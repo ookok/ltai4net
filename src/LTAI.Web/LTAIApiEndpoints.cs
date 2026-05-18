@@ -1,0 +1,81 @@
+using System.Text.Json;
+using LTAI.AI.Governors;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.Logging;
+
+namespace LTAI.Web;
+
+public static class LTAIApiEndpoints
+{
+    public static void MapLTAIEndpoints(this IEndpointRouteBuilder endpoints)
+    {
+        endpoints.MapPost("/api/chat", async (
+            HttpContext context,
+            LivingTreeSystem system,
+            ILogger<LivingTreeSystem> logger,
+            CancellationToken cancellationToken) =>
+        {
+            try
+            {
+                using var reader = new StreamReader(context.Request.Body);
+                var body = await reader.ReadToEndAsync(cancellationToken);
+                var request = JsonSerializer.Deserialize<ChatRequest>(body);
+
+                if (request == null || string.IsNullOrWhiteSpace(request.Query))
+                {
+                    context.Response.StatusCode = 400;
+                    return Results.Json(new { error = "Query is required" });
+                }
+
+                logger.LogInformation("Chat request: {Query}", request.Query[..Math.Min(request.Query.Length, 200)]);
+
+                var response = await system.ChatAsync(request.Query, cancellationToken);
+
+                return Results.Json(new ChatResponse
+                {
+                    Response = response,
+                    Mode = system.Mode.ToString(),
+                    Timestamp = DateTime.UtcNow
+                });
+            }
+            catch (OperationCanceledException)
+            {
+                return Results.Json(new { error = "Request cancelled" });
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Chat endpoint error");
+                return Results.Json(new { error = ex.Message }, statusCode: 500);
+            }
+        });
+
+        endpoints.MapGet("/api/status", async (LivingTreeSystem system) =>
+        {
+            return Results.Json(new
+            {
+                mode = system.Mode.ToString(),
+                version = "5.5.0-net10",
+                runtime = "LTAI .NET 10"
+            });
+        });
+
+        endpoints.MapGet("/api/health", () =>
+        {
+            return Results.Json(new { status = "healthy", timestamp = DateTime.UtcNow });
+        });
+    }
+}
+
+public sealed record ChatRequest
+{
+    public string Query { get; init; } = string.Empty;
+}
+
+public sealed record ChatResponse
+{
+    public string Response { get; init; } = string.Empty;
+    public string Mode { get; init; } = "Normal";
+    public DateTime Timestamp { get; init; }
+}
