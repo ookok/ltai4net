@@ -413,11 +413,12 @@ Config 管理                 →  IConfiguration + Options 模式
 
 **性能优化原则 (场景决定工具):**
 
-| 场景 | 轻量/开发环境 | 大文件/生产环境 |
-|------|-------------|---------------|
-| 向量存储 | SharpVector (内存) | **LanceDB .NET SDK** (Rust引擎, 列式持久化) |
-| PDF 解析 | PdfPig (纯C#) | **并行切页 + P/Invoke MuPDF** (C引擎) |
-| Excel 读写 | ClosedXML (DOM API) | **DocumentFormat.OpenXml OpenXmlReader** (SAX流式) |
+| 场景 | 轻量/开发环境 | 中件 | 大文件/生产环境 |
+|------|-------------|------|---------------|
+| 向量存储 | SharpVector (内存) | **LanceDB .NET SDK** (Rust列式) | **Qdrant** (生产首选, 量化+HNSW) |
+| 向量召回率 | — | — | **Elasticsearch 混合检索** (BM25+向量, 极致召回) |
+| PDF 解析 | PdfPig (纯C#) | **PdfiumViewer** (平衡性能易用性) | P/Invoke MuPDF / 云端解析API (极端复杂) |
+| Excel 读写 | ClosedXML (DOM) | **MiniExcel** (零内存流式) | OpenXmlReader (SAX流式) |
 
 ### 整合建议
 
