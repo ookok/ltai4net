@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using LTAI.Core.Interfaces;
 using LTAI.Core.Models;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 
 namespace LTAI.AI.Governors;
@@ -10,7 +11,7 @@ public sealed class SelfGovernor : LayerGovernor
     private readonly List<Activity> _traces = new();
     private readonly Random _rng = new();
 
-    public SelfGovernor(ICognitiveMesh mesh, IProviderEngine llm, ILogger<SelfGovernor> logger)
+    public SelfGovernor(ICognitiveMesh mesh, IChatClient llm, ILogger<SelfGovernor> logger)
         : base("self", mesh, llm, logger) { }
 
     public override Task<Handshake> ProcessAsync(Handshake incoming, CancellationToken cancellationToken = default)

@@ -1,6 +1,7 @@
 using LTAI.Core.Configuration;
 using LTAI.Core.Interfaces;
 using LTAI.Core.Models;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -10,7 +11,7 @@ public sealed class RoutingGovernor : LayerGovernor
 {
     private readonly IOptions<LTAIOptions> _options;
 
-    public RoutingGovernor(ICognitiveMesh mesh, IProviderEngine llm, ILogger<RoutingGovernor> logger, IOptions<LTAIOptions> options)
+    public RoutingGovernor(ICognitiveMesh mesh, IChatClient llm, ILogger<RoutingGovernor> logger, IOptions<LTAIOptions> options)
         : base("routing", mesh, llm, logger)
     {
         _options = options;

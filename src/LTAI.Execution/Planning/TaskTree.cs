@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using LTAI.Core.Interfaces;
 using LTAI.Execution.Models;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using TaskStatus = LTAI.Execution.Models.TaskStatus;
 
@@ -531,8 +532,8 @@ namespace LTAI.Execution.Planning
 
             try
             {
-                if (_consciousness is IProviderEngine engine)
-                    return await engine.ChatAsync(prompt, cancellationToken: cancellationToken);
+                if (_consciousness is IChatClient engine)
+                    return await engine.CompleteAsync(prompt, cancellationToken: cancellationToken);
 
                 if (_consciousness is Func<string, Task<string>> asyncFunc)
                     return await asyncFunc(prompt);

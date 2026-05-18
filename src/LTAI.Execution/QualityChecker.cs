@@ -1,6 +1,7 @@
 using System.Text.RegularExpressions;
 using LTAI.Core.Interfaces;
 using LTAI.Execution.Models;
+using Microsoft.Extensions.AI;
 
 namespace LTAI.Execution;
 
@@ -241,7 +242,7 @@ public class MultiAgentQualityChecker
         var codeQuality = CheckCodeQuality(content, language);
         results.Add(codeQuality);
 
-        if (codeQuality.Status == CheckStatus.FAIL && _consciousness is IProviderEngine)
+        if (codeQuality.Status == CheckStatus.FAIL && _consciousness is IChatClient)
         {
             var repaired = await RepairCode(content, codeQuality.Issues, language);
             results.Add(repaired);
@@ -253,7 +254,7 @@ public class MultiAgentQualityChecker
             }
         }
 
-        if (_consciousness is IProviderEngine)
+        if (_consciousness is IChatClient)
         {
             var judgeResult = await Judge(content, context);
             results.Add(judgeResult);
@@ -344,7 +345,7 @@ public class MultiAgentQualityChecker
 
     public async Task<CheckResult> RepairCode(string content, List<string> issues, string language)
     {
-        if (_consciousness is not IProviderEngine llm)
+        if (_consciousness is not IChatClient llm)
         {
             return new CheckResult(
                 Agent: "CodeRepair",
@@ -362,7 +363,7 @@ public class MultiAgentQualityChecker
                          $"Original code:\n```{language}\n{content[..Math.Min(content.Length, 4000)]}\n```\n\n" +
                          $"Return the repaired code in a code block.";
 
-            var reply = await llm.ChatAsync(prompt, new LLMChatOptions { Temperature = 0.2f, MaxTokens = 4096 });
+            var reply = await llm.CompleteAsync(prompt, new ChatOptions { Temperature = 0.2f, MaxOutputTokens = 4096 });
 
             var repaired = ExtractCodeBlock(reply, language);
             var recheck = CheckCodeQuality(repaired, language);
@@ -391,7 +392,7 @@ public class MultiAgentQualityChecker
 
     public async Task<CheckResult> Judge(string content, Dictionary<string, object?> context)
     {
-        if (_consciousness is not IProviderEngine llm)
+        if (_consciousness is not IChatClient llm)
         {
             return new CheckResult(
                 Agent: "Judge",
@@ -408,7 +409,7 @@ public class MultiAgentQualityChecker
             var prompt = $"Judge the quality of this output:\n{content[..Math.Min(content.Length, 3000)]}\n\n" +
                          "Rate from 0-10 and list any issues or improvements. Format: Score: X.X";
 
-            var reply = await llm.ChatAsync(prompt, new LLMChatOptions { Temperature = 0.1f, MaxTokens = 512 });
+            var reply = await llm.CompleteAsync(prompt, new ChatOptions { Temperature = 0.1f, MaxOutputTokens = 512 });
 
             var score = 5.0f;
             var scoreMatch = ScoreRx.Match(reply);
@@ -441,7 +442,7 @@ public class MultiAgentQualityChecker
 
     public async Task<CheckResult> ImproveLogic(string content, List<string> suggestions, Dictionary<string, object?> context)
     {
-        if (_consciousness is not IProviderEngine llm || suggestions.Count == 0)
+        if (_consciousness is not IChatClient llm || suggestions.Count == 0)
         {
             return new CheckResult(
                 Agent: "LogicImprovement",
@@ -460,7 +461,7 @@ public class MultiAgentQualityChecker
                          $"Content:\n{content[..Math.Min(content.Length, 4000)]}\n\n" +
                          $"Return the improved content.";
 
-            var reply = await llm.ChatAsync(prompt, new LLMChatOptions { Temperature = 0.3f, MaxTokens = 4096 });
+            var reply = await llm.CompleteAsync(prompt, new ChatOptions { Temperature = 0.3f, MaxOutputTokens = 4096 });
 
             return new CheckResult(
                 Agent: "LogicImprovement",

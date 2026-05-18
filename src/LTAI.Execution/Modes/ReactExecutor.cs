@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text.RegularExpressions;
 using LTAI.Core.Interfaces;
 using LTAI.Execution.Models;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 
 namespace LTAI.Execution.Models
@@ -437,7 +438,7 @@ Task: {task}
         int iteration,
         CancellationToken cancellationToken)
     {
-        if (Consciousness is not IProviderEngine llm)
+        if (Consciousness is not IChatClient llm)
         {
             _logger.LogError("No LLM consciousness available for ReAct");
             return ("", "final_answer", "No consciousness available");
@@ -458,13 +459,12 @@ Task: {task}
 
         try
         {
-            var response = await llm.ChatAsync(
+            var response = await llm.CompleteAsync(
                 fullPrompt,
-                new LLMChatOptions
+                new ChatOptions
                 {
                     Temperature = Config.Temperature,
-                    MaxTokens = Config.MaxTokensPerIteration,
-                    TimeoutMs = (int)(Config.TimeoutSeconds * 1000)
+                    MaxOutputTokens = Config.MaxTokensPerIteration
                 },
                 cancellationToken);
 

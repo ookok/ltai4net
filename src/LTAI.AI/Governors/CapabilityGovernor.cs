@@ -1,5 +1,6 @@
 using LTAI.Core.Interfaces;
 using LTAI.Core.Models;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 
 namespace LTAI.AI.Governors;
@@ -8,7 +9,7 @@ public sealed class CapabilityGovernor : LayerGovernor
 {
     private readonly IToolRegistry _tools;
 
-    public CapabilityGovernor(ICognitiveMesh mesh, IProviderEngine llm, ILogger<CapabilityGovernor> logger, IToolRegistry tools)
+    public CapabilityGovernor(ICognitiveMesh mesh, IChatClient llm, ILogger<CapabilityGovernor> logger, IToolRegistry tools)
         : base("capability", mesh, llm, logger)
     {
         _tools = tools;

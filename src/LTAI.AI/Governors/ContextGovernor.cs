@@ -1,6 +1,7 @@
 using LTAI.Core.Interfaces;
 using LTAI.Core.Models;
 using LTAI.Vector.Interfaces;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 
 namespace LTAI.AI.Governors;
@@ -12,7 +13,7 @@ public sealed class ContextGovernor : LayerGovernor
 
     public ContextGovernor(
         ICognitiveMesh mesh,
-        IProviderEngine llm,
+        IChatClient llm,
         ILogger<ContextGovernor> logger,
         IVectorStore vectorStore)
         : base("context", mesh, llm, logger)

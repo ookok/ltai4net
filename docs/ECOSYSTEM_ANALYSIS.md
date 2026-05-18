@@ -428,3 +428,139 @@ Config 管理                 →  IConfiguration + Options 模式
 - **渐进升级**: `IVectorStore` → `VectorData` 抽象, `SQLite` → `LanceDB .NET SDK`
 - **待 RTM**: 全部 `net10.0` → `net11.0` 升级, 引入 `ONNX Runtime` / `ML.NET`
 - **保留自研**: `HolisticElection` (14维选举), `EIAModels` (56环境函数), `ContextFolding`, `Memory` 层 (User/Emotion/Persona), `QualityChecker` (9步流水线)
+
+---
+
+## 11. 完整许可证审计 (全免费/开源方案)
+
+> 所有推荐组件均为免费/开源，无需额外云服务费用（LLM API 调用本身除外）。
+
+### 完全免费开源 (MIT / Apache 2.0 / BSD)
+
+| 推荐 | 许可证 | 说明 |
+|------|--------|------|
+| Microsoft.Extensions.AI | MIT | 纯库，无服务费 |
+| Microsoft Agent Framework | MIT | 纯库 |
+| Semantic Kernel | MIT | 纯库 |
+| Kernel Memory | MIT | 纯库（自托管 Qdrant/LanceDB） |
+| Microsoft.Extensions.VectorData | MIT | 纯库 |
+| Microsoft.ML.Tokenizers | MIT | 纯库 |
+| Microsoft.CodeAnalysis (Roslyn) | MIT | 纯库 |
+| Polly / Microsoft.Extensions.Resilience | BSD / MIT | 纯库 |
+| OpenTelemetry | Apache 2.0 | 纯库 |
+| Serilog | Apache 2.0 | 纯库 |
+| ONNX Runtime + DirectML | MIT | 纯库 |
+| ML.NET | MIT | 纯库 |
+| Quartz.NET | Apache 2.0 | 纯库 |
+| MassTransit | Apache 2.0 | 纯库（自托管 RabbitMQ） |
+| Qdrant (自托管) | Apache 2.0 | 免费自建 |
+| LanceDB | Apache 2.0 | 内嵌，零依赖 |
+| NPOI / ClosedXML | Apache 2.0 / MIT | 纯库 |
+| PdfPig | Apache 2.0 | 纯库 |
+| PdfSharp / MigraDoc | MIT | 纯库 |
+| Spectre.Console | MIT | 纯库 |
+| YARP | MIT | 纯库 |
+| Google.Protobuf | BSD | 纯库 |
+| Graphify-DotNet (Tree-sitter) | MIT | 纯库 |
+| Squirrel.Windows / Velopack | MIT | 纯库 |
+| BenchmarkDotNet | MIT | 纯库 |
+| MathNet.Numerics | MIT | 纯库 |
+| Sherpa-Onnx (TTS) | Apache 2.0 | 离线 TTS，零费用 |
+| RabbitMQ | MPL 2.0 | 免费自托管消息队列 |
+| Microsoft.Extensions.Diagnostics.HealthChecks | MIT | 内置健康检查 |
+
+### 成本敏感场景的免费替代
+
+| 场景 | 付费方案 | 免费替代 |
+|------|---------|---------|
+| TTS 语音 | Azure Speech API | **Sherpa-Onnx** (离线) 或 Windows **System.Speech** |
+| SMS 通知 | Twilio | **Telegram Bot API** / **企业微信 Webhook** |
+| PDF 生成 (商业) | QuestPDF 商业许可 | **PdfSharp/MigraDoc** (MIT) |
+| 消息队列 | Azure Service Bus | **RabbitMQ** (自托管) |
+| 向量存储 | Qdrant Cloud | **LanceDB** (内嵌) 或 Qdrant 自托管 |
+
+**结论**: 除 LLM API 调用本身需要付费 (OpenAI/各厂商 API key) 外，所有基础设施组件均可免费/开源方案覆盖。
+
+---
+
+## 12. 老项目对照缺口分析 (LivingTreeAlAgent → ltai4net)
+
+> 2026-05-18 对照 `F:\mhzyapp\LivingTreeAlAgent` 老代码逐模块分析
+
+### 覆盖率总览
+
+| 老模块 | .py 文件 | 新.NET 覆盖 | 状态 |
+|--------|:------:|:---------:|:----:|
+| `dna/` | 123 | 0% | ❌ 未开始 |
+| `treellm/` | 118 | ~20% | 🟡 部分 |
+| `capability/` | 95 | ~15% | 🟡 部分 |
+| `core/` | 75 | ~20% | 🟡 部分 |
+| `knowledge/` | 50 | ~70% | ✅ 大部分 |
+| `execution/` | 40 | ~35% | 🟡 部分 |
+| `network/` | 33 | ~15% | 🟡 部分 |
+| `api/` | 27 | ~15% | 🟡 部分 |
+| `infrastructure/` | 23 | ~25% | 🟡 部分 |
+| `observability/` | 17 | 0% | ❌ 未开始 |
+| `integration/` | 15 | 0% | ❌ 未开始 |
+| `reasoning/` | 10 | 0% | ❌ 未开始 |
+| `memory/` | 7 | ~80% | ✅ 大部分 |
+| `serialization/` | 5 | ~20% | 🟡 部分 |
+| `optimization/` | 3 | 0% | ❌ 未开始 |
+
+### 核心缺口详情
+
+#### dna/ (123 文件) — 意识/自进化/安全
+**推荐: 必须自研 + Microsoft Agent Governance Toolkit**
+- 意识系统 (dual_consciousness, phenomenal_consciousness): 核心差异化，必须自研
+- 自进化 (self_evolution, evolution_driver, swarm_evolution): 核心创新
+- 生命引擎 (life_engine, biorhythm, hormone_signaling): 自研
+- 安全层: **Microsoft Agent Governance Toolkit** + 自研安全层
+- HITL: **MAF Human-in-the-Loop** 内置支持
+
+#### core/ (75 文件) — 系统核心
+**推荐: 微软生态 + 自研**
+- 硬件加速: **ONNX Runtime + DirectML** (MIT)
+- TTS: **Sherpa-Onnx** (Apache 2.0, 离线免费)
+- 健康检查: **Microsoft.Extensions.Diagnostics.HealthChecks** (内置)
+- Token压缩: **Microsoft.ML.Tokenizers** (MIT)
+- 韧性: **Polly** (BSD)
+
+#### capability/ (95 文件) — 工具与技能
+**推荐: 微软生态 + 社区**
+- 代码分析: **Microsoft.CodeAnalysis (Roslyn)** + **Tree-sitter (Graphify-DotNet)**
+- 文档: **Kernel Memory** + **NPOI** + **PdfPig**
+- 搜索: MAF Agent Skills / 自研工具注册
+- 管道: **Semantic Kernel Process Framework**
+- GIS地图: REST API 封装 (无成熟 .NET 库)
+
+#### observability/ (17 文件)
+**推荐: OpenTelemetry (全栈免费开源)**
+- 追踪/指标/日志: **OpenTelemetry** + **Serilog**
+
+#### reasoning/ (10 文件)
+**推荐: 自研 + MathNet.Numerics (MIT)**
+
+#### network/ (33 文件)
+**推荐: 微软 MAF A2A + 社区**
+- Agent 通信: **MAF A2A** 协议
+- P2P打洞: **linker**
+- 消息总线: **MassTransit** + **RabbitMQ**
+- 加密: gRPC TLS (内置)
+
+#### execution/ (40 文件)
+**推荐: SK + MAF + Quartz.NET**
+- 计划器: **Semantic Kernel Planner**
+- 调度: **Quartz.NET** (Apache 2.0)
+- HITL: **MAF Human-in-the-Loop**
+
+### 推荐实施优先级
+
+| 阶段 | 内容 | 免费开源方案 |
+|------|------|------------|
+| Phase 1 (进行中) | 抽象层: IChatClient + Polly + RateLimiter + OTEL | M.E.AI + Resilience + Serilog |
+| Phase 2 | RAG层: Kernel Memory + LanceDB | KM + LanceDB |
+| Phase 3 | 编排层: MAF 替换 LivingTreeSystem | MAF + SK Planners |
+| Phase 4 | 网络: A2A + MassTransit + RabbitMQ | MAF A2A + MassTransit |
+| Phase 5 | 基础设施: 向量DB/文档/代码分析 | VectorData + NPOI + Roslyn |
+| Phase 6 | dna: 意识/进化 (自研核心) | 自研 + Agent Governance Toolkit |
+| Phase 7 | 客户端: Blazor / Spectre.Console | MAF AG-UI + Spectre.Console |

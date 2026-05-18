@@ -53,11 +53,36 @@ public static class LTAIApiEndpoints
 
         endpoints.MapGet("/api/status", async (LivingTreeSystem system) =>
         {
+            object dnaInfo;
+            if (system.DNAStatus != null)
+            {
+                var dna = system.DNAStatus;
+                dnaInfo = new
+                {
+                    enabled = true,
+                    consciousness = dna.ConsciousnessLevel.ToString(),
+                    awareness = dna.AwarenessScore,
+                    evolution_phase = dna.EvolutionPhase.ToString(),
+                    generation = dna.Generation,
+                    fitness = dna.FitnessScore,
+                    safety_posture = dna.SafetyPosture.ToString(),
+                    biorhythm = dna.BiorhythmPhase.ToString(),
+                    energy = dna.EnergyLevel,
+                    thoughts = dna.ActiveThoughts,
+                    habits = dna.HabitCount
+                };
+            }
+            else
+            {
+                dnaInfo = new { enabled = false };
+            }
+
             return Results.Json(new
             {
                 mode = system.Mode.ToString(),
                 version = "5.5.0-net10",
-                runtime = "LTAI .NET 10"
+                runtime = "LTAI .NET 10",
+                dna = dnaInfo
             });
         });
 

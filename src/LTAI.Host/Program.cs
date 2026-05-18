@@ -1,3 +1,4 @@
+using System.Threading.RateLimiting;
 using LTAI.AI;
 using LTAI.AI.Governors;
 using LTAI.Browser;
@@ -9,14 +10,78 @@ using LTAI.Document;
 using LTAI.Network;
 using LTAI.Vector;
 using LTAI.Vector.Interfaces;
+using LTAI.Vector.Knowledge;
 using LTAI.Web;
+using LTAI.MAF;
+using LTAI.DNA;
+using LTAI.Capability;
+using LTAI.Sandbox;
+using Microsoft.AspNetCore.RateLimiting;
+using OpenTelemetry.Logs;
+using OpenTelemetry.Metrics;
+using OpenTelemetry.Resources;
+using OpenTelemetry.Trace;
+using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Configuration.AddJsonFile("appsettings.json", optional: false, reloadOnChange: true);
-builder.Services.Configure<LTAIOptions>(builder.Configuration.GetSection(LTAIOptions.SectionName));
 
-builder.Services.AddLogging(b => b.AddConsole().SetMinimumLevel(LogLevel.Information));
+var ltaiSection = builder.Configuration.GetSection(LTAIOptions.SectionName);
+builder.Services.Configure<LTAIOptions>(ltaiSection);
+
+var ltaiOptions = ltaiSection.Get<LTAIOptions>() ?? new LTAIOptions();
+var rateLimit = ltaiOptions.Web.RateLimitPerMinute;
+if (rateLimit <= 0) rateLimit = 60;
+
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = 429;
+    options.AddFixedWindowLimiter("LTAI", config =>
+    {
+        config.PermitLimit = rateLimit;
+        config.Window = TimeSpan.FromMinutes(1);
+        config.QueueProcessingOrder = QueueProcessingOrder.OldestFirst;
+        config.QueueLimit = 0;
+    });
+    options.OnRejected = async (context, ct) =>
+    {
+        context.HttpContext.Response.Headers["Retry-After"] = "60";
+        await context.HttpContext.Response.WriteAsync(
+            "Rate limit exceeded. Try again later.", ct);
+    };
+});
+
+builder.Logging.ClearProviders();
+builder.Host.UseSerilog((context, config) =>
+{
+    config.ReadFrom.Configuration(context.Configuration);
+});
+
+var resourceBuilder = ResourceBuilder.CreateDefault()
+    .AddService("LTAI", serviceVersion: "5.5.0-net10");
+
+builder.Logging.AddOpenTelemetry(o =>
+{
+    o.SetResourceBuilder(resourceBuilder);
+    o.IncludeFormattedMessage = true;
+});
+
+builder.Services.AddOpenTelemetry()
+    .WithTracing(t => t
+        .SetResourceBuilder(resourceBuilder)
+        .AddAspNetCoreInstrumentation()
+        .AddHttpClientInstrumentation()
+        .AddSource("LTAI.AI", "LTAI.TreeLLM", "LTAI.Execution")
+        .AddConsoleExporter())
+    .WithMetrics(m => m
+        .SetResourceBuilder(resourceBuilder)
+        .AddAspNetCoreInstrumentation()
+        .AddHttpClientInstrumentation()
+        .AddConsoleExporter());
+
+builder.Services.AddHealthChecks()
+    .AddCheck("liveness", () => Microsoft.Extensions.Diagnostics.HealthChecks.HealthCheckResult.Healthy("LTAI is running"));
 
 builder.Services.AddLTAICore();
 builder.Services.AddLTAIVector();
@@ -24,6 +89,10 @@ builder.Services.AddLTAIAI();
 builder.Services.AddLTAIBrowser();
 builder.Services.AddLTAIDocument();
 builder.Services.AddLTAINetwork();
+builder.Services.AddLTAIMAF();
+builder.Services.AddLTAIDNA();
+builder.Services.AddLTAICapability();
+builder.Services.AddLTAISandbox();
 
 var app = builder.Build();
 
@@ -31,13 +100,19 @@ await RegisterCapabilityTools(app.Services);
 
 app.UseLTAI();
 
+app.MapMAFEndpoints();
+app.MapDNAEndpoints();
+app.MapCapabilityEndpoints();
+app.MapSandboxEndpoints();
+
+app.UseSerilogRequestLogging();
+
 var system = app.Services.GetRequiredService<LivingTreeSystem>();
 await system.InitializeAsync();
 
 app.Logger.LogInformation("LTAI system initialized, mode: {Mode}", system.Mode);
 app.Logger.LogInformation("Listening on http://{Host}:{Port}",
-    builder.Configuration["LTAI:Web:Host"] ?? "0.0.0.0",
-    builder.Configuration["LTAI:Web:Port"] ?? "8080");
+    ltaiOptions.Web.Host, ltaiOptions.Web.Port);
 
 app.Run();
 
@@ -96,7 +171,152 @@ static async Task RegisterCapabilityTools(IServiceProvider sp)
         return new { result.Success, result.Format, result.ParserUsed, result.Text, result.Tables, result.Metadata, result.ElapsedMs, result.Error };
     });
 
+    try
+    {
+        var codeAnalyzer = sp.GetRequiredService<LTAI.Capability.CodeEngine.MultiLangCodeAnalyzer>();
+        await registry.RegisterAsync("code_analyze", async args =>
+        {
+            var code = args.TryGetValue("code", out var c) ? c?.ToString() ?? "" : "";
+            var lang = args.TryGetValue("language", out var l) ? l?.ToString() ?? "" : "";
+            if (string.IsNullOrWhiteSpace(code))
+                return new { error = "code required" };
+
+            var language = Enum.TryParse<LTAI.Capability.CodeEngine.CodeLanguage>(lang, true, out var parsed) ? parsed : LTAI.Capability.CodeEngine.CodeLanguage.Unknown;
+            var result = codeAnalyzer.Analyze(code, language);
+            return new { result.LanguageName, result.TotalLines, result.CodeLines, result.Complexity, functions = result.Functions.Count, classes = result.Classes.Count, imports = result.Imports.Select(i => i.Module) };
+        });
+    }
+    catch (Exception ex) { logger.LogWarning(ex, "Code analyze tool not registered"); }
+
+    try
+    {
+        var searchEngine = sp.GetRequiredService<LTAI.Capability.Search.UnifiedSearchEngine>();
+        await registry.RegisterAsync("search", async args =>
+        {
+            var query = args.TryGetValue("query", out var q) ? q?.ToString() ?? "" : "";
+            if (string.IsNullOrWhiteSpace(query))
+                return new { error = "query required" };
+
+            var results = await searchEngine.SearchAsync(query, maxResults: 5);
+            return new { count = results.Count, results = results.Select(r => new { r.Title, r.Url, r.Snippet, r.Source }) };
+        });
+    }
+    catch (Exception ex) { logger.LogWarning(ex, "Search tool not registered"); }
+
+    try
+    {
+        var reasoning = sp.GetRequiredService<LTAI.Capability.Reasoning.ReasoningOrchestrator>();
+        await registry.RegisterAsync("reason", async args =>
+        {
+            var query = args.TryGetValue("query", out var q) ? q?.ToString() ?? "" : "";
+            if (string.IsNullOrWhiteSpace(query))
+                return new { error = "query required" };
+
+            var report = await reasoning.ReasonAsync(query);
+            return new
+            {
+                report.OverallConfidence,
+                math = report.Math?.Result,
+                logic = report.Logic?.Result,
+                dialectical = report.Dialectical?.Result,
+                attribution = report.Attribution?.Result
+            };
+        });
+    }
+    catch (Exception ex) { logger.LogWarning(ex, "Reasoning tool not registered"); }
+
+    try
+    {
+        var sandbox = sp.GetRequiredService<LTAI.Sandbox.SandboxOrchestrator>();
+        await registry.RegisterAsync("sandbox_exec", async args =>
+        {
+            var code = args.TryGetValue("code", out var c) ? c?.ToString() ?? "" : "";
+            var lang = args.TryGetValue("language", out var l) ? l?.ToString() ?? "python" : "python";
+            if (string.IsNullOrWhiteSpace(code))
+                return new { error = "code required" };
+
+            var language = Enum.TryParse<LTAI.Sandbox.SandboxLanguage>(lang, true, out var parsed) ? parsed : LTAI.Sandbox.SandboxLanguage.Python;
+            var result = await sandbox.ExecuteAsync(code, language);
+            return new { result.Success, result.Stdout, result.Stderr, result.ExecutionTimeMs, result.Error };
+        });
+    }
+    catch (Exception ex) { logger.LogWarning(ex, "Sandbox tool not registered"); }
+
+    try
+    {
+        var maps = sp.GetRequiredService<LTAI.Capability.GIS.UnifiedMapService>();
+        await registry.RegisterAsync("gis_geocode", async args =>
+        {
+            var address = args.TryGetValue("address", out var a) ? a?.ToString() ?? "" : "";
+            if (string.IsNullOrWhiteSpace(address))
+                return new { error = "address required" };
+            var result = await maps.GeocodeAsync(address);
+            return result != null ? new { result.Formatted, result.Lng, result.Lat, result.City } : new { error = "not found" };
+        });
+    }
+    catch (Exception ex) { logger.LogWarning(ex, "GIS tool not registered"); }
+
     logger.LogInformation("Registered {Count} capability tools", registry.ListTools().Count());
+
+    try
+    {
+        await RegisterKernelMemoryTools(sp, registry);
+    }
+    catch (Exception ex)
+    {
+        logger.LogWarning(ex, "Kernel Memory tools could not be registered");
+    }
+}
+
+static async Task RegisterKernelMemoryTools(IServiceProvider sp, IToolRegistry registry)
+{
+    var km = sp.GetRequiredService<KernelMemoryStore>();
+
+    await registry.RegisterAsync("km_import", async args =>
+    {
+        var content = args.TryGetValue("content", out var c) ? c?.ToString() ?? "" : "";
+        var docId = args.TryGetValue("doc_id", out var id) ? id?.ToString() : null;
+        if (string.IsNullOrWhiteSpace(content))
+            return new { error = "content required" };
+
+        var result = await km.ImportDocumentAsync(content, docId);
+        return new { success = true, document_id = result };
+    });
+
+    await registry.RegisterAsync("km_search", async args =>
+    {
+        var query = args.TryGetValue("query", out var q) ? q?.ToString() ?? "" : "";
+        var limit = args.TryGetValue("limit", out var l) && int.TryParse(l?.ToString(), out var n) ? n : 5;
+        if (string.IsNullOrWhiteSpace(query))
+            return new { error = "query required" };
+
+        var result = await km.SearchAsync(query, limit: limit);
+        return new
+        {
+            results = result.Results.Select(r => new
+            {
+                r.SourceName,
+                r.Link,
+                r.SourceUrl,
+                snippets = r.Partitions.Select(p => p.Text[..Math.Min(p.Text.Length, 300)])
+            })
+        };
+    });
+
+    await registry.RegisterAsync("km_ask", async args =>
+    {
+        var question = args.TryGetValue("question", out var q) ? q?.ToString() ?? "" : "";
+        if (string.IsNullOrWhiteSpace(question))
+            return new { error = "question required" };
+
+        var answer = await km.AskAsync(question);
+        return new
+        {
+            answer.Result,
+            answer.NoResult,
+            sources = answer.RelevantSources.Select(s => new { s.SourceName, s.Link })
+        };
+    });
 }
 
 static string ExtractTitle(string html)

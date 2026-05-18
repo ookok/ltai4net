@@ -1,5 +1,6 @@
 using LTAI.Core.Interfaces;
 using LTAI.Core.Models;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 
 namespace LTAI.AI.Governors;
@@ -8,7 +9,7 @@ public sealed class StorageGovernor : LayerGovernor
 {
     private readonly Dictionary<string, object> _cache = new();
 
-    public StorageGovernor(ICognitiveMesh mesh, IProviderEngine llm, ILogger<StorageGovernor> logger)
+    public StorageGovernor(ICognitiveMesh mesh, IChatClient llm, ILogger<StorageGovernor> logger)
         : base("storage", mesh, llm, logger) { }
 
     public override Task<Handshake> ProcessAsync(Handshake incoming, CancellationToken cancellationToken = default)

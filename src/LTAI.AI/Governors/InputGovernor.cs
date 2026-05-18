@@ -1,6 +1,7 @@
 using LTAI.AI.Utilities;
 using LTAI.Core.Interfaces;
 using LTAI.Core.Models;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 
 namespace LTAI.AI.Governors;
@@ -9,7 +10,7 @@ public sealed class InputGovernor : LayerGovernor
 {
     private static readonly string[] SpinalCommands = { "/help", "/status", "/pause", "/resume", "/restart" };
 
-    public InputGovernor(ICognitiveMesh mesh, IProviderEngine llm, ILogger<InputGovernor> logger)
+    public InputGovernor(ICognitiveMesh mesh, IChatClient llm, ILogger<InputGovernor> logger)
         : base("input", mesh, llm, logger) { }
 
     public override Task<Handshake> ProcessAsync(Handshake incoming, CancellationToken cancellationToken = default)

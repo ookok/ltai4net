@@ -2,6 +2,7 @@ using LTAI.AI.Utilities;
 using LTAI.Core.Execution;
 using LTAI.Core.Interfaces;
 using LTAI.Core.Models;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 
 namespace LTAI.AI.Governors;
@@ -11,7 +12,7 @@ public sealed class TaskGovernor : LayerGovernor
     private readonly TaskJournal _journal;
     private readonly Dictionary<string, List<string>> _dependencyMap = new();
 
-    public TaskGovernor(ICognitiveMesh mesh, IProviderEngine llm, ILogger<TaskGovernor> logger, TaskJournal journal)
+    public TaskGovernor(ICognitiveMesh mesh, IChatClient llm, ILogger<TaskGovernor> logger, TaskJournal journal)
         : base("task", mesh, llm, logger)
     {
         _journal = journal;

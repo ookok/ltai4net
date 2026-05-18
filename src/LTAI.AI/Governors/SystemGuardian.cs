@@ -1,12 +1,13 @@
 using LTAI.Core.Interfaces;
 using LTAI.Core.Models;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 
 namespace LTAI.AI.Governors;
 
 public sealed class SystemGuardian
 {
-    private readonly IProviderEngine _llm;
+    private readonly IChatClient _llm;
     private readonly ILogger<SystemGuardian> _logger;
     private readonly object _lock = new();
     private SystemMode _mode = SystemMode.Normal;
@@ -19,7 +20,7 @@ public sealed class SystemGuardian
         private set { lock (_lock) _mode = value; }
     }
 
-    public SystemGuardian(IProviderEngine llm, ILogger<SystemGuardian> logger)
+    public SystemGuardian(IChatClient llm, ILogger<SystemGuardian> logger)
     {
         _llm = llm;
         _logger = logger;
@@ -65,9 +66,9 @@ public sealed class SystemGuardian
         _logger.LogCritical("Emergency chat activated in {Mode} mode", Mode);
         try
         {
-            return await _llm.ChatAsync(
+            return await _llm.CompleteAsync(
                 $"System is in {Mode} mode. Emergency query: {query}",
-                new LLMChatOptions { Temperature = 0.1f, MaxTokens = 2048 },
+                new ChatOptions { Temperature = 0.1f, MaxOutputTokens = 2048 },
                 cancellationToken
             );
         }

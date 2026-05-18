@@ -1,0 +1,54 @@
+using System.Runtime.InteropServices;
+using System.Text;
+using LTAI.AI;
+using LTAI.AI.Governors;
+using LTAI.Capability;
+using LTAI.Capability.CodeEngine;
+using LTAI.Capability.Reasoning;
+using LTAI.Core;
+using LTAI.Core.Configuration;
+using LTAI.DNA;
+using LTAI.Memory;
+using LTAI.TUI;
+using LTAI.Vector;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+
+Console.OutputEncoding = Encoding.UTF8;
+Console.InputEncoding = Encoding.UTF8;
+
+if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+{
+    try { ConsoleFont.SetMapleMono(); } catch { }
+}
+
+Console.Title = "LTAI Dev Console";
+
+var services = new ServiceCollection();
+services.AddLogging(b => b.SetMinimumLevel(LogLevel.Warning));
+
+var ltaiOptions = new LTAIOptions();
+ltaiOptions.AI.Providers["deepseek"] = new ProviderConfig { Endpoint = "https://api.deepseek.com", Model = "deepseek-v4-pro" };
+ltaiOptions.AI.Providers["deepseek-fast"] = new ProviderConfig { Endpoint = "https://api.deepseek.com", Model = "deepseek-v4-flash" };
+ltaiOptions.Web.RateLimitPerMinute = 60;
+
+services.AddSingleton(Options.Create(ltaiOptions));
+services.AddLTAICore();
+services.AddLTAIVector();
+services.AddLTAIAI();
+services.AddLTAIMemory();
+services.AddLTAIDNA();
+services.AddLTAICapability();
+
+var sp = services.BuildServiceProvider();
+var lts = sp.GetRequiredService<LivingTreeSystem>();
+await lts.InitializeAsync();
+
+var dna = sp.GetService<DNAOrchestrator>();
+var reasoning = sp.GetService<ReasoningOrchestrator>();
+var analyzer = sp.GetService<MultiLangCodeAnalyzer>();
+var options = sp.GetService<IOptions<LTAIOptions>>();
+
+var app = new TuiApp(lts, dna, reasoning, analyzer, options);
+await app.RunAsync();

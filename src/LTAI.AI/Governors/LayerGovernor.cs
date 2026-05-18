@@ -1,5 +1,6 @@
 using LTAI.Core.Interfaces;
 using LTAI.Core.Models;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 
 namespace LTAI.AI.Governors;
@@ -7,14 +8,14 @@ namespace LTAI.AI.Governors;
 public abstract class LayerGovernor : ILayerGovernor
 {
     protected readonly ICognitiveMesh Mesh;
-    protected readonly IProviderEngine LLM;
+    protected readonly IChatClient LLM;
     protected readonly ILogger Logger;
     private LayerStats _stats;
 
     public string LayerName { get; }
     public LayerStats Stats => _stats;
 
-    protected LayerGovernor(string layerName, ICognitiveMesh mesh, IProviderEngine llm, ILogger logger)
+    protected LayerGovernor(string layerName, ICognitiveMesh mesh, IChatClient llm, ILogger logger)
     {
         LayerName = layerName;
         Mesh = mesh;

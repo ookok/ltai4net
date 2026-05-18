@@ -1,13 +1,14 @@
 using LTAI.AI.Utilities;
 using LTAI.Core.Interfaces;
 using LTAI.Core.Models;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 
 namespace LTAI.AI.Governors;
 
 public sealed class EvolutionGovernor : LayerGovernor
 {
-    public EvolutionGovernor(ICognitiveMesh mesh, IProviderEngine llm, ILogger<EvolutionGovernor> logger)
+    public EvolutionGovernor(ICognitiveMesh mesh, IChatClient llm, ILogger<EvolutionGovernor> logger)
         : base("evolution", mesh, llm, logger) { }
 
     public override Task<Handshake> ProcessAsync(Handshake incoming, CancellationToken cancellationToken = default)

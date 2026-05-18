@@ -9,12 +9,11 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.8" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.8" />
-    <PackageReference Include="System.Threading.Channels" Version="10.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Resilience" Version="9.5.0" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\LTAI.Core\LTAI.Core.csproj" />
-    <ProjectReference Include="..\LTAI.AI\LTAI.AI.csproj" />
   </ItemGroup>
 
 </Project>
