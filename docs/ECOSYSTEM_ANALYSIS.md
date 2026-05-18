@@ -329,3 +329,76 @@ Config 管理                 →  IConfiguration + Options 模式
 | 用户记忆 | **自研** (Memory 层) | 个人化建模, 情绪感知 |
 | 质量检查 | **自研** (QualityChecker) | 9 步流水线, 多跳证据检查 |
 | 浏览器 | **Playwright MCP server** | MCP 标准协议 |
+
+---
+
+## 10. 推荐 NuGet 包与选型索引
+
+### 基础设施与核心能力
+
+| 包 | 用途 | 当前状态 |
+|---|------|----------|
+| **System.Text.Json** | JSON 序列化 (已使用) | ✅ |
+| **Serilog** | 结构化日志 (替换 `ILogger<T>` 后端) | ⚠️ 待集成 |
+| **Polly** | 重试/断路器/超时/回退 (替换 `CircuitBreaker.cs`) | ❌ 待引入 |
+| **AutoMapper** | 对象映射 (替换 `MapDocument()` 等手写代码) | ⚠️ 可引入 |
+| **FluentValidation** | 数据验证 (替换 Data Annotations) | ❌ 可选 |
+| **MediatR** | CQRS 中介者 (10 个 Governor 天然适合) | ❌ 可选 |
+| **Swashbuckle.AspNetCore** | Swagger/OpenAPI 文档 | ❌ LTAI.Web 已用 MapEndpoints |
+| **StackExchange.Redis** | 分布式缓存/会话 | ❌ 待引入 |
+
+### 爬虫反爬体系
+
+| 包 | 用途 | 当前状态 |
+|---|------|----------|
+| **HtmlAgilityPack** | 容错 HTML 解析 + XPath/CSS 选择器 | ✅ LTAI.Browser 已使用 |
+| **PuppeteerSharp** | 无头 Chrome 控制 (SPA 渲染/登录) | ✅ LTAI.Browser 已使用 |
+
+.NET 反爬公式: `PuppeteerSharp (真实浏览器) + 指纹噪声注入 + 住宅代理 + 随机行为延迟`
+
+### 向量与 AI
+
+| 包 | 用途 | 当前状态 |
+|---|------|----------|
+| **Microsoft.Extensions.AI** | `IChatClient` + `IEmbeddingGenerator` 抽象层 | ❌ 替换 `IProviderEngine` |
+| **Microsoft.Extensions.VectorData** | 统一向量存储抽象 (InMemory/Qdrant/Azure/Redis/Pinecone) | ❌ 替换 `IVectorStore` |
+| **LanceDB .NET SDK** | 生产级向量库 (对标 Python LanceDBStore) | ❌ 替换 `ConcurrentDictionary` |
+| **ONNX Runtime 1.18+** | CUDA/DirectML AI 推理加速 | ❌ 可选 |
+| **ML.NET** | 传统 ML (分类/回归/聚类/AutoML) | ❌ 可选 |
+| **Semantic Kernel** | LLM 应用 SDK (插件/记忆/规划器) | ❌ 替换 `IToolRegistry` |
+| **Microsoft Agent Framework v1.0** | 多智能体编排 (Sequential/Concurrent/Handoff/Group) | ❌ 替换 `LivingTreeSystem` |
+
+### 代码分析工具
+
+| 包 | 场景 | 对标 Python |
+|---|------|-----------|
+| **Roslyn** (`Microsoft.CodeAnalysis`) | C#/VB.NET 深度分析 (`SyntaxTree` + `SemanticModel`) | `ast.parse` |
+| **Tree-sitter** (Graphify-DotNet) | 跨语言 AST 解析 (Python/JS/TS/Go/Rust等) | `tree-sitter` |
+| **Parlot** | 自定义语法/表达式解析器 | `lark` / `pyparsing` |
+| **Masuit.Tools** | 反射/树结构/常用工具封装 | — |
+| **Microsoft.CodeAnalysis.NetAnalyzers** | 代码质量实时诊断 (性能/安全/API) | `pylint` / `ruff` |
+
+### UI 框架
+
+| 包 | 场景 | 对标 Python |
+|---|------|-----------|
+| **Spectre.Console** | 终端 TUI 仪表板 | `textual` (`tui/DevTUI`) |
+| **Avalonia UI** | 跨平台桌面端 | `PyQt6` (`client/`) |
+| **Blazor** | Web 实时交互 (替代 Jinja2+HTMX) | `templates/` |
+
+### 网络与通信
+
+| 包 | 用途 | 对标 Python / 当前状态 |
+|---|------|-----------------------|
+| **linker** | P2P 打洞 + 虚拟组网 | 替换 `P2PNode.cs` (NAT穿透) |
+| **FreeIM** | 聊天/消息推送 | 替换 `message_bus` + `im_core` |
+| **gRPC** (`Grpc.AspNetCore` + `Google.Protobuf`) | 高性能 RPC 服务 | ✅ LTAI.Network 已使用 |
+| **OpenTelemetry** | 链路追踪/指标/日志 | ❌ 待引入 (MAF 内置) |
+
+### 整合建议
+
+- **已使用并保留**: `System.Text.Json`, `HtmlAgilityPack`, `PuppeteerSharp`, `gRPC+Protobuf`
+- **优先替换**: `IProviderEngine` → `Microsoft.Extensions.AI.IChatClient`, `CircuitBreaker` → `Polly`
+- **渐进升级**: `IVectorStore` → `VectorData` 抽象, `SQLite` → `LanceDB .NET SDK`
+- **待 RTM**: 全部 `net10.0` → `net11.0` 升级, 引入 `ONNX Runtime` / `ML.NET`
+- **保留自研**: `HolisticElection` (14维选举), `EIAModels` (56环境函数), `ContextFolding`, `Memory` 层 (User/Emotion/Persona), `QualityChecker` (9步流水线)
