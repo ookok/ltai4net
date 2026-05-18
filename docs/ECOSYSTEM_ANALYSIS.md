@@ -415,8 +415,9 @@ Config 管理                 →  IConfiguration + Options 模式
 
 | 场景 | 轻量/开发环境 | 中件 | 大文件/生产环境 |
 |------|-------------|------|---------------|
-| 向量存储 | SharpVector (内存) | **LanceDB .NET SDK** (Rust列式) | **Qdrant** (生产首选, 量化+HNSW) |
-| 向量召回率 | — | — | **Elasticsearch 混合检索** (BM25+向量, 极致召回) |
+| 向量存储 | SharpVector (内存) | **LanceDB** (AI工作流友好, Rust引擎) | **Qdrant** (生产HNSW) / **Zvec** (.NET原生极致性能, 大厂背书) |
+| 向量轻量 | **SQLite-vec** (最低集成成本, SQL亲和) | — | — |
+| 向量召回率 | — | — | **Elasticsearch 混合检索** (BM25+向量) |
 | PDF 解析 | PdfPig (纯C#) | **PdfiumViewer** (平衡性能易用性) | P/Invoke MuPDF / 云端解析API (极端复杂) |
 | Excel 读写 | ClosedXML (DOM) | **MiniExcel** (零内存流式) | OpenXmlReader (SAX流式) |
 
