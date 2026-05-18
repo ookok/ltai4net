@@ -31,3 +31,6 @@ appsettings.*.json
 .env
 *.pem
 *.key
+
+## Runtime
+.livingtree/
