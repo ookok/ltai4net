@@ -1,7 +1,9 @@
 using LTAI.Capability.CodeEngine;
 using LTAI.Capability.Documents;
 using LTAI.Capability.GIS;
+using LTAI.Capability.Integration;
 using LTAI.Capability.Reasoning;
+using LTAI.Capability.Review;
 using LTAI.Capability.Search;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -22,6 +24,12 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ReasoningOrchestrator>();
 
         services.AddSingleton<UnifiedMapService>();
+        services.AddSingleton<CodeReviewEngine>();
+
+        services.AddSingleton<TelegramBot>();
+        services.AddSingleton<WechatWorkNotifier>();
+        services.AddSingleton<AutoUpdater>();
+        services.AddSingleton<UnifiedNotifier>();
 
         return services;
     }

@@ -51,6 +51,47 @@ public static class LTAIApiEndpoints
             }
         });
 
+        endpoints.MapPost("/api/chat/stream", async (
+            HttpContext context,
+            LivingTreeSystem system,
+            ILogger<LivingTreeSystem> logger,
+            CancellationToken cancellationToken) =>
+        {
+            using var reader = new StreamReader(context.Request.Body);
+            var body = await reader.ReadToEndAsync(cancellationToken);
+            var request = JsonSerializer.Deserialize<ChatRequest>(body);
+
+            if (request == null || string.IsNullOrWhiteSpace(request.Query))
+            {
+                context.Response.StatusCode = 400;
+                await context.Response.WriteAsync("{\"error\":\"Query required\"}", cancellationToken);
+                return;
+            }
+
+            context.Response.ContentType = "text/event-stream";
+            context.Response.Headers["Cache-Control"] = "no-cache";
+
+            logger.LogInformation("SSE stream: {Query}", request.Query[..Math.Min(200, request.Query.Length)]);
+
+            try
+            {
+                await foreach (var token in system.StreamChatAsync(request.Query, cancellationToken))
+                {
+                    var sseData = JsonSerializer.Serialize(new { text = token });
+                    await context.Response.WriteAsync($"data: {sseData}\n\n", cancellationToken);
+                    await context.Response.Body.FlushAsync(cancellationToken);
+                }
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "SSE stream error");
+                await context.Response.WriteAsync($"data: {{\"error\":\"{ex.Message}\"}}\n\n", cancellationToken);
+            }
+
+            await context.Response.WriteAsync("data: [DONE]\n\n", cancellationToken);
+        });
+
         endpoints.MapGet("/api/status", async (LivingTreeSystem system) =>
         {
             object dnaInfo;

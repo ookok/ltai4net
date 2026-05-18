@@ -4,6 +4,8 @@ using LTAI.Capability.Documents;
 using LTAI.Capability.Reasoning;
 using LTAI.Capability.Search;
 using LTAI.Capability.GIS;
+using LTAI.Capability.Integration;
+using LTAI.Capability.Review;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
@@ -254,6 +256,79 @@ public static class CapabilityEndpoints
             var result = await maps.GetWeatherAsync(city, ct: ct);
             return Results.Json(result);
         });
+
+        endpoints.MapGet("/api/review", async (
+            string? scope, string? target,
+            HttpContext context,
+            CodeReviewEngine review,
+            CancellationToken ct) =>
+        {
+            var reviewScope = Enum.TryParse<ReviewScope>(scope ?? "Staged", true, out var s) ? s : ReviewScope.Staged;
+            var report = await review.ReviewAsync(target, reviewScope, ct);
+
+            if (context.Request.Headers.Accept.ToString().Contains("markdown"))
+            {
+                context.Response.ContentType = "text/markdown";
+                await context.Response.WriteAsync(report.ToMarkdown(), ct);
+                return Results.Empty;
+            }
+
+            return Results.Json(new
+            {
+                report.OverallScore, report.Summary,
+                report.FilesChanged, report.TotalIssues,
+                report.CriticalIssues, report.Warnings, report.Infos,
+                report.ChangedFiles,
+                issues = report.Issues.Select(i => new
+                {
+                    i.File, i.Line, severity = i.Severity.ToString(),
+                    i.Category, i.Title, i.Message, i.Suggestion
+                })
+            });
+        });
+
+        endpoints.MapPost("/api/notify/telegram", async (
+            HttpContext context, TelegramBot bot, CancellationToken ct) =>
+        {
+            using var reader = new StreamReader(context.Request.Body);
+            var body = await reader.ReadToEndAsync(ct);
+            var req = JsonSerializer.Deserialize<NotifyRequest>(body);
+            if (req == null || string.IsNullOrWhiteSpace(req.Message))
+                return Results.Json(new { error = "message required" }, statusCode: 400);
+            var ok = await bot.SendMessageAsync(req.ChatId > 0 ? req.ChatId : 0, req.Message, ct);
+            return Results.Json(new { success = ok });
+        });
+
+        endpoints.MapPost("/api/notify/wework", async (
+            HttpContext context, WechatWorkNotifier wework, CancellationToken ct) =>
+        {
+            using var reader = new StreamReader(context.Request.Body);
+            var body = await reader.ReadToEndAsync(ct);
+            var req = JsonSerializer.Deserialize<NotifyRequest>(body);
+            if (req == null || string.IsNullOrWhiteSpace(req.Message))
+                return Results.Json(new { error = "message required" }, statusCode: 400);
+            var ok = await wework.SendTextAsync(req.Message, ct: ct);
+            return Results.Json(new { success = ok });
+        });
+
+        endpoints.MapGet("/api/update/check", async (
+            AutoUpdater updater, CancellationToken ct) =>
+        {
+            var result = await updater.CheckForUpdatesAsync(ct);
+            return Results.Json(result);
+        });
+
+        endpoints.MapPost("/api/notify/broadcast", async (
+            HttpContext context, UnifiedNotifier notifier, CancellationToken ct) =>
+        {
+            using var reader = new StreamReader(context.Request.Body);
+            var body = await reader.ReadToEndAsync(ct);
+            var req = JsonSerializer.Deserialize<NotifyRequest>(body);
+            if (req == null || string.IsNullOrWhiteSpace(req.Message))
+                return Results.Json(new { error = "message required" }, statusCode: 400);
+            await notifier.NotifyAllAsync(req.Message, ct);
+            return Results.Json(new { success = true });
+        });
     }
 
     private static CodeLanguage DetectLanguage(string code)
@@ -287,6 +362,12 @@ public sealed record SearchRequest
 public sealed record DocParseRequest
 {
     public string FilePath { get; init; } = string.Empty;
+}
+
+public sealed record NotifyRequest
+{
+    public string Message { get; init; } = string.Empty;
+    public long ChatId { get; init; }
 }
 
 public sealed record ReasonRequest

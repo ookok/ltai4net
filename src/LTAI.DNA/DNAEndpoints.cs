@@ -135,5 +135,46 @@ public static class DNAEndpoints
 
             return Results.Json(new { error = "Invalid posture" }, statusCode: 400);
         });
+
+        endpoints.MapGet("/api/dna/world", (DNAOrchestrator dna) =>
+        {
+            return Results.Json(new
+            {
+                entities = dna.World.EntityCount,
+                relations = dna.World.RelationCount,
+                accuracy = dna.World.Accuracy
+            });
+        });
+
+        endpoints.MapGet("/api/dna/predict", (DNAOrchestrator dna, string metric) =>
+        {
+            var forecast = dna.Predictor.Forecast(metric);
+            var trending = dna.Predictor.GetTrending(3);
+            return Results.Json(new { metric, forecast, trending });
+        });
+
+        endpoints.MapGet("/api/dna/memory", (DNAOrchestrator dna, string? query) =>
+        {
+            var recall = query != null ? dna.MTT.Recall(query) : $"Episodes: {dna.MTT.EpisodeCount}";
+            return Results.Json(new { recall });
+        });
+
+        endpoints.MapGet("/api/dna/foresight", (DNAOrchestrator dna, string action) =>
+        {
+            var (proceed, reason) = dna.Foresight.EvaluateAction(action);
+            return Results.Json(new { action, proceed, reason });
+        });
+
+        endpoints.MapGet("/api/dna/focus", (DNAOrchestrator dna) =>
+        {
+            var distribution = dna.Focus.GetFocusDistribution();
+            return Results.Json(new { distribution });
+        });
+
+        endpoints.MapGet("/api/dna/godel", (DNAOrchestrator dna, string statement) =>
+        {
+            var reflection = dna.Godel.Reflect(statement);
+            return Results.Json(new { statement, reflection, depth = dna.Godel.Depth });
+        });
     }
 }

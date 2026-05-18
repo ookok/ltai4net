@@ -1,0 +1,48 @@
+@using LTAI.AI.Governors
+@using LTAI.DNA
+@using LTAI.Metrics
+@using LTAI.Capability.CodeEngine
+@using LTAI.Capability.Review
+@using LTAI.Capability.Search
+@inject LivingTreeSystem LTS
+@inject DNAOrchestrator? DNA
+@inject LTAIMetricsCollector? Metrics
+@inject NavigationManager Nav
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LTAI Console</title>
+    <link rel="stylesheet" href="css/app.css" />
+</head>
+<body>
+    <nav class="sidebar">
+        <div class="logo">LTAI</div>
+        <NavLink href="/" Match="NavLinkMatch.All">📊 Dashboard</NavLink>
+        <NavLink href="/chat">💬 Chat</NavLink>
+        <NavLink href="/files">📁 Files</NavLink>
+        <NavLink href="/git">🔀 Git</NavLink>
+        <NavLink href="/knowledge">📚 Knowledge</NavLink>
+        <NavLink href="/code">🔧 Code</NavLink>
+        <NavLink href="/config">⚙️ Config</NavLink>
+        <div class="status-bar">
+            <div>@LTS.Mode</div>
+            @if (DNA != null)
+            {
+                <div>DNA: @DNA.Consciousness.State.Level</div>
+                <div>Gen: @DNA.Evolution.CurrentGenome.Generation</div>
+            }
+            @if (Metrics != null)
+            {
+                var s = Metrics.GetSnapshot();
+                <div>Req: @s.TotalRequests</div>
+            }
+        </div>
+    </nav>
+    <main class="content">
+        @Body
+    </main>
+</body>
+</html>

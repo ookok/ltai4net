@@ -19,6 +19,9 @@
     <ProjectReference Include="..\LTAI.DNA\LTAI.DNA.csproj" />
     <ProjectReference Include="..\LTAI.Capability\LTAI.Capability.csproj" />
     <ProjectReference Include="..\LTAI.Sandbox\LTAI.Sandbox.csproj" />
+    <ProjectReference Include="..\LTAI.Metrics\LTAI.Metrics.csproj" />
+    <ProjectReference Include="..\LTAI.Multimodal\LTAI.Multimodal.csproj" />
+    <ProjectReference Include="..\LTAI.TreeLLM\LTAI.TreeLLM.csproj" />
   </ItemGroup>
 
   <ItemGroup>

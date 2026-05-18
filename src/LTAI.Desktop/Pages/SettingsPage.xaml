@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="LTAI.Desktop.Pages.SettingsPage"
+             BackgroundColor="#0d1117"
+             Title="Settings">
+    <ScrollView>
+        <VerticalStackLayout Padding="16" Spacing="12">
+            <Label Text="Settings" FontSize="24" TextColor="#f0f6fc" FontAttributes="Bold" />
+            <Label Text="DNA ✅ | Reasoning ✅ | Sandbox ✅ | Metrics ✅ | Multimodal ✅" FontSize="12" TextColor="#3fb950" />
+            <Label Text="LTAI Console v5.5.0" TextColor="#484f58" HorizontalTextAlignment="Center" Margin="0,20,0,0" />
+            <Label Text=".NET MAUI Desktop" TextColor="#484f58" HorizontalTextAlignment="Center" />
+        </VerticalStackLayout>
+    </ScrollView>
+</ContentPage>

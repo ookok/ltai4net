@@ -39,6 +39,12 @@ public static class ServiceCollectionExtensions
 
         services.AddSingleton<KernelMemoryStore>();
 
+        services.AddSingleton<HierarchicalChunker>();
+        services.AddSingleton<MultiDocFusion>();
+        services.AddSingleton<ProvenanceTracker>();
+        services.AddSingleton<LearningEngine>();
+        services.AddSingleton<ContextWiki>();
+
         services.AddSingleton<KnowledgeBase>();
         services.AddSingleton<KnowledgeGraph>();
         services.AddSingleton<RelationEngine>();
@@ -86,6 +92,12 @@ public static class ServiceCollectionExtensions
         });
 
         services.AddSingleton<KernelMemoryStore>();
+
+        services.AddSingleton<HierarchicalChunker>();
+        services.AddSingleton<MultiDocFusion>();
+        services.AddSingleton<ProvenanceTracker>();
+        services.AddSingleton<LearningEngine>();
+        services.AddSingleton<ContextWiki>();
 
         services.AddSingleton<KnowledgeBase>();
         services.AddSingleton<KnowledgeGraph>();

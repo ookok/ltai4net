@@ -1,0 +1,91 @@
+@page "/"
+@inject DNAOrchestrator? DNA
+@inject LTAIMetricsCollector? Metrics
+
+<PageTitle>Dashboard — LTAI</PageTitle>
+
+<h2>Dashboard</h2>
+
+<div class="grid-3">
+    <div class="card">
+        <h3>DNA Status</h3>
+        @if (DNA != null)
+        {
+            <div class="metric"><span>Consciousness</span><span class="val">@DNA.Consciousness.State.Level</span></div>
+            <div class="metric"><span>Awareness</span>
+                <div class="bar"><div class="fill cyan" style="width:@(DNA.Consciousness.State.AwarenessScore*100)%"></div></div>
+                <span>@DNA.Consciousness.State.AwarenessScore.ToString("F2")</span>
+            </div>
+            <div class="metric"><span>Evolution</span><span class="val">@DNA.Evolution.Phase Gen @DNA.Evolution.CurrentGenome.Generation</span></div>
+            <div class="metric"><span>Fitness</span>
+                <div class="bar"><div class="fill green" style="width:@(DNA.Evolution.CurrentGenome.FitnessScore*100)%"></div></div>
+                <span>@DNA.Evolution.CurrentGenome.FitnessScore.ToString("F3")</span>
+            </div>
+            <div class="metric"><span>Safety</span><span class="val @(DNA.Safety.Posture.ToString().ToLower())">@DNA.Safety.Posture</span></div>
+            <div class="metric"><span>Biorhythm</span><span class="val">@DNA.Life.Biorhythm.Phase E:@DNA.Life.Biorhythm.EnergyLevel.ToString("F1")</span></div>
+        }
+        else { <p class="muted">DNA module not loaded</p> }
+    </div>
+
+    <div class="card">
+        <h3>Hormones</h3>
+        @if (DNA != null)
+        {
+            var h = DNA.Life.Hormones;
+            <div class="metric"><span>Dopamine</span><div class="bar"><div class="fill magenta" style="width:@(h.Dopamine*100)%"></div></div><span>@h.Dopamine.ToString("F2")</span></div>
+            <div class="metric"><span>Serotonin</span><div class="bar"><div class="fill yellow" style="width:@(h.Serotonin*100)%"></div></div><span>@h.Serotonin.ToString("F2")</span></div>
+            <div class="metric"><span>Cortisol</span><div class="bar"><div class="fill red" style="width:@(h.Cortisol*100)%"></div></div><span>@h.Cortisol.ToString("F2")</span></div>
+            <div class="metric"><span>Oxytocin</span><div class="bar"><div class="fill blue" style="width:@(h.Oxytocin*100)%"></div></div><span>@h.Oxytocin.ToString("F2")</span></div>
+        }
+    </div>
+
+    <div class="card">
+        <h3>System</h3>
+        @if (Metrics != null)
+        {
+            var s = Metrics.GetSnapshot();
+            <div class="metric"><span>Requests</span><span class="val">@s.TotalRequests</span></div>
+            <div class="metric"><span>Tokens</span><span class="val">@s.TotalTokens</span></div>
+            <div class="metric"><span>Avg Latency</span><span class="val">@s.AvgLatencyMs.ToString("F0")ms</span></div>
+            <div class="metric"><span>Memory</span><span class="val">@s.MemoryMb MB</span></div>
+            <div class="metric"><span>Active Tasks</span><span class="val">@s.ActiveTasks</span></div>
+        }
+    </div>
+</div>
+
+<div class="grid-2" style="margin-top:1rem">
+    <div class="card">
+        <h3>Genes</h3>
+        @if (DNA != null)
+        {
+            foreach (var (name, gene) in DNA.Evolution.CurrentGenome.Genes.Take(8))
+            {
+                <div class="metric">
+                    <span>@name</span>
+                    <div class="bar"><div class="fill green" style="width:@(gene.Expression*100)%"></div></div>
+                    <span>@gene.Expression.ToString("F2")</span>
+                </div>
+            }
+        }
+    </div>
+
+    <div class="card">
+        <h3>Personality</h3>
+        @if (DNA != null)
+        {
+            var p = DNA.Life.Personality;
+            <div class="metric"><span>Openness</span><div class="bar"><div class="fill cyan" style="width:@(p.Openness*100)%"></div></div><span>@p.Openness.ToString("F2")</span></div>
+            <div class="metric"><span>Conscientiousness</span><div class="bar"><div class="fill green" style="width:@(p.Conscientiousness*100)%"></div></div><span>@p.Conscientiousness.ToString("F2")</span></div>
+            <div class="metric"><span>Extraversion</span><div class="bar"><div class="fill yellow" style="width:@(p.Extraversion*100)%"></div></div><span>@p.Extraversion.ToString("F2")</span></div>
+            <div class="metric"><span>Agreeableness</span><div class="bar"><div class="fill blue" style="width:@(p.Agreeableness*100)%"></div></div><span>@p.Agreeableness.ToString("F2")</span></div>
+            <div class="metric"><span>Neuroticism</span><div class="bar"><div class="fill red" style="width:@(p.Neuroticism*100)%"></div></div><span>@p.Neuroticism.ToString("F2")</span></div>
+        }
+    </div>
+</div>
+
+@code {
+    protected override async Task OnInitializedAsync()
+    {
+        while (true) { await Task.Delay(3000); StateHasChanged(); }
+    }
+}

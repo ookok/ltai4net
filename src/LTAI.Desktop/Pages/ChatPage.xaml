@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="LTAI.Desktop.Pages.ChatPage"
+             BackgroundColor="#0d1117"
+             Title="Chat">
+    <Grid RowDefinitions="Auto,*,Auto" Padding="12" RowSpacing="8">
+        <!-- Toolbar -->
+        <HorizontalStackLayout Grid.Row="0" Spacing="8">
+            <Button Text="📋" Clicked="OnTemplates" BackgroundColor="#21262d" TextColor="#c9d1d9" WidthRequest="44" ToolTipProperties.Text="Templates" />
+            <Button Text="📎" Clicked="OnAttach" BackgroundColor="#21262d" TextColor="#c9d1d9" WidthRequest="44" ToolTipProperties.Text="Attach File" />
+            <Button Text="🔀" Clicked="OnBranch" BackgroundColor="#21262d" TextColor="#c9d1d9" WidthRequest="44" ToolTipProperties.Text="Multi-Model Branch" />
+            <Button Text="📥" Clicked="OnExport" BackgroundColor="#21262d" TextColor="#c9d1d9" WidthRequest="44" ToolTipProperties.Text="Export" />
+            <Button Text="🗑" Clicked="OnClear" BackgroundColor="#21262d" TextColor="#c9d1d9" WidthRequest="44" ToolTipProperties.Text="Clear" />
+            <Label x:Name="SessionLabel" Text="Turns:0 Tokens:0" FontSize="11" TextColor="#484f58" VerticalOptions="Center" />
+        </HorizontalStackLayout>
+
+        <!-- Chat WebView -->
+        <WebView x:Name="ChatWebView" Grid.Row="1" BackgroundColor="#0d1117" />
+
+        <!-- Input -->
+        <Grid Grid.Row="2" ColumnDefinitions="*,Auto" ColumnSpacing="8">
+            <Editor x:Name="InputEditor" Grid.Column="0" 
+                    Placeholder="@path load file | Shift+Enter new line | Enter send"
+                    BackgroundColor="#161b22" TextColor="#f0f6fc" PlaceholderColor="#484f58"
+                    MinimumHeightRequest="56" MaximumHeightRequest="120" AutoSize="TextChanges"
+                    FontSize="13" />
+            <Button Grid.Column="1" Text="Send" Clicked="OnSend" 
+                    BackgroundColor="#238636" TextColor="White" WidthRequest="80"
+                    FontAttributes="Bold" />
+        </Grid>
+    </Grid>
+</ContentPage>

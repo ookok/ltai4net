@@ -1,0 +1,64 @@
+@page "/code"
+@inject MultiLangCodeAnalyzer Analyzer
+@inject CodeReviewEngine Review
+
+<PageTitle>Code — LTAI</PageTitle>
+<h2>Code Tools</h2>
+
+<div class="tabs">
+    <button class="tab @(_tab == "analyze" ? "active" : "")" @onclick="() => _tab = \"analyze\"">Analyze</button>
+    <button class="tab @(_tab == "review" ? "active" : "")" @onclick="() => _tab = \"review\"">Review</button>
+</div>
+
+@if (_tab == "analyze")
+{
+    <div class="card">
+        <h3>Analyze Code</h3>
+        <textarea @bind="CodeInput" rows="12" placeholder="Paste code here..."></textarea>
+        <select @bind="LanguageInput">
+            <option value="">Auto</option>
+            @foreach (var l in Enum.GetNames<CodeLanguage>()) { <option value="@l">@l</option> }
+        </select>
+        <button @onclick="AnalyzeCodeAsync">Analyze</button>
+
+        @if (_analysisResult != null)
+        {
+            <div class="results">
+                <p>Language: @_analysisResult.LanguageName | Lines: @_analysisResult.TotalLines | Functions: @_analysisResult.Functions.Count | Complexity: @_analysisResult.Complexity</p>
+            </div>
+        }
+    </div>
+}
+else
+{
+    <div class="card">
+        <h3>Code Review</h3>
+        <button @onclick="RunReviewAsync">Review Staged Changes</button>
+        @if (_reviewReport != null)
+        {
+            <p>Score: <strong>@_reviewReport.OverallScore:F0</strong>/100 — @_reviewReport.Summary</p>
+            <p>Issues: @_reviewReport.TotalIssues (🔴@_reviewReport.CriticalIssues 🟡@_reviewReport.Warnings 🔵@_reviewReport.Infos)</p>
+        }
+    </div>
+}
+
+@code {
+    private string _tab = "analyze";
+    private string CodeInput = "";
+    private string LanguageInput = "";
+    private CodeAnalysisResult? _analysisResult;
+    private ReviewReport? _reviewReport;
+
+    private async Task AnalyzeCodeAsync()
+    {
+        if (string.IsNullOrWhiteSpace(CodeInput)) return;
+        var lang = Enum.TryParse<CodeLanguage>(LanguageInput, out var l) ? l : CodeLanguage.Unknown;
+        _analysisResult = Analyzer.Analyze(CodeInput, lang);
+        await Task.CompletedTask;
+    }
+
+    private async Task RunReviewAsync()
+    {
+        _reviewReport = await Review.ReviewAsync();
+    }
+}

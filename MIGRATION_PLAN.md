@@ -8,10 +8,14 @@
 
 | 指标 | 值 |
 |------|-----|
-| 项目数 | 17 |
-| .cs 文件 | ~190 |
+| 项目数 | 23 |
+| .cs 文件 | ~230 |
 | 构建 | 0 错误 |
 | 测试 | 27 通过 |
+| 端点 | 63 |
+| 工具 | 14 |
+| Phase 1-6 | ✅ 完成 |
+| 交付闭环 | ✅ 完成(压测+AOT) |
 | Phase 1-6 | ✅ 完成 |
 
 ## 阶段路线
@@ -47,7 +51,8 @@
 | DB | Microsoft.Data.Sqlite + FTS5 | 全文搜索 |
 | 序列化 | System.Text.Json | AOT友好 |
 | P2P | Channel\<NetworkMessage\> + **SmartDNS** + ProxyPool | 异步消息 + DNS缓存 |
-| 测试 | xUnit | .NET标配 |
+| AOT编译 | **NativeAOT** (PublishAot) 单文件部署 | 独立exe |
+| 测试 | xUnit + **BenchmarkDotNet** | 性能基准 |
 
 ## 模块映射
 

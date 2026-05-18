@@ -26,10 +26,10 @@ public static class AdaptiveExtractor
     };
 
     public static async Task<List<Dictionary<string, object?>>> ExtractAsync(
-        PuppeteerSharp.IPage page,
+        Microsoft.Playwright.IPage page,
         string task)
     {
-        var html = await page.GetContentAsync();
+        var html = await page.ContentAsync();
         return ExtractFromHtml(html, task);
     }
 

@@ -16,6 +16,9 @@ using LTAI.MAF;
 using LTAI.DNA;
 using LTAI.Capability;
 using LTAI.Sandbox;
+using LTAI.Metrics;
+using LTAI.Multimodal;
+using LTAI.TreeLLM;
 using Microsoft.AspNetCore.RateLimiting;
 using OpenTelemetry.Logs;
 using OpenTelemetry.Metrics;
@@ -93,6 +96,9 @@ builder.Services.AddLTAIMAF();
 builder.Services.AddLTAIDNA();
 builder.Services.AddLTAICapability();
 builder.Services.AddLTAISandbox();
+builder.Services.AddLTAIMetrics();
+builder.Services.AddLTAIMultimodal();
+builder.Services.AddLTAITreeLLM();
 
 var app = builder.Build();
 
@@ -104,6 +110,8 @@ app.MapMAFEndpoints();
 app.MapDNAEndpoints();
 app.MapCapabilityEndpoints();
 app.MapSandboxEndpoints();
+app.UseLTAIMetrics();
+app.MapMultimodalEndpoints();
 
 app.UseSerilogRequestLogging();
 
@@ -255,6 +263,25 @@ static async Task RegisterCapabilityTools(IServiceProvider sp)
         });
     }
     catch (Exception ex) { logger.LogWarning(ex, "GIS tool not registered"); }
+
+    try
+    {
+        var review = sp.GetRequiredService<LTAI.Capability.Review.CodeReviewEngine>();
+        await registry.RegisterAsync("code_review", async args =>
+        {
+            var scope = args.TryGetValue("scope", out var s) ? s?.ToString() ?? "staged" : "staged";
+            var reviewScope = Enum.TryParse<LTAI.Capability.Review.ReviewScope>(scope, true, out var rs) ? rs : LTAI.Capability.Review.ReviewScope.Staged;
+            var report = await review.ReviewAsync(null, reviewScope);
+            return new
+            {
+                report.OverallScore, report.Summary,
+                report.FilesChanged, report.TotalIssues,
+                critical = report.CriticalIssues, warnings = report.Warnings, info = report.Infos,
+                topIssues = report.Issues.Take(5).Select(i => new { i.File, i.Line, i.Title, i.Severity })
+            };
+        });
+    }
+    catch (Exception ex) { logger.LogWarning(ex, "Review tool not registered"); }
 
     logger.LogInformation("Registered {Count} capability tools", registry.ListTools().Count());
 

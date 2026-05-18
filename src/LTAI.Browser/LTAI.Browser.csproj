@@ -6,7 +6,7 @@
 
   <ItemGroup>
     <PackageReference Include="HtmlAgilityPack" Version="1.12.4" />
-    <PackageReference Include="PuppeteerSharp" Version="24.42.0" />
+    <PackageReference Include="Microsoft.Playwright" Version="1.59.0" />
   </ItemGroup>
 
   <PropertyGroup>

@@ -7,7 +7,8 @@ public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddLTAIBrowser(this IServiceCollection services)
     {
-        services.AddSingleton<IBrowserAgent, BrowserAgent>();
+        services.AddSingleton<IBrowserAgent, PlaywrightBrowserAgent>();
+        services.AddSingleton<PlaywrightBrowserAgent>();
         return services;
     }
 }

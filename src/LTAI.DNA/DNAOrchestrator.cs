@@ -13,24 +13,56 @@ public sealed class DNAOrchestrator
     private readonly EvolutionDriver _evolution;
     private readonly SafetyCoordinator _safety;
     private readonly LifeEngine _life;
+    private readonly SelfEvolution _selfEvo;
+    private readonly WorldModel _world;
+    private readonly PredictiveEngine _predictor;
+    private readonly MentalTimeTravel _mtt;
+    private readonly ForesightGovernance _foresight;
+    private readonly EntropyDrive _entropy;
+    private readonly FocusDilution _focus;
+    private readonly GodelianSelf _godel;
 
     public DualConsciousness Consciousness => _consciousness;
     public EvolutionDriver Evolution => _evolution;
     public SafetyCoordinator Safety => _safety;
     public LifeEngine Life => _life;
+    public SelfEvolution SelfEvo => _selfEvo;
+    public WorldModel World => _world;
+    public PredictiveEngine Predictor => _predictor;
+    public MentalTimeTravel MTT => _mtt;
+    public ForesightGovernance Foresight => _foresight;
+    public EntropyDrive Entropy => _entropy;
+    public FocusDilution Focus => _focus;
+    public GodelianSelf Godel => _godel;
 
     public DNAOrchestrator(
         ILogger<DNAOrchestrator> logger,
         DualConsciousness consciousness,
         EvolutionDriver evolution,
         SafetyCoordinator safety,
-        LifeEngine life)
+        LifeEngine life,
+        SelfEvolution selfEvo,
+        WorldModel world,
+        PredictiveEngine predictor,
+        MentalTimeTravel mtt,
+        ForesightGovernance foresight,
+        EntropyDrive entropy,
+        FocusDilution focus,
+        GodelianSelf godel)
     {
         _logger = logger;
         _consciousness = consciousness;
         _evolution = evolution;
         _safety = safety;
         _life = life;
+        _selfEvo = selfEvo;
+        _world = world;
+        _predictor = predictor;
+        _mtt = mtt;
+        _foresight = foresight;
+        _entropy = entropy;
+        _focus = focus;
+        _godel = godel;
     }
 
     public async Task<DNAProcessResult> ProcessAsync(
@@ -64,6 +96,15 @@ public sealed class DNAOrchestrator
         };
 
         await _evolution.EvolveAsync(fitnessSignals, cancellationToken);
+        await _selfEvo.EvolveAsync(fitnessSignals, cancellationToken);
+
+        _world.Observe("input", "length", input.Length);
+        _world.LearnRelation("input", "safety", "triggers", safetyVerdict.RiskScore);
+        _predictor.Record("safety", 1.0 - safetyVerdict.RiskScore);
+        _predictor.Record("awareness", _consciousness.State.AwarenessScore);
+        _mtt.RecordEpisode(input[..Math.Min(input.Length, 80)],
+            previousOutput?[..Math.Min(previousOutput?.Length ?? 0, 80)] ?? "",
+            safetyVerdict.RiskScore > 0.3 ? 0.8 : 0.3);
 
         if (previousOutput != null)
             _life.ProcessInteraction(input, previousOutput);

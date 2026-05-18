@@ -1,333 +1,207 @@
-using System.Diagnostics;
+using System.Collections.Concurrent;
 using System.Text.Json;
 using LTAI.Browser.Interfaces;
 using LTAI.Browser.Models;
 using Microsoft.Extensions.Logging;
-using PuppeteerSharp;
+using Microsoft.Playwright;
 
 namespace LTAI.Browser;
 
-public sealed class BrowserAgent : IBrowserAgent, IAsyncDisposable
+public sealed class PlaywrightBrowserAgent : IBrowserAgent, IAsyncDisposable
 {
-    private readonly ILogger<BrowserAgent> _logger;
-    private readonly Dictionary<string, SessionState> _sessions = new();
-    private string? _activeSessionId;
-    private static readonly string DefaultUserAgent =
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+    private readonly ILogger<PlaywrightBrowserAgent> _logger;
+    private readonly ConcurrentDictionary<string, PwBrowserSession> _sessions = new();
+    private IPlaywright? _playwright;
+    private IBrowser? _browser;
+    private bool _initialized;
 
-    private sealed class SessionState : IDisposable
-    {
-        public IBrowser Browser { get; init; } = null!;
-        public IPage Page { get; init; } = null!;
-        public DateTime CreatedAt { get; init; }
-        public int PageViews { get; set; }
-
-        public void Dispose()
-        {
-            try { Page?.Dispose(); } catch { }
-            try { Browser?.Dispose(); } catch { }
-        }
-    }
-
-    public BrowserAgent(ILogger<BrowserAgent> logger)
+    public PlaywrightBrowserAgent(ILogger<PlaywrightBrowserAgent> logger)
     {
         _logger = logger;
     }
 
-    public async Task<BrowserResult> BrowseAsync(
-        string url,
-        string task,
-        int maxIterations = 6,
-        CancellationToken cancellationToken = default)
+    private async Task EnsureInitializedAsync()
     {
-        var sw = Stopwatch.StartNew();
-
-        try
+        if (_initialized) return;
+        _playwright = await Microsoft.Playwright.Playwright.CreateAsync();
+        _browser = await _playwright.Chromium.LaunchAsync(new BrowserTypeLaunchOptions
         {
-            using var sessionLease = await CreateBrowserSessionAsync();
-            var page = sessionLease.Page;
-
-            await NavigateAsync(page, url);
-
-            List<Dictionary<string, object?>>? items = null;
-
-            for (var iteration = 0; iteration < maxIterations; iteration++)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-
-                var state = await ExtractPageStateInternalAsync(page);
-                var textSample = state.Text.Length > 3000 ? state.Text[..3000] : state.Text;
-
-                if (string.IsNullOrWhiteSpace(textSample) ||
-                    textSample.Length < 50)
-                {
-                    items = await AdaptiveExtractor.ExtractAsync(page, task);
-                    if (items is { Count: > 0 })
-                        break;
-                }
-                else
-                {
-                    items = await AdaptiveExtractor.ExtractAsync(page, task);
-                    if (items is { Count: > 0 })
-                        break;
-                }
-
-                await Task.Delay(500, cancellationToken);
-            }
-
-            items ??= await AdaptiveExtractor.ExtractAsync(page, task);
-
-            var title = await page.GetTitleAsync();
-            sw.Stop();
-
-            _logger.LogInformation("Browse completed: {Url}, items: {Count}, elapsed: {Elapsed}ms",
-                url, items.Count, sw.ElapsedMilliseconds);
-
-            return BrowserResult.Ok(url, title, items, "puppeteer", sw.ElapsedMilliseconds);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            sw.Stop();
-            _logger.LogError(ex, "Browse failed: {Url}", url);
-            return BrowserResult.Fail(url, ex.Message, sw.ElapsedMilliseconds);
-        }
+            Headless = true,
+            Args = new[] { "--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage" }
+        });
+        _initialized = true;
     }
 
-    public async Task<ScreenshotResult> ScreenshotAsync(CancellationToken cancellationToken = default)
+    public async Task<BrowserResult> BrowseAsync(string url, string task, int maxIterations = 6, CancellationToken ct = default)
     {
-        var state = GetActiveSession();
-        if (state == null)
-            return new ScreenshotResult { Success = false, Error = "No active browser session" };
+        await EnsureInitializedAsync();
+        var sw = System.Diagnostics.Stopwatch.StartNew();
 
         try
         {
-            var data = await state.Page.ScreenshotDataAsync(new ScreenshotOptions
-            {
-                FullPage = false,
-                Type = ScreenshotType.Png
-            });
+            var page = await _browser!.NewPageAsync();
+            await page.GotoAsync(url, new() { Timeout = 30000, WaitUntil = WaitUntilState.DOMContentLoaded });
+            await page.WaitForTimeoutAsync(2000);
 
-            var viewport = state.Page.Viewport;
-            return new ScreenshotResult
+            var title = await page.TitleAsync();
+            var html = await page.ContentAsync();
+            var items = AdaptiveExtractor.ExtractFromHtml(html, task);
+            var text = ExtractText(html);
+
+            sw.Stop();
+            return new BrowserResult
             {
-                Success = true,
-                Base64 = Convert.ToBase64String(data),
-                Width = (int)(viewport?.Width ?? 1920),
-                Height = (int)(viewport?.Height ?? 1080)
+                Success = true, Url = url, Title = title,
+                Text = text, Items = items,
+                Count = items.Count, Method = "playwright",
+                ElapsedMs = sw.ElapsedMilliseconds
             };
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Screenshot failed");
-            return new ScreenshotResult { Success = false, Error = ex.Message };
+            sw.Stop();
+            _logger.LogError(ex, "Playwright browse failed: {Url}", url);
+            return new BrowserResult { Success = false, Error = ex.Message, ElapsedMs = sw.ElapsedMilliseconds };
         }
     }
 
-    public async Task<string> SessionOpenAsync(string? url = null, CancellationToken cancellationToken = default)
+    public async Task<ScreenshotResult> ScreenshotAsync(string? url = null, CancellationToken ct = default)
     {
-        var sessionId = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds().ToString();
-        var session = await CreateBrowserSessionAsync();
-
-        var page = session.Page;
-
-        if (!string.IsNullOrEmpty(url))
-        {
-            await NavigateAsync(page, url);
-        }
-
-        _sessions[sessionId] = session;
-        _activeSessionId = sessionId;
-
-        _logger.LogInformation("Session opened: {SessionId}, url: {Url}", sessionId, url);
-        return sessionId;
-    }
-
-    public Task SessionCloseAsync(CancellationToken cancellationToken = default)
-    {
-        if (_activeSessionId == null || !_sessions.TryGetValue(_activeSessionId, out var state))
-            return Task.CompletedTask;
-
-        return CloseSessionInternalAsync(_activeSessionId, state);
-    }
-
-    public Task<IReadOnlyList<BrowserSession>> SessionListAsync(CancellationToken cancellationToken = default)
-    {
-        var list = _sessions
-            .Select(kvp =>
-            {
-                var state = kvp.Value;
-                return new BrowserSession
-                {
-                    SessionId = kvp.Key,
-                    CurrentUrl = state.Page.Url,
-                    CreatedAt = state.CreatedAt,
-                    PageViews = state.PageViews
-                };
-            })
-            .ToList();
-
-        return Task.FromResult<IReadOnlyList<BrowserSession>>(list);
-    }
-
-    public Task<PageState> ExtractPageStateAsync(CancellationToken cancellationToken = default)
-    {
-        var state = GetActiveSession();
-        if (state == null)
-            return Task.FromResult(new PageState());
-
-        return ExtractPageStateInternalAsync(state.Page);
-    }
-
-    private async Task<SessionState> CreateBrowserSessionAsync()
-    {
-        var browser = await Puppeteer.LaunchAsync(new LaunchOptions
-        {
-            Headless = true,
-            Args = new[]
-            {
-                "--no-sandbox",
-                "--disable-setuid-sandbox",
-                "--disable-blink-features=AutomationControlled",
-                "--disable-dev-shm-usage",
-                "--disable-web-security"
-            }
-        });
-
-        var page = await browser.NewPageAsync();
-        await page.SetUserAgentAsync(DefaultUserAgent);
-        await page.SetViewportAsync(new ViewPortOptions
-        {
-            Width = 1920,
-            Height = 1080
-        });
-
-        return new SessionState
-        {
-            Browser = browser,
-            Page = page,
-            CreatedAt = DateTime.UtcNow
-        };
-    }
-
-    private async Task NavigateAsync(IPage page, string url)
-    {
-        await page.GoToAsync(url, new NavigationOptions
-        {
-            Timeout = 30000,
-            WaitUntil = new[] { WaitUntilNavigation.Networkidle2 }
-        });
-    }
-
-    private SessionState? GetActiveSession()
-    {
-        if (_activeSessionId != null && _sessions.TryGetValue(_activeSessionId, out var state))
-            return state;
-        return null;
-    }
-
-    private async Task CloseSessionInternalAsync(string sessionId, SessionState state)
-    {
+        await EnsureInitializedAsync();
         try
         {
-            await state.Page.CloseAsync();
-            await state.Browser.CloseAsync();
-            _sessions.Remove(sessionId);
-            if (_activeSessionId == sessionId)
+            var page = _browser!.Contexts.FirstOrDefault()?.Pages.FirstOrDefault();
+            if (page == null && url != null)
             {
-                _activeSessionId = _sessions.Keys.FirstOrDefault();
+                page = await _browser.NewPageAsync();
+                await page.GotoAsync(url);
             }
-            _logger.LogInformation("Session closed: {SessionId}", sessionId);
+            if (page == null) return new ScreenshotResult { Success = false, Error = "No active page" };
+
+            var bytes = await page.ScreenshotAsync(new() { FullPage = true, Type = ScreenshotType.Png });
+            return new ScreenshotResult
+            {
+                Success = true, Width = page.ViewportSize?.Width ?? 0,
+                Height = page.ViewportSize?.Height ?? 0,
+                Base64 = Convert.ToBase64String(bytes)
+            };
+        }
+        catch (Exception ex) { return new ScreenshotResult { Success = false, Error = ex.Message }; }
+    }
+
+    public async Task<string> SessionOpenAsync(string? url = null, CancellationToken ct = default)
+    {
+        await EnsureInitializedAsync();
+        var context = await _browser!.NewContextAsync();
+        var session = new PwBrowserSession { Id = Guid.NewGuid().ToString("N"), Context = context, CreatedAt = DateTime.UtcNow };
+
+        if (url != null)
+        {
+            var page = await context.NewPageAsync();
+            await page.GotoAsync(url);
+            session.Page = page;
+        }
+
+        _sessions[session.Id] = session;
+        return session.Id;
+    }
+
+    public async Task SessionCloseAsync(string sessionId, CancellationToken ct = default)
+    {
+        if (_sessions.TryRemove(sessionId, out var session))
+        {
+            await session.Context.CloseAsync();
+        }
+    }
+
+    public async Task<List<BrowserSession>> SessionListAsync(CancellationToken ct = default)
+    {
+        var list = new List<BrowserSession>();
+        foreach (var (id, s) in _sessions)
+        {
+            list.Add(new BrowserSession { SessionId = id, CurrentUrl = s.Page?.Url, CreatedAt = s.CreatedAt });
+        }
+        return list;
+    }
+
+    public async Task<PageState> ExtractPageStateAsync(object? context = null, CancellationToken ct = default)
+    {
+        if (context is not IPage page)
+        {
+            page = _browser?.Contexts.FirstOrDefault()?.Pages.FirstOrDefault();
+            if (page == null) return new PageState();
+        }
+
+        try
+        {
+            var text = await page.EvaluateAsync<string>(@"() => {
+                const b = document.body;
+                if (!b) return '';
+                const c = b.cloneNode(true);
+                c.querySelectorAll('script, style, noscript, iframe, svg').forEach(s => s.remove());
+                return (c.textContent || '').substring(0, 50000);
+            }");
+
+            return new PageState { Text = text ?? "", Items = new List<PageItem>() };
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to close session: {SessionId}", sessionId);
+            _logger.LogDebug(ex, "Page state extraction partial");
+            return new PageState();
         }
     }
 
-    internal static async Task<PageState> ExtractPageStateInternalAsync(IPage page)
+    public async Task<BrowserResult> ClickAsync(string selector, CancellationToken ct = default)
     {
-        var state = new PageState();
+        var page = GetActivePage();
+        if (page == null) return new BrowserResult { Success = false, Error = "No active page" };
 
-        try
-        {
-            var jsInputs = @"
-                (() => {
-                    const inputs = [];
-                    const els = document.querySelectorAll('input:not([type=""hidden""]), textarea, select');
-                    for (let i = 0; i < Math.min(els.length, 30); i++) {
-                        const el = els[i];
-                        let sel = el.id ? '#' + CSS.escape(el.id) :
-                            el.className ? '.' + el.className.split(' ')[0] :
-                            el.name ? '[name=""' + el.name + '""]' : '';
-                        inputs.push({
-                            selector: sel || el.tagName.toLowerCase(),
-                            type: (el.getAttribute('type') || el.tagName.toLowerCase()),
-                            placeholder: (el.getAttribute('placeholder') || '').substring(0, 60),
-                            visible: !!el.offsetParent
-                        });
-                    }
-                    return inputs;
-                })()";
+        try { await page.ClickAsync(selector); await page.WaitForTimeoutAsync(1000); return new BrowserResult { Success = true }; }
+        catch (Exception ex) { return new BrowserResult { Success = false, Error = ex.Message }; }
+    }
 
-            var inputs = await page.EvaluateFunctionAsync<List<PageInput>>(jsInputs);
-            state.Inputs = inputs ?? new List<PageInput>();
+    public async Task<BrowserResult> FillAsync(string selector, string text, CancellationToken ct = default)
+    {
+        var page = GetActivePage();
+        if (page == null) return new BrowserResult { Success = false, Error = "No active page" };
+        try { await page.FillAsync(selector, text); return new BrowserResult { Success = true }; }
+        catch (Exception ex) { return new BrowserResult { Success = false, Error = ex.Message }; }
+    }
 
-            var jsClickables = @"
-                (() => {
-                    const clickables = [];
-                    const els = document.querySelectorAll('button, a, [role=""button""], [onclick]');
-                    for (let i = 0; i < Math.min(els.length, 40); i++) {
-                        const el = els[i];
-                        const text = (el.textContent || '').trim().substring(0, 40);
-                        if (!text && !el.id) continue;
-                        let sel = el.id ? '#' + CSS.escape(el.id) :
-                            el.className ? '.' + el.className.split(' ')[0] : el.tagName.toLowerCase();
-                        if (el.offsetParent || text) {
-                            clickables.push({
-                                selector: sel,
-                                text: text,
-                                visible: !!el.offsetParent
-                            });
-                        }
-                    }
-                    return clickables;
-                })()";
+    public async Task<string> EvaluateAsync(string script, CancellationToken ct = default)
+    {
+        var page = GetActivePage();
+        if (page == null) return "No active page";
+        try { var r = await page.EvaluateAsync<object>(script); return r?.ToString() ?? "undefined"; }
+        catch (Exception ex) { return $"Error: {ex.Message}"; }
+    }
 
-            var clickables = await page.EvaluateFunctionAsync<List<PageClickable>>(jsClickables);
-            state.Clickables = clickables ?? new List<PageClickable>();
+    private IPage? GetActivePage() =>
+        _sessions.Values.FirstOrDefault(s => s.Page != null)?.Page
+        ?? _browser?.Contexts.FirstOrDefault()?.Pages.FirstOrDefault();
 
-            var jsText = @"
-                (() => {
-                    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-                    let text = '';
-                    let node;
-                    while ((node = walker.nextNode())) {
-                        if (['SCRIPT','STYLE','NOSCRIPT','SVG'].includes(node.parentElement?.tagName||'')) continue;
-                        const t = node.textContent.trim();
-                        if (t.length > 1) text += t + ' ';
-                        if (text.length > 5000) break;
-                    }
-                    return text;
-                })()";
-
-            var text = await page.EvaluateFunctionAsync<string>(jsText) ?? string.Empty;
-            state.Text = text;
-        }
-        catch (Exception)
-        {
-            state.Text = string.Empty;
-        }
-
-        return state;
+    private static string ExtractText(string html)
+    {
+        var doc = new HtmlAgilityPack.HtmlDocument();
+        doc.LoadHtml(html);
+        var body = doc.DocumentNode.SelectSingleNode("//body");
+        return body?.InnerText?[..Math.Min(body.InnerText?.Length ?? 0, 50000)] ?? "";
     }
 
     public async ValueTask DisposeAsync()
     {
-        foreach (var (id, state) in _sessions.ToList())
-        {
-            await CloseSessionInternalAsync(id, state);
-        }
+        foreach (var (_, s) in _sessions) await s.Context.CloseAsync();
         _sessions.Clear();
+        if (_browser != null) await _browser.CloseAsync();
+        _playwright?.Dispose();
         GC.SuppressFinalize(this);
     }
+}
+
+internal sealed class PwBrowserSession
+{
+    public string Id { get; init; } = "";
+    public IBrowserContext Context { get; init; } = null!;
+    public IPage? Page { get; set; }
+    public DateTime CreatedAt { get; init; }
 }
