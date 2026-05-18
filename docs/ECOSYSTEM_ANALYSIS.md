@@ -411,6 +411,14 @@ Config 管理                 →  IConfiguration + Options 模式
 
 **PDF 表格路由架构:** PdfPig/Tabula.DotNet (原生提取优先) → 判定为扫描件 → PaddleOCRSharp OCR 回退
 
+**性能优化原则 (场景决定工具):**
+
+| 场景 | 轻量/开发环境 | 大文件/生产环境 |
+|------|-------------|---------------|
+| 向量存储 | SharpVector (内存) | **LanceDB .NET SDK** (Rust引擎, 列式持久化) |
+| PDF 解析 | PdfPig (纯C#) | **并行切页 + P/Invoke MuPDF** (C引擎) |
+| Excel 读写 | ClosedXML (DOM API) | **DocumentFormat.OpenXml OpenXmlReader** (SAX流式) |
+
 ### 整合建议
 
 - **已使用并保留**: `System.Text.Json`, `HtmlAgilityPack`, `PuppeteerSharp`, `gRPC+Protobuf`
