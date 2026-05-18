@@ -395,6 +395,18 @@ Config 管理                 →  IConfiguration + Options 模式
 | **gRPC** (`Grpc.AspNetCore` + `Google.Protobuf`) | 高性能 RPC 服务 | ✅ LTAI.Network 已使用 |
 | **OpenTelemetry** | 链路追踪/指标/日志 | ❌ 待引入 (MAF 内置) |
 
+### 文档解析
+
+| 包 | 用途 | 对标 Python |
+|---|------|-----------|
+| **PdfPig** | PDF 文本/结构解析 | `pypdf` / `pdfplumber` |
+| **Tabula.DotNet** | 原生 PDF 表格提取 (快/精度100%) | `pdfplumber` + `camelot` |
+| **PaddleOCRSharp** | OCR 视觉表格识别 (扫描件回退, 中文优化) | `paddleocr` + `pytesseract` |
+| **NPOI** | Office 文档 (.xls/.xlsx/.docx) | `openpyxl` + `python-docx` |
+| **DocumentFormat.OpenXml** | Office Open XML SDK | `python-pptx` |
+
+**PDF 表格路由架构:** PdfPig/Tabula.DotNet (原生提取优先) → 判定为扫描件 → PaddleOCRSharp OCR 回退
+
 ### 整合建议
 
 - **已使用并保留**: `System.Text.Json`, `HtmlAgilityPack`, `PuppeteerSharp`, `gRPC+Protobuf`
