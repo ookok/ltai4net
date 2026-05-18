@@ -17,8 +17,9 @@
 | **Agent Governance Toolkit** | ✅ New | 运行时策略执行、代理行为管控、端到端审计 | `SafetyCoordinator` |
 | **Foundry Agent Service** | ✅ New | 容器化Agent部署: 身份认证、自动扩缩容、会话状态管理、可观测性、版本管理 | Docker/K8s 部署 |
 | **CodeAct** | 🧪 Alpha | 单代码块替代多步工具调用 (降延迟50%, 降token 60%), Hyperlight沙箱隔离 | `ReactExecutor` |
-| **A2A Protocol v1** | ✅ Stable | 跨平台跨组织Agent通信标准 | gRPC protocol |
-| **AG-UI** | ✅ New | 多Agent UI渲染协议 (实时状态、审批流、多Agent可视化) | HTML templates |
+| **Microsoft.Extensions.VectorData** | ✅ New | 统一向量存储抽象 (InMemory/Qdrant/Azure/Redis/Pinecone) | `VectorStore` |
+| **Microsoft.Extensions.DataIngestion** | ✅ New | RAG 数据预处理管道 (分块/清洗/增强) | `knowledge/pipeline` |
+| **Windows AI / Foundry Local** | ✅ Active | WinML/DirectML 硬件加速推理 + 本地优先模型执行 | `HardwareAccelerator` |
 
 ### 社区/第三方
 
@@ -30,6 +31,7 @@
 | **LlamaSharp** | ✅ Active | 本地大模型推理库 (LLaMA 2/3, Mistral, Phi) |
 | **AntSK** | 🟡 Active | 国产知识库平台 (.NET 9 + Blazor + SK + Kernel Memory + Ollama) |
 | **BotSharp** | 🟡 Active | .NET 多智能体框架 (插件+多Agent路由/规划+RAG+MCP+WebSocket)
+| **AForge.NET** | 🟡 Active | 计算机视觉/图像处理/神经网络/遗传算法 (`scikit-image`+`deap` 对标)
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
