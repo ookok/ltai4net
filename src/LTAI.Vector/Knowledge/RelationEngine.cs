@@ -1,0 +1,128 @@
+using LTAI.Vector.Knowledge.Models;
+using Microsoft.Extensions.Logging;
+
+namespace LTAI.Vector.Knowledge;
+
+public class RelationEngine
+{
+    private readonly KnowledgeGraph _kg;
+    private readonly Dictionary<string, RelationRule> _rules = new();
+    private readonly Dictionary<string, Dictionary<string, List<string>>> _graph = new();
+    private readonly ILogger<RelationEngine> _logger;
+    private bool _depsLoaded;
+
+    private static readonly List<RelationRule> DefaultRules = new()
+    {
+        new("depends_on", true, false, false, "required_by"),
+        new("specializes", true, false, false, "generalized_by"),
+        new("composes_with", false, true),
+        new("conflicts_with", false, true),
+        new("related_to", false, true),
+    };
+
+    public RelationEngine(KnowledgeGraph kg, ILogger<RelationEngine> logger)
+    {
+        _kg = kg;
+        _logger = logger;
+        foreach (var rule in DefaultRules) RegisterRule(rule);
+    }
+
+    public void RegisterRule(RelationRule rule)
+    {
+        _rules[rule.Relation] = rule;
+    }
+
+    public void AddRelation(string source, string target, string relation)
+    {
+        _graph.TryAdd(source, new());
+        _graph[source].TryAdd(relation, new());
+        if (!_graph[source][relation].Contains(target))
+            _graph[source][relation].Add(target);
+
+        if (_rules.TryGetValue(relation, out var rule) && rule.Symmetric)
+        {
+            _graph.TryAdd(target, new());
+            _graph[target].TryAdd(relation, new());
+            if (!_graph[target][relation].Contains(source))
+                _graph[target][relation].Add(source);
+        }
+
+        _kg.AddRelation(source, target, relation);
+    }
+
+    public List<string> Infer(string source, string? relation = null)
+    {
+        var results = new List<string>();
+        var visited = new HashSet<string> { source };
+        var queue = new Queue<(string node, int depth)>();
+        queue.Enqueue((source, 0));
+
+        while (queue.Count > 0)
+        {
+            var (node, depth) = queue.Dequeue();
+            if (depth > 10) continue;
+
+            if (_graph.TryGetValue(node, out var relations))
+            {
+                foreach (var (rel, targets) in relations)
+                {
+                    if (relation != null && rel != relation) continue;
+                    foreach (var target in targets)
+                    {
+                        if (visited.Add(target))
+                        {
+                            results.Add(target);
+                            queue.Enqueue((target, depth + 1));
+                        }
+                    }
+                }
+            }
+        }
+        return results;
+    }
+
+    public List<string> DeriveInverse(string source, string relation)
+    {
+        if (_rules.TryGetValue(relation, out var rule) && rule.Inverse != null)
+            return Infer(source, rule.Inverse);
+        return new();
+    }
+
+    public Dictionary<string, List<string>> GetClosure(List<string>? relations = null)
+    {
+        var closure = new Dictionary<string, List<string>>();
+        foreach (var entity in _graph.Keys)
+        {
+            var reachable = new List<string>();
+            foreach (var (rel, targets) in _graph.GetValueOrDefault(entity, new()))
+            {
+                if (_rules.TryGetValue(rel, out var rule) && rule.Transitive
+                    && (relations == null || relations.Contains(rel)))
+                {
+                    foreach (var t in targets)
+                        if (!reachable.Contains(t)) reachable.Add(t);
+                }
+            }
+            if (reachable.Count > 0) closure[entity] = reachable;
+        }
+        return closure;
+    }
+
+    public Dictionary<string, object> GetStats()
+    {
+        int totalRels = 0;
+        var byType = new Dictionary<string, int>();
+        foreach (var (_, relations) in _graph)
+            foreach (var (rel, targets) in relations)
+            {
+                totalRels += targets.Count;
+                byType[rel] = byType.GetValueOrDefault(rel) + targets.Count;
+            }
+        return new()
+        {
+            ["total_relations"] = totalRels,
+            ["by_type"] = byType,
+            ["rules_registered"] = _rules.Count
+        };
+    }
+}

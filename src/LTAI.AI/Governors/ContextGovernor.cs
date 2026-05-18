@@ -1,5 +1,6 @@
 using LTAI.Core.Interfaces;
 using LTAI.Core.Models;
+using LTAI.Vector.Interfaces;
 using Microsoft.Extensions.Logging;
 
 namespace LTAI.AI.Governors;
@@ -7,9 +8,17 @@ namespace LTAI.AI.Governors;
 public sealed class ContextGovernor : LayerGovernor
 {
     private readonly List<(string prompt, string response)> _turnHistory = new();
+    private readonly IVectorStore _vectorStore;
 
-    public ContextGovernor(ICognitiveMesh mesh, IProviderEngine llm, ILogger<ContextGovernor> logger)
-        : base("context", mesh, llm, logger) { }
+    public ContextGovernor(
+        ICognitiveMesh mesh,
+        IProviderEngine llm,
+        ILogger<ContextGovernor> logger,
+        IVectorStore vectorStore)
+        : base("context", mesh, llm, logger)
+    {
+        _vectorStore = vectorStore;
+    }
 
     public override async Task<Handshake> ProcessAsync(Handshake incoming, CancellationToken cancellationToken = default)
     {
@@ -46,6 +55,29 @@ public sealed class ContextGovernor : LayerGovernor
 
     private async Task<string> PreloadKnowledgeAsync(string query, CancellationToken cancellationToken)
     {
-        return "";
+        if (string.IsNullOrWhiteSpace(query))
+            return "";
+
+        try
+        {
+            var queryVec = await _vectorStore.EmbedAsync(query, cancellationToken);
+            var results = await _vectorStore.SearchSimilarAsync(queryVec, topK: 3, cancellationToken);
+
+            if (results.Count == 0)
+                return "";
+
+            var contextParts = new List<string>();
+            foreach (var r in results)
+            {
+                if (!string.IsNullOrWhiteSpace(r.Text))
+                    contextParts.Add($"[知识 {r.Score:F2}] {r.Text}");
+            }
+
+            return string.Join("\n", contextParts);
+        }
+        catch
+        {
+            return "";
+        }
     }
 }

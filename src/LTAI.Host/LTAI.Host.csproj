@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>LTAI.Host</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\LTAI.Core\LTAI.Core.csproj" />
+    <ProjectReference Include="..\LTAI.AI\LTAI.AI.csproj" />
+    <ProjectReference Include="..\LTAI.Vector\LTAI.Vector.csproj" />
+    <ProjectReference Include="..\LTAI.Browser\LTAI.Browser.csproj" />
+    <ProjectReference Include="..\LTAI.Document\LTAI.Document.csproj" />
+    <ProjectReference Include="..\LTAI.Network\LTAI.Network.csproj" />
+    <ProjectReference Include="..\LTAI.Web\LTAI.Web.csproj" />
+  </ItemGroup>
+
+</Project>

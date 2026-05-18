@@ -1,3 +1,4 @@
+using LTAI.AI.Utilities;
 using LTAI.Core.Interfaces;
 using LTAI.Core.Models;
 using Microsoft.Extensions.Logging;
@@ -9,16 +10,16 @@ public sealed class OutputGovernor : LayerGovernor
     public OutputGovernor(ICognitiveMesh mesh, IProviderEngine llm, ILogger<OutputGovernor> logger)
         : base("output", mesh, llm, logger) { }
 
-    public override async Task<Handshake> ProcessAsync(Handshake incoming, CancellationToken cancellationToken = default)
+    public override Task<Handshake> ProcessAsync(Handshake incoming, CancellationToken cancellationToken = default)
     {
         var response = incoming.Payload?.GetValueOrDefault("response")?.ToString() ?? "";
 
         if (string.IsNullOrEmpty(response))
-            return new Handshake { From = LayerName, Action = "output_empty" };
+            return Task.FromResult(new Handshake { From = LayerName, Action = "output_empty" });
 
-        var isHallucinated = await CheckHallucinationAsync(response, cancellationToken);
+        var (isHallucinated, reason) = CheckHallucination(response);
 
-        return new Handshake
+        return Task.FromResult(new Handshake
         {
             From = LayerName,
             Action = "reviewed",
@@ -26,10 +27,11 @@ public sealed class OutputGovernor : LayerGovernor
             {
                 ["response"] = response,
                 ["hallucination_risk"] = isHallucinated,
+                ["hallucination_reason"] = reason,
                 ["format"] = "markdown",
                 ["reviewed_at"] = DateTime.UtcNow
             }
-        };
+        });
     }
 
     public async Task<string> SilentSelfCheckAsync(string response, CancellationToken cancellationToken = default)
@@ -46,8 +48,6 @@ public sealed class OutputGovernor : LayerGovernor
         }
     }
 
-    private async Task<bool> CheckHallucinationAsync(string response, CancellationToken cancellationToken)
-    {
-        return false;
-    }
+    private static (bool IsHallucinated, string Reason) CheckHallucination(string response) =>
+        GovernorUtilities.CheckHallucination(response);
 }

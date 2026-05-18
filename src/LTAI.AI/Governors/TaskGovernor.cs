@@ -1,3 +1,4 @@
+using LTAI.AI.Utilities;
 using LTAI.Core.Execution;
 using LTAI.Core.Interfaces;
 using LTAI.Core.Models;
@@ -41,13 +42,8 @@ public sealed class TaskGovernor : LayerGovernor
         });
     }
 
-    private string[] DecomposeTask(string task)
-    {
-        if (string.IsNullOrEmpty(task))
-            return Array.Empty<string>();
-
-        return new[] { task };
-    }
+    private string[] DecomposeTask(string task) =>
+        GovernorUtilities.DecomposeTask(task);
 
     public void AddDependency(string task, string dependsOn)
     {
