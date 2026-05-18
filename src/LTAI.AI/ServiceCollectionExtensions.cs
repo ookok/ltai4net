@@ -1,7 +1,9 @@
 using LTAI.AI.Governors;
 using LTAI.AI.Providers;
 using LTAI.Core.Interfaces;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace LTAI.AI;
 
@@ -9,7 +11,21 @@ public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddLTAIAI(this IServiceCollection services)
     {
-        services.AddSingleton<IProviderEngine, ProviderEngine>();
+        services.AddSingleton<ProviderEngine>();
+        services.AddSingleton<IProviderEngine>(sp => sp.GetRequiredService<ProviderEngine>());
+
+        services.AddSingleton<IChatClient>(sp =>
+        {
+            var engine = sp.GetRequiredService<ProviderEngine>();
+
+            var builder = new ChatClientBuilder(engine)
+                .UseLogging(sp.GetRequiredService<ILoggerFactory>())
+                .UseFunctionInvocation()
+                .UseOpenTelemetry()
+                .UseDistributedCache();
+
+            return builder.Build();
+        });
 
         services.AddSingleton<InputGovernor>();
         services.AddSingleton<ContextGovernor>();
