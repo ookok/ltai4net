@@ -1,8 +1,35 @@
 # .NET AI 生态分析 & LTAI4Net 迁移复用评估
 
-> 生成日期: 2026-05-18
+> 生成日期: 2026-05-18 | 更新: 深入调研版
 
-## 1. 生态全景图
+## 1. 生态全景图 (2026年5月最新)
+
+### 微软官方 AI 全家桶
+
+| 组件 | 状态 | 定位 | 对标 Python |
+|------|:--:|------|------------|
+| **Microsoft.Extensions.AI** | ✅ Stable | 核心抽象层: `IChatClient` + `IEmbeddingGenerator` + `IImageGenerator`。内置中间件管道: OpenTelemetry/Cache/FunctionInvocation/Logging | `IProviderEngine` + `IEmbeddingBackend` |
+| **Microsoft Agent Framework v1.0** | ✅ Stable (2026-04) | 生产级多智能体编排。支持: Sequential/Concurrent/Handoff/Group workflows + CodeAct(50%延迟降低) + A2A/MCP + AG-UI + 技能系统 + Checkpointing + Human-in-the-Loop + OTEL + Foundry部署 | `LivingTreeSystem` + `Orchestrator` |
+| **Semantic Kernel** | ✅ Active | MAF 基础层, 插件系统 (`IToolRegistry` 对标), ChatHistory, Planner | Plugin + Memory |
+| **Kernel Memory** | ✅ Active | RAG/记忆方案: 多格式文档导入 + 智能分块 + 向量存储(Qdrant/Azure/Postgres/Redis/ES) + 语义搜索 + Web Service | `DocumentStore` + `VectorStore` |
+| **Microsoft.ML.Tokenizers** | ✅ Stable | 高性能文本分词器 (Tiktoken/BPE/WordPiece) | `tiktoken` |
+| **ML.NET** | ✅ Stable | 传统ML/AutoML | `scikit-learn` |
+| **Agent Governance Toolkit** | ✅ New | 运行时策略执行、代理行为管控、端到端审计 | `SafetyCoordinator` |
+| **Foundry Agent Service** | ✅ New | 容器化Agent部署: 身份认证、自动扩缩容、会话状态管理、可观测性、版本管理 | Docker/K8s 部署 |
+| **CodeAct** | 🧪 Alpha | 单代码块替代多步工具调用 (降延迟50%, 降token 60%), Hyperlight沙箱隔离 | `ReactExecutor` |
+| **A2A Protocol v1** | ✅ Stable | 跨平台跨组织Agent通信标准 | gRPC protocol |
+| **AG-UI** | ✅ New | 多Agent UI渲染协议 (实时状态、审批流、多Agent可视化) | HTML templates |
+
+### 社区/第三方
+
+| 项目 | 状态 | 定位 |
+|------|:--:|------|
+| **LangChain.NET** | 🟡 Active | Python LangChain 官方C#移植 (ReAct/Chain/工具调用/向量存储) |
+| **AgentFlow** | 🟡 Active | 轻量级状态机Agent框架 (复杂任务分步执行、状态管理、错误重试) |
+| **Ollama.NET Agent** | 🟡 Active | 本地私有化Agent (LLaMA3/Mistral/Phi, 无需联网) |
+| **LlamaSharp** | ✅ Active | 本地大模型推理库 (LLaMA 2/3, Mistral, Phi) |
+| **AntSK** | 🟡 Active | 国产知识库平台 (.NET 9 + Blazor + SK + Kernel Memory + Ollama) |
+| **BotSharp** | 🟡 Active | .NET 多智能体框架 (插件+多Agent路由/规划+RAG+MCP+WebSocket)
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
