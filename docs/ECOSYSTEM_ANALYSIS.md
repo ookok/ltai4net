@@ -403,6 +403,7 @@ Config 管理                 →  IConfiguration + Options 模式
 | **Tabula.DotNet** | 原生 PDF 表格提取 (快/精度100%) | `pdfplumber` + `camelot` |
 | **PaddleOCRSharp** | OCR 视觉表格识别 (扫描件回退, 中文优化) | `paddleocr` + `pytesseract` |
 | **NPOI** | Office 文档 (.xls/.xlsx/.docx) | `openpyxl` + `python-docx` |
+| **Markdig** | Markdown 解析 (CommonMark + 扩展) | `mistune` / `markdown-it` |
 | **DocumentFormat.OpenXml** | Office Open XML SDK | `python-pptx` |
 
 **PDF 表格路由架构:** PdfPig/Tabula.DotNet (原生提取优先) → 判定为扫描件 → PaddleOCRSharp OCR 回退
