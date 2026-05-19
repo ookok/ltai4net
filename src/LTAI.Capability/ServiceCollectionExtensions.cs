@@ -65,6 +65,11 @@ public static class ServiceCollectionExtensions
 
         services.AddSingleton<KnowledgeForager>();
 
+        services.AddSingleton<MessageGateway>();
+        services.AddSingleton<WXBizMsgCrypt>();
+        services.AddSingleton<WeWorkBot>();
+        services.AddSingleton<PkgManager>();
+
         return services;
     }
 }

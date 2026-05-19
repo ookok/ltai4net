@@ -10,6 +10,8 @@ public static class WebApplicationExtensions
     {
         app.UseRateLimiter();
         app.MapLTAIEndpoints();
+        app.MapAuthEndpoints();
+        app.MapAuditEndpoints();
         app.MapHealthChecks("/api/health", new HealthCheckOptions
         {
             ResponseWriter = async (context, report) =>

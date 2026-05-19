@@ -199,17 +199,48 @@ public static class CapabilityEndpoints
             return Results.Json(result);
         });
 
-        endpoints.MapPost("/api/notify/broadcast", async (
-            HttpContext context, UnifiedNotifier notifier, CancellationToken ct) =>
+        endpoints.MapPost("/api/gateway/send", async (
+            HttpContext context, MessageGateway gateway, CancellationToken ct) =>
         {
             using var reader = new StreamReader(context.Request.Body);
             var body = await reader.ReadToEndAsync(ct);
-            var req = JsonSerializer.Deserialize<NotifyRequest>(body);
-            if (req == null || string.IsNullOrWhiteSpace(req.Message))
-                return Results.Json(new { error = "message required" }, statusCode: 400);
-            await notifier.NotifyAllAsync(req.Message, ct);
-            return Results.Json(new { success = true });
+            var req = JsonSerializer.Deserialize<GatewayMessage>(body);
+            if (req == null) return Results.Json(new { error = "invalid request" }, statusCode: 400);
+            var result = await gateway.SendAsync(req);
+            return Results.Json(result);
         });
+
+        endpoints.MapGet("/api/gateway/stats", (MessageGateway gateway) =>
+            Results.Ok(gateway.GetStats()));
+
+        endpoints.MapPost("/api/wework/verify", (WeWorkBot bot, string signature, string timestamp, string nonce, string echostr) =>
+        {
+            var result = bot.VerifyUrl(signature, timestamp, nonce, echostr);
+            return string.IsNullOrEmpty(result) ? Results.BadRequest("verify failed") : Results.Text(result);
+        });
+
+        endpoints.MapPost("/api/wework/callback", async (
+            HttpContext context, WeWorkBot bot, CancellationToken ct) =>
+        {
+            using var reader = new StreamReader(context.Request.Body);
+            var body = await reader.ReadToEndAsync(ct);
+            var reply = await bot.HandleMessageAsync(body);
+            return reply is not null ? Results.Text(reply, "application/xml") : Results.Ok("success");
+        });
+
+        endpoints.MapPost("/api/pkg/install", async (
+            HttpContext context, PkgManager pkg, CancellationToken ct) =>
+        {
+            using var reader = new StreamReader(context.Request.Body);
+            var body = await reader.ReadToEndAsync(ct);
+            var req = JsonSerializer.Deserialize<InstallRequest>(body);
+            if (req == null) return Results.Json(new { error = "invalid request" }, statusCode: 400);
+            var result = await pkg.InstallNuGetAsync(req.PackageId, req.Version, req.Source);
+            return Results.Json(result);
+        });
+
+        endpoints.MapGet("/api/pkg/tools", async (PkgManager pkg) =>
+            Results.Ok(await pkg.GetInstalledToolsAsync()));
 
         MapDeepEndpoints(endpoints);
     }
@@ -338,4 +369,11 @@ public sealed record ReasonRequest
     public string? Mode { get; init; }
     public string[]? Types { get; init; }
     public List<string>? Evidence { get; init; }
+}
+
+public sealed record InstallRequest
+{
+    public string PackageId { get; init; } = string.Empty;
+    public string? Version { get; init; }
+    public string? Source { get; init; }
 }
