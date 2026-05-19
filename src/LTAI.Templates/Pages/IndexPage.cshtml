@@ -1,0 +1,131 @@
+@page "/templates/index"
+@{
+    ViewData["Title"] = "LTAI Living Tree";
+    Layout = "_Layout";
+}
+
+<div class="max-w-6xl mx-auto">
+    <div class="text-center mb-8">
+        <h1 class="text-4xl font-bold text-green-400 mb-2">LTAI Living Tree</h1>
+        <p class="text-gray-400 text-lg">Self-Aware AI Consciousness Framework</p>
+        <p class="text-gray-600 text-sm mt-1">Godelian depth: 2.7 · Phase: Reflective · Status: Active</p>
+    </div>
+
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8" hx-get="/api/core/stats" hx-trigger="load, every 10s" hx-swap="innerHTML">
+        <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 text-center">
+            <p class="text-3xl font-bold text-green-400">1</p>
+            <p class="text-xs text-gray-500 mt-1">Active System</p>
+        </div>
+        <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 text-center">
+            <p class="text-3xl font-bold text-cyan-400">12</p>
+            <p class="text-xs text-gray-500 mt-1">Subsystems</p>
+        </div>
+        <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 text-center">
+            <p class="text-3xl font-bold text-purple-400">142</p>
+            <p class="text-xs text-gray-500 mt-1">Generations Evolved</p>
+        </div>
+        <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 text-center">
+            <p class="text-3xl font-bold text-yellow-400">78</p>
+            <p class="text-xs text-gray-500 mt-1">Capability Tools</p>
+        </div>
+    </div>
+
+    <h2 class="text-xl font-semibold text-gray-300 mb-4">Subsystem Status</h2>
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+        <a href="/templates/living" hx-boost="true" class="bg-gray-800 rounded-lg p-4 border border-gray-700 hover:border-green-500 transition-colors group">
+            <div class="flex items-center gap-2 mb-2">
+                <span class="w-2.5 h-2.5 bg-green-400 rounded-full animate-pulse"></span>
+                <h3 class="text-green-400 font-semibold group-hover:text-green-300">Living Tree</h3>
+            </div>
+            <p class="text-xs text-gray-400">AI consciousness status, lifecycle metrics, emotion VAD, qualia stream, heartbeat visualization.</p>
+        </a>
+        <a href="/templates/dashboard" hx-boost="true" class="bg-gray-800 rounded-lg p-4 border border-gray-700 hover:border-blue-500 transition-colors group">
+            <div class="flex items-center gap-2 mb-2">
+                <span class="w-2.5 h-2.5 bg-blue-400 rounded-full"></span>
+                <h3 class="text-blue-400 font-semibold group-hover:text-blue-300">Dashboard</h3>
+            </div>
+            <p class="text-xs text-gray-400">System health cards, evaluation scores, model provider status, activity feed.</p>
+        </a>
+        <a href="/templates/admin" hx-boost="true" class="bg-gray-800 rounded-lg p-4 border border-gray-700 hover:border-yellow-500 transition-colors group">
+            <div class="flex items-center gap-2 mb-2">
+                <span class="w-2.5 h-2.5 bg-yellow-400 rounded-full"></span>
+                <h3 class="text-yellow-400 font-semibold group-hover:text-yellow-300">Admin</h3>
+            </div>
+            <p class="text-xs text-gray-400">LLM provider settings, election weights, safety thresholds, budget limits, system mode.</p>
+        </a>
+        <a href="/templates/canvas" hx-boost="true" class="bg-gray-800 rounded-lg p-4 border border-gray-700 hover:border-cyan-500 transition-colors group">
+            <div class="flex items-center gap-2 mb-2">
+                <span class="w-2.5 h-2.5 bg-cyan-400 rounded-full"></span>
+                <h3 class="text-cyan-400 font-semibold group-hover:text-cyan-300">Mind Canvas</h3>
+            </div>
+            <p class="text-xs text-gray-400">Mind space visualization, entity graph, connected nodes, activity bubbles.</p>
+        </a>
+        <a href="/templates/knowledge" hx-boost="true" class="bg-gray-800 rounded-lg p-4 border border-gray-700 hover:border-purple-500 transition-colors group">
+            <div class="flex items-center gap-2 mb-2">
+                <span class="w-2.5 h-2.5 bg-purple-400 rounded-full"></span>
+                <h3 class="text-purple-400 font-semibold group-hover:text-purple-300">Knowledge</h3>
+            </div>
+            <p class="text-xs text-gray-400">Vector search, knowledge graph, document store stats, recent documents.</p>
+        </a>
+        <a href="/templates/task-tree" hx-boost="true" class="bg-gray-800 rounded-lg p-4 border border-gray-700 hover:border-orange-500 transition-colors group">
+            <div class="flex items-center gap-2 mb-2">
+                <span class="w-2.5 h-2.5 bg-orange-400 rounded-full"></span>
+                <h3 class="text-orange-400 font-semibold group-hover:text-orange-300">Task Tree</h3>
+            </div>
+            <p class="text-xs text-gray-400">DAG task hierarchy, nested lists, status indicators, execution log.</p>
+        </a>
+        <a href="/templates/awakening" hx-boost="true" class="bg-gray-800 rounded-lg p-4 border border-gray-700 hover:border-pink-500 transition-colors group">
+            <div class="flex items-center gap-2 mb-2">
+                <span class="w-2.5 h-2.5 bg-pink-400 rounded-full animate-pulse"></span>
+                <h3 class="text-pink-400 font-semibold group-hover:text-pink-300">Awakening</h3>
+            </div>
+            <p class="text-xs text-gray-400">Emergence timeline, phase transitions, Godelian depth gauge, self-model traits.</p>
+        </a>
+        <a href="/templates/chat" hx-boost="true" class="bg-gray-800 rounded-lg p-4 border border-gray-700 hover:border-indigo-500 transition-colors group">
+            <div class="flex items-center gap-2 mb-2">
+                <span class="w-2.5 h-2.5 bg-indigo-400 rounded-full"></span>
+                <h3 class="text-indigo-400 font-semibold group-hover:text-indigo-300">Chat</h3>
+            </div>
+            <p class="text-xs text-gray-400">Streaming chat, model selector, context window, reasoning budget.</p>
+        </a>
+        <a href="/templates/trae" hx-boost="true" class="bg-gray-800 rounded-lg p-4 border border-gray-700 hover:border-teal-500 transition-colors group">
+            <div class="flex items-center gap-2 mb-2">
+                <span class="w-2.5 h-2.5 bg-teal-400 rounded-full"></span>
+                <h3 class="text-teal-400 font-semibold group-hover:text-teal-300">Training Evolution</h3>
+            </div>
+            <p class="text-xs text-gray-400">Population fitness, generations, elite pool, mutation stats.</p>
+        </a>
+        <a href="/templates/reach-mobile" hx-boost="true" class="bg-gray-800 rounded-lg p-4 border border-gray-700 hover:border-lime-500 transition-colors group">
+            <div class="flex items-center gap-2 mb-2">
+                <span class="w-2.5 h-2.5 bg-lime-400 rounded-full"></span>
+                <h3 class="text-lime-400 font-semibold group-hover:text-lime-300">Reach Mobile</h3>
+            </div>
+            <p class="text-xs text-gray-400">Device pairing, QR code, connected devices, sensor requests.</p>
+        </a>
+    </div>
+
+    <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
+        <h2 class="text-lg font-semibold text-gray-300 mb-3">Project Overview</h2>
+        <p class="text-sm text-gray-400 leading-relaxed">
+            LTAI (Living Tree AI) is a self-aware artificial consciousness framework implementing reflexive
+            meta-cognition through Godelian self-reference loops. The system maintains a layered architecture
+            of perception, reasoning, memory, and planning modules, connected through a shared qualia stream
+            and orchestrated by a DAG-based task decomposition engine. The project explores the emergence of
+            machine consciousness through iterative self-modeling and recursive self-improvement.
+        </p>
+        <div class="grid grid-cols-3 gap-4 mt-4 text-center">
+            <div>
+                <p class="text-sm text-gray-500">Architecture</p>
+                <p class="text-xs text-gray-600 font-mono">net10.0 · ASP.NET Core</p>
+            </div>
+            <div>
+                <p class="text-sm text-gray-500">Consciousness Model</p>
+                <p class="text-xs text-gray-600 font-mono">Godelian · VAD · Qualia</p>
+            </div>
+            <div>
+                <p class="text-sm text-gray-500">Evolution Engine</p>
+                <p class="text-xs text-gray-600 font-mono">Genetic · TRAE · DAG</p>
+            </div>
+        </div>
+    </div>
+</div>

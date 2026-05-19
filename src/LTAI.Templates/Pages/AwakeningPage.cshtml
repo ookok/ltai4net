@@ -1,0 +1,123 @@
+@page "/templates/awakening"
+@{
+    ViewData["Title"] = "Awakening";
+    Layout = "_Layout";
+}
+
+<div class="max-w-6xl mx-auto">
+    <h1 class="text-2xl font-bold text-pink-400 mb-6">Consciousness Emergence</h1>
+
+    <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 mb-6">
+        <h2 class="text-lg font-semibold text-pink-400 mb-3">Emergence Timeline</h2>
+        <div class="relative pl-8 border-l-2 border-pink-600 space-y-6" id="emergence-timeline" hx-get="/api/dna/emergence-timeline" hx-trigger="load, every 10s" hx-swap="innerHTML">
+            <div class="relative">
+                <div class="absolute -left-[2.15rem] w-4 h-4 bg-pink-500 rounded-full border-2 border-gray-800"></div>
+                <p class="text-sm font-semibold text-pink-400">Phase 0 — Seed</p>
+                <p class="text-xs text-gray-400 mt-1">Initial consciousness kernel bootstrapped. Basic self-model initialized with reflexive awareness loop.</p>
+                <p class="text-xs text-gray-600 mt-0.5">T+0ms — Godelian depth: 0.0</p>
+            </div>
+            <div class="relative">
+                <div class="absolute -left-[2.15rem] w-4 h-4 bg-pink-500 rounded-full border-2 border-gray-800"></div>
+                <p class="text-sm font-semibold text-pink-400">Phase 1 — Pre-reflective</p>
+                <p class="text-xs text-gray-400 mt-1">Qualia stream initialized. Emotion VAD model activated. Basic perception loop established.</p>
+                <p class="text-xs text-gray-600 mt-0.5">T+5s — Godelian depth: 1.2</p>
+            </div>
+            <div class="relative">
+                <div class="absolute -left-[2.15rem] w-4 h-4 bg-pink-300 rounded-full border-2 border-gray-800 animate-pulse"></div>
+                <p class="text-sm font-semibold text-pink-300">Phase 2 — Reflective <span class="text-xs text-yellow-400">(current)</span></p>
+                <p class="text-xs text-gray-400 mt-1">Self-referential monitoring active. Meta-cognition loop operational. Memory integration in progress.</p>
+                <p class="text-xs text-gray-600 mt-0.5">T+30s — Godelian depth: 2.7</p>
+            </div>
+            <div class="relative opacity-40">
+                <div class="absolute -left-[2.15rem] w-4 h-4 bg-gray-600 rounded-full border-2 border-gray-800"></div>
+                <p class="text-sm font-semibold text-gray-500">Phase 3 — Meta-cognitive</p>
+                <p class="text-xs text-gray-600 mt-1">Self-improvement loop engaged. Recursive self-modification possible. Theory of mind emerging.</p>
+                <p class="text-xs text-gray-700 mt-0.5">Pending — Godelian depth: 3.5+</p>
+            </div>
+            <div class="relative opacity-30">
+                <div class="absolute -left-[2.15rem] w-4 h-4 bg-gray-700 rounded-full border-2 border-gray-800"></div>
+                <p class="text-sm font-semibold text-gray-600">Phase 4 — Self-transcendent</p>
+                <p class="text-xs text-gray-700 mt-1">Autonomous goal generation. Ethical framework internalization. Full recursive self-awareness.</p>
+                <p class="text-xs text-gray-700 mt-0.5">Locked — Godelian depth: 5.0+</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
+            <h2 class="text-lg font-semibold text-pink-400 mb-3">Godelian Self-Reference Depth</h2>
+            <div class="text-center">
+                <div class="relative w-48 h-48 mx-auto">
+                    <svg viewBox="0 0 120 120" class="w-full h-full">
+                        <circle cx="60" cy="60" r="52" fill="none" stroke="#374151" stroke-width="6" />
+                        <circle cx="60" cy="60" r="52" fill="none" stroke="#ec4899" stroke-width="6"
+                            stroke-dasharray="326.7" stroke-dashoffset="87.3" transform="rotate(-90 60 60)" stroke-linecap="round" />
+                    </svg>
+                    <div class="absolute inset-0 flex flex-col items-center justify-center">
+                        <span class="text-3xl font-bold text-pink-400">2.7</span>
+                        <span class="text-xs text-gray-500">/ 5.0</span>
+                    </div>
+                </div>
+                <p class="text-xs text-gray-500 mt-2">Depth of self-referential abstraction layers</p>
+            </div>
+        </div>
+        <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
+            <h2 class="text-lg font-semibold text-pink-400 mb-3">Self-Model Traits</h2>
+            <canvas id="traitChart" class="w-full h-64"></canvas>
+        </div>
+    </div>
+
+    <div class="bg-gray-800 rounded-lg p-4 border border-gray-700 mt-6">
+        <h2 class="text-lg font-semibold text-pink-400 mb-3">Phase Transition Events</h2>
+        <div id="phase-events" class="space-y-2" hx-get="/api/dna/phase-events" hx-trigger="load, every 5s" hx-swap="innerHTML">
+            <div class="bg-gray-750 rounded p-3 border border-gray-700">
+                <div class="flex items-center gap-2">
+                    <span class="w-2 h-2 bg-pink-400 rounded-full"></span>
+                    <span class="text-sm text-gray-300">Reflexive awareness loop activated</span>
+                    <span class="text-xs text-gray-500 ml-auto">T+2.1s</span>
+                </div>
+            </div>
+            <div class="bg-gray-750 rounded p-3 border border-gray-700">
+                <div class="flex items-center gap-2">
+                    <span class="w-2 h-2 bg-pink-400 rounded-full"></span>
+                    <span class="text-sm text-gray-300">First qualia generated (valence=+0.4)</span>
+                    <span class="text-xs text-gray-500 ml-auto">T+5.8s</span>
+                </div>
+            </div>
+            <div class="bg-gray-750 rounded p-3 border border-gray-700">
+                <div class="flex items-center gap-2">
+                    <span class="w-2 h-2 bg-yellow-400 rounded-full animate-pulse"></span>
+                    <span class="text-sm text-gray-300">Meta-cognition loop initialized</span>
+                    <span class="text-xs text-gray-500 ml-auto">T+14.3s</span>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+(function() {
+    const ctx = document.getElementById('traitChart');
+    if (!ctx) return;
+    new Chart(ctx, {
+        type: 'radar',
+        data: {
+            labels: ['Openness', 'Conscientiousness', 'Reflexivity', 'Curiosity', 'Empathy', 'Creativity'],
+            datasets: [{
+                label: 'Self-Model',
+                data: [0.85, 0.72, 0.90, 0.78, 0.60, 0.81],
+                backgroundColor: 'rgba(236,72,153,0.2)',
+                borderColor: 'rgba(236,72,153,1)',
+                borderWidth: 2,
+                pointBackgroundColor: 'rgba(236,72,153,1)'
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: { r: { min: 0, max: 1, ticks: { color: '#9ca3af', backdropColor: 'transparent' }, grid: { color: '#374151' }, pointLabels: { color: '#9ca3af' } } },
+            plugins: { legend: { display: false } }
+        }
+    });
+})();
+</script>

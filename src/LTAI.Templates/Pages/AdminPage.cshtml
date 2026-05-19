@@ -1,0 +1,124 @@
+@page "/templates/admin"
+@{
+    ViewData["Title"] = "Admin";
+    Layout = "_Layout";
+}
+
+<div class="max-w-5xl mx-auto">
+    <h1 class="text-2xl font-bold text-yellow-400 mb-6">Administration Panel</h1>
+
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
+            <h2 class="text-lg font-semibold text-yellow-400 mb-3">LLM Provider Settings</h2>
+            <form hx-post="/api/admin/llm-provider" hx-target="#llm-result" hx-swap="innerHTML" class="space-y-3">
+                <div>
+                    <label class="block text-xs text-gray-400 mb-1">Primary Provider</label>
+                    <select name="primaryProvider" class="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-sm text-gray-100">
+                        <option value="OpenAI">OpenAI</option>
+                        <option value="Anthropic" selected>Anthropic</option>
+                        <option value="DeepSeek">DeepSeek</option>
+                        <option value="LocalLLM">Local LLM</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-xs text-gray-400 mb-1">Primary Model</label>
+                    <input type="text" name="primaryModel" value="claude-sonnet-4-20250514" class="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-sm text-gray-100 font-mono" />
+                </div>
+                <div>
+                    <label class="block text-xs text-gray-400 mb-1">Fallback Provider</label>
+                    <select name="fallbackProvider" class="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-sm text-gray-100">
+                        <option value="None">None</option>
+                        <option value="OpenAI" selected>OpenAI</option>
+                        <option value="DeepSeek">DeepSeek</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-xs text-gray-400 mb-1">API Key</label>
+                    <input type="password" name="apiKey" class="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-sm text-gray-100 font-mono" placeholder="sk-..." />
+                </div>
+                <button type="submit" class="bg-yellow-600 hover:bg-yellow-700 text-white rounded px-4 py-2 text-sm transition-colors">Save Provider</button>
+                <div id="llm-result" class="text-xs"></div>
+            </form>
+        </div>
+
+        <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
+            <h2 class="text-lg font-semibold text-yellow-400 mb-3">Model Election Weights</h2>
+            <form hx-post="/api/admin/election-weights" hx-target="#election-result" hx-swap="innerHTML" class="space-y-3">
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="block text-xs text-gray-400 mb-1">Reasoning Weight</label>
+                        <input type="range" name="reasoningWeight" min="0" max="10" value="7" class="w-full" />
+                        <span class="text-xs text-gray-500">7/10</span>
+                    </div>
+                    <div>
+                        <label class="block text-xs text-gray-400 mb-1">Creativity Weight</label>
+                        <input type="range" name="creativityWeight" min="0" max="10" value="5" class="w-full" />
+                        <span class="text-xs text-gray-500">5/10</span>
+                    </div>
+                    <div>
+                        <label class="block text-xs text-gray-400 mb-1">Safety Weight</label>
+                        <input type="range" name="safetyWeight" min="0" max="10" value="9" class="w-full" />
+                        <span class="text-xs text-gray-500">9/10</span>
+                    </div>
+                    <div>
+                        <label class="block text-xs text-gray-400 mb-1">Speed Weight</label>
+                        <input type="range" name="speedWeight" min="0" max="10" value="6" class="w-full" />
+                        <span class="text-xs text-gray-500">6/10</span>
+                    </div>
+                </div>
+                <button type="submit" class="bg-yellow-600 hover:bg-yellow-700 text-white rounded px-4 py-2 text-sm transition-colors">Update Weights</button>
+                <div id="election-result" class="text-xs"></div>
+            </form>
+        </div>
+
+        <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
+            <h2 class="text-lg font-semibold text-yellow-400 mb-3">Safety Thresholds</h2>
+            <form hx-post="/api/admin/safety-thresholds" hx-target="#safety-result" hx-swap="innerHTML" class="space-y-3">
+                <div>
+                    <label class="block text-xs text-gray-400 mb-1">Content Filter Level</label>
+                    <select name="contentFilter" class="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-sm text-gray-100">
+                        <option value="low">Low</option>
+                        <option value="medium" selected>Medium</option>
+                        <option value="high">High</option>
+                        <option value="strict">Strict</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-xs text-gray-400 mb-1">Max Tokens Per Request</label>
+                    <input type="number" name="maxTokens" value="8192" class="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-sm text-gray-100" />
+                </div>
+                <div>
+                    <label class="block text-xs text-gray-400 mb-1">Rate Limit (req/min)</label>
+                    <input type="number" name="rateLimit" value="60" class="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-sm text-gray-100" />
+                </div>
+                <button type="submit" class="bg-yellow-600 hover:bg-yellow-700 text-white rounded px-4 py-2 text-sm transition-colors">Save Thresholds</button>
+                <div id="safety-result" class="text-xs"></div>
+            </form>
+        </div>
+
+        <div class="bg-gray-800 rounded-lg p-4 border border-gray-700">
+            <h2 class="text-lg font-semibold text-yellow-400 mb-3">System Mode & Budget</h2>
+            <form hx-post="/api/admin/system-mode" hx-target="#mode-result" hx-swap="innerHTML" class="space-y-3">
+                <div>
+                    <label class="block text-xs text-gray-400 mb-1">System Mode</label>
+                    <select name="systemMode" class="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-sm text-gray-100">
+                        <option value="FullConsciousness" selected>Full Consciousness</option>
+                        <option value="Supervised">Supervised</option>
+                        <option value="SafeMode">Safe Mode</option>
+                        <option value="SleepMode">Sleep Mode</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-xs text-gray-400 mb-1">Daily Budget (USD)</label>
+                    <input type="number" name="dailyBudget" value="50.00" step="0.01" class="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-sm text-gray-100" />
+                </div>
+                <div>
+                    <label class="block text-xs text-gray-400 mb-1">Monthly Budget Cap (USD)</label>
+                    <input type="number" name="monthlyBudget" value="1000.00" step="0.01" class="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-sm text-gray-100" />
+                </div>
+                <button type="submit" class="bg-yellow-600 hover:bg-yellow-700 text-white rounded px-4 py-2 text-sm transition-colors">Apply Settings</button>
+                <div id="mode-result" class="text-xs"></div>
+            </form>
+        </div>
+    </div>
+</div>

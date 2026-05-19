@@ -3,7 +3,7 @@
 > 对比时间: 2026-05-19  
 > 源: `D:\mhzyapp\LivingTreeAlAgent` (Python ~700模块)  
 > 目标: `D:\mhzyapp\ltai4net` (.NET 23项目)  
-> 整体覆盖率: ~80%
+> 整体覆盖率: ~85%
 
 ## 子系统覆盖率
 
@@ -12,6 +12,9 @@
 | memory | 7 | 11 | **100%** | 功能更丰富 (UserModel L1-L3 + PersonaMemory + EmotionalMemory/Plutchik + MemoryPolicy/MemPO + TraitEvolution + MemoryOrchestrator) |
 | mcp | 2 | 4 | **≥100%** | 协议更完整 (JSON-RPC 2.0 + tools/list + tools/call + resources + StdioTransport) |
 | reasoning | 10 | 4 | **90%** | 4/4推理类型完成 (MathReasoner + FormalLogicEngine + DialecticalReasoner + ReasoningOrchestrator) |
+| market | ~5 | 7 | **≥100%** | 新项目: UserProfileEngine + OpportunityScorer + MarketTrendAnalyzer + BiddingAssistant + RevenueEngine + SelfInvestmentEngine + ListedCompanyIntel |
+| cell | ~10 | 8 | **80%** | 新项目: CellTrainer + Mitosis + Distillation + DreamLearner + Regen |
+| templates | 12 | 13 | **≥100%** | 新项目: 13个Razor Pages (Living/Dashboard/Admin/Canvas/Knowledge/TaskTree/Awakening/Chat/Trae/ReachMobile/Index + Layout) |
 | optimization | 3 | 9 | **80%** | GRPO覆盖LPO (Economy: Metabolism + ThermoBudget + GRPO + InverseReward + EconomicEngine) |
 | knowledge | 50 | 23 | **70%** | VectorStore + Embedding(3后端) + DocumentStore + KnowledgeBase + KG + AgenticRAG + DeepKnowledge + Reranker + StructMemory + KernelMemoryStore + QueryDecomposer + RelationEngine |
 | tui | ~15 | 13 | **60%** | Spectre.Console: StreamRenderer + DiffEngine + TaskDagView + TuiInputBox + LLMConfigPanel + NotificationService + SessionTracker + PromptLibrary + ConsoleFont + ContextWindowView + InnovationViews |
@@ -28,10 +31,10 @@
 | integration | 15 | ~2 | **15%** | GatewayServices: Telegram/企微 |
 | infrastructure | 23 | 0(合并) | **15%** | DB/存储混入各项目或被Kernel Memory替代 |
 | serialization | 5 | 0(替代) | **20%** | System.Text.Json 替代 orjson |
-| templates | 12 | 0 | **0%** | HTML模板未迁移 |
-| cell | ~10 | 0 | **0%** | 训练/梦境/蒸馏未开始 |
-| market | ~5 | 0 | **0%** | Agent市场未开始 |
-| **整体** | **~700** | **~371** | **~83%** | 架构完整，功能持续补充 |
+| templates | 12 | 13 | **≥100%** | 新项目 LTAI.Templates: 13 Razor Pages (HTMX + Tailwind + Chart.js) |
+| cell | ~10 | 8 | **80%** | 新项目 LTAI.Cell: CellTrainer + Mitosis + Distillation + DreamLearner + Regen |
+| market | ~5 | 7 | **≥100%** | 新项目 LTAI.Market: UserProfileEngine + OpportunityScorer + BiddingAssistant + RevenueEngine + SelfInvestmentEngine + ListedCompanyIntel |
+| **整体** | **~700** | **~400** | **~85%** | 架构完整，功能持续补充 |
 
 ## 模块映射详情
 
