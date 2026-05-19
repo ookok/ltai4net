@@ -12,6 +12,10 @@ public static class WebApplicationExtensions
         app.MapLTAIEndpoints();
         app.MapAuthEndpoints();
         app.MapAuditEndpoints();
+        app.MapOpenAIProxyEndpoints();
+        app.MapWeWorkBotEndpoints();
+        app.MapCodeApiEndpoints();
+        app.MapGithubAuthEndpoints();
         app.MapHealthChecks("/api/health", new HealthCheckOptions
         {
             ResponseWriter = async (context, report) =>
