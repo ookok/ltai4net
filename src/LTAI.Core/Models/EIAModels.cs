@@ -63,7 +63,7 @@ public static class EIAEngine
 
     private static double SocioNPV(Dictionary<string, object> inputs)
     {
-        if (inputs.TryGetValue("cashflow", out var cf) && cf is System.Text.Json.JsonElement je)
+        if (inputs.TryGetValue("cashflow", out var cf) && cf is global::System.Text.Json.JsonElement je)
         {
             var flows = new List<double>();
             foreach (var e in je.EnumerateArray()) flows.Add(e.GetDouble());

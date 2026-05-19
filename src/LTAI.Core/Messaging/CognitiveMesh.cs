@@ -50,7 +50,7 @@ public sealed class CognitiveMesh : ICognitiveMesh
             try
             {
                 _stats[handshake.To].MessagesReceived++;
-                var sw = System.Diagnostics.Stopwatch.StartNew();
+                var sw = global::System.Diagnostics.Stopwatch.StartNew();
                 var response = await governor.ProcessAsync(handshake, cancellationToken);
                 sw.Stop();
                 _stats[handshake.To].AvgLatencyMs =

@@ -355,6 +355,13 @@ public sealed class GodelianSelf
     private int _depth;
 
     public int Depth => _depth;
+    public int MetaChainDepth => _depth;
+    public int GodelianNesting => _selfReflections.Count(r => r.StartsWith("PARADOX"));
+
+    public (double MetaChainDepth, double GodelianNesting) GetDepthMetric()
+    {
+        return (MetaChainDepth, GodelianNesting);
+    }
 
     public string Reflect(string statement)
     {

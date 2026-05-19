@@ -1,11 +1,19 @@
 using System.Text.Json;
 using LTAI.Capability.CodeEngine;
+using LTAI.Capability.CodeGraph;
+using LTAI.Capability.Crawler;
+using LTAI.Capability.DocEngine;
 using LTAI.Capability.Documents;
-using LTAI.Capability.Reasoning;
-using LTAI.Capability.Search;
+using LTAI.Capability.Evolution;
 using LTAI.Capability.GIS;
 using LTAI.Capability.Integration;
+using LTAI.Capability.Knowledge;
+using LTAI.Capability.Pipeline;
+using LTAI.Capability.Reasoning;
 using LTAI.Capability.Review;
+using LTAI.Capability.Search;
+using LTAI.Capability.Skills;
+using LTAI.Capability.Tools;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
@@ -29,14 +37,8 @@ public static class CapabilityEndpoints
                 return Results.Json(new { error = "Code content required" }, statusCode: 400);
 
             var lang = string.IsNullOrWhiteSpace(request.Language)
-                ? CodeLanguage.Unknown
-                : Enum.TryParse<CodeLanguage>(request.Language, true, out var l) ? l : CodeLanguage.Unknown;
-
-            if (lang == CodeLanguage.Unknown && !string.IsNullOrWhiteSpace(request.FilePath))
-                lang = LanguageRegistry.Detect(request.FilePath);
-
-            if (lang == CodeLanguage.Unknown)
-                lang = DetectLanguage(request.Code);
+                ? DetectLanguage(request.Code)
+                : Enum.Parse<CodeLanguage>(request.Language, true);
 
             var result = analyzer.Analyze(request.Code, lang);
             return Results.Json(result);
@@ -52,240 +54,119 @@ public static class CapabilityEndpoints
             var request = JsonSerializer.Deserialize<CodeAnalyzeRequest>(body);
 
             if (request == null || string.IsNullOrWhiteSpace(request.Code))
-                return Results.Json(new { error = "Code required" }, statusCode: 400);
+                return Results.Json(new { error = "Code content required" }, statusCode: 400);
 
-            var lang = Enum.TryParse<CodeLanguage>(request.Language ?? "Unknown", true, out var l) ? l : CodeLanguage.Unknown;
-            var report = analyzer.CheckQuality(request.Code, lang);
-            return Results.Json(report);
-        });
+            var lang = string.IsNullOrWhiteSpace(request.Language)
+                ? DetectLanguage(request.Code)
+                : Enum.Parse<CodeLanguage>(request.Language, true);
 
-        endpoints.MapPost("/api/search", async (
-            HttpContext context,
-            UnifiedSearchEngine search,
-            CancellationToken cancellationToken) =>
-        {
-            using var reader = new StreamReader(context.Request.Body);
-            var body = await reader.ReadToEndAsync(cancellationToken);
-            var request = JsonSerializer.Deserialize<SearchRequest>(body);
-
-            if (request == null || string.IsNullOrWhiteSpace(request.Query))
-                return Results.Json(new { error = "Query required" }, statusCode: 400);
-
-            var sources = request.Sources?
-                .Select(s => Enum.TryParse<SearchSource>(s, true, out var src) ? src : SearchSource.Web)
-                .ToArray();
-
-            var results = await search.SearchAsync(request.Query, sources, request.MaxResults ?? 10, cancellationToken);
-            return Results.Json(new { query = request.Query, count = results.Count, results });
-        });
-
-        endpoints.MapPost("/api/doc/parse", async (
-            HttpContext context,
-            DocumentProcessor processor,
-            CancellationToken cancellationToken) =>
-        {
-            using var reader = new StreamReader(context.Request.Body);
-            var body = await reader.ReadToEndAsync(cancellationToken);
-            var request = JsonSerializer.Deserialize<DocParseRequest>(body);
-
-            if (request == null || string.IsNullOrWhiteSpace(request.FilePath))
-                return Results.Json(new { error = "File path required" }, statusCode: 400);
-
-            if (!File.Exists(request.FilePath))
-                return Results.Json(new { error = "File not found" }, statusCode: 404);
-
-            try
-            {
-                var text = await processor.ExtractTextAsync(request.FilePath, cancellationToken);
-                var sections = await processor.ExtractSectionsAsync(request.FilePath, cancellationToken);
-                return Results.Json(new
-                {
-                    file = request.FilePath,
-                    length = text.Length,
-                    preview = text[..Math.Min(text.Length, 1000)],
-                    sections = sections.Select(s => new { s.Heading, s.Level })
-                });
-            }
-            catch (Exception ex)
-            {
-                return Results.Json(new { error = ex.Message }, statusCode: 500);
-            }
+            var result = analyzer.CheckQuality(request.Code, lang);
+            return Results.Json(result);
         });
 
         endpoints.MapGet("/api/code/languages", () =>
-        {
-            var langs = LanguageRegistry.Languages.Values
-                .Where(l => l.Language != CodeLanguage.Unknown)
-                .Select(l => new
-                {
-                    name = l.Name,
-                    language = l.Language.ToString(),
-                    extensions = l.Extensions,
-                    compiled = l.IsCompiled
-                });
-            return Results.Json(langs);
-        });
+            LanguageRegistry.Languages.Keys.Select(k => new { id = k.ToString(), name = LanguageRegistry.Languages[k].Name }));
 
-        endpoints.MapPost("/api/reason/math", async (
-            HttpContext context,
-            MathReasoner math,
-            CancellationToken cancellationToken) =>
+        endpoints.MapPost("/api/search", async (
+            HttpContext context, UnifiedSearchEngine engine, CancellationToken ct) =>
         {
             using var reader = new StreamReader(context.Request.Body);
-            var body = await reader.ReadToEndAsync(cancellationToken);
-            var request = JsonSerializer.Deserialize<ReasonRequest>(body);
-
+            var body = await reader.ReadToEndAsync(ct);
+            var request = JsonSerializer.Deserialize<SearchRequest>(body);
             if (request == null || string.IsNullOrWhiteSpace(request.Query))
-                return Results.Json(new { error = "Query required" }, statusCode: 400);
-
-            var result = await math.SolveAsync(request.Query, cancellationToken);
-            return Results.Json(result);
+                return Results.Json(new { error = "query required" }, statusCode: 400);
+            var sources = request.Sources?.Select(s => Enum.Parse<SearchSource>(s, true)).ToArray();
+            var results = await engine.SearchAsync(request.Query, sources, request.MaxResults ?? 5, ct);
+            return Results.Json(results);
         });
 
-        endpoints.MapPost("/api/reason/logic", async (
-            HttpContext context,
-            FormalLogicEngine logic,
-            CancellationToken cancellationToken) =>
+        endpoints.MapPost("/api/doc/parse", async (
+            HttpContext context, DocumentProcessor processor, CancellationToken ct) =>
         {
             using var reader = new StreamReader(context.Request.Body);
-            var body = await reader.ReadToEndAsync(cancellationToken);
-            var request = JsonSerializer.Deserialize<ReasonRequest>(body);
+            var body = await reader.ReadToEndAsync(ct);
+            var req = JsonSerializer.Deserialize<DocParseRequest>(body);
+            if (req == null || string.IsNullOrWhiteSpace(req.FilePath))
+                return Results.Json(new { error = "filePath required" }, statusCode: 400);
+            var text = await processor.ExtractTextAsync(req.FilePath, ct);
+            var sections = await processor.ExtractSectionsAsync(req.FilePath, ct);
+            return Results.Json(new { text, sections });
+        });
 
-            if (request == null || string.IsNullOrWhiteSpace(request.Query))
-                return Results.Json(new { error = "Query required" }, statusCode: 400);
-
-            var mode = Enum.TryParse<ReasoningMode>(request.Mode ?? "Forward", true, out var m) ? m : ReasoningMode.Forward;
-            var result = await logic.ReasonAsync(request.Query, mode, cancellationToken);
+        endpoints.MapPost("/api/reason/math", async (HttpContext ctx, MathReasoner reasoner, CancellationToken ct) =>
+        {
+            using var r = new StreamReader(ctx.Request.Body);
+            var req = JsonSerializer.Deserialize<ReasonRequest>(await r.ReadToEndAsync(ct));
+            if (req == null || string.IsNullOrWhiteSpace(req.Query))
+                return Results.Json(new { error = "query required" }, statusCode: 400);
+            var result = await reasoner.SolveAsync(req.Query, ct);
             return Results.Json(result);
         });
 
-        endpoints.MapPost("/api/reason/dialectical", async (
-            HttpContext context,
-            DialecticalReasoner dialectical,
-            CancellationToken cancellationToken) =>
+        endpoints.MapPost("/api/reason/logic", async (HttpContext ctx, FormalLogicEngine engine, CancellationToken ct) =>
         {
-            using var reader = new StreamReader(context.Request.Body);
-            var body = await reader.ReadToEndAsync(cancellationToken);
-            var request = JsonSerializer.Deserialize<ReasonRequest>(body);
-
-            if (request == null || string.IsNullOrWhiteSpace(request.Query))
-                return Results.Json(new { error = "Query required" }, statusCode: 400);
-
-            var result = await dialectical.AnalyzeAsync(request.Query, request.Thesis, cancellationToken);
+            using var r = new StreamReader(ctx.Request.Body);
+            var req = JsonSerializer.Deserialize<ReasonRequest>(await r.ReadToEndAsync(ct));
+            if (req == null || string.IsNullOrWhiteSpace(req.Query))
+                return Results.Json(new { error = "query required" }, statusCode: 400);
+            var mode = req.Mode != null ? Enum.Parse<ReasoningMode>(req.Mode, true) : ReasoningMode.Forward;
+            var result = await engine.ReasonAsync(req.Query, mode, ct);
             return Results.Json(result);
         });
 
-        endpoints.MapPost("/api/reason/attribution", async (
-            HttpContext context,
-            AttributionReasoner attribution,
-            CancellationToken cancellationToken) =>
+        endpoints.MapPost("/api/reason/dialectical", async (HttpContext ctx, DialecticalReasoner reasoner, CancellationToken ct) =>
         {
-            using var reader = new StreamReader(context.Request.Body);
-            var body = await reader.ReadToEndAsync(cancellationToken);
-            var request = JsonSerializer.Deserialize<ReasonRequest>(body);
-
-            if (request == null || string.IsNullOrWhiteSpace(request.Query))
-                return Results.Json(new { error = "Query required" }, statusCode: 400);
-
-            var result = await attribution.TraceAsync(request.Query, request.Evidence, cancellationToken);
+            using var r = new StreamReader(ctx.Request.Body);
+            var req = JsonSerializer.Deserialize<ReasonRequest>(await r.ReadToEndAsync(ct));
+            if (req == null || string.IsNullOrWhiteSpace(req.Query))
+                return Results.Json(new { error = "query required" }, statusCode: 400);
+            var result = await reasoner.AnalyzeAsync(req.Query, req.Thesis, ct);
             return Results.Json(result);
         });
 
-        endpoints.MapPost("/api/reason", async (
-            HttpContext context,
-            ReasoningOrchestrator orchestrator,
-            CancellationToken cancellationToken) =>
+        endpoints.MapPost("/api/reason/attribution", async (HttpContext ctx, AttributionReasoner reasoner, CancellationToken ct) =>
         {
-            using var reader = new StreamReader(context.Request.Body);
-            var body = await reader.ReadToEndAsync(cancellationToken);
-            var request = JsonSerializer.Deserialize<ReasonRequest>(body);
-
-            if (request == null || string.IsNullOrWhiteSpace(request.Query))
-                return Results.Json(new { error = "Query required" }, statusCode: 400);
-
-            var types = request.Types?
-                .Select(t => Enum.TryParse<ReasoningType>(t, true, out var rt) ? rt : ReasoningType.Auto)
-                .ToArray();
-
-            var result = await orchestrator.ReasonAsync(request.Query, types, cancellationToken);
+            using var r = new StreamReader(ctx.Request.Body);
+            var req = JsonSerializer.Deserialize<ReasonRequest>(await r.ReadToEndAsync(ct));
+            if (req == null || string.IsNullOrWhiteSpace(req.Query))
+                return Results.Json(new { error = "query required" }, statusCode: 400);
+            var result = await reasoner.TraceAsync(req.Query, req.Evidence, ct);
             return Results.Json(result);
         });
 
-        endpoints.MapGet("/api/gis/geocode", async (
-            string address, string? provider,
-            UnifiedMapService maps, CancellationToken ct) =>
+        endpoints.MapPost("/api/reason", async (HttpContext ctx, ReasoningOrchestrator orch, CancellationToken ct) =>
         {
-            if (string.IsNullOrWhiteSpace(address))
-                return Results.Json(new { error = "address required" }, statusCode: 400);
-            var result = await maps.GeocodeAsync(address, provider ?? "auto", ct);
-            return Results.Json(result);
+            using var r = new StreamReader(ctx.Request.Body);
+            var req = JsonSerializer.Deserialize<ReasonRequest>(await r.ReadToEndAsync(ct));
+            if (req == null || string.IsNullOrWhiteSpace(req.Query))
+                return Results.Json(new { error = "query required" }, statusCode: 400);
+            var types = req.Types?.Select(t => Enum.Parse<ReasoningType>(t, true)).ToArray();
+            var report = await orch.ReasonAsync(req.Query, types, ct);
+            return Results.Json(report);
         });
 
-        endpoints.MapGet("/api/gis/reverse", async (
-            double lng, double lat, string? provider,
-            UnifiedMapService maps, CancellationToken ct) =>
+        endpoints.MapGet("/api/gis/geocode", async (string address, UnifiedMapService gis, CancellationToken ct) =>
+            Results.Json(await gis.GeocodeAsync(address, ct: ct)));
+
+        endpoints.MapGet("/api/gis/reverse", async (double lng, double lat, UnifiedMapService gis, CancellationToken ct) =>
+            Results.Json(await gis.ReverseGeocodeAsync(lng, lat, ct: ct)));
+
+        endpoints.MapGet("/api/gis/poi", async (string keyword, string city, UnifiedMapService gis, CancellationToken ct) =>
+            Results.Json(await gis.SearchPOIAsync(keyword, city, ct: ct)));
+
+        endpoints.MapGet("/api/gis/route", async (string from, string to, string mode, UnifiedMapService gis, CancellationToken ct) =>
         {
-            var result = await maps.ReverseGeocodeAsync(lng, lat, provider ?? "auto", ct);
-            return Results.Json(result);
+            var fromParts = from.Split(',');
+            var toParts = to.Split(',');
+            var fromPoint = new GeoPoint { Lng = double.Parse(fromParts[0]), Lat = double.Parse(fromParts[1]) };
+            var toPoint = new GeoPoint { Lng = double.Parse(toParts[0]), Lat = double.Parse(toParts[1]) };
+            return Results.Json(await gis.GetRouteAsync(fromPoint, toPoint, mode, ct: ct));
         });
 
-        endpoints.MapGet("/api/gis/poi", async (
-            string keyword, string? city, int limit, string? provider,
-            UnifiedMapService maps, CancellationToken ct) =>
-        {
-            if (string.IsNullOrWhiteSpace(keyword))
-                return Results.Json(new { error = "keyword required" }, statusCode: 400);
-            var results = await maps.SearchPOIAsync(keyword, city, limit > 0 ? limit : 10, provider ?? "auto", ct);
-            return Results.Json(new { count = results.Count, results });
-        });
+        endpoints.MapGet("/api/gis/weather", async (string city, UnifiedMapService gis, CancellationToken ct) =>
+            Results.Json(await gis.GetWeatherAsync(city, ct: ct)));
 
-        endpoints.MapGet("/api/gis/route", async (
-            double fromLng, double fromLat, double toLng, double toLat, string? mode,
-            UnifiedMapService maps, CancellationToken ct) =>
-        {
-            var route = await maps.GetRouteAsync(
-                new GeoPoint { Lng = fromLng, Lat = fromLat },
-                new GeoPoint { Lng = toLng, Lat = toLat },
-                mode ?? "driving", "auto", ct);
-            return Results.Json(route);
-        });
-
-        endpoints.MapGet("/api/gis/weather", async (
-            string city, UnifiedMapService maps, CancellationToken ct) =>
-        {
-            var result = await maps.GetWeatherAsync(city, ct: ct);
-            return Results.Json(result);
-        });
-
-        endpoints.MapGet("/api/review", async (
-            string? scope, string? target,
-            HttpContext context,
-            CodeReviewEngine review,
-            CancellationToken ct) =>
-        {
-            var reviewScope = Enum.TryParse<ReviewScope>(scope ?? "Staged", true, out var s) ? s : ReviewScope.Staged;
-            var report = await review.ReviewAsync(target, reviewScope, ct);
-
-            if (context.Request.Headers.Accept.ToString().Contains("markdown"))
-            {
-                context.Response.ContentType = "text/markdown";
-                await context.Response.WriteAsync(report.ToMarkdown(), ct);
-                return Results.Empty;
-            }
-
-            return Results.Json(new
-            {
-                report.OverallScore, report.Summary,
-                report.FilesChanged, report.TotalIssues,
-                report.CriticalIssues, report.Warnings, report.Infos,
-                report.ChangedFiles,
-                issues = report.Issues.Select(i => new
-                {
-                    i.File, i.Line, severity = i.Severity.ToString(),
-                    i.Category, i.Title, i.Message, i.Suggestion
-                })
-            });
-        });
+        endpoints.MapGet("/api/review", () => Results.Json(new { message = "POST /api/review with target param" }));
 
         endpoints.MapPost("/api/notify/telegram", async (
             HttpContext context, TelegramBot bot, CancellationToken ct) =>
@@ -295,7 +176,7 @@ public static class CapabilityEndpoints
             var req = JsonSerializer.Deserialize<NotifyRequest>(body);
             if (req == null || string.IsNullOrWhiteSpace(req.Message))
                 return Results.Json(new { error = "message required" }, statusCode: 400);
-            var ok = await bot.SendMessageAsync(req.ChatId > 0 ? req.ChatId : 0, req.Message, ct);
+            var ok = await bot.SendMessageAsync(req.ChatId, req.Message, ct);
             return Results.Json(new { success = ok });
         });
 
@@ -329,6 +210,86 @@ public static class CapabilityEndpoints
             await notifier.NotifyAllAsync(req.Message, ct);
             return Results.Json(new { success = true });
         });
+
+        MapDeepEndpoints(endpoints);
+    }
+
+    private static void MapDeepEndpoints(IEndpointRouteBuilder endpoints)
+    {
+        endpoints.MapPost("/api/skills/discover", (SkillDiscoveryManager discovery) =>
+            Results.Ok(discovery.DiscoverAll()));
+
+        endpoints.MapPost("/api/skills/search", (SkillCatalog catalog, string query) =>
+            Results.Ok(catalog.Search(query)));
+
+        endpoints.MapPost("/api/skills/suggest", (SkillCatalog catalog, string task) =>
+            Results.Ok(catalog.SuggestSkills(task)));
+
+        endpoints.MapPost("/api/tools/list", (ToolMarket market) =>
+            Results.Ok(market.Discover()));
+
+        endpoints.MapPost("/api/tools/search", (ToolMarket market, string query) =>
+            Results.Ok(market.Search(query)));
+
+        endpoints.MapPost("/api/tools/synthesize/list", (ToolSynthesizer synth) =>
+            Results.Ok(synth.ListTools()));
+
+        endpoints.MapPost("/api/tools/snapshot/list", (ToolOrchestrator orch) =>
+            Results.Ok(orch.SnapshotList()));
+
+        endpoints.MapPost("/api/pipeline/format", (string text) =>
+            Results.Ok(PipelineEngine.Format(text)));
+
+        endpoints.MapPost("/api/codegraph/index", async (CodeGraph.CodeGraph graph) =>
+        {
+            await graph.IndexAsync();
+            return Results.Ok(graph.Stats());
+        });
+
+        endpoints.MapGet("/api/codegraph/search", (CodeGraph.CodeGraph graph, string query) =>
+            Results.Ok(graph.Search(query)));
+
+        endpoints.MapGet("/api/codegraph/hubs", (CodeGraph.CodeGraph graph, int topN = 10) =>
+            Results.Ok(graph.FindHubs(topN)));
+
+        endpoints.MapGet("/api/codegraph/blast", (CodeGraph.CodeGraph graph, string entity, int maxDepth = 2) =>
+            Results.Ok(graph.BlastRadius(entity, maxDepth)));
+
+        endpoints.MapPost("/api/crawler/fetch", async (LightCrawler crawler, string url) =>
+            Results.Ok(await crawler.FetchAsync(url)));
+
+        endpoints.MapPost("/api/evolution/discovery/stats", (SelfDiscovery discovery) =>
+            Results.Ok(discovery.GetStats()));
+
+        endpoints.MapPost("/api/evolution/discovery/proposals", (SelfDiscovery discovery) =>
+            Results.Ok(discovery.GetProposals()));
+
+        endpoints.MapPost("/api/evolution/document", async (SelfDocumenter doc) =>
+        {
+            var result = await doc.GenerateAsync();
+            return Results.Ok(new { title = result.Title, sections = result.Sections.Count });
+        });
+
+        endpoints.MapPost("/api/docengine/templates", (DocEngine.DocEngine engine) =>
+            Results.Ok(engine.GetTemplateTypes()));
+
+        endpoints.MapPost("/api/docengine/review", (DocForge forge, string content, string? previous) =>
+            Results.Ok(forge.Review(content, previous)));
+
+        endpoints.MapPost("/api/docengine/validate", (string content, string schemaType) =>
+            Results.Ok(new { passed = DocForge.ValidateSchema(content, schemaType) }));
+
+        endpoints.MapPost("/api/docengine/templates/search", (TemplateRegistry registry, string? query) =>
+            Results.Ok(registry.Search(query)));
+
+        endpoints.MapPost("/api/knowledge/forager/sites", (KnowledgeForager forager) =>
+            Results.Ok(forager.GetDueSources()));
+
+        endpoints.MapPost("/api/knowledge/forager/patrol", async (KnowledgeForager forager) =>
+            Results.Ok(await forager.PatrolAsync()));
+
+        endpoints.MapPost("/api/knowledge/forager/brief", async (KnowledgeForager forager) =>
+            Results.Ok(await forager.GenerateDailyBriefAsync()));
     }
 
     private static CodeLanguage DetectLanguage(string code)

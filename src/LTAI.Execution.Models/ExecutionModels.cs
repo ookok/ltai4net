@@ -323,3 +323,344 @@ public static class ResearchStrategies
         return (defaultStrategy, Configs[defaultStrategy]);
     }
 }
+
+// Phase 7a — Execution deep models
+public enum DiffusionStage { Skeleton = 1, Tools = 2, Params = 3 }
+
+public sealed class DiffusionStep
+{
+    public int Stage { get; set; }
+    public string PlanText { get; set; } = "";
+    public List<string> ToolsUsed { get; set; } = new();
+    public double Confidence { get; set; }
+    public string RefinementNotes { get; set; } = "";
+}
+
+public sealed class RefinedPlan
+{
+    public string Intent { get; set; } = "";
+    public string Domain { get; set; } = "";
+    public List<DiffusionStep> Steps { get; set; } = new();
+    public string FinalPlan { get; set; } = "";
+    public List<string> ToolsSequence { get; set; } = new();
+    public int EstimatedTokens { get; set; }
+    public double Confidence { get; set; }
+}
+
+public enum GTSMMode { Tree, Flow, Hybrid, Auto }
+
+public sealed class GTSMStep
+{
+    public int Index { get; set; }
+    public string Action { get; set; } = "";
+    public string Tool { get; set; } = "";
+    public Dictionary<string, object?> Params { get; set; } = new();
+    public int TreeDepth { get; set; }
+    public double NoiseStd { get; set; }
+    public double ScoreGradient { get; set; }
+    public double Confidence { get; set; }
+}
+
+public sealed class GTSMTrajectory
+{
+    public string Task { get; set; } = "";
+    public GTSMMode Mode { get; set; }
+    public List<GTSMStep> Steps { get; set; } = new();
+    public double TotalScore { get; set; }
+    public int TreeDepth { get; set; }
+    public int DiffusionSteps { get; set; }
+}
+
+public sealed class TreeNode
+{
+    public string Action { get; set; } = "";
+    public List<TreeNode> Children { get; set; } = new();
+    public bool IsLeaf { get; set; }
+    public double Score { get; set; }
+    public int Depth { get; set; }
+}
+
+public sealed class CheckpointState
+{
+    public string SessionId { get; set; } = "";
+    public string TaskGoal { get; set; } = "";
+    public List<string> Plan { get; set; } = new();
+    public List<string> CompletedSteps { get; set; } = new();
+    public string? CurrentStep { get; set; }
+    public Dictionary<string, object?> ExecutionResults { get; set; } = new();
+    public List<string> Reflections { get; set; } = new();
+    public double SuccessRate { get; set; }
+    public DateTime SavedAt { get; set; }
+    public int Version { get; set; }
+}
+
+public sealed class EvolutionCandidate
+{
+    public string Id { get; set; } = "";
+    public string Content { get; set; } = "";
+    public int Generation { get; set; }
+    public double Fitness { get; set; }
+    public List<string> Annotations { get; set; } = new();
+    public List<string> ParentIds { get; set; } = new();
+    public int MutationCount { get; set; }
+}
+
+public sealed class EvolutionResult
+{
+    public List<EvolutionCandidate> Candidates { get; set; } = new();
+    public List<EvolutionCandidate> ElitePool { get; set; } = new();
+    public double DiversityScore { get; set; }
+}
+
+public sealed class ThinkingProcessMetrics
+{
+    public int TokensUsed { get; set; }
+    public int Mutations { get; set; }
+    public int Crossovers { get; set; }
+    public int GenerationsRun { get; set; }
+
+    public double TokensPerCandidate => Candidates > 0 ? (double)TokensUsed / Candidates : 0;
+    public double FitnessImprovementPerGen => GenerationsRun > 0 ? (double)FitnessGained / GenerationsRun : 0;
+    public int Candidates { get; set; }
+    public double FitnessGained { get; set; }
+}
+
+public sealed class TokenUsage
+{
+    public DateTime Timestamp { get; set; }
+    public string Model { get; set; } = "";
+    public int Tokens { get; set; }
+    public double CostYuan { get; set; }
+}
+
+public sealed class BudgetStatus
+{
+    public double DailyLimit { get; set; }
+    public double UsedToday { get; set; }
+    public double Remaining => DailyLimit - UsedToday;
+    public double UsagePct => DailyLimit > 0 ? UsedToday / DailyLimit : 0;
+    public bool Degraded { get; set; }
+    public double TotalCostYuan { get; set; }
+    public DateTime? DegradedSince { get; set; }
+}
+
+public enum CognitiveBehavior { BackwardChain, SubgoalDecompose, Verify, Backtrack }
+
+public sealed class VerificationResult
+{
+    public string StepId { get; set; } = "";
+    public bool BackwardChainOk { get; set; }
+    public bool SubgoalVerifiable { get; set; }
+    public bool OutputObservable { get; set; }
+    public bool NoPostHocLeakage { get; set; }
+    public List<string> Reasons { get; set; } = new();
+    public string CausalHypothesis { get; set; } = "";
+    public bool Passed { get; set; }
+    public double Score { get; set; }
+    public List<string> FixSuggestions { get; set; } = new();
+}
+
+public sealed class BacktrackRecord
+{
+    public string Alternative { get; set; } = "";
+    public string WhyRejected { get; set; } = "";
+    public CognitiveBehavior Behavior { get; set; }
+    public string BetterAlternative { get; set; } = "";
+}
+
+public sealed class CognitiveAudit
+{
+    public string PlanId { get; set; } = "";
+    public int StepsVerified { get; set; }
+    public List<BacktrackRecord> BacktrackRecords { get; set; } = new();
+    public double PassRate { get; set; }
+    public double CompressionRatio { get; set; }
+    public string Recommendation { get; set; } = "";
+}
+
+public sealed class ApprovalRequest
+{
+    public string Id { get; set; } = "";
+    public string TaskName { get; set; } = "";
+    public string Question { get; set; } = "";
+    public string Context { get; set; } = "";
+    public string Status { get; set; } = "pending";
+    public DateTime Created { get; set; }
+    public DateTime? Resolved { get; set; }
+    public string? Response { get; set; }
+    public int TimeoutSeconds { get; set; } = 300;
+    public TaskCompletionSource<bool> Future { get; set; } = new();
+}
+
+public sealed class SessionState
+{
+    public string SessionId { get; set; } = "";
+    public string Name { get; set; } = "";
+    public string Workspace { get; set; } = "";
+    public List<object> Messages { get; set; } = new();
+    public int TotalTokens { get; set; }
+    public string ReasoningEffort { get; set; } = "medium";
+    public DateTime CreatedAt { get; set; }
+    public DateTime UpdatedAt { get; set; }
+    public List<string> Tags { get; set; } = new();
+    public bool Archived { get; set; }
+    public int SideGitTurns { get; set; }
+}
+
+public sealed class TurnSnapshot
+{
+    public string TurnId { get; set; } = "";
+    public string Workspace { get; set; } = "";
+    public string SnapshotPath { get; set; } = "";
+    public DateTime Timestamp { get; set; }
+}
+
+public sealed class FitnessVector
+{
+    public double Reliability { get; set; }
+    public double CostEfficiency { get; set; }
+    public double Speed { get; set; }
+    public double Safety { get; set; }
+
+    public bool Dominates(FitnessVector other)
+    {
+        return Reliability >= other.Reliability && CostEfficiency >= other.CostEfficiency
+            && Speed >= other.Speed && Safety >= other.Safety
+            && (Reliability > other.Reliability || CostEfficiency > other.CostEfficiency
+                || Speed > other.Speed || Safety > other.Safety);
+    }
+}
+
+public sealed class TrajectoryScore
+{
+    public string TrajectoryId { get; set; } = "";
+    public FitnessVector Fitness { get; set; } = new();
+    public List<string> ToolSequence { get; set; } = new();
+    public string Summary { get; set; } = "";
+    public int TotalTokens { get; set; }
+    public int TotalMs { get; set; }
+    public bool IsParetoOptimal { get; set; }
+}
+
+public enum DiversityState { Healthy, Condensing, Collapsing, Frozen }
+
+public sealed class RankSnapshot
+{
+    public DateTime Timestamp { get; set; }
+    public int PopulationSize { get; set; }
+    public int EffectiveRank { get; set; }
+    public double DiversityScore { get; set; }
+    public int DominantDirectionCount { get; set; }
+    public double Entropy { get; set; }
+    public DiversityState State { get; set; }
+}
+
+public sealed class AgentBelief
+{
+    public string Name { get; set; } = "";
+    public double Alpha { get; set; } = 1;
+    public double Beta { get; set; } = 1;
+    public int MarginalTokens { get; set; }
+    public DateTime? LastDelegated { get; set; }
+    public int DelegationCount { get; set; }
+
+    public double Mean => Alpha + Beta > 0 ? Alpha / (Alpha + Beta) : 0.5;
+}
+
+public sealed class CompressorStats
+{
+    public long TotalInputChars { get; set; }
+    public long TotalOutputChars { get; set; }
+    public int TotalCalls { get; set; }
+    public int RulesApplied { get; set; }
+    public int FallbackTruncations { get; set; }
+    public int PassThroughs { get; set; }
+}
+
+public sealed class CompressResult
+{
+    public string Original { get; set; } = "";
+    public string Compressed { get; set; } = "";
+    public List<string> RulesApplied { get; set; } = new();
+    public int OriginalChars { get; set; }
+    public int CompressedChars { get; set; }
+    public string Method { get; set; } = "";
+}
+
+public enum RuleAction { PassThrough, TruncateTail, ExtractPattern, Remove, Replace, Condense }
+
+public sealed class CompressionRule
+{
+    public string Id { get; set; } = "";
+    public string Name { get; set; } = "";
+    public string Namespace { get; set; } = "";
+    public int Priority { get; set; }
+    public RuleAction Action { get; set; }
+    public string MatchPattern { get; set; } = "";
+    public string? MatchContext { get; set; }
+    public int TruncateLines { get; set; }
+    public int TruncateChars { get; set; }
+    public string? ExtractRegex { get; set; }
+    public string? ReplacePattern { get; set; }
+    public string? ReplaceWith { get; set; }
+    public int HitCount { get; set; }
+    public int FalsePositiveCount { get; set; }
+    public DateTime CreatedAt { get; set; }
+    public DateTime? LastHit { get; set; }
+    public DateTime? ExpiresAt { get; set; }
+    public string? OriginTask { get; set; }
+    public bool AutoGenerated { get; set; }
+}
+
+public enum ClarifierMode { FillBlank, ConfirmAmbiguity, PreviewCheck }
+
+public sealed class Clarification
+{
+    public string Id { get; set; } = "";
+    public ClarifierMode Mode { get; set; }
+    public string Question { get; set; } = "";
+    public List<string> Options { get; set; } = new();
+    public string? DefaultAnswer { get; set; }
+    public string Context { get; set; } = "";
+    public bool Answered { get; set; }
+    public string? Answer { get; set; }
+}
+
+public sealed class ResolvedSkill
+{
+    public string Name { get; set; } = "";
+    public string Type { get; set; } = "";
+    public string Description { get; set; } = "";
+    public string Source { get; set; } = "";
+    public string Handler { get; set; } = "";
+    public DateTime CreatedAt { get; set; }
+    public int UsedCount { get; set; }
+}
+
+public enum RLMSplitter { ByItem, ByAspect, ByChunk, Custom }
+
+public sealed class RLMTask
+{
+    public string Id { get; set; } = "";
+    public string Prompt { get; set; } = "";
+    public string Context { get; set; } = "";
+    public Dictionary<string, object?> Metadata { get; set; } = new();
+}
+
+public sealed class RLMResult
+{
+    public string TaskId { get; set; } = "";
+    public string Content { get; set; } = "";
+    public bool Success { get; set; }
+    public int TokensUsed { get; set; }
+    public long DurationMs { get; set; }
+}
+
+public sealed class RLMAggregate
+{
+    public List<RLMResult> Results { get; set; } = new();
+    public int TotalTokens { get; set; }
+    public long TotalDurationMs { get; set; }
+    public int WorkerCount { get; set; }
+    public int SuccessCount { get; set; }
+}

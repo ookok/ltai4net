@@ -1,4 +1,6 @@
 using System.Collections.Concurrent;
+using System.Text.Json;
+using LTAI.TreeLLM.Models;
 using Microsoft.Extensions.Logging;
 
 namespace LTAI.TreeLLM.Routing;
@@ -99,24 +101,52 @@ public sealed class BudgetStatus
 public sealed class LatencyOracle
 {
     private readonly ConcurrentDictionary<string, LatencyProfile> _profiles = new();
-    private readonly double _decay = 0.9;
+    private readonly double _alpha = 0.2;
+    private int _predictions;
 
     public void Record(string provider, double latencyMs)
     {
         var profile = _profiles.GetOrAdd(provider, _ => new LatencyProfile());
-        profile.EMAMean = profile.EMAMean * _decay + latencyMs * (1.0 - _decay);
-        profile.EMAVariance = profile.EMAVariance * _decay + Math.Pow(latencyMs - profile.EMAMean, 2) * (1.0 - _decay);
+        profile.EMAMean = profile.EMAMean * (1 - _alpha) + latencyMs * _alpha;
+        profile.EMAVariance = profile.EMAVariance * (1 - _alpha) + Math.Pow(latencyMs - profile.EMAMean, 2) * _alpha;
         profile.Samples++;
         profile.LastSample = DateTime.UtcNow;
+    }
+
+    public (double predictedMs, bool viable) Predict(string provider, double complexity = 0.5, int hour = -1, double timeoutMs = 120000)
+    {
+        if (hour < 0) hour = DateTime.UtcNow.Hour;
+        if (!_profiles.TryGetValue(provider, out var p)) return (2000, true);
+
+        var baseMs = p.EMAMean;
+        var complexityFactor = 0.4 + complexity * 1.6;
+        var hourFactor = (hour >= 9 && hour <= 11) || (hour >= 14 && hour <= 17) || (hour >= 20 && hour <= 21) ? 1.35 : 1.0;
+        var predicted = baseMs * complexityFactor * hourFactor;
+        var viable = predicted < timeoutMs * 0.9;
+
+        Interlocked.Increment(ref _predictions);
+        return (predicted, viable);
     }
 
     public double Predict(string provider) =>
         _profiles.TryGetValue(provider, out var p) ? p.EMAMean : 500;
 
+    public int SmartTimeout(string provider, double complexity = 0.5, int min = 5000, int max = 120000)
+    {
+        var (predicted, _) = Predict(provider, complexity);
+        return (int)Math.Clamp(predicted * 1.5, min, max);
+    }
+
+    public bool ShouldRetry(string provider, double elapsedMs)
+    {
+        if (!_profiles.TryGetValue(provider, out var p)) return true;
+        return elapsedMs < p.EMAMean * 0.5;
+    }
+
     public double PredictP95(string provider)
     {
         if (!_profiles.TryGetValue(provider, out var p)) return 1000;
-        return p.EMAMean + 1.645 * Math.Sqrt(p.EMAVariance);
+        return p.EMAMean + 1.645 * Math.Sqrt(Math.Max(p.EMAVariance, 1));
     }
 
     public bool IsLatencyAcceptable(string provider, double thresholdMs = 2000) =>
@@ -125,12 +155,19 @@ public sealed class LatencyOracle
     public IReadOnlyList<string> GetSlowProviders(double thresholdMs = 1500) =>
         _profiles.Where(kvp => kvp.Value.EMAMean > thresholdMs && kvp.Value.Samples > 10)
             .Select(kvp => kvp.Key).ToList().AsReadOnly();
+
+    public Dictionary<string, object> Stats() => new()
+    {
+        ["predictions"] = _predictions,
+        ["providers"] = _profiles.Count,
+        ["slow_providers"] = GetSlowProviders()
+    };
 }
 
 internal sealed class LatencyProfile
 {
-    public double EMAMean = 500;
-    public double EMAVariance = 25000;
+    public double EMAMean = 2000;
+    public double EMAVariance = 100000;
     public int Samples;
     public DateTime LastSample = DateTime.UtcNow;
 }
@@ -138,65 +175,277 @@ internal sealed class LatencyProfile
 public sealed class CompetitiveEliminator
 {
     private readonly ILogger<CompetitiveEliminator> _logger;
-    private readonly ConcurrentDictionary<string, TournamentState> _tournaments = new();
-    private readonly int _matchesPerRound = 20;
-    private readonly double _eliminationThreshold = 0.55;
+    private readonly ConcurrentDictionary<string, ModelRanking> _rankings = new();
+    private readonly object _lock = new();
+    private const double ELO_INITIAL = 1200;
+    private const double ELO_SCALE = 400;
+    private const double ELO_K_EARLY = 32;
+    private const double ELO_K_STABLE = 16;
+    private const int STREAK_THRESHOLD = 5;
+    private const int MATCHES_TO_ESTABLISH = 10;
+    private const double QUALITY_EMA_ALPHA = 0.3;
+    private const double COOLDOWN_HOURS = 48;
 
     public CompetitiveEliminator(ILogger<CompetitiveEliminator> logger) => _logger = logger;
 
-    public (string winner, string loser)? EvaluateRound(string taskType, string modelA, string modelB)
+    public ModelRanking GetOrCreate(string provider)
     {
-        var pair = string.Compare(modelA, modelB) < 0 ? $"{modelA}_vs_{modelB}" : $"{modelB}_vs_{modelA}";
-        var key = $"{taskType}_{pair}";
-        var state = _tournaments.GetOrAdd(key, _ => new TournamentState
+        return _rankings.GetOrAdd(provider, _ => new ModelRanking
         {
-            ProviderA = modelA,
-            ProviderB = modelB,
-            TaskType = taskType
+            Provider = provider,
+            EloRating = ELO_INITIAL,
+            Tier = ModelTierRank.Mid
         });
+    }
 
-        state.Round++;
-        if (state.Round >= _matchesPerRound)
+    public ModelRanking? RecordMatch(string provider, bool success, double latencyMs, double costYuan,
+        int tokens = 0, double qualityScore = 0.5, double? safetyScore = null, string? opponent = null)
+    {
+        var ranking = GetOrCreate(provider);
+        if (ranking.IsEliminated)
         {
-            var aRate = state.AWins / (double)Math.Max(1, state.AWins + state.BWins);
-            if (aRate > _eliminationThreshold)
-            {
-                _logger.LogInformation("Elimination: {A} > {B} ({Rate:F2})", modelA, modelB, aRate);
-                return (modelA, modelB);
-            }
-            if (1 - aRate > _eliminationThreshold)
-            {
-                _logger.LogInformation("Elimination: {B} > {A} ({Rate:F2})", modelB, modelA, 1 - aRate);
-                return (modelB, modelA);
-            }
-            state.Round = 0;
-            state.AWins = 0;
-            state.BWins = 0;
+            if (ranking.CanRequalify)
+                ranking.Tier = ModelTierRank.Flash;
+            else
+                return ranking;
         }
 
-        return null;
+        ranking.Matches++;
+
+        if (success)
+        {
+            ranking.Wins++;
+            ranking.WinStreak++;
+            ranking.LoseStreak = Math.Max(0, ranking.LoseStreak - 1);
+        }
+        else
+        {
+            ranking.Losses++;
+            ranking.LoseStreak++;
+            ranking.WinStreak = Math.Max(0, ranking.WinStreak - 1);
+        }
+
+        ranking.EmAQuality = ranking.EmAQuality * (1 - QUALITY_EMA_ALPHA) + qualityScore * QUALITY_EMA_ALPHA;
+        if (safetyScore.HasValue)
+            ranking.EmASafety = ranking.EmASafety * (1 - QUALITY_EMA_ALPHA) + safetyScore.Value * QUALITY_EMA_ALPHA;
+
+        ranking.AvgLatencyMs = ranking.AvgLatencyMs * 0.8 + latencyMs * 0.2;
+        ranking.AvgCostYuan = ranking.AvgCostYuan * 0.8 + costYuan * 0.2;
+        ranking.LastMatch = DateTime.UtcNow;
+
+        _UpdateElo(ranking, success, opponent);
+        _CheckTierChange(ranking);
+
+        return ranking;
     }
 
-    public void RecordResult(string taskType, string modelA, string modelB, bool aWon)
+    private void _UpdateElo(ModelRanking ranking, bool success, string? opponent)
     {
-        var pair = string.Compare(modelA, modelB) < 0 ? $"{modelA}_vs_{modelB}" : $"{modelB}_vs_{modelA}";
-        var key = $"{taskType}_{pair}";
-        var state = _tournaments.GetOrAdd(key, _ => new TournamentState { ProviderA = modelA, ProviderB = modelB, TaskType = taskType });
-        if (aWon) state.AWins++; else state.BWins++;
+        double avgOpponentElo = ELO_INITIAL;
+        if (opponent != null && _rankings.TryGetValue(opponent, out var opp))
+            avgOpponentElo = opp.EloRating;
+
+        var expected = 1.0 / (1.0 + Math.Pow(10, (avgOpponentElo - ranking.EloRating) / ELO_SCALE));
+        var actual = success ? 1.0 : 0.0;
+        var k = ranking.Matches < MATCHES_TO_ESTABLISH ? ELO_K_EARLY : ELO_K_STABLE;
+
+        ranking.EloRating += k * (actual - expected);
     }
 
-    public IReadOnlyList<string> GetActiveTournaments() =>
-        _tournaments.Where(kvp => kvp.Value.Round > 0).Select(kvp => kvp.Key).ToList().AsReadOnly();
-}
+    private void _CheckTierChange(ModelRanking ranking)
+    {
+        if (ranking.WinStreak >= STREAK_THRESHOLD)
+        {
+            ranking.Tier = ranking.Tier switch
+            {
+                ModelTierRank.Eliminated => ModelTierRank.Flash,
+                ModelTierRank.Flash => ModelTierRank.Mid,
+                ModelTierRank.Mid => ModelTierRank.Pro,
+                _ => ranking.Tier
+            };
+            _logger.LogInformation("{Provider} promoted to {Tier} (streak:{Streak})", ranking.Provider, ranking.Tier, ranking.WinStreak);
+            ranking.WinStreak = 0;
+        }
+        else if (ranking.LoseStreak >= STREAK_THRESHOLD)
+        {
+            ranking.Tier = ranking.Tier switch
+            {
+                ModelTierRank.Pro => ModelTierRank.Mid,
+                ModelTierRank.Mid => ModelTierRank.Flash,
+                ModelTierRank.Flash => ModelTierRank.Eliminated,
+                _ => ranking.Tier
+            };
+            if (ranking.Tier == ModelTierRank.Eliminated)
+                ranking.EliminatedAt = DateTime.UtcNow;
+            _logger.LogWarning("{Provider} demoted to {Tier} (streak:{Streak})", ranking.Provider, ranking.Tier, ranking.LoseStreak);
+            ranking.LoseStreak = 0;
+        }
 
-internal sealed class TournamentState
-{
-    public string ProviderA { get; init; } = "";
-    public string ProviderB { get; init; } = "";
-    public string TaskType { get; init; } = "";
-    public int Round;
-    public int AWins;
-    public int BWins;
+        if (ranking.IsEstablished && ranking.WinStreak == 0 && ranking.LoseStreak == 0)
+        {
+            if (ranking.EloRating >= 1400 && ranking.Tier != ModelTierRank.Pro)
+            {
+                ranking.Tier = ModelTierRank.Pro;
+                _logger.LogInformation("{Provider} Elo-promoted to Pro ({Elo:F0})", ranking.Provider, ranking.EloRating);
+            }
+            else if (ranking.EloRating >= 1150 && ranking.Tier == ModelTierRank.Flash)
+            {
+                ranking.Tier = ModelTierRank.Mid;
+                _logger.LogInformation("{Provider} Elo-promoted to Mid ({Elo:F0})", ranking.Provider, ranking.EloRating);
+            }
+            else if (ranking.EloRating < 900 && ranking.Tier == ModelTierRank.Flash)
+            {
+                ranking.Tier = ModelTierRank.Eliminated;
+                ranking.EliminatedAt = DateTime.UtcNow;
+                _logger.LogWarning("{Provider} Elo-eliminated ({Elo:F0})", ranking.Provider, ranking.EloRating);
+            }
+        }
+    }
+
+    public Dictionary<string, double> GetTierModifier(string provider)
+    {
+        var r = GetOrCreate(provider);
+        return r.Tier switch
+        {
+            ModelTierRank.Pro => new Dictionary<string, double> { ["quality"] = 1.15, ["capability"] = 1.10 },
+            ModelTierRank.Flash => new Dictionary<string, double> { ["cost"] = 1.30 },
+            ModelTierRank.Eliminated => new Dictionary<string, double> { ["quality"] = 0.0, ["latency"] = 0.0, ["cost"] = 0.0, ["capability"] = 0.0 },
+            _ => new Dictionary<string, double>()
+        };
+    }
+
+    public bool IsViable(string provider)
+    {
+        var r = GetOrCreate(provider);
+        return !r.IsEliminated || r.CanRequalify;
+    }
+
+    public List<(string Provider, double Score)> ListwiseRank(IReadOnlyList<string> providers, double temperature = 0.5)
+    {
+        var eligible = providers.Where(IsViable).Select(p => GetOrCreate(p)).ToList();
+        var scores = eligible.Select(r => (
+            Provider: r.Provider,
+            Score: Math.Exp(r.EloRating / (ELO_SCALE * temperature))
+        )).ToList();
+        var total = scores.Sum(s => s.Score);
+        return scores.Select(s => (
+            Provider: s.Provider,
+            Score: s.Score / Math.Max(total, 0.001)
+        )).OrderByDescending(s => s.Score).ToList();
+    }
+
+    public void TransferKnowledge(string winner, string loser, double ratio = 0.3)
+    {
+        var w = GetOrCreate(winner);
+        var l = GetOrCreate(loser);
+        var eloGap = Math.Abs(w.EloRating - l.EloRating);
+        w.EloRating -= eloGap * ratio * 0.05;
+        l.EloRating += eloGap * ratio * 0.05;
+        l.EmAQuality += (w.EmAQuality - l.EmAQuality) * ratio;
+    }
+
+    public void EvolveCollective(double ratio = 0.25)
+    {
+        var pro = _rankings.Values.Where(r => r.Tier == ModelTierRank.Pro).OrderByDescending(r => r.EloRating).ToList();
+        var flash = _rankings.Values.Where(r => r.Tier == ModelTierRank.Flash || r.Tier == ModelTierRank.Eliminated)
+            .OrderBy(r => r.EloRating).ToList();
+        var pairs = Math.Min(pro.Count, flash.Count);
+        for (int i = 0; i < pairs; i++)
+            TransferKnowledge(pro[i].Provider, flash[i].Provider, ratio);
+        _logger.LogInformation("Collective evolved: {Count} pairs", pairs);
+    }
+
+    public List<Dictionary<string, object>> GetLeaderboard() =>
+        _rankings.Values.OrderByDescending(r => r.EloRating).Select(r => new Dictionary<string, object>
+        {
+            ["provider"] = r.Provider,
+            ["elo"] = Math.Round(r.EloRating, 0),
+            ["tier"] = r.Tier.ToString(),
+            ["matches"] = r.Matches,
+            ["win_rate"] = Math.Round(r.WinRate, 3),
+            ["streak"] = r.WinStreak > 0 ? $"+{r.WinStreak}" : r.LoseStreak > 0 ? $"-{r.LoseStreak}" : "0",
+            ["quality"] = Math.Round(r.EmAQuality, 3),
+            ["avg_latency_ms"] = Math.Round(r.AvgLatencyMs, 0)
+        }).ToList();
+
+    public void ForcePromote(string provider)
+    {
+        var r = GetOrCreate(provider);
+        r.Tier = r.Tier switch
+        {
+            ModelTierRank.Eliminated => ModelTierRank.Flash,
+            ModelTierRank.Flash => ModelTierRank.Mid,
+            ModelTierRank.Mid => ModelTierRank.Pro,
+            _ => r.Tier
+        };
+    }
+
+    public void ForceDemote(string provider)
+    {
+        var r = GetOrCreate(provider);
+        r.Tier = r.Tier switch
+        {
+            ModelTierRank.Pro => ModelTierRank.Mid,
+            ModelTierRank.Mid => ModelTierRank.Flash,
+            _ => ModelTierRank.Eliminated
+        };
+        if (r.Tier == ModelTierRank.Eliminated)
+            r.EliminatedAt = DateTime.UtcNow;
+    }
+
+    public Dictionary<string, object> Stats() => new()
+    {
+        ["total"] = _rankings.Count,
+        ["pro"] = _rankings.Values.Count(r => r.Tier == ModelTierRank.Pro),
+        ["mid"] = _rankings.Values.Count(r => r.Tier == ModelTierRank.Mid),
+        ["flash"] = _rankings.Values.Count(r => r.Tier == ModelTierRank.Flash),
+        ["eliminated"] = _rankings.Values.Count(r => r.Tier == ModelTierRank.Eliminated)
+    };
+
+    public void Save(string path)
+    {
+        lock (_lock)
+        {
+            var state = _rankings.Values.Select(r => new
+            {
+                r.Provider, r.EloRating, Tier = r.Tier.ToString(), r.Matches, r.Wins, r.Losses,
+                r.WinStreak, r.LoseStreak, r.EmAQuality, r.EmASafety, r.AvgLatencyMs, r.AvgCostYuan,
+                LastMatch = r.LastMatch.ToString("O"), EliminatedAt = r.EliminatedAt?.ToString("O")
+            }).ToList();
+            File.WriteAllText(path, JsonSerializer.Serialize(state, new JsonSerializerOptions { WriteIndented = true }));
+        }
+    }
+
+    public void Load(string path)
+    {
+        if (!File.Exists(path)) return;
+        try
+        {
+            var state = JsonSerializer.Deserialize<List<JsonElement>>(File.ReadAllText(path));
+            if (state == null) return;
+            lock (_lock)
+            {
+                foreach (var item in state)
+                {
+                    var provider = item.GetProperty("Provider").GetString()!;
+                    var r = GetOrCreate(provider);
+                    r.EloRating = item.GetProperty("EloRating").GetDouble();
+                    r.Tier = Enum.TryParse<ModelTierRank>(item.GetProperty("Tier").GetString(), out var t) ? t : ModelTierRank.Mid;
+                    r.Matches = item.GetProperty("Matches").GetInt32();
+                    r.Wins = item.GetProperty("Wins").GetInt32();
+                    r.Losses = item.GetProperty("Losses").GetInt32();
+                    r.EmAQuality = item.GetProperty("EmAQuality").GetDouble();
+                    if (item.TryGetProperty("EmASafety", out var s)) r.EmASafety = s.GetDouble();
+                    r.AvgLatencyMs = item.GetProperty("AvgLatencyMs").GetDouble();
+                    r.AvgCostYuan = item.TryGetProperty("AvgCostYuan", out var c) ? c.GetDouble() : 0;
+                    r.LastMatch = DateTime.Parse(item.GetProperty("LastMatch").GetString()!);
+                    if (item.TryGetProperty("EliminatedAt", out var ea) && ea.ValueKind != JsonValueKind.Null)
+                        r.EliminatedAt = DateTime.Parse(ea.GetString()!);
+                }
+            }
+        }
+        catch { /* non-fatal */ }
+    }
 }
 
 public sealed class ContinuousBenchmark
