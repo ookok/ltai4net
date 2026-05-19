@@ -16,6 +16,9 @@ public static class WebApplicationExtensions
         app.MapWeWorkBotEndpoints();
         app.MapCodeApiEndpoints();
         app.MapGithubAuthEndpoints();
+        app.MapSseAgentEndpoints();
+        app.MapOpenCodeBridgeEndpoints();
+        app.MapDocRoutesEndpoints();
         app.MapHealthChecks("/api/health", new HealthCheckOptions
         {
             ResponseWriter = async (context, report) =>
