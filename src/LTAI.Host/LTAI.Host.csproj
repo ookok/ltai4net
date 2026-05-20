@@ -24,6 +24,7 @@
     <ProjectReference Include="..\LTAI.TreeLLM\LTAI.TreeLLM.csproj" />
     <ProjectReference Include="..\LTAI.Execution\LTAI.Execution.csproj" />
     <ProjectReference Include="..\LTAI.Memory\LTAI.Memory.csproj" />
+    <ProjectReference Include="..\LTAI.Economy\LTAI.Economy.csproj" />
   </ItemGroup>
 
   <ItemGroup>
