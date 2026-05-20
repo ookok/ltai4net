@@ -299,7 +299,7 @@ public sealed class ContextMoE
         TaskCriticality = item.TryGetProperty("taskCriticality", out v) ? v.GetDouble() : 0
     };
 
-    private static double[] GetQueryVector(string query, int dim = 64)
+    internal static double[] GetQueryVector(string query, int dim = 64)
     {
         var vec = new double[dim];
         var hash = (uint)query.GetHashCode();
@@ -370,7 +370,7 @@ public sealed class MoERouter
 
     public Dictionary<string, double> GetWeights(string taskType, string query)
     {
-        var (weights, _) = GetWeightsAndGates(taskType, query, GetQueryVector(query));
+        var (weights, _) = GetWeightsAndGates(taskType, query, ContextMoE.GetQueryVector(query));
         return weights;
     }
 

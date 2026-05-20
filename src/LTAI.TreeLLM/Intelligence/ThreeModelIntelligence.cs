@@ -3,6 +3,8 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using LTAI.TreeLLM.Models;
+using LTAI.Vector.Embedding;
+using LTAI.Vector.Interfaces;
 using Microsoft.Extensions.Logging;
 
 namespace LTAI.TreeLLM.Intelligence;
@@ -73,7 +75,7 @@ public sealed partial class ThreeModelIntelligence
         var config = LTAI.Core.Configuration.ProviderRegistry.ResolveConfig(providerName,
             LTAI.Core.Configuration.ProviderRegistry.DefaultProviderModel(providerName), "");
         if (config != null)
-            _embeddingBackend = new OpenAiCompatibleEmbeddingBackend(config.Endpoint, config.ApiKey, config.Model);
+            _embeddingBackend = new APIEmbeddingBackend(config.Endpoint, config.ApiKey, config.Model);
     }
 
     public void ConfigureL0Embedding(LTAI.Core.Configuration.IProviderRegistry registry, LTAI.Core.Configuration.AIConfig aiConfig)
@@ -83,13 +85,13 @@ public sealed partial class ThreeModelIntelligence
 
         if (aiConfig.Providers.TryGetValue(l0.Provider, out var configured))
         {
-            _embeddingBackend = new OpenAiCompatibleEmbeddingBackend(configured.Endpoint, configured.ApiKey, l0.Model);
+            _embeddingBackend = new APIEmbeddingBackend(configured.Endpoint, configured.ApiKey, l0.Model);
             return;
         }
 
         var config = registry.ResolveConfig(l0.Provider, l0.Model);
         if (config != null)
-            _embeddingBackend = new OpenAiCompatibleEmbeddingBackend(config.Endpoint, config.ApiKey, config.Model);
+            _embeddingBackend = new APIEmbeddingBackend(config.Endpoint, config.ApiKey, config.Model);
     }
 
     public async Task<string?> SpinalReflexAsync(string query)
@@ -151,34 +153,14 @@ public sealed partial class ThreeModelIntelligence
 
     private async Task<float[]?> GetEmbeddingAsync(string text)
     {
-        if (string.IsNullOrEmpty(_embeddingApiKey))
-        {
-            if (!_embeddingAvailable) _embeddingAvailable = false;
-            return null;
-        }
+        if (_embeddingBackend == null) return null;
 
         try
         {
-            var payload = JsonSerializer.Serialize(new { model = _embeddingModel, input = text, encoding_format = "float" });
-            var request = new HttpRequestMessage(HttpMethod.Post, _embeddingEndpoint)
-            {
-                Content = new StringContent(payload, Encoding.UTF8, "application/json")
-            };
-            request.Headers.Add("Authorization", $"Bearer {_embeddingApiKey}");
-
-            var response = await _embeddingHttp.SendAsync(request);
-            if (!response.IsSuccessStatusCode) return null;
-
-            var json = await response.Content.ReadAsStringAsync();
-            using var doc = JsonDocument.Parse(json);
-            var data = doc.RootElement.GetProperty("data")[0].GetProperty("embedding");
-            var embed = new float[data.GetArrayLength()];
-            for (var i = 0; i < embed.Length; i++) embed[i] = data[i].GetSingle();
-
-            _embeddingAvailable = true;
-            return embed;
+            var results = await _embeddingBackend.EmbedAsync(new[] { text });
+            return results.Length > 0 ? results[0] : null;
         }
-        catch { _embeddingAvailable = false; return null; }
+        catch { return null; }
     }
 
     public TriageResult Triage(string query)
@@ -203,7 +185,7 @@ public sealed partial class ThreeModelIntelligence
 
         var label = complexity < 0.3 ? "reflex" : complexity < 0.6 ? "fast" : "reasoning";
         var emotion = _DetectEmotion(query);
-        var matchedReflex = await SpinalReflexAsync(query);
+        var matchedReflex = SpinalReflexAsync(query).GetAwaiter().GetResult();
 
         return new TriageResult
         {
@@ -445,7 +427,7 @@ public sealed partial class ThreeModelIntelligence
                     var parts = line.Split('|', 2);
                     if (parts.Length == 2 && !string.IsNullOrWhiteSpace(parts[0]) && !string.IsNullOrWhiteSpace(parts[1]))
                     {
-                        AddReflex(parts[0].Trim(), parts[1].Trim());
+                        AddReflexAsync(parts[0].Trim(), parts[1].Trim());
                         insights.Add($"Discovered reflex: {parts[0].Trim()}");
                     }
                 }

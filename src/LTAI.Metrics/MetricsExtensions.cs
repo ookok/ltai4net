@@ -7,6 +7,7 @@ using LTAI.Metrics.Evaluation;
 using LTAI.Metrics.Monitoring;
 using LTAI.Metrics.Policy;
 using LTAI.Metrics.Safety;
+using LTAI.Vector.Knowledge;
 
 namespace LTAI.Metrics;
 
@@ -26,6 +27,16 @@ public static class MetricsExtensions
         services.AddSingleton(_ => DynamicPolicyEngine.Instance);
         services.AddSingleton(_ => SystemMonitor.Instance);
         services.AddSingleton(_ => HarnessRegistry.Instance.Value);
+
+        services.AddSingleton<RetrievalEvaluator>();
+        services.AddSingleton<GoldenQueryManager>();
+        services.AddSingleton<RetrievalMonitor>();
+        services.AddSingleton<LayerIsolationEvaluator>(sp =>
+        {
+            var docStore = sp.GetRequiredService<DocumentStore>();
+            var reranker = sp.GetRequiredService<Reranker>();
+            return new LayerIsolationEvaluator(docStore, reranker);
+        });
 
         return services;
     }

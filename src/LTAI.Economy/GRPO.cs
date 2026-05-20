@@ -819,5 +819,5 @@ public sealed class GRPOOptimizer
 
     public static LatentGRPO GetLatentGrpo(int latentDim = 6) => new LatentGRPO(latentDim);
     public static SpatialGRPOOptimizer GetSgrpo() => SpatialGRPOOptimizer.Instance;
-    public static TDMRewardOptimizer GetTdmOptimizer() => TDMRewardOptimizer.Instance;
+    public static TDMRewardOptimizer GetTdmOptimizer() => new TDMRewardOptimizer();
 }

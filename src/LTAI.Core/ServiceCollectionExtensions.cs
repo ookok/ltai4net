@@ -40,6 +40,13 @@ public static class ServiceCollectionExtensions
         services.AddSingleton(sp => AsyncDisk.Instance);
         services.AddSingleton(sp => ConcurrencyGuard.Instance);
 
+        services.AddSingleton<VisualReferenceBank>();
+
+        services.AddSingleton<SocialLoadModel>();
+        services.AddSingleton<SovereigntyGapDetector>();
+        services.AddSingleton<LeadAnchorMitigator>();
+        services.AddSingleton<CognitiveLoafingAuditor>();
+
         services.AddSingleton(sp => DpoPrefs.Instance);
 
         services.AddSingleton<ServiceManager>();
