@@ -11,24 +11,44 @@ public sealed class PlaywrightBrowserAgent : IBrowserAgent, IAsyncDisposable
 {
     private readonly ILogger<PlaywrightBrowserAgent> _logger;
     private readonly ConcurrentDictionary<string, PwBrowserSession> _sessions = new();
+    private readonly StealthBrowserAdapter? _stealthAdapter;
     private IPlaywright? _playwright;
     private IBrowser? _browser;
     private bool _initialized;
 
-    public PlaywrightBrowserAgent(ILogger<PlaywrightBrowserAgent> logger)
+    public PlaywrightBrowserAgent(
+        ILogger<PlaywrightBrowserAgent> logger,
+        StealthBrowserAdapter? stealthAdapter = null)
     {
         _logger = logger;
+        _stealthAdapter = stealthAdapter;
     }
 
     private async Task EnsureInitializedAsync()
     {
         if (_initialized) return;
-        _playwright = await Microsoft.Playwright.Playwright.CreateAsync();
-        _browser = await _playwright.Chromium.LaunchAsync(new BrowserTypeLaunchOptions
+
+        if (_stealthAdapter != null)
         {
-            Headless = true,
-            Args = new[] { "--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage" }
-        });
+            _browser = await _stealthAdapter.LaunchStealthBrowserAsync();
+            _logger.LogInformation("Using stealth browser adapter");
+        }
+        else
+        {
+            _playwright = await Microsoft.Playwright.Playwright.CreateAsync();
+            _browser = await _playwright.Chromium.LaunchAsync(new BrowserTypeLaunchOptions
+            {
+                Headless = true,
+                Args = new[]
+                {
+                    "--no-sandbox",
+                    "--disable-setuid-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--disable-blink-features=AutomationControlled"
+                }
+            });
+        }
+
         _initialized = true;
     }
 
