@@ -11,15 +11,15 @@ namespace LTAI.AI.Providers;
 
 public sealed class ProviderEngine : IChatClient
 {
-    private readonly HttpClient _http;
+    private readonly IHttpClientFactory _httpClientFactory;
     private readonly IOptions<LTAIOptions> _options;
     private readonly ILogger<ProviderEngine> _logger;
     private decimal _dailySpent;
     private readonly object _budgetLock = new();
 
-    public ProviderEngine(IOptions<LTAIOptions> options, ILogger<ProviderEngine> logger)
+    public ProviderEngine(IHttpClientFactory httpClientFactory, IOptions<LTAIOptions> options, ILogger<ProviderEngine> logger)
     {
-        _http = new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
+        _httpClientFactory = httpClientFactory;
         _options = options;
         _logger = logger;
     }
@@ -79,7 +79,7 @@ public sealed class ProviderEngine : IChatClient
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         cts.CancelAfter(options.TimeoutMs);
 
-        var response = await _http.SendAsync(httpRequest, cts.Token);
+        var response = await _httpClientFactory.CreateClient().SendAsync(httpRequest, cts.Token);
 
         if (!response.IsSuccessStatusCode)
         {
@@ -142,7 +142,7 @@ public sealed class ProviderEngine : IChatClient
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         cts.CancelAfter(options.TimeoutMs);
 
-        var response = await _http.SendAsync(httpRequest, HttpCompletionOption.ResponseHeadersRead, cts.Token);
+        var response = await _httpClientFactory.CreateClient().SendAsync(httpRequest, HttpCompletionOption.ResponseHeadersRead, cts.Token);
         response.EnsureSuccessStatusCode();
 
         using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
@@ -203,7 +203,6 @@ public sealed class ProviderEngine : IChatClient
 
     void IDisposable.Dispose()
     {
-        _http.Dispose();
         GC.SuppressFinalize(this);
     }
 

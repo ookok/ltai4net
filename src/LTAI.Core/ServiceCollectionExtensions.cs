@@ -8,6 +8,7 @@ using LTAI.Core.Prefs;
 using LTAI.Core.Resilience;
 using LTAI.Core.System;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
 
 namespace LTAI.Core;
@@ -16,6 +17,7 @@ public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddLTAICore(this IServiceCollection services)
     {
+        services.AddHttpClient();
         services.AddSingleton<DataPathResolver>();
 
         services.AddSingleton(sp => new PromptInjector(sp.GetRequiredService<IOptions<LTAIOptions>>()));
@@ -56,6 +58,11 @@ public static class ServiceCollectionExtensions
 
         services.AddSingleton<ServiceManager>();
         services.AddSingleton<ModelManager>();
+
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<ITextClassifier>(
+            ClassificationRegistry.EndpointCategory));
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<ITextClassifier>(
+            ClassificationRegistry.Intent));
 
         return services;
     }

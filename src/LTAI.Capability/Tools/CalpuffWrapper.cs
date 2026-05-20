@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.IO.Compression;
+using Microsoft.Extensions.Logging;
 
 namespace LTAI.Capability.Tools;
 
@@ -7,10 +8,12 @@ public sealed class CalpuffWrapper
 {
     private static readonly HttpClient _http = new() { Timeout = TimeSpan.FromMinutes(30) };
     private readonly string _toolsDir;
+    private readonly ILogger<CalpuffWrapper>? _logger;
 
-    public CalpuffWrapper(string? toolsDir = null)
+    public CalpuffWrapper(string? toolsDir = null, ILogger<CalpuffWrapper>? logger = null)
     {
         _toolsDir = toolsDir ?? Path.Combine(Path.GetTempPath(), "ltai_tools", "calpuff");
+        _logger = logger;
         Directory.CreateDirectory(_toolsDir);
     }
 
@@ -28,7 +31,7 @@ public sealed class CalpuffWrapper
             );
             return IsInstalled;
         }
-        catch (Exception ex) { Debug.WriteLine($"CALPUFF download failed: {ex.Message}"); return false; }
+        catch (Exception ex) { _logger?.LogWarning(ex, "CALPUFF download failed"); return false; }
     }
 
     private async Task DownloadAndExtractAsync(string url, string subDir)

@@ -1,3 +1,4 @@
+using LTAI.Core;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.AspNetCore.Http;
@@ -21,6 +22,7 @@ public static class WebApplicationExtensions
         app.MapDocRoutesEndpoints();
         app.MapCognitionStreamEndpoints();
         app.MapWorkspaceEndpoints();
+        app.MapCoreEndpoints();
         app.MapHealthChecks("/api/health", new HealthCheckOptions
         {
             ResponseWriter = async (context, report) =>

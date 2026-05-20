@@ -76,7 +76,7 @@ public sealed partial class ThreeModelIntelligence
         var config = LTAI.Core.Configuration.ProviderRegistry.ResolveConfig(providerName,
             LTAI.Core.Configuration.ProviderRegistry.DefaultProviderModel(providerName), "");
         if (config != null)
-            _embeddingBackend = new APIEmbeddingBackend(config.Endpoint, config.ApiKey, config.Model);
+            _embeddingBackend = new APIEmbeddingBackend(null, config.Endpoint, config.ApiKey, config.Model);
     }
 
     public void ConfigureL0Embedding(LTAI.Core.Configuration.IProviderRegistry registry, LTAI.Core.Configuration.AIConfig aiConfig)
@@ -86,13 +86,13 @@ public sealed partial class ThreeModelIntelligence
 
         if (aiConfig.Providers.TryGetValue(l0.Provider, out var configured))
         {
-            _embeddingBackend = new APIEmbeddingBackend(configured.Endpoint, configured.ApiKey, l0.Model);
+            _embeddingBackend = new APIEmbeddingBackend(null, configured.Endpoint, configured.ApiKey, l0.Model);
             return;
         }
 
         var config = registry.ResolveConfig(l0.Provider, l0.Model);
         if (config != null)
-            _embeddingBackend = new APIEmbeddingBackend(config.Endpoint, config.ApiKey, config.Model);
+            _embeddingBackend = new APIEmbeddingBackend(null, config.Endpoint, config.ApiKey, config.Model);
     }
 
     public async Task<string?> SpinalReflexAsync(string query)

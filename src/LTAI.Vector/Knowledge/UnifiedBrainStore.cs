@@ -1,4 +1,5 @@
 using System.Data;
+using LTAI.Core.System;
 using LTAI.Vector.Knowledge.Models;
 using LTAI.Vector.Interfaces;
 using LTAI.Vector.Models;
@@ -19,10 +20,11 @@ public sealed class UnifiedBrainStore : IDisposable
     private const int ChunkOverlap = 200;
 
     public UnifiedBrainStore(
-        string dbPath,
+        DataPathResolver dataPath,
         IVectorStore vectorStore,
         ILogger<UnifiedBrainStore> logger)
     {
+        var dbPath = dataPath.GetPath("brain.db");
         _vectorStore = vectorStore;
         _logger = logger;
 
@@ -35,7 +37,7 @@ public sealed class UnifiedBrainStore : IDisposable
         CreateAllTables();
 
         _bm25 = new Bm25Scorer();
-        _truthStore = new CompiledTruthStore(dbPath);
+        _truthStore = new CompiledTruthStore(dataPath);
 
         LoadBm25Index();
     }

@@ -3,9 +3,9 @@ using Microsoft.Extensions.Logging;
 
 namespace LTAI.Vector.Embedding;
 
-public sealed class APIEmbeddingBackend : IEmbeddingBackend, IDisposable
+public sealed class APIEmbeddingBackend : IEmbeddingBackend
 {
-    private readonly HttpClient _http;
+    private readonly IHttpClientFactory? _httpClientFactory;
     private readonly string _endpoint;
     private readonly string _apiKey;
     private readonly string _model;
@@ -14,13 +14,14 @@ public sealed class APIEmbeddingBackend : IEmbeddingBackend, IDisposable
     public int Dimension { get; }
 
     public APIEmbeddingBackend(
+        IHttpClientFactory? httpClientFactory,
         string endpoint,
         string apiKey,
         string model = "text-embedding-3-small",
         int dimension = 1536,
         ILogger<APIEmbeddingBackend>? logger = null)
     {
-        _http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+        _httpClientFactory = httpClientFactory;
         _endpoint = endpoint.TrimEnd('/');
         _apiKey = apiKey;
         _model = model;
@@ -48,7 +49,8 @@ public sealed class APIEmbeddingBackend : IEmbeddingBackend, IDisposable
         };
         httpRequest.Headers.Add("Authorization", $"Bearer {_apiKey}");
 
-        var response = await _http.SendAsync(httpRequest, cancellationToken);
+        var http = _httpClientFactory?.CreateClient() ?? new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+        var response = await http.SendAsync(httpRequest, cancellationToken);
         response.EnsureSuccessStatusCode();
 
         var responseJson = await response.Content.ReadAsStringAsync(cancellationToken);
@@ -70,9 +72,4 @@ public sealed class APIEmbeddingBackend : IEmbeddingBackend, IDisposable
         return result;
     }
 
-    public void Dispose()
-    {
-        _http.Dispose();
-        GC.SuppressFinalize(this);
-    }
 }

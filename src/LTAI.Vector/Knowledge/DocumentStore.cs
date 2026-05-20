@@ -1,4 +1,5 @@
 using System.Text.Json;
+using LTAI.Core.System;
 using LTAI.Vector.Interfaces;
 using LTAI.Vector.Knowledge.Models;
 using LTAI.Vector.Models;
@@ -17,10 +18,11 @@ public sealed class DocumentStore : IDisposable
     private const double RrfK = 60.0;
 
     public DocumentStore(
-        string dbPath,
+        DataPathResolver dataPath,
         IVectorStore vectorStore,
         ILogger<DocumentStore> logger)
     {
+        var dbPath = dataPath.GetPath("document_store.db");
         _vectorStore = vectorStore;
         _logger = logger;
 

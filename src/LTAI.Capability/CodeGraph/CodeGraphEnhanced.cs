@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using LTAI.Core.System;
 using Microsoft.Data.Sqlite;
 
 namespace LTAI.Capability.CodeGraph;
@@ -48,10 +49,10 @@ public sealed class CodeGraphEnhanced : IDisposable
     private readonly object _lock = new();
     private int _totalFiles, _totalNodes, _totalEdges;
 
-    public CodeGraphEnhanced(string? rootDir = null, string? dbPath = null)
+    public CodeGraphEnhanced(DataPathResolver dataPath, string? rootDir = null)
     {
         _rootDir = rootDir ?? Directory.GetCurrentDirectory();
-        dbPath ??= global::System.IO.Path.Combine(_rootDir, ".codegraph", "codegraph.db");
+        var dbPath = dataPath.GetPath("codegraph.db");
         var dir = global::System.IO.Path.GetDirectoryName(dbPath);
         if (dir != null) global::System.IO.Directory.CreateDirectory(dir);
         _db = new SqliteConnection($"Data Source={dbPath}");

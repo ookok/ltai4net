@@ -138,7 +138,7 @@ public sealed class LivingTreeSystem
                 {
                     try
                     {
-                        await _dna.ProcessAsync(query, response, CancellationToken.None);
+                        await _dna.ProcessAsync(query, response, cancellationToken);
                     }
                     catch (Exception ex)
                     {
@@ -358,7 +358,7 @@ public sealed class LivingTreeSystem
             To = "self",
             Action = "start_trace",
             Payload = new Dictionary<string, object?> { ["trace_id"] = traceId }
-        }, CancellationToken.None);
+        }, cancellationToken);
 
         return response;
     }

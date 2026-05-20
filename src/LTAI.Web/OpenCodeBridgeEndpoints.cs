@@ -8,11 +8,14 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace LTAI.Web;
 
 public static class OpenCodeBridgeEndpoints
 {
+    private sealed class LoggerCategory { }
+
     private static readonly string? OpenCodePath = FindOpenCodePath();
     private static bool? _opencodeAvailable;
 
@@ -71,6 +74,8 @@ public static class OpenCodeBridgeEndpoints
 
     public static void MapOpenCodeBridgeEndpoints(this IEndpointRouteBuilder endpoints)
     {
+        var logger = endpoints.ServiceProvider.GetService<ILogger<LoggerCategory>>();
+
         endpoints.MapGet("/api/opencode/health", () =>
         {
             var available = OpenCodePath != null && (_opencodeAvailable ?? false);
@@ -209,6 +214,7 @@ public static class OpenCodeBridgeEndpoints
                 }
                 catch (Exception ex)
                 {
+                    logger?.LogWarning(ex, "OpenCode chat failed");
                     context.Response.StatusCode = 500;
                     context.Response.ContentType = "application/json";
                     await context.Response.WriteAsync(JsonSerializer.Serialize(new { error = ex.Message }));
@@ -216,6 +222,7 @@ public static class OpenCodeBridgeEndpoints
             }
             catch (Exception ex)
             {
+                logger?.LogWarning(ex, "OpenCode chat request failed");
                 context.Response.StatusCode = 500;
                 context.Response.ContentType = "application/json";
                 await context.Response.WriteAsync(JsonSerializer.Serialize(new { error = ex.Message }));

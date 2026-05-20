@@ -97,10 +97,16 @@ public sealed class EventBusV2
     private readonly object _lock = new();
     private int _publishedCount;
     private readonly int _ringSize;
+    private ILogger<EventBusV2>? _logger;
 
     private EventBusV2(int ringSize = DefaultRingSize)
     {
         _ringSize = ringSize;
+    }
+
+    public void SetLogger(ILogger<EventBusV2> logger)
+    {
+        _logger = logger;
     }
 
     public string Publish(LivingEvent evt)
@@ -140,7 +146,7 @@ public sealed class EventBusV2
             }
             catch (Exception ex)
             {
-                global::System.Diagnostics.Debug.WriteLine($"EventBusV2 handler error: {ex.Message}");
+                _logger?.LogWarning(ex, "EventBusV2 handler error");
             }
         }
 

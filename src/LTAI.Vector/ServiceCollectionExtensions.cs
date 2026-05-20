@@ -21,8 +21,8 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IVectorStore, VectorStore>();
         services.AddSingleton<DocumentStore>(sp =>
         {
-            var dbPath = sp.GetRequiredService<DataPathResolver>().GetPath("document_store.db");
-            return new DocumentStore(dbPath,
+            return new DocumentStore(
+                sp.GetRequiredService<DataPathResolver>(),
                 sp.GetRequiredService<IVectorStore>(),
                 sp.GetRequiredService<ILogger<DocumentStore>>());
         });
@@ -57,13 +57,12 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<Bm25Scorer>();
         services.AddSingleton<CompiledTruthStore>(sp =>
         {
-            var dbPath = sp.GetRequiredService<DataPathResolver>().GetPath("brain.db");
-            return new CompiledTruthStore(dbPath);
+            return new CompiledTruthStore(sp.GetRequiredService<DataPathResolver>());
         });
         services.AddSingleton<UnifiedBrainStore>(sp =>
         {
-            var dbPath = sp.GetRequiredService<DataPathResolver>().GetPath("brain.db");
-            return new UnifiedBrainStore(dbPath,
+            return new UnifiedBrainStore(
+                sp.GetRequiredService<DataPathResolver>(),
                 sp.GetRequiredService<IVectorStore>(),
                 sp.GetRequiredService<ILogger<UnifiedBrainStore>>());
         });
@@ -161,7 +160,7 @@ public static class ServiceCollectionExtensions
         int dimension = 1536)
     {
         services.AddSingleton<IEmbeddingBackend>(sp =>
-            new APIEmbeddingBackend(endpoint, apiKey, model, dimension,
+            new APIEmbeddingBackend(sp.GetRequiredService<IHttpClientFactory>(), endpoint, apiKey, model, dimension,
                 sp.GetRequiredService<ILogger<APIEmbeddingBackend>>()));
 
         services.AddSingleton<IEmbeddingGenerator<string, Embedding<float>>>(sp =>
@@ -170,8 +169,8 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IVectorStore, VectorStore>();
         services.AddSingleton<DocumentStore>(sp =>
         {
-            var dbPath = sp.GetRequiredService<DataPathResolver>().GetPath("document_store.db");
-            return new DocumentStore(dbPath,
+            return new DocumentStore(
+                sp.GetRequiredService<DataPathResolver>(),
                 sp.GetRequiredService<IVectorStore>(),
                 sp.GetRequiredService<ILogger<DocumentStore>>());
         });
@@ -206,13 +205,12 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<Bm25Scorer>();
         services.AddSingleton<CompiledTruthStore>(sp =>
         {
-            var dbPath = sp.GetRequiredService<DataPathResolver>().GetPath("brain.db");
-            return new CompiledTruthStore(dbPath);
+            return new CompiledTruthStore(sp.GetRequiredService<DataPathResolver>());
         });
         services.AddSingleton<UnifiedBrainStore>(sp =>
         {
-            var dbPath = sp.GetRequiredService<DataPathResolver>().GetPath("brain.db");
-            return new UnifiedBrainStore(dbPath,
+            return new UnifiedBrainStore(
+                sp.GetRequiredService<DataPathResolver>(),
                 sp.GetRequiredService<IVectorStore>(),
                 sp.GetRequiredService<ILogger<UnifiedBrainStore>>());
         });

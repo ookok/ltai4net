@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using LTAI.Core.System;
 using Microsoft.Data.Sqlite;
 
 namespace LTAI.Vector.Knowledge;
@@ -46,14 +47,14 @@ public sealed class CompiledTruthStore : IDisposable
     private readonly SqliteConnection _conn;
     private readonly string _dbPath;
 
-    public CompiledTruthStore(string dbPath)
+    public CompiledTruthStore(DataPathResolver dataPath)
     {
-        _dbPath = dbPath;
-        var dir = global::System.IO.Path.GetDirectoryName(dbPath);
+        _dbPath = dataPath.GetPath("brain.db");
+        var dir = global::System.IO.Path.GetDirectoryName(_dbPath);
         if (!string.IsNullOrEmpty(dir) && !global::System.IO.Directory.Exists(dir))
             global::System.IO.Directory.CreateDirectory(dir);
 
-        _conn = new SqliteConnection($"Data Source={dbPath}");
+        _conn = new SqliteConnection($"Data Source={_dbPath}");
         _conn.Open();
         CreateTables();
     }

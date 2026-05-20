@@ -13,6 +13,7 @@ using LTAI.Capability.Review;
 using LTAI.Capability.Search;
 using LTAI.Capability.Skills;
 using LTAI.Capability.Tools;
+using LTAI.Core.System;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace LTAI.Capability;
@@ -51,6 +52,8 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<PipelineEngine>();
 
         services.AddSingleton<CodeGraph.CodeGraph>();
+        services.AddSingleton<CodeGraphEnhanced>(sp =>
+            new CodeGraphEnhanced(sp.GetRequiredService<DataPathResolver>()));
 
         services.AddSingleton<LightCrawler>();
 

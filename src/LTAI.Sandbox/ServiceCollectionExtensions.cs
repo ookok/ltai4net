@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace LTAI.Sandbox;
 
@@ -8,8 +9,10 @@ public static class ServiceCollectionExtensions
     {
         services.AddSingleton<ProcessSandbox>();
         services.AddSingleton<DockerSandbox>();
-        services.AddSingleton<ISandbox>(sp => sp.GetRequiredService<ProcessSandbox>());
-        services.AddSingleton<ISandbox>(sp => sp.GetRequiredService<DockerSandbox>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<ISandbox>(
+            sp => sp.GetRequiredService<ProcessSandbox>()));
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<ISandbox>(
+            sp => sp.GetRequiredService<DockerSandbox>()));
         services.AddSingleton<SandboxOrchestrator>();
         return services;
     }

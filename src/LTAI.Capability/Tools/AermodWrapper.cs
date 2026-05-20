@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.IO.Compression;
+using Microsoft.Extensions.Logging;
 
 namespace LTAI.Capability.Tools;
 
@@ -18,10 +19,12 @@ public sealed class AermodWrapper
 {
     private static readonly HttpClient _http = new() { Timeout = TimeSpan.FromMinutes(30) };
     private readonly string _toolsDir;
+    private readonly ILogger<AermodWrapper>? _logger;
 
-    public AermodWrapper(string? toolsDir = null)
+    public AermodWrapper(string? toolsDir = null, ILogger<AermodWrapper>? logger = null)
     {
         _toolsDir = toolsDir ?? Path.Combine(Path.GetTempPath(), "ltai_tools", "aermod");
+        _logger = logger;
         Directory.CreateDirectory(_toolsDir);
     }
 
@@ -43,7 +46,7 @@ public sealed class AermodWrapper
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"AERMOD download failed: {ex.Message}");
+            _logger?.LogWarning(ex, "AERMOD download failed");
             return false;
         }
     }
