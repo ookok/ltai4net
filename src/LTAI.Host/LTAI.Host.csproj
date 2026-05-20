@@ -22,6 +22,7 @@
     <ProjectReference Include="..\LTAI.Metrics\LTAI.Metrics.csproj" />
     <ProjectReference Include="..\LTAI.Multimodal\LTAI.Multimodal.csproj" />
     <ProjectReference Include="..\LTAI.TreeLLM\LTAI.TreeLLM.csproj" />
+    <ProjectReference Include="..\LTAI.Economy\LTAI.Economy.csproj" />
   </ItemGroup>
 
   <ItemGroup>

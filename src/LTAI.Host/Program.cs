@@ -20,6 +20,7 @@ using LTAI.Sandbox;
 using LTAI.Metrics;
 using LTAI.Multimodal;
 using LTAI.TreeLLM;
+using LTAI.Economy;
 using Microsoft.AspNetCore.RateLimiting;
 using OpenTelemetry.Logs;
 using OpenTelemetry.Metrics;
@@ -100,6 +101,7 @@ builder.Services.AddLTAISandbox();
 builder.Services.AddLTAIMetrics();
 builder.Services.AddLTAIMultimodal();
 builder.Services.AddLTAITreeLLM();
+builder.Services.AddEconomyAgentTraining();
 
 var app = builder.Build();
 
