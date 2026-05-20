@@ -123,7 +123,6 @@ public sealed class OnPolicyDataEvolver
 {
     private readonly IChatClient _chatClient;
     private readonly AgenticRAG _agenticRAG;
-    private readonly IInteractionLoop? _interactionLoop;
     private readonly ILogger<OnPolicyDataEvolver>? _logger;
 
     private OdeRoundConfig _evolvableConfig = OdeRoundConfig.Default(0);
@@ -153,12 +152,10 @@ public sealed class OnPolicyDataEvolver
     public OnPolicyDataEvolver(
         IChatClient chatClient,
         AgenticRAG agenticRAG,
-        IInteractionLoop? interactionLoop = null,
         ILogger<OnPolicyDataEvolver>? logger = null)
     {
         _chatClient = chatClient;
         _agenticRAG = agenticRAG;
-        _interactionLoop = interactionLoop;
         _logger = logger;
     }
 

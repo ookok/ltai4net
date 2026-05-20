@@ -8,8 +8,7 @@ namespace LTAI.Economy;
 
 public sealed class AgentGRPO
 {
-    private readonly IInteractionLoop? _interactionLoop;
-    private readonly IChatClient? _chatClient;
+    private readonly IChatClient _chatClient;
     private readonly SessionResilience _sessionResilience;
     private readonly TraceEfficiencyReward? _traceReward;
     private readonly OnPolicyDistillation? _opd;
@@ -24,23 +23,6 @@ public sealed class AgentGRPO
     private readonly object _lock = new();
 
     public AgentGRPO(
-        IInteractionLoop interactionLoop,
-        SessionResilience? sessionResilience = null,
-        TraceEfficiencyReward? traceReward = null,
-        OnPolicyDistillation? opd = null,
-        CostAwareEvaluator? costEvaluator = null,
-        ILogger<AgentGRPO>? logger = null)
-    {
-        _interactionLoop = interactionLoop;
-        _chatClient = interactionLoop as IChatClient;
-        _sessionResilience = sessionResilience ?? SessionResilience.Instance;
-        _traceReward = traceReward;
-        _opd = opd;
-        _costEvaluator = costEvaluator;
-        _logger = logger;
-    }
-
-    public AgentGRPO(
         IChatClient chatClient,
         SessionResilience? sessionResilience = null,
         TraceEfficiencyReward? traceReward = null,
@@ -49,7 +31,6 @@ public sealed class AgentGRPO
         ILogger<AgentGRPO>? logger = null)
     {
         _chatClient = chatClient;
-        _interactionLoop = chatClient as IInteractionLoop;
         _sessionResilience = sessionResilience ?? SessionResilience.Instance;
         _traceReward = traceReward;
         _opd = opd;
@@ -73,17 +54,8 @@ public sealed class AgentGRPO
             cancellationToken.ThrowIfCancellationRequested();
 
             var trajectories = new List<InteractionTrajectory>();
-
-            if (_interactionLoop != null)
-            {
-                await foreach (var traj in _interactionLoop.RunBatchAsync(tasks, cfg, cancellationToken))
-                    trajectories.Add(traj);
-            }
-            else if (_chatClient != null)
-            {
-                await foreach (var traj in RunBatchViaChatClientAsync(tasks, cfg, cancellationToken))
-                    trajectories.Add(traj);
-            }
+            await foreach (var traj in RunBatchViaChatClientAsync(tasks, cfg, cancellationToken))
+                trajectories.Add(traj);
 
             allTrajectories.AddRange(trajectories);
 
@@ -104,9 +76,8 @@ public sealed class AgentGRPO
             StoreTrajectories(trajectories);
 
             _logger?.LogInformation(
-                "AgentGRPO epoch={Epoch}: avgReward={AvgReward:F3} trajectories={Count} costRef={Ref}",
-                epoch + 1, avgReward, trajectories.Count,
-                _traceReward?.GetStats().GetValueOrDefault("reference_cost", 0) ?? 0);
+                "AgentGRPO epoch={Epoch}: avgReward={AvgReward:F3} trajectories={Count}",
+                epoch + 1, avgReward, trajectories.Count);
         }
 
         sw.Stop();
@@ -134,7 +105,7 @@ public sealed class AgentGRPO
             metrics);
     }
 
-    public async Task<GRPOTrainingResult> TrainAsyncPartial(
+    public Task<GRPOTrainingResult> TrainAsyncPartial(
         IReadOnlyList<string> tasks,
         RolloutConfig? config = null,
         int partialSteps = 5,
@@ -146,96 +117,7 @@ public sealed class AgentGRPO
             PartialRolloutSteps = partialSteps
         };
 
-        if (_interactionLoop != null)
-            return await TrainAsyncPartialWithLoop(tasks, cfg, cancellationToken);
-
-        return await TrainAsync(tasks, cfg, 1, cancellationToken);
-    }
-
-    private async Task<GRPOTrainingResult> TrainAsyncPartialWithLoop(
-        IReadOnlyList<string> tasks,
-        RolloutConfig cfg,
-        CancellationToken cancellationToken)
-    {
-        var sw = Stopwatch.StartNew();
-        var allTrajectories = new List<InteractionTrajectory>();
-        double bestReward = 0;
-
-        var queuedTasks = new Queue<string>(tasks);
-        var activeTrajectories = new Dictionary<string, InteractionTrajectory>();
-
-        while (queuedTasks.Count > 0 || activeTrajectories.Count > 0)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            var batchTasks = new List<string>();
-            for (int i = 0; i < Math.Min(cfg.MaxConcurrent, queuedTasks.Count); i++)
-                batchTasks.Add(queuedTasks.Dequeue());
-
-            if (batchTasks.Count > 0 && _interactionLoop != null)
-            {
-                await foreach (var traj in _interactionLoop.RunBatchAsync(batchTasks, cfg, cancellationToken))
-                {
-                    if (traj.Completed)
-                    {
-                        allTrajectories.Add(traj);
-                        UpdateToolPreferences(traj);
-                        UpdateStepRewardStats(traj);
-
-                        if (traj.TotalReward > bestReward) bestReward = traj.TotalReward;
-
-                        if (traj.SessionId != null)
-                            activeTrajectories.Remove(traj.SessionId);
-                    }
-                    else if (traj.SessionId != null)
-                    {
-                        activeTrajectories[traj.SessionId] = traj;
-                    }
-                }
-            }
-
-            foreach (var (sessionId, partialTraj) in activeTrajectories.ToList())
-            {
-                var restored = _interactionLoop?.RestoreFromCheckpoint(partialTraj.TrajectoryId);
-                if (restored != null && restored.Completed)
-                {
-                    allTrajectories.Add(restored);
-                    activeTrajectories.Remove(sessionId);
-                }
-            }
-        }
-
-        if (allTrajectories.Count > 0)
-        {
-            var advantage = ComputeGroupAdvantage(allTrajectories);
-            ApplyPolicyGradient(allTrajectories, advantage);
-            _traceReward?.TightenReference(allTrajectories);
-        }
-
-        StoreTrajectories(allTrajectories);
-        sw.Stop();
-
-        var finalAvg = allTrajectories.Count > 0
-            ? allTrajectories.Average(t => t.TotalReward)
-            : 0;
-
-        var metricsPartial = GetMetrics(allTrajectories);
-        if (_costEvaluator != null && allTrajectories.Count > 0)
-        {
-            var batchEval = _costEvaluator.EvaluateBatch(allTrajectories);
-            foreach (var kv in batchEval)
-                metricsPartial[kv.Key] = kv.Value;
-        }
-
-        return new GRPOTrainingResult(
-            Math.Round(finalAvg, 3),
-            Math.Round(bestReward, 3),
-            0,
-            0,
-            allTrajectories.Count,
-            allTrajectories.Sum(t => t.StepCount),
-            sw.ElapsedMilliseconds,
-            metricsPartial);
+        return TrainAsync(tasks, cfg, 1, cancellationToken);
     }
 
     private async IAsyncEnumerable<InteractionTrajectory> RunBatchViaChatClientAsync(
@@ -275,7 +157,7 @@ public sealed class AgentGRPO
                 new(ChatRole.User, taskDescription)
             };
 
-            var response = await _chatClient!.GetResponseAsync(messages, null, cancellationToken);
+            var response = await _chatClient.GetResponseAsync(messages, null, cancellationToken);
             var text = response.Text ?? "";
 
             steps.Add(new AgentStep(

@@ -1,4 +1,4 @@
-using LTAI.Core.System;
+using LTAI.Core.Messaging;
 using LTAI.TreeLLM.Session;
 using LTAI.Vector.Knowledge;
 using Microsoft.Extensions.AI;
@@ -44,16 +44,6 @@ public static class TreeLLMServiceCollectionExtensions
 
         services.AddSingleton<ContinuousLearningLoop>();
 
-        services.AddSingleton<IInteractionLoop, UnifiedAgentLoop>(sp =>
-        {
-            var chatClient = sp.GetRequiredService<IChatClient>();
-            var agenticRAG = sp.GetRequiredService<AgenticRAG>();
-            var promptBuilder = sp.GetRequiredService<PromptBuilder>();
-            var learningLoop = sp.GetService<ContinuousLearningLoop>();
-            var logger = sp.GetService<ILogger<UnifiedAgentLoop>>();
-            return new UnifiedAgentLoop(chatClient, agenticRAG, promptBuilder, learningLoop, logger);
-        });
-
         services.AddSingleton<MctsAgentReasoner>(sp =>
         {
             var chatClient = sp.GetRequiredService<IChatClient>();
@@ -92,8 +82,8 @@ public static class TreeLLMServiceCollectionExtensions
 
         services.AddSingleton<MultiToolDispatch>(sp =>
         {
-            var agentLoop = (UnifiedAgentLoop)sp.GetRequiredService<IInteractionLoop>();
-            return new MultiToolDispatch(agentLoop);
+            var toolRegistry = sp.GetRequiredService<AIToolRegistry>();
+            return new MultiToolDispatch(toolRegistry);
         });
 
         services.AddSingleton<OnlineMemoryState>();
@@ -138,9 +128,8 @@ public static class TreeLLMServiceCollectionExtensions
         {
             var chatClient = sp.GetRequiredService<IChatClient>();
             var agenticRAG = sp.GetRequiredService<AgenticRAG>();
-            var interactionLoop = sp.GetService<IInteractionLoop>();
             var logger = sp.GetService<ILogger<OnPolicyDataEvolver>>();
-            return new OnPolicyDataEvolver(chatClient, agenticRAG, interactionLoop, logger);
+            return new OnPolicyDataEvolver(chatClient, agenticRAG, logger);
         });
 
         services.AddSingleton<EntailmentAligner>(sp =>
@@ -193,15 +182,6 @@ public static class TreeLLMServiceCollectionExtensions
 
         services.AddSingleton<ContinuousLearningLoop>();
 
-        services.AddSingleton<IInteractionLoop, UnifiedAgentLoop>(sp =>
-        {
-            var agenticRAG = sp.GetRequiredService<AgenticRAG>();
-            var promptBuilder = sp.GetRequiredService<PromptBuilder>();
-            var learningLoop = sp.GetService<ContinuousLearningLoop>();
-            var logger = sp.GetService<ILogger<UnifiedAgentLoop>>();
-            return new UnifiedAgentLoop(chatClient, agenticRAG, promptBuilder, learningLoop, logger);
-        });
-
         services.AddSingleton<MctsAgentReasoner>(sp =>
         {
             var promptBuilder = sp.GetRequiredService<PromptBuilder>();
@@ -237,8 +217,8 @@ public static class TreeLLMServiceCollectionExtensions
 
         services.AddSingleton<MultiToolDispatch>(sp =>
         {
-            var agentLoop = (UnifiedAgentLoop)sp.GetRequiredService<IInteractionLoop>();
-            return new MultiToolDispatch(agentLoop);
+            var toolRegistry = sp.GetRequiredService<AIToolRegistry>();
+            return new MultiToolDispatch(toolRegistry);
         });
 
         services.AddSingleton<OnlineMemoryState>();
@@ -281,9 +261,8 @@ public static class TreeLLMServiceCollectionExtensions
         services.AddSingleton<OnPolicyDataEvolver>(sp =>
         {
             var agenticRAG = sp.GetRequiredService<AgenticRAG>();
-            var interactionLoop = sp.GetService<IInteractionLoop>();
             var logger = sp.GetService<ILogger<OnPolicyDataEvolver>>();
-            return new OnPolicyDataEvolver(chatClient, agenticRAG, interactionLoop, logger);
+            return new OnPolicyDataEvolver(chatClient, agenticRAG, logger);
         });
 
         services.AddSingleton<EntailmentAligner>(sp =>

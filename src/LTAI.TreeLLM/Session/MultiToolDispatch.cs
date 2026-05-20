@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using LTAI.Core.Messaging;
 using LTAI.Core.System;
 
 namespace LTAI.TreeLLM.Session;
@@ -24,17 +25,17 @@ public sealed record ToolCallResult
 
 public sealed class MultiToolDispatch
 {
-    private readonly UnifiedAgentLoop _agentLoop;
+    private readonly AIToolRegistry _toolRegistry;
     private readonly int _maxParallelTools;
 
-    public MultiToolDispatch(UnifiedAgentLoop agentLoop, int maxParallelTools = 5)
+    public MultiToolDispatch(AIToolRegistry toolRegistry, int maxParallelTools = 5)
     {
-        _agentLoop = agentLoop;
+        _toolRegistry = toolRegistry;
         _maxParallelTools = maxParallelTools;
     }
 
-    public async Task<(string thought, List<ToolCall> actions)> DecideParallelActionsAsync(
-        string rawResponse, int stepIdx)
+    public static (string thought, List<ToolCall> actions) DecideParallelActions(
+        string rawResponse, int stepIdx, int maxParallelTools = 5)
     {
         var lines = rawResponse.Split('\n', StringSplitOptions.RemoveEmptyEntries);
 
@@ -50,7 +51,7 @@ public sealed class MultiToolDispatch
 
         var actions = ParseMultiActions(lines, rawResponse, stepIdx);
 
-        return (thought, actions.Take(_maxParallelTools).ToList());
+        return (thought, actions.Take(maxParallelTools).ToList());
     }
 
     public async Task<MultiToolDispatchResult> ExecuteParallelAsync(List<ToolCall> actions)
@@ -81,13 +82,13 @@ public sealed class MultiToolDispatch
         var toolSw = Stopwatch.StartNew();
         try
         {
-            var output = await _agentLoop.ExecuteActionAsyncInternal(action);
+            var output = await _toolRegistry.InvokeAsync(action.ToolName, action.Parameters);
             toolSw.Stop();
             return new ToolCallResult
             {
                 ToolName = action.ToolName,
                 Parameters = action.Parameters,
-                Output = output,
+                Output = output?.ToString() ?? "",
                 LatencyMs = toolSw.ElapsedMilliseconds,
                 Success = true
             };
@@ -167,7 +168,7 @@ public sealed class MultiToolDispatch
         return actions;
     }
 
-    public string BuildObservationText(MultiToolDispatchResult dispatchResult)
+    public static string BuildObservationText(MultiToolDispatchResult dispatchResult)
     {
         if (dispatchResult.Results.Count == 0) return "No actions taken.";
 
