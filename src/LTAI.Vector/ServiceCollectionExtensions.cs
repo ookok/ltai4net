@@ -69,6 +69,14 @@ public static class ServiceCollectionExtensions
 
         services.AddSingleton<MemoryPoisoningDefense>();
 
+        services.AddSingleton<SemanticCompactionEngine>(sp =>
+        {
+            var chatClient = sp.GetService<IChatClient>();
+            var structMemory = sp.GetRequiredService<StructMemory>();
+            var logger = sp.GetService<ILogger<SemanticCompactionEngine>>();
+            return new SemanticCompactionEngine(chatClient!, structMemory, logger);
+        });
+
         services.AddSingleton<CompositionalGeneralizer>(sp =>
         {
             var graph = sp.GetRequiredService<KnowledgeGraph>();
@@ -216,6 +224,14 @@ public static class ServiceCollectionExtensions
         });
 
         services.AddSingleton<MemoryPoisoningDefense>();
+
+        services.AddSingleton<SemanticCompactionEngine>(sp =>
+        {
+            var chatClient = sp.GetService<IChatClient>();
+            var structMemory = sp.GetRequiredService<StructMemory>();
+            var logger = sp.GetService<ILogger<SemanticCompactionEngine>>();
+            return new SemanticCompactionEngine(chatClient!, structMemory, logger);
+        });
 
         services.AddSingleton<CompositionalGeneralizer>(sp =>
         {

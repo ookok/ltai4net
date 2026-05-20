@@ -22,6 +22,30 @@ public static class TreeLLMServiceCollectionExtensions
             return new RagPipeline(chatClient, agenticRAG, promptBuilder, logger);
         });
 
+        services.AddSingleton<DagRagPipeline>(sp =>
+        {
+            var chatClient = sp.GetRequiredService<IChatClient>();
+            var agenticRAG = sp.GetRequiredService<AgenticRAG>();
+            var promptBuilder = sp.GetRequiredService<PromptBuilder>();
+            var logger = sp.GetService<ILogger<DagRagPipeline>>();
+            return new DagRagPipeline(chatClient, agenticRAG, promptBuilder, 4, logger);
+        });
+
+        services.AddSingleton<PromptCache>(sp =>
+        {
+            var chatClient = sp.GetRequiredService<IChatClient>();
+            var logger = sp.GetService<ILogger<PromptCache>>();
+            return new PromptCache(chatClient, logger);
+        });
+
+        services.AddSingleton<PredictivePrefetchBridge>(sp =>
+        {
+            var rag = sp.GetRequiredService<AgenticRAG>();
+            var chatClient = sp.GetRequiredService<IChatClient>();
+            var logger = sp.GetService<ILogger<PredictivePrefetchBridge>>();
+            return new PredictivePrefetchBridge(rag, chatClient, logger);
+        });
+
         services.AddSingleton<SessionRagService>(sp =>
         {
             var chatClient = sp.GetRequiredService<IChatClient>();
@@ -143,6 +167,27 @@ public static class TreeLLMServiceCollectionExtensions
             var promptBuilder = sp.GetRequiredService<PromptBuilder>();
             var logger = sp.GetService<ILogger<RagPipeline>>();
             return new RagPipeline(chatClient, agenticRAG, promptBuilder, logger);
+        });
+
+        services.AddSingleton<DagRagPipeline>(sp =>
+        {
+            var agenticRAG = sp.GetRequiredService<AgenticRAG>();
+            var promptBuilder = sp.GetRequiredService<PromptBuilder>();
+            var logger = sp.GetService<ILogger<DagRagPipeline>>();
+            return new DagRagPipeline(chatClient, agenticRAG, promptBuilder, 4, logger);
+        });
+
+        services.AddSingleton<PromptCache>(sp =>
+        {
+            var logger = sp.GetService<ILogger<PromptCache>>();
+            return new PromptCache(chatClient, logger);
+        });
+
+        services.AddSingleton<PredictivePrefetchBridge>(sp =>
+        {
+            var rag = sp.GetRequiredService<AgenticRAG>();
+            var logger = sp.GetService<ILogger<PredictivePrefetchBridge>>();
+            return new PredictivePrefetchBridge(rag, chatClient, logger);
         });
 
         services.AddSingleton<SessionRagService>(sp =>
