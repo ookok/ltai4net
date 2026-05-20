@@ -345,7 +345,7 @@ public sealed class LivingTreeSystem
         {
             try
             {
-                response = _reasoning.EnhanceResponse(query, response);
+                response = await _reasoning.EnhanceResponse(query, response);
             }
             catch (Exception ex)
             {

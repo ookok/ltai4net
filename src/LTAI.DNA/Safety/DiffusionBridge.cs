@@ -2,7 +2,7 @@ namespace LTAI.DNA.Safety;
 
 public sealed class DiffusionBridge
 {
-    public static Dictionary<string, object> WireNetworkToOrchestrator(object hub)
+    public static async Task<Dictionary<string, object>> WireNetworkToOrchestrator(object hub)
     {
         var result = new Dictionary<string, object>
         {
@@ -26,13 +26,13 @@ public sealed class DiffusionBridge
                         var peersTask = discoverMethod.Invoke(node, null);
                         if (peersTask is Task<List<string>> task)
                         {
-                            task.Wait(TimeSpan.FromSeconds(5));
-                            if (task.IsCompletedSuccessfully)
+                            try
                             {
-                                var peers = task.Result;
+                                var peers = await task.WaitAsync(TimeSpan.FromSeconds(5));
                                 result["peers_discovered"] = peers.Count;
                                 result["peers"] = peers;
                             }
+                            catch (TimeoutException) { }
                         }
                     }
                 }
@@ -55,9 +55,12 @@ public sealed class DiffusionBridge
                         var agentsTask = getTrustedMethod.Invoke(rep, new object[] { 0.6 });
                         if (agentsTask is Task<List<object>> task)
                         {
-                            task.Wait(TimeSpan.FromSeconds(5));
-                            if (task.IsCompletedSuccessfully)
-                                result["trusted_agents_added"] = task.Result.Count;
+                            try
+                            {
+                                var agents = await task.WaitAsync(TimeSpan.FromSeconds(5));
+                                result["trusted_agents_added"] = agents.Count;
+                            }
+                            catch (TimeoutException) { }
                         }
                     }
                 }
@@ -91,11 +94,11 @@ public sealed class DiffusionBridge
         };
     }
 
-    public Dictionary<string, object> ConnectAll(object hub)
+    public async Task<Dictionary<string, object>> ConnectAll(object hub)
     {
         return new Dictionary<string, object>
         {
-            ["network"] = WireNetworkToOrchestrator(hub),
+            ["network"] = await WireNetworkToOrchestrator(hub),
             ["observability"] = WireObservabilityToRuntime(hub),
             ["cell"] = WireCellTrainingToMainLoop(hub),
             ["status"] = "connected"

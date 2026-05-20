@@ -321,8 +321,14 @@ public class StructMemory
         var queryEmbedding = await ComputeEmbedding(query);
         var events = await SemanticRetrieve(queryEmbedding, topK);
 
-        var relevantSynth = _synthesis.OrderByDescending(s =>
-            CosineSimilarity(queryEmbedding, ComputeEmbeddingSync(s.Content))).Take(nSynthesis).ToList();
+        var scoredSynth = new List<(SynthesisBlock Block, double Score)>();
+        foreach (var s in _synthesis)
+        {
+            var synthEmbedding = await ComputeEmbedding(s.Content);
+            var sim = CosineSimilarity(queryEmbedding, synthEmbedding);
+            scoredSynth.Add((s, sim));
+        }
+        var relevantSynth = scoredSynth.OrderByDescending(x => x.Score).Take(nSynthesis).Select(x => x.Block).ToList();
 
         return (events, relevantSynth);
     }
@@ -397,16 +403,6 @@ public class StructMemory
         try
         {
             var vec = await _vectorStore.EmbedAsync(text);
-            return vec.Select(f => (double)f).ToList();
-        }
-        catch { return new(); }
-    }
-
-    private List<double> ComputeEmbeddingSync(string text)
-    {
-        try
-        {
-            var vec = _vectorStore.EmbedAsync(text).GetAwaiter().GetResult();
             return vec.Select(f => (double)f).ToList();
         }
         catch { return new(); }

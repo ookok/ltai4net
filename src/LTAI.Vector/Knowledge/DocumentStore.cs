@@ -200,10 +200,10 @@ public sealed class DocumentStore : IDisposable
         return chunks;
     }
 
-    public List<KnowledgeSearchResult> Search(string query, string? domain = null, int topK = 10)
+    public async Task<List<KnowledgeSearchResult>> Search(string query, string? domain = null, int topK = 10)
     {
         var ftsResults = SearchFts(query, domain, topK * 2);
-        var vectorResults = SearchVectorSync(query, topK * 2);
+        var vectorResults = await SearchVectorAsync(query, topK * 2);
         return RrfMerge(ftsResults, vectorResults).Take(topK).ToList();
     }
 
@@ -248,12 +248,12 @@ public sealed class DocumentStore : IDisposable
         return results;
     }
 
-    public List<KnowledgeSearchResult> SearchVectorSync(string query, int topK = 10)
+    public async Task<List<KnowledgeSearchResult>> SearchVectorAsync(string query, int topK = 10)
     {
         try
         {
-            var queryVec = _vectorStore.EmbedAsync(query).GetAwaiter().GetResult();
-            var vectorResults = _vectorStore.SearchSimilarAsync(queryVec, topK).GetAwaiter().GetResult();
+            var queryVec = await _vectorStore.EmbedAsync(query);
+            var vectorResults = await _vectorStore.SearchSimilarAsync(queryVec, topK);
 
             return vectorResults.Select(r =>
             {
@@ -341,7 +341,7 @@ public sealed class DocumentStore : IDisposable
         tx.Commit();
     }
 
-    public DocumentStoreStats GetStats()
+    public async Task<DocumentStoreStats> GetStats()
     {
         var stats = new DocumentStoreStats();
 
@@ -361,7 +361,7 @@ public sealed class DocumentStore : IDisposable
             stats.TotalRelations = Convert.ToInt32(cmd.ExecuteScalar() ?? 0);
         }
 
-        var vs = _vectorStore.GetStatsAsync().GetAwaiter().GetResult();
+        var vs = await _vectorStore.GetStatsAsync();
         stats.TotalVectors = vs.TotalVectors;
 
         var dbPath = _conn.DataSource;

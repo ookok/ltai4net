@@ -493,17 +493,17 @@ public sealed class ExternalAccess
     public async Task<Dictionary<string, DnsRecord?>> BatchResolveAsync(IEnumerable<string> domains,
         CancellationToken cancellationToken = default)
     {
-        var tasks = domains.Select(d => DnsResolveAsync(d, cancellationToken)).ToList();
-        await Task.WhenAll(tasks);
-
-        var results = new Dictionary<string, DnsRecord?>();
         var domainList = domains.ToList();
+        var tasks = domainList.Select(d => DnsResolveAsync(d, cancellationToken)).ToArray();
+        var results = await Task.WhenAll(tasks);
+
+        var dict = new Dictionary<string, DnsRecord?>();
         for (int i = 0; i < domainList.Count; i++)
         {
-            results[domainList[i]] = tasks[i].Result;
+            dict[domainList[i]] = results[i];
         }
 
-        return results;
+        return dict;
     }
 
     public async Task<string?> FetchPaperAsync(string? doi, string? url,

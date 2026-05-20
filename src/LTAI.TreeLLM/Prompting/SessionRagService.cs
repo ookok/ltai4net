@@ -66,7 +66,7 @@ public sealed class SessionRagService
 
         var longTermDocs = _agenticRAG.Search(question, RAGMode.Iterative, domain: opts.Domain ?? "general");
 
-        var prompt = _promptBuilder.BuildSinglePrompt(question, longTermDocs, opts);
+        var prompt = await _promptBuilder.BuildSinglePrompt(question, longTermDocs, opts);
 
         var response = await _chatClient.GetResponseAsync(prompt, cancellationToken: cancellationToken);
         var answer = response.Text ?? string.Empty;
@@ -124,7 +124,7 @@ public sealed class SessionRagService
         opts.SessionContext = _structMemory.GetContextBlock(question, memoryEvents, memorySynthesis);
 
         var longTermDocs = _agenticRAG.Search(question, RAGMode.Iterative, domain: opts.Domain ?? "general");
-        var prompt = _promptBuilder.BuildSinglePrompt(question, longTermDocs, opts);
+        var prompt = await _promptBuilder.BuildSinglePrompt(question, longTermDocs, opts);
 
         var fullAnswer = "";
         await foreach (var update in _chatClient.GetStreamingResponseAsync(prompt, cancellationToken: cancellationToken))

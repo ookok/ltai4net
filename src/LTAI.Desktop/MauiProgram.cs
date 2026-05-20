@@ -41,7 +41,7 @@ public static class MauiProgram
 
         var sp = services.BuildServiceProvider();
         var lts = sp.GetRequiredService<LivingTreeSystem>();
-        Task.Run(async () => await lts.InitializeAsync()).Wait();
+        lts.InitializeAsync().GetAwaiter().GetResult();
 
         return builder.Build();
     }

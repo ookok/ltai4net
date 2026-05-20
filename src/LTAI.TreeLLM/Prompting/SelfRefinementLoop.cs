@@ -153,7 +153,7 @@ public sealed class SelfRefinementLoop
         var systemPrompt = BuildGenerateSystemPrompt(cfg);
         var userPrompt = $"## Problem\n{problem}\n\nGenerate a complete solution with rigorous reasoning.";
 
-        var prompt = _promptBuilder.BuildSinglePrompt(userPrompt, docs, opts);
+        var prompt = await _promptBuilder.BuildSinglePrompt(userPrompt, docs, opts);
         var fullPrompt = systemPrompt + "\n\n" + prompt;
 
         var response = await _chatClient.GetResponseAsync(fullPrompt, cancellationToken: default);

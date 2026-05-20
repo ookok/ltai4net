@@ -19,7 +19,7 @@ public sealed class ContextProviderRouter
         _promptBuilder = promptBuilder;
     }
 
-    public RoutingDecision Route(string query, string? sessionId = null, RoutingOptions? options = null)
+    public async Task<RoutingDecision> Route(string query, string? sessionId = null, RoutingOptions? options = null)
     {
         var opts = options ?? new RoutingOptions();
         var queryShape = _retrievalFramework.Classify(query);
@@ -34,7 +34,7 @@ public sealed class ContextProviderRouter
 
         if (mode == ProviderMode.Enhance)
         {
-            var enrichment = _promptBuilder.BuildContextSection(docs, query,
+            var enrichment = await _promptBuilder.BuildContextSection(docs, query,
                 new PromptBuildOptions { IncludeCitations = false });
             return new RoutingDecision(
                 mode, reason, query,

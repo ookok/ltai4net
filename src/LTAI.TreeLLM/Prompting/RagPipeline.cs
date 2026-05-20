@@ -3,6 +3,7 @@ using LTAI.Vector.Knowledge;
 using LTAI.Vector.Knowledge.Models;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace LTAI.TreeLLM.Prompting;
 
@@ -33,7 +34,7 @@ public sealed class RagPipeline
         _chatClient = chatClient;
         _agenticRAG = agenticRAG;
         _promptBuilder = promptBuilder;
-        _logger = logger ?? NullLogger<RagPipeline>.Instance;
+        _logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<RagPipeline>.Instance;
     }
 
     public async Task<RagPipelineResult> AskAsync(
@@ -46,7 +47,7 @@ public sealed class RagPipeline
 
         var docs = _agenticRAG.Search(question, RAGMode.Iterative, domain: opts.Domain ?? "general");
 
-        var prompt = _promptBuilder.BuildSinglePrompt(question, docs, opts);
+        var prompt = await _promptBuilder.BuildSinglePrompt(question, docs, opts);
 
         var response = await _chatClient.GetResponseAsync(prompt, cancellationToken: cancellationToken);
         var answer = response.Text ?? string.Empty;
@@ -79,7 +80,7 @@ public sealed class RagPipeline
     {
         var opts = options ?? PromptBuildOptions.Default;
         var docs = _agenticRAG.Search(question, RAGMode.Iterative, domain: opts.Domain ?? "general");
-        var prompt = _promptBuilder.BuildSinglePrompt(question, docs, opts);
+        var prompt = await _promptBuilder.BuildSinglePrompt(question, docs, opts);
 
         await foreach (var update in _chatClient.GetStreamingResponseAsync(prompt, cancellationToken: cancellationToken))
         {
@@ -92,10 +93,3 @@ public sealed class RagPipeline
         Math.Max(1, (int)(text.Length * 0.25));
 }
 
-internal class NullLogger<T> : ILogger<T>
-{
-    public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
-    public bool IsEnabled(LogLevel logLevel) => false;
-    public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter) { }
-    public static NullLogger<T> Instance { get; } = new();
-}

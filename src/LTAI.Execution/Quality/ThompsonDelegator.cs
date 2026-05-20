@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using LTAI.Execution.Models;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace LTAI.Execution.Quality;
 
@@ -16,12 +17,12 @@ public sealed class ThompsonDelegator
 
     private ThompsonDelegator()
     {
-        _logger = NullLogger.Instance;
+        _logger = NullLogger<ThompsonDelegator>.Instance;
     }
 
     internal ThompsonDelegator(ILogger<ThompsonDelegator> logger)
     {
-        _logger = logger ?? NullLogger.Instance;
+        _logger = logger ?? NullLogger<ThompsonDelegator>.Instance;
     }
 
     public string SelectAgent(List<string> candidates, int topK = 1)
@@ -218,14 +219,5 @@ public sealed class ThompsonDelegator
             || reflection.Contains("无法")
             || reflection.Contains("失败")
             || reflection.Contains("不能");
-    }
-
-    private sealed class NullLogger : ILogger<ThompsonDelegator>
-    {
-        public static readonly NullLogger Instance = new();
-
-        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
-        public bool IsEnabled(LogLevel logLevel) => false;
-        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter) { }
     }
 }

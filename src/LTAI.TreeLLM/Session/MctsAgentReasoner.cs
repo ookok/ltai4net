@@ -303,7 +303,7 @@ public sealed class MctsAgentReasoner
                 IncludeGlossary = false
             };
 
-            var prompt = _promptBuilder.BuildSinglePrompt(
+            var prompt = await _promptBuilder.BuildSinglePrompt(
                 $"Based on the current state, generate {maxBranches} distinct next actions or reasoning steps.\n\nCurrent state:\n{node.State[..Math.Min(1000, node.State.Length)]}",
                 docs, opts);
 

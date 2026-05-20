@@ -1,5 +1,6 @@
 using LTAI.Execution.Models;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace LTAI.Execution.Quality;
 
@@ -15,12 +16,12 @@ public sealed class FitnessLandscape
 
     private FitnessLandscape()
     {
-        _logger = NullLogger.Instance;
+        _logger = NullLogger<FitnessLandscape>.Instance;
     }
 
     internal FitnessLandscape(ILogger<FitnessLandscape> logger)
     {
-        _logger = logger ?? NullLogger.Instance;
+        _logger = logger ?? NullLogger<FitnessLandscape>.Instance;
     }
 
     public void Record(string trajectoryId, List<string> toolSequence, int tokens, int ms, bool success, int safetyViolations)
@@ -217,14 +218,5 @@ public sealed class FitnessLandscape
                 count++;
         }
         return count;
-    }
-
-    private sealed class NullLogger : ILogger<FitnessLandscape>
-    {
-        public static readonly NullLogger Instance = new();
-
-        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
-        public bool IsEnabled(LogLevel logLevel) => false;
-        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter) { }
     }
 }

@@ -66,7 +66,7 @@ public sealed class PersonalModelEmulator
         var longTermDocs = _agenticRAG.Search(question, RAGMode.Iterative,
             domain: promptOpts.Domain ?? "general");
 
-        var (sysPrompt, userPrompt) = _promptBuilder.BuildPrompt(question, longTermDocs, promptOpts);
+        var (sysPrompt, userPrompt) = await _promptBuilder.BuildPrompt(question, longTermDocs, promptOpts);
 
         return new PersonalContextResult
         {

@@ -87,6 +87,9 @@ public sealed class AIConfig
     [JsonPropertyName("timeout_ms")]
     public int TimeoutMs { get; init; } = 60000;
 
+    [JsonPropertyName("chat_completions_path")]
+    public string ChatCompletionsPath { get; set; } = "/v1/chat/completions";
+
     [JsonPropertyName("max_collaboration_rounds")]
     public int MaxCollaborationRounds { get; init; } = 5;
 

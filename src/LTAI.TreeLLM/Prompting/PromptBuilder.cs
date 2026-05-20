@@ -34,23 +34,23 @@ public sealed class PromptBuilder
 {
     private const double TokensPerCharEstimate = 0.25;
 
-    public (string SystemPrompt, string UserPrompt) BuildPrompt(
+    public async Task<(string SystemPrompt, string UserPrompt)> BuildPrompt(
         string question,
         IReadOnlyList<LTAI.Vector.Knowledge.Models.KnowledgeSearchResult> docs,
         PromptBuildOptions? options = null)
     {
         var opts = options ?? PromptBuildOptions.Default;
-        var sysPrompt = BuildSystemPrompt(question, docs, opts);
+        var sysPrompt = await BuildSystemPrompt(question, docs, opts);
         var userPrompt = BuildUserPrompt(question, docs, opts);
         return (sysPrompt, userPrompt);
     }
 
-    public List<ChatMessage> BuildChatMessages(
+    public async Task<List<ChatMessage>> BuildChatMessages(
         string question,
         IReadOnlyList<LTAI.Vector.Knowledge.Models.KnowledgeSearchResult> docs,
         PromptBuildOptions? options = null)
     {
-        var (sys, user) = BuildPrompt(question, docs, options);
+        var (sys, user) = await BuildPrompt(question, docs, options);
 
         var messages = new List<ChatMessage>
         {
@@ -61,16 +61,16 @@ public sealed class PromptBuilder
         return messages;
     }
 
-    public string BuildSinglePrompt(
+    public async Task<string> BuildSinglePrompt(
         string question,
         IReadOnlyList<LTAI.Vector.Knowledge.Models.KnowledgeSearchResult> docs,
         PromptBuildOptions? options = null)
     {
-        var (sys, user) = BuildPrompt(question, docs, options);
+        var (sys, user) = await BuildPrompt(question, docs, options);
         return sys + "\n\n---\n\n" + user;
     }
 
-    private string BuildSystemPrompt(
+    private async Task<string> BuildSystemPrompt(
         string question,
         IReadOnlyList<LTAI.Vector.Knowledge.Models.KnowledgeSearchResult> docs,
         PromptBuildOptions opts)
@@ -100,7 +100,7 @@ public sealed class PromptBuilder
 
         if (docs.Count > 0)
         {
-            var contextSection = BuildContextSection(docs, question, opts);
+            var contextSection = await BuildContextSection(docs, question, opts);
             if (!string.IsNullOrEmpty(contextSection))
                 parts.Add(contextSection);
         }
@@ -131,7 +131,7 @@ public sealed class PromptBuilder
         return string.Join("\n\n", parts);
     }
 
-    public string BuildContextSection(
+    public async Task<string> BuildContextSection(
         IReadOnlyList<LTAI.Vector.Knowledge.Models.KnowledgeSearchResult> docs,
         string question,
         PromptBuildOptions opts)
@@ -140,22 +140,22 @@ public sealed class PromptBuilder
 
         return opts.TrimMode switch
         {
-            TrimMode.Tiered => BuildTieredContextSection(docs, question, opts),
-            TrimMode.SummarizeOverflow => BuildOverflowSummarySection(docs, question, opts),
-            _ => BuildSimpleTrimSection(docs, question, opts)
+            TrimMode.Tiered => await BuildTieredContextSection(docs, question, opts),
+            TrimMode.SummarizeOverflow => await BuildOverflowSummarySection(docs, question, opts),
+            _ => await BuildSimpleTrimSection(docs, question, opts)
         };
     }
 
-    private string BuildSimpleTrimSection(
+    private async Task<string> BuildSimpleTrimSection(
         IReadOnlyList<LTAI.Vector.Knowledge.Models.KnowledgeSearchResult> docs,
         string question,
         PromptBuildOptions opts)
     {
         var context = RankAndTrimContext(docs, opts.MaxContextTokens);
-        return RenderDocsSection(context, question, opts);
+        return await RenderDocsSection(context, question, opts);
     }
 
-    private string BuildTieredContextSection(
+    private async Task<string> BuildTieredContextSection(
         IReadOnlyList<LTAI.Vector.Knowledge.Models.KnowledgeSearchResult> docs,
         string question,
         PromptBuildOptions opts)
@@ -222,7 +222,7 @@ public sealed class PromptBuilder
 
         if (opts.IncludeFusion && sorted.Count >= 2)
         {
-            var fusionNote = BuildFusionNote(sorted.Take(10).ToList(), question);
+            var fusionNote = await BuildFusionNote(sorted.Take(10).ToList(), question);
             if (!string.IsNullOrEmpty(fusionNote))
             {
                 sb.AppendLine("### 文档关系");
@@ -234,7 +234,7 @@ public sealed class PromptBuilder
         return sb.ToString().TrimEnd();
     }
 
-    private string BuildOverflowSummarySection(
+    private async Task<string> BuildOverflowSummarySection(
         IReadOnlyList<LTAI.Vector.Knowledge.Models.KnowledgeSearchResult> docs,
         string question,
         PromptBuildOptions opts)
@@ -286,7 +286,7 @@ public sealed class PromptBuilder
         return sb.ToString().TrimEnd();
     }
 
-    private string RenderDocsSection(
+    private async Task<string> RenderDocsSection(
         IReadOnlyList<LTAI.Vector.Knowledge.Models.KnowledgeSearchResult> docs,
         string question,
         PromptBuildOptions opts)
@@ -305,7 +305,7 @@ public sealed class PromptBuilder
 
         if (opts.IncludeFusion && docs.Count >= 2)
         {
-            var fusionNote = BuildFusionNote(docs.ToList(), question);
+            var fusionNote = await BuildFusionNote(docs.ToList(), question);
             if (!string.IsNullOrEmpty(fusionNote))
             {
                 sb.AppendLine("### 文档关系");
@@ -355,13 +355,12 @@ public sealed class PromptBuilder
         return sb.ToString().TrimEnd();
     }
 
-    public string BuildFusionNote(
+    public async Task<string> BuildFusionNote(
         IReadOnlyList<LTAI.Vector.Knowledge.Models.KnowledgeSearchResult> docs,
         string question)
     {
         var fusionDocs = docs.Select(d => (d.Id, d.Content, (DateTime?)null)).Take(10).ToList();
-        var fusionResult = MultiDocFusionEngine.Instance.FuseAsync(fusionDocs, question)
-            .GetAwaiter().GetResult();
+        var fusionResult = await MultiDocFusionEngine.Instance.FuseAsync(fusionDocs, question);
 
         var notes = new List<string>();
 

@@ -64,17 +64,17 @@ public sealed class KnowledgeBase
         _logger.LogInformation("Knowledge deleted: {Id}", id);
     }
 
-    public List<KnowledgeSearchResult> Search(
+    public async Task<List<KnowledgeSearchResult>> Search(
         string query,
         int topK = 10,
         string? domain = null)
     {
-        return _docStore.Search(query, domain, topK);
+        return await _docStore.Search(query, domain, topK);
     }
 
-    public List<KnowledgeSearchResult> SearchCurrent(string query, int topK = 10)
+    public async Task<List<KnowledgeSearchResult>> SearchCurrent(string query, int topK = 10)
     {
-        return _docStore.Search(query, null, topK);
+        return await _docStore.Search(query, null, topK);
     }
 
     public List<KnowledgeSearchResult> SearchKeyword(
@@ -122,8 +122,8 @@ public sealed class KnowledgeBase
         return await Task.Run(() => Search(query, topK, domain));
     }
 
-    public DocumentStoreStats GetStats()
+    public async Task<DocumentStoreStats> GetStats()
     {
-        return _docStore.GetStats();
+        return await _docStore.GetStats();
     }
 }

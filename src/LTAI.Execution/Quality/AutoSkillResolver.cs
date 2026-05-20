@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Text.RegularExpressions;
 using LTAI.Execution.Models;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace LTAI.Execution.Quality;
 
@@ -16,7 +17,7 @@ public sealed class AutoSkillResolver
 
     private AutoSkillResolver()
     {
-        _logger = NullLogger.Instance;
+        _logger = NullLogger<AutoSkillResolver>.Instance;
 
         if (!Directory.Exists(_basePath))
             Directory.CreateDirectory(_basePath);
@@ -24,7 +25,7 @@ public sealed class AutoSkillResolver
 
     internal AutoSkillResolver(ILogger<AutoSkillResolver> logger)
     {
-        _logger = logger ?? NullLogger.Instance;
+        _logger = logger ?? NullLogger<AutoSkillResolver>.Instance;
 
         if (!Directory.Exists(_basePath))
             Directory.CreateDirectory(_basePath);
@@ -72,7 +73,7 @@ public sealed class AutoSkillResolver
         return skills.ToList();
     }
 
-    public ResolvedSkill? Resolve(
+    public async Task<ResolvedSkill?> Resolve(
         string skillName,
         string taskContext,
         Func<string, string?, CancellationToken, Task<string?>>? llmCall = null)
@@ -87,7 +88,7 @@ public sealed class AutoSkillResolver
 
         if (llmCall != null)
         {
-            result = GenerateCode(skillName, taskContext, llmCall);
+            result = await GenerateCode(skillName, taskContext, llmCall);
         }
 
         if (result == null)
@@ -167,7 +168,7 @@ public sealed class AutoSkillResolver
         return true;
     }
 
-    public ResolvedSkill? GenerateCode(
+    public async Task<ResolvedSkill?> GenerateCode(
         string name,
         string context,
         Func<string, string?, CancellationToken, Task<string?>>? llmCall)
@@ -190,7 +191,7 @@ Generate the code for the skill '{name}':";
         string? generatedCode = null;
         try
         {
-            generatedCode = llmCall(prompt, null, CancellationToken.None).GetAwaiter().GetResult();
+            generatedCode = await llmCall(prompt, null, CancellationToken.None);
         }
         catch (Exception ex)
         {
@@ -242,7 +243,7 @@ Generate the code for the skill '{name}':";
         return skill;
     }
 
-    public void RetryWithResolved(
+    public async Task RetryWithResolved(
         Func<Task<bool>> stepFunc,
         string taskContext,
         int maxAttempts = 3)
@@ -254,7 +255,7 @@ Generate the code for the skill '{name}':";
             attempt++;
             try
             {
-                var success = stepFunc().GetAwaiter().GetResult();
+                var success = await stepFunc();
                 if (success)
                     return;
             }
@@ -273,7 +274,7 @@ Generate the code for the skill '{name}':";
                 foreach (var skillName in missingSkills)
                 {
                     _logger.LogInformation("Attempting to resolve missing skill: {Skill}", skillName);
-                    var resolved = Resolve(skillName, taskContext);
+                    var resolved = await Resolve(skillName, taskContext);
                     if (resolved != null)
                     {
                         _logger.LogInformation("Resolved skill {Skill} (type={Type})", skillName, resolved.Type);
@@ -320,14 +321,5 @@ Generate the code for the skill '{name}':";
             sanitized[i] = invalid.Contains(name[i]) ? '_' : name[i];
         }
         return new string(sanitized);
-    }
-
-    private sealed class NullLogger : ILogger<AutoSkillResolver>
-    {
-        public static readonly NullLogger Instance = new();
-
-        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
-        public bool IsEnabled(LogLevel logLevel) => false;
-        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter) { }
     }
 }

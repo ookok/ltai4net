@@ -69,8 +69,9 @@ public sealed class ProviderEngine : IChatClient
             stream = false
         };
 
+        var chatPath = aiConfig.ChatCompletionsPath;
         var json = JsonSerializer.Serialize(request);
-        using var httpRequest = new HttpRequestMessage(HttpMethod.Post, $"{config.Endpoint.TrimEnd('/')}/v1/chat/completions")
+        using var httpRequest = new HttpRequestMessage(HttpMethod.Post, $"{config.Endpoint.TrimEnd('/')}{chatPath}")
         {
             Content = new StringContent(json, Encoding.UTF8, "application/json")
         };
@@ -132,8 +133,9 @@ public sealed class ProviderEngine : IChatClient
             stream = true
         };
 
+        var chatPath = aiConfig.ChatCompletionsPath;
         var json = JsonSerializer.Serialize(request);
-        using var httpRequest = new HttpRequestMessage(HttpMethod.Post, $"{config.Endpoint.TrimEnd('/')}/v1/chat/completions")
+        using var httpRequest = new HttpRequestMessage(HttpMethod.Post, $"{config.Endpoint.TrimEnd('/')}{chatPath}")
         {
             Content = new StringContent(json, Encoding.UTF8, "application/json")
         };

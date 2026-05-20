@@ -164,7 +164,7 @@ public sealed partial class ThreeModelIntelligence
         catch { return null; }
     }
 
-    public TriageResult Triage(string query)
+    public async Task<TriageResult> Triage(string query)
     {
         var complexity = 0.0;
 
@@ -186,7 +186,7 @@ public sealed partial class ThreeModelIntelligence
 
         var label = complexity < 0.3 ? "reflex" : complexity < 0.6 ? "fast" : "reasoning";
         var emotion = _DetectEmotion(query);
-        var matchedReflex = SpinalReflexAsync(query).GetAwaiter().GetResult();
+        var matchedReflex = await SpinalReflexAsync(query);
 
         return new TriageResult
         {

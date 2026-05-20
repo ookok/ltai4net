@@ -282,12 +282,12 @@ public sealed partial class YamlTomlParser : IDocumentParser
         return result;
     }
 
-    private static object ParseScalar(string value)
+    private static object? ParseScalar(string value)
     {
         value = value.Trim().Trim('"', '\'');
         if (value.Equals("true", StringComparison.OrdinalIgnoreCase)) return true;
         if (value.Equals("false", StringComparison.OrdinalIgnoreCase)) return false;
-        if (value.Equals("null", StringComparison.OrdinalIgnoreCase) || value.Equals("~")) return null!;
+        if (value.Equals("null", StringComparison.OrdinalIgnoreCase) || value.Equals("~")) return null;
         if (double.TryParse(value, out var d)) return d;
         if (int.TryParse(value, out var i)) return i;
         return value;

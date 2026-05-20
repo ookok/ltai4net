@@ -30,9 +30,9 @@
     private int _docCount;
     private List<LTAI.Vector.Models.VectorSearchResult> _results = new();
 
-    protected override void OnInitialized()
+    protected override async Task OnInitializedAsync()
     {
-        try { _docCount = DocStore.GetStats().DocumentCount; } catch { _docCount = 0; }
+        try { _docCount = (await DocStore.GetStats()).TotalDocuments; } catch { _docCount = 0; }
     }
 
     private async Task OnSearchKey(KeyboardEventArgs e) { if (e.Key == "Enter") await DoSearch(); }

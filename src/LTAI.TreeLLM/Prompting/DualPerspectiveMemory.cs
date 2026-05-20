@@ -32,13 +32,13 @@ public sealed class DualPerspectiveMemory
         _structMemory = structMemory;
     }
 
-    public PerspectiveResult RetrieveSelfPerspective(
+    public async Task<PerspectiveResult> RetrieveSelfPerspective(
         string sessionId, string query,
         PerspectiveOptions? options = null)
     {
         var opts = options ?? new PerspectiveOptions();
 
-        var memoryEvents = RetrieveMemoryEvents(sessionId, query, opts);
+        var memoryEvents = await RetrieveMemoryEvents(sessionId, query, opts);
         var knowledgeDocs = _agenticRAG.Search(query, RAGMode.Iterative,
             domain: opts.Domain ?? "personal_preference");
 
@@ -53,13 +53,13 @@ public sealed class DualPerspectiveMemory
             GenerateSelfPerspectiveSummary(reweightedDocs, reweightedMemory, query));
     }
 
-    public PerspectiveResult RetrieveThirdPartyPerspective(
+    public async Task<PerspectiveResult> RetrieveThirdPartyPerspective(
         string sessionId, string query,
         PerspectiveOptions? options = null)
     {
         var opts = options ?? new PerspectiveOptions();
 
-        var memoryEvents = RetrieveMemoryEvents(sessionId, query, opts);
+        var memoryEvents = await RetrieveMemoryEvents(sessionId, query, opts);
         var knowledgeDocs = _agenticRAG.Search(query, RAGMode.Iterative,
             domain: opts.Domain ?? "general_knowledge");
 
@@ -74,12 +74,12 @@ public sealed class DualPerspectiveMemory
             GenerateThirdPartyPerspectiveSummary(reweightedDocs, reweightedMemory, query));
     }
 
-    public DualPerspectiveResult RetrieveDualPerspective(
+    public async Task<DualPerspectiveResult> RetrieveDualPerspective(
         string sessionId, string query,
         PerspectiveOptions? options = null)
     {
-        var self = RetrieveSelfPerspective(sessionId, query, options);
-        var thirdParty = RetrieveThirdPartyPerspective(sessionId, query, options);
+        var self = await RetrieveSelfPerspective(sessionId, query, options);
+        var thirdParty = await RetrieveThirdPartyPerspective(sessionId, query, options);
 
         return new DualPerspectiveResult
         {
@@ -90,12 +90,12 @@ public sealed class DualPerspectiveMemory
         };
     }
 
-    private List<EventEntry> RetrieveMemoryEvents(
+    private async Task<List<EventEntry>> RetrieveMemoryEvents(
         string sessionId, string query, PerspectiveOptions opts)
     {
         try
         {
-            var result = _structMemory.RetrieveForQuery(query).Result;
+            var result = await _structMemory.RetrieveForQuery(query);
             return result.Events?.Take(opts.MaxMemoryEvents * 2).ToList() ?? new();
         }
         catch

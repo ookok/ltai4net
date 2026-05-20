@@ -196,7 +196,7 @@ public sealed class UnifiedBrainStore : IDisposable
         return docId;
     }
 
-    public List<Bm25ScoredDoc> SearchThreeLayer(
+    public async Task<List<Bm25ScoredDoc>> SearchThreeLayer(
         string query,
         string? domain = null,
         int topK = 20,
@@ -208,7 +208,7 @@ public sealed class UnifiedBrainStore : IDisposable
 
         var ftsResults = SearchFts(query, domain, ftsTopK);
         var bm25Results = _bm25.Search(query, bm25TopK);
-        var vectorResults = SearchVector(query, vectorTopK);
+        var vectorResults = await SearchVector(query, vectorTopK);
 
         var scoredDocs = RrfFuse(ftsResults, bm25Results, vectorResults, topK);
 
@@ -266,16 +266,16 @@ public sealed class UnifiedBrainStore : IDisposable
         return results;
     }
 
-    private List<(string id, double score, string content, string source)> SearchVector(
+    private async Task<List<(string id, double score, string content, string source)>> SearchVector(
         string query, int topK)
     {
         var results = new List<(string, double, string, string)>();
         try
         {
-            var embedding = _vectorStore.EmbedAsync(query).GetAwaiter().GetResult();
+            var embedding = await _vectorStore.EmbedAsync(query);
             if (embedding.Length == 0) return results;
 
-            var vectorResults = _vectorStore.SearchSimilarAsync(embedding, topK).GetAwaiter().GetResult();
+            var vectorResults = await _vectorStore.SearchSimilarAsync(embedding, topK);
             foreach (var vr in vectorResults)
             {
                 results.Add((vr.Id, vr.Score, vr.Text ?? "", "vector"));
@@ -435,7 +435,7 @@ public sealed class UnifiedBrainStore : IDisposable
     public Bm25Scorer Bm25 => _bm25;
     public CompiledTruthStore Truth => _truthStore;
 
-    public Dictionary<string, object> GetStats()
+    public async Task<Dictionary<string, object>> GetStats()
     {
         using var cmd = _conn.CreateCommand();
         cmd.CommandText = """
@@ -456,7 +456,7 @@ public sealed class UnifiedBrainStore : IDisposable
             ["triplets"] = Convert.ToInt32(reader["triplets"]),
             ["events"] = Convert.ToInt32(reader["events"]),
             ["synthesis"] = Convert.ToInt32(reader["synthesis"]),
-            ["vector_store"] = _vectorStore.GetStatsAsync().GetAwaiter().GetResult(),
+            ["vector_store"] = await _vectorStore.GetStatsAsync(),
             ["bm25"] = _bm25.GetStats(),
             ["compiled_truth"] = _truthStore.GetStats()
         };

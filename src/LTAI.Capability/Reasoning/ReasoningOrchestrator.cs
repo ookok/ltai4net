@@ -110,7 +110,7 @@ public sealed class ReasoningOrchestrator
         return report;
     }
 
-    public string EnhanceResponse(string originalQuery, string llmResponse)
+    public async Task<string> EnhanceResponse(string originalQuery, string llmResponse)
     {
         if (string.IsNullOrWhiteSpace(llmResponse)) return llmResponse;
 
@@ -118,7 +118,7 @@ public sealed class ReasoningOrchestrator
 
         if (detectedType == ReasoningType.Math)
         {
-            var mathSolve = _math.SolveAsync(originalQuery).GetAwaiter().GetResult();
+            var mathSolve = await _math.SolveAsync(originalQuery);
             if (mathSolve.Method != "unknown")
                 return $"{llmResponse}\n\n---\n**Verified Computation:**\n{mathSolve.Solution}";
         }

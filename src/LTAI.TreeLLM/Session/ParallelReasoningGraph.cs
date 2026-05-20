@@ -207,7 +207,7 @@ public sealed class ParallelReasoningGraph
             var prompt = BuildNodePrompt(node.Task, parentContext, node.Depth);
             var docs = _agenticRAG.Search(node.Task, RAGMode.Iterative, maxRounds: 2);
 
-            var builtPrompt = _promptBuilder.BuildSinglePrompt(prompt, docs,
+            var builtPrompt = await _promptBuilder.BuildSinglePrompt(prompt, docs,
                 new Prompting.PromptBuildOptions
                 {
                     MaxContextTokens = 4000,
