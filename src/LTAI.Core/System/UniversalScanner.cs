@@ -54,19 +54,7 @@ public sealed class UniversalScanner
             if (!url.StartsWith("http", StringComparison.OrdinalIgnoreCase))
                 url = "http://" + url;
 
-            var category = "api";
-            if (lowerDesc.Contains("openai") || lowerDesc.Contains("llm") || lowerDesc.Contains("language model"))
-                category = "llm";
-            else if (lowerDesc.Contains("database") || lowerDesc.Contains("postgres") || lowerDesc.Contains("mysql") || lowerDesc.Contains("redis"))
-                category = "database";
-            else if (lowerDesc.Contains("mcp") || lowerDesc.Contains("tool"))
-                category = "mcp";
-            else if (lowerDesc.Contains("weather") || lowerDesc.Contains("news"))
-                category = "utility";
-            else if (lowerDesc.Contains("graph") || lowerDesc.Contains("knowledge"))
-                category = "knowledge";
-            else if (lowerDesc.Contains("storage") || lowerDesc.Contains("file"))
-                category = "storage";
+            var category = ClassificationRegistry.EndpointCategory.Classify(lowerDesc);
 
             var portMatch = Regex.Match(url, @":(\d{1,5})");
             var protocol = "http";
@@ -85,7 +73,7 @@ public sealed class UniversalScanner
                 || lowerDesc.Contains("apikey");
 
             var authType = needsAuth
-                ? (lowerDesc.Contains("bearer") ? "bearer" : lowerDesc.Contains("token") ? "token" : "api_key")
+                ? ClassificationRegistry.AuthType.Classify(lowerDesc)
                 : null;
 
             var name = Regex.Replace(url, @"^https?://", "");
@@ -230,22 +218,9 @@ public sealed class UniversalScanner
         var caps = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var model in models)
         {
-            var lower = model.ToLowerInvariant();
-            if (lower.Contains("gpt") || lower.Contains("claude") || lower.Contains("deepseek")
-                || lower.Contains("qwen") || lower.Contains("llama") || lower.Contains("gemini"))
-                caps.Add("completion");
-            if (lower.Contains("code") || lower.Contains("coder") || lower.Contains("copilot"))
-                caps.Add("code");
-            if (lower.Contains("embed") || lower.Contains("bge") || lower.Contains("e5"))
-                caps.Add("embedding");
-            if (lower.Contains("vision") || lower.Contains("vl") || lower.Contains("multimodal"))
-                caps.Add("vision");
-            if (lower.Contains("audio") || lower.Contains("whisper") || lower.Contains("tts"))
-                caps.Add("audio");
-            if (lower.Contains("image") || lower.Contains("dalle") || lower.Contains("stable"))
-                caps.Add("image_generation");
-            if (lower.Contains("reason") || lower.Contains("o1") || lower.Contains("o3"))
-                caps.Add("reasoning");
+            var capability = ClassificationRegistry.ModelCapability.Classify(model);
+            if (capability != "general")
+                caps.Add(capability);
         }
         return caps.Count == 0 ? new List<string> { "completion" } : caps.ToList();
     }
@@ -254,12 +229,13 @@ public sealed class UniversalScanner
     {
         var caps = new List<string>();
         var lower = url.ToLowerInvariant();
+        var allMatching = ClassificationRegistry.UrlCapability as MultiKeywordClassifier;
 
-        if (lower.Contains("openai")) caps.AddRange(new[] { "chat", "completion", "embedding" });
-        if (lower.Contains("deepseek")) caps.AddRange(new[] { "chat", "completion", "code", "reasoning" });
-        if (lower.Contains("qwen")) caps.AddRange(new[] { "chat", "completion", "vision" });
-        if (lower.Contains("anthropic") || lower.Contains("claude")) caps.AddRange(new[] { "chat", "completion", "code" });
-        if (lower.Contains("gemini") || lower.Contains("google")) caps.AddRange(new[] { "chat", "completion", "vision" });
+        if (lower.Contains("openai")) caps.AddRange(["chat", "completion", "embedding"]);
+        if (lower.Contains("deepseek")) caps.AddRange(["chat", "completion", "code", "reasoning"]);
+        if (lower.Contains("qwen")) caps.AddRange(["chat", "completion", "vision"]);
+        if (lower.Contains("anthropic") || lower.Contains("claude")) caps.AddRange(["chat", "completion", "code"]);
+        if (lower.Contains("gemini") || lower.Contains("google")) caps.AddRange(["chat", "completion", "vision"]);
         if (lower.Contains("ollama") || lower.Contains("local")) caps.Add("chat");
         if (lower.Contains("embed") || lower.Contains("vector")) caps.Add("embedding");
         if (lower.Contains("graph") || lower.Contains("neo4j")) caps.Add("graph");

@@ -1,3 +1,4 @@
+using LTAI.Core.System;
 using LTAI.TreeLLM.Session;
 using LTAI.Vector.Knowledge;
 using Microsoft.Extensions.Logging;
@@ -382,18 +383,7 @@ public sealed class SelfDistillPipeline
         if (branches.Count >= 4) return "multi-perspective";
 
         var taskLower = task.ToLower();
-        if (taskLower.Contains("compare") || taskLower.Contains("对比") || taskLower.Contains("diff"))
-            return "comparison";
-        if (taskLower.Contains("analyze") || taskLower.Contains("分析") || taskLower.Contains("研究"))
-            return "analysis";
-        if (taskLower.Contains("decompose") || taskLower.Contains("分解") || taskLower.Contains("拆分"))
-            return "decomposition";
-        if (taskLower.Contains("evaluate") || taskLower.Contains("评估") || taskLower.Contains("判断"))
-            return "evaluation";
-        if (taskLower.Contains("generate") || taskLower.Contains("生成") || taskLower.Contains("创建"))
-            return "generation";
-        if (taskLower.Contains("verify") || taskLower.Contains("验证") || taskLower.Contains("检查"))
-            return "verification";
+        return ClassificationRegistry.TaskPattern.Classify(taskLower);
 
         return "general";
     }

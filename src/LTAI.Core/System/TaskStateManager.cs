@@ -1,4 +1,6 @@
 using System.Text.Json;
+using LTAI.Core.Configuration;
+using Microsoft.Extensions.Options;
 
 namespace LTAI.Core.System;
 
@@ -59,19 +61,50 @@ public sealed class PromptInjector
     public static readonly string GatewaySystemPrompt =
         $"{InvestigateBeforeAnswering}\n{ProgressiveWorkPattern}\n{SourceVerification}\n{AntiOverengineering}";
 
-    private static readonly Dictionary<string, string> Modes = new()
-    {
-        ["gateway"] = GatewaySystemPrompt,
-        ["research"] = $"{InvestigateBeforeAnswering}\n{SourceVerification}",
-        ["coding"] = $"{ProgressiveWorkPattern}\n{ParallelExecution}\n{AntiOverengineering}",
-        ["light"] = InvestigateBeforeAnswering
-    };
+    private readonly string _investigate;
+    private readonly string _progressive;
+    private readonly string _parallel;
+    private readonly string _antiOverengineering;
+    private readonly string _sourceVerification;
 
-    private PromptInjector() { }
+    private readonly Dictionary<string, string> _modes;
+
+    public PromptInjector()
+    {
+        _investigate = InvestigateBeforeAnswering;
+        _progressive = ProgressiveWorkPattern;
+        _parallel = ParallelExecution;
+        _antiOverengineering = AntiOverengineering;
+        _sourceVerification = SourceVerification;
+        _modes = BuildModes();
+    }
+
+    public PromptInjector(IOptions<LTAIOptions> options)
+    {
+        var sp = options.Value.AI.SystemPrompts;
+        _investigate = sp.InvestigateBeforeAnswering;
+        _progressive = sp.ProgressiveWorkPattern;
+        _parallel = sp.ParallelExecution;
+        _antiOverengineering = sp.AntiOverengineering;
+        _sourceVerification = sp.SourceVerification;
+        _modes = BuildModes();
+    }
+
+    private Dictionary<string, string> BuildModes()
+    {
+        var gateway = $"{_investigate}\n{_progressive}\n{_sourceVerification}\n{_antiOverengineering}";
+        return new()
+        {
+            ["gateway"] = gateway,
+            ["research"] = $"{_investigate}\n{_sourceVerification}",
+            ["coding"] = $"{_progressive}\n{_parallel}\n{_antiOverengineering}",
+            ["light"] = _investigate
+        };
+    }
 
     public List<Dictionary<string, string>> Inject(List<Dictionary<string, string>> messages, string mode = "gateway")
     {
-        var prompt = Modes.GetValueOrDefault(mode, Modes["gateway"]);
+        var prompt = _modes.GetValueOrDefault(mode, _modes["gateway"]);
 
         if (messages.Count > 0 && messages[0].TryGetValue("role", out var role) && role == "system")
         {
@@ -113,6 +146,12 @@ public sealed class TaskStateManager
     private TaskStateManager(string? dataDir = null)
     {
         _dataDir = dataDir ?? global::System.IO.Path.Combine(".livingtree", "tasks");
+        global::System.IO.Directory.CreateDirectory(_dataDir);
+    }
+
+    public TaskStateManager(DataPathResolver dataPath)
+    {
+        _dataDir = dataPath.GetPath("tasks");
         global::System.IO.Directory.CreateDirectory(_dataDir);
     }
 

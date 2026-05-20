@@ -245,14 +245,10 @@ public sealed class ContextBudget
 
     private static string ExtractTopic(string text)
     {
-        var keywords = new[] { "code", "代码", "file", "文件", "error", "错误", "fix", "修复",
-            "api", "接口", "database", "数据库", "test", "测试", "deploy", "部署",
-            "config", "配置", "search", "搜索", "query", "查询", "review", "审查" };
-
-        foreach (var kw in keywords)
+        foreach (var (category, keywords) in ClassificationRegistry.ContentTopics)
         {
-            if (text.Contains(kw, StringComparison.OrdinalIgnoreCase))
-                return kw;
+            if (keywords.Any(k => text.Contains(k, StringComparison.OrdinalIgnoreCase)))
+                return category;
         }
 
         var words = text.Split(' ', '\n', '\r');

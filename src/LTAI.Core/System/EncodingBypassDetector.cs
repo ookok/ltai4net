@@ -218,12 +218,7 @@ public sealed class EncodingBypassDetector
     private static bool HasSuspiciousContent(string text)
     {
         if (string.IsNullOrWhiteSpace(text)) return false;
-        var lower = text.ToLowerInvariant();
-        return lower.Contains("delete") || lower.Contains("drop") || lower.Contains("exec") ||
-               lower.Contains("sudo") || lower.Contains("rm ") || lower.Contains("shutdown") ||
-               lower.Contains("system") || lower.Contains("os.") || lower.Contains("subprocess") ||
-               lower.Contains("__import__") || lower.Contains("eval") || lower.Contains("ignore") ||
-               lower.Contains("bypass") || lower.Contains("jailbreak");
+        return ClassificationRegistry.SuspiciousContent.Classify(text) != "general";
     }
 }
 

@@ -157,19 +157,10 @@ public sealed class MessageGateway
 
     private Task<GatewayMessage> SendCliInternal(GatewayMessage message)
     {
-        var originalColor = Console.ForegroundColor;
-
-        Console.ForegroundColor = ConsoleColor.Cyan;
-        Console.WriteLine($"═══ [{message.Platform.ToUpperInvariant()}] Message ─────────────────");
-        Console.ForegroundColor = ConsoleColor.White;
-        Console.WriteLine($"To: {message.To}");
-        if (!string.IsNullOrEmpty(message.Subject))
-            Console.WriteLine($"Subject: {message.Subject}");
-        Console.ResetColor();
-        Console.WriteLine(message.Body);
-        Console.ForegroundColor = ConsoleColor.Cyan;
-        Console.WriteLine("══════════════════════════════════════════");
-        Console.ForegroundColor = originalColor;
+        _logger.LogInformation(
+            "[{Platform}] Message → {To} Subject: {Subject} Body: {Body}",
+            message.Platform.ToUpperInvariant(), message.To, message.Subject ?? "",
+            message.Body?[..Math.Min(message.Body.Length, 200)] ?? "");
 
         return Task.FromResult(message with { Status = "sent", SentAt = DateTime.UtcNow });
     }

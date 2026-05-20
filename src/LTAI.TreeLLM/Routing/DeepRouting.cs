@@ -3,6 +3,8 @@ using System.Text.Json;
 using LTAI.TreeLLM.Models;
 using Microsoft.Extensions.Logging;
 
+using LTAI.Core.System;
+
 namespace LTAI.TreeLLM.Routing;
 
 public sealed class BudgetRouter
@@ -521,34 +523,17 @@ public sealed class BenchmarkSummary
 public sealed class QueryClassifier
 {
     private readonly ConcurrentDictionary<string, int> _patternCounts = new();
-    private static readonly Dictionary<string, string[]> IntentPatterns = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ["code"] = new[] { "code", "function", "class", "bug", "error", "fix", "implement", "refactor", "test", "compile", "syntax", "import", "package" },
-        ["reasoning"] = new[] { "why", "explain", "reason", "analyze", "compare", "contrast", "evaluate", "assess", "prove", "logic", "cause" },
-        ["chat"] = new[] { "hello", "hi", "how are you", "thanks", "help", "what is", "tell me", "who", "when" },
-        ["search"] = new[] { "find", "search", "lookup", "google", "where is", "locate" },
-        ["long_context"] = new[] { "summarize", "summary", "document", "article", "report", "write", "draft", "essay" }
-    };
 
     public (string intent, double confidence) Classify(string query)
     {
-        var lower = query.ToLowerInvariant();
-        var scores = new Dictionary<string, double>();
-
-        foreach (var (intent, patterns) in IntentPatterns)
-        {
-            var matches = patterns.Count(p => lower.Contains(p));
-            scores[intent] = (double)matches / patterns.Length;
-        }
-
-        var best = scores.OrderByDescending(kvp => kvp.Value).First();
-        _patternCounts.AddOrUpdate(best.Key, 1, (_, v) => v + 1);
-
         if (query.Length < 10) return ("chat", 0.8);
         if (query.Contains("```") || query.Contains("def ") || query.Contains("function ")) return ("code", 0.95);
         if (query.StartsWith("find ") || query.StartsWith("search ")) return ("search", 0.9);
 
-        return (best.Key, best.Value);
+        var intent = ClassificationRegistry.Intent.Classify(query);
+        _patternCounts.AddOrUpdate(intent, 1, (_, v) => v + 1);
+
+        return (intent, 0.7);
     }
 
     public Dictionary<string, int> GetStats() => new(_patternCounts);

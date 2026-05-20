@@ -1,4 +1,5 @@
 using System.Text;
+using LTAI.Core.System;
 using LTAI.Vector.Knowledge;
 using Microsoft.Extensions.AI;
 
@@ -464,8 +465,6 @@ public sealed class PromptBuilder
 
     private static bool HasExplicitDomainSignal(string question)
     {
-        return question.Contains("环评") || question.Contains("EIA") ||
-               question.Contains("环境") || question.Contains("安全") ||
-               question.Contains("翻译") || question.Contains("文档");
+        return ClassificationRegistry.DomainSignal.Classify(question) != "general";
     }
 }

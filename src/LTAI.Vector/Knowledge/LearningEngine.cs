@@ -1,3 +1,5 @@
+using LTAI.Core.System;
+
 namespace LTAI.Vector.Knowledge;
 
 public sealed record ExtractedTemplate(string Name, string Category, string Format, List<string> Sections);
@@ -92,10 +94,6 @@ public sealed class LearningEngine
 
     private static string DetectFormat(string content)
     {
-        if (content.Contains("环评") || content.Contains("环境影响")) return "eia";
-        if (content.Contains("class ") || content.Contains("public ") || content.Contains("def ")) return "code";
-        if (content.Contains("表格") || content.Contains("|--")) return "table";
-        if (content.Contains("# ") && content.Contains("## ")) return "markdown";
-        return "text";
+        return ClassificationRegistry.ContentFormat.Classify(content);
     }
 }

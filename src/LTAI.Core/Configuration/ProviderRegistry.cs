@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using Microsoft.Extensions.Options;
 
 namespace LTAI.Core.Configuration;
 
@@ -139,7 +140,7 @@ public sealed class ProviderRegistry : IProviderRegistry
         ["longcat"] = new() { "reasoning", "long_context" }
     };
 
-    public ProviderRegistry()
+    public ProviderRegistry(IOptions<LTAIOptions>? options = null)
     {
         _baseUrls = new ConcurrentDictionary<string, string>(BuiltInBaseUrls);
         _defaultModels = new ConcurrentDictionary<string, string>(BuiltInDefaultModels);
@@ -147,6 +148,35 @@ public sealed class ProviderRegistry : IProviderRegistry
             BuiltInCapabilities.ToDictionary(kvp => kvp.Key, kvp => new List<string>(kvp.Value)));
         _tierVariants = new ConcurrentDictionary<string, List<ProviderTierVariant>>(
             BuiltInTierVariants.ToDictionary(kvp => kvp.Key, kvp => kvp.Value));
+
+        MergeFromConfig(options?.Value);
+    }
+
+    private void MergeFromConfig(LTAIOptions? opts)
+    {
+        var catalog = opts?.AI?.ProviderCatalog;
+        if (catalog?.Entries == null) return;
+
+        foreach (var entry in catalog.Entries)
+        {
+            if (string.IsNullOrWhiteSpace(entry.Name)) continue;
+
+            if (!string.IsNullOrWhiteSpace(entry.BaseUrl))
+                _baseUrls[entry.Name] = entry.BaseUrl;
+
+            if (!string.IsNullOrWhiteSpace(entry.DefaultModel))
+                _defaultModels[entry.Name] = entry.DefaultModel;
+
+            if (entry.Capabilities is { Count: > 0 })
+                _capabilities[entry.Name] = new List<string>(entry.Capabilities);
+
+            if (entry.TierVariants is { Count: > 0 })
+            {
+                _tierVariants[entry.Name] = entry.TierVariants
+                    .Select(t => new ProviderTierVariant(t.Name, t.Model))
+                    .ToList();
+            }
+        }
     }
 
     public string? GetBaseUrl(string provider) =>

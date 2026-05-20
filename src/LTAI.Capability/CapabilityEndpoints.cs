@@ -8,6 +8,7 @@ using LTAI.Capability.Evolution;
 using LTAI.Capability.GIS;
 using LTAI.Capability.Integration;
 using LTAI.Capability.Knowledge;
+using LTAI.Core.System;
 using LTAI.Capability.Pipeline;
 using LTAI.Capability.Reasoning;
 using LTAI.Capability.Review;
@@ -325,15 +326,19 @@ public static class CapabilityEndpoints
 
     private static CodeLanguage DetectLanguage(string code)
     {
-        if (code.Contains("using System") || code.Contains("namespace ")) return CodeLanguage.CSharp;
-        if (code.Contains("import React") || code.Contains("export default")) return CodeLanguage.TypeScript;
-        if (code.Contains("def ") && code.Contains("import ")) return CodeLanguage.Python;
-        if (code.Contains("func ") && code.Contains("package ")) return CodeLanguage.Go;
-        if (code.Contains("fn ") && code.Contains("let mut")) return CodeLanguage.Rust;
-        if (code.Contains("public class ") && code.Contains("void ")) return CodeLanguage.Java;
-        if (code.Contains("SELECT ") || code.Contains("CREATE TABLE")) return CodeLanguage.Sql;
-        if (code.Contains("<!DOCTYPE html") || code.Contains("<div")) return CodeLanguage.Html;
-        return CodeLanguage.Unknown;
+        var result = ClassificationRegistry.CodeLanguage.Classify(code);
+        return result switch
+        {
+            "CSharp" => CodeLanguage.CSharp,
+            "TypeScript" => CodeLanguage.TypeScript,
+            "Python" => CodeLanguage.Python,
+            "Go" => CodeLanguage.Go,
+            "Rust" => CodeLanguage.Rust,
+            "Java" => CodeLanguage.Java,
+            "Sql" => CodeLanguage.Sql,
+            "Html" => CodeLanguage.Html,
+            _ => CodeLanguage.Unknown
+        };
     }
 }
 

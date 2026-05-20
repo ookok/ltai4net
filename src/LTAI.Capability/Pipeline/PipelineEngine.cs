@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using LTAI.Core.System;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -135,16 +136,18 @@ Pipeline operators:
     private static PipelineConfig GetFallbackPipeline(string description)
     {
         var lower = description.ToLowerInvariant();
-        if (lower.Contains("report") || lower.Contains("报告"))
-            return new PipelineConfig("report_pipeline", "Auto-generated report pipeline",
+        var pipeline = ClassificationRegistry.PipelineTrigger.Classify(lower);
+        return pipeline switch
+        {
+            "report_pipeline" => new PipelineConfig("report_pipeline", "Auto-generated report pipeline",
                 new() { new(PipelineOp.Extract, null, null, "content", null, false, false, false),
-                         new(PipelineOp.Map, "Format as structured report", null, "content", null, true, false, false) });
-        if (lower.Contains("search") || lower.Contains("搜索"))
-            return new PipelineConfig("search_pipeline", "Auto-generated search pipeline",
+                         new(PipelineOp.Map, "Format as structured report", null, "content", null, true, false, false) }),
+            "search_pipeline" => new PipelineConfig("search_pipeline", "Auto-generated search pipeline",
                 new() { new(PipelineOp.Extract, null, null, "text", null, false, false, false),
-                         new(PipelineOp.Filter, null, "contains(text, 'result')", "text", null, false, false, false) });
-        return new PipelineConfig("default_pipeline", "Auto-generated pipeline",
-            new() { new(PipelineOp.Extract, null, null, "text", null, false, false, false) });
+                         new(PipelineOp.Filter, null, "contains(text, 'result')", "text", null, false, false, false) }),
+            _ => new PipelineConfig("default_pipeline", "Auto-generated pipeline",
+                new() { new(PipelineOp.Extract, null, null, "text", null, false, false, false) })
+        };
     }
 
     private async Task<List<Dictionary<string, object>>> Extract(List<Dictionary<string, object>> data,

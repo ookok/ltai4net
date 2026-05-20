@@ -1,3 +1,4 @@
+using LTAI.Core.System;
 using LTAI.Vector.Knowledge;
 using LTAI.Vector.Knowledge.Models;
 
@@ -69,29 +70,17 @@ public sealed class ContextProviderRouter
         if (opts.ForceMode.HasValue)
             return (opts.ForceMode.Value, "手动指定");
 
-        var queryLower = query.ToLower();
-
-        if (queryLower.Contains("我的") || queryLower.Contains("my ") ||
-            queryLower.Contains("个人") || queryLower.Contains("personal") ||
-            queryLower.Contains("偏好") || queryLower.Contains("preference"))
-            return (ProviderMode.Self, "个人化查询: 自我模式");
-
-        if (queryLower.Contains("代表我") || queryLower.Contains("on behalf") ||
-            queryLower.Contains("替我") || queryLower.Contains("present me") ||
-            queryLower.Contains("介绍") && queryLower.Contains("我"))
-            return (ProviderMode.ThirdParty, "代表用户: 第三方模式");
-
-        if (queryLower.Contains("帮我") || queryLower.Contains("help me") ||
-            queryLower.Contains("补充上下文") || queryLower.Contains("add context") ||
-            queryLower.Contains("丰富") || queryLower.Contains("enrich") ||
-            queryLower.Contains("背景") && queryLower.Contains("补充"))
-            return (ProviderMode.Enhance, "上下文增强请求");
-
-        if (queryLower.Contains("检查") || queryLower.Contains("review") ||
-            queryLower.Contains("评估") || queryLower.Contains("critique") ||
-            queryLower.Contains("建议") || queryLower.Contains("suggestion") ||
-            queryLower.Contains("改进") || queryLower.Contains("improve"))
-            return (ProviderMode.Critic, "批判性评估");
+        var result = ClassificationRegistry.ProviderMode.Classify(query);
+        if (result != "Self")
+        {
+            return result switch
+            {
+                "ThirdParty" => (ProviderMode.ThirdParty, "代表用户: 第三方模式"),
+                "Enhance" => (ProviderMode.Enhance, "上下文增强请求"),
+                "Critic" => (ProviderMode.Critic, "批判性评估"),
+                _ => (ProviderMode.Self, "默认: 自我模式")
+            };
+        }
 
         if (shape == QueryShape.AggregationSummary || shape == QueryShape.ProceduralHowTo)
             return (ProviderMode.Enhance, "结构化查询: 上下文增强");

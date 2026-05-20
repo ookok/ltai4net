@@ -1,3 +1,4 @@
+using LTAI.Core.System;
 using Microsoft.Extensions.Logging;
 
 namespace LTAI.Capability.Reasoning;
@@ -127,32 +128,14 @@ public sealed class ReasoningOrchestrator
 
     private static ReasoningType DetectType(string query)
     {
-        var lower = query.ToLowerInvariant();
-
-        if (lower.Any(c => char.IsDigit(c)) &&
-            (lower.Contains("+") || lower.Contains("-") || lower.Contains("*") || lower.Contains("/") ||
-             lower.Contains("=") || lower.Contains("calculate") || lower.Contains("solve") ||
-             lower.Contains("计算") || lower.Contains("等于") || lower.Contains("方程")))
-            return ReasoningType.Math;
-
-        if (lower.Contains("if") && lower.Contains("then") ||
-            lower.Contains("therefore") || lower.Contains("implies") ||
-            lower.Contains("premise") || lower.Contains("syllogism") ||
-            lower.Contains("如果") && lower.Contains("那么"))
-            return ReasoningType.Logic;
-
-        if (lower.Contains("should") || lower.Contains("better") || lower.Contains("versus") ||
-            lower.Contains("compare") || lower.Contains("pros and cons") ||
-            lower.Contains("advantage") || lower.Contains("disadvantage") ||
-            lower.Contains("应该") || lower.Contains("优劣") || lower.Contains("对比"))
-            return ReasoningType.Dialectical;
-
-        if (lower.Contains("why") || lower.Contains("cause") || lower.Contains("because") ||
-            lower.Contains("root cause") || lower.Contains("led to") ||
-            lower.Contains("为什么") || lower.Contains("原因") || lower.Contains("导致"))
-            return ReasoningType.Attribution;
-
-        return ReasoningType.Logic;
+        var result = ClassificationRegistry.ReasoningType.Classify(query);
+        return result switch
+        {
+            "Math" => ReasoningType.Math,
+            "Dialectical" => ReasoningType.Dialectical,
+            "Attribution" => ReasoningType.Attribution,
+            _ => ReasoningType.Logic
+        };
     }
 
     private static double ComputeOverallConfidence(ReasoningReport report)

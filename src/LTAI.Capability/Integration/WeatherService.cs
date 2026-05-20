@@ -1,6 +1,8 @@
 using System.Text.Json;
+using LTAI.Core.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 
 namespace LTAI.Capability.Integration;
 
@@ -23,14 +25,22 @@ public sealed class WeatherService
 {
     private readonly HttpClient _http;
     private readonly ILogger<WeatherService> _logger;
+    private readonly string _owmBaseUrl;
+    private readonly string _qweatherGeoUrl;
+    private readonly string _qweatherNowUrl;
 
     public string OpenWeatherMapKey { get; set; } = "";
     public string QWeatherKey { get; set; } = "";
 
-    public WeatherService(ILogger<WeatherService>? logger = null)
+    public WeatherService(
+        IOptions<LTAIOptions> options,
+        ILogger<WeatherService>? logger = null)
     {
         _logger = logger ?? NullLogger<WeatherService>.Instance;
         _http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+        _owmBaseUrl = options.Value.IntegrationUrls.WeatherOpenWeatherMap;
+        _qweatherGeoUrl = options.Value.IntegrationUrls.WeatherQWeatherGeo;
+        _qweatherNowUrl = options.Value.IntegrationUrls.WeatherQWeatherNow;
     }
 
     public async Task<WeatherData?> GetWeatherAsync(string city, string source = "openweathermap")
@@ -52,7 +62,7 @@ public sealed class WeatherService
 
         try
         {
-            var url = $"https://api.openweathermap.org/data/2.5/weather?q={Uri.EscapeDataString(city)}&appid={OpenWeatherMapKey}&units=metric&lang=zh_cn";
+            var url = $"{_owmBaseUrl}?q={Uri.EscapeDataString(city)}&appid={OpenWeatherMapKey}&units=metric&lang=zh_cn";
             var json = await _http.GetStringAsync(url);
             using var doc = JsonDocument.Parse(json);
 
@@ -91,7 +101,7 @@ public sealed class WeatherService
 
         try
         {
-            var geoUrl = $"https://geoapi.qweather.com/v2/city/lookup?location={Uri.EscapeDataString(city)}&key={QWeatherKey}";
+            var geoUrl = $"{_qweatherGeoUrl}?location={Uri.EscapeDataString(city)}&key={QWeatherKey}";
             var geoJson = await _http.GetStringAsync(geoUrl);
             using var geoDoc = JsonDocument.Parse(geoJson);
 
@@ -102,7 +112,7 @@ public sealed class WeatherService
             var cityName = loc.GetProperty("name").GetString() ?? city;
             var locId = loc.GetProperty("id").GetString() ?? "";
 
-            var weatherUrl = $"https://devapi.qweather.com/v7/weather/now?location={locId}&key={QWeatherKey}";
+            var weatherUrl = $"{_qweatherNowUrl}?location={locId}&key={QWeatherKey}";
             var weatherJson = await _http.GetStringAsync(weatherUrl);
             using var weatherDoc = JsonDocument.Parse(weatherJson);
 

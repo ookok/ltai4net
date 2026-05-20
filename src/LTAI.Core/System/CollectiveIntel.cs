@@ -151,18 +151,20 @@ public sealed class MemoryTierManager
         var tags = new List<string>();
         var cl = content.ToLower();
 
-        if (cl.Contains("error") || cl.Contains("bug") || cl.Contains("fail") || cl.Contains("crash"))
-            tags.Add("error");
-        if (cl.Contains("fix") || cl.Contains("solution") || cl.Contains("resolve"))
-            tags.Add("fix");
-        if (cl.Contains("pattern") || cl.Contains("template"))
-            tags.Add("pattern");
-        if (cl.Contains("security") || cl.Contains("vuln") || cl.Contains("attack"))
-            tags.Add("security");
-        if (cl.Contains("config") || cl.Contains("setup") || cl.Contains("install"))
-            tags.Add("config");
-        if (cl.Contains("api") || cl.Contains("endpoint"))
-            tags.Add("api");
+        var memoryRules = new (string Category, string[] Keywords)[]
+        {
+            ("error", ["error", "bug", "fail", "crash"]),
+            ("fix", ["fix", "solution", "resolve"]),
+            ("pattern", ["pattern", "template"]),
+            ("security", ["security", "vuln", "attack"]),
+            ("config", ["config", "setup", "install"]),
+            ("api", ["api", "endpoint"])
+        };
+        foreach (var (category, keywords) in memoryRules)
+        {
+            if (keywords.Any(k => cl.Contains(k)))
+                tags.Add(category);
+        }
 
         return tags.Count > 0 ? tags : new List<string> { "general" };
     }

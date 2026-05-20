@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using LTAI.Core.System;
 
 namespace LTAI.TreeLLM.Heima;
 
@@ -177,12 +178,7 @@ public sealed class HeimaEncoder
     private static string ClassifyStepType(string text)
     {
         var lower = text.ToLower();
-        if (lower.Contains("therefore") || lower.Contains("conclude") || lower.Contains("thus")) return "conclusion";
-        if (lower.Contains("because") || lower.Contains("reason") || lower.Contains("since")) return "premise";
-        if (lower.Contains("assume") || lower.Contains("hypothesis") || lower.Contains("suppose")) return "assumption";
-        if (lower.Contains("step") || lower.Contains("first") || lower.Contains("next")) return "procedure";
-        if (lower.Contains("example") || lower.Contains("for instance")) return "example";
-        return "observation";
+        return ClassificationRegistry.StepType.Classify(lower);
     }
 
     private double ComputeImportance(string step, string fullText, double lengthRatio)

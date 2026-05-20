@@ -8,6 +8,7 @@ using LTAI.Core.Prefs;
 using LTAI.Core.Resilience;
 using LTAI.Core.System;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 
 namespace LTAI.Core;
 
@@ -15,6 +16,10 @@ public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddLTAICore(this IServiceCollection services)
     {
+        services.AddSingleton<DataPathResolver>();
+
+        services.AddSingleton(sp => new PromptInjector(sp.GetRequiredService<IOptions<LTAIOptions>>()));
+
         services.AddSingleton<IProviderRegistry, ProviderRegistry>();
 
         services.AddSingleton<ICognitiveMesh, CognitiveMesh>();

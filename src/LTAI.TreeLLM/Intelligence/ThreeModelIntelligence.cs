@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using LTAI.Core.System;
 using LTAI.TreeLLM.Models;
 using LTAI.Vector.Embedding;
 using LTAI.Vector.Interfaces;
@@ -272,9 +273,17 @@ public sealed partial class ThreeModelIntelligence
         }
 
         var fallback = new List<string>();
-        if (query.Contains("代码") || query.Contains("code")) fallback.Add("code_tool");
-        if (query.Contains("文件") || query.Contains("file")) fallback.Add("file_access");
-        if (query.Contains("搜索") || query.Contains("search")) fallback.Add("web_search");
+        var toolRules = new (string Category, string[] Keywords)[]
+        {
+            ("code_tool", ["代码", "code"]),
+            ("file_access", ["文件", "file"]),
+            ("web_search", ["搜索", "search"])
+        };
+        foreach (var (category, keywords) in toolRules)
+        {
+            if (keywords.Any(k => query.Contains(k)))
+                fallback.Add(category);
+        }
         if (fallback.Count == 0) fallback.Add("general_chat");
         return fallback;
     }

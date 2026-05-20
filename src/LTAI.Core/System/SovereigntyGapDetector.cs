@@ -162,11 +162,7 @@ public sealed class SovereigntyGapDetector
 
     private static double ScoreEvidenceWeighting(string thought)
     {
-        var evidencePatterns = new[] {
-            "because", "since", "due to", "based on", "evidence", "data shows",
-            "因为", "由于", "根据", "数据", "证据", "依据",
-            "log", "trace", "record", "source", "reference"
-        };
+        var evidencePatterns = ClassificationRegistry.SovereignEvidence[0].Keywords;
 
         var thoughtLower = thought.ToLowerInvariant();
         int evidenceCount = evidencePatterns.Count(p => thoughtLower.Contains(p));
@@ -179,12 +175,7 @@ public sealed class SovereigntyGapDetector
 
     private static double ScoreConflictDetection(string thought)
     {
-        var conflictPatterns = new[] {
-            "however", "but", "although", "contrary", "conflict", "disagree",
-            "但是", "然而", "不过", "矛盾", "冲突", "不一致",
-            "wrong", "incorrect", "false", "error", "mistake",
-            "错误", "不正确", "误解"
-        };
+        var conflictPatterns = ClassificationRegistry.SovereignConflict[0].Keywords;
 
         var thoughtLower = thought.ToLowerInvariant();
         int conflictCount = conflictPatterns.Count(p => thoughtLower.Contains(p));
@@ -194,20 +185,12 @@ public sealed class SovereigntyGapDetector
 
     private static double ScoreIndependentJudgment(string thought)
     {
-        var judgmentPatterns = new[] {
-            "I think", "I believe", "my analysis", "I conclude", "in my opinion",
-            "我认为", "我的分析", "结论是", "根据我的判断",
-            "verify", "validate", "confirm", "check", "examine",
-            "验证", "确认", "检查", "核实"
-        };
+        var judgmentPatterns = ClassificationRegistry.SovereignJudgment[0].Keywords;
 
         var thoughtLower = thought.ToLowerInvariant();
         int judgmentCount = judgmentPatterns.Count(p => thoughtLower.Contains(p));
 
-        var sycophancyPatterns = new[] {
-            "agree with", "as you said", "you are right", "following",
-            "同意", "如你所说", "你说的对", "按照你的", "遵循"
-        };
+        var sycophancyPatterns = ClassificationRegistry.SovereignSycophancy[0].Keywords;
         int sycophancyCount = sycophancyPatterns.Count(p => thoughtLower.Contains(p));
 
         return Math.Min(1.0, Math.Max(0, judgmentCount * 0.2 - sycophancyCount * 0.15));
@@ -230,17 +213,11 @@ public sealed class SovereigntyGapDetector
             ? (double)overlap / thoughtWords.Length
             : 0;
 
-        var confidencePatterns = new[] {
-            "clearly", "definitely", "certainly", "undoubtedly", "obviously",
-            "显然", "明确", "肯定", "确实", "确定"
-        };
+        var confidencePatterns = ClassificationRegistry.SovereignConfidence[0].Keywords;
         int confidenceCount = confidencePatterns.Count(p => obsLower.Contains(p));
         double confidenceScore = Math.Min(1.0, confidenceCount * 0.2);
 
-        var answerPatterns = new[] {
-            "answer is", "result is", "solution is", "correct id", "true id",
-            "答案是", "结果是", "正确ID", "真实ID"
-        };
+        var answerPatterns = ClassificationRegistry.SovereignAnswer[0].Keywords;
         bool hasAnswerAssertion = answerPatterns.Any(p => obsLower.Contains(p));
 
         double accuracy = alignment * 0.5 + confidenceScore * 0.2 + (hasAnswerAssertion ? 0.3 : 0);

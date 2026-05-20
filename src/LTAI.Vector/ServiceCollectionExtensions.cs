@@ -1,3 +1,4 @@
+using LTAI.Core.System;
 using LTAI.Vector.Embedding;
 using LTAI.Vector.Interfaces;
 using LTAI.Vector.Knowledge;
@@ -20,7 +21,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IVectorStore, VectorStore>();
         services.AddSingleton<DocumentStore>(sp =>
         {
-            var dbPath = Path.Combine(AppContext.BaseDirectory, ".livingtree", "document_store.db");
+            var dbPath = sp.GetRequiredService<DataPathResolver>().GetPath("document_store.db");
             return new DocumentStore(dbPath,
                 sp.GetRequiredService<IVectorStore>(),
                 sp.GetRequiredService<ILogger<DocumentStore>>());
@@ -56,12 +57,12 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<Bm25Scorer>();
         services.AddSingleton<CompiledTruthStore>(sp =>
         {
-            var dbPath = Path.Combine(AppContext.BaseDirectory, ".livingtree", "brain.db");
+            var dbPath = sp.GetRequiredService<DataPathResolver>().GetPath("brain.db");
             return new CompiledTruthStore(dbPath);
         });
         services.AddSingleton<UnifiedBrainStore>(sp =>
         {
-            var dbPath = Path.Combine(AppContext.BaseDirectory, ".livingtree", "brain.db");
+            var dbPath = sp.GetRequiredService<DataPathResolver>().GetPath("brain.db");
             return new UnifiedBrainStore(dbPath,
                 sp.GetRequiredService<IVectorStore>(),
                 sp.GetRequiredService<ILogger<UnifiedBrainStore>>());
@@ -176,7 +177,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IVectorStore, VectorStore>();
         services.AddSingleton<DocumentStore>(sp =>
         {
-            var dbPath = Path.Combine(AppContext.BaseDirectory, ".livingtree", "document_store.db");
+            var dbPath = sp.GetRequiredService<DataPathResolver>().GetPath("document_store.db");
             return new DocumentStore(dbPath,
                 sp.GetRequiredService<IVectorStore>(),
                 sp.GetRequiredService<ILogger<DocumentStore>>());
@@ -212,12 +213,12 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<Bm25Scorer>();
         services.AddSingleton<CompiledTruthStore>(sp =>
         {
-            var dbPath = Path.Combine(AppContext.BaseDirectory, ".livingtree", "brain.db");
+            var dbPath = sp.GetRequiredService<DataPathResolver>().GetPath("brain.db");
             return new CompiledTruthStore(dbPath);
         });
         services.AddSingleton<UnifiedBrainStore>(sp =>
         {
-            var dbPath = Path.Combine(AppContext.BaseDirectory, ".livingtree", "brain.db");
+            var dbPath = sp.GetRequiredService<DataPathResolver>().GetPath("brain.db");
             return new UnifiedBrainStore(dbPath,
                 sp.GetRequiredService<IVectorStore>(),
                 sp.GetRequiredService<ILogger<UnifiedBrainStore>>());

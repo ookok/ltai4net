@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using LTAI.Core.System;
 
 namespace LTAI.Vector.Knowledge;
 
@@ -83,9 +84,13 @@ public sealed class ReasoningReranker
     private static double ComputeSourceCredibility(string? source)
     {
         if (source == null) return 0.5;
-        if (source.Contains("gov") || source.Contains("edu") || source.Contains("标准")) return 0.9;
-        if (source.Contains("wiki") || source.Contains("baidu.com")) return 0.6;
-        return 0.7;
+        var credibility = ClassificationRegistry.SourceCredibility.Classify(source);
+        return credibility switch
+        {
+            "high" => 0.9,
+            "medium" => 0.6,
+            _ => 0.7
+        };
     }
 
     private static double ComputeStepAlignment(string content, List<ReasoningStep> steps)
