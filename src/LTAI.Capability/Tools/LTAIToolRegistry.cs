@@ -1,4 +1,4 @@
-using LTAI.Core.Interfaces;
+using LTAI.Core.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using System.Text.Json;
 
@@ -9,7 +9,7 @@ public static class LTAIToolRegistry
     private static bool _seeded;
     private static IServiceProvider? _serviceProvider;
 
-    public static async Task SeedAllAsync(IToolRegistry registry, IServiceProvider sp)
+    public static async Task SeedAllAsync(AIToolRegistry registry, IServiceProvider sp)
     {
         _serviceProvider = sp;
         if (_seeded) return;

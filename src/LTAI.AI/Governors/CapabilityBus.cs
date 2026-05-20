@@ -1,6 +1,5 @@
 using System.Collections.Concurrent;
 using LTAI.Capability.Tools;
-using LTAI.Core.Interfaces;
 using LTAI.Core.Messaging;
 using LTAI.Core.System;
 
@@ -98,7 +97,7 @@ public sealed class CapabilityBus
 
     private readonly List<CapabilityAdapter> _adapters = new();
     private readonly ConcurrentDictionary<string, CapInvokeResult> _history = new();
-    private readonly IToolRegistry? _toolRegistry;
+    private readonly AIToolRegistry? _toolRegistry;
     private int _totalInvokes;
 
     private CapabilityBus() { }

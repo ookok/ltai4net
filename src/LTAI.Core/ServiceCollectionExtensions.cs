@@ -18,7 +18,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IProviderRegistry, ProviderRegistry>();
 
         services.AddSingleton<ICognitiveMesh, CognitiveMesh>();
-        services.AddSingleton<IToolRegistry, ToolRegistry>();
+        services.AddSingleton<AIToolRegistry>();
         services.AddSingleton<TaskJournal>();
 
         services.AddSingleton(sp => HardwareAcceleration.Instance);

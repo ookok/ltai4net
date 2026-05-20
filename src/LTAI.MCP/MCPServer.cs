@@ -1,17 +1,17 @@
 using System.Text.Json;
-using LTAI.Core.Interfaces;
+using LTAI.Core.Messaging;
 using Microsoft.Extensions.Logging;
 
 namespace LTAI.MCP;
 
 public sealed class MCPServer
 {
-    private readonly IToolRegistry _tools;
+    private readonly AIToolRegistry _tools;
     private readonly ILogger<MCPServer> _logger;
     private readonly Dictionary<string, MCPResource> _resources = new();
     private string _serverName = "LTAI";
 
-    public MCPServer(IToolRegistry tools, ILogger<MCPServer> logger)
+    public MCPServer(AIToolRegistry tools, ILogger<MCPServer> logger)
     {
         _tools = tools;
         _logger = logger;
@@ -64,16 +64,21 @@ public sealed class MCPServer
 
     private async Task<string> HandleListToolsAsync(JsonRpcMessage msg)
     {
-        var toolNames = _tools.ListTools().ToList();
+        var tools = _tools.GetTools().ToList();
         var mcpTools = new List<MCPTool>();
 
-        foreach (var name in toolNames)
+        foreach (var tool in tools)
         {
-            var schemaJson = $$"""{"type":"object","properties":{"query":{"type":"string","description":"Input for {{name}} tool"}}}""";
+            var name = (tool as AIFunction)?.Name ?? tool.GetType().Name;
+            var desc = (tool as AIFunction)?.Description ?? $"LTAI tool: {name}";
+            var schemaJson = tool.JsonSchema != null
+                ? JsonSerializer.Serialize(tool.JsonSchema)
+                : $$"""{"type":"object","properties":{"query":{"type":"string","description":"Input for {{name}} tool"}}}""";
+
             mcpTools.Add(new MCPTool
             {
                 Name = name,
-                Description = $"LTAI tool: {name}",
+                Description = desc,
                 InputSchema = JsonDocument.Parse(schemaJson).RootElement
             });
         }

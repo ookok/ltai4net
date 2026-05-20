@@ -6,6 +6,7 @@ using LTAI.Browser.Interfaces;
 using LTAI.Core;
 using LTAI.Core.Configuration;
 using LTAI.Core.Interfaces;
+using LTAI.Core.Messaging;
 using LTAI.Capability.Integration;
 using LTAI.Document;
 using LTAI.Network;
@@ -162,7 +163,7 @@ static void ConfigureServices(IServiceProvider sp)
 
 static async Task RegisterCapabilityTools(IServiceProvider sp)
 {
-    var registry = sp.GetRequiredService<IToolRegistry>();
+    var registry = sp.GetRequiredService<AIToolRegistry>();
     var browser = sp.GetRequiredService<IBrowserAgent>();
     var logger = sp.GetRequiredService<ILogger<Program>>();
 
@@ -333,7 +334,7 @@ static async Task RegisterCapabilityTools(IServiceProvider sp)
     }
 }
 
-static async Task RegisterKernelMemoryTools(IServiceProvider sp, IToolRegistry registry)
+static async Task RegisterKernelMemoryTools(IServiceProvider sp, AIToolRegistry registry)
 {
     var km = sp.GetRequiredService<KernelMemoryStore>();
 
