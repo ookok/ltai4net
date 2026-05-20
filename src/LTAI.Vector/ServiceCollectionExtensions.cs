@@ -68,13 +68,6 @@ public static class ServiceCollectionExtensions
                 sp.GetRequiredService<ILogger<UnifiedBrainStore>>());
         });
 
-        services.AddSingleton<NeocorticalConsolidator>(sp =>
-        {
-            var structMemory = sp.GetRequiredService<StructMemory>();
-            var logger = sp.GetService<ILogger<NeocorticalConsolidator>>();
-            return new NeocorticalConsolidator(structMemory, logger);
-        });
-
         services.AddSingleton<MemoryPoisoningDefense>();
 
         services.AddSingleton<CompositionalGeneralizer>(sp =>
@@ -222,13 +215,6 @@ public static class ServiceCollectionExtensions
             return new UnifiedBrainStore(dbPath,
                 sp.GetRequiredService<IVectorStore>(),
                 sp.GetRequiredService<ILogger<UnifiedBrainStore>>());
-        });
-
-        services.AddSingleton<NeocorticalConsolidator>(sp =>
-        {
-            var structMemory = sp.GetRequiredService<StructMemory>();
-            var logger = sp.GetService<ILogger<NeocorticalConsolidator>>();
-            return new NeocorticalConsolidator(structMemory, logger);
         });
 
         services.AddSingleton<MemoryPoisoningDefense>();

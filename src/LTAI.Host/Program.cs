@@ -21,7 +21,6 @@ using LTAI.Sandbox;
 using LTAI.Metrics;
 using LTAI.Multimodal;
 using LTAI.TreeLLM;
-using LTAI.Economy;
 using LTAI.Execution;
 using LTAI.Memory;
 using Microsoft.AspNetCore.RateLimiting;
@@ -104,7 +103,6 @@ builder.Services.AddLTAISandbox();
 builder.Services.AddLTAIMetrics();
 builder.Services.AddLTAIMultimodal();
 builder.Services.AddLTAITreeLLM();
-builder.Services.AddEconomyAgentTraining();
 builder.Services.AddLTAIExecution();
 builder.Services.AddLTAIMemory();
 

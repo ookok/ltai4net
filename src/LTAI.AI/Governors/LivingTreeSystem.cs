@@ -390,7 +390,7 @@ public sealed class LivingTreeSystem
                        $"DNA: {(_dna != null ? $"active (L{_dna.GetStatus().ConsciousnessLevel})" : "disabled")}",
             "/status" => $"Mode: {_guardian.Mode}\n" +
                          $"Journal: {_journal.Entries.Count} entries\n" +
-                         $"DNA: {(_dna != null ? $"consciousness={_dna.Consciousness.State.Level}, awareness={_dna.Consciousness.State.AwarenessScore:F2}, evolution={_dna.Evolution.Phase}, generation={_dna.Evolution.CurrentGenome.Generation}" : "disabled")}\n" +
+                          $"DNA: {(_dna != null ? $"consciousness={_dna.Consciousness.State.Level}, awareness={_dna.Consciousness.State.AwarenessScore:F2}" : "disabled")}\n" +
                          $"Biorhythm: {(_dna != null ? $"{_dna.Life.Biorhythm.Phase}, energy={_dna.Life.Biorhythm.EnergyLevel:F2}" : "disabled")}",
             "/pause" => "Journal paused.",
             "/resume" => "Journal resumed.",

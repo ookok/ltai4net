@@ -84,22 +84,6 @@ public static class ExecutionEndpoints
             return Results.Json(items);
         });
 
-        endpoints.MapPost("/api/execution/plan/evolve", async (HttpContext context) =>
-        {
-            using var reader = new StreamReader(context.Request.Body);
-            var body = await reader.ReadToEndAsync();
-            var request = JsonSerializer.Deserialize<EvolveRequest>(body);
-
-            if (request == null || request.Candidates == null || request.Candidates.Count == 0)
-                return Results.Json(new { error = "Candidates list is required" }, statusCode: 400);
-
-            var evolution = endpoints.ServiceProvider.GetRequiredService<ThinkingEvolution>();
-            var result = evolution.EvolvePopulation(
-                request.Candidates,
-                fitnessFn: c => c.Content.Length > 0 ? (double)c.Content.Length / 1000.0 : 0.0);
-            return Results.Json(result);
-        });
-
         endpoints.MapGet("/api/execution/plan/budget", () =>
         {
             var costAware = endpoints.ServiceProvider.GetRequiredService<CostAware>();

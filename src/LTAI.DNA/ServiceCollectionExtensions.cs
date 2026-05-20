@@ -22,8 +22,6 @@ public static class ServiceCollectionExtensions
         }));
 
         services.AddSingleton<DualConsciousness>();
-        services.AddSingleton<EvolutionDriver>();
-        services.AddSingleton<SwarmEvolution>();
         services.AddSingleton<SafetyCoordinator>();
         services.AddSingleton<LifeEngine>();
 

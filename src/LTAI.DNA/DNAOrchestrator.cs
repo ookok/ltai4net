@@ -11,7 +11,6 @@ public sealed class DNAOrchestrator
 {
     private readonly ILogger<DNAOrchestrator> _logger;
     private readonly DualConsciousness _consciousness;
-    private readonly EvolutionDriver _evolution;
     private readonly SafetyCoordinator _safety;
     private readonly LifeEngine _life;
     private readonly SelfEvolution _selfEvo;
@@ -44,7 +43,6 @@ public sealed class DNAOrchestrator
     private readonly LivingPresence _livingPresence;
 
     public DualConsciousness Consciousness => _consciousness;
-    public EvolutionDriver Evolution => _evolution;
     public SafetyCoordinator Safety => _safety;
     public LifeEngine Life => _life;
     public SelfEvolution SelfEvo => _selfEvo;
@@ -79,7 +77,6 @@ public sealed class DNAOrchestrator
     public DNAOrchestrator(
         ILogger<DNAOrchestrator> logger,
         DualConsciousness consciousness,
-        EvolutionDriver evolution,
         SafetyCoordinator safety,
         LifeEngine life,
         SelfEvolution selfEvo,
@@ -113,7 +110,6 @@ public sealed class DNAOrchestrator
     {
         _logger = logger;
         _consciousness = consciousness;
-        _evolution = evolution;
         _safety = safety;
         _life = life;
         _selfEvo = selfEvo;
@@ -185,7 +181,6 @@ public sealed class DNAOrchestrator
             ["contradictions"] = 1.0 - metrics.ContradictionCount / 10.0
         };
 
-        await _evolution.EvolveAsync(fitnessSignals, cancellationToken);
         await _selfEvo.EvolveAsync(fitnessSignals, cancellationToken);
 
         _world.Observe("input", "length", input.Length);
@@ -219,8 +214,6 @@ public sealed class DNAOrchestrator
             AwarenessScore = _consciousness.State.AwarenessScore,
             SafetyScore = safetyVerdict.RiskScore,
             SafetyPosture = _safety.Posture,
-            EvolutionPhase = _evolution.Phase,
-            FitnessScore = _evolution.CurrentGenome.FitnessScore,
             Personality = _life.Personality,
             Biorhythm = _life.Biorhythm.Phase,
             EnergyLevel = _life.Biorhythm.EnergyLevel,
@@ -249,9 +242,6 @@ public sealed class DNAOrchestrator
         {
             ConsciousnessLevel = _consciousness.State.Level,
             AwarenessScore = _consciousness.State.AwarenessScore,
-            EvolutionPhase = _evolution.Phase,
-            Generation = _evolution.CurrentGenome.Generation,
-            FitnessScore = _evolution.CurrentGenome.FitnessScore,
             SafetyPosture = _safety.Posture,
             BiorhythmPhase = _life.Biorhythm.Phase,
             EnergyLevel = _life.Biorhythm.EnergyLevel,

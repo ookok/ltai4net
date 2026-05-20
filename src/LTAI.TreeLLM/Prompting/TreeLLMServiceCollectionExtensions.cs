@@ -37,7 +37,7 @@ public static class TreeLLMServiceCollectionExtensions
             var agenticRAG = sp.GetRequiredService<AgenticRAG>();
             var promptBuilder = sp.GetRequiredService<PromptBuilder>();
             var logger = sp.GetService<ILogger<NestedRagLoop>>();
-            return new NestedRagLoop(agenticRAG, orchestrator: null, promptBuilder, logger);
+            return new NestedRagLoop(agenticRAG, promptBuilder, logger);
         });
 
         services.AddSingleton<MoECompressionBridge>();
@@ -77,8 +77,6 @@ public static class TreeLLMServiceCollectionExtensions
             var logger = sp.GetService<ILogger<SelfDistillPipeline>>();
             return new SelfDistillPipeline(promptBuilder, logger);
         });
-
-        services.AddSingleton<ReversePplCurriculum>();
 
         services.AddSingleton<MultiToolDispatch>(sp =>
         {
@@ -124,24 +122,10 @@ public static class TreeLLMServiceCollectionExtensions
             return new DualPerspectiveMemory(agenticRAG, structMemory);
         });
 
-        services.AddSingleton<OnPolicyDataEvolver>(sp =>
-        {
-            var chatClient = sp.GetRequiredService<IChatClient>();
-            var agenticRAG = sp.GetRequiredService<AgenticRAG>();
-            var logger = sp.GetService<ILogger<OnPolicyDataEvolver>>();
-            return new OnPolicyDataEvolver(chatClient, agenticRAG, logger);
-        });
-
         services.AddSingleton<EntailmentAligner>(sp =>
         {
             var agenticRAG = sp.GetRequiredService<AgenticRAG>();
             return new EntailmentAligner(agenticRAG);
-        });
-
-        services.AddSingleton<DisclosurePolicyLearner>(sp =>
-        {
-            var aligner = sp.GetRequiredService<EntailmentAligner>();
-            return new DisclosurePolicyLearner(aligner);
         });
 
         return services;
@@ -175,7 +159,7 @@ public static class TreeLLMServiceCollectionExtensions
             var agenticRAG = sp.GetRequiredService<AgenticRAG>();
             var promptBuilder = sp.GetRequiredService<PromptBuilder>();
             var logger = sp.GetService<ILogger<NestedRagLoop>>();
-            return new NestedRagLoop(agenticRAG, orchestrator: null, promptBuilder, logger);
+            return new NestedRagLoop(agenticRAG, promptBuilder, logger);
         });
 
         services.AddSingleton<MoECompressionBridge>();
@@ -212,8 +196,6 @@ public static class TreeLLMServiceCollectionExtensions
             var logger = sp.GetService<ILogger<SelfDistillPipeline>>();
             return new SelfDistillPipeline(promptBuilder, logger);
         });
-
-        services.AddSingleton<ReversePplCurriculum>();
 
         services.AddSingleton<MultiToolDispatch>(sp =>
         {
@@ -258,23 +240,10 @@ public static class TreeLLMServiceCollectionExtensions
             return new DualPerspectiveMemory(agenticRAG, structMemory);
         });
 
-        services.AddSingleton<OnPolicyDataEvolver>(sp =>
-        {
-            var agenticRAG = sp.GetRequiredService<AgenticRAG>();
-            var logger = sp.GetService<ILogger<OnPolicyDataEvolver>>();
-            return new OnPolicyDataEvolver(chatClient, agenticRAG, logger);
-        });
-
         services.AddSingleton<EntailmentAligner>(sp =>
         {
             var agenticRAG = sp.GetRequiredService<AgenticRAG>();
             return new EntailmentAligner(agenticRAG);
-        });
-
-        services.AddSingleton<DisclosurePolicyLearner>(sp =>
-        {
-            var aligner = sp.GetRequiredService<EntailmentAligner>();
-            return new DisclosurePolicyLearner(aligner);
         });
 
         return services;

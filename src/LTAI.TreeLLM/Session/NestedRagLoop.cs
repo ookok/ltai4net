@@ -29,18 +29,15 @@ public sealed record SubQueryResult
 public sealed class NestedRagLoop
 {
     private readonly AgenticRAG _agenticRAG;
-    private readonly EdcoCurriculumOrchestrator _orchestrator;
     private readonly Prompting.PromptBuilder _promptBuilder;
     private readonly ILogger<NestedRagLoop>? _logger;
 
     public NestedRagLoop(
         AgenticRAG agenticRAG,
-        EdcoCurriculumOrchestrator? orchestrator = null,
         Prompting.PromptBuilder? promptBuilder = null,
         ILogger<NestedRagLoop>? logger = null)
     {
         _agenticRAG = agenticRAG;
-        _orchestrator = orchestrator ?? EdcoCurriculumOrchestrator.Instance;
         _promptBuilder = promptBuilder ?? new Prompting.PromptBuilder();
         _logger = logger;
     }
@@ -87,14 +84,6 @@ public sealed class NestedRagLoop
             subQuestions = reflection.RefinedQuestions.Count > 0
                 ? reflection.RefinedQuestions.Take(subQueriesPerRound).ToList()
                 : DecomposeToSubQueries(query, subQueriesPerRound);
-
-            _orchestrator.AddToPool(subQuestions.Select(sq => new EdcoSample
-            {
-                Id = Guid.NewGuid().ToString("N")[..10],
-                Content = sq,
-                TokenCount = sq.Length / 4,
-                Entropy = 0.5
-            }).ToList());
         }
 
         var finalAnswer = SynthesizeFinalAnswer(query, allSubResults);

@@ -30,21 +30,6 @@ public static class DNAEndpoints
             });
         });
 
-        endpoints.MapGet("/api/dna/evolution", (DNAOrchestrator dna) =>
-        {
-            var e = dna.Evolution;
-            return Results.Json(new
-            {
-                phase = e.Phase.ToString(),
-                generation = e.CurrentGenome.Generation,
-                fitness = e.CurrentGenome.FitnessScore,
-                genes = e.CurrentGenome.Genes.ToDictionary(
-                    g => g.Key,
-                    g => new { expression = g.Value.Expression, mutation_rate = g.Value.MutationRate }),
-                population_size = e.Population.Count
-            });
-        });
-
         endpoints.MapGet("/api/dna/life", (DNAOrchestrator dna) =>
         {
             var l = dna.Life;
@@ -93,28 +78,6 @@ public static class DNAEndpoints
         {
             var narrative = dna.GenerateSelfNarrative();
             return Results.Json(new { narrative });
-        });
-
-        endpoints.MapPost("/api/dna/evolve", async (
-            HttpContext context,
-            DNAOrchestrator dna,
-            CancellationToken cancellationToken) =>
-        {
-            try
-            {
-                using var reader = new StreamReader(context.Request.Body);
-                var body = await reader.ReadToEndAsync(cancellationToken);
-                var signals = JsonSerializer.Deserialize<Dictionary<string, double>>(body);
-
-                if (signals != null)
-                    await dna.Evolution.EvolveAsync(signals, cancellationToken);
-
-                return Results.Json(new { success = true, fitness = dna.Evolution.CurrentGenome.FitnessScore });
-            }
-            catch (Exception ex)
-            {
-                return Results.Json(new { error = ex.Message }, statusCode: 500);
-            }
         });
 
         endpoints.MapPost("/api/dna/safety/posture", async (
