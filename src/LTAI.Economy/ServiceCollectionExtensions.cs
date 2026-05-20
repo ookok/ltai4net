@@ -11,13 +11,13 @@ public static class EconomyServiceCollectionExtensions
     {
         services.AddSingleton<AgentGRPO>(sp =>
         {
-            var interactionLoop = sp.GetRequiredService<IInteractionLoop>();
+            var chatClient = sp.GetRequiredService<IChatClient>();
             var sessionResilience = SessionResilience.Instance;
             var traceReward = sp.GetRequiredService<TraceEfficiencyReward>();
             var opd = sp.GetRequiredService<OnPolicyDistillation>();
             var costEvaluator = sp.GetRequiredService<CostAwareEvaluator>();
             var logger = sp.GetService<ILogger<AgentGRPO>>();
-            return new AgentGRPO(interactionLoop, sessionResilience, traceReward, opd, costEvaluator, logger);
+            return new AgentGRPO(chatClient, sessionResilience, traceReward, opd, costEvaluator, logger);
         });
 
         services.AddSingleton<ExperienceReplayBuffer>();

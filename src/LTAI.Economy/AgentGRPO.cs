@@ -1,13 +1,15 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using LTAI.Core.System;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 
 namespace LTAI.Economy;
 
 public sealed class AgentGRPO
 {
-    private readonly IInteractionLoop _interactionLoop;
+    private readonly IInteractionLoop? _interactionLoop;
+    private readonly IChatClient? _chatClient;
     private readonly SessionResilience _sessionResilience;
     private readonly TraceEfficiencyReward? _traceReward;
     private readonly OnPolicyDistillation? _opd;
@@ -30,6 +32,24 @@ public sealed class AgentGRPO
         ILogger<AgentGRPO>? logger = null)
     {
         _interactionLoop = interactionLoop;
+        _chatClient = interactionLoop as IChatClient;
+        _sessionResilience = sessionResilience ?? SessionResilience.Instance;
+        _traceReward = traceReward;
+        _opd = opd;
+        _costEvaluator = costEvaluator;
+        _logger = logger;
+    }
+
+    public AgentGRPO(
+        IChatClient chatClient,
+        SessionResilience? sessionResilience = null,
+        TraceEfficiencyReward? traceReward = null,
+        OnPolicyDistillation? opd = null,
+        CostAwareEvaluator? costEvaluator = null,
+        ILogger<AgentGRPO>? logger = null)
+    {
+        _chatClient = chatClient;
+        _interactionLoop = chatClient as IInteractionLoop;
         _sessionResilience = sessionResilience ?? SessionResilience.Instance;
         _traceReward = traceReward;
         _opd = opd;
@@ -53,11 +73,19 @@ public sealed class AgentGRPO
             cancellationToken.ThrowIfCancellationRequested();
 
             var trajectories = new List<InteractionTrajectory>();
-            await foreach (var traj in _interactionLoop.RunBatchAsync(tasks, cfg, cancellationToken))
+
+            if (_interactionLoop != null)
             {
-                trajectories.Add(traj);
-                allTrajectories.Add(traj);
+                await foreach (var traj in _interactionLoop.RunBatchAsync(tasks, cfg, cancellationToken))
+                    trajectories.Add(traj);
             }
+            else if (_chatClient != null)
+            {
+                await foreach (var traj in RunBatchViaChatClientAsync(tasks, cfg, cancellationToken))
+                    trajectories.Add(traj);
+            }
+
+            allTrajectories.AddRange(trajectories);
 
             foreach (var traj in trajectories)
             {
@@ -118,6 +146,17 @@ public sealed class AgentGRPO
             PartialRolloutSteps = partialSteps
         };
 
+        if (_interactionLoop != null)
+            return await TrainAsyncPartialWithLoop(tasks, cfg, cancellationToken);
+
+        return await TrainAsync(tasks, cfg, 1, cancellationToken);
+    }
+
+    private async Task<GRPOTrainingResult> TrainAsyncPartialWithLoop(
+        IReadOnlyList<string> tasks,
+        RolloutConfig cfg,
+        CancellationToken cancellationToken)
+    {
         var sw = Stopwatch.StartNew();
         var allTrajectories = new List<InteractionTrajectory>();
         double bestReward = 0;
@@ -133,7 +172,7 @@ public sealed class AgentGRPO
             for (int i = 0; i < Math.Min(cfg.MaxConcurrent, queuedTasks.Count); i++)
                 batchTasks.Add(queuedTasks.Dequeue());
 
-            if (batchTasks.Count > 0)
+            if (batchTasks.Count > 0 && _interactionLoop != null)
             {
                 await foreach (var traj in _interactionLoop.RunBatchAsync(batchTasks, cfg, cancellationToken))
                 {
@@ -157,7 +196,7 @@ public sealed class AgentGRPO
 
             foreach (var (sessionId, partialTraj) in activeTrajectories.ToList())
             {
-                var restored = _interactionLoop.RestoreFromCheckpoint(partialTraj.TrajectoryId);
+                var restored = _interactionLoop?.RestoreFromCheckpoint(partialTraj.TrajectoryId);
                 if (restored != null && restored.Completed)
                 {
                     allTrajectories.Add(restored);
@@ -197,6 +236,89 @@ public sealed class AgentGRPO
             allTrajectories.Sum(t => t.StepCount),
             sw.ElapsedMilliseconds,
             metricsPartial);
+    }
+
+    private async IAsyncEnumerable<InteractionTrajectory> RunBatchViaChatClientAsync(
+        IReadOnlyList<string> tasks,
+        RolloutConfig config,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        var semaphore = new SemaphoreSlim(config.MaxConcurrent);
+        var tasks2 = tasks.Select(async task =>
+        {
+            await semaphore.WaitAsync(cancellationToken);
+            try
+            {
+                return await RunSingleViaChatClientAsync(task, cancellationToken);
+            }
+            finally { semaphore.Release(); }
+        });
+
+        var results = await Task.WhenAll(tasks2);
+        foreach (var traj in results)
+            yield return traj;
+    }
+
+    private async Task<InteractionTrajectory> RunSingleViaChatClientAsync(
+        string taskDescription,
+        CancellationToken cancellationToken)
+    {
+        var trajId = $"chat_{Guid.NewGuid():N}"[..12];
+        var steps = new List<AgentStep>();
+        var sw = Stopwatch.StartNew();
+
+        try
+        {
+            var messages = new List<ChatMessage>
+            {
+                new(ChatRole.System, "You are a helpful AI assistant. Use tools when needed to answer the user's question."),
+                new(ChatRole.User, taskDescription)
+            };
+
+            var response = await _chatClient!.GetResponseAsync(messages, null, cancellationToken);
+            var text = response.Text ?? "";
+
+            steps.Add(new AgentStep(
+                StepIndex: 0,
+                Thought: taskDescription[..Math.Min(taskDescription.Length, 200)],
+                Observation: text[..Math.Min(text.Length, 500)],
+                Reward: ComputeContentReward(text),
+                StepLatencyMs: sw.ElapsedMilliseconds));
+        }
+        catch (Exception ex)
+        {
+            steps.Add(new AgentStep(
+                StepIndex: 0,
+                Thought: taskDescription[..Math.Min(taskDescription.Length, 200)],
+                Observation: $"Error: {ex.Message}",
+                StepLatencyMs: sw.ElapsedMilliseconds));
+        }
+
+        sw.Stop();
+        return new InteractionTrajectory(
+            TrajectoryId: trajId,
+            TaskDescription: taskDescription,
+            Steps: steps,
+            TotalReward: steps.Sum(s => s.Reward),
+            Completed: true,
+            ElapsedMs: sw.ElapsedMilliseconds);
+    }
+
+    private static double ComputeContentReward(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return 0;
+        double score = 0.5;
+
+        if (text.Length > 50) score += 0.1;
+        if (text.Length > 200) score += 0.1;
+        if (text.Contains("\n")) score += 0.1;
+        if (text.Contains("```")) score += 0.05;
+
+        var keywordHits = new[] { "because", "因此", "所以", "根据", "第一步", "first" }
+            .Count(k => text.Contains(k, StringComparison.OrdinalIgnoreCase));
+        score += keywordHits * 0.05;
+
+        return Math.Clamp(score, 0, 1);
     }
 
     public Dictionary<string, double> GetToolPreferences() { lock (_lock) return new(_toolPreferences); }
