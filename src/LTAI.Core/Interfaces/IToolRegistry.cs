@@ -1,4 +1,5 @@
 using LTAI.Core.Models;
+using Microsoft.Extensions.AI;
 
 namespace LTAI.Core.Interfaces;
 
@@ -8,4 +9,5 @@ public interface IToolRegistry
     Task<object?> InvokeAsync(string toolName, Dictionary<string, object?> parameters, CancellationToken cancellationToken = default);
     bool HasTool(string toolName);
     IEnumerable<string> ListTools();
+    IEnumerable<AITool> GetAITools();
 }
