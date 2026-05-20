@@ -16,12 +16,14 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IChatClient>(sp =>
         {
             var engine = sp.GetRequiredService<ProviderEngine>();
-            return new ChatClientBuilder(engine)
+            var pipeline = new ChatClientBuilder(engine)
                 .UseLogging(sp.GetRequiredService<ILoggerFactory>())
                 .UseFunctionInvocation()
                 .UseOpenTelemetry()
                 .UseDistributedCache()
                 .Build();
+
+            return new RescueParsingChatClient(pipeline, sp.GetService<ILogger<RescueParsingChatClient>>());
         });
 
         services.AddSingleton<InputGovernor>();

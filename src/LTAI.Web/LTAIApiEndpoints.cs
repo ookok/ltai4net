@@ -126,11 +126,6 @@ public static class LTAIApiEndpoints
                 dna = dnaInfo
             });
         });
-
-        endpoints.MapGet("/api/health", () =>
-        {
-            return Results.Json(new { status = "healthy", timestamp = DateTime.UtcNow });
-        });
     }
 }
 

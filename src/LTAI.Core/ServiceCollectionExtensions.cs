@@ -7,6 +7,7 @@ using LTAI.Core.Messaging;
 using LTAI.Core.Prefs;
 using LTAI.Core.Resilience;
 using LTAI.Core.System;
+using LTAI.Core.Session;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
@@ -64,6 +65,9 @@ public static class ServiceCollectionExtensions
             new LatencyBudgetAllocator(totalLatencyBudgetMs: 30000));
 
         services.AddSingleton<HotPathObjectPool>();
+
+        services.AddSingleton<IMessageBus, MessageBus>();
+        services.AddSingleton<ISessionStore, InMemorySessionStore>();
 
         services.TryAddEnumerable(ServiceDescriptor.Singleton<ITextClassifier>(
             ClassificationRegistry.EndpointCategory));

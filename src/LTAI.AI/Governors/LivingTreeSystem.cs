@@ -2,9 +2,11 @@ using System.Runtime.CompilerServices;
 using LTAI.Core.Configuration;
 using LTAI.Core.Execution;
 using LTAI.Core.Interfaces;
+using LTAI.Core.Messaging;
 using LTAI.Core.Models;
 using LTAI.DNA;
 using LTAI.Capability.Reasoning;
+using LTAI.AI.Providers;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -16,6 +18,8 @@ public sealed class LivingTreeSystem
     private readonly ICognitiveMesh _mesh;
     private readonly TaskJournal _journal;
     private readonly IChatClient _llm;
+    private readonly ProviderFanOutRace? _fanOut;
+    private readonly AIToolRegistry _toolRegistry;
     private readonly ILogger<LivingTreeSystem> _logger;
     private readonly DNAOrchestrator? _dna;
     private readonly IOptions<LTAIOptions> _options;
@@ -34,16 +38,31 @@ public sealed class LivingTreeSystem
     private readonly ReasoningOrchestrator? _reasoning;
 
     private string DefaultModel => _options.Value.AI.L2.Model;
+    private string FlashModel => _options.Value.AI.L1.Model;
+
+    private string GetDegradedModel(string model)
+    {
+        var chain = _options.Value.ModelPricing?.DegradationChain;
+        if (chain != null && chain.TryGetValue(model, out var fallback))
+            return fallback;
+        return FlashModel;
+    }
 
     public SystemGuardian Guardian => _guardian;
     public SystemMode Mode => _guardian.Mode;
     public bool DNAEnabled => _dna != null;
     public DNAStatus? DNAStatus => _dna?.GetStatus();
+    public InputGovernor InputGovernor => _input;
+    public ContextGovernor ContextGovernor => _context;
+    public RoutingGovernor RoutingGovernor => _routing;
+    public IChatClient LLMClient => _llm;
 
     public LivingTreeSystem(
         ICognitiveMesh mesh,
         TaskJournal journal,
         IChatClient llm,
+        ProviderFanOutRace? fanOut,
+        AIToolRegistry toolRegistry,
         ILogger<LivingTreeSystem> logger,
         IOptions<LTAIOptions> options,
         InputGovernor input,
@@ -63,6 +82,8 @@ public sealed class LivingTreeSystem
         _mesh = mesh;
         _journal = journal;
         _llm = llm;
+        _fanOut = fanOut;
+        _toolRegistry = toolRegistry;
         _logger = logger;
         _options = options;
         _input = input;
@@ -196,11 +217,11 @@ public sealed class LivingTreeSystem
             model = DefaultModel;
         }
 
-        var options = new ChatOptions { ModelId = model, Temperature = 0.3f, MaxOutputTokens = 4096 };
-        messages = new List<ChatMessage> { new(ChatRole.User, query) };
+        var streamOptions = new ChatOptions { ModelId = model, Temperature = 0.3f, MaxOutputTokens = 4096, Tools = _toolRegistry.GetTools().ToList() };
+        messages = new List<ChatMessage> { new(ChatRole.User, query) }; 
 
         IAsyncEnumerable<ChatResponseUpdate> streamResponse;
-        try { streamResponse = _llm.GetStreamingResponseAsync(messages, options, cancellationToken); }
+        try { streamResponse = _llm.GetStreamingResponseAsync(messages, streamOptions, cancellationToken); }
         catch (Exception ex) { streamResponse = null!; _logger.LogError(ex, "Stream init failed"); }
 
         if (streamResponse == null)
@@ -221,20 +242,20 @@ public sealed class LivingTreeSystem
         string modelId,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        var options = new ChatOptions { ModelId = modelId, Temperature = 0.3f, MaxOutputTokens = 4096 };
-        var messages = new List<ChatMessage> { new(ChatRole.User, query) };
-        IAsyncEnumerable<ChatResponseUpdate> stream;
+        var modelOptions = new ChatOptions { ModelId = modelId, Temperature = 0.3f, MaxOutputTokens = 4096, Tools = _toolRegistry.GetTools().ToList() };
+        var modelMessages = new List<ChatMessage> { new(ChatRole.User, query) };
+        IAsyncEnumerable<ChatResponseUpdate> modelStream;
 
-        try { stream = _llm.GetStreamingResponseAsync(messages, options, cancellationToken); }
-        catch { stream = null!; }
+        try { modelStream = _llm.GetStreamingResponseAsync(modelMessages, modelOptions, cancellationToken); }
+        catch { modelStream = null!; }
 
-        if (stream == null)
+        if (modelStream == null)
         {
             yield return $"Error: model {modelId} unavailable";
             yield break;
         }
 
-        await foreach (var update in stream)
+        await foreach (var update in modelStream)
         {
             if (!string.IsNullOrEmpty(update.Text))
                 yield return update.Text;
@@ -243,12 +264,20 @@ public sealed class LivingTreeSystem
 
     public async Task<string> ProcessAsync(string query, CancellationToken cancellationToken = default)
     {
-        var traceId = Guid.NewGuid().ToString("N");
+        var result = await ProcessTypedAsync(GovernorInput.Create(query), cancellationToken);
+        return result.Response;
+    }
 
+    public async Task<GovernorOutput> ProcessTypedAsync(GovernorInput input, CancellationToken cancellationToken = default)
+    {
+        var traceId = input.TraceId;
+
+        var query = input.Query;
         if (_journal.TryConsumeMessage(out var humanMessage) && humanMessage != null)
         {
             _logger.LogInformation("Human message injected: {Message}", humanMessage[..Math.Min(humanMessage.Length, 100)]);
             query = humanMessage;
+            input = GovernorInput.Create(query, traceId);
         }
 
         if (_dna != null)
@@ -265,51 +294,68 @@ public sealed class LivingTreeSystem
 
         var inputResult = await _input.ProcessAsync(new Handshake
         {
-            To = "input",
-            Action = "process",
+            To = "input", Action = "process",
             Payload = new Dictionary<string, object?> { ["query"] = query },
             ReplyTo = traceId
         }, cancellationToken);
 
         if (inputResult.Action == "reflex")
-        {
-            return HandleReflex(inputResult);
-        }
+            return GovernorOutput.Reflex(
+                inputResult.Payload?.GetValueOrDefault("command")?.ToString() ?? "",
+                traceId);
+
+        var label = inputResult.Payload?.GetValueOrDefault("label")?.ToString() ?? "deep";
+        var complexity = inputResult.Payload?.GetValueOrDefault("complexity") is float c ? c : 0.5f;
+        var emotion = inputResult.Payload?.GetValueOrDefault("emotion")?.ToString();
 
         var contextResult = await _context.ProcessAsync(new Handshake
         {
-            To = "context",
-            Action = "preload",
-            Payload = inputResult.Payload,
-            ReplyTo = traceId
+            To = "context", Action = "preload",
+            Payload = inputResult.Payload, ReplyTo = traceId
         }, cancellationToken);
 
         var routingResult = await _routing.ProcessAsync(new Handshake
         {
-            To = "routing",
-            Action = "select_provider",
-            Payload = inputResult.Payload,
-            ReplyTo = traceId
+            To = "routing", Action = "select_provider",
+            Payload = inputResult.Payload, ReplyTo = traceId
         }, cancellationToken);
 
         var model = routingResult.Payload?.GetValueOrDefault("model")?.ToString() ?? DefaultModel;
         var temperature = routingResult.Payload?.GetValueOrDefault("temperature") is float t ? t : 0.3f;
-        var label = inputResult.Payload?.GetValueOrDefault("label")?.ToString() ?? "deep";
-
         var context = contextResult.Payload?.GetValueOrDefault("context")?.ToString() ?? "";
         var fullPrompt = string.IsNullOrEmpty(context) ? query : $"Context:\n{context}\n\nQuery: {query}";
 
         string response;
+        var options = new ChatOptions { ModelId = model, Temperature = temperature, MaxOutputTokens = 4096, Tools = _toolRegistry.GetTools().ToList() };
 
-        var options = new ChatOptions { ModelId = model, Temperature = temperature, MaxOutputTokens = 4096 };
-
-        if (label == "fast" || label == "reflex")
+        try
         {
-            response = await _llm.CompleteAsync(fullPrompt, options, cancellationToken);
+            if (label == "fast" || label == "reflex")
+            {
+                response = await _llm.GetResponseAsync(fullPrompt, options, cancellationToken).ContinueWith(t => t.Result.Text ?? "");
+            }
+            else if (_fanOut != null)
+            {
+                var fanOutResult = await _fanOut.RaceAsync(fullPrompt, maxConcurrent: 3, cancellationToken: cancellationToken);
+                response = fanOutResult.Answer;
+                _logger.LogDebug("Fan-out race winner: {Provider} ({Latency}ms)", fanOutResult.WinningProvider, fanOutResult.LatencyMs);
+            }
+            else
+            {
+                response = await CollaborativeChatAsync(fullPrompt, options, cancellationToken);
+            }
         }
-        else
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            response = await CollaborativeChatAsync(fullPrompt, options, cancellationToken);
+            var fallbackModel = GetDegradedModel(model);
+            if (fallbackModel != model)
+            {
+                _logger.LogWarning("Model {Model} failed, falling back to {Fallback}: {Error}", model, fallbackModel, ex.Message);
+                options.ModelId = fallbackModel;
+                options.Temperature = 0.3f;
+                response = await _llm.GetResponseAsync(fullPrompt, options, cancellationToken).ContinueWith(t => t.Result.Text ?? "");
+            }
+            else { throw; }
         }
 
         if (_dna != null)
@@ -320,47 +366,35 @@ public sealed class LivingTreeSystem
                 if (!outputSafety.Allowed)
                 {
                     _logger.LogWarning("DNA safety blocked output: {Reason}", outputSafety.BlockReason);
-                    response = $"[Response filtered by safety: {outputSafety.BlockReason}]";
+                    return GovernorOutput.Blocked(outputSafety.BlockReason);
                 }
             }
-            catch (Exception ex)
-            {
-                _logger.LogDebug(ex, "DNA output safety check skipped");
-            }
+            catch (Exception ex) { _logger.LogDebug(ex, "DNA output safety check skipped"); }
         }
 
         var outputResult = await _output.ProcessAsync(new Handshake
         {
-            To = "output",
-            Action = "review",
+            To = "output", Action = "review",
             Payload = new Dictionary<string, object?> { ["response"] = response },
             ReplyTo = traceId
         }, cancellationToken);
 
         _context.AddTurn(query, response);
-
         response = outputResult.Payload?.GetValueOrDefault("response")?.ToString() ?? response;
 
         if (_reasoning != null && !string.IsNullOrEmpty(response))
         {
-            try
-            {
-                response = await _reasoning.EnhanceResponse(query, response);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogDebug(ex, "Reasoning enhancement skipped");
-            }
+            try { response = await _reasoning.EnhanceResponse(query, response); }
+            catch (Exception ex) { _logger.LogDebug(ex, "Reasoning enhancement skipped"); }
         }
 
         _ = _self.ProcessAsync(new Handshake
         {
-            To = "self",
-            Action = "start_trace",
+            To = "self", Action = "start_trace",
             Payload = new Dictionary<string, object?> { ["trace_id"] = traceId }
         }, cancellationToken);
 
-        return response;
+        return GovernorOutput.Success(response, traceId);
     }
 
     private async Task<string> CollaborativeChatAsync(string prompt, ChatOptions baseOptions, CancellationToken cancellationToken)
@@ -394,9 +428,17 @@ public sealed class LivingTreeSystem
                          $"Biorhythm: {(_dna != null ? $"{_dna.Life.Biorhythm.Phase}, energy={_dna.Life.Biorhythm.EnergyLevel:F2}" : "disabled")}",
             "/pause" => "Journal paused.",
             "/resume" => "Journal resumed.",
-            "/restart" => "Restart not implemented yet.",
+            "/restart" => RestartSystem(),
             _ => $"Unknown command: {command}"
         };
+    }
+
+    private string RestartSystem()
+    {
+        _guardian.ResetErrors();
+        _journal.Clear();
+        _logger.LogInformation("System restarted: journal cleared, guardian reset");
+        return "System restarted. Journal cleared, error counters reset.";
     }
 
     private async Task SilentSelfCheckAsync(string response)

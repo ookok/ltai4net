@@ -15,7 +15,13 @@ public sealed class ProviderEngine : IChatClient
     private readonly IOptions<LTAIOptions> _options;
     private readonly ILogger<ProviderEngine> _logger;
     private decimal _dailySpent;
+    private DateTime _lastResetUtc = DateTime.UtcNow.Date;
     private readonly object _budgetLock = new();
+    private int _consecutiveFailures;
+    private DateTime _circuitOpenUntil;
+    private const int MaxRetries = 3;
+    private const int CircuitBreakerThreshold = 5;
+    private static readonly TimeSpan CircuitCooldown = TimeSpan.FromSeconds(30);
 
     public ProviderEngine(IHttpClientFactory httpClientFactory, IOptions<LTAIOptions> options, ILogger<ProviderEngine> logger)
     {
@@ -191,16 +197,59 @@ public sealed class ProviderEngine : IChatClient
 
     private async Task<ChatResponse> ChatToResponseAsync(string prompt, LLMChatOptions? options, CancellationToken ct)
     {
-        try
+        if (DateTime.UtcNow < _circuitOpenUntil)
+            throw new InvalidOperationException($"Circuit breaker open until {_circuitOpenUntil:O}");
+
+        Exception? lastEx = null;
+        var currentPrompt = prompt;
+
+        for (int attempt = 1; attempt <= MaxRetries; attempt++)
         {
-            var result = await ChatAsync(prompt, options, ct);
-            return new ChatResponse(new ChatMessage(ChatRole.Assistant, result));
+            try
+            {
+                var result = await ChatAsync(currentPrompt, options, ct);
+                Interlocked.Exchange(ref _consecutiveFailures, 0);
+                return new ChatResponse(new ChatMessage(ChatRole.Assistant, result));
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                lastEx = ex;
+                var failures = Interlocked.Increment(ref _consecutiveFailures);
+                if (failures >= CircuitBreakerThreshold)
+                {
+                    _circuitOpenUntil = DateTime.UtcNow + CircuitCooldown;
+                    _logger.LogError("Circuit breaker OPEN after {Failures} failures", failures);
+                    Interlocked.Exchange(ref _consecutiveFailures, 0);
+                    throw new InvalidOperationException($"Circuit breaker open: {ex.Message}", ex);
+                }
+                if (attempt < MaxRetries)
+                {
+                    var delayMs = 200 * (int)Math.Pow(2, attempt - 1);
+                    var nudge = BuildRetryNudge(ex);
+                    if (!string.IsNullOrWhiteSpace(nudge))
+                        currentPrompt = $"{prompt}\n\n[Diagnostic from attempt {attempt}: {nudge}]";
+                    _logger.LogWarning("Retry {A}/{M}: {Error}", attempt, MaxRetries, ex.Message);
+                    await Task.Delay(delayMs, ct);
+                }
+            }
         }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "ChatResponse error");
-            throw;
-        }
+        throw lastEx!;
+    }
+
+    private static string BuildRetryNudge(Exception ex)
+    {
+        if (ex is HttpRequestException h && h.Message.Contains("429"))
+            return "Rate-limited. Your request was too frequent. Simplify if possible.";
+        if (ex is InvalidOperationException i && i.Message.Contains("budget"))
+            return "Daily budget exceeded. Use a flash-tier model or wait until midnight.";
+        if (ex is InvalidOperationException i2 && i2.Message.Contains("circuit"))
+            return "Provider circuit breaker open. Try again in 30 seconds.";
+        if (ex is TaskCanceledException)
+            return "Request timed out. The model may be overloaded. Consider simplifying the prompt.";
+        if (ex.Message.Contains("JSON") || ex.Message.Contains("parse"))
+            return "Previous response had invalid JSON format. Ensure all string values are double-quoted.";
+        return $"Previous attempt failed: {ex.Message}. Please retry with a corrected approach.";
     }
 
     void IDisposable.Dispose()
@@ -254,6 +303,14 @@ public sealed class ProviderEngine : IChatClient
 
         lock (_budgetLock)
         {
+            var today = DateTime.UtcNow.Date;
+            if (_lastResetUtc < today)
+            {
+                _dailySpent = 0;
+                _lastResetUtc = today;
+                _logger.LogInformation("Budget reset for {Date}", today);
+            }
+
             if (_dailySpent >= ai.DailyBudgetUsd)
                 throw new InvalidOperationException(
                     $"Daily budget exceeded: {_dailySpent:F2} / {ai.DailyBudgetUsd} USD. Reset at midnight UTC.");

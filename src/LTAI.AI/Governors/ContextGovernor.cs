@@ -49,10 +49,37 @@ public sealed class ContextGovernor : LayerGovernor
 
     public string CompressHistory()
     {
-        if (_turnHistory.Count == 0) return "";
-        var summary = string.Join("\n", _turnHistory.Select(t => $"Q: {t.prompt[..Math.Min(t.prompt.Length, 100)]}\nA: {t.response[..Math.Min(t.response.Length, 100)]}"));
-        return summary;
+        return TieredCompressHistory();
     }
+
+    public string TieredCompressHistory(int recentFull = 2, int summaryRange = 4)
+    {
+        if (_turnHistory.Count == 0) return "";
+
+        var turns = _turnHistory.ToList();
+        var parts = new List<string>();
+
+        for (int i = 0; i < turns.Count; i++)
+        {
+            var distanceFromEnd = turns.Count - 1 - i;
+            var (prompt, response) = turns[i];
+
+            if (distanceFromEnd < recentFull)
+            {
+                parts.Add($"Q: {prompt[..Math.Min(prompt.Length, 200)]}\nA: {response[..Math.Min(response.Length, 200)]}");
+            }
+            else if (distanceFromEnd < recentFull + summaryRange)
+            {
+                var qSummary = prompt.Length > 80 ? prompt[..77] + "..." : prompt;
+                var rSummary = response.Length > 80 ? response[..77] + "..." : response;
+                parts.Add($"[summary] Q: {qSummary} A: {rSummary}");
+            }
+        }
+
+        return string.Join("\n", parts);
+    }
+
+    public int GetHistoryTurnCount() => _turnHistory.Count;
 
     private async Task<string> PreloadKnowledgeAsync(string query, CancellationToken cancellationToken)
     {

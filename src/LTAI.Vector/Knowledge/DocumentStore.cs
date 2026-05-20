@@ -207,6 +207,38 @@ public sealed class DocumentStore : IDisposable
         return RrfMerge(ftsResults, vectorResults).Take(topK).ToList();
     }
 
+    public async Task<List<KnowledgeSearchResult>> SearchWithRerank(string query, string? domain = null, int topK = 10)
+    {
+        var ftsResults = SearchFts(query, domain, topK * 3);
+        var vectorResults = await SearchVectorAsync(query, topK * 3);
+        var merged = RrfMerge(ftsResults, vectorResults).Take(topK * 2).ToList();
+
+        var scoredDocs = merged.Select(r => new Bm25ScoredDoc
+        {
+            Id = r.Id, Content = r.Content ?? "",
+            Bm25Score = r.Score, VectorScore = r.Score, RrfScore = r.Score, Source = r.Source
+        }).ToList();
+
+        var reranked = CodeSearchReranker.Rerank(scoredDocs, query).Take(topK).ToList();
+
+        var result = new List<KnowledgeSearchResult>();
+        foreach (var doc in reranked)
+        {
+            var orig = merged.FirstOrDefault(m => m.Id == doc.Id);
+            result.Add(new KnowledgeSearchResult
+            {
+                Id = doc.Id,
+                Title = orig?.Title ?? "",
+                Content = doc.Content,
+                Domain = orig?.Domain ?? "",
+                Score = doc.RrfScore,
+                Source = "reranked",
+                ChunkIndex = orig?.ChunkIndex ?? 0
+            });
+        }
+        return result;
+    }
+
     public List<KnowledgeSearchResult> SearchFts(string query, string? domain = null, int limit = 20)
     {
         var results = new List<KnowledgeSearchResult>();

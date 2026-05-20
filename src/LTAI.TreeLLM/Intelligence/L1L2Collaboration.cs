@@ -213,12 +213,11 @@ public sealed partial class L1L2Collaboration
 
     private static Task<string> HandleFileNeed(Need need)
     {
-        var result = "File operation placeholder";
         if (need.Params.TryGetValue("path", out var path))
-            result = $"Would read file: {path}";
+            return Task.FromResult($"Use filesystem_read tool to read: {path}");
         if (need.Params.TryGetValue("content", out var content))
-            result = $"Would write to file with content length: {content.Length}";
-        return Task.FromResult(result);
+            return Task.FromResult($"Use filesystem_write tool to write {content.Length} chars");
+        return Task.FromResult("Use filesystem tools (filesystem_read/filesystem_write) for file operations.");
     }
 
     private static Task<string> HandleToolNeed(Need need, Func<string, string, Task<string>>? l1ChatFn)
@@ -235,7 +234,7 @@ public sealed partial class L1L2Collaboration
         {
             if (l1ChatFn != null)
                 return await l1ChatFn($"Knowledge retrieval: {query}", "l1");
-            return $"Vector search placeholder for: {query}";
+            return "Use the km_search or vector_search tools for knowledge retrieval.";
         }
         return "Knowledge need: no query specified";
     }

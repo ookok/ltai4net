@@ -42,7 +42,44 @@ public static class GovernorUtilities
             label = complexity > 0.5f ? "deep" : "fast";
         }
 
+        if (IsReviewQuery(q))
+        {
+            var agent = GetReviewRoute(q);
+            if (agent != null)
+                label = $"review:{agent}";
+        }
+
         return (MathF.Round(complexity, 2), label);
+    }
+
+    private static bool IsReviewQuery(string query)
+    {
+        return System.Text.RegularExpressions.Regex.IsMatch(query, @"(?:review|审查|检查|check\s+(?:code|this|my)|analyze\s+(?:code|this)|look\s+good|重构|refactor|simplify|简化|comment|注释|test\s+(?:coverage|quality)|error\s+handling|catch\s+block|type\s+design)",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+    }
+
+    private static readonly (string[] Triggers, string Agent)[] ReviewRoutes =
+    [
+        (new[] { "comment", "注释", "docstring", "///" }, "comment-analyzer"),
+        (new[] { "test", "tests", "coverage", "单元测试", "测试", "spec" }, "test-analyzer"),
+        (new[] { "error handling", "catch", "silent failure", "异常", "try", "错误处理" }, "silent-failure-hunter"),
+        (new[] { "type design", "class", "invariant", "类型设计", "encapsulation", "封装" }, "type-design-analyzer"),
+        (new[] { "simplify", "refactor", "clearer", "clean up", "重构", "简化", "精简" }, "code-simplifier"),
+        (new[] { "review", "check code", "look good", "审查", "检查" }, "code-reviewer"),
+    ];
+
+    private static string? GetReviewRoute(string query)
+    {
+        var q = query.ToLowerInvariant();
+        foreach (var (triggers, agent) in ReviewRoutes)
+        {
+            foreach (var trigger in triggers)
+            {
+                if (q.Contains(trigger.ToLowerInvariant()))
+                    return agent;
+            }
+        }
+        return null;
     }
 
     // ── Emotion Detection ──

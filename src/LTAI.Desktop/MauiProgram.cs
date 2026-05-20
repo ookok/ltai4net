@@ -4,6 +4,7 @@ using LTAI.Capability;
 using LTAI.Core;
 using LTAI.Core.Configuration;
 using LTAI.DNA;
+using LTAI.MAF;
 using LTAI.Metrics;
 using LTAI.Vector;
 using Microsoft.Extensions.Configuration;
@@ -49,6 +50,7 @@ public static class MauiProgram
         services.AddLTAIDNA();
         services.AddLTAICapability();
         services.AddLTAIMetrics();
+        services.AddLTAIMAF();
 
         services.AddSingleton<LTAIService>();
 

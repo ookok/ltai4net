@@ -1,0 +1,45 @@
+{
+  "dataDirectory": ".livingtree",
+  "pluginDirectories": [".livingtree/plugins"],
+  "middleware": {
+    "autoDiscover": true,
+    "pipeline": [
+      "prompt_shield",
+      "input_classifier",
+      "dna_safety",
+      "tool_governance",
+      "output_review"
+    ]
+  },
+  "agents": [
+    {
+      "name": "general",
+      "a2aPath": "/a2a/livingtree"
+    },
+    {
+      "name": "code",
+      "a2aPath": "/a2a/code",
+      "tools": ["code_*", "git_*"]
+    },
+    {
+      "name": "eia",
+      "a2aPath": "/a2a/eia",
+      "tools": ["eia_*", "gis_*"]
+    }
+  ],
+  "tools": {
+    "categories": [
+      { "category": "filesystem", "enabled": true },
+      { "category": "shell", "enabled": true, "disabledTools": [] },
+      { "category": "http", "enabled": true },
+      { "category": "math", "enabled": true },
+      { "category": "text", "enabled": true },
+      { "category": "data", "enabled": true },
+      { "category": "datetime", "enabled": true },
+      { "category": "code", "enabled": true },
+      { "category": "env", "enabled": true },
+      { "category": "websearch", "enabled": true },
+      { "category": "git", "enabled": true }
+    ]
+  }
+}

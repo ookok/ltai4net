@@ -22,6 +22,7 @@
     <ProjectReference Include="..\LTAI.Capability\LTAI.Capability.csproj" />
     <ProjectReference Include="..\LTAI.Vector\LTAI.Vector.csproj" />
     <ProjectReference Include="..\LTAI.Memory\LTAI.Memory.csproj" />
+    <ProjectReference Include="..\LTAI.MAF\LTAI.MAF.csproj" />
   </ItemGroup>
 
 </Project>

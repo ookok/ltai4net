@@ -60,7 +60,7 @@ public partial class ChatPage : ContentPage
             using var http = new HttpClient { BaseAddress = new Uri("http://localhost:8080") };
             var json = JsonSerializer.Serialize(new { query });
             var content = new StringContent(json, Encoding.UTF8, "application/json");
-            var request = new HttpRequestMessage(HttpMethod.Post, "/api/chat/stream") { Content = content };
+            var request = new HttpRequestMessage(HttpMethod.Post, "/api/maf/stream") { Content = content };
 
             var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, _streamCts.Token);
             using var stream = await response.Content.ReadAsStreamAsync();

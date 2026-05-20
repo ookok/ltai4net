@@ -91,4 +91,13 @@ public sealed class TaskJournal
     {
         return _decisionQueue.TryDequeue(out decision);
     }
+
+    public void Clear()
+    {
+        while (_entries.TryTake(out _)) { }
+        while (_humanMessages.TryDequeue(out _)) { }
+        while (_decisionQueue.TryDequeue(out _)) { }
+        _paused = false;
+        _logger.LogInformation("Journal cleared");
+    }
 }

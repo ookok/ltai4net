@@ -107,7 +107,7 @@
             using var http = new HttpClient();
             var json = System.Text.Json.JsonSerializer.Serialize(new { query });
             var content = new StringContent(json, System.Text.Encoding.UTF8, "application/json");
-            var request = new HttpRequestMessage(HttpMethod.Post, "/api/chat/stream") { Content = content };
+            var request = new HttpRequestMessage(HttpMethod.Post, "/api/maf/stream") { Content = content };
 
             var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, _streamCts.Token);
             using var stream = await response.Content.ReadAsStreamAsync();

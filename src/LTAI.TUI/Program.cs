@@ -9,6 +9,7 @@ using LTAI.Core;
 using LTAI.Core.Configuration;
 using LTAI.Core.System;
 using LTAI.DNA;
+using LTAI.MAF;
 using LTAI.Memory;
 using LTAI.TUI;
 using LTAI.Vector;
@@ -54,6 +55,7 @@ services.AddLTAIAI();
 services.AddLTAIMemory();
 services.AddLTAIDNA();
 services.AddLTAICapability();
+services.AddLTAIMAF();
 
 var sp = services.BuildServiceProvider();
 var lts = sp.GetRequiredService<LivingTreeSystem>();
