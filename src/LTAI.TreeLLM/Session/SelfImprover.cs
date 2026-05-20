@@ -330,7 +330,7 @@ public sealed class SelfImprover
                 }
             }
         }
-        catch { }
+        catch { /* non-fatal */ }
     }
 
     private bool ApplyInnovation(Innovation innovation)

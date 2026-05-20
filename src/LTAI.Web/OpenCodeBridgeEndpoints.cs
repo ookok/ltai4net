@@ -62,9 +62,7 @@ public static class OpenCodeBridgeEndpoints
                     }
                 }
             }
-            catch
-            {
-            }
+            catch { /* non-fatal */ }
         }
 
         _opencodeAvailable = false;
@@ -372,9 +370,7 @@ public static class OpenCodeBridgeEndpoints
                 }
             }
         }
-        catch
-        {
-        }
+        catch { /* non-fatal */ }
         return results;
     }
 }

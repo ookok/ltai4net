@@ -35,7 +35,7 @@ public sealed class OCREngine
     {
         var tmp = Path.GetTempFileName() + ".png";
         try { await File.WriteAllBytesAsync(tmp, imageBytes, ct); return await ExtractTextAsync(tmp, language, ct); }
-        finally { try { File.Delete(tmp); } catch { } }
+        finally { try { File.Delete(tmp); } catch { /* non-fatal */ } }
     }
 }
 
@@ -79,7 +79,7 @@ public sealed class SpeechEngine
         try
         {
             var synth = new System.Speech.Synthesis.SpeechSynthesizer();
-            if (voice != null) try { synth.SelectVoice(voice); } catch { }
+            if (voice != null) try { synth.SelectVoice(voice); } catch { /* non-fatal */ }
             using var ms = new MemoryStream();
             synth.SetOutputToWaveStream(ms);
             synth.Speak(text);

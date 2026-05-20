@@ -83,9 +83,7 @@ public sealed class ActivityFeed
                 {
                     subscriber(activityEvent);
                 }
-                catch
-                {
-                }
+                catch { /* non-fatal */ }
             }
         }
 

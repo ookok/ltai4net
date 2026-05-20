@@ -66,7 +66,7 @@ public sealed class ProcessSandbox : ISandbox
             }
             catch (OperationCanceledException)
             {
-                try { process.Kill(entireProcessTree: true); } catch { }
+                try { process.Kill(entireProcessTree: true); } catch { /* non-fatal */ }
                 sw.Stop();
                 return new SandboxResult
                 {
@@ -80,7 +80,7 @@ public sealed class ProcessSandbox : ISandbox
             Cleanup(tempFile);
 
             var memKb = 0L;
-            try { memKb = process.PeakWorkingSet64 / 1024; } catch { }
+            try { memKb = process.PeakWorkingSet64 / 1024; } catch { /* non-fatal */ }
 
             return new SandboxResult
             {
@@ -152,7 +152,7 @@ public sealed class ProcessSandbox : ISandbox
     {
         if (tempFile != null)
         {
-            try { File.Delete(tempFile); } catch { }
+            try { File.Delete(tempFile); } catch { /* non-fatal */ }
         }
     }
 

@@ -724,7 +724,7 @@ public sealed class ExternalAccess
                 }
             }
         }
-        catch { }
+        catch { /* non-fatal */ }
 
         var waybackContent = await _tryWayback(url, cancellationToken);
         if (waybackContent is not null)

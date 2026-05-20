@@ -275,7 +275,7 @@ public sealed class ShellEnv
             var completed = proc.WaitForExit(timeoutSec * 1000);
             if (!completed)
             {
-                try { proc.Kill(entireProcessTree: true); } catch { }
+                try { proc.Kill(entireProcessTree: true); } catch { /* non-fatal */ }
 
                 lock (_statsLock) { _runCount++; }
                 return new ShellResult
@@ -348,7 +348,7 @@ public sealed class ShellEnv
         }
         finally
         {
-            try { File.Delete(tempFile); } catch { }
+            try { File.Delete(tempFile); } catch { /* non-fatal */ }
         }
     }
 

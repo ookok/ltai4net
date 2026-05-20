@@ -41,7 +41,7 @@ public sealed class NotificationService
             CreateNoWindow = true,
             UseShellExecute = false
         };
-        try { System.Diagnostics.Process.Start(psi)?.WaitForExit(2000); } catch { }
+        try { System.Diagnostics.Process.Start(psi)?.WaitForExit(2000); } catch { /* non-fatal */ }
     }
 
     private static void NotifyMacOS(string title, string body)
@@ -50,7 +50,7 @@ public sealed class NotificationService
         {
             CreateNoWindow = true, UseShellExecute = false
         };
-        try { System.Diagnostics.Process.Start(psi)?.WaitForExit(2000); } catch { }
+        try { System.Diagnostics.Process.Start(psi)?.WaitForExit(2000); } catch { /* non-fatal */ }
     }
 
     private static void NotifyLinux(string title, string body)
@@ -59,7 +59,7 @@ public sealed class NotificationService
         {
             CreateNoWindow = true, UseShellExecute = false
         };
-        try { System.Diagnostics.Process.Start(psi)?.WaitForExit(2000); } catch { }
+        try { System.Diagnostics.Process.Start(psi)?.WaitForExit(2000); } catch { /* non-fatal */ }
     }
 }
 

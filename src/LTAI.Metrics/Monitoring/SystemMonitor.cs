@@ -76,9 +76,7 @@ namespace LTAI.Metrics.Monitoring
             {
                 totalPhysicalMemory = GC.GetGCMemoryInfo().TotalAvailableMemoryBytes;
             }
-            catch
-            {
-            }
+            catch { /* non-fatal */ }
 
             double memoryPercent = (double)GC.GetTotalMemory(false) / totalPhysicalMemory * 100;
             double diskPercent = 0;

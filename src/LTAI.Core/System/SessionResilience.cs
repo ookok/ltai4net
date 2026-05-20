@@ -52,9 +52,7 @@ public sealed class SessionResilience
                 if (ageH < MaxSessionAgeHours)
                     _active[snap.SessionId] = snap;
             }
-            catch
-            {
-            }
+            catch { /* non-fatal */ }
         }
     }
 
@@ -144,9 +142,7 @@ public sealed class SessionResilience
                     _active.Remove(Path.GetFileNameWithoutExtension(f.Name));
                 }
             }
-            catch
-            {
-            }
+            catch { /* non-fatal */ }
         }
     }
 

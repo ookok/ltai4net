@@ -271,7 +271,7 @@ public sealed class MetaStrategyEngine
                 _entropyScheduler.StepForward();
             }
         }
-        catch { }
+        catch { /* non-fatal */ }
 
         lock (_lock)
         {

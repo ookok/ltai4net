@@ -68,7 +68,7 @@ public sealed class FileHistoryStore : ChatHistoryStore
                 var s = JsonSerializer.Deserialize<ChatSession>(json);
                 if (s != null) sessions.Add(s);
             }
-            catch { }
+            catch { /* non-fatal */ }
         }
         return sessions;
     }

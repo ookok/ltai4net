@@ -98,9 +98,7 @@ public sealed class SessionManager
                 if (!string.IsNullOrEmpty(state.SessionId))
                     result[state.SessionId] = state;
             }
-            catch
-            {
-            }
+            catch { /* non-fatal */ }
         }
 
         var filtered = includeArchived
@@ -192,9 +190,7 @@ public sealed class SessionManager
                     removed++;
                 }
             }
-            catch
-            {
-            }
+            catch { /* non-fatal */ }
         }
 
         _logger?.LogInformation("Cleaned up {Count} sessions older than {Days} days", removed, maxAgeDays);

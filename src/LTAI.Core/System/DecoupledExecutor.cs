@@ -238,7 +238,7 @@ public sealed class DecoupledExecutor
                     if (exp != null)
                         _virtualExperiences.Enqueue(exp);
                 }
-                catch { }
+                catch { /* non-fatal */ }
             });
         }
     }

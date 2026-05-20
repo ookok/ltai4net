@@ -92,7 +92,7 @@ public sealed class TuiApp
             var currentFont = ConsoleFont.GetCurrentFont();
             AnsiConsole.MarkupLine($"[grey]Font: {currentFont}[/]");
         }
-        catch { }
+        catch { /* non-fatal */ }
 
         AnsiConsole.Write(new Rule("LivingTree AI Agent — Dev Console"));
         AnsiConsole.MarkupLine("[grey]Recommended: Maple Mono NF | Press ? for help, Ctrl+T theme[/]");
@@ -692,7 +692,7 @@ public sealed class TuiApp
                         var functions = System.Text.RegularExpressions.Regex.Matches(code, ext == ".cs" ? @"\b(\w+)\s*\(.*\)\s*\{?" : @"def (\w+)\(");
                         node.AddNode($"[blue]{functions.Count} functions detected[/]");
                     }
-                    catch { }
+                    catch { /* non-fatal */ }
                 }
             }
             else

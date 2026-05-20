@@ -38,7 +38,7 @@ public sealed class DiffusionBridge
                 }
             }
         }
-        catch { }
+        catch { /* non-fatal */ }
 
         try
         {
@@ -63,7 +63,7 @@ public sealed class DiffusionBridge
                 }
             }
         }
-        catch { }
+        catch { /* non-fatal */ }
 
         return result;
     }

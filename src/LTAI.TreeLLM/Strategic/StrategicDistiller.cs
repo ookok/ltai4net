@@ -109,9 +109,7 @@ public sealed class StrategicDistiller
 
             await Task.Run(() => Persist(), ct);
         }
-        catch (OperationCanceledException)
-        {
-        }
+        catch (OperationCanceledException) { /* cancelled */ }
 
         sw.Stop();
 
@@ -231,9 +229,7 @@ public sealed class StrategicDistiller
 
             File.WriteAllText(PersistPath, json);
         }
-        catch
-        {
-        }
+        catch { /* non-fatal */ }
     }
 
     private void LoadPersisted()
@@ -258,8 +254,6 @@ public sealed class StrategicDistiller
                 }
             }
         }
-        catch
-        {
-        }
+        catch { /* non-fatal */ }
     }
 }

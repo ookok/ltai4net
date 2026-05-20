@@ -36,7 +36,7 @@ public sealed class FfmpegMediaProcessor
                 using var process = global::System.Diagnostics.Process.Start(startInfo);
                 if (process != null) { process.WaitForExit(5000); if (process.ExitCode == 0) return name; }
             }
-            catch { }
+            catch { /* non-fatal */ }
         }
 
         var commonPaths = new[]
@@ -95,7 +95,7 @@ public sealed class FfmpegMediaProcessor
                 if (global::System.IO.File.Exists(inputFile)) global::System.IO.File.Delete(inputFile);
                 if (global::System.IO.File.Exists(outputFile)) global::System.IO.File.Delete(outputFile);
             }
-            catch { }
+            catch { /* non-fatal */ }
         }
     }
 
@@ -137,7 +137,7 @@ public sealed class FfmpegMediaProcessor
                 if (global::System.IO.File.Exists(inputFile)) global::System.IO.File.Delete(inputFile);
                 if (global::System.IO.File.Exists(outputFile)) global::System.IO.File.Delete(outputFile);
             }
-            catch { }
+            catch { /* non-fatal */ }
         }
     }
 }

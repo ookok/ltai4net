@@ -69,7 +69,7 @@ public sealed class DockerSandbox : ISandbox
             }
             catch (OperationCanceledException)
             {
-                try { await _docker.Containers.KillContainerAsync(createResp.ID, new ContainerKillParameters(), cancellationToken); } catch { }
+                try { await _docker.Containers.KillContainerAsync(createResp.ID, new ContainerKillParameters(), cancellationToken); } catch { /* non-fatal */ }
             }
 
             var logStream = await _docker.Containers.GetContainerLogsAsync(createResp.ID, false, new ContainerLogsParameters
@@ -79,7 +79,7 @@ public sealed class DockerSandbox : ISandbox
 
             var (stdout, stderr) = await ReadMultiplexedStreamAsync(logStream, cancellationToken);
 
-            try { await _docker.Containers.RemoveContainerAsync(createResp.ID, new ContainerRemoveParameters { Force = true }, CancellationToken.None); } catch { }
+            try { await _docker.Containers.RemoveContainerAsync(createResp.ID, new ContainerRemoveParameters { Force = true }, CancellationToken.None); } catch { /* non-fatal */ }
 
             sw.Stop();
             return new SandboxResult

@@ -591,9 +591,7 @@ public sealed class UserModel
                         parts.Add(personaCtx);
                     }
                 }
-                catch
-                {
-                }
+                catch { /* non-fatal */ }
             }
 
             if (!string.IsNullOrEmpty(role) && role != "system")
@@ -787,9 +785,7 @@ public sealed class UserModel
             File.WriteAllText(UserModelFile, json, Encoding.UTF8);
             _synced = true;
         }
-        catch
-        {
-        }
+        catch { /* non-fatal */ }
     }
 
     private static UserProfile Load()
@@ -807,9 +803,7 @@ public sealed class UserModel
                     return profile;
             }
         }
-        catch
-        {
-        }
+        catch { /* non-fatal */ }
 
         return new UserProfile(
             Corrections: [],

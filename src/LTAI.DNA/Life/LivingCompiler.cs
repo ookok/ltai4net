@@ -75,7 +75,7 @@ public sealed class LivingCompiler
         foreach (var toolCall in path.ToolCalls)
         {
             try { await hubChat(toolCall); }
-            catch { }
+            catch { /* non-fatal */ }
         }
 
         if (!string.IsNullOrEmpty(path.ResponseTemplate))

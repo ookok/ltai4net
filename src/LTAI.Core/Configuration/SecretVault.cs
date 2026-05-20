@@ -170,7 +170,7 @@ public sealed class SecretVault
                     }
                     Save();
                 }
-                catch { }
+                catch { /* non-fatal */ }
             }
 
             _loaded = true;

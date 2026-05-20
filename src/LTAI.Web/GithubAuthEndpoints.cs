@@ -302,9 +302,7 @@ public static class GithubAuthEndpoints
             if (_storedToken != null)
                 _accessToken = _storedToken.AccessToken;
         }
-        catch
-        {
-        }
+        catch { /* non-fatal */ }
     }
 
     private static void SaveToken()
@@ -319,9 +317,7 @@ public static class GithubAuthEndpoints
             var json = JsonSerializer.Serialize(_storedToken);
             File.WriteAllText(tokenFile, json, Encoding.UTF8);
         }
-        catch
-        {
-        }
+        catch { /* non-fatal */ }
     }
 }
 

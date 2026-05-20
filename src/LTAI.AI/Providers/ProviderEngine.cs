@@ -15,6 +15,7 @@ public sealed class ProviderEngine : IChatClient
     private readonly IOptions<LTAIOptions> _options;
     private readonly ILogger<ProviderEngine> _logger;
     private decimal _dailySpent;
+    private readonly object _budgetLock = new();
 
     public ProviderEngine(IOptions<LTAIOptions> options, ILogger<ProviderEngine> logger)
     {
@@ -240,22 +241,33 @@ public sealed class ProviderEngine : IChatClient
                     return content.GetString();
             }
         }
-        catch { }
+        catch { /* non-fatal */ }
         return null;
     }
 
     private void CheckBudget()
     {
         var ai = _options.Value.AI;
-        if (ai.DailyBudgetUsd <= 0 || _dailySpent < ai.DailyBudgetUsd)
+        if (ai.DailyBudgetUsd <= 0)
             return;
 
-        throw new InvalidOperationException(
-            $"Daily budget exceeded: {_dailySpent:F2} / {ai.DailyBudgetUsd} USD. Reset at midnight UTC.");
+        lock (_budgetLock)
+        {
+            if (_dailySpent >= ai.DailyBudgetUsd)
+                throw new InvalidOperationException(
+                    $"Daily budget exceeded: {_dailySpent:F2} / {ai.DailyBudgetUsd} USD. Reset at midnight UTC.");
+        }
     }
 
     private void EstimateCost(int tokens)
     {
-        _logger.LogDebug("Tokens used: {Tokens}, daily total: {Daily:F2}", tokens, _dailySpent);
+        const double defaultCostPer1K = 0.002;
+        var cost = tokens / 1000.0 * defaultCostPer1K;
+        lock (_budgetLock)
+        {
+            _dailySpent += (decimal)cost;
+        }
+        _logger.LogDebug("Tokens used: {Tokens}, cost: ${Cost:F4}, daily total: ${Daily:F2}",
+            tokens, cost, _dailySpent);
     }
 }

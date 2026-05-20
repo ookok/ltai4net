@@ -505,9 +505,7 @@ public sealed class GlobalRulePool
                 return string.Join('\n', matches.Select(m => m.Value));
             }
         }
-        catch (RegexParseException)
-        {
-        }
+        catch (RegexParseException) { /* invalid regex pattern */ }
 
         return text;
     }
@@ -522,9 +520,7 @@ public sealed class GlobalRulePool
             var result = Regex.Replace(text, rule.MatchPattern, "", RegexOptions.Multiline);
             return Regex.Replace(result, @"\n{3,}", "\n\n");
         }
-        catch (RegexParseException)
-        {
-        }
+        catch (RegexParseException) { /* invalid regex pattern */ }
 
         return text;
     }
@@ -538,9 +534,7 @@ public sealed class GlobalRulePool
         {
             return Regex.Replace(text, rule.ReplacePattern, rule.ReplaceWith, RegexOptions.Multiline);
         }
-        catch (RegexParseException)
-        {
-        }
+        catch (RegexParseException) { /* invalid regex pattern */ }
 
         return text;
     }

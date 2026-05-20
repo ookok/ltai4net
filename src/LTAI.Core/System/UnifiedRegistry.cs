@@ -156,7 +156,7 @@ public sealed class UnifiedRegistry
         if (!_subscriptions.TryGetValue(type, out var callbacks)) return;
         foreach (var cb in callbacks)
         {
-            try { cb(item); } catch { }
+            try { cb(item); } catch { /* non-fatal */ }
         }
     }
 }

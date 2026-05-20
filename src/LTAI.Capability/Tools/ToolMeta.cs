@@ -79,7 +79,7 @@ Return JSON: {{""consensus"": ""..."" , ""summary"": ""...""}}";
             consensus = json.TryGetProperty("consensus", out var c) ? c.GetString() ?? consensus : consensus;
             summary = json.TryGetProperty("summary", out var s) ? s.GetString() ?? summary : summary;
         }
-        catch { }
+        catch { /* non-fatal */ }
 
         return new DebateResult(topic, rounds, positions, consensus, voting, summary);
     }

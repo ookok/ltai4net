@@ -215,7 +215,7 @@ public sealed class TaskStateManager
             foreach (var f in global::System.IO.Directory.GetFiles(_dataDir, "task_*.json"))
                 taskFiles.Add((f, global::System.IO.File.GetLastWriteTimeUtc(f)));
         }
-        catch { }
+        catch { /* non-fatal */ }
 
         if (taskFiles.Count == 0) return null;
         taskFiles.Sort((a, b) => b.mtime.CompareTo(a.mtime));
@@ -261,7 +261,7 @@ public sealed class TaskStateManager
                 }
             }
         }
-        catch { }
+        catch { /* non-fatal */ }
         return tasks.OrderByDescending(t => (double)(t["percent"] ?? 0)).ToList();
     }
 
@@ -323,6 +323,6 @@ public sealed class TaskStateManager
         {
             global::System.IO.File.AppendAllText(path, entry);
         }
-        catch { }
+        catch { /* non-fatal */ }
     }
 }

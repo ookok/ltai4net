@@ -125,6 +125,6 @@ public sealed class LazyIndex
                 _totalSections += _index[docId].Count;
             }
         }
-        catch { }
+        catch { /* non-fatal */ }
     }
 }

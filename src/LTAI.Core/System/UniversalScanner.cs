@@ -129,7 +129,7 @@ public sealed class UniversalScanner
                 return endpoint;
             }
         }
-        catch { }
+        catch { /* non-fatal */ }
 
         var openaiEndpoint = await ProbeOpenAI(endpoint, url, CancellationToken.None);
         if (openaiEndpoint.IsAlive) return openaiEndpoint;
@@ -161,7 +161,7 @@ public sealed class UniversalScanner
                 }
             }
         }
-        catch { }
+        catch { /* non-fatal */ }
 
         return endpoint with { IsAlive = false };
     }
@@ -187,7 +187,7 @@ public sealed class UniversalScanner
                         }
                     }
                 }
-                catch { }
+                catch { /* non-fatal */ }
 
                 if (models.Count > 0)
                 {
@@ -208,7 +208,7 @@ public sealed class UniversalScanner
                 }
             }
         }
-        catch { }
+        catch { /* non-fatal */ }
 
         return endpoint;
     }

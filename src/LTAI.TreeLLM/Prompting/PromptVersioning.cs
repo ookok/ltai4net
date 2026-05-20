@@ -248,7 +248,7 @@ public sealed class PromptVersionManager
                 }
             }
         }
-        catch { }
+        catch { /* non-fatal */ }
     }
 
     private void SaveUsage()

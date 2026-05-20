@@ -272,7 +272,7 @@ public sealed class ContextMoE
             LoadDict(doc, "cold", _cold, ExpertLayer.Cold);
             LoadDict(doc, "deep", _deep, ExpertLayer.Deep);
         }
-        catch { }
+        catch { /* non-fatal */ }
     }
 
     private static void LoadBlocks(JsonElement doc, string key, List<MoEMemoryBlock> target, ExpertLayer layer)

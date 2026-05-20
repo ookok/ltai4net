@@ -92,7 +92,7 @@ public sealed class CodeGraphEnhanced : IDisposable
             await Task.Run(() =>
             {
                 try { ParseFile(file); }
-                catch { }
+                catch { /* non-fatal */ }
                 var done = Interlocked.Increment(ref processed);
                 onProgress?.Invoke(done, _totalFiles);
             }, ct);

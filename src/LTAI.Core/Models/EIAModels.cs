@@ -17,11 +17,11 @@ public static class EIAEngine
     public static Dictionary<string, double> RunAll(Dictionary<string, object> inputs)
     {
         var results = new Dictionary<string, double>();
-        try { if (inputs.TryGetValue("plume", out _)) results["plume"] = AtmosphericGaussianPlume(inputs); } catch { }
-        try { if (inputs.TryGetValue("do", out _)) results["do"] = WaterQualityDO(inputs); } catch { }
-        try { if (inputs.TryGetValue("noise", out _)) results["noise"] = NoiseLevel(inputs); } catch { }
-        try { if (inputs.TryGetValue("co2", out _)) results["co2e"] = CarbonCO2Equivalent(inputs); } catch { }
-        try { if (inputs.TryGetValue("npv", out _)) results["npv"] = SocioNPV(inputs); } catch { }
+        try { if (inputs.TryGetValue("plume", out _)) results["plume"] = AtmosphericGaussianPlume(inputs); } catch { /* non-fatal */ }
+        try { if (inputs.TryGetValue("do", out _)) results["do"] = WaterQualityDO(inputs); } catch { /* non-fatal */ }
+        try { if (inputs.TryGetValue("noise", out _)) results["noise"] = NoiseLevel(inputs); } catch { /* non-fatal */ }
+        try { if (inputs.TryGetValue("co2", out _)) results["co2e"] = CarbonCO2Equivalent(inputs); } catch { /* non-fatal */ }
+        try { if (inputs.TryGetValue("npv", out _)) results["npv"] = SocioNPV(inputs); } catch { /* non-fatal */ }
         return results;
     }
 

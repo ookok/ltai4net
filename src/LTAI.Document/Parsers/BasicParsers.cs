@@ -34,9 +34,7 @@ public sealed class JsonParser : IDocumentParser
             else if (rootKind == JsonValueKind.Object)
                 metadata["object_keys"] = doc.RootElement.EnumerateObject().Count().ToString();
         }
-        catch
-        {
-        }
+        catch { /* non-fatal */ }
 
         return ParseResult.Ok(filePath, "json", "json", text, metadata);
     }
@@ -67,9 +65,7 @@ public sealed class XmlParser : IDocumentParser
             metadata["root_element"] = doc.Root?.Name.LocalName ?? "unknown";
             metadata["elements"] = doc.Descendants().Count().ToString();
         }
-        catch
-        {
-        }
+        catch { /* non-fatal */ }
 
         return ParseResult.Ok(filePath, "xml", "xml", text, metadata);
     }

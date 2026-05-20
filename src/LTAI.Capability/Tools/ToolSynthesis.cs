@@ -88,7 +88,7 @@ The code must contain a function called 'execute' that takes params as arguments
             var loaded = JsonSerializer.Deserialize<Dictionary<string, SynthesizedTool>>(json);
             lock (_lock) { if (loaded != null) _registry = loaded; }
         }
-        catch { }
+        catch { /* non-fatal */ }
     }
 
     private void SaveRegistry()

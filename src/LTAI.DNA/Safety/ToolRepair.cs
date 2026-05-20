@@ -60,7 +60,7 @@ public sealed class ToolRepair
                     return JsonSerializer.Deserialize<Dictionary<string, object>>(
                         match.Value, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
                 }
-                catch { }
+                catch { /* non-fatal */ }
             }
         }
 
@@ -131,7 +131,7 @@ public sealed class ToolRepair
                         }
                     }
                 }
-                catch { }
+                catch { /* non-fatal */ }
             }
 
             result[fullKey] = value switch

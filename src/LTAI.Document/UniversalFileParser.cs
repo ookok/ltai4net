@@ -99,9 +99,7 @@ public sealed class UniversalFileParser
                     return "sqlite";
             }
         }
-        catch
-        {
-        }
+        catch { /* non-fatal */ }
 
         return ext.TrimStart('.');
     }
@@ -133,9 +131,7 @@ public sealed class UniversalFileParser
             if (IsLikelyText(text))
                 return text;
         }
-        catch
-        {
-        }
+        catch { /* non-fatal */ }
 
         return null;
     }

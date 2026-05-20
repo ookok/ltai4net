@@ -213,7 +213,7 @@ public sealed class EntityRegistry
                 lock (_lock) { _entries[entry.Id] = entry; }
             }
         }
-        catch { }
+        catch { /* non-fatal */ }
     }
 
     private void SeedDefaults()

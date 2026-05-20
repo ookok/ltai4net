@@ -139,7 +139,7 @@ public sealed class MathReasoner
                 return true;
             }
         }
-        catch { }
+        catch { /* non-fatal */ }
 
         result = "";
         return false;

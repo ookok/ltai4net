@@ -224,7 +224,7 @@ public partial class ChatPage : ContentPage
                 InputEditor.Text = $"@{result.FullPath}";
             }
         }
-        catch { }
+        catch { /* non-fatal */ }
     }
 
     private async void OnBranch(object? sender, EventArgs e)

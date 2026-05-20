@@ -87,8 +87,8 @@ public class SelfHealer
             {
                 await _monitorTask;
             }
-            catch (OperationCanceledException) { }
-            catch (Exception) { }
+            catch (OperationCanceledException) { /* cancelled */ }
+            catch (Exception) { /* non-fatal */ }
         }
 
         _monitorTask = null;

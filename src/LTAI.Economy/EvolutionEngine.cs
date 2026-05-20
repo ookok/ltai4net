@@ -258,9 +258,7 @@ public sealed class EvolutionEngine
             {
                 break;
             }
-            catch
-            {
-            }
+            catch { /* non-fatal */ }
         }
 
         ClassifyDiversityIslands(candidates);

@@ -94,7 +94,6 @@ builder.Services.AddHealthChecks()
 builder.Services.AddLTAICore();
 builder.Services.AddLTAIVector();
 builder.Services.AddLTAIAI();
-builder.Services.AddLTAIVector();
 builder.Services.AddLTAIDocument();
 builder.Services.AddLTAIDNA();
 builder.Services.AddLTAIMemory();
@@ -105,9 +104,9 @@ builder.Services.AddLTAIEconomy();
 builder.Services.AddLTAISandbox();
 builder.Services.AddLTAIMetrics();
 builder.Services.AddLTAIMultimodal();
-builder.Services.AddLTAITreeLLM();
-builder.Services.AddLTAIExecution();
-builder.Services.AddLTAIMemory();
+builder.Services.AddLTAIBrowser();
+builder.Services.AddLTAIMAF();
+builder.Services.AddLTAINetwork();
 
 var app = builder.Build();
 

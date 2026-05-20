@@ -368,9 +368,7 @@ public static class CodeApiEndpoints
                 ));
             }
         }
-        catch
-        {
-        }
+        catch { /* non-fatal */ }
     }
 
     private static void SearchFiles(string root, string currentDir, string query, List<object> results)
@@ -405,14 +403,10 @@ public static class CodeApiEndpoints
                         }
                     }
                 }
-                catch
-                {
-                }
+                catch { /* non-fatal */ }
             }
         }
-        catch
-        {
-        }
+        catch { /* non-fatal */ }
     }
 
     private static string RunGitDiff(string path)

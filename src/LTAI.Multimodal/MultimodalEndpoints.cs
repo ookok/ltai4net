@@ -36,7 +36,7 @@ public static class MultimodalEndpoints
                 var result = await vision.DescribeImageAsync(tmp, task, ct);
                 return Results.Json(new { analysis = result });
             }
-            finally { try { File.Delete(tmp); } catch { } }
+            finally { try { File.Delete(tmp); } catch { /* non-fatal */ } }
         });
 
         endpoints.MapPost("/api/speech/tts", async (HttpContext context, SpeechEngine speech, CancellationToken ct) =>
@@ -68,7 +68,7 @@ public static class MultimodalEndpoints
                 var text = await speech.RecognizeFromFileAsync(tmp, ct);
                 return Results.Json(new { text });
             }
-            finally { try { File.Delete(tmp); } catch { } }
+            finally { try { File.Delete(tmp); } catch { /* non-fatal */ } }
         });
 
         endpoints.MapGet("/api/speech/voices", async (SpeechEngine speech, CancellationToken ct) =>
@@ -88,7 +88,7 @@ public static class MultimodalEndpoints
                 var result = await mm.ProcessFileAsync(tmp, task, ct);
                 return Results.Json(new { result, type = Path.GetExtension(file.FileName) });
             }
-            finally { try { File.Delete(tmp); } catch { } }
+            finally { try { File.Delete(tmp); } catch { /* non-fatal */ } }
         });
     }
 }

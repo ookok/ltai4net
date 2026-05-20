@@ -57,7 +57,7 @@ public sealed class WhisperSttEngine
                     return new WhisperTranscribeResult { Ok = true, Text = text, Language = DetectLanguage(text) };
             }
         }
-        catch { }
+        catch { /* non-fatal */ }
 
         return new WhisperTranscribeResult { Error = "Whisper model not available. Run: ollama pull whisper" };
     }

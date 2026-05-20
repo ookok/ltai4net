@@ -94,9 +94,7 @@ public sealed class MemoryTierManager
                 _memories[m.MemoryId] = m;
             }
         }
-        catch
-        {
-        }
+        catch { /* non-fatal */ }
     }
 
     private void Save()
@@ -313,9 +311,7 @@ public sealed class BlueprintHub
                 if (bp != null)
                     _blueprints[bp.BlueprintId] = bp;
             }
-            catch
-            {
-            }
+            catch { /* non-fatal */ }
         }
     }
 
@@ -357,9 +353,7 @@ public sealed class BlueprintHub
                 return true;
             }
         }
-        catch
-        {
-        }
+        catch { /* non-fatal */ }
         return false;
     }
 

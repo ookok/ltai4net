@@ -154,7 +154,7 @@ print(json.dumps(result, default=str))
         }
         finally
         {
-            try { Directory.Delete(tmpDir, true); } catch { }
+            try { Directory.Delete(tmpDir, true); } catch { /* non-fatal */ }
         }
     }
 }

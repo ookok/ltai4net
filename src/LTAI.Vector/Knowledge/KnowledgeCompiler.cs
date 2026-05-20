@@ -329,7 +329,7 @@ public sealed class KnowledgeCompiler
                     .Deserialize<List<string>>(clean) ?? existing;
             }
         }
-        catch { }
+        catch { /* non-fatal */ }
         return existing;
     }
 

@@ -77,7 +77,7 @@ public sealed class SignalBus
             foreach (var cb in subscribers)
             {
                 try { cb(signal); }
-                catch { }
+                catch { /* non-fatal */ }
             }
         }
     }

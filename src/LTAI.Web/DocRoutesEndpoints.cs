@@ -398,9 +398,7 @@ public static class DocRoutesEndpoints
                             relevance = r.Relevance
                         }));
                     }
-                    catch
-                    {
-                    }
+                    catch { /* non-fatal */ }
                 }
 
                 if (allResults.Count < maxResults)
@@ -418,9 +416,7 @@ public static class DocRoutesEndpoints
                             allResults.Add(new { source = "web", title = linkMatches[i].Groups[2].Value.Trim(), url = linkMatches[i].Groups[1].Value, snippet = "", relevance = 1.0 - i * 0.1 });
                         }
                     }
-                    catch
-                    {
-                    }
+                    catch { /* non-fatal */ }
                 }
 
                 if (Directory.Exists(DocsRoot))
@@ -442,9 +438,7 @@ public static class DocRoutesEndpoints
                                 });
                             }
                         }
-                        catch
-                        {
-                        }
+                        catch { /* non-fatal */ }
                     }
                 }
 

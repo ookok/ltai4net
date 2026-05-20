@@ -21,7 +21,7 @@ Console.InputEncoding = Encoding.UTF8;
 
 if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
 {
-    try { ConsoleFont.SetMapleMono(); } catch { }
+    try { ConsoleFont.SetMapleMono(); } catch { /* non-fatal */ }
 }
 
 Console.Title = "LTAI Dev Console";

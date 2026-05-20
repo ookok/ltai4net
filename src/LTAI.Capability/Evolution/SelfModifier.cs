@@ -63,7 +63,7 @@ public sealed class SelfModifier
             {
                 files.Add((file, File.ReadAllLines(file).Length));
             }
-            catch { }
+            catch { /* non-fatal */ }
         }
         return files.OrderByDescending(f => f.Item2).ToList();
     }
@@ -76,7 +76,7 @@ public sealed class SelfModifier
             if (json.TryGetProperty("files_to_modify", out var arr))
                 return arr.EnumerateArray().Select(e => e.GetString() ?? "").Where(s => !string.IsNullOrEmpty(s)).ToList();
         }
-        catch { }
+        catch { /* non-fatal */ }
         return Regex.Matches(llmOutput, @"[\w/\\-]+\.\w+").Select(m => m.Value).Distinct().ToList();
     }
 

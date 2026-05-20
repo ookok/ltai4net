@@ -279,9 +279,7 @@ public sealed class UnifiedBrainStore : IDisposable
                 results.Add((vr.Id, vr.Score, vr.Text ?? "", "vector"));
             }
         }
-        catch
-        {
-        }
+        catch { /* non-fatal */ }
         return results;
     }
 

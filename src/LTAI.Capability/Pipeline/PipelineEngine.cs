@@ -233,7 +233,7 @@ Pipeline operators:
             if (item.TryGetValue(key, out var val) && val is string text && text.Length > 20)
             {
                 try { item[$"gleaned_{key}"] = await chatFn("glean", $"Refine this: {text[..2000]}"); }
-                catch { }
+                catch { /* non-fatal */ }
             }
         }
         return data;

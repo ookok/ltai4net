@@ -140,7 +140,7 @@ internal sealed class BaiduMapService
                 };
             }
         }
-        catch { }
+        catch { /* non-fatal */ }
         return null;
     }
 
@@ -168,7 +168,7 @@ internal sealed class BaiduMapService
                 }
             }
         }
-        catch { }
+        catch { /* non-fatal */ }
         return results;
     }
 
@@ -190,7 +190,7 @@ internal sealed class BaiduMapService
                 };
             }
         }
-        catch { }
+        catch { /* non-fatal */ }
         return null;
     }
 }
@@ -230,7 +230,7 @@ internal sealed class AmapService
                 };
             }
         }
-        catch { }
+        catch { /* non-fatal */ }
         return null;
     }
 
@@ -255,7 +255,7 @@ internal sealed class AmapService
                 };
             }
         }
-        catch { }
+        catch { /* non-fatal */ }
         return null;
     }
 
@@ -290,7 +290,7 @@ internal sealed class AmapService
                 }
             }
         }
-        catch { }
+        catch { /* non-fatal */ }
         return results;
     }
 
@@ -312,7 +312,7 @@ internal sealed class AmapService
                 };
             }
         }
-        catch { }
+        catch { /* non-fatal */ }
         return null;
     }
 
@@ -338,7 +338,7 @@ internal sealed class AmapService
                 };
             }
         }
-        catch { }
+        catch { /* non-fatal */ }
         return null;
     }
 
@@ -356,7 +356,7 @@ internal sealed class AmapService
                 City = doc.RootElement.TryGetProperty("city", out var c) ? c.GetString() ?? "" : ""
             };
         }
-        catch { }
+        catch { /* non-fatal */ }
         return null;
     }
 }
@@ -423,7 +423,7 @@ internal sealed class TencentMapService
                 };
             }
         }
-        catch { }
+        catch { /* non-fatal */ }
         return null;
     }
 
@@ -474,7 +474,7 @@ internal sealed class TencentMapService
                 };
             }
         }
-        catch { }
+        catch { /* non-fatal */ }
         return null;
     }
 
@@ -515,7 +515,7 @@ internal sealed class TiandituService
                 };
             }
         }
-        catch { }
+        catch { /* non-fatal */ }
         return null;
     }
 }

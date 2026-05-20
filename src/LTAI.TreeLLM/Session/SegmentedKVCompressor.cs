@@ -312,7 +312,7 @@ public sealed class SegmentedKVCompressor
             {
                 tailText = chatFn($"Summarize this conversation segment in {KV_TAIL_TOKENS / 4} words: {tailText}");
             }
-            catch { }
+            catch { /* non-fatal */ }
         }
 
         if (tailText.Length > KV_TAIL_TOKENS * 4)

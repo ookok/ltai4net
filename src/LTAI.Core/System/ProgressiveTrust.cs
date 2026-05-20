@@ -281,7 +281,7 @@ public sealed class ProgressiveTrust
                 _users[username] = u;
             }
         }
-        catch { }
+        catch { /* non-fatal */ }
     }
 
     private void MaybeSave()

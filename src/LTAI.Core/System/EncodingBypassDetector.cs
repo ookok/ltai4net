@@ -86,7 +86,7 @@ public sealed class EncodingBypassDetector
             if (HasSuspiciousContent(decoded))
                 return new DecodedVariant("base64", trimmed, decoded);
         }
-        catch { }
+        catch { /* non-fatal */ }
         return null;
     }
 
@@ -141,7 +141,7 @@ public sealed class EncodingBypassDetector
             if (HasSuspiciousContent(decoded))
                 return new DecodedVariant("hex", text, decoded);
         }
-        catch { }
+        catch { /* non-fatal */ }
         return null;
     }
 
@@ -211,7 +211,7 @@ public sealed class EncodingBypassDetector
             if (decoded != text && HasSuspiciousContent(decoded))
                 return new DecodedVariant("unicode", text, decoded);
         }
-        catch { }
+        catch { /* non-fatal */ }
         return null;
     }
 

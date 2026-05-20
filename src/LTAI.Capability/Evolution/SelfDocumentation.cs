@@ -53,7 +53,7 @@ public sealed class SelfDocumenter
                     sections.Add(new DocSection(category == "security" ? "Security Analysis" : "Recommendations",
                         content, category));
                 }
-                catch { }
+                catch { /* non-fatal */ }
             }
         }
 

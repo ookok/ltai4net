@@ -183,7 +183,7 @@ public sealed class KnowledgeForager
             var sources = JsonSerializer.Deserialize<List<FoodSource>>(File.ReadAllText(path));
             if (sources != null) foreach (var s in sources) _foodMap[s.Domain] = s;
         }
-        catch { }
+        catch { /* non-fatal */ }
     }
 
     private void SaveFoodMap()
@@ -214,7 +214,7 @@ public sealed class KnowledgeForager
                 foreach (var p in projs.EnumerateArray())
                     _projects.Add(JsonSerializer.Deserialize<Dictionary<string, object>>(p.GetRawText())!);
         }
-        catch { }
+        catch { /* non-fatal */ }
     }
 
     public void SaveGraph()

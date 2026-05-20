@@ -91,7 +91,7 @@ public sealed class MassTransitMessageBus : IMessageBus, IAsyncDisposable
                 foreach (var h in _handlers)
                 {
                     try { await h(msg); }
-                    catch { }
+                    catch { /* non-fatal */ }
                 }
             }
         }, cancellationToken);

@@ -51,7 +51,7 @@ public sealed class TtsEngine
                 };
             }
         }
-        catch { }
+        catch { /* non-fatal */ }
 
         return new TtsResult { Ok = false, Error = "TTS not available" };
     }

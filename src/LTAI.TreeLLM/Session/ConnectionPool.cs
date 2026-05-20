@@ -62,7 +62,7 @@ public sealed class ConnectionPool : IDisposable
             if (elapsed < backoffMs) return;
             _lastRecreate = DateTime.UtcNow;
 
-            try { _client.CancelPendingRequests(); } catch { }
+            try { _client.CancelPendingRequests(); } catch { /* non-fatal */ }
             _client.Dispose();
             _client = CreateSession();
         }
@@ -212,7 +212,7 @@ public sealed class ConnectionPool : IDisposable
                 }
             }
         }
-        catch { }
+        catch { /* non-fatal */ }
 
         return new PoolStats
         {
@@ -230,7 +230,7 @@ public sealed class ConnectionPool : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
-        try { _client.CancelPendingRequests(); } catch { }
+        try { _client.CancelPendingRequests(); } catch { /* non-fatal */ }
         _client.Dispose();
     }
 }

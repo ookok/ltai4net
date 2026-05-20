@@ -40,9 +40,7 @@ public sealed class StyleFingerprintExtractor
             if (sectProps != null)
                 fingerprint.PageSetup = ExtractPageSetup(sectProps);
         }
-        catch
-        {
-        }
+        catch { /* non-fatal */ }
 
         fingerprint.ExtractedAt = DateTime.UtcNow;
         return fingerprint;

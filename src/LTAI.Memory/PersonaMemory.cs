@@ -563,9 +563,7 @@ public sealed class PersonaMemory
                 return profile;
             }
         }
-        catch
-        {
-        }
+        catch { /* non-fatal */ }
 
         return null;
     }
@@ -585,8 +583,6 @@ public sealed class PersonaMemory
                 File.WriteAllText(path, json, Encoding.UTF8);
             }
         }
-        catch
-        {
-        }
+        catch { /* non-fatal */ }
     }
 }

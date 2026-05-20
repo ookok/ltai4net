@@ -78,7 +78,7 @@ public static class DevUIEndpoints
                     await context.Response.WriteAsync(sse, context.RequestAborted);
                     await context.Response.Body.FlushAsync(context.RequestAborted);
                 }
-                catch { }
+                catch { /* non-fatal */ }
             });
 
             await tcs.Task;

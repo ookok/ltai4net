@@ -118,7 +118,7 @@ public sealed class DebugLoop
 
             if (!process.WaitForExit(120000))
             {
-                try { process.Kill(entireProcessTree: true); } catch { }
+                try { process.Kill(entireProcessTree: true); } catch { /* non-fatal */ }
                 return null;
             }
 
@@ -251,7 +251,7 @@ public sealed class DebugLoop
                 Process.Start("git", $"reset --hard {fix.GitCommit}");
             }
         }
-        catch { }
+        catch { /* non-fatal */ }
     }
 
     public DebugSession? GetSession(string id) =>

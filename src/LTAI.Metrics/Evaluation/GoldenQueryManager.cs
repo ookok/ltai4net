@@ -235,7 +235,7 @@ public sealed class GoldenQueryManager
                     _queries[q.QueryId] = q;
             }
         }
-        catch { }
+        catch { /* non-fatal */ }
     }
 
     public void SeedDefaults()

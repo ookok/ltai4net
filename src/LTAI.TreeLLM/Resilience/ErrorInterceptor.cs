@@ -224,7 +224,7 @@ public sealed class ErrorInterceptor
             var jsonl = JsonSerializer.Serialize(error, JsonOptions);
             File.AppendAllText(_jsonlPath, jsonl + Environment.NewLine);
         }
-        catch { }
+        catch { /* non-fatal */ }
     }
 
     public Dictionary<string, object> GetStats()
