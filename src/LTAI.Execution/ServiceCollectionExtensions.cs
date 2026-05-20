@@ -10,7 +10,6 @@ public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddLTAIExecution(this IServiceCollection services)
     {
-        services.TryAddSingleton<Orchestrator>();
         services.TryAddSingleton<SelfHealer>();
 
         services.TryAddSingleton(DiffusionPlanner.Instance);

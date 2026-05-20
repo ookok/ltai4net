@@ -4,6 +4,7 @@ using LTAI.Core.Interfaces;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace LTAI.Web;
@@ -45,17 +46,17 @@ public static class SseAgentEndpoints
                 };
                 _tasks.TryAdd(taskId, task);
 
-                var providerEngine = endpoints.ServiceProvider.GetService<IProviderEngine>();
+                var chatClient = endpoints.ServiceProvider.GetService<IChatClient>();
 
-                if (providerEngine != null)
+                if (chatClient != null)
                 {
                     _ = Task.Run(async () =>
                     {
                         task.Status = "running";
                         try
                         {
-                            var result = await providerEngine.ChatAsync(prompt);
-                            task.Result = result;
+                            var response = await chatClient.GetResponseAsync(prompt);
+                            task.Result = response.Text ?? "";
                             task.Status = "completed";
                             task.StepsCompleted = Steps.Length;
                         }

@@ -24,8 +24,10 @@ public static class MAFEndpoints
                 if (request == null || string.IsNullOrWhiteSpace(request.Query))
                     return Results.Json(new { error = "Query is required" }, statusCode: 400);
 
-                var result = await agent.ChatAsync(request.Query, cancellationToken);
-                return Results.Json(new { response = result, agent = agent.Name });
+                var response = await agent.GetResponseAsync(
+                    new List<Microsoft.Extensions.AI.ChatMessage> { new(Microsoft.Extensions.AI.ChatRole.User, request.Query) },
+                    null, cancellationToken);
+                return Results.Json(new { response = response.Text, agent = agent.Name });
             }
             catch (OperationCanceledException)
             {
@@ -56,7 +58,7 @@ public static class MAFEndpoints
                         m.Role == "user" ? Microsoft.Extensions.AI.ChatRole.User : Microsoft.Extensions.AI.ChatRole.Assistant,
                         m.Content ?? ""));
 
-                var response = await agent.GetResponseAsync(chatMessages, cancellationToken);
+                var response = await agent.GetResponseAsync(chatMessages, null, cancellationToken);
                 return Results.Json(new { response = response.Text, agent = agent.Name });
             }
             catch (OperationCanceledException)

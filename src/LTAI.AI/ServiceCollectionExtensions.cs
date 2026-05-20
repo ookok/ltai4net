@@ -1,6 +1,5 @@
 using LTAI.AI.Governors;
 using LTAI.AI.Providers;
-using LTAI.Core.Interfaces;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -12,7 +11,6 @@ public static class ServiceCollectionExtensions
     public static IServiceCollection AddLTAIAI(this IServiceCollection services)
     {
         services.AddSingleton<ProviderEngine>();
-        services.AddSingleton<IProviderEngine>(sp => sp.GetRequiredService<ProviderEngine>());
 
         services.AddSingleton<IChatClient>(sp =>
         {

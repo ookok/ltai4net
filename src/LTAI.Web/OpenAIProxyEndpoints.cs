@@ -1,9 +1,9 @@
 using System.Text;
 using System.Text.Json;
-using LTAI.Core.Interfaces;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace LTAI.Web;
@@ -50,20 +50,22 @@ public static class OpenAIProxyEndpoints
                 var maxTokens = request.MaxTokens ?? 4096;
                 var stream = request.Stream;
 
-                var providerEngine = endpoints.ServiceProvider.GetService<IProviderEngine>();
+                var chatClient = endpoints.ServiceProvider.GetService<IChatClient>();
                 string responseContent;
 
-                if (providerEngine != null)
+                if (chatClient != null)
                 {
                     try
                     {
-                        var chatOptions = new LLMChatOptions
+                        var chatOptions = new ChatOptions
                         {
-                            Model = model,
+                            ModelId = model,
                             Temperature = temperature,
-                            MaxTokens = maxTokens
+                            MaxOutputTokens = maxTokens
                         };
-                        responseContent = await providerEngine.ChatAsync(lastUserMsg, chatOptions);
+                        var messages = new List<ChatMessage> { new(ChatRole.User, lastUserMsg) };
+                        var response = await chatClient.GetResponseAsync(messages, chatOptions);
+                        responseContent = response.Text ?? "";
                     }
                     catch
                     {
@@ -105,19 +107,21 @@ public static class OpenAIProxyEndpoints
                     context.Response.ContentType = "text/event-stream";
                     context.Response.Headers["Cache-Control"] = "no-cache";
 
-                    if (providerEngine != null)
+                    if (chatClient != null)
                     {
-                        var chatOptions = new LLMChatOptions
+                        var chatOptions = new ChatOptions
                         {
-                            Model = model,
+                            ModelId = model,
                             Temperature = temperature,
-                            MaxTokens = maxTokens
+                            MaxOutputTokens = maxTokens
                         };
+                        var messages = new List<ChatMessage> { new(ChatRole.User, lastUserMsg) };
 
                         try
                         {
-                            await foreach (var chunk in providerEngine.StreamAsync(lastUserMsg, chatOptions))
+                            await foreach (var update in chatClient.GetStreamingResponseAsync(messages, chatOptions))
                             {
+                                var chunkText = update.Text ?? "";
                                 var sseChunk = new
                                 {
                                     id = responseId,
@@ -129,7 +133,7 @@ public static class OpenAIProxyEndpoints
                                         new
                                         {
                                             index = 0,
-                                            delta = new { role = "assistant", content = chunk },
+                                            delta = new { role = "assistant", content = chunkText },
                                             finish_reason = (string?)null
                                         }
                                     }

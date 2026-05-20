@@ -219,7 +219,7 @@ public sealed class A2AHost
                 : Microsoft.Extensions.AI.ChatRole.User, textContent)
         };
 
-        var response = await _agent.ProcessAsync(messages, cancellationToken);
+        var response = await _agent.GetResponseAsync(messages, null, cancellationToken);
 
         return new A2AResponse
         {
@@ -264,7 +264,7 @@ public sealed class A2AHost
             new(Microsoft.Extensions.AI.ChatRole.User, textContent)
         };
 
-        var response = await _agent.ProcessAsync(messages, ct);
+        var response = await _agent.GetResponseAsync(messages, null, ct);
 
         task.State = A2ATaskState.Completed;
         task.StatusMessage = "Task completed";

@@ -6,7 +6,7 @@ using ChatRole = Microsoft.Extensions.AI.ChatRole;
 
 namespace LTAI.MAF;
 
-public sealed class LTAIAgent
+public sealed class LTAIAgent : IChatClient
 {
     private readonly LivingTreeSystem _livingTree;
     private readonly ILogger<LTAIAgent> _logger;
@@ -15,6 +15,8 @@ public sealed class LTAIAgent
 
     public string Name => "LTAI";
     public string Description => "LivingTree AI Agent with bio-inspired governance";
+
+    public ChatClientMetadata? Metadata => new("LTAI");
 
     public LTAIAgent(
         LivingTreeSystem livingTree,
@@ -28,23 +30,20 @@ public sealed class LTAIAgent
         _outputFilter = outputFilter;
     }
 
-    public async Task<ChatMessage> ProcessAsync(
+    public async Task<ChatResponse> GetResponseAsync(
         IEnumerable<ChatMessage> messages,
+        ChatOptions? options = null,
         CancellationToken cancellationToken = default)
     {
         var msgList = messages.ToList();
         var userMessages = msgList.Where(m => m.Role == ChatRole.User).ToList();
 
         if (userMessages.Count == 0)
-            return new ChatMessage(ChatRole.Assistant, "No user message received.");
+            return new ChatResponse(new ChatMessage(ChatRole.Assistant, "No user message received."));
 
         var query = string.Join("\n", userMessages.Select(m => m.Text ?? ""));
 
-        if (_inputFilter != null)
-        {
-            var lastMsg = userMessages.Last();
-            var (enriched, label, complexity, emotion) = _inputFilter.Analyze(lastMsg);
-        }
+        _inputFilter?.Analyze(userMessages.Last());
 
         _logger.LogInformation("LTAI agent: {Query}", query[..Math.Min(query.Length, 200)]);
 
@@ -55,27 +54,50 @@ public sealed class LTAIAgent
             if (_outputFilter != null)
                 result = _outputFilter.Review(result);
 
-            return new ChatMessage(ChatRole.Assistant, result);
+            return new ChatResponse(new ChatMessage(ChatRole.Assistant, result));
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "LTAI agent error");
-            return new ChatMessage(ChatRole.Assistant, $"Error: {ex.Message}");
+            return new ChatResponse(new ChatMessage(ChatRole.Assistant, $"Error: {ex.Message}"));
         }
     }
 
-    public async Task<ChatResponse> GetResponseAsync(
+    public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
         IEnumerable<ChatMessage> messages,
+        ChatOptions? options = null,
         CancellationToken cancellationToken = default)
     {
-        var response = await ProcessAsync(messages, cancellationToken);
-        return new ChatResponse(response);
+        return StreamAsync(messages, options, cancellationToken);
     }
 
-    public async Task<string> ChatAsync(string query, CancellationToken cancellationToken = default)
+    private async IAsyncEnumerable<ChatResponseUpdate> StreamAsync(
+        IEnumerable<ChatMessage> messages,
+        ChatOptions? options,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        var messages = new List<ChatMessage> { new(ChatRole.User, query) };
-        var result = await ProcessAsync(messages, cancellationToken);
-        return result.Text ?? "";
+        var response = await GetResponseAsync(messages, options, cancellationToken);
+        var text = response.Text ?? "";
+
+        const int chunkSize = 8;
+        for (int i = 0; i < text.Length; i += chunkSize)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var chunk = text[i..Math.Min(i + chunkSize, text.Length)];
+            yield return new ChatResponseUpdate(ChatRole.Assistant, chunk);
+        }
+    }
+
+    public object? GetService(Type serviceType, object? serviceKey = null)
+    {
+        if (serviceType == typeof(ChatClientMetadata))
+            return Metadata;
+
+        return null;
+    }
+
+    void IDisposable.Dispose()
+    {
+        GC.SuppressFinalize(this);
     }
 }

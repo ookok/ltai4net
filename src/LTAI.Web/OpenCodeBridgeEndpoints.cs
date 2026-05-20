@@ -6,6 +6,7 @@ using LTAI.Core.Interfaces;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace LTAI.Web;
@@ -129,14 +130,15 @@ public static class OpenCodeBridgeEndpoints
 
                 if (OpenCodePath == null || !(_opencodeAvailable ?? false))
                 {
-                    var providerEngine = endpoints.ServiceProvider.GetService<IProviderEngine>();
+                    var chatClient = endpoints.ServiceProvider.GetService<IChatClient>();
                     string fallbackResponse;
 
-                    if (providerEngine != null)
+                    if (chatClient != null)
                     {
                         try
                         {
-                            fallbackResponse = await providerEngine.ChatAsync(request.Prompt);
+                            var response = await chatClient.GetResponseAsync(request.Prompt);
+                            fallbackResponse = response.Text ?? "";
                         }
                         catch
                         {

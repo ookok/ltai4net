@@ -9,7 +9,7 @@ using Microsoft.Extensions.Options;
 
 namespace LTAI.AI.Providers;
 
-public sealed class ProviderEngine : IProviderEngine, IChatClient
+public sealed class ProviderEngine : IChatClient
 {
     private readonly HttpClient _http;
     private readonly IOptions<LTAIOptions> _options;
@@ -43,7 +43,7 @@ public sealed class ProviderEngine : IProviderEngine, IChatClient
         return (config, modelKey);
     }
 
-    public async Task<string> ChatAsync(string prompt, LLMChatOptions? options = null, CancellationToken cancellationToken = default)
+    private async Task<string> ChatAsync(string prompt, LLMChatOptions? options = null, CancellationToken cancellationToken = default)
     {
         options ??= new LLMChatOptions();
         var aiConfig = _options.Value.AI;
@@ -107,7 +107,7 @@ public sealed class ProviderEngine : IProviderEngine, IChatClient
         return string.Empty;
     }
 
-    public async IAsyncEnumerable<string> StreamAsync(string prompt, LLMChatOptions? options = null, [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    private async IAsyncEnumerable<string> StreamAsync(string prompt, LLMChatOptions? options = null, [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         options ??= new LLMChatOptions();
         var aiConfig = _options.Value.AI;
