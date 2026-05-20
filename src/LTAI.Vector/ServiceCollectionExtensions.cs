@@ -14,6 +14,8 @@ public static class ServiceCollectionExtensions
     public static IServiceCollection AddLTAIVector(this IServiceCollection services)
     {
         services.AddSingleton<IEmbeddingBackend, LocalEmbeddingBackend>();
+        services.AddSingleton<EmbeddingQuantizer>();
+        services.AddSingleton<LazyResultDeserializer>();
 
         services.AddSingleton<IEmbeddingGenerator<string, Embedding<float>>>(sp =>
             new EmbeddingGeneratorAdapter(sp.GetRequiredService<IEmbeddingBackend>()));
@@ -167,6 +169,9 @@ public static class ServiceCollectionExtensions
         string model = "text-embedding-3-small",
         int dimension = 1536)
     {
+        services.AddSingleton<EmbeddingQuantizer>();
+        services.AddSingleton<LazyResultDeserializer>();
+
         services.AddSingleton<IEmbeddingBackend>(sp =>
             new APIEmbeddingBackend(sp.GetRequiredService<IHttpClientFactory>(), endpoint, apiKey, model, dimension,
                 sp.GetRequiredService<ILogger<APIEmbeddingBackend>>()));

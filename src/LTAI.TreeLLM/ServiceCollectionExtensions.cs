@@ -33,6 +33,9 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<FluidCollective>();
         services.AddSingleton<DebugLoop>();
         services.AddSingleton<ErrorInterceptor>();
+        services.AddSingleton<MultiModelConsensus>();
+        services.AddSingleton<StreamingGrammarGuard>();
+        services.AddSingleton<AutoTunerBridge>();
         return services;
     }
 }

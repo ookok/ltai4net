@@ -60,6 +60,11 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ServiceManager>();
         services.AddSingleton<ModelManager>();
 
+        services.AddSingleton<LatencyBudgetAllocator>(sp =>
+            new LatencyBudgetAllocator(totalLatencyBudgetMs: 30000));
+
+        services.AddSingleton<HotPathObjectPool>();
+
         services.TryAddEnumerable(ServiceDescriptor.Singleton<ITextClassifier>(
             ClassificationRegistry.EndpointCategory));
         services.TryAddEnumerable(ServiceDescriptor.Singleton<ITextClassifier>(

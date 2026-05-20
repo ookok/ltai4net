@@ -11,6 +11,7 @@ public static class ServiceCollectionExtensions
     public static IServiceCollection AddLTAIAI(this IServiceCollection services)
     {
         services.AddSingleton<ProviderEngine>();
+        services.AddSingleton<ProviderFanOutRace>();
 
         services.AddSingleton<IChatClient>(sp =>
         {
