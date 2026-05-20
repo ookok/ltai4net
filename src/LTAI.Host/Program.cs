@@ -110,7 +110,7 @@ builder.Services.AddLTAINetwork();
 
 var app = builder.Build();
 
-ConfigureServices(app.Services);
+ConfigureServices(app.Services, app.Services.GetRequiredService<SecretVault>());
 
 await RegisterCapabilityTools(app.Services);
 
@@ -135,10 +135,8 @@ app.Logger.LogInformation("Listening on http://{Host}:{Port}",
 
 app.Run();
 
-static void ConfigureServices(IServiceProvider sp)
+static void ConfigureServices(IServiceProvider sp, SecretVault vault)
 {
-    var vault = SecretVault.Instance;
-
     var gateway = sp.GetRequiredService<MessageGateway>();
     var smtpHost = vault.Get("smtp_host");
     if (!string.IsNullOrWhiteSpace(smtpHost))

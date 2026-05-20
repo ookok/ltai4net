@@ -1,38 +1,17 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
+using LTAI.Core.Configuration;
 using LTAI.Execution.Models;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 
 namespace LTAI.Execution.Planning;
 
 public sealed class CostAware
 {
-    public static readonly Dictionary<string, (double input, double output)> PricePer1M = new()
-    {
-        ["gpt-4o"] = (2.50, 10.00),
-        ["gpt-4o-mini"] = (0.15, 0.60),
-        ["claude-sonnet"] = (3.00, 15.00),
-        ["claude-haiku"] = (0.25, 1.25),
-        ["deepseek-v3"] = (0.27, 1.10),
-        ["deepseek-r1"] = (0.55, 2.19),
-        ["qwen-max"] = (0.40, 1.60),
-        ["qwen-turbo"] = (0.08, 0.32),
-        ["default"] = (0.50, 2.00),
-    };
-
-    public static readonly Dictionary<string, string> DegradationChain = new()
-    {
-        ["gpt-4o"] = "gpt-4o-mini",
-        ["claude-sonnet"] = "claude-haiku",
-        ["deepseek-r1"] = "deepseek-v3",
-        ["qwen-max"] = "qwen-turbo",
-    };
-
-    private static readonly Lazy<CostAware> _instance = new(() =>
-        new CostAware((ILogger)NullLogger<CostAware>.Instance));
-
-    public static CostAware Instance => _instance.Value;
+    private readonly Dictionary<string, (double input, double output)> _pricePer1M;
+    private readonly Dictionary<string, string> _degradationChain;
 
     private double _dailyBudget = 10.00;
     private readonly List<TokenUsage> _usage = new();
@@ -42,19 +21,31 @@ public sealed class CostAware
     private readonly Lock _lock = new();
     private readonly ILogger _logger;
 
-    public CostAware(ILogger logger)
+    public CostAware(IOptions<LTAIOptions> options, ILogger? logger = null)
     {
-        _logger = logger;
+        _logger = logger ?? NullLogger<CostAware>.Instance;
+
+        var pricing = options.Value.ModelPricing;
+        _pricePer1M = new Dictionary<string, (double, double)>(StringComparer.OrdinalIgnoreCase);
+        foreach (var kvp in pricing.InputPer1M)
+        {
+            var output = pricing.OutputPer1M.TryGetValue(kvp.Key, out var o) ? o : kvp.Value * 2.0;
+            _pricePer1M[kvp.Key] = (kvp.Value, output);
+        }
+        if (!_pricePer1M.ContainsKey("default"))
+            _pricePer1M["default"] = (0.50, 2.00);
+
+        _degradationChain = new Dictionary<string, string>(pricing.DegradationChain, StringComparer.OrdinalIgnoreCase);
     }
 
     internal CostAware()
-        : this((ILogger)NullLogger<CostAware>.Instance)
+        : this(Options.Create(new LTAIOptions()), null)
     {
     }
 
     public void Record(string model, int tokens, double speedupRatio = 1.0)
     {
-        var prices = PricePer1M.TryGetValue(model, out var p) ? p : PricePer1M["default"];
+        var prices = _pricePer1M.TryGetValue(model, out var p) ? p : _pricePer1M["default"];
         var avgPrice = (prices.input + prices.output) / 2.0;
         var speedup = speedupRatio <= 0 ? 1.0 : speedupRatio;
         var cost = tokens * avgPrice / 1_000_000.0 / speedup;
@@ -79,7 +70,7 @@ public sealed class CostAware
 
     public bool CanUse(string model, double estimatedTokens)
     {
-        var prices = PricePer1M.TryGetValue(model, out var p) ? p : PricePer1M["default"];
+        var prices = _pricePer1M.TryGetValue(model, out var p) ? p : _pricePer1M["default"];
         var avgPrice = (prices.input + prices.output) / 2.0;
         var estimatedCost = estimatedTokens * avgPrice / 1_000_000.0;
 
@@ -94,12 +85,12 @@ public sealed class CostAware
 
     public string Degrade(string model)
     {
-        return DegradationChain.TryGetValue(model, out var degraded) ? degraded : model;
+        return _degradationChain.TryGetValue(model, out var degraded) ? degraded : model;
     }
 
     public string? DegradedModelFor(string model)
     {
-        if (!DegradationChain.TryGetValue(model, out var degraded))
+        if (!_degradationChain.TryGetValue(model, out var degraded))
             return null;
 
         if (CanUse(model, 0))

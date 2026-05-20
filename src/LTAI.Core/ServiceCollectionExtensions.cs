@@ -18,6 +18,7 @@ public static class ServiceCollectionExtensions
     public static IServiceCollection AddLTAICore(this IServiceCollection services)
     {
         services.AddHttpClient();
+        services.AddSingleton(SecretVault.Instance);
         services.AddSingleton<DataPathResolver>();
 
         services.AddSingleton(sp => new PromptInjector(sp.GetRequiredService<IOptions<LTAIOptions>>()));

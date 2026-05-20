@@ -1,6 +1,8 @@
 using System.Text.RegularExpressions;
+using LTAI.Core.Configuration;
 using LTAI.Economy.Models;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace LTAI.Economy;
 
@@ -13,25 +15,25 @@ public sealed class ROIModel
         ["research"] = 1.5, ["question"] = 0.5, ["chat"] = 0.2, ["general"] = 1.0
     };
 
-    private static readonly Dictionary<string, double> ModelPriceInput = new()
-    {
-        ["deepseek-v4-pro"] = 3.0, ["deepseek-v4-flash"] = 1.0, ["sensetime"] = 0.0,
-        ["qwen3.6-plus"] = 2.90, ["qwen3.6-flash"] = 0.73, ["qwen3.6-max"] = 8.70,
-        ["qwq-plus"] = 5.80, ["qvq-max"] = 8.70
-    };
-
-    private static readonly Dictionary<string, double> ModelPriceOutput = new()
-    {
-        ["deepseek-v4-pro"] = 6.0, ["deepseek-v4-flash"] = 2.0,
-        ["qwen3.6-plus"] = 17.40, ["qwen3.6-flash"] = 2.90, ["qwen3.6-max"] = 43.50,
-        ["qwq-plus"] = 11.60, ["qvq-max"] = 17.40, ["sensetime"] = 0.0
-    };
+    private readonly Dictionary<string, double> _modelPriceInput;
+    private readonly Dictionary<string, double> _modelPriceOutput;
 
     private static readonly double TokenBaseMs = 500;
 
     private double _cumulativeCost;
     private double _cumulativeValue;
     private int _evaluationCount;
+
+    public ROIModel(IOptions<LTAIOptions>? options = null)
+    {
+        var pricing = options?.Value.ModelPricing;
+        _modelPriceInput = pricing != null
+            ? new Dictionary<string, double>(pricing.InputPer1M, StringComparer.OrdinalIgnoreCase)
+            : new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+        _modelPriceOutput = pricing != null
+            ? new Dictionary<string, double>(pricing.OutputPer1M, StringComparer.OrdinalIgnoreCase)
+            : new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+    }
 
     public double EstimateValue(string taskType, double complexity = 0.5,
         double userPriority = 0.5, string taskDesc = "")
@@ -57,8 +59,8 @@ public sealed class ROIModel
 
     public double EstimateCost(int estimatedTokens, string model)
     {
-        ModelPriceInput.TryGetValue(model, out var inputPrice);
-        ModelPriceOutput.TryGetValue(model, out var outputPrice);
+        _modelPriceInput.TryGetValue(model, out var inputPrice);
+        _modelPriceOutput.TryGetValue(model, out var outputPrice);
         var avgPrice = (inputPrice + outputPrice) / 2.0;
         return avgPrice * estimatedTokens / 1_000_000.0;
     }
@@ -264,9 +266,10 @@ public sealed class EconomicOrchestrator
     private double _dailySpentYuan;
     private readonly Dictionary<string, double> _sessionBudgets = new();
 
-    public EconomicOrchestrator(ILogger<EconomicOrchestrator>? logger = null)
+    public EconomicOrchestrator(ILogger<EconomicOrchestrator>? logger = null, IOptions<LTAIOptions>? options = null)
     {
         _logger = logger ?? NullLogger.Instance;
+        _roiModel = new Lazy<ROIModel>(() => new ROIModel(options));
         _complianceGate = new Lazy<ComplianceGate>(() => new ComplianceGate(ComplianceLevel.Normal));
     }
 

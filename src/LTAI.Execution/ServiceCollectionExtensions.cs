@@ -15,7 +15,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton(DiffusionPlanner.Instance);
         services.TryAddSingleton(GtsmPlanner.Instance);
         services.TryAddSingleton(TaskCheckpoint.Instance);
-        services.TryAddSingleton(CostAware.Instance);
+        services.TryAddSingleton<CostAware>();
         services.TryAddSingleton(CoFEECognitiveEngine.Instance);
         services.TryAddSingleton(FitnessLandscape.Instance);
         services.TryAddSingleton(RankMonitor.Instance);

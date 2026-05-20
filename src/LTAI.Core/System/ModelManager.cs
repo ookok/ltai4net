@@ -9,10 +9,12 @@ public sealed class ModelManager
 {
     private readonly IProviderRegistry _registry;
     private readonly ILogger<ModelManager> _logger;
+    private readonly SecretVault _vault;
 
-    public ModelManager(IProviderRegistry registry, ILogger<ModelManager>? logger = null)
+    public ModelManager(IProviderRegistry registry, SecretVault vault, ILogger<ModelManager>? logger = null)
     {
         _registry = registry;
+        _vault = vault;
         _logger = logger ?? NullLogger<ModelManager>.Instance;
     }
 
@@ -93,13 +95,12 @@ public sealed class ModelManager
 
     public object Status(AIConfig aiConfig)
     {
-        var vault = SecretVault.Instance;
         var providers = new List<object>();
 
         foreach (var (name, config) in aiConfig.Providers)
         {
             var hasKey = !string.IsNullOrWhiteSpace(config.ApiKey) ||
-                         !string.IsNullOrWhiteSpace(vault.Get($"{name}_api_key"));
+                         !string.IsNullOrWhiteSpace(_vault.Get($"{name}_api_key"));
             providers.Add(new
             {
                 name,

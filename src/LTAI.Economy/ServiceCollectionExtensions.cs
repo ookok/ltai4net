@@ -1,5 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.AI;
+using LTAI.Core.Configuration;
+using Microsoft.Extensions.Options;
 
 namespace LTAI.Economy;
 

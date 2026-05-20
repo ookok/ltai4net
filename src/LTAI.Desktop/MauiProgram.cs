@@ -6,6 +6,7 @@ using LTAI.Core.Configuration;
 using LTAI.DNA;
 using LTAI.Metrics;
 using LTAI.Vector;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -24,8 +25,20 @@ public static class MauiProgram
         var services = builder.Services;
 
         var ltaiOptions = new LTAIOptions();
-        ltaiOptions.AI.Providers["deepseek"] = new ProviderConfig { Endpoint = "https://api.deepseek.com", Model = "deepseek-chat" };
-        ltaiOptions.Web.RateLimitPerMinute = 60;
+
+        var config = new ConfigurationBuilder()
+            .SetBasePath(AppContext.BaseDirectory)
+            .AddJsonFile("appsettings.json", optional: true)
+            .Build();
+
+        config.GetSection(LTAIOptions.SectionName).Bind(ltaiOptions);
+
+        if (ltaiOptions.AI.Providers.Count == 0)
+        {
+            ltaiOptions.AI.Providers["deepseek"] = new ProviderConfig { Endpoint = "https://api.deepseek.com", Model = "deepseek-chat" };
+        }
+
+        ltaiOptions.Web.RateLimitPerMinute = ltaiOptions.Web.RateLimitPerMinute > 0 ? ltaiOptions.Web.RateLimitPerMinute : 60;
         services.AddSingleton(Options.Create(ltaiOptions));
 
         services.AddLogging(b => b.SetMinimumLevel(LogLevel.Warning));

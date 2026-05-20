@@ -13,10 +13,9 @@ public sealed class UnifiedMapService
     private readonly TiandituService _tianditu;
     private readonly TencentMapService _tencent;
 
-    public UnifiedMapService(ILogger<UnifiedMapService> logger)
+    public UnifiedMapService(ILogger<UnifiedMapService> logger, SecretVault vault)
     {
         _logger = logger;
-        var vault = SecretVault.Instance;
         _baidu = new BaiduMapService(logger, vault.Get("baidu_map_ak"), vault.Get("baidu_map_sk"));
         _amap = new AmapService(logger, vault.Get("amap_key"));
         _tianditu = new TiandituService(logger, vault.Get("tianditu_key"));

@@ -1,3 +1,6 @@
+using LTAI.Core.Configuration;
+using Microsoft.Extensions.Options;
+
 namespace LTAI.Core.System;
 
 public sealed record AuditorIdentity(
@@ -26,31 +29,32 @@ public sealed class SocialLoadModel
     private const double DefaultPropagatorResilience = 1.0;
     private const double SovereigntyThreshold = 0.5;
 
-    private readonly Dictionary<string, double> _familyResilience = new()
-    {
-        ["claude"] = 5.0,
-        ["gemini"] = 1.5,
-        ["gpt"] = 1.0,
-        ["qwen"] = 1.2,
-        ["default"] = 1.0
-    };
+    private readonly Dictionary<string, double> _familyResilience;
+    private readonly Dictionary<string, double> _baseAuthority;
+    private readonly LTAIOptions _options;
 
-    private readonly Dictionary<string, double> _baseAuthority = new()
+    public SocialLoadModel(IOptions<LTAIOptions> options)
     {
-        ["claude"] = 0.9,
-        ["gemini"] = 0.75,
-        ["gpt"] = 0.7,
-        ["qwen"] = 0.65,
-        ["default"] = 0.5
-    };
+        _options = options.Value;
+        var sl = _options.SocialLoad;
+        _familyResilience = new Dictionary<string, double>(sl.Resilience, StringComparer.OrdinalIgnoreCase);
+        _baseAuthority = new Dictionary<string, double>(sl.BaseAuthority, StringComparer.OrdinalIgnoreCase);
+
+        if (!_familyResilience.ContainsKey("default"))
+            _familyResilience["default"] = 1.0;
+        if (!_baseAuthority.ContainsKey("default"))
+            _baseAuthority["default"] = 0.5;
+    }
 
     public SocialLoadResult Evaluate(
         string propagatorFamily,
         List<AuditorIdentity> auditors,
         double taskEntropy,
-        double baselineSovereignty = 1.0)
+        double baselineSovereignty = 1.0,
+        string? providerName = null)
     {
-        double resilience = _familyResilience.TryGetValue(propagatorFamily.ToLowerInvariant(), out var r)
+        var family = providerName ?? propagatorFamily;
+        double resilience = _familyResilience.TryGetValue(family.ToLowerInvariant(), out var r)
             ? r : _familyResilience["default"];
 
         double totalLoad = 0;
