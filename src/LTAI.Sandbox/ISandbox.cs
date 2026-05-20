@@ -50,4 +50,4 @@ public sealed class SandboxResult
 
 public enum SandboxLanguage { Python, JavaScript, CSharp, Shell }
 
-public enum SandboxBackend { Auto, Process, Docker }
+public enum SandboxBackend { Auto, Process, Docker, Remote }

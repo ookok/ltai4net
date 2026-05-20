@@ -70,6 +70,11 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<WeWorkBot>();
         services.AddSingleton<PkgManager>();
 
+        services.AddSingleton<TranslateService>();
+        services.AddSingleton<ImageSearchService>();
+        services.AddSingleton<WeatherService>();
+        services.AddSingleton<SmsGateway>();
+
         return services;
     }
 }

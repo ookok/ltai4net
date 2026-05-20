@@ -41,9 +41,7 @@ public static class ServiceCollectionExtensions
 
         services.AddSingleton<HierarchicalChunker>();
         services.AddSingleton<MultiDocFusion>();
-        services.AddSingleton<ProvenanceTracker>();
-        services.AddSingleton<LearningEngine>();
-        services.AddSingleton<ContextWiki>();
+        services.AddSingleton<BasicContextWiki>();
 
         services.AddSingleton<KnowledgeBase>();
         services.AddSingleton<KnowledgeGraph>();
@@ -95,9 +93,7 @@ public static class ServiceCollectionExtensions
 
         services.AddSingleton<HierarchicalChunker>();
         services.AddSingleton<MultiDocFusion>();
-        services.AddSingleton<ProvenanceTracker>();
-        services.AddSingleton<LearningEngine>();
-        services.AddSingleton<ContextWiki>();
+        services.AddSingleton<BasicContextWiki>();
 
         services.AddSingleton<KnowledgeBase>();
         services.AddSingleton<KnowledgeGraph>();

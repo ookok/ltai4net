@@ -28,31 +28,37 @@ public sealed class ProviderEngine : IProviderEngine, IChatClient
         get
         {
             var ai = _options.Value.AI;
-            var model = ai.DeepModel;
-            return new ChatClientMetadata(model);
+            return new ChatClientMetadata(ai.L2.Model);
         }
+    }
+
+    private (ProviderConfig Provider, string ApiModel) ResolveProvider(string modelKey, AIConfig aiConfig)
+    {
+        if (aiConfig.Providers.TryGetValue(modelKey, out var config))
+            return (config, config.Model);
+
+        config = aiConfig.Providers.Values.FirstOrDefault()
+            ?? throw new InvalidOperationException($"No provider configured. Requested model key: {modelKey}");
+
+        return (config, modelKey);
     }
 
     public async Task<string> ChatAsync(string prompt, LLMChatOptions? options = null, CancellationToken cancellationToken = default)
     {
         options ??= new LLMChatOptions();
         var aiConfig = _options.Value.AI;
-        var model = options.Model ?? aiConfig.DeepModel;
+        var modelKey = options.Model ?? aiConfig.L2.Model;
 
         CheckBudget();
 
-        if (!aiConfig.Providers.TryGetValue(model, out var config))
-        {
-            config = aiConfig.Providers.Values.FirstOrDefault()
-                ?? throw new InvalidOperationException($"No provider configured for model: {model}");
-        }
+        var (config, apiModel) = ResolveProvider(modelKey, aiConfig);
 
         var temperature = options.Temperature > 0 ? options.Temperature : aiConfig.DefaultTemperature;
         var maxTokens = options.MaxTokens > 0 ? options.MaxTokens : aiConfig.MaxTokens;
 
         var request = new
         {
-            model = config.Model,
+            model = apiModel,
             messages = new[]
             {
                 new { role = "user", content = prompt }
@@ -105,21 +111,17 @@ public sealed class ProviderEngine : IProviderEngine, IChatClient
     {
         options ??= new LLMChatOptions();
         var aiConfig = _options.Value.AI;
-        var model = options.Model ?? aiConfig.DeepModel;
+        var modelKey = options.Model ?? aiConfig.L2.Model;
 
         CheckBudget();
 
-        if (!aiConfig.Providers.TryGetValue(model, out var config))
-        {
-            config = aiConfig.Providers.Values.FirstOrDefault()
-                ?? throw new InvalidOperationException($"No provider configured for model: {model}");
-        }
+        var (config, apiModel) = ResolveProvider(modelKey, aiConfig);
 
         var temperature = options.Temperature > 0 ? options.Temperature : aiConfig.DefaultTemperature;
 
         var request = new
         {
-            model = config.Model,
+            model = apiModel,
             messages = new[]
             {
                 new { role = "user", content = prompt }

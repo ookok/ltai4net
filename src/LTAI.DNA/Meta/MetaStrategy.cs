@@ -1,4 +1,5 @@
 using System.Text.Json;
+using LTAI.Core.System;
 
 namespace LTAI.DNA.Meta;
 
@@ -216,12 +217,25 @@ public sealed class MetaStrategyEngine
 {
     private MetaStrategy _strategy = new();
     private MetaMemory? _memory;
-    private double _explorationRate = 0.15;
+    private readonly EntropyScheduler _entropyScheduler;
     private int _explorationCount;
     private int _exploitationCount;
     private readonly object _lock = new();
 
     public MetaStrategy Strategy => _strategy;
+    public EntropyScheduler EntropyScheduler => _entropyScheduler;
+
+    public MetaStrategyEngine(EntropyScheduler? scheduler = null)
+    {
+        _entropyScheduler = scheduler ?? new EntropyScheduler(new EntropyScheduleConfig
+        {
+            Type = EntropyScheduleType.Linear,
+            InitialEntropy = 0.8,
+            TargetEntropy = 0.15,
+            WarmupSteps = 50,
+            TotalSteps = 2000
+        });
+    }
 
     public void BindMemory(MetaMemory memory)
     {
@@ -254,7 +268,7 @@ public sealed class MetaStrategyEngine
             if (edits != null && edits.Count > 0)
             {
                 _strategy.Apply(edits);
-                _explorationRate = Math.Max(0.05, _explorationRate * 0.98);
+                _entropyScheduler.StepForward();
             }
         }
         catch { }
@@ -262,7 +276,7 @@ public sealed class MetaStrategyEngine
         lock (_lock)
         {
             _exploitationCount++;
-            if (ShouldExplore())
+            if (_entropyScheduler.ShouldExplore())
             {
                 _explorationCount++;
                 _memory?.RecordGating("explore", true, true, domain);
@@ -271,7 +285,7 @@ public sealed class MetaStrategyEngine
 
         return new Dictionary<string, object>
         {
-            ["exploration_rate"] = _explorationRate,
+            ["entropy"] = _entropyScheduler.CurrentEntropy,
             ["exploration_count"] = _explorationCount,
             ["exploitation_count"] = _exploitationCount,
             ["strategy"] = _strategy.DescribeChanges()
@@ -280,7 +294,7 @@ public sealed class MetaStrategyEngine
 
     public bool ShouldExplore()
     {
-        return Random.Shared.NextDouble() < _explorationRate;
+        return _entropyScheduler.ShouldExplore();
     }
 
     public string? ForceColdExploration(string strategyType, string domain)
@@ -324,10 +338,12 @@ public sealed class MetaStrategyEngine
     {
         return new Dictionary<string, object>
         {
-            ["exploration_rate"] = _explorationRate,
+            ["entropy"] = _entropyScheduler.CurrentEntropy,
             ["exploration_ratio"] = ExplorationRatio,
-            ["strategy"] = _strategy.DescribeChanges(),
-            ["versions"] = _explorationCount + _exploitationCount
+            ["exploration_count"] = _explorationCount,
+            ["exploitation_count"] = _exploitationCount,
+            ["step"] = _entropyScheduler.Step,
+            ["strategy"] = _strategy.DescribeChanges()
         };
     }
 }

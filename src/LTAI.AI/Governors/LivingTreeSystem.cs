@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using LTAI.Core.Configuration;
 using LTAI.Core.Execution;
 using LTAI.Core.Interfaces;
 using LTAI.Core.Models;
@@ -6,6 +7,7 @@ using LTAI.DNA;
 using LTAI.Capability.Reasoning;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace LTAI.AI.Governors;
 
@@ -16,6 +18,7 @@ public sealed class LivingTreeSystem
     private readonly IChatClient _llm;
     private readonly ILogger<LivingTreeSystem> _logger;
     private readonly DNAOrchestrator? _dna;
+    private readonly IOptions<LTAIOptions> _options;
 
     private readonly InputGovernor _input;
     private readonly ContextGovernor _context;
@@ -30,6 +33,8 @@ public sealed class LivingTreeSystem
     private readonly SystemGuardian _guardian;
     private readonly ReasoningOrchestrator? _reasoning;
 
+    private string DefaultModel => _options.Value.AI.L2.Model;
+
     public SystemGuardian Guardian => _guardian;
     public SystemMode Mode => _guardian.Mode;
     public bool DNAEnabled => _dna != null;
@@ -40,6 +45,7 @@ public sealed class LivingTreeSystem
         TaskJournal journal,
         IChatClient llm,
         ILogger<LivingTreeSystem> logger,
+        IOptions<LTAIOptions> options,
         InputGovernor input,
         ContextGovernor context,
         RoutingGovernor routing,
@@ -58,6 +64,7 @@ public sealed class LivingTreeSystem
         _journal = journal;
         _llm = llm;
         _logger = logger;
+        _options = options;
         _input = input;
         _context = context;
         _routing = routing;
@@ -182,11 +189,11 @@ public sealed class LivingTreeSystem
                 Payload = new Dictionary<string, object?> { ["query"] = query, ["label"] = "deep" }
             }, cancellationToken);
 
-            model = routingResult.Payload?.GetValueOrDefault("model")?.ToString() ?? "deepseek-v4-pro";
+            model = routingResult.Payload?.GetValueOrDefault("model")?.ToString() ?? DefaultModel;
         }
         catch
         {
-            model = "deepseek-v4-pro";
+            model = DefaultModel;
         }
 
         var options = new ChatOptions { ModelId = model, Temperature = 0.3f, MaxOutputTokens = 4096 };
@@ -285,7 +292,7 @@ public sealed class LivingTreeSystem
             ReplyTo = traceId
         }, cancellationToken);
 
-        var model = routingResult.Payload?.GetValueOrDefault("model")?.ToString() ?? "deepseek-v4-pro";
+        var model = routingResult.Payload?.GetValueOrDefault("model")?.ToString() ?? DefaultModel;
         var temperature = routingResult.Payload?.GetValueOrDefault("temperature") is float t ? t : 0.3f;
         var label = inputResult.Payload?.GetValueOrDefault("label")?.ToString() ?? "deep";
 

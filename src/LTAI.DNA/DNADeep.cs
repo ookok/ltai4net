@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using LTAI.Core.System;
 using Microsoft.Extensions.Logging;
 
 namespace LTAI.DNA;
@@ -291,27 +292,38 @@ public sealed class ForesightGovernance
 public sealed class EntropyDrive
 {
     private readonly Random _rng = new();
-    private double _entropyLevel = 0.5;
+    private readonly EntropyScheduler _scheduler;
 
-    public double EntropyLevel => _entropyLevel;
+    public double EntropyLevel => _scheduler.CurrentEntropy;
+    public EntropyScheduler Scheduler => _scheduler;
+
+    public EntropyDrive(EntropyScheduler? scheduler = null)
+    {
+        _scheduler = scheduler ?? new EntropyScheduler(new EntropyScheduleConfig
+        {
+            Type = EntropyScheduleType.Linear,
+            InitialEntropy = 0.8,
+            TargetEntropy = 0.15,
+            WarmupSteps = 50,
+            TotalSteps = 2000
+        });
+    }
 
     public string? Explore(List<string> candidates)
     {
         if (candidates.Count == 0) return null;
-        _entropyLevel = Math.Min(1.0, _entropyLevel + 0.02);
+        _scheduler.StepForward();
 
-        if (_rng.NextDouble() < _entropyLevel * 0.3)
+        if (_scheduler.ShouldExplore(_rng))
         {
             var pick = candidates[_rng.Next(candidates.Count)];
-            _entropyLevel = Math.Max(0.1, _entropyLevel - 0.15);
             return pick;
         }
 
-        _entropyLevel *= 0.98;
         return null;
     }
 
-    public void Reset() => _entropyLevel = 0.5;
+    public void Reset() => _scheduler.Reset();
 }
 
 public sealed class FocusDilution

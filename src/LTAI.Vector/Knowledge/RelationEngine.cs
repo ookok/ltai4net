@@ -10,6 +10,8 @@ public class RelationEngine
     private readonly Dictionary<string, Dictionary<string, List<string>>> _graph = new();
     private readonly ILogger<RelationEngine> _logger;
     private bool _depsLoaded;
+    private GeometricRelationSelector? _geometricSelector;
+    private readonly Dictionary<string, List<(string Target, string Relation, double Score)>> _multiHopCache = new();
 
     private static readonly List<RelationRule> DefaultRules = new()
     {
@@ -118,11 +120,105 @@ public class RelationEngine
                 totalRels += targets.Count;
                 byType[rel] = byType.GetValueOrDefault(rel) + targets.Count;
             }
-        return new()
+
+        var stats = new Dictionary<string, object>
         {
+            ["entities"] = _graph.Count,
             ["total_relations"] = totalRels,
-            ["by_type"] = byType,
-            ["rules_registered"] = _rules.Count
+            ["relation_types"] = byType,
+            ["geometric_enabled"] = _geometricSelector != null
         };
+
+        if (_geometricSelector != null)
+        {
+            var gStats = _geometricSelector.GetStats();
+            foreach (var kv in gStats)
+                stats[$"geometric_{kv.Key}"] = kv.Value;
+        }
+
+        return stats;
+    }
+
+    public void EnableGeometricSelector(int embeddingDim = 64)
+    {
+        _geometricSelector = new GeometricRelationSelector(embeddingDim);
+        foreach (var (subject, relations) in _graph)
+        {
+            var attrs = new Dictionary<string, double>();
+            foreach (var (rel, targets) in relations)
+            {
+                foreach (var target in targets)
+                {
+                    attrs[$"{rel}:{target}"] = 1.0;
+                }
+            }
+            if (attrs.Count > 0)
+                _geometricSelector.EncodeSubject(subject, attrs);
+        }
+    }
+
+    public List<string> SelectGeometric(string subject, string relation, int topK = 5)
+    {
+        if (_geometricSelector == null)
+            EnableGeometricSelector();
+
+        if (_geometricSelector != null)
+        {
+            _geometricSelector.LearnRelationGate(relation);
+            return _geometricSelector.Select(subject, relation, topK);
+        }
+
+        return Infer(subject, relation);
+    }
+
+    public List<(string Target, string Relation, double Score)> MultiHopChain(
+        string subject, string[] relations, bool useGeometric = true)
+    {
+        var cacheKey = $"{subject}|{string.Join(">", relations)}";
+        if (_multiHopCache.TryGetValue(cacheKey, out var cached))
+            return cached;
+
+        List<(string, string, double)> results;
+
+        if (useGeometric && _geometricSelector != null)
+        {
+            results = _geometricSelector.MultiHop(subject, relations, 3);
+        }
+        else
+        {
+            results = new();
+            var current = subject;
+            foreach (var relation in relations)
+            {
+                var inferred = Infer(current, relation);
+                if (inferred.Count == 0) break;
+                var best = inferred.First();
+                results.Add((best, relation, 1.0));
+                current = best;
+            }
+        }
+
+        _multiHopCache[cacheKey] = results;
+
+        if (_multiHopCache.Count > 1000)
+        {
+            var oldest = _multiHopCache.Keys.First();
+            _multiHopCache.Remove(oldest);
+        }
+
+        return results;
+    }
+
+    public string ExplainMultiHop(string subject, string[] relations)
+    {
+        var chain = MultiHopChain(subject, relations);
+        if (chain.Count == 0)
+            return $"No path found from '{subject}' via {string.Join(" → ", relations)}";
+
+        var parts = new List<string> { subject };
+        foreach (var (target, rel, score) in chain)
+            parts.Add($"[{rel}:{score:F2}]→ {target}");
+
+        return string.Join(" ", parts);
     }
 }

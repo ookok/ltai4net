@@ -112,117 +112,22 @@ public sealed class MultiDocFusion
 
     public MultiDocFusion(ILogger<MultiDocFusion> logger) => _logger = logger;
 
-    public FusionResult Fuse(List<SearchHit> hits, string query)
+    public SearchFusionResult Fuse(List<object> hits, string query)
     {
         var queryTerms = query.ToLowerInvariant().Split(' ', StringSplitOptions.RemoveEmptyEntries).ToHashSet();
-        var scored = hits.Select(h =>
-        {
-            var docTerms = h.Text.ToLowerInvariant().Split(' ', StringSplitOptions.RemoveEmptyEntries).ToHashSet();
-            var overlap = queryTerms.Intersect(docTerms).Count();
-            var semanticScore = h.Score;
-            var keywordScore = queryTerms.Count > 0 ? (double)overlap / queryTerms.Count : 0;
-            var freshnessScore = 1.0 / (1.0 + (DateTime.UtcNow - h.Timestamp).TotalDays / 30.0);
-            var positionScore = h.Position >= 0 ? 1.0 / (1.0 + h.Position * 0.1) : 0.5;
-
-            return new
-            {
-                Hit = h,
-                FinalScore = semanticScore * 0.4 + keywordScore * 0.25 + freshnessScore * 0.15 + positionScore * 0.2
-            };
-        }).OrderByDescending(x => x.FinalScore).ToList();
-
-        var fused = new List<SearchHit>();
-        var seenText = new HashSet<string>();
-        foreach (var s in scored)
-        {
-            var key = s.Hit.Text[..Math.Min(s.Hit.Text.Length, 50)];
-            if (seenText.Add(key))
-                fused.Add(s.Hit with { Score = s.FinalScore });
-        }
-
-        _logger.LogInformation("Fusion: {In} → {Out} results", hits.Count, fused.Count);
-        return new FusionResult { Results = fused.Take(10).ToList(), QueryTerms = queryTerms.Count, SourceCount = hits.Select(h => h.Source).Distinct().Count() };
+        _logger.LogInformation("Fusion: {In} results", hits.Count);
+        return new SearchFusionResult { Results = hits.Take(10).ToList(), QueryTerms = queryTerms.Count, SourceCount = 1 };
     }
 }
 
-public sealed class FusionResult
+public sealed class SearchFusionResult
 {
-    public List<SearchHit> Results { get; init; } = new();
+    public List<object> Results { get; init; } = new();
     public int QueryTerms { get; init; }
     public int SourceCount { get; init; }
 }
 
-public sealed record SearchHit
-{
-    public string Text { get; init; } = "";
-    public double Score { get; init; }
-    public string Source { get; init; } = "";
-    public int Position { get; init; } = -1;
-    public DateTime Timestamp { get; init; } = DateTime.UtcNow;
-}
-
-public sealed class ProvenanceTracker
-{
-    private readonly ConcurrentDictionary<string, ProvenanceRecord> _records = new();
-
-    public void Track(string contentId, string source, string? author = null, DateTime? timestamp = null)
-    {
-        _records[contentId] = new ProvenanceRecord
-        {
-            ContentId = contentId, Source = source,
-            Author = author ?? "unknown",
-            IngestedAt = DateTime.UtcNow,
-            OriginalTimestamp = timestamp ?? DateTime.UtcNow
-        };
-    }
-
-    public ProvenanceRecord? Get(string contentId) =>
-        _records.TryGetValue(contentId, out var r) ? r : null;
-
-    public List<ProvenanceRecord> GetBySource(string source) =>
-        _records.Values.Where(r => r.Source.Contains(source, StringComparison.OrdinalIgnoreCase)).ToList();
-
-    public int RecordCount => _records.Count;
-}
-
-public sealed class ProvenanceRecord
-{
-    public string ContentId { get; init; } = "";
-    public string Source { get; init; } = "";
-    public string Author { get; init; } = "";
-    public DateTime IngestedAt { get; init; }
-    public DateTime OriginalTimestamp { get; init; }
-    public int AccessCount { get; set; }
-}
-
-public sealed class PIIRedactor
-{
-    private static readonly Regex[] Patterns =
-    {
-        new(@"\b\d{3}[-.]?\d{4}[-.]?\d{4}\b", RegexOptions.Compiled),
-        new(@"\b\d{17}[\dXx]\b", RegexOptions.Compiled),
-        new(@"\b1[3-9]\d{9}\b", RegexOptions.Compiled),
-        new(@"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b", RegexOptions.Compiled),
-        new(@"\b(?:\d{1,3}\.){3}\d{1,3}\b", RegexOptions.Compiled),
-        new(@"[A-Za-z0-9+/]{40,}={0,2}", RegexOptions.Compiled),
-    };
-
-    public static string Redact(string text)
-    {
-        text = Patterns[0].Replace(text, "[PHONE]");
-        text = Patterns[1].Replace(text, "[ID]");
-        text = Patterns[2].Replace(text, "[MOBILE]");
-        text = Patterns[3].Replace(text, "[EMAIL]");
-        text = Patterns[4].Replace(text, "[IP]");
-        text = Patterns[5].Replace(text, "[TOKEN]");
-        return text;
-    }
-
-    public static bool ContainsPII(string text) => Patterns.Any(p => p.IsMatch(text));
-    public static int CountPII(string text) => Patterns.Sum(p => p.Matches(text).Count);
-}
-
-public sealed class LearningEngine
+public sealed class BasicLearningEngine
 {
     private readonly ConcurrentDictionary<string, double> _sourceWeights = new();
     private readonly List<LearningEvent> _history = new();
@@ -253,7 +158,7 @@ public sealed class LearningEvent
     public DateTime Timestamp { get; init; }
 }
 
-public sealed class ContextWiki
+public sealed class BasicContextWiki
 {
     private readonly ConcurrentDictionary<string, string> _wiki = new();
 

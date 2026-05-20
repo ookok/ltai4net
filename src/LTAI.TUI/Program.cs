@@ -7,6 +7,7 @@ using LTAI.Capability.CodeEngine;
 using LTAI.Capability.Reasoning;
 using LTAI.Core;
 using LTAI.Core.Configuration;
+using LTAI.Core.System;
 using LTAI.DNA;
 using LTAI.Memory;
 using LTAI.TUI;
@@ -49,6 +50,8 @@ var dna = sp.GetService<DNAOrchestrator>();
 var reasoning = sp.GetService<ReasoningOrchestrator>();
 var analyzer = sp.GetService<MultiLangCodeAnalyzer>();
 var options = sp.GetService<IOptions<LTAIOptions>>();
+var service = sp.GetService<ServiceManager>();
+var modelMgr = sp.GetService<ModelManager>();
 
-var app = new TuiApp(lts, dna, reasoning, analyzer, options);
+var app = new TuiApp(lts, dna, reasoning, analyzer, options, service, modelMgr);
 await app.RunAsync();

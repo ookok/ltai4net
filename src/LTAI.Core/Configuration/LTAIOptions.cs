@@ -12,19 +12,59 @@ public sealed class LTAIOptions
     public NetworkConfig Network { get; init; } = new();
 }
 
+public sealed class LayerConfig
+{
+    [JsonPropertyName("provider")]
+    public string Provider { get; init; } = string.Empty;
+
+    [JsonPropertyName("model")]
+    public string Model { get; init; } = string.Empty;
+
+    [JsonPropertyName("temperature")]
+    public float? Temperature { get; init; }
+
+    [JsonPropertyName("max_tokens")]
+    public int? MaxTokens { get; init; }
+
+    public bool IsConfigured => !string.IsNullOrWhiteSpace(Provider) && !string.IsNullOrWhiteSpace(Model);
+}
+
 public sealed class AIConfig
 {
     [JsonPropertyName("default_provider")]
     public string DefaultProvider { get; init; } = "deepseek";
 
+    [JsonPropertyName("l0")]
+    public LayerConfig L0 { get; init; } = new()
+    {
+        Provider = "siliconflow",
+        Model = "BAAI/bge-large-zh-v1.5"
+    };
+
+    [JsonPropertyName("l1")]
+    public LayerConfig L1 { get; init; } = new()
+    {
+        Provider = "deepseek",
+        Model = "deepseek-v4-flash",
+        Temperature = 0.3f
+    };
+
+    [JsonPropertyName("l2")]
+    public LayerConfig L2 { get; init; } = new()
+    {
+        Provider = "deepseek",
+        Model = "deepseek-v4-pro",
+        Temperature = 0.3f
+    };
+
     [JsonPropertyName("fast_model")]
-    public string FastModel { get; init; } = "deepseek-v4-flash";
+    public string FastModel => L1.Model;
 
     [JsonPropertyName("deep_model")]
-    public string DeepModel { get; init; } = "deepseek-v4-pro";
+    public string DeepModel => L2.Model;
 
     [JsonPropertyName("embedding_model")]
-    public string EmbeddingModel { get; init; } = "text-embedding-3-small";
+    public string EmbeddingModel => L0.Model;
 
     [JsonPropertyName("daily_budget_usd")]
     public decimal DailyBudgetUsd { get; init; } = 10.00m;
@@ -43,6 +83,20 @@ public sealed class AIConfig
 
     [JsonPropertyName("providers")]
     public Dictionary<string, ProviderConfig> Providers { get; init; } = new();
+
+    public LayerConfig GetLayerConfig(string layer)
+    {
+        return layer.ToUpperInvariant() switch
+        {
+            "L0" => L0,
+            "L1" => L1,
+            "L2" => L2,
+            "FAST" => L1,
+            "DEEP" => L2,
+            "EMBEDDING" => L0,
+            _ => L2
+        };
+    }
 }
 
 public sealed class ProviderConfig

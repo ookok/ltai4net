@@ -6,11 +6,12 @@ using LTAI.DNA;
 using LTAI.Capability.Reasoning;
 using LTAI.Capability.CodeEngine;
 using LTAI.Core.Configuration;
+using LTAI.Core.System;
 using Microsoft.Extensions.Options;
 
 namespace LTAI.TUI;
 
-public enum TuiView { Dashboard, Chat, Code, Git, Help, Session, LLMConfig }
+public enum TuiView { Dashboard, Chat, Code, Git, Help, Session, LLMConfig, Models, Service }
 
 public enum TuiTheme { Dark, Light, HighContrast }
 
@@ -30,6 +31,8 @@ public sealed class TuiApp
     private readonly ContextWindowView _ctxView;
     private readonly NotificationService _notify;
     private readonly SessionSearch _search;
+    private readonly ServiceManager? _service;
+    private readonly ModelManager? _modelMgr;
 
     private TuiView _currentView = TuiView.Dashboard;
     private TuiTheme _theme = TuiTheme.Dark;
@@ -54,12 +57,16 @@ public sealed class TuiApp
         DNAOrchestrator? dna = null,
         ReasoningOrchestrator? reasoning = null,
         MultiLangCodeAnalyzer? analyzer = null,
-        IOptions<LTAIOptions>? options = null)
+        IOptions<LTAIOptions>? options = null,
+        ServiceManager? service = null,
+        ModelManager? modelMgr = null)
     {
         _lts = lts;
         _dna = dna;
         _reasoning = reasoning;
         _analyzer = analyzer;
+        _service = service;
+        _modelMgr = modelMgr;
         _projectRoot = Directory.GetCurrentDirectory();
         _llmConfig = new LLMConfigPanel(options);
         _session = new SessionTracker();
@@ -142,6 +149,8 @@ public sealed class TuiApp
             case TuiView.Help: RenderHelp(); break;
             case TuiView.Session: RenderSessionView(); break;
             case TuiView.LLMConfig: RenderLLMView(); break;
+            case TuiView.Models: RenderModelsView(); break;
+            case TuiView.Service: RenderServiceView(); break;
         }
 
         AnsiConsole.Write(new Rule());
@@ -223,7 +232,7 @@ public sealed class TuiApp
     private IRenderable CreateCommandsPanel()
     {
         return MkPanel("""
-            [yellow]1-7[/] Dashboard/Chat/Code/Git/Help/Session/LLM
+            [yellow]1-9[/] Dashboard/Chat/Code/Git/Help/Session/LLM/Models/Service
             [yellow]c[/] Chat   [yellow]l[/] LLM config   [yellow]t[/] Thought chain
             [yellow]a[/] Analyze   [yellow]g[/] Git   [yellow]q[/] Quit
             [yellow]Enter[/] Send   [yellow]Esc[/] Back
@@ -400,14 +409,77 @@ public sealed class TuiApp
         AnsiConsole.Write(_llmConfig.Render());
     }
 
+    private void RenderModelsView()
+    {
+        AnsiConsole.MarkupLine("[bold cyan]Model Registry[/]");
+        AnsiConsole.Write(new Rule());
+
+        if (_modelMgr == null)
+        {
+            AnsiConsole.MarkupLine("[red]Model manager not available[/]");
+            return;
+        }
+
+        var models = _modelMgr.ListAll();
+        var table = new Table()
+            .Border(TableBorder.Rounded)
+            .AddColumn("[cyan]Provider[/]")
+            .AddColumn("[yellow]Tier[/]")
+            .AddColumn("[white]Model[/]")
+            .AddColumn("[grey]Capabilities[/]");
+
+        foreach (var m in models.OrderBy(m => m.Provider).Take(40))
+        {
+            table.AddRow(
+                new Markup($"[cyan]{m.Provider}[/]"),
+                new Markup($"[yellow]{m.TierName}[/]"),
+                new Markup($"[white]{m.ModelName}[/]"),
+                new Markup($"[grey]{string.Join(", ", m.Capabilities.Take(4))}[/]"));
+        }
+
+        AnsiConsole.Write(table);
+        AnsiConsole.MarkupLine($"[grey]Total: {models.Count} models across {models.Select(m => m.Provider).Distinct().Count()} providers[/]");
+        AnsiConsole.Write(new Rule());
+        AnsiConsole.MarkupLine("[grey]y[/] Sync info  [grey]f[/] Filter  [grey]Esc[/] Back");
+    }
+
+    private async void RenderServiceView()
+    {
+        AnsiConsole.MarkupLine("[bold cyan]Service Management[/]");
+        AnsiConsole.Write(new Rule());
+
+        if (_service == null)
+        {
+            AnsiConsole.MarkupLine("[red]Service manager not available[/]");
+            return;
+        }
+
+        if (!_service.IsWindows)
+        {
+            AnsiConsole.MarkupLine("[yellow]Windows Service management only available on Windows.[/]");
+            AnsiConsole.MarkupLine("[grey]On Linux/macOS, use systemd or launchd directly.[/]");
+            return;
+        }
+
+        var status = await _service.StatusAsync();
+        AnsiConsole.MarkupLine($"[cyan]Service:[/] LTAIService (LivingTree AI Agent)");
+        AnsiConsole.MarkupLine(status.Success
+            ? $"[green]Status:[/] {status.Output}"
+            : $"[red]Status:[/] {status.Message}");
+
+        AnsiConsole.Write(new Rule());
+        AnsiConsole.MarkupLine("[yellow]i[/] Install  [yellow]u[/] Uninstall  [yellow]s[/] Start  [yellow]t[/] Stop  [yellow]r[/] Restart  [yellow]Esc[/] Back");
+    }
+
     private void RenderHelp()
     {
         AnsiConsole.Write(MkPanel("""
             [bold cyan]LTAI TUI — Commands[/]
 
-            [yellow]Views (1-7):[/]
+            [yellow]Views (1-9):[/]
               1 Dashboard  2 Chat  3 Code  4 Git
               5 Help  6 Session  7 LLM Config
+              8 Models  9 Service
 
             [yellow]Chat:[/]
               Enter  - Send   Esc - Exit
@@ -439,7 +511,8 @@ public sealed class TuiApp
         {
             TuiView.Dashboard => "Dashboard", TuiView.Chat => "Chat", TuiView.Code => "Code",
             TuiView.Git => "Git", TuiView.Help => "Help", TuiView.Session => "Session",
-            TuiView.LLMConfig => "LLM Config", _ => ""
+            TuiView.LLMConfig => "LLM Config", TuiView.Models => "Models", TuiView.Service => "Service",
+            _ => ""
         };
         AnsiConsole.MarkupLine($"[grey]View: {name} | Session: {_session.SessionId} | Turns: {_session.TotalTurns} | Tokens: {_session.TotalTokens} | ? help | q quit[/]");
     }
@@ -466,6 +539,8 @@ public sealed class TuiApp
             case ConsoleKey.D5 or ConsoleKey.NumPad5: _currentView = TuiView.Help; break;
             case ConsoleKey.D6 or ConsoleKey.NumPad6: _currentView = TuiView.Session; break;
             case ConsoleKey.D7 or ConsoleKey.NumPad7: _currentView = TuiView.LLMConfig; break;
+            case ConsoleKey.D8 or ConsoleKey.NumPad8: _currentView = TuiView.Models; break;
+            case ConsoleKey.D9 or ConsoleKey.NumPad9: _currentView = TuiView.Service; break;
             case ConsoleKey.C when key.Modifiers == 0: _currentView = TuiView.Chat; break;
             case ConsoleKey.L when key.Modifiers == 0: _showLLMPanel = !_showLLMPanel; _currentView = _showLLMPanel ? TuiView.LLMConfig : _currentView; break;
             case ConsoleKey.M when key.Modifiers == 0: _llmConfig.CycleModel(); _activityLog.Add($"[LLM] Switched to {_llmConfig.SelectedModel}"); break;
@@ -495,6 +570,14 @@ public sealed class TuiApp
             case ConsoleKey.Escape when _currentView == TuiView.Chat: _currentView = TuiView.Dashboard; break;
             case ConsoleKey.Escape when _showLLMPanel: _showLLMPanel = false; break;
             case ConsoleKey.A when _currentView == TuiView.Code: await PromptAnalyzeFileAsync(); break;
+
+            case ConsoleKey.I when _currentView == TuiView.Service: await ServiceActionAsync("install"); break;
+            case ConsoleKey.U when _currentView == TuiView.Service: await ServiceActionAsync("uninstall"); break;
+            case ConsoleKey.S when _currentView == TuiView.Service: await ServiceActionAsync("start"); break;
+            case ConsoleKey.T when _currentView == TuiView.Service: await ServiceActionAsync("stop"); break;
+            case ConsoleKey.R when _currentView == TuiView.Service: await ServiceActionAsync("restart"); break;
+            case ConsoleKey.F when _currentView == TuiView.Models: await FilterModelsAsync(); break;
+            case ConsoleKey.Y when _currentView == TuiView.Models: await SyncModelsAsync(); break;
         }
     }
 
@@ -747,5 +830,64 @@ public sealed class TuiApp
         { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
         using var p = System.Diagnostics.Process.Start(psi); if (p == null) return "";
         var o = p.StandardOutput.ReadToEnd(); p.WaitForExit(5000); return o;
+    }
+
+    private async Task ServiceActionAsync(string action)
+    {
+        if (_service == null) return;
+
+        var result = await AnsiConsole.Status().StartAsync($"Running {action}...", async _ =>
+        {
+            return action switch
+            {
+                "install" => await _service.InstallAsync(),
+                "uninstall" => await _service.UninstallAsync(),
+                "start" => await _service.StartAsync(),
+                "stop" => await _service.StopAsync(),
+                "restart" => await _service.RestartAsync(),
+                _ => new ServiceResult { Success = false, Message = $"Unknown action: {action}" }
+            };
+        });
+
+        if (result.Success)
+            AnsiConsole.MarkupLine($"[green]{action} succeeded:[/] {result.Message}");
+        else
+            AnsiConsole.MarkupLine($"[red]{action} failed:[/] {result.Message}");
+
+        if (!string.IsNullOrWhiteSpace(result.Output))
+            AnsiConsole.MarkupLine($"[grey]{result.Output}[/]");
+
+        _activityLog.Add($"[Service] {action}: {(result.Success ? "OK" : "FAIL")}");
+        await Task.Delay(1500);
+    }
+
+    private async Task FilterModelsAsync()
+    {
+        if (_modelMgr == null) return;
+        var keyword = AnsiConsole.Ask<string>("[cyan]Filter keyword:[/] ");
+        if (string.IsNullOrWhiteSpace(keyword)) return;
+
+        var results = _modelMgr.Search(keyword);
+        AnsiConsole.Clear();
+        AnsiConsole.MarkupLine($"[bold cyan]Models matching '{keyword}' ({results.Count})[/]");
+        AnsiConsole.Write(new Rule());
+
+        foreach (var m in results)
+        {
+            AnsiConsole.MarkupLine($"  [cyan]{m.Provider}[/]/[yellow]{m.TierName}[/] → [white]{m.ModelName}[/] [grey]({string.Join(", ", m.Capabilities)})[/]");
+        }
+
+        AnsiConsole.MarkupLine("[grey](Press any key to return)[/]");
+        while (!Console.KeyAvailable) await Task.Delay(50);
+        Console.ReadKey(true);
+    }
+
+    private async Task SyncModelsAsync()
+    {
+        if (_modelMgr == null) return;
+        var info = _modelMgr.SyncInfo();
+        AnsiConsole.MarkupLine($"[green]Synced:[/] {info.GetType().GetProperty("total_providers")?.GetValue(info)} providers");
+        _activityLog.Add("[Models] Synced registry info");
+        await Task.Delay(800);
     }
 }

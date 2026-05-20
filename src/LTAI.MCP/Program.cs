@@ -27,7 +27,7 @@ var services = new ServiceCollection();
 services.AddLogging(b => b.SetMinimumLevel(LogLevel.Warning).AddConsole());
 
 var ltaiOptions = new LTAIOptions();
-ltaiOptions.AI.Providers["deepseek"] = new ProviderConfig { Endpoint = "https://api.deepseek.com", Model = "deepseek-v4-pro" };
+ltaiOptions.AI.Providers["deepseek"] = new ProviderConfig { Endpoint = "https://api.deepseek.com", Model = "deepseek-chat" };
 ltaiOptions.Web.RateLimitPerMinute = 60;
 services.AddSingleton(Options.Create(ltaiOptions));
 

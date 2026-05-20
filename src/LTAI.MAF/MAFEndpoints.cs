@@ -9,6 +9,7 @@ public static class MAFEndpoints
 {
     public static void MapMAFEndpoints(this IEndpointRouteBuilder endpoints)
     {
+        endpoints.MapDevUIEndpoints();
         endpoints.MapPost("/api/maf/chat", async (
             HttpContext context,
             LTAIAgent agent,

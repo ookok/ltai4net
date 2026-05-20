@@ -19,6 +19,8 @@ public static class WebApplicationExtensions
         app.MapSseAgentEndpoints();
         app.MapOpenCodeBridgeEndpoints();
         app.MapDocRoutesEndpoints();
+        app.MapCognitionStreamEndpoints();
+        app.MapWorkspaceEndpoints();
         app.MapHealthChecks("/api/health", new HealthCheckOptions
         {
             ResponseWriter = async (context, report) =>

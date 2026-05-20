@@ -1,4 +1,5 @@
 using System.Text.Json;
+using LTAI.Core.System;
 using LTAI.Execution.Models;
 using Microsoft.Extensions.Logging;
 
@@ -397,11 +398,29 @@ public sealed class ThinkingEvolution
         };
     }
 
+    private readonly EntropyScheduler? _scheduler;
+
+    public void SetEntropyScheduler(EntropyScheduler scheduler)
+    {
+        _schedulerField = scheduler;
+    }
+
+    private EntropyScheduler? _schedulerField;
+
     private string PickMutationDirection()
     {
-        var roll = _rng.NextDouble();
-        if (roll < 0.5) return "explore";
-        if (roll < 0.8) return "refine";
+        if (_schedulerField != null)
+        {
+            var (explore, refine, exploit) = _schedulerField.GetActionWeights();
+            var roll = _rng.NextDouble();
+            if (roll < explore) return "explore";
+            if (roll < explore + refine) return "refine";
+            return "diversify";
+        }
+
+        var roll2 = _rng.NextDouble();
+        if (roll2 < 0.5) return "explore";
+        if (roll2 < 0.8) return "refine";
         return "diversify";
     }
 

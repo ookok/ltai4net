@@ -89,7 +89,7 @@ public static class SampleCode
 public static class SampleText
 {
     public const string Small = "This is a short document for testing chunking performance.";
-    public const string Large = string.Join("\n\n", Enumerable.Repeat("This is a paragraph about artificial intelligence and machine learning systems. " +
+    public static readonly string Large = string.Join("\n\n", Enumerable.Repeat("This is a paragraph about artificial intelligence and machine learning systems. " +
         "The field has evolved significantly over the past decade with breakthroughs in deep learning and transformer architectures. " +
         "Modern AI systems can process natural language, generate code, analyze images, and reason about complex problems.", 50));
 }

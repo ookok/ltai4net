@@ -1,21 +1,24 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
-using Microsoft.Extensions.Logging;
+using LTAI.Core.System;
 using LTAI.TreeLLM.Models;
+using Microsoft.Extensions.Logging;
 
 namespace LTAI.TreeLLM.Session;
 
 public sealed class SegmentedKVCompressor
 {
     private readonly ILogger<SegmentedKVCompressor>? _logger;
+    private readonly EntropyScheduler? _scheduler;
 
     private const int SEGMENT_SIZE = 8;
     private const int KV_TAIL_TOKENS = 500;
     private const int TRUNCATED_K = 1;
 
-    public SegmentedKVCompressor(ILogger<SegmentedKVCompressor>? logger = null)
+    public SegmentedKVCompressor(ILogger<SegmentedKVCompressor>? logger = null, EntropyScheduler? scheduler = null)
     {
         _logger = logger;
+        _scheduler = scheduler;
     }
 
     public List<Dictionary<string, string>> Compress(
@@ -31,16 +34,44 @@ public sealed class SegmentedKVCompressor
         {
             if (i > 0)
             {
-                var tail = BuildKVTail(segments[i - 1], chatFn);
-                result.Add(new Dictionary<string, string>
+                var prevSegment = segments[i - 1];
+                var nextSegment = segments[i];
+                var transitionEntropy = ComputeTransitionEntropy(prevSegment, nextSegment);
+
+                if (transitionEntropy > 0.4)
                 {
-                    ["role"] = "system",
-                    ["content"] = $"[KV-Tail: {tail.Text}]"
-                });
+                    var tail = BuildKVTail(prevSegment, chatFn);
+                    result.Add(new Dictionary<string, string>
+                    {
+                        ["role"] = "system",
+                        ["content"] = $"[KV-Tail: {tail.Text}]"
+                    });
+
+                    if (transitionEntropy > 0.65)
+                    {
+                        var scratchpad = BuildScratchpad(prevSegment, nextSegment, chatFn);
+                        if (!string.IsNullOrWhiteSpace(scratchpad))
+                        {
+                            result.Add(new Dictionary<string, string>
+                            {
+                                ["role"] = "system",
+                                ["content"] = $"[Scratchpad: {scratchpad}]"
+                            });
+                        }
+                    }
+                }
+                else
+                {
+                    var tail = BuildKVTail(prevSegment, chatFn);
+                    result.Add(new Dictionary<string, string>
+                    {
+                        ["role"] = "system",
+                        ["content"] = $"[KV-Tail: {tail.Text}]"
+                    });
+                }
             }
 
-            var segment = segments[i];
-            result.AddRange(segment);
+            result.AddRange(segments[i]);
         }
 
         if (EstimateTokens(result) > maxTokens)
@@ -116,18 +147,53 @@ public sealed class SegmentedKVCompressor
         List<Dictionary<string, string>> messages)
     {
         var segments = new List<List<Dictionary<string, string>>>();
-        var entropy = EstimateEntropy(messages);
-        var segSize = entropy switch
+        var globalEntropy = EstimateEntropy(messages);
+
+        int baseSegSize = globalEntropy switch
         {
-            > 0.7 => 4,
+            > 0.7 => 3,
+            > 0.5 => 5,
             > 0.3 => SEGMENT_SIZE,
-            _ => 16
+            _ => 14
         };
 
-        for (int i = 0; i < messages.Count; i += segSize)
-            segments.Add(messages.GetRange(i, Math.Min(segSize, messages.Count - i)));
+        if (_scheduler != null)
+        {
+            double schedulerEntropy = _scheduler.CurrentEntropy;
+            baseSegSize = (int)(baseSegSize * (1.0 + schedulerEntropy * 0.5));
+            baseSegSize = Math.Max(3, Math.Min(20, baseSegSize));
+        }
+
+        var i = 0;
+        while (i < messages.Count)
+        {
+            var remaining = messages.Count - i;
+            var segSize = Math.Min(baseSegSize, remaining);
+
+            if (i + segSize < messages.Count)
+            {
+                var localEntropy = EstimateLocalEntropy(messages, i, segSize);
+                segSize = localEntropy switch
+                {
+                    > 0.6 => Math.Max(3, segSize / 2),
+                    > 0.3 => segSize,
+                    _ => Math.Min(20, segSize * 2)
+                };
+            }
+
+            segSize = Math.Min(segSize, messages.Count - i);
+            segments.Add(messages.GetRange(i, segSize));
+            i += segSize;
+        }
 
         return segments;
+    }
+
+    private double EstimateLocalEntropy(List<Dictionary<string, string>> messages, int start, int length)
+    {
+        var end = Math.Min(start + length, messages.Count);
+        var slice = messages.Skip(start).Take(end - start).ToList();
+        return EstimateEntropy(slice);
     }
 
     private double EstimateEntropy(List<Dictionary<string, string>> messages)
@@ -135,18 +201,102 @@ public sealed class SegmentedKVCompressor
         var markers = new[] { "tool_call", "code", "```", "error", "Error", "Exception",
             "decided", "approach", "决定", "方案", "选择", "def ", "class ", "function" };
         int count = 0;
+        var uniqueTokens = new HashSet<string>();
+        var totalLength = 0;
+        var roleTransitions = 0;
+        string? prevRole = null;
 
-        foreach (var m in messages)
+        for (int i = 0; i < messages.Count; i++)
         {
+            var m = messages[i];
             if (m.TryGetValue("content", out var c))
             {
                 foreach (var marker in markers)
                     if (c.Contains(marker, StringComparison.OrdinalIgnoreCase))
                     { count++; break; }
+
+                foreach (var word in c.Split(' ', '\n', '\r'))
+                {
+                    if (word.Length >= 2)
+                        uniqueTokens.Add(word.ToLowerInvariant());
+                }
+                totalLength += c.Length;
+            }
+
+            if (m.TryGetValue("role", out var r))
+            {
+                if (prevRole != null && r != prevRole) roleTransitions++;
+                prevRole = r;
             }
         }
 
-        return Math.Min(1.0, (double)count / messages.Count * 2);
+        double keywordDensity = Math.Min(1.0, (double)count / Math.Max(1, messages.Count) * 2);
+        double vocabRichness = messages.Count > 0
+            ? Math.Min(1.0, (double)uniqueTokens.Count / Math.Max(1, totalLength / 4) * 3)
+            : 0;
+        double transitionRate = messages.Count > 1
+            ? (double)roleTransitions / (messages.Count - 1)
+            : 0;
+
+        return keywordDensity * 0.4 + vocabRichness * 0.35 + transitionRate * 0.25;
+    }
+
+    private double ComputeTransitionEntropy(
+        List<Dictionary<string, string>> prev, List<Dictionary<string, string>> next)
+    {
+        if (prev.Count == 0 || next.Count == 0) return 0.5;
+
+        var prevLast = prev.Last();
+        var nextFirst = next.First();
+        var prevContent = prevLast.TryGetValue("content", out var pc) ? pc : "";
+        var nextContent = nextFirst.TryGetValue("content", out var nc) ? nc : "";
+
+        var prevWords = new HashSet<string>(prevContent.Split(' ', '\n', '\r')
+            .Where(w => w.Length >= 2).Select(w => w.ToLowerInvariant()));
+        var nextWords = new HashSet<string>(nextContent.Split(' ', '\n', '\r')
+            .Where(w => w.Length >= 2).Select(w => w.ToLowerInvariant()));
+
+        if (prevWords.Count == 0 || nextWords.Count == 0) return 0.5;
+
+        var overlap = prevWords.Intersect(nextWords).Count();
+        var jaccard = (double)overlap / (prevWords.Count + nextWords.Count - overlap);
+
+        var prevRole = prevLast.TryGetValue("role", out var pr) ? pr : "";
+        var nextRole = nextFirst.TryGetValue("role", out var nr) ? nr : "";
+        var roleChange = prevRole != nextRole ? 0.3 : 0;
+
+        double sizeRatio = Math.Min(1.0, (double)nextContent.Length / Math.Max(1, prevContent.Length));
+
+        return (1.0 - jaccard) * 0.5 + roleChange * 0.3 + Math.Abs(sizeRatio - 0.5) * 0.2;
+    }
+
+    private string? BuildScratchpad(
+        List<Dictionary<string, string>> prevSegment,
+        List<Dictionary<string, string>> nextSegment,
+        Func<string, string>? chatFn)
+    {
+        if (chatFn == null) return null;
+
+        var lastMessages = prevSegment.TakeLast(Math.Min(2, prevSegment.Count)).ToList();
+        var firstMessages = nextSegment.Take(Math.Min(2, nextSegment.Count)).ToList();
+
+        var context = string.Join("\n", lastMessages.Select(m =>
+            m.TryGetValue("content", out var c) ? c[..Math.Min(c.Length, 200)] : ""));
+        var upcoming = string.Join("\n", firstMessages.Select(m =>
+            m.TryGetValue("content", out var c) ? c[..Math.Min(c.Length, 200)] : ""));
+
+        try
+        {
+            var prompt = $"Bridge context: Previous segment discusses: {context}\n\n" +
+                         $"Upcoming segment begins with: {upcoming}\n\n" +
+                         "In one short sentence, state the key transition or carry-forward insight connecting these.";
+            var scratchpad = chatFn(prompt);
+            return scratchpad.Length > 300 ? scratchpad[..300] : scratchpad;
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private KVTail BuildKVTail(List<Dictionary<string, string>> segment, Func<string, string>? chatFn)

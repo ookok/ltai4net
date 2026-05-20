@@ -1,4 +1,6 @@
 using System.Collections.Concurrent;
+using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using LTAI.TreeLLM.Models;
 using Microsoft.Extensions.Logging;
@@ -11,10 +13,12 @@ public sealed partial class ThreeModelIntelligence
     public static ThreeModelIntelligence Instance => _instanceLazy.Value;
 
     private readonly ConcurrentDictionary<string, ReflexRule> _reflexes = new();
+    private readonly ConcurrentDictionary<string, float[]> _reflexEmbeddings = new();
     private readonly object _lock = new();
     private readonly List<(string Query, List<string> Needs)> _trajectory = new();
     private readonly List<object> _dreamQueue = new();
     private readonly ILogger<ThreeModelIntelligence>? _logger;
+    private IEmbeddingBackend? _embeddingBackend;
 
     private static readonly Dictionary<string, (double Valence, double Arousal, double Dominance)> VadLexiconCn = new()
     {
@@ -52,59 +56,129 @@ public sealed partial class ThreeModelIntelligence
     };
 
     private readonly ConcurrentQueue<EmotionVector> _emotionHistory = new();
+    private readonly HierarchicalEmotionTree _emotionTree = new();
 
     public ThreeModelIntelligence(ILogger<ThreeModelIntelligence>? logger = null)
     {
         _logger = logger;
     }
 
-    public string? SpinalReflex(string query)
+    public void ConfigureL0Embedding(IEmbeddingBackend backend)
+    {
+        _embeddingBackend = backend;
+    }
+
+    public void ConfigureL0Embedding(string providerName)
+    {
+        var config = LTAI.Core.Configuration.ProviderRegistry.ResolveConfig(providerName,
+            LTAI.Core.Configuration.ProviderRegistry.DefaultProviderModel(providerName), "");
+        if (config != null)
+            _embeddingBackend = new OpenAiCompatibleEmbeddingBackend(config.Endpoint, config.ApiKey, config.Model);
+    }
+
+    public void ConfigureL0Embedding(LTAI.Core.Configuration.IProviderRegistry registry, LTAI.Core.Configuration.AIConfig aiConfig)
+    {
+        var l0 = aiConfig.L0;
+        if (!l0.IsConfigured) return;
+
+        if (aiConfig.Providers.TryGetValue(l0.Provider, out var configured))
+        {
+            _embeddingBackend = new OpenAiCompatibleEmbeddingBackend(configured.Endpoint, configured.ApiKey, l0.Model);
+            return;
+        }
+
+        var config = registry.ResolveConfig(l0.Provider, l0.Model);
+        if (config != null)
+            _embeddingBackend = new OpenAiCompatibleEmbeddingBackend(config.Endpoint, config.ApiKey, config.Model);
+    }
+
+    public async Task<string?> SpinalReflexAsync(string query)
     {
         if (string.IsNullOrWhiteSpace(query)) return null;
 
-        if (_reflexes.TryGetValue(query, out var exactMatch))
-        {
-            exactMatch.HitCount++;
-            exactMatch.LastHit = DateTime.UtcNow;
-            return exactMatch.Response;
-        }
+        if (_reflexes.TryGetValue(query, out var exact))
+        { exact.HitCount++; exact.LastHit = DateTime.UtcNow; return exact.Response; }
 
         foreach (var (pattern, rule) in _reflexes)
         {
             if (query.Contains(pattern, StringComparison.Ordinal))
-            {
-                rule.HitCount++;
-                rule.LastHit = DateTime.UtcNow;
-                return rule.Response;
-            }
+            { rule.HitCount++; rule.LastHit = DateTime.UtcNow; return rule.Response; }
         }
 
-        var queryNormal = Normalize(query);
-        foreach (var (pattern, rule) in _reflexes)
+        if (_reflexEmbeddings.Count > 0)
         {
-            if (Normalize(pattern).Contains(queryNormal, StringComparison.Ordinal) ||
-                queryNormal.Contains(Normalize(pattern), StringComparison.Ordinal))
+            var queryEmbed = await GetEmbeddingAsync(query);
+            if (queryEmbed != null)
             {
-                rule.HitCount++;
-                rule.LastHit = DateTime.UtcNow;
-                return rule.Response;
+                var best = FindBestVectorMatch(queryEmbed);
+                if (best.score > 0.85 && _reflexes.TryGetValue(best.pattern, out var rule))
+                { rule.HitCount++; rule.LastHit = DateTime.UtcNow; return rule.Response; }
             }
         }
 
         return null;
     }
 
-    public void AddReflex(string pattern, string response)
+    public async Task AddReflexAsync(string pattern, string response)
     {
         _reflexes.AddOrUpdate(pattern,
             _ => new ReflexRule { Pattern = pattern, Response = response, HitCount = 0, LastHit = DateTime.UtcNow },
-            (_, existing) =>
+            (_, r) => { r.Response = response; r.HitCount = 0; r.LastHit = DateTime.UtcNow; return r; });
+
+        var embed = await GetEmbeddingAsync(pattern);
+        if (embed != null)
+            _reflexEmbeddings[pattern] = embed;
+    }
+
+    private (string pattern, float score) FindBestVectorMatch(float[] queryEmbed)
+    {
+        var best = ("", 0f);
+        foreach (var (pattern, embed) in _reflexEmbeddings)
+        {
+            var sim = CosineSimilarity(queryEmbed, embed);
+            if (sim > best.Item2) best = (pattern, sim);
+        }
+        return best;
+    }
+
+    private static float CosineSimilarity(float[] a, float[] b)
+    {
+        var dot = 0f; var normA = 0f; var normB = 0f;
+        for (var i = 0; i < a.Length; i++)
+        { dot += a[i] * b[i]; normA += a[i] * a[i]; normB += b[i] * b[i]; }
+        return dot / (MathF.Sqrt(normA) * MathF.Sqrt(normB) + 1e-9f);
+    }
+
+    private async Task<float[]?> GetEmbeddingAsync(string text)
+    {
+        if (string.IsNullOrEmpty(_embeddingApiKey))
+        {
+            if (!_embeddingAvailable) _embeddingAvailable = false;
+            return null;
+        }
+
+        try
+        {
+            var payload = JsonSerializer.Serialize(new { model = _embeddingModel, input = text, encoding_format = "float" });
+            var request = new HttpRequestMessage(HttpMethod.Post, _embeddingEndpoint)
             {
-                existing.Response = response;
-                existing.HitCount = 0;
-                existing.LastHit = DateTime.UtcNow;
-                return existing;
-            });
+                Content = new StringContent(payload, Encoding.UTF8, "application/json")
+            };
+            request.Headers.Add("Authorization", $"Bearer {_embeddingApiKey}");
+
+            var response = await _embeddingHttp.SendAsync(request);
+            if (!response.IsSuccessStatusCode) return null;
+
+            var json = await response.Content.ReadAsStringAsync();
+            using var doc = JsonDocument.Parse(json);
+            var data = doc.RootElement.GetProperty("data")[0].GetProperty("embedding");
+            var embed = new float[data.GetArrayLength()];
+            for (var i = 0; i < embed.Length; i++) embed[i] = data[i].GetSingle();
+
+            _embeddingAvailable = true;
+            return embed;
+        }
+        catch { _embeddingAvailable = false; return null; }
     }
 
     public TriageResult Triage(string query)
@@ -129,7 +203,7 @@ public sealed partial class ThreeModelIntelligence
 
         var label = complexity < 0.3 ? "reflex" : complexity < 0.6 ? "fast" : "reasoning";
         var emotion = _DetectEmotion(query);
-        var matchedReflex = SpinalReflex(query);
+        var matchedReflex = await SpinalReflexAsync(query);
 
         return new TriageResult
         {
@@ -175,11 +249,16 @@ public sealed partial class ThreeModelIntelligence
         var a = rawA * blend + center * (1.0 - blend);
         var d = rawD * blend + center * (1.0 - blend);
 
+        var (primary, secondary, tertiary) = _emotionTree.Classify(v, a, d);
+
         var ev = new EmotionVector
         {
             Valence = Math.Clamp(v, 0.0, 1.0),
             Arousal = Math.Clamp(a, 0.0, 1.0),
-            Dominance = Math.Clamp(d, 0.0, 1.0)
+            Dominance = Math.Clamp(d, 0.0, 1.0),
+            PrimaryEmotion = primary,
+            SecondaryEmotion = secondary,
+            TertiaryEmotion = tertiary
         };
 
         _emotionHistory.Enqueue(ev);
@@ -233,33 +312,81 @@ public sealed partial class ThreeModelIntelligence
         var emotion = _DetectEmotion(query);
         var result = new Dictionary<string, object>();
 
-        if (emotion.IsUrgent)
+        var primary = emotion.PrimaryEmotion ?? "neutral";
+
+        switch (primary)
         {
-            result["tone"] = "urgent";
-            result["temperatureAdjust"] = -0.1;
-            result["skipPreload"] = true;
-        }
-        else if (emotion.IsNegative)
-        {
-            result["tone"] = "empathetic";
-            result["temperatureAdjust"] = +0.05;
-            result["maxTokensOverride"] = 4096;
-        }
-        else if (emotion.IsConfused)
-        {
-            result["tone"] = "clarifying";
-            result["askClarification"] = true;
-            result["temperatureAdjust"] = 0.0;
-        }
-        else
-        {
-            result["tone"] = "neutral";
-            result["temperatureAdjust"] = 0.0;
+            case "anger" or "rage" or "irritation":
+                result["tone"] = "calming";
+                result["temperatureAdjust"] = -0.15;
+                result["skipPreload"] = true;
+                result["primary_emotion"] = primary;
+                break;
+            case "fear" or "terror" or "anxiety":
+                result["tone"] = "reassuring";
+                result["temperatureAdjust"] = -0.1;
+                result["maxTokensOverride"] = 4096;
+                result["primary_emotion"] = primary;
+                break;
+            case "sadness" or "grief" or "disappointment":
+                result["tone"] = "empathetic";
+                result["temperatureAdjust"] = +0.05;
+                result["maxTokensOverride"] = 4096;
+                result["primary_emotion"] = primary;
+                break;
+            case "joy" or "excitement" or "ecstasy":
+                result["tone"] = "enthusiastic";
+                result["temperatureAdjust"] = +0.1;
+                result["primary_emotion"] = primary;
+                break;
+            case "surprise" or "curiosity":
+                result["tone"] = "exploratory";
+                result["temperatureAdjust"] = +0.05;
+                result["primary_emotion"] = primary;
+                break;
+            case "disgust" or "contempt":
+                result["tone"] = "neutral";
+                result["temperatureAdjust"] = 0.0;
+                result["primary_emotion"] = primary;
+                break;
+            case "trust" or "acceptance" or "gratitude":
+                result["tone"] = "supportive";
+                result["temperatureAdjust"] = 0.0;
+                result["primary_emotion"] = primary;
+                break;
+            default:
+                if (emotion.IsUrgent)
+                {
+                    result["tone"] = "urgent";
+                    result["temperatureAdjust"] = -0.1;
+                    result["skipPreload"] = true;
+                }
+                else if (emotion.IsNegative)
+                {
+                    result["tone"] = "empathetic";
+                    result["temperatureAdjust"] = +0.05;
+                    result["maxTokensOverride"] = 4096;
+                }
+                else if (emotion.IsConfused)
+                {
+                    result["tone"] = "clarifying";
+                    result["askClarification"] = true;
+                    result["temperatureAdjust"] = 0.0;
+                }
+                else
+                {
+                    result["tone"] = "neutral";
+                    result["temperatureAdjust"] = 0.0;
+                }
+                break;
         }
 
         result["valence"] = emotion.Valence;
         result["arousal"] = emotion.Arousal;
         result["dominance"] = emotion.Dominance;
+        result["primary_emotion"] = primary;
+        result["secondary_emotion"] = emotion.SecondaryEmotion ?? "none";
+        result["tertiary_emotion"] = emotion.TertiaryEmotion ?? "none";
 
         return result;
     }

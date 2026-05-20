@@ -19,7 +19,7 @@ public sealed class LLMConfigPanel
     public LLMConfigPanel(IOptions<LTAIOptions>? options = null)
     {
         _options = options;
-        _selectedModel = options?.Value.AI.DeepModel ?? "deepseek-v4-pro";
+        _selectedModel = options?.Value.AI.L2.Model ?? "deepseek-v4-pro";
     }
 
     public IRenderable Render()

@@ -1,4 +1,5 @@
 using LTAI.Core.Acceleration;
+using LTAI.Core.Configuration;
 using LTAI.Core.Execution;
 using LTAI.Core.Interfaces;
 using LTAI.Core.Life;
@@ -14,6 +15,8 @@ public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddLTAICore(this IServiceCollection services)
     {
+        services.AddSingleton<IProviderRegistry, ProviderRegistry>();
+
         services.AddSingleton<ICognitiveMesh, CognitiveMesh>();
         services.AddSingleton<IToolRegistry, ToolRegistry>();
         services.AddSingleton<TaskJournal>();
@@ -38,6 +41,9 @@ public static class ServiceCollectionExtensions
         services.AddSingleton(sp => ConcurrencyGuard.Instance);
 
         services.AddSingleton(sp => DpoPrefs.Instance);
+
+        services.AddSingleton<ServiceManager>();
+        services.AddSingleton<ModelManager>();
 
         return services;
     }

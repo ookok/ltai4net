@@ -389,9 +389,14 @@ public class EmotionVector
     public double Valence { get; set; }
     public double Arousal { get; set; }
     public double Dominance { get; set; }
+    public string? PrimaryEmotion { get; set; }
+    public string? SecondaryEmotion { get; set; }
+    public string? TertiaryEmotion { get; set; }
     public bool IsUrgent => Arousal > 0.7;
     public bool IsNegative => Valence < 0.3;
     public bool IsConfused => Dominance < 0.3 && Arousal > 0.5;
+    public bool IsPositive => Valence > 0.7;
+    public bool IsNeutral => Valence is >= 0.3 and <= 0.7;
 }
 
 public class TriageResult

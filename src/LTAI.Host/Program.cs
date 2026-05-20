@@ -6,6 +6,7 @@ using LTAI.Browser.Interfaces;
 using LTAI.Core;
 using LTAI.Core.Configuration;
 using LTAI.Core.Interfaces;
+using LTAI.Capability.Integration;
 using LTAI.Document;
 using LTAI.Network;
 using LTAI.Vector;
@@ -102,6 +103,8 @@ builder.Services.AddLTAITreeLLM();
 
 var app = builder.Build();
 
+ConfigureServices(app.Services);
+
 await RegisterCapabilityTools(app.Services);
 
 app.UseLTAI();
@@ -124,11 +127,44 @@ app.Logger.LogInformation("Listening on http://{Host}:{Port}",
 
 app.Run();
 
+static void ConfigureServices(IServiceProvider sp)
+{
+    var vault = SecretVault.Instance;
+
+    var gateway = sp.GetRequiredService<MessageGateway>();
+    var smtpHost = vault.Get("smtp_host");
+    if (!string.IsNullOrWhiteSpace(smtpHost))
+    {
+        var portStr = vault.Get("smtp_port", "465");
+        _ = int.TryParse(portStr, out var port);
+        if (port <= 0) port = 465;
+        gateway.ConfigureSmtp(smtpHost, port, vault.Get("smtp_user"), vault.Get("smtp_pass"));
+    }
+
+    var weather = sp.GetRequiredService<WeatherService>();
+    weather.OpenWeatherMapKey = vault.Get("openweathermap_api_key");
+    weather.QWeatherKey = vault.Get("qweather_api_key");
+
+    var imageSearch = sp.GetRequiredService<ImageSearchService>();
+    imageSearch.UnsplashAccessKey = vault.Get("unsplash_access_key");
+    imageSearch.PixabayApiKey = vault.Get("pixabay_api_key");
+
+    var translate = sp.GetRequiredService<TranslateService>();
+    translate.Config = new TranslateConfig
+    {
+        Provider = "baidu",
+        AppId = vault.Get("baidu_translate_appid"),
+        SecretKey = vault.Get("baidu_translate_key")
+    };
+}
+
 static async Task RegisterCapabilityTools(IServiceProvider sp)
 {
     var registry = sp.GetRequiredService<IToolRegistry>();
     var browser = sp.GetRequiredService<IBrowserAgent>();
     var logger = sp.GetRequiredService<ILogger<Program>>();
+
+    await LTAI.Capability.Tools.LTAIToolRegistry.SeedAllAsync(registry, sp);
 
     await registry.RegisterAsync("browser_browse", async args =>
     {

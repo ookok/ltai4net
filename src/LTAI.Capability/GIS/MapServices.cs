@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using LTAI.Core.Configuration;
 using Microsoft.Extensions.Logging;
 
 namespace LTAI.Capability.GIS;
@@ -15,10 +16,11 @@ public sealed class UnifiedMapService
     public UnifiedMapService(ILogger<UnifiedMapService> logger)
     {
         _logger = logger;
-        _baidu = new BaiduMapService(logger);
-        _amap = new AmapService(logger);
-        _tianditu = new TiandituService(logger);
-        _tencent = new TencentMapService(logger);
+        var vault = SecretVault.Instance;
+        _baidu = new BaiduMapService(logger, vault.Get("baidu_map_ak"), vault.Get("baidu_map_sk"));
+        _amap = new AmapService(logger, vault.Get("amap_key"));
+        _tianditu = new TiandituService(logger, vault.Get("tianditu_key"));
+        _tencent = new TencentMapService(logger, vault.Get("tencent_map_key"));
     }
 
     public async Task<GeoAddress?> GeocodeAsync(string address, string provider = "auto", CancellationToken ct = default)
@@ -83,19 +85,22 @@ internal sealed class BaiduMapService
 {
     private readonly HttpClient _http;
     private readonly ILogger _logger;
-    private const string Ak = ""; // Set via config or env
+    private readonly string _ak;
+    private readonly string _sk;
 
-    public BaiduMapService(ILogger logger)
+    public BaiduMapService(ILogger logger, string ak = "", string sk = "")
     {
         _http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
         _logger = logger;
+        _ak = ak;
+        _sk = sk;
     }
 
     public async Task<GeoAddress?> GeocodeAsync(string address, CancellationToken ct)
     {
         try
         {
-            var url = $"https://api.map.baidu.com/geocoding/v3/?address={Uri.EscapeDataString(address)}&output=json&ak={Ak}";
+            var url = $"https://api.map.baidu.com/geocoding/v3/?address={Uri.EscapeDataString(address)}&output=json&ak={_ak}";
             var json = await _http.GetStringAsync(url, ct);
             var doc = JsonDocument.Parse(json);
             if (doc.RootElement.TryGetProperty("status", out var s) && s.GetInt32() == 0 &&
@@ -119,7 +124,7 @@ internal sealed class BaiduMapService
     {
         try
         {
-            var url = $"https://api.map.baidu.com/reverse_geocoding/v3/?location={lat},{lng}&output=json&ak={Ak}";
+            var url = $"https://api.map.baidu.com/reverse_geocoding/v3/?location={lat},{lng}&output=json&ak={_ak}";
             var json = await _http.GetStringAsync(url, ct);
             var doc = JsonDocument.Parse(json);
             if (doc.RootElement.TryGetProperty("result", out var r) && r.TryGetProperty("formatted_address", out var fa))
@@ -145,7 +150,7 @@ internal sealed class BaiduMapService
         try
         {
             var region = city != null ? Uri.EscapeDataString(city) : "全国";
-            var url = $"https://api.map.baidu.com/place/v2/search?query={Uri.EscapeDataString(keyword)}&region={region}&page_size={limit}&output=json&ak={Ak}";
+            var url = $"https://api.map.baidu.com/place/v2/search?query={Uri.EscapeDataString(keyword)}&region={region}&page_size={limit}&output=json&ak={_ak}";
             var json = await _http.GetStringAsync(url, ct);
             var doc = JsonDocument.Parse(json);
             if (doc.RootElement.TryGetProperty("results", out var arr))
@@ -172,7 +177,7 @@ internal sealed class BaiduMapService
         try
         {
             var type = mode switch { "walking" => "walking", "transit" => "transit", _ => "driving" };
-            var url = $"https://api.map.baidu.com/direction/v2/{type}?origin={from.Lat},{from.Lng}&destination={to.Lat},{to.Lng}&ak={Ak}";
+            var url = $"https://api.map.baidu.com/direction/v2/{type}?origin={from.Lat},{from.Lng}&destination={to.Lat},{to.Lng}&ak={_ak}";
             var json = await _http.GetStringAsync(url, ct);
             var doc = JsonDocument.Parse(json);
             if (doc.RootElement.TryGetProperty("result", out var r) && r.TryGetProperty("routes", out var routes))
@@ -194,19 +199,20 @@ internal sealed class AmapService
 {
     private readonly HttpClient _http;
     private readonly ILogger _logger;
-    private const string Key = "";
+    private readonly string _key;
 
-    public AmapService(ILogger logger)
+    public AmapService(ILogger logger, string key = "")
     {
         _http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
         _logger = logger;
+        _key = key;
     }
 
     public async Task<GeoAddress?> GeocodeAsync(string address, CancellationToken ct)
     {
         try
         {
-            var url = $"https://restapi.amap.com/v3/geocode/geo?address={Uri.EscapeDataString(address)}&key={Key}";
+            var url = $"https://restapi.amap.com/v3/geocode/geo?address={Uri.EscapeDataString(address)}&key={_key}";
             var json = await _http.GetStringAsync(url, ct);
             var doc = JsonDocument.Parse(json);
             if (doc.RootElement.TryGetProperty("geocodes", out var arr) && arr.GetArrayLength() > 0)
@@ -232,7 +238,7 @@ internal sealed class AmapService
     {
         try
         {
-            var url = $"https://restapi.amap.com/v3/geocode/regeo?location={lng},{lat}&key={Key}";
+            var url = $"https://restapi.amap.com/v3/geocode/regeo?location={lng},{lat}&key={_key}";
             var json = await _http.GetStringAsync(url, ct);
             var doc = JsonDocument.Parse(json);
             if (doc.RootElement.TryGetProperty("regeocode", out var r))
@@ -264,7 +270,7 @@ internal sealed class AmapService
         var results = new List<POIResult>();
         try
         {
-            var url = $"https://restapi.amap.com/v3/place/text?keywords={Uri.EscapeDataString(keyword)}&city={city ?? ""}&offset={limit}&key={Key}";
+            var url = $"https://restapi.amap.com/v3/place/text?keywords={Uri.EscapeDataString(keyword)}&city={city ?? ""}&offset={limit}&key={_key}";
             var json = await _http.GetStringAsync(url, ct);
             var doc = JsonDocument.Parse(json);
             if (doc.RootElement.TryGetProperty("pois", out var arr))
@@ -293,7 +299,7 @@ internal sealed class AmapService
         try
         {
             var type = mode switch { "walking" => "1", "transit" => "0", _ => "0" };
-            var url = $"https://restapi.amap.com/v3/direction/driving?origin={from.Lng},{from.Lat}&destination={to.Lng},{to.Lat}&key={Key}";
+            var url = $"https://restapi.amap.com/v3/direction/driving?origin={from.Lng},{from.Lat}&destination={to.Lng},{to.Lat}&key={_key}";
             var json = await _http.GetStringAsync(url, ct);
             var doc = JsonDocument.Parse(json);
             if (doc.RootElement.TryGetProperty("route", out var r) && r.TryGetProperty("paths", out var paths))
@@ -316,7 +322,7 @@ internal sealed class AmapService
         {
             var geo = await GeocodeAsync(city, ct);
             if (geo == null) return null;
-            var url = $"https://restapi.amap.com/v3/weather/weatherInfo?city={geo.Lng},{geo.Lat}&key={Key}";
+            var url = $"https://restapi.amap.com/v3/weather/weatherInfo?city={geo.Lng},{geo.Lat}&key={_key}";
             var json = await _http.GetStringAsync(url, ct);
             var doc = JsonDocument.Parse(json);
             if (doc.RootElement.TryGetProperty("lives", out var arr) && arr.GetArrayLength() > 0)
@@ -340,7 +346,7 @@ internal sealed class AmapService
     {
         try
         {
-            var url = $"https://restapi.amap.com/v3/ip?ip={ip}&key={Key}";
+            var url = $"https://restapi.amap.com/v3/ip?ip={ip}&key={_key}";
             var json = await _http.GetStringAsync(url, ct);
             var doc = JsonDocument.Parse(json);
             return new IPLocation
@@ -359,19 +365,20 @@ internal sealed class TencentMapService
 {
     private readonly HttpClient _http;
     private readonly ILogger _logger;
-    private const string Key = "";
+    private readonly string _key;
 
-    public TencentMapService(ILogger logger)
+    public TencentMapService(ILogger logger, string key = "")
     {
         _http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
         _logger = logger;
+        _key = key;
     }
 
     public async Task<GeoAddress?> GeocodeAsync(string address, CancellationToken ct)
     {
         try
         {
-            var url = $"https://apis.map.qq.com/ws/geocoder/v1/?address={Uri.EscapeDataString(address)}&key={Key}";
+            var url = $"https://apis.map.qq.com/ws/geocoder/v1/?address={Uri.EscapeDataString(address)}&key={_key}";
             var json = await _http.GetStringAsync(url, ct);
             var doc = JsonDocument.Parse(json);
             if (doc.RootElement.TryGetProperty("status", out var s) && s.GetInt32() == 0 &&
@@ -399,7 +406,7 @@ internal sealed class TencentMapService
     {
         try
         {
-            var url = $"https://apis.map.qq.com/ws/geocoder/v1/?location={lat},{lng}&key={Key}";
+            var url = $"https://apis.map.qq.com/ws/geocoder/v1/?location={lat},{lng}&key={_key}";
             var json = await _http.GetStringAsync(url, ct);
             var doc = JsonDocument.Parse(json);
             if (doc.RootElement.TryGetProperty("result", out var r))
@@ -426,7 +433,7 @@ internal sealed class TencentMapService
         try
         {
             var region = city ?? "全国";
-            var url = $"https://apis.map.qq.com/ws/place/v1/search?keyword={Uri.EscapeDataString(keyword)}&boundary=region({Uri.EscapeDataString(region)})&page_size={limit}&key={Key}";
+            var url = $"https://apis.map.qq.com/ws/place/v1/search?keyword={Uri.EscapeDataString(keyword)}&boundary=region({Uri.EscapeDataString(region)})&page_size={limit}&key={_key}";
             var json = await _http.GetStringAsync(url, ct);
             var doc = JsonDocument.Parse(json);
             if (doc.RootElement.TryGetProperty("data", out var arr))
@@ -454,7 +461,7 @@ internal sealed class TencentMapService
         try
         {
             var type = mode switch { "walking" => "walking", "bicycling" => "bicycling", "transit" => "transit", _ => "driving" };
-            var url = $"https://apis.map.qq.com/ws/direction/v1/{type}/?from={from.Lat},{from.Lng}&to={to.Lat},{to.Lng}&key={Key}";
+            var url = $"https://apis.map.qq.com/ws/direction/v1/{type}/?from={from.Lat},{from.Lng}&to={to.Lat},{to.Lng}&key={_key}";
             var json = await _http.GetStringAsync(url, ct);
             var doc = JsonDocument.Parse(json);
             if (doc.RootElement.TryGetProperty("result", out var r) && r.TryGetProperty("routes", out var routes))
@@ -474,7 +481,7 @@ internal sealed class TencentMapService
     public async Task<string?> GetStaticMapUrlAsync(double lng, double lat, int zoom = 15, string size = "600*300", CancellationToken ct = default)
     {
         return await Task.FromResult(
-            $"https://apis.map.qq.com/ws/staticmap/v2/?center={lat},{lng}&zoom={zoom}&size={size}&markers={lat},{lng}&key={Key}");
+            $"https://apis.map.qq.com/ws/staticmap/v2/?center={lat},{lng}&zoom={zoom}&size={size}&markers={lat},{lng}&key={_key}");
     }
 }
 
@@ -482,19 +489,20 @@ internal sealed class TiandituService
 {
     private readonly HttpClient _http;
     private readonly ILogger _logger;
-    private const string Tk = "";
+    private readonly string _tk;
 
-    public TiandituService(ILogger logger)
+    public TiandituService(ILogger logger, string tk = "")
     {
         _http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
         _logger = logger;
+        _tk = tk;
     }
 
     public async Task<GeoAddress?> GeocodeAsync(string address, CancellationToken ct)
     {
         try
         {
-            var url = $"https://api.tianditu.gov.cn/geocoder?ds={{\"keyWord\":\"{Uri.EscapeDataString(address)}\"}}&type=geocode&tk={Tk}";
+            var url = $"https://api.tianditu.gov.cn/geocoder?ds={{\"keyWord\":\"{Uri.EscapeDataString(address)}\"}}&type=geocode&tk={_tk}";
             var json = await _http.GetStringAsync(url, ct);
             var doc = JsonDocument.Parse(json);
             if (doc.RootElement.TryGetProperty("location", out var loc))

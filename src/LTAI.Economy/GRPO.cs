@@ -712,8 +712,93 @@ public sealed class TDMRewardOptimizer
         return best;
     }
 
-    private static Lazy<TDMRewardOptimizer> _instance = new(() => new TDMRewardOptimizer());
-    public static TDMRewardOptimizer Instance => _instance.Value;
+    public Dictionary<string, double> GIPOOptimize(
+        Dictionary<string, double> currentConfig,
+        IReadOnlyList<Dictionary<string, double>> candidates,
+        Func<Dictionary<string, double>, Dictionary<string, double>> configToFeatures,
+        double sigma = 0.5, double beta = 2.0, int maxSteps = 100)
+    {
+        var best = new Dictionary<string, double>(currentConfig);
+        var currentFeatures = configToFeatures(currentConfig);
+        double bestScore = _surrogate.Predict(currentFeatures);
+        double baseScore = bestScore;
+        int stagnation = 0;
+
+        for (int step = 1; step <= maxSteps; step++)
+        {
+            double t = sigma / Math.Log(Math.E + step * 0.5);
+
+            foreach (var candidate in candidates)
+            {
+                double candidateScore = _surrogate.Predict(configToFeatures(candidate));
+                double logRatio = candidateScore - bestScore;
+
+                double trustWeight = Math.Exp(-beta * logRatio * logRatio / (2.0 * sigma * sigma));
+
+                if (candidateScore > bestScore)
+                {
+                    foreach (var kv in candidate)
+                        best[kv.Key] = kv.Value;
+                    bestScore = candidateScore;
+                    stagnation = 0;
+                }
+                else if (trustWeight > 0.3)
+                {
+                    double adjustedScore = bestScore + logRatio * trustWeight;
+                    if (adjustedScore > bestScore * 0.95)
+                    {
+                        double gaussNoise = SampleGaussian() * sigma * trustWeight;
+                        foreach (var kv in candidate)
+                        {
+                            if (best.TryGetValue(kv.Key, out var currentVal))
+                                best[kv.Key] = currentVal * (1.0 - trustWeight) + kv.Value * trustWeight + gaussNoise * (kv.Value - currentVal);
+                            else
+                                best[kv.Key] = kv.Value;
+                        }
+                        bestScore = adjustedScore;
+                        stagnation = 0;
+                    }
+                }
+            }
+
+            stagnation++;
+
+            if (stagnation > 10 && t > 0.01)
+            {
+                int idx1 = _rng.Next(candidates.Count);
+                int idx2 = _rng.Next(candidates.Count);
+                if (idx1 != idx2)
+                {
+                    var c1 = configToFeatures(candidates.ElementAt(idx1));
+                    var c2 = configToFeatures(candidates.ElementAt(idx2));
+
+                    double s1 = _surrogate.Predict(c1);
+                    double s2 = _surrogate.Predict(c2);
+                    double logRatio12 = s1 - s2;
+                    double trust12 = Math.Exp(-beta * logRatio12 * logRatio12 / (2.0 * sigma * sigma));
+
+                    if (_rng.NextDouble() < trust12)
+                    {
+                        var picked = s1 > s2 ? candidates.ElementAt(idx1) : candidates.ElementAt(idx2);
+                        foreach (var kv in picked)
+                            best[kv.Key] = best.GetValueOrDefault(kv.Key) * 0.7 + kv.Value * 0.3;
+                        bestScore = Math.Max(s1, s2);
+                    }
+                }
+                stagnation = 0;
+            }
+        }
+
+        best["_gipo_improvement"] = Math.Max(0, bestScore - baseScore);
+        return best;
+    }
+
+    private double SampleGaussian()
+    {
+        double u1 = 1.0 - _rng.NextDouble();
+        double u2 = 1.0 - _rng.NextDouble();
+        return Math.Sqrt(-2.0 * Math.Log(u1)) * Math.Sin(2.0 * Math.PI * u2);
+    }
 }
 
 public sealed class GRPOOptimizer

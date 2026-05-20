@@ -1,3 +1,4 @@
+using LTAI.Core.System;
 using LTAI.DNA.Consciousness;
 using LTAI.DNA.Evolution;
 using LTAI.DNA.Life;
@@ -11,6 +12,15 @@ public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddLTAIDNA(this IServiceCollection services)
     {
+        services.AddSingleton<EntropyScheduler>(sp => new EntropyScheduler(new EntropyScheduleConfig
+        {
+            Type = EntropyScheduleType.Linear,
+            InitialEntropy = 0.8,
+            TargetEntropy = 0.15,
+            WarmupSteps = 50,
+            TotalSteps = 2000
+        }));
+
         services.AddSingleton<DualConsciousness>();
         services.AddSingleton<EvolutionDriver>();
         services.AddSingleton<SwarmEvolution>();

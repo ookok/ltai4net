@@ -37,13 +37,15 @@ public sealed class RoutingGovernor : LayerGovernor
 
         if (label == "fast")
         {
-            model = aiConfig.FastModel;
-            temperature = 0.3f;
+            var l1 = aiConfig.L1;
+            model = l1.Model;
+            temperature = l1.Temperature ?? aiConfig.DefaultTemperature;
         }
         else
         {
-            model = aiConfig.DeepModel;
-            temperature = 0.3f;
+            var l2 = aiConfig.L2;
+            model = l2.Model;
+            temperature = l2.Temperature ?? aiConfig.DefaultTemperature;
         }
 
         Logger.LogInformation("Provider elected: {Model} for label: {Label}", model, label);
