@@ -95,6 +95,36 @@ public static class LTAIToolRegistry
             }),
         new("search_apis", "Search 1400+ public APIs by keyword", "web",
             async args => { await PublicApisResource.Instance.LoadAsync(); var r = PublicApisResource.Instance.Search(Arg(args, "query")); return r; }),
+        new("platform_catalog", "List all 24 indexed content platforms (CSDN, Zhihu, WeChat, Toutiao, Xiaohongshu, Juejin, Bilibili, etc.) with descriptions and aliases. Use this to discover what platforms are available.", "web",
+            async _ =>
+            {
+                var svc = Search.PlatformSearchService.Instance;
+                return new { summary = svc.BuildPromptContext(), stats = svc.GetStats() };
+            }),
+        new("platform_search", "Search content on a specific Chinese platform. Available platforms: csdn, zhihu, toutiao, wechat, xiaohongshu, juejin, bilibili, weibo, segmentfault, v2ex, zhuanlan, github_zh, wikipedia_zh, baike, douban, 36kr, infoq, oschina, cnblogs, jianshu, gov_cn, mee, ndrc, mohurd. Parameters: query (required), platform (required, platform name or alias), count (1-20)", "web",
+            async args =>
+            {
+                var query = Arg(args, "query");
+                if (string.IsNullOrWhiteSpace(query)) return new { error = "query parameter is required" };
+                var svc = Search.PlatformSearchService.Instance;
+                var platform = svc.Resolve(Arg(args, "platform"));
+                if (platform == null) return new { error = $"Unknown platform '{Arg(args, "platform")}'. Use platform_catalog to list available platforms." };
+                var searchQuery = svc.BuildSearchQuery(query, platform.Name);
+                var count = Math.Clamp(int.TryParse(Arg(args, "count", "5"), out var c) ? c : 5, 1, 20);
+                try
+                {
+                    using var http = LTAI.Core.Network.HttpAccelerator.CreateAcceleratedClient();
+                    var searchUrl = $"https://html.duckduckgo.com/html/?q={Uri.EscapeDataString(searchQuery)}";
+                    var html = await http.GetStringAsync(searchUrl);
+                    var results = new List<object>();
+                    var links = System.Text.RegularExpressions.Regex.Matches(html, @"<a[^>]*class=""result__a""[^>]*href=""([^""]+)""[^>]*>([^<]+)</a>");
+                    var snippets = System.Text.RegularExpressions.Regex.Matches(html, @"<a[^>]*class=""result__snippet""[^>]*>([^<]+)</a>");
+                    for (int i = 0; i < Math.Min(count, Math.Min(links.Count, snippets.Count)); i++)
+                        results.Add(new { title = System.Net.WebUtility.HtmlDecode(links[i].Groups[2].Value.Trim()), url = System.Net.WebUtility.HtmlDecode(links[i].Groups[1].Value.Trim()), snippet = System.Net.WebUtility.HtmlDecode(snippets[i].Groups[1].Value.Trim()) });
+                    return new { query, platform = platform.Name, category = platform.Category, results };
+                }
+                catch { return new { query, platform = platform.Name, error = "Search failed", results = new List<object>() }; }
+            }),
 
         // ═══ Knowledge — 4 tools ═══
         new("km_search", "Semantic knowledge search using AgenticRAG. Parameters: query (required), domain (optional)", "knowledge",
