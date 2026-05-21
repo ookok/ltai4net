@@ -10,6 +10,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\LTAI.Core\LTAI.Core.csproj" />
+    <ProjectReference Include="..\LTAI.Browser\LTAI.Browser.csproj" />
   </ItemGroup>
 
   <ItemGroup>

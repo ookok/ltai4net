@@ -82,6 +82,23 @@ public static class LTAIToolRegistry
                 }
                 catch { return new { query, error = "Search failed", results }; }
             }),
+        new("stealth_browse", "Browse a URL using anti-detection stealth browser (bypasses Cloudflare/WAF/bot detection on government and protected sites). Use this for gov.cn, protected government sites, or when web_fetch/browser_browse return blocked/403 errors. Parameters: url (required), task (what to extract, default 'extract content')", "web",
+            async args =>
+            {
+                var url = Arg(args, "url");
+                if (string.IsNullOrWhiteSpace(url)) return new { error = "url parameter is required" };
+                try
+                {
+                    var agent = _serviceProvider?.GetService(typeof(LTAI.Browser.Interfaces.IBrowserAgent));
+                    if (agent is LTAI.Browser.Interfaces.IBrowserAgent ba)
+                    {
+                        var result = await ba.BrowseAsync(url, Arg(args, "task", "extract content"));
+                        return new { url, title = result.Title, text = result.Text?[..Math.Min(8000, result.Text?.Length ?? 0)] };
+                    }
+                    return new { url, error = "Stealth browser not available. Falling back to web_fetch for:", hint = "Try web_fetch instead" };
+                }
+                catch { return new { url, error = "Browse failed. Site may require different approach or is blocking all access." }; }
+            }),
         new("browser_browse", "Open a URL and extract page content. Parameters: url (required)", "web",
             async args =>
             {
