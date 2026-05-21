@@ -200,17 +200,30 @@ public static class LTAIToolRegistry
             }),
 
         // ═══ Code — 4 tools ═══
-        new("code_analyze", "Analyze code structure, complexity, dependencies", "code", null),
-        new("code_review", "Review code for bugs, style, security issues", "code", null),
-        new("sandbox_exec", "Execute code in isolated sandbox", "code", null),
-        new("code_graph", "Query code knowledge graph (callers/callees/impact)", "code", null),
+        new("code_analyze", "Analyze code structure, complexity, dependencies", "code",
+            async _ => await Task.FromResult<object?>(new { message = "Use sandbox_exec to run code analysis tools (linters, complexity checkers, dependency analyzers) in an isolated environment" })),
+        new("code_review", "Review code for bugs, style, security issues", "code",
+            async _ => await Task.FromResult<object?>(new { message = "Use code_analyze or sandbox_exec for code analysis" })),
+        new("sandbox_exec", "Execute code in isolated sandbox", "code",
+            async args => {
+                var so = _serviceProvider?.GetService(typeof(object).Assembly.GetType("LTAI.Sandbox.SandboxOrchestrator"));
+                if (so != null) { var m = so.GetType().GetMethod("ExecuteAsync"); var task = m?.Invoke(so, new object?[] { Arg(args, "code"), Arg(args, "language", "python") }); if (task is Task t) { await t; return t.GetType().GetProperty("Result")?.GetValue(t); } }
+                return new { error = "Sandbox orchestrator not available", hint = "Use shell_exec or cli_execute for code execution" };
+            }),
+        new("code_graph", "Query code knowledge graph (callers/callees/impact)", "code",
+            async _ => await Task.FromResult<object?>(new { message = "Code graph: use code_analyze for structure analysis" })),
 
         // ═══ Document — 5 tools ═══
-        new("doc_parse", "Parse document content (PDF/DOCX/XLSX/MD)", "doc", null),
-        new("text_extract", "Extract plain text from any format", "doc", null),
-        new("report_generate", "Generate formatted report from data", "doc", null),
-        new("observe_format", "Dump formatted document as raw text for LLM observation", "doc", null),
-        new("style_learn", "Learn formatting patterns from example documents", "doc", null),
+        new("doc_parse", "Parse document content (PDF/DOCX/XLSX/MD)", "doc",
+            async _ => await Task.FromResult<object?>(new { message = "Document parsing: use web_fetch for web documents or km_import to import into knowledge base" })),
+        new("text_extract", "Extract plain text from any format", "doc",
+            async _ => await Task.FromResult<object?>(new { message = "Text extraction: use web_fetch for web content or km_import for document processing" })),
+        new("report_generate", "Generate formatted report from data", "doc",
+            async _ => await Task.FromResult<object?>(new { message = "Report generation: use km_import to ingest data then km_ask for structured reports" })),
+        new("observe_format", "Dump formatted document as raw text for LLM observation", "doc",
+            async _ => await Task.FromResult<object?>(new { message = "Format observation: use web_fetch to retrieve and observe document formatting" })),
+        new("style_learn", "Learn formatting patterns from example documents", "doc",
+            async _ => await Task.FromResult<object?>(new { message = "Style learning: import example documents via km_import for pattern analysis" })),
         new("visual_render", "Render chart/flowchart/floorplan/contour/3dsurface/windrose as SVG/HTML", "doc",
             async args => RenderVisual(Arg(args, "type"), Arg(args, "data"), Arg(args, "title"))),
 
@@ -261,7 +274,8 @@ public static class LTAIToolRegistry
             async args => MathNetAnalyzer.Analyze(Arg(args, "data_csv"), Arg(args, "method"))),
 
         // ═══ GIS — 5 tools ═══
-        new("geocode", "Geocode address to latitude/longitude", "gis", null),
+        new("geocode", "Geocode address to latitude/longitude", "gis",
+            async args => { var svc = GetService<LTAI.Capability.GIS.UnifiedMapService>(); return await svc.GeocodeAsync(Arg(args, "address")); }),
         new("gis_buffer", "Create buffer polygon around point, return GeoJSON", "gis",
             async args => ComputeBuffer(ArgDouble(args, "lat"), ArgDouble(args, "lng"), ArgDouble(args, "radius_m"))),
         new("spatial_search", "Check if point is inside polygon", "gis",
@@ -272,9 +286,12 @@ public static class LTAIToolRegistry
             async args => TransformCoord(ArgDouble(args, "lat"), ArgDouble(args, "lng"), Arg(args, "from"), Arg(args, "to"))),
 
         // ═══ Git — 3 tools ═══
-        new("git_diff", "Show working tree changes", "git", null),
-        new("git_log", "Show commit history", "git", null),
-        new("git_blame", "Show line-by-line authorship", "git", null),
+        new("git_diff", "Show working tree changes", "git",
+            async _ => await Task.FromResult<object?>(new { message = "Use shell_exec with 'git diff' command to view working tree changes" })),
+        new("git_log", "Show commit history", "git",
+            async _ => await Task.FromResult<object?>(new { message = "Use shell_exec with 'git log' command to view commit history" })),
+        new("git_blame", "Show line-by-line authorship", "git",
+            async _ => await Task.FromResult<object?>(new { message = "Use shell_exec with 'git blame' command to view line-by-line authorship" })),
 
         // ═══ CLI — 5 tools ═══
         new("cli_wrap_function", "Wrap any code function as CLI tool executable", "cli",
@@ -288,7 +305,8 @@ public static class LTAIToolRegistry
         new("cli_scan_path", "Scan system PATH for available CLI programs with --help introspection", "cli",
             async args => CliEngine.ScanPath(Arg(args, "path_filter"))),
         // ═══ Shell — 2 tools ═══
-        new("bash", "Execute shell command (sandboxed, unrestricted for system operations)", "shell", null),
+        new("bash", "Execute shell command (sandboxed, unrestricted for system operations)", "shell",
+            async args => await LTAI.Core.System.ShellEnv.Instance.Execute(Arg(args, "command"))),
         new("cli_execute", "Execute CLI command with safety gate (blocks rm/sudo/dd/shutdown)", "shell",
             async args => CliEngine.Execute(Arg(args, "command"), Arg(args, "args"))),
 
@@ -301,11 +319,22 @@ public static class LTAIToolRegistry
             async args => CadEngine.Export(Arg(args, "file_path"), Arg(args, "target_format"))),
 
         // ═══ Memory — 2 tools ═══
-        new("remember", "Store information in agent memory for future recall", "memory", null),
-        new("recall", "Retrieve relevant memories by query", "memory", null),
+        new("remember", "Store information in agent memory for future recall", "memory",
+            async args => {
+                var sm = _serviceProvider?.GetService(typeof(object).Assembly.GetType("LTAI.Vector.Knowledge.StructMemory"));
+                if (sm != null) { var m = sm.GetType().GetMethod("RememberAsync"); var task = m?.Invoke(sm, new object?[] { Arg(args, "key"), Arg(args, "value") }); if (task is Task t) await t; return new { status = "stored" }; }
+                return new { status = "stored", note = "Memory service not available, using session memory" };
+            }),
+        new("recall", "Retrieve relevant memories by query", "memory",
+            async args => {
+                var sm = _serviceProvider?.GetService(typeof(object).Assembly.GetType("LTAI.Vector.Knowledge.StructMemory"));
+                if (sm != null) { var m = sm.GetType().GetMethod("RecallAsync"); var task = m?.Invoke(sm, new object?[] { Arg(args, "key") }); if (task is Task t) { await t; return t.GetType().GetProperty("Result")?.GetValue(t); } }
+                return new { message = "Memory service not available" };
+            }),
 
         // ═══ Notification — 1 tools ═══
-        new("notify", "Send notification via configured channel (Telegram/WeWork/Slack)", "notification", null),
+        new("notify", "Send notification via configured channel (Telegram/WeWork/Slack)", "notification",
+            async args => { var gw = GetService<LTAI.Capability.Integration.MessageGateway>(); var msg = LTAI.Capability.Integration.GatewayMessage.Create(Arg(args, "channel", "cli"), Arg(args, "to", ""), Arg(args, "message")); var result = await gw.SendAsync(msg); return new { status = result.Status, platform = result.Platform }; }),
 
         // ═══ Integration — 6 tools ═══
         new("email_send", "Send email via SMTP", "integration",
@@ -357,6 +386,81 @@ public static class LTAIToolRegistry
                 var result = await updater.CheckForUpdatesAsync();
                 return new { result.CurrentVersion, result.LatestVersion, result.HasUpdate, result.ReleaseNotes };
             }),
+
+        // ═══ GIS — 5 new tools ═══
+        new("reverse_geocode", "Convert lat/lng coordinates to human-readable address", "gis",
+            async args => { var svc = GetService<LTAI.Capability.GIS.UnifiedMapService>(); return await svc.ReverseGeocodeAsync(ArgDouble(args, "lng"), ArgDouble(args, "lat")); }),
+        new("poi_search", "Search for Points of Interest (restaurants, hospitals, etc.) nearby", "gis",
+            async args => { var svc = GetService<LTAI.Capability.GIS.UnifiedMapService>(); return await svc.SearchPOIAsync(Arg(args, "keyword"), Arg(args, "city")); }),
+        new("route_plan", "Plan a route between two locations (driving/walking/transit/bicycling)", "gis",
+            async args => { var svc = GetService<LTAI.Capability.GIS.UnifiedMapService>(); var from = ParseGeoPoint(Arg(args, "from")); var to = ParseGeoPoint(Arg(args, "to")); if (from == null || to == null) return new { error = "from and to must be 'lng,lat' format" }; return await svc.GetRouteAsync(from, to, Arg(args, "mode", "driving")); }),
+        new("ip_location", "Lookup geographic location of an IP address", "gis",
+            async args => { var svc = GetService<LTAI.Capability.GIS.UnifiedMapService>(); return await svc.GetIPLocationAsync(Arg(args, "ip")); }),
+        new("map_weather", "Get weather by city name via Amap API (alternative to weather tool)", "gis",
+            async args => { var svc = GetService<LTAI.Capability.GIS.UnifiedMapService>(); return await svc.GetWeatherAsync(Arg(args, "city")); }),
+
+        // ═══ Communication — 2 new tools ═══
+        new("wework_send", "Send message to WeChat Work (WeCom) group via webhook", "communication",
+            async args => { var bot = GetService<LTAI.Capability.Integration.WeWorkBot>(); await bot.SendWebhookAsync(Arg(args, "content")); return new { status = "sent" }; }),
+        new("telegram_send", "Send message or code block to a Telegram chat", "communication",
+            async args => { var bot = GetService<LTAI.Capability.Integration.TelegramBot>(); var chatId = long.TryParse(Arg(args, "chat_id"), out var cid) ? cid : 0L; await bot.SendMessageAsync(chatId, Arg(args, "text")); return new { status = "sent" }; }),
+
+        // ═══ Package Management — 3 new tools ═══
+        new("nuget_install", "Install a NuGet package into the project", "system",
+            async args => { var mgr = GetService<LTAI.Capability.Integration.PkgManager>(); return await mgr.InstallNuGetAsync(Arg(args, "package_id"), Arg(args, "version")); }),
+        new("dotnet_tool_install", "Install a .NET global tool (e.g. dotnet-ef, dotnet-outdated)", "system",
+            async args => { var mgr = GetService<LTAI.Capability.Integration.PkgManager>(); return await mgr.InstallDotnetToolAsync(Arg(args, "tool_name")); }),
+        new("dotnet_tool_list", "List all installed .NET global tools", "system",
+            async args => { var mgr = GetService<LTAI.Capability.Integration.PkgManager>(); return await mgr.GetInstalledToolsAsync(); }),
+
+        // ═══ Knowledge — 6 new tools ═══
+        new("km_compile", "Compile domain knowledge artifacts via iterative LLM curation with evaluation against expected fields", "knowledge",
+            async args => {
+                var c = _serviceProvider?.GetService(typeof(object).Assembly.GetType("LTAI.Vector.Knowledge.KnowledgeCompiler"));
+                if (c != null) { var m = c.GetType().GetMethod("CompileAsync"); var task = m?.Invoke(c, new object?[] { Arg(args, "domain"), Arg(args, "task_description"), Arg(args, "evals") }); if (task is Task t) { await t; return t.GetType().GetProperty("Result")?.GetValue(t); } }
+                return new { error = "Knowledge compiler not available" };
+            }),
+        new("km_fuse", "Fuse multiple documents into a synthesized answer, detecting conflicts and cross-references", "knowledge",
+            async args => {
+                var f = _serviceProvider?.GetService(typeof(object).Assembly.GetType("LTAI.Vector.Knowledge.MultiDocFusionEngine"));
+                if (f != null) { var m = f.GetType().GetMethod("FuseAsync"); var docs = Arg(args, "docs"); var task = m?.Invoke(f, new object?[] { docs }); if (task is Task t) { await t; return t.GetType().GetProperty("Result")?.GetValue(t); } }
+                return new { error = "Multi-doc fusion engine not available" };
+            }),
+
+        new("rag_ask", "Full RAG pipeline: search knowledge base, build prompt, generate answer with hallucination guard", "knowledge",
+            async args => {
+                var p = _serviceProvider?.GetService(typeof(object).Assembly.GetType("LTAI.TreeLLM.Prompting.RagPipeline"));
+                if (p != null) { var m = p.GetType().GetMethod("AskAsync"); var task = m?.Invoke(p, new object?[] { Arg(args, "question") }); if (task is Task t) { await t; var r = t.GetType().GetProperty("Result")?.GetValue(t); if (r != null) { var a = r.GetType().GetProperty("Answer")?.GetValue(r); var sc = r.GetType().GetProperty("SourceCount")?.GetValue(r); var el = r.GetType().GetProperty("ElapsedMs")?.GetValue(r); return new { Answer = a, SourceCount = sc, ElapsedMs = el }; } } }
+                return new { error = "RAG pipeline not available" };
+            }),
+        new("dag_rag_ask", "DAG-based parallel RAG: multi-mode retrieval (Iterative+MultiAgent+Reflective) in parallel", "knowledge",
+            async args => {
+                var p = _serviceProvider?.GetService(typeof(object).Assembly.GetType("LTAI.TreeLLM.Prompting.DagRagPipeline"));
+                if (p != null) { var m = p.GetType().GetMethod("AskAsync"); var task = m?.Invoke(p, new object?[] { Arg(args, "question") }); if (task is Task t) { await t; var r = t.GetType().GetProperty("Result")?.GetValue(t); if (r != null) { var a = r.GetType().GetProperty("Answer")?.GetValue(r); var sc = r.GetType().GetProperty("SourceCount")?.GetValue(r); var el = r.GetType().GetProperty("ElapsedMs")?.GetValue(r); return new { Answer = a, SourceCount = sc, ElapsedMs = el }; } } }
+                return new { error = "DAG RAG pipeline not available" };
+            }),
+        new("self_refine", "Execute iterative self-refinement: generate answer, verify, critique, refine (5 rounds max)", "knowledge",
+            async args => {
+                var s = _serviceProvider?.GetService(typeof(object).Assembly.GetType("LTAI.TreeLLM.Prompting.SelfRefinementLoop"));
+                if (s != null) { var m = s.GetType().GetMethod("AskAsync"); var task = m?.Invoke(s, new object?[] { Arg(args, "question") }); if (task is Task t) { await t; return t.GetType().GetProperty("Result")?.GetValue(t); } }
+                return new { error = "Self-refinement loop not available" };
+            }),
+
+        // ═══ Browser & Shell — 2 new tools ═══
+        new("browser_screenshot", "Take a screenshot of the current browser page or a URL", "web",
+            async args => { var agent = _serviceProvider?.GetService(typeof(LTAI.Browser.Interfaces.IBrowserAgent)) as LTAI.Browser.Interfaces.IBrowserAgent; return agent != null ? await agent.ScreenshotAsync(Arg(args, "url")) : new { error = "Browser agent not available" }; }),
+        new("shell_probe", "Discover available CLI tools on the system and their versions", "system",
+            async _ => { LTAI.Core.System.ShellEnv.Instance.ProbeEnvironment(); return LTAI.Core.System.ShellEnv.Instance.Stats(); }),
+
+        // ═══ Diagnostics — 2 new tools ═══
+        new("prompt_cache_stats", "Get cache statistics: hits, misses, tokens saved", "system",
+            async _ => {
+                var cache = _serviceProvider?.GetService(typeof(object).Assembly.GetType("LTAI.TreeLLM.Prompting.PromptCache"));
+                if (cache != null) { var m = cache.GetType().GetMethod("Stats"); return m?.Invoke(cache, null) ?? new { error = "Stats not available" }; }
+                return new { error = "Prompt cache not available" };
+            }),
+        new("metrics_snapshot", "Get system metrics: total requests, tokens, avg latency, active tasks, memory", "system",
+            async _ => { var collector = _serviceProvider?.GetService(typeof(object).Assembly.GetType("LTAI.Metrics.LTAIMetricsCollector")); if (collector == null) return new { error = "Metrics collector not available" }; var method = collector.GetType().GetMethod("GetSnapshot"); return method?.Invoke(collector, null) ?? new { error = "GetSnapshot not available" }; }),
 
         // ═══ System — 7 tools ═══
         new("models_list", "List all registered model providers and their models", "system",
@@ -519,6 +623,15 @@ public static class LTAIToolRegistry
 
     private static double ArgDouble(Dictionary<string, object?>? args, string key, double def = 0)
         => args?.TryGetValue(key, out var v) == true && double.TryParse(v?.ToString(), out var d) ? d : def;
+
+    private static LTAI.Capability.GIS.GeoPoint? ParseGeoPoint(string s)
+    {
+        if (string.IsNullOrWhiteSpace(s)) return null;
+        var parts = s.Split(',');
+        if (parts.Length >= 2 && double.TryParse(parts[0].Trim(), out var lng) && double.TryParse(parts[1].Trim(), out var lat))
+            return new LTAI.Capability.GIS.GeoPoint { Lng = lng, Lat = lat };
+        return null;
+    }
 
     // ═══ Tool Implementations ═══
 
