@@ -1,4 +1,6 @@
 using System.Text.RegularExpressions;
+using System.Threading;
+using LTAI.Core.Utility;
 
 namespace LTAI.TreeLLM.Session;
 
@@ -14,6 +16,7 @@ public sealed class SessionCompressor
     private const int MiddleTurns = 10;
 
     private int _compressionCount;
+
     private Func<string, string, Task<string>>? _chatFn;
 
     public void SetChatFunction(Func<string, string, Task<string>> chatFn)
@@ -74,7 +77,7 @@ public sealed class SessionCompressor
             result.RemoveAt(firstNonRecent);
         }
 
-        _compressionCount++;
+        Interlocked.Increment(ref _compressionCount);
         return result;
     }
 
@@ -88,7 +91,7 @@ public sealed class SessionCompressor
         var fn = chatFn ?? _chatFn;
         var result = new List<ChatMessage>();
         var n = messages.Count;
-        var queryTokens = _Tokenize(query);
+        var queryTokens = TextUtility.Tokenize(query);
 
         for (var i = Math.Max(0, n - RecentTurns); i < n; i++)
         {
@@ -122,7 +125,7 @@ public sealed class SessionCompressor
             }
             else if (crit > 0.15)
             {
-                var snippet = TruncateSnippet(msg.Content, 80);
+                var snippet = TextUtility.TruncateSnippet(msg.Content, 80);
                 result.Insert(0, new ChatMessage(msg.Role, snippet));
             }
         }
@@ -136,7 +139,7 @@ public sealed class SessionCompressor
             i--;
         }
 
-        _compressionCount++;
+        Interlocked.Increment(ref _compressionCount);
         return result;
     }
 
@@ -152,7 +155,7 @@ public sealed class SessionCompressor
         }
         catch
         {
-            return TruncateSnippet(string.Join(" | ", messages.TakeLast(3).Select(m => m.Content)), 200);
+            return TextUtility.TruncateSnippet(string.Join(" | ", messages.TakeLast(3).Select(m => m.Content)), 200);
         }
     }
 
@@ -167,7 +170,7 @@ public sealed class SessionCompressor
         }
         catch
         {
-            return TruncateSnippet(message.Content, 60);
+            return TextUtility.TruncateSnippet(message.Content, 60);
         }
     }
 
@@ -207,10 +210,10 @@ public sealed class SessionCompressor
     private static double ComputeCriticality(
         ChatMessage msg, int idx, int total, HashSet<string> queryTokens)
     {
-        var msgTokens = _Tokenize(msg.Content);
+        var msgTokens = TextUtility.Tokenize(msg.Content);
 
         var queryOverlap = queryTokens.Count > 0 && msgTokens.Count > 0
-            ? _JaccardSimilaritySets(queryTokens, msgTokens)
+            ? TextUtility.JaccardSimilarity(queryTokens, msgTokens)
             : 0.0;
 
         var decisionScore = DecisionRegex.IsMatch(msg.Content) ? 1.0 : 0.0;
@@ -232,35 +235,5 @@ public sealed class SessionCompressor
              + roleScore * 0.10
              + positionDecay * 0.20
              + normImportance * 0.15;
-    }
-
-    private static string TruncateSnippet(string text, int maxLen)
-    {
-        if (text.Length <= maxLen) return text;
-        return text[..(maxLen - 3)] + "...";
-    }
-
-    private static HashSet<string> _Tokenize(string text)
-    {
-        var tokens = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-        foreach (Match match in Regex.Matches(text, @"[\u4e00-\u9fff]+|[a-zA-Z]+"))
-        {
-            var token = match.Value.ToLowerInvariant();
-            if (token.Length >= 2)
-                tokens.Add(token);
-        }
-
-        return tokens;
-    }
-
-    private static double _JaccardSimilaritySets(HashSet<string> a, HashSet<string> b)
-    {
-        if (a.Count == 0 || b.Count == 0)
-            return 0.0;
-
-        var intersection = a.Count(x => b.Contains(x));
-        var union = a.Count + b.Count - intersection;
-        return union > 0 ? (double)intersection / union : 0.0;
     }
 }

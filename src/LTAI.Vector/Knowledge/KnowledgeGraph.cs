@@ -11,6 +11,7 @@ public class KnowledgeGraph
     private readonly Dictionary<string, Entity> _nodesIndex = new();
     private readonly Dictionary<string, Dictionary<string, List<string>>> _adjacency = new();
     private readonly List<Triplet> _triplets = new();
+    private readonly ReaderWriterLockSlim _lock = new();
     private readonly ILogger<KnowledgeGraph> _logger;
 
     public KnowledgeGraph(ILogger<KnowledgeGraph> logger)
@@ -20,8 +21,13 @@ public class KnowledgeGraph
 
     public void AddEntity(Entity entity)
     {
-        _nodesIndex[entity.Id] = entity;
-        _adjacency.TryAdd(entity.Id, new());
+        _lock.EnterWriteLock();
+        try
+        {
+            _nodesIndex[entity.Id] = entity;
+            _adjacency.TryAdd(entity.Id, new());
+        }
+        finally { _lock.ExitWriteLock(); }
     }
 
     public async Task SaveToDiskAsync(string? path = null)
@@ -56,121 +62,149 @@ public class KnowledgeGraph
                     AddTripletsToGraph(new() { triplet });
                 }
         }
-        catch { }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to load knowledge graph from disk: {Path}", path);
+        }
     }
 
     public void AddRelation(string sourceId, string targetId, string relation,
         Dictionary<string, object>? properties = null)
     {
-        if (!_nodesIndex.ContainsKey(sourceId))
-            _nodesIndex[sourceId] = new Entity(sourceId, sourceId);
-        if (!_nodesIndex.ContainsKey(targetId))
-            _nodesIndex[targetId] = new Entity(targetId, targetId);
+        _lock.EnterWriteLock();
+        try
+        {
+            if (!_nodesIndex.ContainsKey(sourceId))
+                _nodesIndex[sourceId] = new Entity(sourceId, sourceId);
+            if (!_nodesIndex.ContainsKey(targetId))
+                _nodesIndex[targetId] = new Entity(targetId, targetId);
 
-        _adjacency.TryAdd(sourceId, new());
-        _adjacency[sourceId].TryAdd(relation, new());
-        if (!_adjacency[sourceId][relation].Contains(targetId))
-            _adjacency[sourceId][relation].Add(targetId);
+            _adjacency.TryAdd(sourceId, new());
+            _adjacency[sourceId].TryAdd(relation, new());
+            if (!_adjacency[sourceId][relation].Contains(targetId))
+                _adjacency[sourceId][relation].Add(targetId);
+        }
+        finally { _lock.ExitWriteLock(); }
     }
 
     public List<Dictionary<string, object>> QueryGraph(Dictionary<string, object> filter)
     {
-        var results = new List<Dictionary<string, object>>();
-        foreach (var (id, entity) in _nodesIndex)
+        _lock.EnterReadLock();
+        try
         {
-            bool match = true;
-            foreach (var (k, v) in filter)
+            var results = new List<Dictionary<string, object>>();
+            foreach (var (id, entity) in _nodesIndex)
             {
-                if (!entity.Properties.TryGetValue(k, out var val) || !Equals(val, v))
-                { match = false; break; }
+                bool match = true;
+                foreach (var (k, v) in filter)
+                {
+                    if (!entity.Properties.TryGetValue(k, out var val) || !Equals(val, v))
+                    { match = false; break; }
+                }
+                if (match)
+                    results.Add(new() { ["id"] = id, ["attributes"] = entity.Properties });
             }
-            if (match)
-                results.Add(new() { ["id"] = id, ["attributes"] = entity.Properties });
+            return results;
         }
-        return results;
+        finally { _lock.ExitReadLock(); }
     }
 
     public List<string> FindPath(string startId, string endId)
     {
-        if (!_nodesIndex.ContainsKey(startId) || !_nodesIndex.ContainsKey(endId))
-            return new();
-
-        var visited = new HashSet<string> { startId };
-        var queue = new Queue<List<string>>();
-        queue.Enqueue(new() { startId });
-
-        while (queue.Count > 0)
+        _lock.EnterReadLock();
+        try
         {
-            var path = queue.Dequeue();
-            var current = path[^1];
+            if (!_nodesIndex.ContainsKey(startId) || !_nodesIndex.ContainsKey(endId))
+                return new();
 
-            if (_adjacency.TryGetValue(current, out var relations))
+            var visited = new HashSet<string> { startId };
+            var queue = new Queue<List<string>>();
+            queue.Enqueue(new() { startId });
+
+            while (queue.Count > 0)
             {
-                foreach (var targets in relations.Values)
+                var path = queue.Dequeue();
+                var current = path[^1];
+
+                if (_adjacency.TryGetValue(current, out var relations))
                 {
-                    foreach (var target in targets)
+                    foreach (var targets in relations.Values)
                     {
-                        if (target == endId)
-                        { path.Add(target); return path; }
-                        if (!visited.Contains(target))
+                        foreach (var target in targets)
                         {
-                            visited.Add(target);
-                            var newPath = new List<string>(path) { target };
-                            queue.Enqueue(newPath);
+                            if (target == endId)
+                            { path.Add(target); return path; }
+                            if (!visited.Contains(target))
+                            {
+                                visited.Add(target);
+                                var newPath = new List<string>(path) { target };
+                                queue.Enqueue(newPath);
+                            }
                         }
                     }
                 }
             }
+            return new();
         }
-        return new();
+        finally { _lock.ExitReadLock(); }
     }
 
     public KnowledgeGraph GetSubgraph(List<string> ids)
     {
-        var sub = new KnowledgeGraph(_logger);
-        foreach (var id in ids)
-            if (_nodesIndex.TryGetValue(id, out var e))
-                sub.AddEntity(e);
-
-        foreach (var id in ids)
+        _lock.EnterReadLock();
+        try
         {
-            if (_adjacency.TryGetValue(id, out var relations))
-                foreach (var (rel, targets) in relations)
-                    foreach (var t in targets)
-                        if (ids.Contains(t))
-                            sub.AddRelation(id, t, rel);
+            var sub = new KnowledgeGraph(_logger);
+            foreach (var id in ids)
+                if (_nodesIndex.TryGetValue(id, out var e))
+                    sub.AddEntity(e);
+
+            foreach (var id in ids)
+            {
+                if (_adjacency.TryGetValue(id, out var relations))
+                    foreach (var (rel, targets) in relations)
+                        foreach (var t in targets)
+                            if (ids.Contains(t))
+                                sub.AddRelation(id, t, rel);
+            }
+            return sub;
         }
-        return sub;
+        finally { _lock.ExitReadLock(); }
     }
 
     public List<string> EntityLinking(string text)
     {
-        var found = new List<(string id, int offset, int length)>();
-        foreach (var (id, entity) in _nodesIndex)
+        _lock.EnterReadLock();
+        try
         {
-            int idx = 0;
-            while ((idx = text.IndexOf(entity.Label, idx, StringComparison.OrdinalIgnoreCase)) != -1)
+            var found = new List<(string id, int offset, int length)>();
+            foreach (var (id, entity) in _nodesIndex)
             {
-                found.Add((id, idx, entity.Label.Length));
-                idx += entity.Label.Length;
+                int idx = 0;
+                while ((idx = text.IndexOf(entity.Label, idx, StringComparison.OrdinalIgnoreCase)) != -1)
+                {
+                    found.Add((id, idx, entity.Label.Length));
+                    idx += entity.Label.Length;
+                }
             }
-        }
-        found.Sort((a, b) => a.length != b.length ? b.length.CompareTo(a.length) : a.offset.CompareTo(b.offset));
+            found.Sort((a, b) => a.length != b.length ? b.length.CompareTo(a.length) : a.offset.CompareTo(b.offset));
 
-        var result = new List<string>();
-        var occupied = new HashSet<int>();
-        foreach (var (id, offset, length) in found)
-        {
-            bool overlap = false;
-            for (int i = offset; i < offset + length; i++)
-                if (occupied.Contains(i)) { overlap = true; break; }
-            if (!overlap)
+            var result = new List<string>();
+            var occupied = new HashSet<int>();
+            foreach (var (id, offset, length) in found)
             {
-                result.Add(id);
-                for (int i = offset; i < offset + length; i++) occupied.Add(i);
+                bool overlap = false;
+                for (int i = offset; i < offset + length; i++)
+                    if (occupied.Contains(i)) { overlap = true; break; }
+                if (!overlap)
+                {
+                    result.Add(id);
+                    for (int i = offset; i < offset + length; i++) occupied.Add(i);
+                }
             }
+            return result;
         }
-        return result;
+        finally { _lock.ExitReadLock(); }
     }
 
     public List<Triplet> ExtractTriplets(string text)
@@ -180,46 +214,64 @@ public class KnowledgeGraph
 
     public int AddTripletsToGraph(List<Triplet> triplets)
     {
-        int count = 0;
-        foreach (var t in triplets)
+        _lock.EnterWriteLock();
+        try
         {
-            var sId = EntityId(t.Subject);
-            var oId = EntityId(t.Object);
-            AddEntity(new Entity(sId, t.Subject));
-            AddEntity(new Entity(oId, t.Object));
-            AddRelation(sId, oId, t.Predicate);
-            _triplets.Add(t);
-            count++;
+            int count = 0;
+            foreach (var t in triplets)
+            {
+                var sId = EntityId(t.Subject);
+                var oId = EntityId(t.Object);
+                AddEntity(new Entity(sId, t.Subject));
+                AddEntity(new Entity(oId, t.Object));
+                AddRelation(sId, oId, t.Predicate);
+                _triplets.Add(t);
+                count++;
+            }
+            return count;
         }
-        return count;
+        finally { _lock.ExitWriteLock(); }
     }
 
-    public List<Triplet> GetTriplets() => _triplets;
+    public List<Triplet> GetTriplets()
+    {
+        _lock.EnterReadLock();
+        try
+        {
+            return _triplets.ToList();
+        }
+        finally { _lock.ExitReadLock(); }
+    }
 
     public Dictionary<string, object> GetStats()
     {
-        var byType = new Dictionary<string, int>();
-        int edges = 0;
-        foreach (var (_, relations) in _adjacency)
-            foreach (var (rel, targets) in relations)
-            {
-                edges += targets.Count;
-                byType[rel] = byType.GetValueOrDefault(rel) + targets.Count;
-            }
-
-        return new()
+        _lock.EnterReadLock();
+        try
         {
-            ["entity_count"] = _nodesIndex.Count,
-            ["edge_count"] = edges,
-            ["by_relation_type"] = byType,
-            ["triplet_count"] = _triplets.Count
-        };
+            var byType = new Dictionary<string, int>();
+            int edges = 0;
+            foreach (var (_, relations) in _adjacency)
+                foreach (var (rel, targets) in relations)
+                {
+                    edges += targets.Count;
+                    byType[rel] = byType.GetValueOrDefault(rel) + targets.Count;
+                }
+
+            return new()
+            {
+                ["entity_count"] = _nodesIndex.Count,
+                ["edge_count"] = edges,
+                ["by_relation_type"] = byType,
+                ["triplet_count"] = _triplets.Count
+            };
+        }
+        finally { _lock.ExitReadLock(); }
     }
 
     public static string EntityId(string label)
     {
         var normalized = Regex.Replace(label.Trim().ToLowerInvariant(), @"\s+", "_");
-        return Convert.ToHexString(MD5.HashData(Encoding.UTF8.GetBytes(normalized)))[..12].ToLowerInvariant();
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(normalized)))[..12].ToLowerInvariant();
     }
 
     public static List<Triplet> ExtractTripletsRegex(string text)
@@ -227,11 +279,21 @@ public class KnowledgeGraph
         var results = new List<Triplet>();
         var patterns = new (string Pattern, string Pred)[]
         {
-            (@"(?<subject>.+?)\s+(?:是|is)\s+(?<object>.+?)[。.]", "is_a"),
+            (@"(?<subject>.+?)\s+(?:是|is|are)\s+(?<object>.+?)[。.]", "is_a"),
             (@"(?<subject>.+?)\s+(?:属于|belongs to)\s+(?<object>.+?)[。.]", "belongs_to"),
-            (@"(?<subject>.+?)\s+(?:开发|developed)\s+(?<object>.+?)[。.]", "developed"),
-            (@"(?<subject>.+?)\s+(?:用于|used in)\s+(?<object>.+?)[。.]", "used_in"),
-            (@"(?<subject>.+?)\s+(?:导致|causes)\s+(?<object>.+?)[。.]", "causes"),
+            (@"(?<subject>.+?)\s+(?:开发|developed|created)\s+(?<object>.+?)[。.]", "developed"),
+            (@"(?<subject>.+?)\s+(?:用于|used in|used for)\s+(?<object>.+?)[。.]", "used_in"),
+            (@"(?<subject>.+?)\s+(?:导致|causes|results in)\s+(?<object>.+?)[。.]", "causes"),
+            (@"(?<subject>.+?)\s+(?:包含|contains|includes|has)\s+(?<object>.+?)[。.]", "contains"),
+            (@"(?<subject>.+?)\s+(?:位于|located in|at)\s+(?<object>.+?)[。.]", "located_in"),
+            (@"(?<subject>.+?)\s+(?:需要|requires|needs)\s+(?<object>.+?)[。.]", "requires"),
+            (@"(?<subject>.+?)\s+(?:产生|produces|generates)\s+(?<object>.+?)[。.]", "produces"),
+            (@"(?<subject>.+?)\s+(?:等于|equals)\s+(?<object>.+?)[。.]", "equals"),
+            (@"(?<subject>.+?)\s+(?:由.*组成|consists of|composed of)\s+(?<object>.+?)[。.]", "composed_of"),
+            (@"(?<subject>.+?)\s+(?:与.*相关|related to|associated with)\s+(?<object>.+?)[。.]", "related_to"),
+            (@"(?<subject>.+?)\s+(?:不同于|differs from)\s+(?<object>.+?)[。.]", "differs_from"),
+            (@"(?<subject>.+?)\s+(?:优于|better than|superior to)\s+(?<object>.+?)[。.]", "better_than"),
+            (@"(?<subject>.+?)\s+(?:应用于|applied to|applied in)\s+(?<object>.+?)[。.]", "applied_to"),
         };
 
         foreach (var (pattern, pred) in patterns)
@@ -245,6 +307,26 @@ public class KnowledgeGraph
                     text, 0.7));
             }
         }
+
+        var definitionPatterns = new[]
+        {
+            @"(?<subject>.+?)[:：]\s*(?<object>.+?)[。.]",
+            @"(?<subject>.+?)\s*[-–—]\s*(?<object>.+?)[。.]",
+        };
+
+        foreach (var pattern in definitionPatterns)
+        {
+            foreach (Match m in Regex.Matches(text, pattern, RegexOptions.IgnoreCase))
+            {
+                var subject = m.Groups["subject"].Value.Trim();
+                var obj = m.Groups["object"].Value.Trim();
+                if (subject.Length > 1 && obj.Length > 2 && subject.Length < 50 && obj.Length < 200)
+                {
+                    results.Add(new Triplet(subject, "defined_as", obj, text, 0.6));
+                }
+            }
+        }
+
         return results;
     }
 }

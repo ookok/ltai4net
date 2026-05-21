@@ -33,6 +33,21 @@ public sealed class LTAIOptions
     public ToolsAutoConfig ToolsAuto { get; init; } = new();
 
     public HttpAcceleratorConfig HttpAccelerator { get; init; } = new();
+
+    [JsonPropertyName("economy")]
+    public EconomyOptions? Economy { get; init; }
+}
+
+public sealed class EconomyOptions
+{
+    [JsonPropertyName("policy")]
+    public string? Policy { get; init; }
+
+    [JsonPropertyName("daily_budget_yuan")]
+    public double DailyBudgetYuan { get; init; } = 50.0;
+
+    [JsonPropertyName("max_task_budget_yuan")]
+    public double MaxTaskBudgetYuan { get; init; } = 10.0;
 }
 
 public sealed class LayerConfig
@@ -174,6 +189,9 @@ public sealed class NetworkConfig
 
     [JsonPropertyName("discovery_endpoint")]
     public string DiscoveryEndpoint { get; init; } = string.Empty;
+
+    [JsonPropertyName("queue_path")]
+    public string QueuePath { get; init; } = ".livingtree/p2p/queue.db";
 }
 
 public sealed class ProviderCatalog

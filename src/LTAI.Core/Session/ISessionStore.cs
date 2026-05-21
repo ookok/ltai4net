@@ -20,12 +20,17 @@ public sealed class SessionState
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
     public DateTime LastActivity { get; set; } = DateTime.UtcNow;
 
+    private readonly Lock _turnsLock = new();
+
     public void AddTurn(string query, string response, string? intent = null, string? model = null)
     {
-        Turns.Add(new SessionTurn { UserQuery = query, AssistantResponse = response, Intent = intent, ModelUsed = model });
-        LastActivity = DateTime.UtcNow;
-        while (Turns.Count > MaxTurns)
-            Turns.RemoveAt(0);
+        lock (_turnsLock)
+        {
+            Turns.Add(new SessionTurn { UserQuery = query, AssistantResponse = response, Intent = intent, ModelUsed = model });
+            LastActivity = DateTime.UtcNow;
+            while (Turns.Count > MaxTurns)
+                Turns.RemoveAt(0);
+        }
     }
 
     public string GetCompressedHistory(int recentFull = 2, int summaryRange = 4)
@@ -61,7 +66,7 @@ public interface ISessionStore
 public sealed class InMemorySessionStore : ISessionStore
 {
     private readonly Dictionary<string, SessionState> _sessions = new();
-    private readonly object _lock = new();
+    private readonly Lock _lock = new();
     private const int MaxSessions = 1000;
 
     public int Count { get { lock (_lock) return _sessions.Count; } }

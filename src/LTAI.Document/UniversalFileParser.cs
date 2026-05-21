@@ -9,6 +9,7 @@ namespace LTAI.Document;
 public sealed class UniversalFileParser
 {
     private readonly Dictionary<string, IDocumentParser> _parsers = new();
+    private readonly Lock _registerLock = new();
 
     public UniversalFileParser(IEnumerable<IDocumentParser> parsers)
     {
@@ -18,10 +19,13 @@ public sealed class UniversalFileParser
 
     public void RegisterParser(IDocumentParser parser)
     {
-        foreach (var ext in parser.SupportedExtensions)
+        lock (_registerLock)
         {
-            var key = ext.ToLowerInvariant();
-            _parsers[key] = parser;
+            foreach (var ext in parser.SupportedExtensions)
+            {
+                var key = ext.ToLowerInvariant();
+                _parsers[key] = parser;
+            }
         }
     }
 

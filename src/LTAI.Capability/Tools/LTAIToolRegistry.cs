@@ -1,5 +1,8 @@
 using LTAI.Core.Messaging;
 using LTAI.Core.System;
+using LTAI.Capability.CodeEngine;
+using LTAI.Capability.CodeGraph;
+using LTAI.Capability.Review;
 using Microsoft.Extensions.DependencyInjection;
 using System.Text.Json;
 
@@ -200,19 +203,384 @@ public static class LTAIToolRegistry
                 return new { query, top_k = topK, message = "Vector search: use km_search for AgenticRAG-backed semantic retrieval" };
             }),
 
-        // ═══ Code — 4 tools ═══
-        new("code_analyze", "Analyze code structure, complexity, dependencies", "code",
-            async _ => await Task.FromResult<object?>(new { message = "Use sandbox_exec to run code analysis tools (linters, complexity checkers, dependency analyzers) in an isolated environment" })),
-        new("code_review", "Review code for bugs, style, security issues", "code",
-            async _ => await Task.FromResult<object?>(new { message = "Use code_analyze or sandbox_exec for code analysis" })),
+        // ═══ Code — 13 tools (analyze, review, graph, edit, build, test) ═══
+        new("code_analyze", "Analyze code structure, complexity, dependencies using real AST", "code",
+            async args =>
+            {
+                var code = Arg(args, "code", "");
+                if (string.IsNullOrWhiteSpace(code)) return new { error = "code parameter is required" };
+                try
+                {
+                    var langStr = Arg(args, "language", "");
+                    var language = string.IsNullOrEmpty(langStr)
+                        ? CodeLanguage.CSharp
+                        : Enum.TryParse<CodeLanguage>(langStr, ignoreCase: true, out var l) ? l : CodeLanguage.Unknown;
+                    var analyzer = GetService<MultiLangCodeAnalyzer>();
+                    var result = await analyzer.AnalyzeAsync(code, language);
+                    return new
+                    {
+                        language = language.ToString(),
+                        result.TotalLines,
+                        result.CodeLines,
+                        result.Complexity,
+                        functionCount = result.Functions.Count,
+                        classCount = result.Classes.Count,
+                        importCount = result.Imports.Count,
+                        functions = result.Functions.Select(f => new { f.Name, f.Line, f.ParameterCount }),
+                        classes = result.Classes.Select(c => new { c.Name, c.Line, c.MethodCount }),
+                    };
+                }
+                catch (Exception ex) { return new { error = $"Analysis failed: {ex.Message}" }; }
+            }),
+        new("code_review", "Automated code review for bugs, security, style issues. Use target=branch or scope=staged/unstaged for git diffs.", "code",
+            async args =>
+            {
+                try
+                {
+                    var reviewer = GetService<CodeReviewEngine>();
+                    var target = Arg(args, "target", "");
+                    var scopeStr = Arg(args, "scope", "staged");
+                    var scope = scopeStr.ToLowerInvariant() switch
+                    {
+                        "unstaged" => ReviewScope.Unstaged,
+                        "branch" => ReviewScope.Branch,
+                        "file" => ReviewScope.File,
+                        _ => ReviewScope.Staged,
+                    };
+                    var report = await reviewer.ReviewAsync(
+                        string.IsNullOrEmpty(target) ? null : target,
+                        scope);
+                    return new
+                    {
+                        score = report.OverallScore,
+                        report.TotalIssues,
+                        report.CriticalIssues,
+                        report.Warnings,
+                        report.Infos,
+                        report.FilesChanged,
+                        report.Summary,
+                        issues = report.Issues.Take(15).Select(i => new
+                        {
+                            i.Severity,
+                            i.File,
+                            i.Line,
+                            i.Category,
+                            i.Title,
+                            i.Message,
+                            i.Suggestion,
+                        }),
+                    };
+                }
+                catch (Exception ex) { return new { error = $"Review failed: {ex.Message}" }; }
+            }),
         new("sandbox_exec", "Execute code in isolated sandbox", "code",
             async args => {
                 var so = _serviceProvider?.GetService(typeof(object).Assembly.GetType("LTAI.Sandbox.SandboxOrchestrator"));
                 if (so != null) { var m = so.GetType().GetMethod("ExecuteAsync"); var task = m?.Invoke(so, new object?[] { Arg(args, "code"), Arg(args, "language", "python") }); if (task is Task t) { await t; return t.GetType().GetProperty("Result")?.GetValue(t); } }
                 return new { error = "Sandbox orchestrator not available", hint = "Use shell_exec or cli_execute for code execution" };
             }),
-        new("code_graph", "Query code knowledge graph (callers/callees/impact)", "code",
-            async _ => await Task.FromResult<object?>(new { message = "Code graph: use code_analyze for structure analysis" })),
+
+        // Code Graph tools (using CodeGraphEnhanced - SQLite + FTS5)
+        new("code_graph:search", "Search the code graph for symbols using SQLite FTS5. Returns functions, classes, methods matching the query.", "code",
+            async args =>
+            {
+                var query = Arg(args, "query");
+                if (string.IsNullOrWhiteSpace(query)) return new { query = "", results = new object[0], hint = "Provide a query parameter" };
+                try
+                {
+                    var graph = GetService<CodeGraphEnhanced>();
+                    var kind = Arg(args, "kind", "");
+                    var limit = Math.Clamp(int.TryParse(Arg(args, "limit", "20"), out var l) ? l : 20, 1, 100);
+                    var results = graph.Search(query, string.IsNullOrEmpty(kind) ? null : kind, limit);
+                    return new
+                    {
+                        query,
+                        found = results.Count,
+                        results = results.Select(r => new
+                        {
+                            r.Name, r.Kind, r.File, r.Line, r.EndLine,
+                            r.ParentClass, r.Route, r.CallerCount, r.CalleeCount,
+                            r.Complexity,
+                        }).ToList(),
+                    };
+                }
+                catch (Exception ex) { return new { query, error = $"Search failed: {ex.Message}" }; }
+            }),
+        new("code_graph:blast_radius", "Calculate blast radius: find all functions affected when a given symbol changes. Includes test file detection.", "code",
+            async args =>
+            {
+                var symbol = Arg(args, "symbol");
+                if (string.IsNullOrWhiteSpace(symbol)) return new { error = "symbol parameter is required" };
+                try
+                {
+                    var graph = GetService<CodeGraphEnhanced>();
+                    var maxDepth = Math.Clamp(int.TryParse(Arg(args, "max_depth", "3"), out var d) ? d : 3, 1, 5);
+                    var impact = graph.GetImpactRadius(symbol, maxDepth);
+                    return new
+                    {
+                        impact.TargetSymbol,
+                        impact.DirectCallers,
+                        impact.TransitiveCallers,
+                        impact.AffectedFiles,
+                        impact.AffectedTests,
+                        impact.Radius,
+                        affectedNodes = impact.AffectedNodes.Take(30).Select(n => new
+                        {
+                            n.Name, n.File, n.Line, n.Kind,
+                            isTestFile = n.File.Contains("Test", StringComparison.OrdinalIgnoreCase),
+                        }).ToList(),
+                    };
+                }
+                catch (Exception ex) { return new { symbol, error = $"Blast radius failed: {ex.Message}" }; }
+            }),
+        new("code_graph:callers", "Find all callers of a given symbol (who calls this function/class).", "code",
+            async args =>
+            {
+                var symbol = Arg(args, "symbol");
+                if (string.IsNullOrWhiteSpace(symbol)) return new { error = "symbol parameter is required" };
+                try
+                {
+                    var graph = GetService<CodeGraphEnhanced>();
+                    var depth = Math.Clamp(int.TryParse(Arg(args, "depth", "2"), out var d) ? d : 2, 1, 5);
+                    var callers = graph.GetCallers(symbol, depth);
+                    return new
+                    {
+                        symbol,
+                        depth,
+                        callerCount = callers.Count,
+                        callers = callers.Select(c => new { c.Name, c.File, c.Line, c.Kind, c.ParentClass }).ToList(),
+                    };
+                }
+                catch (Exception ex) { return new { symbol, error = $"Callers lookup failed: {ex.Message}" }; }
+            }),
+        new("code_graph:context", "Build LLM-friendly code context markdown for a given task. Searches the code graph and returns structured markdown for prompt injection.", "code",
+            async args =>
+            {
+                var task = Arg(args, "task");
+                if (string.IsNullOrWhiteSpace(task)) return new { error = "task parameter is required" };
+                try
+                {
+                    var graph = GetService<CodeGraphEnhanced>();
+                    var maxNodes = Math.Clamp(int.TryParse(Arg(args, "max_nodes", "20"), out var n) ? n : 20, 1, 50);
+                    var context = graph.BuildContext(task, maxNodes, "markdown");
+                    return new { task, context };
+                }
+                catch (Exception ex) { return new { task, error = $"Context build failed: {ex.Message}" }; }
+            }),
+        new("code_graph:status", "Get code graph indexing status: files indexed, total nodes, total edges.", "code",
+            async _ =>
+            {
+                try
+                {
+                    var graph = GetService<CodeGraphEnhanced>();
+                    return await Task.FromResult<object?>(graph.GetStatus());
+                }
+                catch { return new { status = "not_initialized", hint = "Call code_graph:index first" }; }
+            }),
+
+        // Code Edit tools (surgical AST-aware edits with diff, validation, rollback)
+        new("code_edit:replace_range", "Replace a range of lines. startLine/endLine are 1-based. Returns unified diff + syntax diagnostics.", "code_edit",
+            async args =>
+            {
+                var path = Arg(args, "path");
+                if (!int.TryParse(Arg(args, "start_line", "0"), out var start) ||
+                    !int.TryParse(Arg(args, "end_line", "0"), out var end))
+                    return new { error = "start_line and end_line (integers) are required" };
+                var tools = GetService<CodeEditTools>();
+                var resultJson = await tools.EditReplaceRange(path, start, end, Arg(args, "new_code", ""));
+                return System.Text.Json.JsonSerializer.Deserialize<object>(resultJson)!;
+            }),
+        new("code_edit:replace_function", "Replace a specific function body using AST to locate boundaries. Compiles and validates.", "code_edit",
+            async args =>
+            {
+                var path = Arg(args, "path");
+                var functionName = Arg(args, "function_name");
+                if (string.IsNullOrWhiteSpace(functionName))
+                    return new { error = "function_name parameter is required" };
+                var tools = GetService<CodeEditTools>();
+                var resultJson = await tools.EditReplaceFunction(path, functionName, Arg(args, "new_code", ""));
+                return System.Text.Json.JsonSerializer.Deserialize<object>(resultJson)!;
+            }),
+        new("code_edit:insert", "Insert code after a specific line. Returns diff + validation.", "code_edit",
+            async args =>
+            {
+                var path = Arg(args, "path");
+                if (!int.TryParse(Arg(args, "line", "0"), out var line))
+                    return new { error = "line (integer) parameter is required" };
+                var tools = GetService<CodeEditTools>();
+                var resultJson = await tools.EditInsertAfterLine(path, line, Arg(args, "code", ""));
+                return System.Text.Json.JsonSerializer.Deserialize<object>(resultJson)!;
+            }),
+        new("code_edit:delete", "Delete a range of lines. Returns deleted content + diff.", "code_edit",
+            async args =>
+            {
+                var path = Arg(args, "path");
+                if (!int.TryParse(Arg(args, "start_line", "0"), out var start) ||
+                    !int.TryParse(Arg(args, "end_line", "0"), out var end))
+                    return new { error = "start_line and end_line (integers) are required" };
+                var tools = GetService<CodeEditTools>();
+                var resultJson = await tools.EditDeleteRange(path, start, end);
+                return System.Text.Json.JsonSerializer.Deserialize<object>(resultJson)!;
+            }),
+        new("code_edit:validate", "Validate syntax of a file using AST diagnostics. Returns error/warning list.", "code_edit",
+            async args =>
+            {
+                var path = Arg(args, "path");
+                var tools = GetService<CodeEditTools>();
+                var resultJson = await tools.EditValidateSyntax(path);
+                return System.Text.Json.JsonSerializer.Deserialize<object>(resultJson)!;
+            }),
+        new("code_edit:diff", "Generate unified diff between snapshot and current file. Use snapshotId from a previous edit result.", "code_edit",
+            async args =>
+            {
+                var tools = GetService<CodeEditTools>();
+                return System.Text.Json.JsonSerializer.Deserialize<object>(
+                    tools.EditDiff(Arg(args, "path"), Arg(args, "snapshot_id", "")))!;
+            }),
+
+        // Code Read tools (selective, AST-aware file reading to minimize token usage)
+        new("code_read:range", "Read a specific line range from a file. Efficient for large files - only returns requested lines.", "code_read",
+            async args =>
+            {
+                var path = Arg(args, "path");
+                if (!int.TryParse(Arg(args, "start_line", "1"), out var start))
+                    return new { error = "start_line (integer) parameter is required" };
+                var tools = GetService<CodeEditTools>();
+                var resultJson = await tools.ReadRange(path, start,
+                    int.TryParse(Arg(args, "count", "50"), out var c) ? c : 50);
+                return System.Text.Json.JsonSerializer.Deserialize<object>(resultJson)!;
+            }),
+        new("code_read:function", "Read a specific function using AST. Returns function body + signature info. Much more token-efficient than reading the entire file.", "code_read",
+            async args =>
+            {
+                var path = Arg(args, "path");
+                var functionName = Arg(args, "function_name");
+                if (string.IsNullOrWhiteSpace(functionName))
+                    return new { error = "function_name parameter is required" };
+                var tools = GetService<CodeEditTools>();
+                var resultJson = await tools.ReadFunction(path, functionName);
+                return System.Text.Json.JsonSerializer.Deserialize<object>(resultJson)!;
+            }),
+        new("code_read:class", "Read a specific class using AST. Returns class definition with method/field signatures. Token-efficient.", "code_read",
+            async args =>
+            {
+                var path = Arg(args, "path");
+                var className = Arg(args, "class_name");
+                if (string.IsNullOrWhiteSpace(className))
+                    return new { error = "class_name parameter is required" };
+                var tools = GetService<CodeEditTools>();
+                var resultJson = await tools.ReadClass(path, className);
+                return System.Text.Json.JsonSerializer.Deserialize<object>(resultJson)!;
+            }),
+        new("code_read:structure", "Get structured overview of a file: all function signatures, class summaries, imports, diagnostics. Best first tool to understand a file.", "code_read",
+            async args =>
+            {
+                var path = Arg(args, "path");
+                var tools = GetService<CodeEditTools>();
+                var resultJson = await tools.ReadStructure(path);
+                return System.Text.Json.JsonSerializer.Deserialize<object>(resultJson)!;
+            }),
+
+        // Build tools (structured build with error parsing)
+        new("code_build:run", "Run project build with auto-detection of build system. Returns structured errors with file/line/code.", "code_build",
+            async args =>
+            {
+                try
+                {
+                    var pipeline = GetService<BuildPipeline>();
+                    var result = await pipeline.BuildAsync(
+                        Arg(args, "path", ""),
+                        Arg(args, "configuration", "Debug"));
+                    return new
+                    {
+                        result.Success,
+                        result.BuildSystem,
+                        result.Command,
+                        result.ExitCode,
+                        result.DurationMs,
+                        result.ErrorCount,
+                        result.WarningCount,
+                        errors = result.Errors.Take(20).Select(e => new
+                        { e.File, e.Line, e.Column, e.Code, e.Message }),
+                    };
+                }
+                catch (Exception ex) { return new { error = $"Build failed: {ex.Message}" }; }
+            }),
+        new("code_build:detect", "Detect the build system used by a project (dotnet/npm/cargo/make/go/java).", "code_build",
+            async args =>
+            {
+                var path = Arg(args, "path", "");
+                var system = BuildPipeline.DetectBuildSystem(string.IsNullOrEmpty(path) ? Directory.GetCurrentDirectory() : path);
+                return await Task.FromResult<object?>(new { buildSystem = system, path = string.IsNullOrEmpty(path) ? Directory.GetCurrentDirectory() : path });
+            }),
+
+        // Test tools
+        new("code_test:run", "Run project tests with auto-detection of test framework. Returns structured results per test case.", "code_test",
+            async args =>
+            {
+                try
+                {
+                    var harness = GetService<TestHarness>();
+                    var result = await harness.RunTestsAsync(
+                        Arg(args, "path", ""),
+                        Arg(args, "filter", ""),
+                        Arg(args, "configuration", "Debug"));
+                    return new
+                    {
+                        result.Success,
+                        result.Framework,
+                        result.Total,
+                        result.Passed,
+                        result.Failed,
+                        result.Skipped,
+                        passRate = Math.Round(result.PassRate * 100, 1),
+                        result.DurationMs,
+                        failures = result.Cases.Where(c => c.Status == "failed").Take(10)
+                            .Select(c => new { c.Name, c.DurationMs, c.Error }),
+                    };
+                }
+                catch (Exception ex) { return new { error = $"Test run failed: {ex.Message}" }; }
+            }),
+        new("code_test:affected", "Run only tests affected by changed symbols. Uses blast radius to find relevant tests.", "code_test",
+            async args =>
+            {
+                try
+                {
+                    var harness = GetService<TestHarness>();
+                    var symbolsJson = Arg(args, "symbols", "[]");
+                    var symbols = new List<string>();
+                    try
+                    {
+                        var arr = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(symbolsJson);
+                        if (arr.ValueKind == System.Text.Json.JsonValueKind.Array)
+                            symbols = arr.EnumerateArray().Select(e => e.GetString() ?? "").Where(s => !string.IsNullOrEmpty(s)).ToList();
+                    }
+                    catch { symbols = symbolsJson.Split(',', ';').Select(s => s.Trim()).Where(s => !string.IsNullOrEmpty(s)).ToList(); }
+
+                    var result = await harness.RunAffectedTestsAsync(
+                        Arg(args, "path", Directory.GetCurrentDirectory()),
+                        symbols,
+                        Arg(args, "configuration", "Debug"));
+                    return new
+                    {
+                        result.Success,
+                        result.Framework,
+                        result.Total,
+                        result.Passed,
+                        result.Failed,
+                        result.DurationMs,
+                        passRate = Math.Round(result.PassRate * 100, 1),
+                    };
+                }
+                catch (Exception ex) { return new { error = $"Affected test run failed: {ex.Message}" }; }
+            }),
+        new("code_test:detect", "Detect the test framework used by a project (xunit/nunit/mstest/pytest/jest/vitest/cargo-test/go-test).", "code_test",
+            async args =>
+            {
+                var path = Arg(args, "path", "");
+                var framework = TestHarness.DetectTestFramework(string.IsNullOrEmpty(path) ? Directory.GetCurrentDirectory() : path);
+                return await Task.FromResult<object?>(new { framework, path = string.IsNullOrEmpty(path) ? Directory.GetCurrentDirectory() : path });
+            }),
 
         // ═══ Document — 5 tools ═══
         new("doc_parse", "Parse document content (PDF/DOCX/XLSX/MD)", "doc",
@@ -1539,7 +1907,7 @@ internal static class CliEngine
     public static async Task<object> FromRepo(string repoUrl, string branch = "main")
     {
         await Task.Delay(100);
-        return new { repo_url = repoUrl, branch, status = "analyzed", message = "Entry points detected via AST/pyproject.toml/package.json scan" };
+        return new { repo_url = repoUrl, branch, status = "pending", message = "Use AnalyzeCode tool with repository files for AST-based entry point detection" };
     }
 
     public static async Task<object> FromManifest(string yaml)

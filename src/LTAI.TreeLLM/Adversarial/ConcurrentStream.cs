@@ -18,6 +18,7 @@ public sealed class ConcurrentStream
 
     private Func<string, string, Task<string>>? _streamChatFn;
     private bool _connected;
+    private readonly Lock _connectLock = new();
 
     private ILogger<ConcurrentStream>? _logger;
 
@@ -27,14 +28,20 @@ public sealed class ConcurrentStream
 
     public void SetStreamChatFn(Func<string, string, Task<string>> fn)
     {
-        _streamChatFn = fn;
-        _connected = true;
+        lock (_connectLock)
+        {
+            _streamChatFn = fn;
+            _connected = true;
+        }
     }
 
     public bool AutoConnect()
     {
-        _connected = _streamChatFn != null;
-        return _connected;
+        lock (_connectLock)
+        {
+            _connected = _streamChatFn != null;
+            return _connected;
+        }
     }
 
     public async IAsyncEnumerable<StreamEvent> Stream(

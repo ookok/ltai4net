@@ -58,6 +58,22 @@ public sealed class SkillCatalog
     public SkillEntry? GetSkill(string moduleName) =>
         _index.GetValueOrDefault(moduleName);
 
+    public bool UpdateSkillMaturity(string moduleName, SkillMaturity newMaturity)
+    {
+        if (!_index.TryGetValue(moduleName, out var existing)) return false;
+
+        var updated = existing with { Maturity = newMaturity };
+
+        if (_buckets.TryGetValue(existing.Bucket, out var bucketList))
+        {
+            var idx = bucketList.FindIndex(s => s.ModuleName == moduleName);
+            if (idx >= 0) bucketList[idx] = updated;
+        }
+
+        _index[moduleName] = updated;
+        return true;
+    }
+
     public List<SkillEntry> Search(string query)
     {
         var lower = query.ToLowerInvariant();

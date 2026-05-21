@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Threading;
 
 namespace LTAI.Vector.Knowledge;
 
@@ -27,12 +28,12 @@ public sealed class ShardBlock
 
 public sealed class ShardStats
 {
-    public int BlockCount { get; set; }
-    public long TotalBytes { get; set; }
-    public int ReadHits { get; set; }
-    public int WriteCount { get; set; }
-    public int CasConflicts { get; set; }
-    public int CrossShardMerges { get; set; }
+    public int BlockCount;
+    public long TotalBytes;
+    public int ReadHits;
+    public int WriteCount;
+    public int CasConflicts;
+    public int CrossShardMerges;
 }
 
 public sealed class ShardedMemoryStore
@@ -40,7 +41,6 @@ public sealed class ShardedMemoryStore
     private readonly int _totalShards;
     private readonly ConcurrentDictionary<int, ConcurrentDictionary<string, ShardBlock>> _shards = new();
     private readonly ConcurrentDictionary<string, ShardStats> _shardStats = new();
-    private readonly object _statsLock = new();
 
     public ShardedMemoryStore(int totalShards = 8)
     {
@@ -238,40 +238,32 @@ public sealed class ShardedMemoryStore
     private void IncrWrite(ShardKey key)
     {
         var name = $"shard_{key.BucketIndex}";
-        lock (_statsLock)
-        {
-            var stats = _shardStats.GetOrAdd(name, _ => new());
-            stats.WriteCount++;
-        }
+        _shardStats.AddOrUpdate(name,
+            _ => new ShardStats { WriteCount = 1 },
+            (_, stats) => { Interlocked.Increment(ref stats.WriteCount); return stats; });
     }
 
     private void IncrCas(ShardKey key)
     {
         var name = $"shard_{key.BucketIndex}";
-        lock (_statsLock)
-        {
-            var stats = _shardStats.GetOrAdd(name, _ => new());
-            stats.CasConflicts++;
-        }
+        _shardStats.AddOrUpdate(name,
+            _ => new ShardStats { CasConflicts = 1 },
+            (_, stats) => { Interlocked.Increment(ref stats.CasConflicts); return stats; });
     }
 
     private void IncrRead(ShardKey key)
     {
         var name = $"shard_{key.BucketIndex}";
-        lock (_statsLock)
-        {
-            var stats = _shardStats.GetOrAdd(name, _ => new());
-            stats.ReadHits++;
-        }
+        _shardStats.AddOrUpdate(name,
+            _ => new ShardStats { ReadHits = 1 },
+            (_, stats) => { Interlocked.Increment(ref stats.ReadHits); return stats; });
     }
 
     private void IncrCrossShard()
     {
-        lock (_statsLock)
-        {
-            var stats = _shardStats.GetOrAdd("cross", _ => new());
-            stats.CrossShardMerges++;
-        }
+        _shardStats.AddOrUpdate("cross",
+            _ => new ShardStats { CrossShardMerges = 1 },
+            (_, stats) => { Interlocked.Increment(ref stats.CrossShardMerges); return stats; });
     }
 
     private static double ComputeRelevance(ShardBlock block, string query)

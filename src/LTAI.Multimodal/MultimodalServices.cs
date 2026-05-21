@@ -1,41 +1,104 @@
+using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
 
 namespace LTAI.Multimodal;
 
-public sealed class OCREngine
+public sealed class OCREngine : IDisposable
 {
+    private static readonly HashSet<string> AllowedExtensions = new(StringComparer.OrdinalIgnoreCase)
+    { ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff", ".tif", ".gif" };
+
+    private static readonly byte[][] ImageMagicBytes =
+    [
+        [0x89, 0x50, 0x4E, 0x47], // PNG
+        [0xFF, 0xD8, 0xFF],        // JPEG
+        [0x52, 0x49, 0x46, 0x46],  // WEBP (RIFF)
+        [0x42, 0x4D],              // BMP
+        [0x49, 0x49],              // TIFF (little endian)
+        [0x4D, 0x4D],              // TIFF (big endian)
+        [0x47, 0x49, 0x46],        // GIF
+    ];
+
     private readonly ILogger<OCREngine> _logger;
     private readonly string _tessDataPath;
+    private readonly ConcurrentDictionary<string, Lazy<Tesseract.TesseractEngine>> _engines = new();
 
     public OCREngine(ILogger<OCREngine> logger)
     {
         _logger = logger;
         _tessDataPath = Environment.GetEnvironmentVariable("TESSDATA_PREFIX")
             ?? Path.Combine(AppContext.BaseDirectory, "tessdata");
+
+        if (!Directory.Exists(_tessDataPath))
+            _logger.LogWarning("TESSDATA directory not found: {Path}. OCR will fail until traineddata files are provided.", _tessDataPath);
+    }
+
+    private Tesseract.TesseractEngine GetEngine(string language)
+    {
+        return _engines.GetOrAdd(language, lang => new Lazy<Tesseract.TesseractEngine>(() =>
+        {
+            _logger.LogInformation("Initializing Tesseract engine with language: {Lang}", lang);
+            return new Tesseract.TesseractEngine(_tessDataPath, lang, Tesseract.EngineMode.Default);
+        })).Value;
     }
 
     public async Task<string> ExtractTextAsync(string imagePath, string language = "eng+chi_sim", CancellationToken ct = default)
     {
         if (!File.Exists(imagePath)) return "Error: File not found";
+
+        var ext = Path.GetExtension(imagePath);
+        if (!AllowedExtensions.Contains(ext))
+            return $"Error: Unsupported image format '{ext}'. Allowed: {string.Join(", ", AllowedExtensions)}";
+
         try
         {
-            using var engine = new Tesseract.TesseractEngine(_tessDataPath, language, Tesseract.EngineMode.Default);
+            var engine = GetEngine(language);
             using var img = Tesseract.Pix.LoadFromFile(imagePath);
             using var page = engine.Process(img);
             var text = page.GetText();
-            var conf = page.GetMeanConfidence();
-            _logger.LogInformation("OCR: {Path}, conf={Conf:F2}", Path.GetFileName(imagePath), conf);
+            var conf = page.GetMeanConfidence() * 100;
+            _logger.LogInformation("OCR: {Path}, confidence={Conf:F1}%", Path.GetFileName(imagePath), conf);
             return await Task.FromResult($"Confidence: {conf:F1}%\n\n{text}");
         }
-        catch (Exception ex) { _logger.LogError(ex, "OCR failed"); return $"OCR error: {ex.Message}"; }
+        catch (Exception ex) { _logger.LogError(ex, "OCR failed for {Path}", imagePath); return $"OCR error: {ex.Message}"; }
     }
 
     public async Task<string> ExtractTextFromBytesAsync(byte[] imageBytes, string language = "eng+chi_sim", CancellationToken ct = default)
     {
-        var tmp = Path.GetTempFileName() + ".png";
-        try { await File.WriteAllBytesAsync(tmp, imageBytes, ct); return await ExtractTextAsync(tmp, language, ct); }
-        finally { try { File.Delete(tmp); } catch { /* non-fatal */ } }
+        if (imageBytes == null || imageBytes.Length == 0)
+            return "Error: Empty image data";
+
+        if (!IsLikelyImage(imageBytes))
+            return "Error: Data does not appear to be a valid image";
+
+        try
+        {
+            var engine = GetEngine(language);
+            using var img = Tesseract.Pix.LoadFromMemory(imageBytes);
+            using var page = engine.Process(img);
+            var text = page.GetText();
+            var conf = page.GetMeanConfidence() * 100;
+            _logger.LogInformation("OCR from bytes, confidence={Conf:F1}%", conf);
+            return await Task.FromResult($"Confidence: {conf:F1}%\n\n{text}");
+        }
+        catch (Exception ex) { _logger.LogError(ex, "OCR failed from bytes"); return $"OCR error: {ex.Message}"; }
+    }
+
+    private static bool IsLikelyImage(byte[] bytes)
+    {
+        if (bytes.Length < 4) return false;
+        return ImageMagicBytes.Any(sig => bytes.Take(sig.Length).SequenceEqual(sig));
+    }
+
+    public void Dispose()
+    {
+        foreach (var kvp in _engines)
+        {
+            if (kvp.Value.IsValueCreated)
+                kvp.Value.Value.Dispose();
+        }
+        _engines.Clear();
     }
 }
 

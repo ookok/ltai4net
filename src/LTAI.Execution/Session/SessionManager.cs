@@ -20,16 +20,13 @@ public sealed class SessionManager
 
     private readonly string _basePath = ".livingtree/sessions";
     private readonly ConcurrentDictionary<string, SessionState> _cache = new();
-    private ILogger<SessionManager>? _logger = null;
-    private readonly object _lock = new();
+    private ILogger<SessionManager>? _logger;
 
     private SessionManager() { }
 
-    public void SetLogger(ILogger<SessionManager> logger)
+    public static void SetLogger(ILogger<SessionManager> logger)
     {
-        typeof(SessionManager)
-            .GetField("_logger", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)
-            ?.SetValue(this, logger);
+        Instance._logger = logger;
     }
 
     public async Task SaveAsync(SessionState state)
@@ -45,13 +42,7 @@ public sealed class SessionManager
         var filePath = Path.Combine(_basePath, $"{state.SessionId}.json");
         var json = JsonSerializer.Serialize(state, JsonOptions);
 
-        await Task.Run(() =>
-        {
-            lock (_lock)
-            {
-                File.WriteAllText(filePath, json);
-            }
-        }).ConfigureAwait(false);
+        await File.WriteAllTextAsync(filePath, json).ConfigureAwait(false);
 
         _logger?.LogDebug("Session {SessionId} saved ({Name})", state.SessionId, state.Name);
     }

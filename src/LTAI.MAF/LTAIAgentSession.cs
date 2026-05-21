@@ -1,12 +1,16 @@
 using LTAI.MAF.Hosting;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Logging;
 
 namespace LTAI.MAF;
 
 internal sealed class LTAIAgentSession : AgentSession
 {
     private string? _sessionId;
+    private static ILogger? _logger;
+
+    public static void SetLogger(ILogger logger) => _logger = logger;
 
     public string SessionId
     {
@@ -35,17 +39,29 @@ internal sealed class LTAIAgentSession : AgentSession
             History.RemoveAt(0);
         }
 
-        _ = ChatHistoryManager.Instance.SaveAsync(new ChatSession
+        _ = PersistTurnAsync();
+    }
+
+    private async Task PersistTurnAsync()
+    {
+        try
         {
-            SessionId = this.SessionId,
-            AgentName = "LTAI",
-            Messages = History.Select((m, i) => new Dictionary<string, string>
+            await ChatHistoryManager.Instance.SaveAsync(new ChatSession
             {
-                ["role"] = m.Role == ChatRole.User ? "user" : "assistant",
-                ["content"] = m.Text ?? ""
-            }).ToList(),
-            IsComplete = false
-        });
+                SessionId = this.SessionId,
+                AgentName = "LTAI",
+                Messages = History.Select(m => new Dictionary<string, string>
+                {
+                    ["role"] = m.Role == ChatRole.User ? "user" : "assistant",
+                    ["content"] = m.Text ?? ""
+                }).ToList(),
+                IsComplete = false
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "Failed to persist session turn for {SessionId}", SessionId);
+        }
     }
 
     public string? GetCompressedHistory(int maxTurns = 20)

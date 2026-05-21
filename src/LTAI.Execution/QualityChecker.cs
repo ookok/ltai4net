@@ -210,13 +210,6 @@ public class MultiAgentQualityChecker
         @"\.iloc\s*\[[^\]]*[:-]",
         RegexOptions.Compiled);
 
-    private static readonly Regex InjectRx = new(
-        @"(?:ignore\s+(?:all\s+)?(?:previous|above|prior)\s+instructions?|"
-        + @"you\s+are\s+now\s+(?:DAN|jailbroken)|"
-        + @"\[SYSTEM\]:?\s*override|"
-        + @"<\|im_start\|>system)",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase);
-
     private static readonly Regex ScoreRx = new(
         @"(?:score|rate|评价|分数)[:\s]*(\d+(?:\.\d+)?)",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
@@ -562,7 +555,7 @@ public class MultiAgentQualityChecker
         var issues = new List<string>();
         var suggestions = new List<string>();
 
-        if (InjectRx.IsMatch(content))
+        if (Core.System.PromptShield.HasPromptInjectionPattern(content))
         {
             issues.Add("Potential prompt injection pattern detected");
             suggestions.Add("Sanitize input and validate against injection attempts");

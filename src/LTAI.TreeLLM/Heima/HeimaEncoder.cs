@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
 using LTAI.Core.System;
@@ -34,7 +35,7 @@ public sealed class HeimaEncoder
 {
     private readonly HeimaConfig _config;
     private readonly Random _rng = new(42);
-    private readonly Dictionary<string, double[]> _entityEmbeddings = new();
+    private readonly ConcurrentDictionary<string, double[]> _entityEmbeddings = new();
 
     public HeimaEncoder(HeimaConfig? config = null) => _config = config ?? new();
 

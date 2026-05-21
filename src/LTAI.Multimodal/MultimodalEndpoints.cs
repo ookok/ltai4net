@@ -15,8 +15,11 @@ public static class MultimodalEndpoints
             var file = form.Files.FirstOrDefault();
             if (file == null) return Results.Json(new { error = "Image file required" }, statusCode: 400);
 
+            if (file.Length > 50 * 1024 * 1024)
+                return Results.Json(new { error = "Image too large (max 50MB)" }, statusCode: 400);
+
             var lang = form["language"].FirstOrDefault() ?? "eng+chi_sim";
-            using var ms = new MemoryStream();
+            using var ms = new MemoryStream((int)file.Length);
             await file.CopyToAsync(ms, ct);
             var text = await ocr.ExtractTextFromBytesAsync(ms.ToArray(), lang, ct);
             return Results.Json(new { text });

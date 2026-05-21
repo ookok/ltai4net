@@ -211,7 +211,8 @@ namespace LTAI.Execution.Planning
 
         public TaskNode UpdateStatus(string nodeId, TaskStatus status, string reasoning = "")
         {
-            var node = _nodeIndex[nodeId];
+            if (!_nodeIndex.TryGetValue(nodeId, out var node) || node is null)
+                throw new KeyNotFoundException($"Node {nodeId} not found in index");
             var oldStatus = node.Status;
             node.Status = status;
 
@@ -245,7 +246,8 @@ namespace LTAI.Execution.Planning
 
         public TaskNode SetResult(string nodeId, string resultText)
         {
-            var node = _nodeIndex[nodeId];
+            if (!_nodeIndex.TryGetValue(nodeId, out var node) || node is null)
+                throw new KeyNotFoundException($"Node {nodeId} not found in index");
             node.Result = resultText;
 
             if (node.Status is TaskStatus.Running or TaskStatus.Pending or TaskStatus.Thinking)
@@ -258,7 +260,10 @@ namespace LTAI.Execution.Planning
 
         public TaskNode? GetTree() => _root;
 
-        public TaskNode GetNode(string nodeId) => _nodeIndex[nodeId];
+        public TaskNode GetNode(string nodeId) =>
+            _nodeIndex.TryGetValue(nodeId, out var node) && node is not null
+                ? node
+                : throw new KeyNotFoundException($"Node {nodeId} not found in index");
 
         public Dictionary<string, object?> Stats()
         {
@@ -648,21 +653,33 @@ namespace LTAI.Execution.Planning
             ILogger<TaskDecomposer> logger,
             object? consciousness = null,
             int? maxDepth = null,
-            int? maxChildren = null)
+            int? maxChildren = null,
+            bool forceReset = false)
         {
-            if (_decomposerInstance is null)
+            if (forceReset || _decomposerInstance is null)
             {
                 lock (DecomposerLock)
                 {
-                    _decomposerInstance ??= new TaskDecomposer(
-                        logger,
-                        consciousness: consciousness,
-                        maxDepth: maxDepth ?? 4,
-                        maxChildren: maxChildren ?? 6
-                    );
+                    if (forceReset || _decomposerInstance is null)
+                    {
+                        _decomposerInstance = new TaskDecomposer(
+                            logger,
+                            consciousness: consciousness,
+                            maxDepth: maxDepth ?? 4,
+                            maxChildren: maxChildren ?? 6
+                        );
+                    }
                 }
             }
             return _decomposerInstance;
+        }
+
+        public static void ResetDecomposer()
+        {
+            lock (DecomposerLock)
+            {
+                _decomposerInstance = null;
+            }
         }
 
         public static TaskTree CreateTaskTree(ILogger<TaskTree> logger, string description)

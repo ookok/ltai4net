@@ -156,6 +156,13 @@ public sealed class ExternalAccess
             .ToList();
 
         _searchCache[query] = (final, DateTime.UtcNow);
+
+        if (_searchCache.Count > 500)
+        {
+            var oldest = _searchCache.OrderBy(kv => kv.Value.Cached).First();
+            _searchCache.TryRemove(oldest.Key, out _);
+        }
+
         _logger.LogInformation("Deep search for '{Query}' returned {Count} results", query, final.Count);
         return final;
     }

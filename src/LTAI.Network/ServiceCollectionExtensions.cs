@@ -1,3 +1,4 @@
+using LTAI.Core.Configuration;
 using LTAI.Network.Acceleration;
 using LTAI.Network.Bridge;
 using LTAI.Network.Consensus;
@@ -7,9 +8,9 @@ using LTAI.Network.Interfaces;
 using LTAI.Network.Links;
 using LTAI.Network.Messaging;
 using LTAI.Network.Perception;
-using MassTransit;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace LTAI.Network;
 
@@ -17,26 +18,19 @@ public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddLTAINetwork(this IServiceCollection services)
     {
+        services.AddHttpClient("p2p");
+
+        services.AddSingleton<PersistentMessageQueue>(sp =>
+        {
+            var options = sp.GetRequiredService<IOptions<LTAIOptions>>();
+            var logger = sp.GetRequiredService<ILogger<PersistentMessageQueue>>();
+            var queuePath = options.Value.Network.QueuePath;
+            return new PersistentMessageQueue(queuePath, logger);
+        });
+
         services.AddSingleton<IP2PNode, P2PNode>();
         services.AddSingleton<ServiceDiscovery>();
         services.AddSingleton<SmartDnsResolver>();
-
-        services.AddMassTransit(x =>
-        {
-            x.UsingRabbitMq((context, cfg) =>
-            {
-                cfg.Host("localhost", "/", h =>
-                {
-                    h.Username("guest");
-                    h.Password("guest");
-                });
-
-                cfg.Message<LTAINetworkMessage>(m => m.SetEntityName("ltai-network"));
-                cfg.ConfigureEndpoints(context);
-            });
-        });
-
-        services.AddSingleton<IMessageBus, MassTransitMessageBus>();
 
         services.AddSingleton(sp => DistributedConsciousness.Instance);
         services.AddSingleton(sp => SwarmCoordinator.Instance);
@@ -52,6 +46,8 @@ public static class ServiceCollectionExtensions
         services.AddSingleton(sp => new ChannelBridge(sp.GetRequiredService<ILogger<ChannelBridge>>()));
         services.AddSingleton(sp => new NetworkResilience(sp.GetRequiredService<ILogger<NetworkResilience>>()));
         services.AddSingleton(sp => new ExternalAccess(sp.GetRequiredService<ILogger<ExternalAccess>>()));
+
+        services.AddSingleton<Bridge.A2aP2pBridge>();
 
         return services;
     }

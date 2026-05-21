@@ -250,6 +250,23 @@ public sealed class PromptShield
         }
         return (violations, _hitlQueue.Count);
     }
+
+    public static bool HasPromptInjectionPattern(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return false;
+        foreach (var (_, pattern) in _inputPatterns)
+        {
+            try
+            {
+                if (Regex.IsMatch(text, pattern, RegexOptions.IgnoreCase | RegexOptions.Singleline))
+                    return true;
+            }
+            catch { }
+        }
+        return false;
+    }
+
+    public static IReadOnlyList<(string Name, string Pattern)> InputPatterns => _inputPatterns;
 }
 
 file static class AutoLogger<T>

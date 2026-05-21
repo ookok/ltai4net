@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Threading;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -31,6 +32,7 @@ public sealed class ResponseCache
     private readonly ConcurrentDictionary<string, CacheEntry> _entries = new();
     private readonly ILogger<ResponseCache> _logger;
     private const int MaxEntries = 500;
+    private long _totalHits;
 
     public ResponseCache() : this(NullLogger<ResponseCache>.Instance) { }
 
@@ -63,6 +65,7 @@ public sealed class ResponseCache
 
             var updated = entry with { Hits = entry.Hits + 1 };
             _entries.TryUpdate(key, updated, entry);
+            Interlocked.Increment(ref _totalHits);
             _logger.LogDebug("Cache hit: {Key}, Hits: {Hits}", key, updated.Hits);
             return entry.Response;
         }
@@ -90,44 +93,40 @@ public sealed class ResponseCache
 
     public void Invalidate(string? query = null, string? model = null)
     {
-        var toRemove = _entries.Keys.Where(k =>
+        if (query == null && model == null)
         {
-            if (query == null && model == null) return true;
-            var entry = _entries[k];
-            bool match = true;
-            if (query != null && !string.IsNullOrEmpty(query))
-                match = match && MakeKey(query, model ?? "") == k;
-            return match;
-        }).ToList();
-
-        foreach (var key in toRemove)
-        {
-            _entries.TryRemove(key, out _);
+            _entries.Clear();
+            _logger.LogInformation("Invalidated all cache entries");
+            return;
         }
 
-        _logger.LogInformation("Invalidated {Count} cache entries", toRemove.Count);
+        if (query != null)
+        {
+            var key = MakeKey(query, model ?? "");
+            _entries.TryRemove(key, out _);
+            _logger.LogInformation("Invalidated cache entry: {Key}", key);
+        }
     }
 
     public double HitRate
     {
         get
         {
-            var total = _entries.Values.Sum(e => e.Hits);
+            var totalHits = Interlocked.Read(ref _totalHits);
             var count = _entries.Count;
-            return count > 0 ? (double)total / count : 0.0;
+            return count > 0 ? (double)totalHits / count : 0.0;
         }
     }
 
     public Dictionary<string, object> Stats()
     {
+        var count = _entries.Count;
         return new Dictionary<string, object>
         {
-            ["entry_count"] = _entries.Count,
+            ["entry_count"] = count,
             ["max_entries"] = MaxEntries,
-            ["total_hits"] = _entries.Values.Sum(e => e.Hits),
-            ["hit_rate"] = HitRate,
-            ["oldest_entry"] = _entries.Values.OrderBy(e => e.CreatedAt).FirstOrDefault()?.CreatedAt.ToString("O") ?? "N/A",
-            ["newest_entry"] = _entries.Values.OrderByDescending(e => e.CreatedAt).FirstOrDefault()?.CreatedAt.ToString("O") ?? "N/A"
+            ["total_hits"] = Interlocked.Read(ref _totalHits),
+            ["hit_rate"] = HitRate
         };
     }
 }

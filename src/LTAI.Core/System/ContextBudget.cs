@@ -23,6 +23,7 @@ public sealed class ContextBudget
 
     private const int SpliceGuardTokens = 60;
     private readonly BudgetState _state = new();
+    private readonly Lock _stateLock = new();
 
     private ContextBudget() { }
 
@@ -30,57 +31,68 @@ public sealed class ContextBudget
 
     public void Reset()
     {
-        var budget = new BudgetState
+        lock (_stateLock)
         {
-            MaxTokens = _state.MaxTokens,
-            MaxTurns = _state.MaxTurns
-        };
-        CopyState(budget);
+            var budget = new BudgetState
+            {
+                MaxTokens = _state.MaxTokens,
+                MaxTurns = _state.MaxTurns
+            };
+            CopyState(budget);
+        }
     }
 
     public void Configure(int maxTokens = 0, int maxTurns = 0)
     {
-        if (maxTokens > 0) _state.MaxTokens = maxTokens;
-        if (maxTurns > 0) _state.MaxTurns = maxTurns;
+        lock (_stateLock)
+        {
+            if (maxTokens > 0) _state.MaxTokens = maxTokens;
+            if (maxTurns > 0) _state.MaxTurns = maxTurns;
+        }
     }
 
     public Dictionary<string, object> GetStats()
     {
-        var usagePct = Math.Round((double)_state.TotalTokens / Math.Max(1, _state.MaxTokens) * 100, 1);
-
-        return new Dictionary<string, object>
+        lock (_stateLock)
         {
-            ["total_tokens"] = _state.TotalTokens,
-            ["max_tokens"] = _state.MaxTokens,
-            ["usage_pct"] = usagePct,
-            ["turn_count"] = _state.TurnCount,
-            ["max_turns"] = _state.MaxTurns,
-            ["compressed_turns"] = _state.CompressedTurns,
-            ["compression_count"] = _state.CompressionCount,
-            ["splice_gap_tokens"] = _state.SpliceGapTokens,
-            ["avg_transition_entropy"] = _state.AvgTransitionEntropy,
-            ["over_budget"] = usagePct > 90
-        };
+            var usagePct = Math.Round((double)_state.TotalTokens / Math.Max(1, _state.MaxTokens) * 100, 1);
+            return new Dictionary<string, object>
+            {
+                ["total_tokens"] = _state.TotalTokens,
+                ["max_tokens"] = _state.MaxTokens,
+                ["usage_pct"] = usagePct,
+                ["turn_count"] = _state.TurnCount,
+                ["max_turns"] = _state.MaxTurns,
+                ["compressed_turns"] = _state.CompressedTurns,
+                ["compression_count"] = _state.CompressionCount,
+                ["splice_gap_tokens"] = _state.SpliceGapTokens,
+                ["avg_transition_entropy"] = _state.AvgTransitionEntropy,
+                ["over_budget"] = usagePct > 90
+            };
+        }
     }
 
     public (bool needsCompression, List<Dictionary<string, string>> compressedHistory, int dropped)
         AddAndCheck(string systemPrompt, List<Dictionary<string, string>> history, string currentMsg)
     {
-        _state.TurnCount++;
+        lock (_stateLock)
+        {
+            _state.TurnCount++;
 
-        var sysTokens = EstimateTokens(systemPrompt);
-        var histTokens = history.Sum(m => EstimateTokens(m.GetValueOrDefault("content", "")));
-        var curTokens = EstimateTokens(currentMsg);
+            var sysTokens = EstimateTokens(systemPrompt);
+            var histTokens = history.Sum(m => EstimateTokens(m.GetValueOrDefault("content", "")));
+            var curTokens = EstimateTokens(currentMsg);
 
-        _state.SystemTokens = sysTokens;
-        _state.HistoryTokens = histTokens;
-        _state.CurrentTokens = curTokens;
-        _state.TotalTokens = sysTokens + histTokens + curTokens;
+            _state.SystemTokens = sysTokens;
+            _state.HistoryTokens = histTokens;
+            _state.CurrentTokens = curTokens;
+            _state.TotalTokens = sysTokens + histTokens + curTokens;
 
-        if (_state.TotalTokens <= _state.MaxTokens && _state.TurnCount <= _state.MaxTurns)
-            return (false, history, 0);
+            if (_state.TotalTokens <= _state.MaxTokens && _state.TurnCount <= _state.MaxTurns)
+                return (false, history, 0);
 
-        return Compress(history, sysTokens, curTokens);
+            return Compress(history, sysTokens, curTokens);
+        }
     }
 
     private (bool needsCompression, List<Dictionary<string, string>> compressedHistory, int dropped)

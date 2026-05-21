@@ -36,6 +36,9 @@ public sealed class LivingTreeSystem
     private readonly EvolutionGovernor _evolution;
     private readonly SystemGuardian _guardian;
     private readonly ReasoningOrchestrator? _reasoning;
+    private readonly L1L2DuplexRouter? _duplexRouter;
+    private readonly SynapticMemory? _synapticMemory;
+    private readonly DreamCycle? _dreamCycle;
 
     private string DefaultModel => _options.Value.AI.L2.Model;
     private string FlashModel => _options.Value.AI.L1.Model;
@@ -77,7 +80,10 @@ public sealed class LivingTreeSystem
         EvolutionGovernor evolution,
         SystemGuardian guardian,
         DNAOrchestrator? dna = null,
-        ReasoningOrchestrator? reasoning = null)
+        ReasoningOrchestrator? reasoning = null,
+        L1L2DuplexRouter? duplexRouter = null,
+        SynapticMemory? synapticMemory = null,
+        DreamCycle? dreamCycle = null)
     {
         _mesh = mesh;
         _journal = journal;
@@ -99,6 +105,9 @@ public sealed class LivingTreeSystem
         _guardian = guardian;
         _dna = dna;
         _reasoning = reasoning;
+        _duplexRouter = duplexRouter;
+        _synapticMemory = synapticMemory;
+        _dreamCycle = dreamCycle;
     }
 
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
@@ -151,7 +160,11 @@ public sealed class LivingTreeSystem
             var response = await ProcessAsync(query, cancellationToken);
             _journal.Complete(entry, response[..Math.Min(response.Length, 500)]);
 
-            _ = SilentSelfCheckAsync(response);
+            _ = Task.Run(async () =>
+            {
+                try { await SilentSelfCheckAsync(response); }
+                catch (Exception ex) { _logger.LogDebug(ex, "Silent self-check failed"); }
+            }, cancellationToken);
 
             if (_dna != null && !string.IsNullOrEmpty(response))
             {
@@ -165,7 +178,7 @@ public sealed class LivingTreeSystem
                     {
                         _logger.LogDebug(ex, "DNA background process skipped");
                     }
-                });
+                }, cancellationToken);
             }
 
             return response;
@@ -202,12 +215,22 @@ public sealed class LivingTreeSystem
             }
         }
 
+        if (_duplexRouter != null)
+        {
+            var routeResult = _duplexRouter.Route(query);
+            if (routeResult.CanAnswerLocally)
+            {
+                yield return routeResult.LocalResponse;
+                yield break;
+            }
+        }
+
         try
         {
             var routingResult = await _routing.ProcessAsync(new Handshake
             {
                 To = "routing", Action = "select_provider",
-                Payload = new Dictionary<string, object?> { ["query"] = query, ["label"] = "deep" }
+                Payload = new Dictionary<string, object?> { ["query"] = query }
             }, cancellationToken);
 
             model = routingResult.Payload?.GetValueOrDefault("model")?.ToString() ?? DefaultModel;
@@ -308,6 +331,50 @@ public sealed class LivingTreeSystem
         var complexity = inputResult.Payload?.GetValueOrDefault("complexity") is float c ? c : 0.5f;
         var emotion = inputResult.Payload?.GetValueOrDefault("emotion")?.ToString();
 
+        if (_duplexRouter != null)
+        {
+            var routeResult = _duplexRouter.Route(query);
+            if (routeResult.CanAnswerLocally)
+            {
+                _logger.LogInformation("L1 answered locally: route={Route}, confidence={Conf:F2}",
+                    routeResult.Route, routeResult.Confidence);
+                return GovernorOutput.Success(routeResult.LocalResponse, traceId);
+            }
+
+            if (routeResult.Route == "delegate_l2")
+            {
+                var duplexContextResult = await _context.ProcessAsync(new Handshake
+                {
+                    To = "context", Action = "preload",
+                    Payload = inputResult.Payload, ReplyTo = traceId
+                }, cancellationToken);
+
+                var duplexContext = duplexContextResult.Payload?.GetValueOrDefault("context")?.ToString() ?? "";
+                var fullQuery = string.IsNullOrEmpty(duplexContext) ? query : $"Context:\n{duplexContext}\n\nQuery: {query}";
+
+                var teachingResult = await _duplexRouter.RequestL2ReasoningAsync(fullQuery, routeResult, cancellationToken);
+                if (teachingResult != null)
+                {
+                    _duplexRouter.LearnFromL2(query, teachingResult);
+                    _logger.LogInformation("L2 teaching received, L1 learned from teacher");
+
+                    var duplexOutputResult = await _output.ProcessAsync(new Handshake
+                    {
+                        To = "output", Action = "review",
+                        Payload = new Dictionary<string, object?> { ["response"] = teachingResult.Answer },
+                        ReplyTo = traceId
+                    }, cancellationToken);
+
+                    _context.AddTurn(query, teachingResult.Answer);
+                    var finalResponse = duplexOutputResult.Payload?.GetValueOrDefault("response")?.ToString() ?? teachingResult.Answer;
+
+                    _duplexRouter.CacheResponse(query, finalResponse, "delegate_l2", "general", routeResult.Confidence);
+
+                    return GovernorOutput.Success(finalResponse, traceId);
+                }
+            }
+        }
+
         var contextResult = await _context.ProcessAsync(new Handshake
         {
             To = "context", Action = "preload",
@@ -332,7 +399,8 @@ public sealed class LivingTreeSystem
         {
             if (label == "fast" || label == "reflex")
             {
-                response = await _llm.GetResponseAsync(fullPrompt, options, cancellationToken).ContinueWith(t => t.Result.Text ?? "");
+                var fastResponse = await _llm.GetResponseAsync(fullPrompt, options, cancellationToken);
+                response = fastResponse.Text ?? "";
             }
             else if (_fanOut != null)
             {
@@ -353,7 +421,8 @@ public sealed class LivingTreeSystem
                 _logger.LogWarning("Model {Model} failed, falling back to {Fallback}: {Error}", model, fallbackModel, ex.Message);
                 options.ModelId = fallbackModel;
                 options.Temperature = 0.3f;
-                response = await _llm.GetResponseAsync(fullPrompt, options, cancellationToken).ContinueWith(t => t.Result.Text ?? "");
+                var fallbackResponse = await _llm.GetResponseAsync(fullPrompt, options, cancellationToken);
+                response = fallbackResponse.Text ?? "";
             }
             else { throw; }
         }
@@ -382,16 +451,38 @@ public sealed class LivingTreeSystem
         _context.AddTurn(query, response);
         response = outputResult.Payload?.GetValueOrDefault("response")?.ToString() ?? response;
 
+        _duplexRouter?.CacheResponse(query, response, label, "general", complexity);
+
         if (_reasoning != null && !string.IsNullOrEmpty(response))
         {
             try { response = await _reasoning.EnhanceResponse(query, response); }
             catch (Exception ex) { _logger.LogDebug(ex, "Reasoning enhancement skipped"); }
         }
 
-        _ = _self.ProcessAsync(new Handshake
+        _synapticMemory?.Store(new SynapticExperience
         {
-            To = "self", Action = "start_trace",
-            Payload = new Dictionary<string, object?> { ["trace_id"] = traceId }
+            Type = SynapseType.Interaction,
+            Query = query,
+            Response = response,
+            Label = label,
+            Confidence = complexity,
+            Reward = 0.7f,
+            Metadata = $"model={model},trace={traceId}"
+        });
+
+        _dreamCycle?.RecordInteraction();
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await _self.ProcessAsync(new Handshake
+                {
+                    To = "self", Action = "start_trace",
+                    Payload = new Dictionary<string, object?> { ["trace_id"] = traceId }
+                }, cancellationToken);
+            }
+            catch (Exception ex) { _logger.LogDebug(ex, "Self governor trace skipped"); }
         }, cancellationToken);
 
         return GovernorOutput.Success(response, traceId);
@@ -405,11 +496,18 @@ public sealed class LivingTreeSystem
             ? prompt
             : $"Previous conversation:\n{history}\n\nCurrent query:\n{prompt}\n\nPlease provide a thorough, well-reasoned response.";
 
-        var response = await _llm.CompleteAsync(iterativePrompt, baseOptions, cancellationToken);
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        cts.CancelAfter(TimeSpan.FromSeconds(60));
+
+        var response = await _llm.CompleteAsync(iterativePrompt, baseOptions, cts.Token);
 
         var reviewPrompt = $"Review this response for accuracy and completeness. If it needs improvement, provide the improved version:\n\n{response}";
         var reviewOptions = new ChatOptions { ModelId = baseOptions.ModelId, Temperature = 0.1f, MaxOutputTokens = 8192 };
-        var reviewed = await _llm.CompleteAsync(reviewPrompt, reviewOptions, cancellationToken);
+
+        using var reviewCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        reviewCts.CancelAfter(TimeSpan.FromSeconds(30));
+
+        var reviewed = await _llm.CompleteAsync(reviewPrompt, reviewOptions, reviewCts.Token);
 
         return reviewed;
     }

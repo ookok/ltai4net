@@ -23,6 +23,7 @@ public sealed class ROIModel
     private double _cumulativeCost;
     private double _cumulativeValue;
     private int _evaluationCount;
+    private readonly Lock _cumulativeLock = new();
 
     public ROIModel(IOptions<LTAIOptions>? options = null)
     {
@@ -106,20 +107,35 @@ public sealed class ROIModel
     {
         result.ActualCostYuan = actualCostYuan;
         result.RoiActual = result.TaskValue / Math.Max(actualCostYuan, 0.0001);
-        _cumulativeCost += actualCostYuan;
-        _cumulativeValue += result.TaskValue;
-        _evaluationCount++;
+        lock (_cumulativeLock)
+        {
+            _cumulativeCost += actualCostYuan;
+            _cumulativeValue += result.TaskValue;
+            _evaluationCount++;
+        }
     }
 
-    public double CumulativeROI() => _cumulativeValue / Math.Max(_cumulativeCost, 0.0001);
-
-    public IReadOnlyDictionary<string, object> Stats() => new Dictionary<string, object>
+    public double CumulativeROI()
     {
-        ["cumulative_cost"] = _cumulativeCost,
-        ["cumulative_value"] = _cumulativeValue,
-        ["cumulative_roi"] = CumulativeROI(),
-        ["evaluation_count"] = _evaluationCount
-    };
+        lock (_cumulativeLock)
+        {
+            return _cumulativeValue / Math.Max(_cumulativeCost, 0.0001);
+        }
+    }
+
+    public IReadOnlyDictionary<string, object> Stats()
+    {
+        lock (_cumulativeLock)
+        {
+            return new Dictionary<string, object>
+            {
+                ["cumulative_cost"] = _cumulativeCost,
+                ["cumulative_value"] = _cumulativeValue,
+                ["cumulative_roi"] = CumulativeROI(),
+                ["evaluation_count"] = _evaluationCount
+            };
+        }
+    }
 }
 
 public sealed class ComplianceGate

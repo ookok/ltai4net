@@ -193,9 +193,8 @@ public class QualityScorer
         var codeCount = CodeBlockRx.Matches(output).Count;
         score += codeCount * 0.1f;
 
-        var openBacktick = output.Count(c => c == '`' && c == '`');
-        var closeBacktick = output.Count(c => c == '`');
-        if (output.Split("```").Length % 2 == 0)
+        var backtickCount = output.Count(c => c == '`');
+        if (backtickCount % 2 != 0)
             score -= 0.15f;
 
         if (ListRx.IsMatch(output))

@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
+using LTAI.Core.Utility;
 using LTAI.TreeLLM.Models;
 
 namespace LTAI.TreeLLM.Session;
@@ -86,7 +87,7 @@ public sealed class CrossSessionBridge
         if (string.IsNullOrEmpty(userId) || !_memories.TryGetValue(userId, out var memories) || memories.Count == 0)
             return string.Empty;
 
-        var queryTokens = _Tokenize(currentQuery);
+        var queryTokens = TextUtility.Tokenize(currentQuery);
         var now = DateTime.UtcNow;
         var scored = new List<(MemoryEntry Entry, double Weight)>();
 
@@ -95,7 +96,7 @@ public sealed class CrossSessionBridge
             if (now - entry.Timestamp > _ttl) continue;
 
             var jaccard = queryTokens.Count > 0
-                ? JaccardSetSimilarity(queryTokens, _Tokenize(entry.Text))
+                ? TextUtility.JaccardSimilarity(queryTokens, TextUtility.Tokenize(entry.Text))
                 : 0.1;
 
             var ageDays = (now - entry.Timestamp).TotalDays;
@@ -165,37 +166,6 @@ public sealed class CrossSessionBridge
     private static bool _HasPendingKeywords(string text)
     {
         return PendingKeywords.IsMatch(text);
-    }
-
-    private static double _JaccardSimilarity(string a, string b)
-    {
-        var tokensA = _Tokenize(a);
-        var tokensB = _Tokenize(b);
-        return JaccardSetSimilarity(tokensA, tokensB);
-    }
-
-    private static double JaccardSetSimilarity(HashSet<string> a, HashSet<string> b)
-    {
-        if (a.Count == 0 || b.Count == 0)
-            return 0.0;
-
-        var intersection = a.Count(x => b.Contains(x));
-        var union = a.Count + b.Count - intersection;
-        return union > 0 ? (double)intersection / union : 0.0;
-    }
-
-    private static HashSet<string> _Tokenize(string text)
-    {
-        var tokens = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-        foreach (Match match in Regex.Matches(text, @"[\u4e00-\u9fff]+|[a-zA-Z]+"))
-        {
-            var token = match.Value.ToLowerInvariant();
-            if (token.Length >= 2)
-                tokens.Add(token);
-        }
-
-        return tokens;
     }
 
     private static string ExtractSnippet(string text, int minLen, int maxLen)

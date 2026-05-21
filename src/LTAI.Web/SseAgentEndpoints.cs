@@ -12,6 +12,22 @@ namespace LTAI.Web;
 public static class SseAgentEndpoints
 {
     private static readonly ConcurrentDictionary<string, SseTask> _tasks = new();
+    private static readonly Timer _cleanupTimer;
+
+    static SseAgentEndpoints()
+    {
+        _cleanupTimer = new Timer(CleanupOldTasks, null, TimeSpan.FromMinutes(5), TimeSpan.FromMinutes(5));
+    }
+
+    private static void CleanupOldTasks(object? state)
+    {
+        var cutoff = DateTime.UtcNow.AddHours(-1);
+        foreach (var (key, task) in _tasks)
+        {
+            if (task.Status is "completed" or "failed" && task.CreatedAt < cutoff)
+                _tasks.TryRemove(key, out _);
+        }
+    }
 
     private static readonly string[] Steps =
     {
@@ -137,7 +153,8 @@ public static class SseAgentEndpoints
             }
 
             var lastStep = 0;
-            while (task.Status == "running" || task.Status == "pending")
+            while ((task.Status == "running" || task.Status == "pending")
+                   && !context.RequestAborted.IsCancellationRequested)
             {
                 if (task.StepsCompleted > lastStep && task.StepsCompleted <= Steps.Length)
                 {
@@ -148,8 +165,11 @@ public static class SseAgentEndpoints
                     await context.Response.WriteAsync($"data: {sseData}\n\n");
                     await context.Response.Body.FlushAsync();
                 }
-                await Task.Delay(100);
+                await Task.Delay(100, context.RequestAborted);
             }
+
+            if (context.RequestAborted.IsCancellationRequested)
+                return;
 
             if (task.Status == "completed")
             {

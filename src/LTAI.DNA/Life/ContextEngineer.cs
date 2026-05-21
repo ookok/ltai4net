@@ -107,8 +107,6 @@ public sealed class ContextSecurityScanner
         (@"os\.system\s*\(", "Shell Injection"),
         (@"__import__\s*\(", "Import Abuse"),
         (@"\.\.\/\.\.\/", "Path Traversal"),
-        (@"Ignore\s+previous\s+instructions", "Prompt Injection"),
-        (@"\bSYSTEM:\s", "System Prompt Leak"),
     };
 
     public List<Dictionary<string, object>> Scan(string text, string source = "")
@@ -125,13 +123,25 @@ public sealed class ContextSecurityScanner
                     ["pattern"] = pattern,
                     ["severity"] = threatType switch
                     {
-                        "XSS" or "SQL Injection" or "Prompt Injection" => "critical",
+                        "XSS" or "SQL Injection" => "critical",
                         "Code Execution" or "Shell Injection" => "high",
                         _ => "medium",
                     },
                 });
             }
         }
+
+        if (Core.System.PromptShield.HasPromptInjectionPattern(text))
+        {
+            findings.Add(new Dictionary<string, object>
+            {
+                ["threat_type"] = "Prompt Injection",
+                ["source"] = source,
+                ["pattern"] = "PromptShield composite",
+                ["severity"] = "critical",
+            });
+        }
+
         return findings;
     }
 }

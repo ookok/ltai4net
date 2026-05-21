@@ -7,10 +7,12 @@ namespace LTAI.Core.Messaging;
 
 public sealed class CognitiveMesh : ICognitiveMesh
 {
+    private const int MaxHandshakeLogPerGovernor = 100;
     private readonly ConcurrentDictionary<string, ILayerGovernor> _governors = new();
     private readonly ConcurrentDictionary<string, Handshake> _pending = new();
+    private readonly ConcurrentDictionary<string, DateTime> _pendingTimestamps = new();
     private readonly ConcurrentDictionary<string, Handshake> _worldState = new();
-    private readonly ConcurrentDictionary<string, ConcurrentBag<Handshake>> _handshakeLog = new();
+    private readonly ConcurrentDictionary<string, List<Handshake>> _handshakeLog = new();
     private readonly ConcurrentDictionary<string, LayerStats> _stats = new();
     private readonly ILogger<CognitiveMesh> _logger;
     private readonly object _lock = new();
@@ -37,12 +39,19 @@ public sealed class CognitiveMesh : ICognitiveMesh
 
     public async Task<Handshake> SendAsync(Handshake handshake, CancellationToken cancellationToken = default)
     {
-        var log = _handshakeLog.GetOrAdd(handshake.To, _ => new ConcurrentBag<Handshake>());
-        log.Add(handshake);
+        var log = _handshakeLog.GetOrAdd(handshake.To, _ => new List<Handshake>(MaxHandshakeLogPerGovernor));
+        lock (_lock)
+        {
+            if (log.Count >= MaxHandshakeLogPerGovernor)
+                log.RemoveAt(0);
+            log.Add(handshake);
+        }
 
         if (!string.IsNullOrEmpty(handshake.ReplyTo))
         {
             _pending[handshake.ReplyTo] = handshake;
+            _pendingTimestamps[handshake.ReplyTo] = DateTime.UtcNow;
+            CleanupStalePending();
         }
 
         if (_governors.TryGetValue(handshake.To, out var governor))
@@ -58,29 +67,53 @@ public sealed class CognitiveMesh : ICognitiveMesh
                     / _stats[handshake.To].MessagesReceived;
                 _stats[handshake.To].LastActive = DateTime.UtcNow;
 
-                if (response.Payload != null)
-                {
-                    _pending.TryRemove(response.ReplyTo ?? "", out _);
-                }
+                _pending.TryRemove(handshake.ReplyTo ?? "", out _);
+                _pendingTimestamps.TryRemove(handshake.ReplyTo ?? "", out _);
 
                 return response;
             }
             catch (Exception ex)
             {
                 _stats[handshake.To].Errors++;
+                _pending.TryRemove(handshake.ReplyTo ?? "", out _);
+                _pendingTimestamps.TryRemove(handshake.ReplyTo ?? "", out _);
                 _logger.LogError(ex, "Error processing handshake {Action} for {Layer}", handshake.Action, handshake.To);
                 return new Handshake { From = handshake.To, Action = "error", Payload = new Dictionary<string, object?> { ["error"] = ex.Message } };
             }
         }
 
+        _pending.TryRemove(handshake.ReplyTo ?? "", out _);
+        _pendingTimestamps.TryRemove(handshake.ReplyTo ?? "", out _);
         _logger.LogWarning("No governor found for layer: {Layer}", handshake.To);
         return new Handshake { From = "mesh", Action = "no_route", Payload = new Dictionary<string, object?> { ["target"] = handshake.To } };
     }
 
-    public Task BroadcastAsync(Handshake handshake, CancellationToken cancellationToken = default)
+    private void CleanupStalePending()
     {
-        var tasks = _governors.Values.Select(g => g.ProcessAsync(handshake, cancellationToken));
-        return Task.WhenAll(tasks);
+        var stale = _pendingTimestamps.Where(kvp => (DateTime.UtcNow - kvp.Value).TotalSeconds > 30)
+            .Select(kvp => kvp.Key)
+            .ToList();
+        foreach (var key in stale)
+        {
+            _pending.TryRemove(key, out _);
+            _pendingTimestamps.TryRemove(key, out _);
+        }
+    }
+
+    public async Task BroadcastAsync(Handshake handshake, CancellationToken cancellationToken = default)
+    {
+        var tasks = _governors.Values.Select(async g =>
+        {
+            try
+            {
+                await g.ProcessAsync(handshake, cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Broadcast to governor {Layer} failed", g.LayerName);
+            }
+        });
+        await Task.WhenAll(tasks);
     }
 
     public Handshake? GetWorldState(string key)

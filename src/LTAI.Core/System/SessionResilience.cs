@@ -59,6 +59,9 @@ public sealed class SessionResilience
     public void Save(string sessionId, string userMsg, string assistantMsg,
         string intent = "", string model = "", Dictionary<string, object>? meta = null)
     {
+        string filePath;
+        string json;
+
         lock (_lock)
         {
             if (!_active.TryGetValue(sessionId, out var snap))
@@ -86,10 +89,11 @@ public sealed class SessionResilience
             if (snap.Messages.Count > MaxMessagesPerSession)
                 snap.Messages = snap.Messages.Skip(snap.Messages.Count - MaxMessagesPerSession).ToList();
 
-            var json = JsonSerializer.Serialize(snap);
-            File.WriteAllText(FileFor(sessionId), json);
+            filePath = FileFor(sessionId);
+            json = JsonSerializer.Serialize(snap);
         }
 
+        File.WriteAllText(filePath, json);
         PruneIfNeeded();
     }
 
@@ -148,12 +152,14 @@ public sealed class SessionResilience
 
     public Dictionary<string, object> GetStats()
     {
+        var recoverableCount = ListRecoverable().Count;
+
         lock (_lock)
         {
             return new Dictionary<string, object>
             {
                 ["active_sessions"] = _active.Count,
-                ["recoverable"] = ListRecoverable().Count,
+                ["recoverable"] = recoverableCount,
                 ["max_age_hours"] = MaxSessionAgeHours,
                 ["checkpoint_dir"] = _checkpointDir
             };

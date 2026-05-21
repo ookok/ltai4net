@@ -67,6 +67,7 @@ public sealed class DecoupledExecutor
         var tid = string.IsNullOrEmpty(taskId) ? $"task_{Interlocked.Increment(ref _submitted)}" : taskId;
         var handle = new TaskHandle { TaskId = tid, WorkerId = workerId, Retries = retries };
 
+        _pending.TryAdd(tid, handle);
         _ = RunAsync(handle, func, timeout ?? TimeSpan.FromSeconds(60));
         return await Task.FromResult(handle);
     }
@@ -78,6 +79,7 @@ public sealed class DecoupledExecutor
         var tid = string.IsNullOrEmpty(taskId) ? $"task_{Interlocked.Increment(ref _submitted)}" : taskId;
         var handle = new TaskHandle { TaskId = tid, WorkerId = workerId, Retries = retries };
 
+        _pending.TryAdd(tid, handle);
         _ = RunWithResultAsync(handle, func, timeout ?? TimeSpan.FromSeconds(60));
         return await Task.FromResult(handle);
     }
@@ -260,6 +262,7 @@ public sealed class DecoupledExecutor
         {
             var tid = $"virtual_{Interlocked.Increment(ref _submitted)}";
             var handle = new TaskHandle { TaskId = tid, WorkerId = "world-model", IsVirtual = true };
+            _pending.TryAdd(tid, handle);
             _ = RunWithResultAsync(handle, func, timeout ?? TimeSpan.FromSeconds(30));
             tasks.Add(handle);
         }

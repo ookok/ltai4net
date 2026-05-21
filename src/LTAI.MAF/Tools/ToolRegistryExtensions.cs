@@ -28,7 +28,7 @@ public static class ToolRegistryExtensions
         totalTools += RegisterGitTools(registry);
         totalTools += RegisterDependencyTools(registry);
 
-        logger?.LogInformation("ToolRegistry: Registered {Count} tools across 10 categories", totalTools);
+        logger?.LogInformation("ToolRegistry: Registered {Count} tools across 12 categories", totalTools);
         return Task.CompletedTask;
     }
 

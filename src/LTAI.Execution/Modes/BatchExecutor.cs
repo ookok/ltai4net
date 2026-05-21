@@ -35,6 +35,7 @@ public sealed class BatchExecutor
 {
     private readonly List<BatchTask> _deque = new();
     private readonly ILogger<BatchExecutor> _logger;
+    private readonly object _lock = new();
     private BatchMode _mode;
 
     public BatchExecutor(BatchMode mode = BatchMode.FIFO, ILogger<BatchExecutor>? logger = null)
@@ -46,8 +47,11 @@ public sealed class BatchExecutor
     public BatchTask Enqueue(BatchTask task)
     {
         task.CreatedAt = Stopwatch.GetTimestamp() / (double)Stopwatch.Frequency;
-        _deque.Add(task);
-        SortQueue();
+        lock (_lock)
+        {
+            _deque.Add(task);
+            SortQueue();
+        }
         return task;
     }
 
@@ -57,36 +61,45 @@ public sealed class BatchExecutor
         foreach (var task in tasks)
             task.CreatedAt = now;
 
-        _deque.AddRange(tasks);
-        SortQueue();
+        lock (_lock)
+        {
+            _deque.AddRange(tasks);
+            SortQueue();
+        }
         return tasks;
     }
 
     public BatchTask? NextTask()
     {
-        if (_deque.Count == 0) return null;
-
-        return _mode switch
+        lock (_lock)
         {
-            BatchMode.LIFO => _deque[^1],
-            _ => _deque[0]
-        };
+            if (_deque.Count == 0) return null;
+
+            return _mode switch
+            {
+                BatchMode.LIFO => _deque[^1],
+                _ => _deque[0]
+            };
+        }
     }
 
     public async Task<BatchTask?> ExecuteNext(CancellationToken ct = default)
     {
-        if (_deque.Count == 0) return null;
+        BatchTask? task;
+        lock (_lock)
+        {
+            if (_deque.Count == 0) return null;
 
-        BatchTask task;
-        if (_mode == BatchMode.LIFO)
-        {
-            task = _deque[^1];
-            _deque.RemoveAt(_deque.Count - 1);
-        }
-        else
-        {
-            task = _deque[0];
-            _deque.RemoveAt(0);
+            if (_mode == BatchMode.LIFO)
+            {
+                task = _deque[^1];
+                _deque.RemoveAt(_deque.Count - 1);
+            }
+            else
+            {
+                task = _deque[0];
+                _deque.RemoveAt(0);
+            }
         }
 
         return await ExecuteTask(task, ct);
@@ -96,9 +109,6 @@ public sealed class BatchExecutor
         BatchMode? mode = null,
         CancellationToken ct = default)
     {
-        if (mode.HasValue)
-            _mode = mode.Value;
-
         var results = new List<BatchTask>();
         var overrideMode = mode;
         var originalMode = _mode;
@@ -108,12 +118,14 @@ public sealed class BatchExecutor
             if (overrideMode.HasValue)
                 _mode = overrideMode.Value;
 
-            while (_deque.Count > 0)
+            while (true)
             {
                 ct.ThrowIfCancellationRequested();
                 var result = await ExecuteNext(ct);
                 if (result != null)
                     results.Add(result);
+                else
+                    break;
             }
         }
         finally
@@ -132,42 +144,48 @@ public sealed class BatchExecutor
         if (mode.HasValue)
             _mode = mode.Value;
 
-        while (_deque.Count > 0)
+        while (true)
         {
             ct.ThrowIfCancellationRequested();
             var result = await ExecuteNext(ct);
             if (result != null)
                 yield return result;
+            else
+                break;
         }
     }
 
-    public void Clear() => _deque.Clear();
+    public void Clear() { lock (_lock) _deque.Clear(); }
 
     public Dictionary<string, object?> GetStats()
     {
-        var completed = _deque.Where(t => t.Status == "completed").ToList();
-        var failed = _deque.Where(t => t.Status == "failed").ToList();
-
-        return new Dictionary<string, object?>
+        lock (_lock)
         {
-            ["total"] = _deque.Count,
-            ["pending"] = _deque.Count(t => t.Status == "pending"),
-            ["running"] = _deque.Count(t => t.Status == "running"),
-            ["completed"] = completed.Count,
-            ["failed"] = failed.Count,
-            ["mode"] = _mode.ToString(),
-            ["avg_latency_ms"] = completed.Count > 0
-                ? Math.Round(completed.Average(t => t.LatencyMs), 1)
-                : 0,
-            ["max_latency_ms"] = completed.Count > 0
-                ? Math.Round(completed.Max(t => t.LatencyMs), 1)
-                : 0
-        };
+            var completed = _deque.Where(t => t.Status == "completed").ToList();
+            var failed = _deque.Where(t => t.Status == "failed").ToList();
+
+            return new Dictionary<string, object?>
+            {
+                ["total"] = _deque.Count,
+                ["pending"] = _deque.Count(t => t.Status == "pending"),
+                ["running"] = _deque.Count(t => t.Status == "running"),
+                ["completed"] = completed.Count,
+                ["failed"] = failed.Count,
+                ["mode"] = _mode.ToString(),
+                ["avg_latency_ms"] = completed.Count > 0
+                    ? Math.Round(completed.Average(t => t.LatencyMs), 1)
+                    : 0,
+                ["max_latency_ms"] = completed.Count > 0
+                    ? Math.Round(completed.Max(t => t.LatencyMs), 1)
+                    : 0
+            };
+        }
     }
 
     public List<BatchTask> PendingTasks()
     {
-        return _deque.Where(t => t.Status == "pending").ToList();
+        lock (_lock)
+            return _deque.Where(t => t.Status == "pending").ToList();
     }
 
     private void SortQueue()

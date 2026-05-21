@@ -81,7 +81,7 @@ public static class ServiceCollectionExtensions
 
         services.AddSingleton<HotPathObjectPool>();
 
-        services.AddSingleton<IMessageBus, MessageBus>();
+        services.AddSingleton<IEventBus, EventBus>();
         services.AddSingleton<ISessionStore, InMemorySessionStore>();
 
         services.TryAddEnumerable(ServiceDescriptor.Singleton<ITextClassifier>(

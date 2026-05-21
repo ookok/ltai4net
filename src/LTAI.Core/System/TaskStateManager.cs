@@ -310,6 +310,7 @@ public sealed class TaskStateManager
                 CompletedItems = data.TryGetValue("completed_items", out var ci) ? ci.GetInt32() : 0,
                 FailedItems = data.TryGetValue("failed_items", out var fi) ? fi.GetInt32() : 0,
                 CurrentItem = data.TryGetValue("current_item", out var cur) ? cur.GetString() ?? "" : "",
+                CurrentIndex = data.TryGetValue("current_index", out var idx) ? idx.GetInt32() : 0,
                 StartedAt = data.TryGetValue("started_at", out var sa) ? sa.GetString() ?? "" : "",
                 LastCheckpoint = data.TryGetValue("last_checkpoint", out var lc) ? lc.GetString() ?? "" : ""
             };

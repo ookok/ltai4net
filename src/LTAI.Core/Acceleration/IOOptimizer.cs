@@ -36,21 +36,22 @@ public sealed class LruCache<T>
             return default;
         }
 
-        _data[key] = entry with { Timestamp = now };
+        var updated = entry with { Timestamp = now };
+        _data.TryUpdate(key, updated, entry);
         Interlocked.Increment(ref _hits);
         return entry.Value;
     }
 
     public void Set(string key, T value)
     {
-        if (_data.Count >= _maxSize && !_data.ContainsKey(key))
+        _data[key] = new CacheEntry<T>(value, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+
+        if (_data.Count > _maxSize)
         {
             var oldest = _data.OrderBy(kvp => kvp.Value.Timestamp).FirstOrDefault();
             if (!string.IsNullOrEmpty(oldest.Key))
                 _data.TryRemove(oldest.Key, out _);
         }
-
-        _data[key] = new CacheEntry<T>(value, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
     }
 
     public Dictionary<string, object> GetStats()
@@ -93,7 +94,6 @@ public sealed class BatchWriter
     private readonly double _flushInterval;
     private readonly int _maxPending;
     private readonly ConcurrentDictionary<string, string> _pending = new();
-    private readonly object _lock = new();
     private double _lastFlush;
 
     public BatchWriter(double flushInterval = 5.0, int maxPending = 100)
@@ -112,15 +112,16 @@ public sealed class BatchWriter
 
     public void Flush()
     {
-        Dictionary<string, string> items;
-        lock (_lock)
+        if (_pending.IsEmpty) return;
+
+        var snapshot = new Dictionary<string, string>();
+        foreach (var kvp in _pending)
         {
-            if (_pending.IsEmpty) return;
-            items = new Dictionary<string, string>(_pending);
-            _pending.Clear();
+            if (_pending.TryRemove(kvp.Key, out var content))
+                snapshot[kvp.Key] = content;
         }
 
-        foreach (var (path, content) in items)
+        foreach (var (path, content) in snapshot)
         {
             try
             {

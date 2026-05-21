@@ -76,6 +76,7 @@ public sealed class PromptCompiler
     private readonly Dictionary<string, List<PromptVariant>> _variants = new();
     private readonly Dictionary<string, double> _banditScores = new();
     private readonly Random _rng = new();
+    private readonly Lock _compilerLock = new();
     private int _callCount;
 
     public PromptCompiler()
@@ -85,19 +86,25 @@ public sealed class PromptCompiler
 
     public string Compile(string taskType, Dictionary<string, string> inputs)
     {
-        _callCount++;
-        var variants = _variants.GetValueOrDefault(taskType, _variants["general"]);
-        var selected = ThompsonSelect(variants);
-        var result = selected.Text;
-        foreach (var (k, v) in inputs)
-            result = result.Replace($"{{{k}}}", v);
-        return result;
+        lock (_compilerLock)
+        {
+            _callCount++;
+            var variants = _variants.GetValueOrDefault(taskType, _variants["general"]);
+            var selected = ThompsonSelect(variants);
+            var result = selected.Text;
+            foreach (var (k, v) in inputs)
+                result = result.Replace($"{{{k}}}", v);
+            return result;
+        }
     }
 
     public void Feedback(string taskType, string variantId, double quality)
     {
-        _banditScores[$"{taskType}:{variantId}"] =
-            _banditScores.GetValueOrDefault($"{taskType}:{variantId}") * 0.9 + quality * 0.1;
+        lock (_compilerLock)
+        {
+            _banditScores[$"{taskType}:{variantId}"] =
+                _banditScores.GetValueOrDefault($"{taskType}:{variantId}") * 0.9 + quality * 0.1;
+        }
     }
 
     private PromptVariant ThompsonSelect(List<PromptVariant> variants)

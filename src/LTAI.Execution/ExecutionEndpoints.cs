@@ -78,7 +78,7 @@ public static class ExecutionEndpoints
 
         endpoints.MapGet("/api/execution/plan/checkpoint/list", () =>
         {
-            var checkpoint = TaskCheckpoint.Instance;
+            var checkpoint = endpoints.ServiceProvider.GetRequiredService<TaskCheckpoint>();
             var sessions = checkpoint.ListSessions();
             var items = sessions.Select(s => new { id = s.id, savedAt = s.savedAt }).ToList();
             return Results.Json(items);

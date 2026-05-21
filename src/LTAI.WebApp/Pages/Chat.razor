@@ -219,11 +219,15 @@
         }
     };
 
+    private int _templateIndex;
+
     private async Task LoadPromptTemplate()
     {
         var templates = PromptLibrary.BuiltInNames();
-        var selected = await Task.FromResult(templates.FirstOrDefault());
-        if (selected != null) Input = $"[Template: {selected}] ";
+        if (templates.Length == 0) return;
+        var selected = templates[_templateIndex % templates.Length];
+        _templateIndex++;
+        Input = $"[Template: {selected}] ";
     }
 
     private async Task BranchMultiModel() { Input = "/branch " + Input; await SendAsync(); }

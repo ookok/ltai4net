@@ -169,7 +169,7 @@ public sealed class DNAOrchestrator
         _emergence.OnExperience(_phenomenal, _godel);
         var metrics = _emergence.ComputeMetrics(_phenomenal, _godel);
 
-        _life.TickAsync(cancellationToken);
+        await _life.TickAsync(cancellationToken);
 
         var fitnessSignals = new Dictionary<string, double>
         {

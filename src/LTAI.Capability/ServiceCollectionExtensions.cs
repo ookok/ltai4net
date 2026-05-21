@@ -7,6 +7,7 @@ using LTAI.Capability.Evolution;
 using LTAI.Capability.GIS;
 using LTAI.Capability.Integration;
 using LTAI.Capability.Knowledge;
+using LTAI.Capability.Lsp;
 using LTAI.Capability.Pipeline;
 using LTAI.Capability.Reasoning;
 using LTAI.Capability.Review;
@@ -15,6 +16,7 @@ using LTAI.Capability.Skills;
 using LTAI.Capability.Tools;
 using LTAI.Core.System;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace LTAI.Capability;
 
@@ -22,7 +24,9 @@ public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddLTAICapability(this IServiceCollection services)
     {
+        services.AddSingleton<ParserRegistry>();
         services.AddSingleton<MultiLangCodeAnalyzer>();
+        services.AddSingleton<LspServer>();
         services.AddSingleton<UnifiedSearchEngine>();
         services.AddSingleton<DocumentProcessor>();
 
@@ -51,7 +55,10 @@ public static class ServiceCollectionExtensions
 
         services.AddSingleton<PipelineEngine>();
 
-        services.AddSingleton<CodeGraph.CodeGraph>();
+        services.AddSingleton<CodeGraph.CodeGraph>(sp =>
+            new CodeGraph.CodeGraph(
+                parser: sp.GetRequiredService<ParserRegistry>().GetParser(CodeLanguage.CSharp),
+                logger: sp.GetRequiredService<ILogger<CodeGraph.CodeGraph>>()));
         services.AddSingleton<CodeGraphEnhanced>(sp =>
             new CodeGraphEnhanced(sp.GetRequiredService<DataPathResolver>()));
 
@@ -60,6 +67,15 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<SelfModifier>();
         services.AddSingleton<SelfDiscovery>();
         services.AddSingleton<SelfDocumenter>();
+
+        services.AddSingleton<CodeEditEngine>(sp =>
+            new CodeEditEngine(
+                parser: sp.GetRequiredService<ParserRegistry>().GetParser(CodeLanguage.CSharp),
+                logger: sp.GetRequiredService<ILogger<CodeEditEngine>>()));
+        services.AddSingleton<BuildPipeline>();
+        services.AddSingleton<TestHarness>(sp =>
+            new TestHarness(sp.GetService<CodeGraphEnhanced>(),
+                sp.GetRequiredService<ILogger<TestHarness>>()));
 
         services.AddSingleton<DocEngine.DocEngine>();
         services.AddSingleton<DocForge>();

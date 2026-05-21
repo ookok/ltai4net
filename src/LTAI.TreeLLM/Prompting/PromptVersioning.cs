@@ -18,7 +18,13 @@ public sealed class PromptTemplate
 
     public string Render()
     {
-        var parts = new List<string> { Content };
+        return Render(new Dictionary<string, string>());
+    }
+
+    public string Render(IReadOnlyDictionary<string, string> variables)
+    {
+        var renderedContent = Core.System.SimplePromptTemplate.RenderStatic(Content, variables);
+        var parts = new List<string> { renderedContent };
         if (!string.IsNullOrEmpty(Goal))
             parts.Insert(0, $"# Goal\n{Goal}");
         if (!string.IsNullOrEmpty(Constraints))
@@ -167,13 +173,16 @@ public sealed class PromptVersionManager
 
     public void RecordUsage(string name, int version, double quality, int tokens)
     {
-        _usageLog.Add(new Dictionary<string, object>
+        lock (_lock)
         {
-            ["prompt"] = name, ["version"] = version,
-            ["quality"] = quality, ["tokens"] = tokens,
-            ["ts"] = DateTimeOffset.UtcNow.ToUnixTimeSeconds()
-        });
-        if (_usageLog.Count > 2000) _usageLog.RemoveRange(0, 500);
+            _usageLog.Add(new Dictionary<string, object>
+            {
+                ["prompt"] = name, ["version"] = version,
+                ["quality"] = quality, ["tokens"] = tokens,
+                ["ts"] = DateTimeOffset.UtcNow.ToUnixTimeSeconds()
+            });
+            if (_usageLog.Count > 2000) _usageLog.RemoveRange(0, 500);
+        }
         if (_usageLog.Count % 20 == 0) SaveUsage();
     }
 

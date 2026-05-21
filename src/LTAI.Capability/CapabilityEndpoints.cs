@@ -1,3 +1,5 @@
+using System.Net.WebSockets;
+using System.Text;
 using System.Text.Json;
 using LTAI.Capability.CodeEngine;
 using LTAI.Capability.CodeGraph;
@@ -8,6 +10,7 @@ using LTAI.Capability.Evolution;
 using LTAI.Capability.GIS;
 using LTAI.Capability.Integration;
 using LTAI.Capability.Knowledge;
+using LTAI.Capability.Lsp;
 using LTAI.Core.System;
 using LTAI.Capability.Pipeline;
 using LTAI.Capability.Reasoning;
@@ -322,6 +325,42 @@ public static class CapabilityEndpoints
 
         endpoints.MapPost("/api/knowledge/forager/brief", async (KnowledgeForager forager) =>
             Results.Ok(await forager.GenerateDailyBriefAsync()));
+
+        endpoints.Map("/api/lsp", async (HttpContext context, LspServer lspServer) =>
+        {
+            if (context.WebSockets.IsWebSocketRequest)
+            {
+                using var ws = await context.WebSockets.AcceptWebSocketAsync();
+                await HandleLspWebSocket(ws, lspServer);
+            }
+            else
+            {
+                context.Response.ContentType = "application/json";
+                context.Response.StatusCode = 200;
+                await context.Response.WriteAsync(
+                    JsonSerializer.Serialize(new { protocol = "lsp", transport = "websocket", version = "3.17" }));
+            }
+        });
+    }
+
+    private static async Task HandleLspWebSocket(WebSocket ws, LspServer lspServer)
+    {
+        var buffer = new byte[1024 * 64];
+        while (ws.State == WebSocketState.Open)
+        {
+            var result = await ws.ReceiveAsync(new ArraySegment<byte>(buffer), CancellationToken.None);
+            if (result.MessageType == WebSocketMessageType.Close) break;
+
+            var json = Encoding.UTF8.GetString(buffer, 0, result.Count);
+            var response = await lspServer.HandleMessageAsync(json);
+
+            if (response != null)
+            {
+                var responseBytes = Encoding.UTF8.GetBytes(response);
+                await ws.SendAsync(new ArraySegment<byte>(responseBytes),
+                    WebSocketMessageType.Text, true, CancellationToken.None);
+            }
+        }
     }
 
     private static CodeLanguage DetectLanguage(string code)

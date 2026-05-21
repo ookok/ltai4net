@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Threading.RateLimiting;
 using LTAI.Core.Configuration;
 using LTAI.Core.Messaging;
@@ -20,6 +21,8 @@ using LTAI.Network;
 using LTAI.Economy;
 using LTAI.TreeLLM;
 using LTAI.Capability.Tools;
+using LTAI.Network.Interfaces;
+using LTAI.Network.Bridge;
 using Microsoft.AspNetCore.RateLimiting;
 using OpenTelemetry.Logs;
 using OpenTelemetry.Metrics;
@@ -60,7 +63,25 @@ builder.Services.AddOpenTelemetry()
 
 builder.Services.AddHealthChecks();
 
-builder.Services.AddLTAICore(); builder.Services.AddLTAIVector(); builder.Services.AddLTAIAI();
+builder.Services.AddLTAICore();
+var l0 = ltaiOptions.AI.L0;
+var l0ProviderConfig = ltaiOptions.AI.Providers.TryGetValue(l0.Provider, out var l0p) ? l0p : null;
+var l0ApiKey = l0ProviderConfig?.ApiKey ?? "";
+if (string.IsNullOrEmpty(l0ApiKey))
+{
+    var secretKey = $"{l0.Provider}_api_key";
+    l0ApiKey = SecretVault.Instance.Get(secretKey);
+}
+if (l0.IsConfigured && !string.IsNullOrEmpty(l0ApiKey) && l0ProviderConfig != null)
+{
+    var l0Endpoint = $"{l0ProviderConfig.Endpoint.TrimEnd('/')}/v1";
+    builder.Services.AddLTAIVectorWithL0(l0Endpoint, l0ApiKey, l0.Model);
+}
+else
+{
+    builder.Services.AddLTAIVector();
+}
+builder.Services.AddLTAIAI();
 builder.Services.AddLTAIDocument(); builder.Services.AddLTAIDNA(); builder.Services.AddLTAIMemory();
 builder.Services.AddLTAITreeLLM(); builder.Services.AddLTAIExecution(); builder.Services.AddLTAICapability();
 builder.Services.AddLTAIEconomy(); builder.Services.AddLTAISandbox(); builder.Services.AddLTAIMetrics();
@@ -76,6 +97,7 @@ app.UseLTAI();
 app.MapMAFEndpoints(); app.MapDNAEndpoints(); app.MapCapabilityEndpoints();
 app.MapSandboxEndpoints(); app.MapMultimodalEndpoints(); app.MapExecutionEndpoints();
 app.UseLTAIMetrics(); app.MapMCPEndpoints(); app.MapAHEEndpoints();
+app.MapNetworkEndpoints();
 app.MapSpecializedA2AEndpoints(); app.MapA2AHttpJson("LTAI", "/a2a/livingtree");
 
 app.UseSerilogRequestLogging();
@@ -83,6 +105,31 @@ app.UseSerilogRequestLogging();
 var sp = app.Services;
 var config = AppConfiguration.Load();
 var logger = sp.GetRequiredService<ILogger<Program>>();
+
+var l0Check = ltaiOptions.AI.L0;
+var l0pc2 = ltaiOptions.AI.Providers.TryGetValue(l0Check.Provider, out var l0pc3) ? l0pc3 : null;
+var l0KeySource = "local";
+if (l0pc2 != null && !string.IsNullOrEmpty(l0pc2.ApiKey))
+    l0KeySource = "appsettings";
+else if (!string.IsNullOrEmpty(SecretVault.Instance.Get($"{l0Check.Provider}_api_key")))
+    l0KeySource = "secrets.enc";
+
+if (l0Check.IsConfigured && l0KeySource != "local")
+{
+    logger.LogInformation("L0 embedding: {Provider}/{Model} via {Endpoint} (key from {Source})", l0Check.Provider, l0Check.Model, l0pc2?.Endpoint, l0KeySource);
+}
+else
+{
+    logger.LogInformation("L0 embedding: local backend (no API key found)");
+}
+
+var token = SecretVault.Instance.Get("a2a_bearer_token");
+if (string.IsNullOrWhiteSpace(token))
+{
+    token = Convert.ToHexString(RandomNumberGenerator.GetBytes(32)).ToLowerInvariant();
+    SecretVault.Instance.Set("a2a_bearer_token", token);
+    logger.LogInformation("Generated new A2A Bearer token: {Token}", token[..16] + "...");
+}
 
 var toolRegistry = sp.GetRequiredService<AIToolRegistry>();
 
@@ -127,6 +174,13 @@ sp.GetRequiredService<LTAI.MAF.Evolution.PluginRegistry>().Install("pr-review-to
 
 var evolEngine = sp.GetRequiredService<LTAI.MAF.Evolution.HarnessEvolutionEngine>();
 evolEngine.RegisterComponent(new LTAI.MAF.Evolution.ToolsHarnessComponent(sp.GetRequiredService<AIToolRegistry>()));
+
+var p2pNode = sp.GetRequiredService<IP2PNode>();
+await p2pNode.StartAsync();
+logger.LogInformation("P2P Node started: {PeerId} on port {Port}", p2pNode.PeerId, p2pNode.LocalPort);
+
+var a2aP2pBridge = sp.GetRequiredService<A2aP2pBridge>();
+await a2aP2pBridge.BroadcastAgentStatusAsync("LTAI", "online");
 
 logger.LogInformation("LTAI running: mode={Mode} plugins={Plugins} tools={Tools}",
     system.Mode,

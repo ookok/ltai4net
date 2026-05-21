@@ -3,12 +3,12 @@ using Xunit;
 
 namespace LTAI.Tests;
 
-public class MessageBusTests
+public class EventBusTests
 {
     [Fact]
     public async Task SendAsync_RoutesTypedMessage_ToRegisteredHandler()
     {
-        var bus = new MessageBus();
+        var bus = new EventBus();
         bus.RegisterHandler<ClassifyQuery, ClassificationResult>(
             (msg, ct) => Task.FromResult(new ClassificationResult { Label = "deep", Query = msg.Query }));
 
@@ -22,7 +22,7 @@ public class MessageBusTests
     [Fact]
     public async Task SendAsync_ThrowsWhenNoHandler()
     {
-        var bus = new MessageBus();
+        var bus = new EventBus();
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             bus.SendAsync<ClassifyQuery, ClassificationResult>(new ClassifyQuery()));
     }
@@ -30,7 +30,7 @@ public class MessageBusTests
     [Fact]
     public async Task BroadcastAsync_DeliversToAllSubscribers()
     {
-        var bus = new MessageBus();
+        var bus = new EventBus();
         var received = new List<string>();
         bus.Subscribe<ClassifyQuery>((msg, ct) => { received.Add($"s1:{msg.Query}"); return Task.CompletedTask; });
         bus.Subscribe<ClassifyQuery>((msg, ct) => { received.Add($"s2:{msg.Query}"); return Task.CompletedTask; });
@@ -45,14 +45,14 @@ public class MessageBusTests
     [Fact]
     public async Task BroadcastAsync_NoSubscribers_DoesNotThrow()
     {
-        var bus = new MessageBus();
+        var bus = new EventBus();
         await bus.BroadcastAsync(new ClassifyQuery { Query = "silent" });
     }
 
     [Fact]
     public void HasHandler_ReturnsTrue_WhenRegistered()
     {
-        var bus = new MessageBus();
+        var bus = new EventBus();
         bus.RegisterHandler<SelectProvider, ProviderResult>((msg, ct) =>
             Task.FromResult(new ProviderResult { Model = "test" }));
 

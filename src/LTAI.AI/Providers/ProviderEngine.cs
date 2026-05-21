@@ -319,13 +319,20 @@ public sealed class ProviderEngine : IChatClient
 
     private void EstimateCost(int tokens)
     {
-        const double defaultCostPer1K = 0.002;
-        var cost = tokens / 1000.0 * defaultCostPer1K;
+        var pricing = _options.Value.ModelPricing;
+        var modelKey = _options.Value.AI.L2.Model;
+
+        var inputCostPer1M = pricing.InputPer1M.GetValueOrDefault(modelKey, pricing.InputPer1M.GetValueOrDefault("default", 0.50));
+        var outputCostPer1M = pricing.OutputPer1M.GetValueOrDefault(modelKey, pricing.OutputPer1M.GetValueOrDefault("default", 2.00));
+
+        var avgCostPer1M = (inputCostPer1M + outputCostPer1M) / 2.0;
+        var cost = tokens / 1_000_000.0 * avgCostPer1M;
+
         lock (_budgetLock)
         {
             _dailySpent += (decimal)cost;
         }
-        _logger.LogDebug("Tokens used: {Tokens}, cost: ${Cost:F4}, daily total: ${Daily:F2}",
-            tokens, cost, _dailySpent);
+        _logger.LogDebug("Tokens used: {Tokens}, model: {Model}, cost: ${Cost:F4}, daily total: ${Daily:F2}",
+            tokens, modelKey, cost, _dailySpent);
     }
 }

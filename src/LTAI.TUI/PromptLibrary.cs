@@ -6,6 +6,7 @@ namespace LTAI.TUI;
 public sealed class PromptLibrary
 {
     private readonly string _storePath;
+    private readonly Lock _templatesLock = new();
     private List<PromptTemplate> _templates = new();
 
     public PromptLibrary(string projectRoot)
@@ -19,26 +20,33 @@ public sealed class PromptLibrary
         try
         {
             if (File.Exists(_storePath))
-                _templates = JsonSerializer.Deserialize<List<PromptTemplate>>(File.ReadAllText(_storePath)) ?? new();
+            {
+                var loaded = JsonSerializer.Deserialize<List<PromptTemplate>>(File.ReadAllText(_storePath)) ?? new();
+                lock (_templatesLock) { _templates = loaded; }
+            }
         }
-        catch { _templates = GetBuiltInTemplates(); }
-        if (_templates.Count == 0) _templates = GetBuiltInTemplates();
+        catch { lock (_templatesLock) { _templates = GetBuiltInTemplates(); } }
+        if (_templates.Count == 0) lock (_templatesLock) { _templates = GetBuiltInTemplates(); }
     }
 
     private void Save()
     {
+        List<PromptTemplate> snapshot;
+        lock (_templatesLock) { snapshot = _templates.ToList(); }
         Directory.CreateDirectory(Path.GetDirectoryName(_storePath)!);
-        File.WriteAllText(_storePath, JsonSerializer.Serialize(_templates, new JsonSerializerOptions { WriteIndented = true }));
+        File.WriteAllText(_storePath, JsonSerializer.Serialize(snapshot, new JsonSerializerOptions { WriteIndented = true }));
     }
 
     public string? SelectPrompt()
     {
-        if (_templates.Count == 0) return null;
+        List<PromptTemplate> snapshot;
+        lock (_templatesLock) { snapshot = _templates.ToList(); }
+        if (snapshot.Count == 0) return null;
 
         var selected = AnsiConsole.Prompt(new SelectionPrompt<PromptTemplate>()
             .Title("[cyan]Select a prompt template:[/]")
             .PageSize(12)
-            .AddChoices(_templates)
+            .AddChoices(snapshot)
             .UseConverter(t => $"{t.Category switch { "code" => "🔧", "review" => "🔍", "test" => "🧪", "doc" => "📝", "ask" => "💬", _ => "📄" }} [grey]{t.Category}[/] {t.Name}"));
 
         var resolved = selected.Template;
@@ -80,7 +88,8 @@ public sealed class PromptLibrary
             lines.Add(line);
         }
 
-        _templates.Add(new PromptTemplate { Name = name, Template = string.Join("\n", lines), Category = category });
+        var template = new PromptTemplate { Name = name, Template = string.Join("\n", lines), Category = category };
+        lock (_templatesLock) { _templates.Add(template); }
         Save();
         AnsiConsole.MarkupLine($"[green]Saved:[/] {name}");
         await Task.CompletedTask;

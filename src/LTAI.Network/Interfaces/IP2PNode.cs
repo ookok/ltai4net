@@ -5,6 +5,7 @@ namespace LTAI.Network.Interfaces;
 public interface IP2PNode
 {
     string PeerId { get; }
+    int LocalPort { get; }
 
     Task StartAsync(CancellationToken cancellationToken = default);
 

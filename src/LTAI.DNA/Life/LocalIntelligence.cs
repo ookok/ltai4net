@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
+using System.Threading;
 using LTAI.DNA.Models;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -9,13 +10,23 @@ namespace LTAI.DNA.Life;
 
 public sealed class LocalIQ
 {
-    public int TotalQueries { get; set; }
-    public int DirectHits { get; set; }
-    public int LocalHits { get; set; }
-    public int RemoteHits { get; set; }
+    private long _totalQueries;
+    private long _directHits;
+    private long _localHits;
+    private long _remoteHits;
+
+    public long TotalQueries => Interlocked.Read(ref _totalQueries);
+    public long DirectHits => Interlocked.Read(ref _directHits);
+    public long LocalHits => Interlocked.Read(ref _localHits);
+    public long RemoteHits => Interlocked.Read(ref _remoteHits);
     public double DirectPct => TotalQueries > 0 ? (double)DirectHits / TotalQueries : 0;
     public double LocalCachePct => TotalQueries > 0 ? (double)(DirectHits + LocalHits) / TotalQueries : 0;
     public double RemotePct => TotalQueries > 0 ? (double)RemoteHits / TotalQueries : 0;
+
+    public void IncrTotal() => Interlocked.Increment(ref _totalQueries);
+    public void IncrDirect() => Interlocked.Increment(ref _directHits);
+    public void IncrLocal() => Interlocked.Increment(ref _localHits);
+    public void IncrRemote() => Interlocked.Increment(ref _remoteHits);
 }
 
 public sealed class LocalIntelligence
@@ -32,12 +43,12 @@ public sealed class LocalIntelligence
 
     public TierResponse Respond(string query, string domain = "general")
     {
-        _iq.TotalQueries++;
+        _iq.IncrTotal();
 
         var direct = MatchCache(query);
         if (direct != null)
         {
-            _iq.DirectHits++;
+            _iq.IncrDirect();
             return new TierResponse
             {
                 Content = direct.Response,
@@ -51,7 +62,7 @@ public sealed class LocalIntelligence
         var pattern = MatchPattern(query, domain);
         if (pattern != null)
         {
-            _iq.LocalHits++;
+            _iq.IncrLocal();
             return new TierResponse
             {
                 Content = pattern.Response,
@@ -62,7 +73,7 @@ public sealed class LocalIntelligence
             };
         }
 
-        _iq.RemoteHits++;
+        _iq.IncrRemote();
         return new TierResponse
         {
             Content = "",

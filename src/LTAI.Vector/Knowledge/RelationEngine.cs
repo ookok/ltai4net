@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using LTAI.Vector.Knowledge.Models;
 using Microsoft.Extensions.Logging;
 
@@ -11,7 +12,7 @@ public class RelationEngine
     private readonly ILogger<RelationEngine> _logger;
     private bool _depsLoaded;
     private GeometricRelationSelector? _geometricSelector;
-    private readonly Dictionary<string, List<(string Target, string Relation, double Score)>> _multiHopCache = new();
+    private readonly ConcurrentDictionary<string, List<(string Target, string Relation, double Score)>> _multiHopCache = new();
 
     private static readonly List<RelationRule> DefaultRules = new()
     {
@@ -203,7 +204,7 @@ public class RelationEngine
         if (_multiHopCache.Count > 1000)
         {
             var oldest = _multiHopCache.Keys.First();
-            _multiHopCache.Remove(oldest);
+            _multiHopCache.TryRemove(oldest, out _);
         }
 
         return results;

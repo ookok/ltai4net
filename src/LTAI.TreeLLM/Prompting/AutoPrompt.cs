@@ -6,6 +6,9 @@ namespace LTAI.TreeLLM.Prompting;
 public sealed class AutoPrompt
 {
     private const int MutationInterval = 50;
+    private const int PruneInterval = 200;
+    private const int MaxVariants = 20;
+    private const double LowQualityThreshold = 0.2;
 
     private static readonly Lazy<AutoPrompt> LazyInstance = new(() => new AutoPrompt());
     public static AutoPrompt Instance => LazyInstance.Value;
@@ -68,6 +71,8 @@ public sealed class AutoPrompt
         var count = _callCounts.AddOrUpdate(taskType, 1, (_, v) => v + 1);
         if (count % MutationInterval == 0)
             Mutate(taskType, variants);
+        if (count % PruneInterval == 0)
+            Prune(taskType, variants);
 
         PromptVariant? best = null;
         var bestScore = double.MinValue;
@@ -152,6 +157,23 @@ public sealed class AutoPrompt
             Alpha = 3.0,
             Beta = 3.0
         });
+    }
+
+    private void Prune(string taskType, ConcurrentDictionary<string, PromptVariant> variants)
+    {
+        if (variants.Count <= MaxVariants) return;
+
+        var keep = variants.Values
+            .OrderByDescending(v => v.Alpha / (v.Alpha + v.Beta))
+            .Take(MaxVariants)
+            .Select(v => v.Id)
+            .ToHashSet();
+
+        foreach (var id in variants.Keys)
+        {
+            if (!keep.Contains(id) && id != "v0")
+                variants.TryRemove(id, out _);
+        }
     }
 
     private void Mutate(string taskType, ConcurrentDictionary<string, PromptVariant> variants)

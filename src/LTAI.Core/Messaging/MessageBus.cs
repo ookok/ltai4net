@@ -1,6 +1,6 @@
 namespace LTAI.Core.Messaging;
 
-public interface IMessageBus
+public interface IEventBus
 {
     Task<TResponse> SendAsync<TMessage, TResponse>(TMessage message, CancellationToken ct = default)
         where TMessage : notnull;
@@ -17,7 +17,7 @@ public interface IMessageBus
     bool HasHandler<TMessage>() where TMessage : notnull;
 }
 
-public sealed class MessageBus : IMessageBus
+public sealed class EventBus : IEventBus
 {
     private readonly Dictionary<Type, Delegate> _handlers = new();
     private readonly Dictionary<Type, List<Delegate>> _subscribers = new();
@@ -62,7 +62,13 @@ public sealed class MessageBus : IMessageBus
         foreach (var sub in subs)
         {
             if (sub is Func<TMessage, CancellationToken, Task> handler)
-                await handler(message, ct);
+            {
+                try { await handler(message, ct); }
+                catch (Exception ex)
+                {
+                    global::System.Diagnostics.Debug.WriteLine($"EventBus handler error: {ex.Message}");
+                }
+            }
         }
     }
 

@@ -141,10 +141,11 @@ public sealed class SemanticDedupCache
 
     private void EvictLowest()
     {
+        var snapshot = _store.ToArray();
         KeyValuePair<int, CachedEntry>? victim = null;
         var minAccess = int.MaxValue;
 
-        foreach (var kvp in _store)
+        foreach (var kvp in snapshot)
         {
             if (kvp.Value.AccessCount < minAccess)
             {

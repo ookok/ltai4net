@@ -18,6 +18,7 @@ public sealed class SubagentTask
     public DateTime? StartedAt { get; set; }
     public DateTime? CompletedAt { get; set; }
     public CancellationTokenSource? Cancellation { get; set; }
+    public TaskCompletionSource<bool> CompletionSource { get; } = new();
 }
 
 public delegate Task<string?> SubagentHandler(string taskDescription, CancellationToken ct);
@@ -64,6 +65,7 @@ public sealed class BackgroundSubagentRunner
             task.State = SubagentTaskState.Failed;
             task.Error = $"Unknown subagent: {task.SubagentName}";
             task.CompletedAt = DateTime.UtcNow;
+            task.CompletionSource.TrySetResult(false);
             return;
         }
 
@@ -94,8 +96,7 @@ public sealed class BackgroundSubagentRunner
         finally
         {
             task.CompletedAt = DateTime.UtcNow;
-            task.Cancellation?.Dispose();
-            task.Cancellation = null;
+            task.CompletionSource.TrySetResult(false);
         }
     }
 
@@ -150,13 +151,14 @@ public sealed class BackgroundSubagentRunner
 
     private async Task<string> WaitForTaskInternalAsync(SubagentTask task, TimeSpan timeout)
     {
-        var deadline = DateTime.UtcNow + timeout;
-        while (task.State is SubagentTaskState.Queued or SubagentTaskState.Running)
+        using var cts = new CancellationTokenSource(timeout);
+        try
         {
-            if (DateTime.UtcNow > deadline)
-                return $"Timeout after {timeout.TotalSeconds:F0}s";
-
-            await Task.Delay(200);
+            await task.CompletionSource.Task.WaitAsync(cts.Token);
+        }
+        catch (TimeoutException)
+        {
+            return $"Timeout after {timeout.TotalSeconds:F0}s";
         }
 
         return task.State switch
@@ -176,6 +178,7 @@ public sealed class BackgroundSubagentRunner
         task.Cancellation?.Cancel();
         task.State = SubagentTaskState.Canceled;
         task.CompletedAt = DateTime.UtcNow;
+        task.CompletionSource.TrySetResult(false);
         return true;
     }
 

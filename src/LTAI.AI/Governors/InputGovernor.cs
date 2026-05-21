@@ -10,17 +10,22 @@ public sealed class InputGovernor : LayerGovernor
 {
     private static readonly string[] SpinalCommands = { "/help", "/status", "/pause", "/resume", "/restart" };
 
-    public InputGovernor(ICognitiveMesh mesh, IChatClient llm, ILogger<InputGovernor> logger)
-        : base("input", mesh, llm, logger) { }
+    private readonly HybridIntentRouter? _hybridRouter;
 
-    public override Task<Handshake> ProcessAsync(Handshake incoming, CancellationToken cancellationToken = default)
+    public InputGovernor(ICognitiveMesh mesh, IChatClient llm, ILogger<InputGovernor> logger, HybridIntentRouter? hybridRouter = null)
+        : base("input", mesh, llm, logger)
+    {
+        _hybridRouter = hybridRouter;
+    }
+
+    public override async Task<Handshake> ProcessAsync(Handshake incoming, CancellationToken cancellationToken = default)
     {
         var query = incoming.Payload?.GetValueOrDefault("query")?.ToString() ?? "";
 
         if (IsSpinalReflex(query, out var command))
         {
             Logger.LogInformation("Spinal reflex: {Command}", command);
-            return Task.FromResult(new Handshake
+            return new Handshake
             {
                 From = LayerName,
                 Action = "reflex",
@@ -29,13 +34,29 @@ public sealed class InputGovernor : LayerGovernor
                     ["command"] = command,
                     ["original_query"] = query
                 }
-            });
+            };
         }
 
-        var (complexity, label) = ClassifyIntent(query);
-        var emotion = DetectEmotion(query);
+        float complexity;
+        string label;
+        string emotion;
 
-        return Task.FromResult(new Handshake
+        if (_hybridRouter != null)
+        {
+            var intent = await _hybridRouter.ClassifyAsync(query, cancellationToken);
+            label = intent.Label;
+            complexity = intent.Complexity;
+            Logger.LogInformation("Hybrid intent: label={Label}, confidence={Conf:F2}, source={Source}",
+                intent.Label, intent.Confidence, intent.Source);
+        }
+        else
+        {
+            (complexity, label) = ClassifyIntent(query);
+        }
+
+        emotion = DetectEmotion(query);
+
+        return new Handshake
         {
             From = LayerName,
             Action = "classified",
@@ -47,7 +68,7 @@ public sealed class InputGovernor : LayerGovernor
                 ["emotion"] = emotion,
                 ["query_length"] = query.Length
             }
-        });
+        };
     }
 
     private static bool IsSpinalReflex(string query, out string command)
