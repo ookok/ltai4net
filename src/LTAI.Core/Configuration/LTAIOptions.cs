@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using LTAI.Core.Network;
 
 namespace LTAI.Core.Configuration;
 
@@ -29,8 +30,9 @@ public sealed class LTAIOptions
     [JsonPropertyName("stealth_browser")]
     public StealthBrowserConfig StealthBrowser { get; init; } = new();
 
-    [JsonPropertyName("tools_auto")]
     public ToolsAutoConfig ToolsAuto { get; init; } = new();
+
+    public HttpAcceleratorConfig HttpAccelerator { get; init; } = new();
 }
 
 public sealed class LayerConfig

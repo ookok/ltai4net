@@ -4,6 +4,8 @@ using LTAI.Core.Execution;
 using LTAI.Core.Interfaces;
 using LTAI.Core.Life;
 using LTAI.Core.Messaging;
+using LTAI.Core.Multimodal;
+using LTAI.Core.Network;
 using LTAI.Core.Prefs;
 using LTAI.Core.Resilience;
 using LTAI.Core.System;
@@ -19,6 +21,16 @@ public static class ServiceCollectionExtensions
     public static IServiceCollection AddLTAICore(this IServiceCollection services)
     {
         services.AddHttpClient();
+
+        services.AddSingleton(sp =>
+        {
+            var options = sp.GetRequiredService<IOptions<LTAIOptions>>();
+            return new HttpAccelerator(options.Value.HttpAccelerator);
+        });
+        services.AddSingleton(sp =>
+            HttpAccelerator.CreateAcceleratedClient(
+                sp.GetRequiredService<IOptions<LTAIOptions>>().Value.HttpAccelerator));
+
         services.AddSingleton(SecretVault.Instance);
         services.AddSingleton<DataPathResolver>();
 
