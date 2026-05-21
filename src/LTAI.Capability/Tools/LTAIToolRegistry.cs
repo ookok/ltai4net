@@ -355,6 +355,23 @@ public static class LTAIToolRegistry
                     active_allocations = rg.GetActiveAllocations().Count()
                 };
             }),
+
+        // ═══ API Catalog — 2 tools ═══
+        new("api_catalog", "Browse available free APIs and tools. Returns full catalog with descriptions, categories, and parameters. Use this to discover what APIs are available before calling api_search.", "discovery",
+            async args =>
+            {
+                var catalog = ApiCatalog.ApiToolCatalog.Instance;
+                var context = catalog.BuildPromptContext();
+                return new { summary = context, stats = catalog.GetStats() };
+            }),
+        new("api_search", "Search for specific API tools by keyword. Returns matching APIs with descriptions and parameters. Use after api_catalog to find relevant APIs for your task.", "discovery",
+            async args =>
+            {
+                var catalog = ApiCatalog.ApiToolCatalog.Instance;
+                var query = Arg(args, "query");
+                var results = catalog.Search(query);
+                return results.Select(r => new { r.Name, r.Description, r.Category, r.Free, r.Parameters });
+            }),
     };
 
     public static int Total => AllTools.Length;
