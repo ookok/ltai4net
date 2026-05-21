@@ -25,6 +25,12 @@ public sealed class LTAIOptions
 
     [JsonPropertyName("social_load")]
     public SocialLoadFamilyConfig SocialLoad { get; init; } = new();
+
+    [JsonPropertyName("stealth_browser")]
+    public StealthBrowserConfig StealthBrowser { get; init; } = new();
+
+    [JsonPropertyName("tools_auto")]
+    public ToolsAutoConfig ToolsAuto { get; init; } = new();
 }
 
 public sealed class LayerConfig
@@ -393,4 +399,126 @@ public sealed class SocialLoadFamilyConfig
         ["qwen"] = 0.65,
         ["default"] = 0.5
     };
+}
+
+public sealed class StealthBrowserConfig
+{
+    [JsonPropertyName("enabled")]
+    public bool Enabled { get; init; } = true;
+
+    [JsonPropertyName("engine")]
+    public string Engine { get; init; } = "cloakbrowser";
+
+    [JsonPropertyName("executable_path")]
+    public string ExecutablePath { get; init; } = "";
+
+    [JsonPropertyName("auto_download")]
+    public bool AutoDownload { get; init; } = true;
+
+    [JsonPropertyName("download_url")]
+    public string DownloadUrl { get; init; } = "https://github.com/CloakHQ/CloakBrowser/releases/latest/download";
+
+    [JsonPropertyName("download_mirror")]
+    public string DownloadMirror { get; init; } = "https://gitee.com/mirrors/cloakbrowser/releases/latest/download";
+
+    [JsonPropertyName("cache_dir")]
+    public string CacheDir { get; init; } = ".livingtree/browser/stealth";
+
+    [JsonPropertyName("docker_image")]
+    public string DockerImage { get; init; } = "cloakhq/cloakbrowser:latest";
+
+    [JsonPropertyName("cdp_port")]
+    public int CdpPort { get; init; } = 9222;
+
+    [JsonPropertyName("headless")]
+    public bool Headless { get; init; } = true;
+
+    [JsonPropertyName("humanize")]
+    public bool Humanize { get; init; } = false;
+
+    [JsonPropertyName("proxy")]
+    public string? Proxy { get; init; }
+
+    [JsonPropertyName("extra_args")]
+    public List<string> ExtraArgs { get; init; } = new();
+
+    [JsonPropertyName("launch_timeout_ms")]
+    public int LaunchTimeoutMs { get; init; } = 30000;
+
+    [JsonPropertyName("user_agent")]
+    public string UserAgent { get; init; } = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36";
+}
+
+public sealed class ToolsAutoConfig
+{
+    [JsonPropertyName("auto_download")]
+    public bool AutoDownload { get; init; } = true;
+
+    [JsonPropertyName("download_dir")]
+    public string DownloadDir { get; init; } = ".livingtree/tools";
+
+    [JsonPropertyName("wsl2")]
+    public ToolAutoItem Wsl2 { get; init; } = new()
+    {
+        Enabled = true,
+        Name = "WSL2",
+        InstallUrl = "https://aka.ms/wslstorepage",
+        AutoInstallDistro = "Ubuntu-24.04"
+    };
+
+    [JsonPropertyName("python")]
+    public ToolAutoItem Python { get; init; } = new()
+    {
+        Enabled = true,
+        Name = "Python",
+        InstallUrl = "https://www.python.org/downloads/",
+        MinVersion = "3.10"
+    };
+
+    [JsonPropertyName("nodejs")]
+    public ToolAutoItem NodeJs { get; init; } = new()
+    {
+        Enabled = true,
+        Name = "Node.js",
+        InstallUrl = "https://nodejs.org/dist/v22.11.0/",
+        MinVersion = "20.0"
+    };
+
+    [JsonPropertyName("dotnet_sdk")]
+    public ToolAutoItem DotNetSdk { get; init; } = new()
+    {
+        Enabled = true,
+        Name = ".NET SDK",
+        InstallUrl = "https://dotnet.microsoft.com/download",
+        MinVersion = "10.0"
+    };
+
+    [JsonPropertyName("ffmpeg")]
+    public ToolAutoItem Ffmpeg { get; init; } = new()
+    {
+        Enabled = false,
+        Name = "FFmpeg",
+        InstallUrl = "https://ffmpeg.org/download.html"
+    };
+}
+
+public sealed class ToolAutoItem
+{
+    [JsonPropertyName("enabled")]
+    public bool Enabled { get; init; } = true;
+
+    [JsonPropertyName("name")]
+    public string Name { get; init; } = "";
+
+    [JsonPropertyName("install_url")]
+    public string InstallUrl { get; init; } = "";
+
+    [JsonPropertyName("auto_install_distro")]
+    public string? AutoInstallDistro { get; init; }
+
+    [JsonPropertyName("min_version")]
+    public string? MinVersion { get; init; }
+
+    [JsonPropertyName("executable_path")]
+    public string? ExecutablePath { get; init; }
 }
