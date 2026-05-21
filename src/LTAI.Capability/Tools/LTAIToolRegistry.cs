@@ -556,6 +556,112 @@ public static class LTAIToolRegistry
         new("metrics_snapshot", "Get system metrics: total requests, tokens, avg latency, active tasks, memory", "system",
             async _ => { var collector = _serviceProvider?.GetService(typeof(object).Assembly.GetType("LTAI.Metrics.LTAIMetricsCollector")); if (collector == null) return new { error = "Metrics collector not available" }; var method = collector.GetType().GetMethod("GetSnapshot"); return method?.Invoke(collector, null) ?? new { error = "GetSnapshot not available" }; }),
 
+        // ═══ Skill Management — 4 tools ═══
+        new("skill_create", "Create a new skill by writing a SKILL.md file. Skills are Markdown files with optional YAML frontmatter. Parameters: name (required, lower-case-hyphenated), description (required), body (required, Markdown content), category (optional)", "management",
+            async args =>
+            {
+                var name = Arg(args, "name");
+                var desc = Arg(args, "description");
+                var body = Arg(args, "body");
+                if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(desc) || string.IsNullOrWhiteSpace(body)) return new { error = "name, description, and body are required" };
+                var skillsDir = Path.Combine(Environment.CurrentDirectory, ".livingtree", "skills");
+                var skillDir = Path.Combine(skillsDir, name);
+                Directory.CreateDirectory(skillDir);
+                var frontmatter = $@"---
+name: {name}
+description: {desc}
+version: 1.0.0
+category: {Arg(args, "category", "general")}
+created: {DateTime.UtcNow:yyyy-MM-dd}
+---
+";
+                await File.WriteAllTextAsync(Path.Combine(skillDir, "SKILL.md"), frontmatter + "\n" + body);
+                return new { name, description = desc, file = Path.Combine(skillDir, "SKILL.md"), status = "created" };
+            }),
+        new("skill_edit", "Edit an existing skill's SKILL.md body. Appends content to the existing file. Parameters: name (required), body (required, new content to append)", "management",
+            async args =>
+            {
+                var name = Arg(args, "name");
+                var body = Arg(args, "body");
+                if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(body)) return new { error = "name and body are required" };
+                var skillDir = Path.Combine(Environment.CurrentDirectory, ".livingtree", "skills", name);
+                var skillFile = Path.Combine(skillDir, "SKILL.md");
+                if (!File.Exists(skillFile))
+                {
+                    var globalSkillDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".livingtree", "skills", name);
+                    var globalSkillFile = Path.Combine(globalSkillDir, "SKILL.md");
+                    if (!File.Exists(globalSkillFile)) return new { error = $"Skill '{name}' not found in project or global skills" };
+                    await File.AppendAllTextAsync(globalSkillFile, "\n\n" + body);
+                    return new { name, file = globalSkillFile, status = "appended" };
+                }
+                await File.AppendAllTextAsync(skillFile, "\n\n" + body);
+                return new { name, file = skillFile, status = "appended" };
+            }),
+        new("skill_delete", "Delete a skill by name. Removes the SKILL.md file and its directory from .livingtree/skills/. Parameters: name (required)", "management",
+            async args =>
+            {
+                var name = Arg(args, "name");
+                if (string.IsNullOrWhiteSpace(name)) return new { error = "name parameter is required" };
+                var skillDir = Path.Combine(Environment.CurrentDirectory, ".livingtree", "skills", name);
+                if (Directory.Exists(skillDir)) { Directory.Delete(skillDir, true); return new { name, status = "deleted" }; }
+                var globalSkillDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".livingtree", "skills", name);
+                if (Directory.Exists(globalSkillDir)) { Directory.Delete(globalSkillDir, true); return new { name, status = "deleted", location = "global" }; }
+                return new { error = $"Skill '{name}' not found" };
+            }),
+        new("skill_explain", "Explain what a skill does by reading its SKILL.md body and providing a summary. Parameters: name (required)", "management",
+            async args =>
+            {
+                var name = Arg(args, "name");
+                if (string.IsNullOrWhiteSpace(name)) return new { error = "name parameter is required" };
+                var discovery = new LTAI.Capability.Skills.SkillDiscoveryManager();
+                var skill = discovery.GetSkill(name);
+                if (skill != null) return new { name = skill.Name, description = skill.Description, source = skill.Source, size = skill.Body.Length, preview = skill.Body[..Math.Min(500, skill.Body.Length)], complexity = skill.Body.Length < 500 ? "simple" : skill.Body.Length < 2000 ? "moderate" : "complex" };
+                var catalog = new LTAI.Capability.Skills.SkillCatalog();
+                var entry = catalog.GetSkill(name);
+                return entry != null ? new { name = entry.ModuleName, description = entry.Description, bucket = entry.Bucket.ToString(), maturity = entry.Maturity.ToString(), dependencies = entry.Dependencies, note = "Built-in skill: edit not supported" } : new { error = $"Skill '{name}' not found" };
+            }),
+
+        // ═══ Tool Management — 4 tools ═══
+        new("tool_search", "Search all registered tools by name, description, or category. Use this to find relevant tools for your task. Parameters: query (required), category (optional filter)", "management",
+            async args =>
+            {
+                var query = Arg(args, "query").ToLower();
+                var category = Arg(args, "category");
+                var results = AllTools
+                    .Where(t => (string.IsNullOrEmpty(query) || t.Name.Contains(query, StringComparison.OrdinalIgnoreCase) || t.Description.Contains(query, StringComparison.OrdinalIgnoreCase))
+                             && (string.IsNullOrEmpty(category) || t.Category.Contains(category, StringComparison.OrdinalIgnoreCase)))
+                    .Select(t => new { t.Name, t.Description, t.Category, has_handler = t.Handler != null })
+                    .Take(30).ToList();
+                return new { query, category, results, total = AllTools.Length, matched = results.Count };
+            }),
+        new("tool_enable", "Enable a previously disabled tool. Tools are enabled by default. This is a placeholder for future tool governance. Parameters: name (required)", "management",
+            async args =>
+            {
+                var name = Arg(args, "name");
+                var tool = AllTools.FirstOrDefault(t => string.Equals(t.Name, name, StringComparison.OrdinalIgnoreCase));
+                return tool != null ? new { name, status = "enabled", description = tool.Description, category = tool.Category, note = "All tools are enabled by default" } : new { error = $"Tool '{name}' not found. Use tool_search to find available tools." };
+            }),
+        new("tool_disable", "Disable a tool so it won't appear in tool suggestions. This is a placeholder for future tool governance. Parameters: name (required)", "management",
+            async args =>
+            {
+                var name = Arg(args, "name");
+                var tool = AllTools.FirstOrDefault(t => string.Equals(t.Name, name, StringComparison.OrdinalIgnoreCase));
+                return tool != null ? new { name, status = "disable_placeholder", description = tool.Description, note = "Tool disable is planned for implementation. Currently all tools are always enabled." } : new { error = $"Tool '{name}' not found" };
+            }),
+        new("tool_stats", "Get comprehensive statistics about all registered tools: counts by category, handlers, and status", "management",
+            async _ =>
+            {
+                var byCategory = AllTools.GroupBy(t => t.Category).ToDictionary(g => g.Key, g => new { total = g.Count(), with_handlers = g.Count(t => t.Handler != null), without_handlers = g.Count(t => t.Handler == null) });
+                return new
+                {
+                    total = AllTools.Length,
+                    with_handlers = AllTools.Count(t => t.Handler != null),
+                    without_handlers = AllTools.Count(t => t.Handler == null),
+                    categories = AllTools.Select(t => t.Category).Distinct().Count(),
+                    by_category = byCategory
+                };
+            }),
+
         // ═══ Discovery — 6 tools ═══
         new("tool_synthesize", "Auto-create a new Python tool from a natural language description. LLM generates code, registers and persists it for future use. Use when no existing tool meets your needs. Parameters: description (required)", "discovery",
             async args =>
