@@ -500,6 +500,49 @@ public sealed class ToolsAutoConfig
         Name = "FFmpeg",
         InstallUrl = "https://ffmpeg.org/download.html"
     };
+
+    [JsonPropertyName("ripgrep")]
+    public ToolAutoItem Ripgrep { get; init; } = new()
+    {
+        Enabled = true,
+        Name = "ripgrep",
+        InstallUrl = "https://github.com/BurntSushi/ripgrep/releases",
+        MinVersion = "14.0"
+    };
+
+    [JsonPropertyName("fd")]
+    public ToolAutoItem Fd { get; init; } = new()
+    {
+        Enabled = true,
+        Name = "fd-find",
+        InstallUrl = "https://github.com/sharkdp/fd/releases",
+        MinVersion = "9.0"
+    };
+
+    [JsonPropertyName("jq")]
+    public ToolAutoItem Jq { get; init; } = new()
+    {
+        Enabled = true,
+        Name = "jq",
+        InstallUrl = "https://github.com/jqlang/jq/releases",
+        MinVersion = "1.7"
+    };
+
+    [JsonPropertyName("delta")]
+    public ToolAutoItem Delta { get; init; } = new()
+    {
+        Enabled = false,
+        Name = "git-delta",
+        InstallUrl = "https://github.com/dandavison/delta/releases"
+    };
+
+    [JsonPropertyName("bat")]
+    public ToolAutoItem Bat { get; init; } = new()
+    {
+        Enabled = false,
+        Name = "bat",
+        InstallUrl = "https://github.com/sharkdp/bat/releases"
+    };
 }
 
 public sealed class ToolAutoItem

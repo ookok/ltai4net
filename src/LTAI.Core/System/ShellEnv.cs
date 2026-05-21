@@ -64,16 +64,9 @@ public sealed class ShellEnv
 
     private static readonly string[] _toolsToProbe = new[]
     {
-        "python",
-        "python3",
-        "git",
-        "node",
-        "npm",
-        "dotnet",
-        "docker",
-        "curl",
-        "pwsh",
-        "gh"
+        "python", "python3", "git", "node", "npm", "dotnet",
+        "docker", "curl", "pwsh", "gh",
+        "rg", "fd", "jq", "delta", "bat", "fzf"
     };
 
     public ShellEnv(ILogger<ShellEnv> logger)
@@ -186,14 +179,20 @@ public sealed class ShellEnv
     {
         return toolName switch
         {
-            "python" or "python3" => "Download from https://python.org",
-            "git" => "Download from https://git-scm.com",
-            "node" or "npm" => "Download from https://nodejs.org",
-            "dotnet" => "Download from https://dotnet.microsoft.com",
-            "docker" => "Download from https://docker.com",
-            "curl" => "Included with Windows 10+ or install via package manager",
-            "pwsh" => "Install via 'winget install Microsoft.PowerShell'",
-            "gh" => "Install via 'winget install GitHub.cli'",
+            "python" or "python3" => "https://python.org",
+            "git" => "https://git-scm.com",
+            "node" or "npm" => "https://nodejs.org",
+            "dotnet" => "https://dotnet.microsoft.com",
+            "docker" => "https://docker.com",
+            "curl" => "winget install curl",
+            "pwsh" => "winget install Microsoft.PowerShell",
+            "gh" => "winget install GitHub.cli",
+            "rg" => "winget install BurntSushi.ripgrep.GNU  # 10-100x faster than grep",
+            "fd" => "winget install sharkdp.fd  # 10x faster than find",
+            "jq" => "winget install jqlang.jq  # JSON processor",
+            "delta" => "winget install dandavison.delta  # syntax-highlighting diff viewer",
+            "bat" => "winget install sharkdp.bat  # cat with syntax highlighting",
+            "fzf" => "winget install junegunn.fzf  # fuzzy finder",
             _ => null
         };
     }

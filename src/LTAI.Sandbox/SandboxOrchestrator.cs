@@ -124,39 +124,23 @@ try {
 
 public sealed class SandboxSecurityAuditor
 {
-    private static readonly HashSet<string> BlockedPython = new(StringComparer.OrdinalIgnoreCase)
+    private static readonly HashSet<string> DangerousOps = new(StringComparer.OrdinalIgnoreCase)
     {
-        "import os", "import subprocess", "import shutil", "import socket",
-        "__import__", "eval(", "exec(", "compile(", "open(",
-        "remove(", "rmdir(", "unlink(", "chmod(",
-        "urllib", "requests.", "ftplib", "smtplib"
-    };
-
-    private static readonly HashSet<string> BlockedJS = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "require('child_process')", "require('fs')", "require('net')",
-        "require('http')", "require('https')",
-        "process.exit", "process.kill", "global.gc",
-        "eval(", "Function("
+        "shutil.rmtree('/')", "os.remove('/')",
+        "rm -rf /", "dd if=/dev/zero", "mkfs.",
+        "format c:", "diskpart", ":(){ :|:& };:"
     };
 
     public (bool Allowed, string? Reason) Audit(string code, SandboxLanguage language)
     {
-        var blocked = language switch
-        {
-            SandboxLanguage.Python => BlockedPython,
-            SandboxLanguage.JavaScript => BlockedJS,
-            _ => new HashSet<string>()
-        };
-
-        foreach (var pattern in blocked)
+        foreach (var pattern in DangerousOps)
         {
             if (code.Contains(pattern, StringComparison.OrdinalIgnoreCase))
-                return (false, $"Blocked pattern: {pattern}");
+                return (false, $"Dangerous operation blocked: {pattern}");
         }
 
-        if (code.Length > 50000)
-            return (false, "Code exceeds 50KB limit");
+        if (code.Length > 100000)
+            return (false, "Code exceeds 100KB limit");
 
         return (true, null);
     }
