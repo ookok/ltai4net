@@ -505,6 +505,54 @@ public static class LTAIToolRegistry
                 return new { status = "recorded", tool = toolName, success };
             }),
 
+        // ═══ Skills — 4 tools ═══
+        new("skill_list", "List all available skills grouped by capability bucket. Includes 18 built-in skills plus filesystem-discovered SKILL.md files.", "discovery",
+            async _ =>
+            {
+                var catalog = new LTAI.Capability.Skills.SkillCatalog();
+                var discovery = new LTAI.Capability.Skills.SkillDiscoveryManager();
+                var discovered = discovery.DiscoverForContext();
+                return new
+                {
+                    summary = catalog.GetBucketSummary(),
+                    discovered_count = discovered.Count,
+                    discovered = discovered.Select(s => new { s.Name, s.Description, s.Source })
+                };
+            }),
+        new("skill_search", "Search for skills by keyword (Chinese/English). Returns matching skills with descriptions and maturity level.", "discovery",
+            async args =>
+            {
+                var catalog = new LTAI.Capability.Skills.SkillCatalog();
+                var results = catalog.Search(Arg(args, "query"));
+                var discovery = new LTAI.Capability.Skills.SkillDiscoveryManager();
+                var discovered = discovery.DiscoverForContext();
+                var matching = discovered.Where(s =>
+                    s.Name.Contains(Arg(args, "query"), StringComparison.OrdinalIgnoreCase) ||
+                    s.Description.Contains(Arg(args, "query"), StringComparison.OrdinalIgnoreCase));
+                return new
+                {
+                    builtin = results.Select(s => new { s.ModuleName, s.Description, bucket = s.Bucket.ToString(), s.Maturity }),
+                    filesystem = matching.Select(s => new { s.Name, s.Description, s.Source })
+                };
+            }),
+        new("skill_load", "Load the full body/content of a specific skill by name. Discovered skills are SKILL.md files; built-in skills are from the catalog.", "discovery",
+            async args =>
+            {
+                var discovery = new LTAI.Capability.Skills.SkillDiscoveryManager();
+                var skill = discovery.GetSkill(Arg(args, "name"));
+                if (skill != null) return new { name = skill.Name, source = skill.Source, body = skill.Body };
+                var catalog = new LTAI.Capability.Skills.SkillCatalog();
+                var entry = catalog.GetSkill(Arg(args, "name"));
+                return entry != null ? new { name = entry.ModuleName, description = entry.Description, bucket = entry.Bucket.ToString(), maturity = entry.Maturity.ToString() } : new { error = "Skill not found" };
+            }),
+        new("skill_suggest", "Suggest the best skills for a given task based on keyword matching and routing priority. Use this when you need guidance on which tools/skills to apply.", "discovery",
+            async args =>
+            {
+                var catalog = new LTAI.Capability.Skills.SkillCatalog();
+                var suggestions = catalog.SuggestSkills(Arg(args, "task"));
+                return suggestions.Select(s => new { s.ModuleName, s.Description, bucket = s.Bucket.ToString(), s.Maturity });
+            }),
+
         // ═══ System — 7 tools ═══
         new("models_list", "List all registered model providers and their models", "system",
             async _ => {
