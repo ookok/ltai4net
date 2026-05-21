@@ -462,6 +462,49 @@ public static class LTAIToolRegistry
         new("metrics_snapshot", "Get system metrics: total requests, tokens, avg latency, active tasks, memory", "system",
             async _ => { var collector = _serviceProvider?.GetService(typeof(object).Assembly.GetType("LTAI.Metrics.LTAIMetricsCollector")); if (collector == null) return new { error = "Metrics collector not available" }; var method = collector.GetType().GetMethod("GetSnapshot"); return method?.Invoke(collector, null) ?? new { error = "GetSnapshot not available" }; }),
 
+        // ═══ Discovery — 6 tools ═══
+        new("tool_synthesize", "Auto-create a new Python tool from a natural language description. LLM generates code, registers and persists it for future use. Use when no existing tool meets your needs. Parameters: description (required)", "discovery",
+            async args =>
+            {
+                var desc = Arg(args, "description");
+                if (string.IsNullOrWhiteSpace(desc)) return new { error = "description parameter is required" };
+                var synth = new LTAI.Capability.Tools.ToolSynthesizer();
+                var result = await synth.Synthesize(desc, Arg(args, "category", "generated"), 
+                    (_, prompt) => Task.FromResult("Tool synthesis requires chat client. Use sandbox_exec to test the generated code."));
+                return result.Success
+                    ? new { status = "created", tool = result.Tool?.Name, code = result.Tool?.Code?[..Math.Min(200, result.Tool?.Code?.Length ?? 0)] }
+                    : new { error = result.Error ?? "Synthesis failed" };
+            }),
+        new("tool_market_list", "List all available tools in the marketplace grouped by category. Use to discover existing tools before creating new ones.", "discovery",
+            async _ =>
+            {
+                var market = new LTAI.Capability.Tools.ToolMarket();
+                var tools = market.Discover();
+                return tools.GroupBy(t => t.Category).Select(g => new { category = g.Key, count = g.Count(), tools = g.Select(t => t.Name).ToList() });
+            }),
+        new("tool_list_synthesized", "List all LLM-synthesized tools that have been auto-created in past sessions", "discovery",
+            async _ =>
+            {
+                var synth = new LTAI.Capability.Tools.ToolSynthesizer();
+                return synth.ListTools().Select(t => new { t.Name, t.Description, t.Category, t.Version, t.SuccessCount, t.FailureCount });
+            }),
+        new("self_discover", "Analyze usage patterns and auto-discover new tool proposals. Returns tools the system thinks should exist based on successful usage patterns.", "discovery",
+            async _ =>
+            {
+                var sd = new LTAI.Capability.Evolution.SelfDiscovery();
+                var proposals = sd.GetProposals();
+                return new { total_proposals = proposals.Count, proposals = proposals.Select(p => new { p.Name, p.Category, p.Description, p.OccurrenceCount, p.AvgSuccessRate }) };
+            }),
+        new("tool_feedback", "Record success/failure feedback for a tool to improve future tool suggestions", "discovery",
+            async args =>
+            {
+                var sd = new LTAI.Capability.Evolution.SelfDiscovery();
+                var toolName = Arg(args, "tool_name");
+                var success = bool.TryParse(Arg(args, "success", "true"), out var s) && s;
+                sd.Observe(Arg(args, "domain", "general"), new List<string> { toolName }, success);
+                return new { status = "recorded", tool = toolName, success };
+            }),
+
         // ═══ System — 7 tools ═══
         new("models_list", "List all registered model providers and their models", "system",
             async _ => {
