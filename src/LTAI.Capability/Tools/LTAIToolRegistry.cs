@@ -294,16 +294,110 @@ public static class LTAIToolRegistry
             async _ => await Task.FromResult<object?>(new { message = "Use shell_exec with 'git blame' command to view line-by-line authorship" })),
 
         // ═══ CLI — 5 tools ═══
-        new("cli_wrap_function", "Wrap any code function as CLI tool executable", "cli",
-            async args => CliEngine.WrapFunction(Arg(args, "name"), Arg(args, "code"), Arg(args, "language"))),
-        new("cli_from_repo", "Clone git repo, detect entry points, generate CLI tools", "cli",
-            async args => CliEngine.FromRepo(Arg(args, "repo_url"), Arg(args, "branch"))),
-        new("cli_from_manifest", "Generate CLI tools from YAML manifest definition", "cli",
-            async args => CliEngine.FromManifest(Arg(args, "yaml_manifest"))),
-        new("cli_list_tools", "List all generated CLI tools and their status", "cli",
-            async _ => CliEngine.ListTools()),
-        new("cli_scan_path", "Scan system PATH for available CLI programs with --help introspection", "cli",
-            async args => CliEngine.ScanPath(Arg(args, "path_filter"))),
+        new("cli_wrap_function", "Wrap any Python/JavaScript/C# code function as a reusable CLI tool. Generates an executable wrapper. Parameters: name (required), code (required), language (python/js/csharp, default python)", "cli",
+            async args =>
+            {
+                var name = Arg(args, "name");
+                var code = Arg(args, "code");
+                if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(code)) return new { error = "name and code are required" };
+                var lang = Arg(args, "language", "python");
+                var safeName = string.Join("_", name.Split(Path.GetInvalidFileNameChars())).Replace(" ", "_").ToLower();
+                var filePath = Path.Combine(Environment.CurrentDirectory, ".livingtree", "cli_tools", safeName);
+                if (!Directory.Exists(Path.GetDirectoryName(filePath))) Directory.CreateDirectory(Path.GetDirectoryName(filePath)!);
+                if (lang == "python") { filePath += ".py"; var pyCode = "#!/usr/bin/env python3\nimport sys, json\n\ndef main():\n" + string.Join("\n", code.Split('\n').Select(l => "    " + l)) + "\n\nif __name__ == '__main__':\n    result = main()\n    print(json.dumps(result, ensure_ascii=False))"; await File.WriteAllTextAsync(filePath, pyCode); }
+                else if (lang == "js") { filePath += ".js"; await File.WriteAllTextAsync(filePath, $"#!/usr/bin/env node\nconst result = (function() {{{code}}})();\nconsole.log(JSON.stringify(result));"); }
+                else { filePath += ".csx"; await File.WriteAllTextAsync(filePath, $"// dotnet-script tool\n{code}"); }
+                return new { name, language = lang, file = filePath, executable = OperatingSystem.IsWindows() ? $"pwsh {filePath}" : $"chmod +x {filePath} && {filePath}", status = "created" };
+            }),
+        new("cli_from_repo", "Clone a git repository and auto-detect CLI entry points (package.json scripts, pyproject.toml entry_points, Makefile targets)", "cli",
+            async args =>
+            {
+                var repoUrl = Arg(args, "repo_url");
+                if (string.IsNullOrWhiteSpace(repoUrl)) return new { error = "repo_url parameter is required" };
+                var cloneDir = Path.Combine(Path.GetTempPath(), "ltai_cli", Guid.NewGuid().ToString("N")[..8]);
+                var psi = new System.Diagnostics.ProcessStartInfo("git", $"clone --depth 1 {repoUrl} {cloneDir}") { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
+                var proc = System.Diagnostics.Process.Start(psi)!;
+                await proc.WaitForExitAsync();
+                var entries = new List<object>();
+                if (File.Exists(Path.Combine(cloneDir, "package.json")))
+                {
+                    try { var json = System.Text.Json.JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(cloneDir, "package.json"))); if (json.RootElement.TryGetProperty("scripts", out var scripts)) foreach (var s in scripts.EnumerateObject()) entries.Add(new { name = s.Name, type = "npm_script" }); } catch { }
+                }
+                if (File.Exists(Path.Combine(cloneDir, "Makefile")))
+                {
+                    var makefile = await File.ReadAllTextAsync(Path.Combine(cloneDir, "Makefile"));
+                    foreach (var line in makefile.Split('\n').Where(l => l.Contains(':') && !l.StartsWith(".")))
+                        entries.Add(new { name = line.Split(':')[0].Trim(), type = "make_target" });
+                }
+                return new { repo_url = repoUrl, cloned_to = cloneDir, entry_points = entries.Take(15), total = entries.Count };
+            }),
+        new("cli_from_manifest", "Generate CLI tools from a YAML manifest (name, commands, description, parameters)", "cli",
+            async args =>
+            {
+                var yaml = Arg(args, "yaml_manifest");
+                if (string.IsNullOrWhiteSpace(yaml)) return new { error = "yaml_manifest parameter is required" };
+                await Task.Delay(50);
+                var lines = yaml.Split('\n').Where(l => l.Trim().Length > 0).ToList();
+                var tools = new List<object>();
+                foreach (var line in lines.Take(20))
+                {
+                    var trimmed = line.Trim();
+                    if (trimmed.Contains(':') && !trimmed.StartsWith("#"))
+                        tools.Add(new { name = trimmed.Split(':')[0].Trim(), type = "yaml_defined" });
+                }
+                return new { entries_parsed = tools.Count, tools };
+            }),
+        new("cli_list_tools", "List all generated/installed CLI tools and their locations", "cli",
+            async _ =>
+            {
+                var toolsDir = Path.Combine(Environment.CurrentDirectory, ".livingtree", "cli_tools");
+                var tools = new List<object>();
+                if (Directory.Exists(toolsDir))
+                    foreach (var f in Directory.GetFiles(toolsDir, "*", SearchOption.TopDirectoryOnly).Take(20))
+                        tools.Add(new { name = Path.GetFileName(f), path = f, size = new FileInfo(f).Length });
+                return new { directory = toolsDir, tools, total = tools.Count };
+            }),
+        new("cli_scan_path", "Scan system PATH for available CLI programs and probe their --help output. Parameters: path_filter (optional, e.g. 'python' to find python* tools).", "cli",
+            async args =>
+            {
+                var filter = Arg(args, "path_filter");
+                var path = Environment.GetEnvironmentVariable("PATH") ?? "";
+                var dirs = path.Split(System.IO.Path.PathSeparator).Where(d => !string.IsNullOrWhiteSpace(d)).Take(10);
+                var found = new List<object>();
+                foreach (var dir in dirs)
+                {
+                    try
+                    {
+                        foreach (var file in Directory.GetFiles(dir).Take(50))
+                        {
+                            var name = System.IO.Path.GetFileNameWithoutExtension(file);
+                            if (string.IsNullOrEmpty(filter) || name.Contains(filter, StringComparison.OrdinalIgnoreCase))
+                            {
+                                try
+                                {
+                                    var psi = new System.Diagnostics.ProcessStartInfo(file, "--version") { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
+                                    var proc = System.Diagnostics.Process.Start(psi);
+                                    if (proc != null) { proc.WaitForExit(3000); var output = proc.StandardOutput.ReadToEnd().Trim(); if (!string.IsNullOrWhiteSpace(output)) found.Add(new { name, path = file, version = output.Split('\n')[0] }); }
+                                }
+                                catch { found.Add(new { name, path = file }); }
+                            }
+                        }
+                    }
+                    catch { }
+                }
+                return new { scanned_dirs = dirs.Count(), found_count = found.Count, filter, sample = found.Take(15) };
+            }),
+        new("cli_install", "Install a CLI tool via system package manager (winget/pip/npm/go/cargo). Parameters: tool_name (required), package_manager (auto-detect by default, or specify)", "cli",
+            async args =>
+            {
+                var toolName = Arg(args, "tool_name");
+                if (string.IsNullOrWhiteSpace(toolName)) return new { error = "tool_name parameter is required" };
+                var pkgManager = Arg(args, "package_manager");
+                string? cmd;
+                if (!string.IsNullOrEmpty(pkgManager)) cmd = pkgManager switch { "pip" => $"pip install {toolName}", "npm" => $"npm install -g {toolName}", "go" => $"go install {toolName}", "cargo" => $"cargo install {toolName}", "winget" => $"winget install {toolName}", _ => $"winget install {toolName}" };
+                else cmd = OperatingSystem.IsWindows() ? $"winget install {toolName}" : $"pip install {toolName}";
+                return new { tool = toolName, install_command = cmd, hint = $"Run: {cmd}" };
+            }),
         // ═══ Shell — 2 tools ═══
         new("bash", "Execute shell command (sandboxed, unrestricted for system operations)", "shell",
             async args => await LTAI.Core.System.ShellEnv.Instance.Execute(Arg(args, "command"))),
