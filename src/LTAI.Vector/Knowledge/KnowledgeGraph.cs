@@ -24,6 +24,41 @@ public class KnowledgeGraph
         _adjacency.TryAdd(entity.Id, new());
     }
 
+    public async Task SaveToDiskAsync(string? path = null)
+    {
+        path ??= Path.Combine(AppContext.BaseDirectory, ".livingtree", "knowledge_graph.json");
+        var dir = Path.GetDirectoryName(path);
+        if (dir != null) Directory.CreateDirectory(dir);
+        var data = new Dictionary<string, object>
+        {
+            ["entities"] = _nodesIndex,
+            ["triplets"] = _triplets.Select(t => new { t.Subject, t.Predicate, t.Object, t.Confidence }).ToList(),
+            ["saved_at"] = DateTimeOffset.UtcNow.ToUnixTimeSeconds()
+        };
+        await File.WriteAllTextAsync(path, System.Text.Json.JsonSerializer.Serialize(data));
+    }
+
+    public void LoadFromDisk(string? path = null)
+    {
+        path ??= Path.Combine(AppContext.BaseDirectory, ".livingtree", "knowledge_graph.json");
+        if (!File.Exists(path)) return;
+        try
+        {
+            var json = File.ReadAllText(path);
+            var doc = System.Text.Json.JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            if (root.TryGetProperty("entities", out var entities))
+                foreach (var e in entities.EnumerateArray()) { var ent = new Entity(e.GetProperty("id").GetString() ?? "", e.GetProperty("label").GetString() ?? ""); AddEntity(ent); }
+            if (root.TryGetProperty("triplets", out var triplets))
+                foreach (var t in triplets.EnumerateArray())
+                {
+                    var triplet = new Triplet(t.GetProperty("subject").GetString() ?? "", t.GetProperty("predicate").GetString() ?? "", t.GetProperty("object").GetString() ?? "", Confidence: t.TryGetProperty("confidence", out var c) && c.TryGetDouble(out var conf) ? conf : 0.5);
+                    AddTripletsToGraph(new() { triplet });
+                }
+        }
+        catch { }
+    }
+
     public void AddRelation(string sourceId, string targetId, string relation,
         Dictionary<string, object>? properties = null)
     {

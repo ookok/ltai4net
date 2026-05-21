@@ -159,6 +159,33 @@ public sealed class ArtifactStore
                 .Sum(a => a.Fields.Sum(f => f.Citations.Count))
         };
     }
+
+    public async Task SaveToDiskAsync(string? path = null)
+    {
+        path ??= Path.Combine(AppContext.BaseDirectory, ".livingtree", "artifacts.json");
+        var dir = Path.GetDirectoryName(path);
+        if (dir != null) Directory.CreateDirectory(dir);
+        var data = System.Text.Json.JsonSerializer.Serialize(new { artifacts = _artifacts, saved_at = DateTimeOffset.UtcNow.ToUnixTimeSeconds() });
+        await File.WriteAllTextAsync(path, data);
+    }
+
+    public void LoadFromDisk(string? path = null)
+    {
+        path ??= Path.Combine(AppContext.BaseDirectory, ".livingtree", "artifacts.json");
+        if (!File.Exists(path)) return;
+        try
+        {
+            var json = File.ReadAllText(path);
+            var doc = System.Text.Json.JsonDocument.Parse(json);
+            if (doc.RootElement.TryGetProperty("artifacts", out var artifacts))
+                foreach (var a in artifacts.EnumerateArray())
+                {
+                    var artifact = System.Text.Json.JsonSerializer.Deserialize<KnowledgeArtifact>(a.GetRawText());
+                    if (artifact != null) _artifacts[artifact.Id] = artifact;
+                }
+        }
+        catch { }
+    }
 }
 
 public sealed class ProvenanceTracker

@@ -124,4 +124,46 @@ public sealed class SelfDiscovery
         step = step.ToLowerInvariant().Replace(" ", "_");
         return step.Length > 10 ? step[..10] : step;
     }
+
+    public void SaveToDisk(string? path = null)
+    {
+        path ??= Path.Combine(AppContext.BaseDirectory, ".livingtree", "self_discovery.json");
+        var dir = Path.GetDirectoryName(path);
+        if (dir != null) Directory.CreateDirectory(dir);
+        lock (_lock)
+        {
+            var data = System.Text.Json.JsonSerializer.Serialize(new { patterns = _patterns, proposals = _proposals, saved_at = DateTime.UtcNow.ToString("O") });
+            File.WriteAllText(path, data);
+        }
+    }
+
+    public void LoadFromDisk(string? path = null)
+    {
+        path ??= Path.Combine(AppContext.BaseDirectory, ".livingtree", "self_discovery.json");
+        if (!File.Exists(path)) return;
+        try
+        {
+            var json = File.ReadAllText(path);
+            var doc = System.Text.Json.JsonDocument.Parse(json);
+            lock (_lock)
+            {
+                if (doc.RootElement.TryGetProperty("patterns", out var pats))
+                    foreach (var p in pats.EnumerateArray())
+                    {
+                        var sig = p.GetProperty("signature").GetString() ?? "";
+                        var tp = new ToolPattern(sig, p.GetProperty("domain").GetString() ?? "", new(), p.TryGetProperty("count", out var c) ? c.GetInt32() : 0, new(), new());
+                        _patterns[sig] = tp;
+                    }
+                if (doc.RootElement.TryGetProperty("proposals", out var props))
+                    foreach (var pr in props.EnumerateArray())
+                    {
+                        _proposals.Add(new ToolProposal(
+                            pr.GetProperty("name").GetString() ?? "", pr.GetProperty("category").GetString() ?? "",
+                            pr.GetProperty("command").GetString() ?? "", pr.GetProperty("description").GetString() ?? "",
+                            pr.GetProperty("pattern").GetString() ?? "", null, 0, 0, false, false, false));
+                    }
+            }
+        }
+        catch { }
+    }
 }
