@@ -71,7 +71,7 @@ public sealed class ExternalAccess
     private ExternalAccess()
     {
         _http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
-        _searchEngines = new List<string> { "duckduckgo", "searxng", "bing" };
+        _searchEngines = new List<string> { "duckduckgo", "searxng", "bing", "brave", "mojeek", "marginalia" };
         _gitHubMirrors = new List<string>
         {
             "https://ghproxy.com/https://raw.githubusercontent.com",
@@ -135,6 +135,9 @@ public sealed class ExternalAccess
             _searchDuckDuckGo(query, maxResults, cancellationToken),
             _searchSearxng(query, maxResults, cancellationToken),
             _searchBing(query, maxResults, cancellationToken),
+            _searchBrave(query, maxResults, cancellationToken),
+            _searchMojeek(query, maxResults, cancellationToken),
+            _searchMarginalia(query, maxResults, cancellationToken),
         };
 
         var results = await Task.WhenAll(tasks);
@@ -276,6 +279,125 @@ public sealed class ExternalAccess
         catch (Exception ex)
         {
             _logger.LogDebug(ex, "Bing search failed");
+            return new List<ExternalSearchResult>();
+        }
+    }
+
+    private async Task<List<ExternalSearchResult>> _searchBrave(string query, int max,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var encoded = Uri.EscapeDataString(query);
+            var url = $"https://search.brave.com/search?q={encoded}&source=web";
+            var html = await _http.GetStringAsync(url, cancellationToken);
+            var matches = Regex.Matches(html, @"<div[^>]*class=""snippet""[^>]*>.*?<a[^>]*href=""([^""]*)""[^>]*>([^<]*)</a>.*?<p[^>]*class=""snippet-description""[^>]*>([^<]*)</p>", RegexOptions.Singleline);
+
+            var results = new List<ExternalSearchResult>();
+            foreach (Match m in matches.Take(max))
+            {
+                results.Add(new ExternalSearchResult
+                {
+                    Title = m.Groups[2].Value.Trim(),
+                    Url = m.Groups[1].Value,
+                    Snippet = Regex.Replace(m.Groups[3].Value, @"<[^>]+>", "").Trim(),
+                    Engine = "Brave",
+                    Relevance = 0.55
+                });
+            }
+
+            if (results.Count == 0)
+            {
+                var linkMatches = Regex.Matches(html, @"<a[^>]*href=""([^""]+)""[^>]*class=""[^""]*heading[^""]*""[^>]*>([^<]+)</a>");
+                foreach (Match m in linkMatches.Take(max))
+                {
+                    results.Add(new ExternalSearchResult
+                    {
+                        Title = m.Groups[2].Value.Trim(),
+                        Url = m.Groups[1].Value,
+                        Snippet = "Brave search result",
+                        Engine = "Brave",
+                        Relevance = 0.5
+                    });
+                }
+            }
+
+            return results;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Brave search failed");
+            return new List<ExternalSearchResult>();
+        }
+    }
+
+    private async Task<List<ExternalSearchResult>> _searchMojeek(string query, int max,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var encoded = Uri.EscapeDataString(query);
+            var url = $"https://www.mojeek.com/search?q={encoded}&fmt=html";
+            var html = await _http.GetStringAsync(url, cancellationToken);
+            var matches = Regex.Matches(html, @"<a[^>]*class=""ob""[^>]*href=""([^""]+)""[^>]*>([^<]+)</a>");
+            var snippetMatches = Regex.Matches(html, @"<p[^>]*class=""s""[^>]*>([^<]*)</p>");
+
+            var results = new List<ExternalSearchResult>();
+            for (int i = 0; i < Math.Min(max, Math.Min(matches.Count, snippetMatches.Count)); i++)
+            {
+                results.Add(new ExternalSearchResult
+                {
+                    Title = System.Net.WebUtility.HtmlDecode(matches[i].Groups[2].Value.Trim()),
+                    Url = System.Net.WebUtility.HtmlDecode(matches[i].Groups[1].Value.Trim()),
+                    Snippet = System.Net.WebUtility.HtmlDecode(snippetMatches[i].Groups[1].Value.Trim()),
+                    Engine = "Mojeek",
+                    Relevance = 0.5
+                });
+            }
+
+            return results;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Mojeek search failed");
+            return new List<ExternalSearchResult>();
+        }
+    }
+
+    private async Task<List<ExternalSearchResult>> _searchMarginalia(string query, int max,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var encoded = Uri.EscapeDataString(query);
+            var url = $"https://search.marginalia.nu/search?query={encoded}&profile=default";
+            var html = await _http.GetStringAsync(url, cancellationToken);
+
+            var results = new List<ExternalSearchResult>();
+            var linkMatches = Regex.Matches(html, @"<a[^>]*href=""([^""]+)""[^>]*>([^<]+)</a>");
+
+            foreach (Match m in linkMatches.Take(max))
+            {
+                var linkUrl = m.Groups[1].Value;
+                var title = m.Groups[2].Value.Trim();
+                if (linkUrl.StartsWith("http") && title.Length > 5)
+                {
+                    results.Add(new ExternalSearchResult
+                    {
+                        Title = System.Net.WebUtility.HtmlDecode(title),
+                        Url = linkUrl,
+                        Snippet = "Marginalia search result",
+                        Engine = "Marginalia",
+                        Relevance = 0.4
+                    });
+                }
+            }
+
+            return results;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Marginalia search failed");
             return new List<ExternalSearchResult>();
         }
     }
