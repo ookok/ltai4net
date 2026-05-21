@@ -60,6 +60,9 @@ public static class ServiceCollectionExtensions
 
         services.AddSingleton<ServiceManager>();
         services.AddSingleton<ModelManager>();
+        services.AddSingleton<DaemonManager>();
+        services.AddSingleton<Wsl2Manager>();
+        services.AddSingleton<ResourceGuard>();
 
         services.AddSingleton<LatencyBudgetAllocator>(sp =>
             new LatencyBudgetAllocator(totalLatencyBudgetMs: 30000));

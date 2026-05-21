@@ -273,6 +273,88 @@ public static class LTAIToolRegistry
                 };
                 return new { action, result.Success, result.Message, result.Output };
             }),
+
+        // ═══ Daemon — 2 tools ═══
+        new("daemon_install", "Cross-platform daemon/service installation (systemd/launchd/Windows Service). Creates and enables a background service that auto-starts on boot.", "system",
+            async args => {
+                var dm = GetService<LTAI.Core.System.DaemonManager>();
+                if (!dm.IsAvailable())
+                    return new { error = $"Daemon manager not available on {dm.Platform}. Requires systemctl (Linux), launchctl (macOS), or Windows." };
+                var config = new LTAI.Core.System.DaemonConfig
+                {
+                    ServiceName = Arg(args, "service_name", "ltai-agent"),
+                    DisplayName = Arg(args, "display_name", "LTAI Agent"),
+                    Description = Arg(args, "description", "LivingTree AI Background Agent"),
+                    ExecPath = Arg(args, "exec_path", ""),
+                    WorkingDirectory = Arg(args, "working_dir", Environment.CurrentDirectory),
+                    RestartPolicy = Arg(args, "restart_policy", "always")
+                };
+                var result = await dm.InstallAsync(config);
+                return new { result.Success, result.Message, result.Platform, result.ServiceName, result.Output };
+            }),
+        new("daemon_status", "Query daemon/service status across platforms (systemd/launchctl/sc query)", "system",
+            async args => {
+                var dm = GetService<LTAI.Core.System.DaemonManager>();
+                if (!dm.IsAvailable())
+                    return new { error = $"Daemon manager not available on {dm.Platform}" };
+                var serviceName = Arg(args, "service_name", "ltai-agent");
+                var result = await dm.StatusAsync(serviceName);
+                return new { result.Success, result.Message, result.Platform, result.ServiceName, result.Output };
+            }),
+
+        // ═══ WSL2 — 3 tools ═══
+        new("wsl2_list", "List installed WSL2 Linux distributions with version and state info", "system",
+            async _ => {
+                var wm = GetService<LTAI.Core.System.Wsl2Manager>();
+                var avail = await wm.IsAvailable();
+                if (!avail.Success)
+                    return new { error = avail.Message, hint = "WSL2 requires Windows 10/11 with WSL2 enabled. Run `wsl --install` first." };
+                var result = await wm.ListDistros();
+                return new { result.Success, result.Message, distros = result.Output };
+            }),
+        new("wsl2_exec", "Execute a command inside a WSL2 Linux distribution", "system",
+            async args => {
+                var wm = GetService<LTAI.Core.System.Wsl2Manager>();
+                var avail = await wm.IsAvailable();
+                if (!avail.Success)
+                    return new { error = avail.Message, hint = "WSL2 requires Windows 10/11 with WSL2 enabled." };
+                var distro = Arg(args, "distro");
+                var command = Arg(args, "command");
+                if (string.IsNullOrWhiteSpace(distro)) return new { error = "distro parameter required" };
+                if (string.IsNullOrWhiteSpace(command)) return new { error = "command parameter required" };
+                var result = await wm.ExecuteInDistro(distro, command);
+                return new { result.Success, result.Message, result.Distro, result.Output };
+            }),
+        new("wsl2_limits", "Set WSL2 resource limits (memory MB, processor count) via .wslconfig", "system",
+            async args => {
+                var wm = GetService<LTAI.Core.System.Wsl2Manager>();
+                var avail = await wm.IsAvailable();
+                if (!avail.Success)
+                    return new { error = avail.Message, hint = "WSL2 requires Windows 10/11 with WSL2 enabled." };
+                var memoryMb = (int)ArgDouble(args, "memory_mb", 4096);
+                var processors = (int)ArgDouble(args, "processors", 2);
+                var result = await wm.SetResourceLimits(memoryMb, processors);
+                return new { result.Success, result.Message, memory_mb = memoryMb, processors };
+            }),
+
+        // ═══ Resource — 1 tool ═══
+        new("resource_usage", "Get current system resource usage and available headroom (memory, CPU, disk, process count). Cross-platform.", "system",
+            async _ => {
+                var rg = GetService<LTAI.Core.System.ResourceGuard>();
+                if (!rg.IsAvailable())
+                    return new { error = "ResourceGuard not available" };
+                var usage = rg.GetCurrentUsage();
+                var available = rg.GetAvailableResources();
+                return new
+                {
+                    platform = usage.Platform,
+                    memory = new { total_mb = usage.TotalMemoryMb, used_mb = usage.UsedMemoryMb, available_mb = usage.AvailableMemoryMb },
+                    cpu = new { usage_percent = usage.CpuUsagePercent, headroom_percent = Math.Round(100 - usage.CpuUsagePercent, 1) },
+                    disk = new { total_mb = usage.TotalDiskMb, used_mb = usage.UsedDiskMb },
+                    processes = usage.ProcessCount,
+                    active_allocations = rg.GetActiveAllocations().Count()
+                };
+            }),
     };
 
     public static int Total => AllTools.Length;
