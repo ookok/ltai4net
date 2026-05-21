@@ -413,20 +413,133 @@ public static class LTAIToolRegistry
         new("cad_export", "Export CAD model to target format (STEP/DWG/DXF/STL)", "cad",
             async args => CadEngine.Export(Arg(args, "file_path"), Arg(args, "target_format"))),
 
-        // ═══ Memory — 3 tools ═══
-        new("remember", "Store information in agent memory for future recall", "memory",
-            async args => {
-                var sm = _serviceProvider?.GetService(typeof(object).Assembly.GetType("LTAI.Vector.Knowledge.StructMemory"));
-                if (sm != null) { var m = sm.GetType().GetMethod("RememberAsync"); var task = m?.Invoke(sm, new object?[] { Arg(args, "key"), Arg(args, "value") }); if (task is Task t) await t; return new { status = "stored" }; }
-                return new { status = "stored", note = "Memory service not available, using session memory" };
+        // ═══ Memory — 8 tools ═══
+        new("remember", "Store a key-value fact in working memory. The system will retain this for future recall. Parameters: key (required, a short label), value (required, the information to remember)", "memory",
+            async args =>
+            {
+                var key = Arg(args, "key");
+                var value = Arg(args, "value");
+                if (string.IsNullOrWhiteSpace(key) || string.IsNullOrWhiteSpace(value)) return new { error = "key and value are required" };
+                try
+                {
+                    var smType = typeof(object).Assembly.GetType("LTAI.Vector.Knowledge.StructMemory");
+                    var sm = _serviceProvider?.GetService(smType);
+                    if (sm != null)
+                    {
+                        var bindMethod = sm.GetType().GetMethod("BindEvents");
+                        var entries = new List<object> { new { Id = $"mem_{DateTime.UtcNow.Ticks}", SessionId = "memory_tool", Timestamp = DateTime.UtcNow.ToString("O"), Role = "memory", Content = $"[{key}]: {value}" } };
+                        bindMethod?.Invoke(sm, new object[] { entries });
+                    }
+                    var persistDir = Path.Combine(Environment.CurrentDirectory, ".livingtree", "memories");
+                    Directory.CreateDirectory(persistDir);
+                    await File.WriteAllTextAsync(Path.Combine(persistDir, $"{SafeKey(key)}.json"),
+                        System.Text.Json.JsonSerializer.Serialize(new { key, value, stored_at = DateTime.UtcNow }));
+                    return new { status = "stored", key, chars = value.Length, location = persistDir };
+                }
+                catch (Exception ex) { return new { error = $"Store failed: {ex.Message}" }; }
             }),
-        new("recall", "Retrieve relevant memories by query", "memory",
-            async args => {
-                var sm = _serviceProvider?.GetService(typeof(object).Assembly.GetType("LTAI.Vector.Knowledge.StructMemory"));
-                if (sm != null) { var m = sm.GetType().GetMethod("RecallAsync"); var task = m?.Invoke(sm, new object?[] { Arg(args, "key") }); if (task is Task t) { await t; return t.GetType().GetProperty("Result")?.GetValue(t); } }
-                return new { message = "Memory service not available" };
+        new("recall", "Recall memories by keyword or topic. Searches working memory and persistent store. Parameters: query (required, what to search for), count (1-20, default 5)", "memory",
+            async args =>
+            {
+                var query = Arg(args, "query");
+                if (string.IsNullOrWhiteSpace(query)) return new { error = "query parameter is required" };
+                var count = Math.Clamp(int.TryParse(Arg(args, "count", "5"), out var c) ? c : 5, 1, 20);
+                var results = new List<object>();
+                try
+                {
+                    var smType = typeof(object).Assembly.GetType("LTAI.Vector.Knowledge.StructMemory");
+                    var sm = _serviceProvider?.GetService(smType);
+                    if (sm != null)
+                    {
+                        var retrieveMethod = sm.GetType().GetMethod("RetrieveForQuery");
+                        var task = retrieveMethod?.Invoke(sm, new object[] { query, count, 3 });
+                        if (task is Task t) { await t; var result = t.GetType().GetProperty("Result")?.GetValue(t); if (result != null) return result; }
+                    }
+                }
+                catch { }
+                var persistDir = Path.Combine(Environment.CurrentDirectory, ".livingtree", "memories");
+                if (Directory.Exists(persistDir))
+                {
+                    foreach (var file in Directory.GetFiles(persistDir, "*.json").Take(30))
+                    {
+                        try { var json = await File.ReadAllTextAsync(file); var mem = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, object>>(json); if (mem != null && mem.TryGetValue("value", out var v) && v?.ToString()?.Contains(query, StringComparison.OrdinalIgnoreCase) == true) results.Add(mem); } catch { }
+                    }
+                }
+                return new { query, results = results.Take(count), total = results.Count };
             }),
-        new("mem_optimize", "Optimize and compress memory context using preference optimization. Reduces token usage while preserving key information. Parameters: context (required, the text to optimize), max_tokens (optional, target token budget)", "memory",
+        new("forget", "Remove a specific memory by key or clean all memories matching a pattern. Parameters: key (required, the memory key to forget)", "memory",
+            async args =>
+            {
+                var key = Arg(args, "key");
+                if (string.IsNullOrWhiteSpace(key)) return new { error = "key parameter is required" };
+                var persistDir = Path.Combine(Environment.CurrentDirectory, ".livingtree", "memories");
+                var filePath = Path.Combine(persistDir, $"{SafeKey(key)}.json");
+                if (File.Exists(filePath)) { File.Delete(filePath); return new { status = "deleted", key }; }
+                return new { error = $"No memory found with key: {key}" };
+            }),
+        new("memory_stats", "Get memory statistics: counts, categories, storage locations", "memory",
+            async _ =>
+            {
+                var persistDir = Path.Combine(Environment.CurrentDirectory, ".livingtree", "memories");
+                var fileCount = Directory.Exists(persistDir) ? Directory.GetFiles(persistDir, "*.json").Length : 0;
+                long totalBytes = 0;
+                if (Directory.Exists(persistDir)) foreach (var f in Directory.GetFiles(persistDir, "*.json")) totalBytes += new FileInfo(f).Length;
+                return new { persistent_count = fileCount, persistent_bytes = totalBytes, path = persistDir };
+            }),
+        new("list_memories", "List all stored memory keys with preview of content", "memory",
+            async _ =>
+            {
+                var persistDir = Path.Combine(Environment.CurrentDirectory, ".livingtree", "memories");
+                var results = new List<object>();
+                if (Directory.Exists(persistDir))
+                {
+                    foreach (var file in Directory.GetFiles(persistDir, "*.json").Take(50))
+                    {
+                        try { var json = await File.ReadAllTextAsync(file); var mem = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, object>>(json); if (mem != null) { var v = mem.TryGetValue("value", out var val) ? val?.ToString() : ""; results.Add(new { key = mem.GetValueOrDefault("key"), preview = v?[..Math.Min(120, v?.Length ?? 0)], bytes = json.Length }); } } catch { }
+                    }
+                }
+                return new { total = results.Count, memories = results };
+            }),
+        new("emotion_state", "Get the current emotional memory state: dominant emotion, intensity, recent emotional context", "memory",
+            async _ =>
+            {
+                try
+                {
+                    var emType = typeof(object).Assembly.GetType("LTAI.Memory.EmotionalMemoryStore");
+                    var store = emType?.GetProperty("Instance")?.GetValue(null);
+                    if (store != null)
+                    {
+                        var ctxMethod = store.GetType().GetMethod("EmotionalContext");
+                        var ctx = ctxMethod?.Invoke(store, new object[] { 2.0 });
+                        var fbMethod = store.GetType().GetMethod("GetFlashbulbs");
+                        var fbs = fbMethod?.Invoke(store, new object[] { 5 });
+                        return new { emotional_context = ctx, flashbulbs = fbs };
+                    }
+                }
+                catch { }
+                return new { message = "Emotional memory not available" };
+            }),
+        new("persona_query", "Query the user persona model: traits, preferences, knowledge gaps. Parameters: query (optional, what aspect of persona to retrieve - traits/preferences/knowledge/domains/summary)", "memory",
+            async args =>
+            {
+                var aspect = Arg(args, "query", "summary");
+                try
+                {
+                    var pmType = typeof(object).Assembly.GetType("LTAI.Memory.PersonaMemory");
+                    var pm = pmType?.GetProperty("Instance")?.GetValue(null);
+                    if (pm != null)
+                    {
+                        var ctxMethod = pm.GetType().GetMethod("GetContextForQuery");
+                        var ctx = ctxMethod?.Invoke(pm, new object[] { aspect }).ToString() ?? "";
+                        var statsMethod = pm.GetType().GetMethod("GetStats");
+                        var stats = statsMethod?.Invoke(pm, null);
+                        return new { aspect, context = ctx[..Math.Min(1000, ctx.Length)], stats };
+                    }
+                }
+                catch { }
+                return new { error = "Persona model not available" };
+            }),
+        new("mem_optimize", "Optimize and compress memory context using preference optimization. Parameters: context (required), max_tokens (optional, default 2000)", "memory",
             async args =>
             {
                 var context = Arg(args, "context");
@@ -989,6 +1102,11 @@ created: {DateTime.UtcNow:yyyy-MM-dd}
 
     private static string Arg(Dictionary<string, object?>? args, string key, string def = "")
         => args?.TryGetValue(key, out var v) == true ? v?.ToString() ?? def : def;
+
+    private static string SafeKey(string key) =>
+        string.Join("_", key.Split(Path.GetInvalidFileNameChars())).Replace(" ", "_").ToLowerInvariant().Length > 60
+            ? string.Join("_", key.Split(Path.GetInvalidFileNameChars())).Replace(" ", "_").ToLowerInvariant()[..60]
+            : string.Join("_", key.Split(Path.GetInvalidFileNameChars())).Replace(" ", "_").ToLowerInvariant();
 
     private static double ArgDouble(Dictionary<string, object?>? args, string key, double def = 0)
         => args?.TryGetValue(key, out var v) == true && double.TryParse(v?.ToString(), out var d) ? d : def;

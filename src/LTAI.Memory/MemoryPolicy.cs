@@ -619,6 +619,15 @@ public class MemPOOptimizer
         var startTime = DateTime.UtcNow;
         var (retained, compressed, forgotten) = _retentionPolicy.ApplyPolicy(_store);
 
+        foreach (var id in compressed)
+        {
+            if (_store.TryGetValue(id, out var mem))
+            {
+                var updated = mem with { Metadata = new Dictionary<string, object>(mem.Metadata) { ["compressed"] = true, ["importance_original"] = mem.Importance } };
+                _store[id] = updated;
+            }
+        }
+
         foreach (var id in forgotten)
             _store.Remove(id);
 
@@ -637,7 +646,7 @@ public class MemPOOptimizer
                     forgotten.Add(id);
             }
 
-            retained = _store.Keys.Where(k => !forgotten.Contains(k) && !compressed.Contains(k)).ToList();
+            retained = _store.Keys.Where(k => !forgotten.Contains(k)).ToList();
         }
 
         var total = _store.Count + forgotten.Count;
