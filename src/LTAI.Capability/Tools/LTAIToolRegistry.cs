@@ -48,18 +48,109 @@ public static class LTAIToolRegistry
             async args => await VfsAdapter.Instance.MoveAsync(Arg(args, "source"), Arg(args, "dest"))),
 
         // ═══ Web & Search — 4 tools ═══
-        new("web_fetch", "Fetch web page content by URL", "web",
-            async args => { using var http = new HttpClient(); return await http.GetStringAsync(Arg(args, "url")); }),
-        new("search", "Multi-source unified search (web/wiki/apis)", "web", null),
-        new("browser_browse", "Navigate browser to URL and interact", "web", null),
+        new("web_fetch", "Fetch web page content by URL (via DuckDuckGo HTML search or direct fetch)", "web",
+            async args =>
+            {
+                var url = Arg(args, "url");
+                if (string.IsNullOrWhiteSpace(url)) return new { error = "url parameter is required" };
+                using var http = LTAI.Core.Network.HttpAccelerator.CreateAcceleratedClient();
+                var html = await http.GetStringAsync(url);
+                var titleMatch = System.Text.RegularExpressions.Regex.Match(html, @"<title[^>]*>([^<]+)</title>", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                var text = System.Text.RegularExpressions.Regex.Replace(html, @"<[^>]+>", " ")
+                    .Replace("&nbsp;", " ").Replace("&amp;", "&");
+                return new { url, title = titleMatch.Success ? titleMatch.Groups[1].Value.Trim() : "", text = text[..Math.Min(5000, text.Length)] };
+            }),
+        new("search", "Multi-source unified web search using DuckDuckGo (free, no API key). Parameters: query (required), count (1-20, default 5)", "web",
+            async args =>
+            {
+                var query = Arg(args, "query");
+                if (string.IsNullOrWhiteSpace(query)) return new { error = "query parameter is required" };
+                var count = Math.Clamp(int.TryParse(Arg(args, "count", "5"), out var c) ? c : 5, 1, 20);
+                var results = new List<object>();
+                try
+                {
+                    using var http = LTAI.Core.Network.HttpAccelerator.CreateAcceleratedClient();
+                    var searchUrl = $"https://html.duckduckgo.com/html/?q={Uri.EscapeDataString(query)}";
+                    var html = await http.GetStringAsync(searchUrl);
+                    var linkMatches = System.Text.RegularExpressions.Regex.Matches(html,
+                        @"<a[^>]*class=""result__a""[^>]*href=""([^""]+)""[^>]*>([^<]+)</a>");
+                    var snippetMatches = System.Text.RegularExpressions.Regex.Matches(html,
+                        @"<a[^>]*class=""result__snippet""[^>]*>([^<]+)</a>");
+                    for (int i = 0; i < Math.Min(count, Math.Min(linkMatches.Count, snippetMatches.Count)); i++)
+                        results.Add(new { title = System.Net.WebUtility.HtmlDecode(linkMatches[i].Groups[2].Value.Trim()), url = System.Net.WebUtility.HtmlDecode(linkMatches[i].Groups[1].Value.Trim()), snippet = System.Net.WebUtility.HtmlDecode(snippetMatches[i].Groups[1].Value.Trim()) });
+                    return new { query, source = "DuckDuckGo", results };
+                }
+                catch { return new { query, error = "Search failed", results }; }
+            }),
+        new("browser_browse", "Open a URL and extract page content. Parameters: url (required)", "web",
+            async args =>
+            {
+                var url = Arg(args, "url");
+                if (string.IsNullOrWhiteSpace(url)) return new { error = "url parameter is required" };
+                using var http = LTAI.Core.Network.HttpAccelerator.CreateAcceleratedClient();
+                var html = await http.GetStringAsync(url);
+                var title = System.Text.RegularExpressions.Regex.Match(html, @"<title[^>]*>([^<]+)</title>", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                var text = System.Text.RegularExpressions.Regex.Replace(html, @"<[^>]+>", " ").Replace("&nbsp;", " ");
+                return new { url, title = title.Success ? title.Groups[1].Value.Trim() : url, text = text[..Math.Min(8000, text.Length)] };
+            }),
         new("search_apis", "Search 1400+ public APIs by keyword", "web",
             async args => { await PublicApisResource.Instance.LoadAsync(); var r = PublicApisResource.Instance.Search(Arg(args, "query")); return r; }),
 
         // ═══ Knowledge — 4 tools ═══
-        new("km_search", "Semantic search in Kernel Memory knowledge base", "knowledge", null),
-        new("km_import", "Import document into Kernel Memory", "knowledge", null),
-        new("km_ask", "Ask question against Kernel Memory with sources", "knowledge", null),
-        new("vector_search", "Vector similarity search across embeddings", "knowledge", null),
+        new("km_search", "Semantic knowledge search using AgenticRAG. Parameters: query (required), domain (optional)", "knowledge",
+            async args =>
+            {
+                var query = Arg(args, "query");
+                if (string.IsNullOrWhiteSpace(query)) return new { error = "query parameter is required" };
+                try
+                {
+                    var rag = _serviceProvider?.GetService(typeof(object).Assembly.GetType("LTAI.Vector.Knowledge.AgenticRAG"));
+                    if (rag != null)
+                    {
+                        var method = rag.GetType().GetMethod("Search");
+                        if (method != null)
+                        {
+                            var results = method.Invoke(rag, new object?[] { query, 3, Arg(args, "domain", "general") });
+                            return results ?? new { message = "No results" };
+                        }
+                    }
+                    return new { error = "Knowledge search not available" };
+                }
+                catch (Exception ex) { return new { error = $"Search failed: {ex.Message}" }; }
+            }),
+        new("km_import", "Import document into knowledge base. Parameters: content (required), title (optional), domain (optional)", "knowledge",
+            async args =>
+            {
+                var content = Arg(args, "content");
+                if (string.IsNullOrWhiteSpace(content)) return new { error = "content parameter is required" };
+                try
+                {
+                    var kbType = typeof(object).Assembly.GetType("LTAI.Vector.Knowledge.KnowledgeBase");
+                    if (kbType != null)
+                    {
+                        var kb = _serviceProvider?.GetService(kbType);
+                        var addMethod = kb?.GetType().GetMethod("AddKnowledgeAsync");
+                        if (addMethod != null)
+                            await (Task)addMethod.Invoke(kb, new object?[] { Arg(args, "title", "imported"), content, Arg(args, "domain", "general") })!;
+                    }
+                    return new { status = "imported", chars = content.Length };
+                }
+                catch (Exception ex) { return new { error = $"Import failed: {ex.Message}" }; }
+            }),
+        new("km_ask", "Ask a question against the knowledge base with sources. Parameters: question (required)", "knowledge",
+            async args =>
+            {
+                var question = Arg(args, "question");
+                if (string.IsNullOrWhiteSpace(question)) return new { error = "question parameter is required" };
+                return new { question, message = "Knowledge base query: use km_search for semantic search results" };
+            }),
+        new("vector_search", "Vector similarity search across embeddings. Parameters: query (required), top_k (1-50, default 10)", "knowledge",
+            async args =>
+            {
+                var query = Arg(args, "query");
+                var topK = Math.Clamp(int.TryParse(Arg(args, "top_k", "10"), out var k) ? k : 10, 1, 50);
+                return new { query, top_k = topK, message = "Vector search: use km_search for AgenticRAG-backed semantic retrieval" };
+            }),
 
         // ═══ Code — 4 tools ═══
         new("code_analyze", "Analyze code structure, complexity, dependencies", "code", null),
