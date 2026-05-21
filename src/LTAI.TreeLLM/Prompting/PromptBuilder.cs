@@ -32,8 +32,6 @@ public sealed class PromptBuildOptions
 
 public sealed class PromptBuilder
 {
-    private const double TokensPerCharEstimate = 0.25;
-
     public async Task<(string SystemPrompt, string UserPrompt)> BuildPrompt(
         string question,
         IReadOnlyList<LTAI.Vector.Knowledge.Models.KnowledgeSearchResult> docs,
@@ -417,7 +415,7 @@ public sealed class PromptBuilder
     }
 
     private static int EstimateTokens(string text) =>
-        Math.Max(1, (int)(text.Length * TokensPerCharEstimate));
+        TokenCounter.Estimate(text);
 
     private string ResolveRolePrompt(string question, PromptBuildOptions opts)
     {

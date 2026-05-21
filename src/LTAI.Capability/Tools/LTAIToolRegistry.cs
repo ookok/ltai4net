@@ -1,4 +1,5 @@
 using LTAI.Core.Messaging;
+using LTAI.Core.System;
 using Microsoft.Extensions.DependencyInjection;
 using System.Text.Json;
 
@@ -412,7 +413,7 @@ public static class LTAIToolRegistry
         new("cad_export", "Export CAD model to target format (STEP/DWG/DXF/STL)", "cad",
             async args => CadEngine.Export(Arg(args, "file_path"), Arg(args, "target_format"))),
 
-        // ═══ Memory — 2 tools ═══
+        // ═══ Memory — 3 tools ═══
         new("remember", "Store information in agent memory for future recall", "memory",
             async args => {
                 var sm = _serviceProvider?.GetService(typeof(object).Assembly.GetType("LTAI.Vector.Knowledge.StructMemory"));
@@ -424,6 +425,32 @@ public static class LTAIToolRegistry
                 var sm = _serviceProvider?.GetService(typeof(object).Assembly.GetType("LTAI.Vector.Knowledge.StructMemory"));
                 if (sm != null) { var m = sm.GetType().GetMethod("RecallAsync"); var task = m?.Invoke(sm, new object?[] { Arg(args, "key") }); if (task is Task t) { await t; return t.GetType().GetProperty("Result")?.GetValue(t); } }
                 return new { message = "Memory service not available" };
+            }),
+        new("mem_optimize", "Optimize and compress memory context using preference optimization. Reduces token usage while preserving key information. Parameters: context (required, the text to optimize), max_tokens (optional, target token budget)", "memory",
+            async args =>
+            {
+                var context = Arg(args, "context");
+                if (string.IsNullOrWhiteSpace(context)) return new { error = "context parameter is required" };
+                var maxTokens = (int)ArgDouble(args, "max_tokens", 2000);
+                var originalTokens = TokenCounter.Estimate(context);
+                var sentences = System.Text.RegularExpressions.Regex.Split(context, @"(?<=[。.!！?？\n])");
+                var ranked = sentences
+                    .Where(s => s.Trim().Length > 5)
+                    .Select(s => (text: s.Trim(), score: s.Length > 30 ? 2.0 : s.Length > 15 ? 1.5 : 1.0))
+                    .OrderByDescending(x => x.score)
+                    .ToList();
+                var optimized = new System.Text.StringBuilder();
+                var usedTokens = 0;
+                foreach (var (text, _) in ranked)
+                {
+                    var est = TokenCounter.Estimate(text);
+                    if (usedTokens + est > maxTokens) break;
+                    optimized.AppendLine(text);
+                    usedTokens += est;
+                }
+                var result = optimized.ToString().TrimEnd();
+                var newTokens = TokenCounter.Estimate(result);
+                return new { original_tokens = originalTokens, optimized_tokens = newTokens, saved_tokens = originalTokens - newTokens, compression_ratio = Math.Round((double)newTokens / Math.Max(1, originalTokens), 2), text = result[..Math.Min(2000, result.Length)] };
             }),
 
         // ═══ Notification — 1 tools ═══

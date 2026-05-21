@@ -1,3 +1,4 @@
+using LTAI.Core.System;
 using LTAI.Vector.Interfaces;
 using Microsoft.Extensions.AI;
 using Microsoft.KernelMemory.AI;
@@ -55,7 +56,7 @@ public sealed class KernelMemoryEmbeddingAdapter : ITextEmbeddingGenerator
         _backend = backend;
     }
 
-    public int CountTokens(string text) => (int)(text.Length * 0.75);
+    public int CountTokens(string text) => TokenCounter.Estimate(text);
 
     public IReadOnlyList<string> GetTokens(string text) =>
         text.Split(' ', StringSplitOptions.RemoveEmptyEntries).ToList().AsReadOnly();

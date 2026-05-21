@@ -104,6 +104,8 @@ public sealed class PromptInjector
 
     public List<Dictionary<string, string>> Inject(List<Dictionary<string, string>> messages, string mode = "gateway")
     {
+        // Integration point: Call MemPOOptimizer.Models.BuildContext() before injection
+        // to include optimized memory context in the system prompt.
         var prompt = _modes.GetValueOrDefault(mode, _modes["gateway"]);
 
         if (messages.Count > 0 && messages[0].TryGetValue("role", out var role) && role == "system")

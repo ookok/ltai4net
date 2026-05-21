@@ -396,7 +396,46 @@ public class StructMemory
         return string.Join(". ", sentences.Take(3));
     }
 
-    private string ExtractRel(string text) => "";
+    private string ExtractRel(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return "";
+
+        var relations = new List<string>();
+
+        foreach (Match m in Regex.Matches(text, @"(\S+)\s*(是|属于|为|即)\s*(\S+)"))
+        {
+            var subj = m.Groups[1].Value.Trim();
+            var obj = m.Groups[3].Value.Trim();
+            if (subj.Length > 1 && obj.Length > 1)
+                relations.Add($"{subj} is_a {obj}");
+        }
+
+        foreach (Match m in Regex.Matches(text, @"(\S+)\s+is\s+(an?\s+)?(\S+)", RegexOptions.IgnoreCase))
+        {
+            var subj = m.Groups[1].Value.Trim();
+            var obj = m.Groups[3].Value.Trim();
+            if (subj.Length > 1 && obj.Length > 1)
+                relations.Add($"{subj} is_a {obj}");
+        }
+
+        foreach (Match m in Regex.Matches(text, @"(\S+)\s*(有|拥有|具有|包含)\s*(\S+)"))
+        {
+            var subj = m.Groups[1].Value.Trim();
+            var obj = m.Groups[3].Value.Trim();
+            if (subj.Length > 1 && obj.Length > 1)
+                relations.Add($"{subj} has {obj}");
+        }
+
+        foreach (Match m in Regex.Matches(text, @"(\S+)\s+has\s+(an?\s+)?(\S+)", RegexOptions.IgnoreCase))
+        {
+            var subj = m.Groups[1].Value.Trim();
+            var obj = m.Groups[3].Value.Trim();
+            if (subj.Length > 1 && obj.Length > 1)
+                relations.Add($"{subj} has {obj}");
+        }
+
+        return relations.Count > 0 ? string.Join("; ", relations.Take(10)) : "";
+    }
 
     private async Task<List<double>> ComputeEmbedding(string text)
     {

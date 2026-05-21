@@ -21,16 +21,12 @@ public sealed class ContextBudget
     private static readonly Lazy<ContextBudget> _instance = new(() => new ContextBudget());
     public static ContextBudget Instance => _instance.Value;
 
-    private const double TokensPerCharEstimate = 0.25;
     private const int SpliceGuardTokens = 60;
     private readonly BudgetState _state = new();
 
     private ContextBudget() { }
 
-    public int EstimateTokens(string text)
-    {
-        return Math.Max(1, (int)(text.Length * TokensPerCharEstimate));
-    }
+    public int EstimateTokens(string text) => TokenCounter.Estimate(text);
 
     public void Reset()
     {

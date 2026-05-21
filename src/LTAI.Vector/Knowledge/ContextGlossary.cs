@@ -94,8 +94,46 @@ public sealed class ContextGlossary
         ["terms"] = _terms.Count,
         ["categories"] = GetCategories().Count,
         ["aliases"] = _aliasIndex.Count,
-        ["relations"] = _relationGraph.Values.Sum(v => v.Count)
+        ["relations"] = _relationGraph.Values.Sum(v => v.Count),
+        ["auto_learned"] = _autoLearnedCount
     };
+
+    private int _autoLearnedCount;
+
+    public void LearnFromInteraction(string userMessage, string aiResponse)
+    {
+        var combined = $"{userMessage} {aiResponse}";
+        var candidates = new HashSet<string>();
+
+        foreach (System.Text.RegularExpressions.Match match in System.Text.RegularExpressions.Regex.Matches(combined, @"\b[A-Z\u2E80-\u9FFF][A-Za-z0-9\u2E80-\u9FFF_\-]{1,}\b"))
+        {
+            var term = match.Value.Trim();
+            if (term.Length >= 2 && !_terms.ContainsKey(term.ToLower()))
+                candidates.Add(term);
+        }
+
+        foreach (System.Text.RegularExpressions.Match match in System.Text.RegularExpressions.Regex.Matches(combined, @"[\u4E00-\u9FFF]{2,6}"))
+        {
+            var term = match.Value;
+            if (!_terms.ContainsKey(term.ToLower()))
+                candidates.Add(term);
+        }
+
+        var existingAutoCount = _terms.Values.Count(t => t.Category == "auto");
+        var remaining = Math.Max(0, 200 - existingAutoCount);
+
+        foreach (var term in candidates.Take(remaining))
+        {
+            Register(new DomainTerm
+            {
+                Term = term,
+                Category = "auto",
+                Definition = $"Auto-learned from interaction at {DateTimeOffset.UtcNow:yyyy-MM-dd HH:mm}",
+                Priority = 1
+            });
+            _autoLearnedCount++;
+        }
+    }
 
     private void SeedDefaults()
     {

@@ -24,6 +24,7 @@ public sealed class SessionRagService
     private readonly AgenticRAG _agenticRAG;
     private readonly StructMemory _structMemory;
     private readonly PromptBuilder _promptBuilder;
+    private readonly ContextBudget _contextBudget;
     private readonly ILogger<SessionRagService> _logger;
 
     public SessionRagService(
@@ -31,12 +32,14 @@ public sealed class SessionRagService
         AgenticRAG agenticRAG,
         StructMemory structMemory,
         PromptBuilder promptBuilder,
-        ILogger<SessionRagService>? logger = null)
+        ILogger<SessionRagService>? logger = null,
+        ContextBudget? contextBudget = null)
     {
         _chatClient = chatClient;
         _agenticRAG = agenticRAG;
         _structMemory = structMemory;
         _promptBuilder = promptBuilder;
+        _contextBudget = contextBudget ?? ContextBudget.Instance;
         _logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<SessionRagService>.Instance;
     }
 
@@ -67,6 +70,15 @@ public sealed class SessionRagService
         var longTermDocs = _agenticRAG.Search(question, RAGMode.Iterative, domain: opts.Domain ?? "general");
 
         var prompt = await _promptBuilder.BuildSinglePrompt(question, longTermDocs, opts);
+
+        var (needsCompression, _, dropped) = _contextBudget.AddAndCheck("system", new List<Dictionary<string, string>>(), prompt);
+        if (needsCompression || dropped > 0)
+        {
+            _logger.LogWarning(
+                "SessionRAG: context budget warning. needsCompression={NeedsCompression}, dropped={Dropped}, tokens={TotalTokens}/{MaxTokens}",
+                needsCompression, dropped,
+                _contextBudget.GetStats()["total_tokens"], _contextBudget.GetStats()["max_tokens"]);
+        }
 
         var response = await _chatClient.GetResponseAsync(prompt, cancellationToken: cancellationToken);
         var answer = response.Text ?? string.Empty;

@@ -1,4 +1,5 @@
 using LTAI.Core.Acceleration;
+using LTAI.Core.System;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -104,5 +105,5 @@ public sealed class PromptCache
     }
 
     private static int ExtractTokenCount(string text) =>
-        Math.Max(1, (int)(text.Length * 0.25));
+        TokenCounter.Estimate(text);
 }

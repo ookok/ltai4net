@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using LTAI.Core.System;
 using LTAI.Vector.Knowledge;
 using LTAI.Vector.Knowledge.Models;
 using Microsoft.Extensions.AI;
@@ -69,7 +70,7 @@ public sealed class DagRagPipeline
             Sources = mergedDocs,
             PromptUsed = prompt,
             ElapsedMs = sw.ElapsedMilliseconds,
-            TokensUsed = Math.Max(1, (int)((answer.Length + prompt.Length) * 0.25))
+            TokensUsed = TokenCounter.Estimate(answer) + TokenCounter.Estimate(prompt)
         };
     }
 

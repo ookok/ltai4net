@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using LTAI.Core.System;
 using LTAI.Vector.Knowledge;
 using LTAI.Vector.Knowledge.Models;
 using Microsoft.Extensions.AI;
@@ -90,6 +91,6 @@ public sealed class RagPipeline
     }
 
     private static int EstimateTokens(string text) =>
-        Math.Max(1, (int)(text.Length * 0.25));
+        TokenCounter.Estimate(text);
 }
 
