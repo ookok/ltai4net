@@ -3,12 +3,12 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using LTAI.Core.Interfaces;
-using LTAI.Planning.Models;
+using LTAI.Planning.TaskModels;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
-using TaskStatus = LTAI.Planning.Models.TaskStatus;
+using TaskStatus = LTAI.Planning.TaskModels.TaskStatus;
 
-namespace LTAI.Planning.Models
+namespace LTAI.Planning.TaskModels
 {
     [JsonConverter(typeof(JsonStringEnumConverter))]
     public enum TaskStatus

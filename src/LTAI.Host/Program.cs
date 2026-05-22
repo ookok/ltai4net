@@ -13,10 +13,10 @@ using LTAI.Infra.Sandbox;
 using LTAI.Planning.Metrics;
 using LTAI.Infra.Multimodal;
 using LTAI.Planning;
+using LTAI.Planning.Planning;
 using LTAI.Knowledge.Memory;
 using LTAI.Knowledge.Document;
 using LTAI.Knowledge.Vector;
-using LTAI.Infra.Browser;
 using LTAI.Infra.Network;
 using LTAI.Infra.Network.Interfaces;
 using LTAI.Infra.Network.Bridge;
@@ -178,6 +178,13 @@ await toolRegistry.RegisterAsync("git_blame", async args =>
 
 var system = sp.GetRequiredService<LivingTreeSystem>();
 await system.InitializeAsync();
+
+var decomposer = TaskPlanning.GetTaskDecomposer(
+    sp.GetRequiredService<ILogger<TaskDecomposer>>(),
+    system.LLMClient);
+system.TaskPipeline.LlmDecomposer = (client, query, ct) =>
+    decomposer.Decompose(query.Length > 1000 ? query[..1000] : query);
+logger.LogInformation("TaskDecomposer wired to LivingTreeSystem");
 
 sp.GetRequiredService<LTAI.Agent.Evolution.HarnessSnapshot>().Capture();
 sp.GetRequiredService<LTAI.Agent.Evolution.PluginRegistry>().Install("pr-review-toolkit", new()

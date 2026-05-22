@@ -1,6 +1,6 @@
 <Project>
   <PropertyGroup>
-    <NoWarn>$(NoWarn);MSB3243;NU1510</NoWarn>
+    <NoWarn>$(NoWarn);MSB3243;NU1510;MAAIW001</NoWarn>
   </PropertyGroup>
 
   <!-- All projects output to dist/lib for shared DLLs (debug builds) -->

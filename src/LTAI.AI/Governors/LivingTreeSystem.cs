@@ -65,6 +65,7 @@ public sealed class LivingTreeSystem
     public ContextGovernor ContextGovernor => _context;
     public RoutingGovernor RoutingGovernor => _routing;
     public IChatClient LLMClient => _llm;
+    public TaskPipeline TaskPipeline => _taskPipeline;
 
     public LivingTreeSystem(
         ICognitiveMesh mesh,

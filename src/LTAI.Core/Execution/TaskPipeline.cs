@@ -1,3 +1,4 @@
+using LTAI.Core.Execution;
 using LTAI.Core.System;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
@@ -26,6 +27,8 @@ public sealed class TaskPipeline
         _logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<TaskPipeline>.Instance;
     }
 
+    public Func<IChatClient, string, CancellationToken, IAsyncEnumerable<string>>? LlmDecomposer { get; set; }
+
     /// Check if a query needs task decomposition
     public static bool NeedsDecomposition(string query)
     {
@@ -42,7 +45,7 @@ public sealed class TaskPipeline
         var results = new List<string>();
 
         // Split by numbered patterns: "1. xxx", "1) xxx", "(1) xxx"
-        var numbered = System.Text.RegularExpressions.Regex.Split(query, @"\n\s*(?:\d+[\.\)]|[-•]\s)");
+        var numbered = global::System.Text.RegularExpressions.Regex.Split(query, @"\n\s*(?:\d+[\.\)]|[-•]\s)");
         if (numbered.Length > 1)
         {
             foreach (var part in numbered)
