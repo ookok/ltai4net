@@ -1,9 +1,8 @@
-using LTAI.Core.Execution;
 using LTAI.Core.System;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 
-namespace LTAI.Agent.Providers;
+namespace LTAI.Core.Execution;
 
 /// Activated Task Pipeline — wires previously dead DecoupledExecutor into LivingTreeSystem.
 /// Enables parallel subtask execution with retry, and TaskJournal persistence.

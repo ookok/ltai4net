@@ -42,8 +42,9 @@ public sealed class LivingTreeSystem
     private readonly StructuredReflectionEngine _reflectionEngine = new();
     private readonly CoEchoDetector _echoDetector = new();
     private readonly OTESelector _oteSelector;
+    private readonly TaskPipeline _taskPipeline;
     private int _requestCount;
-    private const int TrainingInterval = 50;   // trigger ONNX retraining every 50 requests
+    private const int TrainingInterval = 50;
 
     private string DefaultModel => _options.Value.AI.L2.Model;
     private string FlashModel => _options.Value.AI.L1.Model;
@@ -103,6 +104,7 @@ public sealed class LivingTreeSystem
         _duplexRouter = duplexRouter;
         _synapticMemory = synapticMemory;
         _dreamCycle = dreamCycle;
+        _taskPipeline = new TaskPipeline(_journal);
     }
 
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
@@ -382,6 +384,7 @@ public sealed class LivingTreeSystem
         _erlLoop.RecordTrial(query[..Math.Min(query.Length, 60)], response[..Math.Min(response.Length, 100)], "l2_response", 0.7, true);
         _elasticMemory.Store($"lts_{traceId}", response[..Math.Min(response.Length, 200)]);
         _echoDetector.RecordResponse(model, response[..Math.Min(response.Length, 500)]);
+        if (_taskPipeline.HasPending) _logger.LogDebug("TaskPipeline: {Count} pending tasks", _taskPipeline.GetStats()["pending"]);
 
         if (++_requestCount % TrainingInterval == 0)
         {
