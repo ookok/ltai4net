@@ -56,6 +56,52 @@ public static class ServiceCollectionExtensions
         return AddLTAIVector(services);
     }
 
+    /// <summary>
+    /// Configure L0 embedding to use Jina Embeddings v5 Omni.
+    /// Downloads the model from HuggingFace if not cached locally.
+    /// Supports jina-embeddings-v5-omni-small (768-dim) and jina-embeddings-v5-omni-nano (512-dim).
+    /// </summary>
+    public static IServiceCollection AddLTAIVectorWithJina(
+        this IServiceCollection services,
+        JinaModelVariant variant = JinaModelVariant.OmniSmall,
+        string? cacheDir = null)
+    {
+        var preset = JinaModelPresets.GetPreset(variant);
+        cacheDir ??= Path.Combine(AppContext.BaseDirectory, ".livingtree", "models", "embedding");
+        var modelDir = Path.Combine(cacheDir, "jina", preset.ModelName);
+
+        JinaEmbeddingConfig config;
+        if (!File.Exists(Path.Combine(modelDir, "model.onnx")))
+        {
+            config = JinaModelDownloader.DownloadModelAsync(cacheDir, variant).GetAwaiter().GetResult();
+        }
+        else
+        {
+            config = new JinaEmbeddingConfig
+            {
+                ModelName = preset.ModelName,
+                Dimension = preset.Dimension,
+                HuggingFaceRepo = preset.HuggingFaceRepo,
+                OnnxModelPath = Path.Combine(modelDir, "model.onnx"),
+                OnnxTokenizerPath = Path.Combine(modelDir, "tokenizer.json")
+            };
+        }
+
+        services.AddSingleton<JinaEmbeddingConfig>(config);
+        services.AddSingleton<IEmbeddingBackend>(sp =>
+        {
+            var logger = sp.GetService<ILogger<JinaEmbeddingBackend>>();
+            var backend = new JinaEmbeddingBackend(config, logger);
+            backend.InitializeAsync().GetAwaiter().GetResult();
+            return backend;
+        });
+
+        services.AddSingleton<IEmbeddingGenerator<string, Embedding<float>>>(sp =>
+            new EmbeddingGeneratorAdapter(sp.GetRequiredService<IEmbeddingBackend>()));
+
+        return services;
+    }
+
     private static IServiceCollection AddLTAIVectorInternal(
         IServiceCollection services,
         string embeddingType = "local",

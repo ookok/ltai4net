@@ -7,6 +7,7 @@ using LTAI.Core.Models;
 using LTAI.DNA;
 using LTAI.Tools.Reasoning;
 using LTAI.AI.Providers;
+using LTAI.AI.Providers;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -39,6 +40,8 @@ public sealed class LivingTreeSystem
     private readonly ERLLoop _erlLoop = new();
     private readonly ElasticMemoryOrchestrator _elasticMemory = new();
     private readonly StructuredReflectionEngine _reflectionEngine = new();
+    private readonly CoEchoDetector _echoDetector = new();
+    private readonly OTESelector _oteSelector;
 
     private string DefaultModel => _options.Value.AI.L2.Model;
     private string FlashModel => _options.Value.AI.L1.Model;
@@ -376,6 +379,7 @@ public sealed class LivingTreeSystem
         _bavtRouter.Spend(1.0);
         _erlLoop.RecordTrial(query[..Math.Min(query.Length, 60)], response[..Math.Min(response.Length, 100)], "l2_response", 0.7, true);
         _elasticMemory.Store($"lts_{traceId}", response[..Math.Min(response.Length, 200)]);
+        _echoDetector.RecordResponse(model, response[..Math.Min(response.Length, 500)]);
 
         if (_dna != null)
         {
