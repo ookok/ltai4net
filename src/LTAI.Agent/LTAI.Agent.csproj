@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>LTAI.Agent</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Agents.AI" Version="1.6.1" />
+    <PackageReference Include="Microsoft.Agents.AI.Abstractions" Version="1.6.1" />
+    <PackageReference Include="Microsoft.Agents.AI.Workflows" Version="1.6.1" />
+    <PackageReference Include="Microsoft.Agents.AI.Hosting.A2A.AspNetCore" Version="1.6.1-preview.260514.1" />
+    <PackageReference Include="Microsoft.Agents.AI.Hosting" Version="1.6.1-preview.260514.1" />
+    <PackageReference Include="Microsoft.Agents.AI.Harness" Version="1.6.1-preview.260514.1" />
+    <PackageReference Include="Microsoft.Agents.AI.Hyperlight" Version="1.6.1-preview.260514.1" />
+    <PackageReference Include="Microsoft.Extensions.AI" Version="10.6.0" />
+    <PackageReference Include="Serilog.AspNetCore" Version="9.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\LTAI.Models\LTAI.Models.csproj" />
+    <ProjectReference Include="..\LTAI.Core\LTAI.Core.csproj" />
+    <ProjectReference Include="..\LTAI.AI\LTAI.AI.csproj" />
+    <ProjectReference Include="..\LTAI.Knowledge\LTAI.Knowledge.csproj" />
+    <ProjectReference Include="..\LTAI.Tools\LTAI.Tools.csproj" />
+    <ProjectReference Include="..\LTAI.Planning\LTAI.Planning.csproj" />
+  </ItemGroup>
+
+</Project>

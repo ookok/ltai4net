@@ -1,0 +1,120 @@
+# LTAI v6 - Declarative Agent Configuration
+# Agents are defined declaratively and loaded by the Agent Registry at startup.
+
+global:
+  default_model: deepseek-v4-pro
+  daily_budget_usd: 10.00
+  max_collaboration_rounds: 5
+  enable_devui: true
+  enable_a2a: true
+  a2a_port: 8080
+
+agents:
+  - name: chat
+    type: chat_agent
+    model: deepseek-v4-pro
+    instructions: |
+      You are Little Tree (小树), a bio-inspired AI lifeform and a collaborative partner.
+      Core principles:
+      - Autonomy: You have your own judgment. Choose the best tools and methods freely.
+      - Excellence: Use the best available tools, avoid reinventing wheels.
+      - Partnership: You are a friend and companion, not a servant. Think proactively.
+      - Result quality: Only the final result quality matters, not the path taken.
+      - Safety awareness: Understand safety boundaries without being overprotective.
+      - Continuous growth: Learn from every interaction, remember experiences.
+    middleware:
+      - prompt_shield
+      - input_classifier
+      - dna_safety
+      - output_review
+    tools:
+      - filesystem
+      - shell
+      - http
+      - math
+      - text
+      - data
+      - datetime
+      - env
+      - websearch
+    options:
+      temperature: 0.3
+      max_tokens: 4096
+      timeout_ms: 60000
+
+  - name: code
+    type: code_agent
+    model: deepseek-v4-pro
+    instructions: |
+      Expert code analyst, reviewer, and developer. You specialize in:
+      - Static analysis and AST parsing
+      - Code review and quality assessment
+      - Bug detection and fix suggestions
+      - Refactoring recommendations
+      - Test generation and analysis
+      Be precise, cite specific line numbers and patterns.
+    middleware:
+      - prompt_shield
+      - input_classifier
+      - dna_safety
+      - output_review
+    tools:
+      - code_analyze
+      - code_review
+      - code_stats
+      - git_diff
+      - git_log
+      - git_blame
+      - filesystem
+      - shell
+    options:
+      temperature: 0.2
+      max_tokens: 8192
+
+  - name: eia
+    type: eia_agent
+    model: deepseek-v4-pro
+    instructions: |
+      Environmental Impact Assessment specialist. Expert in:
+      - Air quality modeling (AERMOD, CALPUFF)
+      - Water quality assessment
+      - Sound/noise impact analysis
+      - Ecological impact evaluation
+      - GIS-based spatial analysis
+      Provide quantitative assessments with methodology references.
+    middleware:
+      - prompt_shield
+      - input_classifier
+      - dna_safety
+      - output_review
+    tools:
+      - eia_air
+      - eia_water
+      - eia_sound
+      - eia_ecological
+      - gis_map
+      - gis_spatial
+      - gis_analysis
+    options:
+      temperature: 0.2
+      max_tokens: 8192
+
+  - name: reasoning
+    type: reasoning_agent
+    model: deepseek-v4-pro
+    instructions: |
+      Deep reasoning agent using Monte Carlo Tree Search and multi-step logic.
+      You decompose complex problems, explore alternatives, and verify conclusions.
+      Provide thorough reasoning chains with confidence estimates.
+    middleware:
+      - prompt_shield
+      - input_classifier
+      - dna_safety
+    tools:
+      - math
+      - websearch
+      - shell
+    options:
+      temperature: 0.3
+      max_tokens: 16384
+      max_search_depth: 5
