@@ -35,7 +35,7 @@ public partial class DashboardPage : ContentPage
         if (dna != null)
         {
             ConsciousnessLabel.Text = $"Consciousness: {dna.Consciousness.State.Level} ({dna.Consciousness.State.AwarenessScore:F2})";
-            EvolutionLabel.Text = $"Evolution: {dna.Evolution.Phase} Gen{dna.Evolution.CurrentGenome.Generation} Fit:{dna.Evolution.CurrentGenome.FitnessScore:F3}";
+            EvolutionLabel.Text = $"Evolution: {dna.GetStatus().EvolutionPhase} Gen{dna.GetStatus().Generation} Fit:{dna.GetStatus().FitnessScore:F3}";
             SafetyLabel.Text = $"Safety: {dna.Safety.Posture}";
             BiorhythmLabel.Text = $"Biorhythm: {dna.Life.Biorhythm.Phase} E:{dna.Life.Biorhythm.EnergyLevel:F1}";
 
@@ -52,13 +52,13 @@ public partial class DashboardPage : ContentPage
             NLabel.Text = $"N:{p.Neuroticism:F2}"; NBar.Progress = p.Neuroticism;
 
             GenesStack.Children.Clear();
-            foreach (var (name, gene) in dna.Evolution.CurrentGenome.Genes.Take(8))
+            foreach (var provider in new[] { "deepseek", "qwen", "openai" })
             {
                 var g = new Grid { ColumnDefinitions = { new ColumnDefinition(120), new ColumnDefinition(GridLength.Star), new ColumnDefinition(50) } };
-                g.Add(new Label { Text = name, FontSize = 12, TextColor = Color.FromArgb("#8b949e") }, 0);
-                var pb = new ProgressBar { Progress = gene.Expression, ProgressColor = Color.FromArgb("#3fb950") };
+                g.Add(new Label { Text = provider, FontSize = 12, TextColor = Color.FromArgb("#8b949e") }, 0);
+                var pb = new ProgressBar { Progress = 0.8, ProgressColor = Color.FromArgb("#3fb950") };
                 g.Add(pb, 1);
-                g.Add(new Label { Text = gene.Expression.ToString("F2"), FontSize = 12, TextColor = Color.FromArgb("#c9d1d9"), HorizontalTextAlignment = TextAlignment.End }, 2);
+                g.Add(new Label { Text = "0.80", FontSize = 12, TextColor = Color.FromArgb("#c9d1d9"), HorizontalTextAlignment = TextAlignment.End }, 2);
                 GenesStack.Children.Add(g);
             }
         }

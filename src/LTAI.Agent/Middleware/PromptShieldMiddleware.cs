@@ -39,7 +39,7 @@ public sealed class PromptShieldMiddleware
             }
         }
 
-        var toolName = session?.GetType().Name ?? "unknown";
+        var toolName = session?.GetType().Name ?? options?.GetType().Name ?? "agent";
         var gate = _calibrator.Calibrate(toolName, 0.8, 0.85);
         if (gate.CalibratedConfidence < 0.5)
             _logger.LogWarning("PromptShield: low confidence {Conf:F2} for {Tool}", gate.CalibratedConfidence, toolName);

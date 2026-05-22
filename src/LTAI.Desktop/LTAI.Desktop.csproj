@@ -1,18 +1,23 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFrameworks>net10.0-android;net10.0-ios;net10.0-maccatalyst</TargetFrameworks>
-    <TargetFrameworks Condition="$([MSBuild]::IsOSPlatform('windows'))">$(TargetFrameworks);net10.0-windows10.0.19041.0</TargetFrameworks>
+    <IsExeProject>true</IsExeProject>
+    <OutputPath>$(MSBuildThisFileDirectory)..\..\dist\Desktop\</OutputPath>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
+    <TargetFrameworks>net10.0-windows10.0.19041.0</TargetFrameworks>
     <OutputType>Exe</OutputType>
     <RootNamespace>LTAI.Desktop</RootNamespace>
     <UseMaui>true</UseMaui>
     <SingleProject>true</SingleProject>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <ApplicationTitle>LTAI Console</ApplicationTitle>
+    <ApplicationTitle>LTAI Desktop</ApplicationTitle>
     <ApplicationId>com.ltai.desktop</ApplicationId>
-    <ApplicationDisplayVersion>5.5</ApplicationDisplayVersion>
+    <ApplicationDisplayVersion>6.1</ApplicationDisplayVersion>
     <ApplicationVersion>1</ApplicationVersion>
+    <WindowsPackageType>MSIX</WindowsPackageType>
+    <SkipValidateMauiImplicitPackageReferences>true</SkipValidateMauiImplicitPackageReferences>
     <SupportedOSPlatformVersion Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'windows'">10.0.17763.0</SupportedOSPlatformVersion>
   </PropertyGroup>
 

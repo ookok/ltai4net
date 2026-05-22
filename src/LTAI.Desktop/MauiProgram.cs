@@ -39,8 +39,7 @@ public static class MauiProgram
             ltaiOptions.AI.Providers["deepseek"] = new ProviderConfig { Endpoint = "https://api.deepseek.com", Model = "deepseek-chat" };
         }
 
-        ltaiOptions.Web.RateLimitPerMinute = ltaiOptions.Web.RateLimitPerMinute > 0 ? ltaiOptions.Web.RateLimitPerMinute : 60;
-        services.AddSingleton(Options.Create(ltaiOptions));
+                services.AddSingleton(Options.Create(ltaiOptions));
 
         services.AddLogging(b => b.SetMinimumLevel(LogLevel.Warning));
 

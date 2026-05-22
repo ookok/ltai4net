@@ -5,7 +5,7 @@ using LTAI.Core;
 using LTAI.Core.Configuration;
 using LTAI.DNA;
 using LTAI.Agent;
-using LTAI.Memory;
+using LTAI.Knowledge.Memory;
 using LTAI.Planning.Metrics;
 using LTAI.Knowledge.Vector;
 using Microsoft.AspNetCore.Components;

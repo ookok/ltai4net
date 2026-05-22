@@ -10,7 +10,7 @@ using LTAI.Core.Configuration;
 using LTAI.Core.System;
 using LTAI.DNA;
 using LTAI.Agent;
-using LTAI.Memory;
+using LTAI.Knowledge.Memory;
 using LTAI.TUI;
 using LTAI.Knowledge.Vector;
 using Microsoft.Extensions.Configuration;
@@ -46,7 +46,6 @@ if (ltaiOptions.AI.Providers.Count == 0)
     ltaiOptions.AI.Providers["deepseek-fast"] = new ProviderConfig { Endpoint = "https://api.deepseek.com", Model = "deepseek-v4-flash" };
 }
 
-ltaiOptions.Web.RateLimitPerMinute = ltaiOptions.Web.RateLimitPerMinute > 0 ? ltaiOptions.Web.RateLimitPerMinute : 60;
 
 services.AddSingleton(Options.Create(ltaiOptions));
 services.AddLTAICore();

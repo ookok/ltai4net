@@ -42,6 +42,8 @@ public sealed class LivingTreeSystem
     private readonly StructuredReflectionEngine _reflectionEngine = new();
     private readonly CoEchoDetector _echoDetector = new();
     private readonly OTESelector _oteSelector;
+    private int _requestCount;
+    private const int TrainingInterval = 50;   // trigger ONNX retraining every 50 requests
 
     private string DefaultModel => _options.Value.AI.L2.Model;
     private string FlashModel => _options.Value.AI.L1.Model;
@@ -381,6 +383,11 @@ public sealed class LivingTreeSystem
         _elasticMemory.Store($"lts_{traceId}", response[..Math.Min(response.Length, 200)]);
         _echoDetector.RecordResponse(model, response[..Math.Min(response.Length, 500)]);
 
+        if (++_requestCount % TrainingInterval == 0)
+        {
+            _ = Task.Run(() => TriggerPeriodicTraining());
+        }
+
         if (_dna != null)
         {
             try
@@ -465,5 +472,38 @@ public sealed class LivingTreeSystem
     {
         try { await _output.SilentSelfCheckAsync(response); }
         catch (Exception ex) { _logger.LogDebug(ex, "Silent self-check skipped"); }
+    }
+
+    /// Periodically triggers ONNX retraining from collected synaptic experiences.
+    /// Called every ~50 requests as a background fire-and-forget task.
+    private async Task TriggerPeriodicTraining()
+    {
+        try
+        {
+            var samples = _synapticMemory?.GetTrainingSamples(maxCount: TrainingInterval) ?? new();
+
+            if (samples.Count >= 10)
+            {
+                // Train and export ONNX weights
+                var synapticDir = Path.Combine(AppContext.BaseDirectory, "synaptic");
+                var trainer = new SynapticTrainer(Path.Combine(synapticDir, "models"));
+                var result = trainer.TrainIntentClassifier(samples);
+
+                if (result.Success)
+                {
+                    var inference = new SynapticInference();
+                    if (!string.IsNullOrEmpty(result.OnnxPath) && inference.LoadOnnxModel(result.OnnxPath))
+                    {
+                        _logger.LogInformation("ONNX retraining: accuracy={Acc:F2} samples={N} onnx={Path}",
+                            result.Accuracy, result.TrainingSamples, result.OnnxPath);
+                        inference.Dispose();
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Periodic training skipped");
+        }
     }
 }

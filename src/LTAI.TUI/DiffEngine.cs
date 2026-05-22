@@ -2,6 +2,8 @@ using System.Text;
 
 namespace LTAI.TUI;
 
+public enum DiffMode { Unified, Split }
+
 public static class DiffEngine
 {
     public static DiffResult Compute(string original, string modified)

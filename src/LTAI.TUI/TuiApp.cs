@@ -1,3 +1,4 @@
+using Spectre.Console.Rendering;
 using System.Text;
 using Spectre.Console;
 using Spectre.Console.Rendering;
@@ -160,7 +161,7 @@ public sealed class TuiApp
     private void RenderHeader()
     {
         var dnaStatus = _dna != null
-            ? $"[cyan]DNA:{_dna.Consciousness.State.Level}[/] [green]Gen:{_dna.Evolution.CurrentGenome.Generation}[/]"
+            ? $"[cyan]DNA:{_dna.Consciousness.State.Level}[/] [green]Gen:{_dna.GetStatus().Generation}[/]"
             : "[grey]DNA:off[/]";
         var sysInfo = $"[green]Mode:{_lts.Mode}[/] [blue]v5.5[/]";
         var proc = $"[grey]CPU:{Environment.ProcessorCount}c MEM:{Environment.WorkingSet / 1024 / 1024}MB[/]";
@@ -195,11 +196,11 @@ public sealed class TuiApp
     {
         if (_dna == null) return MkPanel("DNA module not loaded", "[cyan]DNA[/]");
         var c = _dna.Consciousness.State;
-        var e = _dna.Evolution;
+        var e = _dna.SelfEvo;
         var l = _dna.Life;
         return MkPanel($$"""
             [cyan]Consciousness:[/] {{c.Level}} ({{c.AwarenessScore:F2}})
-            [green]Evolution:[/] {{e.Phase}} Gen {{e.CurrentGenome.Generation}} Fit:{{e.CurrentGenome.FitnessScore:F3}}
+            [green]Evolution:[/] active
             [magenta]Safety:[/] {{_dna.Safety.Posture}}
             [yellow]Biorhythm:[/] {{l.Biorhythm.Phase}} E:{{l.Biorhythm.EnergyLevel:F2}}
             [blue]Dopamine:[/] {{l.Hormones.Dopamine:F2}} Serotonin:{{l.Hormones.Serotonin:F2}}
@@ -263,7 +264,7 @@ public sealed class TuiApp
         if (_dna == null) return new Text("");
         return new BarChart().Width(60).Label("[bold]DNA State[/]")
             .AddItem("Awareness", _dna.Consciousness.State.AwarenessScore, Color.Cyan1)
-            .AddItem("Fitness", _dna.Evolution.CurrentGenome.FitnessScore, Color.Green)
+            .AddItem("Fitness", _dna.GetStatus().FitnessScore, Color.Green)
             .AddItem("Energy", _dna.Life.Biorhythm.EnergyLevel, Color.Yellow)
             .AddItem("Dopamine", _dna.Life.Hormones.Dopamine, Color.Magenta1);
     }
@@ -558,7 +559,6 @@ public sealed class TuiApp
             case ConsoleKey.F3 when key.Modifiers == 0: _search.NextMatch(); break;
             case ConsoleKey.F3 when key.Modifiers == ConsoleModifiers.Shift: _search.PrevMatch(); break;
             case ConsoleKey.G: _currentView = TuiView.Git; break;
-            case ConsoleKey.R: break;
             case ConsoleKey.Oem2 or ConsoleKey.Divide: _currentView = TuiView.Help; break;
             case ConsoleKey.Q: _running = false; break;
             case ConsoleKey.Enter when _currentView == TuiView.Chat:
@@ -596,7 +596,7 @@ public sealed class TuiApp
         await AnsiConsole.Status().StartAsync("Analyzing...", async _ =>
         {
             var code = await File.ReadAllTextAsync(filePath);
-            _lastAnalysisResult = _analyzer.Analyze(code, LanguageRegistry.Detect(filePath));
+            _lastAnalysisResult = await _analyzer.Analyze(code, LanguageRegistry.Detect(filePath));
             _lastAnalyzedFile = filePath;
         });
         _activityLog.Add($"[Code] Analyzed {Path.GetFileName(filePath)}");
@@ -652,7 +652,7 @@ public sealed class TuiApp
         {
             var life = _dna.Life;
             life.ProcessInteraction("memory_consolidation", "Triggered manual consolidation", "positive");
-            await _dna.Evolution.EvolveAsync(new Dictionary<string, double> { ["stability"] = 0.9, ["efficiency"] = 0.8 }, CancellationToken.None);
+            await _dna.SelfEvo.EvolveAsync(new Dictionary<string, double> { ["stability"] = 0.9, ["efficiency"] = 0.8 }, CancellationToken.None);
             await Task.Delay(500);
             _dna.Consciousness.State.LastReflection = DateTime.UtcNow;
             _dna.Consciousness.State.Level = LTAI.DNA.Models.ConsciousnessLevel.Reflective;
@@ -660,7 +660,7 @@ public sealed class TuiApp
 
         _activityLog.Add("[Memory] Consolidation triggered");
         AnsiConsole.MarkupLine($"[green]Memory consolidated:[/] {_dna.Life.Habits.Count} habits, " +
-            $"consciousness={_dna.Consciousness.State.Level}, fitness={_dna.Evolution.CurrentGenome.FitnessScore:F3}");
+            $"consciousness={_dna.Consciousness.State.Level}, fitness={_dna.GetStatus().FitnessScore:F3}");
     }
 
     private async Task KnowledgeGraphPreviewAsync()

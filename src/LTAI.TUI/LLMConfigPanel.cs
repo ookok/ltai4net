@@ -1,3 +1,4 @@
+using Spectre.Console.Rendering;
 using Spectre.Console;
 using LTAI.Core.Configuration;
 using Microsoft.Extensions.Options;

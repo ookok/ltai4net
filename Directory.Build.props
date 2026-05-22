@@ -2,4 +2,21 @@
   <PropertyGroup>
     <NoWarn>$(NoWarn);MSB3243;NU1510</NoWarn>
   </PropertyGroup>
+
+  <!-- All projects output to dist/lib for shared DLLs (debug builds) -->
+  <PropertyGroup Condition="'$(IsExeProject)' != 'true'">
+    <OutputPath>$(MSBuildThisFileDirectory)dist\lib\</OutputPath>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
+  </PropertyGroup>
+
+  <!-- Publish: single-file self-contained executables -->
+  <PropertyGroup Condition="'$(IsExeProject)' == 'true'">
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+    <PublishTrimmed>false</PublishTrimmed>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <PublishDir>$(MSBuildThisFileDirectory)dist\publish\$(MSBuildProjectName)\</PublishDir>
+  </PropertyGroup>
 </Project>

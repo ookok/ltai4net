@@ -32,10 +32,10 @@
         <h3>Hormones</h3>
         @if (DNA != null)
         {
-            <div class="metric"><span>Dopamine</span><div class="bar"><div class="fill magenta" style="width:@(DNA.HormoneNetwork.GetLevel(HormoneType.Dopamine)*100)%"></div></div><span>@DNA.HormoneNetwork.GetLevel(HormoneType.Dopamine).ToString("F2")</span></div>
-            <div class="metric"><span>Serotonin</span><div class="bar"><div class="fill yellow" style="width:@(DNA.HormoneNetwork.GetLevel(HormoneType.Serotonin)*100)%"></div></div><span>@DNA.HormoneNetwork.GetLevel(HormoneType.Serotonin).ToString("F2")</span></div>
-            <div class="metric"><span>Cortisol</span><div class="bar"><div class="fill red" style="width:@(DNA.HormoneNetwork.GetLevel(HormoneType.Cortisol)*100)%"></div></div><span>@DNA.HormoneNetwork.GetLevel(HormoneType.Cortisol).ToString("F2")</span></div>
-            <div class="metric"><span>Oxytocin</span><div class="bar"><div class="fill blue" style="width:@(DNA.HormoneNetwork.GetLevel(HormoneType.Oxytocin)*100)%"></div></div><span>@DNA.HormoneNetwork.GetLevel(HormoneType.Oxytocin).ToString("F2")</span></div>
+            <div class="metric"><span>Dopamine</span><div class="bar"><div class="fill magenta" style="width:@(DNA?.Life?.Hormones?.Dopamine ?? 0*100)%"></div></div><span>@DNA?.Life?.Hormones?.Dopamine ?? 0.ToString("F2")</span></div>
+            <div class="metric"><span>Serotonin</span><div class="bar"><div class="fill yellow" style="width:@(DNA?.Life?.Hormones?.Serotonin ?? 0*100)%"></div></div><span>@DNA?.Life?.Hormones?.Serotonin ?? 0.ToString("F2")</span></div>
+            <div class="metric"><span>Cortisol</span><div class="bar"><div class="fill red" style="width:@(DNA?.Life?.Hormones?.Cortisol ?? 0*100)%"></div></div><span>@DNA?.Life?.Hormones?.Cortisol ?? 0.ToString("F2")</span></div>
+            <div class="metric"><span>Oxytocin</span><div class="bar"><div class="fill blue" style="width:@(DNA?.Life?.Hormones?.Oxytocin ?? 0*100)%"></div></div><span>@DNA?.Life?.Hormones?.Oxytocin ?? 0.ToString("F2")</span></div>
         }
     </div>
 
@@ -88,9 +88,9 @@
     {
         get
         {
-            var bio = DNA?.BiorhythmEngine?.GetSnapshot();
-            if (bio != null && bio.TryGetValue("phase", out var p))
-                return $"{p:F1}";
+            var bio = DNA?.Life?.Biorhythm;
+            if (bio != null)
+                return $"{bio.Phase}";
             return "--";
         }
     }
@@ -98,9 +98,9 @@
     {
         get
         {
-            var bio = DNA?.BiorhythmEngine?.GetSnapshot();
-            if (bio != null && bio.TryGetValue("energy", out var e))
-                return $"{e:F1}";
+            var bio = DNA?.Life?.Biorhythm;
+            if (bio != null)
+                return $"{bio.EnergyLevel:F1}";
             return "--";
         }
     }

@@ -1,11 +1,11 @@
 using BenchmarkDotNet.Attributes;
 using BenchmarkDotNet.Running;
-using LTAI.Capability.CodeEngine;
-using LTAI.Capability.Reasoning;
+using LTAI.Tools.CodeEngine;
+using LTAI.Tools.Reasoning;
 using LTAI.DNA;
-using LTAI.Vector.Embedding;
-using LTAI.Vector.Interfaces;
-using LTAI.Vector.Knowledge;
+using LTAI.Knowledge.Vector.Embedding;
+using LTAI.Knowledge.Vector.Interfaces;
+using LTAI.Knowledge.Vector.Knowledge;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace LTAI.Benchmarks;

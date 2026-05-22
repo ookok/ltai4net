@@ -15,8 +15,8 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\LTAI.Core\LTAI.Core.csproj" />
     <ProjectReference Include="..\..\src\LTAI.AI\LTAI.AI.csproj" />
-    <ProjectReference Include="..\..\src\LTAI.Capability\LTAI.Capability.csproj" />
-    <ProjectReference Include="..\..\src\LTAI.Vector\LTAI.Vector.csproj" />
+    <ProjectReference Include="..\..\src\LTAI.Capability\LTAI.Tools\LTAI.Tools.csproj" />
+    <ProjectReference Include="..\..\src\LTAI.Vector\LTAI.Knowledge\LTAI.Knowledge.csproj" />
     <ProjectReference Include="..\..\src\LTAI.DNA\LTAI.DNA.csproj" />
   </ItemGroup>
 

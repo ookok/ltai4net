@@ -1,3 +1,4 @@
+using Spectre.Console.Rendering;
 using Spectre.Console;
 
 namespace LTAI.TUI;

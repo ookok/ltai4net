@@ -862,7 +862,7 @@ Think step by step, then output ONLY the JSON.";
     /// <summary>
     /// 构建二值向量索引 (从现有知识/图谱)
     /// </summary>
-    public void BuildBinaryIndex(LocalEmbeddingBackend embeddingBackend, CodeGraphEnhanced? codeGraph = null)
+    public void BuildBinaryIndex(LTAI.Knowledge.Vector.Embedding.LocalEmbeddingBackend embeddingBackend, CodeGraphEnhanced? codeGraph = null)
     {
         if (_binaryIndex == null) return;
 

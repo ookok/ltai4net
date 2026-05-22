@@ -1,3 +1,4 @@
+using Spectre.Console.Rendering;
 using System.Text;
 using System.Text.RegularExpressions;
 using Spectre.Console;
@@ -249,8 +250,7 @@ public sealed class StreamRenderer
         {
             return new Panel(new Markup($"{status} {name}\n[grey]{Escape(block.ToolResult)}[/]"))
             {
-                Border = BoxBorder.Rounded,
-                BorderColor = Color.Grey
+                Border = BoxBorder.Rounded
             };
         }
 

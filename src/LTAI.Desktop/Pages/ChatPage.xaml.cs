@@ -157,7 +157,7 @@ public partial class ChatPage : ContentPage
         var prefix = role switch { "You" => "You", "LTAI" => "LTAI", "Diff" => "Diff", "System" => "System", _ => role };
         var escaped = EscapeHtml(text).Replace("\n", "<br>");
 
-        InvokeOnMainThreadAsync(() =>
+        MainThread.InvokeOnMainThreadAsync(() =>
         {
             ChatWebView.EvaluateJavaScriptAsync(
                 $"addMessage('{prefix}', `{escaped}`, '{color}');");
@@ -166,7 +166,7 @@ public partial class ChatPage : ContentPage
 
     private void AppendStreamBlock(string id)
     {
-        InvokeOnMainThreadAsync(() =>
+        MainThread.InvokeOnMainThreadAsync(() =>
         {
             ChatWebView.EvaluateJavaScriptAsync(
                 $"addStreamBlock('{id}');");
@@ -176,7 +176,7 @@ public partial class ChatPage : ContentPage
     private void UpdateStreamBlock(string id, string html)
     {
         var escaped = html.Replace("`", "\\`").Replace("$", "\\$");
-        InvokeOnMainThreadAsync(() =>
+        MainThread.InvokeOnMainThreadAsync(() =>
         {
             ChatWebView.EvaluateJavaScriptAsync(
                 $"updateStreamBlock('{id}', `{escaped}`);");
@@ -186,7 +186,7 @@ public partial class ChatPage : ContentPage
     private void FinalizeStreamBlock(string id, string html)
     {
         var escaped = html.Replace("`", "\\`").Replace("$", "\\$");
-        InvokeOnMainThreadAsync(() =>
+        MainThread.InvokeOnMainThreadAsync(() =>
         {
             ChatWebView.EvaluateJavaScriptAsync(
                 $"finalizeStreamBlock('{id}', `{escaped}`);");
@@ -229,7 +229,7 @@ public partial class ChatPage : ContentPage
 
     private async void OnBranch(object? sender, EventArgs e)
     {
-        var providers = _svc.DNA?.Evolution.CurrentGenome.Genes.Keys.Take(3).ToList();
+        var providers = new[] { "deepseek", "qwen", "openai" }.Take(3).ToList();
         if (providers == null || providers.Count < 2)
         {
             await DisplayAlert("Branch", "Need at least 2 models available", "OK");

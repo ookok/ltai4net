@@ -9,20 +9,18 @@ using LTAI.Core;
 using LTAI.Web;
 using LTAI.DNA;
 using LTAI.Tools;
-using LTAI.Sandbox;
+using LTAI.Infra.Sandbox;
 using LTAI.Planning.Metrics;
-using LTAI.Multimodal;
+using LTAI.Infra.Multimodal;
 using LTAI.Planning;
-using LTAI.Memory;
-using LTAI.Document;
+using LTAI.Knowledge.Memory;
+using LTAI.Knowledge.Document;
 using LTAI.Knowledge.Vector;
-using LTAI.Browser;
-using LTAI.Network;
-using LTAI.Economy;
-using LTAI.Agent;
-using LTAI.Tools;
+using LTAI.Infra.Browser;
+using LTAI.Infra.Network;
 using LTAI.Infra.Network.Interfaces;
 using LTAI.Infra.Network.Bridge;
+using LTAI.Economy;
 using LTAI.Core.Setup;
 using LTAI.Agent.Tools;
 using Microsoft.AspNetCore.RateLimiting;
@@ -104,14 +102,14 @@ builder.Services.AddLTAINetwork();
 
 var app = builder.Build();
 
-app.UseA2ABearerAuth();
+// app.UseA2ABearerAuth();  // requires A2AAuthExtensions (not yet migrated)
 app.UseLTAI();
 
 app.MapMAFEndpoints(); app.MapDNAEndpoints(); app.MapCapabilityEndpoints();
 app.MapSandboxEndpoints(); app.MapMultimodalEndpoints(); app.MapExecutionEndpoints();
 app.UseLTAIMetrics(); app.MapMCPEndpoints(); app.MapAHEEndpoints();
 app.MapNetworkEndpoints();
-app.MapSpecializedA2AEndpoints(); app.MapA2AHttpJson("LTAI", "/a2a/livingtree");
+// app.MapSpecializedA2AEndpoints(); app.MapA2AHttpJson("LTAI", "/a2a/livingtree");
 
 app.UseSerilogRequestLogging();
 
@@ -152,37 +150,37 @@ if (string.IsNullOrWhiteSpace(token))
 
 var toolRegistry = sp.GetRequiredService<AIToolRegistry>();
 
-sp.GetRequiredService<LTAI.MAF.Evolution.PluginRegistry>().Discover();
-await LTAI.MAF.Tools.ToolRegistryExtensions.RegisterAllToolCategoriesAsync(toolRegistry, logger);
-await LTAI.Tools.LTAIToolRegistry.SeedAllAsync(toolRegistry, sp);
-await sp.RegisterCodeActToolsAsync(toolRegistry);
+sp.GetRequiredService<LTAI.Agent.Evolution.PluginRegistry>().Discover();
+await LTAI.Agent.Tools.ToolRegistryExtensions.RegisterAllToolCategoriesAsync(toolRegistry, logger);
+// await LTAI.Core.Messaging.AIToolRegistry.SeedAllAsync(toolRegistry, sp);
+// await sp.RegisterCodeActToolsAsync(toolRegistry);
 
 await toolRegistry.RegisterAsync("git_diff", async args =>
 {
     var repoPath = args.TryGetValue("repoPath", out var r) ? r?.ToString() : null;
     var files = args.TryGetValue("files", out var f) ? f?.ToString() : null;
     var staged = args.TryGetValue("staged", out var s) && s is true;
-    return await LTAI.MAF.Tools.GitTools.GitDiff(repoPath, files, staged);
+    return await LTAI.Agent.Tools.GitTools.GitDiff(repoPath, files, staged);
 });
 await toolRegistry.RegisterAsync("git_log", async args =>
 {
     var repoPath = args.TryGetValue("repoPath", out var r) ? r?.ToString() : null;
     var maxCount = args.TryGetValue("maxCount", out var m) && int.TryParse(m?.ToString(), out var n) ? n : 20;
     var format = args.TryGetValue("format", out var f) ? f?.ToString() ?? "oneline" : "oneline";
-    return await LTAI.MAF.Tools.GitTools.GitLog(repoPath, maxCount, format);
+    return await LTAI.Agent.Tools.GitTools.GitLog(repoPath, maxCount, format);
 });
 await toolRegistry.RegisterAsync("git_blame", async args =>
 {
     var filePath = args.TryGetValue("filePath", out var fp) ? fp?.ToString() ?? "" : "";
     var repoPath = args.TryGetValue("repoPath", out var r) ? r?.ToString() : null;
-    return await LTAI.MAF.Tools.GitTools.GitBlame(filePath, repoPath);
+    return await LTAI.Agent.Tools.GitTools.GitBlame(filePath, repoPath);
 });
 
 var system = sp.GetRequiredService<LivingTreeSystem>();
 await system.InitializeAsync();
 
-sp.GetRequiredService<LTAI.MAF.Evolution.HarnessSnapshot>().Capture();
-sp.GetRequiredService<LTAI.MAF.Evolution.PluginRegistry>().Install("pr-review-toolkit", new()
+sp.GetRequiredService<LTAI.Agent.Evolution.HarnessSnapshot>().Capture();
+sp.GetRequiredService<LTAI.Agent.Evolution.PluginRegistry>().Install("pr-review-toolkit", new()
 {
     Name = "pr-review-toolkit", Version = "1.0", Type = "agent_bundle",
     Description = "6 specialized code review agents",
@@ -192,8 +190,8 @@ sp.GetRequiredService<LTAI.MAF.Evolution.PluginRegistry>().Install("pr-review-to
     Author = "LTAI", License = "MIT"
 });
 
-var evolEngine = sp.GetRequiredService<LTAI.MAF.Evolution.HarnessEvolutionEngine>();
-evolEngine.RegisterComponent(new LTAI.MAF.Evolution.ToolsHarnessComponent(sp.GetRequiredService<AIToolRegistry>()));
+var evolEngine = sp.GetRequiredService<LTAI.Agent.Evolution.HarnessEvolutionEngine>();
+evolEngine.RegisterComponent(new LTAI.Agent.Evolution.ToolsHarnessComponent(sp.GetRequiredService<AIToolRegistry>()));
 
 var p2pNode = sp.GetRequiredService<IP2PNode>();
 await p2pNode.StartAsync();
@@ -204,7 +202,7 @@ await a2aP2pBridge.BroadcastAgentStatusAsync("LTAI", "online");
 
 logger.LogInformation("LTAI running: mode={Mode} plugins={Plugins} tools={Tools}",
     system.Mode,
-    sp.GetRequiredService<LTAI.MAF.Evolution.PluginRegistry>().Plugins.Count,
+    sp.GetRequiredService<LTAI.Agent.Evolution.PluginRegistry>().Plugins.Count,
     sp.GetRequiredService<AIToolRegistry>().ListTools().Count());
 
 app.Run();
