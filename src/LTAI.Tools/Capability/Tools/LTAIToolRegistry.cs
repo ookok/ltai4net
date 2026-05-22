@@ -86,34 +86,6 @@ public static class LTAIToolRegistry
                 }
                 catch { return new { query, error = "Search failed", results }; }
             }),
-        new("stealth_browse", "Browse a URL using anti-detection stealth browser (bypasses Cloudflare/WAF/bot detection on government and protected sites). Use this for gov.cn, protected government sites, or when web_fetch/browser_browse return blocked/403 errors. Parameters: url (required), task (what to extract, default 'extract content')", "web",
-            async args =>
-            {
-                var url = Arg(args, "url");
-                if (string.IsNullOrWhiteSpace(url)) return new { error = "url parameter is required" };
-                try
-                {
-                    var agent = _serviceProvider?.GetService(typeof(LTAI.Infra.Browser.Interfaces.IBrowserAgent));
-                    if (agent is LTAI.Infra.Browser.Interfaces.IBrowserAgent ba)
-                    {
-                        var result = await ba.BrowseAsync(url, Arg(args, "task", "extract content"));
-                        return new { url, title = result.Title, text = result.Text?[..Math.Min(8000, result.Text?.Length ?? 0)] };
-                    }
-                    return new { url, error = "Stealth browser not available. Falling back to web_fetch for:", hint = "Try web_fetch instead" };
-                }
-                catch { return new { url, error = "Browse failed. Site may require different approach or is blocking all access." }; }
-            }),
-        new("browser_browse", "Open a URL and extract page content. Parameters: url (required)", "web",
-            async args =>
-            {
-                var url = Arg(args, "url");
-                if (string.IsNullOrWhiteSpace(url)) return new { error = "url parameter is required" };
-                using var http = LTAI.Core.Network.HttpAccelerator.CreateAcceleratedClient();
-                var html = await http.GetStringAsync(url);
-                var title = System.Text.RegularExpressions.Regex.Match(html, @"<title[^>]*>([^<]+)</title>", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-                var text = System.Text.RegularExpressions.Regex.Replace(html, @"<[^>]+>", " ").Replace("&nbsp;", " ");
-                return new { url, title = title.Success ? title.Groups[1].Value.Trim() : url, text = text[..Math.Min(8000, text.Length)] };
-            }),
         new("search_apis", "Search 1400+ public APIs by keyword", "web",
             async args => { await PublicApisResource.Instance.LoadAsync(); var r = PublicApisResource.Instance.Search(Arg(args, "query")); return r; }),
         new("platform_catalog", "List all 24 indexed content platforms (CSDN, Zhihu, WeChat, Toutiao, Xiaohongshu, Juejin, Bilibili, etc.) with descriptions and aliases. Use this to discover what platforms are available.", "web",
@@ -1055,9 +1027,7 @@ public static class LTAIToolRegistry
                 return new { error = "Self-refinement loop not available" };
             }),
 
-        // ═══ Browser & Shell — 2 new tools ═══
-        new("browser_screenshot", "Take a screenshot of the current browser page or a URL", "web",
-            async args => { var agent = _serviceProvider?.GetService(typeof(LTAI.Infra.Browser.Interfaces.IBrowserAgent)) as LTAI.Infra.Browser.Interfaces.IBrowserAgent; return agent != null ? await agent.ScreenshotAsync(Arg(args, "url")) : new { error = "Browser agent not available" }; }),
+        // ═══ Shell — 1 tool ═══
         new("shell_probe", "Discover available CLI tools on the system and their versions", "system",
             async _ => { LTAI.Core.System.ShellEnv.Instance.ProbeEnvironment(); return LTAI.Core.System.ShellEnv.Instance.Stats(); }),
 

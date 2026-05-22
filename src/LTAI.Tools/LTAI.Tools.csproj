@@ -30,7 +30,6 @@
   <ItemGroup>
     <ProjectReference Include="..\LTAI.Models\LTAI.Models.csproj" />
     <ProjectReference Include="..\LTAI.Core\LTAI.Core.csproj" />
-    <ProjectReference Include="..\LTAI.Infra\LTAI.Infra.csproj" />
   </ItemGroup>
 
 </Project>
