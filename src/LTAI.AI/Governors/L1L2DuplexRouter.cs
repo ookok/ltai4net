@@ -1,10 +1,10 @@
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.RegularExpressions;
-using LTAI.Capability.CodeGraph;
-using LTAI.Capability.Skills;
-using LTAI.Vector.Embedding;
-using LTAI.Vector.Knowledge;
+using LTAI.Tools.CodeGraph;
+using LTAI.Tools.Skills;
+using LTAI.Knowledge.Vector.Embedding;
+using LTAI.Knowledge.Core;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 

@@ -1,13 +1,13 @@
 using LTAI.AI;
 using LTAI.AI.Governors;
-using LTAI.Capability;
+using LTAI.Tools;
 using LTAI.Core;
 using LTAI.Core.Configuration;
 using LTAI.DNA;
-using LTAI.MAF;
+using LTAI.Agent;
 using LTAI.Memory;
-using LTAI.Metrics;
-using LTAI.Vector;
+using LTAI.Planning.Metrics;
+using LTAI.Knowledge.Vector;
 using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.Options;
 

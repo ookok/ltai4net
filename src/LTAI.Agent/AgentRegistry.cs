@@ -9,7 +9,7 @@ public sealed class AgentRegistry
     private readonly IAgentFactory _factory;
     private readonly ILogger<AgentRegistry> _logger;
 
-    public IReadOnlyList<AgentCard> Cards => _config.Agents;
+    public IReadOnlyList<LTAIAgentCard> Cards => _config.Agents;
 
     public AgentRegistry(AgentConfig config, IAgentFactory factory, ILogger<AgentRegistry> logger)
     {
@@ -29,7 +29,7 @@ public sealed class AgentRegistry
         }
     }
 
-    public AgentCard? GetCard(string name) =>
+    public LTAIAgentCard? GetCard(string name) =>
         _config.Agents.FirstOrDefault(a => a.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
 
     public IEnumerable<string> ListAgentNames() => _config.Agents.Select(a => a.Name);

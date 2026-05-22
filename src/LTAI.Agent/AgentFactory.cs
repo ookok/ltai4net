@@ -1,5 +1,7 @@
 using LTAI.Models;
+using LTAI.Agent.Middleware;
 using Microsoft.Agents.AI;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -51,7 +53,7 @@ public sealed class AgentFactory : IAgentFactory
                 loggerFactory.CreateLogger<Agents.ChatAgent>())
         };
 
-        ApplyMiddleware(agent, card);
+        agent = ApplyMiddleware(agent, card);
         _logger.LogInformation("AgentFactory: Created '{Name}' type={Type}", card.Name, card.Type);
         return agent;
     }
@@ -70,19 +72,33 @@ public sealed class AgentFactory : IAgentFactory
         return config.Agents.Select(card => GetOrCreate(card.Name));
     }
 
-    private void ApplyMiddleware(AIAgent agent, AgentCard card)
+    private AIAgent ApplyMiddleware(AIAgent agent, LTAIAgentCard card)
     {
+        var builder = agent.AsBuilder();
+
         foreach (var mwName in card.Middleware)
         {
-            AgentMiddleware? middleware = mwName switch
+            switch (mwName)
             {
-                "prompt_shield" => _sp.GetRequiredService<Middleware.PromptShieldMiddleware>(),
-                "input_classifier" => _sp.GetRequiredService<Middleware.InputClassifierMiddleware>(),
-                "dna_safety" => _sp.GetRequiredService<Middleware.DNASafetyMiddleware>(),
-                "output_review" => _sp.GetRequiredService<Middleware.OutputReviewMiddleware>(),
-                _ => null
-            };
-            if (middleware is not null) agent.Use(middleware);
+                case "prompt_shield":
+                    var promptShield = _sp.GetRequiredService<PromptShieldMiddleware>();
+                    builder.Use(promptShield.InvokeAsync, null);
+                    break;
+                case "input_classifier":
+                    var inputClassifier = _sp.GetRequiredService<InputClassifierMiddleware>();
+                    builder.Use(inputClassifier.InvokeAsync, null);
+                    break;
+                case "dna_safety":
+                    var dnaSafety = _sp.GetRequiredService<DNASafetyMiddleware>();
+                    builder.Use(dnaSafety.InvokeAsync, null);
+                    break;
+                case "output_review":
+                    var outputReview = _sp.GetRequiredService<OutputReviewMiddleware>();
+                    builder.Use(outputReview.InvokeAsync, null);
+                    break;
+            }
         }
+
+        return builder.Build();
     }
 }

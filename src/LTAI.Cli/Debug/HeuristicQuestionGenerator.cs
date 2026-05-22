@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 
-namespace LTAI.CLI.Debug;
+namespace LTAI.Cli.Debug;
 
 /// <summary>
 /// 测试用例难度级别

@@ -3,9 +3,9 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
-using LTAI.MAF.Tools;
+using LTAI.Agent.Tools;
 
-namespace LTAI.CLI.Improve;
+namespace LTAI.Cli.Improve;
 
 /// <summary>
 /// 论文核心创新点

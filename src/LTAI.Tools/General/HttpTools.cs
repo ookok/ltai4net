@@ -1,5 +1,5 @@
+using System.ComponentModel;
 using System.Net.Http.Json;
-using Microsoft.Agents.AI;
 
 namespace LTAI.Tools.General;
 
@@ -10,10 +10,9 @@ public static class HttpTools
         Timeout = TimeSpan.FromSeconds(30)
     };
 
-    [AIFunction("Fetches content from a URL")]
+    [Description("Fetches content from a URL")]
     public static async Task<string> FetchAsync(
-        [AIFunctionParameter("The URL to fetch", Required = true)]
-        string url,
+        [Description("The URL to fetch")] string url,
         CancellationToken ct = default)
     {
         try
@@ -32,12 +31,10 @@ public static class HttpTools
         }
     }
 
-    [AIFunction("Sends a POST request with JSON body")]
+    [Description("Sends a POST request with JSON body")]
     public static async Task<string> PostJsonAsync(
-        [AIFunctionParameter("The URL to post to", Required = true)]
-        string url,
-        [AIFunctionParameter("JSON string to send as the request body", Required = true)]
-        string jsonBody,
+        [Description("The URL to post to")] string url,
+        [Description("JSON string to send as the request body")] string jsonBody,
         CancellationToken ct = default)
     {
         try

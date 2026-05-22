@@ -1,16 +1,14 @@
+using System.ComponentModel;
 using System.Diagnostics;
-using Microsoft.Agents.AI;
 
 namespace LTAI.Tools.General;
 
 public static class ShellTools
 {
-    [AIFunction("Executes a shell command and returns the output")]
+    [Description("Executes a shell command and returns the output")]
     public static async Task<string> ExecuteAsync(
-        [AIFunctionParameter("The shell command to execute", Required = true)]
-        string command,
-        [AIFunctionParameter("Working directory for the command")]
-        string? workingDirectory = null,
+        [Description("The shell command to execute")] string command,
+        [Description("Working directory for the command")] string? workingDirectory = null,
         CancellationToken ct = default)
     {
         try
@@ -45,13 +43,13 @@ public static class ShellTools
         }
     }
 
-    [AIFunction("Gets the current working directory")]
+    [Description("Gets the current working directory")]
     public static string GetWorkingDirectory()
     {
         return Environment.CurrentDirectory;
     }
 
-    [AIFunction("Gets environment information (OS, runtime, architecture)")]
+    [Description("Gets environment information (OS, runtime, architecture)")]
     public static string GetEnvironmentInfo()
     {
         return $"OS: {Environment.OSVersion}\n"
@@ -61,10 +59,9 @@ public static class ShellTools
              + $"User: {Environment.UserName}";
     }
 
-    [AIFunction("Reads an environment variable")]
+    [Description("Reads an environment variable")]
     public static string? GetEnvironmentVariable(
-        [AIFunctionParameter("Name of the environment variable", Required = true)]
-        string name)
+        [Description("Name of the environment variable")] string name)
     {
         return Environment.GetEnvironmentVariable(name);
     }

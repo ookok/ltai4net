@@ -9,22 +9,16 @@
 
   <ItemGroup>
     <ProjectReference Include="..\LTAI.Core\LTAI.Core.csproj" />
+    <ProjectReference Include="..\LTAI.Models\LTAI.Models.csproj" />
     <ProjectReference Include="..\LTAI.AI\LTAI.AI.csproj" />
-    <ProjectReference Include="..\LTAI.Vector\LTAI.Vector.csproj" />
-    <ProjectReference Include="..\LTAI.Browser\LTAI.Browser.csproj" />
-    <ProjectReference Include="..\LTAI.Document\LTAI.Document.csproj" />
-    <ProjectReference Include="..\LTAI.Network\LTAI.Network.csproj" />
-    <ProjectReference Include="..\LTAI.Web\LTAI.Web.csproj" />
-    <ProjectReference Include="..\LTAI.MAF\LTAI.MAF.csproj" />
+    <ProjectReference Include="..\LTAI.Knowledge\LTAI.Knowledge.csproj" />
+    <ProjectReference Include="..\LTAI.Tools\LTAI.Tools.csproj" />
+    <ProjectReference Include="..\LTAI.Planning\LTAI.Planning.csproj" />
+    <ProjectReference Include="..\LTAI.Agent\LTAI.Agent.csproj" />
+    <ProjectReference Include="..\LTAI.Infra\LTAI.Infra.csproj" />
     <ProjectReference Include="..\LTAI.DNA\LTAI.DNA.csproj" />
-    <ProjectReference Include="..\LTAI.Capability\LTAI.Capability.csproj" />
-    <ProjectReference Include="..\LTAI.Sandbox\LTAI.Sandbox.csproj" />
-    <ProjectReference Include="..\LTAI.Metrics\LTAI.Metrics.csproj" />
-    <ProjectReference Include="..\LTAI.Multimodal\LTAI.Multimodal.csproj" />
-    <ProjectReference Include="..\LTAI.TreeLLM\LTAI.TreeLLM.csproj" />
-    <ProjectReference Include="..\LTAI.Execution\LTAI.Execution.csproj" />
-    <ProjectReference Include="..\LTAI.Memory\LTAI.Memory.csproj" />
     <ProjectReference Include="..\LTAI.Economy\LTAI.Economy.csproj" />
+    <ProjectReference Include="..\LTAI.Web\LTAI.Web.csproj" />
   </ItemGroup>
 
   <ItemGroup>

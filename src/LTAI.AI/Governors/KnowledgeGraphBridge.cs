@@ -1,7 +1,7 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
-using LTAI.Vector.Knowledge;
-using LTAI.Vector.Knowledge.Models;
+using LTAI.Knowledge.Core;
+using LTAI.Knowledge.Core.Models;
 using Microsoft.Extensions.Logging;
 
 namespace LTAI.AI.Governors;

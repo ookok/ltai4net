@@ -18,21 +18,21 @@ public enum AgentType
     Custom
 }
 
-public sealed class AgentCard
+public sealed class LTAIAgentCard
 {
-    public string Name { get; init; } = "agent";
-    public AgentType Type { get; init; } = AgentType.Chat;
-    public string Model { get; init; } = "";
-    public string Instructions { get; init; } = "";
-    public List<string> Middleware { get; init; } = new();
-    public List<string> Tools { get; init; } = new();
-    public Dictionary<string, object?> Options { get; init; } = new();
+    public string Name { get; set; } = "agent";
+    public AgentType Type { get; set; } = AgentType.Chat;
+    public string Model { get; set; } = "";
+    public string Instructions { get; set; } = "";
+    public List<string> Middleware { get; set; } = new();
+    public List<string> Tools { get; set; } = new();
+    public Dictionary<string, object?> Options { get; set; } = new();
 }
 
 public sealed class AgentConfig
 {
-    public List<AgentCard> Agents { get; init; } = new();
-    public Dictionary<string, object?> Global { get; init; } = new();
+    public List<LTAIAgentCard> Agents { get; set; } = new();
+    public Dictionary<string, object?> Global { get; set; } = new();
 }
 
 public sealed class DNAStatus

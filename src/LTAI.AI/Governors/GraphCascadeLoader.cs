@@ -1,5 +1,5 @@
 using System.Collections.Concurrent;
-using LTAI.Vector.Knowledge;
+using LTAI.Knowledge.Core;
 using Microsoft.Extensions.Logging;
 
 namespace LTAI.AI.Governors;

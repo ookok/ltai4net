@@ -1,3 +1,6 @@
+using System.Runtime.CompilerServices;
+using System.Text.Json;
+using LTAI.Models;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
@@ -6,6 +9,7 @@ namespace LTAI.Agent.Agents;
 
 public sealed class ReasoningAgent : AIAgent
 {
+    private readonly ChatClientAgent _inner;
     private readonly ILogger<ReasoningAgent> _logger;
     private readonly int _maxSearchDepth;
 
@@ -14,14 +18,9 @@ public sealed class ReasoningAgent : AIAgent
 
     public ReasoningAgent(
         IChatClient chatClient,
-        AgentCard card,
-        IEnumerable<AITool> reasoningTools,
+        LTAIAgentCard card,
+        IEnumerable<Microsoft.Extensions.AI.AITool> reasoningTools,
         ILogger<ReasoningAgent> logger)
-        : base(new ChatClientAgent(chatClient, new ChatClientAgentOptions
-        {
-            Name = card.Name,
-            Description = card.Instructions
-        }))
     {
         Name = card.Name;
         Description = card.Instructions;
@@ -29,8 +28,12 @@ public sealed class ReasoningAgent : AIAgent
 
         _maxSearchDepth = card.Options.TryGetValue("maxSearchDepth", out var d) && d is int depth ? depth : 5;
 
-        foreach (var tool in reasoningTools)
-            Tools.Add(tool);
+        _inner = chatClient.AsBuilder().BuildAIAgent(new ChatClientAgentOptions
+        {
+            Name = card.Name,
+            Description = card.Instructions,
+            ChatOptions = new() { Tools = reasoningTools.ToList() }
+        });
     }
 
     protected override async Task<AgentResponse> RunCoreAsync(
@@ -68,9 +71,34 @@ public sealed class ReasoningAgent : AIAgent
 
         _logger.LogInformation("ReasoningAgent [{Name}]: Deep reasoning, maxDepth={Depth}", Name, _maxSearchDepth);
 
-        var response = await _agent.RunAsync(enhancedMessages, session, options, cancellationToken);
+        var response = await _inner.RunAsync(enhancedMessages, session, options, cancellationToken);
 
         _logger.LogInformation("ReasoningAgent [{Name}]: Reasoning complete", Name);
         return response;
     }
+
+    protected override async IAsyncEnumerable<AgentResponseUpdate> RunCoreStreamingAsync(
+        IEnumerable<ChatMessage> messages,
+        AgentSession? session = null,
+        AgentRunOptions? options = null,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        await foreach (var update in _inner.RunStreamingAsync(messages, session, options, cancellationToken))
+            yield return update;
+    }
+
+    protected override ValueTask<AgentSession> CreateSessionCoreAsync(CancellationToken cancellationToken = default)
+        => _inner.CreateSessionAsync(cancellationToken);
+
+    protected override ValueTask<JsonElement> SerializeSessionCoreAsync(
+        AgentSession session,
+        JsonSerializerOptions? jsonSerializerOptions = null,
+        CancellationToken cancellationToken = default)
+        => _inner.SerializeSessionAsync(session, jsonSerializerOptions, cancellationToken);
+
+    protected override ValueTask<AgentSession> DeserializeSessionCoreAsync(
+        JsonElement serializedState,
+        JsonSerializerOptions? jsonSerializerOptions = null,
+        CancellationToken cancellationToken = default)
+        => _inner.DeserializeSessionAsync(serializedState, jsonSerializerOptions, cancellationToken);
 }

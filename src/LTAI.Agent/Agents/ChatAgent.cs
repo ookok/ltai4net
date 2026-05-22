@@ -1,3 +1,6 @@
+using System.Runtime.CompilerServices;
+using System.Text.Json;
+using LTAI.Models;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
@@ -6,6 +9,7 @@ namespace LTAI.Agent.Agents;
 
 public sealed class ChatAgent : AIAgent
 {
+    private readonly ChatClientAgent _inner;
     private readonly ILogger<ChatAgent> _logger;
 
     public override string Name { get; }
@@ -13,21 +17,20 @@ public sealed class ChatAgent : AIAgent
 
     public ChatAgent(
         IChatClient chatClient,
-        AgentCard card,
-        IEnumerable<AITool> tools,
+        LTAIAgentCard card,
+        IEnumerable<Microsoft.Extensions.AI.AITool> tools,
         ILogger<ChatAgent> logger)
-        : base(new ChatClientAgent(chatClient, new ChatClientAgentOptions
-        {
-            Name = card.Name,
-            Description = card.Instructions
-        }))
     {
         Name = card.Name;
         Description = card.Instructions;
         _logger = logger;
 
-        foreach (var tool in tools)
-            Tools.Add(tool);
+        _inner = chatClient.AsBuilder().BuildAIAgent(new ChatClientAgentOptions
+        {
+            Name = card.Name,
+            Description = card.Instructions,
+            ChatOptions = new() { Tools = tools.ToList() }
+        });
     }
 
     protected override async Task<AgentResponse> RunCoreAsync(
@@ -45,7 +48,31 @@ public sealed class ChatAgent : AIAgent
         _logger.LogInformation("ChatAgent [{Name}]: {Query}", Name,
             userMsg.Text?[..Math.Min(userMsg.Text?.Length ?? 0, 200)]);
 
-        var response = await _agent.RunAsync(messages, session, options, cancellationToken);
-        return response;
+        return await _inner.RunAsync(messages, session, options, cancellationToken);
     }
+
+    protected override async IAsyncEnumerable<AgentResponseUpdate> RunCoreStreamingAsync(
+        IEnumerable<ChatMessage> messages,
+        AgentSession? session = null,
+        AgentRunOptions? options = null,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        await foreach (var update in _inner.RunStreamingAsync(messages, session, options, cancellationToken))
+            yield return update;
+    }
+
+    protected override ValueTask<AgentSession> CreateSessionCoreAsync(CancellationToken cancellationToken = default)
+        => _inner.CreateSessionAsync(cancellationToken);
+
+    protected override ValueTask<JsonElement> SerializeSessionCoreAsync(
+        AgentSession session,
+        JsonSerializerOptions? jsonSerializerOptions = null,
+        CancellationToken cancellationToken = default)
+        => _inner.SerializeSessionAsync(session, jsonSerializerOptions, cancellationToken);
+
+    protected override ValueTask<AgentSession> DeserializeSessionCoreAsync(
+        JsonElement serializedState,
+        JsonSerializerOptions? jsonSerializerOptions = null,
+        CancellationToken cancellationToken = default)
+        => _inner.DeserializeSessionAsync(serializedState, jsonSerializerOptions, cancellationToken);
 }

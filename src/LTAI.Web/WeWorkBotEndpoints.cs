@@ -1,5 +1,5 @@
 using System.Text;
-using LTAI.Capability.Integration;
+using LTAI.Tools.Integration;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;

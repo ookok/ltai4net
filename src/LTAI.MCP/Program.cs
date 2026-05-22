@@ -2,14 +2,14 @@ using System.Text;
 using LTAI.AI;
 using LTAI.AI.Governors;
 using LTAI.AI.Providers;
-using LTAI.Capability;
+using LTAI.Tools;
 using LTAI.Core;
 using LTAI.Core.Configuration;
 using LTAI.Core.Interfaces;
 using LTAI.DNA;
+using LTAI.Infra.Sandbox;
+using LTAI.Knowledge.Vector;
 using LTAI.MCP;
-using LTAI.Sandbox;
-using LTAI.Vector;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -41,7 +41,6 @@ if (ltaiOptions.AI.Providers.Count == 0)
     ltaiOptions.AI.Providers["deepseek"] = new ProviderConfig { Endpoint = "https://api.deepseek.com", Model = "deepseek-chat" };
 }
 
-ltaiOptions.Web.RateLimitPerMinute = ltaiOptions.Web.RateLimitPerMinute > 0 ? ltaiOptions.Web.RateLimitPerMinute : 60;
 services.AddSingleton(Options.Create(ltaiOptions));
 
 services.AddLTAICore();

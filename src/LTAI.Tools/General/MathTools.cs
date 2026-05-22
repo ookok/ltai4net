@@ -1,13 +1,12 @@
-using Microsoft.Agents.AI;
+using System.ComponentModel;
 
 namespace LTAI.Tools.General;
 
 public static class MathTools
 {
-    [AIFunction("Evaluates a mathematical expression")]
+    [Description("Evaluates a mathematical expression")]
     public static string Evaluate(
-        [AIFunctionParameter("Mathematical expression to evaluate", Required = true)]
-        string expression)
+        [Description("Mathematical expression to evaluate")] string expression)
     {
         try
         {
@@ -21,11 +20,11 @@ public static class MathTools
         }
     }
 
-    [AIFunction("Performs basic arithmetic")]
+    [Description("Performs basic arithmetic")]
     public static string BasicMath(
-        [AIFunctionParameter("First number")] double a,
-        [AIFunctionParameter("Operation: add, subtract, multiply, divide, power")] string operation,
-        [AIFunctionParameter("Second number")] double b)
+        [Description("First number")] double a,
+        [Description("Operation: add, subtract, multiply, divide, power")] string operation,
+        [Description("Second number")] double b)
     {
         return operation.ToLowerInvariant() switch
         {
@@ -38,19 +37,19 @@ public static class MathTools
         };
     }
 
-    [AIFunction("Generates a random number in range")]
+    [Description("Generates a random number in range")]
     public static double Random(
-        [AIFunctionParameter("Minimum value (inclusive)")] double min = 0,
-        [AIFunctionParameter("Maximum value (exclusive)")] double max = 1)
+        [Description("Minimum value (inclusive)")] double min = 0,
+        [Description("Maximum value (exclusive)")] double max = 1)
     {
         return System.Random.Shared.NextDouble() * (max - min) + min;
     }
 
-    [AIFunction("Converts between units")]
+    [Description("Converts between units")]
     public static string Convert(
-        [AIFunctionParameter("Value to convert")] double value,
-        [AIFunctionParameter("Source unit (e.g. km, m, cm, mi, ft)")] string fromUnit,
-        [AIFunctionParameter("Target unit")] string toUnit)
+        [Description("Value to convert")] double value,
+        [Description("Source unit (e.g. km, m, cm, mi, ft)")] string fromUnit,
+        [Description("Target unit")] string toUnit)
     {
         var meters = fromUnit.ToLowerInvariant() switch
         {

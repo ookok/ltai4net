@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 
-namespace LTAI.CLI.Improve;
+namespace LTAI.Cli.Improve;
 
 /// <summary>
 /// 改革方案

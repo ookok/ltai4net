@@ -2,7 +2,7 @@ using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using LTAI.Vector.Knowledge;
+using LTAI.Knowledge.Core;
 using Microsoft.Extensions.Logging;
 
 namespace LTAI.AI.Governors;
@@ -279,7 +279,7 @@ public sealed class GraphPackageManager
 
         try
         {
-            var graph = new KnowledgeGraph(graphLogger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<KnowledgeGraph>.Instance);
+            var graph = new LTAI.Knowledge.Core.KnowledgeGraph(graphLogger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<KnowledgeGraph>.Instance);
             graph.LoadFromDisk(packageInfo.LocalPath);
 
             _logger.LogInformation(

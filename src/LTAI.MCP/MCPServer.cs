@@ -1,5 +1,6 @@
 using System.Text.Json;
 using LTAI.Core.Messaging;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 
 namespace LTAI.MCP;
@@ -71,9 +72,7 @@ public sealed class MCPServer
         {
             var name = (tool as AIFunction)?.Name ?? tool.GetType().Name;
             var desc = (tool as AIFunction)?.Description ?? $"LTAI tool: {name}";
-            var schemaJson = tool.JsonSchema != null
-                ? JsonSerializer.Serialize(tool.JsonSchema)
-                : $$"""{"type":"object","properties":{"query":{"type":"string","description":"Input for {{name}} tool"}}}""";
+            var schemaJson = JsonSerializer.Serialize(new { type = "object", properties = new { query = new { type = "string", description = $"Input for {name} tool" } } });
 
             mcpTools.Add(new MCPTool
             {

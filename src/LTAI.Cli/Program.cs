@@ -5,9 +5,9 @@ using System.CommandLine.Parsing;
 using System.IO;
 using System.Text;
 using System.Threading.Tasks;
-using LTAI.CLI.Debug;
-using LTAI.CLI.Improve;
-using LTAI.CLI.Model;
+using LTAI.Cli.Debug;
+using LTAI.Cli.Improve;
+using LTAI.Cli.Model;
 using LTAI.Core.Setup;
 
 namespace LTAI.Cli;

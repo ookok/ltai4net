@@ -38,7 +38,7 @@ public static class ServiceCollectionExtensions
         return services;
     }
 
-    private static AIAgent CreateAgent(IServiceProvider sp, AgentCard card)
+    private static AIAgent CreateAgent(IServiceProvider sp, LTAIAgentCard card)
     {
         var loggerFactory = sp.GetRequiredService<ILoggerFactory>();
         var chatClient = sp.GetRequiredService<IChatClient>();
@@ -58,25 +58,37 @@ public static class ServiceCollectionExtensions
                 loggerFactory.CreateLogger<ChatAgent>())
         };
 
-        ApplyMiddleware(agent, card, sp);
-        return agent;
+        return ApplyMiddleware(agent, card, sp);
     }
 
-    private static void ApplyMiddleware(AIAgent agent, AgentCard card, IServiceProvider sp)
+    private static AIAgent ApplyMiddleware(AIAgent agent, LTAIAgentCard card, IServiceProvider sp)
     {
+        var builder = agent.AsBuilder();
+
         foreach (var mwName in card.Middleware)
         {
-            AgentMiddleware? middleware = mwName switch
+            switch (mwName)
             {
-                "prompt_shield" => sp.GetRequiredService<PromptShieldMiddleware>(),
-                "input_classifier" => sp.GetRequiredService<InputClassifierMiddleware>(),
-                "dna_safety" => sp.GetRequiredService<DNASafetyMiddleware>(),
-                "output_review" => sp.GetRequiredService<OutputReviewMiddleware>(),
-                _ => null
-            };
-            if (middleware is not null)
-                agent.Use(middleware);
+                case "prompt_shield":
+                    var promptShield = sp.GetRequiredService<PromptShieldMiddleware>();
+                    builder.Use(promptShield.InvokeAsync, null);
+                    break;
+                case "input_classifier":
+                    var inputClassifier = sp.GetRequiredService<InputClassifierMiddleware>();
+                    builder.Use(inputClassifier.InvokeAsync, null);
+                    break;
+                case "dna_safety":
+                    var dnaSafety = sp.GetRequiredService<DNASafetyMiddleware>();
+                    builder.Use(dnaSafety.InvokeAsync, null);
+                    break;
+                case "output_review":
+                    var outputReview = sp.GetRequiredService<OutputReviewMiddleware>();
+                    builder.Use(outputReview.InvokeAsync, null);
+                    break;
+            }
         }
+
+        return builder.Build();
     }
 
     private static AITool[] ResolveTools(IServiceProvider sp, List<string> toolNames)
@@ -94,7 +106,7 @@ public static class ServiceCollectionExtensions
     {
         var config = new AgentConfig();
         var lines = yaml.Split('\n');
-        AgentCard? currentAgent = null;
+        LTAIAgentCard? currentAgent = null;
         string currentSection = "";
         var currentTools = new List<string>();
         var currentMiddleware = new List<string>();
@@ -115,7 +127,7 @@ public static class ServiceCollectionExtensions
             if (trimmed.StartsWith("- name:") && currentSection == "agents")
             {
                 FinalizeCurrentAgent();
-                currentAgent = new AgentCard { Name = trimmed[8..].Trim() };
+                currentAgent = new LTAIAgentCard { Name = trimmed[8..].Trim() };
                 currentTools.Clear();
                 currentMiddleware.Clear();
                 currentOptions.Clear();

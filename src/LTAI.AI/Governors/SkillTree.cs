@@ -1,4 +1,4 @@
-using LTAI.Capability.Skills;
+using LTAI.Tools.Skills;
 using Microsoft.Extensions.Logging;
 
 namespace LTAI.AI.Governors;

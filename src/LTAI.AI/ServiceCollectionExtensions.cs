@@ -1,10 +1,10 @@
 using System.ClientModel;
 using LTAI.AI.Governors;
 using LTAI.AI.Providers;
-using LTAI.Capability.Skills;
+using LTAI.Tools.Skills;
 using LTAI.Core.Configuration;
 using LTAI.Core.Messaging;
-using LTAI.Vector.Knowledge;
+using LTAI.Knowledge.Core;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -70,7 +70,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<KnowledgeGraph>(sp =>
         {
             var logger = sp.GetService<ILogger<KnowledgeGraph>>();
-            var graph = new KnowledgeGraph(logger!);
+            var graph = new LTAI.Knowledge.Core.KnowledgeGraph(logger!);
             var graphPath = System.IO.Path.Combine(AppContext.BaseDirectory, ".livingtree", "knowledge_graph.json");
             if (System.IO.File.Exists(graphPath))
                 graph.LoadFromDisk(graphPath);
@@ -178,7 +178,6 @@ public static class ServiceCollectionExtensions
             var logger = sp.GetService<ILogger<CostAwareRouter>>();
             return new CostAwareRouter(options, logger);
         });
-        services.AddSingleton<UserContextTracker>();
         services.AddSingleton<KnowledgeGapDetector>(sp =>
         {
             var metaCognition = sp.GetRequiredService<MetaCognitiveLayer>();
@@ -483,18 +482,10 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<InputGovernor>();
         services.AddSingleton<ContextGovernor>();
         services.AddSingleton<RoutingGovernor>();
-        services.AddSingleton<CapabilityGovernor>();
-        services.AddSingleton<StorageGovernor>();
         services.AddSingleton<OutputGovernor>();
-        services.AddSingleton<CommunicationGovernor>();
-        services.AddSingleton<TaskGovernor>();
         services.AddSingleton<SelfGovernor>();
-        services.AddSingleton<EvolutionGovernor>();
         services.AddSingleton<SystemGuardian>();
         services.AddSingleton<LivingTreeSystem>();
-
-        services.AddSingleton<PathCompressor>();
-        services.AddSingleton<QValueEstimator>();
 
         return services;
     }

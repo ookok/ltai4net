@@ -9,7 +9,7 @@ using System.Threading.Tasks;
 using LTAI.Core.Governors;
 using LTAI.Core.Setup;
 
-namespace LTAI.CLI.Model;
+namespace LTAI.Cli.Model;
 
 internal static class ModelMode
 {

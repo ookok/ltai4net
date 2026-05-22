@@ -11,10 +11,11 @@
   <ItemGroup>
     <ProjectReference Include="..\LTAI.Core\LTAI.Core.csproj" />
     <ProjectReference Include="..\LTAI.AI\LTAI.AI.csproj" />
-    <ProjectReference Include="..\LTAI.Vector\LTAI.Vector.csproj" />
+    <ProjectReference Include="..\LTAI.Knowledge\LTAI.Knowledge.csproj" />
     <ProjectReference Include="..\LTAI.DNA\LTAI.DNA.csproj" />
-    <ProjectReference Include="..\LTAI.Capability\LTAI.Capability.csproj" />
-    <ProjectReference Include="..\LTAI.Sandbox\LTAI.Sandbox.csproj" />
+    <ProjectReference Include="..\LTAI.Tools\LTAI.Tools.csproj" />
+    <ProjectReference Include="..\LTAI.Infra\LTAI.Infra.csproj" />
+    <ProjectReference Include="..\LTAI.Models\LTAI.Models.csproj" />
   </ItemGroup>
 
   <ItemGroup>

@@ -2,9 +2,9 @@
 
   <ItemGroup>
     <ProjectReference Include="..\LTAI.Core\LTAI.Core.csproj" />
-    <ProjectReference Include="..\LTAI.Vector\LTAI.Vector.csproj" />
+    <ProjectReference Include="..\LTAI.Knowledge\LTAI.Knowledge.csproj" />
     <ProjectReference Include="..\LTAI.DNA\LTAI.DNA.csproj" />
-    <ProjectReference Include="..\LTAI.Capability\LTAI.Capability.csproj" />
+    <ProjectReference Include="..\LTAI.Tools\LTAI.Tools.csproj" />
     <ProjectReference Include="..\LTAI.Economy\LTAI.Economy.csproj" />
   </ItemGroup>
 

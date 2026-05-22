@@ -1,6 +1,6 @@
 using System.Collections.Concurrent;
-using LTAI.Vector.Knowledge;
-using LTAI.Vector.Knowledge.Models;
+using LTAI.Knowledge.Core;
+using LTAI.Knowledge.Core.Models;
 using Microsoft.Extensions.Logging;
 
 namespace LTAI.AI.Governors;
@@ -97,7 +97,7 @@ public sealed class DomainGraphRegistry : IDisposable
         }
 
         // 创建空图谱
-        var newGraph = new KnowledgeGraph(
+        var newGraph = new LTAI.Knowledge.Core.KnowledgeGraph(
             Microsoft.Extensions.Logging.Abstractions.NullLogger<KnowledgeGraph>.Instance);
 
         _loadedGraphs[domain] = newGraph;
@@ -143,7 +143,7 @@ public sealed class DomainGraphRegistry : IDisposable
 
             // 尝试从磁盘加载
             var graphPath = GetGraphPath(domain);
-            var graph = new KnowledgeGraph(
+            var graph = new LTAI.Knowledge.Core.KnowledgeGraph(
                 Microsoft.Extensions.Logging.Abstractions.NullLogger<KnowledgeGraph>.Instance);
 
             if (File.Exists(graphPath))

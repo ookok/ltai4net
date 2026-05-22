@@ -5,7 +5,7 @@ using LTAI.Core.Interfaces;
 using LTAI.Core.Messaging;
 using LTAI.Core.Models;
 using LTAI.DNA;
-using LTAI.Capability.Reasoning;
+using LTAI.Tools.Reasoning;
 using LTAI.AI.Providers;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
@@ -27,18 +27,18 @@ public sealed class LivingTreeSystem
     private readonly InputGovernor _input;
     private readonly ContextGovernor _context;
     private readonly RoutingGovernor _routing;
-    private readonly CapabilityGovernor _capability;
-    private readonly StorageGovernor _storage;
     private readonly OutputGovernor _output;
-    private readonly CommunicationGovernor _communication;
-    private readonly TaskGovernor _task;
     private readonly SelfGovernor _self;
-    private readonly EvolutionGovernor _evolution;
     private readonly SystemGuardian _guardian;
     private readonly ReasoningOrchestrator? _reasoning;
     private readonly L1L2DuplexRouter? _duplexRouter;
     private readonly SynapticMemory? _synapticMemory;
     private readonly DreamCycle? _dreamCycle;
+
+    private readonly BAVTRouter _bavtRouter = new(100.0);
+    private readonly ERLLoop _erlLoop = new();
+    private readonly ElasticMemoryOrchestrator _elasticMemory = new();
+    private readonly StructuredReflectionEngine _reflectionEngine = new();
 
     private string DefaultModel => _options.Value.AI.L2.Model;
     private string FlashModel => _options.Value.AI.L1.Model;
@@ -64,21 +64,16 @@ public sealed class LivingTreeSystem
         ICognitiveMesh mesh,
         TaskJournal journal,
         IChatClient llm,
-        ProviderFanOutRace? fanOut,
-        AIToolRegistry toolRegistry,
-        ILogger<LivingTreeSystem> logger,
         IOptions<LTAIOptions> options,
         InputGovernor input,
         ContextGovernor context,
         RoutingGovernor routing,
-        CapabilityGovernor capability,
-        StorageGovernor storage,
         OutputGovernor output,
-        CommunicationGovernor communication,
-        TaskGovernor task,
         SelfGovernor self,
-        EvolutionGovernor evolution,
         SystemGuardian guardian,
+        AIToolRegistry toolRegistry,
+        ILogger<LivingTreeSystem> logger,
+        ProviderFanOutRace? fanOut = null,
         DNAOrchestrator? dna = null,
         ReasoningOrchestrator? reasoning = null,
         L1L2DuplexRouter? duplexRouter = null,
@@ -95,13 +90,8 @@ public sealed class LivingTreeSystem
         _input = input;
         _context = context;
         _routing = routing;
-        _capability = capability;
-        _storage = storage;
         _output = output;
-        _communication = communication;
-        _task = task;
         _self = self;
-        _evolution = evolution;
         _guardian = guardian;
         _dna = dna;
         _reasoning = reasoning;
@@ -115,16 +105,11 @@ public sealed class LivingTreeSystem
         await _mesh.RegisterAsync(_input, cancellationToken);
         await _mesh.RegisterAsync(_context, cancellationToken);
         await _mesh.RegisterAsync(_routing, cancellationToken);
-        await _mesh.RegisterAsync(_capability, cancellationToken);
-        await _mesh.RegisterAsync(_storage, cancellationToken);
         await _mesh.RegisterAsync(_output, cancellationToken);
-        await _mesh.RegisterAsync(_communication, cancellationToken);
-        await _mesh.RegisterAsync(_task, cancellationToken);
         await _mesh.RegisterAsync(_self, cancellationToken);
-        await _mesh.RegisterAsync(_evolution, cancellationToken);
 
         _guardian.StartMonitoring(TimeSpan.FromSeconds(15));
-        _logger.LogInformation("LivingTreeSystem initialized with 10 governors, DNA: {DNA}",
+        _logger.LogInformation("LivingTreeSystem v6.0 initialized with 5 governors, DNA: {DNA}",
             _dna != null ? "enabled" : "disabled");
     }
 
@@ -157,12 +142,13 @@ public sealed class LivingTreeSystem
                 }
             }
 
-            var response = await ProcessAsync(query, cancellationToken);
-            _journal.Complete(entry, response[..Math.Min(response.Length, 500)]);
+            var response = await ProcessTypedAsync(GovernorInput.Create(query), cancellationToken);
+            _journal.Complete(entry, response.Response[..Math.Min(response.Response.Length, 500)]);
 
+            var reply = response.Response;
             _ = Task.Run(async () =>
             {
-                try { await SilentSelfCheckAsync(response); }
+                try { await SilentSelfCheckAsync(reply); }
                 catch (Exception ex) { _logger.LogDebug(ex, "Silent self-check failed"); }
             }, cancellationToken).ContinueWith(t =>
             {
@@ -170,18 +156,12 @@ public sealed class LivingTreeSystem
                     _logger.LogDebug(t.Exception, "Silent self-check background task failed");
             }, TaskContinuationOptions.OnlyOnFaulted);
 
-            if (_dna != null && !string.IsNullOrEmpty(response))
+            if (_dna != null && !string.IsNullOrEmpty(reply))
             {
                 _ = Task.Run(async () =>
                 {
-                    try
-                    {
-                        await _dna.ProcessAsync(query, response, cancellationToken);
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogDebug(ex, "DNA background process failed");
-                    }
+                    try { await _dna.ProcessAsync(query, reply, cancellationToken); }
+                    catch (Exception ex) { _logger.LogDebug(ex, "DNA background process failed"); }
                 }, cancellationToken).ContinueWith(t =>
                 {
                     if (t.IsFaulted && t.Exception != null)
@@ -189,7 +169,7 @@ public sealed class LivingTreeSystem
                 }, TaskContinuationOptions.OnlyOnFaulted);
             }
 
-            return response;
+            return reply;
         }
         catch (Exception ex)
         {
@@ -204,9 +184,6 @@ public sealed class LivingTreeSystem
         string query,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        var model = "";
-        List<ChatMessage> messages;
-
         if (_guardian.Mode == SystemMode.LifeSupport)
         {
             yield return await _guardian.EmergencyChatAsync(query, cancellationToken);
@@ -233,6 +210,7 @@ public sealed class LivingTreeSystem
             }
         }
 
+        var model = DefaultModel;
         try
         {
             var routingResult = await _routing.ProcessAsync(new Handshake
@@ -240,26 +218,18 @@ public sealed class LivingTreeSystem
                 To = "routing", Action = "select_provider",
                 Payload = new Dictionary<string, object?> { ["query"] = query }
             }, cancellationToken);
-
             model = routingResult.Payload?.GetValueOrDefault("model")?.ToString() ?? DefaultModel;
         }
-        catch
-        {
-            model = DefaultModel;
-        }
+        catch { }
 
         var streamOptions = new ChatOptions { ModelId = model, Temperature = 0.3f, MaxOutputTokens = 4096, Tools = _toolRegistry.GetTools().ToList() };
-        messages = new List<ChatMessage> { new(ChatRole.User, query) }; 
+        var messages = new List<ChatMessage> { new(ChatRole.User, query) };
 
         IAsyncEnumerable<ChatResponseUpdate> streamResponse;
         try { streamResponse = _llm.GetStreamingResponseAsync(messages, streamOptions, cancellationToken); }
         catch (Exception ex) { streamResponse = null!; _logger.LogError(ex, "Stream init failed"); }
 
-        if (streamResponse == null)
-        {
-            yield return "Error connecting to provider.";
-            yield break;
-        }
+        if (streamResponse == null) { yield return "Error connecting to provider."; yield break; }
 
         await foreach (var update in streamResponse)
         {
@@ -269,22 +239,16 @@ public sealed class LivingTreeSystem
     }
 
     public async IAsyncEnumerable<string> StreamWithModelAsync(
-        string query,
-        string modelId,
+        string query, string modelId,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         var modelOptions = new ChatOptions { ModelId = modelId, Temperature = 0.3f, MaxOutputTokens = 4096, Tools = _toolRegistry.GetTools().ToList() };
         var modelMessages = new List<ChatMessage> { new(ChatRole.User, query) };
+
         IAsyncEnumerable<ChatResponseUpdate> modelStream;
-
         try { modelStream = _llm.GetStreamingResponseAsync(modelMessages, modelOptions, cancellationToken); }
-        catch { modelStream = null!; }
-
-        if (modelStream == null)
-        {
-            yield return $"Error: model {modelId} unavailable";
-            yield break;
-        }
+        catch (Exception ex) { _logger.LogError(ex, "StreamWithModel init failed for {Model}", modelId); yield break; }
+        if (modelStream == null) yield break;
 
         await foreach (var update in modelStream)
         {
@@ -293,17 +257,11 @@ public sealed class LivingTreeSystem
         }
     }
 
-    public async Task<string> ProcessAsync(string query, CancellationToken cancellationToken = default)
-    {
-        var result = await ProcessTypedAsync(GovernorInput.Create(query), cancellationToken);
-        return result.Response;
-    }
-
     public async Task<GovernorOutput> ProcessTypedAsync(GovernorInput input, CancellationToken cancellationToken = default)
     {
         var traceId = input.TraceId;
-
         var query = input.Query;
+
         if (_journal.TryConsumeMessage(out var humanMessage) && humanMessage != null)
         {
             _logger.LogInformation("Human message injected: {Message}", humanMessage[..Math.Min(humanMessage.Length, 100)]);
@@ -313,14 +271,8 @@ public sealed class LivingTreeSystem
 
         if (_dna != null)
         {
-            try
-            {
-                await _dna.Consciousness.ProcessExperienceAsync(query, cancellationToken: cancellationToken);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogDebug(ex, "DNA consciousness processing skipped");
-            }
+            try { await _dna.Consciousness.ProcessExperienceAsync(query, cancellationToken: cancellationToken); }
+            catch (Exception ex) { _logger.LogDebug(ex, "DNA consciousness processing skipped"); }
         }
 
         var inputResult = await _input.ProcessAsync(new Handshake
@@ -331,54 +283,37 @@ public sealed class LivingTreeSystem
         }, cancellationToken);
 
         if (inputResult.Action == "reflex")
-            return GovernorOutput.Reflex(
-                inputResult.Payload?.GetValueOrDefault("command")?.ToString() ?? "",
-                traceId);
+            return GovernorOutput.Reflex(inputResult.Payload?.GetValueOrDefault("command")?.ToString() ?? "", traceId);
 
         var label = inputResult.Payload?.GetValueOrDefault("label")?.ToString() ?? "deep";
-        var complexity = inputResult.Payload?.GetValueOrDefault("complexity") is float c ? c : 0.5f;
-        var emotion = inputResult.Payload?.GetValueOrDefault("emotion")?.ToString();
 
         if (_duplexRouter != null)
         {
             var routeResult = _duplexRouter.Route(query);
             if (routeResult.CanAnswerLocally)
             {
-                _logger.LogInformation("L1 answered locally: route={Route}, confidence={Conf:F2}",
-                    routeResult.Route, routeResult.Confidence);
+                _erlLoop.RecordTrial(query[..Math.Min(query.Length, 60)], routeResult.LocalResponse, "l1_success", 0.8, true);
                 return GovernorOutput.Success(routeResult.LocalResponse, traceId);
             }
 
             if (routeResult.Route == "delegate_l2")
             {
-                var duplexContextResult = await _context.ProcessAsync(new Handshake
+                var ctxResult = await _context.ProcessAsync(new Handshake
                 {
                     To = "context", Action = "preload",
                     Payload = inputResult.Payload, ReplyTo = traceId
                 }, cancellationToken);
 
-                var duplexContext = duplexContextResult.Payload?.GetValueOrDefault("context")?.ToString() ?? "";
-                var fullQuery = string.IsNullOrEmpty(duplexContext) ? query : $"Context:\n{duplexContext}\n\nQuery: {query}";
-
+                var ctx = ctxResult.Payload?.GetValueOrDefault("context")?.ToString() ?? "";
+                var fullQuery = string.IsNullOrEmpty(ctx) ? query : $"Context:\n{ctx}\n\nQuery: {query}";
                 var teachingResult = await _duplexRouter.RequestL2ReasoningAsync(fullQuery, routeResult, cancellationToken);
                 if (teachingResult != null)
                 {
                     _duplexRouter.LearnFromL2(query, teachingResult);
-                    _logger.LogInformation("L2 teaching received, L1 learned from teacher");
-
-                    var duplexOutputResult = await _output.ProcessAsync(new Handshake
-                    {
-                        To = "output", Action = "review",
-                        Payload = new Dictionary<string, object?> { ["response"] = teachingResult.Answer },
-                        ReplyTo = traceId
-                    }, cancellationToken);
-
                     _context.AddTurn(query, teachingResult.Answer);
-                    var finalResponse = duplexOutputResult.Payload?.GetValueOrDefault("response")?.ToString() ?? teachingResult.Answer;
-
-                    _duplexRouter.CacheResponse(query, finalResponse, "delegate_l2", "general", routeResult.Confidence);
-
-                    return GovernorOutput.Success(finalResponse, traceId);
+                    _duplexRouter.CacheResponse(query, teachingResult.Answer, "delegate_l2", "general", routeResult.Confidence);
+                    _erlLoop.RecordTrial(query[..Math.Min(query.Length, 60)], teachingResult.Answer, "l2_teaching", 0.9, true);
+                    return GovernorOutput.Success(teachingResult.Answer, traceId);
                 }
             }
         }
@@ -388,6 +323,9 @@ public sealed class LivingTreeSystem
             To = "context", Action = "preload",
             Payload = inputResult.Payload, ReplyTo = traceId
         }, cancellationToken);
+
+        var preloadedContext = contextResult.Payload?.GetValueOrDefault("context")?.ToString() ?? "";
+        _elasticMemory.Store($"ctx_{traceId}", preloadedContext[..Math.Min(preloadedContext.Length, 500)]);
 
         var routingResult = await _routing.ProcessAsync(new Handshake
         {
@@ -400,40 +338,44 @@ public sealed class LivingTreeSystem
         var context = contextResult.Payload?.GetValueOrDefault("context")?.ToString() ?? "";
         var fullPrompt = string.IsNullOrEmpty(context) ? query : $"Context:\n{context}\n\nQuery: {query}";
 
+        if (_bavtRouter.BudgetRatio < 0.1)
+        {
+            _logger.LogWarning("BAVT: budget nearly exhausted (ratio={Ratio:F2}), using fast path", _bavtRouter.BudgetRatio);
+            var fastResp = await _llm.GetResponseAsync(fullPrompt, new ChatOptions { ModelId = FlashModel, Temperature = 0.3f }, cancellationToken);
+            _erlLoop.RecordTrial(query[..Math.Min(query.Length, 60)], fastResp.Text ?? "", "budget_fast", 0.5, true);
+            return GovernorOutput.Success(fastResp.Text ?? "", traceId);
+        }
+
         string response;
         var options = new ChatOptions { ModelId = model, Temperature = temperature, MaxOutputTokens = 4096, Tools = _toolRegistry.GetTools().ToList() };
 
         try
         {
-            if (label == "fast" || label == "reflex")
+            response = label switch
             {
-                var fastResponse = await _llm.GetResponseAsync(fullPrompt, options, cancellationToken);
-                response = fastResponse.Text ?? "";
-            }
-            else if (_fanOut != null)
-            {
-                var fanOutResult = await _fanOut.RaceAsync(fullPrompt, maxConcurrent: 3, cancellationToken: cancellationToken);
-                response = fanOutResult.Answer;
-                _logger.LogDebug("Fan-out race winner: {Provider} ({Latency}ms)", fanOutResult.WinningProvider, fanOutResult.LatencyMs);
-            }
-            else
-            {
-                response = await CollaborativeChatAsync(fullPrompt, options, cancellationToken);
-            }
+                "fast" or "reflex" => (await _llm.GetResponseAsync(fullPrompt, options, cancellationToken)).Text ?? "",
+                _ when _fanOut != null => (await _fanOut.RaceAsync(fullPrompt, maxConcurrent: 3, cancellationToken: cancellationToken)).Answer,
+                _ => await CollaborativeChatAsync(fullPrompt, options, cancellationToken)
+            };
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             var fallbackModel = GetDegradedModel(model);
             if (fallbackModel != model)
             {
-                _logger.LogWarning("Model {Model} failed, falling back to {Fallback}: {Error}", model, fallbackModel, ex.Message);
+                var reflection = _reflectionEngine.Reflect(model, ex.Message, 1);
+                _logger.LogWarning("Model {Model} failed, reflection={Action} fallback={Fallback}: {Error}",
+                    model, reflection.Action, fallbackModel, ex.Message);
                 options.ModelId = fallbackModel;
                 options.Temperature = 0.3f;
-                var fallbackResponse = await _llm.GetResponseAsync(fullPrompt, options, cancellationToken);
-                response = fallbackResponse.Text ?? "";
+                response = (await _llm.GetResponseAsync(fullPrompt, options, cancellationToken)).Text ?? "";
             }
             else { throw; }
         }
+
+        _bavtRouter.Spend(1.0);
+        _erlLoop.RecordTrial(query[..Math.Min(query.Length, 60)], response[..Math.Min(response.Length, 100)], "l2_response", 0.7, true);
+        _elasticMemory.Store($"lts_{traceId}", response[..Math.Min(response.Length, 200)]);
 
         if (_dna != null)
         {
@@ -441,10 +383,7 @@ public sealed class LivingTreeSystem
             {
                 var outputSafety = await _dna.Safety.EvaluateOutputAsync(response, cancellationToken);
                 if (!outputSafety.Allowed)
-                {
-                    _logger.LogWarning("DNA safety blocked output: {Reason}", outputSafety.BlockReason);
                     return GovernorOutput.Blocked(outputSafety.BlockReason);
-                }
             }
             catch (Exception ex) { _logger.LogDebug(ex, "DNA output safety check skipped"); }
         }
@@ -459,7 +398,7 @@ public sealed class LivingTreeSystem
         _context.AddTurn(query, response);
         response = outputResult.Payload?.GetValueOrDefault("response")?.ToString() ?? response;
 
-        _duplexRouter?.CacheResponse(query, response, label, "general", complexity);
+        _duplexRouter?.CacheResponse(query, response, label, "general", 0.7f);
 
         if (_reasoning != null && !string.IsNullOrEmpty(response))
         {
@@ -469,12 +408,8 @@ public sealed class LivingTreeSystem
 
         _synapticMemory?.Store(new SynapticExperience
         {
-            Type = SynapseType.Interaction,
-            Query = query,
-            Response = response,
-            Label = label,
-            Confidence = complexity,
-            Reward = 0.7f,
+            Type = SynapseType.Interaction, Query = query, Response = response,
+            Label = label, Confidence = 0.7f, Reward = 0.7f,
             Metadata = $"model={model},trace={traceId}"
         });
 
@@ -482,33 +417,25 @@ public sealed class LivingTreeSystem
 
         _ = Task.Run(async () =>
         {
-            try
+            try { await _self.ProcessAsync(new Handshake
             {
-                await _self.ProcessAsync(new Handshake
-                {
-                    To = "self", Action = "start_trace",
-                    Payload = new Dictionary<string, object?> { ["trace_id"] = traceId }
-                }, cancellationToken);
-            }
+                To = "self", Action = "start_trace",
+                Payload = new Dictionary<string, object?> { ["trace_id"] = traceId }
+            }, cancellationToken); }
             catch (Exception ex) { _logger.LogDebug(ex, "Self governor trace failed"); }
-        }, cancellationToken).ContinueWith(t =>
-        {
-            if (t.IsFaulted && t.Exception != null)
-                _logger.LogDebug(t.Exception, "Self governor background task failed");
-        }, TaskContinuationOptions.OnlyOnFaulted);
+        }, cancellationToken);
 
         return GovernorOutput.Success(response, traceId);
     }
 
-    private async Task<string> CollaborativeChatAsync(string prompt, ChatOptions baseOptions, CancellationToken cancellationToken)
+    private async Task<string> CollaborativeChatAsync(string prompt, ChatOptions baseOptions, CancellationToken ct)
     {
         var history = _context.CompressHistory();
-
         var iterativePrompt = string.IsNullOrEmpty(history)
             ? prompt
             : $"Previous conversation:\n{history}\n\nCurrent query:\n{prompt}\n\nPlease provide a thorough, well-reasoned response.";
 
-        using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         cts.CancelAfter(TimeSpan.FromSeconds(60));
 
         var response = await _llm.CompleteAsync(iterativePrompt, baseOptions, cts.Token);
@@ -516,31 +443,10 @@ public sealed class LivingTreeSystem
         var reviewPrompt = $"Review this response for accuracy and completeness. If it needs improvement, provide the improved version:\n\n{response}";
         var reviewOptions = new ChatOptions { ModelId = baseOptions.ModelId, Temperature = 0.1f, MaxOutputTokens = 8192 };
 
-        using var reviewCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        using var reviewCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         reviewCts.CancelAfter(TimeSpan.FromSeconds(30));
 
-        var reviewed = await _llm.CompleteAsync(reviewPrompt, reviewOptions, reviewCts.Token);
-
-        return reviewed;
-    }
-
-    private string HandleReflex(Handshake inputResult)
-    {
-        var command = inputResult.Payload?.GetValueOrDefault("command")?.ToString() ?? "";
-        return command switch
-        {
-            "/help" => "LivingTree AI Agent v5.5 (.NET 10)\n" +
-                       "Commands: /help /status /pause /resume /restart\n" +
-                       $"DNA: {(_dna != null ? $"active (L{_dna.GetStatus().ConsciousnessLevel})" : "disabled")}",
-            "/status" => $"Mode: {_guardian.Mode}\n" +
-                         $"Journal: {_journal.Entries.Count} entries\n" +
-                          $"DNA: {(_dna != null ? $"consciousness={_dna.Consciousness.State.Level}, awareness={_dna.Consciousness.State.AwarenessScore:F2}" : "disabled")}\n" +
-                         $"Biorhythm: {(_dna != null ? $"{_dna.Life.Biorhythm.Phase}, energy={_dna.Life.Biorhythm.EnergyLevel:F2}" : "disabled")}",
-            "/pause" => "Journal paused.",
-            "/resume" => "Journal resumed.",
-            "/restart" => RestartSystem(),
-            _ => $"Unknown command: {command}"
-        };
+        return await _llm.CompleteAsync(reviewPrompt, reviewOptions, reviewCts.Token);
     }
 
     private string RestartSystem()
@@ -548,19 +454,12 @@ public sealed class LivingTreeSystem
         _guardian.ResetErrors();
         _journal.Clear();
         _logger.LogInformation("System restarted: journal cleared, guardian reset");
-        return "System restarted. Journal cleared, error counters reset.";
+        return "System restarted.";
     }
 
     private async Task SilentSelfCheckAsync(string response)
     {
-        try
-        {
-            var result = await _output.SilentSelfCheckAsync(response);
-            _logger.LogInformation("Silent self-check: {Result}", result);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogDebug(ex, "Silent self-check skipped");
-        }
+        try { await _output.SilentSelfCheckAsync(response); }
+        catch (Exception ex) { _logger.LogDebug(ex, "Silent self-check skipped"); }
     }
 }

@@ -354,16 +354,6 @@ public static class JitAccel
         return scores;
     }
 
-    public static double JaccardSimilarity(HashSet<string> setA, HashSet<string> setB)
-    {
-        if (setA == null || setB == null || setA.Count == 0 || setB.Count == 0)
-            return 0.0;
-
-        var intersection = setA.Intersect(setB).Count();
-        var union = setA.Union(setB).Count();
-        return union == 0 ? 0.0 : (double)intersection / union;
-    }
-
     public static Dictionary<string, object> JitStatus()
     {
         return new Dictionary<string, object>

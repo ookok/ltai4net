@@ -5,7 +5,7 @@ using System.Text;
 using System.Threading.Tasks;
 using LTAI.AI.Governors;
 
-namespace LTAI.CLI.Debug;
+namespace LTAI.Cli.Debug;
 
 /// <summary>
 /// 端到端测试结果

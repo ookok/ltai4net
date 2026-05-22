@@ -22,22 +22,14 @@ public static class ServiceCollectionExtensions
     {
         services.AddHttpClient();
 
-        services.AddSingleton(sp =>
-        {
-            var options = sp.GetRequiredService<IOptions<LTAIOptions>>();
-            return new HttpAccelerator(options.Value.HttpAccelerator);
-        });
-        services.AddSingleton(sp =>
-            HttpAccelerator.CreateAcceleratedClient(
-                sp.GetRequiredService<IOptions<LTAIOptions>>().Value.HttpAccelerator));
+        services.AddSingleton(sp => new HttpAccelerator(sp.GetRequiredService<IOptions<LTAIOptions>>().Value.HttpAccelerator));
+        services.AddSingleton(sp => HttpAccelerator.CreateAcceleratedClient(
+            sp.GetRequiredService<IOptions<LTAIOptions>>().Value.HttpAccelerator));
 
         services.AddSingleton(SecretVault.Instance);
         services.AddSingleton<DataPathResolver>();
 
-        services.AddSingleton(sp => new PromptInjector(sp.GetRequiredService<IOptions<LTAIOptions>>()));
-
         services.AddSingleton<IProviderRegistry, ProviderRegistry>();
-
         services.AddSingleton<ICognitiveMesh, CognitiveMesh>();
         services.AddSingleton<AIToolRegistry>();
         services.AddSingleton<TaskJournal>();
@@ -51,24 +43,14 @@ public static class ServiceCollectionExtensions
 
         services.AddSingleton(sp => ResilienceBrain.Instance);
         services.AddSingleton(sp => SystemHealth.Instance);
-        services.AddSingleton(sp => GreenScheduler.Instance);
 
         services.AddSingleton(sp => ShellEnv.Instance);
         services.AddSingleton(sp => PromptShield.Instance);
         services.AddSingleton(sp => ResourceTree.Instance);
         services.AddSingleton(sp => UniversalScanner.Instance);
         services.AddSingleton(sp => AtomicModification.Instance);
-        services.AddSingleton<IAsyncDisk>(sp => AsyncDisk.Instance);
-        services.AddSingleton<IConcurrencyGuard>(sp => ConcurrencyGuard.Instance);
-        services.AddSingleton<IDecoupledExecutor>(sp => DecoupledExecutor.Instance);
-
-        services.AddSingleton<VisualReferenceBank>();
 
         services.AddSingleton<SocialLoadModel>();
-        services.AddSingleton<SovereigntyGapDetector>();
-        services.AddSingleton<LeadAnchorMitigator>();
-        services.AddSingleton<CognitiveLoafingAuditor>();
-
         services.AddSingleton(sp => DpoPrefs.Instance);
 
         services.AddSingleton<ServiceManager>();
@@ -77,13 +59,9 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<Wsl2Manager>();
         services.AddSingleton<ResourceGuard>();
 
-        services.AddSingleton<LatencyBudgetAllocator>(sp =>
-            new LatencyBudgetAllocator(totalLatencyBudgetMs: 30000));
-
         services.AddSingleton<HotPathObjectPool>();
 
         services.AddSingleton<IEventBusV2, EventBusV2>();
-        services.AddSingleton(sp => EventBusV2.Instance);
         services.AddSingleton<IEventBus, EventBus>();
         services.AddSingleton<ISessionStore, InMemorySessionStore>();
 

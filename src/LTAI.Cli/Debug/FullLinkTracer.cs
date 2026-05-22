@@ -4,7 +4,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Text;
 
-namespace LTAI.CLI.Debug;
+namespace LTAI.Cli.Debug;
 
 /// <summary>
 /// 链路阶段枚举

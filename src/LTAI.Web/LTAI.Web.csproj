@@ -3,6 +3,7 @@
   <ItemGroup>
     <ProjectReference Include="..\LTAI.Core\LTAI.Core.csproj" />
     <ProjectReference Include="..\LTAI.AI\LTAI.AI.csproj" />
+    <ProjectReference Include="..\LTAI.Tools\LTAI.Tools.csproj" />
   </ItemGroup>
 
   <ItemGroup>
