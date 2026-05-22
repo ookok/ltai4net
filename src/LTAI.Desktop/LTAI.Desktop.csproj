@@ -11,9 +11,14 @@
     <ApplicationTitle>LTAI Desktop</ApplicationTitle>
     <ApplicationId>com.ltai.desktop</ApplicationId>
     <WindowsPackageType>None</WindowsPackageType>
+    <WindowsAppSDKSelfContained>false</WindowsAppSDKSelfContained>
     <ApplicationDisplayVersion>6.1</ApplicationDisplayVersion>
     <ApplicationVersion>1</ApplicationVersion>
     <PublishReadyToRun>false</PublishReadyToRun>
+    <PublishTrimmed>true</PublishTrimmed>
+    <TrimMode>partial</TrimMode>
+    <DebugType>none</DebugType>
+    <DebugSymbols>false</DebugSymbols>
     <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
   </PropertyGroup>
 
@@ -24,6 +29,14 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Maui.Controls" Version="10.0.*" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <TrimmerRootAssembly Update="Microsoft.Playwright" Action="Remove" />
+    <TrimmerRootAssembly Update="Docker.DotNet" Action="Remove" />
+    <TrimmerRootAssembly Update="Tesseract" Action="Remove" />
+    <TrimmerRootAssembly Update="LLamaSharp" Action="Remove" />
+    <TrimmerRootAssembly Update="LLamaSharp.Backend.Cpu" Action="Remove" />
   </ItemGroup>
 
   <ItemGroup>
