@@ -97,7 +97,6 @@ public sealed class CapabilityBus
 
     private readonly List<CapabilityAdapter> _adapters = new();
     private readonly ConcurrentDictionary<string, CapInvokeResult> _history = new();
-    private readonly AIToolRegistry? _toolRegistry;
     private int _totalInvokes;
 
     private CapabilityBus() { }
@@ -127,21 +126,7 @@ public sealed class CapabilityBus
                 return await adapter.InvokeAsync(fullId, parameters);
         }
 
-        if (_toolRegistry != null && _toolRegistry.HasTool(capId))
-        {
-            var sw = global::System.Diagnostics.Stopwatch.StartNew();
-            try
-            {
-                var result = await _toolRegistry.InvokeAsync(capId, parameters);
-                return new CapInvokeResult { Success = true, Data = result, LatencyMs = sw.ElapsedMilliseconds, AdapterName = "ToolRegistry" };
-            }
-            catch (Exception ex)
-            {
-                return new CapInvokeResult { Success = false, Error = ex.Message };
-            }
-        }
-
-        return new CapInvokeResult { Success = false, Error = $"Unknown capability: {capId}" };
+        return new CapInvokeResult { Success = false, Error = $"Capability '{capId}' not found on any mounted adapter" };
     }
 
     public async Task<List<Capability>> DiscoverAllAsync()

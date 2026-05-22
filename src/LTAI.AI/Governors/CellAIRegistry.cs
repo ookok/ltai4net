@@ -49,14 +49,18 @@ public sealed class CellAIRegistry
     private readonly Dictionary<string, CellRule> _rules = new();
     private readonly Dictionary<string, CellModelInfo> _cells = new();
     private readonly Dictionary<string, SynapticInference> _engines = new();
+    private readonly Dictionary<string, ICellEngine> _pretrainedEngines = new();
     private readonly CellAnswerStore _answerStore;
     private readonly SynapticTrainer _trainer;
     private readonly SynapticMemory _memory;
     private readonly ILogger<CellAIRegistry> _logger;
     private readonly string _cellDirectory;
+    private readonly string _pretrainedDirectory;
     private readonly object _lock = new();
     private long _totalActivations;
     private long _totalMemoryBytes;
+    private float _selfTrainedOverrideThreshold = 0.75f;
+    private bool _fallbackToSelfTrained = true;
 
     public CellAIRegistry(
         CellAnswerStore answerStore,
@@ -69,9 +73,35 @@ public sealed class CellAIRegistry
         _memory = memory;
         _logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<CellAIRegistry>.Instance;
         _cellDirectory = Path.Combine(AppContext.BaseDirectory, "synaptic", "cells");
+        _pretrainedDirectory = Path.Combine(AppContext.BaseDirectory, "synaptic", "pretrained");
         Directory.CreateDirectory(_cellDirectory);
+        Directory.CreateDirectory(_pretrainedDirectory);
 
         InitializeDefaultRules();
+        InitializeSeedEngines();  // ← 加载内置种子
+    }
+
+    private void InitializeSeedEngines()
+    {
+        var seeds = SeedModelFactory.CreateDefaultSeeds();
+        foreach (var (domain, engine) in seeds)
+        {
+            // 将规则引擎包装为 OnnxCellEngine 兼容的接口
+            // 这里我们直接使用 RuleBasedCellEngine，并在 SelectBestModelAndPredict 中处理
+            // 为简化，我们将其注册为特殊的“预训练引擎”
+            _pretrainedEngines[domain] = new RuleEngineAdapter(engine);
+            
+            _logger.LogDebug("Seed engine registered: domain={Domain}", domain);
+        }
+    }
+
+    public void ConfigureHybridStrategy(float selfTrainedOverrideThreshold = 0.75f, bool fallbackToSelfTrained = true)
+    {
+        _selfTrainedOverrideThreshold = selfTrainedOverrideThreshold;
+        _fallbackToSelfTrained = fallbackToSelfTrained;
+        _logger.LogInformation(
+            "Hybrid strategy configured: overrideThreshold={Threshold:F2} fallback={Fallback}",
+            _selfTrainedOverrideThreshold, _fallbackToSelfTrained);
     }
 
     private void InitializeDefaultRules()
@@ -164,6 +194,52 @@ public sealed class CellAIRegistry
         _logger.LogInformation("CellAIRegistry initialized with {Count} default domains", _rules.Count);
     }
 
+    public async Task InitializePretrainedModelsAsync(
+        Dictionary<string, OnnxModelConfig>? models = null,
+        bool autoDownload = true,
+        CancellationToken ct = default)
+    {
+        var modelConfigs = models ?? PretrainedModelRegistry.GetDefaultModels(_pretrainedDirectory);
+
+        foreach (var (domain, config) in modelConfigs)
+        {
+            if (autoDownload)
+            {
+                await PretrainedModelRegistry.DownloadModelAsync(config, _pretrainedDirectory, _logger, ct);
+            }
+
+            if (!File.Exists(config.ModelPath))
+            {
+                _logger.LogWarning("Pretrained model not available: {Domain}", domain);
+                continue;
+            }
+
+            var engine = new OnnxCellEngine(config);
+            if (await engine.LoadAsync(ct))
+            {
+                lock (_lock)
+                {
+                    _pretrainedEngines[domain] = engine;
+                    
+                    if (_cells.TryGetValue(domain, out var cell))
+                    {
+                        _cells[domain] = cell with
+                        {
+                            State = cell.State == CellState.Dormant ? CellState.Mature : cell.State,
+                            ModelPath = config.ModelPath,
+                            SizeBytes = new FileInfo(config.ModelPath).Length
+                        };
+                    }
+                }
+
+                _logger.LogInformation("Pretrained model loaded: {Domain} source={Source}", domain, config.Source);
+            }
+        }
+
+        _logger.LogInformation(
+            "Pretrained models initialized: {Count} models loaded", _pretrainedEngines.Count);
+    }
+
     public void AddRule(CellRule rule)
     {
         lock (_lock)
@@ -178,8 +254,38 @@ public sealed class CellAIRegistry
                     ModelPath = ""
                 };
             }
+            
+            // 如果是动态注册的新领域，自动初始化种子引擎
+            if (!_pretrainedEngines.ContainsKey(rule.Domain))
+            {
+                var seedEngine = new RuleBasedCellEngine(rule.Domain, new List<RuleMapping>
+                {
+                    new() { Keywords = rule.Keywords, Label = rule.Domain, Confidence = 0.5f }
+                });
+                _pretrainedEngines[rule.Domain] = new RuleEngineAdapter(seedEngine);
+                _logger.LogInformation("Auto-initialized seed engine for new domain: {Domain}", rule.Domain);
+            }
         }
         _logger.LogInformation("Cell rule added: {Domain}", rule.Domain);
+    }
+
+    /// <summary>
+    /// 注册动态发现的新领域
+    /// </summary>
+    public void RegisterDynamicDomain(string domain, string[] keywords)
+    {
+        var rule = new CellRule
+        {
+            Domain = domain,
+            Keywords = keywords,
+            MinSamplesToTrain = 15,
+            MinAccuracyToActivate = 0.5f,
+            MaxMemoryMB = 30,
+            Priority = 1,
+            AutoTrain = true
+        };
+
+        AddRule(rule);
     }
 
     public string DetectDomain(string query)
@@ -238,18 +344,64 @@ public sealed class CellAIRegistry
                 domain, answerResult.Confidence, rule.MinConfidenceThreshold);
         }
 
+        // 混合策略：选择最佳模型
+        return SelectBestModelAndPredict(query, domain, rule);
+    }
+
+    private CellActivationResult SelectBestModelAndPredict(string query, string domain, CellRule rule)
+    {
         CellModelInfo? cellInfo;
-        SynapticInference? engine;
+        bool hasSelfTrained = false;
+        bool hasPretrained = false;
 
         lock (_lock)
         {
-            if (!_cells.TryGetValue(domain, out var cell) || cell.State == CellState.Dormant)
-                return new CellActivationResult { Activated = false, Domain = domain };
+            if (_cells.TryGetValue(domain, out var cell))
+            {
+                hasSelfTrained = cell.State == CellState.Active && _engines.ContainsKey(domain);
+                hasPretrained = _pretrainedEngines.ContainsKey(domain);
+                cellInfo = cell;
+            }
+            else
+            {
+                cellInfo = null;
+            }
+        }
 
+        // 决策逻辑：
+        // 1. 如果自训练模型准确率超过阈值，优先使用自训练模型
+        // 2. 否则使用预训练模型（冷启动）
+        // 3. 如果都没有，返回未激活
+
+        if (hasSelfTrained && cellInfo!.Accuracy >= _selfTrainedOverrideThreshold)
+        {
+            _logger.LogDebug("Using self-trained model: {Domain} accuracy={Accuracy:F2}", domain, cellInfo.Accuracy);
+            return PredictWithSelfTrainedModel(query, domain, cellInfo, rule);
+        }
+
+        if (hasPretrained)
+        {
+            _logger.LogDebug("Using pretrained ONNX model: {Domain}", domain);
+            return PredictWithPretrainedModel(query, domain, rule);
+        }
+
+        if (hasSelfTrained && _fallbackToSelfTrained)
+        {
+            _logger.LogDebug("Falling back to self-trained model: {Domain} accuracy={Accuracy:F2}", domain, cellInfo!.Accuracy);
+            return PredictWithSelfTrainedModel(query, domain, cellInfo, rule);
+        }
+
+        return new CellActivationResult { Activated = false, Domain = domain };
+    }
+
+    private CellActivationResult PredictWithSelfTrainedModel(
+        string query, string domain, CellModelInfo cellInfo, CellRule rule)
+    {
+        SynapticInference? engine;
+        lock (_lock)
+        {
             if (!_engines.TryGetValue(domain, out engine) || !engine.IsReady)
                 return new CellActivationResult { Activated = false, Domain = domain };
-
-            cellInfo = cell;
         }
 
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
@@ -258,8 +410,8 @@ public sealed class CellAIRegistry
 
         if (result.Confidence < rule.MinConfidenceThreshold)
         {
-            _logger.LogDebug("Cell inference below confidence threshold: domain={Domain}, confidence={Conf:F2} < {Min:F2}",
-                domain, result.Confidence, rule.MinConfidenceThreshold);
+            _logger.LogDebug("Self-trained inference below threshold: domain={Domain} confidence={Conf:F2}",
+                domain, result.Confidence);
             return new CellActivationResult { Activated = false, Domain = domain, Confidence = result.Confidence };
         }
 
@@ -272,6 +424,52 @@ public sealed class CellAIRegistry
                 ActivationCount = cellInfo.ActivationCount + 1,
                 AvgLatencyMs = (cellInfo.AvgLatencyMs * (cellInfo.ActivationCount - 1) + (float)stopwatch.Elapsed.TotalMilliseconds) / cellInfo.ActivationCount
             };
+        }
+
+        return new CellActivationResult
+        {
+            Activated = true,
+            Domain = domain,
+            Response = result.PredictedLabel,
+            Confidence = result.Confidence,
+            LatencyMs = (float)stopwatch.Elapsed.TotalMilliseconds,
+            CellInfo = _cells.GetValueOrDefault(domain)
+        };
+    }
+
+    private CellActivationResult PredictWithPretrainedModel(
+        string query, string domain, CellRule rule)
+    {
+        ICellEngine? engine;
+        lock (_lock)
+        {
+            if (!_pretrainedEngines.TryGetValue(domain, out engine) || !engine.IsReady)
+                return new CellActivationResult { Activated = false, Domain = domain };
+        }
+
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        var result = engine.Predict(query);
+        stopwatch.Stop();
+
+        if (result.Confidence < rule.MinConfidenceThreshold)
+        {
+            _logger.LogDebug("Pretrained inference below threshold: domain={Domain} confidence={Conf:F2}",
+                domain, result.Confidence);
+            return new CellActivationResult { Activated = false, Domain = domain, Confidence = result.Confidence };
+        }
+
+        _totalActivations++;
+        lock (_lock)
+        {
+            if (_cells.TryGetValue(domain, out var cell))
+            {
+                _cells[domain] = cell with
+                {
+                    LastUsed = DateTime.UtcNow,
+                    ActivationCount = cell.ActivationCount + 1,
+                    AvgLatencyMs = (cell.AvgLatencyMs * (cell.ActivationCount - 1) + (float)stopwatch.Elapsed.TotalMilliseconds) / cell.ActivationCount
+                };
+            }
         }
 
         return new CellActivationResult
@@ -417,10 +615,32 @@ public sealed class CellAIRegistry
                     engine.Dispose();
                     _totalMemoryBytes -= _cells[domain].SizeBytes;
                     _cells[domain] = _cells[domain] with { State = CellState.Dormant };
-                    _logger.LogInformation("Cell unloaded (idle): {Domain}", domain);
+                    _logger.LogInformation("Self-trained cell unloaded (idle): {Domain}", domain);
                 }
             }
         }
+
+        _logger.LogInformation("Idle cells unloaded: {Count}", toUnload.Count);
+    }
+
+    public void Dispose()
+    {
+        lock (_lock)
+        {
+            foreach (var engine in _engines.Values)
+            {
+                try { engine.Dispose(); } catch { }
+            }
+            _engines.Clear();
+
+            foreach (var engine in _pretrainedEngines.Values)
+            {
+                try { engine.Dispose(); } catch { }
+            }
+            _pretrainedEngines.Clear();
+        }
+
+        _logger.LogInformation("CellAIRegistry disposed");
     }
 
     public async Task PruneLowAccuracyCellsAsync(CancellationToken ct = default)
@@ -463,10 +683,18 @@ public sealed class CellAIRegistry
                 ["total_cells"] = _cells.Count,
                 ["active_cells"] = _cells.Count(c => c.Value.State == CellState.Active),
                 ["learning_cells"] = _cells.Count(c => c.Value.State == CellState.Learning),
+                ["mature_cells"] = _cells.Count(c => c.Value.State == CellState.Mature),
                 ["dormant_cells"] = _cells.Count(c => c.Value.State == CellState.Dormant),
+                ["pretrained_models"] = _pretrainedEngines.Count,
+                ["self_trained_models"] = _engines.Count,
                 ["total_activations"] = _totalActivations,
                 ["total_memory_bytes"] = _totalMemoryBytes,
                 ["total_memory_mb"] = _totalMemoryBytes / (1024.0 * 1024.0),
+                ["hybrid_strategy"] = new
+                {
+                    selfTrainedOverrideThreshold = _selfTrainedOverrideThreshold,
+                    fallbackToSelfTrained = _fallbackToSelfTrained
+                },
                 ["cells"] = _cells.ToDictionary(kvp => kvp.Key, kvp => new
                 {
                     kvp.Value.Domain,
@@ -475,7 +703,9 @@ public sealed class CellAIRegistry
                     kvp.Value.SampleCount,
                     kvp.Value.ActivationCount,
                     kvp.Value.AvgLatencyMs,
-                    SizeKB = kvp.Value.SizeBytes / 1024.0
+                    SizeKB = kvp.Value.SizeBytes / 1024.0,
+                    HasPretrained = _pretrainedEngines.ContainsKey(kvp.Key),
+                    HasSelfTrained = _engines.ContainsKey(kvp.Key)
                 })
             };
         }
@@ -502,9 +732,6 @@ public sealed class CellAIRegistry
         var relatedDomains = GetRelatedDomains(primaryDomain);
         foreach (var domain in relatedDomains)
         {
-            if (!_engines.TryGetValue(domain, out var engine) || !engine.IsReady)
-                continue;
-
             var rule = _rules.GetValueOrDefault(domain);
             if (rule == null) continue;
 
@@ -521,20 +748,44 @@ public sealed class CellAIRegistry
                 };
             }
 
-            var stopwatch = System.Diagnostics.Stopwatch.StartNew();
-            var result = engine.Predict(query);
-            stopwatch.Stop();
-
-            if (result.Confidence >= rule.MinConfidenceThreshold)
+            // 尝试自训练模型
+            if (_engines.TryGetValue(domain, out var selfEngine) && selfEngine.IsReady)
             {
-                return new CellActivationResult
+                var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+                var result = selfEngine.Predict(query);
+                stopwatch.Stop();
+
+                if (result.Confidence >= rule.MinConfidenceThreshold)
                 {
-                    Activated = true,
-                    Domain = domain,
-                    Response = result.PredictedLabel,
-                    Confidence = result.Confidence,
-                    LatencyMs = (float)stopwatch.Elapsed.TotalMilliseconds
-                };
+                    return new CellActivationResult
+                    {
+                        Activated = true,
+                        Domain = domain,
+                        Response = result.PredictedLabel,
+                        Confidence = result.Confidence,
+                        LatencyMs = (float)stopwatch.Elapsed.TotalMilliseconds
+                    };
+                }
+            }
+
+            // 尝试预训练模型
+            if (_pretrainedEngines.TryGetValue(domain, out var pretrainedEngine) && pretrainedEngine.IsReady)
+            {
+                var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+                var result = pretrainedEngine.Predict(query);
+                stopwatch.Stop();
+
+                if (result.Confidence >= rule.MinConfidenceThreshold)
+                {
+                    return new CellActivationResult
+                    {
+                        Activated = true,
+                        Domain = domain,
+                        Response = result.PredictedLabel,
+                        Confidence = result.Confidence,
+                        LatencyMs = (float)stopwatch.Elapsed.TotalMilliseconds
+                    };
+                }
             }
         }
 

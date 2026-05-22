@@ -47,7 +47,7 @@ public static class LTAIMiddleware
         {
             var response = await innerAgent.RunAsync(messages, session, options, ct);
             journal.Complete(entry, response.Text[..Math.Min(response.Text.Length, 500)]);
-            PostProcess(dna, query, response.Text);
+            PostProcess(dna, query, response.Text, logger);
             return response;
         }
         catch (Exception ex)
@@ -114,7 +114,7 @@ public static class LTAIMiddleware
         else
         {
             journal.Complete(entry, fullText.ToString()[..Math.Min(fullText.Length, 500)]);
-            PostProcess(dna, query, fullText.ToString());
+            PostProcess(dna, query, fullText.ToString(), logger);
         }
     }
 
@@ -167,15 +167,19 @@ public static class LTAIMiddleware
         return null;
     }
 
-    private static void PostProcess(DNAOrchestrator? dna, string query, string response)
+    private static void PostProcess(DNAOrchestrator? dna, string query, string response, ILogger? logger = null)
     {
         if (dna != null && !string.IsNullOrEmpty(response))
         {
             _ = Task.Run(async () =>
             {
                 try { await dna.ProcessAsync(query, response, CancellationToken.None); }
-                catch { }
-            });
+                catch (Exception ex) { logger?.LogDebug(ex, "DNA background processing failed"); }
+            }).ContinueWith(t =>
+            {
+                if (t.IsFaulted && t.Exception != null)
+                    logger?.LogDebug(t.Exception, "DNA background task failed");
+            }, TaskContinuationOptions.OnlyOnFaulted);
         }
     }
 }

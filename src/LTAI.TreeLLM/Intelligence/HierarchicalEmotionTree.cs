@@ -25,7 +25,7 @@ public sealed class EmotionNode
 public sealed class HierarchicalEmotionTree
 {
     private readonly Dictionary<string, EmotionNode> _nodes = new();
-    private readonly ConcurrentDictionary<string, (string primary, string secondary, string tertiary)> _cache = new();
+    private readonly ConcurrentDictionary<string, (string primary, string? secondary, string? tertiary)> _cache = new();
 
     public IReadOnlyDictionary<string, EmotionNode> Nodes => _nodes;
 

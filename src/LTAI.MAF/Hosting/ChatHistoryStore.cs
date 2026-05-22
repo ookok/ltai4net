@@ -78,7 +78,6 @@ public sealed class BlobHistoryStore : ChatHistoryStore
 {
     private readonly string _connectionString;
     private readonly string _containerName;
-    private readonly HttpClient? _http;
 
     public BlobHistoryStore(string connectionString, string containerName = "chat-sessions") : base("Blob")
     {

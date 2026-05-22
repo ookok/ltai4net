@@ -23,7 +23,7 @@ public class LTAIBenchmarks
     public void Setup()
     {
         var logger = NullLoggerFactory.Instance.CreateLogger("bench");
-        _analyzer = new MultiLangCodeAnalyzer(new NullLogger<MultiLangCodeAnalyzer>());
+        _analyzer = new MultiLangCodeAnalyzer(new ParserRegistry(NullLoggerFactory.Instance), new NullLogger<MultiLangCodeAnalyzer>());
         _math = new MathReasoner(new NullLogger<MathReasoner>());
         _chunker = new HierarchicalChunker(new NullLogger<HierarchicalChunker>());
         _embedding = new LocalEmbeddingBackend(new NullLogger<LocalEmbeddingBackend>());
@@ -31,8 +31,12 @@ public class LTAIBenchmarks
         _predictor = new PredictiveEngine();
     }
 
-    [Benchmark] public void CodeAnalysis_CSharp() => _analyzer!.Analyze(SampleCode.CSharp, CodeLanguage.CSharp);
-    [Benchmark] public void CodeAnalysis_Python() => _analyzer!.Analyze(SampleCode.Python, CodeLanguage.Python);
+    [Benchmark]
+#pragma warning disable CS0618
+    public void CodeAnalysis_CSharp() => _analyzer!.Analyze(SampleCode.CSharp, CodeLanguage.CSharp);
+    [Benchmark]
+    public void CodeAnalysis_Python() => _analyzer!.Analyze(SampleCode.Python, CodeLanguage.Python);
+#pragma warning restore CS0618
     [Benchmark] public void MathSolve_Linear() => _math!.SolveAsync("3*x+5=20").GetAwaiter().GetResult();
     [Benchmark] public void MathSolve_Expression() => _math!.SolveAsync("123.45 + 67.89").GetAwaiter().GetResult();
     [Benchmark] public void Chunking_Small() => _chunker!.Chunk(SampleText.Small, 1000, 100);

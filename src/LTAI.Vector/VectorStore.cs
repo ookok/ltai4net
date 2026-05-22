@@ -23,6 +23,9 @@ public sealed class VectorStore : IVectorStore, IDisposable
     private readonly IOptions<LTAIOptions> _options;
     private readonly ILogger<VectorStore> _logger;
     private readonly int _dimension;
+    
+    private readonly Dictionary<int, List<string>> _spatialIndex = new();
+    private const int SpatialBuckets = 64;
 
     public VectorStore(
         IEmbeddingBackend embeddingBackend,
@@ -49,7 +52,9 @@ public sealed class VectorStore : IVectorStore, IDisposable
         {
             foreach (var (id, vector) in items)
             {
-                if (_count >= MaxVectors)
+                var isNew = !_vectors.ContainsKey(id);
+                
+                if (isNew && _count >= MaxVectors)
                 {
                     var oldest = _vectors.Keys.FirstOrDefault();
                     if (oldest != null)
@@ -62,7 +67,8 @@ public sealed class VectorStore : IVectorStore, IDisposable
                 }
 
                 _vectors[id] = vector;
-                _count++;
+                if (isNew)
+                    _count++;
             }
 
             _matrixDirty = true;
@@ -81,7 +87,11 @@ public sealed class VectorStore : IVectorStore, IDisposable
             return Task.FromResult<IReadOnlyList<VectorSearchResult>>(Array.Empty<VectorSearchResult>());
 
         RefreshMatrixCache();
-        var results = CosineTopK(queryVector, _cachedMatrix!, _cachedIds!, topK);
+        
+        var results = _count > 1000 
+            ? CosineTopKOptimized(queryVector, _cachedMatrix!, _cachedIds!, topK)
+            : CosineTopK(queryVector, _cachedMatrix!, _cachedIds!, topK);
+        
         return Task.FromResult(results);
     }
 
@@ -188,11 +198,61 @@ public sealed class VectorStore : IVectorStore, IDisposable
             .ToList();
     }
 
+    private static IReadOnlyList<VectorSearchResult> CosineTopKOptimized(
+        float[] query,
+        float[][] matrix,
+        string[] ids,
+        int topK)
+    {
+        var queryNorm = Norm(query);
+        if (queryNorm < 1e-9f)
+            return Array.Empty<VectorSearchResult>();
+
+        var results = new List<(int Index, float Score)>(Math.Min(topK * 4, matrix.Length));
+        var minScore = 0f;
+
+        for (var i = 0; i < matrix.Length; i++)
+        {
+            var dot = DotProduct(query, matrix[i]);
+            var norm = Norm(matrix[i]);
+            var score = norm > 1e-9f ? dot / (queryNorm * norm) : 0f;
+
+            if (results.Count < topK)
+            {
+                results.Add((i, score));
+                if (results.Count == topK)
+                    minScore = results.Min(r => r.Score);
+            }
+            else if (score > minScore)
+            {
+                results.Add((i, score));
+                results.Sort((a, b) => b.Score.CompareTo(a.Score));
+                if (results.Count > topK)
+                    results.RemoveAt(results.Count - 1);
+                minScore = results[^1].Score;
+            }
+        }
+
+        return results
+            .Select(s => new VectorSearchResult
+            {
+                Id = ids[s.Index],
+                Score = s.Score
+            })
+            .ToList();
+    }
+
+    private bool _disposed;
+
     public void Dispose()
     {
+        if (_disposed) return;
+        
         _vectors.Clear();
+        _idToCollection.Clear();
         _cachedMatrix = null;
         _cachedIds = null;
+        _disposed = true;
         GC.SuppressFinalize(this);
     }
 }

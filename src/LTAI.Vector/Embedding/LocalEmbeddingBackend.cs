@@ -28,6 +28,20 @@ public sealed class LocalEmbeddingBackend : IEmbeddingBackend, IDisposable
         return Task.FromResult(results);
     }
 
+    /// <summary>
+    /// 生成 1-Bit 二值化向量 (极速检索模式)
+    /// </summary>
+    public Task<BinaryVector[]> EmbedBinaryAsync(IReadOnlyList<string> texts, CancellationToken cancellationToken = default)
+    {
+        var results = new BinaryVector[texts.Count];
+        for (var i = 0; i < texts.Count; i++)
+        {
+            var floatVec = EmbedSingle(texts[i], EmbeddingDim);
+            results[i] = BinaryVector.FromFloatVector(floatVec);
+        }
+        return Task.FromResult(results);
+    }
+
     private static float[] EmbedSingle(string text, int dim)
     {
         var vec = new float[dim];

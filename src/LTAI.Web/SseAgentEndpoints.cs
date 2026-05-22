@@ -202,13 +202,39 @@ public static class SseAgentEndpoints
 
 public sealed class SseTask
 {
+    private readonly object _lock = new();
+    private string _status = "pending";
+    private string? _result;
+    private string? _error;
+    private int _stepsCompleted;
+
     public string TaskId { get; init; } = string.Empty;
-    public string Status { get; set; } = "pending";
     public string Prompt { get; init; } = string.Empty;
-    public string? Result { get; set; }
-    public string? Error { get; set; }
     public DateTime CreatedAt { get; init; }
-    public int StepsCompleted { get; set; }
+
+    public string Status
+    {
+        get { lock (_lock) return _status; }
+        set { lock (_lock) _status = value; }
+    }
+
+    public string? Result
+    {
+        get { lock (_lock) return _result; }
+        set { lock (_lock) _result = value; }
+    }
+
+    public string? Error
+    {
+        get { lock (_lock) return _error; }
+        set { lock (_lock) _error = value; }
+    }
+
+    public int StepsCompleted
+    {
+        get { lock (_lock) return _stepsCompleted; }
+        set { lock (_lock) _stepsCompleted = value; }
+    }
 }
 
 public sealed record AgentTaskRequest

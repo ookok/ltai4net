@@ -20,14 +20,12 @@ public sealed class PlatformSearchService
     public static PlatformSearchService Instance => _instance.Value;
 
     private readonly ConcurrentDictionary<string, PlatformSearchEntry> _platforms = new();
-    private bool _loaded;
 
     public IReadOnlyDictionary<string, PlatformSearchEntry> Platforms => _platforms;
 
     private PlatformSearchService()
     {
         SeedPlatforms();
-        _loaded = true;
     }
 
     private void SeedPlatforms()

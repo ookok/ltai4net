@@ -77,7 +77,6 @@ public sealed class MarkdownKnowledgeGraph
     private readonly ReaderWriterLockSlim _rwl = new();
     private readonly IEmbeddingBackend? _embedding;
     private readonly IVectorStore? _vectorStore;
-    private bool _initialized;
 
     private static readonly Regex HeadingRegex = new(@"^(#{1,6})\s+(.+)$", RegexOptions.Multiline);
     private static readonly Regex WikiLinkRegex = new(@"\[\[([^\]]+)\]\]");
@@ -116,7 +115,6 @@ public sealed class MarkdownKnowledgeGraph
                     _sectionsById[section.FullId] = section;
                 }
             }
-            _initialized = true;
         }
         finally
         {

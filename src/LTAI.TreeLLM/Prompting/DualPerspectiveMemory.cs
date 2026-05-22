@@ -116,7 +116,7 @@ public sealed class DualPerspectiveMemory
                 Id = d.Id,
                 Title = d.Title,
                 Content = d.Content,
-                Domain = d.Domain,
+                Domain = d.Domain ?? string.Empty,
                 Score = d.Score * weight,
                 Source = d.Source
             };

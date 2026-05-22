@@ -96,13 +96,14 @@ public class KnowledgeGraph
             foreach (var (id, entity) in _nodesIndex)
             {
                 bool match = true;
+                var props = entity.Properties ?? new();
                 foreach (var (k, v) in filter)
                 {
-                    if (!entity.Properties.TryGetValue(k, out var val) || !Equals(val, v))
+                    if (!props.TryGetValue(k, out var val) || !Equals(val, v))
                     { match = false; break; }
                 }
                 if (match)
-                    results.Add(new() { ["id"] = id, ["attributes"] = entity.Properties });
+                    results.Add(new() { ["id"] = id, ["attributes"] = props });
             }
             return results;
         }

@@ -155,7 +155,8 @@ public static class LTAIToolRegistry
                 if (string.IsNullOrWhiteSpace(query)) return new { error = "query parameter is required" };
                 try
                 {
-                    var rag = _serviceProvider?.GetService(typeof(object).Assembly.GetType("LTAI.Vector.Knowledge.AgenticRAG"));
+                    var ragType = typeof(object).Assembly.GetType("LTAI.Vector.Knowledge.AgenticRAG");
+                    var rag = ragType != null ? _serviceProvider?.GetService(ragType) : null;
                     if (rag != null)
                     {
                         var method = rag.GetType().GetMethod("Search");
@@ -275,7 +276,8 @@ public static class LTAIToolRegistry
             }),
         new("sandbox_exec", "Execute code in isolated sandbox", "code",
             async args => {
-                var so = _serviceProvider?.GetService(typeof(object).Assembly.GetType("LTAI.Sandbox.SandboxOrchestrator"));
+                var soType = typeof(object).Assembly.GetType("LTAI.Sandbox.SandboxOrchestrator");
+                var so = soType != null ? _serviceProvider?.GetService(soType) : null;
                 if (so != null) { var m = so.GetType().GetMethod("ExecuteAsync"); var task = m?.Invoke(so, new object?[] { Arg(args, "code"), Arg(args, "language", "python") }); if (task is Task t) { await t; return t.GetType().GetProperty("Result")?.GetValue(t); } }
                 return new { error = "Sandbox orchestrator not available", hint = "Use shell_exec or cli_execute for code execution" };
             }),
@@ -791,7 +793,7 @@ public static class LTAIToolRegistry
                 try
                 {
                     var smType = typeof(object).Assembly.GetType("LTAI.Vector.Knowledge.StructMemory");
-                    var sm = _serviceProvider?.GetService(smType);
+                    var sm = smType != null ? _serviceProvider?.GetService(smType) : null;
                     if (sm != null)
                     {
                         var bindMethod = sm.GetType().GetMethod("BindEvents");
@@ -898,7 +900,7 @@ public static class LTAIToolRegistry
                     if (pm != null)
                     {
                         var ctxMethod = pm.GetType().GetMethod("GetContextForQuery");
-                        var ctx = ctxMethod?.Invoke(pm, new object[] { aspect }).ToString() ?? "";
+                        var ctx = (ctxMethod?.Invoke(pm, new object[] { aspect }) ?? string.Empty).ToString();
                         var statsMethod = pm.GetType().GetMethod("GetStats");
                         var stats = statsMethod?.Invoke(pm, null);
                         return new { aspect, context = ctx[..Math.Min(1000, ctx.Length)], stats };
@@ -1018,32 +1020,37 @@ public static class LTAIToolRegistry
         // ═══ Knowledge — 6 new tools ═══
         new("km_compile", "Compile domain knowledge artifacts via iterative LLM curation with evaluation against expected fields", "knowledge",
             async args => {
-                var c = _serviceProvider?.GetService(typeof(object).Assembly.GetType("LTAI.Vector.Knowledge.KnowledgeCompiler"));
+                var cType = typeof(object).Assembly.GetType("LTAI.Vector.Knowledge.KnowledgeCompiler");
+                var c = cType != null ? _serviceProvider?.GetService(cType) : null;
                 if (c != null) { var m = c.GetType().GetMethod("CompileAsync"); var task = m?.Invoke(c, new object?[] { Arg(args, "domain"), Arg(args, "task_description"), Arg(args, "evals") }); if (task is Task t) { await t; return t.GetType().GetProperty("Result")?.GetValue(t); } }
                 return new { error = "Knowledge compiler not available" };
             }),
         new("km_fuse", "Fuse multiple documents into a synthesized answer, detecting conflicts and cross-references", "knowledge",
             async args => {
-                var f = _serviceProvider?.GetService(typeof(object).Assembly.GetType("LTAI.Vector.Knowledge.MultiDocFusionEngine"));
+                var fType = typeof(object).Assembly.GetType("LTAI.Vector.Knowledge.MultiDocFusionEngine");
+                var f = fType != null ? _serviceProvider?.GetService(fType) : null;
                 if (f != null) { var m = f.GetType().GetMethod("FuseAsync"); var docs = Arg(args, "docs"); var task = m?.Invoke(f, new object?[] { docs }); if (task is Task t) { await t; return t.GetType().GetProperty("Result")?.GetValue(t); } }
                 return new { error = "Multi-doc fusion engine not available" };
             }),
 
         new("rag_ask", "Full RAG pipeline: search knowledge base, build prompt, generate answer with hallucination guard", "knowledge",
             async args => {
-                var p = _serviceProvider?.GetService(typeof(object).Assembly.GetType("LTAI.TreeLLM.Prompting.RagPipeline"));
+                var pType = typeof(object).Assembly.GetType("LTAI.TreeLLM.Prompting.RagPipeline");
+                var p = pType != null ? _serviceProvider?.GetService(pType) : null;
                 if (p != null) { var m = p.GetType().GetMethod("AskAsync"); var task = m?.Invoke(p, new object?[] { Arg(args, "question") }); if (task is Task t) { await t; var r = t.GetType().GetProperty("Result")?.GetValue(t); if (r != null) { var a = r.GetType().GetProperty("Answer")?.GetValue(r); var sc = r.GetType().GetProperty("SourceCount")?.GetValue(r); var el = r.GetType().GetProperty("ElapsedMs")?.GetValue(r); return new { Answer = a, SourceCount = sc, ElapsedMs = el }; } } }
                 return new { error = "RAG pipeline not available" };
             }),
         new("dag_rag_ask", "DAG-based parallel RAG: multi-mode retrieval (Iterative+MultiAgent+Reflective) in parallel", "knowledge",
             async args => {
-                var p = _serviceProvider?.GetService(typeof(object).Assembly.GetType("LTAI.TreeLLM.Prompting.DagRagPipeline"));
+                var pType = typeof(object).Assembly.GetType("LTAI.TreeLLM.Prompting.DagRagPipeline");
+                var p = pType != null ? _serviceProvider?.GetService(pType) : null;
                 if (p != null) { var m = p.GetType().GetMethod("AskAsync"); var task = m?.Invoke(p, new object?[] { Arg(args, "question") }); if (task is Task t) { await t; var r = t.GetType().GetProperty("Result")?.GetValue(t); if (r != null) { var a = r.GetType().GetProperty("Answer")?.GetValue(r); var sc = r.GetType().GetProperty("SourceCount")?.GetValue(r); var el = r.GetType().GetProperty("ElapsedMs")?.GetValue(r); return new { Answer = a, SourceCount = sc, ElapsedMs = el }; } } }
                 return new { error = "DAG RAG pipeline not available" };
             }),
         new("self_refine", "Execute iterative self-refinement: generate answer, verify, critique, refine (5 rounds max)", "knowledge",
             async args => {
-                var s = _serviceProvider?.GetService(typeof(object).Assembly.GetType("LTAI.TreeLLM.Prompting.SelfRefinementLoop"));
+                var sType = typeof(object).Assembly.GetType("LTAI.TreeLLM.Prompting.SelfRefinementLoop");
+                var s = sType != null ? _serviceProvider?.GetService(sType) : null;
                 if (s != null) { var m = s.GetType().GetMethod("AskAsync"); var task = m?.Invoke(s, new object?[] { Arg(args, "question") }); if (task is Task t) { await t; return t.GetType().GetProperty("Result")?.GetValue(t); } }
                 return new { error = "Self-refinement loop not available" };
             }),
@@ -1057,12 +1064,19 @@ public static class LTAIToolRegistry
         // ═══ Diagnostics — 2 new tools ═══
         new("prompt_cache_stats", "Get cache statistics: hits, misses, tokens saved", "system",
             async _ => {
-                var cache = _serviceProvider?.GetService(typeof(object).Assembly.GetType("LTAI.TreeLLM.Prompting.PromptCache"));
+                var cacheType = typeof(object).Assembly.GetType("LTAI.TreeLLM.Prompting.PromptCache");
+                var cache = cacheType != null ? _serviceProvider?.GetService(cacheType) : null;
                 if (cache != null) { var m = cache.GetType().GetMethod("Stats"); return m?.Invoke(cache, null) ?? new { error = "Stats not available" }; }
                 return new { error = "Prompt cache not available" };
             }),
         new("metrics_snapshot", "Get system metrics: total requests, tokens, avg latency, active tasks, memory", "system",
-            async _ => { var collector = _serviceProvider?.GetService(typeof(object).Assembly.GetType("LTAI.Metrics.LTAIMetricsCollector")); if (collector == null) return new { error = "Metrics collector not available" }; var method = collector.GetType().GetMethod("GetSnapshot"); return method?.Invoke(collector, null) ?? new { error = "GetSnapshot not available" }; }),
+            async _ => {
+                var collectorType = typeof(object).Assembly.GetType("LTAI.Metrics.LTAIMetricsCollector");
+                var collector = collectorType != null ? _serviceProvider?.GetService(collectorType) : null;
+                if (collector == null) return new { error = "Metrics collector not available" };
+                var method = collector.GetType().GetMethod("GetSnapshot");
+                return method?.Invoke(collector, null) ?? new { error = "GetSnapshot not available" };
+            }),
 
         // ═══ Skill Management — 4 tools ═══
         new("skill_create", "Create a new skill by writing a SKILL.md file. Skills are Markdown files with optional YAML frontmatter. Parameters: name (required, lower-case-hyphenated), description (required), body (required, Markdown content), category (optional)", "management",

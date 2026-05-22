@@ -306,7 +306,7 @@ public sealed class CalpuffResult
         ["max_concentration"] = Results.Count > 0 ? Results.Max(r => r.Concentration) : 0,
         ["max_distance"] = Results.Count > 0 ? Results.OrderByDescending(r => r.Concentration).First().Distance.ToString() : "0",
         ["model"] = "CALPUFF (CALMET + CALPUFF + CALPOST pipeline)",
-        ["error"] = Error
+        ["error"] = Error ?? string.Empty
     };
 }
 

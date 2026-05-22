@@ -11,7 +11,6 @@ public sealed class ImmuneDefense
     private readonly ILogger<ImmuneDefense> _logger;
     private readonly ConcurrentDictionary<string, MemoryCell> _memoryCells = new();
     private readonly List<(Regex compiled, string pattern, AntigenType type, double severity, string antibody)> _innateRules = new();
-    private bool _dirty;
     private DateTime _lastSave = DateTime.UtcNow;
     private const int MaxMemoryCells = 2000;
     private const int AutoElevateThreshold = 3;
@@ -99,7 +98,6 @@ public sealed class ImmuneDefense
             AutoAntibody = $"block_{type.ToString().ToLower()}_{pattern.GetHashCode() & 0xFFF:x}",
             IsRegex = false,
         };
-        _dirty = true;
     }
 
     public void Vaccinate(string pattern, AntigenType type, double severity, string antibody)

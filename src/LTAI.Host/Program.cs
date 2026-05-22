@@ -23,6 +23,7 @@ using LTAI.TreeLLM;
 using LTAI.Capability.Tools;
 using LTAI.Network.Interfaces;
 using LTAI.Network.Bridge;
+using LTAI.Core.Setup;
 using Microsoft.AspNetCore.RateLimiting;
 using OpenTelemetry.Logs;
 using OpenTelemetry.Metrics;
@@ -31,7 +32,18 @@ using OpenTelemetry.Trace;
 using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
-builder.Configuration.AddJsonFile("appsettings.json", optional: false, reloadOnChange: true);
+
+var configPath = Path.Combine(AppContext.BaseDirectory, "appsettings.json");
+var isFirstRun = !File.Exists(configPath) || new FileInfo(configPath).Length < 50;
+
+if (isFirstRun)
+{
+    Console.WriteLine("检测到首次运行，启动配置向导...");
+    var setupWizard = new InteractiveSetupWizard(configPath);
+    await setupWizard.RunAsync();
+}
+
+builder.Configuration.AddJsonFile(configPath, optional: false, reloadOnChange: true);
 
 var ltaiSection = builder.Configuration.GetSection(LTAIOptions.SectionName);
 builder.Services.Configure<LTAIOptions>(ltaiSection);
@@ -72,15 +84,16 @@ if (string.IsNullOrEmpty(l0ApiKey))
     var secretKey = $"{l0.Provider}_api_key";
     l0ApiKey = SecretVault.Instance.Get(secretKey);
 }
-if (l0.IsConfigured && !string.IsNullOrEmpty(l0ApiKey) && l0ProviderConfig != null)
-{
-    var l0Endpoint = $"{l0ProviderConfig.Endpoint.TrimEnd('/')}/v1";
-    builder.Services.AddLTAIVectorWithL0(l0Endpoint, l0ApiKey, l0.Model);
-}
-else
-{
-    builder.Services.AddLTAIVector();
-}
+
+var synapticDir = System.IO.Path.Combine(AppContext.BaseDirectory, "synaptic");
+var onnxEmbeddingPath = System.IO.Path.Combine(synapticDir, "models", "embedding", "model.onnx");
+
+var l0Endpoint = l0ProviderConfig != null ? $"{l0ProviderConfig.Endpoint.TrimEnd('/')}/v1" : null;
+builder.Services.AddLTAIVectorAuto(
+    apiEndpoint: l0Endpoint,
+    apiKey: l0ApiKey,
+    apiModel: l0.Model,
+    onnxModelPath: onnxEmbeddingPath);
 builder.Services.AddLTAIAI();
 builder.Services.AddLTAIDocument(); builder.Services.AddLTAIDNA(); builder.Services.AddLTAIMemory();
 builder.Services.AddLTAITreeLLM(); builder.Services.AddLTAIExecution(); builder.Services.AddLTAICapability();
@@ -114,13 +127,19 @@ if (l0pc2 != null && !string.IsNullOrEmpty(l0pc2.ApiKey))
 else if (!string.IsNullOrEmpty(SecretVault.Instance.Get($"{l0Check.Provider}_api_key")))
     l0KeySource = "secrets.enc";
 
+var onnxEmbeddingPath2 = System.IO.Path.Combine(AppContext.BaseDirectory, "synaptic", "models", "embedding", "model.onnx");
+
 if (l0Check.IsConfigured && l0KeySource != "local")
 {
-    logger.LogInformation("L0 embedding: {Provider}/{Model} via {Endpoint} (key from {Source})", l0Check.Provider, l0Check.Model, l0pc2?.Endpoint, l0KeySource);
+    logger.LogInformation("Embedding: API ({Provider}/{Model} via {Endpoint}, key from {Source})", l0Check.Provider, l0Check.Model, l0pc2?.Endpoint, l0KeySource);
+}
+else if (System.IO.File.Exists(onnxEmbeddingPath2))
+{
+    logger.LogInformation("Embedding: ONNX local model ({Path})", onnxEmbeddingPath2);
 }
 else
 {
-    logger.LogInformation("L0 embedding: local backend (no API key found)");
+    logger.LogInformation("Embedding: local backend (fallback)");
 }
 
 var token = SecretVault.Instance.Get("a2a_bearer_token");

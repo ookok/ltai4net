@@ -164,7 +164,11 @@ public sealed class LivingTreeSystem
             {
                 try { await SilentSelfCheckAsync(response); }
                 catch (Exception ex) { _logger.LogDebug(ex, "Silent self-check failed"); }
-            }, cancellationToken);
+            }, cancellationToken).ContinueWith(t =>
+            {
+                if (t.IsFaulted && t.Exception != null)
+                    _logger.LogDebug(t.Exception, "Silent self-check background task failed");
+            }, TaskContinuationOptions.OnlyOnFaulted);
 
             if (_dna != null && !string.IsNullOrEmpty(response))
             {
@@ -176,9 +180,13 @@ public sealed class LivingTreeSystem
                     }
                     catch (Exception ex)
                     {
-                        _logger.LogDebug(ex, "DNA background process skipped");
+                        _logger.LogDebug(ex, "DNA background process failed");
                     }
-                }, cancellationToken);
+                }, cancellationToken).ContinueWith(t =>
+                {
+                    if (t.IsFaulted && t.Exception != null)
+                        _logger.LogDebug(t.Exception, "DNA background task failed");
+                }, TaskContinuationOptions.OnlyOnFaulted);
             }
 
             return response;
@@ -482,8 +490,12 @@ public sealed class LivingTreeSystem
                     Payload = new Dictionary<string, object?> { ["trace_id"] = traceId }
                 }, cancellationToken);
             }
-            catch (Exception ex) { _logger.LogDebug(ex, "Self governor trace skipped"); }
-        }, cancellationToken);
+            catch (Exception ex) { _logger.LogDebug(ex, "Self governor trace failed"); }
+        }, cancellationToken).ContinueWith(t =>
+        {
+            if (t.IsFaulted && t.Exception != null)
+                _logger.LogDebug(t.Exception, "Self governor background task failed");
+        }, TaskContinuationOptions.OnlyOnFaulted);
 
         return GovernorOutput.Success(response, traceId);
     }

@@ -325,14 +325,18 @@ public sealed class ProviderEngine : IChatClient
         var inputCostPer1M = pricing.InputPer1M.GetValueOrDefault(modelKey, pricing.InputPer1M.GetValueOrDefault("default", 0.50));
         var outputCostPer1M = pricing.OutputPer1M.GetValueOrDefault(modelKey, pricing.OutputPer1M.GetValueOrDefault("default", 2.00));
 
-        var avgCostPer1M = (inputCostPer1M + outputCostPer1M) / 2.0;
-        var cost = tokens / 1_000_000.0 * avgCostPer1M;
+        var inputTokens = (int)(tokens * 0.3);
+        var outputTokens = tokens - inputTokens;
+        
+        var inputCost = inputTokens / 1_000_000.0 * inputCostPer1M;
+        var outputCost = outputTokens / 1_000_000.0 * outputCostPer1M;
+        var cost = inputCost + outputCost;
 
         lock (_budgetLock)
         {
             _dailySpent += (decimal)cost;
         }
-        _logger.LogDebug("Tokens used: {Tokens}, model: {Model}, cost: ${Cost:F4}, daily total: ${Daily:F2}",
-            tokens, modelKey, cost, _dailySpent);
+        _logger.LogDebug("Tokens used: {Tokens} (in: {InTokens}, out: {OutTokens}), model: {Model}, cost: ${Cost:F4}, daily total: ${Daily:F2}",
+            tokens, inputTokens, outputTokens, modelKey, cost, _dailySpent);
     }
 }

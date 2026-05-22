@@ -13,7 +13,7 @@ public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddLTAIVector(this IServiceCollection services)
     {
-        return AddLTAIVectorInternal(services, useLocalEmbedding: true, endpoint: null, apiKey: null, model: null, dimension: null);
+        return AddLTAIVectorInternal(services, embeddingType: "local");
     }
 
     public static IServiceCollection AddLTAIVectorWithL0(
@@ -23,28 +23,86 @@ public static class ServiceCollectionExtensions
         string model = "BAAI/bge-large-zh-v1.5",
         int dimension = 1024)
     {
-        return AddLTAIVectorInternal(services, useLocalEmbedding: false, endpoint, apiKey, model, dimension);
+        return AddLTAIVectorInternal(services, embeddingType: "api", endpoint, apiKey, model, dimension, onnxModelPath: null);
+    }
+
+    public static IServiceCollection AddLTAIVectorWithOnnx(
+        this IServiceCollection services,
+        string modelPath,
+        string? tokenizerPath = null,
+        int dimension = 384,
+        string modelName = "onnx-embedding")
+    {
+        return AddLTAIVectorInternal(services, embeddingType: "onnx", endpoint: null, apiKey: null, model: modelName, dimension, modelPath);
+    }
+
+    public static IServiceCollection AddLTAIVectorAuto(
+        this IServiceCollection services,
+        string? apiEndpoint = null,
+        string? apiKey = null,
+        string apiModel = "BAAI/bge-large-zh-v1.5",
+        int apiDimension = 1024,
+        string? onnxModelPath = null,
+        int onnxDiension = 384)
+    {
+        if (!string.IsNullOrEmpty(apiEndpoint) && !string.IsNullOrEmpty(apiKey))
+        {
+            return AddLTAIVectorWithL0(services, apiEndpoint, apiKey, apiModel, apiDimension);
+        }
+        if (!string.IsNullOrEmpty(onnxModelPath) && System.IO.File.Exists(onnxModelPath))
+        {
+            return AddLTAIVectorWithOnnx(services, onnxModelPath, dimension: onnxDiension);
+        }
+        return AddLTAIVector(services);
     }
 
     private static IServiceCollection AddLTAIVectorInternal(
         IServiceCollection services,
-        bool useLocalEmbedding,
-        string? endpoint,
-        string? apiKey,
-        string? model,
-        int? dimension)
+        string embeddingType = "local",
+        string? endpoint = null,
+        string? apiKey = null,
+        string? model = null,
+        int? dimension = null,
+        string? onnxModelPath = null)
     {
-        if (useLocalEmbedding)
+        switch (embeddingType.ToLowerInvariant())
         {
-            services.AddSingleton<IEmbeddingBackend, LocalEmbeddingBackend>();
-        }
-        else
-        {
-            services.AddSingleton<IEmbeddingBackend>(sp =>
-                new APIEmbeddingBackend(
-                    sp.GetRequiredService<IHttpClientFactory>(),
-                    endpoint!, apiKey!, model!, dimension ?? 1024,
-                    sp.GetRequiredService<ILogger<APIEmbeddingBackend>>()));
+            case "onnx":
+                services.AddSingleton<IEmbeddingBackend>(sp =>
+                {
+                    var config = new OnnxEmbeddingConfig
+                    {
+                        ModelPath = onnxModelPath!,
+                        TokenizerPath = null,
+                        Dimension = dimension ?? 384,
+                        ModelName = model ?? "onnx-embedding"
+                    };
+                    var backend = new OnnxEmbeddingBackend(config, sp.GetRequiredService<ILogger<OnnxEmbeddingBackend>>());
+                    
+                    // 异步初始化 (Fire and Forget with logging)
+                    _ = backend.InitializeAsync().ContinueWith(t =>
+                    {
+                        if (t.IsFaulted)
+                        {
+                            sp.GetRequiredService<ILogger<OnnxEmbeddingBackend>>().LogError(t.Exception, "ONNX Embedding init failed");
+                        }
+                    });
+
+                    return backend;
+                });
+                break;
+
+            case "api":
+                services.AddSingleton<IEmbeddingBackend>(sp =>
+                    new APIEmbeddingBackend(
+                        sp.GetRequiredService<IHttpClientFactory>(),
+                        endpoint!, apiKey!, model!, dimension ?? 1024,
+                        sp.GetRequiredService<ILogger<APIEmbeddingBackend>>()));
+                break;
+
+            default: // local
+                services.AddSingleton<IEmbeddingBackend, LocalEmbeddingBackend>();
+                break;
         }
 
         services.AddSingleton<EmbeddingQuantizer>();

@@ -22,6 +22,7 @@ public static class WebApplicationExtensions
         app.MapDocRoutesEndpoints();
         app.MapCognitionStreamEndpoints();
         app.MapWorkspaceEndpoints();
+        app.MapCellGraphEndpoints();
         app.MapCoreEndpoints();
         app.MapHealthChecks("/api/health", new HealthCheckOptions
         {

@@ -31,7 +31,7 @@ public sealed class SandboxOrchestrator
     {
         var audit = _auditor.Audit(code, language);
         if (!audit.Allowed)
-            return new SandboxResult { Success = false, Error = $"Security audit failed: {audit.Reason}", Stderr = audit.Reason };
+            return new SandboxResult { Success = false, Error = $"Security audit failed: {audit.Reason ?? "unknown"}", Stderr = audit.Reason ?? "unknown" };
 
         var request = new SandboxRequest
         {

@@ -82,7 +82,7 @@ public sealed class MultiToolDispatch
         var toolSw = Stopwatch.StartNew();
         try
         {
-            var output = await _toolRegistry.InvokeAsync(action.ToolName, action.Parameters);
+            var output = await _toolRegistry.InvokeAsync(action.ToolName, action.Parameters.ToDictionary(kvp => kvp.Key, kvp => (object?)kvp.Value));
             toolSw.Stop();
             return new ToolCallResult
             {

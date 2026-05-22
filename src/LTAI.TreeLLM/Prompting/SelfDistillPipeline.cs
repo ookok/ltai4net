@@ -384,8 +384,6 @@ public sealed class SelfDistillPipeline
 
         var taskLower = task.ToLower();
         return ClassificationRegistry.TaskPattern.Classify(taskLower);
-
-        return "general";
     }
 
     private static double Similarity(string a, string b)

@@ -467,6 +467,15 @@ public sealed class StealthBrowserConfig
 
     [JsonPropertyName("user_agent")]
     public string UserAgent { get; init; } = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36";
+
+    [JsonPropertyName("block_trackers")]
+    public bool BlockTrackers { get; init; } = true;
+
+    [JsonPropertyName("randomize_viewport")]
+    public bool RandomizeViewport { get; init; } = true;
+
+    [JsonPropertyName("inject_stealth_scripts")]
+    public bool InjectStealthScripts { get; init; } = true;
 }
 
 public sealed class ToolsAutoConfig

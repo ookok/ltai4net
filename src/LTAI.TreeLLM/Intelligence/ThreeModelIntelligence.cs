@@ -73,8 +73,9 @@ public sealed partial class ThreeModelIntelligence
 
     public void ConfigureL0Embedding(string providerName)
     {
-        var config = LTAI.Core.Configuration.ProviderRegistry.ResolveConfig(providerName,
-            LTAI.Core.Configuration.ProviderRegistry.DefaultProviderModel(providerName), "");
+        var model = LTAI.Core.Configuration.ProviderRegistry.DefaultProviderModel(providerName);
+        if (string.IsNullOrEmpty(model)) return;
+        var config = LTAI.Core.Configuration.ProviderRegistry.ResolveConfig(providerName, model, "");
         if (config != null)
             _embeddingBackend = new APIEmbeddingBackend(null, config.Endpoint, config.ApiKey, config.Model);
     }
@@ -436,7 +437,7 @@ public sealed partial class ThreeModelIntelligence
                     var parts = line.Split('|', 2);
                     if (parts.Length == 2 && !string.IsNullOrWhiteSpace(parts[0]) && !string.IsNullOrWhiteSpace(parts[1]))
                     {
-                        AddReflexAsync(parts[0].Trim(), parts[1].Trim());
+                        _ = AddReflexAsync(parts[0].Trim(), parts[1].Trim());
                         insights.Add($"Discovered reflex: {parts[0].Trim()}");
                     }
                 }

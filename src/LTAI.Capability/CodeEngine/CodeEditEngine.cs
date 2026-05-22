@@ -79,7 +79,7 @@ public sealed class CodeEditEngine
             }
 
             var diff = GenerateDiff(snapshot.Content, result.NewHash);
-            var diagnostics = ValidateSyntax(op.FilePath);
+            var diagnostics = await ValidateSyntaxAsync(op.FilePath);
 
             return result with
             {
@@ -398,7 +398,7 @@ public sealed class CodeEditEngine
         };
     }
 
-    private (List<string> Errors, List<string> Warnings) ValidateSyntax(string filePath)
+    private async Task<(List<string> Errors, List<string> Warnings)> ValidateSyntaxAsync(string filePath)
     {
         var errors = new List<string>();
         var warnings = new List<string>();
@@ -407,8 +407,8 @@ public sealed class CodeEditEngine
         {
             if (_parser != null && _parser.SupportsDiagnostics)
             {
-                var content = File.ReadAllText(filePath);
-                var result = _parser.ParseAsync(content, filePath).GetAwaiter().GetResult();
+                var content = await File.ReadAllTextAsync(filePath);
+                var result = await _parser.ParseAsync(content, filePath);
                 foreach (var diag in result.Diagnostics)
                 {
                     var msg = $"{filePath}:{diag.Line}: {diag.Message} [{diag.Code}]";
@@ -420,7 +420,7 @@ public sealed class CodeEditEngine
             }
             else
             {
-                var content = File.ReadAllText(filePath);
+                var content = await File.ReadAllTextAsync(filePath);
                 var unclosedBraces = content.Count(c => c == '{') - content.Count(c => c == '}');
                 if (unclosedBraces != 0)
                     errors.Add($"Brace mismatch: {unclosedBraces} unclosed braces in {filePath}");
@@ -436,6 +436,12 @@ public sealed class CodeEditEngine
         }
 
         return (errors, warnings);
+    }
+
+    [Obsolete("Use ValidateSyntaxAsync instead to avoid sync-over-async deadlocks")]
+    private (List<string> Errors, List<string> Warnings) ValidateSyntax(string filePath)
+    {
+        return ValidateSyntaxAsync(filePath).GetAwaiter().GetResult();
     }
 
     public void CleanupSnapshots(int keepLast = 50)

@@ -68,6 +68,12 @@ public sealed class LocalKnowledgeBase
 
     public int KnowledgeCount => _exactAnswers.Count + _patternAnswers.Count + _learnedPatterns.Count;
 
+    public IEnumerable<(string Key, LocalAnswerResult Value)> GetAll()
+    {
+        foreach (var kvp in _exactAnswers) yield return (kvp.Key, kvp.Value);
+        foreach (var kvp in _patternAnswers) yield return (kvp.Key, kvp.Value);
+    }
+
     private void SeedBuiltInKnowledge()
     {
         var greetings = new[] { "你好", "hello", "hi", "hey" };

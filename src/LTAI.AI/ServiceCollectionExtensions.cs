@@ -1,6 +1,7 @@
 using LTAI.AI.Governors;
 using LTAI.AI.Providers;
 using LTAI.Capability.Skills;
+using LTAI.Core.Messaging;
 using LTAI.Vector.Knowledge;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
@@ -52,6 +53,46 @@ public static class ServiceCollectionExtensions
         });
 
         var synapticDir = System.IO.Path.Combine(AppContext.BaseDirectory, "synaptic");
+        services.AddSingleton<DualMemoryStore>(sp =>
+        {
+            var logger = sp.GetService<ILogger<DualMemoryStore>>();
+            var dbPath = System.IO.Path.Combine(synapticDir, "dual_memory.db");
+            Directory.CreateDirectory(synapticDir);
+            var embeddingGenerator = sp.GetService<IEmbeddingGenerator<string, Embedding<float>>>();
+            return new DualMemoryStore(dbPath, config: null, retrievalWeights: null, embeddingGenerator, logger);
+        });
+
+        services.AddSingleton<MemoryQualityMonitor>(sp =>
+        {
+            var memoryStore = sp.GetRequiredService<DualMemoryStore>();
+            var cellRegistry = sp.GetRequiredService<CellAIRegistry>();
+            var logger = sp.GetService<ILogger<MemoryQualityMonitor>>();
+            return new MemoryQualityMonitor(memoryStore, cellRegistry, logger);
+        });
+
+        services.AddSingleton<IncrementalRuleExtractor>(sp =>
+        {
+            var memoryStore = sp.GetRequiredService<DualMemoryStore>();
+            var logger = sp.GetService<ILogger<IncrementalRuleExtractor>>();
+            return new IncrementalRuleExtractor(memoryStore, logger);
+        });
+
+        // Fast-Slow Learning 组件
+        services.AddSingleton<GEPAPromptOptimizer>(sp =>
+        {
+            var logger = sp.GetService<ILogger<GEPAPromptOptimizer>>();
+            return new GEPAPromptOptimizer(config: null, logger);
+        });
+
+        services.AddSingleton<FastSlowCellAI>(sp =>
+        {
+            var cellRegistry = sp.GetRequiredService<CellAIRegistry>();
+            var memoryStore = sp.GetRequiredService<DualMemoryStore>();
+            var promptOptimizer = sp.GetRequiredService<GEPAPromptOptimizer>();
+            var logger = sp.GetService<ILogger<FastSlowCellAI>>();
+            return new FastSlowCellAI(cellRegistry, memoryStore, promptOptimizer, config: null, logger);
+        });
+
         services.AddSingleton<SynapticMemory>(sp =>
         {
             var logger = sp.GetService<ILogger<SynapticMemory>>();
@@ -128,7 +169,237 @@ public static class ServiceCollectionExtensions
             var trainer = sp.GetRequiredService<SynapticTrainer>();
             var memory = sp.GetRequiredService<SynapticMemory>();
             var logger = sp.GetService<ILogger<CellAIRegistry>>();
-            return new CellAIRegistry(answerStore, trainer, memory, logger);
+            var registry = new CellAIRegistry(answerStore, trainer, memory, logger);
+            
+            // 配置混合策略
+            registry.ConfigureHybridStrategy(
+                selfTrainedOverrideThreshold: 0.75f,
+                fallbackToSelfTrained: true);
+            
+            return registry;
+        });
+
+        // ==================== GitHub 细胞分发系统 ====================
+
+        services.AddSingleton<CellPackageManager>(sp =>
+        {
+            var logger = sp.GetService<ILogger<CellPackageManager>>();
+            var packagesDir = System.IO.Path.Combine(synapticDir, "packages");
+            return new CellPackageManager(packagesDir, logger!);
+        });
+
+        services.AddSingleton<GitHubCellRegistry>(sp =>
+        {
+            var packageManager = sp.GetRequiredService<CellPackageManager>();
+            var logger = sp.GetService<ILogger<GitHubCellRegistry>>();
+            var config = new GitHubCellConfig
+            {
+                Owner = "ltai-org",
+                Repository = "ltai-cells",
+                Token = Environment.GetEnvironmentVariable("GITHUB_TOKEN"),
+                MaxDownloadSizeMB = 100
+            };
+            return new GitHubCellRegistry(config, packageManager, logger!);
+        });
+
+        services.AddSingleton<SizeGovernor>(sp =>
+        {
+            var packageManager = sp.GetRequiredService<CellPackageManager>();
+            var logger = sp.GetService<ILogger<SizeGovernor>>();
+            var config = new SizeGovernorConfig
+            {
+                MaxCellSizeMB = 50,
+                MaxTotalSizeMB = 500,
+                EnableAutoCompression = true,
+                EnableQuantization = true
+            };
+            return new SizeGovernor(config, packageManager, logger);
+        });
+
+        services.AddSingleton<CascadeLoader>(sp =>
+        {
+            var cellRegistry = sp.GetRequiredService<CellAIRegistry>();
+            var githubRegistry = sp.GetRequiredService<GitHubCellRegistry>();
+            var packageManager = sp.GetRequiredService<CellPackageManager>();
+            var logger = sp.GetService<ILogger<CascadeLoader>>();
+            var config = new CascadeLoaderConfig
+            {
+                MaxConcurrentDownloads = 3,
+                MaxMemoryMB = 200,
+                EnableLazyLoading = true,
+                EnableAutoUnload = true,
+                MaxCachedCells = 20
+            };
+            return new CascadeLoader(config, cellRegistry, githubRegistry, packageManager, logger!);
+        });
+
+        // ==================== 领域知识图谱分发系统 ====================
+
+        services.AddSingleton<DomainGraphRegistry>(sp =>
+        {
+            var logger = sp.GetService<ILogger<DomainGraphRegistry>>();
+            var config = new DomainGraphConfig
+            {
+                GraphsDirectory = System.IO.Path.Combine(synapticDir, "graphs"),
+                MaxLoadedGraphs = 10,
+                EnableLazyLoading = true,
+                EnableAutoUnload = true
+            };
+            return new DomainGraphRegistry(config, logger!);
+        });
+
+        services.AddSingleton<GraphPackageManager>(sp =>
+        {
+            var logger = sp.GetService<ILogger<GraphPackageManager>>();
+            var packagesDir = System.IO.Path.Combine(synapticDir, "graph_packages");
+            return new GraphPackageManager(packagesDir, logger!);
+        });
+
+        services.AddSingleton<GitHubGraphRegistry>(sp =>
+        {
+            var packageManager = sp.GetRequiredService<GraphPackageManager>();
+            var logger = sp.GetService<ILogger<GitHubGraphRegistry>>();
+            var config = new GitHubGraphConfig
+            {
+                Owner = "ltai-org",
+                Repository = "ltai-graphs",
+                Token = Environment.GetEnvironmentVariable("GITHUB_TOKEN"),
+                MaxDownloadSizeMB = 200
+            };
+            return new GitHubGraphRegistry(config, packageManager, logger!);
+        });
+
+        services.AddSingleton<GraphCascadeLoader>(sp =>
+        {
+            var graphRegistry = sp.GetRequiredService<DomainGraphRegistry>();
+            var githubRegistry = sp.GetRequiredService<GitHubGraphRegistry>();
+            var packageManager = sp.GetRequiredService<GraphPackageManager>();
+            var logger = sp.GetService<ILogger<GraphCascadeLoader>>();
+            var config = new GraphCascadeConfig
+            {
+                MaxConcurrentDownloads = 2,
+                MaxMemoryMB = 300,
+                EnableLazyLoading = true,
+                EnableAutoUnload = true,
+                MaxLoadedGraphs = 10
+            };
+            return new GraphCascadeLoader(config, graphRegistry, githubRegistry, packageManager, logger!);
+        });
+
+        // ==================== 事件驱动计划治理 ====================
+
+        services.AddSingleton<FastSlowGovernorPipeline>(sp =>
+        {
+            var eventBus = sp.GetRequiredService<IEventBusV2>();
+            var planStore = sp.GetRequiredService<CellAnswerStore>();
+            var fastSlowAI = sp.GetRequiredService<FastSlowCellAI>();
+            var memoryStore = sp.GetRequiredService<DualMemoryStore>();
+            var logger = sp.GetService<ILogger<FastSlowGovernorPipeline>>();
+            var config = new PlanGovernorConfig
+            {
+                EnableAutoInvalidation = true,
+                HighImpactPriorityThreshold = 5,
+                ReplanningCooldown = TimeSpan.FromMinutes(5),
+                MaxReplansPerHour = 10
+            };
+            return new FastSlowGovernorPipeline(eventBus, planStore, fastSlowAI, memoryStore, config, logger!);
+        });
+
+        services.AddSingleton<DomainDiscoveryService>(sp =>
+        {
+            var cellRegistry = sp.GetRequiredService<CellAIRegistry>();
+            var logger = sp.GetService<ILogger<DomainDiscoveryService>>();
+            var config = new DomainDiscoveryConfig
+            {
+                MinQueriesToDiscover = 10,
+                SimilarityThreshold = 0.3f,
+                DiscoveryInterval = TimeSpan.FromMinutes(30),
+                MaxNurserySize = 1000
+            };
+            return new DomainDiscoveryService(config, cellRegistry, logger!);
+        });
+
+        services.AddSingleton<IL1InferenceEngine>(sp =>
+        {
+            var logger = sp.GetService<ILoggerFactory>();
+            var modelDir = System.IO.Path.Combine(synapticDir, "models", "local_llm");
+            
+            // 尝试读取用户配置
+            var userConfigPath = System.IO.Path.Combine(AppContext.BaseDirectory, "local_llm.json");
+            string? preferredEngine = null;
+            if (System.IO.File.Exists(userConfigPath))
+            {
+                try
+                {
+                    var json = System.IO.File.ReadAllText(userConfigPath);
+                    using var doc = System.Text.Json.JsonDocument.Parse(json);
+                    if (doc.RootElement.TryGetProperty("EngineType", out var engineProp))
+                        preferredEngine = engineProp.GetString();
+                }
+                catch { }
+            }
+
+            // 根据配置选择引擎
+            if (preferredEngine?.Equals("gguf", StringComparison.OrdinalIgnoreCase) == true)
+            {
+                sp.GetService<ILogger<LlamaSharpEngine>>();
+                return new LlamaSharpEngine(logger?.CreateLogger<LlamaSharpEngine>());
+            }
+            else
+            {
+                var modelPath = System.IO.Path.Combine(modelDir, "model.onnx");
+                var tokenizerPath = System.IO.Path.Combine(modelDir, "tokenizer.json");
+                
+                var config = new SmallLlmConfig
+                {
+                    ModelPath = modelPath,
+                    TokenizerPath = tokenizerPath,
+                    ModelName = "local-quantized-llm",
+                    MaxContextLength = 2048
+                };
+
+                return new OnnxSmallLlmEngine(config, logger?.CreateLogger<OnnxSmallLlmEngine>());
+            }
+        });
+
+        services.AddSingleton<LocalLlmBootstrapConfig>(sp =>
+        {
+            var modelDir = System.IO.Path.Combine(synapticDir, "models", "local_llm");
+            return new LocalLlmBootstrapConfig
+            {
+                ModelDir = modelDir,
+                AutoDownloadIfMissing = true,
+                AutoUpdate = false
+            };
+        });
+
+        services.AddHttpClient(); // 确保 IHttpClientFactory 可用
+        services.AddHostedService<LocalLlmBootstrapService>(sp =>
+        {
+            var config = sp.GetRequiredService<LocalLlmBootstrapConfig>();
+            var httpClientFactory = sp.GetRequiredService<IHttpClientFactory>();
+            var engine = sp.GetRequiredService<IL1InferenceEngine>();
+            var logger = sp.GetService<ILogger<LocalLlmBootstrapService>>();
+            return new LocalLlmBootstrapService(config, httpClientFactory, engine, logger!);
+        });
+
+        services.AddHostedService<PretrainedModelLoader>(sp =>
+        {
+            var cellRegistry = sp.GetRequiredService<CellAIRegistry>();
+            var logger = sp.GetService<ILogger<PretrainedModelLoader>>();
+            return new PretrainedModelLoader(cellRegistry, logger);
+        });
+
+        services.AddSingleton<TokenHardnessDecider>();
+        services.AddSingleton<SelectiveThinkingPipeline>(sp =>
+        {
+            var l1Engine = sp.GetService<IL1InferenceEngine>();
+            var l2Client = sp.GetService<IChatClient>();
+            var decider = sp.GetRequiredService<TokenHardnessDecider>();
+            var logger = sp.GetService<ILogger<SelectiveThinkingPipeline>>();
+            return l1Engine != null && l2Client != null 
+                ? new SelectiveThinkingPipeline(l1Engine, l2Client, decider, logger) 
+                : null!;
         });
 
         services.AddSingleton<L1L2DuplexRouter>(sp =>
@@ -136,6 +407,9 @@ public static class ServiceCollectionExtensions
             var inference = sp.GetRequiredService<SynapticInference>();
             var memory = sp.GetRequiredService<SynapticMemory>();
             var graphBridge = sp.GetRequiredService<KnowledgeGraphBridge>();
+            var domainGraphRegistry = sp.GetRequiredService<DomainGraphRegistry>();
+            var domainDiscovery = sp.GetRequiredService<DomainDiscoveryService>();
+            var localLlm = sp.GetService<IL1InferenceEngine>();
             var metaCognition = sp.GetRequiredService<MetaCognitiveLayer>();
             var skillTree = sp.GetRequiredService<SkillTree>();
             var cache = sp.GetRequiredService<SemanticQueryCache>();
@@ -146,7 +420,7 @@ public static class ServiceCollectionExtensions
             var cellRegistry = sp.GetRequiredService<CellAIRegistry>();
             var llm = sp.GetService<IChatClient>();
             var logger = sp.GetService<ILogger<L1L2DuplexRouter>>();
-            return new L1L2DuplexRouter(inference, memory, graphBridge, metaCognition, skillTree, cache, ruleExtractor, costRouter, knowledge, classifier, cellRegistry, llm, logger);
+            return new L1L2DuplexRouter(inference, memory, graphBridge, domainGraphRegistry, domainDiscovery, localLlm, metaCognition, skillTree, cache, ruleExtractor, costRouter, knowledge, classifier, cellRegistry, llm, logger);
         });
 
         services.AddHostedService<SynapticEvolutionLoop>(sp =>
@@ -165,8 +439,10 @@ public static class ServiceCollectionExtensions
             var graphBridge = sp.GetRequiredService<KnowledgeGraphBridge>();
             var skillTree = sp.GetRequiredService<SkillTree>();
             var metaCognition = sp.GetRequiredService<MetaCognitiveLayer>();
+            var dualMemoryStore = sp.GetRequiredService<DualMemoryStore>();
+            var ruleExtractor = sp.GetRequiredService<IncrementalRuleExtractor>();
             var logger = sp.GetService<ILogger<DreamCycle>>();
-            return new DreamCycle(memory, graphBridge, skillTree, metaCognition, logger);
+            return new DreamCycle(memory, graphBridge, skillTree, metaCognition, dualMemoryStore, ruleExtractor, logger);
         });
 
         services.AddHostedService<FederatedLearningService>(sp =>

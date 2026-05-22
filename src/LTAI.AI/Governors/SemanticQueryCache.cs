@@ -16,6 +16,12 @@ public sealed record CacheEntry
     public DateTime ExpiresAt { get; init; }
     public string Route { get; init; } = "";
     public string Domain { get; init; } = "";
+    
+    /// <summary>
+    /// PACE: 参数变化量 ||Δθ||² (学习价值指标)
+    /// 高 ||Δθ||² = 高学习价值 = 优先保留
+    /// </summary>
+    public double DeltaNorm { get; init; }
 }
 
 public sealed record SemanticCacheResult
@@ -30,6 +36,7 @@ public sealed class SemanticQueryCache
 {
     private readonly ConcurrentDictionary<string, CacheEntry> _cache = new();
     private readonly ILogger<SemanticQueryCache> _logger;
+    private readonly LearningProgressTracker? _progressTracker;
     private readonly int _maxEntries;
     private readonly float _minSimilarity;
     private readonly object _statsLock = new();
@@ -39,10 +46,12 @@ public sealed class SemanticQueryCache
     public SemanticQueryCache(
         int maxEntries = 500,
         float minSimilarity = 0.85f,
+        LearningProgressTracker? progressTracker = null,
         ILogger<SemanticQueryCache>? logger = null)
     {
         _maxEntries = maxEntries;
         _minSimilarity = minSimilarity;
+        _progressTracker = progressTracker;
         _logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<SemanticQueryCache>.Instance;
     }
 
@@ -111,7 +120,7 @@ public sealed class SemanticQueryCache
         return new SemanticCacheResult { Hit = false };
     }
 
-    public void Store(string query, string response, string route, string domain, float confidence, TimeSpan? ttl = null)
+    public void Store(string query, string response, string route, string domain, float confidence, double deltaNorm = 0, TimeSpan? ttl = null)
     {
         var normalized = NormalizeQuery(query);
         var cacheKey = ComputeCacheKey(normalized);
@@ -128,7 +137,8 @@ public sealed class SemanticQueryCache
             LastHit = DateTime.UtcNow,
             ExpiresAt = DateTime.UtcNow + effectiveTtl,
             Route = route,
-            Domain = domain
+            Domain = domain,
+            DeltaNorm = deltaNorm
         };
 
         if (_cache.Count >= _maxEntries)
@@ -137,7 +147,8 @@ public sealed class SemanticQueryCache
         }
 
         _cache[cacheKey] = entry;
-        _logger.LogDebug("Cache stored: key={Key}, route={Route}, ttl={Ttl}", cacheKey[..8], route, effectiveTtl);
+        _logger.LogDebug("Cache stored: key={Key}, route={Route}, ||Δθ||²={DeltaNorm:E4}, ttl={Ttl}", 
+            cacheKey[..8], route, deltaNorm, effectiveTtl);
     }
 
     public Dictionary<string, object> GetStats()
@@ -183,8 +194,9 @@ public sealed class SemanticQueryCache
 
     private void EvictLeastValuable()
     {
+        // PACE: 优先淘汰低 ||Δθ||² 的条目 (已掌握/低学习价值)
         var toEvict = _cache.Values
-            .OrderBy(e => ComputeEntryValue(e))
+            .OrderBy(e => ComputeEntryValuePace(e))
             .Take(Math.Max(1, _maxEntries / 10))
             .Select(e => ComputeCacheKey(e.NormalizedQuery))
             .ToList();
@@ -194,7 +206,26 @@ public sealed class SemanticQueryCache
             _cache.TryRemove(key, out _);
         }
 
-        _logger.LogDebug("Cache evicted {Count} least valuable entries", toEvict.Count);
+        _logger.LogDebug("PACE cache evicted {Count} least valuable entries (low ||Δθ||²)", toEvict.Count);
+    }
+
+    /// <summary>
+    /// PACE 缓存价值计算
+    /// 价值 = f(||Δθ||², 命中率, 最近访问, 年龄)
+    /// 高 ||Δθ||² → 高学习价值 → 优先保留
+    /// </summary>
+    private static float ComputeEntryValuePace(CacheEntry entry)
+    {
+        var recency = (float)(DateTime.UtcNow - entry.LastHit).TotalMinutes;
+        var hitBonus = entry.HitCount * 10f;
+        var agePenalty = (float)(DateTime.UtcNow - entry.CreatedAt).TotalHours;
+        
+        // PACE 核心: ||Δθ||² 权重 (归一化到 0-100 范围)
+        var learningValue = (float)Math.Min(100.0, entry.DeltaNorm * 100);
+        
+        // 价值 = 低最近访问 + 低命中率 + 高年龄 - 高学习价值
+        // 值越低 = 越应该被淘汰
+        return recency - hitBonus + agePenalty - learningValue;
     }
 
     private static float ComputeEntryValue(CacheEntry entry)

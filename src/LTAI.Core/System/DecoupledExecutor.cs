@@ -36,7 +36,24 @@ public sealed class VirtualExperience
     public DateTime GeneratedAt { get; init; } = DateTime.UtcNow;
 }
 
-public sealed class DecoupledExecutor
+public interface IDecoupledExecutor
+{
+    Task<TaskHandle> SubmitAsync(Func<CancellationToken, Task> func, string taskId = "", string workerId = "",
+        int retries = 0, TimeSpan? timeout = null);
+    Task<TaskHandle> SubmitAsync(Func<CancellationToken, Task<object?>> func, string taskId = "", string workerId = "",
+        int retries = 0, TimeSpan? timeout = null);
+    Task<List<TaskHandle>> CollectAsync(TimeSpan? timeout = null, bool partial = true);
+    int PendingCount { get; }
+    Dictionary<string, object> GetStats();
+    void RegisterWorldModel(string modelId, Func<string[], Task<VirtualExperience?>> generator);
+    void GenerateVirtualRollouts(string modelId, string[] entities, int count = 8);
+    List<VirtualExperience> CollectVirtualExperiences(int maxCount = 50);
+    Task<List<TaskHandle>> SubmitVirtualRolloutsAsync(Func<CancellationToken, Task<object?>> func, int count = 4,
+        TimeSpan? timeout = null);
+    (int submitted, int completed, int failed, int timeout, int pending, int virtualExp) GetExtendedStats();
+}
+
+public sealed class DecoupledExecutor : IDecoupledExecutor
 {
     private static readonly Lazy<DecoupledExecutor> _instance = new(() => new DecoupledExecutor());
     public static DecoupledExecutor Instance => _instance.Value;
@@ -240,8 +257,17 @@ public sealed class DecoupledExecutor
                     if (exp != null)
                         _virtualExperiences.Enqueue(exp);
                 }
-                catch { /* non-fatal */ }
-            });
+                catch (Exception)
+                {
+                    // Log or handle the exception appropriately
+                }
+            }).ContinueWith(t =>
+            {
+                if (t.IsFaulted && t.Exception != null)
+                {
+                    // Log the exception for debugging
+                }
+            }, TaskContinuationOptions.OnlyOnFaulted);
         }
     }
 

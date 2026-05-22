@@ -19,6 +19,7 @@ public sealed class CallGraphNode
     public int ImportCount { get; set; }
     public string? SourceCode { get; set; }
     public double Complexity { get; set; }
+    public ulong Fingerprint { get; set; }
 }
 
 public sealed class CallGraphEdge
@@ -32,26 +33,42 @@ public sealed class CallGraphEdge
 public sealed class ImpactResult
 {
     public string TargetSymbol { get; set; } = "";
+    public int Radius { get; set; }
     public int DirectCallers { get; set; }
     public int TransitiveCallers { get; set; }
     public int AffectedFiles { get; set; }
     public int AffectedTests { get; set; }
     public List<CallGraphNode> AffectedNodes { get; set; } = new();
-    public int Radius { get; set; }
+}
+
+/// <summary>
+/// 分析轨迹记录 (用于多步分析的上下文累积)
+/// </summary>
+public sealed record AnalysisTrajectory
+{
+    public DateTime Timestamp { get; init; } = DateTime.UtcNow;
+    public string Query { get; init; } = "";
+    public string Action { get; init; } = "";
+    public List<string> Findings { get; init; } = new();
+    public ulong ContextFingerprint { get; init; }
 }
 
 public sealed class CodeGraphEnhanced : IDisposable
 {
     private readonly SqliteConnection _db;
     private readonly string _rootDir;
+    private readonly LanguageParserRegistry _parserRegistry;
     private readonly ConcurrentDictionary<string, CallGraphNode> _nodes = new();
     private readonly List<CallGraphEdge> _edges = new();
+    private readonly List<AnalysisTrajectory> _trajectories = new();
     private readonly object _lock = new();
     private int _totalFiles, _totalNodes, _totalEdges;
+    private readonly HashSet<string> _languages = new();
 
     public CodeGraphEnhanced(DataPathResolver dataPath, string? rootDir = null)
     {
         _rootDir = rootDir ?? Directory.GetCurrentDirectory();
+        _parserRegistry = new LanguageParserRegistry();
         var dbPath = dataPath.GetPath("codegraph.db");
         var dir = global::System.IO.Path.GetDirectoryName(dbPath);
         if (dir != null) global::System.IO.Directory.CreateDirectory(dir);
@@ -66,7 +83,7 @@ public sealed class CodeGraphEnhanced : IDisposable
         cmd.CommandText = """
             CREATE TABLE IF NOT EXISTS nodes (
                 id TEXT PRIMARY KEY, name TEXT, file TEXT, kind TEXT, line INTEGER,
-                end_line INTEGER, parent_class TEXT, route TEXT, source_code TEXT, complexity REAL);
+                end_line INTEGER, parent_class TEXT, route TEXT, source_code TEXT, complexity REAL, fingerprint INTEGER);
             CREATE TABLE IF NOT EXISTS edges (
                 source_id TEXT, target_id TEXT, relation TEXT, line INTEGER,
                 PRIMARY KEY (source_id, target_id, relation));
@@ -74,25 +91,44 @@ public sealed class CodeGraphEnhanced : IDisposable
             CREATE INDEX IF NOT EXISTS idx_edges_source ON edges(source_id);
             CREATE INDEX IF NOT EXISTS idx_edges_target ON edges(target_id);
             CREATE INDEX IF NOT EXISTS idx_nodes_file ON nodes(file);
+            CREATE INDEX IF NOT EXISTS idx_nodes_fingerprint ON nodes(fingerprint);
             """;
         cmd.ExecuteNonQuery();
     }
 
     public async Task IndexAsync(Action<int, int>? onProgress = null)
     {
-        var excludes = new[] { "\\obj\\", "\\bin\\", "\\node_modules\\", "\\.git\\", "\\dist\\", "\\build\\" };
-        var files = Directory.GetFiles(_rootDir, "*.cs", SearchOption.AllDirectories)
-            .Where(f => !excludes.Any(e => f.Contains(e)))
-            .ToList();
+        var excludes = new[] { "\\obj\\", "\\bin\\", "\\node_modules\\", "\\.git\\", "\\dist\\", "\\build\\", "\\target\\", "\\vendor\\", "third_party" };
+
+        // 1. 智能预扫描：根据文件占比自动决定索引哪些语言 (默认阈值 1%)
+        var activeExtensions = _parserRegistry.GetActiveExtensions(_rootDir, threshold: 0.01);
+        
+        if (activeExtensions.Count == 0)
+        {
+            return;
+        }
+
+        // 2. 仅收集活跃语言的文件
+        var files = new List<string>();
+        foreach (var ext in activeExtensions)
+        {
+            try
+            {
+                files.AddRange(Directory.GetFiles(_rootDir, $"*{ext}", SearchOption.AllDirectories)
+                    .Where(f => !excludes.Any(e => f.Contains(e, StringComparison.OrdinalIgnoreCase))));
+            }
+            catch (UnauthorizedAccessException) { }
+        }
 
         _totalFiles = files.Count;
         var processed = 0;
 
+        // 3. 并行解析
         await Parallel.ForEachAsync(files, new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount }, async (file, ct) =>
         {
             await Task.Run(() =>
             {
-                try { ParseFile(file); }
+                try { ParseFileMultiLang(file); }
                 catch { /* non-fatal */ }
                 var done = Interlocked.Increment(ref processed);
                 onProgress?.Invoke(done, _totalFiles);
@@ -103,6 +139,45 @@ public sealed class CodeGraphEnhanced : IDisposable
         _totalNodes = _nodes.Count;
         _totalEdges = _edges.Count;
         RebuildFts();
+    }
+
+    private void ParseFileMultiLang(string file)
+    {
+        if (!global::System.IO.File.Exists(file)) return;
+        var content = global::System.IO.File.ReadAllText(file);
+        var parser = _parserRegistry.GetParserForFile(file);
+        if (parser == null) return;
+
+        _languages.Add(parser.LanguageName);
+        var symbols = parser.ParseFileAsync(file, content).GetAwaiter().GetResult();
+        var relativePath = global::System.IO.Path.GetRelativePath(_rootDir, file).Replace('\\', '/');
+
+        foreach (var symbol in symbols)
+        {
+            var fingerprint = SimHash.Compute(symbol.SourceCode ?? $"{symbol.Name}{symbol.ParentClass}");
+            AddNode(symbol.Name, relativePath, symbol.Kind.ToString().ToLower(), symbol.Line, symbol.EndLine, symbol.ParentClass, fingerprint);
+            _nodes.TryGetValue($"{relativePath}:{symbol.Name}:{symbol.Line}", out var node);
+            if (node != null)
+            {
+                node.Complexity = symbol.Complexity;
+                node.SourceCode = symbol.SourceCode;
+                node.Fingerprint = fingerprint;
+            }
+
+            foreach (var dep in symbol.Dependencies)
+            {
+                lock (_lock)
+                {
+                    _edges.Add(new CallGraphEdge
+                    {
+                        SourceId = $"{relativePath}:{symbol.Name}:{symbol.Line}",
+                        TargetId = dep,
+                        Relation = "calls",
+                        Line = symbol.Line
+                    });
+                }
+            }
+        }
     }
 
     private void ParseFile(string file)
@@ -168,13 +243,13 @@ public sealed class CodeGraphEnhanced : IDisposable
         }
     }
 
-    private void AddNode(string name, string file, string kind, int line, int endLine, string? parent)
+    private void AddNode(string name, string file, string kind, int line, int endLine, string? parent, ulong fingerprint = 0)
     {
         var id = $"{file}:{name}:{line}";
         _nodes.TryAdd(id, new CallGraphNode
         {
             Id = id, Name = name, File = file, Kind = kind,
-            Line = line, EndLine = endLine, ParentClass = parent
+            Line = line, EndLine = endLine, ParentClass = parent, Fingerprint = fingerprint
         });
     }
 
@@ -214,7 +289,7 @@ public sealed class CodeGraphEnhanced : IDisposable
     {
         using var tx = _db.BeginTransaction();
         using var cmd = _db.CreateCommand();
-        cmd.CommandText = "INSERT OR REPLACE INTO nodes VALUES (@id, @name, @file, @kind, @line, @end_line, @parent_class, @route, @source_code, @complexity)";
+        cmd.CommandText = "INSERT OR REPLACE INTO nodes VALUES (@id, @name, @file, @kind, @line, @end_line, @parent_class, @route, @source_code, @complexity, @fingerprint)";
         var idP = cmd.Parameters.Add("@id", SqliteType.Text);
         var nameP = cmd.Parameters.Add("@name", SqliteType.Text);
         var fileP = cmd.Parameters.Add("@file", SqliteType.Text);
@@ -225,6 +300,7 @@ public sealed class CodeGraphEnhanced : IDisposable
         var routeP = cmd.Parameters.Add("@route", SqliteType.Text);
         var srcP = cmd.Parameters.Add("@source_code", SqliteType.Text);
         var compP = cmd.Parameters.Add("@complexity", SqliteType.Real);
+        var fpP = cmd.Parameters.Add("@fingerprint", SqliteType.Integer);
 
         foreach (var (_, node) in _nodes)
         {
@@ -234,6 +310,7 @@ public sealed class CodeGraphEnhanced : IDisposable
             routeP.Value = (object?)node.Route ?? DBNull.Value;
             srcP.Value = (object?)node.SourceCode ?? DBNull.Value;
             compP.Value = node.Complexity;
+            fpP.Value = (long)node.Fingerprint;
             cmd.ExecuteNonQuery();
         }
 
@@ -406,15 +483,59 @@ public sealed class CodeGraphEnhanced : IDisposable
         return string.Join("\n", unique.Select(n => $"{n.Kind}:{n.Name} @ {n.File}:{n.Line}" + (n.Route != null ? $" [{n.Route}]" : "")));
     }
 
-    public Dictionary<string, object> GetStatus() => new()
+    public Dictionary<string, object> GetStatus()
     {
-        ["files_indexed"] = _totalFiles,
-        ["total_nodes"] = _totalNodes,
-        ["total_edges"] = _totalEdges,
-        ["languages"] = new[] { "C#" },
-        ["root_dir"] = _rootDir,
-        ["database_path"] = _db.DataSource
-    };
+        var langDist = _parserRegistry.GetPrimaryLanguages(_rootDir, threshold: 0.01)
+            .Select(x => new { language = x.Language, percentage = Math.Round(x.Percentage * 100, 1), files = x.Files })
+            .ToList();
+
+        return new()
+        {
+            ["files_indexed"] = _totalFiles,
+            ["total_nodes"] = _totalNodes,
+            ["total_edges"] = _totalEdges,
+            ["languages"] = _languages.ToList(),
+            ["language_distribution"] = langDist,
+            ["dominant_language"] = _parserRegistry.GetDominantLanguage(_rootDir) ?? "unknown",
+            ["root_dir"] = _rootDir,
+            ["database_path"] = _db.DataSource
+        };
+    }
+
+    public List<CallGraphNode> SearchSimilarCode(ulong fingerprint, int maxDistance = 5, int limit = 10)
+    {
+        var results = new List<CallGraphNode>();
+        using var cmd = _db.CreateCommand();
+        cmd.CommandText = "SELECT * FROM nodes WHERE ABS(fingerprint - @fp) < @threshold LIMIT @limit";
+        var fpParam = cmd.Parameters.Add("@fp", SqliteType.Integer);
+        var threshParam = cmd.Parameters.Add("@threshold", SqliteType.Integer);
+        var limitParam = cmd.Parameters.Add("@limit", SqliteType.Integer);
+        
+        fpParam.Value = (long)fingerprint;
+        threshParam.Value = (long)Math.Pow(2, maxDistance);
+        limitParam.Value = limit;
+
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            var node = ReadNode(reader);
+            var dist = SimHash.Distance(fingerprint, node.Fingerprint);
+            if (dist <= maxDistance)
+                results.Add(node);
+        }
+        return results;
+    }
+
+    public List<CallGraphNode> GetAllNodes()
+    {
+        var results = new List<CallGraphNode>();
+        using var cmd = _db.CreateCommand();
+        cmd.CommandText = "SELECT * FROM nodes";
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+            results.Add(ReadNode(reader));
+        return results;
+    }
 
     private static CallGraphNode ReadNode(SqliteDataReader reader) => new()
     {
@@ -427,8 +548,54 @@ public sealed class CodeGraphEnhanced : IDisposable
         ParentClass = reader.IsDBNull(6) ? null : reader.GetString(6),
         Route = reader.IsDBNull(7) ? null : reader.GetString(7),
         SourceCode = reader.IsDBNull(8) ? null : reader.GetString(8),
-        Complexity = reader.IsDBNull(9) ? 0 : reader.GetDouble(9)
+        Complexity = reader.IsDBNull(9) ? 0 : reader.GetDouble(9),
+        Fingerprint = reader.IsDBNull(10) ? 0 : (ulong)reader.GetInt64(10)
     };
 
     public void Dispose() => _db?.Dispose();
+
+    /// <summary>
+    /// 累积分析上下文 (Trajectory-Accumulative Conditioning)
+    /// 将每次分析的结果存入轨迹，供后续多步推理使用
+    /// </summary>
+    public void AccumulateContext(string query, string action, List<string> findings)
+    {
+        var fp = SimHash.Compute(string.Join(" ", findings));
+        lock (_lock)
+        {
+            _trajectories.Add(new AnalysisTrajectory
+            {
+                Query = query,
+                Action = action,
+                Findings = findings,
+                ContextFingerprint = fp
+            });
+        }
+    }
+
+    /// <summary>
+    /// 获取最近的分析历史 (用于构建长上下文 Prompt)
+    /// </summary>
+    public List<AnalysisTrajectory> GetAnalysisHistory(int lastN = 5)
+    {
+        lock (_lock)
+        {
+            return _trajectories.TakeLast(lastN).ToList();
+        }
+    }
+
+    /// <summary>
+    /// 基于历史轨迹的相似性搜索 (查找之前的类似分析)
+    /// </summary>
+    public List<AnalysisTrajectory> FindSimilarHistory(ulong queryFingerprint, int maxDistance = 10, int limit = 3)
+    {
+        lock (_lock)
+        {
+            return _trajectories
+                .Where(t => SimHash.Distance(queryFingerprint, t.ContextFingerprint) <= maxDistance)
+                .OrderBy(t => SimHash.Distance(queryFingerprint, t.ContextFingerprint))
+                .Take(limit)
+                .ToList();
+        }
+    }
 }

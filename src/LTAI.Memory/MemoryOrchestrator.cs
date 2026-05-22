@@ -8,7 +8,6 @@ public class MemoryOrchestrator
     private static readonly object _instanceLock = new();
 
     private readonly Lazy<MemPOOptimizer> _mempo;
-    private readonly object? _surpriseGate;
     private readonly Lazy<EmotionalMemoryStore> _emotional;
 
     private int _totalProcessed;
@@ -18,7 +17,6 @@ public class MemoryOrchestrator
     private MemoryOrchestrator()
     {
         _mempo = new Lazy<MemPOOptimizer>(() => MemPOOptimizer.GetMempoOptimizer());
-        _surpriseGate = null;
         _emotional = new Lazy<EmotionalMemoryStore>(() => EmotionalMemoryStore.Instance);
     }
 

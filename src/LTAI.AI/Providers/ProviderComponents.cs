@@ -39,10 +39,11 @@ public sealed class StreamParser
         using var stream = await response.Content.ReadAsStreamAsync(ct);
         using var reader = new StreamReader(stream);
 
-        while (!reader.EndOfStream)
+        while (true)
         {
             ct.ThrowIfCancellationRequested();
             var line = await reader.ReadLineAsync(ct);
+            if (line == null) break;
             if (string.IsNullOrWhiteSpace(line) || !line.StartsWith("data: ")) continue;
             var data = line["data: ".Length..];
             if (data == "[DONE]") yield break;

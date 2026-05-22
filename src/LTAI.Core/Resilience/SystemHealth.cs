@@ -95,7 +95,11 @@ public sealed class GreenScheduler
             {
                 _logger.LogError(ex, "Task '{Name}' failed", name);
             }
-        });
+        }).ContinueWith(t =>
+        {
+            if (t.IsFaulted && t.Exception != null)
+                _logger.LogError(t.Exception, "Task '{Name}' background execution failed", name);
+        }, TaskContinuationOptions.OnlyOnFaulted);
     }
 
     public void CheckAndAdjust(double cpuPercent)
@@ -160,7 +164,11 @@ public sealed class GreenScheduler
                     {
                         _logger.LogError(ex, "Deferred task '{Name}' failed", task.Name);
                     }
-                });
+                }).ContinueWith(t =>
+                {
+                    if (t.IsFaulted && t.Exception != null)
+                        _logger.LogError(t.Exception, "Deferred task '{Name}' background execution failed", task.Name);
+                }, TaskContinuationOptions.OnlyOnFaulted);
             }
 
             foreach (var remaining in tasks.Skip(10))

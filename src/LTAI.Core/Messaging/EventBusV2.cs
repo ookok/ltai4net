@@ -83,7 +83,28 @@ public sealed class EventFilter
     }
 }
 
-public sealed class EventBusV2
+public interface IEventBusV2
+{
+    string Publish(LivingEvent evt);
+    string Publish(string eventType, string sourceOrgan = "system",
+        Dictionary<string, object>? data = null, int priority = 0, string? correlationId = null);
+    void Subscribe(string eventType, Action<LivingEvent> handler, EventFilter? filter = null);
+    bool Unsubscribe(string eventType, Action<LivingEvent> handler);
+    void SubscribeFiltered(EventFilter filter, Action<LivingEvent> handler);
+    void OrganSubscribe(string organName, string eventPattern, Action<LivingEvent> handler);
+    List<LivingEvent> GetOrganEvents(string organName, int limit = 100);
+    List<LivingEvent> CorrelationTrace(string correlationId);
+    string StartCorrelation(string? correlationId = null);
+    void EndCorrelation(string correlationId);
+    List<LivingEvent> GetEventHistory(int limit = 100);
+    int PublishedCount { get; }
+    int RingSize { get; }
+    int GetSubscriberCount();
+    void ClearHistory();
+    void Emit(string eventType, Dictionary<string, object>? data = null);
+}
+
+public sealed class EventBusV2 : IEventBusV2
 {
     private static readonly Lazy<EventBusV2> _instance = new(() => new EventBusV2());
     public static EventBusV2 Instance => _instance.Value;

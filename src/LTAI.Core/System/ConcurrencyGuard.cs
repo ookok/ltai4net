@@ -11,7 +11,20 @@ public record BackgroundTask(
     string? Exception,
     Task? TaskRef);
 
-public sealed class ConcurrencyGuard
+public interface IConcurrencyGuard
+{
+    BackgroundTask Spawn(string name, Func<Task> coroutineFn);
+    BackgroundTask Spawn(string name, Action action);
+    List<BackgroundTask> SpawnMany(string namePrefix, IEnumerable<Func<Task>> coroutineFns);
+    List<BackgroundTask> SpawnMany(string namePrefix, IEnumerable<Action> actions);
+    void CancelAll();
+    List<BackgroundTask> ListTasks();
+    BackgroundTask? GetTask(string name);
+    IReadOnlyDictionary<string, BackgroundTask> Tasks { get; }
+    Dictionary<string, object> Stats();
+}
+
+public sealed class ConcurrencyGuard : IConcurrencyGuard
 {
     private static readonly Lazy<ConcurrencyGuard> _instance = new(() => new ConcurrencyGuard());
     public static ConcurrencyGuard Instance => _instance.Value;
@@ -125,9 +138,20 @@ public sealed class ConcurrencyGuard
         {
             _ = Task.Run(async () =>
             {
-                await Task.Delay(100);
-                _tasks.TryRemove(bt.Name, out _);
-            });
+                try
+                {
+                    await Task.Delay(100);
+                    _tasks.TryRemove(bt.Name, out _);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Failed to cleanup task {Name}", bt.Name);
+                }
+            }).ContinueWith(t =>
+            {
+                if (t.IsFaulted && t.Exception != null)
+                    _logger.LogError(t.Exception, "Background task cleanup failed for {Name}", bt.Name);
+            }, TaskContinuationOptions.OnlyOnFaulted);
         }
     }
 

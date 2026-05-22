@@ -152,11 +152,6 @@ public sealed class TreeSitterParser : ICodeParser
             if (rootVal == null) return default;
 
             return ConvertNode(rootVal);
-
-            void DisposeTree()
-            {
-                try { (tree as IDisposable)?.Dispose(); } catch { }
-            }
         }
         catch
         {

@@ -17,7 +17,16 @@ public sealed class A2aP2pBridge : IDisposable
     {
         _p2pNode = p2pNode;
         _logger = logger;
-        _ = Task.Run(() => ListenForP2pMessagesAsync(_cts.Token), _cts.Token);
+        _ = Task.Run(async () =>
+        {
+            try { await ListenForP2pMessagesAsync(_cts.Token); }
+            catch (OperationCanceledException) { /* expected on shutdown */ }
+            catch (Exception ex) { _logger.LogError(ex, "P2P message listener failed"); }
+        }, _cts.Token).ContinueWith(t =>
+        {
+            if (t.IsFaulted && t.Exception != null)
+                _logger.LogError(t.Exception, "P2P message listener background task failed");
+        }, TaskContinuationOptions.OnlyOnFaulted);
     }
 
     public async Task ForwardA2aRequestToP2pAsync(string agentName, string payload, CancellationToken ct = default)

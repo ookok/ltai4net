@@ -10,7 +10,6 @@ public sealed class DockerSandbox : ISandbox
     private readonly ILogger<DockerSandbox> _logger;
     private readonly DockerClient _docker;
     private readonly string _imagePrefix = "ltaisb-";
-    private bool _initialized;
 
     private static readonly Dictionary<SandboxLanguage, string> Images = new()
     {

@@ -181,7 +181,7 @@ public sealed class RoslynCSharpParser : ICodeParser
             var lineSpan = u.GetLocation().GetLineSpan();
             return new AstImport
             {
-                Module = u.Name.ToString(),
+                Module = u.Name?.ToString() ?? string.Empty,
                 Alias = u.Alias?.Name.Identifier.Text,
                 Line = lineSpan.StartLinePosition.Line + 1,
                 Column = lineSpan.StartLinePosition.Character + 1,

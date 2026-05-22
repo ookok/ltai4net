@@ -27,16 +27,10 @@ public sealed class MultiLangCodeAnalyzer
         return AnalyzeFallback(code, language, info);
     }
 
-    public CodeAnalysisResult Analyze(string code, CodeLanguage language)
+    [Obsolete("Use AnalyzeAsync instead to avoid sync-over-async deadlocks")]
+    public async Task<CodeAnalysisResult> Analyze(string code, CodeLanguage language)
     {
-        var info = LanguageRegistry.Get(language);
-        var parser = _parserRegistry.GetParser(language);
-        if (parser != null)
-        {
-            var astResult = parser.ParseAsync(code).GetAwaiter().GetResult();
-            return MapToResult(astResult, language, info);
-        }
-        return AnalyzeFallback(code, language, info);
+        return await AnalyzeAsync(code, language);
     }
 
     public async Task<List<string>> ExtractDependenciesAsync(

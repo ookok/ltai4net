@@ -32,7 +32,6 @@ namespace LTAI.Metrics.Monitoring
         private DateTime _previousCpuSampleTime;
         private bool _hasCpuBaseline;
 
-        private int _deferredCount;
         private int _consecutiveSkips;
 
         public int CpuHighThreshold { get; set; } = 80;
@@ -144,7 +143,6 @@ namespace LTAI.Metrics.Monitoring
                     ["under_pressure"] = snapshot.UnderPressure,
                     ["critical"] = snapshot.Critical
                 },
-                ["deferred_count"] = _deferredCount,
                 ["consecutive_skips"] = _consecutiveSkips,
                 ["thresholds"] = new Dictionary<string, object>
                 {

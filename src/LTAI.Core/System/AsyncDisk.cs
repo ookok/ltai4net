@@ -5,7 +5,18 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 namespace LTAI.Core.System;
 
-public sealed class AsyncDisk
+public interface IAsyncDisk
+{
+    void WriteJson(string path, object data);
+    void WriteText(string path, string text);
+    Task FlushNowAsync(string path);
+    Task FlushAllAsync();
+    void Start();
+    void Stop();
+    Dictionary<string, object> Stats();
+}
+
+public sealed class AsyncDisk : IAsyncDisk
 {
     private static readonly Lazy<AsyncDisk> _instance = new(() => new AsyncDisk());
     public static AsyncDisk Instance => _instance.Value;
@@ -41,27 +52,39 @@ public sealed class AsyncDisk
         _logger.LogDebug("Queued text write: {Path}", path);
     }
 
-    public void FlushNow(string path)
+    public async Task FlushNowAsync(string path)
     {
         if (!_dirty.ContainsKey(path))
             return;
 
         if (_pending.TryGetValue(path, out var content))
         {
-            _writeFile(path, content);
+            await _writeFileAsync(path, content);
             _dirty.TryRemove(path, out _);
             _logger.LogDebug("Flushed immediately: {Path}", path);
         }
     }
 
-    public void FlushAll()
+    [Obsolete("Use FlushNowAsync instead")]
+    public void FlushNow(string path)
     {
-        _flushBatch();
+        FlushNowAsync(path).GetAwaiter().GetResult();
     }
 
-    private void _flushBatch()
+    public async Task FlushAllAsync()
     {
-        _flushLock.Wait();
+        await _flushBatchAsync();
+    }
+
+    [Obsolete("Use FlushAllAsync instead")]
+    public void FlushAll()
+    {
+        FlushAllAsync().GetAwaiter().GetResult();
+    }
+
+    private async Task _flushBatchAsync()
+    {
+        await _flushLock.WaitAsync();
         try
         {
             var dirtyKeys = _dirty.Keys.Take(_maxBatchSize).ToList();
@@ -69,7 +92,7 @@ public sealed class AsyncDisk
             {
                 if (_pending.TryGetValue(path, out var content))
                 {
-                    _writeFile(path, content);
+                    await _writeFileAsync(path, content);
                 }
 
                 _dirty.TryRemove(path, out _);
@@ -84,7 +107,13 @@ public sealed class AsyncDisk
         }
     }
 
-    private void _writeFile(string path, string content)
+    [Obsolete("Use _flushBatchAsync instead")]
+    private void _flushBatch()
+    {
+        _flushBatchAsync().GetAwaiter().GetResult();
+    }
+
+    private async Task _writeFileAsync(string path, string content)
     {
         try
         {
@@ -93,13 +122,19 @@ public sealed class AsyncDisk
                 Directory.CreateDirectory(dir);
 
             var tempPath = path + ".tmp." + Guid.NewGuid().ToString("N");
-            File.WriteAllText(tempPath, content);
+            await File.WriteAllTextAsync(tempPath, content);
             File.Move(tempPath, path, overwrite: true);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to write file: {Path}", path);
         }
+    }
+
+    [Obsolete("Use _writeFileAsync instead")]
+    private void _writeFile(string path, string content)
+    {
+        _writeFileAsync(path, content).GetAwaiter().GetResult();
     }
 
     public void Start()
@@ -124,7 +159,7 @@ public sealed class AsyncDisk
                 }
 
                 if (_dirty.Count > 0)
-                    _flushBatch();
+                    await _flushBatchAsync();
             }
         }, token);
 
@@ -136,7 +171,9 @@ public sealed class AsyncDisk
         _cts?.Cancel();
         _cts?.Dispose();
         _cts = null;
+#pragma warning disable CS0618
         _flushBatch();
+#pragma warning restore CS0618
         _logger.LogInformation("AsyncDisk stopped, all pending flushed");
     }
 

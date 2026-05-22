@@ -158,7 +158,7 @@ public sealed class AermodResult
         ["receptors"] = Results.Count,
         ["max_concentration"] = Results.Count > 0 ? Results.Max(r => r.Concentration) : 0,
         ["max_receptor"] = Results.Count > 0 ? Results.OrderByDescending(r => r.Concentration).First().Name : "",
-        ["error"] = Error
+        ["error"] = Error ?? string.Empty
     };
 }
 

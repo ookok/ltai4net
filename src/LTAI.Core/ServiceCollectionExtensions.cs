@@ -58,8 +58,9 @@ public static class ServiceCollectionExtensions
         services.AddSingleton(sp => ResourceTree.Instance);
         services.AddSingleton(sp => UniversalScanner.Instance);
         services.AddSingleton(sp => AtomicModification.Instance);
-        services.AddSingleton(sp => AsyncDisk.Instance);
-        services.AddSingleton(sp => ConcurrencyGuard.Instance);
+        services.AddSingleton<IAsyncDisk>(sp => AsyncDisk.Instance);
+        services.AddSingleton<IConcurrencyGuard>(sp => ConcurrencyGuard.Instance);
+        services.AddSingleton<IDecoupledExecutor>(sp => DecoupledExecutor.Instance);
 
         services.AddSingleton<VisualReferenceBank>();
 
@@ -81,6 +82,8 @@ public static class ServiceCollectionExtensions
 
         services.AddSingleton<HotPathObjectPool>();
 
+        services.AddSingleton<IEventBusV2, EventBusV2>();
+        services.AddSingleton(sp => EventBusV2.Instance);
         services.AddSingleton<IEventBus, EventBus>();
         services.AddSingleton<ISessionStore, InMemorySessionStore>();
 

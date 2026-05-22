@@ -10,7 +10,6 @@ public class RelationEngine
     private readonly Dictionary<string, RelationRule> _rules = new();
     private readonly Dictionary<string, Dictionary<string, List<string>>> _graph = new();
     private readonly ILogger<RelationEngine> _logger;
-    private bool _depsLoaded;
     private GeometricRelationSelector? _geometricSelector;
     private readonly ConcurrentDictionary<string, List<(string Target, string Relation, double Score)>> _multiHopCache = new();
 

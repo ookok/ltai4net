@@ -233,7 +233,7 @@ public sealed partial class YamlTomlParser : IDocumentParser
             if (listMatch.Success)
             {
                 var val = ParseScalar(listMatch.Groups[1].Value.Trim());
-                currentArray.Add(val);
+                currentArray.Add(val ?? string.Empty);
                 if (lastArrayKey != null && stack.Peek().dict.TryGetValue(lastArrayKey, out _))
                     stack.Peek().dict[lastArrayKey] = new List<object>(currentArray);
                 continue;

@@ -19,9 +19,48 @@ public sealed record CellAnswerResult
     public string MatchedPattern { get; init; } = "";
 }
 
+// ==================== 分层计划存储 (Generative Agents 论文机制) ====================
+
+public enum PlanLevel { Daily, Hourly, Immediate }
+
+public record CellPlan
+{
+    public string Id { get; init; } = Guid.NewGuid().ToString("N")[..8];
+    public string CellId { get; init; } = "";
+    public PlanLevel Level { get; init; }
+    public string Content { get; init; } = "";  // 计划内容
+    public string Domain { get; init; } = "";
+    public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
+    public DateTime? ExpiresAt { get; init; }
+    public DateTime? InvalidatedAt { get; init; }  // 计划失效时间
+    public bool IsValid => !InvalidatedAt.HasValue && (!ExpiresAt.HasValue || ExpiresAt.Value > DateTime.UtcNow);
+    public int ExecutionCount { get; init; }
+    public float SuccessRate { get; init; }
+    public List<string> SubPlans { get; init; } = new();  // 子计划 ID
+    public string ParentPlanId { get; init; } = "";
+}
+
+public record PlanInvalidationEvent
+{
+    public string CellId { get; init; } = "";
+    public string Reason { get; init; } = "";
+    public List<string> AffectedPlanIds { get; init; } = new();
+    public DateTime TriggeredAt { get; init; } = DateTime.UtcNow;
+    public int Priority { get; init; }  // 高优先级事件立即触发重规划
+}
+
+public record PlanQueryResult
+{
+    public List<CellPlan> DailyPlans { get; init; } = new();
+    public List<CellPlan> HourlyPlans { get; init; } = new();
+    public List<CellPlan> ImmediatePlans { get; init; } = new();
+    public CellPlan? ActivePlan { get; init; }
+}
+
 public sealed class CellAnswerStore
 {
     private readonly Dictionary<string, List<CellAnswer>> _answers = new();
+    private readonly Dictionary<string, List<CellPlan>> _plans = new();  // CellId -> Plans
     private readonly ILogger<CellAnswerStore> _logger;
     private readonly object _lock = new();
 
@@ -173,5 +212,176 @@ public sealed class CellAnswerStore
             .ToList();
 
         return words.Count > 0 ? string.Join(".*", words) : query.ToLowerInvariant();
+    }
+
+    // ==================== 分层计划管理 ====================
+
+    /// <summary>
+    /// 创建分层计划 (日→时→瞬间)
+    /// </summary>
+    public CellPlan CreatePlan(string cellId, PlanLevel level, string content, string domain, TimeSpan? validity = null)
+    {
+        var plan = new CellPlan
+        {
+            CellId = cellId,
+            Level = level,
+            Content = content,
+            Domain = domain,
+            ExpiresAt = validity.HasValue ? DateTime.UtcNow.Add(validity.Value) : null
+        };
+
+        lock (_lock)
+        {
+            if (!_plans.TryGetValue(cellId, out var plans))
+            {
+                plans = new List<CellPlan>();
+                _plans[cellId] = plans;
+            }
+            plans.Add(plan);
+        }
+
+        _logger.LogInformation(
+            "Plan created: cell={Cell} level={Level} domain={Domain}",
+            cellId, level, domain);
+
+        return plan;
+    }
+
+    /// <summary>
+    /// 查询 Cell 的分层计划
+    /// </summary>
+    public PlanQueryResult QueryPlans(string cellId)
+    {
+        lock (_lock)
+        {
+            if (!_plans.TryGetValue(cellId, out var plans))
+            {
+                return new PlanQueryResult();
+            }
+
+            var validPlans = plans.Where(p => p.IsValid).ToList();
+
+            return new PlanQueryResult
+            {
+                DailyPlans = validPlans.Where(p => p.Level == PlanLevel.Daily).OrderByDescending(p => p.CreatedAt).ToList(),
+                HourlyPlans = validPlans.Where(p => p.Level == PlanLevel.Hourly).OrderByDescending(p => p.CreatedAt).ToList(),
+                ImmediatePlans = validPlans.Where(p => p.Level == PlanLevel.Immediate).OrderByDescending(p => p.CreatedAt).ToList(),
+                ActivePlan = validPlans
+                    .Where(p => p.Level == PlanLevel.Immediate)
+                    .OrderByDescending(p => p.CreatedAt)
+                    .FirstOrDefault()
+            };
+        }
+    }
+
+    /// <summary>
+    /// 标记计划失效 (用于事件驱动重规划)
+    /// </summary>
+    public PlanInvalidationEvent InvalidatePlans(string cellId, string reason, int priority = 0)
+    {
+        var affectedIds = new List<string>();
+
+        lock (_lock)
+        {
+            if (!_plans.TryGetValue(cellId, out var plans))
+            {
+                return new PlanInvalidationEvent { CellId = cellId, Reason = reason };
+            }
+
+            var now = DateTime.UtcNow;
+
+            // 高优先级事件使所有计划失效
+            if (priority >= 5)
+            {
+                foreach (var plan in plans.Where(p => p.IsValid))
+                {
+                    affectedIds.Add(plan.Id);
+                    // 使用反射更新不可变记录
+                    var idx = plans.IndexOf(plan);
+                    plans[idx] = plan with { InvalidatedAt = now };
+                }
+            }
+            else
+            {
+                // 低优先级事件仅使即时计划失效
+                foreach (var plan in plans.Where(p => p.IsValid && p.Level == PlanLevel.Immediate))
+                {
+                    affectedIds.Add(plan.Id);
+                    var idx = plans.IndexOf(plan);
+                    plans[idx] = plan with { InvalidatedAt = now };
+                }
+            }
+        }
+
+        var evt = new PlanInvalidationEvent
+        {
+            CellId = cellId,
+            Reason = reason,
+            AffectedPlanIds = affectedIds,
+            Priority = priority
+        };
+
+        _logger.LogInformation(
+            "Plans invalidated: cell={Cell} reason={Reason} count={Count} priority={Priority}",
+            cellId, reason, affectedIds.Count, priority);
+
+        return evt;
+    }
+
+    /// <summary>
+    /// 记录计划执行反馈
+    /// </summary>
+    public void RecordPlanExecution(string planId, bool wasSuccessful)
+    {
+        lock (_lock)
+        {
+            foreach (var plans in _plans.Values)
+            {
+                var planIdx = plans.FindIndex(p => p.Id == planId);
+                if (planIdx >= 0)
+                {
+                    var plan = plans[planIdx];
+                    var totalExecutions = plan.ExecutionCount + 1;
+                    var newSuccessRate = (plan.SuccessRate * plan.ExecutionCount + (wasSuccessful ? 1.0f : 0.0f)) / totalExecutions;
+
+                    plans[planIdx] = plan with
+                    {
+                        ExecutionCount = totalExecutions,
+                        SuccessRate = newSuccessRate
+                    };
+
+                    _logger.LogDebug(
+                        "Plan execution recorded: id={Id} success={Success} rate={Rate:F2}",
+                        planId, wasSuccessful, newSuccessRate);
+                    return;
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// 获取计划统计
+    /// </summary>
+    public Dictionary<string, object> GetPlanStats()
+    {
+        lock (_lock)
+        {
+            var allPlans = _plans.Values.SelectMany(p => p).ToList();
+            var validPlans = allPlans.Where(p => p.IsValid).ToList();
+
+            return new Dictionary<string, object>
+            {
+                ["total_plans"] = allPlans.Count,
+                ["valid_plans"] = validPlans.Count,
+                ["invalidated_plans"] = allPlans.Count - validPlans.Count,
+                ["by_level"] = new Dictionary<string, int>
+                {
+                    ["daily"] = validPlans.Count(p => p.Level == PlanLevel.Daily),
+                    ["hourly"] = validPlans.Count(p => p.Level == PlanLevel.Hourly),
+                    ["immediate"] = validPlans.Count(p => p.Level == PlanLevel.Immediate)
+                },
+                ["average_success_rate"] = validPlans.Count > 0 ? validPlans.Average(p => (double)p.SuccessRate) : 0.0
+            };
+        }
     }
 }

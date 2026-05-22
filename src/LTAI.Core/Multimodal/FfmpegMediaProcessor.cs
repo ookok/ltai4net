@@ -11,7 +11,7 @@ public sealed class MediaResult
 
 public sealed class FfmpegMediaProcessor
 {
-    private readonly string _ffmpegPath;
+    private readonly string? _ffmpegPath;
 
     public FfmpegMediaProcessor(string? ffmpegPath = null)
     {

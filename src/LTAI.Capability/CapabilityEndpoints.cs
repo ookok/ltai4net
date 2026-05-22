@@ -44,7 +44,7 @@ public static class CapabilityEndpoints
                 ? DetectLanguage(request.Code)
                 : Enum.Parse<CodeLanguage>(request.Language, true);
 
-            var result = analyzer.Analyze(request.Code, lang);
+            var result = await analyzer.AnalyzeAsync(request.Code, lang);
             return Results.Json(result);
         });
 

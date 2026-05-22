@@ -59,8 +59,13 @@ public sealed class CodeGraph
             _ = Task.Run(async () =>
             {
                 try { await ParseFileWithAstAsync(file); }
+                catch (Exception ex) { _logger.LogError(ex, "Failed to parse file with AST: {File}", file); }
                 finally { semaphore.Release(); }
-            });
+            }).ContinueWith(t =>
+            {
+                if (t.IsFaulted && t.Exception != null)
+                    _logger.LogError(t.Exception, "Background file parsing failed: {File}", file);
+            }, TaskContinuationOptions.OnlyOnFaulted);
         }
         for (var i = 0; i < Environment.ProcessorCount; i++) await semaphore.WaitAsync();
         semaphore.Dispose();
@@ -118,8 +123,13 @@ public sealed class CodeGraph
             _ = Task.Run(() =>
             {
                 try { ParseFile(file); }
+                catch (Exception ex) { _logger.LogError(ex, "Failed to parse file: {File}", file); }
                 finally { semaphore.Release(); }
-            });
+            }).ContinueWith(t =>
+            {
+                if (t.IsFaulted && t.Exception != null)
+                    _logger.LogError(t.Exception, "Background file parsing failed: {File}", file);
+            }, TaskContinuationOptions.OnlyOnFaulted);
         }
         for (var i = 0; i < Environment.ProcessorCount; i++) await semaphore.WaitAsync();
         semaphore.Dispose();

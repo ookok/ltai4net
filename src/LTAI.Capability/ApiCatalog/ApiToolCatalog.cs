@@ -24,14 +24,12 @@ public sealed class ApiToolCatalog
     public static ApiToolCatalog Instance => _instance.Value;
 
     private readonly ConcurrentDictionary<string, ApiToolEntry> _tools = new();
-    private bool _loaded;
 
     public IReadOnlyDictionary<string, ApiToolEntry> AllTools => _tools;
 
     private ApiToolCatalog()
     {
         SeedBuiltInApis();
-        _loaded = true;
     }
 
     private void SeedBuiltInApis()
