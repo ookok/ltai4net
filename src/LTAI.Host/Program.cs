@@ -97,19 +97,19 @@ builder.Services.AddLTAIAI();
 builder.Services.AddLTAIDocument(); builder.Services.AddLTAIDNA(); builder.Services.AddLTAIMemory();
 builder.Services.AddLTAITreeLLM(); builder.Services.AddLTAIExecution(); builder.Services.AddLTAICapability();
 builder.Services.AddLTAIEconomy(); builder.Services.AddLTAISandbox(); builder.Services.AddLTAIMetrics();
-builder.Services.AddLTAIMultimodal(); builder.Services.AddLTAIBrowser(); builder.Services.AddLTAIMAF();
+builder.Services.AddLTAIMultimodal(); builder.Services.AddLTAIMAF();
 builder.Services.AddLTAINetwork();
 
 var app = builder.Build();
 
-// app.UseA2ABearerAuth();  // requires A2AAuthExtensions (not yet migrated)
+// app.UseA2ABearerAuth();
 app.UseLTAI();
 
 app.MapMAFEndpoints(); app.MapDNAEndpoints(); app.MapCapabilityEndpoints();
 app.MapSandboxEndpoints(); app.MapMultimodalEndpoints(); app.MapExecutionEndpoints();
 app.UseLTAIMetrics(); app.MapMCPEndpoints(); app.MapAHEEndpoints();
 app.MapNetworkEndpoints();
-// app.MapSpecializedA2AEndpoints(); app.MapA2AHttpJson("LTAI", "/a2a/livingtree");
+app.MapA2AHttpJson("LTAI", "/a2a/livingtree");
 
 app.UseSerilogRequestLogging();
 
