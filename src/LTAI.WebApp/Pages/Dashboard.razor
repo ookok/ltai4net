@@ -1,4 +1,5 @@
 @page "/"
+@using LTAI.DNA.Models
 @inject DNAOrchestrator? DNA
 @inject LTAIMetricsCollector? Metrics
 
@@ -16,13 +17,13 @@
                 <div class="bar"><div class="fill cyan" style="width:@(DNA.Consciousness.State.AwarenessScore*100)%"></div></div>
                 <span>@DNA.Consciousness.State.AwarenessScore.ToString("F2")</span>
             </div>
-            <div class="metric"><span>Evolution</span><span class="val">@DNA.Evolution.Phase Gen @DNA.Evolution.CurrentGenome.Generation</span></div>
-            <div class="metric"><span>Fitness</span>
-                <div class="bar"><div class="fill green" style="width:@(DNA.Evolution.CurrentGenome.FitnessScore*100)%"></div></div>
-                <span>@DNA.Evolution.CurrentGenome.FitnessScore.ToString("F3")</span>
+            <div class="metric"><span>Evolution Rules</span><span class="val">@DNA.SelfEvo.Rules.Count</span></div>
+            <div class="metric"><span>Mutation Rate</span>
+                <div class="bar"><div class="fill green" style="width:@(DNA.SelfEvo.MutationRate*100)%"></div></div>
+                <span>@DNA.SelfEvo.MutationRate.ToString("F3")</span>
             </div>
             <div class="metric"><span>Safety</span><span class="val @(DNA.Safety.Posture.ToString().ToLower())">@DNA.Safety.Posture</span></div>
-            <div class="metric"><span>Biorhythm</span><span class="val">@DNA.Life.Biorhythm.Phase E:@DNA.Life.Biorhythm.EnergyLevel.ToString("F1")</span></div>
+            <div class="metric"><span>Biorhythm</span><span class="val">@BioPhase E:@BioEnergy</span></div>
         }
         else { <p class="muted">DNA module not loaded</p> }
     </div>
@@ -31,11 +32,10 @@
         <h3>Hormones</h3>
         @if (DNA != null)
         {
-            var h = DNA.Life.Hormones;
-            <div class="metric"><span>Dopamine</span><div class="bar"><div class="fill magenta" style="width:@(h.Dopamine*100)%"></div></div><span>@h.Dopamine.ToString("F2")</span></div>
-            <div class="metric"><span>Serotonin</span><div class="bar"><div class="fill yellow" style="width:@(h.Serotonin*100)%"></div></div><span>@h.Serotonin.ToString("F2")</span></div>
-            <div class="metric"><span>Cortisol</span><div class="bar"><div class="fill red" style="width:@(h.Cortisol*100)%"></div></div><span>@h.Cortisol.ToString("F2")</span></div>
-            <div class="metric"><span>Oxytocin</span><div class="bar"><div class="fill blue" style="width:@(h.Oxytocin*100)%"></div></div><span>@h.Oxytocin.ToString("F2")</span></div>
+            <div class="metric"><span>Dopamine</span><div class="bar"><div class="fill magenta" style="width:@(DNA.HormoneNetwork.GetLevel(HormoneType.Dopamine)*100)%"></div></div><span>@DNA.HormoneNetwork.GetLevel(HormoneType.Dopamine).ToString("F2")</span></div>
+            <div class="metric"><span>Serotonin</span><div class="bar"><div class="fill yellow" style="width:@(DNA.HormoneNetwork.GetLevel(HormoneType.Serotonin)*100)%"></div></div><span>@DNA.HormoneNetwork.GetLevel(HormoneType.Serotonin).ToString("F2")</span></div>
+            <div class="metric"><span>Cortisol</span><div class="bar"><div class="fill red" style="width:@(DNA.HormoneNetwork.GetLevel(HormoneType.Cortisol)*100)%"></div></div><span>@DNA.HormoneNetwork.GetLevel(HormoneType.Cortisol).ToString("F2")</span></div>
+            <div class="metric"><span>Oxytocin</span><div class="bar"><div class="fill blue" style="width:@(DNA.HormoneNetwork.GetLevel(HormoneType.Oxytocin)*100)%"></div></div><span>@DNA.HormoneNetwork.GetLevel(HormoneType.Oxytocin).ToString("F2")</span></div>
         }
     </div>
 
@@ -55,15 +55,15 @@
 
 <div class="grid-2" style="margin-top:1rem">
     <div class="card">
-        <h3>Genes</h3>
+        <h3>Evolution Rules</h3>
         @if (DNA != null)
         {
-            foreach (var (name, gene) in DNA.Evolution.CurrentGenome.Genes.Take(8))
+            foreach (var (name, rule) in DNA.SelfEvo.Rules.Take(8))
             {
                 <div class="metric">
-                    <span>@name</span>
-                    <div class="bar"><div class="fill green" style="width:@(gene.Expression*100)%"></div></div>
-                    <span>@gene.Expression.ToString("F2")</span>
+                    <span>@rule.Name</span>
+                    <div class="bar"><div class="fill green" style="width:@(rule.Strength*100)%"></div></div>
+                    <span>@rule.Strength.ToString("F2")</span>
                 </div>
             }
         }
@@ -73,7 +73,7 @@
         <h3>Personality</h3>
         @if (DNA != null)
         {
-            var p = DNA.Life.Personality;
+            var p = DNA.Personality.Profile;
             <div class="metric"><span>Openness</span><div class="bar"><div class="fill cyan" style="width:@(p.Openness*100)%"></div></div><span>@p.Openness.ToString("F2")</span></div>
             <div class="metric"><span>Conscientiousness</span><div class="bar"><div class="fill green" style="width:@(p.Conscientiousness*100)%"></div></div><span>@p.Conscientiousness.ToString("F2")</span></div>
             <div class="metric"><span>Extraversion</span><div class="bar"><div class="fill yellow" style="width:@(p.Extraversion*100)%"></div></div><span>@p.Extraversion.ToString("F2")</span></div>
@@ -84,6 +84,27 @@
 </div>
 
 @code {
+    private string BioPhase
+    {
+        get
+        {
+            var bio = DNA?.BiorhythmEngine?.GetSnapshot();
+            if (bio != null && bio.TryGetValue("phase", out var p))
+                return $"{p:F1}";
+            return "--";
+        }
+    }
+    private string BioEnergy
+    {
+        get
+        {
+            var bio = DNA?.BiorhythmEngine?.GetSnapshot();
+            if (bio != null && bio.TryGetValue("energy", out var e))
+                return $"{e:F1}";
+            return "--";
+        }
+    }
+
     protected override async Task OnInitializedAsync()
     {
         while (true) { await Task.Delay(3000); StateHasChanged(); }

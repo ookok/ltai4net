@@ -4,6 +4,7 @@
 @using LTAI.Capability.CodeEngine
 @using LTAI.Capability.Review
 @using LTAI.Capability.Search
+@inherits LayoutComponentBase
 @inject LivingTreeSystem LTS
 @inject DNAOrchestrator? DNA
 @inject LTAIMetricsCollector? Metrics
@@ -26,13 +27,14 @@
         <NavLink href="/git">🔀 Git</NavLink>
         <NavLink href="/knowledge">📚 Knowledge</NavLink>
         <NavLink href="/code">🔧 Code</NavLink>
+        <NavLink href="/devui">🧠 DevUI</NavLink>
         <NavLink href="/config">⚙️ Config</NavLink>
         <div class="status-bar">
             <div>@LTS.Mode</div>
             @if (DNA != null)
             {
                 <div>DNA: @DNA.Consciousness.State.Level</div>
-                <div>Gen: @DNA.Evolution.CurrentGenome.Generation</div>
+                <div>Rules: @DNA.SelfEvo.Rules.Count</div>
             }
             @if (Metrics != null)
             {

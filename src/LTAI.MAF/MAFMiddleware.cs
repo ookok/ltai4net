@@ -17,18 +17,21 @@ public static class LTAIMiddleware
 {
     public static AIAgent WithLTAIGovernance(this AIAgent agent, IServiceProvider services)
     {
+        return agent.AsBuilder().WithLTAIGovernance(services).Build();
+    }
+
+    public static AIAgentBuilder WithLTAIGovernance(this AIAgentBuilder builder, IServiceProvider services)
+    {
         var logger = services.GetRequiredService<ILogger<LTAIAgent>>();
         var journal = services.GetRequiredService<TaskJournal>();
         var dna = services.GetService<DNAOrchestrator>();
         var guardian = services.GetRequiredService<SystemGuardian>();
 
-        return agent.AsBuilder()
-            .Use(
-                runFunc: (messages, session, options, innerAgent, ct) =>
-                    AgentRunWithGovernance(messages, session, options, innerAgent, journal, guardian, dna, logger, ct),
-                runStreamingFunc: (messages, session, options, innerAgent, ct) =>
-                    AgentRunStreamingWithGovernance(messages, session, options, innerAgent, journal, guardian, dna, logger, ct))
-            .Build();
+        return builder.Use(
+            runFunc: (messages, session, options, innerAgent, ct) =>
+                AgentRunWithGovernance(messages, session, options, innerAgent, journal, guardian, dna, logger, ct),
+            runStreamingFunc: (messages, session, options, innerAgent, ct) =>
+                AgentRunStreamingWithGovernance(messages, session, options, innerAgent, journal, guardian, dna, logger, ct));
     }
 
     private static async Task<AgentResponse> AgentRunWithGovernance(

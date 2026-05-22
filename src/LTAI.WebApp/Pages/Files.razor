@@ -56,17 +56,18 @@
         if (depth > 2) return;
         foreach (var sd in dir.GetDirectories().Where(d => !d.Name.StartsWith('.') && d.Name != "bin" && d.Name != "obj").Take(8))
         {
-            builder.AddMarkupContent(0, $"<div style='padding-left:{depth*16}px' class='dir' onclick=''>📁 {sd.Name}</div>");
+            builder.AddMarkupContent(0, $"<div style='padding-left:{depth*16}px' class='dir'>📁 {sd.Name}</div>");
             RenderTree(sd, depth + 1)(builder);
         }
         foreach (var f in dir.GetFiles().Take(20).OrderBy(x => x.Extension).ThenBy(x => x.Name))
         {
             var icon = f.Extension switch { ".cs" => "🟢", ".py" => "🐍", ".js" => "🟨", ".ts" => "🟦", ".md" => "📝", ".csproj" => "⚙", _ => "📄" };
-            var idx = builder.AddMarkupContent(0, $"<div style='padding-left:{depth*16+16}px' class='file' @onclick='{() => SelectFile(f.FullName)}'>{icon} {f.Name}</div>");
+            var path = f.FullName;
+            builder.AddMarkupContent(0, $"<div style='padding-left:{depth*16+16}px' class='file' @onclick='{() => SelectFile(path)}'>{icon} {f.Name}</div>");
         }
     };
 
-    private void SelectFile(string path)
+    private async Task SelectFile(string path)
     {
         _selectedFile = path;
         _fileContent = "";
@@ -75,7 +76,7 @@
         {
             _fileContent = File.ReadAllText(path);
             var lang = LanguageRegistry.Detect(path);
-            _analysisResult = Analyzer.Analyze(_fileContent[..Math.Min(_fileContent.Length, 5000)], lang);
+            _analysisResult = await Analyzer.AnalyzeAsync(_fileContent[..Math.Min(_fileContent.Length, 5000)], lang);
         }
         catch { _fileContent = "Cannot read file."; }
         StateHasChanged();

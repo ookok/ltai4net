@@ -537,6 +537,23 @@ public sealed class CodeGraphEnhanced : IDisposable
         return results;
     }
 
+    public List<CallGraphEdge> GetAllEdges()
+    {
+        var results = new List<CallGraphEdge>();
+        using var cmd = _db.CreateCommand();
+        cmd.CommandText = "SELECT source_id, target_id, relation, line FROM edges";
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+            results.Add(new CallGraphEdge
+            {
+                SourceId = reader.GetString(0),
+                TargetId = reader.GetString(1),
+                Relation = reader.GetString(2),
+                Line = reader.GetInt32(3)
+            });
+        return results;
+    }
+
     private static CallGraphNode ReadNode(SqliteDataReader reader) => new()
     {
         Id = reader.GetString(0),

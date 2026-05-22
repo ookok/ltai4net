@@ -27,8 +27,9 @@ public static class ToolRegistryExtensions
         totalTools += RegisterWebSearchTools(registry);
         totalTools += RegisterGitTools(registry);
         totalTools += RegisterDependencyTools(registry);
+        totalTools += RegisterUnderstandTools(registry);
 
-        logger?.LogInformation("ToolRegistry: Registered {Count} tools across 12 categories", totalTools);
+        logger?.LogInformation("ToolRegistry: Registered {Count} tools across 13 categories", totalTools);
         return Task.CompletedTask;
     }
 
@@ -240,5 +241,16 @@ public static class ToolRegistryExtensions
             (CancellationToken ct) => DependencyTools.CheckPackageManagers(ct), "dep_managers",
             "Check if Chocolatey and Scoop package managers are installed and working."));
         return 4;
+    }
+
+    private static int RegisterUnderstandTools(AIToolRegistry registry)
+    {
+        registry.RegisterTool("understand_diff", AIFunctionFactory.Create(
+            (string? repoPath) => UnderstandDiffTool.AnalyzeImpact(repoPath), "understand_diff",
+            "Analyze the impact of recent code changes. Shows changed files, affected directories, risk score, and potential ripple effects."));
+        registry.RegisterTool("understand_tour", AIFunctionFactory.Create(
+            (string? repoPath) => TourGeneratorTool.GenerateTour(repoPath), "understand_tour",
+            "Generate a guided architecture tour of the codebase, ordered by dependency. Start from solution files → config → code → docs."));
+        return 2;
     }
 }

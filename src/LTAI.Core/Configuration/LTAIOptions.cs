@@ -148,6 +148,9 @@ public sealed class AIConfig
 
 public sealed class ProviderConfig
 {
+    [JsonPropertyName("name")]
+    public string Name { get; init; } = string.Empty;
+
     [JsonPropertyName("endpoint")]
     public string Endpoint { get; init; } = string.Empty;
 

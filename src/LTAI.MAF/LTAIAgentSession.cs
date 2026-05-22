@@ -9,6 +9,9 @@ internal sealed class LTAIAgentSession : AgentSession
 {
     private string? _sessionId;
     private static ILogger? _logger;
+    private string? _lastIntent;
+    private string? _lastModel;
+    private int _turnCount;
 
     public static void SetLogger(ILogger logger) => _logger = logger;
 
@@ -23,9 +26,23 @@ internal sealed class LTAIAgentSession : AgentSession
 
     public List<ChatMessage> History { get; } = new();
 
-    public string? LastIntent { get; set; }
-    public string? LastModel { get; set; }
-    public int TurnCount { get; set; }
+    public string? LastIntent
+    {
+        get => _lastIntent;
+        set => _lastIntent = value;
+    }
+
+    public string? LastModel
+    {
+        get => _lastModel;
+        set => _lastModel = value;
+    }
+
+    public int TurnCount
+    {
+        get => _turnCount;
+        set => _turnCount = value;
+    }
 
     public void AddTurn(string userQuery, string assistantResponse)
     {

@@ -129,37 +129,59 @@ public class InteractiveSetupWizard
 
         Console.WriteLine();
         Console.WriteLine("选择 API 提供商：");
+        Console.WriteLine("  ─── 云端提供商 ───");
+        var cloudProviders = new List<(int Index, string Name)>();
+        var localProviders = new List<(int Index, string Name)>();
+        
         for (int i = 0; i < providers.Count; i++)
         {
             var p = providers[i];
-            var url = registry.GetBaseUrl(p);
-            var model = registry.GetDefaultModel(p);
-            Console.WriteLine($"  [{i + 1,2}] {p,-16} {url}");
+            var url = registry.GetBaseUrl(p)!;
+            var model = registry.GetDefaultModel(p)!;
+            var isLocal = url.Contains("localhost") || url.Contains("127.0.0.1") || url.Contains("0.0.0.0") || url.Contains(".local");
+            
+            if (isLocal)
+                localProviders.Add((i + 1, p));
+            else
+                cloudProviders.Add((i + 1, p));
+            
+            var tag = isLocal ? "  [本地无Key]" : "";
+            Console.WriteLine($"  [{i + 1,2}] {p,-16} {model,-36}{tag}");
         }
         Console.WriteLine();
 
         var providerChoice = ReadLine("选择提供商编号");
-        if (string.IsNullOrWhiteSpace(providerChoice) || !int.TryParse(providerChoice, out var idx) || idx < 1 || idx > providers.Count)
+        if (string.IsNullOrWhiteSpace(providerChoice) || !int.TryParse(providerChoice, out var selectedIdx) || selectedIdx < 1 || selectedIdx > providers.Count)
         {
             Console.WriteLine("  ⚠️  无效选择，跳过 API 配置");
             return;
         }
 
-        var selectedProvider = providers[idx - 1];
+        var selectedProvider = providers[selectedIdx - 1];
         var endpoint = registry.GetBaseUrl(selectedProvider)!;
         var defaultModel = registry.GetDefaultModel(selectedProvider)!;
+        var isLocalProvider = endpoint.Contains("localhost") || endpoint.Contains("127.0.0.1") || endpoint.Contains("0.0.0.0") || endpoint.Contains(".local");
 
         Console.WriteLine();
-        Console.WriteLine($"提供商: {selectedProvider}");
+        Console.WriteLine($"提供商: {selectedProvider}{(isLocalProvider ? " (本地, 无需 API Key)" : "")}");
         Console.WriteLine($"端点: {endpoint}");
         Console.WriteLine($"默认模型: {defaultModel}");
         Console.WriteLine();
 
-        var apiKey = ReadSecret("API Key");
-        if (string.IsNullOrWhiteSpace(apiKey))
+        string apiKey;
+        if (isLocalProvider)
         {
-            Console.WriteLine("  ⚠️  未提供 API Key，跳过");
-            return;
+            Console.WriteLine("  ℹ️  本地提供商不需要 API Key");
+            apiKey = "";
+        }
+        else
+        {
+            apiKey = ReadSecret("API Key");
+            if (string.IsNullOrWhiteSpace(apiKey))
+            {
+                Console.WriteLine("  ⚠️  未提供 API Key，跳过");
+                return;
+            }
         }
 
         var customModel = ReadLine($"模型名称 (默认: {defaultModel})");
@@ -178,7 +200,11 @@ public class InteractiveSetupWizard
         _isDirty = true;
 
         Console.WriteLine();
-        if (await ValidateApiKeyAsync(endpoint, apiKey, chosenModel, ct))
+        if (isLocalProvider)
+        {
+            Console.WriteLine($"  ✓ {layerName} 本地提供商已配置");
+        }
+        else if (await ValidateApiKeyAsync(endpoint, apiKey, chosenModel, ct))
             Console.WriteLine($"  ✓ {layerName} API 配置成功，连接正常");
         else
             Console.WriteLine($"  ⚠️ {layerName} API 配置已保存，但连接失败");

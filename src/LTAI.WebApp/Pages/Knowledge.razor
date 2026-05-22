@@ -1,4 +1,5 @@
 @page "/knowledge"
+@using LTAI.Vector.Knowledge.Models
 @inject LTAI.Vector.Knowledge.DocumentStore DocStore
 @inject LTAI.Vector.Knowledge.KnowledgeBase KB
 
@@ -17,8 +18,8 @@
         @foreach (var r in _results)
         {
             <div class="card result-item">
-                <strong>@r.Id</strong>
-                <p>@r.Text?[..Math.Min(r.Text?.Length ?? 0, 200)]</p>
+                <strong>@r.Title</strong>
+                <p>@r.Content?[..Math.Min(r.Content?.Length ?? 0, 200)]</p>
                 <span class="score">Score: @r.Score.ToString("F2")</span>
             </div>
         }
@@ -28,7 +29,7 @@
 @code {
     private string SearchQuery = "";
     private int _docCount;
-    private List<LTAI.Vector.Models.VectorSearchResult> _results = new();
+    private List<KnowledgeSearchResult> _results = new();
 
     protected override async Task OnInitializedAsync()
     {
@@ -39,7 +40,6 @@
     private async Task DoSearch()
     {
         if (string.IsNullOrWhiteSpace(SearchQuery)) return;
-        var results = await KB.SearchAsync(SearchQuery, 10);
-        _results = results.Select(r => new LTAI.Vector.Models.VectorSearchResult { Id = r.Id, Text = r.Text, Score = r.Score }).ToList();
+        _results = await KB.SearchAsync(SearchQuery, 10);
     }
 }

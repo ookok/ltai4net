@@ -1,12 +1,16 @@
+using System.ClientModel;
 using LTAI.AI.Governors;
 using LTAI.AI.Providers;
 using LTAI.Capability.Skills;
+using LTAI.Core.Configuration;
 using LTAI.Core.Messaging;
 using LTAI.Vector.Knowledge;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using OpenAI;
 
 namespace LTAI.AI;
 
@@ -14,14 +18,35 @@ public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddLTAIAI(this IServiceCollection services)
     {
-        services.AddSingleton<ProviderEngine>();
         services.AddSingleton<ProviderFanOutRace>();
+        services.AddSingleton<BudgetTracker>();
 
         services.AddSingleton<IChatClient>(sp =>
         {
-            var engine = sp.GetRequiredService<ProviderEngine>();
-            var pipeline = new ChatClientBuilder(engine)
-                .UseLogging(sp.GetRequiredService<ILoggerFactory>())
+            var options = sp.GetRequiredService<IOptions<LTAIOptions>>();
+            var loggerFactory = sp.GetRequiredService<ILoggerFactory>();
+            var budget = sp.GetRequiredService<BudgetTracker>();
+            var multiLogger = sp.GetService<ILogger<MultiProviderChatClient>>();
+
+            var providerClients = new List<KeyValuePair<string, IChatClient>>();
+            foreach (var kv in options.Value.AI.Providers)
+            {
+                if (string.IsNullOrEmpty(kv.Value.Endpoint))
+                    continue;
+
+                var apiKey = ResolveApiKey(kv.Key, kv.Value.ApiKey);
+                if (apiKey == null)
+                    continue;
+
+                var providerClient = CreateProviderChatClient(kv.Value, apiKey, kv.Key, loggerFactory);
+                if (providerClient != null)
+                    providerClients.Add(new KeyValuePair<string, IChatClient>(kv.Key, providerClient));
+            }
+
+            var multiClient = new MultiProviderChatClient(providerClients, options, multiLogger!, budget);
+
+            var pipeline = new ChatClientBuilder(multiClient)
+                .UseLogging(loggerFactory)
                 .UseFunctionInvocation()
                 .UseOpenTelemetry()
                 .UseDistributedCache()
@@ -468,6 +493,58 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<SystemGuardian>();
         services.AddSingleton<LivingTreeSystem>();
 
+        services.AddSingleton<PathCompressor>();
+        services.AddSingleton<QValueEstimator>();
+
         return services;
+    }
+
+    private static string? ResolveApiKey(string providerName, string configuredKey)
+    {
+        if (!string.IsNullOrWhiteSpace(configuredKey) && !configuredKey.Contains("YOUR_API_KEY", StringComparison.OrdinalIgnoreCase))
+            return configuredKey;
+
+        var nameUpper = providerName.ToUpperInvariant();
+
+        var isLocal = nameUpper is "OLLAMA" or "LMSTUDIO" or "LM_STUDIO" or "VLLM" or "LLAMACPP" or "LLAMA_CPP" or "OPEN_WEBUI";
+
+        var envVar = nameUpper switch
+        {
+            "DEEPSEEK" => "DEEPSEEK_API_KEY",
+            "OPENAI" => "OPENAI_API_KEY",
+            "ANTHROPIC" => "ANTHROPIC_API_KEY",
+            "GEMINI" or "GOOGLE" => "GEMINI_API_KEY",
+            "SILICONFLOW" => "SILICONFLOW_API_KEY",
+            _ => isLocal ? null : $"{nameUpper}_API_KEY"
+        };
+
+        var envKey = envVar != null ? Environment.GetEnvironmentVariable(envVar) : null;
+        if (!string.IsNullOrEmpty(envKey))
+            return envKey;
+
+        if (isLocal)
+            return "";
+
+        try { return SecretVault.Instance.Get(providerName); }
+        catch { return null; }
+    }
+
+    private static IChatClient? CreateProviderChatClient(
+        ProviderConfig config, string apiKey, string providerName, ILoggerFactory loggerFactory)
+    {
+        try
+        {
+            var endpoint = config.Endpoint.TrimEnd('/');
+            var credential = new ApiKeyCredential(string.IsNullOrEmpty(apiKey) ? "not-needed" : apiKey);
+            var clientOptions = new OpenAIClientOptions { Endpoint = new Uri(endpoint) };
+            var openAiClient = new OpenAIClient(credential, clientOptions);
+            var chatClient = openAiClient.GetChatClient(config.Model);
+            return new OpenAIProviderChatClient(chatClient);
+        }
+        catch (Exception ex)
+        {
+            loggerFactory.CreateLogger("LTAI.AI").LogWarning(ex, "Skipping provider {Provider}: creation failed", providerName);
+            return null;
+        }
     }
 }

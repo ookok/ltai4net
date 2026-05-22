@@ -1,0 +1,28 @@
+{
+  "name": "understand-anything",
+  "version": "1.0.0",
+  "description": "Turn any codebase into an interactive knowledge graph you can explore, search, and ask questions about.",
+  "author": "LTAI Team",
+  "commands": {
+    "/understand": {
+      "description": "Analyze the codebase and build a knowledge graph",
+      "handler": "understand"
+    },
+    "/understand-dashboard": {
+      "description": "Open interactive knowledge graph dashboard",
+      "handler": "understand-dashboard"
+    },
+    "/understand-diff": {
+      "description": "Analyze impact of current code changes",
+      "handler": "understand-diff"
+    },
+    "/understand-chat": {
+      "description": "Ask questions about the codebase",
+      "handler": "understand-chat"
+    },
+    "/understand-tour": {
+      "description": "Generate a guided architecture tour",
+      "handler": "understand-tour"
+    }
+  }
+}

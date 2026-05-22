@@ -92,19 +92,21 @@ public class Program
         rootCommand.AddCommand(debugCommand);
         rootCommand.AddCommand(improveCommand);
 
-        var modelCommand = new Command("model", "Manage local models (list, download, remove)");
+        var modelCommand = new Command("model", "Manage local models (list, download, remove, reset)");
         
-        var modelCommandArg = new Argument<string?>("command", "Command: list, download, remove");
+        var modelCommandArg = new Argument<string?>("command", "Command: list, download, remove, reset");
         var modelLayerOption = new Option<string?>("--layer", "Model layer: L0, L1, L2");
         var modelVersionOption = new Option<string?>("--version", "Model version to download/remove");
         var modelMirrorOption = new Option<bool>("--mirror", () => false, "Force use of China mirror (hf-mirror.com)");
         var modelForceOption = new Option<bool>("--force", () => false, "Force re-download even if model exists");
+        var modelSetupOption = new Option<bool>("--setup", () => false, "Re-run setup wizard after reset");
 
         modelCommand.AddArgument(modelCommandArg);
         modelCommand.AddOption(modelLayerOption);
         modelCommand.AddOption(modelVersionOption);
         modelCommand.AddOption(modelMirrorOption);
         modelCommand.AddOption(modelForceOption);
+        modelCommand.AddOption(modelSetupOption);
 
         modelCommand.SetHandler(async (ctx) =>
         {
@@ -113,8 +115,9 @@ public class Program
             var version = ctx.ParseResult.GetValueForOption(modelVersionOption);
             var mirror = ctx.ParseResult.GetValueForOption(modelMirrorOption);
             var force = ctx.ParseResult.GetValueForOption(modelForceOption);
+            var rerunSetup = ctx.ParseResult.GetValueForOption(modelSetupOption);
 
-            var exitCode = await ModelMode.RunAsync(cmd, layer, version, mirror, force);
+            var exitCode = await ModelMode.RunAsync(cmd, layer, version, mirror, force, rerunSetup);
             ctx.ExitCode = exitCode;
         });
 
@@ -149,6 +152,7 @@ public class Program
         Console.WriteLine("  ltai model list [--layer L0|L1|L2]");
         Console.WriteLine("  ltai model download --layer L1 --version qwen2.5-1.5b-q4 [--mirror]");
         Console.WriteLine("  ltai model remove --layer L1 --version qwen2.5-1.5b-q4");
+        Console.WriteLine("  ltai model reset [--setup]                       # 清除所有模型, --setup 可重新进入引导");
         Console.WriteLine();
         Console.WriteLine("Setup 选项:");
         Console.WriteLine("  配置 L0/L1/L2 三层，支持 API 或 Local 模式");

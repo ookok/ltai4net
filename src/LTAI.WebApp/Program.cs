@@ -4,6 +4,7 @@ using LTAI.Capability;
 using LTAI.Core;
 using LTAI.Core.Configuration;
 using LTAI.DNA;
+using LTAI.MAF;
 using LTAI.Memory;
 using LTAI.Metrics;
 using LTAI.Vector;
@@ -27,6 +28,7 @@ builder.Services.AddLTAIDNA();
 builder.Services.AddLTAIMemory();
 builder.Services.AddLTAICapability();
 builder.Services.AddLTAIMetrics();
+builder.Services.AddLTAIMAF();
 
 builder.Services.AddSingleton<LivingTreeSystem>();
 builder.Services.AddSingleton<DNAOrchestrator>();
@@ -36,6 +38,8 @@ var app = builder.Build();
 
 app.UseStaticFiles();
 app.UseAntiforgery();
+
+app.MapDevUIEndpoints();
 
 app.MapRazorComponents<LTAI.WebApp.Components.App>();
 

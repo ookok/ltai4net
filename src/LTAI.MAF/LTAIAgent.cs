@@ -12,6 +12,7 @@ namespace LTAI.MAF;
 
 public sealed class LTAIAgent : AIAgent
 {
+    private readonly ChatClientAgent _chatAgent;
     private readonly LivingTreeSystem _livingTree;
     private readonly ILogger<LTAIAgent> _logger;
     private readonly LTAIInputFilter? _inputFilter;
@@ -30,6 +31,14 @@ public sealed class LTAIAgent : AIAgent
         _logger = logger;
         _inputFilter = inputFilter;
         _outputFilter = outputFilter;
+
+        _chatAgent = new ChatClientAgent(
+            new LivingTreeChatClient(livingTree, null),
+            new ChatClientAgentOptions
+            {
+                Name = "LTAI",
+                Description = "LivingTree AI Agent with bio-inspired governance"
+            });
     }
 
     protected override async Task<AgentResponse> RunCoreAsync(
@@ -56,25 +65,24 @@ public sealed class LTAIAgent : AIAgent
 
         try
         {
-            string result;
             var useWorkflow = options?.AdditionalProperties?.TryGetValue("useWorkflow", out var wf) == true && wf is true;
             var forceChat = options?.AdditionalProperties?.TryGetValue("forceChat", out var fc) == true && fc is true;
-
             bool shouldUseWorkflow = useWorkflow || (!forceChat && ShouldUseWorkflow(query));
 
             if (shouldUseWorkflow)
             {
                 var wfResult = await GovernorWorkflow.ExecuteWorkflowAsync(_livingTree, query, cancellationToken);
-                result = wfResult.IsBlocked ? $"[Blocked: {wfResult.BlockReason}]" : wfResult.Response;
-            }
-            else
-            {
-                result = await _livingTree.ChatAsync(query, cancellationToken);
+                var result = wfResult.IsBlocked ? $"[Blocked: {wfResult.BlockReason}]" : wfResult.Response;
+                if (_outputFilter != null) result = _outputFilter.Review(result);
+                ltaSession?.AddTurn(userMessages.Last().Text ?? query, result);
+                return new AgentResponse(new ChatMessage(ChatRole.Assistant, result));
             }
 
-            if (_outputFilter != null) result = _outputFilter.Review(result);
-            ltaSession?.AddTurn(userMessages.Last().Text ?? query, result);
-            return new AgentResponse(new ChatMessage(ChatRole.Assistant, result));
+            var response = await _chatAgent.RunAsync(messages, session, options, cancellationToken);
+            var text = response.Text ?? "";
+            if (_outputFilter != null) text = _outputFilter.Review(text);
+            ltaSession?.AddTurn(userMessages.Last().Text ?? query, text);
+            return new AgentResponse(new ChatMessage(ChatRole.Assistant, text));
         }
         catch (Exception ex)
         {
@@ -99,9 +107,7 @@ public sealed class LTAIAgent : AIAgent
         }
 
         var query = string.Join("\n", userMessages.Select(m => m.Text ?? ""));
-
         _inputFilter?.Analyze(userMessages.Last());
-
         _logger.LogInformation("LTAI agent (stream): {Query}", query[..Math.Min(query.Length, 200)]);
 
         var useWorkflow = options?.AdditionalProperties?.TryGetValue("useWorkflow", out var wf) == true && wf is true;
@@ -115,16 +121,16 @@ public sealed class LTAIAgent : AIAgent
         }
         else
         {
-            await using var enumerator = _livingTree.StreamChatAsync(query, cancellationToken).GetAsyncEnumerator(cancellationToken);
+            await using var enumerator = _chatAgent.RunStreamingAsync(messages, session, options, cancellationToken).GetAsyncEnumerator(cancellationToken);
             string? streamError = null;
 
             while (true)
             {
-                string chunk;
+                AgentResponseUpdate update;
                 try
                 {
                     if (!await enumerator.MoveNextAsync()) break;
-                    chunk = enumerator.Current;
+                    update = enumerator.Current;
                 }
                 catch (OperationCanceledException) { yield break; }
                 catch (Exception ex)
@@ -134,13 +140,11 @@ public sealed class LTAIAgent : AIAgent
                     break;
                 }
 
-                yield return new AgentResponseUpdate(ChatRole.Assistant, chunk);
+                yield return update;
             }
 
             if (streamError != null)
-            {
                 yield return new AgentResponseUpdate(ChatRole.Assistant, $"Error: {streamError}");
-            }
         }
     }
 
@@ -190,10 +194,8 @@ public sealed class LTAIAgent : AIAgent
     private static bool ShouldUseWorkflow(string query)
     {
         if (string.IsNullOrWhiteSpace(query)) return false;
-
         var trimmed = query.Trim();
         if (trimmed.Length < 10) return false;
-
         if (trimmed.StartsWith('/') && trimmed.Length < 30) return false;
 
         var workflowKeywords = new[]
@@ -207,9 +209,7 @@ public sealed class LTAIAgent : AIAgent
 
         var lower = query.ToLowerInvariant();
         foreach (var kw in workflowKeywords)
-        {
             if (lower.Contains(kw)) return true;
-        }
 
         var wordCount = trimmed.Split((char[])[' ', '\t', '\n', '\r'], StringSplitOptions.RemoveEmptyEntries).Length;
         if (wordCount > 50) return true;

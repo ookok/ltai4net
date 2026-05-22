@@ -24,6 +24,7 @@ using LTAI.Capability.Tools;
 using LTAI.Network.Interfaces;
 using LTAI.Network.Bridge;
 using LTAI.Core.Setup;
+using LTAI.MAF.Tools;
 using Microsoft.AspNetCore.RateLimiting;
 using OpenTelemetry.Logs;
 using OpenTelemetry.Metrics;
@@ -103,7 +104,6 @@ builder.Services.AddLTAINetwork();
 
 var app = builder.Build();
 
-ActivityFeedBridge.BridgeToOpenTelemetry();
 app.UseA2ABearerAuth();
 app.UseLTAI();
 
@@ -155,6 +155,7 @@ var toolRegistry = sp.GetRequiredService<AIToolRegistry>();
 sp.GetRequiredService<LTAI.MAF.Evolution.PluginRegistry>().Discover();
 await LTAI.MAF.Tools.ToolRegistryExtensions.RegisterAllToolCategoriesAsync(toolRegistry, logger);
 await LTAI.Capability.Tools.LTAIToolRegistry.SeedAllAsync(toolRegistry, sp);
+await sp.RegisterCodeActToolsAsync(toolRegistry);
 
 await toolRegistry.RegisterAsync("git_diff", async args =>
 {

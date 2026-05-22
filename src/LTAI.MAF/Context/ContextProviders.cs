@@ -10,14 +10,14 @@ public sealed class ContextItem
     public string Source { get; set; } = "";
 }
 
-public abstract class AIContextProvider(string name, ContextProviderType type)
+public abstract class LTAIContextProvider(string name, ContextProviderType type)
 {
     public string Name { get; } = name;
     public ContextProviderType Type { get; } = type;
     public abstract Task<IReadOnlyList<ContextItem>> GetContextAsync(string query, CancellationToken ct = default);
 }
 
-public sealed class MoEContextProvider : AIContextProvider
+public sealed class MoEContextProvider : LTAIContextProvider
 {
     private readonly Func<string, string, Task<object>> _moeQuery;
 
@@ -38,11 +38,11 @@ public sealed class MoEContextProvider : AIContextProvider
     }
 }
 
-public sealed class CompositeContextProvider : AIContextProvider
+public sealed class CompositeContextProvider : LTAIContextProvider
 {
-    private readonly List<AIContextProvider> _providers;
+    private readonly List<LTAIContextProvider> _providers;
 
-    public CompositeContextProvider(params AIContextProvider[] providers) : base("Composite", ContextProviderType.Memory)
+    public CompositeContextProvider(params LTAIContextProvider[] providers) : base("Composite", ContextProviderType.Memory)
     {
         _providers = providers.ToList();
     }

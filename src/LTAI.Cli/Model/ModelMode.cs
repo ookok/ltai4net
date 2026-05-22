@@ -25,7 +25,7 @@ internal static class ModelMode
         }
     }
 
-    public static async Task<int> RunAsync(string? command, string? layer, string? version, bool useMirror, bool force)
+    public static async Task<int> RunAsync(string? command, string? layer, string? version, bool useMirror, bool force, bool rerunSetup = false)
     {
         var downloader = new ModelDownloader();
 
@@ -44,8 +44,13 @@ internal static class ModelMode
             return RemoveModel(downloader, layer, version);
         }
 
+        if (command == "reset")
+        {
+            return ResetAllModels(downloader, rerunSetup);
+        }
+
         Console.WriteLine($"Unknown model command: {command}");
-        Console.WriteLine("Available commands: list, download, remove");
+        Console.WriteLine("Available commands: list, download, remove, reset");
         return 1;
     }
 
@@ -171,6 +176,79 @@ internal static class ModelMode
 
         downloader.RemoveModel(version, ModelsDir);
         Console.WriteLine($"🗑️ Removed {model.Name}");
+        return 0;
+    }
+
+    private static int ResetAllModels(ModelDownloader downloader, bool rerunSetup)
+    {
+        var modelsDir = ModelsDir;
+        
+        if (!Directory.Exists(modelsDir))
+        {
+            Console.WriteLine("No models directory found. Nothing to reset.");
+            return 0;
+        }
+
+        var layerDirs = new[] { "l0", "l1", "l2" };
+        var deletedCount = 0;
+        var deletedSize = 0L;
+
+        foreach (var ld in layerDirs)
+        {
+            var dir = Path.Combine(modelsDir, ld);
+            if (!Directory.Exists(dir)) continue;
+
+            var files = Directory.GetFiles(dir);
+            foreach (var f in files)
+            {
+                var fi = new FileInfo(f);
+                deletedSize += fi.Length;
+                File.Delete(f);
+                deletedCount++;
+            }
+
+            if (Directory.GetFiles(dir).Length == 0 && Directory.GetDirectories(dir).Length == 0)
+                Directory.Delete(dir);
+        }
+
+        Console.WriteLine("=== LTAI Model Reset ===");
+        Console.WriteLine();
+        Console.WriteLine($"🗑️  Deleted {deletedCount} model file(s) ({deletedSize / 1024.0 / 1024.0:F1} MB)");
+        Console.WriteLine();
+
+        // 清除 local_llm.json 等配置
+        var configFiles = new[]
+        {
+            Path.Combine(AppContext.BaseDirectory, "local_llm.json"),
+            Path.Combine(AppContext.BaseDirectory, "local_l0.json"),
+            Path.Combine(AppContext.BaseDirectory, "local_l1.json"),
+            Path.Combine(AppContext.BaseDirectory, "local_l2.json")
+        };
+        foreach (var cf in configFiles)
+        {
+            if (File.Exists(cf))
+            {
+                File.Delete(cf);
+                Console.WriteLine($"   Cleared config: {Path.GetFileName(cf)}");
+            }
+        }
+        Console.WriteLine();
+
+        if (rerunSetup)
+        {
+            Console.WriteLine("🔄 Restarting setup wizard...");
+            Console.WriteLine();
+
+            var configPath = Path.Combine(AppContext.BaseDirectory, "appsettings.json");
+            var wizard = new InteractiveSetupWizard(configPath);
+            wizard.RunAsync().GetAwaiter().GetResult();
+        }
+        else
+        {
+            Console.WriteLine("Tip: Run 'ltai model reset --setup' to also restart the setup wizard.");
+            Console.WriteLine("     Run '.\\setup-models.ps1' to one-click re-download all models.");
+        }
+
         return 0;
     }
 

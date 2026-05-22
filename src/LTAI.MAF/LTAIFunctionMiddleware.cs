@@ -11,13 +11,16 @@ public static class LTAIFunctionMiddleware
 {
     public static AIAgent WithToolGovernance(this AIAgent agent, IServiceProvider services)
     {
+        return agent.AsBuilder().WithToolGovernance(services).Build();
+    }
+
+    public static AIAgentBuilder WithToolGovernance(this AIAgentBuilder builder, IServiceProvider services)
+    {
         var actionGov = ActionGovernor.Instance;
         var logger = services.GetRequiredService<ILogger<LTAIAgent>>();
 
-        return agent.AsBuilder()
-            .Use((agent, context, next, ct) =>
-                InterceptToolCallAsync(agent, context, next, actionGov, logger, ct))
-            .Build();
+        return builder.Use((agent, context, next, ct) =>
+            InterceptToolCallAsync(agent, context, next, actionGov, logger, ct));
     }
 
     private static async ValueTask<object?> InterceptToolCallAsync(

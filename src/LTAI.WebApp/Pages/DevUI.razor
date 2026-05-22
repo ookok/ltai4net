@@ -1,0 +1,26 @@
+@page "/devui"
+
+<PageTitle>DevUI — LTAI</PageTitle>
+
+<h2>DevUI — Interactive Knowledge Graph</h2>
+
+<div class="devui-container">
+    <iframe src="/devui" class="devui-frame" title="LTAI DevUI"></iframe>
+</div>
+
+@code {
+    protected override async Task OnInitializedAsync()
+    {
+        // auto-refresh every 30s to sync with project changes
+        _ = RunRefreshLoop();
+    }
+
+    private async Task RunRefreshLoop()
+    {
+        while (true)
+        {
+            await Task.Delay(30_000);
+            StateHasChanged();
+        }
+    }
+}

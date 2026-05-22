@@ -6,8 +6,8 @@
 <h2>Code Tools</h2>
 
 <div class="tabs">
-    <button class="tab @(_tab == "analyze" ? "active" : "")" @onclick="() => _tab = \"analyze\"">Analyze</button>
-    <button class="tab @(_tab == "review" ? "active" : "")" @onclick="() => _tab = \"review\"">Review</button>
+    <button class="tab @(_tab == "analyze" ? "active" : "")" @onclick="SetAnalyzeTab">Analyze</button>
+    <button class="tab @(_tab == "review" ? "active" : "")" @onclick="SetReviewTab">Review</button>
 </div>
 
 @if (_tab == "analyze")
@@ -49,12 +49,14 @@ else
     private CodeAnalysisResult? _analysisResult;
     private ReviewReport? _reviewReport;
 
+    private void SetAnalyzeTab() => _tab = "analyze";
+    private void SetReviewTab() => _tab = "review";
+
     private async Task AnalyzeCodeAsync()
     {
         if (string.IsNullOrWhiteSpace(CodeInput)) return;
         var lang = Enum.TryParse<CodeLanguage>(LanguageInput, out var l) ? l : CodeLanguage.Unknown;
-        _analysisResult = Analyzer.Analyze(CodeInput, lang);
-        await Task.CompletedTask;
+        _analysisResult = await Analyzer.AnalyzeAsync(CodeInput, lang);
     }
 
     private async Task RunReviewAsync()

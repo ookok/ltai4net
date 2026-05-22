@@ -1,5 +1,5 @@
 @page "/config"
-@inject IConfiguration Config
+@inject IConfiguration Configuration
 
 <PageTitle>Config — LTAI</PageTitle>
 <h2>System Configuration</h2>
@@ -8,7 +8,7 @@
     <h3>LLM Providers</h3>
     <table>
         <tr><th>Provider</th><th>Model</th><th>Endpoint</th></tr>
-        @foreach (var (key, val) in Config.GetSection("LTAI:AI:Providers").GetChildren().ToDictionary(c => c.Key, c => c))
+        @foreach (var (key, val) in Configuration.GetSection("LTAI:AI:Providers").GetChildren().ToDictionary(c => c.Key, c => c))
         {
             <tr>
                 <td>@key</td>
@@ -21,10 +21,10 @@
 
 <div class="card">
     <h3>Settings</h3>
-    <div class="metric"><span>Deep Model</span><span class="val">@Config["LTAI:AI:DeepModel"]</span></div>
-    <div class="metric"><span>Fast Model</span><span class="val">@Config["LTAI:AI:FastModel"]</span></div>
-    <div class="metric"><span>Daily Budget</span><span class="val">$@Config["LTAI:AI:DailyBudgetUsd"]</span></div>
-    <div class="metric"><span>Rate Limit</span><span class="val">@Config["LTAI:Web:RateLimitPerMinute"]/min</span></div>
+    <div class="metric"><span>Deep Model</span><span class="val">@Configuration["LTAI:AI:DeepModel"]</span></div>
+    <div class="metric"><span>Fast Model</span><span class="val">@Configuration["LTAI:AI:FastModel"]</span></div>
+    <div class="metric"><span>Daily Budget</span><span class="val">$@Configuration["LTAI:AI:DailyBudgetUsd"]</span></div>
+    <div class="metric"><span>Rate Limit</span><span class="val">@Configuration["LTAI:Web:RateLimitPerMinute"]/min</span></div>
 </div>
 
 <div class="card">

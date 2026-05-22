@@ -49,7 +49,7 @@
                 <input type="file" @ref="_fileInput" hidden accept=".cs,.py,.js,.ts,.go,.rs,.java,.md,.json,.xml,.txt" @onchange="OnFileSelected" />
                 <span class="muted">@_attachedFile @_diffLabel</span>
             </div>
-            <textarea @bind="Input" @bind:event="oninput" @onkeydown="OnKeyDown" placeholder="Type... (@path to load, Shift+Enter new line)"></textarea>
+            <textarea @bind="Input" @bind:event="oninput" @onkeydown="OnKeyDown" placeholder="Type... (&#64;path to load, Shift+Enter new line)"></textarea>
             <button @onclick="SendAsync" disabled="@(_sending || string.IsNullOrWhiteSpace(Input))">
                 @(_sending ? "⏳" : "Send")
             </button>
@@ -136,9 +136,8 @@
 
             if (_originalContent != null)
             {
-                var diff = TUI.DiffEngine.Compute(_originalContent, ExtractCodeBlock(final));
-                _diffContent = TUI.DiffEngine.RenderUnifiedDiff(diff);
-                _diffLabel = $" {diff.AddedCount}+ {diff.RemovedCount}- {diff.ChangedCount}~";
+                var generated = ExtractCodeBlock(final);
+                _diffLabel = $" Original: {_originalContent.Length}B → Generated: {generated.Length}B";
             }
         }
         catch (OperationCanceledException) { }
@@ -223,7 +222,7 @@
 
     private async Task LoadPromptTemplate()
     {
-        var templates = PromptLibrary.BuiltInNames();
+        var templates = new[] { "Code Review", "Refactor", "Generate Tests", "Document", "Explain", "Fix Bugs", "Optimize", "Add Error Handling" };
         if (templates.Length == 0) return;
         var selected = templates[_templateIndex % templates.Length];
         _templateIndex++;
@@ -239,9 +238,4 @@
     private async Task AttachFile() { }
     private async Task OnFileSelected(ChangeEventArgs e) { }
     public async ValueTask DisposeAsync() { _streamCts?.Cancel(); _streamCts?.Dispose(); }
-}
-
-public static class PromptLibrary
-{
-    public static string[] BuiltInNames() => new[] { "Code Review", "Refactor", "Generate Tests", "Document", "Explain", "Fix Bugs", "Optimize", "Add Error Handling" };
 }
