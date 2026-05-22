@@ -1,6 +1,6 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
-using LTAI.Core.Interfaces;
+using LTAI.AI.Governors;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
@@ -37,9 +37,16 @@ public static class SseAgentEndpoints
 
     public static void MapSseAgentEndpoints(this IEndpointRouteBuilder endpoints)
     {
-        endpoints.MapGet("/api/agent/health", () =>
+        endpoints.MapGet("/api/agent/health", (HttpContext context) =>
         {
-            return Results.Json(new { status = "ok", version = "5.5" });
+            var system = context.RequestServices.GetService<LivingTreeSystem>();
+            return Results.Json(new
+            {
+                status = system is not null ? "ok" : "degraded",
+                version = "5.5",
+                mode = system?.Mode.ToString() ?? "unknown",
+                dna_enabled = system?.DNAEnabled ?? false
+            });
         });
 
         endpoints.MapPost("/api/agent/tasks", async (HttpContext context) =>
@@ -62,15 +69,38 @@ public static class SseAgentEndpoints
                 };
                 _tasks.TryAdd(taskId, task);
 
-                var chatClient = endpoints.ServiceProvider.GetService<IChatClient>();
+                var sp = context.RequestServices;
+                var system = sp.GetService<LivingTreeSystem>();
+                var chatClient = sp.GetService<IChatClient>();
 
-                if (chatClient != null)
+                if (system is not null)
                 {
                     _ = Task.Run(async () =>
                     {
                         task.Status = "running";
                         try
                         {
+                            task.StepsCompleted = 2;
+                            var response = await system.ChatAsync(prompt);
+                            task.Result = response;
+                            task.Status = "completed";
+                            task.StepsCompleted = Steps.Length;
+                        }
+                        catch (Exception ex)
+                        {
+                            task.Status = "failed";
+                            task.Error = ex.Message;
+                        }
+                    });
+                }
+                else if (chatClient is not null)
+                {
+                    _ = Task.Run(async () =>
+                    {
+                        task.Status = "running";
+                        try
+                        {
+                            task.StepsCompleted = 2;
                             var response = await chatClient.GetResponseAsync(prompt);
                             task.Result = response.Text ?? "";
                             task.Status = "completed";
@@ -85,32 +115,15 @@ public static class SseAgentEndpoints
                 }
                 else
                 {
-                    _ = Task.Run(async () =>
-                    {
-                        task.Status = "running";
-                        try
-                        {
-                            for (var i = 0; i < Steps.Length; i++)
-                            {
-                                await Task.Delay(200);
-                                task.StepsCompleted = i + 1;
-                            }
-                            task.Result = $"[Simulated response for: {prompt}]";
-                            task.Status = "completed";
-                        }
-                        catch (Exception ex)
-                        {
-                            task.Status = "failed";
-                            task.Error = ex.Message;
-                        }
-                    });
+                    task.Status = "failed";
+                    task.Error = "No backend (LivingTreeSystem or IChatClient) available";
                 }
 
                 context.Response.ContentType = "application/json";
                 await context.Response.WriteAsync(JsonSerializer.Serialize(new
                 {
                     task_id = taskId,
-                    status = "created"
+                    status = task.Status == "failed" ? "failed" : "created"
                 }));
             }
             catch (Exception ex)

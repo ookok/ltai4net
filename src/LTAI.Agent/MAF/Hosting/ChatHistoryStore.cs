@@ -74,77 +74,21 @@ public sealed class FileHistoryStore : ChatHistoryStore
     }
 }
 
-public sealed class BlobHistoryStore : ChatHistoryStore
-{
-    private readonly string _connectionString;
-    private readonly string _containerName;
-
-    public BlobHistoryStore(string connectionString, string containerName = "chat-sessions") : base("Blob")
-    {
-        _connectionString = connectionString;
-        _containerName = containerName;
-    }
-
-    public override Task SaveAsync(ChatSession session, CancellationToken ct = default)
-    {
-        var data = JsonSerializer.SerializeToUtf8Bytes(session);
-        return Task.CompletedTask;
-    }
-
-    public override Task<ChatSession?> LoadAsync(string sessionId, CancellationToken ct = default)
-        => Task.FromResult<ChatSession?>(null);
-
-    public override Task DeleteAsync(string sessionId, CancellationToken ct = default)
-        => Task.CompletedTask;
-
-    public override Task<List<ChatSession>> ListAsync(int limit = 20, CancellationToken ct = default)
-        => Task.FromResult(new List<ChatSession>());
-}
-
-public sealed class TableHistoryStore : ChatHistoryStore
-{
-    public TableHistoryStore(string connectionString, string tableName = "ChatSessions") : base("Table") { }
-
-    public override Task SaveAsync(ChatSession session, CancellationToken ct = default) => Task.CompletedTask;
-    public override Task<ChatSession?> LoadAsync(string sessionId, CancellationToken ct = default) => Task.FromResult<ChatSession?>(null);
-    public override Task DeleteAsync(string sessionId, CancellationToken ct = default) => Task.CompletedTask;
-    public override Task<List<ChatSession>> ListAsync(int limit = 20, CancellationToken ct = default) => Task.FromResult(new List<ChatSession>());
-}
-
-public sealed class CosmosHistoryStore : ChatHistoryStore
-{
-    public CosmosHistoryStore(string endpoint, string key, string database = "LTAI", string collection = "sessions") : base("Cosmos") { }
-
-    public override Task SaveAsync(ChatSession session, CancellationToken ct = default) => Task.CompletedTask;
-    public override Task<ChatSession?> LoadAsync(string sessionId, CancellationToken ct = default) => Task.FromResult<ChatSession?>(null);
-    public override Task DeleteAsync(string sessionId, CancellationToken ct = default) => Task.CompletedTask;
-    public override Task<List<ChatSession>> ListAsync(int limit = 20, CancellationToken ct = default) => Task.FromResult(new List<ChatSession>());
-}
-
 public sealed class ChatHistoryManager
 {
     private static readonly Lazy<ChatHistoryManager> _instance = new(() => new ChatHistoryManager());
     public static ChatHistoryManager Instance => _instance.Value;
 
-    private readonly Dictionary<StorageBackend, ChatHistoryStore> _stores = new();
     private readonly FileHistoryStore _defaultStore;
 
     private ChatHistoryManager()
     {
         _defaultStore = new FileHistoryStore();
-        _stores[StorageBackend.File] = _defaultStore;
     }
-
-    public void RegisterStore(StorageBackend backend, ChatHistoryStore store) => _stores[backend] = store;
 
     public async Task SaveAsync(ChatSession session, StorageBackend backend = StorageBackend.File, CancellationToken ct = default)
     {
-        if (_stores.TryGetValue(backend, out var store))
-        {
-            session.UpdatedAt = DateTime.UtcNow;
-            await store.SaveAsync(session, ct);
-            return;
-        }
+        session.UpdatedAt = DateTime.UtcNow;
         await _defaultStore.SaveAsync(session, ct);
     }
 
@@ -155,10 +99,7 @@ public sealed class ChatHistoryManager
 
     public Dictionary<string, string> DescribeBackends() => new()
     {
-        ["File"] = "Local JSON files in .livingtree/sessions/ — zero config, dev-friendly",
-        ["Blob"] = "Azure Blob Storage — cheap, durable, ideal for production sessions",
-        ["Table"] = "Azure Table Storage — key-value, fast lookup by sessionId",
-        ["Cosmos"] = "Azure Cosmos DB — global distribution, multi-region, low latency"
+        ["File"] = "Local JSON files in .livingtree/sessions/ — zero config, dev-friendly"
     };
 }
 

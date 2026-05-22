@@ -159,24 +159,6 @@ public enum HeadPhase
     Master
 }
 
-public sealed class SheshaHeadState
-{
-    public string Id { get; init; } = Guid.NewGuid().ToString("N");
-    public string Name { get; set; } = "";
-    public HeadRole Role { get; set; }
-    public HeadPhase Phase { get; set; } = HeadPhase.Newborn;
-    public Dictionary<string, double> Traits { get; init; } = new();
-    public int TotalTasks { get; set; }
-    public int SuccessfulTasks { get; set; }
-    public double SuccessRate => TotalTasks > 0 ? (double)SuccessfulTasks / TotalTasks : 0;
-    public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
-    public List<string> Experiences { get; init; } = new();
-    public List<string> LessonsLearned { get; init; } = new();
-    public List<string> Mistakes { get; init; } = new();
-    public Dictionary<string, int> Collaborators { get; init; } = new();
-    public int InactiveCycles { get; set; }
-}
-
 public sealed class InterHeadMessage
 {
     public string From { get; init; } = "";

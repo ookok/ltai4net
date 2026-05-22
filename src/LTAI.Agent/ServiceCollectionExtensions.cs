@@ -11,9 +11,13 @@ namespace LTAI.Agent;
 
 public static class ServiceCollectionExtensions
 {
+    /// Note: AddLTAIAgent() is not currently called from any entry point.
+    /// AddLTAIMAF() is the primary agent setup path.
+    /// Kept for forwards-compat: this method registers HandoffMeshWorkflow (MAF-native)
+    /// which replaces the legacy keyword-based AgentMeshWorkflow.
     public static IServiceCollection AddLTAIAgent(this IServiceCollection services)
     {
-        services.AddSingleton<AgentMeshWorkflow>();
+        services.AddSingleton<HandoffMeshWorkflow>();
         services.AddSingleton<PromptShieldMiddleware>();
         services.AddSingleton<InputClassifierMiddleware>();
         services.AddSingleton<DNASafetyMiddleware>();

@@ -1,10 +1,11 @@
-using System.Text.Json;
-using LTAI.Tools.CodeGraph;
+using LTAI.AI.Governors;
 using LTAI.Core.Messaging;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
+using System.Text.Json;
+using LTAI.Tools.CodeGraph;
 
 namespace LTAI.Agent;
 
@@ -20,40 +21,68 @@ public static class DevUIEndpoints
 
         endpoints.MapGet("/api/devui/state", async (HttpContext context) =>
         {
+            var sp = context.RequestServices;
+            var system = sp.GetService<LivingTreeSystem>();
+            var toolRegistry = sp.GetService<AIToolRegistry>();
+
             var state = new
             {
-                session = new { id = Guid.NewGuid().ToString("N")[..8], started_at = DateTime.UtcNow.ToString("o"), total_tokens = 1250, total_cost = 0.0035 },
-                agents = new[]
+                session = new
                 {
-                    new { name = "Evolver", role = "Generates solutions", status = "idle", calls = 42, avg_latency_ms = 320, tokens = 580 },
-                    new { name = "Evaluator", role = "Evaluates quality", status = "idle", calls = 38, avg_latency_ms = 180, tokens = 420 },
-                    new { name = "Verifier", role = "Verifies correctness", status = "idle", calls = 35, avg_latency_ms = 150, tokens = 250 }
+                    id = Guid.NewGuid().ToString("N")[..8],
+                    started_at = DateTime.UtcNow.ToString("o"),
+                    mode = system?.Mode.ToString() ?? "uninitialized",
+                    dna_enabled = system?.DNAEnabled ?? false,
+                    task_pipeline = new
+                    {
+                        submissions = system?.TaskPipeline.TotalSubmissions ?? 0,
+                        completions = system?.TaskPipeline.TotalCompletions ?? 0
+                    }
+                },
+                agents = new object[]
+                {
+                    new {
+                        name = "LivingTreeSystem",
+                        role = "5-layer Governor Pipeline",
+                        status = system is not null ? "active" : "inactive",
+                        dna_phase = system?.DNAStatus?.EvolutionPhase.ToString() ?? "disabled",
+                        awareness = system?.DNAStatus?.AwarenessScore ?? 0
+                    },
+                    new {
+                        name = "AgentMesh",
+                        role = "Keyword-based Intent Routing",
+                        status = "active",
+                        routes = new[] { "code", "eia", "reasoning", "chat" }
+                    }
                 },
                 workflows = WorkflowRegistry.GetAll(),
                 governance = Governance.ActionGovernor.Instance.GetStats(),
                 storage = Hosting.ChatHistoryManager.Instance.DescribeBackends(),
+                tools = new
+                {
+                    total = toolRegistry?.ListTools().Count() ?? 0,
+                    sample = toolRegistry?.ListTools().Take(8).ToArray() ?? Array.Empty<string>()
+                },
                 graph = new
                 {
                     nodes = new[]
                     {
                         new { id = "input", label = "User Input", group = "io" },
                         new { id = "governor", label = "Governor (AGT)", group = "pipeline" },
-                        new { id = "moe", label = "ContextMoE (5-tier)", group = "memory" },
-                        new { id = "codeact", label = "CodeAct (Hyperlight)", group = "tool" },
-                        new { id = "skills", label = "Skills (5 builtin)", group = "tool" },
-                        new { id = "workflow", label = "Workflow Engine", group = "orchestra" },
+                        new { id = "livingtree", label = "LivingTree Pipeline", group = "pipeline" },
+                        new { id = "tools", label = $"Tools ({toolRegistry?.ListTools().Count() ?? 0})", group = "tool" },
+                        new { id = "mesh", label = "Agent Mesh", group = "orchestra" },
                         new { id = "agui", label = "AG-UI Stream", group = "io" },
                         new { id = "output", label = "Response", group = "io" }
                     },
                     edges = new[]
                     {
                         new { from = "input", to = "governor" },
-                        new { from = "governor", to = "moe" },
-                        new { from = "moe", to = "codeact" },
-                        new { from = "moe", to = "skills" },
-                        new { from = "codeact", to = "workflow" },
-                        new { from = "skills", to = "workflow" },
-                        new { from = "workflow", to = "agui" },
+                        new { from = "governor", to = "livingtree" },
+                        new { from = "livingtree", to = "tools" },
+                        new { from = "livingtree", to = "mesh" },
+                        new { from = "tools", to = "mesh" },
+                        new { from = "mesh", to = "agui" },
                         new { from = "agui", to = "output" }
                     }
                 }

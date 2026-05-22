@@ -1,7 +1,11 @@
 using System.Text.Json;
+using LTAI.AI.Governors;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.AI;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace LTAI.Web;
 
@@ -25,8 +29,8 @@ public static class CognitionStreamEndpoints
                 return;
             }
 
-            var sessionId = $"cog_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}";
             var cancellationToken = context.RequestAborted;
+            var sessionId = $"cog_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}";
 
             await WriteSseEvent(context, "cog-start", new
             {
@@ -38,90 +42,113 @@ public static class CognitionStreamEndpoints
 
             try
             {
-                await WriteSseEvent(context, "phase", new
+                var system = context.RequestServices.GetService<LivingTreeSystem>();
+                if (system is not null)
                 {
-                    phase = "intent",
-                    status = "done",
-                    label = "意图识别",
-                    icon = "🧠",
-                    intent = "general",
-                    domain = "general",
-                    confidence = 0.85,
-                    summary = "Intent recognized from message context"
-                });
+                    var response = await system.ChatAsync(request.Message, cancellationToken);
 
-                await WriteSseEvent(context, "phase", new
-                {
-                    phase = "tools",
-                    status = "done",
-                    label = "工具搜索",
-                    icon = "🔧",
-                    tools = new[] {
-                        new { name = "CodeAnalyzer", description = "Multi-language static analysis", category = "code" },
-                        new { name = "UnifiedSearch", description = "Multi-source web search", category = "search" }
-                    },
-                    count = 2
-                });
+                    await WriteSseEvent(context, "phase", new
+                    {
+                        phase = "processing",
+                        status = "done",
+                        label = "LivingTree Processing",
+                        summary = "Processed through 5-layer governor pipeline",
+                        mode = system.Mode.ToString(),
+                        dna_enabled = system.DNAEnabled
+                    });
 
-                await WriteSseEvent(context, "phase", new
-                {
-                    phase = "memory",
-                    status = "done",
-                    label = "记忆召回",
-                    icon = "🧩",
-                    entries = 3,
-                    synthesis_count = 1
-                });
+                    var toolRegistry = context.RequestServices.GetService<Core.Messaging.AIToolRegistry>();
+                    var toolNames = toolRegistry?.ListTools().Take(5).ToArray() ?? Array.Empty<string>();
 
-                await WriteSseEvent(context, "phase", new
-                {
-                    phase = "skills",
-                    status = "done",
-                    label = "技能匹配",
-                    icon = "🎯",
-                    skills = new[] { "code_generation", "document_analysis", "search_synthesis" },
-                    count = 3
-                });
+                    await WriteSseEvent(context, "phase", new
+                    {
+                        phase = "tools",
+                        status = "done",
+                        label = "Tools",
+                        tools = toolNames,
+                        count = toolNames.Length
+                    });
 
-                await WriteSseEvent(context, "phase", new
-                {
-                    phase = "planning",
-                    status = "done",
-                    label = "任务规划",
-                    icon = "📋",
-                    steps = new[] {
-                        new { num = 1, name = "Analyze requirement" },
-                        new { num = 2, name = "Search knowledge base" },
-                        new { num = 3, name = "Generate solution" }
-                    },
-                    count = 3
-                });
+                    await WriteSseEvent(context, "phase", new
+                    {
+                        phase = "memory",
+                        status = "done",
+                        label = "Memory",
+                        entries = system.TaskPipeline.TotalCompletions,
+                        pending = system.TaskPipeline.TotalSubmissions - system.TaskPipeline.TotalCompletions
+                    });
 
-                await WriteSseEvent(context, "phase", new
-                {
-                    phase = "agents",
-                    status = "done",
-                    label = "专家协作",
-                    icon = "👥",
-                    roles_active = 3,
-                    roles = new[] { "Evolver", "Evaluator", "Verifier" }
-                });
+                    var taskStats = system.TaskPipeline.GetStats();
+                    await WriteSseEvent(context, "phase", new
+                    {
+                        phase = "planning",
+                        status = "done",
+                        label = "Task Planning",
+                        active_tasks = taskStats.GetValueOrDefault("pending", 0),
+                        total_submissions = system.TaskPipeline.TotalSubmissions,
+                        total_completions = system.TaskPipeline.TotalCompletions
+                    });
 
-                await WriteSseEvent(context, "cog-complete", new
+                    await WriteSseEvent(context, "phase", new
+                    {
+                        phase = "agents",
+                        status = "done",
+                        label = "Agent Mesh",
+                        pipeline = "LivingTree + GovernorWorkflow",
+                        evolution_phase = system.DNAStatus?.EvolutionPhase.ToString() ?? "disabled"
+                    });
+
+                    await WriteSseEvent(context, "cog-complete", new
+                    {
+                        phase = "complete",
+                        session_id = sessionId,
+                        response_preview = response.Length > 200 ? response[..200] : response,
+                        ts = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 1000.0
+                    });
+                }
+                else
                 {
-                    phase = "complete",
-                    session_id = sessionId,
-                    success_rate = 0.92,
-                    intent = "general",
-                    suggest_tools = true,
-                    ts = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 1000.0
-                });
+                    var chatClient = context.RequestServices.GetService<IChatClient>();
+                    if (chatClient is not null)
+                    {
+                        var response = await chatClient.GetResponseAsync(
+                            new ChatMessage(ChatRole.User, request.Message),
+                            cancellationToken: cancellationToken);
+                        await WriteSseEvent(context, "phase", new
+                        {
+                            phase = "direct_chat",
+                            status = "done",
+                            label = "Direct Chat",
+                            summary = response.Text?[..Math.Min((response.Text ?? "").Length, 200)] ?? ""
+                        });
+                    }
+                    else
+                    {
+                        await WriteSseEvent(context, "phase", new
+                        {
+                            phase = "unavailable",
+                            status = "error",
+                            label = "No backend available",
+                            summary = "LivingTreeSystem and IChatClient are not registered"
+                        });
+                    }
+
+                    await WriteSseEvent(context, "cog-complete", new
+                    {
+                        phase = "complete",
+                        session_id = sessionId,
+                        ts = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 1000.0
+                    });
+                }
             }
             catch (OperationCanceledException)
             {
+                await WriteSseEvent(context, "cog-cancelled", new { session_id = sessionId });
             }
             catch (Exception ex)
             {
+                var loggerFactory = context.RequestServices.GetService<ILoggerFactory>();
+                loggerFactory?.CreateLogger("CognitionStream").LogError(ex, "Cognition stream error");
                 await WriteSseEvent(context, "cog-error", new
                 {
                     phase = "error",

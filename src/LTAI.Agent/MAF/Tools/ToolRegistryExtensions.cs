@@ -223,7 +223,27 @@ public static class ToolRegistryExtensions
 
     private static int RegisterGitTools(AIToolRegistry registry)
     {
-        return 0;
+        int count = 0;
+
+        registry.RegisterTool("git_diff", AIFunctionFactory.Create(
+            (string? repoPath, string? files, bool? staged, CancellationToken ct)
+                => GitTools.GitDiff(repoPath, files, staged ?? false),
+            "git_diff", "View changes in the working tree."));
+        count++;
+
+        registry.RegisterTool("git_log", AIFunctionFactory.Create(
+            (string? repoPath, int? maxCount, string? format, CancellationToken ct)
+                => GitTools.GitLog(repoPath, maxCount ?? 20, format ?? "oneline"),
+            "git_log", "View commit history."));
+        count++;
+
+        registry.RegisterTool("git_blame", AIFunctionFactory.Create(
+            (string filePath, string? repoPath, CancellationToken ct)
+                => GitTools.GitBlame(filePath, repoPath),
+            "git_blame", "View line-by-line authorship for a file."));
+        count++;
+
+        return count;
     }
 
     private static int RegisterDependencyTools(AIToolRegistry registry)
