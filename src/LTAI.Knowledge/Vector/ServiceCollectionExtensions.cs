@@ -43,8 +43,28 @@ public static class ServiceCollectionExtensions
         string apiModel = "BAAI/bge-large-zh-v1.5",
         int apiDimension = 1024,
         string? onnxModelPath = null,
-        int onnxDiension = 384)
+        int onnxDiension = 384,
+        bool allowJina = true,
+        string? jinaModel = null)
     {
+        // Auto-detect Jina: if the L0 model starts with "jina-", use the Jina backend.
+        // This is the config-driven approach: just set l0.model in appsettings.json.
+        if (allowJina && !string.IsNullOrEmpty(apiModel) && apiModel.StartsWith("jina-", StringComparison.OrdinalIgnoreCase))
+        {
+            var variant = apiModel.Contains("nano", StringComparison.OrdinalIgnoreCase)
+                ? JinaModelVariant.OmniNano
+                : JinaModelVariant.OmniSmall;
+            return AddLTAIVectorWithJina(services, variant);
+        }
+
+        // Allow explicit Jina model override
+        if (allowJina && !string.IsNullOrEmpty(jinaModel))
+        {
+            var variant = jinaModel.Contains("nano", StringComparison.OrdinalIgnoreCase)
+                ? JinaModelVariant.OmniNano
+                : JinaModelVariant.OmniSmall;
+            return AddLTAIVectorWithJina(services, variant);
+        }
         if (!string.IsNullOrEmpty(apiEndpoint) && !string.IsNullOrEmpty(apiKey))
         {
             return AddLTAIVectorWithL0(services, apiEndpoint, apiKey, apiModel, apiDimension);

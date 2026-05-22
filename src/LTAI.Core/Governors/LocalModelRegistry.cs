@@ -62,7 +62,93 @@ public static class LocalModelRegistry
             Layer: ModelLayer.L0,
             EngineType: "onnx"),
 
-        // ==================== L1: Fast Models (GGUF) ====================
+        // Jina Embeddings v5 Omni
+        new LocalModelInfo(
+            Version: "jina-embeddings-v5-omni-small",
+            Name: "Jina-v5-Omni-Small (ONNX) - 多模态嵌入",
+            Url: "https://huggingface.co/jinaai/jina-embeddings-v5-omni/resolve/main/onnx_small/model.onnx",
+            MirrorUrl: "https://hf-mirror.com/jinaai/jina-embeddings-v5-omni/resolve/main/onnx_small/model.onnx",
+            Sha256: "auto_verify",
+            RecommendedMemoryMB: 2048,
+            DiskSizeMB: 500,
+            Description: "Jina AI v5 全模态嵌入模型 (768-dim)，支持文本+图像+音频。8K上下文，任务自适应。",
+            Layer: ModelLayer.L0,
+            EngineType: "onnx"),
+
+        new LocalModelInfo(
+            Version: "jina-embeddings-v5-omni-nano",
+            Name: "Jina-v5-Omni-Nano (ONNX) - 轻量多模态嵌入",
+            Url: "https://huggingface.co/jinaai/jina-embeddings-v5-omni/resolve/main/onnx_nano/model.onnx",
+            MirrorUrl: "https://hf-mirror.com/jinaai/jina-embeddings-v5-omni/resolve/main/onnx_nano/model.onnx",
+            Sha256: "auto_verify",
+            RecommendedMemoryMB: 1024,
+            DiskSizeMB: 200,
+            Description: "Jina AI v5 Nano 嵌入模型 (512-dim)，轻量全模态。4GB边缘设备即可运行。",
+            Layer: ModelLayer.L0,
+            EngineType: "onnx"),
+
+        // ==================== L1: Small ONNX LLMs (Edge-Native) ====================
+        new LocalModelInfo(
+            Version: "smollm2-360m-onnx",
+            Name: "SmolLM2 360M (ONNX) - 极致边缘",
+            Url: "https://huggingface.co/HuggingFaceTB/SmolLM2-360M-Instruct/resolve/main/onnx/model.onnx",
+            MirrorUrl: "https://hf-mirror.com/HuggingFaceTB/SmolLM2-360M-Instruct/resolve/main/onnx/model.onnx",
+            Sha256: "auto_verify",
+            RecommendedMemoryMB: 1024,
+            DiskSizeMB: 280,
+            Description: "HuggingFace 极轻量模型，2GB设备可运行。基础对话+意图识别，L1 ONNX链路入口。",
+            Layer: ModelLayer.L1,
+            EngineType: "onnx"),
+
+        new LocalModelInfo(
+            Version: "smollm2-1.7b-onnx",
+            Name: "SmolLM2 1.7B (ONNX) - 轻量推理",
+            Url: "https://huggingface.co/HuggingFaceTB/SmolLM2-1.7B-Instruct/resolve/main/onnx/model.onnx",
+            MirrorUrl: "https://hf-mirror.com/HuggingFaceTB/SmolLM2-1.7B-Instruct/resolve/main/onnx/model.onnx",
+            Sha256: "auto_verify",
+            RecommendedMemoryMB: 4096,
+            DiskSizeMB: 1300,
+            Description: "SmolLM2 1.7B 轻量版。英文为主，推理能力接近 Llama 3B。ONNX原生链路可直接调用。",
+            Layer: ModelLayer.L1,
+            EngineType: "onnx"),
+
+        new LocalModelInfo(
+            Version: "qwen2.5-0.5b-onnx",
+            Name: "Qwen2.5 0.5B (ONNX) - 中文边缘推理",
+            Url: "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct/resolve/main/onnx/model.onnx",
+            MirrorUrl: "https://hf-mirror.com/Qwen/Qwen2.5-0.5B-Instruct/resolve/main/onnx/model.onnx",
+            Sha256: "auto_verify",
+            RecommendedMemoryMB: 2048,
+            DiskSizeMB: 400,
+            Description: "通义千问 0.5B 边缘版，中文原生。4GB设备流畅运行。L1链路中文入口。",
+            Layer: ModelLayer.L1,
+            EngineType: "onnx"),
+
+        new LocalModelInfo(
+            Version: "qwen2.5-1.5b-onnx",
+            Name: "Qwen2.5 1.5B (ONNX) - 中文主力",
+            Url: "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct/resolve/main/onnx/model.onnx",
+            MirrorUrl: "https://hf-mirror.com/Qwen/Qwen2.5-1.5B-Instruct/resolve/main/onnx/model.onnx",
+            Sha256: "auto_verify",
+            RecommendedMemoryMB: 4096,
+            DiskSizeMB: 1200,
+            Description: "Qwen2.5 1.5B 中文主力，同尺寸中文最强。8GB设备可跑OnnxParallelEngine多模型并发。",
+            Layer: ModelLayer.L1,
+            EngineType: "onnx"),
+
+        new LocalModelInfo(
+            Version: "phi3.5-mini-onnx",
+            Name: "Phi-3.5-Mini (ONNX) - 英文推理增强",
+            Url: "https://huggingface.co/microsoft/Phi-3.5-mini-onnx/resolve/main/model.onnx",
+            MirrorUrl: "https://hf-mirror.com/microsoft/Phi-3.5-mini-onnx/resolve/main/model.onnx",
+            Sha256: "auto_verify",
+            RecommendedMemoryMB: 8192,
+            DiskSizeMB: 2500,
+            Description: "微软 Phi-3.5 Mini ONNX，1.3B MoE。推理+工具调用+代码能力均衡。推荐8GB+设备。",
+            Layer: ModelLayer.L1,
+            EngineType: "onnx"),
+
+        // ==================== L1: Fast Models (GGUF — legacy compat) ====================
         new LocalModelInfo(
             Version: "rwkv7-g1-0.4b-q4",
             Name: "RWKV-7 G1 0.4B (Q4_K_M) - 极轻量",
@@ -173,46 +259,58 @@ public static class LocalModelRegistry
             EngineType: "gguf"),
     };
 
-    public static LocalModelInfo SelectBestModel(long availableMemoryMB, ModelLayer layer, string preferredLanguage = "zh")
+    public static LocalModelInfo SelectBestModel(long availableMemoryMB, ModelLayer layer, string preferredLanguage = "zh", string preferredEngine = "onnx")
     {
         var layerModels = AvailableModels.Where(m => m.Layer == layer).ToList();
         if (layerModels.Count == 0) return AvailableModels.First();
 
+        // Prefer the specified engine type, fallback to any
+        var byEngine = layerModels.Where(m => m.EngineType.Equals(preferredEngine, StringComparison.OrdinalIgnoreCase)).ToList();
+        if (byEngine.Count > 0) layerModels = byEngine;
+
         if (layer == ModelLayer.L0)
         {
+            // Jina preferred for ONNX-native pipeline
+            if (availableMemoryMB >= 2048 && preferredEngine == "onnx")
+                return layerModels.FirstOrDefault(m => m.Version.Contains("jina-small", StringComparison.OrdinalIgnoreCase)) ?? layerModels[0];
             if (availableMemoryMB >= 4096)
-                return layerModels.First(m => m.Version == "bge-m3-onnx");
+                return layerModels.FirstOrDefault(m => m.Version.Contains("m3", StringComparison.OrdinalIgnoreCase)) ?? layerModels[0];
             if (availableMemoryMB >= 2048)
-                return layerModels.First(m => m.Version == "bge-large-zh-v1.5-onnx");
-            return layerModels.First(m => m.Version == "bge-small-zh-v1.5-onnx");
+                return layerModels.FirstOrDefault(m => m.Version.Contains("large", StringComparison.OrdinalIgnoreCase)) ?? layerModels[0];
+            return layerModels.FirstOrDefault(m => m.Version.Contains("nano", StringComparison.OrdinalIgnoreCase) || m.Version.Contains("small", StringComparison.OrdinalIgnoreCase)) ?? layerModels[0];
         }
 
         if (layer == ModelLayer.L1)
         {
+            // ONNX preferred: runs natively on edge, supports OnnxParallelEngine + OnnxModelPipeline
             if (preferredLanguage.Equals("zh", StringComparison.OrdinalIgnoreCase))
             {
-                if (availableMemoryMB >= 8192)
-                    return layerModels.First(m => m.Version == "qwen2.5-3b-q4");
                 if (availableMemoryMB >= 4096)
-                    return layerModels.First(m => m.Version == "qwen2.5-1.5b-q4");
+                    return layerModels.FirstOrDefault(m => m.Version.Contains("qwen2.5-1.5b-onnx", StringComparison.OrdinalIgnoreCase))
+                        ?? layerModels.FirstOrDefault(m => m.Version.Contains("qwen2.5-1.5b", StringComparison.OrdinalIgnoreCase))
+                        ?? layerModels[0];
+                if (availableMemoryMB >= 2048)
+                    return layerModels.FirstOrDefault(m => m.Version.Contains("qwen2.5-0.5b-onnx", StringComparison.OrdinalIgnoreCase))
+                        ?? layerModels.FirstOrDefault(m => m.Version.Contains("qwen2.5-0.5b", StringComparison.OrdinalIgnoreCase))
+                        ?? layerModels[0];
             }
             if (availableMemoryMB >= 8192)
-                return layerModels.First(m => m.Version == "rwkv7-g1-2.9b-q4");
+                return layerModels.FirstOrDefault(m => m.Version.Contains("phi3", StringComparison.OrdinalIgnoreCase)) ?? layerModels[0];
             if (availableMemoryMB >= 4096)
-                return layerModels.First(m => m.Version == "rwkv7-g1-1.5b-q4");
-            return layerModels.First(m => m.Version == "rwkv7-g1-0.4b-q4");
+                return layerModels.FirstOrDefault(m => m.Version.Contains("1.7b", StringComparison.OrdinalIgnoreCase)) ?? layerModels[0];
+            return layerModels.FirstOrDefault(m => m.Version.Contains("360m", StringComparison.OrdinalIgnoreCase)) ?? layerModels[0];
         }
 
         // L2
         if (availableMemoryMB >= 32768)
-            return layerModels.First(m => m.Version == "qwen2.5-14b-q4");
+            return layerModels.FirstOrDefault(m => m.Version == "qwen2.5-14b-q4") ?? layerModels[0];
         if (availableMemoryMB >= 16384)
         {
             if (preferredLanguage.Equals("zh", StringComparison.OrdinalIgnoreCase))
-                return layerModels.First(m => m.Version == "qwen2.5-7b-q4");
-            return layerModels.First(m => m.Version == "deepseek-r1-distill-llama-8b-q4");
+                return layerModels.FirstOrDefault(m => m.Version == "qwen2.5-7b-q4") ?? layerModels[0];
+            return layerModels.FirstOrDefault(m => m.Version == "deepseek-r1-distill-llama-8b-q4") ?? layerModels[0];
         }
-        return layerModels.First(m => m.Version == "qwen2.5-7b-q4");
+        return layerModels.FirstOrDefault(m => m.Version == "qwen2.5-7b-q4") ?? layerModels[0];
     }
 
     public static LocalModelInfo? GetByVersion(string version)

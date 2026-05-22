@@ -22,7 +22,7 @@ var ltaiOptions = ltaiSection.Get<LTAIOptions>() ?? new LTAIOptions();
 builder.Services.AddSingleton(Options.Create(ltaiOptions));
 
 builder.Services.AddLTAICore();
-builder.Services.AddLTAIVector();
+builder.Services.AddLTAIVectorAuto(apiModel: ltaiOptions.AI.L0.Model);
 builder.Services.AddLTAIAI();
 builder.Services.AddLTAIDNA();
 builder.Services.AddLTAIMemory();

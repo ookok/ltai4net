@@ -45,7 +45,7 @@ public static class MauiProgram
         services.AddLogging(b => b.SetMinimumLevel(LogLevel.Warning));
 
         services.AddLTAICore();
-        services.AddLTAIVector();
+        services.AddLTAIVectorAuto(apiModel: ltaiOptions.AI.L0.Model);
         services.AddLTAIAI();
         services.AddLTAIDNA();
         services.AddLTAICapability();

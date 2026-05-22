@@ -50,7 +50,7 @@ ltaiOptions.Web.RateLimitPerMinute = ltaiOptions.Web.RateLimitPerMinute > 0 ? lt
 
 services.AddSingleton(Options.Create(ltaiOptions));
 services.AddLTAICore();
-services.AddLTAIVector();
+services.AddLTAIVectorAuto(apiModel: ltaiOptions.AI.L0.Model);
 services.AddLTAIAI();
 services.AddLTAIMemory();
 services.AddLTAIDNA();

@@ -44,7 +44,7 @@ if (ltaiOptions.AI.Providers.Count == 0)
 services.AddSingleton(Options.Create(ltaiOptions));
 
 services.AddLTAICore();
-services.AddLTAIVector();
+services.AddLTAIVectorAuto(apiModel: ltaiOptions.AI.L0.Model);
 services.AddLTAIAI();
 services.AddLTAIDNA();
 services.AddLTAICapability();

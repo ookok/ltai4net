@@ -11,7 +11,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using LTAI.Core.Configuration;
 using LTAI.Core.Governors;
-using LTAI.Core.Setup;
 
 namespace LTAI.Core.Setup;
 
@@ -22,6 +21,8 @@ public class InteractiveSetupWizard
     private readonly ModelDownloader _modelDownloader;
     private LTAIOptions _options;
     private bool _isDirty;
+
+    private static readonly HttpClient _hfClient = new() { Timeout = TimeSpan.FromMinutes(30) };
 
     public InteractiveSetupWizard(string configPath, IHttpClientFactory? httpClientFactory = null)
     {
@@ -48,7 +49,7 @@ public class InteractiveSetupWizard
         Console.WriteLine("直接按 Enter 跳过，将使用本地模式运行。");
         Console.WriteLine();
 
-        await ConfigureLayerAsync("L0", "Embedding 层 (向量检索)", hwInfo, cancellationToken);
+        await ConfigureLayerAsync("L0", "Embedding 层 (向量检索 / 知识库)", hwInfo, cancellationToken);
         await ConfigureLayerAsync("L1", "Fast 层 (快速推理/日常对话)", hwInfo, cancellationToken);
         await ConfigureLayerAsync("L2", "Deep 层 (深度推理/复杂任务)", hwInfo, cancellationToken);
 
@@ -96,10 +97,12 @@ public class InteractiveSetupWizard
         Console.WriteLine("选择模式：");
         Console.WriteLine("  [1] API 模式 (云端模型，能力强)");
         Console.WriteLine("  [2] 本地模式 (离线运行，隐私安全)");
+        if (layerName == "L0")
+            Console.WriteLine("  [3] Jina v5 Omni (推荐 — 多模态小模型，自动下载)");
         Console.WriteLine("  [Enter] 跳过，保持当前配置");
         Console.WriteLine();
 
-        var choice = ReadLine("选择 (1/2) 或回车");
+        var choice = ReadLine("选择 (1/2/3) 或回车");
         if (string.IsNullOrWhiteSpace(choice))
         {
             Console.WriteLine($"  ⏭️  跳过 {layerName} 配置");
@@ -114,6 +117,10 @@ public class InteractiveSetupWizard
         else if (choice == "2")
         {
             await ConfigureLocalModeAsync(layerName, hwInfo, ct);
+        }
+        else if (choice == "3" && layerName == "L0")
+        {
+            await ConfigureJinaModeAsync(ct);
         }
         else
         {
@@ -285,6 +292,123 @@ public class InteractiveSetupWizard
         _isDirty = true;
 
         SaveLocalModelConfig(layerName, selectedModel);
+    }
+
+    /// <summary>
+    /// Jina Embeddings v5 Omni 首次启动下载引导
+    /// 提供 jina-embeddings-v5-omni-small (768-dim, ~500MB) 和 nano (512-dim, ~200MB)
+    /// </summary>
+    private async Task ConfigureJinaModeAsync(CancellationToken ct)
+    {
+        Console.WriteLine();
+        Console.WriteLine("━━━ Jina Embeddings v5 Omni (多模态) ━━━");
+        Console.WriteLine();
+        Console.WriteLine("选择模型：");
+        Console.WriteLine("  [1] jina-embeddings-v5-omni-small (768维, ~500MB, 推荐)");
+        Console.WriteLine("      • 支持文本 + 图像 + 音频嵌入");
+        Console.WriteLine("      • 适合 8GB+ 内存设备");
+        Console.WriteLine("  [2] jina-embeddings-v5-omni-nano (512维, ~200MB, 轻量)");
+        Console.WriteLine("      • 支持文本嵌入，图像嵌入能力保留");
+        Console.WriteLine("      • 适合 4GB+ 内存/边缘设备");
+        Console.WriteLine("  [Enter] 跳过");
+        Console.WriteLine();
+
+        var choice = ReadLine("选择 (1/2) 或回车");
+        if (string.IsNullOrWhiteSpace(choice))
+        {
+            Console.WriteLine("  ⏭️  跳过 Jina 配置");
+            return;
+        }
+
+        var variant = choice == "2" ? "nano" : "small";
+        var dim = variant == "nano" ? 512 : 768;
+        var sizeMB = variant == "nano" ? 200 : 500;
+        var modelName = $"jina-embeddings-v5-omni-{variant}";
+
+        Console.WriteLine();
+        Console.WriteLine($"已选择: {modelName}");
+        Console.WriteLine($"  维度: {dim}");
+        Console.WriteLine($"  大小: ~{sizeMB} MB");
+        Console.WriteLine($"  来源: HuggingFace jinaai/jina-embeddings-v5-omni");
+        Console.WriteLine();
+
+        var downloadChoice = ReadChoice("是否立即下载？(Y/n)", "Y", new[] { "Y", "y", "n", "N" });
+        if (downloadChoice is "Y" or "y")
+        {
+            Console.WriteLine();
+            Console.WriteLine($"📥 正在下载 {modelName} (首次约需 {sizeMB}MB 流量)...");
+            Console.WriteLine();
+
+            var cacheDir = Path.Combine(AppContext.BaseDirectory, ".livingtree", "models", "embedding");
+            Directory.CreateDirectory(Path.Combine(cacheDir, "jina", modelName));
+
+            var hfRepo = "jinaai/jina-embeddings-v5-omni";
+            var variantPath = choice == "2" ? "onnx_nano" : "onnx_small";
+            var onnxDir = Path.Combine(cacheDir, "jina", modelName);
+            var onnxPath = Path.Combine(onnxDir, "model.onnx");
+            var tokenizerPath = Path.Combine(onnxDir, "tokenizer.json");
+
+            try
+            {
+                // Try HF official first, fallback to hf-mirror
+                await DownloadWithMirrorAsync(
+                    $"https://huggingface.co/{hfRepo}/resolve/main/{variantPath}/model.onnx",
+                    onnxPath, ct);
+                await DownloadWithMirrorAsync(
+                    $"https://huggingface.co/{hfRepo}/resolve/main/tokenizer.json",
+                    tokenizerPath, ct);
+
+                Console.WriteLine($"  ✓ Jina {modelName} 下载完成");
+                Console.WriteLine($"  模型: {onnxPath}");
+                Console.WriteLine($"  Tokenizer: {tokenizerPath}");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"  ✗ 下载失败: {ex.Message}");
+                Console.WriteLine("  提示: 可稍后重新运行配置向导下载");
+            }
+        }
+
+        // Save config — the auto-detect in AddLTAIVectorAuto will pick this up
+        var layerConfig = _options.AI.GetLayerConfig("L0");
+        layerConfig.GetType().GetProperty("Provider")!.SetValue(layerConfig, "jina");
+        layerConfig.GetType().GetProperty("Model")!.SetValue(layerConfig, modelName);
+        _isDirty = true;
+
+        // Use reflection to bypass init-only restriction (options loaded from JSON)
+        typeof(LTAIOptions).GetProperty("Vector")!.SetValue(_options, new VectorConfig { Dimension = dim, Backend = "jina-onnx" });
+
+        Console.WriteLine();
+        Console.WriteLine("  ✓ Jina L0 配置完成");
+    }
+
+    private static async Task DownloadWithMirrorAsync(string hfUrl, string savePath, CancellationToken ct)
+    {
+        // Try hf-mirror.com first (domestic CDN), fallback to huggingface.co
+        var urls = new[]
+        {
+            hfUrl.Replace("huggingface.co", "hf-mirror.com"),
+            hfUrl
+        };
+
+        Exception? lastEx = null;
+        foreach (var url in urls)
+        {
+            try
+            {
+                var response = await _hfClient.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct);
+                response.EnsureSuccessStatusCode();
+
+                Directory.CreateDirectory(Path.GetDirectoryName(savePath)!);
+                await using var stream = await response.Content.ReadAsStreamAsync(ct);
+                await using var file = File.Create(savePath);
+                await stream.CopyToAsync(file, ct);
+                return;
+            }
+            catch (Exception ex) { lastEx = ex; }
+        }
+
+        throw lastEx ?? new IOException($"Failed to download: {hfUrl}");
     }
 
     private void SaveLocalModelConfig(string layerName, LocalModelInfo model)
