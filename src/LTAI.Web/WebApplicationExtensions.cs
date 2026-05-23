@@ -28,6 +28,7 @@ public static class WebApplicationExtensions
         app.MapFeedbackEndpoints();
         app.MapToolDashboardEndpoints();
         app.MapParliamentEndpoints();
+        app.MapPlanningInnovationEndpoints();
         app.MapHealthChecks("/api/health", new HealthCheckOptions
         {
             ResponseWriter = async (context, report) =>

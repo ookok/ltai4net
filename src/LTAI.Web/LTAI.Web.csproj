@@ -6,6 +6,7 @@
     <ProjectReference Include="..\LTAI.Tools\LTAI.Tools.csproj" />
     <ProjectReference Include="..\LTAI.Infra\LTAI.Infra.csproj" />
     <ProjectReference Include="..\LTAI.Agent\LTAI.Agent.csproj" />
+    <ProjectReference Include="..\LTAI.Planning\LTAI.Planning.csproj" />
   </ItemGroup>
 
   <ItemGroup>

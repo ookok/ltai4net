@@ -1,6 +1,8 @@
+using LTAI.Planning.HTN;
 using LTAI.Planning.Planning;
 using LTAI.Planning.Quality;
 using LTAI.Planning.Session;
+using LTAI.Planning.Trace;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
@@ -26,6 +28,9 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton(SideGit.Instance);
         services.TryAddSingleton(TerminalCompressor.Instance);
         services.TryAddSingleton(GlobalRulePool.Instance);
+
+        services.TryAddSingleton<HTNPlanner>();
+        services.TryAddSingleton<TraceCollector>();
 
         return services;
     }
