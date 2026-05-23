@@ -83,8 +83,7 @@ if (string.IsNullOrEmpty(l0ApiKey))
     l0ApiKey = Environment.GetEnvironmentVariable($"{l0.Provider.ToUpperInvariant()}_API_KEY") ?? "";
 }
 
-var synapticDir = System.IO.Path.Combine(AppContext.BaseDirectory, "synaptic");
-var onnxEmbeddingPath = System.IO.Path.Combine(synapticDir, "models", "embedding", "model.onnx");
+var onnxEmbeddingPath = System.IO.Path.Combine(AppContext.BaseDirectory, "models", "l0", "model.onnx");
 
 var l0Endpoint = l0ProviderConfig != null ? $"{l0ProviderConfig.Endpoint.TrimEnd('/')}/v1" : null;
 builder.Services.AddLTAIVectorAuto(

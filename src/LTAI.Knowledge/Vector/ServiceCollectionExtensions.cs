@@ -23,7 +23,7 @@ public static class ServiceCollectionExtensions
         string? tokenizerPath = null,
         int dimension = 384)
     {
-        var modelPath = onnxModelPath ?? Path.Combine(AppContext.BaseDirectory, "synaptic", "models", "embedding", "model.onnx");
+        var modelPath = onnxModelPath ?? Path.Combine(AppContext.BaseDirectory, "models", "l0", "model.onnx");
         var tokPath = tokenizerPath ?? Path.Combine(Path.GetDirectoryName(modelPath)!, "tokenizer.json");
 
         if (File.Exists(modelPath))
