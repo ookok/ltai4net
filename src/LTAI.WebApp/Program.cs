@@ -3,6 +3,7 @@ using LTAI.AI.Governors;
 using LTAI.Tools;
 using LTAI.Core;
 using LTAI.Core.Configuration;
+using LTAI.Core.Setup;
 using LTAI.DNA;
 using LTAI.Agent;
 using LTAI.Knowledge.Memory;
@@ -10,6 +11,16 @@ using LTAI.Planning.Metrics;
 using LTAI.Knowledge.Vector;
 using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.Options;
+
+var configPath = Path.Combine(AppContext.BaseDirectory, "appsettings.json");
+var status = FirstRunDetector.Check(configPath);
+
+if (status.IsFirstRun)
+{
+    FirstRunDetector.PrintDiagnostics(status);
+    Console.WriteLine("检测到未配置，启动配置向导...");
+    await new InteractiveSetupWizard(configPath).RunAsync();
+}
 
 var builder = WebApplication.CreateBuilder(args);
 

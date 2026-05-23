@@ -6,6 +6,7 @@
     <Nullable>enable</Nullable>
     <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
     <ApplicationDisplayVersion>7.0</ApplicationDisplayVersion>
+    <IsExeProject>true</IsExeProject>
     <RootNamespace>LTAI.Desktop</RootNamespace>
     <AssemblyName>LTAI.Desktop</AssemblyName>
   </PropertyGroup>
