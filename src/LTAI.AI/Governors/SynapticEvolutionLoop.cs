@@ -22,6 +22,7 @@ public sealed class SynapticEvolutionLoop : BackgroundService
     private readonly TimeSpan _checkInterval;
     private readonly int _minSamplesForTraining;
     private EvolutionMetrics _metrics;
+    private bool _useLora;
 
     public EvolutionMetrics Metrics => _metrics;
 
@@ -42,15 +43,16 @@ public sealed class SynapticEvolutionLoop : BackgroundService
         _checkInterval = checkInterval ?? TimeSpan.FromMinutes(5);
         _minSamplesForTraining = minSamplesForTraining;
         _metrics = new EvolutionMetrics();
+        _useLora = _trainer.UseLora;
 
         _logger.LogInformation(
-            "SynapticEvolutionLoop initialized: interval={Interval}s, minSamples={MinSamples}",
-            _checkInterval.TotalSeconds, _minSamplesForTraining);
+            "SynapticEvolutionLoop: interval={Interval}s minSamples={Min} lora={UseLora}",
+            _checkInterval.TotalSeconds, _minSamplesForTraining, _useLora);
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        _logger.LogInformation("SynapticEvolutionLoop started");
+        _logger.LogInformation("SynapticEvolutionLoop started (LoRA={UseLora})", _useLora);
 
         while (!stoppingToken.IsCancellationRequested)
         {
@@ -58,10 +60,7 @@ public sealed class SynapticEvolutionLoop : BackgroundService
             {
                 await EvolutionCycleAsync(stoppingToken);
             }
-            catch (OperationCanceledException)
-            {
-                break;
-            }
+            catch (OperationCanceledException) { break; }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Evolution cycle failed");
@@ -85,21 +84,16 @@ public sealed class SynapticEvolutionLoop : BackgroundService
 
         if (untrained.Count < _minSamplesForTraining)
         {
-            _logger.LogDebug(
-                "Insufficient untrained experiences: {Count}/{Min}",
-                untrained.Count, _minSamplesForTraining);
+            _logger.LogDebug("Insufficient untrained: {Count}/{Min}", untrained.Count, _minSamplesForTraining);
             return;
         }
 
-        _logger.LogInformation(
-            "Starting evolution cycle: {Count} untrained experiences", untrained.Count);
+        _logger.LogInformation("Evolution cycle: {Count} untrained experiences", untrained.Count);
 
         var samples = untrained
             .Select(exp => new TrainingSample
             {
-                Text = exp.Query,
-                Label = exp.Label,
-                Weight = exp.Reward
+                Text = exp.Query, Label = exp.Label, Weight = exp.Reward
             })
             .ToList();
 
@@ -111,8 +105,18 @@ public sealed class SynapticEvolutionLoop : BackgroundService
             return;
         }
 
-        var modelPath = _trainer.GetLatestModelPath();
-        if (modelPath != null && _inference.LoadModel(modelPath))
+        var modelPath = _useLora ? result.OnnxPath : _trainer.GetLatestModelPath();
+        if (modelPath is null)
+        {
+            _logger.LogWarning("No model path returned from trainer");
+            return;
+        }
+
+        bool loaded = _useLora
+            ? _inference.HotReload(modelPath)
+            : _inference.LoadModel(modelPath!);
+
+        if (loaded)
         {
             var ids = untrained.Select(e => e.Id).ToList();
             _memory.MarkAsTrained(ids);
@@ -123,16 +127,18 @@ public sealed class SynapticEvolutionLoop : BackgroundService
                 TotalExperiences = _memory.ExperienceCount,
                 LatestAccuracy = result.Accuracy,
                 LastTrainingAt = DateTime.UtcNow,
-                ModelVersion = Path.GetFileNameWithoutExtension(modelPath)
+                ModelVersion = global::System.IO.Path.GetFileNameWithoutExtension(modelPath)
             };
 
             _logger.LogInformation(
-                "Evolution complete: accuracy={Accuracy:F3}, samples={Samples}, time={Time:F1}s, totalTrainings={Trainings}",
-                result.Accuracy, result.TrainingSamples, result.TrainingDuration.TotalSeconds, _metrics.TotalTrainings);
+                "Evolution complete: accuracy={Acc:F3} samples={S} time={T:F1}s gen={Gen} totalTrainings={Total} lora={Lora}",
+                result.Accuracy, result.TrainingSamples, result.TrainingDuration.TotalSeconds,
+                result.Generation, _metrics.TotalTrainings, _useLora);
         }
         else
         {
-            _logger.LogWarning("Model loaded failed after successful training");
+            _logger.LogWarning("Model {Action} failed after training",
+                _useLora ? "HotReload" : "load");
         }
     }
 
@@ -145,9 +151,8 @@ public sealed class SynapticEvolutionLoop : BackgroundService
         {
             try
             {
-                var success = await _cellRegistry.TrainCellAsync(domain, ct);
-                if (success)
-                    trainedCount++;
+                var success = await _cellRegistry!.TrainCellAsync(domain, ct);
+                if (success) trainedCount++;
             }
             catch (Exception ex)
             {
@@ -157,7 +162,7 @@ public sealed class SynapticEvolutionLoop : BackgroundService
 
         if (trainedCount > 0)
         {
-            _logger.LogInformation("Cell evolution complete: {Count}/{Total} cells trained",
+            _logger.LogInformation("Cell evolution: {Count}/{Total} trained",
                 trainedCount, domains.Length);
         }
     }

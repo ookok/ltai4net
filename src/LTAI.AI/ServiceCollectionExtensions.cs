@@ -126,21 +126,43 @@ public static class ServiceCollectionExtensions
             return new SynapticMemory(dbPath, logger);
         });
 
+        services.AddSingleton<LoraTrainer>(sp =>
+        {
+            var logger = sp.GetService<ILogger<LoraTrainer>>();
+            var modelDir = System.IO.Path.Combine(synapticDir, "models");
+            return new LoraTrainer(modelDir, logger);
+        });
+
         services.AddSingleton<SynapticTrainer>(sp =>
         {
             var logger = sp.GetService<ILogger<SynapticTrainer>>();
             var modelDir = System.IO.Path.Combine(synapticDir, "models");
-            return new SynapticTrainer(modelDir, logger);
+            var loraTrainer = sp.GetService<LoraTrainer>();
+            return new SynapticTrainer(modelDir, logger, loraTrainer);
         });
 
         services.AddSingleton<SynapticInference>(sp =>
         {
             var logger = sp.GetService<ILogger<SynapticInference>>();
-            var inference = new SynapticInference(logger);
-            var trainer = sp.GetRequiredService<SynapticTrainer>();
-            var existingModel = trainer.GetLatestModelPath();
-            if (existingModel != null)
-                inference.LoadModel(existingModel);
+            var loraTrainer = sp.GetService<LoraTrainer>();
+            var inference = new SynapticInference(logger, loraTrainer);
+
+            // Auto-load latest model (LoRA weights > ONNX > ML.NET ZIP)
+            if (loraTrainer != null)
+            {
+                var latestWeights = loraTrainer.GetLatestWeightsPath();
+                if (latestWeights != null)
+                    inference.LoadLoraWeights(latestWeights);
+            }
+            else
+            {
+                var trainer = sp.GetRequiredService<SynapticTrainer>();
+                var existing = trainer.GetLatestModelPath()
+                    ?? trainer.GetLatestOnnxPath();
+                if (existing != null)
+                    inference.LoadModel(existing);
+            }
+
             return inference;
         });
 

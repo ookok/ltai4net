@@ -17,6 +17,9 @@ public sealed record TrainingResult
     public string? ErrorMessage { get; init; }
     public bool Success => string.IsNullOrEmpty(ErrorMessage);
     public bool HasOnnx => !string.IsNullOrEmpty(OnnxPath);
+    public string? LoraCheckpointPath { get; init; }
+    public int Generation { get; init; }
+    public bool IsLoraTrained => Generation > 0;
 }
 
 public sealed class SynapticTrainer
@@ -24,18 +27,47 @@ public sealed class SynapticTrainer
     private readonly MLContext _ml;
     private readonly ILogger<SynapticTrainer> _logger;
     private readonly string _modelDirectory;
+    private readonly LoraTrainer? _loraTrainer;
 
-    public SynapticTrainer(string modelDirectory, ILogger<SynapticTrainer>? logger = null)
+    public bool UseLora => _loraTrainer != null;
+
+    public SynapticTrainer(string modelDirectory, ILogger<SynapticTrainer>? logger = null,
+        LoraTrainer? loraTrainer = null)
     {
         _ml = new MLContext(seed: 42);
         _logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<SynapticTrainer>.Instance;
         _modelDirectory = modelDirectory;
+        _loraTrainer = loraTrainer;
 
-        if (!Directory.Exists(_modelDirectory))
-            Directory.CreateDirectory(_modelDirectory);
+        if (!global::System.IO.Directory.Exists(_modelDirectory))
+            global::System.IO.Directory.CreateDirectory(_modelDirectory);
     }
 
     public TrainingResult TrainIntentClassifier(List<TrainingSample> samples)
+    {
+        if (_loraTrainer != null)
+            return TrainWithLora(samples);
+        return TrainWithMLNet(samples);
+    }
+
+    private TrainingResult TrainWithLora(List<TrainingSample> samples)
+    {
+        var result = _loraTrainer!.Train(samples, epochs: 5, lr: 0.01f);
+
+        return new TrainingResult
+        {
+            ModelPath = result.ModelPath ?? "",
+            OnnxPath = result.CheckpointPath ?? "",
+            LoraCheckpointPath = result.CheckpointPath,
+            Generation = result.Generation,
+            Accuracy = result.Accuracy,
+            TrainingSamples = result.SamplesTrained,
+            TrainingDuration = result.Duration,
+            ErrorMessage = result.ErrorMessage
+        };
+    }
+
+    private TrainingResult TrainWithMLNet(List<TrainingSample> samples)
     {
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
 
@@ -58,22 +90,19 @@ public sealed class SynapticTrainer
                 .Append(_ml.Transforms.Conversion.MapKeyToValue("PredictedLabel"));
 
             var model = pipeline.Fit(data);
-
             var predictions = model.Transform(data);
             var metrics = _ml.MulticlassClassification.Evaluate(predictions);
 
-            // Save ML.NET ZIP (backward compat)
             var baseName = $"intent_classifier_{DateTime.UtcNow:yyyyMMdd_HHmmss}";
-            var zipPath = Path.Combine(_modelDirectory, $"{baseName}.zip");
+            var zipPath = global::System.IO.Path.Combine(_modelDirectory, $"{baseName}.zip");
             _ml.Model.Save(model, data.Schema, zipPath);
 
-            // Export ONNX — the key upgrade: ML.NET pipeline → ONNX model file
-            var onnxPath = Path.Combine(_modelDirectory, $"{baseName}.onnx");
-            ExportToONNX(model, data, onnxPath);
+            var onnxPath = global::System.IO.Path.Combine(_modelDirectory, $"{baseName}.onnx");
+            ExportOnnxWeights(model, data, onnxPath);
 
             stopwatch.Stop();
 
-            var result = new TrainingResult
+            var trainingResult = new TrainingResult
             {
                 ModelPath = zipPath,
                 OnnxPath = onnxPath,
@@ -84,15 +113,15 @@ public sealed class SynapticTrainer
             };
 
             _logger.LogInformation(
-                "Intent classifier trained: accuracy={Accuracy:F3}, ONNX exported to {Path}, time={Time:F1}s",
-                result.Accuracy, onnxPath, result.TrainingDuration.TotalSeconds);
+                "ML.NET classifier trained: accuracy={Accuracy:F3}, time={Time:F1}s",
+                trainingResult.Accuracy, trainingResult.TrainingDuration.TotalSeconds);
 
-            return result;
+            return trainingResult;
         }
         catch (Exception ex)
         {
             stopwatch.Stop();
-            _logger.LogError(ex, "Intent classifier training failed");
+            _logger.LogError(ex, "ML.NET training failed");
             return new TrainingResult
             {
                 ErrorMessage = ex.Message,
@@ -102,56 +131,52 @@ public sealed class SynapticTrainer
         }
     }
 
-    /// Export the trained model for ONNX Runtime consumption.
-    /// Saves the pipeline to a weights JSON that can be loaded by InferenceSession.
-    /// The primary ZIP format (ML.NET native) is also saved for backward compat.
-    private void ExportToONNX(ITransformer model, IDataView data, string onnxPath)
+    private void ExportOnnxWeights(ITransformer model, IDataView data, string onnxPath)
     {
         int numClasses = 3;
         try
         {
             var labelCol = data.Schema.GetColumnOrNull("Label");
-            if (labelCol.HasValue && labelCol.Value.Type is Microsoft.ML.Data.KeyDataViewType keyType)
+            if (labelCol.HasValue && labelCol.Value.Type is KeyDataViewType keyType)
                 numClasses = (int)keyType.Count;
         }
         catch { }
 
-        var jsonPath = Path.ChangeExtension(onnxPath, ".weights.json");
+        var jsonPath = global::System.IO.Path.ChangeExtension(onnxPath, ".weights.json");
         var weights = new
         {
             num_classes = numClasses,
             exported_at = DateTime.UtcNow.ToString("O"),
             format = "mlnet-sdca-linear-classifier-v1"
         };
-        File.WriteAllText(jsonPath, System.Text.Json.JsonSerializer.Serialize(weights));
-        _logger.LogInformation("ONNX-ready weights exported: {Path} ({NumClasses} classes)", jsonPath, numClasses);
-    }
-
-    /// Fallback: extract SDCA weights and save as JSON → loadable by InferenceSession at runtime
-    private static void ExportWeightsJSON(ITransformer model, string onnxPath, int numClasses)
-    {
-        var jsonPath = Path.ChangeExtension(onnxPath, ".weights.json");
-        var data = new { num_classes = numClasses, exported_at = DateTime.UtcNow, format = "mlnet-linear-classifier" };
-        File.WriteAllText(jsonPath, System.Text.Json.JsonSerializer.Serialize(data));
+        global::System.IO.File.WriteAllText(jsonPath,
+            global::System.Text.Json.JsonSerializer.Serialize(weights));
     }
 
     public string? GetLatestModelPath()
     {
-        if (!Directory.Exists(_modelDirectory))
-            return null;
+        if (!global::System.IO.Directory.Exists(_modelDirectory)) return null;
 
-        return Directory.GetFiles(_modelDirectory, "intent_classifier_*.zip")
-            .OrderByDescending(f => File.GetLastWriteTimeUtc(f))
+        if (_loraTrainer != null)
+        {
+            var weightsPath = _loraTrainer.GetLatestWeightsPath();
+            if (weightsPath != null) return weightsPath;
+        }
+
+        return global::System.IO.Directory.GetFiles(_modelDirectory, "intent_classifier_*.zip")
+            .OrderByDescending(f => global::System.IO.File.GetLastWriteTimeUtc(f))
             .FirstOrDefault();
     }
 
     public string? GetLatestOnnxPath()
     {
-        if (!Directory.Exists(_modelDirectory))
-            return null;
+        if (!global::System.IO.Directory.Exists(_modelDirectory)) return null;
 
-        return Directory.GetFiles(_modelDirectory, "intent_classifier_*.onnx")
-            .OrderByDescending(f => File.GetLastWriteTimeUtc(f))
+        return global::System.IO.Directory.GetFiles(_modelDirectory, "intent_classifier_gen*_*.weights.json")
+            .OrderByDescending(f => global::System.IO.File.GetLastWriteTimeUtc(f))
+            .FirstOrDefault()
+            ?? global::System.IO.Directory.GetFiles(_modelDirectory, "intent_classifier_*.onnx")
+            .OrderByDescending(f => global::System.IO.File.GetLastWriteTimeUtc(f))
             .FirstOrDefault();
     }
 }
@@ -164,56 +189,163 @@ public sealed record InferenceResult
     public string ModelType { get; init; } = "";
 }
 
-/// SynapticInference — now ONNX-native.
-/// Loads intent classifier ONNX from SynapticTrainer export,
-/// runs via InferenceSession (no ML.NET PredictionEngine needed).
-/// Falls back to ZIP/legacy if ONNX not available.
-public sealed class SynapticInference
+public sealed class SynapticInference : IDisposable
 {
     private readonly ILogger<SynapticInference> _logger;
+    private readonly LoraTrainer? _loraTrainer;
     private InferenceSession? _onnxSession;
     private readonly object _lock = new();
     private volatile bool _isLoaded;
     private string _loadedPath = "";
+    private int _loadedGeneration;
 
-    // Legacy compat
+    // Legacy ML.NET compat
     private PredictionEngine<TrainingSample, IntentPrediction>? _predictionEngine;
     private bool _isOnnx;
+    private bool _isLora;
 
-    public SynapticInference(ILogger<SynapticInference>? logger = null)
+    public bool IsReady => _isLoaded;
+    public bool IsOnnx => _isOnnx || _isLora;
+    public string LoadedPath => _loadedPath;
+    public int LoadedGeneration => _loadedGeneration;
+
+    // Hot-reload event for subscribers
+    public event Action<string, int>? OnModelHotReloaded;
+
+    public SynapticInference(ILogger<SynapticInference>? logger = null,
+        LoraTrainer? loraTrainer = null)
     {
         _logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<SynapticInference>.Instance;
+        _loraTrainer = loraTrainer;
     }
 
-    /// Load model — prefers ONNX, falls back to ZIP
+    /// Load model — prioritizes LoRA weights > ONNX > ML.NET ZIP
     public bool LoadModel(string modelPath)
     {
         _loadedPath = modelPath;
 
-        // Prefer ONNX
+        // LoRA-trained weights JSON
+        if (modelPath.EndsWith(".weights.json", StringComparison.OrdinalIgnoreCase) && _loraTrainer != null)
+        {
+            return LoadLoraWeights(modelPath);
+        }
+
+        // ONNX model
         if (modelPath.EndsWith(".onnx", StringComparison.OrdinalIgnoreCase))
         {
             return LoadOnnxModel(modelPath);
         }
 
-        // Check for companion ONNX
-        var onnxPath = Path.ChangeExtension(modelPath, ".onnx");
-        if (File.Exists(onnxPath))
-        {
-            _logger.LogInformation("Found companion ONNX model: {Path}", onnxPath);
+        var onnxPath = global::System.IO.Path.ChangeExtension(modelPath, ".onnx");
+        if (global::System.IO.File.Exists(onnxPath))
             return LoadOnnxModel(onnxPath);
-        }
 
-        // Fallback to legacy ML.NET ZIP
+        // Try LoRA weights
+        var weightsPath = global::System.IO.Path.ChangeExtension(modelPath, ".weights.json");
+        if (global::System.IO.File.Exists(weightsPath) && _loraTrainer != null)
+            return LoadLoraWeights(weightsPath);
+
         return LoadLegacyModel(modelPath);
     }
 
-    /// Load ONNX model directly via InferenceSession — no ML.NET PredictionEngine overhead
+    /// Load LoRA-trained weights JSON and merge into network for inference
+    public bool LoadLoraWeights(string weightsPath)
+    {
+        try
+        {
+            if (!global::System.IO.File.Exists(weightsPath))
+            {
+                _logger.LogWarning("LoRA weights not found: {Path}", weightsPath);
+                return false;
+            }
+
+            var json = global::System.IO.File.ReadAllText(weightsPath);
+            var doc = System.Text.Json.JsonDocument.Parse(json);
+            var root = doc.RootElement;
+
+            if (root.TryGetProperty("generation", out var gen))
+                _loadedGeneration = gen.GetInt32();
+
+            lock (_lock)
+            {
+                DisposeInternal();
+                _isLora = true;
+                _isOnnx = false;
+                _isLoaded = true;
+                _loadedPath = weightsPath;
+            }
+
+            // Ensure LoRA network is merged for inference
+            _loraTrainer?.Network.Merge();
+
+            var labels = root.TryGetProperty("labels", out var lbls)
+                ? lbls.EnumerateArray().Select(l => l.GetString() ?? "").ToArray()
+                : LoraTrainer.DefaultLabels;
+
+            _logger.LogInformation(
+                "LoRA weights loaded: {Path} gen={Gen} labels=[{Labels}]",
+                weightsPath, _loadedGeneration, string.Join(",", labels));
+
+            OnModelHotReloaded?.Invoke(weightsPath, _loadedGeneration);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to load LoRA weights: {Path}", weightsPath);
+            return false;
+        }
+    }
+
+    /// Hot-reload: swap to a newer model atomically without downtime
+    public bool HotReload(string newWeightsPath)
+    {
+        if (!global::System.IO.File.Exists(newWeightsPath))
+        {
+            _logger.LogWarning("HotReload target not found: {Path}", newWeightsPath);
+            return false;
+        }
+
+        _logger.LogInformation("HotReload: {Old} -> {New} (gen {OldGen} -> ...)",
+            _loadedPath, newWeightsPath, _loadedGeneration);
+
+        var success = LoadModel(newWeightsPath);
+
+        if (success)
+            _logger.LogInformation("HotReload complete: {Path} gen={Gen}", newWeightsPath, _loadedGeneration);
+        else
+            _logger.LogWarning("HotReload failed, keeping existing model: {Path}", _loadedPath);
+
+        return success;
+    }
+
+    /// Async hot-reload for background training threads
+    public async Task<bool> HotReloadAsync(string newWeightsPath, CancellationToken ct = default)
+    {
+        return await Task.Run(() => HotReload(newWeightsPath), ct);
+    }
+
+    /// Auto-discover and load the latest model
+    public bool LoadLatest()
+    {
+        if (_loraTrainer != null)
+        {
+            var latestWeights = _loraTrainer.GetLatestWeightsPath();
+            if (latestWeights != null && latestWeights != _loadedPath)
+                return LoadLoraWeights(latestWeights);
+        }
+
+        var latestOnnx = GetLatestOnnxFile();
+        if (latestOnnx != null && latestOnnx != _loadedPath)
+            return LoadOnnxModel(latestOnnx);
+
+        return _isLoaded;
+    }
+
     public bool LoadOnnxModel(string onnxPath)
     {
         try
         {
-            if (!File.Exists(onnxPath))
+            if (!global::System.IO.File.Exists(onnxPath))
             {
                 _logger.LogWarning("ONNX model not found: {Path}", onnxPath);
                 return false;
@@ -221,10 +353,8 @@ public sealed class SynapticInference
 
             lock (_lock)
             {
-                _predictionEngine?.Dispose();
-                _predictionEngine = null;
+                DisposeInternal();
 
-                _onnxSession?.Dispose();
                 _onnxSession = new InferenceSession(onnxPath, new SessionOptions
                 {
                     GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL,
@@ -233,10 +363,11 @@ public sealed class SynapticInference
 
                 _isLoaded = true;
                 _isOnnx = true;
+                _isLora = false;
             }
 
             _logger.LogInformation("ONNX model loaded: {Path} ({Size}MB)",
-                onnxPath, new FileInfo(onnxPath).Length / 1024 / 1024);
+                onnxPath, new global::System.IO.FileInfo(onnxPath).Length / 1024 / 1024);
             return true;
         }
         catch (Exception ex)
@@ -246,7 +377,6 @@ public sealed class SynapticInference
         }
     }
 
-    /// Legacy ML.NET ZIP loading — kept for backward compat
     private bool LoadLegacyModel(string zipPath)
     {
         try
@@ -256,13 +386,11 @@ public sealed class SynapticInference
 
             lock (_lock)
             {
-                _onnxSession?.Dispose();
-                _onnxSession = null;
-
-                _predictionEngine?.Dispose();
+                DisposeInternal();
                 _predictionEngine = mlContext.Model.CreatePredictionEngine<TrainingSample, IntentPrediction>(model);
                 _isLoaded = true;
                 _isOnnx = false;
+                _isLora = false;
             }
 
             _logger.LogInformation("Legacy ML.NET model loaded: {Path}", zipPath);
@@ -275,7 +403,6 @@ public sealed class SynapticInference
         }
     }
 
-    /// Predict intent — ONNX via InferenceSession if available, else legacy PredictionEngine
     public InferenceResult Predict(string text)
     {
         if (!_isLoaded)
@@ -285,12 +412,44 @@ public sealed class SynapticInference
 
         var sw = System.Diagnostics.Stopwatch.StartNew();
 
+        if (_isLora && _loraTrainer != null)
+        {
+            return PredictLora(text, sw);
+        }
+
         if (_isOnnx && _onnxSession != null)
         {
             return PredictOnnx(text, sw);
         }
 
         return PredictLegacy(text, sw);
+    }
+
+    private InferenceResult PredictLora(string text, System.Diagnostics.Stopwatch sw)
+    {
+        try
+        {
+            var (classIdx, confidence) = _loraTrainer!.Network.Predict(text);
+            var label = _loraTrainer.MapIndexToLabel(classIdx);
+
+            sw.Stop();
+            return new InferenceResult
+            {
+                PredictedLabel = label, Confidence = confidence,
+                LatencyMs = (float)sw.Elapsed.TotalMilliseconds,
+                ModelType = $"lora_gen{_loraTrainer.Network.Generation}"
+            };
+        }
+        catch (Exception ex)
+        {
+            sw.Stop();
+            _logger.LogWarning(ex, "LoRA prediction failed");
+            return new InferenceResult
+            {
+                PredictedLabel = "deep", Confidence = 0.5f,
+                LatencyMs = (float)sw.Elapsed.TotalMilliseconds, ModelType = "fallback"
+            };
+        }
     }
 
     private InferenceResult PredictOnnx(string text, System.Diagnostics.Stopwatch sw)
@@ -310,13 +469,21 @@ public sealed class SynapticInference
             var confidence = scoreTensor?.ToArray().Max() ?? 0.5f;
 
             sw.Stop();
-            return new InferenceResult { PredictedLabel = label, Confidence = confidence, LatencyMs = (float)sw.Elapsed.TotalMilliseconds, ModelType = "onnx" };
+            return new InferenceResult
+            {
+                PredictedLabel = label, Confidence = confidence,
+                LatencyMs = (float)sw.Elapsed.TotalMilliseconds, ModelType = "onnx"
+            };
         }
         catch (Exception ex)
         {
             sw.Stop();
-            _logger.LogWarning(ex, "ONNX prediction failed, falling back to heuristic");
-            return new InferenceResult { PredictedLabel = "deep", Confidence = 0.5f, LatencyMs = (float)sw.Elapsed.TotalMilliseconds, ModelType = "fallback" };
+            _logger.LogWarning(ex, "ONNX prediction failed");
+            return new InferenceResult
+            {
+                PredictedLabel = "deep", Confidence = 0.5f,
+                LatencyMs = (float)sw.Elapsed.TotalMilliseconds, ModelType = "fallback"
+            };
         }
     }
 
@@ -324,7 +491,6 @@ public sealed class SynapticInference
     {
         var sample = new TrainingSample { Text = text, Label = "" };
         var prediction = _predictionEngine!.Predict(sample);
-
         sw.Stop();
         return new InferenceResult
         {
@@ -339,21 +505,29 @@ public sealed class SynapticInference
     {
         var tokens = new long[maxLen];
         var words = text.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        for (int i = 0; i < Math.Min(words.Length, maxLen); i++)
-        {
-            tokens[i] = Math.Abs(words[i].GetHashCode()) % 1000L;
-        }
+        for (int i = 0; i < global::System.Math.Min(words.Length, maxLen); i++)
+            tokens[i] = global::System.Math.Abs(words[i].GetHashCode()) % 1000L;
         return new DenseTensor<long>(tokens, [1, maxLen]);
     }
 
-    public bool IsReady => _isLoaded;
-    public bool IsOnnx => _isOnnx;
-    public string LoadedPath => _loadedPath;
+    private string? GetLatestOnnxFile()
+    {
+        if (!global::System.IO.Directory.Exists(_loraTrainer?.GetLatestWeightsPath() ?? ""))
+            return null;
+        return null;
+    }
+
+    private void DisposeInternal()
+    {
+        _predictionEngine?.Dispose();
+        _predictionEngine = null;
+        _onnxSession?.Dispose();
+        _onnxSession = null;
+    }
 
     public void Dispose()
     {
-        _predictionEngine?.Dispose();
-        _onnxSession?.Dispose();
+        lock (_lock) DisposeInternal();
     }
 }
 
