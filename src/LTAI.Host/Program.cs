@@ -167,6 +167,6 @@ sp.GetRequiredService<LTAI.Agent.Evolution.PluginRegistry>().Discover();
 await LTAI.Agent.Tools.ToolRegistryExtensions.RegisterAllToolCategoriesAsync(toolRegistry, logger);
 await sp.RegisterCodeActToolsAsync(toolRegistry);
 
-app.MapGet("/health", () => Results.Ok(new { status = "healthy", version = "6.2.0", timestamp = DateTime.UtcNow }));
+app.MapGet("/health", () => Results.Ok(new { status = "healthy", version = "7.0.0", timestamp = DateTime.UtcNow }));
 
 await app.RunAsync();

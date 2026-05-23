@@ -1450,7 +1450,7 @@ created: {DateTime.UtcNow:yyyy-MM-dd}
             async _ =>
             {
                 var tools = AllTools.Select(t => new { name = t.Name, description = t.Description, category = t.Category, has_handler = t.Handler != null });
-                return new { protocol = "2024-11-05", server_name = "LTAI", version = "5.5.0", tools, total = AllTools.Length };
+                return new { protocol = "2024-11-05", server_name = "LTAI", version = "7.0.0", tools, total = AllTools.Length };
             }),
 
         // ═══ System — 7 tools ═══

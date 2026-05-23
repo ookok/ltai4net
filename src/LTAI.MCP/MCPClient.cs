@@ -52,7 +52,7 @@ public sealed class MCPClient
             {
                 protocolVersion = "2024-11-05",
                 capabilities = new { },
-                clientInfo = new { name = "LTAI", version = "5.5.0" }
+                clientInfo = new { name = "LTAI", version = "7.0.0" }
             }, ct);
 
             if (result.TryGetProperty("serverInfo", out var info))

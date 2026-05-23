@@ -123,7 +123,7 @@ public sealed class AutoUpdater
     public AutoUpdater(ILogger<AutoUpdater> logger, string? updateUrl = null)
     {
         _logger = logger;
-        _currentVersion = "5.5.0";
+        _currentVersion = "7.0.0";
         _updateUrl = updateUrl ?? Environment.GetEnvironmentVariable("LTAI_UPDATE_URL") ?? "";
     }
 

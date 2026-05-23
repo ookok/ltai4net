@@ -33,7 +33,7 @@ public static class MCPEndpoints
                     {
                         protocolVersion = "2024-11-05",
                         capabilities = new { tools = new { }, resources = new { } },
-                        serverInfo = new { name = "LTAI", version = "5.5.0" }
+                        serverInfo = new { name = "LTAI", version = "7.0.0" }
                     },
                     "tools/list" => new
                     {

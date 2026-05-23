@@ -89,7 +89,7 @@ public static class ProviderConfigEndpoints
             return Results.Ok(new
             {
                 status = "healthy",
-                version = "6.2.0",
+                version = "7.0.0",
                 timestamp = DateTime.UtcNow,
                 providers = new
                 {

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using LTAI.Core.Messaging;
+using LTAI.DNA.Safety;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 
@@ -8,13 +9,15 @@ namespace LTAI.MCP;
 public sealed class MCPServer
 {
     private readonly AIToolRegistry _tools;
+    private readonly UnifiedSafetyGate? _safety;
     private readonly ILogger<MCPServer> _logger;
     private readonly Dictionary<string, MCPResource> _resources = new();
-    private string _serverName = "LTAI";
+    private string _serverName = "LTAI v7.0";
 
-    public MCPServer(AIToolRegistry tools, ILogger<MCPServer> logger)
+    public MCPServer(AIToolRegistry tools, UnifiedSafetyGate? safety, ILogger<MCPServer> logger)
     {
         _tools = tools;
+        _safety = safety;
         _logger = logger;
         RegisterBuiltInResources();
     }
@@ -50,7 +53,7 @@ public sealed class MCPServer
     {
         var result = new InitializeResult
         {
-            Info = new ServerInfo { Name = _serverName, Version = "5.5.0" },
+            Info = new ServerInfo { Name = _serverName, Version = "7.0.0" },
             Capabilities = new ServerCapabilities
             {
                 Tools = new ToolCapability { ListChanged = false },
@@ -94,6 +97,12 @@ public sealed class MCPServer
 
         try
         {
+            if (_safety != null && !_safety.EvaluateToolCall(request.Name, JsonSerializer.Serialize(request.Arguments)))
+            {
+                _logger.LogWarning("MCPServer: SafetyGate blocked tool call {Tool}", request.Name);
+                return ErrorResponse(msg.Id, -32000, $"[Safety] Tool call blocked: {request.Name}");
+            }
+
             var args = new Dictionary<string, object?>();
             if (request.Arguments != null)
             {

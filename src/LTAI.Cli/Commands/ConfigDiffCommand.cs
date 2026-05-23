@@ -193,6 +193,20 @@ internal static class YamlParser
 
     private static List<string> ParseList(string[] lines, ref string currentLine)
     {
-        return new List<string>(); // simplified — real parser uses YAML library
+        var items = new List<string>();
+        // Parse YAML list items indented under the current property
+        for (int i = Array.IndexOf(lines, currentLine) + 1; i < lines.Length; i++)
+        {
+            var line = lines[i].Trim();
+            if (line.StartsWith("- "))
+            {
+                items.Add(line[2..].Trim());
+            }
+            else if (!string.IsNullOrWhiteSpace(line) && !line.StartsWith("#"))
+            {
+                break; // No longer in the list
+            }
+        }
+        return items;
     }
 }

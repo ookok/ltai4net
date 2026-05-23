@@ -80,7 +80,7 @@ public static class MAFEndpoints
                 agent = agent.Name,
                 description = agent.Description,
                 protocol = "MAF-compatible",
-                version = "5.5.0-maf-net10"
+                version = "7.0.0-maf-net10"
             });
         });
 
