@@ -10,16 +10,11 @@
     <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
   </PropertyGroup>
 
-  <!-- Exe projects: build → dist/ -->
+  <!-- Exe projects: single-file self-contained -->
   <PropertyGroup Condition="'$(IsExeProject)' == 'true'">
-    <OutputPath>$(MSBuildThisFileDirectory)dist\lib\</OutputPath>
-    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
-    <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>true</SelfContained>
-    <PublishTrimmed>false</PublishTrimmed>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
-    <PublishDir>$(MSBuildThisFileDirectory)dist\$(MSBuildProjectName)\</PublishDir>
   </PropertyGroup>
 </Project>
