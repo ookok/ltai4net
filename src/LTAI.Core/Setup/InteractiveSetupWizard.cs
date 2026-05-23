@@ -95,6 +95,13 @@ public class InteractiveSetupWizard
         Console.WriteLine($"━━━ {layerName}: {description} ━━━");
         Console.WriteLine();
 
+        // L0 嵌入层：优先推荐本地模型下载
+        if (layerName == "L0")
+        {
+            var choseLocal = await OfferL0LocalModelAsync(hwInfo, ct);
+            if (choseLocal) return;
+        }
+
         await ConfigureApiProviderSelectionAsync(layerName, ct);
         Console.WriteLine();
     }
@@ -104,7 +111,6 @@ public class InteractiveSetupWizard
         var registry = new ProviderRegistry();
         var allProviders = registry.AllProviders.ToList();
 
-        // 收集所有云端提供商
         var cloud = new List<(string Name, string BaseUrl, List<string> Caps, bool Suitable)>();
         foreach (var p in allProviders)
         {
@@ -113,34 +119,33 @@ public class InteractiveSetupWizard
             if (url.Contains("localhost") || url.Contains("127.0.0.1") || url.Contains("0.0.0.0") || url.Contains(".local")) continue;
 
             var caps = registry.GetCapabilities(p);
-            var isSuitable = layerName != "L0" || caps.Contains("embedding");
-            cloud.Add((p, url, caps, isSuitable));
+            // L0: only show providers with embedding capability
+            if (layerName == "L0" && !caps.Contains("embedding"))
+                continue;
+
+            cloud.Add((p, url, caps, true));
         }
 
-        var unsuitableCount = cloud.Count(c => !c.Suitable);
+        if (cloud.Count == 0)
+        {
+            Console.WriteLine("  ⚠️  无可用云端嵌入提供商");
+            Console.WriteLine("  提示: 运行 'ltai setup' 重新配置，或使用本地 ONNX 模型");
+            return;
+        }
 
-        Console.WriteLine("选择云端提供商：");
+        Console.WriteLine("选择嵌入向量云端提供商 (仅显示支持 embedding 的提供商)：");
         Console.WriteLine();
-        Console.WriteLine("  ─── 推荐 ───");
-        Console.WriteLine("  [A] 硅基流动    siliconflow  | BGE/Qwen3嵌入 + DeepSeek/Qwen对话");
-        Console.WriteLine("  [B] DeepSeek     deepseek    | v4-pro/flash 对话，无嵌入");
-        Console.WriteLine("  [C] 阿里云百炼    aliyun      | text-embedding + qwen 对话");
-        Console.WriteLine();
-        Console.WriteLine($"  ─── 全部 {cloud.Count} 个云端提供商 ───");
-        if (layerName == "L0" && unsuitableCount > 0)
-            Console.WriteLine($"  L0 嵌入层: 仅含 embedding 能力的提供商可正常使用，{unsuitableCount} 个标 ⚠️ 的将用本地哈希");
 
         for (int i = 0; i < cloud.Count; i++)
         {
             var c = cloud[i];
-            var tag = c.Suitable ? "  " : "⚠️";
             var capStr = string.Join(",", c.Caps);
-            Console.WriteLine($"  [{i + 1,2}] {tag} {c.Name,-14} {c.BaseUrl,-50} [{capStr}]");
+            Console.WriteLine($"  [{i + 1,2}] {c.Name,-14} {c.BaseUrl,-50} [{capStr}]");
         }
         Console.WriteLine("  [Enter] 跳过");
         Console.WriteLine();
 
-        var choice = ReadLine("选择 (A/B/C/1-28) 或回车");
+        var choice = ReadLine("选择编号或回车跳过");
         if (string.IsNullOrWhiteSpace(choice))
         {
             Console.WriteLine($"  ⏭️  跳过 {layerName} 配置");
@@ -148,25 +153,12 @@ public class InteractiveSetupWizard
         }
 
         string selectedProvider;
-        switch (choice.ToUpperInvariant())
+        if (!int.TryParse(choice, out var idx) || idx < 1 || idx > cloud.Count)
         {
-            case "A": selectedProvider = "siliconflow"; break;
-            case "B": selectedProvider = "deepseek"; break;
-            case "C": selectedProvider = "aliyun"; break;
-            default:
-                if (!int.TryParse(choice, out var idx) || idx < 1 || idx > cloud.Count)
-                {
-                    Console.WriteLine("  ⚠️  无效选择");
-                    return;
-                }
-                selectedProvider = cloud[idx - 1].Name;
-                break;
+            Console.WriteLine("  ⚠️  无效选择");
+            return;
         }
-
-        if (layerName == "L0" && !cloud.First(c => c.Name == selectedProvider).Suitable)
-        {
-            Console.WriteLine($"  ⚠️  {selectedProvider} 不提供嵌入 API，L0 将使用本地哈希后端");
-        }
+        selectedProvider = cloud[idx - 1].Name;
 
         var endpoint = registry.GetBaseUrl(selectedProvider)!;
         Console.WriteLine();
@@ -321,6 +313,92 @@ public class InteractiveSetupWizard
                                     m.Contains("reasoning", c) || m.Contains("think", c) || m.Contains("r1", c) ? 2 : 1)
             .ThenByDescending(m => m.Length)
             .ToList();
+    }
+
+    /// <summary>
+    /// L0 嵌入层：优先推荐本地 ONNX 模型下载。
+    /// 返回 true 表示用户已选择本地模型并完成配置。
+    /// </summary>
+    private async Task<bool> OfferL0LocalModelAsync(HardwareInfo hwInfo, CancellationToken ct)
+    {
+        Console.WriteLine("📦 L0 嵌入层 — 推荐本地模型");
+        Console.WriteLine();
+        Console.WriteLine("  本地 ONNX 模型优势：");
+        Console.WriteLine("    • 零网络延迟，纯本地推理");
+        Console.WriteLine("    • 数据不离开本机，隐私安全");
+        Console.WriteLine("    • 无需 API Key，零成本");
+        Console.WriteLine();
+
+        var layer = ModelLayer.L0;
+        var models = LocalModelRegistry.GetByLayer(layer)
+            .Where(m => m.EngineType == "onnx" && !m.Version.Contains("ocr", StringComparison.OrdinalIgnoreCase))
+            .OrderBy(m => m.DiskSizeMB)
+            .ToList();
+
+        var recommended = LocalModelRegistry.SelectBestModel(hwInfo.MemoryMB, layer);
+        if (recommended.EngineType != "onnx" || recommended.Version.Contains("ocr"))
+            recommended = models.FirstOrDefault(m => m.Version.Contains("small", StringComparison.OrdinalIgnoreCase)) ?? models[0];
+
+        Console.WriteLine($"推荐模型: {recommended.Name}");
+        Console.WriteLine($"  大小: {recommended.DiskSizeMB} MB | 内存需求: {recommended.RecommendedMemoryMB} MB");
+        Console.WriteLine();
+
+        Console.WriteLine("可选本地模型：");
+        for (int i = 0; i < models.Count; i++)
+        {
+            var m = models[i];
+            var tag = m.Version == recommended.Version ? " ★推荐" : "";
+            Console.WriteLine($"  [{i + 1}] {m.Name} ({m.DiskSizeMB}MB){tag}");
+        }
+        Console.WriteLine("  [D] 下载推荐模型 (bge-small-zh-v1.5, 93MB)");
+        Console.WriteLine("  [S] 跳过本地，使用云端 API");
+        Console.WriteLine("  [Enter] = D");
+        Console.WriteLine();
+
+        var choice = ReadChoice("选择", "D", new[] { "D", "d", "S", "s" });
+        choice = choice.ToUpperInvariant();
+
+        if (choice == "S")
+        {
+            Console.WriteLine("  ⏭️  跳过本地模型，进入云端 API 选择...");
+            Console.WriteLine();
+            return false;
+        }
+
+        // D or Enter: download recommended
+        var selectedModel = recommended;
+        Console.WriteLine();
+        Console.WriteLine($"📥 下载 {selectedModel.Name} ({selectedModel.DiskSizeMB} MB)...");
+        Console.WriteLine("  使用 hf-mirror.com 国内镜像加速");
+        Console.WriteLine();
+
+        var progress = new Progress<ModelDownloadProgress>(p =>
+        {
+            Console.Write($"\r   {p.Percent:F1}% ({p.DownloadedBytes / 1024.0 / 1024.0:F1}/{p.TotalBytes / 1024.0 / 1024.0:F1} MB)");
+        });
+
+        try
+        {
+            var modelsDir = GetModelsDir();
+            var path = await _modelDownloader.DownloadAsync(selectedModel, modelsDir, progress, ct);
+            Console.WriteLine($"\n  ✓ 下载完成: {path}");
+
+            var layerConfig = _options.AI.GetLayerConfig("L0");
+            layerConfig.GetType().GetProperty("Provider")!.SetValue(layerConfig, "local");
+            layerConfig.GetType().GetProperty("Model")!.SetValue(layerConfig, selectedModel.Version);
+            _isDirty = true;
+
+            Console.WriteLine();
+            Console.WriteLine("  ✓ L0 已配置为本地 ONNX 模型");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"\n  ✗ 下载失败: {ex.Message}");
+            Console.WriteLine("  回退到云端 API 选择...");
+            Console.WriteLine();
+            return false;
+        }
     }
 
     private async Task ConfigureLocalModeAsync(string layerName, HardwareInfo hwInfo, CancellationToken ct)
