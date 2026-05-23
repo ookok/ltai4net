@@ -531,7 +531,7 @@ public static class ServiceCollectionExtensions
         services.AddHttpClient(); // 确保 IHttpClientFactory 可用
 
         // ONNX 训练流水线 HostedServices — 由 onnx_enabled 开关控制
-        services.AddHostedService<IHostedService>(sp =>
+        services.AddSingleton<IHostedService>(sp =>
         {
             var opts = sp.GetRequiredService<IOptions<LTAIOptions>>();
             if (!opts.Value.AI.OnnxEnabled)
@@ -544,7 +544,7 @@ public static class ServiceCollectionExtensions
             return new LocalLlmBootstrapService(config, httpClientFactory, engine, logger!);
         });
 
-        services.AddHostedService<IHostedService>(sp =>
+        services.AddSingleton<IHostedService>(sp =>
         {
             var opts = sp.GetRequiredService<IOptions<LTAIOptions>>();
             if (!opts.Value.AI.OnnxEnabled)
@@ -588,7 +588,7 @@ public static class ServiceCollectionExtensions
             return new L1L2DuplexRouter(inference, memory, graphBridge, domainGraphRegistry, domainDiscovery, localLlm, metaCognition, skillTree, cache, ruleExtractor, costRouter, knowledge, classifier, cellRegistry, llm, logger);
         });
 
-        services.AddHostedService<IHostedService>(sp =>
+        services.AddSingleton<IHostedService>(sp =>
         {
             var opts = sp.GetRequiredService<IOptions<LTAIOptions>>();
             if (!opts.Value.AI.OnnxEnabled)
@@ -614,7 +614,7 @@ public static class ServiceCollectionExtensions
             return new DreamCycle(memory, graphBridge, skillTree, metaCognition, dualMemoryStore, ruleExtractor, logger);
         });
 
-        services.AddHostedService<IHostedService>(sp =>
+        services.AddSingleton<IHostedService>(sp =>
         {
             var opts = sp.GetRequiredService<IOptions<LTAIOptions>>();
             if (!opts.Value.AI.OnnxEnabled)
