@@ -38,7 +38,7 @@ public class L0EmbeddingTests
     {
         var services = new Microsoft.Extensions.DependencyInjection.ServiceCollection();
         services.AddLogging();
-        var result = ServiceCollectionExtensions.AddLTAIVector(services);
+        var result = LTAI.Knowledge.Vector.ServiceCollectionExtensions.AddLTAIVector(services);
         Assert.NotNull(result);
     }
 }
