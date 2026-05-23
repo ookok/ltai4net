@@ -62,33 +62,24 @@ public sealed class PaperSearchAgent
 
     private async Task<List<PaperInsight>> SearchQueryAsync(string query, int maxResults)
     {
-        var papers = new List<PaperInsight>();
-
         try
         {
-            // 使用封装好的 WebSearchTools 进行搜索
             var searchResultJson = await WebSearchTools.WebSearch(query, maxResults);
             var searchResult = JsonSerializer.Deserialize<WebSearchResult>(searchResultJson);
 
-            if (searchResult?.Results != null)
+            if (searchResult?.Results != null && searchResult.Results.Count > 0)
             {
-                foreach (var result in searchResult.Results)
-                {
-                    var paper = ParseSearchResult(result);
-                    if (paper != null)
-                    {
-                        papers.Add(paper);
-                    }
-                }
+                return searchResult.Results
+                    .Select(r => ParseSearchResult(r))
+                    .Where(p => p != null)
+                    .Select(p => p!)
+                    .Take(maxResults)
+                    .ToList();
             }
         }
-        catch (Exception)
-        {
-            // 如果搜索失败，返回预定义的近期高影响力论文
-            papers = GetFallbackPapers(query);
-        }
+        catch { /* WebSearchTools or deserialization failed — fall through to curated papers */ }
 
-        return papers;
+        return GetFallbackPapers(query).Take(maxResults).ToList();
     }
 
     private static PaperInsight? ParseSearchResult(WebSearchResultItem result)
