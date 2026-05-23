@@ -1097,3 +1097,66 @@ private static readonly PolicyRule[] BuiltInRules =
 - **可观测性基础**: OpenTelemetry + AG-UI SSE + DevUI 知识图谱可视化已就绪
 
 **总体评估**: LTAI v6.0 是一个**架构雄心勃勃、实现深度可观**的 MAF 原生 Agent Mesh 系统。核心缺陷集中在**安全层碎片化**、**路由碎片化**和**反馈闭环缺失**三个结构性问题上。上述 P0/P1 修复可在 4 周内显著降低生产风险, P2 重构可在 1 个季度内完成架构收敛。
+
+---
+
+## 附录: v6.3 → v7.0 架构创新实施记录
+
+**实施日期**: 2026-05-23
+**实施范围**: 6 项架构创新
+
+### 创新清单
+
+| 版本 | 创新 | 核心文件 | 关键能力 |
+|------|------|---------|---------|
+| v6.4 | 🏛️ Agent 议会 | `AgentParliament.cs` | 多 Agent 并行投票, 置信度加权, Critic 破僵局 |
+| v6.4 | 🔄 自进化工具生态 | `ToolEvolutionLoop.cs` | 失败检测→SelfEvolve→安全审计→实验版→废弃旧版 |
+| v6.5 | 📐 分层任务网络 HTN | `HTNPlanner.cs` | 计划资产化, 15 种领域模式, 子计划复用, 模板匹配 |
+| v6.5 | 🔍 可解释性追踪 | `TraceCollector.cs` | 6 步决策溯源, 标准引用链, 决策树生成 |
+| v7.0 | 🧠 神经符号记忆网 | `TemporalMemoryFabric.cs` | FTS5+向量+知识图谱统一时间轴, 三大索引 |
+| v7.0 | 🌐 分布式 Agent 联邦 | `FederationCoordinator.cs` | 8 种能力, 负载感知调度, 心跳检测 |
+
+### 新增文件
+
+| 文件 | 行数 | 功能 |
+|------|------|------|
+| `src/LTAI.Agent/Workflows/AgentParliament.cs` | ~200 | 议会投票工作流 |
+| `src/LTAI.Tools/Capability/Evolution/ToolEvolutionLoop.cs` | ~170 | 工具自进化后台服务 |
+| `src/LTAI.Planning/HTN/HTNPlanner.cs` | ~260 | 分层任务规划器 |
+| `src/LTAI.Planning/Trace/TraceCollector.cs` | ~300 | 决策追踪收集器 |
+| `src/LTAI.Knowledge/Memory/TemporalMemoryFabric.cs` | ~250 | 时间感知记忆网 |
+| `src/LTAI.Agent/Federation/FederationCoordinator.cs` | ~200 | 联邦协调器 |
+| `src/LTAI.Web/ParliamentEndpoints.cs` | ~130 | 议会 REST API |
+| `src/LTAI.Web/PlanningInnovationEndpoints.cs` | ~190 | HTN/Trace REST API |
+| `src/LTAI.Web/InnovationEndpoints.cs` | ~170 | Memory/Federation REST API |
+
+### API 端点总览
+
+| 模块 | 端点 | 总数 |
+|------|------|------|
+| Agent 议会 | `/api/parliament/convene`, `/api/parliament/complex` | 2 |
+| HTN 规划 | `/api/htn/decompose`, `/api/htn/templates`, `/api/htn/stats` | 3 |
+| 可解释性追踪 | `/api/trace/start`, `/step`, `/complete`, `/{id}`, `/recent`, `/stats` | 6 |
+| 神经符号记忆 | `/api/memory/query`, `/record`, `/session/{id}`, `/stats` | 4 |
+| Agent 联邦 | `/api/federation/nodes`, `/register`, `/dispatch`, `/complete`, `/stats` | 5 |
+
+### 测试覆盖
+
+测试文件: `tests/LTAI.Tests/InnovationTests.cs` (20 个测试)
+
+| 组件 | 测试数 |
+|------|--------|
+| HTNPlanner | 3 |
+| TraceCollector | 4 |
+| TemporalMemoryFabric | 3 |
+| FederationCoordinator | 7 |
+| AgentParliament | 3 (待扩展) |
+
+### 累计进度
+
+| 阶段 | 完成项数 |
+|------|---------|
+| P0-P3 评审修复 | 15 |
+| 后续修复 (短期+中期+长期) | 12 |
+| 架构创新 (v6.4-v7.0) | 6 |
+| **总计** | **33 项** |

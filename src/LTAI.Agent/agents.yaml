@@ -151,3 +151,32 @@ agents:
     options:
       temperature: 0.1
       max_tokens: 4096
+
+# ─── v6.4+ Innovation: Agent Parliament ───
+parliament:
+  enabled: true
+  default_voters: [chat, code, reasoning]
+  critic_agent: eia_critic
+  required_pass_votes: 2
+  max_revision_rounds: 2
+  complex_voters: [chat, code, reasoning, eia]
+  hung_timeout_ms: 30000
+
+# ─── v7.0 Innovation: Federation ───
+federation:
+  enabled: false
+  local_capabilities: [Chat, CodeGeneration, CodeReview, EIA, Reasoning, KnowledgeRetrieval, SandboxExecution]
+  max_concurrency: 10
+  discovery_endpoint: http://localhost:9090/api/p2p/peers
+  heartbeat_interval_seconds: 30
+  node_timeout_minutes: 5
+
+# ─── v6.5 Innovation: HTN Planning ───
+htn:
+  enabled: true
+  max_plan_library: 2000
+  min_success_rate_for_reuse: 0.6
+  domain_patterns:
+    code: [analyze, build, test, review, refactor]
+    eia: [environmental, report, calculate]
+    general: [search, summarize, compare]
