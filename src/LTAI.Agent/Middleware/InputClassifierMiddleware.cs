@@ -1,3 +1,4 @@
+using LTAI.Agent.Routing;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
@@ -7,10 +8,12 @@ namespace LTAI.Agent.Middleware;
 public sealed class InputClassifierMiddleware
 {
     private readonly ILogger<InputClassifierMiddleware> _logger;
+    private readonly UnifiedIntentRouter _router;
 
-    public InputClassifierMiddleware(ILogger<InputClassifierMiddleware> logger)
+    public InputClassifierMiddleware(ILogger<InputClassifierMiddleware> logger, UnifiedIntentRouter router)
     {
         _logger = logger;
+        _router = router;
     }
 
     public Task<AgentResponse> InvokeAsync(
@@ -25,26 +28,18 @@ public sealed class InputClassifierMiddleware
 
         if (userMsg?.Text is not null)
         {
-            var intent = ClassifyIntent(userMsg.Text);
-            _logger.LogDebug("InputClassifierMiddleware: Intent={Intent}", intent);
+            var route = _router.Route(userMsg.Text);
+            _logger.LogDebug("InputClassifierMiddleware: Intent={Intent} Shape={Shape} Workflow={Workflow}",
+                route.Intent, route.QueryShape ?? "none", route.UseWorkflow);
+
+            options ??= new AgentRunOptions();
+            options.AdditionalProperties ??= new AdditionalPropertiesDictionary();
+            options.AdditionalProperties["classified_intent"] = route.Intent;
+            options.AdditionalProperties["query_shape"] = route.QueryShape;
+            options.AdditionalProperties["use_workflow"] = route.UseWorkflow;
+            options.AdditionalProperties["target_agent"] = route.TargetAgent;
         }
 
         return innerAgent.RunAsync(messages, session, options, cancellationToken);
-    }
-
-    private static string ClassifyIntent(string text)
-    {
-        var lower = text.ToLowerInvariant();
-
-        if (lower.Contains("code") || lower.Contains("class ") || lower.Contains("function ") || lower.Contains("bug") || lower.Contains("error") || lower.Contains("build"))
-            return "code";
-
-        if (lower.Contains("environment") || lower.Contains("impact") || lower.Contains("emission") || lower.Contains("gis") || lower.Contains("map") || lower.Contains("spatial"))
-            return "eia";
-
-        if (lower.Contains("why") || lower.Contains("explain") || lower.Contains("reason") || lower.Contains("compare") || lower.Contains("analyze") || lower.Contains("think"))
-            return "reasoning";
-
-        return "chat";
     }
 }

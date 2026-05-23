@@ -4,6 +4,7 @@ using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using LTAI.Agent.Agents;
+using LTAI.Agent.Feedback;
 using LTAI.Agent.Middleware;
 using LTAI.Agent.Routing;
 using LTAI.Agent.Workflows;
@@ -15,16 +16,21 @@ public static class ServiceCollectionExtensions
     public static IServiceCollection AddLTAIAgent(this IServiceCollection services)
     {
         services.AddSingleton<IntentRouter>();
+        services.AddSingleton<UnifiedIntentRouter>();
         services.AddSingleton<HandoffMeshWorkflow>();
         services.AddSingleton<CollaborativeMeshWorkflow>();
         services.AddSingleton<AgentMeshWorkflow>();
+        services.AddSingleton<PlannerCriticWorkflow>();
         services.AddSingleton<HumanInTheLoopReview>();
+        services.AddSingleton<FeedbackCollector>();
+        services.AddSingleton<ABExperimentEngine>();
         services.AddSingleton<PromptShieldMiddleware>();
         services.AddSingleton<InputClassifierMiddleware>();
         services.AddSingleton<DNASafetyMiddleware>();
         services.AddSingleton<OutputReviewMiddleware>();
         services.AddSingleton<BudgetTrackingMiddleware>();
         services.AddSingleton<AgentRegistry>();
+        services.AddSingleton<AgentRegistryLock>();
         services.AddSingleton<IAgentFactory, AgentFactory>();
 
         return services;

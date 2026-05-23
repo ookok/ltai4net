@@ -5,7 +5,7 @@ using LTAI.Tools.Reasoning;
 using LTAI.DNA;
 using LTAI.Knowledge.Vector.Embedding;
 using LTAI.Knowledge.Vector.Interfaces;
-using LTAI.Knowledge.Vector.Knowledge;
+using LTAI.Knowledge.Core;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace LTAI.Benchmarks;

@@ -60,20 +60,37 @@ public sealed class CodeAgent : AIAgent
             foreach (var fp in filePaths.Take(5))
             {
                 var ext = Path.GetExtension(fp);
-                if (_supportedExtensions.Contains(ext) && File.Exists(fp))
+                if (!_supportedExtensions.Contains(ext))
                 {
-                    try
-                    {
-                        var content = await File.ReadAllTextAsync(fp, cancellationToken);
-                        var truncated = content.Length > 10000 ? content[..10000] + $"\n... ({content.Length} total chars)" : content;
-                        contextMessages.Add(new ChatMessage(ChatRole.System,
-                            $"File: {fp} ({content.Length} chars)\n```{ext.TrimStart('.')}\n{truncated}\n```"));
-                        _logger.LogDebug("CodeAgent: Preloaded {Path} ({Length} chars)", fp, content.Length);
-                    }
-                    catch (Exception ex)
-                    {
-                        contextMessages.Add(new ChatMessage(ChatRole.System, $"File {fp}: read error - {ex.Message}"));
-                    }
+                    _logger.LogWarning("CodeAgent: Unsupported file extension {Ext} for {Path}", ext, fp);
+                    continue;
+                }
+
+                if (!ValidateFilePath(fp))
+                {
+                    _logger.LogWarning("CodeAgent: Path traversal attempt blocked: {Path}", fp);
+                    contextMessages.Add(new ChatMessage(ChatRole.System,
+                        $"File {fp}: access denied - path traversal not allowed"));
+                    continue;
+                }
+
+                if (!File.Exists(fp))
+                {
+                    _logger.LogWarning("CodeAgent: File not found: {Path}", fp);
+                    continue;
+                }
+
+                try
+                {
+                    var content = await File.ReadAllTextAsync(fp, cancellationToken);
+                    var truncated = content.Length > 10000 ? content[..10000] + $"\n... ({content.Length} total chars)" : content;
+                    contextMessages.Add(new ChatMessage(ChatRole.System,
+                        $"File: {fp} ({content.Length} chars)\n```{ext.TrimStart('.')}\n{truncated}\n```"));
+                    _logger.LogDebug("CodeAgent: Preloaded {Path} ({Length} chars)", fp, content.Length);
+                }
+                catch (Exception ex)
+                {
+                    contextMessages.Add(new ChatMessage(ChatRole.System, $"File {fp}: read error - {ex.Message}"));
                 }
             }
         }
@@ -99,9 +116,15 @@ public sealed class CodeAgent : AIAgent
 
         var response = await _inner.RunAsync(enhancedMessages, session, options, cancellationToken);
 
-        var validationFeedback = ValidateCodeResponse(response.Text ?? "");
-        if (!string.IsNullOrWhiteSpace(validationFeedback))
+        const int MaxCorrectionAttempts = 2;
+        for (int attempt = 0; attempt < MaxCorrectionAttempts; attempt++)
         {
+            var validationFeedback = ValidateCodeResponse(response.Text ?? "");
+            if (string.IsNullOrWhiteSpace(validationFeedback))
+                break;
+
+            _logger.LogWarning("CodeAgent [{Name}]: Correction attempt {Attempt}/{Max}", Name, attempt + 1, MaxCorrectionAttempts);
+
             var fixedMessages = new List<ChatMessage>(enhancedMessages)
             {
                 new(ChatRole.Assistant, response.Text ?? ""),
@@ -124,6 +147,48 @@ public sealed class CodeAgent : AIAgent
                 paths.Add(w);
         }
         return paths;
+    }
+
+    private static bool ValidateFilePath(string path)
+    {
+        try
+        {
+            // Normalize path to absolute
+            var fullPath = Path.GetFullPath(path);
+            var currentDir = Environment.CurrentDirectory;
+
+            // Check for directory traversal patterns
+            if (path.Contains("../") || path.Contains("..\\") || path.Contains(".."))
+            {
+                return false;
+            }
+
+            // Ensure path is within current directory or its subdirectories
+            if (!fullPath.StartsWith(currentDir, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            // Block access to sensitive system directories
+            var sensitivePaths = new[]
+            {
+                "/etc/", "/proc/", "/sys/", "/dev/",
+                "C:\\Windows\\", "C:\\Program Files\\", "C:\\Program Files (x86)\\"
+            };
+
+            foreach (var sensitive in sensitivePaths)
+            {
+                if (fullPath.StartsWith(sensitive, StringComparison.OrdinalIgnoreCase))
+                    return false;
+            }
+
+            return true;
+        }
+        catch
+        {
+            // If path normalization fails, reject it
+            return false;
+        }
     }
 
     private static string ValidateCodeResponse(string response)

@@ -110,6 +110,24 @@ public sealed class CollaborativeMeshWorkflow
         AgentSession? session = null,
         CancellationToken cancellationToken = default)
     {
+        return await RouteAndExecuteWithDepthAsync(messages, session, 0, cancellationToken);
+    }
+
+    private async Task<AgentResponse> RouteAndExecuteWithDepthAsync(
+        IEnumerable<ChatMessage> messages,
+        AgentSession? session,
+        int depth,
+        CancellationToken cancellationToken)
+    {
+        const int MaxHandoffDepth = 3;
+
+        if (depth >= MaxHandoffDepth)
+        {
+            _logger.LogWarning("CollaborativeMeshWorkflow: Max handoff depth {Depth} reached, preventing Ping-Pong loop", depth);
+            return new AgentResponse(new ChatMessage(ChatRole.Assistant,
+                $"[Workflow] Maximum handoff depth ({MaxHandoffDepth}) reached. Please rephrase your request."));
+        }
+
         var msgList = messages.ToList();
         var userMsg = msgList.LastOrDefault(m => m.Role == ChatRole.User);
 
@@ -118,8 +136,8 @@ public sealed class CollaborativeMeshWorkflow
 
         var route = _router.Classify(userMsg.Text);
 
-        _logger.LogInformation("CollaborativeMeshWorkflow: Route intent={Intent} agent={Agent} conf={Conf:F2} keywords=[{Kw}]",
-            route.Intent, route.TargetAgent, route.Confidence, string.Join(", ", route.MatchedKeywords));
+        _logger.LogInformation("CollaborativeMeshWorkflow: Route intent={Intent} agent={Agent} conf={Conf:F2} keywords=[{Kw}] depth={Depth}",
+            route.Intent, route.TargetAgent, route.Confidence, string.Join(", ", route.MatchedKeywords), depth);
 
         if (route.Confidence < 0.3f)
         {
@@ -130,6 +148,22 @@ public sealed class CollaborativeMeshWorkflow
         if (_agents.TryGetValue(route.TargetAgent, out var targetAgent))
         {
             var response = await targetAgent.RunAsync(messages, session, null, cancellationToken);
+
+            // Check if response indicates handoff request
+            if (response.Text?.Contains("[HANDOFF:", StringComparison.OrdinalIgnoreCase) == true)
+            {
+                _logger.LogInformation("CollaborativeMeshWorkflow: Agent requested handoff, depth={Depth}", depth + 1);
+
+                // Summarize context before handoff
+                var contextSummary = SummarizeContextForHandoff(userMsg.Text, response.Text);
+                var handoffMessages = new List<ChatMessage>(messages)
+                {
+                    new(ChatRole.System, $"[Handoff Context from {route.TargetAgent}]: {contextSummary}")
+                };
+
+                return await RouteAndExecuteWithDepthAsync(handoffMessages, session, depth + 1, cancellationToken);
+            }
+
             return await MaybeRunCriticAsync(route.TargetAgent, response, msgList, session, cancellationToken);
         }
 
@@ -211,5 +245,13 @@ public sealed class CollaborativeMeshWorkflow
         if (_agents.TryGetValue("chat", out var chatAgent))
             return await chatAgent.RunAsync(messages, session, null, cancellationToken);
         return new AgentResponse(new ChatMessage(ChatRole.Assistant, "No agent available to handle this request."));
+    }
+
+    private static string SummarizeContextForHandoff(string userQuery, string agentResponse)
+    {
+        var querySummary = userQuery.Length > 200 ? userQuery[..200] + "..." : userQuery;
+        var responseSummary = agentResponse.Length > 300 ? agentResponse[..300] + "..." : agentResponse;
+
+        return $"User asked: {querySummary}\n\nPrevious agent responded: {responseSummary}\n\nContinuing with handoff...";
     }
 }

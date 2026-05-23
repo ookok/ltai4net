@@ -95,13 +95,16 @@ public sealed class DNAOrchestrator
         string? previousOutput = null,
         CancellationToken cancellationToken = default)
     {
+        var traceId = System.Diagnostics.Activity.Current?.TraceId.ToString()
+            ?? Guid.NewGuid().ToString("N");
+
         var safetyVerdict = await _safety.EvaluateAsync(input, previousOutput, cancellationToken);
 
         if (!safetyVerdict.Allowed)
         {
             _logger.LogWarning("DNA process blocked by safety: {Reason}", safetyVerdict.BlockReason);
             _rlvr.Record("safety", 0, 0.1, _phenomenal.TotalExperiences);
-            return new DNAProcessResult { Allowed = false, BlockReason = safetyVerdict.BlockReason, SafetyPosture = _safety.Posture };
+            return new DNAProcessResult { Allowed = false, BlockReason = safetyVerdict.BlockReason, SafetyPosture = _safety.Posture, TraceId = traceId };
         }
 
         await _consciousness.ProcessExperienceAsync(input, cancellationToken: cancellationToken);
@@ -140,6 +143,7 @@ public sealed class DNAOrchestrator
         return new DNAProcessResult
         {
             Allowed = true,
+            TraceId = traceId,
             ConsciousnessLevel = _consciousness.State.Level,
             AwarenessScore = _consciousness.State.AwarenessScore,
             SafetyScore = safetyVerdict.RiskScore,
@@ -180,6 +184,7 @@ public sealed class DNAProcessResult
 {
     public bool Allowed { get; init; }
     public string? BlockReason { get; init; }
+    public string TraceId { get; init; } = "";
     public LTAI.DNA.Models.ConsciousnessLevel ConsciousnessLevel { get; init; }
     public double AwarenessScore { get; init; }
     public double SafetyScore { get; init; }

@@ -53,6 +53,12 @@ public sealed class ActionGovernor : IDisposable
             new PolicyRule { Name = "audit_model_call", Action = AgentAction.ModelCall, Severity = PolicySeverity.Audit, Description = "Log all model calls for cost tracking" },
             new PolicyRule { Name = "block_unsafe_code", Action = AgentAction.CodeExecute, Pattern = @"(Process\.Start|Runtime\.getRuntime|subprocess|eval|exec)\(", Severity = PolicySeverity.Block, Description = "Block unsafe code execution" },
             new PolicyRule { Name = "warn_data_access", Action = AgentAction.DataAccess, Severity = PolicySeverity.Warn, Description = "Warn on sensitive data access patterns" },
+            new PolicyRule { Name = "block_pipe_to_shell", Action = AgentAction.ToolCall, Pattern = @"\|\s*(bash|sh|pwsh|zsh|fish|cmd)\b", Severity = PolicySeverity.Block, Description = "Block pipe-to-shell execution" },
+            new PolicyRule { Name = "block_download_exec", Action = AgentAction.ToolCall, Pattern = @"(curl|wget)\s+\S+.*\|\s*\w+", Severity = PolicySeverity.Block, Description = "Block download-and-execute patterns" },
+            new PolicyRule { Name = "block_powershell_iex", Action = AgentAction.ToolCall, Pattern = @"\b(Invoke-Expression|iex|Invoke-WebRequest.*\|\s*iex)\b", Severity = PolicySeverity.Block, Description = "Block PowerShell dynamic execution" },
+            new PolicyRule { Name = "block_fork_bomb", Action = AgentAction.ToolCall, Pattern = @":\(\)\s*\{\s*:\|:\s*&\s*\}\s*;", Severity = PolicySeverity.Block, Description = "Block fork bomb patterns" },
+            new PolicyRule { Name = "block_chmod_777", Action = AgentAction.ToolCall, Pattern = @"chmod\s+777\s+/", Severity = PolicySeverity.Warn, Description = "Warn on world-writable root paths" },
+            new PolicyRule { Name = "block_reverse_shell", Action = AgentAction.ToolCall, Pattern = @"(/dev/tcp/|nc\s+-[el]|ncat\s+-[el]|socat.*exec)", Severity = PolicySeverity.Block, Description = "Block reverse shell patterns" },
         });
     }
 

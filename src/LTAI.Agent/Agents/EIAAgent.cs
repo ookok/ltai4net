@@ -18,6 +18,28 @@ public sealed class EIAAgent : AIAgent
         "HJ 610-2016", "HJ 19-2022", "GB 3838-2002", "GB 3096-2008"
     };
 
+    private static readonly Dictionary<string, string> ValidStandards = new()
+    {
+        ["GB 3095-2012"] = "环境空气质量标准",
+        ["GB 3838-2002"] = "地表水环境质量标准",
+        ["GB 3096-2008"] = "声环境质量标准",
+        ["GB 36600-2018"] = "土壤环境质量 建设用地土壤污染风险管控标准",
+        ["GB 15618-2018"] = "土壤环境质量 农用地土壤污染风险管控标准",
+        ["GB 16297-1996"] = "大气污染物综合排放标准",
+        ["GB 8978-1996"] = "污水综合排放标准",
+        ["GB 12348-2008"] = "工业企业厂界环境噪声排放标准",
+        ["GB 14554-1993"] = "恶臭污染物排放标准",
+        ["HJ 2.1-2016"] = "环境影响评价技术导则 总纲",
+        ["HJ 2.2-2018"] = "环境影响评价技术导则 大气环境",
+        ["HJ 2.3-2018"] = "环境影响评价技术导则 地表水环境",
+        ["HJ 2.4-2021"] = "环境影响评价技术导则 声环境",
+        ["HJ 610-2016"] = "环境影响评价技术导则 地下水",
+        ["HJ 964-2018"] = "环境影响评价技术导则 土壤环境",
+        ["HJ 19-2022"] = "环境影响评价技术导则 生态影响",
+        ["HJ 169-2018"] = "建设项目环境风险评价技术导则",
+        ["HJ 298-2019"] = "危险废物鉴别标准",
+    };
+
     private static readonly Dictionary<string, (double min, double max, string unit)> ParamRanges = new()
     {
         ["Q"] = (0.001, 1_000_000, "g/s"),
@@ -133,6 +155,10 @@ public sealed class EIAAgent : AIAgent
         return warnings;
     }
 
+    private static readonly System.Text.RegularExpressions.Regex StandardRefPattern = new(
+        @"(GB|HJ)\s*\d{2,5}[-—]\d{4}",
+        System.Text.RegularExpressions.RegexOptions.Compiled);
+
     private static List<string> AuditEiaResponse(string response)
     {
         var issues = new List<string>();
@@ -140,6 +166,14 @@ public sealed class EIAAgent : AIAgent
         var hasStandardRef = RequiredStandards.Any(s => response.Contains(s));
         if (!hasStandardRef)
             issues.Add("Missing references to applicable Chinese environmental standards (GB/HJ)");
+
+        var standardMatches = StandardRefPattern.Matches(response);
+        foreach (System.Text.RegularExpressions.Match match in standardMatches)
+        {
+            var normalized = System.Text.RegularExpressions.Regex.Replace(match.Value, @"\s+", " ").Replace("—", "-");
+            if (!ValidStandards.ContainsKey(normalized))
+                issues.Add($"Standard reference '{normalized}' not found in valid standards database — verify accuracy");
+        }
 
         if (!System.Text.RegularExpressions.Regex.IsMatch(response, @"\d+\.\d+\s*(μg|mg|g)/m[³3]", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
             issues.Add("Concentration values should include units (μg/m³ or mg/m³)");

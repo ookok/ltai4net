@@ -84,8 +84,71 @@ public sealed class AgentRegistryLock
                 warnings.Add($"New agent '{name}' not in registry lock — needs registration.");
         }
 
-        var isCompatible = warnings.Count <= 2; // Minor warnings are OK
+        var isCompatible = warnings.Count <= 2;
         return (isCompatible, warnings);
+    }
+
+    public RegistryValidationResult ValidateUpgrade(AgentConfig newConfig)
+    {
+        var current = ReadCurrent();
+        if (current == null)
+            return new RegistryValidationResult { IsValid = true, BreakingChanges = new(), NonBreakingChanges = new() };
+
+        var breaking = new List<string>();
+        var nonBreaking = new List<string>();
+
+        foreach (var (name, hash) in current.AgentHashes)
+        {
+            var agent = newConfig.Agents.FirstOrDefault(a =>
+                a.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+
+            if (agent == null)
+            {
+                breaking.Add($"Agent '{name}' removed — breaking change");
+                continue;
+            }
+
+            var computedHash = ComputeAgentHash(agent);
+            if (computedHash != hash)
+            {
+                var oldAgent = current.AgentHashes.ContainsKey(name);
+                if (IsBreakingChange(current, agent))
+                    breaking.Add($"Agent '{name}' has breaking changes (type/model change)");
+                else
+                    nonBreaking.Add($"Agent '{name}' configuration updated");
+            }
+        }
+
+        foreach (var agent in newConfig.Agents)
+        {
+            if (!current.AgentHashes.ContainsKey(agent.Name))
+                nonBreaking.Add($"New agent '{agent.Name}' added");
+        }
+
+        return new RegistryValidationResult
+        {
+            IsValid = breaking.Count == 0,
+            BreakingChanges = breaking,
+            NonBreakingChanges = nonBreaking,
+            MigrationRequired = breaking.Count > 0
+        };
+    }
+
+    private static bool IsBreakingChange(RegistryLockInfo current, LTAIAgentCard agent)
+    {
+        var oldHash = current.AgentHashes.GetValueOrDefault(agent.Name);
+        if (oldHash == null) return false;
+
+        var typeModelHash = ComputeTypeModelHash(agent);
+        return !oldHash.StartsWith(typeModelHash);
+    }
+
+    private static string ComputeTypeModelHash(LTAIAgentCard agent)
+    {
+        var key = $"{agent.Type}|{agent.Model}";
+        var bytes = System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes(key));
+        return Convert.ToHexStringLower(bytes)[..8];
     }
 
     public void GenerateLock(AgentConfig config)
@@ -102,7 +165,7 @@ public sealed class AgentRegistryLock
         Write(info);
     }
 
-    private static string GetCurrentVersion() => "v6.1";
+    private static string GetCurrentVersion() => "v6.2";
 
     private static string ComputeAgentHash(LTAI.Models.LTAIAgentCard agent)
     {
@@ -118,4 +181,12 @@ public sealed class RegistryLockInfo
     public string Version { get; init; } = "";
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
     public Dictionary<string, string> AgentHashes { get; init; } = new();
+}
+
+public sealed class RegistryValidationResult
+{
+    public bool IsValid { get; init; }
+    public List<string> BreakingChanges { get; init; } = new();
+    public List<string> NonBreakingChanges { get; init; } = new();
+    public bool MigrationRequired { get; init; }
 }

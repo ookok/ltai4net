@@ -37,3 +37,6 @@ appsettings.*.json
 
 ## Build output
 dist/
+
+## Models (large binary files)
+models/

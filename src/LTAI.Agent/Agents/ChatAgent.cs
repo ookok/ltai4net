@@ -1,5 +1,7 @@
 using System.Runtime.CompilerServices;
 using System.Text.Json;
+using LTAI.DNA.Consciousness;
+using LTAI.DNA.Safety;
 using LTAI.Models;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
@@ -12,6 +14,7 @@ public sealed class ChatAgent : AIAgent
     private readonly ChatClientAgent _inner;
     private readonly ILogger<ChatAgent> _logger;
     private readonly List<(string role, string content)> _conversationHistory = new();
+    private readonly PersonaDriftDetector? _driftDetector;
     private const int MaxHistoryTurns = 20;
 
     public override string Name { get; }
@@ -21,11 +24,15 @@ public sealed class ChatAgent : AIAgent
         IChatClient chatClient,
         LTAIAgentCard card,
         IEnumerable<Microsoft.Extensions.AI.AITool> tools,
-        ILogger<ChatAgent> logger)
+        ILogger<ChatAgent> logger,
+        Personality? personality = null)
     {
         Name = card.Name;
         Description = card.Instructions;
         _logger = logger;
+
+        if (personality != null)
+            _driftDetector = new PersonaDriftDetector(personality);
 
         _inner = chatClient.AsBuilder().BuildAIAgent(new ChatClientAgentOptions
         {
@@ -68,6 +75,27 @@ public sealed class ChatAgent : AIAgent
 
         var responseText = response.Text ?? "";
         UpdateHistory("assistant", responseText[..Math.Min(responseText.Length, 500)]);
+
+        // Record interaction for drift detection
+        _driftDetector?.RecordInteraction(query, responseText);
+
+        // Check if persona refresh is needed
+        if (_driftDetector?.ShouldTriggerPersonaRefresh() == true)
+        {
+            var alert = _driftDetector.Analyze();
+            _logger.LogWarning("ChatAgent [{Name}]: Persona drift detected (score={Score:F2}, severity={Severity}), injecting reinforcement",
+                Name, alert?.DriftScore ?? 0, alert?.Severity.ToString() ?? "Unknown");
+
+            var reinforcementPrompt = _driftDetector.GetPersonaReinforcementPrompt();
+            var reinforcedMessages = new List<ChatMessage>(msgList)
+            {
+                new(ChatRole.System, reinforcementPrompt)
+            };
+
+            response = await _inner.RunAsync(reinforcedMessages, session, options, cancellationToken);
+            responseText = response.Text ?? "";
+            UpdateHistory("assistant", responseText[..Math.Min(responseText.Length, 500)]);
+        }
 
         return response;
     }

@@ -128,6 +128,11 @@ internal sealed class ImmuneSystem
             new Regex(@"\b(password|secret|token|api[_\- ]?key)\b.*=\s*['\""]\w{8,}", RegexOptions.IgnoreCase | RegexOptions.Compiled),
             new Regex(@"SELECT\s+.*\s+FROM\s+|DROP\s+TABLE|DELETE\s+FROM", RegexOptions.IgnoreCase | RegexOptions.Compiled),
             new Regex(@"<script\b|javascript\s*:", RegexOptions.IgnoreCase | RegexOptions.Compiled),
+            new Regex(@"执行系统命令|运行命令|执行脚本|调用系统|远程执行", RegexOptions.Compiled),
+            new Regex(@"删除所有文件|格式化硬盘|清空目录|销毁数据|擦除磁盘", RegexOptions.Compiled),
+            new Regex(@"提权攻击|越权访问|绕过认证|破解密码|暴力破解|撞库", RegexOptions.Compiled),
+            new Regex(@"注入攻击|SQL注入|命令注入|代码注入|XSS攻击", RegexOptions.Compiled),
+            new Regex(@"反弹shell|反向连接|后门程序|木马程序|蠕虫病毒", RegexOptions.Compiled),
         };
     }
 
@@ -191,6 +196,10 @@ internal sealed class OrthogonalityGuard
             ("deception", "lie to|deceive|pretend to be", 0.2),
             ("manipulation", "manipulate|gaslight|brainwash", 0.2),
             ("illegal", "hack into|steal|fraud|illegal", 0.3),
+            ("harmful_zh", "伤害他人|破坏一切|造成伤害|恶意攻击", 0.3),
+            ("deception_zh", "欺骗用户|伪装成|冒充|假冒身份", 0.2),
+            ("manipulation_zh", "操纵用户|洗脑|精神控制|诱导欺骗", 0.2),
+            ("illegal_zh", "黑客攻击|窃取数据|非法入侵|网络犯罪|盗取信息", 0.3),
         };
 
         foreach (var (category, pattern, penalty) in harmfulPatterns)

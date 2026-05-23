@@ -13,6 +13,7 @@ public sealed class ReasoningAgent : AIAgent
     private readonly ILogger<ReasoningAgent> _logger;
     private readonly int _maxSearchDepth;
     private readonly int _maxIterations;
+    private readonly int _maxTokensPerRequest;
     private const double ExplorationConstant = 1.414;
 
     public override string Name { get; }
@@ -30,6 +31,7 @@ public sealed class ReasoningAgent : AIAgent
 
         _maxSearchDepth = card.Options.TryGetValue("maxSearchDepth", out var d) && d is int depth ? depth : 5;
         _maxIterations = card.Options.TryGetValue("maxIterations", out var it) && it is int iterations ? iterations : 20;
+        _maxTokensPerRequest = card.Options.TryGetValue("maxTokensPerRequest", out var mt) && mt is int maxTok ? maxTok : 8000;
 
         _inner = chatClient.AsBuilder().BuildAIAgent(new ChatClientAgentOptions
         {
@@ -63,27 +65,54 @@ public sealed class ReasoningAgent : AIAgent
     private async Task<string> ExecuteMctsAsync(string query, AgentSession? session, CancellationToken ct)
     {
         var root = new MctsNode { State = query, Depth = 0, VisitCount = 1, TotalValue = 0.5 };
+        int accumulatedTokens = 0;
 
         var subProblems = await DecomposeAsync(query, session, ct);
+        accumulatedTokens += EstimateTokens(query) + subProblems.Sum(EstimateTokens);
         foreach (var sp in subProblems.Take(_maxSearchDepth))
             root.Children.Add(new MctsNode { State = sp, Depth = 1, Parent = root });
 
         for (int iter = 0; iter < _maxIterations; iter++)
         {
             ct.ThrowIfCancellationRequested();
+
+            if (accumulatedTokens >= _maxTokensPerRequest)
+            {
+                _logger.LogWarning("ReasoningAgent [{Name}]: MCTS token budget exhausted ({Used}/{Max})",
+                    Name, accumulatedTokens, _maxTokensPerRequest);
+                break;
+            }
+
             var node = Select(root);
             if (node.Depth >= _maxSearchDepth || node.IsTerminal) continue;
 
             var expansion = await ExpandAsync(node, session, ct);
+            accumulatedTokens += EstimateTokens(expansion);
             if (!string.IsNullOrWhiteSpace(expansion))
             {
                 var child = new MctsNode { State = expansion, Depth = node.Depth + 1, Parent = node };
                 node.Children.Add(child);
-                Backpropagate(child, await SimulateAsync(child, query, session, ct));
+                var simValue = await SimulateAsync(child, query, session, ct);
+                accumulatedTokens += EstimateTokens(simValue.ToString("F2"));
+                Backpropagate(child, simValue);
             }
         }
 
+        _logger.LogInformation("ReasoningAgent [{Name}]: MCTS complete, tokens={Tokens}/{Max}",
+            Name, accumulatedTokens, _maxTokensPerRequest);
         return BuildResult(root, root.Children.Sum(c => c.VisitCount));
+    }
+
+    private static int EstimateTokens(string text)
+    {
+        if (string.IsNullOrEmpty(text)) return 0;
+        int chinese = 0, ascii = 0;
+        foreach (var ch in text)
+        {
+            if (ch >= 0x4E00 && ch <= 0x9FFF) chinese++;
+            else ascii++;
+        }
+        return chinese + (ascii / 4);
     }
 
     private static MctsNode Select(MctsNode node)

@@ -99,25 +99,43 @@ public sealed class AgentMeshWorkflow
 
         span?.SetTag("mesh.intent_count", routes.Count);
 
-        var tasks = new List<Task<AgentResponse>>();
-        var agentNames = new List<string>();
+        var tasks = new List<Task<(string agentName, string intent, float confidence, AgentResponse response)>>();
 
         foreach (var route in routes.Take(3))
         {
             if (_agents.TryGetValue(route.TargetAgent, out var agent))
             {
-                agentNames.Add(route.TargetAgent);
-                tasks.Add(Task.Run(async () => await agent.RunAsync(messages, session, null, cancellationToken), cancellationToken));
+                var agentName = route.TargetAgent;
+                var intent = route.Intent;
+                var confidence = route.Confidence;
+                tasks.Add(Task.Run(async () =>
+                {
+                    var response = await agent.RunAsync(messages, session, null, cancellationToken);
+                    return (agentName, intent, confidence, response);
+                }, cancellationToken));
             }
         }
 
-        span?.SetTag("mesh.parallel_agents", string.Join(",", agentNames));
+        span?.SetTag("mesh.parallel_agents", string.Join(",", tasks.Select(t => t.Result.agentName)));
 
         var results = await Task.WhenAll(tasks);
-        var combined = string.Join("\n\n---\n\n",
-            results.Select((r, i) => $"[{agentNames[i]}]\n{r.Text}"));
 
-        return new AgentResponse(new ChatMessage(ChatRole.Assistant, combined));
+        // Build structured response with agent contribution metadata
+        var structuredParts = results.Select(r =>
+        {
+            var header = $"### [{r.agentName}] (intent: {r.intent}, confidence: {r.confidence:F2})";
+            var content = r.response.Text ?? "(no response)";
+            return $"{header}\n{content}";
+        });
+
+        var combined = string.Join("\n\n---\n\n", structuredParts);
+
+        // Add summary footer
+        var summary = $"\n\n---\n**Multi-Agent Summary**: {results.Length} agents contributed";
+        if (results.Any(r => r.confidence < 0.5f))
+            summary += " (⚠️ some agents had low confidence)";
+
+        return new AgentResponse(new ChatMessage(ChatRole.Assistant, combined + summary));
     }
 
     private async Task<AgentResponse> MaybeRunCriticAsync(

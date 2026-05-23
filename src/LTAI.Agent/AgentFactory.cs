@@ -1,3 +1,4 @@
+using LTAI.DNA.Consciousness;
 using LTAI.Models;
 using LTAI.Agent.Middleware;
 using Microsoft.Agents.AI;
@@ -26,6 +27,8 @@ public sealed class AgentFactory : IAgentFactory
         _logger = logger;
     }
 
+    private const int MaxToolsPerAgent = 25;
+
     public AIAgent Create(string agentName)
     {
         var config = _sp.GetRequiredService<AgentConfig>();
@@ -34,10 +37,7 @@ public sealed class AgentFactory : IAgentFactory
             ?? throw new InvalidOperationException($"Agent '{agentName}' not found.");
 
         var chatClient = _sp.GetRequiredService<Microsoft.Extensions.AI.IChatClient>();
-        var tools = _sp.GetServices<AITool>()
-            .Where(t => card.Tools.Count == 0 || card.Tools.Any(n =>
-                t.Name.Contains(n, StringComparison.OrdinalIgnoreCase)))
-            .ToArray();
+        var tools = ResolveToolSubset(card);
 
         var loggerFactory = _sp.GetRequiredService<ILoggerFactory>();
 
@@ -50,12 +50,37 @@ public sealed class AgentFactory : IAgentFactory
             AgentType.Reasoning => new Agents.ReasoningAgent(chatClient, card, tools,
                 loggerFactory.CreateLogger<Agents.ReasoningAgent>()),
             _ => new Agents.ChatAgent(chatClient, card, tools,
-                loggerFactory.CreateLogger<Agents.ChatAgent>())
+                loggerFactory.CreateLogger<Agents.ChatAgent>(),
+                _sp.GetService<Personality>())
         };
 
         agent = ApplyMiddleware(agent, card);
-        _logger.LogInformation("AgentFactory: Created '{Name}' type={Type}", card.Name, card.Type);
+        _logger.LogInformation("AgentFactory: Created '{Name}' type={Type} tools={ToolCount}", card.Name, card.Type, tools.Length);
         return agent;
+    }
+
+    private AITool[] ResolveToolSubset(LTAIAgentCard card)
+    {
+        var allTools = _sp.GetServices<AITool>().ToList();
+        if (card.Tools.Count == 0)
+            return allTools.Take(MaxToolsPerAgent).ToArray();
+
+        var declared = card.Tools.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var matched = allTools
+            .Where(t => declared.Any(n =>
+                t.Name.Equals(n, StringComparison.OrdinalIgnoreCase) ||
+                t.Name.StartsWith(n + ":", StringComparison.OrdinalIgnoreCase) ||
+                t.Name.StartsWith(n + "_", StringComparison.OrdinalIgnoreCase)))
+            .ToList();
+
+        if (matched.Count > MaxToolsPerAgent)
+        {
+            _logger.LogWarning("AgentFactory: Agent '{Name}' matched {Count} tools, truncating to {Max}",
+                card.Name, matched.Count, MaxToolsPerAgent);
+            matched = matched.Take(MaxToolsPerAgent).ToList();
+        }
+
+        return matched.ToArray();
     }
 
     public AIAgent GetOrCreate(string agentName)

@@ -63,6 +63,24 @@ public sealed class HandoffMeshWorkflow
         AgentSession? session = null,
         CancellationToken cancellationToken = default)
     {
+        return await RouteAndExecuteWithDepthAsync(messages, session, 0, cancellationToken);
+    }
+
+    private async Task<AgentResponse> RouteAndExecuteWithDepthAsync(
+        IEnumerable<ChatMessage> messages,
+        AgentSession? session,
+        int depth,
+        CancellationToken cancellationToken)
+    {
+        const int MaxHandoffDepth = 3;
+
+        if (depth >= MaxHandoffDepth)
+        {
+            _logger.LogWarning("HandoffMeshWorkflow: Max handoff depth {Depth} reached, preventing Ping-Pong loop", depth);
+            return new AgentResponse(new ChatMessage(ChatRole.Assistant,
+                $"[Workflow] Maximum handoff depth ({MaxHandoffDepth}) reached. Please rephrase your request."));
+        }
+
         var msgList = messages.ToList();
         var userMsg = msgList.LastOrDefault(m => m.Role == ChatRole.User);
 
@@ -74,11 +92,22 @@ public sealed class HandoffMeshWorkflow
 
         var route = _router.Classify(userMsg.Text);
 
-        _logger.LogInformation("HandoffMeshWorkflow: intent={Intent} -> agent={Agent} conf={Conf:F2}",
-            route.Intent, route.TargetAgent, route.Confidence);
+        _logger.LogInformation("HandoffMeshWorkflow: intent={Intent} -> agent={Agent} conf={Conf:F2} depth={Depth}",
+            route.Intent, route.TargetAgent, route.Confidence, depth);
 
         if (_agents.TryGetValue(route.TargetAgent, out var targetAgent) && route.Confidence >= 0.3f)
-            return await targetAgent.RunAsync(messages, session, null, cancellationToken);
+        {
+            var response = await targetAgent.RunAsync(messages, session, null, cancellationToken);
+
+            // Check if response indicates handoff request
+            if (response.Text?.Contains("[HANDOFF:", StringComparison.OrdinalIgnoreCase) == true)
+            {
+                _logger.LogInformation("HandoffMeshWorkflow: Agent requested handoff, depth={Depth}", depth + 1);
+                return await RouteAndExecuteWithDepthAsync(messages, session, depth + 1, cancellationToken);
+            }
+
+            return response;
+        }
 
         if (_agents.TryGetValue("chat", out var chatAgent))
             return await chatAgent.RunAsync(messages, session, null, cancellationToken);

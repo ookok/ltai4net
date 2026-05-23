@@ -11,6 +11,8 @@ public static class ShellTools
         [Description("Working directory for the command")] string? workingDirectory = null,
         CancellationToken ct = default)
     {
+        const int MaxOutputChars = 50000;
+
         try
         {
             var psi = new ProcessStartInfo
@@ -34,6 +36,13 @@ public static class ShellTools
             var result = stdout;
             if (!string.IsNullOrEmpty(stderr))
                 result += $"\n[stderr]\n{stderr}";
+
+            // Truncate if output exceeds limit
+            if (result.Length > MaxOutputChars)
+            {
+                var truncated = result[..MaxOutputChars];
+                return $"{truncated}\n\n[Output truncated: {result.Length} chars total, showing first {MaxOutputChars} chars]";
+            }
 
             return result.Length > 0 ? result : $"(exit code: {process.ExitCode})";
         }

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -17,6 +18,30 @@ public sealed class ToolSynthesizer
     private readonly object _lock = new();
     private Dictionary<string, SynthesizedTool> _registry = new();
 
+    private static readonly Regex[] DangerousCodePatterns =
+    [
+        new(@"\bimport\s+(os|subprocess|shutil|ctypes|socket)\b", RegexOptions.Compiled),
+        new(@"\bfrom\s+(os|subprocess|shutil|ctypes|socket)\b", RegexOptions.Compiled),
+        new(@"\b(eval|exec|compile)\s*\(", RegexOptions.Compiled),
+        new(@"\b__import__\s*\(", RegexOptions.Compiled),
+        new(@"\bos\.(system|popen|remove|rmdir|unlink|chmod|chown)\s*\(", RegexOptions.Compiled),
+        new(@"\bsubprocess\.(run|call|Popen|check_output)\s*\(", RegexOptions.Compiled),
+        new(@"\bopen\s*\(.+['""][wWaA]", RegexOptions.Compiled),
+        new(@"\bshutil\.(rmtree|move|copy)\s*\(", RegexOptions.Compiled),
+        new(@"\bsocket\.(socket|create_connection)\s*\(", RegexOptions.Compiled),
+        new(@"\bctypes\.(CDLL|WinDLL|cdll|windll)\b", RegexOptions.Compiled),
+        new(@"\b(requests|urllib|http\.client)\.(get|post|put|delete|request)\s*\(", RegexOptions.Compiled),
+        new(@"\b(base64|codecs)\.(b64decode|decode)\s*\(", RegexOptions.Compiled),
+    ];
+
+    private static readonly string[] DangerousStrings =
+    [
+        "/etc/passwd", "/etc/shadow", "/proc/", "/sys/",
+        "rm -rf", "format /", "del /f", "shutdown",
+        "curl |", "wget |", "nc -", "ncat -",
+        "reverse_shell", "backdoor", "keylogger",
+    ];
+
     public ToolSynthesizer(ILogger<ToolSynthesizer>? logger = null)
     {
         _storeDir = Path.Combine(Directory.GetCurrentDirectory(), ".livingtree", "synthesized_tools");
@@ -28,13 +53,16 @@ public sealed class ToolSynthesizer
     public async Task<SynthesisResult> Synthesize(string description, string category,
         Func<string, string, Task<string>> chatFn)
     {
-        var prompt = $@"You are a code generator. Create a Python function based on this description. Output ONLY valid JSON.
-
-Description: {description}
-
-Return JSON with: name, code (Python), params (list of param names).
-
-The code must contain a function called 'execute' that takes params as arguments and returns a dict.";
+        var prompt = $"You are a code generator. Create a Python function based on this description. Output ONLY valid JSON.\n\n" +
+            $"Description: {description}\n\n" +
+            "Return JSON with: name, code (Python), params (list of param names).\n\n" +
+            "The code must contain a function called 'execute' that takes params as arguments and returns a dict.\n\n" +
+            "IMPORTANT SECURITY CONSTRAINTS:\n" +
+            "- Do NOT use os, subprocess, shutil, ctypes, or socket modules\n" +
+            "- Do NOT use eval(), exec(), or __import__()\n" +
+            "- Do NOT access the filesystem outside the current directory\n" +
+            "- Do NOT make network requests\n" +
+            "- The code must be purely computational (string processing, math, data transformation)";
         try
         {
             var response = await chatFn("tool_synthesis", prompt);
@@ -47,12 +75,21 @@ The code must contain a function called 'execute' that takes params as arguments
                 ? p.EnumerateArray().Select(e => e.GetString() ?? "").ToList()
                 : new List<string>();
 
+            var auditResult = AuditCode(code, name);
+            if (!auditResult.Passed)
+            {
+                _logger.LogWarning("Synthesized tool '{Name}' failed security audit: {Issues}",
+                    name, string.Join(", ", auditResult.Issues));
+                return new SynthesisResult(false, null,
+                    $"Security audit failed: {string.Join("; ", auditResult.Issues)}");
+            }
+
             var tool = new SynthesizedTool(name, description, code, category, paramList, 1, 0, 0,
                 DateTime.UtcNow, DateTime.UtcNow, description);
             SaveTool(tool);
             lock (_lock) { _registry[name] = tool; }
 
-            _logger.LogInformation("Synthesized tool: {Name}", name);
+            _logger.LogInformation("Synthesized tool: {Name} (audit passed)", name);
             return new SynthesisResult(true, tool, null);
         }
         catch (Exception ex)
@@ -69,6 +106,33 @@ The code must contain a function called 'execute' that takes params as arguments
     public List<SynthesizedTool> ListTools()
     {
         lock (_lock) { return _registry.Values.OrderBy(t => t.Name).ToList(); }
+    }
+
+    private static CodeAuditResult AuditCode(string code, string toolName)
+    {
+        var issues = new List<string>();
+
+        foreach (var pattern in DangerousCodePatterns)
+        {
+            var match = pattern.Match(code);
+            if (match.Success)
+                issues.Add($"Dangerous pattern: {match.Value}");
+        }
+
+        var lowerCode = code.ToLowerInvariant();
+        foreach (var dangerous in DangerousStrings)
+        {
+            if (lowerCode.Contains(dangerous))
+                issues.Add($"Dangerous string: {dangerous}");
+        }
+
+        if (code.Length > 10000)
+            issues.Add($"Code too long ({code.Length} chars, max 10000)");
+
+        if (!code.Contains("def execute"))
+            issues.Add("Missing required 'execute' function");
+
+        return new CodeAuditResult(issues.Count == 0, issues);
     }
 
     private void SaveTool(SynthesizedTool tool)
@@ -114,3 +178,5 @@ The code must contain a function called 'execute' that takes params as arguments
         return string.Join("_", name.Split(Path.GetInvalidFileNameChars())).Replace(" ", "_").ToLowerInvariant();
     }
 }
+
+public record CodeAuditResult(bool Passed, List<string> Issues);

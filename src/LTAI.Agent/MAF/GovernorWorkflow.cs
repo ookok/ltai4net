@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using LTAI.AI.Governors;
 using LTAI.Core.Models;
 using Microsoft.Agents.AI.Workflows;
@@ -108,6 +109,8 @@ internal sealed class ProgressEvent(string message) : WorkflowEvent(message);
 
 public static class GovernorWorkflow
 {
+    private static readonly ActivitySource ActivitySource = new("LTAI.Agent.Mesh");
+
     public static Workflow BuildGovernorWorkflow(LivingTreeSystem system)
     {
         var preExec = new PreProcessExecutor(system.InputGovernor, system.ContextGovernor, system.RoutingGovernor);
@@ -124,8 +127,11 @@ public static class GovernorWorkflow
         string query,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
     {
+        using var activity = ActivitySource.StartActivity("governor.workflow", ActivityKind.Server);
+        activity?.SetTag("governor.query_length", query.Length);
+
         var workflow = BuildGovernorWorkflow(system);
-        var input = new GovernorQuery { Text = query, TraceId = Guid.NewGuid().ToString("N") };
+        var input = new GovernorQuery { Text = query, TraceId = activity?.TraceId.ToString() ?? Guid.NewGuid().ToString("N") };
         await using var run = await InProcessExecution.RunStreamingAsync(workflow, input);
 
         await foreach (var evt in run.WatchStreamAsync().WithCancellation(ct))
@@ -138,7 +144,7 @@ public static class GovernorWorkflow
         CancellationToken ct = default)
     {
         GovernorResult? result = null;
-        string? error = null;
+        Exception? caughtException = null;
 
         await foreach (var evt in ExecuteWorkflowStreamingAsync(system, query, ct))
         {
@@ -148,14 +154,14 @@ public static class GovernorWorkflow
                     result = gr;
                     break;
                 case WorkflowErrorEvent err:
-                    error = err.Exception?.Message ?? "Unknown workflow error";
+                    caughtException = err.Exception ?? new InvalidOperationException(err.Exception?.Message ?? "Unknown workflow error");
                     break;
             }
         }
 
-        if (error != null)
-            return new GovernorResult { Response = $"Error: {error}", IsBlocked = true };
+        if (caughtException != null)
+            throw new InvalidOperationException($"GovernorWorkflow failed: {caughtException.Message}", caughtException);
 
-        return result ?? new GovernorResult { Response = "No output produced" };
+        return result ?? throw new InvalidOperationException("GovernorWorkflow produced no output");
     }
 }

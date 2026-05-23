@@ -14,6 +14,7 @@ using LTAI.Tools.Review;
 using LTAI.Tools.Search;
 using LTAI.Tools.Skills;
 using LTAI.Tools.Tools;
+using LTAI.Tools.Capability.Governance;
 using LTAI.Core.System;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -52,6 +53,7 @@ public static class CapabilityServiceCollectionExtensions
         services.AddSingleton<ToolSynthesizer>();
         services.AddSingleton<ToolOrchestrator>();
         services.AddSingleton<ToolMeta>();
+        services.AddSingleton<ToolDashboard>();
 
         services.AddSingleton<PipelineEngine>();
 

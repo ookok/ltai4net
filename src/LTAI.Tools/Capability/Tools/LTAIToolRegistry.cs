@@ -1090,9 +1090,21 @@ public static class LTAIToolRegistry
 
         // ═══ Communication — 2 new tools ═══
         new("wework_send", "Send message to WeChat Work (WeCom) group via webhook", "communication",
-            async args => { var bot = GetService<LTAI.Tools.Integration.WeWorkBot>(); await bot.SendWebhookAsync(Arg(args, "content")); return new { status = "sent" }; }),
+            async args => {
+                var bot = GetService<LTAI.Tools.Integration.WeWorkBot>();
+                var success = await bot.SendWebhookAsync(Arg(args, "content"));
+                if (!success) return (object)new { error = "WeWork webhook send failed. Check webhook URL configuration (LTAI_WEWORK_WEBHOOK)." };
+                return (object)new { status = "sent" };
+            }),
         new("telegram_send", "Send message or code block to a Telegram chat", "communication",
-            async args => { var bot = GetService<LTAI.Tools.Integration.TelegramBot>(); var chatId = long.TryParse(Arg(args, "chat_id"), out var cid) ? cid : 0L; await bot.SendMessageAsync(chatId, Arg(args, "text")); return new { status = "sent" }; }),
+            async args => {
+                var bot = GetService<LTAI.Tools.Integration.TelegramBot>();
+                var chatId = long.TryParse(Arg(args, "chat_id"), out var cid) ? cid : 0L;
+                if (chatId == 0) return (object)new { error = "Invalid or missing chat_id parameter." };
+                var success = await bot.SendMessageAsync(chatId, Arg(args, "text"));
+                if (!success) return (object)new { error = "Telegram send failed. Check token configuration (LTAI_TELEGRAM_TOKEN)." };
+                return (object)new { status = "sent" };
+            }),
 
         // ═══ Package Management — 3 new tools ═══
         new("nuget_install", "Install a NuGet package into the project", "system",
@@ -2101,35 +2113,28 @@ internal static class CliEngine
 
 internal static class CadEngine
 {
-    public static async Task<object> Import(string filePath, string format)
+    public static Task<object> Import(string filePath, string format)
     {
-        await Task.Delay(50);
-        return new
-        {
-            file = global::System.IO.Path.GetFileName(filePath), format,
-            status = "imported",
-            entities = "solids,surfaces,curves,points",
-            bounds = new { min_x = 0, min_y = 0, min_z = 0, max_x = 100, max_y = 100, max_z = 50 },
-            note = "CADability .NET library (MIT) — STEP/DWG/DXF/STL import"
-        };
+        throw new NotSupportedException(
+            $"[cad_import] CAD import functionality is not yet implemented. " +
+            $"Requested file: {filePath}, format: {format}. " +
+            $"This tool requires the CADability .NET library to be installed and configured.");
     }
 
-    public static async Task<object> Analyze(string filePath)
+    public static Task<object> Analyze(string filePath)
     {
-        await Task.Delay(100);
-        return new
-        {
-            file = global::System.IO.Path.GetFileName(filePath), status = "analyzed",
-            solids = 12, surfaces = 45, curves = 89, points = 234,
-            volume_m3 = 2.5, surface_area_m2 = 15.3, bounding_box = new { x = 10.5, y = 8.2, z = 3.1 },
-            materials = new[] { "steel", "concrete", "aluminum" }
-        };
+        throw new NotSupportedException(
+            $"[cad_analyze] CAD analysis functionality is not yet implemented. " +
+            $"Requested file: {filePath}. " +
+            $"This tool requires the CADability .NET library to be installed and configured.");
     }
 
-    public static async Task<object> Export(string filePath, string targetFormat)
+    public static Task<object> Export(string filePath, string targetFormat)
     {
-        await Task.Delay(80);
-        return new { source = global::System.IO.Path.GetFileName(filePath), target_format = targetFormat, status = "converted", supported_export = "STEP/DWG/DXF/STL" };
+        throw new NotSupportedException(
+            $"[cad_export] CAD export functionality is not yet implemented. " +
+            $"Requested file: {filePath}, target format: {targetFormat}. " +
+            $"This tool requires the CADability .NET library to be installed and configured.");
     }
 }
 
