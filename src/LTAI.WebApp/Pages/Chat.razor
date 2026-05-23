@@ -10,7 +10,6 @@
         <h3>Project</h3>
         <button @onclick="LoadPromptTemplate" class="sm">📋 Templates</button>
         <button @onclick="BranchMultiModel" class="sm">🔀 Branch</button>
-        <button @onclick="ExportChat" class="sm">📥 Export</button>
         <div style="margin-top:0.5rem">
             <span class="muted">Model: @_model</span><br/>
             <span class="muted">Turns: @_history.Count/2</span><br/>
@@ -45,8 +44,7 @@
 
         <div class="chat-input">
             <div class="input-actions">
-                <button @onclick="() => AttachFile()" title="Attach file" class="icon">📎</button>
-                <input type="file" @ref="_fileInput" hidden accept=".cs,.py,.js,.ts,.go,.rs,.java,.md,.json,.xml,.txt" @onchange="OnFileSelected" />
+                <button @onclick="LoadPromptTemplate" title="Prompt template" class="icon">📋</button>
                 <span class="muted">@_attachedFile @_diffLabel</span>
             </div>
             <textarea @bind="Input" @bind:event="oninput" @onkeydown="OnKeyDown" placeholder="Type... (&#64;path to load, Shift+Enter new line)"></textarea>
@@ -75,7 +73,6 @@
     private string? _diffContent;
     private string? _diffLabel;
     private string? _originalContent;
-    private ElementReference _fileInput;
     private readonly List<ChatMessage> _history = new();
     private CancellationTokenSource? _streamCts;
 
