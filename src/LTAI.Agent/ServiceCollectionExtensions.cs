@@ -5,6 +5,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using LTAI.Agent.Agents;
 using LTAI.Agent.Feedback;
+using LTAI.Agent.Federation;
 using LTAI.Agent.Middleware;
 using LTAI.Agent.Routing;
 using LTAI.Agent.Workflows;
@@ -25,6 +26,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<HumanInTheLoopReview>();
         services.AddSingleton<FeedbackCollector>();
         services.AddSingleton<ABExperimentEngine>();
+        services.AddSingleton<FederationCoordinator>();
         services.AddSingleton<PromptShieldMiddleware>();
         services.AddSingleton<InputClassifierMiddleware>();
         services.AddSingleton<DNASafetyMiddleware>();

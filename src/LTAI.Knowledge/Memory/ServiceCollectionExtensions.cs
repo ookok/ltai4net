@@ -1,3 +1,4 @@
+using LTAI.Knowledge.Memory;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace LTAI.Knowledge.Memory;
@@ -12,6 +13,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<MemPOOptimizer>();
         services.AddSingleton<MemoryOrchestrator>();
         services.AddSingleton<UserTraitEvolutionTree>();
+        services.AddSingleton<TemporalMemoryFabric>();
         return services;
     }
 }
