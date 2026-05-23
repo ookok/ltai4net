@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using LTAI.Agent.Routing;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
@@ -6,12 +8,16 @@ namespace LTAI.Agent.Workflows;
 
 public sealed class AgentMeshWorkflow
 {
+    private static readonly ActivitySource ActivitySource = new("LTAI.Agent.Mesh");
+
     private readonly ILogger<AgentMeshWorkflow> _logger;
+    private readonly IntentRouter _router;
     private readonly Dictionary<string, AIAgent> _agents = new();
 
-    public AgentMeshWorkflow(ILogger<AgentMeshWorkflow> logger)
+    public AgentMeshWorkflow(ILogger<AgentMeshWorkflow> logger, IntentRouter router)
     {
         _logger = logger;
+        _router = router;
     }
 
     public void RegisterAgent(string name, AIAgent agent)
@@ -20,70 +26,127 @@ public sealed class AgentMeshWorkflow
         _logger.LogInformation("AgentMeshWorkflow: Registered agent '{Name}'", name);
     }
 
+    public IReadOnlyDictionary<string, AIAgent> Agents => _agents;
+
     public async Task<AgentResponse> RouteAndExecuteAsync(
         IEnumerable<ChatMessage> messages,
         AgentSession? session = null,
         CancellationToken cancellationToken = default)
     {
+        using var rootSpan = ActivitySource.StartActivity("mesh.route", ActivityKind.Server);
+
         var msgList = messages.ToList();
         var userMsg = msgList.LastOrDefault(m => m.Role == ChatRole.User);
 
         if (userMsg?.Text is null)
         {
-            return new AgentResponse(new ChatMessage(ChatRole.Assistant,
-                "No message to process."));
+            rootSpan?.SetStatus(ActivityStatusCode.Error, "No user message");
+            return new AgentResponse(new ChatMessage(ChatRole.Assistant, "No message to process."));
         }
 
-        var intent = ClassifyRouteIntent(userMsg.Text);
-        var targetAgent = GetBestAgent(intent);
+        var route = _router.Classify(userMsg.Text);
+        rootSpan?.SetTag("mesh.intent", route.Intent);
+        rootSpan?.SetTag("mesh.target_agent", route.TargetAgent);
+        rootSpan?.SetTag("mesh.confidence", route.Confidence);
 
-        _logger.LogInformation("AgentMeshWorkflow: Routing intent={Intent} to agent={Agent}",
-            intent, targetAgent?.Name ?? "fallback");
+        _logger.LogInformation("AgentMeshWorkflow: Routing intent={Intent} agent={Agent} conf={Conf:F2}",
+            route.Intent, route.TargetAgent, route.Confidence);
 
-        if (targetAgent is not null)
+        if (_agents.TryGetValue(route.TargetAgent, out var targetAgent) && route.Confidence >= 0.3f)
         {
-            return await targetAgent.RunAsync(messages, session, null, cancellationToken);
+            using var agentSpan = ActivitySource.StartActivity($"agent.{route.TargetAgent}.run");
+            agentSpan?.SetTag("agent.name", route.TargetAgent);
+            agentSpan?.SetTag("agent.intent", route.Intent);
+
+            var response = await targetAgent.RunAsync(messages, session, null, cancellationToken);
+            agentSpan?.SetTag("agent.response_length", response.Text?.Length ?? 0);
+
+            var criticResponse = await MaybeRunCriticAsync(route.TargetAgent, response, msgList, session, cancellationToken);
+
+            rootSpan?.SetStatus(ActivityStatusCode.Ok);
+            return criticResponse;
         }
+
+        rootSpan?.SetTag("mesh.fallback", true);
 
         if (_agents.TryGetValue("chat", out var chatAgent))
         {
-            return await chatAgent.RunAsync(messages, session, null, cancellationToken);
+            using var fallbackSpan = ActivitySource.StartActivity("agent.chat.fallback");
+            var response = await chatAgent.RunAsync(messages, session, null, cancellationToken);
+            rootSpan?.SetStatus(ActivityStatusCode.Ok);
+            return response;
         }
 
-        return new AgentResponse(new ChatMessage(ChatRole.Assistant,
-            "No agent available to handle this request."));
+        rootSpan?.SetStatus(ActivityStatusCode.Error, "No agent available");
+        return new AgentResponse(new ChatMessage(ChatRole.Assistant, "No agent available to handle this request."));
     }
 
-    private AIAgent? GetBestAgent(string intent)
+    public async Task<AgentResponse> RouteMultiIntentAsync(
+        IEnumerable<ChatMessage> messages,
+        AgentSession? session = null,
+        CancellationToken cancellationToken = default)
     {
-        return intent switch
+        using var span = ActivitySource.StartActivity("mesh.multi-intent");
+
+        var msgList = messages.ToList();
+        var userMsg = msgList.LastOrDefault(m => m.Role == ChatRole.User);
+        if (userMsg?.Text is null)
+            return new AgentResponse(new ChatMessage(ChatRole.Assistant, "No message to process."));
+
+        var routes = _router.ClassifyAll(userMsg.Text);
+        if (routes.Count <= 1)
+            return await RouteAndExecuteAsync(messages, session, cancellationToken);
+
+        span?.SetTag("mesh.intent_count", routes.Count);
+
+        var tasks = new List<Task<AgentResponse>>();
+        var agentNames = new List<string>();
+
+        foreach (var route in routes.Take(3))
         {
-            "code" => _agents.GetValueOrDefault("code"),
-            "eia" => _agents.GetValueOrDefault("eia"),
-            "reasoning" => _agents.GetValueOrDefault("reasoning"),
-            _ => _agents.GetValueOrDefault("chat")
-        };
+            if (_agents.TryGetValue(route.TargetAgent, out var agent))
+            {
+                agentNames.Add(route.TargetAgent);
+                tasks.Add(Task.Run(async () => await agent.RunAsync(messages, session, null, cancellationToken), cancellationToken));
+            }
+        }
+
+        span?.SetTag("mesh.parallel_agents", string.Join(",", agentNames));
+
+        var results = await Task.WhenAll(tasks);
+        var combined = string.Join("\n\n---\n\n",
+            results.Select((r, i) => $"[{agentNames[i]}]\n{r.Text}"));
+
+        return new AgentResponse(new ChatMessage(ChatRole.Assistant, combined));
     }
 
-    private static string ClassifyRouteIntent(string text)
+    private async Task<AgentResponse> MaybeRunCriticAsync(
+        string agentName,
+        AgentResponse originalResponse,
+        List<ChatMessage> messages,
+        AgentSession? session,
+        CancellationToken cancellationToken)
     {
-        var lower = text.ToLowerInvariant();
+        var criticName = $"{agentName}_critic";
+        if (!_agents.TryGetValue(criticName, out var critic))
+            return originalResponse;
 
-        if (lower.Contains("code") || lower.Contains("programming") || lower.Contains("class ") ||
-            lower.Contains("function ") || lower.Contains("debug") || lower.Contains("build") ||
-            lower.Contains("test") || lower.Contains("refactor"))
-            return "code";
+        using var criticSpan = ActivitySource.StartActivity($"critic.{criticName}.review");
+        criticSpan?.SetTag("critic.source_agent", agentName);
 
-        if (lower.Contains("环境") || lower.Contains("impact") || lower.Contains("emission") ||
-            lower.Contains("environmental") || lower.Contains("gis") || lower.Contains("map") ||
-            lower.Contains("spatial") || lower.Contains("ecological"))
-            return "eia";
+        _logger.LogInformation("AgentMeshWorkflow: Running critic '{Critic}' for '{Agent}'", criticName, agentName);
 
-        if (lower.Contains("analyze") || lower.Contains("reason") || lower.Contains("think") ||
-            lower.Contains("compare") || lower.Contains("evaluate") || lower.Contains("solve") ||
-            lower.Contains("logic") || lower.Contains("为什么") || lower.Contains("如何"))
-            return "reasoning";
+        var reviewMessages = new List<ChatMessage>
+        {
+            new(ChatRole.User, $"Review the following {agentName} output for quality, compliance, and factual accuracy:\n\n{originalResponse.Text}")
+        };
 
-        return "chat";
+        var review = await critic.RunAsync(reviewMessages, session, null, cancellationToken);
+
+        var originalText = originalResponse.Text ?? "";
+        var reviewText = review.Text ?? "";
+
+        var combined = $"{originalText}\n\n---\n## Critic Review ({criticName})\n{reviewText}";
+        return new AgentResponse(new ChatMessage(ChatRole.Assistant, combined));
     }
 }

@@ -41,6 +41,12 @@ public sealed class PromptShieldMiddleware
 
         var toolName = session?.GetType().Name ?? options?.GetType().Name ?? "agent";
         var gate = _calibrator.Calibrate(toolName, 0.8, 0.85);
+        if (gate.CalibratedConfidence < 0.4)
+        {
+            _logger.LogWarning("PromptShield: BLOCKED input, confidence {Conf:F2} below threshold for {Tool}", gate.CalibratedConfidence, toolName);
+            return Task.FromResult(new AgentResponse(new ChatMessage(ChatRole.Assistant,
+                "[PromptShield] Your input was blocked by the prompt injection filter. Please rephrase your request.")));
+        }
         if (gate.CalibratedConfidence < 0.5)
             _logger.LogWarning("PromptShield: low confidence {Conf:F2} for {Tool}", gate.CalibratedConfidence, toolName);
 

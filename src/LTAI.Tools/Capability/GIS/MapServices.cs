@@ -1,6 +1,5 @@
 using System.Text;
 using System.Text.Json;
-using LTAI.Core.Configuration;
 using Microsoft.Extensions.Logging;
 
 namespace LTAI.Tools.GIS;
@@ -13,14 +12,16 @@ public sealed class UnifiedMapService
     private readonly TiandituService _tianditu;
     private readonly TencentMapService _tencent;
 
-    public UnifiedMapService(ILogger<UnifiedMapService> logger, SecretVault vault)
+    public UnifiedMapService(ILogger<UnifiedMapService> logger)
     {
         _logger = logger;
-        _baidu = new BaiduMapService(logger, vault.Get("baidu_map_ak"), vault.Get("baidu_map_sk"));
-        _amap = new AmapService(logger, vault.Get("amap_key"));
-        _tianditu = new TiandituService(logger, vault.Get("tianditu_key"));
-        _tencent = new TencentMapService(logger, vault.Get("tencent_map_key"));
+        _baidu = new BaiduMapService(logger, Env("BAIDU_MAP_AK"), Env("BAIDU_MAP_SK"));
+        _amap = new AmapService(logger, Env("AMAP_KEY"));
+        _tianditu = new TiandituService(logger, Env("TIANDITU_KEY"));
+        _tencent = new TencentMapService(logger, Env("TENCENT_MAP_KEY"));
     }
+
+    private static string Env(string name) => Environment.GetEnvironmentVariable(name) ?? "";
 
     public async Task<GeoAddress?> GeocodeAsync(string address, string provider = "auto", CancellationToken ct = default)
     {

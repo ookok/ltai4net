@@ -12,6 +12,8 @@ public sealed class ReasoningAgent : AIAgent
     private readonly ChatClientAgent _inner;
     private readonly ILogger<ReasoningAgent> _logger;
     private readonly int _maxSearchDepth;
+    private readonly int _maxIterations;
+    private const double ExplorationConstant = 1.414;
 
     public override string Name { get; }
     public override string Description { get; }
@@ -22,11 +24,12 @@ public sealed class ReasoningAgent : AIAgent
         IEnumerable<Microsoft.Extensions.AI.AITool> reasoningTools,
         ILogger<ReasoningAgent> logger)
     {
+        _logger = logger;
         Name = card.Name;
         Description = card.Instructions;
-        _logger = logger;
 
         _maxSearchDepth = card.Options.TryGetValue("maxSearchDepth", out var d) && d is int depth ? depth : 5;
+        _maxIterations = card.Options.TryGetValue("maxIterations", out var it) && it is int iterations ? iterations : 20;
 
         _inner = chatClient.AsBuilder().BuildAIAgent(new ChatClientAgentOptions
         {
@@ -44,61 +47,128 @@ public sealed class ReasoningAgent : AIAgent
     {
         var msgList = messages.ToList();
         var userMsg = msgList.LastOrDefault(m => m.Role == ChatRole.User);
-
         if (userMsg is null)
             return new AgentResponse(new ChatMessage(ChatRole.Assistant, "No reasoning request received."));
 
         var query = userMsg.Text ?? "";
+        _logger.LogInformation("ReasoningAgent [{Name}]: MCTS reasoning depth={D} iter={I}", Name, _maxSearchDepth, _maxIterations);
 
-        var reasoningPrompt = $"""
-            You are a deep reasoning agent. Think step by step. 
-            
-            Use the following reasoning strategy:
-            1. Decompose the problem into sub-problems
-            2. For each sub-problem, explore up to {_maxSearchDepth} alternative solutions
-            3. Evaluate each solution path by expected outcome
-            4. Select the best solution and verify it
-            
-            Question: {query}
-            
-            Provide your reasoning chain and final answer.
-            """;
+        if (query.Length < 20)
+            return await _inner.RunAsync(messages, session, options, cancellationToken);
 
-        var enhancedMessages = new List<ChatMessage>(msgList.Take(msgList.Count - 1))
+        var result = await ExecuteMctsAsync(query, session, cancellationToken);
+        return new AgentResponse(new ChatMessage(ChatRole.Assistant, result));
+    }
+
+    private async Task<string> ExecuteMctsAsync(string query, AgentSession? session, CancellationToken ct)
+    {
+        var root = new MctsNode { State = query, Depth = 0, VisitCount = 1, TotalValue = 0.5 };
+
+        var subProblems = await DecomposeAsync(query, session, ct);
+        foreach (var sp in subProblems.Take(_maxSearchDepth))
+            root.Children.Add(new MctsNode { State = sp, Depth = 1, Parent = root });
+
+        for (int iter = 0; iter < _maxIterations; iter++)
         {
-            new(ChatRole.User, reasoningPrompt)
-        };
+            ct.ThrowIfCancellationRequested();
+            var node = Select(root);
+            if (node.Depth >= _maxSearchDepth || node.IsTerminal) continue;
 
-        _logger.LogInformation("ReasoningAgent [{Name}]: Deep reasoning, maxDepth={Depth}", Name, _maxSearchDepth);
+            var expansion = await ExpandAsync(node, session, ct);
+            if (!string.IsNullOrWhiteSpace(expansion))
+            {
+                var child = new MctsNode { State = expansion, Depth = node.Depth + 1, Parent = node };
+                node.Children.Add(child);
+                Backpropagate(child, await SimulateAsync(child, query, session, ct));
+            }
+        }
 
-        var response = await _inner.RunAsync(enhancedMessages, session, options, cancellationToken);
+        return BuildResult(root, root.Children.Sum(c => c.VisitCount));
+    }
 
-        _logger.LogInformation("ReasoningAgent [{Name}]: Reasoning complete", Name);
-        return response;
+    private static MctsNode Select(MctsNode node)
+    {
+        while (node.Children.Count > 0)
+            node = node.Children.OrderByDescending(c => Ucb1(c)).First();
+        return node;
+    }
+
+    private static double Ucb1(MctsNode n)
+    {
+        if (n.VisitCount == 0) return double.MaxValue;
+        if (n.Parent?.VisitCount is null or 0) return n.TotalValue / n.VisitCount;
+        return n.TotalValue / n.VisitCount + ExplorationConstant * Math.Sqrt(Math.Log(n.Parent.VisitCount) / n.VisitCount);
+    }
+
+    private static void Backpropagate(MctsNode? node, double value)
+    {
+        for (; node != null; node = node.Parent)
+        { node.VisitCount++; node.TotalValue += value; }
+    }
+
+    private async Task<List<string>> DecomposeAsync(string q, AgentSession? s, CancellationToken ct)
+    {
+        var r = await _inner.RunAsync(
+            [new(ChatRole.User, $"Decompose into max {_maxSearchDepth} sub-problems, each prefixed \"- \":\n{q}")],
+            s, null, ct);
+        return (r.Text ?? "").Split('\n').Where(l => l.TrimStart().StartsWith("-")).Select(l => l.TrimStart().TrimStart('-').Trim()).Where(l => l.Length > 3).ToList();
+    }
+
+    private async Task<string> ExpandAsync(MctsNode n, AgentSession? s, CancellationToken ct)
+    {
+        var r = await _inner.RunAsync(
+            [new(ChatRole.User, $"Propose ONE concrete next step for:\n{n.State}\n\nNext step:")],
+            s, null, ct);
+        return r.Text?.Trim() ?? "";
+    }
+
+    private async Task<double> SimulateAsync(MctsNode n, string orig, AgentSession? s, CancellationToken ct)
+    {
+        var r = await _inner.RunAsync(
+            [new(ChatRole.User, $"Rate relevance to \"{orig}\":\n{n.State}\nScore (0.0-1.0):")],
+            s, null, ct);
+        return double.TryParse(r.Text?.Trim(), out var v) ? Math.Clamp(v, 0, 1) : 0.5;
+    }
+
+    private static string BuildResult(MctsNode root, int totalVisits)
+    {
+        var path = new List<MctsNode>(); var cur = root;
+        while (cur.Children.Count > 0) { cur = cur.Children.OrderByDescending(c => c.TotalValue / Math.Max(c.VisitCount, 1)).First(); path.Add(cur); }
+
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine($"## MCTS Reasoning ({totalVisits} iterations, {root.Children.Count} branches)");
+        for (int i = 0; i < path.Count; i++)
+            sb.AppendLine($"{i + 1}. [{path[i].TotalValue / Math.Max(path[i].VisitCount, 1):P0}] {path[i].State}");
+        return sb.ToString();
+    }
+
+    private sealed class MctsNode
+    {
+        public string State { get; init; } = "";
+        public int Depth { get; init; }
+        public int VisitCount { get; set; }
+        public double TotalValue { get; set; }
+        public MctsNode? Parent { get; init; }
+        public List<MctsNode> Children { get; } = new();
+        public bool IsTerminal => Depth >= 10;
     }
 
     protected override async IAsyncEnumerable<AgentResponseUpdate> RunCoreStreamingAsync(
-        IEnumerable<ChatMessage> messages,
-        AgentSession? session = null,
-        AgentRunOptions? options = null,
+        IEnumerable<ChatMessage> messages, AgentSession? session = null, AgentRunOptions? options = null,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        await foreach (var update in _inner.RunStreamingAsync(messages, session, options, cancellationToken))
-            yield return update;
+        var r = await RunCoreAsync(messages, session, options, cancellationToken);
+        var t = r.Text ?? "";
+        for (int i = 0; i < t.Length; i += 80)
+            yield return new AgentResponseUpdate(ChatRole.Assistant, t[i..Math.Min(i + 80, t.Length)]);
     }
 
-    protected override ValueTask<AgentSession> CreateSessionCoreAsync(CancellationToken cancellationToken = default)
-        => _inner.CreateSessionAsync(cancellationToken);
+    protected override ValueTask<AgentSession> CreateSessionCoreAsync(CancellationToken ct = default)
+        => _inner.CreateSessionAsync(ct);
 
-    protected override ValueTask<JsonElement> SerializeSessionCoreAsync(
-        AgentSession session,
-        JsonSerializerOptions? jsonSerializerOptions = null,
-        CancellationToken cancellationToken = default)
-        => _inner.SerializeSessionAsync(session, jsonSerializerOptions, cancellationToken);
+    protected override ValueTask<JsonElement> SerializeSessionCoreAsync(AgentSession s, JsonSerializerOptions? o = null, CancellationToken ct = default)
+        => _inner.SerializeSessionAsync(s, o, ct);
 
-    protected override ValueTask<AgentSession> DeserializeSessionCoreAsync(
-        JsonElement serializedState,
-        JsonSerializerOptions? jsonSerializerOptions = null,
-        CancellationToken cancellationToken = default)
-        => _inner.DeserializeSessionAsync(serializedState, jsonSerializerOptions, cancellationToken);
+    protected override ValueTask<AgentSession> DeserializeSessionCoreAsync(JsonElement j, JsonSerializerOptions? o = null, CancellationToken ct = default)
+        => _inner.DeserializeSessionAsync(j, o, ct);
 }

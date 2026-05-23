@@ -1,0 +1,117 @@
+using LTAI.Agent.Routing;
+using Xunit;
+
+namespace LTAI.Tests;
+
+public class IntentRouterTests
+{
+    private readonly IntentRouter _router = new();
+
+    [Fact]
+    public void EmptyInput_ReturnsChat()
+    {
+        var route = _router.Classify("");
+        Assert.Equal("chat", route.Intent);
+        Assert.Equal("chat", route.TargetAgent);
+        Assert.Equal(1.0f, route.Confidence);
+    }
+
+    [Fact]
+    public void NullInput_ReturnsChat()
+    {
+        var route = _router.Classify(null!);
+        Assert.Equal("chat", route.Intent);
+    }
+
+    [Fact]
+    public void CodeKeywords_RouteToCode()
+    {
+        var route = _router.Classify("Please debug this function and refactor the class");
+        Assert.Equal("code", route.Intent);
+        Assert.Equal("code", route.TargetAgent);
+        Assert.True(route.Confidence >= 0.85f);
+        Assert.Contains("debug", route.MatchedKeywords);
+        Assert.Contains("function ", route.MatchedKeywords);
+    }
+
+    [Fact]
+    public void EiaChineseKeywords_RouteToEia()
+    {
+        var route = _router.Classify("请评估这个项目的环境影响，包括大气排放和噪声污染");
+        Assert.Equal("eia", route.Intent);
+        Assert.Equal("eia", route.TargetAgent);
+        Assert.True(route.Confidence > 0.8f);
+    }
+
+    [Fact]
+    public void EiaEnglishKeywords_RouteToEia()
+    {
+        var route = _router.Classify("Analyze the air quality impact and dispersion modeling for this factory");
+        Assert.Equal("eia", route.Intent);
+        Assert.True(route.MatchedKeywords.Count >= 2);
+    }
+
+    [Fact]
+    public void ReasoningKeywords_RouteToReasoning()
+    {
+        var route = _router.Classify("为什么这个算法的复杂度是O(n log n)？请分析并比较不同方案");
+        Assert.Equal("reasoning", route.Intent);
+        Assert.Contains("为什么", route.MatchedKeywords);
+    }
+
+    [Fact]
+    public void EiaCriticReview_RoutesToCritic()
+    {
+        var route = _router.Classify("请审核这份环评报告的合规性，检查标准引用");
+        Assert.Equal("eia_critic", route.Intent);
+        Assert.Equal("eia_critic", route.TargetAgent);
+    }
+
+    [Fact]
+    public void UnknownInput_ReturnsChatWithLowConfidence()
+    {
+        var route = _router.Classify("xyzzy flibble wobble");
+        Assert.Equal("chat", route.Intent);
+        Assert.True(route.Confidence <= 0.7f);
+        Assert.Empty(route.MatchedKeywords);
+    }
+
+    [Fact]
+    public void MultiIntent_ReturnsBestMatch()
+    {
+        var route = _router.Classify("Help me debug the environmental impact code");
+        Assert.Equal("code", route.Intent);
+        Assert.True(route.Confidence > 0.8f);
+    }
+
+    [Fact]
+    public void ClassifyAll_MultipleIntents_ReturnsOrderedByConfidence()
+    {
+        var routes = _router.ClassifyAll("analyze the code and environmental impact");
+        Assert.True(routes.Count >= 2);
+        Assert.True(routes[0].Confidence >= routes[^1].Confidence);
+    }
+
+    [Fact]
+    public void ClassifyAll_SingleIntent_ReturnsOneResult()
+    {
+        var routes = _router.ClassifyAll("hello how are you");
+        Assert.Single(routes);
+        Assert.Equal("chat", routes[0].Intent);
+    }
+
+    [Fact]
+    public void ArchitectureKeywords_RouteToReasoning()
+    {
+        var route = _router.Classify("Design the architecture for a microservice system");
+        Assert.Equal("reasoning", route.Intent);
+    }
+
+    [Fact]
+    public void ChineseEmissions_RoutesToEia()
+    {
+        var route = _router.Classify("计算温室气体排放量，评估碳排放影响");
+        Assert.Equal("eia", route.Intent);
+        Assert.Contains("温室", route.MatchedKeywords);
+    }
+}

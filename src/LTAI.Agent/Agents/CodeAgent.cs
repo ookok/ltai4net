@@ -11,6 +11,11 @@ public sealed class CodeAgent : AIAgent
 {
     private readonly ChatClientAgent _inner;
     private readonly ILogger<CodeAgent> _logger;
+    private readonly HashSet<string> _supportedExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".cs", ".py", ".js", ".ts", ".go", ".rs", ".java", ".kt", ".swift", ".cpp", ".c", ".h",
+        ".json", ".yaml", ".yml", ".xml", ".md", ".sql", ".sh", ".ps1", ".toml", ".csproj"
+    };
 
     public override string Name { get; }
     public override string Description { get; }
@@ -41,16 +46,100 @@ public sealed class CodeAgent : AIAgent
     {
         var msgList = messages.ToList();
         var userMsg = msgList.LastOrDefault(m => m.Role == ChatRole.User);
-
         if (userMsg is null)
             return new AgentResponse(new ChatMessage(ChatRole.Assistant, "No code analysis request received."));
 
-        _logger.LogInformation("CodeAgent [{Name}]: Analyzing code request", Name);
+        var query = userMsg.Text ?? "";
+        _logger.LogInformation("CodeAgent [{Name}]: {Query}", Name, query[..Math.Min(query.Length, 200)]);
 
-        var response = await _inner.RunAsync(messages, session, options, cancellationToken);
+        var filePaths = ExtractFilePaths(query);
+        var contextMessages = new List<ChatMessage>();
+
+        if (filePaths.Count > 0)
+        {
+            foreach (var fp in filePaths.Take(5))
+            {
+                var ext = Path.GetExtension(fp);
+                if (_supportedExtensions.Contains(ext) && File.Exists(fp))
+                {
+                    try
+                    {
+                        var content = await File.ReadAllTextAsync(fp, cancellationToken);
+                        var truncated = content.Length > 10000 ? content[..10000] + $"\n... ({content.Length} total chars)" : content;
+                        contextMessages.Add(new ChatMessage(ChatRole.System,
+                            $"File: {fp} ({content.Length} chars)\n```{ext.TrimStart('.')}\n{truncated}\n```"));
+                        _logger.LogDebug("CodeAgent: Preloaded {Path} ({Length} chars)", fp, content.Length);
+                    }
+                    catch (Exception ex)
+                    {
+                        contextMessages.Add(new ChatMessage(ChatRole.System, $"File {fp}: read error - {ex.Message}"));
+                    }
+                }
+            }
+        }
+
+        if (contextMessages.Count > 0)
+            msgList.InsertRange(0, contextMessages);
+
+        var enhancedQuery = $"""
+            Code analysis task. Be precise, cite line numbers, and flag:
+            - Security issues (SQL injection, XSS, hardcoded secrets, unsafe deserialization)
+            - Performance problems (N+1 queries, excessive allocations, blocking calls)
+            - Design problems (violations of SOLID, tight coupling, missing abstractions)
+
+            Request: {query}
+            """;
+
+        var enhancedMessages = new List<ChatMessage>(msgList.Take(msgList.Count - 1))
+        {
+            new(ChatRole.User, enhancedQuery)
+        };
+
+        _logger.LogInformation("CodeAgent [{Name}]: Analyzing {FileCount} files", Name, filePaths.Count);
+
+        var response = await _inner.RunAsync(enhancedMessages, session, options, cancellationToken);
+
+        var validationFeedback = ValidateCodeResponse(response.Text ?? "");
+        if (!string.IsNullOrWhiteSpace(validationFeedback))
+        {
+            var fixedMessages = new List<ChatMessage>(enhancedMessages)
+            {
+                new(ChatRole.Assistant, response.Text ?? ""),
+                new(ChatRole.User, $"Review feedback: {validationFeedback}\nPlease address these issues.")
+            };
+            response = await _inner.RunAsync(fixedMessages, session, options, cancellationToken);
+        }
 
         _logger.LogInformation("CodeAgent [{Name}]: Analysis complete", Name);
         return response;
+    }
+
+    private static List<string> ExtractFilePaths(string text)
+    {
+        var paths = new List<string>();
+        foreach (var word in text.Split(' ', '\n', '\t', '"', '\''))
+        {
+            var w = word.Trim();
+            if (w.Contains('.') && (w.Contains('/') || w.Contains('\\') || w.EndsWith(".cs") || w.EndsWith(".py") || w.EndsWith(".js")))
+                paths.Add(w);
+        }
+        return paths;
+    }
+
+    private static string ValidateCodeResponse(string response)
+    {
+        var warnings = new List<string>();
+
+        if (response.Contains("delete all", StringComparison.OrdinalIgnoreCase) ||
+            response.Contains("drop table", StringComparison.OrdinalIgnoreCase) ||
+            response.Contains("rm -rf /", StringComparison.OrdinalIgnoreCase))
+            warnings.Add("Response contains potentially destructive commands — verify before execution.");
+
+        if (response.Contains("password", StringComparison.OrdinalIgnoreCase) ||
+            response.Contains("secret", StringComparison.OrdinalIgnoreCase))
+            warnings.Add("Response may contain sensitive information — sanitize before sharing.");
+
+        return string.Join("\n", warnings);
     }
 
     protected override async IAsyncEnumerable<AgentResponseUpdate> RunCoreStreamingAsync(
@@ -67,14 +156,10 @@ public sealed class CodeAgent : AIAgent
         => _inner.CreateSessionAsync(cancellationToken);
 
     protected override ValueTask<JsonElement> SerializeSessionCoreAsync(
-        AgentSession session,
-        JsonSerializerOptions? jsonSerializerOptions = null,
-        CancellationToken cancellationToken = default)
-        => _inner.SerializeSessionAsync(session, jsonSerializerOptions, cancellationToken);
+        AgentSession session, JsonSerializerOptions? o = null, CancellationToken ct = default)
+        => _inner.SerializeSessionAsync(session, o, ct);
 
     protected override ValueTask<AgentSession> DeserializeSessionCoreAsync(
-        JsonElement serializedState,
-        JsonSerializerOptions? jsonSerializerOptions = null,
-        CancellationToken cancellationToken = default)
-        => _inner.DeserializeSessionAsync(serializedState, jsonSerializerOptions, cancellationToken);
+        JsonElement state, JsonSerializerOptions? o = null, CancellationToken ct = default)
+        => _inner.DeserializeSessionAsync(state, o, ct);
 }

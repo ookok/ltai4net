@@ -3,6 +3,7 @@ using LTAI.AI.Governors;
 using LTAI.Tools;
 using LTAI.Core;
 using LTAI.Core.Configuration;
+using LTAI.Core.Setup;
 using LTAI.DNA;
 using LTAI.Agent;
 using LTAI.Planning.Metrics;
@@ -22,6 +23,23 @@ public static class MauiProgram
     {
         var builder = MauiApp.CreateBuilder();
         builder.UseMauiApp<App>();
+
+        var configPath = Path.Combine(AppContext.BaseDirectory, "appsettings.json");
+        var isFirstRun = !File.Exists(configPath) || new FileInfo(configPath).Length < 50;
+
+        if (isFirstRun)
+        {
+            try
+            {
+                Console.WriteLine("检测到首次运行，启动配置向导...");
+                var setupWizard = new InteractiveSetupWizard(configPath);
+                setupWizard.RunAsync().GetAwaiter().GetResult();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"配置向导失败: {ex.Message}，使用默认配置");
+            }
+        }
 
         var services = builder.Services;
 

@@ -60,10 +60,10 @@ public sealed class ProviderRegistry : IProviderRegistry
 
     private static readonly Dictionary<string, string> BuiltInDefaultModels = new()
     {
-        ["deepseek"] = "deepseek-chat",
+        ["deepseek"] = "deepseek-v4-pro",
         ["longcat"] = "LongCat-Flash-Lite",
         ["xiaomi"] = "mimo-v2-flash",
-        ["aliyun"] = "qwen-turbo",
+        ["aliyun"] = "qwen-plus",
         ["zhipu"] = "glm-4-flash",
         ["hunyuan"] = "hunyuan-lite",
         ["baidu"] = "ernie-speed-128k",
@@ -115,15 +115,24 @@ public sealed class ProviderRegistry : IProviderRegistry
             new("nvidia-pro", "nvidia/llama-3.1-nemotron-ultra-253b-v1"),
             new("nvidia-flash", "meta/llama-3.3-70b-instruct"),
             new("nvidia-small", "microsoft/phi-3.5-mini-instruct")
+        },
+        ["aliyun"] = new()
+        {
+            new("aliyun-flash", "qwen-turbo"),
+            new("aliyun-plus", "qwen-plus"),
+            new("aliyun-max", "qwen-max"),
+            new("aliyun-coder", "qwen-coder-plus"),
+            new("aliyun-vl", "qwen-vl-max"),
+            new("aliyun-long", "qwen-long")
         }
     };
 
     private static readonly Dictionary<string, List<string>> BuiltInCapabilities = new()
     {
-        ["deepseek"] = new() { "code", "reasoning", "analysis" },
+        ["deepseek"] = new() { "code", "reasoning", "analysis", "thinking", "tool_calls", "json_mode", "fim" },
         ["openai"] = new() { "multimodal", "code", "reasoning", "vision" },
         ["anthropic"] = new() { "long_context", "safety", "code", "reasoning" },
-        ["aliyun"] = new() { "chinese", "code", "reasoning" },
+        ["aliyun"] = new() { "chinese", "code", "reasoning", "embedding", "vision", "web_search", "document", "audio", "function_calling" },
         ["zhipu"] = new() { "agent", "tools", "chinese", "code" },
         ["moonshot"] = new() { "long_text", "chinese" },
         ["gemini"] = new() { "vision", "search", "multimodal" },
@@ -142,7 +151,7 @@ public sealed class ProviderRegistry : IProviderRegistry
         ["bailing"] = new() { "chinese", "search" },
         ["xiaomi"] = new() { "chinese", "fast" },
         ["nvidia"] = new() { "code", "reasoning", "multimodal" },
-        ["siliconflow"] = new() { "code", "chinese", "fast" },
+        ["siliconflow"] = new() { "code", "chinese", "fast", "embedding" },
         ["modelscope"] = new() { "chinese", "code", "free" },
         ["internlm"] = new() { "chinese", "long_context" },
         ["sensetime"] = new() { "chinese", "free" },

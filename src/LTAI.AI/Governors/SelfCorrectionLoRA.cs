@@ -39,7 +39,7 @@ public sealed class SelfCorrectionLoRA
     /// correct labels even when the input query contains signs of prior mistakes.
     public float Train(int epochs = 3, float lr = 0.008f)
     {
-        List<(string, int)> samples;
+        List<(string query, string wrong, string correct, string errorType)> samples;
         lock (_trainingBuffer)
         {
             if (_trainingBuffer.Count < 5) return 0;
@@ -52,10 +52,10 @@ public sealed class SelfCorrectionLoRA
 
         // Construct augmented training inputs: prefix query with "[self-correct] wrong:... → "
         var trainingData = new List<(string text, int targetClass)>();
-        foreach (var (query, wrong, correct, errType) in samples)
+        foreach (var sample in samples)
         {
-            var augmentedInput = $"[self-correct, error={errType}] Query: {query[..global::System.Math.Min(query.Length, 200)]} Wrong: {wrong[..global::System.Math.Min(wrong.Length, 150)]}";
-            var decision = _depthController.Decide(correct);
+            var augmentedInput = $"[self-correct, error={sample.errorType}] Query: {sample.query[..global::System.Math.Min(sample.query.Length, 200)]} Wrong: {sample.wrong[..global::System.Math.Min(sample.wrong.Length, 150)]}";
+            var decision = _depthController.Decide(sample.correct);
             var targetIdx = decision.Tier switch
             {
                 HrmReasoningTier.Reflex => 0, HrmReasoningTier.FastThink => 0,

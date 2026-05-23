@@ -69,6 +69,9 @@ public sealed class LayerConfig
 
 public sealed class AIConfig
 {
+    [JsonPropertyName("onnx_enabled")]
+    public bool OnnxEnabled { get; init; } = false;
+
     [JsonPropertyName("default_provider")]
     public string DefaultProvider { get; init; } = "deepseek";
 

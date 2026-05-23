@@ -94,127 +94,233 @@ public class InteractiveSetupWizard
     {
         Console.WriteLine($"━━━ {layerName}: {description} ━━━");
         Console.WriteLine();
-        Console.WriteLine("选择模式：");
-        Console.WriteLine("  [1] API 模式 (云端模型，能力强)");
-        Console.WriteLine("  [2] 本地模式 (离线运行，隐私安全)");
-        if (layerName == "L0")
-            Console.WriteLine("  [3] Jina v5 Omni (推荐 — 多模态小模型，自动下载)");
-        Console.WriteLine("  [Enter] 跳过，保持当前配置");
-        Console.WriteLine();
 
-        var choice = ReadLine("选择 (1/2/3) 或回车");
-        if (string.IsNullOrWhiteSpace(choice))
-        {
-            Console.WriteLine($"  ⏭️  跳过 {layerName} 配置");
-            Console.WriteLine();
-            return;
-        }
-
-        if (choice == "1")
-        {
-            await ConfigureApiModeAsync(layerName, ct);
-        }
-        else if (choice == "2")
-        {
-            await ConfigureLocalModeAsync(layerName, hwInfo, ct);
-        }
-        else if (choice == "3" && layerName == "L0")
-        {
-            await ConfigureJinaModeAsync(ct);
-        }
-        else
-        {
-            Console.WriteLine($"  ⏭️  跳过 {layerName} 配置");
-        }
+        await ConfigureApiProviderSelectionAsync(layerName, ct);
         Console.WriteLine();
     }
 
-    private async Task ConfigureApiModeAsync(string layerName, CancellationToken ct)
+    private async Task ConfigureApiProviderSelectionAsync(string layerName, CancellationToken ct)
     {
         var registry = new ProviderRegistry();
-        var providers = registry.AllProviders.ToList();
+        var allProviders = registry.AllProviders.ToList();
 
-        Console.WriteLine();
-        Console.WriteLine("选择 API 提供商：");
-        Console.WriteLine("  ─── 云端提供商 ───");
-        var cloudProviders = new List<(int Index, string Name)>();
-        var localProviders = new List<(int Index, string Name)>();
-        
-        for (int i = 0; i < providers.Count; i++)
+        // 收集所有云端提供商
+        var cloud = new List<(string Name, string BaseUrl, List<string> Caps, bool Suitable)>();
+        foreach (var p in allProviders)
         {
-            var p = providers[i];
-            var url = registry.GetBaseUrl(p)!;
-            var model = registry.GetDefaultModel(p)!;
-            var isLocal = url.Contains("localhost") || url.Contains("127.0.0.1") || url.Contains("0.0.0.0") || url.Contains(".local");
-            
-            if (isLocal)
-                localProviders.Add((i + 1, p));
-            else
-                cloudProviders.Add((i + 1, p));
-            
-            var tag = isLocal ? "  [本地无Key]" : "";
-            Console.WriteLine($"  [{i + 1,2}] {p,-16} {model,-36}{tag}");
+            var url = registry.GetBaseUrl(p);
+            if (url == null) continue;
+            if (url.Contains("localhost") || url.Contains("127.0.0.1") || url.Contains("0.0.0.0") || url.Contains(".local")) continue;
+
+            var caps = registry.GetCapabilities(p);
+            var isSuitable = layerName != "L0" || caps.Contains("embedding");
+            cloud.Add((p, url, caps, isSuitable));
         }
+
+        var unsuitableCount = cloud.Count(c => !c.Suitable);
+
+        Console.WriteLine("选择云端提供商：");
+        Console.WriteLine();
+        Console.WriteLine("  ─── 推荐 ───");
+        Console.WriteLine("  [A] 硅基流动    siliconflow  | BGE/Qwen3嵌入 + DeepSeek/Qwen对话");
+        Console.WriteLine("  [B] DeepSeek     deepseek    | v4-pro/flash 对话，无嵌入");
+        Console.WriteLine("  [C] 阿里云百炼    aliyun      | text-embedding + qwen 对话");
+        Console.WriteLine();
+        Console.WriteLine($"  ─── 全部 {cloud.Count} 个云端提供商 ───");
+        if (layerName == "L0" && unsuitableCount > 0)
+            Console.WriteLine($"  L0 嵌入层: 仅含 embedding 能力的提供商可正常使用，{unsuitableCount} 个标 ⚠️ 的将用本地哈希");
+
+        for (int i = 0; i < cloud.Count; i++)
+        {
+            var c = cloud[i];
+            var tag = c.Suitable ? "  " : "⚠️";
+            var capStr = string.Join(",", c.Caps);
+            Console.WriteLine($"  [{i + 1,2}] {tag} {c.Name,-14} {c.BaseUrl,-50} [{capStr}]");
+        }
+        Console.WriteLine("  [Enter] 跳过");
         Console.WriteLine();
 
-        var providerChoice = ReadLine("选择提供商编号");
-        if (string.IsNullOrWhiteSpace(providerChoice) || !int.TryParse(providerChoice, out var selectedIdx) || selectedIdx < 1 || selectedIdx > providers.Count)
+        var choice = ReadLine("选择 (A/B/C/1-28) 或回车");
+        if (string.IsNullOrWhiteSpace(choice))
         {
-            Console.WriteLine("  ⚠️  无效选择，跳过 API 配置");
+            Console.WriteLine($"  ⏭️  跳过 {layerName} 配置");
             return;
         }
 
-        var selectedProvider = providers[selectedIdx - 1];
+        string selectedProvider;
+        switch (choice.ToUpperInvariant())
+        {
+            case "A": selectedProvider = "siliconflow"; break;
+            case "B": selectedProvider = "deepseek"; break;
+            case "C": selectedProvider = "aliyun"; break;
+            default:
+                if (!int.TryParse(choice, out var idx) || idx < 1 || idx > cloud.Count)
+                {
+                    Console.WriteLine("  ⚠️  无效选择");
+                    return;
+                }
+                selectedProvider = cloud[idx - 1].Name;
+                break;
+        }
+
+        if (layerName == "L0" && !cloud.First(c => c.Name == selectedProvider).Suitable)
+        {
+            Console.WriteLine($"  ⚠️  {selectedProvider} 不提供嵌入 API，L0 将使用本地哈希后端");
+        }
+
         var endpoint = registry.GetBaseUrl(selectedProvider)!;
-        var defaultModel = registry.GetDefaultModel(selectedProvider)!;
-        var isLocalProvider = endpoint.Contains("localhost") || endpoint.Contains("127.0.0.1") || endpoint.Contains("0.0.0.0") || endpoint.Contains(".local");
-
         Console.WriteLine();
-        Console.WriteLine($"提供商: {selectedProvider}{(isLocalProvider ? " (本地, 无需 API Key)" : "")}");
+        Console.WriteLine($"提供商: {selectedProvider}");
         Console.WriteLine($"端点: {endpoint}");
-        Console.WriteLine($"默认模型: {defaultModel}");
         Console.WriteLine();
 
-        string apiKey;
-        if (isLocalProvider)
+        var apiKey = ReadSecret($"API Key ({selectedProvider})");
+        if (string.IsNullOrWhiteSpace(apiKey))
         {
-            Console.WriteLine("  ℹ️  本地提供商不需要 API Key");
-            apiKey = "";
-        }
-        else
-        {
-            apiKey = ReadSecret("API Key");
-            if (string.IsNullOrWhiteSpace(apiKey))
-            {
-                Console.WriteLine("  ⚠️  未提供 API Key，跳过");
-                return;
-            }
+            Console.WriteLine("  ⚠️  未提供 API Key");
+            return;
         }
 
-        var customModel = ReadLine($"模型名称 (默认: {defaultModel})");
-        var chosenModel = string.IsNullOrWhiteSpace(customModel) ? defaultModel : customModel;
+        Console.WriteLine();
+        Console.WriteLine("  正在获取模型列表...");
+
+        var availableModels = await FetchModelListAsync(endpoint, apiKey, ct);
+
+        if (availableModels.Count == 0)
+        {
+            Console.WriteLine("  ⚠️  无法获取模型列表，请检查 API Key 和网络");
+            return;
+        }
+
+        var suitable = FilterModelsForLayer(layerName, availableModels);
+
+        if (suitable.Count == 0)
+        {
+            Console.WriteLine($"  ⚠️  该提供商无可用的 {layerName} 层模型");
+            Console.WriteLine("  所有可用模型：");
+            foreach (var m in availableModels.Take(20))
+                Console.WriteLine($"    - {m}");
+            return;
+        }
+
+        var recommended = suitable[0];
+        Console.WriteLine();
+        Console.WriteLine($"  {layerName} 层可用模型 ({suitable.Count} 个)：");
+        Console.WriteLine($"  推荐: {recommended}");
+        Console.WriteLine();
+
+        if (suitable.Count > 1)
+        {
+            Console.WriteLine("  全部可选：");
+            for (int i = 0; i < suitable.Count; i++)
+                Console.WriteLine($"    [{i + 1}] {suitable[i]}");
+            Console.WriteLine("    [Enter] 使用推荐");
+            Console.WriteLine();
+
+            var modelChoice = ReadLine("选择模型编号");
+            if (!string.IsNullOrWhiteSpace(modelChoice) && int.TryParse(modelChoice, out var mi) && mi >= 1 && mi <= suitable.Count)
+                recommended = suitable[mi - 1];
+        }
 
         _options.AI.Providers[selectedProvider] = new ProviderConfig
         {
             Endpoint = endpoint,
-            ApiKey = apiKey,
-            Model = chosenModel
+            ApiKey = "",
+            Model = recommended
         };
+
+        var envVarName = GetProviderEnvVar(selectedProvider, layerName);
+        SetPersistentEnvVar(envVarName, apiKey);
 
         var layerConfig = _options.AI.GetLayerConfig(layerName);
         layerConfig.GetType().GetProperty("Provider")!.SetValue(layerConfig, selectedProvider);
-        layerConfig.GetType().GetProperty("Model")!.SetValue(layerConfig, chosenModel);
+        layerConfig.GetType().GetProperty("Model")!.SetValue(layerConfig, recommended);
         _isDirty = true;
 
         Console.WriteLine();
-        if (isLocalProvider)
+        Console.WriteLine($"  ✓ {layerName} → {selectedProvider} / {recommended}");
+        Console.WriteLine($"  🔑 API Key 已存入环境变量 {envVarName}（永久保存）");
+    }
+
+    private static async Task<List<string>> FetchModelListAsync(string endpoint, string apiKey, CancellationToken ct)
+    {
+        try
         {
-            Console.WriteLine($"  ✓ {layerName} 本地提供商已配置");
+            var client = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+            client.DefaultRequestHeaders.Authorization = new global::System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", apiKey);
+
+            var baseUrl = endpoint.TrimEnd('/');
+            var response = await client.GetStringAsync($"{baseUrl}/models", ct);
+            using var doc = JsonDocument.Parse(response);
+            var models = new List<string>();
+
+            if (doc.RootElement.TryGetProperty("data", out var data))
+            {
+                foreach (var item in data.EnumerateArray())
+                {
+                    if (item.TryGetProperty("id", out var id))
+                        models.Add(id.GetString()!);
+                }
+            }
+
+            return models;
         }
-        else if (await ValidateApiKeyAsync(endpoint, apiKey, chosenModel, ct))
-            Console.WriteLine($"  ✓ {layerName} API 配置成功，连接正常");
-        else
-            Console.WriteLine($"  ⚠️ {layerName} API 配置已保存，但连接失败");
+        catch
+        {
+            return new List<string>();
+        }
+    }
+
+    private static List<string> FilterModelsForLayer(string layerName, List<string> allModels)
+    {
+        const StringComparison c = StringComparison.OrdinalIgnoreCase;
+
+        if (layerName == "L0")
+        {
+            // Embedding-capable models
+            return allModels
+                .Where(m =>
+                    m.Contains("embed", c) || m.Contains("Embed", c) ||
+                    m.Contains("bge-", c) || m.Contains("BGE", c) ||
+                    m.Contains("text-embedding", c))
+                .OrderByDescending(m => m.Contains("large", c) || m.Contains("v4", c) || m.Contains("v3", c) ? 2 :
+                                       m.Contains("small", c) || m.Contains("v1", c) ? 0 : 1)
+                .ThenBy(m => m.Length)
+                .ToList();
+        }
+
+        if (layerName == "L1")
+        {
+            // Fast/cheap chat models
+            return allModels
+                .Where(m =>
+                    !m.Contains("embed", c) && !m.Contains("Embed", c) &&
+                    !m.Contains("rerank", c) && !m.Contains("image", c) &&
+                    !m.Contains("vl-", c) && !m.Contains("vision", c) &&
+                    !m.Contains("ocr", c) && !m.Contains("asr", c) &&
+                    !m.Contains("tts", c) && !m.Contains("speech", c) &&
+                    !m.Contains("omni", c))
+                .OrderBy(m => m.Contains("flash", c) || m.Contains("turbo", c) || m.Contains("lite", c) ? 3 :
+                              m.Contains("plus", c) || m.Contains("air", c) ? 2 :
+                              m.Contains("pro", c) || m.Contains("max", c) || m.Contains("ultra", c) ? 0 : 1)
+                .ThenBy(m => m.Length)
+                .ToList();
+        }
+
+        // L2: Deep/reasoning models
+        return allModels
+            .Where(m =>
+                !m.Contains("embed", c) && !m.Contains("Embed", c) &&
+                !m.Contains("rerank", c) && !m.Contains("image", c) &&
+                !m.Contains("vl-", c) && !m.Contains("vision", c) &&
+                !m.Contains("ocr", c) && !m.Contains("asr", c) &&
+                !m.Contains("tts", c) && !m.Contains("speech", c) &&
+                !m.Contains("omni", c) && !m.Contains("flash", c) &&
+                !m.Contains("turbo", c) && !m.Contains("lite", c))
+            .OrderByDescending(m => m.Contains("pro", c) || m.Contains("max", c) || m.Contains("ultra", c) ? 3 :
+                                    m.Contains("reasoning", c) || m.Contains("think", c) || m.Contains("r1", c) ? 2 : 1)
+            .ThenByDescending(m => m.Length)
+            .ToList();
     }
 
     private async Task ConfigureLocalModeAsync(string layerName, HardwareInfo hwInfo, CancellationToken ct)
@@ -478,6 +584,29 @@ public class InteractiveSetupWizard
             }
         }
         return key;
+    }
+
+    private static string GetProviderEnvVar(string providerName, string layerName)
+    {
+        var p = providerName.ToUpperInvariant();
+        if (p == "DEEPSEEK") return "DEEPSEEK_API_KEY";
+        if (p == "SILICONFLOW") return "SILICONFLOW_API_KEY";
+        if (p == "ALIYUN") return "DASHSCOPE_API_KEY";
+        if (p == "OPENAI") return "OPENAI_API_KEY";
+        if (p == "ANTHROPIC") return "ANTHROPIC_API_KEY";
+        return $"{p}_API_KEY";
+    }
+
+    private static void SetPersistentEnvVar(string name, string value)
+    {
+        try
+        {
+            Environment.SetEnvironmentVariable(name, value, EnvironmentVariableTarget.User);
+        }
+        catch
+        {
+            Environment.SetEnvironmentVariable(name, value, EnvironmentVariableTarget.Process);
+        }
     }
 
     private async Task<bool> ValidateApiKeyAsync(string endpoint, string apiKey, string model, CancellationToken ct)

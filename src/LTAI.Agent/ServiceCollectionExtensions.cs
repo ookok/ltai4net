@@ -5,23 +5,25 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using LTAI.Agent.Agents;
 using LTAI.Agent.Middleware;
+using LTAI.Agent.Routing;
 using LTAI.Agent.Workflows;
 
 namespace LTAI.Agent;
 
 public static class ServiceCollectionExtensions
 {
-    /// Note: AddLTAIAgent() is not currently called from any entry point.
-    /// AddLTAIMAF() is the primary agent setup path.
-    /// Kept for forwards-compat: this method registers HandoffMeshWorkflow (MAF-native)
-    /// which replaces the legacy keyword-based AgentMeshWorkflow.
     public static IServiceCollection AddLTAIAgent(this IServiceCollection services)
     {
+        services.AddSingleton<IntentRouter>();
         services.AddSingleton<HandoffMeshWorkflow>();
+        services.AddSingleton<CollaborativeMeshWorkflow>();
+        services.AddSingleton<AgentMeshWorkflow>();
+        services.AddSingleton<HumanInTheLoopReview>();
         services.AddSingleton<PromptShieldMiddleware>();
         services.AddSingleton<InputClassifierMiddleware>();
         services.AddSingleton<DNASafetyMiddleware>();
         services.AddSingleton<OutputReviewMiddleware>();
+        services.AddSingleton<BudgetTrackingMiddleware>();
         services.AddSingleton<AgentRegistry>();
         services.AddSingleton<IAgentFactory, AgentFactory>();
 
@@ -88,6 +90,10 @@ public static class ServiceCollectionExtensions
                 case "output_review":
                     var outputReview = sp.GetRequiredService<OutputReviewMiddleware>();
                     builder.Use(outputReview.InvokeAsync, null);
+                    break;
+                case "budget_tracking":
+                    var budgetTracking = sp.GetRequiredService<BudgetTrackingMiddleware>();
+                    builder.Use(budgetTracking.InvokeAsync, null);
                     break;
             }
         }

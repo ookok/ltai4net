@@ -1,4 +1,4 @@
-using LTAI.Vector.Knowledge;
+using LTAI.Knowledge.Vector;
 using Xunit;
 
 namespace LTAI.Tests;

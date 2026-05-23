@@ -32,6 +32,12 @@ using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// 从 secrets JSON 文件加载所有密钥到环境变量
+var secretsPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Desktop), "secrets_export.json");
+SecretVault.LoadFromJsonFile(secretsPath);
+// 备选路径: 项目根目录
+SecretVault.LoadFromJsonFile(Path.Combine(AppContext.BaseDirectory, "secrets_export.json"));
+
 var configPath = Path.Combine(AppContext.BaseDirectory, "appsettings.json");
 var isFirstRun = !File.Exists(configPath) || new FileInfo(configPath).Length < 50;
 
@@ -80,8 +86,7 @@ var l0ProviderConfig = ltaiOptions.AI.Providers.TryGetValue(l0.Provider, out var
 var l0ApiKey = l0ProviderConfig?.ApiKey ?? "";
 if (string.IsNullOrEmpty(l0ApiKey))
 {
-    var secretKey = $"{l0.Provider}_api_key";
-    l0ApiKey = SecretVault.Instance.Get(secretKey);
+    l0ApiKey = Environment.GetEnvironmentVariable($"{l0.Provider.ToUpperInvariant()}_API_KEY") ?? "";
 }
 
 var synapticDir = System.IO.Path.Combine(AppContext.BaseDirectory, "synaptic");
@@ -122,8 +127,8 @@ var l0pc2 = ltaiOptions.AI.Providers.TryGetValue(l0Check.Provider, out var l0pc3
 var l0KeySource = "local";
 if (l0pc2 != null && !string.IsNullOrEmpty(l0pc2.ApiKey))
     l0KeySource = "appsettings";
-else if (!string.IsNullOrEmpty(SecretVault.Instance.Get($"{l0Check.Provider}_api_key")))
-    l0KeySource = "secrets.enc";
+else if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable($"{l0Check.Provider.ToUpperInvariant()}_API_KEY")))
+    l0KeySource = "env";
 
 var onnxEmbeddingPath2 = System.IO.Path.Combine(AppContext.BaseDirectory, "synaptic", "models", "embedding", "model.onnx");
 
@@ -140,12 +145,12 @@ else
     logger.LogInformation("Embedding: local backend (fallback)");
 }
 
-var token = SecretVault.Instance.Get("a2a_bearer_token");
+var token = Environment.GetEnvironmentVariable("A2A_BEARER_TOKEN") ?? "";
 if (string.IsNullOrWhiteSpace(token))
 {
     token = Convert.ToHexString(RandomNumberGenerator.GetBytes(32)).ToLowerInvariant();
-    SecretVault.Instance.Set("a2a_bearer_token", token);
-    logger.LogInformation("Generated new A2A Bearer token: {Token}", token[..16] + "...");
+    Environment.SetEnvironmentVariable("A2A_BEARER_TOKEN", token, EnvironmentVariableTarget.Process);
+    logger.LogInformation("Generated new A2A Bearer token: {Token}...", token[..16]);
 }
 
 var toolRegistry = sp.GetRequiredService<AIToolRegistry>();

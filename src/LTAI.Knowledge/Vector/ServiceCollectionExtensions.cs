@@ -1,7 +1,8 @@
 using LTAI.Core.System;
+using LTAI.Knowledge.Core;
+using LTAI.Knowledge.Services;
 using LTAI.Knowledge.Vector.Embedding;
 using LTAI.Knowledge.Vector.Interfaces;
-using LTAI.Knowledge.Core;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -187,7 +188,6 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<MultiDocFusion>();
 
         services.AddSingleton<KnowledgeBase>();
-        services.AddSingleton<KnowledgeGraph>();
         services.AddSingleton<RelationEngine>();
         services.AddSingleton<TemporalCompressor>();
         services.AddSingleton<SignalCleaner>();
@@ -220,6 +220,20 @@ public static class ServiceCollectionExtensions
             return new KnowQLQueryService(artifactStore,
                 provenanceTracker, agenticRAG, kg, logger);
         });
+
+        // Markdown-based knowledge graph (lat.md folder)
+        services.AddSingleton(sp =>
+        {
+            var rootPath = Directory.GetCurrentDirectory();
+            var embedding = sp.GetService<IEmbeddingBackend>();
+            var vectorStore = sp.GetService<IVectorStore>();
+            var graph = new MarkdownKnowledgeGraph(rootPath, embedding, vectorStore);
+            graph.Initialize();
+            return graph;
+        });
+
+        // Code graph auto-index background service
+        services.AddHostedService<CodeGraphSyncService>();
 
         return services;
     }

@@ -6,18 +6,43 @@ using Microsoft.Extensions.Logging;
 
 namespace LTAI.Knowledge.Core;
 
-public class KnowledgeGraph
+public class KnowledgeGraph : IDisposable
 {
     private readonly Dictionary<string, Entity> _nodesIndex = new();
     private readonly Dictionary<string, Dictionary<string, List<string>>> _adjacency = new();
     private readonly List<Triplet> _triplets = new();
     private readonly ReaderWriterLockSlim _lock = new();
     private readonly ILogger<KnowledgeGraph> _logger;
+    private readonly CancellationTokenSource _saveCts = new();
+    private Task? _saveLoop;
+    private volatile int _dirtyCount;
 
     public KnowledgeGraph(ILogger<KnowledgeGraph> logger)
     {
         _logger = logger;
+        _saveLoop = Task.Run(() => PeriodicSaveLoop(_saveCts.Token));
     }
+
+    private async Task PeriodicSaveLoop(CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                await Task.Delay(TimeSpan.FromMinutes(5), ct);
+                if (_dirtyCount > 0)
+                {
+                    await SaveToDiskAsync();
+                    _dirtyCount = 0;
+                    _logger.LogDebug("KnowledgeGraph: Auto-saved ({Count} dirty operations)", _dirtyCount);
+                }
+            }
+            catch (OperationCanceledException) { break; }
+            catch (Exception ex) { _logger.LogWarning(ex, "KnowledgeGraph auto-save failed"); }
+        }
+    }
+
+    public void MarkDirty() => Interlocked.Increment(ref _dirtyCount);
 
     public void AddEntity(Entity entity)
     {
@@ -26,6 +51,7 @@ public class KnowledgeGraph
         {
             _nodesIndex[entity.Id] = entity;
             _adjacency.TryAdd(entity.Id, new());
+            MarkDirty();
         }
         finally { _lock.ExitWriteLock(); }
     }
@@ -329,5 +355,13 @@ public class KnowledgeGraph
         }
 
         return results;
+    }
+
+    public void Dispose()
+    {
+        _saveCts.Cancel();
+        try { SaveToDiskAsync().GetAwaiter().GetResult(); } catch { }
+        _saveCts.Dispose();
+        _lock.Dispose();
     }
 }

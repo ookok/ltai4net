@@ -1,4 +1,4 @@
-&lt;#
+<#
 .SYNOPSIS
     LTAI 一键模型下载脚本
 .DESCRIPTION
@@ -29,7 +29,7 @@
 .EXAMPLE
     .\setup-models.ps1 -Layers L0,L1,L2 -Type all -Mirror -Force
     使用国内镜像下载全部模型，覆盖已存在的。
-#&gt;
+#>
 [CmdletBinding()]
 param(
     [ValidateSet('auto', 'L0', 'L1', 'L2')]
@@ -82,13 +82,13 @@ function Get-HardwareInfo {
             $cs = Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue
             if ($cs) { $memoryMB = [math]::Round($cs.TotalPhysicalMemory / 1MB) }
         } elseif ($IsLinux) {
-            $meminfo = Get-Content /proc/meminfo 2&gt;$null
+            $meminfo = Get-Content /proc/meminfo 2>$null
             $memTotalLine = $meminfo | Where-Object { $_ -match 'MemTotal:' }
             if ($memTotalLine -and $memTotalLine -match '(\d+)') {
                 $memoryMB = [math]::Round([int]$Matches[1] / 1024)
             }
         } elseif ($IsMacOS) {
-            $mem = sysctl -n hw.memsize 2&gt;$null
+            $mem = sysctl -n hw.memsize 2>$null
             if ($mem) { $memoryMB = [math]::Round([long]$mem / 1MB) }
         }
     } catch {}
@@ -143,7 +143,8 @@ function Select-Models {
     param($Hardware, $TargetLayers, $DownloadType)
 
     $selected = @()
-    $targetLayerSet = [System.Collections.Generic.HashSet[string]]::new($TargetLayers | ForEach-Object { $_.ToUpper() })
+    $targetLayerSet = [System.Collections.Generic.HashSet[string]]::new()
+    $TargetLayers | ForEach-Object { [void]$targetLayerSet.Add($_.ToUpper()) }
 
     foreach ($m in $script:AllModels) {
         if ($targetLayerSet.Count -gt 0 -and -not $targetLayerSet.Contains($m.Layer)) { continue }
@@ -159,7 +160,7 @@ function Select-Models {
         }
         else {
             # recommended: best per layer based on RAM
-            # L0: bge-large-zh (standard) if &gt;= 2GB, else bge-small (minimal)
+            # L0: bge-large-zh (standard) if >= 2GB, else bge-small (minimal)
             # L1: Qwen2.5 1.5B if 4GB+, Qwen2.5 3B if 8GB+, else RWKV 0.4B
             # L2: Qwen2.5 7B if 16GB+, else skip
             if ($m.Layer -eq 'L0') {

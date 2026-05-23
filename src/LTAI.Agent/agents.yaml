@@ -1,8 +1,12 @@
 # LTAI v6 - Declarative Agent Configuration
-# Agents are defined declaratively and loaded by the Agent Registry at startup.
+# L0 (Embedding): aliyun text-embedding-v3 / siliconflow BGE
+# L1 (Fast):     deepseek-v4-flash / qwen-turbo
+# L2 (Deep):     deepseek-v4-pro / qwen-max
 
 global:
   default_model: deepseek-v4-pro
+  l1_model: deepseek-v4-flash
+  l2_model: deepseek-v4-pro
   daily_budget_usd: 10.00
   max_collaboration_rounds: 5
   enable_devui: true
@@ -26,6 +30,7 @@ agents:
       - prompt_shield
       - input_classifier
       - dna_safety
+      - budget_tracking
       - output_review
     tools:
       - filesystem
@@ -57,6 +62,7 @@ agents:
       - prompt_shield
       - input_classifier
       - dna_safety
+      - budget_tracking
       - output_review
     tools:
       - code_analyze
@@ -86,6 +92,7 @@ agents:
       - prompt_shield
       - input_classifier
       - dna_safety
+      - budget_tracking
       - output_review
     tools:
       - eia_air
@@ -110,6 +117,8 @@ agents:
       - prompt_shield
       - input_classifier
       - dna_safety
+      - budget_tracking
+      - output_review
     tools:
       - math
       - websearch
@@ -118,3 +127,27 @@ agents:
       temperature: 0.3
       max_tokens: 16384
       max_search_depth: 5
+
+  - name: eia_critic
+    type: eia_agent
+    model: deepseek-v4-pro
+    instructions: |
+      EIA 质量审核员。验证 EIAAgent 输出的：规范引用是否为最新版本（GB 3095-2012、HJ 2.2-2018 等）、模型参数是否合理范围、数值结果与输入参数是否一致、结论是否有数据支撑。
+      发现问题时，输出:
+      - 审核通过项：[列出合格条目]
+      - 审核问题项：[列出问题及修正建议]
+      - 综合评分：0.0-1.0
+    middleware:
+      - prompt_shield
+      - input_classifier
+      - dna_safety
+      - budget_tracking
+      - output_review
+    tools:
+      - eia_air
+      - eia_water
+      - eia_ecological
+      - gis_analysis
+    options:
+      temperature: 0.1
+      max_tokens: 4096

@@ -2,6 +2,7 @@ using System.ComponentModel;
 
 namespace LTAI.Tools.General;
 
+[Obsolete("Use LTAI.Agent.Tools.FileSystemTools instead. This class is deprecated and will be removed.")]
 public static class FileSystemTools
 {
     [Description("Reads the contents of a file from the local filesystem")]

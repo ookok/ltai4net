@@ -12,7 +12,12 @@ public sealed class DNASafetyMiddleware
     {
         "hack", "exploit", "malware", "ransomware", "phishing",
         "social engineering", "password crack", "ddos", "backdoor",
-        "illegal", "harmful", "self-harm", "violence"
+        "illegal", "harmful", "self-harm", "violence",
+        "黑客", "越权", "提权", "脱库", "漏洞利用", "0day", "payload",
+        "木马", "蠕虫", "病毒植入", "钓鱼网站", "撞库", "爆破密码",
+        "自杀", "自残", "暴力恐怖", "制造武器", "毒品制作",
+        "人肉搜索", "窃取隐私", "非法入侵", "伪造证件",
+        "色情", "赌博", "洗钱"
     };
 
     public DNASafetyMiddleware(ILogger<DNASafetyMiddleware> logger)

@@ -110,4 +110,16 @@ public sealed class Personality
             ["adjustments"] = _adjustments.Count,
         };
     }
+
+    public List<string> GetTraitDescriptions()
+    {
+        var traits = new List<string>();
+        traits.AddRange(_profile.Values);
+        traits.AddRange(_profile.Interests);
+        if (_profile.Openness > 0.5) traits.Add("open-minded");
+        if (_profile.Conscientiousness > 0.5) traits.Add("detail-oriented");
+        if (_profile.Extraversion > 0.5) traits.Add("engaging");
+        if (_profile.Agreeableness > 0.5) traits.Add("collaborative");
+        return traits;
+    }
 }

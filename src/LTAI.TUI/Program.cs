@@ -7,6 +7,7 @@ using LTAI.Tools.CodeEngine;
 using LTAI.Tools.Reasoning;
 using LTAI.Core;
 using LTAI.Core.Configuration;
+using LTAI.Core.Setup;
 using LTAI.Core.System;
 using LTAI.DNA;
 using LTAI.Agent;
@@ -28,6 +29,16 @@ if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
 
 Console.Title = "LTAI Dev Console";
 
+var configPath = Path.Combine(AppContext.BaseDirectory, "appsettings.json");
+var isFirstRun = !File.Exists(configPath) || new FileInfo(configPath).Length < 50;
+
+if (isFirstRun)
+{
+    Console.WriteLine("检测到首次运行，启动配置向导...");
+    var setupWizard = new InteractiveSetupWizard(configPath);
+    await setupWizard.RunAsync();
+}
+
 var services = new ServiceCollection();
 services.AddLogging(b => b.SetMinimumLevel(LogLevel.Warning));
 
@@ -44,6 +55,7 @@ if (ltaiOptions.AI.Providers.Count == 0)
 {
     ltaiOptions.AI.Providers["deepseek"] = new ProviderConfig { Endpoint = "https://api.deepseek.com", Model = "deepseek-v4-pro" };
     ltaiOptions.AI.Providers["deepseek-fast"] = new ProviderConfig { Endpoint = "https://api.deepseek.com", Model = "deepseek-v4-flash" };
+    Console.WriteLine("未检测到提供商配置，使用 DeepSeek 默认配置。运行 'ltai setup' 重新配置。");
 }
 
 

@@ -399,7 +399,7 @@ public sealed class LivingTreeSystem
         _echoDetector.RecordResponse(model, response[..Math.Min(response.Length, 500)]);
         if (_taskPipeline.HasPending) _logger.LogDebug("TaskPipeline: {Count} pending tasks", _taskPipeline.GetStats()["pending"]);
 
-        if (++_requestCount % TrainingInterval == 0)
+        if (++_requestCount % TrainingInterval == 0 && _options.Value.AI.OnnxEnabled)
         {
             _ = Task.Run(() => TriggerPeriodicTraining());
         }

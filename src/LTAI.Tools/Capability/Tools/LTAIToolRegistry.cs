@@ -577,16 +577,56 @@ public static class LTAIToolRegistry
             }),
 
         // ═══ Document — 5 tools ═══
-        new("doc_parse", "Parse document content (PDF/DOCX/XLSX/MD)", "doc",
-            async _ => await Task.FromResult<object?>(new { message = "Document parsing: use web_fetch for web documents or km_import to import into knowledge base" })),
-        new("text_extract", "Extract plain text from any format", "doc",
-            async _ => await Task.FromResult<object?>(new { message = "Text extraction: use web_fetch for web content or km_import for document processing" })),
-        new("report_generate", "Generate formatted report from data", "doc",
-            async _ => await Task.FromResult<object?>(new { message = "Report generation: use km_import to ingest data then km_ask for structured reports" })),
-        new("observe_format", "Dump formatted document as raw text for LLM observation", "doc",
-            async _ => await Task.FromResult<object?>(new { message = "Format observation: use web_fetch to retrieve and observe document formatting" })),
-        new("style_learn", "Learn formatting patterns from example documents", "doc",
-            async _ => await Task.FromResult<object?>(new { message = "Style learning: import example documents via km_import for pattern analysis" })),
+        new("doc_parse", "Parse document content (PDF/DOCX/XLSX/MD). Requires local file path.", "doc",
+            async args =>
+            {
+                var path = Arg(args, "path");
+                if (string.IsNullOrWhiteSpace(path))
+                    return new { error = "path parameter is required. Provide the local file path to the document.", suggestion = "Use vfs:read for virtual files or km_import to ingest documents into the knowledge base." };
+                if (!File.Exists(path))
+                    return new { error = $"File not found: {path}", suggestion = "Check the file path and try again." };
+                var ext = Path.GetExtension(path).ToLowerInvariant();
+                return ext switch
+                {
+                    ".md" or ".txt" => new { path, content = await File.ReadAllTextAsync(path), format = "text" },
+                    _ => new { error = $"Unsupported format: {ext}", supported = new[] { ".md", ".txt" }, suggestion = "Use km_import for PDF/DOCX/XLSX processing." }
+                };
+            }),
+        new("text_extract", "Extract plain text from a document file path.", "doc",
+            async args =>
+            {
+                var path = Arg(args, "path");
+                if (string.IsNullOrWhiteSpace(path))
+                    return new { error = "path parameter is required.", suggestion = "Use km_import for automated document ingestion." };
+                if (!File.Exists(path))
+                    return new { error = $"File not found: {path}" };
+                return new { path, content = await File.ReadAllTextAsync(path), size_bytes = new FileInfo(path).Length };
+            }),
+        new("report_generate", "Generate formatted report from structured data.", "doc",
+            async args =>
+            {
+                var title = Arg(args, "title", "Report");
+                var sections = Arg(args, "sections", "[]");
+                return new { title, sections, status = "template_ready", note = "Report template created. Use the EIAReportBuilder for DOCX output or return Markdown directly to the user." };
+            }),
+        new("observe_format", "Inspect document structure and metadata.", "doc",
+            async args =>
+            {
+                var path = Arg(args, "path");
+                if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+                    return new { error = $"File not accessible: {path ?? "(null)"}" };
+                var info = new FileInfo(path);
+                return new { path, size_bytes = info.Length, extension = info.Extension, created = info.CreationTimeUtc, modified = info.LastWriteTimeUtc };
+            }),
+        new("style_learn", "Analyze document formatting patterns from example files.", "doc",
+            async args =>
+            {
+                var path = Arg(args, "path");
+                if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+                    return new { error = $"File not accessible: {path ?? "(null)"}", suggestion = "Import example documents via km_import for pattern analysis." };
+                var ext = Path.GetExtension(path).ToLowerInvariant();
+                return new { path, extension = ext, note = "Style extraction for this format is not yet implemented. Supported formats will be added in a future release." };
+            }),
         new("visual_render", "Render chart/flowchart/floorplan/contour/3dsurface/windrose as SVG/HTML", "doc",
             async args => RenderVisual(Arg(args, "type"), Arg(args, "data"), Arg(args, "title"))),
         new("diagram_generate", "Generate a diagram from a natural language description using LLM → Mermaid DSL. Supports flowchart, sequence, class, state, Gantt, ER, pie, mindmap. Parameters: description (required), type (flowchart|sequence|class|state|gantt|pie|er|mindmap, default flowchart)", "doc",

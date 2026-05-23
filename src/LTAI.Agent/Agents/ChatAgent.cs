@@ -11,6 +11,8 @@ public sealed class ChatAgent : AIAgent
 {
     private readonly ChatClientAgent _inner;
     private readonly ILogger<ChatAgent> _logger;
+    private readonly List<(string role, string content)> _conversationHistory = new();
+    private const int MaxHistoryTurns = 20;
 
     public override string Name { get; }
     public override string Description { get; }
@@ -41,14 +43,64 @@ public sealed class ChatAgent : AIAgent
     {
         var msgList = messages.ToList();
         var userMsg = msgList.LastOrDefault(m => m.Role == ChatRole.User);
-
         if (userMsg is null)
             return new AgentResponse(new ChatMessage(ChatRole.Assistant, "No user message received."));
 
-        _logger.LogInformation("ChatAgent [{Name}]: {Query}", Name,
-            userMsg.Text?[..Math.Min(userMsg.Text?.Length ?? 0, 200)]);
+        var query = userMsg.Text ?? "";
+        _logger.LogInformation("ChatAgent [{Name}]: {Query}", Name, query[..Math.Min(query.Length, 200)]);
 
-        return await _inner.RunAsync(messages, session, options, cancellationToken);
+        UpdateHistory("user", query);
+
+        if (query.Trim().StartsWith('/'))
+        {
+            return await HandleSlashCommand(query, session, options, cancellationToken);
+        }
+
+        if (_conversationHistory.Count > 6)
+        {
+            var systemMsg = new ChatMessage(ChatRole.System,
+                "Previous conversation summary:\n" + string.Join("\n",
+                    _conversationHistory.TakeLast(10).Select(h => $"[{h.role}]: {h.content[..Math.Min(h.content.Length, 200)]}")));
+            msgList.Insert(0, systemMsg);
+        }
+
+        var response = await _inner.RunAsync(messages, session, options, cancellationToken);
+
+        var responseText = response.Text ?? "";
+        UpdateHistory("assistant", responseText[..Math.Min(responseText.Length, 500)]);
+
+        return response;
+    }
+
+    private async Task<AgentResponse> HandleSlashCommand(
+        string command, AgentSession? session, AgentRunOptions? options, CancellationToken ct)
+    {
+        var cmd = command.Trim().ToLowerInvariant();
+        switch (cmd)
+        {
+            case "/help":
+                return new AgentResponse(new ChatMessage(ChatRole.Assistant,
+                    "LTAI Chat Agent. Commands: /help /status /clear /budget"));
+            case "/status":
+                return new AgentResponse(new ChatMessage(ChatRole.Assistant,
+                    $"Chat Agent [{Name}] — History: {_conversationHistory.Count} turns, Model: deepseek-v4-pro"));
+            case "/clear":
+                _conversationHistory.Clear();
+                return new AgentResponse(new ChatMessage(ChatRole.Assistant, "Conversation history cleared."));
+            case "/budget":
+                return new AgentResponse(new ChatMessage(ChatRole.Assistant, "Budget tracking is enabled for this agent."));
+            default:
+                return await _inner.RunAsync(
+                    [new ChatMessage(ChatRole.User, command)],
+                    session, options, ct);
+        }
+    }
+
+    private void UpdateHistory(string role, string content)
+    {
+        _conversationHistory.Add((role, content));
+        while (_conversationHistory.Count > MaxHistoryTurns)
+            _conversationHistory.RemoveAt(0);
     }
 
     protected override async IAsyncEnumerable<AgentResponseUpdate> RunCoreStreamingAsync(
@@ -65,14 +117,10 @@ public sealed class ChatAgent : AIAgent
         => _inner.CreateSessionAsync(cancellationToken);
 
     protected override ValueTask<JsonElement> SerializeSessionCoreAsync(
-        AgentSession session,
-        JsonSerializerOptions? jsonSerializerOptions = null,
-        CancellationToken cancellationToken = default)
-        => _inner.SerializeSessionAsync(session, jsonSerializerOptions, cancellationToken);
+        AgentSession session, JsonSerializerOptions? o = null, CancellationToken ct = default)
+        => _inner.SerializeSessionAsync(session, o, ct);
 
     protected override ValueTask<AgentSession> DeserializeSessionCoreAsync(
-        JsonElement serializedState,
-        JsonSerializerOptions? jsonSerializerOptions = null,
-        CancellationToken cancellationToken = default)
-        => _inner.DeserializeSessionAsync(serializedState, jsonSerializerOptions, cancellationToken);
+        JsonElement state, JsonSerializerOptions? o = null, CancellationToken ct = default)
+        => _inner.DeserializeSessionAsync(state, o, ct);
 }

@@ -77,3 +77,26 @@ public sealed class ProgressEvent
     public string? Stage { get; init; }
     public DateTime Timestamp { get; init; } = DateTime.UtcNow;
 }
+
+public interface ISandboxExecutor
+{
+    Task<SandboxExecutionResult> ExecuteCommandAsync(
+        string command,
+        int timeoutSeconds = 30,
+        int memoryMb = 256,
+        bool allowNetwork = false,
+        CancellationToken cancellationToken = default);
+}
+
+public sealed class SandboxExecutionResult
+{
+    public bool Success { get; init; }
+    public string Stdout { get; init; } = "";
+    public string Stderr { get; init; } = "";
+    public int ExitCode { get; init; }
+    public long ExecutionTimeMs { get; init; }
+    public long PeakMemoryKb { get; init; }
+    public string? Error { get; init; }
+    public bool TimedOut { get; init; }
+    public bool Sandboxed { get; init; }
+}

@@ -3,12 +3,12 @@ using Microsoft.Extensions.Logging;
 
 namespace LTAI.AI.Governors;
 
-public record CorrectionSample
+public sealed class CorrectionSample
 {
     public string Query { get; init; } = "";
     public string WrongOutput { get; init; } = "";
-    public string CorrectOutput { get; init; } = "";
-    public string ErrorType { get; init; } = "";    // logic, factual, incomplete, syntax
+    public string CorrectOutput { get; set; } = "";
+    public string ErrorType { get; set; } = "";    // logic, factual, incomplete, syntax
     public float OriginalReward { get; init; }
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
     public bool UsedForTraining { get; set; }

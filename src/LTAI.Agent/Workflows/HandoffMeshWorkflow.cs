@@ -1,3 +1,4 @@
+using LTAI.Agent.Routing;
 using Microsoft.Agents.AI;
 using Microsoft.Agents.AI.Workflows;
 using Microsoft.Extensions.AI;
@@ -10,13 +11,15 @@ namespace LTAI.Agent.Workflows;
 public sealed class HandoffMeshWorkflow
 {
     private readonly ILogger<HandoffMeshWorkflow> _logger;
+    private readonly IntentRouter _router;
     private readonly Dictionary<string, AIAgent> _agents = new();
     private AIAgent? _initialAgent;
     private Workflow? _cachedWorkflow;
 
-    public HandoffMeshWorkflow(ILogger<HandoffMeshWorkflow> logger)
+    public HandoffMeshWorkflow(ILogger<HandoffMeshWorkflow> logger, IntentRouter router)
     {
         _logger = logger;
+        _router = router;
     }
 
     public void SetInitialAgent(AIAgent agent)
@@ -42,7 +45,7 @@ public sealed class HandoffMeshWorkflow
 
         var builder = AgentWorkflowBuilder.CreateHandoffBuilderWith(_initialAgent)
             .WithName("LTAI Handoff Mesh")
-            .WithDescription("Multi-agent handoff workflow with keyword-based routing");
+            .WithDescription("Multi-agent handoff workflow with intent-based routing");
 
         foreach (var (name, agent) in _agents)
         {
@@ -69,13 +72,12 @@ public sealed class HandoffMeshWorkflow
                 "No message to process."));
         }
 
-        var intent = ClassifyRouteIntent(userMsg.Text);
-        var targetAgent = GetBestAgent(intent);
+        var route = _router.Classify(userMsg.Text);
 
-        _logger.LogInformation("HandoffMeshWorkflow: intent={Intent} -> agent={Agent}",
-            intent, targetAgent?.Name ?? "fallback");
+        _logger.LogInformation("HandoffMeshWorkflow: intent={Intent} -> agent={Agent} conf={Conf:F2}",
+            route.Intent, route.TargetAgent, route.Confidence);
 
-        if (targetAgent is not null)
+        if (_agents.TryGetValue(route.TargetAgent, out var targetAgent) && route.Confidence >= 0.3f)
             return await targetAgent.RunAsync(messages, session, null, cancellationToken);
 
         if (_agents.TryGetValue("chat", out var chatAgent))
@@ -93,53 +95,19 @@ public sealed class HandoffMeshWorkflow
     {
         var msgList = messages.ToList();
         var userMsg = msgList.LastOrDefault(m => m.Role == ChatRole.User);
-        var intent = userMsg?.Text is not null ? ClassifyRouteIntent(userMsg.Text) : "chat";
-        var targetAgent = GetBestAgent(intent)
+        var route = userMsg?.Text is not null ? _router.Classify(userMsg.Text) : null;
+        var agentName = route?.TargetAgent ?? "chat";
+        var targetAgent = _agents.GetValueOrDefault(agentName)
             ?? _agents.GetValueOrDefault("chat")
             ?? _initialAgent;
 
         if (targetAgent is null)
-        {
             yield break;
-        }
 
         await foreach (var update in targetAgent.RunStreamingAsync(
             messages, session, null, cancellationToken))
         {
             yield return update;
         }
-    }
-
-    private AIAgent? GetBestAgent(string intent)
-    {
-        return intent switch
-        {
-            "code" => _agents.GetValueOrDefault("code"),
-            "eia" => _agents.GetValueOrDefault("eia"),
-            "reasoning" => _agents.GetValueOrDefault("reasoning"),
-            _ => _agents.GetValueOrDefault("chat")
-        };
-    }
-
-    private static string ClassifyRouteIntent(string text)
-    {
-        var lower = text.ToLowerInvariant();
-
-        if (lower.Contains("code") || lower.Contains("programming") || lower.Contains("class ") ||
-            lower.Contains("function ") || lower.Contains("debug") || lower.Contains("build") ||
-            lower.Contains("test") || lower.Contains("refactor"))
-            return "code";
-
-        if (lower.Contains("环境") || lower.Contains("impact") || lower.Contains("emission") ||
-            lower.Contains("environmental") || lower.Contains("gis") || lower.Contains("map") ||
-            lower.Contains("spatial") || lower.Contains("ecological"))
-            return "eia";
-
-        if (lower.Contains("analyze") || lower.Contains("reason") || lower.Contains("think") ||
-            lower.Contains("compare") || lower.Contains("evaluate") || lower.Contains("solve") ||
-            lower.Contains("logic") || lower.Contains("为什么") || lower.Contains("如何"))
-            return "reasoning";
-
-        return "chat";
     }
 }

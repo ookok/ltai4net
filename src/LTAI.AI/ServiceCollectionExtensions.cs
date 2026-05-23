@@ -529,8 +529,14 @@ public static class ServiceCollectionExtensions
         });
 
         services.AddHttpClient(); // 确保 IHttpClientFactory 可用
-        services.AddHostedService<LocalLlmBootstrapService>(sp =>
+
+        // ONNX 训练流水线 HostedServices — 由 onnx_enabled 开关控制
+        services.AddHostedService<IHostedService>(sp =>
         {
+            var opts = sp.GetRequiredService<IOptions<LTAIOptions>>();
+            if (!opts.Value.AI.OnnxEnabled)
+                return new NoOpHostedService();
+
             var config = sp.GetRequiredService<LocalLlmBootstrapConfig>();
             var httpClientFactory = sp.GetRequiredService<IHttpClientFactory>();
             var engine = sp.GetRequiredService<IL1InferenceEngine>();
@@ -538,8 +544,12 @@ public static class ServiceCollectionExtensions
             return new LocalLlmBootstrapService(config, httpClientFactory, engine, logger!);
         });
 
-        services.AddHostedService<PretrainedModelLoader>(sp =>
+        services.AddHostedService<IHostedService>(sp =>
         {
+            var opts = sp.GetRequiredService<IOptions<LTAIOptions>>();
+            if (!opts.Value.AI.OnnxEnabled)
+                return new NoOpHostedService();
+
             var cellRegistry = sp.GetRequiredService<CellAIRegistry>();
             var logger = sp.GetService<ILogger<PretrainedModelLoader>>();
             return new PretrainedModelLoader(cellRegistry, logger);
@@ -578,8 +588,12 @@ public static class ServiceCollectionExtensions
             return new L1L2DuplexRouter(inference, memory, graphBridge, domainGraphRegistry, domainDiscovery, localLlm, metaCognition, skillTree, cache, ruleExtractor, costRouter, knowledge, classifier, cellRegistry, llm, logger);
         });
 
-        services.AddHostedService<SynapticEvolutionLoop>(sp =>
+        services.AddHostedService<IHostedService>(sp =>
         {
+            var opts = sp.GetRequiredService<IOptions<LTAIOptions>>();
+            if (!opts.Value.AI.OnnxEnabled)
+                return new NoOpHostedService();
+
             var memory = sp.GetRequiredService<SynapticMemory>();
             var trainer = sp.GetRequiredService<SynapticTrainer>();
             var inference = sp.GetRequiredService<SynapticInference>();
@@ -600,8 +614,12 @@ public static class ServiceCollectionExtensions
             return new DreamCycle(memory, graphBridge, skillTree, metaCognition, dualMemoryStore, ruleExtractor, logger);
         });
 
-        services.AddHostedService<FederatedLearningService>(sp =>
+        services.AddHostedService<IHostedService>(sp =>
         {
+            var opts = sp.GetRequiredService<IOptions<LTAIOptions>>();
+            if (!opts.Value.AI.OnnxEnabled)
+                return new NoOpHostedService();
+
             var transport = sp.GetService<IFederatedTransport>();
             var trainer = sp.GetRequiredService<SynapticTrainer>();
             var inference = sp.GetRequiredService<SynapticInference>();
@@ -621,34 +639,48 @@ public static class ServiceCollectionExtensions
         return services;
     }
 
-    private static string? ResolveApiKey(string providerName, string configuredKey)
+    private static string? ResolveApiKey(string providerName, string _)
     {
-        if (!string.IsNullOrWhiteSpace(configuredKey) && !configuredKey.Contains("YOUR_API_KEY", StringComparison.OrdinalIgnoreCase))
-            return configuredKey;
+        var p = providerName.ToUpperInvariant();
 
-        var nameUpper = providerName.ToUpperInvariant();
-
-        var isLocal = nameUpper is "OLLAMA" or "LMSTUDIO" or "LM_STUDIO" or "VLLM" or "LLAMACPP" or "LLAMA_CPP" or "OPEN_WEBUI";
-
-        var envVar = nameUpper switch
-        {
-            "DEEPSEEK" => "DEEPSEEK_API_KEY",
-            "OPENAI" => "OPENAI_API_KEY",
-            "ANTHROPIC" => "ANTHROPIC_API_KEY",
-            "GEMINI" or "GOOGLE" => "GEMINI_API_KEY",
-            "SILICONFLOW" => "SILICONFLOW_API_KEY",
-            _ => isLocal ? null : $"{nameUpper}_API_KEY"
-        };
-
-        var envKey = envVar != null ? Environment.GetEnvironmentVariable(envVar) : null;
-        if (!string.IsNullOrEmpty(envKey))
-            return envKey;
-
-        if (isLocal)
+        // 本地提供商无需 API Key
+        if (p is "OLLAMA" or "LMSTUDIO" or "LM_STUDIO" or "VLLM" or "LLAMACPP" or "LLAMA_CPP" or "OPEN_WEBUI")
             return "";
 
-        try { return SecretVault.Instance.Get(providerName); }
-        catch { return null; }
+        // 所有云端提供商的 API Key 均从环境变量读取
+        var envVar = p switch
+        {
+            "DEEPSEEK"    => "DEEPSEEK_API_KEY",
+            "OPENAI"      => "OPENAI_API_KEY",
+            "ANTHROPIC"   => "ANTHROPIC_API_KEY",
+            "GEMINI"      => "GEMINI_API_KEY",
+            "SILICONFLOW" => "SILICONFLOW_API_KEY",
+            "ALIYUN"      => "DASHSCOPE_API_KEY",
+            "ZHIPU"       => "ZHIPU_API_KEY",
+            "HUNYUAN"     => "HUNYUAN_API_KEY",
+            "BAIDU"       => "BAIDU_API_KEY",
+            "SPARK"       => "SPARK_API_KEY",
+            "MOFANG"      => "MOFANG_API_KEY",
+            "NVIDIA"      => "NVIDIA_API_KEY",
+            "BAILING"     => "BAILING_API_KEY",
+            "STEPFUN"     => "STEPFUN_API_KEY",
+            "INTERNLM"    => "INTERNLM_API_KEY",
+            "SENSETIME"   => "SENSETIME_API_KEY",
+            "MODELSCOPE"  => "MODELSCOPE_API_KEY",
+            "OPENROUTER"  => "OPENROUTER_API_KEY",
+            "XIAOMI"      => "XIAOMI_API_KEY",
+            "LONGCAT"     => "LONGCAT_API_KEY",
+            "DMXAPI"      => "DMXAPI_API_KEY",
+            "VOLCENGINE"  => "VOLCENGINE_API_KEY",
+            "MOONSHOT"    => "MOONSHOT_API_KEY",
+            "MINIMAX"     => "MINIMAX_API_KEY",
+            "GROQ"        => "GROQ_API_KEY",
+            "KIRO"        => "KIRO_API_KEY",
+            "OPENCODE"    => "OPENCODE_API_KEY",
+            _             => $"{p}_API_KEY"
+        };
+
+        return Environment.GetEnvironmentVariable(envVar);
     }
 
     private static IChatClient? CreateProviderChatClient(
@@ -669,4 +701,10 @@ public static class ServiceCollectionExtensions
             return null;
         }
     }
+}
+
+internal sealed class NoOpHostedService : IHostedService
+{
+    public Task StartAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 }
