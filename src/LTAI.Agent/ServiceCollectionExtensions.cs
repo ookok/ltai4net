@@ -1,3 +1,4 @@
+using LTAI.DNA.Safety;
 using LTAI.Models;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
@@ -16,6 +17,7 @@ public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddLTAIAgent(this IServiceCollection services)
     {
+        services.AddSingleton<SkillRegistry>();
         services.AddSingleton<IntentRouter>();
         services.AddSingleton<UnifiedIntentRouter>();
         services.AddSingleton<HandoffMeshWorkflow>();
@@ -27,10 +29,6 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<FeedbackCollector>();
         services.AddSingleton<ABExperimentEngine>();
         services.AddSingleton<FederationCoordinator>();
-        services.AddSingleton<PromptShieldMiddleware>();
-        services.AddSingleton<InputClassifierMiddleware>();
-        services.AddSingleton<DNASafetyMiddleware>();
-        services.AddSingleton<OutputReviewMiddleware>();
         services.AddSingleton<BudgetTrackingMiddleware>();
         services.AddSingleton<AgentRegistry>();
         services.AddSingleton<AgentRegistryLock>();
@@ -57,19 +55,19 @@ public static class ServiceCollectionExtensions
     {
         var loggerFactory = sp.GetRequiredService<ILoggerFactory>();
         var chatClient = sp.GetRequiredService<IChatClient>();
-        var tools = ResolveTools(sp, card.Tools);
+        var skillRegistry = sp.GetRequiredService<SkillRegistry>();
 
         AIAgent agent = card.Type switch
         {
-            AgentType.Chat => new ChatAgent(chatClient, card, tools,
+            AgentType.Chat => new ChatAgent(card, chatClient, skillRegistry,
                 loggerFactory.CreateLogger<ChatAgent>()),
-            AgentType.Code => new CodeAgent(chatClient, card, tools,
+            AgentType.Code => new CodeAgent(card, chatClient, skillRegistry,
                 loggerFactory.CreateLogger<CodeAgent>()),
-            AgentType.EIA => new EIAAgent(chatClient, card, tools,
+            AgentType.EIA => new EIAAgent(card, chatClient, skillRegistry,
                 loggerFactory.CreateLogger<EIAAgent>()),
-            AgentType.Reasoning => new ReasoningAgent(chatClient, card, tools,
+            AgentType.Reasoning => new ReasoningAgent(card, chatClient, skillRegistry,
                 loggerFactory.CreateLogger<ReasoningAgent>()),
-            _ => new ChatAgent(chatClient, card, tools,
+            _ => new ChatAgent(card, chatClient, skillRegistry,
                 loggerFactory.CreateLogger<ChatAgent>())
         };
 
@@ -84,21 +82,41 @@ public static class ServiceCollectionExtensions
         {
             switch (mwName)
             {
-                case "prompt_shield":
-                    var promptShield = sp.GetRequiredService<PromptShieldMiddleware>();
-                    builder.Use(promptShield.InvokeAsync, null);
-                    break;
-                case "input_classifier":
-                    var inputClassifier = sp.GetRequiredService<InputClassifierMiddleware>();
-                    builder.Use(inputClassifier.InvokeAsync, null);
-                    break;
-                case "dna_safety":
-                    var dnaSafety = sp.GetRequiredService<DNASafetyMiddleware>();
-                    builder.Use(dnaSafety.InvokeAsync, null);
-                    break;
-                case "output_review":
-                    var outputReview = sp.GetRequiredService<OutputReviewMiddleware>();
-                    builder.Use(outputReview.InvokeAsync, null);
+                case "unified_safety":
+                    var safetyGate = sp.GetRequiredService<UnifiedSafetyGate>();
+                    builder.Use(async (messages, session, options, inner, ct) =>
+                    {
+                        var msgList = messages.ToList();
+                        var userMsg = msgList.LastOrDefault(m => m.Role == ChatRole.User);
+                        var sessionId = (session as LTAIAgentSession)?.SessionId ?? "anon";
+
+                        var gateVerdict = await safetyGate.EvaluateInputAsync(
+                            userMsg?.Text ?? "", sessionId, ct);
+
+                        if (!gateVerdict.IsAllowed)
+                            return new AgentResponse(new ChatMessage(ChatRole.Assistant,
+                                $"[Safety] {gateVerdict.Reason}"));
+
+                        if (gateVerdict.Action == GateAction.Warn)
+                        {
+                            var logger = sp.GetRequiredService<ILoggerFactory>()
+                                .CreateLogger("UnifiedSafety");
+                            logger.LogWarning("Safety warning for {Agent}: {Reason}", card.Name, gateVerdict.Reason);
+                        }
+
+                        var response = await inner.RunAsync(messages, session, options, ct);
+
+                        if (response.Text is not null)
+                        {
+                            var outputVerdict = await safetyGate.EvaluateOutputAsync(
+                                response.Text, sessionId, ct);
+                            if (!outputVerdict.IsAllowed)
+                                return new AgentResponse(new ChatMessage(ChatRole.Assistant,
+                                    $"[Safety] Output filtered: {outputVerdict.Reason}"));
+                        }
+
+                        return response;
+                    }, null);
                     break;
                 case "budget_tracking":
                     var budgetTracking = sp.GetRequiredService<BudgetTrackingMiddleware>();
@@ -108,17 +126,6 @@ public static class ServiceCollectionExtensions
         }
 
         return builder.Build();
-    }
-
-    private static AITool[] ResolveTools(IServiceProvider sp, List<string> toolNames)
-    {
-        var allTools = sp.GetRequiredService<IEnumerable<AITool>>().ToArray();
-        if (toolNames.Count == 0) return allTools;
-
-        return allTools
-            .Where(t => toolNames.Any(n =>
-                t.Name.Contains(n, StringComparison.OrdinalIgnoreCase)))
-            .ToArray();
     }
 
     private static AgentConfig ParseYamlConfig(string yaml)

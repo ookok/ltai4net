@@ -7,58 +7,36 @@ using Microsoft.Extensions.Logging;
 
 namespace LTAI.Agent.Agents;
 
-public sealed class ReasoningAgent : AIAgent
+public sealed class ReasoningAgent : BaseAgent
 {
-    private readonly ChatClientAgent _inner;
-    private readonly ILogger<ReasoningAgent> _logger;
     private readonly int _maxSearchDepth;
     private readonly int _maxIterations;
     private readonly int _maxTokensPerRequest;
     private const double ExplorationConstant = 1.414;
 
-    public override string Name { get; }
-    public override string Description { get; }
-
     public ReasoningAgent(
-        IChatClient chatClient,
         LTAIAgentCard card,
-        IEnumerable<Microsoft.Extensions.AI.AITool> reasoningTools,
+        IChatClient brain,
+        SkillRegistry skills,
         ILogger<ReasoningAgent> logger)
+        : base(card, brain, skills, logger)
     {
-        _logger = logger;
-        Name = card.Name;
-        Description = card.Instructions;
-
         _maxSearchDepth = card.Options.TryGetValue("maxSearchDepth", out var d) && d is int depth ? depth : 5;
         _maxIterations = card.Options.TryGetValue("maxIterations", out var it) && it is int iterations ? iterations : 20;
         _maxTokensPerRequest = card.Options.TryGetValue("maxTokensPerRequest", out var mt) && mt is int maxTok ? maxTok : 8000;
-
-        _inner = chatClient.AsBuilder().BuildAIAgent(new ChatClientAgentOptions
-        {
-            Name = card.Name,
-            Description = card.Instructions,
-            ChatOptions = new() { Tools = reasoningTools.ToList() }
-        });
     }
 
-    protected override async Task<AgentResponse> RunCoreAsync(
-        IEnumerable<ChatMessage> messages,
-        AgentSession? session = null,
-        AgentRunOptions? options = null,
-        CancellationToken cancellationToken = default)
+    protected override async Task<AgentResponse> ExecuteLogicAsync(
+        AgentContext context, CancellationToken ct)
     {
-        var msgList = messages.ToList();
-        var userMsg = msgList.LastOrDefault(m => m.Role == ChatRole.User);
-        if (userMsg is null)
-            return new AgentResponse(new ChatMessage(ChatRole.Assistant, "No reasoning request received."));
-
-        var query = userMsg.Text ?? "";
+        var msgList = context.FullHistory;
+        var query = context.UserQuery;
         _logger.LogInformation("ReasoningAgent [{Name}]: MCTS reasoning depth={D} iter={I}", Name, _maxSearchDepth, _maxIterations);
 
         if (query.Length < 20)
-            return await _inner.RunAsync(messages, session, options, cancellationToken);
+            return await CallBrainAsync(msgList, ct: ct);
 
-        var result = await ExecuteMctsAsync(query, session, cancellationToken);
+        var result = await ExecuteMctsAsync(query, context.Session, ct);
         return new AgentResponse(new ChatMessage(ChatRole.Assistant, result));
     }
 
@@ -137,25 +115,25 @@ public sealed class ReasoningAgent : AIAgent
 
     private async Task<List<string>> DecomposeAsync(string q, AgentSession? s, CancellationToken ct)
     {
-        var r = await _inner.RunAsync(
+        var r = await CallBrainAsync(
             [new(ChatRole.User, $"Decompose into max {_maxSearchDepth} sub-problems, each prefixed \"- \":\n{q}")],
-            s, null, ct);
+            ct: ct);
         return (r.Text ?? "").Split('\n').Where(l => l.TrimStart().StartsWith("-")).Select(l => l.TrimStart().TrimStart('-').Trim()).Where(l => l.Length > 3).ToList();
     }
 
     private async Task<string> ExpandAsync(MctsNode n, AgentSession? s, CancellationToken ct)
     {
-        var r = await _inner.RunAsync(
+        var r = await CallBrainAsync(
             [new(ChatRole.User, $"Propose ONE concrete next step for:\n{n.State}\n\nNext step:")],
-            s, null, ct);
+            ct: ct);
         return r.Text?.Trim() ?? "";
     }
 
     private async Task<double> SimulateAsync(MctsNode n, string orig, AgentSession? s, CancellationToken ct)
     {
-        var r = await _inner.RunAsync(
+        var r = await CallBrainAsync(
             [new(ChatRole.User, $"Rate relevance to \"{orig}\":\n{n.State}\nScore (0.0-1.0):")],
-            s, null, ct);
+            ct: ct);
         return double.TryParse(r.Text?.Trim(), out var v) ? Math.Clamp(v, 0, 1) : 0.5;
     }
 
@@ -186,18 +164,10 @@ public sealed class ReasoningAgent : AIAgent
         IEnumerable<ChatMessage> messages, AgentSession? session = null, AgentRunOptions? options = null,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        var r = await RunCoreAsync(messages, session, options, cancellationToken);
+        var r = await ExecuteLogicAsync(
+            new AgentContext(messages.LastOrDefault()?.Text ?? "", messages.ToList(), session), cancellationToken);
         var t = r.Text ?? "";
         for (int i = 0; i < t.Length; i += 80)
-            yield return new AgentResponseUpdate(ChatRole.Assistant, t[i..Math.Min(i + 80, t.Length)]);
+            yield return new AgentResponseUpdate(new ChatResponseUpdate(ChatRole.Assistant, t[i..Math.Min(i + 80, t.Length)]));
     }
-
-    protected override ValueTask<AgentSession> CreateSessionCoreAsync(CancellationToken ct = default)
-        => _inner.CreateSessionAsync(ct);
-
-    protected override ValueTask<JsonElement> SerializeSessionCoreAsync(AgentSession s, JsonSerializerOptions? o = null, CancellationToken ct = default)
-        => _inner.SerializeSessionAsync(s, o, ct);
-
-    protected override ValueTask<AgentSession> DeserializeSessionCoreAsync(JsonElement j, JsonSerializerOptions? o = null, CancellationToken ct = default)
-        => _inner.DeserializeSessionAsync(j, o, ct);
 }

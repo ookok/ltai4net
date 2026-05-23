@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using LTAI.Models;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
@@ -7,11 +8,8 @@ using Microsoft.Extensions.Logging;
 
 namespace LTAI.Agent.Agents;
 
-public sealed class EIAAgent : AIAgent
+public sealed class EIAAgent : BaseAgent
 {
-    private readonly ChatClientAgent _inner;
-    private readonly ILogger<EIAAgent> _logger;
-
     private static readonly string[] RequiredStandards =
     {
         "GB 3095-2012", "HJ 2.2-2018", "HJ 2.1-2016", "HJ 2.4-2021",
@@ -42,57 +40,34 @@ public sealed class EIAAgent : AIAgent
 
     private static readonly Dictionary<string, (double min, double max, string unit)> ParamRanges = new()
     {
-        ["Q"] = (0.001, 1_000_000, "g/s"),
-        ["u"] = (0.5, 50, "m/s"),
-        ["x"] = (1, 100_000, "m"),
-        ["He"] = (1, 500, "m"),
-        ["stability"] = (0, 0, "A-F"),
-        ["Ts"] = (200, 2000, "K"),
-        ["Ta"] = (200, 350, "K"),
-        ["Vs"] = (0.1, 100, "m/s"),
+        ["Q"] = (0.001, 1_000_000, "g/s"), ["u"] = (0.5, 50, "m/s"),
+        ["x"] = (1, 100_000, "m"), ["He"] = (1, 500, "m"),
+        ["stability"] = (0, 0, "A-F"), ["Ts"] = (200, 2000, "K"),
+        ["Ta"] = (200, 350, "K"), ["Vs"] = (0.1, 100, "m/s"),
         ["D"] = (0.1, 50, "m")
     };
 
-    public override string Name { get; }
-    public override string Description { get; }
+    private static readonly Regex StandardRefPattern = new(
+        @"(GB|HJ)\s*\d{2,5}[-—]\d{4}", RegexOptions.Compiled);
 
     public EIAAgent(
-        IChatClient chatClient,
         LTAIAgentCard card,
-        IEnumerable<Microsoft.Extensions.AI.AITool> eiaTools,
+        IChatClient brain,
+        SkillRegistry skills,
         ILogger<EIAAgent> logger)
+        : base(card, brain, skills, logger) { }
+
+    protected override async Task<AgentResponse> ExecuteLogicAsync(
+        AgentContext context, CancellationToken ct)
     {
-        Name = card.Name;
-        Description = card.Instructions;
-        _logger = logger;
-
-        _inner = chatClient.AsBuilder().BuildAIAgent(new ChatClientAgentOptions
-        {
-            Name = card.Name,
-            Description = card.Instructions,
-            ChatOptions = new() { Tools = eiaTools.ToList() }
-        });
-    }
-
-    protected override async Task<AgentResponse> RunCoreAsync(
-        IEnumerable<ChatMessage> messages,
-        AgentSession? session = null,
-        AgentRunOptions? options = null,
-        CancellationToken cancellationToken = default)
-    {
-        var msgList = messages.ToList();
-        var userMsg = msgList.LastOrDefault(m => m.Role == ChatRole.User);
-        if (userMsg is null)
-            return new AgentResponse(new ChatMessage(ChatRole.Assistant, "No environmental assessment request received."));
-
-        var query = userMsg.Text ?? "";
+        var query = context.UserQuery;
         _logger.LogInformation("EIAAgent [{Name}]: Processing EIA request", Name);
 
         var preCheck = ValidateEiaParameters(query);
         if (preCheck.Count > 0)
         {
             var warnings = string.Join("\n", preCheck.Select(w => $"- ⚠️ {w}"));
-            msgList.Insert(0, new ChatMessage(ChatRole.System,
+            context.FullHistory.Insert(0, new ChatMessage(ChatRole.System,
                 $"Pre-request parameter validation:\n{warnings}\nPlease verify or clarify these parameters."));
         }
 
@@ -107,15 +82,14 @@ public sealed class EIAAgent : AIAgent
             Request: {query}
             """;
 
-        var enhancedMessages = new List<ChatMessage>(msgList.Take(msgList.Count - 1))
+        var enhancedMessages = new List<ChatMessage>(context.FullHistory.Take(context.FullHistory.Count - 1))
         {
             new(ChatRole.User, enhancedQuery)
         };
 
         _logger.LogInformation("EIAAgent [{Name}]: Enhanced prompt with {WarnCount} pre-check warnings", Name, preCheck.Count);
 
-        var response = await _inner.RunAsync(enhancedMessages, session, options, cancellationToken);
-
+        var response = await CallBrainAsync(enhancedMessages, ct: ct);
         var responseText = response.Text ?? "";
         var complianceResult = AuditEiaResponse(responseText);
 
@@ -139,7 +113,7 @@ public sealed class EIAAgent : AIAgent
         foreach (var (param, (min, max, unit)) in ParamRanges)
         {
             var pattern = $@"{param}\s*[=:]\s*([\d.]+)";
-            var match = System.Text.RegularExpressions.Regex.Match(query, pattern, System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            var match = Regex.Match(query, pattern, RegexOptions.IgnoreCase);
             if (!match.Success) continue;
 
             if (double.TryParse(match.Groups[1].Value, out var value))
@@ -155,10 +129,6 @@ public sealed class EIAAgent : AIAgent
         return warnings;
     }
 
-    private static readonly System.Text.RegularExpressions.Regex StandardRefPattern = new(
-        @"(GB|HJ)\s*\d{2,5}[-—]\d{4}",
-        System.Text.RegularExpressions.RegexOptions.Compiled);
-
     private static List<string> AuditEiaResponse(string response)
     {
         var issues = new List<string>();
@@ -168,14 +138,14 @@ public sealed class EIAAgent : AIAgent
             issues.Add("Missing references to applicable Chinese environmental standards (GB/HJ)");
 
         var standardMatches = StandardRefPattern.Matches(response);
-        foreach (System.Text.RegularExpressions.Match match in standardMatches)
+        foreach (Match match in standardMatches)
         {
-            var normalized = System.Text.RegularExpressions.Regex.Replace(match.Value, @"\s+", " ").Replace("—", "-");
+            var normalized = Regex.Replace(match.Value, @"\s+", " ").Replace("—", "-");
             if (!ValidStandards.ContainsKey(normalized))
                 issues.Add($"Standard reference '{normalized}' not found in valid standards database — verify accuracy");
         }
 
-        if (!System.Text.RegularExpressions.Regex.IsMatch(response, @"\d+\.\d+\s*(μg|mg|g)/m[³3]", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+        if (!Regex.IsMatch(response, @"\d+\.\d+\s*(μg|mg|g)/m[³3]", RegexOptions.IgnoreCase))
             issues.Add("Concentration values should include units (μg/m³ or mg/m³)");
 
         var suspiciousPatterns = new[] { "虚构", "假设", "approximately estimated" };
@@ -191,18 +161,7 @@ public sealed class EIAAgent : AIAgent
         AgentRunOptions? options = null,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        await foreach (var update in _inner.RunStreamingAsync(messages, session, options, cancellationToken))
+        await foreach (var update in CallBrainStreamingAsync(messages, cancellationToken))
             yield return update;
     }
-
-    protected override ValueTask<AgentSession> CreateSessionCoreAsync(CancellationToken cancellationToken = default)
-        => _inner.CreateSessionAsync(cancellationToken);
-
-    protected override ValueTask<JsonElement> SerializeSessionCoreAsync(
-        AgentSession session, JsonSerializerOptions? o = null, CancellationToken ct = default)
-        => _inner.SerializeSessionAsync(session, o, ct);
-
-    protected override ValueTask<AgentSession> DeserializeSessionCoreAsync(
-        JsonElement state, JsonSerializerOptions? o = null, CancellationToken ct = default)
-        => _inner.DeserializeSessionAsync(state, o, ct);
 }

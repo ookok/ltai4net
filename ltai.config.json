@@ -54,10 +54,7 @@
   "middleware": {
     "autoDiscover": true,
     "pipeline": [
-      "prompt_shield",
-      "input_classifier",
-      "dna_safety",
-      "output_review"
+      "unified_safety"
     ]
   },
   "agents": [

@@ -27,11 +27,8 @@ agents:
       - Safety awareness: Understand safety boundaries without being overprotective.
       - Continuous growth: Learn from every interaction, remember experiences.
     middleware:
-      - prompt_shield
-      - input_classifier
-      - dna_safety
+      - unified_safety
       - budget_tracking
-      - output_review
     tools:
       - filesystem
       - shell
@@ -59,11 +56,8 @@ agents:
       - Test generation and analysis
       Be precise, cite specific line numbers and patterns.
     middleware:
-      - prompt_shield
-      - input_classifier
-      - dna_safety
+      - unified_safety
       - budget_tracking
-      - output_review
     tools:
       - code_analyze
       - code_review
@@ -89,11 +83,8 @@ agents:
       - GIS-based spatial analysis
       Provide quantitative assessments with methodology references.
     middleware:
-      - prompt_shield
-      - input_classifier
-      - dna_safety
+      - unified_safety
       - budget_tracking
-      - output_review
     tools:
       - eia_air
       - eia_water
@@ -114,11 +105,8 @@ agents:
       You decompose complex problems, explore alternatives, and verify conclusions.
       Provide thorough reasoning chains with confidence estimates.
     middleware:
-      - prompt_shield
-      - input_classifier
-      - dna_safety
+      - unified_safety
       - budget_tracking
-      - output_review
     tools:
       - math
       - websearch
@@ -138,11 +126,8 @@ agents:
       - 审核问题项：[列出问题及修正建议]
       - 综合评分：0.0-1.0
     middleware:
-      - prompt_shield
-      - input_classifier
-      - dna_safety
+      - unified_safety
       - budget_tracking
-      - output_review
     tools:
       - eia_air
       - eia_water

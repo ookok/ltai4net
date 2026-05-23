@@ -1,6 +1,6 @@
 using LTAI.DNA.Consciousness;
+using LTAI.DNA.Safety;
 using LTAI.Models;
-using LTAI.Agent.Middleware;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
@@ -20,14 +20,16 @@ public sealed class AgentFactory : IAgentFactory
     private readonly IServiceProvider _sp;
     private readonly ILogger<AgentFactory> _logger;
     private readonly Dictionary<string, AIAgent> _cache = new();
+    private readonly UnifiedSafetyGate _safetyGate;
+    private readonly Agents.SkillRegistry _skillRegistry;
 
     public AgentFactory(IServiceProvider sp, ILogger<AgentFactory> logger)
     {
         _sp = sp;
         _logger = logger;
+        _safetyGate = sp.GetRequiredService<UnifiedSafetyGate>();
+        _skillRegistry = sp.GetRequiredService<Agents.SkillRegistry>();
     }
-
-    private const int MaxToolsPerAgent = 25;
 
     public AIAgent Create(string agentName)
     {
@@ -36,51 +38,25 @@ public sealed class AgentFactory : IAgentFactory
             a.Name.Equals(agentName, StringComparison.OrdinalIgnoreCase))
             ?? throw new InvalidOperationException($"Agent '{agentName}' not found.");
 
-        var chatClient = _sp.GetRequiredService<Microsoft.Extensions.AI.IChatClient>();
-        var tools = ResolveToolSubset(card);
-
+        var chatClient = _sp.GetRequiredService<IChatClient>();
         var loggerFactory = _sp.GetRequiredService<ILoggerFactory>();
 
         AIAgent agent = card.Type switch
         {
-            AgentType.Code => new Agents.CodeAgent(chatClient, card, tools,
+            AgentType.Code => new Agents.CodeAgent(card, chatClient, _skillRegistry,
                 loggerFactory.CreateLogger<Agents.CodeAgent>()),
-            AgentType.EIA => new Agents.EIAAgent(chatClient, card, tools,
+            AgentType.EIA => new Agents.EIAAgent(card, chatClient, _skillRegistry,
                 loggerFactory.CreateLogger<Agents.EIAAgent>()),
-            AgentType.Reasoning => new Agents.ReasoningAgent(chatClient, card, tools,
+            AgentType.Reasoning => new Agents.ReasoningAgent(card, chatClient, _skillRegistry,
                 loggerFactory.CreateLogger<Agents.ReasoningAgent>()),
-            _ => new Agents.ChatAgent(chatClient, card, tools,
+            _ => new Agents.ChatAgent(card, chatClient, _skillRegistry,
                 loggerFactory.CreateLogger<Agents.ChatAgent>(),
                 _sp.GetService<Personality>())
         };
 
-        agent = ApplyMiddleware(agent, card);
-        _logger.LogInformation("AgentFactory: Created '{Name}' type={Type} tools={ToolCount}", card.Name, card.Type, tools.Length);
+        agent = ApplyUnifiedSafety(agent, card);
+        _logger.LogInformation("AgentFactory: Created '{Name}' type={Type}", card.Name, card.Type);
         return agent;
-    }
-
-    private AITool[] ResolveToolSubset(LTAIAgentCard card)
-    {
-        var allTools = _sp.GetServices<AITool>().ToList();
-        if (card.Tools.Count == 0)
-            return allTools.Take(MaxToolsPerAgent).ToArray();
-
-        var declared = card.Tools.ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var matched = allTools
-            .Where(t => declared.Any(n =>
-                t.Name.Equals(n, StringComparison.OrdinalIgnoreCase) ||
-                t.Name.StartsWith(n + ":", StringComparison.OrdinalIgnoreCase) ||
-                t.Name.StartsWith(n + "_", StringComparison.OrdinalIgnoreCase)))
-            .ToList();
-
-        if (matched.Count > MaxToolsPerAgent)
-        {
-            _logger.LogWarning("AgentFactory: Agent '{Name}' matched {Count} tools, truncating to {Max}",
-                card.Name, matched.Count, MaxToolsPerAgent);
-            matched = matched.Take(MaxToolsPerAgent).ToList();
-        }
-
-        return matched.ToArray();
     }
 
     public AIAgent GetOrCreate(string agentName)
@@ -97,32 +73,49 @@ public sealed class AgentFactory : IAgentFactory
         return config.Agents.Select(card => GetOrCreate(card.Name));
     }
 
-    private AIAgent ApplyMiddleware(AIAgent agent, LTAIAgentCard card)
+    private AIAgent ApplyUnifiedSafety(AIAgent agent, LTAIAgentCard card)
     {
         var builder = agent.AsBuilder();
 
-        foreach (var mwName in card.Middleware)
+        builder.Use(async (messages, session, options, inner, ct) =>
         {
-            switch (mwName)
+            var msgList = messages.ToList();
+            var userMsg = msgList.LastOrDefault(m => m.Role == ChatRole.User);
+            var sessionId = (session as LTAIAgentSession)?.SessionId ?? "anon";
+
+            var gateVerdict = await _safetyGate.EvaluateInputAsync(
+                userMsg?.Text ?? "", sessionId, ct);
+
+            if (!gateVerdict.IsAllowed)
             {
-                case "prompt_shield":
-                    var promptShield = _sp.GetRequiredService<PromptShieldMiddleware>();
-                    builder.Use(promptShield.InvokeAsync, null);
-                    break;
-                case "input_classifier":
-                    var inputClassifier = _sp.GetRequiredService<InputClassifierMiddleware>();
-                    builder.Use(inputClassifier.InvokeAsync, null);
-                    break;
-                case "dna_safety":
-                    var dnaSafety = _sp.GetRequiredService<DNASafetyMiddleware>();
-                    builder.Use(dnaSafety.InvokeAsync, null);
-                    break;
-                case "output_review":
-                    var outputReview = _sp.GetRequiredService<OutputReviewMiddleware>();
-                    builder.Use(outputReview.InvokeAsync, null);
-                    break;
+                _logger.LogWarning("AgentFactory [{Agent}]: Input blocked by UnifiedSafetyGate: {Reason}",
+                    card.Name, gateVerdict.Reason);
+                return new AgentResponse(new ChatMessage(ChatRole.Assistant,
+                    $"[Safety] {gateVerdict.Reason}"));
             }
-        }
+
+            if (gateVerdict.Action == GateAction.Warn)
+                _logger.LogWarning("AgentFactory [{Agent}]: Safety warning: {Reason}",
+                    card.Name, gateVerdict.Reason);
+
+            var response = await inner.RunAsync(messages, session, options, ct);
+
+            if (response.Text is not null)
+            {
+                var outputVerdict = await _safetyGate.EvaluateOutputAsync(
+                    response.Text, sessionId, ct);
+
+                if (!outputVerdict.IsAllowed)
+                {
+                    _logger.LogWarning("AgentFactory [{Agent}]: Output blocked: {Reason}",
+                        card.Name, outputVerdict.Reason);
+                    return new AgentResponse(new ChatMessage(ChatRole.Assistant,
+                        $"[Safety] Output filtered: {outputVerdict.Reason}"));
+                }
+            }
+
+            return response;
+        }, null);
 
         return builder.Build();
     }

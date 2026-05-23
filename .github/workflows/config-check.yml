@@ -1,0 +1,60 @@
+name: Config Safety Check
+
+on:
+  pull_request:
+    paths:
+      - 'src/LTAI.Agent/agents.yaml'
+      - 'ltai.config.json'
+      - 'prompts/**'
+
+jobs:
+  config-diff:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Restore CLI project
+        run: dotnet restore src/LTAI.Cli/LTAI.Cli.csproj
+
+      - name: Run ConfigDiffer (YAML)
+        run: |
+          dotnet run --project src/LTAI.Cli -- config-diff \
+            --base $(git rev-parse origin/main) \
+            --target HEAD \
+            --format json > config-diff-report.json
+
+      - name: Run ConfigDiffer (JSON)
+        run: |
+          dotnet run --project src/LTAI.Cli -- config-diff-json \
+            --base ltai.config.json \
+            --target ltai.config.json \
+            --format json >> config-diff-report.json
+
+      - name: Check Critical Changes
+        id: check
+        run: |
+          if grep -q '"Level":"Critical"' config-diff-report.json 2>/dev/null; then
+            echo "⛔ CRITICAL breaking changes detected! PR blocked."
+            echo ""
+            echo "Check if unified_safety middleware was removed."
+            echo "Check if agent types were changed."
+            cat config-diff-report.json
+            exit 1
+          fi
+          echo "✅ Config safety check passed."
+
+      - name: Validate Prompt Files
+        run: |
+          for f in prompts/*.prompt; do
+            if [ ! -s "$f" ]; then
+              echo "⛔ Empty prompt file: $f"
+              exit 1
+            fi
+            echo "✅ Prompt file OK: $f ($(wc -l < $f) lines)"
+          done

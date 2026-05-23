@@ -7,49 +7,28 @@ using Microsoft.Extensions.Logging;
 
 namespace LTAI.Agent.Agents;
 
-public sealed class CodeAgent : AIAgent
+public sealed class CodeAgent : BaseAgent
 {
-    private readonly ChatClientAgent _inner;
-    private readonly ILogger<CodeAgent> _logger;
-    private readonly HashSet<string> _supportedExtensions = new(StringComparer.OrdinalIgnoreCase)
+    private static readonly HashSet<string> _supportedExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
         ".cs", ".py", ".js", ".ts", ".go", ".rs", ".java", ".kt", ".swift", ".cpp", ".c", ".h",
         ".json", ".yaml", ".yml", ".xml", ".md", ".sql", ".sh", ".ps1", ".toml", ".csproj"
     };
 
-    public override string Name { get; }
-    public override string Description { get; }
-
     public CodeAgent(
-        IChatClient chatClient,
         LTAIAgentCard card,
-        IEnumerable<Microsoft.Extensions.AI.AITool> tools,
+        IChatClient brain,
+        SkillRegistry skills,
         ILogger<CodeAgent> logger)
+        : base(card, brain, skills, logger)
     {
-        Name = card.Name;
-        Description = card.Instructions;
-        _logger = logger;
-
-        _inner = chatClient.AsBuilder().BuildAIAgent(new ChatClientAgentOptions
-        {
-            Name = card.Name,
-            Description = card.Instructions,
-            ChatOptions = new() { Tools = tools.ToList() }
-        });
+        RegisterStrategy(new DefaultCodeAnalysisStrategy(brain, logger, _supportedExtensions));
     }
 
-    protected override async Task<AgentResponse> RunCoreAsync(
-        IEnumerable<ChatMessage> messages,
-        AgentSession? session = null,
-        AgentRunOptions? options = null,
-        CancellationToken cancellationToken = default)
+    protected override async Task<AgentResponse> ExecuteLogicAsync(
+        AgentContext context, CancellationToken ct)
     {
-        var msgList = messages.ToList();
-        var userMsg = msgList.LastOrDefault(m => m.Role == ChatRole.User);
-        if (userMsg is null)
-            return new AgentResponse(new ChatMessage(ChatRole.Assistant, "No code analysis request received."));
-
-        var query = userMsg.Text ?? "";
+        var query = context.UserQuery;
         _logger.LogInformation("CodeAgent [{Name}]: {Query}", Name, query[..Math.Min(query.Length, 200)]);
 
         var filePaths = ExtractFilePaths(query);
@@ -82,21 +61,24 @@ public sealed class CodeAgent : AIAgent
 
                 try
                 {
-                    var content = await File.ReadAllTextAsync(fp, cancellationToken);
-                    var truncated = content.Length > 10000 ? content[..10000] + $"\n... ({content.Length} total chars)" : content;
+                    var content = await File.ReadAllTextAsync(fp, ct);
+                    var truncated = content.Length > 10000
+                        ? content[..10000] + $"\n... ({content.Length} total chars)"
+                        : content;
                     contextMessages.Add(new ChatMessage(ChatRole.System,
                         $"File: {fp} ({content.Length} chars)\n```{ext.TrimStart('.')}\n{truncated}\n```"));
                     _logger.LogDebug("CodeAgent: Preloaded {Path} ({Length} chars)", fp, content.Length);
                 }
                 catch (Exception ex)
                 {
-                    contextMessages.Add(new ChatMessage(ChatRole.System, $"File {fp}: read error - {ex.Message}"));
+                    contextMessages.Add(new ChatMessage(ChatRole.System,
+                        $"File {fp}: read error - {ex.Message}"));
                 }
             }
         }
 
         if (contextMessages.Count > 0)
-            msgList.InsertRange(0, contextMessages);
+            context.FullHistory.InsertRange(0, contextMessages);
 
         var enhancedQuery = $"""
             Code analysis task. Be precise, cite line numbers, and flag:
@@ -107,33 +89,36 @@ public sealed class CodeAgent : AIAgent
             Request: {query}
             """;
 
-        var enhancedMessages = new List<ChatMessage>(msgList.Take(msgList.Count - 1))
+        var enhancedMessages = new List<ChatMessage>(context.FullHistory.Take(context.FullHistory.Count - 1))
         {
             new(ChatRole.User, enhancedQuery)
         };
 
         _logger.LogInformation("CodeAgent [{Name}]: Analyzing {FileCount} files", Name, filePaths.Count);
 
-        var response = await _inner.RunAsync(enhancedMessages, session, options, cancellationToken);
+        return await CallBrainWithCorrectionAsync(enhancedMessages, ct);
+    }
 
-        const int MaxCorrectionAttempts = 2;
-        for (int attempt = 0; attempt < MaxCorrectionAttempts; attempt++)
+    private async Task<AgentResponse> CallBrainWithCorrectionAsync(
+        List<ChatMessage> messages, CancellationToken ct, int maxAttempts = 2)
+    {
+        var response = await CallBrainAsync(messages, ct: ct);
+        var text = response.Text ?? "";
+
+        for (int attempt = 0; attempt < maxAttempts; attempt++)
         {
-            var validationFeedback = ValidateCodeResponse(response.Text ?? "");
+            var validationFeedback = ValidateCodeResponse(text);
             if (string.IsNullOrWhiteSpace(validationFeedback))
                 break;
 
-            _logger.LogWarning("CodeAgent [{Name}]: Correction attempt {Attempt}/{Max}", Name, attempt + 1, MaxCorrectionAttempts);
+            _logger.LogWarning("CodeAgent: Correction attempt {Attempt}/{Max}", attempt + 1, maxAttempts);
 
-            var fixedMessages = new List<ChatMessage>(enhancedMessages)
-            {
-                new(ChatRole.Assistant, response.Text ?? ""),
-                new(ChatRole.User, $"Review feedback: {validationFeedback}\nPlease address these issues.")
-            };
-            response = await _inner.RunAsync(fixedMessages, session, options, cancellationToken);
+            messages.Add(new(ChatRole.Assistant, text));
+            messages.Add(new(ChatRole.User, $"Review feedback: {validationFeedback}\nPlease address these issues."));
+            response = await CallBrainAsync(messages, ct: ct);
+            text = response.Text ?? "";
         }
 
-        _logger.LogInformation("CodeAgent [{Name}]: Analysis complete", Name);
         return response;
     }
 
@@ -143,7 +128,8 @@ public sealed class CodeAgent : AIAgent
         foreach (var word in text.Split(' ', '\n', '\t', '"', '\''))
         {
             var w = word.Trim();
-            if (w.Contains('.') && (w.Contains('/') || w.Contains('\\') || w.EndsWith(".cs") || w.EndsWith(".py") || w.EndsWith(".js")))
+            if (w.Contains('.') && (w.Contains('/') || w.Contains('\\') ||
+                w.EndsWith(".cs") || w.EndsWith(".py") || w.EndsWith(".js")))
                 paths.Add(w);
         }
         return paths;
@@ -153,23 +139,15 @@ public sealed class CodeAgent : AIAgent
     {
         try
         {
-            // Normalize path to absolute
             var fullPath = Path.GetFullPath(path);
             var currentDir = Environment.CurrentDirectory;
 
-            // Check for directory traversal patterns
             if (path.Contains("../") || path.Contains("..\\") || path.Contains(".."))
-            {
                 return false;
-            }
 
-            // Ensure path is within current directory or its subdirectories
             if (!fullPath.StartsWith(currentDir, StringComparison.OrdinalIgnoreCase))
-            {
                 return false;
-            }
 
-            // Block access to sensitive system directories
             var sensitivePaths = new[]
             {
                 "/etc/", "/proc/", "/sys/", "/dev/",
@@ -186,7 +164,6 @@ public sealed class CodeAgent : AIAgent
         }
         catch
         {
-            // If path normalization fails, reject it
             return false;
         }
     }
@@ -213,18 +190,35 @@ public sealed class CodeAgent : AIAgent
         AgentRunOptions? options = null,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        await foreach (var update in _inner.RunStreamingAsync(messages, session, options, cancellationToken))
+        await foreach (var update in CallBrainStreamingAsync(messages, cancellationToken))
             yield return update;
     }
+}
 
-    protected override ValueTask<AgentSession> CreateSessionCoreAsync(CancellationToken cancellationToken = default)
-        => _inner.CreateSessionAsync(cancellationToken);
+internal sealed class DefaultCodeAnalysisStrategy : IAnalysisStrategy<AgentContext, AgentResponse>
+{
+    private readonly IChatClient _brain;
+    private readonly ILogger _logger;
+    private readonly HashSet<string> _supportedExtensions;
 
-    protected override ValueTask<JsonElement> SerializeSessionCoreAsync(
-        AgentSession session, JsonSerializerOptions? o = null, CancellationToken ct = default)
-        => _inner.SerializeSessionAsync(session, o, ct);
+    public string StrategyName => "default-code-analysis";
 
-    protected override ValueTask<AgentSession> DeserializeSessionCoreAsync(
-        JsonElement state, JsonSerializerOptions? o = null, CancellationToken ct = default)
-        => _inner.DeserializeSessionAsync(state, o, ct);
+    public DefaultCodeAnalysisStrategy(IChatClient brain, ILogger logger, HashSet<string> supportedExtensions)
+    {
+        _brain = brain;
+        _logger = logger;
+        _supportedExtensions = supportedExtensions;
+    }
+
+    public bool CanHandle(string query) => true;
+
+    public async Task<AgentResponse> AnalyzeAsync(AgentContext context, CancellationToken ct)
+    {
+        var messages = new List<ChatMessage>(context.FullHistory)
+        {
+            new(ChatRole.User, $"Code analysis: {context.UserQuery}")
+        };
+        var response = await _brain.GetResponseAsync(messages, cancellationToken: ct);
+        return new AgentResponse(new ChatMessage(ChatRole.Assistant, response.Text ?? ""));
+    }
 }

@@ -860,13 +860,8 @@ public static class LTAIToolRegistry
         new("cli_execute", "Execute CLI command with safety gate (blocks rm/sudo/dd/shutdown)", "shell",
             async args => CliEngine.Execute(Arg(args, "command"), Arg(args, "args"))),
 
-        // ═══ CAD — 3 tools ═══
-        new("cad_import", "Import CAD model (STEP/DWG/DXF/STL) for analysis via CADability", "cad",
-            async args => CadEngine.Import(Arg(args, "file_path"), Arg(args, "format"))),
-        new("cad_analyze", "Analyze CAD geometry: solids/surfaces/bounds/volume/materials", "cad",
-            async args => CadEngine.Analyze(Arg(args, "file_path"))),
-        new("cad_export", "Export CAD model to target format (STEP/DWG/DXF/STL)", "cad",
-            async args => CadEngine.Export(Arg(args, "file_path"), Arg(args, "target_format"))),
+        // ═══ CAD — 3 tools (REMOVED: placeholder tools, feature not online) ═══
+        // cad_import, cad_analyze, cad_export removed — see LTAI v7.0 Phase 0
 
         // ═══ Memory — 8 tools ═══
         new("remember", "Store a key-value fact in working memory. The system will retain this for future recall. Parameters: key (required, a short label), value (required, the information to remember)", "memory",
@@ -1088,14 +1083,7 @@ public static class LTAIToolRegistry
         new("map_weather", "Get weather by city name via Amap API (alternative to weather tool)", "gis",
             async args => { var svc = GetService<LTAI.Tools.GIS.UnifiedMapService>(); return await svc.GetWeatherAsync(Arg(args, "city")); }),
 
-        // ═══ Communication — 2 new tools ═══
-        new("wework_send", "Send message to WeChat Work (WeCom) group via webhook", "communication",
-            async args => {
-                var bot = GetService<LTAI.Tools.Integration.WeWorkBot>();
-                var success = await bot.SendWebhookAsync(Arg(args, "content"));
-                if (!success) return (object)new { error = "WeWork webhook send failed. Check webhook URL configuration (LTAI_WEWORK_WEBHOOK)." };
-                return (object)new { status = "sent" };
-            }),
+        // ═══ Communication — 1 tool (wework_send removed per v7.0 Phase 0) ═══
         new("telegram_send", "Send message or code block to a Telegram chat", "communication",
             async args => {
                 var bot = GetService<LTAI.Tools.Integration.TelegramBot>();
