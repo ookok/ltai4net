@@ -20,7 +20,15 @@ public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddLTAIAI(this IServiceCollection services)
     {
-        services.AddSingleton<ProviderFanOutRace>();
+        services.AddSingleton<ProviderFanOutRace>(sp =>
+        {
+            var logger = sp.GetService<ILogger<ProviderFanOutRace>>();
+            return new ProviderFanOutRace(
+                Array.Empty<IChatClient>(),
+                Array.Empty<string>(),
+                "primary",
+                logger);
+        });
         services.AddSingleton<BudgetTracker>();
 
         services.AddSingleton<IChatClient>(sp =>
