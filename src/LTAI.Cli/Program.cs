@@ -64,7 +64,7 @@ public class Program
         modelCommand.SetHandler(async ctx =>
         {
             var cmd = ctx.ParseResult.GetValueForArgument(modelArg);
-            await ModelMode.RunAsync(cmd);
+            await ModelMode.RunAsync(cmd, null, null, false, false, false);
             ctx.ExitCode = 0;
         });
         root.AddCommand(modelCommand);

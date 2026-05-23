@@ -165,9 +165,9 @@ internal static class YamlParser
                 else if (trimmed.StartsWith("model:"))
                     currentAgent.Model = ExtractValue(trimmed, "model:");
                 else if (trimmed == "middleware:")
-                    currentAgent.Middleware = ParseList(lines, ref line);
+                    currentAgent.Middleware = ParseList(lines, trimmed);
                 else if (trimmed == "tools:")
-                    currentAgent.Tools = ParseList(lines, ref line);
+                    currentAgent.Tools = ParseList(lines, trimmed);
             }
         }
 
@@ -191,11 +191,14 @@ internal static class YamlParser
         _ => AgentType.Chat
     };
 
-    private static List<string> ParseList(string[] lines, ref string currentLine)
+    private static List<string> ParseList(string[] lines, string currentLine)
     {
         var items = new List<string>();
-        // Parse YAML list items indented under the current property
-        for (int i = Array.IndexOf(lines, currentLine) + 1; i < lines.Length; i++)
+        int startIndex = 0;
+        for (int j = 0; j < lines.Length; j++)
+            if (lines[j].Trim() == currentLine) { startIndex = j; break; }
+
+        for (int i = startIndex + 1; i < lines.Length; i++)
         {
             var line = lines[i].Trim();
             if (line.StartsWith("- "))

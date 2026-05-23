@@ -38,6 +38,7 @@
     <ProjectReference Include="..\..\src\LTAI.Agent\LTAI.Agent.csproj" />
     <ProjectReference Include="..\..\src\LTAI.Models\LTAI.Models.csproj" />
     <ProjectReference Include="..\..\src\LTAI.DNA\LTAI.DNA.csproj" />
+    <ProjectReference Include="..\..\src\LTAI.Cli\LTAI.Cli.csproj" />
   </ItemGroup>
 
 </Project>
