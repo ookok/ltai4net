@@ -152,8 +152,7 @@ var toolRegistry = sp.GetRequiredService<AIToolRegistry>();
 
 sp.GetRequiredService<LTAI.Agent.Evolution.PluginRegistry>().Discover();
 await LTAI.Agent.Tools.ToolRegistryExtensions.RegisterAllToolCategoriesAsync(toolRegistry, logger);
-// await LTAI.Core.Messaging.AIToolRegistry.SeedAllAsync(toolRegistry, sp);
-// await sp.RegisterCodeActToolsAsync(toolRegistry);
+await sp.RegisterCodeActToolsAsync(toolRegistry);
 
 await toolRegistry.RegisterAsync("git_diff", async args =>
 {

@@ -247,12 +247,31 @@ public static class LTAIToolRegistry
                 }
                 catch (Exception ex) { return new { error = $"Review failed: {ex.Message}" }; }
             }),
-        new("sandbox_exec", "Execute code in isolated sandbox", "code",
+        new("sandbox_exec", "Execute code in isolated sandbox (Process/Docker/Hyperlight)", "code",
             async args => {
-                var soType = typeof(object).Assembly.GetType("LTAI.Sandbox.SandboxOrchestrator");
+                var soType = typeof(object).Assembly.GetType("LTAI.Infra.Sandbox.SandboxOrchestrator");
                 var so = soType != null ? _serviceProvider?.GetService(soType) : null;
-                if (so != null) { var m = so.GetType().GetMethod("ExecuteAsync"); var task = m?.Invoke(so, new object?[] { Arg(args, "code"), Arg(args, "language", "python") }); if (task is Task t) { await t; return t.GetType().GetProperty("Result")?.GetValue(t); } }
-                return new { error = "Sandbox orchestrator not available", hint = "Use shell_exec or cli_execute for code execution" };
+                if (so is null)
+                {
+                    // Try resolving via direct type if assembly reflection fails
+                    try { so = _serviceProvider?.GetService(
+                        Type.GetType("LTAI.Infra.Sandbox.SandboxOrchestrator, LTAI.Infra")!); }
+                    catch { }
+                }
+                if (so != null)
+                {
+                    var m = so.GetType().GetMethod("ExecuteAsync");
+                    var reqType = so.GetType().Assembly.GetType("LTAI.Infra.Sandbox.SandboxRequest");
+                    if (reqType != null && m != null)
+                    {
+                        var req = Activator.CreateInstance(reqType);
+                        reqType.GetProperty("Code")?.SetValue(req, Arg(args, "code"));
+                        reqType.GetProperty("Language")?.SetValue(req, Arg(args, "language", "python"));
+                        var task = (Task)m.Invoke(so, new[] { req, CancellationToken.None });
+                        if (task != null) { await task; return task.GetType().GetProperty("Result")?.GetValue(task); }
+                    }
+                }
+                return new { error = "Sandbox not available. Install Docker or ensure python3/node is on PATH.", hint = "Use shell_exec for direct shell execution" };
             }),
 
         // Code Graph tools (using CodeGraphEnhanced - SQLite + FTS5)
