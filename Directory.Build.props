@@ -12,7 +12,7 @@
 
   <!-- Exe projects: build → dist/ -->
   <PropertyGroup Condition="'$(IsExeProject)' == 'true'">
-    <OutputPath>$(MSBuildThisFileDirectory)dist\</OutputPath>
+    <OutputPath>$(MSBuildThisFileDirectory)dist\lib\</OutputPath>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
     <PublishSingleFile>true</PublishSingleFile>
@@ -20,13 +20,6 @@
     <PublishTrimmed>false</PublishTrimmed>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <PublishDir>$(MSBuildThisFileDirectory)dist\$(MSBuildProjectName)\</PublishDir>
   </PropertyGroup>
-
-  <!-- After publish: copy self-contained EXE to dist/ root -->
-  <Target Name="CopyExeToDistRoot" AfterTargets="Publish" Condition="'$(IsExeProject)' == 'true'">
-    <Copy SourceFiles="$(PublishDir)$(AssemblyName).exe"
-          DestinationFolder="$(MSBuildThisFileDirectory)dist\"
-          SkipUnchangedFiles="true" />
-    <Message Text="  → dist/$(AssemblyName).exe" Importance="high" />
-  </Target>
 </Project>

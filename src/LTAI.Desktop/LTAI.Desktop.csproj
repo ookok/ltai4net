@@ -7,6 +7,8 @@
     <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
     <ApplicationDisplayVersion>7.0</ApplicationDisplayVersion>
     <IsExeProject>true</IsExeProject>
+    <OutputPath>$(MSBuildThisFileDirectory)..\..\dist\Desktop\</OutputPath>
+    <PublishDir>$(MSBuildThisFileDirectory)..\..\dist\Desktop\</PublishDir>
     <RootNamespace>LTAI.Desktop</RootNamespace>
     <AssemblyName>LTAI.Desktop</AssemblyName>
   </PropertyGroup>
