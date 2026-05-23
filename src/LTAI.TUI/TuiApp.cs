@@ -37,7 +37,6 @@ public sealed class TuiApp
 
     private TuiView _currentView = TuiView.Dashboard;
     private TuiTheme _theme = TuiTheme.Dark;
-    private readonly List<string> _activityLog = new();
     private readonly string _projectRoot;
     private bool _running = true;
     private readonly List<(string role, string text)> _chatHistory = new();
@@ -79,7 +78,6 @@ public sealed class TuiApp
         _ctxView = new ContextWindowView();
         _notify = new NotificationService();
         _search = new SessionSearch(_chatHistory);
-        _activityLog.Add($"LTAI TUI started at {DateTime.Now:HH:mm:ss}");
     }
 
     public async Task RunAsync()
@@ -177,35 +175,22 @@ public sealed class TuiApp
         AnsiConsole.Write(new Grid().AddColumns(2)
             .AddRow(_session.RenderPanel(_lts, _dna), CreateCommandsPanel()));
 
-        if (_dna != null)
-            AnsiConsole.Write(CreateBarChart());
-
         var tasks = RenderTaskPanel();
         AnsiConsole.Write(tasks);
 
-        if (_session.ActiveTasks.Count > 0)
-            AnsiConsole.Write(_dagView.RenderFlowChart(_session.ActiveTasks));
-
         AnsiConsole.Write(_ctxView.Render(_session));
-
-        if (!string.IsNullOrEmpty(_currentPhase))
-            AnsiConsole.Write(_taskPulse.RenderPhaseIndicator(_currentPhase, TaskPhases));
     }
 
     private IRenderable CreateDnaPanel()
     {
-        if (_dna == null) return MkPanel("DNA module not loaded", "[cyan]DNA[/]");
+        if (_dna == null) return MkPanel("v7.0 Sentient Mesh", "[cyan]LTAI v7.0[/]");
         var c = _dna.Consciousness.State;
-        var e = _dna.SelfEvo;
-        var l = _dna.Life;
         return MkPanel($$"""
-            [cyan]Consciousness:[/] {{c.Level}} ({{c.AwarenessScore:F2}})
-            [green]Evolution:[/] active
+            [cyan]Status:[/] {{c.Level}} (awareness {{c.AwarenessScore:F2}})
             [magenta]Safety:[/] {{_dna.Safety.Posture}}
-            [yellow]Biorhythm:[/] {{l.Biorhythm.Phase}} E:{{l.Biorhythm.EnergyLevel:F2}}
-            [blue]Dopamine:[/] {{l.Hormones.Dopamine:F2}} Serotonin:{{l.Hormones.Serotonin:F2}}
-            [grey]Thoughts:[/] {{c.ActiveThoughts.Count}} Habits:{{_dna.Life.Habits.Count}}
-            """, "[cyan]DNA[/]");
+            [green]Evolution:[/] generation {{_dna.GetStatus().Generation}}
+            [grey]Fitness:[/] {{_dna.GetStatus().FitnessScore:F2}}
+            """, "[cyan]LTAI v7.0[/]");
     }
 
     private IRenderable CreateSystemPanel()
@@ -233,17 +218,10 @@ public sealed class TuiApp
     private IRenderable CreateCommandsPanel()
     {
         return MkPanel("""
-            [yellow]1-9[/] Dashboard/Chat/Code/Git/Help/Session/LLM/Models/Service
-            [yellow]c[/] Chat   [yellow]l[/] LLM config   [yellow]t[/] Thought chain
-            [yellow]a[/] Analyze   [yellow]g[/] Git   [yellow]q[/] Quit
-            [yellow]Enter[/] Send   [yellow]Esc[/] Back
-            [yellow]Ctrl+V[/] Paste path   [yellow]@path[/] Load file
-            [yellow]d[/] Toggle diff   [yellow]s[/] Split diff
-            [yellow]e[/] Export session   [yellow]m[/] Memory consolidate
-            [yellow]k[/] Knowledge graph   [yellow]b[/] Multi-model branch
-            [yellow]p[/] Prompt templates   [yellow]n[/] Notifications
-            [yellow]Ctrl+F[/] Search   [yellow]F3[/] Next match
-            [yellow]Ctrl+T[/] Theme ({_theme})
+            [yellow]1-9[/] View: Dash/Chat/Code/Git/Help/Session/LLM/Models/Service
+            [yellow]c[/] Chat  [yellow]l[/] LLM  [yellow]t[/] Think  [yellow]k[/] Graph  [yellow]p[/] Prompts
+            [yellow]d[/] Diff  [yellow]e[/] Export  [yellow]m[/] Memory  [yellow]b[/] Branch
+            [yellow]Ctrl+T[/] Theme  [yellow]Ctrl+F[/] Search  [yellow]q[/] Quit
             """, "[yellow]Commands[/]");
     }
 
@@ -289,7 +267,6 @@ public sealed class TuiApp
         if (string.IsNullOrWhiteSpace(input)) return;
 
         _chatHistory.Add(("You", input));
-        _activityLog.Add($"[Chat] Q: {input[..Math.Min(input.Length, 80)]}");
 
         if (input.StartsWith("@") || input.Contains("[File:") || input.Contains("[Folder:"))
         {
@@ -333,7 +310,6 @@ public sealed class TuiApp
         _currentPhase = "";
         var fullResponse = renderer.GetFullText();
         _chatHistory.Add(("LTAI", fullResponse));
-        _activityLog.Add($"[Chat] A: {fullResponse[..Math.Min(fullResponse.Length, 80)]}");
         _innovation.RecordInteraction(input, fullResponse);
 
         var task = _session.ActiveTasks.Find(t => t.Name == "chat" && t.Status == "running");
@@ -544,17 +520,13 @@ public sealed class TuiApp
             case ConsoleKey.D9 or ConsoleKey.NumPad9: _currentView = TuiView.Service; break;
             case ConsoleKey.C when key.Modifiers == 0: _currentView = TuiView.Chat; break;
             case ConsoleKey.L when key.Modifiers == 0: _showLLMPanel = !_showLLMPanel; _currentView = _showLLMPanel ? TuiView.LLMConfig : _currentView; break;
-            case ConsoleKey.M when key.Modifiers == 0: _llmConfig.CycleModel(); _activityLog.Add($"[LLM] Switched to {_llmConfig.SelectedModel}"); break;
             case ConsoleKey.T when key.Modifiers == 0: _innovation.ToggleThoughtChain(); break;
-            case ConsoleKey.D when key.Modifiers == 0: _diffEnabled = !_diffEnabled; _activityLog.Add($"[Diff] mode: {(_diffEnabled ? "on" : "off")}"); break;
             case ConsoleKey.S when key.Modifiers == 0: _diffSplitView = !_diffSplitView; break;
             case ConsoleKey.E when key.Modifiers == 0: ExportSession(); break;
             case ConsoleKey.M when key.Modifiers == 0: await MemoryConsolidateAsync(); break;
             case ConsoleKey.K when key.Modifiers == 0: await KnowledgeGraphPreviewAsync(); break;
             case ConsoleKey.B when key.Modifiers == 0: await MultiModelBranchAsync(); break;
             case ConsoleKey.P when key.Modifiers == 0: await PromptTemplateAsync(); break;
-            case ConsoleKey.N when key.Modifiers == 0: _notify.Enabled = !_notify.Enabled; _activityLog.Add($"[Notify] {(_notify.Enabled ? "on" : "off")}"); break;
-            case ConsoleKey.T when key.Modifiers == ConsoleModifiers.Control: _theme = (TuiTheme)(((int)_theme + 1) % 3); _activityLog.Add($"[Theme] {_theme}"); break;
             case ConsoleKey.F when key.Modifiers == ConsoleModifiers.Control: _search.Search(); break;
             case ConsoleKey.F3 when key.Modifiers == 0: _search.NextMatch(); break;
             case ConsoleKey.F3 when key.Modifiers == ConsoleModifiers.Shift: _search.PrevMatch(); break;
@@ -599,7 +571,6 @@ public sealed class TuiApp
             _lastAnalysisResult = await _analyzer.Analyze(code, LanguageRegistry.Detect(filePath));
             _lastAnalyzedFile = filePath;
         });
-        _activityLog.Add($"[Code] Analyzed {Path.GetFileName(filePath)}");
     }
 
     private void ExportSession()
@@ -635,7 +606,6 @@ public sealed class TuiApp
         }
 
         File.WriteAllText(filePath, md.ToString());
-        _activityLog.Add($"[Export] Session exported to {fileName}");
         AnsiConsole.MarkupLine($"[green]Exported:[/] {filePath}");
     }
 
@@ -658,7 +628,6 @@ public sealed class TuiApp
             _dna.Consciousness.State.Level = LTAI.DNA.Models.ConsciousnessLevel.Reflective;
         });
 
-        _activityLog.Add("[Memory] Consolidation triggered");
         AnsiConsole.MarkupLine($"[green]Memory consolidated:[/] {_dna.Life.Habits.Count} habits, " +
             $"consciousness={_dna.Consciousness.State.Level}, fitness={_dna.GetStatus().FitnessScore:F3}");
     }
@@ -710,7 +679,6 @@ public sealed class TuiApp
             AnsiConsole.MarkupLine($"[white]{EscapeM(preview)}[/]");
         }
 
-        _activityLog.Add($"[KG] Previewed {_knowledgeItems.Count} items");
     }
 
     private async Task MultiModelBranchAsync()
@@ -769,7 +737,6 @@ public sealed class TuiApp
             };
             AnsiConsole.Write(panel);
         }
-        _activityLog.Add($"[Branch] Compared {results.Count} models on last query");
     }
 
     private async Task PromptTemplateAsync()
@@ -857,7 +824,6 @@ public sealed class TuiApp
         if (!string.IsNullOrWhiteSpace(result.Output))
             AnsiConsole.MarkupLine($"[grey]{result.Output}[/]");
 
-        _activityLog.Add($"[Service] {action}: {(result.Success ? "OK" : "FAIL")}");
         await Task.Delay(1500);
     }
 
@@ -887,7 +853,6 @@ public sealed class TuiApp
         if (_modelMgr == null) return;
         var info = _modelMgr.SyncInfo();
         AnsiConsole.MarkupLine($"[green]Synced:[/] {info.GetType().GetProperty("total_providers")?.GetValue(info)} providers");
-        _activityLog.Add("[Models] Synced registry info");
         await Task.Delay(800);
     }
 }
