@@ -1,4 +1,5 @@
 using LTAI.Core;
+using LTAI.Web.V7;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.AspNetCore.Http;
@@ -30,6 +31,7 @@ public static class WebApplicationExtensions
         app.MapParliamentEndpoints();
         app.MapPlanningInnovationEndpoints();
         app.MapInnovationEndpoints();
+        app.MapV7StatusEndpoints();
         app.MapHealthChecks("/api/health", new HealthCheckOptions
         {
             ResponseWriter = async (context, report) =>

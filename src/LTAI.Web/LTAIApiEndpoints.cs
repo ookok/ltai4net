@@ -121,7 +121,7 @@ public static class LTAIApiEndpoints
             return Results.Json(new
             {
                 mode = system.Mode.ToString(),
-                version = "5.5.0-net10",
+                version = "7.0.0",
                 runtime = "LTAI .NET 10",
                 dna = dnaInfo
             });

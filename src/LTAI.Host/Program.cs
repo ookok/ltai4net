@@ -121,6 +121,8 @@ builder.Services.AddOpenTelemetry()
 
 var app = builder.Build();
 
+app.UseLTAIExceptionHandler();
+
 // app.UseA2ABearerAuth();
 app.UseLTAI();
 

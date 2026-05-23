@@ -230,12 +230,5 @@
     }
 
     private async Task BranchMultiModel() { Input = "/branch " + Input; await SendAsync(); }
-    private async Task ExportChat()
-    {
-        var md = string.Join("\n\n", _history.Select(m => $"## {m.Role}\n{m.Text}"));
-        await Task.CompletedTask;
-    }
-    private async Task AttachFile() { }
-    private async Task OnFileSelected(ChangeEventArgs e) { }
     public async ValueTask DisposeAsync() { _streamCts?.Cancel(); _streamCts?.Dispose(); }
 }
