@@ -21,7 +21,7 @@ Console.InputEncoding = Encoding.UTF8;
 
 if (args.Contains("--version") || args.Contains("-v"))
 {
-    Console.WriteLine("LTAI MCP Server v5.5.0");
+    Console.WriteLine("LTAI MCP Server v7.0.0");
     return 0;
 }
 
