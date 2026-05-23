@@ -8,6 +8,7 @@ using LTAI.Agent.Agents;
 using LTAI.Agent.Feedback;
 using LTAI.Agent.Federation;
 using LTAI.Agent.Middleware;
+using LTAI.Agent.Prefetch;
 using LTAI.Agent.Routing;
 using LTAI.Agent.Tools;
 using LTAI.Agent.Workflows;
@@ -39,6 +40,8 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<AgentRegistry>();
         services.AddSingleton<AgentRegistryLock>();
         services.AddSingleton<IAgentFactory, AgentFactory>();
+        services.AddSingleton<PredictivePrefetcher>();
+        services.AddHostedService<ReflectiveIdlingService>();
 
         return services;
     }
