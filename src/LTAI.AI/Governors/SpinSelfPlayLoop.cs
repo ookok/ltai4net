@@ -37,16 +37,23 @@ public sealed class SpinSelfPlayLoop
 
     public SpinEpochResult? LastResult => _lastResult;
 
+    private readonly CorrectionMemory? _correctionMemory;
+    private readonly SelfCorrectionLoRA? _correctionLoRA;
+
     public SpinSelfPlayLoop(
         TieredLoraManager loraManager,
         AdaptiveDepthController depthController,
         SynapticMemory? synapticMemory = null,
+        CorrectionMemory? correctionMemory = null,
+        SelfCorrectionLoRA? correctionLoRA = null,
         ILogger<SpinSelfPlayLoop>? logger = null,
         int maxLogSize = 500)
     {
         _loraManager = loraManager;
         _depthController = depthController;
         _synapticMemory = synapticMemory;
+        _correctionMemory = correctionMemory;
+        _correctionLoRA = correctionLoRA;
         _logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<SpinSelfPlayLoop>.Instance;
         _maxLogSize = maxLogSize;
     }
@@ -116,6 +123,14 @@ public sealed class SpinSelfPlayLoop
                     });
 
                     accepted++;
+                }
+                else if (winner != "tie")
+                {
+                    // CIPO (arXiv:2605.14539): loser output → correction training
+                    var loserLabel = winner == "player" ? opponentLabel : playerLabel;
+                    var winLabel = winner == "player" ? playerLabel : opponentLabel;
+                    _correctionMemory?.RecordFailure(query, loserLabel, reward, "spin_loss");
+                    _correctionLoRA?.AddCorrectionPair(query, loserLabel, winLabel, "spin_loss");
                 }
             }
             catch (Exception ex)

@@ -151,13 +151,31 @@ public static class ServiceCollectionExtensions
             return new CrossLevelDistiller(loraManager, depthController, logger);
         });
 
+        services.AddSingleton<CorrectionMemory>(sp =>
+        {
+            var llm = sp.GetRequiredService<IChatClient>();
+            var synapticMemory = sp.GetRequiredService<SynapticMemory>();
+            var logger = sp.GetService<ILogger<CorrectionMemory>>();
+            return new CorrectionMemory(llm, synapticMemory, logger);
+        });
+
+        services.AddSingleton<SelfCorrectionLoRA>(sp =>
+        {
+            var loraManager = sp.GetRequiredService<TieredLoraManager>();
+            var depthController = sp.GetRequiredService<AdaptiveDepthController>();
+            var logger = sp.GetService<ILogger<SelfCorrectionLoRA>>();
+            return new SelfCorrectionLoRA(loraManager, depthController, logger);
+        });
+
         services.AddSingleton<SpinSelfPlayLoop>(sp =>
         {
             var loraManager = sp.GetRequiredService<TieredLoraManager>();
             var depthController = sp.GetRequiredService<AdaptiveDepthController>();
             var synapticMemory = sp.GetService<SynapticMemory>();
+            var correctionMemory = sp.GetService<CorrectionMemory>();
+            var correctionLoRA = sp.GetService<SelfCorrectionLoRA>();
             var logger = sp.GetService<ILogger<SpinSelfPlayLoop>>();
-            return new SpinSelfPlayLoop(loraManager, depthController, synapticMemory, logger);
+            return new SpinSelfPlayLoop(loraManager, depthController, synapticMemory, correctionMemory, correctionLoRA, logger);
         });
 
         services.AddSingleton<MoERouter>(sp =>
