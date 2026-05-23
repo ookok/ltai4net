@@ -8,10 +8,7 @@ using LTAI.Core.Messaging;
 using LTAI.Core.Network;
 using LTAI.Knowledge.Core;
 using Microsoft.Extensions.AI;
-using Microsoft.Extensions.Caching.Distributed;
-using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -23,7 +20,6 @@ public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddLTAIAI(this IServiceCollection services)
     {
-        services.AddSingleton<IDistributedCache, MemoryDistributedCache>();
         services.AddSingleton<ProviderFanOutRace>(sp =>
         {
             var logger = sp.GetService<ILogger<ProviderFanOutRace>>();
@@ -63,7 +59,6 @@ public static class ServiceCollectionExtensions
                 .UseLogging(loggerFactory)
                 .UseFunctionInvocation()
                 .UseOpenTelemetry()
-                .UseDistributedCache()
                 .Build();
 
             return new RescueParsingChatClient(pipeline, sp.GetService<ILogger<RescueParsingChatClient>>());
