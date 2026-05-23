@@ -2,6 +2,8 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using LTAI.Tools.Search;
+using LTAI.Infra.Multimodal;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
@@ -247,13 +249,17 @@ public static class DocRoutesEndpoints
                 try
                 {
                     using var stream = file.OpenReadStream();
-                    extractedText = ExtractTextFromDocx(stream);
+                    var ocr = context.RequestServices.GetService<OCREngine>();
+                    if (ocr is not null)
+                        extractedText = await ExtractTextFromDocxWithImagesAsync(stream, ocr, context.RequestAborted);
+                    else
+                        extractedText = ExtractTextFromDocx(stream);
                 }
-                catch
+                catch (Exception ex)
                 {
                     context.Response.StatusCode = 400;
                     context.Response.ContentType = "application/json";
-                    await context.Response.WriteAsync(JsonSerializer.Serialize(new { error = "Failed to parse .docx file" }));
+                    await context.Response.WriteAsync(JsonSerializer.Serialize(new { error = $"Failed to parse .docx file: {ex.Message}" }));
                     return;
                 }
 
@@ -623,11 +629,74 @@ public static class DocRoutesEndpoints
         }
 
         var result = sb.ToString();
-
-        var paragraphMatches = Regex.Matches(xml, @"<w:p[ >]");
         result = Regex.Replace(result, "(.{80})", "$1\n");
 
         return result;
+    }
+
+    /// Extract images from .docx (word/media/*) and run OCR on each.
+    /// Appends image text content to the document text extraction.
+    private static async Task<string> ExtractTextFromDocxWithImagesAsync(
+        Stream stream,
+        OCREngine ocr,
+        CancellationToken ct = default)
+    {
+        var textResult = ExtractTextFromDocx(stream);
+
+        stream.Position = 0;
+        using var archive = new System.IO.Compression.ZipArchive(stream, System.IO.Compression.ZipArchiveMode.Read);
+
+        var mediaEntries = archive.Entries
+            .Where(e => e.FullName.StartsWith("word/media/", StringComparison.OrdinalIgnoreCase)
+                     && (e.Name.EndsWith(".png", StringComparison.OrdinalIgnoreCase)
+                      || e.Name.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase)
+                      || e.Name.EndsWith(".jpeg", StringComparison.OrdinalIgnoreCase)
+                      || e.Name.EndsWith(".bmp", StringComparison.OrdinalIgnoreCase)
+                      || e.Name.EndsWith(".gif", StringComparison.OrdinalIgnoreCase)
+                      || e.Name.EndsWith(".tiff", StringComparison.OrdinalIgnoreCase)
+                      || e.Name.EndsWith(".tif", StringComparison.OrdinalIgnoreCase)
+                      || e.Name.EndsWith(".webp", StringComparison.OrdinalIgnoreCase)))
+            .ToList();
+
+        if (mediaEntries.Count == 0)
+            return textResult;
+
+        var sb = new StringBuilder(textResult);
+        sb.AppendLine();
+        sb.AppendLine("=== 文档图片OCR内容 ===");
+
+        foreach (var entry in mediaEntries)
+        {
+            try
+            {
+                using var imgStream = entry.Open();
+                using var ms = new MemoryStream();
+                await imgStream.CopyToAsync(ms, ct);
+                var imgBytes = ms.ToArray();
+
+                if (imgBytes.Length < 1024)
+                {
+                    sb.AppendLine($"[图片 {entry.Name}: 文件过小跳过]");
+                    continue;
+                }
+
+                var ocrText = await ocr.ExtractTextFromBytesAsync(imgBytes, "eng+chi_sim", ct);
+                if (!string.IsNullOrWhiteSpace(ocrText))
+                {
+                    sb.AppendLine($"[图片 {entry.Name}]: {ocrText}");
+                }
+                else
+                {
+                    sb.AppendLine($"[图片 {entry.Name}: OCR未识别到文字]");
+                }
+            }
+            catch (Exception ex)
+            {
+                sb.AppendLine($"[图片 {entry.Name}: OCR错误 - {ex.Message}]");
+            }
+        }
+
+        return sb.ToString();
     }
 
     private static string ConvertMarkdownToHtml(string markdown)
