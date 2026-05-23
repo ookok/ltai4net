@@ -41,12 +41,12 @@ public static class LocalModelRegistry
         new LocalModelInfo(
             Version: "bge-small-zh-v1.5-onnx",
             Name: "BGE-Small-ZH-v1.5 (ONNX) - 轻量中文嵌入",
-            Url: "https://huggingface.co/BAAI/bge-small-zh-v1.5/resolve/main/onnx/model.onnx",
-            MirrorUrl: "https://hf-mirror.com/BAAI/bge-small-zh-v1.5/resolve/main/onnx/model.onnx",
+            Url: "https://huggingface.co/Xenova/bge-small-zh-v1.5/resolve/main/onnx/model.onnx",
+            MirrorUrl: "https://hf-mirror.com/Xenova/bge-small-zh-v1.5/resolve/main/onnx/model.onnx",
             Sha256: "auto_verify",
             RecommendedMemoryMB: 1024,
-            DiskSizeMB: 350,
-            Description: "BGE 轻量中文版，适合内存受限场景。",
+            DiskSizeMB: 95,
+            Description: "BGE 轻量中文版，93MB，适合内存受限场景。",
             Layer: ModelLayer.L0,
             EngineType: "onnx"),
 

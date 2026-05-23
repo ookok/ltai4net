@@ -3,6 +3,7 @@ using LTAI.AI;
 using LTAI.AI.Governors;
 using LTAI.Core;
 using LTAI.Core.Configuration;
+using LTAI.Core.Setup;
 using LTAI.DNA;
 using LTAI.Planning.Metrics;
 using LTAI.Knowledge.Vector;
@@ -18,6 +19,17 @@ public static class Program
     [STAThread]
     public static void Main(string[] args)
     {
+        // First-run: show setup wizard for L0/L1/L2 model download
+        var configPath = Path.Combine(AppContext.BaseDirectory, "appsettings.json");
+        if (!File.Exists(configPath) || new FileInfo(configPath).Length < 50)
+        {
+            Task.Run(async () =>
+            {
+                Console.WriteLine("First run detected — starting setup wizard...");
+                await new InteractiveSetupWizard(configPath).RunAsync();
+            }).GetAwaiter().GetResult();
+        }
+
         var services = BuildServices();
         var provider = services.BuildServiceProvider();
         ServiceLocator.SetProvider(provider);
