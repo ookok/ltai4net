@@ -81,13 +81,16 @@ public sealed class CellPackageManager
     private readonly string _packagesDirectory;
     private readonly Dictionary<string, CellPackageInfo> _installedPackages = new();
     private readonly object _lock = new();
+    private readonly OnnxInt8Quantizer? _quantizer;
 
     public CellPackageManager(
         string packagesDirectory,
-        ILogger<CellPackageManager>? logger = null)
+        ILogger<CellPackageManager>? logger = null,
+        OnnxInt8Quantizer? quantizer = null)
     {
         _packagesDirectory = packagesDirectory;
         _logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<CellPackageManager>.Instance;
+        _quantizer = quantizer;
         Directory.CreateDirectory(_packagesDirectory);
         
         LoadInstalledPackages();
@@ -360,9 +363,24 @@ public sealed class CellPackageManager
 
         if (compression == CellCompression.Quantized)
         {
-            // 量化：简化实现，实际应使用 ONNX Runtime 量化工具
+            if (_quantizer is not null)
+            {
+                try
+                {
+                    var result = await _quantizer.QuantizeAsync(modelPath, compressedPath, ct);
+                    _logger.LogInformation(
+                        "Model quantized via ONNX Runtime: {Path} (ratio={Ratio:F1}%, orig={Orig}MB, quantized={Quant}MB)",
+                        compressedPath, result.CompressionRatio * 100, result.OriginalSizeMB, result.QuantizedSizeMB);
+                    return compressedPath;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "ONNX quantization failed, falling back to copy: {Path}", modelPath);
+                }
+            }
+
             File.Copy(modelPath, compressedPath, true);
-            _logger.LogInformation("Model quantized (placeholder): {Path}", compressedPath);
+            _logger.LogInformation("Model quantized (copy fallback): {Path}", compressedPath);
             return compressedPath;
         }
 

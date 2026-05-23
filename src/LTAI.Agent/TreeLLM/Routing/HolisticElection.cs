@@ -348,11 +348,60 @@ public sealed class HolisticElection
         return Math.Clamp(factor, 0.05, 1.0);
     }
 
+    private readonly Dictionary<string, CircuitState> _circuits = new();
+
+    private sealed class CircuitState
+    {
+        public int FailureCount;
+        public DateTime? OpenUntil;
+        public DateTime? LastFailure;
+    }
+
     private bool IsCircuitClosed(string provider)
     {
-        // Circuit breaker is not yet available in this assembly.
-        // When a CircuitBreaker service is registered via DI, it will be injected here.
+        if (!_circuits.TryGetValue(provider, out var state))
+        {
+            _circuits[provider] = new CircuitState();
+            return true;
+        }
+
+        // If circuit is open, check if cooldown has passed
+        if (state.OpenUntil is not null)
+        {
+            if (DateTime.UtcNow < state.OpenUntil)
+                return false;
+
+            // Half-open: allow one probe
+            state.OpenUntil = null;
+            state.FailureCount = 0;
+            return true;
+        }
+
         return true;
+    }
+
+    public void RecordFailure(string provider)
+    {
+        if (!_circuits.TryGetValue(provider, out var state))
+            state = _circuits[provider] = new CircuitState();
+
+        state.FailureCount++;
+        state.LastFailure = DateTime.UtcNow;
+
+        if (state.FailureCount >= 5)
+        {
+            var backoffSeconds = Math.Min(60, 2 << state.FailureCount);
+            state.OpenUntil = DateTime.UtcNow.AddSeconds(backoffSeconds);
+        }
+    }
+
+    public void RecordSuccess(string provider)
+    {
+        if (_circuits.TryGetValue(provider, out var state))
+        {
+            state.FailureCount = Math.Max(0, state.FailureCount - 1);
+            state.OpenUntil = null;
+        }
     }
 
     public static Dictionary<string, double> GetDynamicWeights(string taskType, double complexity = 0.5)

@@ -178,7 +178,17 @@ public sealed class LTAIAgent : AIAgent
         JsonSerializerOptions? jsonSerializerOptions = null,
         CancellationToken cancellationToken = default)
     {
-        var json = JsonSerializer.SerializeToElement(new { id = Guid.NewGuid().ToString("N") });
+        var ltsAgentSession = session as LTAIAgentSession;
+        var data = new Dictionary<string, object?>
+        {
+            ["session_id"] = ltsAgentSession?.SessionId ?? Guid.NewGuid().ToString("N"),
+            ["agent_name"] = Name,
+            ["agent_id"] = Id,
+            ["turn_count"] = ltsAgentSession?.TurnCount ?? 0,
+            ["last_intent"] = ltsAgentSession?.LastIntent ?? "",
+            ["pipeline"] = new { mode = _livingTree.Mode.ToString(), dna = _livingTree.DNAEnabled }
+        };
+        var json = JsonSerializer.SerializeToElement(data);
         return ValueTask.FromResult(json);
     }
 
@@ -188,6 +198,10 @@ public sealed class LTAIAgent : AIAgent
         CancellationToken cancellationToken = default)
     {
         var session = new LTAIAgentSession();
+        if (serializedState.TryGetProperty("last_intent", out var li))
+            session.LastIntent = li.GetString();
+        if (serializedState.TryGetProperty("turn_count", out var tc) && tc.TryGetInt32(out var turns))
+            session.TurnCount = turns;
         return ValueTask.FromResult<AgentSession>(session);
     }
 

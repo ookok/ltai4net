@@ -31,8 +31,13 @@ public sealed class MoEContextProvider : LTAIContextProvider
     {
         try
         {
-            await _moeQuery("context_provider", query);
-            return new[] { new ContextItem { Content = "ContextMoE memory enrichment active", ProviderType = ContextProviderType.Memory, Relevance = 1.0, Source = "MoE" } };
+            var moeResult = await _moeQuery("context_provider", query);
+            var content = moeResult?.ToString() ?? "";
+            if (string.IsNullOrEmpty(content) || content == "ContextMoE memory enrichment active")
+            {
+                content = $"MoE context enrichment: query='{query[..global::System.Math.Min(query.Length, 80)]}'";
+            }
+            return new[] { new ContextItem { Content = content, ProviderType = ContextProviderType.Memory, Relevance = 0.85, Source = "MoE" } };
         }
         catch { return Array.Empty<ContextItem>(); }
     }

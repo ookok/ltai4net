@@ -1,5 +1,6 @@
 using LTAI.Core.Messaging;
 using LTAI.Core.System;
+using LTAI.Tools.Capability.Governance;
 using LTAI.Tools.CodeEngine;
 using LTAI.Tools.CodeGraph;
 using LTAI.Tools.Review;
@@ -1126,19 +1127,23 @@ created: {DateTime.UtcNow:yyyy-MM-dd}
                     .Take(30).ToList();
                 return new { query, category, results, total = AllTools.Length, matched = results.Count };
             }),
-        new("tool_enable", "Enable a previously disabled tool. Tools are enabled by default. This is a placeholder for future tool governance. Parameters: name (required)", "management",
+        new("tool_enable", "Enable a tool by name. Disabled tools are filtered from suggestions and blocked from invocation. Parameters: name (required)", "management",
             async args =>
             {
                 var name = Arg(args, "name");
                 var tool = AllTools.FirstOrDefault(t => string.Equals(t.Name, name, StringComparison.OrdinalIgnoreCase));
-                return tool != null ? new { name, status = "enabled", description = tool.Description, category = tool.Category, note = "All tools are enabled by default" } : new { error = $"Tool '{name}' not found. Use tool_search to find available tools." };
+                if (tool is null) return new { error = $"Tool '{name}' not found. Use tool_search to find available tools." };
+                ToolGate.Instance.Enable(name);
+                return new { name, status = "enabled", description = tool.Description, category = tool.Category };
             }),
-        new("tool_disable", "Disable a tool so it won't appear in tool suggestions. This is a placeholder for future tool governance. Parameters: name (required)", "management",
+        new("tool_disable", "Disable a tool by name. It will be filtered from suggestions and blocked from invocation. Parameters: name (required)", "management",
             async args =>
             {
                 var name = Arg(args, "name");
                 var tool = AllTools.FirstOrDefault(t => string.Equals(t.Name, name, StringComparison.OrdinalIgnoreCase));
-                return tool != null ? new { name, status = "disable_placeholder", description = tool.Description, note = "Tool disable is planned for implementation. Currently all tools are always enabled." } : new { error = $"Tool '{name}' not found" };
+                if (tool is null) return new { error = $"Tool '{name}' not found" };
+                ToolGate.Instance.Disable(name);
+                return new { name, status = "disabled", description = tool.Description, disabled_tools = ToolGate.Instance.DisabledCount };
             }),
         new("tool_stats", "Get comprehensive statistics about all registered tools: counts by category, handlers, and status", "management",
             async _ =>
