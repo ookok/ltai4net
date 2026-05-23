@@ -21,6 +21,7 @@ using LTAI.Tools.Tools;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace LTAI.Tools;
 
@@ -259,6 +260,30 @@ public static class CapabilityEndpoints
 
         endpoints.MapPost("/api/skills/suggest", (SkillCatalog catalog, string task) =>
             Results.Ok(catalog.SuggestSkills(task)));
+
+        endpoints.MapPost("/api/skills/import", async (HttpContext context) =>
+        {
+            var mdContent = "";
+            if (context.Request.HasFormContentType)
+            {
+                var file = context.Request.Form.Files.FirstOrDefault();
+                if (file is not null)
+                {
+                    using var reader = new StreamReader(file.OpenReadStream());
+                    mdContent = await reader.ReadToEndAsync();
+                }
+            }
+            if (string.IsNullOrEmpty(mdContent))
+            {
+                using var reader = new StreamReader(context.Request.Body);
+                mdContent = await reader.ReadToEndAsync();
+            }
+
+            var discovery = context.RequestServices.GetRequiredService<SkillDiscoveryManager>();
+            var importer = new SkillMarkdownImporter(discovery);
+            var result = importer.ImportFromMarkdown(mdContent);
+            return Results.Ok(new { installed = result.Installed.Count, failed = result.Failed.Count, skills = result.Installed.Select(s => new { s.name, s.file }), errors = result.Failed });
+        });
 
         endpoints.MapPost("/api/tools/list", (ToolMarket market) =>
             Results.Ok(market.Discover()));

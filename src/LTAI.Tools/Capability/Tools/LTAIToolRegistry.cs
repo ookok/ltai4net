@@ -1143,6 +1143,46 @@ created: {DateTime.UtcNow:yyyy-MM-dd}
                 await File.WriteAllTextAsync(Path.Combine(skillDir, "SKILL.md"), frontmatter + "\n" + body);
                 return new { name, description = desc, file = Path.Combine(skillDir, "SKILL.md"), status = "created" };
             }),
+        new("skill_import", "Batch import skills from a Markdown document. Skills are identified by ## headings with optional descriptions and code blocks. Also accepts raw text/skill descriptions — the LLM will format them as proper skill definitions. Parameters: markdown (required, the full Markdown document content or skill description text)", "management",
+            async args =>
+            {
+                var markdown = Arg(args, "markdown");
+                if (string.IsNullOrWhiteSpace(markdown)) return new { error = "markdown parameter is required. Provide the Markdown document content to import." };
+
+                var discovery = _serviceProvider?.GetService(typeof(object).Assembly.GetType("LTAI.Tools.Skills.SkillDiscoveryManager"));
+                if (discovery is null)
+                {
+                    var skillsDir = Path.Combine(Environment.CurrentDirectory, ".livingtree", "skills");
+                    discovery = Activator.CreateInstance(
+                        typeof(object).Assembly.GetType("LTAI.Tools.Skills.SkillDiscoveryManager")!,
+                        Environment.CurrentDirectory, null);
+                }
+
+                var importerType = typeof(object).Assembly.GetType("LTAI.Tools.Skills.SkillMarkdownImporter");
+                if (importerType is null) return new { error = "SkillMarkdownImporter not found in assembly" };
+
+                var importer = Activator.CreateInstance(importerType, discovery);
+                var importMethod = importerType.GetMethod("ImportFromMarkdown");
+                var result = importMethod?.Invoke(importer, new object[] { markdown });
+
+                if (result is null) return new { error = "Import failed" };
+
+                var installedProp = result.GetType().GetProperty("Installed");
+                var failedProp = result.GetType().GetProperty("Failed");
+                var totalProp = result.GetType().GetProperty("TotalFound");
+                var installed = ((System.Collections.IEnumerable?)installedProp?.GetValue(result))?.Cast<object>().ToList() ?? new();
+                var failed = ((System.Collections.IEnumerable?)failedProp?.GetValue(result))?.Cast<object>().ToList() ?? new();
+
+                return new
+                {
+                    installed = installed.Count,
+                    failed_count = failed.Count,
+                    total_found = totalProp?.GetValue(result),
+                    skills = installed.Select(s => new { name = s.GetType().GetProperty("name")?.GetValue(s), file = s.GetType().GetProperty("file")?.GetValue(s) }),
+                    errors = failed.Select(f => new { name = f.GetType().GetProperty("name")?.GetValue(f), error = f.GetType().GetProperty("error")?.GetValue(f) }),
+                    hint = "Use skill_list to verify imported skills. Skills are active immediately."
+                };
+            }),
         new("skill_edit", "Edit an existing skill's SKILL.md body. Appends content to the existing file. Parameters: name (required), body (required, new content to append)", "management",
             async args =>
             {
