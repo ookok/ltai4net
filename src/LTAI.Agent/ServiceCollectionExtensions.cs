@@ -21,6 +21,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<CollaborativeMeshWorkflow>();
         services.AddSingleton<AgentMeshWorkflow>();
         services.AddSingleton<PlannerCriticWorkflow>();
+        services.AddSingleton<AgentParliament>();
         services.AddSingleton<HumanInTheLoopReview>();
         services.AddSingleton<FeedbackCollector>();
         services.AddSingleton<ABExperimentEngine>();

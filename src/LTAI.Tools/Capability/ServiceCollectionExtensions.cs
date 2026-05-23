@@ -17,6 +17,7 @@ using LTAI.Tools.Tools;
 using LTAI.Tools.Capability.Governance;
 using LTAI.Core.System;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
 namespace LTAI.Tools;
@@ -54,6 +55,8 @@ public static class CapabilityServiceCollectionExtensions
         services.AddSingleton<ToolOrchestrator>();
         services.AddSingleton<ToolMeta>();
         services.AddSingleton<ToolDashboard>();
+        services.AddSingleton<ToolEvolutionLoop>();
+        services.AddHostedService(sp => sp.GetRequiredService<ToolEvolutionLoop>());
 
         services.AddSingleton<PipelineEngine>();
 
