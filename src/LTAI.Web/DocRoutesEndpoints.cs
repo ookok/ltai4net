@@ -249,9 +249,10 @@ public static class DocRoutesEndpoints
                 try
                 {
                     using var stream = file.OpenReadStream();
-                    var ocr = context.RequestServices.GetService<OCREngine>();
-                    if (ocr is not null)
-                        extractedText = await ExtractTextFromDocxWithImagesAsync(stream, ocr, context.RequestAborted);
+                    var rapidOcr = context.RequestServices.GetService<OCREngine>();
+                    // Prefer RapidOCR if available (better Chinese, same lightweight ~15MB)
+                    if (rapidOcr is not null)
+                        extractedText = await ExtractTextFromDocxWithImagesAsync(stream, rapidOcr, context.RequestAborted);
                     else
                         extractedText = ExtractTextFromDocx(stream);
                 }

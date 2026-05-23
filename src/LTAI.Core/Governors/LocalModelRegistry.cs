@@ -87,6 +87,43 @@ public static class LocalModelRegistry
             Layer: ModelLayer.L0,
             EngineType: "onnx"),
 
+        // ==================== L0: OCR Models (ONNX, lightweight) ====================
+        new LocalModelInfo(
+            Version: "rapidocr-det-v4-onnx",
+            Name: "RapidOCR Detection (PP-OCRv4 DB) — 文本检测",
+            Url: "https://huggingface.co/SWHL/RapidOCR/resolve/main/ch_PP-OCRv4_det_infer.onnx",
+            MirrorUrl: "https://hf-mirror.com/SWHL/RapidOCR/resolve/main/ch_PP-OCRv4_det_infer.onnx",
+            Sha256: "auto_verify",
+            RecommendedMemoryMB: 512,
+            DiskSizeMB: 5,
+            Description: "PP-OCRv4 DBNet 文本检测模型。识别图片中文字区域位置。",
+            Layer: ModelLayer.L0,
+            EngineType: "onnx"),
+
+        new LocalModelInfo(
+            Version: "rapidocr-rec-v4-onnx",
+            Name: "RapidOCR Recognition (PP-OCRv4 CRNN) — 文字识别",
+            Url: "https://huggingface.co/SWHL/RapidOCR/resolve/main/ch_PP-OCRv4_rec_infer.onnx",
+            MirrorUrl: "https://hf-mirror.com/SWHL/RapidOCR/resolve/main/ch_PP-OCRv4_rec_infer.onnx",
+            Sha256: "auto_verify",
+            RecommendedMemoryMB: 512,
+            DiskSizeMB: 9,
+            Description: "PP-OCRv4 CRNN 文字识别模型。将检测到的文字区域识别为中文/英文文本。6623字符集。",
+            Layer: ModelLayer.L0,
+            EngineType: "onnx"),
+
+        new LocalModelInfo(
+            Version: "rapidocr-vocab",
+            Name: "RapidOCR Vocabulary (PP-OCRv4 keys) — 字符映射表",
+            Url: "https://huggingface.co/SWHL/RapidOCR/resolve/main/ppocr_keys_v1.txt",
+            MirrorUrl: "https://hf-mirror.com/SWHL/RapidOCR/resolve/main/ppocr_keys_v1.txt",
+            Sha256: "auto_verify",
+            RecommendedMemoryMB: 256,
+            DiskSizeMB: 1,
+            Description: "PP-OCRv4 字符映射表。6623个中英文常用字符。",
+            Layer: ModelLayer.L0,
+            EngineType: "text"),
+
         // ==================== L1: Small ONNX LLMs (Edge-Native) ====================
         new LocalModelInfo(
             Version: "smollm2-360m-onnx",

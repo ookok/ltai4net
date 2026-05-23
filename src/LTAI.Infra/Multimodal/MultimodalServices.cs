@@ -187,12 +187,14 @@ public sealed class MultimodalOrchestrator
 {
     private readonly ILogger<MultimodalOrchestrator> _logger;
     private readonly OCREngine _ocr;
+    private readonly RapidOCREngine? _rapidOcr;
     private readonly VisionAnalyzer _vision;
     private readonly SpeechEngine _speech;
 
-    public MultimodalOrchestrator(ILogger<MultimodalOrchestrator> logger, OCREngine ocr, VisionAnalyzer vision, SpeechEngine speech)
+    public MultimodalOrchestrator(ILogger<MultimodalOrchestrator> logger, OCREngine ocr,
+        VisionAnalyzer vision, SpeechEngine speech, RapidOCREngine? rapidOcr = null)
     {
-        _logger = logger; _ocr = ocr; _vision = vision; _speech = speech;
+        _logger = logger; _ocr = ocr; _vision = vision; _speech = speech; _rapidOcr = rapidOcr;
     }
 
     public async Task<string> ProcessFileAsync(string filePath, string? task = null, CancellationToken ct = default)
@@ -203,7 +205,9 @@ public sealed class MultimodalOrchestrator
         {
             ".png" or ".jpg" or ".jpeg" or ".webp" or ".bmp" or ".gif" =>
                 (task?.Contains("ocr") == true || task?.Contains("text") == true)
-                    ? await _ocr.ExtractTextAsync(filePath, ct: ct)
+                    ? (_rapidOcr?.IsReady == true
+                        ? await _rapidOcr.ExtractTextAsync(filePath, ct: ct)
+                        : await _ocr.ExtractTextAsync(filePath, ct: ct))
                     : await _vision.DescribeImageAsync(filePath, task, ct),
             ".wav" or ".mp3" or ".m4a" => await _speech.RecognizeFromFileAsync(filePath, ct),
             _ => $"Unsupported format: {ext}"

@@ -8,6 +8,12 @@ public static class ServiceCollectionExtensions
     public static IServiceCollection AddLTAIMultimodal(this IServiceCollection services)
     {
         services.AddSingleton<OCREngine>();
+        services.AddSingleton<RapidOCREngine>(sp =>
+        {
+            var logger = sp.GetService<Microsoft.Extensions.Logging.ILogger<RapidOCREngine>>();
+            var modelDir = global::System.IO.Path.Combine(AppContext.BaseDirectory, "models", "rapidocr");
+            return new RapidOCREngine(modelDir, logger);
+        });
         services.AddSingleton<VisionAnalyzer>();
         services.AddSingleton<SpeechEngine>();
         services.AddSingleton<MultimodalOrchestrator>();
