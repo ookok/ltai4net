@@ -3,7 +3,9 @@ using LTAI.AI.Governors;
 using LTAI.AI.Providers;
 using LTAI.Tools.Skills;
 using LTAI.Core.Configuration;
+using LTAI.Core.Governors;
 using LTAI.Core.Messaging;
+using LTAI.Core.Network;
 using LTAI.Knowledge.Core;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
@@ -163,6 +165,30 @@ public static class ServiceCollectionExtensions
             var depthController = sp.GetRequiredService<AdaptiveDepthController>();
             var logger = sp.GetService<ILogger<MoERouter>>();
             return new MoERouter(depthController, logger);
+        });
+
+        services.AddSingleton<CapabilityMigrator>(sp =>
+        {
+            var loraManager = sp.GetRequiredService<TieredLoraManager>();
+            var synapticMemory = sp.GetService<SynapticMemory>();
+            var logger = sp.GetService<ILogger<CapabilityMigrator>>();
+            return new CapabilityMigrator(loraManager, synapticMemory, logger);
+        });
+
+        services.AddSingleton<ModelUpgrader>(sp =>
+        {
+            var loraManager = sp.GetRequiredService<TieredLoraManager>();
+            var migrator = sp.GetRequiredService<CapabilityMigrator>();
+            var synapticMemory = sp.GetService<SynapticMemory>();
+            var logger = sp.GetService<ILogger<ModelUpgrader>>();
+            return new ModelUpgrader(loraManager, migrator, synapticMemory, logger);
+        });
+
+        services.AddSingleton<ModelAutoDownloader>(sp =>
+        {
+            var logger = sp.GetService<ILogger<ModelAutoDownloader>>();
+            var modelsRoot = global::System.IO.Path.Combine(AppContext.BaseDirectory, "models");
+            return new ModelAutoDownloader(modelsRoot, logger);
         });
 
         services.AddSingleton<SpeculativeDecoder>(sp =>
