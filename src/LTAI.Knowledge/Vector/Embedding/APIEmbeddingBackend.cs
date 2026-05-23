@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 
 namespace LTAI.Knowledge.Vector.Embedding;
 
+[Obsolete("Cloud embedding APIs are being phased out. Use ONNX local embedding (AddLTAIVectorLocal) instead. API backend retained for backward compatibility only.")]
 public sealed class APIEmbeddingBackend : IEmbeddingBackend
 {
     private readonly IHttpClientFactory? _httpClientFactory;

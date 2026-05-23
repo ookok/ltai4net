@@ -14,6 +14,24 @@ public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddLTAIVector(this IServiceCollection services)
     {
+        return AddLTAIVectorLocal(services);
+    }
+
+    public static IServiceCollection AddLTAIVectorLocal(
+        this IServiceCollection services,
+        string? onnxModelPath = null,
+        string? tokenizerPath = null,
+        int dimension = 384)
+    {
+        var modelPath = onnxModelPath ?? Path.Combine(AppContext.BaseDirectory, "synaptic", "models", "embedding", "model.onnx");
+        var tokPath = tokenizerPath ?? Path.Combine(Path.GetDirectoryName(modelPath)!, "tokenizer.json");
+
+        if (File.Exists(modelPath))
+        {
+            return AddLTAIVectorWithOnnx(services, modelPath, tokPath, dimension, "bge-small-zh-v1.5");
+        }
+
+        // Fallback to hash-based local embedding (no model needed)
         return AddLTAIVectorInternal(services, embeddingType: "local");
     }
 

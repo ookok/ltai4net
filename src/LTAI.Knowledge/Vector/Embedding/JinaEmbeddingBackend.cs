@@ -75,6 +75,7 @@ public static class JinaModelPresets
 /// Backend that wraps OnnxEmbeddingBackend with Jina-specific preprocessing.
 /// Jina v5 Omni uses task-specific prefixes: "text: ", "image: ", "audio: "
 /// which must be prepended to inputs before embedding.
+[Obsolete("Cloud embedding APIs are being phased out. Use ONNX local embedding (AddLTAIVectorLocal) instead. Jina backend retained for backward compatibility only.")]
 public sealed class JinaEmbeddingBackend : IEmbeddingBackend, IDisposable
 {
     private readonly OnnxEmbeddingBackend _onnxBackend;
