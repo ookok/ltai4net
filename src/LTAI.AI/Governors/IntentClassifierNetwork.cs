@@ -35,6 +35,15 @@ public sealed class IntentClassifierNetwork : IDisposable
     public int Generation { get; private set; }
     public int TotalSamplesTrained { get; private set; }
 
+    public string MapClassLabel(int idx)
+    {
+        return idx switch
+        {
+            0 => "fast", 1 => "deep", 2 => "code", 3 => "chat", 4 => "reasoning",
+            _ => "chat"
+        };
+    }
+
     public IntentClassifierNetwork(
         int vocabSize = 1000, int inputDim = 256, int hidden1Dim = 128, int hidden2Dim = 64,
         int numClasses = 5, int loraRank = 8, Random? rng = null)

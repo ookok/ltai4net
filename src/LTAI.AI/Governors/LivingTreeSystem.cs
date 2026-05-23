@@ -43,6 +43,9 @@ public sealed class LivingTreeSystem
     private readonly CoEchoDetector _echoDetector = new();
     private readonly OTESelector _oteSelector;
     private readonly TaskPipeline _taskPipeline;
+    private readonly AdaptiveDepthController? _depthController;
+    private readonly TieredLoraManager? _tieredLora;
+    private readonly CrossLevelDistiller? _crossDistiller;
     private int _requestCount;
     private const int TrainingInterval = 50;
 
@@ -66,6 +69,9 @@ public sealed class LivingTreeSystem
     public RoutingGovernor RoutingGovernor => _routing;
     public IChatClient LLMClient => _llm;
     public TaskPipeline TaskPipeline => _taskPipeline;
+    public AdaptiveDepthController? DepthController => _depthController;
+    public TieredLoraManager? TieredLora => _tieredLora;
+    public CrossLevelDistiller? CrossDistiller => _crossDistiller;
 
     public LivingTreeSystem(
         ICognitiveMesh mesh,
@@ -85,7 +91,10 @@ public sealed class LivingTreeSystem
         ReasoningOrchestrator? reasoning = null,
         L1L2DuplexRouter? duplexRouter = null,
         SynapticMemory? synapticMemory = null,
-        DreamCycle? dreamCycle = null)
+        DreamCycle? dreamCycle = null,
+        AdaptiveDepthController? depthController = null,
+        TieredLoraManager? tieredLora = null,
+        CrossLevelDistiller? crossDistiller = null)
     {
         _mesh = mesh;
         _journal = journal;
@@ -105,6 +114,9 @@ public sealed class LivingTreeSystem
         _duplexRouter = duplexRouter;
         _synapticMemory = synapticMemory;
         _dreamCycle = dreamCycle;
+        _depthController = depthController;
+        _tieredLora = tieredLora;
+        _crossDistiller = crossDistiller;
         _taskPipeline = new TaskPipeline(_journal);
     }
 

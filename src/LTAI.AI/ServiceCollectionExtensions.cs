@@ -126,6 +126,29 @@ public static class ServiceCollectionExtensions
             return new SynapticMemory(dbPath, logger);
         });
 
+        services.AddSingleton<AdaptiveDepthController>(sp =>
+        {
+            var logger = sp.GetService<ILogger<AdaptiveDepthController>>();
+            var paceTracker = sp.GetService<LearningProgressTracker>();
+            return new AdaptiveDepthController(logger, paceTracker);
+        });
+
+        services.AddSingleton<TieredLoraManager>(sp =>
+        {
+            var logger = sp.GetService<ILogger<TieredLoraManager>>();
+            var modelDir = System.IO.Path.Combine(synapticDir, "models");
+            var depthController = sp.GetRequiredService<AdaptiveDepthController>();
+            return new TieredLoraManager(modelDir, depthController, logger);
+        });
+
+        services.AddSingleton<CrossLevelDistiller>(sp =>
+        {
+            var loraManager = sp.GetRequiredService<TieredLoraManager>();
+            var depthController = sp.GetRequiredService<AdaptiveDepthController>();
+            var logger = sp.GetService<ILogger<CrossLevelDistiller>>();
+            return new CrossLevelDistiller(loraManager, depthController, logger);
+        });
+
         services.AddSingleton<LoraTrainer>(sp =>
         {
             var logger = sp.GetService<ILogger<LoraTrainer>>();
