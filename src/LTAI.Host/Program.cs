@@ -32,10 +32,12 @@ using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Windows Service 部署: sc create LTAI binPath="dotnet LTAI.Host.dll"
+// Linux systemd 部署: 创建 /etc/systemd/system/ltai.service
+
 // 从 secrets JSON 文件加载所有密钥到环境变量
 var secretsPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Desktop), "secrets_export.json");
 SecretVault.LoadFromJsonFile(secretsPath);
-// 备选路径: 项目根目录
 SecretVault.LoadFromJsonFile(Path.Combine(AppContext.BaseDirectory, "secrets_export.json"));
 
 var configPath = Path.Combine(AppContext.BaseDirectory, "appsettings.json");
@@ -65,22 +67,14 @@ builder.Services.AddRateLimiter(options =>
     });
 });
 
-builder.Logging.ClearProviders();
-builder.Host.UseSerilog((context, config) => config.ReadFrom.Configuration(context.Configuration));
-
-var resourceBuilder = ResourceBuilder.CreateDefault().AddService("LTAI", "5.5.0-net10");
-builder.Logging.AddOpenTelemetry(o => { o.SetResourceBuilder(resourceBuilder); o.IncludeFormattedMessage = true; });
-builder.Services.AddOpenTelemetry()
-    .WithTracing(t => t.SetResourceBuilder(resourceBuilder)
-        .AddAspNetCoreInstrumentation().AddHttpClientInstrumentation()
-        .AddSource("LTAI.AI", "LTAI.TreeLLM", "LTAI.Execution", "Microsoft.Agents.AI").AddConsoleExporter())
-    .WithMetrics(m => m.SetResourceBuilder(resourceBuilder)
-        .AddAspNetCoreInstrumentation().AddHttpClientInstrumentation()
-        .AddMeter("Microsoft.Agents.AI").AddConsoleExporter());
-
-builder.Services.AddHealthChecks();
+builder.Host.UseSerilog((ctx, lc) => lc
+    .MinimumLevel.Information()
+    .WriteTo.Console()
+    .WriteTo.File(Path.Combine(AppContext.BaseDirectory, "logs", "ltai-.log"), rollingInterval: RollingInterval.Day));
 
 builder.Services.AddLTAICore();
+builder.Services.AddLTAIAgent();
+
 var l0 = ltaiOptions.AI.L0;
 var l0ProviderConfig = ltaiOptions.AI.Providers.TryGetValue(l0.Provider, out var l0p) ? l0p : null;
 var l0ApiKey = l0ProviderConfig?.ApiKey ?? "";
@@ -105,44 +99,44 @@ builder.Services.AddLTAIEconomy(); builder.Services.AddLTAISandbox(); builder.Se
 builder.Services.AddLTAIMultimodal(); builder.Services.AddLTAIMAF();
 builder.Services.AddLTAINetwork();
 
+// OpenTelemetry
+builder.Services.AddOpenTelemetry()
+    .ConfigureResource(r => r.AddService("LTAI.Host", serviceVersion: "6.2.0"))
+    .WithTracing(t => t.AddAspNetCoreInstrumentation().AddHttpClientInstrumentation().AddSource("LTAI.Agent.Mesh"))
+    .WithMetrics(m => m.AddAspNetCoreInstrumentation().AddHttpClientInstrumentation());
+
 var app = builder.Build();
 
 // app.UseA2ABearerAuth();
 app.UseLTAI();
 
-app.MapMAFEndpoints(); app.MapDNAEndpoints(); app.MapCapabilityEndpoints();
-app.MapSandboxEndpoints(); app.MapMultimodalEndpoints(); app.MapExecutionEndpoints();
-app.UseLTAIMetrics(); app.MapMCPEndpoints(); app.MapAHEEndpoints();
-app.MapNetworkEndpoints();
-app.MapA2AHttpJson("LTAI", "/a2a/livingtree");
-
-app.UseSerilogRequestLogging();
-
-var sp = app.Services;
-var config = AppConfiguration.Load();
+using var scope = app.Services.CreateScope();
+var sp = scope.ServiceProvider;
 var logger = sp.GetRequiredService<ILogger<Program>>();
 
+logger.LogInformation("LTAI Agent Mesh starting on {Port}", ltaiOptions.Web.Port);
+logger.LogInformation("L1={L1Model} L2={L2Model} L0={L0Model}",
+    ltaiOptions.AI.L1.Model, ltaiOptions.AI.L2.Model, ltaiOptions.AI.L0.Model);
+logger.LogInformation("ONNX training: {Enabled}", ltaiOptions.AI.OnnxEnabled ? "enabled" : "disabled");
+
 var l0Check = ltaiOptions.AI.L0;
-var l0pc2 = ltaiOptions.AI.Providers.TryGetValue(l0Check.Provider, out var l0pc3) ? l0pc3 : null;
-var l0KeySource = "local";
+var l0pc2 = ltaiOptions.AI.Providers.TryGetValue(l0Check.Provider, out var l02) ? l02 : null;
+var l0KeySource = "none";
 if (l0pc2 != null && !string.IsNullOrEmpty(l0pc2.ApiKey))
     l0KeySource = "appsettings";
 else if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable($"{l0Check.Provider.ToUpperInvariant()}_API_KEY")))
     l0KeySource = "env";
 
-var onnxEmbeddingPath2 = System.IO.Path.Combine(AppContext.BaseDirectory, "synaptic", "models", "embedding", "model.onnx");
-
-if (l0Check.IsConfigured && l0KeySource != "local")
+if (System.IO.File.Exists(onnxEmbeddingPath))
 {
-    logger.LogInformation("Embedding: API ({Provider}/{Model} via {Endpoint}, key from {Source})", l0Check.Provider, l0Check.Model, l0pc2?.Endpoint, l0KeySource);
-}
-else if (System.IO.File.Exists(onnxEmbeddingPath2))
-{
-    logger.LogInformation("Embedding: ONNX local model ({Path})", onnxEmbeddingPath2);
+    logger.LogInformation("Embedding: ONNX local model ({Path})", onnxEmbeddingPath);
 }
 else
 {
-    logger.LogInformation("Embedding: local backend (fallback)");
+    if (l0KeySource != "none")
+        logger.LogInformation("Embedding: {Provider} API ({Source}={Model})", l0Check.Provider, l0KeySource, l0Check.Model);
+    else
+        logger.LogInformation("Embedding: local backend (fallback)");
 }
 
 var token = Environment.GetEnvironmentVariable("A2A_BEARER_TOKEN") ?? "";
@@ -154,66 +148,10 @@ if (string.IsNullOrWhiteSpace(token))
 }
 
 var toolRegistry = sp.GetRequiredService<AIToolRegistry>();
-
 sp.GetRequiredService<LTAI.Agent.Evolution.PluginRegistry>().Discover();
 await LTAI.Agent.Tools.ToolRegistryExtensions.RegisterAllToolCategoriesAsync(toolRegistry, logger);
 await sp.RegisterCodeActToolsAsync(toolRegistry);
 
-await toolRegistry.RegisterAsync("git_diff", async args =>
-{
-    var repoPath = args.TryGetValue("repoPath", out var r) ? r?.ToString() : null;
-    var files = args.TryGetValue("files", out var f) ? f?.ToString() : null;
-    var staged = args.TryGetValue("staged", out var s) && s is true;
-    return await LTAI.Agent.Tools.GitTools.GitDiff(repoPath, files, staged);
-});
-await toolRegistry.RegisterAsync("git_log", async args =>
-{
-    var repoPath = args.TryGetValue("repoPath", out var r) ? r?.ToString() : null;
-    var maxCount = args.TryGetValue("maxCount", out var m) && int.TryParse(m?.ToString(), out var n) ? n : 20;
-    var format = args.TryGetValue("format", out var f) ? f?.ToString() ?? "oneline" : "oneline";
-    return await LTAI.Agent.Tools.GitTools.GitLog(repoPath, maxCount, format);
-});
-await toolRegistry.RegisterAsync("git_blame", async args =>
-{
-    var filePath = args.TryGetValue("filePath", out var fp) ? fp?.ToString() ?? "" : "";
-    var repoPath = args.TryGetValue("repoPath", out var r) ? r?.ToString() : null;
-    return await LTAI.Agent.Tools.GitTools.GitBlame(filePath, repoPath);
-});
+app.MapGet("/health", () => Results.Ok(new { status = "healthy", version = "6.2.0", timestamp = DateTime.UtcNow }));
 
-var system = sp.GetRequiredService<LivingTreeSystem>();
-await system.InitializeAsync();
-
-var decomposer = TaskPlanning.GetTaskDecomposer(
-    sp.GetRequiredService<ILogger<TaskDecomposer>>(),
-    system.LLMClient);
-system.TaskPipeline.LlmDecomposer = (client, query, ct) =>
-    decomposer.Decompose(query.Length > 1000 ? query[..1000] : query);
-logger.LogInformation("TaskDecomposer wired to LivingTreeSystem");
-
-sp.GetRequiredService<LTAI.Agent.Evolution.HarnessSnapshot>().Capture();
-sp.GetRequiredService<LTAI.Agent.Evolution.PluginRegistry>().Install("pr-review-toolkit", new()
-{
-    Name = "pr-review-toolkit", Version = "1.0", Type = "agent_bundle",
-    Description = "6 specialized code review agents",
-    Agents = new() { "comment-analyzer", "test-analyzer", "silent-failure-hunter", "type-design-analyzer", "code-reviewer", "code-simplifier" },
-    Tools = new() { "code_analyze", "code_review", "git_diff", "code_stats" },
-    Triggers = new() { "review", "check code", "test", "comment", "error", "refactor", "simplify" },
-    Author = "LTAI", License = "MIT"
-});
-
-var evolEngine = sp.GetRequiredService<LTAI.Agent.Evolution.HarnessEvolutionEngine>();
-evolEngine.RegisterComponent(new LTAI.Agent.Evolution.ToolsHarnessComponent(sp.GetRequiredService<AIToolRegistry>()));
-
-var p2pNode = sp.GetRequiredService<IP2PNode>();
-await p2pNode.StartAsync();
-logger.LogInformation("P2P Node started: {PeerId} on port {Port}", p2pNode.PeerId, p2pNode.LocalPort);
-
-var a2aP2pBridge = sp.GetRequiredService<A2aP2pBridge>();
-await a2aP2pBridge.BroadcastAgentStatusAsync("LTAI", "online");
-
-logger.LogInformation("LTAI running: mode={Mode} plugins={Plugins} tools={Tools}",
-    system.Mode,
-    sp.GetRequiredService<LTAI.Agent.Evolution.PluginRegistry>().Plugins.Count,
-    sp.GetRequiredService<AIToolRegistry>().ListTools().Count());
-
-app.Run();
+await app.RunAsync();

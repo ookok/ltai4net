@@ -24,6 +24,7 @@ public static class WebApplicationExtensions
         app.MapWorkspaceEndpoints();
         app.MapCellGraphEndpoints();
         app.MapCoreEndpoints();
+        app.MapProviderConfigApi();
         app.MapHealthChecks("/api/health", new HealthCheckOptions
         {
             ResponseWriter = async (context, report) =>
