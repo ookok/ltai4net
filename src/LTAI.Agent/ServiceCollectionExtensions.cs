@@ -25,9 +25,6 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<UnifiedIntentRouter>();
         services.AddSingleton<UniversalOrchestrator>();
         services.AddSingleton<ToolRetriever>();
-        services.AddSingleton<HandoffMeshWorkflow>();
-        services.AddSingleton<CollaborativeMeshWorkflow>();
-        services.AddSingleton<AgentMeshWorkflow>();
         services.AddSingleton<PlannerCriticWorkflow>();
         services.AddSingleton<AgentParliament>();
         services.AddSingleton<SentientParliament>();

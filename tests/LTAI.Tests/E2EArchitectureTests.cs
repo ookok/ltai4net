@@ -12,7 +12,6 @@ namespace LTAI.Tests;
 
 public class E2EArchitectureTests
 {
-    private readonly ILogger<AgentMeshWorkflow> _logger = NullLogger<AgentMeshWorkflow>.Instance;
     private readonly ILogger<HumanInTheLoopReview> _hitlLogger = NullLogger<HumanInTheLoopReview>.Instance;
 
     // ═══ TC-01: 正常路径 Chat → Code → Document ═══
