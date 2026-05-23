@@ -6,7 +6,12 @@
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
+    <IsExeProject>true</IsExeProject>
+    <PublishSingleFile>false</PublishSingleFile>
     <RootNamespace>LTAI.Tests</RootNamespace>
+    <OutputPath>bin/Debug/net10.0/</OutputPath>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
   </PropertyGroup>
 
   <ItemGroup>
@@ -32,6 +37,7 @@
     <ProjectReference Include="..\..\src\LTAI.Knowledge\LTAI.Knowledge.csproj" />
     <ProjectReference Include="..\..\src\LTAI.Agent\LTAI.Agent.csproj" />
     <ProjectReference Include="..\..\src\LTAI.Models\LTAI.Models.csproj" />
+    <ProjectReference Include="..\..\src\LTAI.DNA\LTAI.DNA.csproj" />
   </ItemGroup>
 
 </Project>
