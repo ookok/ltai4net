@@ -68,6 +68,7 @@ public sealed class SpinSelfPlayLoop
         int generated = 0, accepted = 0;
         float totalReward = 0;
         int playerWins = 0, opponentWins = 0;
+        var allRewards = new List<float>();
 
         var queries = GenerateQueries(numRounds);
         _logger.LogInformation("SPIN epoch start: {Rounds} rounds", queries.Count);
@@ -89,6 +90,7 @@ public sealed class SpinSelfPlayLoop
                 // Higher-tier model with higher confidence = better answer → positive reward
                 var reward = opponentConf * 0.6f + (1 - playerConf) * 0.4f;
                 totalReward += reward;
+                allRewards.Add(reward);
                 generated++;
 
                 string winner = reward > 0.55f ? "player" : reward < 0.45f ? "opponent" : "tie";
@@ -144,7 +146,7 @@ public sealed class SpinSelfPlayLoop
         {
             SamplesGenerated = generated,
             SamplesAccepted = accepted,
-            AvgReward = generated > 0 ? totalReward / generated : 0,
+            AvgReward = ComputeHolderMean(allRewards, p: 1.5f),
             PlayerWinRate = generated > 0 ? (float)playerWins / generated : 0,
             Duration = sw.Elapsed
         };
@@ -221,5 +223,17 @@ public sealed class SpinSelfPlayLoop
     {
         while (_playLog.Count > _maxLogSize)
             _playLog.RemoveAt(0);
+    }
+
+    /// Hölder mean: M_p = (1/n Σ x_i^p)^(1/p)
+    /// p>1 → amplifies high rewards, p<1 → conservative.
+    private static float ComputeHolderMean(List<float> values, float p)
+    {
+        if (values.Count == 0) return 0;
+        if (MathF.Abs(p) < 1e-6f) // geometric mean for p≈0
+            return MathF.Exp(values.Where(v => v > 0).Select(v => MathF.Log(v)).DefaultIfEmpty(0).Average());
+        if (p == 1.0f) return values.Average();
+        var powSum = values.Select(v => MathF.Pow(Math.Max(v, 1e-8f), p)).Sum();
+        return MathF.Pow(powSum / values.Count, 1f / p);
     }
 }

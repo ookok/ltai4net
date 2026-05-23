@@ -45,6 +45,14 @@ public sealed class AdaptiveDepthController
         [HrmReasoningTier.DeepThink] = 0, [HrmReasoningTier.FullReason] = 0
     };
 
+    // HölderPO p-annealing (arXiv:2605.12058)
+    private float _holderP = 3.0f;
+    private int _totalTrainingSteps;
+
+    /// Current Hölder p (3.0→1.0 over training lifecycle).
+    /// p>1: amplifies hard samples, fast learning. p<1: stable convergence.
+    public float CurrentHolderP => _holderP;
+
     // Tier baselines: (thinking tokens, max recursion, rank, model name)
     private static readonly Dictionary<HrmReasoningTier, (int tokens, int recursion, int rank, string model)> TierConfig = new()
     {
@@ -264,7 +272,25 @@ public sealed class AdaptiveDepthController
             ["escalation_rate"] = _totalDecisions > 0 ? (float)_escalationCount / _totalDecisions : 0,
             ["tier_distribution"] = _tierCounts.ToDictionary(
                 kv => kv.Key.ToString(), kv => (object)kv.Value),
-            ["plateau"] = _paceTracker?.IsConverged("global", 5) ?? false
+            ["plateau"] = _paceTracker?.IsConverged("global", 5) ?? false,
+            ["holder_p"] = _holderP,
+            ["training_steps"] = _totalTrainingSteps
         };
     }
+
+    /// HölderPO p-annealing: p 从 3.0 线性退火到 1.0
+    /// 训练初期 p=3 (梯度集中→快速学习稀疏信号)
+    /// 训练后期 p=1 (算术平均→稳定收敛)
+    public float StepPAnnealing(int totalSteps = 200)
+    {
+        _totalTrainingSteps++;
+        var progress = Math.Clamp((float)_totalTrainingSteps / totalSteps, 0f, 1f);
+        _holderP = 3.0f - 2.0f * progress;
+        _logger.LogDebug("HölderPO p-annealing: step={Step}/{Total} p={P:F2} progress={Prog:F0}%",
+            _totalTrainingSteps, totalSteps, _holderP, progress * 100);
+        return _holderP;
+    }
+
+    /// Reset p to initial aggressive value (new training cycle)
+    public void ResetHolderP() { _holderP = 3.0f; _totalTrainingSteps = 0; }
 }

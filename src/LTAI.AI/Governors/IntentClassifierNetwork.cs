@@ -35,6 +35,7 @@ public sealed class IntentClassifierNetwork : IDisposable
     public int Generation { get; private set; }
     public int TotalSamplesTrained { get; private set; }
     public float L1Lambda { get; set; } = 0f;
+    public float HolderP { get; set; } = 1.5f;  // HölderPO: p>1 → focus hard samples
 
     public string MapClassLabel(int idx)
     {
@@ -277,6 +278,8 @@ public sealed class IntentClassifierNetwork : IDisposable
     }
 
     /// Train for multiple epochs on a batch of samples
+    /// Train for multiple epochs with Hölder-weighted loss (arXiv:2605.12058).
+    /// p>1 → amplifies hard samples, p<1 → stable conservative update.
     public float Train(List<(string text, int targetClass)> samples, int epochs = 3, float lr = 0.01f, ILogger? logger = null)
     {
         var initialLr = lr;
@@ -288,16 +291,46 @@ public sealed class IntentClassifierNetwork : IDisposable
             float epochLoss = 0;
 
             var shuffled = samples.OrderBy(_ => Random.Shared.Next()).ToList();
-            foreach (var (text, label) in shuffled)
+
+            // HölderPO: compute per-sample losses first pass to get p-weighted scaling
+            var sampleLosses = new float[shuffled.Count];
+            if (HolderP != 1.0f)
             {
-                epochLoss += TrainStep(text, label, epochLr);
+                for (int i = 0; i < shuffled.Count; i++)
+                {
+                    var logits = Forward(shuffled[i].text);
+                    var maxLogit = logits.Max();
+                    var exps = logits.Select(l => MathF.Exp(l - maxLogit)).ToArray();
+                    var sum = exps.Sum();
+                    sampleLosses[i] = -MathF.Log(Math.Max(exps[shuffled[i].targetClass] / (sum + 1e-8f), 1e-8f));
+                }
             }
 
-            epochLoss /= Math.Max(1, samples.Count);
+            // Hölder mean of losses → per-sample weight
+            var holderWeights = new float[shuffled.Count];
+            Array.Fill(holderWeights, 1f);
+            if (HolderP != 1.0f && shuffled.Count > 1)
+            {
+                var pPow = sampleLosses.Select(l => MathF.Pow(Math.Max(l, 1e-8f), HolderP)).ToArray();
+                var holderMean = MathF.Pow(pPow.Average(), 1f / HolderP);
+                for (int i = 0; i < shuffled.Count; i++)
+                {
+                    // Weight ∝ loss^(p-1): hard samples get higher LR when p>1
+                    var w = MathF.Pow(Math.Max(sampleLosses[i], 1e-8f) / (holderMean + 1e-8f), HolderP - 1);
+                    holderWeights[i] = Math.Clamp(w, 0.3f, 3.0f);
+                }
+            }
+
+            for (int i = 0; i < shuffled.Count; i++)
+            {
+                epochLoss += TrainStep(shuffled[i].text, shuffled[i].targetClass, epochLr * holderWeights[i]);
+            }
+
+            epochLoss /= Math.Max(1, shuffled.Count);
             totalLoss = epochLoss;
 
-            logger?.LogDebug("LoRA training epoch {Epoch}/{Total}: loss={Loss:F4}, lr={LR:F6}",
-                epoch + 1, epochs, epochLoss, epochLr);
+            logger?.LogDebug("LoRA epoch {Epoch}/{Total}: loss={Loss:F4} lr={LR:F6} p={P:F2}",
+                epoch + 1, epochs, epochLoss, epochLr, HolderP);
         }
 
         return totalLoss;
