@@ -101,9 +101,23 @@ builder.Services.AddLTAINetwork();
 
 // OpenTelemetry
 builder.Services.AddOpenTelemetry()
-    .ConfigureResource(r => r.AddService("LTAI.Host", serviceVersion: "6.2.0"))
-    .WithTracing(t => t.AddAspNetCoreInstrumentation().AddHttpClientInstrumentation().AddSource("LTAI.Agent.Mesh"))
-    .WithMetrics(m => m.AddAspNetCoreInstrumentation().AddHttpClientInstrumentation());
+    .ConfigureResource(r => r.AddService("LTAI.Host", serviceVersion: "7.0.0"))
+    .WithTracing(t => t
+        .AddAspNetCoreInstrumentation()
+        .AddHttpClientInstrumentation()
+        .AddSource("LTAI.Agent.Mesh")
+        .AddSource("LTAI.Agent")
+        .AddSource("LTAI.Safety")
+        .AddSource("LTAI.Router")
+        .AddSource("LTAI.Agent.Execution")
+        .AddSource("LTAI.Workflow")
+        .AddSource("LTAI.Tool"))
+    .WithMetrics(m =>
+    {
+        m.AddAspNetCoreInstrumentation()
+         .AddHttpClientInstrumentation()
+         .AddMeter("LTAI");
+    });
 
 var app = builder.Build();
 

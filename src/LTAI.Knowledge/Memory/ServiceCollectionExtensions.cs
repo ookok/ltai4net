@@ -14,6 +14,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<MemoryOrchestrator>();
         services.AddSingleton<UserTraitEvolutionTree>();
         services.AddSingleton<TemporalMemoryFabric>();
+        services.AddSingleton<CausalMemoryEngine>();
         return services;
     }
 }

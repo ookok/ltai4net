@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
@@ -68,6 +69,10 @@ public sealed class UnifiedSafetyGate
     public async Task<GateVerdict> EvaluateInputAsync(
         string input, string sessionId, CancellationToken ct = default)
     {
+        using var activity = new ActivitySource("LTAI.Safety").StartActivity("safety.evaluate_input");
+        activity?.SetTag("safety.session_id", sessionId);
+        activity?.SetTag("safety.input_length", input?.Length ?? 0);
+
         if (string.IsNullOrWhiteSpace(input))
         {
             _logger.LogWarning("SafetyGate: Empty/null input from session {Session}", sessionId);
@@ -97,6 +102,8 @@ public sealed class UnifiedSafetyGate
         var cumulative = UpdateCumulativeRisk(sessionId, verdict.RiskScore + injectionScore);
         if (cumulative is > 0.6)
         {
+            activity?.SetTag("safety.block_reason", "cumulative_risk");
+            activity?.SetTag("safety.cumulative_risk", cumulative);
             _sessionRisk.TryRemove(sessionId, out _);
             return EscalateAndBlock(sessionId, "Cumulative risk threshold exceeded");
         }
