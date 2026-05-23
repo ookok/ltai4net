@@ -1,3 +1,4 @@
+using Avalonia;
 using LTAI.AI;
 using LTAI.AI.Governors;
 using LTAI.Core;
@@ -9,25 +10,27 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using Microsoft.Maui.Controls.Hosting;
-using Microsoft.Maui.Hosting;
 
 namespace LTAI.Desktop;
 
-public static class MauiProgram
+public static class Program
 {
-    public static MauiApp CreateMauiApp()
+    [STAThread]
+    public static void Main(string[] args)
     {
-        var builder = MauiApp.CreateBuilder();
-        builder.UseMauiApp<App>();
+        var services = BuildServices();
+        var provider = services.BuildServiceProvider();
+        ServiceLocator.SetProvider(provider);
 
-        var configPath = Path.Combine(AppContext.BaseDirectory, "appsettings.json");
-        if (!File.Exists(configPath) || new FileInfo(configPath).Length < 50)
-        {
-            Console.WriteLine("First run detected — using default config");
-        }
+        BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
+    }
 
-        var services = builder.Services;
+    public static AppBuilder BuildAvaloniaApp()
+        => AppBuilder.Configure<App>().UsePlatformDetect().LogToTrace();
+
+    private static IServiceCollection BuildServices()
+    {
+        var services = new ServiceCollection();
         var ltaiOptions = new LTAIOptions();
 
         var config = new ConfigurationBuilder()
@@ -44,17 +47,22 @@ public static class MauiProgram
 
         services.AddSingleton(Options.Create(ltaiOptions));
         services.AddLogging(b => b.SetMinimumLevel(LogLevel.Information));
-
         services.AddLTAICore();
         services.AddLTAIVectorAuto(apiModel: ltaiOptions.AI.L0.Model);
         services.AddLTAIAI();
         services.AddLTAIDNA();
         services.AddLTAIMetrics();
-
         services.AddSingleton<LTAIService>();
 
-        return builder.Build();
+        return services;
     }
+}
+
+public sealed class ServiceLocator
+{
+    private static IServiceProvider? _provider;
+    public static void SetProvider(IServiceProvider p) => _provider = p;
+    public static T Get<T>() where T : notnull => _provider!.GetRequiredService<T>();
 }
 
 public sealed class LTAIService

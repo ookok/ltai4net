@@ -1,44 +1,32 @@
 <Project Sdk="Microsoft.NET.Sdk">
-
   <PropertyGroup>
-    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
     <OutputType>WinExe</OutputType>
-    <RootNamespace>LTAI.Desktop</RootNamespace>
-    <UseMaui>true</UseMaui>
-    <SingleProject>true</SingleProject>
+    <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <ApplicationTitle>LTAI Desktop</ApplicationTitle>
-    <ApplicationId>com.ltai.desktop</ApplicationId>
-    <WindowsPackageType>None</WindowsPackageType>
-    <WindowsAppSDKSelfContained>false</WindowsAppSDKSelfContained>
+    <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
     <ApplicationDisplayVersion>7.0</ApplicationDisplayVersion>
-    <ApplicationVersion>1</ApplicationVersion>
-    <PublishReadyToRun>false</PublishReadyToRun>
-    <PublishTrimmed>true</PublishTrimmed>
-    <TrimMode>partial</TrimMode>
-    <DebugType>none</DebugType>
-    <DebugSymbols>false</DebugSymbols>
-    <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
+    <RootNamespace>LTAI.Desktop</RootNamespace>
+    <AssemblyName>LTAI.Desktop</AssemblyName>
   </PropertyGroup>
 
   <ItemGroup>
-    <MauiIcon Include="Resources\appicon.svg" />
-    <MauiFont Include="Resources\Fonts\*" />
+    <AvaloniaResource Include="Assets\**" />
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.Maui.Controls" Version="10.0.*" />
+    <PackageReference Include="Avalonia" Version="11.2.5" />
+    <PackageReference Include="Avalonia.Desktop" Version="11.2.5" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="11.2.5" />
+    <PackageReference Include="Avalonia.Fonts.Inter" Version="11.2.5" />
+    <PackageReference Include="Avalonia.Diagnostics" Version="11.2.5" Condition="'$(Configuration)' == 'Debug'" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\LTAI.Core\LTAI.Core.csproj" />
     <ProjectReference Include="..\LTAI.AI\LTAI.AI.csproj" />
     <ProjectReference Include="..\LTAI.DNA\LTAI.DNA.csproj" />
-    <ProjectReference Include="..\LTAI.Tools\LTAI.Tools.csproj" />
-    <ProjectReference Include="..\LTAI.Knowledge\LTAI.Knowledge.csproj" />
     <ProjectReference Include="..\LTAI.Planning\LTAI.Planning.csproj" />
-    <ProjectReference Include="..\LTAI.Agent\LTAI.Agent.csproj" />
+    <ProjectReference Include="..\LTAI.Knowledge\LTAI.Knowledge.csproj" />
   </ItemGroup>
-
 </Project>
