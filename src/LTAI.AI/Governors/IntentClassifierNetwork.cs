@@ -260,11 +260,9 @@ public sealed class IntentClassifierNetwork : IDisposable
 
         for (int epoch = 0; epoch < epochs; epoch++)
         {
-            // LR decay
             var epochLr = initialLr * MathF.Pow(0.9f, epoch);
             float epochLoss = 0;
 
-            // Shuffle
             var shuffled = samples.OrderBy(_ => Random.Shared.Next()).ToList();
             foreach (var (text, label) in shuffled)
             {
@@ -279,6 +277,150 @@ public sealed class IntentClassifierNetwork : IDisposable
         }
 
         return totalLoss;
+    }
+
+    /// Progressive layer freezing: early epochs train all layers,
+    /// later epochs freeze bottom layers and only train LoRA on top layers.
+    /// Typical schedule: epoch 0-1: all layers, epoch 2: freeze W1, epoch 3+: freeze W1+W2
+    public float TrainProgressive(List<(string text, int targetClass)> samples,
+        int epochs = 5, float lr = 0.01f, ILogger? logger = null)
+    {
+        var initialLr = lr;
+        float totalLoss = 0;
+
+        for (int epoch = 0; epoch < epochs; epoch++)
+        {
+            var epochLr = initialLr * MathF.Pow(0.9f, epoch);
+            float epochLoss = 0;
+
+            // Progressive freezing schedule
+            if (epoch >= 3)
+            {
+                // Freeze W1 + W2, only train LoRA adapters
+                Lora1.Scale = 1.5f; // Boost LoRA contribution when base is frozen
+                Lora2.Scale = 1.5f;
+            }
+            else if (epoch == 2)
+            {
+                // Freeze W1 only, train LoRA1 + all of Layer2+Layer3
+                Lora1.Scale = 1.2f;
+            }
+
+            var shuffled = samples.OrderBy(_ => Random.Shared.Next()).ToList();
+            foreach (var (text, label) in shuffled)
+            {
+                // In frozen mode, only apply LoRA gradient (skip bias/W updates for frozen layers)
+                if (epoch >= 3)
+                    epochLoss += TrainStepFrozen(text, label, epochLr);
+                else if (epoch == 2)
+                    epochLoss += TrainStepFreezeLayer1(text, label, epochLr);
+                else
+                    epochLoss += TrainStep(text, label, epochLr);
+            }
+
+            epochLoss /= Math.Max(1, samples.Count);
+            totalLoss = epochLoss;
+
+            logger?.LogDebug("Progressive epoch {Epoch}/{Total}: loss={Loss:F4} lr={LR:F6} frozen={(epoch>=2?'L1':'')}{(epoch>=3?'+L2':'')}",
+                epoch + 1, epochs, epochLoss, epochLr);
+        }
+
+        return totalLoss;
+    }
+
+    /// Train only LoRA adapters (all base weights frozen)
+    private float TrainStepFrozen(string text, int targetClass, float lr)
+    {
+        var logits = Forward(text, cacheForBackward: true);
+        var (dLogits, dH2a, _) = ComputeGradients(logits, targetClass);
+
+        // Only LoRA adapters, skip base weights
+        var dH2 = new float[_hidden2Dim];
+        for (int i = 0; i < _hidden2Dim; i++) dH2[i] = _h2Cache![i] > 0 ? dH2a[i] : 0;
+        var (dA2, dB2) = Lora2.Backward(_h1aCache!, dH2);
+        Lora2.ApplyGradient(dA2, dB2, lr);
+
+        var dH1a = new float[_hidden1Dim];
+        for (int j = 0; j < _hidden1Dim; j++)
+        {
+            float sum = 0;
+            for (int i = 0; i < _hidden2Dim; i++) sum += _w2[i, j] * dH2[i];
+            dH1a[j] = sum;
+        }
+        var dH1 = new float[_hidden1Dim];
+        for (int i = 0; i < _hidden1Dim; i++) dH1[i] = _h1Cache![i] > 0 ? dH1a[i] : 0;
+        var (dA1, dB1) = Lora1.Backward(EncodeText(text), dH1);
+        Lora1.ApplyGradient(dA1, dB1, lr);
+
+        TotalSamplesTrained++;
+        return -MathF.Log(Math.Max(ComputeSoftmax(logits)[targetClass], 1e-8f));
+    }
+
+    /// Freeze Layer 1 base weights, train LoRA1 + all of Layer2/3
+    private float TrainStepFreezeLayer1(string text, int targetClass, float lr)
+    {
+        var logits = Forward(text, cacheForBackward: true);
+        var (dLogits, dH2a, _) = ComputeGradients(logits, targetClass);
+
+        // Layer 3: full update
+        for (int i = 0; i < _numClasses; i++)
+        {
+            _b3[i] -= lr * dLogits[i];
+            for (int j = 0; j < _hidden2Dim; j++) _w3[i, j] -= lr * dLogits[i] * _h2aCache![j];
+        }
+
+        // Layer 2: full update
+        var dH2 = new float[_hidden2Dim];
+        for (int i = 0; i < _hidden2Dim; i++) dH2[i] = _h2Cache![i] > 0 ? dH2a[i] : 0;
+        var (dA2, dB2) = Lora2.Backward(_h1aCache!, dH2);
+        Lora2.ApplyGradient(dA2, dB2, lr);
+        for (int i = 0; i < _hidden2Dim; i++) _b2[i] -= lr * dH2[i];
+
+        // Layer 1: only LoRA, freeze base W1, b1
+        var dH1a = new float[_hidden1Dim];
+        for (int j = 0; j < _hidden1Dim; j++)
+        {
+            float sum = 0;
+            for (int i = 0; i < _hidden2Dim; i++) sum += _w2[i, j] * dH2[i];
+            dH1a[j] = sum;
+        }
+        var dH1 = new float[_hidden1Dim];
+        for (int i = 0; i < _hidden1Dim; i++) dH1[i] = _h1Cache![i] > 0 ? dH1a[i] : 0;
+        var (dA1, dB1) = Lora1.Backward(EncodeText(text), dH1);
+        Lora1.ApplyGradient(dA1, dB1, lr);
+
+        TotalSamplesTrained++;
+        return -MathF.Log(Math.Max(ComputeSoftmax(logits)[targetClass], 1e-8f));
+    }
+
+    private (float[] dLogits, float[] dH2a, float[] probs) ComputeGradients(float[] logits, int targetClass)
+    {
+        var maxLogit = logits.Max();
+        var exps = logits.Select(l => MathF.Exp(l - maxLogit)).ToArray();
+        var expSum = exps.Sum();
+        var probs = exps.Select(e => e / (expSum + 1e-8f)).ToArray();
+
+        var dLogits = new float[_numClasses];
+        for (int i = 0; i < _numClasses; i++)
+            dLogits[i] = probs[i] - (i == targetClass ? 1 : 0);
+
+        var dH2a = new float[_hidden2Dim];
+        for (int j = 0; j < _hidden2Dim; j++)
+        {
+            float sum = 0;
+            for (int i = 0; i < _numClasses; i++) sum += _w3[i, j] * dLogits[i];
+            dH2a[j] = sum;
+        }
+
+        return (dLogits, dH2a, probs);
+    }
+
+    private static float[] ComputeSoftmax(float[] logits)
+    {
+        var maxLogit = logits.Max();
+        var exps = logits.Select(l => MathF.Exp(l - maxLogit)).ToArray();
+        var sum = exps.Sum();
+        return exps.Select(e => e / (sum + 1e-8f)).ToArray();
     }
 
     /// Merge all LoRA adapters into base weights and return merged weights for export

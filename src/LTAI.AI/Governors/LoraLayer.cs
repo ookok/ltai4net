@@ -13,7 +13,7 @@ public sealed class LoraLayer
     public int InputDim { get; }
     public int OutputDim { get; }
     public int Rank { get; }
-    public float Scale { get; private set; }
+    public float Scale { get; set; }
     public bool IsMerged => _merged != null;
 
     public LoraLayer(float[,] baseWeights, int rank, float scale = 1.0f, Random? rng = null)

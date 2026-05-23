@@ -149,6 +149,34 @@ public static class ServiceCollectionExtensions
             return new CrossLevelDistiller(loraManager, depthController, logger);
         });
 
+        services.AddSingleton<SpinSelfPlayLoop>(sp =>
+        {
+            var loraManager = sp.GetRequiredService<TieredLoraManager>();
+            var depthController = sp.GetRequiredService<AdaptiveDepthController>();
+            var synapticMemory = sp.GetService<SynapticMemory>();
+            var logger = sp.GetService<ILogger<SpinSelfPlayLoop>>();
+            return new SpinSelfPlayLoop(loraManager, depthController, synapticMemory, logger);
+        });
+
+        services.AddSingleton<MoERouter>(sp =>
+        {
+            var depthController = sp.GetRequiredService<AdaptiveDepthController>();
+            var logger = sp.GetService<ILogger<MoERouter>>();
+            return new MoERouter(depthController, logger);
+        });
+
+        services.AddSingleton<SpeculativeDecoder>(sp =>
+        {
+            var logger = sp.GetService<ILogger<SpeculativeDecoder>>();
+            var config = new SpeculativeDecoderConfig
+            {
+                DraftSteps = 6,
+                DraftModelPath = global::System.IO.Path.Combine(synapticDir, "models", "smollm2-135m", "model.onnx"),
+                DraftTokenizerPath = global::System.IO.Path.Combine(synapticDir, "models", "smollm2-135m", "tokenizer.json")
+            };
+            return new SpeculativeDecoder(config, logger);
+        });
+
         services.AddSingleton<LoraTrainer>(sp =>
         {
             var logger = sp.GetService<ILogger<LoraTrainer>>();
