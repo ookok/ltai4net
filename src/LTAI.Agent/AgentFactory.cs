@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using LTAI.DNA.Consciousness;
 using LTAI.DNA.Safety;
 using LTAI.Models;
@@ -79,15 +80,19 @@ public sealed class AgentFactory : IAgentFactory
 
         builder.Use(async (messages, session, options, inner, ct) =>
         {
+            using var span = new ActivitySource("LTAI.Safety").StartActivity("unified_safety.middleware");
             var msgList = messages.ToList();
             var userMsg = msgList.LastOrDefault(m => m.Role == ChatRole.User);
             var sessionId = (session as LTAIAgentSession)?.SessionId ?? "anon";
+            span?.SetTag("safety.session", sessionId);
 
             var gateVerdict = await _safetyGate.EvaluateInputAsync(
                 userMsg?.Text ?? "", sessionId, ct);
 
             if (!gateVerdict.IsAllowed)
             {
+                span?.SetTag("safety.blocked", true);
+                span?.SetTag("safety.reason", gateVerdict.Reason);
                 _logger.LogWarning("AgentFactory [{Agent}]: Input blocked by UnifiedSafetyGate: {Reason}",
                     card.Name, gateVerdict.Reason);
                 return new AgentResponse(new ChatMessage(ChatRole.Assistant,
