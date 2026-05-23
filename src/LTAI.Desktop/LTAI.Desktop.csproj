@@ -12,7 +12,7 @@
     <ApplicationId>com.ltai.desktop</ApplicationId>
     <WindowsPackageType>None</WindowsPackageType>
     <WindowsAppSDKSelfContained>false</WindowsAppSDKSelfContained>
-    <ApplicationDisplayVersion>6.1</ApplicationDisplayVersion>
+    <ApplicationDisplayVersion>7.0</ApplicationDisplayVersion>
     <ApplicationVersion>1</ApplicationVersion>
     <PublishReadyToRun>false</PublishReadyToRun>
     <PublishTrimmed>true</PublishTrimmed>

@@ -57,31 +57,13 @@ public partial class ChatPage : ContentPage
         _streamCts = new CancellationTokenSource();
         try
         {
-            using var http = new HttpClient { BaseAddress = new Uri("http://localhost:8080") };
-            var json = JsonSerializer.Serialize(new { query });
-            var content = new StringContent(json, Encoding.UTF8, "application/json");
-            var request = new HttpRequestMessage(HttpMethod.Post, "/api/maf/stream") { Content = content };
-
-            var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, _streamCts.Token);
-            using var stream = await response.Content.ReadAsStreamAsync();
-            using var reader = new StreamReader(stream);
-
             var fullResponse = new StringBuilder();
-            while (true)
+            await foreach (var token in _svc.LTS.StreamChatAsync(query).WithCancellation(_streamCts.Token))
             {
-                var line = await reader.ReadLineAsync();
-                if (line == null || line == "data: [DONE]") break;
-                if (!line.StartsWith("data: ")) continue;
-
-                var data = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(line[6..]);
-                if (data != null && data.TryGetValue("text", out var t))
-                {
-                    var token = t.GetString() ?? "";
-                    fullResponse.Append(token);
-                    _totalTokens++;
-                    UpdateStreamBlock(responseId, RenderMarkdownToHtml(fullResponse.ToString()));
-                    UpdateStats();
-                }
+                fullResponse.Append(token);
+                _totalTokens++;
+                UpdateStreamBlock(responseId, RenderMarkdownToHtml(fullResponse.ToString()));
+                UpdateStats();
             }
 
             var final = fullResponse.ToString();

@@ -51,15 +51,11 @@ public partial class DashboardPage : ContentPage
             ALabel.Text = $"A:{p.Agreeableness:F2}"; ABar.Progress = p.Agreeableness;
             NLabel.Text = $"N:{p.Neuroticism:F2}"; NBar.Progress = p.Neuroticism;
 
-            GenesStack.Children.Clear();
-            foreach (var provider in new[] { "deepseek", "qwen", "openai" })
+            if (_svc.DNA != null)
             {
-                var g = new Grid { ColumnDefinitions = { new ColumnDefinition(120), new ColumnDefinition(GridLength.Star), new ColumnDefinition(50) } };
-                g.Add(new Label { Text = provider, FontSize = 12, TextColor = Color.FromArgb("#8b949e") }, 0);
-                var pb = new ProgressBar { Progress = 0.8, ProgressColor = Color.FromArgb("#3fb950") };
-                g.Add(pb, 1);
-                g.Add(new Label { Text = "0.80", FontSize = 12, TextColor = Color.FromArgb("#c9d1d9"), HorizontalTextAlignment = TextAlignment.End }, 2);
-                GenesStack.Children.Add(g);
+                GenesStack.Children.Clear();
+                var status = _svc.DNA.GetStatus();
+                GenesStack.Add(new Label { Text = $"Generation: {status.Generation}  |  Fitness: {status.FitnessScore:F2}", FontSize = 12, TextColor = Color.FromArgb("#8b949e") });
             }
         }
 

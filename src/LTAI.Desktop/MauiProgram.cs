@@ -1,11 +1,8 @@
 using LTAI.AI;
 using LTAI.AI.Governors;
-using LTAI.Tools;
 using LTAI.Core;
 using LTAI.Core.Configuration;
-using LTAI.Core.Setup;
 using LTAI.DNA;
-using LTAI.Agent;
 using LTAI.Planning.Metrics;
 using LTAI.Knowledge.Vector;
 using Microsoft.Extensions.Configuration;
@@ -25,24 +22,12 @@ public static class MauiProgram
         builder.UseMauiApp<App>();
 
         var configPath = Path.Combine(AppContext.BaseDirectory, "appsettings.json");
-        var isFirstRun = !File.Exists(configPath) || new FileInfo(configPath).Length < 50;
-
-        if (isFirstRun)
+        if (!File.Exists(configPath) || new FileInfo(configPath).Length < 50)
         {
-            try
-            {
-                Console.WriteLine("检测到首次运行，启动配置向导...");
-                var setupWizard = new InteractiveSetupWizard(configPath);
-                setupWizard.RunAsync().GetAwaiter().GetResult();
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"配置向导失败: {ex.Message}，使用默认配置");
-            }
+            Console.WriteLine("First run detected — using default config");
         }
 
         var services = builder.Services;
-
         var ltaiOptions = new LTAIOptions();
 
         var config = new ConfigurationBuilder()
@@ -51,29 +36,22 @@ public static class MauiProgram
             .Build();
 
         config.GetSection(LTAIOptions.SectionName).Bind(ltaiOptions);
-
         if (ltaiOptions.AI.Providers.Count == 0)
         {
-            ltaiOptions.AI.Providers["deepseek"] = new ProviderConfig { Endpoint = "https://api.deepseek.com", Model = "deepseek-chat" };
+            ltaiOptions.AI.Providers["deepseek"] = new ProviderConfig
+                { Endpoint = "https://api.deepseek.com", Model = "deepseek-chat" };
         }
 
-                services.AddSingleton(Options.Create(ltaiOptions));
-
-        services.AddLogging(b => b.SetMinimumLevel(LogLevel.Warning));
+        services.AddSingleton(Options.Create(ltaiOptions));
+        services.AddLogging(b => b.SetMinimumLevel(LogLevel.Information));
 
         services.AddLTAICore();
         services.AddLTAIVectorAuto(apiModel: ltaiOptions.AI.L0.Model);
         services.AddLTAIAI();
         services.AddLTAIDNA();
-        services.AddLTAICapability();
         services.AddLTAIMetrics();
-        services.AddLTAIMAF();
 
         services.AddSingleton<LTAIService>();
-
-        var sp = services.BuildServiceProvider();
-        var lts = sp.GetRequiredService<LivingTreeSystem>();
-        lts.InitializeAsync().GetAwaiter().GetResult();
 
         return builder.Build();
     }

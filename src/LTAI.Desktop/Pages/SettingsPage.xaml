@@ -3,13 +3,17 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
              x:Class="LTAI.Desktop.Pages.SettingsPage"
              BackgroundColor="#0d1117"
-             Title="Settings">
+             Title="Diagnostics">
     <ScrollView>
         <VerticalStackLayout Padding="16" Spacing="12">
-            <Label Text="Settings" FontSize="24" TextColor="#f0f6fc" FontAttributes="Bold" />
-            <Label Text="DNA ✅ | Reasoning ✅ | Sandbox ✅ | Metrics ✅ | Multimodal ✅" FontSize="12" TextColor="#3fb950" />
-            <Label Text="LTAI Console v5.5.0" TextColor="#484f58" HorizontalTextAlignment="Center" Margin="0,20,0,0" />
-            <Label Text=".NET MAUI Desktop" TextColor="#484f58" HorizontalTextAlignment="Center" />
+            <Label x:Name="VersionLabel" FontSize="24" TextColor="#f0f6fc" FontAttributes="Bold" />
+            <BoxView HeightRequest="1" Color="#30363d" />
+            <Label x:Name="DnaLabel" FontSize="13" TextColor="#8b949e" />
+            <Label x:Name="SafetyLabel" FontSize="13" TextColor="#8b949e" />
+            <Label x:Name="RouterLabel" FontSize="13" TextColor="#8b949e" />
+            <Label x:Name="SystemLabel" FontSize="13" TextColor="#8b949e" />
+            <BoxView HeightRequest="1" Color="#30363d" />
+            <Label x:Name="ProviderLabel" FontSize="12" TextColor="#484f58" />
         </VerticalStackLayout>
     </ScrollView>
 </ContentPage>
