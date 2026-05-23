@@ -258,5 +258,3 @@ public class V7ProductionTests
     private static ChatMessage U(string text) => new(ChatRole.User, text);
     private static AgentResponse R(string text) => new(new ChatMessage(ChatRole.Assistant, text));
 }
-
-internal static class PolicyExtensions { public static T Apply<T>(this T obj, Action<T> a) { a(obj); return obj; } }
