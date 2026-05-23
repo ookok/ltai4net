@@ -16,6 +16,9 @@ public sealed class LoraLayer
     public float Scale { get; set; }
     public bool IsMerged => _merged != null;
 
+    public float GetA(int i, int r) => _A[i, r];
+    public float GetB(int r, int j) => _B[r, j];
+
     public LoraLayer(float[,] baseWeights, int rank, float scale = 1.0f, Random? rng = null)
     {
         OutputDim = baseWeights.GetLength(0);
@@ -122,6 +125,22 @@ public sealed class LoraLayer
         for (int j = 0; j < InputDim; j++)
             _B[r, j] -= lr * dB[r, j];
     }
+
+    /// L1 proximal gradient: soft-threshold each LoRA weight toward zero.
+    /// Lam = "sparse → robust" from Nature Physics paper.
+    public void ApplyL1Proximal(float lambda)
+    {
+        for (int i = 0; i < OutputDim; i++)
+        for (int r = 0; r < Rank; r++)
+            _A[i, r] = SoftThreshold(_A[i, r], lambda);
+
+        for (int r = 0; r < Rank; r++)
+        for (int j = 0; j < InputDim; j++)
+            _B[r, j] = SoftThreshold(_B[r, j], lambda);
+    }
+
+    private static float SoftThreshold(float x, float lam)
+        => x > lam ? x - lam : x < -lam ? x + lam : 0;
 
     /// Merge LoRA into base: W_merged = W + scale * A @ B
     public float[,] Merge()

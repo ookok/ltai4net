@@ -34,6 +34,7 @@ public sealed class IntentClassifierNetwork : IDisposable
     public int NumClasses => _numClasses;
     public int Generation { get; private set; }
     public int TotalSamplesTrained { get; private set; }
+    public float L1Lambda { get; set; } = 0f;
 
     public string MapClassLabel(int idx)
     {
@@ -174,36 +175,40 @@ public sealed class IntentClassifierNetwork : IDisposable
         return (maxIdx, confidence);
     }
 
-    /// Train one step on a single sample (SGD with cross-entropy loss)
+    /// Train one step on a single sample (SGD with cross-entropy + L1 sparse regularization)
     public float TrainStep(string text, int targetClass, float lr = 0.01f)
     {
-        // Forward with caching
         var logits = Forward(text, cacheForBackward: true);
 
-        // Softmax + cross-entropy
         var maxLogit = logits.Max();
         var exps = logits.Select(l => MathF.Exp(l - maxLogit)).ToArray();
         var expSum = exps.Sum();
         var probs = exps.Select(e => e / (expSum + 1e-8f)).ToArray();
 
-        var loss = -MathF.Log(Math.Max(probs[targetClass], 1e-8f));
+        var ceLoss = -MathF.Log(Math.Max(probs[targetClass], 1e-8f));
 
-        // Gradient of loss w.r.t. logits: dL/dz = p - one_hot(y)
+        // L1 penalty on LoRA weights (sparsity, Lam of paper: neurons → sparse)
+        var l1Loss = 0f;
+        if (L1Lambda > 0)
+        {
+            var (a1Sum, b1Sum, a2Sum, b2Sum) = L1Norm();
+            l1Loss = L1Lambda * (a1Sum + b1Sum + a2Sum + b2Sum);
+        }
+        var loss = ceLoss + l1Loss;
+
+        // Standard backward pass
         var dLogits = new float[_numClasses];
         for (int i = 0; i < _numClasses; i++)
             dLogits[i] = probs[i] - (i == targetClass ? 1 : 0);
 
-        // Backward through layer 3 (FC, no activation)
-        var dH2a = new float[_hidden2Dim]; // gradient at h2 after ReLU
+        var dH2a = new float[_hidden2Dim];
         for (int j = 0; j < _hidden2Dim; j++)
         {
             float sum = 0;
-            for (int i = 0; i < _numClasses; i++)
-                sum += _w3[i, j] * dLogits[i];
+            for (int i = 0; i < _numClasses; i++) sum += _w3[i, j] * dLogits[i];
             dH2a[j] = sum;
         }
 
-        // Update W3, B3
         for (int i = 0; i < _numClasses; i++)
         {
             _b3[i] -= lr * dLogits[i];
@@ -211,39 +216,58 @@ public sealed class IntentClassifierNetwork : IDisposable
                 _w3[i, j] -= lr * dLogits[i] * _h2aCache![j];
         }
 
-        // Backward through ReLU 2
-        var dH2 = new float[_hidden2Dim]; // gradient at h2 pre-ReLU
-        for (int i = 0; i < _hidden2Dim; i++)
-            dH2[i] = _h2Cache![i] > 0 ? dH2a[i] : 0;
+        var dH2 = new float[_hidden2Dim];
+        for (int i = 0; i < _hidden2Dim; i++) dH2[i] = _h2Cache![i] > 0 ? dH2a[i] : 0;
 
-        // Backward through layer 2 (FC + LoRA)
         var (dA2, dB2) = Lora2.Backward(_h1aCache!, dH2);
         Lora2.ApplyGradient(dA2, dB2, lr);
+        if (L1Lambda > 0) Lora2.ApplyL1Proximal(lr * L1Lambda);
         for (int i = 0; i < _hidden2Dim; i++) _b2[i] -= lr * dH2[i];
 
-        var dH1a = new float[_hidden1Dim]; // gradient at h1 after ReLU
+        var dH1a = new float[_hidden1Dim];
         for (int j = 0; j < _hidden1Dim; j++)
         {
             float sum = 0;
             for (int i = 0; i < _hidden2Dim; i++)
-                sum += Lora2.IsMerged
-                    ? Lora2.Merge()[i, j] * dH2[i]
-                    : (_w2[i, j] + LoraScaleDot(_w2[i, j], Lora2)) * dH2[i];
+                sum += Lora2.IsMerged ? Lora2.Merge()[i, j] * dH2[i]
+                     : (_w2[i, j] + LoraScaleDot(_w2[i, j], Lora2)) * dH2[i];
             dH1a[j] = sum;
         }
 
-        // Backward through ReLU 1
         var dH1 = new float[_hidden1Dim];
-        for (int i = 0; i < _hidden1Dim; i++)
-            dH1[i] = _h1Cache![i] > 0 ? dH1a[i] : 0;
+        for (int i = 0; i < _hidden1Dim; i++) dH1[i] = _h1Cache![i] > 0 ? dH1a[i] : 0;
 
-        // Backward through layer 1 (FC + LoRA)
         var (dA1, dB1) = Lora1.Backward(EncodeText(text), dH1);
         Lora1.ApplyGradient(dA1, dB1, lr);
+        if (L1Lambda > 0) Lora1.ApplyL1Proximal(lr * L1Lambda);
         for (int i = 0; i < _hidden1Dim; i++) _b1[i] -= lr * dH1[i];
 
         TotalSamplesTrained++;
         return loss;
+    }
+
+    /// Compute L1 norms of all LoRA weights
+    public (float a1, float b1, float a2, float b2) L1Norm()
+    {
+        float a1 = 0, b1 = 0, a2 = 0, b2 = 0;
+
+        for (int i = 0; i < Lora1.OutputDim; i++)
+        for (int r = 0; r < Lora1.Rank; r++)
+            a1 += MathF.Abs(Lora1.GetA(i, r));
+
+        for (int r = 0; r < Lora1.Rank; r++)
+        for (int j = 0; j < Lora1.InputDim; j++)
+            b1 += MathF.Abs(Lora1.GetB(r, j));
+
+        for (int i = 0; i < Lora2.OutputDim; i++)
+        for (int r = 0; r < Lora2.Rank; r++)
+            a2 += MathF.Abs(Lora2.GetA(i, r));
+
+        for (int r = 0; r < Lora2.Rank; r++)
+        for (int j = 0; j < Lora2.InputDim; j++)
+            b2 += MathF.Abs(Lora2.GetB(r, j));
+
+        return (a1, b1, a2, b2);
     }
 
     private static float LoraScaleDot(float wVal, LoraLayer lora)

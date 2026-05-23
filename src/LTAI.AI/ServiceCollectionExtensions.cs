@@ -167,6 +167,20 @@ public static class ServiceCollectionExtensions
             return new MoERouter(depthController, logger);
         });
 
+        services.AddSingleton<NeuralDependencyGraph>(sp =>
+        {
+            var logger = sp.GetService<ILogger<NeuralDependencyGraph>>();
+            return new NeuralDependencyGraph(logger);
+        });
+
+        services.AddSingleton<StructureAwareRouter>(sp =>
+        {
+            var loraManager = sp.GetRequiredService<TieredLoraManager>();
+            var depGraph = sp.GetRequiredService<NeuralDependencyGraph>();
+            var logger = sp.GetService<ILogger<StructureAwareRouter>>();
+            return new StructureAwareRouter(loraManager, depGraph, logger);
+        });
+
         services.AddSingleton<CapabilityMigrator>(sp =>
         {
             var loraManager = sp.GetRequiredService<TieredLoraManager>();

@@ -1,3 +1,4 @@
+using LTAI.Core.Governors;
 using Microsoft.Extensions.Logging;
 
 namespace LTAI.Core.Network;
@@ -5,7 +6,7 @@ namespace LTAI.Core.Network;
 public record DownloadProgress
 {
     public string ModelVersion { get; init; } = "";
-    public long TotalBytes { get; init; }
+    public long TotalBytes { get; set; }
     public long DownloadedBytes { get; set; }
     public double Percent => TotalBytes > 0 ? (double)DownloadedBytes / TotalBytes * 100 : 0;
     public string Status { get; set; } = "pending"; // pending, downloading, verifying, complete, failed
