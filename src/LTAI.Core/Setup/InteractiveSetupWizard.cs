@@ -128,12 +128,17 @@ public class InteractiveSetupWizard
 
         if (cloud.Count == 0)
         {
-            Console.WriteLine("  ⚠️  无可用云端嵌入提供商");
-            Console.WriteLine("  提示: 运行 'ltai setup' 重新配置，或使用本地 ONNX 模型");
+            if (layerName == "L0")
+                Console.WriteLine("  ⚠️  无可用云端嵌入提供商，请使用本地 ONNX 模型");
+            else
+                Console.WriteLine("  ⚠️  无可用云端提供商");
             return;
         }
 
-        Console.WriteLine("选择嵌入向量云端提供商 (仅显示支持 embedding 的提供商)：");
+        var title = layerName == "L0"
+            ? "选择嵌入向量云端提供商 (仅显示支持 embedding 的提供商)："
+            : "选择云端提供商：";
+        Console.WriteLine(title);
         Console.WriteLine();
 
         for (int i = 0; i < cloud.Count; i++)
