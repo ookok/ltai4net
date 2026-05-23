@@ -30,11 +30,12 @@ if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
 Console.Title = "LTAI Dev Console";
 
 var configPath = Path.Combine(AppContext.BaseDirectory, "appsettings.json");
-var isFirstRun = !File.Exists(configPath) || new FileInfo(configPath).Length < 50;
+var status = FirstRunDetector.Check(configPath);
 
-if (isFirstRun)
+if (status.IsFirstRun)
 {
-    Console.WriteLine("检测到首次运行，启动配置向导...");
+    FirstRunDetector.PrintDiagnostics(status);
+    Console.WriteLine("检测到未配置，启动配置向导...");
     var setupWizard = new InteractiveSetupWizard(configPath);
     await setupWizard.RunAsync();
 }

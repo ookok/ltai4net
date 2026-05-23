@@ -19,15 +19,14 @@ public static class Program
     [STAThread]
     public static void Main(string[] args)
     {
-        // First-run: show setup wizard for L0/L1/L2 model download
         var configPath = Path.Combine(AppContext.BaseDirectory, "appsettings.json");
-        if (!File.Exists(configPath) || new FileInfo(configPath).Length < 50)
+        var status = FirstRunDetector.Check(configPath);
+
+        if (status.IsFirstRun)
         {
-            Task.Run(async () =>
-            {
-                Console.WriteLine("First run detected — starting setup wizard...");
-                await new InteractiveSetupWizard(configPath).RunAsync();
-            }).GetAwaiter().GetResult();
+            FirstRunDetector.PrintDiagnostics(status);
+            Task.Run(async () => await new InteractiveSetupWizard(configPath).RunAsync())
+                .GetAwaiter().GetResult();
         }
 
         var services = BuildServices();
