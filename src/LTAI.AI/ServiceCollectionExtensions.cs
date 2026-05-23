@@ -23,7 +23,7 @@ public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddLTAIAI(this IServiceCollection services)
     {
-        services.TryAddSingleton<IDistributedCache, MemoryDistributedCache>();
+        services.AddSingleton<IDistributedCache, MemoryDistributedCache>();
         services.AddSingleton<ProviderFanOutRace>(sp =>
         {
             var logger = sp.GetService<ILogger<ProviderFanOutRace>>();
