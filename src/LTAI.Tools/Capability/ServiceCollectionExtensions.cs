@@ -15,6 +15,7 @@ using LTAI.Tools.Search;
 using LTAI.Tools.Skills;
 using LTAI.Tools.Tools;
 using LTAI.Tools.Capability.Governance;
+using LTAI.Tools.Capability;
 using LTAI.Core.System;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;

@@ -2,6 +2,7 @@ using LTAI.DNA.Consciousness;
 using LTAI.DNA.Evolution;
 using LTAI.DNA.Life;
 using LTAI.DNA.Meta;
+using LTAI.DNA.Regulation;
 using LTAI.DNA.Safety;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -13,6 +14,8 @@ public static class ServiceCollectionExtensions
     {
         services.AddSingleton<DualConsciousness>();
         services.AddSingleton<SafetyCoordinator>();
+        services.AddSingleton<UnifiedSafetyGate>();
+        services.AddSingleton<PolicyAsCode>();
         services.AddSingleton<LifeEngine>();
 
         services.AddSingleton<SelfEvolution>();
@@ -34,6 +37,9 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<LocalIntelligence>();
 
         services.AddSingleton<DNAOrchestrator>();
+
+        services.AddSingleton<RegulationVersionStore>();
+        services.AddSingleton<IRegulationProvider>(sp => sp.GetRequiredService<RegulationVersionStore>());
         return services;
     }
 }

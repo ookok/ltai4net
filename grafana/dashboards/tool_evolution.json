@@ -1,0 +1,89 @@
+{
+  "title": "LTAI v7.0 Tool Evolution Loop",
+  "panels": [
+    {
+      "id": 1,
+      "title": "Error Rate per Tool",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "tool_evolution_error_rate{tool=~\"$tool\"}", "legendFormat": "{{tool}}" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "steps": [
+              { "value": 0, "color": "green" },
+              { "value": 0.3, "color": "red" }
+            ]
+          }
+        }
+      },
+      "description": "Error rate above 0.3 triggers evolution"
+    },
+    {
+      "id": 2,
+      "title": "Canary Success Rate",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "tool_evolution_canary_success{tool=~\"$tool\"}", "legendFormat": "{{tool}}" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "steps": [
+              { "value": 0, "color": "red" },
+              { "value": 0.85, "color": "green" }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 3,
+      "title": "Rollback Count (24h)",
+      "type": "stat",
+      "targets": [
+        { "expr": "tool_evolution_rollbacks_24h{tool=~\"$tool\"}" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "steps": [
+              { "value": 0, "color": "green" },
+              { "value": 1, "color": "yellow" },
+              { "value": 3, "color": "red" }
+            ]
+          }
+        }
+      },
+      "description": "3 rollbacks in 24h triggers evolution freeze + P0 alert"
+    },
+    {
+      "id": 4,
+      "title": "Active Promotions (Cumulative)",
+      "type": "stat",
+      "targets": [
+        { "expr": "tool_evolution_promotions_total" }
+      ],
+      "description": "Total self-healed tools promoted to stable"
+    },
+    {
+      "id": 5,
+      "title": "SAST Violations Blocked",
+      "type": "stat",
+      "targets": [
+        { "expr": "tool_evolution_sast_blocks_total" }
+      ],
+      "description": "Dangerous API calls blocked by SAST scanner"
+    }
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "tool",
+        "type": "query",
+        "query": "label_values(tool_evolution_error_rate, tool)"
+      }
+    ]
+  }
+}

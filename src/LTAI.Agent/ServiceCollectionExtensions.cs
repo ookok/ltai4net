@@ -9,6 +9,7 @@ using LTAI.Agent.Feedback;
 using LTAI.Agent.Federation;
 using LTAI.Agent.Middleware;
 using LTAI.Agent.Routing;
+using LTAI.Agent.Tools;
 using LTAI.Agent.Workflows;
 
 namespace LTAI.Agent;
@@ -19,7 +20,10 @@ public static class ServiceCollectionExtensions
     {
         services.AddSingleton<SkillRegistry>();
         services.AddSingleton<IntentRouter>();
+        services.AddSingleton<UnifiedSemanticRouter>();
         services.AddSingleton<UnifiedIntentRouter>();
+        services.AddSingleton<UniversalOrchestrator>();
+        services.AddSingleton<ToolRetriever>();
         services.AddSingleton<HandoffMeshWorkflow>();
         services.AddSingleton<CollaborativeMeshWorkflow>();
         services.AddSingleton<AgentMeshWorkflow>();
