@@ -297,18 +297,24 @@ public sealed class TuiApp
             renderer.ToggleDiffMode();
         if (_diffSplitView)
             renderer.CycleDiffMode();
+        var sb = new System.Text.StringBuilder();
+        var fullResponse = "";
         try
         {
-            var stream = _lts.StreamChatAsync(input);
-            await renderer.RenderStreamAsync(stream);
+            AnsiConsole.Markup("[cyan]LTAI: [/]");
+            await foreach (var token in _lts.StreamChatAsync(input))
+            {
+                sb.Append(token);
+                AnsiConsole.Write(token);
+            }
+            AnsiConsole.WriteLine();
+            fullResponse = sb.ToString();
         }
         catch (Exception ex)
         {
             AnsiConsole.MarkupLine($"[red]Error: {ex.Message}[/]");
         }
 
-        _currentPhase = "";
-        var fullResponse = renderer.GetFullText();
         _chatHistory.Add(("LTAI", fullResponse));
         _innovation.RecordInteraction(input, fullResponse);
 
