@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using LTAI.Tools.Search;
 using LTAI.Infra.Multimodal;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -340,34 +341,53 @@ public static class DocRoutesEndpoints
                 var request = JsonSerializer.Deserialize<DocDiagramRequest>(body);
 
                 var diagramType = request?.Type ?? "process_flow";
-                var title = request?.Title ?? diagramType;
+                var description = request?.Title ?? diagramType;
+                var cancellationToken = context.RequestAborted;
 
-                string diagram = diagramType.ToLower() switch
+                // LLM-driven Mermaid generation
+                var mermaidGen = context.RequestServices.GetService<MermaidGenerator>();
+                string diagram;
+
+                if (mermaidGen is not null)
                 {
-                    "contour" => $"+----------+\n|  {title}  |\n| 等高线图  |\n|  (占位)   |\n+----------+",
-                    "process_flow" => $"┌──────────┐     ┌──────────┐     ┌──────────┐\n│  开始    │────>│  处理    │────>│  结束    │\n└──────────┘     └──────────┘     └──────────┘",
-                    "site_plan" => $"+-------------------------+\n|       {title}          |\n|   厂区平面布置图 (占位)  |\n|                         |\n+-------------------------+",
-                    "noise" => $"频率 (Hz)  噪声级 (dB)\n  125        45  ■\n  250        52  ■■■\n  500        48  ■■\n 1000        42  ■\n 2000        38  ■",
-                    "monitoring" => $"监测点位分布图\n  N\n  |\nW-+-E  ★ 监测点\n  |\n  S\n\n点位1: 厂界东  (113.321, 23.145)\n点位2: 厂界南  (113.320, 23.142)",
-                    "causal" => $"┌──────────┐     ┌──────────┐\n│  原因A   │────>│          │\n└──────────┘     │  影响    │\n┌──────────┐     │  ({title}) │\n│  原因B   │────>│          │\n└──────────┘     └──────────┘",
-                    "risk" => $"风险评估矩阵\n        可能性\n      低  中  高\n后 高 [  ] [■ ] [■■]\n果 中 [  ] [■ ] [■ ]\n   低 [  ] [  ] [  ]",
-                    "base_map" => $"┌────────────────────────────┐\n│        {title}            │\n│   ┌──┐  ┌──┐  ┌──┐       │\n│   │A │  │B │  │C │       │\n│   └──┘  └──┘  └──┘       │\n│                            │\n│       ==道路==             │\n│                            │\n│   ┌──┐       ┌──┐         │\n│   │D │       │E │         │\n│   └──┘       └──┘         │\n└────────────────────────────┘",
-                    _ => $"diagram placeholder for {diagramType}"
-                };
+                    var result = await mermaidGen.GenerateAsync(description, diagramType, cancellationToken);
+                    diagram = result.Html;
+                }
+                else
+                {
+                    // Fallback: try IChatClient directly
+                    var chatClient = context.RequestServices.GetService<IChatClient>();
+                    if (chatClient is not null)
+                    {
+                        var gen = new MermaidGenerator(chatClient);
+                        var result = await gen.GenerateAsync(description, diagramType, cancellationToken);
+                        diagram = result.Html;
+                    }
+                    else
+                    {
+                        diagram = MermaidGenerator.BuildMermaidEmbed(
+                            $"A[Start] --> B[{description}] --> C[End]", diagramType);
+                    }
+                }
 
                 context.Response.ContentType = "application/json";
                 await context.Response.WriteAsync(JsonSerializer.Serialize(new
                 {
                     type = diagramType,
-                    title,
-                    diagram
+                    title = description,
+                    diagram,
+                    format = "html+mermaid"
                 }));
             }
             catch (Exception ex)
             {
-                context.Response.StatusCode = 500;
                 context.Response.ContentType = "application/json";
-                await context.Response.WriteAsync(JsonSerializer.Serialize(new { error = ex.Message }));
+                await context.Response.WriteAsync(JsonSerializer.Serialize(new
+                {
+                    error = ex.Message,
+                    fallback = MermaidGenerator.BuildMermaidEmbed(
+                        $"A[Start] --> B[Processing] --> C[End]", "flowchart")
+                }));
             }
         });
 

@@ -589,6 +589,59 @@ public static class LTAIToolRegistry
             async _ => await Task.FromResult<object?>(new { message = "Style learning: import example documents via km_import for pattern analysis" })),
         new("visual_render", "Render chart/flowchart/floorplan/contour/3dsurface/windrose as SVG/HTML", "doc",
             async args => RenderVisual(Arg(args, "type"), Arg(args, "data"), Arg(args, "title"))),
+        new("diagram_generate", "Generate a diagram from a natural language description using LLM → Mermaid DSL. Supports flowchart, sequence, class, state, Gantt, ER, pie, mindmap. Parameters: description (required), type (flowchart|sequence|class|state|gantt|pie|er|mindmap, default flowchart)", "doc",
+            async args =>
+            {
+                var description = Arg(args, "description");
+                var type = Arg(args, "type", "flowchart");
+                if (string.IsNullOrWhiteSpace(description))
+                    return new { error = "description is required. Provide a natural language description of the diagram to generate." };
+
+                try
+                {
+                    var chatClient = _serviceProvider?.GetService(typeof(Microsoft.Extensions.AI.IChatClient)) as Microsoft.Extensions.AI.IChatClient;
+                    if (chatClient is null)
+                        return new { error = "No LLM client available. Configure an AI provider first.", fallback_html = BuildFlowchart(type, $"A[Start] --> B[{description[..Math.Min(description.Length, 30)]}] --> C[End]") };
+
+                    var diagramTypes = new Dictionary<string, string>
+                    {
+                        ["flowchart"] = "flowchart TD", ["process_flow"] = "flowchart TD",
+                        ["sequence"] = "sequenceDiagram", ["class"] = "classDiagram",
+                        ["state"] = "stateDiagram-v2", ["gantt"] = "gantt",
+                        ["pie"] = "pie", ["er"] = "erDiagram", ["mindmap"] = "mindmap"
+                    };
+                    var dt = diagramTypes.GetValueOrDefault(type, "flowchart TD");
+
+                    var systemPrompt = "You are a Mermaid.js diagram expert. Generate ONLY valid Mermaid syntax. Output ONLY the diagram code, no markdown fences, no explanations. Use proper nodes and edges. Keep labels short and clear.";
+                    var prompt = $"Generate a {dt} diagram for: {description}";
+
+                    var response = await chatClient.GetResponseAsync(
+                        new List<Microsoft.Extensions.AI.ChatMessage>
+                        {
+                            new(Microsoft.Extensions.AI.ChatRole.System, systemPrompt),
+                            new(Microsoft.Extensions.AI.ChatRole.User, prompt)
+                        },
+                        new Microsoft.Extensions.AI.ChatOptions { Temperature = 0.3f, MaxOutputTokens = 2000 });
+
+                    var raw = response.Text ?? "";
+                    // Clean markdown fences
+                    if (raw.StartsWith("```")) raw = raw[raw.IndexOf('\n')..].Trim();
+                    if (raw.EndsWith("```")) raw = raw[..raw.LastIndexOf("```")].Trim();
+
+                    return new
+                    {
+                        type, description = description[..Math.Min(description.Length, 100)],
+                        mermaid_code = raw,
+                        html = BuildFlowchart(type, raw),
+                        format = "html+mermaid",
+                        supported_types = diagramTypes.Keys.ToArray()
+                    };
+                }
+                catch (Exception ex)
+                {
+                    return new { error = ex.Message, fallback_html = BuildFlowchart(type, $"A[Start] --> B[{description[..Math.Min(description.Length, 30)]}] --> C[End]") };
+                }
+            }),
 
         // ═══ EIA Models — 16 tools ═══
         new("gaussian_plume", "Gaussian plume air dispersion model (GB/T3840-1991)", "eia",
