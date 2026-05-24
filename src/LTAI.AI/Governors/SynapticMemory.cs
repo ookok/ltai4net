@@ -215,4 +215,35 @@ public sealed class SynapticMemory : IDisposable
             _logger.LogWarning(ex, "Error disposing SynapticMemory");
         }
     }
+
+    public List<SynapticExperience> FindSimilar(string query, int maxResults = 3, float minReward = 0.6f)
+    {
+        var queryWords = query.Split(' ', StringSplitOptions.RemoveEmptyEntries)
+            .Select(w => w.ToLowerInvariant().TrimEnd('？', '?', '。', '.', '！', '!', '，', ','))
+            .Where(w => w.Length > 1)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        if (queryWords.Count == 0) return new();
+
+        return _experiences.Query()
+            .Where(x => x.Reward >= minReward && x.Query.Length > 3)
+            .OrderByDescending(x => x.Reward)
+            .Limit(200)
+            .ToList()
+            .Select(x => new { Exp = x, Score = ScoreOverlap(x.Query, queryWords) })
+            .Where(x => x.Score >= 2)
+            .OrderByDescending(x => x.Score)
+            .ThenByDescending(x => x.Exp.Reward)
+            .Take(maxResults)
+            .Select(x => x.Exp)
+            .ToList();
+    }
+
+    private static int ScoreOverlap(string pastQuery, HashSet<string> queryWords)
+    {
+        var pastWords = pastQuery.Split(' ', StringSplitOptions.RemoveEmptyEntries)
+            .Select(w => w.ToLowerInvariant().TrimEnd('？', '?', '。', '.', '！', '!', '，', ','))
+            .Where(w => w.Length > 1);
+        return pastWords.Count(queryWords.Contains);
+    }
 }

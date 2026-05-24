@@ -468,10 +468,34 @@ public sealed class LivingTreeSystem : IAsyncDisposable
         }
 
         var selectedTools = _toolSelector.SelectTools(query, _toolRegistry.GetTools());
+
+        // Cross-run memory: inject relevant past experiences as context
+        string? memoryContext = null;
+        if (_synapticMemory != null && layer1Context == null)
+        {
+            var similar = _synapticMemory.FindSimilar(query, maxResults: 2, minReward: 0.7f);
+            if (similar.Count > 0)
+            {
+                var memSb = new StringBuilder();
+                memSb.AppendLine("【跨运行记忆】以下是以往相似问题的成功回答，可参考其结构和关键信息：");
+                foreach (var exp in similar)
+                {
+                    var snippet = exp.Response.Length > 500 ? exp.Response[..500] + "..." : exp.Response;
+                    memSb.AppendLine($"--- 历史问答 (置信度={exp.Confidence:F2}, 奖励={exp.Reward:F2}) ---");
+                    memSb.AppendLine(snippet);
+                }
+                memoryContext = memSb.ToString();
+                _logger.LogInformation("SynapticMemory: injected {Count} similar past experiences", similar.Count);
+            }
+        }
+
         var (messages, streamOptions) = BuildSystemMessages(
             model, layer1Context, autoSearchContext, layer2Context,
             metaContext, metaAssessment, label, toolCount, dateTag, query,
             selectedTools);
+
+        if (memoryContext != null)
+            messages.Insert(0, new ChatMessage(ChatRole.System, memoryContext));
 
         // ReAct loop: stream response, detect tool calls, execute them, and retry
         var useStreaming = label != "fast" && label != "reflex";
