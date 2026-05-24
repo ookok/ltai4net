@@ -316,6 +316,26 @@ public sealed class LivingTreeSystem : IAsyncDisposable
         _logger.LogDebug("MetaCognition assessment: {Assessment} | Delegating={Deleg} Layer1={L1}",
             metaAssessment.Assessment, metaAssessment.ShouldDelegate, layer1HighConfidence);
 
+        // Fuzzy query detection: use L1 flash to judge ambiguity instead of keyword matching
+        var isFuzzyQuery = !patternResult.Matched && extractedEntity == null
+            && metaAssessment.ShouldDelegate && label != "fast" && label != "reflex"
+            && query.Length < 100;
+        if (isFuzzyQuery)
+        {
+            var isAmbiguous = await IsQueryAmbiguousAsync(query, cancellationToken);
+            if (isAmbiguous)
+            {
+                var clarifyQuestions = await GenerateClarificationAsync(query, cancellationToken);
+                if (clarifyQuestions != null)
+                {
+                    yield return "您的提问比较模糊，请问您是指以下哪种情况？\n\n" + clarifyQuestions;
+                    _metaCognition.RecordOutcome(query, false);
+                    _logger.LogInformation("Fuzzy query: yielded clarification questions for: {Query}", query[..Math.Min(query.Length, 60)]);
+                    yield break;
+                }
+            }
+        }
+
         var now = DateTime.Now;
         var dayNames = new[] { "星期日", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六" };
         var dateTag = $"当前日期: {now:yyyy年M月d日} {dayNames[(int)now.DayOfWeek]}";
@@ -683,6 +703,20 @@ public sealed class LivingTreeSystem : IAsyncDisposable
 
         // MetaCognitiveLayer: record outcome for self-learning
         var finalResponse = fullResponse.ToString();
+
+        // Post-response follow-up: generate related questions from tool context
+        if (!groundingFailed && !layer1HighConfidence && finalResponse.Length > 50)
+        {
+            var toolCtx = layer1Context ?? layer2Context ?? autoSearchContext;
+            if (!string.IsNullOrWhiteSpace(toolCtx) && toolCtx.Length > 100)
+            {
+                var followup = await GenerateFollowupAsync(finalResponse, toolCtx, cancellationToken);
+                if (followup != null)
+                {
+                    yield return "\n\n---\n您可能还想了解：\n" + followup;
+                }
+            }
+        }
 
         _bavtRouter.Spend(1.0); // Track streaming path cost
 
@@ -1236,6 +1270,70 @@ public sealed class LivingTreeSystem : IAsyncDisposable
 
         messages.Add(new ChatMessage(ChatRole.User, $"{dateTag}\n{query}"));
         return (messages, options);
+    }
+
+    private async Task<bool> IsQueryAmbiguousAsync(string query, CancellationToken ct)
+    {
+        try
+        {
+            var messages = new List<ChatMessage>
+            {
+                new(ChatRole.System, "You detect ambiguity. Answer ONLY 'YES' if the query is ambiguous/vague and needs clarification, or 'NO' if it is specific enough to answer. Queries with concrete names, dates, or clear entities are NOT ambiguous."),
+                new(ChatRole.User, $"Query: \"{query}\"\n\nIs this query ambiguous? YES/NO:")
+            };
+            var options = new ChatOptions { ModelId = FlashModel, Temperature = 0f, MaxOutputTokens = 8, Tools = new List<AITool>() };
+            var result = await _llm.GetResponseAsync(messages, options, ct);
+            return result.Text?.Trim().StartsWith("YES", StringComparison.OrdinalIgnoreCase) == true;
+        }
+        catch { return false; }
+    }
+
+    private async Task<string?> GenerateClarificationAsync(string query, CancellationToken ct)
+    {
+        try
+        {
+            var messages = new List<ChatMessage>
+            {
+                new(ChatRole.System, _prompts.Render("clarify_system")),
+                new(ChatRole.User, _prompts.Render("clarify_user", new Dictionary<string, string> { ["query"] = query }))
+            };
+            var options = new ChatOptions { ModelId = FlashModel, Temperature = 0.3f, MaxOutputTokens = 256, Tools = new List<AITool>() };
+            var result = await _llm.GetResponseAsync(messages, options, ct);
+            var text = result.Text?.Trim();
+            return !string.IsNullOrWhiteSpace(text) && text.Length > 10 ? text : null;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Clarification generation skipped");
+            return null;
+        }
+    }
+
+    private async Task<string?> GenerateFollowupAsync(string answer, string toolContext, CancellationToken ct)
+    {
+        try
+        {
+            var ctxSnippet = toolContext.Length > 2000 ? toolContext[..2000] : toolContext;
+            var ansSnippet = answer.Length > 1000 ? answer[..1000] : answer;
+            var messages = new List<ChatMessage>
+            {
+                new(ChatRole.System, _prompts.Render("followup_system")),
+                new(ChatRole.User, _prompts.Render("followup_user", new Dictionary<string, string>
+                {
+                    ["answer"] = ansSnippet,
+                    ["context"] = ctxSnippet
+                }))
+            };
+            var options = new ChatOptions { ModelId = FlashModel, Temperature = 0.5f, MaxOutputTokens = 256, Tools = new List<AITool>() };
+            var result = await _llm.GetResponseAsync(messages, options, ct);
+            var text = result.Text?.Trim();
+            return !string.IsNullOrWhiteSpace(text) && text.Length > 10 ? text : null;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Follow-up generation skipped");
+            return null;
+        }
     }
 
     public async ValueTask DisposeAsync()

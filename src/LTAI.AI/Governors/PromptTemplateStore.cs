@@ -75,6 +75,14 @@ public sealed class PromptTemplateStore
             ["honest_fallback"] = "抱歉，经过多次尝试仍无法提供可靠的答案。建议换个方式提问或提供更多具体信息。",
 
             ["layer2_context_header"] = "【Layer2 自动规划执行】以下是按计划执行的工具结果：",
+
+            ["clarify_system"] = "You help clarify ambiguous user queries. Given a vague query, generate 2-3 clear, specific clarification questions in the user's language. Output ONLY the numbered questions, one per line. No intro, no explanation.",
+
+            ["clarify_user"] = "The user asked: \"{query}\"\n\nThis query is ambiguous. Generate 2-3 clarifying questions to help the user be more specific.",
+
+            ["followup_system"] = "You generate relevant follow-up questions. Given a tool result and answer, suggest 2-3 natural follow-up questions in the user's language. Output ONLY the numbered questions, one per line. No intro.",
+
+            ["followup_user"] = "Answer: {answer}\n\nContext: {context}\n\nGenerate 2-3 natural follow-up questions the user might ask next.",
         };
 
         foreach (var (name, content) in defaults)
