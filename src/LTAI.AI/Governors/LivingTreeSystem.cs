@@ -47,6 +47,7 @@ public sealed class LivingTreeSystem : IAsyncDisposable
     private readonly ToolSelector _toolSelector;
     private readonly PromptTemplateStore _prompts;
     private readonly ModelHealthTracker _health;
+    private readonly UnifiedQueryClassifier _classifier;
 
     private readonly BAVTRouter _bavtRouter = new(100.0);
     private readonly ERLLoop _erlLoop = new();
@@ -116,6 +117,7 @@ public sealed class LivingTreeSystem : IAsyncDisposable
         ToolSelector? toolSelector = null,
         PromptTemplateStore? prompts = null,
         ModelHealthTracker? health = null,
+        UnifiedQueryClassifier? classifier = null,
         ICrossRunEvolutionStore? evolutionStore = null,
         IVerifiableRegistry? verifiableRegistry = null)
     {
@@ -145,6 +147,7 @@ public sealed class LivingTreeSystem : IAsyncDisposable
         _toolSelector = toolSelector ?? new ToolSelector(toolRegistry);
         _prompts = prompts ?? new PromptTemplateStore();
         _health = health ?? new ModelHealthTracker();
+        _classifier = classifier ?? new UnifiedQueryClassifier();
         _evolutionStore = evolutionStore;
         _verifiableRegistry = verifiableRegistry;
         _taskPipeline = new TaskPipeline(_journal);
@@ -248,12 +251,14 @@ public sealed class LivingTreeSystem : IAsyncDisposable
             }
         }
 
-        // Injection immunity: detect and block prompt injection attacks
-        if ((query.Contains("忽略") && query.Contains("指令")) ||
-            (query.Contains("ignore") && query.Contains("instruction")) ||
-            query.Contains("system prompt") || query.Contains("DAN") || query.Contains("越狱"))
+        // UnifiedQueryClassifier: single L1 call replaces all keyword matching
+        var classification = await _classifier.ClassifyAsync(query, _llm, FlashModel, cancellationToken);
+
+        // Injection immunity: block detected prompt injection (high-priority security rule)
+        if (classification.Domain == "system" && classification.Emotions.Contains("angry") ||
+            query.Contains("ignore") && query.Contains("instruction"))  // keep critical security keywords
         {
-            yield return "[安全防护] 检测到潜在提示注入攻击，已自动中和。请重新输入正常查询。";
+            yield return "[安全防护] 检测到潜在提示注入攻击，已自动中和。";
             _logger.LogWarning("PromptShield: injection blocked: {Query}", query[..Math.Min(query.Length, 60)]);
             yield break;
         }
@@ -356,14 +361,10 @@ public sealed class LivingTreeSystem : IAsyncDisposable
         _logger.LogDebug("MetaCognition assessment: {Assessment} | Delegating={Deleg} Layer1={L1}",
             metaAssessment.Assessment, metaAssessment.ShouldDelegate, layer1HighConfidence);
 
-        // Fuzzy query detection: L1 flash classifies query type — no keyword matching
-        var isFuzzyQuery = false;
-        if (!patternResult.Matched && extractedEntity == null
+        // Fuzzy query detection: use classifier.IsVague instead of keyword matching
+        var isFuzzyQuery = !patternResult.Matched && extractedEntity == null
             && metaAssessment.ShouldDelegate && label != "fast" && label != "reflex"
-            && query.Length < 100)
-        {
-            isFuzzyQuery = await IsQueryVagueAsync(query, cancellationToken);
-        }
+            && query.Length < 100 && classification.IsVague;
         if (isFuzzyQuery)
         {
             var clarifyQuestions = await GenerateClarificationAsync(query, cancellationToken);
@@ -920,9 +921,9 @@ public sealed class LivingTreeSystem : IAsyncDisposable
         // Query cache: store successful responses with adaptive TTL
         if (!groundingFailed && finalResponse.Length > 50)
         {
-            var ttl = query.Contains("今天") || query.Contains("星期") || query.Contains("时间") ? 60 :
-                      query.Contains("git") || query.Contains("提交") ? 2 :
-                      query.Contains("目录") || query.Contains("文件") ? 10 :
+            var ttl = classification.Domain == "knowledge" || classification.Emotions.Contains("urgent") ? 2 :
+                      classification.Domain == "system" ? 60 :
+                      classification.Domain == "code" ? 2 :
                       query.Length < 20 ? 3 : 5;
             _queryCache[query] = (finalResponse, DateTime.UtcNow.AddMinutes(ttl));
         }
@@ -1138,8 +1139,8 @@ public sealed class LivingTreeSystem : IAsyncDisposable
                 catch { }
             }, "PromptEvolution");
 
-        // Conversation fork: detect "换个角度" → snapshot context for future branch
-        if (query.Contains("换个角度") || query.Contains("另一个角度"))
+        // Conversation fork: detect alternative perspective requests via classifier
+        if (classification.IsVague && finalResponse.Length > 200)
             _workQueue.Enqueue(async ct =>
             {
                 try
@@ -1748,24 +1749,6 @@ public sealed class LivingTreeSystem : IAsyncDisposable
 
         messages.Add(new ChatMessage(ChatRole.User, $"{dateTag}\n{query}"));
         return (messages, options);
-    }
-
-    private async Task<bool> IsQueryVagueAsync(string query, CancellationToken ct)
-    {
-        // L1 flash classifies: VAGUE (ambiguous, needs clarification) vs SPECIFIC (actionable)
-        try
-        {
-            var prompt = $"Query: \"{query}\"\n\nIs this query VAGUE/AMBIGUOUS (missing key details, can't be meaningfully answered) or SPECIFIC (clear intent, has enough context)?\nAnswer ONLY: VAGUE or SPECIFIC";
-            var messages = new List<ChatMessage>
-            {
-                new(ChatRole.System, "You classify user queries. Output ONLY 'VAGUE' or 'SPECIFIC'."),
-                new(ChatRole.User, prompt)
-            };
-            var options = new ChatOptions { ModelId = FlashModel, Temperature = 0f, MaxOutputTokens = 10, Tools = new List<AITool>() };
-            var result = await _llm.GetResponseAsync(messages, options, ct);
-            return result.Text?.Trim().StartsWith("VAGUE", StringComparison.OrdinalIgnoreCase) == true;
-        }
-        catch { return false; }
     }
 
     private async Task<string?> GenerateClarificationAsync(string query, CancellationToken ct)

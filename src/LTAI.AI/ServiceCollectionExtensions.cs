@@ -337,6 +337,7 @@ public static class ServiceCollectionExtensions
             return new ToolSelector(toolRegistry);
         });
         services.AddSingleton<ModelHealthTracker>();
+        services.AddSingleton<UnifiedQueryClassifier>();
         services.AddSingleton<PromptTemplateStore>(sp =>
         {
             var logger = sp.GetService<ILogger<PromptTemplateStore>>();
