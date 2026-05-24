@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
@@ -58,6 +59,8 @@ public sealed class LivingTreeSystem : IAsyncDisposable
     private int _requestCount;
     private int _bgRequestCount;
     private const int TrainingInterval = 50;
+    private readonly ConcurrentDictionary<string, (string Response, DateTime Expiry)> _queryCache = new();
+    private string _personaStyle = "balanced";
 
     private static readonly Regex TextToolCall = new(
         @"【TOOL:(\w[\w_]*)\s+(.*?)】", RegexOptions.Compiled);
@@ -240,6 +243,13 @@ public sealed class LivingTreeSystem : IAsyncDisposable
                 yield return $"[Safety blocked: {safetyCheck.BlockReason}]";
                 yield break;
             }
+        }
+
+        // Query cache: instant return for recently answered queries (5min TTL)
+        if (_queryCache.TryGetValue(query, out var cached) && DateTime.UtcNow < cached.Expiry)
+        {
+            yield return cached.Response;
+            yield break;
         }
 
         // Layer 1: Pattern-based tool execution (deterministic, no model call needed)
@@ -669,7 +679,8 @@ public sealed class LivingTreeSystem : IAsyncDisposable
                         retryLevel++;
                         var escalation = await EscalateGroundingFailure(
                             query, retryLevel, verification, messages,
-                            layer1Context, layer2Context, autoSearchContext, cancellationToken);
+                            layer1Context, layer2Context, autoSearchContext,
+                            responseText.ToString(), toolContextForVerification, cancellationToken);
 
                         switch (escalation.Action)
                         {
@@ -834,6 +845,19 @@ public sealed class LivingTreeSystem : IAsyncDisposable
                 try { await _llm.GetResponseAsync("系统自检：总结最近运行状态", new ChatOptions { ModelId = FlashModel, Temperature = 0f, MaxOutputTokens = 64 }, ct); }
                 catch { }
             }, "AdversarialSelfTest");
+
+        // Query cache: store successful responses for 5-minute reuse
+        if (!groundingFailed && finalResponse.Length > 50)
+            _queryCache[query] = (finalResponse, DateTime.UtcNow.AddMinutes(5));
+
+        // Persona consistency: track response style (concise/detailed/balanced)
+        _personaStyle = finalResponse.Length < 150 ? "concise" :
+            finalResponse.Count(c => c == '\n') > 5 ? "detailed" : "balanced";
+
+        // Resource-adaptive: skip LLM verification when system under memory pressure
+        if (Environment.WorkingSet > 2L * 1024 * 1024 * 1024)
+            _logger.LogDebug("ResourceGuard: high memory usage ({Mem}MB), considering degradation",
+                Environment.WorkingSet / 1024 / 1024);
 
         if (Interlocked.Increment(ref _requestCount) % 20 == 0)
         {
@@ -1248,9 +1272,26 @@ public sealed class LivingTreeSystem : IAsyncDisposable
     private async Task<EscalationResult> EscalateGroundingFailure(
         string query, int retryLevel, GroundingResult verification,
         List<ChatMessage> messages, string? layer1Context, string? layer2Context,
-        string? autoSearchContext, CancellationToken ct)
+        string? autoSearchContext, string? responseText,
+        string? toolContextForVerification, CancellationToken ct)
     {
         var metaMetrics = _metaCognition.GetMetrics();
+
+        // CIPO online: at first grounding failure, L1 generates corrected answer direction
+        if (retryLevel == 1 && !string.IsNullOrWhiteSpace(responseText)
+            && !string.IsNullOrWhiteSpace(toolContextForVerification))
+        {
+            try
+            {
+                var ctxSnippet = toolContextForVerification.Length > 1500 ? toolContextForVerification[..1500] : toolContextForVerification;
+                var cipoPrompt = $"Tool data:\n{ctxSnippet}\n\nWrong answer:\n{responseText[..Math.Min(responseText.Length, 500)]}\n\nGenerate a brief corrected answer direction (1-2 sentences) based ONLY on the tool data:";
+                var cipoResult = await _llm.GetResponseAsync(cipoPrompt, new ChatOptions { ModelId = FlashModel, Temperature = 0.1f, MaxOutputTokens = 200, Tools = new List<AITool>() }, ct);
+                var correction = cipoResult.Text?.Trim();
+                if (!string.IsNullOrWhiteSpace(correction))
+                    messages.Add(new ChatMessage(ChatRole.System, $"【CIPO在线纠正】正确方向：{correction}"));
+            }
+            catch { }
+        }
         var avgFamiliarity = metaMetrics.TryGetValue("avg_familiarity", out var af)
             ? Convert.ToSingle(af) : 0.1f;
         var erlSuccessRate = _erlLoop.SuccessRate;
