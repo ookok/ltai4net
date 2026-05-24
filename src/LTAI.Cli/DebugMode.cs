@@ -100,6 +100,7 @@ internal static class DebugMode
             {
                 AnsiConsole.Markup(Markup.Escape(chunk));
                 fullResponse.Append(chunk);
+                Console.Out.Flush();
             }
             sw.Stop();
 
