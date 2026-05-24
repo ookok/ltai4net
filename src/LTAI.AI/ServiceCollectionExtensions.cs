@@ -336,6 +336,7 @@ public static class ServiceCollectionExtensions
             var toolRegistry = sp.GetRequiredService<AIToolRegistry>();
             return new ToolSelector(toolRegistry);
         });
+        services.AddSingleton<ModelHealthTracker>();
         services.AddSingleton<PromptTemplateStore>(sp =>
         {
             var logger = sp.GetService<ILogger<PromptTemplateStore>>();

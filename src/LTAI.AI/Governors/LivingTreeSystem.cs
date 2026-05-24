@@ -45,6 +45,7 @@ public sealed class LivingTreeSystem : IAsyncDisposable
     private readonly BackgroundWorkQueue _workQueue;
     private readonly ToolSelector _toolSelector;
     private readonly PromptTemplateStore _prompts;
+    private readonly ModelHealthTracker _health;
 
     private readonly BAVTRouter _bavtRouter = new(100.0);
     private readonly ERLLoop _erlLoop = new();
@@ -107,6 +108,7 @@ public sealed class LivingTreeSystem : IAsyncDisposable
         BackgroundWorkQueue? workQueue = null,
         ToolSelector? toolSelector = null,
         PromptTemplateStore? prompts = null,
+        ModelHealthTracker? health = null,
         ICrossRunEvolutionStore? evolutionStore = null,
         IVerifiableRegistry? verifiableRegistry = null)
     {
@@ -135,6 +137,7 @@ public sealed class LivingTreeSystem : IAsyncDisposable
         _workQueue = workQueue ?? new BackgroundWorkQueue();
         _toolSelector = toolSelector ?? new ToolSelector(toolRegistry);
         _prompts = prompts ?? new PromptTemplateStore();
+        _health = health ?? new ModelHealthTracker();
         _evolutionStore = evolutionStore;
         _verifiableRegistry = verifiableRegistry;
         _taskPipeline = new TaskPipeline(_journal);
@@ -540,6 +543,20 @@ public sealed class LivingTreeSystem : IAsyncDisposable
 
         // ReAct loop: stream response, detect tool calls, execute them, and retry
         var useStreaming = label != "fast" && label != "reflex";
+
+        // Self-healing: auto-switch to fallback if current model is unhealthy
+        var activeModel = model;
+        if (!_health.IsHealthy(activeModel))
+        {
+            var fallback = GetDegradedModel(activeModel);
+            if (fallback != activeModel)
+            {
+                _logger.LogWarning("ModelHealth: switching {From} → {To} (health={Health:F2})",
+                    activeModel, fallback, _health.GetHealth(activeModel));
+                activeModel = fallback;
+                streamOptions.ModelId = fallback;
+            }
+        }
         var fullResponse = new StringBuilder();
         var totalToolCalls = 0;
         var retryLevel = 0;
@@ -721,6 +738,13 @@ public sealed class LivingTreeSystem : IAsyncDisposable
 
         // MetaCognitiveLayer: record outcome for self-learning
         var finalResponse = fullResponse.ToString();
+
+        // Model health tracking
+        if (!string.IsNullOrEmpty(finalResponse) && finalResponse.Length > 20
+            && !finalResponse.Contains("模型调用失败") && !groundingFailed)
+            _health.RecordSuccess(activeModel);
+        else if (!layer1HighConfidence)
+            _health.RecordFailure(activeModel);
 
         // Post-response follow-up: generate related questions from tool context
         if (!groundingFailed && !layer1HighConfidence && finalResponse.Length > 50)
