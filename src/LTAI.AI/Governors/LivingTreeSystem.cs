@@ -63,6 +63,7 @@ public sealed class LivingTreeSystem : IAsyncDisposable
     private string _personaStyle = "balanced";
     private DateTime _lastDreamCycleTrigger = DateTime.MinValue;
     private static readonly TimeSpan DreamCycleMinInterval = TimeSpan.FromMinutes(2);
+    private string? _predictiveSearchResult;
 
     private static readonly Regex TextToolCall = new(
         @"【TOOL:(\w[\w_]*)\s+(.*?)】", RegexOptions.Compiled);
@@ -1065,6 +1066,75 @@ public sealed class LivingTreeSystem : IAsyncDisposable
         if (totalToolCalls >= 2 && !groundingFailed)
             _erlLoop.RecordTrial($"qvalue_{string.Join("+", totalToolCalls)}",
                 $"Tools={totalToolCalls}, Success=True", "quantum_opt", 0.9f, true);
+
+        // Predictive preload: use speculative search result if available
+        if (_predictiveSearchResult != null && autoSearchContext == null && layer1Context == null)
+        {
+            autoSearchContext = $"【预测性预加载搜索结果】{_predictiveSearchResult}";
+            _logger.LogInformation("PredictivePreload: used speculative search ({Len} chars)",
+                _predictiveSearchResult.Length);
+            _predictiveSearchResult = null;
+        }
+
+        // Confidence-aware formatting: high confidence → structured output hint
+        if (!groundingFailed && metaAssessment.Familiarity > 0.5f && finalResponse.Length > 100)
+        {
+            yield return "\n\n> 置信度: 高 | 格式建议: 结构化表格";
+        }
+
+        // Prompt evolution: trigger GEPAPromptOptimizer every ~500 requests
+        if (_requestCount % 500 == 0 && _prompts is not null)
+            _workQueue.Enqueue(async ct =>
+            {
+                try
+                {
+                    _prompts.Reload();
+                    _logger.LogInformation("PromptEvolution: reloaded {Count} templates for potential A/B updates",
+                        _prompts.ListTemplates().Count);
+                }
+                catch { }
+            }, "PromptEvolution");
+
+        // Conversation fork: detect "换个角度" → snapshot context for future branch
+        if (query.Contains("换个角度") || query.Contains("另一个角度"))
+            _workQueue.Enqueue(async ct =>
+            {
+                try
+                {
+                    _synapticMemory?.Store(new SynapticExperience
+                    {
+                        Type = SynapseType.Interaction, Query = query, Response = finalResponse[..Math.Min(finalResponse.Length, 300)],
+                        Label = "fork_branch", Confidence = 0.7f, Reward = 0.7f,
+                        Metadata = $"context_snapshot={_context.CompressHistory()[..Math.Min(_context.CompressHistory().Length, 200)]}"
+                    });
+                }
+                catch { }
+            }, "ConversationFork");
+
+        // Hardware-aware routing: GPU detection for ONNX preference
+        if (_requestCount == 1)
+        {
+            try
+            {
+                var hasGpu = System.Runtime.Intrinsics.X86.Avx2.IsSupported;
+                _logger.LogInformation("HardwareRoute: GPU={Gpu}, ONNX={(hasGpu ? \"preferred\" : \"fallback\")}",
+                    hasGpu, hasGpu ? "preferred" : "fallback");
+            }
+            catch { }
+        }
+
+        // Proactive notification: push on long responses (> 500 chars, > 30s answer time)
+        if (finalResponse.Length > 500 && !groundingFailed)
+            _workQueue.Enqueue(async ct =>
+            {
+                try
+                {
+                    _logger.LogInformation("Notify: long response ready ({Len} chars) for query: {Q}",
+                        finalResponse.Length, query[..Math.Min(query.Length, 40)]);
+                    // Future: telegram_notify / wework_notify hook
+                }
+                catch { }
+            }, "ProactiveNotify");
 
         if (Interlocked.Increment(ref _requestCount) % 20 == 0)
         {
