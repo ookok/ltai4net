@@ -302,6 +302,14 @@ public sealed class LivingTreeSystem : IAsyncDisposable
 
         model = label switch { "fast" or "reflex" => FlashModel, "deep" => DefaultModel, _ => DefaultModel };
 
+        // Cost-aware routing: when budget is tight, prefer Flash for non-critical queries
+        if (_bavtRouter.BudgetRatio < 0.3f && label == "deep" && query.Length < 50)
+        {
+            model = FlashModel;
+            _logger.LogInformation("CostRouter: budget low ({Ratio:F2}), downgraded to Flash for short query",
+                _bavtRouter.BudgetRatio);
+        }
+
         // MetaCognitiveLayer: self-awareness check before answering
         // Layer 1 high-confidence match boosts local confidence → skip unnecessary delegation
         var localConfidence = layer1HighConfidence
@@ -858,6 +866,58 @@ public sealed class LivingTreeSystem : IAsyncDisposable
         if (Environment.WorkingSet > 2L * 1024 * 1024 * 1024)
             _logger.LogDebug("ResourceGuard: high memory usage ({Mem}MB), considering degradation",
                 Environment.WorkingSet / 1024 / 1024);
+
+        // Auto LoRA: trigger fine-tuning when domain consistently fails
+        if (groundingFailed && _requestCount % 10 == 0 && _synapticMemory != null)
+        {
+            var samples = _synapticMemory.GetTrainingSamples(maxCount: 50);
+            if (samples.Count >= 20)
+                _workQueue.Enqueue(async ct =>
+                {
+                    try { await TriggerPeriodicTraining(); } catch { }
+                }, "AutoLoRA");
+        }
+
+        // L0 self-learning: back-propagate wrong routing decisions
+        if (groundingFailed && label == "fast" && !layer1HighConfidence)
+        {
+            _erlLoop.RecordTrial($"l0_reroute_{query[..Math.Min(query.Length, 30)]}",
+                "should_be_deep", "fast_misroute", 0.3f, false);
+            _logger.LogInformation("L0 self-learning: fast→deep reroute for pattern: {Pattern}",
+                query[..Math.Min(query.Length, 40)]);
+        }
+
+        // Session memory: store structured dialogue summary after meaningful exchanges
+        if (!groundingFailed && finalResponse.Length > 200 && _context.CompressHistory().Length > 300)
+            _workQueue.Enqueue(async ct =>
+            {
+                try
+                {
+                    _synapticMemory?.Store(new SynapticExperience
+                    {
+                        Type = SynapseType.Interaction, Query = query, Response = finalResponse[..Math.Min(finalResponse.Length, 500)],
+                        Label = "session_memory", Confidence = groundingFailed ? 0.3f : 0.85f, Reward = groundingFailed ? 0.2f : 0.8f,
+                        Metadata = $"style={_personaStyle},turns={_context.CompressHistory().Split('\n').Length}"
+                    });
+                }
+                catch { }
+            }, "SessionMemory");
+
+        // Anomaly auto-report: detect ERL degradation and generate insight
+        if (erlRate < 0.4f && _erlLoop.TotalTrials > 10)
+        {
+            _logger.LogWarning("Anomaly: ERL success rate dropped to {Rate:F2} ({Trials} trials). " +
+                "Consider: 1) Check model health 2) Increase pre-emptive tool execution 3) Review grounding failures",
+                erlRate, _erlLoop.TotalTrials);
+            _evolutionStore?.RecordLesson(new EvolutionLesson
+            {
+                Category = LessonCategory.QualityRegression.ToString(),
+                Severity = 0.7f,
+                Summary = $"ERL success rate critical: {erlRate:F2} over {_erlLoop.TotalTrials} trials",
+                Mitigation = "Enable stricter grounding checks, force pre-emptive tool execution",
+                SourceStage = "anomaly_report"
+            });
+        }
 
         if (Interlocked.Increment(ref _requestCount) % 20 == 0)
         {
