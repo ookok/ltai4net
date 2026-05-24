@@ -7,7 +7,7 @@ using LTAI.Core.Models;
 using LTAI.DNA;
 using LTAI.Tools.Reasoning;
 using LTAI.AI.Providers;
-using LTAI.AI.Providers;
+using LTAI.AI.Utilities;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -46,6 +46,8 @@ public sealed class LivingTreeSystem
     private readonly AdaptiveDepthController? _depthController;
     private readonly TieredLoraManager? _tieredLora;
     private readonly CrossLevelDistiller? _crossDistiller;
+    private readonly ICrossRunEvolutionStore? _evolutionStore;
+    private readonly IVerifiableRegistry? _verifiableRegistry;
     private int _requestCount;
     private const int TrainingInterval = 50;
 
@@ -94,7 +96,9 @@ public sealed class LivingTreeSystem
         DreamCycle? dreamCycle = null,
         AdaptiveDepthController? depthController = null,
         TieredLoraManager? tieredLora = null,
-        CrossLevelDistiller? crossDistiller = null)
+        CrossLevelDistiller? crossDistiller = null,
+        ICrossRunEvolutionStore? evolutionStore = null,
+        IVerifiableRegistry? verifiableRegistry = null)
     {
         _mesh = mesh;
         _journal = journal;
@@ -117,6 +121,8 @@ public sealed class LivingTreeSystem
         _depthController = depthController;
         _tieredLora = tieredLora;
         _crossDistiller = crossDistiller;
+        _evolutionStore = evolutionStore;
+        _verifiableRegistry = verifiableRegistry;
         _taskPipeline = new TaskPipeline(_journal);
     }
 
@@ -131,6 +137,16 @@ public sealed class LivingTreeSystem
         _guardian.StartMonitoring(TimeSpan.FromSeconds(15));
         _logger.LogInformation("LivingTreeSystem v6.0 initialized with 5 governors, DNA: {DNA}",
             _dna != null ? "enabled" : "disabled");
+
+        if (_evolutionStore != null)
+        {
+            var activeLessons = _evolutionStore.GetActiveLessons(10);
+            if (activeLessons.Count > 0)
+            {
+                _logger.LogInformation("Cross-run evolution: loaded {Count} active lessons from prior runs",
+                    activeLessons.Count);
+            }
+        }
     }
 
     public async Task<string> ChatAsync(string query, CancellationToken cancellationToken = default)
@@ -220,6 +236,8 @@ public sealed class LivingTreeSystem
             }
         }
 
+        // L0: intent classification + knowledge graph shortcut
+        var toolCount = _toolRegistry.ListTools().Count();
         if (_duplexRouter != null)
         {
             var routeResult = _duplexRouter.Route(query);
@@ -228,22 +246,80 @@ public sealed class LivingTreeSystem
                 yield return routeResult.LocalResponse;
                 yield break;
             }
+
+            if (routeResult.Route == "delegate_l2")
+            {
+                var ctxResult = await _context.ProcessAsync(new Handshake
+                {
+                    To = "context", Action = "preload",
+                    Payload = new Dictionary<string, object?> { ["query"] = query },
+                    ReplyTo = Guid.NewGuid().ToString("N")
+                }, cancellationToken);
+                var ctx = ctxResult.Payload?.GetValueOrDefault("context")?.ToString() ?? "";
+                var toolHint = toolCount > 0
+                    ? $"\n[System: You have {toolCount} tools available including web_search, shell_exec, http_get, filesystem_read, and more. Use tools when you need real-time information or external capabilities.]"
+                    : "";
+                var fullQuery = string.IsNullOrEmpty(ctx) ? query + toolHint : $"Context:\n{ctx}\n\nQuery: {query}{toolHint}";
+                var teachingResult = await _duplexRouter.RequestL2ReasoningAsync(fullQuery, routeResult, cancellationToken);
+                if (teachingResult != null)
+                {
+                    _duplexRouter.LearnFromL2(query, teachingResult);
+                    _context.AddTurn(query, teachingResult.Answer);
+                    yield return teachingResult.Answer;
+                    yield break;
+                }
+            }
         }
 
-        var model = DefaultModel;
+        // L0 classify: fast vs deep
+        var label = "general";
+        string model;
         try
         {
-            var routingResult = await _routing.ProcessAsync(new Handshake
+            var inputResult = await _input.ProcessAsync(new Handshake
             {
-                To = "routing", Action = "select_provider",
+                To = "input", Action = "process",
                 Payload = new Dictionary<string, object?> { ["query"] = query }
             }, cancellationToken);
-            model = routingResult.Payload?.GetValueOrDefault("model")?.ToString() ?? DefaultModel;
+            label = inputResult.Payload?.GetValueOrDefault("label")?.ToString() ?? "deep";
         }
         catch { }
 
-        var streamOptions = new ChatOptions { ModelId = model, Temperature = 0.3f, MaxOutputTokens = 4096, Tools = _toolRegistry.GetTools().ToList() };
-        var messages = new List<ChatMessage> { new(ChatRole.User, query) };
+        model = label switch { "fast" or "reflex" => FlashModel, "deep" => DefaultModel, _ => DefaultModel };
+
+        var messages = new List<ChatMessage>();
+        var streamOptions = new ChatOptions
+        {
+            ModelId = model,
+            Temperature = 0.3f,
+            MaxOutputTokens = 4096,
+            Tools = _toolRegistry.GetTools().ToList()
+        };
+
+        if (toolCount > 0)
+        {
+            var toolNames = string.Join("、", _toolRegistry.ListTools().Take(10));
+            messages.Add(new ChatMessage(ChatRole.System,
+                $"你可以使用以下工具: {toolNames} 等共 {toolCount} 个工具。" +
+                "遇到不确定的事实性问题、需要实时数据、需要操作系统文件或执行命令时，请主动调用相应的工具后再回答。"));
+        }
+
+        messages.Add(new ChatMessage(ChatRole.User, query));
+
+        if (toolCount > 0 && (label == "fast" || label == "reflex"))
+        {
+            messages.Insert(0, new ChatMessage(ChatRole.System,
+                $"你可以使用以下工具: {string.Join("、", _toolRegistry.ListTools().Take(10))} 等共 {toolCount} 个。" +
+                "重要规则: 1) 遇到需要实时信息、外部数据或事实核查的问题，必须先调用工具再回答。" +
+                "2) 如果工具返回空结果或不确定信息，必须如实告知用户'未找到相关信息'，严禁编造或推测。" +
+                "3) 回答中明确区分【工具返回的事实】和【你的推测】，推测必须标注'不确定'。"));
+
+            var response = await _llm.GetResponseAsync(messages, streamOptions, cancellationToken);
+            var text = response.Text ?? "";
+            if (!string.IsNullOrEmpty(text))
+                yield return text;
+            yield break;
+        }
 
         IAsyncEnumerable<ChatResponseUpdate> streamResponse;
         try { streamResponse = _llm.GetStreamingResponseAsync(messages, streamOptions, cancellationToken); }
@@ -253,6 +329,13 @@ public sealed class LivingTreeSystem
 
         await foreach (var update in streamResponse)
         {
+            // Yield thinking/reasoning tokens with a prefix marker
+            foreach (var content in update.Contents)
+            {
+                if (content is TextReasoningContent rc && !string.IsNullOrEmpty(rc.Text))
+                    yield return $"<thinking>{rc.Text}</thinking>";
+            }
+
             if (!string.IsNullOrEmpty(update.Text))
                 yield return update.Text;
         }
@@ -367,7 +450,8 @@ public sealed class LivingTreeSystem
         }
 
         string response;
-        var options = new ChatOptions { ModelId = model, Temperature = temperature, MaxOutputTokens = 4096, Tools = _toolRegistry.GetTools().ToList() };
+        var maxTokens = _options.Value.AI.MaxTokens > 0 ? _options.Value.AI.MaxTokens : 4096;
+        var options = new ChatOptions { ModelId = model, Temperature = temperature, MaxOutputTokens = maxTokens, Tools = _toolRegistry.GetTools().ToList() };
 
         try
         {
@@ -389,6 +473,16 @@ public sealed class LivingTreeSystem
                 options.ModelId = fallbackModel;
                 options.Temperature = 0.3f;
                 response = (await _llm.GetResponseAsync(fullPrompt, options, cancellationToken)).Text ?? "";
+
+                _evolutionStore?.RecordLesson(new EvolutionLesson
+                {
+                    Category = LessonCategory.ModelDegradation.ToString(),
+                    Severity = 0.6f,
+                    Summary = $"Model {model} failed and degraded to {fallbackModel}",
+                    Mitigation = $"Use {fallbackModel} as fallback; monitor {model} error rate",
+                    SourceRun = traceId,
+                    SourceStage = "l2_response"
+                });
             }
             else { throw; }
         }
@@ -462,18 +556,46 @@ public sealed class LivingTreeSystem
             ? prompt
             : $"Previous conversation:\n{history}\n\nCurrent query:\n{prompt}\n\nPlease provide a thorough, well-reasoned response.";
 
-        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        cts.CancelAfter(TimeSpan.FromSeconds(60));
+        var messages = new List<ChatMessage> { new(ChatRole.User, iterativePrompt) };
+        var sb = new System.Text.StringBuilder();
+        string? lastModel = null;
 
-        var response = await _llm.CompleteAsync(iterativePrompt, baseOptions, cts.Token);
+        await foreach (var update in _llm.GetStreamingResponseAsync(messages, baseOptions, ct))
+        {
+            if (!string.IsNullOrEmpty(update.Text))
+                sb.Append(update.Text);
+            lastModel ??= update.ModelId;
+        }
+        var response = sb.ToString();
 
-        var reviewPrompt = $"Review this response for accuracy and completeness. If it needs improvement, provide the improved version:\n\n{response}";
-        var reviewOptions = new ChatOptions { ModelId = baseOptions.ModelId, Temperature = 0.1f, MaxOutputTokens = 8192 };
+        if (string.IsNullOrWhiteSpace(response))
+            throw new InvalidOperationException("Empty streaming response");
 
-        using var reviewCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        reviewCts.CancelAfter(TimeSpan.FromSeconds(30));
+        // Fire-and-forget review: doesn't block the critical path
+        var capturedResponse = response;
+        var capturedPrompt = iterativePrompt;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var reviewPrompt = $"Review this response for accuracy and completeness. If it needs improvement, provide the improved version:\n\n{capturedResponse}";
+                var reviewOptions = new ChatOptions { ModelId = baseOptions.ModelId, Temperature = 0.1f, MaxOutputTokens = 2048 };
+                using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+                var reviewed = await _llm.CompleteAsync(reviewPrompt, reviewOptions, cts.Token);
+                if (!string.IsNullOrWhiteSpace(reviewed))
+                {
+                    _synapticMemory?.Store(new SynapticExperience
+                    {
+                        Type = SynapseType.Correction, Query = capturedPrompt, Response = reviewed,
+                        Label = "reviewed", Confidence = 0.85f, Reward = 0.9f,
+                        Metadata = $"model={baseOptions.ModelId},original_len={capturedResponse.Length}"
+                    });
+                }
+            }
+            catch (Exception ex) { _logger.LogDebug(ex, "Background review skipped"); }
+        });
 
-        return await _llm.CompleteAsync(reviewPrompt, reviewOptions, reviewCts.Token);
+        return response;
     }
 
     private string RestartSystem()
@@ -512,6 +634,31 @@ public sealed class LivingTreeSystem
                     {
                         _logger.LogInformation("ONNX retraining: accuracy={Acc:F2} samples={N} onnx={Path}",
                             result.Accuracy, result.TrainingSamples, result.OnnxPath);
+
+                        _verifiableRegistry?.RegisterMeasurement(new NumericMeasurement
+                        {
+                            Key = "onnx_training_accuracy",
+                            Condition = $"samples={result.TrainingSamples}",
+                            Value = result.Accuracy,
+                            SourceExperiment = "lts_periodic_training",
+                            Domain = "intent_classifier",
+                            IsVerified = true,
+                            Provenance = result.OnnxPath
+                        });
+
+                        if (result.Accuracy < 0.5f)
+                        {
+                            _evolutionStore?.RecordLesson(new EvolutionLesson
+                            {
+                                Category = LessonCategory.QualityRegression.ToString(),
+                                Severity = 0.5f,
+                                Summary = $"ONNX training accuracy low ({result.Accuracy:F2})",
+                                Mitigation = "Increase training samples or adjust hyperparameters",
+                                SourceRun = result.OnnxPath,
+                                SourceStage = "onnx_training"
+                            });
+                        }
+
                         inference.Dispose();
                     }
                 }

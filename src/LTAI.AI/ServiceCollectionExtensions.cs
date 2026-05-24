@@ -57,7 +57,11 @@ public static class ServiceCollectionExtensions
 
             var pipeline = new ChatClientBuilder(multiClient)
                 .UseLogging(loggerFactory)
-                .UseFunctionInvocation()
+                .UseFunctionInvocation(loggerFactory, client =>
+                {
+                    client.MaximumIterationsPerRequest = int.MaxValue;
+                    client.AllowConcurrentInvocation = true;
+                })
                 .UseOpenTelemetry()
                 .Build();
 
@@ -133,6 +137,29 @@ public static class ServiceCollectionExtensions
             var dbPath = System.IO.Path.Combine(synapticDir, "synaptic_memory.db");
             Directory.CreateDirectory(synapticDir);
             return new SynapticMemory(dbPath, logger);
+        });
+
+        services.AddSingleton<ICrossRunEvolutionStore>(sp =>
+        {
+            var dbPath = System.IO.Path.Combine(synapticDir, "crossrun_evolution.db");
+            Directory.CreateDirectory(synapticDir);
+            var options = sp.GetService<IOptions<LTAIOptions>>();
+            var halfLife = options?.Value.Thresholds.CrossRunHalfLifeDays ?? 30;
+            return new CrossRunEvolutionStore(dbPath, halfLife);
+        });
+
+        services.AddSingleton<IVerifiableRegistry>(sp =>
+        {
+            var dbPath = System.IO.Path.Combine(synapticDir, "numeric_registry.db");
+            Directory.CreateDirectory(synapticDir);
+            var registry = new VerifiableRegistry(dbPath);
+            var logger = sp.GetService<ILogger<IVerifiableRegistry>>();
+            if (logger != null)
+            {
+                registry.OnClaimRejected += (claim, result) =>
+                    logger.LogWarning("Numeric claim rejected: {Claim} — {Discrepancy}", claim, result.Discrepancy);
+            }
+            return registry;
         });
 
         services.AddSingleton<AdaptiveDepthController>(sp =>

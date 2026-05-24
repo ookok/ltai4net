@@ -1,7 +1,18 @@
-using System;
-using System.IO;
+using System.Diagnostics;
 using System.Text;
+using LTAI.AI;
+using LTAI.AI.Governors;
+using LTAI.Agent.Tools;
 using LTAI.Cli.Debug;
+using LTAI.Core;
+using LTAI.Core.Configuration;
+using LTAI.Core.Messaging;
+using LTAI.Core.Setup;
+using LTAI.Knowledge.Vector;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Spectre.Console;
 
 namespace LTAI.Cli;
 
@@ -13,223 +24,255 @@ internal static class DebugMode
         {
             var baseDir = AppContext.BaseDirectory;
             var rootDir = FindRootDirectory(baseDir, "docs");
-            if (rootDir != null)
-                return Path.Combine(rootDir, "docs", "debug");
-            return Path.Combine(baseDir, "docs", "debug");
+            return rootDir != null ? Path.Combine(rootDir, "docs", "debug") : Path.Combine(baseDir, "docs", "debug");
         }
     }
 
     public static async Task RunAsync(string? query, int count, string? difficulty, string? domain, bool generateReport)
     {
-        Console.WriteLine("=== LTAI Debug Mode ===\n");
+        Console.WriteLine("=== LTAI Debug Mode (Live Pipeline) ===\n");
 
-        var tracer = new FullLinkTracer();
-        var generator = new HeuristicQuestionGenerator();
-        
-        Console.WriteLine("Initializing test infrastructure...");
+        var baseDir = AppContext.BaseDirectory;
+        var configPath = Path.Combine(baseDir, "appsettings.json");
 
-        var docDir = Path.GetFullPath(DocsDir);
-        Directory.CreateDirectory(docDir);
+        if (!File.Exists(configPath) || new FileInfo(configPath).Length < 30)
+        {
+            Console.WriteLine("未检测到配置文件，正在运行配置向导...");
+            var wizard = new InteractiveSetupWizard(configPath);
+            await wizard.RunAsync();
+        }
+
+        var configuration = new ConfigurationBuilder()
+            .AddJsonFile(configPath, optional: true, reloadOnChange: false)
+            .Build();
+
+        var services = new ServiceCollection();
+        services.Configure<LTAIOptions>(configuration.GetSection(LTAIOptions.SectionName));
+        services.AddLogging(b => b.AddConsole().SetMinimumLevel(LogLevel.Warning));
+        services.AddLTAICore();
+        services.AddLTAIVectorAuto();
+        services.AddLTAIAI();
+
+        var sp = services.BuildServiceProvider();
+        var livingTree = sp.GetRequiredService<LivingTreeSystem>();
+        var options = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<LTAIOptions>>().Value;
+
+        var toolRegistry = sp.GetRequiredService<AIToolRegistry>();
+        await toolRegistry.RegisterAllToolCategoriesAsync();
+        Console.WriteLine($"Registered {toolRegistry.ListTools().Count()} tools");
+
+        var hasProvider = options.AI.Providers.Any(kv => !string.IsNullOrEmpty(kv.Value.Endpoint));
+        if (!hasProvider)
+        {
+            Console.WriteLine("无可用 AI 提供商");
+            return;
+        }
+
+        try { await livingTree.InitializeAsync(); }
+        catch (Exception ex) { Console.WriteLine($"初始化失败: {ex.Message}"); return; }
 
         if (!string.IsNullOrEmpty(query))
         {
-            var traceId = tracer.StartTrace(query);
-            
-            tracer.RecordStageStart(traceId, TraceStage.Router, query);
-            await Task.Delay(10);
-            tracer.RecordStageEnd(traceId, TraceStage.Router, "local_llm", success: true, metadata: new Dictionary<string, object>
-            {
-                ["Confidence"] = 0.75f,
-                ["Complexity"] = 0.5f
-            });
-
-            tracer.RecordStageStart(traceId, TraceStage.L1_Generation, query);
-            await Task.Delay(50);
-            tracer.RecordStageEnd(traceId, TraceStage.L1_Generation, "Generated response", success: true);
-
-            tracer.RecordStageStart(traceId, TraceStage.Verification);
-            await Task.Delay(5);
-            tracer.RecordStageEnd(traceId, TraceStage.Verification, "Passed", success: true);
-
-            var report = tracer.EndTrace(traceId, "local_llm", "Mock response");
-            
-            Console.WriteLine($"\n✅ Trace completed.");
-            Console.WriteLine($"   Duration: {report.TotalDuration.TotalMilliseconds:F0}ms");
-            Console.WriteLine($"   Stages: {report.Spans.Count}");
-            Console.WriteLine($"   Success: {report.Success}");
-            
-            if (report.Bottlenecks?.Count > 0)
-            {
-                Console.WriteLine("\n   Bottlenecks:");
-                foreach (var bn in report.Bottlenecks)
-                    Console.WriteLine($"     - {bn}");
-            }
-
-            var docPath = Path.Combine(docDir, $"trace_{DateTime.UtcNow:yyyyMMdd_HHmmss}.md");
-            await File.WriteAllTextAsync(docPath, GenerateTraceDocument(report), default);
-            Console.WriteLine($"\n📄 Trace document saved: {docPath}");
+            await RunLiveQueryAsync(query, livingTree, options);
         }
         else
         {
-            Console.WriteLine($"\n📝 Generating {count} test cases...");
-            var tests = generator.GenerateTests(count);
-            
-            Console.WriteLine($"\nGenerated {tests.Count} tests:");
-            Console.WriteLine($"  Simple: {tests.Count(t => t.Difficulty == TestDifficulty.Simple)}");
-            Console.WriteLine($"  Moderate: {tests.Count(t => t.Difficulty == TestDifficulty.Moderate)}");
-            Console.WriteLine($"  Complex: {tests.Count(t => t.Difficulty == TestDifficulty.Complex)}");
-            Console.WriteLine($"  OOD: {tests.Count(t => t.Difficulty == TestDifficulty.OOD)}");
-            Console.WriteLine();
-
-            Console.WriteLine("Sample test cases:");
-            foreach (var test in tests.Take(5))
-            {
-                Console.WriteLine($"  [{test.Difficulty,8}] [{test.Domain,10}] {test.Query}");
-                Console.WriteLine($"             Expected Route: {test.ExpectedRoute}");
-            }
-
-            Console.WriteLine("\n🔄 Running end-to-end tests...");
-            Console.WriteLine("   [Mock] Tests would run against real L1L2DuplexRouter here.");
-            Console.WriteLine("   [Mock] Results would show Pass/Fail per test case.");
-
-            var reportPath = Path.Combine(docDir, $"debug_report_{DateTime.UtcNow:yyyyMMdd_HHmmss}.md");
-            await File.WriteAllTextAsync(reportPath, GenerateDebugDocument(tests, generateReport), default);
-            Console.WriteLine($"\n📄 Debug report saved: {reportPath}");
+            await RunBatchTestAsync(count, livingTree, options);
         }
 
-        Console.WriteLine("\n✅ Debug mode completed.");
+        Console.WriteLine("\nDebug mode completed.");
     }
 
-    private static string GenerateTraceDocument(TraceReport report)
+    private static async Task RunLiveQueryAsync(string query, LivingTreeSystem livingTree, LTAIOptions options)
+    {
+        var obs = new DebugObservability(livingTree);
+        var snapBefore = obs.Snapshot();
+
+        Console.WriteLine($"Query: {query}");
+        Console.WriteLine(new string('-', 60));
+
+        var sw = Stopwatch.StartNew();
+        var fullResponse = new StringBuilder();
+
+        try
+        {
+            await foreach (var chunk in livingTree.StreamChatAsync(query))
+            {
+                AnsiConsole.Markup(Markup.Escape(chunk));
+                fullResponse.Append(chunk);
+            }
+            sw.Stop();
+
+            var response = fullResponse.ToString();
+            Console.WriteLine();
+            Console.WriteLine();
+            Console.WriteLine(new string('-', 60));
+            AnsiConsole.MarkupLine($"[bold]L1:[/] [yellow]{options.AI.L1.Provider}/{options.AI.L1.Model}[/]");
+            AnsiConsole.MarkupLine($"[bold]L2:[/] [cyan]{options.AI.L2.Provider}/{options.AI.L2.Model}[/]");
+            AnsiConsole.MarkupLine($"[bold]L0:[/] [green]{options.AI.L0.Provider}/{options.AI.L0.Model}[/]");
+            AnsiConsole.MarkupLine($"ONNX: {(options.AI.OnnxEnabled ? "[green]enabled[/]" : "[dim]disabled[/]")}  |  {sw.ElapsedMilliseconds}ms");
+
+            var snapAfter = obs.Snapshot();
+            Console.WriteLine();
+            AnsiConsole.MarkupLine("[bold cyan]── Pipeline Metrics ──[/]");
+            PrintMetricChanged(snapBefore, snapAfter, "bavt.budget_ratio", "BAVT预算比", "F3");
+            PrintMetricChanged(snapBefore, snapAfter, "erl.total_trials", "ERL总试验", null);
+            PrintMetricChanged(snapBefore, snapAfter, "erl.success_rate", "ERL成功率", "F3");
+            PrintMetricChanged(snapBefore, snapAfter, "elastic.raw", "弹性记忆(原始)", null);
+            PrintMetricChanged(snapBefore, snapAfter, "elastic.compressed", "弹性记忆(压缩)", null);
+            PrintMetricChanged(snapBefore, snapAfter, "elastic.episodic", "弹性记忆(情景)", null);
+            PrintMetricChanged(snapBefore, snapAfter, "reflection.total", "反射恢复次数", null);
+            PrintMetricChanged(snapBefore, snapAfter, "reflection.recovery_rate", "反射恢复率", "F3");
+            PrintMetricChanged(snapBefore, snapAfter, "evolution.total_lessons", "跨轮次教训总数", null);
+            PrintMetricChanged(snapBefore, snapAfter, "evolution.active_lessons", "活跃教训数", null);
+            PrintMetricChanged(snapBefore, snapAfter, "verifiable.measurements", "已验证测量值", null);
+            PrintMetricChanged(snapBefore, snapAfter, "verifiable.citations", "已验证引用", null);
+
+            var lessons = snapAfter.GetValueOrDefault("evolution.lessons_prompt")?.ToString();
+            if (!string.IsNullOrWhiteSpace(lessons) && lessons != snapBefore.GetValueOrDefault("evolution.lessons_prompt")?.ToString())
+            {
+                Console.WriteLine();
+                Console.WriteLine("── Active Cross-Run Lessons ──");
+                Console.WriteLine(lessons);
+            }
+
+            var docDir = DocsDir;
+            Directory.CreateDirectory(docDir);
+            var docPath = Path.Combine(docDir, $"trace_{DateTime.UtcNow:yyyyMMdd_HHmmss}.md");
+            await File.WriteAllTextAsync(docPath, GenerateLiveTraceDocument(query, response, sw.ElapsedMilliseconds, options), default);
+            Console.WriteLine($"\nTrace: {docPath}");
+        }
+        catch (Exception ex)
+        {
+            sw.Stop();
+            Console.WriteLine($"\nERROR: {ex.Message}");
+        }
+    }
+
+    private static void PrintMetricChanged(Dictionary<string, object> before, Dictionary<string, object> after, string key, string label, string? format)
+    {
+        var prev = before.GetValueOrDefault(key);
+        var curr = after.GetValueOrDefault(key);
+
+        if (prev == null && curr == null) return;
+
+        var prevStr = FormatMetric(prev, format);
+        var currStr = FormatMetric(curr, format);
+        var delta = prev == null || prev.Equals(curr) ? "" : $"(Δ)";
+
+        Console.WriteLine($"  {label}: {currStr} {delta}");
+    }
+
+    private static string FormatMetric(object? val, string? format)
+    {
+        if (val == null) return "n/a";
+        return format switch
+        {
+            "F2" => string.Format("{0:F2}", val),
+            "F3" => string.Format("{0:F3}", val),
+            _ => val.ToString() ?? "?"
+        };
+    }
+
+    private static async Task RunBatchTestAsync(int count, LivingTreeSystem livingTree, LTAIOptions options)
+    {
+        var generator = new HeuristicQuestionGenerator();
+        Console.WriteLine($"生成 {count} 个测试用例...");
+        var tests = generator.GenerateTests(count);
+        Console.WriteLine($"  Simple: {tests.Count(t => t.Difficulty == TestDifficulty.Simple)}, Moderate: {tests.Count(t => t.Difficulty == TestDifficulty.Moderate)}, Complex: {tests.Count(t => t.Difficulty == TestDifficulty.Complex)}, OOD: {tests.Count(t => t.Difficulty == TestDifficulty.OOD)}");
+        Console.WriteLine("\n运行真实全链路测试...\n");
+
+        var results = new List<(HeuristicTestCase Test, bool Pass, string? Response, long Ms)>();
+        for (int i = 0; i < tests.Count; i++)
+        {
+            var test = tests[i];
+            Console.Write($"[{i + 1}/{tests.Count}] [{test.Difficulty}] {Truncate(test.Query, 60).PadRight(60)} ");
+            try
+            {
+                var sw = Stopwatch.StartNew();
+                var output = await livingTree.ProcessTypedAsync(GovernorInput.Create(test.Query), default);
+                sw.Stop();
+                var ok = !output.IsBlocked && !string.IsNullOrEmpty(output.Response);
+                Console.Write($"{(ok ? "PASS" : "FAIL")} ({sw.ElapsedMilliseconds}ms)");
+                results.Add((test, ok, output.Response, sw.ElapsedMilliseconds));
+            }
+            catch (Exception ex)
+            {
+                Console.Write($"ERR: {Truncate(ex.Message, 30)}");
+                results.Add((test, false, null, 0));
+            }
+            Console.WriteLine();
+        }
+
+        var passed = results.Count(r => r.Pass);
+        Console.WriteLine($"\n结果: {passed}/{tests.Count} 通过");
+        var reportPath = Path.Combine(DocsDir, $"debug_report_{DateTime.UtcNow:yyyyMMdd_HHmmss}.md");
+        await File.WriteAllTextAsync(reportPath, GenerateLiveDebugDocument(results, tests, options));
+        Console.WriteLine($"报告: {reportPath}");
+    }
+
+    private static string GenerateLiveTraceDocument(string query, string response, long ms, LTAIOptions options)
     {
         var sb = new StringBuilder();
-        sb.AppendLine("# LTAI Trace Report");
+        sb.AppendLine("# LTAI Live Trace Report");
         sb.AppendLine();
         sb.AppendLine($"| Item | Value |");
         sb.AppendLine($"|------|-------|");
-        sb.AppendLine($"| **Trace ID** | `{report.TraceId}` |");
-        sb.AppendLine($"| **Query** | {report.Query} |");
-        sb.AppendLine($"| **Time** | {report.StartTime:yyyy-MM-dd HH:mm:ss} |");
-        sb.AppendLine($"| **Duration** | {report.TotalDuration.TotalMilliseconds:F0}ms |");
-        sb.AppendLine($"| **Route** | {report.FinalRoute} |");
-        sb.AppendLine($"| **Success** | {(report.Success ? "✅ Yes" : "❌ No")} |");
+        sb.AppendLine($"| **Query** | {Truncate(query, 100)} |");
+        sb.AppendLine($"| **Time** | {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} UTC |");
+        sb.AppendLine($"| **Duration** | {ms}ms |");
+        sb.AppendLine($"| **L1** | {options.AI.L1.Provider}/{options.AI.L1.Model} |");
+        sb.AppendLine($"| **L2** | {options.AI.L2.Provider}/{options.AI.L2.Model} |");
+        sb.AppendLine($"| **L0** | {options.AI.L0.Provider}/{options.AI.L0.Model} |");
+        sb.AppendLine($"| **ONNX** | {(options.AI.OnnxEnabled ? "enabled" : "disabled")} |");
         sb.AppendLine();
-
-        sb.AppendLine("## Pipeline Stages");
+        sb.AppendLine("## Response");
         sb.AppendLine();
-        sb.AppendLine("| # | Stage | Duration | Status | Input | Output |");
-        sb.AppendLine("|---|-------|----------|--------|-------|--------|");
-        for (int i = 0; i < report.Spans.Count; i++)
-        {
-            var span = report.Spans[i];
-            sb.AppendLine($"| {i + 1} | {span.Stage} | {span.Duration.TotalMilliseconds:F0}ms | {(span.Success ? "✅" : "❌")} | {Truncate(span.Input, 30)} | {Truncate(span.Output, 30)} |");
-        }
+        sb.AppendLine(response);
         sb.AppendLine();
-
-        if (report.Bottlenecks?.Count > 0)
-        {
-            sb.AppendLine("## Bottlenecks");
-            sb.AppendLine();
-            foreach (var bn in report.Bottlenecks)
-                sb.AppendLine($"- {bn}");
-            sb.AppendLine();
-        }
-
-        if (report.Errors?.Count > 0)
-        {
-            sb.AppendLine("## Errors");
-            sb.AppendLine();
-            foreach (var err in report.Errors)
-                sb.AppendLine($"- {err}");
-            sb.AppendLine();
-        }
-
-        sb.AppendLine($"---\n*Generated by LTAI Debug at {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} UTC*");
+        sb.AppendLine($"---\n*Generated at {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} UTC*");
         return sb.ToString();
     }
 
-    private static string GenerateDebugDocument(List<HeuristicTestCase> tests, bool includeFullReport)
+    private static string GenerateLiveDebugDocument(List<(HeuristicTestCase Test, bool Pass, string? Response, long Ms)> results,
+        List<HeuristicTestCase> tests, LTAIOptions options)
     {
         var sb = new StringBuilder();
-        sb.AppendLine("# LTAI Debug Report");
+        sb.AppendLine("# LTAI Live Debug Report");
         sb.AppendLine();
         sb.AppendLine($"**Generated:** {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} UTC");
+        sb.AppendLine($"**L1:** {options.AI.L1.Provider}/{options.AI.L1.Model}");
+        sb.AppendLine($"**L2:** {options.AI.L2.Provider}/{options.AI.L2.Model}");
         sb.AppendLine();
-
-        sb.AppendLine("## Test Suite Summary");
-        sb.AppendLine();
-        sb.AppendLine("| Difficulty | Count | Expected Route |");
-        sb.AppendLine("|------------|-------|----------------|");
-        foreach (var d in Enum.GetValues<TestDifficulty>())
+        sb.AppendLine("| # | Difficulty | Pass | Time | Query | Response |");
+        sb.AppendLine("|---|------------|------|------|-------|----------|");
+        for (int i = 0; i < results.Count; i++)
         {
-            var count = tests.Count(t => t.Difficulty == d);
-            if (count == 0) continue;
-            var route = tests.First(t => t.Difficulty == d).ExpectedRoute;
-            sb.AppendLine($"| {d} | {count} | `{route}` |");
+            var (test, pass, resp, ms) = results[i];
+            sb.AppendLine($"| {i + 1} | {test.Difficulty} | {(pass ? "PASS" : "FAIL")} | {ms}ms | {Truncate(test.Query, 40)} | {Truncate(resp, 40)} |");
         }
         sb.AppendLine();
-
-        sb.AppendLine("## Domain Distribution");
+        sb.AppendLine($"**{results.Count(r => r.Pass)}/{tests.Count} passed**");
         sb.AppendLine();
-        sb.AppendLine("| Domain | Count |");
-        sb.AppendLine("|--------|-------|");
-        foreach (var dom in Enum.GetValues<TestDomain>())
-        {
-            var count = tests.Count(t => t.Domain == dom);
-            if (count == 0) continue;
-            sb.AppendLine($"| {dom} | {count} |");
-        }
-        sb.AppendLine();
-
-        if (includeFullReport)
-        {
-            sb.AppendLine("## Test Cases");
-            sb.AppendLine();
-            for (int i = 0; i < tests.Count; i++)
-            {
-                var t = tests[i];
-                sb.AppendLine($"### {i + 1}. [{t.Difficulty}] {t.Domain}");
-                sb.AppendLine();
-                sb.AppendLine($"- **Query:** {t.Query}");
-                sb.AppendLine($"- **Expected Route:** `{t.ExpectedRoute}`");
-                sb.AppendLine($"- **Description:** {t.Description}");
-                sb.AppendLine();
-            }
-        }
-        else
-        {
-            sb.AppendLine("## Sample Test Cases");
-            sb.AppendLine();
-            sb.AppendLine("| # | Difficulty | Domain | Query | Expected Route |");
-            sb.AppendLine("|---|------------|--------|-------|----------------|");
-            foreach (var t in tests.Take(10))
-            {
-                sb.AppendLine($"| | {t.Difficulty} | {t.Domain} | {Truncate(t.Query, 50)} | `{t.ExpectedRoute}` |");
-            }
-            sb.AppendLine();
-            sb.AppendLine($"> *{tests.Count - 10} more test cases omitted. Use `--report` for full listing.*");
-            sb.AppendLine();
-        }
-
-        sb.AppendLine("## Pipeline Architecture");
-        sb.AppendLine();
-        sb.AppendLine("```");
-        sb.AppendLine("Query → Cache → BinaryIndex → DomainGraph → SynapticInference → LocalLLM");
-        sb.AppendLine("  │         │          │            │                │              │");
-        sb.AppendLine("  ├─cache_hit├─binary_correction├─graph_knowledge├─synaptic_knowledge├─local_llm");
-        sb.AppendLine("  │                                                                    │");
-        sb.AppendLine("  └────────────────────────────────────────────────────── PACE Routing ─┤");
-        sb.AppendLine("                                                                        │");
-        sb.AppendLine("                    ┌─ RecursiveMAS (ZPD zone)                          │");
-        sb.AppendLine("                    ├─ ForceL2 (plateau)                                │");
-        sb.AppendLine("                    └─ DirectL2 (OOD)                                   │");
-        sb.AppendLine("```");
-        sb.AppendLine();
-
-        sb.AppendLine("---\n*Generated by LTAI Debug Mode*");
+        sb.AppendLine($"---\n*Generated at {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} UTC*");
         return sb.ToString();
     }
 
-    private static string Truncate(string? text, int maxLen) => CliUtilities.Truncate(text, maxLen);
-    private static string? FindRootDirectory(string startDir, string markerDir) => CliUtilities.FindRootDirectory(startDir, markerDir);
+    private static string Truncate(string? text, int maxLen)
+    {
+        if (string.IsNullOrEmpty(text)) return "";
+        return text.Length <= maxLen ? text : text[..maxLen] + "...";
+    }
+
+    private static string? FindRootDirectory(string startDir, string markerDir)
+    {
+        var current = startDir;
+        while (current != null)
+        {
+            if (Directory.Exists(Path.Combine(current, markerDir)))
+                return current;
+            current = Path.GetDirectoryName(current);
+        }
+        return null;
+    }
 }

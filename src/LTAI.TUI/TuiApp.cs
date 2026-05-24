@@ -12,7 +12,7 @@ using Microsoft.Extensions.Options;
 
 namespace LTAI.TUI;
 
-public enum TuiView { Dashboard, Chat, Code, Git, Help, Session, LLMConfig, Models, Service }
+public enum TuiView { Dashboard, Chat, Code, Git, Help, Session, LLMConfig, Models, Service, Pipeline }
 
 public enum TuiTheme { Dark, Light, HighContrast }
 
@@ -34,6 +34,7 @@ public sealed class TuiApp
     private readonly SessionSearch _search;
     private readonly ServiceManager? _service;
     private readonly ModelManager? _modelMgr;
+    private readonly IOptions<LTAIOptions>? _configOptions;
 
     private TuiView _currentView = TuiView.Dashboard;
     private TuiTheme _theme = TuiTheme.Dark;
@@ -67,6 +68,7 @@ public sealed class TuiApp
         _analyzer = analyzer;
         _service = service;
         _modelMgr = modelMgr;
+        _configOptions = options;
         _projectRoot = Directory.GetCurrentDirectory();
         _llmConfig = new LLMConfigPanel(options);
         _session = new SessionTracker();
@@ -86,26 +88,65 @@ public sealed class TuiApp
         ApplyTheme();
         AnsiConsole.Write(new FigletText("LTAI TUI").Color(Color.Cyan1));
 
-        try
-        {
-            var currentFont = ConsoleFont.GetCurrentFont();
-            AnsiConsole.MarkupLine($"[grey]Font: {currentFont}[/]");
-        }
-        catch { /* non-fatal */ }
-
-        AnsiConsole.Write(new Rule("LivingTree AI Agent — Dev Console"));
-        AnsiConsole.MarkupLine("[grey]Recommended: Maple Mono NF | Press ? for help, Ctrl+T theme[/]");
+        AnsiConsole.Write(new Rule("小树 AI — 开发控制台"));
+        AnsiConsole.MarkupLine("[grey]推荐字体: Maple Mono NF | ? 帮助  Ctrl+T 主题[/]");
 
         while (_running)
         {
-            await RenderAsync();
+            RenderView();
             if (!_running) break;
             var key = await ReadKeyAsync();
             await HandleKeyAsync(key);
         }
 
         AnsiConsole.Clear();
-        AnsiConsole.MarkupLine("[yellow]LTAI TUI exited. Session stats saved.[/]");
+        AnsiConsole.MarkupLine("[yellow]小树已退出，会话数据已保存。[/]");
+    }
+
+    private void RenderView()
+    {
+        AnsiConsole.Cursor.SetPosition(0, 3);
+        var headerMarkup = $"[bold cyan]LTAI Dev Console[/]  {DnaStatusLine()}  [green]Mode:{_lts.Mode}[/] [blue]v5.5[/]  [grey]CPU:{Environment.ProcessorCount}c MEM:{Environment.WorkingSet / 1024 / 1024}MB[/]";
+        AnsiConsole.MarkupLine(headerMarkup);
+
+        if (_showLLMPanel)
+        {
+            AnsiConsole.Write(_llmConfig.Render());
+            AnsiConsole.Write(new Rule());
+        }
+
+        switch (_currentView)
+        {
+            case TuiView.Dashboard: RenderDashboard(); break;
+            case TuiView.Chat: RenderChatView(); break;
+            case TuiView.Code: RenderCodeView(); break;
+            case TuiView.Git: RenderGitView(); break;
+            case TuiView.Help: RenderHelp(); break;
+            case TuiView.Session: RenderSessionView(); break;
+            case TuiView.LLMConfig: RenderLLMView(); break;
+            case TuiView.Models: RenderModelsView(); break;
+            case TuiView.Service: RenderServiceViewStub(); break;
+            case TuiView.Pipeline: RenderPipelineView(); break;
+        }
+
+        AnsiConsole.Write(new Rule());
+        RenderFooterLine();
+    }
+
+    private string DnaStatusLine() => _dna != null
+        ? $"[cyan]DNA:{_dna.Consciousness.State.Level}[/] [green]Gen:{_dna.GetStatus().Generation}[/]"
+        : "[grey]DNA:off[/]";
+
+    private void RenderFooterLine()
+    {
+        var name = _currentView switch
+        {
+            TuiView.Dashboard => "Dashboard", TuiView.Chat => "Chat", TuiView.Code => "Code",
+            TuiView.Git => "Git", TuiView.Help => "Help", TuiView.Session => "Session",
+            TuiView.LLMConfig => "LLM Config", TuiView.Models => "Models", TuiView.Service => "Service", TuiView.Pipeline => "Pipeline",
+            _ => ""
+        };
+        AnsiConsole.MarkupLine($"[grey]View: {name} | Session: {_session.SessionId} | Turns: {_session.TotalTurns} | Tokens: {_session.TotalTokens} | ? help | q quit[/]");
     }
 
     private void ApplyTheme()
@@ -128,101 +169,98 @@ public sealed class TuiApp
         _ => dark
     };
 
-    private async Task RenderAsync()
+    private void RenderChatView()
     {
-        AnsiConsole.Clear();
-        RenderHeader();
-
-        if (_showLLMPanel)
-        {
-            AnsiConsole.Write(_llmConfig.Render());
-            AnsiConsole.Write(new Rule());
-        }
-
-        switch (_currentView)
-        {
-            case TuiView.Dashboard: RenderDashboard(); break;
-            case TuiView.Chat: await RenderChatAsync(); break;
-            case TuiView.Code: RenderCodeView(); break;
-            case TuiView.Git: RenderGitView(); break;
-            case TuiView.Help: RenderHelp(); break;
-            case TuiView.Session: RenderSessionView(); break;
-            case TuiView.LLMConfig: RenderLLMView(); break;
-            case TuiView.Models: RenderModelsView(); break;
-            case TuiView.Service: RenderServiceView(); break;
-        }
-
-        AnsiConsole.Write(new Rule());
-        RenderFooter();
+        AnsiConsole.MarkupLine("[bold cyan]Chat Mode[/] — Enter to chat, Esc back");
+        AnsiConsole.Write(new Rule("[cyan]Recent[/]"));
+        if (_chatHistory.Count == 0)
+            AnsiConsole.MarkupLine("[grey]No messages yet. Press Enter to start chatting.[/]");
+        else
+            foreach (var (role, text) in _chatHistory.TakeLast(6))
+                AnsiConsole.MarkupLine($"[bold {RoleColor(role)}]{role}:[/] {EscapeM(text.Length > 300 ? text[..300] + "..." : text)}");
     }
 
-    private void RenderHeader()
+    private void RenderServiceViewStub()
     {
-        var dnaStatus = _dna != null
-            ? $"[cyan]DNA:{_dna.Consciousness.State.Level}[/] [green]Gen:{_dna.GetStatus().Generation}[/]"
-            : "[grey]DNA:off[/]";
-        var sysInfo = $"[green]Mode:{_lts.Mode}[/] [blue]v5.5[/]";
-        var proc = $"[grey]CPU:{Environment.ProcessorCount}c MEM:{Environment.WorkingSet / 1024 / 1024}MB[/]";
-        AnsiConsole.MarkupLine($"[bold cyan]LTAI Dev Console[/]  {dnaStatus}  {sysInfo}  {proc}");
+        AnsiConsole.MarkupLine("[bold cyan]Service Management[/]");
+        AnsiConsole.Write(new Rule());
+        if (_service == null)
+            AnsiConsole.MarkupLine("[red]Service manager not available[/]");
+        else
+            AnsiConsole.MarkupLine($"Service: LTAIService | [yellow]i[/] Install [yellow]s[/] Start [yellow]t[/] Stop [yellow]Esc[/] Back");
     }
 
     private void RenderDashboard()
     {
-        var mainGrid = new Grid().AddColumns(3);
-        mainGrid.AddRow(CreateDnaPanel(), CreateSystemPanel(), CreateHealthPanel());
-        AnsiConsole.Write(mainGrid);
+        var topGrid = new Grid().AddColumns(3);
+        topGrid.AddRow(CreateDnaPanel(), CreateSystemPanel(), CreateHealthPanel());
+        AnsiConsole.Write(topGrid);
 
-        AnsiConsole.Write(new Grid().AddColumns(2)
-            .AddRow(_session.RenderPanel(_lts, _dna), CreateCommandsPanel()));
+        var midGrid = new Grid().AddColumns(2);
+        midGrid.AddRow(
+            _session.RenderPanel(_lts, _dna),
+            new Panel(CreateBarChart()).RoundedBorder().Header("[yellow]DNA Metrics[/]"));
 
-        var tasks = RenderTaskPanel();
-        AnsiConsole.Write(tasks);
+        var bottomGrid = new Grid().AddColumns(2);
+        bottomGrid.AddRow(
+            CreateCommandsPanel(),
+            new Panel(_ctxView.Render(_session)).RoundedBorder().Header("[blue]Context[/]"));
 
-        AnsiConsole.Write(_ctxView.Render(_session));
+        AnsiConsole.Write(midGrid);
+        AnsiConsole.Write(RenderTaskPanel());
+        AnsiConsole.Write(bottomGrid);
     }
 
     private IRenderable CreateDnaPanel()
     {
-        if (_dna == null) return MkPanel("v7.0 Sentient Mesh", "[cyan]LTAI v7.0[/]");
+        if (_dna == null) return new Panel("[cyan]LTAI v7.0[/]").RoundedBorder().Header("[cyan]v7.0 Sentient Mesh[/]");
         var c = _dna.Consciousness.State;
-        return MkPanel($$"""
-            [cyan]Status:[/] {{c.Level}} (awareness {{c.AwarenessScore:F2}})
-            [magenta]Safety:[/] {{_dna.Safety.Posture}}
-            [green]Evolution:[/] generation {{_dna.GetStatus().Generation}}
-            [grey]Fitness:[/] {{_dna.GetStatus().FitnessScore:F2}}
-            """, "[cyan]LTAI v7.0[/]");
+        return new Panel($$"""
+            [cyan]状态:[/] {{c.Level}} (知觉度 {{c.AwarenessScore:F2}})
+            [magenta]安全:[/] {{_dna.Safety.Posture}}
+            [green]进化:[/] 代数 {{_dna.GetStatus().Generation}}
+            [grey]适应度:[/] {{_dna.GetStatus().FitnessScore:F2}}
+            """)
+            .RoundedBorder()
+            .Header("[cyan]小树 v7.0[/]");
     }
 
     private IRenderable CreateSystemPanel()
     {
         var p = System.Diagnostics.Process.GetCurrentProcess();
-        return MkPanel($$"""
+        return new Panel($$"""
             [green]Mode:[/] {{_lts.Mode}}
             [green]DNA:[/] {{(_dna != null ? "Active" : "Disabled")}}
             [green]Reasoning:[/] {{(_reasoning != null ? "Active" : "Disabled")}}
             [grey]PID:[/] {{p.Id}} Th:{{p.Threads.Count}}
             [grey]MEM:[/] {{p.WorkingSet64/1024/1024}}MB
             [grey]Uptime:[/] {{Fmt(DateTime.Now-p.StartTime)}}
-            """, "[green]System[/]");
+            """)
+            .RoundedBorder()
+            .Header("[green]System[/]");
     }
 
     private IRenderable CreateHealthPanel()
     {
-        return MkPanel($$"""
+        return new Panel($$"""
             [blue]Runtime:[/] .NET {{Environment.Version}}
             [blue]GC Memory:[/] {{GC.GetTotalMemory(false)/1024/1024}}MB
             [grey]Heap:[/] {{GC.GetGCMemoryInfo().HeapSizeBytes/1024/1024}}MB
-            """, "[blue]Health[/]");
+            """)
+            .RoundedBorder()
+            .Header("[blue]Health[/]");
     }
 
     private IRenderable CreateCommandsPanel()
     {
-        return MkPanel("""
+        return new Panel("""
             [yellow]1-9[/] View: Dash/Chat/Code/Git/Help/Session/LLM/Models/Service
             [yellow]c[/] Chat  [yellow]l[/] LLM  [yellow]t[/] Think  [yellow]k[/] Graph  [yellow]p[/] Prompts
             [yellow]d[/] Diff  [yellow]e[/] Export  [yellow]m[/] Memory  [yellow]b[/] Branch
             [yellow]Ctrl+T[/] Theme  [yellow]Ctrl+F[/] Search  [yellow]q[/] Quit
-            """, "[yellow]Commands[/]");
+            """)
+            .RoundedBorder()
+            .Header("[yellow]Commands[/]");
     }
 
     private IRenderable RenderTaskPanel()
@@ -232,7 +270,7 @@ public sealed class TuiApp
 
         var grid = new Grid().AddColumns(2);
         grid.AddRow(
-            MkPanel(_taskPulse.RenderTasks(_session.ActiveTasks), "[cyan]Tasks[/]"),
+            new Panel(_taskPulse.RenderTasks(_session.ActiveTasks)).RoundedBorder().Header("[cyan]Tasks[/]"),
             _innovation.RenderThoughtChain());
         return grid;
     }
@@ -256,7 +294,7 @@ public sealed class TuiApp
             AnsiConsole.MarkupLine("[grey]Start typing. Use @path to load files, @@folder to load folders.[/]");
         else
             foreach (var (role, text) in _chatHistory)
-                AnsiConsole.MarkupLine($"[bold {RoleColor(role)}]{role}:[/] {text}");
+                AnsiConsole.MarkupLine($"[bold {RoleColor(role)}]{role}:[/] {Spectre.Console.Markup.Escape(text)}");
 
         if (_knowledgeItems.Count > 0)
             AnsiConsole.Write(_innovation.RenderKnowledgePreview("", _knowledgeItems));
@@ -291,28 +329,18 @@ public sealed class TuiApp
         _currentPhase = "generation";
         var startTime = DateTime.Now;
 
-        var renderer = new StreamRenderer(_loadedFileContent);
+        var chatLayout = new ChatLayout(_lts, _configOptions?.Value, _loadedFileContent);
+        chatLayout.UpdateRouteInfo("delegate_l2", "conf=0.8");
 
-        if (!_diffEnabled)
-            renderer.ToggleDiffMode();
-        if (_diffSplitView)
-            renderer.CycleDiffMode();
-        var sb = new System.Text.StringBuilder();
         var fullResponse = "";
         try
         {
-            AnsiConsole.Markup("[cyan]LTAI: [/]");
-            await foreach (var token in _lts.StreamChatAsync(input))
-            {
-                sb.Append(token);
-                AnsiConsole.Write(token);
-            }
-            AnsiConsole.WriteLine();
-            fullResponse = sb.ToString();
+            fullResponse = await chatLayout.ChatAsync(input);
         }
         catch (Exception ex)
         {
             AnsiConsole.MarkupLine($"[red]Error: {ex.Message}[/]");
+            fullResponse = $"[Error: {ex.Message}]";
         }
 
         _chatHistory.Add(("LTAI", fullResponse));
@@ -406,6 +434,7 @@ public sealed class TuiApp
         var models = _modelMgr.ListAll();
         var table = new Table()
             .Border(TableBorder.Rounded)
+            .Expand()
             .AddColumn("[cyan]Provider[/]")
             .AddColumn("[yellow]Tier[/]")
             .AddColumn("[white]Model[/]")
@@ -426,7 +455,7 @@ public sealed class TuiApp
         AnsiConsole.MarkupLine("[grey]y[/] Sync info  [grey]f[/] Filter  [grey]Esc[/] Back");
     }
 
-    private async void RenderServiceView()
+    private async Task RenderServiceView()
     {
         AnsiConsole.MarkupLine("[bold cyan]Service Management[/]");
         AnsiConsole.Write(new Rule());
@@ -454,9 +483,105 @@ public sealed class TuiApp
         AnsiConsole.MarkupLine("[yellow]i[/] Install  [yellow]u[/] Uninstall  [yellow]s[/] Start  [yellow]t[/] Stop  [yellow]r[/] Restart  [yellow]Esc[/] Back");
     }
 
+    private void RenderPipelineView()
+    {
+        var dashboard = new PipelineDashboard(_lts);
+        var snap = new Dictionary<string, object>();
+
+        try { snap["system.mode"] = _lts.Mode.ToString(); } catch { }
+        try { snap["system.dna"] = _lts.DNAEnabled; } catch { }
+        try
+        {
+            var bavt = _lts.GetType().GetField("_bavtRouter", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)?.GetValue(_lts);
+            if (bavt != null)
+            {
+                snap["bavt.ratio"] = bavt.GetType().GetProperty("BudgetRatio")?.GetValue(bavt);
+                snap["bavt.remaining"] = bavt.GetType().GetProperty("RemainingBudget")?.GetValue(bavt);
+            }
+        }
+        catch { }
+        try
+        {
+            var erl = _lts.GetType().GetField("_erlLoop", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)?.GetValue(_lts);
+            if (erl != null)
+            {
+                snap["erl.trials"] = erl.GetType().GetProperty("TotalTrials")?.GetValue(erl);
+                snap["erl.rate"] = erl.GetType().GetProperty("SuccessRate")?.GetValue(erl);
+            }
+        }
+        catch { }
+        try
+        {
+            var elastic = _lts.GetType().GetField("_elasticMemory", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)?.GetValue(_lts);
+            if (elastic != null)
+            {
+                var s = elastic.GetType().GetProperty("Stats")?.GetValue(elastic);
+                if (s != null) { var t = s.GetType(); snap["elastic.raw"] = t.GetField("Item1")?.GetValue(s); snap["elastic.compressed"] = t.GetField("Item2")?.GetValue(s); snap["elastic.episodic"] = t.GetField("Item3")?.GetValue(s); }
+            }
+        }
+        catch { }
+        try
+        {
+            var evo = _lts.GetType().GetField("_evolutionStore", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)?.GetValue(_lts) as ICrossRunEvolutionStore;
+            if (evo != null) { snap["evolution.total"] = evo.LessonCount; snap["evolution.active"] = evo.ActiveLessonCount; }
+        }
+        catch { }
+
+        _ = snap; // suppress unused warning — render directly via PipelineDashboard
+
+        AnsiConsole.MarkupLine("[bold cyan]Pipeline Dashboard[/] — [dim]F10 / 0 to toggle, press any key to return[/]");
+        AnsiConsole.Write(new Rule());
+
+        var l1 = _configOptions?.Value.AI.L1.Model ?? "?";
+        var l2 = _configOptions?.Value.AI.L2.Model ?? "?";
+        var ontx = _configOptions?.Value.AI.OnnxEnabled ?? false;
+
+        var layersTable = new Table().Border(TableBorder.Rounded).BorderColor(Color.Cyan1)
+            .AddColumn("Layer").AddColumn("Model").AddColumn("Status");
+        layersTable.AddRow("L0", Markup.Escape(_configOptions?.Value.AI.L0.Model ?? "?"), "[dim]embedding[/]");
+        layersTable.AddRow("L1", Markup.Escape(l1), "[yellow]fast[/]");
+        layersTable.AddRow("L2", Markup.Escape(l2), "[cyan]deep[/]");
+        layersTable.AddRow("ONNX", "", ontx ? "[green]enabled[/]" : "[dim]disabled[/]");
+        layersTable.AddRow("DNA", "", _lts.DNAEnabled ? "[green]active[/]" : "[dim]inactive[/]");
+
+        var bavtTable = new Table().Border(TableBorder.Rounded).BorderColor(Color.Green)
+            .AddColumn("Metric").AddColumn("Value");
+        var ratio = snap.GetValueOrDefault("bavt.ratio");
+        bavtTable.AddRow("Budget Ratio", ratio is double d ? $"{d:P1}" : "?");
+        bavtTable.AddRow("Remaining", snap.GetValueOrDefault("bavt.remaining")?.ToString() ?? "?");
+
+        var erlTable = new Table().Border(TableBorder.Rounded).BorderColor(Color.Blue)
+            .AddColumn("Metric").AddColumn("Value");
+        erlTable.AddRow("Trials", snap.GetValueOrDefault("erl.trials")?.ToString() ?? "0");
+        var erlRate = snap.GetValueOrDefault("erl.rate");
+        erlTable.AddRow("Rate", erlRate is double rd ? $"{rd:P1}" : "0");
+
+        var elasticTable = new Table().Border(TableBorder.Rounded).BorderColor(Color.Magenta1)
+            .AddColumn("Layer").AddColumn("Count");
+        elasticTable.AddRow("Raw", snap.GetValueOrDefault("elastic.raw")?.ToString() ?? "0");
+        elasticTable.AddRow("Compressed", snap.GetValueOrDefault("elastic.compressed")?.ToString() ?? "0");
+        elasticTable.AddRow("Episodic", snap.GetValueOrDefault("elastic.episodic")?.ToString() ?? "0");
+
+        var evoTable = new Table().Border(TableBorder.Rounded).BorderColor(Color.Yellow)
+            .AddColumn("Metric").AddColumn("Value");
+        evoTable.AddRow("Lessons", snap.GetValueOrDefault("evolution.total")?.ToString() ?? "0");
+        evoTable.AddRow("Active", snap.GetValueOrDefault("evolution.active")?.ToString() ?? "0");
+
+        var grid = new Grid().AddColumns(2);
+        grid.AddRow(new Panel(layersTable).Header("Layers").BorderColor(Color.Cyan1).Padding(1, 1),
+            new Panel(bavtTable).Header("BAVT Budget").BorderColor(Color.Green).Padding(1, 1));
+        grid.AddRow(new Panel(erlTable).Header("ERL Trials").BorderColor(Color.Blue).Padding(1, 1),
+            new Panel(elasticTable).Header("Elastic Memory").BorderColor(Color.Magenta1).Padding(1, 1));
+        grid.AddRow(new Panel(evoTable).Header("Cross-Run Evolution").BorderColor(Color.Yellow).Padding(1, 1),
+            new Panel(new Markup($"[dim]Mode: {_lts.Mode}[/]")).Header("System").BorderColor(Color.Grey).Padding(1, 1));
+
+        AnsiConsole.Write(grid);
+        AnsiConsole.MarkupLine("[grey](Press any key to return)[/]");
+    }
+
     private void RenderHelp()
     {
-        AnsiConsole.Write(MkPanel("""
+        AnsiConsole.Write(new Panel("""
             [bold cyan]LTAI TUI — Commands[/]
 
             [yellow]Views (1-9):[/]
@@ -485,19 +610,9 @@ public sealed class TuiApp
 
             [yellow]Global:[/]
               r      - Refresh   ? - Help   q - Quit
-            """, "[cyan]Help[/]"));
-    }
-
-    private void RenderFooter()
-    {
-        var name = _currentView switch
-        {
-            TuiView.Dashboard => "Dashboard", TuiView.Chat => "Chat", TuiView.Code => "Code",
-            TuiView.Git => "Git", TuiView.Help => "Help", TuiView.Session => "Session",
-            TuiView.LLMConfig => "LLM Config", TuiView.Models => "Models", TuiView.Service => "Service",
-            _ => ""
-        };
-        AnsiConsole.MarkupLine($"[grey]View: {name} | Session: {_session.SessionId} | Turns: {_session.TotalTurns} | Tokens: {_session.TotalTokens} | ? help | q quit[/]");
+            """)
+            .RoundedBorder()
+            .Header("[cyan]Help[/]"));
     }
 
     private async Task<ConsoleKeyInfo> ReadKeyAsync()
@@ -524,6 +639,7 @@ public sealed class TuiApp
             case ConsoleKey.D7 or ConsoleKey.NumPad7: _currentView = TuiView.LLMConfig; break;
             case ConsoleKey.D8 or ConsoleKey.NumPad8: _currentView = TuiView.Models; break;
             case ConsoleKey.D9 or ConsoleKey.NumPad9: _currentView = TuiView.Service; break;
+            case ConsoleKey.D0 or ConsoleKey.NumPad0 or ConsoleKey.F10: _currentView = TuiView.Pipeline; break;
             case ConsoleKey.C when key.Modifiers == 0: _currentView = TuiView.Chat; break;
             case ConsoleKey.L when key.Modifiers == 0: _showLLMPanel = !_showLLMPanel; _currentView = _showLLMPanel ? TuiView.LLMConfig : _currentView; break;
             case ConsoleKey.T when key.Modifiers == 0: _innovation.ToggleThoughtChain(); break;
@@ -781,16 +897,6 @@ public sealed class TuiApp
             var icon = f.Extension switch { ".cs" => "[green]C#[/]", ".py" => "[yellow]Py[/]", ".js" => "[yellow]JS[/]", ".ts" => "[blue]TS[/]", ".md" => "[cyan]MD[/]", ".csproj" => "[magenta]prj[/]", ".sln" => "[magenta]sln[/]", _ => "   " };
             parent.AddNode($"{icon} {f.Name}");
         }
-    }
-
-    private static Panel MkPanel(string content, string header)
-    {
-        var p = new Panel(content); p.Header = new PanelHeader(header); return p;
-    }
-
-    private static Panel MkPanel(IRenderable content, string header)
-    {
-        var p = new Panel(content); p.Header = new PanelHeader(header); return p;
     }
 
     private static string RoleColor(string role) => role == "You" ? "green" : "cyan1";

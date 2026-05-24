@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using LTAI.Agent.Feedback;
 using LTAI.Agent.Routing;
+using LTAI.Models;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
@@ -10,7 +11,7 @@ namespace LTAI.Agent.Workflows;
 public enum ParliamentVerdict { Passed, Rejected, RequiresRevision, Hung }
 
 public sealed record ParliamentVote(
-    string AgentName, string Intent, float Confidence,
+    string AgentName, AgentType Intent, float Confidence,
     string? Verdict, string? Reasoning, double Weight);
 
 public sealed record ParliamentResult(
@@ -118,7 +119,7 @@ public sealed class AgentParliament
             var criticResponse = await critic.RunAsync(
                 [new ChatMessage(ChatRole.User, criticInput)], session, null, cancellationToken);
 
-            var criticVote = ExtractVote(criticAgent, "critic", 0.9f, criticResponse.Text ?? "");
+            var criticVote = ExtractVote(criticAgent, AgentType.Custom, 0.9f, criticResponse.Text ?? "");
             votes.Add(criticVote);
 
             var finalVerdict = criticVote.Verdict == "PASS" ? ParliamentVerdict.Passed : ParliamentVerdict.RequiresRevision;
@@ -145,7 +146,7 @@ public sealed class AgentParliament
         );
     }
 
-    private static ParliamentVote ExtractVote(string agentName, string intent, float confidence, string response)
+    private static ParliamentVote ExtractVote(string agentName, AgentType intent, float confidence, string response)
     {
         var upper = response.ToUpperInvariant();
         var verdict = "PASS";

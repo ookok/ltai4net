@@ -1,6 +1,8 @@
 using Avalonia;
 using LTAI.AI;
 using LTAI.AI.Governors;
+using LTAI.Agent.Tools;
+using LTAI.Core.Messaging;
 using LTAI.Core;
 using LTAI.Core.Configuration;
 using LTAI.Core.Setup;
@@ -32,6 +34,12 @@ public static class Program
         var services = BuildServices();
         var provider = services.BuildServiceProvider();
         ServiceLocator.SetProvider(provider);
+
+        var toolRegistry = provider.GetRequiredService<AIToolRegistry>();
+        toolRegistry.RegisterAllToolCategoriesAsync().GetAwaiter().GetResult();
+
+        var lts = provider.GetRequiredService<LivingTreeSystem>();
+        lts.InitializeAsync().GetAwaiter().GetResult();
 
         BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
     }

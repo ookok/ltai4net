@@ -124,6 +124,19 @@ public static class LocalModelRegistry
             Layer: ModelLayer.L0,
             EngineType: "text"),
 
+        // ==================== L0: TTS Models (ONNX) ====================
+        new LocalModelInfo(
+            Version: "supertonic-3-onnx",
+            Name: "Supertonic 3 (ONNX) - 多语言 TTS",
+            Url: "https://huggingface.co/Supertone/supertonic-3",
+            MirrorUrl: "https://hf-mirror.com/Supertone/supertonic-3",
+            Sha256: "auto_verify",
+            RecommendedMemoryMB: 2048,
+            DiskSizeMB: 400,
+            Description: "Supertonic 3 闪电 TTS 模型，31语言支持。99M参数，44.1kHz输出，支持表达标签。需 Git LFS 克隆完整 assets 目录。",
+            Layer: ModelLayer.L0,
+            EngineType: "onnx"),
+
         // ==================== L1: Small ONNX LLMs (Edge-Native) ====================
         new LocalModelInfo(
             Version: "smollm2-360m-onnx",

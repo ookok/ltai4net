@@ -1,5 +1,6 @@
 using LTAI.Agent.Agents;
 using LTAI.Agent.Routing;
+using LTAI.Models;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
@@ -63,12 +64,13 @@ public sealed class UniversalOrchestrator
         if (route.ShouldBlock)
             return new(new ChatMessage(ChatRole.Assistant, $"[Router] Unable to classify intent. Please rephrase."));
 
-        if (_agents.TryGetValue(route.TargetAgent, out var target))
+        var agentKey = route.TargetAgent.ToString().ToLowerInvariant();
+        if (_agents.TryGetValue(agentKey, out var target))
         {
             _logger.LogInformation("Orchestrator: routed to {Agent} (conf={Conf:F2})", route.TargetAgent, route.FinalConfidence);
             var response = await target.RunAsync(messages, session, null, ct);
 
-            if (_agents.TryGetValue($"{route.TargetAgent}_critic", out var critic))
+            if (_agents.TryGetValue($"{agentKey}_critic", out var critic))
             {
                 var review = await critic.RunAsync(
                     [new(ChatRole.User, $"Review this {route.TargetAgent} output:\n{response.Text}")],
@@ -78,7 +80,7 @@ public sealed class UniversalOrchestrator
             return response;
         }
 
-        if (_agents.TryGetValue("chat", out var chat))
+        if (_agents.TryGetValue(AgentType.Chat.ToString().ToLowerInvariant(), out var chat))
             return await chat.RunAsync(messages, session, null, ct);
 
         return new(new ChatMessage(ChatRole.Assistant, "No agent available for this request."));
@@ -111,8 +113,8 @@ public sealed class UniversalOrchestrator
         var routes = await _router.RouteAllAsync(userMsg?.Text ?? "", ct);
 
         var tasks = routes.Take(3)
-            .Where(r => _agents.ContainsKey(r.TargetAgent))
-            .Select(r => _agents[r.TargetAgent].RunAsync(messages, session, null, ct));
+            .Where(r => _agents.ContainsKey(r.TargetAgent.ToString().ToLowerInvariant()))
+            .Select(r => _agents[r.TargetAgent.ToString().ToLowerInvariant()].RunAsync(messages, session, null, ct));
 
         var results = await Task.WhenAll(tasks);
         var merged = string.Join("\n\n---\n\n",

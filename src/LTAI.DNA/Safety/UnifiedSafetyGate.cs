@@ -2,7 +2,9 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text;
 using System.Text.RegularExpressions;
+using LTAI.Core.Configuration;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace LTAI.DNA.Safety;
 
@@ -33,8 +35,17 @@ public sealed class UnifiedSafetyGate
     private readonly ILogger<UnifiedSafetyGate> _logger;
     private readonly SafetyCoordinator _coordinator;
     private readonly PolicyAsCode _policy;
-    private readonly ConcurrentDictionary<string, CumulativeRisk> _sessionRisk = new();
-    private readonly ConcurrentDictionary<string, (DateTime frozenUntil, int strikeCount)> _coolDown = new();
+    private readonly float _encodedInjectionRiskThreshold;
+    private readonly float _cumulativeRiskThreshold;
+    private readonly float _injectionScorePerHit;
+    private readonly ConcurrentDictionary<string, SessionSafetyState> _sessions = new();
+
+    private sealed class SessionSafetyState
+    {
+        public DateTime? FrozenUntil { get; set; }
+        public int StrikeCount { get; set; }
+        public Queue<double> RiskHistory { get; } = new();
+    }
 
     private static readonly TimeSpan[] CoolingDurations =
     {
@@ -59,11 +70,16 @@ public sealed class UnifiedSafetyGate
     public UnifiedSafetyGate(
         ILogger<UnifiedSafetyGate> logger,
         SafetyCoordinator coordinator,
-        PolicyAsCode policy)
+        PolicyAsCode policy,
+        IOptions<LTAIOptions> options)
     {
         _logger = logger;
         _coordinator = coordinator;
         _policy = policy;
+        var t = options.Value.Thresholds;
+        _encodedInjectionRiskThreshold = t.EncodedInjectionRiskThreshold;
+        _cumulativeRiskThreshold = t.CumulativeRiskThreshold;
+        _injectionScorePerHit = t.InjectionScorePerHit;
     }
 
     public async Task<GateVerdict> EvaluateInputAsync(
@@ -79,19 +95,19 @@ public sealed class UnifiedSafetyGate
             return GateVerdict.Block("Empty input detected.");
         }
 
-        if (_coolDown.TryGetValue(sessionId, out var record))
+        if (_sessions.TryGetValue(sessionId, out var session) && session.FrozenUntil.HasValue)
         {
-            if (DateTime.UtcNow < record.frozenUntil)
+            if (DateTime.UtcNow < session.FrozenUntil.Value)
                 return GateVerdict.Block(
-                    $"Session frozen until {record.frozenUntil:HH:mm:ss} (strike {record.strikeCount}). Please wait.");
-            _coolDown.TryRemove(sessionId, out _);
+                    $"Session frozen until {session.FrozenUntil:HH:mm:ss} (strike {session.StrikeCount}). Please wait.");
+            session.FrozenUntil = null;
         }
 
         var decoded = DecodeEncodings(input);
         if (decoded != input)
         {
             var decodedRisk = await _coordinator.EvaluateAsync(decoded, null, ct);
-            if (decodedRisk.RiskScore > 0.3)
+            if (decodedRisk.RiskScore > _encodedInjectionRiskThreshold)
                 return EscalateAndBlock(sessionId, "Encoded injection detected");
         }
 
@@ -100,11 +116,11 @@ public sealed class UnifiedSafetyGate
         var verdict = await _coordinator.EvaluateAsync(input, null, ct);
 
         var cumulative = UpdateCumulativeRisk(sessionId, verdict.RiskScore + injectionScore);
-        if (cumulative is > 0.6)
+        if (cumulative > _cumulativeRiskThreshold)
         {
             activity?.SetTag("safety.block_reason", "cumulative_risk");
             activity?.SetTag("safety.cumulative_risk", cumulative);
-            _sessionRisk.TryRemove(sessionId, out _);
+            _sessions.TryRemove(sessionId, out _);
             return EscalateAndBlock(sessionId, "Cumulative risk threshold exceeded");
         }
 
@@ -156,50 +172,50 @@ public sealed class UnifiedSafetyGate
 
     public Dictionary<string, object> GetStats()
     {
+        var now = DateTime.UtcNow;
         return new()
         {
-            ["active_sessions"] = _sessionRisk.Count,
-            ["frozen_sessions"] = _coolDown.Count
+            ["active_sessions"] = _sessions.Count,
+            ["frozen_sessions"] = _sessions.Values.Count(s => s.FrozenUntil.HasValue && s.FrozenUntil > now)
         };
     }
 
     private GateVerdict EscalateAndBlock(string sessionId, string reason)
     {
-        var strike = 1;
-        if (_coolDown.TryGetValue(sessionId, out var existing))
-            strike = Math.Min(existing.strikeCount + 1, CoolingDurations.Length - 1);
+        var session = _sessions.GetOrAdd(sessionId, _ => new SessionSafetyState());
+        session.StrikeCount = Math.Min(session.StrikeCount + 1, CoolingDurations.Length - 1);
 
-        var duration = CoolingDurations[strike];
-        _coolDown[sessionId] = (DateTime.UtcNow.Add(duration), strike);
+        var duration = CoolingDurations[session.StrikeCount];
+        session.FrozenUntil = DateTime.UtcNow.Add(duration);
 
         _logger.LogWarning(
             "SafetyGate: Session {Session} strike={Strike}, frozen {Minutes}min. Reason: {Reason}",
-            sessionId, strike, duration.TotalMinutes, reason);
+            sessionId, session.StrikeCount, duration.TotalMinutes, reason);
 
-        return strike == 1
+        return session.StrikeCount == 1
             ? GateVerdict.Warn(reason + " (warning — further violations will freeze your session)")
-            : GateVerdict.Block(reason + $" (session frozen {duration.TotalMinutes} min, strike {strike})");
+            : GateVerdict.Block(reason + $" (session frozen {duration.TotalMinutes} min, strike {session.StrikeCount})");
     }
 
-    private static double ComputeInjectionScore(string text)
+    private double ComputeInjectionScore(string text)
     {
         var lower = text.ToLowerInvariant();
         var hitCount = InjectionKeywords.Count(kw => lower.Contains(kw));
-        return hitCount == 0 ? 0 : Math.Min(1.0, hitCount * 0.35);
+        return hitCount == 0 ? 0 : Math.Min(1.0, hitCount * _injectionScorePerHit);
     }
 
     private double UpdateCumulativeRisk(string sessionId, double currentRisk)
     {
-        var risk = _sessionRisk.GetOrAdd(sessionId, _ => new CumulativeRisk());
-        lock (risk)
+        var session = _sessions.GetOrAdd(sessionId, _ => new SessionSafetyState());
+        lock (session)
         {
-            risk.History.Enqueue(currentRisk);
-            if (risk.History.Count > 10)
-                risk.History.Dequeue();
+            session.RiskHistory.Enqueue(currentRisk);
+            if (session.RiskHistory.Count > 10)
+                session.RiskHistory.Dequeue();
 
-            if (risk.History.Count < 3) return 0.0;
+            if (session.RiskHistory.Count < 3) return 0.0;
 
-            return risk.History.Average();
+            return session.RiskHistory.Average();
         }
     }
 
@@ -226,10 +242,5 @@ public sealed class UnifiedSafetyGate
         });
 
         return result;
-    }
-
-    private sealed class CumulativeRisk
-    {
-        public Queue<double> History { get; } = new();
     }
 }

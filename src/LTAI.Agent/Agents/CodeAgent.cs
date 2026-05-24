@@ -201,6 +201,14 @@ internal sealed class DefaultCodeAnalysisStrategy : IAnalysisStrategy<AgentConte
     private readonly ILogger _logger;
     private readonly HashSet<string> _supportedExtensions;
 
+    private static readonly string[] _codePatterns =
+    {
+        "code ", "programming", "debug ", "refactor", "compile", "lint ",
+        "syntax", "class ", "function ", "import ", "require ", "package",
+        ".cs", ".py", ".js", ".ts", ".go", ".rs", ".java", ".kt",
+        "github.com", "gitlab", "repository", "commit "
+    };
+
     public string StrategyName => "default-code-analysis";
 
     public DefaultCodeAnalysisStrategy(IChatClient brain, ILogger logger, HashSet<string> supportedExtensions)
@@ -210,7 +218,12 @@ internal sealed class DefaultCodeAnalysisStrategy : IAnalysisStrategy<AgentConte
         _supportedExtensions = supportedExtensions;
     }
 
-    public bool CanHandle(string query) => true;
+    public bool CanHandle(string query)
+    {
+        if (string.IsNullOrWhiteSpace(query)) return false;
+        var lower = query.ToLowerInvariant();
+        return _codePatterns.Any(p => lower.Contains(p));
+    }
 
     public async Task<AgentResponse> AnalyzeAsync(AgentContext context, CancellationToken ct)
     {

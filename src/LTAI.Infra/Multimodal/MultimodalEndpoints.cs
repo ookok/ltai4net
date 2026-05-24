@@ -1,4 +1,5 @@
 using System.Text.Json;
+using LTAI.Core.Multimodal;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
@@ -39,10 +40,10 @@ public static class MultimodalEndpoints
                 var result = await vision.DescribeImageAsync(tmp, task, ct);
                 return Results.Json(new { analysis = result });
             }
-            finally { try { File.Delete(tmp); } catch { /* non-fatal */ } }
+            finally { try { File.Delete(tmp); } catch { } }
         });
 
-        endpoints.MapPost("/api/speech/tts", async (HttpContext context, SpeechEngine speech, CancellationToken ct) =>
+        endpoints.MapPost("/api/speech/tts", async (HttpContext context, ITtsEngine tts, CancellationToken ct) =>
         {
             using var reader = new StreamReader(context.Request.Body);
             var body = await reader.ReadToEndAsync(ct);
@@ -52,8 +53,19 @@ public static class MultimodalEndpoints
 
             try
             {
-                var bytes = await speech.SynthesizeAsync(req.Text, req.Voice, ct);
-                return Results.File(bytes, "audio/wav", "speech.wav");
+                var options = new TtsSynthesisOptions
+                {
+                    Voice = req.Voice,
+                    Speed = req.Speed > 0 ? req.Speed : 1.05f,
+                    Format = req.Format ?? "wav",
+                    Lang = req.Lang
+                };
+                var result = await tts.SynthesizeAsync(req.Text, options, ct);
+                if (!result.Ok)
+                    return Results.Json(new { error = result.Error }, statusCode: 500);
+
+                return Results.File(result.AudioBytes, req.Format == "mp3" ? "audio/mpeg" : "audio/wav",
+                    $"speech.{result.Format}");
             }
             catch (Exception ex) { return Results.Json(new { error = ex.Message }, statusCode: 500); }
         });
@@ -71,11 +83,14 @@ public static class MultimodalEndpoints
                 var text = await speech.RecognizeFromFileAsync(tmp, ct);
                 return Results.Json(new { text });
             }
-            finally { try { File.Delete(tmp); } catch { /* non-fatal */ } }
+            finally { try { File.Delete(tmp); } catch { } }
         });
 
-        endpoints.MapGet("/api/speech/voices", async (SpeechEngine speech, CancellationToken ct) =>
-            Results.Json(await speech.GetAvailableVoicesAsync(ct)));
+        endpoints.MapGet("/api/speech/voices", async (ITtsEngine tts, CancellationToken ct) =>
+        {
+            var voices = await tts.GetVoicesAsync(ct);
+            return Results.Json(new { engine = tts.EngineName, voices });
+        });
 
         endpoints.MapPost("/api/multimodal/process", async (HttpContext context, MultimodalOrchestrator mm, CancellationToken ct) =>
         {
@@ -91,7 +106,7 @@ public static class MultimodalEndpoints
                 var result = await mm.ProcessFileAsync(tmp, task, ct);
                 return Results.Json(new { result, type = Path.GetExtension(file.FileName) });
             }
-            finally { try { File.Delete(tmp); } catch { /* non-fatal */ } }
+            finally { try { File.Delete(tmp); } catch { } }
         });
     }
 }
@@ -100,4 +115,7 @@ public sealed record SpeechRequest
 {
     public string Text { get; init; } = "";
     public string? Voice { get; init; }
+    public float Speed { get; init; } = 1.05f;
+    public string? Format { get; init; }
+    public string? Lang { get; init; }
 }

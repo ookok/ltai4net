@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Text;
 using Spectre.Console;
 
@@ -10,7 +11,7 @@ public sealed class TuiInputBox
     private readonly List<string> _history = new();
     private int _historyIdx = -1;
     private readonly string _projectRoot;
-    private string _pastedContent = "";
+    private readonly List<StringBuilder> _multiLineBuffer = new();
 
     public TuiInputBox(string projectRoot)
     {
@@ -21,15 +22,24 @@ public sealed class TuiInputBox
     {
         _buffer.Clear();
         _cursorPos = 0;
-        _pastedContent = "";
+        _multiLineBuffer.Clear();
 
         AnsiConsole.Markup($"[green]{prompt}:[/] ");
-        AnsiConsole.Markup("[grey](Ctrl+V paste path, @file, ↑↓ history, Esc cancel)[/]");
+        AnsiConsole.Markup("[dim](Ctrl+V paste | Alt+Enter newline | ↑↓ history | Esc cancel)[/]");
         AnsiConsole.WriteLine();
 
         while (true)
         {
             var key = Console.ReadKey(true);
+
+            if (key.Key == ConsoleKey.Enter && key.Modifiers == ConsoleModifiers.Alt)
+            {
+                _multiLineBuffer.Add(new StringBuilder(_buffer.ToString()));
+                _buffer.Clear();
+                _cursorPos = 0;
+                AnsiConsole.WriteLine();
+                continue;
+            }
 
             if (key.Key == ConsoleKey.Enter)
             {
@@ -101,18 +111,31 @@ public sealed class TuiInputBox
 
     private string GetFinalContent()
     {
-        var text = _buffer.ToString();
+        if (_multiLineBuffer.Count > 0)
+        {
+            _multiLineBuffer.Add(new StringBuilder(_buffer.ToString()));
+            var sb = new StringBuilder();
+            foreach (var line in _multiLineBuffer)
+                sb.AppendLine(line.ToString());
+            _multiLineBuffer.Clear();
+            return ResolveContent(sb.ToString().TrimEnd());
+        }
 
-        if (text.StartsWith("@"))
+        return ResolveContent(_buffer.ToString());
+    }
+
+    private string ResolveContent(string text)
+    {
+        if (text.StartsWith("@") && !text.StartsWith("@@"))
         {
             var path = text[1..].Trim();
-            text = LoadFileContent(path);
+            return LoadFileContent(path);
         }
 
         if (text.StartsWith("@@"))
         {
             var path = text[2..].Trim();
-            text = LoadFolderContent(path);
+            return LoadFolderContent(path);
         }
 
         return text;
@@ -161,9 +184,56 @@ public sealed class TuiInputBox
         }
     }
 
-    private async Task<string> ReadClipboardAsync()
+    private static async Task<string> ReadClipboardAsync()
     {
-        return await Task.FromResult("");
+        try
+        {
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            {
+                var psi = new System.Diagnostics.ProcessStartInfo("powershell", "-Command \"Get-Clipboard\"")
+                {
+                    RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true
+                };
+                using var p = System.Diagnostics.Process.Start(psi);
+                if (p != null)
+                {
+                    var result = await p.StandardOutput.ReadToEndAsync();
+                    await p.WaitForExitAsync();
+                    return result.TrimEnd();
+                }
+            }
+            else if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+            {
+                var psi = new System.Diagnostics.ProcessStartInfo("pbpaste")
+                {
+                    RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true
+                };
+                using var p = System.Diagnostics.Process.Start(psi);
+                if (p != null)
+                {
+                    var result = await p.StandardOutput.ReadToEndAsync();
+                    await p.WaitForExitAsync();
+                    return result;
+                }
+            }
+            else
+            {
+                var psi = new System.Diagnostics.ProcessStartInfo("xclip", "-o -selection clipboard")
+                {
+                    RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true
+                };
+                using var p = System.Diagnostics.Process.Start(psi);
+                if (p != null)
+                {
+                    var result = await p.StandardOutput.ReadToEndAsync();
+                    await p.WaitForExitAsync();
+                    return result;
+                }
+            }
+        }
+        catch { }
+
+        return "";
     }
 
     private async Task<string> ResolvePastedContentAsync(string pasted)
@@ -203,9 +273,10 @@ public sealed class TuiInputBox
 
     private void RedrawInput(string prompt)
     {
-        Console.SetCursorPosition(0, Console.CursorTop);
-        Console.Write(new string(' ', Console.WindowWidth));
-        Console.SetCursorPosition(0, Console.CursorTop);
+        var top = Console.CursorTop;
+        Console.SetCursorPosition(0, top > 0 ? top - 1 : 0);
+        Console.Write(new string(' ', Math.Min(Console.WindowWidth, 120)));
+        Console.SetCursorPosition(0, top > 0 ? top - 1 : 0);
         AnsiConsole.Markup($"[green]{prompt}:[/] [white]{EscapeMarkup(_buffer.ToString())}[/]");
     }
 

@@ -3,18 +3,10 @@
     <NoWarn>$(NoWarn);MSB3243;NU1510;MAAIW001</NoWarn>
   </PropertyGroup>
 
-  <!-- All projects output to dist/lib for shared DLLs (debug builds) -->
-  <PropertyGroup Condition="'$(IsExeProject)' != 'true'">
+  <!-- All library projects output to dist/lib for shared DLLs -->
+  <PropertyGroup Condition="'$(IsExeProject)' != 'true' And '$(IsTestProject)' != 'true'">
     <OutputPath>$(MSBuildThisFileDirectory)dist\lib\</OutputPath>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
-  </PropertyGroup>
-
-  <!-- Exe projects: single-file self-contained -->
-  <PropertyGroup Condition="'$(IsExeProject)' == 'true'">
-    <PublishSingleFile>true</PublishSingleFile>
-    <SelfContained>true</SelfContained>
-    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
-    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
   </PropertyGroup>
 </Project>

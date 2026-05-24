@@ -1,19 +1,16 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <IsExeProject>true</IsExeProject>
-    <OutputPath>$(MSBuildThisFileDirectory)..\..\dist\Cli\</OutputPath>
-    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
-    <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
-    <IsExeProject>true</IsExeProject>
-    <OutputPath>$(MSBuildThisFileDirectory)..\..\dist\Cli\</OutputPath>
-    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
-    <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
     <OutputType>Exe</OutputType>
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <RootNamespace>LTAI.CLI</RootNamespace>
+    <IsExeProject>true</IsExeProject>
+    <OutputPath>$(MSBuildThisFileDirectory)..\..\dist\Cli\</OutputPath>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
   </PropertyGroup>
 
   <ItemGroup>
@@ -22,10 +19,14 @@
     <ProjectReference Include="..\LTAI.Core\LTAI.Core.csproj" />
     <ProjectReference Include="..\LTAI.Knowledge\LTAI.Knowledge.csproj" />
     <ProjectReference Include="..\LTAI.Agent\LTAI.Agent.csproj" />
+    <ProjectReference Include="..\LTAI.Host\LTAI.Host.csproj" />
+    <ProjectReference Include="..\LTAI.MCP\LTAI.MCP.csproj" />
+    <ProjectReference Include="..\LTAI.TUI\LTAI.TUI.csproj" />
+    <ProjectReference Include="..\LTAI.WebApp\LTAI.WebApp.csproj" />
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="System.CommandLine" Version="2.0.0-beta4.22272.1" />
+    <PackageReference Include="Spectre.Console.Cli" Version="0.55.0" />
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.1" />
   </ItemGroup>
 

@@ -217,7 +217,7 @@ public static class ToolRegistryExtensions
             "Extract meta tags, OG tags, and RSS feeds from a page."));
         registry.RegisterTool("web_search", AIFunctionFactory.Create(
             (string query, int maxResults, CancellationToken ct) => WebSearchTools.WebSearch(query, maxResults, ct), "web_search",
-            "Search the web using DuckDuckGo (no API key required)."));
+            "Search the web: uses Bing for Chinese queries, DuckDuckGo for others. No API key required."));
         return 3;
     }
 

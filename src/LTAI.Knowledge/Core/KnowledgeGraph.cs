@@ -47,13 +47,37 @@ public class KnowledgeGraph : IDisposable
     public void AddEntity(Entity entity)
     {
         _lock.EnterWriteLock();
-        try
-        {
-            _nodesIndex[entity.Id] = entity;
-            _adjacency.TryAdd(entity.Id, new());
-            MarkDirty();
-        }
+        try { AddEntityUnsafe(entity); }
         finally { _lock.ExitWriteLock(); }
+    }
+
+    private void AddEntityUnsafe(Entity entity)
+    {
+        _nodesIndex[entity.Id] = entity;
+        _adjacency.TryAdd(entity.Id, new());
+        MarkDirty();
+    }
+
+    public void AddRelation(string sourceId, string targetId, string relation,
+        Dictionary<string, object>? properties = null)
+    {
+        _lock.EnterWriteLock();
+        try { AddRelationUnsafe(sourceId, targetId, relation, properties); }
+        finally { _lock.ExitWriteLock(); }
+    }
+
+    private void AddRelationUnsafe(string sourceId, string targetId, string relation,
+        Dictionary<string, object>? properties = null)
+    {
+        if (!_nodesIndex.ContainsKey(sourceId))
+            _nodesIndex[sourceId] = new Entity(sourceId, sourceId);
+        if (!_nodesIndex.ContainsKey(targetId))
+            _nodesIndex[targetId] = new Entity(targetId, targetId);
+
+        _adjacency.TryAdd(sourceId, new());
+        _adjacency[sourceId].TryAdd(relation, new());
+        if (!_adjacency[sourceId][relation].Contains(targetId))
+            _adjacency[sourceId][relation].Add(targetId);
     }
 
     public async Task SaveToDiskAsync(string? path = null)
@@ -92,25 +116,6 @@ public class KnowledgeGraph : IDisposable
         {
             _logger.LogWarning(ex, "Failed to load knowledge graph from disk: {Path}", path);
         }
-    }
-
-    public void AddRelation(string sourceId, string targetId, string relation,
-        Dictionary<string, object>? properties = null)
-    {
-        _lock.EnterWriteLock();
-        try
-        {
-            if (!_nodesIndex.ContainsKey(sourceId))
-                _nodesIndex[sourceId] = new Entity(sourceId, sourceId);
-            if (!_nodesIndex.ContainsKey(targetId))
-                _nodesIndex[targetId] = new Entity(targetId, targetId);
-
-            _adjacency.TryAdd(sourceId, new());
-            _adjacency[sourceId].TryAdd(relation, new());
-            if (!_adjacency[sourceId][relation].Contains(targetId))
-                _adjacency[sourceId][relation].Add(targetId);
-        }
-        finally { _lock.ExitWriteLock(); }
     }
 
     public List<Dictionary<string, object>> QueryGraph(Dictionary<string, object> filter)
@@ -249,9 +254,9 @@ public class KnowledgeGraph : IDisposable
             {
                 var sId = EntityId(t.Subject);
                 var oId = EntityId(t.Object);
-                AddEntity(new Entity(sId, t.Subject));
-                AddEntity(new Entity(oId, t.Object));
-                AddRelation(sId, oId, t.Predicate);
+                AddEntityUnsafe(new Entity(sId, t.Subject));
+                AddEntityUnsafe(new Entity(oId, t.Object));
+                AddRelationUnsafe(sId, oId, t.Predicate);
                 _triplets.Add(t);
                 count++;
             }

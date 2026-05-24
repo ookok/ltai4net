@@ -31,7 +31,7 @@ public sealed class ShadowRouter
         var legacyResult = _legacyRouter.Classify(text);
         var newResult = await _newRouter.RouteAsync(text, ct);
 
-        var agreed = newResult.TargetAgent.Equals(legacyResult.TargetAgent, StringComparison.OrdinalIgnoreCase);
+        var agreed = newResult.TargetAgent == legacyResult.TargetAgent;
         Interlocked.Increment(ref _totalRoutes);
         if (agreed) Interlocked.Increment(ref _agreedRoutes);
 

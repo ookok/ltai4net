@@ -1,8 +1,8 @@
-using System.CommandLine;
-using System.CommandLine.Builder;
-using System.CommandLine.Parsing;
-using LTAI.Cli.Model;
+using LTAI.Cli.Commands;
 using LTAI.Core.Setup;
+using Microsoft.Extensions.DependencyInjection;
+using Spectre.Console;
+using Spectre.Console.Cli;
 
 namespace LTAI.Cli;
 
@@ -10,66 +10,87 @@ public class Program
 {
     public static async Task<int> Main(string[] args)
     {
-        if (args.Length == 0)
+        if (args.Length > 0)
         {
-            PrintHelp();
-            return 0;
+            var cmd = args[0].ToLowerInvariant();
+
+            if (cmd is "host" or "serve") { await Host.EntryPoint.RunAsync(args[1..]); return 0; }
+            if (cmd is "mcp") { await MCP.EntryPoint.RunAsync(args[1..]); return 0; }
+            if (cmd is "tui") { await TUI.EntryPoint.RunAsync(args[1..]); return 0; }
+            if (cmd is "webapp") { await WebApp.EntryPoint.RunAsync(args[1..]); return 0; }
+            if (cmd is "setup") { await RunSetupAsync(); return 0; }
         }
 
-        var command = args[0].ToLowerInvariant();
-        if (command == "setup" || command == "help" || command == "--help" || command == "-h")
+        var services = new ServiceCollection();
+        var registrar = new TypeRegistrar(services);
+
+        var app = new CommandApp(registrar);
+        app.Configure(config =>
         {
-            if (command == "setup") return await RunSetupAsync();
-            PrintHelp();
-            return 0;
-        }
+            config.SetApplicationName("ltai");
+            config.SetApplicationVersion("v7.0");
 
-        var rootCommand = CreateRootCommand();
-        var parser = new CommandLineBuilder(rootCommand).UseDefaults().Build();
-        return await parser.InvokeAsync(args);
-    }
+            config.Settings.CaseSensitivity = CaseSensitivity.None;
+            config.Settings.StrictParsing = false;
 
-    private static RootCommand CreateRootCommand()
-    {
-        var root = new RootCommand("LTAI CLI v7.0 — debug, improve, model management");
+            config.SetInterceptor(new CliInterceptor());
 
-        var debugCommand = new Command("debug", "End-to-end tests with full link tracing");
-        var queryOpt = new Option<string?>("--query", "Specific query to trace");
-        var countOpt = new Option<int>("--count", () => 20, "Number of test cases");
-        debugCommand.AddOption(queryOpt); debugCommand.AddOption(countOpt);
-        debugCommand.SetHandler(async ctx =>
-        {
-            await DebugMode.RunAsync(
-                ctx.ParseResult.GetValueForOption(queryOpt),
-                ctx.ParseResult.GetValueForOption(countOpt),
-                ctx.ParseResult.GetValueForOption(new Option<string?>("--difficulty")),
-                ctx.ParseResult.GetValueForOption(new Option<string?>("--domain")),
-                ctx.ParseResult.GetValueForOption(new Option<bool>("--report")));
+            config.SetExceptionHandler((ex, _) =>
+            {
+                AnsiConsole.MarkupLine($"[red]Error:[/] {ex.Message}");
+                if (ex.InnerException != null)
+                    AnsiConsole.MarkupLine($"[dim]  → {ex.InnerException.Message}[/]");
+                return -1;
+            });
+
+#if DEBUG
+            config.PropagateExceptions();
+            config.ValidateExamples();
+#endif
+
+            config.AddCommand<DebugCommand>("debug")
+                .WithDescription("End-to-end tests with full link tracing")
+                .WithAlias("d")
+                .WithExample("debug")
+                .WithExample("debug", "--count", "50")
+                .WithExample("debug", "--query", "\"What is LTAI?\"");
+
+            config.AddCommand<ImproveCommand>("improve")
+                .WithDescription("Architecture audit + paper-driven innovation proposals")
+                .WithAlias("i")
+                .WithExample("improve", "--auto")
+                .WithExample("improve", "--scan", "--papers");
+
+            config.AddBranch("model", model =>
+            {
+                model.SetDescription("Manage local AI models");
+                model.AddCommand<ModelListCommand>("list")
+                    .WithDescription("List available models")
+                    .WithAlias("ls")
+                    .WithExample("model", "list")
+                    .WithExample("model", "list", "--layer", "L1");
+                model.AddCommand<ModelDownloadCommand>("download")
+                    .WithDescription("Download a model")
+                    .WithAlias("dl")
+                    .WithExample("model", "download", "--version", "qwen2.5-1.5b-q4")
+                    .WithExample("model", "download", "--layer", "L1", "--version", "qwen2.5-1.5b-q4", "--mirror");
+                model.AddCommand<ModelRemoveCommand>("remove")
+                    .WithDescription("Remove an installed model")
+                    .WithAlias("rm")
+                    .WithExample("model", "remove", "--version", "qwen2.5-1.5b-q4");
+                model.AddCommand<ModelResetCommand>("reset")
+                    .WithDescription("Remove all models and clear config")
+                    .WithExample("model", "reset")
+                    .WithExample("model", "reset", "--setup");
+            });
+
+            config.AddCommand<CompatCommand>("compat")
+                .WithDescription("Agent Framework API compatibility gate")
+                .WithAlias("c")
+                .WithExample("compat");
         });
-        root.AddCommand(debugCommand);
 
-        var improveCommand = new Command("improve", "Architecture audit + paper-driven innovation proposals");
-        var autoOpt = new Option<bool>("--auto", () => false, "Run full pipeline");
-        improveCommand.AddOption(autoOpt);
-        improveCommand.SetHandler(async ctx =>
-        {
-            var auto = ctx.ParseResult.GetValueForOption(autoOpt);
-            await ImproveMode.RunAsync(auto, auto, auto, auto);
-        });
-        root.AddCommand(improveCommand);
-
-        var modelCommand = new Command("model", "Manage local models");
-        var modelArg = new Argument<string?>("command", "list, download, remove, reset");
-        modelCommand.AddArgument(modelArg);
-        modelCommand.SetHandler(async ctx =>
-        {
-            var cmd = ctx.ParseResult.GetValueForArgument(modelArg);
-            await ModelMode.RunAsync(cmd, null, null, false, false, false);
-            ctx.ExitCode = 0;
-        });
-        root.AddCommand(modelCommand);
-
-        return root;
+        return await app.RunAsync(args);
     }
 
     private static async Task<int> RunSetupAsync()
@@ -77,14 +98,5 @@ public class Program
         var wizard = new InteractiveSetupWizard(Path.Combine(AppContext.BaseDirectory, "appsettings.json"));
         await wizard.RunAsync();
         return 0;
-    }
-
-    private static void PrintHelp()
-    {
-        Console.WriteLine("LTAI CLI v7.0");
-        Console.WriteLine("  ltai setup     Interactive config wizard");
-        Console.WriteLine("  ltai model     Manage local models (list/download/remove)");
-        Console.WriteLine("  ltai debug     Run trace tests");
-        Console.WriteLine("  ltai improve   Architecture audit + AI paper proposals");
     }
 }

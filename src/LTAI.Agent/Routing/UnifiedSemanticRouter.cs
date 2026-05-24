@@ -1,12 +1,15 @@
 using System.Diagnostics;
+using LTAI.Core.Configuration;
 using LTAI.Knowledge.Vector.Interfaces;
+using LTAI.Models;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace LTAI.Agent.Routing;
 
 public sealed record SemanticRoute(
-    string Intent,
-    string TargetAgent,
+    AgentType Intent,
+    AgentType TargetAgent,
     float SemanticScore,
     float KeywordScore,
     float FinalConfidence,
@@ -15,7 +18,7 @@ public sealed record SemanticRoute(
     bool ShouldBlock)
 {
     public static SemanticRoute Rejected(string reason) =>
-        new("rejected", "none", 0, 0, 0, null, false, ShouldBlock: true);
+        new(AgentType.Chat, AgentType.Chat, 0, 0, 0, null, false, ShouldBlock: true);
 }
 
 public sealed class UnifiedSemanticRouter
@@ -23,29 +26,42 @@ public sealed class UnifiedSemanticRouter
     private readonly IVectorStore _vectorStore;
     private readonly IntentRouter _keywordFallback;
     private readonly ILogger<UnifiedSemanticRouter> _logger;
+    private readonly float _semanticRejectThreshold;
+    private readonly float _keywordRejectThreshold;
+    private readonly float _semanticPreferThreshold;
+    private readonly float _semanticFusionWeight;
+    private readonly float _keywordFusionWeight;
+    private readonly float _workflowConfidenceThreshold;
+    private readonly int _workflowLengthThreshold;
     private float[][]? _routeEmbeddings; // lazy init
     private bool _initialized;
 
-    private const float SemanticRejectThreshold = 0.4f;
-    private const float KeywordRejectThreshold = 0.3f;
-
-    private static readonly (string Intent, string Agent, string Description)[] RouteDefinitions =
+    private static readonly (AgentType Intent, AgentType Agent, string Description)[] RouteDefinitions =
     {
-        ("code", "code", "write code, debug, refactor, AST analysis, compile, test, programming"),
-        ("eia", "eia", "environmental impact, air quality, emission, GIS, plume dispersion, water quality"),
-        ("eia_critic", "eia_critic", "review EIA report, compliance check, audit standards, report review"),
-        ("reasoning", "reasoning", "analyze deeply, compare, evaluate, logic, architecture design, planning"),
-        ("chat", "chat", "casual conversation, help, general questions, greeting, chat"),
+        (AgentType.Code, AgentType.Code, "write code, debug, refactor, AST analysis, compile, test, programming"),
+        (AgentType.EIA, AgentType.EIA, "environmental impact, air quality, emission, GIS, plume dispersion, water quality"),
+        (AgentType.EiaCritic, AgentType.EiaCritic, "review EIA report, compliance check, audit standards, report review"),
+        (AgentType.Reasoning, AgentType.Reasoning, "analyze deeply, compare, evaluate, logic, architecture design, planning"),
+        (AgentType.Chat, AgentType.Chat, "casual conversation, help, general questions, greeting, chat"),
     };
 
     public UnifiedSemanticRouter(
         IVectorStore vectorStore,
         IntentRouter keywordFallback,
-        ILogger<UnifiedSemanticRouter> logger)
+        ILogger<UnifiedSemanticRouter> logger,
+        IOptions<LTAIOptions> options)
     {
         _vectorStore = vectorStore;
         _keywordFallback = keywordFallback;
         _logger = logger;
+        var t = options.Value.Thresholds;
+        _semanticRejectThreshold = t.SemanticRejectThreshold;
+        _keywordRejectThreshold = t.KeywordRejectThreshold;
+        _semanticPreferThreshold = t.SemanticPreferThreshold;
+        _semanticFusionWeight = t.SemanticFusionWeight;
+        _keywordFusionWeight = t.KeywordFusionWeight;
+        _workflowConfidenceThreshold = t.WorkflowConfidenceThreshold;
+        _workflowLengthThreshold = t.WorkflowLengthThreshold;
     }
 
     public async Task InitializeAsync(CancellationToken ct = default)
@@ -63,11 +79,11 @@ public sealed class UnifiedSemanticRouter
     public async Task<SemanticRoute> RouteAsync(string text, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(text))
-            return new SemanticRoute("chat", "chat", 0, 0, 1.0f, null, false, false);
+            return new SemanticRoute(AgentType.Chat, AgentType.Chat, 0, 0, 1.0f, null, false, false);
 
         // Layer 1: semantic vector similarity (try; fall back to keyword if unavailable)
         float bestSemanticScore = 0;
-        int bestSemanticIdx = 4; // default: chat
+        int bestSemanticIdx = 4; // default: Chat
 
         if (_initialized && _routeEmbeddings != null)
         {
@@ -90,11 +106,11 @@ public sealed class UnifiedSemanticRouter
         var keywordRoute = _keywordFallback.Classify(text);
         var keywordScore = keywordRoute.Confidence;
         int keywordIdx = Array.FindIndex(RouteDefinitions, r =>
-            r.Agent.Equals(keywordRoute.TargetAgent, StringComparison.OrdinalIgnoreCase));
-        if (keywordIdx < 0) keywordIdx = 4;
+            r.Agent == keywordRoute.TargetAgent);
+        if (keywordIdx < 0) keywordIdx = 4; // Chat
 
         // Layer 3: confidence circuit breaker
-        if (bestSemanticScore < SemanticRejectThreshold && keywordScore < KeywordRejectThreshold)
+        if (bestSemanticScore < _semanticRejectThreshold && keywordScore < _keywordRejectThreshold)
         {
             _logger.LogWarning("UnifiedSemanticRouter: both scores low (sem={Sem:F2}, kw={Kw:F2}), rejecting",
                 bestSemanticScore, keywordScore);
@@ -102,12 +118,12 @@ public sealed class UnifiedSemanticRouter
         }
 
         // Layer 4: fusion
-        var finalIdx = bestSemanticScore > 0.6f ? bestSemanticIdx : keywordIdx;
-        var finalConfidence = bestSemanticScore > 0.6f
-            ? bestSemanticScore * 0.7f + keywordScore * 0.3f
-            : keywordScore * 0.7f + bestSemanticScore * 0.3f;
+        var finalIdx = bestSemanticScore > _semanticPreferThreshold ? bestSemanticIdx : keywordIdx;
+        var finalConfidence = bestSemanticScore > _semanticPreferThreshold
+            ? bestSemanticScore * _semanticFusionWeight + keywordScore * _keywordFusionWeight
+            : keywordScore * _semanticFusionWeight + bestSemanticScore * _keywordFusionWeight;
 
-        var useWorkflow = finalConfidence < 0.7f || text.Length > 500;
+        var useWorkflow = finalConfidence < _workflowConfidenceThreshold || text.Length > _workflowLengthThreshold;
 
         return new SemanticRoute(
             Intent: RouteDefinitions[finalIdx].Intent,
@@ -124,13 +140,13 @@ public sealed class UnifiedSemanticRouter
     public async Task<IReadOnlyList<SemanticRoute>> RouteAllAsync(string text, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(text))
-            return new[] { new SemanticRoute("chat", "chat", 0, 0, 1.0f, null, false, false) };
+            return new[] { new SemanticRoute(AgentType.Chat, AgentType.Chat, 0, 0, 1.0f, null, false, false) };
 
         var keywordRoutes = _keywordFallback.ClassifyAll(text);
         return keywordRoutes.Select(kr =>
         {
             var idx = Array.FindIndex(RouteDefinitions, r =>
-                r.Agent.Equals(kr.TargetAgent, StringComparison.OrdinalIgnoreCase));
+                r.Agent == kr.TargetAgent);
             return new SemanticRoute(kr.Intent, kr.TargetAgent, 0, kr.Confidence, kr.Confidence,
                 null, kr.Confidence < 0.7f, false);
         }).ToList();

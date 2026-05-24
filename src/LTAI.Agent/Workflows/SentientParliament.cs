@@ -3,6 +3,7 @@ using LTAI.Agent.Agents;
 using LTAI.Agent.Routing;
 using LTAI.Core.Observability;
 using LTAI.Knowledge.Memory;
+using LTAI.Models;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
@@ -94,11 +95,11 @@ public sealed class SentientParliament
         // Phase 4: Voting
         var votes = new List<ParliamentVote>
         {
-            new("primary", "generate", 0.85f, "accept", primary.Text ?? "", 1.0),
-            new("critic", "review", (float)critic.Confidence,
+            new("primary", AgentType.Custom, 0.85f, "accept", primary.Text ?? "", 1.0),
+            new("critic", AgentType.EiaCritic, (float)critic.Confidence,
                 critic.Issues.Count == 0 ? "accept" : "reject",
                 critic.Summary, 0.8),
-            new("oracle", "fact_check", (float)oracleConfidence,
+            new("oracle", AgentType.Reasoning, (float)oracleConfidence,
                 oracleFacts.Contains("issue") || oracleFacts.Contains("error") ? "reject" : "accept",
                 oracleFacts, 1.2)
         };

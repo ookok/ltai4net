@@ -36,6 +36,9 @@ public sealed class LTAIOptions
 
     [JsonPropertyName("economy")]
     public EconomyOptions? Economy { get; init; }
+
+    [JsonPropertyName("supertonic")]
+    public SupertonicOptions Supertonic { get; init; } = new();
 }
 
 public sealed class EconomyOptions
@@ -44,10 +47,10 @@ public sealed class EconomyOptions
     public string? Policy { get; init; }
 
     [JsonPropertyName("daily_budget_yuan")]
-    public double DailyBudgetYuan { get; init; } = 50.0;
+    public double DailyBudgetYuan { get; set; } = 50.0;
 
     [JsonPropertyName("max_task_budget_yuan")]
-    public double MaxTaskBudgetYuan { get; init; } = 10.0;
+    public double MaxTaskBudgetYuan { get; set; } = 10.0;
 }
 
 public sealed class LayerConfig
@@ -70,7 +73,7 @@ public sealed class LayerConfig
 public sealed class AIConfig
 {
     [JsonPropertyName("onnx_enabled")]
-    public bool OnnxEnabled { get; init; } = false;
+    public bool OnnxEnabled { get; set; } = false;
 
     [JsonPropertyName("default_provider")]
     public string DefaultProvider { get; init; } = "deepseek";
@@ -108,22 +111,22 @@ public sealed class AIConfig
     public string EmbeddingModel => L0.Model;
 
     [JsonPropertyName("daily_budget_usd")]
-    public decimal DailyBudgetUsd { get; init; } = 10.00m;
+    public decimal DailyBudgetUsd { get; set; } = 10.00m;
 
     [JsonPropertyName("default_temperature")]
-    public float DefaultTemperature { get; init; } = 0.3f;
+    public float DefaultTemperature { get; set; } = 0.3f;
 
     [JsonPropertyName("max_tokens")]
-    public int MaxTokens { get; init; } = 4096;
+    public int MaxTokens { get; set; } = 4096;
 
     [JsonPropertyName("timeout_ms")]
-    public int TimeoutMs { get; init; } = 60000;
+    public int TimeoutMs { get; set; } = 60000;
 
     [JsonPropertyName("chat_completions_path")]
     public string ChatCompletionsPath { get; set; } = "/v1/chat/completions";
 
     [JsonPropertyName("max_collaboration_rounds")]
-    public int MaxCollaborationRounds { get; init; } = 5;
+    public int MaxCollaborationRounds { get; set; } = 5;
 
     [JsonPropertyName("system_prompts")]
     public SystemPromptsConfig SystemPrompts { get; init; } = new();
@@ -170,28 +173,28 @@ public sealed class WebConfig
     public string Host { get; init; } = "0.0.0.0";
 
     [JsonPropertyName("port")]
-    public int Port { get; init; } = 8080;
+    public int Port { get; set; } = 8080;
 
     [JsonPropertyName("rate_limit_per_minute")]
-    public int RateLimitPerMinute { get; init; } = 60;
+    public int RateLimitPerMinute { get; set; } = 60;
 }
 
 public sealed class VectorConfig
 {
     [JsonPropertyName("dimension")]
-    public int Dimension { get; init; } = 384;
+    public int Dimension { get; set; } = 384;
 
     [JsonPropertyName("backend")]
     public string Backend { get; init; } = "hnsw";
 
     [JsonPropertyName("cache_size_mb")]
-    public int CacheSizeMb { get; init; } = 256;
+    public int CacheSizeMb { get; set; } = 256;
 }
 
 public sealed class NetworkConfig
 {
     [JsonPropertyName("p2p_port")]
-    public int P2PPort { get; init; } = 9090;
+    public int P2PPort { get; set; } = 9090;
 
     [JsonPropertyName("discovery_endpoint")]
     public string DiscoveryEndpoint { get; init; } = string.Empty;
@@ -326,40 +329,73 @@ public sealed class IntegrationUrlsConfig
 public sealed class ThresholdsConfig
 {
     [JsonPropertyName("consolidation_learning_rate")]
-    public double ConsolidationLearningRate { get; init; } = 0.015;
+    public double ConsolidationLearningRate { get; set; } = 0.015;
 
     [JsonPropertyName("consolidation_decay_rate")]
-    public double ConsolidationDecayRate { get; init; } = 0.999;
+    public double ConsolidationDecayRate { get; set; } = 0.999;
 
     [JsonPropertyName("consolidation_interval_minutes")]
-    public int ConsolidationIntervalMinutes { get; init; } = 2;
+    public int ConsolidationIntervalMinutes { get; set; } = 2;
 
     [JsonPropertyName("grpo_learning_rate")]
-    public double GrpoLearningRate { get; init; } = 0.02;
+    public double GrpoLearningRate { get; set; } = 0.02;
 
     [JsonPropertyName("evolution_population_size")]
-    public int EvolutionPopulationSize { get; init; } = 32;
+    public int EvolutionPopulationSize { get; set; } = 32;
 
     [JsonPropertyName("evolution_mutation_rate")]
-    public double EvolutionMutationRate { get; init; } = 0.3;
+    public double EvolutionMutationRate { get; set; } = 0.3;
 
     [JsonPropertyName("retrieval_zero_result_warning_rate")]
-    public double RetrievalZeroResultWarningRate { get; init; } = 0.15;
+    public double RetrievalZeroResultWarningRate { get; set; } = 0.15;
 
     [JsonPropertyName("retrieval_recall_drift_warning_percent")]
-    public double RetrievalRecallDriftWarningPercent { get; init; } = 5.0;
+    public double RetrievalRecallDriftWarningPercent { get; set; } = 5.0;
 
     [JsonPropertyName("loafing_threshold")]
-    public double LoafingThreshold { get; init; } = 0.35;
+    public double LoafingThreshold { get; set; } = 0.35;
 
     [JsonPropertyName("sovereignty_gap_threshold")]
-    public double SovereigntyGapThreshold { get; init; } = 0.25;
+    public double SovereigntyGapThreshold { get; set; } = 0.25;
 
     [JsonPropertyName("purge_hot_threshold_sec")]
-    public int PurgeHotThresholdSec { get; init; } = 3600;
+    public int PurgeHotThresholdSec { get; set; } = 3600;
 
     [JsonPropertyName("purge_warm_threshold_sec")]
-    public int PurgeWarmThresholdSec { get; init; } = 86400;
+    public int PurgeWarmThresholdSec { get; set; } = 86400;
+
+    [JsonPropertyName("crossrun_half_life_days")]
+    public int CrossRunHalfLifeDays { get; set; } = 30;
+
+    [JsonPropertyName("semantic_reject_threshold")]
+    public float SemanticRejectThreshold { get; set; } = 0.4f;
+
+    [JsonPropertyName("keyword_reject_threshold")]
+    public float KeywordRejectThreshold { get; set; } = 0.3f;
+
+    [JsonPropertyName("semantic_prefer_threshold")]
+    public float SemanticPreferThreshold { get; set; } = 0.6f;
+
+    [JsonPropertyName("semantic_fusion_weight")]
+    public float SemanticFusionWeight { get; set; } = 0.7f;
+
+    [JsonPropertyName("keyword_fusion_weight")]
+    public float KeywordFusionWeight { get; set; } = 0.3f;
+
+    [JsonPropertyName("workflow_confidence_threshold")]
+    public float WorkflowConfidenceThreshold { get; set; } = 0.7f;
+
+    [JsonPropertyName("workflow_length_threshold")]
+    public int WorkflowLengthThreshold { get; set; } = 500;
+
+    [JsonPropertyName("cumulative_risk_threshold")]
+    public float CumulativeRiskThreshold { get; set; } = 0.6f;
+
+    [JsonPropertyName("encoded_injection_risk_threshold")]
+    public float EncodedInjectionRiskThreshold { get; set; } = 0.3f;
+
+    [JsonPropertyName("injection_score_per_hit")]
+    public float InjectionScorePerHit { get; set; } = 0.35f;
 }
 
 public sealed class ModelPricingConfig
@@ -430,7 +466,7 @@ public sealed class SocialLoadFamilyConfig
 public sealed class StealthBrowserConfig
 {
     [JsonPropertyName("enabled")]
-    public bool Enabled { get; init; } = true;
+    public bool Enabled { get; set; } = true;
 
     [JsonPropertyName("engine")]
     public string Engine { get; init; } = "cloakbrowser";
@@ -439,7 +475,7 @@ public sealed class StealthBrowserConfig
     public string ExecutablePath { get; init; } = "";
 
     [JsonPropertyName("auto_download")]
-    public bool AutoDownload { get; init; } = true;
+    public bool AutoDownload { get; set; } = true;
 
     [JsonPropertyName("download_url")]
     public string DownloadUrl { get; init; } = "https://github.com/CloakHQ/CloakBrowser/releases/latest/download";
@@ -454,13 +490,13 @@ public sealed class StealthBrowserConfig
     public string DockerImage { get; init; } = "cloakhq/cloakbrowser:latest";
 
     [JsonPropertyName("cdp_port")]
-    public int CdpPort { get; init; } = 9222;
+    public int CdpPort { get; set; } = 9222;
 
     [JsonPropertyName("headless")]
-    public bool Headless { get; init; } = true;
+    public bool Headless { get; set; } = true;
 
     [JsonPropertyName("humanize")]
-    public bool Humanize { get; init; } = false;
+    public bool Humanize { get; set; } = false;
 
     [JsonPropertyName("proxy")]
     public string? Proxy { get; init; }
@@ -469,25 +505,25 @@ public sealed class StealthBrowserConfig
     public List<string> ExtraArgs { get; init; } = new();
 
     [JsonPropertyName("launch_timeout_ms")]
-    public int LaunchTimeoutMs { get; init; } = 30000;
+    public int LaunchTimeoutMs { get; set; } = 30000;
 
     [JsonPropertyName("user_agent")]
     public string UserAgent { get; init; } = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36";
 
     [JsonPropertyName("block_trackers")]
-    public bool BlockTrackers { get; init; } = true;
+    public bool BlockTrackers { get; set; } = true;
 
     [JsonPropertyName("randomize_viewport")]
-    public bool RandomizeViewport { get; init; } = true;
+    public bool RandomizeViewport { get; set; } = true;
 
     [JsonPropertyName("inject_stealth_scripts")]
-    public bool InjectStealthScripts { get; init; } = true;
+    public bool InjectStealthScripts { get; set; } = true;
 }
 
 public sealed class ToolsAutoConfig
 {
     [JsonPropertyName("auto_download")]
-    public bool AutoDownload { get; init; } = true;
+    public bool AutoDownload { get; set; } = true;
 
     [JsonPropertyName("download_dir")]
     public string DownloadDir { get; init; } = ".livingtree/tools";
@@ -583,7 +619,7 @@ public sealed class ToolsAutoConfig
 public sealed class ToolAutoItem
 {
     [JsonPropertyName("enabled")]
-    public bool Enabled { get; init; } = true;
+    public bool Enabled { get; set; } = true;
 
     [JsonPropertyName("name")]
     public string Name { get; init; } = "";
@@ -599,4 +635,34 @@ public sealed class ToolAutoItem
 
     [JsonPropertyName("executable_path")]
     public string? ExecutablePath { get; init; }
+}
+
+public sealed class SupertonicOptions
+{
+    [JsonPropertyName("enabled")]
+    public bool Enabled { get; set; } = false;
+
+    [JsonPropertyName("server_url")]
+    public string ServerUrl { get; init; } = "http://127.0.0.1:7788";
+
+    [JsonPropertyName("default_voice")]
+    public string DefaultVoice { get; init; } = "M1";
+
+    [JsonPropertyName("model")]
+    public string Model { get; init; } = "supertonic-3";
+
+    [JsonPropertyName("total_steps")]
+    public int TotalSteps { get; set; } = 8;
+
+    [JsonPropertyName("speed")]
+    public float Speed { get; set; } = 1.05f;
+
+    [JsonPropertyName("auto_start_server")]
+    public bool AutoStartServer { get; set; } = false;
+
+    [JsonPropertyName("onnx_dir")]
+    public string OnnxDir { get; init; } = "assets/onnx";
+
+    [JsonPropertyName("voice_style_dir")]
+    public string VoiceStyleDir { get; init; } = "assets/voice_styles";
 }

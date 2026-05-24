@@ -21,7 +21,6 @@ public static class MAFServiceCollectionExtensions
             var loggerFactory = sp.GetRequiredService<ILoggerFactory>();
 
             return rawAgent.AsBuilder()
-                .WithToolGovernance(sp)
                 .WithLTAIGovernance(sp)
                 .UseLogging(loggerFactory)
                 .UseOpenTelemetry("LTAI")

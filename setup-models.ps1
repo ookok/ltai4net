@@ -117,10 +117,11 @@ function Get-HardwareInfo {
 # 模型目录定义
 # ============================================================
 $script:AllModels = @(
-    # ========== L0: Embedding Models (ONNX) ==========
+    # ========== L0: Embedding + TTS Models (ONNX) ==========
     @{ Version = 'bge-large-zh-v1.5-onnx'; Name = 'BGE-Large-ZH-v1.5 (ONNX) - 中文嵌入'; Layer = 'L0'; Engine = 'onnx'; SizeMB = 1200; RAM_MB = 2048; FileName = 'model.onnx'; Url = 'https://huggingface.co/BAAI/bge-large-zh-v1.5/resolve/main/onnx/model.onnx'; MirrorUrl = 'https://hf-mirror.com/BAAI/bge-large-zh-v1.5/resolve/main/onnx/model.onnx'; Tier = 'standard' },
     @{ Version = 'bge-small-zh-v1.5-onnx'; Name = 'BGE-Small-ZH-v1.5 (ONNX) - 轻量中文嵌入'; Layer = 'L0'; Engine = 'onnx'; SizeMB = 95; RAM_MB = 1024; FileName = 'model.onnx'; Url = 'https://huggingface.co/Xenova/bge-small-zh-v1.5/resolve/main/onnx/model.onnx'; MirrorUrl = 'https://hf-mirror.com/Xenova/bge-small-zh-v1.5/resolve/main/onnx/model.onnx'; Tier = 'minimal' },
     @{ Version = 'bge-m3-onnx'; Name = 'BGE-M3 (ONNX) - 多语言嵌入'; Layer = 'L0'; Engine = 'onnx'; SizeMB = 2200; RAM_MB = 4096; FileName = 'model.onnx'; Url = 'https://huggingface.co/BAAI/bge-m3/resolve/main/onnx/model.onnx'; MirrorUrl = 'https://hf-mirror.com/BAAI/bge-m3/resolve/main/onnx/model.onnx'; Tier = 'premium' },
+    @{ Version = 'supertonic-3-onnx'; Name = 'Supertonic 3 (ONNX) - 31语言 TTS'; Layer = 'L0'; Engine = 'onnx-lfs'; SizeMB = 400; RAM_MB = 2048; FileName = 'assets/onnx/duration_predictor.onnx'; Url = 'https://huggingface.co/Supertone/supertonic-3'; MirrorUrl = 'https://hf-mirror.com/Supertone/supertonic-3'; Tier = 'standard'; Comment = 'Git LFS clone. Use: git lfs install && git clone https://huggingface.co/Supertone/supertonic-3 assets' },
 
     # ========== L1: Fast Models (GGUF) ==========
     @{ Version = 'rwkv7-g1-0.4b-q4'; Name = 'RWKV-7 G1 0.4B (Q4_K_M) - 极轻量'; Layer = 'L1'; Engine = 'gguf'; SizeMB = 250; RAM_MB = 2048; FileName = 'rwkv7-g1-0.4b-q4.gguf'; Url = 'https://huggingface.co/Mungert/rwkv7-0.4B-g1-GGUF/resolve/main/rwkv7-0.4b-g1-q4_k_m.gguf'; MirrorUrl = 'https://hf-mirror.com/Mungert/rwkv7-0.4B-g1-GGUF/resolve/main/rwkv7-0.4b-g1-q4_k_m.gguf'; Tier = 'minimal' },

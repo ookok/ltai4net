@@ -72,7 +72,10 @@ public class InteractiveSetupWizard
             try
             {
                 var json = File.ReadAllText(_configPath);
-                return JsonSerializer.Deserialize<LTAIOptions>(json) ?? new LTAIOptions();
+                using var doc = JsonDocument.Parse(json);
+                if (doc.RootElement.TryGetProperty("LTAI", out var ltai))
+                    return ltai.Deserialize<LTAIOptions>(new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? new();
+                return doc.RootElement.Deserialize<LTAIOptions>(new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? new();
             }
             catch
             {
@@ -86,7 +89,8 @@ public class InteractiveSetupWizard
 
     private void SaveConfig()
     {
-        var json = JsonSerializer.Serialize(_options, new JsonSerializerOptions { WriteIndented = true });
+        var wrapper = new { LTAI = _options };
+        var json = JsonSerializer.Serialize(wrapper, new JsonSerializerOptions { WriteIndented = true });
         File.WriteAllText(_configPath, json);
     }
 
@@ -95,11 +99,28 @@ public class InteractiveSetupWizard
         Console.WriteLine($"━━━ {layerName}: {description} ━━━");
         Console.WriteLine();
 
-        // L0 嵌入层：优先推荐本地模型下载
         if (layerName == "L0")
         {
-            var choseLocal = await OfferL0LocalModelAsync(hwInfo, ct);
-            if (choseLocal) return;
+            Console.WriteLine("选择 L0 嵌入层模式：");
+            Console.WriteLine();
+            Console.WriteLine("  [1] 云端 API 模式");
+            Console.WriteLine("      使用在线 Embedding API，需要 API Key");
+            Console.WriteLine("  [2] 本地模式 (离线运行，隐私安全)");
+            Console.WriteLine("      纯本地 ONNX 推理，零网络依赖，完全隐私");
+            Console.WriteLine("      支持: BGE / Jina v5 Omni (多模态) / Supertonic TTS");
+            Console.WriteLine("  [Enter] = 2 (本地模式)");
+            Console.WriteLine();
+
+            var modeChoice = ReadChoice("选择模式", "2", new[] { "1", "2" });
+            if (modeChoice == "1")
+            {
+                await ConfigureApiProviderSelectionAsync(layerName, ct);
+                Console.WriteLine();
+                return;
+            }
+
+            await OfferL0LocalModelAsync(hwInfo, ct);
+            return;
         }
 
         await ConfigureApiProviderSelectionAsync(layerName, ct);
@@ -183,40 +204,62 @@ public class InteractiveSetupWizard
 
         var availableModels = await FetchModelListAsync(endpoint, apiKey, ct);
 
-        if (availableModels.Count == 0)
+        string recommended;
+        if (availableModels.Count > 0)
         {
-            Console.WriteLine("  ⚠️  无法获取模型列表，请检查 API Key 和网络");
-            return;
+            var suitable = FilterModelsForLayer(layerName, availableModels);
+
+            if (suitable.Count == 0)
+            {
+                Console.WriteLine($"  ⚠️  该提供商无可用的 {layerName} 层模型");
+                Console.WriteLine("  所有可用模型：");
+                foreach (var m in availableModels.Take(20))
+                    Console.WriteLine($"    - {m}");
+                recommended = ReadLine("• 手动输入模型名称，或回车跳过") ?? "";
+                if (string.IsNullOrWhiteSpace(recommended))
+                {
+                    Console.WriteLine("  ⚠️  未提供模型名称");
+                    return;
+                }
+            }
+            else
+            {
+                recommended = suitable[0];
+                Console.WriteLine();
+                Console.WriteLine($"  {layerName} 层可用模型 ({suitable.Count} 个)：");
+                Console.WriteLine($"  推荐: {recommended}");
+                Console.WriteLine();
+
+                if (suitable.Count > 1)
+                {
+                    Console.WriteLine("  全部可选：");
+                    for (int i = 0; i < suitable.Count; i++)
+                        Console.WriteLine($"    [{i + 1}] {suitable[i]}");
+                    Console.WriteLine("    [Enter] 使用推荐");
+                    Console.WriteLine();
+
+                    var modelChoice = ReadLine("选择模型编号");
+                    if (!string.IsNullOrWhiteSpace(modelChoice) && int.TryParse(modelChoice, out var mi) && mi >= 1 && mi <= suitable.Count)
+                        recommended = suitable[mi - 1];
+                }
+            }
         }
-
-        var suitable = FilterModelsForLayer(layerName, availableModels);
-
-        if (suitable.Count == 0)
+        else
         {
-            Console.WriteLine($"  ⚠️  该提供商无可用的 {layerName} 层模型");
-            Console.WriteLine("  所有可用模型：");
-            foreach (var m in availableModels.Take(20))
-                Console.WriteLine($"    - {m}");
-            return;
-        }
-
-        var recommended = suitable[0];
-        Console.WriteLine();
-        Console.WriteLine($"  {layerName} 层可用模型 ({suitable.Count} 个)：");
-        Console.WriteLine($"  推荐: {recommended}");
-        Console.WriteLine();
-
-        if (suitable.Count > 1)
-        {
-            Console.WriteLine("  全部可选：");
-            for (int i = 0; i < suitable.Count; i++)
-                Console.WriteLine($"    [{i + 1}] {suitable[i]}");
-            Console.WriteLine("    [Enter] 使用推荐");
+            Console.WriteLine("  ⚠️  无法获取模型列表 (API 可能不支持 /models 端点)");
             Console.WriteLine();
 
-            var modelChoice = ReadLine("选择模型编号");
-            if (!string.IsNullOrWhiteSpace(modelChoice) && int.TryParse(modelChoice, out var mi) && mi >= 1 && mi <= suitable.Count)
-                recommended = suitable[mi - 1];
+            var defaultModel = layerName switch
+            {
+                "L0" => "text-embedding-v1",
+                "L1" => "deepseek-chat",
+                "L2" => "deepseek-chat",
+                _ => ""
+            };
+
+            recommended = ReadLine($"模型名称 (默认: {defaultModel})") ?? "";
+            if (string.IsNullOrWhiteSpace(recommended))
+                recommended = defaultModel;
         }
 
         _options.AI.Providers[selectedProvider] = new ProviderConfig
@@ -326,12 +369,7 @@ public class InteractiveSetupWizard
     /// </summary>
     private async Task<bool> OfferL0LocalModelAsync(HardwareInfo hwInfo, CancellationToken ct)
     {
-        Console.WriteLine("📦 L0 嵌入层 — 推荐本地模型");
-        Console.WriteLine();
-        Console.WriteLine("  本地 ONNX 模型优势：");
-        Console.WriteLine("    • 零网络延迟，纯本地推理");
-        Console.WriteLine("    • 数据不离开本机，隐私安全");
-        Console.WriteLine("    • 无需 API Key，零成本");
+        Console.WriteLine("📦 本地 ONNX 模型 (离线推理，零网络依赖)");
         Console.WriteLine();
 
         var layer = ModelLayer.L0;
@@ -340,42 +378,51 @@ public class InteractiveSetupWizard
             .OrderBy(m => m.DiskSizeMB)
             .ToList();
 
+        if (models.Count == 0)
+        {
+            Console.WriteLine("  ⚠️  无可用本地模型");
+            return false;
+        }
+
         var recommended = LocalModelRegistry.SelectBestModel(hwInfo.MemoryMB, layer);
         if (recommended.EngineType != "onnx" || recommended.Version.Contains("ocr"))
             recommended = models.FirstOrDefault(m => m.Version.Contains("small", StringComparison.OrdinalIgnoreCase)) ?? models[0];
 
-        Console.WriteLine($"推荐模型: {recommended.Name}");
+        Console.WriteLine($"推荐: {recommended.Name}");
         Console.WriteLine($"  大小: {recommended.DiskSizeMB} MB | 内存需求: {recommended.RecommendedMemoryMB} MB");
         Console.WriteLine();
 
-        Console.WriteLine("可选本地模型：");
+        Console.WriteLine("可选模型：");
         for (int i = 0; i < models.Count; i++)
         {
             var m = models[i];
             var tag = m.Version == recommended.Version ? " ★推荐" : "";
             Console.WriteLine($"  [{i + 1}] {m.Name} ({m.DiskSizeMB}MB){tag}");
         }
-        Console.WriteLine("  [D] 下载推荐模型 (bge-small-zh-v1.5, 93MB)");
-        Console.WriteLine("  [S] 跳过本地，使用云端 API");
-        Console.WriteLine("  [Enter] = D");
+        Console.WriteLine("  [J] Jina v5 Omni (多模态嵌入, 推荐 — AI自动下载)");
+        Console.WriteLine("  [Enter] = 推荐模型");
         Console.WriteLine();
 
-        var choice = ReadChoice("选择", "D", new[] { "D", "d", "S", "s" });
-        choice = choice.ToUpperInvariant();
-
-        if (choice == "S")
+        var choice = ReadLine("选择编号 / J / 回车");
+        if (choice?.ToUpperInvariant() == "J")
         {
-            Console.WriteLine("  ⏭️  跳过本地模型，进入云端 API 选择...");
-            Console.WriteLine();
-            return false;
+            await DownloadJinaModelAsync(ct);
+            return true;
         }
 
-        // D or Enter: download recommended
-        var selectedModel = recommended;
+        LocalModelInfo selectedModel;
+        if (string.IsNullOrWhiteSpace(choice) || !int.TryParse(choice, out var idx) || idx < 1 || idx > models.Count)
+        {
+            Console.WriteLine("  ⏭️  使用推荐模型");
+            selectedModel = recommended;
+        }
+        else
+        {
+            selectedModel = models[idx - 1];
+        }
+
         Console.WriteLine();
         Console.WriteLine($"📥 下载 {selectedModel.Name} ({selectedModel.DiskSizeMB} MB)...");
-        Console.WriteLine("  使用 hf-mirror.com 国内镜像加速");
-        Console.WriteLine();
 
         var progress = new Progress<ModelDownloadProgress>(p =>
         {
@@ -388,9 +435,8 @@ public class InteractiveSetupWizard
             var path = await _modelDownloader.DownloadAsync(selectedModel, modelsDir, progress, ct);
             Console.WriteLine($"\n  ✓ 下载完成: {path}");
 
-            var layerConfig = _options.AI.GetLayerConfig("L0");
-            layerConfig.GetType().GetProperty("Provider")!.SetValue(layerConfig, "local");
-            layerConfig.GetType().GetProperty("Model")!.SetValue(layerConfig, selectedModel.Version);
+            _options.AI.GetLayerConfig("L0").GetType().GetProperty("Provider")!.SetValue(_options.AI.GetLayerConfig("L0"), "local");
+            _options.AI.GetLayerConfig("L0").GetType().GetProperty("Model")!.SetValue(_options.AI.GetLayerConfig("L0"), selectedModel.Version);
             _isDirty = true;
 
             Console.WriteLine();
@@ -483,89 +529,60 @@ public class InteractiveSetupWizard
         SaveLocalModelConfig(layerName, selectedModel);
     }
 
-    /// <summary>
-    /// Jina Embeddings v5 Omni 首次启动下载引导
-    /// 提供 jina-embeddings-v5-omni-small (768-dim, ~500MB) 和 nano (512-dim, ~200MB)
-    /// </summary>
-    private async Task ConfigureJinaModeAsync(CancellationToken ct)
+    private async Task DownloadJinaModelAsync(CancellationToken ct)
     {
         Console.WriteLine();
         Console.WriteLine("━━━ Jina Embeddings v5 Omni (多模态) ━━━");
         Console.WriteLine();
-        Console.WriteLine("选择模型：");
+        Console.WriteLine("选择模型变体：");
         Console.WriteLine("  [1] jina-embeddings-v5-omni-small (768维, ~500MB, 推荐)");
-        Console.WriteLine("      • 支持文本 + 图像 + 音频嵌入");
-        Console.WriteLine("      • 适合 8GB+ 内存设备");
+        Console.WriteLine("     支持文本 + 图像 + 音频嵌入，适合 8GB+ 设备");
         Console.WriteLine("  [2] jina-embeddings-v5-omni-nano (512维, ~200MB, 轻量)");
-        Console.WriteLine("      • 支持文本嵌入，图像嵌入能力保留");
-        Console.WriteLine("      • 适合 4GB+ 内存/边缘设备");
-        Console.WriteLine("  [Enter] 跳过");
+        Console.WriteLine("     支持文本嵌入，适合 4GB+ / 边缘设备");
+        Console.WriteLine("  [Enter] = 1 (推荐)");
         Console.WriteLine();
 
         var choice = ReadLine("选择 (1/2) 或回车");
-        if (string.IsNullOrWhiteSpace(choice))
+        var isNano = choice == "2";
+        var variant = isNano ? "nano" : "small";
+        var dim = isNano ? 512 : 768;
+        var modelName = $"jina-embeddings-v5-omni-{variant}";
+        var hfRepo = "jinaai/jina-embeddings-v5-omni";
+        var variantPath = isNano ? "onnx_nano" : "onnx_small";
+
+        Console.WriteLine();
+        Console.WriteLine($"📥 正在下载 {modelName}...");
+
+        var cacheDir = Path.Combine(AppContext.BaseDirectory, ".livingtree", "models", "embedding");
+        var onnxDir = Path.Combine(cacheDir, "jina", modelName);
+        var onnxPath = Path.Combine(onnxDir, "model.onnx");
+        var tokenizerPath = Path.Combine(onnxDir, "tokenizer.json");
+
+        try
         {
-            Console.WriteLine("  ⏭️  跳过 Jina 配置");
+            Directory.CreateDirectory(onnxDir);
+            await DownloadWithMirrorAsync(
+                $"https://huggingface.co/{hfRepo}/resolve/main/{variantPath}/model.onnx",
+                onnxPath, ct);
+            await DownloadWithMirrorAsync(
+                $"https://huggingface.co/{hfRepo}/resolve/main/tokenizer.json",
+                tokenizerPath, ct);
+
+            Console.WriteLine($"  ✓ {modelName} 下载完成");
+            Console.WriteLine($"  模型: {onnxPath}");
+            Console.WriteLine($"  Tokenizer: {tokenizerPath}");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"  ✗ 下载失败: {ex.Message}");
+            Console.WriteLine("  请稍后重试或选择其他模型");
             return;
         }
 
-        var variant = choice == "2" ? "nano" : "small";
-        var dim = variant == "nano" ? 512 : 768;
-        var sizeMB = variant == "nano" ? 200 : 500;
-        var modelName = $"jina-embeddings-v5-omni-{variant}";
-
-        Console.WriteLine();
-        Console.WriteLine($"已选择: {modelName}");
-        Console.WriteLine($"  维度: {dim}");
-        Console.WriteLine($"  大小: ~{sizeMB} MB");
-        Console.WriteLine($"  来源: HuggingFace jinaai/jina-embeddings-v5-omni");
-        Console.WriteLine();
-
-        var downloadChoice = ReadChoice("是否立即下载？(Y/n)", "Y", new[] { "Y", "y", "n", "N" });
-        if (downloadChoice is "Y" or "y")
-        {
-            Console.WriteLine();
-            Console.WriteLine($"📥 正在下载 {modelName} (首次约需 {sizeMB}MB 流量)...");
-            Console.WriteLine();
-
-            var cacheDir = Path.Combine(AppContext.BaseDirectory, ".livingtree", "models", "embedding");
-            Directory.CreateDirectory(Path.Combine(cacheDir, "jina", modelName));
-
-            var hfRepo = "jinaai/jina-embeddings-v5-omni";
-            var variantPath = choice == "2" ? "onnx_nano" : "onnx_small";
-            var onnxDir = Path.Combine(cacheDir, "jina", modelName);
-            var onnxPath = Path.Combine(onnxDir, "model.onnx");
-            var tokenizerPath = Path.Combine(onnxDir, "tokenizer.json");
-
-            try
-            {
-                // Try HF official first, fallback to hf-mirror
-                await DownloadWithMirrorAsync(
-                    $"https://huggingface.co/{hfRepo}/resolve/main/{variantPath}/model.onnx",
-                    onnxPath, ct);
-                await DownloadWithMirrorAsync(
-                    $"https://huggingface.co/{hfRepo}/resolve/main/tokenizer.json",
-                    tokenizerPath, ct);
-
-                Console.WriteLine($"  ✓ Jina {modelName} 下载完成");
-                Console.WriteLine($"  模型: {onnxPath}");
-                Console.WriteLine($"  Tokenizer: {tokenizerPath}");
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"  ✗ 下载失败: {ex.Message}");
-                Console.WriteLine("  提示: 可稍后重新运行配置向导下载");
-            }
-        }
-
-        // Save config — the auto-detect in AddLTAIVectorAuto will pick this up
-        var layerConfig = _options.AI.GetLayerConfig("L0");
-        layerConfig.GetType().GetProperty("Provider")!.SetValue(layerConfig, "jina");
-        layerConfig.GetType().GetProperty("Model")!.SetValue(layerConfig, modelName);
-        _isDirty = true;
-
-        // Use reflection to bypass init-only restriction (options loaded from JSON)
+        _options.AI.GetLayerConfig("L0").GetType().GetProperty("Provider")!.SetValue(_options.AI.GetLayerConfig("L0"), "jina");
+        _options.AI.GetLayerConfig("L0").GetType().GetProperty("Model")!.SetValue(_options.AI.GetLayerConfig("L0"), modelName);
         typeof(LTAIOptions).GetProperty("Vector")!.SetValue(_options, new VectorConfig { Dimension = dim, Backend = "jina-onnx" });
+        _isDirty = true;
 
         Console.WriteLine();
         Console.WriteLine("  ✓ Jina L0 配置完成");

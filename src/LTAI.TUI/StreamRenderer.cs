@@ -58,7 +58,11 @@ public sealed class StreamRenderer
 
     private void ProcessToken(string token)
     {
-        if (token.Contains("```"))
+        if (token.StartsWith("<thinking>") && token.EndsWith("</thinking>"))
+        {
+            HandleThinkingToken(token);
+        }
+        else if (token.Contains("```"))
         {
             HandleCodeBlockBoundary(token);
         }
@@ -66,16 +70,35 @@ public sealed class StreamRenderer
         {
             HandleToolCall(token);
         }
-        else if (token.Contains("<｜end▁of▁thinking｜>") && _currentBlock?.Type == BlockType.Tool)
+        else if (token.Contains(" response") && _currentBlock?.Type == BlockType.Tool)
         {
             HandleToolResult(token);
         }
         else
         {
+            if (_currentBlock?.Type == BlockType.Thinking)
+                CompleteCurrentBlock();
+
             _currentBlock ??= new StreamBlock(BlockType.Text, _blocks.Count);
             _currentBlock.Append(token);
-
             CheckMarkdownBoundaries();
+        }
+    }
+
+    private void HandleThinkingToken(string token)
+    {
+        if (_currentBlock?.Type == BlockType.Text)
+            CompleteCurrentBlock();
+
+        var content = token.AsSpan(10, token.Length - 21).ToString();
+
+        if (_currentBlock?.Type == BlockType.Thinking)
+            _currentBlock.Append(content);
+        else
+        {
+            CompleteCurrentBlock();
+            _currentBlock = new StreamBlock(BlockType.Thinking, _blocks.Count);
+            _currentBlock.Append(content);
         }
     }
 

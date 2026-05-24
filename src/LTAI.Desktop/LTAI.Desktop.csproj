@@ -9,6 +9,7 @@
     <IsExeProject>true</IsExeProject>
     <RootNamespace>LTAI.Desktop</RootNamespace>
     <AssemblyName>LTAI.Desktop</AssemblyName>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
   </PropertyGroup>
 
   <ItemGroup>
@@ -25,6 +26,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\LTAI.Core\LTAI.Core.csproj" />
+    <ProjectReference Include="..\LTAI.Agent\LTAI.Agent.csproj" />
     <ProjectReference Include="..\LTAI.AI\LTAI.AI.csproj" />
     <ProjectReference Include="..\LTAI.DNA\LTAI.DNA.csproj" />
     <ProjectReference Include="..\LTAI.Planning\LTAI.Planning.csproj" />

@@ -14,6 +14,7 @@ public enum AgentType
     Chat,
     Code,
     EIA,
+    EiaCritic,
     Reasoning,
     Custom
 }
