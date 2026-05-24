@@ -19,14 +19,16 @@ public sealed record GroundingResult
 public sealed class ResponseGroundingVerifier
 {
     private readonly ILogger<ResponseGroundingVerifier>? _logger;
+    private readonly PromptTemplateStore? _prompts;
     private const int MinResponseChars = 15;
     private const int MinContextChars = 100;
     private const float MinOverlapRatio = 0.3f;
     private const int DeflectionRatioThreshold = 10;
 
-    public ResponseGroundingVerifier(ILogger<ResponseGroundingVerifier>? logger = null)
+    public ResponseGroundingVerifier(ILogger<ResponseGroundingVerifier>? logger = null, PromptTemplateStore? prompts = null)
     {
         _logger = logger;
+        _prompts = prompts;
     }
 
     public GroundingResult Verify(
@@ -170,26 +172,19 @@ public sealed class ResponseGroundingVerifier
         var ctxSnippet = toolContext.Length > 3000 ? toolContext[..3000] : toolContext;
         var respSnippet = response.Length > 2000 ? response[..2000] : response;
 
-        var prompt = $"""
-            Tool results:
-            ---
-            {ctxSnippet}
-            ---
+        var prompt = _prompts?.Render("verify_user", new Dictionary<string, string>
+        {
+            ["context"] = ctxSnippet,
+            ["response"] = respSnippet
+        }) ?? $"Tool results:\n---\n{ctxSnippet}\n---\n\nModel answer:\n---\n{respSnippet}\n---\n\nIs every factual claim in the model answer directly supported by the tool results?\nAnswer ONLY: YES or NO, followed by a single short reason.";
 
-            Model answer:
-            ---
-            {respSnippet}
-            ---
-
-            Is every factual claim in the model answer directly supported by the tool results?
-            Answer ONLY: YES or NO, followed by a single short reason.
-            """;
+        var systemPrompt = _prompts?.Render("verify_system") ?? "You verify factuality. Output ONLY 'YES' or 'NO' followed by a one-line reason.";
 
         try
         {
             var messages = new List<ChatMessage>
             {
-                new(ChatRole.System, "You verify factuality. Output ONLY 'YES' or 'NO' followed by a one-line reason."),
+                new(ChatRole.System, systemPrompt),
                 new(ChatRole.User, prompt)
             };
             var options = new ChatOptions

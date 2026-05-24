@@ -32,11 +32,13 @@ public sealed record PlanResult
 public sealed class L1PlanExecutor
 {
     private readonly ILogger<L1PlanExecutor>? _logger;
+    private readonly PromptTemplateStore? _prompts;
     private const int MaxPlanSteps = 5;
 
-    public L1PlanExecutor(ILogger<L1PlanExecutor>? logger = null)
+    public L1PlanExecutor(ILogger<L1PlanExecutor>? logger = null, PromptTemplateStore? prompts = null)
     {
         _logger = logger;
+        _prompts = prompts;
     }
 
     public async Task<PlanResult> PlanAndExecuteAsync(
@@ -47,24 +49,21 @@ public sealed class L1PlanExecutor
         CancellationToken cancellationToken = default)
     {
         var toolSignatures = BuildToolSignatures(toolRegistry);
-        var planningPrompt = $"""
-            Available tools:
-            {toolSignatures}
-
-            User query: "{query}"
-
-            Output ONLY a JSON plan. Format: {"{\"plan\":[{\"tool\":\"name\",\"args\":{\"p\":\"v\"}}]}"}
-            Do NOT include tools that won't help answer the query.
-            If no tools are needed, output: {"{\"plan\":[]}"}
-            """;
+        var planningPrompt = _prompts != null
+            ? _prompts.Render("plan_user", new Dictionary<string, string>
+            {
+                ["tools"] = toolSignatures,
+                ["query"] = query
+            })
+            : $"Available tools:\n{toolSignatures}\n\nUser query: \"{query}\"\n\nOutput ONLY a JSON plan.";
+        var systemPrompt = _prompts?.Render("plan_system") ?? "You are a task planner. Output ONLY a JSON plan.";
 
         string? planJson;
         try
         {
             var planMessages = new List<ChatMessage>
             {
-                new(ChatRole.System,
-                    "You are a task planner. Output ONLY a JSON plan. Do NOT answer the query, do NOT add explanations, do NOT use markdown code fences."),
+                new(ChatRole.System, systemPrompt),
                 new(ChatRole.User, planningPrompt)
             };
             var planOptions = new ChatOptions

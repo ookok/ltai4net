@@ -43,6 +43,7 @@ public sealed class LivingTreeSystem : IAsyncDisposable
     private readonly L1PlanExecutor _planExecutor;
     private readonly BackgroundWorkQueue _workQueue;
     private readonly ToolSelector _toolSelector;
+    private readonly PromptTemplateStore _prompts;
 
     private readonly BAVTRouter _bavtRouter = new(100.0);
     private readonly ERLLoop _erlLoop = new();
@@ -101,6 +102,7 @@ public sealed class LivingTreeSystem : IAsyncDisposable
         L1PlanExecutor? planExecutor = null,
         BackgroundWorkQueue? workQueue = null,
         ToolSelector? toolSelector = null,
+        PromptTemplateStore? prompts = null,
         ICrossRunEvolutionStore? evolutionStore = null,
         IVerifiableRegistry? verifiableRegistry = null)
     {
@@ -128,6 +130,7 @@ public sealed class LivingTreeSystem : IAsyncDisposable
         _planExecutor = planExecutor ?? new L1PlanExecutor();
         _workQueue = workQueue ?? new BackgroundWorkQueue();
         _toolSelector = toolSelector ?? new ToolSelector(toolRegistry);
+        _prompts = prompts ?? new PromptTemplateStore();
         _evolutionStore = evolutionStore;
         _verifiableRegistry = verifiableRegistry;
         _taskPipeline = new TaskPipeline(_journal);
@@ -293,11 +296,20 @@ public sealed class LivingTreeSystem : IAsyncDisposable
             if (label is "fast" or "reflex")
             {
                 model = DefaultModel;
-                metaContext = $"【系统自评】该领域熟悉度低（置信度={metaAssessment.Certainty:F2}，原因: {metaAssessment.DelegationReason}），已升级到 {DefaultModel} 处理。请务必使用工具验证信息，不得推测。";
+                metaContext = _prompts.Render("meta_model_upgrade", new Dictionary<string, string>
+                {
+                    ["certainty"] = metaAssessment.Certainty.ToString("F2"),
+                    ["reason"] = metaAssessment.DelegationReason,
+                    ["model"] = DefaultModel
+                });
             }
             else
             {
-                metaContext = $"【系统自评】该领域熟悉度低（置信度={metaAssessment.Certainty:F2}，原因: {metaAssessment.DelegationReason}）。请务必使用工具，不得推测。";
+                metaContext = _prompts.Render("meta_tool_recommend", new Dictionary<string, string>
+                {
+                    ["certainty"] = metaAssessment.Certainty.ToString("F2"),
+                    ["reason"] = metaAssessment.DelegationReason
+                });
             }
             _logger.LogInformation("MetaCognition: {Assessment} | Model={Model}", metaAssessment.Assessment, model);
         }
@@ -336,11 +348,11 @@ public sealed class LivingTreeSystem : IAsyncDisposable
 
                     if (resultCount == 0)
                     {
-                        autoSearchContext = $"【自动网络搜索】搜索 \"{query}\" 未找到任何相关结果。你必须如实告知用户未找到相关信息，严禁编造虚构。";
+                        autoSearchContext = _prompts.Render("auto_search_empty", new Dictionary<string, string> { ["query"] = query });
                     }
                     else
                     {
-                        autoSearchContext = $"【自动网络搜索结果】（仅基于以下数据回答，不得自行推测或联想）\n{raw[..Math.Min(raw.Length, 4000)]}";
+                        autoSearchContext = _prompts.Render("auto_search_results", new Dictionary<string, string> { ["results"] = raw[..Math.Min(raw.Length, 4000)] });
                     }
                 }
             }
@@ -1144,7 +1156,7 @@ public sealed class LivingTreeSystem : IAsyncDisposable
             if (allContext.Count > 0)
                 return EscalationResult.YieldAndBreak(allContext);
 
-            allContext.Add("抱歉，经过多次尝试仍无法提供可靠的答案。建议换个方式提问或提供更多具体信息。");
+            allContext.Add(_prompts.Render("honest_fallback"));
             return EscalationResult.YieldAndBreak(allContext);
         }
 
@@ -1152,13 +1164,20 @@ public sealed class LivingTreeSystem : IAsyncDisposable
         {
             var forcedContext = await ForceExecuteForRetryAsync(query, ct);
             if (forcedContext != null)
-                messages.Add(new ChatMessage(ChatRole.System,
-                    $"【系统强制工具执行 L{retryLevel}】以下是为确保回答准确而强制获取的数据，必须基于此回答：\n{forcedContext}"));
+                messages.Add(new ChatMessage(ChatRole.System, _prompts.Render("force_tool_exec", new Dictionary<string, string>
+                {
+                    ["level"] = retryLevel.ToString(),
+                    ["context"] = forcedContext
+                })));
         }
 
-        var severity = retryLevel >= maxRetries - 1 ? "【严重警告】" : "";
-        return EscalationResult.ContinueLoop(
-            $"{severity}【事实核查失败 L{retryLevel} - {verification.CheckType}】{verification.RetryInstruction}");
+        var templateName = retryLevel >= maxRetries - 1 ? "grounding_failed_severe" : "grounding_failed";
+        return EscalationResult.ContinueLoop(_prompts.Render(templateName, new Dictionary<string, string>
+        {
+            ["level"] = retryLevel.ToString(),
+            ["check_type"] = verification.CheckType,
+            ["retry_instruction"] = verification.RetryInstruction
+        }));
     }
 
     private (List<ChatMessage> Messages, ChatOptions Options) BuildSystemMessages(
@@ -1187,9 +1206,7 @@ public sealed class LivingTreeSystem : IAsyncDisposable
         var allLayersEmpty = layer1Context == null && layer2Context == null && autoSearchContext == null;
         if (allLayersEmpty && metaAssessment.ShouldDelegate && label != "fast" && label != "reflex")
         {
-            messages.Add(new ChatMessage(ChatRole.System,
-                "【系统提示】所有自动工具和搜索均未能获取到相关数据。你必须如实告知用户当前无法回答该问题。" +
-                "严禁编造任何具体数字、名称或事实。可以建议用户提供更多信息或换个方式提问。"));
+            messages.Add(new ChatMessage(ChatRole.System, _prompts.Render("all_layers_empty")));
         }
 
         var selCount = selectedTools.Count;
@@ -1198,22 +1215,19 @@ public sealed class LivingTreeSystem : IAsyncDisposable
             var toolNames = string.Join("、", selectedTools.Take(10).Select(t => t.Name));
             if (layer1Context != null)
             {
-                messages.Add(new ChatMessage(ChatRole.System,
-                    $"你可以使用以下工具: {toolNames} 等共 {selCount} 个。" +
-                    "【关键规则】上面已经通过自动工具获取了真实数据，你的任务是：" +
-                    "1) 严格基于上述【Layer1 自动执行工具】的结果回答用户，一字一句都要有数据依据。" +
-                    "2) 严禁自行推测、联想或编造任何工具结果中不存在的信息。" +
-                    "3) 如果工具结果为空或报错，必须如实告知，不得猜测原因。" +
-                    "4) 不得建议用户去执行命令——系统已经执行过了。"));
+                messages.Add(new ChatMessage(ChatRole.System, _prompts.Render("layer1_tool_summary", new Dictionary<string, string>
+                {
+                    ["tool_names"] = toolNames,
+                    ["tool_count"] = selCount.ToString()
+                })));
             }
             else
             {
-                messages.Add(new ChatMessage(ChatRole.System,
-                    $"你可以使用以下工具: {toolNames} 等共 {selCount} 个。" +
-                    "重要规则: 1) 遇到需要实时信息、外部数据或事实核查的问题，必须先调用工具再回答。" +
-                    "2) 回答时只能陈述工具返回的事实数据，严禁自行推测、联想或编造任何信息。" +
-                    "3) 如果工具返回空结果或不确定信息，必须如实告知用户'未找到相关信息'。" +
-                    "4) 声称使用了工具（如\"已使用shell_exec\"）必须在响应中发出 tool_call，否则视为编造。"));
+                messages.Add(new ChatMessage(ChatRole.System, _prompts.Render("layer_tool_rules", new Dictionary<string, string>
+                {
+                    ["tool_names"] = toolNames,
+                    ["tool_count"] = selCount.ToString()
+                })));
             }
         }
 

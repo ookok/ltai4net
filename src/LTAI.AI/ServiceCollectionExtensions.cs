@@ -336,6 +336,19 @@ public static class ServiceCollectionExtensions
             var toolRegistry = sp.GetRequiredService<AIToolRegistry>();
             return new ToolSelector(toolRegistry);
         });
+        services.AddSingleton<PromptTemplateStore>(sp =>
+        {
+            var logger = sp.GetService<ILogger<PromptTemplateStore>>();
+            var dir = Directory.GetCurrentDirectory();
+            string? promptsDir = null;
+            for (int i = 0; i < 5 && dir != null; i++)
+            {
+                var candidate = Path.Combine(dir, "prompts");
+                if (Directory.Exists(candidate)) { promptsDir = candidate; break; }
+                dir = Path.GetDirectoryName(dir);
+            }
+            return new PromptTemplateStore(promptsDir, logger);
+        });
         services.AddSingleton<BackgroundWorkQueue>(sp =>
         {
             var logger = sp.GetService<ILogger<BackgroundWorkQueue>>();

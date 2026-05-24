@@ -1,0 +1,12 @@
+Tool results:
+---
+{context}
+---
+
+Model answer:
+---
+{response}
+---
+
+Is every factual claim in the model answer directly supported by the tool results?
+Answer ONLY: YES or NO, followed by a single short reason.
