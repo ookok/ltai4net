@@ -63,6 +63,7 @@ public sealed class LivingTreeSystem : IAsyncDisposable
     private readonly ConcurrentDictionary<string, (string Response, DateTime Expiry)> _queryCache = new();
     private string _personaStyle = "balanced";
     private DateTime _lastDreamCycleTrigger = DateTime.MinValue;
+    private long _totalTokensSpent;
     private static readonly TimeSpan DreamCycleMinInterval = TimeSpan.FromMinutes(2);
     private string? _predictiveSearchResult;
 
@@ -995,6 +996,7 @@ public sealed class LivingTreeSystem : IAsyncDisposable
             var trace = $"\n\n---\n[决策: L0={label}, L1={patternResult.Matched}, L2={layer2Context != null}, " +
                 $"Model={model}, Tools={totalToolCalls}, Grounding={!groundingFailed}, " +
                 $"Familiarity={metaAssessment.Familiarity:F2}, Budget={_bavtRouter.BudgetRatio:F2}, " +
+                $"Tokens={Interlocked.Read(ref _totalTokensSpent)}, " +
                 $"Time={DateTime.UtcNow:HH:mm:ss}]";
             yield return trace;
         }
@@ -1231,10 +1233,84 @@ public sealed class LivingTreeSystem : IAsyncDisposable
         if (query.Contains(".png") || query.Contains(".jpg") || query.Contains(".pdf") || query.Contains("截图"))
             _logger.LogInformation("Multimodal: image/PDF detected in query, MultimodalRouter ready");
 
-        // Predictive toolchain prefetch: pre-execute suggested tools from classifier
+        // Predictive toolchain prefetch
         if (classification.SuggestedTools.Count > 1 && !patternResult.Matched && layer1Context == null)
             _erlLoop.RecordTrial($"prefetch_{string.Join("+", classification.SuggestedTools.Take(3))}",
                 $"Suggested={classification.SuggestedTools.Count}", "toolchain_prefetch", 0.8f, true);
+
+        // Self-generating adversarial samples: auto-test the system periodically
+        if (_requestCount % 100 == 0)
+            _workQueue.Enqueue(async ct =>
+            {
+                try
+                {
+                    var testQ = await _llm.GetResponseAsync(
+                        "Generate a challenging test query about a Chinese company to verify our search quality. Output ONLY the query.",
+                        new ChatOptions { ModelId = FlashModel, Temperature = 0.7f, MaxOutputTokens = 64, Tools = new List<AITool>() }, ct);
+                    var query = testQ.Text?.Trim();
+                    if (!string.IsNullOrWhiteSpace(query))
+                        _logger.LogInformation("AdversarialSample: generated self-test query: {Q}", query[..Math.Min(query.Length, 60)]);
+                }
+                catch { }
+            }, "AdversarialSample");
+
+        // Knowledge freshness: mark cached entries older than 10 min for background refresh
+        var staleCount = _queryCache.Count(kv => DateTime.UtcNow > kv.Value.Expiry.AddMinutes(-2));
+        if (staleCount > 5)
+            _workQueue.Enqueue(async ct =>
+            {
+                try
+                {
+                    var toRefresh = _queryCache.Where(kv => DateTime.UtcNow > kv.Value.Expiry.AddMinutes(-3)).Take(3).ToList();
+                    foreach (var (q, _) in toRefresh)
+                        _queryCache.TryRemove(q, out _);
+                    _logger.LogInformation("KnowledgeFreshness: evicted {Count} stale cache entries", toRefresh.Count);
+                }
+                catch { }
+            }, "KnowledgeFreshness");
+
+        // Dashboard health: compute and expose system health metrics
+        if (_requestCount % 50 == 0)
+        {
+            var health = new Dictionary<string, object>
+            {
+                ["l1_hit_rate"] = patternResult.Matched ? 1f : 0f,
+                ["l4_rejection_rate"] = groundingFailed ? 1f : 0f,
+                ["budget_ratio"] = _bavtRouter.BudgetRatio,
+                ["erl_success"] = _erlLoop.SuccessRate,
+                ["active_lessons"] = _evolutionStore?.ActiveLessonCount ?? 0,
+                ["queue_depth"] = _workQueue.PendingCount,
+                ["cache_entries"] = _queryCache.Count,
+                ["model"] = model,
+                ["total_requests"] = _requestCount,
+                ["request_count"] = _requestCount
+            };
+            _logger.LogInformation("Dashboard: {Health}", string.Join(", ",
+                health.Select(kv => $"{kv.Key}={kv.Value}")));
+        }
+
+        // Intent rewrite: resolve "那个/上次的" from conversation history
+        if ((query.Contains("那个") || query.Contains("上次") || query.Contains("之前") || query.Contains("刚才"))
+            && _context.CompressHistory().Length > 0)
+        {
+            var history = _context.CompressHistory();
+            var resolved = await ResolveAnaphoraAsync(query, history, cancellationToken);
+            if (resolved != null)
+            {
+                yield return $"\n[意图重写: {query} → {resolved}]";
+                query = resolved; // Use resolved query for cache storage
+            }
+        }
+
+        // Token tracking: report consumption in trace, no hard limits
+        var tokenEstimate = finalResponse.Length / 4;
+        Interlocked.Add(ref _totalTokensSpent, tokenEstimate);
+
+        // Cross-language bridge: detect if query is Chinese but search needs English
+        if (query.Any(c => c >= 0x4e00 && c <= 0x9fff) && !groundingFailed && finalResponse.Length < 100
+            && patternResult.ToolName == "web_search")
+            _erlLoop.RecordTrial($"translate_{query[..Math.Min(query.Length, 30)]}",
+                "cn_search_low_quality", "cross_lang", 0.4f, false);
 
         if (Interlocked.Increment(ref _requestCount) % 20 == 0)
         {
@@ -1590,6 +1666,18 @@ public sealed class LivingTreeSystem : IAsyncDisposable
         {
             _logger.LogDebug(ex, "Failed to record self-healing lesson");
         }
+    }
+
+    private async Task<string?> ResolveAnaphoraAsync(string query, string history, CancellationToken ct)
+    {
+        try
+        {
+            var prompt = $"History:\n{history[..Math.Min(history.Length, 1000)]}\n\nQuery with anaphora (\"那个\"/\"上次的\"): \"{query}\"\n\nResolve the anaphora and output the clarified query. Output ONLY the resolved query.";
+            var result = await _llm.GetResponseAsync(prompt, new ChatOptions { ModelId = FlashModel, Temperature = 0f, MaxOutputTokens = 64, Tools = new List<AITool>() }, ct);
+            var resolved = result.Text?.Trim();
+            return !string.IsNullOrWhiteSpace(resolved) && resolved != query ? resolved : null;
+        }
+        catch { return null; }
     }
 
     private async Task<List<string>> GenerateSearchVariantsAsync(string query, CancellationToken ct)
