@@ -1082,12 +1082,17 @@ public sealed class LivingTreeSystem : IAsyncDisposable
         var metaMetrics = _metaCognition.GetMetrics();
         var avgFamiliarity = metaMetrics.TryGetValue("avg_familiarity", out var af)
             ? Convert.ToSingle(af) : 0.1f;
+        var erlSuccessRate = _erlLoop.SuccessRate;
 
-        var maxRetries = Math.Clamp((int)(6 - avgFamiliarity * 5), 2, 5);
-        var forceToolLevel = avgFamiliarity < 0.3f ? 1 : 2;
+        // Blend ERL global success rate (actual outcomes) with MetaCog domain familiarity (learning).
+        // High ERL success → system is generally doing well → fewer retries needed.
+        // High familiarity → domain is well-known → fewer retries needed.
+        var blendedConfidence = (float)(avgFamiliarity * 0.6 + erlSuccessRate * 0.4);
+        var maxRetries = Math.Clamp((int)(6 - blendedConfidence * 5), 2, 5);
+        var forceToolLevel = blendedConfidence < 0.3f ? 1 : 2;
 
-        _logger.LogWarning("Grounding check failed L{Level}/{Max}: {Issue} (type={Type}, fam={Fam:F2})",
-            retryLevel, maxRetries, verification.Issue, verification.CheckType, avgFamiliarity);
+        _logger.LogWarning("Grounding check failed L{Level}/{Max}: {Issue} (type={Type}, fam={Fam:F2}, erl={ERL:F2})",
+            retryLevel, maxRetries, verification.Issue, verification.CheckType, avgFamiliarity, erlSuccessRate);
 
         if (retryLevel >= maxRetries)
         {
