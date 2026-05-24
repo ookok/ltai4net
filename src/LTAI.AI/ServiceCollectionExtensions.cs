@@ -331,6 +331,11 @@ public static class ServiceCollectionExtensions
 
         services.AddSingleton<ResponseGroundingVerifier>();
         services.AddSingleton<L1PlanExecutor>();
+        services.AddSingleton<ToolSelector>(sp =>
+        {
+            var toolRegistry = sp.GetRequiredService<AIToolRegistry>();
+            return new ToolSelector(toolRegistry);
+        });
         services.AddSingleton<BackgroundWorkQueue>(sp =>
         {
             var logger = sp.GetService<ILogger<BackgroundWorkQueue>>();

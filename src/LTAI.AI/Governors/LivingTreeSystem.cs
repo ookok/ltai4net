@@ -42,6 +42,7 @@ public sealed class LivingTreeSystem : IAsyncDisposable
     private readonly ResponseGroundingVerifier _groundingVerifier;
     private readonly L1PlanExecutor _planExecutor;
     private readonly BackgroundWorkQueue _workQueue;
+    private readonly ToolSelector _toolSelector;
 
     private readonly BAVTRouter _bavtRouter = new(100.0);
     private readonly ERLLoop _erlLoop = new();
@@ -99,6 +100,7 @@ public sealed class LivingTreeSystem : IAsyncDisposable
         ResponseGroundingVerifier? groundingVerifier = null,
         L1PlanExecutor? planExecutor = null,
         BackgroundWorkQueue? workQueue = null,
+        ToolSelector? toolSelector = null,
         ICrossRunEvolutionStore? evolutionStore = null,
         IVerifiableRegistry? verifiableRegistry = null)
     {
@@ -125,6 +127,7 @@ public sealed class LivingTreeSystem : IAsyncDisposable
         _groundingVerifier = groundingVerifier ?? new ResponseGroundingVerifier();
         _planExecutor = planExecutor ?? new L1PlanExecutor();
         _workQueue = workQueue ?? new BackgroundWorkQueue();
+        _toolSelector = toolSelector ?? new ToolSelector(toolRegistry);
         _evolutionStore = evolutionStore;
         _verifiableRegistry = verifiableRegistry;
         _taskPipeline = new TaskPipeline(_journal);
@@ -464,9 +467,11 @@ public sealed class LivingTreeSystem : IAsyncDisposable
             }
         }
 
+        var selectedTools = _toolSelector.SelectTools(query, _toolRegistry.GetTools());
         var (messages, streamOptions) = BuildSystemMessages(
             model, layer1Context, autoSearchContext, layer2Context,
-            metaContext, metaAssessment, label, toolCount, dateTag, query);
+            metaContext, metaAssessment, label, toolCount, dateTag, query,
+            selectedTools);
 
         // ReAct loop: stream response, detect tool calls, execute them, and retry
         var useStreaming = label != "fast" && label != "reflex";
@@ -1118,7 +1123,8 @@ public sealed class LivingTreeSystem : IAsyncDisposable
         string model,
         string? layer1Context, string? autoSearchContext, string? layer2Context,
         string? metaContext, MetaCognitiveAssessment metaAssessment, string label,
-        int toolCount, string dateTag, string query)
+        int toolCount, string dateTag, string query,
+        List<AITool> selectedTools)
     {
         var messages = new List<ChatMessage>();
         var options = new ChatOptions
@@ -1126,7 +1132,7 @@ public sealed class LivingTreeSystem : IAsyncDisposable
             ModelId = model,
             Temperature = 0.3f,
             MaxOutputTokens = 4096,
-            Tools = _toolRegistry.GetTools().ToList()
+            Tools = selectedTools
         };
 
         if (layer1Context != null)
@@ -1144,13 +1150,14 @@ public sealed class LivingTreeSystem : IAsyncDisposable
                 "严禁编造任何具体数字、名称或事实。可以建议用户提供更多信息或换个方式提问。"));
         }
 
-        if (toolCount > 0)
+        var selCount = selectedTools.Count;
+        if (selCount > 0)
         {
-            var toolNames = string.Join("、", _toolRegistry.ListTools().Take(10));
+            var toolNames = string.Join("、", selectedTools.Take(10).Select(t => t.Name));
             if (layer1Context != null)
             {
                 messages.Add(new ChatMessage(ChatRole.System,
-                    $"你可以使用以下工具: {toolNames} 等共 {toolCount} 个。" +
+                    $"你可以使用以下工具: {toolNames} 等共 {selCount} 个。" +
                     "【关键规则】上面已经通过自动工具获取了真实数据，你的任务是：" +
                     "1) 严格基于上述【Layer1 自动执行工具】的结果回答用户，一字一句都要有数据依据。" +
                     "2) 严禁自行推测、联想或编造任何工具结果中不存在的信息。" +
@@ -1160,7 +1167,7 @@ public sealed class LivingTreeSystem : IAsyncDisposable
             else
             {
                 messages.Add(new ChatMessage(ChatRole.System,
-                    $"你可以使用以下工具: {toolNames} 等共 {toolCount} 个。" +
+                    $"你可以使用以下工具: {toolNames} 等共 {selCount} 个。" +
                     "重要规则: 1) 遇到需要实时信息、外部数据或事实核查的问题，必须先调用工具再回答。" +
                     "2) 回答时只能陈述工具返回的事实数据，严禁自行推测、联想或编造任何信息。" +
                     "3) 如果工具返回空结果或不确定信息，必须如实告知用户'未找到相关信息'。" +
