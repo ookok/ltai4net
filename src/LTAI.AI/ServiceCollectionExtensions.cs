@@ -322,6 +322,16 @@ public static class ServiceCollectionExtensions
             return new MetaCognitiveLayer(logger);
         });
 
+        services.AddSingleton<QueryPatternRouter>(sp =>
+        {
+            var toolRegistry = sp.GetRequiredService<AIToolRegistry>();
+            var logger = sp.GetService<ILogger<QueryPatternRouter>>();
+            return new QueryPatternRouter(toolRegistry, logger);
+        });
+
+        services.AddSingleton<ResponseGroundingVerifier>();
+        services.AddSingleton<L1PlanExecutor>();
+
         services.AddSingleton<SkillTree>(sp =>
         {
             var catalog = sp.GetRequiredService<SkillCatalog>();

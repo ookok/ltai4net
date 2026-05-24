@@ -84,8 +84,19 @@ public sealed class OpenAIProviderChatClient : IChatClient
                     try { args = toolCall.FunctionArgumentsUpdate.ToObjectFromJson<Dictionary<string, object?>>() ?? new(); }
                     catch { }
                 }
+                var callId = toolCall.ToolCallId;
+                if (string.IsNullOrEmpty(callId))
+                {
+                    var genId = $"auto_{toolCall.Index}_{Guid.NewGuid():N}";
+                    callId = genId.Length <= 64 ? genId : genId[..64];
+                }
+                var funcName = toolCall.FunctionName;
+                if (string.IsNullOrEmpty(funcName))
+                {
+                    continue; // DeepSeek sometimes emits empty tool call fragments — skip
+                }
                 yield return new ChatResponseUpdate(MEAIChatRole.Assistant,
-                    contents: new List<AIContent> { new FunctionCallContent(toolCall.ToolCallId, toolCall.FunctionName, args) })
+                    contents: new List<AIContent> { new FunctionCallContent(callId, funcName, args) })
                 { ResponseId = update.CompletionId };
             }
         }

@@ -241,9 +241,10 @@ public sealed class SystemPromptsConfig
     [JsonPropertyName("investigate_before_answering")]
     public string InvestigateBeforeAnswering { get; init; } = """
         Never speculate about content you haven't read. If referencing specific files or data,
-        you must read them first before answering. Before proposing solutions, always check
-        relevant files and data. When answering knowledge questions, cite sources you actually
-        retrieved, don't fabricate. Ensure answers are pragmatic, accurate, and hallucination-free.
+        you must read them first before answering. Only state facts that are directly supported
+        by the retrieved data. When answering knowledge questions, cite sources you actually
+        retrieved, don't fabricate. Never make up or guess — if the data doesn't contain the
+        answer, explicitly state that no information was found.
         """;
 
     [JsonPropertyName("progressive_work_pattern")]

@@ -132,24 +132,32 @@ public sealed class WebSearchTools
         var searchUrl = $"https://cn.bing.com/search?q={Uri.EscapeDataString(query)}&setlang=zh-cn&count={maxResults}&ensearch=0";
         var html = await _http.GetStringAsync(searchUrl, ct);
 
-        var itemMatches = Regex.Matches(html, @"<li class=""b_algo"">(.*?)</li>", RegexOptions.Singleline);
+        var itemMatches = Regex.Matches(html, @"<li class=""b_algo""[^>]*>(.*?)</li>", RegexOptions.Singleline);
 
         foreach (Match item in itemMatches.Take(maxResults))
         {
             var block = item.Groups[1].Value;
             var hrefMatch = Regex.Match(block, @"<a[^>]*href=""(https?://[^""]+)""");
-            var titleMatch = Regex.Match(block, @"<a[^>]*>([^<]+)</a>");
-            var snippetMatch = Regex.Match(block, @"(?:<p[^>]*>|<div class=""b_caption""[^>]*>)([^<]+(?:<[^>]+>[^<]*)*)</(?:p|div)>");
+            var titleMatch = Regex.Match(block, @"<a[^>]*>[\s\S]*?</a>");
 
             if (hrefMatch.Success && titleMatch.Success)
             {
+                var titleHtml = titleMatch.Groups[0].Value;
+                var titleText = System.Web.HttpUtility.HtmlDecode(
+                    Regex.Replace(titleHtml, @"<[^>]+>", "")).Trim();
+
+                var snippetMatch = Regex.Match(block,
+                    @"(?:<p[^>]*>|<div class=""b_caption""[^>]*>)([\s\S]*?)</(?:p|div)>");
+                var snippetText = snippetMatch.Success
+                    ? System.Web.HttpUtility.HtmlDecode(
+                        Regex.Replace(snippetMatch.Groups[1].Value, @"<[^>]+>", "")).Trim()
+                    : "";
+
                 results.Add(new WebSearchResult
                 {
-                    Title = System.Web.HttpUtility.HtmlDecode(titleMatch.Groups[1].Value),
+                    Title = titleText,
                     Url = hrefMatch.Groups[1].Value,
-                    Snippet = snippetMatch.Success
-                        ? System.Web.HttpUtility.HtmlDecode(Regex.Replace(snippetMatch.Groups[1].Value, @"<[^>]+>", "")).Trim()
-                        : ""
+                    Snippet = snippetText
                 });
             }
         }
@@ -158,18 +166,20 @@ public sealed class WebSearchTools
         {
             var fallbackUrl = $"https://www.bing.com/search?q={Uri.EscapeDataString(query)}&setlang=zh-cn&count={maxResults}";
             var fallbackHtml = await _http.GetStringAsync(fallbackUrl, ct);
-            var fallbackMatches = Regex.Matches(fallbackHtml, @"<li class=""b_algo"">(.*?)</li>", RegexOptions.Singleline);
+            var fallbackMatches = Regex.Matches(fallbackHtml, @"<li class=""b_algo""[^>]*>(.*?)</li>", RegexOptions.Singleline);
 
             foreach (Match item in fallbackMatches.Take(maxResults))
             {
                 var block = item.Groups[1].Value;
                 var hrefMatch = Regex.Match(block, @"<a[^>]*href=""(https?://[^""]+)""");
-                var titleMatch = Regex.Match(block, @"<a[^>]*>([^<]+)</a>");
+                var titleMatch = Regex.Match(block, @"<a[^>]*>[\s\S]*?</a>");
                 if (hrefMatch.Success && titleMatch.Success)
                 {
+                    var titleText = System.Web.HttpUtility.HtmlDecode(
+                        Regex.Replace(titleMatch.Groups[0].Value, @"<[^>]+>", "")).Trim();
                     results.Add(new WebSearchResult
                     {
-                        Title = System.Web.HttpUtility.HtmlDecode(titleMatch.Groups[1].Value),
+                        Title = titleText,
                         Url = hrefMatch.Groups[1].Value,
                         Snippet = ""
                     });
@@ -186,19 +196,32 @@ public sealed class WebSearchTools
         var searchUrl = $"https://html.duckduckgo.com/html/?q={Uri.EscapeDataString(query)}";
         var html = await _http.GetStringAsync(searchUrl, ct);
 
-        var linkMatches = Regex.Matches(html, @"<a[^>]+class=""result__a""[^>]+href=""([^""]+)""[^>]*>([^<]+)</a>");
-        var snippetMatches = Regex.Matches(html, @"<a[^>]+class=""result__snippet""[^>]*>([^<]+)</a>");
+        var linkMatches = Regex.Matches(html, @"<a[^>]+class=""result__a""[^>]+href=""([^""]+)""[^>]*>[\s\S]*?</a>");
+        var snippetMatches = Regex.Matches(html, @"<a[^>]+class=""result__snippet""[^>]*>[\s\S]*?</a>");
 
         for (int i = 0; i < Math.Min(linkMatches.Count, maxResults); i++)
         {
-            results.Add(new WebSearchResult
+            var linkHtml = linkMatches[i].Groups[0].Value;
+            var hrefMatch = Regex.Match(linkHtml, @"href=""([^""]+)""");
+            var titleText = System.Web.HttpUtility.HtmlDecode(
+                Regex.Replace(linkHtml, @"<[^>]+>", "")).Trim();
+
+            var snippetText = "";
+            if (i < snippetMatches.Count)
             {
-                Title = System.Web.HttpUtility.HtmlDecode(linkMatches[i].Groups[2].Value),
-                Url = linkMatches[i].Groups[1].Value,
-                Snippet = i < snippetMatches.Count
-                    ? System.Web.HttpUtility.HtmlDecode(snippetMatches[i].Groups[1].Value).Trim()
-                    : ""
-            });
+                snippetText = System.Web.HttpUtility.HtmlDecode(
+                    Regex.Replace(snippetMatches[i].Groups[0].Value, @"<[^>]+>", "")).Trim();
+            }
+
+            if (hrefMatch.Success)
+            {
+                results.Add(new WebSearchResult
+                {
+                    Title = titleText,
+                    Url = hrefMatch.Groups[1].Value,
+                    Snippet = snippetText
+                });
+            }
         }
 
         return results;
