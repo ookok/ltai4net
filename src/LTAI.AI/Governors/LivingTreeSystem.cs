@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using LTAI.Core.Configuration;
 using LTAI.Core.Execution;
 using LTAI.Core.Interfaces;
@@ -55,6 +56,9 @@ public sealed class LivingTreeSystem : IAsyncDisposable
     private readonly IVerifiableRegistry? _verifiableRegistry;
     private int _requestCount;
     private const int TrainingInterval = 50;
+
+    private static readonly Regex TextToolCall = new(
+        @"【TOOL:(\w[\w_]*)\s+(.*?)】", RegexOptions.Compiled);
 
     private string DefaultModel => _options.Value.AI.L2.Model;
     private string FlashModel => _options.Value.AI.L1.Model;
@@ -316,23 +320,25 @@ public sealed class LivingTreeSystem : IAsyncDisposable
         _logger.LogDebug("MetaCognition assessment: {Assessment} | Delegating={Deleg} Layer1={L1}",
             metaAssessment.Assessment, metaAssessment.ShouldDelegate, layer1HighConfidence);
 
-        // Fuzzy query detection: use L1 flash to judge ambiguity instead of keyword matching
+        // Fuzzy query detection: queries with vague evaluative patterns without entities are ambiguous.
+        var hasVaguePattern = query.Contains("怎么样") || query.Contains("如何评价") ||
+            query.Contains("讲一下") || query.Contains("说说") || query.Contains("聊聊");
+        var hasQuestionWord = query.Contains('？') || query.Contains('?') ||
+            query.Contains("什么") || query.Contains("怎么") || query.Contains("为什么") ||
+            query.Contains("谁") || query.Contains("哪里") || query.Contains("何时") ||
+            query.Contains("多少") || query.Contains("几") || query.Contains("哪");
         var isFuzzyQuery = !patternResult.Matched && extractedEntity == null
             && metaAssessment.ShouldDelegate && label != "fast" && label != "reflex"
-            && query.Length < 100;
+            && query.Length < 100 && (hasVaguePattern || !hasQuestionWord);
         if (isFuzzyQuery)
         {
-            var isAmbiguous = await IsQueryAmbiguousAsync(query, cancellationToken);
-            if (isAmbiguous)
+            var clarifyQuestions = await GenerateClarificationAsync(query, cancellationToken);
+            if (clarifyQuestions != null)
             {
-                var clarifyQuestions = await GenerateClarificationAsync(query, cancellationToken);
-                if (clarifyQuestions != null)
-                {
-                    yield return "您的提问比较模糊，请问您是指以下哪种情况？\n\n" + clarifyQuestions;
-                    _metaCognition.RecordOutcome(query, false);
-                    _logger.LogInformation("Fuzzy query: yielded clarification questions for: {Query}", query[..Math.Min(query.Length, 60)]);
-                    yield break;
-                }
+                yield return "您的提问比较模糊，请问您是指以下哪种情况？\n\n" + clarifyQuestions;
+                _metaCognition.RecordOutcome(query, false);
+                _logger.LogInformation("Fuzzy query: yielded clarification questions for: {Query}", query[..Math.Min(query.Length, 60)]);
+                yield break;
             }
         }
 
@@ -607,6 +613,18 @@ public sealed class LivingTreeSystem : IAsyncDisposable
             }
 
             fullResponse.Append(responseText.ToString());
+
+            // Text-based tool calls: fallback when model doesn't emit FunctionCallContent.
+            // Parse 【TOOL:name key=val】 patterns from the response text.
+            if (toolCalls.Count == 0)
+            {
+                var textCalls = ParseTextToolCalls(responseText.ToString());
+                if (textCalls.Count > 0)
+                {
+                    toolCalls.AddRange(textCalls);
+                    _logger.LogInformation("TextToolCall: parsed {Count} tool calls from response text", textCalls.Count);
+                }
+            }
 
             if (toolCalls.Count == 0)
             {
@@ -1212,6 +1230,29 @@ public sealed class LivingTreeSystem : IAsyncDisposable
             ["check_type"] = verification.CheckType,
             ["retry_instruction"] = verification.RetryInstruction
         }));
+    }
+
+    private static List<FunctionCallContent> ParseTextToolCalls(string text)
+    {
+        var calls = new List<FunctionCallContent>();
+        foreach (Match m in TextToolCall.Matches(text))
+        {
+            var toolName = m.Groups[1].Value;
+            var argsStr = m.Groups[2].Value;
+            var args = new Dictionary<string, object?>();
+
+            foreach (Match am in Regex.Matches(argsStr, @"(\w[\w_]*)=(""[^""]*""|[^\s】]+)"))
+            {
+                var key = am.Groups[1].Value;
+                var val = am.Groups[2].Value.Trim('"');
+                if (val is "null" or "null!") val = null;
+                args[key] = val;
+            }
+
+            var callId = $"text_{toolName}_{Guid.NewGuid():N}"[..64];
+            calls.Add(new FunctionCallContent(callId, toolName, args));
+        }
+        return calls;
     }
 
     private (List<ChatMessage> Messages, ChatOptions Options) BuildSystemMessages(
