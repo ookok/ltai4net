@@ -351,14 +351,17 @@ public sealed class LivingTreeSystem : IAsyncDisposable
         }
 
         // Layer 2: L1 model plans tool usage → execute → inject results
-        // Runs when Layer 1 didn't match and MetaCog says we're in unfamiliar territory
+        // Runs when Layer 1 didn't match and MetaCog says we're in unfamiliar territory.
+        // Skipped when budget is critically low — save resources for essential processing.
         string? layer2Context = null;
+        var budgetRatio = _bavtRouter.BudgetRatio;
         if (!patternResult.Matched
             && autoSearchContext == null
             && layer1Context == null
             && metaAssessment.ShouldDelegate
             && label != "fast" && label != "reflex"
-            && toolCount > 0)
+            && toolCount > 0
+            && budgetRatio > 0.2f)  // skip Layer2 when budget critically low
         {
             try
             {
@@ -607,9 +610,11 @@ public sealed class LivingTreeSystem : IAsyncDisposable
                     }
                     _logger.LogDebug("Grounding check passed");
 
-                    // LLM-based semantic verification as second pass (only on first attempt with tool data)
+                    // LLM-based semantic verification as second pass (only on first attempt with tool data).
+                    // Skipped when budget is low — prioritise essential processing over verification.
                     if (retryLevel == 0 && !string.IsNullOrWhiteSpace(toolContextForVerification)
-                        && toolContextForVerification!.Length > 200)
+                        && toolContextForVerification!.Length > 200
+                        && budgetRatio > 0.3f)
                     {
                         var llmVerification = await _groundingVerifier.VerifyWithLLMAsync(
                             responseText.ToString(), toolContextForVerification,
@@ -666,6 +671,8 @@ public sealed class LivingTreeSystem : IAsyncDisposable
 
         // MetaCognitiveLayer: record outcome for self-learning
         var finalResponse = fullResponse.ToString();
+
+        _bavtRouter.Spend(1.0); // Track streaming path cost
 
         if (groundingFailed)
         {
@@ -1113,10 +1120,16 @@ public sealed class LivingTreeSystem : IAsyncDisposable
         // High familiarity → domain is well-known → fewer retries needed.
         var blendedConfidence = (float)(avgFamiliarity * 0.6 + erlSuccessRate * 0.4);
         var maxRetries = Math.Clamp((int)(6 - blendedConfidence * 5), 2, 5);
+
+        // Budget-aware cap: low budget → fewer retries, save resources
+        var budgetRatio = _bavtRouter.BudgetRatio;
+        if (budgetRatio < 0.5f) maxRetries = Math.Min(maxRetries, 3);
+        if (budgetRatio < 0.2f) maxRetries = Math.Min(maxRetries, 2);
+
         var forceToolLevel = blendedConfidence < 0.3f ? 1 : 2;
 
-        _logger.LogWarning("Grounding check failed L{Level}/{Max}: {Issue} (type={Type}, fam={Fam:F2}, erl={ERL:F2})",
-            retryLevel, maxRetries, verification.Issue, verification.CheckType, avgFamiliarity, erlSuccessRate);
+        _logger.LogWarning("Grounding check failed L{Level}/{Max}: {Issue} (type={Type}, fam={Fam:F2}, erl={ERL:F2}, budget={Bud:F2})",
+            retryLevel, maxRetries, verification.Issue, verification.CheckType, avgFamiliarity, erlSuccessRate, budgetRatio);
 
         if (retryLevel >= maxRetries)
         {
