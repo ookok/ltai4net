@@ -47,11 +47,7 @@ public sealed class LivingTreeSystem
     private readonly ElasticMemoryOrchestrator _elasticMemory = new();
     private readonly StructuredReflectionEngine _reflectionEngine = new();
     private readonly CoEchoDetector _echoDetector = new();
-    private readonly OTESelector _oteSelector;
     private readonly TaskPipeline _taskPipeline;
-    private readonly AdaptiveDepthController? _depthController;
-    private readonly TieredLoraManager? _tieredLora;
-    private readonly CrossLevelDistiller? _crossDistiller;
     private readonly ICrossRunEvolutionStore? _evolutionStore;
     private readonly IVerifiableRegistry? _verifiableRegistry;
     private int _requestCount;
@@ -77,9 +73,6 @@ public sealed class LivingTreeSystem
     public RoutingGovernor RoutingGovernor => _routing;
     public IChatClient LLMClient => _llm;
     public TaskPipeline TaskPipeline => _taskPipeline;
-    public AdaptiveDepthController? DepthController => _depthController;
-    public TieredLoraManager? TieredLora => _tieredLora;
-    public CrossLevelDistiller? CrossDistiller => _crossDistiller;
 
     public LivingTreeSystem(
         ICognitiveMesh mesh,
@@ -104,9 +97,6 @@ public sealed class LivingTreeSystem
         QueryPatternRouter? patternRouter = null,
         ResponseGroundingVerifier? groundingVerifier = null,
         L1PlanExecutor? planExecutor = null,
-        AdaptiveDepthController? depthController = null,
-        TieredLoraManager? tieredLora = null,
-        CrossLevelDistiller? crossDistiller = null,
         ICrossRunEvolutionStore? evolutionStore = null,
         IVerifiableRegistry? verifiableRegistry = null)
     {
@@ -132,9 +122,6 @@ public sealed class LivingTreeSystem
         _patternRouter = patternRouter ?? new QueryPatternRouter(toolRegistry);
         _groundingVerifier = groundingVerifier ?? new ResponseGroundingVerifier();
         _planExecutor = planExecutor ?? new L1PlanExecutor();
-        _depthController = depthController;
-        _tieredLora = tieredLora;
-        _crossDistiller = crossDistiller;
         _evolutionStore = evolutionStore;
         _verifiableRegistry = verifiableRegistry;
         _taskPipeline = new TaskPipeline(_journal);
@@ -292,7 +279,10 @@ public sealed class LivingTreeSystem
             extractedEntity = (inputResult.Payload?.GetValueOrDefault("entity_root") as string)
                 ?? (inputResult.Payload?.GetValueOrDefault("entity") as string);
         }
-        catch { }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Auto-search JSON parse failed for: {Query}", query);
+        }
 
         model = label switch { "fast" or "reflex" => FlashModel, "deep" => DefaultModel, _ => DefaultModel };
 
@@ -345,7 +335,10 @@ public sealed class LivingTreeSystem
                         using var doc = JsonDocument.Parse(raw);
                         resultCount = doc.RootElement.TryGetProperty("count", out var c) ? c.GetInt32() : 0;
                     }
-                    catch { }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "L0 intent classification failed, falling back to 'deep'");
+        }
 
                     if (resultCount == 0)
                     {
@@ -480,65 +473,9 @@ public sealed class LivingTreeSystem
             }
         }
 
-        var messages = new List<ChatMessage>();
-        var streamOptions = new ChatOptions
-        {
-            ModelId = model,
-            Temperature = 0.3f,
-            MaxOutputTokens = 4096,
-            Tools = _toolRegistry.GetTools().ToList()
-        };
-
-        if (layer1Context != null)
-            messages.Add(new ChatMessage(ChatRole.System, layer1Context));
-
-        if (autoSearchContext != null)
-            messages.Add(new ChatMessage(ChatRole.System, autoSearchContext));
-
-        if (layer2Context != null)
-            messages.Add(new ChatMessage(ChatRole.System, layer2Context));
-
-        // When all layers failed to get data but MetaCog says unfamiliar domain,
-        // force the model to be honest — no fabrication allowed.
-        // Only for non-trivial queries (fast/reflex are simple queries model can handle)
-        var allLayersEmpty = layer1Context == null && layer2Context == null && autoSearchContext == null;
-        if (allLayersEmpty && metaAssessment.ShouldDelegate && label != "fast" && label != "reflex")
-        {
-            messages.Add(new ChatMessage(ChatRole.System,
-                "【系统提示】所有自动工具和搜索均未能获取到相关数据。你必须如实告知用户当前无法回答该问题。" +
-                "严禁编造任何具体数字、名称或事实。可以建议用户提供更多信息或换个方式提问。"));
-        }
-
-        if (toolCount > 0)
-        {
-            var toolNames = string.Join("、", _toolRegistry.ListTools().Take(10));
-            if (layer1Context != null)
-            {
-                // Layer 1 already executed a tool and injected real data.
-                // Model's job is ONLY to summarize the data, not to call more tools.
-                messages.Add(new ChatMessage(ChatRole.System,
-                    $"你可以使用以下工具: {toolNames} 等共 {toolCount} 个。" +
-                    "【关键规则】上面已经通过自动工具获取了真实数据，你的任务是：" +
-                    "1) 严格基于上述【Layer1 自动执行工具】的结果回答用户，一字一句都要有数据依据。" +
-                    "2) 严禁自行推测、联想或编造任何工具结果中不存在的信息。" +
-                    "3) 如果工具结果为空或报错，必须如实告知，不得猜测原因。" +
-                    "4) 不得建议用户去执行命令——系统已经执行过了。"));
-            }
-            else
-            {
-                messages.Add(new ChatMessage(ChatRole.System,
-                    $"你可以使用以下工具: {toolNames} 等共 {toolCount} 个。" +
-                    "重要规则: 1) 遇到需要实时信息、外部数据或事实核查的问题，必须先调用工具再回答。" +
-                    "2) 回答时只能陈述工具返回的事实数据，严禁自行推测、联想或编造任何信息。" +
-                    "3) 如果工具返回空结果或不确定信息，必须如实告知用户'未找到相关信息'。" +
-                    "4) 声称使用了工具（如\"已使用shell_exec\"）必须在响应中发出 tool_call，否则视为编造。"));
-            }
-        }
-
-        if (metaContext != null)
-            messages.Add(new ChatMessage(ChatRole.System, metaContext));
-
-        messages.Add(new ChatMessage(ChatRole.User, $"{dateTag}\n{query}"));
+        var (messages, streamOptions) = BuildSystemMessages(
+            model, layer1Context, autoSearchContext, layer2Context,
+            metaContext, metaAssessment, label, toolCount, dateTag, query);
 
         // ReAct loop: stream response, detect tool calls, execute them, and retry
         var useStreaming = label != "fast" && label != "reflex";
@@ -554,9 +491,12 @@ public sealed class LivingTreeSystem
 
             if (useStreaming)
             {
-                IAsyncEnumerable<ChatResponseUpdate> streamResponse;
+                IAsyncEnumerable<ChatResponseUpdate>? streamResponse = null;
                 try { streamResponse = _llm.GetStreamingResponseAsync(messages, streamOptions, cancellationToken); }
-                catch (Exception ex) { streamResponse = null!; _logger.LogError(ex, "Stream init failed"); }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Stream init failed for query: {Query}", query[..Math.Min(query.Length, 60)]);
+                }
 
                 if (streamResponse == null) { yield return "Error connecting to provider."; yield break; }
 
@@ -626,54 +566,24 @@ public sealed class LivingTreeSystem
                     if (!verification.IsGrounded)
                     {
                         retryLevel++;
-                        var metaMetrics = _metaCognition.GetMetrics();
-                        var avgFamiliarity = metaMetrics.TryGetValue("avg_familiarity", out var af)
-                            ? Convert.ToSingle(af) : 0.1f;
+                        var escalation = await EscalateGroundingFailure(
+                            query, retryLevel, verification, messages,
+                            layer1Context, layer2Context, autoSearchContext, cancellationToken);
 
-                        // Dynamic thresholds from MetaCog domain familiarity:
-                        // Unfamiliar (0.1) → max 5 retries, force tools at L2
-                        // Familiar (0.8+)  → max 2 retries, force tools at L1
-                        var maxRetries = Math.Clamp((int)(6 - avgFamiliarity * 5), 2, 5);
-                        var forceToolLevel = avgFamiliarity < 0.3f ? 1 : 2;
-
-                        _logger.LogWarning("Grounding check failed L{Level}/{Max}: {Issue} (type={Type}, fam={Fam:F2})",
-                            retryLevel, maxRetries, verification.Issue, verification.CheckType, avgFamiliarity);
-
-                        if (retryLevel >= maxRetries)
+                        switch (escalation.Action)
                         {
-                            _metaCognition.RecordOutcome(query, false);
-                            RecordSelfHealingLesson(query, retryLevel, verification.CheckType);
-                            groundingFailed = true;
-
-                            var allContext = new List<string>();
-                            if (layer1Context != null) allContext.Add(layer1Context);
-                            if (layer2Context != null) allContext.Add(layer2Context);
-                            if (autoSearchContext != null) allContext.Add(autoSearchContext);
-
-                            if (allContext.Count > 0)
-                            {
-                                foreach (var ctx in allContext)
-                                    yield return ctx;
-                            }
-                            else
-                            {
-                                yield return "抱歉，经过多次尝试仍无法提供可靠的答案。建议换个方式提问或提供更多具体信息。";
-                            }
-                            break;
+                            case EscalationAction.YieldAndBreak:
+                                groundingFailed = true;
+                                foreach (var chunk in escalation.YieldChunks!)
+                                    yield return chunk;
+                                yield break;
+                            case EscalationAction.Break:
+                                groundingFailed = true;
+                                yield break;
+                            case EscalationAction.Continue:
+                                messages.Add(new ChatMessage(ChatRole.System, escalation.RetryMessage!));
+                                continue;
                         }
-
-                        if (retryLevel >= forceToolLevel)
-                        {
-                            var forcedContext = await ForceExecuteForRetryAsync(query, cancellationToken);
-                            if (forcedContext != null)
-                                messages.Add(new ChatMessage(ChatRole.System,
-                                    $"【系统强制工具执行 L{retryLevel}】以下是为确保回答准确而强制获取的数据，必须基于此回答：\n{forcedContext}"));
-                        }
-
-                        var severity = retryLevel >= maxRetries - 1 ? "【严重警告】" : "";
-                        messages.Add(new ChatMessage(ChatRole.System,
-                            $"{severity}【事实核查失败 L{retryLevel} - {verification.CheckType}】{verification.RetryInstruction}"));
-                        continue;
                     }
                     _logger.LogDebug("Grounding check passed");
 
@@ -758,7 +668,7 @@ public sealed class LivingTreeSystem
             _metaCognition.RecordOutcome(query, !hasFailure);
         }
 
-        if (++_requestCount % 20 == 0)
+        if (Interlocked.Increment(ref _requestCount) % 20 == 0)
         {
             var metrics = _metaCognition.GetMetrics();
             _logger.LogInformation("MetaCognition periodic: queries={Q} delegations={D} rate={R:F2} domains={Dom} familiarity={F:F2}",
@@ -1025,14 +935,6 @@ public sealed class LivingTreeSystem
         return response;
     }
 
-    private string RestartSystem()
-    {
-        _guardian.ResetErrors();
-        _journal.Clear();
-        _logger.LogInformation("System restarted: journal cleared, guardian reset");
-        return "System restarted.";
-    }
-
     private async Task SilentSelfCheckAsync(string response)
     {
         try { await _output.SilentSelfCheckAsync(response); }
@@ -1163,6 +1065,124 @@ public sealed class LivingTreeSystem
         }
 
         return null;
+    }
+
+    private enum EscalationAction { Continue, Break, YieldAndBreak }
+
+    private sealed record EscalationResult(
+        EscalationAction Action,
+        List<string>? YieldChunks = null,
+        string? RetryMessage = null)
+    {
+        public static EscalationResult ContinueLoop(string msg) => new(EscalationAction.Continue, RetryMessage: msg);
+        public static EscalationResult BreakLoop => new(EscalationAction.Break);
+        public static EscalationResult YieldAndBreak(List<string> chunks) => new(EscalationAction.YieldAndBreak, YieldChunks: chunks);
+    }
+
+    private async Task<EscalationResult> EscalateGroundingFailure(
+        string query, int retryLevel, GroundingResult verification,
+        List<ChatMessage> messages, string? layer1Context, string? layer2Context,
+        string? autoSearchContext, CancellationToken ct)
+    {
+        var metaMetrics = _metaCognition.GetMetrics();
+        var avgFamiliarity = metaMetrics.TryGetValue("avg_familiarity", out var af)
+            ? Convert.ToSingle(af) : 0.1f;
+
+        var maxRetries = Math.Clamp((int)(6 - avgFamiliarity * 5), 2, 5);
+        var forceToolLevel = avgFamiliarity < 0.3f ? 1 : 2;
+
+        _logger.LogWarning("Grounding check failed L{Level}/{Max}: {Issue} (type={Type}, fam={Fam:F2})",
+            retryLevel, maxRetries, verification.Issue, verification.CheckType, avgFamiliarity);
+
+        if (retryLevel >= maxRetries)
+        {
+            _metaCognition.RecordOutcome(query, false);
+            RecordSelfHealingLesson(query, retryLevel, verification.CheckType);
+
+            var allContext = new List<string>();
+            if (layer1Context != null) allContext.Add(layer1Context);
+            if (layer2Context != null) allContext.Add(layer2Context);
+            if (autoSearchContext != null) allContext.Add(autoSearchContext);
+
+            if (allContext.Count > 0)
+                return EscalationResult.YieldAndBreak(allContext);
+
+            allContext.Add("抱歉，经过多次尝试仍无法提供可靠的答案。建议换个方式提问或提供更多具体信息。");
+            return EscalationResult.YieldAndBreak(allContext);
+        }
+
+        if (retryLevel >= forceToolLevel)
+        {
+            var forcedContext = await ForceExecuteForRetryAsync(query, ct);
+            if (forcedContext != null)
+                messages.Add(new ChatMessage(ChatRole.System,
+                    $"【系统强制工具执行 L{retryLevel}】以下是为确保回答准确而强制获取的数据，必须基于此回答：\n{forcedContext}"));
+        }
+
+        var severity = retryLevel >= maxRetries - 1 ? "【严重警告】" : "";
+        return EscalationResult.ContinueLoop(
+            $"{severity}【事实核查失败 L{retryLevel} - {verification.CheckType}】{verification.RetryInstruction}");
+    }
+
+    private (List<ChatMessage> Messages, ChatOptions Options) BuildSystemMessages(
+        string model,
+        string? layer1Context, string? autoSearchContext, string? layer2Context,
+        string? metaContext, MetaCognitiveAssessment metaAssessment, string label,
+        int toolCount, string dateTag, string query)
+    {
+        var messages = new List<ChatMessage>();
+        var options = new ChatOptions
+        {
+            ModelId = model,
+            Temperature = 0.3f,
+            MaxOutputTokens = 4096,
+            Tools = _toolRegistry.GetTools().ToList()
+        };
+
+        if (layer1Context != null)
+            messages.Add(new ChatMessage(ChatRole.System, layer1Context));
+        if (autoSearchContext != null)
+            messages.Add(new ChatMessage(ChatRole.System, autoSearchContext));
+        if (layer2Context != null)
+            messages.Add(new ChatMessage(ChatRole.System, layer2Context));
+
+        var allLayersEmpty = layer1Context == null && layer2Context == null && autoSearchContext == null;
+        if (allLayersEmpty && metaAssessment.ShouldDelegate && label != "fast" && label != "reflex")
+        {
+            messages.Add(new ChatMessage(ChatRole.System,
+                "【系统提示】所有自动工具和搜索均未能获取到相关数据。你必须如实告知用户当前无法回答该问题。" +
+                "严禁编造任何具体数字、名称或事实。可以建议用户提供更多信息或换个方式提问。"));
+        }
+
+        if (toolCount > 0)
+        {
+            var toolNames = string.Join("、", _toolRegistry.ListTools().Take(10));
+            if (layer1Context != null)
+            {
+                messages.Add(new ChatMessage(ChatRole.System,
+                    $"你可以使用以下工具: {toolNames} 等共 {toolCount} 个。" +
+                    "【关键规则】上面已经通过自动工具获取了真实数据，你的任务是：" +
+                    "1) 严格基于上述【Layer1 自动执行工具】的结果回答用户，一字一句都要有数据依据。" +
+                    "2) 严禁自行推测、联想或编造任何工具结果中不存在的信息。" +
+                    "3) 如果工具结果为空或报错，必须如实告知，不得猜测原因。" +
+                    "4) 不得建议用户去执行命令——系统已经执行过了。"));
+            }
+            else
+            {
+                messages.Add(new ChatMessage(ChatRole.System,
+                    $"你可以使用以下工具: {toolNames} 等共 {toolCount} 个。" +
+                    "重要规则: 1) 遇到需要实时信息、外部数据或事实核查的问题，必须先调用工具再回答。" +
+                    "2) 回答时只能陈述工具返回的事实数据，严禁自行推测、联想或编造任何信息。" +
+                    "3) 如果工具返回空结果或不确定信息，必须如实告知用户'未找到相关信息'。" +
+                    "4) 声称使用了工具（如\"已使用shell_exec\"）必须在响应中发出 tool_call，否则视为编造。"));
+            }
+        }
+
+        if (metaContext != null)
+            messages.Add(new ChatMessage(ChatRole.System, metaContext));
+
+        messages.Add(new ChatMessage(ChatRole.User, $"{dateTag}\n{query}"));
+        return (messages, options);
     }
 
 }
