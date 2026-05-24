@@ -146,12 +146,12 @@ public sealed class QueryPatternRouter
 
             // Priority 8: Environment processes
             new("processes",
-                new Regex(@"进程|process|运行.*程序|running.*process|ps\s",
+                new Regex(@"\b(?:进程|process)\b|运行.*程序|running.*process|ps\s",
                     RegexOptions.IgnoreCase | RegexOptions.Compiled),
                 "env_processes",
                 (m, q) =>
                 {
-                    var filter = ExtractTargetAfterKeyword(q, "进程|process");
+                    var filter = ExtractTargetAfterKeyword(q, @"\b(?:进程|process)\b");
                     return new Dictionary<string, object?>
                     {
                         ["filter"] = filter ?? null!,

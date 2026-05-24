@@ -363,9 +363,14 @@ public sealed class LivingTreeSystem : IAsyncDisposable
             query.Contains("什么") || query.Contains("怎么") || query.Contains("为什么") ||
             query.Contains("谁") || query.Contains("哪里") || query.Contains("何时") ||
             query.Contains("多少") || query.Contains("几") || query.Contains("哪");
+        var isImperative = query.StartsWith("列出") || query.StartsWith("显示") ||
+            query.StartsWith("查看") || query.StartsWith("找到") || query.StartsWith("运行") ||
+            query.StartsWith("执行") || query.StartsWith("打开") || query.StartsWith("读取") ||
+            query.StartsWith("list") || query.StartsWith("show") || query.StartsWith("find") ||
+            query.StartsWith("run") || query.StartsWith("get") || query.StartsWith("count");
         var isFuzzyQuery = !patternResult.Matched && extractedEntity == null
             && metaAssessment.ShouldDelegate && label != "fast" && label != "reflex"
-            && query.Length < 100 && (hasVaguePattern || !hasQuestionWord);
+            && query.Length < 100 && !isImperative && (hasVaguePattern || !hasQuestionWord);
         if (isFuzzyQuery)
         {
             var clarifyQuestions = await GenerateClarificationAsync(query, cancellationToken);
@@ -454,6 +459,51 @@ public sealed class LivingTreeSystem : IAsyncDisposable
             catch (Exception ex)
             {
                 _logger.LogDebug(ex, "Layer2 planning exception");
+            }
+        }
+
+        // Speculative tool execution (FlashAR-inspired): pre-execute top tools in parallel.
+        if (!patternResult.Matched && layer1Context == null && layer2Context == null
+            && label != "fast" && label != "reflex" && toolCount > 0 && _bavtRouter.BudgetRatio > 0.4f)
+        {
+            yield return "\uD83D\uDE80 ";
+            var speculativeResults = new List<string>();
+            var tasks = new List<(string Name, Task<object?> Task)>();
+
+            if (_toolRegistry.HasTool("web_search"))
+                tasks.Add(("web_search", _toolRegistry.InvokeAsync("web_search",
+                    new Dictionary<string, object?> { ["query"] = query, ["maxResults"] = 3 }, cancellationToken)));
+
+            if (_toolRegistry.HasTool("env_sysinfo"))
+                tasks.Add(("env_sysinfo", _toolRegistry.InvokeAsync("env_sysinfo",
+                    new Dictionary<string, object?>(), cancellationToken)));
+
+            if (_toolRegistry.HasTool("env_processes"))
+                tasks.Add(("env_processes", _toolRegistry.InvokeAsync("env_processes",
+                    new Dictionary<string, object?> { ["filter"] = null!, ["top"] = 10 }, cancellationToken)));
+
+            if (tasks.Count > 1)
+            {
+                await Task.WhenAll(tasks.Select(t => t.Task));
+                foreach (var (name, task) in tasks)
+                {
+                    try
+                    {
+                        var text = (await task)?.ToString();
+                        if (!string.IsNullOrWhiteSpace(text) && text.Length > 20)
+                            speculativeResults.Add($"### {name}\n{text[..Math.Min(text.Length, 2000)]}");
+                    }
+                    catch { }
+                }
+
+                if (speculativeResults.Count > 0)
+                {
+                    var speculativeContext = "【投机预执行结果（FlashAR）】以下工具已并行预执行，请基于这些结果直接回答，无需重复调用：\n\n" +
+                        string.Join("\n\n", speculativeResults) +
+                        "\n\n---\n以上数据已就绪，请直接总结回答。";
+                    layer2Context = (layer2Context != null ? layer2Context + "\n\n" : "") + speculativeContext;
+                    _logger.LogInformation("SpeculativeExec: pre-executed {Count} tools in parallel", speculativeResults.Count);
+                }
             }
         }
 
