@@ -242,6 +242,7 @@ public sealed class LivingTreeSystem : IAsyncDisposable
         }
 
         // Layer 1: Pattern-based tool execution (deterministic, no model call needed)
+        yield return "\uD83D\uDD0D ";
         var patternResult = await _patternRouter.MatchAndExecuteAsync(query, cancellationToken);
         string? layer1Context = null;
         bool layer1HighConfidence = false;
@@ -717,9 +718,10 @@ public sealed class LivingTreeSystem : IAsyncDisposable
             messages.Add(new ChatMessage(ChatRole.Assistant, assistantReply) { Contents = new List<AIContent>(toolCalls) });
 
             foreach (var tc in toolCalls)
+        {
+            yield return "\uD83D\uDCCB ";
+            try
             {
-                try
-                {
                     var args = new Dictionary<string, object?>();
                     if (tc.Arguments != null)
                     {
@@ -772,6 +774,13 @@ public sealed class LivingTreeSystem : IAsyncDisposable
 
         _bavtRouter.Spend(1.0); // Track streaming path cost
 
+        // Confidence calibration: back-propagate ERL outcomes to MetaCog familiarity
+        var erlRate = _erlLoop.SuccessRate;
+        if (erlRate > 0 && erlRate < 0.5f && patternResult.ToolName != null)
+            _metaCognition.ReinforceDomain(patternResult.ToolName, -0.05f);
+        else if (erlRate > 0.7f && patternResult.ToolName != null)
+            _metaCognition.ReinforceDomain(patternResult.ToolName, 0.02f);
+
         if (groundingFailed)
         {
             _metaCognition.RecordOutcome(query, false);
@@ -779,19 +788,25 @@ public sealed class LivingTreeSystem : IAsyncDisposable
         }
         else if (layer1HighConfidence)
         {
-            // Layer 1 provided ground truth data → boost success confidence and reinforce domain
             _metaCognition.RecordOutcome(query, true);
             if (patternResult.ToolName != null)
                 _metaCognition.ReinforceDomain(patternResult.ToolName, 0.1f);
         }
         else
         {
-            // Standard outcome recording with stricter failure detection
             var hasFailure = finalResponse.Contains("未找到相关信息")
                 || finalResponse.Contains("无法")
                 || finalResponse.Length <= 20;
             _metaCognition.RecordOutcome(query, !hasFailure);
         }
+
+        // DreamCycle realtime: instant quality reflection (fire-and-forget, non-blocking)
+        if (!groundingFailed && !layer1HighConfidence && finalResponse.Length > 100)
+            _workQueue.Enqueue(async ct =>
+            {
+                try { await _dreamCycle?.ForceReflectionAsync(); }
+                catch { }
+            }, "DreamCycle realtime");
 
         if (Interlocked.Increment(ref _requestCount) % 20 == 0)
         {
