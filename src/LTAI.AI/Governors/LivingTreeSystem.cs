@@ -16,7 +16,7 @@ using Microsoft.Extensions.Options;
 
 namespace LTAI.AI.Governors;
 
-public sealed class LivingTreeSystem
+public sealed class LivingTreeSystem : IAsyncDisposable
 {
     private readonly ICognitiveMesh _mesh;
     private readonly TaskJournal _journal;
@@ -41,6 +41,7 @@ public sealed class LivingTreeSystem
     private readonly QueryPatternRouter _patternRouter;
     private readonly ResponseGroundingVerifier _groundingVerifier;
     private readonly L1PlanExecutor _planExecutor;
+    private readonly BackgroundWorkQueue _workQueue;
 
     private readonly BAVTRouter _bavtRouter = new(100.0);
     private readonly ERLLoop _erlLoop = new();
@@ -97,6 +98,7 @@ public sealed class LivingTreeSystem
         QueryPatternRouter? patternRouter = null,
         ResponseGroundingVerifier? groundingVerifier = null,
         L1PlanExecutor? planExecutor = null,
+        BackgroundWorkQueue? workQueue = null,
         ICrossRunEvolutionStore? evolutionStore = null,
         IVerifiableRegistry? verifiableRegistry = null)
     {
@@ -122,6 +124,7 @@ public sealed class LivingTreeSystem
         _patternRouter = patternRouter ?? new QueryPatternRouter(toolRegistry);
         _groundingVerifier = groundingVerifier ?? new ResponseGroundingVerifier();
         _planExecutor = planExecutor ?? new L1PlanExecutor();
+        _workQueue = workQueue ?? new BackgroundWorkQueue();
         _evolutionStore = evolutionStore;
         _verifiableRegistry = verifiableRegistry;
         _taskPipeline = new TaskPipeline(_journal);
@@ -183,27 +186,15 @@ public sealed class LivingTreeSystem
             _journal.Complete(entry, response.Response[..Math.Min(response.Response.Length, 500)]);
 
             var reply = response.Response;
-            _ = Task.Run(async () =>
-            {
-                try { await SilentSelfCheckAsync(reply); }
-                catch (Exception ex) { _logger.LogDebug(ex, "Silent self-check failed"); }
-            }, cancellationToken).ContinueWith(t =>
-            {
-                if (t.IsFaulted && t.Exception != null)
-                    _logger.LogDebug(t.Exception, "Silent self-check background task failed");
-            }, TaskContinuationOptions.OnlyOnFaulted);
+            _workQueue.Enqueue(async ct => { try { await SilentSelfCheckAsync(reply); } catch { } }, "SilentSelfCheck");
 
             if (_dna != null && !string.IsNullOrEmpty(reply))
             {
-                _ = Task.Run(async () =>
+                _workQueue.Enqueue(async ct =>
                 {
-                    try { await _dna.ProcessAsync(query, reply, cancellationToken); }
-                    catch (Exception ex) { _logger.LogDebug(ex, "DNA background process failed"); }
-                }, cancellationToken).ContinueWith(t =>
-                {
-                    if (t.IsFaulted && t.Exception != null)
-                        _logger.LogDebug(t.Exception, "DNA background task failed");
-                }, TaskContinuationOptions.OnlyOnFaulted);
+                    try { await _dna.ProcessAsync(query, reply, ct); }
+                    catch { }
+                }, "DNA process");
             }
 
             return reply;
@@ -830,9 +821,9 @@ public sealed class LivingTreeSystem
         _echoDetector.RecordResponse(model, response[..Math.Min(response.Length, 500)]);
         if (_taskPipeline.HasPending) _logger.LogDebug("TaskPipeline: {Count} pending tasks", _taskPipeline.GetStats()["pending"]);
 
-        if (++_requestCount % TrainingInterval == 0 && _options.Value.AI.OnnxEnabled)
+        if (Interlocked.Increment(ref _requestCount) % TrainingInterval == 0 && _options.Value.AI.OnnxEnabled)
         {
-            _ = Task.Run(() => TriggerPeriodicTraining());
+            _workQueue.Enqueue(async ct => { try { await Task.Run(() => TriggerPeriodicTraining(), ct); } catch { } }, "PeriodicTraining");
         }
 
         if (_dna != null)
@@ -873,15 +864,15 @@ public sealed class LivingTreeSystem
 
         _dreamCycle?.RecordInteraction();
 
-        _ = Task.Run(async () =>
+        _workQueue.Enqueue(async ct =>
         {
             try { await _self.ProcessAsync(new Handshake
             {
                 To = "self", Action = "start_trace",
                 Payload = new Dictionary<string, object?> { ["trace_id"] = traceId }
-            }, cancellationToken); }
-            catch (Exception ex) { _logger.LogDebug(ex, "Self governor trace failed"); }
-        }, cancellationToken);
+            }, ct); }
+            catch { }
+        }, "SelfGovernor trace");
 
         return GovernorOutput.Success(response, traceId);
     }
@@ -911,14 +902,13 @@ public sealed class LivingTreeSystem
         // Fire-and-forget review: doesn't block the critical path
         var capturedResponse = response;
         var capturedPrompt = iterativePrompt;
-        _ = Task.Run(async () =>
+        _workQueue.Enqueue(async ct =>
         {
             try
             {
                 var reviewPrompt = $"Review this response for accuracy and completeness. If it needs improvement, provide the improved version:\n\n{capturedResponse}";
                 var reviewOptions = new ChatOptions { ModelId = baseOptions.ModelId, Temperature = 0.1f, MaxOutputTokens = 2048 };
-                using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(2));
-                var reviewed = await _llm.CompleteAsync(reviewPrompt, reviewOptions, cts.Token);
+                var reviewed = await _llm.CompleteAsync(reviewPrompt, reviewOptions, ct);
                 if (!string.IsNullOrWhiteSpace(reviewed))
                 {
                     _synapticMemory?.Store(new SynapticExperience
@@ -929,8 +919,8 @@ public sealed class LivingTreeSystem
                     });
                 }
             }
-            catch (Exception ex) { _logger.LogDebug(ex, "Background review skipped"); }
-        });
+            catch { }
+        }, "LLM review");
 
         return response;
     }
@@ -1183,6 +1173,12 @@ public sealed class LivingTreeSystem
 
         messages.Add(new ChatMessage(ChatRole.User, $"{dateTag}\n{query}"));
         return (messages, options);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        await _workQueue.DisposeAsync();
+        GC.SuppressFinalize(this);
     }
 
 }

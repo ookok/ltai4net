@@ -331,6 +331,11 @@ public static class ServiceCollectionExtensions
 
         services.AddSingleton<ResponseGroundingVerifier>();
         services.AddSingleton<L1PlanExecutor>();
+        services.AddSingleton<BackgroundWorkQueue>(sp =>
+        {
+            var logger = sp.GetService<ILogger<BackgroundWorkQueue>>();
+            return new BackgroundWorkQueue(capacity: 64, logger);
+        });
 
         services.AddSingleton<SkillTree>(sp =>
         {
