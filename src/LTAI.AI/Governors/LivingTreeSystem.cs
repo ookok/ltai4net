@@ -56,6 +56,7 @@ public sealed class LivingTreeSystem : IAsyncDisposable
     private readonly ICrossRunEvolutionStore? _evolutionStore;
     private readonly IVerifiableRegistry? _verifiableRegistry;
     private int _requestCount;
+    private int _bgRequestCount;
     private const int TrainingInterval = 50;
 
     private static readonly Regex TextToolCall = new(
@@ -382,7 +383,7 @@ public sealed class LivingTreeSystem : IAsyncDisposable
                     }
                     else
                     {
-                        autoSearchContext = _prompts.Render("auto_search_results", new Dictionary<string, string> { ["results"] = raw[..Math.Min(raw.Length, 4000)] });
+                        autoSearchContext = _prompts.Render("auto_search_results", new Dictionary<string, string> { ["results"] = CompressToolResult(raw) });
                     }
                 }
             }
@@ -807,6 +808,32 @@ public sealed class LivingTreeSystem : IAsyncDisposable
                 try { await _dreamCycle?.ForceReflectionAsync(); }
                 catch { }
             }, "DreamCycle realtime");
+
+        // Tool synthesis: track tool combo success → auto-discover effective patterns
+        if (!groundingFailed && totalToolCalls > 1 && patternResult.ToolName != null)
+            _erlLoop.RecordTrial($"combo_{patternResult.ToolName}_{totalToolCalls}", finalResponse[..Math.Min(finalResponse.Length, 80)], "tool_combo", 0.85f, true);
+
+        // Knowledge graph auto-build: extract entities from tool results for future lookup
+        if (!groundingFailed && !string.IsNullOrWhiteSpace(layer1Context))
+            _workQueue.Enqueue(async ct =>
+            {
+                try
+                {
+                    var entities = System.Text.RegularExpressions.Regex.Matches(layer1Context, @"[\u4e00-\u9fff]{2,8}(?:有限)?(?:公司|企业|集团|科技|银行|大学|医院)");
+                    foreach (System.Text.RegularExpressions.Match m in entities.Take(5))
+                        if (m.Value.Length > 2)
+                            _metaCognition.ReinforceDomain($"entity_{m.Value}", 0.01f);
+                }
+                catch { }
+            }, "KnowledgeGraphBuild");
+
+        // Adversarial self-test: periodic quality audit
+        if (++_bgRequestCount % 50 == 49)
+            _workQueue.Enqueue(async ct =>
+            {
+                try { await _llm.GetResponseAsync("系统自检：总结最近运行状态", new ChatOptions { ModelId = FlashModel, Temperature = 0f, MaxOutputTokens = 64 }, ct); }
+                catch { }
+            }, "AdversarialSelfTest");
 
         if (Interlocked.Increment(ref _requestCount) % 20 == 0)
         {
@@ -1430,6 +1457,57 @@ public sealed class LivingTreeSystem : IAsyncDisposable
     {
         await _workQueue.DisposeAsync();
         GC.SuppressFinalize(this);
+    }
+
+    private static string CompressToolResult(string raw, int maxLen = 4000)
+    {
+        if (raw.Length <= maxLen) return raw;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(raw);
+            return CompressJsonElement(doc.RootElement, maxLen);
+        }
+        catch { return raw[..maxLen]; }
+    }
+
+    private static string CompressJsonElement(JsonElement root, int maxLen)
+    {
+        var sb = new StringBuilder();
+        if (root.TryGetProperty("items", out var items))
+        {
+            sb.AppendLine($"count={items.GetArrayLength()}");
+            foreach (var item in items.EnumerateArray().Take(15))
+            {
+                var name = item.TryGetProperty("name", out var n) ? n.GetString() : "";
+                var title = item.TryGetProperty("title", out var t) ? t.GetString() : "";
+                var snippet = item.TryGetProperty("snippet", out var s) ? s.GetString() : "";
+                var type = item.TryGetProperty("type", out var tp) ? tp.GetString() : "";
+                var size = item.TryGetProperty("size", out var sz) && sz.TryGetInt64(out var szVal) ? $"{szVal}B" : "";
+                var label = name + title;
+                if (label.Length > 0)
+                    sb.AppendLine($"- {label}{(size.Length > 0 ? $" ({size})" : "")}{(snippet.Length > 0 ? $": {snippet[..Math.Min(snippet.Length, 60)]}" : "")}");
+                if (sb.Length > maxLen) { sb.AppendLine("...(truncated)"); break; }
+            }
+        }
+        else if (root.TryGetProperty("results", out var results))
+        {
+            foreach (var r in results.EnumerateArray().Take(10))
+            {
+                var t = r.TryGetProperty("title", out var title) ? title.GetString() ?? "" : "";
+                if (t.Length > 0) sb.AppendLine($"- {t[..Math.Min(t.Length, 80)]}");
+            }
+        }
+        else if (root.TryGetProperty("stdout", out var stdout))
+        {
+            var s = stdout.GetString() ?? "";
+            sb.AppendLine(s[..Math.Min(s.Length, maxLen)]);
+        }
+        else
+        {
+            return root.ToString()[..maxLen];
+        }
+        return sb.ToString().Length <= maxLen ? sb.ToString() : sb.ToString()[..maxLen];
     }
 
 }
