@@ -582,22 +582,8 @@ public sealed class LivingTreeSystem : IAsyncDisposable
 
         // ReAct loop: stream response, detect tool calls, execute them, and retry
         var useStreaming = label != "fast" && label != "reflex";
-
-        // Self-healing: auto-switch to fallback if current model is unhealthy
-        var activeModel = model;
-        if (!_health.IsHealthy(activeModel))
-        {
-            var fallback = GetDegradedModel(activeModel);
-            if (fallback != activeModel)
-            {
-                _logger.LogWarning("ModelHealth: switching {From} → {To} (health={Health:F2})",
-                    activeModel, fallback, _health.GetHealth(activeModel));
-                activeModel = fallback;
-                streamOptions.ModelId = fallback;
-            }
-        }
         var fullResponse = new StringBuilder();
-        var totalToolCalls = 0;
+        var totalToolCalls = patternResult.Matched ? 1 : 0; // Layer 1 tools count too
         var retryLevel = 0;
         var groundingFailed = false;
         const int maxToolRounds = 5;
@@ -783,9 +769,9 @@ public sealed class LivingTreeSystem : IAsyncDisposable
         // Model health tracking
         if (!string.IsNullOrEmpty(finalResponse) && finalResponse.Length > 20
             && !finalResponse.Contains("模型调用失败") && !groundingFailed)
-            _health.RecordSuccess(activeModel);
+            _health.RecordSuccess(model);
         else if (!layer1HighConfidence)
-            _health.RecordFailure(activeModel);
+            _health.RecordFailure(model);
 
         // Post-response follow-up: generate related questions from tool context
         if (!groundingFailed && !layer1HighConfidence && finalResponse.Length > 50)
@@ -939,7 +925,7 @@ public sealed class LivingTreeSystem : IAsyncDisposable
         if (finalResponse.Length > 10)
         {
             var trace = $"\n\n---\n[决策: L0={label}, L1={patternResult.Matched}, L2={layer2Context != null}, " +
-                $"Model={activeModel}, Tools={totalToolCalls}, Grounding={!groundingFailed}, " +
+                $"Model={model}, Tools={totalToolCalls}, Grounding={!groundingFailed}, " +
                 $"Familiarity={metaAssessment.Familiarity:F2}, Budget={_bavtRouter.BudgetRatio:F2}, " +
                 $"Time={DateTime.UtcNow:HH:mm:ss}]";
             yield return trace;
@@ -983,7 +969,7 @@ public sealed class LivingTreeSystem : IAsyncDisposable
                 try
                 {
                     await _dna.Consciousness.ProcessExperienceAsync(
-                        $"SYSTEM CRASH: empty response after L{retryLevel} retries. Query: '{query[..Math.Min(query.Length, 60)]}'. Model: {activeModel}",
+                        $"SYSTEM CRASH: empty response after L{retryLevel} retries. Query: '{query[..Math.Min(query.Length, 60)]}'. Model: {model}",
                         new Dictionary<string, object?>(), ct);
                 }
                 catch { }
