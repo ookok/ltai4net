@@ -1594,25 +1594,34 @@ public sealed class LivingTreeSystem : IAsyncDisposable
 
     private async Task<string?> ForceExecuteForRetryAsync(string query, CancellationToken ct)
     {
-        // Force auto-search as last-resort data injection before retry
-        if (_toolRegistry.HasTool("web_search"))
+        if (!_toolRegistry.HasTool("web_search")) return null;
+
+        var allResults = new List<string>();
+        var keywords = query.Replace("搜索", "").Replace("查找", "").Replace("帮我查", "").Trim();
+        var variants = new[] { query, keywords + " 是什么", keywords + " 公司" }
+            .Distinct().Take(3).ToArray();
+
+        foreach (var variant in variants)
         {
             try
             {
                 var result = await _toolRegistry.InvokeAsync("web_search",
-                    new Dictionary<string, object?> { ["query"] = query, ["maxResults"] = 3 }, ct);
+                    new Dictionary<string, object?> { ["query"] = variant, ["maxResults"] = 3 }, ct);
                 var text = result?.ToString();
                 if (!string.IsNullOrWhiteSpace(text) && text.Length > 50)
-                {
-                    var truncated = text.Length > 2000 ? text[..2000] : text;
-                    return $"【强制搜索】以下是为确保事实准确性而强制执行的搜索结果：\n{truncated}";
-                }
+                    allResults.Add($"### 搜索 \"{variant}\"\n{text[..Math.Min(text.Length, 1500)]}");
             }
             catch (Exception ex)
             {
-                _logger.LogDebug(ex, "ForceExecuteForRetry web_search failed");
+                _logger.LogDebug(ex, "ForceExecuteForRetry variant '{Variant}' failed", variant);
             }
         }
+
+        if (allResults.Count > 0)
+            return $"【强制搜索 - 尝试多种查询】以下是为确保准确性而执行的搜索，请自行判断相关性：\n\n{string.Join("\n\n", allResults)}";
+
+        // Fallback: shell_exec for file queries
+        if (_toolRegistry.HasTool("shell_exec") && query.Contains("文件"))
 
         // Also try filesystem_list for relevant queries
         if (_toolRegistry.HasTool("shell_exec") && query.Contains("文件"))
