@@ -1592,16 +1592,30 @@ public sealed class LivingTreeSystem : IAsyncDisposable
         }
     }
 
+    private async Task<List<string>> GenerateSearchVariantsAsync(string query, CancellationToken ct)
+    {
+        try
+        {
+            var prompt = $"Search: \"{query}\"\n\nGenerate 2-3 alternative search queries that might yield better results. Output one query per line. No explanation.";
+            var result = await _llm.GetResponseAsync(prompt, new ChatOptions { ModelId = FlashModel, Temperature = 0.3f, MaxOutputTokens = 128, Tools = new List<AITool>() }, ct);
+            var text = result.Text?.Trim();
+            if (string.IsNullOrWhiteSpace(text)) return new List<string> { query };
+            return text.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+                .Select(l => l.Trim().TrimStart('-', '•', '*', '1', '2', '3', '.', ' '))
+                .Where(l => l.Length > 1).ToList();
+        }
+        catch { return new List<string> { query }; }
+    }
+
     private async Task<string?> ForceExecuteForRetryAsync(string query, CancellationToken ct)
     {
         if (!_toolRegistry.HasTool("web_search")) return null;
 
         var allResults = new List<string>();
-        var keywords = query.Replace("搜索", "").Replace("查找", "").Replace("帮我查", "").Trim();
-        var variants = new[] { query, keywords + " 是什么", keywords + " 公司" }
-            .Distinct().Take(3).ToArray();
+        var variants = await GenerateSearchVariantsAsync(query, ct);
+        variants = variants.Count > 0 ? variants : new List<string> { query };
 
-        foreach (var variant in variants)
+        foreach (var variant in variants.Take(3))
         {
             try
             {
@@ -1618,7 +1632,7 @@ public sealed class LivingTreeSystem : IAsyncDisposable
         }
 
         if (allResults.Count > 0)
-            return $"【强制搜索 - 尝试多种查询】以下是为确保准确性而执行的搜索，请自行判断相关性：\n\n{string.Join("\n\n", allResults)}";
+            return $"【强制搜索】以下是为确保准确性而执行的搜索结果，请自行判断相关性：\n\n{string.Join("\n\n", allResults)}";
 
         // Fallback: shell_exec for file queries
         if (_toolRegistry.HasTool("shell_exec") && query.Contains("文件"))
