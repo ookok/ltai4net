@@ -59,7 +59,7 @@ internal static class DebugMode
 
         var toolRegistry = sp.GetRequiredService<AIToolRegistry>();
         await toolRegistry.RegisterAllToolCategoriesAsync();
-        Console.WriteLine($"Registered {toolRegistry.ListTools().Count()} tools");
+        Console.WriteLine($"可用 {toolRegistry.ListTools().Count()} 个工具（查询时按需选择）");
 
         var hasProvider = options.AI.Providers.Any(kv => !string.IsNullOrEmpty(kv.Value.Endpoint));
         if (!hasProvider)
