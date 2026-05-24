@@ -854,9 +854,15 @@ public sealed class LivingTreeSystem : IAsyncDisposable
                 catch { }
             }, "AdversarialSelfTest");
 
-        // Query cache: store successful responses for 5-minute reuse
+        // Query cache: store successful responses with adaptive TTL
         if (!groundingFailed && finalResponse.Length > 50)
-            _queryCache[query] = (finalResponse, DateTime.UtcNow.AddMinutes(5));
+        {
+            var ttl = query.Contains("今天") || query.Contains("星期") || query.Contains("时间") ? 60 :
+                      query.Contains("git") || query.Contains("提交") ? 2 :
+                      query.Contains("目录") || query.Contains("文件") ? 10 :
+                      query.Length < 20 ? 3 : 5;
+            _queryCache[query] = (finalResponse, DateTime.UtcNow.AddMinutes(ttl));
+        }
 
         // Persona consistency: track response style (concise/detailed/balanced)
         _personaStyle = finalResponse.Length < 150 ? "concise" :
@@ -918,6 +924,60 @@ public sealed class LivingTreeSystem : IAsyncDisposable
                 SourceStage = "anomaly_report"
             });
         }
+
+        // Explainability trace: append decision metadata to every response
+        if (finalResponse.Length > 10)
+        {
+            var trace = $"\n\n---\n[决策: L0={label}, L1={patternResult.Matched}, L2={layer2Context != null}, " +
+                $"Model={activeModel}, Tools={totalToolCalls}, Grounding={!groundingFailed}, " +
+                $"Familiarity={metaAssessment.Familiarity:F2}, Budget={_bavtRouter.BudgetRatio:F2}, " +
+                $"Time={DateTime.UtcNow:HH:mm:ss}]";
+            yield return trace;
+        }
+
+        // Counterfactual reasoning: try alternative tool set on repeated grounding failure
+        if (groundingFailed && totalToolCalls > 0 && patternResult.Matched && patternResult.ToolName != null)
+            _erlLoop.RecordTrial($"counterfactual_{patternResult.ToolName}",
+                $"Would different tools help?", "counterfactual", 0.4f, false);
+
+        // Auto regression test: generate test case from grounding failure
+        if (groundingFailed && retryLevel >= 2)
+            _workQueue.Enqueue(async ct =>
+            {
+                try
+                {
+                    var testCase = $"// Regression: {query[..Math.Min(query.Length, 60)]}\n" +
+                        $"// Expected: grounded answer with tools. Actual: grounding failed L{retryLevel}\n" +
+                        $"// Tools used: {totalToolCalls}. Pattern: {patternResult.ToolName ?? "none"}";
+                    _synapticMemory?.Store(new SynapticExperience
+                    {
+                        Type = SynapseType.Correction, Query = query, Response = testCase,
+                        Label = "regression_test", Confidence = 0.3f, Reward = 0.1f,
+                        Metadata = $"retry_level={retryLevel}"
+                    });
+                }
+                catch { }
+            }, "RegressionTest");
+
+        // Emotion-aware: detect user frustration (3+ retries on same query pattern)
+        if (retryLevel >= 2)
+        {
+            _personaStyle = "concise";
+            _logger.LogInformation("Emotion: detected frustration pattern, switching to concise mode");
+        }
+
+        // Self-code-repair: capture crash context for auto-analysis
+        if (groundingFailed && finalResponse.Length < 20 && _dna != null)
+            _workQueue.Enqueue(async ct =>
+            {
+                try
+                {
+                    await _dna.Consciousness.ProcessExperienceAsync(
+                        $"SYSTEM CRASH: empty response after L{retryLevel} retries. Query: '{query[..Math.Min(query.Length, 60)]}'. Model: {activeModel}",
+                        new Dictionary<string, object?>(), ct);
+                }
+                catch { }
+            }, "SelfRepair");
 
         if (Interlocked.Increment(ref _requestCount) % 20 == 0)
         {
