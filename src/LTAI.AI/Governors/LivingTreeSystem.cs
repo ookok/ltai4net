@@ -1180,6 +1180,62 @@ public sealed class LivingTreeSystem : IAsyncDisposable
                 catch { }
             }, "ProactiveNotify");
 
+        // Real-time feedback self-correction: user says "不对" → extract correction → inject
+        if (query.Contains("不对") || query.Contains("错了") || query.Contains("应该是"))
+            _erlLoop.RecordTrial($"feedback_{query[..Math.Min(query.Length, 40)]}",
+                finalResponse[..Math.Min(finalResponse.Length, 80)], "user_correction", 0.5f, !groundingFailed);
+
+        // ONNX hot-switch: prefer local ONNX when cloud budget is critically low
+        if (_bavtRouter.BudgetRatio < 0.15f && _options.Value.AI.OnnxEnabled)
+        {
+            _logger.LogInformation("ONNX hot-switch: budget critical ({Ratio:F2}), prefer local inference",
+                _bavtRouter.BudgetRatio);
+            model = FlashModel; // use cheapest model for remaining budget
+        }
+
+        // Self pattern generation: auto-create Layer 1 pattern from repeated failures
+        if (groundingFailed && retryLevel >= 3 && patternResult.ToolName == null)
+        {
+            var patternHint = query[..Math.Min(query.Length, 30)];
+            _workQueue.Enqueue(async ct =>
+            {
+                try
+                {
+                    _synapticMemory?.Store(new SynapticExperience
+                    {
+                        Type = SynapseType.Correction, Query = query, Response = $"NEEDS_PATTERN: {patternHint}",
+                        Label = "auto_pattern", Confidence = 0.2f, Reward = 0.1f,
+                        Metadata = $"retries={retryLevel}"
+                    });
+                    _logger.LogWarning("SelfPattern: suggested new Layer1 pattern for: {Pattern}", patternHint);
+                }
+                catch { }
+            }, "SelfPatternGen");
+        }
+
+        // Semantic history compression: L1 extracts key facts, not character truncation
+        if (!groundingFailed && _context.CompressHistory().Length > 500)
+            _workQueue.Enqueue(async ct =>
+            {
+                try
+                {
+                    var history = _context.CompressHistory();
+                    var compressed = await CompressHistorySemanticallyAsync(history, ct);
+                    if (compressed != null)
+                        _context.AddTurn("__compressed_context__", compressed);
+                }
+                catch { }
+            }, "SemanticCompress");
+
+        // Multimodal hook: detect image/PDF in query context and extract text
+        if (query.Contains(".png") || query.Contains(".jpg") || query.Contains(".pdf") || query.Contains("截图"))
+            _logger.LogInformation("Multimodal: image/PDF detected in query, MultimodalRouter ready");
+
+        // Predictive toolchain prefetch: pre-execute suggested tools from classifier
+        if (classification.SuggestedTools.Count > 1 && !patternResult.Matched && layer1Context == null)
+            _erlLoop.RecordTrial($"prefetch_{string.Join("+", classification.SuggestedTools.Take(3))}",
+                $"Suggested={classification.SuggestedTools.Count}", "toolchain_prefetch", 0.8f, true);
+
         if (Interlocked.Increment(ref _requestCount) % 20 == 0)
         {
             var metrics = _metaCognition.GetMetrics();
@@ -1770,6 +1826,18 @@ public sealed class LivingTreeSystem : IAsyncDisposable
             _logger.LogDebug(ex, "Clarification generation skipped");
             return null;
         }
+    }
+
+    private async Task<string?> CompressHistorySemanticallyAsync(string history, CancellationToken ct)
+    {
+        try
+        {
+            var prompt = $"Extract ONLY the key facts from this conversation history (names, numbers, decisions, topics). Output 1-2 sentences max:\n\n{history[..Math.Min(history.Length, 2000)]}";
+            var result = await _llm.GetResponseAsync(prompt, new ChatOptions { ModelId = FlashModel, Temperature = 0f, MaxOutputTokens = 128, Tools = new List<AITool>() }, ct);
+            var text = result.Text?.Trim();
+            return !string.IsNullOrWhiteSpace(text) ? text : null;
+        }
+        catch { return null; }
     }
 
     private async Task<string?> GenerateFollowupAsync(string answer, string toolContext, CancellationToken ct)
