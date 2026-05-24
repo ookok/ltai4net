@@ -541,6 +541,15 @@ public sealed class LivingTreeSystem : IAsyncDisposable
         if (memoryContext != null)
             messages.Insert(0, new ChatMessage(ChatRole.System, memoryContext));
 
+        // Inject multi-turn conversation history as context (skip for Layer1 bypass)
+        if (!layer1HighConfidence)
+        {
+            var history = _context.CompressHistory();
+            if (history.Length > 0)
+                messages.Insert(0, new ChatMessage(ChatRole.System,
+                    $"【此前对话】\n{history}\n\n请基于以上对话历史理解用户当前问题的上下文。"));
+        }
+
         // ReAct loop: stream response, detect tool calls, execute them, and retry
         var useStreaming = label != "fast" && label != "reflex";
 
@@ -749,6 +758,7 @@ public sealed class LivingTreeSystem : IAsyncDisposable
         // Post-response follow-up: generate related questions from tool context
         if (!groundingFailed && !layer1HighConfidence && finalResponse.Length > 50)
         {
+            _context.AddTurn(query, finalResponse);
             var toolCtx = layer1Context ?? layer2Context ?? autoSearchContext;
             if (!string.IsNullOrWhiteSpace(toolCtx) && toolCtx.Length > 100)
             {
