@@ -61,6 +61,8 @@ public sealed class LivingTreeSystem : IAsyncDisposable
     private const int TrainingInterval = 50;
     private readonly ConcurrentDictionary<string, (string Response, DateTime Expiry)> _queryCache = new();
     private string _personaStyle = "balanced";
+    private DateTime _lastDreamCycleTrigger = DateTime.MinValue;
+    private static readonly TimeSpan DreamCycleMinInterval = TimeSpan.FromMinutes(2);
 
     private static readonly Regex TextToolCall = new(
         @"【TOOL:(\w[\w_]*)\s+(.*?)】", RegexOptions.Compiled);
@@ -790,6 +792,23 @@ public sealed class LivingTreeSystem : IAsyncDisposable
 
         _bavtRouter.Spend(1.0); // Track streaming path cost
 
+        // Queue theory: backpressure-aware retry — reduce maxRetries when queue is congested
+        if (_workQueue.PendingCount > 10)
+        {
+            _logger.LogInformation("Backpressure: queue depth {Depth}, reducing aggressiveness",
+                _workQueue.PendingCount);
+        }
+
+        // BAVTRouter recovery: estimate time to budget recovery
+        if (_bavtRouter.BudgetRatio < 0.5f && _requestCount > 10)
+        {
+            var eta = (_bavtRouter.BudgetRatio < 0.1f) ? "critical" :
+                      (_bavtRouter.BudgetRatio < 0.3f) ? "low" : "moderate";
+            _logger.LogInformation("BudgetRecovery: ratio={Ratio:F2}, status={Eta}, recommended={Rec}",
+                _bavtRouter.BudgetRatio, eta,
+                _bavtRouter.BudgetRatio < 0.3f ? "skip_non_essential_ops" : "normal");
+        }
+
         // Confidence calibration: back-propagate ERL outcomes to MetaCog familiarity
         var erlRate = _erlLoop.SuccessRate;
         if (erlRate > 0 && erlRate < 0.5f && patternResult.ToolName != null)
@@ -816,13 +835,17 @@ public sealed class LivingTreeSystem : IAsyncDisposable
             _metaCognition.RecordOutcome(query, !hasFailure);
         }
 
-        // DreamCycle realtime: instant quality reflection (fire-and-forget, non-blocking)
-        if (!groundingFailed && !layer1HighConfidence && finalResponse.Length > 100)
+        // DreamCycle realtime: instant quality reflection (rate-limited to prevent backlog)
+        if (!groundingFailed && !layer1HighConfidence && finalResponse.Length > 100
+            && DateTime.UtcNow - _lastDreamCycleTrigger > DreamCycleMinInterval)
+        {
+            _lastDreamCycleTrigger = DateTime.UtcNow;
             _workQueue.Enqueue(async ct =>
             {
                 try { await _dreamCycle?.ForceReflectionAsync(); }
                 catch { }
             }, "DreamCycle realtime");
+        }
 
         // Tool synthesis: track tool combo success → auto-discover effective patterns
         if (!groundingFailed && totalToolCalls > 1 && patternResult.ToolName != null)

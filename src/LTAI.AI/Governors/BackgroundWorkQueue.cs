@@ -17,6 +17,26 @@ public sealed class BackgroundWorkQueue : IAsyncDisposable
     public int CompletedCount => Volatile.Read(ref _completed);
     public int FailedCount => Volatile.Read(ref _failed);
     public int PendingCount => EnqueuedCount - CompletedCount - FailedCount;
+    public double QueuePressure => _channel.Reader.Count / (double)Math.Max(1, 64);
+
+    // Little's Law: target latency 2s, recent arrival rate → optimal capacity
+    public int RecommendedCapacity
+    {
+        get
+        {
+            var recentArrivals = EnqueuedCount - _lastSnapshot.Enqueued;
+            var recentCompleted = CompletedCount - _lastSnapshot.Completed;
+            var elapsed = (DateTime.UtcNow - _lastSnapshot.Time).TotalSeconds;
+            if (elapsed < 1) return 64;
+            var arrivalRate = recentArrivals / elapsed;
+            var serviceRate = recentCompleted / elapsed;
+            var targetLatency = 2.0;
+            var optimalCapacity = (int)(arrivalRate * targetLatency) + 1;
+            return Math.Clamp(optimalCapacity, 8, 128);
+        }
+    }
+
+    private (int Enqueued, int Completed, DateTime Time) _lastSnapshot = (0, 0, DateTime.UtcNow);
 
     private sealed record WorkItem(
         Func<CancellationToken, Task> Work,
@@ -62,6 +82,10 @@ public sealed class BackgroundWorkQueue : IAsyncDisposable
                 Interlocked.Increment(ref _failed);
                 _logger?.LogWarning(ex, "BackgroundWorkQueue: task failed: {Description}", item.Description);
             }
+
+            // Periodic snapshot for Little's Law capacity estimation
+            if (_completed % 10 == 0)
+                _lastSnapshot = (EnqueuedCount, CompletedCount, DateTime.UtcNow);
         }
     }
 
