@@ -289,6 +289,7 @@ public sealed class LivingTreeSystem : IAsyncDisposable
             {
                 var summary = patternResult.ContextMessage;
                 yield return summary;
+                Interlocked.Add(ref _totalTokensSpent, (summary?.Length ?? 0) / 4);
                 _metaCognition.RecordOutcome(query, true);
                 if (patternResult.ToolName != null)
                     _metaCognition.ReinforceDomain(patternResult.ToolName, 0.05f);
@@ -996,7 +997,7 @@ public sealed class LivingTreeSystem : IAsyncDisposable
             var trace = $"\n\n---\n[决策: L0={label}, L1={patternResult.Matched}, L2={layer2Context != null}, " +
                 $"Model={model}, Tools={totalToolCalls}, Grounding={!groundingFailed}, " +
                 $"Familiarity={metaAssessment.Familiarity:F2}, Budget={_bavtRouter.BudgetRatio:F2}, " +
-                $"Tokens={Interlocked.Read(ref _totalTokensSpent)}, " +
+                $"Tokens~{finalResponse.Length / 4}, " +
                 $"Time={DateTime.UtcNow:HH:mm:ss}]";
             yield return trace;
         }
@@ -1302,9 +1303,10 @@ public sealed class LivingTreeSystem : IAsyncDisposable
             }
         }
 
-        // Token tracking: report consumption in trace, no hard limits
-        var tokenEstimate = finalResponse.Length / 4;
-        Interlocked.Add(ref _totalTokensSpent, tokenEstimate);
+        // Token tracking: estimate from prompt + response (no hard limits)
+        var pTokens = (layer1Context?.Length ?? 0) + (layer2Context?.Length ?? 0) +
+            (autoSearchContext?.Length ?? 0) + query.Length;
+        Interlocked.Add(ref _totalTokensSpent, (pTokens + finalResponse.Length) / 4);
 
         // Cross-language bridge: detect if query is Chinese but search needs English
         if (query.Any(c => c >= 0x4e00 && c <= 0x9fff) && !groundingFailed && finalResponse.Length < 100
