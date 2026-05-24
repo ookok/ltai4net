@@ -356,21 +356,14 @@ public sealed class LivingTreeSystem : IAsyncDisposable
         _logger.LogDebug("MetaCognition assessment: {Assessment} | Delegating={Deleg} Layer1={L1}",
             metaAssessment.Assessment, metaAssessment.ShouldDelegate, layer1HighConfidence);
 
-        // Fuzzy query detection: queries with vague evaluative patterns without entities are ambiguous.
-        var hasVaguePattern = query.Contains("怎么样") || query.Contains("如何评价") ||
-            query.Contains("讲一下") || query.Contains("说说") || query.Contains("聊聊");
-        var hasQuestionWord = query.Contains('？') || query.Contains('?') ||
-            query.Contains("什么") || query.Contains("怎么") || query.Contains("为什么") ||
-            query.Contains("谁") || query.Contains("哪里") || query.Contains("何时") ||
-            query.Contains("多少") || query.Contains("几") || query.Contains("哪");
-        var isImperative = query.StartsWith("列出") || query.StartsWith("显示") ||
-            query.StartsWith("查看") || query.StartsWith("找到") || query.StartsWith("运行") ||
-            query.StartsWith("执行") || query.StartsWith("打开") || query.StartsWith("读取") ||
-            query.StartsWith("list") || query.StartsWith("show") || query.StartsWith("find") ||
-            query.StartsWith("run") || query.StartsWith("get") || query.StartsWith("count");
-        var isFuzzyQuery = !patternResult.Matched && extractedEntity == null
+        // Fuzzy query detection: L1 flash classifies query type — no keyword matching
+        var isFuzzyQuery = false;
+        if (!patternResult.Matched && extractedEntity == null
             && metaAssessment.ShouldDelegate && label != "fast" && label != "reflex"
-            && query.Length < 100 && !isImperative && (hasVaguePattern || !hasQuestionWord);
+            && query.Length < 100)
+        {
+            isFuzzyQuery = await IsQueryVagueAsync(query, cancellationToken);
+        }
         if (isFuzzyQuery)
         {
             var clarifyQuestions = await GenerateClarificationAsync(query, cancellationToken);
@@ -1757,18 +1750,20 @@ public sealed class LivingTreeSystem : IAsyncDisposable
         return (messages, options);
     }
 
-    private async Task<bool> IsQueryAmbiguousAsync(string query, CancellationToken ct)
+    private async Task<bool> IsQueryVagueAsync(string query, CancellationToken ct)
     {
+        // L1 flash classifies: VAGUE (ambiguous, needs clarification) vs SPECIFIC (actionable)
         try
         {
+            var prompt = $"Query: \"{query}\"\n\nIs this query VAGUE/AMBIGUOUS (missing key details, can't be meaningfully answered) or SPECIFIC (clear intent, has enough context)?\nAnswer ONLY: VAGUE or SPECIFIC";
             var messages = new List<ChatMessage>
             {
-                new(ChatRole.System, "You detect ambiguity. Answer ONLY 'YES' if the query is ambiguous/vague and needs clarification, or 'NO' if it is specific enough to answer. Queries with concrete names, dates, or clear entities are NOT ambiguous."),
-                new(ChatRole.User, $"Query: \"{query}\"\n\nIs this query ambiguous? YES/NO:")
+                new(ChatRole.System, "You classify user queries. Output ONLY 'VAGUE' or 'SPECIFIC'."),
+                new(ChatRole.User, prompt)
             };
-            var options = new ChatOptions { ModelId = FlashModel, Temperature = 0f, MaxOutputTokens = 8, Tools = new List<AITool>() };
+            var options = new ChatOptions { ModelId = FlashModel, Temperature = 0f, MaxOutputTokens = 10, Tools = new List<AITool>() };
             var result = await _llm.GetResponseAsync(messages, options, ct);
-            return result.Text?.Trim().StartsWith("YES", StringComparison.OrdinalIgnoreCase) == true;
+            return result.Text?.Trim().StartsWith("VAGUE", StringComparison.OrdinalIgnoreCase) == true;
         }
         catch { return false; }
     }
