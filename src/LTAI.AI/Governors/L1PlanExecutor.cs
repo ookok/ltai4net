@@ -9,8 +9,10 @@ namespace LTAI.AI.Governors;
 
 public sealed record PlanStep
 {
+    public string Id { get; init; } = "";
     public string Tool { get; init; } = "";
     public Dictionary<string, object?> Args { get; init; } = new();
+    public List<string> Deps { get; init; } = new();
 }
 
 public sealed record PlanResult
@@ -96,39 +98,86 @@ public sealed class L1PlanExecutor
         contextSb.AppendLine("【Layer2 自动规划执行】以下是按计划执行的工具结果：");
 
         var executedSteps = new List<PlanStep>();
+        var results = new Dictionary<string, string>();
         var toolsExecuted = 0;
 
-        foreach (var step in steps)
+        // Assign IDs to steps without them
+        for (int i = 0; i < steps.Count; i++)
+            if (string.IsNullOrEmpty(steps[i].Id))
+                steps[i] = steps[i] with { Id = $"s{i}" };
+
+        var remaining = steps.ToHashSet();
+        while (remaining.Count > 0)
         {
-            if (!toolRegistry.HasTool(step.Tool))
+            // Find steps whose dependencies are all resolved
+            var ready = remaining.Where(s => s.Deps.All(d => results.ContainsKey(d))).ToList();
+            if (ready.Count == 0)
             {
-                _logger?.LogDebug("L2 plan: unknown tool {Tool}, skipping", step.Tool);
-                continue;
+                // Circular dependency or missing deps — execute remaining sequentially
+                _logger?.LogWarning("L2 plan: possible circular dependency, executing remaining {Count} steps sequentially", remaining.Count);
+                ready = remaining.ToList();
             }
 
-            FillDefaultArgsFromMetadata(step, toolRegistry);
-
-            try
+            // Execute ready steps in parallel
+            var tasks = ready.Select(async step =>
             {
-                var result = await toolRegistry.InvokeAsync(step.Tool, step.Args, cancellationToken);
-                var resultText = result?.ToString() ?? "";
-                var truncated = resultText.Length > 2000 ? resultText[..2000] + "..." : resultText;
+                if (!toolRegistry.HasTool(step.Tool))
+                {
+                    _logger?.LogDebug("L2 plan: unknown tool {Tool}, skipping", step.Tool);
+                    return (step, (string?)null, (string?)null);
+                }
+
+                FillDefaultArgsFromMetadata(step, toolRegistry);
+
+                // Resolve dependencies: replace {sX} references in args with results
+                foreach (var key in step.Args.Keys.ToList())
+                {
+                    var val = step.Args[key]?.ToString();
+                    if (val != null)
+                    {
+                        foreach (var (depId, depResult) in results)
+                        {
+                            if (val.Contains($"{{{depId}}}"))
+                                step.Args[key] = val.Replace($"{{{depId}}}", depResult);
+                        }
+                    }
+                }
+
+                try
+                {
+                    var result = await toolRegistry.InvokeAsync(step.Tool, step.Args, cancellationToken);
+                    var resultText = result?.ToString() ?? "";
+                    _logger?.LogInformation("L2 plan executed: {Tool} (id={Id}, result {Len} chars)", step.Tool, step.Id, resultText.Length);
+                    return (step, resultText, (string?)null);
+                }
+                catch (Exception ex)
+                {
+                    _logger?.LogWarning(ex, "L2 plan tool {Tool} failed: {Error}", step.Tool, ex.Message);
+                    return (step, (string?)null, ex.Message);
+                }
+            });
+
+            var batchResults = await Task.WhenAll(tasks);
+
+            foreach (var (step, resultText, error) in batchResults)
+            {
+                remaining.Remove(step);
+                executedSteps.Add(step);
 
                 contextSb.AppendLine();
-                contextSb.AppendLine($"### 工具: {step.Tool}");
-                contextSb.AppendLine(truncated);
-
-                executedSteps.Add(step);
-                toolsExecuted++;
-                _logger?.LogInformation("L2 plan executed: {Tool} (result {Len} chars)", step.Tool, resultText.Length);
-            }
-            catch (Exception ex)
-            {
-                _logger?.LogWarning(ex, "L2 plan tool {Tool} failed: {Error}", step.Tool, ex.Message);
-                contextSb.AppendLine();
-                contextSb.AppendLine($"### 工具: {step.Tool} (失败)");
-                contextSb.AppendLine($"错误: {ex.Message}");
-                executedSteps.Add(step);
+                if (error != null)
+                {
+                    contextSb.AppendLine($"### 工具: {step.Tool} (失败)");
+                    contextSb.AppendLine($"错误: {error}");
+                }
+                else if (resultText != null)
+                {
+                    var truncated = resultText.Length > 2000 ? resultText[..2000] + "..." : resultText;
+                    contextSb.AppendLine($"### 工具: {step.Tool}");
+                    contextSb.AppendLine(truncated);
+                    results[step.Id] = resultText;
+                    toolsExecuted++;
+                }
             }
         }
 
@@ -281,6 +330,14 @@ public sealed class L1PlanExecutor
                 if (string.IsNullOrWhiteSpace(tool))
                     continue;
 
+                var stepId = item.TryGetProperty("id", out var idProp) ? idProp.GetString() ?? "" : "";
+                var deps = new List<string>();
+                if (item.TryGetProperty("deps", out var depsProp) && depsProp.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var d in depsProp.EnumerateArray())
+                        deps.Add(d.GetString() ?? "");
+                }
+
                 var args = new Dictionary<string, object?>();
                 if (item.TryGetProperty("args", out var argsProp))
                 {
@@ -298,7 +355,7 @@ public sealed class L1PlanExecutor
                     }
                 }
 
-                steps.Add(new PlanStep { Tool = tool, Args = args });
+                steps.Add(new PlanStep { Id = stepId, Tool = tool, Args = args, Deps = deps });
             }
 
             return steps;
