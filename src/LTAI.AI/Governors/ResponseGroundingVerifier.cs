@@ -1,5 +1,7 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Logging;
 
 namespace LTAI.AI.Governors;
 
@@ -9,29 +11,23 @@ public sealed record GroundingResult
     public string? Issue { get; init; }
     public string? RetryInstruction { get; init; }
     public float Confidence { get; init; }
-    public string CheckType { get; init; } = "heuristic";
+    public string CheckType { get; init; } = "structural";
 
     public static GroundingResult Grounded => new() { IsGrounded = true, Confidence = 1.0f };
 }
 
 public sealed class ResponseGroundingVerifier
 {
-    private const int MinHonestResponseLength = 10;
-    private static readonly Regex ToolUsageClaim = new(
-        @"(?:已使用|执行了|调用了|运行了|通过|使用了)\s*(?:shell_exec|web_search|filesystem_read|git_diff|git_log|filesystem_list|http_get|env_\w+)",
-        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private readonly ILogger<ResponseGroundingVerifier>? _logger;
+    private const int MinResponseChars = 15;
+    private const int MinContextChars = 100;
+    private const float MinOverlapRatio = 0.3f;
+    private const int DeflectionRatioThreshold = 10;
 
-    private static readonly Regex SpeculationPattern = new(
-        @"(?:可能|或许|大概|也许|建议|可以尝试|推测|猜测|估计)",
-        RegexOptions.IgnoreCase | RegexOptions.Compiled);
-
-    private static readonly Regex HonestyDenial = new(
-        @"(?:未找到|没有找到|不存在|无法找到|没有相关信息|无结果|空)",
-        RegexOptions.IgnoreCase | RegexOptions.Compiled);
-
-    private static readonly Regex DeflectionPattern = new(
-        @"(?:I am unable|I cannot|I can't|抱歉.*无法|无法提供|作为.*AI|simulated|teacher model|没有.*能力|没有.*权限)",
-        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    public ResponseGroundingVerifier(ILogger<ResponseGroundingVerifier>? logger = null)
+    {
+        _logger = logger;
+    }
 
     public GroundingResult Verify(
         string response,
@@ -41,193 +37,318 @@ public sealed class ResponseGroundingVerifier
         int toolCallCount,
         bool layer1ContextWasInjected)
     {
-        // Check 1: Tool usage claim without actual tool call
+        if (string.IsNullOrWhiteSpace(response))
+            return GroundingResult.Grounded;
+
+        var ctxSize = toolContext?.Length ?? 0;
+        var hasToolData = toolContext != null && ctxSize > MinContextChars
+            && !LooksLikeEmptyResult(toolContext);
+
+        // Check 1: Tool name mention without actual call
         if (!toolsWereActuallyCalled && !layer1ContextWasInjected)
         {
-            var toolClaimMatch = ToolUsageClaim.Match(response);
-            if (toolClaimMatch.Success)
+            var mentionedTool = FindMentionedTool(response);
+            if (mentionedTool != null)
             {
                 return new GroundingResult
                 {
                     IsGrounded = false,
-                    Issue = $"回答声称使用了工具（\"{toolClaimMatch.Value}\"），但实际未产生任何 tool_call。这是编造行为。",
-                    RetryInstruction = "你的上一轮回答声称使用了工具但实际并未调用。请重新回答：要么调用工具获取真实数据，要么如实告知无法回答。不得编造工具调用描述。",
+                    Issue = $"Response mentions tool '{mentionedTool}' but no tool call was issued. Fabrication detected.",
+                    RetryInstruction = $"You claimed to use '{mentionedTool}' but did not actually call it. Regenerate using real tool data or state you cannot answer.",
                     Confidence = 0.1f,
                     CheckType = "false_tool_claim"
                 };
             }
         }
 
-        // Check 2: Tool result had data but answer says nothing/empty
-        if (toolContext != null && !string.IsNullOrWhiteSpace(toolContext)
-            && !toolContext.Contains("工具返回了空结果")
-            && !toolContext.Contains("未找到任何相关结果")
-            && !toolContext.Contains("\"error\""))
+        // Check 2: Tool has data but response is disproportionately small
+        if (hasToolData)
         {
-            var isHonestyDenial = HonestyDenial.IsMatch(response);
-            var isTooShort = response.Trim().Length < MinHonestResponseLength;
-
-            if (isHonestyDenial && toolContext.Length > 100)
+            if (response.Length < MinResponseChars)
             {
                 return new GroundingResult
                 {
                     IsGrounded = false,
-                    Issue = "工具返回了实际数据，但回答声称未找到内容。回答与工具结果矛盾。",
-                    RetryInstruction = "上一轮回答声称未找到信息，但工具实际返回了数据。请严格基于已提供的工具结果重新回答，不要编造或忽略已有数据。",
-                    Confidence = 0.2f,
-                    CheckType = "context_denial"
+                    Issue = $"Tool returned {ctxSize} chars of data but response is only {response.Length} chars — likely ignoring tool results.",
+                    RetryInstruction = $"Tool returned substantial data ({ctxSize} chars). Your response was too brief. Provide a proper summary based on the tool results.",
+                    Confidence = 0.35f,
+                    CheckType = "response_too_short"
                 };
             }
 
-            if (isTooShort && toolContext.Length > 200)
+            // Response is disproportionately small compared to context
+            if (ctxSize > response.Length * DeflectionRatioThreshold)
             {
                 return new GroundingResult
                 {
                     IsGrounded = false,
-                    Issue = "工具返回了大量数据，但回答过于简短，可能忽略了关键信息。",
-                    RetryInstruction = "上一轮回答过于简短。请严格基于已提供的工具结果，给出更详细、更有帮助的回答。",
-                    Confidence = 0.4f,
-                    CheckType = "too_short"
+                    Issue = $"Tool context is {ctxSize} chars but response is only {response.Length} chars (ratio {ctxSize / Math.Max(1, response.Length)}:1). Model appears to be deflecting.",
+                    RetryInstruction = $"The system provided {ctxSize} chars of tool data. Your response is too short relative to the available data. Summarize the tool results properly.",
+                    Confidence = 0.25f,
+                    CheckType = "deflection_ratio"
                 };
             }
         }
 
-        // Check 3: Tool result was empty/error, check for honesty
-        if (toolContext != null && (toolContext.Contains("工具返回了空结果")
-            || toolContext.Contains("未找到任何相关结果")
-            || toolContext.Contains("\"error\"")))
+        // Check 3: Tool returned no data, but response contains substantive claims
+        if (toolContext != null && ctxSize > 0 && LooksLikeEmptyResult(toolContext))
         {
-            var hasSpeculation = SpeculationPattern.IsMatch(response);
-            if (hasSpeculation)
+            var claimCount = CountSubstantiveClaims(response);
+            if (claimCount >= 3)
             {
                 return new GroundingResult
                 {
                     IsGrounded = false,
-                    Issue = "工具未返回有效数据，但回答中包含推测性内容（如\"可能\"、\"建议\"等）。工具无数据时不得推测。",
-                    RetryInstruction = "上一轮回答在工具无返回数据的情况下进行了推测。请严格如实告知用户：工具未找到相关信息。不得添加任何推测或建议。",
+                    Issue = $"Tool returned empty/error but response contains {claimCount} substantive claims. Model is speculating on empty data.",
+                    RetryInstruction = "Tool returned empty or error results. Your previous response contained claims not supported by any data. Regenerate: state honestly that no data was found.",
                     Confidence = 0.3f,
                     CheckType = "speculation_on_empty"
                 };
             }
         }
 
-        // Check 4: Data grounding with specific items (only when we have structured tool context)
-        if (toolContext != null && layer1ContextWasInjected
-            && !toolContext.Contains("未找到")
-            && !toolContext.Contains("\"error\""))
+        // Check 4: Structural overlap between response and tool context
+        if (hasToolData && layer1ContextWasInjected)
         {
-            var toolItems = ExtractToolItems(toolContext);
-            if (toolItems.Count > 0)
-            {
-                var responseItems = ExtractResponseItems(response);
-                if (responseItems.Count > 0)
-                {
-                    var fabricatedItems = new List<string>();
-                    foreach (var ri in responseItems)
-                    {
-                        var found = toolItems.Any(ti =>
-                            ti.Contains(ri, StringComparison.OrdinalIgnoreCase)
-                            || ri.Contains(ti, StringComparison.OrdinalIgnoreCase));
-                        if (!found)
-                            fabricatedItems.Add(ri);
-                    }
+            var toolItems = ExtractKeyItems(toolContext!);
+            var responseItems = ExtractKeyItems(response);
 
-                    if (fabricatedItems.Count >= responseItems.Count * 0.5f && fabricatedItems.Count >= 3)
+            if (toolItems.Count >= 5 && responseItems.Count >= 3)
+            {
+                var overlap = toolItems.Intersect(responseItems, StringComparer.OrdinalIgnoreCase).Count();
+                var overlapRatio = (float)overlap / responseItems.Count;
+
+                if (overlapRatio < MinOverlapRatio)
+                {
+                    return new GroundingResult
                     {
-                        return new GroundingResult
-                        {
-                            IsGrounded = false,
-                            Issue = $"回答中至少 {fabricatedItems.Count}/{responseItems.Count} 个条目不在工具结果中，可能编造。编造示例: {string.Join(", ", fabricatedItems.Take(3))}",
-                            RetryInstruction = "上一轮回答包含了工具返回数据中不存在的条目。请严格基于系统消息中的【Layer1 自动执行工具】或【自动网络搜索结果】数据回答，不要添加任何不在其中的名称、数字或事实。",
-                            Confidence = 0.15f,
-                            CheckType = "fabricated_items"
-                        };
-                    }
+                        IsGrounded = false,
+                        Issue = $"Only {overlap}/{responseItems.Count} response items ({overlapRatio:P0} overlap) found in tool results. Likely fabrication.",
+                        RetryInstruction = $"Most items in your response ({responseItems.Count - overlap}) were not found in the tool results. Regenerate strictly from the provided tool data.",
+                        Confidence = 0.15f,
+                        CheckType = "low_overlap"
+                    };
                 }
             }
         }
 
-        // Check 5: Honest deflection — model admits inability without trying tools.
-        // When tool context exists, the system has data the model should use.
-        if (toolContext != null && !string.IsNullOrWhiteSpace(toolContext)
-            && !toolContext.Contains("工具返回了空结果")
-            && !toolContext.Contains("未找到任何相关结果"))
+        // Check 5: Response has duplicate structure not from tool — hallucinated formatting
+        if (hasToolData && !layer1ContextWasInjected)
         {
-            if (DeflectionPattern.IsMatch(response))
+            var responseItems = ExtractKeyItems(response);
+            var toolItems = ExtractKeyItems(toolContext!);
+
+            if (responseItems.Count >= 4 && toolItems.Count == 0)
             {
-                return new GroundingResult
+                // Response has structured items but tool didn't → possible hallucination
+                // Only flag if the items look like data (contain digits, specific names)
+                var dataItems = responseItems.Count(i => i.Any(char.IsDigit) || i.Length > 20);
+                if (dataItems >= 2)
                 {
-                    IsGrounded = false,
-                    Issue = "回答声称无法处理（I am unable / 无法提供），但系统已通过 Layer1 提供了工具数据。模型应基于已有数据回答而非放弃。",
-                    RetryInstruction = "上一轮你声称无法回答，但实际上方已提供了工具获取的真实数据。请严格基于系统消息中的工具结果重新回答，不要放弃。",
-                    Confidence = 0.25f,
-                    CheckType = "deflection"
-                };
+                    return new GroundingResult
+                    {
+                        IsGrounded = false,
+                        Issue = $"Response contains {responseItems.Count} structured items but tool context has none. Possible hallucination.",
+                        RetryInstruction = "Your response contains structured data items not found in tool results. Regenerate based only on the provided tool data.",
+                        Confidence = 0.2f,
+                        CheckType = "hallucinated_items"
+                    };
+                }
             }
         }
 
         return GroundingResult.Grounded;
     }
 
-    private static List<string> ExtractToolItems(string toolContext)
+    public async Task<GroundingResult> VerifyWithLLMAsync(
+        string response,
+        string toolContext,
+        IChatClient llm,
+        string flashModel,
+        CancellationToken ct = default)
     {
-        var items = new List<string>();
+        var ctxSnippet = toolContext.Length > 3000 ? toolContext[..3000] : toolContext;
+        var respSnippet = response.Length > 2000 ? response[..2000] : response;
+
+        var prompt = $"""
+            Tool results:
+            ---
+            {ctxSnippet}
+            ---
+
+            Model answer:
+            ---
+            {respSnippet}
+            ---
+
+            Is every factual claim in the model answer directly supported by the tool results?
+            Answer ONLY: YES or NO, followed by a single short reason.
+            """;
 
         try
         {
-            if (toolContext.Contains("\"items\"") || toolContext.Contains("\"results\""))
+            var messages = new List<ChatMessage>
             {
-                using var doc = JsonDocument.Parse(toolContext);
+                new(ChatRole.System, "You verify factuality. Output ONLY 'YES' or 'NO' followed by a one-line reason."),
+                new(ChatRole.User, prompt)
+            };
+            var options = new ChatOptions
+            {
+                ModelId = flashModel,
+                Temperature = 0f,
+                MaxOutputTokens = 128,
+                Tools = new List<AITool>()
+            };
+
+            var result = await llm.GetResponseAsync(messages, options, ct);
+            var verdict = result.Text?.Trim() ?? "";
+
+            if (verdict.StartsWith("NO", StringComparison.OrdinalIgnoreCase))
+            {
+                var reason = verdict.Length > 3 ? verdict[3..].Trim().TrimStart('.', ',', ':').Trim() : "LLM verification";
+                return new GroundingResult
+                {
+                    IsGrounded = false,
+                    Issue = $"LLM verification: {reason}",
+                    RetryInstruction = $"The system verifier flagged this response as ungrounded: {reason}. Regenerate strictly from the tool data.",
+                    Confidence = 0.3f,
+                    CheckType = "llm_verifier"
+                };
+            }
+
+            return GroundingResult.Grounded;
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogDebug(ex, "LLM grounding verification skipped");
+            return GroundingResult.Grounded;
+        }
+    }
+
+    private static bool LooksLikeEmptyResult(string toolContext)
+    {
+        try
+        {
+            if (toolContext.Contains("\"error\"") || toolContext.Contains("\"exitCode\":1"))
+                return true;
+
+            var jsonStart = toolContext.IndexOf('{');
+            if (jsonStart >= 0)
+            {
+                using var doc = JsonDocument.Parse(toolContext[jsonStart..]);
                 var root = doc.RootElement;
 
-                if (root.TryGetProperty("items", out var itemsArr))
+                if (root.TryGetProperty("error", out _)) return true;
+                if (root.TryGetProperty("exitCode", out var ec) && ec.GetInt32() != 0) return true;
+                if (root.TryGetProperty("count", out var c) && c.GetInt32() == 0)
                 {
-                    foreach (var item in itemsArr.EnumerateArray())
-                    {
-                        if (item.TryGetProperty("name", out var name))
-                            items.Add(name.GetString() ?? "");
-                        if (item.TryGetProperty("title", out var title))
-                            items.Add(title.GetString() ?? "");
-                        if (item.TryGetProperty("snippet", out var snippet))
-                            items.Add(snippet.GetString() ?? "");
-                    }
-                }
-
-                if (root.TryGetProperty("results", out var resultsArr))
-                {
-                    foreach (var r in resultsArr.EnumerateArray())
-                    {
-                        if (r.TryGetProperty("title", out var t))
-                            items.Add(t.GetString() ?? "");
-                    }
+                    if (root.TryGetProperty("items", out var items) && items.GetArrayLength() == 0)
+                        return true;
                 }
             }
         }
         catch { }
 
-        return items;
+        return false;
     }
 
-    private static List<string> ExtractResponseItems(string response)
+    private static string? FindMentionedTool(string response)
+    {
+        var toolNames = new[] { "shell_exec", "web_search", "filesystem_read", "filesystem_list",
+            "filesystem_write", "git_diff", "git_log", "git_blame", "http_get", "http_post",
+            "env_sysinfo", "env_processes", "env_network", "datetime_now", "math_eval" };
+
+        foreach (var name in toolNames)
+        {
+            if (response.Contains(name, StringComparison.OrdinalIgnoreCase))
+                return name;
+        }
+        return null;
+    }
+
+    private static int CountSubstantiveClaims(string response)
+    {
+        // Claims are: numbers, proper nouns (2+ uppercase/hanzi sequences), or bullet points
+        var count = 0;
+
+        var digitMatches = Regex.Matches(response, @"\b\d{2,}\b");
+        count += digitMatches.Count;
+
+        var properNounMatches = Regex.Matches(response, @"\b[A-Z\u4e00-\u9fff]{2,}\b");
+        count += Math.Min(properNounMatches.Count / 3, 5);
+
+        var bulletMatches = Regex.Matches(response, @"(?:^|\n)\s*[-•*]\s+\S");
+        count += bulletMatches.Count;
+
+        return count;
+    }
+
+    private static List<string> ExtractKeyItems(string text)
     {
         var items = new List<string>();
 
-        var bulletMatch = Regex.Matches(response, @"(?:^|\n)\s*[-*•]\s*(.+?)(?:\n|$)", RegexOptions.Multiline);
-        foreach (Match m in bulletMatch)
+        // Extract JSON items from tool context
+        try
+        {
+            var jsonStart = text.IndexOf('{');
+            if (jsonStart >= 0)
+            {
+                using var doc = JsonDocument.Parse(text[jsonStart..]);
+                ExtractFromElement(doc.RootElement, items);
+            }
+        }
+        catch { }
+
+        // Extract bullet/numbered list items from response
+        foreach (Match m in Regex.Matches(text, @"(?:^|\n)\s*[-•*\d]+[.)]\s*(.+?)(?:\n|$)", RegexOptions.Multiline))
         {
             var item = m.Groups[1].Value.Trim();
-            if (item.Length > 1 && item.Length < 100)
-                items.Add(item);
+            if (item.Length > 2 && item.Length < 120)
+                items.Add(NormalizeItem(item));
         }
 
-        var numberedMatch = Regex.Matches(response, @"(?:^|\n)\s*\d+[.)]\s*(.+?)(?:\n|$)", RegexOptions.Multiline);
-        foreach (Match m in numberedMatch)
+        // Extract table rows (pipe-delimited)
+        foreach (Match m in Regex.Matches(text, @"\|([^|\n]+)\|", RegexOptions.Multiline))
         {
-            var item = m.Groups[1].Value.Trim();
-            if (item.Length > 1 && item.Length < 100 && !items.Contains(item))
-                items.Add(item);
+            var cell = m.Groups[1].Value.Trim();
+            if (cell.Length > 2 && cell.Length < 120 && !cell.StartsWith('-'))
+                items.Add(NormalizeItem(cell));
         }
 
-        return items;
+        return items.Distinct().ToList();
+    }
+
+    private static void ExtractFromElement(JsonElement element, List<string> items, string prefix = "")
+    {
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.Object:
+                foreach (var prop in element.EnumerateObject())
+                {
+                    if (prop.Name is "name" or "title" or "snippet" or "path" or "message" or "summary")
+                    {
+                        var val = prop.Value.GetString();
+                        if (!string.IsNullOrWhiteSpace(val) && val.Length > 1)
+                            items.Add(NormalizeItem(val));
+                    }
+                    if (prop.Name is "items" or "results" or "commits" or "processes")
+                        ExtractFromElement(prop.Value, items, prefix);
+                }
+                break;
+            case JsonValueKind.Array:
+                foreach (var item in element.EnumerateArray())
+                    ExtractFromElement(item, items, prefix);
+                break;
+        }
+    }
+
+    private static string NormalizeItem(string item)
+    {
+        var normalized = item.Trim()
+            .Replace("**", "")
+            .Replace("`", "")
+            .Replace("：", ":")
+            .Replace("，", ",");
+        return normalized.Length <= 80 ? normalized : normalized[..80];
     }
 }

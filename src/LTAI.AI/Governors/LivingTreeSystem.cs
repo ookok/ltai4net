@@ -626,13 +626,21 @@ public sealed class LivingTreeSystem
                     if (!verification.IsGrounded)
                     {
                         retryLevel++;
-                        _logger.LogWarning("Grounding check failed L{Level}: {Issue} (type={Type})",
-                            retryLevel, verification.Issue, verification.CheckType);
+                        var metaMetrics = _metaCognition.GetMetrics();
+                        var avgFamiliarity = metaMetrics.TryGetValue("avg_familiarity", out var af)
+                            ? Convert.ToSingle(af) : 0.1f;
 
-                        // Layer 5: Multi-level escalation
-                        if (retryLevel >= 3)
+                        // Dynamic thresholds from MetaCog domain familiarity:
+                        // Unfamiliar (0.1) → max 5 retries, force tools at L2
+                        // Familiar (0.8+)  → max 2 retries, force tools at L1
+                        var maxRetries = Math.Clamp((int)(6 - avgFamiliarity * 5), 2, 5);
+                        var forceToolLevel = avgFamiliarity < 0.3f ? 1 : 2;
+
+                        _logger.LogWarning("Grounding check failed L{Level}/{Max}: {Issue} (type={Type}, fam={Fam:F2})",
+                            retryLevel, maxRetries, verification.Issue, verification.CheckType, avgFamiliarity);
+
+                        if (retryLevel >= maxRetries)
                         {
-                            // Level 3+: Honest fallback — give up and admit inability
                             _metaCognition.RecordOutcome(query, false);
                             RecordSelfHealingLesson(query, retryLevel, verification.CheckType);
                             groundingFailed = true;
@@ -644,7 +652,6 @@ public sealed class LivingTreeSystem
 
                             if (allContext.Count > 0)
                             {
-                                // We have tool data but model kept fabricating — yield data directly
                                 foreach (var ctx in allContext)
                                     yield return ctx;
                             }
@@ -655,22 +662,39 @@ public sealed class LivingTreeSystem
                             break;
                         }
 
-                        if (retryLevel == 2)
+                        if (retryLevel >= forceToolLevel)
                         {
-                            // Level 2: Force tool execution before retry
                             var forcedContext = await ForceExecuteForRetryAsync(query, cancellationToken);
                             if (forcedContext != null)
                                 messages.Add(new ChatMessage(ChatRole.System,
-                                    $"【系统强制工具执行 L2】以下是为确保回答准确而强制获取的数据，必须基于此回答：\n{forcedContext}"));
+                                    $"【系统强制工具执行 L{retryLevel}】以下是为确保回答准确而强制获取的数据，必须基于此回答：\n{forcedContext}"));
                         }
 
-                        // Level 1-2: Stricter retry instruction
-                        var severity = retryLevel >= 2 ? "【严重警告】" : "";
+                        var severity = retryLevel >= maxRetries - 1 ? "【严重警告】" : "";
                         messages.Add(new ChatMessage(ChatRole.System,
                             $"{severity}【事实核查失败 L{retryLevel} - {verification.CheckType}】{verification.RetryInstruction}"));
                         continue;
                     }
                     _logger.LogDebug("Grounding check passed");
+
+                    // LLM-based semantic verification as second pass (only on first attempt with tool data)
+                    if (retryLevel == 0 && !string.IsNullOrWhiteSpace(toolContextForVerification)
+                        && toolContextForVerification!.Length > 200)
+                    {
+                        var llmVerification = await _groundingVerifier.VerifyWithLLMAsync(
+                            responseText.ToString(), toolContextForVerification,
+                            _llm, FlashModel, cancellationToken);
+
+                        if (!llmVerification.IsGrounded)
+                        {
+                            retryLevel = 1;
+                            _logger.LogWarning("LLM grounding check failed: {Issue}", llmVerification.Issue);
+                            messages.Add(new ChatMessage(ChatRole.System,
+                                $"【语义验证失败】{llmVerification.RetryInstruction}"));
+                            continue;
+                        }
+                        _logger.LogDebug("LLM grounding check passed");
+                    }
                 }
                 break;
             }

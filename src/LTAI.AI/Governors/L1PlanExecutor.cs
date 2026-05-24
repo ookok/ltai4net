@@ -46,8 +46,17 @@ public sealed class L1PlanExecutor
         string flashModel,
         CancellationToken cancellationToken = default)
     {
-        var toolNames = string.Join(", ", toolRegistry.ListTools().Take(20));
-        var planningPrompt = BuildPlanningPrompt(query, toolNames);
+        var toolSignatures = BuildToolSignatures(toolRegistry);
+        var planningPrompt = $"""
+            Available tools:
+            {toolSignatures}
+
+            User query: "{query}"
+
+            Output ONLY a JSON plan. Format: {"{\"plan\":[{\"tool\":\"name\",\"args\":{\"p\":\"v\"}}]}"}
+            Do NOT include tools that won't help answer the query.
+            If no tools are needed, output: {"{\"plan\":[]}"}
+            """;
 
         string? planJson;
         try
@@ -98,7 +107,7 @@ public sealed class L1PlanExecutor
                 continue;
             }
 
-            FillDefaultArgs(step);
+            FillDefaultArgsFromMetadata(step, toolRegistry);
 
             try
             {
@@ -147,83 +156,89 @@ public sealed class L1PlanExecutor
 
     private static void FillDefaultArgs(PlanStep step)
     {
-        // Some tools have required params that the planner might omit.
-        // Fill in sensible defaults.
-        switch (step.Tool)
-        {
-            case "shell_exec":
-                if (!step.Args.ContainsKey("workingDirectory"))
-                    step.Args["workingDirectory"] = null!;
-                break;
-            case "filesystem_list":
-                if (!step.Args.ContainsKey("path"))
-                    step.Args["path"] = ".";
-                if (!step.Args.ContainsKey("pattern"))
-                    step.Args["pattern"] = null!;
-                break;
-            case "filesystem_read":
-                if (!step.Args.ContainsKey("path"))
-                    step.Args["path"] = "README.md";
-                break;
-            case "git_log":
-                if (!step.Args.ContainsKey("repoPath"))
-                    step.Args["repoPath"] = null!;
-                if (!step.Args.ContainsKey("maxCount"))
-                    step.Args["maxCount"] = 10;
-                if (!step.Args.ContainsKey("format"))
-                    step.Args["format"] = "oneline";
-                break;
-            case "git_diff":
-                if (!step.Args.ContainsKey("repoPath"))
-                    step.Args["repoPath"] = null!;
-                if (!step.Args.ContainsKey("files"))
-                    step.Args["files"] = null!;
-                if (!step.Args.ContainsKey("staged"))
-                    step.Args["staged"] = false;
-                break;
-            case "web_search":
-                if (!step.Args.ContainsKey("query"))
-                    step.Args["query"] = step.Tool;
-                if (!step.Args.ContainsKey("maxResults"))
-                    step.Args["maxResults"] = 5;
-                break;
-            case "env_processes":
-                if (!step.Args.ContainsKey("filter"))
-                    step.Args["filter"] = null!;
-                if (!step.Args.ContainsKey("top"))
-                    step.Args["top"] = 20;
-                break;
-            case "env_network":
-                if (!step.Args.ContainsKey("pingHost"))
-                    step.Args["pingHost"] = null!;
-                break;
-            case "datetime_now":
-                if (!step.Args.ContainsKey("timezoneOffset"))
-                    step.Args["timezoneOffset"] = null!;
-                break;
-        }
+        // No longer hardcoded — FillDefaultArgsFromMetadata handles this
     }
 
-    private static string BuildPlanningPrompt(string query, string toolNames)
+    private static string BuildToolSignatures(AIToolRegistry toolRegistry)
     {
-        return $"""
-                Available tools: {toolNames}
+        var sb = new StringBuilder();
+        foreach (var tool in toolRegistry.GetTools().Take(25))
+        {
+            var name = tool.Name;
+            var desc = tool.Description ?? "";
+            if (desc.Length > 80) desc = desc[..80] + "...";
 
-                User query: "{query}"
+            sb.AppendLine($"- {name}: {desc}");
 
-                Output ONLY a JSON plan with tools needed. Format: {"{\"plan\":[{\"tool\":\"name\",\"args\":{\"p\":\"v\"}}]}"}
+            var schema = (tool as AIFunction)?.JsonSchema;
+            if (schema != null)
+            {
+                try
+                {
+                    using var doc = JsonDocument.Parse(schema.ToString());
+                    var root = doc.RootElement;
+                    if (root.TryGetProperty("properties", out var props))
+                    {
+                        sb.Append("  args: {");
+                        var paramParts = new List<string>();
+                        foreach (var p in props.EnumerateObject())
+                        {
+                            var pType = p.Value.TryGetProperty("type", out var t)
+                                ? t.GetString() ?? "string" : "string";
+                            var isRequired = root.TryGetProperty("required", out var req)
+                                && req.EnumerateArray().Any(r => r.GetString() == p.Name);
+                            var reqMark = isRequired ? "" : "?";
+                            paramParts.Add($"\"{p.Name}\": {pType}{reqMark}");
+                        }
+                        sb.AppendLine(string.Join(", ", paramParts) + "}");
+                    }
+                }
+                catch { }
+            }
+            sb.AppendLine();
+        }
+        return sb.ToString();
+    }
 
-                Key tools and their required args:
-                - web_search: args {"{\"query\":\"...\",\"maxResults\":5}"}
-                - shell_exec: args {"{\"command\":\"...\",\"workingDirectory\":null}"}
-                - filesystem_list: args {"{\"path\":\"dir\",\"pattern\":null}"}
-                - filesystem_read: args {"{\"path\":\"file\"}"}
-                - git_log: args {"{\"repoPath\":null,\"maxCount\":10,\"format\":\"oneline\"}"}
-                - git_diff: args {"{\"repoPath\":null,\"files\":null,\"staged\":false}"}
-                - env_sysinfo: args {"{}"}
+    private void FillDefaultArgsFromMetadata(PlanStep step, AIToolRegistry toolRegistry)
+    {
+        var tool = toolRegistry.GetTool(step.Tool) as AIFunction;
+        var schema = tool?.JsonSchema;
+        if (schema == null) return;
 
-                Output ONLY the JSON. No explanations.
-                """;
+        try
+        {
+            using var doc = JsonDocument.Parse(schema.ToString());
+            var root = doc.RootElement;
+            if (!root.TryGetProperty("properties", out var props)) return;
+
+            bool isRequired(string name) =>
+                root.TryGetProperty("required", out var req)
+                && req.EnumerateArray().Any(r => r.GetString() == name);
+
+            foreach (var p in props.EnumerateObject())
+            {
+                if (step.Args.ContainsKey(p.Name)) continue;
+
+                var pType = p.Value.TryGetProperty("type", out var t) ? t.GetString() : "string";
+                if (isRequired(p.Name))
+                {
+                    step.Args[p.Name] = pType switch
+                    {
+                        "string" => "",
+                        "integer" or "number" => 0,
+                        "boolean" => false,
+                        "null" => null!,
+                        _ => ""
+                    };
+                }
+                else
+                {
+                    step.Args[p.Name] = null!;
+                }
+            }
+        }
+        catch { }
     }
 
     private static List<PlanStep> ParsePlan(string text)
