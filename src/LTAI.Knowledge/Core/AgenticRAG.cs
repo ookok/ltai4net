@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text.RegularExpressions;
 using LTAI.Knowledge.Core.Models;
@@ -9,14 +10,17 @@ namespace LTAI.Knowledge.Core;
 public class AgenticRAG
 {
     private const int MaxRounds = 5;
-    private const double MinImprovement = 0.1;
     private const int ShortPathMaxLength = 15;
+    private const int MaxCacheEntries = 200;
 
     private readonly DocumentStore _docStore;
     private readonly Reranker _reranker;
     private readonly QueryDecomposer _decomposer;
     private readonly RAGCircuitBreaker _circuitBreaker;
+    private readonly HybridRecallEngine? _hybridRecall;
     private readonly ILogger<AgenticRAG> _logger;
+
+    private readonly ConcurrentDictionary<string, (List<KnowledgeSearchResult> Results, DateTime Expiry)> _queryCache = new();
 
     private static readonly string[] ShortPathPatterns =
     {
@@ -27,12 +31,14 @@ public class AgenticRAG
     };
 
     public AgenticRAG(DocumentStore docStore, Reranker reranker,
-        QueryDecomposer decomposer, ILogger<AgenticRAG>? logger = null)
+        QueryDecomposer decomposer, ILogger<AgenticRAG>? logger = null,
+        HybridRecallEngine? hybridRecall = null)
     {
         _docStore = docStore;
         _reranker = reranker;
         _decomposer = decomposer;
         _circuitBreaker = new RAGCircuitBreaker();
+        _hybridRecall = hybridRecall;
         _logger = logger ?? new NullLogger<AgenticRAG>();
     }
 
@@ -42,20 +48,45 @@ public class AgenticRAG
         var sw = Stopwatch.StartNew();
         _circuitBreaker.Reset();
 
-        if (IsShortPath(query))
-            return ShortPathRAG(query, domain);
+        // In-memory query cache
+        var cacheKey = $"{domain}:{query}";
+        if (_queryCache.TryGetValue(cacheKey, out var cached) && cached.Expiry > DateTime.UtcNow)
+        {
+            _logger.LogDebug("AgenticRAG: Cache hit ({Len} chars, {Count} results)", query.Length, cached.Results.Count);
+            return cached.Results;
+        }
 
-        return IterativeRAG(query, domain, maxRounds, maxTokens);
+        List<KnowledgeSearchResult> results;
+        if (_hybridRecall != null)
+        {
+            try
+            {
+                results = _hybridRecall.SearchAsync(query, domain, maxRounds * 3).GetAwaiter().GetResult();
+                _logger.LogInformation("AgenticRAG: Hybrid recall returned {Count} results in {Ms}ms",
+                    results.Count, sw.ElapsedMilliseconds);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Hybrid recall failed, falling back to FTS5");
+                results = IsShortPath(query) ? ShortPathRAG(query, domain) : IterativeRAG(query, domain, maxRounds, maxTokens);
+            }
+        }
+        else
+        {
+            results = IsShortPath(query) ? ShortPathRAG(query, domain) : IterativeRAG(query, domain, maxRounds, maxTokens);
+        }
+
+        if (results.Count > 0 && _queryCache.Count < MaxCacheEntries)
+            _queryCache[cacheKey] = (results, DateTime.UtcNow.AddMinutes(15));
+
+        return results;
     }
 
     private List<KnowledgeSearchResult> IterativeRAG(string query, string domain, int maxRounds, int maxTokens)
     {
         for (int round = 0; round < Math.Min(maxRounds, MaxRounds); round++)
         {
-            // FTS5 search
             var results = _docStore.SearchFts(query, domain, 20);
-
-            // Rerank
             var candidates = results.Select(r => new Dictionary<string, object>
             {
                 ["id"] = r.Id, ["text"] = r.Content, ["score"] = r.Score, ["source"] = r.Source
@@ -98,9 +129,4 @@ public class AgenticRAG
         if (query.Length <= ShortPathMaxLength) return true;
         return ShortPathPatterns.Any(p => Regex.IsMatch(query, p, RegexOptions.IgnoreCase));
     }
-
-    public Dictionary<string, object> GetStats() => new()
-    {
-        ["circuit_breaker_open"] = _circuitBreaker.IsOpen
-    };
 }

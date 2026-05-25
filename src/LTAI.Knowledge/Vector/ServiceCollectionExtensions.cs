@@ -218,7 +218,26 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<StructMemory>();
         services.AddSingleton<Reranker>();
         services.AddSingleton<QueryDecomposer>();
-        services.AddSingleton<AgenticRAG>();
+        services.AddSingleton<HybridRecallEngine>(sp =>
+        {
+            var llm = sp.GetRequiredService<IChatClient>();
+            var vectorStore = sp.GetRequiredService<IVectorStore>();
+            var docStore = sp.GetRequiredService<DocumentStore>();
+            var kg = sp.GetRequiredService<KnowledgeGraph>();
+            var reranker = sp.GetRequiredService<Reranker>();
+            var logger = sp.GetService<ILogger<HybridRecallEngine>>();
+            return new HybridRecallEngine(llm, vectorStore, docStore, kg, reranker, logger);
+        });
+        services.AddSingleton<AgenticRAG>(sp =>
+        {
+            var docStore = sp.GetRequiredService<DocumentStore>();
+            var reranker = sp.GetRequiredService<Reranker>();
+            var decomposer = sp.GetRequiredService<QueryDecomposer>();
+            var logger = sp.GetService<ILogger<AgenticRAG>>();
+            var hybrid = sp.GetService<HybridRecallEngine>();
+            return new AgenticRAG(docStore, reranker, decomposer, logger, hybrid);
+        });
+        services.AddSingleton<DocumentIngestionPipeline>();
 
         services.AddSingleton<Bm25Scorer>();
         services.AddSingleton<CompiledTruthStore>(sp =>

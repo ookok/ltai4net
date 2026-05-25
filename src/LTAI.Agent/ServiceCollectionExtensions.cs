@@ -33,6 +33,8 @@ public static class ServiceCollectionExtensions
         });
         services.AddSingleton<ToolRetriever>();
         services.AddSingleton<PlannerCriticWorkflow>();
+        services.AddSingleton<PlannerIntegration>();
+        services.AddSingleton<UnifiedPlanningPipeline>();
         services.AddSingleton<AgentParliament>();
         services.AddSingleton<SentientParliament>();
         services.AddSingleton<ShadowRouter>();
@@ -249,5 +251,31 @@ public static class ServiceCollectionExtensions
         }
 
         return config;
+    }
+
+    public static void WirePlanningPipeline(IServiceProvider sp)
+    {
+        var plannerCritic = sp.GetRequiredService<PlannerCriticWorkflow>();
+        var factory = sp.GetRequiredService<AgentFactory>();
+        var logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger("LTAI.Agent");
+
+        // Register default planner-critic-executor triads per domain
+        foreach (var domain in new[] { "code", "eia", "general" })
+        {
+            try
+            {
+                var agent = factory.GetOrCreate(domain);
+                var planner = factory.GetOrCreate($"{domain}_planner");
+                var critic = factory.GetOrCreate($"{domain}_critic");
+
+                plannerCritic.RegisterAgent(domain, agent);
+                plannerCritic.RegisterAgent($"{domain}_planner", planner);
+                plannerCritic.RegisterAgent($"{domain}_critic", critic);
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Failed to register planner-critic pair for domain '{Domain}'", domain);
+            }
+        }
     }
 }

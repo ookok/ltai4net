@@ -1,8 +1,11 @@
 using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
+using System.Security.Cryptography;
+using System.Text;
 using LTAI.Core.Configuration;
 using LTAI.Knowledge.Vector.Interfaces;
 using LTAI.Knowledge.Vector.Models;
+using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -12,18 +15,21 @@ public sealed class VectorStore : IVectorStore, IDisposable
 {
     private readonly ConcurrentDictionary<string, float[]> _vectors = new();
     private readonly ConcurrentDictionary<string, string> _idToCollection = new();
+    private readonly ConcurrentDictionary<string, float[]> _embeddingCache = new();
     private float[][]? _cachedMatrix;
     private string[]? _cachedIds;
     private bool _matrixDirty = true;
     private int _count;
     private const int MaxVectors = 50000;
+    private const int MaxEmbeddingCache = 500;
     private readonly object _lock = new();
 
     private readonly IEmbeddingBackend _embeddingBackend;
     private readonly IOptions<LTAIOptions> _options;
     private readonly ILogger<VectorStore> _logger;
     private readonly int _dimension;
-    
+    private readonly SqliteConnection _db;
+
     private readonly Dictionary<int, List<string>> _spatialIndex = new();
     private const int SpatialBuckets = 64;
 
@@ -36,12 +42,57 @@ public sealed class VectorStore : IVectorStore, IDisposable
         _options = options;
         _logger = logger;
         _dimension = options.Value.Vector.Dimension;
+
+        var dbPath = Path.Combine(AppContext.BaseDirectory, ".livingtree", "vectors.db");
+        Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+        _db = new SqliteConnection($"Data Source={dbPath}");
+        _db.Open();
+        InitDb();
+        LoadFromDb();
+    }
+
+    private void InitDb()
+    {
+        using var cmd = _db.CreateCommand();
+        cmd.CommandText = "CREATE TABLE IF NOT EXISTS vectors(id TEXT PRIMARY KEY, embedding BLOB, collection TEXT, created_at TEXT)";
+        cmd.ExecuteNonQuery();
+    }
+
+    private void LoadFromDb()
+    {
+        try
+        {
+            using var cmd = _db.CreateCommand();
+            cmd.CommandText = "SELECT id, embedding, collection FROM vectors LIMIT 10000";
+            using var r = cmd.ExecuteReader();
+            while (r.Read())
+            {
+                var id = r.GetString(0);
+                var blob = (byte[])r["embedding"];
+                var vec = new float[blob.Length / 4];
+                Buffer.BlockCopy(blob, 0, vec, 0, blob.Length);
+                _vectors[id] = vec;
+                if (!r.IsDBNull(2)) _idToCollection[id] = r.GetString(2);
+                _count++;
+            }
+            if (_count > 0) { _matrixDirty = true; _logger.LogInformation("Loaded {N} persisted vectors", _count); }
+        }
+        catch (Exception ex) { _logger.LogWarning(ex, "LoadFromDb failed"); }
     }
 
     public async Task<float[]> EmbedAsync(string text, CancellationToken cancellationToken = default)
     {
+        var key = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text)))[..20];
+        if (_embeddingCache.TryGetValue(key, out var cached))
+            return cached;
+
         var embeddings = await _embeddingBackend.EmbedAsync(new[] { text }, cancellationToken).ConfigureAwait(false);
-        return embeddings[0];
+        var result = embeddings[0];
+
+        if (_embeddingCache.Count < MaxEmbeddingCache)
+            _embeddingCache[key] = result;
+
+        return result;
     }
 
     public Task AddVectorsAsync(
@@ -69,6 +120,20 @@ public sealed class VectorStore : IVectorStore, IDisposable
                 _vectors[id] = vector;
                 if (isNew)
                     _count++;
+
+                var blob = new byte[vector.Length * 4];
+                Buffer.BlockCopy(vector, 0, blob, 0, blob.Length);
+                try
+                {
+                    using var c = _db.CreateCommand();
+                    c.CommandText = "INSERT OR REPLACE INTO vectors(id, embedding, collection, created_at) VALUES(@id, @e, @col, @ts)";
+                    c.Parameters.AddWithValue("@id", id);
+                    c.Parameters.AddWithValue("@e", blob);
+                    c.Parameters.AddWithValue("@col", _idToCollection.GetValueOrDefault(id) ?? (object)DBNull.Value);
+                    c.Parameters.AddWithValue("@ts", DateTime.UtcNow.ToString("O"));
+                    c.ExecuteNonQuery();
+                }
+                catch (Exception ex) { _logger.LogWarning(ex, "Persist vector failed {Id}", id); }
             }
 
             _matrixDirty = true;
@@ -247,11 +312,13 @@ public sealed class VectorStore : IVectorStore, IDisposable
     public void Dispose()
     {
         if (_disposed) return;
-        
         _vectors.Clear();
         _idToCollection.Clear();
+        _embeddingCache.Clear();
         _cachedMatrix = null;
         _cachedIds = null;
+        try { _db.Close(); } catch { }
+        try { _db.Dispose(); } catch { }
         _disposed = true;
         GC.SuppressFinalize(this);
     }
