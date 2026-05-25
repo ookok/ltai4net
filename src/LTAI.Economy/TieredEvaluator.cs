@@ -58,7 +58,7 @@ public sealed class TieredEvaluator
     {
         var warnings = new List<string>();
 
-        var correctnessScore = await EvaluateCorrectnessAsync(candidate, warnings, ct);
+        var correctnessScore = await EvaluateCorrectnessAsync(candidate, warnings, ct).ConfigureAwait(false);
 
         if (correctnessScore < 1.0)
         {
@@ -74,7 +74,7 @@ public sealed class TieredEvaluator
             return CreateRejectedResult(candidate, correctnessScore, securityScore, warnings);
         }
 
-        var (latencyMs, profilingMetrics) = await _profiler.ProfileAsync(candidate, ct);
+        var (latencyMs, profilingMetrics) = await _profiler.ProfileAsync(candidate, ct).ConfigureAwait(false);
 
         var memMb = profilingMetrics.GetValueOrDefault("memory_mb", 0);
         var computeUtil = profilingMetrics.GetValueOrDefault("compute_util", 0);
@@ -118,10 +118,10 @@ public sealed class TieredEvaluator
 
         var tasks = candidates.Select(async candidate =>
         {
-            await semaphore.WaitAsync(ct);
+            await semaphore.WaitAsync(ct).ConfigureAwait(false);
             try
             {
-                var result = await EvaluateAsync(candidate, ct);
+                var result = await EvaluateAsync(candidate, ct).ConfigureAwait(false);
                 results.Add(result);
             }
             finally
@@ -130,7 +130,7 @@ public sealed class TieredEvaluator
             }
         });
 
-        await Task.WhenAll(tasks);
+        await Task.WhenAll(tasks).ConfigureAwait(false);
         return results.ToList();
     }
 
@@ -169,10 +169,10 @@ public sealed class TieredEvaluator
         {
             try
             {
-                var score = await CheckCompilationAsync(candidate.Code, ct);
+                var score = await CheckCompilationAsync(candidate.Code, ct).ConfigureAwait(false);
                 if (score >= 1.0)
                 {
-                    score += await CheckRuntimeBehaviorAsync(candidate, ct);
+                    score += await CheckRuntimeBehaviorAsync(candidate, ct).ConfigureAwait(false);
                     return Math.Min(1.0, score / 2.0);
                 }
                 return score;
@@ -185,7 +185,7 @@ public sealed class TieredEvaluator
                     warnings.Add($"Failed after {_maxRetries} correctness check retries");
                     return 0;
                 }
-                await Task.Delay(100 * retries, ct);
+                await Task.Delay(100 * retries, ct).ConfigureAwait(false);
             }
         }
         return 0;
@@ -251,13 +251,13 @@ public sealed class TieredEvaluator
             return 0.5;
         }
 
-        await Task.CompletedTask;
+        await Task.CompletedTask.ConfigureAwait(false);
         return errors.Count == 0 ? 1.0 : 0.5;
     }
 
     private async Task<double> CheckRuntimeBehaviorAsync(EvolutionCandidate candidate, CancellationToken ct)
     {
-        await Task.CompletedTask;
+        await Task.CompletedTask.ConfigureAwait(false);
 
         if (candidate.Code.Contains("return ") && !candidate.Code.Contains("return None"))
             return 1.0;

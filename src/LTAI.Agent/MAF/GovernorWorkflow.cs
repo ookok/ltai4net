@@ -92,7 +92,7 @@ internal sealed partial class PipelineExecutor(LivingTreeSystem system) : Execut
         await ctx.AddEventAsync(new ProgressEvent("Processing through governor pipeline"));
         var result = await system.ProcessTypedAsync(
             new AI.Governors.GovernorInput { Query = query.Text, TraceId = query.TraceId },
-            ct);
+            ct).ConfigureAwait(false);
 
         await ctx.YieldOutputAsync(new GovernorResult
         {
@@ -101,7 +101,7 @@ internal sealed partial class PipelineExecutor(LivingTreeSystem system) : Execut
             Label = query.Label,
             IsBlocked = result.IsBlocked,
             BlockReason = result.BlockReason
-        });
+        }).ConfigureAwait(false);
     }
 }
 
@@ -132,7 +132,7 @@ public static class GovernorWorkflow
 
         var workflow = BuildGovernorWorkflow(system);
         var input = new GovernorQuery { Text = query, TraceId = activity?.TraceId.ToString() ?? Guid.NewGuid().ToString("N") };
-        await using var run = await InProcessExecution.RunStreamingAsync(workflow, input);
+        await using var run = await InProcessExecution.RunStreamingAsync(workflow, input).ConfigureAwait(false);
 
         await foreach (var evt in run.WatchStreamAsync().WithCancellation(ct))
             yield return evt;

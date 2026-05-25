@@ -54,7 +54,7 @@ public sealed class ModelUpgrader
         {
             // Step 1: Migrate existing capabilities to new model
             var migrationResult = await _migrator.MigrateToNewModelAsync(
-                newModel.Version, tier, ct);
+                newModel.Version, tier, ct).ConfigureAwait(false);
 
             // Step 2: Re-evaluate on held-out samples if synaptic memory has them
             float? oldAcc = null, newAcc = null;
@@ -135,7 +135,7 @@ public sealed class ModelUpgrader
         }
 
         _logger.LogInformation("Rolling back to {Version}", previousVersion);
-        await _migrator.MigrateToNewModelAsync(previousVersion, tier, ct);
+        await _migrator.MigrateToNewModelAsync(previousVersion, tier, ct).ConfigureAwait(false);
         _currentVersion = previousVersion;
         return true;
     }

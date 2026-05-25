@@ -41,7 +41,7 @@ public sealed class SentientParliament
         var context = new AgentContext(query, history.ToList(), session);
         int round = 0;
 
-        return await DeliberateCoreAsync(query, context, session, round, ct);
+        return await DeliberateCoreAsync(query, context, session, round, ct).ConfigureAwait(false);
     }
 
     private async Task<ParliamentResult> DeliberateCoreAsync(
@@ -62,14 +62,14 @@ public sealed class SentientParliament
         using (var span = LtaiActivitySource.Agent.StartActivity("parliament.primary"))
         {
             span?.SetTag("parliament.phase", "generation");
-            primary = await ExecutePrimaryAsync(query, context, session, ct);
+            primary = await ExecutePrimaryAsync(query, context, session, ct).ConfigureAwait(false);
             span?.SetTag("parliament.primary_length", primary.Text?.Length ?? 0);
         }
 
         // Phase 2: Critic Agent
         using var criticSpan = LtaiActivitySource.Agent.StartActivity("parliament.critic");
         criticSpan?.SetTag("parliament.phase", "critique");
-        var critic = await ExecuteCriticAsync(query, primary, context, session, ct);
+        var critic = await ExecuteCriticAsync(query, primary, context, session, ct).ConfigureAwait(false);
 
         // Phase 3: Oracle Agent
         string oracleFacts;
@@ -77,7 +77,7 @@ public sealed class SentientParliament
         using (var oracleSpan = LtaiActivitySource.Agent.StartActivity("parliament.oracle"))
         {
             oracleSpan?.SetTag("parliament.phase", "fact_check");
-            var oracle = await ExecuteOracleAsync(primary, ct);
+            var oracle = await ExecuteOracleAsync(primary, ct).ConfigureAwait(false);
             oracleFacts = oracle.Facts;
             oracleConfidence = oracle.Confidence;
             oracleSpan?.SetTag("parliament.oracle_confidence", oracleConfidence);
@@ -119,7 +119,7 @@ public sealed class SentientParliament
 
             var revisedQuery = $"{query}\n\n[Critic feedback]: {critic.Summary}\n[Oracle facts]: {oracleFacts}";
             var revisedContext = new AgentContext(revisedQuery, context.FullHistory, session);
-            return await DeliberateCoreAsync(revisedQuery, revisedContext, session, round + 1, ct);
+            return await DeliberateCoreAsync(revisedQuery, revisedContext, session, round + 1, ct).ConfigureAwait(false);
         }
 
         _logger.LogInformation("Parliament: PASSED with {Score:P0} consensus, {Passed}/{Total} votes",
@@ -134,9 +134,9 @@ public sealed class SentientParliament
         string query, AgentContext context, AgentSession? session, CancellationToken ct)
     {
         if (_agents.TryGetValue("eia", out var eia))
-            return await eia.RunAsync(new[] { new ChatMessage(ChatRole.User, query) }, session, null, ct);
+            return await eia.RunAsync(new[] { new ChatMessage(ChatRole.User, query) }, session, null, ct).ConfigureAwait(false);
         if (_agents.TryGetValue("code", out var code))
-            return await code.RunAsync(new[] { new ChatMessage(ChatRole.User, query) }, session, null, ct);
+            return await code.RunAsync(new[] { new ChatMessage(ChatRole.User, query) }, session, null, ct).ConfigureAwait(false);
         return new(new ChatMessage(ChatRole.Assistant, "No primary agent available"));
     }
 

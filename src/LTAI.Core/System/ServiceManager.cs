@@ -62,8 +62,8 @@ public sealed class ServiceManager
         if (!IsWindows)
             return new ServiceResult { Success = false, Message = "Windows Service only supports Windows" };
 
-        await StopAsync();
-        await Task.Delay(1000);
+        await StopAsync().ConfigureAwait(false);
+        await Task.Delay(1000).ConfigureAwait(false);
         var result = await RunScAsync($"delete {ServiceName}");
         return result;
     }
@@ -84,9 +84,9 @@ public sealed class ServiceManager
 
     public async Task<ServiceResult> RestartAsync()
     {
-        var stop = await StopAsync();
-        await Task.Delay(2000);
-        var start = await StartAsync();
+        var stop = await StopAsync().ConfigureAwait(false);
+        await Task.Delay(2000).ConfigureAwait(false);
+        var start = await StartAsync().ConfigureAwait(false);
         return new ServiceResult
         {
             Success = start.Success,
@@ -119,9 +119,9 @@ public sealed class ServiceManager
             if (proc == null)
                 return new ServiceResult { Success = false, Message = "Failed to start sc.exe" };
 
-            var output = await proc.StandardOutput.ReadToEndAsync();
-            var error = await proc.StandardError.ReadToEndAsync();
-            await proc.WaitForExitAsync();
+            var output = await proc.StandardOutput.ReadToEndAsync().ConfigureAwait(false);
+            var error = await proc.StandardError.ReadToEndAsync().ConfigureAwait(false);
+            await proc.WaitForExitAsync().ConfigureAwait(false);
 
             var combined = string.IsNullOrEmpty(error) ? output : $"{output}\n{error}";
 

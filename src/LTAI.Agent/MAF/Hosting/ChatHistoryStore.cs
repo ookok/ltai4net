@@ -38,14 +38,14 @@ public sealed class FileHistoryStore : ChatHistoryStore
     {
         var path = global::System.IO.Path.Combine(_dataDir, $"{session.SessionId}.json");
         var json = JsonSerializer.Serialize(session);
-        await global::System.IO.File.WriteAllTextAsync(path, json, ct);
+        await global::System.IO.File.WriteAllTextAsync(path, json, ct).ConfigureAwait(false);
     }
 
     public override async Task<ChatSession?> LoadAsync(string sessionId, CancellationToken ct = default)
     {
         var path = global::System.IO.Path.Combine(_dataDir, $"{sessionId}.json");
         if (!global::System.IO.File.Exists(path)) return null;
-        var json = await global::System.IO.File.ReadAllTextAsync(path, ct);
+        var json = await global::System.IO.File.ReadAllTextAsync(path, ct).ConfigureAwait(false);
         return JsonSerializer.Deserialize<ChatSession>(json);
     }
 
@@ -64,7 +64,7 @@ public sealed class FileHistoryStore : ChatHistoryStore
         {
             try
             {
-                var json = await global::System.IO.File.ReadAllTextAsync(f, ct);
+                var json = await global::System.IO.File.ReadAllTextAsync(f, ct).ConfigureAwait(false);
                 var s = JsonSerializer.Deserialize<ChatSession>(json);
                 if (s != null) sessions.Add(s);
             }
@@ -89,7 +89,7 @@ public sealed class ChatHistoryManager
     public async Task SaveAsync(ChatSession session, StorageBackend backend = StorageBackend.File, CancellationToken ct = default)
     {
         session.UpdatedAt = DateTime.UtcNow;
-        await _defaultStore.SaveAsync(session, ct);
+        await _defaultStore.SaveAsync(session, ct).ConfigureAwait(false);
     }
 
     public Task<ChatSession?> LoadAsync(string sessionId, CancellationToken ct = default)

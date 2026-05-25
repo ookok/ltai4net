@@ -24,7 +24,7 @@ public sealed class PretrainedModelLoader : IHostedService
         {
             await _cellRegistry.InitializePretrainedModelsAsync(
                 autoDownload: true,
-                ct: cancellationToken);
+                ct: cancellationToken).ConfigureAwait(false);
 
             var metrics = _cellRegistry.GetMetrics();
             _logger.LogInformation(

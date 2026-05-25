@@ -132,7 +132,7 @@ public sealed class ResourceTree
                     LatencyMs = sw.ElapsedMilliseconds
                 };
 
-            var content = await mount.ReadFn(subPath);
+            var content = await mount.ReadFn(subPath).ConfigureAwait(false);
             return new ResourceResult
             {
                 Path = path,
@@ -169,7 +169,7 @@ public sealed class ResourceTree
                     LatencyMs = sw.ElapsedMilliseconds
                 };
 
-            var items = await mount.ListFn();
+            var items = await mount.ListFn().ConfigureAwait(false);
             return new ResourceResult
             {
                 Path = subPath,
@@ -206,7 +206,7 @@ public sealed class ResourceTree
                     LatencyMs = sw.ElapsedMilliseconds
                 };
 
-            var items = await mount.SearchFn(query, topK);
+            var items = await mount.SearchFn(query, topK).ConfigureAwait(false);
             return new ResourceResult
             {
                 Path = subPath,
@@ -248,7 +248,7 @@ public sealed class ResourceTree
                     LatencyMs = sw.ElapsedMilliseconds
                 };
 
-            var ok = await mount.WriteFn(subPath, content);
+            var ok = await mount.WriteFn(subPath, content).ConfigureAwait(false);
             return new ResourceResult
             {
                 Path = path,
@@ -295,7 +295,7 @@ public sealed class ResourceTree
                 if (trimmed.StartsWith("read ", StringComparison.OrdinalIgnoreCase))
                 {
                     var path = trimmed[5..].Trim();
-                    result = await Read(path);
+                    result = await Read(path).ConfigureAwait(false);
                 }
                 else if (trimmed.StartsWith("search ", StringComparison.OrdinalIgnoreCase))
                 {
@@ -303,12 +303,12 @@ public sealed class ResourceTree
                     var match = Regex.Match(searchArgs, @"^(.*?)\s+(.+)$");
                     var path = match.Success ? match.Groups[1].Value.Trim() : "/";
                     var query = match.Success ? match.Groups[2].Value.Trim() : searchArgs;
-                    result = await Search(path, query);
+                    result = await Search(path, query).ConfigureAwait(false);
                 }
                 else if (trimmed.StartsWith("list", StringComparison.OrdinalIgnoreCase))
                 {
                     var path = trimmed.Length > 4 ? trimmed[4..].Trim() : "/";
-                    result = await List(path);
+                    result = await List(path).ConfigureAwait(false);
                 }
                 else if (trimmed.StartsWith("write ", StringComparison.OrdinalIgnoreCase))
                 {
@@ -316,7 +316,7 @@ public sealed class ResourceTree
                     var match = Regex.Match(writeArgs, @"^(\S+)\s+(.+)", RegexOptions.Singleline);
                     var path = match.Success ? match.Groups[1].Value.Trim() : writeArgs;
                     var content = match.Success ? match.Groups[2].Value.Trim() : "";
-                    result = await Write(path, content);
+                    result = await Write(path, content).ConfigureAwait(false);
                 }
                 else
                 {
@@ -411,12 +411,12 @@ public sealed class ResourceTree
         tree.Mount("/knowledge", "knowledge",
             readFn: async path =>
             {
-                await Task.Delay(1);
+                await Task.Delay(1).ConfigureAwait(false);
                 return JsonSerializer.Serialize(new { source = "knowledge_base", path, cached = true });
             },
             listFn: async () =>
             {
-                await Task.Delay(1);
+                await Task.Delay(1).ConfigureAwait(false);
                 return new List<object>
                 {
                     new { name = "ai_basics.md", type = "doc" },
@@ -426,7 +426,7 @@ public sealed class ResourceTree
             },
             searchFn: async (query, topK) =>
             {
-                await Task.Delay(5);
+                await Task.Delay(5).ConfigureAwait(false);
                 return new List<object>
                 {
                     new { score = 0.95, title = $"Knowledge result for: {query}", snippet = "Placeholder knowledge content..." }
@@ -436,7 +436,7 @@ public sealed class ResourceTree
         tree.Mount("/weather", "weather",
             readFn: async path =>
             {
-                await Task.Delay(20);
+                await Task.Delay(20).ConfigureAwait(false);
                 return JsonSerializer.Serialize(new
                 {
                     location = path.Trim('/'),
@@ -448,7 +448,7 @@ public sealed class ResourceTree
             },
             searchFn: async (query, topK) =>
             {
-                await Task.Delay(10);
+                await Task.Delay(10).ConfigureAwait(false);
                 return new List<object>
                 {
                     new { location = query, forecast = "sunny", temp_high = 28, temp_low = 18 }
@@ -458,7 +458,7 @@ public sealed class ResourceTree
         tree.Mount("/models", "models",
             listFn: async () =>
             {
-                await Task.Delay(2);
+                await Task.Delay(2).ConfigureAwait(false);
                 return new List<object>
                 {
                     new { provider = "openai", model = "gpt-4o", status = "available" },
@@ -468,7 +468,7 @@ public sealed class ResourceTree
             },
             searchFn: async (query, topK) =>
             {
-                await Task.Delay(3);
+                await Task.Delay(3).ConfigureAwait(false);
                 return new List<object>
                 {
                     new { provider = "openai", model = "gpt-4o", capability = query, score = 0.98 }
@@ -478,7 +478,7 @@ public sealed class ResourceTree
         tree.Mount("/graph", "graph",
             readFn: async path =>
             {
-                await Task.Delay(10);
+                await Task.Delay(10).ConfigureAwait(false);
                 return JsonSerializer.Serialize(new
                 {
                     node = path.Trim('/'),
@@ -488,7 +488,7 @@ public sealed class ResourceTree
             },
             searchFn: async (query, topK) =>
             {
-                await Task.Delay(15);
+                await Task.Delay(15).ConfigureAwait(false);
                 return new List<object>
                 {
                     new { node = query, rank = 1, embedding_distance = 0.12 },
@@ -499,7 +499,7 @@ public sealed class ResourceTree
         tree.Mount("/session", "session",
             readFn: async path =>
             {
-                await Task.Delay(1);
+                await Task.Delay(1).ConfigureAwait(false);
                 return JsonSerializer.Serialize(new
                 {
                     session_id = path.Trim('/'),
@@ -510,7 +510,7 @@ public sealed class ResourceTree
             },
             writeFn: async (path, content) =>
             {
-                await Task.Delay(5);
+                await Task.Delay(5).ConfigureAwait(false);
                 _ = content;
                 return true;
             });

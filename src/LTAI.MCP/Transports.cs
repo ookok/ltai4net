@@ -37,17 +37,17 @@ public sealed class StdioTransport : IMCPTransport
         {
             while (!_cts.Token.IsCancellationRequested)
             {
-                var line = await reader.ReadLineAsync(_cts.Token);
+                var line = await reader.ReadLineAsync(_cts.Token).ConfigureAwait(false);
                 if (line == null) break;
                 if (string.IsNullOrWhiteSpace(line)) continue;
 
                 _logger.LogDebug("MCP <- {Line}", line[..Math.Min(line.Length, 200)]);
 
-                var response = await _server.HandleMessageAsync(line, _cts.Token);
+                var response = await _server.HandleMessageAsync(line, _cts.Token).ConfigureAwait(false);
                 if (!string.IsNullOrEmpty(response))
                 {
                     _logger.LogDebug("MCP -> {Response}", response[..Math.Min(response.Length, 200)]);
-                    await writer.WriteLineAsync(response);
+                    await writer.WriteLineAsync(response).ConfigureAwait(false);
                 }
             }
         }

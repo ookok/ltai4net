@@ -90,8 +90,8 @@ public sealed class PathCompressor
             });
         }
 
-        await IngestIntoKnowledgeGraph(results, ct);
-        await IngestAsLessons(results, ct);
+        await IngestIntoKnowledgeGraph(results, ct).ConfigureAwait(false);
+        await IngestAsLessons(results, ct).ConfigureAwait(false);
 
         _logger?.LogInformation("PathCompressor: mined {Count} path patterns from {Episodes} episodes (domain={Domain})",
             results.Count, episodes.Count, domain ?? "all");

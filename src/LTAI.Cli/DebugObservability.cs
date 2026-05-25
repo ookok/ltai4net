@@ -18,6 +18,7 @@ public sealed class DebugObservability
 
     public Dictionary<string, object> Snapshot()
     {
+#pragma warning disable CS8601
         var snap = new Dictionary<string, object>();
 
         try
@@ -117,6 +118,7 @@ public sealed class DebugObservability
         }
         catch { }
 
+#pragma warning restore CS8601
         return snap;
     }
 }

@@ -39,7 +39,7 @@ public interface ITtsEngine
     bool IsAvailable { get; }
 }
 
-public sealed class TtsEngine : ITtsEngine
+public sealed class TtsEngine : ITtsEngine, IDisposable
 {
     private readonly HttpClient _http;
     private readonly string _ollamaUrl;
@@ -52,6 +52,8 @@ public sealed class TtsEngine : ITtsEngine
         _http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
         _ollamaUrl = ollamaUrl.TrimEnd('/');
     }
+
+    public void Dispose() { _http?.Dispose(); }
 
     public Task<TtsResult> SynthesizeAsync(string text, TtsSynthesisOptions? options = null, CancellationToken ct = default)
     {
@@ -81,7 +83,7 @@ public sealed class TtsEngine : ITtsEngine
             var response = await _http.PostAsync($"{_ollamaUrl}/api/generate", content);
             if (response.IsSuccessStatusCode)
             {
-                var respJson = await response.Content.ReadAsStringAsync();
+                var respJson = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
                 return new TtsResult
                 {
                     AudioBytes = Encoding.UTF8.GetBytes(respJson),

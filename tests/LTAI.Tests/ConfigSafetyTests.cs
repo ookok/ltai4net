@@ -5,7 +5,7 @@ using Xunit;
 namespace LTAI.Tests;
 
 /// <summary>
-/// Configuration Safety Auditor Tests for LTAI v7.0.
+/// Configuration Safety Auditor Tests for LTAI V0.51.
 /// Covers: middleware removal, agent type changes, critical change detection, CI fail conditions.
 /// Uses in-memory agent configs — no file I/O.
 /// </summary>

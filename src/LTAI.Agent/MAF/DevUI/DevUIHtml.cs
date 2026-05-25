@@ -121,13 +121,13 @@ let searchHighlight = null;
 
 async function loadGraph() {
   try {
-    const resp = await fetch('/api/devui/graph');
-    graphData = await resp.json();
+    const resp = await fetch('/api/devui/graph').ConfigureAwait(false);
+    graphData = await resp.json().ConfigureAwait(false);
     renderAll(graphData);
   } catch (e) {
     console.warn('API not available, using sample data');
-    const resp = await fetch('/api/devui/state');
-    const state = await resp.json();
+    const resp = await fetch('/api/devui/state').ConfigureAwait(false);
+    const state = await resp.json().ConfigureAwait(false);
     graphData = state.graph;
     renderAll(graphData);
   }
@@ -260,8 +260,8 @@ function resetZoom() { svg.transition().duration(500).call(zoom.transform, d3.zo
 
 async function analyzeImpact() {
   try {
-    const resp = await fetch('/api/devui/impact');
-    const impact = await resp.json();
+    const resp = await fetch('/api/devui/impact').ConfigureAwait(false);
+    const impact = await resp.json().ConfigureAwait(false);
     const bar = document.getElementById('impact-bar');
     bar.classList.add('visible');
     const level = impact.score > 0.7 ? 'high' : impact.score > 0.3 ? 'medium' : 'low';
@@ -270,9 +270,9 @@ async function analyzeImpact() {
     document.getElementById('impactDetails').innerHTML = `
       <div>${impact.changed_files} changed files</div>
       <div>${impact.affected_nodes} potentially affected</div>`;
-    const resp2 = await fetch('/api/devui/graph');
+    const resp2 = await fetch('/api/devui/graph').ConfigureAwait(false);
     if (resp2.ok) {
-      graphData = await resp2.json();
+      graphData = await resp2.json().ConfigureAwait(false);
       drawForceGraph(graphData);
     }
   } catch (e) {
@@ -285,8 +285,8 @@ async function analyzeImpact() {
 
 async function generateTour() {
   try {
-    const resp = await fetch('/api/devui/tour');
-    const tour = await resp.json();
+    const resp = await fetch('/api/devui/tour').ConfigureAwait(false);
+    const tour = await resp.json().ConfigureAwait(false);
     alert('Tour generated: ' + tour.steps.length + ' steps\n' + tour.steps.map(s => s.order + '. ' + s.file).join('\n'));
   } catch (e) {
     alert('Tour generation requires the graph to be loaded. Click Refresh first.');

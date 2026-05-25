@@ -89,7 +89,7 @@ public sealed class GreenScheduler
         {
             try
             {
-                await fn();
+                await fn().ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -158,7 +158,7 @@ public sealed class GreenScheduler
                     try
                     {
                         _logger.LogInformation("Executing deferred task '{Name}' in Growth mode", task.Name);
-                        await task.Fn();
+                        await task.Fn().ConfigureAwait(false);
                     }
                     catch (Exception ex)
                     {

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using LTAI.Tools.CodeEngine;
 using Microsoft.Extensions.Logging;
@@ -23,14 +24,14 @@ public sealed class LspServer
 
         if (msg.IsRequest && msg.Id.HasValue)
         {
-            var result = await HandleRequestAsync(msg.Method!, msg.Params);
+            var result = await HandleRequestAsync(msg.Method!, msg.Params).ConfigureAwait(false);
             var response = new LspMessage { Id = msg.Id.Value, Result = result };
             return response.ToJson();
         }
 
         if (msg.IsNotification)
         {
-            await HandleNotificationAsync(msg.Method!, msg.Params);
+            await HandleNotificationAsync(msg.Method!, msg.Params).ConfigureAwait(false);
             return null;
         }
 
@@ -146,7 +147,7 @@ public sealed class LspServer
                 _openDocuments[uri] = text;
             }
         }
-        catch { }
+        catch (Exception ex) { _logger.LogWarning(ex, "LSP: Failed to parse code action diagnostics"); }
     }
 
     private void HandleDidClose(JsonElement? @params)
@@ -157,18 +158,18 @@ public sealed class LspServer
             var uri = @params.Value.GetProperty("textDocument").GetProperty("uri").GetString() ?? "";
             _openDocuments.Remove(uri);
         }
-        catch { }
+        catch (Exception ex) { _logger.LogWarning(ex, "LSP: Failed to handle didClose"); }
     }
 
     private async Task<HoverResult?> HandleHoverAsync(JsonElement? @params)
     {
-        var (code, language, pos) = await ResolvePosition(@params);
+        var (code, language, pos) = await ResolvePosition(@params).ConfigureAwait(false);
         if (code == null || language == null) return null;
 
         var parser = _parserRegistry.GetParser(language.Value);
         if (parser == null) return null;
 
-        var result = await parser.ParseAsync(code);
+        var result = await parser.ParseAsync(code).ConfigureAwait(false);
         var line = pos.Line + 1;
 
         var func = result.Functions.FirstOrDefault(f => f.Line <= line && f.EndLine >= line);
@@ -195,7 +196,7 @@ public sealed class LspServer
 
     private async Task<CompletionList?> HandleCompletionAsync(JsonElement? @params)
     {
-        var (code, language, _) = await ResolvePosition(@params);
+        var (code, language, _) = await ResolvePosition(@params).ConfigureAwait(false);
         if (code == null || language == null)
             return new CompletionList { IsIncomplete = false, Items = new() };
 
@@ -203,7 +204,7 @@ public sealed class LspServer
         if (parser == null)
             return new CompletionList { IsIncomplete = false, Items = new() };
 
-        var result = await parser.ParseAsync(code);
+        var result = await parser.ParseAsync(code).ConfigureAwait(false);
         var items = new List<CompletionItem>();
 
         foreach (var func in result.Functions)
@@ -236,13 +237,13 @@ public sealed class LspServer
 
     private async Task<List<Location>?> HandleDefinitionAsync(JsonElement? @params)
     {
-        var (code, language, pos) = await ResolvePosition(@params);
+        var (code, language, pos) = await ResolvePosition(@params).ConfigureAwait(false);
         if (code == null || language == null) return new();
 
         var parser = _parserRegistry.GetParser(language.Value);
         if (parser == null) return new();
 
-        var result = await parser.ParseAsync(code);
+        var result = await parser.ParseAsync(code).ConfigureAwait(false);
         var line = pos.Line + 1;
         var uri = ExtractUri(@params) ?? "file:///untitled";
 
@@ -268,13 +269,13 @@ public sealed class LspServer
 
     private async Task<List<Location>?> HandleReferencesAsync(JsonElement? @params)
     {
-        var (code, language, pos) = await ResolvePosition(@params);
+        var (code, language, pos) = await ResolvePosition(@params).ConfigureAwait(false);
         if (code == null || language == null) return new();
 
         var parser = _parserRegistry.GetParser(language.Value);
         if (parser == null) return new();
 
-        var result = await parser.ParseAsync(code);
+        var result = await parser.ParseAsync(code).ConfigureAwait(false);
         var line = pos.Line + 1;
         var uri = ExtractUri(@params) ?? "file:///untitled";
 
@@ -307,13 +308,13 @@ public sealed class LspServer
 
     private async Task<List<DocumentSymbol>?> HandleDocumentSymbolAsync(JsonElement? @params)
     {
-        var (code, language, _) = await ResolvePosition(@params);
+        var (code, language, _) = await ResolvePosition(@params).ConfigureAwait(false);
         if (code == null || language == null) return new();
 
         var parser = _parserRegistry.GetParser(language.Value);
         if (parser == null) return new();
 
-        var result = await parser.ParseAsync(code);
+        var result = await parser.ParseAsync(code).ConfigureAwait(false);
         var symbols = new List<DocumentSymbol>();
 
         foreach (var cls in result.Classes)
@@ -380,13 +381,13 @@ public sealed class LspServer
 
     private async Task<List<Diagnostic>?> HandleDiagnosticAsync(JsonElement? @params)
     {
-        var (code, language, _) = await ResolvePosition(@params);
+        var (code, language, _) = await ResolvePosition(@params).ConfigureAwait(false);
         if (code == null || language == null) return new();
 
         var parser = _parserRegistry.GetParser(language.Value);
         if (parser == null || !parser.SupportsDiagnostics) return new();
 
-        var result = await parser.ParseAsync(code);
+        var result = await parser.ParseAsync(code).ConfigureAwait(false);
         return result.Diagnostics.Select(d => new Diagnostic
         {
             Range = new Range
@@ -418,7 +419,7 @@ public sealed class LspServer
                 var rawDiags = ctx.GetProperty("diagnostics");
                 diags = JsonSerializer.Deserialize<List<Diagnostic>>(rawDiags.GetRawText()) ?? new();
             }
-            catch { }
+        catch (Exception ex) { _logger.LogWarning(ex, "LSP: Failed to handle didChange"); }
         }
 
         return diags
@@ -459,8 +460,9 @@ public sealed class LspServer
 
             return (null, null, pos);
         }
-        catch
+        catch (Exception ex)
         {
+            _logger.LogWarning(ex, "LSP: Failed to resolve position from params");
             return (null, null, new());
         }
     }
@@ -471,7 +473,7 @@ public sealed class LspServer
         {
             return @params?.GetProperty("textDocument").GetProperty("uri").GetString();
         }
-        catch { return null; }
+        catch (Exception ex) { System.Diagnostics.Debug.WriteLine(ex, "LSP: Failed to extract URI from params"); return null; }
     }
 
     private static CodeLanguage DetectLanguage(string uri)

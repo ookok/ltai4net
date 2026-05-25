@@ -79,7 +79,7 @@ public sealed class CodeEditEngine
             }
 
             var diff = GenerateDiff(snapshot.Content, result.NewHash);
-            var diagnostics = await ValidateSyntaxAsync(op.FilePath);
+            var diagnostics = await ValidateSyntaxAsync(op.FilePath).ConfigureAwait(false);
 
             return result with
             {
@@ -112,7 +112,7 @@ public sealed class CodeEditEngine
         var allSuccess = true;
         foreach (var op in ops)
         {
-            var r = await ApplyEditAsync(op);
+            var r = await ApplyEditAsync(op).ConfigureAwait(false);
             r = r with { SnapshotId = snapshots.First(s => s.FilePath == op.FilePath).Id };
             results.Add(r);
             if (!r.Success) allSuccess = false;
@@ -138,8 +138,8 @@ public sealed class CodeEditEngine
         if (_parser == null || !File.Exists(filePath))
             return Array.Empty<EditOp>();
 
-        var content = await File.ReadAllTextAsync(filePath);
-        var result = await _parser.ParseAsync(content, filePath);
+        var content = await File.ReadAllTextAsync(filePath).ConfigureAwait(false);
+        var result = await _parser.ParseAsync(content, filePath).ConfigureAwait(false);
 
         int line = 0, endLine = 0;
         string? functionName = null;
@@ -298,8 +298,8 @@ public sealed class CodeEditEngine
         if (_parser == null || !File.Exists(op.FilePath))
             return new() { Success = false, Errors = new() { "Parser not available or file not found" } };
 
-        var content = await File.ReadAllTextAsync(op.FilePath);
-        var parseResult = await _parser.ParseAsync(content, op.FilePath);
+        var content = await File.ReadAllTextAsync(op.FilePath).ConfigureAwait(false);
+        var parseResult = await _parser.ParseAsync(content, op.FilePath).ConfigureAwait(false);
 
         var function = parseResult.Functions
             .FirstOrDefault(f => f.Name.Equals(op.FunctionName ?? "", StringComparison.OrdinalIgnoreCase));
@@ -407,8 +407,8 @@ public sealed class CodeEditEngine
         {
             if (_parser != null && _parser.SupportsDiagnostics)
             {
-                var content = await File.ReadAllTextAsync(filePath);
-                var result = await _parser.ParseAsync(content, filePath);
+                var content = await File.ReadAllTextAsync(filePath).ConfigureAwait(false);
+                var result = await _parser.ParseAsync(content, filePath).ConfigureAwait(false);
                 foreach (var diag in result.Diagnostics)
                 {
                     var msg = $"{filePath}:{diag.Line}: {diag.Message} [{diag.Code}]";
@@ -420,7 +420,7 @@ public sealed class CodeEditEngine
             }
             else
             {
-                var content = await File.ReadAllTextAsync(filePath);
+                var content = await File.ReadAllTextAsync(filePath).ConfigureAwait(false);
                 var unclosedBraces = content.Count(c => c == '{') - content.Count(c => c == '}');
                 if (unclosedBraces != 0)
                     errors.Add($"Brace mismatch: {unclosedBraces} unclosed braces in {filePath}");

@@ -33,7 +33,7 @@ public sealed class LifeEngine
         _biorhythm.Tick();
         _hormones.Update(_biorhythm.State);
         _habits.Reinforce();
-        await Task.CompletedTask;
+        await Task.CompletedTask.ConfigureAwait(false);
     }
 
     public void ProcessInteraction(string input, string output, string? emotion = null)

@@ -66,9 +66,9 @@ public sealed class DaemonManager
 
         try
         {
-            if (IsLinux) return await InstallSystemd(config);
-            if (IsMacOS) return await InstallLaunchd(config);
-            if (IsWindows) return await InstallWindowsService(config);
+            if (IsLinux) return await InstallSystemd(config).ConfigureAwait(false);
+            if (IsMacOS) return await InstallLaunchd(config).ConfigureAwait(false);
+            if (IsWindows) return await InstallWindowsService(config).ConfigureAwait(false);
 
             return Fail(config.ServiceName, "Unsupported platform");
         }
@@ -91,7 +91,7 @@ public sealed class DaemonManager
 
             if (IsWindows)
             {
-                var result = await _serviceManager.UninstallAsync();
+                var result = await _serviceManager.UninstallAsync().ConfigureAwait(false);
                 return new DaemonResult
                 {
                     Success = result.Success,
@@ -123,7 +123,7 @@ public sealed class DaemonManager
 
             if (IsWindows)
             {
-                var result = await _serviceManager.StartAsync();
+                var result = await _serviceManager.StartAsync().ConfigureAwait(false);
                 return new DaemonResult
                 {
                     Success = result.Success,
@@ -154,7 +154,7 @@ public sealed class DaemonManager
 
             if (IsWindows)
             {
-                var result = await _serviceManager.StopAsync();
+                var result = await _serviceManager.StopAsync().ConfigureAwait(false);
                 return new DaemonResult
                 {
                     Success = result.Success,
@@ -184,7 +184,7 @@ public sealed class DaemonManager
             if (IsMacOS)
             {
                 var stop = await RunLaunchCtl($"stop ~/Library/LaunchAgents/{serviceName}.plist", serviceName);
-                await Task.Delay(1000);
+                await Task.Delay(1000).ConfigureAwait(false);
                 var start = await RunLaunchCtl($"start ~/Library/LaunchAgents/{serviceName}.plist", serviceName);
                 return new DaemonResult
                 {
@@ -198,7 +198,7 @@ public sealed class DaemonManager
 
             if (IsWindows)
             {
-                var result = await _serviceManager.RestartAsync();
+                var result = await _serviceManager.RestartAsync().ConfigureAwait(false);
                 return new DaemonResult
                 {
                     Success = result.Success,
@@ -229,7 +229,7 @@ public sealed class DaemonManager
 
             if (IsWindows)
             {
-                var result = await _serviceManager.StatusAsync();
+                var result = await _serviceManager.StatusAsync().ConfigureAwait(false);
                 return new DaemonResult
                 {
                     Success = result.Success,
@@ -327,7 +327,7 @@ public sealed class DaemonManager
 
         try
         {
-            await File.WriteAllTextAsync(unitPath, unitFile);
+            await File.WriteAllTextAsync(unitPath, unitFile).ConfigureAwait(false);
             _logger.LogInformation("Written systemd unit file: {Path}", unitPath);
 
             await RunSystemCtl("daemon-reload", config.ServiceName);
@@ -385,7 +385,7 @@ public sealed class DaemonManager
             </plist>
             """;
 
-        await File.WriteAllTextAsync(plistPath, plistContent);
+        await File.WriteAllTextAsync(plistPath, plistContent).ConfigureAwait(false);
         _logger.LogInformation("Written launchd plist: {Path}", plistPath);
 
         var loadResult = await RunLaunchCtl($"load {plistPath}", config.ServiceName);
@@ -401,7 +401,7 @@ public sealed class DaemonManager
 
     private async Task<DaemonResult> InstallWindowsService(DaemonConfig config)
     {
-        var result = await _serviceManager.InstallAsync(config.ExecPath);
+        var result = await _serviceManager.InstallAsync(config.ExecPath).ConfigureAwait(false);
 
         return new DaemonResult
         {
@@ -429,9 +429,9 @@ public sealed class DaemonManager
             if (proc == null)
                 return Fail(serviceName, "Failed to start systemctl");
 
-            var output = await proc.StandardOutput.ReadToEndAsync();
-            var error = await proc.StandardError.ReadToEndAsync();
-            await proc.WaitForExitAsync();
+            var output = await proc.StandardOutput.ReadToEndAsync().ConfigureAwait(false);
+            var error = await proc.StandardError.ReadToEndAsync().ConfigureAwait(false);
+            await proc.WaitForExitAsync().ConfigureAwait(false);
 
             var combined = string.IsNullOrEmpty(error) ? output : $"{output}\n{error}";
 
@@ -467,9 +467,9 @@ public sealed class DaemonManager
             if (proc == null)
                 return Fail(serviceName, "Failed to start launchctl");
 
-            var output = await proc.StandardOutput.ReadToEndAsync();
-            var error = await proc.StandardError.ReadToEndAsync();
-            await proc.WaitForExitAsync();
+            var output = await proc.StandardOutput.ReadToEndAsync().ConfigureAwait(false);
+            var error = await proc.StandardError.ReadToEndAsync().ConfigureAwait(false);
+            await proc.WaitForExitAsync().ConfigureAwait(false);
 
             var combined = string.IsNullOrEmpty(error) ? output : $"{output}\n{error}";
 

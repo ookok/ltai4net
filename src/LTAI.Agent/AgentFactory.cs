@@ -103,12 +103,12 @@ public sealed class AgentFactory : IAgentFactory
                 _logger.LogWarning("AgentFactory [{Agent}]: Safety warning: {Reason}",
                     card.Name, gateVerdict.Reason);
 
-            var response = await inner.RunAsync(messages, session, options, ct);
+            var response = await inner.RunAsync(messages, session, options, ct).ConfigureAwait(false);
 
             if (response.Text is not null)
             {
                 var outputVerdict = await _safetyGate.EvaluateOutputAsync(
-                    response.Text, sessionId, ct);
+                    response.Text, sessionId, ct).ConfigureAwait(false);
 
                 if (!outputVerdict.IsAllowed)
                 {

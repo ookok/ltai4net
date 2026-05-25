@@ -5,7 +5,7 @@ using Xunit;
 namespace LTAI.Tests;
 
 /// <summary>
-/// Red Team Security Tests for LTAI v7.0 UnifiedSafetyGate.
+/// Red Team Security Tests for LTAI V0.51 UnifiedSafetyGate.
 /// Covers: Base64 injection, Unicode evasion, cumulative risk, stair-step punishment, tool call screening.
 /// </summary>
 public class RedTeamTests

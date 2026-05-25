@@ -113,7 +113,7 @@ public sealed class VisionAnalyzer
         if (!File.Exists(imagePath)) return "Error: File not found";
         try
         {
-            var bytes = await File.ReadAllBytesAsync(imagePath, ct);
+            var bytes = await File.ReadAllBytesAsync(imagePath, ct).ConfigureAwait(false);
             var base64 = Convert.ToBase64String(bytes);
             var ext = Path.GetExtension(imagePath).ToLowerInvariant();
             var mime = ext switch { ".png" => "image/png", ".jpg" or ".jpeg" => "image/jpeg", ".webp" => "image/webp", _ => "image/png" };
@@ -123,7 +123,7 @@ public sealed class VisionAnalyzer
             sb.AppendLine($"Format: {mime} | Size: {info.Length / 1024}KB | Base64: {base64.Length} chars");
             sb.AppendLine($"Task: {task ?? "Describe this image in detail"}");
             sb.AppendLine("\n[Send to vision LLM (GPT-4V/Claude 3) for full analysis]");
-            return await Task.FromResult(sb.ToString());
+            return await Task.FromResult(sb.ToString()).ConfigureAwait(false);
         }
         catch (Exception ex) { return $"Error: {ex.Message}"; }
     }
@@ -146,15 +146,15 @@ public sealed class SpeechEngine
             using var ms = new MemoryStream();
             synth.SetOutputToWaveStream(ms);
             synth.Speak(text);
-            return await Task.FromResult(ms.ToArray());
+            return await Task.FromResult(ms.ToArray()).ConfigureAwait(false);
         }
         catch (Exception ex) { _logger.LogError(ex, "TTS failed"); throw; }
     }
 
     public async Task<string> SynthesizeToFileAsync(string text, string outputPath, string? voice = null, CancellationToken ct = default)
     {
-        var bytes = await SynthesizeAsync(text, voice, ct);
-        await File.WriteAllBytesAsync(outputPath, bytes, ct);
+        var bytes = await SynthesizeAsync(text, voice, ct).ConfigureAwait(false);
+        await File.WriteAllBytesAsync(outputPath, bytes, ct).ConfigureAwait(false);
         return outputPath;
     }
 
@@ -177,9 +177,11 @@ public sealed class SpeechEngine
     public async Task<string[]> GetAvailableVoicesAsync(CancellationToken ct = default)
     {
         if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-            return await Task.FromResult(Array.Empty<string>());
+            return await Task.FromResult(Array.Empty<string>()).ConfigureAwait(false);
+#pragma warning disable CA1416
         var synth = new System.Speech.Synthesis.SpeechSynthesizer();
         return synth.GetInstalledVoices().Select(v => v.VoiceInfo.Name).ToArray();
+#pragma warning restore CA1416
     }
 }
 

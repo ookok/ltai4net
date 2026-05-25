@@ -10,7 +10,7 @@ public static class FileSystemTools
         [Description("Absolute path to the file")] string path,
         CancellationToken ct = default)
     {
-        return await File.ReadAllTextAsync(path, ct);
+        return await File.ReadAllTextAsync(path, ct).ConfigureAwait(false);
     }
 
     [Description("Writes content to a file, creating directories if needed")]
@@ -23,7 +23,7 @@ public static class FileSystemTools
         if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
             Directory.CreateDirectory(dir);
 
-        await File.WriteAllTextAsync(path, content, ct);
+        await File.WriteAllTextAsync(path, content, ct).ConfigureAwait(false);
     }
 
     [Description("Lists files and directories at the given path")]

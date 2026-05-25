@@ -29,7 +29,7 @@ public abstract class LayerGovernor : ILayerGovernor
     public async Task SendAsync(Handshake handshake, CancellationToken cancellationToken = default)
     {
         handshake = handshake with { From = LayerName };
-        await Mesh.SendAsync(handshake, cancellationToken);
+        await Mesh.SendAsync(handshake, cancellationToken).ConfigureAwait(false);
         _stats.MessagesSent++;
         _stats.LastActive = DateTime.UtcNow;
     }

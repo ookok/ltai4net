@@ -165,7 +165,7 @@ public sealed class AgentRegistryLock
         Write(info);
     }
 
-    private static string GetCurrentVersion() => "v7.0";
+    private static string GetCurrentVersion() => "V0.51";
 
     private static string ComputeAgentHash(LTAI.Models.LTAIAgentCard agent)
     {

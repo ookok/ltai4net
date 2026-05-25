@@ -19,7 +19,7 @@ public static class MCPEndpoints
             try
             {
                 using var reader = new StreamReader(context.Request.Body);
-                var body = await reader.ReadToEndAsync(ct);
+                var body = await reader.ReadToEndAsync(ct).ConfigureAwait(false);
                 var request = JsonSerializer.Deserialize<JsonElement>(body);
 
                 var method = request.TryGetProperty("method", out var m) ? m.GetString() ?? "" : "";
@@ -33,7 +33,7 @@ public static class MCPEndpoints
                     {
                         protocolVersion = "2024-11-05",
                         capabilities = new { tools = new { }, resources = new { } },
-                        serverInfo = new { name = "LTAI", version = "7.0.0" }
+                        serverInfo = new { name = "LTAI", version = "0.51.0" }
                     },
                     "tools/list" => new
                     {

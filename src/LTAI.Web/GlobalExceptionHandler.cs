@@ -13,7 +13,7 @@ public static class GlobalExceptionHandler
         {
             try
             {
-                await next();
+                await next().ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -24,7 +24,7 @@ public static class GlobalExceptionHandler
                 context.Response.StatusCode = 500;
                 context.Response.ContentType = "application/json";
                 var response = new { error = "Internal server error", traceId = context.TraceIdentifier };
-                await context.Response.WriteAsJsonAsync(response);
+                await context.Response.WriteAsJsonAsync(response).ConfigureAwait(false);
             }
         });
     }

@@ -48,7 +48,7 @@ public sealed class WarmStartAccel
             }
         });
 
-        var pinged = (await Task.WhenAll(pingTasks)).Where(p => p != null).Select(p => p!).ToList();
+        var pinged = (await Task.WhenAll(pingTasks).ConfigureAwait(false)).Where(p => p != null).Select(p => p!).ToList();
         var warmupCandidates = pinged.Take(3).ToList();
 
         var warmupTasks = warmupCandidates.Select(async provider =>
@@ -69,7 +69,7 @@ public sealed class WarmStartAccel
             }
         });
 
-        var results = await Task.WhenAll(warmupTasks);
+        var results = await Task.WhenAll(warmupTasks).ConfigureAwait(false);
         _providersWarmed = results.Count(r => r);
 
         sw.Stop();

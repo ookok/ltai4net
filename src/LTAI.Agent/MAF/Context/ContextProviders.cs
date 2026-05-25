@@ -55,7 +55,7 @@ public sealed class CompositeContextProvider : LTAIContextProvider
     public override async Task<IReadOnlyList<ContextItem>> GetContextAsync(string query, CancellationToken ct = default)
     {
         var tasks = _providers.Select(p => p.GetContextAsync(query, ct));
-        var results = await Task.WhenAll(tasks);
+        var results = await Task.WhenAll(tasks).ConfigureAwait(false);
         return results.SelectMany(r => r).OrderByDescending(c => c.Relevance).Take(20).ToList();
     }
 }

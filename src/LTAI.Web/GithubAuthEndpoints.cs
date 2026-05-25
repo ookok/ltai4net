@@ -88,10 +88,10 @@ public static class GithubAuthEndpoints
                 };
                 tokenRequest.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
 
-                var tokenResponse = await _http.SendAsync(tokenRequest);
+                var tokenResponse = await _http.SendAsync(tokenRequest).ConfigureAwait(false);
                 tokenResponse.EnsureSuccessStatusCode();
 
-                var tokenJson = await tokenResponse.Content.ReadAsStringAsync();
+                var tokenJson = await tokenResponse.Content.ReadAsStringAsync().ConfigureAwait(false);
                 using var tokenDoc = JsonDocument.Parse(tokenJson);
                 var accessToken = tokenDoc.RootElement.GetProperty("access_token").GetString() ?? "";
 
@@ -108,10 +108,10 @@ public static class GithubAuthEndpoints
                 userRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
                 userRequest.Headers.UserAgent.ParseAdd("LTAI");
 
-                var userResponse = await _http.SendAsync(userRequest);
+                var userResponse = await _http.SendAsync(userRequest).ConfigureAwait(false);
                 userResponse.EnsureSuccessStatusCode();
 
-                var userJson = await userResponse.Content.ReadAsStringAsync();
+                var userJson = await userResponse.Content.ReadAsStringAsync().ConfigureAwait(false);
                 using var userDoc = JsonDocument.Parse(userJson);
                 var username = userDoc.RootElement.GetProperty("login").GetString() ?? "";
                 var avatarUrl = userDoc.RootElement.GetProperty("avatar_url").GetString() ?? "";
@@ -126,13 +126,13 @@ public static class GithubAuthEndpoints
                 SaveToken();
 
                 context.Response.ContentType = "application/json";
-                await context.Response.WriteAsync(JsonSerializer.Serialize(new GitHubAuthResponse(true, username, avatarUrl)));
+                await context.Response.WriteAsync(JsonSerializer.Serialize(new GitHubAuthResponse(true, username, avatarUrl))).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
                 context.Response.StatusCode = 500;
                 context.Response.ContentType = "application/json";
-                await context.Response.WriteAsync(JsonSerializer.Serialize(new { error = ex.Message }));
+                await context.Response.WriteAsync(JsonSerializer.Serialize(new { error = ex.Message })).ConfigureAwait(false);
             }
         });
 
@@ -142,7 +142,7 @@ public static class GithubAuthEndpoints
             if (token == null || string.IsNullOrEmpty(token.AccessToken))
             {
                 context.Response.ContentType = "application/json";
-                await context.Response.WriteAsync(JsonSerializer.Serialize(new GitHubAuthResponse(false, null, null)));
+                await context.Response.WriteAsync(JsonSerializer.Serialize(new GitHubAuthResponse(false, null, null))).ConfigureAwait(false);
                 return;
             }
 
@@ -151,28 +151,28 @@ public static class GithubAuthEndpoints
                 var userRequest = new HttpRequestMessage(HttpMethod.Get, "https://api.github.com/user");
                 userRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token.AccessToken);
                 userRequest.Headers.UserAgent.ParseAdd("LTAI");
-                var userResponse = await _http.SendAsync(userRequest);
+                var userResponse = await _http.SendAsync(userRequest).ConfigureAwait(false);
 
                 if (userResponse.IsSuccessStatusCode)
                 {
-                    var userJson = await userResponse.Content.ReadAsStringAsync();
+                    var userJson = await userResponse.Content.ReadAsStringAsync().ConfigureAwait(false);
                     using var userDoc = JsonDocument.Parse(userJson);
                     var username = userDoc.RootElement.GetProperty("login").GetString() ?? "";
                     var avatarUrl = userDoc.RootElement.GetProperty("avatar_url").GetString() ?? "";
 
                     context.Response.ContentType = "application/json";
-                    await context.Response.WriteAsync(JsonSerializer.Serialize(new GitHubAuthResponse(true, username, avatarUrl)));
+                    await context.Response.WriteAsync(JsonSerializer.Serialize(new GitHubAuthResponse(true, username, avatarUrl))).ConfigureAwait(false);
                 }
                 else
                 {
                     context.Response.ContentType = "application/json";
-                    await context.Response.WriteAsync(JsonSerializer.Serialize(new GitHubAuthResponse(false, null, null)));
+                    await context.Response.WriteAsync(JsonSerializer.Serialize(new GitHubAuthResponse(false, null, null))).ConfigureAwait(false);
                 }
             }
             catch
             {
                 context.Response.ContentType = "application/json";
-                await context.Response.WriteAsync(JsonSerializer.Serialize(new GitHubAuthResponse(false, null, null)));
+                await context.Response.WriteAsync(JsonSerializer.Serialize(new GitHubAuthResponse(false, null, null))).ConfigureAwait(false);
             }
         });
 
@@ -192,18 +192,18 @@ public static class GithubAuthEndpoints
                 var reposRequest = new HttpRequestMessage(HttpMethod.Get, "https://api.github.com/user/repos?per_page=100&sort=updated");
                 reposRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token.AccessToken);
                 reposRequest.Headers.UserAgent.ParseAdd("LTAI");
-                var reposResponse = await _http.SendAsync(reposRequest);
+                var reposResponse = await _http.SendAsync(reposRequest).ConfigureAwait(false);
                 reposResponse.EnsureSuccessStatusCode();
 
-                var reposJson = await reposResponse.Content.ReadAsStringAsync();
+                var reposJson = await reposResponse.Content.ReadAsStringAsync().ConfigureAwait(false);
                 context.Response.ContentType = "application/json";
-                await context.Response.WriteAsync(reposJson);
+                await context.Response.WriteAsync(reposJson).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
                 context.Response.StatusCode = 500;
                 context.Response.ContentType = "application/json";
-                await context.Response.WriteAsync(JsonSerializer.Serialize(new { error = ex.Message }));
+                await context.Response.WriteAsync(JsonSerializer.Serialize(new { error = ex.Message })).ConfigureAwait(false);
             }
         });
 
@@ -212,7 +212,7 @@ public static class GithubAuthEndpoints
             try
             {
                 using var reader = new StreamReader(context.Request.Body);
-                var body = await reader.ReadToEndAsync();
+                var body = await reader.ReadToEndAsync().ConfigureAwait(false);
                 var request = JsonSerializer.Deserialize<CloneRepoRequest>(body);
 
                 if (request == null || string.IsNullOrWhiteSpace(request.RepoFullName))
@@ -278,13 +278,13 @@ public static class GithubAuthEndpoints
                     branch,
                     path = targetPath,
                     cloned = true
-                }));
+                })).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
                 context.Response.StatusCode = 500;
                 context.Response.ContentType = "application/json";
-                await context.Response.WriteAsync(JsonSerializer.Serialize(new { error = ex.Message }));
+                await context.Response.WriteAsync(JsonSerializer.Serialize(new { error = ex.Message })).ConfigureAwait(false);
             }
         });
     }

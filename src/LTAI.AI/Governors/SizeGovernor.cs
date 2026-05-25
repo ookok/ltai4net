@@ -134,7 +134,7 @@ public sealed class SizeGovernor : IDisposable
         // 1. 尝试量化 (如果启用且准确率允许)
         if (_config.EnableQuantization && originalSize > maxBytes * 0.5)
         {
-            var quantizedPath = await QuantizeModelAsync(modelPath, currentAccuracy, ct);
+            var quantizedPath = await QuantizeModelAsync(modelPath, currentAccuracy, ct).ConfigureAwait(false);
             if (quantizedPath != null)
             {
                 optimizedPath = quantizedPath;
@@ -147,7 +147,7 @@ public sealed class SizeGovernor : IDisposable
         var compressedPath = optimizedPath;
         if (new FileInfo(optimizedPath).Length > maxBytes)
         {
-            compressedPath = await CompressModelForDistributionAsync(optimizedPath, ct);
+            compressedPath = await CompressModelForDistributionAsync(optimizedPath, ct).ConfigureAwait(false);
         }
 
         var finalSize = new FileInfo(compressedPath).Length;
@@ -254,7 +254,7 @@ public sealed class SizeGovernor : IDisposable
 
         // 简化量化实现：复制文件
         // 实际应使用 ONNX Runtime 量化工具 (onnxruntime.quantization)
-        await Task.Run(() => File.Copy(modelPath, quantizedPath, true), ct);
+        await Task.Run(() => File.Copy(modelPath, quantizedPath, true), ct).ConfigureAwait(false);
 
         // 模拟量化后的准确率检查
         var quantizedAccuracy = currentAccuracy * _config.QuantizationAccuracyThreshold;
@@ -289,13 +289,13 @@ public sealed class SizeGovernor : IDisposable
         {
             await using var gzipStream = new System.IO.Compression.GZipStream(
                 destStream, System.IO.Compression.CompressionLevel.Optimal);
-            await sourceStream.CopyToAsync(gzipStream, ct);
+            await sourceStream.CopyToAsync(gzipStream, ct).ConfigureAwait(false);
         }
         else if (_config.PreferredCompression == CellCompression.Brotli)
         {
             await using var brotliStream = new System.IO.Compression.BrotliStream(
                 destStream, System.IO.Compression.CompressionLevel.Optimal);
-            await sourceStream.CopyToAsync(brotliStream, ct);
+            await sourceStream.CopyToAsync(brotliStream, ct).ConfigureAwait(false);
         }
 
         return compressedPath;

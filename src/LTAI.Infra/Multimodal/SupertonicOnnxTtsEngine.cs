@@ -26,6 +26,13 @@ public sealed class SupertonicOnnxTtsEngine : ITtsEngine, IDisposable
     private readonly int _chunkCompressFactor;
     private readonly int _ldim;
 
+    private static readonly Regex s_paragraphRegex = new(
+        @"\n\s*\n+",
+        RegexOptions.Compiled);
+    private static readonly Regex s_sentenceRegex = new(
+        @"(?<!Mr\.|Mrs\.|Ms\.|Dr\.|Prof\.|Sr\.|Jr\.|etc\.|e\.g\.|i\.e\.|vs\.)(?<!\b[A-Z]\.)(?<=[.!?])\s+",
+        RegexOptions.Compiled);
+
     public string EngineName => "Supertonic ONNX";
     public bool IsAvailable => true;
 
@@ -112,7 +119,7 @@ public sealed class SupertonicOnnxTtsEngine : ITtsEngine, IDisposable
                 ct.ThrowIfCancellationRequested();
                 var chunk = textList[chunkIdx];
                 var (wav, duration) = await Task.Run(() =>
-                    Infer(new List<string> { chunk }, new List<string> { lang }, style, totalStep, speed), ct);
+                    Infer(new List<string> { chunk }, new List<string> { lang }, style, totalStep, speed), ct).ConfigureAwait(false);
 
                 if (wavCat.Count == 0)
                 {
@@ -161,7 +168,7 @@ public sealed class SupertonicOnnxTtsEngine : ITtsEngine, IDisposable
             string? description = null;
             try
             {
-                using var doc = JsonDocument.Parse(await File.ReadAllTextAsync(file, ct));
+                using var doc = JsonDocument.Parse(await File.ReadAllTextAsync(file, ct).ConfigureAwait(false));
                 if (doc.RootElement.TryGetProperty("description", out var desc))
                     description = desc.GetString();
             }
@@ -335,13 +342,13 @@ public sealed class SupertonicOnnxTtsEngine : ITtsEngine, IDisposable
             return new List<string> { text };
 
         var chunks = new List<string>();
-        var paragraphRegex = new Regex(@"\n\s*\n+");
+        var paragraphRegex = s_paragraphRegex;
         var paragraphs = paragraphRegex.Split(text.Trim())
             .Select(p => p.Trim())
             .Where(p => !string.IsNullOrEmpty(p))
             .ToList();
 
-        var sentenceRegex = new Regex(@"(?<!Mr\.|Mrs\.|Ms\.|Dr\.|Prof\.|Sr\.|Jr\.|etc\.|e\.g\.|i\.e\.|vs\.)(?<!\b[A-Z]\.)(?<=[.!?])\s+");
+        var sentenceRegex = s_sentenceRegex;
         foreach (var paragraph in paragraphs)
         {
             var sentences = sentenceRegex.Split(paragraph);

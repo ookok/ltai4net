@@ -38,7 +38,7 @@ public sealed class PromptBuilder
         PromptBuildOptions? options = null)
     {
         var opts = options ?? PromptBuildOptions.Default;
-        var sysPrompt = await BuildSystemPrompt(question, docs, opts);
+        var sysPrompt = await BuildSystemPrompt(question, docs, opts).ConfigureAwait(false);
         var userPrompt = BuildUserPrompt(question, docs, opts);
         return (sysPrompt, userPrompt);
     }
@@ -48,7 +48,7 @@ public sealed class PromptBuilder
         IReadOnlyList<LTAI.Knowledge.Core.Models.KnowledgeSearchResult> docs,
         PromptBuildOptions? options = null)
     {
-        var (sys, user) = await BuildPrompt(question, docs, options);
+        var (sys, user) = await BuildPrompt(question, docs, options).ConfigureAwait(false);
 
         var messages = new List<ChatMessage>
         {
@@ -64,7 +64,7 @@ public sealed class PromptBuilder
         IReadOnlyList<LTAI.Knowledge.Core.Models.KnowledgeSearchResult> docs,
         PromptBuildOptions? options = null)
     {
-        var (sys, user) = await BuildPrompt(question, docs, options);
+        var (sys, user) = await BuildPrompt(question, docs, options).ConfigureAwait(false);
         return sys + "\n\n---\n\n" + user;
     }
 
@@ -98,7 +98,7 @@ public sealed class PromptBuilder
 
         if (docs.Count > 0)
         {
-            var contextSection = await BuildContextSection(docs, question, opts);
+            var contextSection = await BuildContextSection(docs, question, opts).ConfigureAwait(false);
             if (!string.IsNullOrEmpty(contextSection))
                 parts.Add(contextSection);
         }
@@ -139,8 +139,8 @@ public sealed class PromptBuilder
         return opts.TrimMode switch
         {
             TrimMode.Tiered => await BuildTieredContextSection(docs, question, opts),
-            TrimMode.SummarizeOverflow => await BuildOverflowSummarySection(docs, question, opts),
-            _ => await BuildSimpleTrimSection(docs, question, opts)
+            TrimMode.SummarizeOverflow => await BuildOverflowSummarySection(docs, question, opts).ConfigureAwait(false),
+            _ => await BuildSimpleTrimSection(docs, question, opts).ConfigureAwait(false)
         };
     }
 
@@ -150,7 +150,7 @@ public sealed class PromptBuilder
         PromptBuildOptions opts)
     {
         var context = RankAndTrimContext(docs, opts.MaxContextTokens);
-        return await RenderDocsSection(context, question, opts);
+        return await RenderDocsSection(context, question, opts).ConfigureAwait(false);
     }
 
     private async Task<string> BuildTieredContextSection(
@@ -220,7 +220,7 @@ public sealed class PromptBuilder
 
         if (opts.IncludeFusion && sorted.Count >= 2)
         {
-            var fusionNote = await BuildFusionNote(sorted.Take(10).ToList(), question);
+            var fusionNote = await BuildFusionNote(sorted.Take(10).ToList(), question).ConfigureAwait(false);
             if (!string.IsNullOrEmpty(fusionNote))
             {
                 sb.AppendLine("### 文档关系");
@@ -303,7 +303,7 @@ public sealed class PromptBuilder
 
         if (opts.IncludeFusion && docs.Count >= 2)
         {
-            var fusionNote = await BuildFusionNote(docs.ToList(), question);
+            var fusionNote = await BuildFusionNote(docs.ToList(), question).ConfigureAwait(false);
             if (!string.IsNullOrEmpty(fusionNote))
             {
                 sb.AppendLine("### 文档关系");
@@ -358,7 +358,7 @@ public sealed class PromptBuilder
         string question)
     {
         var fusionDocs = docs.Select(d => (d.Id, d.Content, (DateTime?)null)).Take(10).ToList();
-        var fusionResult = await MultiDocFusionEngine.Instance.FuseAsync(fusionDocs, question);
+        var fusionResult = await MultiDocFusionEngine.Instance.FuseAsync(fusionDocs, question).ConfigureAwait(false);
 
         var notes = new List<string>();
 

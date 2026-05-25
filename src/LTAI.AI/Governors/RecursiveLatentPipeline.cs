@@ -62,7 +62,7 @@ public sealed class RecursiveLatentPipeline
         _logger.LogInformation("🔄 Starting RecursiveMAS: rounds={Rounds}, pattern={Pattern}", recursionRounds, pattern);
 
         // 1. 编码初始 prompt 为潜状态
-        var latent = await _l1Engine.EncodeToLatentAsync(prompt, ct);
+        var latent = await _l1Engine.EncodeToLatentAsync(prompt, ct).ConfigureAwait(false);
         var previousEmbedding = (float[])latent.Embedding.Clone();
         var actualRounds = 0;
         var earlyStopped = false;
@@ -118,13 +118,13 @@ public sealed class RecursiveLatentPipeline
             // 验证潜空间一致性 (Closed-Loop Verification)
             if (r < recursionRounds - 1 && !earlyStopped)
             {
-                var verified = await VerifyLatentConsistencyAsync(latent, prompt, ct);
+                var verified = await VerifyLatentConsistencyAsync(latent, prompt, ct).ConfigureAwait(false);
                 lastVerificationPassed = verified;
                 
                 if (!verified)
                 {
                     _logger.LogWarning("⚠️ Latent consistency check failed at round {Round}, triggering correction", r + 1);
-                    latent = await CorrectLatentAsync(latent, prompt, ct);
+                    latent = await CorrectLatentAsync(latent, prompt, ct).ConfigureAwait(false);
                     
                     // SePT: 记录失败状态，下一轮将自动提高温度
                     if (_tempScheduler != null)
@@ -147,7 +147,7 @@ public sealed class RecursiveLatentPipeline
             actualRounds, recursionRounds, earlyStopped);
 
         // 2. 仅最后一轮解码为文本
-        var finalText = await _l1Engine.DecodeFromLatentAsync(latent, ct);
+        var finalText = await _l1Engine.DecodeFromLatentAsync(latent, ct).ConfigureAwait(false);
         yield return finalText;
     }
 
@@ -158,17 +158,17 @@ public sealed class RecursiveLatentPipeline
     private async Task<LatentState> ExecuteSequentialRoundAsync(LatentState latent, int round, CancellationToken ct)
     {
         // Step 1: L1 作为 Planner 生成规划潜状态
-        var plannerLatent = await _l1Engine.RefineLatentAsync(latent, ct: ct);
+        var plannerLatent = await _l1Engine.RefineLatentAsync(latent, ct: ct).ConfigureAwait(false);
         
         // Step 2: 通过 RecursiveLink 传递给 L2 Critic
         if (_l2Engine != null && _recursiveLink != null)
         {
             var transferred = _recursiveLink.Transfer(plannerLatent);
-            var criticLatent = await _l2Engine.RefineLatentAsync(transferred, ct: ct);
+            var criticLatent = await _l2Engine.RefineLatentAsync(transferred, ct: ct).ConfigureAwait(false);
             
             // Step 3: 传回 L1 作为 Solver 执行
             var backTransferred = _recursiveLink.Transfer(criticLatent with { SourceAgent = "critic" });
-            return await _l1Engine.RefineLatentAsync(backTransferred, ct: ct);
+            return await _l1Engine.RefineLatentAsync(backTransferred, ct: ct).ConfigureAwait(false);
         }
         
         return plannerLatent;
@@ -215,10 +215,10 @@ public sealed class RecursiveLatentPipeline
             
             // 通过 RecursiveLink 蒸馏到 L1
             var distilled = _recursiveLink.Transfer(expertLatent);
-            return await _l1Engine.RefineLatentAsync(distilled, ct: ct);
+            return await _l1Engine.RefineLatentAsync(distilled, ct: ct).ConfigureAwait(false);
         }
         
-        return await _l1Engine.RefineLatentAsync(latent, ct: ct);
+        return await _l1Engine.RefineLatentAsync(latent, ct: ct).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -235,7 +235,7 @@ public sealed class RecursiveLatentPipeline
         {
             var toolLatent = _recursiveLink.Transfer(reflectorLatent);
             toolLatent = toolLatent with { SourceAgent = "tool_caller" };
-            return await _l2Engine.RefineLatentAsync(toolLatent, ct: ct);
+            return await _l2Engine.RefineLatentAsync(toolLatent, ct: ct).ConfigureAwait(false);
         }
         
         return reflectorLatent;
@@ -263,7 +263,7 @@ public sealed class RecursiveLatentPipeline
     private async Task<LatentState> CorrectLatentAsync(LatentState latent, string originalPrompt, CancellationToken ct)
     {
         // 重新编码原始 prompt 并与当前 latent 融合
-        var fresh = await _l1Engine.EncodeToLatentAsync(originalPrompt, ct);
+        var fresh = await _l1Engine.EncodeToLatentAsync(originalPrompt, ct).ConfigureAwait(false);
         
         var corrected = new float[Math.Max(latent.Embedding.Length, fresh.Embedding.Length)];
         for (int i = 0; i < corrected.Length; i++)

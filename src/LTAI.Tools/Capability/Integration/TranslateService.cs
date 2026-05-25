@@ -13,7 +13,7 @@ public sealed class TranslateConfig
     public string SecretKey { get; set; } = "";
 }
 
-public sealed class TranslateService
+public sealed class TranslateService : IDisposable
 {
     private readonly HttpClient _http;
     private readonly ILogger<TranslateService> _logger;
@@ -24,6 +24,8 @@ public sealed class TranslateService
         _logger = logger ?? NullLogger<TranslateService>.Instance;
         _http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
     }
+
+    public void Dispose() { _http?.Dispose(); }
 
     public async Task<string?> TranslateAsync(string text, string from = "auto", string to = "zh")
     {
@@ -52,7 +54,7 @@ public sealed class TranslateService
                       $"&from={from}&to={to}" +
                       $"&appid={Config.AppId}&salt={salt}&sign={sign}";
 
-            var json = await _http.GetStringAsync(url);
+            var json = await _http.GetStringAsync(url).ConfigureAwait(false);
             using var doc = JsonDocument.Parse(json);
 
             if (doc.RootElement.TryGetProperty("error_code", out var err))

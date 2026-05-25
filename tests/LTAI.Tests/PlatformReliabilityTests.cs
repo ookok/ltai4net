@@ -13,7 +13,7 @@ using Xunit;
 namespace LTAI.Tests;
 
 /// <summary>
-/// Platform Reliability Tests for LTAI v7.0.
+/// Platform Reliability Tests for LTAI V0.51.
 /// No external dependencies. API keys from env vars only.
 /// </summary>
 public class PlatformReliabilityTests

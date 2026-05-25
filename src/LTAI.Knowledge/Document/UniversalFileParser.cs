@@ -43,12 +43,12 @@ public sealed class UniversalFileParser
 
             if (_parsers.TryGetValue(ext, out var parser))
             {
-                var result = await parser.ParseAsync(filePath, cancellationToken);
+                var result = await parser.ParseAsync(filePath, cancellationToken).ConfigureAwait(false);
                 sw.Stop();
                 return result with { ElapsedMs = sw.ElapsedMilliseconds };
             }
 
-            var text = await TryReadTextAsync(filePath, cancellationToken);
+            var text = await TryReadTextAsync(filePath, cancellationToken).ConfigureAwait(false);
             sw.Stop();
 
             if (text != null)
@@ -126,12 +126,12 @@ public sealed class UniversalFileParser
 
         if (textExtensions.Contains(ext))
         {
-            return await File.ReadAllTextAsync(filePath, Encoding.UTF8, cancellationToken);
+            return await File.ReadAllTextAsync(filePath, Encoding.UTF8, cancellationToken).ConfigureAwait(false);
         }
 
         try
         {
-            var text = await File.ReadAllTextAsync(filePath, Encoding.UTF8, cancellationToken);
+            var text = await File.ReadAllTextAsync(filePath, Encoding.UTF8, cancellationToken).ConfigureAwait(false);
             if (IsLikelyText(text))
                 return text;
         }

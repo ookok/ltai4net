@@ -43,7 +43,7 @@ public sealed class HarnessEvolutionEngine
 
         foreach (var comp in _components)
         {
-            var fitness = await comp.EvaluateAsync(sp, ct);
+            var fitness = await comp.EvaluateAsync(sp, ct).ConfigureAwait(false);
             if (fitness.Score < 0.7 && experience.Patterns.Count > 0)
             {
                 var topPattern = experience.Patterns.FirstOrDefault(p => p.Severity == "critical" || p.Severity == "high");
@@ -59,7 +59,7 @@ public sealed class HarnessEvolutionEngine
                         $"Expected to fix {topPattern.OccurrenceCount} occurrences of '{topPattern.Pattern}'",
                         0.1);
 
-                    await comp.ApplyEditAsync(edit, sp, ct);
+                    await comp.ApplyEditAsync(edit, sp, ct).ConfigureAwait(false);
                     edits.Add(edit);
                 }
             }
@@ -85,7 +85,7 @@ public sealed class HarnessEvolutionEngine
             var component = _components.FirstOrDefault(c => c.ComponentName == edit.Component);
             if (component == null) continue;
 
-            var fitness = await component.EvaluateAsync(sp, ct);
+            var fitness = await component.EvaluateAsync(sp, ct).ConfigureAwait(false);
             var improved = fitness.Score > 0.7;
 
             _decisionLog.VerifyEdit(edit.Id, improved,

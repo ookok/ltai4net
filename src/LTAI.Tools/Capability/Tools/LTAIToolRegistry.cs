@@ -57,19 +57,19 @@ public static class LTAIToolRegistry
             async args =>
             {
                 var url = Arg(args, "url");
-                if (string.IsNullOrWhiteSpace(url)) return new { error = "url parameter is required" };
+                if (string.IsNullOrWhiteSpace(url)) return JsonToolResult.Error("url parameter is required");
                 using var http = LTAI.Core.Network.HttpAccelerator.CreateAcceleratedClient();
                 var html = await http.GetStringAsync(url);
                 var titleMatch = System.Text.RegularExpressions.Regex.Match(html, @"<title[^>]*>([^<]+)</title>", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
                 var text = System.Text.RegularExpressions.Regex.Replace(html, @"<[^>]+>", " ")
                     .Replace("&nbsp;", " ").Replace("&amp;", "&");
-                return new { url, title = titleMatch.Success ? titleMatch.Groups[1].Value.Trim() : "", text = text[..Math.Min(5000, text.Length)] };
+                return JsonToolResult.Success(new { url, title = titleMatch.Success ? titleMatch.Groups[1].Value.Trim() : "", text = text[..Math.Min(5000, text.Length)] });
             }),
         new("search", "Multi-source unified web search using DuckDuckGo (free, no API key). Parameters: query (required), count (1-20, default 5)", "web",
             async args =>
             {
                 var query = Arg(args, "query");
-                if (string.IsNullOrWhiteSpace(query)) return new { error = "query parameter is required" };
+                if (string.IsNullOrWhiteSpace(query)) return JsonToolResult.Error("query parameter is required");
                 var count = Math.Clamp(int.TryParse(Arg(args, "count", "5"), out var c) ? c : 5, 1, 20);
                 var results = new List<object>();
                 try
@@ -83,9 +83,9 @@ public static class LTAIToolRegistry
                         @"<a[^>]*class=""result__snippet""[^>]*>([^<]+)</a>");
                     for (int i = 0; i < Math.Min(count, Math.Min(linkMatches.Count, snippetMatches.Count)); i++)
                         results.Add(new { title = System.Net.WebUtility.HtmlDecode(linkMatches[i].Groups[2].Value.Trim()), url = System.Net.WebUtility.HtmlDecode(linkMatches[i].Groups[1].Value.Trim()), snippet = System.Net.WebUtility.HtmlDecode(snippetMatches[i].Groups[1].Value.Trim()) });
-                    return new { query, source = "DuckDuckGo", results };
+                    return JsonToolResult.Success(new { query, source = "DuckDuckGo", results });
                 }
-                catch { return new { query, error = "Search failed", results }; }
+                catch { return JsonToolResult.Success(new { query, error = "Search failed", results }); }
             }),
         new("search_apis", "Search 1400+ public APIs by keyword", "web",
             async args => { await PublicApisResource.Instance.LoadAsync(); var r = PublicApisResource.Instance.Search(Arg(args, "query")); return r; }),
@@ -93,16 +93,16 @@ public static class LTAIToolRegistry
             async _ =>
             {
                 var svc = Search.PlatformSearchService.Instance;
-                return new { summary = svc.BuildPromptContext(), stats = svc.GetStats() };
+                return JsonToolResult.Success(new { summary = svc.BuildPromptContext(), stats = svc.GetStats() });
             }),
         new("platform_search", "Search content on a specific Chinese platform. Available platforms: csdn, zhihu, toutiao, wechat, xiaohongshu, juejin, bilibili, weibo, segmentfault, v2ex, zhuanlan, github_zh, wikipedia_zh, baike, douban, 36kr, infoq, oschina, cnblogs, jianshu, gov_cn, mee, ndrc, mohurd. Parameters: query (required), platform (required, platform name or alias), count (1-20)", "web",
             async args =>
             {
                 var query = Arg(args, "query");
-                if (string.IsNullOrWhiteSpace(query)) return new { error = "query parameter is required" };
+                if (string.IsNullOrWhiteSpace(query)) return JsonToolResult.Error("query parameter is required");
                 var svc = Search.PlatformSearchService.Instance;
                 var platform = svc.Resolve(Arg(args, "platform"));
-                if (platform == null) return new { error = $"Unknown platform '{Arg(args, "platform")}'. Use platform_catalog to list available platforms." };
+                if (platform == null) return JsonToolResult.Success(new { error = $"Unknown platform '{Arg(args, "platform")}'. Use platform_catalog to list available platforms." });
                 var searchQuery = svc.BuildSearchQuery(query, platform.Name);
                 var count = Math.Clamp(int.TryParse(Arg(args, "count", "5"), out var c) ? c : 5, 1, 20);
                 try
@@ -115,9 +115,9 @@ public static class LTAIToolRegistry
                     var snippets = System.Text.RegularExpressions.Regex.Matches(html, @"<a[^>]*class=""result__snippet""[^>]*>([^<]+)</a>");
                     for (int i = 0; i < Math.Min(count, Math.Min(links.Count, snippets.Count)); i++)
                         results.Add(new { title = System.Net.WebUtility.HtmlDecode(links[i].Groups[2].Value.Trim()), url = System.Net.WebUtility.HtmlDecode(links[i].Groups[1].Value.Trim()), snippet = System.Net.WebUtility.HtmlDecode(snippets[i].Groups[1].Value.Trim()) });
-                    return new { query, platform = platform.Name, category = platform.Category, results };
+                    return JsonToolResult.Success(new { query, platform = platform.Name, category = platform.Category, results });
                 }
-                catch { return new { query, platform = platform.Name, error = "Search failed", results = new List<object>() }; }
+                catch { return JsonToolResult.Success(new { query, platform = platform.Name, error = "Search failed", results = new List<object>() }); }
             }),
 
         // ═══ Knowledge — 4 tools ═══
@@ -125,7 +125,7 @@ public static class LTAIToolRegistry
             async args =>
             {
                 var query = Arg(args, "query");
-                if (string.IsNullOrWhiteSpace(query)) return new { error = "query parameter is required" };
+                if (string.IsNullOrWhiteSpace(query)) return JsonToolResult.Error("query parameter is required");
                 try
                 {
                     var ragType = typeof(object).Assembly.GetType("LTAI.Vector.Knowledge.AgenticRAG");
@@ -139,15 +139,15 @@ public static class LTAIToolRegistry
                             return results ?? new { message = "No results" };
                         }
                     }
-                    return new { error = "Knowledge search not available" };
+                    return JsonToolResult.Error("Knowledge search not available");
                 }
-                catch (Exception ex) { return new { error = $"Search failed: {ex.Message}" }; }
+                catch (Exception ex) { return JsonToolResult.Success(new { error = $"Search failed: {ex.Message}" }); }
             }),
         new("km_import", "Import document into knowledge base. Parameters: content (required), title (optional), domain (optional)", "knowledge",
             async args =>
             {
                 var content = Arg(args, "content");
-                if (string.IsNullOrWhiteSpace(content)) return new { error = "content parameter is required" };
+                if (string.IsNullOrWhiteSpace(content)) return JsonToolResult.Error("content parameter is required");
                 try
                 {
                     var kbType = typeof(object).Assembly.GetType("LTAI.Vector.Knowledge.KnowledgeBase");
@@ -158,23 +158,23 @@ public static class LTAIToolRegistry
                         if (addMethod != null)
                             await (Task)addMethod.Invoke(kb, new object?[] { Arg(args, "title", "imported"), content, Arg(args, "domain", "general") })!;
                     }
-                    return new { status = "imported", chars = content.Length };
+                    return JsonToolResult.Success(new { status = "imported", chars = content.Length });
                 }
-                catch (Exception ex) { return new { error = $"Import failed: {ex.Message}" }; }
+                catch (Exception ex) { return JsonToolResult.Success(new { error = $"Import failed: {ex.Message}" }); }
             }),
         new("km_ask", "Ask a question against the knowledge base with sources. Parameters: question (required)", "knowledge",
             async args =>
             {
                 var question = Arg(args, "question");
-                if (string.IsNullOrWhiteSpace(question)) return new { error = "question parameter is required" };
-                return new { question, message = "Knowledge base query: use km_search for semantic search results" };
+                if (string.IsNullOrWhiteSpace(question)) return JsonToolResult.Error("question parameter is required");
+                return JsonToolResult.Success(new { question, message = "Knowledge base query: use km_search for semantic search results" });
             }),
         new("vector_search", "Vector similarity search across embeddings. Parameters: query (required), top_k (1-50, default 10)", "knowledge",
             async args =>
             {
                 var query = Arg(args, "query");
                 var topK = Math.Clamp(int.TryParse(Arg(args, "top_k", "10"), out var k) ? k : 10, 1, 50);
-                return new { query, top_k = topK, message = "Vector search: use km_search for AgenticRAG-backed semantic retrieval" };
+                return JsonToolResult.Success(new { query, top_k = topK, message = "Vector search: use km_search for AgenticRAG-backed semantic retrieval" });
             }),
 
         // ═══ Code — 13 tools (analyze, review, graph, edit, build, test) ═══
@@ -182,7 +182,7 @@ public static class LTAIToolRegistry
             async args =>
             {
                 var code = Arg(args, "code", "");
-                if (string.IsNullOrWhiteSpace(code)) return new { error = "code parameter is required" };
+                if (string.IsNullOrWhiteSpace(code)) return JsonToolResult.Error("code parameter is required");
                 try
                 {
                     var langStr = Arg(args, "language", "");
@@ -204,7 +204,7 @@ public static class LTAIToolRegistry
                         classes = result.Classes.Select(c => new { c.Name, c.Line, c.MethodCount }),
                     };
                 }
-                catch (Exception ex) { return new { error = $"Analysis failed: {ex.Message}" }; }
+                catch (Exception ex) { return JsonToolResult.Success(new { error = $"Analysis failed: {ex.Message}" }); }
             }),
         new("code_review", "Automated code review for bugs, security, style issues. Use target=branch or scope=staged/unstaged for git diffs.", "code",
             async args =>
@@ -245,7 +245,7 @@ public static class LTAIToolRegistry
                         }),
                     };
                 }
-                catch (Exception ex) { return new { error = $"Review failed: {ex.Message}" }; }
+                catch (Exception ex) { return JsonToolResult.Success(new { error = $"Review failed: {ex.Message}" }); }
             }),
         new("sandbox_exec", "Execute code in isolated sandbox (Process/Docker/Hyperlight)", "code",
             async args => {
@@ -271,7 +271,7 @@ public static class LTAIToolRegistry
                         if (task != null) { await task; return task.GetType().GetProperty("Result")?.GetValue(task); }
                     }
                 }
-                return new { error = "Sandbox not available. Install Docker or ensure python3/node is on PATH.", hint = "Use shell_exec for direct shell execution" };
+                return JsonToolResult.Success(new { error = "Sandbox not available. Install Docker or ensure python3/node is on PATH.", hint = "Use shell_exec for direct shell execution" });
             }),
 
         // Code Graph tools (using CodeGraphEnhanced - SQLite + FTS5)
@@ -279,7 +279,7 @@ public static class LTAIToolRegistry
             async args =>
             {
                 var query = Arg(args, "query");
-                if (string.IsNullOrWhiteSpace(query)) return new { query = "", results = new object[0], hint = "Provide a query parameter" };
+                if (string.IsNullOrWhiteSpace(query)) return JsonToolResult.Success(new { query = "", results = new object[0], hint = "Provide a query parameter" });
                 try
                 {
                     var graph = GetService<CodeGraphEnhanced>();
@@ -298,13 +298,13 @@ public static class LTAIToolRegistry
                         }).ToList(),
                     };
                 }
-                catch (Exception ex) { return new { query, error = $"Search failed: {ex.Message}" }; }
+                catch (Exception ex) { return JsonToolResult.Success(new { query, error = $"Search failed: {ex.Message}" }); }
             }),
         new("code_graph:blast_radius", "Calculate blast radius: find all functions affected when a given symbol changes. Includes test file detection.", "code",
             async args =>
             {
                 var symbol = Arg(args, "symbol");
-                if (string.IsNullOrWhiteSpace(symbol)) return new { error = "symbol parameter is required" };
+                if (string.IsNullOrWhiteSpace(symbol)) return JsonToolResult.Error("symbol parameter is required");
                 try
                 {
                     var graph = GetService<CodeGraphEnhanced>();
@@ -325,13 +325,13 @@ public static class LTAIToolRegistry
                         }).ToList(),
                     };
                 }
-                catch (Exception ex) { return new { symbol, error = $"Blast radius failed: {ex.Message}" }; }
+                catch (Exception ex) { return JsonToolResult.Success(new { symbol, error = $"Blast radius failed: {ex.Message}" }); }
             }),
         new("code_graph:callers", "Find all callers of a given symbol (who calls this function/class).", "code",
             async args =>
             {
                 var symbol = Arg(args, "symbol");
-                if (string.IsNullOrWhiteSpace(symbol)) return new { error = "symbol parameter is required" };
+                if (string.IsNullOrWhiteSpace(symbol)) return JsonToolResult.Error("symbol parameter is required");
                 try
                 {
                     var graph = GetService<CodeGraphEnhanced>();
@@ -345,21 +345,21 @@ public static class LTAIToolRegistry
                         callers = callers.Select(c => new { c.Name, c.File, c.Line, c.Kind, c.ParentClass }).ToList(),
                     };
                 }
-                catch (Exception ex) { return new { symbol, error = $"Callers lookup failed: {ex.Message}" }; }
+                catch (Exception ex) { return JsonToolResult.Success(new { symbol, error = $"Callers lookup failed: {ex.Message}" }); }
             }),
         new("code_graph:context", "Build LLM-friendly code context markdown for a given task. Searches the code graph and returns structured markdown for prompt injection.", "code",
             async args =>
             {
                 var task = Arg(args, "task");
-                if (string.IsNullOrWhiteSpace(task)) return new { error = "task parameter is required" };
+                if (string.IsNullOrWhiteSpace(task)) return JsonToolResult.Error("task parameter is required");
                 try
                 {
                     var graph = GetService<CodeGraphEnhanced>();
                     var maxNodes = Math.Clamp(int.TryParse(Arg(args, "max_nodes", "20"), out var n) ? n : 20, 1, 50);
                     var context = graph.BuildContext(task, maxNodes, "markdown");
-                    return new { task, context };
+                    return JsonToolResult.Success(new { task, context });
                 }
-                catch (Exception ex) { return new { task, error = $"Context build failed: {ex.Message}" }; }
+                catch (Exception ex) { return JsonToolResult.Success(new { task, error = $"Context build failed: {ex.Message}" }); }
             }),
         new("code_graph:status", "Get code graph indexing status: files indexed, total nodes, total edges.", "code",
             async _ =>
@@ -369,7 +369,7 @@ public static class LTAIToolRegistry
                     var graph = GetService<CodeGraphEnhanced>();
                     return await Task.FromResult<object?>(graph.GetStatus());
                 }
-                catch { return new { status = "not_initialized", hint = "Call code_graph:index first" }; }
+                catch { return JsonToolResult.Success(new { status = "not_initialized", hint = "Call code_graph:index first" }); }
             }),
 
         // Code Edit tools (surgical AST-aware edits with diff, validation, rollback)
@@ -379,7 +379,7 @@ public static class LTAIToolRegistry
                 var path = Arg(args, "path");
                 if (!int.TryParse(Arg(args, "start_line", "0"), out var start) ||
                     !int.TryParse(Arg(args, "end_line", "0"), out var end))
-                    return new { error = "start_line and end_line (integers) are required" };
+                    return JsonToolResult.Success(new { error = "start_line and end_line (integers) are required" });
                 var tools = GetService<CodeEditTools>();
                 var resultJson = await tools.EditReplaceRange(path, start, end, Arg(args, "new_code", ""));
                 return System.Text.Json.JsonSerializer.Deserialize<object>(resultJson)!;
@@ -390,7 +390,7 @@ public static class LTAIToolRegistry
                 var path = Arg(args, "path");
                 var functionName = Arg(args, "function_name");
                 if (string.IsNullOrWhiteSpace(functionName))
-                    return new { error = "function_name parameter is required" };
+                    return JsonToolResult.Success(new { error = "function_name parameter is required" });
                 var tools = GetService<CodeEditTools>();
                 var resultJson = await tools.EditReplaceFunction(path, functionName, Arg(args, "new_code", ""));
                 return System.Text.Json.JsonSerializer.Deserialize<object>(resultJson)!;
@@ -400,7 +400,7 @@ public static class LTAIToolRegistry
             {
                 var path = Arg(args, "path");
                 if (!int.TryParse(Arg(args, "line", "0"), out var line))
-                    return new { error = "line (integer) parameter is required" };
+                    return JsonToolResult.Success(new { error = "line (integer) parameter is required" });
                 var tools = GetService<CodeEditTools>();
                 var resultJson = await tools.EditInsertAfterLine(path, line, Arg(args, "code", ""));
                 return System.Text.Json.JsonSerializer.Deserialize<object>(resultJson)!;
@@ -411,7 +411,7 @@ public static class LTAIToolRegistry
                 var path = Arg(args, "path");
                 if (!int.TryParse(Arg(args, "start_line", "0"), out var start) ||
                     !int.TryParse(Arg(args, "end_line", "0"), out var end))
-                    return new { error = "start_line and end_line (integers) are required" };
+                    return JsonToolResult.Success(new { error = "start_line and end_line (integers) are required" });
                 var tools = GetService<CodeEditTools>();
                 var resultJson = await tools.EditDeleteRange(path, start, end);
                 return System.Text.Json.JsonSerializer.Deserialize<object>(resultJson)!;
@@ -438,7 +438,7 @@ public static class LTAIToolRegistry
             {
                 var path = Arg(args, "path");
                 if (!int.TryParse(Arg(args, "start_line", "1"), out var start))
-                    return new { error = "start_line (integer) parameter is required" };
+                    return JsonToolResult.Success(new { error = "start_line (integer) parameter is required" });
                 var tools = GetService<CodeEditTools>();
                 var resultJson = await tools.ReadRange(path, start,
                     int.TryParse(Arg(args, "count", "50"), out var c) ? c : 50);
@@ -450,7 +450,7 @@ public static class LTAIToolRegistry
                 var path = Arg(args, "path");
                 var functionName = Arg(args, "function_name");
                 if (string.IsNullOrWhiteSpace(functionName))
-                    return new { error = "function_name parameter is required" };
+                    return JsonToolResult.Success(new { error = "function_name parameter is required" });
                 var tools = GetService<CodeEditTools>();
                 var resultJson = await tools.ReadFunction(path, functionName);
                 return System.Text.Json.JsonSerializer.Deserialize<object>(resultJson)!;
@@ -461,7 +461,7 @@ public static class LTAIToolRegistry
                 var path = Arg(args, "path");
                 var className = Arg(args, "class_name");
                 if (string.IsNullOrWhiteSpace(className))
-                    return new { error = "class_name parameter is required" };
+                    return JsonToolResult.Success(new { error = "class_name parameter is required" });
                 var tools = GetService<CodeEditTools>();
                 var resultJson = await tools.ReadClass(path, className);
                 return System.Text.Json.JsonSerializer.Deserialize<object>(resultJson)!;
@@ -498,7 +498,7 @@ public static class LTAIToolRegistry
                         { e.File, e.Line, e.Column, e.Code, e.Message }),
                     };
                 }
-                catch (Exception ex) { return new { error = $"Build failed: {ex.Message}" }; }
+                catch (Exception ex) { return JsonToolResult.Success(new { error = $"Build failed: {ex.Message}" }); }
             }),
         new("code_build:detect", "Detect the build system used by a project (dotnet/npm/cargo/make/go/java).", "code_build",
             async args =>
@@ -533,7 +533,7 @@ public static class LTAIToolRegistry
                             .Select(c => new { c.Name, c.DurationMs, c.Error }),
                     };
                 }
-                catch (Exception ex) { return new { error = $"Test run failed: {ex.Message}" }; }
+                catch (Exception ex) { return JsonToolResult.Success(new { error = $"Test run failed: {ex.Message}" }); }
             }),
         new("code_test:affected", "Run only tests affected by changed symbols. Uses blast radius to find relevant tests.", "code_test",
             async args =>
@@ -566,7 +566,7 @@ public static class LTAIToolRegistry
                         passRate = Math.Round(result.PassRate * 100, 1),
                     };
                 }
-                catch (Exception ex) { return new { error = $"Affected test run failed: {ex.Message}" }; }
+                catch (Exception ex) { return JsonToolResult.Success(new { error = $"Affected test run failed: {ex.Message}" }); }
             }),
         new("code_test:detect", "Detect the test framework used by a project (xunit/nunit/mstest/pytest/jest/vitest/cargo-test/go-test).", "code_test",
             async args =>
@@ -582,9 +582,9 @@ public static class LTAIToolRegistry
             {
                 var path = Arg(args, "path");
                 if (string.IsNullOrWhiteSpace(path))
-                    return new { error = "path parameter is required. Provide the local file path to the document.", suggestion = "Use vfs:read for virtual files or km_import to ingest documents into the knowledge base." };
+                    return JsonToolResult.Success(new { error = "path parameter is required. Provide the local file path to the document.", suggestion = "Use vfs:read for virtual files or km_import to ingest documents into the knowledge base." });
                 if (!File.Exists(path))
-                    return new { error = $"File not found: {path}", suggestion = "Check the file path and try again." };
+                    return JsonToolResult.Success(new { error = $"File not found: {path}", suggestion = "Check the file path and try again." });
                 var ext = Path.GetExtension(path).ToLowerInvariant();
                 return ext switch
                 {
@@ -597,35 +597,35 @@ public static class LTAIToolRegistry
             {
                 var path = Arg(args, "path");
                 if (string.IsNullOrWhiteSpace(path))
-                    return new { error = "path parameter is required.", suggestion = "Use km_import for automated document ingestion." };
+                    return JsonToolResult.Success(new { error = "path parameter is required.", suggestion = "Use km_import for automated document ingestion." });
                 if (!File.Exists(path))
-                    return new { error = $"File not found: {path}" };
-                return new { path, content = await File.ReadAllTextAsync(path), size_bytes = new FileInfo(path).Length };
+                    return JsonToolResult.Success(new { error = $"File not found: {path}" });
+                return JsonToolResult.Success(new { path, content = await File.ReadAllTextAsync(path), size_bytes = new FileInfo(path).Length });
             }),
         new("report_generate", "Generate formatted report from structured data.", "doc",
             async args =>
             {
                 var title = Arg(args, "title", "Report");
                 var sections = Arg(args, "sections", "[]");
-                return new { title, sections, status = "template_ready", note = "Report template created. Use the EIAReportBuilder for DOCX output or return Markdown directly to the user." };
+                return JsonToolResult.Success(new { title, sections, status = "template_ready", note = "Report template created. Use the EIAReportBuilder for DOCX output or return Markdown directly to the user." });
             }),
         new("observe_format", "Inspect document structure and metadata.", "doc",
             async args =>
             {
                 var path = Arg(args, "path");
                 if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
-                    return new { error = $"File not accessible: {path ?? "(null)"}" };
+                    return JsonToolResult.Success(new { error = $"File not accessible: {path ?? "(null)"}" });
                 var info = new FileInfo(path);
-                return new { path, size_bytes = info.Length, extension = info.Extension, created = info.CreationTimeUtc, modified = info.LastWriteTimeUtc };
+                return JsonToolResult.Success(new { path, size_bytes = info.Length, extension = info.Extension, created = info.CreationTimeUtc, modified = info.LastWriteTimeUtc });
             }),
         new("style_learn", "Analyze document formatting patterns from example files.", "doc",
             async args =>
             {
                 var path = Arg(args, "path");
                 if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
-                    return new { error = $"File not accessible: {path ?? "(null)"}", suggestion = "Import example documents via km_import for pattern analysis." };
+                    return JsonToolResult.Success(new { error = $"File not accessible: {path ?? "(null)"}", suggestion = "Import example documents via km_import for pattern analysis." });
                 var ext = Path.GetExtension(path).ToLowerInvariant();
-                return new { path, extension = ext, note = "Style extraction for this format is not yet implemented. Supported formats will be added in a future release." };
+                return JsonToolResult.Success(new { path, extension = ext, note = "Style extraction for this format is not yet implemented. Supported formats will be added in a future release." });
             }),
         new("visual_render", "Render chart/flowchart/floorplan/contour/3dsurface/windrose as SVG/HTML", "doc",
             async args => RenderVisual(Arg(args, "type"), Arg(args, "data"), Arg(args, "title"))),
@@ -635,13 +635,13 @@ public static class LTAIToolRegistry
                 var description = Arg(args, "description");
                 var type = Arg(args, "type", "flowchart");
                 if (string.IsNullOrWhiteSpace(description))
-                    return new { error = "description is required. Provide a natural language description of the diagram to generate." };
+                    return JsonToolResult.Success(new { error = "description is required. Provide a natural language description of the diagram to generate." });
 
                 try
                 {
                     var chatClient = _serviceProvider?.GetService(typeof(Microsoft.Extensions.AI.IChatClient)) as Microsoft.Extensions.AI.IChatClient;
                     if (chatClient is null)
-                        return new { error = "No LLM client available. Configure an AI provider first.", fallback_html = BuildFlowchart(type, $"A[Start] --> B[{description[..Math.Min(description.Length, 30)]}] --> C[End]") };
+                        return JsonToolResult.Success(new { error = "No LLM client available. Configure an AI provider first.", fallback_html = BuildFlowchart(type, $"A[Start] --> B[{description[..Math.Min(description.Length, 30)]}] --> C[End]") });
 
                     var diagramTypes = new Dictionary<string, string>
                     {
@@ -679,7 +679,7 @@ public static class LTAIToolRegistry
                 }
                 catch (Exception ex)
                 {
-                    return new { error = ex.Message, fallback_html = BuildFlowchart(type, $"A[Start] --> B[{description[..Math.Min(description.Length, 30)]}] --> C[End]") };
+                    return JsonToolResult.Success(new { error = ex.Message, fallback_html = BuildFlowchart(type, $"A[Start] --> B[{description[..Math.Min(description.Length, 30)]}] --> C[End]") });
                 }
             }),
 
@@ -755,7 +755,7 @@ public static class LTAIToolRegistry
             {
                 var name = Arg(args, "name");
                 var code = Arg(args, "code");
-                if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(code)) return new { error = "name and code are required" };
+                if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(code)) return JsonToolResult.Success(new { error = "name and code are required" });
                 var lang = Arg(args, "language", "python");
                 var safeName = string.Join("_", name.Split(Path.GetInvalidFileNameChars())).Replace(" ", "_").ToLower();
                 var filePath = Path.Combine(Environment.CurrentDirectory, ".livingtree", "cli_tools", safeName);
@@ -763,13 +763,13 @@ public static class LTAIToolRegistry
                 if (lang == "python") { filePath += ".py"; var pyCode = "#!/usr/bin/env python3\nimport sys, json\n\ndef main():\n" + string.Join("\n", code.Split('\n').Select(l => "    " + l)) + "\n\nif __name__ == '__main__':\n    result = main()\n    print(json.dumps(result, ensure_ascii=False))"; await File.WriteAllTextAsync(filePath, pyCode); }
                 else if (lang == "js") { filePath += ".js"; await File.WriteAllTextAsync(filePath, $"#!/usr/bin/env node\nconst result = (function() {{{code}}})();\nconsole.log(JSON.stringify(result));"); }
                 else { filePath += ".csx"; await File.WriteAllTextAsync(filePath, $"// dotnet-script tool\n{code}"); }
-                return new { name, language = lang, file = filePath, executable = OperatingSystem.IsWindows() ? $"pwsh {filePath}" : $"chmod +x {filePath} && {filePath}", status = "created" };
+                return JsonToolResult.Success(new { name, language = lang, file = filePath, executable = OperatingSystem.IsWindows() ? $"pwsh {filePath}" : $"chmod +x {filePath} && {filePath}", status = "created" });
             }),
         new("cli_from_repo", "Clone a git repository and auto-detect CLI entry points (package.json scripts, pyproject.toml entry_points, Makefile targets)", "cli",
             async args =>
             {
                 var repoUrl = Arg(args, "repo_url");
-                if (string.IsNullOrWhiteSpace(repoUrl)) return new { error = "repo_url parameter is required" };
+                if (string.IsNullOrWhiteSpace(repoUrl)) return JsonToolResult.Success(new { error = "repo_url parameter is required" });
                 var cloneDir = Path.Combine(Path.GetTempPath(), "ltai_cli", Guid.NewGuid().ToString("N")[..8]);
                 var psi = new System.Diagnostics.ProcessStartInfo("git", $"clone --depth 1 {repoUrl} {cloneDir}") { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
                 var proc = System.Diagnostics.Process.Start(psi)!;
@@ -785,13 +785,13 @@ public static class LTAIToolRegistry
                     foreach (var line in makefile.Split('\n').Where(l => l.Contains(':') && !l.StartsWith(".")))
                         entries.Add(new { name = line.Split(':')[0].Trim(), type = "make_target" });
                 }
-                return new { repo_url = repoUrl, cloned_to = cloneDir, entry_points = entries.Take(15), total = entries.Count };
+                return JsonToolResult.Success(new { repo_url = repoUrl, cloned_to = cloneDir, entry_points = entries.Take(15), total = entries.Count });
             }),
         new("cli_from_manifest", "Generate CLI tools from a YAML manifest (name, commands, description, parameters)", "cli",
             async args =>
             {
                 var yaml = Arg(args, "yaml_manifest");
-                if (string.IsNullOrWhiteSpace(yaml)) return new { error = "yaml_manifest parameter is required" };
+                if (string.IsNullOrWhiteSpace(yaml)) return JsonToolResult.Success(new { error = "yaml_manifest parameter is required" });
                 await Task.Delay(50);
                 var lines = yaml.Split('\n').Where(l => l.Trim().Length > 0).ToList();
                 var tools = new List<object>();
@@ -801,7 +801,7 @@ public static class LTAIToolRegistry
                     if (trimmed.Contains(':') && !trimmed.StartsWith("#"))
                         tools.Add(new { name = trimmed.Split(':')[0].Trim(), type = "yaml_defined" });
                 }
-                return new { entries_parsed = tools.Count, tools };
+                return JsonToolResult.Success(new { entries_parsed = tools.Count, tools });
             }),
         new("cli_list_tools", "List all generated/installed CLI tools and their locations", "cli",
             async _ =>
@@ -811,7 +811,7 @@ public static class LTAIToolRegistry
                 if (Directory.Exists(toolsDir))
                     foreach (var f in Directory.GetFiles(toolsDir, "*", SearchOption.TopDirectoryOnly).Take(20))
                         tools.Add(new { name = Path.GetFileName(f), path = f, size = new FileInfo(f).Length });
-                return new { directory = toolsDir, tools, total = tools.Count };
+                return JsonToolResult.Success(new { directory = toolsDir, tools, total = tools.Count });
             }),
         new("cli_scan_path", "Scan system PATH for available CLI programs and probe their --help output. Parameters: path_filter (optional, e.g. 'python' to find python* tools).", "cli",
             async args =>
@@ -841,18 +841,18 @@ public static class LTAIToolRegistry
                     }
                     catch { }
                 }
-                return new { scanned_dirs = dirs.Count(), found_count = found.Count, filter, sample = found.Take(15) };
+                return JsonToolResult.Success(new { scanned_dirs = dirs.Count(), found_count = found.Count, filter, sample = found.Take(15) });
             }),
         new("cli_install", "Install a CLI tool via system package manager (winget/pip/npm/go/cargo). Parameters: tool_name (required), package_manager (auto-detect by default, or specify)", "cli",
             async args =>
             {
                 var toolName = Arg(args, "tool_name");
-                if (string.IsNullOrWhiteSpace(toolName)) return new { error = "tool_name parameter is required" };
+                if (string.IsNullOrWhiteSpace(toolName)) return JsonToolResult.Success(new { error = "tool_name parameter is required" });
                 var pkgManager = Arg(args, "package_manager");
                 string? cmd;
                 if (!string.IsNullOrEmpty(pkgManager)) cmd = pkgManager switch { "pip" => $"pip install {toolName}", "npm" => $"npm install -g {toolName}", "go" => $"go install {toolName}", "cargo" => $"cargo install {toolName}", "winget" => $"winget install {toolName}", _ => $"winget install {toolName}" };
                 else cmd = OperatingSystem.IsWindows() ? $"winget install {toolName}" : $"pip install {toolName}";
-                return new { tool = toolName, install_command = cmd, hint = $"Run: {cmd}" };
+                return JsonToolResult.Success(new { tool = toolName, install_command = cmd, hint = $"Run: {cmd}" });
             }),
         // ═══ Shell — 2 tools ═══
         new("bash", "Execute shell command (sandboxed, unrestricted for system operations)", "shell",
@@ -869,7 +869,7 @@ public static class LTAIToolRegistry
             {
                 var key = Arg(args, "key");
                 var value = Arg(args, "value");
-                if (string.IsNullOrWhiteSpace(key) || string.IsNullOrWhiteSpace(value)) return new { error = "key and value are required" };
+                if (string.IsNullOrWhiteSpace(key) || string.IsNullOrWhiteSpace(value)) return JsonToolResult.Error("key and value are required");
                 try
                 {
                     var smType = typeof(object).Assembly.GetType("LTAI.Vector.Knowledge.StructMemory");
@@ -884,15 +884,15 @@ public static class LTAIToolRegistry
                     Directory.CreateDirectory(persistDir);
                     await File.WriteAllTextAsync(Path.Combine(persistDir, $"{SafeKey(key)}.json"),
                         System.Text.Json.JsonSerializer.Serialize(new { key, value, stored_at = DateTime.UtcNow }));
-                    return new { status = "stored", key, chars = value.Length, location = persistDir };
+                    return JsonToolResult.Success(new { status = "stored", key, chars = value.Length, location = persistDir });
                 }
-                catch (Exception ex) { return new { error = $"Store failed: {ex.Message}" }; }
+                catch (Exception ex) { return JsonToolResult.Success(new { error = $"Store failed: {ex.Message}" }); }
             }),
         new("recall", "Recall memories by keyword or topic. Searches working memory and persistent store. Parameters: query (required, what to search for), count (1-20, default 5)", "memory",
             async args =>
             {
                 var query = Arg(args, "query");
-                if (string.IsNullOrWhiteSpace(query)) return new { error = "query parameter is required" };
+                if (string.IsNullOrWhiteSpace(query)) return JsonToolResult.Error("query parameter is required");
                 var count = Math.Clamp(int.TryParse(Arg(args, "count", "5"), out var c) ? c : 5, 1, 20);
                 var results = new List<object>();
                 try
@@ -915,17 +915,17 @@ public static class LTAIToolRegistry
                         try { var json = await File.ReadAllTextAsync(file); var mem = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, object>>(json); if (mem != null && mem.TryGetValue("value", out var v) && v?.ToString()?.Contains(query, StringComparison.OrdinalIgnoreCase) == true) results.Add(mem); } catch { }
                     }
                 }
-                return new { query, results = results.Take(count), total = results.Count };
+                return JsonToolResult.Success(new { query, results = results.Take(count), total = results.Count });
             }),
         new("forget", "Remove a specific memory by key or clean all memories matching a pattern. Parameters: key (required, the memory key to forget)", "memory",
             async args =>
             {
                 var key = Arg(args, "key");
-                if (string.IsNullOrWhiteSpace(key)) return new { error = "key parameter is required" };
+                if (string.IsNullOrWhiteSpace(key)) return JsonToolResult.Success(new { error = "key parameter is required" });
                 var persistDir = Path.Combine(Environment.CurrentDirectory, ".livingtree", "memories");
                 var filePath = Path.Combine(persistDir, $"{SafeKey(key)}.json");
-                if (File.Exists(filePath)) { File.Delete(filePath); return new { status = "deleted", key }; }
-                return new { error = $"No memory found with key: {key}" };
+                if (File.Exists(filePath)) { File.Delete(filePath); return JsonToolResult.Success(new { status = "deleted", key }); }
+                return JsonToolResult.Success(new { error = $"No memory found with key: {key}" });
             }),
         new("memory_stats", "Get memory statistics: counts, categories, storage locations", "memory",
             async _ =>
@@ -934,7 +934,7 @@ public static class LTAIToolRegistry
                 var fileCount = Directory.Exists(persistDir) ? Directory.GetFiles(persistDir, "*.json").Length : 0;
                 long totalBytes = 0;
                 if (Directory.Exists(persistDir)) foreach (var f in Directory.GetFiles(persistDir, "*.json")) totalBytes += new FileInfo(f).Length;
-                return new { persistent_count = fileCount, persistent_bytes = totalBytes, path = persistDir };
+                return JsonToolResult.Success(new { persistent_count = fileCount, persistent_bytes = totalBytes, path = persistDir });
             }),
         new("list_memories", "List all stored memory keys with preview of content", "memory",
             async _ =>
@@ -948,7 +948,7 @@ public static class LTAIToolRegistry
                         try { var json = await File.ReadAllTextAsync(file); var mem = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, object>>(json); if (mem != null) { var v = mem.TryGetValue("value", out var val) ? val?.ToString() : ""; results.Add(new { key = mem.GetValueOrDefault("key"), preview = v?[..Math.Min(120, v?.Length ?? 0)], bytes = json.Length }); } } catch { }
                     }
                 }
-                return new { total = results.Count, memories = results };
+                return JsonToolResult.Success(new { total = results.Count, memories = results });
             }),
         new("emotion_state", "Get the current emotional memory state: dominant emotion, intensity, recent emotional context", "memory",
             async _ =>
@@ -963,11 +963,11 @@ public static class LTAIToolRegistry
                         var ctx = ctxMethod?.Invoke(store, new object[] { 2.0 });
                         var fbMethod = store.GetType().GetMethod("GetFlashbulbs");
                         var fbs = fbMethod?.Invoke(store, new object[] { 5 });
-                        return new { emotional_context = ctx, flashbulbs = fbs };
+                        return JsonToolResult.Success(new { emotional_context = ctx, flashbulbs = fbs });
                     }
                 }
                 catch { }
-                return new { message = "Emotional memory not available" };
+                return JsonToolResult.Success(new { message = "Emotional memory not available" });
             }),
         new("persona_query", "Query the user persona model: traits, preferences, knowledge gaps. Parameters: query (optional, what aspect of persona to retrieve - traits/preferences/knowledge/domains/summary)", "memory",
             async args =>
@@ -983,17 +983,17 @@ public static class LTAIToolRegistry
                         var ctx = (ctxMethod?.Invoke(pm, new object[] { aspect }) ?? string.Empty).ToString();
                         var statsMethod = pm.GetType().GetMethod("GetStats");
                         var stats = statsMethod?.Invoke(pm, null);
-                        return new { aspect, context = ctx[..Math.Min(1000, ctx.Length)], stats };
+                        return JsonToolResult.Success(new { aspect, context = ctx[..Math.Min(1000, ctx.Length)], stats });
                     }
                 }
                 catch { }
-                return new { error = "Persona model not available" };
+                return JsonToolResult.Error("Persona model not available");
             }),
         new("mem_optimize", "Optimize and compress memory context using preference optimization. Parameters: context (required), max_tokens (optional, default 2000)", "memory",
             async args =>
             {
                 var context = Arg(args, "context");
-                if (string.IsNullOrWhiteSpace(context)) return new { error = "context parameter is required" };
+                if (string.IsNullOrWhiteSpace(context)) return JsonToolResult.Error("context parameter is required");
                 var maxTokens = (int)ArgDouble(args, "max_tokens", 2000);
                 var originalTokens = TokenCounter.Estimate(context);
                 var sentences = System.Text.RegularExpressions.Regex.Split(context, @"(?<=[。.!！?？\n])");
@@ -1013,53 +1013,53 @@ public static class LTAIToolRegistry
                 }
                 var result = optimized.ToString().TrimEnd();
                 var newTokens = TokenCounter.Estimate(result);
-                return new { original_tokens = originalTokens, optimized_tokens = newTokens, saved_tokens = originalTokens - newTokens, compression_ratio = Math.Round((double)newTokens / Math.Max(1, originalTokens), 2), text = result[..Math.Min(2000, result.Length)] };
+                return JsonToolResult.Success(new { original_tokens = originalTokens, optimized_tokens = newTokens, saved_tokens = originalTokens - newTokens, compression_ratio = Math.Round((double)newTokens / Math.Max(1, originalTokens), 2), text = result[..Math.Min(2000, result.Length)] });
             }),
 
         // ═══ Notification — 1 tools ═══
         new("notify", "Send notification via configured channel (Telegram/WeWork/Slack)", "notification",
-            async args => { var gw = GetService<LTAI.Tools.Integration.MessageGateway>(); var msg = LTAI.Tools.Integration.GatewayMessage.Create(Arg(args, "channel", "cli"), Arg(args, "to", ""), Arg(args, "message")); var result = await gw.SendAsync(msg); return new { status = result.Status, platform = result.Platform }; }),
+            async args => { var gw = GetService<LTAI.Tools.Integration.MessageGateway>(); var msg = LTAI.Tools.Integration.GatewayMessage.Create(Arg(args, "channel", "cli"), Arg(args, "to", ""), Arg(args, "message")); var result = await gw.SendAsync(msg); return JsonToolResult.Success(new { status = result.Status, platform = result.Platform }); }),
 
         // ═══ Integration — 6 tools ═══
         new("email_send", "Send email via SMTP", "integration",
             async args => {
                 var gw = GetService<LTAI.Tools.Integration.MessageGateway>();
                 var to = Arg(args, "to"); var subject = Arg(args, "subject"); var body = Arg(args, "body");
-                if (string.IsNullOrWhiteSpace(to) || string.IsNullOrWhiteSpace(body)) return new { error = "to and body required" };
+                if (string.IsNullOrWhiteSpace(to) || string.IsNullOrWhiteSpace(body)) return JsonToolResult.Success(new { error = "to and body required" });
                 if (string.IsNullOrWhiteSpace(subject)) subject = "LTAI Notification";
                 var ok = await gw.SendSmtpAsync(to, subject, body);
-                return new { success = ok, platform = "smtp", to };
+                return JsonToolResult.Success(new { success = ok, platform = "smtp", to });
             }),
         new("sms_send", "Send SMS via Aliyun/Tencent Cloud SMS", "integration",
             async args => {
                 var sms = GetService<LTAI.Tools.Integration.SmsGateway>();
                 var msg = Arg(args, "message"); var phone = Arg(args, "phone");
-                if (string.IsNullOrWhiteSpace(msg)) return new { error = "message required" };
+                if (string.IsNullOrWhiteSpace(msg)) return JsonToolResult.Success(new { error = "message required" });
                 var ok = await sms.SendAsync(msg, string.IsNullOrWhiteSpace(phone) ? null : phone);
-                return new { success = ok, phone = phone ?? sms.Config.PhoneNumbers.FirstOrDefault() };
+                return JsonToolResult.Success(new { success = ok, phone = phone ?? sms.Config.PhoneNumbers.FirstOrDefault() });
             }),
         new("translate", "Translate text using Baidu Translate API", "integration",
             async args => {
                 var svc = GetService<LTAI.Tools.Integration.TranslateService>();
                 var text = Arg(args, "text"); var from = Arg(args, "from", "auto"); var to = Arg(args, "to", "zh");
-                if (string.IsNullOrWhiteSpace(text)) return new { error = "text required" };
+                if (string.IsNullOrWhiteSpace(text)) return JsonToolResult.Success(new { error = "text required" });
                 var result = await svc.TranslateAsync(text, from, to);
-                return new { success = result != null, text, from, to, translation = result };
+                return JsonToolResult.Success(new { success = result != null, text, from, to, translation = result });
             }),
         new("image_search", "Search images via Unsplash/Pixabay", "integration",
             async args => {
                 var svc = GetService<LTAI.Tools.Integration.ImageSearchService>();
                 var query = Arg(args, "query"); var count = (int)ArgDouble(args, "count", 10);
                 var source = Arg(args, "source", "unsplash");
-                if (string.IsNullOrWhiteSpace(query)) return new { error = "query required" };
+                if (string.IsNullOrWhiteSpace(query)) return JsonToolResult.Success(new { error = "query required" });
                 var results = await svc.SearchAsync(query, count, source);
-                return new { success = true, query, count = results.Count, results = results.Select(r => new { r.Id, r.Url, r.Description, r.Author, r.Source }) };
+                return JsonToolResult.Success(new { success = true, query, count = results.Count, results = results.Select(r => new { r.Id, r.Url, r.Description, r.Author, r.Source }) });
             }),
         new("weather", "Get current weather by city name", "integration",
             async args => {
                 var svc = GetService<LTAI.Tools.Integration.WeatherService>();
                 var city = Arg(args, "city"); var source = Arg(args, "source", "openweathermap");
-                if (string.IsNullOrWhiteSpace(city)) return new { error = "city required" };
+                if (string.IsNullOrWhiteSpace(city)) return JsonToolResult.Success(new { error = "city required" });
                 var data = await svc.GetWeatherAsync(city, source);
                 return data != null ? new { success = true, data.City, data.Weather, data.Description, data.Temperature, data.Humidity, data.WindSpeed, data.Source }
                     : new { error = "Weather data not available", city };
@@ -1068,7 +1068,7 @@ public static class LTAIToolRegistry
             async args => {
                 var updater = GetService<LTAI.Tools.Integration.AutoUpdater>();
                 var result = await updater.CheckForUpdatesAsync();
-                return new { result.CurrentVersion, result.LatestVersion, result.HasUpdate, result.ReleaseNotes };
+                return JsonToolResult.Success(new { result.CurrentVersion, result.LatestVersion, result.HasUpdate, result.ReleaseNotes });
             }),
 
         // ═══ GIS — 5 new tools ═══
@@ -1077,7 +1077,7 @@ public static class LTAIToolRegistry
         new("poi_search", "Search for Points of Interest (restaurants, hospitals, etc.) nearby", "gis",
             async args => { var svc = GetService<LTAI.Tools.GIS.UnifiedMapService>(); return await svc.SearchPOIAsync(Arg(args, "keyword"), Arg(args, "city")); }),
         new("route_plan", "Plan a route between two locations (driving/walking/transit/bicycling)", "gis",
-            async args => { var svc = GetService<LTAI.Tools.GIS.UnifiedMapService>(); var from = ParseGeoPoint(Arg(args, "from")); var to = ParseGeoPoint(Arg(args, "to")); if (from == null || to == null) return new { error = "from and to must be 'lng,lat' format" }; return await svc.GetRouteAsync(from, to, Arg(args, "mode", "driving")); }),
+            async args => { var svc = GetService<LTAI.Tools.GIS.UnifiedMapService>(); var from = ParseGeoPoint(Arg(args, "from")); var to = ParseGeoPoint(Arg(args, "to")); if (from == null || to == null) return JsonToolResult.Success(new { error = "from and to must be 'lng,lat' format" }); return await svc.GetRouteAsync(from, to, Arg(args, "mode", "driving")); }),
         new("ip_location", "Lookup geographic location of an IP address", "gis",
             async args => { var svc = GetService<LTAI.Tools.GIS.UnifiedMapService>(); return await svc.GetIPLocationAsync(Arg(args, "ip")); }),
         new("map_weather", "Get weather by city name via Amap API (alternative to weather tool)", "gis",
@@ -1108,36 +1108,36 @@ public static class LTAIToolRegistry
                 var cType = typeof(object).Assembly.GetType("LTAI.Vector.Knowledge.KnowledgeCompiler");
                 var c = cType != null ? _serviceProvider?.GetService(cType) : null;
                 if (c != null) { var m = c.GetType().GetMethod("CompileAsync"); var task = m?.Invoke(c, new object?[] { Arg(args, "domain"), Arg(args, "task_description"), Arg(args, "evals") }); if (task is Task t) { await t; return t.GetType().GetProperty("Result")?.GetValue(t); } }
-                return new { error = "Knowledge compiler not available" };
+                return JsonToolResult.Error("Knowledge compiler not available");
             }),
         new("km_fuse", "Fuse multiple documents into a synthesized answer, detecting conflicts and cross-references", "knowledge",
             async args => {
                 var fType = typeof(object).Assembly.GetType("LTAI.Vector.Knowledge.MultiDocFusionEngine");
                 var f = fType != null ? _serviceProvider?.GetService(fType) : null;
                 if (f != null) { var m = f.GetType().GetMethod("FuseAsync"); var docs = Arg(args, "docs"); var task = m?.Invoke(f, new object?[] { docs }); if (task is Task t) { await t; return t.GetType().GetProperty("Result")?.GetValue(t); } }
-                return new { error = "Multi-doc fusion engine not available" };
+                return JsonToolResult.Error("Multi-doc fusion engine not available");
             }),
 
         new("rag_ask", "Full RAG pipeline: search knowledge base, build prompt, generate answer with hallucination guard", "knowledge",
             async args => {
                 var pType = typeof(object).Assembly.GetType("LTAI.TreeLLM.Prompting.RagPipeline");
                 var p = pType != null ? _serviceProvider?.GetService(pType) : null;
-                if (p != null) { var m = p.GetType().GetMethod("AskAsync"); var task = m?.Invoke(p, new object?[] { Arg(args, "question") }); if (task is Task t) { await t; var r = t.GetType().GetProperty("Result")?.GetValue(t); if (r != null) { var a = r.GetType().GetProperty("Answer")?.GetValue(r); var sc = r.GetType().GetProperty("SourceCount")?.GetValue(r); var el = r.GetType().GetProperty("ElapsedMs")?.GetValue(r); return new { Answer = a, SourceCount = sc, ElapsedMs = el }; } } }
-                return new { error = "RAG pipeline not available" };
+                if (p != null) { var m = p.GetType().GetMethod("AskAsync"); var task = m?.Invoke(p, new object?[] { Arg(args, "question") }); if (task is Task t) { await t; var r = t.GetType().GetProperty("Result")?.GetValue(t); if (r != null) { var a = r.GetType().GetProperty("Answer")?.GetValue(r); var sc = r.GetType().GetProperty("SourceCount")?.GetValue(r); var el = r.GetType().GetProperty("ElapsedMs")?.GetValue(r); return JsonToolResult.Success(new { Answer = a, SourceCount = sc, ElapsedMs = el }); } } }
+                return JsonToolResult.Error("RAG pipeline not available");
             }),
         new("dag_rag_ask", "DAG-based parallel RAG: multi-mode retrieval (Iterative+MultiAgent+Reflective) in parallel", "knowledge",
             async args => {
                 var pType = typeof(object).Assembly.GetType("LTAI.TreeLLM.Prompting.DagRagPipeline");
                 var p = pType != null ? _serviceProvider?.GetService(pType) : null;
-                if (p != null) { var m = p.GetType().GetMethod("AskAsync"); var task = m?.Invoke(p, new object?[] { Arg(args, "question") }); if (task is Task t) { await t; var r = t.GetType().GetProperty("Result")?.GetValue(t); if (r != null) { var a = r.GetType().GetProperty("Answer")?.GetValue(r); var sc = r.GetType().GetProperty("SourceCount")?.GetValue(r); var el = r.GetType().GetProperty("ElapsedMs")?.GetValue(r); return new { Answer = a, SourceCount = sc, ElapsedMs = el }; } } }
-                return new { error = "DAG RAG pipeline not available" };
+                if (p != null) { var m = p.GetType().GetMethod("AskAsync"); var task = m?.Invoke(p, new object?[] { Arg(args, "question") }); if (task is Task t) { await t; var r = t.GetType().GetProperty("Result")?.GetValue(t); if (r != null) { var a = r.GetType().GetProperty("Answer")?.GetValue(r); var sc = r.GetType().GetProperty("SourceCount")?.GetValue(r); var el = r.GetType().GetProperty("ElapsedMs")?.GetValue(r); return JsonToolResult.Success(new { Answer = a, SourceCount = sc, ElapsedMs = el }); } } }
+                return JsonToolResult.Error("DAG RAG pipeline not available");
             }),
         new("self_refine", "Execute iterative self-refinement: generate answer, verify, critique, refine (5 rounds max)", "knowledge",
             async args => {
                 var sType = typeof(object).Assembly.GetType("LTAI.TreeLLM.Prompting.SelfRefinementLoop");
                 var s = sType != null ? _serviceProvider?.GetService(sType) : null;
                 if (s != null) { var m = s.GetType().GetMethod("AskAsync"); var task = m?.Invoke(s, new object?[] { Arg(args, "question") }); if (task is Task t) { await t; return t.GetType().GetProperty("Result")?.GetValue(t); } }
-                return new { error = "Self-refinement loop not available" };
+                return JsonToolResult.Error("Self-refinement loop not available");
             }),
 
         // ═══ Shell — 1 tool ═══
@@ -1150,13 +1150,13 @@ public static class LTAIToolRegistry
                 var cacheType = typeof(object).Assembly.GetType("LTAI.TreeLLM.Prompting.PromptCache");
                 var cache = cacheType != null ? _serviceProvider?.GetService(cacheType) : null;
                 if (cache != null) { var m = cache.GetType().GetMethod("Stats"); return m?.Invoke(cache, null) ?? new { error = "Stats not available" }; }
-                return new { error = "Prompt cache not available" };
+                return JsonToolResult.Error("Prompt cache not available");
             }),
         new("metrics_snapshot", "Get system metrics: total requests, tokens, avg latency, active tasks, memory", "system",
             async _ => {
                 var collectorType = typeof(object).Assembly.GetType("LTAI.Metrics.LTAIMetricsCollector");
                 var collector = collectorType != null ? _serviceProvider?.GetService(collectorType) : null;
-                if (collector == null) return new { error = "Metrics collector not available" };
+                if (collector == null) return JsonToolResult.Error("Metrics collector not available");
                 var method = collector.GetType().GetMethod("GetSnapshot");
                 return method?.Invoke(collector, null) ?? new { error = "GetSnapshot not available" };
             }),
@@ -1168,7 +1168,7 @@ public static class LTAIToolRegistry
                 var name = Arg(args, "name");
                 var desc = Arg(args, "description");
                 var body = Arg(args, "body");
-                if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(desc) || string.IsNullOrWhiteSpace(body)) return new { error = "name, description, and body are required" };
+                if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(desc) || string.IsNullOrWhiteSpace(body)) return JsonToolResult.Success(new { error = "name, description, and body are required" });
                 var skillsDir = Path.Combine(Environment.CurrentDirectory, ".livingtree", "skills");
                 var skillDir = Path.Combine(skillsDir, name);
                 Directory.CreateDirectory(skillDir);
@@ -1181,13 +1181,13 @@ created: {DateTime.UtcNow:yyyy-MM-dd}
 ---
 ";
                 await File.WriteAllTextAsync(Path.Combine(skillDir, "SKILL.md"), frontmatter + "\n" + body);
-                return new { name, description = desc, file = Path.Combine(skillDir, "SKILL.md"), status = "created" };
+                return JsonToolResult.Success(new { name, description = desc, file = Path.Combine(skillDir, "SKILL.md"), status = "created" });
             }),
         new("skill_import", "Batch import skills from a Markdown document. Skills are identified by ## headings with optional descriptions and code blocks. Also accepts raw text/skill descriptions — the LLM will format them as proper skill definitions. Parameters: markdown (required, the full Markdown document content or skill description text)", "management",
             async args =>
             {
                 var markdown = Arg(args, "markdown");
-                if (string.IsNullOrWhiteSpace(markdown)) return new { error = "markdown parameter is required. Provide the Markdown document content to import." };
+                if (string.IsNullOrWhiteSpace(markdown)) return JsonToolResult.Success(new { error = "markdown parameter is required. Provide the Markdown document content to import." });
 
                 var discovery = _serviceProvider?.GetService(typeof(object).Assembly.GetType("LTAI.Tools.Skills.SkillDiscoveryManager"));
                 if (discovery is null)
@@ -1199,13 +1199,13 @@ created: {DateTime.UtcNow:yyyy-MM-dd}
                 }
 
                 var importerType = typeof(object).Assembly.GetType("LTAI.Tools.Skills.SkillMarkdownImporter");
-                if (importerType is null) return new { error = "SkillMarkdownImporter not found in assembly" };
+                if (importerType is null) return JsonToolResult.Success(new { error = "SkillMarkdownImporter not found in assembly" });
 
                 var importer = Activator.CreateInstance(importerType, discovery);
                 var importMethod = importerType.GetMethod("ImportFromMarkdown");
                 var result = importMethod?.Invoke(importer, new object[] { markdown });
 
-                if (result is null) return new { error = "Import failed" };
+                if (result is null) return JsonToolResult.Success(new { error = "Import failed" });
 
                 var installedProp = result.GetType().GetProperty("Installed");
                 var failedProp = result.GetType().GetProperty("Failed");
@@ -1228,39 +1228,39 @@ created: {DateTime.UtcNow:yyyy-MM-dd}
             {
                 var name = Arg(args, "name");
                 var body = Arg(args, "body");
-                if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(body)) return new { error = "name and body are required" };
+                if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(body)) return JsonToolResult.Success(new { error = "name and body are required" });
                 var skillDir = Path.Combine(Environment.CurrentDirectory, ".livingtree", "skills", name);
                 var skillFile = Path.Combine(skillDir, "SKILL.md");
                 if (!File.Exists(skillFile))
                 {
                     var globalSkillDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".livingtree", "skills", name);
                     var globalSkillFile = Path.Combine(globalSkillDir, "SKILL.md");
-                    if (!File.Exists(globalSkillFile)) return new { error = $"Skill '{name}' not found in project or global skills" };
+                    if (!File.Exists(globalSkillFile)) return JsonToolResult.Success(new { error = $"Skill '{name}' not found in project or global skills" });
                     await File.AppendAllTextAsync(globalSkillFile, "\n\n" + body);
-                    return new { name, file = globalSkillFile, status = "appended" };
+                    return JsonToolResult.Success(new { name, file = globalSkillFile, status = "appended" });
                 }
                 await File.AppendAllTextAsync(skillFile, "\n\n" + body);
-                return new { name, file = skillFile, status = "appended" };
+                return JsonToolResult.Success(new { name, file = skillFile, status = "appended" });
             }),
         new("skill_delete", "Delete a skill by name. Removes the SKILL.md file and its directory from .livingtree/skills/. Parameters: name (required)", "management",
             async args =>
             {
                 var name = Arg(args, "name");
-                if (string.IsNullOrWhiteSpace(name)) return new { error = "name parameter is required" };
+                if (string.IsNullOrWhiteSpace(name)) return JsonToolResult.Success(new { error = "name parameter is required" });
                 var skillDir = Path.Combine(Environment.CurrentDirectory, ".livingtree", "skills", name);
-                if (Directory.Exists(skillDir)) { Directory.Delete(skillDir, true); return new { name, status = "deleted" }; }
+                if (Directory.Exists(skillDir)) { Directory.Delete(skillDir, true); return JsonToolResult.Success(new { name, status = "deleted" }); }
                 var globalSkillDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".livingtree", "skills", name);
-                if (Directory.Exists(globalSkillDir)) { Directory.Delete(globalSkillDir, true); return new { name, status = "deleted", location = "global" }; }
-                return new { error = $"Skill '{name}' not found" };
+                if (Directory.Exists(globalSkillDir)) { Directory.Delete(globalSkillDir, true); return JsonToolResult.Success(new { name, status = "deleted", location = "global" }); }
+                return JsonToolResult.Success(new { error = $"Skill '{name}' not found" });
             }),
         new("skill_explain", "Explain what a skill does by reading its SKILL.md body and providing a summary. Parameters: name (required)", "management",
             async args =>
             {
                 var name = Arg(args, "name");
-                if (string.IsNullOrWhiteSpace(name)) return new { error = "name parameter is required" };
+                if (string.IsNullOrWhiteSpace(name)) return JsonToolResult.Success(new { error = "name parameter is required" });
                 var discovery = new LTAI.Tools.Skills.SkillDiscoveryManager();
                 var skill = discovery.GetSkill(name);
-                if (skill != null) return new { name = skill.Name, description = skill.Description, source = skill.Source, size = skill.Body.Length, preview = skill.Body[..Math.Min(500, skill.Body.Length)], complexity = skill.Body.Length < 500 ? "simple" : skill.Body.Length < 2000 ? "moderate" : "complex" };
+                if (skill != null) return JsonToolResult.Success(new { name = skill.Name, description = skill.Description, source = skill.Source, size = skill.Body.Length, preview = skill.Body[..Math.Min(500, skill.Body.Length)], complexity = skill.Body.Length < 500 ? "simple" : skill.Body.Length < 2000 ? "moderate" : "complex" });
                 var catalog = new LTAI.Tools.Skills.SkillCatalog();
                 var entry = catalog.GetSkill(name);
                 return entry != null ? new { name = entry.ModuleName, description = entry.Description, bucket = entry.Bucket.ToString(), maturity = entry.Maturity.ToString(), dependencies = entry.Dependencies, note = "Built-in skill: edit not supported" } : new { error = $"Skill '{name}' not found" };
@@ -1277,25 +1277,25 @@ created: {DateTime.UtcNow:yyyy-MM-dd}
                              && (string.IsNullOrEmpty(category) || t.Category.Contains(category, StringComparison.OrdinalIgnoreCase)))
                     .Select(t => new { t.Name, t.Description, t.Category, has_handler = t.Handler != null })
                     .Take(30).ToList();
-                return new { query, category, results, total = AllTools.Length, matched = results.Count };
+                return JsonToolResult.Success(new { query, category, results, total = AllTools.Length, matched = results.Count });
             }),
         new("tool_enable", "Enable a tool by name. Disabled tools are filtered from suggestions and blocked from invocation. Parameters: name (required)", "management",
             async args =>
             {
                 var name = Arg(args, "name");
                 var tool = AllTools.FirstOrDefault(t => string.Equals(t.Name, name, StringComparison.OrdinalIgnoreCase));
-                if (tool is null) return new { error = $"Tool '{name}' not found. Use tool_search to find available tools." };
+                if (tool is null) return JsonToolResult.Success(new { error = $"Tool '{name}' not found. Use tool_search to find available tools." });
                 ToolGate.Instance.Enable(name);
-                return new { name, status = "enabled", description = tool.Description, category = tool.Category };
+                return JsonToolResult.Success(new { name, status = "enabled", description = tool.Description, category = tool.Category });
             }),
         new("tool_disable", "Disable a tool by name. It will be filtered from suggestions and blocked from invocation. Parameters: name (required)", "management",
             async args =>
             {
                 var name = Arg(args, "name");
                 var tool = AllTools.FirstOrDefault(t => string.Equals(t.Name, name, StringComparison.OrdinalIgnoreCase));
-                if (tool is null) return new { error = $"Tool '{name}' not found" };
+                if (tool is null) return JsonToolResult.Success(new { error = $"Tool '{name}' not found" });
                 ToolGate.Instance.Disable(name);
-                return new { name, status = "disabled", description = tool.Description, disabled_tools = ToolGate.Instance.DisabledCount };
+                return JsonToolResult.Success(new { name, status = "disabled", description = tool.Description, disabled_tools = ToolGate.Instance.DisabledCount });
             }),
         new("tool_stats", "Get comprehensive statistics about all registered tools: counts by category, handlers, and status", "management",
             async _ =>
@@ -1316,7 +1316,7 @@ created: {DateTime.UtcNow:yyyy-MM-dd}
             async args =>
             {
                 var desc = Arg(args, "description");
-                if (string.IsNullOrWhiteSpace(desc)) return new { error = "description parameter is required" };
+                if (string.IsNullOrWhiteSpace(desc)) return JsonToolResult.Success(new { error = "description parameter is required" });
                 var synth = new LTAI.Tools.Tools.ToolSynthesizer();
                 var result = await synth.Synthesize(desc, Arg(args, "category", "generated"), 
                     (_, prompt) => Task.FromResult("Tool synthesis requires chat client. Use sandbox_exec to test the generated code."));
@@ -1342,7 +1342,7 @@ created: {DateTime.UtcNow:yyyy-MM-dd}
             {
                 var sd = new LTAI.Tools.Evolution.SelfDiscovery();
                 var proposals = sd.GetProposals();
-                return new { total_proposals = proposals.Count, proposals = proposals.Select(p => new { p.Name, p.Category, p.Description, p.OccurrenceCount, p.AvgSuccessRate }) };
+                return JsonToolResult.Success(new { total_proposals = proposals.Count, proposals = proposals.Select(p => new { p.Name, p.Category, p.Description, p.OccurrenceCount, p.AvgSuccessRate }) });
             }),
         new("tool_feedback", "Record success/failure feedback for a tool to improve future tool suggestions", "discovery",
             async args =>
@@ -1351,7 +1351,7 @@ created: {DateTime.UtcNow:yyyy-MM-dd}
                 var toolName = Arg(args, "tool_name");
                 var success = bool.TryParse(Arg(args, "success", "true"), out var s) && s;
                 sd.Observe(Arg(args, "domain", "general"), new List<string> { toolName }, success);
-                return new { status = "recorded", tool = toolName, success };
+                return JsonToolResult.Success(new { status = "recorded", tool = toolName, success });
             }),
 
         // ═══ Skills — 4 tools ═══
@@ -1389,7 +1389,7 @@ created: {DateTime.UtcNow:yyyy-MM-dd}
             {
                 var discovery = new LTAI.Tools.Skills.SkillDiscoveryManager();
                 var skill = discovery.GetSkill(Arg(args, "name"));
-                if (skill != null) return new { name = skill.Name, source = skill.Source, body = skill.Body };
+                if (skill != null) return JsonToolResult.Success(new { name = skill.Name, source = skill.Source, body = skill.Body });
                 var catalog = new LTAI.Tools.Skills.SkillCatalog();
                 var entry = catalog.GetSkill(Arg(args, "name"));
                 return entry != null ? new { name = entry.ModuleName, description = entry.Description, bucket = entry.Bucket.ToString(), maturity = entry.Maturity.ToString() } : new { error = "Skill not found" };
@@ -1407,7 +1407,7 @@ created: {DateTime.UtcNow:yyyy-MM-dd}
             async args =>
             {
                 var serverUrl = Arg(args, "server_url");
-                if (string.IsNullOrWhiteSpace(serverUrl)) return new { error = "server_url parameter is required" };
+                if (string.IsNullOrWhiteSpace(serverUrl)) return JsonToolResult.Success(new { error = "server_url parameter is required" });
                 try
                 {
                     using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
@@ -1424,16 +1424,16 @@ created: {DateTime.UtcNow:yyyy-MM-dd}
                         foreach (var t in toolsArr.EnumerateArray())
                             tools.Add(new { name = t.GetProperty("name").GetString(), description = t.TryGetProperty("description", out var d) ? d.GetString() : "" });
                     }
-                    return new { server_url = serverUrl, connected = initResult.IsSuccessStatusCode, tools };
+                    return JsonToolResult.Success(new { server_url = serverUrl, connected = initResult.IsSuccessStatusCode, tools });
                 }
-                catch (Exception ex) { return new { error = $"MCP discovery failed: {ex.Message}" }; }
+                catch (Exception ex) { return JsonToolResult.Success(new { error = $"MCP discovery failed: {ex.Message}" }); }
             }),
         new("mcp_call", "Call a specific tool on a remote MCP server. Use mcp_discover first to find available tools. Parameters: server_url (required), tool_name (required), arguments (JSON object, optional)", "discovery",
             async args =>
             {
                 var serverUrl = Arg(args, "server_url");
                 var toolName = Arg(args, "tool_name");
-                if (string.IsNullOrWhiteSpace(serverUrl) || string.IsNullOrWhiteSpace(toolName)) return new { error = "server_url and tool_name are required" };
+                if (string.IsNullOrWhiteSpace(serverUrl) || string.IsNullOrWhiteSpace(toolName)) return JsonToolResult.Success(new { error = "server_url and tool_name are required" });
                 try
                 {
                     var toolArgs = Arg(args, "arguments", "{}");
@@ -1442,15 +1442,15 @@ created: {DateTime.UtcNow:yyyy-MM-dd}
                     var callContent = new StringContent(callPayload, System.Text.Encoding.UTF8, "application/json");
                     var callResult = await http.PostAsync($"{serverUrl.TrimEnd('/')}/message", callContent);
                     var json = await callResult.Content.ReadAsStringAsync();
-                    return new { tool = toolName, status = callResult.IsSuccessStatusCode ? "called" : "failed", raw_response = json[..Math.Min(2000, json.Length)] };
+                    return JsonToolResult.Success(new { tool = toolName, status = callResult.IsSuccessStatusCode ? "called" : "failed", raw_response = json[..Math.Min(2000, json.Length)] });
                 }
-                catch (Exception ex) { return new { error = $"MCP call failed: {ex.Message}" }; }
+                catch (Exception ex) { return JsonToolResult.Success(new { error = $"MCP call failed: {ex.Message}" }); }
             }),
         new("mcp_export", "Export current LTAI tools as MCP-compatible tool definitions. Use this to share LTAI's capabilities with other MCP clients.", "discovery",
             async _ =>
             {
                 var tools = AllTools.Select(t => new { name = t.Name, description = t.Description, category = t.Category, has_handler = t.Handler != null });
-                return new { protocol = "2024-11-05", server_name = "LTAI", version = "7.0.0", tools, total = AllTools.Length };
+                return JsonToolResult.Success(new { protocol = "2024-11-05", server_name = "LTAI", version = "7.0.0", tools, total = AllTools.Length });
             }),
 
         // ═══ System — 7 tools ═══
@@ -1458,13 +1458,13 @@ created: {DateTime.UtcNow:yyyy-MM-dd}
             async _ => {
                 var mgr = GetService<LTAI.Core.System.ModelManager>();
                 var models = mgr.ListAll();
-                return new { count = models.Count, models = models.Select(m => new { m.Provider, m.ModelName, m.TierName, m.Capabilities }) };
+                return JsonToolResult.Success(new { count = models.Count, models = models.Select(m => new { m.Provider, m.ModelName, m.TierName, m.Capabilities }) });
             }),
         new("models_show", "Show details for a specific provider or model", "system",
             async args => {
                 var mgr = GetService<LTAI.Core.System.ModelManager>();
                 var name = Arg(args, "name");
-                if (string.IsNullOrWhiteSpace(name)) return new { error = "name required" };
+                if (string.IsNullOrWhiteSpace(name)) return JsonToolResult.Success(new { error = "name required" });
                 var info = mgr.Show(name);
                 return info != null ? new { info.Provider, info.ModelName, info.TierName, info.BaseUrl, info.Capabilities } : new { error = $"Provider/model not found: {name}" };
             }),
@@ -1472,9 +1472,9 @@ created: {DateTime.UtcNow:yyyy-MM-dd}
             async args => {
                 var mgr = GetService<LTAI.Core.System.ModelManager>();
                 var q = Arg(args, "query");
-                if (string.IsNullOrWhiteSpace(q)) return new { error = "query required" };
+                if (string.IsNullOrWhiteSpace(q)) return JsonToolResult.Success(new { error = "query required" });
                 var results = mgr.Search(q);
-                return new { query = q, count = results.Count, results = results.Select(m => new { m.Provider, m.ModelName, m.TierName }) };
+                return JsonToolResult.Success(new { query = q, count = results.Count, results = results.Select(m => new { m.Provider, m.ModelName, m.TierName }) });
             }),
         new("models_sync", "Sync model registry info from built-in providers", "system",
             async _ => {
@@ -1485,13 +1485,13 @@ created: {DateTime.UtcNow:yyyy-MM-dd}
             async _ => {
                 var svc = GetService<LTAI.Core.System.ServiceManager>();
                 var result = await svc.InstallAsync();
-                return new { result.Success, result.Message };
+                return JsonToolResult.Success(new { result.Success, result.Message });
             }),
         new("service_uninstall", "Uninstall LTAI Windows Service", "system",
             async _ => {
                 var svc = GetService<LTAI.Core.System.ServiceManager>();
                 var result = await svc.UninstallAsync();
-                return new { result.Success, result.Message };
+                return JsonToolResult.Success(new { result.Success, result.Message });
             }),
         new("service_status", "Check LTAI Windows Service status or start/stop/restart", "system",
             async args => {
@@ -1504,7 +1504,7 @@ created: {DateTime.UtcNow:yyyy-MM-dd}
                     "restart" => await svc.RestartAsync(),
                     _ => await svc.StatusAsync()
                 };
-                return new { action, result.Success, result.Message, result.Output };
+                return JsonToolResult.Success(new { action, result.Success, result.Message, result.Output });
             }),
 
         // ═══ Daemon — 2 tools ═══
@@ -1512,7 +1512,7 @@ created: {DateTime.UtcNow:yyyy-MM-dd}
             async args => {
                 var dm = GetService<LTAI.Core.System.DaemonManager>();
                 if (!dm.IsAvailable())
-                    return new { error = $"Daemon manager not available on {dm.Platform}. Requires systemctl (Linux), launchctl (macOS), or Windows." };
+                    return JsonToolResult.Success(new { error = $"Daemon manager not available on {dm.Platform}. Requires systemctl (Linux), launchctl (macOS), or Windows." });
                 var config = new LTAI.Core.System.DaemonConfig
                 {
                     ServiceName = Arg(args, "service_name", "ltai-agent"),
@@ -1523,16 +1523,16 @@ created: {DateTime.UtcNow:yyyy-MM-dd}
                     RestartPolicy = Arg(args, "restart_policy", "always")
                 };
                 var result = await dm.InstallAsync(config);
-                return new { result.Success, result.Message, result.Platform, result.ServiceName, result.Output };
+                return JsonToolResult.Success(new { result.Success, result.Message, result.Platform, result.ServiceName, result.Output });
             }),
         new("daemon_status", "Query daemon/service status across platforms (systemd/launchctl/sc query)", "system",
             async args => {
                 var dm = GetService<LTAI.Core.System.DaemonManager>();
                 if (!dm.IsAvailable())
-                    return new { error = $"Daemon manager not available on {dm.Platform}" };
+                    return JsonToolResult.Success(new { error = $"Daemon manager not available on {dm.Platform}" });
                 var serviceName = Arg(args, "service_name", "ltai-agent");
                 var result = await dm.StatusAsync(serviceName);
-                return new { result.Success, result.Message, result.Platform, result.ServiceName, result.Output };
+                return JsonToolResult.Success(new { result.Success, result.Message, result.Platform, result.ServiceName, result.Output });
             }),
 
         // ═══ WSL2 — 3 tools ═══
@@ -1541,33 +1541,33 @@ created: {DateTime.UtcNow:yyyy-MM-dd}
                 var wm = GetService<LTAI.Core.System.Wsl2Manager>();
                 var avail = await wm.IsAvailable();
                 if (!avail.Success)
-                    return new { error = avail.Message, hint = "WSL2 requires Windows 10/11 with WSL2 enabled. Run `wsl --install` first." };
+                    return JsonToolResult.Success(new { error = avail.Message, hint = "WSL2 requires Windows 10/11 with WSL2 enabled. Run `wsl --install` first." });
                 var result = await wm.ListDistros();
-                return new { result.Success, result.Message, distros = result.Output };
+                return JsonToolResult.Success(new { result.Success, result.Message, distros = result.Output });
             }),
         new("wsl2_exec", "Execute a command inside a WSL2 Linux distribution", "system",
             async args => {
                 var wm = GetService<LTAI.Core.System.Wsl2Manager>();
                 var avail = await wm.IsAvailable();
                 if (!avail.Success)
-                    return new { error = avail.Message, hint = "WSL2 requires Windows 10/11 with WSL2 enabled." };
+                    return JsonToolResult.Success(new { error = avail.Message, hint = "WSL2 requires Windows 10/11 with WSL2 enabled." });
                 var distro = Arg(args, "distro");
                 var command = Arg(args, "command");
-                if (string.IsNullOrWhiteSpace(distro)) return new { error = "distro parameter required" };
-                if (string.IsNullOrWhiteSpace(command)) return new { error = "command parameter required" };
+                if (string.IsNullOrWhiteSpace(distro)) return JsonToolResult.Success(new { error = "distro parameter required" });
+                if (string.IsNullOrWhiteSpace(command)) return JsonToolResult.Success(new { error = "command parameter required" });
                 var result = await wm.ExecuteInDistro(distro, command);
-                return new { result.Success, result.Message, result.Distro, result.Output };
+                return JsonToolResult.Success(new { result.Success, result.Message, result.Distro, result.Output });
             }),
         new("wsl2_limits", "Set WSL2 resource limits (memory MB, processor count) via .wslconfig", "system",
             async args => {
                 var wm = GetService<LTAI.Core.System.Wsl2Manager>();
                 var avail = await wm.IsAvailable();
                 if (!avail.Success)
-                    return new { error = avail.Message, hint = "WSL2 requires Windows 10/11 with WSL2 enabled." };
+                    return JsonToolResult.Success(new { error = avail.Message, hint = "WSL2 requires Windows 10/11 with WSL2 enabled." });
                 var memoryMb = (int)ArgDouble(args, "memory_mb", 4096);
                 var processors = (int)ArgDouble(args, "processors", 2);
                 var result = await wm.SetResourceLimits(memoryMb, processors);
-                return new { result.Success, result.Message, memory_mb = memoryMb, processors };
+                return JsonToolResult.Success(new { result.Success, result.Message, memory_mb = memoryMb, processors });
             }),
 
         // ═══ Resource — 1 tool ═══
@@ -1575,7 +1575,7 @@ created: {DateTime.UtcNow:yyyy-MM-dd}
             async _ => {
                 var rg = GetService<LTAI.Core.System.ResourceGuard>();
                 if (!rg.IsAvailable())
-                    return new { error = "ResourceGuard not available" };
+                    return JsonToolResult.Error("ResourceGuard not available");
                 var usage = rg.GetCurrentUsage();
                 var available = rg.GetAvailableResources();
                 return new
@@ -1595,7 +1595,7 @@ created: {DateTime.UtcNow:yyyy-MM-dd}
             {
                 var catalog = ApiCatalog.ApiToolCatalog.Instance;
                 var context = catalog.BuildPromptContext();
-                return new { summary = context, stats = catalog.GetStats() };
+                return JsonToolResult.Success(new { summary = context, stats = catalog.GetStats() });
             }),
         new("api_search", "Search for specific API tools by keyword. Returns matching APIs with descriptions and parameters. Use after api_catalog to find relevant APIs for your task.", "discovery",
             async args =>
@@ -1633,19 +1633,19 @@ created: {DateTime.UtcNow:yyyy-MM-dd}
 
     private static object ComputeGaussianPlume(double q, double u, double h, double x)
     {
-        if (u <= 0 || x <= 0) return new { error = "Invalid parameters: u>0, x>0 required" };
+        if (u <= 0 || x <= 0) return JsonToolResult.Success(new { error = "Invalid parameters: u>0, x>0 required" });
         var sigmaY = 0.22 * x / Math.Sqrt(1 + 0.0001 * x);
         var sigmaZ = 0.20 * x;
         var concentration = q / (2 * Math.PI * u * sigmaY * sigmaZ) * Math.Exp(-h * h / (2 * sigmaZ * sigmaZ));
-        return new { concentration_mg_m3 = Math.Round(concentration * 1e6, 4), sigma_y = Math.Round(sigmaY, 1), sigma_z = Math.Round(sigmaZ, 1), distance_m = x };
+        return JsonToolResult.Success(new { concentration_mg_m3 = Math.Round(concentration * 1e6, 4), sigma_y = Math.Round(sigmaY, 1), sigma_z = Math.Round(sigmaZ, 1), distance_m = x });
     }
 
     private static object ComputeNoiseAttenuation(double lw, double distance)
     {
-        if (distance <= 0) return new { error = "distance > 0 required" };
+        if (distance <= 0) return JsonToolResult.Success(new { error = "distance > 0 required" });
         var attenuation = 20 * Math.Log10(Math.Max(distance, 0.1));
         var spl = lw - attenuation;
-        return new { spl_db = Math.Round(spl, 1), attenuation_db = Math.Round(attenuation, 1), distance_m = distance };
+        return JsonToolResult.Success(new { spl_db = Math.Round(spl, 1), attenuation_db = Math.Round(attenuation, 1), distance_m = distance });
     }
 
     private static object ComputeStreeterPhelps(double doSat, double do0, double k1, double k2, double x)
@@ -1653,20 +1653,20 @@ created: {DateTime.UtcNow:yyyy-MM-dd}
         var deficit = doSat - do0;
         var d = k1 / (k2 - k1) * (Math.Exp(-k1 * x / 86400) - Math.Exp(-k2 * x / 86400)) * deficit + deficit * Math.Exp(-k2 * x / 86400);
         var doVal = doSat - d;
-        return new { do_mg_l = Math.Round(doVal, 4), deficit = Math.Round(d, 4), distance_m = x };
+        return JsonToolResult.Success(new { do_mg_l = Math.Round(doVal, 4), deficit = Math.Round(d, 4), distance_m = x });
     }
 
     private static object ComputeCo2Equivalent(double ch4, double n2o)
     {
         var co2e = ch4 * 28 + n2o * 265;
-        return new { co2e_kg = Math.Round(co2e, 2), ch4_kg = ch4, n2o_kg = n2o, gwp_ch4 = 28, gwp_n2o = 265 };
+        return JsonToolResult.Success(new { co2e_kg = Math.Round(co2e, 2), ch4_kg = ch4, n2o_kg = n2o, gwp_ch4 = 28, gwp_n2o = 265 });
     }
 
     private static object ComputeHazardQuotient(double exposure, double rfd)
     {
-        if (rfd <= 0) return new { error = "reference_dose > 0 required" };
+        if (rfd <= 0) return JsonToolResult.Success(new { error = "reference_dose > 0 required" });
         var hq = exposure / rfd;
-        return new { hazard_quotient = Math.Round(hq, 4), risk_level = hq < 1 ? "acceptable" : hq < 10 ? "moderate" : "high" };
+        return JsonToolResult.Success(new { hazard_quotient = Math.Round(hq, 4), risk_level = hq < 1 ? "acceptable" : hq < 10 ? "moderate" : "high" });
     }
 
     private static object LookupStandard(string code)
@@ -1686,18 +1686,18 @@ created: {DateTime.UtcNow:yyyy-MM-dd}
         };
 
         if (standards.TryGetValue(code.ToUpper(), out var desc))
-            return new { code = code.ToUpper(), description = desc, found = true };
+            return JsonToolResult.Success(new { code = code.ToUpper(), description = desc, found = true });
 
         var partial = standards.FirstOrDefault(s => s.Key.Contains(code, StringComparison.OrdinalIgnoreCase));
         if (partial.Key != null)
-            return new { code = partial.Key, description = partial.Value, found = true, note = $"partial match for '{code}'" };
+            return JsonToolResult.Success(new { code = partial.Key, description = partial.Value, found = true, note = $"partial match for '{code}'" });
 
-        return new { code, found = false, note = "Standard not found in local database" };
+        return JsonToolResult.Success(new { code, found = false, note = "Standard not found in local database" });
     }
 
     private static object ComputeNoiseIso9613(double lw, double distance, string groundType = "mixed")
     {
-        if (distance <= 0) return new { error = "distance > 0 required" };
+        if (distance <= 0) return JsonToolResult.Success(new { error = "distance > 0 required" });
         var groundFactor = groundType switch { "hard" => 0.0, "soft" => 1.0, _ => 0.5 };
         var geometric = 20 * Math.Log10(Math.Max(distance, 0.1)) + 11;
         var atmospheric = distance * 0.005;
@@ -1717,7 +1717,7 @@ created: {DateTime.UtcNow:yyyy-MM-dd}
         if (nh3n <= 0.15) scores.Add(1); else if (nh3n <= 0.5) scores.Add(2); else if (nh3n <= 1.0) scores.Add(3); else if (nh3n <= 1.5) scores.Add(4); else if (nh3n <= 2.0) scores.Add(5); else scores.Add(6);
         var level = (int)scores.Max();
         var cls = level <= 1 ? "I" : level <= 2 ? "II" : level <= 3 ? "III" : level <= 4 ? "IV" : level <= 5 ? "V" : ">V";
-        return new { classification = cls, level, cod, bod, do_mg_l = doVal, nh3n, standard = "GB3838-2002" };
+        return JsonToolResult.Success(new { classification = cls, level, cod, bod, do_mg_l = doVal, nh3n, standard = "GB3838-2002" });
     }
 
     private static object ClassifyAir(double so2, double no2, double pm10, double pm25)
@@ -1734,7 +1734,7 @@ created: {DateTime.UtcNow:yyyy-MM-dd}
         var iaqiPm25 = calcIAQI(pm25, new double[] { 0, 35, 75, 115, 150, 250 });
         var aqi = new[] { iaqiSo2, iaqiNo2, iaqiPm10, iaqiPm25 }.Max();
         var cls = aqi <= 50 ? "I(优)" : aqi <= 100 ? "II(良)" : aqi <= 150 ? "III(轻度污染)" : aqi <= 200 ? "IV(中度污染)" : aqi <= 300 ? "V(重度污染)" : "VI(严重污染)";
-        return new { classification = cls, aqi = Math.Round(aqi, 1), so2_iaqi = Math.Round(iaqiSo2, 1), no2_iaqi = Math.Round(iaqiNo2, 1), pm10_iaqi = Math.Round(iaqiPm10, 1), pm25_iaqi = Math.Round(iaqiPm25, 1), standard = "GB3095-2012" };
+        return JsonToolResult.Success(new { classification = cls, aqi = Math.Round(aqi, 1), so2_iaqi = Math.Round(iaqiSo2, 1), no2_iaqi = Math.Round(iaqiNo2, 1), pm10_iaqi = Math.Round(iaqiPm10, 1), pm25_iaqi = Math.Round(iaqiPm25, 1), standard = "GB3095-2012" });
     }
 
     private static object ClassifyNoise(double daytimeDb, double nightDb, string zone = "class2")
@@ -1902,7 +1902,7 @@ graph TD
 
         var conc = q / (2 * Math.PI * u * sigmaY * sigmaZ) * Math.Exp(-effectiveH * effectiveH / (2 * sigmaZ * sigmaZ)) * 1e6;
 
-        return new { concentration_ug_m3 = Math.Round(Math.Max(0, conc), 4), effective_stack_h = Math.Round(effectiveH, 1), cavity_zone = x < x3bh, distance_m = x, building_h = bh, building_w = bw, standard = "HJ2.2-2018" };
+        return JsonToolResult.Success(new { concentration_ug_m3 = Math.Round(Math.Max(0, conc), 4), effective_stack_h = Math.Round(effectiveH, 1), cavity_zone = x < x3bh, distance_m = x, building_h = bh, building_w = bw, standard = "HJ2.2-2018" });
     }
 
     /// <summary>
@@ -1912,13 +1912,13 @@ graph TD
     /// </summary>
     private static object ComputeFumigation(double q, double u, double h, double x, double zi)
     {
-        if (h >= zi) return new { error = "Stack height must be below inversion layer height zi" };
+        if (h >= zi) return JsonToolResult.Success(new { error = "Stack height must be below inversion layer height zi" });
 
         var sigmaY = 0.22 * x / Math.Sqrt(1 + 0.0001 * x);
         var effectiveH = h + 0.5 * (zi - h);
         var conc = q / (Math.Sqrt(2 * Math.PI) * u * sigmaY * zi) * Math.Exp(-effectiveH * effectiveH / (2 * zi * zi)) * 1e6;
 
-        return new { concentration_ug_m3 = Math.Round(Math.Max(0, conc), 4), sigma_y = Math.Round(sigmaY, 1), inversion_height_m = zi, distance_m = x, scenario = "fumigation" };
+        return JsonToolResult.Success(new { concentration_ug_m3 = Math.Round(Math.Max(0, conc), 4), sigma_y = Math.Round(sigmaY, 1), inversion_height_m = zi, distance_m = x, scenario = "fumigation" });
     }
 
     private static object ComputeTrafficNoise(double volumePerH, double speedKmh, double distance, double heavyRatio)
@@ -1926,16 +1926,16 @@ graph TD
         var soundPower = 10 * Math.Log10(volumePerH) + 30 * Math.Log10(Math.Max(speedKmh, 1)) + 10 * Math.Log10(1 + heavyRatio * 4) - 38;
         var attenuation = 10 * Math.Log10(Math.Max(distance, 1)) + 5;
         var spl = soundPower - attenuation;
-        return new { spl_db = Math.Round(spl, 1), sound_power_db = Math.Round(soundPower, 1), attenuation_db = Math.Round(attenuation, 1), volume_per_h = volumePerH, speed_kmh = speedKmh, distance_m = distance, heavy_ratio = heavyRatio };
+        return JsonToolResult.Success(new { spl_db = Math.Round(spl, 1), sound_power_db = Math.Round(soundPower, 1), attenuation_db = Math.Round(attenuation, 1), volume_per_h = volumePerH, speed_kmh = speedKmh, distance_m = distance, heavy_ratio = heavyRatio });
     }
 
     private static object ComputeRiverMixing(double flowRate, double width, double depth, double velocity, double emissionLoad)
     {
-        if (velocity <= 0) return new { error = "velocity > 0 required" };
+        if (velocity <= 0) return JsonToolResult.Success(new { error = "velocity > 0 required" });
         var fullMixingLength = 0.4 * velocity * width * width / (depth * 10);
         var initialConc = emissionLoad / (flowRate + 0.001);
         var mixedConc = emissionLoad / (flowRate + 0.001) * Math.Exp(-0.2 * fullMixingLength / 86400);
-        return new { full_mixing_length_m = Math.Round(fullMixingLength, 1), mixing_zone_type = fullMixingLength > width * 10 ? "大中河" : "小河", initial_concentration_mg_l = Math.Round(initialConc, 4), fully_mixed_concentration_mg_l = Math.Round(mixedConc, 4) };
+        return JsonToolResult.Success(new { full_mixing_length_m = Math.Round(fullMixingLength, 1), mixing_zone_type = fullMixingLength > width * 10 ? "大中河" : "小河", initial_concentration_mg_l = Math.Round(initialConc, 4), fully_mixed_concentration_mg_l = Math.Round(mixedConc, 4) });
     }
 
     private static object ComputeEcologicalRisk(string metalsCsv)
@@ -1957,13 +1957,13 @@ graph TD
             totalRisk += ri;
             details.Add(new { metal = name, concentration = value, toxic_factor = tf, risk_index = Math.Round(ri, 2) });
         }
-        return new { total_risk_index = Math.Round(totalRisk, 2), risk_level = totalRisk < 150 ? "低" : totalRisk < 300 ? "中" : totalRisk < 600 ? "较高" : "高", details };
+        return JsonToolResult.Success(new { total_risk_index = Math.Round(totalRisk, 2), risk_level = totalRisk < 150 ? "低" : totalRisk < 300 ? "中" : totalRisk < 600 ? "较高" : "高", details });
     }
 
     private static object ComputeSoilLoss(double r, double k, double ls, double c, double p)
     {
         var usle = r * k * ls * c * p;
-        return new { soil_loss_t_ha_yr = Math.Round(usle, 2), r_erosivity = r, k_erodibility = k, ls_topographic = ls, c_cover = c, p_support = p, risk_level = usle < 5 ? "微度" : usle < 25 ? "轻度" : usle < 50 ? "中度" : usle < 80 ? "强度" : "剧烈" };
+        return JsonToolResult.Success(new { soil_loss_t_ha_yr = Math.Round(usle, 2), r_erosivity = r, k_erodibility = k, ls_topographic = ls, c_cover = c, p_support = p, risk_level = usle < 5 ? "微度" : usle < 25 ? "轻度" : usle < 50 ? "中度" : usle < 80 ? "强度" : "剧烈" });
     }
 
     private static object ComputeCarbonSink(double areaHa, string vegType, double growthRate)
@@ -1975,7 +1975,7 @@ graph TD
         };
         var annualSink = areaHa * growthRate * carbonDensity / 100;
         var co2Equivalent = annualSink * 44.0 / 12.0;
-        return new { annual_carbon_sink_tc = Math.Round(annualSink, 2), co2_equivalent_t = Math.Round(co2Equivalent, 2), area_ha = areaHa, vegetation_type = vegType, carbon_density_tc_ha = carbonDensity, growth_rate_pct = growthRate };
+        return JsonToolResult.Success(new { annual_carbon_sink_tc = Math.Round(annualSink, 2), co2_equivalent_t = Math.Round(co2Equivalent, 2), area_ha = areaHa, vegetation_type = vegType, carbon_density_tc_ha = carbonDensity, growth_rate_pct = growthRate });
     }
 
     private static object ComputeBuffer(double lat, double lng, double radiusM)
@@ -1998,7 +1998,7 @@ graph TD
         var dLng = (lng2 - lng1) * Math.PI / 180;
         var a = Math.Sin(dLat / 2) * Math.Sin(dLat / 2) + Math.Cos(lat1 * Math.PI / 180) * Math.Cos(lat2 * Math.PI / 180) * Math.Sin(dLng / 2) * Math.Sin(dLng / 2);
         var c = 2 * Math.Atan2(Math.Sqrt(a), Math.Sqrt(1 - a));
-        return new { distance_m = Math.Round(r * c, 1), from = new { lat1, lng1 }, to = new { lat2, lng2 } };
+        return JsonToolResult.Success(new { distance_m = Math.Round(r * c, 1), from = new { lat1, lng1 }, to = new { lat2, lng2 } });
     }
 
     private static object TransformCoord(double lat, double lng, string from, string to)
@@ -2012,7 +2012,7 @@ graph TD
             return new { lat = Math.Round(lat + dLat * 180 / ((6378137 * (1 - 0.0066934)) / (Math.Sqrt(1 - 0.0066934 * magic * magic) * Math.PI)), 6),
                          lng = Math.Round(lng + dLng * 180 / (6378137 / Math.Sqrt(1 - 0.0066934 * magic * magic) * Math.Cos(radLat) * Math.PI), 6), from, to };
         }
-        return new { lat, lng, from, to, note = "identity (unsupported transform)" };
+        return JsonToolResult.Success(new { lat, lng, from, to, note = "identity (unsupported transform)" });
     }
 
     private static double TransformLat(double x, double y) => -100 + 2 * x + 3 * y + 0.2 * y * y + 0.1 * x * y + 0.2 * Math.Sqrt(Math.Abs(x));
@@ -2048,13 +2048,13 @@ internal static class CliEngine
     public static async Task<object> FromRepo(string repoUrl, string branch = "main")
     {
         await Task.Delay(100);
-        return new { repo_url = repoUrl, branch, status = "pending", message = "Use AnalyzeCode tool with repository files for AST-based entry point detection" };
+        return JsonToolResult.Success(new { repo_url = repoUrl, branch, status = "pending", message = "Use AnalyzeCode tool with repository files for AST-based entry point detection" });
     }
 
     public static async Task<object> FromManifest(string yaml)
     {
         await Task.Delay(50);
-        return new { manifest = yaml[..Math.Min(100, yaml.Length)], status = "parsed", commands_generated = yaml.Split('\n').Length / 5 + 1 };
+        return JsonToolResult.Success(new { manifest = yaml[..Math.Min(100, yaml.Length)], status = "parsed", commands_generated = yaml.Split('\n').Length / 5 + 1 });
     }
 
     public static object ListTools() => new { total = _generatedTools.Count, tools = _generatedTools.TakeLast(10) };
@@ -2070,13 +2070,13 @@ internal static class CliEngine
             catch { return Array.Empty<string?>(); }
         }).Take(20).ToList();
 
-        return new { scanned_paths = dirs.Count(), executables_found = found.Count, sample = found.Take(10), filter };
+        return JsonToolResult.Success(new { scanned_paths = dirs.Count(), executables_found = found.Count, sample = found.Take(10), filter });
     }
 
     public static async Task<object> Execute(string command, string args)
     {
         if (DangerousCommands.Any(d => command.Contains(d, StringComparison.OrdinalIgnoreCase)))
-            return new { blocked = true, reason = "Dangerous command blocked by safety gate", command };
+            return JsonToolResult.Success(new { blocked = true, reason = "Dangerous command blocked by safety gate", command });
 
         try
         {
@@ -2086,16 +2086,16 @@ internal static class CliEngine
                 UseShellExecute = false, CreateNoWindow = true
             };
             using var proc = global::System.Diagnostics.Process.Start(psi);
-            if (proc == null) return new { error = "Failed to start process" };
+            if (proc == null) return JsonToolResult.Success(new { error = "Failed to start process" });
             var stdout = await proc.StandardOutput.ReadToEndAsync();
             var stderr = await proc.StandardError.ReadToEndAsync();
             await proc.WaitForExitAsync();
 
             var output = stdout.Length > 0 ? stdout : stderr;
             var isJson = output.TrimStart().StartsWith('{') || output.TrimStart().StartsWith('[');
-            return new { exit_code = proc.ExitCode, output = output[..Math.Min(2000, output.Length)], format = isJson ? "json" : output.Contains("\t") ? "tsv" : "text" };
+            return JsonToolResult.Success(new { exit_code = proc.ExitCode, output = output[..Math.Min(2000, output.Length)], format = isJson ? "json" : output.Contains("\t") ? "tsv" : "text" });
         }
-        catch (Exception ex) { return new { error = ex.Message }; }
+        catch (Exception ex) { return JsonToolResult.Success(new { error = ex.Message }); }
     }
 }
 
@@ -2149,7 +2149,7 @@ internal static class MathNetAnalyzer
     public static object Analyze(string dataCsv, string method)
     {
         var values = dataCsv.Split(',').Select(v => double.TryParse(v, out var d) ? d : 0).ToList();
-        if (values.Count == 0) return new { error = "No valid data" };
+        if (values.Count == 0) return JsonToolResult.Success(new { error = "No valid data" });
 
         var mean = values.Average();
         var variance = values.Sum(v => Math.Pow(v - mean, 2)) / values.Count;
@@ -2181,7 +2181,7 @@ internal static class MathNetAnalyzer
             var frac = idx - lo;
             result.Add(Math.Round(vals[lo] + (vals[hi] - vals[lo]) * frac, 4));
         }
-        return new { method = "linear_interpolation", original_count = vals.Count, target_count = targetCount, interpolated = result };
+        return JsonToolResult.Success(new { method = "linear_interpolation", original_count = vals.Count, target_count = targetCount, interpolated = result });
     }
 
     private static object ComputeFFT(List<double> vals)
@@ -2200,7 +2200,7 @@ internal static class MathNetAnalyzer
         }
         var magnitudes = Enumerable.Range(0, Math.Min(n / 2, 20))
             .Select(k => Math.Round(Math.Sqrt(real[k] * real[k] + imag[k] * imag[k]) / n, 4)).ToList();
-        return new { method = "fft", dominant_freq = magnitudes.IndexOf(magnitudes.Max()), magnitudes = magnitudes.Take(10) };
+        return JsonToolResult.Success(new { method = "fft", dominant_freq = magnitudes.IndexOf(magnitudes.Max()), magnitudes = magnitudes.Take(10) });
     }
 
     private static object MonteCarlo(double mean, double std)
@@ -2209,6 +2209,8 @@ internal static class MathNetAnalyzer
         var samples = Enumerable.Range(0, 1000).Select(_ => mean + std * (rng.NextDouble() * 2 - 1)).ToList();
         var p95 = samples.OrderBy(s => s).ToList()[(int)(samples.Count * 0.95)];
         var p99 = samples.OrderBy(s => s).ToList()[(int)(samples.Count * 0.99)];
-        return new { method = "monte_carlo", samples = 1000, mean = Math.Round(samples.Average(), 4), p95 = Math.Round(p95, 4), p99 = Math.Round(p99, 4) };
+        return JsonToolResult.Success(new { method = "monte_carlo", samples = 1000, mean = Math.Round(samples.Average(), 4), p95 = Math.Round(p95, 4), p99 = Math.Round(p99, 4) });
     }
 }
+
+

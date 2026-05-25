@@ -78,7 +78,7 @@ public sealed class FederatedLearningService : BackgroundService
                 {
                     if (type == "federated_model_update")
                     {
-                        await HandleModelUpdateAsync(type, payload, sourceId, stoppingToken);
+                        await HandleModelUpdateAsync(type, payload, sourceId, stoppingToken).ConfigureAwait(false);
                     }
                 }
             }
@@ -91,12 +91,12 @@ public sealed class FederatedLearningService : BackgroundService
 
         while (!stoppingToken.IsCancellationRequested)
         {
-            await Task.Delay(TimeSpan.FromMinutes(15), stoppingToken);
+            await Task.Delay(TimeSpan.FromMinutes(15), stoppingToken).ConfigureAwait(false);
 
             var untrainedCount = _memory.GetRecentUntrained(100).Count;
             if (untrainedCount >= 20)
             {
-                await BroadcastLocalModelAsync(stoppingToken);
+                await BroadcastLocalModelAsync(stoppingToken).ConfigureAwait(false);
             }
         }
 
@@ -114,7 +114,7 @@ public sealed class FederatedLearningService : BackgroundService
             return;
         }
 
-        var modelData = await File.ReadAllBytesAsync(modelPath, ct);
+        var modelData = await File.ReadAllBytesAsync(modelPath, ct).ConfigureAwait(false);
         var update = new FederatedModelUpdate
         {
             NodeId = _nodeId,
@@ -174,7 +174,7 @@ public sealed class FederatedLearningService : BackgroundService
 
             if (_receivedUpdates.Count >= 3)
             {
-                await MergeModelsAsync(ct);
+                await MergeModelsAsync(ct).ConfigureAwait(false);
             }
         }
         catch (Exception ex)
@@ -223,11 +223,11 @@ public sealed class FederatedLearningService : BackgroundService
         var totalAccuracy = updates.Sum(u => (double)u.Accuracy);
         var weights = updates.Select(u => (double)u.Accuracy / totalAccuracy).ToList();
 
-        var mergedModelData = await WeightedAverageModelsAsync(updates, weights, ct);
+        var mergedModelData = await WeightedAverageModelsAsync(updates, weights, ct).ConfigureAwait(false);
         if (mergedModelData == null)
         {
             _logger.LogWarning("Weighted averaging failed, falling back to best model selection");
-            await FallbackToBestModelAsync(updates, ct);
+            await FallbackToBestModelAsync(updates, ct).ConfigureAwait(false);
             return;
         }
 
@@ -235,7 +235,7 @@ public sealed class FederatedLearningService : BackgroundService
 
         try
         {
-            await File.WriteAllBytesAsync(tempPath, mergedModelData, ct);
+            await File.WriteAllBytesAsync(tempPath, mergedModelData, ct).ConfigureAwait(false);
 
             if (_inference.LoadModel(tempPath))
             {
@@ -245,7 +245,7 @@ public sealed class FederatedLearningService : BackgroundService
             else
             {
                 _logger.LogWarning("Failed to load merged model, falling back to best");
-                await FallbackToBestModelAsync(updates, ct);
+                await FallbackToBestModelAsync(updates, ct).ConfigureAwait(false);
             }
 
             _receivedUpdates.Clear();
@@ -287,7 +287,7 @@ public sealed class FederatedLearningService : BackgroundService
 
         try
         {
-            await File.WriteAllBytesAsync(tempPath, bestUpdate.ModelData, ct);
+            await File.WriteAllBytesAsync(tempPath, bestUpdate.ModelData, ct).ConfigureAwait(false);
             _inference.LoadModel(tempPath);
 
             _logger.LogInformation("Fallback model merge: from {NodeId}, version={Version}, accuracy={Accuracy:F2}",

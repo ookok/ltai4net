@@ -26,7 +26,7 @@ public static class EntryPoint
         {
             FirstRunDetector.PrintDiagnostics(status);
             Console.WriteLine("检测到未配置，启动配置向导...");
-            await new InteractiveSetupWizard(configPath).RunAsync();
+            await new InteractiveSetupWizard(configPath).RunAsync().ConfigureAwait(false);
         }
 
         var builder = WebApplication.CreateBuilder(args);
@@ -55,11 +55,11 @@ public static class EntryPoint
         app.MapRazorComponents<LTAI.WebApp.Components.App>();
 
         var toolRegistry = app.Services.GetRequiredService<AIToolRegistry>();
-        await toolRegistry.RegisterAllToolCategoriesAsync();
+        await toolRegistry.RegisterAllToolCategoriesAsync().ConfigureAwait(false);
 
         var lts = app.Services.GetRequiredService<LivingTreeSystem>();
-        await lts.InitializeAsync();
+        await lts.InitializeAsync().ConfigureAwait(false);
 
-        await app.RunAsync();
+        await app.RunAsync().ConfigureAwait(false);
     }
 }

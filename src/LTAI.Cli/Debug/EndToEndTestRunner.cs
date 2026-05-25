@@ -107,7 +107,7 @@ public sealed class EndToEndTestRunner
         
         foreach (var testCase in testCases)
         {
-            var result = await RunTestAsync(testCase);
+            var result = await RunTestAsync(testCase).ConfigureAwait(false);
             results.Add(result);
         }
 
@@ -156,7 +156,7 @@ public sealed class EndToEndTestRunner
         // 瓶颈分析
         var bottlenecks = results
             .Where(r => r.TraceReport?.Bottlenecks != null)
-            .SelectMany(r => r.TraceReport.Bottlenecks!)
+            .SelectMany(r => r.TraceReport?.Bottlenecks ?? [])
             .GroupBy(b => b.Split(':')[0].Trim())
             .OrderByDescending(g => g.Count())
             .Take(5);

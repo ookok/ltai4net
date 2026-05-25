@@ -50,7 +50,7 @@ public static class WebApplicationExtensions
                         }),
                     timestamp = DateTime.UtcNow
                 });
-                await context.Response.WriteAsync(json);
+                await context.Response.WriteAsync(json).ConfigureAwait(false);
             }
         });
         return app;

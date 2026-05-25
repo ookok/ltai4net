@@ -25,11 +25,11 @@ public static class CompatibilityGate
 
         // 3. Build (opt-in)
         if (runBuild)
-            results.Add(await CheckProjectBuildAsync());
+            results.Add(await CheckProjectBuildAsync().ConfigureAwait(false));
 
         // 4. Tests (opt-in)
         if (runTests)
-            results.Add(await CheckTestsPassingAsync());
+            results.Add(await CheckTestsPassingAsync().ConfigureAwait(false));
 
         Console.WriteLine(new string('-', 40));
         foreach (var r in results)
@@ -138,7 +138,7 @@ public static class CompatibilityGate
     private static async Task<GateCheck> CheckProjectBuildAsync()
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        var p = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+        using var p = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
         {
             FileName = "dotnet",
             Arguments = "build src/LTAI.Agent/LTAI.Agent.csproj --no-restore",
@@ -146,7 +146,7 @@ public static class CompatibilityGate
             UseShellExecute = false, CreateNoWindow = true
         });
         if (p == null) return new GateCheck(false, "Build Agent", "failed to start");
-        await p.WaitForExitAsync();
+        await p.WaitForExitAsync().ConfigureAwait(false);
         sw.Stop();
         return p.ExitCode == 0
             ? new GateCheck(true, "Build Agent", $"{sw.ElapsedMilliseconds}ms")
@@ -156,7 +156,7 @@ public static class CompatibilityGate
     private static async Task<GateCheck> CheckTestsPassingAsync()
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        var p = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+        using var p = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
         {
             FileName = "dotnet",
             Arguments = "test tests/LTAI.Tests/LTAI.Tests.csproj --no-restore --filter FullyQualifiedName~AIAgent",
@@ -164,7 +164,7 @@ public static class CompatibilityGate
             UseShellExecute = false, CreateNoWindow = true
         });
         if (p == null) return new GateCheck(false, "Tests", "failed to start");
-        await p.WaitForExitAsync();
+        await p.WaitForExitAsync().ConfigureAwait(false);
         sw.Stop();
         return p.ExitCode == 0
             ? new GateCheck(true, "Tests", $"{sw.ElapsedMilliseconds}ms")

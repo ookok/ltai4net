@@ -11,6 +11,7 @@ public sealed class LTAIOptions
     public WebConfig Web { get; init; } = new();
     public VectorConfig Vector { get; init; } = new();
     public NetworkConfig Network { get; init; } = new();
+    public HarnessProfile Harness { get; set; } = new();
 
     [JsonPropertyName("data_directory")]
     public string DataDirectory { get; init; } = ".livingtree";
@@ -51,6 +52,24 @@ public sealed class EconomyOptions
 
     [JsonPropertyName("max_task_budget_yuan")]
     public double MaxTaskBudgetYuan { get; set; } = 10.0;
+}
+
+public sealed class AiRoleConfig
+{
+    [JsonPropertyName("provider")]
+    public string Provider { get; init; } = string.Empty;
+
+    [JsonPropertyName("model")]
+    public string Model { get; init; } = string.Empty;
+
+    [JsonPropertyName("temperature")]
+    public float? Temperature { get; init; }
+
+    [JsonPropertyName("max_tokens")]
+    public int? MaxTokens { get; init; }
+
+    [JsonPropertyName("prompt_prefix")]
+    public string? PromptPrefix { get; init; }
 }
 
 public sealed class LayerConfig
@@ -137,6 +156,9 @@ public sealed class AIConfig
     [JsonPropertyName("provider_catalog")]
     public ProviderCatalog ProviderCatalog { get; init; } = new();
 
+    [JsonPropertyName("roles")]
+    public Dictionary<string, AiRoleConfig> Roles { get; init; } = new();
+
     public LayerConfig GetLayerConfig(string layer)
     {
         return layer.ToUpperInvariant() switch
@@ -148,6 +170,28 @@ public sealed class AIConfig
             "DEEP" => L2,
             "EMBEDDING" => L0,
             _ => L2
+        };
+    }
+
+    public AiRoleConfig GetRoleConfig(string role)
+    {
+        if (Roles.TryGetValue(role, out var config) && config != null)
+            return config;
+
+        var fallbackLayer = role.ToLowerInvariant() switch
+        {
+            "keywords" => L1,
+            "extract" => L1,
+            "query" => L2,
+            _ => L2
+        };
+
+        return new AiRoleConfig
+        {
+            Provider = fallbackLayer.Provider,
+            Model = fallbackLayer.Model,
+            Temperature = fallbackLayer.Temperature,
+            MaxTokens = fallbackLayer.MaxTokens
         };
     }
 }
@@ -189,6 +233,12 @@ public sealed class VectorConfig
 
     [JsonPropertyName("cache_size_mb")]
     public int CacheSizeMb { get; set; } = 256;
+
+    [JsonPropertyName("task_aware_embedding")]
+    public bool TaskAwareEmbedding { get; set; }
+
+    [JsonPropertyName("postgres_connection_string")]
+    public string? PostgresConnectionString { get; set; }
 }
 
 public sealed class NetworkConfig

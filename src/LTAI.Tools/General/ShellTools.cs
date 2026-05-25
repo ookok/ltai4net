@@ -29,9 +29,9 @@ public static class ShellTools
             using var process = Process.Start(psi);
             if (process is null) return "Failed to start process.";
 
-            var stdout = await process.StandardOutput.ReadToEndAsync(ct);
-            var stderr = await process.StandardError.ReadToEndAsync(ct);
-            await process.WaitForExitAsync(ct);
+            var stdout = await process.StandardOutput.ReadToEndAsync(ct).ConfigureAwait(false);
+            var stderr = await process.StandardError.ReadToEndAsync(ct).ConfigureAwait(false);
+            await process.WaitForExitAsync(ct).ConfigureAwait(false);
 
             var result = stdout;
             if (!string.IsNullOrEmpty(stderr))

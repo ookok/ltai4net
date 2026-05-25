@@ -17,7 +17,7 @@ public sealed class RescueParsingChatClient : DelegatingChatClient
     public override async Task<ChatResponse> GetResponseAsync(
         IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken ct = default)
     {
-        var response = await base.GetResponseAsync(messages, options, ct);
+        var response = await base.GetResponseAsync(messages, options, ct).ConfigureAwait(false);
         return RescueResponse(response);
     }
 

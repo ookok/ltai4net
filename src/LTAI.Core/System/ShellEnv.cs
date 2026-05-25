@@ -287,8 +287,8 @@ public sealed class ShellEnv
                 };
             }
 
-            var stdout = await stdoutTask;
-            var stderr = await stderrTask;
+            var stdout = await stdoutTask.ConfigureAwait(false);
+            var stderr = await stderrTask.ConfigureAwait(false);
             sw.Stop();
 
             var truncated = false;
@@ -342,7 +342,7 @@ public sealed class ShellEnv
         var tempFile = Path.Combine(Path.GetTempPath(), $"ltai_py_{Guid.NewGuid():N}.py");
         try
         {
-            await File.WriteAllTextAsync(tempFile, code);
+            await File.WriteAllTextAsync(tempFile, code).ConfigureAwait(false);
             return await Execute($"python \"{tempFile}\"", workdir);
         }
         finally

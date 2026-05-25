@@ -166,7 +166,7 @@ public sealed class ArtifactStore
         var dir = Path.GetDirectoryName(path);
         if (dir != null) Directory.CreateDirectory(dir);
         var data = System.Text.Json.JsonSerializer.Serialize(new { artifacts = _artifacts, saved_at = DateTimeOffset.UtcNow.ToUnixTimeSeconds() });
-        await File.WriteAllTextAsync(path, data);
+        await File.WriteAllTextAsync(path, data).ConfigureAwait(false);
     }
 
     public void LoadFromDisk(string? path = null)

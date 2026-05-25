@@ -63,7 +63,7 @@ public static class CellGraphEndpoints
             [FromQuery] string? tag,
             GitHubCellRegistry registry) =>
         {
-            var results = await registry.SearchCellsAsync(domain, tag);
+            var results = await registry.SearchCellsAsync(domain, tag).ConfigureAwait(false);
             return Results.Ok(results);
         })
         .WithName("SearchCells")
@@ -74,7 +74,7 @@ public static class CellGraphEndpoints
             GitHubCellRegistry registry,
             [FromQuery] string version = "latest") =>
         {
-            var package = await registry.DownloadCellAsync(id, version);
+            var package = await registry.DownloadCellAsync(id, version).ConfigureAwait(false);
             if (package == null)
             {
                 return Results.NotFound(new { error = "Cell not found or download failed" });
@@ -122,7 +122,7 @@ public static class CellGraphEndpoints
             [FromQuery] string? tag,
             GitHubGraphRegistry registry) =>
         {
-            var results = await registry.SearchGraphsAsync(domain, tag);
+            var results = await registry.SearchGraphsAsync(domain, tag).ConfigureAwait(false);
             return Results.Ok(results);
         })
         .WithName("SearchGraphs")
@@ -133,7 +133,7 @@ public static class CellGraphEndpoints
             GitHubGraphRegistry registry,
             [FromQuery] string version = "latest") =>
         {
-            var package = await registry.DownloadGraphAsync(id, version);
+            var package = await registry.DownloadGraphAsync(id, version).ConfigureAwait(false);
             if (package == null)
             {
                 return Results.NotFound(new { error = "Graph not found or download failed" });

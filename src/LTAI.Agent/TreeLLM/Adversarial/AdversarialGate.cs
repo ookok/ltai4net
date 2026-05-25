@@ -42,7 +42,7 @@ Reply with FLAG: <reason> if any issues are found. Keep the reason concise (unde
 
         try
         {
-            var reviewResponse = await chatFn(prompt, systemContext);
+            var reviewResponse = await chatFn(prompt, systemContext).ConfigureAwait(false);
             if (string.IsNullOrWhiteSpace(reviewResponse))
             {
                 _logger.LogWarning("AdversarialGate: empty review response, passing through");

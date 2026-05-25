@@ -15,7 +15,7 @@ public sealed class MultiDocFusionEngine
         var refs = CrossReference(docs);
         var conflicts = DetectConflicts(docs);
         var complementary = FindComplementary(docs, query);
-        var synthesized = await SynthesizeAsync(docs, refs, conflicts, query);
+        var synthesized = await SynthesizeAsync(docs, refs, conflicts, query).ConfigureAwait(false);
 
         return new FusionResult
         {

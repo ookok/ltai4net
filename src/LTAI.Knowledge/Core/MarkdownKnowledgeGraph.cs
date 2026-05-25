@@ -74,9 +74,11 @@ public sealed class MarkdownKnowledgeGraph
     private readonly string _latMdPath;
     private readonly Dictionary<string, KnowledgeFile> _files = new();
     private readonly Dictionary<string, KnowledgeSection> _sectionsById = new();
+    private readonly Dictionary<string, List<string>> _chunks = new();
     private readonly ReaderWriterLockSlim _rwl = new();
     private readonly IEmbeddingBackend? _embedding;
     private readonly IVectorStore? _vectorStore;
+    private readonly ChunkingStrategyType _chunkingStrategy;
 
     private static readonly Regex HeadingRegex = new(@"^(#{1,6})\s+(.+)$", RegexOptions.Multiline);
     private static readonly Regex WikiLinkRegex = new(@"\[\[([^\]]+)\]\]");
@@ -84,12 +86,13 @@ public sealed class MarkdownKnowledgeGraph
     private static readonly Regex YamlKeyRegex = new(@"^(\w[\w-]*)\s*:\s*(.+)$", RegexOptions.Multiline);
     private static readonly Regex FirstParagraphRegex = new(@"^#+\s+.+\n\n((?:(?!#).)*?)(?=\n(#+\s|```|\n$|$))", RegexOptions.Singleline);
 
-    public MarkdownKnowledgeGraph(string rootPath, IEmbeddingBackend? embedding = null, IVectorStore? vectorStore = null)
+    public MarkdownKnowledgeGraph(string rootPath, IEmbeddingBackend? embedding = null, IVectorStore? vectorStore = null, ChunkingStrategyType chunkingStrategy = ChunkingStrategyType.Paragraph)
     {
         _rootPath = rootPath;
         _latMdPath = Path.Combine(rootPath, "lat.md");
         _embedding = embedding;
         _vectorStore = vectorStore;
+        _chunkingStrategy = chunkingStrategy;
     }
 
     public void Initialize()
@@ -99,6 +102,7 @@ public sealed class MarkdownKnowledgeGraph
         {
             _files.Clear();
             _sectionsById.Clear();
+            _chunks.Clear();
             if (!Directory.Exists(_latMdPath))
                 Directory.CreateDirectory(_latMdPath);
 
@@ -114,11 +118,48 @@ public sealed class MarkdownKnowledgeGraph
                 {
                     _sectionsById[section.FullId] = section;
                 }
+
+                _chunks[relPath] = _chunkingStrategy switch
+                {
+                    ChunkingStrategyType.Fix => ChunkingStrategies.FixChunk(content),
+                    ChunkingStrategyType.Recursive => ChunkingStrategies.RecursiveChunk(content),
+                    ChunkingStrategyType.Vector => ChunkingStrategies.VectorChunk(content),
+                    ChunkingStrategyType.Paragraph => ChunkingStrategies.ParagraphChunk(content),
+                    _ => ChunkingStrategies.ParagraphChunk(content)
+                };
             }
         }
         finally
         {
             _rwl.ExitWriteLock();
+        }
+    }
+
+    public List<string> GetChunks(string relativePath)
+    {
+        _rwl.EnterReadLock();
+        try
+        {
+            return _chunks.TryGetValue(relativePath.Replace('\\', '/'), out var chunks)
+                ? chunks
+                : new List<string>();
+        }
+        finally
+        {
+            _rwl.ExitReadLock();
+        }
+    }
+
+    public List<string> GetAllChunks()
+    {
+        _rwl.EnterReadLock();
+        try
+        {
+            return _chunks.Values.SelectMany(c => c).ToList();
+        }
+        finally
+        {
+            _rwl.ExitReadLock();
         }
     }
 
@@ -198,7 +239,7 @@ public sealed class MarkdownKnowledgeGraph
         if (_embedding == null || _vectorStore == null)
             return Locate(query, fuzzy: true).Select(s => (s, 1.0f)).Take(topK).ToList();
 
-        var qVector = (await _embedding.EmbedAsync(new[] { query }))[0];
+        var qVector = (await _embedding.EmbedAsync(new[] { query }).ConfigureAwait(false))[0];
 
         var results = new List<(KnowledgeSection, float)>();
         _rwl.EnterReadLock();
@@ -378,6 +419,15 @@ public sealed class MarkdownKnowledgeGraph
                     _sectionsById.Remove(oldId);
             }
 
+            _chunks[relative] = _chunkingStrategy switch
+            {
+                ChunkingStrategyType.Fix => ChunkingStrategies.FixChunk(content),
+                ChunkingStrategyType.Recursive => ChunkingStrategies.RecursiveChunk(content),
+                ChunkingStrategyType.Vector => ChunkingStrategies.VectorChunk(content),
+                ChunkingStrategyType.Paragraph => ChunkingStrategies.ParagraphChunk(content),
+                _ => ChunkingStrategies.ParagraphChunk(content)
+            };
+
             return _files[relative];
         }
         finally
@@ -400,6 +450,8 @@ public sealed class MarkdownKnowledgeGraph
 
             foreach (var id in idsToRemove)
                 _sectionsById.Remove(id);
+
+            _chunks.Remove(relativePath);
         }
         finally
         {

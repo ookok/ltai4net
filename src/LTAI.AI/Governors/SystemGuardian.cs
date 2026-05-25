@@ -29,6 +29,7 @@ public sealed class SystemGuardian
     public void StartMonitoring(TimeSpan interval)
     {
         _monitorCts?.Cancel();
+        _monitorCts?.Dispose();
         _monitorCts = new CancellationTokenSource();
         _ = MonitorLoopAsync(interval, _monitorCts.Token);
         _logger.LogInformation("Guardian monitoring started at {Interval}s interval", interval.TotalSeconds);
@@ -37,6 +38,7 @@ public sealed class SystemGuardian
     public void StopMonitoring()
     {
         _monitorCts?.Cancel();
+        _monitorCts?.Dispose();
         _logger.LogInformation("Guardian monitoring stopped");
     }
 
@@ -92,7 +94,7 @@ public sealed class SystemGuardian
         {
             try
             {
-                await Task.Delay(interval, cancellationToken);
+                await Task.Delay(interval, cancellationToken).ConfigureAwait(false);
                 var memMb = System.Diagnostics.Process.GetCurrentProcess().WorkingSet64 / 1024 / 1024;
 
                 if (memMb > 8192)

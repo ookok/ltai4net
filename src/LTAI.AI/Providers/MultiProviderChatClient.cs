@@ -13,23 +13,27 @@ public sealed class MultiProviderChatClient : IChatClient
     private readonly IOptions<LTAIOptions> _options;
     private readonly ILogger<MultiProviderChatClient> _logger;
     private readonly BudgetTracker _budget;
+    private readonly PrefixCacheStore _prefixCache;
 
     private int _consecutiveFailures;
     private DateTime _circuitOpenUntil;
     private const int MaxRetries = 3;
     private const int CircuitBreakerThreshold = 5;
+    private const int ToolResultCapTokens = 3000;
     private static readonly TimeSpan CircuitCooldown = TimeSpan.FromSeconds(30);
 
     public MultiProviderChatClient(
         IEnumerable<KeyValuePair<string, IChatClient>> providerClients,
         IOptions<LTAIOptions> options,
         ILogger<MultiProviderChatClient> logger,
-        BudgetTracker budget)
+        BudgetTracker budget,
+        PrefixCacheStore prefixCache)
     {
         _providerClients = new Dictionary<string, IChatClient>(providerClients);
         _options = options;
         _logger = logger;
         _budget = budget;
+        _prefixCache = prefixCache;
     }
 
     public ChatClientMetadata? Metadata
@@ -60,7 +64,7 @@ public sealed class MultiProviderChatClient : IChatClient
         {
             try
             {
-                var response = await client.GetResponseAsync(messages, chatOptions, cancellationToken);
+                var response = await client.GetResponseAsync(messages, chatOptions, cancellationToken).ConfigureAwait(false);
                 Interlocked.Exchange(ref _consecutiveFailures, 0);
 
                 if (response.Usage != null)
@@ -84,7 +88,7 @@ public sealed class MultiProviderChatClient : IChatClient
                 {
                     var delayMs = 200 * (int)Math.Pow(2, attempt - 1);
                     _logger.LogWarning("Retry {A}/{M} on provider {Provider}: {Error}", attempt, MaxRetries, config.Name, ex.Message);
-                    await Task.Delay(delayMs, cancellationToken);
+                    await Task.Delay(delayMs, cancellationToken).ConfigureAwait(false);
 
                     var degradedModel = GetDegradedModel(modelKey);
                     if (degradedModel != modelKey)
@@ -107,17 +111,97 @@ public sealed class MultiProviderChatClient : IChatClient
     {
         _budget.CheckBudget();
 
-        var modelKey = options?.ModelId ?? _options.Value.AI.L2.Model;
-        var (client, config) = ResolveClient(modelKey);
+        var ai = _options.Value.AI;
+        var modelKey = options?.ModelId ?? ai.L2.Model;
 
+        if (_providerClients.Count == 0)
+        {
+            var whichLayer = modelKey == ai.L2.Model ? "L2 (Deep)" :
+                             modelKey == ai.L1.Model ? "L1 (Fast)" :
+                             modelKey == ai.L0.Model ? "L0 (Embedding)" : modelKey;
+            yield return new ChatResponseUpdate(ChatRole.Assistant, $"[Model Not Configured] {whichLayer} 层的模型未配置。\n\n请在 Settings → LLM Config 中为此层设置 Provider 和 Model，并确保已填写 API Key。");
+            yield break;
+        }
+
+        var useFlashFirst = modelKey == ai.L2.Model && !string.IsNullOrEmpty(ai.L1.Model);
+        if (useFlashFirst)
+        {
+            var (flashClient, flashConfig) = ResolveClient(ai.L1.Model);
+            var flashOptions = BuildOptions(options, flashConfig, ai.L1.Model);
+
+            var flashBuf = new StringBuilder();
+            var needsPro = false;
+            var flashResults = new List<ChatResponseUpdate>();
+
+            try
+            {
+                await foreach (var update in flashClient.GetStreamingResponseAsync(messages, flashOptions, cancellationToken))
+                {
+                    if (!needsPro && update.Text != null)
+                    {
+                        flashBuf.Append(update.Text);
+                        if (flashBuf.Length > 0)
+                        {
+                            CheckNeedsPro(flashBuf, out needsPro);
+                            if (needsPro)
+                            {
+                                _logger.LogInformation("Flash model self-reported NEEDS_PRO, escalating to {Pro}", ai.L2.Model);
+                                flashResults.Add(new ChatResponseUpdate(ChatRole.Assistant, "\n[escalating to " + ai.L2.Model + "]\n"));
+                                break;
+                            }
+                        }
+                    }
+                    flashResults.Add(update);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Flash model failed for {Model}, falling back to Pro {Pro}", ai.L1.Model, ai.L2.Model);
+            }
+
+            foreach (var update in flashResults)
+                yield return update;
+
+            if (!needsPro) yield break;
+        }
+
+        var (client, config) = ResolveClient(modelKey);
         var chatOptions = BuildOptions(options, config, modelKey);
 
         await foreach (var update in client.GetStreamingResponseAsync(messages, chatOptions, cancellationToken))
             yield return update;
     }
 
+    private static void CheckNeedsPro(StringBuilder buf, out bool needsPro)
+    {
+        needsPro = false;
+        var text = buf.ToString();
+        if (text.StartsWith("<<<NEEDS_PRO>>>", StringComparison.Ordinal))
+        {
+            needsPro = true;
+            return;
+        }
+
+        if (text.Contains("<<<NEEDS_PRO>>>", StringComparison.Ordinal))
+        {
+            needsPro = true;
+            return;
+        }
+    }
+
+    public static string CapToolResult(string result) =>
+        ToolCallRepairer.CapToolResult(result, ToolResultCapTokens);
+
+    public static void ClearStormHistory()
+    {
+        ToolCallRepairer.ClearStormHistory();
+    }
+
+    public PrefixCacheStore PrefixCache => _prefixCache;
+
     object? IChatClient.GetService(Type serviceType, object? serviceKey) =>
-        serviceType == typeof(ChatClientMetadata) ? Metadata : null;
+        serviceType == typeof(ChatClientMetadata) ? Metadata :
+        serviceType == typeof(PrefixCacheStore) ? _prefixCache : null;
 
     private (IChatClient Client, ProviderConfig Config) ResolveClient(string modelKey)
     {
@@ -155,15 +239,15 @@ public sealed class MultiProviderChatClient : IChatClient
                 ?? new ProviderConfig { Endpoint = "", ApiKey = "", Model = modelKey, Name = "default" };
         }
 
-        if (!_providerClients.TryGetValue(providerName, out var client))
+        if (!_providerClients.TryGetValue(providerName, out var newClient))
         {
             var entry = _providerClients.FirstOrDefault();
             if (entry.Value == null)
                 throw new InvalidOperationException($"No provider client registered for '{providerName}'");
-            client = entry.Value;
+            newClient = entry.Value;
         }
 
-        return (client, config ?? new ProviderConfig { Endpoint = "", ApiKey = "", Model = modelKey, Name = providerName });
+        return (newClient, config ?? new ProviderConfig { Endpoint = "", ApiKey = "", Model = modelKey, Name = providerName });
     }
 
     private ChatOptions BuildOptions(ChatOptions? options, ProviderConfig config, string modelKey)

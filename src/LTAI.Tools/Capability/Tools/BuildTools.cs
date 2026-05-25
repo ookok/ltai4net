@@ -23,7 +23,7 @@ public sealed class BuildTools
         [Description("Build configuration (Debug/Release)")] string? configuration = null,
         CancellationToken cancellationToken = default)
     {
-        var result = await _pipeline.BuildAsync(path, configuration);
+        var result = await _pipeline.BuildAsync(path, configuration).ConfigureAwait(false);
 
         return JsonSerializer.Serialize(new
         {
@@ -96,7 +96,7 @@ public sealed class BuildTools
         [Description("Root path of the project")] string? path = null,
         CancellationToken cancellationToken = default)
     {
-        var errorsByFile = await _pipeline.ErrorsByFileAsync(path ?? Directory.GetCurrentDirectory());
+        var errorsByFile = await _pipeline.ErrorsByFileAsync(path ?? Directory.GetCurrentDirectory()).ConfigureAwait(false);
         return JsonSerializer.Serialize(errorsByFile.Select(kvp => new
         {
             file = kvp.Key,

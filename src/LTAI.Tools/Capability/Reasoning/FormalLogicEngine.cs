@@ -51,7 +51,7 @@ public sealed class FormalLogicEngine
             result.Confidence = 0;
         }
 
-        return await Task.FromResult(result);
+        return await Task.FromResult(result).ConfigureAwait(false);
     }
 
     private LogicResult ForwardChain(string query)

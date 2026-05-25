@@ -67,7 +67,7 @@ public sealed class TestSpecEnforcer
 
         if (_unenforcedSpecs.Any() && Directory.Exists(sourceRoot))
         {
-            await ScanSourceForMissingRefsAsync(sourceRoot);
+            await ScanSourceForMissingRefsAsync(sourceRoot).ConfigureAwait(false);
         }
     }
 

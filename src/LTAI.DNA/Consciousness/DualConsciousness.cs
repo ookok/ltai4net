@@ -31,7 +31,7 @@ public sealed class DualConsciousness
 
         if (ShouldReflect(qualia))
         {
-            var reflection = await _meta.ReflectAsync(input, qualia, State, cancellationToken);
+            var reflection = await _meta.ReflectAsync(input, qualia, State, cancellationToken).ConfigureAwait(false);
             State.Level = reflection.NewLevel;
             State.SelfModelAccuracy = reflection.SelfModelUpdate;
             State.WorldModelAccuracy = reflection.WorldModelUpdate;
@@ -47,7 +47,7 @@ public sealed class DualConsciousness
     {
         var narrative = _meta.GenerateNarrative(State);
         var response = $"Level: {State.Level}, Awareness: {State.AwarenessScore:F2}\n{narrative}";
-        return await Task.FromResult(response);
+        return await Task.FromResult(response).ConfigureAwait(false);
     }
 
     private bool ShouldReflect(PhenomenaQualia qualia)

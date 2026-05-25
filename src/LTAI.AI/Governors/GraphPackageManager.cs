@@ -102,7 +102,7 @@ public sealed class GraphPackageManager
         {
             // 1. 保存图谱数据
             var graphDataPath = Path.Combine(packageDir, "graph_data.json");
-            await graph.SaveToDiskAsync(graphDataPath);
+            await graph.SaveToDiskAsync(graphDataPath).ConfigureAwait(false);
 
             // 2. 验证大小限制
             var graphSize = new FileInfo(graphDataPath).Length;
@@ -115,14 +115,14 @@ public sealed class GraphPackageManager
             }
 
             // 3. 压缩 (如果需要)
-            var compressedPath = await CompressGraphAsync(graphDataPath, manifest.Compression, packageDir, ct);
+            var compressedPath = await CompressGraphAsync(graphDataPath, manifest.Compression, packageDir, ct).ConfigureAwait(false);
 
             // 4. 分片 (如果需要)
-            var shardPaths = await ShardIfNeededAsync(compressedPath, manifest, packageDir, ct);
+            var shardPaths = await ShardIfNeededAsync(compressedPath, manifest, packageDir, ct).ConfigureAwait(false);
 
             // 5. 生成清单和校验和
             var stats = graph.GetStats();
-            var checksum = await ComputeChecksumAsync(compressedPath, ct);
+            var checksum = await ComputeChecksumAsync(compressedPath, ct).ConfigureAwait(false);
             
             manifest = manifest with
             {
@@ -136,11 +136,11 @@ public sealed class GraphPackageManager
 
             // 6. 写入清单文件
             var manifestPath = Path.Combine(packageDir, "manifest.json");
-            await File.WriteAllTextAsync(manifestPath, JsonSerializer.Serialize(manifest, JsonOptions), ct);
+            await File.WriteAllTextAsync(manifestPath, JsonSerializer.Serialize(manifest, JsonOptions), ct).ConfigureAwait(false);
 
             // 7. 创建 .graphpackage 归档
             var packagePath = Path.Combine(_packagesDirectory, $"{manifest.GraphId}_{manifest.Version}.graphpackage");
-            await CreatePackageArchiveAsync(packageDir, packagePath, ct);
+            await CreatePackageArchiveAsync(packageDir, packagePath, ct).ConfigureAwait(false);
 
             // 8. 注册已安装的包
             var packageInfo = new GraphPackageInfo
@@ -194,7 +194,7 @@ public sealed class GraphPackageManager
         try
         {
             // 1. 解压
-            await ExtractPackageArchiveAsync(packagePath, extractDir, ct);
+            await ExtractPackageArchiveAsync(packagePath, extractDir, ct).ConfigureAwait(false);
 
             // 2. 读取清单
             var manifestPath = Path.Combine(extractDir, "manifest.json");
@@ -205,14 +205,14 @@ public sealed class GraphPackageManager
             }
 
             var manifest = JsonSerializer.Deserialize<GraphPackageManifest>(
-                await File.ReadAllTextAsync(manifestPath, ct), JsonOptions);
+                await File.ReadAllTextAsync(manifestPath, ct).ConfigureAwait(false), JsonOptions);
             if (manifest == null) return null;
 
             // 3. 验证校验和
             var graphPath = Path.Combine(extractDir, "graph_data.json");
             if (File.Exists(graphPath))
             {
-                var checksum = await ComputeChecksumAsync(graphPath, ct);
+                var checksum = await ComputeChecksumAsync(graphPath, ct).ConfigureAwait(false);
                 if (checksum != manifest.ChecksumSHA256)
                 {
                     _logger.LogWarning("Checksum mismatch for package: {Id}", manifest.GraphId);
@@ -221,10 +221,10 @@ public sealed class GraphPackageManager
             }
 
             // 4. 解压缩 (如果需要)
-            var decompressedPath = await DecompressIfNeededAsync(graphPath, manifest.Compression, extractDir, ct);
+            var decompressedPath = await DecompressIfNeededAsync(graphPath, manifest.Compression, extractDir, ct).ConfigureAwait(false);
 
             // 5. 合并分片 (如果需要)
-            var finalGraphPath = await MergeShardsIfNeededAsync(extractDir, manifest, ct);
+            var finalGraphPath = await MergeShardsIfNeededAsync(extractDir, manifest, ct).ConfigureAwait(false);
 
             var packageInfo = new GraphPackageInfo
             {
@@ -411,12 +411,12 @@ public sealed class GraphPackageManager
         if (compression == GraphCompression.Gzip)
         {
             await using var gzipStream = new GZipStream(destStream, CompressionLevel.Optimal);
-            await sourceStream.CopyToAsync(gzipStream, ct);
+            await sourceStream.CopyToAsync(gzipStream, ct).ConfigureAwait(false);
         }
         else if (compression == GraphCompression.Brotli)
         {
             await using var brotliStream = new BrotliStream(destStream, CompressionLevel.Optimal);
-            await sourceStream.CopyToAsync(brotliStream, ct);
+            await sourceStream.CopyToAsync(brotliStream, ct).ConfigureAwait(false);
         }
 
         _logger.LogInformation(
@@ -457,10 +457,10 @@ public sealed class GraphPackageManager
             while (bytesWritten < shardSizeBytes && sourceStream.Position < sourceStream.Length)
             {
                 var bytesToRead = (int)Math.Min(buffer.Length, shardSizeBytes - bytesWritten);
-                var bytesRead = await sourceStream.ReadAsync(buffer.AsMemory(0, bytesToRead), ct);
+                var bytesRead = await sourceStream.ReadAsync(buffer.AsMemory(0, bytesToRead), ct).ConfigureAwait(false);
                 if (bytesRead == 0) break;
 
-                await shardStream.WriteAsync(buffer.AsMemory(0, bytesRead), ct);
+                await shardStream.WriteAsync(buffer.AsMemory(0, bytesRead), ct).ConfigureAwait(false);
                 bytesWritten += bytesRead;
             }
 
@@ -480,7 +480,7 @@ public sealed class GraphPackageManager
     private async Task<string> ComputeChecksumAsync(string filePath, CancellationToken ct)
     {
         await using var stream = File.OpenRead(filePath);
-        var hash = await SHA256.HashDataAsync(stream, ct);
+        var hash = await SHA256.HashDataAsync(stream, ct).ConfigureAwait(false);
         return Convert.ToHexString(hash).ToLowerInvariant();
     }
 
@@ -491,7 +491,7 @@ public sealed class GraphPackageManager
             File.Delete(packagePath);
         }
 
-        await Task.Run(() => ZipFile.CreateFromDirectory(sourceDir, packagePath), ct);
+        await Task.Run(() => ZipFile.CreateFromDirectory(sourceDir, packagePath), ct).ConfigureAwait(false);
     }
 
     private static async Task ExtractPackageArchiveAsync(string packagePath, string extractDir, CancellationToken ct)
@@ -524,14 +524,14 @@ public sealed class GraphPackageManager
             await using var sourceStream = File.OpenRead(graphPath);
             await using var gzipStream = new GZipStream(sourceStream, CompressionMode.Decompress);
             await using var destStream = File.Create(decompressedPath);
-            await gzipStream.CopyToAsync(destStream, ct);
+            await gzipStream.CopyToAsync(destStream, ct).ConfigureAwait(false);
         }
         else if (compression == GraphCompression.Brotli)
         {
             await using var sourceStream = File.OpenRead(graphPath);
             await using var brotliStream = new BrotliStream(sourceStream, CompressionMode.Decompress);
             await using var destStream = File.Create(decompressedPath);
-            await brotliStream.CopyToAsync(destStream, ct);
+            await brotliStream.CopyToAsync(destStream, ct).ConfigureAwait(false);
         }
         else
         {
@@ -563,7 +563,7 @@ public sealed class GraphPackageManager
         foreach (var shard in shards)
         {
             await using var sourceStream = File.OpenRead(shard);
-            await sourceStream.CopyToAsync(destStream, buffer.Length, ct);
+            await sourceStream.CopyToAsync(destStream, buffer.Length, ct).ConfigureAwait(false);
         }
 
         _logger.LogInformation("Shards merged: {Count} -> {Path}", shards.Count, mergedPath);

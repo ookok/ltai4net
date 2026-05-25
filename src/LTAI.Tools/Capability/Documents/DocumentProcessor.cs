@@ -36,7 +36,7 @@ public sealed class DocumentProcessor
     public async Task<List<DocumentSection>> ExtractSectionsAsync(
         string filePath, CancellationToken cancellationToken = default)
     {
-        var text = await ExtractTextAsync(filePath, cancellationToken);
+        var text = await ExtractTextAsync(filePath, cancellationToken).ConfigureAwait(false);
         var sections = new List<DocumentSection>();
         var lines = text.Split('\n');
         DocumentSection? current = null;
@@ -70,7 +70,7 @@ public sealed class DocumentProcessor
     {
         using var pdf = PdfDocument.Open(filePath);
         var text = string.Join("\n", pdf.GetPages().Select(p => p.Text));
-        return await Task.FromResult(text);
+        return await Task.FromResult(text).ConfigureAwait(false);
     }
 
     private static async Task<string> ExtractExcelAsync(string filePath, CancellationToken ct)
@@ -101,7 +101,7 @@ public sealed class DocumentProcessor
             sb.AppendLine();
         }
 
-        return await Task.FromResult(sb.ToString());
+        return await Task.FromResult(sb.ToString()).ConfigureAwait(false);
     }
 
     private static async Task<string> ExtractDocxAsync(string filePath, CancellationToken ct)
@@ -122,12 +122,12 @@ public sealed class DocumentProcessor
             }
         }
 
-        return await Task.FromResult(sb.ToString());
+        return await Task.FromResult(sb.ToString()).ConfigureAwait(false);
     }
 
     private static async Task<string> ExtractMarkdownAsync(string filePath, CancellationToken ct)
     {
-        var markdown = await File.ReadAllTextAsync(filePath, ct);
+        var markdown = await File.ReadAllTextAsync(filePath, ct).ConfigureAwait(false);
         var html = Markdown.ToHtml(markdown);
         var text = System.Text.RegularExpressions.Regex.Replace(html, "<[^>]+>", " ");
         text = System.Text.RegularExpressions.Regex.Replace(text, @"\s+", " ").Trim();

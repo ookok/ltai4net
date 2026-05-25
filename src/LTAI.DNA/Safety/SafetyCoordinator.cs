@@ -62,7 +62,7 @@ public sealed class SafetyCoordinator
             _logger.LogWarning("Safety blocked: risk={Risk:F2}, reasons: {Reasons}",
                 verdict.RiskScore, string.Join(", ", verdict.Threats));
 
-        return await Task.FromResult(verdict);
+        return await Task.FromResult(verdict).ConfigureAwait(false);
     }
 
     public async Task<SafetyVerdict> EvaluateOutputAsync(string output, CancellationToken cancellationToken = default)

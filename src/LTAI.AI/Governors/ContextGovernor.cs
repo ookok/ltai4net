@@ -25,7 +25,7 @@ public sealed class ContextGovernor : LayerGovernor
     {
         var query = incoming.Payload?.GetValueOrDefault("query")?.ToString() ?? "";
 
-        var relevantContext = await PreloadKnowledgeAsync(query, cancellationToken);
+        var relevantContext = await PreloadKnowledgeAsync(query, cancellationToken).ConfigureAwait(false);
 
         return new Handshake
         {
@@ -88,8 +88,8 @@ public sealed class ContextGovernor : LayerGovernor
 
         try
         {
-            var queryVec = await _vectorStore.EmbedAsync(query, cancellationToken);
-            var results = await _vectorStore.SearchSimilarAsync(queryVec, topK: 3, cancellationToken);
+            var queryVec = await _vectorStore.EmbedAsync(query, cancellationToken).ConfigureAwait(false);
+            var results = await _vectorStore.SearchSimilarAsync(queryVec, topK: 3, cancellationToken).ConfigureAwait(false);
 
             if (results.Count == 0)
                 return "";

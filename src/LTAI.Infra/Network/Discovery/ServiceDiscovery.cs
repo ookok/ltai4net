@@ -7,7 +7,7 @@ using Microsoft.Extensions.Logging;
 
 namespace LTAI.Infra.Network.Discovery;
 
-public sealed class ServiceDiscovery
+public sealed class ServiceDiscovery : IDisposable
 {
     private readonly HttpClient _http;
     private readonly ILogger<ServiceDiscovery> _logger;
@@ -19,6 +19,8 @@ public sealed class ServiceDiscovery
         _logger = logger;
     }
 
+    public void Dispose() { _http?.Dispose(); }
+
     public async Task<DiscoveryResponse?> QueryAsync(string discoveryEndpoint, CancellationToken cancellationToken = default)
     {
         try
@@ -29,7 +31,7 @@ public sealed class ServiceDiscovery
 
             if (response.IsSuccessStatusCode)
             {
-                var json = await response.Content.ReadAsStringAsync(cancellationToken);
+                var json = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
                 return JsonSerializer.Deserialize<DiscoveryResponse>(json);
             }
         }
@@ -62,7 +64,7 @@ public sealed class ServiceDiscovery
                 $"{discoveryEndpoint.TrimEnd('/')}/api/discovery/announce",
                 content, cancellationToken);
 
-            var responseJson = await response.Content.ReadAsStringAsync(cancellationToken);
+            var responseJson = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
             var discoveryResponse = JsonSerializer.Deserialize<DiscoveryResponse>(responseJson);
 
             if (discoveryResponse?.KnownPeers != null)

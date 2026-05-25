@@ -14,7 +14,8 @@ public static class PlanningInnovationEndpoints
         // ─── HTN Planner ───
         endpoints.MapPost("/api/htn/decompose", (HttpContext context, HTNPlanner planner) =>
         {
-            var body = new StreamReader(context.Request.Body).ReadToEnd();
+            using var reader = new StreamReader(context.Request.Body);
+            var body = reader.ReadToEnd();
             var request = JsonSerializer.Deserialize<Dictionary<string, string>>(body);
 
             if (request == null || !request.TryGetValue("task", out var task))
@@ -61,7 +62,8 @@ public static class PlanningInnovationEndpoints
         // ─── Explainability Trace ───
         endpoints.MapPost("/api/trace/start", (HttpContext context, TraceCollector collector) =>
         {
-            var body = new StreamReader(context.Request.Body).ReadToEnd();
+            using var reader = new StreamReader(context.Request.Body);
+            var body = reader.ReadToEnd();
             var request = JsonSerializer.Deserialize<Dictionary<string, string>>(body);
 
             var sessionId = request?.GetValueOrDefault("session_id", "anon") ?? "anon";
@@ -78,7 +80,8 @@ public static class PlanningInnovationEndpoints
 
         endpoints.MapPost("/api/trace/step", (HttpContext context, TraceCollector collector) =>
         {
-            var body = new StreamReader(context.Request.Body).ReadToEnd();
+            using var reader = new StreamReader(context.Request.Body);
+            var body = reader.ReadToEnd();
             var request = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(body);
 
             if (request == null || !request.TryGetValue("trace_id", out var traceIdElem))
@@ -110,7 +113,8 @@ public static class PlanningInnovationEndpoints
 
         endpoints.MapPost("/api/trace/complete", (HttpContext context, TraceCollector collector) =>
         {
-            var body = new StreamReader(context.Request.Body).ReadToEnd();
+            using var reader = new StreamReader(context.Request.Body);
+            var body = reader.ReadToEnd();
             var request = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(body);
 
             if (request == null || !request.TryGetValue("trace_id", out var traceIdElem))

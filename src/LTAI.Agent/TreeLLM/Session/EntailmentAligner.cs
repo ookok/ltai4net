@@ -1,3 +1,4 @@
+using System.Text;
 using LTAI.Core.System;
 using LTAI.Knowledge.Core;
 
@@ -28,8 +29,8 @@ public sealed class EntailmentAligner
             return new();
 
         var interleaved = new List<EntailmentAlignedStep>();
-        string cumulativeReasoning = "";
-        string cumulativeAnswer = "";
+        var reasoningSb = new StringBuilder();
+        var answerSb = new StringBuilder();
         int disclosedUpTo = 0;
         bool disclosedAll = false;
 
@@ -37,25 +38,25 @@ public sealed class EntailmentAligner
         {
             var step = trajectory.Steps[i];
 
-            cumulativeReasoning += " " + step.Thought;
+            reasoningSb.Append(' ').Append(step.Thought);
 
             if (step.Observation != null)
-                cumulativeAnswer += " " + step.Observation;
+                answerSb.Append(' ').Append(step.Observation);
 
             interleaved.Add(new EntailmentAlignedStep(
                 i, DisclosureAction.Think, step.Thought,
-                ComputeEntailmentScore(cumulativeReasoning, step.Thought)));
+                ComputeEntailmentScore(reasoningSb.ToString(), step.Thought)));
 
             if (disclosedAll)
                 continue;
 
-            var answerFragments = BuildAnswerFragments(cumulativeAnswer);
+            var answerFragments = BuildAnswerFragments(answerSb.ToString());
             int newDisclosed = disclosedUpTo;
 
             for (int a = disclosedUpTo; a < answerFragments.Count; a++)
             {
                 var frag = answerFragments[a];
-                var entailment = ComputeEntailmentScore(cumulativeReasoning, frag);
+                var entailment = ComputeEntailmentScore(reasoningSb.ToString(), frag);
 
                 if (entailment >= EntailmentThreshold)
                 {
@@ -76,9 +77,10 @@ public sealed class EntailmentAligner
                 disclosedAll = true;
         }
 
-        if (trajectory.Completed && disclosedUpTo < BuildAnswerFragments(cumulativeAnswer).Count)
+        var cumulativeAnswerStr = answerSb.ToString();
+        if (trajectory.Completed && disclosedUpTo < BuildAnswerFragments(cumulativeAnswerStr).Count)
         {
-            var remainingFrags = BuildAnswerFragments(cumulativeAnswer)
+            var remainingFrags = BuildAnswerFragments(cumulativeAnswerStr)
                 .Skip(disclosedUpTo);
             foreach (var frag in remainingFrags)
             {
@@ -149,15 +151,15 @@ public sealed class EntailmentAligner
         InteractionTrajectory trajectory)
     {
         var results = new List<DisclosureActionResult>();
-        string cumulativeReasoning = "";
+        var reasoningSb = new StringBuilder();
 
         for (int i = 0; i < trajectory.Steps.Count; i++)
         {
             var step = trajectory.Steps[i];
-            cumulativeReasoning += " " + step.Thought;
+            reasoningSb.Append(' ').Append(step.Thought);
 
             var observation = step.Observation ?? "";
-            var entailment = ComputeEntailmentScore(cumulativeReasoning, observation);
+            var entailment = ComputeEntailmentScore(reasoningSb.ToString(), observation);
 
             bool shouldDisclose = entailment >= EntailmentThreshold
                 && observation.Length >= MinBlockSize;
@@ -180,19 +182,19 @@ public sealed class EntailmentAligner
             new[] { ". ", ".\n", "。", "\n\n" },
             StringSplitOptions.RemoveEmptyEntries);
 
-        string currentFrag = "";
+        var fragSb = new StringBuilder();
         foreach (var s in sentences)
         {
-            currentFrag += s + ". ";
-            if (currentFrag.Length >= MinBlockSize * 2)
+            fragSb.Append(s).Append(". ");
+            if (fragSb.Length >= MinBlockSize * 2)
             {
-                fragments.Add(currentFrag.Trim());
-                currentFrag = "";
+                fragments.Add(fragSb.ToString().Trim());
+                fragSb.Clear();
             }
         }
 
-        if (currentFrag.Trim().Length > 0)
-            fragments.Add(currentFrag.Trim());
+        if (fragSb.Length > 0)
+            fragments.Add(fragSb.ToString().Trim());
 
         return fragments;
     }

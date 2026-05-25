@@ -64,7 +64,7 @@ public sealed class MultiToolDispatch
             tasks.Add(ExecuteSingleToolAsync(action));
         }
 
-        var results = await Task.WhenAll(tasks);
+        var results = await Task.WhenAll(tasks).ConfigureAwait(false);
         sw.Stop();
 
         return new MultiToolDispatchResult
@@ -82,7 +82,7 @@ public sealed class MultiToolDispatch
         var toolSw = Stopwatch.StartNew();
         try
         {
-            var output = await _toolRegistry.InvokeAsync(action.ToolName, action.Parameters.ToDictionary(kvp => kvp.Key, kvp => (object?)kvp.Value));
+            var output = await _toolRegistry.InvokeAsync(action.ToolName, action.Parameters.ToDictionary(kvp => kvp.Key, kvp => (object?)kvp.Value)).ConfigureAwait(false);
             toolSw.Stop();
             return new ToolCallResult
             {

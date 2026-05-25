@@ -39,7 +39,7 @@ internal static class DebugMode
         {
             Console.WriteLine("未检测到配置文件，正在运行配置向导...");
             var wizard = new InteractiveSetupWizard(configPath);
-            await wizard.RunAsync();
+            await wizard.RunAsync().ConfigureAwait(false);
         }
 
         var configuration = new ConfigurationBuilder()
@@ -58,7 +58,7 @@ internal static class DebugMode
         var options = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<LTAIOptions>>().Value;
 
         var toolRegistry = sp.GetRequiredService<AIToolRegistry>();
-        await toolRegistry.RegisterAllToolCategoriesAsync();
+        await toolRegistry.RegisterAllToolCategoriesAsync().ConfigureAwait(false);
         Console.WriteLine($"可用 {toolRegistry.ListTools().Count()} 个工具（查询时按需选择）");
 
         var hasProvider = options.AI.Providers.Any(kv => !string.IsNullOrEmpty(kv.Value.Endpoint));
@@ -73,11 +73,11 @@ internal static class DebugMode
 
         if (!string.IsNullOrEmpty(query))
         {
-            await RunLiveQueryAsync(query, livingTree, options);
+            await RunLiveQueryAsync(query, livingTree, options).ConfigureAwait(false);
         }
         else
         {
-            await RunBatchTestAsync(count, livingTree, options);
+            await RunBatchTestAsync(count, livingTree, options).ConfigureAwait(false);
         }
 
         Console.WriteLine("\nDebug mode completed.");
@@ -140,7 +140,7 @@ internal static class DebugMode
             var docDir = DocsDir;
             Directory.CreateDirectory(docDir);
             var docPath = Path.Combine(docDir, $"trace_{DateTime.UtcNow:yyyyMMdd_HHmmss}.md");
-            await File.WriteAllTextAsync(docPath, GenerateLiveTraceDocument(query, response, sw.ElapsedMilliseconds, options), default);
+            await File.WriteAllTextAsync(docPath, GenerateLiveTraceDocument(query, response, sw.ElapsedMilliseconds, options), default).ConfigureAwait(false);
             Console.WriteLine($"\nTrace: {docPath}");
         }
         catch (Exception ex)
@@ -191,7 +191,7 @@ internal static class DebugMode
             try
             {
                 var sw = Stopwatch.StartNew();
-                var output = await livingTree.ProcessTypedAsync(GovernorInput.Create(test.Query), default);
+                var output = await livingTree.ProcessTypedAsync(GovernorInput.Create(test.Query), default).ConfigureAwait(false);
                 sw.Stop();
                 var ok = !output.IsBlocked && !string.IsNullOrEmpty(output.Response);
                 Console.Write($"{(ok ? "PASS" : "FAIL")} ({sw.ElapsedMilliseconds}ms)");
@@ -208,7 +208,7 @@ internal static class DebugMode
         var passed = results.Count(r => r.Pass);
         Console.WriteLine($"\n结果: {passed}/{tests.Count} 通过");
         var reportPath = Path.Combine(DocsDir, $"debug_report_{DateTime.UtcNow:yyyyMMdd_HHmmss}.md");
-        await File.WriteAllTextAsync(reportPath, GenerateLiveDebugDocument(results, tests, options));
+        await File.WriteAllTextAsync(reportPath, GenerateLiveDebugDocument(results, tests, options)).ConfigureAwait(false);
         Console.WriteLine($"报告: {reportPath}");
     }
 

@@ -837,3 +837,13 @@ public class Lesson
     public double AutoFixConfidence { get; set; } = 0.5;
     public DateTime LastUsed { get; set; } = DateTime.UtcNow;
 }
+
+public class PreAnalysisIssue
+{
+    public string FilePath { get; set; } = "";
+    public string Severity { get; set; } = "";
+    public int LineNumber { get; set; }
+    public string Category { get; set; } = "";
+    public string Description { get; set; } = "";
+    public string? SuggestedFix { get; set; }
+}

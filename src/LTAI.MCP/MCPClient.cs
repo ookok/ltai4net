@@ -52,7 +52,7 @@ public sealed class MCPClient
             {
                 protocolVersion = "2024-11-05",
                 capabilities = new { },
-                clientInfo = new { name = "LTAI", version = "7.0.0" }
+                clientInfo = new { name = "LTAI", version = "0.51.0" }
             }, ct);
 
             if (result.TryGetProperty("serverInfo", out var info))
@@ -179,15 +179,15 @@ public sealed class MCPClient
 
         var json = JsonSerializer.Serialize(request);
         var content = new StringContent(json, Encoding.UTF8, "application/json");
-        var response = await _http.PostAsync(_serverUrl, content, ct);
+        var response = await _http.PostAsync(_serverUrl, content, ct).ConfigureAwait(false);
 
         if (!response.IsSuccessStatusCode)
         {
-            var errorBody = await response.Content.ReadAsStringAsync(ct);
+            var errorBody = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
             throw new HttpRequestException($"MCP server returned {(int)response.StatusCode}: {errorBody[..Math.Min(200, errorBody.Length)]}");
         }
 
-        var responseJson = await response.Content.ReadAsStringAsync(ct);
+        var responseJson = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
         using var doc = JsonDocument.Parse(responseJson);
         var root = doc.RootElement;
 
@@ -211,6 +211,6 @@ public sealed class MCPClient
 
         var json = JsonSerializer.Serialize(notification);
         var content = new StringContent(json, Encoding.UTF8, "application/json");
-        await _http.PostAsync(_serverUrl, content, ct);
+        await _http.PostAsync(_serverUrl, content, ct).ConfigureAwait(false);
     }
 }

@@ -120,7 +120,7 @@ public static class OpenCodeBridgeEndpoints
             try
             {
                 using var reader = new StreamReader(context.Request.Body);
-                var body = await reader.ReadToEndAsync();
+                var body = await reader.ReadToEndAsync().ConfigureAwait(false);
                 var request = JsonSerializer.Deserialize<OpenCodeChatRequest>(body);
 
                 if (request == null || string.IsNullOrWhiteSpace(request.Prompt))
@@ -140,7 +140,7 @@ public static class OpenCodeBridgeEndpoints
                     {
                         try
                         {
-                            var response = await chatClient.GetResponseAsync(request.Prompt);
+                            var response = await chatClient.GetResponseAsync(request.Prompt).ConfigureAwait(false);
                             fallbackResponse = response.Text ?? "";
                         }
                         catch
@@ -210,14 +210,14 @@ public static class OpenCodeBridgeEndpoints
                         session_id = sessionId,
                         response = output.Trim(),
                         error = string.IsNullOrWhiteSpace(error) ? null : error
-                    }));
+                    })).ConfigureAwait(false);
                 }
                 catch (Exception ex)
                 {
                     logger?.LogWarning(ex, "OpenCode chat failed");
                     context.Response.StatusCode = 500;
                     context.Response.ContentType = "application/json";
-                    await context.Response.WriteAsync(JsonSerializer.Serialize(new { error = ex.Message }));
+                    await context.Response.WriteAsync(JsonSerializer.Serialize(new { error = ex.Message })).ConfigureAwait(false);
                 }
             }
             catch (Exception ex)
@@ -225,7 +225,7 @@ public static class OpenCodeBridgeEndpoints
                 logger?.LogWarning(ex, "OpenCode chat request failed");
                 context.Response.StatusCode = 500;
                 context.Response.ContentType = "application/json";
-                await context.Response.WriteAsync(JsonSerializer.Serialize(new { error = ex.Message }));
+                await context.Response.WriteAsync(JsonSerializer.Serialize(new { error = ex.Message })).ConfigureAwait(false);
             }
         });
 
@@ -248,7 +248,7 @@ public static class OpenCodeBridgeEndpoints
                 session_id = id,
                 message = lastMessage,
                 message_count = session.Messages.Count
-            }));
+            })).ConfigureAwait(false);
         });
 
         endpoints.MapGet("/api/opencode/providers", async (HttpContext context) =>
@@ -320,7 +320,7 @@ public static class OpenCodeBridgeEndpoints
                 })
                 .ToList();
 
-            await context.Response.WriteAsync(JsonSerializer.Serialize(result));
+            await context.Response.WriteAsync(JsonSerializer.Serialize(result)).ConfigureAwait(false);
         });
     }
 

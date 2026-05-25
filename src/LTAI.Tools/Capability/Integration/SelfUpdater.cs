@@ -3,7 +3,7 @@ using Microsoft.Extensions.Logging;
 
 namespace LTAI.Tools.Integration;
 
-public sealed class SelfUpdater
+public sealed class SelfUpdater : IDisposable
 {
     private static readonly Lazy<SelfUpdater> _instance = new(() => new SelfUpdater());
     public static SelfUpdater Instance => _instance.Value;
@@ -20,13 +20,15 @@ public sealed class SelfUpdater
         _projectRoot = AppDomain.CurrentDomain.BaseDirectory;
     }
 
+    public void Dispose() { _http?.Dispose(); }
+
     public async Task<Dictionary<string, object>> CheckUpdateAsync(bool useMirror = false)
     {
         var url = useMirror ? GiteeReleases : GitHubReleases;
 
         try
         {
-            var response = await _http.GetStringAsync(url);
+            var response = await _http.GetStringAsync(url).ConfigureAwait(false);
             var data = JsonSerializer.Deserialize<JsonElement>(response);
 
             var version = data.GetProperty("tag_name").GetString()?.TrimStart('v') ?? "";
@@ -44,7 +46,7 @@ public sealed class SelfUpdater
         }
         catch (HttpRequestException) when (!useMirror)
         {
-            return await CheckUpdateAsync(useMirror: true);
+            return await CheckUpdateAsync(useMirror: true).ConfigureAwait(false);
         }
         catch
         {
@@ -76,9 +78,9 @@ public sealed class SelfUpdater
             if (process == null)
                 return new Dictionary<string, object> { ["error"] = "Could not start git process" };
 
-            var output = await process.StandardOutput.ReadToEndAsync();
-            var error = await process.StandardError.ReadToEndAsync();
-            await process.WaitForExitAsync();
+            var output = await process.StandardOutput.ReadToEndAsync().ConfigureAwait(false);
+            var error = await process.StandardError.ReadToEndAsync().ConfigureAwait(false);
+            await process.WaitForExitAsync().ConfigureAwait(false);
 
             if (process.ExitCode != 0)
                 return new Dictionary<string, object> { ["error"] = error[..Math.Min(300, error.Length)] };
@@ -103,13 +105,13 @@ public sealed class SelfUpdater
     public async Task<Dictionary<string, object>> RunUpdateAsync(
         bool dryRun = false, bool checkOnly = false, bool useMirror = false)
     {
-        var gitResult = await GitPullAsync();
+        var gitResult = await GitPullAsync().ConfigureAwait(false);
         if (gitResult.ContainsKey("status") && gitResult["status"]?.ToString() == "updated")
             return gitResult;
         if (gitResult.TryGetValue("status", out var s) && s?.ToString() == "up_to_date")
             return gitResult;
 
-        var info = await CheckUpdateAsync(useMirror);
+        var info = await CheckUpdateAsync(useMirror).ConfigureAwait(false);
         if (info.ContainsKey("error"))
             return new Dictionary<string, object> { ["status"] = "no_update", ["message"] = info["error"] };
 

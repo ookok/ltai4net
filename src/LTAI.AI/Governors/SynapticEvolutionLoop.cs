@@ -58,7 +58,7 @@ public sealed class SynapticEvolutionLoop : BackgroundService
         {
             try
             {
-                await EvolutionCycleAsync(stoppingToken);
+                await EvolutionCycleAsync(stoppingToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException) { break; }
             catch (Exception ex)
@@ -66,7 +66,7 @@ public sealed class SynapticEvolutionLoop : BackgroundService
                 _logger.LogError(ex, "Evolution cycle failed");
             }
 
-            await Task.Delay(_checkInterval, stoppingToken);
+            await Task.Delay(_checkInterval, stoppingToken).ConfigureAwait(false);
         }
 
         _logger.LogInformation("SynapticEvolutionLoop stopped");
@@ -76,7 +76,7 @@ public sealed class SynapticEvolutionLoop : BackgroundService
     {
         if (_cellRegistry != null)
         {
-            await TrainCellsAsync(ct);
+            await TrainCellsAsync(ct).ConfigureAwait(false);
             return;
         }
 
@@ -151,7 +151,7 @@ public sealed class SynapticEvolutionLoop : BackgroundService
         {
             try
             {
-                var success = await _cellRegistry!.TrainCellAsync(domain, ct);
+                var success = await _cellRegistry!.TrainCellAsync(domain, ct).ConfigureAwait(false);
                 if (success) trainedCount++;
             }
             catch (Exception ex)
@@ -170,6 +170,6 @@ public sealed class SynapticEvolutionLoop : BackgroundService
     public async Task ForceEvolutionAsync(CancellationToken ct = default)
     {
         _logger.LogInformation("Forced evolution triggered");
-        await EvolutionCycleAsync(ct);
+        await EvolutionCycleAsync(ct).ConfigureAwait(false);
     }
 }

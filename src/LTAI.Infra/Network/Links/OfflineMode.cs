@@ -13,7 +13,7 @@ public sealed record SyncQueueItem
     public int MaxRetries { get; init; } = 5;
 }
 
-public sealed class DualMode
+public sealed class DualMode : IDisposable
 {
     private static readonly Lazy<DualMode> _instance = new(() => new DualMode());
     public static DualMode Instance => _instance.Value;
@@ -38,6 +38,8 @@ public sealed class DualMode
         _http = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
         _logger = null;
     }
+
+    public void Dispose() { _http?.Dispose(); }
 
     public async Task Check()
     {
@@ -81,8 +83,8 @@ public sealed class DualMode
 
         while (true)
         {
-            await Task.Delay(intervalMs);
-            await Check();
+            await Task.Delay(intervalMs).ConfigureAwait(false);
+            await Check().ConfigureAwait(false);
         }
     }
 
@@ -124,7 +126,7 @@ public sealed class DualMode
                 _queueCount--;
             }
 
-            await SyncItem(item);
+            await SyncItem(item).ConfigureAwait(false);
             count++;
         }
 
@@ -168,7 +170,7 @@ public sealed class DualMode
                 return;
             }
 
-            await Task.Delay(10);
+            await Task.Delay(10).ConfigureAwait(false);
 
             var updated = item with { RetryCount = item.RetryCount + 1 };
             _logger?.LogDebug("Sync item processed: {Id} ({Action})", item.Id, updated.Action);
@@ -184,7 +186,7 @@ public sealed class DualMode
         try
         {
             using var request = new HttpRequestMessage(HttpMethod.Head, url);
-            var response = await _http.SendAsync(request);
+            var response = await _http.SendAsync(request).ConfigureAwait(false);
             return response.IsSuccessStatusCode;
         }
         catch

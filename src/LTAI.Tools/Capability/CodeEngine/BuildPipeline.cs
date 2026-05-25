@@ -45,6 +45,26 @@ public sealed class BuildPipeline
 {
     private readonly ILogger<BuildPipeline> _logger;
 
+    private static readonly Regex s_msbuildPattern = new(
+        @"^(?<file>[^(]+)\((?<line>\d+),(?<col>\d+)\):\s+(?<severity>error|warning)\s+(?<code>[A-Z]{2}\d+):\s+(?<message>.+)$",
+        RegexOptions.Multiline | RegexOptions.Compiled);
+
+    private static readonly Regex s_tsPattern = new(
+        @"^(?<file>[^(]+)\((?<line>\d+),(?<col>\d+)\):\s+error\s+(?<code>TS\d+):\s+(?<message>.+)$",
+        RegexOptions.Multiline | RegexOptions.Compiled);
+
+    private static readonly Regex s_esPattern = new(
+        @"^\s*(?<file>.+):\s+line\s+(?<line>\d+),\s+col\s+(?<col>\d+),\s+(?<severity>Error|Warning)\s*[-–]\s*(?<message>.+)$",
+        RegexOptions.Multiline | RegexOptions.Compiled);
+
+    private static readonly Regex s_cargoBuildPattern = new(
+        @"^\s*-->\s*(?<file>[^:]+):(?<line>\d+):(?<col>\d+)\s*$(?:[\s\S]*?)^\s*\d+\s*\|\s*(?<message>.+)$",
+        RegexOptions.Multiline | RegexOptions.Compiled);
+
+    private static readonly Regex s_genericBuildPattern = new(
+        @"^(?<file>[^:]+):(?<line>\d+):(?<col>\d+)?\s*(?<severity>error|warning|Error|Warning)[:\s]+(?<message>.+)$",
+        RegexOptions.Multiline | RegexOptions.Compiled);
+
     public BuildPipeline(ILogger<BuildPipeline>? logger = null)
     {
         _logger = logger ?? NullLogger<BuildPipeline>.Instance;
@@ -59,7 +79,7 @@ public sealed class BuildPipeline
         var (command, args) = GetBuildCommand(buildSystem, configuration);
 
         var sw = Stopwatch.StartNew();
-        var (exitCode, output) = await RunProcessAsync(command, args, rootPath);
+        var (exitCode, output) = await RunProcessAsync(command, args, rootPath).ConfigureAwait(false);
         sw.Stop();
 
         var result = new BuildResult
@@ -94,7 +114,7 @@ public sealed class BuildPipeline
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            var before = await BuildAsync(rootPath);
+            var before = await BuildAsync(rootPath).ConfigureAwait(false);
             if (before.Success)
             {
                 attempts.Add(new BuildFixAttempt
@@ -105,8 +125,8 @@ public sealed class BuildPipeline
                 break;
             }
 
-            var fixDescription = await fixFn(before.Errors);
-            var after = await BuildAsync(rootPath);
+            var fixDescription = await fixFn(before.Errors).ConfigureAwait(false);
+            var after = await BuildAsync(rootPath).ConfigureAwait(false);
 
             attempts.Add(new BuildFixAttempt
             {
@@ -125,7 +145,7 @@ public sealed class BuildPipeline
 
     public async Task<Dictionary<string, List<BuildError>>> ErrorsByFileAsync(string rootPath)
     {
-        var result = await BuildAsync(rootPath);
+        var result = await BuildAsync(rootPath).ConfigureAwait(false);
         return result.Errors
             .GroupBy(e => e.File)
             .ToDictionary(g => g.Key, g => g.ToList());
@@ -200,11 +220,8 @@ public sealed class BuildPipeline
 
     private static void ParseDotNetOutput(string output, List<BuildError> errors, List<BuildError> warnings)
     {
-        var msbuildPattern = new Regex(
-            @"^(?<file>[^(]+)\((?<line>\d+),(?<col>\d+)\):\s+(?<severity>error|warning)\s+(?<code>[A-Z]{2}\d+):\s+(?<message>.+)$",
-            RegexOptions.Multiline);
 
-        foreach (Match m in msbuildPattern.Matches(output))
+        foreach (Match m in s_msbuildPattern.Matches(output))
         {
             var error = new BuildError
             {
@@ -226,11 +243,8 @@ public sealed class BuildPipeline
 
     private static void ParseNpmOutput(string output, List<BuildError> errors, List<BuildError> warnings)
     {
-        var tsPattern = new Regex(
-            @"^(?<file>[^(]+)\((?<line>\d+),(?<col>\d+)\):\s+error\s+(?<code>TS\d+):\s+(?<message>.+)$",
-            RegexOptions.Multiline);
 
-        foreach (Match m in tsPattern.Matches(output))
+        foreach (Match m in s_tsPattern.Matches(output))
         {
             errors.Add(new BuildError
             {
@@ -244,11 +258,7 @@ public sealed class BuildPipeline
             });
         }
 
-        var esPattern = new Regex(
-            @"^\s*(?<file>.+):\s+line\s+(?<line>\d+),\s+col\s+(?<col>\d+),\s+(?<severity>Error|Warning)\s*[-–]\s*(?<message>.+)$",
-            RegexOptions.Multiline);
-
-        foreach (Match m in esPattern.Matches(output))
+        foreach (Match m in s_esPattern.Matches(output))
         {
             var error = new BuildError
             {
@@ -268,11 +278,8 @@ public sealed class BuildPipeline
 
     private static void ParseCargoOutput(string output, List<BuildError> errors, List<BuildError> warnings)
     {
-        var pattern = new Regex(
-            @"^\s*-->\s*(?<file>[^:]+):(?<line>\d+):(?<col>\d+)\s*$(?:[\s\S]*?)^\s*\d+\s*\|\s*(?<message>.+)$",
-            RegexOptions.Multiline);
 
-        foreach (Match m in pattern.Matches(output))
+        foreach (Match m in s_cargoBuildPattern.Matches(output))
         {
             var msg = m.Groups["message"].Value.Trim();
             if (msg.Contains("error[", StringComparison.OrdinalIgnoreCase) ||
@@ -307,11 +314,8 @@ public sealed class BuildPipeline
 
     private static void ParseGenericOutput(string output, List<BuildError> errors, List<BuildError> warnings)
     {
-        var pattern = new Regex(
-            @"^(?<file>[^:]+):(?<line>\d+):(?<col>\d+)?\s*(?<severity>error|warning|Error|Warning)[:\s]+(?<message>.+)$",
-            RegexOptions.Multiline);
 
-        foreach (Match m in pattern.Matches(output))
+        foreach (Match m in s_genericBuildPattern.Matches(output))
         {
             var severity = m.Groups["severity"].Value.ToLowerInvariant();
             var error = new BuildError
@@ -360,7 +364,7 @@ public sealed class BuildPipeline
         proc.BeginOutputReadLine();
         proc.BeginErrorReadLine();
 
-        var completed = await Task.Run(() => proc.WaitForExit(timeoutMs));
+        var completed = await Task.Run(() => proc.WaitForExit(timeoutMs)).ConfigureAwait(false);
         if (!completed)
         {
             try { proc.Kill(entireProcessTree: true); } catch { }

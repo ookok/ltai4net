@@ -60,7 +60,7 @@ public sealed class UnifiedQueryClassifier
                 Tools = new List<AITool>()
             };
 
-            var result = await llm.GetResponseAsync(messages, options, ct);
+            var result = await llm.GetResponseAsync(messages, options, ct).ConfigureAwait(false);
             var json = result.Text?.Trim() ?? "";
 
             var classification = ParseClassification(json);

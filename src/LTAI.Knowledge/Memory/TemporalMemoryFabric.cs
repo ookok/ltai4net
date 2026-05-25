@@ -99,7 +99,7 @@ public sealed class TemporalMemoryFabric
         // 1. FTS5 exact search
         if (FTS5SearchAsync != null)
         {
-            var ftsResults = await FTS5SearchAsync(query);
+            var ftsResults = await FTS5SearchAsync(query).ConfigureAwait(false);
             foreach (var (id, content, score) in ftsResults.Take(topK))
             {
                 if (_events.TryGetValue(id, out var evt))
@@ -114,7 +114,7 @@ public sealed class TemporalMemoryFabric
         if (VectorSearchAsync != null)
         {
             var queryEmbedding = ComputeSimpleEmbedding(query);
-            var vecResults = await VectorSearchAsync(queryEmbedding, topK);
+            var vecResults = await VectorSearchAsync(queryEmbedding, topK).ConfigureAwait(false);
             foreach (var (id, score) in vecResults)
             {
                 if (_events.TryGetValue(id, out var evt) && results.All(r => r.Id != id))
@@ -128,7 +128,7 @@ public sealed class TemporalMemoryFabric
         // 3. Knowledge graph traverse
         if (GraphQueryAsync != null)
         {
-            var graphResults = await GraphQueryAsync(query);
+            var graphResults = await GraphQueryAsync(query).ConfigureAwait(false);
             foreach (var (subject, relation, obj) in graphResults.Take(topK))
             {
                 var triplet = $"{subject} {relation} {obj}";

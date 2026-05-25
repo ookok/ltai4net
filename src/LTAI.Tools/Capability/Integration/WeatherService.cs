@@ -21,7 +21,7 @@ public sealed record WeatherData(
     long Sunset,
     string Source);
 
-public sealed class WeatherService
+public sealed class WeatherService : IDisposable
 {
     private readonly HttpClient _http;
     private readonly ILogger<WeatherService> _logger;
@@ -43,6 +43,8 @@ public sealed class WeatherService
         _qweatherNowUrl = options.Value.IntegrationUrls.WeatherQWeatherNow;
     }
 
+    public void Dispose() { _http?.Dispose(); }
+
     public async Task<WeatherData?> GetWeatherAsync(string city, string source = "openweathermap")
     {
         if (string.IsNullOrWhiteSpace(city))
@@ -63,7 +65,7 @@ public sealed class WeatherService
         try
         {
             var url = $"{_owmBaseUrl}?q={Uri.EscapeDataString(city)}&appid={OpenWeatherMapKey}&units=metric&lang=zh_cn";
-            var json = await _http.GetStringAsync(url);
+            var json = await _http.GetStringAsync(url).ConfigureAwait(false);
             using var doc = JsonDocument.Parse(json);
 
             var main = doc.RootElement.GetProperty("main");
@@ -90,7 +92,7 @@ public sealed class WeatherService
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "OpenWeatherMap query failed for {City}", city);
-            return await GetQWeatherAsync(city);
+            return await GetQWeatherAsync(city).ConfigureAwait(false);
         }
     }
 
@@ -102,7 +104,7 @@ public sealed class WeatherService
         try
         {
             var geoUrl = $"{_qweatherGeoUrl}?location={Uri.EscapeDataString(city)}&key={QWeatherKey}";
-            var geoJson = await _http.GetStringAsync(geoUrl);
+            var geoJson = await _http.GetStringAsync(geoUrl).ConfigureAwait(false);
             using var geoDoc = JsonDocument.Parse(geoJson);
 
             if (!geoDoc.RootElement.TryGetProperty("location", out var locations) || locations.GetArrayLength() == 0)
@@ -113,7 +115,7 @@ public sealed class WeatherService
             var locId = loc.GetProperty("id").GetString() ?? "";
 
             var weatherUrl = $"{_qweatherNowUrl}?location={locId}&key={QWeatherKey}";
-            var weatherJson = await _http.GetStringAsync(weatherUrl);
+            var weatherJson = await _http.GetStringAsync(weatherUrl).ConfigureAwait(false);
             using var weatherDoc = JsonDocument.Parse(weatherJson);
 
             if (!weatherDoc.RootElement.TryGetProperty("now", out var now))

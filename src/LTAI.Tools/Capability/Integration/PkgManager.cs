@@ -39,7 +39,7 @@ public sealed class PkgManager
             if (!string.IsNullOrEmpty(source))
                 args += $" --source {source}";
 
-            var (code, output) = await RunDotnetAsync(args);
+            var (code, output) = await RunDotnetAsync(args).ConfigureAwait(false);
 
             var installed = code == 0;
             var installedVersion = version;
@@ -74,7 +74,7 @@ public sealed class PkgManager
             if (!string.IsNullOrEmpty(version))
                 args += $" --version {version}";
 
-            var (code, output) = await RunDotnetAsync(args);
+            var (code, output) = await RunDotnetAsync(args).ConfigureAwait(false);
 
             var success = code == 0;
 
@@ -99,7 +99,7 @@ public sealed class PkgManager
         {
             var path = projectPath ?? ".";
             var args = $"restore \"{path}\"";
-            var (code, output) = await RunDotnetAsync(args);
+            var (code, output) = await RunDotnetAsync(args).ConfigureAwait(false);
 
             return new PackageResult(
                 path,
@@ -215,7 +215,7 @@ public sealed class PkgManager
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
 
-        await process.WaitForExitAsync();
+        await process.WaitForExitAsync().ConfigureAwait(false);
 
         var combined = output.ToString();
         if (process.ExitCode != 0 && error.Length > 0)

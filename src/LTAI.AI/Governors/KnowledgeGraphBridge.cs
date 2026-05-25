@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using LTAI.Knowledge.Core;
 using LTAI.Knowledge.Core.Models;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 
 namespace LTAI.AI.Governors;
@@ -17,11 +18,19 @@ public sealed record GraphKnowledgeResult
 public sealed class KnowledgeGraphBridge
 {
     private readonly KnowledgeGraph _graph;
+    private readonly IChatClient? _llm;
     private readonly ILogger<KnowledgeGraphBridge> _logger;
 
-    public KnowledgeGraphBridge(KnowledgeGraph graph, ILogger<KnowledgeGraphBridge>? logger = null)
+    private static readonly JsonSerializerOptions JsonOpts = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        PropertyNameCaseInsensitive = true
+    };
+
+    public KnowledgeGraphBridge(KnowledgeGraph graph, IChatClient? llm = null, ILogger<KnowledgeGraphBridge>? logger = null)
     {
         _graph = graph;
+        _llm = llm;
         _logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<KnowledgeGraphBridge>.Instance;
     }
 
@@ -54,17 +63,121 @@ public sealed class KnowledgeGraphBridge
         };
     }
 
-    public int IngestTeachingResult(string query, L2TeachingResult teaching)
+    public async Task<int> IngestWithJsonModeAsync(string content, CancellationToken ct = default)
     {
+        if (_llm is null)
+        {
+            _logger.LogWarning("KnowledgeGraphBridge: Cannot use JSON mode, no IChatClient configured");
+            return 0;
+        }
+
+        var prompt = $$"""
+            Extract all entities and relations from the following text. Output ONLY valid JSON with no additional text.
+
+            {
+              "entities": [
+                { "id": "unique_entity_id", "label": "Human-readable entity name", "properties": { "key": "value" } }
+              ],
+              "relations": [
+                { "subject": "entity_id_from_entities", "predicate": "relationship_name", "object": "entity_id_from_entities", "source_text": "original text fragment", "confidence": 0.9 }
+              ]
+            }
+
+            Text to analyze:
+            {{content}}
+            """;
+
+        try
+        {
+            var response = await _llm.GetResponseAsync(
+                prompt,
+                new ChatOptions
+                {
+                    ResponseFormat = ChatResponseFormat.Json,
+                    Temperature = 0.1f
+                },
+                ct).ConfigureAwait(false);
+
+            var json = response.Text ?? "";
+            if (string.IsNullOrWhiteSpace(json))
+            {
+                _logger.LogWarning("KnowledgeGraphBridge: Empty LLM response for JSON extraction");
+                return 0;
+            }
+
+            var extraction = JsonSerializer.Deserialize<JsonGraphExtraction>(json, JsonOpts);
+            if (extraction is null)
+            {
+                _logger.LogWarning("KnowledgeGraphBridge: Failed to deserialize JSON extraction");
+                return 0;
+            }
+
+            int count = 0;
+
+            if (extraction.Entities is not null)
+            {
+                foreach (var e in extraction.Entities)
+                {
+                    var entityId = string.IsNullOrWhiteSpace(e.Id) ? KnowledgeGraph.EntityId(e.Label) : e.Id;
+                    _graph.AddEntity(new Entity(entityId, e.Label, e.Properties));
+                    count++;
+                }
+            }
+
+            if (extraction.Relations is not null && extraction.Entities is not null)
+            {
+                var entityIds = new HashSet<string>(extraction.Entities
+                    .Select(e => string.IsNullOrWhiteSpace(e.Id) ? KnowledgeGraph.EntityId(e.Label) : e.Id));
+
+                foreach (var r in extraction.Relations)
+                {
+                    var subjId = entityIds.Contains(r.Subject) ? r.Subject : KnowledgeGraph.EntityId(r.Subject);
+                    var objId = entityIds.Contains(r.Object) ? r.Object : KnowledgeGraph.EntityId(r.Object);
+                    var props = new Dictionary<string, object?>();
+                    if (!string.IsNullOrEmpty(r.SourceText)) props["source_text"] = r.SourceText;
+                    if (r.Confidence.HasValue) props["confidence"] = r.Confidence.Value;
+                    _graph.AddRelation(subjId, objId, r.Predicate, props!);
+                    count++;
+                }
+            }
+
+            _logger.LogInformation("Knowledge graph ingested {Count} items from JSON extraction", count);
+            return count;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "KnowledgeGraphBridge: JSON extraction failed");
+            return 0;
+        }
+    }
+
+    public int IngestTeachingResult(string query, L2TeachingResult teaching, bool useJsonMode = false)
+    {
+        if (useJsonMode)
+        {
+            var text = $"Query: {query}\n\n" +
+                       $"Answer: {teaching.Answer}\n\n" +
+                       $"Reasoning: {teaching.ReasoningSteps}\n\n" +
+                       $"Concepts: {teaching.KeyConcepts}\n\n" +
+                       $"Explanation: {teaching.SimplifiedExplanation}";
+            return IngestWithJsonModeAsync(text).GetAwaiter().GetResult();
+        }
+
         var triplets = ExtractTripletsFromTeaching(query, teaching);
         var count = _graph.AddTripletsToGraph(triplets);
         _logger.LogInformation("Knowledge graph ingested {Count} triplets from L2 teaching", count);
         return count;
     }
 
-    public int IngestExperience(string query, string response, string label)
+    public int IngestExperience(string query, string response, string label, bool useJsonMode = false)
     {
         var combinedText = $"{query}. {response}";
+
+        if (useJsonMode)
+        {
+            return IngestWithJsonModeAsync(combinedText).GetAwaiter().GetResult();
+        }
+
         var triplets = KnowledgeGraph.ExtractTripletsRegex(combinedText);
         var count = _graph.AddTripletsToGraph(triplets);
         if (count > 0)
@@ -155,4 +268,26 @@ public sealed class KnowledgeGraphBridge
     }
 
     private static string EntityId(string label) => KnowledgeGraph.EntityId(label);
+}
+
+internal sealed class JsonGraphEntity
+{
+    public string Id { get; set; } = "";
+    public string Label { get; set; } = "";
+    public Dictionary<string, object>? Properties { get; set; }
+}
+
+internal sealed class JsonGraphRelation
+{
+    public string Subject { get; set; } = "";
+    public string Predicate { get; set; } = "";
+    public string Object { get; set; } = "";
+    public string? SourceText { get; set; }
+    public double? Confidence { get; set; }
+}
+
+internal sealed class JsonGraphExtraction
+{
+    public List<JsonGraphEntity>? Entities { get; set; }
+    public List<JsonGraphRelation>? Relations { get; set; }
 }

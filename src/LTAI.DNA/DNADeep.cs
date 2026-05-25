@@ -65,7 +65,7 @@ public sealed class SelfEvolution
             Generation = _generation, MutationCount = mutations.Count,
             ActiveRules = _rules.Count, MutationRate = _mutationRate,
             RecentMutations = mutations
-        });
+        }).ConfigureAwait(false);
     }
 
     private void InitializeBaseRules()

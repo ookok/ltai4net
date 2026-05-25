@@ -170,7 +170,7 @@ public sealed class GitHubCellRegistry : IDisposable
                 : "";
 
             var assetPath = await UploadReleaseAssetAsync(
-                releaseResponse, packagePath, manifest, ct);
+                releaseResponse, packagePath, manifest, ct).ConfigureAwait(false);
 
             var publishedInfo = new PublishedCellInfo
             {
@@ -207,7 +207,7 @@ public sealed class GitHubCellRegistry : IDisposable
         try
         {
             // 1. 查找 Release
-            var release = await FindReleaseAsync(cellId, version, ct);
+            var release = await FindReleaseAsync(cellId, version, ct).ConfigureAwait(false);
             if (release == null)
             {
                 _logger.LogWarning("Release not found: id={Id} version={Version}", cellId, version);
@@ -235,10 +235,10 @@ public sealed class GitHubCellRegistry : IDisposable
 
             // 4. 下载
             var localPath = Path.Combine(_cacheDirectory, packageAsset.Name);
-            await DownloadAssetAsync(packageAsset, localPath, ct);
+            await DownloadAssetAsync(packageAsset, localPath, ct).ConfigureAwait(false);
 
             // 5. 安装
-            var packageInfo = await _packageManager.InstallPackageAsync(localPath, ct);
+            var packageInfo = await _packageManager.InstallPackageAsync(localPath, ct).ConfigureAwait(false);
 
             if (packageInfo != null)
             {
@@ -278,7 +278,7 @@ public sealed class GitHubCellRegistry : IDisposable
             }
 
             var searchUrl = $"/search/repositories?q={Uri.EscapeDataString(query)}&per_page={maxResults}";
-            var searchResult = await GetJsonAsync<GitHubSearchResult>(searchUrl, ct);
+            var searchResult = await GetJsonAsync<GitHubSearchResult>(searchUrl, ct).ConfigureAwait(false);
 
             if (searchResult == null) return results;
 
@@ -286,7 +286,7 @@ public sealed class GitHubCellRegistry : IDisposable
             {
                 // 获取该仓库的 Releases
                 var releasesUrl = $"/repos/{repo.FullName}/releases?per_page=5";
-                var releases = await GetJsonAsync<List<GitHubRelease>>(releasesUrl, ct);
+                var releases = await GetJsonAsync<List<GitHubRelease>>(releasesUrl, ct).ConfigureAwait(false);
 
                 if (releases != null)
                 {
@@ -349,7 +349,7 @@ public sealed class GitHubCellRegistry : IDisposable
             }
 
             // 下载依赖
-            var packageInfo = await DownloadCellAsync(dep.CellId, dep.MinVersion, ct);
+            var packageInfo = await DownloadCellAsync(dep.CellId, dep.MinVersion, ct).ConfigureAwait(false);
             if (packageInfo != null)
             {
                 installed.Add(packageInfo);
@@ -397,11 +397,11 @@ public sealed class GitHubCellRegistry : IDisposable
         {
             try
             {
-                using var response = await _httpClient.GetAsync(asset.DownloadUrl, ct);
+                using var response = await _httpClient.GetAsync(asset.DownloadUrl, ct).ConfigureAwait(false);
                 response.EnsureSuccessStatusCode();
 
                 await using var fileStream = File.Create(localPath);
-                await response.Content.CopyToAsync(fileStream, ct);
+                await response.Content.CopyToAsync(fileStream, ct).ConfigureAwait(false);
 
                 _logger.LogInformation(
                     "Asset downloaded: {Name} size={SizeKB:F1}KB",
@@ -411,7 +411,7 @@ public sealed class GitHubCellRegistry : IDisposable
             catch (Exception ex) when (retry < _config.MaxRetries - 1)
             {
                 _logger.LogWarning(ex, "Download failed, retry {Retry}/{Max}", retry + 1, _config.MaxRetries);
-                await Task.Delay(TimeSpan.FromSeconds(Math.Pow(2, retry)), ct);
+                await Task.Delay(TimeSpan.FromSeconds(Math.Pow(2, retry)), ct).ConfigureAwait(false);
             }
         }
     }
@@ -440,7 +440,7 @@ public sealed class GitHubCellRegistry : IDisposable
         };
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github.v3+json"));
 
-        using var response = await _httpClient.SendAsync(request, ct);
+        using var response = await _httpClient.SendAsync(request, ct).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
 
         _logger.LogInformation(
@@ -496,7 +496,7 @@ public sealed class GitHubCellRegistry : IDisposable
     {
         try
         {
-            return await _httpClient.GetFromJsonAsync<T>(url, ct);
+            return await _httpClient.GetFromJsonAsync<T>(url, ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -509,9 +509,9 @@ public sealed class GitHubCellRegistry : IDisposable
     {
         try
         {
-            var response = await _httpClient.PostAsJsonAsync(url, data, ct);
+            var response = await _httpClient.PostAsJsonAsync(url, data, ct).ConfigureAwait(false);
             response.EnsureSuccessStatusCode();
-            return await response.Content.ReadFromJsonAsync<T>(ct);
+            return await response.Content.ReadFromJsonAsync<T>(ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {

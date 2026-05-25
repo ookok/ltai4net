@@ -20,7 +20,7 @@ public static class LTAIApiEndpoints
             try
             {
                 using var reader = new StreamReader(context.Request.Body);
-                var body = await reader.ReadToEndAsync(cancellationToken);
+                var body = await reader.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
                 var request = JsonSerializer.Deserialize<ChatRequest>(body);
 
                 if (request == null || string.IsNullOrWhiteSpace(request.Query))
@@ -31,7 +31,7 @@ public static class LTAIApiEndpoints
 
                 logger.LogInformation("Chat request: {Query}", request.Query[..Math.Min(request.Query.Length, 200)]);
 
-                var response = await system.ChatAsync(request.Query, cancellationToken);
+                var response = await system.ChatAsync(request.Query, cancellationToken).ConfigureAwait(false);
 
                 return Results.Json(new ChatResponse
                 {
@@ -58,7 +58,7 @@ public static class LTAIApiEndpoints
             CancellationToken cancellationToken) =>
         {
             using var reader = new StreamReader(context.Request.Body);
-            var body = await reader.ReadToEndAsync(cancellationToken);
+            var body = await reader.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
             var request = JsonSerializer.Deserialize<ChatRequest>(body);
 
             if (request == null || string.IsNullOrWhiteSpace(request.Query))
@@ -79,7 +79,7 @@ public static class LTAIApiEndpoints
                 {
                     var sseData = JsonSerializer.Serialize(new { text = token });
                     await context.Response.WriteAsync($"data: {sseData}\n\n", cancellationToken);
-                    await context.Response.Body.FlushAsync(cancellationToken);
+                    await context.Response.Body.FlushAsync(cancellationToken).ConfigureAwait(false);
                 }
             }
             catch (OperationCanceledException) { }
@@ -121,7 +121,7 @@ public static class LTAIApiEndpoints
             return Results.Json(new
             {
                 mode = system.Mode.ToString(),
-                version = "7.0.0",
+                version = "0.51.0",
                 runtime = "LTAI .NET 10",
                 dna = dnaInfo
             });

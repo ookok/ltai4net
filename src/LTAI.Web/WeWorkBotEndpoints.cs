@@ -36,7 +36,7 @@ public static class WeWorkBotEndpoints
             }
 
             context.Response.ContentType = "text/plain";
-            await context.Response.WriteAsync(result);
+            await context.Response.WriteAsync(result).ConfigureAwait(false);
         });
 
         endpoints.MapPost("/api/bot/wework", async (HttpContext context) =>
@@ -44,7 +44,7 @@ public static class WeWorkBotEndpoints
             try
             {
                 using var reader = new StreamReader(context.Request.Body, Encoding.UTF8);
-                var xmlBody = await reader.ReadToEndAsync();
+                var xmlBody = await reader.ReadToEndAsync().ConfigureAwait(false);
 
                 if (string.IsNullOrWhiteSpace(xmlBody))
                 {
@@ -54,7 +54,7 @@ public static class WeWorkBotEndpoints
                 }
 
                 var bot = endpoints.ServiceProvider.GetRequiredService<WeWorkBot>();
-                var reply = await bot.HandleMessageAsync(xmlBody);
+                var reply = await bot.HandleMessageAsync(xmlBody).ConfigureAwait(false);
 
                 if (string.IsNullOrEmpty(reply))
                 {
@@ -64,7 +64,7 @@ public static class WeWorkBotEndpoints
                 else
                 {
                     context.Response.ContentType = "application/xml";
-                    await context.Response.WriteAsync(reply);
+                    await context.Response.WriteAsync(reply).ConfigureAwait(false);
                 }
             }
             catch (Exception ex)

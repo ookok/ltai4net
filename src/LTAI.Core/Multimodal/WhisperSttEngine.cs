@@ -11,7 +11,7 @@ public sealed class WhisperTranscribeResult
     public string Error { get; set; } = "";
 }
 
-public sealed class WhisperSttEngine
+public sealed class WhisperSttEngine : IDisposable
 {
     private readonly HttpClient _http;
     private readonly string _ollamaUrl;
@@ -23,6 +23,8 @@ public sealed class WhisperSttEngine
         _ollamaUrl = ollamaUrl.TrimEnd('/');
         _sttModel = sttModel;
     }
+
+    public void Dispose() { _http?.Dispose(); }
 
     public string OllamaUrl => _ollamaUrl;
     public string SttModel => _sttModel;
@@ -49,7 +51,7 @@ public sealed class WhisperSttEngine
             var response = await _http.PostAsync($"{_ollamaUrl}/api/generate", content);
             if (response.IsSuccessStatusCode)
             {
-                var respJson = await response.Content.ReadAsStringAsync();
+                var respJson = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
                 using var doc = JsonDocument.Parse(respJson);
                 var text = doc.RootElement.TryGetProperty("response", out var r) ? r.GetString()?.Trim() ?? "" : "";
 

@@ -186,7 +186,7 @@ public sealed class FastSlowGovernorPipeline : IDisposable
         {
             try
             {
-                await ReplanForCellAsync(cellId, invalidationEvent);
+                await ReplanForCellAsync(cellId, invalidationEvent).ConfigureAwait(false);
 
                 lock (_lock)
                 {
@@ -217,7 +217,7 @@ public sealed class FastSlowGovernorPipeline : IDisposable
 
         // 2. 使用 FastSlowCellAI 生成新计划
         var replanQuery = BuildReplanQuery(cellId, invalidationEvent, relevantEpisodes);
-        var replanResult = await _fastSlowAI.ProcessAsync(replanQuery);
+        var replanResult = await _fastSlowAI.ProcessAsync(replanQuery).ConfigureAwait(false);
 
         // 3. 创建新的分层计划
         if (replanResult.Activated)

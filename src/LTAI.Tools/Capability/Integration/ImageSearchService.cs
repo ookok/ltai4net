@@ -14,7 +14,7 @@ public sealed record ImageSearchResult(
     int Height,
     string Source);
 
-public sealed class ImageSearchService
+public sealed class ImageSearchService : IDisposable
 {
     private readonly HttpClient _http;
     private readonly ILogger<ImageSearchService> _logger;
@@ -27,6 +27,8 @@ public sealed class ImageSearchService
         _logger = logger ?? NullLogger<ImageSearchService>.Instance;
         _http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
     }
+
+    public void Dispose() { _http?.Dispose(); }
 
     public async Task<List<ImageSearchResult>> SearchAsync(string query, int count = 10, string source = "unsplash")
     {
@@ -48,7 +50,7 @@ public sealed class ImageSearchService
         try
         {
             var url = $"https://api.unsplash.com/search/photos?query={Uri.EscapeDataString(query)}&per_page={Math.Min(count, 30)}&client_id={UnsplashAccessKey}";
-            var json = await _http.GetStringAsync(url);
+            var json = await _http.GetStringAsync(url).ConfigureAwait(false);
             using var doc = JsonDocument.Parse(json);
 
             var results = new List<ImageSearchResult>();
@@ -85,7 +87,7 @@ public sealed class ImageSearchService
         try
         {
             var url = $"https://pixabay.com/api/?key={PixabayApiKey}&q={Uri.EscapeDataString(query)}&per_page={Math.Min(count, 200)}&image_type=photo";
-            var json = await _http.GetStringAsync(url);
+            var json = await _http.GetStringAsync(url).ConfigureAwait(false);
             using var doc = JsonDocument.Parse(json);
 
             var results = new List<ImageSearchResult>();

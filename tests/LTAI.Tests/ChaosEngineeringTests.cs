@@ -10,7 +10,7 @@ using Xunit;
 namespace LTAI.Tests;
 
 /// <summary>
-/// Chaos Engineering Tests for LTAI v7.0.
+/// Chaos Engineering Tests for LTAI V0.51.
 /// Injects failures via ChaoticChatClient + ChaosRule.
 /// Verifies graceful degradation — no 500s leak, fallback paths activated, warnings logged.
 /// </summary>

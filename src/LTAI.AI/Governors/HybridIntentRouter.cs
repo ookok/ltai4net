@@ -66,7 +66,7 @@ public sealed class HybridIntentRouter
 
         if (_l0Embedder != null)
         {
-            var l0Result = await ClassifyWithL0Async(query, ct);
+            var l0Result = await ClassifyWithL0Async(query, ct).ConfigureAwait(false);
             if (l0Result != null)
             {
                 _logger.LogDebug("L0 fallback: label={Label}, similarity={Sim:F2}", l0Result.Label, l0Result.Confidence);
@@ -82,7 +82,7 @@ public sealed class HybridIntentRouter
     {
         try
         {
-            var queryEmbedding = await _l0Embedder.GenerateAsync(query, cancellationToken: ct);
+            var queryEmbedding = await _l0Embedder!.GenerateAsync(query, cancellationToken: ct).ConfigureAwait(false);
             var queryVector = queryEmbedding.Vector.ToArray();
 
             float bestSimilarity = 0;
@@ -90,7 +90,7 @@ public sealed class HybridIntentRouter
 
             foreach (var example in _knownExamples.Values)
             {
-                var exampleEmbedding = await _l0Embedder.GenerateAsync(example.Text, cancellationToken: ct);
+                var exampleEmbedding = await _l0Embedder!.GenerateAsync(example.Text, cancellationToken: ct).ConfigureAwait(false);
                 var exampleVector = exampleEmbedding.Vector.ToArray();
                 var similarity = CosineSimilarity(queryVector, exampleVector);
 

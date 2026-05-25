@@ -124,7 +124,7 @@ public sealed class HumanInTheLoopReview
 
         try
         {
-            return await tcs.Task.WaitAsync(cts.Token);
+            return await tcs.Task.WaitAsync(cts.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {

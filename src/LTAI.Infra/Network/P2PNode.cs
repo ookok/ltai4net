@@ -66,7 +66,7 @@ public sealed class P2PNode : IP2PNode, IAsyncDisposable
             _logger.LogWarning(ex, "Failed to bind P2P listener on port {Port}. Running in outbound-only mode.", port);
         }
 
-        await AnnounceSelfAsync(cancellationToken);
+        await AnnounceSelfAsync(cancellationToken).ConfigureAwait(false);
     }
 
     public async Task StopAsync(CancellationToken cancellationToken = default)
@@ -92,14 +92,14 @@ public sealed class P2PNode : IP2PNode, IAsyncDisposable
 
         if (!string.IsNullOrEmpty(message.ToPeer) && _knownPeers.TryGetValue(message.ToPeer, out var target))
         {
-            await SendToPeerAsync(target, json, message, cancellationToken);
+            await SendToPeerAsync(target, json, message, cancellationToken).ConfigureAwait(false);
         }
         else
         {
             var tasks = _knownPeers.Values
                 .Where(p => p.IsActive && p.PeerId != PeerId)
                 .Select(p => SendToPeerAsync(p, json, message, cancellationToken));
-            await Task.WhenAll(tasks);
+            await Task.WhenAll(tasks).ConfigureAwait(false);
         }
     }
 
@@ -110,7 +110,7 @@ public sealed class P2PNode : IP2PNode, IAsyncDisposable
         {
             var url = $"http://{peer.Address}:{peer.Port}/api/p2p/messages";
             var content = new StringContent(json, Encoding.UTF8, "application/json");
-            var response = await client.PostAsync(url, content, ct);
+            var response = await client.PostAsync(url, content, ct).ConfigureAwait(false);
             if (response.IsSuccessStatusCode)
                 _logger.LogDebug("Message delivered to {PeerId} at {Address}:{Port}", peer.PeerId, peer.Address, peer.Port);
             else
@@ -162,7 +162,7 @@ public sealed class P2PNode : IP2PNode, IAsyncDisposable
 
         if (!string.IsNullOrEmpty(_options.Value.Network.DiscoveryEndpoint))
         {
-            await AnnounceToDiscoveryAsync(peer, cancellationToken);
+            await AnnounceToDiscoveryAsync(peer, cancellationToken).ConfigureAwait(false);
         }
     }
 
@@ -180,7 +180,7 @@ public sealed class P2PNode : IP2PNode, IAsyncDisposable
             Metadata = new Dictionary<string, string> { ["role"] = "ltai-node" }
         };
 
-        await AnnounceToDiscoveryAsync(self, ct);
+        await AnnounceToDiscoveryAsync(self, ct).ConfigureAwait(false);
     }
 
     private async Task AnnounceToDiscoveryAsync(PeerInfo peer, CancellationToken cancellationToken)
@@ -204,7 +204,7 @@ public sealed class P2PNode : IP2PNode, IAsyncDisposable
 
             if (response.IsSuccessStatusCode)
             {
-                var responseJson = await response.Content.ReadAsStringAsync(cancellationToken);
+                var responseJson = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
                 var discoveryResponse = JsonSerializer.Deserialize<DiscoveryResponse>(responseJson, JsonOpts);
                 if (discoveryResponse?.KnownPeers != null)
                 {
@@ -229,8 +229,8 @@ public sealed class P2PNode : IP2PNode, IAsyncDisposable
         {
             try
             {
-                var context = await _listener.GetContextAsync();
-                await _requestSemaphore.WaitAsync(ct);
+                var context = await _listener.GetContextAsync().ConfigureAwait(false);
+                await _requestSemaphore.WaitAsync(ct).ConfigureAwait(false);
                 var task = Task.Run(async () =>
                 {
                     try { await HandleRequest(context, ct); }
@@ -260,7 +260,7 @@ public sealed class P2PNode : IP2PNode, IAsyncDisposable
             if (request.HttpMethod == "POST" && request.Url?.AbsolutePath == "/api/p2p/messages")
             {
                 using var reader = new StreamReader(request.InputStream);
-                var body = await reader.ReadToEndAsync(ct);
+                var body = await reader.ReadToEndAsync(ct).ConfigureAwait(false);
                 var message = JsonSerializer.Deserialize<NetworkMessage>(body, JsonOpts);
 
                 if (message != null)
@@ -275,7 +275,7 @@ public sealed class P2PNode : IP2PNode, IAsyncDisposable
                     var ackBytes = Encoding.UTF8.GetBytes(ack);
                     response.ContentLength64 = ackBytes.Length;
                     response.ContentType = "application/json";
-                    await response.OutputStream.WriteAsync(ackBytes, ct);
+                    await response.OutputStream.WriteAsync(ackBytes, ct).ConfigureAwait(false);
                 }
                 else
                 {
@@ -289,7 +289,7 @@ public sealed class P2PNode : IP2PNode, IAsyncDisposable
                 var bytes = Encoding.UTF8.GetBytes(json);
                 response.ContentLength64 = bytes.Length;
                 response.ContentType = "application/json";
-                await response.OutputStream.WriteAsync(bytes, ct);
+                await response.OutputStream.WriteAsync(bytes, ct).ConfigureAwait(false);
                 response.StatusCode = 200;
             }
             else if (request.HttpMethod == "GET" && request.Url?.AbsolutePath == "/api/p2p/health")
@@ -299,7 +299,7 @@ public sealed class P2PNode : IP2PNode, IAsyncDisposable
                 var bytes = Encoding.UTF8.GetBytes(json);
                 response.ContentLength64 = bytes.Length;
                 response.ContentType = "application/json";
-                await response.OutputStream.WriteAsync(bytes, ct);
+                await response.OutputStream.WriteAsync(bytes, ct).ConfigureAwait(false);
                 response.StatusCode = 200;
             }
             else
@@ -327,7 +327,7 @@ public sealed class P2PNode : IP2PNode, IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        await StopAsync();
+        await StopAsync().ConfigureAwait(false);
         _requestSemaphore.Dispose();
         GC.SuppressFinalize(this);
     }

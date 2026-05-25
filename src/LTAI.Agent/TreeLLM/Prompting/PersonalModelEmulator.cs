@@ -30,7 +30,7 @@ public sealed class PersonalModelEmulator
 
         parts.Add(BuildIdentityBlock(opts));
 
-        var preferenceBlock = await BuildPreferenceBlock(sessionId, currentQuery, opts);
+        var preferenceBlock = await BuildPreferenceBlock(sessionId, currentQuery, opts).ConfigureAwait(false);
         if (!string.IsNullOrEmpty(preferenceBlock))
             parts.Add(preferenceBlock);
 
@@ -42,7 +42,7 @@ public sealed class PersonalModelEmulator
         if (!string.IsNullOrEmpty(behavioralBlock))
             parts.Add(behavioralBlock);
 
-        var memoryBlock = await BuildMemoryBlock(sessionId, currentQuery, opts);
+        var memoryBlock = await BuildMemoryBlock(sessionId, currentQuery, opts).ConfigureAwait(false);
         if (!string.IsNullOrEmpty(memoryBlock))
             parts.Add(memoryBlock);
 
@@ -60,13 +60,13 @@ public sealed class PersonalModelEmulator
     {
         var perOpts = personalOpts ?? new PersonalModelOptions();
 
-        var personalSystemPrompt = await BuildPersonalSystemPrompt(sessionId, question, perOpts);
+        var personalSystemPrompt = await BuildPersonalSystemPrompt(sessionId, question, perOpts).ConfigureAwait(false);
         promptOpts.SessionContext = (promptOpts.SessionContext ?? "") + "\n" + personalSystemPrompt;
 
         var longTermDocs = _agenticRAG.Search(question, RAGMode.Iterative,
             domain: promptOpts.Domain ?? "general");
 
-        var (sysPrompt, userPrompt) = await _promptBuilder.BuildPrompt(question, longTermDocs, promptOpts);
+        var (sysPrompt, userPrompt) = await _promptBuilder.BuildPrompt(question, longTermDocs, promptOpts).ConfigureAwait(false);
 
         return new PersonalContextResult
         {
@@ -156,7 +156,7 @@ public sealed class PersonalModelEmulator
 
         try
         {
-            var (memoryEvents, _) = await _structMemory.RetrieveForQuery(query);
+            var (memoryEvents, _) = await _structMemory.RetrieveForQuery(query).ConfigureAwait(false);
             if (memoryEvents.Count == 0) return "";
 
             var sb = new StringBuilder();

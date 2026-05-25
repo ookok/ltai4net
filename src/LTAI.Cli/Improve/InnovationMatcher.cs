@@ -94,7 +94,10 @@ public sealed class InnovationMatcher
 
     private static string GenerateIntegrationSuggestion(PaperInsight paper, string module)
     {
-        return paper.KeyInnovations.FirstOrDefault() switch
+        var firstInnovation = paper.KeyInnovations?.FirstOrDefault();
+        if (firstInnovation is null)
+            return $"Explore integration of {paper.Title} concepts into {module}.";
+        return firstInnovation switch
         {
             var s when s.Contains("Self-evolving") => $"Integrate self-training loop into {module}. Collect high-quality samples and use for in-context learning.",
             var s when s.Contains("Latent-space") => $"Optimize {module} latent space transfers. Consider training RecursiveLink for better cross-model alignment.",

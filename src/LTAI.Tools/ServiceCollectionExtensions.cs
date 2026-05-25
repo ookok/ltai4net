@@ -21,6 +21,7 @@ public static class ServiceCollectionExtensions
     }
 
     public static AITool[] CreateFileSystemTools() =>
+#pragma warning disable CS0618
     [
         AIFunctionFactory.Create(FileSystemTools.ReadFileAsync, nameof(FileSystemTools.ReadFileAsync)),
         AIFunctionFactory.Create(FileSystemTools.WriteFileAsync, nameof(FileSystemTools.WriteFileAsync)),
@@ -29,6 +30,7 @@ public static class ServiceCollectionExtensions
         AIFunctionFactory.Create(FileSystemTools.DeleteFile, nameof(FileSystemTools.DeleteFile)),
         AIFunctionFactory.Create(FileSystemTools.GetMetadata, nameof(FileSystemTools.GetMetadata)),
     ];
+#pragma warning restore CS0618
 
     public static AITool[] CreateHttpTools() =>
     [

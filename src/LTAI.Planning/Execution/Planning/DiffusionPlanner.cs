@@ -48,7 +48,7 @@ public sealed class DiffusionPlanner
         string skeleton;
         if (llmCall is not null)
         {
-            skeleton = await llmCall(skeletonPrompt, normalizedDomain, cancellationToken);
+            skeleton = await llmCall(skeletonPrompt, normalizedDomain, cancellationToken).ConfigureAwait(false);
         }
         else
         {
@@ -68,7 +68,7 @@ public sealed class DiffusionPlanner
         string toolsResponse;
         if (llmCall is not null)
         {
-            toolsResponse = await llmCall(toolsPrompt, normalizedDomain, cancellationToken);
+            toolsResponse = await llmCall(toolsPrompt, normalizedDomain, cancellationToken).ConfigureAwait(false);
         }
         else
         {

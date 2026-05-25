@@ -8,7 +8,6 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace LTAI.Web;
@@ -35,7 +34,7 @@ public static class DocRoutesEndpoints
             try
             {
                 using var reader = new StreamReader(context.Request.Body);
-                var body = await reader.ReadToEndAsync();
+                var body = await reader.ReadToEndAsync().ConfigureAwait(false);
                 var request = JsonSerializer.Deserialize<DocCreateRequest>(body);
 
                 var templateType = request?.TemplateType ?? "meeting_minutes";
@@ -52,16 +51,16 @@ public static class DocRoutesEndpoints
                 }
 
                 var docPath = Path.Combine(DocsRoot, $"{docId}.md");
-                await File.WriteAllTextAsync(docPath, content, Encoding.UTF8);
+                await File.WriteAllTextAsync(docPath, content, Encoding.UTF8).ConfigureAwait(false);
 
                 context.Response.ContentType = "application/json";
-                await context.Response.WriteAsync(JsonSerializer.Serialize(new { id = docId, path = docPath }));
+                await context.Response.WriteAsync(JsonSerializer.Serialize(new { id = docId, path = docPath })).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
                 context.Response.StatusCode = 500;
                 context.Response.ContentType = "application/json";
-                await context.Response.WriteAsync(JsonSerializer.Serialize(new { error = ex.Message }));
+                await context.Response.WriteAsync(JsonSerializer.Serialize(new { error = ex.Message })).ConfigureAwait(false);
             }
         });
 
@@ -70,7 +69,7 @@ public static class DocRoutesEndpoints
             try
             {
                 using var reader = new StreamReader(context.Request.Body);
-                var body = await reader.ReadToEndAsync();
+                var body = await reader.ReadToEndAsync().ConfigureAwait(false);
                 var request = JsonSerializer.Deserialize<DocFillRequest>(body);
 
                 if (request == null || string.IsNullOrWhiteSpace(request.DocId))
@@ -90,7 +89,7 @@ public static class DocRoutesEndpoints
                     return;
                 }
 
-                var content = await File.ReadAllTextAsync(docPath, Encoding.UTF8);
+                var content = await File.ReadAllTextAsync(docPath, Encoding.UTF8).ConfigureAwait(false);
 
                 if (request.Fields != null)
                 {
@@ -103,20 +102,20 @@ public static class DocRoutesEndpoints
                     }
                 }
 
-                await File.WriteAllTextAsync(docPath, content, Encoding.UTF8);
+                await File.WriteAllTextAsync(docPath, content, Encoding.UTF8).ConfigureAwait(false);
 
                 context.Response.ContentType = "application/json";
                 await context.Response.WriteAsync(JsonSerializer.Serialize(new
                 {
                     doc_id = request.DocId,
                     content
-                }));
+                })).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
                 context.Response.StatusCode = 500;
                 context.Response.ContentType = "application/json";
-                await context.Response.WriteAsync(JsonSerializer.Serialize(new { error = ex.Message }));
+                await context.Response.WriteAsync(JsonSerializer.Serialize(new { error = ex.Message })).ConfigureAwait(false);
             }
         });
 
@@ -125,7 +124,7 @@ public static class DocRoutesEndpoints
             try
             {
                 using var reader = new StreamReader(context.Request.Body);
-                var body = await reader.ReadToEndAsync();
+                var body = await reader.ReadToEndAsync().ConfigureAwait(false);
                 var request = JsonSerializer.Deserialize<DocAnnotateRequest>(body);
 
                 if (request == null || string.IsNullOrWhiteSpace(request.DocId))
@@ -145,7 +144,7 @@ public static class DocRoutesEndpoints
                     return;
                 }
 
-                var content = await File.ReadAllTextAsync(docPath, Encoding.UTF8);
+                var content = await File.ReadAllTextAsync(docPath, Encoding.UTF8).ConfigureAwait(false);
                 var annotations = new StringBuilder();
 
                 if (request.Citations != null && request.Citations.Count > 0)
@@ -159,7 +158,7 @@ public static class DocRoutesEndpoints
                     content += annotations.ToString();
                 }
 
-                await File.WriteAllTextAsync(docPath, content, Encoding.UTF8);
+                await File.WriteAllTextAsync(docPath, content, Encoding.UTF8).ConfigureAwait(false);
 
                 context.Response.ContentType = "application/json";
                 await context.Response.WriteAsync(JsonSerializer.Serialize(new
@@ -167,13 +166,13 @@ public static class DocRoutesEndpoints
                     doc_id = request.DocId,
                     content,
                     citation_count = request.Citations?.Count ?? 0
-                }));
+                })).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
                 context.Response.StatusCode = 500;
                 context.Response.ContentType = "application/json";
-                await context.Response.WriteAsync(JsonSerializer.Serialize(new { error = ex.Message }));
+                await context.Response.WriteAsync(JsonSerializer.Serialize(new { error = ex.Message })).ConfigureAwait(false);
             }
         });
 
@@ -182,7 +181,7 @@ public static class DocRoutesEndpoints
             try
             {
                 using var reader = new StreamReader(context.Request.Body);
-                var body = await reader.ReadToEndAsync();
+                var body = await reader.ReadToEndAsync().ConfigureAwait(false);
                 var request = JsonSerializer.Deserialize<DocReviewRequest>(body);
 
                 string content;
@@ -197,7 +196,7 @@ public static class DocRoutesEndpoints
                         await context.Response.WriteAsync(JsonSerializer.Serialize(new { error = "Document not found" }));
                         return;
                     }
-                    content = await File.ReadAllTextAsync(docPath, Encoding.UTF8);
+                    content = await File.ReadAllTextAsync(docPath, Encoding.UTF8).ConfigureAwait(false);
                 }
                 else if (!string.IsNullOrWhiteSpace(request?.Content))
                 {
@@ -214,13 +213,13 @@ public static class DocRoutesEndpoints
                 var comments = ReviewContent(content);
 
                 context.Response.ContentType = "application/json";
-                await context.Response.WriteAsync(JsonSerializer.Serialize(new { doc_id = request?.DocId, comments }));
+                await context.Response.WriteAsync(JsonSerializer.Serialize(new { doc_id = request?.DocId, comments })).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
                 context.Response.StatusCode = 500;
                 context.Response.ContentType = "application/json";
-                await context.Response.WriteAsync(JsonSerializer.Serialize(new { error = ex.Message }));
+                await context.Response.WriteAsync(JsonSerializer.Serialize(new { error = ex.Message })).ConfigureAwait(false);
             }
         });
 
@@ -253,7 +252,7 @@ public static class DocRoutesEndpoints
                     var rapidOcr = context.RequestServices.GetService<OCREngine>();
                     // Prefer RapidOCR if available (better Chinese, same lightweight ~15MB)
                     if (rapidOcr is not null)
-                        extractedText = await ExtractTextFromDocxWithImagesAsync(stream, rapidOcr, context.RequestAborted);
+                        extractedText = await ExtractTextFromDocxWithImagesAsync(stream, rapidOcr, context.RequestAborted).ConfigureAwait(false);
                     else
                         extractedText = ExtractTextFromDocx(stream);
                 }
@@ -322,13 +321,13 @@ public static class DocRoutesEndpoints
                     word_count = wordCount,
                     heading_count = headingMatches.Count,
                     issues
-                }));
+                })).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
                 context.Response.StatusCode = 500;
                 context.Response.ContentType = "application/json";
-                await context.Response.WriteAsync(JsonSerializer.Serialize(new { error = ex.Message }));
+                await context.Response.WriteAsync(JsonSerializer.Serialize(new { error = ex.Message })).ConfigureAwait(false);
             }
         });
 
@@ -337,7 +336,7 @@ public static class DocRoutesEndpoints
             try
             {
                 using var reader = new StreamReader(context.Request.Body);
-                var body = await reader.ReadToEndAsync();
+                var body = await reader.ReadToEndAsync().ConfigureAwait(false);
                 var request = JsonSerializer.Deserialize<DocDiagramRequest>(body);
 
                 var diagramType = request?.Type ?? "process_flow";
@@ -350,7 +349,7 @@ public static class DocRoutesEndpoints
 
                 if (mermaidGen is not null)
                 {
-                    var result = await mermaidGen.GenerateAsync(description, diagramType, cancellationToken);
+                    var result = await mermaidGen.GenerateAsync(description, diagramType, cancellationToken).ConfigureAwait(false);
                     diagram = result.Html;
                 }
                 else
@@ -360,7 +359,7 @@ public static class DocRoutesEndpoints
                     if (chatClient is not null)
                     {
                         var gen = new MermaidGenerator(chatClient);
-                        var result = await gen.GenerateAsync(description, diagramType, cancellationToken);
+                        var result = await gen.GenerateAsync(description, diagramType, cancellationToken).ConfigureAwait(false);
                         diagram = result.Html;
                     }
                     else
@@ -396,7 +395,7 @@ public static class DocRoutesEndpoints
             try
             {
                 using var reader = new StreamReader(context.Request.Body);
-                var body = await reader.ReadToEndAsync();
+                var body = await reader.ReadToEndAsync().ConfigureAwait(false);
                 var request = JsonSerializer.Deserialize<DocSearchRequest>(body);
 
                 if (request == null || string.IsNullOrWhiteSpace(request.Query))
@@ -415,7 +414,7 @@ public static class DocRoutesEndpoints
                 {
                     try
                     {
-                        var webResults = await searchEngine.SearchAsync(request.Query, maxResults: maxResults);
+                        var webResults = await searchEngine.SearchAsync(request.Query, maxResults: maxResults).ConfigureAwait(false);
                         allResults.AddRange(webResults.Select(r => new
                         {
                             source = "web",
@@ -435,7 +434,7 @@ public static class DocRoutesEndpoints
                         var encoded = Uri.EscapeDataString(request.Query);
                         var url = $"https://html.duckduckgo.com/html/?q={encoded}";
                         using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
-                        var html = await http.GetStringAsync(url);
+                        var html = await http.GetStringAsync(url).ConfigureAwait(false);
                         var linkMatches = Regex.Matches(html, @"<a[^>]*class=""result__a""[^>]*href=""([^""]+)""[^>]*>([^<]+)</a>");
 
                         for (var i = 0; i < Math.Min(linkMatches.Count, maxResults - allResults.Count); i++)
@@ -452,7 +451,7 @@ public static class DocRoutesEndpoints
                     {
                         try
                         {
-                            var docContent = await File.ReadAllTextAsync(file, Encoding.UTF8);
+                            var docContent = await File.ReadAllTextAsync(file, Encoding.UTF8).ConfigureAwait(false);
                             if (docContent.Contains(request.Query, StringComparison.OrdinalIgnoreCase))
                             {
                                 allResults.Add(new
@@ -475,13 +474,13 @@ public static class DocRoutesEndpoints
                     query = request.Query,
                     total = allResults.Count,
                     results = allResults.Take(maxResults)
-                }));
+                })).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
                 context.Response.StatusCode = 500;
                 context.Response.ContentType = "application/json";
-                await context.Response.WriteAsync(JsonSerializer.Serialize(new { error = ex.Message }));
+                await context.Response.WriteAsync(JsonSerializer.Serialize(new { error = ex.Message })).ConfigureAwait(false);
             }
         });
 
@@ -502,7 +501,7 @@ public static class DocRoutesEndpoints
                 },
                 fields = ExtractTemplateFields(Templates[k])
             });
-            await context.Response.WriteAsync(JsonSerializer.Serialize(templateList));
+            await context.Response.WriteAsync(JsonSerializer.Serialize(templateList)).ConfigureAwait(false);
         });
 
         endpoints.MapPost("/api/doc/export", async (HttpContext context) =>
@@ -510,7 +509,7 @@ public static class DocRoutesEndpoints
             try
             {
                 using var reader = new StreamReader(context.Request.Body);
-                var body = await reader.ReadToEndAsync();
+                var body = await reader.ReadToEndAsync().ConfigureAwait(false);
                 var request = JsonSerializer.Deserialize<DocExportRequest>(body);
 
                 if (request == null || string.IsNullOrWhiteSpace(request.DocId))
@@ -530,7 +529,7 @@ public static class DocRoutesEndpoints
                     return;
                 }
 
-                var content = await File.ReadAllTextAsync(docPath, Encoding.UTF8);
+                var content = await File.ReadAllTextAsync(docPath, Encoding.UTF8).ConfigureAwait(false);
                 var format = request.Format?.ToLower() ?? "md";
 
                 string exportedContent;
@@ -560,13 +559,13 @@ public static class DocRoutesEndpoints
 
                 context.Response.ContentType = contentType;
                 context.Response.Headers["Content-Disposition"] = $"attachment; filename=\"{request.DocId}.{format}\"";
-                await context.Response.WriteAsync(exportedContent);
+                await context.Response.WriteAsync(exportedContent).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
                 context.Response.StatusCode = 500;
                 context.Response.ContentType = "application/json";
-                await context.Response.WriteAsync(JsonSerializer.Serialize(new { error = ex.Message }));
+                await context.Response.WriteAsync(JsonSerializer.Serialize(new { error = ex.Message })).ConfigureAwait(false);
             }
         });
     }
@@ -692,7 +691,7 @@ public static class DocRoutesEndpoints
             {
                 using var imgStream = entry.Open();
                 using var ms = new MemoryStream();
-                await imgStream.CopyToAsync(ms, ct);
+                await imgStream.CopyToAsync(ms, ct).ConfigureAwait(false);
                 var imgBytes = ms.ToArray();
 
                 if (imgBytes.Length < 1024)

@@ -35,7 +35,7 @@ public static class CapabilityEndpoints
             CancellationToken cancellationToken) =>
         {
             using var reader = new StreamReader(context.Request.Body);
-            var body = await reader.ReadToEndAsync(cancellationToken);
+            var body = await reader.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
             var request = JsonSerializer.Deserialize<CodeAnalyzeRequest>(body);
 
             if (request == null || string.IsNullOrWhiteSpace(request.Code))
@@ -45,7 +45,7 @@ public static class CapabilityEndpoints
                 ? DetectLanguage(request.Code)
                 : Enum.Parse<CodeLanguage>(request.Language, true);
 
-            var result = await analyzer.AnalyzeAsync(request.Code, lang);
+            var result = await analyzer.AnalyzeAsync(request.Code, lang).ConfigureAwait(false);
             return Results.Json(result);
         });
 
@@ -55,7 +55,7 @@ public static class CapabilityEndpoints
             CancellationToken cancellationToken) =>
         {
             using var reader = new StreamReader(context.Request.Body);
-            var body = await reader.ReadToEndAsync(cancellationToken);
+            var body = await reader.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
             var request = JsonSerializer.Deserialize<CodeAnalyzeRequest>(body);
 
             if (request == null || string.IsNullOrWhiteSpace(request.Code))
@@ -76,12 +76,12 @@ public static class CapabilityEndpoints
             HttpContext context, UnifiedSearchEngine engine, CancellationToken ct) =>
         {
             using var reader = new StreamReader(context.Request.Body);
-            var body = await reader.ReadToEndAsync(ct);
+            var body = await reader.ReadToEndAsync(ct).ConfigureAwait(false);
             var request = JsonSerializer.Deserialize<SearchRequest>(body);
             if (request == null || string.IsNullOrWhiteSpace(request.Query))
                 return Results.Json(new { error = "query required" }, statusCode: 400);
             var sources = request.Sources?.Select(s => Enum.Parse<SearchSource>(s, true)).ToArray();
-            var results = await engine.SearchAsync(request.Query, sources, request.MaxResults ?? 5, ct);
+            var results = await engine.SearchAsync(request.Query, sources, request.MaxResults ?? 5, ct).ConfigureAwait(false);
             return Results.Json(results);
         });
 
@@ -89,64 +89,64 @@ public static class CapabilityEndpoints
             HttpContext context, DocumentProcessor processor, CancellationToken ct) =>
         {
             using var reader = new StreamReader(context.Request.Body);
-            var body = await reader.ReadToEndAsync(ct);
+            var body = await reader.ReadToEndAsync(ct).ConfigureAwait(false);
             var req = JsonSerializer.Deserialize<DocParseRequest>(body);
             if (req == null || string.IsNullOrWhiteSpace(req.FilePath))
                 return Results.Json(new { error = "filePath required" }, statusCode: 400);
-            var text = await processor.ExtractTextAsync(req.FilePath, ct);
-            var sections = await processor.ExtractSectionsAsync(req.FilePath, ct);
+            var text = await processor.ExtractTextAsync(req.FilePath, ct).ConfigureAwait(false);
+            var sections = await processor.ExtractSectionsAsync(req.FilePath, ct).ConfigureAwait(false);
             return Results.Json(new { text, sections });
         });
 
         endpoints.MapPost("/api/reason/math", async (HttpContext ctx, MathReasoner reasoner, CancellationToken ct) =>
         {
             using var r = new StreamReader(ctx.Request.Body);
-            var req = JsonSerializer.Deserialize<ReasonRequest>(await r.ReadToEndAsync(ct));
+            var req = JsonSerializer.Deserialize<ReasonRequest>(await r.ReadToEndAsync(ct).ConfigureAwait(false));
             if (req == null || string.IsNullOrWhiteSpace(req.Query))
                 return Results.Json(new { error = "query required" }, statusCode: 400);
-            var result = await reasoner.SolveAsync(req.Query, ct);
+            var result = await reasoner.SolveAsync(req.Query, ct).ConfigureAwait(false);
             return Results.Json(result);
         });
 
         endpoints.MapPost("/api/reason/logic", async (HttpContext ctx, FormalLogicEngine engine, CancellationToken ct) =>
         {
             using var r = new StreamReader(ctx.Request.Body);
-            var req = JsonSerializer.Deserialize<ReasonRequest>(await r.ReadToEndAsync(ct));
+            var req = JsonSerializer.Deserialize<ReasonRequest>(await r.ReadToEndAsync(ct).ConfigureAwait(false));
             if (req == null || string.IsNullOrWhiteSpace(req.Query))
                 return Results.Json(new { error = "query required" }, statusCode: 400);
             var mode = req.Mode != null ? Enum.Parse<ReasoningMode>(req.Mode, true) : ReasoningMode.Forward;
-            var result = await engine.ReasonAsync(req.Query, mode, ct);
+            var result = await engine.ReasonAsync(req.Query, mode, ct).ConfigureAwait(false);
             return Results.Json(result);
         });
 
         endpoints.MapPost("/api/reason/dialectical", async (HttpContext ctx, DialecticalReasoner reasoner, CancellationToken ct) =>
         {
             using var r = new StreamReader(ctx.Request.Body);
-            var req = JsonSerializer.Deserialize<ReasonRequest>(await r.ReadToEndAsync(ct));
+            var req = JsonSerializer.Deserialize<ReasonRequest>(await r.ReadToEndAsync(ct).ConfigureAwait(false));
             if (req == null || string.IsNullOrWhiteSpace(req.Query))
                 return Results.Json(new { error = "query required" }, statusCode: 400);
-            var result = await reasoner.AnalyzeAsync(req.Query, req.Thesis, ct);
+            var result = await reasoner.AnalyzeAsync(req.Query, req.Thesis, ct).ConfigureAwait(false);
             return Results.Json(result);
         });
 
         endpoints.MapPost("/api/reason/attribution", async (HttpContext ctx, AttributionReasoner reasoner, CancellationToken ct) =>
         {
             using var r = new StreamReader(ctx.Request.Body);
-            var req = JsonSerializer.Deserialize<ReasonRequest>(await r.ReadToEndAsync(ct));
+            var req = JsonSerializer.Deserialize<ReasonRequest>(await r.ReadToEndAsync(ct).ConfigureAwait(false));
             if (req == null || string.IsNullOrWhiteSpace(req.Query))
                 return Results.Json(new { error = "query required" }, statusCode: 400);
-            var result = await reasoner.TraceAsync(req.Query, req.Evidence, ct);
+            var result = await reasoner.TraceAsync(req.Query, req.Evidence, ct).ConfigureAwait(false);
             return Results.Json(result);
         });
 
         endpoints.MapPost("/api/reason", async (HttpContext ctx, ReasoningOrchestrator orch, CancellationToken ct) =>
         {
             using var r = new StreamReader(ctx.Request.Body);
-            var req = JsonSerializer.Deserialize<ReasonRequest>(await r.ReadToEndAsync(ct));
+            var req = JsonSerializer.Deserialize<ReasonRequest>(await r.ReadToEndAsync(ct).ConfigureAwait(false));
             if (req == null || string.IsNullOrWhiteSpace(req.Query))
                 return Results.Json(new { error = "query required" }, statusCode: 400);
             var types = req.Types?.Select(t => Enum.Parse<ReasoningType>(t, true)).ToArray();
-            var report = await orch.ReasonAsync(req.Query, types, ct);
+            var report = await orch.ReasonAsync(req.Query, types, ct).ConfigureAwait(false);
             return Results.Json(report);
         });
 
@@ -165,7 +165,7 @@ public static class CapabilityEndpoints
             var toParts = to.Split(',');
             var fromPoint = new GeoPoint { Lng = double.Parse(fromParts[0]), Lat = double.Parse(fromParts[1]) };
             var toPoint = new GeoPoint { Lng = double.Parse(toParts[0]), Lat = double.Parse(toParts[1]) };
-            return Results.Json(await gis.GetRouteAsync(fromPoint, toPoint, mode, ct: ct));
+            return Results.Json(await gis.GetRouteAsync(fromPoint, toPoint, mode, ct: ct).ConfigureAwait(false));
         });
 
         endpoints.MapGet("/api/gis/weather", async (string city, UnifiedMapService gis, CancellationToken ct) =>
@@ -177,11 +177,11 @@ public static class CapabilityEndpoints
             HttpContext context, TelegramBot bot, CancellationToken ct) =>
         {
             using var reader = new StreamReader(context.Request.Body);
-            var body = await reader.ReadToEndAsync(ct);
+            var body = await reader.ReadToEndAsync(ct).ConfigureAwait(false);
             var req = JsonSerializer.Deserialize<NotifyRequest>(body);
             if (req == null || string.IsNullOrWhiteSpace(req.Message))
                 return Results.Json(new { error = "message required" }, statusCode: 400);
-            var ok = await bot.SendMessageAsync(req.ChatId, req.Message, ct);
+            var ok = await bot.SendMessageAsync(req.ChatId, req.Message, ct).ConfigureAwait(false);
             return Results.Json(new { success = ok });
         });
 
@@ -189,18 +189,18 @@ public static class CapabilityEndpoints
             HttpContext context, WechatWorkNotifier wework, CancellationToken ct) =>
         {
             using var reader = new StreamReader(context.Request.Body);
-            var body = await reader.ReadToEndAsync(ct);
+            var body = await reader.ReadToEndAsync(ct).ConfigureAwait(false);
             var req = JsonSerializer.Deserialize<NotifyRequest>(body);
             if (req == null || string.IsNullOrWhiteSpace(req.Message))
                 return Results.Json(new { error = "message required" }, statusCode: 400);
-            var ok = await wework.SendTextAsync(req.Message, ct: ct);
+            var ok = await wework.SendTextAsync(req.Message, ct: ct).ConfigureAwait(false);
             return Results.Json(new { success = ok });
         });
 
         endpoints.MapGet("/api/update/check", async (
             AutoUpdater updater, CancellationToken ct) =>
         {
-            var result = await updater.CheckForUpdatesAsync(ct);
+            var result = await updater.CheckForUpdatesAsync(ct).ConfigureAwait(false);
             return Results.Json(result);
         });
 
@@ -208,10 +208,10 @@ public static class CapabilityEndpoints
             HttpContext context, MessageGateway gateway, CancellationToken ct) =>
         {
             using var reader = new StreamReader(context.Request.Body);
-            var body = await reader.ReadToEndAsync(ct);
+            var body = await reader.ReadToEndAsync(ct).ConfigureAwait(false);
             var req = JsonSerializer.Deserialize<GatewayMessage>(body);
             if (req == null) return Results.Json(new { error = "invalid request" }, statusCode: 400);
-            var result = await gateway.SendAsync(req);
+            var result = await gateway.SendAsync(req).ConfigureAwait(false);
             return Results.Json(result);
         });
 
@@ -228,8 +228,8 @@ public static class CapabilityEndpoints
             HttpContext context, WeWorkBot bot, CancellationToken ct) =>
         {
             using var reader = new StreamReader(context.Request.Body);
-            var body = await reader.ReadToEndAsync(ct);
-            var reply = await bot.HandleMessageAsync(body);
+            var body = await reader.ReadToEndAsync(ct).ConfigureAwait(false);
+            var reply = await bot.HandleMessageAsync(body).ConfigureAwait(false);
             return reply is not null ? Results.Text(reply, "application/xml") : Results.Ok("success");
         });
 
@@ -237,10 +237,10 @@ public static class CapabilityEndpoints
             HttpContext context, PkgManager pkg, CancellationToken ct) =>
         {
             using var reader = new StreamReader(context.Request.Body);
-            var body = await reader.ReadToEndAsync(ct);
+            var body = await reader.ReadToEndAsync(ct).ConfigureAwait(false);
             var req = JsonSerializer.Deserialize<InstallRequest>(body);
             if (req == null) return Results.Json(new { error = "invalid request" }, statusCode: 400);
-            var result = await pkg.InstallNuGetAsync(req.PackageId, req.Version, req.Source);
+            var result = await pkg.InstallNuGetAsync(req.PackageId, req.Version, req.Source).ConfigureAwait(false);
             return Results.Json(result);
         });
 
@@ -270,13 +270,13 @@ public static class CapabilityEndpoints
                 if (file is not null)
                 {
                     using var reader = new StreamReader(file.OpenReadStream());
-                    mdContent = await reader.ReadToEndAsync();
+                    mdContent = await reader.ReadToEndAsync().ConfigureAwait(false);
                 }
             }
             if (string.IsNullOrEmpty(mdContent))
             {
                 using var reader = new StreamReader(context.Request.Body);
-                mdContent = await reader.ReadToEndAsync();
+                mdContent = await reader.ReadToEndAsync().ConfigureAwait(false);
             }
 
             var discovery = context.RequestServices.GetRequiredService<SkillDiscoveryManager>();
@@ -300,19 +300,19 @@ public static class CapabilityEndpoints
         endpoints.MapPost("/api/pipeline/format", (string text) =>
             Results.Ok(PipelineEngine.Format(text)));
 
-        endpoints.MapPost("/api/codegraph/index", async (CodeGraph.CodeGraph graph) =>
+        endpoints.MapPost("/api/codegraph/index", async (CodeGraphEnhanced graph) =>
         {
-            await graph.IndexAsync();
+            await graph.IndexAsync().ConfigureAwait(false);
             return Results.Ok(graph.Stats());
         });
 
-        endpoints.MapGet("/api/codegraph/search", (CodeGraph.CodeGraph graph, string query) =>
+        endpoints.MapGet("/api/codegraph/search", (CodeGraphEnhanced graph, string query) =>
             Results.Ok(graph.Search(query)));
 
-        endpoints.MapGet("/api/codegraph/hubs", (CodeGraph.CodeGraph graph, int topN = 10) =>
+        endpoints.MapGet("/api/codegraph/hubs", (CodeGraphEnhanced graph, int topN = 10) =>
             Results.Ok(graph.FindHubs(topN)));
 
-        endpoints.MapGet("/api/codegraph/blast", (CodeGraph.CodeGraph graph, string entity, int maxDepth = 2) =>
+        endpoints.MapGet("/api/codegraph/blast", (CodeGraphEnhanced graph, string entity, int maxDepth = 2) =>
             Results.Ok(graph.BlastRadius(entity, maxDepth)));
 
         endpoints.MapPost("/api/crawler/fetch", async (LightCrawler crawler, string url) =>
@@ -326,7 +326,7 @@ public static class CapabilityEndpoints
 
         endpoints.MapPost("/api/evolution/document", async (SelfDocumenter doc) =>
         {
-            var result = await doc.GenerateAsync();
+            var result = await doc.GenerateAsync().ConfigureAwait(false);
             return Results.Ok(new { title = result.Title, sections = result.Sections.Count });
         });
 
@@ -355,8 +355,8 @@ public static class CapabilityEndpoints
         {
             if (context.WebSockets.IsWebSocketRequest)
             {
-                using var ws = await context.WebSockets.AcceptWebSocketAsync();
-                await HandleLspWebSocket(ws, lspServer);
+                using var ws = await context.WebSockets.AcceptWebSocketAsync().ConfigureAwait(false);
+                await HandleLspWebSocket(ws, lspServer).ConfigureAwait(false);
             }
             else
             {
@@ -373,17 +373,17 @@ public static class CapabilityEndpoints
         var buffer = new byte[1024 * 64];
         while (ws.State == WebSocketState.Open)
         {
-            var result = await ws.ReceiveAsync(new ArraySegment<byte>(buffer), CancellationToken.None);
+            var result = await ws.ReceiveAsync(new ArraySegment<byte>(buffer), CancellationToken.None).ConfigureAwait(false);
             if (result.MessageType == WebSocketMessageType.Close) break;
 
             var json = Encoding.UTF8.GetString(buffer, 0, result.Count);
-            var response = await lspServer.HandleMessageAsync(json);
+            var response = await lspServer.HandleMessageAsync(json).ConfigureAwait(false);
 
             if (response != null)
             {
                 var responseBytes = Encoding.UTF8.GetBytes(response);
                 await ws.SendAsync(new ArraySegment<byte>(responseBytes),
-                    WebSocketMessageType.Text, true, CancellationToken.None);
+                    WebSocketMessageType.Text, true, CancellationToken.None).ConfigureAwait(false);
             }
         }
     }

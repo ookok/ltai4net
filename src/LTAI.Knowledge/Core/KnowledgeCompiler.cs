@@ -66,8 +66,8 @@ public sealed class KnowledgeCompiler
             "KnowledgeCompiler: starting compile domain={Domain} task={Task} evals={Evals}",
             domain, taskDescription, evals.Count);
 
-        string curationStrategy = await DiscoverInitialStrategy(domain, taskDescription, ct);
-        var discoveredFields = await DiscoverFields(domain, taskDescription, evals, ct);
+        string curationStrategy = await DiscoverInitialStrategy(domain, taskDescription, ct).ConfigureAwait(false);
+        var discoveredFields = await DiscoverFields(domain, taskDescription, evals, ct).ConfigureAwait(false);
 
         var iterations = new List<CompilerIteration>();
         double bestScore = 0;
@@ -79,9 +79,9 @@ public sealed class KnowledgeCompiler
             var compiled = await CompileIteration(
                 artifactId, domain, taskDescription,
                 curationStrategy, discoveredFields,
-                sourceDocumentIds, ct);
+                sourceDocumentIds, ct).ConfigureAwait(false);
 
-            var (score, correct, total) = await EvaluateArtifact(compiled, evals, ct);
+            var (score, correct, total) = await EvaluateArtifact(compiled, evals, ct).ConfigureAwait(false);
 
             var record = new CompilerIteration
             {
@@ -114,8 +114,8 @@ public sealed class KnowledgeCompiler
             if (score >= 0.9) break;
 
             curationStrategy = await RefineStrategy(
-                curationStrategy, score, correct, total, evals.Count, ct);
-            discoveredFields = await DiscoverFields(domain, taskDescription, evals, ct);
+                curationStrategy, score, correct, total, evals.Count, ct).ConfigureAwait(false);
+            discoveredFields = await DiscoverFields(domain, taskDescription, evals, ct).ConfigureAwait(false);
         }
 
         _iterationLogs[artifactId] = iterations;
@@ -143,7 +143,7 @@ public sealed class KnowledgeCompiler
             Return only valid JSON, no markdown.
             """;
 
-        var response = await _chatClient.GetResponseAsync(prompt, cancellationToken: ct);
+        var response = await _chatClient.GetResponseAsync(prompt, cancellationToken: ct).ConfigureAwait(false);
         return response.Text;
     }
 
@@ -167,7 +167,7 @@ public sealed class KnowledgeCompiler
             Example: ["company_name (string)", "revenue_usd (number)", "fiscal_year (number)"]
             """;
 
-        var response = await _chatClient.GetResponseAsync(prompt, cancellationToken: ct);
+        var response = await _chatClient.GetResponseAsync(prompt, cancellationToken: ct).ConfigureAwait(false);
         return ParseFieldList(response.Text, expectedFields);
     }
 
@@ -197,7 +197,7 @@ public sealed class KnowledgeCompiler
                 "Return JSON: {\"value\": \"...\", \"confidence\": 0.0-1.0, \"evidence\": \"...\"}"
             );
 
-            var response = await _chatClient.GetResponseAsync(evidencePrompt, cancellationToken: ct);
+            var response = await _chatClient.GetResponseAsync(evidencePrompt, cancellationToken: ct).ConfigureAwait(false);
             var (value, confidence, evidence) = ParseEvidenceResponse(response.Text);
 
             var citations = new List<SourceCitation>();
@@ -272,7 +272,7 @@ public sealed class KnowledgeCompiler
                 "Return JSON: {\"correct_count\": N, \"total_fields\": N, \"details\": [{\"field\": \"...\", \"correct\": true/false, \"reason\": \"...\"}]}"
             );
 
-            var response = await _chatClient.GetResponseAsync(prompt, cancellationToken: ct);
+            var response = await _chatClient.GetResponseAsync(prompt, cancellationToken: ct).ConfigureAwait(false);
             var (c, _) = ParseEvalResponse(response.Text);
             correct += c;
         }
@@ -299,7 +299,7 @@ public sealed class KnowledgeCompiler
             Return only valid JSON.
             """;
 
-        var response = await _chatClient.GetResponseAsync(prompt, cancellationToken: ct);
+        var response = await _chatClient.GetResponseAsync(prompt, cancellationToken: ct).ConfigureAwait(false);
         return response.Text.Length > 50 ? response.Text : currentStrategy;
     }
 

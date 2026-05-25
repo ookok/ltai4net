@@ -56,7 +56,7 @@ public static class CodeApiEndpoints
                 .ToList();
 
             context.Response.ContentType = "application/json";
-            await context.Response.WriteAsync(JsonSerializer.Serialize(dirs));
+            await context.Response.WriteAsync(JsonSerializer.Serialize(dirs)).ConfigureAwait(false);
         });
 
         endpoints.MapPost("/api/code/projects", async (HttpContext context) =>
@@ -64,7 +64,7 @@ public static class CodeApiEndpoints
             try
             {
                 using var reader = new StreamReader(context.Request.Body);
-                var body = await reader.ReadToEndAsync();
+                var body = await reader.ReadToEndAsync().ConfigureAwait(false);
                 var request = JsonSerializer.Deserialize<CreateProjectRequest>(body);
 
                 if (request == null || string.IsNullOrWhiteSpace(request.Name))
@@ -89,13 +89,13 @@ public static class CodeApiEndpoints
                 await File.WriteAllTextAsync(gitkeep, "");
 
                 context.Response.ContentType = "application/json";
-                await context.Response.WriteAsync(JsonSerializer.Serialize(new { name = request.Name, created = true }));
+                await context.Response.WriteAsync(JsonSerializer.Serialize(new { name = request.Name, created = true })).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
                 context.Response.StatusCode = 500;
                 context.Response.ContentType = "application/json";
-                await context.Response.WriteAsync(JsonSerializer.Serialize(new { error = ex.Message }));
+                await context.Response.WriteAsync(JsonSerializer.Serialize(new { error = ex.Message })).ConfigureAwait(false);
             }
         });
 
@@ -122,13 +122,13 @@ public static class CodeApiEndpoints
             {
                 Directory.Delete(projectDir, true);
                 context.Response.ContentType = "application/json";
-                await context.Response.WriteAsync(JsonSerializer.Serialize(new { name, deleted = true }));
+                await context.Response.WriteAsync(JsonSerializer.Serialize(new { name, deleted = true })).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
                 context.Response.StatusCode = 500;
                 context.Response.ContentType = "application/json";
-                await context.Response.WriteAsync(JsonSerializer.Serialize(new { error = ex.Message }));
+                await context.Response.WriteAsync(JsonSerializer.Serialize(new { error = ex.Message })).ConfigureAwait(false);
             }
         });
 
@@ -159,7 +159,7 @@ public static class CodeApiEndpoints
             CollectFiles(targetPath, targetPath, items);
 
             context.Response.ContentType = "application/json";
-            await context.Response.WriteAsync(JsonSerializer.Serialize(items));
+            await context.Response.WriteAsync(JsonSerializer.Serialize(items)).ConfigureAwait(false);
         });
 
         endpoints.MapGet("/api/code/file", async (HttpContext context) =>
@@ -184,7 +184,7 @@ public static class CodeApiEndpoints
                 return;
             }
 
-            var content = await File.ReadAllTextAsync(filePath, Encoding.UTF8);
+            var content = await File.ReadAllTextAsync(filePath, Encoding.UTF8).ConfigureAwait(false);
             var ext = Path.GetExtension(filePath);
             var language = LanguageMap.GetValueOrDefault(ext, "");
 
@@ -196,7 +196,7 @@ public static class CodeApiEndpoints
                 language,
                 extension = ext,
                 size = new FileInfo(filePath).Length
-            }));
+            })).ConfigureAwait(false);
         });
 
         endpoints.MapPut("/api/code/file", async (HttpContext context) =>
@@ -204,7 +204,7 @@ public static class CodeApiEndpoints
             try
             {
                 using var reader = new StreamReader(context.Request.Body);
-                var body = await reader.ReadToEndAsync();
+                var body = await reader.ReadToEndAsync().ConfigureAwait(false);
                 var request = JsonSerializer.Deserialize<FileContentRequest>(body);
 
                 if (request == null || string.IsNullOrWhiteSpace(request.Path) || request.Path.Contains(".."))
@@ -223,13 +223,13 @@ public static class CodeApiEndpoints
                 await File.WriteAllTextAsync(filePath, request.Content ?? "", Encoding.UTF8);
 
                 context.Response.ContentType = "application/json";
-                await context.Response.WriteAsync(JsonSerializer.Serialize(new { path = request.Path, written = true }));
+                await context.Response.WriteAsync(JsonSerializer.Serialize(new { path = request.Path, written = true })).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
                 context.Response.StatusCode = 500;
                 context.Response.ContentType = "application/json";
-                await context.Response.WriteAsync(JsonSerializer.Serialize(new { error = ex.Message }));
+                await context.Response.WriteAsync(JsonSerializer.Serialize(new { error = ex.Message })).ConfigureAwait(false);
             }
         });
 
@@ -257,7 +257,7 @@ public static class CodeApiEndpoints
 
             File.Delete(filePath);
             context.Response.ContentType = "application/json";
-            await context.Response.WriteAsync(JsonSerializer.Serialize(new { path, deleted = true }));
+            await context.Response.WriteAsync(JsonSerializer.Serialize(new { path, deleted = true })).ConfigureAwait(false);
         });
 
         endpoints.MapPost("/api/code/diff", async (HttpContext context) =>
@@ -265,7 +265,7 @@ public static class CodeApiEndpoints
             try
             {
                 using var reader = new StreamReader(context.Request.Body);
-                var body = await reader.ReadToEndAsync();
+                var body = await reader.ReadToEndAsync().ConfigureAwait(false);
                 var request = JsonSerializer.Deserialize<DiffRequest>(body);
 
                 if (request == null || string.IsNullOrWhiteSpace(request.Path) || request.Path.Contains(".."))
@@ -288,13 +288,13 @@ public static class CodeApiEndpoints
 
                 var diff = RunGitDiff(targetPath);
                 context.Response.ContentType = "application/json";
-                await context.Response.WriteAsync(JsonSerializer.Serialize(new { path = request.Path, diff }));
+                await context.Response.WriteAsync(JsonSerializer.Serialize(new { path = request.Path, diff })).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
                 context.Response.StatusCode = 500;
                 context.Response.ContentType = "application/json";
-                await context.Response.WriteAsync(JsonSerializer.Serialize(new { error = ex.Message }));
+                await context.Response.WriteAsync(JsonSerializer.Serialize(new { error = ex.Message })).ConfigureAwait(false);
             }
         });
 
@@ -325,7 +325,7 @@ public static class CodeApiEndpoints
             SearchFiles(searchRoot, searchRoot, q, results);
 
             context.Response.ContentType = "application/json";
-            await context.Response.WriteAsync(JsonSerializer.Serialize(results));
+            await context.Response.WriteAsync(JsonSerializer.Serialize(results)).ConfigureAwait(false);
         });
     }
 

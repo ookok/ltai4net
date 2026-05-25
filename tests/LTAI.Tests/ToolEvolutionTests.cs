@@ -7,7 +7,7 @@ using Xunit;
 namespace LTAI.Tests;
 
 /// <summary>
-/// ToolEvolutionLoop Tests for LTAI v7.0.
+/// ToolEvolutionLoop Tests for LTAI V0.51.
 /// Covers: failure detection, SAST blocking, canary promotion/rollback, rollback storm.
 /// No real network calls — in-memory ToolLifecycle only.
 /// </summary>

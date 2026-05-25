@@ -152,11 +152,11 @@ public sealed class LivingTreeSystem : IAsyncDisposable
 
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
     {
-        await _mesh.RegisterAsync(_input, cancellationToken);
-        await _mesh.RegisterAsync(_context, cancellationToken);
-        await _mesh.RegisterAsync(_routing, cancellationToken);
-        await _mesh.RegisterAsync(_output, cancellationToken);
-        await _mesh.RegisterAsync(_self, cancellationToken);
+        await _mesh.RegisterAsync(_input, cancellationToken).ConfigureAwait(false);
+        await _mesh.RegisterAsync(_context, cancellationToken).ConfigureAwait(false);
+        await _mesh.RegisterAsync(_routing, cancellationToken).ConfigureAwait(false);
+        await _mesh.RegisterAsync(_output, cancellationToken).ConfigureAwait(false);
+        await _mesh.RegisterAsync(_self, cancellationToken).ConfigureAwait(false);
 
         _guardian.StartMonitoring(TimeSpan.FromSeconds(15));
         _logger.LogInformation("LivingTreeSystem v6.0 initialized with 5 governors, DNA: {DNA}",
@@ -182,7 +182,7 @@ public sealed class LivingTreeSystem : IAsyncDisposable
             if (_guardian.Mode == SystemMode.LifeSupport)
             {
                 _journal.Complete(entry, "emergency");
-                return await _guardian.EmergencyChatAsync(query, cancellationToken);
+                return await _guardian.EmergencyChatAsync(query, cancellationToken).ConfigureAwait(false);
             }
 
             if (_journal.IsPaused)
@@ -193,7 +193,7 @@ public sealed class LivingTreeSystem : IAsyncDisposable
 
             if (_dna != null)
             {
-                var safetyCheck = await _dna.Safety.EvaluateAsync(query, cancellationToken: cancellationToken);
+                var safetyCheck = await _dna.Safety.EvaluateAsync(query, cancellationToken: cancellationToken).ConfigureAwait(false);
                 if (!safetyCheck.Allowed)
                 {
                     _journal.Complete(entry, $"blocked: {safetyCheck.BlockReason}");
@@ -202,18 +202,18 @@ public sealed class LivingTreeSystem : IAsyncDisposable
                 }
             }
 
-            var response = await ProcessTypedAsync(GovernorInput.Create(query), cancellationToken);
+            var response = await ProcessTypedAsync(GovernorInput.Create(query), cancellationToken).ConfigureAwait(false);
             _journal.Complete(entry, response.Response[..Math.Min(response.Response.Length, 500)]);
 
             var reply = response.Response;
-            _workQueue.Enqueue(async ct => { try { await SilentSelfCheckAsync(reply); } catch { } }, "SilentSelfCheck");
+            _workQueue.Enqueue(async ct => { try { await SilentSelfCheckAsync(reply); } catch (Exception ex) { _logger.LogWarning(ex, "SilentSelfCheck background task failed"); } }, "SilentSelfCheck");
 
             if (_dna != null && !string.IsNullOrEmpty(reply))
             {
                 _workQueue.Enqueue(async ct =>
                 {
                     try { await _dna.ProcessAsync(query, reply, ct); }
-                    catch { }
+                    catch (Exception ex) { _logger.LogWarning(ex, "DNA process background task failed"); }
                 }, "DNA process");
             }
 
@@ -234,13 +234,24 @@ public sealed class LivingTreeSystem : IAsyncDisposable
     {
         if (_guardian.Mode == SystemMode.LifeSupport)
         {
-            yield return await _guardian.EmergencyChatAsync(query, cancellationToken);
+            yield return await _guardian.EmergencyChatAsync(query, cancellationToken).ConfigureAwait(false);
+            yield break;
+        }
+
+        var ai = _options.Value.AI;
+        var unconfigured = new List<string>();
+        if (!ai.L0.IsConfigured) unconfigured.Add("L0 (Embedding)");
+        if (!ai.L1.IsConfigured) unconfigured.Add("L1 (Fast Model)");
+        if (!ai.L2.IsConfigured) unconfigured.Add("L2 (Deep Model)");
+        if (unconfigured.Count > 0)
+        {
+            yield return $"[Model Not Configured] 以下模型层级未配置:\n  {string.Join("\n  ", unconfigured)}\n\n请在 Settings → LLM Config 中为每一层设置 Provider 和 Model。";
             yield break;
         }
 
         if (_dna != null)
         {
-            var safetyCheck = await _dna.Safety.EvaluateAsync(query, cancellationToken: cancellationToken);
+            var safetyCheck = await _dna.Safety.EvaluateAsync(query, cancellationToken: cancellationToken).ConfigureAwait(false);
             if (!safetyCheck.Allowed)
             {
                 yield return $"[Safety blocked: {safetyCheck.BlockReason}]";
@@ -267,7 +278,7 @@ public sealed class LivingTreeSystem : IAsyncDisposable
 
         // Layer 1: Pattern-based tool execution (deterministic, no model call needed)
         yield return "\uD83D\uDD0D ";
-        var patternResult = await _patternRouter.MatchAndExecuteAsync(query, cancellationToken);
+        var patternResult = await _patternRouter.MatchAndExecuteAsync(query, cancellationToken).ConfigureAwait(false);
         string? layer1Context = null;
         bool layer1HighConfidence = false;
 
@@ -368,7 +379,7 @@ public sealed class LivingTreeSystem : IAsyncDisposable
             && query.Length < 100 && (hasVaguePattern || !hasQuestionWord);
         if (isFuzzyQuery)
         {
-            var clarifyQuestions = await GenerateClarificationAsync(query, cancellationToken);
+            var clarifyQuestions = await GenerateClarificationAsync(query, cancellationToken).ConfigureAwait(false);
             if (clarifyQuestions != null)
             {
                 yield return "您的提问比较模糊，请问您是指以下哪种情况？\n\n" + clarifyQuestions;
@@ -440,7 +451,7 @@ public sealed class LivingTreeSystem : IAsyncDisposable
             try
             {
                 var planResult = await _planExecutor.PlanAndExecuteAsync(
-                    query, _llm, _toolRegistry, FlashModel, cancellationToken);
+                    query, _llm, _toolRegistry, FlashModel, cancellationToken).ConfigureAwait(false);
                 if (planResult.Success && planResult.ContextMessage != null)
                 {
                     layer2Context = planResult.ContextMessage;
@@ -507,7 +518,7 @@ public sealed class LivingTreeSystem : IAsyncDisposable
                 var fullQuery = string.IsNullOrEmpty(fullContext)
                     ? $"{dateTag}\n{query}{toolHint}"
                     : $"Context:\n{fullContext}\n\n{dateTag}\nQuery: {query}{toolHint}";
-                var teachingResult = await _duplexRouter.RequestL2ReasoningAsync(fullQuery, routeResult, cancellationToken);
+                var teachingResult = await _duplexRouter.RequestL2ReasoningAsync(fullQuery, routeResult, cancellationToken).ConfigureAwait(false);
                 if (teachingResult != null)
                 {
                     // Layer 4: Verify cached/taught answer before returning
@@ -644,7 +655,7 @@ public sealed class LivingTreeSystem : IAsyncDisposable
             }
             else
             {
-                var response = await _llm.GetResponseAsync(messages, streamOptions, cancellationToken);
+                var response = await _llm.GetResponseAsync(messages, streamOptions, cancellationToken).ConfigureAwait(false);
                 responseText.Append(response.Text ?? "");
                 if (response.Messages != null)
                 {
@@ -687,7 +698,7 @@ public sealed class LivingTreeSystem : IAsyncDisposable
                         var escalation = await EscalateGroundingFailure(
                             query, retryLevel, verification, messages,
                             layer1Context, layer2Context, autoSearchContext,
-                            responseText.ToString(), toolContextForVerification, cancellationToken);
+                            responseText.ToString(), toolContextForVerification, cancellationToken).ConfigureAwait(false);
 
                         switch (escalation.Action)
                         {
@@ -714,7 +725,7 @@ public sealed class LivingTreeSystem : IAsyncDisposable
                     {
                         var llmVerification = await _groundingVerifier.VerifyWithLLMAsync(
                             responseText.ToString(), toolContextForVerification,
-                            _llm, FlashModel, cancellationToken);
+                            _llm, FlashModel, cancellationToken).ConfigureAwait(false);
 
                         if (!llmVerification.IsGrounded)
                         {
@@ -747,7 +758,7 @@ public sealed class LivingTreeSystem : IAsyncDisposable
                         foreach (var kv in tc.Arguments)
                             args[kv.Key] = kv.Value;
                     }
-                    var result = await _toolRegistry.InvokeAsync(tc.Name, args, cancellationToken);
+                    var result = await _toolRegistry.InvokeAsync(tc.Name, args, cancellationToken).ConfigureAwait(false);
                     var resultText = result?.ToString() ?? "";
                     messages.Add(new ChatMessage(ChatRole.User, "") { Contents = new List<AIContent> { new FunctionResultContent(tc.CallId, resultText) } });
                     _logger.LogInformation("ReAct: executed {Tool} (callId={Id})", tc.Name, tc.CallId);
@@ -783,7 +794,7 @@ public sealed class LivingTreeSystem : IAsyncDisposable
             var toolCtx = layer1Context ?? layer2Context ?? autoSearchContext;
             if (!string.IsNullOrWhiteSpace(toolCtx) && toolCtx.Length > 100)
             {
-                var followup = await GenerateFollowupAsync(finalResponse, toolCtx, cancellationToken);
+                var followup = await GenerateFollowupAsync(finalResponse, toolCtx, cancellationToken).ConfigureAwait(false);
                 if (followup != null)
                 {
                     yield return "\n\n---\n您可能还想了解：\n" + followup;
@@ -843,8 +854,8 @@ public sealed class LivingTreeSystem : IAsyncDisposable
             _lastDreamCycleTrigger = DateTime.UtcNow;
             _workQueue.Enqueue(async ct =>
             {
-                try { await _dreamCycle?.ForceReflectionAsync(); }
-                catch { }
+                try { if (_dreamCycle != null) await _dreamCycle.ForceReflectionAsync(); }
+                catch (Exception ex) { _logger.LogWarning(ex, "DreamCycle realtime reflection failed"); }
             }, "DreamCycle realtime");
         }
 
@@ -863,7 +874,7 @@ public sealed class LivingTreeSystem : IAsyncDisposable
                         if (m.Value.Length > 2)
                             _metaCognition.ReinforceDomain($"entity_{m.Value}", 0.01f);
                 }
-                catch { }
+                catch (Exception ex) { _logger.LogWarning(ex, "Knowledge graph entity extraction failed"); }
             }, "KnowledgeGraphBuild");
 
         // Adversarial self-test: periodic quality audit
@@ -871,7 +882,7 @@ public sealed class LivingTreeSystem : IAsyncDisposable
             _workQueue.Enqueue(async ct =>
             {
                 try { await _llm.GetResponseAsync("系统自检：总结最近运行状态", new ChatOptions { ModelId = FlashModel, Temperature = 0f, MaxOutputTokens = 64 }, ct); }
-                catch { }
+                catch (Exception ex) { _logger.LogWarning(ex, "Adversarial self-test LLM call failed"); }
             }, "AdversarialSelfTest");
 
         // Query cache: store successful responses with adaptive TTL
@@ -901,7 +912,7 @@ public sealed class LivingTreeSystem : IAsyncDisposable
             if (samples.Count >= 20)
                 _workQueue.Enqueue(async ct =>
                 {
-                    try { await TriggerPeriodicTraining(); } catch { }
+                    try { await TriggerPeriodicTraining(); } catch (Exception ex) { _logger.LogWarning(ex, "AutoLoRA periodic training trigger failed"); }
                 }, "AutoLoRA");
         }
 
@@ -928,7 +939,7 @@ public sealed class LivingTreeSystem : IAsyncDisposable
                         Metadata = $"style={_personaStyle},weight={weight:F2}"
                     });
                 }
-                catch { }
+                catch (Exception ex) { _logger.LogWarning(ex, "Session memory synaptic storage failed"); }
             }, "SessionMemory");
 
         // Anomaly auto-report: detect ERL degradation and generate insight
@@ -978,7 +989,7 @@ public sealed class LivingTreeSystem : IAsyncDisposable
                         Metadata = $"retry_level={retryLevel}"
                     });
                 }
-                catch { }
+                catch (Exception ex) { _logger.LogWarning(ex, "Regression test synaptic storage failed"); }
             }, "RegressionTest");
 
         // Emotion-aware: detect user frustration (3+ retries on same query pattern)
@@ -998,7 +1009,7 @@ public sealed class LivingTreeSystem : IAsyncDisposable
                         $"SYSTEM CRASH: empty response after L{retryLevel} retries. Query: '{query[..Math.Min(query.Length, 60)]}'. Model: {model}",
                         new Dictionary<string, object?>(), ct);
                 }
-                catch { }
+                catch (Exception ex) { _logger.LogWarning(ex, "Self-code-repair DNA experience processing failed"); }
             }, "SelfRepair");
 
         // Digital twin sandbox: pre-execution safety check for shell_exec commands
@@ -1030,7 +1041,7 @@ public sealed class LivingTreeSystem : IAsyncDisposable
                         _logger.LogInformation("Federated: {Count} active lessons available for cross-instance sharing",
                             lessons.Count);
                 }
-                catch { }
+                catch (Exception ex) { _logger.LogWarning(ex, "Federated learning lesson retrieval failed"); }
             }, "FederatedLearning");
 
         // Self-evolution: auto-suggest architecture improvements
@@ -1056,7 +1067,7 @@ public sealed class LivingTreeSystem : IAsyncDisposable
                         });
                     }
                 }
-                catch { }
+                catch (Exception ex) { _logger.LogWarning(ex, "Self-evolution architecture review failed"); }
             }, "SelfEvolution");
 
         // Multi-agent debate: fork to SentientParliament on complex grounded queries
@@ -1094,7 +1105,7 @@ public sealed class LivingTreeSystem : IAsyncDisposable
                     _logger.LogInformation("PromptEvolution: reloaded {Count} templates for potential A/B updates",
                         _prompts.ListTemplates().Count);
                 }
-                catch { }
+                catch (Exception ex) { _logger.LogWarning(ex, "Prompt evolution template reload failed"); }
             }, "PromptEvolution");
 
         // Conversation fork: detect "换个角度" → snapshot context for future branch
@@ -1110,7 +1121,7 @@ public sealed class LivingTreeSystem : IAsyncDisposable
                         Metadata = $"context_snapshot={_context.CompressHistory()[..Math.Min(_context.CompressHistory().Length, 200)]}"
                     });
                 }
-                catch { }
+                catch (Exception ex) { _logger.LogWarning(ex, "Conversation fork synaptic storage failed"); }
             }, "ConversationFork");
 
         // Hardware-aware routing: GPU detection for ONNX preference
@@ -1122,7 +1133,7 @@ public sealed class LivingTreeSystem : IAsyncDisposable
                 _logger.LogInformation("HardwareRoute: GPU={Gpu}, ONNX={(hasGpu ? \"preferred\" : \"fallback\")}",
                     hasGpu, hasGpu ? "preferred" : "fallback");
             }
-            catch { }
+            catch (Exception ex) { _logger.LogWarning(ex, "Hardware GPU detection failed"); }
         }
 
         // Proactive notification: push on long responses (> 500 chars, > 30s answer time)
@@ -1135,7 +1146,7 @@ public sealed class LivingTreeSystem : IAsyncDisposable
                         finalResponse.Length, query[..Math.Min(query.Length, 40)]);
                     // Future: telegram_notify / wework_notify hook
                 }
-                catch { }
+                catch (Exception ex) { _logger.LogWarning(ex, "Proactive notification logging failed"); }
             }, "ProactiveNotify");
 
         if (Interlocked.Increment(ref _requestCount) % 20 == 0)
@@ -1216,7 +1227,7 @@ public sealed class LivingTreeSystem : IAsyncDisposable
 
                 var ctx = ctxResult.Payload?.GetValueOrDefault("context")?.ToString() ?? "";
                 var fullQuery = string.IsNullOrEmpty(ctx) ? query : $"Context:\n{ctx}\n\nQuery: {query}";
-                var teachingResult = await _duplexRouter.RequestL2ReasoningAsync(fullQuery, routeResult, cancellationToken);
+                var teachingResult = await _duplexRouter.RequestL2ReasoningAsync(fullQuery, routeResult, cancellationToken).ConfigureAwait(false);
                 if (teachingResult != null)
                 {
                     _duplexRouter.LearnFromL2(query, teachingResult);
@@ -1251,7 +1262,7 @@ public sealed class LivingTreeSystem : IAsyncDisposable
         if (_bavtRouter.BudgetRatio < 0.1)
         {
             _logger.LogWarning("BAVT: budget nearly exhausted (ratio={Ratio:F2}), using fast path", _bavtRouter.BudgetRatio);
-            var fastResp = await _llm.GetResponseAsync(fullPrompt, new ChatOptions { ModelId = FlashModel, Temperature = 0.3f }, cancellationToken);
+            var fastResp = await _llm.GetResponseAsync(fullPrompt, new ChatOptions { ModelId = FlashModel, Temperature = 0.3f }, cancellationToken).ConfigureAwait(false);
             _erlLoop.RecordTrial(query[..Math.Min(query.Length, 60)], fastResp.Text ?? "", "budget_fast", 0.5, true);
             return GovernorOutput.Success(fastResp.Text ?? "", traceId);
         }
@@ -1302,16 +1313,16 @@ public sealed class LivingTreeSystem : IAsyncDisposable
 
         if (Interlocked.Increment(ref _requestCount) % TrainingInterval == 0 && _options.Value.AI.OnnxEnabled)
         {
-            _workQueue.Enqueue(async ct => { try { await Task.Run(() => TriggerPeriodicTraining(), ct); } catch { } }, "PeriodicTraining");
+            _workQueue.Enqueue(async ct => { try { await Task.Run(() => TriggerPeriodicTraining(), ct); } catch (Exception ex) { _logger.LogWarning(ex, "Periodic training trigger failed"); } }, "PeriodicTraining");
         }
 
         if (_dna != null)
         {
             try
             {
-                var outputSafety = await _dna.Safety.EvaluateOutputAsync(response, cancellationToken);
+                var outputSafety = await _dna.Safety.EvaluateOutputAsync(response, cancellationToken).ConfigureAwait(false);
                 if (!outputSafety.Allowed)
-                    return GovernorOutput.Blocked(outputSafety.BlockReason);
+                    return GovernorOutput.Blocked(outputSafety.BlockReason ?? "Blocked by DNA safety");
             }
             catch (Exception ex) { _logger.LogDebug(ex, "DNA output safety check skipped"); }
         }
@@ -1350,7 +1361,7 @@ public sealed class LivingTreeSystem : IAsyncDisposable
                 To = "self", Action = "start_trace",
                 Payload = new Dictionary<string, object?> { ["trace_id"] = traceId }
             }, ct); }
-            catch { }
+            catch (Exception ex) { _logger.LogWarning(ex, "Self governor trace processing failed"); }
         }, "SelfGovernor trace");
 
         return GovernorOutput.Success(response, traceId);
@@ -1387,7 +1398,7 @@ public sealed class LivingTreeSystem : IAsyncDisposable
             {
                 var reviewPrompt = $"Review this response for accuracy and completeness. If it needs improvement, provide the improved version:\n\n{capturedResponse}";
                 var reviewOptions = new ChatOptions { ModelId = baseOptions.ModelId, Temperature = 0.1f, MaxOutputTokens = 2048 };
-                var reviewed = await _llm.CompleteAsync(reviewPrompt, reviewOptions, ct);
+                var reviewed = await _llm.CompleteAsync(reviewPrompt, reviewOptions, ct).ConfigureAwait(false);
                 if (!string.IsNullOrWhiteSpace(reviewed))
                 {
                     _synapticMemory?.Store(new SynapticExperience
@@ -1398,7 +1409,7 @@ public sealed class LivingTreeSystem : IAsyncDisposable
                     });
                 }
             }
-            catch { }
+            catch (Exception ex) { _logger.LogWarning(ex, "LLM review background task failed"); }
         }, "LLM review");
 
         return response;
@@ -1564,13 +1575,13 @@ public sealed class LivingTreeSystem : IAsyncDisposable
             {
                 var ctxSnippet = toolContextForVerification.Length > 1500 ? toolContextForVerification[..1500] : toolContextForVerification;
                 var cipoPrompt = $"Tool data:\n{ctxSnippet}\n\nWrong answer:\n{responseText[..Math.Min(responseText.Length, 500)]}\n\nGenerate a brief corrected answer direction (1-2 sentences) based ONLY on the tool data:";
-                var cipoResult = await _llm.GetResponseAsync(cipoPrompt, new ChatOptions { ModelId = FlashModel, Temperature = 0.1f, MaxOutputTokens = 200, Tools = new List<AITool>() }, ct);
+                var cipoResult = await _llm.GetResponseAsync(cipoPrompt, new ChatOptions { ModelId = FlashModel, Temperature = 0.1f, MaxOutputTokens = 200, Tools = new List<AITool>() }, ct).ConfigureAwait(false);
                 var correction = cipoResult.Text?.Trim();
                 if (!string.IsNullOrWhiteSpace(correction))
                     messages.Add(new ChatMessage(ChatRole.System,
                         $"【CIPO在线纠正 - 仅修正错误部分】问题: {verification.Issue}\n正确方向: {correction}\n保留原有回答中正确的部分，只修正上述问题。"));
             }
-            catch { }
+            catch (Exception ex) { _logger.LogWarning(ex, "CIPO online correction generation failed"); }
         }
         var avgFamiliarity = metaMetrics.TryGetValue("avg_familiarity", out var af)
             ? Convert.ToSingle(af) : 0.1f;
@@ -1611,7 +1622,7 @@ public sealed class LivingTreeSystem : IAsyncDisposable
 
         if (retryLevel >= forceToolLevel)
         {
-            var forcedContext = await ForceExecuteForRetryAsync(query, ct);
+            var forcedContext = await ForceExecuteForRetryAsync(query, ct).ConfigureAwait(false);
             if (forcedContext != null)
                 messages.Add(new ChatMessage(ChatRole.System, _prompts.Render("force_tool_exec", new Dictionary<string, string>
                 {
@@ -1625,7 +1636,7 @@ public sealed class LivingTreeSystem : IAsyncDisposable
         {
             ["level"] = retryLevel.ToString(),
             ["check_type"] = verification.CheckType,
-            ["retry_instruction"] = verification.RetryInstruction
+            ["retry_instruction"] = verification.RetryInstruction ?? ""
         }));
     }
 
@@ -1720,10 +1731,10 @@ public sealed class LivingTreeSystem : IAsyncDisposable
                 new(ChatRole.User, $"Query: \"{query}\"\n\nIs this query ambiguous? YES/NO:")
             };
             var options = new ChatOptions { ModelId = FlashModel, Temperature = 0f, MaxOutputTokens = 8, Tools = new List<AITool>() };
-            var result = await _llm.GetResponseAsync(messages, options, ct);
+            var result = await _llm.GetResponseAsync(messages, options, ct).ConfigureAwait(false);
             return result.Text?.Trim().StartsWith("YES", StringComparison.OrdinalIgnoreCase) == true;
         }
-        catch { return false; }
+        catch (Exception ex) { _logger.LogWarning(ex, "Ambiguity detection LLM call failed"); return false; }
     }
 
     private async Task<string?> GenerateClarificationAsync(string query, CancellationToken ct)
@@ -1736,7 +1747,7 @@ public sealed class LivingTreeSystem : IAsyncDisposable
                 new(ChatRole.User, _prompts.Render("clarify_user", new Dictionary<string, string> { ["query"] = query }))
             };
             var options = new ChatOptions { ModelId = FlashModel, Temperature = 0.3f, MaxOutputTokens = 256, Tools = new List<AITool>() };
-            var result = await _llm.GetResponseAsync(messages, options, ct);
+            var result = await _llm.GetResponseAsync(messages, options, ct).ConfigureAwait(false);
             var text = result.Text?.Trim();
             return !string.IsNullOrWhiteSpace(text) && text.Length > 10 ? text : null;
         }
@@ -1763,7 +1774,7 @@ public sealed class LivingTreeSystem : IAsyncDisposable
                 }))
             };
             var options = new ChatOptions { ModelId = FlashModel, Temperature = 0.5f, MaxOutputTokens = 256, Tools = new List<AITool>() };
-            var result = await _llm.GetResponseAsync(messages, options, ct);
+            var result = await _llm.GetResponseAsync(messages, options, ct).ConfigureAwait(false);
             var text = result.Text?.Trim();
             return !string.IsNullOrWhiteSpace(text) && text.Length > 10 ? text : null;
         }
@@ -1776,7 +1787,7 @@ public sealed class LivingTreeSystem : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        await _workQueue.DisposeAsync();
+        await _workQueue.DisposeAsync().ConfigureAwait(false);
         GC.SuppressFinalize(this);
     }
 
@@ -1789,7 +1800,7 @@ public sealed class LivingTreeSystem : IAsyncDisposable
             using var doc = JsonDocument.Parse(raw);
             return CompressJsonElement(doc.RootElement, maxLen);
         }
-        catch { return raw[..maxLen]; }
+        catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"JSON compression failed: {ex.Message}"); return raw[..maxLen]; }
     }
 
     private static string CompressJsonElement(JsonElement root, int maxLen)
@@ -1802,7 +1813,7 @@ public sealed class LivingTreeSystem : IAsyncDisposable
             {
                 var name = item.TryGetProperty("name", out var n) ? n.GetString() : "";
                 var title = item.TryGetProperty("title", out var t) ? t.GetString() : "";
-                var snippet = item.TryGetProperty("snippet", out var s) ? s.GetString() : "";
+                var snippet = item.TryGetProperty("snippet", out var s) ? s.GetString() ?? "" : "";
                 var type = item.TryGetProperty("type", out var tp) ? tp.GetString() : "";
                 var size = item.TryGetProperty("size", out var sz) && sz.TryGetInt64(out var szVal) ? $"{szVal}B" : "";
                 var label = name + title;

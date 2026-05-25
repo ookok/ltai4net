@@ -17,7 +17,7 @@ public static class ExecutionEndpoints
         endpoints.MapPost("/api/execution/plan/diffuse", async (HttpContext context) =>
         {
             using var reader = new StreamReader(context.Request.Body);
-            var body = await reader.ReadToEndAsync();
+            var body = await reader.ReadToEndAsync().ConfigureAwait(false);
             var request = JsonSerializer.Deserialize<DiffuseRequest>(body);
 
             if (request == null || string.IsNullOrWhiteSpace(request.Intent))
@@ -31,7 +31,7 @@ public static class ExecutionEndpoints
         endpoints.MapPost("/api/execution/plan/gtsm", async (HttpContext context) =>
         {
             using var reader = new StreamReader(context.Request.Body);
-            var body = await reader.ReadToEndAsync();
+            var body = await reader.ReadToEndAsync().ConfigureAwait(false);
             var request = JsonSerializer.Deserialize<GtsmRequest>(body);
 
             if (request == null || string.IsNullOrWhiteSpace(request.Task))
@@ -47,21 +47,21 @@ public static class ExecutionEndpoints
         endpoints.MapPost("/api/execution/plan/checkpoint/save", async (HttpContext context) =>
         {
             using var reader = new StreamReader(context.Request.Body);
-            var body = await reader.ReadToEndAsync();
+            var body = await reader.ReadToEndAsync().ConfigureAwait(false);
             var state = JsonSerializer.Deserialize<CheckpointState>(body);
 
             if (state == null || string.IsNullOrWhiteSpace(state.SessionId))
                 return Results.Json(new { error = "CheckpointState with SessionId is required" }, statusCode: 400);
 
             var checkpoint = endpoints.ServiceProvider.GetRequiredService<TaskCheckpoint>();
-            await checkpoint.SaveAsync(state.SessionId, state);
+            await checkpoint.SaveAsync(state.SessionId, state).ConfigureAwait(false);
             return Results.Json(new { saved = true, sessionId = state.SessionId, version = state.Version });
         });
 
         endpoints.MapGet("/api/execution/plan/checkpoint/{sessionId}", async (string sessionId, HttpContext context) =>
         {
             var checkpoint = endpoints.ServiceProvider.GetRequiredService<TaskCheckpoint>();
-            var state = await checkpoint.LoadAsync(sessionId);
+            var state = await checkpoint.LoadAsync(sessionId).ConfigureAwait(false);
             if (state is null)
                 return Results.NotFound(new { error = $"Checkpoint {sessionId} not found" });
             return Results.Json(state);
@@ -70,7 +70,7 @@ public static class ExecutionEndpoints
         endpoints.MapPost("/api/execution/plan/checkpoint/{sessionId}/resume", async (string sessionId, HttpContext context) =>
         {
             var checkpoint = endpoints.ServiceProvider.GetRequiredService<TaskCheckpoint>();
-            var state = await checkpoint.ResumeAsync(sessionId);
+            var state = await checkpoint.ResumeAsync(sessionId).ConfigureAwait(false);
             if (state is null)
                 return Results.NotFound(new { error = $"Checkpoint {sessionId} not found" });
             return Results.Json(state);
@@ -93,7 +93,7 @@ public static class ExecutionEndpoints
         endpoints.MapPost("/api/execution/plan/audit", async (HttpContext context) =>
         {
             using var reader = new StreamReader(context.Request.Body);
-            var body = await reader.ReadToEndAsync();
+            var body = await reader.ReadToEndAsync().ConfigureAwait(false);
             var request = JsonSerializer.Deserialize<AuditRequest>(body);
 
             if (request == null || string.IsNullOrWhiteSpace(request.PlanId))
@@ -111,21 +111,21 @@ public static class ExecutionEndpoints
         endpoints.MapPost("/api/execution/session/save", async (HttpContext context) =>
         {
             using var reader = new StreamReader(context.Request.Body);
-            var body = await reader.ReadToEndAsync();
+            var body = await reader.ReadToEndAsync().ConfigureAwait(false);
             var state = JsonSerializer.Deserialize<SessionState>(body);
 
             if (state == null || string.IsNullOrWhiteSpace(state.SessionId))
                 return Results.Json(new { error = "SessionState with SessionId is required" }, statusCode: 400);
 
             var session = endpoints.ServiceProvider.GetRequiredService<SessionManager>();
-            await session.SaveAsync(state);
+            await session.SaveAsync(state).ConfigureAwait(false);
             return Results.Json(new { saved = true, sessionId = state.SessionId });
         });
 
         endpoints.MapGet("/api/execution/session/{sessionId}", async (string sessionId) =>
         {
             var session = endpoints.ServiceProvider.GetRequiredService<SessionManager>();
-            var state = await session.LoadAsync(sessionId);
+            var state = await session.LoadAsync(sessionId).ConfigureAwait(false);
             if (state is null)
                 return Results.NotFound(new { error = $"Session {sessionId} not found" });
             return Results.Json(state);
@@ -168,7 +168,7 @@ public static class ExecutionEndpoints
         endpoints.MapPost("/api/execution/quality/rank/analyze", async (HttpContext context) =>
         {
             using var reader = new StreamReader(context.Request.Body);
-            var body = await reader.ReadToEndAsync();
+            var body = await reader.ReadToEndAsync().ConfigureAwait(false);
             var request = JsonSerializer.Deserialize<RankAnalyzeRequest>(body);
 
             if (request == null || request.Population == null || request.Population.Count == 0)
@@ -182,7 +182,7 @@ public static class ExecutionEndpoints
         endpoints.MapPost("/api/execution/quality/delegate/select", async (HttpContext context) =>
         {
             using var reader = new StreamReader(context.Request.Body);
-            var body = await reader.ReadToEndAsync();
+            var body = await reader.ReadToEndAsync().ConfigureAwait(false);
             var request = JsonSerializer.Deserialize<DelegateSelectRequest>(body);
 
             if (request == null || request.Candidates == null || request.Candidates.Count == 0)
@@ -196,7 +196,7 @@ public static class ExecutionEndpoints
         endpoints.MapPost("/api/execution/compress", async (HttpContext context) =>
         {
             using var reader = new StreamReader(context.Request.Body);
-            var body = await reader.ReadToEndAsync();
+            var body = await reader.ReadToEndAsync().ConfigureAwait(false);
             var request = JsonSerializer.Deserialize<CompressRequest>(body);
 
             if (request == null || string.IsNullOrWhiteSpace(request.Output))
@@ -217,7 +217,7 @@ public static class ExecutionEndpoints
         endpoints.MapPost("/api/execution/clarify", async (HttpContext context) =>
         {
             using var reader = new StreamReader(context.Request.Body);
-            var body = await reader.ReadToEndAsync();
+            var body = await reader.ReadToEndAsync().ConfigureAwait(false);
             var request = JsonSerializer.Deserialize<ClarifyRequest>(body);
 
             if (request == null || string.IsNullOrWhiteSpace(request.Input))
@@ -231,7 +231,7 @@ public static class ExecutionEndpoints
         endpoints.MapPost("/api/execution/skill/detect-missing", async (HttpContext context) =>
         {
             using var reader = new StreamReader(context.Request.Body);
-            var body = await reader.ReadToEndAsync();
+            var body = await reader.ReadToEndAsync().ConfigureAwait(false);
             var request = JsonSerializer.Deserialize<DetectMissingRequest>(body);
 
             if (request == null || string.IsNullOrWhiteSpace(request.Output))

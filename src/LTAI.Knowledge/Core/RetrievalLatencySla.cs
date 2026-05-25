@@ -138,7 +138,7 @@ public sealed class RetrievalLatencySla
 
         try
         {
-            var result = await retrievalFn();
+            var result = await retrievalFn().ConfigureAwait(false);
             sw.Stop();
             Measure(layer, sw.ElapsedMilliseconds, query);
             return result;
@@ -152,7 +152,7 @@ public sealed class RetrievalLatencySla
             {
                 _degradedLevel = DegradeTier(layer);
                 var degradedSw = Stopwatch.StartNew();
-                var fallback = await degradedFn();
+                var fallback = await degradedFn().ConfigureAwait(false);
                 Measure(_degradedLevel, degradedSw.ElapsedMilliseconds, query);
                 return fallback;
             }

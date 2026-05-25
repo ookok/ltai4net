@@ -66,7 +66,7 @@ public static class LTAIFunctionMiddleware
             if (sandbox is not null)
             {
                 logger.LogInformation("Tool governance: routing '{Tool}' through sandbox", toolName);
-                return await ExecuteInSandboxAsync(toolName, args, sandbox, logger, ct);
+                return await ExecuteInSandboxAsync(toolName, args, sandbox, logger, ct).ConfigureAwait(false);
             }
             else
             {
@@ -75,7 +75,7 @@ public static class LTAIFunctionMiddleware
         }
 
         logger.LogDebug("Tool governance: {Tool} allowed (severity={Severity})", toolName, decision.Severity);
-        return await next(context, ct);
+        return await next(context, ct).ConfigureAwait(false);
     }
 
     private static bool ShouldUseSandbox(string toolName, Dictionary<string, object?> args)
@@ -121,7 +121,7 @@ public static class LTAIFunctionMiddleware
                 timeoutSeconds: 30,
                 memoryMb: 256,
                 allowNetwork: false,
-                cancellationToken: ct);
+                cancellationToken: ct).ConfigureAwait(false);
 
             return new
             {

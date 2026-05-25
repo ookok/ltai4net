@@ -9,6 +9,11 @@ namespace LTAI.Web;
 
 public static class FeedbackEndpoints
 {
+    private static readonly JsonSerializerOptions _jsonCaseInsensitive = new()
+    {
+        PropertyNameCaseInsensitive = true
+    };
+
     public static void MapFeedbackEndpoints(this IEndpointRouteBuilder endpoints)
     {
         endpoints.MapPost("/api/feedback", async (
@@ -20,11 +25,8 @@ public static class FeedbackEndpoints
             try
             {
                 using var reader = new StreamReader(context.Request.Body);
-                var body = await reader.ReadToEndAsync(cancellationToken);
-                var request = JsonSerializer.Deserialize<FeedbackRequest>(body, new JsonSerializerOptions
-                {
-                    PropertyNameCaseInsensitive = true
-                });
+                var body = await reader.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
+                var request = JsonSerializer.Deserialize<FeedbackRequest>(body, _jsonCaseInsensitive);
 
                 if (request == null || string.IsNullOrWhiteSpace(request.AgentName))
                 {

@@ -57,7 +57,7 @@ public static class ProviderConfigEndpoints
         // Set provider API key via POST
         api.MapPost("/key", async (HttpRequest request) =>
         {
-            using var doc = await JsonDocument.ParseAsync(request.Body);
+            using var doc = await JsonDocument.ParseAsync(request.Body).ConfigureAwait(false);
             var provider = doc.RootElement.GetProperty("provider").GetString() ?? "";
             var apiKey = doc.RootElement.GetProperty("api_key").GetString() ?? "";
 
@@ -75,7 +75,7 @@ public static class ProviderConfigEndpoints
         {
             var configPath = Path.Combine(AppContext.BaseDirectory, "appsettings.json");
             var wizard = new InteractiveSetupWizard(configPath);
-            await wizard.RunAsync();
+            await wizard.RunAsync().ConfigureAwait(false);
             return Results.Ok(new { status = "setup_complete" });
         });
 
@@ -89,7 +89,7 @@ public static class ProviderConfigEndpoints
             return Results.Ok(new
             {
                 status = "healthy",
-                version = "7.0.0",
+                version = "0.51.0",
                 timestamp = DateTime.UtcNow,
                 providers = new
                 {

@@ -38,7 +38,7 @@ public sealed class DualPerspectiveMemory
     {
         var opts = options ?? new PerspectiveOptions();
 
-        var memoryEvents = await RetrieveMemoryEvents(sessionId, query, opts);
+        var memoryEvents = await RetrieveMemoryEvents(sessionId, query, opts).ConfigureAwait(false);
         var knowledgeDocs = _agenticRAG.Search(query, RAGMode.Iterative,
             domain: opts.Domain ?? "personal_preference");
 
@@ -59,7 +59,7 @@ public sealed class DualPerspectiveMemory
     {
         var opts = options ?? new PerspectiveOptions();
 
-        var memoryEvents = await RetrieveMemoryEvents(sessionId, query, opts);
+        var memoryEvents = await RetrieveMemoryEvents(sessionId, query, opts).ConfigureAwait(false);
         var knowledgeDocs = _agenticRAG.Search(query, RAGMode.Iterative,
             domain: opts.Domain ?? "general_knowledge");
 
@@ -78,8 +78,8 @@ public sealed class DualPerspectiveMemory
         string sessionId, string query,
         PerspectiveOptions? options = null)
     {
-        var self = await RetrieveSelfPerspective(sessionId, query, options);
-        var thirdParty = await RetrieveThirdPartyPerspective(sessionId, query, options);
+        var self = await RetrieveSelfPerspective(sessionId, query, options).ConfigureAwait(false);
+        var thirdParty = await RetrieveThirdPartyPerspective(sessionId, query, options).ConfigureAwait(false);
 
         return new DualPerspectiveResult
         {
@@ -95,7 +95,7 @@ public sealed class DualPerspectiveMemory
     {
         try
         {
-            var result = await _structMemory.RetrieveForQuery(query);
+            var result = await _structMemory.RetrieveForQuery(query).ConfigureAwait(false);
             return result.Events?.Take(opts.MaxMemoryEvents * 2).ToList() ?? new();
         }
         catch

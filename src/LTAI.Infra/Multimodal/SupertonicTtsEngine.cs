@@ -107,7 +107,7 @@ public sealed class SupertonicTtsEngine : ITtsEngine, IDisposable
 
             if (!response.IsSuccessStatusCode)
             {
-                var errorBody = await response.Content.ReadAsStringAsync(ct);
+                var errorBody = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
                 _logger.LogError("Supertonic TTS failed: HTTP {Status} - {Error}", (int)response.StatusCode, errorBody);
                 return new TtsResult
                 {
@@ -117,7 +117,7 @@ public sealed class SupertonicTtsEngine : ITtsEngine, IDisposable
                 };
             }
 
-            var audioBytes = await response.Content.ReadAsByteArrayAsync(ct);
+            var audioBytes = await response.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false);
             var duration = EstimateDurationSeconds(audioBytes);
 
             _logger.LogInformation(
@@ -168,7 +168,7 @@ public sealed class SupertonicTtsEngine : ITtsEngine, IDisposable
 
                 try
                 {
-                    var json = await File.ReadAllTextAsync(file, ct);
+                    var json = await File.ReadAllTextAsync(file, ct).ConfigureAwait(false);
                     using var doc = JsonDocument.Parse(json);
                     if (doc.RootElement.TryGetProperty("description", out var desc))
                         description = desc.GetString();

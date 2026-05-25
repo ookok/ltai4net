@@ -48,7 +48,7 @@ public static class EntryPoint
         {
             FirstRunDetector.PrintDiagnostics(status);
             Console.WriteLine("检测到未配置，启动配置向导...");
-            await new InteractiveSetupWizard(configPath).RunAsync();
+            await new InteractiveSetupWizard(configPath).RunAsync().ConfigureAwait(false);
         }
 
         builder.Configuration.AddJsonFile(configPath, optional: false, reloadOnChange: true);
@@ -94,7 +94,7 @@ public static class EntryPoint
         builder.Services.AddLTAINetwork();
 
         builder.Services.AddOpenTelemetry()
-            .ConfigureResource(r => r.AddService("LTAI.Host", serviceVersion: "7.0.0"))
+            .ConfigureResource(r => r.AddService("LTAI.Host", serviceVersion: "0.51.0"))
             .WithTracing(t => t
                 .AddAspNetCoreInstrumentation()
                 .AddHttpClientInstrumentation()
@@ -124,15 +124,15 @@ public static class EntryPoint
 
         var toolRegistry = sp.GetRequiredService<AIToolRegistry>();
         sp.GetRequiredService<LTAI.Agent.Evolution.PluginRegistry>().Discover();
-        await LTAI.Agent.Tools.ToolRegistryExtensions.RegisterAllToolCategoriesAsync(toolRegistry, logger);
-        await sp.RegisterCodeActToolsAsync(toolRegistry);
+        await LTAI.Agent.Tools.ToolRegistryExtensions.RegisterAllToolCategoriesAsync(toolRegistry, logger).ConfigureAwait(false);
+        await sp.RegisterCodeActToolsAsync(toolRegistry).ConfigureAwait(false);
 
         var lts = sp.GetRequiredService<LivingTreeSystem>();
-        await lts.InitializeAsync();
+        await lts.InitializeAsync().ConfigureAwait(false);
         logger.LogInformation("LTAI Agent Mesh initialized");
 
-        app.MapGet("/health", () => Results.Ok(new { status = "healthy", version = "7.0.0", timestamp = DateTime.UtcNow }));
+        app.MapGet("/health", () => Results.Ok(new { status = "healthy", version = "0.51.0", timestamp = DateTime.UtcNow }));
 
-        await app.RunAsync();
+        await app.RunAsync().ConfigureAwait(false);
     }
 }

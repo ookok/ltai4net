@@ -103,7 +103,7 @@ public sealed class SeedDevice
         SaveRole(profile);
         steps.Add("role config saved");
 
-        await Task.CompletedTask;
+        await Task.CompletedTask.ConfigureAwait(false);
         return result;
     }
 

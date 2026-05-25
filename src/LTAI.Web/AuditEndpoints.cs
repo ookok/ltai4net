@@ -30,7 +30,7 @@ public static class AuditEndpoints
             var results = AuditLogService.Instance.Query(sessionId, operation, since, until, limit);
 
             context.Response.ContentType = "application/json";
-            await context.Response.WriteAsync(JsonSerializer.Serialize(new { total = results.Count, logs = results }));
+            await context.Response.WriteAsync(JsonSerializer.Serialize(new { total = results.Count, logs = results })).ConfigureAwait(false);
         });
 
         endpoints.MapGet("/api/audit/trace/{traceId}", async (HttpContext context, string traceId) =>
@@ -70,7 +70,7 @@ public static class AuditEndpoints
             traceEvents.Sort((a, b) => a.Timestamp.CompareTo(b.Timestamp));
 
             context.Response.ContentType = "application/json";
-            await context.Response.WriteAsync(JsonSerializer.Serialize(new { traceId, events = traceEvents }));
+            await context.Response.WriteAsync(JsonSerializer.Serialize(new { traceId, events = traceEvents })).ConfigureAwait(false);
         });
 
         endpoints.MapGet("/api/audit/metrics", async (HttpContext context) =>
@@ -99,7 +99,7 @@ public static class AuditEndpoints
             };
 
             context.Response.ContentType = "application/json";
-            await context.Response.WriteAsync(JsonSerializer.Serialize(metrics));
+            await context.Response.WriteAsync(JsonSerializer.Serialize(metrics)).ConfigureAwait(false);
         });
     }
 }

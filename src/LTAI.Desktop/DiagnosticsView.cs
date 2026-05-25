@@ -2,62 +2,94 @@ using Avalonia.Controls;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
+using LTAI.Core.Configuration;
 
 namespace LTAI.Desktop;
 
 public sealed class DiagnosticsView : UserControl
 {
+    private readonly LTAIService _svc;
     private readonly TextBlock _content;
     private readonly DispatcherTimer _timer;
 
     public DiagnosticsView(LTAIService svc)
     {
-        Background = new SolidColorBrush(Color.Parse("#0d1117"));
+        _svc = svc;
+        Background = LtaiTheme.Sbb(LtaiTheme.Bg);
+
         var root = new StackPanel { Spacing = 12, Margin = new(16) };
 
-        root.Children.Add(new TextBlock { Text = "LTAI v7.0 — Diagnostics", FontSize = 20, FontWeight = FontWeight.Bold, Foreground = new SolidColorBrush(Color.Parse("#f0f6fc")) });
-        root.Children.Add(new Border { Height = 1, Background = new SolidColorBrush(Color.Parse("#30363d")) });
+        root.Children.Add(new TextBlock
+        {
+            Text = "LTAI V0.51 - Diagnostics",
+            FontSize = 20,
+            FontWeight = FontWeight.Bold,
+            Foreground = LtaiTheme.Sbb(LtaiTheme.TextPrimary)
+        });
+        root.Children.Add(new Border { Height = 1, Background = LtaiTheme.Sbb(LtaiTheme.Border) });
 
-        _content = new TextBlock { FontFamily = new("Consolas"), FontSize = 13, Foreground = new SolidColorBrush(Color.Parse("#8b949e")) };
+        _content = new TextBlock
+        {
+            FontFamily = new("Consolas"),
+            FontSize = 13,
+            Foreground = LtaiTheme.Sbb(LtaiTheme.TextSecondary)
+        };
         root.Children.Add(_content);
 
         Content = new ScrollViewer { Content = root };
 
-        _timer = new DispatcherTimer(TimeSpan.FromSeconds(5), DispatcherPriority.Background, (_, _) => Refresh());
+        _timer = new DispatcherTimer(
+            TimeSpan.FromSeconds(3),
+            DispatcherPriority.Background,
+            (_, _) => Refresh());
         _timer.Start();
-
-        Refresh(svc);
+        DetachedFromVisualTree += (_, _) => _timer.Stop();
+        Refresh();
     }
 
-    private void Refresh() => Refresh(ServiceLocator.Get<LTAIService>());
-
-    private void Refresh(LTAIService svc)
+    private void Refresh()
     {
-        var dna = svc.DNA;
+        var dna = _svc.DNA;
         var p = System.Diagnostics.Process.GetCurrentProcess();
+        var harness = ServiceLocator.Get<HarnessProfile>();
 
-        _content.Text = $"""
-            LTAI v7.0.0 — Sentient Mesh
-
-            Architecture:
-              ✅ BaseAgent + IAnalysisStrategy pattern
-              ✅ UnifiedSafetyGate with staircase penalty
-              ✅ UnifiedSemanticRouter (embedding + keyword)
-              ✅ UniversalOrchestrator (3-in-1 workflows)
-              ✅ RegulationVersionStore with integrity checks
-              ✅ SentientParliament (3-way voting)
-              ✅ ToolEvolutionLoop (observation mode)
-
-            DNA: {(dna != null ? $"{dna.Consciousness.State.Level} (Gen {dna.GetStatus().Generation})" : "Offline")}
-            Safety: {(dna != null ? dna.Safety.Posture.ToString() : "Offline")}
-            Mode: {svc.LTS.Mode}
-
-            System:
-              PID: {p.Id}  Threads: {p.Threads.Count}
-              MEM: {p.WorkingSet64 / 1024 / 1024} MB
-              Uptime: {DateTime.Now - p.StartTime:hh\\:mm\\:ss}
-              .NET: {Environment.Version}
-              OS: {Environment.OSVersion}
-            """;
+        _content.Text = string.Format(
+            "LTAI V0.51.0 - Sentient Mesh\n\n" +
+            "Architecture:\n" +
+            "  BaseAgent + IAnalysisStrategy pattern\n" +
+            "  UnifiedSafetyGate with staircase penalty\n" +
+            "  UnifiedSemanticRouter (embedding + keyword)\n" +
+            "  UniversalOrchestrator (3-in-1 workflows)\n" +
+            "  SentientParliament (3-way voting)\n" +
+            "  ToolEvolutionLoop (observation mode)\n\n" +
+            "Harness Layers (System Design):\n" +
+            "  Task Decomposition → UniversalOrchestrator ({0})\n" +
+            "  Tool Orchestration → LTAIToolRegistry\n" +
+            "  Memory Storage    → KnowledgeGraph + CodeGraph\n" +
+            "  Error Correction  → CorrectionMemory + GDN-2 Gate\n" +
+            "  Audit & Delivery  → VerifiableRegistry + EvolutionStore\n\n" +
+            "Profile: {1}  |  Safety: {2}  |  Evolution: {3}\n\n" +
+            "DNA: {4}\n" +
+            "Safety: {5}\n" +
+            "Mode: {6}\n\n" +
+            "System:\n" +
+            "  PID: {7}  Threads: {8}\n" +
+            "  MEM: {9} MB\n" +
+            "  Uptime: {10:hh\\:mm\\:ss}\n" +
+            "  .NET: {11}\n" +
+            "  OS: {12}",
+            harness.Mode,
+            harness.Mode.ToString(),
+            harness.SafetyPosture,
+            harness.EnableEvolution ? harness.EvolutionAggressiveness : "off",
+            dna != null ? string.Format("{0} (Gen {1})", dna.Consciousness.State.Level, dna.GetStatus().Generation) : "Offline",
+            dna != null ? dna.Safety.Posture.ToString() : "Offline",
+            _svc.LTS.Mode,
+            p.Id,
+            p.Threads.Count,
+            p.WorkingSet64 / 1024 / 1024,
+            DateTime.Now - p.StartTime,
+            Environment.Version,
+            Environment.OSVersion);
     }
 }

@@ -57,14 +57,14 @@ public sealed class DockerSandbox : ISandbox
                     Name = containerId
                 }, cancellationToken);
 
-            await _docker.Containers.StartContainerAsync(createResp.ID, null, cancellationToken);
+            await _docker.Containers.StartContainerAsync(createResp.ID, null, cancellationToken).ConfigureAwait(false);
 
             using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(request.TimeoutSeconds));
             using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
 
             try
             {
-                await _docker.Containers.WaitContainerAsync(createResp.ID, linked.Token);
+                await _docker.Containers.WaitContainerAsync(createResp.ID, linked.Token).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
@@ -74,9 +74,9 @@ public sealed class DockerSandbox : ISandbox
             var logStream = await _docker.Containers.GetContainerLogsAsync(createResp.ID, false, new ContainerLogsParameters
             {
                 ShowStdout = true, ShowStderr = true
-            }, cancellationToken);
+            }, cancellationToken).ConfigureAwait(false);
 
-            var (stdout, stderr) = await ReadMultiplexedStreamAsync(logStream, cancellationToken);
+            var (stdout, stderr) = await ReadMultiplexedStreamAsync(logStream, cancellationToken).ConfigureAwait(false);
 
             try { await _docker.Containers.RemoveContainerAsync(createResp.ID, new ContainerRemoveParameters { Force = true }, CancellationToken.None); } catch { /* non-fatal */ }
 
@@ -101,7 +101,7 @@ public sealed class DockerSandbox : ISandbox
     {
         try
         {
-            await _docker.System.PingAsync(cancellationToken);
+            await _docker.System.PingAsync(cancellationToken).ConfigureAwait(false);
             return true;
         }
         catch
@@ -132,7 +132,7 @@ public sealed class DockerSandbox : ISandbox
 
         while (true)
         {
-            var result = await stream.ReadOutputAsync(buffer, 0, buffer.Length, ct);
+            var result = await stream.ReadOutputAsync(buffer, 0, buffer.Length, ct).ConfigureAwait(false);
             if (result.EOF) break;
 
             var text = Encoding.UTF8.GetString(buffer, 0, result.Count);

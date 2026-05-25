@@ -116,7 +116,7 @@ public sealed class ConcurrencyGuard : IConcurrencyGuard
     {
         try
         {
-            await fn();
+            await fn().ConfigureAwait(false);
 
             if (_tasks.TryGetValue(bt.Name, out var current))
             {
@@ -140,7 +140,7 @@ public sealed class ConcurrencyGuard : IConcurrencyGuard
             {
                 try
                 {
-                    await Task.Delay(100);
+                    await Task.Delay(100).ConfigureAwait(false);
                     _tasks.TryRemove(bt.Name, out _);
                 }
                 catch (Exception ex)

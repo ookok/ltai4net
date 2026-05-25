@@ -59,7 +59,7 @@ public sealed class AsyncDisk : IAsyncDisk
 
         if (_pending.TryGetValue(path, out var content))
         {
-            await _writeFileAsync(path, content);
+            await _writeFileAsync(path, content).ConfigureAwait(false);
             _dirty.TryRemove(path, out _);
             _logger.LogDebug("Flushed immediately: {Path}", path);
         }
@@ -73,7 +73,7 @@ public sealed class AsyncDisk : IAsyncDisk
 
     public async Task FlushAllAsync()
     {
-        await _flushBatchAsync();
+        await _flushBatchAsync().ConfigureAwait(false);
     }
 
     [Obsolete("Use FlushAllAsync instead")]
@@ -84,7 +84,7 @@ public sealed class AsyncDisk : IAsyncDisk
 
     private async Task _flushBatchAsync()
     {
-        await _flushLock.WaitAsync();
+        await _flushLock.WaitAsync().ConfigureAwait(false);
         try
         {
             var dirtyKeys = _dirty.Keys.Take(_maxBatchSize).ToList();
@@ -92,7 +92,7 @@ public sealed class AsyncDisk : IAsyncDisk
             {
                 if (_pending.TryGetValue(path, out var content))
                 {
-                    await _writeFileAsync(path, content);
+                    await _writeFileAsync(path, content).ConfigureAwait(false);
                 }
 
                 _dirty.TryRemove(path, out _);
@@ -122,7 +122,7 @@ public sealed class AsyncDisk : IAsyncDisk
                 Directory.CreateDirectory(dir);
 
             var tempPath = path + ".tmp." + Guid.NewGuid().ToString("N");
-            await File.WriteAllTextAsync(tempPath, content);
+            await File.WriteAllTextAsync(tempPath, content).ConfigureAwait(false);
             File.Move(tempPath, path, overwrite: true);
         }
         catch (Exception ex)
@@ -151,7 +151,7 @@ public sealed class AsyncDisk : IAsyncDisk
             {
                 try
                 {
-                    await Task.Delay(_batchInterval, token);
+                    await Task.Delay(_batchInterval, token).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException)
                 {
@@ -159,7 +159,7 @@ public sealed class AsyncDisk : IAsyncDisk
                 }
 
                 if (_dirty.Count > 0)
-                    await _flushBatchAsync();
+                    await _flushBatchAsync().ConfigureAwait(false);
             }
         }, token);
 

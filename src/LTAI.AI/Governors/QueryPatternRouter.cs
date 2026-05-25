@@ -214,7 +214,7 @@ public sealed class QueryPatternRouter
 
             try
             {
-                var result = await _toolRegistry.InvokeAsync(pattern.ToolName, args, cancellationToken);
+                var result = await _toolRegistry.InvokeAsync(pattern.ToolName, args, cancellationToken).ConfigureAwait(false);
                 var resultText = result?.ToString() ?? "";
 
                 _logger?.LogInformation("Layer1 auto-tool: {Pattern} → {Tool} → {Length} chars",
@@ -403,8 +403,8 @@ public sealed class QueryPatternRouter
         if (root.TryGetProperty("error", out var err))
             return $"错误: {err.GetString()}";
 
-        var path = root.GetProperty("path").GetString();
-        var content = root.GetProperty("content").GetString();
+        var path = root.GetProperty("path").GetString() ?? "";
+        var content = root.GetProperty("content").GetString() ?? "";
         var maxLen = 3000;
         if (content.Length > maxLen)
             content = content[..maxLen] + $"\n... (截断，共 {content.Length} 字符)";

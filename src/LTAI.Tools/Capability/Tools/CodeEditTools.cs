@@ -35,7 +35,7 @@ public sealed class CodeEditTools
             StartLine = startLine,
             EndLine = endLine,
             NewCode = newCode,
-        });
+        }).ConfigureAwait(false);
 
         return JsonSerializer.Serialize(new
         {
@@ -67,7 +67,7 @@ public sealed class CodeEditTools
             Kind = EditOpKind.ReplaceFunction,
             FunctionName = functionName,
             NewCode = newCode,
-        });
+        }).ConfigureAwait(false);
 
         return JsonSerializer.Serialize(new
         {
@@ -94,7 +94,7 @@ public sealed class CodeEditTools
             Kind = EditOpKind.InsertAfterLine,
             StartLine = line,
             NewCode = code,
-        });
+        }).ConfigureAwait(false);
 
         return JsonSerializer.Serialize(new
         {
@@ -119,7 +119,7 @@ public sealed class CodeEditTools
             Kind = EditOpKind.DeleteRange,
             StartLine = startLine,
             EndLine = endLine,
-        });
+        }).ConfigureAwait(false);
 
         return JsonSerializer.Serialize(new
         {
@@ -141,13 +141,13 @@ public sealed class CodeEditTools
 
         try
         {
-            var content = await File.ReadAllTextAsync(path, cancellationToken);
+            var content = await File.ReadAllTextAsync(path, cancellationToken).ConfigureAwait(false);
             var language = LanguageRegistry.Detect(path);
             var parser = _parserRegistry.GetParser(language);
 
             if (parser != null && parser.SupportsDiagnostics)
             {
-                var result = await parser.ParseAsync(content, path, cancellationToken);
+                var result = await parser.ParseAsync(content, path, cancellationToken).ConfigureAwait(false);
                 return JsonSerializer.Serialize(new
                 {
                     path,
@@ -197,7 +197,7 @@ public sealed class CodeEditTools
         if (!File.Exists(path))
             return JsonSerializer.Serialize(new { error = $"File not found: {path}" });
 
-        var lines = await File.ReadAllLinesAsync(path, cancellationToken);
+        var lines = await File.ReadAllLinesAsync(path, cancellationToken).ConfigureAwait(false);
         if (startLine < 1) startLine = 1;
         if (startLine > lines.Length)
             return JsonSerializer.Serialize(new { path, startLine, error = $"Start line {startLine} out of range (max {lines.Length})" });
@@ -228,14 +228,14 @@ public sealed class CodeEditTools
         if (!File.Exists(path))
             return JsonSerializer.Serialize(new { error = $"File not found: {path}" });
 
-        var content = await File.ReadAllTextAsync(path, cancellationToken);
+        var content = await File.ReadAllTextAsync(path, cancellationToken).ConfigureAwait(false);
         var language = LanguageRegistry.Detect(path);
         var parser = _parserRegistry.GetParser(language);
 
         if (parser == null)
             return JsonSerializer.Serialize(new { error = $"No parser available for {language}" });
 
-        var result = await parser.ParseAsync(content, path, cancellationToken);
+        var result = await parser.ParseAsync(content, path, cancellationToken).ConfigureAwait(false);
         var function = result.Functions
             .FirstOrDefault(f => f.Name.Equals(functionName, StringComparison.OrdinalIgnoreCase));
 
@@ -292,14 +292,14 @@ public sealed class CodeEditTools
         if (!File.Exists(path))
             return JsonSerializer.Serialize(new { error = $"File not found: {path}" });
 
-        var content = await File.ReadAllTextAsync(path, cancellationToken);
+        var content = await File.ReadAllTextAsync(path, cancellationToken).ConfigureAwait(false);
         var language = LanguageRegistry.Detect(path);
         var parser = _parserRegistry.GetParser(language);
 
         if (parser == null)
             return JsonSerializer.Serialize(new { error = $"No parser available for {language}" });
 
-        var result = await parser.ParseAsync(content, path, cancellationToken);
+        var result = await parser.ParseAsync(content, path, cancellationToken).ConfigureAwait(false);
         var cls = result.Classes
             .FirstOrDefault(c => c.Name.Equals(className, StringComparison.OrdinalIgnoreCase));
 
@@ -356,14 +356,14 @@ public sealed class CodeEditTools
         if (!File.Exists(path))
             return JsonSerializer.Serialize(new { error = $"File not found: {path}" });
 
-        var content = await File.ReadAllTextAsync(path, cancellationToken);
+        var content = await File.ReadAllTextAsync(path, cancellationToken).ConfigureAwait(false);
         var language = LanguageRegistry.Detect(path);
         var parser = _parserRegistry.GetParser(language);
 
         if (parser == null)
             return JsonSerializer.Serialize(new { error = $"No parser available for {language}" });
 
-        var result = await parser.ParseAsync(content, path, cancellationToken);
+        var result = await parser.ParseAsync(content, path, cancellationToken).ConfigureAwait(false);
 
         return JsonSerializer.Serialize(new
         {

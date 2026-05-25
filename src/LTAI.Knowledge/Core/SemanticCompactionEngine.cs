@@ -35,7 +35,7 @@ public sealed class SemanticCompactionEngine
 
         try
         {
-            var response = await _chatClient.GetResponseAsync(prompt, cancellationToken: ct);
+            var response = await _chatClient.GetResponseAsync(prompt, cancellationToken: ct).ConfigureAwait(false);
             var summary = response.Text?.Trim() ?? "";
             return summary.Length > 5 ? summary : content[..Math.Min(500, content.Length)];
         }
@@ -64,7 +64,7 @@ public sealed class SemanticCompactionEngine
 
         try
         {
-            var response = await _chatClient.GetResponseAsync(prompt, cancellationToken: ct);
+            var response = await _chatClient.GetResponseAsync(prompt, cancellationToken: ct).ConfigureAwait(false);
             var merged = response.Text?.Trim() ?? "";
             return merged.Length > 10 ? merged : similarBlocks.FirstOrDefault() ?? "";
         }
@@ -90,7 +90,7 @@ public sealed class SemanticCompactionEngine
 
         try
         {
-            var response = await _chatClient.GetResponseAsync(prompt, cancellationToken: ct);
+            var response = await _chatClient.GetResponseAsync(prompt, cancellationToken: ct).ConfigureAwait(false);
             return (response.Text ?? "").Trim().StartsWith("YES", StringComparison.OrdinalIgnoreCase);
         }
         catch
@@ -114,7 +114,7 @@ public sealed class SemanticCompactionEngine
 
         try
         {
-            var response = await _chatClient.GetResponseAsync(prompt, cancellationToken: ct);
+            var response = await _chatClient.GetResponseAsync(prompt, cancellationToken: ct).ConfigureAwait(false);
             _logger.LogInformation("Semantic compaction analyzed context ({Len} chars)", contextBlock.Length);
             return 1;
         }
@@ -128,7 +128,7 @@ public sealed class SemanticCompactionEngine
     public async Task<string> CompressAndMergeAsync(
         string content, CancellationToken ct = default)
     {
-        var compressed = await CompressColdBlock(content, ct);
+        var compressed = await CompressColdBlock(content, ct).ConfigureAwait(false);
         return compressed;
     }
 

@@ -40,7 +40,7 @@ public sealed class OutputGovernor : LayerGovernor
         try
         {
             var prompt = $"You just said: {response}\n\nIs there anything factually wrong or misleading in your response? Answer with 'OK' if correct, or explain the error briefly.";
-            var check = await LLM.CompleteAsync(prompt, new ChatOptions { Temperature = 0.1f, MaxOutputTokens = 200 }, cancellationToken);
+            var check = await LLM.CompleteAsync(prompt, new ChatOptions { Temperature = 0.1f, MaxOutputTokens = 200 }, cancellationToken).ConfigureAwait(false);
             return check.Contains("OK", StringComparison.OrdinalIgnoreCase) ? "verified" : $"flagged: {check}";
         }
         catch

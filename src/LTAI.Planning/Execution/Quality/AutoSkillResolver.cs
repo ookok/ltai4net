@@ -88,7 +88,7 @@ public sealed class AutoSkillResolver
 
         if (llmCall != null)
         {
-            result = await GenerateCode(skillName, taskContext, llmCall);
+            result = await GenerateCode(skillName, taskContext, llmCall).ConfigureAwait(false);
         }
 
         if (result == null)
@@ -191,7 +191,7 @@ Generate the code for the skill '{name}':";
         string? generatedCode = null;
         try
         {
-            generatedCode = await llmCall(prompt, null, CancellationToken.None);
+            generatedCode = await llmCall(prompt, null, CancellationToken.None).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -255,7 +255,7 @@ Generate the code for the skill '{name}':";
             attempt++;
             try
             {
-                var success = await stepFunc();
+                var success = await stepFunc().ConfigureAwait(false);
                 if (success)
                     return;
             }
@@ -274,7 +274,7 @@ Generate the code for the skill '{name}':";
                 foreach (var skillName in missingSkills)
                 {
                     _logger.LogInformation("Attempting to resolve missing skill: {Skill}", skillName);
-                    var resolved = await Resolve(skillName, taskContext);
+                    var resolved = await Resolve(skillName, taskContext).ConfigureAwait(false);
                     if (resolved != null)
                     {
                         _logger.LogInformation("Resolved skill {Skill} (type={Type})", skillName, resolved.Type);

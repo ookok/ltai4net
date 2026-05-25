@@ -106,14 +106,14 @@ public sealed class UnifiedSafetyGate
         var decoded = DecodeEncodings(input);
         if (decoded != input)
         {
-            var decodedRisk = await _coordinator.EvaluateAsync(decoded, null, ct);
+            var decodedRisk = await _coordinator.EvaluateAsync(decoded, null, ct).ConfigureAwait(false);
             if (decodedRisk.RiskScore > _encodedInjectionRiskThreshold)
                 return EscalateAndBlock(sessionId, "Encoded injection detected");
         }
 
         var injectionScore = ComputeInjectionScore(input);
 
-        var verdict = await _coordinator.EvaluateAsync(input, null, ct);
+        var verdict = await _coordinator.EvaluateAsync(input, null, ct).ConfigureAwait(false);
 
         var cumulative = UpdateCumulativeRisk(sessionId, verdict.RiskScore + injectionScore);
         if (cumulative > _cumulativeRiskThreshold)
@@ -137,7 +137,7 @@ public sealed class UnifiedSafetyGate
     public async Task<GateVerdict> EvaluateOutputAsync(
         string output, string sessionId, CancellationToken ct = default)
     {
-        var result = await _coordinator.EvaluateOutputAsync(output, ct);
+        var result = await _coordinator.EvaluateOutputAsync(output, ct).ConfigureAwait(false);
         if (!result.Allowed)
             return GateVerdict.Block(result.BlockReason ?? "Output blocked");
 

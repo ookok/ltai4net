@@ -290,7 +290,7 @@ public sealed class ReachGateway
         try
         {
             cts.Token.Register(() => tcs.TrySetResult(null));
-            var result = await tcs.Task;
+            var result = await tcs.Task.ConfigureAwait(false);
             return result;
         }
         catch (OperationCanceledException)

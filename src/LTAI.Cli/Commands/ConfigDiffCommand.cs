@@ -39,8 +39,8 @@ public sealed class ConfigDiffer
     public async Task<ConfigDiffReport> DiffAsync(
         string oldYamlPath, string newYamlPath, CancellationToken ct)
     {
-        var oldConfig = await LoadConfigAsync(oldYamlPath, ct);
-        var newConfig = await LoadConfigAsync(newYamlPath, ct);
+        var oldConfig = await LoadConfigAsync(oldYamlPath, ct).ConfigureAwait(false);
+        var newConfig = await LoadConfigAsync(newYamlPath, ct).ConfigureAwait(false);
 
         var report = new ConfigDiffReport();
 
@@ -78,8 +78,8 @@ public sealed class ConfigDiffer
     public async Task<ConfigDiffReport> DiffJsonAsync(
         string oldJsonPath, string newJsonPath, CancellationToken ct)
     {
-        var oldJson = await File.ReadAllTextAsync(oldJsonPath, ct);
-        var newJson = await File.ReadAllTextAsync(newJsonPath, ct);
+        var oldJson = await File.ReadAllTextAsync(oldJsonPath, ct).ConfigureAwait(false);
+        var newJson = await File.ReadAllTextAsync(newJsonPath, ct).ConfigureAwait(false);
 
         var oldConfig = JsonSerializer.Deserialize<LtaiRootConfig>(oldJson)
             ?? new LtaiRootConfig();
@@ -119,7 +119,7 @@ public sealed class ConfigDiffer
 
     private static async Task<AgentConfig> LoadConfigAsync(string path, CancellationToken ct)
     {
-        var yaml = await File.ReadAllTextAsync(path, ct);
+        var yaml = await File.ReadAllTextAsync(path, ct).ConfigureAwait(false);
         return YamlParser.ParseAgentConfig(yaml);
     }
 

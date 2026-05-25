@@ -70,7 +70,7 @@ public sealed class SelfRefinementLoop
         var sources = new List<string>();
         int totalTokens = 0;
 
-        var currentSolution = await GenerateAsync(problem, sources, cfg);
+        var currentSolution = await GenerateAsync(problem, sources, cfg).ConfigureAwait(false);
         totalTokens += EstimateTokens(currentSolution);
 
         for (int round = 0; round < cfg.MaxRefinementRounds; round++)
@@ -79,7 +79,7 @@ public sealed class SelfRefinementLoop
             var stepSw = Stopwatch.StartNew();
 
             var (verification, issues, qualityScore) = await VerifyAsync(
-                problem, currentSolution, round, cfg);
+                problem, currentSolution, round, cfg).ConfigureAwait(false);
 
             var step = new RefinementStep
             {
@@ -118,7 +118,7 @@ public sealed class SelfRefinementLoop
                 break;
             }
 
-            currentSolution = await RefineAsync(problem, currentSolution, verification, issues, sources, cfg);
+            currentSolution = await RefineAsync(problem, currentSolution, verification, issues, sources, cfg).ConfigureAwait(false);
             totalTokens += EstimateTokens(currentSolution);
         }
 
@@ -153,10 +153,10 @@ public sealed class SelfRefinementLoop
         var systemPrompt = BuildGenerateSystemPrompt(cfg);
         var userPrompt = $"## Problem\n{problem}\n\nGenerate a complete solution with rigorous reasoning.";
 
-        var prompt = await _promptBuilder.BuildSinglePrompt(userPrompt, docs, opts);
+        var prompt = await _promptBuilder.BuildSinglePrompt(userPrompt, docs, opts).ConfigureAwait(false);
         var fullPrompt = systemPrompt + "\n\n" + prompt;
 
-        var response = await _chatClient.GetResponseAsync(fullPrompt, cancellationToken: default);
+        var response = await _chatClient.GetResponseAsync(fullPrompt, cancellationToken: default).ConfigureAwait(false);
         return response.Text ?? "";
     }
 
@@ -164,7 +164,7 @@ public sealed class SelfRefinementLoop
         string problem, string solution, int round, RefinementConfig cfg)
     {
         var verifyPrompt = BuildVerifyPrompt(problem, solution);
-        var response = await _chatClient.GetResponseAsync(verifyPrompt);
+        var response = await _chatClient.GetResponseAsync(verifyPrompt).ConfigureAwait(false);
 
         var raw = response.Text ?? "";
         var issues = ParseIssues(raw);
@@ -181,7 +181,7 @@ public sealed class SelfRefinementLoop
         foreach (var d in docs) sources.Add(d.Title ?? "");
 
         var refinePrompt = BuildRefinePrompt(problem, currentSolution, verification, issues);
-        var response = await _chatClient.GetResponseAsync(refinePrompt);
+        var response = await _chatClient.GetResponseAsync(refinePrompt).ConfigureAwait(false);
         return response.Text ?? currentSolution;
     }
 

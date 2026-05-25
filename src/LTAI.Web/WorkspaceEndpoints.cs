@@ -33,12 +33,33 @@ public static class WorkspaceEndpoints
 {
     private static readonly ConcurrentDictionary<string, WorkspaceRecord> _workspaces = new();
     private static readonly string[] ValidRoles = { "owner", "editor", "viewer" };
+    private static readonly Timer _workspaceCleanupTimer;
+
+    static WorkspaceEndpoints()
+    {
+        _workspaceCleanupTimer = new Timer(CleanupOldWorkspaces, null, TimeSpan.FromMinutes(30), TimeSpan.FromMinutes(30));
+    }
+
+    private static void CleanupOldWorkspaces(object? state)
+    {
+        try
+        {
+            var cutoff = DateTime.UtcNow.AddHours(-24);
+            foreach (var (key, ws) in _workspaces)
+            {
+                if (ws.LastAccessedAt < cutoff)
+                    _workspaces.TryRemove(key, out _);
+            }
+        }
+        catch { /* timer callback must not throw */ }
+    }
 
     public static void MapWorkspaceEndpoints(this IEndpointRouteBuilder endpoints)
     {
         endpoints.MapPost("/api/workspaces", async (HttpContext context) =>
         {
-            var body = await new StreamReader(context.Request.Body).ReadToEndAsync();
+            using var reader = new StreamReader(context.Request.Body);
+            var body = await reader.ReadToEndAsync().ConfigureAwait(false);
             var req = JsonSerializer.Deserialize<CreateWorkspaceRequest>(body);
 
             if (req == null || string.IsNullOrWhiteSpace(req.Name))
@@ -64,6 +85,12 @@ public static class WorkspaceEndpoints
                 }
             };
 
+            if (_workspaces.Count >= 500)
+            {
+                var oldest = _workspaces.Values.MinBy(w => w.CreatedAt);
+                if (oldest != null)
+                    _workspaces.TryRemove(oldest.WorkspaceId, out _);
+            }
             _workspaces[wsId] = ws;
 
             await context.Response.WriteAsJsonAsync(new WorkspaceInfo
@@ -97,7 +124,7 @@ public static class WorkspaceEndpoints
                 .OrderByDescending(w => w.CreatedAt)
                 .ToList();
 
-            await context.Response.WriteAsJsonAsync(result);
+            await context.Response.WriteAsJsonAsync(result).ConfigureAwait(false);
         });
 
         endpoints.MapGet("/api/workspaces/{workspaceId}", async (string workspaceId, HttpContext context) =>
@@ -118,6 +145,8 @@ public static class WorkspaceEndpoints
                 return;
             }
 
+            ws.LastAccessedAt = DateTime.UtcNow;
+
             await context.Response.WriteAsJsonAsync(new WorkspaceInfo
             {
                 WorkspaceId = ws.WorkspaceId,
@@ -127,7 +156,7 @@ public static class WorkspaceEndpoints
                 MemberCount = ws.Members.Count,
                 ProjectCount = ws.Projects.Count,
                 CreatedAt = ws.CreatedAt
-            });
+            }).ConfigureAwait(false);
         });
 
         endpoints.MapDelete("/api/workspaces/{workspaceId}", async (string workspaceId, HttpContext context) =>
@@ -148,13 +177,14 @@ public static class WorkspaceEndpoints
             }
 
             _workspaces.TryRemove(workspaceId, out _);
-            await context.Response.WriteAsJsonAsync(new { ok = true, workspace_id = workspaceId });
+            await context.Response.WriteAsJsonAsync(new { ok = true, workspace_id = workspaceId }).ConfigureAwait(false);
         });
 
         endpoints.MapPost("/api/workspaces/{workspaceId}/members", async (string workspaceId, HttpContext context) =>
         {
             var userId = context.Request.Headers["X-User-Id"].FirstOrDefault() ?? "anonymous";
-            var body = await new StreamReader(context.Request.Body).ReadToEndAsync();
+            using var reader = new StreamReader(context.Request.Body);
+            var body = await reader.ReadToEndAsync().ConfigureAwait(false);
             var req = JsonSerializer.Deserialize<InviteMemberRequest>(body);
 
             if (req == null || string.IsNullOrWhiteSpace(req.UserId))
@@ -190,7 +220,7 @@ public static class WorkspaceEndpoints
                 JoinedAt = DateTimeOffset.UtcNow.ToUnixTimeSeconds()
             };
 
-            await context.Response.WriteAsJsonAsync(new { ok = true, user_id = req.UserId, role = req.Role });
+            await context.Response.WriteAsJsonAsync(new { ok = true, user_id = req.UserId, role = req.Role }).ConfigureAwait(false);
         });
 
         endpoints.MapDelete("/api/workspaces/{workspaceId}/members/{targetUserId}", async (string workspaceId, string targetUserId, HttpContext context) =>
@@ -218,7 +248,7 @@ public static class WorkspaceEndpoints
             }
 
             ws.Members.TryRemove(targetUserId, out _);
-            await context.Response.WriteAsJsonAsync(new { ok = true, removed_user = targetUserId });
+            await context.Response.WriteAsJsonAsync(new { ok = true, removed_user = targetUserId }).ConfigureAwait(false);
         });
 
         endpoints.MapGet("/api/workspaces/{workspaceId}/members", async (string workspaceId, HttpContext context) =>
@@ -236,7 +266,7 @@ public static class WorkspaceEndpoints
                 joined_at = kvp.Value.JoinedAt
             }).ToList();
 
-            await context.Response.WriteAsJsonAsync(members);
+            await context.Response.WriteAsJsonAsync(members).ConfigureAwait(false);
         });
     }
 }
@@ -247,6 +277,7 @@ internal sealed class WorkspaceRecord
     public string Name { get; set; } = "";
     public string Owner { get; set; } = "";
     public double CreatedAt { get; set; }
+    public DateTime LastAccessedAt { get; set; } = DateTime.UtcNow;
     public ConcurrentDictionary<string, MemberRecord> Members { get; set; } = new();
     public ConcurrentBag<object> Projects { get; set; } = new();
 }

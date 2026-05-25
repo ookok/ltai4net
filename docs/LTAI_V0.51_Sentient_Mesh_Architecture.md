@@ -1,8 +1,8 @@
-# LTAI v7.0 "Sentient Mesh" -- 架构重构方案
+# LTAI V0.51 "Sentient Mesh" -- 架构重构方案
 
 **评审日期**: 2026-05-23
 **评审范围**: 17 个项目, 635+ .cs 文件
-**基线**: v6.1 → v7.0 彻底重构
+**基线**: V0.50 → V0.51 彻底重构
 
 ---
 
@@ -10,7 +10,7 @@
 
 ```mermaid
 graph TB
-    subgraph "LTAI v7.0 ─ Sentient Mesh"
+    subgraph "LTAI V0.51 ─ Sentient Mesh"
     
     subgraph "入口层"
         GATE[UnifiedSafetyGate<br/>唯一安全守门人 + 冷却期控制<br/>废除: DNASafetyMiddleware]
@@ -1078,7 +1078,7 @@ public sealed class PredictivePrefetcher
 Feature: EIA 全流程 (TC-EIA-FULL)
 
   Background:
-    Given 系统已启动 LTAI v7.0
+    Given 系统已启动 LTAI V0.51
     And 用户已认证
     And FakeChatClient 已配置（Mock 模式）
 
@@ -1915,7 +1915,7 @@ if (verdict.RiskScore > 0.7f)
 
 ---
 
-## YAML 配置示例 (v7.0)
+## YAML 配置示例 (V0.51)
 
 ```yaml
 # src/LTAI.Agent/agents_v7.yaml

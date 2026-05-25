@@ -17,9 +17,9 @@ public static class HttpTools
     {
         try
         {
-            var response = await _client.GetAsync(url, ct);
+            var response = await _client.GetAsync(url, ct).ConfigureAwait(false);
             response.EnsureSuccessStatusCode();
-            var content = await response.Content.ReadAsStringAsync(ct);
+            var content = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
 
             return content.Length > 10000
                 ? content[..10000] + $"\n...(truncated, total {content.Length} chars)"
@@ -40,9 +40,9 @@ public static class HttpTools
         try
         {
             var content = new StringContent(jsonBody, System.Text.Encoding.UTF8, "application/json");
-            var response = await _client.PostAsync(url, content, ct);
+            var response = await _client.PostAsync(url, content, ct).ConfigureAwait(false);
             response.EnsureSuccessStatusCode();
-            var result = await response.Content.ReadAsStringAsync(ct);
+            var result = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
             return result;
         }
         catch (Exception ex)

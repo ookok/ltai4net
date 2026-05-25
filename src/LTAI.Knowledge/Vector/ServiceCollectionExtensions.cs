@@ -1,3 +1,4 @@
+using LTAI.Core.Configuration;
 using LTAI.Core.System;
 using LTAI.Knowledge.Core;
 using LTAI.Knowledge.Services;
@@ -6,6 +7,7 @@ using LTAI.Knowledge.Vector.Interfaces;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Microsoft.KernelMemory;
 
 namespace LTAI.Knowledge.Vector;
@@ -129,14 +131,16 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<JinaEmbeddingConfig>(config);
         services.AddSingleton<IEmbeddingBackend>(sp =>
         {
+#pragma warning disable CS0618
             var logger = sp.GetService<ILogger<JinaEmbeddingBackend>>();
             var backend = new JinaEmbeddingBackend(config, logger);
             backend.InitializeAsync().GetAwaiter().GetResult();
             return backend;
         });
+#pragma warning restore CS0618
 
         services.AddSingleton<IEmbeddingGenerator<string, Embedding<float>>>(sp =>
-            new EmbeddingGeneratorAdapter(sp.GetRequiredService<IEmbeddingBackend>()));
+            CreateWrappedGenerator(sp, sp.GetRequiredService<IEmbeddingBackend>()));
 
         return services;
     }
@@ -179,10 +183,12 @@ public static class ServiceCollectionExtensions
 
             case "api":
                 services.AddSingleton<IEmbeddingBackend>(sp =>
+#pragma warning disable CS0618
                     new APIEmbeddingBackend(
                         sp.GetRequiredService<IHttpClientFactory>(),
                         endpoint!, apiKey!, model!, dimension ?? 1024,
                         sp.GetRequiredService<ILogger<APIEmbeddingBackend>>()));
+#pragma warning restore CS0618
                 break;
 
             default: // local
@@ -191,7 +197,7 @@ public static class ServiceCollectionExtensions
         }
 
         services.AddSingleton<IEmbeddingGenerator<string, Embedding<float>>>(sp =>
-            new EmbeddingGeneratorAdapter(sp.GetRequiredService<IEmbeddingBackend>()));
+            CreateWrappedGenerator(sp, sp.GetRequiredService<IEmbeddingBackend>()));
 
         services.AddSingleton<IVectorStore, VectorStore>();
         services.AddSingleton<DocumentStore>(sp =>
@@ -254,5 +260,20 @@ public static class ServiceCollectionExtensions
         services.AddHostedService<CodeGraphSyncService>();
 
         return services;
+    }
+
+    private static IEmbeddingGenerator<string, Embedding<float>> CreateWrappedGenerator(
+        IServiceProvider sp,
+        IEmbeddingBackend backend)
+    {
+        var adapter = new EmbeddingGeneratorAdapter(backend);
+
+        var options = sp.GetService<IOptions<LTAIOptions>>();
+        if (options?.Value?.Vector?.TaskAwareEmbedding == true)
+        {
+            return new TaskAwareEmbeddingGeneratorDecorator(adapter);
+        }
+
+        return adapter;
     }
 }

@@ -40,7 +40,7 @@ public sealed class VectorStore : IVectorStore, IDisposable
 
     public async Task<float[]> EmbedAsync(string text, CancellationToken cancellationToken = default)
     {
-        var embeddings = await _embeddingBackend.EmbedAsync(new[] { text }, cancellationToken);
+        var embeddings = await _embeddingBackend.EmbedAsync(new[] { text }, cancellationToken).ConfigureAwait(false);
         return embeddings[0];
     }
 

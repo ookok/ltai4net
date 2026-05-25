@@ -100,7 +100,7 @@ public sealed class SelfDistillPipeline
             var roundResult = ProcessRound(stage, allTraces, chatFn);
             _distillHistory.Add(roundResult);
 
-            await AddNoiseFilter(allTraces);
+            await AddNoiseFilter(allTraces).ConfigureAwait(false);
 
             if (stage == DistillStage.ProgressiveEnforcement && round >= 2)
             {
@@ -363,7 +363,7 @@ public sealed class SelfDistillPipeline
             }
         }
 
-        await System.Threading.Tasks.Task.CompletedTask;
+        await System.Threading.Tasks.Task.CompletedTask.ConfigureAwait(false);
     }
 
     private static string? ExtractNoisePattern(ParallelGraphResult trace)

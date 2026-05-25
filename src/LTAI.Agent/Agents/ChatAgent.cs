@@ -36,7 +36,7 @@ public sealed class ChatAgent : BaseAgent
         UpdateHistory("user", query);
 
         if (query.Trim().StartsWith('/'))
-            return await HandleSlashCommand(query, ct);
+            return await HandleSlashCommand(query, ct).ConfigureAwait(false);
 
         var msgList = new List<ChatMessage>(context.FullHistory);
 
@@ -49,7 +49,7 @@ public sealed class ChatAgent : BaseAgent
             msgList.Insert(0, systemMsg);
         }
 
-        var response = await CallBrainAsync(msgList, ct: ct);
+        var response = await CallBrainAsync(msgList, ct: ct).ConfigureAwait(false);
         var responseText = response.Text ?? "";
         UpdateHistory("assistant", responseText[..Math.Min(responseText.Length, 500)]);
 
@@ -67,7 +67,7 @@ public sealed class ChatAgent : BaseAgent
                 new(ChatRole.System, reinforcementPrompt)
             };
 
-            response = await CallBrainAsync(reinforcedMessages, ct: ct);
+            response = await CallBrainAsync(reinforcedMessages, ct: ct).ConfigureAwait(false);
             responseText = response.Text ?? "";
             UpdateHistory("assistant", responseText[..Math.Min(responseText.Length, 500)]);
         }
@@ -94,7 +94,7 @@ public sealed class ChatAgent : BaseAgent
                     "Budget tracking is enabled for this agent."));
             default:
                 return await CallBrainAsync(
-                    new List<ChatMessage> { new(ChatRole.User, command) }, ct: ct);
+                    new List<ChatMessage> { new(ChatRole.User, command) }, ct: ct).ConfigureAwait(false);
         }
     }
 

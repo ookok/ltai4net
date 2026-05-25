@@ -86,7 +86,7 @@ public sealed class DecoupledExecutor : IDecoupledExecutor
 
         _pending.TryAdd(tid, handle);
         _ = RunAsync(handle, func, timeout ?? TimeSpan.FromSeconds(60));
-        return await Task.FromResult(handle);
+        return await Task.FromResult(handle).ConfigureAwait(false);
     }
 
     public async Task<TaskHandle> SubmitAsync(
@@ -98,7 +98,7 @@ public sealed class DecoupledExecutor : IDecoupledExecutor
 
         _pending.TryAdd(tid, handle);
         _ = RunWithResultAsync(handle, func, timeout ?? TimeSpan.FromSeconds(60));
-        return await Task.FromResult(handle);
+        return await Task.FromResult(handle).ConfigureAwait(false);
     }
 
     public async Task<List<TaskHandle>> CollectAsync(TimeSpan? timeout = null, bool partial = true)
@@ -113,14 +113,14 @@ public sealed class DecoupledExecutor : IDecoupledExecutor
 
             if (!partial && !_pending.IsEmpty)
             {
-                await Task.Delay(_collectInterval);
+                await Task.Delay(_collectInterval).ConfigureAwait(false);
                 continue;
             }
 
             if (results.Count > 0 || _pending.IsEmpty)
                 break;
 
-            await Task.Delay(_collectInterval);
+            await Task.Delay(_collectInterval).ConfigureAwait(false);
         }
 
         return results;
@@ -140,7 +140,7 @@ public sealed class DecoupledExecutor : IDecoupledExecutor
 
     private async Task RunAsync(TaskHandle handle, Func<CancellationToken, Task> func, TimeSpan timeout)
     {
-        await _semaphore.WaitAsync();
+        await _semaphore.WaitAsync().ConfigureAwait(false);
         try
         {
             handle.Status = TaskStatusState.Running;
@@ -151,7 +151,7 @@ public sealed class DecoupledExecutor : IDecoupledExecutor
                 try
                 {
                     using var cts = new CancellationTokenSource(timeout);
-                    await func(cts.Token);
+                    await func(cts.Token).ConfigureAwait(false);
                     handle.Status = TaskStatusState.Done;
                     Interlocked.Increment(ref _completed);
                     break;
@@ -188,7 +188,7 @@ public sealed class DecoupledExecutor : IDecoupledExecutor
 
     private async Task RunWithResultAsync(TaskHandle handle, Func<CancellationToken, Task<object?>> func, TimeSpan timeout)
     {
-        await _semaphore.WaitAsync();
+        await _semaphore.WaitAsync().ConfigureAwait(false);
         try
         {
             handle.Status = TaskStatusState.Running;
@@ -199,7 +199,7 @@ public sealed class DecoupledExecutor : IDecoupledExecutor
                 try
                 {
                     using var cts = new CancellationTokenSource(timeout);
-                    handle.Result = await func(cts.Token);
+                    handle.Result = await func(cts.Token).ConfigureAwait(false);
                     handle.Status = TaskStatusState.Done;
                     Interlocked.Increment(ref _completed);
                     break;
@@ -253,7 +253,7 @@ public sealed class DecoupledExecutor : IDecoupledExecutor
             {
                 try
                 {
-                    var exp = await generator(entitySubset);
+                    var exp = await generator(entitySubset).ConfigureAwait(false);
                     if (exp != null)
                         _virtualExperiences.Enqueue(exp);
                 }

@@ -141,7 +141,7 @@ public sealed class BatchWriter
     {
         while (!cancellationToken.IsCancellationRequested)
         {
-            await Task.Delay(TimeSpan.FromSeconds(_flushInterval), cancellationToken);
+            await Task.Delay(TimeSpan.FromSeconds(_flushInterval), cancellationToken).ConfigureAwait(false);
             Flush();
         }
     }
@@ -197,7 +197,7 @@ public static class IOUtils
         var size = new FileInfo(path).Length;
         if (size < chunkSize * 2)
         {
-            var content = await File.ReadAllTextAsync(path);
+            var content = await File.ReadAllTextAsync(path).ConfigureAwait(false);
             chunks.Add(content);
             return chunks;
         }
@@ -206,7 +206,7 @@ public static class IOUtils
         using var reader = new StreamReader(path);
         while (true)
         {
-            var read = await reader.ReadAsync(buffer, 0, buffer.Length);
+            var read = await reader.ReadAsync(buffer, 0, buffer.Length).ConfigureAwait(false);
             if (read == 0) break;
             chunks.Add(new string(buffer, 0, read));
         }

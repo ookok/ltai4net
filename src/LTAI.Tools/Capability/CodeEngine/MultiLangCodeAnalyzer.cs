@@ -21,7 +21,7 @@ public sealed class MultiLangCodeAnalyzer
         var parser = _parserRegistry.GetParser(language);
         if (parser != null)
         {
-            var astResult = await parser.ParseAsync(code, null, cancellationToken);
+            var astResult = await parser.ParseAsync(code, null, cancellationToken).ConfigureAwait(false);
             return MapToResult(astResult, language, info);
         }
         return AnalyzeFallback(code, language, info);
@@ -30,7 +30,7 @@ public sealed class MultiLangCodeAnalyzer
     [Obsolete("Use AnalyzeAsync instead to avoid sync-over-async deadlocks")]
     public async Task<CodeAnalysisResult> Analyze(string code, CodeLanguage language)
     {
-        return await AnalyzeAsync(code, language);
+        return await AnalyzeAsync(code, language).ConfigureAwait(false);
     }
 
     public async Task<List<string>> ExtractDependenciesAsync(
@@ -39,7 +39,7 @@ public sealed class MultiLangCodeAnalyzer
         var parser = _parserRegistry.GetParser(language);
         if (parser != null)
         {
-            var result = await parser.ParseAsync(code, null, cancellationToken);
+            var result = await parser.ParseAsync(code, null, cancellationToken).ConfigureAwait(false);
             return result.Imports.Select(i => i.Module).Distinct().ToList();
         }
         var info = LanguageRegistry.Get(language);
@@ -53,7 +53,7 @@ public sealed class MultiLangCodeAnalyzer
         var parser = _parserRegistry.GetParser(language);
         if (parser != null && parser.SupportsDiagnostics)
         {
-            var result = await parser.ParseAsync(code, null, cancellationToken);
+            var result = await parser.ParseAsync(code, null, cancellationToken).ConfigureAwait(false);
             return result.Diagnostics;
         }
         return new();
@@ -64,7 +64,7 @@ public sealed class MultiLangCodeAnalyzer
     {
         var parser = _parserRegistry.GetParser(language);
         if (parser != null)
-            return await parser.ParseAsync(code, null, cancellationToken);
+            return await parser.ParseAsync(code, null, cancellationToken).ConfigureAwait(false);
 
         var result = new CodeParseResult { Language = language };
         var info = LanguageRegistry.Get(language);

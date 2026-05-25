@@ -23,7 +23,7 @@ public sealed class EmbeddingGeneratorAdapter : IEmbeddingGenerator<string, Embe
         CancellationToken cancellationToken = default)
     {
         var texts = values as IReadOnlyList<string> ?? values.ToList();
-        var vectors = await _backend.EmbedAsync(texts, cancellationToken);
+        var vectors = await _backend.EmbedAsync(texts, cancellationToken).ConfigureAwait(false);
 
         var embeddings = vectors.Select(v => new Embedding<float>(v)).ToList();
         return new GeneratedEmbeddings<Embedding<float>>(embeddings);
@@ -64,7 +64,7 @@ public sealed class KernelMemoryEmbeddingAdapter : ITextEmbeddingGenerator
     public async Task<Microsoft.KernelMemory.Embedding> GenerateEmbeddingAsync(
         string text, CancellationToken cancellationToken = default)
     {
-        var vectors = await _backend.EmbedAsync(new[] { text }, cancellationToken);
+        var vectors = await _backend.EmbedAsync(new[] { text }, cancellationToken).ConfigureAwait(false);
         return new Microsoft.KernelMemory.Embedding(vectors[0]);
     }
 }

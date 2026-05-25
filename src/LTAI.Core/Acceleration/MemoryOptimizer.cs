@@ -133,6 +133,15 @@ public sealed class ResponseCache
 
 public static class TokenCompressor
 {
+    private static readonly Regex s_timestampPattern = new(
+        @"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(\.\d+)?",
+        RegexOptions.Compiled);
+    private static readonly Regex s_uuidPattern = new(
+        @"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex s_numberPattern = new(
+        @"\b\d+(\.\d+)?\b",
+        RegexOptions.Compiled);
     public static string CompressGitDiff(string text)
     {
         var lines = text.Split('\n');
@@ -220,15 +229,12 @@ public static class TokenCompressor
         var lines = text.Split('\n');
         var result = new List<string>();
         var seen = new HashSet<string>();
-        var timestampPattern = new Regex(@"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(\.\d+)?");
-        var uuidPattern = new Regex(@"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b", RegexOptions.IgnoreCase);
-        var numberPattern = new Regex(@"\b\d+(\.\d+)?\b");
 
         foreach (var line in lines)
         {
-            var normalized = timestampPattern.Replace(line, "[TS]");
-            normalized = uuidPattern.Replace(normalized, "[UUID]");
-            normalized = numberPattern.Replace(normalized, "[N]");
+            var normalized = s_timestampPattern.Replace(line, "[TS]");
+            normalized = s_uuidPattern.Replace(normalized, "[UUID]");
+            normalized = s_numberPattern.Replace(normalized, "[N]");
             normalized = normalized.Trim();
 
             if (seen.Add(normalized))

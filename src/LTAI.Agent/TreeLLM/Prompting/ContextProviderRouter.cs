@@ -35,7 +35,7 @@ public sealed class ContextProviderRouter
         if (mode == ProviderMode.Enhance)
         {
             var enrichment = await _promptBuilder.BuildContextSection(docs, query,
-                new PromptBuildOptions { IncludeCitations = false });
+                new PromptBuildOptions { IncludeCitations = false }).ConfigureAwait(false);
             return new RoutingDecision(
                 mode, reason, query,
                 EnrichedContext: enrichment,

@@ -98,7 +98,7 @@ public sealed class CascadeLoader : IDisposable
         // 检查内存限制
         if (!CanFitInMemory(cellId))
         {
-            await UnloadLeastUsedCellsAsync(ct);
+            await UnloadLeastUsedCellsAsync(ct).ConfigureAwait(false);
         }
 
         var status = new CellLoadStatus
@@ -119,7 +119,7 @@ public sealed class CascadeLoader : IDisposable
             {
                 // 尝试从 GitHub 下载
                 _logger.LogInformation("Cell not found locally, downloading from GitHub: {Id}", cellId);
-                package = await _githubRegistry.DownloadCellAsync(cellId, ct: ct);
+                package = await _githubRegistry.DownloadCellAsync(cellId, ct: ct).ConfigureAwait(false);
                 if (package == null)
                 {
                     status = status with { State = CellLoadState.Failed, Error = "Package not found" };
@@ -132,11 +132,11 @@ public sealed class CascadeLoader : IDisposable
             var dependencies = package.Manifest.Dependencies;
             if (_config.EnableDependencyPrefetch && dependencies.Count > 0)
             {
-                await LoadDependenciesAsync(dependencies, ct);
+                await LoadDependenciesAsync(dependencies, ct).ConfigureAwait(false);
             }
 
             // 3. 加载细胞模型
-            await LoadCellModelAsync(package, ct);
+            await LoadCellModelAsync(package, ct).ConfigureAwait(false);
 
             status = status with
             {
@@ -176,7 +176,7 @@ public sealed class CascadeLoader : IDisposable
     {
         if (!_config.EnableLazyLoading)
         {
-            return await LoadCellCascadeAsync(cellId, domain, ct: ct);
+            return await LoadCellCascadeAsync(cellId, domain, ct: ct).ConfigureAwait(false);
         }
 
         // 如果未加载，标记为待加载并返回占位符
@@ -188,7 +188,7 @@ public sealed class CascadeLoader : IDisposable
             {
                 using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
                 cts.CancelAfter(_config.LazyLoadTimeout);
-                await LoadCellCascadeAsync(cellId, domain, ct: cts.Token);
+                await LoadCellCascadeAsync(cellId, domain, ct: cts.Token).ConfigureAwait(false);
             }, ct);
 
             return new CellLoadStatus
@@ -216,7 +216,7 @@ public sealed class CascadeLoader : IDisposable
         try
         {
             // 从 CellAIRegistry 卸载
-            await _cellRegistry.UnloadIdleCellsAsync(ct);
+            await _cellRegistry.UnloadIdleCellsAsync(ct).ConfigureAwait(false);
 
             status = status with
             {
@@ -291,7 +291,7 @@ public sealed class CascadeLoader : IDisposable
             }
 
             // 加载依赖
-            await LoadCellCascadeAsync(dep.CellId, dep.Domain, dep.LoadOrder, ct);
+            await LoadCellCascadeAsync(dep.CellId, dep.Domain, dep.LoadOrder, ct).ConfigureAwait(false);
         }
     }
 
@@ -314,7 +314,7 @@ public sealed class CascadeLoader : IDisposable
         await _cellRegistry.InitializePretrainedModelsAsync(
             new Dictionary<string, OnnxModelConfig> { [package.Manifest.Domain] = config },
             autoDownload: false,
-            ct: ct);
+            ct: ct).ConfigureAwait(false);
     }
 
     private bool CanFitInMemory(string cellId)
@@ -343,7 +343,7 @@ public sealed class CascadeLoader : IDisposable
                 break;  // 内存使用降至 80% 以下
             }
 
-            await UnloadCellAsync(cell.CellId, ct);
+            await UnloadCellAsync(cell.CellId, ct).ConfigureAwait(false);
             unloaded++;
         }
 

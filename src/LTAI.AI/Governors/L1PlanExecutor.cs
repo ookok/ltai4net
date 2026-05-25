@@ -76,7 +76,7 @@ public sealed class L1PlanExecutor
                 Tools = new List<AITool>() // Disable tool calling — planner outputs JSON only
             };
 
-            var planResponse = await llm.GetResponseAsync(planMessages, planOptions, cancellationToken);
+            var planResponse = await llm.GetResponseAsync(planMessages, planOptions, cancellationToken).ConfigureAwait(false);
             planJson = planResponse.Text?.Trim() ?? "";
         }
         catch (Exception ex)
@@ -145,7 +145,7 @@ public sealed class L1PlanExecutor
 
                 try
                 {
-                    var result = await toolRegistry.InvokeAsync(step.Tool, step.Args, cancellationToken);
+                    var result = await toolRegistry.InvokeAsync(step.Tool, step.Args, cancellationToken).ConfigureAwait(false);
                     var resultText = result?.ToString() ?? "";
                     _logger?.LogInformation("L2 plan executed: {Tool} (id={Id}, result {Len} chars)", step.Tool, step.Id, resultText.Length);
                     return (step, resultText, (string?)null);
@@ -157,7 +157,7 @@ public sealed class L1PlanExecutor
                 }
             });
 
-            var batchResults = await Task.WhenAll(tasks);
+            var batchResults = await Task.WhenAll(tasks).ConfigureAwait(false);
 
             foreach (var (step, resultText, error) in batchResults)
             {
@@ -207,7 +207,7 @@ public sealed class L1PlanExecutor
         // No longer hardcoded — FillDefaultArgsFromMetadata handles this
     }
 
-    private static string BuildToolSignatures(AIToolRegistry toolRegistry)
+    private string BuildToolSignatures(AIToolRegistry toolRegistry)
     {
         var sb = new StringBuilder();
         foreach (var tool in toolRegistry.GetTools().Take(25))
@@ -223,7 +223,7 @@ public sealed class L1PlanExecutor
             {
                 try
                 {
-                    using var doc = JsonDocument.Parse(schema.ToString());
+                    using var doc = JsonDocument.Parse(schema.Value.ToString());
                     var root = doc.RootElement;
                     if (root.TryGetProperty("properties", out var props))
                     {
@@ -241,7 +241,7 @@ public sealed class L1PlanExecutor
                         sb.AppendLine(string.Join(", ", paramParts) + "}");
                     }
                 }
-                catch { }
+                catch (Exception ex) { _logger?.LogWarning(ex, "Tool schema parameter parsing failed"); }
             }
             sb.AppendLine();
         }
@@ -256,7 +256,7 @@ public sealed class L1PlanExecutor
 
         try
         {
-            using var doc = JsonDocument.Parse(schema.ToString());
+            using var doc = JsonDocument.Parse(schema.Value.ToString());
             var root = doc.RootElement;
             if (!root.TryGetProperty("properties", out var props)) return;
 
@@ -286,7 +286,7 @@ public sealed class L1PlanExecutor
                 }
             }
         }
-        catch { }
+        catch (Exception ex) { _logger?.LogWarning(ex, "Default argument metadata population failed"); }
     }
 
     private static List<PlanStep> ParsePlan(string text)

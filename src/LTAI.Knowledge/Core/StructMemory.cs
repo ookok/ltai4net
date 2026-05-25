@@ -261,7 +261,7 @@ public class StructMemory
 
             var fact = ExtractFact(content);
             var rel = ExtractRel(content);
-            var embedding = await ComputeEmbedding(content);
+            var embedding = await ComputeEmbedding(content).ConfigureAwait(false);
 
             var entry = new EventEntry(id, sessionId, ts, role, content, fact, rel, embedding);
             _entries[id] = entry;
@@ -283,7 +283,7 @@ public class StructMemory
                 ? (DateTimeOffset.UtcNow.ToUnixTimeSeconds() - ParseTimestamp(_buffer.FirstTimestamp))
                 : 0;
             if (elapsed >= ConsolidationThreshold)
-                return await Consolidate();
+                return await Consolidate().ConfigureAwait(false);
         }
         return new();
     }
@@ -294,10 +294,10 @@ public class StructMemory
         if (_buffer.Entries.Count == 0) return blocks;
 
         var bufferText = string.Join("\n", _buffer.Entries.Select(e => $"[{e.Role}] {e.Content}"));
-        var queryEmbedding = await ComputeEmbedding(bufferText);
-        var seeds = await SemanticRetrieve(queryEmbedding, SemanticSeeds);
+        var queryEmbedding = await ComputeEmbedding(bufferText).ConfigureAwait(false);
+        var seeds = await SemanticRetrieve(queryEmbedding, SemanticSeeds).ConfigureAwait(false);
         var reconstructed = ReconstructEvents(seeds, _buffer.Entries);
-        var synthText = await Synthesize(_buffer.Entries, reconstructed);
+        var synthText = await Synthesize(_buffer.Entries, reconstructed).ConfigureAwait(false);
 
         var block = new SynthesisBlock(
             $"syn_{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}",
@@ -318,13 +318,13 @@ public class StructMemory
     public async Task<(List<EventEntry> Events, List<SynthesisBlock> Synthesis)> RetrieveForQuery(
         string query, int topK = DefaultTopK, int nSynthesis = DefaultSynthesis)
     {
-        var queryEmbedding = await ComputeEmbedding(query);
-        var events = await SemanticRetrieve(queryEmbedding, topK);
+        var queryEmbedding = await ComputeEmbedding(query).ConfigureAwait(false);
+        var events = await SemanticRetrieve(queryEmbedding, topK).ConfigureAwait(false);
 
         var scoredSynth = new List<(SynthesisBlock Block, double Score)>();
         foreach (var s in _synthesis)
         {
-            var synthEmbedding = await ComputeEmbedding(s.Content);
+            var synthEmbedding = await ComputeEmbedding(s.Content).ConfigureAwait(false);
             var sim = CosineSimilarity(queryEmbedding, synthEmbedding);
             scoredSynth.Add((s, sim));
         }
@@ -441,7 +441,7 @@ public class StructMemory
     {
         try
         {
-            var vec = await _vectorStore.EmbedAsync(text);
+            var vec = await _vectorStore.EmbedAsync(text).ConfigureAwait(false);
             return vec.Select(f => (double)f).ToList();
         }
         catch { return new(); }

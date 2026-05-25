@@ -61,15 +61,15 @@ public sealed class SessionRagService
                 ["content"] = m.GetValueOrDefault("content", "")
             }).ToList() ?? new();
 
-        await _structMemory.BindEvents(sessionId, historyMessages);
-        var (memoryEvents, memorySynthesis) = await _structMemory.RetrieveForQuery(question);
+        await _structMemory.BindEvents(sessionId, historyMessages).ConfigureAwait(false);
+        var (memoryEvents, memorySynthesis) = await _structMemory.RetrieveForQuery(question).ConfigureAwait(false);
 
         var sessionContext = _structMemory.GetContextBlock(question, memoryEvents, memorySynthesis);
         opts.SessionContext = string.IsNullOrEmpty(sessionContext) ? null : sessionContext;
 
         var longTermDocs = _agenticRAG.Search(question, RAGMode.Iterative, domain: opts.Domain ?? "general");
 
-        var prompt = await _promptBuilder.BuildSinglePrompt(question, longTermDocs, opts);
+        var prompt = await _promptBuilder.BuildSinglePrompt(question, longTermDocs, opts).ConfigureAwait(false);
 
         var (needsCompression, _, dropped) = _contextBudget.AddAndCheck("system", new List<Dictionary<string, string>>(), prompt);
         if (needsCompression || dropped > 0)
@@ -80,7 +80,7 @@ public sealed class SessionRagService
                 _contextBudget.GetStats()["total_tokens"], _contextBudget.GetStats()["max_tokens"]);
         }
 
-        var response = await _chatClient.GetResponseAsync(prompt, cancellationToken: cancellationToken);
+        var response = await _chatClient.GetResponseAsync(prompt, cancellationToken: cancellationToken).ConfigureAwait(false);
         var answer = response.Text ?? string.Empty;
 
         var hallucinationCheck = HallucinationGuard.Instance.CheckGeneration(
@@ -131,12 +131,12 @@ public sealed class SessionRagService
                 ["content"] = m.GetValueOrDefault("content", "")
             }).ToList() ?? new();
 
-        await _structMemory.BindEvents(sessionId, historyMessages);
-        var (memoryEvents, memorySynthesis) = await _structMemory.RetrieveForQuery(question);
+        await _structMemory.BindEvents(sessionId, historyMessages).ConfigureAwait(false);
+        var (memoryEvents, memorySynthesis) = await _structMemory.RetrieveForQuery(question).ConfigureAwait(false);
         opts.SessionContext = _structMemory.GetContextBlock(question, memoryEvents, memorySynthesis);
 
         var longTermDocs = _agenticRAG.Search(question, RAGMode.Iterative, domain: opts.Domain ?? "general");
-        var prompt = await _promptBuilder.BuildSinglePrompt(question, longTermDocs, opts);
+        var prompt = await _promptBuilder.BuildSinglePrompt(question, longTermDocs, opts).ConfigureAwait(false);
 
         var fullAnswer = "";
         await foreach (var update in _chatClient.GetStreamingResponseAsync(prompt, cancellationToken: cancellationToken))

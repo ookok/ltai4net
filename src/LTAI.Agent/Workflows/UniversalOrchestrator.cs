@@ -1,5 +1,6 @@
 using LTAI.Agent.Agents;
 using LTAI.Agent.Routing;
+using LTAI.Core.Configuration;
 using LTAI.Models;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
@@ -13,21 +14,37 @@ public sealed class UniversalOrchestrator
 {
     private readonly ILogger<UniversalOrchestrator> _logger;
     private readonly UnifiedSemanticRouter _router;
+    private readonly HarnessProfile _harness;
     private readonly Dictionary<string, BaseAgent> _agents = new();
     private const int MaxRecursionDepth = 3;
 
     public UniversalOrchestrator(
         ILogger<UniversalOrchestrator> logger,
-        UnifiedSemanticRouter router)
+        UnifiedSemanticRouter router,
+        HarnessProfile? harness = null)
     {
         _logger = logger;
         _router = router;
+        _harness = harness ?? HarnessProfile.For(HarnessMode.Hybrid);
     }
 
     public void RegisterAgent(string name, BaseAgent agent)
     {
         _agents[name] = agent;
         _logger.LogInformation("Orchestrator: registered agent '{Name}'", name);
+    }
+
+    public HarnessProfile Profile => _harness;
+
+    public OrchestrationMode ResolveMode(OrchestrationMode? explicitMode = null)
+    {
+        if (explicitMode.HasValue) return explicitMode.Value;
+        return _harness.Mode switch
+        {
+            HarnessMode.Controlled => OrchestrationMode.Direct,
+            HarnessMode.Evolutionary => OrchestrationMode.Parliament,
+            _ => OrchestrationMode.FanOut
+        };
     }
 
     public async Task<AgentResponse> ExecuteAsync(
@@ -40,8 +57,8 @@ public sealed class UniversalOrchestrator
         {
             OrchestrationMode.Direct => await ExecuteDirectAsync(messages, session, 0, ct),
             OrchestrationMode.Handoff => await ExecuteHandoffAsync(messages, session, 0, ct),
-            OrchestrationMode.FanOut => await ExecuteFanOutAsync(messages, session, ct),
-            _ => await ExecuteDirectAsync(messages, session, 0, ct)
+            OrchestrationMode.FanOut => await ExecuteFanOutAsync(messages, session, ct).ConfigureAwait(false),
+            _ => await ExecuteDirectAsync(messages, session, 0, ct).ConfigureAwait(false)
         };
     }
 
@@ -68,7 +85,7 @@ public sealed class UniversalOrchestrator
         if (_agents.TryGetValue(agentKey, out var target))
         {
             _logger.LogInformation("Orchestrator: routed to {Agent} (conf={Conf:F2})", route.TargetAgent, route.FinalConfidence);
-            var response = await target.RunAsync(messages, session, null, ct);
+            var response = await target.RunAsync(messages, session, null, ct).ConfigureAwait(false);
 
             if (_agents.TryGetValue($"{agentKey}_critic", out var critic))
             {
@@ -81,7 +98,7 @@ public sealed class UniversalOrchestrator
         }
 
         if (_agents.TryGetValue(AgentType.Chat.ToString().ToLowerInvariant(), out var chat))
-            return await chat.RunAsync(messages, session, null, ct);
+            return await chat.RunAsync(messages, session, null, ct).ConfigureAwait(false);
 
         return new(new ChatMessage(ChatRole.Assistant, "No agent available for this request."));
     }
@@ -92,7 +109,7 @@ public sealed class UniversalOrchestrator
         if (depth >= MaxRecursionDepth)
             return new(new ChatMessage(ChatRole.Assistant, "[Orchestrator] Handoff loop detected — circuit breaker tripped."));
 
-        var result = await ExecuteDirectAsync(messages, session, depth, ct);
+        var result = await ExecuteDirectAsync(messages, session, depth, ct).ConfigureAwait(false);
 
         if (result.Text?.Contains("[HANDOFF:", StringComparison.OrdinalIgnoreCase) == true)
         {
@@ -100,7 +117,7 @@ public sealed class UniversalOrchestrator
             var msgList = messages.ToList();
             var summary = CompressContext(msgList, result.Text);
             var handoffMsgs = new List<ChatMessage>(messages) { new(ChatRole.System, $"[Handoff]: {summary}") };
-            return await ExecuteHandoffAsync(handoffMsgs, session, depth + 1, ct);
+            return await ExecuteHandoffAsync(handoffMsgs, session, depth + 1, ct).ConfigureAwait(false);
         }
         return result;
     }
@@ -116,7 +133,7 @@ public sealed class UniversalOrchestrator
             .Where(r => _agents.ContainsKey(r.TargetAgent.ToString().ToLowerInvariant()))
             .Select(r => _agents[r.TargetAgent.ToString().ToLowerInvariant()].RunAsync(messages, session, null, ct));
 
-        var results = await Task.WhenAll(tasks);
+        var results = await Task.WhenAll(tasks).ConfigureAwait(false);
         var merged = string.Join("\n\n---\n\n",
             results.Select((r, i) => $"### Response {i + 1}\n{r.Text}"));
         return new(new ChatMessage(ChatRole.Assistant, merged + $"\n\n---\n**{results.Length} agents contributed**"));

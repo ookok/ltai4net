@@ -21,12 +21,16 @@ public static class SseAgentEndpoints
 
     private static void CleanupOldTasks(object? state)
     {
-        var cutoff = DateTime.UtcNow.AddHours(-1);
-        foreach (var (key, task) in _tasks)
+        try
         {
-            if (task.Status is "completed" or "failed" && task.CreatedAt < cutoff)
-                _tasks.TryRemove(key, out _);
+            var cutoff = DateTime.UtcNow.AddHours(-1);
+            foreach (var (key, task) in _tasks)
+            {
+                if (task.Status is "completed" or "failed" && task.CreatedAt < cutoff)
+                    _tasks.TryRemove(key, out _);
+            }
         }
+        catch { /* timer callback must not throw */ }
     }
 
     private static readonly string[] Steps =
@@ -54,7 +58,7 @@ public static class SseAgentEndpoints
             try
             {
                 using var reader = new StreamReader(context.Request.Body);
-                var body = await reader.ReadToEndAsync();
+                var body = await reader.ReadToEndAsync().ConfigureAwait(false);
                 var request = JsonSerializer.Deserialize<AgentTaskRequest>(body);
 
                 var prompt = request?.Prompt ?? "";
@@ -67,6 +71,14 @@ public static class SseAgentEndpoints
                     Prompt = prompt,
                     CreatedAt = DateTime.UtcNow
                 };
+                if (_tasks.Count >= 1000)
+                {
+                    var oldest = _tasks.Values
+                        .Where(t => t.Status is "completed" or "failed")
+                        .MinBy(t => t.CreatedAt);
+                    if (oldest != null)
+                        _tasks.TryRemove(oldest.TaskId, out _);
+                }
                 _tasks.TryAdd(taskId, task);
 
                 var sp = context.RequestServices;
@@ -81,7 +93,7 @@ public static class SseAgentEndpoints
                         try
                         {
                             task.StepsCompleted = 2;
-                            var response = await system.ChatAsync(prompt);
+                            var response = await system.ChatAsync(prompt).ConfigureAwait(false);
                             task.Result = response;
                             task.Status = "completed";
                             task.StepsCompleted = Steps.Length;
@@ -101,7 +113,7 @@ public static class SseAgentEndpoints
                         try
                         {
                             task.StepsCompleted = 2;
-                            var response = await chatClient.GetResponseAsync(prompt);
+                            var response = await chatClient.GetResponseAsync(prompt).ConfigureAwait(false);
                             task.Result = response.Text ?? "";
                             task.Status = "completed";
                             task.StepsCompleted = Steps.Length;
@@ -130,7 +142,7 @@ public static class SseAgentEndpoints
             {
                 context.Response.StatusCode = 500;
                 context.Response.ContentType = "application/json";
-                await context.Response.WriteAsync(JsonSerializer.Serialize(new { error = ex.Message }));
+                await context.Response.WriteAsync(JsonSerializer.Serialize(new { error = ex.Message })).ConfigureAwait(false);
             }
         });
 
@@ -151,7 +163,7 @@ public static class SseAgentEndpoints
                 status = task.Status,
                 result = task.Result,
                 error = task.Error
-            }));
+            })).ConfigureAwait(false);
         });
 
         endpoints.MapGet("/api/agent/tasks/{taskId}/stream", async (HttpContext context, string taskId) =>
@@ -176,9 +188,9 @@ public static class SseAgentEndpoints
                     var msg = $"Executing {stepName.Replace('_', ' ')}...";
                     var sseData = JsonSerializer.Serialize(new { type = "progress", step = stepName, message = msg });
                     await context.Response.WriteAsync($"data: {sseData}\n\n");
-                    await context.Response.Body.FlushAsync();
+                    await context.Response.Body.FlushAsync().ConfigureAwait(false);
                 }
-                await Task.Delay(100, context.RequestAborted);
+                await Task.Delay(100, context.RequestAborted).ConfigureAwait(false);
             }
 
             if (context.RequestAborted.IsCancellationRequested)
@@ -195,7 +207,7 @@ public static class SseAgentEndpoints
                 await context.Response.WriteAsync($"data: {errorData}\n\n");
             }
 
-            await context.Response.Body.FlushAsync();
+            await context.Response.Body.FlushAsync().ConfigureAwait(false);
         });
 
         endpoints.MapGet("/api/agent/tasks", async (HttpContext context) =>
@@ -208,7 +220,7 @@ public static class SseAgentEndpoints
                 result = t.Result,
                 error = t.Error
             });
-            await context.Response.WriteAsync(JsonSerializer.Serialize(tasks));
+            await context.Response.WriteAsync(JsonSerializer.Serialize(tasks)).ConfigureAwait(false);
         });
     }
 }

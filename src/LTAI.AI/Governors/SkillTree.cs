@@ -122,22 +122,22 @@ public sealed class SkillTree
             var groupTasks = groupSkills.Select(async skillName =>
             {
                 var skill = plan.OrderedSkills.FirstOrDefault(s => s.ModuleName == skillName);
-                if (skill == null) return (skillName, result: (object)null, success: false);
+                if (skill == null) return (skillName, result: (object?)null, success: false);
 
                 try
                 {
-                    var result = await executor(skill);
+                    var result = await executor(skill).ConfigureAwait(false);
                     RecordUsage(skill.ModuleName, true);
                     return (skill.ModuleName, result, success: true);
                 }
                 catch
                 {
                     RecordUsage(skill.ModuleName, false);
-                    return (skill.ModuleName, result: (object)null, success: false);
+                    return (skill.ModuleName, result: (object?)null, success: false);
                 }
             }).ToList();
 
-            var groupResults = await Task.WhenAll(groupTasks);
+            var groupResults = await Task.WhenAll(groupTasks).ConfigureAwait(false);
             foreach (var (name, result, success) in groupResults)
             {
                 if (result != null)

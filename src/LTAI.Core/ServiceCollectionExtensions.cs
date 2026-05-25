@@ -19,6 +19,11 @@ namespace LTAI.Core;
 
 public static class ServiceCollectionExtensions
 {
+    private static readonly JsonSerializerOptions _jsonCaseInsensitive = new()
+    {
+        PropertyNameCaseInsensitive = true
+    };
+
     public static IServiceCollection AddLTAICore(this IServiceCollection services)
     {
         // Patch IConfiguration.Bind bug: value-type properties on init-only nested
@@ -32,7 +37,7 @@ public static class ServiceCollectionExtensions
                 var root = doc.RootElement;
                 if (root.TryGetProperty("LTAI", out var ltai))
                     root = ltai;
-                var opts = root.Deserialize<LTAIOptions>(new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                var opts = root.Deserialize<LTAIOptions>(_jsonCaseInsensitive);
                 if (opts != null)
                     services.AddSingleton<IOptions<LTAIOptions>>(Options.Create(opts));
             }
@@ -49,6 +54,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<DataPathResolver>();
 
         services.AddSingleton<IProviderRegistry, ProviderRegistry>();
+        services.AddSingleton(sp => sp.GetRequiredService<IOptions<LTAIOptions>>().Value.Harness);
         services.AddSingleton<ICognitiveMesh, CognitiveMesh>();
         services.AddSingleton<AIToolRegistry>();
         services.AddSingleton<TaskJournal>();

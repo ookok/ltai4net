@@ -200,6 +200,7 @@ public sealed class MetabolismEngine
                 return;
 
             _running = true;
+            _cts?.Dispose();
             _cts = new CancellationTokenSource();
             _backgroundTask = BackgroundTickAsync();
         }
@@ -214,6 +215,7 @@ public sealed class MetabolismEngine
 
             _running = false;
             _cts?.Cancel();
+            _cts?.Dispose();
         }
     }
 
@@ -395,7 +397,7 @@ public sealed class MetabolismEngine
         {
             try
             {
-                await Task.Delay(5000, _cts.Token);
+                await Task.Delay(5000, _cts.Token).ConfigureAwait(false);
                 Tick();
             }
             catch (OperationCanceledException)

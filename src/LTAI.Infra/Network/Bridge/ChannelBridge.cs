@@ -78,7 +78,7 @@ public sealed class ChannelBridge
     {
         _logMessage(message);
         _autoProfileFeed(message);
-        return await Dispatch(message);
+        return await Dispatch(message).ConfigureAwait(false);
     }
 
     public async Task<string> Dispatch(ChannelMessage message)
@@ -87,7 +87,7 @@ public sealed class ChannelBridge
         {
             try
             {
-                var reply = await handler(message);
+                var reply = await handler(message).ConfigureAwait(false);
                 _logger?.LogDebug("Message handled on {Channel} from {UserId}", message.Channel, message.UserId);
                 return reply;
             }

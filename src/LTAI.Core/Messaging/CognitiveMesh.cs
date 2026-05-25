@@ -60,7 +60,7 @@ public sealed class CognitiveMesh : ICognitiveMesh
             {
                 _stats[handshake.To].MessagesReceived++;
                 var sw = global::System.Diagnostics.Stopwatch.StartNew();
-                var response = await governor.ProcessAsync(handshake, cancellationToken);
+                var response = await governor.ProcessAsync(handshake, cancellationToken).ConfigureAwait(false);
                 sw.Stop();
                 _stats[handshake.To].AvgLatencyMs =
                     (_stats[handshake.To].AvgLatencyMs * (_stats[handshake.To].MessagesReceived - 1) + sw.Elapsed.TotalMilliseconds)
@@ -106,14 +106,14 @@ public sealed class CognitiveMesh : ICognitiveMesh
         {
             try
             {
-                await g.ProcessAsync(handshake, cancellationToken);
+                await g.ProcessAsync(handshake, cancellationToken).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Broadcast to governor {Layer} failed", g.LayerName);
             }
         });
-        await Task.WhenAll(tasks);
+        await Task.WhenAll(tasks).ConfigureAwait(false);
     }
 
     public Handshake? GetWorldState(string key)

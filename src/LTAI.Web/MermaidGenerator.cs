@@ -63,7 +63,7 @@ Rules:
                     new(ChatRole.User, prompt)
                 },
                 new ChatOptions { Temperature = 0.3f, MaxOutputTokens = 2000 },
-                ct);
+                ct).ConfigureAwait(false);
 
             var mermaid = CleanMermaidOutput(response.Text ?? "");
 

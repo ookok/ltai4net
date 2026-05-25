@@ -29,7 +29,7 @@ public static class LTAIMiddleware
         AIAgent innerAgent, ILogger logger, CancellationToken ct)
     {
         ClassifyAndLog(messages, logger);
-        return await innerAgent.RunAsync(messages, session, options, ct);
+        return await innerAgent.RunAsync(messages, session, options, ct).ConfigureAwait(false);
     }
 
     private static async IAsyncEnumerable<AgentResponseUpdate> AgentRunStreamingAsync(

@@ -165,7 +165,7 @@ public sealed class DreamCycle : BackgroundService
                 var idleDuration = DateTime.UtcNow - _lastInteraction;
                 if (idleDuration >= _cycleInterval)
                 {
-                    await DreamAsync(stoppingToken);
+                    await DreamAsync(stoppingToken).ConfigureAwait(false);
                 }
             }
             catch (OperationCanceledException)
@@ -177,7 +177,7 @@ public sealed class DreamCycle : BackgroundService
                 _logger.LogError(ex, "Dream cycle failed");
             }
 
-            await Task.Delay(TimeSpan.FromMinutes(1), stoppingToken);
+            await Task.Delay(TimeSpan.FromMinutes(1), stoppingToken).ConfigureAwait(false);
         }
     }
 
@@ -186,13 +186,13 @@ public sealed class DreamCycle : BackgroundService
         _logger.LogInformation("Dream cycle #{Count} beginning...", _totalDreams + 1);
 
         // 1. 双记忆系统门控整合 (Gate Consolidation)
-        var consolidationResult = await ConsolidateDualMemoryAsync(ct);
+        var consolidationResult = await ConsolidateDualMemoryAsync(ct).ConfigureAwait(false);
 
         // 2. 检查是否触发反思 (Reflection Trigger)
         var reflectionsGenerated = 0;
         if (ShouldTriggerReflection(out var triggerReason))
         {
-            reflectionsGenerated = await GenerateReflectionsAsync(ct, triggerReason);
+            reflectionsGenerated = await GenerateReflectionsAsync(ct, triggerReason).ConfigureAwait(false);
         }
 
         // 3. 传统记忆维护 (Legacy Maintenance - optional, keep for SynapticMemory compatibility)
@@ -211,7 +211,7 @@ public sealed class DreamCycle : BackgroundService
             Summary = $"Dream #{_totalDreams}: consolidated={consolidationResult.ExtractedLessons}, reflections={reflectionsGenerated}, forgotten={forgotten}"
         };
 
-        await PersistDreamResultAsync(result, ct);
+        await PersistDreamResultAsync(result, ct).ConfigureAwait(false);
 
         _logger.LogInformation("Dream cycle #{Count} complete: {Summary}", _totalDreams, result.Summary);
     }
@@ -235,7 +235,7 @@ public sealed class DreamCycle : BackgroundService
             var result = await _dualMemoryStore.ConsolidateIfNeededAsync(
                 async (episodes) =>
                 {
-                    var deltas = await _ruleExtractor.ExtractDeltasAsync(episodes, ct);
+                    var deltas = await _ruleExtractor.ExtractDeltasAsync(episodes, ct).ConfigureAwait(false);
                     // 将 Delta 转换为 AbstractLesson
                     return deltas.Select(d => new AbstractLesson
                     {
@@ -412,6 +412,11 @@ public sealed class DreamCycle : BackgroundService
 
     private readonly object _persistLock = new();
 
+    private static readonly System.Text.Json.JsonSerializerOptions _jsonWriteIndented = new()
+    {
+        WriteIndented = true
+    };
+
     private async Task PersistDreamResultAsync(DreamCycleResult result, CancellationToken ct)
     {
         try
@@ -434,8 +439,7 @@ public sealed class DreamCycle : BackgroundService
                 if (history.Count > 100)
                     history = history.OrderByDescending(d => d.MemoriesConsolidated + d.KnowledgeDistilled).Take(50).ToList();
 
-                var options = new System.Text.Json.JsonSerializerOptions { WriteIndented = true };
-                File.WriteAllText(_dreamLogPath, System.Text.Json.JsonSerializer.Serialize(history, options));
+                File.WriteAllText(_dreamLogPath, System.Text.Json.JsonSerializer.Serialize(history, _jsonWriteIndented));
             }
         }
         catch (Exception ex)
@@ -526,7 +530,7 @@ public sealed class DreamCycle : BackgroundService
     public async Task ForceDreamAsync(CancellationToken ct = default)
     {
         _logger.LogInformation("Forced dream cycle triggered");
-        await DreamAsync(ct);
+        await DreamAsync(ct).ConfigureAwait(false);
     }
 
     /// <summary>

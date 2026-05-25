@@ -58,7 +58,7 @@ public sealed class MultimodalRouter
         {
             try
             {
-                var extractedText = await processor(input);
+                var extractedText = await processor(input).ConfigureAwait(false);
                 return new MultimodalRouteResult
                 {
                     CanHandleLocally = true,

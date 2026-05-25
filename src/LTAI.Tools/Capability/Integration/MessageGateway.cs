@@ -32,7 +32,7 @@ public record GatewayMessage(
     }
 }
 
-public sealed class MessageGateway
+public sealed class MessageGateway : IDisposable
 {
     public static readonly Lazy<MessageGateway> Instance = new(() => new MessageGateway());
 
@@ -52,6 +52,8 @@ public sealed class MessageGateway
         _logger = logger ?? NullLogger<MessageGateway>.Instance;
         _http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
     }
+
+    public void Dispose() { _http?.Dispose(); }
 
     public void ConfigureSmtp(string host, int port, string user, string pass, bool useSsl = true)
     {
@@ -144,7 +146,7 @@ public sealed class MessageGateway
             };
             mail.To.Add(message.To);
 
-            await smtp.SendMailAsync(mail);
+            await smtp.SendMailAsync(mail).ConfigureAwait(false);
 
             return message with { Status = "sent", SentAt = DateTime.UtcNow };
         }
@@ -177,14 +179,14 @@ public sealed class MessageGateway
     public async Task<bool> SendTelegramAsync(string chatId, string text)
     {
         var msg = GatewayMessage.Create("telegram", chatId, text);
-        var result = await SendTelegramInternal(msg);
+        var result = await SendTelegramInternal(msg).ConfigureAwait(false);
         return result.Status == "sent";
     }
 
     public async Task<bool> SendSmtpAsync(string to, string subject, string body)
     {
         var msg = GatewayMessage.Create("smtp", to, body, subject);
-        var result = await SendSmtpInternal(msg);
+        var result = await SendSmtpInternal(msg).ConfigureAwait(false);
         return result.Status == "sent";
     }
 

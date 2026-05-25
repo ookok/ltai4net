@@ -294,7 +294,7 @@ public sealed class TieredLoraManager
         foreach (var (tier, samples) in tieredSamples)
         {
             ct.ThrowIfCancellationRequested();
-            var result = await Task.Run(() => TrainTier(tier, samples), ct);
+            var result = await Task.Run(() => TrainTier(tier, samples), ct).ConfigureAwait(false);
             results.Add(result);
         }
 

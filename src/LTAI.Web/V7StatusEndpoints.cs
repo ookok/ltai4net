@@ -28,7 +28,7 @@ public static class V7StatusEndpoints
 
             var status = new
             {
-                version = "7.0.0",
+                version = "0.51.0",
                 name = "LTAI Sentient Mesh",
                 uptime = DateTime.UtcNow - System.Diagnostics.Process.GetCurrentProcess().StartTime.ToUniversalTime(),
                 dna = dna == null ? null : new
@@ -59,13 +59,13 @@ public static class V7StatusEndpoints
             };
 
             ctx.Response.ContentType = "application/json";
-            await ctx.Response.WriteAsJsonAsync(status, ctx.RequestAborted);
+            await ctx.Response.WriteAsJsonAsync(status, ctx.RequestAborted).ConfigureAwait(false);
         });
 
         app.MapGet("/api/v7/health", (HttpContext ctx) =>
         {
             ctx.Response.StatusCode = 200;
-            return Results.Ok(new { status = "healthy", version = "7.0.0" });
+            return Results.Ok(new { status = "healthy", version = "0.51.0" });
         });
     }
 }

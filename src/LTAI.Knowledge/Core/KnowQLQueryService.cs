@@ -94,11 +94,11 @@ public sealed class KnowQLQueryService
         if (!string.IsNullOrEmpty(query.Where) && query.Where.StartsWith("context:"))
         {
             var contextId = query.Where.Replace("context:", "").Trim();
-            result = await ExecuteFromContext(query, domain, contextId, budget, ct);
+            result = await ExecuteFromContext(query, domain, contextId, budget, ct).ConfigureAwait(false);
         }
         else
         {
-            result = await ExecuteFromArtifacts(query, domain, budget, ct);
+            result = await ExecuteFromArtifacts(query, domain, budget, ct).ConfigureAwait(false);
         }
 
         sw.Stop();
@@ -129,7 +129,7 @@ public sealed class KnowQLQueryService
 
         if (fields.Count == 0)
         {
-            var ragFields = await RetrieveFromRAG(query, domain, budget, ct);
+            var ragFields = await RetrieveFromRAG(query, domain, budget, ct).ConfigureAwait(false);
             fields.AddRange(ragFields);
         }
 
@@ -159,7 +159,7 @@ public sealed class KnowQLQueryService
 
         if (fields.Count == 0)
         {
-            var ragFields = await RetrieveFromRAG(query, domain, budget, ct);
+            var ragFields = await RetrieveFromRAG(query, domain, budget, ct).ConfigureAwait(false);
             fields.AddRange(ragFields);
         }
 

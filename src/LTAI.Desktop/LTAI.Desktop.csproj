@@ -5,7 +5,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
-    <ApplicationDisplayVersion>7.0</ApplicationDisplayVersion>
+    <ApplicationDisplayVersion>0.51.0</ApplicationDisplayVersion>
+    <ApplicationIcon>Assets\ltai-icon.ico</ApplicationIcon>
     <IsExeProject>true</IsExeProject>
     <RootNamespace>LTAI.Desktop</RootNamespace>
     <AssemblyName>LTAI.Desktop</AssemblyName>

@@ -85,7 +85,7 @@ public sealed class AgentQA
     public async Task<Dictionary<string, object>> RunTestAsync(
         Func<string, Task<string>> agentFn, string testInput)
     {
-        var originalOutput = await agentFn(testInput);
+        var originalOutput = await agentFn(testInput).ConfigureAwait(false);
         var results = new List<Dictionary<string, object>>();
 
         foreach (var rel in _relations)
@@ -93,7 +93,7 @@ public sealed class AgentQA
             try
             {
                 var transformedInput = rel.TransformInput(testInput);
-                var transformedOutput = await agentFn(transformedInput);
+                var transformedOutput = await agentFn(transformedInput).ConfigureAwait(false);
                 var (checkOk, reason) = rel.CheckOutput(originalOutput, transformedOutput);
                 results.Add(new Dictionary<string, object>
                 {

@@ -43,7 +43,7 @@ public sealed class SessionCompressor
 
         if (middle.Count > 0 && fn != null)
         {
-            var summary = await _Summarize(middle, fn);
+            var summary = await _Summarize(middle, fn).ConfigureAwait(false);
             result.Insert(0, new ChatMessage("system", summary));
         }
         else if (middle.Count > 3 && fn == null)
@@ -120,7 +120,7 @@ public sealed class SessionCompressor
             }
             else if (crit > 0.25 && fn != null)
             {
-                var snippet = await _SingleMessageSummarize(msg, fn);
+                var snippet = await _SingleMessageSummarize(msg, fn).ConfigureAwait(false);
                 result.Insert(0, new ChatMessage("system", snippet));
             }
             else if (crit > 0.15)

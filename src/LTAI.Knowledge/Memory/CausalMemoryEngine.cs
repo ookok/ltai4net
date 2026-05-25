@@ -52,7 +52,7 @@ public sealed class CausalMemoryEngine
             {
                 try
                 {
-                    var regulation = await _regulationStore.GetActiveStandardAsync(code, DateTime.UtcNow, ct);
+                    var regulation = await _regulationStore.GetActiveStandardAsync(code, DateTime.UtcNow, ct).ConfigureAwait(false);
                     if (regulation is null)
                         _logger.LogWarning("Memory pollution: standard {Code} not found in verified registry", code);
                 }
@@ -76,7 +76,7 @@ public sealed class CausalMemoryEngine
 
         if (evt.GraphTriplet != null && _fabric.GraphQueryAsync != null)
         {
-            var related = await _fabric.GraphQueryAsync(evt.GraphTriplet);
+            var related = await _fabric.GraphQueryAsync(evt.GraphTriplet).ConfigureAwait(false);
             foreach (var triple in related)
             {
                 if (triple.relation.Contains("causes", StringComparison.OrdinalIgnoreCase) ||
@@ -93,7 +93,7 @@ public sealed class CausalMemoryEngine
 
     public async Task<MemoryQueryResult?> FindAuthoritativeAnswerAsync(string query, CancellationToken ct)
     {
-        var results = await _fabric.QueryAsync(query, topK: 10);
+        var results = await _fabric.QueryAsync(query, topK: 10).ConfigureAwait(false);
         var allEvents = _fabric.QueryTimeRange(DateTime.UtcNow.AddHours(-24), DateTime.UtcNow, count: 1000);
         return results
             .Where(r =>

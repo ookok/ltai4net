@@ -51,10 +51,10 @@ public sealed class APIEmbeddingBackend : IEmbeddingBackend
         httpRequest.Headers.Add("Authorization", $"Bearer {_apiKey}");
 
         var http = _httpClientFactory?.CreateClient() ?? new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
-        var response = await http.SendAsync(httpRequest, cancellationToken);
+        var response = await http.SendAsync(httpRequest, cancellationToken).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
 
-        var responseJson = await response.Content.ReadAsStringAsync(cancellationToken);
+        var responseJson = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
         using var doc = System.Text.Json.JsonDocument.Parse(responseJson);
         var root = doc.RootElement;
 

@@ -6,7 +6,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 namespace LTAI.Tools.Integration;
 
-public sealed class WeWorkBot
+public sealed class WeWorkBot : IDisposable
 {
     public static readonly Lazy<WeWorkBot> Instance = new(() => new WeWorkBot());
 
@@ -23,6 +23,8 @@ public sealed class WeWorkBot
         _logger = logger ?? NullLogger<WeWorkBot>.Instance;
         _http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
     }
+
+    public void Dispose() { _http?.Dispose(); }
 
     public void Configure(string token, string encodingAesKey, string corpId, string? webhookUrl = null)
     {
@@ -75,7 +77,7 @@ public sealed class WeWorkBot
             string reply;
             if (_llmCallback != null)
             {
-                reply = await _llmCallback(content, fromUser);
+                reply = await _llmCallback(content, fromUser).ConfigureAwait(false);
             }
             else
             {

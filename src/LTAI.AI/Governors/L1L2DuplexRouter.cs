@@ -451,7 +451,7 @@ public sealed class L1L2DuplexRouter
             {
                 Temperature = 0.2f,
                 MaxOutputTokens = 4096
-            }, ct);
+            }, ct).ConfigureAwait(false);
 
             var text = response.Text ?? "";
             var result = ParseTeachingResult(text);

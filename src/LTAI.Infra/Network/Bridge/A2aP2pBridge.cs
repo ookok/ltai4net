@@ -39,7 +39,7 @@ public sealed class A2aP2pBridge : IDisposable
             TtlMs = 60000
         };
 
-        await _p2pNode.SendMessageAsync(message, ct);
+        await _p2pNode.SendMessageAsync(message, ct).ConfigureAwait(false);
         _logger.LogInformation("A2A request forwarded to P2P network: agent={Agent}", agentName);
     }
 
@@ -52,7 +52,7 @@ public sealed class A2aP2pBridge : IDisposable
             Priority = "normal"
         };
 
-        await _p2pNode.SendMessageAsync(message, ct);
+        await _p2pNode.SendMessageAsync(message, ct).ConfigureAwait(false);
     }
 
     private async Task ListenForP2pMessagesAsync(CancellationToken ct)

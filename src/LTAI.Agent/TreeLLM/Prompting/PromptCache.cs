@@ -39,7 +39,7 @@ public sealed class PromptCache
         }
 
         Interlocked.Increment(ref _misses);
-        var response = await _fallbackClient.GetResponseAsync(prompt, cancellationToken: cancellationToken);
+        var response = await _fallbackClient.GetResponseAsync(prompt, cancellationToken: cancellationToken).ConfigureAwait(false);
         var answer = response.Text ?? string.Empty;
         _responseCache.Set(prompt, answer, model);
         return answer;
@@ -51,7 +51,7 @@ public sealed class PromptCache
         ChatOptions? options = null,
         CancellationToken cancellationToken = default)
     {
-        var text = await GetOrComputeAsync(prompt, model, cancellationToken);
+        var text = await GetOrComputeAsync(prompt, model, cancellationToken).ConfigureAwait(false);
         return new ChatResponse(new ChatMessage(ChatRole.Assistant, text));
     }
 
@@ -69,7 +69,7 @@ public sealed class PromptCache
         string model,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        var text = await GetOrComputeAsync(prompt, model, cancellationToken);
+        var text = await GetOrComputeAsync(prompt, model, cancellationToken).ConfigureAwait(false);
         const int chunkSize = 8;
         for (int i = 0; i < text.Length; i += chunkSize)
         {

@@ -12,7 +12,7 @@ public sealed class MCPServer
     private readonly UnifiedSafetyGate? _safety;
     private readonly ILogger<MCPServer> _logger;
     private readonly Dictionary<string, MCPResource> _resources = new();
-    private string _serverName = "LTAI v7.0";
+    private string _serverName = "LTAI V0.51";
 
     public MCPServer(AIToolRegistry tools, UnifiedSafetyGate? safety, ILogger<MCPServer> logger)
     {
@@ -53,7 +53,7 @@ public sealed class MCPServer
     {
         var result = new InitializeResult
         {
-            Info = new ServerInfo { Name = _serverName, Version = "7.0.0" },
+            Info = new ServerInfo { Name = _serverName, Version = "0.51.0" },
             Capabilities = new ServerCapabilities
             {
                 Tools = new ToolCapability { ListChanged = false },
@@ -117,7 +117,7 @@ public sealed class MCPServer
                     };
             }
 
-            var result = await _tools.InvokeAsync(request.Name, args, ct);
+            var result = await _tools.InvokeAsync(request.Name, args, ct).ConfigureAwait(false);
             var resultJson = JsonSerializer.Serialize(result);
 
             return ResultResponse(msg.Id, new ToolCallResult
@@ -156,7 +156,7 @@ public sealed class MCPServer
         if (!_resources.TryGetValue(request.Uri, out var resource))
             return ErrorResponse(msg.Id, -32002, $"Resource not found: {request.Uri}");
 
-        var content = await ReadResourceContentAsync(request.Uri);
+        var content = await ReadResourceContentAsync(request.Uri).ConfigureAwait(false);
         return ResultResponse(msg.Id, new ReadResourceResult
         {
             Contents = new List<ResourceContent>

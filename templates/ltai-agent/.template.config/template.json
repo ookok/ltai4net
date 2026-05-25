@@ -5,7 +5,7 @@
   "identity": "LTAI.Agent.Template",
   "name": "LTAI Agent",
   "shortName": "ltai-agent",
-  "description": "Generate a new LTAI v7.0 Agent with strategy pattern, YAML config, and tests skeleton.",
+  "description": "Generate a new LTAI V0.51 Agent with strategy pattern, YAML config, and tests skeleton.",
   "sourceName": "AgentTemplate",
   "tags": {
     "language": "C#",
@@ -34,7 +34,7 @@
     "AgentDescription": {
       "type": "parameter",
       "datatype": "string",
-      "defaultValue": "Custom LTAI v7.0 Agent",
+      "defaultValue": "Custom LTAI V0.51 Agent",
       "description": "Short description of the agent"
     }
   }

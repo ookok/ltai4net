@@ -1,4 +1,4 @@
-# LTAI (LivingTree AI) v6.1
+# LTAI (LivingTree AI) V0.51
 
 ONNX-native multilayered AI agent framework for .NET 10. Edge-first L0-L1-L2 architecture with autonomous self-evolution, 10 research paper integrations, and multi-provider intelligent routing.
 

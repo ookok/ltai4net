@@ -47,7 +47,7 @@ public sealed class TaskCheckpoint
         try
         {
             var json = JsonSerializer.Serialize(state, JsonOptions);
-            await File.WriteAllTextAsync(tempPath, json);
+            await File.WriteAllTextAsync(tempPath, json).ConfigureAwait(false);
             File.Move(tempPath, filePath, overwrite: true);
 
             _cache[sessionId] = state;
@@ -74,7 +74,7 @@ public sealed class TaskCheckpoint
 
         try
         {
-            var json = await File.ReadAllTextAsync(filePath);
+            var json = await File.ReadAllTextAsync(filePath).ConfigureAwait(false);
             var state = JsonSerializer.Deserialize<CheckpointState>(json, JsonOptions);
             if (state is not null)
                 _cache[sessionId] = state;
@@ -89,7 +89,7 @@ public sealed class TaskCheckpoint
 
     public async Task<CheckpointState?> ResumeAsync(string sessionId)
     {
-        var state = await LoadAsync(sessionId);
+        var state = await LoadAsync(sessionId).ConfigureAwait(false);
         if (state is null)
             return null;
 

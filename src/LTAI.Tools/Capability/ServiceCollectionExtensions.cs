@@ -61,10 +61,6 @@ public static class CapabilityServiceCollectionExtensions
 
         services.AddSingleton<PipelineEngine>();
 
-        services.AddSingleton<CodeGraph.CodeGraph>(sp =>
-            new CodeGraph.CodeGraph(
-                parser: sp.GetRequiredService<ParserRegistry>().GetParser(CodeLanguage.CSharp),
-                logger: sp.GetRequiredService<ILogger<CodeGraph.CodeGraph>>()));
         services.AddSingleton<CodeGraphEnhanced>(sp =>
             new CodeGraphEnhanced(sp.GetRequiredService<DataPathResolver>()));
 

@@ -120,14 +120,14 @@ public sealed class ParallelReasoningGraph
             {
                 if (_allNodes.Count >= cfg.MaxTotalNodes) break;
 
-                await semaphore.WaitAsync(cancellationToken);
+                await semaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
                 var t = ExecuteNodeAsync(node, cfg, semaphore, cancellationToken);
                 runningTasks[node.Id] = t;
             }
 
             if (runningTasks.IsEmpty && pendingQueue.IsEmpty) break;
 
-            var completedTask = await Task.WhenAny(runningTasks.Values);
+            var completedTask = await Task.WhenAny(runningTasks.Values).ConfigureAwait(false);
             var completedEntry = runningTasks.First(kv => kv.Value == completedTask);
             runningTasks.TryRemove(completedEntry.Key, out _);
 
@@ -141,7 +141,7 @@ public sealed class ParallelReasoningGraph
                     completedNode.Depth < cfg.MaxDepth &&
                     completedNode.Confidence >= cfg.MinConfidenceForBranch)
                 {
-                    var branches = await GenerateBranchesAsync(completedNode, cfg);
+                    var branches = await GenerateBranchesAsync(completedNode, cfg).ConfigureAwait(false);
                     foreach (var branch in branches)
                     {
                         if (_allNodes.Count >= cfg.MaxTotalNodes) break;
@@ -212,9 +212,9 @@ public sealed class ParallelReasoningGraph
                 {
                     MaxContextTokens = 4000,
                     IncludeStrategyHint = false
-                });
+                }).ConfigureAwait(false);
 
-            var response = await _chatClient.GetResponseAsync(builtPrompt, cancellationToken: cancellationToken);
+            var response = await _chatClient.GetResponseAsync(builtPrompt, cancellationToken: cancellationToken).ConfigureAwait(false);
             var result = response.Text ?? "";
             node.Result = result;
             node.Confidence = EstimateConfidence(result);
@@ -253,7 +253,7 @@ public sealed class ParallelReasoningGraph
 
         try
         {
-            var response = await _chatClient.GetResponseAsync(decompositionPrompt);
+            var response = await _chatClient.GetResponseAsync(decompositionPrompt).ConfigureAwait(false);
             var text = response.Text ?? "";
 
             var branches = new List<ParallelNode>();
@@ -322,7 +322,7 @@ public sealed class ParallelReasoningGraph
 
         try
         {
-            var response = await _chatClient.GetResponseAsync(mergePrompt, cancellationToken: cancellationToken);
+            var response = await _chatClient.GetResponseAsync(mergePrompt, cancellationToken: cancellationToken).ConfigureAwait(false);
             return response.Text ?? root.Result ?? "";
         }
         catch

@@ -126,7 +126,7 @@ public sealed class OnnxEmbeddingBackend : IEmbeddingBackend, IDisposable
             var typeTensor = new DenseTensor<int>(tokenTypeIds.ToArray(), new[] { 1, tokenTypeIds.Count });
             onnxInputs.Add(NamedOnnxValue.CreateFromTensor("token_type_ids", typeTensor));
 
-            using var outputs = await Task.Run(() => _session.Run(onnxInputs));
+            using var outputs = await Task.Run(() => _session.Run(onnxInputs)).ConfigureAwait(false);
             
             // 获取 last_hidden_state (通常是第一个输出)
             var output = outputs.First(); 

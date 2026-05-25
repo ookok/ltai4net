@@ -205,7 +205,7 @@ public sealed class CellAIRegistry
         {
             if (autoDownload)
             {
-                await PretrainedModelRegistry.DownloadModelAsync(config, _pretrainedDirectory, _logger, ct);
+                await PretrainedModelRegistry.DownloadModelAsync(config, _pretrainedDirectory, _logger, ct).ConfigureAwait(false);
             }
 
             if (!File.Exists(config.ModelPath))
@@ -629,13 +629,13 @@ public sealed class CellAIRegistry
         {
             foreach (var engine in _engines.Values)
             {
-                try { engine.Dispose(); } catch { }
+                try { engine.Dispose(); } catch (Exception ex) { _logger.LogWarning(ex, "Failed to dispose engine in CellAIRegistry"); }
             }
             _engines.Clear();
 
             foreach (var engine in _pretrainedEngines.Values)
             {
-                try { engine.Dispose(); } catch { }
+                try { engine.Dispose(); } catch (Exception ex) { _logger.LogWarning(ex, "Failed to dispose pretrained engine in CellAIRegistry"); }
             }
             _pretrainedEngines.Clear();
         }

@@ -47,7 +47,7 @@ public sealed class MultiModelConsensus
             tasks.Add(CallClientAsync(clients[idx], modelNames[idx], messages, cancellationToken));
         }
 
-        var results = await Task.WhenAll(tasks);
+        var results = await Task.WhenAll(tasks).ConfigureAwait(false);
         var responses = results.Where(r => r.Success).ToList();
 
         if (responses.Count == 0)
@@ -133,7 +133,7 @@ public sealed class MultiModelConsensus
     {
         try
         {
-            var response = await client.GetResponseAsync(messages, null, ct);
+            var response = await client.GetResponseAsync(messages, null, ct).ConfigureAwait(false);
             var text = response.Text ?? "";
             return (modelName, text, true);
         }

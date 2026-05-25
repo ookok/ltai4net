@@ -69,6 +69,7 @@ public sealed class PipelineDashboard
 
     private void Snapshot(Dictionary<string, object> snap)
     {
+#pragma warning disable CS8601
         try
         {
             snap["system.mode"] = _lts.Mode.ToString();
@@ -148,6 +149,7 @@ public sealed class PipelineDashboard
             }
         }
         catch { }
+#pragma warning restore CS8601
     }
 
     private void UpdateTables(Dictionary<string, object> snap)

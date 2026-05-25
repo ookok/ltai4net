@@ -378,8 +378,12 @@ public sealed class IntentClassifierNetwork : IDisposable
             epochLoss /= Math.Max(1, samples.Count);
             totalLoss = epochLoss;
 
-            logger?.LogDebug("Progressive epoch {Epoch}/{Total}: loss={Loss:F4} lr={LR:F6} frozen={(epoch>=2?'L1':'')}{(epoch>=3?'+L2':'')}",
-                epoch + 1, epochs, epochLoss, epochLr);
+            if (logger?.IsEnabled(LogLevel.Debug) == true)
+            {
+                var frozen = $"{(epoch >= 2 ? "L1" : "")}{(epoch >= 3 ? "+L2" : "")}";
+                logger.LogDebug("Progressive epoch {Epoch}/{Total}: loss={Loss:F4} lr={LR:F6} frozen={Frozen}",
+                    epoch + 1, epochs, epochLoss, epochLr, frozen);
+            }
         }
 
         return totalLoss;

@@ -22,7 +22,7 @@ public static class NetworkEndpoints
             CancellationToken cancellationToken) =>
         {
             using var reader = new StreamReader(context.Request.Body);
-            var body = await reader.ReadToEndAsync(cancellationToken);
+            var body = await reader.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
             var request = JsonSerializer.Deserialize<DistributedMergeRequest>(body);
 
             if (request == null)
@@ -55,7 +55,7 @@ public static class NetworkEndpoints
             CancellationToken cancellationToken) =>
         {
             using var reader = new StreamReader(context.Request.Body);
-            var body = await reader.ReadToEndAsync(cancellationToken);
+            var body = await reader.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
             var request = JsonSerializer.Deserialize<ReputationRateRequest>(body);
 
             if (request == null || string.IsNullOrWhiteSpace(request.PeerId))
@@ -84,7 +84,7 @@ public static class NetworkEndpoints
             CancellationToken cancellationToken) =>
         {
             using var reader = new StreamReader(context.Request.Body);
-            var body = await reader.ReadToEndAsync(cancellationToken);
+            var body = await reader.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
             var request = JsonSerializer.Deserialize<BiometricVerifyRequest>(body);
 
             if (request == null || string.IsNullOrWhiteSpace(request.UserId))
@@ -108,7 +108,7 @@ public static class NetworkEndpoints
             CancellationToken cancellationToken) =>
         {
             using var reader = new StreamReader(context.Request.Body);
-            var body = await reader.ReadToEndAsync(cancellationToken);
+            var body = await reader.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
             var request = JsonSerializer.Deserialize<ReachSensorPostRequest>(body);
 
             if (request == null || string.IsNullOrWhiteSpace(request.DeviceId))
@@ -125,7 +125,7 @@ public static class NetworkEndpoints
             };
 
             var response = await ReachGateway.Instance.RequestSensor(
-                request.DeviceId, sensorRequest, cancellationToken);
+                request.DeviceId, sensorRequest, cancellationToken).ConfigureAwait(false);
 
             return Results.Json(new { device_id = request.DeviceId, response });
         });
@@ -138,13 +138,13 @@ public static class NetworkEndpoints
             CancellationToken cancellationToken) =>
         {
             using var reader = new StreamReader(context.Request.Body);
-            var body = await reader.ReadToEndAsync(cancellationToken);
+            var body = await reader.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
             var request = JsonSerializer.Deserialize<FetchRequest>(body);
 
             if (request == null || string.IsNullOrWhiteSpace(request.Url))
                 return Results.Json(new { error = "Url required" }, statusCode: 400);
 
-            var result = await NetworkResilience.Instance.ResilientFetchAsync(request.Url, cancellationToken);
+            var result = await NetworkResilience.Instance.ResilientFetchAsync(request.Url, cancellationToken).ConfigureAwait(false);
             return Results.Json(result);
         });
 
@@ -156,14 +156,14 @@ public static class NetworkEndpoints
             CancellationToken cancellationToken) =>
         {
             using var reader = new StreamReader(context.Request.Body);
-            var body = await reader.ReadToEndAsync(cancellationToken);
+            var body = await reader.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
             var request = JsonSerializer.Deserialize<ExternalSearchRequest>(body);
 
             if (request == null || string.IsNullOrWhiteSpace(request.Query))
                 return Results.Json(new { error = "Query required" }, statusCode: 400);
 
             var results = await ExternalAccess.Instance.DeepSearchAsync(
-                request.Query, request.MaxResults ?? 20, cancellationToken);
+                request.Query, request.MaxResults ?? 20, cancellationToken).ConfigureAwait(false);
 
             return Results.Json(results);
         });
@@ -173,13 +173,13 @@ public static class NetworkEndpoints
             CancellationToken cancellationToken) =>
         {
             using var reader = new StreamReader(context.Request.Body);
-            var body = await reader.ReadToEndAsync(cancellationToken);
+            var body = await reader.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
             var request = JsonSerializer.Deserialize<FetchPaperRequest>(body);
 
             if (request == null || (string.IsNullOrWhiteSpace(request.Doi) && string.IsNullOrWhiteSpace(request.Url)))
                 return Results.Json(new { error = "Doi or Url required" }, statusCode: 400);
 
-            var result = await ExternalAccess.Instance.FetchPaperAsync(request.Doi, request.Url, cancellationToken);
+            var result = await ExternalAccess.Instance.FetchPaperAsync(request.Doi, request.Url, cancellationToken).ConfigureAwait(false);
 
             if (result == null)
                 return Results.Json(new { error = "Paper not found" }, statusCode: 404);
@@ -192,13 +192,13 @@ public static class NetworkEndpoints
             CancellationToken cancellationToken) =>
         {
             using var reader = new StreamReader(context.Request.Body);
-            var body = await reader.ReadToEndAsync(cancellationToken);
+            var body = await reader.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
             var request = JsonSerializer.Deserialize<DnsRequest>(body);
 
             if (request == null || string.IsNullOrWhiteSpace(request.Domain))
                 return Results.Json(new { error = "Domain required" }, statusCode: 400);
 
-            var record = await ExternalAccess.Instance.DnsResolveAsync(request.Domain, cancellationToken);
+            var record = await ExternalAccess.Instance.DnsResolveAsync(request.Domain, cancellationToken).ConfigureAwait(false);
             return Results.Json(record);
         });
 

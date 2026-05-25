@@ -118,9 +118,9 @@ public sealed class MctsAgentReasoner
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            var leaf = await Selection(root, cfg, cancellationToken);
-            var expanded = await Expansion(leaf, cfg, cancellationToken);
-            var value = await Simulation(expanded, cfg, cancellationToken);
+            var leaf = await Selection(root, cfg, cancellationToken).ConfigureAwait(false);
+            var expanded = await Expansion(leaf, cfg, cancellationToken).ConfigureAwait(false);
+            var value = await Simulation(expanded, cfg, cancellationToken).ConfigureAwait(false);
             Backpropagation(expanded, value);
 
             if (cfg.EnableVirtualLoss)
@@ -195,7 +195,7 @@ public sealed class MctsAgentReasoner
         if (node.Children.Count > 0)
             return node;
 
-        var candidateActions = await GenerateCandidateActions(node, cfg.MaxBranches, ct);
+        var candidateActions = await GenerateCandidateActions(node, cfg.MaxBranches, ct).ConfigureAwait(false);
 
         foreach (var action in candidateActions)
         {
@@ -241,7 +241,7 @@ public sealed class MctsAgentReasoner
 
         while (depth < cfg.RolloutDepth && !current.IsTerminal && !ct.IsCancellationRequested)
         {
-            var actions = await GenerateCandidateActions(current, Math.Min(2, cfg.MaxBranches), ct);
+            var actions = await GenerateCandidateActions(current, Math.Min(2, cfg.MaxBranches), ct).ConfigureAwait(false);
 
             if (actions.Count == 0 || IsTerminalState(actions[0]))
             {
@@ -307,7 +307,7 @@ public sealed class MctsAgentReasoner
                 $"Based on the current state, generate {maxBranches} distinct next actions or reasoning steps.\n\nCurrent state:\n{node.State[..Math.Min(1000, node.State.Length)]}",
                 docs, opts);
 
-            var response = await _chatClient.GetResponseAsync(prompt, cancellationToken: ct);
+            var response = await _chatClient.GetResponseAsync(prompt, cancellationToken: ct).ConfigureAwait(false);
             return ParseActions(response.Text ?? "", maxBranches);
         }
         catch

@@ -34,7 +34,7 @@ public sealed class KernelMemoryStore
             content,
             documentId: documentId,
             tags: tagCollection,
-            cancellationToken: cancellationToken);
+            cancellationToken: cancellationToken).ConfigureAwait(false);
 
         _importedDocIds.Add(docId);
         _logger.LogInformation("Document imported: {DocId}, length: {Length}", docId, content.Length);
@@ -52,7 +52,7 @@ public sealed class KernelMemoryStore
             question,
             index: index,
             filter: filter,
-            cancellationToken: cancellationToken);
+            cancellationToken: cancellationToken).ConfigureAwait(false);
 
         _logger.LogInformation("KM ask: {Question}",
             question[..Math.Min(question.Length, 100)]);
@@ -72,7 +72,7 @@ public sealed class KernelMemoryStore
             index: index,
             limit: limit,
             filter: filter,
-            cancellationToken: cancellationToken);
+            cancellationToken: cancellationToken).ConfigureAwait(false);
 
         _logger.LogInformation("KM search: {Query}, results: {Count}",
             query[..Math.Min(query.Length, 100)], result.Results.Count);
@@ -82,7 +82,7 @@ public sealed class KernelMemoryStore
 
     public async Task DeleteDocumentAsync(string documentId, CancellationToken cancellationToken = default)
     {
-        await _memory.DeleteDocumentAsync(documentId, cancellationToken: cancellationToken);
+        await _memory.DeleteDocumentAsync(documentId, cancellationToken: cancellationToken).ConfigureAwait(false);
         _importedDocIds.Remove(documentId);
         _logger.LogInformation("Document deleted: {DocId}", documentId);
     }

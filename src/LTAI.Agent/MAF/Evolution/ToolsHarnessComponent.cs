@@ -36,7 +36,7 @@ public sealed class ToolsHarnessComponent : IHarnessComponent
             tool_count_before = _registry.ListTools().Count()
         };
         await global::System.IO.File.WriteAllTextAsync(logPath,
-            global::System.Text.Json.JsonSerializer.Serialize(snapshot), ct);
+            global::System.Text.Json.JsonSerializer.Serialize(snapshot), ct).ConfigureAwait(false);
 
         _logger?.LogInformation("Harness edit applied: {EditId} - {Fix}",
             edit.Id, edit.Fix);

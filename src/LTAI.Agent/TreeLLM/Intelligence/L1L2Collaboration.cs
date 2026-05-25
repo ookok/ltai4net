@@ -38,7 +38,7 @@ public sealed class L1L2Collaboration
         var fullText = new List<string>();
 
         var l1Functions = BuildL2DelegationFunctions();
-        var l1Preload = await L1PreloadAsync(userQuery, l1ChatClient);
+        var l1Preload = await L1PreloadAsync(userQuery, l1ChatClient).ConfigureAwait(false);
 
         var history = new List<ChatMessage>
         {
@@ -52,7 +52,7 @@ public sealed class L1L2Collaboration
             var chatOptions = new ChatOptions { Tools = l1Functions };
 
             var response = await l2ChatClient.GetResponseAsync(
-                history, chatOptions, CancellationToken.None);
+                history, chatOptions, CancellationToken.None).ConfigureAwait(false);
 
             totalTokens += EstimateTokens(response.Text ?? "");
 
@@ -118,11 +118,11 @@ public sealed class L1L2Collaboration
                 needs.Add(need);
             }
 
-            await Task.WhenAll(fulfillTasks.Values);
+            await Task.WhenAll(fulfillTasks.Values).ConfigureAwait(false);
 
             foreach (var (callId, task) in fulfillTasks)
             {
-                var result = await task;
+                var result = await task.ConfigureAwait(false);
                 history.Add(new ChatMessage(ChatRole.Tool, [result]));
             }
 
@@ -172,7 +172,7 @@ public sealed class L1L2Collaboration
                 "ask_human" => await HandleHumanAsync(call),
                 "l1_question" => await HandleL1QuestionAsync(call, l1ChatClient),
                 "fire_and_forget_task" or "approve_action" => "Task dispatched",
-                _ => await HandleL1QuestionAsync(call, l1ChatClient)
+                _ => await HandleL1QuestionAsync(call, l1ChatClient).ConfigureAwait(false)
             };
 
             return new FunctionResultContent(call.CallId, result?.ToString() ?? "done");
@@ -219,7 +219,7 @@ public sealed class L1L2Collaboration
     {
         var question = ExtractArg(call, "question") ?? ExtractArg(call, "message") ?? "";
         var timeout = int.TryParse(ExtractArg(call, "timeout") ?? "30", out var t) ? t : 30;
-        var answer = await _AskHumanAsync(question, timeout, _humanCallback);
+        var answer = await _AskHumanAsync(question, timeout, _humanCallback).ConfigureAwait(false);
         return answer ?? "No human response";
     }
 
@@ -228,7 +228,7 @@ public sealed class L1L2Collaboration
         var question = ExtractArg(call, "question") ?? ExtractArg(call, "description") ?? "";
         if (l1ChatClient != null)
         {
-            var resp = await l1ChatClient.GetResponseAsync(question, cancellationToken: CancellationToken.None);
+            var resp = await l1ChatClient.GetResponseAsync(question, cancellationToken: CancellationToken.None).ConfigureAwait(false);
             return resp.Text ?? "";
         }
         return $"L1: {question}";
@@ -249,7 +249,7 @@ public sealed class L1L2Collaboration
         try
         {
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(timeout));
-            return await callback(question, timeout).WaitAsync(cts.Token);
+            return await callback(question, timeout).WaitAsync(cts.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {

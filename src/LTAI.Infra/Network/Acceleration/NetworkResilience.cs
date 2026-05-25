@@ -74,7 +74,7 @@ public sealed record FetchResult
     };
 }
 
-public sealed class NetworkResilience
+public sealed class NetworkResilience : IDisposable
 {
     private static readonly Lazy<NetworkResilience> _instance = new(() => new NetworkResilience());
     public static NetworkResilience Instance => _instance.Value;
@@ -112,6 +112,8 @@ public sealed class NetworkResilience
     {
         _logger = logger;
     }
+
+    public void Dispose() { _http?.Dispose(); }
 
     private void InitializeMirrors()
     {
@@ -509,13 +511,13 @@ public sealed class NetworkResilience
         _logger.LogInformation("Refreshing proxies from {Count} sources", _proxySources.Count);
 
         var tasks = _proxySources.Select(source => FetchProxySourceAsync(source, cancellationToken));
-        var results = await Task.WhenAll(tasks);
+        var results = await Task.WhenAll(tasks).ConfigureAwait(false);
 
         var allProxies = results.SelectMany(r => r).DistinctBy(p => p.Address).ToList();
 
         var testTasks = allProxies.Take(300).Select(async proxy =>
         {
-            var (success, latencyMs) = await TestProxyAsync(proxy.Address, cancellationToken);
+            var (success, latencyMs) = await TestProxyAsync(proxy.Address, cancellationToken).ConfigureAwait(false);
             return proxy with
             {
                 LatencyMs = success ? latencyMs : 5000,
@@ -525,7 +527,7 @@ public sealed class NetworkResilience
             };
         });
 
-        var tested = await Task.WhenAll(testTasks);
+        var tested = await Task.WhenAll(testTasks).ConfigureAwait(false);
         var valid = tested.Where(p => p.SuccessRate > 0).ToList();
 
         _proxies.Clear();
@@ -540,7 +542,7 @@ public sealed class NetworkResilience
     {
         try
         {
-            var response = await _http.GetStringAsync(sourceUrl, cancellationToken);
+            var response = await _http.GetStringAsync(sourceUrl, cancellationToken).ConfigureAwait(false);
             return _parseProxiesFromSource(response, sourceUrl);
         }
         catch (Exception ex)
@@ -610,7 +612,7 @@ public sealed class NetworkResilience
 
             var sw = System.Diagnostics.Stopwatch.StartNew();
             using var tcp = new TcpClient();
-            await tcp.ConnectAsync(host, port, cancellationToken);
+            await tcp.ConnectAsync(host, port, cancellationToken).ConfigureAwait(false);
             sw.Stop();
 
             return (true, (int)sw.ElapsedMilliseconds);
@@ -634,26 +636,26 @@ public sealed class NetworkResilience
             if (bestIP is not null)
             {
                 var sniOverride = GetSniOverride(domain);
-                var ipResult = await FetchWithIPAsync(url, bestIP.IP, sniOverride, cancellationToken);
+                var ipResult = await FetchWithIPAsync(url, bestIP.IP, sniOverride, cancellationToken).ConfigureAwait(false);
                 if (ipResult.Success)
                     return ipResult;
             }
 
-            var mirrorResult = await FetchWithMirrorAsync(url, cancellationToken);
+            var mirrorResult = await FetchWithMirrorAsync(url, cancellationToken).ConfigureAwait(false);
             if (mirrorResult.Success)
                 return mirrorResult;
 
             var proxy = GetBestProxy();
             if (proxy is not null)
             {
-                var proxyResult = await FetchWithProxyAsync(url, proxy, cancellationToken);
+                var proxyResult = await FetchWithProxyAsync(url, proxy, cancellationToken).ConfigureAwait(false);
                 if (proxyResult.Success)
                     return proxyResult;
             }
 
             using var request = new HttpRequestMessage(HttpMethod.Get, url);
-            var response = await _http.SendAsync(request, cancellationToken);
-            var content = await response.Content.ReadAsStringAsync(cancellationToken);
+            var response = await _http.SendAsync(request, cancellationToken).ConfigureAwait(false);
+            var content = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
             sw.Stop();
 
             UpdateIP(domain, uri.Host, response.IsSuccessStatusCode, (int)sw.ElapsedMilliseconds);
@@ -690,8 +692,8 @@ public sealed class NetworkResilience
             request.Headers.Host = sniOverride ?? uri.Host;
 
             var sw = System.Diagnostics.Stopwatch.StartNew();
-            var response = await _http.SendAsync(request, cancellationToken);
-            var content = await response.Content.ReadAsStringAsync(cancellationToken);
+            var response = await _http.SendAsync(request, cancellationToken).ConfigureAwait(false);
+            var content = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
             sw.Stop();
 
             UpdateIP(uri.Host, ip, response.IsSuccessStatusCode, (int)sw.ElapsedMilliseconds);
@@ -724,8 +726,8 @@ public sealed class NetworkResilience
             using var proxyClient = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(15) };
 
             var sw = System.Diagnostics.Stopwatch.StartNew();
-            var response = await proxyClient.GetAsync(url, cancellationToken);
-            var content = await response.Content.ReadAsStringAsync(cancellationToken);
+            var response = await proxyClient.GetAsync(url, cancellationToken).ConfigureAwait(false);
+            var content = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
             sw.Stop();
 
             if (response.IsSuccessStatusCode)
@@ -765,8 +767,8 @@ public sealed class NetworkResilience
                 try
                 {
                     var sw = System.Diagnostics.Stopwatch.StartNew();
-                    var response = await _http.GetAsync(mirrorUrl, cancellationToken);
-                    var content = await response.Content.ReadAsStringAsync(cancellationToken);
+                    var response = await _http.GetAsync(mirrorUrl, cancellationToken).ConfigureAwait(false);
+                    var content = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
                     sw.Stop();
 
                     if (response.IsSuccessStatusCode)

@@ -191,13 +191,13 @@ public sealed class HttpAccelerator : DelegatingHandler
         HttpRequestMessage request, CancellationToken cancellationToken)
     {
         if (!_config.Enabled || request.RequestUri == null)
-            return await base.SendAsync(request, cancellationToken);
+            return await base.SendAsync(request, cancellationToken).ConfigureAwait(false);
 
         var host = request.RequestUri.Host.ToLowerInvariant();
         var mirror = FindMirror(host, request.RequestUri.ToString());
 
         if (mirror == null)
-            return await base.SendAsync(request, cancellationToken);
+            return await base.SendAsync(request, cancellationToken).ConfigureAwait(false);
 
         var startTime = DateTime.UtcNow;
         Exception? lastError = null;
@@ -210,7 +210,7 @@ public sealed class HttpAccelerator : DelegatingHandler
                 {
                     var redirected = new HttpRequestMessage(request.Method, directUrl + request.RequestUri.PathAndQuery);
                     CopyHeaders(request, redirected);
-                    var response = await base.SendAsync(redirected, cancellationToken);
+                    var response = await base.SendAsync(redirected, cancellationToken).ConfigureAwait(false);
 
                     var elapsed = (DateTime.UtcNow - startTime).TotalMilliseconds;
                     _logger.LogDebug("HttpAccelerator: {Host} → direct {Url} ({Elapsed:F0}ms)",
@@ -237,7 +237,7 @@ public sealed class HttpAccelerator : DelegatingHandler
 
                 var redirected = new HttpRequestMessage(request.Method, builder.Uri);
                 CopyHeaders(request, redirected);
-                var response = await base.SendAsync(redirected, cancellationToken);
+                var response = await base.SendAsync(redirected, cancellationToken).ConfigureAwait(false);
 
                 var elapsed = (DateTime.UtcNow - startTime).TotalMilliseconds;
                 _logger.LogDebug("HttpAccelerator: {Host} → {Mirror} ({Elapsed:F0}ms)",
@@ -257,7 +257,7 @@ public sealed class HttpAccelerator : DelegatingHandler
             _logger.LogWarning("HttpAccelerator: all mirrors failed for {Url}, trying direct", request.RequestUri);
         }
 
-        return await base.SendAsync(request, cancellationToken);
+        return await base.SendAsync(request, cancellationToken).ConfigureAwait(false);
     }
 
     private AcceleratorMirror? FindMirror(string host, string fullUrl)

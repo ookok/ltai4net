@@ -72,7 +72,7 @@ public sealed class CapabilityMigrator
                 if (samples.Count >= 10)
                 {
                     _logger.LogInformation("Replaying {Count} training samples for migration", samples.Count);
-                    await Task.Run(() => _loraManager.TrainTier(tier, samples, epochs: 5, lr: 0.005f), ct);
+                    await Task.Run(() => _loraManager.TrainTier(tier, samples, epochs: 5, lr: 0.005f), ct).ConfigureAwait(false);
                     result = new MigrationResult
                     {
                         NewModelVersion = newModelVersion, CheckpointsPreserved = archived,

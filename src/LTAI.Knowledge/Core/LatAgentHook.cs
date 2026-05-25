@@ -74,7 +74,7 @@ public sealed class LatAgentHook
 
         LogAction("before_task", $"Starting: {taskDescription}");
 
-        var results = await _kg.SearchAsync(taskDescription, topK: 5);
+        var results = await _kg.SearchAsync(taskDescription, topK: 5).ConfigureAwait(false);
         foreach (var (section, score) in results)
         {
             context.SearchedSections.Add(section.FullId);

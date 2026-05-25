@@ -5,7 +5,6 @@ using LTAI.Agent.Tools;
 using LTAI.Core.Messaging;
 using LTAI.Core;
 using LTAI.Core.Configuration;
-using LTAI.Core.Setup;
 using LTAI.DNA;
 using LTAI.Planning.Metrics;
 using LTAI.Knowledge.Vector;
@@ -21,16 +20,6 @@ public static class Program
     [STAThread]
     public static void Main(string[] args)
     {
-        var configPath = Path.Combine(AppContext.BaseDirectory, "appsettings.json");
-        var status = FirstRunDetector.Check(configPath);
-
-        if (status.IsFirstRun)
-        {
-            FirstRunDetector.PrintDiagnostics(status);
-            Task.Run(async () => await new InteractiveSetupWizard(configPath).RunAsync())
-                .GetAwaiter().GetResult();
-        }
-
         var services = BuildServices();
         var provider = services.BuildServiceProvider();
         ServiceLocator.SetProvider(provider);

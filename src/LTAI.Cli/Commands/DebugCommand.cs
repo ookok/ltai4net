@@ -33,7 +33,7 @@ public sealed class DebugCommand : AsyncCommand<DebugCommand.Settings>
     protected override async Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken cancellation)
     {
         await DebugMode.RunAsync(
-            settings.Query, settings.Count, settings.Difficulty, settings.Domain, settings.GenerateReport);
+            settings.Query, settings.Count, settings.Difficulty, settings.Domain, settings.GenerateReport).ConfigureAwait(false);
         return 0;
     }
 }

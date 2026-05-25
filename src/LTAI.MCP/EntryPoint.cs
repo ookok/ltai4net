@@ -31,7 +31,7 @@ public static class EntryPoint
 
         if (args.Contains("--version") || args.Contains("-v"))
         {
-            Console.WriteLine("LTAI MCP Server v7.0.0");
+            Console.WriteLine("LTAI MCP Server V0.51.0");
             return;
         }
 
@@ -41,7 +41,7 @@ public static class EntryPoint
         {
             FirstRunDetector.PrintDiagnostics(status);
             Console.WriteLine("检测到未配置，启动配置向导...");
-            await new InteractiveSetupWizard(configPath).RunAsync();
+            await new InteractiveSetupWizard(configPath).RunAsync().ConfigureAwait(false);
         }
 
         var services = new ServiceCollection();
@@ -70,13 +70,13 @@ public static class EntryPoint
         var sp = services.BuildServiceProvider();
 
         var toolRegistry = sp.GetRequiredService<AIToolRegistry>();
-        await toolRegistry.RegisterAllToolCategoriesAsync();
+        await toolRegistry.RegisterAllToolCategoriesAsync().ConfigureAwait(false);
 
         var lts = sp.GetRequiredService<LivingTreeSystem>();
-        await lts.InitializeAsync();
+        await lts.InitializeAsync().ConfigureAwait(false);
 
         var server = sp.GetRequiredService<MCPServer>();
         var transport = sp.GetRequiredService<IMCPTransport>();
-        await transport.StartAsync(server);
+        await transport.StartAsync(server).ConfigureAwait(false);
     }
 }

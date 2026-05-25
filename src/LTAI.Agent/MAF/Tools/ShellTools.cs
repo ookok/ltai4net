@@ -45,15 +45,15 @@ public sealed class ShellTools
         var stdoutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
         var stderrTask = process.StandardError.ReadToEndAsync(cancellationToken);
 
-        var completed = await Task.Run(() => process.WaitForExit(60_000), cancellationToken);
+        var completed = await Task.Run(() => process.WaitForExit(60_000), cancellationToken).ConfigureAwait(false);
         if (!completed)
         {
             process.Kill(entireProcessTree: true);
             return JsonSerializer.Serialize(new { error = "Command timed out after 60s" });
         }
 
-        var stdout = await stdoutTask;
-        var stderr = await stderrTask;
+        var stdout = await stdoutTask.ConfigureAwait(false);
+        var stderr = await stderrTask.ConfigureAwait(false);
 
         if (stdout.Length > 10000) stdout = stdout[..10000] + "\n... (truncated)";
         if (stderr.Length > 10000) stderr = stderr[..10000] + "\n... (truncated)";

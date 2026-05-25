@@ -20,7 +20,7 @@ public static class CoreEndpoints
         endpoints.MapPost("/api/core/compress", async (HttpContext context, CancellationToken ct) =>
         {
             using var reader = new StreamReader(context.Request.Body);
-            var body = await reader.ReadToEndAsync(ct);
+            var body = await reader.ReadToEndAsync(ct).ConfigureAwait(false);
             var request = JsonSerializer.Deserialize<CompressRequest>(body);
             if (request == null || string.IsNullOrWhiteSpace(request.Content))
                 return Results.Json(new { error = "content required" }, statusCode: 400);
@@ -31,7 +31,7 @@ public static class CoreEndpoints
         endpoints.MapPost("/api/core/twin/simulate", async (HttpContext context, CancellationToken ct) =>
         {
             using var reader = new StreamReader(context.Request.Body);
-            var body = await reader.ReadToEndAsync(ct);
+            var body = await reader.ReadToEndAsync(ct).ConfigureAwait(false);
             var request = JsonSerializer.Deserialize<TwinSimulateRequest>(body);
             if (request == null)
                 return Results.Json(new { error = "simulation parameters required" }, statusCode: 400);
@@ -84,7 +84,7 @@ public static class CoreEndpoints
         endpoints.MapPost("/api/core/health/trust", async (HttpContext context, CancellationToken ct) =>
         {
             using var reader = new StreamReader(context.Request.Body);
-            var body = await reader.ReadToEndAsync(ct);
+            var body = await reader.ReadToEndAsync(ct).ConfigureAwait(false);
             var request = JsonSerializer.Deserialize<TrustRequest>(body);
             if (request == null || string.IsNullOrWhiteSpace(request.AgentId))
                 return Results.Json(new { error = "agentId required" }, statusCode: 400);
@@ -102,7 +102,7 @@ public static class CoreEndpoints
         endpoints.MapPost("/api/core/shell/exec", async (HttpContext context, CancellationToken ct) =>
         {
             using var reader = new StreamReader(context.Request.Body);
-            var body = await reader.ReadToEndAsync(ct);
+            var body = await reader.ReadToEndAsync(ct).ConfigureAwait(false);
             var request = JsonSerializer.Deserialize<ShellExecRequest>(body);
             if (request == null || string.IsNullOrWhiteSpace(request.Command))
                 return Results.Json(new { error = "command required" }, statusCode: 400);
@@ -113,7 +113,7 @@ public static class CoreEndpoints
         endpoints.MapPost("/api/core/shield/input", async (HttpContext context, CancellationToken ct) =>
         {
             using var reader = new StreamReader(context.Request.Body);
-            var body = await reader.ReadToEndAsync(ct);
+            var body = await reader.ReadToEndAsync(ct).ConfigureAwait(false);
             var request = JsonSerializer.Deserialize<ShieldInputRequest>(body);
             if (request == null || string.IsNullOrWhiteSpace(request.Text))
                 return Results.Json(new { error = "text required" }, statusCode: 400);
@@ -124,7 +124,7 @@ public static class CoreEndpoints
         endpoints.MapPost("/api/core/shield/output", async (HttpContext context, CancellationToken ct) =>
         {
             using var reader = new StreamReader(context.Request.Body);
-            var body = await reader.ReadToEndAsync(ct);
+            var body = await reader.ReadToEndAsync(ct).ConfigureAwait(false);
             var request = JsonSerializer.Deserialize<ShieldOutputRequest>(body);
             if (request == null || string.IsNullOrWhiteSpace(request.Text))
                 return Results.Json(new { error = "text required" }, statusCode: 400);
@@ -135,18 +135,18 @@ public static class CoreEndpoints
         endpoints.MapPost("/api/core/tree/read", async (HttpContext context, CancellationToken ct) =>
         {
             using var reader = new StreamReader(context.Request.Body);
-            var body = await reader.ReadToEndAsync(ct);
+            var body = await reader.ReadToEndAsync(ct).ConfigureAwait(false);
             var request = JsonSerializer.Deserialize<TreeReadRequest>(body);
             if (request == null || string.IsNullOrWhiteSpace(request.Path))
                 return Results.Json(new { error = "path required" }, statusCode: 400);
-            var result = await ResourceTree.Instance.Read(request.Path);
+            var result = await ResourceTree.Instance.Read(request.Path).ConfigureAwait(false);
             return Results.Json(result);
         });
 
         endpoints.MapPost("/api/core/atomic/apply", async (HttpContext context, CancellationToken ct) =>
         {
             using var reader = new StreamReader(context.Request.Body);
-            var body = await reader.ReadToEndAsync(ct);
+            var body = await reader.ReadToEndAsync(ct).ConfigureAwait(false);
             var request = JsonSerializer.Deserialize<AtomicApplyRequest>(body);
             if (request == null || request.Edits == null || request.Edits.Count == 0)
                 return Results.Json(new { error = "edits required" }, statusCode: 400);
@@ -171,7 +171,7 @@ public static class CoreEndpoints
         endpoints.MapPost("/api/core/prefs/route", async (HttpContext context, CancellationToken ct) =>
         {
             using var reader = new StreamReader(context.Request.Body);
-            var body = await reader.ReadToEndAsync(ct);
+            var body = await reader.ReadToEndAsync(ct).ConfigureAwait(false);
             var request = JsonSerializer.Deserialize<PrefsRouteRequest>(body);
             if (request == null || string.IsNullOrWhiteSpace(request.Entity))
                 return Results.Json(new { error = "entity required" }, statusCode: 400);

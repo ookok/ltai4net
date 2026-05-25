@@ -30,7 +30,7 @@ public sealed class ImproveCommand : AsyncCommand<ImproveCommand.Settings>
 
     protected override async Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken cancellation)
     {
-        await ImproveMode.RunAsync(settings.Scan, settings.Papers, settings.Propose, settings.Auto);
+        await ImproveMode.RunAsync(settings.Scan, settings.Papers, settings.Propose, settings.Auto).ConfigureAwait(false);
         return 0;
     }
 }

@@ -43,7 +43,7 @@ public sealed class ElectionBus
             }
         }
 
-        await _refreshLock.WaitAsync(ct);
+        await _refreshLock.WaitAsync(ct).ConfigureAwait(false);
         try
         {
             // Double-check cache after acquiring lock
@@ -55,7 +55,7 @@ public sealed class ElectionBus
             }
 
             var election = HolisticElection.Instance;
-            var scores = await election.ScoreProvidersAsync(providers, freeModels, taskType, force, ct);
+            var scores = await election.ScoreProvidersAsync(providers, freeModels, taskType, force, ct).ConfigureAwait(false);
 
             var healthRatio = scores.Count > 0
                 ? scores.Average(s => s.Scores.GetValueOrDefault("health_factor", 1.0))

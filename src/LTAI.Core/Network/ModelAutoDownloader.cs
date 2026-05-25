@@ -69,7 +69,7 @@ public sealed class ModelAutoDownloader
             return new DownloadResult { Success = true, LocalPath = localPath, FileSizeBytes = existingSize };
         }
 
-        return await DownloadWithRetryAsync(model, localPath, ct);
+        return await DownloadWithRetryAsync(model, localPath, ct).ConfigureAwait(false);
     }
 
     private async Task<DownloadResult> DownloadWithRetryAsync(
@@ -96,7 +96,7 @@ public sealed class ModelAutoDownloader
                     _logger.LogInformation("Downloading {Version} from {Url} (attempt {Attempt})",
                         model.Version, url[..Math.Min(url.Length, 80)], retry + 1);
 
-                    using var response = await _http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct);
+                    using var response = await _http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
                     response.EnsureSuccessStatusCode();
 
                     progress.TotalBytes = response.Content.Headers.ContentLength ?? 0;
@@ -104,14 +104,14 @@ public sealed class ModelAutoDownloader
                     OnProgress?.Invoke(progress);
 
                     var tempPath = localPath + ".download";
-                    await using var contentStream = await response.Content.ReadAsStreamAsync(ct);
+                    await using var contentStream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
                     await using var fileStream = global::System.IO.File.Create(tempPath);
 
                     var buffer = new byte[8192];
                     int bytesRead;
                     while ((bytesRead = await contentStream.ReadAsync(buffer, ct)) > 0)
                     {
-                        await fileStream.WriteAsync(buffer.AsMemory(0, bytesRead), ct);
+                        await fileStream.WriteAsync(buffer.AsMemory(0, bytesRead), ct).ConfigureAwait(false);
                         progress.DownloadedBytes += bytesRead;
                         OnProgress?.Invoke(progress);
                     }
@@ -165,7 +165,7 @@ public sealed class ModelAutoDownloader
                             Error = ex.Message, Duration = DateTime.UtcNow - progress.StartedAt
                         };
                     }
-                    await Task.Delay(TimeSpan.FromSeconds(retry * 5), ct);
+                    await Task.Delay(TimeSpan.FromSeconds(retry * 5), ct).ConfigureAwait(false);
                 }
             }
         }
@@ -183,10 +183,10 @@ public sealed class ModelAutoDownloader
             recommendation.L0Embedding.Version, recommendation.L1Fast.Version,
             recommendation.L2Deep?.Version ?? "none");
 
-        results.Add(await DownloadAsync(recommendation.L0Embedding, ct));
-        results.Add(await DownloadAsync(recommendation.L1Fast, ct));
+        results.Add(await DownloadAsync(recommendation.L0Embedding, ct).ConfigureAwait(false));
+        results.Add(await DownloadAsync(recommendation.L1Fast, ct).ConfigureAwait(false));
         if (recommendation.L2Deep is not null)
-            results.Add(await DownloadAsync(recommendation.L2Deep, ct));
+            results.Add(await DownloadAsync(recommendation.L2Deep, ct).ConfigureAwait(false));
 
         return results;
     }
@@ -227,7 +227,7 @@ public sealed class ModelAutoDownloader
     private static async Task<string> VerifySha256Async(string path, string expected, CancellationToken ct)
     {
         await using var stream = global::System.IO.File.OpenRead(path);
-        var hash = await global::System.Security.Cryptography.SHA256.HashDataAsync(stream, ct);
+        var hash = await global::System.Security.Cryptography.SHA256.HashDataAsync(stream, ct).ConfigureAwait(false);
         var actual = Convert.ToHexStringLower(hash);
         if (!string.Equals(expected, "auto_verify", StringComparison.OrdinalIgnoreCase)
             && !string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase))

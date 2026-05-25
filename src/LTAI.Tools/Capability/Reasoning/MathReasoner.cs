@@ -37,7 +37,7 @@ public sealed class MathReasoner
             result.Method = "error";
         }
 
-        return await Task.FromResult(result);
+        return await Task.FromResult(result).ConfigureAwait(false);
     }
 
     private static bool TrySolveLinearEquation(string problem, out string result)

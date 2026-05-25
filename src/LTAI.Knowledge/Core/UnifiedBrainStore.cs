@@ -208,7 +208,7 @@ public sealed class UnifiedBrainStore : IDisposable
 
         var ftsResults = SearchFts(query, domain, ftsTopK);
         var bm25Results = _bm25.Search(query, bm25TopK);
-        var vectorResults = await SearchVector(query, vectorTopK);
+        var vectorResults = await SearchVector(query, vectorTopK).ConfigureAwait(false);
 
         var scoredDocs = RrfFuse(ftsResults, bm25Results, vectorResults, topK);
 
@@ -272,10 +272,10 @@ public sealed class UnifiedBrainStore : IDisposable
         var results = new List<(string, double, string, string)>();
         try
         {
-            var embedding = await _vectorStore.EmbedAsync(query);
+            var embedding = await _vectorStore.EmbedAsync(query).ConfigureAwait(false);
             if (embedding.Length == 0) return results;
 
-            var vectorResults = await _vectorStore.SearchSimilarAsync(embedding, topK);
+            var vectorResults = await _vectorStore.SearchSimilarAsync(embedding, topK).ConfigureAwait(false);
             foreach (var vr in vectorResults)
             {
                 results.Add((vr.Id, vr.Score, vr.Text ?? "", "vector"));

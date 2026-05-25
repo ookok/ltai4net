@@ -66,8 +66,8 @@ public sealed class LlamaSharpEngine : IL1InferenceEngine
         if (_isReady)
         {
             // LLamaSharp actual call would go here when library is integrated
-            // var result = await _executor.InferAsync(prompt, params, ct);
-            await Task.Delay(10, ct);
+            // var result = await _executor.InferAsync(prompt, params, ct).ConfigureAwait(false);
+            await Task.Delay(10, ct).ConfigureAwait(false);
             return $"[GGUF: {_modelName}] {prompt[..global::System.Math.Min(prompt.Length, 100)]}";
         }
 
@@ -76,7 +76,7 @@ public sealed class LlamaSharpEngine : IL1InferenceEngine
             var response = await _fallbackClient.GetResponseAsync(
                 new Microsoft.Extensions.AI.ChatMessage(ChatRole.User, prompt),
                 new ChatOptions { Temperature = temperature, MaxOutputTokens = maxTokens },
-                ct);
+                ct).ConfigureAwait(false);
             return response.Text ?? "";
         }
 
@@ -121,7 +121,7 @@ public sealed class LlamaSharpEngine : IL1InferenceEngine
         if (_fallbackClient is not null && !_isReady)
         {
             var response = await _fallbackClient.GetResponseAsync(
-                new ChatMessage(ChatRole.User, text), cancellationToken: ct);
+                new ChatMessage(ChatRole.User, text), cancellationToken: ct).ConfigureAwait(false);
             var hash = global::System.Security.Cryptography.SHA256.HashData(
                 global::System.Text.Encoding.UTF8.GetBytes(response.Text ?? text));
             var vec = new float[384];

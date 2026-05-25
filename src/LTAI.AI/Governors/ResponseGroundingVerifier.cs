@@ -195,7 +195,7 @@ public sealed class ResponseGroundingVerifier
                 Tools = new List<AITool>()
             };
 
-            var result = await llm.GetResponseAsync(messages, options, ct);
+            var result = await llm.GetResponseAsync(messages, options, ct).ConfigureAwait(false);
             var verdict = result.Text?.Trim() ?? "";
 
             if (verdict.StartsWith("NO", StringComparison.OrdinalIgnoreCase))

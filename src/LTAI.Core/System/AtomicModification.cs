@@ -78,7 +78,7 @@ public sealed class AtomicModification
 
                 if (File.Exists(path))
                 {
-                    originalContent = await File.ReadAllTextAsync(path);
+                    originalContent = await File.ReadAllTextAsync(path).ConfigureAwait(false);
                     originalSha256 = ComputeSha256(originalContent);
                 }
 
@@ -95,10 +95,10 @@ public sealed class AtomicModification
 
                 if (!dryRun)
                 {
-                    edit = await BackupAndWrite(path, newContent, backupDir);
+                    edit = await BackupAndWrite(path, newContent, backupDir).ConfigureAwait(false);
                     if (edit.Status == "written")
                     {
-                        edit = await Verify(edit);
+                        edit = await Verify(edit).ConfigureAwait(false);
                         if (edit.Status == "verified")
                         {
                             edit = edit with { Status = "applied" };
@@ -144,7 +144,7 @@ public sealed class AtomicModification
             {
                 try
                 {
-                    var content = await File.ReadAllTextAsync(edit.Path);
+                    var content = await File.ReadAllTextAsync(edit.Path).ConfigureAwait(false);
                     if (content != edit.NewContent)
                     {
                         errors.Add($"Import verification failed: {edit.Path} content mismatch after write");
@@ -175,7 +175,7 @@ public sealed class AtomicModification
 
         if (!result.Success && !dryRun)
         {
-            await Rollback(result);
+            await Rollback(result).ConfigureAwait(false);
         }
 
         _logger.LogInformation("Atomic apply: {Reason} - {Success} ({Modified} files, {Chars} chars)",
@@ -200,10 +200,10 @@ public sealed class AtomicModification
                 Directory.CreateDirectory(backupDirPath);
 
             File.Copy(path, backupPath, true);
-            edit = edit with { BackupPath = backupPath, OriginalContent = await File.ReadAllTextAsync(path) };
+            edit = edit with { BackupPath = backupPath, OriginalContent = await File.ReadAllTextAsync(path).ConfigureAwait(false) };
         }
 
-        edit = await WriteNewFile(edit);
+        edit = await WriteNewFile(edit).ConfigureAwait(false);
         return edit;
     }
 
@@ -216,7 +216,7 @@ public sealed class AtomicModification
                 Directory.CreateDirectory(dir);
 
             var tmpPath = edit.Path + ".tmp";
-            await File.WriteAllTextAsync(tmpPath, edit.NewContent, Encoding.UTF8);
+            await File.WriteAllTextAsync(tmpPath, edit.NewContent, Encoding.UTF8).ConfigureAwait(false);
 
             File.Move(tmpPath, edit.Path, true);
 
@@ -232,7 +232,7 @@ public sealed class AtomicModification
     {
         try
         {
-            var actual = await File.ReadAllTextAsync(edit.Path);
+            var actual = await File.ReadAllTextAsync(edit.Path).ConfigureAwait(false);
             var actualSha256 = ComputeSha256(actual);
 
             if (actualSha256 == edit.NewSha256)
@@ -312,7 +312,7 @@ public sealed class AtomicModification
                     File.Copy(edit.BackupPath!, edit.Path, true);
                     rolledBack++;
 
-                    var verifySha = ComputeSha256(await File.ReadAllTextAsync(edit.Path));
+                    var verifySha = ComputeSha256(await File.ReadAllTextAsync(edit.Path).ConfigureAwait(false));
                     if (edit.OriginalSha256 != null && verifySha != edit.OriginalSha256)
                     {
                         _logger.LogWarning("Rollback SHA mismatch for {Path}", edit.Path);
@@ -320,7 +320,7 @@ public sealed class AtomicModification
                 }
                 else if (edit.OriginalContent != null)
                 {
-                    await File.WriteAllTextAsync(edit.Path, edit.OriginalContent);
+                    await File.WriteAllTextAsync(edit.Path, edit.OriginalContent).ConfigureAwait(false);
                     rolledBack++;
                 }
             }
@@ -375,7 +375,7 @@ public sealed class AtomicModification
     {
         return await Apply(
             new Dictionary<string, string> { { path, content } },
-            reason);
+            reason).ConfigureAwait(false);
     }
 
     public static string ComputeSha256(string content)

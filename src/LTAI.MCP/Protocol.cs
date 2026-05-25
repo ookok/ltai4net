@@ -76,7 +76,7 @@ public sealed class ServerInfo
     public string Name { get; set; } = "LTAI";
 
     [JsonPropertyName("version")]
-    public string Version { get; set; } = "7.0.0";
+    public string Version { get; set; } = "0.51.0";
 }
 
 public sealed class ServerCapabilities

@@ -37,13 +37,13 @@ public sealed class VfsAdapter
 
     public async Task<string?> ReadAsync(string path)
     {
-        var result = await _vfs.Read(path);
+        var result = await _vfs.Read(path).ConfigureAwait(false);
         return result.Content;
     }
 
     public async Task<bool> WriteAsync(string path, string content)
     {
-        var result = await _vfs.Write(path, content);
+        var result = await _vfs.Write(path, content).ConfigureAwait(false);
         return result.Error == null;
     }
 
@@ -51,21 +51,21 @@ public sealed class VfsAdapter
 
     public async Task<List<object>> ListAsync(string path)
     {
-        var result = await _vfs.List(path);
+        var result = await _vfs.List(path).ConfigureAwait(false);
         return result.Items ?? new List<object>();
     }
 
     public async Task<List<object>> SearchAsync(string path, string query, int limit = 20)
     {
-        var result = await _vfs.Search(path, query, limit);
+        var result = await _vfs.Search(path, query, limit).ConfigureAwait(false);
         return result.Items ?? new List<object>();
     }
 
     public async Task<bool> MoveAsync(string source, string dest)
     {
-        var readResult = await _vfs.Read(source);
+        var readResult = await _vfs.Read(source).ConfigureAwait(false);
         if (readResult.Content == null) return false;
-        var writeResult = await _vfs.Write(dest, readResult.Content);
+        var writeResult = await _vfs.Write(dest, readResult.Content).ConfigureAwait(false);
         if (writeResult.Error != null) return false;
         _vfs.Unmount(source);
         return true;
@@ -73,7 +73,7 @@ public sealed class VfsAdapter
 
     public async Task<bool> ExistsAsync(string path)
     {
-        var result = await _vfs.Read(path);
+        var result = await _vfs.Read(path).ConfigureAwait(false);
         return result.Content != null;
     }
 }
@@ -81,8 +81,18 @@ public sealed class VfsAdapter
 internal static class RamStorage
 {
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> _store = new();
+    private static readonly System.Collections.Concurrent.ConcurrentQueue<string> _insertionOrder = new();
 
-    public static void Store(string path, string content) => _store[path] = content;
+    public static void Store(string path, string content)
+    {
+        if (_store.TryAdd(path, content))
+            _insertionOrder.Enqueue(path);
+        else
+            _store[path] = content;
+
+        while (_store.Count > 1000 && _insertionOrder.TryDequeue(out var oldest))
+            _store.TryRemove(oldest, out _);
+    }
     public static string? Get(string path) => _store.TryGetValue(path, out var v) ? v : null;
     public static List<object> List(string prefix) =>
         _store.Keys.Where(k => k.StartsWith(prefix)).Select(k => (object)new { path = k, size = _store[k].Length }).ToList();

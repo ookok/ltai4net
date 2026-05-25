@@ -37,7 +37,7 @@ public sealed class ToolRetriever
             try
             {
                 var desc = $"{tool.Name}: {tool.Description}";
-                var emb = await _vectorStore.EmbedAsync(desc, ct);
+                var emb = await _vectorStore.EmbedAsync(desc, ct).ConfigureAwait(false);
                 _toolIndex[tool.Name] = (tool, emb);
             }
             catch (Exception ex)
@@ -62,7 +62,7 @@ public sealed class ToolRetriever
         try
         {
             var queryText = $"{intent}: {query}";
-            var queryEmbedding = await _vectorStore.EmbedAsync(queryText, ct);
+            var queryEmbedding = await _vectorStore.EmbedAsync(queryText, ct).ConfigureAwait(false);
 
             var scored = _toolIndex.Values
                 .Select(kv => new ToolDefResult

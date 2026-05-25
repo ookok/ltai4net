@@ -20,7 +20,7 @@ public static class CognitionStreamEndpoints
             context.Response.Headers.Connection = "keep-alive";
 
             using var reader = new StreamReader(context.Request.Body);
-            var body = await reader.ReadToEndAsync();
+            var body = await reader.ReadToEndAsync().ConfigureAwait(false);
             var request = JsonSerializer.Deserialize<CognitionRequest>(body);
 
             if (request == null || string.IsNullOrWhiteSpace(request.Message))
@@ -45,7 +45,7 @@ public static class CognitionStreamEndpoints
                 var system = context.RequestServices.GetService<LivingTreeSystem>();
                 if (system is not null)
                 {
-                    var response = await system.ChatAsync(request.Message, cancellationToken);
+                    var response = await system.ChatAsync(request.Message, cancellationToken).ConfigureAwait(false);
 
                     await WriteSseEvent(context, "phase", new
                     {
@@ -113,7 +113,7 @@ public static class CognitionStreamEndpoints
                     {
                         var response = await chatClient.GetResponseAsync(
                             new ChatMessage(ChatRole.User, request.Message),
-                            cancellationToken: cancellationToken);
+                            cancellationToken: cancellationToken).ConfigureAwait(false);
                         await WriteSseEvent(context, "phase", new
                         {
                             phase = "direct_chat",
@@ -157,7 +157,7 @@ public static class CognitionStreamEndpoints
                 });
             }
 
-            await context.Response.CompleteAsync();
+            await context.Response.CompleteAsync().ConfigureAwait(false);
         });
     }
 
@@ -165,8 +165,8 @@ public static class CognitionStreamEndpoints
     {
         var json = JsonSerializer.Serialize(data);
         var sse = $"event: {eventType}\ndata: {json}\n\n";
-        await context.Response.WriteAsync(sse);
-        await context.Response.Body.FlushAsync();
+        await context.Response.WriteAsync(sse).ConfigureAwait(false);
+        await context.Response.Body.FlushAsync().ConfigureAwait(false);
     }
 }
 

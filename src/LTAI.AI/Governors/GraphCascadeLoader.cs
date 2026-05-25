@@ -101,7 +101,7 @@ public sealed class GraphCascadeLoader : IDisposable
         // 检查内存限制
         if (!CanFitInMemory(graphId))
         {
-            await UnloadLeastUsedGraphsAsync(ct);
+            await UnloadLeastUsedGraphsAsync(ct).ConfigureAwait(false);
         }
 
         var status = new GraphLoadStatus
@@ -116,7 +116,7 @@ public sealed class GraphCascadeLoader : IDisposable
 
         try
         {
-            await _downloadSemaphore.WaitAsync(ct);
+            await _downloadSemaphore.WaitAsync(ct).ConfigureAwait(false);
             try
             {
                 // 1. 获取包信息
@@ -125,7 +125,7 @@ public sealed class GraphCascadeLoader : IDisposable
                 {
                     // 尝试从 GitHub 下载
                     _logger.LogInformation("Graph not found locally, downloading from GitHub: {Id}", graphId);
-                    package = await _githubRegistry.DownloadGraphAsync(graphId, ct: ct);
+                    package = await _githubRegistry.DownloadGraphAsync(graphId, ct: ct).ConfigureAwait(false);
                     if (package == null)
                     {
                         status = status with { State = GraphLoadState.Failed, Error = "Package not found" };
@@ -138,11 +138,11 @@ public sealed class GraphCascadeLoader : IDisposable
                 var dependencies = package.Manifest.Dependencies;
                 if (_config.EnableDependencyPrefetch && dependencies.Count > 0)
                 {
-                    await LoadDependenciesAsync(dependencies, ct);
+                    await LoadDependenciesAsync(dependencies, ct).ConfigureAwait(false);
                 }
 
                 // 3. 加载图谱到 DomainGraphRegistry
-                var graph = await _packageManager.LoadGraphFromPackageAsync(graphId, ct: ct);
+                var graph = await _packageManager.LoadGraphFromPackageAsync(graphId, ct: ct).ConfigureAwait(false);
                 if (graph == null)
                 {
                     status = status with { State = GraphLoadState.Failed, Error = "Failed to load graph from package" };
@@ -201,7 +201,7 @@ public sealed class GraphCascadeLoader : IDisposable
     {
         if (!_config.EnableLazyLoading)
         {
-            return await LoadGraphCascadeAsync(graphId, domain, ct: ct);
+            return await LoadGraphCascadeAsync(graphId, domain, ct: ct).ConfigureAwait(false);
         }
 
         // 如果未加载，标记为待加载并返回占位符
@@ -213,7 +213,7 @@ public sealed class GraphCascadeLoader : IDisposable
             {
                 using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
                 cts.CancelAfter(_config.LazyLoadTimeout);
-                await LoadGraphCascadeAsync(graphId, domain, ct: cts.Token);
+                await LoadGraphCascadeAsync(graphId, domain, ct: cts.Token).ConfigureAwait(false);
             }, ct);
 
             return new GraphLoadStatus
@@ -241,7 +241,7 @@ public sealed class GraphCascadeLoader : IDisposable
         try
         {
             // 从 DomainGraphRegistry 卸载
-            await _graphRegistry.UnloadGraphAsync(status.Domain, ct);
+            await _graphRegistry.UnloadGraphAsync(status.Domain, ct).ConfigureAwait(false);
 
             status = status with
             {
@@ -316,7 +316,7 @@ public sealed class GraphCascadeLoader : IDisposable
             }
 
             // 加载依赖
-            await LoadGraphCascadeAsync(dep.GraphId, dep.Domain, dep.LoadOrder, ct);
+            await LoadGraphCascadeAsync(dep.GraphId, dep.Domain, dep.LoadOrder, ct).ConfigureAwait(false);
         }
     }
 
@@ -346,7 +346,7 @@ public sealed class GraphCascadeLoader : IDisposable
                 break;  // 内存使用降至 80% 以下
             }
 
-            await UnloadGraphAsync(graph.GraphId, ct);
+            await UnloadGraphAsync(graph.GraphId, ct).ConfigureAwait(false);
             unloaded++;
         }
 

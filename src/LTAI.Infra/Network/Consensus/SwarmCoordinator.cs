@@ -225,7 +225,7 @@ public sealed class SwarmCoordinator
             "Task {TaskId} distributed to {NodeCount} nodes via {Strategy}: {Description}",
             taskId, targetNodes.Count, strategy, taskDescription);
 
-        await Task.CompletedTask;
+        await Task.CompletedTask.ConfigureAwait(false);
     }
 
     public void ReceiveTask(SwarmTask task)

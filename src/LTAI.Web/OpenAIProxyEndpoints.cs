@@ -25,7 +25,7 @@ public static class OpenAIProxyEndpoints
                     new { id = "ltai-reasoning", @object = "model", owned_by = "ltai" }
                 }
             };
-            await context.Response.WriteAsync(JsonSerializer.Serialize(response));
+            await context.Response.WriteAsync(JsonSerializer.Serialize(response)).ConfigureAwait(false);
         });
 
         endpoints.MapPost("/v1/chat/completions", async (HttpContext context) =>
@@ -33,7 +33,7 @@ public static class OpenAIProxyEndpoints
             try
             {
                 using var reader = new StreamReader(context.Request.Body);
-                var body = await reader.ReadToEndAsync();
+                var body = await reader.ReadToEndAsync().ConfigureAwait(false);
                 var request = JsonSerializer.Deserialize<ChatCompletionRequest>(body);
 
                 if (request == null || request.Messages.Count == 0)
@@ -64,7 +64,7 @@ public static class OpenAIProxyEndpoints
                             MaxOutputTokens = maxTokens
                         };
                         var messages = new List<ChatMessage> { new(ChatRole.User, lastUserMsg) };
-                        var response = await chatClient.GetResponseAsync(messages, chatOptions);
+                        var response = await chatClient.GetResponseAsync(messages, chatOptions).ConfigureAwait(false);
                         responseContent = response.Text ?? "";
                     }
                     catch
@@ -100,7 +100,7 @@ public static class OpenAIProxyEndpoints
                     };
 
                     context.Response.ContentType = "application/json";
-                    await context.Response.WriteAsync(JsonSerializer.Serialize(response));
+                    await context.Response.WriteAsync(JsonSerializer.Serialize(response)).ConfigureAwait(false);
                 }
                 else
                 {
@@ -139,7 +139,7 @@ public static class OpenAIProxyEndpoints
                                     }
                                 };
                                 await context.Response.WriteAsync($"data: {JsonSerializer.Serialize(sseChunk)}\n\n");
-                                await context.Response.Body.FlushAsync();
+                                await context.Response.Body.FlushAsync().ConfigureAwait(false);
                             }
                         }
                         catch
@@ -161,7 +161,7 @@ public static class OpenAIProxyEndpoints
                                 }
                             };
                             await context.Response.WriteAsync($"data: {JsonSerializer.Serialize(fallbackChunk)}\n\n");
-                            await context.Response.Body.FlushAsync();
+                            await context.Response.Body.FlushAsync().ConfigureAwait(false);
                         }
                     }
                     else
@@ -183,18 +183,18 @@ public static class OpenAIProxyEndpoints
                             }
                         };
                         await context.Response.WriteAsync($"data: {JsonSerializer.Serialize(echoChunk)}\n\n");
-                        await context.Response.Body.FlushAsync();
+                        await context.Response.Body.FlushAsync().ConfigureAwait(false);
                     }
 
                     await context.Response.WriteAsync("data: [DONE]\n\n");
-                    await context.Response.Body.FlushAsync();
+                    await context.Response.Body.FlushAsync().ConfigureAwait(false);
                 }
             }
             catch (Exception ex)
             {
                 context.Response.StatusCode = 500;
                 context.Response.ContentType = "application/json";
-                await context.Response.WriteAsync(JsonSerializer.Serialize(new { error = ex.Message }));
+                await context.Response.WriteAsync(JsonSerializer.Serialize(new { error = ex.Message })).ConfigureAwait(false);
             }
         });
     }

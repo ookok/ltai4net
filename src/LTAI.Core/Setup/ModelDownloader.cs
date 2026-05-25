@@ -63,7 +63,7 @@ public sealed class ModelDownloader
             try
             {
                 _logger?.LogDebug("Trying URL: {Url}", url);
-                await DownloadFileAsync(url, filePath, model, progress, ct);
+                await DownloadFileAsync(url, filePath, model, progress, ct).ConfigureAwait(false);
                 _logger?.LogInformation("✅ Downloaded successfully");
                 return filePath;
             }
@@ -124,11 +124,11 @@ public sealed class ModelDownloader
         IProgress<ModelDownloadProgress>? progress,
         CancellationToken ct)
     {
-        using var response = await _httpClient.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct);
+        using var response = await _httpClient.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
 
         var totalBytes = response.Content.Headers.ContentLength ?? -1L;
-        await using var stream = await response.Content.ReadAsStreamAsync(ct);
+        await using var stream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
         await using var fileStream = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None, 81920, true);
 
         var buffer = new byte[81920];
@@ -139,7 +139,7 @@ public sealed class ModelDownloader
 
         while ((bytesRead = await stream.ReadAsync(buffer, ct)) > 0)
         {
-            await fileStream.WriteAsync(buffer.AsMemory(0, bytesRead), ct);
+            await fileStream.WriteAsync(buffer.AsMemory(0, bytesRead), ct).ConfigureAwait(false);
             totalRead += bytesRead;
 
             var now = DateTime.UtcNow;

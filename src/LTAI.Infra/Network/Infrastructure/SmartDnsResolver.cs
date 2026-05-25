@@ -26,7 +26,7 @@ public sealed class SmartDnsResolver
 
         try
         {
-            var addresses = await Dns.GetHostAddressesAsync(host, cancellationToken);
+            var addresses = await Dns.GetHostAddressesAsync(host, cancellationToken).ConfigureAwait(false);
             _cache[host] = (addresses, DateTime.UtcNow + _cacheTtl);
             _logger.LogInformation("DNS resolved: {Host} -> {Count} addresses", host, addresses.Length);
             return addresses;

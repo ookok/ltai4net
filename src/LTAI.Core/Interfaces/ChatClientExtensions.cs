@@ -10,7 +10,7 @@ public static class ChatClientExtensions
         ChatOptions? options = null,
         CancellationToken cancellationToken = default)
     {
-        var response = await client.GetResponseAsync(prompt, options, cancellationToken);
+        var response = await client.GetResponseAsync(prompt, options, cancellationToken).ConfigureAwait(false);
         return response.Text ?? string.Empty;
     }
 

@@ -16,7 +16,7 @@ public enum SynapseType
 public record SynapticExperience
 {
     [BsonId]
-    public ObjectId Id { get; init; }
+    public ObjectId Id { get; init; } = default!;
     public SynapseType Type { get; init; }
     public string Query { get; init; } = "";
     public string Response { get; init; } = "";

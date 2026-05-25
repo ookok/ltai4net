@@ -59,7 +59,7 @@ public sealed class CollectiveConsciousness
         _logger.LogInformation("Knowledge shared with {PeerCount} peers", peers.Count);
         _lastSync = DateTime.UtcNow;
 
-        await Task.CompletedTask;
+        await Task.CompletedTask.ConfigureAwait(false);
     }
 
     public SharedKnowledge? ReceiveFromPeer(SharedKnowledge knowledge)

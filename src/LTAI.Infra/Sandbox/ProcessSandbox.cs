@@ -53,7 +53,7 @@ public sealed class ProcessSandbox : ISandbox
 
             if (!string.IsNullOrEmpty(request.Stdin))
             {
-                await process.StandardInput.WriteAsync(request.Stdin);
+                await process.StandardInput.WriteAsync(request.Stdin).ConfigureAwait(false);
                 process.StandardInput.Close();
             }
 
@@ -62,7 +62,7 @@ public sealed class ProcessSandbox : ISandbox
 
             try
             {
-                await process.WaitForExitAsync(linkedCts.Token);
+                await process.WaitForExitAsync(linkedCts.Token).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {

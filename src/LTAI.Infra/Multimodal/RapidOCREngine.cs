@@ -56,7 +56,7 @@ public sealed class RapidOCREngine : IDisposable
 
         if (global::System.IO.File.Exists(vocabPath))
         {
-            var vocabText = await global::System.IO.File.ReadAllTextAsync(vocabPath, ct);
+            var vocabText = await global::System.IO.File.ReadAllTextAsync(vocabPath, ct).ConfigureAwait(false);
             _vocab = vocabText.Split('\n', StringSplitOptions.RemoveEmptyEntries);
         }
 
@@ -72,15 +72,15 @@ public sealed class RapidOCREngine : IDisposable
         if (!_isReady) return "";
         if (!global::System.IO.File.Exists(imagePath)) return "";
 
-        var bytes = await global::System.IO.File.ReadAllBytesAsync(imagePath, ct);
-        return await RecognizeBytesAsync(bytes, ct);
+        var bytes = await global::System.IO.File.ReadAllBytesAsync(imagePath, ct).ConfigureAwait(false);
+        return await RecognizeBytesAsync(bytes, ct).ConfigureAwait(false);
     }
 
     public async Task<string> ExtractTextFromBytesAsync(byte[] imageBytes, string language = "", CancellationToken ct = default)
     {
         if (!_isReady) return "";
         if (imageBytes.Length < 100) return "";
-        return await RecognizeBytesAsync(imageBytes, ct);
+        return await RecognizeBytesAsync(imageBytes, ct).ConfigureAwait(false);
     }
 
     private async Task<string> RecognizeBytesAsync(byte[] imageBytes, CancellationToken ct)
@@ -90,7 +90,7 @@ public sealed class RapidOCREngine : IDisposable
             var sw = System.Diagnostics.Stopwatch.StartNew();
 
             // Load image and preprocess for detection
-            var (imgData, width, height) = await Task.Run(() => LoadImageRgb(imageBytes), ct);
+            var (imgData, width, height) = await Task.Run(() => LoadImageRgb(imageBytes), ct).ConfigureAwait(false);
             if (imgData is null) return "";
 
             // Scale short side to 960 for detection

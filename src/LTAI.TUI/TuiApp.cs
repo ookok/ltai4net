@@ -1,7 +1,6 @@
 using Spectre.Console.Rendering;
 using System.Text;
 using Spectre.Console;
-using Spectre.Console.Rendering;
 using LTAI.AI.Governors;
 using LTAI.DNA;
 using LTAI.Tools.Reasoning;
@@ -47,11 +46,9 @@ public sealed class TuiApp
     private bool _showLLMPanel;
     private string? _loadedFileContent;
     private string? _loadedFilePath;
-    private bool _diffEnabled = true;
     private bool _diffSplitView;
 
     private static readonly string[] TaskPhases = { "input", "context", "routing", "reasoning", "generation", "review", "output" };
-    private string _currentPhase = "";
 
     public TuiApp(
         LivingTreeSystem lts,
@@ -213,7 +210,7 @@ public sealed class TuiApp
 
     private IRenderable CreateDnaPanel()
     {
-        if (_dna == null) return new Panel("[cyan]LTAI v7.0[/]").RoundedBorder().Header("[cyan]v7.0 Sentient Mesh[/]");
+        if (_dna == null) return new Panel("[cyan]LTAI V0.51[/]").RoundedBorder().Header("[cyan]V0.51 Sentient Mesh[/]");
         var c = _dna.Consciousness.State;
         return new Panel($$"""
             [cyan]状态:[/] {{c.Level}} (知觉度 {{c.AwarenessScore:F2}})
@@ -222,7 +219,7 @@ public sealed class TuiApp
             [grey]适应度:[/] {{_dna.GetStatus().FitnessScore:F2}}
             """)
             .RoundedBorder()
-            .Header("[cyan]小树 v7.0[/]");
+            .Header("[cyan]小树 V0.51[/]");
     }
 
     private IRenderable CreateSystemPanel()
@@ -326,7 +323,6 @@ public sealed class TuiApp
         }
 
         _session.AddTask("chat", "running");
-        _currentPhase = "generation";
         var startTime = DateTime.Now;
 
         var chatLayout = new ChatLayout(_lts, _configOptions?.Value, _loadedFileContent);
@@ -486,6 +482,7 @@ public sealed class TuiApp
     private void RenderPipelineView()
     {
         var dashboard = new PipelineDashboard(_lts);
+#pragma warning disable CS8601
         var snap = new Dictionary<string, object>();
 
         try { snap["system.mode"] = _lts.Mode.ToString(); } catch { }
@@ -527,6 +524,7 @@ public sealed class TuiApp
         }
         catch { }
 
+#pragma warning restore CS8601
         _ = snap; // suppress unused warning — render directly via PipelineDashboard
 
         AnsiConsole.MarkupLine("[bold cyan]Pipeline Dashboard[/] — [dim]F10 / 0 to toggle, press any key to return[/]");
@@ -690,7 +688,7 @@ public sealed class TuiApp
         await AnsiConsole.Status().StartAsync("Analyzing...", async _ =>
         {
             var code = await File.ReadAllTextAsync(filePath);
-            _lastAnalysisResult = await _analyzer.Analyze(code, LanguageRegistry.Detect(filePath));
+            _lastAnalysisResult = await _analyzer.AnalyzeAsync(code, LanguageRegistry.Detect(filePath));
             _lastAnalyzedFile = filePath;
         });
     }

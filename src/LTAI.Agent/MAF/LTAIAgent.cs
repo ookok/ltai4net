@@ -71,14 +71,14 @@ public sealed class LTAIAgent : AIAgent
 
             if (shouldUseWorkflow)
             {
-                var wfResult = await GovernorWorkflow.ExecuteWorkflowAsync(_livingTree, query, cancellationToken);
+                var wfResult = await GovernorWorkflow.ExecuteWorkflowAsync(_livingTree, query, cancellationToken).ConfigureAwait(false);
                 var result = wfResult.IsBlocked ? $"[Blocked: {wfResult.BlockReason}]" : wfResult.Response;
                 if (_outputFilter != null) result = _outputFilter.Review(result);
                 ltaSession?.AddTurn(userMessages.Last().Text ?? query, result);
                 return new AgentResponse(new ChatMessage(ChatRole.Assistant, result));
             }
 
-            var response = await _chatAgent.RunAsync(messages, session, options, cancellationToken);
+            var response = await _chatAgent.RunAsync(messages, session, options, cancellationToken).ConfigureAwait(false);
             var text = response.Text ?? "";
             if (_outputFilter != null) text = _outputFilter.Review(text);
             ltaSession?.AddTurn(userMessages.Last().Text ?? query, text);

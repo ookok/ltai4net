@@ -97,8 +97,10 @@ public sealed class DomainGraphRegistry : IDisposable
         }
 
         // 创建空图谱
+        var graphPath = GetGraphPath(domain);
         var newGraph = new LTAI.Knowledge.Core.KnowledgeGraph(
-            Microsoft.Extensions.Logging.Abstractions.NullLogger<KnowledgeGraph>.Instance);
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<KnowledgeGraph>.Instance,
+            dbPath: graphPath);
 
         _loadedGraphs[domain] = newGraph;
         _graphRegistry[domain] = new DomainGraphInfo
@@ -123,7 +125,7 @@ public sealed class DomainGraphRegistry : IDisposable
     /// </summary>
     public async Task<DomainGraphInfo?> LoadGraphAsync(string domain, CancellationToken ct = default)
     {
-        await _loadSemaphore.WaitAsync(ct);
+        await _loadSemaphore.WaitAsync(ct).ConfigureAwait(false);
         try
         {
             // 检查是否已加载
@@ -144,7 +146,8 @@ public sealed class DomainGraphRegistry : IDisposable
             // 尝试从磁盘加载
             var graphPath = GetGraphPath(domain);
             var graph = new LTAI.Knowledge.Core.KnowledgeGraph(
-                Microsoft.Extensions.Logging.Abstractions.NullLogger<KnowledgeGraph>.Instance);
+                Microsoft.Extensions.Logging.Abstractions.NullLogger<KnowledgeGraph>.Instance,
+                dbPath: graphPath);
 
             if (File.Exists(graphPath))
             {
@@ -178,7 +181,7 @@ public sealed class DomainGraphRegistry : IDisposable
             // 检查是否需要卸载其他图谱
             if (_loadedGraphs.Count > _config.MaxLoadedGraphs)
             {
-                await UnloadLeastUsedGraphAsync(ct);
+                await UnloadLeastUsedGraphAsync(ct).ConfigureAwait(false);
             }
 
             return info;
@@ -215,7 +218,7 @@ public sealed class DomainGraphRegistry : IDisposable
         try
         {
             var graphPath = GetGraphPath(domain);
-            await graph.SaveToDiskAsync(graphPath);
+            await graph.SaveToDiskAsync(graphPath).ConfigureAwait(false);
 
             _logger.LogInformation("Graph saved: domain={Domain} path={Path}", domain, graphPath);
             return true;
@@ -233,7 +236,7 @@ public sealed class DomainGraphRegistry : IDisposable
     public async Task<bool> UnloadGraphAsync(string domain, CancellationToken ct = default)
     {
         // 先保存
-        await SaveGraphAsync(domain, ct);
+        await SaveGraphAsync(domain, ct).ConfigureAwait(false);
 
         if (_loadedGraphs.TryRemove(domain, out var graph))
         {
@@ -327,8 +330,9 @@ public sealed class DomainGraphRegistry : IDisposable
 
     private string GetGraphPath(string domain)
     {
-        var safeDomain = domain.Replace(" ", "_").Replace("/", "_").ToLowerInvariant();
-        return Path.Combine(_config.GraphsDirectory, $"{safeDomain}_graph.json");
+        var safeDomain = domain.Replace(Path.DirectorySeparatorChar, '_')
+            .Replace(Path.AltDirectorySeparatorChar, '_');
+        return Path.Combine(_config.GraphsDirectory, $"{safeDomain}_graph.db");
     }
 
     private void UpdateLastUsed(string domain)
@@ -341,7 +345,7 @@ public sealed class DomainGraphRegistry : IDisposable
 
     private void ScanExistingGraphs()
     {
-        foreach (var graphFile in Directory.GetFiles(_config.GraphsDirectory, "*_graph.json"))
+        foreach (var graphFile in Directory.GetFiles(_config.GraphsDirectory, "*_graph.db"))
         {
             var domain = Path.GetFileNameWithoutExtension(graphFile)
                 .Replace("_graph", "")
@@ -368,7 +372,7 @@ public sealed class DomainGraphRegistry : IDisposable
 
         if (leastUsed != null)
         {
-            await UnloadGraphAsync(leastUsed.Domain, ct);
+            await UnloadGraphAsync(leastUsed.Domain, ct).ConfigureAwait(false);
             _logger.LogInformation("Unloaded least-used graph: domain={Domain}", leastUsed.Domain);
         }
     }

@@ -61,7 +61,7 @@ public sealed class LocalLlmBootstrapService : IHostedService
         var metaPath = Path.Combine(_config.ModelDir, ".meta.json");
 
         bool needsDownload = !File.Exists(modelPath);
-        bool needsUpdate = _config.AutoUpdate && await CheckForUpdatesAsync(metaPath, cancellationToken);
+        bool needsUpdate = _config.AutoUpdate && await CheckForUpdatesAsync(metaPath, cancellationToken).ConfigureAwait(false);
 
         if (needsDownload || needsUpdate)
         {
@@ -72,11 +72,11 @@ public sealed class LocalLlmBootstrapService : IHostedService
 
             try
             {
-                await DownloadWithRetryAsync(_selectedModel.Url, modelPath, _selectedModel.Name, cancellationToken);
-                await SaveMetaAsync(metaPath, _selectedModel, cancellationToken);
+                await DownloadWithRetryAsync(_selectedModel.Url, modelPath, _selectedModel.Name, cancellationToken).ConfigureAwait(false);
+                await SaveMetaAsync(metaPath, _selectedModel, cancellationToken).ConfigureAwait(false);
 
                 _logger.LogInformation("✅ Local LLM download completed. Initializing engine...");
-                await _engine.InitializeAsync(modelPath, cancellationToken);
+                await _engine.InitializeAsync(modelPath, cancellationToken).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -86,7 +86,7 @@ public sealed class LocalLlmBootstrapService : IHostedService
         else
         {
             _logger.LogInformation("✅ Local LLM model found ({Version}). Initializing...", _selectedModel.Version);
-            await _engine.InitializeAsync(modelPath, cancellationToken);
+            await _engine.InitializeAsync(modelPath, cancellationToken).ConfigureAwait(false);
         }
     }
 
@@ -144,7 +144,7 @@ public sealed class LocalLlmBootstrapService : IHostedService
 
         try
         {
-            var metaJson = await File.ReadAllTextAsync(metaPath, ct);
+            var metaJson = await File.ReadAllTextAsync(metaPath, ct).ConfigureAwait(false);
             var meta = JsonSerializer.Deserialize<LocalLlmMeta>(metaJson);
             if (meta == null) return true;
 
@@ -163,7 +163,7 @@ public sealed class LocalLlmBootstrapService : IHostedService
     {
         var meta = new LocalLlmMeta(model.Version, model.Name, DateTime.UtcNow);
         var json = JsonSerializer.Serialize(meta);
-        await File.WriteAllTextAsync(metaPath, json, ct);
+        await File.WriteAllTextAsync(metaPath, json, ct).ConfigureAwait(false);
     }
 
     private async Task DownloadWithRetryAsync(string url, string path, string name, CancellationToken ct)
@@ -172,13 +172,13 @@ public sealed class LocalLlmBootstrapService : IHostedService
         {
             try
             {
-                await DownloadFileAsync(url, path, name, ct);
+                await DownloadFileAsync(url, path, name, ct).ConfigureAwait(false);
                 return;
             }
             catch (Exception ex) when (i < _config.MaxDownloadRetries - 1)
             {
                 _logger.LogWarning(ex, "⚠️ Download attempt {Attempt}/{Max} failed. Retrying...", i + 1, _config.MaxDownloadRetries);
-                await Task.Delay(2000 * (i + 1), ct);
+                await Task.Delay(2000 * (i + 1), ct).ConfigureAwait(false);
             }
         }
     }
@@ -192,13 +192,13 @@ public sealed class LocalLlmBootstrapService : IHostedService
         }
 
         using var client = _httpClientFactory.CreateClient();
-        using var response = await client.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct);
+        using var response = await client.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
 
         var totalBytes = response.Content.Headers.ContentLength ?? -1L;
         var canReportProgress = totalBytes != -1L;
 
-        await using var stream = await response.Content.ReadAsStreamAsync(ct);
+        await using var stream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
         await using var fileStream = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None, 81920, true);
 
         var buffer = new byte[81920];
@@ -208,7 +208,7 @@ public sealed class LocalLlmBootstrapService : IHostedService
 
         while ((bytesRead = await stream.ReadAsync(buffer, ct)) > 0)
         {
-            await fileStream.WriteAsync(buffer.AsMemory(0, bytesRead), ct);
+            await fileStream.WriteAsync(buffer.AsMemory(0, bytesRead), ct).ConfigureAwait(false);
             totalRead += bytesRead;
 
             if (canReportProgress && (DateTime.UtcNow - lastReportTime).TotalSeconds > 2)

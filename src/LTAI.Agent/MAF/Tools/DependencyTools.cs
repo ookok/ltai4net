@@ -25,7 +25,7 @@ public sealed class DependencyTools
         [Description("CLI tool name, e.g. 'git', 'node', 'python', 'ffmpeg'")] string toolName,
         CancellationToken cancellationToken = default)
     {
-        var (found, path, version) = await FindToolAsync(toolName, cancellationToken);
+        var (found, path, version) = await FindToolAsync(toolName, cancellationToken).ConfigureAwait(false);
         return JsonSerializer.Serialize(new
         {
             tool = toolName,
@@ -41,7 +41,7 @@ public sealed class DependencyTools
         [Description("Force a specific package manager: 'scoop', 'choco', or 'auto' to let the system decide")] string manager = "auto",
         CancellationToken cancellationToken = default)
     {
-        var (found, _, _) = await FindToolAsync(toolName, cancellationToken);
+        var (found, _, _) = await FindToolAsync(toolName, cancellationToken).ConfigureAwait(false);
         if (found)
             return JsonSerializer.Serialize(new { tool = toolName, status = "already_installed", message = "Tool is already available on PATH" });
 
@@ -49,7 +49,7 @@ public sealed class DependencyTools
             ? SelectManager(toolName)
             : manager.ToLowerInvariant();
 
-        var (installOk, installOutput) = await RunInstallerAsync(selectedManager, toolName, cancellationToken);
+        var (installOk, installOutput) = await RunInstallerAsync(selectedManager, toolName, cancellationToken).ConfigureAwait(false);
         if (!installOk)
         {
             if (selectedManager == "scoop" && manager.Equals("auto", StringComparison.OrdinalIgnoreCase))
@@ -81,7 +81,7 @@ public sealed class DependencyTools
 
         foreach (var tool in tools)
         {
-            var (found, _, ver) = await FindToolAsync(tool, ct);
+            var (found, _, ver) = await FindToolAsync(tool, ct).ConfigureAwait(false);
             if (found)
             {
                 results.Add(new { tool, status = "ok", version = ver });
@@ -89,7 +89,7 @@ public sealed class DependencyTools
             else
             {
                 var manager = SelectManager(tool);
-                var (ok, output) = await RunInstallerAsync(manager, tool, ct);
+                var (ok, output) = await RunInstallerAsync(manager, tool, ct).ConfigureAwait(false);
                 results.Add(new { tool, status = ok ? "installed" : "failed", manager, output = Truncate(output, 200) });
             }
         }
@@ -121,7 +121,7 @@ public sealed class DependencyTools
         var path = whereResult.output.Split('\n', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()?.Trim();
         if (string.IsNullOrWhiteSpace(path)) return (false, null, null);
 
-        var verResult = await CheckCommandAsync(GetVersionCommand(name), ct);
+        var verResult = await CheckCommandAsync(GetVersionCommand(name), ct).ConfigureAwait(false);
         return (true, path, verResult.success ? verResult.output.Trim() : null);
     }
 
@@ -149,7 +149,7 @@ public sealed class DependencyTools
             "choco" => $"choco install {tool} -y",
             _ => throw new ArgumentException($"Unknown package manager: {manager}")
         };
-        return await CheckCommandAsync(cmd, ct);
+        return await CheckCommandAsync(cmd, ct).ConfigureAwait(false);
     }
 
     private static async Task<(bool success, string output)> CheckCommandAsync(string command, CancellationToken ct)
@@ -169,9 +169,9 @@ public sealed class DependencyTools
             using var p = Process.Start(psi);
             if (p == null) return (false, "Process start failed");
 
-            var stdout = await p.StandardOutput.ReadToEndAsync(ct);
-            var stderr = await p.StandardError.ReadToEndAsync(ct);
-            await p.WaitForExitAsync(ct);
+            var stdout = await p.StandardOutput.ReadToEndAsync(ct).ConfigureAwait(false);
+            var stderr = await p.StandardError.ReadToEndAsync(ct).ConfigureAwait(false);
+            await p.WaitForExitAsync(ct).ConfigureAwait(false);
 
             var output = string.IsNullOrWhiteSpace(stdout) ? stderr : stdout;
             return (p.ExitCode == 0, output);

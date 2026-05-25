@@ -26,7 +26,7 @@ public sealed class SandboxExecutorAdapter : ISandboxExecutor
                 timeoutSeconds,
                 memoryMb,
                 allowNetwork,
-                cancellationToken);
+                cancellationToken).ConfigureAwait(false);
 
             return new SandboxExecutionResult
             {

@@ -16,7 +16,7 @@ public sealed class JsonParser : IDocumentParser
 
     public async Task<ParseResult> ParseAsync(string filePath, CancellationToken cancellationToken = default)
     {
-        var text = await File.ReadAllTextAsync(filePath, Encoding.UTF8, cancellationToken);
+        var text = await File.ReadAllTextAsync(filePath, Encoding.UTF8, cancellationToken).ConfigureAwait(false);
         var metadata = new Dictionary<string, string>
         {
             ["size"] = new FileInfo(filePath).Length.ToString(),
@@ -53,7 +53,7 @@ public sealed class XmlParser : IDocumentParser
 
     public async Task<ParseResult> ParseAsync(string filePath, CancellationToken cancellationToken = default)
     {
-        var text = await File.ReadAllTextAsync(filePath, Encoding.UTF8, cancellationToken);
+        var text = await File.ReadAllTextAsync(filePath, Encoding.UTF8, cancellationToken).ConfigureAwait(false);
         var metadata = new Dictionary<string, string>
         {
             ["size"] = new FileInfo(filePath).Length.ToString()
@@ -84,7 +84,7 @@ public sealed class CsvParser : IDocumentParser
 
     public async Task<ParseResult> ParseAsync(string filePath, CancellationToken cancellationToken = default)
     {
-        var text = await File.ReadAllTextAsync(filePath, Encoding.UTF8, cancellationToken);
+        var text = await File.ReadAllTextAsync(filePath, Encoding.UTF8, cancellationToken).ConfigureAwait(false);
         var separator = Path.GetExtension(filePath).ToLowerInvariant() == ".tsv" ? '\t' : ',';
 
         var lines = text.Split('\n', StringSplitOptions.RemoveEmptyEntries);
@@ -133,7 +133,7 @@ public sealed class TextParser : IDocumentParser
 
     public async Task<ParseResult> ParseAsync(string filePath, CancellationToken cancellationToken = default)
     {
-        var text = await File.ReadAllTextAsync(filePath, Encoding.UTF8, cancellationToken);
+        var text = await File.ReadAllTextAsync(filePath, Encoding.UTF8, cancellationToken).ConfigureAwait(false);
         var metadata = new Dictionary<string, string>
         {
             ["size"] = new FileInfo(filePath).Length.ToString(),

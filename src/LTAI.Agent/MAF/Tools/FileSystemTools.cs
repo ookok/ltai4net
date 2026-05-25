@@ -13,7 +13,7 @@ public sealed class FileSystemTools
     {
         if (!File.Exists(path))
             return JsonSerializer.Serialize(new { error = $"File not found: {path}" });
-        var content = await File.ReadAllTextAsync(path, cancellationToken);
+        var content = await File.ReadAllTextAsync(path, cancellationToken).ConfigureAwait(false);
         if (content.Length > 50000)
             content = content[..50000] + $"\n... (truncated, total {content.Length} chars)";
         return JsonSerializer.Serialize(new { path, content, length = content.Length });
@@ -28,7 +28,7 @@ public sealed class FileSystemTools
         var dir = Path.GetDirectoryName(path);
         if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
             Directory.CreateDirectory(dir);
-        await File.WriteAllTextAsync(path, content, cancellationToken);
+        await File.WriteAllTextAsync(path, content, cancellationToken).ConfigureAwait(false);
         return JsonSerializer.Serialize(new { path, written = content.Length });
     }
 

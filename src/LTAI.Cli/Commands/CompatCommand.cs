@@ -8,6 +8,6 @@ public sealed class CompatCommand : AsyncCommand<CompatCommand.Settings>
 
     protected override async Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken cancellation)
     {
-        return await CompatibilityGate.RunAsync(Array.Empty<string>());
+        return await CompatibilityGate.RunAsync(Array.Empty<string>()).ConfigureAwait(false);
     }
 }

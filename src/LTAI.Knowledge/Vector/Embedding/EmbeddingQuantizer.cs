@@ -127,11 +127,11 @@ public sealed class EmbeddingQuantizer
 
         if (_vectorStore != null)
         {
-            queryEmbedding = await _vectorStore.EmbedAsync(queryText, cancellationToken);
+            queryEmbedding = await _vectorStore.EmbedAsync(queryText, cancellationToken).ConfigureAwait(false);
         }
         else if (_backend != null)
         {
-            var embeddings = await _backend.EmbedAsync(new[] { queryText }, cancellationToken);
+            var embeddings = await _backend.EmbedAsync(new[] { queryText }, cancellationToken).ConfigureAwait(false);
             queryEmbedding = embeddings.Length > 0 ? embeddings[0] : null;
         }
 

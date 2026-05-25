@@ -118,13 +118,13 @@ public sealed class CellPackageManager
         }
 
         // 2. 压缩/量化模型
-        var compressedPath = await CompressModelAsync(modelPath, manifest.Compression, packageDir, ct);
+        var compressedPath = await CompressModelAsync(modelPath, manifest.Compression, packageDir, ct).ConfigureAwait(false);
         
         // 3. 如果超过分片阈值，进行分片
-        var shardPaths = await ShardIfNeededAsync(compressedPath, manifest, packageDir, ct);
+        var shardPaths = await ShardIfNeededAsync(compressedPath, manifest, packageDir, ct).ConfigureAwait(false);
 
         // 4. 生成校验和
-        var checksum = await ComputeChecksumAsync(compressedPath, ct);
+        var checksum = await ComputeChecksumAsync(compressedPath, ct).ConfigureAwait(false);
         manifest = manifest with
         {
             ModelSizeBytes = modelSize,
@@ -135,11 +135,11 @@ public sealed class CellPackageManager
 
         // 5. 写入清单文件
         var manifestPath = Path.Combine(packageDir, "manifest.json");
-        await File.WriteAllTextAsync(manifestPath, JsonSerializer.Serialize(manifest, JsonOptions), ct);
+        await File.WriteAllTextAsync(manifestPath, JsonSerializer.Serialize(manifest, JsonOptions), ct).ConfigureAwait(false);
 
         // 6. 创建 .cellpackage 归档
         var packagePath = Path.Combine(_packagesDirectory, $"{manifest.CellId}_{manifest.Version}.cellpackage");
-        await CreatePackageArchiveAsync(packageDir, packagePath, ct);
+        await CreatePackageArchiveAsync(packageDir, packagePath, ct).ConfigureAwait(false);
 
         // 7. 注册已安装的包
         var packageInfo = new CellPackageInfo
@@ -187,7 +187,7 @@ public sealed class CellPackageManager
         try
         {
             // 1. 解压
-            await ExtractPackageArchiveAsync(packagePath, extractDir, ct);
+            await ExtractPackageArchiveAsync(packagePath, extractDir, ct).ConfigureAwait(false);
 
             // 2. 读取清单
             var manifestPath = Path.Combine(extractDir, "manifest.json");
@@ -198,14 +198,14 @@ public sealed class CellPackageManager
             }
 
             var manifest = JsonSerializer.Deserialize<CellPackageManifest>(
-                await File.ReadAllTextAsync(manifestPath, ct), JsonOptions);
+                await File.ReadAllTextAsync(manifestPath, ct).ConfigureAwait(false), JsonOptions);
             if (manifest == null) return null;
 
             // 3. 验证校验和
             var modelPath = Path.Combine(extractDir, "model.onnx");
             if (File.Exists(modelPath))
             {
-                var checksum = await ComputeChecksumAsync(modelPath, ct);
+                var checksum = await ComputeChecksumAsync(modelPath, ct).ConfigureAwait(false);
                 if (checksum != manifest.ChecksumSHA256)
                 {
                     _logger.LogWarning("Checksum mismatch for package: {Id}", manifest.CellId);
@@ -214,10 +214,10 @@ public sealed class CellPackageManager
             }
 
             // 4. 解压缩（如果需要）
-            var decompressedPath = await DecompressIfNeededAsync(modelPath, manifest.Compression, extractDir, ct);
+            var decompressedPath = await DecompressIfNeededAsync(modelPath, manifest.Compression, extractDir, ct).ConfigureAwait(false);
 
             // 5. 合并分片（如果需要）
-            var finalModelPath = await MergeShardsIfNeededAsync(extractDir, manifest, ct);
+            var finalModelPath = await MergeShardsIfNeededAsync(extractDir, manifest, ct).ConfigureAwait(false);
 
             var packageInfo = new CellPackageInfo
             {
@@ -367,7 +367,7 @@ public sealed class CellPackageManager
             {
                 try
                 {
-                    var result = await _quantizer.QuantizeAsync(modelPath, compressedPath, ct);
+                    var result = await _quantizer.QuantizeAsync(modelPath, compressedPath, ct).ConfigureAwait(false);
                     _logger.LogInformation(
                         "Model quantized via ONNX Runtime: {Path} (ratio={Ratio:F1}%, orig={Orig}MB, quantized={Quant}MB)",
                         compressedPath, result.CompressionRatio * 100, result.OriginalSizeMB, result.QuantizedSizeMB);
@@ -390,12 +390,12 @@ public sealed class CellPackageManager
         if (compression == CellCompression.Gzip)
         {
             await using var gzipStream = new GZipStream(destStream, CompressionLevel.Optimal);
-            await sourceStream.CopyToAsync(gzipStream, ct);
+            await sourceStream.CopyToAsync(gzipStream, ct).ConfigureAwait(false);
         }
         else if (compression == CellCompression.Brotli)
         {
             await using var brotliStream = new BrotliStream(destStream, CompressionLevel.Optimal);
-            await sourceStream.CopyToAsync(brotliStream, ct);
+            await sourceStream.CopyToAsync(brotliStream, ct).ConfigureAwait(false);
         }
 
         _logger.LogInformation(
@@ -436,10 +436,10 @@ public sealed class CellPackageManager
             while (bytesWritten < shardSizeBytes && sourceStream.Position < sourceStream.Length)
             {
                 var bytesToRead = (int)Math.Min(buffer.Length, shardSizeBytes - bytesWritten);
-                var bytesRead = await sourceStream.ReadAsync(buffer.AsMemory(0, bytesToRead), ct);
+                var bytesRead = await sourceStream.ReadAsync(buffer.AsMemory(0, bytesToRead), ct).ConfigureAwait(false);
                 if (bytesRead == 0) break;
 
-                await shardStream.WriteAsync(buffer.AsMemory(0, bytesRead), ct);
+                await shardStream.WriteAsync(buffer.AsMemory(0, bytesRead), ct).ConfigureAwait(false);
                 bytesWritten += bytesRead;
             }
 
@@ -459,7 +459,7 @@ public sealed class CellPackageManager
     private async Task<string> ComputeChecksumAsync(string filePath, CancellationToken ct)
     {
         await using var stream = File.OpenRead(filePath);
-        var hash = await SHA256.HashDataAsync(stream, ct);
+        var hash = await SHA256.HashDataAsync(stream, ct).ConfigureAwait(false);
         return Convert.ToHexString(hash).ToLowerInvariant();
     }
 
@@ -470,7 +470,7 @@ public sealed class CellPackageManager
             File.Delete(packagePath);
         }
 
-        await Task.Run(() => ZipFile.CreateFromDirectory(sourceDir, packagePath), ct);
+        await Task.Run(() => ZipFile.CreateFromDirectory(sourceDir, packagePath), ct).ConfigureAwait(false);
     }
 
     private static async Task ExtractPackageArchiveAsync(string packagePath, string extractDir, CancellationToken ct)
@@ -503,14 +503,14 @@ public sealed class CellPackageManager
             await using var sourceStream = File.OpenRead(modelPath);
             await using var gzipStream = new GZipStream(sourceStream, CompressionMode.Decompress);
             await using var destStream = File.Create(decompressedPath);
-            await gzipStream.CopyToAsync(destStream, ct);
+            await gzipStream.CopyToAsync(destStream, ct).ConfigureAwait(false);
         }
         else if (compression == CellCompression.Brotli)
         {
             await using var sourceStream = File.OpenRead(modelPath);
             await using var brotliStream = new BrotliStream(sourceStream, CompressionMode.Decompress);
             await using var destStream = File.Create(decompressedPath);
-            await brotliStream.CopyToAsync(destStream, ct);
+            await brotliStream.CopyToAsync(destStream, ct).ConfigureAwait(false);
         }
         else
         {
@@ -542,7 +542,7 @@ public sealed class CellPackageManager
         foreach (var shard in shards)
         {
             await using var sourceStream = File.OpenRead(shard);
-            await sourceStream.CopyToAsync(destStream, buffer.Length, ct);
+            await sourceStream.CopyToAsync(destStream, buffer.Length, ct).ConfigureAwait(false);
         }
 
         _logger.LogInformation("Shards merged: {Count} -> {Path}", shards.Count, mergedPath);

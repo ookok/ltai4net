@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text;
 using System.Text.RegularExpressions;
 using LTAI.Agent.Models;
 using Microsoft.Extensions.Logging;
@@ -47,7 +48,7 @@ public sealed class AdversarialSelfPlay
         for (var roundNum = 1; roundNum <= MAX_ROUNDS; roundNum++)
         {
             var roundSw = Stopwatch.StartNew();
-            var counterArgs = await _GenerateCounterArgs(currentAnswer, originalQuery, roundNum, chatFn, modelName);
+            var counterArgs = await _GenerateCounterArgs(currentAnswer, originalQuery, roundNum, chatFn, modelName).ConfigureAwait(false);
 
             if (counterArgs.Count == 0)
             {
@@ -172,7 +173,7 @@ List any remaining issues as numbered bullet points. If the answer is fully sati
 
         var args = new List<string>();
         var lines = response.Split('\n');
-        var current = "";
+        var sb = new StringBuilder();
 
         foreach (var line in lines)
         {
@@ -182,27 +183,33 @@ List any remaining issues as numbered bullet points. If the answer is fully sati
 
             if (Regex.IsMatch(trimmed, @"^\d+[\.\)]\s"))
             {
-                if (!string.IsNullOrWhiteSpace(current))
-                    args.Add(current.Trim());
+                if (sb.Length > 0)
+                {
+                    args.Add(sb.ToString().Trim());
+                    sb.Clear();
+                }
 
-                current = Regex.Replace(trimmed, @"^\d+[\.\)]\s", "");
+                sb.Append(Regex.Replace(trimmed, @"^\d+[\.\)]\s", ""));
             }
             else if (trimmed.StartsWith("-") || trimmed.StartsWith("*"))
             {
-                if (!string.IsNullOrWhiteSpace(current))
-                    args.Add(current.Trim());
+                if (sb.Length > 0)
+                {
+                    args.Add(sb.ToString().Trim());
+                    sb.Clear();
+                }
 
-                current = trimmed.Substring(1).Trim();
+                sb.Append(trimmed.Substring(1).Trim());
             }
             else
             {
-                if (!string.IsNullOrWhiteSpace(current))
-                    current += " " + trimmed;
+                if (sb.Length > 0)
+                    sb.Append(' ').Append(trimmed);
             }
         }
 
-        if (!string.IsNullOrWhiteSpace(current))
-            args.Add(current.Trim());
+        if (sb.Length > 0)
+            args.Add(sb.ToString().Trim());
 
         args = args.Where(a => a.Length > 5).ToList();
         return args.Take(6).ToList();

@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
 
@@ -77,13 +78,13 @@ public sealed class GEPAPromptOptimizer
         var asi = ExtractActionableSideInfo(interactions);
 
         // 2. 自然语言反思
-        var reflections = await ReflectAsync(existingContexts, asi, ct);
+        var reflections = await ReflectAsync(existingContexts, asi, ct).ConfigureAwait(false);
 
         // 3. 提出候选更新
-        var candidates = await ProposeCandidatesAsync(existingContexts, reflections, asi, ct);
+        var candidates = await ProposeCandidatesAsync(existingContexts, reflections, asi, ct).ConfigureAwait(false);
 
         // 4. 评估候选
-        var scored = await EvaluateCandidatesAsync(candidates, interactions, ct);
+        var scored = await EvaluateCandidatesAsync(candidates, interactions, ct).ConfigureAwait(false);
 
         // 5. 更新 Pareto 前沿
         var newFrontier = UpdateParetoFrontier(domain, existingContexts, scored);
@@ -330,24 +331,25 @@ public sealed class GEPAPromptOptimizer
         newLessons.AddRange(reflections.Take(_config.MaxReflections));
 
         // 简单变异：添加新教训到提示词
-        var mutatedPrompt = existing.Prompt;
+        var mutatedPrompt = new StringBuilder(existing.Prompt);
         if (reflections.Count > 0)
         {
-            mutatedPrompt += "\n\n## Learned Lessons:\n";
+            mutatedPrompt.Append("\n\n## Learned Lessons:\n");
             foreach (var lesson in reflections.Take(_config.MaxReflections))
             {
-                mutatedPrompt += $"- {lesson}\n";
+                mutatedPrompt.Append("- ").Append(lesson).Append('\n');
             }
         }
 
+        var mutatedPromptStr = mutatedPrompt.ToString();
         return new PromptCandidate
         {
             Domain = existing.Domain,
-            Prompt = mutatedPrompt,
+            Prompt = mutatedPromptStr,
             Ancestors = new List<string> { existing.Id },
             Lessons = newLessons.Distinct().ToList(),
             Accuracy = existing.Accuracy,  // 继承父代准确率
-            Diversity = ComputeDiversity(mutatedPrompt, existing.Prompt),
+            Diversity = ComputeDiversity(mutatedPromptStr, existing.Prompt),
             EvalCount = 0,
             IsParetoOptimal = false
         };
@@ -357,36 +359,37 @@ public sealed class GEPAPromptOptimizer
         List<string> reflections,
         ActionableSideInfo asi)
     {
-        var prompt = "You are a helpful assistant.\n\n";
+        var sb = new StringBuilder();
+        sb.Append("You are a helpful assistant.\n\n");
 
         if (asi.Suggestion != null)
         {
-            prompt += $"## Guidance:\n{asi.Suggestion}\n\n";
+            sb.Append("## Guidance:\n").Append(asi.Suggestion).Append("\n\n");
         }
 
         if (asi.SuccessPatterns.Count > 0)
         {
-            prompt += "## Successful Patterns:\n";
+            sb.Append("## Successful Patterns:\n");
             foreach (var pattern in asi.SuccessPatterns.Take(3))
             {
-                prompt += $"- {pattern}\n";
+                sb.Append("- ").Append(pattern).Append('\n');
             }
-            prompt += "\n";
+            sb.Append('\n');
         }
 
         if (asi.FailurePatterns.Count > 0)
         {
-            prompt += "## Avoid These Patterns:\n";
+            sb.Append("## Avoid These Patterns:\n");
             foreach (var pattern in asi.FailurePatterns.Take(3))
             {
-                prompt += $"- {pattern}\n";
+                sb.Append("- ").Append(pattern).Append('\n');
             }
-            prompt += "\n";
+            sb.Append('\n');
         }
 
         return new PromptCandidate
         {
-            Prompt = prompt,
+            Prompt = sb.ToString(),
             Lessons = reflections.Take(_config.MaxReflections).ToList(),
             Accuracy = 0.5f,  // 新候选默认准确率
             Diversity = 1.0f,  // 新候选最大多样性
@@ -404,18 +407,19 @@ public sealed class GEPAPromptOptimizer
         var mergedLessons = a.Lessons.Union(b.Lessons).Distinct().ToList();
         var mergedAncestors = new List<string> { a.Id, b.Id };
 
-        var mergedPrompt = $"# Combined Strategy\n\n";
-        mergedPrompt += $"## From Candidate A:\n{a.Prompt}\n\n";
-        mergedPrompt += $"## From Candidate B:\n{b.Prompt}\n\n";
-        mergedPrompt += $"## Combined Lessons:\n";
+        var mergedSb = new StringBuilder();
+        mergedSb.Append("# Combined Strategy\n\n");
+        mergedSb.Append("## From Candidate A:\n").Append(a.Prompt).Append("\n\n");
+        mergedSb.Append("## From Candidate B:\n").Append(b.Prompt).Append("\n\n");
+        mergedSb.Append("## Combined Lessons:\n");
         foreach (var lesson in mergedLessons.Take(5))
         {
-            mergedPrompt += $"- {lesson}\n";
+            mergedSb.Append("- ").Append(lesson).Append('\n');
         }
 
         return new PromptCandidate
         {
-            Prompt = mergedPrompt,
+            Prompt = mergedSb.ToString(),
             Ancestors = mergedAncestors,
             Lessons = mergedLessons,
             Accuracy = Math.Max(a.Accuracy, b.Accuracy),

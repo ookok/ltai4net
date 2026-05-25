@@ -46,8 +46,8 @@ public sealed class LightCrawler
             request.Headers.Add("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
             request.Headers.Add("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8");
 
-            var response = await _client.SendAsync(request);
-            var html = await response.Content.ReadAsStringAsync();
+            var response = await _client.SendAsync(request).ConfigureAwait(false);
+            var html = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
 
             var title = Regex.Match(html, @"<title[^>]*>([^<]+)</title>", RegexOptions.IgnoreCase).Groups[1].Value.Trim();
             var pageType = DetectPageType(html);
@@ -73,11 +73,11 @@ public sealed class LightCrawler
         var semaphore = new SemaphoreSlim(maxConcurrency);
         var tasks = urls.Select(async url =>
         {
-            await semaphore.WaitAsync();
+            await semaphore.WaitAsync().ConfigureAwait(false);
             try { results.Add(await FetchAsync(url)); }
             finally { semaphore.Release(); }
         });
-        await Task.WhenAll(tasks);
+        await Task.WhenAll(tasks).ConfigureAwait(false);
         return results.OrderBy(r => urls.IndexOf(r.Url)).ToList();
     }
 
@@ -174,7 +174,7 @@ public sealed class Spider
         for (int i = 0; i < _config.MaxConcurrent; i++)
             workers.Add(WorkerAsync());
 
-        await Task.WhenAll(workers);
+        await Task.WhenAll(workers).ConfigureAwait(false);
     }
 
     private async Task WorkerAsync()
@@ -186,8 +186,8 @@ public sealed class Spider
             if (!_visited.Add(normalized)) continue;
 
             Interlocked.Increment(ref _pageCount);
-            var page = await _crawler.FetchAsync(task.Url);
-            if (task.Callback != null) await task.Callback(page);
+            var page = await _crawler.FetchAsync(task.Url).ConfigureAwait(false);
+            if (task.Callback != null) await task.Callback(page).ConfigureAwait(false);
 
             foreach (var item in page.Items)
             {
@@ -195,7 +195,7 @@ public sealed class Spider
                     _queue.Enqueue(new CrawlTask(link));
             }
 
-            if (_config.DelayMs > 0) await Task.Delay(_config.DelayMs);
+            if (_config.DelayMs > 0) await Task.Delay(_config.DelayMs).ConfigureAwait(false);
         }
     }
 

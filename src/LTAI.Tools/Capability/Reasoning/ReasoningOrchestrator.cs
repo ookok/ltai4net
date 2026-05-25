@@ -49,7 +49,7 @@ public sealed class ReasoningOrchestrator
             switch (type)
             {
                 case ReasoningType.Math:
-                    var mathResult = await _math.SolveAsync(query, cancellationToken);
+                    var mathResult = await _math.SolveAsync(query, cancellationToken).ConfigureAwait(false);
                     report.Math = new ReasoningStep
                     {
                         Type = "math",
@@ -60,7 +60,7 @@ public sealed class ReasoningOrchestrator
                     break;
 
                 case ReasoningType.Logic:
-                    var logicResult = await _logic.ReasonAsync(query, ReasoningMode.Forward, cancellationToken);
+                    var logicResult = await _logic.ReasonAsync(query, ReasoningMode.Forward, cancellationToken).ConfigureAwait(false);
                     report.Logic = new ReasoningStep
                     {
                         Type = "logic",
@@ -72,7 +72,7 @@ public sealed class ReasoningOrchestrator
                     break;
 
                 case ReasoningType.Dialectical:
-                    var dialecticalResult = await _dialectical.AnalyzeAsync(query, cancellationToken: cancellationToken);
+                    var dialecticalResult = await _dialectical.AnalyzeAsync(query, cancellationToken: cancellationToken).ConfigureAwait(false);
                     report.Dialectical = new ReasoningStep
                     {
                         Type = "dialectical",
@@ -90,7 +90,7 @@ public sealed class ReasoningOrchestrator
                     break;
 
                 case ReasoningType.Attribution:
-                    var attrResult = await _attribution.TraceAsync(query, cancellationToken: cancellationToken);
+                    var attrResult = await _attribution.TraceAsync(query, cancellationToken: cancellationToken).ConfigureAwait(false);
                     report.Attribution = new ReasoningStep
                     {
                         Type = "attribution",
@@ -118,7 +118,7 @@ public sealed class ReasoningOrchestrator
 
         if (detectedType == ReasoningType.Math)
         {
-            var mathSolve = await _math.SolveAsync(originalQuery);
+            var mathSolve = await _math.SolveAsync(originalQuery).ConfigureAwait(false);
             if (mathSolve.Method != "unknown")
                 return $"{llmResponse}\n\n---\n**Verified Computation:**\n{mathSolve.Solution}";
         }

@@ -67,7 +67,7 @@ public sealed class ConnectionPool : IDisposable
             _client = CreateSession();
         }
 
-        await Task.Delay(100);
+        await Task.Delay(100).ConfigureAwait(false);
     }
 
     public async Task<(int StatusCode, string Body, double LatencyMs)> RequestAsync(
@@ -84,7 +84,7 @@ public sealed class ConnectionPool : IDisposable
             var client = _client;
             if (client == null)
             {
-                await RecreateSession();
+                await RecreateSession().ConfigureAwait(false);
                 client = _client;
                 if (client == null) return (503, "", 0);
             }
@@ -98,8 +98,8 @@ public sealed class ConnectionPool : IDisposable
                 request.Content = new StringContent(jsonPayload, System.Text.Encoding.UTF8, "application/json");
 
             using var cts = new CancellationTokenSource(timeoutMs);
-            var response = await client.SendAsync(request, cts.Token);
-            var body = await response.Content.ReadAsStringAsync(cts.Token);
+            var response = await client.SendAsync(request, cts.Token).ConfigureAwait(false);
+            var body = await response.Content.ReadAsStringAsync(cts.Token).ConfigureAwait(false);
 
             sw.Stop();
             var latencyMs = sw.Elapsed.TotalMilliseconds;
@@ -130,7 +130,7 @@ public sealed class ConnectionPool : IDisposable
             {
                 _logger?.LogWarning("ConnectionPool: {Provider} has {Errors} consecutive errors, recreating session",
                     providerName, errors);
-                await RecreateSession();
+                await RecreateSession().ConfigureAwait(false);
                 Interlocked.Exchange(ref _consecutiveErrors, 0);
             }
 
@@ -157,14 +157,14 @@ public sealed class ConnectionPool : IDisposable
             request.Content = new StringContent(jsonPayload, System.Text.Encoding.UTF8, "application/json");
 
         using var cts = new CancellationTokenSource(timeoutMs);
-        var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cts.Token);
-        using var stream = await response.Content.ReadAsStreamAsync(cts.Token);
+        var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false);
+        using var stream = await response.Content.ReadAsStreamAsync(cts.Token).ConfigureAwait(false);
         using var reader = new StreamReader(stream);
 
         var buffer = new char[4096];
         while (true)
         {
-            var read = await reader.ReadAsync(buffer, 0, buffer.Length);
+            var read = await reader.ReadAsync(buffer, 0, buffer.Length).ConfigureAwait(false);
             if (read == 0) break;
             yield return new string(buffer, 0, read);
         }
@@ -177,7 +177,7 @@ public sealed class ConnectionPool : IDisposable
             try
             {
                 var url = $"{p.BaseUrl}/models";
-                var result = await RequestAsync(p.Provider, HttpMethod.Get, url, timeoutMs: 5000);
+                var result = await RequestAsync(p.Provider, HttpMethod.Get, url, timeoutMs: 5000).ConfigureAwait(false);
                 _logger?.LogDebug("ConnectionPool: Warmed up {Provider} ({Code})", p.Provider, result.StatusCode);
             }
             catch (Exception ex)
@@ -186,7 +186,7 @@ public sealed class ConnectionPool : IDisposable
             }
         });
 
-        await Task.WhenAll(tasks);
+        await Task.WhenAll(tasks).ConfigureAwait(false);
     }
 
     public PoolStats GetStats()

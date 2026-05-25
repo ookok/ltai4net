@@ -75,7 +75,7 @@ public sealed class OnnxParallelEngine : IDisposable
             ? Task.Run(() => RunSentiment(_sentimentSession, query), ct)
             : null;
 
-        await Task.WhenAll(tasks.Where(t => t != null).Cast<Task>());
+        await Task.WhenAll(tasks.Where(t => t != null).Cast<Task>()).ConfigureAwait(false);
 
         var result = new ParallelInferenceResult
         {
@@ -450,7 +450,7 @@ public sealed class OnnxModelPipeline : IDisposable
         var sw = System.Diagnostics.Stopwatch.StartNew();
 
         // Stage 1: Intent (ONNX parallel)
-        var inference = await _parallel.InferAsync(query, ct);
+        var inference = await _parallel.InferAsync(query, ct).ConfigureAwait(false);
         var intent = inference.Intent;
 
         // Stage 2: Domain routing (rule-based from intent + entities)

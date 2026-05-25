@@ -321,7 +321,7 @@ public sealed class SynapticInference : IDisposable
     /// Async hot-reload for background training threads
     public async Task<bool> HotReloadAsync(string newWeightsPath, CancellationToken ct = default)
     {
-        return await Task.Run(() => HotReload(newWeightsPath), ct);
+        return await Task.Run(() => HotReload(newWeightsPath), ct).ConfigureAwait(false);
     }
 
     /// Auto-discover and load the latest model

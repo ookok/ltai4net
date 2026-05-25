@@ -29,7 +29,7 @@ public sealed class ShadowRouter
     public async Task<SemanticRoute> RouteWithShadowAsync(string text, CancellationToken ct = default)
     {
         var legacyResult = _legacyRouter.Classify(text);
-        var newResult = await _newRouter.RouteAsync(text, ct);
+        var newResult = await _newRouter.RouteAsync(text, ct).ConfigureAwait(false);
 
         var agreed = newResult.TargetAgent == legacyResult.TargetAgent;
         Interlocked.Increment(ref _totalRoutes);

@@ -75,7 +75,7 @@ public sealed class Wsl2Manager
         if (!IsWindows)
             return new Wsl2Result { Success = false, Message = "WSL2 only supported on Windows" };
 
-        var availability = await IsAvailable();
+        var availability = await IsAvailable().ConfigureAwait(false);
         if (!availability.Success)
             return availability;
 
@@ -108,7 +108,7 @@ public sealed class Wsl2Manager
         if (!IsWindows)
             return new Wsl2Result { Success = false, Message = "WSL2 only supported on Windows" };
 
-        var availability = await IsAvailable();
+        var availability = await IsAvailable().ConfigureAwait(false);
         if (!availability.Success)
             return availability;
 
@@ -135,7 +135,7 @@ public sealed class Wsl2Manager
         if (!IsWindows)
             return new Wsl2Result { Success = false, Message = "WSL2 only supported on Windows" };
 
-        var availability = await IsAvailable();
+        var availability = await IsAvailable().ConfigureAwait(false);
         if (!availability.Success)
             return availability;
 
@@ -300,9 +300,9 @@ public sealed class Wsl2Manager
             if (proc == null)
                 return (false, "Failed to start wsl.exe");
 
-            var output = await proc.StandardOutput.ReadToEndAsync();
-            var error = await proc.StandardError.ReadToEndAsync();
-            await proc.WaitForExitAsync();
+            var output = await proc.StandardOutput.ReadToEndAsync().ConfigureAwait(false);
+            var error = await proc.StandardError.ReadToEndAsync().ConfigureAwait(false);
+            await proc.WaitForExitAsync().ConfigureAwait(false);
 
             var combined = string.IsNullOrEmpty(error) ? output : $"{output}\n{error}";
 

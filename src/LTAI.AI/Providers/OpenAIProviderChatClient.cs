@@ -28,7 +28,7 @@ public sealed class OpenAIProviderChatClient : IChatClient
     {
         var openAiMessages = ToOpenAIMessages(messages).ToList();
         var openAiOptions = ToOpenAIOptions(options);
-        var result = await _chatClient.CompleteChatAsync(openAiMessages, openAiOptions, cancellationToken);
+        var result = await _chatClient.CompleteChatAsync(openAiMessages, openAiOptions, cancellationToken).ConfigureAwait(false);
         var content = string.Join("", result.Value.Content.Select(c => c.Text ?? ""));
         var toolCalls = result.Value.ToolCalls?.Select(tc =>
         {

@@ -165,7 +165,7 @@ public sealed class ResilienceBrain
             try
             {
                 var sw = global::System.Diagnostics.Stopwatch.StartNew();
-                var response = await _httpClient.GetAsync(target.url, HttpCompletionOption.ResponseHeadersRead);
+                var response = await _httpClient.GetAsync(target.url, HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
                 sw.Stop();
 
                 if (response.IsSuccessStatusCode)
@@ -186,7 +186,7 @@ public sealed class ResilienceBrain
             }
         });
 
-        var results = await Task.WhenAll(tasks);
+        var results = await Task.WhenAll(tasks).ConfigureAwait(false);
 
         foreach (var result in results)
         {

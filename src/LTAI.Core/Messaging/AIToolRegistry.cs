@@ -43,7 +43,7 @@ public sealed class AIToolRegistry
             _logger.LogInformation("Invoking tool: {Tool}", toolName);
             var funcArgs = new AIFunctionArguments(
                 new Dictionary<string, object?>(parameters!));
-            return await func.InvokeAsync(funcArgs, cancellationToken);
+            return await func.InvokeAsync(funcArgs, cancellationToken).ConfigureAwait(false);
         }
 
         _logger.LogWarning("Tool not found: {Tool}", toolName);

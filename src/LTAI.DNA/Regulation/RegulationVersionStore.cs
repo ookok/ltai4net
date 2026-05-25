@@ -63,7 +63,7 @@ public sealed class RegulationVersionStore : IRegulationProvider
         string code, DateTime effectiveDate, CancellationToken ct)
     {
         if (_standards.TryGetValue(code, out var reg) && reg.IsActive && effectiveDate >= reg.EffectiveFrom)
-            return await Task.FromResult(reg);
+            return await Task.FromResult(reg).ConfigureAwait(false);
 
         var superseded = _standards.Values.FirstOrDefault(r => r.SupersededBy == code);
         if (superseded != null)
@@ -100,12 +100,12 @@ public sealed class RegulationVersionStore : IRegulationProvider
             if ((DateTime.UtcNow - reg.LastVerifiedDate) > VerificationExpiry)
                 stale.Add(new StaleRegulation(code, reg.LastVerifiedDate));
 
-            var liveChecksum = await FetchOfficialChecksumAsync(code, ct);
+            var liveChecksum = await FetchOfficialChecksumAsync(code, ct).ConfigureAwait(false);
             if (liveChecksum != null && liveChecksum != reg.OfficialChecksum)
                 integrity.Add(new IntegrityViolation(code, reg.OfficialChecksum, liveChecksum));
         }
 
-        return await Task.FromResult(new IntegrityReport(expired, stale, integrity));
+        return await Task.FromResult(new IntegrityReport(expired, stale, integrity)).ConfigureAwait(false);
     }
 
     public void AddOrUpdate(Regulation regulation)
@@ -115,7 +115,7 @@ public sealed class RegulationVersionStore : IRegulationProvider
 
     private static async Task<string?> FetchOfficialChecksumAsync(string code, CancellationToken ct)
     {
-        await Task.CompletedTask;
+        await Task.CompletedTask.ConfigureAwait(false);
         return null; // Phase 1: stub — Phase 2 integrates with real MEE API
     }
 

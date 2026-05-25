@@ -72,7 +72,7 @@ public sealed class ConcurrentStream
         {
             try
             {
-                flashFull = await flashFn(query, systemPrompt);
+                flashFull = await flashFn(query, systemPrompt).ConfigureAwait(false);
                 flashTcs.SetResult(true);
             }
             catch (Exception ex)
@@ -86,7 +86,7 @@ public sealed class ConcurrentStream
         {
             try
             {
-                proFull = await proFn(query, systemPrompt);
+                proFull = await proFn(query, systemPrompt).ConfigureAwait(false);
                 proTcs.SetResult(true);
             }
             catch (Exception ex)
@@ -100,7 +100,7 @@ public sealed class ConcurrentStream
         {
             try
             {
-                await deepProbeFn(query);
+                await deepProbeFn(query).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -184,7 +184,7 @@ public sealed class ConcurrentStream
                 break;
             }
 
-            await Task.Delay(50, cancellationToken);
+            await Task.Delay(50, cancellationToken).ConfigureAwait(false);
         }
 
         if (flashError != null && flashFull == null)

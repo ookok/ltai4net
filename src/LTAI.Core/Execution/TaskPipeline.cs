@@ -79,7 +79,7 @@ public sealed class TaskPipeline
         // Single task — just run directly
         if (subTasks.Count <= 1)
         {
-            return await worker(query, ct);
+            return await worker(query, ct).ConfigureAwait(false);
         }
 
         // Multiple subtasks — run in parallel via executor
@@ -92,7 +92,7 @@ public sealed class TaskPipeline
             {
                 try
                 {
-                    var result = await worker(sub, taskCt);
+                    var result = await worker(sub, taskCt).ConfigureAwait(false);
                     _logger.LogDebug("TaskPipeline: subtask done ({Len} chars)", result.Length);
                     _journal.Complete(entry, result[..Math.Min(result.Length, 100)]);
                     return result;
@@ -109,7 +109,7 @@ public sealed class TaskPipeline
         }
 
         // Collect results
-        var collected = await _executor.CollectAsync(TimeSpan.FromMinutes(6), partial: true);
+        var collected = await _executor.CollectAsync(TimeSpan.FromMinutes(6), partial: true).ConfigureAwait(false);
         _totalCompletions += collected.Count(h => h.Status == TaskStatusState.Done);
 
         // Clean up active handles

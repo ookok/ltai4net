@@ -9,6 +9,11 @@ namespace LTAI.Web;
 
 public static class ParliamentEndpoints
 {
+    private static readonly JsonSerializerOptions _jsonCaseInsensitive = new()
+    {
+        PropertyNameCaseInsensitive = true
+    };
+
     public static void MapParliamentEndpoints(this IEndpointRouteBuilder endpoints)
     {
         endpoints.MapPost("/api/parliament/convene", async (
@@ -19,11 +24,8 @@ public static class ParliamentEndpoints
             try
             {
                 using var reader = new StreamReader(context.Request.Body);
-                var body = await reader.ReadToEndAsync(cancellationToken);
-                var request = JsonSerializer.Deserialize<ParliamentRequest>(body, new JsonSerializerOptions
-                {
-                    PropertyNameCaseInsensitive = true
-                });
+                var body = await reader.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
+                var request = JsonSerializer.Deserialize<ParliamentRequest>(body, _jsonCaseInsensitive);
 
                 if (request == null || string.IsNullOrWhiteSpace(request.Query))
                 {
@@ -37,7 +39,7 @@ public static class ParliamentEndpoints
                     overrideVoterAgents: request.Voters,
                     criticAgent: request.Critic,
                     requiredPassVotes: request.RequiredPassVotes ?? 2,
-                    cancellationToken: cancellationToken);
+                    cancellationToken: cancellationToken).ConfigureAwait(false);
 
                 return Results.Json(new
                 {
@@ -72,11 +74,8 @@ public static class ParliamentEndpoints
             try
             {
                 using var reader = new StreamReader(context.Request.Body);
-                var body = await reader.ReadToEndAsync(cancellationToken);
-                var request = JsonSerializer.Deserialize<ParliamentRequest>(body, new JsonSerializerOptions
-                {
-                    PropertyNameCaseInsensitive = true
-                });
+                var body = await reader.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
+                var request = JsonSerializer.Deserialize<ParliamentRequest>(body, _jsonCaseInsensitive);
 
                 if (request == null || string.IsNullOrWhiteSpace(request.Query))
                 {

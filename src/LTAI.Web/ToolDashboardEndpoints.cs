@@ -62,7 +62,7 @@ public static class ToolDashboardEndpoints
                 });
 
                 await context.Response.WriteAsync($"event: tool_dashboard\ndata: {data}\n\n", ct);
-                await context.Response.Body.FlushAsync(ct);
+                await context.Response.Body.FlushAsync(ct).ConfigureAwait(false);
 
                 try { await Task.Delay(5000, ct); }
                 catch (OperationCanceledException) { break; }

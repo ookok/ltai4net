@@ -162,7 +162,7 @@ Pipeline operators:
                 foreach (var (ek, ev) in entities) item[$"extracted_{ek}"] = ev;
             }
         }
-        return await Task.FromResult(data);
+        return await Task.FromResult(data).ConfigureAwait(false);
     }
 
     private static List<Dictionary<string, object>> Filter(List<Dictionary<string, object>> data, PipelineStep step)
@@ -249,7 +249,7 @@ Pipeline operators:
             var hash = item.TryGetValue(key, out var v) ? v?.ToString()?.GetHashCode().ToString() ?? Guid.NewGuid().ToString() : Guid.NewGuid().ToString();
             if (seen.Add(hash)) resolved.Add(item);
         }
-        return await Task.FromResult(resolved);
+        return await Task.FromResult(resolved).ConfigureAwait(false);
     }
 
     private static Dictionary<string, string> ExtractEntities(string text)

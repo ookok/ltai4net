@@ -37,6 +37,48 @@ public sealed class TestHarness
     private readonly CodeGraphEnhanced? _codeGraph;
     private readonly ILogger<TestHarness> _logger;
 
+    private static readonly Regex s_dotNetPassedPattern = new(
+        @"Passed\s+(?<name>[^(]+)\s*\((?<duration>[\d.]+)\s*\w*\)",
+        RegexOptions.Multiline | RegexOptions.Compiled);
+    private static readonly Regex s_dotNetFailedPattern = new(
+        @"Failed\s+(?<name>[^(]+)\s*\((?<duration>[\d.]+)\s*\w*\)",
+        RegexOptions.Multiline | RegexOptions.Compiled);
+    private static readonly Regex s_dotNetSkippedPattern = new(
+        @"Skipped\s+(?<name>[^(]+)",
+        RegexOptions.Multiline | RegexOptions.Compiled);
+
+    private static readonly Regex s_pytestPattern = new(
+        @"^(?<status>PASSED|FAILED|SKIPPED|XFAIL|XPASS)\s+(?<name>\S+)",
+        RegexOptions.Multiline | RegexOptions.Compiled);
+
+    private static readonly Regex s_jestPassPattern = new(
+        @"✓\s+(?<name>.+?)(?:\s+\((?<duration>\d+)\s*ms\))?$",
+        RegexOptions.Multiline | RegexOptions.Compiled);
+    private static readonly Regex s_jestFailPattern = new(
+        @"✕\s+(?<name>.+?)(?:\s+\((?<duration>\d+)\s*ms\))?$",
+        RegexOptions.Multiline | RegexOptions.Compiled);
+    private static readonly Regex s_jestSkipPattern = new(
+        @"○\s+skipped\s+(?<name>.+)$",
+        RegexOptions.Multiline | RegexOptions.Compiled);
+
+    private static readonly Regex s_cargoTestPattern = new(
+        @"test\s+(?<name>\S+)\s+\.\.\.\s+(?<status>ok|FAILED|ignored)",
+        RegexOptions.Multiline | RegexOptions.Compiled);
+
+    private static readonly Regex s_goTestPassPattern = new(
+        @"^--- PASS:\s+(?<name>\S+)",
+        RegexOptions.Multiline | RegexOptions.Compiled);
+    private static readonly Regex s_goTestFailPattern = new(
+        @"^--- FAIL:\s+(?<name>\S+)",
+        RegexOptions.Multiline | RegexOptions.Compiled);
+    private static readonly Regex s_goTestSkipPattern = new(
+        @"^--- SKIP:\s+(?<name>\S+)",
+        RegexOptions.Multiline | RegexOptions.Compiled);
+
+    private static readonly Regex s_genericPattern = new(
+        @"(?<status>PASS|FAIL|SKIP|OK|ERROR)[:\s]+(?<name>.+)$",
+        RegexOptions.Multiline | RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
     public TestHarness(CodeGraphEnhanced? codeGraph = null, ILogger<TestHarness>? logger = null)
     {
         _codeGraph = codeGraph;
@@ -56,7 +98,7 @@ public sealed class TestHarness
         var (command, args) = GetTestCommand(framework, rootPath, filter, configuration);
 
         var sw = Stopwatch.StartNew();
-        var (exitCode, output) = await RunProcessAsync(command, args, rootPath, timeoutMs);
+        var (exitCode, output) = await RunProcessAsync(command, args, rootPath, timeoutMs).ConfigureAwait(false);
         sw.Stop();
 
         var cases = ParseTestOutput(output, framework);
@@ -85,7 +127,7 @@ public sealed class TestHarness
         if (_codeGraph == null)
         {
             _logger.LogWarning("CodeGraphEnhanced not available, running all tests");
-            return await RunTestsAsync(rootPath, configuration: configuration, timeoutMs: timeoutMs);
+            return await RunTestsAsync(rootPath, configuration: configuration, timeoutMs: timeoutMs).ConfigureAwait(false);
         }
 
         var affectedFiles = new HashSet<string>();
@@ -114,7 +156,7 @@ public sealed class TestHarness
             .Take(10));
 
         _logger.LogInformation("Running affected tests: {Filter} ({Count} files)", filter, affectedFiles.Count);
-        return await RunTestsAsync(rootPath, filter, configuration, timeoutMs);
+        return await RunTestsAsync(rootPath, filter, configuration, timeoutMs).ConfigureAwait(false);
     }
 
     public async Task<List<string>> GetTestsCoveringSymbolAsync(string rootPath, string symbolName)
@@ -231,17 +273,7 @@ public sealed class TestHarness
     {
         var cases = new List<TestCase>();
 
-        var passedPattern = new Regex(
-            @"Passed\s+(?<name>[^(]+)\s*\((?<duration>[\d.]+)\s*\w*\)",
-            RegexOptions.Multiline);
-        var failedPattern = new Regex(
-            @"Failed\s+(?<name>[^(]+)\s*\((?<duration>[\d.]+)\s*\w*\)",
-            RegexOptions.Multiline);
-        var skippedPattern = new Regex(
-            @"Skipped\s+(?<name>[^(]+)",
-            RegexOptions.Multiline);
-
-        foreach (Match m in passedPattern.Matches(output))
+        foreach (Match m in s_dotNetPassedPattern.Matches(output))
         {
             cases.Add(new TestCase
             {
@@ -251,7 +283,7 @@ public sealed class TestHarness
             });
         }
 
-        foreach (Match m in failedPattern.Matches(output))
+        foreach (Match m in s_dotNetFailedPattern.Matches(output))
         {
             cases.Add(new TestCase
             {
@@ -262,7 +294,7 @@ public sealed class TestHarness
             });
         }
 
-        foreach (Match m in skippedPattern.Matches(output))
+        foreach (Match m in s_dotNetSkippedPattern.Matches(output))
         {
             cases.Add(new TestCase
             {
@@ -278,11 +310,7 @@ public sealed class TestHarness
     {
         var cases = new List<TestCase>();
 
-        var pattern = new Regex(
-            @"^(?<status>PASSED|FAILED|SKIPPED|XFAIL|XPASS)\s+(?<name>\S+)",
-            RegexOptions.Multiline);
-
-        foreach (Match m in pattern.Matches(output))
+        foreach (Match m in s_pytestPattern.Matches(output))
         {
             var status = m.Groups["status"].Value;
             cases.Add(new TestCase
@@ -306,11 +334,7 @@ public sealed class TestHarness
     {
         var cases = new List<TestCase>();
 
-        var passPattern = new Regex(@"✓\s+(?<name>.+?)(?:\s+\((?<duration>\d+)\s*ms\))?$", RegexOptions.Multiline);
-        var failPattern = new Regex(@"✕\s+(?<name>.+?)(?:\s+\((?<duration>\d+)\s*ms\))?$", RegexOptions.Multiline);
-        var skipPattern = new Regex(@"○\s+skipped\s+(?<name>.+)$", RegexOptions.Multiline);
-
-        foreach (Match m in passPattern.Matches(output))
+        foreach (Match m in s_jestPassPattern.Matches(output))
         {
             cases.Add(new TestCase
             {
@@ -320,7 +344,7 @@ public sealed class TestHarness
             });
         }
 
-        foreach (Match m in failPattern.Matches(output))
+        foreach (Match m in s_jestFailPattern.Matches(output))
         {
             cases.Add(new TestCase
             {
@@ -331,7 +355,7 @@ public sealed class TestHarness
             });
         }
 
-        foreach (Match m in skipPattern.Matches(output))
+        foreach (Match m in s_jestSkipPattern.Matches(output))
         {
             cases.Add(new TestCase
             {
@@ -347,11 +371,7 @@ public sealed class TestHarness
     {
         var cases = new List<TestCase>();
 
-        var pattern = new Regex(
-            @"test\s+(?<name>\S+)\s+\.\.\.\s+(?<status>ok|FAILED|ignored)",
-            RegexOptions.Multiline);
-
-        foreach (Match m in pattern.Matches(output))
+        foreach (Match m in s_cargoTestPattern.Matches(output))
         {
             var status = m.Groups["status"].Value;
             cases.Add(new TestCase
@@ -375,16 +395,12 @@ public sealed class TestHarness
     {
         var cases = new List<TestCase>();
 
-        var passPattern = new Regex(@"^--- PASS:\s+(?<name>\S+)", RegexOptions.Multiline);
-        var failPattern = new Regex(@"^--- FAIL:\s+(?<name>\S+)", RegexOptions.Multiline);
-        var skipPattern = new Regex(@"^--- SKIP:\s+(?<name>\S+)", RegexOptions.Multiline);
-
-        foreach (Match m in passPattern.Matches(output))
+        foreach (Match m in s_goTestPassPattern.Matches(output))
         {
             cases.Add(new TestCase { Name = m.Groups["name"].Value, Status = "passed" });
         }
 
-        foreach (Match m in failPattern.Matches(output))
+        foreach (Match m in s_goTestFailPattern.Matches(output))
         {
             cases.Add(new TestCase
             {
@@ -394,7 +410,7 @@ public sealed class TestHarness
             });
         }
 
-        foreach (Match m in skipPattern.Matches(output))
+        foreach (Match m in s_goTestSkipPattern.Matches(output))
         {
             cases.Add(new TestCase { Name = m.Groups["name"].Value, Status = "skipped" });
         }
@@ -406,11 +422,7 @@ public sealed class TestHarness
     {
         var cases = new List<TestCase>();
 
-        var pattern = new Regex(
-            @"(?<status>PASS|FAIL|SKIP|OK|ERROR)[:\s]+(?<name>.+)$",
-            RegexOptions.Multiline | RegexOptions.IgnoreCase);
-
-        foreach (Match m in pattern.Matches(output))
+        foreach (Match m in s_genericPattern.Matches(output))
         {
             var status = m.Groups["status"].Value.ToUpperInvariant();
             cases.Add(new TestCase
@@ -494,7 +506,7 @@ public sealed class TestHarness
         proc.BeginOutputReadLine();
         proc.BeginErrorReadLine();
 
-        var completed = await Task.Run(() => proc.WaitForExit(timeoutMs));
+        var completed = await Task.Run(() => proc.WaitForExit(timeoutMs)).ConfigureAwait(false);
         if (!completed)
         {
             try { proc.Kill(entireProcessTree: true); } catch { }

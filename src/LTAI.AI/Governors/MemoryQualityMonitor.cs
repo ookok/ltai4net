@@ -54,10 +54,10 @@ public sealed class MemoryQualityMonitor
         }
 
         // 测试不同记忆配置的效果
-        var withEpisodic = await TestWithEpisodicMemoryAsync(testQueries, ct);
-        var withAbstract = await TestWithAbstractMemoryAsync(testQueries, ct);
-        var withDual = await TestWithDualMemoryAsync(testQueries, ct);
-        var withoutMemory = await TestWithoutMemoryAsync(testQueries, ct);
+        var withEpisodic = await TestWithEpisodicMemoryAsync(testQueries, ct).ConfigureAwait(false);
+        var withAbstract = await TestWithAbstractMemoryAsync(testQueries, ct).ConfigureAwait(false);
+        var withDual = await TestWithDualMemoryAsync(testQueries, ct).ConfigureAwait(false);
+        var withoutMemory = await TestWithoutMemoryAsync(testQueries, ct).ConfigureAwait(false);
 
         var result = new QualityTestResult
         {
@@ -95,7 +95,7 @@ public sealed class MemoryQualityMonitor
         List<string> testQueries,
         CancellationToken ct = default)
     {
-        var result = await MeasureAsync(testQueries, ct);
+        var result = await MeasureAsync(testQueries, ct).ConfigureAwait(false);
         return result.WouldConsolidationHelp;
     }
 

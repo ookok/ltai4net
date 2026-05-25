@@ -20,7 +20,7 @@ public sealed class WebSearchTools
     {
         try
         {
-            var html = await _http.GetStringAsync(url, cancellationToken);
+            var html = await _http.GetStringAsync(url, cancellationToken).ConfigureAwait(false);
             var title = ExtractTitle(html);
             var text = StripHtml(html);
             text = System.Web.HttpUtility.HtmlDecode(text);
@@ -44,7 +44,7 @@ public sealed class WebSearchTools
     {
         try
         {
-            var html = await _http.GetStringAsync(url, cancellationToken);
+            var html = await _http.GetStringAsync(url, cancellationToken).ConfigureAwait(false);
             var meta = new Dictionary<string, string>();
 
             meta["title"] = ExtractTitle(html);
@@ -84,20 +84,20 @@ public sealed class WebSearchTools
         {
             try
             {
-                var bingResults = await SearchBingAsync(query, maxResults, cancellationToken);
+                var bingResults = await SearchBingAsync(query, maxResults, cancellationToken).ConfigureAwait(false);
                 if (bingResults.Count > 0)
                 {
                     results.AddRange(bingResults);
                 }
                 else
                 {
-                    var ddgResults = await SearchDuckDuckGoAsync(query, maxResults, cancellationToken);
+                    var ddgResults = await SearchDuckDuckGoAsync(query, maxResults, cancellationToken).ConfigureAwait(false);
                     results.AddRange(ddgResults);
                 }
             }
             catch
             {
-                var ddgResults = await SearchDuckDuckGoAsync(query, maxResults, cancellationToken);
+                var ddgResults = await SearchDuckDuckGoAsync(query, maxResults, cancellationToken).ConfigureAwait(false);
                 results.AddRange(ddgResults);
             }
         }
@@ -105,12 +105,12 @@ public sealed class WebSearchTools
         {
             try
             {
-                var ddgResults = await SearchDuckDuckGoAsync(query, maxResults, cancellationToken);
+                var ddgResults = await SearchDuckDuckGoAsync(query, maxResults, cancellationToken).ConfigureAwait(false);
                 results.AddRange(ddgResults);
             }
             catch
             {
-                var bingResults = await SearchBingAsync(query, maxResults, cancellationToken);
+                var bingResults = await SearchBingAsync(query, maxResults, cancellationToken).ConfigureAwait(false);
                 results.AddRange(bingResults);
             }
         }
@@ -130,7 +130,7 @@ public sealed class WebSearchTools
     {
         var results = new List<WebSearchResult>();
         var searchUrl = $"https://cn.bing.com/search?q={Uri.EscapeDataString(query)}&setlang=zh-cn&count={maxResults}&ensearch=0";
-        var html = await _http.GetStringAsync(searchUrl, ct);
+        var html = await _http.GetStringAsync(searchUrl, ct).ConfigureAwait(false);
 
         var itemMatches = Regex.Matches(html, @"<li class=""b_algo""[^>]*>(.*?)</li>", RegexOptions.Singleline);
 
@@ -165,7 +165,7 @@ public sealed class WebSearchTools
         if (results.Count == 0)
         {
             var fallbackUrl = $"https://www.bing.com/search?q={Uri.EscapeDataString(query)}&setlang=zh-cn&count={maxResults}";
-            var fallbackHtml = await _http.GetStringAsync(fallbackUrl, ct);
+            var fallbackHtml = await _http.GetStringAsync(fallbackUrl, ct).ConfigureAwait(false);
             var fallbackMatches = Regex.Matches(fallbackHtml, @"<li class=""b_algo""[^>]*>(.*?)</li>", RegexOptions.Singleline);
 
             foreach (Match item in fallbackMatches.Take(maxResults))
@@ -194,7 +194,7 @@ public sealed class WebSearchTools
     {
         var results = new List<WebSearchResult>();
         var searchUrl = $"https://html.duckduckgo.com/html/?q={Uri.EscapeDataString(query)}";
-        var html = await _http.GetStringAsync(searchUrl, ct);
+        var html = await _http.GetStringAsync(searchUrl, ct).ConfigureAwait(false);
 
         var linkMatches = Regex.Matches(html, @"<a[^>]+class=""result__a""[^>]+href=""([^""]+)""[^>]*>[\s\S]*?</a>");
         var snippetMatches = Regex.Matches(html, @"<a[^>]+class=""result__snippet""[^>]*>[\s\S]*?</a>");

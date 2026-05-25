@@ -194,7 +194,7 @@ public sealed class FunctionalTokenRouter
         {
             if (_l1Engine != null)
             {
-                token = await TryL1QuickAnswerAsync(query, ct);
+                token = await TryL1QuickAnswerAsync(query, ct).ConfigureAwait(false);
             }
 
             if (token == FunctionalToken.Unknown)
@@ -396,7 +396,7 @@ public sealed class AtlasThinkingPipeline
         int maxTokens = 512,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
-        var routeResult = await _router.RouteAsync(prompt, ct);
+        var routeResult = await _router.RouteAsync(prompt, ct).ConfigureAwait(false);
         _logger.LogInformation("ATLAS routing: token={Token} conf={Conf:F2}", routeResult.Token, routeResult.Confidence);
 
         switch (routeResult.Token)
@@ -417,7 +417,7 @@ public sealed class AtlasThinkingPipeline
             case FunctionalToken.EscalateL2:
                 if (_l2Client != null)
                 {
-                    var l2Response = await _l2Client.GetResponseAsync(prompt, new ChatOptions { Temperature = temperature }, ct);
+                    var l2Response = await _l2Client.GetResponseAsync(prompt, new ChatOptions { Temperature = temperature }, ct).ConfigureAwait(false);
                     yield return l2Response.Text ?? "";
                     _router.RecordOutcome(FunctionalToken.EscalateL2, 0.7f);
                 }
@@ -440,7 +440,7 @@ public sealed class AtlasThinkingPipeline
         string prompt, float temperature, int maxTokens,
         [EnumeratorCancellation] CancellationToken ct)
     {
-        var output = await _l1Engine.GenerateAsync(prompt, temperature, maxTokens, ct);
+        var output = await _l1Engine.GenerateAsync(prompt, temperature, maxTokens, ct).ConfigureAwait(false);
         if (!string.IsNullOrEmpty(output))
             yield return output;
     }

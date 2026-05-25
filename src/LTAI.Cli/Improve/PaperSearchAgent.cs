@@ -47,7 +47,7 @@ public sealed class PaperSearchAgent
 
         foreach (var query in queries)
         {
-            var papers = await SearchQueryAsync(query, maxResults / queries.Length);
+            var papers = await SearchQueryAsync(query, maxResults / queries.Length).ConfigureAwait(false);
             allPapers.AddRange(papers);
         }
 
@@ -64,7 +64,7 @@ public sealed class PaperSearchAgent
     {
         try
         {
-            var searchResultJson = await WebSearchTools.WebSearch(query, maxResults);
+            var searchResultJson = await WebSearchTools.WebSearch(query, maxResults).ConfigureAwait(false);
             var searchResult = JsonSerializer.Deserialize<WebSearchResult>(searchResultJson);
 
             if (searchResult?.Results != null && searchResult.Results.Count > 0)

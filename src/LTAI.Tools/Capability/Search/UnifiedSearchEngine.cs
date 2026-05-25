@@ -4,7 +4,7 @@ using Microsoft.Extensions.Logging;
 
 namespace LTAI.Tools.Search;
 
-public sealed class UnifiedSearchEngine
+public sealed class UnifiedSearchEngine : IDisposable
 {
     private readonly HttpClient _http;
     private readonly ILogger<UnifiedSearchEngine> _logger;
@@ -15,6 +15,8 @@ public sealed class UnifiedSearchEngine
         _http.DefaultRequestHeaders.Add("User-Agent", "LTAI/5.5");
         _logger = logger;
     }
+
+    public void Dispose() { _http?.Dispose(); }
 
     public async Task<List<SearchResult>> SearchAsync(
         string query,
@@ -37,7 +39,7 @@ public sealed class UnifiedSearchEngine
             });
         }
 
-        var allResults = await Task.WhenAll(tasks);
+        var allResults = await Task.WhenAll(tasks).ConfigureAwait(false);
         foreach (var r in allResults)
             results.AddRange(r);
 
@@ -54,7 +56,7 @@ public sealed class UnifiedSearchEngine
         {
             var encoded = Uri.EscapeDataString(query);
             var url = $"https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch={encoded}&format=json&srlimit={Math.Min(max, 10)}";
-            var json = await _http.GetStringAsync(url, ct);
+            var json = await _http.GetStringAsync(url, ct).ConfigureAwait(false);
             var doc = JsonDocument.Parse(json);
             var results = new List<SearchResult>();
 
@@ -90,7 +92,7 @@ public sealed class UnifiedSearchEngine
         {
             var encoded = Uri.EscapeDataString(query);
             var url = $"https://html.duckduckgo.com/html/?q={encoded}";
-            var html = await _http.GetStringAsync(url, ct);
+            var html = await _http.GetStringAsync(url, ct).ConfigureAwait(false);
 
             var results = new List<SearchResult>();
             var linkMatches = Regex.Matches(html, @"<a[^>]*class=""result__a""[^>]*href=""([^""]+)""[^>]*>([^<]+)</a>");
@@ -125,7 +127,7 @@ public sealed class UnifiedSearchEngine
 
         try
         {
-            var json = await _http.GetStringAsync(url, ct);
+            var json = await _http.GetStringAsync(url, ct).ConfigureAwait(false);
             var doc = JsonDocument.Parse(json);
             var results = new List<SearchResult>();
 

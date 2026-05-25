@@ -15,7 +15,7 @@ public static class SandboxEndpoints
             CancellationToken cancellationToken) =>
         {
             using var reader = new StreamReader(context.Request.Body);
-            var body = await reader.ReadToEndAsync(cancellationToken);
+            var body = await reader.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
             var request = JsonSerializer.Deserialize<SandboxExecuteRequest>(body);
 
             if (request == null || string.IsNullOrWhiteSpace(request.Code))
@@ -27,7 +27,7 @@ public static class SandboxEndpoints
                 request.TimeoutSeconds ?? 30,
                 request.MemoryMb ?? 256,
                 request.AllowNetwork ?? false,
-                cancellationToken);
+                cancellationToken).ConfigureAwait(false);
 
             return Results.Json(new
             {
@@ -43,7 +43,7 @@ public static class SandboxEndpoints
             CancellationToken cancellationToken) =>
         {
             using var reader = new StreamReader(context.Request.Body);
-            var body = await reader.ReadToEndAsync(cancellationToken);
+            var body = await reader.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
             var request = JsonSerializer.Deserialize<SandboxExecuteRequest>(body);
 
             if (request == null || string.IsNullOrWhiteSpace(request.Code))
@@ -51,7 +51,7 @@ public static class SandboxEndpoints
 
             var lang = Enum.TryParse<SandboxLanguage>(request.Language ?? "Python", true, out var l) ? l : SandboxLanguage.Python;
             var template = orchestrator.GenerateTemplate(lang, request.TaskDescription ?? "solve");
-            var results = await orchestrator.ExecuteTemplateAsync(template, request.Code, lang, cancellationToken);
+            var results = await orchestrator.ExecuteTemplateAsync(template, request.Code, lang, cancellationToken).ConfigureAwait(false);
 
             return Results.Json(new { template = template[..Math.Min(template.Length, 500)], results });
         });
@@ -63,7 +63,7 @@ public static class SandboxEndpoints
             {
                 try
                 {
-                    var available = await sb.IsAvailableAsync();
+                    var available = await sb.IsAvailableAsync().ConfigureAwait(false);
                     statuses.Add(new { name = sb.Name, available, capability = sb.Capability.ToString() });
                 }
                 catch

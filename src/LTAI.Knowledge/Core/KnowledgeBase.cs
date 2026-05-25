@@ -40,7 +40,7 @@ public sealed class KnowledgeBase
             {
                 try
                 {
-                    await _docStore.IndexDocumentVectorAsync(id);
+                    await _docStore.IndexDocumentVectorAsync(id).ConfigureAwait(false);
                 }
                 catch (Exception ex)
                 {
@@ -69,12 +69,12 @@ public sealed class KnowledgeBase
         int topK = 10,
         string? domain = null)
     {
-        return await _docStore.Search(query, domain, topK);
+        return await _docStore.Search(query, domain, topK).ConfigureAwait(false);
     }
 
     public async Task<List<KnowledgeSearchResult>> SearchCurrent(string query, int topK = 10)
     {
-        return await _docStore.Search(query, null, topK);
+        return await _docStore.Search(query, null, topK).ConfigureAwait(false);
     }
 
     public List<KnowledgeSearchResult> SearchKeyword(
@@ -119,11 +119,11 @@ public sealed class KnowledgeBase
         int topK = 10,
         string? domain = null)
     {
-        return await Task.Run(() => Search(query, topK, domain));
+        return await Task.Run(() => Search(query, topK, domain)).ConfigureAwait(false);
     }
 
     public async Task<DocumentStoreStats> GetStats()
     {
-        return await _docStore.GetStats();
+        return await _docStore.GetStats().ConfigureAwait(false);
     }
 }

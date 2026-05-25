@@ -25,7 +25,7 @@ public sealed class LivingTreeChatClient : IChatClient
         CancellationToken cancellationToken = default)
     {
         var query = ExtractQuery(messages);
-        var result = await _system.ChatAsync(query, cancellationToken);
+        var result = await _system.ChatAsync(query, cancellationToken).ConfigureAwait(false);
         return new ChatResponse(new ChatMessage(ChatRole.Assistant, result));
     }
 

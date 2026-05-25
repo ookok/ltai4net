@@ -446,7 +446,7 @@ namespace LTAI.Planning.Planning
             }
             else
             {
-                await DecomposeLevel(tree, root, depthLimit, childLimit, cancellationToken);
+                await DecomposeLevel(tree, root, depthLimit, childLimit, cancellationToken).ConfigureAwait(false);
             }
 
             var queue = new Queue<TaskNode>(root.Children);
@@ -457,7 +457,7 @@ namespace LTAI.Planning.Planning
                 {
                     tree.UpdateStatus(node.Id, TaskStatus.Thinking);
                     yield return FormatNodeSse("node_update", node.ToDict());
-                    await DecomposeLevel(tree, node, depthLimit, childLimit, cancellationToken);
+                    await DecomposeLevel(tree, node, depthLimit, childLimit, cancellationToken).ConfigureAwait(false);
                 }
 
                 foreach (var child in node.Children)
@@ -482,7 +482,7 @@ namespace LTAI.Planning.Planning
                 return;
 
             var prompt = BuildDecompositionPrompt(parent, childLimit);
-            var response = await LlmGenerate(prompt, cancellationToken);
+            var response = await LlmGenerate(prompt, cancellationToken).ConfigureAwait(false);
             var subtasks = ParseSubtasks(response);
 
             foreach (var sub in subtasks.Take(childLimit))
@@ -538,10 +538,10 @@ namespace LTAI.Planning.Planning
             try
             {
                 if (_consciousness is IChatClient engine)
-                    return await engine.CompleteAsync(prompt, cancellationToken: cancellationToken);
+                    return await engine.CompleteAsync(prompt, cancellationToken: cancellationToken).ConfigureAwait(false);
 
                 if (_consciousness is Func<string, Task<string>> asyncFunc)
-                    return await asyncFunc(prompt);
+                    return await asyncFunc(prompt).ConfigureAwait(false);
 
                 if (_consciousness is Func<string, string> syncFunc)
                     return syncFunc(prompt);
@@ -553,7 +553,7 @@ namespace LTAI.Planning.Planning
                 {
                     var result = generateMethod.Invoke(_consciousness, new object[] { prompt });
                     if (result is Task<string> taskResult)
-                        return await taskResult;
+                        return await taskResult.ConfigureAwait(false);
                     if (result is string strResult)
                         return strResult;
                     return result?.ToString() ?? "[]";
@@ -565,7 +565,7 @@ namespace LTAI.Planning.Planning
                 {
                     var result = thinkMethod.Invoke(_consciousness, new object[] { prompt });
                     if (result is Task<string> taskResult)
-                        return await taskResult;
+                        return await taskResult.ConfigureAwait(false);
                     if (result is string strResult)
                         return strResult;
                     return result?.ToString() ?? "[]";

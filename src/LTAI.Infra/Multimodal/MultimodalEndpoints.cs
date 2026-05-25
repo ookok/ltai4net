@@ -12,7 +12,7 @@ public static class MultimodalEndpoints
     {
         endpoints.MapPost("/api/ocr", async (HttpContext context, OCREngine ocr, CancellationToken ct) =>
         {
-            var form = await context.Request.ReadFormAsync(ct);
+            var form = await context.Request.ReadFormAsync(ct).ConfigureAwait(false);
             var file = form.Files.FirstOrDefault();
             if (file == null) return Results.Json(new { error = "Image file required" }, statusCode: 400);
 
@@ -21,14 +21,14 @@ public static class MultimodalEndpoints
 
             var lang = form["language"].FirstOrDefault() ?? "eng+chi_sim";
             using var ms = new MemoryStream((int)file.Length);
-            await file.CopyToAsync(ms, ct);
-            var text = await ocr.ExtractTextFromBytesAsync(ms.ToArray(), lang, ct);
+            await file.CopyToAsync(ms, ct).ConfigureAwait(false);
+            var text = await ocr.ExtractTextFromBytesAsync(ms.ToArray(), lang, ct).ConfigureAwait(false);
             return Results.Json(new { text });
         });
 
         endpoints.MapPost("/api/vision", async (HttpContext context, VisionAnalyzer vision, CancellationToken ct) =>
         {
-            var form = await context.Request.ReadFormAsync(ct);
+            var form = await context.Request.ReadFormAsync(ct).ConfigureAwait(false);
             var file = form.Files.FirstOrDefault();
             if (file == null) return Results.Json(new { error = "Image file required" }, statusCode: 400);
 
@@ -36,17 +36,17 @@ public static class MultimodalEndpoints
             var tmp = Path.GetTempFileName() + Path.GetExtension(file.FileName);
             try
             {
-                using (var fs = File.Create(tmp)) await file.CopyToAsync(fs, ct);
-                var result = await vision.DescribeImageAsync(tmp, task, ct);
+                using (var fs = File.Create(tmp)) await file.CopyToAsync(fs, ct).ConfigureAwait(false);
+                var result = await vision.DescribeImageAsync(tmp, task, ct).ConfigureAwait(false);
                 return Results.Json(new { analysis = result });
             }
-            finally { try { File.Delete(tmp); } catch { } }
+            finally { try { File.Delete(tmp); } catch (Exception) { } }
         });
 
         endpoints.MapPost("/api/speech/tts", async (HttpContext context, ITtsEngine tts, CancellationToken ct) =>
         {
             using var reader = new StreamReader(context.Request.Body);
-            var body = await reader.ReadToEndAsync(ct);
+            var body = await reader.ReadToEndAsync(ct).ConfigureAwait(false);
             var req = JsonSerializer.Deserialize<SpeechRequest>(body);
             if (req == null || string.IsNullOrWhiteSpace(req.Text))
                 return Results.Json(new { error = "Text required" }, statusCode: 400);
@@ -60,7 +60,7 @@ public static class MultimodalEndpoints
                     Format = req.Format ?? "wav",
                     Lang = req.Lang
                 };
-                var result = await tts.SynthesizeAsync(req.Text, options, ct);
+                var result = await tts.SynthesizeAsync(req.Text, options, ct).ConfigureAwait(false);
                 if (!result.Ok)
                     return Results.Json(new { error = result.Error }, statusCode: 500);
 
@@ -72,29 +72,29 @@ public static class MultimodalEndpoints
 
         endpoints.MapPost("/api/speech/stt", async (HttpContext context, SpeechEngine speech, CancellationToken ct) =>
         {
-            var form = await context.Request.ReadFormAsync(ct);
+            var form = await context.Request.ReadFormAsync(ct).ConfigureAwait(false);
             var file = form.Files.FirstOrDefault();
             if (file == null) return Results.Json(new { error = "Audio file required" }, statusCode: 400);
 
             var tmp = Path.GetTempFileName() + ".wav";
             try
             {
-                using (var fs = File.Create(tmp)) await file.CopyToAsync(fs, ct);
-                var text = await speech.RecognizeFromFileAsync(tmp, ct);
+                using (var fs = File.Create(tmp)) await file.CopyToAsync(fs, ct).ConfigureAwait(false);
+                var text = await speech.RecognizeFromFileAsync(tmp, ct).ConfigureAwait(false);
                 return Results.Json(new { text });
             }
-            finally { try { File.Delete(tmp); } catch { } }
+            finally { try { File.Delete(tmp); } catch (Exception) { } }
         });
 
         endpoints.MapGet("/api/speech/voices", async (ITtsEngine tts, CancellationToken ct) =>
         {
-            var voices = await tts.GetVoicesAsync(ct);
+            var voices = await tts.GetVoicesAsync(ct).ConfigureAwait(false);
             return Results.Json(new { engine = tts.EngineName, voices });
         });
 
         endpoints.MapPost("/api/multimodal/process", async (HttpContext context, MultimodalOrchestrator mm, CancellationToken ct) =>
         {
-            var form = await context.Request.ReadFormAsync(ct);
+            var form = await context.Request.ReadFormAsync(ct).ConfigureAwait(false);
             var file = form.Files.FirstOrDefault();
             if (file == null) return Results.Json(new { error = "File required" }, statusCode: 400);
 
@@ -102,11 +102,11 @@ public static class MultimodalEndpoints
             var tmp = Path.GetTempFileName() + Path.GetExtension(file.FileName);
             try
             {
-                using (var fs = File.Create(tmp)) await file.CopyToAsync(fs, ct);
-                var result = await mm.ProcessFileAsync(tmp, task, ct);
+                using (var fs = File.Create(tmp)) await file.CopyToAsync(fs, ct).ConfigureAwait(false);
+                var result = await mm.ProcessFileAsync(tmp, task, ct).ConfigureAwait(false);
                 return Results.Json(new { result, type = Path.GetExtension(file.FileName) });
             }
-            finally { try { File.Delete(tmp); } catch { } }
+            finally { try { File.Delete(tmp); } catch (Exception) { } }
         });
     }
 }

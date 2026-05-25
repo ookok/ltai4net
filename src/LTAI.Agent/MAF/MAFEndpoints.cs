@@ -22,13 +22,13 @@ public static class MAFEndpoints
             try
             {
                 using var reader = new StreamReader(context.Request.Body);
-                var body = await reader.ReadToEndAsync(cancellationToken);
+                var body = await reader.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
                 var request = JsonSerializer.Deserialize<MAFChatRequest>(body);
 
                 if (request == null || string.IsNullOrWhiteSpace(request.Query))
                     return Results.Json(new { error = "Query is required" }, statusCode: 400);
 
-                var response = await agent.RunAsync(request.Query, null, null, cancellationToken);
+                var response = await agent.RunAsync(request.Query, null, null, cancellationToken).ConfigureAwait(false);
                 return Results.Json(new { response = response.Text, agent = agent.Name });
             }
             catch (OperationCanceledException)
@@ -49,7 +49,7 @@ public static class MAFEndpoints
             try
             {
                 using var reader = new StreamReader(context.Request.Body);
-                var body = await reader.ReadToEndAsync(cancellationToken);
+                var body = await reader.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
                 var request = JsonSerializer.Deserialize<MAFMessageRequest>(body);
 
                 if (request?.Messages == null || request.Messages.Count == 0)
@@ -60,7 +60,7 @@ public static class MAFEndpoints
                         m.Role == "user" ? ChatRole.User : ChatRole.Assistant,
                         m.Content ?? ""));
 
-                var response = await agent.RunAsync(chatMessages, null, null, cancellationToken);
+                var response = await agent.RunAsync(chatMessages, null, null, cancellationToken).ConfigureAwait(false);
                 return Results.Json(new { response = response.Text, agent = agent.Name });
             }
             catch (OperationCanceledException)
@@ -80,7 +80,7 @@ public static class MAFEndpoints
                 agent = agent.Name,
                 description = agent.Description,
                 protocol = "MAF-compatible",
-                version = "7.0.0-maf-net10"
+                version = "0.51.0-maf-net10"
             });
         });
 
@@ -92,7 +92,7 @@ public static class MAFEndpoints
             try
             {
                 using var reader = new StreamReader(context.Request.Body);
-                var body = await reader.ReadToEndAsync(cancellationToken);
+                var body = await reader.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
                 var request = JsonSerializer.Deserialize<MAFChatRequest>(body);
 
                 if (request == null || string.IsNullOrWhiteSpace(request.Query))
@@ -110,12 +110,12 @@ public static class MAFEndpoints
                     if (!string.IsNullOrWhiteSpace(update.Text))
                     {
                         await context.Response.WriteAsync($"data: {System.Text.Json.JsonSerializer.Serialize(new { text = update.Text, role = "assistant" })}\n\n", cancellationToken);
-                        await context.Response.Body.FlushAsync(cancellationToken);
+                        await context.Response.Body.FlushAsync(cancellationToken).ConfigureAwait(false);
                     }
                 }
 
                 await context.Response.WriteAsync("data: [DONE]\n\n", cancellationToken);
-                await context.Response.Body.FlushAsync(cancellationToken);
+                await context.Response.Body.FlushAsync(cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException) { }
             catch (Exception ex)
@@ -123,7 +123,7 @@ public static class MAFEndpoints
                 if (!context.Response.HasStarted)
                 {
                     context.Response.StatusCode = 500;
-                    await context.Response.WriteAsync(System.Text.Json.JsonSerializer.Serialize(new { error = ex.Message }));
+                    await context.Response.WriteAsync(System.Text.Json.JsonSerializer.Serialize(new { error = ex.Message })).ConfigureAwait(false);
                 }
             }
         });

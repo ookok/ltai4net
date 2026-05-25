@@ -51,11 +51,11 @@ public sealed class DagRagPipeline
                 _agenticRAG.Search(variant, RAGMode.Iterative, domain: opts.Domain ?? "general"), cancellationToken));
         }
 
-        var allResults = await Task.WhenAll(searchTasks);
+        var allResults = await Task.WhenAll(searchTasks).ConfigureAwait(false);
         var mergedDocs = MergeAndDeduplicate(allResults.ToList());
 
-        var prompt = await _promptBuilder.BuildSinglePrompt(question, mergedDocs, opts);
-        var response = await _chatClient.GetResponseAsync(prompt, cancellationToken: cancellationToken);
+        var prompt = await _promptBuilder.BuildSinglePrompt(question, mergedDocs, opts).ConfigureAwait(false);
+        var response = await _chatClient.GetResponseAsync(prompt, cancellationToken: cancellationToken).ConfigureAwait(false);
         var answer = response.Text ?? string.Empty;
 
         sw.Stop();
@@ -94,9 +94,9 @@ public sealed class DagRagPipeline
                 _agenticRAG.Search(variant, RAGMode.Iterative, domain: opts.Domain ?? "general"), cancellationToken));
         }
 
-        var allResults = await Task.WhenAll(searchTasks);
+        var allResults = await Task.WhenAll(searchTasks).ConfigureAwait(false);
         var mergedDocs = MergeAndDeduplicate(allResults.ToList());
-        var prompt = await _promptBuilder.BuildSinglePrompt(question, mergedDocs, opts);
+        var prompt = await _promptBuilder.BuildSinglePrompt(question, mergedDocs, opts).ConfigureAwait(false);
 
         await foreach (var update in _chatClient.GetStreamingResponseAsync(prompt, cancellationToken: cancellationToken))
         {

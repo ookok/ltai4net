@@ -8,6 +8,7 @@ public sealed class PromptLibrary
     private readonly string _storePath;
     private readonly Lock _templatesLock = new();
     private List<PromptTemplate> _templates = new();
+    private Dictionary<string, DiagnosticTemplate> _diagnosticTemplates = new();
 
     public PromptLibrary(string projectRoot)
     {
@@ -27,6 +28,15 @@ public sealed class PromptLibrary
         }
         catch { lock (_templatesLock) { _templates = GetBuiltInTemplates(); } }
         if (_templates.Count == 0) lock (_templatesLock) { _templates = GetBuiltInTemplates(); }
+
+        lock (_templatesLock) { _diagnosticTemplates = GetBuiltInDiagnosticTemplates(); }
+    }
+
+    public DiagnosticTemplate? GetDiagnosticTemplate(string code)
+    {
+        _templatesLock.Enter();
+        try { return _diagnosticTemplates.GetValueOrDefault(code); }
+        finally { _templatesLock.Exit(); }
     }
 
     private void Save()
@@ -112,6 +122,20 @@ public sealed class PromptLibrary
         new() { Name = "Optimize Performance", Category = "code", Template = "Identify performance bottlenecks in this code and suggest optimizations:\n```{language}\n{file}\n```" },
         new() { Name = "Add Error Handling", Category = "code", Template = "Add proper error handling, logging, and validation to this code:\n```{language}\n{file}\n```" },
     };
+
+    private static Dictionary<string, DiagnosticTemplate> GetBuiltInDiagnosticTemplates() => new()
+    {
+        ["CS1061"] = new() { Code = "CS1061", Title = "Missing member", FixPattern = "Verify the member name exists on the target type. Check for missing using directives or extension methods." },
+        ["CS8602"] = new() { Code = "CS8602", Title = "Possible null dereference", FixPattern = "Add null check or null-forgiving operator. Verify the variable is initialized before use." },
+        ["CS0103"] = new() { Code = "CS0103", Title = "Name not found", FixPattern = "Check for missing using directive, variable scope, or typo in the identifier name." },
+        ["CS0117"] = new() { Code = "CS0117", Title = "Member not accessible", FixPattern = "Verify type compatibility. The member may belong to a different type or require a using directive for extension methods." },
+        ["CS0246"] = new() { Code = "CS0246", Title = "Type not found", FixPattern = "Add missing using directive or project reference. Check namespace qualification." },
+        ["CS1503"] = new() { Code = "CS1503", Title = "Type mismatch", FixPattern = "Add type cast or conversion. Verify overload signatures." },
+        ["CS0165"] = new() { Code = "CS0165", Title = "Unassigned variable", FixPattern = "Initialize the variable before use. Consider using 'default' or 'new'." },
+        ["NullReference"] = new() { Code = "NullReference", Title = "Null reference", FixPattern = "Add null check with 'if (x is null) return' or 'ArgumentNullException.ThrowIfNull(x)'. Verify initialization order." },
+        ["ArgumentNull"] = new() { Code = "ArgumentNull", Title = "Null argument", FixPattern = "Add guard clause at method entry: ArgumentNullException.ThrowIfNull(paramName)." },
+        ["FileNotFound"] = new() { Code = "FileNotFound", Title = "Missing file", FixPattern = "Check file path. Create directory if needed with Directory.CreateDirectory(Path.GetDirectoryName(path)!)." },
+    };
 }
 
 public sealed class PromptTemplate
@@ -119,6 +143,13 @@ public sealed class PromptTemplate
     public string Name { get; init; } = "";
     public string Template { get; init; } = "";
     public string Category { get; init; } = "custom";
+}
+
+public sealed class DiagnosticTemplate
+{
+    public string Code { get; init; } = "";
+    public string Title { get; init; } = "";
+    public string FixPattern { get; init; } = "";
 }
 
 internal static class Int32Extensions

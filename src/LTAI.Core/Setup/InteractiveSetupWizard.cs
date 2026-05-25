@@ -114,16 +114,16 @@ public class InteractiveSetupWizard
             var modeChoice = ReadChoice("选择模式", "2", new[] { "1", "2" });
             if (modeChoice == "1")
             {
-                await ConfigureApiProviderSelectionAsync(layerName, ct);
+                await ConfigureApiProviderSelectionAsync(layerName, ct).ConfigureAwait(false);
                 Console.WriteLine();
                 return;
             }
 
-            await OfferL0LocalModelAsync(hwInfo, ct);
+            await OfferL0LocalModelAsync(hwInfo, ct).ConfigureAwait(false);
             return;
         }
 
-        await ConfigureApiProviderSelectionAsync(layerName, ct);
+        await ConfigureApiProviderSelectionAsync(layerName, ct).ConfigureAwait(false);
         Console.WriteLine();
     }
 
@@ -202,7 +202,7 @@ public class InteractiveSetupWizard
         Console.WriteLine();
         Console.WriteLine("  正在获取模型列表...");
 
-        var availableModels = await FetchModelListAsync(endpoint, apiKey, ct);
+        var availableModels = await FetchModelListAsync(endpoint, apiKey, ct).ConfigureAwait(false);
 
         string recommended;
         if (availableModels.Count > 0)
@@ -406,7 +406,7 @@ public class InteractiveSetupWizard
         var choice = ReadLine("选择编号 / J / 回车");
         if (choice?.ToUpperInvariant() == "J")
         {
-            await DownloadJinaModelAsync(ct);
+            await DownloadJinaModelAsync(ct).ConfigureAwait(false);
             return true;
         }
 
@@ -432,7 +432,7 @@ public class InteractiveSetupWizard
         try
         {
             var modelsDir = GetModelsDir();
-            var path = await _modelDownloader.DownloadAsync(selectedModel, modelsDir, progress, ct);
+            var path = await _modelDownloader.DownloadAsync(selectedModel, modelsDir, progress, ct).ConfigureAwait(false);
             Console.WriteLine($"\n  ✓ 下载完成: {path}");
 
             _options.AI.GetLayerConfig("L0").GetType().GetProperty("Provider")!.SetValue(_options.AI.GetLayerConfig("L0"), "local");
@@ -511,7 +511,7 @@ public class InteractiveSetupWizard
             try
             {
                 var modelsDir = GetModelsDir();
-                var path = await _modelDownloader.DownloadAsync(selectedModel, modelsDir, progress, ct);
+                var path = await _modelDownloader.DownloadAsync(selectedModel, modelsDir, progress, ct).ConfigureAwait(false);
                 Console.WriteLine($"\n  ✓ 下载完成: {path}");
             }
             catch (Exception ex)
@@ -602,13 +602,13 @@ public class InteractiveSetupWizard
         {
             try
             {
-                var response = await _hfClient.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct);
+                var response = await _hfClient.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
                 response.EnsureSuccessStatusCode();
 
                 Directory.CreateDirectory(Path.GetDirectoryName(savePath)!);
-                await using var stream = await response.Content.ReadAsStreamAsync(ct);
+                await using var stream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
                 await using var file = File.Create(savePath);
-                await stream.CopyToAsync(file, ct);
+                await stream.CopyToAsync(file, ct).ConfigureAwait(false);
                 return;
             }
             catch (Exception ex) { lastEx = ex; }

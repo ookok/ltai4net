@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
@@ -53,7 +54,7 @@ public sealed class PlannerCriticWorkflow
         {
             _logger.LogWarning("PlannerCriticWorkflow: Incomplete pair for '{Domain}' (planner={P}, critic={C})",
                 domain, planner != null, critic != null);
-            return await executor.RunAsync(messages, session, null, cancellationToken);
+            return await executor.RunAsync(messages, session, null, cancellationToken).ConfigureAwait(false);
         }
 
         span?.SetTag("planner-critic.domain", domain);
@@ -72,7 +73,7 @@ public sealed class PlannerCriticWorkflow
             var planMessages = new List<ChatMessage> { new(ChatRole.User, planPrompt) };
 
             using var planSpan = ActivitySource.StartActivity($"planner.{plannerName}.round{round}");
-            var planResponse = await planner.RunAsync(planMessages, session, null, cancellationToken);
+            var planResponse = await planner.RunAsync(planMessages, session, null, cancellationToken).ConfigureAwait(false);
             var plan = planResponse.Text ?? "";
             planSpan?.SetTag("planner.plan_length", plan.Length);
 
@@ -80,7 +81,7 @@ public sealed class PlannerCriticWorkflow
             var execMessages = new List<ChatMessage> { new(ChatRole.User, execPrompt) };
 
             using var execSpan = ActivitySource.StartActivity($"executor.{domain}.round{round}");
-            var result = await executor.RunAsync(execMessages, session, null, cancellationToken);
+            var result = await executor.RunAsync(execMessages, session, null, cancellationToken).ConfigureAwait(false);
             var resultText = result.Text ?? "";
             execSpan?.SetTag("executor.result_length", resultText.Length);
 
@@ -88,7 +89,7 @@ public sealed class PlannerCriticWorkflow
             var reviewMessages = new List<ChatMessage> { new(ChatRole.User, reviewPrompt) };
 
             using var criticSpan = ActivitySource.StartActivity($"critic.{criticName}.round{round}");
-            var review = await critic.RunAsync(reviewMessages, session, null, cancellationToken);
+            var review = await critic.RunAsync(reviewMessages, session, null, cancellationToken).ConfigureAwait(false);
             var reviewText = review.Text ?? "";
             criticSpan?.SetTag("critic.review_length", reviewText.Length);
 
@@ -113,27 +114,30 @@ public sealed class PlannerCriticWorkflow
         span?.SetStatus(ActivityStatusCode.Ok, "MaxRevisionReached");
         _logger.LogWarning("PlannerCriticWorkflow: Max revision rounds reached for '{Domain}'", domain);
 
-        var fallbackResult = await executor.RunAsync(messages, session, null, cancellationToken);
+        var fallbackResult = await executor.RunAsync(messages, session, null, cancellationToken).ConfigureAwait(false);
         var fallbackText = $"{fallbackResult.Text}\n\n---\n⚠️ **[MaxRevisionReached]** Output may require manual review. Critic did not pass after {MaxRevisionRounds} revision rounds.";
         return new AgentResponse(new ChatMessage(ChatRole.Assistant, fallbackText));
     }
 
     private static string BuildPlanPrompt(string input, int round, string? previousFeedback)
     {
-        var prompt = $"Generate an execution plan for the following task:\n\n{input}\n\n";
-        prompt += "Plan requirements:\n";
-        prompt += "1. Break down into clear, actionable steps\n";
-        prompt += "2. Specify tools or methods for each step\n";
-        prompt += "3. Include validation checkpoints\n";
-        prompt += "4. Estimate complexity for each step\n";
+        var sb = new StringBuilder();
+        sb.Append("Generate an execution plan for the following task:\n\n")
+          .Append(input).Append("\n\n");
+        sb.Append("Plan requirements:\n");
+        sb.Append("1. Break down into clear, actionable steps\n");
+        sb.Append("2. Specify tools or methods for each step\n");
+        sb.Append("3. Include validation checkpoints\n");
+        sb.Append("4. Estimate complexity for each step\n");
 
         if (round > 0 && previousFeedback != null)
         {
-            prompt += $"\n\nPrevious plan was rejected by critic. Feedback:\n{previousFeedback}\n";
-            prompt += "Address the issues above and improve the plan.";
+            sb.Append("\n\nPrevious plan was rejected by critic. Feedback:\n")
+              .Append(previousFeedback).Append('\n');
+            sb.Append("Address the issues above and improve the plan.");
         }
 
-        return prompt;
+        return sb.ToString();
     }
 
     private static string BuildExecPrompt(string input, string plan)

@@ -17,7 +17,7 @@ public sealed class GitTools
         var args = "diff";
         if (staged) args += " --staged";
         if (!string.IsNullOrWhiteSpace(files)) args += $" -- {files}";
-        return await RunGitAsync(repoPath, args, cancellationToken);
+        return await RunGitAsync(repoPath, args, cancellationToken).ConfigureAwait(false);
     }
 
     [Description("Show git commit log. Returns recent commits with hash, author, date, and message.")]
@@ -28,7 +28,7 @@ public sealed class GitTools
         CancellationToken cancellationToken = default)
     {
         var args = $"log --max-count={maxCount} --format=\"%h|%an|%ad|%s\" --date=short";
-        var result = await RunGitAsync(repoPath, args, cancellationToken);
+        var result = await RunGitAsync(repoPath, args, cancellationToken).ConfigureAwait(false);
         if (!result.StartsWith("error"))
         {
             var lines = result.Split('\n', StringSplitOptions.RemoveEmptyEntries);
@@ -49,7 +49,7 @@ public sealed class GitTools
         CancellationToken cancellationToken = default)
     {
         var args = $"blame --line-porcelain \"{filePath}\"";
-        var result = await RunGitAsync(repoPath, args, cancellationToken);
+        var result = await RunGitAsync(repoPath, args, cancellationToken).ConfigureAwait(false);
         if (!result.StartsWith("error"))
         {
             var lines = result.Split('\n', StringSplitOptions.RemoveEmptyEntries);
@@ -81,9 +81,9 @@ public sealed class GitTools
         {
             using var p = Process.Start(psi);
             if (p == null) return JsonSerializer.Serialize(new { error = "Git not found" });
-            var stdout = await p.StandardOutput.ReadToEndAsync(ct);
-            var stderr = await p.StandardError.ReadToEndAsync(ct);
-            await p.WaitForExitAsync(ct);
+            var stdout = await p.StandardOutput.ReadToEndAsync(ct).ConfigureAwait(false);
+            var stderr = await p.StandardError.ReadToEndAsync(ct).ConfigureAwait(false);
+            await p.WaitForExitAsync(ct).ConfigureAwait(false);
             if (p.ExitCode != 0 && !string.IsNullOrWhiteSpace(stderr))
                 return JsonSerializer.Serialize(new { error = stderr.Trim() });
             if (stdout.Length > 20000) stdout = stdout[..20000] + "\n... (truncated)";

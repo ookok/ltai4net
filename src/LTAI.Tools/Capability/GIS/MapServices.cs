@@ -25,58 +25,58 @@ public sealed class UnifiedMapService
 
     public async Task<GeoAddress?> GeocodeAsync(string address, string provider = "auto", CancellationToken ct = default)
     {
-        if (provider == "baidu") return await _baidu.GeocodeAsync(address, ct);
-        if (provider == "amap") return await _amap.GeocodeAsync(address, ct);
-        if (provider == "tencent") return await _tencent.GeocodeAsync(address, ct);
+        if (provider == "baidu") return await _baidu.GeocodeAsync(address, ct).ConfigureAwait(false);
+        if (provider == "amap") return await _amap.GeocodeAsync(address, ct).ConfigureAwait(false);
+        if (provider == "tencent") return await _tencent.GeocodeAsync(address, ct).ConfigureAwait(false);
         return await _tianditu.GeocodeAsync(address, ct) ??
                await _tencent.GeocodeAsync(address, ct) ??
                await _baidu.GeocodeAsync(address, ct) ??
-               await _amap.GeocodeAsync(address, ct);
+               await _amap.GeocodeAsync(address, ct).ConfigureAwait(false);
     }
 
     public async Task<GeoAddress?> ReverseGeocodeAsync(double lng, double lat, string provider = "auto", CancellationToken ct = default)
     {
-        if (provider == "baidu") return await _baidu.ReverseGeocodeAsync(lng, lat, ct);
-        if (provider == "amap") return await _amap.ReverseGeocodeAsync(lng, lat, ct);
-        if (provider == "tencent") return await _tencent.ReverseGeocodeAsync(lng, lat, ct);
+        if (provider == "baidu") return await _baidu.ReverseGeocodeAsync(lng, lat, ct).ConfigureAwait(false);
+        if (provider == "amap") return await _amap.ReverseGeocodeAsync(lng, lat, ct).ConfigureAwait(false);
+        if (provider == "tencent") return await _tencent.ReverseGeocodeAsync(lng, lat, ct).ConfigureAwait(false);
         return await _amap.ReverseGeocodeAsync(lng, lat, ct) ??
                await _tencent.ReverseGeocodeAsync(lng, lat, ct) ??
-               await _baidu.ReverseGeocodeAsync(lng, lat, ct);
+               await _baidu.ReverseGeocodeAsync(lng, lat, ct).ConfigureAwait(false);
     }
 
     public async Task<List<POIResult>> SearchPOIAsync(string keyword, string? city = null, int limit = 10, string provider = "auto", CancellationToken ct = default)
     {
-        if (provider == "baidu") return await _baidu.SearchPOIAsync(keyword, city, limit, ct);
-        if (provider == "amap") return await _amap.SearchPOIAsync(keyword, city, limit, ct);
-        if (provider == "tencent") return await _tencent.SearchPOIAsync(keyword, city, limit, ct);
+        if (provider == "baidu") return await _baidu.SearchPOIAsync(keyword, city, limit, ct).ConfigureAwait(false);
+        if (provider == "amap") return await _amap.SearchPOIAsync(keyword, city, limit, ct).ConfigureAwait(false);
+        if (provider == "tencent") return await _tencent.SearchPOIAsync(keyword, city, limit, ct).ConfigureAwait(false);
         return await _amap.SearchPOIAsync(keyword, city, limit, ct) is { Count: > 0 } a ? a
             : await _tencent.SearchPOIAsync(keyword, city, limit, ct) is { Count: > 0 } t ? t
-            : await _baidu.SearchPOIAsync(keyword, city, limit, ct);
+            : await _baidu.SearchPOIAsync(keyword, city, limit, ct).ConfigureAwait(false);
     }
 
     public async Task<RouteResult?> GetRouteAsync(GeoPoint from, GeoPoint to, string mode = "driving", string provider = "auto", CancellationToken ct = default)
     {
-        if (provider == "baidu") return await _baidu.GetRouteAsync(from, to, mode, ct);
-        if (provider == "amap") return await _amap.GetRouteAsync(from, to, mode, ct);
-        if (provider == "tencent") return await _tencent.GetRouteAsync(from, to, mode, ct);
+        if (provider == "baidu") return await _baidu.GetRouteAsync(from, to, mode, ct).ConfigureAwait(false);
+        if (provider == "amap") return await _amap.GetRouteAsync(from, to, mode, ct).ConfigureAwait(false);
+        if (provider == "tencent") return await _tencent.GetRouteAsync(from, to, mode, ct).ConfigureAwait(false);
         return await _amap.GetRouteAsync(from, to, mode, ct) ??
                await _tencent.GetRouteAsync(from, to, mode, ct) ??
-               await _baidu.GetRouteAsync(from, to, mode, ct);
+               await _baidu.GetRouteAsync(from, to, mode, ct).ConfigureAwait(false);
     }
 
     public async Task<WeatherResult?> GetWeatherAsync(string city, string provider = "amap", CancellationToken ct = default)
     {
-        return await _amap.GetWeatherAsync(city, ct);
+        return await _amap.GetWeatherAsync(city, ct).ConfigureAwait(false);
     }
 
     public async Task<IPLocation?> GetIPLocationAsync(string ip, CancellationToken ct = default)
     {
-        return await _amap.GetIPLocationAsync(ip, ct);
+        return await _amap.GetIPLocationAsync(ip, ct).ConfigureAwait(false);
     }
 
     public async Task<List<double>> ConvertBaiduToWGS84Async(double lng, double lat, CancellationToken ct = default)
     {
-        var delta = await Task.FromResult((0.0065, 0.0060));
+        var delta = await Task.FromResult((0.0065, 0.0060)).ConfigureAwait(false);
         return new List<double> { lng - delta.Item1, lat - delta.Item2 };
     }
 }
@@ -101,7 +101,7 @@ internal sealed class BaiduMapService
         try
         {
             var url = $"https://api.map.baidu.com/geocoding/v3/?address={Uri.EscapeDataString(address)}&output=json&ak={_ak}";
-            var json = await _http.GetStringAsync(url, ct);
+            var json = await _http.GetStringAsync(url, ct).ConfigureAwait(false);
             var doc = JsonDocument.Parse(json);
             if (doc.RootElement.TryGetProperty("status", out var s) && s.GetInt32() == 0 &&
                 doc.RootElement.TryGetProperty("result", out var r))
@@ -125,7 +125,7 @@ internal sealed class BaiduMapService
         try
         {
             var url = $"https://api.map.baidu.com/reverse_geocoding/v3/?location={lat},{lng}&output=json&ak={_ak}";
-            var json = await _http.GetStringAsync(url, ct);
+            var json = await _http.GetStringAsync(url, ct).ConfigureAwait(false);
             var doc = JsonDocument.Parse(json);
             if (doc.RootElement.TryGetProperty("result", out var r) && r.TryGetProperty("formatted_address", out var fa))
             {
@@ -151,7 +151,7 @@ internal sealed class BaiduMapService
         {
             var region = city != null ? Uri.EscapeDataString(city) : "全国";
             var url = $"https://api.map.baidu.com/place/v2/search?query={Uri.EscapeDataString(keyword)}&region={region}&page_size={limit}&output=json&ak={_ak}";
-            var json = await _http.GetStringAsync(url, ct);
+            var json = await _http.GetStringAsync(url, ct).ConfigureAwait(false);
             var doc = JsonDocument.Parse(json);
             if (doc.RootElement.TryGetProperty("results", out var arr))
             {
@@ -178,7 +178,7 @@ internal sealed class BaiduMapService
         {
             var type = mode switch { "walking" => "walking", "transit" => "transit", _ => "driving" };
             var url = $"https://api.map.baidu.com/direction/v2/{type}?origin={from.Lat},{from.Lng}&destination={to.Lat},{to.Lng}&ak={_ak}";
-            var json = await _http.GetStringAsync(url, ct);
+            var json = await _http.GetStringAsync(url, ct).ConfigureAwait(false);
             var doc = JsonDocument.Parse(json);
             if (doc.RootElement.TryGetProperty("result", out var r) && r.TryGetProperty("routes", out var routes))
             {
@@ -213,7 +213,7 @@ internal sealed class AmapService
         try
         {
             var url = $"https://restapi.amap.com/v3/geocode/geo?address={Uri.EscapeDataString(address)}&key={_key}";
-            var json = await _http.GetStringAsync(url, ct);
+            var json = await _http.GetStringAsync(url, ct).ConfigureAwait(false);
             var doc = JsonDocument.Parse(json);
             if (doc.RootElement.TryGetProperty("geocodes", out var arr) && arr.GetArrayLength() > 0)
             {
@@ -239,7 +239,7 @@ internal sealed class AmapService
         try
         {
             var url = $"https://restapi.amap.com/v3/geocode/regeo?location={lng},{lat}&key={_key}";
-            var json = await _http.GetStringAsync(url, ct);
+            var json = await _http.GetStringAsync(url, ct).ConfigureAwait(false);
             var doc = JsonDocument.Parse(json);
             if (doc.RootElement.TryGetProperty("regeocode", out var r))
             {
@@ -271,7 +271,7 @@ internal sealed class AmapService
         try
         {
             var url = $"https://restapi.amap.com/v3/place/text?keywords={Uri.EscapeDataString(keyword)}&city={city ?? ""}&offset={limit}&key={_key}";
-            var json = await _http.GetStringAsync(url, ct);
+            var json = await _http.GetStringAsync(url, ct).ConfigureAwait(false);
             var doc = JsonDocument.Parse(json);
             if (doc.RootElement.TryGetProperty("pois", out var arr))
             {
@@ -300,7 +300,7 @@ internal sealed class AmapService
         {
             var type = mode switch { "walking" => "1", "transit" => "0", _ => "0" };
             var url = $"https://restapi.amap.com/v3/direction/driving?origin={from.Lng},{from.Lat}&destination={to.Lng},{to.Lat}&key={_key}";
-            var json = await _http.GetStringAsync(url, ct);
+            var json = await _http.GetStringAsync(url, ct).ConfigureAwait(false);
             var doc = JsonDocument.Parse(json);
             if (doc.RootElement.TryGetProperty("route", out var r) && r.TryGetProperty("paths", out var paths))
             {
@@ -320,10 +320,10 @@ internal sealed class AmapService
     {
         try
         {
-            var geo = await GeocodeAsync(city, ct);
+            var geo = await GeocodeAsync(city, ct).ConfigureAwait(false);
             if (geo == null) return null;
             var url = $"https://restapi.amap.com/v3/weather/weatherInfo?city={geo.Lng},{geo.Lat}&key={_key}";
-            var json = await _http.GetStringAsync(url, ct);
+            var json = await _http.GetStringAsync(url, ct).ConfigureAwait(false);
             var doc = JsonDocument.Parse(json);
             if (doc.RootElement.TryGetProperty("lives", out var arr) && arr.GetArrayLength() > 0)
             {
@@ -347,7 +347,7 @@ internal sealed class AmapService
         try
         {
             var url = $"https://restapi.amap.com/v3/ip?ip={ip}&key={_key}";
-            var json = await _http.GetStringAsync(url, ct);
+            var json = await _http.GetStringAsync(url, ct).ConfigureAwait(false);
             var doc = JsonDocument.Parse(json);
             return new IPLocation
             {
@@ -379,7 +379,7 @@ internal sealed class TencentMapService
         try
         {
             var url = $"https://apis.map.qq.com/ws/geocoder/v1/?address={Uri.EscapeDataString(address)}&key={_key}";
-            var json = await _http.GetStringAsync(url, ct);
+            var json = await _http.GetStringAsync(url, ct).ConfigureAwait(false);
             var doc = JsonDocument.Parse(json);
             if (doc.RootElement.TryGetProperty("status", out var s) && s.GetInt32() == 0 &&
                 doc.RootElement.TryGetProperty("result", out var r))
@@ -407,7 +407,7 @@ internal sealed class TencentMapService
         try
         {
             var url = $"https://apis.map.qq.com/ws/geocoder/v1/?location={lat},{lng}&key={_key}";
-            var json = await _http.GetStringAsync(url, ct);
+            var json = await _http.GetStringAsync(url, ct).ConfigureAwait(false);
             var doc = JsonDocument.Parse(json);
             if (doc.RootElement.TryGetProperty("result", out var r))
             {
@@ -434,7 +434,7 @@ internal sealed class TencentMapService
         {
             var region = city ?? "全国";
             var url = $"https://apis.map.qq.com/ws/place/v1/search?keyword={Uri.EscapeDataString(keyword)}&boundary=region({Uri.EscapeDataString(region)})&page_size={limit}&key={_key}";
-            var json = await _http.GetStringAsync(url, ct);
+            var json = await _http.GetStringAsync(url, ct).ConfigureAwait(false);
             var doc = JsonDocument.Parse(json);
             if (doc.RootElement.TryGetProperty("data", out var arr))
             {
@@ -462,7 +462,7 @@ internal sealed class TencentMapService
         {
             var type = mode switch { "walking" => "walking", "bicycling" => "bicycling", "transit" => "transit", _ => "driving" };
             var url = $"https://apis.map.qq.com/ws/direction/v1/{type}/?from={from.Lat},{from.Lng}&to={to.Lat},{to.Lng}&key={_key}";
-            var json = await _http.GetStringAsync(url, ct);
+            var json = await _http.GetStringAsync(url, ct).ConfigureAwait(false);
             var doc = JsonDocument.Parse(json);
             if (doc.RootElement.TryGetProperty("result", out var r) && r.TryGetProperty("routes", out var routes))
             {
@@ -503,7 +503,7 @@ internal sealed class TiandituService
         try
         {
             var url = $"https://api.tianditu.gov.cn/geocoder?ds={{\"keyWord\":\"{Uri.EscapeDataString(address)}\"}}&type=geocode&tk={_tk}";
-            var json = await _http.GetStringAsync(url, ct);
+            var json = await _http.GetStringAsync(url, ct).ConfigureAwait(false);
             var doc = JsonDocument.Parse(json);
             if (doc.RootElement.TryGetProperty("location", out var loc))
             {

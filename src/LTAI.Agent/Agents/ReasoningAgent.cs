@@ -34,9 +34,9 @@ public sealed class ReasoningAgent : BaseAgent
         _logger.LogInformation("ReasoningAgent [{Name}]: MCTS reasoning depth={D} iter={I}", Name, _maxSearchDepth, _maxIterations);
 
         if (query.Length < 20)
-            return await CallBrainAsync(msgList, ct: ct);
+            return await CallBrainAsync(msgList, ct: ct).ConfigureAwait(false);
 
-        var result = await ExecuteMctsAsync(query, context.Session, ct);
+        var result = await ExecuteMctsAsync(query, context.Session, ct).ConfigureAwait(false);
         return new AgentResponse(new ChatMessage(ChatRole.Assistant, result));
     }
 
@@ -45,7 +45,7 @@ public sealed class ReasoningAgent : BaseAgent
         var root = new MctsNode { State = query, Depth = 0, VisitCount = 1, TotalValue = 0.5 };
         int accumulatedTokens = 0;
 
-        var subProblems = await DecomposeAsync(query, session, ct);
+        var subProblems = await DecomposeAsync(query, session, ct).ConfigureAwait(false);
         accumulatedTokens += EstimateTokens(query) + subProblems.Sum(EstimateTokens);
         foreach (var sp in subProblems.Take(_maxSearchDepth))
             root.Children.Add(new MctsNode { State = sp, Depth = 1, Parent = root });
@@ -64,13 +64,13 @@ public sealed class ReasoningAgent : BaseAgent
             var node = Select(root);
             if (node.Depth >= _maxSearchDepth || node.IsTerminal) continue;
 
-            var expansion = await ExpandAsync(node, session, ct);
+            var expansion = await ExpandAsync(node, session, ct).ConfigureAwait(false);
             accumulatedTokens += EstimateTokens(expansion);
             if (!string.IsNullOrWhiteSpace(expansion))
             {
                 var child = new MctsNode { State = expansion, Depth = node.Depth + 1, Parent = node };
                 node.Children.Add(child);
-                var simValue = await SimulateAsync(child, query, session, ct);
+                var simValue = await SimulateAsync(child, query, session, ct).ConfigureAwait(false);
                 accumulatedTokens += EstimateTokens(simValue.ToString("F2"));
                 Backpropagate(child, simValue);
             }

@@ -18,7 +18,7 @@ public sealed class MarkdownParser : IDocumentParser
 
     public async Task<ParseResult> ParseAsync(string filePath, CancellationToken cancellationToken = default)
     {
-        var text = await File.ReadAllTextAsync(filePath, Encoding.UTF8, cancellationToken);
+        var text = await File.ReadAllTextAsync(filePath, Encoding.UTF8, cancellationToken).ConfigureAwait(false);
         var metadata = new Dictionary<string, string>
         {
             ["size"] = new FileInfo(filePath).Length.ToString(),
@@ -89,7 +89,7 @@ public sealed class IniConfigParser : IDocumentParser
 
     public async Task<ParseResult> ParseAsync(string filePath, CancellationToken cancellationToken = default)
     {
-        var text = await File.ReadAllTextAsync(filePath, Encoding.UTF8, cancellationToken);
+        var text = await File.ReadAllTextAsync(filePath, Encoding.UTF8, cancellationToken).ConfigureAwait(false);
         var metadata = new Dictionary<string, string>
         {
             ["size"] = new FileInfo(filePath).Length.ToString()
@@ -165,7 +165,7 @@ public sealed partial class YamlTomlParser : IDocumentParser
 
     public async Task<ParseResult> ParseAsync(string filePath, CancellationToken cancellationToken = default)
     {
-        var text = await File.ReadAllTextAsync(filePath, Encoding.UTF8, cancellationToken);
+        var text = await File.ReadAllTextAsync(filePath, Encoding.UTF8, cancellationToken).ConfigureAwait(false);
         var ext = Path.GetExtension(filePath).ToLowerInvariant();
         var isToml = ext == ".toml";
         var format = isToml ? "toml" : "yaml";
@@ -324,7 +324,7 @@ public sealed class HtmlTextParser : IDocumentParser
 
     public async Task<ParseResult> ParseAsync(string filePath, CancellationToken cancellationToken = default)
     {
-        var html = await File.ReadAllTextAsync(filePath, Encoding.UTF8, cancellationToken);
+        var html = await File.ReadAllTextAsync(filePath, Encoding.UTF8, cancellationToken).ConfigureAwait(false);
         var metadata = new Dictionary<string, string>
         {
             ["size"] = new FileInfo(filePath).Length.ToString(),
@@ -387,7 +387,7 @@ public sealed class LogParser : IDocumentParser
 
     public async Task<ParseResult> ParseAsync(string filePath, CancellationToken cancellationToken = default)
     {
-        var text = await File.ReadAllTextAsync(filePath, Encoding.UTF8, cancellationToken);
+        var text = await File.ReadAllTextAsync(filePath, Encoding.UTF8, cancellationToken).ConfigureAwait(false);
         var lines = text.Split('\n', StringSplitOptions.RemoveEmptyEntries);
         var metadata = new Dictionary<string, string>
         {

@@ -24,7 +24,7 @@ public sealed class TestTools
         [Description("Build configuration")] string? configuration = null,
         CancellationToken cancellationToken = default)
     {
-        var result = await _harness.RunTestsAsync(path, filter, configuration);
+        var result = await _harness.RunTestsAsync(path, filter, configuration).ConfigureAwait(false);
 
         return JsonSerializer.Serialize(new
         {
@@ -70,7 +70,7 @@ public sealed class TestTools
                 .ToList();
         }
 
-        var result = await _harness.RunAffectedTestsAsync(path, changedSymbols, configuration);
+        var result = await _harness.RunAffectedTestsAsync(path, changedSymbols, configuration).ConfigureAwait(false);
 
         return JsonSerializer.Serialize(new
         {
@@ -94,7 +94,7 @@ public sealed class TestTools
         [Description("Symbol name to find tests for (function/class name)")] string symbolName,
         CancellationToken cancellationToken = default)
     {
-        var tests = await _harness.GetTestsCoveringSymbolAsync(path, symbolName);
+        var tests = await _harness.GetTestsCoveringSymbolAsync(path, symbolName).ConfigureAwait(false);
         return JsonSerializer.Serialize(new
         {
             symbolName,
@@ -122,7 +122,7 @@ public sealed class TestTools
         path ??= Directory.GetCurrentDirectory();
 
         var buildPipeline = new BuildPipeline();
-        var buildResult = await buildPipeline.BuildAsync(path, configuration);
+        var buildResult = await buildPipeline.BuildAsync(path, configuration).ConfigureAwait(false);
 
         if (!buildResult.Success)
         {
@@ -136,7 +136,7 @@ public sealed class TestTools
             });
         }
 
-        var testResult = await _harness.RunTestsAsync(path, filter, configuration);
+        var testResult = await _harness.RunTestsAsync(path, filter, configuration).ConfigureAwait(false);
 
         return JsonSerializer.Serialize(new
         {

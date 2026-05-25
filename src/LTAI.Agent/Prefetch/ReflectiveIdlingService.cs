@@ -37,16 +37,16 @@ public sealed class ReflectiveIdlingService : BackgroundService
 
                 if (_evolution != null)
                 {
-                    await _evolution.DryRunCycleAsync(ct);
+                    await _evolution.DryRunCycleAsync(ct).ConfigureAwait(false);
                     _logger.LogInformation("ReflectiveIdling: DryRun evolution scan complete");
                 }
 
                 _logger.LogInformation("ReflectiveIdling: night cycle complete, sleeping 1 hour");
-                await Task.Delay(TimeSpan.FromHours(1), ct);
+                await Task.Delay(TimeSpan.FromHours(1), ct).ConfigureAwait(false);
             }
             else
             {
-                await Task.Delay(TimeSpan.FromMinutes(15), ct);
+                await Task.Delay(TimeSpan.FromMinutes(15), ct).ConfigureAwait(false);
             }
         }
     }

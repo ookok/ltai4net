@@ -36,7 +36,7 @@ internal static class ModelMode
 
         if (command == "download")
         {
-            return await DownloadModelAsync(downloader, layer, version, useMirror, force);
+            return await DownloadModelAsync(downloader, layer, version, useMirror, force).ConfigureAwait(false);
         }
 
         if (command == "remove")
@@ -141,7 +141,7 @@ internal static class ModelMode
 
         try
         {
-            var path = await downloader.DownloadAsync(model, ModelsDir, progress);
+            var path = await downloader.DownloadAsync(model, ModelsDir, progress).ConfigureAwait(false);
             Console.WriteLine($"\n\n✅ Model downloaded successfully!");
             Console.WriteLine($"   Path: {path}");
             return 0;

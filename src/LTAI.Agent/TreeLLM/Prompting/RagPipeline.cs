@@ -48,9 +48,9 @@ public sealed class RagPipeline
 
         var docs = _agenticRAG.Search(question, RAGMode.Iterative, domain: opts.Domain ?? "general");
 
-        var prompt = await _promptBuilder.BuildSinglePrompt(question, docs, opts);
+        var prompt = await _promptBuilder.BuildSinglePrompt(question, docs, opts).ConfigureAwait(false);
 
-        var response = await _chatClient.GetResponseAsync(prompt, cancellationToken: cancellationToken);
+        var response = await _chatClient.GetResponseAsync(prompt, cancellationToken: cancellationToken).ConfigureAwait(false);
         var answer = response.Text ?? string.Empty;
 
         var hallucinationCheck = HallucinationGuard.Instance.CheckGeneration(
@@ -81,7 +81,7 @@ public sealed class RagPipeline
     {
         var opts = options ?? PromptBuildOptions.Default;
         var docs = _agenticRAG.Search(question, RAGMode.Iterative, domain: opts.Domain ?? "general");
-        var prompt = await _promptBuilder.BuildSinglePrompt(question, docs, opts);
+        var prompt = await _promptBuilder.BuildSinglePrompt(question, docs, opts).ConfigureAwait(false);
 
         await foreach (var update in _chatClient.GetStreamingResponseAsync(prompt, cancellationToken: cancellationToken))
         {

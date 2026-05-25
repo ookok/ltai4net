@@ -81,13 +81,13 @@ public sealed class AgentParliament
         {
             using var voterSpan = ActivitySource.StartActivity($"parliament.vote.{v.name}");
             var route = _router.Classify(userMsg.Text);
-            var response = await v.agent.RunAsync(messages, session, null, cancellationToken);
+            var response = await v.agent.RunAsync(messages, session, null, cancellationToken).ConfigureAwait(false);
             var vote = ExtractVote(v.name, route.Intent, route.Confidence, response.Text ?? "");
             voterSpan?.SetTag("parliament.vote.verdict", vote.Verdict);
             return vote;
         });
 
-        var allVotes = await Task.WhenAll(tasks);
+        var allVotes = await Task.WhenAll(tasks).ConfigureAwait(false);
         votes.AddRange(allVotes);
 
         // Evaluate
@@ -117,7 +117,7 @@ public sealed class AgentParliament
                 votes.Select((v, i) => $"Agent {i + 1} ({v.AgentName}): {v.Verdict}\n{v.Reasoning}").Aggregate((a, b) => $"{a}\n\n{b}");
 
             var criticResponse = await critic.RunAsync(
-                [new ChatMessage(ChatRole.User, criticInput)], session, null, cancellationToken);
+                [new ChatMessage(ChatRole.User, criticInput)], session, null, cancellationToken).ConfigureAwait(false);
 
             var criticVote = ExtractVote(criticAgent, AgentType.Custom, 0.9f, criticResponse.Text ?? "");
             votes.Add(criticVote);
@@ -180,7 +180,7 @@ public sealed class AgentParliament
         {
             sb.AppendLine($"### {vote.AgentName} (confidence: {vote.Confidence:F2}, weight: {vote.Weight})");
             sb.AppendLine($"- Verdict: **{vote.Verdict}**");
-            sb.AppendLine($"- Reasoning: {vote.Reasoning[..Math.Min(vote.Reasoning.Length, 300)]}");
+            sb.AppendLine($"- Reasoning: {vote.Reasoning?[..Math.Min(vote.Reasoning.Length, 300)]}");
             sb.AppendLine();
         }
 

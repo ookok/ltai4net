@@ -47,7 +47,7 @@ public enum LearningStrategy
     OfflineDocCache
 }
 
-public sealed class ExternalAccess
+public sealed class ExternalAccess : IDisposable
 {
     private static readonly Lazy<ExternalAccess> _instance = new(() => new ExternalAccess());
     public static ExternalAccess Instance => _instance.Value;
@@ -121,6 +121,8 @@ public sealed class ExternalAccess
         _logger = logger;
     }
 
+    public void Dispose() { _http?.Dispose(); }
+
     public async Task<List<ExternalSearchResult>> DeepSearchAsync(string query, int maxResults = 20,
         CancellationToken cancellationToken = default)
     {
@@ -140,7 +142,7 @@ public sealed class ExternalAccess
             _searchMarginalia(query, maxResults, cancellationToken),
         };
 
-        var results = await Task.WhenAll(tasks);
+        var results = await Task.WhenAll(tasks).ConfigureAwait(false);
         var allResults = results.SelectMany(r => r).ToList();
 
         var unique = allResults
@@ -174,7 +176,7 @@ public sealed class ExternalAccess
         {
             var encoded = Uri.EscapeDataString(query);
             var url = $"https://html.duckduckgo.com/html/?q={encoded}";
-            var html = await _http.GetStringAsync(url, cancellationToken);
+            var html = await _http.GetStringAsync(url, cancellationToken).ConfigureAwait(false);
 
             var results = new List<ExternalSearchResult>();
             var linkMatches = Regex.Matches(html, @"<a[^>]+class=""result__a""[^>]+href=""([^""]+)""[^>]*>([^<]+)</a>");
@@ -221,7 +223,7 @@ public sealed class ExternalAccess
             {
                 var encoded = Uri.EscapeDataString(query);
                 var url = $"{instance}/search?q={encoded}&format=json&categories=general";
-                var json = await _http.GetStringAsync(url, cancellationToken);
+                var json = await _http.GetStringAsync(url, cancellationToken).ConfigureAwait(false);
 
                 using var doc = JsonDocument.Parse(json);
                 var results = new List<ExternalSearchResult>();
@@ -264,7 +266,7 @@ public sealed class ExternalAccess
         {
             var encoded = Uri.EscapeDataString(query);
             var url = $"https://www.bing.com/search?q={encoded}&setlang=en";
-            var html = await _http.GetStringAsync(url, cancellationToken);
+            var html = await _http.GetStringAsync(url, cancellationToken).ConfigureAwait(false);
 
             var results = new List<ExternalSearchResult>();
             var matches = Regex.Matches(html, @"<li class=""b_algo"">.*?<h2>.*?<a[^>]*href=""([^""]+)""[^>]*>([^<]+)</a>.*?<p[^>]*>([^<]+)</p>", RegexOptions.Singleline);
@@ -297,7 +299,7 @@ public sealed class ExternalAccess
         {
             var encoded = Uri.EscapeDataString(query);
             var url = $"https://search.brave.com/search?q={encoded}&source=web";
-            var html = await _http.GetStringAsync(url, cancellationToken);
+            var html = await _http.GetStringAsync(url, cancellationToken).ConfigureAwait(false);
             var matches = Regex.Matches(html, @"<div[^>]*class=""snippet""[^>]*>.*?<a[^>]*href=""([^""]*)""[^>]*>([^<]*)</a>.*?<p[^>]*class=""snippet-description""[^>]*>([^<]*)</p>", RegexOptions.Singleline);
 
             var results = new List<ExternalSearchResult>();
@@ -345,7 +347,7 @@ public sealed class ExternalAccess
         {
             var encoded = Uri.EscapeDataString(query);
             var url = $"https://www.mojeek.com/search?q={encoded}&fmt=html";
-            var html = await _http.GetStringAsync(url, cancellationToken);
+            var html = await _http.GetStringAsync(url, cancellationToken).ConfigureAwait(false);
             var matches = Regex.Matches(html, @"<a[^>]*class=""ob""[^>]*href=""([^""]+)""[^>]*>([^<]+)</a>");
             var snippetMatches = Regex.Matches(html, @"<p[^>]*class=""s""[^>]*>([^<]*)</p>");
 
@@ -378,7 +380,7 @@ public sealed class ExternalAccess
         {
             var encoded = Uri.EscapeDataString(query);
             var url = $"https://search.marginalia.nu/search?query={encoded}&profile=default";
-            var html = await _http.GetStringAsync(url, cancellationToken);
+            var html = await _http.GetStringAsync(url, cancellationToken).ConfigureAwait(false);
 
             var results = new List<ExternalSearchResult>();
             var linkMatches = Regex.Matches(html, @"<a[^>]*href=""([^""]+)""[^>]*>([^<]+)</a>");
@@ -434,7 +436,7 @@ public sealed class ExternalAccess
             try
             {
                 var url = $"{mirror.TrimEnd('/')}/{repoPath.Trim('/')}/{filePath.TrimStart('/')}";
-                var content = await _http.GetStringAsync(url, cancellationToken);
+                var content = await _http.GetStringAsync(url, cancellationToken).ConfigureAwait(false);
 
                 if (!string.IsNullOrWhiteSpace(content) && !content.Contains("404: Not Found"))
                 {
@@ -532,7 +534,7 @@ public sealed class ExternalAccess
         {
             try
             {
-                var record = await ResolveDohAsync(domain, provider, cancellationToken);
+                var record = await ResolveDohAsync(domain, provider, cancellationToken).ConfigureAwait(false);
                 if (record is not null && record.IPs.Count > 0)
                 {
                     _dnsCache[domain] = record;
@@ -547,7 +549,7 @@ public sealed class ExternalAccess
 
         try
         {
-            var addresses = await Dns.GetHostAddressesAsync(domain, cancellationToken);
+            var addresses = await Dns.GetHostAddressesAsync(domain, cancellationToken).ConfigureAwait(false);
             var record = new DnsRecord
             {
                 Domain = domain,
@@ -582,8 +584,8 @@ public sealed class ExternalAccess
         var request = new HttpRequestMessage(HttpMethod.Get, url);
         request.Headers.Accept.Add(new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("application/dns-json"));
 
-        var response = await _http.SendAsync(request, cancellationToken);
-        var json = await response.Content.ReadAsStringAsync(cancellationToken);
+        var response = await _http.SendAsync(request, cancellationToken).ConfigureAwait(false);
+        var json = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
 
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
@@ -624,7 +626,7 @@ public sealed class ExternalAccess
     {
         var domainList = domains.ToList();
         var tasks = domainList.Select(d => DnsResolveAsync(d, cancellationToken)).ToArray();
-        var results = await Task.WhenAll(tasks);
+        var results = await Task.WhenAll(tasks).ConfigureAwait(false);
 
         var dict = new Dictionary<string, DnsRecord?>();
         for (int i = 0; i < domainList.Count; i++)
@@ -640,7 +642,7 @@ public sealed class ExternalAccess
     {
         if (!string.IsNullOrWhiteSpace(doi))
         {
-            var sciHubContent = await _trySciHub(doi, cancellationToken);
+            var sciHubContent = await _trySciHub(doi, cancellationToken).ConfigureAwait(false);
             if (sciHubContent is not null)
                 return sciHubContent;
         }
@@ -654,13 +656,13 @@ public sealed class ExternalAccess
                 var arxivId = ExtractArxivId(url);
                 if (arxivId is not null)
                 {
-                    var arxivContent = await _tryArxivMirror(arxivId, cancellationToken);
+                    var arxivContent = await _tryArxivMirror(arxivId, cancellationToken).ConfigureAwait(false);
                     if (arxivContent is not null)
                         return arxivContent;
                 }
             }
 
-            var waybackContent = await _tryWayback(url, cancellationToken);
+            var waybackContent = await _tryWayback(url, cancellationToken).ConfigureAwait(false);
             if (waybackContent is not null)
                 return waybackContent;
         }
@@ -676,11 +678,11 @@ public sealed class ExternalAccess
             try
             {
                 var url = $"{domain.TrimEnd('/')}/{doi}";
-                var response = await _http.GetAsync(url, cancellationToken);
+                var response = await _http.GetAsync(url, cancellationToken).ConfigureAwait(false);
 
                 if (response.IsSuccessStatusCode)
                 {
-                    var html = await response.Content.ReadAsStringAsync(cancellationToken);
+                    var html = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
 
                     var pdfMatch = Regex.Match(html, @"(?:src|href)=""([^""]+\.pdf)""", RegexOptions.IgnoreCase);
                     if (pdfMatch.Success)
@@ -689,7 +691,7 @@ public sealed class ExternalAccess
                         if (!pdfUrl.StartsWith("http", StringComparison.OrdinalIgnoreCase))
                             pdfUrl = domain.TrimEnd('/') + "/" + pdfUrl.TrimStart('/');
 
-                        var pdfBytes = await _http.GetByteArrayAsync(pdfUrl, cancellationToken);
+                        var pdfBytes = await _http.GetByteArrayAsync(pdfUrl, cancellationToken).ConfigureAwait(false);
                         _logger.LogInformation("Sci-Hub resolved via {Domain}: {Doi}", domain, doi);
                         return Convert.ToBase64String(pdfBytes);
                     }
@@ -716,11 +718,11 @@ public sealed class ExternalAccess
             try
             {
                 var url = $"{mirror.TrimEnd('/')}/abs/{arxivId}";
-                var response = await _http.GetAsync(url, cancellationToken);
+                var response = await _http.GetAsync(url, cancellationToken).ConfigureAwait(false);
 
                 if (response.IsSuccessStatusCode)
                 {
-                    var html = await response.Content.ReadAsStringAsync(cancellationToken);
+                    var html = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
                     _logger.LogInformation("arXiv mirror {Mirror} resolved {Id}", mirror, arxivId);
                     return html;
                 }
@@ -739,11 +741,11 @@ public sealed class ExternalAccess
         try
         {
             var waybackUrl = $"{_waybackUrl}/web/{url}";
-            var response = await _http.GetAsync(waybackUrl, cancellationToken);
+            var response = await _http.GetAsync(waybackUrl, cancellationToken).ConfigureAwait(false);
 
             if (response.IsSuccessStatusCode)
             {
-                var content = await response.Content.ReadAsStringAsync(cancellationToken);
+                var content = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
                 if (!string.IsNullOrWhiteSpace(content) && !content.Contains("Wayback Machine doesn't have that page"))
                 {
                     _logger.LogInformation("Wayback Machine resolved: {Url}", url);
@@ -766,11 +768,11 @@ public sealed class ExternalAccess
             try
             {
                 var url = $"{gateway.TrimEnd('/')}/ipfs/{cid}";
-                var response = await _http.GetAsync(url, cancellationToken);
+                var response = await _http.GetAsync(url, cancellationToken).ConfigureAwait(false);
 
                 if (response.IsSuccessStatusCode)
                 {
-                    var content = await response.Content.ReadAsStringAsync(cancellationToken);
+                    var content = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
                     _logger.LogInformation("IPFS gateway {Gateway} resolved {CID}", gateway, cid);
                     return content;
                 }
@@ -791,7 +793,7 @@ public sealed class ExternalAccess
         {
             var encoded = Uri.EscapeDataString(query);
             var url = $"https://api.semanticscholar.org/graph/v1/paper/search?query={encoded}&limit=20&fields=title,url,abstract";
-            var json = await _http.GetStringAsync(url, cancellationToken);
+            var json = await _http.GetStringAsync(url, cancellationToken).ConfigureAwait(false);
 
             using var doc = JsonDocument.Parse(json);
             var results = new List<ExternalSearchResult>();
@@ -825,9 +827,9 @@ public sealed class ExternalAccess
     {
         try
         {
-            var response = await _http.GetAsync(url, cancellationToken);
+            var response = await _http.GetAsync(url, cancellationToken).ConfigureAwait(false);
             if (response.IsSuccessStatusCode)
-                return await response.Content.ReadAsStringAsync(cancellationToken);
+                return await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -835,7 +837,7 @@ public sealed class ExternalAccess
         }
 
         var resilience = NetworkResilience.Instance;
-        var fetchResult = await resilience.ResilientFetchAsync(url, cancellationToken);
+        var fetchResult = await resilience.ResilientFetchAsync(url, cancellationToken).ConfigureAwait(false);
         if (fetchResult.Success && fetchResult.Content is not null)
             return fetchResult.Content;
 
@@ -847,7 +849,7 @@ public sealed class ExternalAccess
                 var cid = ExtractCid(url);
                 if (cid is not null)
                 {
-                    var ipfsContent = await _tryIpfs(cid, cancellationToken);
+                    var ipfsContent = await _tryIpfs(cid, cancellationToken).ConfigureAwait(false);
                     if (ipfsContent is not null)
                         return ipfsContent;
                 }
@@ -855,7 +857,7 @@ public sealed class ExternalAccess
         }
         catch { /* non-fatal */ }
 
-        var waybackContent = await _tryWayback(url, cancellationToken);
+        var waybackContent = await _tryWayback(url, cancellationToken).ConfigureAwait(false);
         if (waybackContent is not null)
             return waybackContent;
 

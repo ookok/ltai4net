@@ -72,7 +72,7 @@ public sealed class BudgetTrackingMiddleware
         _logger.LogDebug("BudgetTracking: Agent '{Agent}' tokens={Tokens} cost=${Cost:F4} reqs={Reqs}",
             agentName, budget.TotalTokens, budget.TotalCost, budget.RequestCount);
 
-        var response = await innerAgent.RunAsync(messages, session, options, cancellationToken);
+        var response = await innerAgent.RunAsync(messages, session, options, cancellationToken).ConfigureAwait(false);
 
         var outputTokens = EstimateTokensFromResponse(response);
         budget.TotalTokens += outputTokens;

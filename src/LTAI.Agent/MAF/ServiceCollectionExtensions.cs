@@ -83,7 +83,7 @@ public static class MAFServiceCollectionExtensions
                         ["code"] = code,
                         ["language"] = language
                     };
-                    var result = await hyperlightFn.InvokeAsync(fnArgs);
+                    var result = await hyperlightFn.InvokeAsync(fnArgs).ConfigureAwait(false);
                     return result?.ToString() ?? "";
                 }
 

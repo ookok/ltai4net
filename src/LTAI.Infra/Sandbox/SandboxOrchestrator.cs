@@ -43,8 +43,8 @@ public sealed class SandboxOrchestrator
         _logger.LogInformation("Sandbox exec: {Lang}, timeout={TO}s, mem={MEM}MB, network={NET}",
             language, timeoutSeconds, memoryMb, allowNetwork);
 
-        var sandbox = await SelectSandboxAsync(language, cancellationToken);
-        return await sandbox.ExecuteAsync(request, cancellationToken);
+        var sandbox = await SelectSandboxAsync(language, cancellationToken).ConfigureAwait(false);
+        return await sandbox.ExecuteAsync(request, cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<IReadOnlyList<string>> ExecuteTemplateAsync(
@@ -52,7 +52,7 @@ public sealed class SandboxOrchestrator
         CancellationToken cancellationToken = default)
     {
         var wrapped = template.Replace("{code}", code);
-        var result = await ExecuteAsync(wrapped, language, cancellationToken: cancellationToken);
+        var result = await ExecuteAsync(wrapped, language, cancellationToken: cancellationToken).ConfigureAwait(false);
 
         if (!result.Success && _fallback != null)
         {
@@ -62,7 +62,7 @@ public sealed class SandboxOrchestrator
                 Code = wrapped, Language = language,
                 TimeoutSeconds = 30, MemoryLimitMb = 256,
                 ReadOnlyFilesystem = true
-            }, cancellationToken);
+            }, cancellationToken).ConfigureAwait(false);
         }
 
         return new List<string>

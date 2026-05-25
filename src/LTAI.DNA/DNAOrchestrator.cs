@@ -98,7 +98,7 @@ public sealed class DNAOrchestrator
         var traceId = System.Diagnostics.Activity.Current?.TraceId.ToString()
             ?? Guid.NewGuid().ToString("N");
 
-        var safetyVerdict = await _safety.EvaluateAsync(input, previousOutput, cancellationToken);
+        var safetyVerdict = await _safety.EvaluateAsync(input, previousOutput, cancellationToken).ConfigureAwait(false);
 
         if (!safetyVerdict.Allowed)
         {
@@ -107,11 +107,11 @@ public sealed class DNAOrchestrator
             return new DNAProcessResult { Allowed = false, BlockReason = safetyVerdict.BlockReason, SafetyPosture = _safety.Posture, TraceId = traceId };
         }
 
-        await _consciousness.ProcessExperienceAsync(input, cancellationToken: cancellationToken);
+        await _consciousness.ProcessExperienceAsync(input, cancellationToken: cancellationToken).ConfigureAwait(false);
         _phenomenal.OnTaskStart(input[..Math.Min(input.Length, 80)]);
         _phenomenal.OnTaskComplete(input[..Math.Min(input.Length, 80)], true);
 
-        await _life.TickAsync(cancellationToken);
+        await _life.TickAsync(cancellationToken).ConfigureAwait(false);
 
         var fitnessSignals = new Dictionary<string, double>
         {
@@ -121,7 +121,7 @@ public sealed class DNAOrchestrator
             ["exploration"] = _consciousness.State.ActiveThoughts.Count > 3 ? 0.8 : 0.4
         };
 
-        await _selfEvo.EvolveAsync(fitnessSignals, cancellationToken);
+        await _selfEvo.EvolveAsync(fitnessSignals, cancellationToken).ConfigureAwait(false);
         _world.Observe("input", "length", input.Length);
         _world.LearnRelation("input", "safety", "triggers", safetyVerdict.RiskScore);
         _predictor.Record("safety", 1.0 - safetyVerdict.RiskScore);

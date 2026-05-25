@@ -39,10 +39,10 @@ public sealed class CalpuffWrapper
         var dir = Path.Combine(_toolsDir, subDir);
         Directory.CreateDirectory(dir);
         var zipPath = Path.Combine(dir, Path.GetFileName(url));
-        var response = await _http.GetAsync(url);
+        var response = await _http.GetAsync(url).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
         await using var fs = new FileStream(zipPath, FileMode.Create);
-        await response.Content.CopyToAsync(fs);
+        await response.Content.CopyToAsync(fs).ConfigureAwait(false);
         ZipFile.ExtractToDirectory(zipPath, dir, true);
     }
 
@@ -56,13 +56,13 @@ public sealed class CalpuffWrapper
 
         try
         {
-            var calmetOk = await RunCalmetAsync(input, runDir, ct);
+            var calmetOk = await RunCalmetAsync(input, runDir, ct).ConfigureAwait(false);
             if (!calmetOk) return new CalpuffResult { Error = "CALMET preprocessing failed" };
 
-            var calpuffOk = await RunCalpuffAsync(input, runDir, ct);
+            var calpuffOk = await RunCalpuffAsync(input, runDir, ct).ConfigureAwait(false);
             if (!calpuffOk) return new CalpuffResult { Error = "CALPUFF dispersion failed" };
 
-            var results = await RunCalpostAsync(input, runDir, ct);
+            var results = await RunCalpostAsync(input, runDir, ct).ConfigureAwait(false);
             return results;
         }
         catch (Exception ex) { return new CalpuffResult { Error = ex.Message }; }
@@ -71,7 +71,7 @@ public sealed class CalpuffWrapper
     private async Task<bool> RunCalmetAsync(CalpuffInput input, string runDir, CancellationToken ct)
     {
         var inpPath = Path.Combine(runDir, "calmet.inp");
-        await File.WriteAllTextAsync(input.GenerateCalmetInput(runDir), inpPath, ct);
+        await File.WriteAllTextAsync(input.GenerateCalmetInput(runDir), inpPath, ct).ConfigureAwait(false);
 
         var psi = new ProcessStartInfo
         {
@@ -84,14 +84,14 @@ public sealed class CalpuffWrapper
 
         using var proc = Process.Start(psi);
         if (proc == null) return false;
-        await proc.WaitForExitAsync(ct);
+        await proc.WaitForExitAsync(ct).ConfigureAwait(false);
         return proc.ExitCode == 0;
     }
 
     private async Task<bool> RunCalpuffAsync(CalpuffInput input, string runDir, CancellationToken ct)
     {
         var inpPath = Path.Combine(runDir, "calpuff.inp");
-        await File.WriteAllTextAsync(input.GenerateCalpuffInput(runDir), inpPath, ct);
+        await File.WriteAllTextAsync(input.GenerateCalpuffInput(runDir), inpPath, ct).ConfigureAwait(false);
 
         var psi = new ProcessStartInfo
         {
@@ -104,14 +104,14 @@ public sealed class CalpuffWrapper
 
         using var proc = Process.Start(psi);
         if (proc == null) return false;
-        await proc.WaitForExitAsync(ct);
+        await proc.WaitForExitAsync(ct).ConfigureAwait(false);
         return proc.ExitCode == 0;
     }
 
     private async Task<CalpuffResult> RunCalpostAsync(CalpuffInput input, string runDir, CancellationToken ct)
     {
         var inpPath = Path.Combine(runDir, "calpost.inp");
-        await File.WriteAllTextAsync(input.GenerateCalpostInput(runDir), inpPath, ct);
+        await File.WriteAllTextAsync(input.GenerateCalpostInput(runDir), inpPath, ct).ConfigureAwait(false);
 
         var psi = new ProcessStartInfo
         {
@@ -125,13 +125,13 @@ public sealed class CalpuffWrapper
         using var proc = Process.Start(psi);
         if (proc == null) return new CalpuffResult { Error = "Failed to start CALPOST" };
 
-        var stdout = await proc.StandardOutput.ReadToEndAsync(ct);
-        await proc.WaitForExitAsync(ct);
+        var stdout = await proc.StandardOutput.ReadToEndAsync(ct).ConfigureAwait(false);
+        await proc.WaitForExitAsync(ct).ConfigureAwait(false);
 
         var lstPath = Path.Combine(runDir, "calpost.lst");
         if (File.Exists(lstPath))
         {
-            var lstContent = await File.ReadAllTextAsync(lstPath, ct);
+            var lstContent = await File.ReadAllTextAsync(lstPath, ct).ConfigureAwait(false);
             return ParseCalpostOutput(lstContent);
         }
 

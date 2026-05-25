@@ -10,7 +10,7 @@ using Xunit;
 namespace LTAI.Tests;
 
 /// <summary>
-/// LTAI v7.0 EIA + Code Safety Combined Test Suite.
+/// LTAI V0.51 EIA + Code Safety Combined Test Suite.
 /// Uses FakeChatClient for LLM mock, Roslyn for SAST, Bogus for params.
 /// CI gate: any failed test = Block Merge.
 /// </summary>

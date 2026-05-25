@@ -72,12 +72,12 @@ public sealed class ProviderFanOutRace
 
         while (tasks.Count > 0)
         {
-            var completed = await Task.WhenAny(tasks);
+            var completed = await Task.WhenAny(tasks).ConfigureAwait(false);
             tasks.Remove(completed);
 
-            await cts.CancelAsync();
+            await cts.CancelAsync().ConfigureAwait(false);
 
-            var (provider, response, success, latency) = await completed;
+            var (provider, response, success, latency) = await completed.ConfigureAwait(false);
             sw.Stop();
 
             if (success)
@@ -101,7 +101,7 @@ public sealed class ProviderFanOutRace
         cts.Dispose();
         sw.Stop();
 
-        var fallbackResult = await FallbackToPrimaryAsync(messages, cancellationToken);
+        var fallbackResult = await FallbackToPrimaryAsync(messages, cancellationToken).ConfigureAwait(false);
 
         return new FanOutResult
         {
@@ -189,7 +189,7 @@ public sealed class ProviderFanOutRace
         var sw = Stopwatch.StartNew();
         try
         {
-            var response = await client.GetResponseAsync(messages, null, ct);
+            var response = await client.GetResponseAsync(messages, null, ct).ConfigureAwait(false);
             sw.Stop();
             return (providerName, response.Text ?? "", true, sw.Elapsed.TotalMilliseconds);
         }
@@ -216,7 +216,7 @@ public sealed class ProviderFanOutRace
         {
             try
             {
-                var response = await clients[primaryIdx].GetResponseAsync(messages, null, ct);
+                var response = await clients[primaryIdx].GetResponseAsync(messages, null, ct).ConfigureAwait(false);
                 return (response.Text ?? "", true);
             }
             catch (Exception ex)
@@ -230,7 +230,7 @@ public sealed class ProviderFanOutRace
             if (name == _primaryProvider) continue;
             try
             {
-                var response = await client.GetResponseAsync(messages, null, ct);
+                var response = await client.GetResponseAsync(messages, null, ct).ConfigureAwait(false);
                 return (response.Text ?? "", true);
             }
             catch

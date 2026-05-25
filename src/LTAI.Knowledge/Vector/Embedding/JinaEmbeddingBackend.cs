@@ -106,13 +106,13 @@ public sealed class JinaEmbeddingBackend : IEmbeddingBackend, IDisposable
     public async Task<float[][]> EmbedAsync(IReadOnlyList<string> texts, CancellationToken ct = default)
     {
         var prefixed = texts.Select(t => $"text: {t}").ToArray();
-        return await _onnxBackend.EmbedAsync(prefixed, ct);
+        return await _onnxBackend.EmbedAsync(prefixed, ct).ConfigureAwait(false);
     }
 
     public async Task<float[]> EmbedSingleAsync(string text, CancellationToken ct = default)
     {
         var prefixedInput = $"text: {text}";
-        var results = await _onnxBackend.EmbedAsync(new[] { prefixedInput }, ct);
+        var results = await _onnxBackend.EmbedAsync(new[] { prefixedInput }, ct).ConfigureAwait(false);
         return results[0];
     }
 
@@ -120,13 +120,13 @@ public sealed class JinaEmbeddingBackend : IEmbeddingBackend, IDisposable
     public async Task<float[]> EmbedImageDescriptionAsync(string imageDescription, CancellationToken ct = default)
     {
         var prefixedInput = $"image: {imageDescription}";
-        var results = await _onnxBackend.EmbedAsync(new[] { prefixedInput }, ct);
+        var results = await _onnxBackend.EmbedAsync(new[] { prefixedInput }, ct).ConfigureAwait(false);
         return results[0];
     }
 
     public async Task InitializeAsync(CancellationToken ct = default)
     {
-        await _onnxBackend.InitializeAsync();
+        await _onnxBackend.InitializeAsync().ConfigureAwait(false);
         _logger.LogInformation("JinaEmbeddingBackend initialized: model={Model} dim={Dim}", _config.ModelName, _config.Dimension);
     }
 
@@ -154,13 +154,13 @@ public static class JinaModelDownloader
         {
             var variantPath = variant == JinaModelVariant.OmniNano ? "onnx_nano" : "onnx_small";
             var onnxUrl = $"https://huggingface.co/{preset.HuggingFaceRepo}/resolve/main/{variantPath}/model.onnx";
-            await DownloadFileAsync(onnxUrl, onnxPath, ct);
+            await DownloadFileAsync(onnxUrl, onnxPath, ct).ConfigureAwait(false);
         }
 
         if (!File.Exists(tokenizerPath))
         {
             var tokenizerUrl = $"https://huggingface.co/{preset.HuggingFaceRepo}/resolve/main/tokenizer.json";
-            await DownloadFileAsync(tokenizerUrl, tokenizerPath, ct);
+            await DownloadFileAsync(tokenizerUrl, tokenizerPath, ct).ConfigureAwait(false);
         }
 
         return preset with { OnnxModelPath = onnxPath, OnnxTokenizerPath = tokenizerPath };
@@ -168,10 +168,10 @@ public static class JinaModelDownloader
 
     private static async Task DownloadFileAsync(string url, string path, CancellationToken ct)
     {
-        var response = await _http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct);
+        var response = await _http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
-        await using var stream = await response.Content.ReadAsStreamAsync(ct);
+        await using var stream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
         await using var file = File.Create(path);
-        await stream.CopyToAsync(file, ct);
+        await stream.CopyToAsync(file, ct).ConfigureAwait(false);
     }
 }

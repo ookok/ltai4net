@@ -125,13 +125,13 @@ public sealed class UniversalScanner
             if (healthResp.IsSuccessStatusCode)
             {
                 endpoint = endpoint with { IsAlive = true, Protocol = "http" };
-                await ProbeOpenAI(endpoint, url, cts.Token);
+                await ProbeOpenAI(endpoint, url, cts.Token).ConfigureAwait(false);
                 return endpoint;
             }
         }
         catch { /* non-fatal */ }
 
-        var openaiEndpoint = await ProbeOpenAI(endpoint, url, CancellationToken.None);
+        var openaiEndpoint = await ProbeOpenAI(endpoint, url, CancellationToken.None).ConfigureAwait(false);
         if (openaiEndpoint.IsAlive) return openaiEndpoint;
 
         try
@@ -144,11 +144,11 @@ public sealed class UniversalScanner
                 id = 1
             });
             var mcpContent = new StringContent(mcpPayload, global::System.Text.Encoding.UTF8, new global::System.Net.Http.Headers.MediaTypeHeaderValue("application/json"));
-            var mcpResp = await _http.PostAsync(url, mcpContent, cts.Token);
+            var mcpResp = await _http.PostAsync(url, mcpContent, cts.Token).ConfigureAwait(false);
 
             if (mcpResp.IsSuccessStatusCode)
             {
-                var body = await mcpResp.Content.ReadAsStringAsync(cts.Token);
+                var body = await mcpResp.Content.ReadAsStringAsync(cts.Token).ConfigureAwait(false);
                 if (body.Contains("tools") || body.Contains("jsonrpc"))
                 {
                     endpoint = endpoint with
@@ -173,7 +173,7 @@ public sealed class UniversalScanner
             var modelsResp = await _http.GetAsync($"{url}/v1/models", ct);
             if (modelsResp.IsSuccessStatusCode)
             {
-                var body = await modelsResp.Content.ReadAsStringAsync(ct);
+                var body = await modelsResp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
                 var models = new List<string>();
                 try
                 {
@@ -286,7 +286,7 @@ public sealed class UniversalScanner
                         DiscoveredAt = DateTime.UtcNow
                     };
 
-                    svc = await ProbeProtocol(svc);
+                    svc = await ProbeProtocol(svc).ConfigureAwait(false);
                     svc = svc with
                     {
                         Capabilities = svc.Capabilities.Concat(HeuristicCapability(url)).Distinct().ToList()

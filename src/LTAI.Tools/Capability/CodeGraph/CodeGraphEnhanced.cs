@@ -569,6 +569,39 @@ public sealed class CodeGraphEnhanced : IDisposable
         Fingerprint = reader.IsDBNull(10) ? 0 : (ulong)reader.GetInt64(10)
     };
 
+    public ImpactResult BlastRadius(string entityName, int maxDepth = 2)
+    {
+        var results = Search(entityName, limit: 1);
+        if (results.Count == 0) return new ImpactResult { TargetSymbol = entityName };
+        return GetImpactRadius(results[0].Id, maxDepth);
+    }
+
+    public List<CallGraphNode> FindHubs(int topN = 10)
+    {
+        var results = new List<CallGraphNode>();
+        using var cmd = _db.CreateCommand();
+        cmd.CommandText = """
+            SELECT n.*, COALESCE(s.cnt, 0) + COALESCE(t.cnt, 0) AS degree FROM nodes n
+            LEFT JOIN (SELECT source_id, COUNT(*) AS cnt FROM edges GROUP BY source_id) s ON n.id = s.source_id
+            LEFT JOIN (SELECT target_id, COUNT(*) AS cnt FROM edges GROUP BY target_id) t ON n.id = t.target_id
+            ORDER BY degree DESC LIMIT @topN
+            """;
+        cmd.Parameters.AddWithValue("@topN", topN);
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+            results.Add(ReadNode(reader));
+        return results;
+    }
+
+    public Dictionary<string, object> Stats() => new()
+    {
+        ["files_indexed"] = _totalFiles,
+        ["total_nodes"] = _totalNodes,
+        ["total_edges"] = _totalEdges,
+        ["languages"] = _languages.ToList(),
+        ["hubs"] = FindHubs(5).Select(h => new { h.Name, h.File }).ToList()
+    };
+
     public void Dispose() => _db?.Dispose();
 
     /// <summary>
@@ -587,6 +620,8 @@ public sealed class CodeGraphEnhanced : IDisposable
                 Findings = findings,
                 ContextFingerprint = fp
             });
+            if (_trajectories.Count > 100)
+                _trajectories.RemoveRange(0, _trajectories.Count - 100);
         }
     }
 

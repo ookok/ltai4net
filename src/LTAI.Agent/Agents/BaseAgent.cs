@@ -34,7 +34,7 @@ public sealed class SkillRegistry
         if (!_skills.TryGetValue(skillId, out var handler))
             throw new InvalidOperationException($"Skill '{skillId}' not registered.");
 
-        var result = await handler(input, ct);
+        var result = await handler(input, ct).ConfigureAwait(false);
         if (result is TResult typed)
             return typed;
 
@@ -93,11 +93,11 @@ public abstract class BaseAgent : AIAgent
             if (strategy.CanHandle(query))
             {
                 _logger.LogDebug("{Agent} using strategy: {Strategy}", Name, strategy.StrategyName);
-                return await strategy.AnalyzeAsync(context, cancellationToken);
+                return await strategy.AnalyzeAsync(context, cancellationToken).ConfigureAwait(false);
             }
         }
 
-        return await ExecuteLogicAsync(context, cancellationToken);
+        return await ExecuteLogicAsync(context, cancellationToken).ConfigureAwait(false);
     }
 
     protected abstract Task<AgentResponse> ExecuteLogicAsync(
@@ -108,7 +108,7 @@ public abstract class BaseAgent : AIAgent
         ChatOptions? chatOptions = null,
         CancellationToken ct = default)
     {
-        var response = await _brain.GetResponseAsync(messages, chatOptions, ct);
+        var response = await _brain.GetResponseAsync(messages, chatOptions, ct).ConfigureAwait(false);
         return new AgentResponse(new ChatMessage(ChatRole.Assistant, response.Text ?? ""));
     }
 
@@ -116,7 +116,7 @@ public abstract class BaseAgent : AIAgent
         IEnumerable<ChatMessage> messages,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
-        var response = await _brain.GetResponseAsync(messages.ToList(), cancellationToken: ct);
+        var response = await _brain.GetResponseAsync(messages.ToList(), cancellationToken: ct).ConfigureAwait(false);
         yield return new AgentResponseUpdate(new ChatResponseUpdate(ChatRole.Assistant, response.Text ?? ""));
     }
 

@@ -17,7 +17,7 @@ public sealed class SmsConfig
     public bool Enabled { get; set; }
 }
 
-public sealed class SmsGateway
+public sealed class SmsGateway : IDisposable
 {
     private readonly HttpClient _http;
     private readonly ILogger<SmsGateway> _logger;
@@ -28,6 +28,8 @@ public sealed class SmsGateway
         _logger = logger ?? NullLogger<SmsGateway>.Instance;
         _http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
     }
+
+    public void Dispose() { _http?.Dispose(); }
 
     public async Task<bool> SendAsync(string message, string? phone = null)
     {
@@ -77,7 +79,7 @@ public sealed class SmsGateway
 
             var content = new FormUrlEncodedContent(parameters.Where(kv => kv.Key != "SignatureMethod" && kv.Key != "SignatureVersion"));
             var response = await _http.PostAsync("https://dysmsapi.aliyuncs.com/", content);
-            var body = await response.Content.ReadAsStringAsync();
+            var body = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
 
             if (response.IsSuccessStatusCode)
             {

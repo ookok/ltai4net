@@ -22,14 +22,14 @@ public sealed class CodeReviewEngine
         ReviewScope scope = ReviewScope.Staged,
         CancellationToken cancellationToken = default)
     {
-        var changes = await GetChangesAsync(target, scope, cancellationToken);
+        var changes = await GetChangesAsync(target, scope, cancellationToken).ConfigureAwait(false);
         if (changes.Count == 0)
             return new ReviewReport { Summary = "No changes to review." };
 
         var issues = new List<ReviewIssue>();
         foreach (var change in changes)
         {
-            var fileIssues = await ReviewFileAsync(change, cancellationToken);
+            var fileIssues = await ReviewFileAsync(change, cancellationToken).ConfigureAwait(false);
             issues.AddRange(fileIssues);
         }
 
@@ -87,7 +87,7 @@ public sealed class CodeReviewEngine
             }
         }
 
-        return await Task.FromResult(changes);
+        return await Task.FromResult(changes).ConfigureAwait(false);
     }
 
     private static List<DiffHunk> ParseHunks(string fileDiff)
@@ -158,7 +158,7 @@ public sealed class CodeReviewEngine
             }
         }
 
-        return await Task.FromResult(issues);
+        return await Task.FromResult(issues).ConfigureAwait(false);
     }
 
     private void CheckSecurity(DiffLine line, string file, CodeLanguage lang, List<ReviewIssue> issues)

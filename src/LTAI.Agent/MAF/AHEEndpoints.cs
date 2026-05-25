@@ -49,7 +49,7 @@ public static class AHEEndpoints
         endpoints.MapPost("/api/harness/decisions/verify", async (HttpContext context, DecisionLog log) =>
         {
             using var reader = new StreamReader(context.Request.Body);
-            var body = await reader.ReadToEndAsync();
+            var body = await reader.ReadToEndAsync().ConfigureAwait(false);
             var request = JsonSerializer.Deserialize<JsonElement>(body);
             var editId = request.TryGetProperty("editId", out var id) ? id.GetString() : null;
             var held = request.TryGetProperty("predictionHeld", out var h) && h.GetBoolean();
@@ -82,7 +82,7 @@ public static class AHEEndpoints
         endpoints.MapPost("/api/plugins/install", async (HttpContext context, PluginRegistry registry) =>
         {
             using var reader = new StreamReader(context.Request.Body);
-            var body = await reader.ReadToEndAsync();
+            var body = await reader.ReadToEndAsync().ConfigureAwait(false);
             var manifest = JsonSerializer.Deserialize<PluginManifest>(body);
             if (manifest == null || string.IsNullOrWhiteSpace(manifest.Name))
                 return Results.Json(new { error = "Valid plugin manifest required" }, statusCode: 400);
@@ -108,7 +108,7 @@ public static class AHEEndpoints
         endpoints.MapPost("/api/review/route", async (HttpContext context) =>
         {
             using var reader = new StreamReader(context.Request.Body);
-            var body = await reader.ReadToEndAsync();
+            var body = await reader.ReadToEndAsync().ConfigureAwait(false);
             var request = JsonSerializer.Deserialize<JsonElement>(body);
             var query = request.TryGetProperty("query", out var q) ? q.GetString() ?? "" : "";
             var (agent, instructions, confidence) = ReviewAgentRouter.RouteReview(query);
@@ -124,13 +124,13 @@ public static class AHEEndpoints
 
         endpoints.MapPost("/api/harness/evolution/iterate", async (HarnessEvolutionEngine engine, IServiceProvider sp, CancellationToken ct) =>
         {
-            var result = await engine.RunIterationAsync(sp, ct);
+            var result = await engine.RunIterationAsync(sp, ct).ConfigureAwait(false);
             return Results.Json(result);
         });
 
         endpoints.MapPost("/api/harness/evolution/verify", async (HarnessEvolutionEngine engine, IServiceProvider sp, CancellationToken ct) =>
         {
-            await engine.VerifyPendingEditsAsync(sp, ct);
+            await engine.VerifyPendingEditsAsync(sp, ct).ConfigureAwait(false);
             return Results.Json(new { verified = true });
         });
 
@@ -151,7 +151,7 @@ public static class AHEEndpoints
         endpoints.MapPost("/api/search/code-rerank", async (HttpContext context) =>
         {
             using var reader = new StreamReader(context.Request.Body);
-            var body = await reader.ReadToEndAsync();
+            var body = await reader.ReadToEndAsync().ConfigureAwait(false);
             var req = JsonSerializer.Deserialize<JsonElement>(body);
             var query = req.TryGetProperty("query", out var q) ? q.GetString() ?? "" : "";
             var queryType = LTAI.Knowledge.Core.CodeSearchReranker.ClassifyQueryType(query);

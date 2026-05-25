@@ -43,9 +43,9 @@ public sealed class DeltaMemAdapter
         WriteMode writeMode = WriteMode.Segment,
         CancellationToken cancellationToken = default)
     {
-        var adapterPrompt = await EnrichPromptWithMemory(prompt, sessionId, writeMode);
+        var adapterPrompt = await EnrichPromptWithMemory(prompt, sessionId, writeMode).ConfigureAwait(false);
 
-        var response = await _innerClient.GetResponseAsync(adapterPrompt, cancellationToken: cancellationToken);
+        var response = await _innerClient.GetResponseAsync(adapterPrompt, cancellationToken: cancellationToken).ConfigureAwait(false);
         var answer = response.Text ?? string.Empty;
 
         _memoryState.Write(answer, writeMode);
@@ -72,7 +72,7 @@ public sealed class DeltaMemAdapter
         if (!string.IsNullOrEmpty(correctionText))
             enrichedPrompt = $"[MemoryCorrection: {correctionText}]\n\n{prompt}";
 
-        var response = await _innerClient.GetResponseAsync(enrichedPrompt, cancellationToken: cancellationToken);
+        var response = await _innerClient.GetResponseAsync(enrichedPrompt, cancellationToken: cancellationToken).ConfigureAwait(false);
         var answer = response.Text ?? string.Empty;
 
         _memoryState.Write(answer);
@@ -86,7 +86,7 @@ public sealed class DeltaMemAdapter
         WriteMode writeMode = WriteMode.Segment,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        var adapterPrompt = await EnrichPromptWithMemory(prompt, sessionId, writeMode);
+        var adapterPrompt = await EnrichPromptWithMemory(prompt, sessionId, writeMode).ConfigureAwait(false);
         var fullAnswer = "";
 
         await foreach (var update in _innerClient.GetStreamingResponseAsync(adapterPrompt, cancellationToken: cancellationToken))

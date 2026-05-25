@@ -10,7 +10,7 @@ namespace LTAI.AI.Governors;
 public record RawEpisode
 {
     [BsonId]
-    public ObjectId Id { get; init; }
+    public ObjectId Id { get; init; } = default!;
     public string Query { get; init; } = "";
     public string FullTrajectory { get; init; } = "";  // 完整推理过程
     public string FinalAnswer { get; init; } = "";
@@ -32,7 +32,7 @@ public enum LessonKind { Strategy, Rule, Pattern, Warning, CodeSnippet }
 public record AbstractLesson
 {
     [BsonId]
-    public ObjectId Id { get; init; }
+    public ObjectId Id { get; init; } = default!;
     public string Title { get; init; } = "";
     public LessonKind Kind { get; init; }
     public string Content { get; init; } = "";
@@ -118,7 +118,7 @@ public sealed class DualMemoryStore : IDisposable
         {
             try
             {
-                var embeddings = await _embeddingGenerator.GenerateAsync(new[] { episode.Query });
+                var embeddings = await _embeddingGenerator.GenerateAsync(new[] { episode.Query }).ConfigureAwait(false);
                 if (embeddings.Count > 0)
                 {
                     // Embedding<T> exposes Vector as ReadOnlyMemory<T>
@@ -174,7 +174,7 @@ public sealed class DualMemoryStore : IDisposable
         {
             try
             {
-                var embeddings = await _embeddingGenerator.GenerateAsync(new[] { query });
+                var embeddings = await _embeddingGenerator.GenerateAsync(new[] { query }).ConfigureAwait(false);
                 if (embeddings.Count > 0)
                 {
                     queryEmbedding = embeddings[0].Vector.ToArray();
@@ -484,7 +484,7 @@ public sealed class DualMemoryStore : IDisposable
         try
         {
             // 提取教训
-            var newLessons = await lessonExtractor(episodes.Take(_config.MaxConsolidationPerCycle).ToList());
+            var newLessons = await lessonExtractor(episodes.Take(_config.MaxConsolidationPerCycle).ToList()).ConfigureAwait(false);
 
             if (newLessons.Count == 0)
             {

@@ -6,19 +6,19 @@ namespace LTAI.Core.Observability;
 
 public static class LtaiActivitySource
 {
-    public static readonly ActivitySource Source = new("LTAI.Agent", "7.0.0");
+    public static readonly ActivitySource Source = new("LTAI.Agent", "0.51.0");
 
     // 子 ActivitySource 按模块划分
-    public static readonly ActivitySource Safety = new("LTAI.Safety", "7.0.0");
-    public static readonly ActivitySource Router = new("LTAI.Router", "7.0.0");
-    public static readonly ActivitySource Agent = new("LTAI.Agent.Execution", "7.0.0");
-    public static readonly ActivitySource Workflow = new("LTAI.Workflow", "7.0.0");
-    public static readonly ActivitySource Tool = new("LTAI.Tool", "7.0.0");
+    public static readonly ActivitySource Safety = new("LTAI.Safety", "0.51.0");
+    public static readonly ActivitySource Router = new("LTAI.Router", "0.51.0");
+    public static readonly ActivitySource Agent = new("LTAI.Agent.Execution", "0.51.0");
+    public static readonly ActivitySource Workflow = new("LTAI.Workflow", "0.51.0");
+    public static readonly ActivitySource Tool = new("LTAI.Tool", "0.51.0");
 }
 
 public static class LtaiMetrics
 {
-    public static readonly Meter Meter = new("LTAI", "7.0.0");
+    public static readonly Meter Meter = new("LTAI", "0.51.0");
 
     // Counters
     public static readonly Counter<long> RequestsTotal = Meter.CreateCounter<long>(

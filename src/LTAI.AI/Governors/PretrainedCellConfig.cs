@@ -82,8 +82,8 @@ public static class PretrainedModelRegistry
                 if (File.Exists(filePath)) continue;
 
                 logger.LogInformation("Downloading: {FileName}", fileName);
-                var data = await client.GetByteArrayAsync(url, ct);
-                await File.WriteAllBytesAsync(filePath, data, ct);
+                var data = await client.GetByteArrayAsync(url, ct).ConfigureAwait(false);
+                await File.WriteAllBytesAsync(filePath, data, ct).ConfigureAwait(false);
             }
 
             logger.LogInformation("Model downloaded: {Domain}", config.Domain);

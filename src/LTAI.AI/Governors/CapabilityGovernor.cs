@@ -33,7 +33,7 @@ public sealed class CapabilityGovernor : LayerGovernor
 
         try
         {
-            var result = await _tools.InvokeAsync(toolName, parameters ?? new(), cancellationToken);
+            var result = await _tools.InvokeAsync(toolName, parameters ?? new(), cancellationToken).ConfigureAwait(false);
             return new Handshake
             {
                 From = LayerName,

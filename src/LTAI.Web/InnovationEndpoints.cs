@@ -14,14 +14,15 @@ public static class InnovationEndpoints
         // ─── Temporal Memory Fabric ───
         endpoints.MapPost("/api/memory/query", async (HttpContext context, TemporalMemoryFabric memory) =>
         {
-            var body = await new StreamReader(context.Request.Body).ReadToEndAsync();
+            using var reader = new StreamReader(context.Request.Body);
+            var body = await reader.ReadToEndAsync().ConfigureAwait(false);
             var request = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(body);
 
             if (request == null || !request.TryGetValue("query", out var q))
                 return Results.Json(new { error = "query is required" }, statusCode: 400);
 
             var query = q.GetString() ?? "";
-            var results = await memory.QueryAsync(query, timeWindow: null, filePath: null, topK: 10);
+            var results = await memory.QueryAsync(query, timeWindow: null, filePath: null, topK: 10).ConfigureAwait(false);
 
             return Results.Json(new
             {
@@ -38,7 +39,8 @@ public static class InnovationEndpoints
 
         endpoints.MapPost("/api/memory/record", (HttpContext context, TemporalMemoryFabric memory) =>
         {
-            var body = new StreamReader(context.Request.Body).ReadToEnd();
+            using var reader = new StreamReader(context.Request.Body);
+            var body = reader.ReadToEnd();
             var request = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(body);
 
             if (request == null || !request.TryGetValue("session_id", out var sid))
@@ -101,7 +103,8 @@ public static class InnovationEndpoints
 
         endpoints.MapPost("/api/federation/register", (HttpContext context, FederationCoordinator federation) =>
         {
-            var body = new StreamReader(context.Request.Body).ReadToEnd();
+            using var reader = new StreamReader(context.Request.Body);
+            var body = reader.ReadToEnd();
             var request = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(body);
 
             if (request == null)
@@ -127,7 +130,8 @@ public static class InnovationEndpoints
 
         endpoints.MapPost("/api/federation/dispatch", async (HttpContext context, FederationCoordinator federation) =>
         {
-            var body = await new StreamReader(context.Request.Body).ReadToEndAsync();
+            using var reader = new StreamReader(context.Request.Body);
+            var body = await reader.ReadToEndAsync().ConfigureAwait(false);
             var request = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(body);
 
             if (request == null || !request.TryGetValue("query", out var q))
@@ -149,7 +153,8 @@ public static class InnovationEndpoints
 
         endpoints.MapPost("/api/federation/complete", (HttpContext context, FederationCoordinator federation) =>
         {
-            var body = new StreamReader(context.Request.Body).ReadToEnd();
+            using var reader = new StreamReader(context.Request.Body);
+            var body = reader.ReadToEnd();
             var request = JsonSerializer.Deserialize<Dictionary<string, string>>(body);
 
             if (request == null || !request.TryGetValue("task_id", out var taskId))

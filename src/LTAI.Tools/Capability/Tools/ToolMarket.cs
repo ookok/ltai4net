@@ -50,7 +50,7 @@ public sealed class ToolMarket
 
         try
         {
-            var result = await handler(inputData, _world);
+            var result = await handler(inputData, _world).ConfigureAwait(false);
             return new { success = true, data = result };
         }
         catch (Exception ex)

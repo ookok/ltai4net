@@ -178,7 +178,7 @@ public static class LoopUSIntegration
 
         while (true)
         {
-            var output = await llmFn(currentInput);
+            var output = await llmFn(currentInput).ConfigureAwait(false);
             var confidence = gate.EstimateConfidence(output, query, state.LoopCount);
 
             if (!gate.ShouldContinueLoop(state, output, confidence))

@@ -41,7 +41,7 @@ internal static class ImproveMode
         {
             Console.WriteLine("\n📚 Searching recent AI papers using WebSearchTools...\n");
             var searchAgent = new PaperSearchAgent();
-            paperList = await searchAgent.SearchRecentPapersAsync();
+            paperList = await searchAgent.SearchRecentPapersAsync().ConfigureAwait(false);
             
             Console.WriteLine($"Found {paperList.Count} relevant papers:");
             foreach (var p in paperList.Take(5))
@@ -64,7 +64,7 @@ internal static class ImproveMode
             if (paperList == null)
             {
                 var searchAgent = new PaperSearchAgent();
-                paperList = await searchAgent.SearchRecentPapersAsync();
+                paperList = await searchAgent.SearchRecentPapersAsync().ConfigureAwait(false);
             }
 
             Console.WriteLine("\n🔗 Matching innovations with architecture...\n");
@@ -82,21 +82,21 @@ internal static class ImproveMode
         if (auditReport != null)
         {
             var auditPath = Path.Combine(docDir, $"audit_{ts}.md");
-            await File.WriteAllTextAsync(auditPath, GenerateAuditDocument(auditReport), default);
+            await File.WriteAllTextAsync(auditPath, GenerateAuditDocument(auditReport), default).ConfigureAwait(false);
             Console.WriteLine($"\n📄 Audit report saved: {auditPath}");
         }
 
         if (paperList != null)
         {
             var papersPath = Path.Combine(docDir, $"papers_{ts}.md");
-            await File.WriteAllTextAsync(papersPath, GeneratePapersDocument(paperList), default);
+            await File.WriteAllTextAsync(papersPath, GeneratePapersDocument(paperList), default).ConfigureAwait(false);
             Console.WriteLine($"\n📄 Papers report saved: {papersPath}");
         }
 
         if (proposalDoc != null)
         {
             var proposalPath = Path.Combine(docDir, $"proposal_{ts}.md");
-            await File.WriteAllTextAsync(proposalPath, GenerateProposalDocument(proposalDoc), default);
+            await File.WriteAllTextAsync(proposalPath, GenerateProposalDocument(proposalDoc), default).ConfigureAwait(false);
             Console.WriteLine($"\n📄 Proposal document saved: {proposalPath}");
         }
 

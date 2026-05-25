@@ -51,7 +51,7 @@ public sealed class SelectiveThinkingPipeline
         while (generatedTokens < maxTokens && !ct.IsCancellationRequested)
         {
             // L1 尝试生成下一个 Token/片段
-            var l1Output = await _l1Engine.GenerateAsync(currentContext, temperature, maxTokens: 1, ct);
+            var l1Output = await _l1Engine.GenerateAsync(currentContext, temperature, maxTokens: 1, ct).ConfigureAwait(false);
             
             if (string.IsNullOrEmpty(l1Output))
                 break;
@@ -108,7 +108,7 @@ public sealed class SelectiveThinkingPipeline
                             var l2Response = await _l2Client.GetResponseAsync(
                                 new List<ChatMessage> { new(ChatRole.User, currentContext) },
                                 new ChatOptions { Temperature = 0.3f, MaxOutputTokens = 128 },
-                                ct);
+                                ct).ConfigureAwait(false);
 
                             var l2Text = l2Response.Text ?? "";
                             foreach (var l2Token in SplitIntoTokens(l2Text))
@@ -134,13 +134,13 @@ public sealed class SelectiveThinkingPipeline
                     case ThinkingState.Verifying:
                         _logger.LogDebug("🔍 Verifying generated content against prompt...");
                         
-                        var verificationResult = await VerifyConsistencyAsync(prompt, fullResponse.ToString(), ct);
+                        var verificationResult = await VerifyConsistencyAsync(prompt, fullResponse.ToString(), ct).ConfigureAwait(false);
                         if (!verificationResult.Passed)
                         {
                             _logger.LogWarning("⚠️ Verification failed: {Reason}. Triggering Self-Correction.", verificationResult.Reason);
                             
                             var correctionPrompt = $"{currentContext}\n[Verification Failed: {verificationResult.Reason}. Please correct the output to match the original intent.]";
-                            var corrected = await _l1Engine.GenerateAsync(correctionPrompt, temperature: 0.5f, maxTokens: 64, ct);
+                            var corrected = await _l1Engine.GenerateAsync(correctionPrompt, temperature: 0.5f, maxTokens: 64, ct).ConfigureAwait(false);
                             
                             if (!string.IsNullOrEmpty(corrected))
                             {

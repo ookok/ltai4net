@@ -26,10 +26,15 @@ public record CorrectionBatchResult
 /// Converts failed trajectories into correction-oriented supervision.
 /// When a model produces wrong output, the LLM generates a correction,
 /// creating (query, wrong, correct) triples for self-correction training.
+///
+/// GDN-2 Integrated: When Gdn2CorrectionGate is provided, the erase gate
+/// removes wrong associations from the recurrent state, and the write gate
+/// commits corrections directly — replacing the post-hoc LoRA approach.
 public sealed class CorrectionMemory
 {
     private readonly IChatClient _llm;
     private readonly SynapticMemory _synapticMemory;
+    private readonly Gdn2CorrectionGate? _correctionGate;
     private readonly ILogger<CorrectionMemory> _logger;
     private readonly List<CorrectionSample> _buffer = new();
     private readonly object _lock = new();
@@ -50,12 +55,14 @@ Correct Answer:";
         IChatClient llm,
         SynapticMemory synapticMemory,
         ILogger<CorrectionMemory>? logger = null,
-        int maxBufferSize = 500)
+        int maxBufferSize = 500,
+        Gdn2CorrectionGate? correctionGate = null)
     {
         _llm = llm;
         _synapticMemory = synapticMemory;
         _logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<CorrectionMemory>.Instance;
         _maxBufferSize = maxBufferSize;
+        _correctionGate = correctionGate;
     }
 
     /// Record a failed output for later correction
@@ -97,7 +104,7 @@ Correct Answer:";
                     sample.WrongOutput[..global::System.Math.Min(sample.WrongOutput.Length, 800)]);
 
                 var response = await _llm.GetResponseAsync(prompt,
-                    new ChatOptions { Temperature = 0.2f, MaxOutputTokens = 1000 }, ct);
+                    new ChatOptions { Temperature = 0.2f, MaxOutputTokens = 1000 }, ct).ConfigureAwait(false);
                 var corrected = response.Text ?? "";
 
                 if (string.IsNullOrWhiteSpace(corrected)) continue;
@@ -126,6 +133,23 @@ Correct Answer:";
                     trained++;
 
                     totalQuality += EstimateCorrectionQuality(sample.WrongOutput, correction);
+
+                    if (_correctionGate != null)
+                    {
+                        try
+                        {
+                            var queryEmb = Gdn2CorrectionGate.SimpleEmbed(sample.Query, 128);
+                            var wrongEmb = Gdn2CorrectionGate.SimpleEmbed(sample.WrongOutput, 128);
+                            var correctEmb = Gdn2CorrectionGate.SimpleEmbed(correction, 128);
+                            _correctionGate.ApplyCorrection("cipo", queryEmb, wrongEmb, correctEmb,
+                                sample.Query, sample.WrongOutput, correction);
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogWarning(ex, "GDN-2 correction gate failed for query: {Q}",
+                                sample.Query[..global::System.Math.Min(sample.Query.Length, 60)]);
+                        }
+                    }
                 }
 
                 sample.UsedForTraining = true;

@@ -222,7 +222,7 @@ public sealed class OnnxSmallLlmEngine : IL1InferenceEngine
         if (!_isReady || _session == null) return latent;
         
         // 简化实现：直接返回输入潜状态 (实际应执行前向传播)
-        await Task.Delay(1, ct);
+        await Task.Delay(1, ct).ConfigureAwait(false);
         return latent with { RecursionDepth = latent.RecursionDepth + 1 };
     }
 
@@ -230,7 +230,7 @@ public sealed class OnnxSmallLlmEngine : IL1InferenceEngine
     {
         if (!_isReady || _tokenizer == null) return "";
         
-        await Task.Delay(1, ct);
+        await Task.Delay(1, ct).ConfigureAwait(false);
         return "[ONNX Latent Decode - Placeholder]";
     }
 }

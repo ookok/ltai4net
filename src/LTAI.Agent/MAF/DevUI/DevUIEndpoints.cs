@@ -11,12 +11,23 @@ namespace LTAI.Agent;
 
 public static class DevUIEndpoints
 {
+    private static readonly JsonSerializerOptions _jsonIndentedCamelCase = new()
+    {
+        WriteIndented = true,
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+    };
+
+    private static readonly JsonSerializerOptions _jsonCamelCase = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+    };
+
     public static void MapDevUIEndpoints(this IEndpointRouteBuilder endpoints)
     {
         endpoints.MapGet("/devui", async (HttpContext context) =>
         {
             context.Response.ContentType = "text/html; charset=utf-8";
-            await context.Response.WriteAsync(DevUIHtml.Page);
+            await context.Response.WriteAsync(DevUIHtml.Page).ConfigureAwait(false);
         });
 
         endpoints.MapGet("/api/devui/state", async (HttpContext context) =>
@@ -89,7 +100,7 @@ public static class DevUIEndpoints
             };
 
             context.Response.ContentType = "application/json";
-            await context.Response.WriteAsync(JsonSerializer.Serialize(state, new JsonSerializerOptions { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase }));
+            await context.Response.WriteAsync(JsonSerializer.Serialize(state, _jsonIndentedCamelCase)).ConfigureAwait(false);
         });
 
         endpoints.MapGet("/api/devui/graph", async (HttpContext context) =>
@@ -180,7 +191,7 @@ public static class DevUIEndpoints
             var result = new { nodes, edges, project = Path.GetFileName(projectRoot.TrimEnd('/', '\\')), total_files = nodes.Count(n => !((dynamic)n).id.EndsWith("/")) };
 
             context.Response.ContentType = "application/json";
-            await context.Response.WriteAsync(JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = false, PropertyNamingPolicy = JsonNamingPolicy.CamelCase }));
+            await context.Response.WriteAsync(JsonSerializer.Serialize(result, _jsonCamelCase)).ConfigureAwait(false);
         });
 
         endpoints.MapGet("/api/devui/impact", async (HttpContext context) =>
@@ -214,7 +225,7 @@ public static class DevUIEndpoints
             {
                 try
                 {
-                    var process = new System.Diagnostics.Process
+                    using var process = new System.Diagnostics.Process
                     {
                         StartInfo = new System.Diagnostics.ProcessStartInfo
                         {
@@ -223,8 +234,8 @@ public static class DevUIEndpoints
                         }
                     };
                     process.Start();
-                    var output = await process.StandardOutput.ReadToEndAsync();
-                    await process.WaitForExitAsync();
+                    var output = await process.StandardOutput.ReadToEndAsync().ConfigureAwait(false);
+                    await process.WaitForExitAsync().ConfigureAwait(false);
                     changedFiles = output.Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(f => f.Trim()).ToList();
                 }
                 catch { }
@@ -244,7 +255,7 @@ public static class DevUIEndpoints
                 blast_radius = impact != null ? new { radius = impact.Radius, direct_callers = impact.DirectCallers, transitive = impact.TransitiveCallers, affected_files = impact.AffectedFiles, affected_tests = impact.AffectedTests } : null,
                 affected_nodes = affectedNodes,
                 files = changedFiles.Take(20)
-            }, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }));
+            }, _jsonCamelCase)).ConfigureAwait(false);
         });
 
         endpoints.MapGet("/api/devui/tour", async (HttpContext context) =>
@@ -290,7 +301,7 @@ public static class DevUIEndpoints
             }
 
             context.Response.ContentType = "application/json";
-            await context.Response.WriteAsync(JsonSerializer.Serialize(new { steps, total = steps.Count }, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }));
+            await context.Response.WriteAsync(JsonSerializer.Serialize(new { steps, total = steps.Count }, _jsonCamelCase)).ConfigureAwait(false);
         });
 
         endpoints.MapGet("/api/devui/agui-stream", async (HttpContext context) =>
@@ -308,13 +319,13 @@ public static class DevUIEndpoints
                 try
                 {
                     var sse = hub.RenderSseEvent(evt);
-                    await context.Response.WriteAsync(sse, context.RequestAborted);
-                    await context.Response.Body.FlushAsync(context.RequestAborted);
+                    await context.Response.WriteAsync(sse, context.RequestAborted).ConfigureAwait(false);
+                    await context.Response.Body.FlushAsync(context.RequestAborted).ConfigureAwait(false);
                 }
                 catch { }
             });
 
-            await tcs.Task;
+            await tcs.Task.ConfigureAwait(false);
         });
     }
 }

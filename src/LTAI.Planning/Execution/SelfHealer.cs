@@ -85,7 +85,7 @@ public class SelfHealer
         {
             try
             {
-                await _monitorTask;
+                await _monitorTask.ConfigureAwait(false);
             }
             catch (OperationCanceledException) { /* cancelled */ }
             catch (Exception) { /* non-fatal */ }
@@ -125,7 +125,7 @@ public class SelfHealer
 
         try
         {
-            var healthy = await checkFn(_cts?.Token ?? CancellationToken.None);
+            var healthy = await checkFn(_cts?.Token ?? CancellationToken.None).ConfigureAwait(false);
 
             if (healthy)
             {
@@ -148,7 +148,7 @@ public class SelfHealer
 
                 if (consecutive >= healthRecord.MaxFailures)
                 {
-                    await ExecuteRecovery(name, _cts?.Token ?? CancellationToken.None);
+                    await ExecuteRecovery(name, _cts?.Token ?? CancellationToken.None).ConfigureAwait(false);
                 }
             }
         }
@@ -186,7 +186,7 @@ public class SelfHealer
             {
                 tasks.Add(Task.Run(async () =>
                 {
-                    var result = await RunCheck(name);
+                    var result = await RunCheck(name).ConfigureAwait(false);
                     lock (results)
                     {
                         results[name] = result;
@@ -195,7 +195,7 @@ public class SelfHealer
             }
         }
 
-        await Task.WhenAll(tasks);
+        await Task.WhenAll(tasks).ConfigureAwait(false);
         return results;
     }
 
@@ -247,8 +247,8 @@ public class SelfHealer
         {
             try
             {
-                await RunAllChecks();
-                await Task.Delay(TimeSpan.FromSeconds(_checkInterval), cancellationToken);
+                await RunAllChecks().ConfigureAwait(false);
+                await Task.Delay(TimeSpan.FromSeconds(_checkInterval), cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
@@ -256,7 +256,7 @@ public class SelfHealer
             }
             catch (Exception)
             {
-                await Task.Delay(TimeSpan.FromSeconds(Math.Min(_checkInterval, 10)), cancellationToken);
+                await Task.Delay(TimeSpan.FromSeconds(Math.Min(_checkInterval, 10)), cancellationToken).ConfigureAwait(false);
             }
         }
     }
@@ -285,7 +285,7 @@ public class SelfHealer
 
                 try
                 {
-                    var success = await strategy(cancellationToken);
+                    var success = await strategy(cancellationToken).ConfigureAwait(false);
                     if (success)
                     {
                         action.MarkCompleted("recovery successful");

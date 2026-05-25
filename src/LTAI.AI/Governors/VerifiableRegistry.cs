@@ -2,12 +2,13 @@ using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using LiteDB;
+using Microsoft.Extensions.Logging;
 
 namespace LTAI.AI.Governors;
 
 public sealed class NumericMeasurement
 {
-    public ObjectId Id { get; set; }
+    public ObjectId Id { get; set; } = default!;
     public string Key { get; set; } = "";
     public string Condition { get; set; } = "";
     public double Value { get; set; }
@@ -23,7 +24,7 @@ public sealed class NumericMeasurement
 
 public sealed class CitationRecord
 {
-    public ObjectId Id { get; set; }
+    public ObjectId Id { get; set; } = default!;
     public string Title { get; set; } = "";
     public string? Doi { get; set; }
     public string? ArxivId { get; set; }
@@ -75,14 +76,16 @@ public sealed class VerifiableRegistry : IVerifiableRegistry
     private readonly ILiteCollection<NumericMeasurement> _measurements;
     private readonly ILiteCollection<CitationRecord> _citations;
     private readonly Lock _lock = new();
+    private readonly ILogger<VerifiableRegistry> _logger;
     private static readonly Regex NumberRegex = new(
         @"(?<!\w)([-+]?\d+\.?\d*(?:e[-+]?\d+)?)(?!\w)",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     public event Action<string, ClaimVerificationResult>? OnClaimRejected;
 
-    public VerifiableRegistry(string dbPath)
+    public VerifiableRegistry(string dbPath, ILogger<VerifiableRegistry>? logger = null)
     {
+        _logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<VerifiableRegistry>.Instance;
         _db = new LiteDatabase($"Filename={dbPath};Connection=Shared");
         _measurements = _db.GetCollection<NumericMeasurement>("measurements");
         _citations = _db.GetCollection<CitationRecord>("citations");
@@ -239,6 +242,6 @@ public sealed class VerifiableRegistry : IVerifiableRegistry
 
     public void Dispose()
     {
-        try { _db.Dispose(); } catch { }
+        try { _db.Dispose(); } catch (Exception ex) { _logger.LogWarning(ex, "Failed to dispose database in VerifiableRegistry"); }
     }
 }

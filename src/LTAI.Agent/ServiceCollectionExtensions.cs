@@ -1,5 +1,6 @@
 using LTAI.DNA.Safety;
 using LTAI.Models;
+using HarnessProfile = LTAI.Core.Configuration.HarnessProfile;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
@@ -23,7 +24,13 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IntentRouter>();
         services.AddSingleton<UnifiedSemanticRouter>();
         services.AddSingleton<UnifiedIntentRouter>();
-        services.AddSingleton<UniversalOrchestrator>();
+        services.AddSingleton<UniversalOrchestrator>(sp =>
+        {
+            var logger = sp.GetRequiredService<ILogger<UniversalOrchestrator>>();
+            var router = sp.GetRequiredService<UnifiedSemanticRouter>();
+            var harness = sp.GetService<HarnessProfile>();
+            return new UniversalOrchestrator(logger, router, harness);
+        });
         services.AddSingleton<ToolRetriever>();
         services.AddSingleton<PlannerCriticWorkflow>();
         services.AddSingleton<AgentParliament>();
@@ -110,12 +117,12 @@ public static class ServiceCollectionExtensions
                             logger.LogWarning("Safety warning for {Agent}: {Reason}", card.Name, gateVerdict.Reason);
                         }
 
-                        var response = await inner.RunAsync(messages, session, options, ct);
+                        var response = await inner.RunAsync(messages, session, options, ct).ConfigureAwait(false);
 
                         if (response.Text is not null)
                         {
                             var outputVerdict = await safetyGate.EvaluateOutputAsync(
-                                response.Text, sessionId, ct);
+                                response.Text, sessionId, ct).ConfigureAwait(false);
                             if (!outputVerdict.IsAllowed)
                                 return new AgentResponse(new ChatMessage(ChatRole.Assistant,
                                     $"[Safety] Output filtered: {outputVerdict.Reason}"));

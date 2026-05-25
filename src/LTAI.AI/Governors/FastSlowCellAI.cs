@@ -107,10 +107,10 @@ public sealed class FastSlowCellAI : IDisposable
         var domain = _cellRegistry.DetectDomain(query);
 
         // Fast loop: 使用动态上下文快速适应
-        var fastResult = await ProcessWithFastContextAsync(query, domain, ct);
+        var fastResult = await ProcessWithFastContextAsync(query, domain, ct).ConfigureAwait(false);
 
         // Slow loop: 使用模型进行深度推理
-        var slowResult = await ProcessWithSlowModelAsync(query, domain, ct);
+        var slowResult = await ProcessWithSlowModelAsync(query, domain, ct).ConfigureAwait(false);
 
         // 协同决策
         var combinedResult = CombineFastSlowResults(fastResult, slowResult, domain);
@@ -119,7 +119,7 @@ public sealed class FastSlowCellAI : IDisposable
         RecordInteraction(query, combinedResult, domain);
 
         // 检查是否需要更新
-        await CheckAndUpdateAsync(ct);
+        await CheckAndUpdateAsync(ct).ConfigureAwait(false);
 
         return combinedResult;
     }
@@ -282,19 +282,19 @@ public sealed class FastSlowCellAI : IDisposable
         // Fast update: 每 N 次交互更新快速上下文
         if (_totalInteractions % _config.FastUpdateInterval == 0)
         {
-            await UpdateFastContextsAsync(ct);
+            await UpdateFastContextsAsync(ct).ConfigureAwait(false);
         }
 
         // Slow update: 每 M 次交互更新慢速模型
         if (_totalInteractions % _config.SlowUpdateInterval == 0)
         {
-            await UpdateSlowModelsAsync(ct);
+            await UpdateSlowModelsAsync(ct).ConfigureAwait(false);
         }
 
         // Co-evolution: 快速上下文指导慢速训练
         if (_config.EnableCoEvolution && _totalInteractions % (_config.SlowUpdateInterval * 2) == 0)
         {
-            await CoEvolveAsync(ct);
+            await CoEvolveAsync(ct).ConfigureAwait(false);
         }
     }
 
@@ -335,7 +335,7 @@ public sealed class FastSlowCellAI : IDisposable
                 domain,
                 domainInteractions,
                 existingCandidates,
-                ct);
+                ct).ConfigureAwait(false);
 
             // 更新快速上下文
             foreach (var candidate in optimizedCandidates)
@@ -398,7 +398,7 @@ public sealed class FastSlowCellAI : IDisposable
             var domainSamples = domainGroup.ToList();
 
             // 触发 Cell AI 训练
-            var success = await _cellRegistry.TrainCellAsync(domain, ct);
+            var success = await _cellRegistry.TrainCellAsync(domain, ct).ConfigureAwait(false);
             if (success)
             {
                 _slowUpdates++;
@@ -422,7 +422,7 @@ public sealed class FastSlowCellAI : IDisposable
         var guidedSamples = SelectGuidedSamples(fastContexts);
 
         // 2. 使用慢速模型验证快速上下文质量
-        var contextQuality = await ValidateContextQualityAsync(fastContexts, ct);
+        var contextQuality = await ValidateContextQualityAsync(fastContexts, ct).ConfigureAwait(false);
 
         // 3. 更新低质量上下文
         foreach (var (context, quality) in contextQuality)
@@ -537,7 +537,7 @@ public sealed class FastSlowCellAI : IDisposable
             var successCount = 0;
             foreach (var episode in testEpisodes)
             {
-                var result = await ProcessWithFastContextAsync(episode.Query, context.Domain, ct);
+                var result = await ProcessWithFastContextAsync(episode.Query, context.Domain, ct).ConfigureAwait(false);
                 if (result.Activated && result.Confidence > 0.7f)
                 {
                     successCount++;

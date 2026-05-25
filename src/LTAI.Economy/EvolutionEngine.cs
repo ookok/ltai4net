@@ -90,10 +90,10 @@ public sealed class EvolutionEngine
             if (ct.IsCancellationRequested) break;
 
             _phase = EvolutionPhase.Generating;
-            var newCandidates = await GenerateCandidatesAsync(ct);
+            var newCandidates = await GenerateCandidatesAsync(ct).ConfigureAwait(false);
 
             _phase = EvolutionPhase.Evaluating;
-            var evaluated = await EvaluateBatchAsync(newCandidates, ct);
+            var evaluated = await EvaluateBatchAsync(newCandidates, ct).ConfigureAwait(false);
 
             foreach (var candidate in evaluated)
             {
@@ -234,7 +234,7 @@ public sealed class EvolutionEngine
                         new(ChatRole.System, systemPrompt),
                         new(ChatRole.User, prompt)
                     },
-                    cancellationToken: ct);
+                    cancellationToken: ct).ConfigureAwait(false);
 
                 var generatedCode = ExtractCodeBlock(response.Text ?? "");
 
@@ -282,7 +282,7 @@ public sealed class EvolutionEngine
             {
                 tasks.Add(Task.Run(async () =>
                 {
-                    var result = await _evaluator.EvaluateAsync(candidate, ct);
+                    var result = await _evaluator.EvaluateAsync(candidate, ct).ConfigureAwait(false);
                     return candidate with
                     {
                         CorrectnessScore = result.CorrectnessScore,
@@ -294,7 +294,7 @@ public sealed class EvolutionEngine
                 }, ct));
             }
 
-            var batchResults = await Task.WhenAll(tasks);
+            var batchResults = await Task.WhenAll(tasks).ConfigureAwait(false);
             evaluated.AddRange(batchResults);
             tasks.Clear();
         }

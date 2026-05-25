@@ -181,7 +181,7 @@ public sealed class HotPathObjectPool
         var sb = RentStringBuilder();
         try
         {
-            await buildAction(sb);
+            await buildAction(sb).ConfigureAwait(false);
             return sb.ToString();
         }
         finally

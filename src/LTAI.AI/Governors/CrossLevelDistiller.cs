@@ -86,7 +86,7 @@ public sealed class CrossLevelDistiller
                 // Get teacher (L2) response
                 var teacherResponse = await l2Client.GetResponseAsync(
                     new ChatMessage(ChatRole.User, sample.Text),
-                    cancellationToken: ct);
+                    cancellationToken: ct).ConfigureAwait(false);
                 var teacherText = teacherResponse.Text ?? "";
 
                 // Get student (L1) prediction before training
@@ -145,7 +145,7 @@ public sealed class CrossLevelDistiller
                 new TrainingSample { Text = d.text, Label = MapIndexToLabel(d.targetClass), Weight = 1.0f })
                 .ToList()
         };
-        await _loraManager.TrainAllTiersAsync(tieredSamples, ct);
+        await _loraManager.TrainAllTiersAsync(tieredSamples, ct).ConfigureAwait(false);
 
         var postTrainAcc = EvaluateAccuracy(studentNetwork, samples);
 

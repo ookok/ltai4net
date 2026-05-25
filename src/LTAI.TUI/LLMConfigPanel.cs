@@ -11,8 +11,6 @@ public sealed class LLMConfigPanel
     private string _selectedModel;
     private float _temperature = 0.3f;
     private int _maxTokens = 4096;
-    private string _providerFilter = "";
-
     public string SelectedModel => _selectedModel;
     public float Temperature => _temperature;
     public int MaxTokens => _maxTokens;

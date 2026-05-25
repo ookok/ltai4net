@@ -22,8 +22,8 @@ public sealed class HttpTools
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
         AddHeaders(request, headers);
-        var response = await _http.SendAsync(request, cancellationToken);
-        return await FormatResponse(response, cancellationToken);
+        var response = await _http.SendAsync(request, cancellationToken).ConfigureAwait(false);
+        return await FormatResponse(response, cancellationToken).ConfigureAwait(false);
     }
 
     [Description("Perform an HTTP POST request with a JSON body and return the response.")]
@@ -38,8 +38,8 @@ public sealed class HttpTools
             Content = new StringContent(body, Encoding.UTF8, "application/json")
         };
         AddHeaders(request, headers);
-        var response = await _http.SendAsync(request, cancellationToken);
-        return await FormatResponse(response, cancellationToken);
+        var response = await _http.SendAsync(request, cancellationToken).ConfigureAwait(false);
+        return await FormatResponse(response, cancellationToken).ConfigureAwait(false);
     }
 
     [Description("Download content from a URL and return base64-encoded data with content type. Useful for downloading images or files.")]
@@ -48,8 +48,8 @@ public sealed class HttpTools
         CancellationToken cancellationToken = default)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
-        var response = await _http.SendAsync(request, cancellationToken);
-        var bytes = await response.Content.ReadAsByteArrayAsync(cancellationToken);
+        var response = await _http.SendAsync(request, cancellationToken).ConfigureAwait(false);
+        var bytes = await response.Content.ReadAsByteArrayAsync(cancellationToken).ConfigureAwait(false);
         var contentType = response.Content.Headers.ContentType?.ToString() ?? "application/octet-stream";
         var base64 = Convert.ToBase64String(bytes);
         var preview = base64.Length > 200 ? base64[..200] + "..." : base64;
@@ -70,7 +70,7 @@ public sealed class HttpTools
         CancellationToken cancellationToken = default)
     {
         using var request = new HttpRequestMessage(HttpMethod.Head, url);
-        var response = await _http.SendAsync(request, cancellationToken);
+        var response = await _http.SendAsync(request, cancellationToken).ConfigureAwait(false);
         return JsonSerializer.Serialize(new
         {
             url,
@@ -95,7 +95,7 @@ public sealed class HttpTools
 
     private static async Task<string> FormatResponse(HttpResponseMessage response, CancellationToken ct)
     {
-        var text = await response.Content.ReadAsStringAsync(ct);
+        var text = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
         var contentType = response.Content.Headers.ContentType?.MediaType ?? "";
         if (text.Length > 20000) text = text[..20000] + $"\n... (truncated)";
 

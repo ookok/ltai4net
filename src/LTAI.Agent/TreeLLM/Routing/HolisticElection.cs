@@ -220,7 +220,7 @@ public sealed class HolisticElection
         CancellationToken ct)
     {
         var pingTasks = providers.Select(p => SimulatePingAsync(p, ct)).ToList();
-        var pingResults = await Task.WhenAll(pingTasks);
+        var pingResults = await Task.WhenAll(pingTasks).ConfigureAwait(false);
 
         var results = new List<ProviderScore>(providers.Count);
 
@@ -297,7 +297,7 @@ public sealed class HolisticElection
     private static async Task<double> SimulatePingAsync(string provider, CancellationToken ct)
     {
         var rng = Random.Shared;
-        await Task.Delay(rng.Next(50, 201), ct);
+        await Task.Delay(rng.Next(50, 201), ct).ConfigureAwait(false);
         return rng.Next(50, 201);
     }
 

@@ -28,7 +28,7 @@ public sealed class PredictivePrefetcher
         {
             try
             {
-                await _toolRetriever.RetrieveToolsAsync(predictedIntent, currentText, ct: ct);
+                await _toolRetriever.RetrieveToolsAsync(predictedIntent, currentText, ct: ct).ConfigureAwait(false);
                 _logger.LogDebug("Prefetcher: warmed tools for intent={Intent}", predictedIntent);
             }
             catch (Exception ex)

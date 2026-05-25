@@ -30,7 +30,7 @@ public sealed class DialecticalReasoner
             Antithesis = antithesis,
             Synthesis = synthesis,
             Critique = critique
-        });
+        }).ConfigureAwait(false);
     }
 
     private static string ExtractThesis(string topic)
@@ -145,7 +145,7 @@ public sealed class AttributionReasoner
             result.Confidence = 0.1;
         }
 
-        return await Task.FromResult(result);
+        return await Task.FromResult(result).ConfigureAwait(false);
     }
 
     private List<CausalLink> BuildEvidenceChain(string target, List<string> evidence)

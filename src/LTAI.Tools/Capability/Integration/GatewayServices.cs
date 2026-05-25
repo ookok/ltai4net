@@ -3,7 +3,7 @@ using Microsoft.Extensions.Logging;
 
 namespace LTAI.Tools.Integration;
 
-public sealed class TelegramBot
+public sealed class TelegramBot : IDisposable
 {
     private readonly HttpClient _http;
     private readonly ILogger<TelegramBot> _logger;
@@ -16,6 +16,8 @@ public sealed class TelegramBot
         _logger = logger;
         _token = token ?? Environment.GetEnvironmentVariable("LTAI_TELEGRAM_TOKEN") ?? "";
     }
+
+    public void Dispose() { _http?.Dispose(); }
 
     public async Task<bool> SendMessageAsync(long chatId, string text, CancellationToken ct = default)
     {
@@ -46,7 +48,7 @@ public sealed class TelegramBot
     public async Task<bool> SendCodeBlockAsync(long chatId, string code, string language = "", CancellationToken ct = default)
     {
         var msg = $"```{language}\n{code[..Math.Min(code.Length, 3500)]}\n```";
-        return await SendMessageAsync(chatId, msg, ct);
+        return await SendMessageAsync(chatId, msg, ct).ConfigureAwait(false);
     }
 
     public async Task<string?> GetUpdatesAsync(long offset = 0, CancellationToken ct = default)
@@ -62,7 +64,7 @@ public sealed class TelegramBot
     public bool IsConfigured => !string.IsNullOrEmpty(_token);
 }
 
-public sealed class WechatWorkNotifier
+public sealed class WechatWorkNotifier : IDisposable
 {
     private readonly HttpClient _http;
     private readonly ILogger<WechatWorkNotifier> _logger;
@@ -74,6 +76,8 @@ public sealed class WechatWorkNotifier
         _logger = logger;
         _webhookUrl = webhookUrl ?? Environment.GetEnvironmentVariable("LTAI_WEWORK_WEBHOOK") ?? "";
     }
+
+    public void Dispose() { _http?.Dispose(); }
 
     public async Task<bool> SendTextAsync(string content, List<string>? mentionedList = null, CancellationToken ct = default)
     {
@@ -108,7 +112,7 @@ public sealed class WechatWorkNotifier
     public async Task<bool> SendReviewReportAsync(string report, CancellationToken ct = default)
     {
         var msg = $"## Code Review Report\n\n{report[..Math.Min(report.Length, 3800)]}";
-        return await SendMarkdownAsync(msg, ct);
+        return await SendMarkdownAsync(msg, ct).ConfigureAwait(false);
     }
 
     public bool IsConfigured => !string.IsNullOrEmpty(_webhookUrl);
@@ -123,7 +127,7 @@ public sealed class AutoUpdater
     public AutoUpdater(ILogger<AutoUpdater> logger, string? updateUrl = null)
     {
         _logger = logger;
-        _currentVersion = "7.0.0";
+        _currentVersion = "0.51.0";
         _updateUrl = updateUrl ?? Environment.GetEnvironmentVariable("LTAI_UPDATE_URL") ?? "";
     }
 
@@ -135,7 +139,7 @@ public sealed class AutoUpdater
         try
         {
             using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
-            var json = await http.GetStringAsync(_updateUrl, ct);
+            var json = await http.GetStringAsync(_updateUrl, ct).ConfigureAwait(false);
             var doc = JsonDocument.Parse(json);
             var latestVersion = doc.RootElement.TryGetProperty("version", out var v) ? v.GetString() ?? "" : "";
             var downloadUrl = doc.RootElement.TryGetProperty("download_url", out var d) ? d.GetString() ?? "" : "";
@@ -162,8 +166,8 @@ public sealed class AutoUpdater
         try
         {
             using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
-            var bytes = await http.GetByteArrayAsync(downloadUrl, ct);
-            await File.WriteAllBytesAsync(savePath, bytes, ct);
+            var bytes = await http.GetByteArrayAsync(downloadUrl, ct).ConfigureAwait(false);
+            await File.WriteAllBytesAsync(savePath, bytes, ct).ConfigureAwait(false);
             _logger.LogInformation("Update downloaded: {Size} bytes to {Path}", bytes.Length, savePath);
             return true;
         }
@@ -202,15 +206,15 @@ public sealed class UnifiedNotifier
         var tasks = new List<Task<bool>>();
         if (_telegram?.IsConfigured == true) tasks.Add(_telegram.SendMessageAsync(0, message, ct));
         if (_wework?.IsConfigured == true) tasks.Add(_wework.SendTextAsync(message, ct: ct));
-        if (tasks.Count > 0) await Task.WhenAll(tasks);
+        if (tasks.Count > 0) await Task.WhenAll(tasks).ConfigureAwait(false);
         _logger.LogInformation("Notified {Count} channels", tasks.Count);
     }
 
     public async Task NotifyReviewAsync(string report, CancellationToken ct = default)
     {
         if (_wework?.IsConfigured == true)
-            await _wework.SendReviewReportAsync(report, ct);
+            await _wework.SendReviewReportAsync(report, ct).ConfigureAwait(false);
         if (_telegram?.IsConfigured == true)
-            await _telegram.SendMarkdownAsync(0, report, ct);
+            await _telegram.SendMarkdownAsync(0, report, ct).ConfigureAwait(false);
     }
 }

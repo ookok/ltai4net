@@ -6,23 +6,18 @@ namespace LTAI.Knowledge.Services;
 
 public sealed class CodeGraphSyncService : BackgroundService
 {
-    private readonly CodeGraph _codeGraph;
-    private readonly CodeGraphEnhanced _codeGraphEnhanced;
+    private readonly CodeGraphEnhanced _codeGraph;
     private readonly ILogger<CodeGraphSyncService> _logger;
     private readonly TimeSpan _indexInterval;
     private readonly string _watchPath;
     private FileSystemWatcher? _watcher;
-    private DateTime _lastGitSync = DateTime.MinValue;
-    private static readonly TimeSpan GitSyncCooldown = TimeSpan.FromMinutes(15);
 
     public CodeGraphSyncService(
-        CodeGraph codeGraph,
-        CodeGraphEnhanced codeGraphEnhanced,
+        CodeGraphEnhanced codeGraph,
         ILogger<CodeGraphSyncService> logger,
         string? watchPath = null)
     {
         _codeGraph = codeGraph;
-        _codeGraphEnhanced = codeGraphEnhanced;
         _logger = logger;
         _watchPath = watchPath ?? Directory.GetCurrentDirectory();
         _indexInterval = TimeSpan.FromMinutes(30);
@@ -32,8 +27,8 @@ public sealed class CodeGraphSyncService : BackgroundService
     {
         _logger.LogInformation("CodeGraphSyncService: Started, watchPath={Path}", _watchPath);
 
-        await Task.Delay(TimeSpan.FromSeconds(10), ct);
-        await FullIndexAsync(ct);
+        await Task.Delay(TimeSpan.FromSeconds(10), ct).ConfigureAwait(false);
+        await FullIndexAsync(ct).ConfigureAwait(false);
 
         SetupFileWatcher(ct);
 
@@ -41,8 +36,7 @@ public sealed class CodeGraphSyncService : BackgroundService
         {
             try
             {
-                await Task.Delay(_indexInterval, ct);
-                await IncrementalUpdateAsync();
+                await Task.Delay(_indexInterval, ct).ConfigureAwait(false);
             }
             catch (OperationCanceledException) { break; }
             catch (Exception ex) { _logger.LogWarning(ex, "CodeGraphSyncService: Periodic update failed"); }
@@ -56,37 +50,14 @@ public sealed class CodeGraphSyncService : BackgroundService
         try
         {
             _logger.LogInformation("CodeGraphSyncService: Full indexing started");
-            await _codeGraph.IndexAsync();
-            var hubs = _codeGraph.FindHubs(5);
-            _logger.LogInformation("CodeGraphSyncService: Simple graph indexed, hubs={Hubs}", hubs.Count);
-
-            await _codeGraphEnhanced.IndexAsync();
-            _logger.LogInformation("CodeGraphSyncService: Enhanced graph indexed");
+            await _codeGraph.IndexAsync().ConfigureAwait(false);
+            var status = _codeGraph.GetStatus();
+            _logger.LogInformation("CodeGraphSyncService: Graph indexed, nodes={Nodes} files={Files}",
+                status.GetValueOrDefault("total_nodes"), status.GetValueOrDefault("files_indexed"));
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "CodeGraphSyncService: Full index failed");
-        }
-    }
-
-    private async Task IncrementalUpdateAsync()
-    {
-        try
-        {
-            if (DateTime.UtcNow - _lastGitSync > GitSyncCooldown)
-            {
-                var gitDir = Path.GetDirectoryName(_watchPath);
-                if (Directory.Exists(Path.Combine(gitDir ?? _watchPath, ".git")))
-                {
-                    await _codeGraph.IncrementalUpdateFromGitAsync();
-                    _lastGitSync = DateTime.UtcNow;
-                    _logger.LogDebug("CodeGraphSyncService: Git incremental update done");
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogDebug(ex, "CodeGraphSyncService: Incremental update skipped");
         }
     }
 
@@ -96,16 +67,18 @@ public sealed class CodeGraphSyncService : BackgroundService
 
         try
         {
-            _watcher = new FileSystemWatcher(_watchPath, "*.cs")
+            var extensions = new[] { "*.cs", "*.ts", "*.tsx", "*.js", "*.jsx", "*.py", "*.rs", "*.go", "*.java", "*.cpp", "*.c", "*.h", "*.fs", "*.fsx" };
+            _watcher = new FileSystemWatcher(_watchPath)
             {
                 IncludeSubdirectories = true,
                 NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName,
                 EnableRaisingEvents = true
             };
+            foreach (var ext in extensions) _watcher.Filters.Add(ext);
 
-            _watcher.Changed += (_, e) => DebouncedReindex();
-            _watcher.Created += (_, e) => DebouncedReindex();
-            _watcher.Renamed += (_, e) => DebouncedReindex();
+            _watcher.Changed += (_, _) => DebouncedReindex();
+            _watcher.Created += (_, _) => DebouncedReindex();
+            _watcher.Renamed += (_, _) => DebouncedReindex();
 
             ct.Register(() => _watcher?.Dispose());
         }
@@ -119,12 +92,12 @@ public sealed class CodeGraphSyncService : BackgroundService
     private async void DebouncedReindex()
     {
         _lastFileChange = DateTime.UtcNow;
-        await Task.Delay(3000);
+        await Task.Delay(3000).ConfigureAwait(false);
         if ((DateTime.UtcNow - _lastFileChange).TotalSeconds < 2) return;
 
         try
         {
-            await _codeGraph.IndexAsync();
+            await _codeGraph.IndexAsync().ConfigureAwait(false);
             _logger.LogDebug("CodeGraphSyncService: Re-indexed after file change");
         }
         catch (Exception ex) { _logger.LogDebug(ex, "CodeGraphSyncService: Debounced reindex failed"); }

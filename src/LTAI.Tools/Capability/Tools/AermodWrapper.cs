@@ -8,10 +8,10 @@ internal static class HttpClientExtensions
 {
     public static async Task DownloadFileAsync(this HttpClient client, string url, string path)
     {
-        using var response = await client.GetAsync(url);
+        using var response = await client.GetAsync(url).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
         await using var fs = new FileStream(path, FileMode.Create);
-        await response.Content.CopyToAsync(fs);
+        await response.Content.CopyToAsync(fs).ConfigureAwait(false);
     }
 }
 
@@ -39,7 +39,7 @@ public sealed class AermodWrapper
             var url = "https://gaftp.epa.gov/Air/aqmg/SCRAM/models/preferred/aermod/aermod_exe.zip";
             var zipPath = Path.Combine(_toolsDir, "aermod_exe.zip");
 
-            await _http.DownloadFileAsync(url, zipPath);
+            await _http.DownloadFileAsync(url, zipPath).ConfigureAwait(false);
             ZipFile.ExtractToDirectory(zipPath, _toolsDir, true);
 
             return IsInstalled;
@@ -62,7 +62,7 @@ public sealed class AermodWrapper
         try
         {
             var inpPath = Path.Combine(runDir, "aermod.inp");
-            await File.WriteAllTextAsync(input.GenerateInputFile(), inpPath, ct);
+            await File.WriteAllTextAsync(input.GenerateInputFile(), inpPath, ct).ConfigureAwait(false);
 
             var psi = new ProcessStartInfo
             {
@@ -77,9 +77,9 @@ public sealed class AermodWrapper
             using var proc = Process.Start(psi);
             if (proc == null) return new AermodResult { Error = "Failed to start AERMOD" };
 
-            var stdout = await proc.StandardOutput.ReadToEndAsync(ct);
-            var stderr = await proc.StandardError.ReadToEndAsync(ct);
-            await proc.WaitForExitAsync(ct);
+            var stdout = await proc.StandardOutput.ReadToEndAsync(ct).ConfigureAwait(false);
+            var stderr = await proc.StandardError.ReadToEndAsync(ct).ConfigureAwait(false);
+            await proc.WaitForExitAsync(ct).ConfigureAwait(false);
 
             return AermodResultParser.ParseOutput(stdout, stderr, proc.ExitCode);
         }

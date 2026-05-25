@@ -84,7 +84,7 @@ public static class DNAEndpoints
             HttpContext context, DNAOrchestrator dna, CancellationToken ct) =>
         {
             using var reader = new StreamReader(context.Request.Body);
-            var body = await reader.ReadToEndAsync(ct);
+            var body = await reader.ReadToEndAsync(ct).ConfigureAwait(false);
             var request = JsonSerializer.Deserialize<Dictionary<string, string>>(body);
             if (request != null && request.TryGetValue("posture", out var postureStr) &&
                 Enum.TryParse<LTAI.DNA.Models.SafetyPosture>(postureStr, true, out var posture))

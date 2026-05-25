@@ -70,7 +70,7 @@ public sealed class UnifiedSemanticRouter
         _routeEmbeddings = new float[RouteDefinitions.Length][];
         for (int i = 0; i < RouteDefinitions.Length; i++)
         {
-            _routeEmbeddings[i] = await _vectorStore.EmbedAsync(RouteDefinitions[i].Description, ct);
+            _routeEmbeddings[i] = await _vectorStore.EmbedAsync(RouteDefinitions[i].Description, ct).ConfigureAwait(false);
         }
         _initialized = true;
         _logger.LogInformation("UnifiedSemanticRouter: initialized {Count} route embeddings", RouteDefinitions.Length);
@@ -89,7 +89,7 @@ public sealed class UnifiedSemanticRouter
         {
             try
             {
-                var queryEmbedding = await _vectorStore.EmbedAsync(text, ct);
+                var queryEmbedding = await _vectorStore.EmbedAsync(text, ct).ConfigureAwait(false);
                 for (int i = 0; i < RouteDefinitions.Length; i++)
                 {
                     var score = CosineSimilarity(queryEmbedding, _routeEmbeddings[i]);

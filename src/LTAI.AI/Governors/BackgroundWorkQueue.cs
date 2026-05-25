@@ -73,7 +73,7 @@ public sealed class BackgroundWorkQueue : IAsyncDisposable
                     _logger?.LogDebug("BackgroundWorkQueue: stale item ({Age:F0}s): {Description}",
                         age.TotalSeconds, item.Description);
 
-                await item.Work(_cts.Token);
+                await item.Work(_cts.Token).ConfigureAwait(false);
                 Interlocked.Increment(ref _completed);
             }
             catch (OperationCanceledException) { break; }

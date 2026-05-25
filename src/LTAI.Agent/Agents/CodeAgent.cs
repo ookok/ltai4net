@@ -61,7 +61,7 @@ public sealed class CodeAgent : BaseAgent
 
                 try
                 {
-                    var content = await File.ReadAllTextAsync(fp, ct);
+                    var content = await File.ReadAllTextAsync(fp, ct).ConfigureAwait(false);
                     var truncated = content.Length > 10000
                         ? content[..10000] + $"\n... ({content.Length} total chars)"
                         : content;
@@ -96,13 +96,13 @@ public sealed class CodeAgent : BaseAgent
 
         _logger.LogInformation("CodeAgent [{Name}]: Analyzing {FileCount} files", Name, filePaths.Count);
 
-        return await CallBrainWithCorrectionAsync(enhancedMessages, ct);
+        return await CallBrainWithCorrectionAsync(enhancedMessages, ct).ConfigureAwait(false);
     }
 
     private async Task<AgentResponse> CallBrainWithCorrectionAsync(
         List<ChatMessage> messages, CancellationToken ct, int maxAttempts = 2)
     {
-        var response = await CallBrainAsync(messages, ct: ct);
+        var response = await CallBrainAsync(messages, ct: ct).ConfigureAwait(false);
         var text = response.Text ?? "";
 
         for (int attempt = 0; attempt < maxAttempts; attempt++)
@@ -115,7 +115,7 @@ public sealed class CodeAgent : BaseAgent
 
             messages.Add(new(ChatRole.Assistant, text));
             messages.Add(new(ChatRole.User, $"Review feedback: {validationFeedback}\nPlease address these issues."));
-            response = await CallBrainAsync(messages, ct: ct);
+            response = await CallBrainAsync(messages, ct: ct).ConfigureAwait(false);
             text = response.Text ?? "";
         }
 
@@ -231,7 +231,7 @@ internal sealed class DefaultCodeAnalysisStrategy : IAnalysisStrategy<AgentConte
         {
             new(ChatRole.User, $"Code analysis: {context.UserQuery}")
         };
-        var response = await _brain.GetResponseAsync(messages, cancellationToken: ct);
+        var response = await _brain.GetResponseAsync(messages, cancellationToken: ct).ConfigureAwait(false);
         return new AgentResponse(new ChatMessage(ChatRole.Assistant, response.Text ?? ""));
     }
 }

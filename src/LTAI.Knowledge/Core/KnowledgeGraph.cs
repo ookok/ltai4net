@@ -1,7 +1,9 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
+using LTAI.Core.System;
 using LTAI.Knowledge.Core.Models;
+using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging;
 
 namespace LTAI.Knowledge.Core;
@@ -13,60 +15,82 @@ public class KnowledgeGraph : IDisposable
     private readonly List<Triplet> _triplets = new();
     private readonly ReaderWriterLockSlim _lock = new();
     private readonly ILogger<KnowledgeGraph> _logger;
-    private readonly CancellationTokenSource _saveCts = new();
-    private Task? _saveLoop;
-    private volatile int _dirtyCount;
+    private readonly SqliteConnection _db;
+    private bool _disposed;
 
-    public KnowledgeGraph(ILogger<KnowledgeGraph> logger)
+    public KnowledgeGraph(ILogger<KnowledgeGraph> logger, DataPathResolver? dataPath = null, string? dbPath = null)
     {
         _logger = logger;
-        _saveLoop = Task.Run(() => PeriodicSaveLoop(_saveCts.Token));
-    }
+        var effectivePath = dbPath
+            ?? dataPath?.GetPath("knowledge_graph.db")
+            ?? Path.Combine(AppContext.BaseDirectory, ".livingtree", "knowledge_graph.db");
+        var dir = Path.GetDirectoryName(effectivePath);
+        if (dir != null) Directory.CreateDirectory(dir);
+        _db = new SqliteConnection($"Data Source={effectivePath}");
+        _db.Open();
+        InitializeSchema();
 
-    private async Task PeriodicSaveLoop(CancellationToken ct)
-    {
-        while (!ct.IsCancellationRequested)
+        var jsonPath = Path.Combine(dir ?? ".livingtree", "knowledge_graph.json");
+        if (File.Exists(jsonPath))
         {
-            try
-            {
-                await Task.Delay(TimeSpan.FromMinutes(5), ct);
-                if (_dirtyCount > 0)
-                {
-                    await SaveToDiskAsync();
-                    _dirtyCount = 0;
-                    _logger.LogDebug("KnowledgeGraph: Auto-saved ({Count} dirty operations)", _dirtyCount);
-                }
-            }
-            catch (OperationCanceledException) { break; }
-            catch (Exception ex) { _logger.LogWarning(ex, "KnowledgeGraph auto-save failed"); }
+            LoadFromDisk(jsonPath);
+            try { File.Delete(jsonPath); } catch (Exception ex) { _logger.LogWarning(ex, "KnowledgeGraph: Failed to delete legacy JSON file"); }
         }
     }
 
-    public void MarkDirty() => Interlocked.Increment(ref _dirtyCount);
+    private void InitializeSchema()
+    {
+        using var cmd = _db.CreateCommand();
+        cmd.CommandText = """
+            CREATE TABLE IF NOT EXISTS entities (
+                id TEXT PRIMARY KEY, label TEXT, properties TEXT);
+            CREATE TABLE IF NOT EXISTS triplets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                subject TEXT, predicate TEXT, object TEXT, confidence REAL, source_text TEXT);
+            CREATE VIRTUAL TABLE IF NOT EXISTS entities_fts USING fts5(
+                id, label, content=entities, content_rowid=rowid);
+            CREATE TABLE IF NOT EXISTS relations (
+                source_id TEXT, target_id TEXT, relation TEXT,
+                PRIMARY KEY (source_id, target_id, relation));
+            CREATE INDEX IF NOT EXISTS idx_triplets_subject ON triplets(subject);
+            CREATE INDEX IF NOT EXISTS idx_triplets_object ON triplets(object);
+            CREATE INDEX IF NOT EXISTS idx_triplets_pred ON triplets(predicate);
+            """;
+        cmd.ExecuteNonQuery();
+    }
 
     public void AddEntity(Entity entity)
     {
         _lock.EnterWriteLock();
-        try { AddEntityUnsafe(entity); }
+        try { PersistEntity(entity); }
         finally { _lock.ExitWriteLock(); }
     }
 
-    private void AddEntityUnsafe(Entity entity)
+    private void PersistEntity(Entity entity)
     {
         _nodesIndex[entity.Id] = entity;
         _adjacency.TryAdd(entity.Id, new());
-        MarkDirty();
+
+        using var cmd = _db.CreateCommand();
+        cmd.CommandText = "INSERT OR REPLACE INTO entities VALUES (@id, @label, @props)";
+        cmd.Parameters.AddWithValue("@id", entity.Id);
+        cmd.Parameters.AddWithValue("@label", entity.Label);
+        cmd.Parameters.AddWithValue("@props",
+            entity.Properties != null
+                ? System.Text.Json.JsonSerializer.Serialize(entity.Properties)
+                : DBNull.Value);
+        cmd.ExecuteNonQuery();
     }
 
     public void AddRelation(string sourceId, string targetId, string relation,
         Dictionary<string, object>? properties = null)
     {
         _lock.EnterWriteLock();
-        try { AddRelationUnsafe(sourceId, targetId, relation, properties); }
+        try { PersistRelation(sourceId, targetId, relation, properties); }
         finally { _lock.ExitWriteLock(); }
     }
 
-    private void AddRelationUnsafe(string sourceId, string targetId, string relation,
+    private void PersistRelation(string sourceId, string targetId, string relation,
         Dictionary<string, object>? properties = null)
     {
         if (!_nodesIndex.ContainsKey(sourceId))
@@ -78,44 +102,191 @@ public class KnowledgeGraph : IDisposable
         _adjacency[sourceId].TryAdd(relation, new());
         if (!_adjacency[sourceId][relation].Contains(targetId))
             _adjacency[sourceId][relation].Add(targetId);
+
+        using var cmd = _db.CreateCommand();
+        cmd.CommandText = "INSERT OR REPLACE INTO relations VALUES (@sid, @tid, @rel)";
+        cmd.Parameters.AddWithValue("@sid", sourceId);
+        cmd.Parameters.AddWithValue("@tid", targetId);
+        cmd.Parameters.AddWithValue("@rel", relation);
+        cmd.ExecuteNonQuery();
     }
 
     public async Task SaveToDiskAsync(string? path = null)
     {
-        path ??= Path.Combine(AppContext.BaseDirectory, ".livingtree", "knowledge_graph.json");
-        var dir = Path.GetDirectoryName(path);
-        if (dir != null) Directory.CreateDirectory(dir);
-        var data = new Dictionary<string, object>
-        {
-            ["entities"] = _nodesIndex,
-            ["triplets"] = _triplets.Select(t => new { t.Subject, t.Predicate, t.Object, t.Confidence }).ToList(),
-            ["saved_at"] = DateTimeOffset.UtcNow.ToUnixTimeSeconds()
-        };
-        await File.WriteAllTextAsync(path, System.Text.Json.JsonSerializer.Serialize(data));
+        _ = path;
+        await Task.CompletedTask.ConfigureAwait(false);
     }
 
     public void LoadFromDisk(string? path = null)
     {
-        path ??= Path.Combine(AppContext.BaseDirectory, ".livingtree", "knowledge_graph.json");
-        if (!File.Exists(path)) return;
+        if (path != null && File.Exists(path))
+        {
+            LoadFromJsonFile(path);
+            return;
+        }
+
+        LoadFromSqlite();
+    }
+
+    private void LoadFromJsonFile(string path)
+    {
         try
         {
             var json = File.ReadAllText(path);
             var doc = System.Text.Json.JsonDocument.Parse(json);
             var root = doc.RootElement;
-            if (root.TryGetProperty("entities", out var entities))
-                foreach (var e in entities.EnumerateArray()) { var ent = new Entity(e.GetProperty("id").GetString() ?? "", e.GetProperty("label").GetString() ?? ""); AddEntity(ent); }
-            if (root.TryGetProperty("triplets", out var triplets))
-                foreach (var t in triplets.EnumerateArray())
+
+            _lock.EnterWriteLock();
+            try
+            {
+                if (root.TryGetProperty("entities", out var entities))
                 {
-                    var triplet = new Triplet(t.GetProperty("subject").GetString() ?? "", t.GetProperty("predicate").GetString() ?? "", t.GetProperty("object").GetString() ?? "", Confidence: t.TryGetProperty("confidence", out var c) && c.TryGetDouble(out var conf) ? conf : 0.5);
-                    AddTripletsToGraph(new() { triplet });
+                    foreach (var e in entities.EnumerateArray())
+                    {
+                        var ent = new Entity(
+                            e.GetProperty("id").GetString() ?? "",
+                            e.GetProperty("label").GetString() ?? "");
+                        PersistEntity(ent);
+                    }
                 }
+                if (root.TryGetProperty("triplets", out var triplets))
+                {
+                    foreach (var t in triplets.EnumerateArray())
+                    {
+                        var subj = t.GetProperty("subject").GetString() ?? "";
+                        var pred = t.GetProperty("predicate").GetString() ?? "";
+                        var obj = t.GetProperty("object").GetString() ?? "";
+                        var conf = t.TryGetProperty("confidence", out var c) && c.TryGetDouble(out var d) ? d : 0.5;
+                        var triplet = new Triplet(subj, pred, obj, Confidence: conf);
+                        PersistTriplet(triplet);
+                    }
+                }
+            }
+            finally { _lock.ExitWriteLock(); }
+
+            _logger.LogInformation("KnowledgeGraph: Imported from JSON, migrated to SQLite");
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Failed to load knowledge graph from disk: {Path}", path);
+            _logger.LogWarning(ex, "Failed to import knowledge graph from JSON: {Path}", path);
         }
+    }
+
+    private void LoadFromSqlite()
+    {
+        _lock.EnterWriteLock();
+        try
+        {
+            _nodesIndex.Clear();
+            _adjacency.Clear();
+            _triplets.Clear();
+
+            using (var cmd = _db.CreateCommand())
+            {
+                cmd.CommandText = "SELECT id, label, properties FROM entities";
+                using var reader = cmd.ExecuteReader();
+                while (reader.Read())
+                {
+                    var ent = new Entity(reader.GetString(0), reader.GetString(1));
+                    if (!reader.IsDBNull(2))
+                    {
+                        try
+                        {
+                            var props = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, object?>>(reader.GetString(2));
+                            var propInfo = typeof(Entity).GetProperty("Properties");
+                            if (propInfo != null && props != null)
+                                propInfo.SetValue(ent, props);
+                        }
+                        catch (Exception ex) { _logger.LogWarning(ex, "KnowledgeGraph: Failed to deserialize entity properties"); }
+                    }
+                }
+            }
+
+            using (var cmd = _db.CreateCommand())
+            {
+                cmd.CommandText = "SELECT source_id, target_id, relation FROM relations";
+                using var reader = cmd.ExecuteReader();
+                while (reader.Read())
+                {
+                    var sid = reader.GetString(0);
+                    var tid = reader.GetString(1);
+                    var rel = reader.GetString(2);
+                    _adjacency.TryAdd(sid, new());
+                    _adjacency[sid].TryAdd(rel, new());
+                    if (!_adjacency[sid][rel].Contains(tid))
+                        _adjacency[sid][rel].Add(tid);
+                }
+            }
+
+            using (var cmd = _db.CreateCommand())
+            {
+                cmd.CommandText = "SELECT subject, predicate, object, confidence, source_text FROM triplets";
+                using var reader = cmd.ExecuteReader();
+                while (reader.Read())
+                {
+                    _triplets.Add(new Triplet(
+                        reader.GetString(0), reader.GetString(1), reader.GetString(2),
+                        reader.IsDBNull(4) ? null! : reader.GetString(4),
+                        reader.GetDouble(3)));
+                }
+            }
+        }
+        finally { _lock.ExitWriteLock(); }
+    }
+
+    public List<Triplet> SearchTriplets(string query, int limit = 20)
+    {
+        _lock.EnterReadLock();
+        try
+        {
+            var results = new List<Triplet>();
+            using var cmd = _db.CreateCommand();
+            cmd.CommandText = "SELECT subject, predicate, object, confidence, source_text FROM triplets WHERE subject LIKE @q OR predicate LIKE @q OR object LIKE @q LIMIT @limit";
+            cmd.Parameters.AddWithValue("@q", $"%{query}%");
+            cmd.Parameters.AddWithValue("@limit", limit);
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                results.Add(new Triplet(
+                    reader.GetString(0), reader.GetString(1), reader.GetString(2),
+                    reader.IsDBNull(4) ? null! : reader.GetString(4),
+                    reader.GetDouble(3)));
+            }
+            return results;
+        }
+        finally { _lock.ExitReadLock(); }
+    }
+
+    public List<Entity> SearchEntities(string query, int limit = 20)
+    {
+        _lock.EnterReadLock();
+        try
+        {
+            var results = new List<Entity>();
+            using var cmd = _db.CreateCommand();
+            cmd.CommandText = "SELECT e.id, e.label, e.properties FROM entities e JOIN entities_fts f ON e.rowid = f.rowid WHERE entities_fts MATCH @q ORDER BY rank LIMIT @limit";
+            cmd.Parameters.AddWithValue("@q", $"\"{query}\"");
+            cmd.Parameters.AddWithValue("@limit", limit);
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                var ent = new Entity(reader.GetString(0), reader.GetString(1));
+                if (!reader.IsDBNull(2))
+                {
+                    try
+                    {
+                        var props = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, object?>>(reader.GetString(2));
+                        var propInfo = typeof(Entity).GetProperty("Properties");
+                        if (propInfo != null && props != null)
+                            propInfo.SetValue(ent, props);
+                    }
+                    catch (Exception ex) { _logger.LogWarning(ex, "KnowledgeGraph: Failed to deserialize entity properties in search"); }
+                }
+                results.Add(ent);
+            }
+            return results;
+        }
+        finally { _lock.ExitReadLock(); }
     }
 
     public List<Dictionary<string, object>> QueryGraph(Dictionary<string, object> filter)
@@ -252,17 +423,31 @@ public class KnowledgeGraph : IDisposable
             int count = 0;
             foreach (var t in triplets)
             {
-                var sId = EntityId(t.Subject);
-                var oId = EntityId(t.Object);
-                AddEntityUnsafe(new Entity(sId, t.Subject));
-                AddEntityUnsafe(new Entity(oId, t.Object));
-                AddRelationUnsafe(sId, oId, t.Predicate);
-                _triplets.Add(t);
+                PersistTriplet(t);
                 count++;
             }
             return count;
         }
         finally { _lock.ExitWriteLock(); }
+    }
+
+    private void PersistTriplet(Triplet t)
+    {
+        var sId = EntityId(t.Subject);
+        var oId = EntityId(t.Object);
+        PersistEntity(new Entity(sId, t.Subject));
+        PersistEntity(new Entity(oId, t.Object));
+        PersistRelation(sId, oId, t.Predicate);
+        _triplets.Add(t);
+
+        using var cmd = _db.CreateCommand();
+        cmd.CommandText = "INSERT INTO triplets (subject, predicate, object, confidence, source_text) VALUES (@s, @p, @o, @c, @src)";
+        cmd.Parameters.AddWithValue("@s", t.Subject);
+        cmd.Parameters.AddWithValue("@p", t.Predicate);
+        cmd.Parameters.AddWithValue("@o", t.Object);
+        cmd.Parameters.AddWithValue("@c", t.Confidence);
+        cmd.Parameters.AddWithValue("@src", (object?)t.SourceText ?? DBNull.Value);
+        cmd.ExecuteNonQuery();
     }
 
     public List<Triplet> GetTriplets()
@@ -289,12 +474,17 @@ public class KnowledgeGraph : IDisposable
                     byType[rel] = byType.GetValueOrDefault(rel) + targets.Count;
                 }
 
+            long dbSize = 0;
+            try { dbSize = new FileInfo(_db.DataSource).Length; } catch (Exception ex) { _logger.LogWarning(ex, "KnowledgeGraph: Failed to get DB file size"); }
+
             return new()
             {
                 ["entity_count"] = _nodesIndex.Count,
                 ["edge_count"] = edges,
                 ["by_relation_type"] = byType,
-                ["triplet_count"] = _triplets.Count
+                ["triplet_count"] = _triplets.Count,
+                ["storage"] = "SQLite",
+                ["db_size_bytes"] = dbSize
             };
         }
         finally { _lock.ExitReadLock(); }
@@ -364,9 +554,10 @@ public class KnowledgeGraph : IDisposable
 
     public void Dispose()
     {
-        _saveCts.Cancel();
-        try { SaveToDiskAsync().GetAwaiter().GetResult(); } catch { }
-        _saveCts.Dispose();
+        if (_disposed) return;
+        _disposed = true;
         _lock.Dispose();
+        _db.Close();
+        _db.Dispose();
     }
 }

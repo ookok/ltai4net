@@ -22,8 +22,8 @@ public static class UnderstandDiffTool
             };
             using var process = Process.Start(psi);
             if (process == null) return "Failed to start git process.";
-            var output = await process.StandardOutput.ReadToEndAsync();
-            await process.WaitForExitAsync();
+            var output = await process.StandardOutput.ReadToEndAsync().ConfigureAwait(false);
+            await process.WaitForExitAsync().ConfigureAwait(false);
 
             var files = output.Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(f => f.Trim()).ToList();
             if (files.Count == 0) return "No changes detected since last commit.";

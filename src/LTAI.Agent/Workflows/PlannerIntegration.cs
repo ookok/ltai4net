@@ -28,12 +28,12 @@ public sealed class PlannerIntegration
     {
         _logger.LogInformation("PlannerIntegration: Planning for domain={Domain} intent={Intent}", domain, intent);
 
-        var refinedPlan = await _diffusionPlanner.Refine(intent, domain, llmCall, cancellationToken);
+        var refinedPlan = await _diffusionPlanner.Refine(intent, domain, llmCall, cancellationToken).ConfigureAwait(false);
 
         if (refinedPlan.Confidence < 0.5)
         {
             _logger.LogWarning("PlannerIntegration: Diffusion plan confidence low ({Conf:F2}), falling back to GTSM", refinedPlan.Confidence);
-            return await ExecuteGtsmPlan(task, domain, cancellationToken);
+            return await ExecuteGtsmPlan(task, domain, cancellationToken).ConfigureAwait(false);
         }
 
         _logger.LogInformation("PlannerIntegration: Diffusion plan ready (conf={Conf:F2}, tools={ToolCount})",

@@ -19,13 +19,13 @@ public sealed class LivingCompiler
         if (path != null && !path.IsStale)
         {
             path.LastUsed = DateTime.UtcNow;
-            var nativeResult = await ExecuteCompiled(path, query, hubChat);
+            var nativeResult = await ExecuteCompiled(path, query, hubChat).ConfigureAwait(false);
             nativeResult["compile_mode"] = "native";
             nativeResult["intent_confidence"] = confidence;
             return nativeResult;
         }
 
-        var fullResult = await ExecuteFullPipeline(query, hubChat);
+        var fullResult = await ExecuteFullPipeline(query, hubChat).ConfigureAwait(false);
         CompileFromExecution(intentHash, query, fullResult);
         fullResult["compile_mode"] = "cold";
         fullResult["intent_confidence"] = confidence;
@@ -93,7 +93,7 @@ public sealed class LivingCompiler
     private async Task<Dictionary<string, object>> ExecuteFullPipeline(string query,
         Func<string, Task<Dictionary<string, object>>> hubChat)
     {
-        return await hubChat(query);
+        return await hubChat(query).ConfigureAwait(false);
     }
 
     public int RecompileStale()

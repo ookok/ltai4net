@@ -35,7 +35,7 @@ public sealed class PublicApisResource
 
         try
         {
-            var md = await _http.GetStringAsync(RepoUrl);
+            var md = await _http.GetStringAsync(RepoUrl).ConfigureAwait(false);
             ParseReadme(md);
             _loaded = true;
         }

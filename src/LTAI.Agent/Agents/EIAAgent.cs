@@ -89,7 +89,7 @@ public sealed class EIAAgent : BaseAgent
 
         _logger.LogInformation("EIAAgent [{Name}]: Enhanced prompt with {WarnCount} pre-check warnings", Name, preCheck.Count);
 
-        var response = await CallBrainAsync(enhancedMessages, ct: ct);
+        var response = await CallBrainAsync(enhancedMessages, ct: ct).ConfigureAwait(false);
         var responseText = response.Text ?? "";
         var complianceResult = AuditEiaResponse(responseText);
 

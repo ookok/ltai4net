@@ -63,15 +63,15 @@ public sealed class IncrementalRuleExtractor
             var episodes = domainGroup.ToList();
 
             // 提取新规则
-            var newRules = await ExtractNewRulesAsync(episodes, domain, ct);
+            var newRules = await ExtractNewRulesAsync(episodes, domain, ct).ConfigureAwait(false);
             deltas.AddRange(newRules);
 
             // 检查是否需要更新现有规则
-            var updates = await FindUpdatesAsync(episodes, domain, ct);
+            var updates = await FindUpdatesAsync(episodes, domain, ct).ConfigureAwait(false);
             deltas.AddRange(updates);
 
             // 检查是否需要合并相似规则
-            var merges = await FindMergesAsync(domain, ct);
+            var merges = await FindMergesAsync(domain, ct).ConfigureAwait(false);
             deltas.AddRange(merges);
         }
 
@@ -114,7 +114,7 @@ public sealed class IncrementalRuleExtractor
             }
 
             // 提取高阶模式
-            var metaRules = await ExtractMetaRulesFromLessonsAsync(currentLessons, domain, depth, ct);
+            var metaRules = await ExtractMetaRulesFromLessonsAsync(currentLessons, domain, depth, ct).ConfigureAwait(false);
             metaDeltas.AddRange(metaRules);
 
             _logger.LogInformation(
@@ -145,22 +145,22 @@ public sealed class IncrementalRuleExtractor
                 switch (delta.Kind)
                 {
                     case DeltaKind.Add:
-                        await ApplyAddDeltaAsync(delta, ct);
+                        await ApplyAddDeltaAsync(delta, ct).ConfigureAwait(false);
                         applied++;
                         break;
 
                     case DeltaKind.Update:
-                        await ApplyUpdateDeltaAsync(delta, ct);
+                        await ApplyUpdateDeltaAsync(delta, ct).ConfigureAwait(false);
                         applied++;
                         break;
 
                     case DeltaKind.Delete:
-                        await ApplyDeleteDeltaAsync(delta, ct);
+                        await ApplyDeleteDeltaAsync(delta, ct).ConfigureAwait(false);
                         applied++;
                         break;
 
                     case DeltaKind.Merge:
-                        await ApplyMergeDeltaAsync(delta, ct);
+                        await ApplyMergeDeltaAsync(delta, ct).ConfigureAwait(false);
                         applied++;
                         break;
                 }

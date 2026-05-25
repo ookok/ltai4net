@@ -20,7 +20,7 @@ public record EntityRelation(string FromId, string ToId, string Relation, double
 public record DailyBrief(DateTime Date, Dictionary<string, int> Stats, List<string> Highlights,
     List<string> Transitions, List<string> Recommendations);
 
-public sealed class KnowledgeForager
+public sealed class KnowledgeForager : IDisposable
 {
     private readonly ConcurrentDictionary<string, FoodSource> _foodMap = new();
     private readonly ConcurrentDictionary<string, EntityNode> _entities = new();
@@ -40,6 +40,8 @@ public sealed class KnowledgeForager
         LoadFoodMap();
         LoadGraph();
     }
+
+    public void Dispose() { _client?.Dispose(); }
 
     public void RegisterSite(string domain, string url, string category, int scanHours = 24, int priority = 5)
     {
@@ -65,8 +67,8 @@ public sealed class KnowledgeForager
             {
                 var request = new HttpRequestMessage(HttpMethod.Get, source.Url);
                 request.Headers.Add("User-Agent", "Mozilla/5.0 (compatible; LTAI-Forager/1.0)");
-                var response = await _client.SendAsync(request);
-                var html = await response.Content.ReadAsStringAsync();
+                var response = await _client.SendAsync(request).ConfigureAwait(false);
+                var html = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
                 var items = DigestResults(html, source.Category);
                 result[source.Domain] = items;
             }

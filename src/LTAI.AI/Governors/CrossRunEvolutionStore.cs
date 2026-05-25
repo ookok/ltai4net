@@ -1,4 +1,5 @@
 using LiteDB;
+using Microsoft.Extensions.Logging;
 
 namespace LTAI.AI.Governors;
 
@@ -20,7 +21,7 @@ public enum LessonCategory
 
 public sealed class EvolutionLesson
 {
-    public ObjectId Id { get; set; }
+    public ObjectId Id { get; set; } = default!;
     public string Category { get; set; } = "";
     public float Severity { get; set; }
     public string Summary { get; set; } = "";
@@ -58,10 +59,12 @@ public sealed class CrossRunEvolutionStore : ICrossRunEvolutionStore
     private readonly ILiteCollection<EvolutionLesson> _lessons;
     private readonly Lock _lock = new();
     private readonly double _halfLifeDays;
+    private readonly ILogger<CrossRunEvolutionStore> _logger;
 
-    public CrossRunEvolutionStore(string dbPath, double halfLifeDays = 30)
+    public CrossRunEvolutionStore(string dbPath, double halfLifeDays = 30, ILogger<CrossRunEvolutionStore>? logger = null)
     {
         _halfLifeDays = halfLifeDays;
+        _logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<CrossRunEvolutionStore>.Instance;
         _db = new LiteDatabase($"Filename={dbPath};Connection=Shared");
         _lessons = _db.GetCollection<EvolutionLesson>("evolution_lessons");
         _lessons.EnsureIndex(x => x.Category);
@@ -196,6 +199,6 @@ public sealed class CrossRunEvolutionStore : ICrossRunEvolutionStore
 
     public void Dispose()
     {
-        try { _db.Dispose(); } catch { }
+        try { _db.Dispose(); } catch (Exception ex) { _logger.LogWarning(ex, "Failed to dispose database in CrossRunEvolutionStore"); }
     }
 }

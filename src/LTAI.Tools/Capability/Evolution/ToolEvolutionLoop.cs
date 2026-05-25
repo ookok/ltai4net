@@ -66,8 +66,8 @@ public sealed class ToolEvolutionLoop : BackgroundService
         {
             try
             {
-                await Task.Delay(_checkInterval, stoppingToken);
-                await EvolveFailingToolsAsync(stoppingToken);
+                await Task.Delay(_checkInterval, stoppingToken).ConfigureAwait(false);
+                await EvolveFailingToolsAsync(stoppingToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
@@ -111,7 +111,7 @@ public sealed class ToolEvolutionLoop : BackgroundService
                     continue;
                 }
 
-                var ok = await EvolveSingleToolAsync(entry, ct);
+                var ok = await EvolveSingleToolAsync(entry, ct).ConfigureAwait(false);
                 if (ok) evolved++;
             }
             catch (Exception ex)
@@ -133,7 +133,7 @@ public sealed class ToolEvolutionLoop : BackgroundService
         var failing = _lifecycle.GetFailing(0.3, minInvocations: 5).ToList();
         foreach (var tool in failing)
             _logger.LogInformation("ToolEvolution DryRun: {Tool} eligible (errorRate={Rate:P2})", tool.Name, 1.0 - tool.SuccessRate);
-        await Task.CompletedTask;
+        await Task.CompletedTask.ConfigureAwait(false);
     }
 
     public Dictionary<string, object> GetStats() => new()

@@ -107,7 +107,7 @@ public sealed class EnvironmentTools
             {
                 var sw = Stopwatch.StartNew();
                 using var ping = new System.Net.NetworkInformation.Ping();
-                var reply = await ping.SendPingAsync(pingHost, 3000);
+                var reply = await ping.SendPingAsync(pingHost, 3000).ConfigureAwait(false);
                 sw.Stop();
                 result["ping"] = new { host = pingHost, status = reply.Status.ToString(), roundtripMs = sw.ElapsedMilliseconds, address = reply.Address?.ToString() };
             }

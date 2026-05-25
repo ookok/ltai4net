@@ -77,7 +77,9 @@ public sealed partial class ThreeModelIntelligence
         if (string.IsNullOrEmpty(model)) return;
         var config = LTAI.Core.Configuration.ProviderRegistry.ResolveConfig(providerName, model, "");
         if (config != null)
+#pragma warning disable CS0618
             _embeddingBackend = new APIEmbeddingBackend(null, config.Endpoint, config.ApiKey, config.Model);
+#pragma warning restore CS0618
     }
 
     public void ConfigureL0Embedding(LTAI.Core.Configuration.IProviderRegistry registry, LTAI.Core.Configuration.AIConfig aiConfig)
@@ -87,13 +89,17 @@ public sealed partial class ThreeModelIntelligence
 
         if (aiConfig.Providers.TryGetValue(l0.Provider, out var configured))
         {
+#pragma warning disable CS0618
             _embeddingBackend = new APIEmbeddingBackend(null, configured.Endpoint, configured.ApiKey, l0.Model);
+#pragma warning restore CS0618
             return;
         }
 
         var config = registry.ResolveConfig(l0.Provider, l0.Model);
         if (config != null)
+#pragma warning disable CS0618
             _embeddingBackend = new APIEmbeddingBackend(null, config.Endpoint, config.ApiKey, config.Model);
+#pragma warning restore CS0618
     }
 
     public async Task<string?> SpinalReflexAsync(string query)
@@ -111,7 +117,7 @@ public sealed partial class ThreeModelIntelligence
 
         if (_reflexEmbeddings.Count > 0)
         {
-            var queryEmbed = await GetEmbeddingAsync(query);
+            var queryEmbed = await GetEmbeddingAsync(query).ConfigureAwait(false);
             if (queryEmbed != null)
             {
                 var best = FindBestVectorMatch(queryEmbed);
@@ -129,7 +135,7 @@ public sealed partial class ThreeModelIntelligence
             _ => new ReflexRule { Pattern = pattern, Response = response, HitCount = 0, LastHit = DateTime.UtcNow },
             (_, r) => { r.Response = response; r.HitCount = 0; r.LastHit = DateTime.UtcNow; return r; });
 
-        var embed = await GetEmbeddingAsync(pattern);
+        var embed = await GetEmbeddingAsync(pattern).ConfigureAwait(false);
         if (embed != null)
             _reflexEmbeddings[pattern] = embed;
     }
@@ -159,7 +165,7 @@ public sealed partial class ThreeModelIntelligence
 
         try
         {
-            var results = await _embeddingBackend.EmbedAsync(new[] { text });
+            var results = await _embeddingBackend.EmbedAsync(new[] { text }).ConfigureAwait(false);
             return results.Length > 0 ? results[0] : null;
         }
         catch { return null; }
@@ -187,7 +193,7 @@ public sealed partial class ThreeModelIntelligence
 
         var label = complexity < 0.3 ? "reflex" : complexity < 0.6 ? "fast" : "reasoning";
         var emotion = _DetectEmotion(query);
-        var matchedReflex = await SpinalReflexAsync(query);
+        var matchedReflex = await SpinalReflexAsync(query).ConfigureAwait(false);
 
         return new TriageResult
         {

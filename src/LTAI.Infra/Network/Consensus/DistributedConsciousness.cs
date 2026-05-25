@@ -276,7 +276,7 @@ public sealed class DistributedConsciousness
         };
 
         var json = JsonSerializer.Serialize(state, new JsonSerializerOptions { WriteIndented = true });
-        await File.WriteAllTextAsync(path, json, cancellationToken);
+        await File.WriteAllTextAsync(path, json, cancellationToken).ConfigureAwait(false);
 
         _logger.LogInformation("State saved to {Path}: {FragmentCount} fragments, {InstanceCount} known instances",
             path, _fragments.Count, _knownInstances.Count);
@@ -290,7 +290,7 @@ public sealed class DistributedConsciousness
             return;
         }
 
-        var json = await File.ReadAllTextAsync(path, cancellationToken);
+        var json = await File.ReadAllTextAsync(path, cancellationToken).ConfigureAwait(false);
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
 

@@ -6,6 +6,7 @@ using LTAI.Core.Configuration;
 using LTAI.Core.Governors;
 using LTAI.Core.Messaging;
 using LTAI.Core.Network;
+using LTAI.Core.System;
 using LTAI.Knowledge.Core;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
@@ -30,12 +31,14 @@ public static class ServiceCollectionExtensions
                 logger);
         });
         services.AddSingleton<BudgetTracker>();
+        services.AddSingleton<PrefixCacheStore>();
 
         services.AddSingleton<IChatClient>(sp =>
         {
             var options = sp.GetRequiredService<IOptions<LTAIOptions>>();
             var loggerFactory = sp.GetRequiredService<ILoggerFactory>();
             var budget = sp.GetRequiredService<BudgetTracker>();
+            var prefixCache = sp.GetRequiredService<PrefixCacheStore>();
             var multiLogger = sp.GetService<ILogger<MultiProviderChatClient>>();
 
             var providerClients = new List<KeyValuePair<string, IChatClient>>();
@@ -53,7 +56,7 @@ public static class ServiceCollectionExtensions
                     providerClients.Add(new KeyValuePair<string, IChatClient>(kv.Key, providerClient));
             }
 
-            var multiClient = new MultiProviderChatClient(providerClients, options, multiLogger!, budget);
+            var multiClient = new MultiProviderChatClient(providerClients, options, multiLogger!, budget, prefixCache);
 
             var pipeline = new ChatClientBuilder(multiClient)
                 .UseLogging(loggerFactory)
@@ -82,12 +85,9 @@ public static class ServiceCollectionExtensions
 
         services.AddSingleton<KnowledgeGraph>(sp =>
         {
-            var logger = sp.GetService<ILogger<KnowledgeGraph>>();
-            var graph = new LTAI.Knowledge.Core.KnowledgeGraph(logger!);
-            var graphPath = System.IO.Path.Combine(AppContext.BaseDirectory, ".livingtree", "knowledge_graph.json");
-            if (System.IO.File.Exists(graphPath))
-                graph.LoadFromDisk(graphPath);
-            return graph;
+            var logger = sp.GetRequiredService<ILogger<KnowledgeGraph>>();
+            var dataPath = sp.GetRequiredService<DataPathResolver>();
+            return new LTAI.Knowledge.Core.KnowledgeGraph(logger, dataPath);
         });
 
         var synapticDir = System.IO.Path.Combine(AppContext.BaseDirectory, "synaptic");
@@ -190,8 +190,11 @@ public static class ServiceCollectionExtensions
             var llm = sp.GetRequiredService<IChatClient>();
             var synapticMemory = sp.GetRequiredService<SynapticMemory>();
             var logger = sp.GetService<ILogger<CorrectionMemory>>();
-            return new CorrectionMemory(llm, synapticMemory, logger);
+            var correctionGate = sp.GetService<Gdn2CorrectionGate>();
+            return new CorrectionMemory(llm, synapticMemory, logger, correctionGate: correctionGate);
         });
+
+        services.AddSingleton<Gdn2CorrectionGate>(_ => new Gdn2CorrectionGate(dimK: 128, dimV: 128, maxStates: 32));
 
         services.AddSingleton<SelfCorrectionLoRA>(sp =>
         {
@@ -312,8 +315,9 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<KnowledgeGraphBridge>(sp =>
         {
             var graph = sp.GetRequiredService<KnowledgeGraph>();
+            var llm = sp.GetService<IChatClient>();
             var logger = sp.GetService<ILogger<KnowledgeGraphBridge>>();
-            return new KnowledgeGraphBridge(graph, logger);
+            return new KnowledgeGraphBridge(graph, llm, logger);
         });
 
         services.AddSingleton<MetaCognitiveLayer>(sp =>

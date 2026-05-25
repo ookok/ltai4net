@@ -47,7 +47,7 @@ public sealed class EventBus : IEventBus
         lock (_lock) { _handlers.TryGetValue(typeof(TMessage), out handler); }
 
         if (handler is Func<TMessage, CancellationToken, Task<TResponse>> typedHandler)
-            return await typedHandler(message, ct);
+            return await typedHandler(message, ct).ConfigureAwait(false);
 
         throw new InvalidOperationException($"No handler registered for {typeof(TMessage).Name}");
     }

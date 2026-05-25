@@ -62,7 +62,7 @@ public sealed class FfmpegMediaProcessor
 
         try
         {
-            await global::System.IO.File.WriteAllBytesAsync(inputFile, videoData);
+            await global::System.IO.File.WriteAllBytesAsync(inputFile, videoData).ConfigureAwait(false);
             var args = $"-i \"{inputFile}\" -vn -acodec pcm_s16le -ar {sampleRate} -ac 1 -f {outputFormat} \"{outputFile}\" -y";
 
             var psi = new global::System.Diagnostics.ProcessStartInfo
@@ -74,11 +74,11 @@ public sealed class FfmpegMediaProcessor
 
             using var process = global::System.Diagnostics.Process.Start(psi);
             if (process == null) return new MediaResult { Error = "Could not start FFmpeg" };
-            await process.WaitForExitAsync();
+            await process.WaitForExitAsync().ConfigureAwait(false);
 
             if (process.ExitCode == 0 && global::System.IO.File.Exists(outputFile))
             {
-                var audioData = await global::System.IO.File.ReadAllBytesAsync(outputFile);
+                var audioData = await global::System.IO.File.ReadAllBytesAsync(outputFile).ConfigureAwait(false);
                 return new MediaResult
                 {
                     Ok = true, Data = audioData, Format = outputFormat,
@@ -110,7 +110,7 @@ public sealed class FfmpegMediaProcessor
 
         try
         {
-            await global::System.IO.File.WriteAllBytesAsync(inputFile, audioData);
+            await global::System.IO.File.WriteAllBytesAsync(inputFile, audioData).ConfigureAwait(false);
             var args = $"-i \"{inputFile}\" -ar 16000 -ac 1 \"{outputFile}\" -y";
 
             var psi = new global::System.Diagnostics.ProcessStartInfo
@@ -122,10 +122,10 @@ public sealed class FfmpegMediaProcessor
 
             using var process = global::System.Diagnostics.Process.Start(psi);
             if (process == null) return new MediaResult { Error = "Could not start FFmpeg" };
-            await process.WaitForExitAsync();
+            await process.WaitForExitAsync().ConfigureAwait(false);
 
             if (process.ExitCode == 0 && global::System.IO.File.Exists(outputFile))
-                return new MediaResult { Ok = true, Data = await global::System.IO.File.ReadAllBytesAsync(outputFile), Format = outputFormat };
+                return new MediaResult { Ok = true, Data = await global::System.IO.File.ReadAllBytesAsync(outputFile).ConfigureAwait(false), Format = outputFormat };
 
             return new MediaResult { Error = "FFmpeg conversion failed" };
         }

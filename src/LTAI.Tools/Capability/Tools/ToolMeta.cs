@@ -32,7 +32,7 @@ public sealed class ToolMeta
 Your position on the topic '{topic}' is: {pos}
 
 State your position clearly (2-3 sentences):";
-            var response = await chatFn(role, prompt);
+            var response = await chatFn(role, prompt).ConfigureAwait(false);
             positions[role] = response;
         }
 

@@ -173,8 +173,8 @@ public sealed class DocumentStore : IDisposable
         var doc = GetDocument(docId);
         if (doc == null) return;
 
-        var embed = await _vectorStore.EmbedAsync(doc.Content);
-        await _vectorStore.AddVectorsAsync(new[] { (docId, embed) });
+        var embed = await _vectorStore.EmbedAsync(doc.Content).ConfigureAwait(false);
+        await _vectorStore.AddVectorsAsync(new[] { (docId, embed) }).ConfigureAwait(false);
     }
 
     public DocumentEntity? GetDocument(string docId)
@@ -203,14 +203,14 @@ public sealed class DocumentStore : IDisposable
     public async Task<List<KnowledgeSearchResult>> Search(string query, string? domain = null, int topK = 10)
     {
         var ftsResults = SearchFts(query, domain, topK * 2);
-        var vectorResults = await SearchVectorAsync(query, topK * 2);
+        var vectorResults = await SearchVectorAsync(query, topK * 2).ConfigureAwait(false);
         return RrfMerge(ftsResults, vectorResults).Take(topK).ToList();
     }
 
     public async Task<List<KnowledgeSearchResult>> SearchWithRerank(string query, string? domain = null, int topK = 10)
     {
         var ftsResults = SearchFts(query, domain, topK * 3);
-        var vectorResults = await SearchVectorAsync(query, topK * 3);
+        var vectorResults = await SearchVectorAsync(query, topK * 3).ConfigureAwait(false);
         var merged = RrfMerge(ftsResults, vectorResults).Take(topK * 2).ToList();
 
         var scoredDocs = merged.Select(r => new Bm25ScoredDoc
@@ -284,8 +284,8 @@ public sealed class DocumentStore : IDisposable
     {
         try
         {
-            var queryVec = await _vectorStore.EmbedAsync(query);
-            var vectorResults = await _vectorStore.SearchSimilarAsync(queryVec, topK);
+            var queryVec = await _vectorStore.EmbedAsync(query).ConfigureAwait(false);
+            var vectorResults = await _vectorStore.SearchSimilarAsync(queryVec, topK).ConfigureAwait(false);
 
             return vectorResults.Select(r =>
             {
@@ -393,7 +393,7 @@ public sealed class DocumentStore : IDisposable
             stats.TotalRelations = Convert.ToInt32(cmd.ExecuteScalar() ?? 0);
         }
 
-        var vs = await _vectorStore.GetStatsAsync();
+        var vs = await _vectorStore.GetStatsAsync().ConfigureAwait(false);
         stats.TotalVectors = vs.TotalVectors;
 
         var dbPath = _conn.DataSource;

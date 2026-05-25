@@ -24,7 +24,7 @@ public sealed class LTAIMetricsCollector : IDisposable
 
     public LTAIMetricsCollector()
     {
-        _meter = new Meter("LTAI", "7.0.0");
+        _meter = new Meter("LTAI", "0.51.0");
 
         _requestCounter = _meter.CreateCounter<long>("ltai_requests_total", description: "Total request count");
         _tokenCounter = _meter.CreateCounter<long>("ltai_tokens_total", description: "Total tokens processed");

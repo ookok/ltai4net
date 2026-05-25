@@ -28,7 +28,7 @@ public class Program
         app.Configure(config =>
         {
             config.SetApplicationName("ltai");
-            config.SetApplicationVersion("v7.0");
+            config.SetApplicationVersion("V0.51");
 
             config.Settings.CaseSensitivity = CaseSensitivity.None;
             config.Settings.StrictParsing = false;
@@ -54,6 +54,14 @@ public class Program
                 .WithExample("debug")
                 .WithExample("debug", "--count", "50")
                 .WithExample("debug", "--query", "\"What is LTAI?\"");
+
+            config.AddCommand<AutoFixCommand>("auto-fix")
+                .WithDescription("LLM-driven debugging with root-cause tracing (no logs needed)")
+                .WithAlias("fix")
+                .WithExample("auto-fix", "--target", "src/LTAI.Agent")
+                .WithExample("auto-fix", "--target", "src/LTAI.Agent", "--analyze")
+                .WithExample("auto-fix", "--target", "src/LTAI.Agent", "--attempts", "5")
+                .WithExample("auto-fix", "--target", "src/LTAI.Agent/SomeFile.cs", "--scan");
 
             config.AddCommand<ImproveCommand>("improve")
                 .WithDescription("Architecture audit + paper-driven innovation proposals")
@@ -90,13 +98,13 @@ public class Program
                 .WithExample("compat");
         });
 
-        return await app.RunAsync(args);
+        return await app.RunAsync(args).ConfigureAwait(false);
     }
 
     private static async Task<int> RunSetupAsync()
     {
         var wizard = new InteractiveSetupWizard(Path.Combine(AppContext.BaseDirectory, "appsettings.json"));
-        await wizard.RunAsync();
+        await wizard.RunAsync().ConfigureAwait(false);
         return 0;
     }
 }
