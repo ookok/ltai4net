@@ -29,6 +29,20 @@ public sealed class ContextBudget
 
     public int EstimateTokens(string text) => TokenCounter.Estimate(text);
 
+    /// <summary>
+    /// Create a per-session budget instance with the same max settings as the global.
+    /// Prefer this for multi-turn conversations to avoid cross-session contamination.
+    /// </summary>
+    public static BudgetState CreateSessionBudget(int maxTokens = 50000, int maxTurns = 20)
+    {
+        return new BudgetState
+        {
+            MaxTokens = maxTokens,
+            MaxTurns = maxTurns,
+            TurnCount = 0
+        };
+    }
+
     public void Reset()
     {
         lock (_stateLock)

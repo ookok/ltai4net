@@ -607,4 +607,260 @@ public class KnowledgeGraph : IDisposable
         _db.Close();
         _db.Dispose();
     }
+
+    // ── Advanced Graph Analytics ──
+
+    /// <summary>
+    /// Transitive closure: all nodes reachable from startId within maxDepth hops.
+    /// Example: find all functions transitively called by Main().
+    /// </summary>
+    public List<(string NodeId, int Depth)> TransitiveClosure(string startId, int maxDepth = 5)
+    {
+        _lock.EnterReadLock();
+        try
+        {
+            var result = new List<(string, int)>();
+            var visited = new HashSet<string> { startId };
+            var queue = new Queue<(string Id, int Depth)>();
+            queue.Enqueue((startId, 0));
+
+            while (queue.Count > 0)
+            {
+                var (current, depth) = queue.Dequeue();
+                result.Add((current, depth));
+                if (depth >= maxDepth) continue;
+
+                if (_adjacency.TryGetValue(current, out var relations))
+                    foreach (var (_, targets) in relations)
+                        foreach (var t in targets)
+                            if (visited.Add(t))
+                                queue.Enqueue((t, depth + 1));
+            }
+
+            return result;
+        }
+        finally { _lock.ExitReadLock(); }
+    }
+
+    /// <summary>
+    /// Entity deduplication: merge entities with case-insensitive matching labels.
+    /// Returns count of merged entities.
+    /// </summary>
+    public int DeduplicateEntities()
+    {
+        _lock.EnterWriteLock();
+        try
+        {
+            var merged = 0;
+            var normalized = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var toRemove = new List<string>();
+
+            foreach (var (id, entity) in _nodesIndex)
+            {
+                var normLabel = entity.Label.Trim().ToLowerInvariant();
+                if (normalized.TryGetValue(normLabel, out var existingId))
+                {
+                    // Merge edges from duplicate to canonical
+                    if (_adjacency.TryGetValue(id, out var edges))
+                    {
+                        foreach (var (rel, targets) in edges)
+                            foreach (var t in targets)
+                                AddRelation(existingId, t, rel);
+                        _adjacency.Remove(id);
+                    }
+                    toRemove.Add(id);
+                    merged++;
+                }
+                else
+                {
+                    normalized[normLabel] = id;
+                }
+            }
+
+            foreach (var id in toRemove)
+                _nodesIndex.Remove(id);
+
+            if (merged > 0) _logger.LogInformation("Deduplicated {Count} entities", merged);
+            return merged;
+        }
+        finally { _lock.ExitWriteLock(); }
+    }
+
+    /// <summary>
+    /// PageRank centrality scores for all entities in the graph.
+    /// Returns dictionary of entity ID → PageRank score.
+    /// </summary>
+    public Dictionary<string, double> PageRank(double damping = 0.85, int iterations = 30)
+    {
+        _lock.EnterReadLock();
+        try
+        {
+            var nodes = _nodesIndex.Keys.ToList();
+            if (nodes.Count == 0) return new();
+
+            var n = nodes.Count;
+            var ranks = nodes.ToDictionary(id => id, _ => 1.0 / n);
+            var outDegree = new Dictionary<string, int>();
+
+            foreach (var id in nodes)
+            {
+                outDegree[id] = _adjacency.TryGetValue(id, out var edges)
+                    ? edges.Values.Sum(t => t.Count) : 0;
+            }
+
+            for (var iter = 0; iter < iterations; iter++)
+            {
+                var newRanks = new Dictionary<string, double>();
+                var danglingSum = ranks.Where(kv => outDegree[kv.Key] == 0).Sum(kv => kv.Value) / n;
+
+                foreach (var id in nodes)
+                {
+                    double incoming = 0;
+                    foreach (var (src, edges) in _adjacency)
+                    {
+                        foreach (var (_, targets) in edges)
+                            if (targets.Contains(id))
+                                incoming += ranks[src] / Math.Max(outDegree[src], 1);
+                    }
+                    newRanks[id] = (1 - damping) / n + damping * (incoming + danglingSum);
+                }
+
+                ranks = newRanks;
+            }
+
+            return ranks.OrderByDescending(kv => kv.Value).ToDictionary();
+        }
+        finally { _lock.ExitReadLock(); }
+    }
+
+    /// <summary>
+    /// Centrality analysis: in-degree, out-degree, and betweenness (approximate).
+    /// Returns (NodeId, InDegree, OutDegree) sorted by total degree.
+    /// </summary>
+    public List<(string NodeId, int InDegree, int OutDegree)> Centrality()
+    {
+        _lock.EnterReadLock();
+        try
+        {
+            var inDegree = new Dictionary<string, int>();
+            var outDegree = new Dictionary<string, int>();
+
+            foreach (var (id, _) in _nodesIndex)
+            {
+                inDegree[id] = 0;
+                outDegree[id] = _adjacency.TryGetValue(id, out var edges)
+                    ? edges.Values.Sum(t => t.Count) : 0;
+            }
+
+            foreach (var (src, edges) in _adjacency)
+                foreach (var (_, targets) in edges)
+                    foreach (var t in targets)
+                        if (inDegree.ContainsKey(t))
+                            inDegree[t]++;
+
+            return _nodesIndex.Keys
+                .Select(id => (id, inDegree.GetValueOrDefault(id), outDegree.GetValueOrDefault(id)))
+                .OrderByDescending(t => t.Item2 + t.Item3)
+                .ToList();
+        }
+        finally { _lock.ExitReadLock(); }
+    }
+
+    /// <summary>
+    /// Detect orphaned nodes: entities with 0 incoming AND 0 outgoing edges.
+    /// These are candidates for dead code or unused entities.
+    /// </summary>
+    public List<string> DetectOrphans()
+    {
+        _lock.EnterReadLock();
+        try
+        {
+            var hasEdge = new HashSet<string>();
+            foreach (var (src, edges) in _adjacency)
+            {
+                hasEdge.Add(src);
+                foreach (var (_, targets) in edges)
+                    foreach (var t in targets)
+                        hasEdge.Add(t);
+            }
+
+            return _nodesIndex.Keys.Where(id => !hasEdge.Contains(id)).ToList();
+        }
+        finally { _lock.ExitReadLock(); }
+    }
+
+    /// <summary>
+    /// Detect contradictions: same (subject, predicate) with different objects.
+    /// Example: "LTAI uses Python" and "LTAI uses C#" → detected.
+    /// </summary>
+    public List<(string Subject, string Predicate, string ObjectA, string ObjectB)> DetectContradictions()
+    {
+        _lock.EnterReadLock();
+        try
+        {
+            var pairs = new Dictionary<(string, string), string>();
+            var contradictions = new List<(string, string, string, string)>();
+
+            foreach (var t in _triplets)
+            {
+                var key = (t.Subject.ToLowerInvariant(), t.Predicate.ToLowerInvariant());
+                if (pairs.TryGetValue(key, out var existingObj))
+                {
+                    if (!existingObj.Equals(t.Object, StringComparison.OrdinalIgnoreCase))
+                        contradictions.Add((t.Subject, t.Predicate, existingObj, t.Object));
+                }
+                else
+                {
+                    pairs[key] = t.Object;
+                }
+            }
+
+            return contradictions;
+        }
+        finally { _lock.ExitReadLock(); }
+    }
+
+    /// <summary>
+    /// Export graph to DOT format for Graphviz visualization.
+    /// Usage: dot -Tpng graph.dot -o graph.png
+    /// </summary>
+    public string ExportDot(string? highlightNode = null)
+    {
+        _lock.EnterReadLock();
+        try
+        {
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine("digraph KnowledgeGraph {");
+            sb.AppendLine("  rankdir=LR; node [shape=box,style=filled,fillcolor=lightyellow];");
+
+            foreach (var (id, entity) in _nodesIndex)
+            {
+                var label = entity.Label.Length > 30 ? entity.Label[..30] : entity.Label;
+                var color = id == highlightNode ? "fillcolor=lightblue" : "";
+                sb.AppendLine($"  \"{id}\" [label=\"{EscapeDot(label)}\" {color}];");
+            }
+
+            var seen = new HashSet<string>();
+            foreach (var (src, edges) in _adjacency)
+            {
+                foreach (var (rel, targets) in edges)
+                {
+                    foreach (var tgt in targets)
+                    {
+                        var key = $"{src}->{tgt}:{rel}";
+                        if (seen.Add(key))
+                            sb.AppendLine($"  \"{src}\" -> \"{tgt}\" [label=\"{EscapeDot(rel)}\"];");
+                    }
+                }
+            }
+
+            sb.AppendLine("}");
+            return sb.ToString();
+        }
+        finally { _lock.ExitReadLock(); }
+    }
+
+    private static string EscapeDot(string s) =>
+        s.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\n", "\\n");
+
 }

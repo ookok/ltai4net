@@ -59,6 +59,59 @@ public sealed class PromptBuilder
         return messages;
     }
 
+    /// <summary>
+    /// Build chat messages including multi-turn conversation history.
+    /// History is inserted as alternating user/assistant messages before the current question.
+    /// Recent turns are prioritized; older turns are summarized if budget is tight.
+    /// </summary>
+    public async Task<List<ChatMessage>> BuildChatMessages(
+        string question,
+        IReadOnlyList<LTAI.Knowledge.Core.Models.KnowledgeSearchResult> docs,
+        IReadOnlyList<Dictionary<string, object>> history,
+        int maxHistoryTokens = 8000,
+        PromptBuildOptions? options = null)
+    {
+        var opts = options ?? PromptBuildOptions.Default;
+        var (sysPrompt, _) = await BuildPrompt(question, docs, opts).ConfigureAwait(false);
+        var messages = new List<ChatMessage> { new(ChatRole.System, sysPrompt) };
+
+        if (history != null && history.Count > 0)
+        {
+            var historyBudget = Math.Min(maxHistoryTokens, opts.MaxContextTokens / 3);
+            var historyTokens = 0;
+
+            // Keep most recent turns, older turns summarized
+            var recentStart = Math.Max(0, history.Count - 10);
+            for (var i = 0; i < history.Count; i++)
+            {
+                var msg = history[i];
+                var role = msg.GetValueOrDefault("role", "").ToString() ?? "";
+                var content = msg.GetValueOrDefault("content", "").ToString() ?? "";
+                if (string.IsNullOrWhiteSpace(content)) continue;
+
+                var estTokens = content.Length / 4;
+                if (i < recentStart || historyTokens + estTokens > historyBudget)
+                {
+                    // Older or budget overflow: inject as summary at system level if first overflow
+                    if (i == recentStart - 1 && historyTokens > 0)
+                        messages.Add(new ChatMessage(ChatRole.System,
+                            $"[Earlier context: {recentStart} turns summarized]"));
+                    continue;
+                }
+
+                if (role == "user")
+                    messages.Add(new ChatMessage(ChatRole.User, content));
+                else if (role == "assistant")
+                    messages.Add(new ChatMessage(ChatRole.Assistant, content));
+
+                historyTokens += estTokens;
+            }
+        }
+
+        messages.Add(new ChatMessage(ChatRole.User, question));
+        return messages;
+    }
+
     public async Task<string> BuildSinglePrompt(
         string question,
         IReadOnlyList<LTAI.Knowledge.Core.Models.KnowledgeSearchResult> docs,

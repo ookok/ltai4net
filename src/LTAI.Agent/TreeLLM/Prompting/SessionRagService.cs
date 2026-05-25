@@ -69,18 +69,22 @@ public sealed class SessionRagService
 
         var longTermDocs = _agenticRAG.Search(question, RAGMode.Iterative, domain: opts.Domain ?? "general");
 
-        var prompt = await _promptBuilder.BuildSinglePrompt(question, longTermDocs, opts).ConfigureAwait(false);
-
-        var (needsCompression, _, dropped) = _contextBudget.AddAndCheck("system", new List<Dictionary<string, string>>(), prompt);
-        if (needsCompression || dropped > 0)
+        // Pass REAL history to budget check (was previously empty list)
+        var historyTokens = historyMessages.Sum(m => _contextBudget.EstimateTokens(
+            m.GetValueOrDefault("content", "")?.ToString() ?? ""));
+        var promptTokens = _contextBudget.EstimateTokens(question);
+        var totalTokens = historyTokens + promptTokens;
+        if (totalTokens > 50000 * 0.85)
         {
-            _logger.LogWarning(
-                "SessionRAG: context budget warning. needsCompression={NeedsCompression}, dropped={Dropped}, tokens={TotalTokens}/{MaxTokens}",
-                needsCompression, dropped,
-                _contextBudget.GetStats()["total_tokens"], _contextBudget.GetStats()["max_tokens"]);
+            _logger.LogWarning("SessionRAG: context near limit ({Tokens}/50000)", totalTokens);
         }
 
-        var response = await _chatClient.GetResponseAsync(prompt, cancellationToken: cancellationToken).ConfigureAwait(false);
+        // Use multi-turn chat messages INCLUDING raw dialog history
+        var messages = await _promptBuilder.BuildChatMessages(
+            question, longTermDocs, historyMessages,
+            maxHistoryTokens: 8000, options: opts).ConfigureAwait(false);
+
+        var response = await _chatClient.GetResponseAsync(messages, cancellationToken: cancellationToken).ConfigureAwait(false);
         var answer = response.Text ?? string.Empty;
 
         var hallucinationCheck = HallucinationGuard.Instance.CheckGeneration(
@@ -108,7 +112,7 @@ public sealed class SessionRagService
             Answer = answer,
             LongTermSources = longTermDocs,
             MemorySources = memoryEvents,
-            PromptUsed = prompt,
+            PromptUsed = messages.FirstOrDefault(m => m.Role == ChatRole.System)?.Text ?? question,
             HallucinationCheck = hallucinationCheck,
             ElapsedMs = sw.ElapsedMilliseconds,
             TurnCount = sessionSnapshot?.TurnCount + 1 ?? 1
