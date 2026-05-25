@@ -95,6 +95,15 @@ public static class FixInstinctStore
         return sb.ToString();
     }
 
+    public static List<FixInstinct> GetTopInstincts(int minSuccess = 3)
+    {
+        return _instincts.Values
+            .Where(i => i.SuccessCount >= minSuccess)
+            .OrderByDescending(i => i.SuccessCount)
+            .Take(20)
+            .ToList();
+    }
+
     public static double GetHealthScore()
     {
         lock (_healthLock)

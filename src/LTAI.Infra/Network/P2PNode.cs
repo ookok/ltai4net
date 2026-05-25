@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Net;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using LTAI.Core.Configuration;
@@ -25,6 +26,9 @@ public sealed class P2PNode : IP2PNode, IAsyncDisposable
     private CancellationTokenSource? _cts;
     private Task? _listenerTask;
 
+    private readonly ECDsa _signingKey;
+    private readonly byte[] _publicKeyBytes;
+
     public string PeerId { get; }
     public int LocalPort => _options.Value.Network.P2PPort;
 
@@ -38,7 +42,9 @@ public sealed class P2PNode : IP2PNode, IAsyncDisposable
         _options = options;
         _logger = logger;
         _persistentQueue = persistentQueue;
-        PeerId = GeneratePeerId();
+        _signingKey = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        _publicKeyBytes = _signingKey.ExportSubjectPublicKeyInfo();
+        PeerId = GeneratePeerId(_publicKeyBytes);
     }
 
     private HttpClient CreateHttpClient()
@@ -318,11 +324,37 @@ public sealed class P2PNode : IP2PNode, IAsyncDisposable
         }
     }
 
-    private static string GeneratePeerId()
+    public void SignMessage(NetworkMessage message)
     {
-        Span<byte> bytes = stackalloc byte[8];
-        Random.Shared.NextBytes(bytes);
-        return Convert.ToHexString(bytes).ToLowerInvariant();
+        var payload = $"{message.FromPeer}|{message.MessageId}|{message.Timestamp:O}";
+        var payloadBytes = Encoding.UTF8.GetBytes(payload);
+        message.Signature = Convert.ToBase64String(
+            _signingKey.SignData(payloadBytes, HashAlgorithmName.SHA256));
+    }
+
+    public bool VerifySignature(NetworkMessage message, byte[] peerPublicKey)
+    {
+        if (string.IsNullOrEmpty(message.Signature)) return false;
+        try
+        {
+            using var verifier = ECDsa.Create();
+            verifier.ImportSubjectPublicKeyInfo(peerPublicKey, out _);
+            var payload = $"{message.FromPeer}|{message.MessageId}|{message.Timestamp:O}";
+            return verifier.VerifyData(
+                Encoding.UTF8.GetBytes(payload),
+                Convert.FromBase64String(message.Signature),
+                HashAlgorithmName.SHA256);
+        }
+        catch { return false; }
+    }
+
+    public byte[] PublicKey => _publicKeyBytes;
+
+    private static string GeneratePeerId(byte[] publicKey)
+    {
+        var hash = SHA256.HashData(publicKey);
+        return Convert.ToBase64String(hash)[..16]
+            .Replace('+', '-').Replace('/', '_');
     }
 
     public async ValueTask DisposeAsync()

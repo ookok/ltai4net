@@ -197,6 +197,52 @@ public static class ToolCallRepairer
     public static void ClearStormHistory(string sessionId)
     {
         lock (_stormLock) _sessionToolCalls.TryRemove(sessionId, out _);
+        lock (_loopLock) _loopHistory.TryRemove(sessionId, out _);
+    }
+
+    private static readonly ConcurrentDictionary<string, Queue<(string Hash, DateTime Time)>> _loopHistory = new();
+    private static readonly object _loopLock = new();
+    private const int LoopWindowSize = 5;
+    private const int LoopThreshold = 3;
+
+    /// <summary>
+    /// SHA256-based tool call loop detection with circuit breaker.
+    /// From OpenFang's Loop Guard pattern: if the same tool+args hash appears
+    /// >= LoopThreshold times within the recent window, trigger a circuit break.
+    /// Returns true if this call should be blocked as a detected loop.
+    /// </summary>
+    public static bool DetectLoop(string sessionId, string toolName, string args)
+    {
+        var hash = ComputeToolCallHash(toolName, args);
+        var now = DateTime.UtcNow;
+
+        lock (_loopLock)
+        {
+            var history = _loopHistory.GetOrAdd(sessionId,
+                _ => new Queue<(string Hash, DateTime Time)>());
+
+            while (history.Count > LoopWindowSize)
+                history.Dequeue();
+
+            var loopCount = history.Count(h => h.Hash == hash);
+            history.Enqueue((hash, now));
+
+            if (loopCount >= LoopThreshold)
+            {
+                ClearStormHistory(sessionId);
+                return true;
+            }
+
+            return false;
+        }
+    }
+
+    private static string ComputeToolCallHash(string toolName, string args)
+    {
+        var input = $"{toolName}|{args}";
+        var hashBytes = System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes(input));
+        return Convert.ToHexStringLower(hashBytes)[..16];
     }
 
     private static object? ExtractJsonValue(JsonElement element)

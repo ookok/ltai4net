@@ -74,6 +74,11 @@ public sealed class PolicyAsCode
     private PolicyVersion? _activeVersion;
     private PolicyVersion? _canaryVersion;
 
+    private readonly EnhancedRuleEngine _ruleEngine;
+    private bool _useRuleEngine = true;
+
+    public EnhancedRuleEngine RuleEngine => _ruleEngine;
+
     public IReadOnlyList<PolicyRule> InputRules => _inputRules.AsReadOnly();
     public IReadOnlyList<PolicyRule> OutputRules => _outputRules.AsReadOnly();
     public IReadOnlyList<PolicyRule> DNARules => _dnaRules.AsReadOnly();
@@ -83,6 +88,7 @@ public sealed class PolicyAsCode
     public PolicyAsCode(ILogger<PolicyAsCode>? logger = null)
     {
         _logger = logger;
+        _ruleEngine = new EnhancedRuleEngine().WithStrategy(ConflictStrategy.Salience);
     }
 
     public void LoadFromYaml(string yamlContent)
@@ -441,6 +447,35 @@ public sealed class PolicyAsCode
     public List<PolicyEvaluation> EvaluateInput(string text, string? sessionId = null)
     {
         _metrics.TotalEvaluations++;
+
+        if (_useRuleEngine && _ruleEngine.RuleCount > 0)
+        {
+            var facts = new object[] { new InputFact { Text = text, SessionId = sessionId } };
+            var results = _ruleEngine.EvaluateMulti(facts);
+
+            foreach (var r in results.Where(r => r.Triggered))
+            {
+                _metrics.TotalTriggered++;
+                _metrics.RuleHits[r.RuleId] = _metrics.RuleHits.GetValueOrDefault(r.RuleId) + 1;
+                if (r.Action == PolicyAction.Block) _metrics.TotalBlocked++;
+                else if (r.Action == PolicyAction.Warn) _metrics.TotalWarned++;
+            }
+
+            return results.Select(r => new PolicyEvaluation
+            {
+                RuleId = r.RuleId,
+                Triggered = r.Triggered,
+                Action = r.Action,
+                Message = r.Message,
+                Confidence = 1.0
+            }).ToList();
+        }
+
+        return EvaluateInputLegacy(text, sessionId);
+    }
+
+    private List<PolicyEvaluation> EvaluateInputLegacy(string text, string? sessionId = null)
+    {
         var results = new List<PolicyEvaluation>();
         var activeRules = GetActiveRules(_inputRules, sessionId);
 
@@ -451,23 +486,45 @@ public sealed class PolicyAsCode
             {
                 _metrics.TotalTriggered++;
                 _metrics.RuleHits[rule.Id] = _metrics.RuleHits.GetValueOrDefault(rule.Id) + 1;
-
                 if (rule.Action == PolicyAction.Block) _metrics.TotalBlocked++;
                 else if (rule.Action == PolicyAction.Warn) _metrics.TotalWarned++;
 
                 results.Add(new PolicyEvaluation
                 {
-                    RuleId = rule.Id,
-                    Triggered = true,
-                    Action = rule.Action,
-                    Message = rule.Message,
-                    MatchedContent = matchedContent,
-                    Confidence = confidence
+                    RuleId = rule.Id, Triggered = true,
+                    Action = rule.Action, Message = rule.Message,
+                    MatchedContent = matchedContent, Confidence = confidence
                 });
             }
         }
 
         return results;
+    }
+
+    public void CompileToRuleEngine()
+    {
+        _ruleEngine.AddRulesFromPolicy(this);
+        _ruleEngine.AddKnowledgeGraphRules();
+        _ruleEngine.AddTemporalRule("session_injection_storm", "injection", 10, TimeSpan.FromMinutes(5), PolicyAction.Block);
+        _ruleEngine.AddTemporalRule("session_warn_spam", "warning", 20, TimeSpan.FromMinutes(10), PolicyAction.Block);
+    }
+
+    /// <summary>
+    /// Add a canary rule to test a new policy variant on a percentage of traffic.
+    /// </summary>
+    public void AddCanaryPolicy(string id, int percentage, string factType, Func<object, bool> condition, PolicyAction action, string message)
+    {
+        _ruleEngine.AddCanaryRule(id, percentage, b =>
+        {
+            b.WithPriority(150).WithCategory("canary").WithCanary(percentage);
+
+            if (factType == "input")
+                b.When<InputFact>(f => condition(f)).Then(ctx => ctx.RecordHit(new RuleHit
+                    { RuleId = id, Action = action, Message = message, Triggered = true, Priority = 150 }));
+            else if (factType == "output")
+                b.When<OutputFact>(f => condition(f)).Then(ctx => ctx.RecordHit(new RuleHit
+                    { RuleId = id, Action = action, Message = message, Triggered = true, Priority = 150 }));
+        });
     }
 
     public List<PolicyEvaluation> EvaluateOutput(string text, string? context = null, string? sessionId = null)

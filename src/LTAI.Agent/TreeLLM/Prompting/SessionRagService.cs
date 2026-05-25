@@ -151,11 +151,13 @@ public sealed class SessionRagService
         SessionResilience.Instance.Save(sessionId, question, fullAnswer);
 
         var eventId = Guid.NewGuid().ToString("N")[..12];
-        await _structMemory.BindEvents(sessionId, new()
+        var messages = new List<Dictionary<string, object>>
         {
             new() { ["role"] = "user", ["content"] = question },
             new() { ["role"] = "assistant", ["content"] = fullAnswer }
-        }, eventId);
+        };
+        var repaired = ValidateAndRepairMessages(messages);
+        await _structMemory.BindEvents(sessionId, repaired, eventId);
 
         var hallucinationCheck = HallucinationGuard.Instance.CheckGeneration(
             fullAnswer,
@@ -164,5 +166,98 @@ public sealed class SessionRagService
         _logger.LogInformation(
             "SessionRAG Streaming: session={SessionId}, sources={LongTermCount}, answerLen={AnswerLen}, hallucination={HallucinationScore}",
             sessionId, longTermDocs.Count, fullAnswer.Length, hallucinationCheck?.Score ?? 0);
+    }
+
+    /// <summary>
+    /// 7-phase message history validation and repair. From OpenFang's Session Repair pattern:
+    /// 1. Remove empty messages
+    /// 2. Fix role alternation (no consecutive same-role messages)
+    /// 3. Remove duplicate content
+    /// 4. Truncate oversized messages
+    /// 5. Ensure system message is first
+    /// 6. Remove orphaned tool messages
+    /// 7. Cap total message count
+    /// </summary>
+    internal static List<Dictionary<string, object>> ValidateAndRepairMessages(
+        List<Dictionary<string, object>> messages, int maxMessages = 50, int maxContentLen = 8000)
+    {
+        if (messages == null || messages.Count == 0)
+            return new List<Dictionary<string, object>>();
+
+        var result = new List<Dictionary<string, object>>();
+
+        // Phase 1: Remove empty messages
+        var filtered = messages
+            .Where(m => m.TryGetValue("content", out var c) && c is string s && !string.IsNullOrWhiteSpace(s))
+            .ToList();
+
+        // Phase 2: Fix role alternation (merge consecutive same-role messages)
+        string? lastRole = null;
+        foreach (var msg in filtered)
+        {
+            var role = msg.GetValueOrDefault("role", "")?.ToString() ?? "";
+            var content = msg.GetValueOrDefault("content", "")?.ToString() ?? "";
+
+            if (role == lastRole && result.Count > 0)
+            {
+                var prevContent = result[^1].GetValueOrDefault("content", "")?.ToString() ?? "";
+                result[^1]["content"] = prevContent + "\n\n" + content;
+            }
+            else
+            {
+                result.Add(new Dictionary<string, object>(msg));
+                lastRole = role;
+            }
+        }
+
+        // Phase 3: Remove duplicate content
+        var seen = new HashSet<string>();
+        result = result.Where(m =>
+        {
+            var content = (m.GetValueOrDefault("content", "")?.ToString() ?? "")[..Math.Min(200,
+                (m.GetValueOrDefault("content", "")?.ToString() ?? "").Length)];
+            return seen.Add(content);
+        }).ToList();
+
+        // Phase 4: Truncate oversized messages
+        foreach (var msg in result)
+        {
+            if (msg.TryGetValue("content", out var c) && c is string s && s.Length > maxContentLen)
+                msg["content"] = s[..maxContentLen] + "\n... [truncated]";
+        }
+
+        // Phase 5: Ensure system message is first
+        var systemMsg = result.FirstOrDefault(m =>
+            (m.GetValueOrDefault("role", "")?.ToString() ?? "").Equals("system", StringComparison.OrdinalIgnoreCase));
+        if (systemMsg != null)
+        {
+            result.Remove(systemMsg);
+            result.Insert(0, systemMsg);
+        }
+
+        // Phase 6: Remove orphaned tool messages (tool must follow assistant)
+        for (var i = result.Count - 1; i >= 0; i--)
+        {
+            var role = result[i].GetValueOrDefault("role", "")?.ToString() ?? "";
+            if (role == "tool" && (i == 0 || result[i - 1].GetValueOrDefault("role", "")?.ToString() != "assistant"))
+            {
+                // Convert orphaned tool to user message with context
+                result[i]["role"] = "user";
+                result[i]["content"] = "[Tool Response] " + (result[i].GetValueOrDefault("content", "")?.ToString() ?? "");
+            }
+        }
+
+        // Phase 7: Cap total message count (keep system + last N messages)
+        if (result.Count > maxMessages)
+        {
+            var sysIdx = result[0].GetValueOrDefault("role", "")?.ToString() == "system" ? 1 : 0;
+            if (sysIdx > 0)
+                result = new List<Dictionary<string, object>> { result[0] }
+                    .Concat(result.Skip(result.Count - (maxMessages - 1))).ToList();
+            else
+                result = result.Skip(result.Count - maxMessages).ToList();
+        }
+
+        return result;
     }
 }

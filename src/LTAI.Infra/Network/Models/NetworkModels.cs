@@ -48,6 +48,12 @@ public sealed class NetworkMessage
 
     [JsonPropertyName("ttl_ms")]
     public int TtlMs { get; init; } = 30000;
+
+    [JsonPropertyName("signature")]
+    public string? Signature { get; set; }
+
+    [JsonPropertyName("public_key")]
+    public string? PublicKey { get; init; }
 }
 
 public sealed class DiscoveryRequest

@@ -9,6 +9,7 @@ using LTAI.Core.Execution;
 using LTAI.Core.Interfaces;
 using LTAI.Core.Messaging;
 using LTAI.Core.Models;
+using LTAI.Core.System;
 using LTAI.DNA;
 using LTAI.Models;
 using LTAI.Tools.Reasoning;
@@ -261,13 +262,13 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
             }
         }
 
-        // Injection immunity: detect and block prompt injection attacks
-        if ((query.Contains("忽略") && query.Contains("指令")) ||
-            (query.Contains("ignore") && query.Contains("instruction")) ||
-            query.Contains("system prompt") || query.Contains("DAN") || query.Contains("越狱"))
+        // Injection immunity: PromptShield multi-layer detection
+        var shieldResult = PromptShield.Instance.SanitizeInput(query);
+        if (!shieldResult.Passed)
         {
-            yield return "[安全防护] 检测到潜在提示注入攻击，已自动中和。请重新输入正常查询。";
-            _logger.LogWarning("PromptShield: injection blocked: {Query}", query[..Math.Min(query.Length, 60)]);
+            yield return $"[安全防护] 检测到潜在提示注入攻击 ({shieldResult.Layer}: {string.Join(", ", shieldResult.Violations)})。请重新输入正常查询。";
+            _logger.LogWarning("PromptShield: injection blocked layer={Layer} violations={Violations} query={Query}",
+                shieldResult.Layer, string.Join(",", shieldResult.Violations), query[..Math.Min(query.Length, 60)]);
             yield break;
         }
 
