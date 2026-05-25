@@ -127,6 +127,30 @@ public static class LTAIApiEndpoints
                 dna = dnaInfo
             });
         });
+
+        endpoints.MapGet("/metrics", () =>
+        {
+            var sb = new System.Text.StringBuilder();
+            var proc = System.Diagnostics.Process.GetCurrentProcess();
+
+            sb.AppendLine("# HELP ltai_uptime_seconds Process uptime");
+            sb.AppendLine("# TYPE ltai_uptime_seconds gauge");
+            sb.AppendLine($"ltai_uptime_seconds {(DateTime.UtcNow - proc.StartTime.ToUniversalTime()).TotalSeconds:F0}");
+
+            sb.AppendLine("# HELP ltai_memory_working_set_bytes Working set");
+            sb.AppendLine("# TYPE ltai_memory_working_set_bytes gauge");
+            sb.AppendLine($"ltai_memory_working_set_bytes {proc.WorkingSet64}");
+
+            sb.AppendLine("# HELP ltai_memory_managed_bytes GC heap");
+            sb.AppendLine("# TYPE ltai_memory_managed_bytes gauge");
+            sb.AppendLine($"ltai_memory_managed_bytes {GC.GetTotalMemory(false)}");
+
+            sb.AppendLine("# HELP ltai_threads Thread count");
+            sb.AppendLine("# TYPE ltai_threads gauge");
+            sb.AppendLine($"ltai_threads {proc.Threads.Count}");
+
+            return Results.Text(sb.ToString(), "text/plain; version=0.0.4");
+        });
     }
 }
 

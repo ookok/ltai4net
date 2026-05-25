@@ -59,6 +59,7 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
     private readonly TaskPipeline _taskPipeline;
     private readonly ICrossRunEvolutionStore? _evolutionStore;
     private readonly IVerifiableRegistry? _verifiableRegistry;
+    private readonly IParliamentBridge? _parliamentBridge;
     private int _requestCount;
     private int _bgRequestCount;
     private const int TrainingInterval = 50;
@@ -120,7 +121,8 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
         PromptTemplateStore? prompts = null,
         ModelHealthTracker? health = null,
         ICrossRunEvolutionStore? evolutionStore = null,
-        IVerifiableRegistry? verifiableRegistry = null)
+        IVerifiableRegistry? verifiableRegistry = null,
+        IParliamentBridge? parliamentBridge = null)
     {
         _mesh = mesh;
         _journal = journal;
@@ -150,6 +152,7 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
         _health = health ?? new ModelHealthTracker();
         _evolutionStore = evolutionStore;
         _verifiableRegistry = verifiableRegistry;
+        _parliamentBridge = parliamentBridge;
         _taskPipeline = new TaskPipeline(_journal);
     }
 
@@ -1081,11 +1084,25 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
             }, "SelfEvolution");
 
         // Multi-agent debate: fork to SentientParliament on complex grounded queries
-        // NOTE: Cross-assembly bridge needed (LTAI.Agent.SentientParliament).
-        // Parliament deliberation is triggered from the Agent layer via GovernorWorkflow.
         if (!groundingFailed && finalResponse.Length > 300 && totalToolCalls >= 2)
+        {
             _erlLoop.RecordTrial($"debate_{query[..Math.Min(query.Length, 40)]}",
                 finalResponse[..Math.Min(finalResponse.Length, 100)], "multi_agent", 0.85f, true);
+
+            if (_parliamentBridge is { IsAvailable: true })
+            {
+                try
+                {
+                    var verdict = await _parliamentBridge.DeliberateAsync(query, finalResponse).ConfigureAwait(false);
+                    if (!verdict.IsConsensus && verdict.AvgConfidence < 0.6f)
+                        _logger.LogWarning("Parliament: no consensus (conf={Conf:F2}, voters={Voters})",
+                            verdict.AvgConfidence, verdict.VoterCount);
+                    else
+                        _logger.LogDebug("Parliament: verified (conf={Conf:F2})", verdict.AvgConfidence);
+                }
+                catch (Exception ex) { _logger.LogDebug(ex, "Parliament deliberation skipped"); }
+            }
+        }
 
         // Quantum-inspired optimization: Q-value guided tool selection hint
         if (totalToolCalls >= 2 && !groundingFailed)

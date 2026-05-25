@@ -54,7 +54,11 @@ public sealed class VectorStore : IVectorStore, IDisposable
     private void InitDb()
     {
         using var cmd = _db.CreateCommand();
-        cmd.CommandText = "CREATE TABLE IF NOT EXISTS vectors(id TEXT PRIMARY KEY, embedding BLOB, collection TEXT, created_at TEXT)";
+        cmd.CommandText = """
+            PRAGMA journal_mode=WAL;
+            PRAGMA synchronous=NORMAL;
+            CREATE TABLE IF NOT EXISTS vectors(id TEXT PRIMARY KEY, embedding BLOB, collection TEXT, created_at TEXT);
+            """;
         cmd.ExecuteNonQuery();
     }
 

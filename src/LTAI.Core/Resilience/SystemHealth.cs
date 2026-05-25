@@ -214,6 +214,13 @@ public sealed class SystemHealth
     private readonly List<SystemHealthReport> _history = new();
     private readonly ConcurrentDictionary<string, TrustProfile> _trust = new();
 
+    /// <summary>
+    /// Optional external metrics source. When set, SystemHealth.Check()
+    /// will use these values instead of the default synthetic RandomTick().
+    /// Wire from LTAIMetricsCollector or any real monitoring source.
+    /// </summary>
+    public Func<Dictionary<string, double>>? ExternalMetrics { get; set; }
+
     public SystemHealth(ILogger<SystemHealth> logger)
     {
         _logger = logger;
