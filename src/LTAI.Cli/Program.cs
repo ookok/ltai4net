@@ -94,6 +94,27 @@ public class Program
                     .WithExample("model", "reset", "--setup");
             });
 
+            config.AddBranch("skill", skill =>
+            {
+                skill.SetDescription("Manage skills — the only distributable artifact");
+                skill.AddCommand<SkillListCommand>("list")
+                    .WithDescription("List all loaded skills")
+                    .WithAlias("ls")
+                    .WithExample("skill", "list");
+                skill.AddCommand<SkillInstallCommand>("install")
+                    .WithDescription("Install a skill from URL, GitHub, or local path")
+                    .WithAlias("i")
+                    .WithExample("skill", "install", "github.com/user/repo/skills/l0_atomic/my_skill.md");
+                skill.AddCommand<SkillExtractCommand>("extract")
+                    .WithDescription("Auto-extract skills from successful conversation patterns")
+                    .WithAlias("x")
+                    .WithExample("skill", "extract");
+                skill.AddCommand<SkillStatsCommand>("stats")
+                    .WithDescription("Show skill statistics")
+                    .WithAlias("s")
+                    .WithExample("skill", "stats");
+            });
+
             config.AddCommand<CompatCommand>("compat")
                 .WithDescription("Agent Framework API compatibility gate")
                 .WithAlias("c")
@@ -112,9 +133,11 @@ public class Program
 
     private static void TriggerEntryPointRegistrations()
     {
+#if !SKIP_HOST_MODULES
         LTAI.Host.HostEntryPointRegistration.Initialize();
         LTAI.MCP.McpEntryPointRegistration.Initialize();
         LTAI.TUI.TuiEntryPointRegistration.Initialize();
         LTAI.WebApp.WebAppEntryPointRegistration.Initialize();
+#endif
     }
 }

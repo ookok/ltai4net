@@ -1,5 +1,6 @@
 using Spectre.Console.Rendering;
 using Spectre.Console;
+using LTAI.AI.Interfaces;
 using LTAI.AI.Governors;
 using LTAI.DNA;
 
@@ -36,7 +37,7 @@ public sealed class SessionTracker
     public void AddTask(string task, string status = "pending") =>
         ActiveTasks.Add(new TaskEntry { Name = task, Status = status, StartedAt = DateTime.Now });
 
-    public IRenderable RenderPanel(LivingTreeSystem lts, DNAOrchestrator? dna)
+    public IRenderable RenderPanel(ILivingTreeSystem lts, DNAOrchestrator? dna)
     {
         var elapsed = DateTime.Now - StartedAt;
         var ctxPercent = MaxContextWindow > 0 ? (double)ContextWindowUsed / MaxContextWindow * 100 : 0;

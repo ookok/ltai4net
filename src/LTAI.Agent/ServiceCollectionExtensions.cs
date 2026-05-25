@@ -8,6 +8,9 @@ using Microsoft.Extensions.Logging;
 using LTAI.Agent.Adversarial;
 using LTAI.Agent.Agents;
 using LTAI.Agent.Feedback;
+using LTAI.Agent.Skills;
+using LTAI.Agent.Skills.Runtime;
+using LTAI.Agent.Workflows;
 using LTAI.Agent.Federation;
 using LTAI.Agent.MAF;
 using LTAI.Agent.Middleware;
@@ -23,7 +26,13 @@ public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddLTAIAgent(this IServiceCollection services)
     {
-        services.AddSingleton<SkillRegistry>();
+        services.AddSingleton<Skills.SkillRegistry>();
+        services.AddSingleton<SkillLoader>();
+        services.AddSingleton<SkillInstaller>();
+        services.AddSingleton<SkillExtractor>();
+        services.AddSingleton<SkillRuntime>();
+        services.AddSingleton<SkillAwareDecomposer>();
+        services.AddSingleton<MultiRoundOrchestrator>();
         services.AddSingleton<IntentRouter>();
         services.AddSingleton<UnifiedSemanticRouter>();
         services.AddSingleton<UnifiedIntentRouter>();
@@ -90,7 +99,7 @@ public static class ServiceCollectionExtensions
     {
         var loggerFactory = sp.GetRequiredService<ILoggerFactory>();
         var chatClient = sp.GetRequiredService<IChatClient>();
-        var skillRegistry = sp.GetRequiredService<SkillRegistry>();
+        var skillRegistry = sp.GetRequiredService<Agents.SkillRegistry>();
 
         AIAgent agent = card.Type switch
         {

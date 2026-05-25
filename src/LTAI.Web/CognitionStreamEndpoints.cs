@@ -1,4 +1,5 @@
 using System.Text.Json;
+using LTAI.AI.Interfaces;
 using LTAI.AI.Governors;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -42,7 +43,7 @@ public static class CognitionStreamEndpoints
 
             try
             {
-                var system = context.RequestServices.GetService<LivingTreeSystem>();
+                var system = context.RequestServices.GetService<ILivingTreeSystem>();
                 if (system is not null)
                 {
                     var response = await system.ChatAsync(request.Message, cancellationToken).ConfigureAwait(false);

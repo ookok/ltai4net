@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using LTAI.AI.Interfaces;
+using LTAI.AI.Governors.Pipeline;
 using LTAI.Core.Configuration;
 using LTAI.Core.Execution;
 using LTAI.Core.Interfaces;
@@ -60,6 +61,7 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
     private readonly ICrossRunEvolutionStore? _evolutionStore;
     private readonly IVerifiableRegistry? _verifiableRegistry;
     private readonly IParliamentBridge? _parliamentBridge;
+    private readonly QueryPreprocessingService _preprocessor;
     private int _requestCount;
     private int _bgRequestCount;
     private const int TrainingInterval = 50;
@@ -87,6 +89,7 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
     public SystemMode Mode => _guardian.Mode;
     public bool DNAEnabled => _dna != null;
     public DNAStatus? DNAStatus => _dna?.GetStatus();
+    public ICognitiveMesh Mesh => _mesh;
     public InputGovernor InputGovernor => _input;
     public ContextGovernor ContextGovernor => _context;
     public RoutingGovernor RoutingGovernor => _routing;
@@ -122,7 +125,8 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
         ModelHealthTracker? health = null,
         ICrossRunEvolutionStore? evolutionStore = null,
         IVerifiableRegistry? verifiableRegistry = null,
-        IParliamentBridge? parliamentBridge = null)
+        IParliamentBridge? parliamentBridge = null,
+        QueryPreprocessingService? preprocessor = null)
     {
         _mesh = mesh;
         _journal = journal;
@@ -153,7 +157,11 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
         _evolutionStore = evolutionStore;
         _verifiableRegistry = verifiableRegistry;
         _parliamentBridge = parliamentBridge;
+        _preprocessor = preprocessor ?? new QueryPreprocessingService(
+            _mesh, _llm, _dna, _options, _guardian, _toolRegistry,
+            _metaCognition, _patternRouter, _planExecutor, _prompts, _logger);
         _taskPipeline = new TaskPipeline(_journal);
+        _taskPipeline.LlmDecomposer = LlmDecomposeAsync;
     }
 
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
@@ -238,241 +246,48 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
         string query,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        if (_guardian.Mode == SystemMode.LifeSupport)
+        var pre = await _preprocessor.PreprocessAsync(query, _queryCache, _bavtRouter, cancellationToken).ConfigureAwait(false);
+
+        if (pre.IsBlocked)
         {
-            yield return await _guardian.EmergencyChatAsync(query, cancellationToken).ConfigureAwait(false);
+            yield return pre.BlockMessage!;
             yield break;
         }
 
-        var ai = _options.Value.AI;
-        var unconfigured = new List<string>();
-        if (!ai.L0.IsConfigured) unconfigured.Add("L0 (Embedding)");
-        if (!ai.L1.IsConfigured) unconfigured.Add("L1 (Fast Model)");
-        if (!ai.L2.IsConfigured) unconfigured.Add("L2 (Deep Model)");
-        if (unconfigured.Count > 0)
+        if (pre.IsCached && pre.ShouldYieldEarly)
         {
-            yield return $"[Model Not Configured] 以下模型层级未配置:\n  {string.Join("\n  ", unconfigured)}\n\n请在 Settings → LLM Config 中为每一层设置 Provider 和 Model。";
+            yield return pre.CachedResponse!;
             yield break;
         }
 
-        if (_dna != null)
+        if (pre.IsFuzzyQuery && pre.ShouldYieldEarly)
         {
-            var safetyCheck = await _dna.Safety.EvaluateAsync(query, cancellationToken: cancellationToken).ConfigureAwait(false);
-            if (!safetyCheck.Allowed)
-            {
-                yield return $"[Safety blocked: {safetyCheck.BlockReason}]";
-                yield break;
-            }
-        }
-
-        // Injection immunity: PromptShield multi-layer detection
-        var shieldResult = PromptShield.Instance.SanitizeInput(query);
-        if (!shieldResult.Passed)
-        {
-            yield return $"[安全防护] 检测到潜在提示注入攻击 ({shieldResult.Layer}: {string.Join(", ", shieldResult.Violations)})。请重新输入正常查询。";
-            _logger.LogWarning("PromptShield: injection blocked layer={Layer} violations={Violations} query={Query}",
-                shieldResult.Layer, string.Join(",", shieldResult.Violations), query[..Math.Min(query.Length, 60)]);
+            _metaCognition.RecordOutcome(query, false);
+            yield return pre.ClarifyMessage!;
             yield break;
         }
 
-        // Query cache: instant return for recently answered queries (adaptive TTL)
-        if (_queryCache.TryGetValue(query, out var cached) && DateTime.UtcNow < cached.Expiry)
+        if (pre.Layer1HighConfidence && pre.ShouldYieldEarly)
         {
-            yield return cached.Response;
+            _metaCognition.RecordOutcome(query, true);
+            if (pre.PatternToolName != null)
+                _metaCognition.ReinforceDomain(pre.PatternToolName, 0.05f);
+            yield return pre.CachedResponse!;
             yield break;
         }
 
-        // Layer 1: Pattern-based tool execution (deterministic, no model call needed)
-        yield return "\uD83D\uDD0D ";
-        var patternResult = await _patternRouter.MatchAndExecuteAsync(query, cancellationToken).ConfigureAwait(false);
-        string? layer1Context = null;
-        bool layer1HighConfidence = false;
-
-        if (patternResult.Matched)
-        {
-            layer1Context = $"【Layer1 自动执行工具: {patternResult.ToolName}】\n{patternResult.ContextMessage}";
-            layer1HighConfidence = patternResult.Confidence >= 0.95f;
-            _logger.LogInformation("Layer1 matched: tool={Tool} confidence={Conf:F2}",
-                patternResult.ToolName, patternResult.Confidence);
-
-            // For high-confidence matches, yield tool result directly — no model call needed
-            if (layer1HighConfidence && patternResult.ContextMessage != null)
-            {
-                var summary = patternResult.ContextMessage;
-                yield return summary;
-                _metaCognition.RecordOutcome(query, true);
-                if (patternResult.ToolName != null)
-                    _metaCognition.ReinforceDomain(patternResult.ToolName, 0.05f);
-                yield break;
-            }
-        }
-
-        // L0: intent classification + knowledge graph shortcut
-        var toolCount = _toolRegistry.ListTools().Count();
-
-        // L0 classify: fast vs deep — must run before any routing/search
-        var label = "general";
-        string model;
-        string? extractedEntity = null;
-        try
-        {
-            var inputResult = await _input.ProcessAsync(new Handshake
-            {
-                To = "input", Action = "process",
-                Payload = new Dictionary<string, object?> { ["query"] = query }
-            }, cancellationToken);
-            label = inputResult.Payload?.GetValueOrDefault("label")?.ToString() ?? "deep";
-            extractedEntity = (inputResult.Payload?.GetValueOrDefault("entity_root") as string)
-                ?? (inputResult.Payload?.GetValueOrDefault("entity") as string);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Auto-search JSON parse failed for: {Query}", query);
-        }
-
-        model = label switch { "fast" or "reflex" => FlashModel, "deep" => DefaultModel, _ => DefaultModel };
-
-        // Cost-aware routing: when budget is tight, prefer Flash for non-critical queries
-        if (_bavtRouter.BudgetRatio < 0.3f && label == "deep" && query.Length < 50)
-        {
-            model = FlashModel;
-            _logger.LogInformation("CostRouter: budget low ({Ratio:F2}), downgraded to Flash for short query",
-                _bavtRouter.BudgetRatio);
-        }
-
-        // MetaCognitiveLayer: self-awareness check before answering
-        // Layer 1 high-confidence match boosts local confidence → skip unnecessary delegation
-        var localConfidence = layer1HighConfidence
-            ? 0.95f
-            : label switch { "fast" => 0.8f, "reflex" => 0.9f, _ => 0.5f };
-        var metaAssessment = _metaCognition.Assess(query, localConfidence);
-        string? metaContext = null;
-
-        if (metaAssessment.ShouldDelegate)
-        {
-            if (label is "fast" or "reflex")
-            {
-                model = DefaultModel;
-                metaContext = _prompts.Render("meta_model_upgrade", new Dictionary<string, string>
-                {
-                    ["certainty"] = metaAssessment.Certainty.ToString("F2"),
-                    ["reason"] = metaAssessment.DelegationReason,
-                    ["model"] = DefaultModel
-                });
-            }
-            else
-            {
-                metaContext = _prompts.Render("meta_tool_recommend", new Dictionary<string, string>
-                {
-                    ["certainty"] = metaAssessment.Certainty.ToString("F2"),
-                    ["reason"] = metaAssessment.DelegationReason
-                });
-            }
-            _logger.LogInformation("MetaCognition: {Assessment} | Model={Model}", metaAssessment.Assessment, model);
-        }
-        _logger.LogDebug("MetaCognition assessment: {Assessment} | Delegating={Deleg} Layer1={L1}",
-            metaAssessment.Assessment, metaAssessment.ShouldDelegate, layer1HighConfidence);
-
-        // Fuzzy query detection: queries with vague evaluative patterns without entities are ambiguous.
-        var hasVaguePattern = query.Contains("怎么样") || query.Contains("如何评价") ||
-            query.Contains("讲一下") || query.Contains("说说") || query.Contains("聊聊");
-        var hasQuestionWord = query.Contains('？') || query.Contains('?') ||
-            query.Contains("什么") || query.Contains("怎么") || query.Contains("为什么") ||
-            query.Contains("谁") || query.Contains("哪里") || query.Contains("何时") ||
-            query.Contains("多少") || query.Contains("几") || query.Contains("哪");
-        var isFuzzyQuery = !patternResult.Matched && extractedEntity == null
-            && metaAssessment.ShouldDelegate && label != "fast" && label != "reflex"
-            && query.Length < 100 && (hasVaguePattern || !hasQuestionWord);
-        if (isFuzzyQuery)
-        {
-            var clarifyQuestions = await GenerateClarificationAsync(query, cancellationToken).ConfigureAwait(false);
-            if (clarifyQuestions != null)
-            {
-                yield return "您的提问比较模糊，请问您是指以下哪种情况？\n\n" + clarifyQuestions;
-                _metaCognition.RecordOutcome(query, false);
-                _logger.LogInformation("Fuzzy query: yielded clarification questions for: {Query}", query[..Math.Min(query.Length, 60)]);
-                yield break;
-            }
-        }
-
-        var now = DateTime.Now;
-        var dayNames = new[] { "星期日", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六" };
-        var dateTag = $"当前日期: {now:yyyy年M月d日} {dayNames[(int)now.DayOfWeek]}";
-
-        // After L0 understanding, auto-search only when a named entity was extracted
-        // Skip auto-search if Layer 1 already performed a web_search or provided tool context
-        string? autoSearchContext = null;
-        if (label != "fast" && label != "reflex" && extractedEntity != null
-            && toolCount > 0 && _toolRegistry.HasTool("web_search")
-            && !layer1HighConfidence
-            && patternResult.ToolName != "web_search")
-        {
-            try
-            {
-                var searchResult = await _toolRegistry.InvokeAsync("web_search",
-                    new Dictionary<string, object?> { ["query"] = extractedEntity, ["maxResults"] = 5 },
-                    cancellationToken);
-                if (searchResult?.ToString() is { Length: > 0 } raw)
-                {
-                    int resultCount = 0;
-                    try
-                    {
-                        using var doc = JsonDocument.Parse(raw);
-                        resultCount = doc.RootElement.TryGetProperty("count", out var c) ? c.GetInt32() : 0;
-                    }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "L0 intent classification failed, falling back to 'deep'");
-        }
-
-                    if (resultCount == 0)
-                    {
-                        autoSearchContext = _prompts.Render("auto_search_empty", new Dictionary<string, string> { ["query"] = query });
-                    }
-                    else
-                    {
-                        autoSearchContext = _prompts.Render("auto_search_results", new Dictionary<string, string> { ["results"] = CompressToolResult(raw) });
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogDebug(ex, "Auto web_search failed for: {Query}", query);
-            }
-        }
-
-        // Layer 2: L1 model plans tool usage → execute → inject results
-        // Runs when Layer 1 didn't match and MetaCog says we're in unfamiliar territory.
-        // Skipped when budget is critically low — save resources for essential processing.
-        string? layer2Context = null;
-        var budgetRatio = _bavtRouter.BudgetRatio;
-        if (!patternResult.Matched
-            && autoSearchContext == null
-            && layer1Context == null
-            && metaAssessment.ShouldDelegate
-            && label != "fast" && label != "reflex"
-            && toolCount > 0
-            && budgetRatio > 0.2f)  // skip Layer2 when budget critically low
-        {
-            try
-            {
-                var planResult = await _planExecutor.PlanAndExecuteAsync(
-                    query, _llm, _toolRegistry, FlashModel, cancellationToken).ConfigureAwait(false);
-                if (planResult.Success && planResult.ContextMessage != null)
-                {
-                    layer2Context = planResult.ContextMessage;
-                    _logger.LogInformation("Layer2 plan executed: {Count} tools", planResult.ToolsExecuted);
-                }
-                else
-                {
-                    _logger.LogDebug("Layer2 plan failed: {Error}", planResult.Error ?? "no tools executed");
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogDebug(ex, "Layer2 planning exception");
-            }
-        }
+        var model = pre.Model;
+        var label = pre.Label;
+        var dateTag = pre.DateTag;
+        var layer1Context = pre.Layer1Context;
+        var layer1HighConfidence = pre.Layer1HighConfidence;
+        var autoSearchContext = pre.AutoSearchContext;
+        var layer2Context = pre.Layer2Context;
+        var metaContext = pre.MetaContext;
+        var metaAssessment = pre.MetaAssessment!;
+        var patternMatched = pre.PatternMatched;
+        var toolCount = pre.ToolCount;
+        var budgetRatio = pre.BudgetRatio;
 
         if (_duplexRouter != null)
         {
@@ -509,7 +324,7 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
             // because the teaching model doesn't see Layer 1's injected context
             if (routeResult.Route == "delegate_l2" && layer1Context == null && layer2Context == null)
             {
-                var ctxResult = await _context.ProcessAsync(new Handshake
+                var ctxResult = await _mesh.SendAsync(new Handshake
                 {
                     To = "context", Action = "preload",
                     Payload = new Dictionary<string, object?> { ["query"] = query },
@@ -603,7 +418,7 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
         // ReAct loop: stream response, detect tool calls, execute them, and retry
         var useStreaming = label != "fast" && label != "reflex";
         var fullResponse = new StringBuilder();
-        var totalToolCalls = patternResult.Matched ? 1 : 0; // Layer 1 tools count too
+        var totalToolCalls = patternMatched ? 1 : 0; // Layer 1 tools count too
         var retryLevel = 0;
         var groundingFailed = false;
         const int maxToolRounds = 5;
@@ -836,10 +651,10 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
 
         // Confidence calibration: back-propagate ERL outcomes to MetaCog familiarity
         var erlRate = _erlLoop.SuccessRate;
-        if (erlRate > 0 && erlRate < 0.5f && patternResult.ToolName != null)
-            _metaCognition.ReinforceDomain(patternResult.ToolName, -0.05f);
-        else if (erlRate > 0.7f && patternResult.ToolName != null)
-            _metaCognition.ReinforceDomain(patternResult.ToolName, 0.02f);
+        if (erlRate > 0 && erlRate < 0.5f && pre.PatternToolName != null)
+            _metaCognition.ReinforceDomain(pre.PatternToolName, -0.05f);
+        else if (erlRate > 0.7f && pre.PatternToolName != null)
+            _metaCognition.ReinforceDomain(pre.PatternToolName, 0.02f);
 
         if (groundingFailed)
         {
@@ -849,8 +664,8 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
         else if (layer1HighConfidence)
         {
             _metaCognition.RecordOutcome(query, true);
-            if (patternResult.ToolName != null)
-                _metaCognition.ReinforceDomain(patternResult.ToolName, 0.1f);
+            if (pre.PatternToolName != null)
+                _metaCognition.ReinforceDomain(pre.PatternToolName, 0.1f);
         }
         else
         {
@@ -873,8 +688,8 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
         }
 
         // Tool synthesis: track tool combo success → auto-discover effective patterns
-        if (!groundingFailed && totalToolCalls > 1 && patternResult.ToolName != null)
-            _erlLoop.RecordTrial($"combo_{patternResult.ToolName}_{totalToolCalls}", finalResponse[..Math.Min(finalResponse.Length, 80)], "tool_combo", 0.85f, true);
+        if (!groundingFailed && totalToolCalls > 1 && pre.PatternToolName != null)
+            _erlLoop.RecordTrial($"combo_{pre.PatternToolName}_{totalToolCalls}", finalResponse[..Math.Min(finalResponse.Length, 80)], "tool_combo", 0.85f, true);
 
         // Knowledge graph auto-build: extract entities from tool results for future lookup
         if (!groundingFailed && !string.IsNullOrWhiteSpace(layer1Context))
@@ -974,7 +789,7 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
         // Explainability trace: append decision metadata to every response
         if (finalResponse.Length > 10)
         {
-            var trace = $"\n\n---\n[决策: L0={label}, L1={patternResult.Matched}, L2={layer2Context != null}, " +
+            var trace = $"\n\n---\n[决策: L0={label}, L1={patternMatched}, L2={layer2Context != null}, " +
                 $"Model={model}, Tools={totalToolCalls}, Grounding={!groundingFailed}, " +
                 $"Familiarity={metaAssessment.Familiarity:F2}, Budget={_bavtRouter.BudgetRatio:F2}, " +
                 $"Time={DateTime.UtcNow:HH:mm:ss}]";
@@ -982,8 +797,8 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
         }
 
         // Counterfactual reasoning: try alternative tool set on repeated grounding failure
-        if (groundingFailed && totalToolCalls > 0 && patternResult.Matched && patternResult.ToolName != null)
-            _erlLoop.RecordTrial($"counterfactual_{patternResult.ToolName}",
+        if (groundingFailed && totalToolCalls > 0 && patternMatched && pre.PatternToolName != null)
+            _erlLoop.RecordTrial($"counterfactual_{pre.PatternToolName}",
                 $"Would different tools help?", "counterfactual", 0.4f, false);
 
         // Auto regression test: generate test case from grounding failure
@@ -994,7 +809,7 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
                 {
                     var testCase = $"// Regression: {query[..Math.Min(query.Length, 60)]}\n" +
                         $"// Expected: grounded answer with tools. Actual: grounding failed L{retryLevel}\n" +
-                        $"// Tools used: {totalToolCalls}. Pattern: {patternResult.ToolName ?? "none"}";
+                        $"// Tools used: {totalToolCalls}. Pattern: {pre.PatternToolName ?? "none"}";
                     _synapticMemory?.Store(new SynapticExperience
                     {
                         Type = SynapseType.Correction, Query = query, Response = testCase,
@@ -1026,9 +841,9 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
             }, "SelfRepair");
 
         // Digital twin sandbox: pre-execution safety check for shell_exec commands
-        if (!groundingFailed && patternResult.ToolName == "shell_exec" && patternResult.ContextMessage != null)
+        if (!groundingFailed && pre.PatternToolName == "shell_exec" && layer1Context != null)
         {
-            var cmd = patternResult.ContextMessage;
+            var cmd = layer1Context;
             if (cmd.Contains("rm ") || cmd.Contains("del ") || cmd.Contains("format") || cmd.Contains("DROP"))
             {
                 _logger.LogWarning("Sandbox: blocked dangerous command in shell_exec: {Cmd}", cmd[..Math.Min(cmd.Length, 80)]);
@@ -1225,7 +1040,7 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
             catch (Exception ex) { _logger.LogDebug(ex, "DNA consciousness processing skipped"); }
         }
 
-        var inputResult = await _input.ProcessAsync(new Handshake
+        var inputResult = await _mesh.SendAsync(new Handshake
         {
             To = "input", Action = "process",
             Payload = new Dictionary<string, object?> { ["query"] = query },
@@ -1248,7 +1063,7 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
 
             if (routeResult.Route == "delegate_l2")
             {
-                var ctxResult = await _context.ProcessAsync(new Handshake
+                var ctxResult = await _mesh.SendAsync(new Handshake
                 {
                     To = "context", Action = "preload",
                     Payload = inputResult.Payload, ReplyTo = traceId
@@ -1268,7 +1083,7 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
             }
         }
 
-        var contextResult = await _context.ProcessAsync(new Handshake
+        var contextResult = await _mesh.SendAsync(new Handshake
         {
             To = "context", Action = "preload",
             Payload = inputResult.Payload, ReplyTo = traceId
@@ -1277,7 +1092,7 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
         var preloadedContext = contextResult.Payload?.GetValueOrDefault("context")?.ToString() ?? "";
         _elasticMemory.Store($"ctx_{traceId}", preloadedContext[..Math.Min(preloadedContext.Length, 500)]);
 
-        var routingResult = await _routing.ProcessAsync(new Handshake
+        var routingResult = await _mesh.SendAsync(new Handshake
         {
             To = "routing", Action = "select_provider",
             Payload = inputResult.Payload, ReplyTo = traceId
@@ -1356,7 +1171,7 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
             catch (Exception ex) { _logger.LogDebug(ex, "DNA output safety check skipped"); }
         }
 
-        var outputResult = await _output.ProcessAsync(new Handshake
+        var outputResult = await _mesh.SendAsync(new Handshake
         {
             To = "output", Action = "review",
             Payload = new Dictionary<string, object?> { ["response"] = response },
@@ -1385,7 +1200,7 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
 
         _workQueue.Enqueue(async ct =>
         {
-            try { await _self.ProcessAsync(new Handshake
+            try { await _mesh.SendAsync(new Handshake
             {
                 To = "self", Action = "start_trace",
                 Payload = new Dictionary<string, object?> { ["trace_id"] = traceId }
@@ -1812,6 +1627,43 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
             _logger.LogDebug(ex, "Follow-up generation skipped");
             return null;
         }
+    }
+
+    private async IAsyncEnumerable<string> LlmDecomposeAsync(
+        IChatClient llm, string task, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
+    {
+        var prompt = $"""
+            Break down the following task into numbered subtasks. Each subtask should be a single, actionable step.
+            Return ONLY the numbered list, one per line. No explanations.
+
+            Task: {task}
+            """;
+
+        List<string> results;
+        try
+        {
+            var response = await llm.GetResponseAsync(prompt, cancellationToken: ct).ConfigureAwait(false);
+            var text = response.Text ?? "";
+            results = new List<string>();
+
+            foreach (var line in text.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+            {
+                var trimmed = line.Trim();
+                if (trimmed.Length > 5 && (char.IsDigit(trimmed[0]) || trimmed[0] == '-' || trimmed[0] == '*'))
+                    results.Add(trimmed);
+            }
+
+            if (results.Count == 0)
+                results.Add(task);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "LLM task decomposition failed, using original task");
+            results = new List<string> { task };
+        }
+
+        foreach (var result in results)
+            yield return result;
     }
 
     public async ValueTask DisposeAsync()

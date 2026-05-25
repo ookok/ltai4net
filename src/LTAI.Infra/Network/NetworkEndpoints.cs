@@ -14,33 +14,6 @@ public static class NetworkEndpoints
 {
     public static void MapNetworkEndpoints(this IEndpointRouteBuilder endpoints)
     {
-        endpoints.MapGet("/api/network/distributed", () =>
-            Results.Json(DistributedConsciousness.Instance.Stats()));
-
-        endpoints.MapPost("/api/network/distributed/merge", async (
-            HttpContext context,
-            CancellationToken cancellationToken) =>
-        {
-            using var reader = new StreamReader(context.Request.Body);
-            var body = await reader.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
-            var request = JsonSerializer.Deserialize<DistributedMergeRequest>(body);
-
-            if (request == null)
-                return Results.Json(new { error = "SelfModel and traits required" }, statusCode: 400);
-
-            var selfModel = request.SelfModel ?? new SelfModelSnapshot();
-            var insights = request.RecentInsights ?? new List<string>();
-            var mutations = request.Mutations ?? new List<string>();
-
-            var fragment = DistributedConsciousness.Instance.PrepareFragment(
-                selfModel, insights, mutations, request.EmergencePhase);
-
-            DistributedConsciousness.Instance.ReceiveFragment(fragment);
-            var merged = DistributedConsciousness.Instance.MergeExperiences(fragment);
-
-            return Results.Json(new { fragment_id = fragment.FragmentId, merged });
-        });
-
         endpoints.MapGet("/api/network/swarm/status", () =>
             Results.Json(SwarmCoordinator.Instance.Stats()));
 
@@ -205,14 +178,6 @@ public static class NetworkEndpoints
         endpoints.MapGet("/api/network/external/strategies", () =>
             Results.Json(ExternalAccess.Instance.GetStrategies()));
     }
-}
-
-public sealed record DistributedMergeRequest
-{
-    public SelfModelSnapshot? SelfModel { get; init; }
-    public List<string>? RecentInsights { get; init; }
-    public List<string>? Mutations { get; init; }
-    public string EmergencePhase { get; init; } = string.Empty;
 }
 
 public sealed record ReputationRateRequest

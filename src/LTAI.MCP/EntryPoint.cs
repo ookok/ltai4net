@@ -75,7 +75,7 @@ public static class EntryPoint
         var toolRegistry = sp.GetRequiredService<AIToolRegistry>();
         await toolRegistry.RegisterAllToolCategoriesAsync().ConfigureAwait(false);
 
-        var lts = sp.GetRequiredService<LivingTreeSystem>();
+        var lts = sp.GetRequiredService<ILivingTreeSystem>();
         await lts.InitializeAsync().ConfigureAwait(false);
 
         var server = sp.GetRequiredService<MCPServer>();

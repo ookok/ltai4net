@@ -1,4 +1,5 @@
 using LTAI.AI;
+using LTAI.AI.Interfaces;
 using LTAI.AI.Governors;
 using LTAI.Agent.Tools;
 using LTAI.Core.Messaging;
@@ -46,7 +47,7 @@ public static class EntryPoint
         builder.Services.AddLTAICapability();
         builder.Services.AddLTAIMetrics();
         builder.Services.AddLTAIMAF();
-        builder.Services.AddSingleton<LivingTreeSystem>();
+        builder.Services.AddSingleton<ILivingTreeSystem>(sp => sp.GetRequiredService<LivingTreeSystem>());
         builder.Services.AddSingleton<DNAOrchestrator>();
         builder.Services.AddSingleton<LTAIMetricsCollector>();
 
@@ -59,8 +60,11 @@ public static class EntryPoint
         var toolRegistry = app.Services.GetRequiredService<AIToolRegistry>();
         await toolRegistry.RegisterAllToolCategoriesAsync().ConfigureAwait(false);
 
-        var lts = app.Services.GetRequiredService<LivingTreeSystem>();
+        var lts = app.Services.GetRequiredService<ILivingTreeSystem>();
         await lts.InitializeAsync().ConfigureAwait(false);
+
+        var skillRegistry = app.Services.GetRequiredService<LTAI.Agent.Skills.SkillRegistry>();
+        await skillRegistry.LoadAllAsync().ConfigureAwait(false);
 
         await app.RunAsync().ConfigureAwait(false);
     }

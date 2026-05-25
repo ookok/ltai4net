@@ -32,7 +32,6 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ServiceDiscovery>();
         services.AddSingleton<SmartDnsResolver>();
 
-        services.AddSingleton(sp => DistributedConsciousness.Instance);
         services.AddSingleton(sp => SwarmCoordinator.Instance);
         services.AddSingleton(sp => CollectiveConsciousness.Instance);
         services.AddSingleton(sp => NATTraverser.Instance);

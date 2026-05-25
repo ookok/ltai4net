@@ -93,7 +93,7 @@ public static class LTAIApiEndpoints
             await context.Response.WriteAsync("data: [DONE]\n\n", cancellationToken);
         });
 
-        endpoints.MapGet("/api/status", async (LivingTreeSystem system) =>
+        endpoints.MapGet("/api/status", async (ILivingTreeSystem system) =>
         {
             object dnaInfo;
             if (system.DNAStatus != null)

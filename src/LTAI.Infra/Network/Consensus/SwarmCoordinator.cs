@@ -199,7 +199,6 @@ public sealed class SwarmCoordinator
     public async Task DistributeTaskAsync(
         string taskDescription,
         List<string> targetNodes,
-        DistributedConsciousness? consciousness,
         CancellationToken cancellationToken = default)
     {
         var strategy = _monitor.AutoStrategy();
@@ -214,7 +213,7 @@ public sealed class SwarmCoordinator
         {
             TaskId = taskId,
             Description = taskDescription,
-            SourceNode = consciousness?.Stats().GetValueOrDefault("instance_id", "unknown")?.ToString() ?? "unknown",
+            SourceNode = "local",
             TargetNodes = targetNodes,
             Status = "distributed"
         };

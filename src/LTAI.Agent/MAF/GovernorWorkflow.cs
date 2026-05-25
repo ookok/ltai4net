@@ -1,5 +1,7 @@
 using System.Diagnostics;
+using LTAI.AI.Interfaces;
 using LTAI.AI.Governors;
+using LTAI.Core.Interfaces;
 using LTAI.Core.Models;
 using Microsoft.Agents.AI.Workflows;
 
@@ -30,7 +32,7 @@ public sealed class ClassifiedQuery
     public string TraceId { get; init; } = "";
 }
 
-internal sealed partial class PreProcessExecutor(InputGovernor input, ContextGovernor context, RoutingGovernor routing) : Executor("PreProcess")
+internal sealed partial class PreProcessExecutor(ICognitiveMesh mesh) : Executor("PreProcess")
 {
     protected override ProtocolBuilder ConfigureProtocol(ProtocolBuilder builder) => builder;
 
@@ -38,7 +40,7 @@ internal sealed partial class PreProcessExecutor(InputGovernor input, ContextGov
     private async ValueTask<ClassifiedQuery> HandleAsync(GovernorQuery query, IWorkflowContext ctx, CancellationToken ct)
     {
         var traceId = query.TraceId ?? Guid.NewGuid().ToString("N");
-        var inputResult = await input.ProcessAsync(new Handshake
+        var inputResult = await mesh.SendAsync(new Handshake
         {
             To = "input", Action = "process",
             Payload = new Dictionary<string, object?> { ["query"] = query.Text },
@@ -58,13 +60,13 @@ internal sealed partial class PreProcessExecutor(InputGovernor input, ContextGov
             return new ClassifiedQuery { Text = query.Text, Label = "reflex", TraceId = traceId };
         }
 
-        var contextResult = await context.ProcessAsync(new Handshake
+        var contextResult = await mesh.SendAsync(new Handshake
         {
             To = "context", Action = "preload",
             Payload = inputResult.Payload, ReplyTo = traceId
         }, ct);
 
-        var routingResult = await routing.ProcessAsync(new Handshake
+        var routingResult = await mesh.SendAsync(new Handshake
         {
             To = "routing", Action = "select_provider",
             Payload = inputResult.Payload, ReplyTo = traceId
@@ -80,7 +82,7 @@ internal sealed partial class PreProcessExecutor(InputGovernor input, ContextGov
     }
 }
 
-internal sealed partial class PipelineExecutor(LivingTreeSystem system) : Executor("Pipeline")
+internal sealed partial class PipelineExecutor(ILivingTreeSystem system) : Executor("Pipeline")
 {
     protected override ProtocolBuilder ConfigureProtocol(ProtocolBuilder builder) => builder;
 
@@ -111,9 +113,9 @@ public static class GovernorWorkflow
 {
     private static readonly ActivitySource ActivitySource = new("LTAI.Agent.Mesh");
 
-    public static Workflow BuildGovernorWorkflow(LivingTreeSystem system)
+    public static Workflow BuildGovernorWorkflow(ILivingTreeSystem system)
     {
-        var preExec = new PreProcessExecutor(system.InputGovernor, system.ContextGovernor, system.RoutingGovernor);
+        var preExec = new PreProcessExecutor(system.Mesh);
         var pipelineExec = new PipelineExecutor(system);
 
         var builder = new WorkflowBuilder(preExec);
@@ -123,7 +125,7 @@ public static class GovernorWorkflow
     }
 
     public static async IAsyncEnumerable<WorkflowEvent> ExecuteWorkflowStreamingAsync(
-        LivingTreeSystem system,
+        ILivingTreeSystem system,
         string query,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
     {
@@ -139,7 +141,7 @@ public static class GovernorWorkflow
     }
 
     public static async Task<GovernorResult> ExecuteWorkflowAsync(
-        LivingTreeSystem system,
+        ILivingTreeSystem system,
         string query,
         CancellationToken ct = default)
     {

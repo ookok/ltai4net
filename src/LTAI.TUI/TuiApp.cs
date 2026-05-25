@@ -18,7 +18,7 @@ public enum TuiTheme { Dark, Light, HighContrast }
 
 public sealed class TuiApp
 {
-    private readonly LivingTreeSystem _lts;
+    private readonly ILivingTreeSystem _lts;
     private readonly DNAOrchestrator? _dna;
     private readonly ReasoningOrchestrator? _reasoning;
     private readonly MultiLangCodeAnalyzer? _analyzer;
@@ -52,7 +52,7 @@ public sealed class TuiApp
     private static readonly string[] TaskPhases = { "input", "context", "routing", "reasoning", "generation", "review", "output" };
 
     public TuiApp(
-        LivingTreeSystem lts,
+        ILivingTreeSystem lts,
         DNAOrchestrator? dna = null,
         ReasoningOrchestrator? reasoning = null,
         MultiLangCodeAnalyzer? analyzer = null,

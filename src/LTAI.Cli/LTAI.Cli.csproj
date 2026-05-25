@@ -11,6 +11,7 @@
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <DefineConstants Condition="'$(SkipHostModules)' == 'true'">$(DefineConstants);SKIP_HOST_MODULES</DefineConstants>
   </PropertyGroup>
 
   <ItemGroup>
@@ -19,10 +20,10 @@
     <ProjectReference Include="..\LTAI.Core\LTAI.Core.csproj" />
     <ProjectReference Include="..\LTAI.Knowledge\LTAI.Knowledge.csproj" />
     <ProjectReference Include="..\LTAI.Agent\LTAI.Agent.csproj" />
-    <ProjectReference Include="..\LTAI.Host\LTAI.Host.csproj" />
-    <ProjectReference Include="..\LTAI.MCP\LTAI.MCP.csproj" />
-    <ProjectReference Include="..\LTAI.TUI\LTAI.TUI.csproj" />
-    <ProjectReference Include="..\LTAI.WebApp\LTAI.WebApp.csproj" />
+    <ProjectReference Include="..\LTAI.Host\LTAI.Host.csproj" Condition="'$(SkipHostModules)' != 'true'" />
+    <ProjectReference Include="..\LTAI.MCP\LTAI.MCP.csproj" Condition="'$(SkipHostModules)' != 'true'" />
+    <ProjectReference Include="..\LTAI.TUI\LTAI.TUI.csproj" Condition="'$(SkipHostModules)' != 'true'" />
+    <ProjectReference Include="..\LTAI.WebApp\LTAI.WebApp.csproj" Condition="'$(SkipHostModules)' != 'true'" />
   </ItemGroup>
 
   <ItemGroup>

@@ -1,3 +1,4 @@
+using LTAI.AI.Interfaces;
 using LTAI.AI.Governors;
 using LTAI.Core.Messaging;
 using Microsoft.AspNetCore.Builder;
@@ -33,7 +34,7 @@ public static class DevUIEndpoints
         endpoints.MapGet("/api/devui/state", async (HttpContext context) =>
         {
             var sp = context.RequestServices;
-            var system = sp.GetService<LivingTreeSystem>();
+            var system = sp.GetService<ILivingTreeSystem>();
             var toolRegistry = sp.GetService<AIToolRegistry>();
 
             var state = new

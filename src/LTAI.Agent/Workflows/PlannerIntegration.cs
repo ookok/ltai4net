@@ -1,4 +1,6 @@
+using LTAI.Agent.Skills;
 using LTAI.Planning;
+using LTAI.Planning.HTN;
 using LTAI.Planning.Models;
 using LTAI.Planning.Planning;
 using Microsoft.Extensions.Logging;
@@ -9,16 +11,22 @@ public sealed class PlannerIntegration
 {
     private readonly DiffusionPlanner _diffusionPlanner;
     private readonly GtsmPlanner _gtsmPlanner;
+    private readonly HTNPlanner _htnPlanner;
+    private readonly SkillRegistry? _skillRegistry;
     private readonly ILogger<PlannerIntegration> _logger;
 
     public PlannerIntegration(
         DiffusionPlanner diffusionPlanner,
         GtsmPlanner gtsmPlanner,
-        ILogger<PlannerIntegration> logger)
+        HTNPlanner htnPlanner,
+        ILogger<PlannerIntegration> logger,
+        SkillRegistry? skillRegistry = null)
     {
         _diffusionPlanner = diffusionPlanner;
         _gtsmPlanner = gtsmPlanner;
+        _htnPlanner = htnPlanner;
         _logger = logger;
+        _skillRegistry = skillRegistry;
     }
 
     public async Task<string> PlanAndExecuteAsync(
@@ -32,7 +40,16 @@ public sealed class PlannerIntegration
 
         if (refinedPlan.Confidence < 0.5)
         {
-            _logger.LogWarning("PlannerIntegration: Diffusion plan confidence low ({Conf:F2}), falling back to GTSM", refinedPlan.Confidence);
+            _logger.LogWarning("PlannerIntegration: Diffusion plan confidence low ({Conf:F2}), trying HTN", refinedPlan.Confidence);
+
+            var htnPlan = ExecuteHtnPlan(task, domain);
+            if (htnPlan != null)
+            {
+                _logger.LogInformation("PlannerIntegration: HTN plan used (template found)");
+                return htnPlan;
+            }
+
+            _logger.LogWarning("PlannerIntegration: HTN plan insufficient, falling back to GTSM");
             return await ExecuteGtsmPlan(task, domain, cancellationToken).ConfigureAwait(false);
         }
 
@@ -47,6 +64,83 @@ public sealed class PlannerIntegration
         result.AppendLine(refinedPlan.FinalPlan);
 
         return result.ToString();
+    }
+
+    private string? ExecuteHtnPlan(string task, string domain)
+    {
+        var tools = new List<string> { "filesystem", "shell", "http", "code", "git", "search", "math", "text" };
+
+        if (_skillRegistry != null)
+        {
+            var skills = _skillRegistry.GetByDomain(domain);
+            if (skills.Count > 0)
+            {
+                var skillPlan = BuildSkillPlan(task, domain, skills);
+                if (skillPlan != null) return skillPlan;
+            }
+        }
+
+        var root = _htnPlanner.DecomposeTask(task, domain, tools);
+
+        if (root.Children.Count == 0 && root.ToolCalls.Count == 0)
+            return null;
+
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine($"# HTN Plan ({domain})");
+        FlattenPlanNode(root, sb, 0);
+        return sb.ToString();
+    }
+
+    private string? BuildSkillPlan(string task, string domain, List<LTAI.Models.Skill> skills)
+    {
+        var relevant = skills.Where(s => s.IsActive && s.Triggers.Any(t =>
+            task.Contains(t.Pattern, StringComparison.OrdinalIgnoreCase))).ToList();
+
+        if (relevant.Count == 0) return null;
+
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine($"# Skill-guided Plan ({domain})");
+
+        foreach (var skill in relevant.OrderByDescending(s => s.Confidence))
+        {
+            sb.AppendLine($"## {skill.Name} (conf={skill.Confidence:F2})");
+            foreach (var step in skill.Steps)
+            {
+                var action = step.SkillRef != null ? $"→ {step.SkillRef} {step.Action}" : step.Action;
+                sb.AppendLine($"{step.Index}. {action}");
+            }
+
+            foreach (var dep in skill.Requires)
+                sb.AppendLine($"   depends: {dep}");
+        }
+
+        return sb.ToString();
+    }
+
+    private static void FlattenPlanNode(PlanNode node, System.Text.StringBuilder sb, int depth)
+    {
+        var indent = new string(' ', depth * 2);
+
+        if (!string.IsNullOrEmpty(node.Name))
+        {
+            var typeLabel = node.Type switch
+            {
+                PlanNodeType.Parallel => "[P]",
+                PlanNodeType.Decision => "[?]",
+                PlanNodeType.ToolCall => "[T]",
+                _ => ""
+            };
+            sb.AppendLine($"{indent}{node.Children.Count + 1}. {typeLabel} {node.Name}");
+
+            if (!string.IsNullOrEmpty(node.Description))
+                sb.AppendLine($"{indent}   {node.Description}");
+
+            if (node.ToolCalls.Count > 0)
+                sb.AppendLine($"{indent}   tools: {string.Join(", ", node.ToolCalls)}");
+        }
+
+        foreach (var child in node.Children)
+            FlattenPlanNode(child, sb, depth + 1);
     }
 
     private async Task<string> ExecuteGtsmPlan(string task, string domain, CancellationToken ct)

@@ -1,5 +1,6 @@
 using System.ClientModel;
 using LTAI.AI.Governors;
+using LTAI.AI.Governors.Pipeline;
 using LTAI.AI.Interfaces;
 using LTAI.AI.Providers;
 using LTAI.Tools.Skills;
@@ -693,11 +694,8 @@ public static class ServiceCollectionExtensions
                 return new NoOpHostedService();
 
             var transport = sp.GetService<IFederatedTransport>();
-            var trainer = sp.GetRequiredService<SynapticTrainer>();
-            var inference = sp.GetRequiredService<SynapticInference>();
-            var memory = sp.GetRequiredService<SynapticMemory>();
             var logger = sp.GetService<ILogger<FederatedLearningService>>();
-            return new FederatedLearningService(transport, trainer, inference, memory, logger);
+            return new FederatedLearningService(transport, logger);
         });
 
         services.AddSingleton<InputGovernor>();
@@ -706,6 +704,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<OutputGovernor>();
         services.AddSingleton<SelfGovernor>();
         services.AddSingleton<SystemGuardian>();
+        services.AddSingleton<QueryPreprocessingService>();
         services.AddSingleton<LivingTreeSystem>();
         services.AddSingleton<ILivingTreeSystem>(sp => sp.GetRequiredService<LivingTreeSystem>());
 

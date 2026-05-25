@@ -28,7 +28,7 @@ public static class Program
         var toolRegistry = provider.GetRequiredService<AIToolRegistry>();
         toolRegistry.RegisterAllToolCategoriesAsync().GetAwaiter().GetResult();
 
-        var lts = provider.GetRequiredService<LivingTreeSystem>();
+        var lts = provider.GetRequiredService<ILivingTreeSystem>();
         lts.InitializeAsync().GetAwaiter().GetResult();
 
         BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);

@@ -80,7 +80,7 @@ public static class EntryPoint
         var toolRegistry = sp.GetRequiredService<AIToolRegistry>();
         await toolRegistry.RegisterAllToolCategoriesAsync();
 
-        var lts = sp.GetRequiredService<LivingTreeSystem>();
+        var lts = sp.GetRequiredService<ILivingTreeSystem>();
         await lts.InitializeAsync();
 
         var dna = sp.GetService<DNAOrchestrator>();

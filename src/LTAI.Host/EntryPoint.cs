@@ -129,9 +129,13 @@ public static class EntryPoint
         await LTAI.Agent.Tools.ToolRegistryExtensions.RegisterAllToolCategoriesAsync(toolRegistry, logger).ConfigureAwait(false);
         await sp.RegisterCodeActToolsAsync(toolRegistry).ConfigureAwait(false);
 
-        var lts = sp.GetRequiredService<LivingTreeSystem>();
+        var lts = sp.GetRequiredService<ILivingTreeSystem>();
         await lts.InitializeAsync().ConfigureAwait(false);
-        logger.LogInformation("LTAI Agent Mesh initialized");
+
+        var skillRegistry = sp.GetRequiredService<LTAI.Agent.Skills.SkillRegistry>();
+        await skillRegistry.LoadAllAsync().ConfigureAwait(false);
+        logger.LogInformation("LTAI Agent Mesh initialized ({SkillCount} skills loaded)",
+            skillRegistry.All.Count);
 
         app.MapGet("/health", () => Results.Ok(new { status = "healthy", version = "0.51.0", timestamp = DateTime.UtcNow }));
 
