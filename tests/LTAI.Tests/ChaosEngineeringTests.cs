@@ -1,4 +1,6 @@
 using LTAI.Agent.Agents;
+using LTAI.Core.Configuration;
+using LTAI.Models;
 using LTAI.Agent.Routing;
 using LTAI.DNA.Safety;
 using LTAI.Models;
@@ -91,7 +93,7 @@ public class ChaosEngineeringTests
         var router = new IntentRouter();
         var route = router.Classify("评估环境影响需要进行向量检索和分析");
         Assert.NotNull(route.TargetAgent);
-        Assert.True(route.TargetAgent is "eia" or "reasoning" or "chat",
+        Assert.True(route.TargetAgent is AgentType.EIA or AgentType.Reasoning or AgentType.Chat,
             $"Keyword router should classify environmental queries, got: {route.TargetAgent}");
 
         // Verify agent still works through keyword routing
@@ -255,7 +257,8 @@ public class ChaosEngineeringTests
         var policy = new PolicyAsCode(); policy.LoadDefaults();
         var safety = new UnifiedSafetyGate(
             NullLogger<UnifiedSafetyGate>.Instance,
-            new SafetyCoordinator(NullLogger<SafetyCoordinator>.Instance), policy);
+            new SafetyCoordinator(NullLogger<SafetyCoordinator>.Instance), policy,
+            Microsoft.Extensions.Options.Options.Create(new LTAIOptions()));
 
         var brain = new ChaoticChatClient()
             .InjectChaos(new ChaosRule("should-not-trigger", "previous instructions", ChaosBehavior.Error))

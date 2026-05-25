@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
@@ -5,16 +6,17 @@ namespace LTAI.AI.Providers;
 
 public static class ToolCallRepairer
 {
-    private static readonly HashSet<string> _recentToolCalls = new();
+    private static readonly ConcurrentDictionary<string, HashSet<string>> _sessionToolCalls = new();
     private static readonly object _stormLock = new();
     private const int StormWindowMax = 20;
+
+    private static readonly Regex TruncationTrailingCommaRegex = new(
+        @",\s*(?=\})", RegexOptions.Compiled, TimeSpan.FromMilliseconds(100));
 
     public static JsonElement? RepairToolCall(string rawJson)
     {
         if (string.IsNullOrWhiteSpace(rawJson)) return null;
-
         var json = FlattenDeepSchema(rawJson);
-
         return RescueParser.TryParseToolCall(json)
             ?? ScavengeFromThinking(rawJson);
     }
@@ -22,18 +24,13 @@ public static class ToolCallRepairer
     public static JsonElement? RepairAll(string rawJson)
     {
         if (string.IsNullOrWhiteSpace(rawJson)) return null;
-
         var json = FlattenDeepSchema(rawJson);
-
         var result = RescueParser.TryParseToolCall(json);
         if (result.HasValue) return result;
-
         result = ScavengeFromThinking(json);
         if (result.HasValue) return result;
-
         result = TruncationRepair(json);
         if (result.HasValue) return result;
-
         return null;
     }
 
@@ -61,8 +58,8 @@ public static class ToolCallRepairer
                 {
                     if (prop.Name == "parameters")
                         rootDict["parameters"] = flattened;
-                    else if (prop.Value.ValueKind != JsonValueKind.Object)
-                        rootDict[prop.Name] = prop.Value.ToString();
+                    else
+                        rootDict[prop.Name] = ExtractJsonValue(prop.Value);
                 }
 
                 return JsonSerializer.Serialize(rootDict);
@@ -81,19 +78,54 @@ public static class ToolCallRepairer
 
         var toolPattern = new Regex(
             @"(?:function|tool)_call[:\s]*(\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\})",
-            RegexOptions.IgnoreCase | RegexOptions.Singleline);
+            RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.NonBacktracking,
+            TimeSpan.FromMilliseconds(500));
 
-        var match = toolPattern.Match(text);
+        Match match;
+        try { match = toolPattern.Match(text); }
+        catch (RegexMatchTimeoutException) { return null; }
+
         if (match.Success)
             return RescueParser.TryParseToolCall(match.Groups[1].Value);
 
-        var bracePattern = new Regex(
-            @"""(?:name|function_name|tool_name)""\s*:\s*""(\w+)""[^}]*""(?:arguments|parameters|input)""\s*:\s*(\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\})",
-            RegexOptions.Singleline);
+        var braceJson = ExtractBraceBalancedJson(text, "arguments")
+            ?? ExtractBraceBalancedJson(text, "parameters")
+            ?? ExtractBraceBalancedJson(text, "input");
+        if (braceJson != null)
+            return RescueParser.TryParseToolCall(braceJson);
 
-        var braceMatch = bracePattern.Match(text);
-        if (braceMatch.Success)
-            return RescueParser.TryParseToolCall(braceMatch.Groups[2].Value);
+        return null;
+    }
+
+    private static string? ExtractBraceBalancedJson(string text, string keyName)
+    {
+        var keyIdx = text.IndexOf($"\"{keyName}\"", StringComparison.OrdinalIgnoreCase);
+        if (keyIdx < 0) return null;
+
+        var colonIdx = text.IndexOf(':', keyIdx);
+        if (colonIdx < 0) return null;
+
+        var startIdx = colonIdx + 1;
+        while (startIdx < text.Length && char.IsWhiteSpace(text[startIdx]))
+            startIdx++;
+        if (startIdx >= text.Length || text[startIdx] != '{') return null;
+
+        var depth = 0;
+        var inString = false;
+        for (var i = startIdx; i < text.Length; i++)
+        {
+            var ch = text[i];
+            if (ch == '"' && (i == 0 || text[i - 1] != '\\'))
+                inString = !inString;
+            if (inString) continue;
+            if (ch == '{') depth++;
+            else if (ch == '}')
+            {
+                depth--;
+                if (depth == 0)
+                    return text[startIdx..(i + 1)];
+            }
+        }
 
         return null;
     }
@@ -131,25 +163,23 @@ public static class ToolCallRepairer
         if (repaired.EndsWith(", ..."))
             repaired = repaired[..^4] + "}";
 
-        repaired = Regex.Replace(repaired, @",\s*(?=\})", "");
+        repaired = TruncationTrailingCommaRegex.Replace(repaired, "");
 
         return RescueParser.TryParseToolCall(repaired);
     }
 
-    public static bool IsDuplicateToolCall(string toolName, string args)
+    public static bool IsDuplicateToolCall(string sessionId, string toolName, string args)
     {
         var key = $"{toolName}|{args}";
         lock (_stormLock)
         {
-            if (_recentToolCalls.Contains(key))
-                return true;
-
-            _recentToolCalls.Add(key);
-            if (_recentToolCalls.Count > StormWindowMax)
+            var recentCalls = _sessionToolCalls.GetOrAdd(sessionId, _ => new HashSet<string>());
+            if (recentCalls.Contains(key)) return true;
+            recentCalls.Add(key);
+            if (recentCalls.Count > StormWindowMax)
             {
-                var toRemove = _recentToolCalls.Take(_recentToolCalls.Count - StormWindowMax).ToList();
-                foreach (var r in toRemove)
-                    _recentToolCalls.Remove(r);
+                var toRemove = recentCalls.Take(recentCalls.Count - StormWindowMax).ToList();
+                foreach (var r in toRemove) recentCalls.Remove(r);
             }
             return false;
         }
@@ -160,14 +190,36 @@ public static class ToolCallRepairer
         if (string.IsNullOrWhiteSpace(result)) return result;
         var approxTokens = result.Length / 4;
         if (approxTokens <= maxTokens) return result;
-
         var targetChars = maxTokens * 4;
         return result[..targetChars] + $"\n\n... [truncated: {approxTokens} tokens → {maxTokens} tokens cap]";
     }
 
-    public static void ClearStormHistory()
+    public static void ClearStormHistory(string sessionId)
     {
-        lock (_stormLock) _recentToolCalls.Clear();
+        lock (_stormLock) _sessionToolCalls.TryRemove(sessionId, out _);
+    }
+
+    private static object? ExtractJsonValue(JsonElement element)
+    {
+        return element.ValueKind switch
+        {
+            JsonValueKind.String => element.GetString(),
+            JsonValueKind.Number => element.GetRawText(),
+            JsonValueKind.True => true,
+            JsonValueKind.False => false,
+            JsonValueKind.Null => null,
+            JsonValueKind.Array => element.EnumerateArray().Select(ExtractJsonValue).ToList(),
+            JsonValueKind.Object => FlattenObjectToDict(element),
+            _ => element.GetRawText()
+        };
+    }
+
+    private static Dictionary<string, object?> FlattenObjectToDict(JsonElement element)
+    {
+        var dict = new Dictionary<string, object?>();
+        foreach (var prop in element.EnumerateObject())
+            dict[prop.Name] = ExtractJsonValue(prop.Value);
+        return dict;
     }
 
     private static void FlattenObject(JsonElement element, Dictionary<string, object?> result, string prefix)
@@ -175,23 +227,14 @@ public static class ToolCallRepairer
         foreach (var prop in element.EnumerateObject())
         {
             var key = string.IsNullOrEmpty(prefix) ? prop.Name : $"{prefix}.{prop.Name}";
-
             if (prop.Value.ValueKind == JsonValueKind.Object)
-            {
                 FlattenObject(prop.Value, result, key);
-            }
             else if (prop.Value.ValueKind == JsonValueKind.String)
-            {
                 result[key] = prop.Value.GetString();
-            }
             else if (prop.Value.ValueKind == JsonValueKind.Number)
-            {
                 result[key] = prop.Value.GetRawText();
-            }
             else if (prop.Value.ValueKind == JsonValueKind.True || prop.Value.ValueKind == JsonValueKind.False)
-            {
                 result[key] = prop.Value.GetBoolean();
-            }
         }
     }
 }

@@ -63,13 +63,6 @@ public sealed class ProviderInfo
     public List<string> Capabilities { get; init; } = new();
 }
 
-public sealed class Handshake
-{
-    public string To { get; init; } = "";
-    public string Action { get; init; } = "process";
-    public Dictionary<string, object?>? Payload { get; init; }
-    public string? ReplyTo { get; init; }
-}
 
 public sealed class ProgressEvent
 {

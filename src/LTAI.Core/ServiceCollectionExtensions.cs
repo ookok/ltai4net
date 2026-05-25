@@ -1,4 +1,3 @@
-using System.Text.Json;
 using LTAI.Core.Acceleration;
 using LTAI.Core.Configuration;
 using LTAI.Core.Execution;
@@ -19,31 +18,8 @@ namespace LTAI.Core;
 
 public static class ServiceCollectionExtensions
 {
-    private static readonly JsonSerializerOptions _jsonCaseInsensitive = new()
-    {
-        PropertyNameCaseInsensitive = true
-    };
-
     public static IServiceCollection AddLTAICore(this IServiceCollection services)
     {
-        // Patch IConfiguration.Bind bug: value-type properties on init-only nested
-        // containers are silently ignored. Deserialize via System.Text.Json instead.
-        var configPath = Path.Combine(AppContext.BaseDirectory, "appsettings.json");
-        if (File.Exists(configPath))
-        {
-            try
-            {
-                using var doc = JsonDocument.Parse(File.ReadAllText(configPath));
-                var root = doc.RootElement;
-                if (root.TryGetProperty("LTAI", out var ltai))
-                    root = ltai;
-                var opts = root.Deserialize<LTAIOptions>(_jsonCaseInsensitive);
-                if (opts != null)
-                    services.AddSingleton<IOptions<LTAIOptions>>(Options.Create(opts));
-            }
-            catch { }
-        }
-
         services.AddHttpClient();
 
         services.AddSingleton(sp => new HttpAccelerator(sp.GetRequiredService<IOptions<LTAIOptions>>().Value.HttpAccelerator));

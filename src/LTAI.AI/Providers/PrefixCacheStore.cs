@@ -79,7 +79,9 @@ public sealed class PrefixCacheStore
     {
         lock (_lock)
         {
-            return $"turn_count={_turnCount} system_hash={_systemHash[..Math.Min(_systemHash.Length, 8)]} tool_hash={_toolHash[..Math.Min(_toolHash.Length, 8)]}";
+            var sysLen = Math.Min(_systemHash.Length, 8);
+            var toolLen = Math.Min(_toolHash.Length, 8);
+            return $"turn_count={_turnCount} system_hash={(sysLen > 0 ? _systemHash[..sysLen] : "n/a")} tool_hash={(toolLen > 0 ? _toolHash[..toolLen] : "n/a")}";
         }
     }
 

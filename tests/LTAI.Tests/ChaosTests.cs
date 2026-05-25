@@ -1,4 +1,5 @@
 using LTAI.Agent.Routing;
+using LTAI.Models;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
@@ -32,7 +33,7 @@ public class ChaosTests
         var router = new IntentRouter();
         var route = router.Classify("评估环境影响");
 
-        Assert.Equal("eia", route.Intent);
+        Assert.Equal(AgentType.EIA, route.Intent);
         Assert.True(route.Confidence > 0.3f, "Keyword routing should handle the request when vector store is down");
     }
 
@@ -45,7 +46,7 @@ public class ChaosTests
         foreach (var text in texts)
         {
             var route = router.Classify(text);
-            Assert.Equal("code", route.Intent);
+            Assert.Equal(AgentType.Code, route.Intent);
         }
     }
 }

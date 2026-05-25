@@ -1,8 +1,8 @@
 using LTAI.Core.Configuration;
-using LTAI.Vector;
-using LTAI.Vector.Embedding;
-using LTAI.Vector.Interfaces;
-using LTAI.Vector.Knowledge;
+using LTAI.Knowledge.Vector;
+using LTAI.Knowledge.Vector.Embedding;
+using LTAI.Knowledge.Vector.Interfaces;
+using LTAI.Knowledge.Core;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Xunit;

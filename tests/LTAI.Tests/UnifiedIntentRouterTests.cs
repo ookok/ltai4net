@@ -1,4 +1,5 @@
 using LTAI.Agent.Routing;
+using LTAI.Models;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
@@ -18,15 +19,15 @@ public class UnifiedIntentRouterTests
     public void Route_CodeRequest_ReturnsCodeIntent()
     {
         var route = _router.Route("Fix this bug in the code");
-        Assert.Equal("code", route.Intent);
-        Assert.Equal("code", route.TargetAgent);
+        Assert.Equal(AgentType.Code, route.Intent);
+        Assert.Equal(AgentType.Code, route.TargetAgent);
     }
 
     [Fact]
     public void Route_EIARequest_ReturnsEIAIntent()
     {
         var route = _router.Route("分析这个化工厂的环境影响");
-        Assert.Equal("eia", route.Intent);
+        Assert.Equal(AgentType.EIA, route.Intent);
     }
 
     [Fact]
@@ -55,7 +56,7 @@ public class UnifiedIntentRouterTests
     public void Route_EmptyInput_ReturnsChat()
     {
         var route = _router.Route("");
-        Assert.Equal("chat", route.Intent);
+        Assert.Equal(AgentType.Chat, route.Intent);
         Assert.Equal(1.0f, route.Confidence);
     }
 

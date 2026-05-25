@@ -49,7 +49,7 @@ internal static class AutoFixMode
         services.AddLTAIAgent();
         services.AddLTAITreeLLM();
 
-        var sp = services.BuildServiceProvider();
+        using var sp = services.BuildServiceProvider();
         var debugLoop = sp.GetRequiredService<DebugLoop>();
 
         var level = analyzeOnly ? DebugLevel.Analyze : DebugLevel.SemiAuto;

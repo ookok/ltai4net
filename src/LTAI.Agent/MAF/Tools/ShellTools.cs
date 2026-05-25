@@ -14,7 +14,7 @@ public sealed class ShellTools
         ":(){ :|:& };:", "mkfs", "dd if=/dev/zero", "> /dev/sda"
     };
 
-    [Description("Execute a shell command and return stdout/stderr/exit code. Commands timeout after 60 seconds. DANGEROUS commands are blocked.")]
+    [Description("Execute a shell command and return stdout/stderr/exit code. Commands timeout after 60 seconds. DANGEROUS commands are blocked. Command is piped via stdin for safety.")]
     public static async Task<string> ExecuteCommand(
         [Description("The shell command to execute")] string command,
         [Description("Working directory for the command")] string? workingDirectory = null,
@@ -26,21 +26,40 @@ public sealed class ShellTools
                 return JsonSerializer.Serialize(new { error = $"Blocked dangerous command pattern: {dangerous}" });
         }
 
+        string shellExe;
+        string[] shellArgs;
+        if (OperatingSystem.IsWindows())
+        {
+            shellExe = "pwsh";
+            shellArgs = new[] { "-NoProfile", "-NonInteractive", "-Command", "-" };
+        }
+        else
+        {
+            shellExe = "/bin/bash";
+            shellArgs = new[] { "--noprofile", "--norc" };
+        }
+
         var psi = new ProcessStartInfo
         {
-            FileName = OperatingSystem.IsWindows() ? "cmd.exe" : "/bin/bash",
-            Arguments = OperatingSystem.IsWindows() ? $"/c \"{command}\"" : $"-c \"{command}\"",
+            FileName = shellExe,
+            RedirectStandardInput = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
             CreateNoWindow = true
         };
 
+        foreach (var arg in shellArgs)
+            psi.ArgumentList.Add(arg);
+
         if (!string.IsNullOrWhiteSpace(workingDirectory))
             psi.WorkingDirectory = workingDirectory;
 
         using var process = new Process { StartInfo = psi };
         process.Start();
+
+        await process.StandardInput.WriteLineAsync(command).ConfigureAwait(false);
+        process.StandardInput.Close();
 
         var stdoutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
         var stderrTask = process.StandardError.ReadToEndAsync(cancellationToken);
@@ -70,10 +89,7 @@ public sealed class ShellTools
             os = $"{Environment.OSVersion} ({RuntimeInformation.OSDescription})",
             is64Bit = Environment.Is64BitOperatingSystem,
             processorCount = Environment.ProcessorCount,
-            machineName = Environment.MachineName,
-            user = Environment.UserName,
-            runtime = RuntimeInformation.FrameworkDescription,
-            workingSet = Process.GetCurrentProcess().WorkingSet64
+            runtime = RuntimeInformation.FrameworkDescription
         });
     }
 }

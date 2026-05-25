@@ -247,7 +247,7 @@ public sealed class DecoupledExecutor : IDecoupledExecutor
         {
             var entitySubset = entities.Length <= 3
                 ? entities
-                : entities.OrderBy(_ => Random.Shared.Next()).Take(Math.Min(3, entities.Length)).ToArray();
+                : Random.Shared.GetItems(entities, Math.Min(3, entities.Length));
 
             _ = Task.Run(async () =>
             {

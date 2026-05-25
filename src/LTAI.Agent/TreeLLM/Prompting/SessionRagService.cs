@@ -87,12 +87,12 @@ public sealed class SessionRagService
             answer,
             string.Join("\n", longTermDocs.Select(d => d.Content)));
 
-        var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString();
+        var eventId = Guid.NewGuid().ToString("N")[..12];
         await _structMemory.BindEvents(sessionId, new()
         {
             new() { ["role"] = "user", ["content"] = question },
             new() { ["role"] = "assistant", ["content"] = answer }
-        }, now);
+        }, eventId);
 
         SessionResilience.Instance.Save(sessionId, question, answer,
             intent: RetrievalFramework.Instance.Classify(question).ToString());
@@ -149,5 +149,20 @@ public sealed class SessionRagService
         }
 
         SessionResilience.Instance.Save(sessionId, question, fullAnswer);
+
+        var eventId = Guid.NewGuid().ToString("N")[..12];
+        await _structMemory.BindEvents(sessionId, new()
+        {
+            new() { ["role"] = "user", ["content"] = question },
+            new() { ["role"] = "assistant", ["content"] = fullAnswer }
+        }, eventId);
+
+        var hallucinationCheck = HallucinationGuard.Instance.CheckGeneration(
+            fullAnswer,
+            string.Join("\n", longTermDocs.Select(d => d.Content)));
+
+        _logger.LogInformation(
+            "SessionRAG Streaming: session={SessionId}, sources={LongTermCount}, answerLen={AnswerLen}, hallucination={HallucinationScore}",
+            sessionId, longTermDocs.Count, fullAnswer.Length, hallucinationCheck?.Score ?? 0);
     }
 }

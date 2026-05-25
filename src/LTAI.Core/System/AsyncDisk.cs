@@ -65,21 +65,9 @@ public sealed class AsyncDisk : IAsyncDisk
         }
     }
 
-    [Obsolete("Use FlushNowAsync instead")]
-    public void FlushNow(string path)
-    {
-        FlushNowAsync(path).GetAwaiter().GetResult();
-    }
-
     public async Task FlushAllAsync()
     {
         await _flushBatchAsync().ConfigureAwait(false);
-    }
-
-    [Obsolete("Use FlushAllAsync instead")]
-    public void FlushAll()
-    {
-        FlushAllAsync().GetAwaiter().GetResult();
     }
 
     private async Task _flushBatchAsync()
@@ -107,12 +95,6 @@ public sealed class AsyncDisk : IAsyncDisk
         }
     }
 
-    [Obsolete("Use _flushBatchAsync instead")]
-    private void _flushBatch()
-    {
-        _flushBatchAsync().GetAwaiter().GetResult();
-    }
-
     private async Task _writeFileAsync(string path, string content)
     {
         try
@@ -129,12 +111,6 @@ public sealed class AsyncDisk : IAsyncDisk
         {
             _logger.LogError(ex, "Failed to write file: {Path}", path);
         }
-    }
-
-    [Obsolete("Use _writeFileAsync instead")]
-    private void _writeFile(string path, string content)
-    {
-        _writeFileAsync(path, content).GetAwaiter().GetResult();
     }
 
     public void Start()
@@ -171,9 +147,7 @@ public sealed class AsyncDisk : IAsyncDisk
         _cts?.Cancel();
         _cts?.Dispose();
         _cts = null;
-#pragma warning disable CS0618
-        _flushBatch();
-#pragma warning restore CS0618
+        Task.Run(async () => await _flushBatchAsync().ConfigureAwait(false)).GetAwaiter().GetResult();
         _logger.LogInformation("AsyncDisk stopped, all pending flushed");
     }
 

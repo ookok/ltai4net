@@ -99,9 +99,11 @@ Correct Answer:";
 
             try
             {
+                var sampleQuery = sample.Query;
+                var sampleWrong = sample.WrongOutput;
                 var prompt = string.Format(CorrectionPrompt,
-                    sample.Query[..global::System.Math.Min(sample.Query.Length, 500)],
-                    sample.WrongOutput[..global::System.Math.Min(sample.WrongOutput.Length, 800)]);
+                    sampleQuery[..Math.Min(sampleQuery.Length, 500)],
+                    sampleWrong[..Math.Min(sampleWrong.Length, 800)]);
 
                 var response = await _llm.GetResponseAsync(prompt,
                     new ChatOptions { Temperature = 0.2f, MaxOutputTokens = 1000 }, ct).ConfigureAwait(false);
@@ -113,8 +115,12 @@ Correct Answer:";
 
                 if (!string.IsNullOrWhiteSpace(correction) && correction.Length > 10)
                 {
-                    sample.CorrectOutput = correction;
-                    sample.ErrorType = errorType;
+                    lock (_lock)
+                    {
+                        sample.CorrectOutput = correction;
+                        sample.ErrorType = errorType;
+                        sample.UsedForTraining = true;
+                    }
                     generated++;
 
                     // Store as synaptic experience with high reward (corrected answer)
@@ -219,24 +225,27 @@ Correct Answer:";
         var correctLen = correct.Length;
         if (wrongLen == 0 || correctLen == 0) return 0.5f;
 
-        // Length ratio (good correction often adds detail)
-        var lenRatio = (float)correctLen / wrongLen;
-        var lenScore = global::System.Math.Clamp(lenRatio, 0.3f, 2.0f) / 2.0f;
+        var lengthRatio = (float)correctLen / wrongLen;
+        var lenScore = Math.Clamp(lengthRatio, 0.3f, 2.0f) / 2.0f;
 
-        // Content difference (correction should differ from wrong output)
-        var commonChars = wrong.Intersect(correct).Count();
-        var diffScore = 1.0f - (float)commonChars / global::System.Math.Max(wrongLen, 1);
+        var minLen = Math.Min(wrongLen, correctLen);
+        var matchCount = 0;
+        for (var i = 0; i < minLen; i++)
+            if (wrong[i] == correct[i]) matchCount++;
+        var diffScore = 1.0f - (float)matchCount / Math.Max(wrongLen, 1);
 
-        return (lenScore * 0.3f + diffScore * 0.7f);
+        return lenScore * 0.3f + diffScore * 0.7f;
     }
 
     public Dictionary<string, object> GetStats()
     {
+        List<CorrectionSample> snapshot;
+        lock (_lock) { snapshot = new List<CorrectionSample>(_buffer); }
         return new Dictionary<string, object>
         {
             ["pending"] = PendingCount,
             ["corrected"] = CorrectedCount,
-            ["by_error_type"] = _buffer.Where(s => s.UsedForTraining)
+            ["by_error_type"] = snapshot.Where(s => s.UsedForTraining)
                 .GroupBy(s => s.ErrorType)
                 .ToDictionary(g => g.Key, g => (object)g.Count())
         };

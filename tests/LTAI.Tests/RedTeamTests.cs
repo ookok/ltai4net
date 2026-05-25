@@ -1,5 +1,7 @@
 using LTAI.DNA.Safety;
+using LTAI.Core.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using Xunit;
 
 namespace LTAI.Tests;
@@ -10,10 +12,16 @@ namespace LTAI.Tests;
 /// </summary>
 public class RedTeamTests
 {
-    private static UnifiedSafetyGate NewGate() => new(
-        NullLogger<UnifiedSafetyGate>.Instance,
-        new SafetyCoordinator(NullLogger<SafetyCoordinator>.Instance),
-        new PolicyAsCode().Apply(p => p.LoadDefaults()));
+    private static UnifiedSafetyGate NewGate()
+    {
+        var policy = new PolicyAsCode();
+        policy.LoadDefaults();
+        return new(
+            NullLogger<UnifiedSafetyGate>.Instance,
+            new SafetyCoordinator(NullLogger<SafetyCoordinator>.Instance),
+            policy,
+            Microsoft.Extensions.Options.Options.Create(new LTAIOptions()));
+    }
 
     // ═══ BASE64 INJECTION ═══
 

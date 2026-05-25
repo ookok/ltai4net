@@ -45,8 +45,8 @@ public sealed class DockerSandbox : ISandbox
                     Cmd = GetCmd(request),
                     HostConfig = new HostConfig
                     {
-                        Memory = request.MemoryLimitMb * 1024 * 1024L,
-                        MemorySwap = request.MemoryLimitMb * 1024 * 1024L * 2,
+                        Memory = (long)request.MemoryLimitMb * 1024 * 1024,
+                        MemorySwap = (long)request.MemoryLimitMb * 1024 * 1024 * 2,
                         NetworkMode = request.NetworkEnabled ? "bridge" : "none",
                         ReadonlyRootfs = request.ReadOnlyFilesystem,
                         AutoRemove = true
@@ -78,7 +78,9 @@ public sealed class DockerSandbox : ISandbox
 
             var (stdout, stderr) = await ReadMultiplexedStreamAsync(logStream, cancellationToken).ConfigureAwait(false);
 
-            try { await _docker.Containers.RemoveContainerAsync(createResp.ID, new ContainerRemoveParameters { Force = true }, CancellationToken.None); } catch { /* non-fatal */ }
+            using var cleanupCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            try { await _docker.Containers.RemoveContainerAsync(createResp.ID, new ContainerRemoveParameters { Force = true }, cleanupCts.Token); }
+            catch { /* non-fatal */ }
 
             sw.Stop();
             return new SandboxResult
@@ -128,18 +130,36 @@ public sealed class DockerSandbox : ISandbox
     {
         var stdout = new StringBuilder();
         var stderr = new StringBuilder();
-        var buffer = new byte[4096];
+        var header = new byte[8];
 
         while (true)
         {
-            var result = await stream.ReadOutputAsync(buffer, 0, buffer.Length, ct).ConfigureAwait(false);
-            if (result.EOF) break;
+            var headerBytesRead = 0;
+            while (headerBytesRead < 8)
+            {
+                var read = await stream.ReadOutputAsync(header, headerBytesRead, 8 - headerBytesRead, ct).ConfigureAwait(false);
+                if (read.EOF) return (stdout.ToString(), stderr.ToString());
+                headerBytesRead += read.Count;
+            }
 
-            var text = Encoding.UTF8.GetString(buffer, 0, result.Count);
-            stdout.Append(text);
+            var streamType = header[0];
+            var frameSize = (header[4] << 24) | (header[5] << 16) | (header[6] << 8) | header[7];
+            if (frameSize == 0) continue;
+
+            var buffer = new byte[Math.Min(frameSize, 65536)];
+            var remaining = frameSize;
+            while (remaining > 0)
+            {
+                var read = await stream.ReadOutputAsync(buffer, 0, Math.Min(buffer.Length, remaining), ct).ConfigureAwait(false);
+                if (read.EOF) break;
+                var text = Encoding.UTF8.GetString(buffer, 0, read.Count);
+                if (streamType == 1)
+                    stdout.Append(text);
+                else if (streamType == 2)
+                    stderr.Append(text);
+                remaining -= read.Count;
+            }
         }
-
-        return (stdout.ToString(), stderr.ToString());
     }
 
     public ValueTask DisposeAsync()

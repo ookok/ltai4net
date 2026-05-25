@@ -183,24 +183,26 @@ public sealed class UnifiedSafetyGate
     private GateVerdict EscalateAndBlock(string sessionId, string reason)
     {
         var session = _sessions.GetOrAdd(sessionId, _ => new SessionSafetyState());
-        session.StrikeCount = Math.Min(session.StrikeCount + 1, CoolingDurations.Length - 1);
+        lock (session)
+        {
+            session.StrikeCount = Math.Min(session.StrikeCount + 1, CoolingDurations.Length - 1);
+            var duration = CoolingDurations[session.StrikeCount];
+            session.FrozenUntil = DateTime.UtcNow.Add(duration);
 
-        var duration = CoolingDurations[session.StrikeCount];
-        session.FrozenUntil = DateTime.UtcNow.Add(duration);
+            _logger.LogWarning(
+                "SafetyGate: Session {Session} strike={Strike}, frozen {Minutes}min. Reason: {Reason}",
+                sessionId, session.StrikeCount, duration.TotalMinutes, reason);
 
-        _logger.LogWarning(
-            "SafetyGate: Session {Session} strike={Strike}, frozen {Minutes}min. Reason: {Reason}",
-            sessionId, session.StrikeCount, duration.TotalMinutes, reason);
-
-        return session.StrikeCount == 1
-            ? GateVerdict.Warn(reason + " (warning — further violations will freeze your session)")
-            : GateVerdict.Block(reason + $" (session frozen {duration.TotalMinutes} min, strike {session.StrikeCount})");
+            return session.StrikeCount == 1
+                ? GateVerdict.Warn(reason + " (warning — further violations will freeze your session)")
+                : GateVerdict.Block(reason + $" (session frozen {duration.TotalMinutes} min, strike {session.StrikeCount})");
+        }
     }
 
     private double ComputeInjectionScore(string text)
     {
-        var lower = text.ToLowerInvariant();
-        var hitCount = InjectionKeywords.Count(kw => lower.Contains(kw));
+        var hitCount = InjectionKeywords.Count(kw =>
+            text.Contains(kw, StringComparison.OrdinalIgnoreCase));
         return hitCount == 0 ? 0 : Math.Min(1.0, hitCount * _injectionScorePerHit);
     }
 
@@ -232,7 +234,8 @@ public sealed class UnifiedSafetyGate
                 if (decoded.All(c => !char.IsControl(c) || c == '\n' || c == '\r' || c == '\t'))
                     result = result.Replace(match.Value, decoded);
             }
-            catch { }
+            catch (FormatException) { }
+            catch (Exception) { }
         }
 
         result = Regex.Replace(result, @"\\u([0-9a-fA-F]{4})", m =>

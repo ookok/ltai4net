@@ -117,6 +117,12 @@ public sealed class UniversalScanner
         var endpoint = svc with { };
         var url = endpoint.Url.TrimEnd('/');
 
+        if (!IsSafeUrl(url))
+        {
+            _logger.LogInformation("Blocked probe to unsafe URL: {Url}", url);
+            return endpoint with { IsAlive = false };
+        }
+
         try
         {
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
@@ -131,7 +137,8 @@ public sealed class UniversalScanner
         }
         catch { /* non-fatal */ }
 
-        var openaiEndpoint = await ProbeOpenAI(endpoint, url, CancellationToken.None).ConfigureAwait(false);
+        using var cts2 = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var openaiEndpoint = await ProbeOpenAI(endpoint, url, cts2.Token).ConfigureAwait(false);
         if (openaiEndpoint.IsAlive) return openaiEndpoint;
 
         try
@@ -249,6 +256,11 @@ public sealed class UniversalScanner
 
     public async Task<List<ServiceEndpoint>> ScanNetwork(string host, (int Start, int End) portRange, int maxPorts = 50)
     {
+        if (!host.Equals("localhost", StringComparison.OrdinalIgnoreCase) && !host.Equals("127.0.0.1"))
+        {
+            _logger.LogWarning("ScanNetwork blocked: only localhost is allowed, got '{Host}'", host);
+            return new List<ServiceEndpoint>();
+        }
         var discovered = new List<ServiceEndpoint>();
         var scanned = 0;
 
@@ -325,10 +337,49 @@ public sealed class UniversalScanner
 
     public List<ServiceEndpoint> GetByCategory(string category)
     {
-        return _discovered.Values
-            .Where(s => s.Category.Equals(category, StringComparison.OrdinalIgnoreCase))
-            .OrderByDescending(s => s.DiscoveredAt)
-            .ToList();
+        return _discovered.Values.Where(s =>
+            s.Category.Equals(category, StringComparison.OrdinalIgnoreCase)).ToList();
+    }
+
+    private static bool IsSafeUrl(string url)
+    {
+        if (string.IsNullOrEmpty(url)) return false;
+
+        var host = url;
+        var schemeIdx = url.IndexOf("://", StringComparison.Ordinal);
+        if (schemeIdx >= 0)
+            host = url[(schemeIdx + 3)..];
+
+        var portIdx = host.IndexOf(':');
+        if (portIdx >= 0)
+            host = host[..portIdx];
+
+        var pathIdx = host.IndexOf('/');
+        if (pathIdx >= 0)
+            host = host[..pathIdx];
+
+        if (host.Length == 0) return false;
+
+        if (host == "localhost" || host == "127.0.0.1" || host == "[::1]")
+            return false;
+
+        if (Uri.CheckHostName(host) == UriHostNameType.IPv4)
+        {
+            var parts = host.Split('.');
+            if (parts.Length != 4) return false;
+            if (parts[0] == "10") return false;
+            if (parts[0] == "172" && int.TryParse(parts[1], out var b) && b >= 16 && b <= 31) return false;
+            if (parts[0] == "192" && parts[1] == "168") return false;
+            if (parts[0] == "169" && parts[1] == "254") return false; // link-local
+            if (parts[0] == "0") return false;
+            if (parts[0] == "127") return false;
+        }
+
+        if (host.EndsWith(".local", StringComparison.OrdinalIgnoreCase) ||
+            host.EndsWith(".internal", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        return true;
     }
 
     public Dictionary<string, object> Stats()

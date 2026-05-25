@@ -1,7 +1,7 @@
 using System.Text.Json;
-using LTAI.Document;
-using LTAI.Document.Interfaces;
-using LTAI.Document.Parsers;
+using LTAI.Knowledge.Document;
+using LTAI.Knowledge.Document.Interfaces;
+using LTAI.Knowledge.Document.Parsers;
 using Xunit;
 
 namespace LTAI.Document.Tests;

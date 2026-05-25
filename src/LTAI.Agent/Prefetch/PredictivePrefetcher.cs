@@ -31,11 +31,12 @@ public sealed class PredictivePrefetcher
                 await _toolRetriever.RetrieveToolsAsync(predictedIntent, currentText, ct: ct).ConfigureAwait(false);
                 _logger.LogDebug("Prefetcher: warmed tools for intent={Intent}", predictedIntent);
             }
+            catch (OperationCanceledException) { }
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Prefetcher: background warmup failed");
             }
-        }, ct);
+        }, CancellationToken.None);
     }
 
     private string PredictIntent(string text)

@@ -15,7 +15,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\LTAI.Browser\LTAI.Browser.csproj" />
+    <ProjectReference Include="..\..\src\LTAI.Infra\LTAI.Infra.csproj" />
   </ItemGroup>
 
 </Project>

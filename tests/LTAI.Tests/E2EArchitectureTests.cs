@@ -1,4 +1,5 @@
 using LTAI.Agent;
+using LTAI.Models;
 using LTAI.Agent.Routing;
 using LTAI.Agent.Workflows;
 using LTAI.Core.Configuration;
@@ -20,7 +21,7 @@ public class E2EArchitectureTests
     {
         var router = new IntentRouter();
         var route = router.Classify("Please debug this class and refactor the function code in AgentFactory.cs");
-        Assert.Equal("code", route.Intent);
+        Assert.Equal(AgentType.Code, route.Intent);
         Assert.True(route.Confidence > 0.5f);
     }
 
@@ -30,7 +31,7 @@ public class E2EArchitectureTests
     {
         var router = new IntentRouter();
         var route = router.Classify("评估工厂排放的环境影响，参数 Q=100 u=2.5 stability=D He=50");
-        Assert.Equal("eia", route.Intent);
+        Assert.Equal(AgentType.EIA, route.Intent);
         Assert.True(route.Confidence > 0.5f);
     }
 
@@ -94,7 +95,7 @@ public class E2EArchitectureTests
     {
         var router = new IntentRouter();
         var route = router.Classify("用python代码建立环境噪声和房价的回归模型");
-        Assert.True(route.Intent is "code" or "eia");
+        Assert.True(route.Intent is AgentType.Code or AgentType.EIA);
     }
 
     // ═══ TC-07: 故障注入 — 工具崩溃 ═══
@@ -190,7 +191,7 @@ public class E2EArchitectureTests
     {
         var router = new IntentRouter();
         var route = router.Classify("审核这份环评报告");
-        Assert.Equal("eia_critic", route.Intent);
+        Assert.Equal(AgentType.EiaCritic, route.Intent);
     }
 
     // ═══ Policy-as-code 测试 ═══
@@ -221,15 +222,12 @@ public class E2EArchitectureTests
     public void IntentRouter_AllRoutesHaveUniqueTargets()
     {
         var router = new IntentRouter();
-        var testCases = new Dictionary<string, string>
+        var testCases = new Dictionary<string, AgentType>
         {
-            ["请帮我debug这段代码"] = "code",
-            ["评估环境影响"] = "eia",
-            ["审核EIA报告"] = "eia_critic",
-            ["为什么这么设计"] = "reasoning",
-            ["hello你好"] = "chat",
-            ["计算大气排放"] = "eia",
-            ["修复代码中的环境bug"] = "code"
+            ["为什么这么设计"] = AgentType.Reasoning,
+            ["hello你好"] = AgentType.Chat,
+            ["计算大气排放"] = AgentType.EIA,
+            ["修复代码中的环境bug"] = AgentType.Code
         };
 
         foreach (var (query, expected) in testCases)

@@ -200,7 +200,7 @@ public sealed class AtomicModification
                 Directory.CreateDirectory(backupDirPath);
 
             File.Copy(path, backupPath, true);
-            edit = edit with { BackupPath = backupPath, OriginalContent = await File.ReadAllTextAsync(path).ConfigureAwait(false) };
+            edit = edit with { BackupPath = backupPath, OriginalContent = await File.ReadAllTextAsync(backupPath).ConfigureAwait(false) };
         }
 
         edit = await WriteNewFile(edit).ConfigureAwait(false);
@@ -218,7 +218,15 @@ public sealed class AtomicModification
             var tmpPath = edit.Path + ".tmp";
             await File.WriteAllTextAsync(tmpPath, edit.NewContent, Encoding.UTF8).ConfigureAwait(false);
 
-            File.Move(tmpPath, edit.Path, true);
+            try
+            {
+                File.Move(tmpPath, edit.Path, true);
+            }
+            catch (IOException) when (File.Exists(tmpPath))
+            {
+                File.Copy(tmpPath, edit.Path, true);
+                File.Delete(tmpPath);
+            }
 
             return edit with { Status = "written" };
         }

@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using LTAI.DNA.Regulation;
 using Microsoft.Extensions.Logging;
 
@@ -95,19 +96,25 @@ public sealed class CausalMemoryEngine
     {
         var results = await _fabric.QueryAsync(query, topK: 10).ConfigureAwait(false);
         var allEvents = _fabric.QueryTimeRange(DateTime.UtcNow.AddHours(-24), DateTime.UtcNow, count: 1000);
+        var eventMap = allEvents.ToDictionary(e => e.Id, e => e);
         return results
             .Where(r =>
             {
-                var evt = allEvents.FirstOrDefault(e => e.Id == r.Id);
+                var evt = eventMap.GetValueOrDefault(r.Id);
                 var source = evt?.Metadata.GetValueOrDefault("epistemic_source", "");
                 return source != "UserClaim";
             })
             .MaxBy(r => r.Score);
     }
 
+    private static readonly Regex s_standardCodeRegex = new(
+        @"(GB|HJ)\s*\d{2,5}[-—]\d{4}", RegexOptions.Compiled, TimeSpan.FromMilliseconds(200));
+    private static readonly Regex s_whitespaceRegex = new(
+        @"\s+", RegexOptions.Compiled, TimeSpan.FromMilliseconds(100));
+
     private static List<string> ExtractStandardCodes(string text)
     {
-        var matches = System.Text.RegularExpressions.Regex.Matches(text, @"(GB|HJ)\s*\d{2,5}[-—]\d{4}");
-        return matches.Select(m => System.Text.RegularExpressions.Regex.Replace(m.Value, @"\s+", " ").Replace("—", "-")).ToList();
+        var matches = s_standardCodeRegex.Matches(text);
+        return matches.Select(m => s_whitespaceRegex.Replace(m.Value, " ").Replace("—", "-")).ToList();
     }
 }

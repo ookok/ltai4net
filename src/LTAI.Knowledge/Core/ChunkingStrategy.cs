@@ -13,7 +13,8 @@ public enum ChunkingStrategyType
 public static class ChunkingStrategies
 {
     private const int CharsPerToken = 4;
-    private static readonly Regex SentenceBoundaryRegex = new(@"(?<=[.!?])\s+", RegexOptions.Compiled);
+    private static readonly Regex SentenceBoundaryRegex = new(
+        @"(?<=[.!?。！？\u3002\uff01\uff1f])\s+", RegexOptions.Compiled);
 
     public static List<string> FixChunk(string text, int maxTokens = 512)
     {

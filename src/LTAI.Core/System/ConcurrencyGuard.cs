@@ -31,7 +31,6 @@ public sealed class ConcurrencyGuard : IConcurrencyGuard
 
     private readonly ConcurrentDictionary<string, BackgroundTask> _tasks = new();
     private readonly object _lock = new();
-    private volatile CancellationTokenSource? _globalCts;
     private readonly ILogger<ConcurrencyGuard> _logger;
 
     public IReadOnlyDictionary<string, BackgroundTask> Tasks => _tasks;
@@ -95,11 +94,8 @@ public sealed class ConcurrencyGuard : IConcurrencyGuard
 
     public void CancelAll()
     {
-        _globalCts?.Cancel();
-        _globalCts?.Dispose();
-        _globalCts = new CancellationTokenSource();
-
-        _logger.LogInformation("Cancelled all tasks");
+        _tasks.Clear();
+        _logger.LogInformation("Cleared all tracked tasks");
     }
 
     public List<BackgroundTask> ListTasks()

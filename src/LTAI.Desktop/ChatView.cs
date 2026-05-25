@@ -79,7 +79,6 @@ public sealed class ChatView : UserControl
             TextWrapping = TextWrapping.Wrap
         };
         _input.KeyDown += OnInputKey;
-        _input.AddHandler(KeyDownEvent, OnInputKeyRaw, handledEventsToo: true);
 
         _actionBtn = new Button
         {
@@ -140,23 +139,17 @@ public sealed class ChatView : UserControl
         _cts = null;
     }
 
-    private void OnInputKeyRaw(object? s, KeyEventArgs e)
-    {
-        if (e.Key == Key.Enter && e.KeyModifiers == KeyModifiers.None)
-        {
-            if (_isSending) return;
-            e.Handled = true;
-            _ = SendAsync();
-        }
-    }
-
     private void OnInputKey(object? s, KeyEventArgs e)
     {
         if (e.Key == Key.Enter && e.KeyModifiers == KeyModifiers.None)
         {
             if (_isSending) return;
             e.Handled = true;
-            _ = SendAsync();
+            _ = SendAsync().ContinueWith(t =>
+            {
+                if (t.IsFaulted && t.Exception != null)
+                    System.Diagnostics.Debug.WriteLine($"SendAsync error: {t.Exception}");
+            }, TaskScheduler.Default);
         }
         else if (e.Key == Key.Up && e.KeyModifiers == KeyModifiers.None && _history.Count > 0)
         {
@@ -317,7 +310,9 @@ public sealed class ChatView : UserControl
                 else
                 {
                     responseBuf.Append(token);
-                    RenderResponse(responsePanel, responseBuf.ToString());
+                    _tokens++;
+                    if (_tokens % 8 == 0)
+                        RenderResponse(responsePanel, responseBuf.ToString());
                 }
 
                 _scroller.ScrollToEnd();
@@ -424,7 +419,12 @@ public sealed class ChatView : UserControl
         };
         btn.Click += async (_, _) =>
         {
-            await TopLevel.GetTopLevel(btn)!.Clipboard!.SetTextAsync(content);
+            var topLevel = TopLevel.GetTopLevel(btn);
+            var clipboard = topLevel?.Clipboard;
+            if (clipboard != null)
+                await clipboard.SetTextAsync(content);
+            else
+                return;
             btn.Content = "Done";
             btn.Foreground = LtaiTheme.Sbb(LtaiTheme.AccentSystem);
             await Task.Delay(1500);

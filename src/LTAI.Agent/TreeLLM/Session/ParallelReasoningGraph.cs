@@ -108,6 +108,7 @@ public sealed class ParallelReasoningGraph
         pendingQueue.Enqueue(root);
 
         var runningTasks = new ConcurrentDictionary<string, Task>();
+        var taskToNodeMap = new ConcurrentDictionary<Task, string>();
         int completedNodes = 0;
         int failedNodes = 0;
         int maxDepthReached = 0;
@@ -123,15 +124,17 @@ public sealed class ParallelReasoningGraph
                 await semaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
                 var t = ExecuteNodeAsync(node, cfg, semaphore, cancellationToken);
                 runningTasks[node.Id] = t;
+                taskToNodeMap[t] = node.Id;
             }
 
             if (runningTasks.IsEmpty && pendingQueue.IsEmpty) break;
 
             var completedTask = await Task.WhenAny(runningTasks.Values).ConfigureAwait(false);
-            var completedEntry = runningTasks.First(kv => kv.Value == completedTask);
-            runningTasks.TryRemove(completedEntry.Key, out _);
+            var completedNodeId = taskToNodeMap.GetValueOrDefault(completedTask, "");
+            runningTasks.TryRemove(completedNodeId, out _);
+            taskToNodeMap.TryRemove(completedTask, out _);
 
-            if (_allNodes.TryGetValue(completedEntry.Key, out var completedNode))
+            if (_allNodes.TryGetValue(completedNodeId, out var completedNode))
             {
                 if (completedNode.State == NodeState.Completed) completedNodes++;
                 else if (completedNode.State == NodeState.Failed) failedNodes++;

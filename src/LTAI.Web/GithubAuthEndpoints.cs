@@ -46,19 +46,38 @@ public static class GithubAuthEndpoints
                 return;
             }
 
-            var redirectUri = $"https://github.com/login/oauth/authorize?client_id={Uri.EscapeDataString(clientId)}&scope=repo,user";
+            var state = Guid.NewGuid().ToString("N");
+            context.Response.Cookies.Append("ltai_oauth_state", state, new CookieOptions
+            {
+                HttpOnly = true,
+                Secure = true,
+                SameSite = SameSiteMode.Lax,
+                Expires = DateTimeOffset.UtcNow.AddMinutes(10)
+            });
+
+            var redirectUri = $"https://github.com/login/oauth/authorize?client_id={Uri.EscapeDataString(clientId)}&scope=repo,user&state={Uri.EscapeDataString(state)}";
             context.Response.Redirect(redirectUri);
         });
 
         endpoints.MapGet("/api/code/github/callback", async (HttpContext context) =>
         {
             var code = context.Request.Query["code"].FirstOrDefault() ?? "";
+            var state = context.Request.Query["state"].FirstOrDefault() ?? "";
 
             if (string.IsNullOrEmpty(code))
             {
                 context.Response.StatusCode = 400;
                 context.Response.ContentType = "application/json";
                 await context.Response.WriteAsync(JsonSerializer.Serialize(new { error = "code is required" }));
+                return;
+            }
+
+            var expectedState = context.Request.Cookies["ltai_oauth_state"];
+            if (string.IsNullOrEmpty(expectedState) || !string.Equals(state, expectedState, StringComparison.Ordinal))
+            {
+                context.Response.StatusCode = 400;
+                context.Response.ContentType = "application/json";
+                await context.Response.WriteAsync(JsonSerializer.Serialize(new { error = "Invalid state parameter" }));
                 return;
             }
 
@@ -98,7 +117,7 @@ public static class GithubAuthEndpoints
                 if (string.IsNullOrEmpty(accessToken))
                 {
                     context.Response.ContentType = "application/json";
-                    await context.Response.WriteAsync(JsonSerializer.Serialize(new { error = "Failed to obtain token", raw = tokenJson }));
+                    await context.Response.WriteAsync(JsonSerializer.Serialize(new { error = "Failed to obtain token" }));
                     return;
                 }
 
@@ -225,14 +244,20 @@ public static class GithubAuthEndpoints
 
                 var token = _storedToken;
                 var branch = string.IsNullOrWhiteSpace(request.Branch) ? "main" : request.Branch;
-                var cloneUrl = token != null && !string.IsNullOrEmpty(token.AccessToken)
-                    ? $"https://oauth2:{token.AccessToken}@github.com/{request.RepoFullName}.git"
-                    : $"https://github.com/{request.RepoFullName}.git";
+                var cloneUrl = $"https://github.com/{request.RepoFullName}.git";
 
                 var codeRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "output", "code"));
                 Directory.CreateDirectory(codeRoot);
 
                 var repoName = request.RepoFullName.Split('/').LastOrDefault() ?? request.RepoFullName;
+                if (repoName.Contains("..") || repoName.Contains('/') || repoName.Contains('\\') || string.IsNullOrWhiteSpace(repoName))
+                {
+                    context.Response.StatusCode = 400;
+                    context.Response.ContentType = "application/json";
+                    await context.Response.WriteAsync(JsonSerializer.Serialize(new { error = "Invalid repo name" }));
+                    return;
+                }
+
                 var targetPath = Path.Combine(codeRoot, repoName);
 
                 if (Directory.Exists(targetPath))
@@ -240,7 +265,7 @@ public static class GithubAuthEndpoints
                     Directory.Delete(targetPath, true);
                 }
 
-                var startInfo = new System.Diagnostics.ProcessStartInfo
+                var psi = new System.Diagnostics.ProcessStartInfo
                 {
                     FileName = "git",
                     Arguments = $"clone --branch {branch} --single-branch {cloneUrl} \"{targetPath}\"",
@@ -250,7 +275,14 @@ public static class GithubAuthEndpoints
                     CreateNoWindow = true
                 };
 
-                using var process = System.Diagnostics.Process.Start(startInfo);
+                if (token != null && !string.IsNullOrEmpty(token.AccessToken))
+                {
+                    psi.Environment["GIT_ASKPASS"] = "echo";
+                    psi.Environment["GIT_USERNAME"] = "oauth2";
+                    psi.Environment["GIT_PASSWORD"] = token.AccessToken;
+                }
+
+                using var process = System.Diagnostics.Process.Start(psi);
                 if (process == null)
                 {
                     context.Response.StatusCode = 500;
@@ -289,22 +321,6 @@ public static class GithubAuthEndpoints
         });
     }
 
-    private static void LoadToken()
-    {
-        try
-        {
-            var tokenFile = TokenPath.Value;
-            if (!File.Exists(tokenFile))
-                return;
-
-            var json = File.ReadAllText(tokenFile, Encoding.UTF8);
-            _storedToken = JsonSerializer.Deserialize<StoredGitHubToken>(json);
-            if (_storedToken != null)
-                _accessToken = _storedToken.AccessToken;
-        }
-        catch { /* non-fatal */ }
-    }
-
     private static void SaveToken()
     {
         try
@@ -315,7 +331,26 @@ public static class GithubAuthEndpoints
                 Directory.CreateDirectory(dir);
 
             var json = JsonSerializer.Serialize(_storedToken);
-            File.WriteAllText(tokenFile, json, Encoding.UTF8);
+            var bytes = Encoding.UTF8.GetBytes(json);
+            File.WriteAllText(tokenFile, Convert.ToBase64String(bytes), Encoding.UTF8);
+        }
+        catch { /* non-fatal */ }
+    }
+
+    private static void LoadToken()
+    {
+        try
+        {
+            var tokenFile = TokenPath.Value;
+            if (!File.Exists(tokenFile))
+                return;
+
+            var encrypted = File.ReadAllText(tokenFile, Encoding.UTF8);
+            var bytes = Convert.FromBase64String(encrypted);
+            var json = Encoding.UTF8.GetString(bytes);
+            _storedToken = JsonSerializer.Deserialize<StoredGitHubToken>(json);
+            if (_storedToken != null)
+                _accessToken = _storedToken.AccessToken;
         }
         catch { /* non-fatal */ }
     }

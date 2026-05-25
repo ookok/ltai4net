@@ -22,12 +22,24 @@ public static class RescueParser
         catch { return null; }
     }
 
+    private static readonly Regex s_quotedKeyPattern = new(@"'(\w+)'\s*:", RegexOptions.Compiled, TimeSpan.FromMilliseconds(200));
+    private static readonly Regex s_unquotedKeyPattern = new(@"(?<=\{|,)\s*(\w+)\s*:", RegexOptions.Compiled, TimeSpan.FromMilliseconds(200));
+    private static readonly Regex s_singleQuoteValuePattern = new(@":\s*'([^']*)'", RegexOptions.Compiled, TimeSpan.FromMilliseconds(200));
+    private static readonly Regex s_unquotedValuePattern = new(@":\s*([^{\[\]"",}\s]+)", RegexOptions.Compiled, TimeSpan.FromMilliseconds(200));
+
     private static JsonElement? TryFixQuotes(string json)
     {
-        var fixed1 = Regex.Replace(json, @"(?<=\{|,)\s*'(\w+)'\s*:", "\"$1\":");
-        var fixed2 = Regex.Replace(fixed1, @"(?<=\{|,)\s*(\w+)\s*:", "\"$1\":");
-        var fixed3 = Regex.Replace(fixed2, @":\s*'([^']*)'", ": \"$1\"");
-        var fixed4 = Regex.Replace(fixed3, @":\s*([^{\[\]"",}\s]+)", ": \"$1\"");
+        var fixed1 = s_quotedKeyPattern.Replace(json, "\"$1\":");
+        var fixed2 = s_unquotedKeyPattern.Replace(fixed1, "\"$1\":");
+        var fixed3 = s_singleQuoteValuePattern.Replace(fixed2, ": \"$1\"");
+        var fixed4 = s_unquotedValuePattern.Replace(fixed3, m =>
+        {
+            var value = m.Groups[1].Value;
+            if (value == "true" || value == "false" || value == "null"
+                || double.TryParse(value, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out _))
+                return $": {value}";
+            return $": \"{value}\"";
+        });
         try { using var doc = JsonDocument.Parse(fixed4); return doc.RootElement.Clone(); }
         catch { return null; }
     }

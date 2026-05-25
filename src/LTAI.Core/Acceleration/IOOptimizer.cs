@@ -11,6 +11,7 @@ public sealed class LruCache<T>
     private readonly ConcurrentDictionary<string, CacheEntry<T>> _data = new();
     private long _hits;
     private long _misses;
+    private string? _oldestKey;
 
     private sealed record CacheEntry<TVal>(TVal Value, double Timestamp);
 
@@ -48,9 +49,25 @@ public sealed class LruCache<T>
 
         if (_data.Count > _maxSize)
         {
-            var oldest = _data.OrderBy(kvp => kvp.Value.Timestamp).FirstOrDefault();
-            if (!string.IsNullOrEmpty(oldest.Key))
-                _data.TryRemove(oldest.Key, out _);
+            var oldestKey = _oldestKey;
+            if (oldestKey != null && _data.TryRemove(oldestKey, out _))
+            {
+                _oldestKey = null;
+                return;
+            }
+
+            double oldestTs = double.MaxValue;
+            string? foundKey = null;
+            foreach (var kvp in _data)
+            {
+                if (kvp.Value.Timestamp < oldestTs)
+                {
+                    oldestTs = kvp.Value.Timestamp;
+                    foundKey = kvp.Key;
+                }
+            }
+            if (foundKey != null)
+                _data.TryRemove(foundKey, out _);
         }
     }
 

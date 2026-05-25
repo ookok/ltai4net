@@ -24,7 +24,7 @@ public static class SseAgentEndpoints
         try
         {
             var cutoff = DateTime.UtcNow.AddHours(-1);
-            foreach (var (key, task) in _tasks)
+            foreach (var (key, task) in _tasks.ToArray())
             {
                 if (task.Status is "completed" or "failed" && task.CreatedAt < cutoff)
                     _tasks.TryRemove(key, out _);
@@ -57,6 +57,13 @@ public static class SseAgentEndpoints
         {
             try
             {
+                if (context.Request.ContentLength > 100_000)
+                {
+                    context.Response.StatusCode = 413;
+                    await context.Response.WriteAsync(JsonSerializer.Serialize(new { error = "Request body too large (max 100KB)" }));
+                    return;
+                }
+
                 using var reader = new StreamReader(context.Request.Body);
                 var body = await reader.ReadToEndAsync().ConfigureAwait(false);
                 var request = JsonSerializer.Deserialize<AgentTaskRequest>(body);
@@ -94,14 +101,16 @@ public static class SseAgentEndpoints
                         {
                             task.StepsCompleted = 2;
                             var response = await system.ChatAsync(prompt).ConfigureAwait(false);
-                            task.Result = response;
+                        task.Result = response;
                             task.Status = "completed";
                             task.StepsCompleted = Steps.Length;
+                            task.Complete();
                         }
                         catch (Exception ex)
                         {
-                            task.Status = "failed";
                             task.Error = ex.Message;
+                            task.Status = "failed";
+                            task.Complete();
                         }
                     });
                 }
@@ -117,11 +126,13 @@ public static class SseAgentEndpoints
                             task.Result = response.Text ?? "";
                             task.Status = "completed";
                             task.StepsCompleted = Steps.Length;
+                            task.Complete();
                         }
                         catch (Exception ex)
                         {
-                            task.Status = "failed";
                             task.Error = ex.Message;
+                            task.Status = "failed";
+                            task.Complete();
                         }
                     });
                 }
@@ -190,7 +201,8 @@ public static class SseAgentEndpoints
                     await context.Response.WriteAsync($"data: {sseData}\n\n");
                     await context.Response.Body.FlushAsync().ConfigureAwait(false);
                 }
-                await Task.Delay(100, context.RequestAborted).ConfigureAwait(false);
+
+                await Task.WhenAny(task.Completion, Task.Delay(200, context.RequestAborted)).ConfigureAwait(false);
             }
 
             if (context.RequestAborted.IsCancellationRequested)
@@ -259,6 +271,14 @@ public sealed class SseTask
     {
         get { lock (_lock) return _stepsCompleted; }
         set { lock (_lock) _stepsCompleted = value; }
+    }
+
+    private readonly TaskCompletionSource _completionSource = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    public Task Completion => _completionSource.Task;
+
+    public void Complete()
+    {
+        _completionSource.TrySetResult();
     }
 }
 

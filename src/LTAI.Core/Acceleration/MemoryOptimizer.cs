@@ -16,13 +16,25 @@ public record MemoryStats(
     double Percent,
     long SwapUsedMb);
 
-public record CacheEntry(
-    string Key,
-    string Response,
-    DateTime CreatedAt,
-    int TtlSeconds,
-    int Hits,
-    int TokensSaved);
+public sealed class CacheEntry
+{
+    public string Key { get; set; }
+    public string Response { get; set; }
+    public DateTime CreatedAt { get; set; }
+    public int TtlSeconds { get; set; }
+    public int Hits { get; set; }
+    public int TokensSaved { get; set; }
+
+    public CacheEntry(string key, string response, DateTime createdAt, int ttlSeconds, int hits, int tokensSaved)
+    {
+        Key = key;
+        Response = response;
+        CreatedAt = createdAt;
+        TtlSeconds = ttlSeconds;
+        Hits = hits;
+        TokensSaved = tokensSaved;
+    }
+}
 
 public sealed class ResponseCache
 {
@@ -33,6 +45,7 @@ public sealed class ResponseCache
     private readonly ILogger<ResponseCache> _logger;
     private const int MaxEntries = 500;
     private long _totalHits;
+    private string? _oldestKey;
 
     public ResponseCache() : this(NullLogger<ResponseCache>.Instance) { }
 
@@ -63,10 +76,9 @@ public sealed class ResponseCache
                 return null;
             }
 
-            var updated = entry with { Hits = entry.Hits + 1 };
-            _entries.TryUpdate(key, updated, entry);
+            entry.Hits++;
             Interlocked.Increment(ref _totalHits);
-            _logger.LogDebug("Cache hit: {Key}, Hits: {Hits}", key, updated.Hits);
+            _logger.LogDebug("Cache hit: {Key}, Hits: {Hits}", key, entry.Hits);
             return entry.Response;
         }
         return null;
@@ -79,15 +91,24 @@ public sealed class ResponseCache
 
         if (_entries.Count >= MaxEntries)
         {
-            var oldest = _entries.Values.OrderBy(e => e.CreatedAt).FirstOrDefault();
-            if (oldest != null)
+            var oldestKey = _oldestKey;
+            if (oldestKey != null && _entries.TryRemove(oldestKey, out _))
+                _logger.LogDebug("Evicted oldest cache entry: {Key}", oldestKey);
+            else if (_entries.Count >= MaxEntries)
             {
-                _entries.TryRemove(oldest.Key, out _);
-                _logger.LogDebug("Evicted oldest cache entry: {Key}", oldest.Key);
+                foreach (var kvp in _entries)
+                {
+                    if (oldestKey == null || kvp.Value.CreatedAt < _entries[oldestKey].CreatedAt)
+                        oldestKey = kvp.Key;
+                }
+                if (oldestKey != null)
+                    _entries.TryRemove(oldestKey, out _);
             }
         }
 
         _entries[key] = entry;
+        if (_oldestKey == null || entry.CreatedAt < (_entries.TryGetValue(_oldestKey, out var ok) ? ok.CreatedAt : DateTime.MaxValue))
+            _oldestKey = key;
         _logger.LogDebug("Cached response: {Key}, TTL: {TtlSeconds}s", key, ttlSeconds);
     }
 

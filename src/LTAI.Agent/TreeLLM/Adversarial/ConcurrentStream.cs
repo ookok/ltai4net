@@ -273,15 +273,23 @@ public sealed class ConcurrentStream
         var events = new List<StreamEvent>();
 
         var flashSw = Stopwatch.StartNew();
-        string flashOutput;
+        var proSw = Stopwatch.StartNew();
+
+        var flashTask = chatFn($"[Flash] {query}", systemPrompt);
+        var proTask = chatFn($"[Pro] {query}", systemPrompt);
+
+        string flashOutput = "", proOutput = "";
+        var flashLatency = 0L;
+        var proLatency = 0L;
 
         try
         {
-            flashOutput = await chatFn($"[Flash] {query}", systemPrompt);
+            flashOutput = await flashTask.ConfigureAwait(false);
+            flashLatency = flashSw.ElapsedMilliseconds;
         }
         catch (Exception ex)
         {
-            flashOutput = "";
+            flashSw.Stop();
             events.Add(new StreamEvent
             {
                 Kind = StreamEventKind.Error,
@@ -291,18 +299,14 @@ public sealed class ConcurrentStream
             });
         }
 
-        var flashLatency = flashSw.ElapsedMilliseconds;
-
-        var proSw = Stopwatch.StartNew();
-        string proOutput;
-
         try
         {
-            proOutput = await chatFn($"[Pro] {query}", systemPrompt);
+            proOutput = await proTask.ConfigureAwait(false);
+            proLatency = proSw.ElapsedMilliseconds;
         }
         catch (Exception ex)
         {
-            proOutput = "";
+            proSw.Stop();
             events.Add(new StreamEvent
             {
                 Kind = StreamEventKind.Error,
@@ -311,8 +315,6 @@ public sealed class ConcurrentStream
                 Sequence = events.Count
             });
         }
-
-        var proLatency = proSw.ElapsedMilliseconds;
 
         var insights = _ExtractInsights(proOutput, MAX_PRO_INSIGHTS);
 
@@ -337,6 +339,9 @@ public sealed class ConcurrentStream
         };
     }
 
+    private static readonly Regex s_sentenceSplitRegex = new(
+        @"(?<=[.!?])\s+", RegexOptions.Compiled, TimeSpan.FromMilliseconds(200));
+
     private static List<string> _ExtractInsights(string text, int max = 3)
     {
         if (string.IsNullOrWhiteSpace(text))
@@ -348,7 +353,7 @@ public sealed class ConcurrentStream
             "notably", "significantly", "fundamental", "vital", "major"
         };
 
-        var sentences = Regex.Split(text, @"(?<=[.!?])\s+")
+        var sentences = s_sentenceSplitRegex.Split(text)
             .Where(s => s.Trim().Length >= 30)
             .ToList();
 

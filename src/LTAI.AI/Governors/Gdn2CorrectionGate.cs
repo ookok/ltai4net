@@ -27,13 +27,14 @@ public sealed class Gdn2CorrectionGate
 {
     private readonly Dictionary<string, CorrectionState> _domains = new();
     private readonly List<CorrectionRecord> _history = [];
+    private readonly object _gateLock = new();
     private readonly int _dimK;
     private readonly int _dimV;
     private readonly int _maxStates;
     private const float DefaultEraseStrength = 0.85f;
     private const float DefaultWriteStrength = 0.90f;
 
-    public int HistoryCount => _history.Count;
+    public int HistoryCount { get { lock (_gateLock) return _history.Count; } }
 
     public Gdn2CorrectionGate(int dimK = 128, int dimV = 128, int maxStates = 32)
     {
@@ -44,98 +45,109 @@ public sealed class Gdn2CorrectionGate
 
     public CorrectionState GetOrCreate(string domain)
     {
-        if (!_domains.TryGetValue(domain, out var state))
+        lock (_gateLock)
         {
-            state = new CorrectionState
+            if (!_domains.TryGetValue(domain, out var state))
             {
-                Domain = domain,
-                Matrix = new float[_dimK * _dimV],
-                DimK = _dimK,
-                DimV = _dimV,
-                DecayAccumulator = new float[_dimK]
-            };
-            if (_domains.Count >= _maxStates)
-            {
-                var oldest = _domains.Keys.First();
-                _domains.Remove(oldest);
+                state = new CorrectionState
+                {
+                    Domain = domain,
+                    Matrix = new float[_dimK * _dimV],
+                    DimK = _dimK,
+                    DimV = _dimV,
+                    DecayAccumulator = new float[_dimK]
+                };
+                if (_domains.Count >= _maxStates)
+                {
+                    var oldest = _domains.Keys.First();
+                    _domains.Remove(oldest);
+                }
+                _domains[domain] = state;
             }
-            _domains[domain] = state;
+            return state;
         }
-        return state;
     }
 
     public void Erase(string domain, float[] key, float? eraseStrength = null)
     {
-        var state = GetOrCreate(domain);
-        var strength = eraseStrength ?? DefaultEraseStrength;
-        var dk = state.DimK;
-        var dv = state.DimV;
-
-        for (var i = 0; i < dk; i++)
+        lock (_gateLock)
         {
-            var bi = Math.Clamp(key[i] * strength, 0f, 1f);
-            for (var j = 0; j < dv; j++)
-            {
-                var idx = i * dv + j;
-                state.Matrix[idx] *= (1f - bi * key[i]);
-            }
-        }
+            var state = GetOrCreate(domain);
+            var strength = eraseStrength ?? DefaultEraseStrength;
+            var dk = state.DimK;
 
-        for (var i = 0; i < dk; i++)
-            state.DecayAccumulator[i] = Math.Max(state.DecayAccumulator[i], Math.Abs(key[i]));
+            for (var i = 0; i < dk; i++)
+            {
+                var wi = Math.Clamp(key[i] * strength, 0f, 1f);
+                for (var j = 0; j < state.DimV; j++)
+                    state.Matrix[i * state.DimV + j] *= (1f - wi);
+            }
+
+            for (var i = 0; i < dk; i++)
+                state.DecayAccumulator[i] = Math.Max(state.DecayAccumulator[i], Math.Abs(key[i]));
+        }
     }
 
     public void Write(string domain, float[] key, float[] value, float? writeStrength = null)
     {
-        var state = GetOrCreate(domain);
-        var strength = writeStrength ?? DefaultWriteStrength;
-        var dk = state.DimK;
-        var dv = state.DimV;
-
-        for (var i = 0; i < dk; i++)
+        lock (_gateLock)
         {
-            var wi = Math.Clamp(key[i] * strength, 0f, 1f);
-            var gated = wi * value[Math.Min(i, value.Length - 1)];
-            for (var j = 0; j < dv; j++)
+            var state = GetOrCreate(domain);
+            var strength = writeStrength ?? DefaultWriteStrength;
+            var dk = state.DimK;
+            var dv = state.DimV;
+
+            for (var i = 0; i < dk; i++)
             {
-                var jj = Math.Min(j, value.Length - 1);
-                state.Matrix[i * dv + j] += key[i] * gated * wi;
+                var wi = Math.Clamp(key[i] * strength, 0f, 1f);
+                for (var j = 0; j < dv; j++)
+                {
+                    var vj = value[Math.Min(j, value.Length - 1)];
+                    state.Matrix[i * dv + j] += wi * vj;
+                }
             }
         }
     }
 
+
     public void ApplyCorrection(string domain, float[] queryKey, float[] wrongValue, float[] correctValue)
     {
-        Erase(domain, queryKey, DefaultEraseStrength);
-        Write(domain, queryKey, correctValue, DefaultWriteStrength);
-
-        _history.Add(new CorrectionRecord
+        lock (_gateLock)
         {
-            Domain = domain,
-            EraseStrength = DefaultEraseStrength,
-            WriteStrength = DefaultWriteStrength,
-            CorrectionQuality = ComputeQuality(wrongValue, correctValue),
-            Timestamp = DateTime.UtcNow
-        });
+            Erase(domain, queryKey, DefaultEraseStrength);
+            Write(domain, queryKey, correctValue, DefaultWriteStrength);
+
+            _history.Add(new CorrectionRecord
+            {
+                Domain = domain,
+                EraseStrength = DefaultEraseStrength,
+                WriteStrength = DefaultWriteStrength,
+                CorrectionQuality = ComputeQuality(wrongValue, correctValue),
+                Timestamp = DateTime.UtcNow
+            });
+        }
     }
 
     public void ApplyCorrection(string domain, float[] queryKey, float[] wrongValue, float[] correctValue,
         string query, string wrongOutput, string correctOutput)
     {
-        Erase(domain, queryKey, DefaultEraseStrength);
-        Write(domain, queryKey, correctValue, DefaultWriteStrength);
-
-        _history.Add(new CorrectionRecord
+        lock (_gateLock)
         {
-            Domain = domain,
-            Query = query,
-            WrongOutput = wrongOutput,
-            CorrectOutput = correctOutput,
-            EraseStrength = DefaultEraseStrength,
-            WriteStrength = DefaultWriteStrength,
-            CorrectionQuality = ComputeQuality(wrongValue, correctValue),
-            Timestamp = DateTime.UtcNow
-        });
+            Erase(domain, queryKey, DefaultEraseStrength);
+            Write(domain, queryKey, correctValue, DefaultWriteStrength);
+
+            _history.Add(new CorrectionRecord
+            {
+                Domain = domain,
+                Query = query,
+                WrongOutput = wrongOutput,
+                CorrectOutput = correctOutput,
+                EraseStrength = DefaultEraseStrength,
+                WriteStrength = DefaultWriteStrength,
+                CorrectionQuality = ComputeQuality(wrongValue, correctValue),
+                Timestamp = DateTime.UtcNow
+            });
+        }
     }
 
     public float Retrieve(string domain, float[] queryKey, float[] outputBuffer)

@@ -1,8 +1,8 @@
 using LTAI.Core.Configuration;
-using LTAI.Network;
-using LTAI.Network.Discovery;
-using LTAI.Network.Interfaces;
-using LTAI.Network.Models;
+using LTAI.Infra.Network;
+using LTAI.Infra.Network.Discovery;
+using LTAI.Infra.Network.Interfaces;
+using LTAI.Infra.Network.Models;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Xunit;

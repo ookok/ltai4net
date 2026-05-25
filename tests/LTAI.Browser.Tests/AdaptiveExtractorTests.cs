@@ -1,4 +1,4 @@
-using LTAI.Browser;
+using LTAI.Infra;
 using LTAI.Browser.Models;
 using Xunit;
 

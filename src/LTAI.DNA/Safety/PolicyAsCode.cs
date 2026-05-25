@@ -615,7 +615,7 @@ public sealed class PolicyAsCode
 
         if (_canaryVersion != null && _canaryVersion.CanaryPercentage > 0 && sessionId != null)
         {
-            var hash = Math.Abs(sessionId.GetHashCode()) % 100;
+            var hash = Math.Abs(DeterministicHash(sessionId)) % 100;
             if (hash >= _canaryVersion.CanaryPercentage)
             {
                 active = active.Where(r => !_canaryVersion.Description?.Contains(r.Id) == true).ToList();
@@ -665,8 +665,7 @@ public sealed class PolicyAsCode
                     }
                 }
             }
-
-            if (lower.Contains(".matches("))
+            else if (lower.Contains(".matches("))
             {
                 var match = Regex.Match(lower, @"matches\('([^']*)'[^)]*\)");
                 if (match.Success)
@@ -778,5 +777,12 @@ public sealed class PolicyAsCode
         catch { }
 
         return (false, null, 0.0);
+    }
+
+    private static int DeterministicHash(string input)
+    {
+        var bytes = System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes(input));
+        return BitConverter.ToInt32(bytes, 0);
     }
 }

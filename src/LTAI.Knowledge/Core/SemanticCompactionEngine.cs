@@ -132,10 +132,11 @@ public sealed class SemanticCompactionEngine
         return compressed;
     }
 
+    private static readonly char[] s_sentenceSeparators = { '.', '!', '?', '。', '！', '？' };
+
     private static string CompressHeuristic(string content)
     {
-        var sentences = content.Split(new[] { '.', '!', '?', '。', '！', '？' },
-            StringSplitOptions.RemoveEmptyEntries);
+        var sentences = content.Split(s_sentenceSeparators, StringSplitOptions.RemoveEmptyEntries);
 
         if (sentences.Length <= 3)
             return content[..Math.Min(500, content.Length)];

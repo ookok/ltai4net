@@ -44,6 +44,11 @@ public sealed class ResourceTree
     private readonly ConcurrentDictionary<string, Dictionary<string, MountPoint>> _snapshots = new();
     private readonly ILogger<ResourceTree> _logger;
 
+    private static readonly Regex s_searchArgsRegex = new(
+        @"^(.*?)\s+(.+)$", RegexOptions.Compiled, TimeSpan.FromMilliseconds(100));
+    private static readonly Regex s_writeArgsRegex = new(
+        @"^(\S+)\s+(.+)", RegexOptions.Singleline | RegexOptions.Compiled, TimeSpan.FromMilliseconds(100));
+
     public ResourceTree(ILogger<ResourceTree>? logger = null)
     {
         _logger = logger ?? NullLogger<ResourceTree>.Instance;
@@ -300,7 +305,7 @@ public sealed class ResourceTree
                 else if (trimmed.StartsWith("search ", StringComparison.OrdinalIgnoreCase))
                 {
                     var searchArgs = trimmed[7..].Trim();
-                    var match = Regex.Match(searchArgs, @"^(.*?)\s+(.+)$");
+                    var match = s_searchArgsRegex.Match(searchArgs);
                     var path = match.Success ? match.Groups[1].Value.Trim() : "/";
                     var query = match.Success ? match.Groups[2].Value.Trim() : searchArgs;
                     result = await Search(path, query).ConfigureAwait(false);
@@ -313,7 +318,7 @@ public sealed class ResourceTree
                 else if (trimmed.StartsWith("write ", StringComparison.OrdinalIgnoreCase))
                 {
                     var writeArgs = trimmed[6..].Trim();
-                    var match = Regex.Match(writeArgs, @"^(\S+)\s+(.+)", RegexOptions.Singleline);
+                    var match = s_writeArgsRegex.Match(writeArgs);
                     var path = match.Success ? match.Groups[1].Value.Trim() : writeArgs;
                     var content = match.Success ? match.Groups[2].Value.Trim() : "";
                     result = await Write(path, content).ConfigureAwait(false);

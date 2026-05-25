@@ -202,9 +202,9 @@ public sealed class MultiProviderChatClient : IChatClient
     public static string CapToolResult(string result) =>
         ToolCallRepairer.CapToolResult(result, ToolResultCapTokens);
 
-    public static void ClearStormHistory()
+    public static void ClearStormHistory(string sessionId = "")
     {
-        ToolCallRepairer.ClearStormHistory();
+        ToolCallRepairer.ClearStormHistory(sessionId);
     }
 
     public PrefixCacheStore PrefixCache => _prefixCache;

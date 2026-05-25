@@ -18,7 +18,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\LTAI.Core\LTAI.Core.csproj" />
-    <ProjectReference Include="..\..\src\LTAI.Network\LTAI.Network.csproj" />
+    <ProjectReference Include="..\..\src\LTAI.Infra\LTAI.Infra.csproj" />
   </ItemGroup>
 
 </Project>

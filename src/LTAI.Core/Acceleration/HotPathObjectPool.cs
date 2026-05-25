@@ -106,12 +106,11 @@ public sealed class HotPathObjectPool
         if (bag.TryTake(out var buffer) && buffer.Length >= minimumSize)
         {
             Interlocked.Increment(ref _hits);
-            Array.Clear(buffer, 0, buffer.Length);
             return buffer;
         }
 
         Interlocked.Increment(ref _misses);
-        return ArrayPool<byte>.Shared.Rent(Math.Max(minimumSize, slabSize));
+        return new byte[Math.Max(minimumSize, slabSize)];
     }
 
     public void ReturnBuffer(byte[] buffer, int slabSize)
@@ -129,10 +128,6 @@ public sealed class HotPathObjectPool
         {
             bag.Add(buffer);
             Interlocked.Add(ref _bytesReclaimed, buffer.Length);
-        }
-        else
-        {
-            ArrayPool<byte>.Shared.Return(buffer);
         }
     }
 
@@ -172,7 +167,7 @@ public sealed class HotPathObjectPool
         }
 
         Interlocked.Increment(ref _misses);
-        var buffer = ArrayPool<byte>.Shared.Rent(expectedSize);
+        var buffer = new byte[expectedSize];
         return new PooledJsonDocument(buffer, expectedSize, this);
     }
 

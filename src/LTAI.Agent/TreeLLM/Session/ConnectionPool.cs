@@ -161,12 +161,19 @@ public sealed class ConnectionPool : IDisposable
         using var stream = await response.Content.ReadAsStreamAsync(cts.Token).ConfigureAwait(false);
         using var reader = new StreamReader(stream);
 
-        var buffer = new char[4096];
-        while (true)
+        var buffer = System.Buffers.ArrayPool<char>.Shared.Rent(4096);
+        try
         {
-            var read = await reader.ReadAsync(buffer, 0, buffer.Length).ConfigureAwait(false);
-            if (read == 0) break;
-            yield return new string(buffer, 0, read);
+            while (true)
+            {
+                var read = await reader.ReadAsync(buffer, 0, buffer.Length).ConfigureAwait(false);
+                if (read == 0) break;
+                yield return new string(buffer, 0, read);
+            }
+        }
+        finally
+        {
+            System.Buffers.ArrayPool<char>.Shared.Return(buffer);
         }
     }
 
@@ -191,37 +198,33 @@ public sealed class ConnectionPool : IDisposable
 
     public PoolStats GetStats()
     {
-        int active = 0, idle = 0;
-        try
+        var requests = _providerStats.Values.Sum(s => s.Requests);
+        var failures = _providerStats.Values.Sum(s => s.Failures);
+
+        double avgLatency = 0;
+        if (_latencyRing.Count > 0)
         {
-            if (_client != null)
-            {
-                var handler = _client.GetType().GetField("_handler",
-                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)?
-                    .GetValue(_client);
-                if (handler != null)
-                {
-                    var pool = handler.GetType().GetProperty("Pool",
-                        System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)?
-                        .GetValue(handler);
-                    if (pool != null)
-                    {
-                        var activeProp = pool.GetType().GetProperty("TotalConnectionCount")?.GetValue(pool);
-                        if (activeProp is int ac) active = ac;
-                    }
-                }
-            }
+            var sum = 0.0;
+            foreach (var l in _latencyRing) sum += l;
+            avgLatency = sum / _latencyRing.Count;
         }
-        catch { /* non-fatal */ }
+
+        double reuseRatio = 0;
+        if (_reuseRing.Count > 0)
+        {
+            var count = 0;
+            foreach (var r in _reuseRing) if (r) count++;
+            reuseRatio = (double)count / _reuseRing.Count;
+        }
 
         return new PoolStats
         {
-            ActiveConnections = active,
-            IdleConnections = idle,
-            TotalRequests = _providerStats.Values.Sum(s => s.Requests),
-            TotalFailures = _providerStats.Values.Sum(s => s.Failures),
-            AvgLatencyMs = _latencyRing.Count > 0 ? _latencyRing.Average() : 0,
-            ReusedRatio = _reuseRing.Count > 0 ? (double)_reuseRing.Count(r => r) / _reuseRing.Count : 0,
+            ActiveConnections = 0,
+            IdleConnections = 0,
+            TotalRequests = requests,
+            TotalFailures = failures,
+            AvgLatencyMs = avgLatency,
+            ReusedRatio = reuseRatio,
             Recreations = _recreateCount
         };
     }

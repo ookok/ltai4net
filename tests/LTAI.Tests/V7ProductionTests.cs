@@ -1,4 +1,6 @@
 using System.Net.Http.Json;
+using LTAI.Core.Configuration;
+using LTAI.Models;
 using System.Runtime.CompilerServices;
 using LTAI.Agent.Agents;
 using LTAI.Agent.Routing;
@@ -20,11 +22,11 @@ public class V7ProductionTests
     public void UT_01_IntentRouter_AllFiveRoutes()
     {
         var r = new IntentRouter();
-        Assert.Equal("code", r.Classify("请帮我debug这段代码").TargetAgent);
-        Assert.Equal("eia", r.Classify("评估化工厂大气环境影响").TargetAgent);
-        Assert.Equal("eia_critic", r.Classify("审核这份环评报告").TargetAgent);
-        Assert.Equal("reasoning", r.Classify("为什么系统架构要这样设计").TargetAgent);
-        Assert.Equal("chat", r.Classify("hello, how are you?").TargetAgent);
+        Assert.Equal(AgentType.Code, r.Classify("请帮我debug这段代码").TargetAgent);
+        Assert.Equal(AgentType.EIA, r.Classify("评估化工厂大气环境影响").TargetAgent);
+        Assert.Equal(AgentType.EiaCritic, r.Classify("审核这份环评报告").TargetAgent);
+        Assert.Equal(AgentType.Reasoning, r.Classify("为什么系统架构要这样设计").TargetAgent);
+        Assert.Equal(AgentType.Chat, r.Classify("hello, how are you?").TargetAgent);
     }
 
     [Fact]
@@ -32,7 +34,7 @@ public class V7ProductionTests
     {
         var r = new IntentRouter();
         var rt = r.Classify("");
-        Assert.Equal("chat", rt.TargetAgent);
+        Assert.Equal(AgentType.Chat, rt.TargetAgent);
         Assert.Equal(1.0f, rt.Confidence);
     }
 
@@ -41,7 +43,7 @@ public class V7ProductionTests
     {
         var r = new IntentRouter();
         var rt = r.Classify("xyzzy quux 12345 nonsense");
-        Assert.Equal("chat", rt.TargetAgent);
+        Assert.Equal(AgentType.Chat, rt.TargetAgent);
         Assert.True(rt.Confidence <= 0.6f);
     }
 
@@ -158,7 +160,7 @@ public class V7ProductionTests
     {
         var router = new IntentRouter();
         var rt = router.Classify("debug and refactor this code to read CSV and calculate mean in Python");
-        Assert.Equal("code", rt.TargetAgent);
+        Assert.Equal(AgentType.Code, rt.TargetAgent);
 
         var brain = new FakeChatClient().AddRoute("Code analysis", _ =>
             "```python\nimport csv\nprint('done')\n```");
@@ -171,7 +173,7 @@ public class V7ProductionTests
     public void E2E_02_EIA_FullFlow()
     {
         var rt = new IntentRouter().Classify("评估工厂排放的环境影响 Q=100 u=2.5 He=50");
-        Assert.Equal("eia", rt.TargetAgent);
+        Assert.Equal(AgentType.EIA, rt.TargetAgent);
 
         var brain = new FakeChatClient().AddRoute("EIA", _ =>
             "根据 GB 3095-2012 和 HJ 2.2-2018，排放浓度达标。");
@@ -202,14 +204,14 @@ public class V7ProductionTests
     [Fact]
     public void EDGE_01_AllRouters_HandleEmpty()
     {
-        Assert.Equal("chat", new IntentRouter().Classify("").TargetAgent);
+        Assert.Equal(AgentType.Chat, new IntentRouter().Classify("").TargetAgent);
     }
 
     [Fact]
     public void EDGE_02_LongInput_NoOverflow()
     {
         var rt = new IntentRouter().Classify(new string('x', 10000));
-        Assert.Equal("chat", rt.TargetAgent);
+        Assert.Equal(AgentType.Chat, rt.TargetAgent);
     }
 
     [Fact]
@@ -247,10 +249,16 @@ public class V7ProductionTests
 
     // ═══ HELPERS ═══
 
-    private static UnifiedSafetyGate Gate() => new(
-        NullLogger<UnifiedSafetyGate>.Instance,
-        new SafetyCoordinator(NullLogger<SafetyCoordinator>.Instance),
-        new PolicyAsCode().Apply(p => p.LoadDefaults()));
+    private static UnifiedSafetyGate Gate()
+    {
+        var policy = new PolicyAsCode();
+        policy.LoadDefaults();
+        return new(
+            NullLogger<UnifiedSafetyGate>.Instance,
+            new SafetyCoordinator(NullLogger<SafetyCoordinator>.Instance),
+            policy,
+            Microsoft.Extensions.Options.Options.Create(new LTAIOptions()));
+    }
 
     private static LTAIAgentCard Card(string name, AgentType type = AgentType.Chat) => new()
     { Name = name, Type = type, Instructions = "", Middleware = new() { "unified_safety" } };

@@ -16,7 +16,7 @@ public sealed class ProcessSandbox : ISandbox
 
     public string Name => "ProcessSandbox";
     public SandboxCapability Capability => SandboxCapability.Python | SandboxCapability.JavaScript |
-        SandboxCapability.CSharp | SandboxCapability.Shell | SandboxCapability.Timeout | SandboxCapability.MemoryLimit;
+        SandboxCapability.CSharp | SandboxCapability.Shell | SandboxCapability.Timeout;
 
     public ProcessSandbox(ILogger<ProcessSandbox> logger)
     {
@@ -26,10 +26,12 @@ public sealed class ProcessSandbox : ISandbox
     public async Task<SandboxResult> ExecuteAsync(SandboxRequest request, CancellationToken cancellationToken = default)
     {
         var sw = Stopwatch.StartNew();
+        string? tempFile = null;
 
         try
         {
-            var (executable, args, tempFile) = PrepareExecution(request);
+            var (executable, args, tf) = PrepareExecution(request);
+            tempFile = tf;
             var psi = new ProcessStartInfo(executable, args)
             {
                 RedirectStandardInput = true,
@@ -80,7 +82,10 @@ public sealed class ProcessSandbox : ISandbox
             Cleanup(tempFile);
 
             var memKb = 0L;
-            try { memKb = process.PeakWorkingSet64 / 1024; } catch { /* non-fatal */ }
+            if (!process.HasExited)
+            {
+                try { memKb = process.PeakWorkingSet64 / 1024; } catch { }
+            }
 
             return new SandboxResult
             {
@@ -95,6 +100,7 @@ public sealed class ProcessSandbox : ISandbox
         catch (Exception ex)
         {
             sw.Stop();
+            Cleanup(tempFile);
             _logger.LogError(ex, "Sandbox execution failed");
             return new SandboxResult
             {
@@ -103,7 +109,7 @@ public sealed class ProcessSandbox : ISandbox
         }
     }
 
-    public Task<bool> IsAvailableAsync(CancellationToken cancellationToken = default)
+    public async Task<bool> IsAvailableAsync(CancellationToken cancellationToken = default)
     {
         try
         {
@@ -114,28 +120,29 @@ public sealed class ProcessSandbox : ISandbox
                     RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true
                 };
                 using var p = Process.Start(psi);
-                if (p == null) return Task.FromResult(false);
-                p.WaitForExit(2000);
-                if (p.ExitCode != 0) return Task.FromResult(false);
+                if (p == null) return false;
+                await p.WaitForExitAsync(cancellationToken).WaitAsync(TimeSpan.FromSeconds(2), cancellationToken).ConfigureAwait(false);
+                if (p.ExitCode != 0) return false;
             }
-            return Task.FromResult(true);
+            return true;
         }
         catch
         {
-            return Task.FromResult(false);
+            return false;
         }
     }
 
     private (string executable, string args, string? tempFile) PrepareExecution(SandboxRequest request)
     {
+        var runtime = _runtimes.GetValueOrDefault(request.Language, "python3");
         return request.Language switch
         {
-            SandboxLanguage.Python => ("python", $"-c \"{EscapeArg(request.Code)}\"", null),
-            SandboxLanguage.JavaScript => ("node", $"-e \"{EscapeArg(request.Code)}\"", null),
+            SandboxLanguage.Python => (runtime, $"-c \"{EscapeArg(request.Code)}\"", null),
+            SandboxLanguage.JavaScript => (runtime, $"-e \"{EscapeArg(request.Code)}\"", null),
             SandboxLanguage.Shell => (RuntimeInfo.IsWindows ? "pwsh" : "bash",
                 RuntimeInfo.IsWindows ? $"-NoProfile -Command \"{EscapeArg(request.Code)}\"" : $"-c \"{EscapeArg(request.Code)}\"", null),
             SandboxLanguage.CSharp => PrepareCSharp(request.Code),
-            _ => ("python", $"-c \"{EscapeArg(request.Code)}\"", null)
+            _ => (runtime, $"-c \"{EscapeArg(request.Code)}\"", null)
         };
     }
 

@@ -71,7 +71,7 @@ public class PlatformReliabilityTests
 
     [Fact] public void REL_11_SafetyGate_Instantiable() {
         var p=new PolicyAsCode(); p.LoadDefaults();
-        var g=new UnifiedSafetyGate(NullLogger<UnifiedSafetyGate>.Instance,new SafetyCoordinator(NullLogger<SafetyCoordinator>.Instance),p);
+        var g=new UnifiedSafetyGate(NullLogger<UnifiedSafetyGate>.Instance,new SafetyCoordinator(NullLogger<SafetyCoordinator>.Instance),p,Options.Create(new LTAIOptions()));
         Assert.NotNull(g); }
 
     // ── Performance ──
@@ -86,7 +86,7 @@ public class PlatformReliabilityTests
     [Fact] public void REL_13_SafetyGate_InitFast() {
         var sw = Stopwatch.StartNew();
         var p=new PolicyAsCode(); p.LoadDefaults();
-        new UnifiedSafetyGate(NullLogger<UnifiedSafetyGate>.Instance,new SafetyCoordinator(NullLogger<SafetyCoordinator>.Instance),p);
+        new UnifiedSafetyGate(NullLogger<UnifiedSafetyGate>.Instance,new SafetyCoordinator(NullLogger<SafetyCoordinator>.Instance),p,Options.Create(new LTAIOptions()));
         sw.Stop();
         Assert.True(sw.Elapsed.TotalMilliseconds<200); }
 

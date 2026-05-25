@@ -41,11 +41,22 @@ public static class MarkdownRenderer
         var i = 0;
         while (i < text.Length)
         {
+            var codeEnd = text.IndexOf('`', i);
             var boldEnd = text.IndexOf("**", i);
             var italicEnd = text.IndexOf('*', i);
-            var codeEnd = text.IndexOf('`', i);
 
-            if (boldEnd >= i && (italicEnd < i || boldEnd <= italicEnd))
+            if (codeEnd >= i && (boldEnd < i || codeEnd <= boldEnd) && (italicEnd < i || codeEnd <= italicEnd))
+            {
+                if (codeEnd > i) inlines.Add(Run(text[i..codeEnd]));
+                var end = text.IndexOf('`', codeEnd + 1);
+                if (end > codeEnd)
+                {
+                    inlines.Add(Run(text[(codeEnd + 1)..end], LtaiTheme.AccentInfo, style: FontStyle.Italic));
+                    i = end + 1;
+                }
+                else { inlines.Add(Run(text[codeEnd..])); break; }
+            }
+            else if (boldEnd >= i && (italicEnd < i || boldEnd <= italicEnd))
             {
                 if (boldEnd > i) inlines.Add(Run(text[i..boldEnd]));
                 var end = text.IndexOf("**", boldEnd + 2);
