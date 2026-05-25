@@ -48,8 +48,7 @@ public static class ServiceCollectionExtensions
                     continue;
 
                 var apiKey = ResolveApiKey(kv.Key, kv.Value.ApiKey);
-                if (apiKey == null)
-                    continue;
+                if (apiKey == null) continue;
 
                 var providerClient = CreateProviderChatClient(kv.Value, apiKey, kv.Key, loggerFactory);
                 if (providerClient != null)
@@ -60,11 +59,6 @@ public static class ServiceCollectionExtensions
 
             var pipeline = new ChatClientBuilder(multiClient)
                 .UseLogging(loggerFactory)
-                .UseFunctionInvocation(loggerFactory, client =>
-                {
-                    client.MaximumIterationsPerRequest = int.MaxValue;
-                    client.AllowConcurrentInvocation = true;
-                })
                 .UseOpenTelemetry()
                 .Build();
 
@@ -712,15 +706,16 @@ public static class ServiceCollectionExtensions
         return services;
     }
 
-    private static string? ResolveApiKey(string providerName, string _)
+    private static string? ResolveApiKey(string providerName, string configApiKey)
     {
         var p = providerName.ToUpperInvariant();
 
-        // 本地提供商无需 API Key
         if (p is "OLLAMA" or "LMSTUDIO" or "LM_STUDIO" or "VLLM" or "LLAMACPP" or "LLAMA_CPP" or "OPEN_WEBUI")
             return "";
 
-        // 所有云端提供商的 API Key 均从环境变量读取
+        if (!string.IsNullOrWhiteSpace(configApiKey))
+            return configApiKey;
+
         var envVar = p switch
         {
             "DEEPSEEK"    => "DEEPSEEK_API_KEY",
@@ -753,7 +748,8 @@ public static class ServiceCollectionExtensions
             _             => $"{p}_API_KEY"
         };
 
-        return Environment.GetEnvironmentVariable(envVar);
+        return Environment.GetEnvironmentVariable(envVar)
+            ?? Environment.GetEnvironmentVariable(envVar, EnvironmentVariableTarget.User);
     }
 
     private static IChatClient? CreateProviderChatClient(

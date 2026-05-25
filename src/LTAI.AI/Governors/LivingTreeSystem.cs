@@ -605,6 +605,7 @@ public sealed class LivingTreeSystem : IAsyncDisposable
         {
             var toolCalls = new List<FunctionCallContent>();
             var responseText = new StringBuilder();
+            var reasoningText = new StringBuilder();
 
             if (useStreaming)
             {
@@ -628,7 +629,10 @@ public sealed class LivingTreeSystem : IAsyncDisposable
                             if (content is FunctionCallContent fcc)
                                 toolCalls.Add(fcc);
                             else if (content is TextReasoningContent rc && !string.IsNullOrEmpty(rc.Text))
+                            {
+                                reasoningText.Append(rc.Text);
                                 streamChunks.Add($"<thinking>{rc.Text}</thinking>");
+                            }
                         }
                         if (!string.IsNullOrEmpty(update.Text))
                         {
@@ -745,7 +749,10 @@ public sealed class LivingTreeSystem : IAsyncDisposable
 
             // Execute tool calls and feed results back into the conversation
             var assistantReply = responseText.ToString();
-            messages.Add(new ChatMessage(ChatRole.Assistant, assistantReply) { Contents = new List<AIContent>(toolCalls) });
+            var assistantContents = new List<AIContent>(toolCalls);
+            if (reasoningText.Length > 0)
+                assistantContents.Insert(0, new TextReasoningContent(reasoningText.ToString()));
+            messages.Add(new ChatMessage(ChatRole.Assistant, assistantReply) { Contents = assistantContents });
 
             foreach (var tc in toolCalls)
         {
@@ -759,14 +766,14 @@ public sealed class LivingTreeSystem : IAsyncDisposable
                             args[kv.Key] = kv.Value;
                     }
                     var result = await _toolRegistry.InvokeAsync(tc.Name, args, cancellationToken).ConfigureAwait(false);
-                    var resultText = result?.ToString() ?? "";
-                    messages.Add(new ChatMessage(ChatRole.User, "") { Contents = new List<AIContent> { new FunctionResultContent(tc.CallId, resultText) } });
+                    var resultText = ToolCallRepairer.CapToolResult(result?.ToString() ?? "");
+                    messages.Add(new ChatMessage(ChatRole.Tool, "") { Contents = new List<AIContent> { new FunctionResultContent(tc.CallId, resultText) } });
                     _logger.LogInformation("ReAct: executed {Tool} (callId={Id})", tc.Name, tc.CallId);
                 }
                 catch (Exception ex)
                 {
                     _logger.LogError(ex, "ReAct: tool {Tool} failed", tc.Name);
-                    messages.Add(new ChatMessage(ChatRole.User, "") { Contents = new List<AIContent> { new FunctionResultContent(tc.CallId, $"Error: {ex.Message}") } });
+                    messages.Add(new ChatMessage(ChatRole.Tool, "") { Contents = new List<AIContent> { new FunctionResultContent(tc.CallId, $"Error: {ex.Message}") } });
                 }
             }
 

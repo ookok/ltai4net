@@ -133,6 +133,9 @@ public sealed class MultiProviderChatClient : IChatClient
             var needsPro = false;
             var flashResults = new List<ChatResponseUpdate>();
 
+            var msgList = messages as IList<ChatMessage>;
+            var msgCount = msgList?.Count ?? 0;
+
             try
             {
                 await foreach (var update in flashClient.GetStreamingResponseAsync(messages, flashOptions, cancellationToken))
@@ -157,6 +160,13 @@ public sealed class MultiProviderChatClient : IChatClient
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Flash model failed for {Model}, falling back to Pro {Pro}", ai.L1.Model, ai.L2.Model);
+                if (msgList != null && msgList.Count > msgCount)
+                {
+                    var removed = msgList.Count - msgCount;
+                    while (msgList.Count > msgCount)
+                        msgList.RemoveAt(msgList.Count - 1);
+                    _logger.LogInformation("Removed {Count} orphaned messages from Flash pipeline failure", removed);
+                }
             }
 
             foreach (var update in flashResults)

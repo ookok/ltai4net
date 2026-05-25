@@ -231,10 +231,17 @@ public sealed class L1PlanExecutor
                         var paramParts = new List<string>();
                         foreach (var p in props.EnumerateObject())
                         {
-                            var pType = p.Value.TryGetProperty("type", out var t)
-                                ? t.GetString() ?? "string" : "string";
+                            var pType = "string";
+                            if (p.Value.TryGetProperty("type", out var t))
+                            {
+                                if (t.ValueKind == JsonValueKind.String)
+                                    pType = t.GetString() ?? "string";
+                                else if (t.ValueKind == JsonValueKind.Array)
+                                    pType = string.Join("|", t.EnumerateArray().Select(e => e.GetString() ?? ""));
+                            }
                             var isRequired = root.TryGetProperty("required", out var req)
-                                && req.EnumerateArray().Any(r => r.GetString() == p.Name);
+                                && req.ValueKind == JsonValueKind.Array
+                                && req.EnumerateArray().Any(r => r.ValueKind == JsonValueKind.String && r.GetString() == p.Name);
                             var reqMark = isRequired ? "" : "?";
                             paramParts.Add($"\"{p.Name}\": {pType}{reqMark}");
                         }

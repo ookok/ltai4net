@@ -64,7 +64,12 @@ public sealed class ModelDownloader
             {
                 _logger?.LogDebug("Trying URL: {Url}", url);
                 await DownloadFileAsync(url, filePath, model, progress, ct).ConfigureAwait(false);
-                _logger?.LogInformation("✅ Downloaded successfully");
+                _logger?.LogInformation("Downloaded successfully");
+
+                if (model.Layer == ModelLayer.L0)
+                {
+                    await DownloadTokenizerAsync(url, dir, progress, ct).ConfigureAwait(false);
+                }
                 return filePath;
             }
             catch (Exception ex)
@@ -88,7 +93,7 @@ public sealed class ModelDownloader
         var dir = Path.Combine(modelsDir, layerDir);
 
         if (model.Layer == ModelLayer.L0 && model.EngineType == "onnx")
-            return File.Exists(Path.Combine(dir, "model.onnx"));
+            return File.Exists(Path.Combine(dir, "model.onnx")) && File.Exists(Path.Combine(dir, "tokenizer.json"));
 
         var extension = model.EngineType.ToLowerInvariant();
         return File.Exists(Path.Combine(dir, $"{model.Version}.{extension}"));
@@ -106,6 +111,8 @@ public sealed class ModelDownloader
         {
             var filePath = Path.Combine(dir, "model.onnx");
             if (File.Exists(filePath)) File.Delete(filePath);
+            var tokPath = Path.Combine(dir, "tokenizer.json");
+            if (File.Exists(tokPath)) File.Delete(tokPath);
         }
         else
         {
@@ -115,6 +122,37 @@ public sealed class ModelDownloader
         }
 
         _logger?.LogInformation("🗑️ Removed model {Version} ({Name})", version, model.Name);
+    }
+
+    private async Task DownloadTokenizerAsync(
+        string modelUrl,
+        string outputDir,
+        IProgress<ModelDownloadProgress>? progress,
+        CancellationToken ct)
+    {
+        var tokenizerPath = Path.Combine(outputDir, "tokenizer.json");
+        if (File.Exists(tokenizerPath)) return;
+
+        var tokenizerUrl = modelUrl.Replace("model.onnx", "tokenizer.json");
+        if (tokenizerUrl == modelUrl)
+        {
+            tokenizerUrl = modelUrl[..modelUrl.LastIndexOf('/')] + "/tokenizer.json";
+        }
+
+        try
+        {
+            _logger?.LogInformation("Downloading tokenizer.json...");
+            using var response = await _httpClient.GetAsync(tokenizerUrl, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
+            response.EnsureSuccessStatusCode();
+            await using var stream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+            await using var fileStream = new FileStream(tokenizerPath, FileMode.Create, FileAccess.Write, FileShare.None, 81920, true);
+            await stream.CopyToAsync(fileStream, ct).ConfigureAwait(false);
+            _logger?.LogInformation("Tokenizer downloaded successfully");
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "Tokenizer download from {Url} failed, embedding may use hash fallback", tokenizerUrl);
+        }
     }
 
     private async Task DownloadFileAsync(

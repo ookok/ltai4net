@@ -111,8 +111,8 @@ public sealed class OnnxEmbeddingBackend : IEmbeddingBackend, IDisposable
                 attentionMask.Add(0);
             }
 
-            var inputTensor = new DenseTensor<int>(inputIds.ToArray(), new[] { 1, inputIds.Count });
-            var maskTensor = new DenseTensor<int>(attentionMask.ToArray(), new[] { 1, attentionMask.Count });
+            var inputTensor = new DenseTensor<long>(inputIds.Select(id => (long)id).ToArray(), new[] { 1, inputIds.Count });
+            var maskTensor = new DenseTensor<long>(attentionMask.Select(m => (long)m).ToArray(), new[] { 1, attentionMask.Count });
 
             var onnxInputs = new List<NamedOnnxValue>
             {
@@ -123,7 +123,7 @@ public sealed class OnnxEmbeddingBackend : IEmbeddingBackend, IDisposable
             // 某些模型可能还需要 token_type_ids
             var tokenTypeIds = inputs.TokenTypeIds.Take(_config.MaxSequenceLength).ToList();
             while (tokenTypeIds.Count < _config.MaxSequenceLength) tokenTypeIds.Add(0);
-            var typeTensor = new DenseTensor<int>(tokenTypeIds.ToArray(), new[] { 1, tokenTypeIds.Count });
+            var typeTensor = new DenseTensor<long>(tokenTypeIds.Select(t => (long)t).ToArray(), new[] { 1, tokenTypeIds.Count });
             onnxInputs.Add(NamedOnnxValue.CreateFromTensor("token_type_ids", typeTensor));
 
             using var outputs = await Task.Run(() => _session.Run(onnxInputs)).ConfigureAwait(false);
