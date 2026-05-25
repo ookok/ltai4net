@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using LTAI.Knowledge.Vector.Interfaces;
 using LTAI.Tools.Tools;
 using Microsoft.Extensions.Logging;
@@ -15,6 +16,7 @@ public sealed class ToolRetriever
     private readonly IVectorStore _vectorStore;
     private readonly ILogger<ToolRetriever> _logger;
     private readonly Dictionary<string, (ToolDef Tool, float[] Embedding)> _toolIndex = new();
+    private readonly ConcurrentDictionary<string, (int Successes, int Failures)> _feedback = new();
     private bool _initialized;
 
     private static readonly string[] CoreTools =
@@ -65,10 +67,18 @@ public sealed class ToolRetriever
             var queryEmbedding = await _vectorStore.EmbedAsync(queryText, ct).ConfigureAwait(false);
 
             var scored = _toolIndex.Values
-                .Select(kv => new ToolDefResult
+                .Select(kv =>
                 {
-                    Definition = kv.Tool,
-                    Score = CosineSimilarity(queryEmbedding, kv.Embedding)
+                    var baseScore = CosineSimilarity(queryEmbedding, kv.Embedding);
+                    var fb = _feedback.GetValueOrDefault(kv.Tool.Name);
+                    var fbBonus = fb.Successes > 0 || fb.Failures > 0
+                        ? ((float)(fb.Successes + 1) / (fb.Successes + fb.Failures + 2) - 0.5f) * 0.3f
+                        : 0f;
+                    return new ToolDefResult
+                    {
+                        Definition = kv.Tool,
+                        Score = Math.Clamp(baseScore + fbBonus, 0, 1)
+                    };
                 })
                 .OrderByDescending(x => x.Score)
                 .Take(topK)
@@ -81,7 +91,6 @@ public sealed class ToolRetriever
                     scored.Add(new ToolDefResult { Definition = t.Tool, Score = 0.5f });
             }
 
-            _logger.LogDebug("ToolRetriever: recalled {Count} tools for intent={Intent}", scored.Count, intent);
             return scored;
         }
         catch (Exception ex)
@@ -92,6 +101,16 @@ public sealed class ToolRetriever
                 Definition = new ToolDef(n, n, "core", null), Score = 0.2f
             }).ToList();
         }
+    }
+
+    /// <summary>
+    /// Record feedback: successful tool invocation → boost future ranking.
+    /// </summary>
+    public void RecordFeedback(string toolName, bool success)
+    {
+        _feedback.AddOrUpdate(toolName,
+            _ => success ? (1, 0) : (0, 1),
+            (_, v) => success ? (v.Successes + 1, v.Failures) : (v.Successes, v.Failures + 1));
     }
 
     private static float CosineSimilarity(float[] a, float[] b)
