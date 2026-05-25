@@ -72,7 +72,7 @@ public class E2EArchitectureTests
 
     // ═══ TC-05: 边界场景 — 大型项目 ═══
     [Fact]
-    public void TC05_LargeProject_BudgetEnforcement()
+    public async Task TC05_LargeProject_BudgetEnforcement()
     {
         var middleware = new LTAI.Agent.Middleware.BudgetTrackingMiddleware(
             NullLogger<LTAI.Agent.Middleware.BudgetTrackingMiddleware>.Instance,
@@ -84,9 +84,10 @@ public class E2EArchitectureTests
         };
 
         var agent = new TestAgent("CodeAgent");
-        var result = middleware.InvokeAsync(largeMessage, null, null, agent, CancellationToken.None).GetAwaiter().GetResult();
+        var result = await middleware.InvokeAsync(largeMessage, null, null, agent, CancellationToken.None);
 
-        Assert.Contains("[Budget]", result.Text);
+        var budget = middleware.GetBudget("CodeAgent");
+        Assert.True(budget.DegradationCount >= 1, "Should degrade model instead of hard block");
     }
 
     // ═══ TC-06: 边界场景 — 跨行业提问 ═══
@@ -127,7 +128,7 @@ public class E2EArchitectureTests
 
     // ═══ TC-09: 故障注入 — 预算超限 ═══
     [Fact]
-    public async Task TC09_BudgetExceeded_BlocksRequest()
+    public async Task TC09_BudgetExceeded_DegradesModel()
     {
         var middleware = new LTAI.Agent.Middleware.BudgetTrackingMiddleware(
             NullLogger<LTAI.Agent.Middleware.BudgetTrackingMiddleware>.Instance,
@@ -142,8 +143,8 @@ public class E2EArchitectureTests
         var agent = new TestAgent("Agent");
         var response = await middleware.InvokeAsync(msg, null, null, agent, CancellationToken.None);
 
-        Assert.Contains("[Budget]", response.Text);
-        Assert.Contains("cost limit", response.Text);
+        var budget = middleware.GetBudget("Agent");
+        Assert.True(budget.DegradationCount >= 1, "Should degrade to cheaper model");
     }
 
     // ═══ TC-10: EIA 合规性验证 ═══

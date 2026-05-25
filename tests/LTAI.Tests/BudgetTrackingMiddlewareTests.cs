@@ -49,27 +49,30 @@ public class BudgetTrackingMiddlewareTests
     }
 
     [Fact]
-    public async Task ExceededTokenLimit_BlocksRequest()
+    public async Task ExceededTokenLimit_DegradesModel()
     {
         var middleware = new BudgetTrackingMiddleware(_logger, dailyTokenLimit: 100);
 
         var agent = new TestAgent();
         var response = await middleware.InvokeAsync(LongMessage(), null, null, agent, CancellationToken.None);
 
-        Assert.Contains("[Budget]", response.Text);
-        Assert.Contains("token limit", response.Text);
+        // Should degrade L2→L1 instead of hard blocking
+        Assert.False(response.Text.Contains("limit reached") && response.Text.Contains("tomorrow"),
+            "Should degrade model instead of hard block");
+        var budget = middleware.GetBudget(agent.Name ?? "unknown");
+        Assert.True(budget.DegradationCount >= 1, "Should have degraded at least once");
     }
 
     [Fact]
-    public async Task ExceededCostLimit_BlocksRequest()
+    public async Task ExceededCostLimit_DegradesModel()
     {
         var middleware = new BudgetTrackingMiddleware(_logger, dailyTokenLimit: 1_000_000, dailyCostLimitUsd: 0.0001m);
 
         var agent = new TestAgent();
         var response = await middleware.InvokeAsync(LongMessage(), null, null, agent, CancellationToken.None);
 
-        Assert.Contains("[Budget]", response.Text);
-        Assert.Contains("cost limit", response.Text);
+        var budget = middleware.GetBudget(agent.Name ?? "unknown");
+        Assert.True(budget.DegradationCount >= 1, "Should have degraded to cheaper model");
     }
 
     [Fact]

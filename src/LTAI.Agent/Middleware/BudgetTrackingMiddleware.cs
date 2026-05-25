@@ -51,18 +51,49 @@ public sealed class BudgetTrackingMiddleware
 
         if (budget.TotalTokens + estimatedInputTokens > _dailyTokenLimit)
         {
+            // L2→L1→L0 degradation chain per AGENTS.md
+            var degraded = TryDegradeModel(modelName);
+            if (degraded != null)
+            {
+                _logger.LogInformation("BudgetTracking: Degrading {Agent} from {Old} to {New} (token limit reached)",
+                    agentName, modelName, degraded);
+                if (options == null) options = new AgentRunOptions();
+                options.AdditionalProperties ??= new AdditionalPropertiesDictionary();
+                options.AdditionalProperties["model"] = degraded;
+                budget.TotalTokens += estimatedInputTokens;
+                budget.TotalCost += estimatedCost;
+                budget.RequestCount++;
+                budget.DegradationCount++;
+                return await innerAgent.RunAsync(messages, session, options, cancellationToken).ConfigureAwait(false);
+            }
+
             _logger.LogWarning("BudgetTracking: Agent '{Agent}' exceeded daily token limit ({Used}/{Limit})",
                 agentName, budget.TotalTokens, _dailyTokenLimit);
             return new AgentResponse(new ChatMessage(ChatRole.Assistant,
-                $"[Budget] Daily token limit of {_dailyTokenLimit:N0} reached for '{agentName}'. Used: {budget.TotalTokens:N0}. Please try again tomorrow or switch to a cheaper model."));
+                $"[Budget] Daily token limit of {_dailyTokenLimit:N0} reached for '{agentName}'. Used: {budget.TotalTokens:N0}."));
         }
 
         if (budget.TotalCost + estimatedCost > _dailyCostLimitUsd)
         {
+            var degraded = TryDegradeToCheapest(modelName);
+            if (degraded != null)
+            {
+                _logger.LogInformation("BudgetTracking: Degrading {Agent} from {Old} to {New} (cost limit reached)",
+                    agentName, modelName, degraded);
+                if (options == null) options = new AgentRunOptions();
+                options.AdditionalProperties ??= new AdditionalPropertiesDictionary();
+                options.AdditionalProperties["model"] = degraded;
+                budget.TotalTokens += estimatedInputTokens;
+                budget.TotalCost += estimatedCost;
+                budget.RequestCount++;
+                budget.DegradationCount++;
+                return await innerAgent.RunAsync(messages, session, options, cancellationToken).ConfigureAwait(false);
+            }
+
             _logger.LogWarning("BudgetTracking: Agent '{Agent}' exceeded daily cost limit (${Used:F2}/${Limit:F2})",
                 agentName, budget.TotalCost, _dailyCostLimitUsd);
             return new AgentResponse(new ChatMessage(ChatRole.Assistant,
-                $"[Budget] Daily cost limit of ${_dailyCostLimitUsd:F2} would be exceeded. Current: ${budget.TotalCost:F2}, Estimated: ${estimatedCost:F4}. Try a cheaper model or wait until tomorrow."));
+                $"[Budget] Daily cost limit of ${_dailyCostLimitUsd:F2} would be exceeded."));
         }
 
         budget.TotalTokens += estimatedInputTokens;
@@ -84,6 +115,23 @@ public sealed class BudgetTrackingMiddleware
     public AgentBudget GetBudget(string agentName) => _budgets.GetValueOrDefault(agentName, new AgentBudget());
 
     public Dictionary<string, AgentBudget> GetAllBudgets() => _budgets.ToDictionary(kv => kv.Key, kv => kv.Value);
+
+    private string? TryDegradeModel(string? current)
+    {
+        return current switch
+        {
+            "deepseek-v4-pro" or "qwen-max" => "deepseek-v4-flash",
+            "deepseek-v4-flash" or "qwen-plus" => "qwen-turbo",
+            "qwen-turbo" => "local-onnx",
+            _ => null
+        };
+    }
+
+    private string? TryDegradeToCheapest(string? current)
+    {
+        return current is "deepseek-v4-pro" or "qwen-max" or "deepseek-v4-flash" or "qwen-plus"
+            ? "qwen-turbo" : null;
+    }
 
     private static int EstimateTokens(IEnumerable<ChatMessage> messages)
     {
@@ -108,4 +156,5 @@ public sealed class AgentBudget
     public int TotalTokens { get; set; }
     public decimal TotalCost { get; set; }
     public int RequestCount { get; set; }
+    public int DegradationCount { get; set; }
 }
