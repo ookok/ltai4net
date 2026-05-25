@@ -7,6 +7,7 @@ namespace LTAI.Knowledge.Services;
 public sealed class CodeGraphSyncService : BackgroundService
 {
     private readonly CodeGraphEnhanced _codeGraph;
+    private readonly CodeGraphKnowledgeBridge? _bridge;
     private readonly ILogger<CodeGraphSyncService> _logger;
     private readonly TimeSpan _indexInterval;
     private readonly string _watchPath;
@@ -15,9 +16,11 @@ public sealed class CodeGraphSyncService : BackgroundService
     public CodeGraphSyncService(
         CodeGraphEnhanced codeGraph,
         ILogger<CodeGraphSyncService> logger,
+        CodeGraphKnowledgeBridge? bridge = null,
         string? watchPath = null)
     {
         _codeGraph = codeGraph;
+        _bridge = bridge;
         _logger = logger;
         _watchPath = watchPath ?? Directory.GetCurrentDirectory();
         _indexInterval = TimeSpan.FromMinutes(30);
@@ -54,6 +57,8 @@ public sealed class CodeGraphSyncService : BackgroundService
             var status = _codeGraph.GetStatus();
             _logger.LogInformation("CodeGraphSyncService: Graph indexed, nodes={Nodes} files={Files}",
                 status.GetValueOrDefault("total_nodes"), status.GetValueOrDefault("files_indexed"));
+
+            _bridge?.SyncToKnowledgeGraph();
         }
         catch (Exception ex)
         {
