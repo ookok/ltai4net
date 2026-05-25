@@ -34,6 +34,7 @@ appsettings.*.json
 
 ## Runtime
 .livingtree/
+*.meta.json
 
 ## Build output
 dist/

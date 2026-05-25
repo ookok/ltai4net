@@ -6,7 +6,7 @@
 # Git tracks this file → your AI behavior rules are versioned, auditable, forkable.
 
 ## Identity
-- LTAI V0.52 "Sentient Mesh" — multi-agent AI framework for EIA + general tasks
+- LTAI V0.53 "Skill Mesh" — Skill-driven multi-agent AI framework for EIA + general tasks
 - Agentic Shell pattern: Read → Think → Edit → Run → Observe loop
 - Each session is a conversation with file system + git as its UI
 
@@ -24,6 +24,16 @@
 - Use `var` only when type is obvious from right-hand side
 - Nullable reference types enabled: handle null explicitly
 - Async suffix on async methods; pass CancellationToken consistently
+
+## Skill System
+- Skills are the ONLY distributable artifact — encoded as .md files in `skills/`
+- 5-layer hierarchy: L0(atomic) → L1(task) → L2(workflow) → L3(domain) → L4(meta)
+- Each skill.md contains: triggers, steps, verification rules, evolution stats
+- Skills auto-extract from successful patterns (≥3 successes → L0 skill)
+- Skills auto-promote layers based on success rate and usage count
+- `skills/` directory = the distribution unit; share via git, no special transport
+- Runtime stores (vectors, SQLite, memory) are local-only — never distributed
+- Skill evolution metadata (`*.meta.json`) is runtime-generated, not in git
 
 ## Git Workflow
 - Commit only when explicitly asked
