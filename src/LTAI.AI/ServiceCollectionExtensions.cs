@@ -53,7 +53,11 @@ public static class ServiceCollectionExtensions
 
                 var providerClient = CreateProviderChatClient(kv.Value, apiKey, kv.Key, loggerFactory);
                 if (providerClient != null)
+                {
+                    if (IsQwenProvider(kv.Key, kv.Value.Model))
+                        providerClient = new QwenTemplateChatClient(providerClient);
                     providerClients.Add(new KeyValuePair<string, IChatClient>(kv.Key, providerClient));
+                }
             }
 
             var multiClient = new MultiProviderChatClient(providerClients, options, multiLogger!, budget, prefixCache);
@@ -771,6 +775,13 @@ public static class ServiceCollectionExtensions
             loggerFactory.CreateLogger("LTAI.AI").LogWarning(ex, "Skipping provider {Provider}: creation failed", providerName);
             return null;
         }
+    }
+    private static bool IsQwenProvider(string providerName, string model)
+    {
+        var p = providerName.ToLowerInvariant();
+        var m = model.ToLowerInvariant();
+        return p is "aliyun" or "alibaba" or "modelscope"
+            || m.Contains("qwen") || m.Contains("qwq");
     }
 }
 

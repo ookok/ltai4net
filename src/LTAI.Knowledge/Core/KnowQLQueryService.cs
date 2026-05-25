@@ -82,6 +82,20 @@ public sealed class KnowQLQueryService
         KnowQLQuery query, string? domain = null, CancellationToken ct = default)
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
+
+        // PI gate: skip graph reasoning if predictability index is too low
+        if (_knowledgeGraph != null && !KnowledgeGraphAnalytics.IsSubgraphReliable(_knowledgeGraph))
+        {
+            _logger.LogInformation("KnowQL: Graph PI below threshold, falling back to text-only response");
+            sw.Stop();
+            return new KnowQLResponse
+            {
+                Ask = query.Ask,
+                OverallConfidence = 0.3,
+                LatencyMs = sw.ElapsedMilliseconds,
+                RawResponse = "[Graph PI too low] Graph structure is sparse. Consider adding more entities before running structured queries."
+            };
+        }
         var budget = query.Budget ?? new KnowQLBudget
         {
             MaxDepth = DefaultMaxDepth,

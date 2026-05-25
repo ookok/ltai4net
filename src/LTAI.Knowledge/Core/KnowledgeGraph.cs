@@ -484,10 +484,57 @@ public class KnowledgeGraph : IDisposable
                 ["by_relation_type"] = byType,
                 ["triplet_count"] = _triplets.Count,
                 ["storage"] = "SQLite",
-                ["db_size_bytes"] = dbSize
+                ["db_size_bytes"] = dbSize,
+                ["predictability"] = ComputePredictabilitySnapshot()
             };
         }
         finally { _lock.ExitReadLock(); }
+    }
+
+    internal List<Entity> GetAllNodes()
+    {
+        _lock.EnterReadLock();
+        try { return _nodesIndex.Values.ToList(); }
+        finally { _lock.ExitReadLock(); }
+    }
+
+    internal Dictionary<string, Dictionary<string, List<string>>> GetAdjacencyForAnalysis()
+    {
+        _lock.EnterReadLock();
+        try
+        {
+            var snapshot = new Dictionary<string, Dictionary<string, List<string>>>();
+            foreach (var (key, edges) in _adjacency)
+            {
+                var copy = new Dictionary<string, List<string>>();
+                foreach (var (rel, targets) in edges)
+                    copy[rel] = new List<string>(targets);
+                snapshot[key] = copy;
+            }
+            return snapshot;
+        }
+        finally { _lock.ExitReadLock(); }
+    }
+
+    private object ComputePredictabilitySnapshot()
+    {
+        try
+        {
+            var result = KnowledgeGraphAnalytics.Analyze(this, sampleSize: 500);
+            return new
+            {
+                pi = Math.Round(result.PredictabilityIndex, 3),
+                reliability = result.IsReliable ? "high" : "low",
+                graph_type = result.ClassifiedType.ToString(),
+                heterogeneity = Math.Round(result.DegreeHeterogeneity, 3),
+                clustering = Math.Round(result.ClusteringCoefficient, 3),
+                avg_degree = Math.Round(result.AverageDegree, 1),
+                recommendation = result.IsReliable
+                    ? "Graph structure is dense enough for reliable KB reasoning"
+                    : "Sparse graph — prefer vector search over graph traversal"
+            };
+        }
+        catch { return new { pi = 0, reliability = "unknown" }; }
     }
 
     public static string EntityId(string label)
