@@ -1,4 +1,5 @@
 using System.Text;
+using LTAI.AI.Interfaces;
 using LTAI.AI.Governors;
 using LTAI.Core.Configuration;
 using Spectre.Console;
@@ -8,7 +9,7 @@ namespace LTAI.TUI;
 
 public sealed class ChatLayout
 {
-    private readonly LivingTreeSystem _lts;
+    private readonly ILivingTreeSystem _lts;
     private readonly LTAIOptions? _options;
     private readonly List<(string role, string content)> _history = new();
     private readonly string? _loadedFileContent;
@@ -22,7 +23,7 @@ public sealed class ChatLayout
     private bool _hasResponse;
     private bool _hasThinking;
 
-    public ChatLayout(LivingTreeSystem lts, LTAIOptions? options, string? loadedFileContent = null)
+    public ChatLayout(ILivingTreeSystem lts, LTAIOptions? options, string? loadedFileContent = null)
     {
         _lts = lts;
         _options = options;

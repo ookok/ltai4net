@@ -27,9 +27,3 @@ public enum JournalStatus
     Paused
 }
 
-public enum SystemMode
-{
-    Normal,
-    Degraded,
-    LifeSupport
-}

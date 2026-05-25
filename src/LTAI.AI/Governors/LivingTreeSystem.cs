@@ -3,12 +3,14 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using LTAI.AI.Interfaces;
 using LTAI.Core.Configuration;
 using LTAI.Core.Execution;
 using LTAI.Core.Interfaces;
 using LTAI.Core.Messaging;
 using LTAI.Core.Models;
 using LTAI.DNA;
+using LTAI.Models;
 using LTAI.Tools.Reasoning;
 using LTAI.AI.Providers;
 using LTAI.AI.Utilities;
@@ -18,7 +20,7 @@ using Microsoft.Extensions.Options;
 
 namespace LTAI.AI.Governors;
 
-public sealed class LivingTreeSystem : IAsyncDisposable
+public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
 {
     private readonly ICognitiveMesh _mesh;
     private readonly TaskJournal _journal;

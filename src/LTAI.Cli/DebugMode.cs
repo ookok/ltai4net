@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using LTAI.AI.Interfaces;
 using System.Text;
 using LTAI.AI;
 using LTAI.AI.Governors;
@@ -54,7 +55,7 @@ internal static class DebugMode
         services.AddLTAIAI();
 
         var sp = services.BuildServiceProvider();
-        var livingTree = sp.GetRequiredService<LivingTreeSystem>();
+        var livingTree = sp.GetRequiredService<ILivingTreeSystem>();
         var options = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<LTAIOptions>>().Value;
 
         var toolRegistry = sp.GetRequiredService<AIToolRegistry>();
@@ -83,7 +84,7 @@ internal static class DebugMode
         Console.WriteLine("\nDebug mode completed.");
     }
 
-    private static async Task RunLiveQueryAsync(string query, LivingTreeSystem livingTree, LTAIOptions options)
+    private static async Task RunLiveQueryAsync(string query, ILivingTreeSystem livingTree, LTAIOptions options)
     {
         var obs = new DebugObservability(livingTree);
         var snapBefore = obs.Snapshot();
@@ -175,7 +176,7 @@ internal static class DebugMode
         };
     }
 
-    private static async Task RunBatchTestAsync(int count, LivingTreeSystem livingTree, LTAIOptions options)
+    private static async Task RunBatchTestAsync(int count, ILivingTreeSystem livingTree, LTAIOptions options)
     {
         var generator = new HeuristicQuestionGenerator();
         Console.WriteLine($"生成 {count} 个测试用例...");

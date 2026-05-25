@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using LTAI.AI.Governors;
+using LTAI.AI.Interfaces;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 
@@ -7,17 +8,17 @@ namespace LTAI.Agent;
 
 public sealed class LivingTreeChatClient : IChatClient
 {
-    private readonly LivingTreeSystem _system;
+    private readonly ILivingTreeSystem _system;
     private readonly ILogger<LivingTreeChatClient>? _logger;
 
-    public LivingTreeChatClient(LivingTreeSystem system, ILogger<LivingTreeChatClient>? logger = null)
+    public LivingTreeChatClient(ILivingTreeSystem system, ILogger<LivingTreeChatClient>? logger = null)
     {
         _system = system;
         _logger = logger;
     }
 
     public ChatClientMetadata? Metadata =>
-        new("LivingTreeSystem", new Uri("https://github.com/ltai-org/ltai4net"));
+        new("ILivingTreeSystem", new Uri("https://github.com/ltai-org/ltai4net"));
 
     public async Task<ChatResponse> GetResponseAsync(
         IEnumerable<ChatMessage> messages,

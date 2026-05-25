@@ -6,7 +6,8 @@ public enum SystemMode
     Safe,
     Learning,
     Offline,
-    Degraded
+    Degraded,
+    LifeSupport
 }
 
 public enum AgentType
@@ -36,14 +37,6 @@ public sealed class AgentConfig
     public Dictionary<string, object?> Global { get; set; } = new();
 }
 
-public sealed class DNAStatus
-{
-    public string PersonaMode { get; init; } = "normal";
-    public float Energy { get; init; } = 1.0f;
-    public float Curiosity { get; init; } = 0.7f;
-    public string Mood { get; init; } = "neutral";
-    public DateTime LastUpdate { get; init; } = DateTime.UtcNow;
-}
 
 public sealed class ToolMetadata
 {

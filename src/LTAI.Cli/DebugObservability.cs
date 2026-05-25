@@ -1,14 +1,15 @@
 using LTAI.AI.Governors;
+using LTAI.AI.Interfaces;
 using LTAI.Cli.Debug;
 
 namespace LTAI.Cli;
 
 public sealed class DebugObservability
 {
-    private readonly LivingTreeSystem _lts;
+    private readonly ILivingTreeSystem _lts;
     private readonly FullLinkTracer _tracer;
 
-    public DebugObservability(LivingTreeSystem lts)
+    public DebugObservability(ILivingTreeSystem lts)
     {
         _lts = lts;
         _tracer = new FullLinkTracer();

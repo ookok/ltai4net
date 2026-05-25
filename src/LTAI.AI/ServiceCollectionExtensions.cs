@@ -1,5 +1,6 @@
 using System.ClientModel;
 using LTAI.AI.Governors;
+using LTAI.AI.Interfaces;
 using LTAI.AI.Providers;
 using LTAI.Tools.Skills;
 using LTAI.Core.Configuration;
@@ -702,6 +703,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<SelfGovernor>();
         services.AddSingleton<SystemGuardian>();
         services.AddSingleton<LivingTreeSystem>();
+        services.AddSingleton<ILivingTreeSystem>(sp => sp.GetRequiredService<LivingTreeSystem>());
 
         return services;
     }

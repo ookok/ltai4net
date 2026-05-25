@@ -1,4 +1,5 @@
 using LTAI.AI.Governors;
+using LTAI.AI.Interfaces;
 using Spectre.Console;
 using Spectre.Console.Rendering;
 
@@ -6,7 +7,7 @@ namespace LTAI.TUI;
 
 public sealed class PipelineDashboard
 {
-    private readonly LivingTreeSystem _lts;
+    private readonly ILivingTreeSystem _lts;
 
     private readonly Table _layersTable;
     private readonly Table _routingTable;
@@ -22,7 +23,7 @@ public sealed class PipelineDashboard
     private static readonly Style CyanStyle = new(Color.Cyan1);
     private static readonly Style DimStyle = new(Color.Grey);
 
-    public PipelineDashboard(LivingTreeSystem lts)
+    public PipelineDashboard(ILivingTreeSystem lts)
     {
         _lts = lts;
 

@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using LTAI.AI.Interfaces;
 using System.Text.Json;
 using LTAI.AI.Governors;
 using Microsoft.AspNetCore.Builder;
@@ -43,7 +44,7 @@ public static class SseAgentEndpoints
     {
         endpoints.MapGet("/api/agent/health", (HttpContext context) =>
         {
-            var system = context.RequestServices.GetService<LivingTreeSystem>();
+            var system = context.RequestServices.GetService<ILivingTreeSystem>();
             return Results.Json(new
             {
                 status = system is not null ? "ok" : "degraded",
@@ -89,7 +90,7 @@ public static class SseAgentEndpoints
                 _tasks.TryAdd(taskId, task);
 
                 var sp = context.RequestServices;
-                var system = sp.GetService<LivingTreeSystem>();
+                var system = sp.GetService<ILivingTreeSystem>();
                 var chatClient = sp.GetService<IChatClient>();
 
                 if (system is not null)
@@ -139,7 +140,7 @@ public static class SseAgentEndpoints
                 else
                 {
                     task.Status = "failed";
-                    task.Error = "No backend (LivingTreeSystem or IChatClient) available";
+                    task.Error = "No backend (ILivingTreeSystem or IChatClient) available";
                 }
 
                 context.Response.ContentType = "application/json";

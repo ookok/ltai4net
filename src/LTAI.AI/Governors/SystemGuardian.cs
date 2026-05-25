@@ -1,5 +1,6 @@
 using LTAI.Core.Interfaces;
 using LTAI.Core.Models;
+using LTAI.Models;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 

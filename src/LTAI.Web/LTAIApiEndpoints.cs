@@ -1,4 +1,5 @@
 using System.Text.Json;
+using LTAI.AI.Interfaces;
 using LTAI.AI.Governors;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -13,8 +14,8 @@ public static class LTAIApiEndpoints
     {
         endpoints.MapPost("/api/chat", async (
             HttpContext context,
-            LivingTreeSystem system,
-            ILogger<LivingTreeSystem> logger,
+            ILivingTreeSystem system,
+            ILogger<ILivingTreeSystem> logger,
             CancellationToken cancellationToken) =>
         {
             try
@@ -53,8 +54,8 @@ public static class LTAIApiEndpoints
 
         endpoints.MapPost("/api/chat/stream", async (
             HttpContext context,
-            LivingTreeSystem system,
-            ILogger<LivingTreeSystem> logger,
+            ILivingTreeSystem system,
+            ILogger<ILivingTreeSystem> logger,
             CancellationToken cancellationToken) =>
         {
             using var reader = new StreamReader(context.Request.Body);

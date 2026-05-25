@@ -1,4 +1,5 @@
 using Avalonia;
+using LTAI.AI.Interfaces;
 using LTAI.AI;
 using LTAI.AI.Governors;
 using LTAI.Agent.Tools;
@@ -75,11 +76,11 @@ public sealed class ServiceLocator
 
 public sealed class LTAIService
 {
-    public LivingTreeSystem LTS { get; }
+    public ILivingTreeSystem LTS { get; }
     public DNAOrchestrator? DNA { get; }
     public LTAIMetricsCollector? Metrics { get; }
 
-    public LTAIService(LivingTreeSystem lts, DNAOrchestrator? dna = null, LTAIMetricsCollector? metrics = null)
+    public LTAIService(ILivingTreeSystem lts, DNAOrchestrator? dna = null, LTAIMetricsCollector? metrics = null)
     {
         LTS = lts; DNA = dna; Metrics = metrics;
     }
