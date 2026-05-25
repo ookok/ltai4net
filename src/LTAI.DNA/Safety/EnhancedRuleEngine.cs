@@ -290,6 +290,77 @@ public sealed class EnhancedRuleEngine
         ["audit_log_size"] = _auditLog.Count,
         ["strategy"] = _strategy.ToString()
     };
+
+    /// <summary>
+    /// Auto-tune rule priorities: rules with high false positive rate → lower priority.
+    /// Called periodically (e.g., from DreamCycle after consolidation).
+    /// </summary>
+    public int AutoTuneRulePriorities(Dictionary<string, int> falsePositives)
+    {
+        var tuned = 0;
+        foreach (var rule in _rules.ToList())
+        {
+            if (falsePositives.TryGetValue(rule.Id, out var fp) && fp >= 3)
+            {
+                var newRule = new EnhancedCompiledRule(
+                    rule.Id, rule.Priority + fp * 10, rule.Category, rule.CanaryPercent,
+                    rule.ConditionType, rule.Condition, rule.FireAction);
+                _rules.Remove(rule);
+                _rules.Add(newRule);
+                tuned++;
+            }
+        }
+        return tuned;
+    }
+
+    /// <summary>
+    /// Flag rules that haven't fired in N days for review.
+    /// </summary>
+    public List<string> DetectStaleRules(int staleDays = 30)
+    {
+        var stale = new List<string>();
+        var cutoff = DateTime.UtcNow.AddDays(-staleDays);
+
+        foreach (var rule in _rules.ToList())
+        {
+            var lastFire = _auditLog
+                .Where(a => a.RuleId == rule.Id)
+                .OrderByDescending(a => a.Timestamp)
+                .FirstOrDefault();
+
+            if (lastFire == null || lastFire.Timestamp < cutoff)
+            {
+                stale.Add(rule.Id);
+            }
+        }
+
+        return stale;
+    }
+
+    /// <summary>
+    /// Wire DreamCycle consolidation → auto-mine rules from FixInstinctStore.
+    /// Called from DreamCycle after each consolidation cycle.
+    /// </summary>
+    public void BridgeFromDreamCycle(Dictionary<string, (string Strategy, int SuccessCount)> topInstincts)
+    {
+        foreach (var (code, (strategy, count)) in topInstincts)
+        {
+            AddCanaryRule($"dream_{code}", percentage: 10, b =>
+            {
+                b.WithPriority(60).WithCategory("dream-bridge")
+                 .WithCanary(10)
+                 .When<InputFact>(f => f.ContainsAny(code))
+                 .Then(ctx => ctx.RecordHit(new RuleHit
+                 {
+                     RuleId = $"dream_{code}",
+                     Action = PolicyAction.Warn,
+                     Triggered = true,
+                     Message = $"[DreamCycle] Learned fix pattern: {strategy} (success rate: {count}x)",
+                     Priority = 60
+                 }));
+            });
+        }
+    }
 }
 
 public sealed class RuleAuditEntry
@@ -356,4 +427,7 @@ public sealed class EnhancedCompiledRule
     }
 
     public void Fire(RuleContext ctx) => _action(ctx);
+
+    internal Delegate Condition => _condition;
+    internal Action<RuleContext> FireAction => _action;
 }

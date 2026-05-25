@@ -5,11 +5,14 @@ using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using LTAI.Agent.Adversarial;
 using LTAI.Agent.Agents;
 using LTAI.Agent.Feedback;
 using LTAI.Agent.Federation;
+using LTAI.Agent.MAF;
 using LTAI.Agent.Middleware;
 using LTAI.Agent.Prefetch;
+using LTAI.Agent.Prompting;
 using LTAI.Agent.Routing;
 using LTAI.Agent.Tools;
 using LTAI.Agent.Workflows;
@@ -35,7 +38,24 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<PlannerCriticWorkflow>();
         services.AddSingleton<PlannerIntegration>();
         services.AddSingleton<UnifiedPlanningPipeline>();
+        services.AddSingleton<AdversarialSelfPlay>(sp =>
+        {
+            var instance = AdversarialSelfPlay.Instance;
+            instance.SetLogger(sp.GetRequiredService<ILogger<AdversarialSelfPlay>>());
+            return instance;
+        });
+        services.AddSingleton<SelfRefinementLoop>();
         services.AddSingleton<AgentParliament>();
+
+        // Register BuiltInHooks on AgentHookPipeline
+        services.AddSingleton<AgentHookPipeline>(sp =>
+        {
+            var pipeline = new AgentHookPipeline();
+            pipeline.OnPreToolUse(BuiltInHooks.ShellSafetyHook);
+            pipeline.OnPreToolUse(BuiltInHooks.FileSystemSafetyHook);
+            pipeline.OnPreToolUse(BuiltInHooks.NetworkSafetyHook);
+            return pipeline;
+        });
         services.AddSingleton<SentientParliament>();
         services.AddSingleton<ShadowRouter>();
         services.AddSingleton<HumanInTheLoopReview>();

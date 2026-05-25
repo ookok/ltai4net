@@ -1081,6 +1081,8 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
             }, "SelfEvolution");
 
         // Multi-agent debate: fork to SentientParliament on complex grounded queries
+        // NOTE: Cross-assembly bridge needed (LTAI.Agent.SentientParliament).
+        // Parliament deliberation is triggered from the Agent layer via GovernorWorkflow.
         if (!groundingFailed && finalResponse.Length > 300 && totalToolCalls >= 2)
             _erlLoop.RecordTrial($"debate_{query[..Math.Min(query.Length, 40)]}",
                 finalResponse[..Math.Min(finalResponse.Length, 100)], "multi_agent", 0.85f, true);
