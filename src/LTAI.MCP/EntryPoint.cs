@@ -2,6 +2,8 @@ using System.Runtime.InteropServices;
 using LTAI.AI.Interfaces;
 using System.Text;
 using LTAI.AI;
+using LTAI.Core.Interfaces;
+using LTAI.Core.Messaging;
 using LTAI.AI.Governors;
 using LTAI.AI.Providers;
 using LTAI.Agent.Tools;
@@ -80,4 +82,15 @@ public static class EntryPoint
         var transport = sp.GetRequiredService<IMCPTransport>();
         await transport.StartAsync(server).ConfigureAwait(false);
     }
+}
+
+internal sealed class McpEntryPointAdapter : ILTAIEntryPoint
+{
+    public Task RunAsync(string[] args) => EntryPoint.RunAsync(args);
+}
+
+public static class McpEntryPointRegistration
+{
+    static McpEntryPointRegistration() { LTAIEntryPointRegistry.Register("mcp", new McpEntryPointAdapter()); }
+    public static void Initialize() { }
 }

@@ -1,3 +1,4 @@
+using LTAI.Core.Interfaces;
 using System.Security.Cryptography;
 using LTAI.AI.Interfaces;
 using System.Threading.RateLimiting;
@@ -136,4 +137,20 @@ public static class EntryPoint
 
         await app.RunAsync().ConfigureAwait(false);
     }
+}
+
+internal sealed class HostEntryPointAdapter : ILTAIEntryPoint
+{
+    public Task RunAsync(string[] args) => EntryPoint.RunAsync(args);
+}
+
+public static class HostEntryPointRegistration
+{
+    static HostEntryPointRegistration()
+    {
+        LTAIEntryPointRegistry.Register("host", new HostEntryPointAdapter());
+        LTAIEntryPointRegistry.Register("serve", new HostEntryPointAdapter());
+    }
+
+    public static void Initialize() { }
 }

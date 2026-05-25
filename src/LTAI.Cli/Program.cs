@@ -1,4 +1,5 @@
 using LTAI.Cli.Commands;
+using LTAI.Core.Messaging;
 using LTAI.Core.Setup;
 using Microsoft.Extensions.DependencyInjection;
 using Spectre.Console;
@@ -10,14 +11,15 @@ public class Program
 {
     public static async Task<int> Main(string[] args)
     {
+        TriggerEntryPointRegistrations();
+
         if (args.Length > 0)
         {
             var cmd = args[0].ToLowerInvariant();
 
-            if (cmd is "host" or "serve") { await Host.EntryPoint.RunAsync(args[1..]); return 0; }
-            if (cmd is "mcp") { await MCP.EntryPoint.RunAsync(args[1..]); return 0; }
-            if (cmd is "tui") { await TUI.EntryPoint.RunAsync(args[1..]); return 0; }
-            if (cmd is "webapp") { await WebApp.EntryPoint.RunAsync(args[1..]); return 0; }
+            var entry = LTAIEntryPointRegistry.Get(cmd);
+            if (entry != null) { await entry.RunAsync(args[1..]); return 0; }
+
             if (cmd is "setup") { await RunSetupAsync(); return 0; }
         }
 
@@ -106,5 +108,13 @@ public class Program
         var wizard = new InteractiveSetupWizard(Path.Combine(AppContext.BaseDirectory, "appsettings.json"));
         await wizard.RunAsync().ConfigureAwait(false);
         return 0;
+    }
+
+    private static void TriggerEntryPointRegistrations()
+    {
+        LTAI.Host.HostEntryPointRegistration.Initialize();
+        LTAI.MCP.McpEntryPointRegistration.Initialize();
+        LTAI.TUI.TuiEntryPointRegistration.Initialize();
+        LTAI.WebApp.WebAppEntryPointRegistration.Initialize();
     }
 }

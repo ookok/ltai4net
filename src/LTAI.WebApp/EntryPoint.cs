@@ -2,6 +2,8 @@ using LTAI.AI;
 using LTAI.AI.Governors;
 using LTAI.Agent.Tools;
 using LTAI.Core.Messaging;
+using LTAI.Core.Interfaces;
+using LTAI.Core.Messaging;
 using LTAI.Tools;
 using LTAI.Core;
 using LTAI.Core.Configuration;
@@ -62,4 +64,15 @@ public static class EntryPoint
 
         await app.RunAsync().ConfigureAwait(false);
     }
+}
+
+internal sealed class WebAppEntryPointAdapter : ILTAIEntryPoint
+{
+    public Task RunAsync(string[] args) => EntryPoint.RunAsync(args);
+}
+
+public static class WebAppEntryPointRegistration
+{
+    static WebAppEntryPointRegistration() { LTAIEntryPointRegistry.Register("webapp", new WebAppEntryPointAdapter()); }
+    public static void Initialize() { }
 }

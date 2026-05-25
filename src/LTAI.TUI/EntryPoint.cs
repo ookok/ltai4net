@@ -2,6 +2,8 @@ using System.Runtime.InteropServices;
 using LTAI.AI.Interfaces;
 using System.Text;
 using LTAI.AI;
+using LTAI.Core.Interfaces;
+using LTAI.Core.Messaging;
 using LTAI.AI.Governors;
 using LTAI.Agent.Tools;
 using LTAI.Core.Messaging;
@@ -91,4 +93,15 @@ public static class EntryPoint
         var app = new TuiApp(lts, dna, reasoning, analyzer, options, svc, modelMgr);
         await app.RunAsync();
     }
+}
+
+internal sealed class TuiEntryPointAdapter : ILTAIEntryPoint
+{
+    public Task RunAsync(string[] args) => EntryPoint.RunAsync(args);
+}
+
+public static class TuiEntryPointRegistration
+{
+    static TuiEntryPointRegistration() { LTAIEntryPointRegistry.Register("tui", new TuiEntryPointAdapter()); }
+    public static void Initialize() { }
 }
