@@ -715,6 +715,22 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<GovernorSet>();
         services.AddSingleton<ReActLoopOrchestrator>();
         services.AddSingleton<ModelDispatchService>();
+        services.AddSingleton<ContextHub>(sp =>
+        {
+            return ContextHubBuilder.Build(
+                dualMemory: sp.GetService<DualMemoryStore>(),
+                memoryFiles: sp.GetService<MemoryFilesService>(),
+                knowledgeGraph: sp.GetService<KnowledgeGraph>(),
+                skillStoreQuery: null,
+                evolutionStore: sp.GetService<ICrossRunEvolutionStore>(),
+                harnessEvo: sp.GetService<HarnessEvolution>(),
+                contextMap: sp.GetService<ContextMapStore>(),
+                synapticMemory: sp.GetService<SynapticMemory>(),
+                contextGovernor: sp.GetService<ContextGovernor>(),
+                logger: sp.GetService<ILogger<ContextHub>>()
+            );
+        });
+
         services.AddSingleton<LivingTreeSystem>();
         services.AddSingleton<ILivingTreeSystem>(sp => sp.GetRequiredService<LivingTreeSystem>());
 

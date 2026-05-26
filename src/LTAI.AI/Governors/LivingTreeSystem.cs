@@ -43,6 +43,7 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
     private readonly PromptTemplateStore _prompts;
     private readonly ContextMapStore? _contextMapStore;
     private readonly ContextMap? _contextMap;
+    private readonly ContextHub? _contextHub;
 
     private readonly BAVTRouter _bavtRouter = new(100.0);
     private readonly ERLLoop _erlLoop = new();
@@ -99,7 +100,8 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
         ReActLoopOrchestrator? reActOrchestrator = null,
         ModelDispatchService? modelDispatch = null,
         ContextMapStore? contextMapStore = null,
-        ContextMap? contextMap = null)
+        ContextMap? contextMap = null,
+        ContextHub? contextHub = null)
     {
         _journal = journal;
         _llm = llm;
@@ -121,6 +123,7 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
         _prompts = prompts ?? new PromptTemplateStore();
         _contextMapStore = contextMapStore ?? (new ContextMapStore(new Microsoft.Extensions.Logging.Abstractions.NullLogger<ContextMapStore>()));
         _contextMap = contextMap ?? new ContextMap(_contextMapStore);
+        _contextHub = contextHub;
         _evolutionStore = evolutionStore;
         _verifiableRegistry = verifiableRegistry;
         _parliamentBridge = parliamentBridge;
@@ -246,6 +249,22 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
         }
 
         var model = modelOverride ?? pre.Model;
+
+        string? hubContext = null;
+        if (_contextHub != null)
+        {
+            try
+            {
+                var contextItems = _contextHub.Query(query, topK: 3);
+                if (contextItems.Count > 0)
+                {
+                    hubContext = "[Unified Context]\n" + string.Join("\n",
+                        contextItems.Select(c => $"- [{c.Domain}/{c.Kind}] {c.Summary}"));
+                }
+            }
+            catch { }
+        }
+
         var label = pre.Label;
         var dateTag = pre.DateTag;
         var layer1Context = pre.Layer1Context;
@@ -259,6 +278,8 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
         var budgetRatio = pre.BudgetRatio;
 
         var harnessQuery = pre.HarnessContext ?? query;
+        if (hubContext != null)
+            harnessQuery = hubContext + "\n\n" + harnessQuery;
 
         if (_duplexRouter != null)
         {
