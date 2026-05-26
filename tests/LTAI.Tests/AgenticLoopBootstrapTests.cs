@@ -467,6 +467,7 @@ internal sealed class FakeLivingTreeSystem : ILivingTreeSystem
 
     public async IAsyncEnumerable<string> StreamChatAsync(
         string query,
+        string? modelOverride = null,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         await Task.CompletedTask;

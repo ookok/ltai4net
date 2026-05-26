@@ -76,7 +76,7 @@ public static class LTAIApiEndpoints
 
             try
             {
-                await foreach (var token in system.StreamChatAsync(request.Query, cancellationToken))
+                await foreach (var token in system.StreamChatAsync(request.Query, null, cancellationToken))
                 {
                     var sseData = JsonSerializer.Serialize(new { text = token });
                     await context.Response.WriteAsync($"data: {sseData}\n\n", cancellationToken);

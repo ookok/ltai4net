@@ -20,7 +20,7 @@ public interface ILivingTreeSystem
 
     Task InitializeAsync(CancellationToken cancellationToken = default);
     Task<string> ChatAsync(string query, CancellationToken cancellationToken = default);
-    IAsyncEnumerable<string> StreamChatAsync(string query, CancellationToken cancellationToken = default);
+    IAsyncEnumerable<string> StreamChatAsync(string query, string? modelOverride = null, CancellationToken cancellationToken = default);
     IAsyncEnumerable<string> StreamWithModelAsync(string query, string model, CancellationToken cancellationToken = default);
     Task<GovernorOutput> ProcessTypedAsync(GovernorInput input, CancellationToken cancellationToken = default);
 }

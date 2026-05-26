@@ -36,7 +36,7 @@ public sealed class LivingTreeChatClient : IChatClient
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         var query = ExtractQuery(messages);
-        await foreach (var chunk in _system.StreamChatAsync(query, cancellationToken))
+        await foreach (var chunk in _system.StreamChatAsync(query, null, cancellationToken))
         {
             yield return new ChatResponseUpdate(ChatRole.Assistant, chunk);
         }

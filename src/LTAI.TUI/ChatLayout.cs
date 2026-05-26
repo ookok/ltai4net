@@ -35,7 +35,7 @@ public sealed class ChatLayout
             .AddColumn("").AddColumn("").AddColumn("");
     }
 
-    public async Task<string> ChatAsync(string input)
+    public async Task<string> ChatAsync(string input, string? modelOverride = null)
     {
         _responseBuffer.Clear();
         _thinkingBuffer.Clear();
@@ -59,7 +59,7 @@ public sealed class ChatLayout
 
         await AnsiConsole.Live(layout).AutoClear(false).StartAsync(async ctx =>
         {
-            await foreach (var chunk in _lts.StreamChatAsync(input))
+            await foreach (var chunk in _lts.StreamChatAsync(input, modelOverride))
             {
                 if (chunk.StartsWith("<thinking>") && chunk.EndsWith("</thinking>"))
                 {

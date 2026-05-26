@@ -203,6 +203,7 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
 
     public async IAsyncEnumerable<string> StreamChatAsync(
         string query,
+        string? modelOverride = null,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         var pre = await _preprocessor.PreprocessAsync(query, _postProcessor.QueryCache, _bavtRouter, cancellationToken).ConfigureAwait(false);
@@ -235,7 +236,7 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
             yield break;
         }
 
-        var model = pre.Model;
+        var model = modelOverride ?? pre.Model;
         var label = pre.Label;
         var dateTag = pre.DateTag;
         var layer1Context = pre.Layer1Context;

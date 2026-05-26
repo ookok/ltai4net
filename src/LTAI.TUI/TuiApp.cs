@@ -117,7 +117,8 @@ public sealed class TuiApp
     {
         AnsiConsole.Cursor.SetPosition(0, 3);
         var model = _llmConfig.SelectedModel;
-        var headerMarkup = $"[bold cyan]LTAI Dev Console[/]  {DnaStatusLine()}  [green]Mode:{_lts.Mode}[/] [blue]v5.5[/]  [yellow]Model:{model}[/]  [grey]CPU:{Environment.ProcessorCount}c MEM:{Environment.WorkingSet / 1024 / 1024}MB[/]";
+        var layer = _llmConfig.ActiveLayerName;
+        var headerMarkup = $"[bold cyan]LTAI Dev Console[/]  {DnaStatusLine()}  [green]Mode:{_lts.Mode}[/] [blue]v5.5[/]  [yellow]{layer}:{model}[/]  [grey]CPU:{Environment.ProcessorCount}c MEM:{Environment.WorkingSet / 1024 / 1024}MB[/]";
         AnsiConsole.MarkupLine(headerMarkup);
 
         if (_showLLMPanel)
@@ -619,6 +620,7 @@ public sealed class TuiApp
             [yellow]Chat:[/]
               Enter  - Send   Esc - Exit
               Tab   - Switch model   Z - Setup wizard
+              (shows layer: L0/L1/L2 + API key status 🔑/🔒)
               Ctrl+V - Paste file/folder path
               @path  - Load file content
               @@path - Load folder structure
@@ -675,7 +677,7 @@ public sealed class TuiApp
             case ConsoleKey.C when key.Modifiers == 0: _currentView = TuiView.Chat; break;
             case ConsoleKey.Tab when _currentView == TuiView.Chat && key.Modifiers == 0:
                 _llmConfig.CycleModel();
-                AnsiConsole.MarkupLine($"[yellow]⚡ Switched to:[/] [bold]{_llmConfig.SelectedModel}[/]");
+                AnsiConsole.MarkupLine($"[yellow]⚡ {_llmConfig.ActiveLayerName}:[/] [bold]{_llmConfig.SelectedModel}[/]");
                 break;
             case ConsoleKey.Z when key.Modifiers == 0 && (_currentView == TuiView.Chat || _currentView == TuiView.Dashboard):
                 await JumpToSetupAsync();
@@ -787,7 +789,8 @@ public sealed class TuiApp
             {
                 var chatLayout = new ChatLayout(_lts, _configOptions?.Value, _loadedFileContent);
                 chatLayout.UpdateRouteInfo("delegate_l2", "conf=0.8");
-                fullResponse = await chatLayout.ChatAsync(input);
+                var modelOverride = _llmConfig.GetModelForChat();
+                fullResponse = await chatLayout.ChatAsync(input, modelOverride);
             }
         }
         catch (Exception ex)
