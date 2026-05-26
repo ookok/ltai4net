@@ -12,10 +12,12 @@ public sealed class UnifiedMapService
     private readonly AmapService _amap;
     private readonly TiandituService _tianditu;
     private readonly TencentMapService _tencent;
+    private readonly SpatialCache? _cache;
 
-    public UnifiedMapService(ILogger<UnifiedMapService> logger)
+    public UnifiedMapService(ILogger<UnifiedMapService> logger, SpatialCache? cache = null)
     {
         _logger = logger;
+        _cache = cache;
         _baidu = new BaiduMapService(logger, Env("BAIDU_MAP_AK"), Env("BAIDU_MAP_SK"));
         _amap = new AmapService(logger, Env("AMAP_KEY"));
         _tianditu = new TiandituService(logger, Env("TIANDITU_KEY"));
@@ -26,23 +28,40 @@ public sealed class UnifiedMapService
 
     public async Task<GeoAddress?> GeocodeAsync(string address, string provider = "auto", CancellationToken ct = default)
     {
-        if (provider == "baidu") return await _baidu.GeocodeAsync(address, ct).ConfigureAwait(false);
-        if (provider == "amap") return await _amap.GeocodeAsync(address, ct).ConfigureAwait(false);
-        if (provider == "tencent") return await _tencent.GeocodeAsync(address, ct).ConfigureAwait(false);
-        return await _tianditu.GeocodeAsync(address, ct) ??
-               await _tencent.GeocodeAsync(address, ct) ??
-               await _baidu.GeocodeAsync(address, ct) ??
-               await _amap.GeocodeAsync(address, ct).ConfigureAwait(false);
+        if (_cache != null)
+        {
+            var cached = _cache.GetPlace(address);
+            if (cached?.Lat != null && cached?.Lng != null)
+                return new GeoAddress { Formatted = cached.Name, Lng = cached.Lng.Value, Lat = cached.Lat.Value };
+        }
+
+        GeoAddress? geo;
+        if (provider == "baidu") geo = await _baidu.GeocodeAsync(address, ct).ConfigureAwait(false);
+        else if (provider == "amap") geo = await _amap.GeocodeAsync(address, ct).ConfigureAwait(false);
+        else if (provider == "tencent") geo = await _tencent.GeocodeAsync(address, ct).ConfigureAwait(false);
+        else geo = await _tianditu.GeocodeAsync(address, ct) ??
+                      await _tencent.GeocodeAsync(address, ct) ??
+                      await _baidu.GeocodeAsync(address, ct) ??
+                      await _amap.GeocodeAsync(address, ct).ConfigureAwait(false);
+
+        if (geo != null && _cache != null)
+            _cache.CachePlace(new SpatialPlace { Name = address, Lat = geo.Lat, Lng = geo.Lng, Address = geo.Formatted });
+        return geo;
     }
 
     public async Task<GeoAddress?> ReverseGeocodeAsync(double lng, double lat, string provider = "auto", CancellationToken ct = default)
     {
-        if (provider == "baidu") return await _baidu.ReverseGeocodeAsync(lng, lat, ct).ConfigureAwait(false);
-        if (provider == "amap") return await _amap.ReverseGeocodeAsync(lng, lat, ct).ConfigureAwait(false);
-        if (provider == "tencent") return await _tencent.ReverseGeocodeAsync(lng, lat, ct).ConfigureAwait(false);
-        return await _amap.ReverseGeocodeAsync(lng, lat, ct) ??
-               await _tencent.ReverseGeocodeAsync(lng, lat, ct) ??
-               await _baidu.ReverseGeocodeAsync(lng, lat, ct).ConfigureAwait(false);
+        GeoAddress? geo;
+        if (provider == "baidu") geo = await _baidu.ReverseGeocodeAsync(lng, lat, ct).ConfigureAwait(false);
+        else if (provider == "amap") geo = await _amap.ReverseGeocodeAsync(lng, lat, ct).ConfigureAwait(false);
+        else if (provider == "tencent") geo = await _tencent.ReverseGeocodeAsync(lng, lat, ct).ConfigureAwait(false);
+        else geo = await _amap.ReverseGeocodeAsync(lng, lat, ct) ??
+                      await _tencent.ReverseGeocodeAsync(lng, lat, ct) ??
+                      await _baidu.ReverseGeocodeAsync(lng, lat, ct).ConfigureAwait(false);
+
+        if (geo != null && _cache != null)
+            _cache.CachePlace(new SpatialPlace { Name = geo.Formatted, Lat = geo.Lat, Lng = geo.Lng, Address = geo.Formatted });
+        return geo;
     }
 
     public async Task<List<POIResult>> SearchPOIAsync(string keyword, string? city = null, int limit = 10, string provider = "auto", CancellationToken ct = default)
@@ -57,12 +76,30 @@ public sealed class UnifiedMapService
 
     public async Task<RouteResult?> GetRouteAsync(GeoPoint from, GeoPoint to, string mode = "driving", string provider = "auto", CancellationToken ct = default)
     {
-        if (provider == "baidu") return await _baidu.GetRouteAsync(from, to, mode, ct).ConfigureAwait(false);
-        if (provider == "amap") return await _amap.GetRouteAsync(from, to, mode, ct).ConfigureAwait(false);
-        if (provider == "tencent") return await _tencent.GetRouteAsync(from, to, mode, ct).ConfigureAwait(false);
-        return await _amap.GetRouteAsync(from, to, mode, ct) ??
-               await _tencent.GetRouteAsync(from, to, mode, ct) ??
-               await _baidu.GetRouteAsync(from, to, mode, ct).ConfigureAwait(false);
+        var originKey = $"{from.Lng},{from.Lat}";
+        var destKey = $"{to.Lng},{to.Lat}";
+        if (_cache != null)
+        {
+            var cached = _cache.GetRoute(originKey, destKey, mode);
+            if (cached?.DistanceMeters != null)
+                return new RouteResult { DistanceMeters = cached.DistanceMeters.Value, DurationSeconds = cached.DurationSeconds ?? 0 };
+        }
+
+        RouteResult? route;
+        if (provider == "baidu") route = await _baidu.GetRouteAsync(from, to, mode, ct).ConfigureAwait(false);
+        else if (provider == "amap") route = await _amap.GetRouteAsync(from, to, mode, ct).ConfigureAwait(false);
+        else if (provider == "tencent") route = await _tencent.GetRouteAsync(from, to, mode, ct).ConfigureAwait(false);
+        else route = await _amap.GetRouteAsync(from, to, mode, ct) ??
+                        await _tencent.GetRouteAsync(from, to, mode, ct) ??
+                        await _baidu.GetRouteAsync(from, to, mode, ct).ConfigureAwait(false);
+
+        if (route != null && _cache != null)
+            _cache.CacheRoute(new SpatialRoute
+            {
+                Origin = originKey, Destination = destKey, Mode = mode,
+                DistanceMeters = route.DistanceMeters, DurationSeconds = route.DurationSeconds
+            });
+        return route;
     }
 
     public async Task<WeatherResult?> GetWeatherAsync(string city, string provider = "amap", CancellationToken ct = default)

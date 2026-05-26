@@ -1,6 +1,7 @@
 using LTAI.DNA.Safety;
 using LTAI.Knowledge.Core;
 using LTAI.Models;
+using LTAI.Tools.GIS;
 using HarnessProfile = LTAI.Core.Configuration.HarnessProfile;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
@@ -55,6 +56,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IntentRouter>();
         services.AddSingleton<UnifiedSemanticRouter>();
         services.AddSingleton<UnifiedIntentRouter>();
+        services.AddSingleton<SpatialCache>();
         services.AddSingleton<UniversalOrchestrator>(sp =>
         {
             var logger = sp.GetRequiredService<ILogger<UniversalOrchestrator>>();
