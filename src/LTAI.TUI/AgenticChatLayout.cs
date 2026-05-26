@@ -9,11 +9,13 @@ namespace LTAI.TUI;
 public sealed class AgenticChatLayout
 {
     private readonly AgenticLoop _loop;
+    private readonly FunnelView? _funnelView;
     private readonly List<RenderablePart> _parts = new();
     private readonly Queue<string> _textBuffer = new();
     private string _reasoningText = "";
     private readonly Dictionary<string, ToolRender> _tools = new();
     private string _sessionId = "";
+    private readonly Dictionary<string, DateTime> _toolStartTimes = new();
 
     private sealed class ToolRender
     {
@@ -24,9 +26,10 @@ public sealed class AgenticChatLayout
 
     private sealed record RenderablePart(string Id, string Type, string Content);
 
-    public AgenticChatLayout(AgenticLoop loop)
+    public AgenticChatLayout(AgenticLoop loop, FunnelView? funnelView = null)
     {
         _loop = loop;
+        _funnelView = funnelView;
     }
 
     public async Task<string> ChatAsync(string task, CancellationToken ct = default)
@@ -43,6 +46,8 @@ public sealed class AgenticChatLayout
 
         try
         {
+            _funnelView?.RecordStage("ReAct Loop", "starting");
+
             await AnsiConsole.Live(new Panel("")).StartAsync(async ctx =>
             {
                 var loopTask = _loop.RunAsync(task, ct);
@@ -54,6 +59,9 @@ public sealed class AgenticChatLayout
                 ctx.UpdateTarget(BuildLayout(task));
                 await loopTask;
             });
+
+            var completedTools = _tools.Values.Count(t => t.State == ToolState.Completed);
+            _funnelView?.SetTokenUsage(task.Length / 4, string.Join("\n", _textBuffer).Length / 4);
 
             return string.Join("\n", _textBuffer);
         }
@@ -77,6 +85,7 @@ public sealed class AgenticChatLayout
                 break;
             case ToolInvocationPart tool:
                 _tools[tool.Id] = new ToolRender { ToolName = tool.ToolName, State = tool.State };
+                _toolStartTimes[tool.Id] = DateTime.UtcNow;
                 break;
             case FilePart file:
                 var change = file.ChangeType ?? "modified";
@@ -95,8 +104,22 @@ public sealed class AgenticChatLayout
     {
         if (part is ToolInvocationPart tool && _tools.TryGetValue(tool.Id, out var tr))
         {
+            var prevState = tr.State;
             tr.State = tool.State;
             tr.Output = tool.Output?.ToString();
+
+            if (prevState != ToolState.Completed && tool.State == ToolState.Completed
+                && _toolStartTimes.TryGetValue(tool.Id, out var start))
+            {
+                var duration = (DateTime.UtcNow - start).TotalMilliseconds;
+                _funnelView?.RecordToolCall(tool.ToolName, duration, "success");
+            }
+            else if (prevState != ToolState.Error && tool.State == ToolState.Error
+                && _toolStartTimes.TryGetValue(tool.Id, out var errStart))
+            {
+                var duration = (DateTime.UtcNow - errStart).TotalMilliseconds;
+                _funnelView?.RecordToolCall(tool.ToolName, duration, "error");
+            }
         }
     }
 

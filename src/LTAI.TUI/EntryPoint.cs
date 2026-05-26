@@ -97,8 +97,9 @@ public static class EntryPoint
         var svc = sp.GetService<ServiceManager>();
         var modelMgr = sp.GetService<ModelManager>();
         var agenticLoop = sp.GetService<AgenticLoop>();
+        var kg = sp.GetService<KnowledgeGraph>();
 
-        var app = new TuiApp(lts, dna, reasoning, analyzer, options, svc, modelMgr, agenticLoop);
+        var app = new TuiApp(lts, dna, reasoning, analyzer, options, svc, modelMgr, agenticLoop, knowledgeGraph: kg);
         await app.RunAsync();
     }
 }

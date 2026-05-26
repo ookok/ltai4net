@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using Avalonia;
@@ -6,6 +7,7 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Threading;
 
 namespace LTAI.Desktop;
 
@@ -18,6 +20,8 @@ public partial class MainWindow : Window
     private bool _collapsed;
     private double _expandedWidth = 180;
     private readonly Grid _grid;
+    private readonly TextBlock _statusBar;
+    private readonly DispatcherTimer _statusTimer;
 
     private sealed record ViewEntry(string Name, string Shortcut, Control View);
     private readonly List<ViewEntry> _views;
@@ -139,7 +143,33 @@ public partial class MainWindow : Window
         _grid.Children.Add(splitter);
         _grid.Children.Add(_contentArea);
 
-        Content = _grid;
+        _statusBar = new TextBlock
+        {
+            Text = "CPU: --  MEM: --",
+            Foreground = LtaiTheme.Sbb(LtaiTheme.TextDim),
+            FontSize = 11,
+            FontFamily = new("Consolas"),
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Margin = new(0, 0, 12, 4)
+        };
+
+        var rootPanel = new DockPanel();
+        var statusBorder = new Border
+        {
+            Background = LtaiTheme.Sbb(LtaiTheme.BgPanel),
+            BorderBrush = LtaiTheme.Sbb(LtaiTheme.Border),
+            BorderThickness = new(0, 1, 0, 0),
+            Child = _statusBar,
+            Height = 24
+        };
+        DockPanel.SetDock(statusBorder, Dock.Bottom);
+        rootPanel.Children.Add(statusBorder);
+        rootPanel.Children.Add(_grid);
+
+        Content = rootPanel;
+
+        _statusTimer = new DispatcherTimer(TimeSpan.FromSeconds(2), DispatcherPriority.Background, (_, _) => UpdateStatusBar());
+        _statusTimer.Start();
 
         ActivateView(1);
 
@@ -212,7 +242,16 @@ public partial class MainWindow : Window
         Background = LtaiTheme.Sbb(LtaiTheme.Bg);
         _sidebar.Background = LtaiTheme.Sbb(LtaiTheme.BgPanel);
         _sidebar.BorderBrush = LtaiTheme.Sbb(LtaiTheme.Border);
+        _statusBar.Foreground = LtaiTheme.Sbb(LtaiTheme.TextDim);
         ActivateView(_activeIndex);
+    }
+
+    private void UpdateStatusBar()
+    {
+        using var process = Process.GetCurrentProcess();
+        var cpu = Environment.ProcessorCount;
+        var mem = process.WorkingSet64 / 1024.0 / 1024.0;
+        _statusBar.Text = string.Format("CPU: {0}c  MEM: {1:F0}MB", cpu, mem);
     }
 
     private void OnKeyDown(object? sender, KeyEventArgs e)

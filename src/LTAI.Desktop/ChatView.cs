@@ -6,6 +6,7 @@ using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
+using LTAI.Core.System;
 
 namespace LTAI.Desktop;
 
@@ -443,6 +444,7 @@ public sealed class ChatView : UserControl
             if (fullCopy.Length > 0)
                 AddAICopyButton(fullCopy);
 
+            NotificationService.Show("LTAI", "Response ready");
             RefreshStats();
         }
         catch (OperationCanceledException)

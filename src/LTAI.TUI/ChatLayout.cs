@@ -13,6 +13,7 @@ public sealed class ChatLayout
     private readonly LTAIOptions? _options;
     private readonly List<(string role, string content)> _history = new();
     private readonly string? _loadedFileContent;
+    private readonly FunnelView? _funnelView;
 
     private readonly Table _routingTable;
     private readonly Table _toolsTable;
@@ -23,11 +24,12 @@ public sealed class ChatLayout
     private bool _hasResponse;
     private bool _hasThinking;
 
-    public ChatLayout(ILivingTreeSystem lts, LTAIOptions? options, string? loadedFileContent = null)
+    public ChatLayout(ILivingTreeSystem lts, LTAIOptions? options, string? loadedFileContent = null, FunnelView? funnelView = null)
     {
         _lts = lts;
         _options = options;
         _loadedFileContent = loadedFileContent;
+        _funnelView = funnelView;
 
         _routingTable = new Table().Border(TableBorder.None).HideHeaders().Expand()
             .AddColumn("").AddColumn("");
@@ -56,9 +58,12 @@ public sealed class ChatLayout
 
         var fullResponse = "";
         var layout = BuildLayout();
+        var modelName = modelOverride ?? _options?.AI.L2.Model ?? "?";
 
         await AnsiConsole.Live(layout).AutoClear(false).StartAsync(async ctx =>
         {
+            _funnelView?.RecordStage("Model Dispatch", modelName);
+
             await foreach (var chunk in _lts.StreamChatAsync(input, modelOverride))
             {
                 if (chunk.StartsWith("<thinking>") && chunk.EndsWith("</thinking>"))

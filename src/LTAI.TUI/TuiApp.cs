@@ -17,7 +17,7 @@ using Microsoft.Extensions.Options;
 
 namespace LTAI.TUI;
 
-public enum TuiView { Dashboard, Chat, Code, Git, Help, Session, LLMConfig, Models, Service, Pipeline, Editor, ComposeTool, Swarm, MemoryTimeline }
+public enum TuiView { Dashboard, Chat, Code, Git, Help, Session, LLMConfig, Models, Service, Pipeline, Editor, ComposeTool, Swarm, MemoryTimeline, Diff, Funnel, KgBrowser, Health }
 
 public enum TuiTheme { Dark, Light, HighContrast }
 
@@ -45,6 +45,10 @@ public sealed class TuiApp
     private readonly ComposeToolView _composeView;
     private readonly SwarmView _swarmView;
     private readonly MemoryTimeline _memoryTimeline;
+    private readonly DiffViewer _diffViewer = new();
+    private readonly FunnelView _funnelView = new();
+    private readonly HealthDashboard _healthDashboard = new();
+    private readonly KgBrowserView _kgBrowser;
 
     private TuiView _currentView = TuiView.Dashboard;
     private int _selectedComposeToolIndex = -1;
@@ -58,6 +62,7 @@ public sealed class TuiApp
     private bool _showLLMPanel;
     private string? _loadedFileContent;
     private string? _loadedFilePath;
+    private string? _originalFileContent;
     private string _lastBuildOutput = "";
 
     private static readonly string[] TaskPhases = { "input", "context", "routing", "reasoning", "generation", "review", "output" };
@@ -71,7 +76,8 @@ public sealed class TuiApp
         ServiceManager? service = null,
         ModelManager? modelMgr = null,
         AgenticLoop? agenticLoop = null,
-        LTAICoordinator? coordinator = null)
+        LTAICoordinator? coordinator = null,
+        KnowledgeGraph? knowledgeGraph = null)
     {
         _lts = lts;
         _dna = dna;
@@ -96,6 +102,7 @@ public sealed class TuiApp
         _composeView = new ComposeToolView();
         _swarmView = new SwarmView(coordinator);
         _memoryTimeline = CreateMemoryTimeline(lts);
+        _kgBrowser = new KgBrowserView(knowledgeGraph);
     }
 
     private static MemoryTimeline CreateMemoryTimeline(ILivingTreeSystem lts)
@@ -173,6 +180,10 @@ public sealed class TuiApp
             case TuiView.ComposeTool: RenderComposeView(); break;
             case TuiView.Swarm: RenderSwarmView(); break;
             case TuiView.MemoryTimeline: RenderMemoryTimelineView(); break;
+            case TuiView.Diff: RenderDiffView(); break;
+            case TuiView.Health: RenderHealthView(); break;
+            case TuiView.Funnel: RenderFunnelView(); break;
+            case TuiView.KgBrowser: RenderKgBrowserView(); break;
         }
 
         AnsiConsole.Write(new Rule());
@@ -189,7 +200,7 @@ public sealed class TuiApp
         {
             TuiView.Dashboard => "Dashboard", TuiView.Chat => "Chat", TuiView.Code => "Code",
             TuiView.Git => "Git", TuiView.Help => "Help", TuiView.Session => "Session",
-            TuiView.LLMConfig => "LLM Config", TuiView.Models => "Models", TuiView.Service => "Service", TuiView.Pipeline => "Pipeline",             TuiView.Editor => "Editor", TuiView.ComposeTool => "Compose Tools", TuiView.Swarm => "Swarm", TuiView.MemoryTimeline => "Memory Timeline",
+            TuiView.LLMConfig => "LLM Config", TuiView.Models => "Models", TuiView.Service => "Service", TuiView.Pipeline => "Pipeline",             TuiView.Editor => "Editor", TuiView.ComposeTool => "Compose Tools", TuiView.Swarm => "Swarm", TuiView.MemoryTimeline => "Memory Timeline", TuiView.Diff => "Diff", TuiView.Funnel => "Funnel", TuiView.KgBrowser => "KG Browser", TuiView.Health => "Health",
             _ => ""
         };
         AnsiConsole.MarkupLine($"[grey]View: {name} | Session: {_session.SessionId} | Turns: {_session.TotalTurns} | Tokens: {_session.TotalTokens} | ? help | q quit[/]");
@@ -301,9 +312,9 @@ public sealed class TuiApp
     {
         return new Panel("""
             [yellow]1-9[/] View: Dash/Chat/Code/Git/Help/Session/LLM/Models/Service
-            [yellow]c[/] Chat  [yellow]l[/] LLM  [yellow]t[/] Think  [yellow]k[/] Graph  [yellow]p[/] Prompts
-            [yellow]d[/] Diff  [yellow]e[/] Export  [yellow]m[/] Memory  [yellow]b[/] Branch  [yellow]s[/] Swarm  [yellow]n[/] MemTimeline
-            [yellow]Ctrl+T[/] Theme  [yellow]Ctrl+F[/] Search  [yellow]q[/] Quit
+            [yellow]c[/] Chat  [yellow]l[/] LLM  [yellow]t[/] Think              [yellow]k[/] KG Browser  [yellow]p[/] Prompts
+            [yellow]d[/] Diff  [yellow]e[/] Export  [yellow]m[/] Memory  [yellow]b[/] Branch  [yellow]s[/] Swarm  [yellow]n[/] MemTimeline  [yellow]u[/] Funnel
+            [yellow]Ctrl+T[/] Theme  [yellow]Ctrl+F[/] Search  [yellow]Ctrl+H[/] Health  [yellow]q[/] Quit
             """)
             .RoundedBorder()
             .Header("[yellow]Commands[/]");
@@ -367,6 +378,7 @@ public sealed class TuiApp
                 {
                     _loadedFilePath = fp;
                     _loadedFileContent = File.ReadAllText(fp);
+                    _originalFileContent = _loadedFileContent;
                 }
             }
         }
@@ -644,6 +656,10 @@ public sealed class TuiApp
               5 Help  6 Session  7 LLM Config
               8 Models  9 Service
 
+            [yellow]More Views:[/]
+              0/F10 Pipeline   F11 Compose   u Funnel
+              s Swarm   n MemTimeline   d Diff   Ctrl+H Health
+
             [yellow]IDE (Code View):[/]
               F5  - Run   F7  - Build
               F8  - Test  E   - Edit file
@@ -667,11 +683,12 @@ public sealed class TuiApp
 
             [yellow]Innovation:[/]
               t      - Toggle thought chain
-              k      - Knowledge preview
+              k      - KG Browser
               h      - History replay
 
             [yellow]Global:[/]
               r      - Refresh   ? - Help   q - Quit
+              Ctrl+H - Health Dashboard
             """)
             .RoundedBorder()
             .Header("[cyan]Help[/]"));
@@ -688,6 +705,60 @@ public sealed class TuiApp
         if (_showLLMPanel && (_currentView == TuiView.Dashboard || _currentView == TuiView.LLMConfig))
         {
             _llmConfig.HandleKey(key);
+        }
+
+        if (_currentView == TuiView.KgBrowser)
+        {
+            if (_kgBrowser.InSearchMode)
+            {
+                if (key.Key == ConsoleKey.Escape)
+                {
+                    _kgBrowser.HandleKey(key);
+                    return;
+                }
+                if (key.Key == ConsoleKey.Enter)
+                {
+                    _kgBrowser.HandleKey(key);
+                    return;
+                }
+                if (key.Key == ConsoleKey.Backspace)
+                {
+                    var chars = key.KeyChar;
+                    _kgBrowser.DeleteSearchChar();
+                    return;
+                }
+                if (key.Key == ConsoleKey.UpArrow || key.Key == ConsoleKey.DownArrow)
+                {
+                    _kgBrowser.HandleKey(key);
+                    return;
+                }
+                if (!char.IsControl(key.KeyChar) && key.KeyChar != default)
+                {
+                    _kgBrowser.AppendSearchChar(key.KeyChar);
+                    return;
+                }
+                if (key.Key == ConsoleKey.Spacebar)
+                {
+                    _kgBrowser.AppendSearchChar(' ');
+                    return;
+                }
+                return;
+            }
+
+            switch (key.Key)
+            {
+                case ConsoleKey.UpArrow:
+                case ConsoleKey.DownArrow:
+                case ConsoleKey.Enter:
+                case ConsoleKey.B:
+                case ConsoleKey.Escape:
+                    _kgBrowser.HandleKey(key);
+                    return;
+                case ConsoleKey.S when key.Modifiers == 0:
+                    _kgBrowser.EnterSearchMode();
+                    return;
+            }
+            return;
         }
 
         switch (key.Key)
@@ -725,14 +796,17 @@ public sealed class TuiApp
                     ExportSession();
                 break;
             case ConsoleKey.M when key.Modifiers == 0: await MemoryConsolidateAsync(); break;
-            case ConsoleKey.K when key.Modifiers == 0: await KnowledgeGraphPreviewAsync(); break;
+            case ConsoleKey.K when key.Modifiers == 0: _currentView = TuiView.KgBrowser; break;
             case ConsoleKey.B when key.Modifiers == 0: await MultiModelBranchAsync(); break;
             case ConsoleKey.P when key.Modifiers == 0: await PromptTemplateAsync(); break;
             case ConsoleKey.F when key.Modifiers == ConsoleModifiers.Control: _search.Search(); break;
+            case ConsoleKey.H when key.Modifiers == ConsoleModifiers.Control: _currentView = TuiView.Health; break;
             case ConsoleKey.F3 when key.Modifiers == 0: _search.NextMatch(); break;
             case ConsoleKey.F3 when key.Modifiers == ConsoleModifiers.Shift: _search.PrevMatch(); break;
             case ConsoleKey.G: _currentView = TuiView.Git; break;
+            case ConsoleKey.D when key.Modifiers == 0: _currentView = TuiView.Diff; break;
             case ConsoleKey.Oem2 or ConsoleKey.Divide: _currentView = TuiView.Help; break;
+            case ConsoleKey.U when key.Modifiers == 0 && _currentView != TuiView.Service: _currentView = TuiView.Funnel; break;
             case ConsoleKey.Q: _running = false; break;
             case ConsoleKey.Enter when _currentView == TuiView.Chat:
             case ConsoleKey.Enter when _currentView == TuiView.Dashboard:
@@ -803,26 +877,32 @@ public sealed class TuiApp
                 {
                     _loadedFilePath = fp;
                     _loadedFileContent = File.ReadAllText(fp);
+                    _originalFileContent = _loadedFileContent;
                 }
             }
         }
 
         _session.AddTask("chat", "running");
         var startTime = DateTime.Now;
+        _funnelView.RecordRequest(input);
+        _funnelView.RecordStage("Preprocessing", "query + context assembly");
 
         string fullResponse;
         try
         {
             if (_agenticLoop != null)
             {
-                var agenticLayout = new AgenticChatLayout(_agenticLoop);
+                var agenticLayout = new AgenticChatLayout(_agenticLoop, _funnelView);
                 fullResponse = await agenticLayout.ChatAsync(input, CancellationToken.None);
             }
             else
             {
-                var chatLayout = new ChatLayout(_lts, _configOptions?.Value, _loadedFileContent);
-                chatLayout.UpdateRouteInfo("delegate_l2", "conf=0.8");
                 var modelOverride = _llmConfig.GetModelForChat();
+                _funnelView.SetModelInfo(_llmConfig.ActiveLayerName, _llmConfig.SelectedModel);
+                _funnelView.RecordStage("Routing", $"{_llmConfig.ActiveLayerName} → {_llmConfig.SelectedModel}");
+
+                var chatLayout = new ChatLayout(_lts, _configOptions?.Value, _loadedFileContent, _funnelView);
+                chatLayout.UpdateRouteInfo("delegate_l2", "conf=0.8");
                 fullResponse = await chatLayout.ChatAsync(input, modelOverride);
             }
         }
@@ -831,6 +911,11 @@ public sealed class TuiApp
             AnsiConsole.MarkupLine($"[red]Error: {ex.Message}[/]");
             fullResponse = $"[Error: {ex.Message}]";
         }
+
+        _funnelView.RecordStage("Post-processing", "response formatting");
+        var estimatedInTokens = input.Length / 4;
+        var estimatedOutTokens = fullResponse.Length / 4;
+        _funnelView.Complete(fullResponse, estimatedInTokens, estimatedOutTokens);
 
         _chatHistory.Add(("LTAI", fullResponse));
         _innovation.RecordInteraction(input, fullResponse);
@@ -1179,11 +1264,68 @@ public sealed class TuiApp
         AnsiConsole.Write(_swarmView.Render());
     }
 
+    private void RenderKgBrowserView()
+    {
+        if (_kgBrowser.InSearchMode)
+            AnsiConsole.MarkupLine("[bold cyan]KG Browser[/] — Search mode: type to filter, Enter to select, Esc to cancel");
+        else
+            AnsiConsole.MarkupLine("[bold cyan]Knowledge Graph Explorer[/] — ↑↓ navigate | Enter expand | B back | S search | Esc root");
+        AnsiConsole.Write(new Rule());
+        AnsiConsole.Write(_kgBrowser.Render());
+    }
+
     private void RenderMemoryTimelineView()
     {
         AnsiConsole.MarkupLine("[bold cyan]Memory Timeline[/] — Chronological system memories with confidence decay");
         AnsiConsole.Write(new Rule());
         AnsiConsole.Write(_memoryTimeline.Render());
+    }
+
+    private void RenderFunnelView()
+    {
+        AnsiConsole.MarkupLine("[bold cyan]Request Funnel Analysis[/] — Breakdown of last chat request lifecycle");
+        AnsiConsole.Write(new Rule());
+        AnsiConsole.Write(_funnelView.Render(_configOptions?.Value));
+    }
+
+    private void RenderDiffView()
+    {
+        AnsiConsole.MarkupLine("[bold cyan]Diff View[/] — Shows changes between versions | Esc back");
+        AnsiConsole.Write(new Rule());
+
+        if (_loadedFilePath == null || _loadedFileContent == null)
+        {
+            AnsiConsole.MarkupLine("[grey]No file loaded. Use @path in Chat to load a file, then press d to diff.[/]");
+            return;
+        }
+
+        string oldText;
+        if (_originalFileContent != null)
+        {
+            oldText = _originalFileContent;
+        }
+        else if (File.Exists(_loadedFilePath))
+        {
+            oldText = File.ReadAllText(_loadedFilePath);
+        }
+        else
+        {
+            AnsiConsole.MarkupLine("[grey]Original file not found on disk. Nothing to diff against.[/]");
+            return;
+        }
+
+        var newText = _loadedFileContent;
+        var fileName = Path.GetFileName(_loadedFilePath);
+
+        var renderable = _diffViewer.Render(oldText, newText, $"[cyan]Diff: {EscapeM(fileName)}[/]");
+        AnsiConsole.Write(renderable);
+    }
+
+    private void RenderHealthView()
+    {
+        AnsiConsole.MarkupLine("[bold cyan]Health Dashboard[/] — Ctrl+H toggle | Esc back");
+        AnsiConsole.Write(new Rule());
+        AnsiConsole.Write(_healthDashboard.Render());
     }
 
     private async Task HandleEditorAsync()
@@ -1197,6 +1339,7 @@ public sealed class TuiApp
             if (savedContent != null)
             {
                 _loadedFileContent = savedContent;
+                _originalFileContent = savedContent;
                 AnsiConsole.MarkupLine($"[green]Saved: {_loadedFilePath}[/]");
                 await Task.Delay(800);
             }
@@ -1209,6 +1352,7 @@ public sealed class TuiApp
             {
                 _loadedFilePath = newPath;
                 _loadedFileContent = savedContent;
+                _originalFileContent = savedContent;
                 AnsiConsole.MarkupLine($"[green]Saved: {newPath}[/]");
                 await Task.Delay(800);
             }
@@ -1297,6 +1441,8 @@ public sealed class TuiApp
         AnsiConsole.WriteLine();
         var preview = _lastBuildOutput.Length > 600 ? _lastBuildOutput[^600..] : _lastBuildOutput;
         AnsiConsole.MarkupLine($"[grey]{EscapeM(preview)}[/]");
+        var exitCode = _lastBuildOutput.Contains("Build succeeded") || _lastBuildOutput.Contains("Build succeeded.");
+        _notify.Notify("LTAI", exitCode ? $"dotnet {args} succeeded" : $"dotnet {args} completed (check output)");
         AnsiConsole.MarkupLine("[grey](Press any key to return)[/]");
         while (!Console.KeyAvailable) await Task.Delay(50);
         Console.ReadKey(true);
