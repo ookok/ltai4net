@@ -53,6 +53,7 @@ public sealed class TuiApp
     private bool _showLLMPanel;
     private string? _loadedFileContent;
     private string? _loadedFilePath;
+    private string _lastBuildOutput = "";
     private bool _diffSplitView;
 
     private static readonly string[] TaskPhases = { "input", "context", "routing", "reasoning", "generation", "review", "output" };
@@ -374,6 +375,7 @@ public sealed class TuiApp
     private void RenderCodeView()
     {
         AnsiConsole.MarkupLine($"[bold cyan]Code View[/] — {_projectRoot}");
+        AnsiConsole.MarkupLine($"[grey]F7=Build  F5=Run  F8=Test  A=Analyze  E=Edit  Enter=Select[/]");
         AnsiConsole.Write(new Rule());
         var tree = new Tree($"[yellow]{new DirectoryInfo(_projectRoot).Name}[/]");
         AddDirectory(tree, new DirectoryInfo(_projectRoot), 0, 2);
@@ -381,9 +383,16 @@ public sealed class TuiApp
 
         if (_lastAnalyzedFile != null && _lastAnalysisResult != null)
         {
-            AnsiConsole.Write(new Rule("[green]Last Analysis[/]"));
+            AnsiConsole.Write(new Rule("[green]Analysis[/]"));
             AnsiConsole.MarkupLine($"[green]File:[/] {_lastAnalyzedFile}");
             AnsiConsole.MarkupLine($"[grey]Lines:{_lastAnalysisResult.TotalLines} Fn:{_lastAnalysisResult.Functions.Count} Cls:{_lastAnalysisResult.Classes.Count} Cx:{_lastAnalysisResult.Complexity}[/]");
+        }
+
+        if (!string.IsNullOrWhiteSpace(_lastBuildOutput))
+        {
+            AnsiConsole.Write(new Rule("[blue]Last Build[/]"));
+            var output = _lastBuildOutput.Length > 500 ? _lastBuildOutput[^500..] : _lastBuildOutput;
+            AnsiConsole.MarkupLine($"[grey]{EscapeM(output)}[/]");
         }
     }
 
@@ -600,6 +609,11 @@ public sealed class TuiApp
               5 Help  6 Session  7 LLM Config
               8 Models  9 Service
 
+            [yellow]IDE (Code View):[/]
+              F5  - Run   F7  - Build
+              F8  - Test  E   - Edit file
+              A   - Analyze   Enter - Select
+
             [yellow]Chat:[/]
               Enter  - Send   Esc - Exit
               Ctrl+V - Paste file/folder path
@@ -651,6 +665,9 @@ public sealed class TuiApp
             case ConsoleKey.D8 or ConsoleKey.NumPad8: HandleNumKey(8); break;
             case ConsoleKey.D9 or ConsoleKey.NumPad9: HandleNumKey(9); break;
             case ConsoleKey.D0 or ConsoleKey.NumPad0 or ConsoleKey.F10: _currentView = TuiView.Pipeline; break;
+            case ConsoleKey.F7 when key.Modifiers == 0: await RunBuildAsync(); break;
+            case ConsoleKey.F5 when key.Modifiers == 0: await RunProjectAsync(); break;
+            case ConsoleKey.F8 when key.Modifiers == 0: await RunTestAsync(); break;
             case ConsoleKey.F11: _currentView = TuiView.ComposeTool; _selectedComposeToolIndex = -1; break;
             case ConsoleKey.C when key.Modifiers == 0: _currentView = TuiView.Chat; break;
             case ConsoleKey.L when key.Modifiers == 0: _showLLMPanel = !_showLLMPanel; _currentView = _showLLMPanel ? TuiView.LLMConfig : _currentView; break;
@@ -1139,5 +1156,87 @@ public sealed class TuiApp
         AnsiConsole.MarkupLine("[bold cyan]Compose Tools[/] — 1-9 detail | f flowchart | Esc back");
         AnsiConsole.Write(new Rule());
         AnsiConsole.Write(_composeView.RenderAllComposeTools());
+    }
+
+    private async Task RunBuildAsync()
+    {
+        await RunDotnetAsync("build", "Building...");
+    }
+
+    private async Task RunProjectAsync()
+    {
+        await RunDotnetAsync("run --no-build", "Running...");
+    }
+
+    private async Task RunTestAsync()
+    {
+        await RunDotnetAsync("test --no-build", "Testing...");
+    }
+
+    private async Task RunDotnetAsync(string args, string status)
+    {
+        var buildDir = FindBuildableDir();
+        if (buildDir == null)
+        {
+            AnsiConsole.MarkupLine("[red]No .csproj found in project tree[/]");
+            return;
+        }
+
+        _lastBuildOutput = "";
+        var sb = new StringBuilder();
+
+        await AnsiConsole.Status().StartAsync($"[cyan]{status}[/]", async ctx =>
+        {
+            var psi = new System.Diagnostics.ProcessStartInfo("dotnet", args)
+            {
+                WorkingDirectory = buildDir,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+
+            using var p = System.Diagnostics.Process.Start(psi);
+            if (p == null) return;
+
+            p.OutputDataReceived += (_, e) =>
+            {
+                if (e.Data != null) { sb.AppendLine(e.Data); ctx.Status($"[cyan]{status}[/] {e.Data[..Math.Min(e.Data.Length, 80)]}"); }
+            };
+            p.ErrorDataReceived += (_, e) =>
+            {
+                if (e.Data != null) { sb.AppendLine(e.Data); ctx.Status($"[red]{e.Data[..Math.Min(e.Data.Length, 80)]}[/]"); }
+            };
+
+            p.BeginOutputReadLine();
+            p.BeginErrorReadLine();
+            await p.WaitForExitAsync();
+            _lastBuildOutput = sb.ToString();
+
+            var icon = p.ExitCode == 0 ? "green" : "red";
+            var result = p.ExitCode == 0 ? "Success" : $"Failed (exit {p.ExitCode})";
+            ctx.Status($"[{icon}]{result}[/]");
+        });
+
+        AnsiConsole.WriteLine();
+        var preview = _lastBuildOutput.Length > 600 ? _lastBuildOutput[^600..] : _lastBuildOutput;
+        AnsiConsole.MarkupLine($"[grey]{EscapeM(preview)}[/]");
+        AnsiConsole.MarkupLine("[grey](Press any key to return)[/]");
+        while (!Console.KeyAvailable) await Task.Delay(50);
+        Console.ReadKey(true);
+    }
+
+    private string? FindBuildableDir()
+    {
+        var dir = _projectRoot;
+        for (int i = 0; i < 3 && dir != null; i++)
+        {
+            if (Directory.GetFiles(dir, "*.csproj").Any()) return dir;
+            var srcDir = Path.Combine(dir, "src");
+            if (Directory.Exists(srcDir) && Directory.GetFiles(srcDir, "*.csproj", SearchOption.TopDirectoryOnly).Any())
+                return srcDir;
+            dir = Path.GetDirectoryName(dir);
+        }
+        return Directory.GetFiles(_projectRoot, "*.sln").Any() ? _projectRoot : null;
     }
 }
