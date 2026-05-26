@@ -98,8 +98,9 @@ public static class EntryPoint
         var modelMgr = sp.GetService<ModelManager>();
         var agenticLoop = sp.GetService<AgenticLoop>();
         var kg = sp.GetService<KnowledgeGraph>();
+        var skillRegistry = sp.GetService<LTAI.Agent.Skills.SkillRegistry>();
 
-        var app = new TuiApp(lts, dna, reasoning, analyzer, options, svc, modelMgr, agenticLoop, knowledgeGraph: kg);
+        var app = new TuiApp(lts, dna, reasoning, analyzer, options, svc, modelMgr, agenticLoop, knowledgeGraph: kg, skillRegistry: skillRegistry);
         await app.RunAsync();
     }
 }

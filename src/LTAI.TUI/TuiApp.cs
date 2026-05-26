@@ -6,18 +6,20 @@ using LTAI.Agent.MAF;
 using LTAI.AI.Governors;
 using LTAI.AI.Interfaces;
 using LTAI.Core.Configuration;
+using LTAI.Core.Interfaces;
 using LTAI.Core.Setup;
 using LTAI.Core.System;
 using LTAI.DNA;
 using LTAI.Knowledge.Core;
 using LTAI.Tools.CodeEngine;
 using LTAI.Tools.Reasoning;
+using LTAI.Agent.Skills;
 using LTAI.Agent.Workflows;
 using Microsoft.Extensions.Options;
 
 namespace LTAI.TUI;
 
-public enum TuiView { Dashboard, Chat, Code, Git, Help, Session, LLMConfig, Models, Service, Pipeline, Editor, ComposeTool, Swarm, MemoryTimeline, Diff, Funnel, KgBrowser, Health }
+public enum TuiView { Dashboard, Chat, Code, Git, Help, Session, LLMConfig, Models, Service, Pipeline, Editor, ComposeTool, Swarm, MemoryTimeline, Diff, Funnel, KgBrowser, Health, DnaEvolution, DreamReplay, Parliament, Evolution, SkillEvolution }
 
 public enum TuiTheme { Dark, Light, HighContrast }
 
@@ -49,6 +51,11 @@ public sealed class TuiApp
     private readonly FunnelView _funnelView = new();
     private readonly HealthDashboard _healthDashboard = new();
     private readonly KgBrowserView _kgBrowser;
+    private readonly DnaEvolutionView _dnaView;
+    private readonly DreamReplayView _dreamView;
+    private readonly ParliamentView _parliamentView;
+    private readonly EvolutionTimelineView _evoView;
+    private readonly SkillEvolutionView _skillEvoView;
 
     private TuiView _currentView = TuiView.Dashboard;
     private int _selectedComposeToolIndex = -1;
@@ -77,7 +84,8 @@ public sealed class TuiApp
         ModelManager? modelMgr = null,
         AgenticLoop? agenticLoop = null,
         LTAICoordinator? coordinator = null,
-        KnowledgeGraph? knowledgeGraph = null)
+        KnowledgeGraph? knowledgeGraph = null,
+        SkillRegistry? skillRegistry = null)
     {
         _lts = lts;
         _dna = dna;
@@ -103,6 +111,11 @@ public sealed class TuiApp
         _swarmView = new SwarmView(coordinator);
         _memoryTimeline = CreateMemoryTimeline(lts);
         _kgBrowser = new KgBrowserView(knowledgeGraph);
+        _dnaView = new DnaEvolutionView(dna);
+        _dreamView = CreateDreamView(lts);
+        _parliamentView = CreateParliamentView(lts);
+        _evoView = CreateEvolutionView(lts);
+        _skillEvoView = new SkillEvolutionView(skillRegistry);
     }
 
     private static MemoryTimeline CreateMemoryTimeline(ILivingTreeSystem lts)
@@ -127,6 +140,42 @@ public sealed class TuiApp
         catch { }
 
         return new MemoryTimeline(dualStore, synapticMemory, null);
+    }
+
+    private static DreamReplayView CreateDreamView(ILivingTreeSystem lts)
+    {
+        DreamCycle? dreamCycle = null;
+        try
+        {
+            var dreamField = lts.GetType().GetField("_dreamCycle", BindingFlags.NonPublic | BindingFlags.Instance);
+            dreamCycle = dreamField?.GetValue(lts) as DreamCycle;
+        }
+        catch { }
+        return new DreamReplayView(dreamCycle);
+    }
+
+    private static ParliamentView CreateParliamentView(ILivingTreeSystem lts)
+    {
+        IParliamentBridge? bridge = null;
+        try
+        {
+            var field = lts.GetType().GetField("_parliamentBridge", BindingFlags.NonPublic | BindingFlags.Instance);
+            bridge = field?.GetValue(lts) as IParliamentBridge;
+        }
+        catch { }
+        return new ParliamentView(bridge);
+    }
+
+    private static EvolutionTimelineView CreateEvolutionView(ILivingTreeSystem lts)
+    {
+        ICrossRunEvolutionStore? store = null;
+        try
+        {
+            var field = lts.GetType().GetField("_evolutionStore", BindingFlags.NonPublic | BindingFlags.Instance);
+            store = field?.GetValue(lts) as ICrossRunEvolutionStore;
+        }
+        catch { }
+        return new EvolutionTimelineView(store);
     }
 
     public async Task RunAsync()
@@ -184,6 +233,11 @@ public sealed class TuiApp
             case TuiView.Health: RenderHealthView(); break;
             case TuiView.Funnel: RenderFunnelView(); break;
             case TuiView.KgBrowser: RenderKgBrowserView(); break;
+            case TuiView.DnaEvolution: RenderDnaView(); break;
+            case TuiView.DreamReplay: RenderDreamReplayView(); break;
+            case TuiView.Parliament: RenderParliamentView(); break;
+            case TuiView.Evolution: RenderEvolutionView(); break;
+            case TuiView.SkillEvolution: RenderSkillEvolutionView(); break;
         }
 
         AnsiConsole.Write(new Rule());
@@ -200,7 +254,7 @@ public sealed class TuiApp
         {
             TuiView.Dashboard => "Dashboard", TuiView.Chat => "Chat", TuiView.Code => "Code",
             TuiView.Git => "Git", TuiView.Help => "Help", TuiView.Session => "Session",
-            TuiView.LLMConfig => "LLM Config", TuiView.Models => "Models", TuiView.Service => "Service", TuiView.Pipeline => "Pipeline",             TuiView.Editor => "Editor", TuiView.ComposeTool => "Compose Tools", TuiView.Swarm => "Swarm", TuiView.MemoryTimeline => "Memory Timeline", TuiView.Diff => "Diff", TuiView.Funnel => "Funnel", TuiView.KgBrowser => "KG Browser", TuiView.Health => "Health",
+            TuiView.LLMConfig => "LLM Config", TuiView.Models => "Models", TuiView.Service => "Service", TuiView.Pipeline => "Pipeline",             TuiView.Editor => "Editor", TuiView.ComposeTool => "Compose Tools", TuiView.Swarm => "Swarm", TuiView.MemoryTimeline => "Memory Timeline", TuiView.Diff => "Diff", TuiView.Funnel => "Funnel",             TuiView.KgBrowser => "KG Browser", TuiView.Health => "Health", TuiView.DnaEvolution => "DNA Evolution", TuiView.SkillEvolution => "Skill Evolution", TuiView.DreamReplay => "Dream Replay", TuiView.Parliament => "Parliament", TuiView.Evolution => "Evolution",
             _ => ""
         };
         AnsiConsole.MarkupLine($"[grey]View: {name} | Session: {_session.SessionId} | Turns: {_session.TotalTurns} | Tokens: {_session.TotalTokens} | ? help | q quit[/]");
@@ -314,6 +368,7 @@ public sealed class TuiApp
             [yellow]1-9[/] View: Dash/Chat/Code/Git/Help/Session/LLM/Models/Service
             [yellow]c[/] Chat  [yellow]l[/] LLM  [yellow]t[/] Think              [yellow]k[/] KG Browser  [yellow]p[/] Prompts
             [yellow]d[/] Diff  [yellow]e[/] Export  [yellow]m[/] Memory  [yellow]b[/] Branch  [yellow]s[/] Swarm  [yellow]n[/] MemTimeline  [yellow]u[/] Funnel
+            [yellow]x[/] DNA  [yellow]v[/] Skills  [yellow]w[/] Dream  [yellow]j[/] Parliament  [yellow]o[/] Evolution
             [yellow]Ctrl+T[/] Theme  [yellow]Ctrl+F[/] Search  [yellow]Ctrl+H[/] Health  [yellow]q[/] Quit
             """)
             .RoundedBorder()
@@ -657,8 +712,10 @@ public sealed class TuiApp
               8 Models  9 Service
 
             [yellow]More Views:[/]
-              0/F10 Pipeline   F11 Compose   u Funnel
-              s Swarm   n MemTimeline   d Diff   Ctrl+H Health
+               0/F10 Pipeline   F11 Compose   u Funnel
+               s Swarm   n MemTimeline   d Diff   Ctrl+H Health
+               x DNA Evolution   v Skill Evolution
+               w Dream Replay   j Parliament   o Evolution
 
             [yellow]IDE (Code View):[/]
               F5  - Run   F7  - Build
@@ -804,6 +861,11 @@ public sealed class TuiApp
             case ConsoleKey.F3 when key.Modifiers == 0: _search.NextMatch(); break;
             case ConsoleKey.F3 when key.Modifiers == ConsoleModifiers.Shift: _search.PrevMatch(); break;
             case ConsoleKey.G: _currentView = TuiView.Git; break;
+            case ConsoleKey.X when key.Modifiers == 0: _currentView = TuiView.DnaEvolution; break;
+            case ConsoleKey.W when key.Modifiers == 0: _currentView = TuiView.DreamReplay; break;
+            case ConsoleKey.J when key.Modifiers == 0: _currentView = TuiView.Parliament; break;
+            case ConsoleKey.O when key.Modifiers == 0: _currentView = TuiView.Evolution; break;
+            case ConsoleKey.V when key.Modifiers == 0: _currentView = TuiView.SkillEvolution; break;
             case ConsoleKey.D when key.Modifiers == 0: _currentView = TuiView.Diff; break;
             case ConsoleKey.Oem2 or ConsoleKey.Divide: _currentView = TuiView.Help; break;
             case ConsoleKey.U when key.Modifiers == 0 && _currentView != TuiView.Service: _currentView = TuiView.Funnel; break;
@@ -1319,6 +1381,41 @@ public sealed class TuiApp
 
         var renderable = _diffViewer.Render(oldText, newText, $"[cyan]Diff: {EscapeM(fileName)}[/]");
         AnsiConsole.Write(renderable);
+    }
+
+    private void RenderDnaView()
+    {
+        AnsiConsole.MarkupLine("[bold green]DNA Evolution[/] — Mutation tree, safety rules, evolution timeline");
+        AnsiConsole.Write(new Rule());
+        AnsiConsole.Write(_dnaView.Render());
+    }
+
+    private void RenderSkillEvolutionView()
+    {
+        AnsiConsole.MarkupLine("[bold yellow]Skill Evolution[/] — L0→L4 promotion paths, branching, success rates");
+        AnsiConsole.Write(new Rule());
+        AnsiConsole.Write(_skillEvoView.Render());
+    }
+
+    private void RenderDreamReplayView()
+    {
+        AnsiConsole.MarkupLine("[bold magenta]Dream Replay[/] — Browse dream cycle reflections and moon phases");
+        AnsiConsole.Write(new Rule());
+        AnsiConsole.Write(_dreamView.Render());
+    }
+
+    private void RenderParliamentView()
+    {
+        AnsiConsole.MarkupLine("[bold blue]Parliament Debate[/] — Multi-agent deliberation viewer");
+        AnsiConsole.Write(new Rule());
+        AnsiConsole.Write(_parliamentView.Render());
+    }
+
+    private void RenderEvolutionView()
+    {
+        AnsiConsole.MarkupLine("[bold cyan]Cross-Run Evolution Timeline[/] — Lessons across runs");
+        AnsiConsole.Write(new Rule());
+        AnsiConsole.Write(_evoView.Render());
     }
 
     private void RenderHealthView()
