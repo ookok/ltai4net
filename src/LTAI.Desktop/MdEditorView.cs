@@ -9,6 +9,7 @@ using Avalonia.Media;
 using Avalonia.Threading;
 using AvaloniaEdit;
 using AvaloniaEdit.Highlighting;
+using AvaloniaEdit.Rendering;
 using LTAI.Knowledge.Core;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -30,6 +31,11 @@ public sealed class MdEditorView : UserControl
     private string? _currentFile;
     private bool _isCodeFile;
     private string _detectedLanguage = "plaintext";
+
+    private ComboBox _symbolDropdown;
+    private TextBox _outputPanel;
+    private TextBox _searchTextBox;
+    private readonly HashSet<int> _breakpoints = new();
 
     private static readonly HashSet<string> CodeExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -82,7 +88,7 @@ public sealed class MdEditorView : UserControl
         var mainGrid = new Grid
         {
             ColumnDefinitions = new("240,*,320"),
-            RowDefinitions = new("Auto,*")
+            RowDefinitions = new("Auto,*,Auto")
         };
 
         var toolbar = BuildToolbar();
@@ -90,6 +96,7 @@ public sealed class MdEditorView : UserControl
         Grid.SetColumnSpan(toolbar, 3);
         mainGrid.Children.Add(toolbar);
 
+        BuildSymbolNavigator();
         var fileTreePanel = BuildFileTree();
         Grid.SetRow(fileTreePanel, 1);
         Grid.SetColumn(fileTreePanel, 0);
@@ -104,6 +111,31 @@ public sealed class MdEditorView : UserControl
         Grid.SetRow(previewPanelWrapper, 1);
         Grid.SetColumn(previewPanelWrapper, 2);
         mainGrid.Children.Add(previewPanelWrapper);
+
+        _outputPanel = new TextBox
+        {
+            IsReadOnly = true,
+            FontFamily = new("Cascadia Code, Consolas, monospace"),
+            FontSize = 12,
+            Foreground = LtaiTheme.Sbb(LtaiTheme.TextPrimary),
+            Background = LtaiTheme.Sbb(Color.Parse("#0d1117")),
+            MaxHeight = 200,
+            IsVisible = false,
+            TextWrapping = TextWrapping.Wrap,
+            AcceptsReturn = true,
+            BorderThickness = new(0),
+            Padding = new(8, 4)
+        };
+
+        var outputBorder = new Border
+        {
+            BorderBrush = LtaiTheme.Sbb(LtaiTheme.Border),
+            BorderThickness = new(0, 1, 0, 0),
+            Child = _outputPanel
+        };
+        Grid.SetRow(outputBorder, 2);
+        Grid.SetColumnSpan(outputBorder, 3);
+        mainGrid.Children.Add(outputBorder);
 
         Content = mainGrid;
 
@@ -168,6 +200,40 @@ public sealed class MdEditorView : UserControl
         refreshBtn.Click += (_, _) => PopulateFileTree();
         left.Children.Add(refreshBtn);
 
+        var buildBtn = new Button
+        {
+            Content = "Build",
+            Width = 50,
+            Background = LtaiTheme.Sbb(LtaiTheme.BgPanel),
+            Foreground = LtaiTheme.Sbb(LtaiTheme.TextSecondary),
+            FontSize = 11
+        };
+        buildBtn.Click += async (_, _) => _ = Task.Run(BuildProjectAsync);
+        left.Children.Add(buildBtn);
+
+        var runBtn = new Button
+        {
+            Content = "Run",
+            Width = 45,
+            Background = LtaiTheme.Sbb(LtaiTheme.AccentSystem),
+            Foreground = Brushes.White,
+            FontSize = 11,
+            FontWeight = FontWeight.Bold
+        };
+        runBtn.Click += async (_, _) => _ = Task.Run(RunProjectAsync);
+        left.Children.Add(runBtn);
+
+        var publishBtn = new Button
+        {
+            Content = "Publish",
+            Width = 56,
+            Background = LtaiTheme.Sbb(LtaiTheme.BgPanel),
+            Foreground = LtaiTheme.Sbb(LtaiTheme.TextSecondary),
+            FontSize = 11
+        };
+        publishBtn.Click += async (_, _) => _ = Task.Run(PublishProjectAsync);
+        left.Children.Add(publishBtn);
+
         panel.Children.Add(left);
 
         var right = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, HorizontalAlignment = HorizontalAlignment.Right };
@@ -204,7 +270,12 @@ public sealed class MdEditorView : UserControl
         var panel = new DockPanel();
         DockPanel.SetDock(header, Dock.Top);
         panel.Children.Add(header);
-        panel.Children.Add(new ScrollViewer { Content = _fileTree });
+
+        var treeScroll = new ScrollViewer { Content = _fileTree };
+        panel.Children.Add(treeScroll);
+
+        DockPanel.SetDock(_symbolDropdown, Dock.Bottom);
+        panel.Children.Add(_symbolDropdown);
 
         return new Border
         {
@@ -213,6 +284,27 @@ public sealed class MdEditorView : UserControl
             Child = panel
         };
     }
+
+    private void BuildSymbolNavigator()
+    {
+        _symbolDropdown = new ComboBox
+        {
+            IsVisible = false,
+            Margin = new(4),
+            FontSize = 11
+        };
+        _symbolDropdown.SelectionChanged += (_, _) =>
+        {
+            if (_symbolDropdown.SelectedItem is SymbolItem sym)
+            {
+                _codeEditor.CaretOffset = _codeEditor.Document.GetOffset(Math.Min(sym.Line, _codeEditor.Document.LineCount), 1);
+                _codeEditor.ScrollToLine(sym.Line);
+                _codeEditor.Focus();
+            }
+        };
+    }
+
+    private record SymbolItem(string Display, int Line, string Kind);
 
     private Border BuildEditor()
     {
@@ -241,9 +333,32 @@ public sealed class MdEditorView : UserControl
             Options = { ShowTabs = false, ShowSpaces = false, ConvertTabsToSpaces = true, IndentationSize = 4 }
         };
         _codeEditor.TextChanged += OnEditorTextChanged;
+        _codeEditor.KeyDown += OnCodeEditorKeyDown;
+        _codeEditor.TextArea.TextView.BackgroundRenderers.Add(new BreakpointRenderer(_breakpoints));
 
         _mdEditor.IsVisible = true;
         _codeEditor.IsVisible = false;
+
+        _searchTextBox = new TextBox
+        {
+            Watermark = "Find (Ctrl+F)...",
+            FontFamily = new("Consolas"),
+            FontSize = 12,
+            Foreground = LtaiTheme.Sbb(LtaiTheme.TextPrimary),
+            Background = LtaiTheme.Sbb(Color.Parse("#161b22")),
+            BorderThickness = new(0),
+            Padding = new(8, 2),
+            Height = 28
+        };
+        _searchTextBox.TextChanged += OnSearchTextChanged;
+        _searchTextBox.KeyDown += (_, e) =>
+        {
+            if (e.Key == Key.Escape)
+            {
+                _searchTextBox.Text = "";
+                _codeEditor.Focus();
+            }
+        };
 
         var editorStack = new Grid();
         editorStack.Children.Add(_mdEditor);
@@ -251,12 +366,58 @@ public sealed class MdEditorView : UserControl
 
         _editorScroller = new ScrollViewer { Content = editorStack };
 
+        var editorDock = new DockPanel();
+        var searchBorder = new Border
+        {
+            BorderBrush = LtaiTheme.Sbb(LtaiTheme.Border),
+            BorderThickness = new(0, 0, 0, 1),
+            Child = _searchTextBox
+        };
+        DockPanel.SetDock(searchBorder, Dock.Top);
+        editorDock.Children.Add(searchBorder);
+        editorDock.Children.Add(_editorScroller);
+
         return new Border
         {
             BorderBrush = LtaiTheme.Sbb(LtaiTheme.Border),
             BorderThickness = new(1, 0),
-            Child = _editorScroller
+            Child = editorDock
         };
+    }
+
+    private void OnSearchTextChanged(object? sender, TextChangedEventArgs e)
+    {
+        var searchText = _searchTextBox.Text;
+        if (string.IsNullOrEmpty(searchText)) return;
+
+        var targetEditor = _isCodeFile ? (ITextEditor)_codeEditor : new MdTextEditorAdapter(_mdEditor);
+        var text = targetEditor.Text;
+        var idx = text.IndexOf(searchText, StringComparison.OrdinalIgnoreCase);
+        if (idx >= 0)
+        {
+            targetEditor.Select(idx, searchText.Length);
+            targetEditor.ScrollToOffset(idx);
+        }
+    }
+
+    private interface ITextEditor
+    {
+        string Text { get; }
+        void Select(int start, int length);
+        void ScrollToOffset(int offset);
+    }
+
+    private sealed class MdTextEditorAdapter : ITextEditor
+    {
+        private readonly TextBox _tb;
+        public MdTextEditorAdapter(TextBox tb) => _tb = tb;
+        public string Text => _tb.Text ?? "";
+        public void Select(int start, int length)
+        {
+            _tb.SelectionStart = start;
+            _tb.SelectionEnd = start + length;
+        }
+        public void ScrollToOffset(int _) { }
     }
 
     private Border BuildPreview()
@@ -398,12 +559,14 @@ public sealed class MdEditorView : UserControl
                 SetupSyntaxHighlighting(ext);
                 _codeEditor.Text = content;
                 _ = CheckSyntaxAsync(path, content, _detectedLanguage);
+                PopulateSymbols(content);
             }
             else
             {
                 _codeEditor.IsVisible = false;
                 _mdEditor.IsVisible = true;
                 _mdEditor.Text = content;
+                _symbolDropdown.IsVisible = false;
             }
 
             _currentFile = path;
@@ -415,6 +578,59 @@ public sealed class MdEditorView : UserControl
         {
             _statusBar.Text = $"Error: {ex.Message}";
         }
+    }
+
+    private void PopulateSymbols(string code)
+    {
+        var symbols = new List<SymbolItem>();
+        var lines = code.Split('\n');
+        for (int i = 0; i < lines.Length; i++)
+        {
+            var line = lines[i].TrimStart();
+            if (line.StartsWith("class ") || line.StartsWith("public class ") || line.StartsWith("internal class ") ||
+                line.StartsWith("sealed class ") || line.StartsWith("static class ") || line.StartsWith("partial class "))
+            {
+                var match = System.Text.RegularExpressions.Regex.Match(line, @"class\s+(\w+)");
+                if (match.Success) symbols.Add(new($"🏛 {match.Groups[1].Value}", i + 1, "class"));
+            }
+            else if (line.StartsWith("interface ") || line.StartsWith("public interface "))
+            {
+                var match = System.Text.RegularExpressions.Regex.Match(line, @"interface\s+(\w+)");
+                if (match.Success) symbols.Add(new($"🔷 {match.Groups[1].Value}", i + 1, "interface"));
+            }
+            else if (line.StartsWith("record ") || line.StartsWith("public record "))
+            {
+                var match = System.Text.RegularExpressions.Regex.Match(line, @"record\s+(\w+)");
+                if (match.Success) symbols.Add(new($"📋 {match.Groups[1].Value}", i + 1, "record"));
+            }
+            else if (line.StartsWith("enum ") || line.StartsWith("public enum "))
+            {
+                var match = System.Text.RegularExpressions.Regex.Match(line, @"enum\s+(\w+)");
+                if (match.Success) symbols.Add(new($"🔢 {match.Groups[1].Value}", i + 1, "enum"));
+            }
+            else
+            {
+                var methodMatch = System.Text.RegularExpressions.Regex.Match(line,
+                    @"(?:public|private|protected|internal|static|async|virtual|override|abstract|sealed)\s+(?:static\s+)?(?:async\s+)?[\w<>\[\],\s]+\s+(\w+)\s*\(");
+                if (methodMatch.Success && !line.Contains(" class ") && !line.Contains(" interface ") && !line.Contains(" record ") && !line.Contains(" enum "))
+                    symbols.Add(new($"  ⚡ {methodMatch.Groups[1].Value}()", i + 1, "method"));
+                else
+                {
+                    var propMatch = System.Text.RegularExpressions.Regex.Match(line,
+                        @"(?:public|private|protected|internal)\s+(?:static\s+)?(?:virtual\s+)?(?:override\s+)?[\w<>\[\],\?]+\s+(\w+)\s*\{\s*(?:get|set)");
+                    if (propMatch.Success)
+                        symbols.Add(new($"  📦 {propMatch.Groups[1].Value}", i + 1, "property"));
+                }
+            }
+        }
+
+        Dispatcher.UIThread.Post(() =>
+        {
+            _symbolDropdown.Items.Clear();
+            foreach (var s in symbols)
+                _symbolDropdown.Items.Add(s);
+            _symbolDropdown.IsVisible = symbols.Count > 0;
+        });
     }
 
     private void SetupSyntaxHighlighting(string ext)
@@ -724,6 +940,229 @@ public sealed class MdEditorView : UserControl
             e.Handled = true;
             await SaveFileAsync();
         }
+        else if (e.Key == Key.F7 && e.KeyModifiers == KeyModifiers.None)
+        {
+            e.Handled = true;
+            _ = Task.Run(BuildProjectAsync);
+        }
+        else if (e.Key == Key.F5 && e.KeyModifiers == KeyModifiers.None)
+        {
+            e.Handled = true;
+            _ = Task.Run(RunProjectAsync);
+        }
+        else if (e.Key == Key.F5 && e.KeyModifiers == KeyModifiers.Control)
+        {
+            e.Handled = true;
+            _ = Task.Run(RunReleaseAsync);
+        }
+        else if (e.Key == Key.F && e.KeyModifiers == KeyModifiers.Control)
+        {
+            e.Handled = true;
+            _searchTextBox.Focus();
+            _searchTextBox.SelectAll();
+        }
+    }
+
+    private async void OnCodeEditorKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.G && e.KeyModifiers == KeyModifiers.Control)
+        {
+            e.Handled = true;
+            var lineStr = await ShowInputDialogAsync("Go to Line", "Line number:");
+            if (int.TryParse(lineStr, out var line) && line > 0)
+            {
+                var targetLine = Math.Min(line, _codeEditor.Document.LineCount);
+                _codeEditor.CaretOffset = _codeEditor.Document.GetOffset(targetLine, 1);
+                _codeEditor.ScrollToLine(targetLine);
+            }
+        }
+        else if (e.Key == Key.L && e.KeyModifiers == KeyModifiers.Control)
+        {
+            e.Handled = true;
+            var line = _codeEditor.Document.GetLineByOffset(_codeEditor.CaretOffset);
+            ToggleBreakpoint(line.LineNumber);
+        }
+        else if (e.Key == Key.F && e.KeyModifiers == KeyModifiers.Control)
+        {
+            e.Handled = true;
+            _searchTextBox.Focus();
+            _searchTextBox.SelectAll();
+        }
+    }
+
+    private void ToggleBreakpoint(int line)
+    {
+        if (_breakpoints.Contains(line))
+            _breakpoints.Remove(line);
+        else
+            _breakpoints.Add(line);
+
+        _codeEditor.TextArea.TextView.InvalidateVisual();
+    }
+
+    private string? FindProjectDir(string filePath)
+    {
+        var dir = Path.GetDirectoryName(filePath);
+        while (dir != null && dir.Length >= _workspaceRoot.Length)
+        {
+            if (Directory.GetFiles(dir, "*.csproj").Any()) return dir;
+            dir = Path.GetDirectoryName(dir);
+        }
+        return null;
+    }
+
+    private async Task BuildProjectAsync()
+    {
+        await RunProcessAsync("dotnet", "build", _workspaceRoot);
+    }
+
+    private async Task RunProjectAsync()
+    {
+        var projectDir = _currentFile != null ? FindProjectDir(_currentFile) : _workspaceRoot;
+        var targetDir = projectDir ?? _workspaceRoot;
+        var csproj = Directory.GetFiles(targetDir, "*.csproj").FirstOrDefault();
+        if (csproj != null)
+            await RunProcessAsync("dotnet", $"run --project \"{csproj}\" --configuration Debug", targetDir);
+        else
+            await RunProcessAsync("dotnet", "run --configuration Debug", targetDir);
+    }
+
+    private async Task RunReleaseAsync()
+    {
+        var projectDir = _currentFile != null ? FindProjectDir(_currentFile) : _workspaceRoot;
+        var targetDir = projectDir ?? _workspaceRoot;
+        var csproj = Directory.GetFiles(targetDir, "*.csproj").FirstOrDefault();
+        if (csproj != null)
+            await RunProcessAsync("dotnet", $"run --project \"{csproj}\" --configuration Release", targetDir);
+        else
+            await RunProcessAsync("dotnet", "run --configuration Release", targetDir);
+    }
+
+    private async Task PublishProjectAsync()
+    {
+        var projectDir = _currentFile != null ? FindProjectDir(_currentFile) : _workspaceRoot;
+        var targetDir = projectDir ?? _workspaceRoot;
+        var csproj = Directory.GetFiles(targetDir, "*.csproj").FirstOrDefault();
+        var publishDir = Path.Combine(targetDir, "publish");
+        if (csproj != null)
+            await RunProcessAsync("dotnet", $"publish \"{csproj}\" -c Release -o \"{publishDir}\"", targetDir);
+        else
+            await RunProcessAsync("dotnet", $"publish -c Release -o \"{publishDir}\"", targetDir);
+    }
+
+    private async Task RunProcessAsync(string fileName, string args, string workingDir)
+    {
+        Dispatcher.UIThread.Post(() =>
+        {
+            _outputPanel.Text = $"$ {fileName} {args}\n\n";
+            _outputPanel.IsVisible = true;
+        });
+
+        var psi = new ProcessStartInfo(fileName, args)
+        {
+            WorkingDirectory = workingDir,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+
+        using var process = Process.Start(psi);
+        if (process == null) return;
+
+        process.OutputDataReceived += (_, e) =>
+        {
+            if (e.Data != null)
+                Dispatcher.UIThread.Post(() => _outputPanel.Text += e.Data + "\n");
+        };
+        process.ErrorDataReceived += (_, e) =>
+        {
+            if (e.Data != null)
+                Dispatcher.UIThread.Post(() => _outputPanel.Text += e.Data + "\n");
+        };
+        process.BeginOutputReadLine();
+        process.BeginErrorReadLine();
+        await process.WaitForExitAsync();
+
+        Dispatcher.UIThread.Post(() =>
+        {
+            _outputPanel.Text += $"\n--- exit code: {process.ExitCode} ---\n";
+        });
+    }
+
+    private async Task<string?> ShowInputDialogAsync(string title, string prompt)
+    {
+        var dialog = new TextBox
+        {
+            FontFamily = new("Consolas"),
+            FontSize = 13,
+            Foreground = LtaiTheme.Sbb(LtaiTheme.TextPrimary),
+            Background = LtaiTheme.Sbb(LtaiTheme.BgInput),
+            MinWidth = 300
+        };
+
+        var panel = new StackPanel { Spacing = 8, Margin = new(12) };
+        panel.Children.Add(new TextBlock
+        {
+            Text = prompt,
+            Foreground = LtaiTheme.Sbb(LtaiTheme.TextPrimary),
+            FontSize = 13
+        });
+        panel.Children.Add(dialog);
+
+        var btnStack = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4, HorizontalAlignment = HorizontalAlignment.Right };
+        var cancelBtn = new Button
+        {
+            Content = "Cancel",
+            Background = LtaiTheme.Sbb(LtaiTheme.BgPanel),
+            Foreground = LtaiTheme.Sbb(LtaiTheme.TextSecondary)
+        };
+        var okBtn = new Button
+        {
+            Content = "OK",
+            Background = LtaiTheme.Sbb(LtaiTheme.AccentSystem),
+            Foreground = Brushes.White,
+            FontWeight = FontWeight.Bold
+        };
+        btnStack.Children.Add(cancelBtn);
+        btnStack.Children.Add(okBtn);
+        panel.Children.Add(btnStack);
+
+        var popup = new Border
+        {
+            Background = LtaiTheme.Sbb(LtaiTheme.BgPanel),
+            BorderBrush = LtaiTheme.Sbb(LtaiTheme.Border),
+            BorderThickness = new(1),
+            CornerRadius = new(6),
+            Child = panel,
+            MaxWidth = 400
+        };
+
+        var overlay = new Panel();
+        overlay.Children.Add(popup);
+        popup.HorizontalAlignment = HorizontalAlignment.Center;
+        popup.VerticalAlignment = VerticalAlignment.Center;
+
+        var host = new Border { Child = overlay, Background = LtaiTheme.Sbb(Color.Parse("#66000000")) };
+        var container = this.Parent ?? this;
+        if (container is Panel parentPanel)
+            parentPanel.Children.Add(host);
+
+        var tcs = new TaskCompletionSource<string?>();
+
+        cancelBtn.Click += (_, _) => tcs.TrySetResult(null);
+        okBtn.Click += (_, _) => tcs.TrySetResult(dialog.Text?.Trim());
+        dialog.KeyDown += (_, e) =>
+        {
+            if (e.Key == Key.Enter) tcs.TrySetResult(dialog.Text?.Trim());
+            if (e.Key == Key.Escape) tcs.TrySetResult(null);
+        };
+
+        _ = dialog.Focus();
+
+        var name = await tcs.Task;
+        if (container is Panel p) p.Children.Remove(host);
+        return name;
     }
 
     private void RefreshPreview()
@@ -1154,5 +1593,24 @@ public sealed class MdEditorView : UserControl
         await OpenFileAsync(filePath);
         PopulateFileTree();
         _statusBar.Text = $"Created: {name}{extension}";
+    }
+
+    private sealed class BreakpointRenderer(HashSet<int> breakpoints) : IBackgroundRenderer
+    {
+        public KnownLayer Layer => KnownLayer.Background;
+
+        public void Draw(TextView textView, DrawingContext drawingContext)
+        {
+            if (breakpoints.Count == 0) return;
+            foreach (var line in breakpoints)
+            {
+                var visualLine = textView.GetVisualLine(line);
+                if (visualLine != null)
+                {
+                    var rect = new Rect(0, visualLine.VisualTop, textView.Bounds.Width, visualLine.Height);
+                    drawingContext.DrawRectangle(new SolidColorBrush(Color.Parse("#332200")), null, rect);
+                }
+            }
+        }
     }
 }
