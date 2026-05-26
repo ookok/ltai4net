@@ -29,6 +29,7 @@ public sealed class ReActLoopOrchestrator
     private readonly BAVTRouter _bavtRouter;
     private readonly ERLLoop _erlLoop;
     private readonly ICrossRunEvolutionStore? _evolutionStore;
+    private readonly HarnessEvolution? _harnessEvo;
     private readonly ModelHealthTracker _health;
 
     private static readonly Regex TextToolCall = new(
@@ -60,6 +61,7 @@ public sealed class ReActLoopOrchestrator
         BAVTRouter? bavtRouter = null,
         ERLLoop? erlLoop = null,
         ICrossRunEvolutionStore? evolutionStore = null,
+        HarnessEvolution? harnessEvo = null,
         ModelHealthTracker? health = null)
     {
         _llm = llm;
@@ -75,6 +77,7 @@ public sealed class ReActLoopOrchestrator
         _bavtRouter = bavtRouter ?? new BAVTRouter(100.0);
         _erlLoop = erlLoop ?? new ERLLoop();
         _evolutionStore = evolutionStore;
+        _harnessEvo = harnessEvo;
         _health = health ?? new ModelHealthTracker();
     }
 
@@ -307,6 +310,20 @@ public sealed class ReActLoopOrchestrator
             foreach (var tc in toolCalls)
             {
                 yield return "\ud83d\udccb ";
+
+                if (_harnessEvo != null)
+                {
+                    var argsStr = tc.Arguments != null
+                        ? string.Join(" ", tc.Arguments.Select(kv => $"{kv.Key}={kv.Value}"))
+                        : "";
+                    if (!_harnessEvo.ValidateEnvironmentContract(tc.Name, argsStr, out var violation))
+                    {
+                        _logger.LogWarning("HarnessEvolution environment contract violated for {Tool}: {Violation}", tc.Name, violation);
+                        messages.Add(new ChatMessage(ChatRole.Tool, "") { Contents = new List<AIContent> { new FunctionResultContent(tc.CallId, $"[Blocked by environment contract: {violation}]") } });
+                        continue;
+                    }
+                }
+
                 try
                 {
                     var args = new Dictionary<string, object?>();

@@ -52,6 +52,7 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
     private readonly ICrossRunEvolutionStore? _evolutionStore;
     private readonly IVerifiableRegistry? _verifiableRegistry;
     private readonly IParliamentBridge? _parliamentBridge;
+    private readonly HarnessEvolution? _harnessEvo;
     private readonly QueryPreprocessingService _preprocessor;
     private readonly ReActLoopOrchestrator _reActOrchestrator;
     private readonly ModelDispatchService _modelDispatch;
@@ -93,6 +94,7 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
         ICrossRunEvolutionStore? evolutionStore = null,
         IVerifiableRegistry? verifiableRegistry = null,
         IParliamentBridge? parliamentBridge = null,
+        HarnessEvolution? harnessEvo = null,
         QueryPreprocessingService? preprocessor = null,
         ReActLoopOrchestrator? reActOrchestrator = null,
         ModelDispatchService? modelDispatch = null,
@@ -122,14 +124,15 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
         _evolutionStore = evolutionStore;
         _verifiableRegistry = verifiableRegistry;
         _parliamentBridge = parliamentBridge;
+        _harnessEvo = harnessEvo;
         _preprocessor = preprocessor ?? new QueryPreprocessingService(
             _gov.Input, _llm, _dna, _options, _gov.Guardian, _toolRegistry,
-            _metaCognition, _patternRouter, _planExecutor, _prompts, _contextMap, _logger);
+            _metaCognition, _patternRouter, _planExecutor, _prompts, _contextMap, _logger, _harnessEvo);
         _reActOrchestrator = reActOrchestrator ?? throw new ArgumentNullException(nameof(reActOrchestrator));
         _modelDispatch = modelDispatch ?? throw new ArgumentNullException(nameof(modelDispatch));
         _postProcessor = new ResponsePostProcessor(
             _bavtRouter, _workQueue, logger, _metaCognition, _dreamCycle, _erlLoop,
-            _synapticMemory, _evolutionStore, _parliamentBridge, _dna, _prompts,
+            _synapticMemory, _evolutionStore, _harnessEvo, _parliamentBridge, _dna, _prompts,
             _gov.Context, _contextMapStore, _llm, FlashModel);
         _taskPipeline = new TaskPipeline(_journal);
         _taskPipeline.LlmDecomposer = (_modelDispatch ?? throw new InvalidOperationException("ModelDispatchService is required")).LlmDecomposeAsync;
@@ -255,6 +258,8 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
         var toolCount = pre.ToolCount;
         var budgetRatio = pre.BudgetRatio;
 
+        var harnessQuery = pre.HarnessContext ?? query;
+
         if (_duplexRouter != null)
         {
             var routeResult = await _duplexRouter.RouteAsync(query);
@@ -343,7 +348,7 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
         }
 
         await foreach (var chunk in _reActOrchestrator.RunReActLoopAsync(
-            query, model, label, dateTag,
+            harnessQuery, model, label, dateTag,
             layer1Context, layer1HighConfidence, autoSearchContext, layer2Context,
             metaContext, metaAssessment, patternMatched, toolCount, budgetRatio, cancellationToken))
         {

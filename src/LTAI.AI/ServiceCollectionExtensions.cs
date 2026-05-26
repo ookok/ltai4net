@@ -150,6 +150,12 @@ public static class ServiceCollectionExtensions
             return new CrossRunEvolutionStore(dbPath, halfLife);
         });
 
+        services.AddSingleton<HarnessEvolution>(sp =>
+        {
+            var evolutionStore = sp.GetService<ICrossRunEvolutionStore>();
+            return new HarnessEvolution(evolutionStore);
+        });
+
         services.AddSingleton<IVerifiableRegistry>(sp =>
         {
             var dbPath = System.IO.Path.Combine(synapticDir, "numeric_registry.db");

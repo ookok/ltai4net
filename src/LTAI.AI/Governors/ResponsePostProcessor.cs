@@ -23,6 +23,7 @@ public sealed class ResponsePostProcessor
     private readonly ERLLoop _erlLoop;
     private readonly SynapticMemory? _synapticMemory;
     private readonly ICrossRunEvolutionStore? _evolutionStore;
+    private readonly HarnessEvolution? _harnessEvo;
     private readonly IParliamentBridge? _parliamentBridge;
     private readonly DNAOrchestrator? _dna;
     private readonly PromptTemplateStore? _prompts;
@@ -52,6 +53,7 @@ public sealed class ResponsePostProcessor
         ERLLoop erlLoop,
         SynapticMemory? synapticMemory,
         ICrossRunEvolutionStore? evolutionStore,
+        HarnessEvolution? harnessEvo,
         IParliamentBridge? parliamentBridge,
         DNAOrchestrator? dna,
         PromptTemplateStore? prompts,
@@ -68,6 +70,7 @@ public sealed class ResponsePostProcessor
         _erlLoop = erlLoop;
         _synapticMemory = synapticMemory;
         _evolutionStore = evolutionStore;
+        _harnessEvo = harnessEvo;
         _parliamentBridge = parliamentBridge;
         _dna = dna;
         _prompts = prompts;
@@ -103,6 +106,15 @@ public sealed class ResponsePostProcessor
         {
             _metaCognition.RecordOutcome(query, false);
             _logger.LogWarning("MetaCognition: grounding failure for {Q}", query[..Math.Min(query.Length, 60)]);
+
+            if (_harnessEvo != null)
+            {
+                _harnessEvo.Learn(
+                    $"grounding_failed_{pre.PatternToolName ?? "unknown"}",
+                    query,
+                    InterventionType.TrajectoryRegulation,
+                    "Response grounding failed. Suggestion: verify tool outputs, add explicit fact-checking step.");
+            }
         }
         else if (layer1HighConfidence)
         {

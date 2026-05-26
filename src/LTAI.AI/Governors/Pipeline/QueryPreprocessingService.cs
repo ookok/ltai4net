@@ -36,6 +36,7 @@ public sealed record PreprocessingResult
     public float BudgetRatio { get; init; }
     public int ToolCount { get; init; }
     public bool ShouldYieldEarly { get; init; }
+    public string? HarnessContext { get; init; }
 }
 
 public sealed class QueryPreprocessingService
@@ -52,6 +53,7 @@ public sealed class QueryPreprocessingService
     private readonly PromptTemplateStore _prompts;
     private readonly ContextMap? _contextMap;
     private readonly ILogger _logger;
+    private readonly HarnessEvolution? _harnessEvo;
 
     public QueryPreprocessingService(
         InputGovernor input,
@@ -65,7 +67,8 @@ public sealed class QueryPreprocessingService
         L1PlanExecutor planExecutor,
         PromptTemplateStore prompts,
         ContextMap? contextMap,
-        ILogger logger)
+        ILogger logger,
+        HarnessEvolution? harnessEvo = null)
     {
         _input = input;
         _llm = llm;
@@ -79,6 +82,7 @@ public sealed class QueryPreprocessingService
         _prompts = prompts;
         _contextMap = contextMap;
         _logger = logger;
+        _harnessEvo = harnessEvo;
     }
 
     public async Task<PreprocessingResult> PreprocessAsync(
@@ -189,6 +193,14 @@ public sealed class QueryPreprocessingService
         {
             model = flashModel;
             _logger.LogInformation("CostRouter: budget low ({Ratio:F2}), downgraded to Flash", budgetRatio);
+        }
+
+        string? harnessContext = null;
+        if (_harnessEvo != null)
+        {
+            var harnessQuery = _harnessEvo.ApplyHarnessToQuery(query);
+            if (harnessQuery != query)
+                harnessContext = harnessQuery;
         }
 
         var localConfidence = layer1HighConfidence
@@ -334,7 +346,8 @@ public sealed class QueryPreprocessingService
             PatternMatched = patternResult.Matched,
             DateTag = dateTag,
             BudgetRatio = (float)budgetRatio,
-            ToolCount = toolCount
+            ToolCount = toolCount,
+            HarnessContext = harnessContext
         };
     }
 
