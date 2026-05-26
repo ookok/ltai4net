@@ -22,7 +22,7 @@ public sealed record SubSession
     public DateTime? CompletedAt { get; set; }
 }
 
-public sealed class LTAICoordinator
+public sealed class LTAICoordinator : IAsyncDisposable
 {
     private readonly ILivingTreeSystem _lts;
     private readonly SkillAwareDecomposer _decomposer;
@@ -521,5 +521,10 @@ Instructions:
 - If you cannot complete the goal, report exactly why
 - Do not ask for clarifications — use your best judgment
 """;
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        await Task.CompletedTask;
     }
 }

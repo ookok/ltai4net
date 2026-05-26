@@ -305,15 +305,15 @@ public sealed class OnlineMemoryState
         lock (result._lock)
         {
             if (doc.TryGetProperty("state_key", out var sk))
-                result._stateKey = BytesToFloats(Convert.FromBase64String(sk.GetString()!));
+                result._stateKey = BytesToFloats(Convert.FromBase64String(sk.GetString() ?? throw new InvalidOperationException("state_key is null in memory state file")));
             if (doc.TryGetProperty("state_value", out var sv))
-                result._stateValue = BytesToFloats(Convert.FromBase64String(sv.GetString()!));
+                result._stateValue = BytesToFloats(Convert.FromBase64String(sv.GetString() ?? throw new InvalidOperationException("state_value is null in memory state file")));
             if (doc.TryGetProperty("write_proj", out var wp))
-                result._writeProj = BytesToFloats(Convert.FromBase64String(wp.GetString()!));
+                result._writeProj = BytesToFloats(Convert.FromBase64String(wp.GetString() ?? throw new InvalidOperationException("write_proj is null in memory state file")));
             if (doc.TryGetProperty("read_key_proj", out var rkp))
-                result._readKeyProj = BytesToFloats(Convert.FromBase64String(rkp.GetString()!));
+                result._readKeyProj = BytesToFloats(Convert.FromBase64String(rkp.GetString() ?? throw new InvalidOperationException("read_key_proj is null in memory state file")));
             if (doc.TryGetProperty("read_value_proj", out var rvp))
-                result._readValueProj = BytesToFloats(Convert.FromBase64String(rvp.GetString()!));
+                result._readValueProj = BytesToFloats(Convert.FromBase64String(rvp.GetString() ?? throw new InvalidOperationException("read_value_proj is null in memory state file")));
             if (doc.TryGetProperty("write_count", out var wc))
                 result._writeCount = wc.GetInt32();
             if (doc.TryGetProperty("read_count", out var rc))
@@ -322,8 +322,9 @@ public sealed class OnlineMemoryState
             {
                 foreach (var h in hist.EnumerateArray())
                 {
-                    result._segmentHistory.Enqueue(h.GetString()!);
-                    result._totalHistoryTokens += h.GetString()!.Length / 4;
+                    var hStr = h.GetString() ?? throw new InvalidOperationException("history entry is null in memory state file");
+                    result._segmentHistory.Enqueue(hStr);
+                    result._totalHistoryTokens += hStr.Length / 4;
                 }
             }
         }

@@ -33,7 +33,7 @@ public record DomainGraphInfo
 
 // ==================== 领域图谱注册表 ====================
 
-public sealed class DomainGraphRegistry : IDisposable
+public sealed class DomainGraphRegistry : IDisposable, IAsyncDisposable
 {
     private readonly DomainGraphConfig _config;
     private readonly ILogger<DomainGraphRegistry> _logger;
@@ -407,9 +407,21 @@ public sealed class DomainGraphRegistry : IDisposable
 
     public void Dispose()
     {
+        foreach (var (_, graph) in _loadedGraphs)
+        {
+            try { graph.Dispose(); }
+            catch { /* cleanup may fail */ }
+        }
+        _loadedGraphs.Clear();
         _idleCheckTimer?.Dispose();
         _loadSemaphore.Dispose();
         _logger.LogInformation("DomainGraphRegistry disposed");
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        Dispose();
+        await Task.CompletedTask;
     }
 }
 

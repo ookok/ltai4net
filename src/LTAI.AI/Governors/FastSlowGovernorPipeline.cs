@@ -13,7 +13,7 @@ public record PlanGovernorConfig
     public int MaxReplansPerHour { get; init; } = 10;  // 每小时最大重规划次数
 }
 
-public sealed class FastSlowGovernorPipeline : IDisposable
+public sealed class FastSlowGovernorPipeline : IDisposable, IAsyncDisposable
 {
     private readonly IEventBusV2 _eventBus;
     private readonly CellAnswerStore _planStore;
@@ -284,6 +284,12 @@ public sealed class FastSlowGovernorPipeline : IDisposable
     public void Dispose()
     {
         _logger.LogInformation("FastSlowGovernorPipeline disposed");
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        Dispose();
+        await Task.CompletedTask;
     }
 }
 

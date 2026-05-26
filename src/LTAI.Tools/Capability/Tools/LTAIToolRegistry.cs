@@ -263,7 +263,7 @@ public static class LTAIToolRegistry
                 {
                     // Try resolving via direct type if assembly reflection fails
                     try { so = _serviceProvider?.GetService(
-                        Type.GetType("LTAI.Infra.Sandbox.SandboxOrchestrator, LTAI.Infra")!); }
+                        Type.GetType("LTAI.Infra.Sandbox.SandboxOrchestrator, LTAI.Infra") ?? throw new InvalidOperationException("SandboxOrchestrator type not found")); }
                     catch (Exception ex) { _logger?.LogWarning(ex, "sandbox_exec: type resolution fallback failed"); }
                 }
                 if (so != null)
@@ -390,7 +390,7 @@ public static class LTAIToolRegistry
                     return JsonToolResult.Success(new { error = "start_line and end_line (integers) are required" });
                 var tools = GetService<CodeEditTools>();
                 var resultJson = await tools.EditReplaceRange(path, start, end, Arg(args, "new_code", ""));
-                return System.Text.Json.JsonSerializer.Deserialize<object>(resultJson)!;
+                return System.Text.Json.JsonSerializer.Deserialize<object>(resultJson) ?? throw new InvalidOperationException("Deserialization returned null");
             }),
         new("code_edit:replace_function", "Replace a specific function body using AST to locate boundaries. Compiles and validates.", "code_edit",
             async args =>
@@ -401,7 +401,7 @@ public static class LTAIToolRegistry
                     return JsonToolResult.Success(new { error = "function_name parameter is required" });
                 var tools = GetService<CodeEditTools>();
                 var resultJson = await tools.EditReplaceFunction(path, functionName, Arg(args, "new_code", ""));
-                return System.Text.Json.JsonSerializer.Deserialize<object>(resultJson)!;
+                return System.Text.Json.JsonSerializer.Deserialize<object>(resultJson) ?? throw new InvalidOperationException("Deserialization returned null");
             }),
         new("code_edit:insert", "Insert code after a specific line. Returns diff + validation.", "code_edit",
             async args =>
@@ -411,7 +411,7 @@ public static class LTAIToolRegistry
                     return JsonToolResult.Success(new { error = "line (integer) parameter is required" });
                 var tools = GetService<CodeEditTools>();
                 var resultJson = await tools.EditInsertAfterLine(path, line, Arg(args, "code", ""));
-                return System.Text.Json.JsonSerializer.Deserialize<object>(resultJson)!;
+                return System.Text.Json.JsonSerializer.Deserialize<object>(resultJson) ?? throw new InvalidOperationException("Deserialization returned null");
             }),
         new("code_edit:delete", "Delete a range of lines. Returns deleted content + diff.", "code_edit",
             async args =>
@@ -422,7 +422,7 @@ public static class LTAIToolRegistry
                     return JsonToolResult.Success(new { error = "start_line and end_line (integers) are required" });
                 var tools = GetService<CodeEditTools>();
                 var resultJson = await tools.EditDeleteRange(path, start, end);
-                return System.Text.Json.JsonSerializer.Deserialize<object>(resultJson)!;
+                return System.Text.Json.JsonSerializer.Deserialize<object>(resultJson) ?? throw new InvalidOperationException("Deserialization returned null");
             }),
         new("code_edit:validate", "Validate syntax of a file using AST diagnostics. Returns error/warning list.", "code_edit",
             async args =>
@@ -430,14 +430,14 @@ public static class LTAIToolRegistry
                 var path = Arg(args, "path");
                 var tools = GetService<CodeEditTools>();
                 var resultJson = await tools.EditValidateSyntax(path);
-                return System.Text.Json.JsonSerializer.Deserialize<object>(resultJson)!;
+                return System.Text.Json.JsonSerializer.Deserialize<object>(resultJson) ?? throw new InvalidOperationException("Deserialization returned null");
             }),
         new("code_edit:diff", "Generate unified diff between snapshot and current file. Use snapshotId from a previous edit result.", "code_edit",
             async args =>
             {
                 var tools = GetService<CodeEditTools>();
                 return System.Text.Json.JsonSerializer.Deserialize<object>(
-                    tools.EditDiff(Arg(args, "path"), Arg(args, "snapshot_id", "")))!;
+                    tools.EditDiff(Arg(args, "path"), Arg(args, "snapshot_id", ""))) ?? throw new InvalidOperationException("EditDiff deserialization returned null");
             }),
 
         // Code Read tools (selective, AST-aware file reading to minimize token usage)
@@ -450,7 +450,7 @@ public static class LTAIToolRegistry
                 var tools = GetService<CodeEditTools>();
                 var resultJson = await tools.ReadRange(path, start,
                     int.TryParse(Arg(args, "count", "50"), out var c) ? c : 50);
-                return System.Text.Json.JsonSerializer.Deserialize<object>(resultJson)!;
+                return System.Text.Json.JsonSerializer.Deserialize<object>(resultJson) ?? throw new InvalidOperationException("Deserialization returned null");
             }),
         new("code_read:function", "Read a specific function using AST. Returns function body + signature info. Much more token-efficient than reading the entire file.", "code_read",
             async args =>
@@ -461,7 +461,7 @@ public static class LTAIToolRegistry
                     return JsonToolResult.Success(new { error = "function_name parameter is required" });
                 var tools = GetService<CodeEditTools>();
                 var resultJson = await tools.ReadFunction(path, functionName);
-                return System.Text.Json.JsonSerializer.Deserialize<object>(resultJson)!;
+                return System.Text.Json.JsonSerializer.Deserialize<object>(resultJson) ?? throw new InvalidOperationException("Deserialization returned null");
             }),
         new("code_read:class", "Read a specific class using AST. Returns class definition with method/field signatures. Token-efficient.", "code_read",
             async args =>
@@ -472,7 +472,7 @@ public static class LTAIToolRegistry
                     return JsonToolResult.Success(new { error = "class_name parameter is required" });
                 var tools = GetService<CodeEditTools>();
                 var resultJson = await tools.ReadClass(path, className);
-                return System.Text.Json.JsonSerializer.Deserialize<object>(resultJson)!;
+                return System.Text.Json.JsonSerializer.Deserialize<object>(resultJson) ?? throw new InvalidOperationException("Deserialization returned null");
             }),
         new("code_read:structure", "Get structured overview of a file: all function signatures, class summaries, imports, diagnostics. Best first tool to understand a file.", "code_read",
             async args =>
@@ -480,7 +480,7 @@ public static class LTAIToolRegistry
                 var path = Arg(args, "path");
                 var tools = GetService<CodeEditTools>();
                 var resultJson = await tools.ReadStructure(path);
-                return System.Text.Json.JsonSerializer.Deserialize<object>(resultJson)!;
+                return System.Text.Json.JsonSerializer.Deserialize<object>(resultJson) ?? throw new InvalidOperationException("Deserialization returned null");
             }),
 
         // Build tools (structured build with error parsing)
@@ -748,7 +748,7 @@ public static class LTAIToolRegistry
                 var lang = Arg(args, "language", "python");
                 var safeName = string.Join("_", name.Split(Path.GetInvalidFileNameChars())).Replace(" ", "_").ToLower();
                 var filePath = Path.Combine(LivingTreeDir, "cli_tools", safeName);
-                if (!Directory.Exists(Path.GetDirectoryName(filePath))) Directory.CreateDirectory(Path.GetDirectoryName(filePath)!);
+                if (!Directory.Exists(Path.GetDirectoryName(filePath))) Directory.CreateDirectory(Path.GetDirectoryName(filePath) ?? throw new InvalidOperationException("CLI tool file path has no parent directory"));
                 if (lang == "python") { filePath += ".py"; var pyCode = "#!/usr/bin/env python3\nimport sys, json\n\ndef main():\n" + string.Join("\n", code.Split('\n').Select(l => "    " + l)) + "\n\nif __name__ == '__main__':\n    result = main()\n    print(json.dumps(result, ensure_ascii=False))"; await File.WriteAllTextAsync(filePath, pyCode); }
                 else if (lang == "js") { filePath += ".js"; await File.WriteAllTextAsync(filePath, $"#!/usr/bin/env node\nconst result = (function() {{{code}}})();\nconsole.log(JSON.stringify(result));"); }
                 else { filePath += ".csx"; await File.WriteAllTextAsync(filePath, $"// dotnet-script tool\n{code}"); }
@@ -761,7 +761,7 @@ public static class LTAIToolRegistry
                 if (string.IsNullOrWhiteSpace(repoUrl)) return JsonToolResult.Success(new { error = "repo_url parameter is required" });
                 var cloneDir = Path.Combine(Path.GetTempPath(), "ltai_cli", Guid.NewGuid().ToString("N")[..8]);
                 var psi = new System.Diagnostics.ProcessStartInfo("git", $"clone --depth 1 {repoUrl} {cloneDir}") { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
-                var proc = System.Diagnostics.Process.Start(psi)!;
+                var proc = System.Diagnostics.Process.Start(psi) ?? throw new InvalidOperationException("Failed to start git process");
                 await proc.WaitForExitAsync();
                 var entries = new List<object>();
                 if (File.Exists(Path.Combine(cloneDir, "package.json")))
@@ -807,7 +807,7 @@ public static class LTAIToolRegistry
             {
                 var filter = Arg(args, "path_filter");
                 var path = OptionService.Get("PATH", "dotnet");
-                var dirs = path!.Split(System.IO.Path.PathSeparator).Where(d => !string.IsNullOrWhiteSpace(d)).Take(10);
+                var dirs = path?.Split(System.IO.Path.PathSeparator).Where(d => !string.IsNullOrWhiteSpace(d)).Take(10) ?? Enumerable.Empty<string>();
                 var found = new List<object>();
                 foreach (var dir in dirs)
                 {
@@ -1183,7 +1183,7 @@ created: {DateTime.UtcNow:yyyy-MM-dd}
                 {
                     var skillsDir = Path.Combine(LivingTreeDir, "skills");
                     discovery = Activator.CreateInstance(
-                        typeof(object).Assembly.GetType("LTAI.Tools.Skills.SkillDiscoveryManager")!,
+                        typeof(object).Assembly.GetType("LTAI.Tools.Skills.SkillDiscoveryManager") ?? throw new InvalidOperationException("SkillDiscoveryManager type not found"),
                         OptionService.Get("LTAI_WORKSPACE") ?? Environment.CurrentDirectory, null);
                 }
 
@@ -1335,7 +1335,8 @@ created: {DateTime.UtcNow:yyyy-MM-dd}
                             if (method != null)
                             {
                                 MkToolType? prefType = Enum.TryParse<MkToolType>(typeStr, true, out var pt) ? pt : null;
-                                var task = (Task)method.Invoke(synth, new object?[] { desc, domain, prefType, CancellationToken.None })!;
+                                var task = method.Invoke(synth, new object?[] { desc, domain, prefType, CancellationToken.None }) as Task
+                                    ?? throw new InvalidOperationException("MdToolSynthesizer.SynthesizeAsync returned null");
                                 await task;
                                 var result = task.GetType().GetProperty("Result")?.GetValue(task);
                                 if (result != null)
@@ -2117,10 +2118,10 @@ internal static class CliEngine
     {
         await Task.Delay(200);
         var path = OptionService.Get("PATH", "dotnet");
-        var dirs = path!.Split(global::System.IO.Path.PathSeparator).Where(d => !string.IsNullOrWhiteSpace(d));
+        var dirs = path?.Split(global::System.IO.Path.PathSeparator).Where(d => !string.IsNullOrWhiteSpace(d)) ?? Enumerable.Empty<string>();
         var found = dirs.SelectMany(d =>
         {
-            try { return Directory.GetFiles(d).Select(global::System.IO.Path.GetFileName).Where(f => filter == null || f!.Contains(filter, StringComparison.OrdinalIgnoreCase)); }
+            try { return Directory.GetFiles(d).Select(global::System.IO.Path.GetFileName).Where(f => f != null && (filter == null || f.Contains(filter, StringComparison.OrdinalIgnoreCase))); }
             catch { return Array.Empty<string?>(); }
         }).Take(20).ToList();
 

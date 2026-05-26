@@ -37,8 +37,7 @@ public sealed class BudgetRouter
 
         var models = candidates
             .Select(c => _registry.Get(c))
-            .Where(m => m != null)
-            .Select(m => m!)
+            .OfType<ModelProfile>()
             .OrderByDescending(m => m.GetScore(taskType))
             .ToList();
 
@@ -429,7 +428,7 @@ public sealed class CompetitiveEliminator
             {
                 foreach (var item in state)
                 {
-                    var provider = item.GetProperty("Provider").GetString()!;
+                    var provider = item.GetProperty("Provider").GetString() ?? string.Empty;
                     var r = GetOrCreate(provider);
                     r.EloRating = item.GetProperty("EloRating").GetDouble();
                     r.Tier = Enum.TryParse<ModelTierRank>(item.GetProperty("Tier").GetString(), out var t) ? t : ModelTierRank.Mid;
@@ -440,9 +439,9 @@ public sealed class CompetitiveEliminator
                     if (item.TryGetProperty("EmASafety", out var s)) r.EmASafety = s.GetDouble();
                     r.AvgLatencyMs = item.GetProperty("AvgLatencyMs").GetDouble();
                     r.AvgCostYuan = item.TryGetProperty("AvgCostYuan", out var c) ? c.GetDouble() : 0;
-                    r.LastMatch = DateTime.Parse(item.GetProperty("LastMatch").GetString()!);
+                    r.LastMatch = DateTime.Parse(item.GetProperty("LastMatch").GetString() ?? throw new InvalidOperationException("LastMatch is null in state file"));
                     if (item.TryGetProperty("EliminatedAt", out var ea) && ea.ValueKind != JsonValueKind.Null)
-                        r.EliminatedAt = DateTime.Parse(ea.GetString()!);
+                        r.EliminatedAt = DateTime.Parse(ea.GetString() ?? throw new InvalidOperationException("EliminatedAt is null in state file"));
                 }
             }
         }

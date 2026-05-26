@@ -34,7 +34,7 @@ public sealed record L2TeachingResult
     public List<string> FollowUpSuggestions { get; init; } = new();
 }
 
-public sealed class L1L2DuplexRouter
+public sealed class L1L2DuplexRouter : IAsyncDisposable
 {
     private static readonly JsonSerializerOptions JsonOpts = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
@@ -950,6 +950,11 @@ Think step by step, then output ONLY the JSON.";
             AvgDeltaNorm = metrics.AvgDeltaNorm,
             RecommendedRounds = 2
         };
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        await Task.CompletedTask;
     }
 }
 

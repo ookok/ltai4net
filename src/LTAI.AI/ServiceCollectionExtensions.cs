@@ -61,7 +61,7 @@ public static class ServiceCollectionExtensions
                 }
             }
 
-            var multiClient = new MultiProviderChatClient(providerClients, options, multiLogger!, budget, prefixCache);
+            var multiClient = new MultiProviderChatClient(providerClients, options, multiLogger ?? throw new InvalidOperationException("ILogger<MultiProviderChatClient> must be registered"), budget, prefixCache);
 
             var pipeline = new ChatClientBuilder(multiClient)
                 .UseLogging(loggerFactory)
@@ -416,7 +416,7 @@ public static class ServiceCollectionExtensions
         {
             var logger = sp.GetService<ILogger<CellPackageManager>>();
             var packagesDir = System.IO.Path.Combine(synapticDir, "packages");
-            return new CellPackageManager(packagesDir, logger!);
+            return new CellPackageManager(packagesDir, logger);
         });
 
         services.AddSingleton<GitHubCellRegistry>(sp =>
@@ -430,7 +430,7 @@ public static class ServiceCollectionExtensions
                 Token = OptionService.Get("GITHUB_TOKEN"),
                 MaxDownloadSizeMB = 100
             };
-            return new GitHubCellRegistry(config, packageManager, logger!);
+            return new GitHubCellRegistry(config, packageManager, logger);
         });
 
         services.AddSingleton<CascadeLoader>(sp =>
@@ -447,7 +447,7 @@ public static class ServiceCollectionExtensions
                 EnableAutoUnload = true,
                 MaxCachedCells = 20
             };
-            return new CascadeLoader(config, cellRegistry, githubRegistry, packageManager, logger!);
+            return new CascadeLoader(config, cellRegistry, githubRegistry, packageManager, logger);
         });
 
         // ==================== 领域知识图谱分发系统 ====================
@@ -462,14 +462,14 @@ public static class ServiceCollectionExtensions
                 EnableLazyLoading = true,
                 EnableAutoUnload = true
             };
-            return new DomainGraphRegistry(config, logger!);
+            return new DomainGraphRegistry(config, logger);
         });
 
         services.AddSingleton<GraphPackageManager>(sp =>
         {
             var logger = sp.GetService<ILogger<GraphPackageManager>>();
             var packagesDir = System.IO.Path.Combine(synapticDir, "graph_packages");
-            return new GraphPackageManager(packagesDir, logger!);
+            return new GraphPackageManager(packagesDir, logger);
         });
 
         services.AddSingleton<GitHubGraphRegistry>(sp =>
@@ -483,7 +483,7 @@ public static class ServiceCollectionExtensions
                 Token = OptionService.Get("GITHUB_TOKEN"),
                 MaxDownloadSizeMB = 200
             };
-            return new GitHubGraphRegistry(config, packageManager, logger!);
+            return new GitHubGraphRegistry(config, packageManager, logger);
         });
 
         services.AddSingleton<GraphCascadeLoader>(sp =>
@@ -500,7 +500,7 @@ public static class ServiceCollectionExtensions
                 EnableAutoUnload = true,
                 MaxLoadedGraphs = 10
             };
-            return new GraphCascadeLoader(config, graphRegistry, githubRegistry, packageManager, logger!);
+            return new GraphCascadeLoader(config, graphRegistry, githubRegistry, packageManager, logger);
         });
 
         // ==================== 事件驱动计划治理 ====================
@@ -519,7 +519,7 @@ public static class ServiceCollectionExtensions
                 ReplanningCooldown = TimeSpan.FromMinutes(5),
                 MaxReplansPerHour = 10
             };
-            return new FastSlowGovernorPipeline(eventBus, planStore, fastSlowAI, memoryStore, config, logger!);
+            return new FastSlowGovernorPipeline(eventBus, planStore, fastSlowAI, memoryStore, config, logger);
         });
 
         services.AddSingleton<DomainDiscoveryService>(sp =>
@@ -533,7 +533,7 @@ public static class ServiceCollectionExtensions
                 DiscoveryInterval = TimeSpan.FromMinutes(30),
                 MaxNurserySize = 1000
             };
-            return new DomainDiscoveryService(config, cellRegistry, logger!);
+            return new DomainDiscoveryService(config, cellRegistry, logger);
         });
 
         services.AddSingleton<IL1InferenceEngine>(sp =>
@@ -603,7 +603,7 @@ public static class ServiceCollectionExtensions
             var httpClientFactory = sp.GetRequiredService<IHttpClientFactory>();
             var engine = sp.GetRequiredService<IL1InferenceEngine>();
             var logger = sp.GetService<ILogger<LocalLlmBootstrapService>>();
-            return new LocalLlmBootstrapService(config, httpClientFactory, engine, logger!);
+            return new LocalLlmBootstrapService(config, httpClientFactory, engine, logger ?? throw new InvalidOperationException("ILogger<LocalLlmBootstrapService> must be registered"));
         });
 
         services.AddSingleton<IHostedService>(sp =>
@@ -626,7 +626,7 @@ public static class ServiceCollectionExtensions
             var logger = sp.GetService<ILogger<SelectiveThinkingPipeline>>();
             return l1Engine != null && l2Client != null 
                 ? new SelectiveThinkingPipeline(l1Engine, l2Client, decider, logger) 
-                : null!;
+                : throw new InvalidOperationException("SelectiveThinkingPipeline requires both IL1InferenceEngine and IChatClient to be registered");
         });
 
         services.AddSingleton<L1L2DuplexRouter>(sp =>

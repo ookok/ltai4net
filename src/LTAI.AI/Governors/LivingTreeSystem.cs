@@ -119,8 +119,8 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
         _preprocessor = preprocessor ?? new QueryPreprocessingService(
             _gov.Input, _llm, _dna, _options, _gov.Guardian, _toolRegistry,
             _metaCognition, _patternRouter, _planExecutor, _prompts, _logger);
-        _reActOrchestrator = reActOrchestrator!;
-        _modelDispatch = modelDispatch!;
+        _reActOrchestrator = reActOrchestrator ?? throw new ArgumentNullException(nameof(reActOrchestrator));
+        _modelDispatch = modelDispatch ?? throw new ArgumentNullException(nameof(modelDispatch));
         _postProcessor = new ResponsePostProcessor(
             _bavtRouter, _workQueue, logger, _metaCognition, _dreamCycle, _erlLoop,
             _synapticMemory, _evolutionStore, _parliamentBridge, _dna, _prompts,
@@ -209,20 +209,20 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
 
         if (pre.IsBlocked)
         {
-            yield return pre.BlockMessage!;
+            yield return pre.BlockMessage ?? string.Empty;
             yield break;
         }
 
         if (pre.IsCached && pre.ShouldYieldEarly)
         {
-            yield return pre.CachedResponse!;
+            yield return pre.CachedResponse ?? string.Empty;
             yield break;
         }
 
         if (pre.IsFuzzyQuery && pre.ShouldYieldEarly)
         {
             _metaCognition.RecordOutcome(query, false);
-            yield return pre.ClarifyMessage!;
+            yield return pre.ClarifyMessage ?? string.Empty;
             yield break;
         }
 
@@ -231,7 +231,7 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
             _metaCognition.RecordOutcome(query, true);
             if (pre.PatternToolName != null)
                 _metaCognition.ReinforceDomain(pre.PatternToolName, 0.05f);
-            yield return pre.CachedResponse!;
+            yield return pre.CachedResponse ?? string.Empty;
             yield break;
         }
 
@@ -243,7 +243,7 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
         var autoSearchContext = pre.AutoSearchContext;
         var layer2Context = pre.Layer2Context;
         var metaContext = pre.MetaContext;
-        var metaAssessment = pre.MetaAssessment!;
+        var metaAssessment = pre.MetaAssessment ?? throw new InvalidOperationException("Preprocessing result MetaAssessment should not be null");
         var patternMatched = pre.PatternMatched;
         var toolCount = pre.ToolCount;
         var budgetRatio = pre.BudgetRatio;

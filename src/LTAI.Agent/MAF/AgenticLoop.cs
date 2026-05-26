@@ -12,7 +12,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 namespace LTAI.Agent.MAF;
 
-public sealed class AgenticLoop
+public sealed class AgenticLoop : IAsyncDisposable
 {
     private readonly ILivingTreeSystem _lts;
     private readonly ILogger<AgenticLoop> _logger;
@@ -22,6 +22,8 @@ public sealed class AgenticLoop
     private readonly CSharpCompilationService? _roslynDiagnostics;
     private readonly PartStreamStore? _partStore;
     private readonly PartAssembler _assembler;
+    private readonly Action<Part> _onPartAppendedHandler;
+    private readonly Action<Part> _onPartUpdatedHandler;
     private readonly string _workspaceRoot;
     private readonly string _projectLanguage;
     private readonly string _sessionId;
@@ -53,18 +55,21 @@ public sealed class AgenticLoop
         _sessionId = Guid.NewGuid().ToString("N")[..8];
         _assembler = new PartAssembler();
 
-        _assembler.OnPartAppended += async p =>
+        _onPartAppendedHandler = async p =>
         {
             _logger.LogDebug("PartAppended: {Id} {Type}", p.Id, p.GetType().Name);
             if (_partStore != null)
                 await _partStore.AppendAsync(_sessionId, p, CancellationToken.None).ConfigureAwait(false);
         };
-        _assembler.OnPartUpdated += async p =>
+        _onPartUpdatedHandler = async p =>
         {
             _logger.LogDebug("PartUpdated: {Id} {Type}", p.Id, p.GetType().Name);
             if (_partStore != null)
                 await _partStore.AppendAsync(_sessionId, p, CancellationToken.None).ConfigureAwait(false);
         };
+
+        _assembler.OnPartAppended += _onPartAppendedHandler;
+        _assembler.OnPartUpdated += _onPartUpdatedHandler;
     }
 
     /// <summary>
@@ -517,6 +522,14 @@ public sealed class AgenticLoop
         }
 
         return readPaths;
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _assembler.OnPartAppended -= _onPartAppendedHandler;
+        _assembler.OnPartUpdated -= _onPartUpdatedHandler;
+        History.Clear();
+        await Task.CompletedTask;
     }
 }
 

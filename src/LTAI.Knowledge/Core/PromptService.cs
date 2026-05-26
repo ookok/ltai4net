@@ -6,7 +6,7 @@ using Microsoft.Extensions.Logging;
 
 namespace LTAI.Knowledge.Core;
 
-public sealed class PromptService
+public sealed class PromptService : IAsyncDisposable
 {
     private readonly PromptLoader _loader;
     private readonly ILogger<PromptService> _logger;
@@ -349,5 +349,15 @@ public sealed class PromptService
     {
         var prompts = SelectBest(task, domain, maxResults: 1);
         return prompts.FirstOrDefault();
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _prompts.Clear();
+        _templates.Clear();
+        _byDomain.Clear();
+        _byTag.Clear();
+        _selectionCounts.Clear();
+        await Task.CompletedTask;
     }
 }

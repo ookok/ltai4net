@@ -84,7 +84,7 @@ public sealed class SkillPublisher : ISkillExchangeProvider
                 File.Copy(metaFile, destMeta, overwrite: true);
             }
 
-            var versionsDir = Path.Combine(Path.GetDirectoryName(mdFile)!, "versions");
+            var versionsDir = Path.Combine(Path.GetDirectoryName(mdFile) ?? throw new InvalidOperationException("Skill source file has no parent directory"), "versions");
             if (Directory.Exists(versionsDir))
             {
                 var destVersions = Path.Combine(destSkillsDir, "versions");
@@ -161,10 +161,10 @@ public sealed class SkillPublisher : ISkillExchangeProvider
                     File.Copy(metaFile, destMeta, overwrite: true);
                 }
 
-                var versionsSrcDir = Path.Combine(Path.GetDirectoryName(file)!, "versions");
+                var versionsSrcDir = Path.Combine(Path.GetDirectoryName(file) ?? throw new InvalidOperationException("Skill file has no parent directory"), "versions");
                 if (Directory.Exists(versionsSrcDir))
                 {
-                    var versionsDestDir = Path.Combine(Path.GetDirectoryName(destFile)!, "versions");
+                    var versionsDestDir = Path.Combine(Path.GetDirectoryName(destFile) ?? throw new InvalidOperationException("Destination file has no parent directory"), "versions");
                     Directory.CreateDirectory(versionsDestDir);
                     foreach (var vf in Directory.GetFiles(versionsSrcDir))
                     {
@@ -212,7 +212,7 @@ public sealed class SkillPublisher : ISkillExchangeProvider
         if (File.Exists(metaFile))
             zip.CreateEntryFromFile(metaFile, Path.GetFileName(metaFile));
 
-        var versionsDir = Path.Combine(Path.GetDirectoryName(sourceFile)!, "versions");
+        var versionsDir = Path.Combine(Path.GetDirectoryName(sourceFile) ?? throw new InvalidOperationException("Source file has no parent directory"), "versions");
         if (Directory.Exists(versionsDir))
         {
             foreach (var vf in Directory.GetFiles(versionsDir))

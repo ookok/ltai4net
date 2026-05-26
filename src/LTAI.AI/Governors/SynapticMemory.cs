@@ -35,7 +35,7 @@ public record TrainingSample
     public float Weight { get; init; } = 1.0f;
 }
 
-public sealed class SynapticMemory : IDisposable
+public sealed class SynapticMemory : IDisposable, IAsyncDisposable
 {
     private readonly LiteDatabase _db;
     private readonly ILiteCollection<SynapticExperience> _experiences;
@@ -214,6 +214,12 @@ public sealed class SynapticMemory : IDisposable
         {
             _logger.LogWarning(ex, "Error disposing SynapticMemory");
         }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        Dispose();
+        await Task.CompletedTask;
     }
 
     public List<SynapticExperience> FindSimilar(string query, int maxResults = 3, float minReward = 0.6f)

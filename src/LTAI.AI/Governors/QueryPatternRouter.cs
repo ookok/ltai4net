@@ -45,7 +45,7 @@ public sealed class QueryPatternRouter
                 "filesystem_list",
                 (m, q) =>
                 {
-                    return new Dictionary<string, object?> { ["path"] = ExtractDirPath(q), ["pattern"] = null! };
+                    return new Dictionary<string, object?> { ["path"] = ExtractDirPath(q), ["pattern"] = null };
                 },
                 (m, q) => "以下是通过 filesystem_list 工具获取的目录文件列表（JSON格式，type=dir/folder 表示目录，type=file 表示文件），请提取其中的文件名据实描述：",
                 1.0f),
@@ -60,7 +60,7 @@ public sealed class QueryPatternRouter
                     return new Dictionary<string, object?>
                     {
                         ["command"] = BuildComparisonCommand(q),
-                        ["workingDirectory"] = null!
+                        ["workingDirectory"] = null
                     };
                 },
                 (m, q) => "以下是通过命令自动统计的目录文件数量，请据实描述，不得编造数字：",
@@ -105,8 +105,8 @@ public sealed class QueryPatternRouter
                 "git_diff",
                 (m, q) => new Dictionary<string, object?>
                 {
-                    ["repoPath"] = null!,
-                    ["files"] = null!,
+                    ["repoPath"] = null,
+                    ["files"] = null,
                     ["staged"] = false
                 },
                 (m, q) => "以下是通过 git diff 获取的当前仓库变更，请据实描述，不得编造：",
@@ -119,7 +119,7 @@ public sealed class QueryPatternRouter
                 "git_log",
                 (m, q) => new Dictionary<string, object?>
                 {
-                    ["repoPath"] = null!,
+                    ["repoPath"] = null,
                     ["maxCount"] = 10,
                     ["format"] = "oneline"
                 },
@@ -140,7 +140,7 @@ public sealed class QueryPatternRouter
                 new Regex(@"^(?:现在|当前).*(?:时间|日期|几点)|what.*(?:time|date).*now|current.*(?:time|date)",
                     RegexOptions.IgnoreCase | RegexOptions.Compiled),
                 "datetime_now",
-                (m, q) => new Dictionary<string, object?> { ["timezoneOffset"] = null! },
+                (m, q) => new Dictionary<string, object?> { ["timezoneOffset"] = null },
                 (m, q) => "以下是通过 datetime_now 获取的当前时间，请据实描述：",
                 1.0f),
 
@@ -154,7 +154,7 @@ public sealed class QueryPatternRouter
                     var filter = ExtractTargetAfterKeyword(q, @"\b(?:进程|process)\b");
                     return new Dictionary<string, object?>
                     {
-                        ["filter"] = filter ?? null!,
+                        ["filter"] = filter,
                         ["top"] = 20
                     };
                 },
@@ -169,7 +169,7 @@ public sealed class QueryPatternRouter
                 (m, q) =>
                 {
                     var host = ExtractTargetAfterKeyword(q, @"ping\s+|网络.*(?:到|连接|访问)");
-                    return new Dictionary<string, object?> { ["pingHost"] = host ?? null! };
+                    return new Dictionary<string, object?> { ["pingHost"] = host };
                 },
                 (m, q) => "以下是通过 env_network 获取的网络信息，请据实描述：",
                 0.9f),
@@ -188,7 +188,7 @@ public sealed class QueryPatternRouter
                 new Regex(@"理解.*(?:代码|变更|diff)|分析.*影响|影响.*分析|understand.*(?:code|diff)|analyze.*impact",
                     RegexOptions.IgnoreCase | RegexOptions.Compiled),
                 "understand_diff",
-                (m, q) => new Dictionary<string, object?> { ["repoPath"] = null! },
+                (m, q) => new Dictionary<string, object?> { ["repoPath"] = null },
                 (m, q) => "以下是通过 understand_diff 分析的代码影响：",
                 0.85f),
         };

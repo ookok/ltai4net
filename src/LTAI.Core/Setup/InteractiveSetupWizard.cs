@@ -81,7 +81,7 @@ public class InteractiveSetupWizard
                 return new LTAIOptions();
         }
 
-        Directory.CreateDirectory(Path.GetDirectoryName(_configPath)!);
+        Directory.CreateDirectory(Path.GetDirectoryName(_configPath) ?? throw new InvalidOperationException("Config path has no parent directory"));
         return new LTAIOptions();
     }
 
@@ -184,7 +184,7 @@ public class InteractiveSetupWizard
         }
         selectedProvider = cloud[idx - 1].Name;
 
-        var endpoint = registry.GetBaseUrl(selectedProvider)!;
+        var endpoint = registry.GetBaseUrl(selectedProvider) ?? throw new InvalidOperationException($"No base URL found for provider {selectedProvider}");
         Console.WriteLine();
         Console.WriteLine($"提供商: {selectedProvider}");
         Console.WriteLine($"端点: {endpoint}");
@@ -271,8 +271,8 @@ public class InteractiveSetupWizard
         SetPersistentEnvVar(envVarName, apiKey);
 
         var layerConfig = _options.AI.GetLayerConfig(layerName);
-        layerConfig.GetType().GetProperty("Provider")!.SetValue(layerConfig, selectedProvider);
-        layerConfig.GetType().GetProperty("Model")!.SetValue(layerConfig, recommended);
+        layerConfig.GetType().GetProperty("Provider")?.SetValue(layerConfig, selectedProvider);
+        layerConfig.GetType().GetProperty("Model")?.SetValue(layerConfig, recommended);
         _isDirty = true;
 
         Console.WriteLine();
@@ -297,7 +297,7 @@ public class InteractiveSetupWizard
                 foreach (var item in data.EnumerateArray())
                 {
                     if (item.TryGetProperty("id", out var id))
-                        models.Add(id.GetString()!);
+                        models.Add(id.GetString() ?? string.Empty);
                 }
             }
 
@@ -431,8 +431,8 @@ public class InteractiveSetupWizard
             var path = await _modelDownloader.DownloadAsync(selectedModel, modelsDir, progress, ct).ConfigureAwait(false);
             Console.WriteLine($"\n  ✓ 下载完成: {path}");
 
-            _options.AI.GetLayerConfig("L0").GetType().GetProperty("Provider")!.SetValue(_options.AI.GetLayerConfig("L0"), "local");
-            _options.AI.GetLayerConfig("L0").GetType().GetProperty("Model")!.SetValue(_options.AI.GetLayerConfig("L0"), selectedModel.Version);
+            _options.AI.GetLayerConfig("L0").GetType().GetProperty("Provider")?.SetValue(_options.AI.GetLayerConfig("L0"), "local");
+            _options.AI.GetLayerConfig("L0").GetType().GetProperty("Model")?.SetValue(_options.AI.GetLayerConfig("L0"), selectedModel.Version);
             _isDirty = true;
 
             Console.WriteLine();
@@ -518,8 +518,8 @@ public class InteractiveSetupWizard
         }
 
         var layerConfig = _options.AI.GetLayerConfig(layerName);
-        layerConfig.GetType().GetProperty("Provider")!.SetValue(layerConfig, "local");
-        layerConfig.GetType().GetProperty("Model")!.SetValue(layerConfig, selectedModel.Version);
+        layerConfig.GetType().GetProperty("Provider")?.SetValue(layerConfig, "local");
+        layerConfig.GetType().GetProperty("Model")?.SetValue(layerConfig, selectedModel.Version);
         _isDirty = true;
 
         SaveLocalModelConfig(layerName, selectedModel);
@@ -575,9 +575,9 @@ public class InteractiveSetupWizard
             return;
         }
 
-        _options.AI.GetLayerConfig("L0").GetType().GetProperty("Provider")!.SetValue(_options.AI.GetLayerConfig("L0"), "jina");
-        _options.AI.GetLayerConfig("L0").GetType().GetProperty("Model")!.SetValue(_options.AI.GetLayerConfig("L0"), modelName);
-        typeof(LTAIOptions).GetProperty("Vector")!.SetValue(_options, new VectorConfig { Dimension = dim, Backend = "jina-onnx" });
+        _options.AI.GetLayerConfig("L0").GetType().GetProperty("Provider")?.SetValue(_options.AI.GetLayerConfig("L0"), "jina");
+        _options.AI.GetLayerConfig("L0").GetType().GetProperty("Model")?.SetValue(_options.AI.GetLayerConfig("L0"), modelName);
+        typeof(LTAIOptions).GetProperty("Vector")?.SetValue(_options, new VectorConfig { Dimension = dim, Backend = "jina-onnx" });
         _isDirty = true;
 
         Console.WriteLine();
@@ -601,7 +601,7 @@ public class InteractiveSetupWizard
                 var response = await _hfClient.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
                 response.EnsureSuccessStatusCode();
 
-                Directory.CreateDirectory(Path.GetDirectoryName(savePath)!);
+                Directory.CreateDirectory(Path.GetDirectoryName(savePath) ?? throw new InvalidOperationException("Download save path has no parent directory"));
                 await using var stream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
                 await using var file = File.Create(savePath);
                 await stream.CopyToAsync(file, ct).ConfigureAwait(false);
