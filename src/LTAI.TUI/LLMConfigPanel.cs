@@ -93,9 +93,27 @@ public sealed class LLMConfigPanel
     {
         var providers = _options?.Value.AI.Providers;
         if (providers == null || providers.Count == 0) return;
-        var keys = providers.Keys.ToList();
-        var idx = keys.IndexOf(_selectedModel);
-        _selectedModel = keys[(idx + 1) % keys.Count];
+
+        var chatProviders = new List<string>();
+        var l1Name = _options?.Value.AI.L1.Provider;
+        var l2Name = _options?.Value.AI.L2.Provider;
+
+        foreach (var key in providers.Keys)
+        {
+            if (key == l1Name || key == l2Name ||
+                key.EndsWith("-flash") || key.EndsWith("-pro") ||
+                key.Contains("deepseek") || key.Contains("qwen") || key.Contains("gpt"))
+                chatProviders.Add(key);
+        }
+
+        if (chatProviders.Count == 0)
+        {
+            chatProviders.AddRange(providers.Keys);
+        }
+
+        var idx = chatProviders.IndexOf(_selectedModel);
+        if (idx < 0) idx = chatProviders.Count - 1;
+        _selectedModel = chatProviders[(idx + 1) % chatProviders.Count];
     }
 
     public IReadOnlyList<string> GetProviders()
