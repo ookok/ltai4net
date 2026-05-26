@@ -19,7 +19,10 @@ public record SpiderConfig(int MaxConcurrent = 5, int MaxPages = 100, int MaxDep
 
 public sealed class LightCrawler
 {
-    private readonly HttpClient _client;
+    private static readonly HttpClient _client = new(new HttpClientHandler { AllowAutoRedirect = true, MaxAutomaticRedirections = 5 })
+    {
+        Timeout = TimeSpan.FromSeconds(30)
+    };
     private readonly ILogger<LightCrawler> _logger;
     private static readonly string[] TlsProfiles =
     {
@@ -32,8 +35,6 @@ public sealed class LightCrawler
     public LightCrawler(ILogger<LightCrawler>? logger = null)
     {
         _logger = logger ?? NullLogger<LightCrawler>.Instance;
-        _client = new HttpClient(new HttpClientHandler { AllowAutoRedirect = true, MaxAutomaticRedirections = 5 })
-        { Timeout = TimeSpan.FromSeconds(30) };
     }
 
     public async Task<LightPage> FetchAsync(string url)

@@ -6,17 +6,19 @@ namespace LTAI.Tools.Search;
 
 public sealed class UnifiedSearchEngine : IDisposable
 {
-    private readonly HttpClient _http;
+    private static readonly HttpClient _http = new()
+    {
+        Timeout = TimeSpan.FromSeconds(15),
+        DefaultRequestHeaders = { { "User-Agent", "LTAI/5.5" } }
+    };
     private readonly ILogger<UnifiedSearchEngine> _logger;
 
     public UnifiedSearchEngine(ILogger<UnifiedSearchEngine> logger)
     {
-        _http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
-        _http.DefaultRequestHeaders.Add("User-Agent", "LTAI/5.5");
         _logger = logger;
     }
 
-    public void Dispose() { _http?.Dispose(); }
+    public void Dispose() { }
 
     public async Task<List<SearchResult>> SearchAsync(
         string query,

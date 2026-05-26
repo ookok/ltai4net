@@ -1441,54 +1441,11 @@ created: {DateTime.UtcNow:yyyy-MM-dd}
 
         // ═══ MCP — 3 tools ═══
         new("mcp_discover", "Connect to a remote MCP (Model Context Protocol) server and list its available tools and resources. Use this to discover external AI agent tools. Parameters: server_url (required, e.g. http://localhost:8080/mcp)", "discovery",
-            async args =>
-            {
-                var serverUrl = Arg(args, "server_url");
-                if (string.IsNullOrWhiteSpace(serverUrl)) return JsonToolResult.Success(new { error = "server_url parameter is required" });
-                try
-                {
-                    using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
-                    var content = new StringContent("""{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"LTAI","version":"5.5"}}}""", System.Text.Encoding.UTF8, "application/json");
-                    var initResult = await http.PostAsync($"{serverUrl.TrimEnd('/')}/message", content);
-                    var toolContent = new StringContent("""{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}""", System.Text.Encoding.UTF8, "application/json");
-                    var toolResult = await http.PostAsync($"{serverUrl.TrimEnd('/')}/message", toolContent);
-                    var toolsJson = await toolResult.Content.ReadAsStringAsync();
-                    var doc = System.Text.Json.JsonDocument.Parse(toolsJson);
-                    var tools = new List<object>();
-                    if (doc.RootElement.TryGetProperty("result", out var result) &&
-                        result.TryGetProperty("tools", out var toolsArr))
-                    {
-                        foreach (var t in toolsArr.EnumerateArray())
-                            tools.Add(new { name = t.GetProperty("name").GetString(), description = t.TryGetProperty("description", out var d) ? d.GetString() : "" });
-                    }
-                    return JsonToolResult.Success(new { server_url = serverUrl, connected = initResult.IsSuccessStatusCode, tools });
-                }
-                catch (Exception ex) { return JsonToolResult.Success(new { error = $"MCP discovery failed: {ex.Message}" }); }
-            }),
+            async args => await McpToolAdapter.DiscoverAsync(args)),
         new("mcp_call", "Call a specific tool on a remote MCP server. Use mcp_discover first to find available tools. Parameters: server_url (required), tool_name (required), arguments (JSON object, optional)", "discovery",
-            async args =>
-            {
-                var serverUrl = Arg(args, "server_url");
-                var toolName = Arg(args, "tool_name");
-                if (string.IsNullOrWhiteSpace(serverUrl) || string.IsNullOrWhiteSpace(toolName)) return JsonToolResult.Success(new { error = "server_url and tool_name are required" });
-                try
-                {
-                    var toolArgs = Arg(args, "arguments", "{}");
-                    using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(60) };
-                    var callPayload = $"{{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{{\"name\":\"{toolName}\",\"arguments\":{toolArgs}}}}}";
-                    var callContent = new StringContent(callPayload, System.Text.Encoding.UTF8, "application/json");
-                    var callResult = await http.PostAsync($"{serverUrl.TrimEnd('/')}/message", callContent);
-                    var json = await callResult.Content.ReadAsStringAsync();
-                    return JsonToolResult.Success(new { tool = toolName, status = callResult.IsSuccessStatusCode ? "called" : "failed", raw_response = json[..Math.Min(2000, json.Length)] });
-                }
-                catch (Exception ex) { return JsonToolResult.Success(new { error = $"MCP call failed: {ex.Message}" }); }
-            }),
+            async args => await McpToolAdapter.CallAsync(args)),
         new("mcp_export", "Export current LTAI tools as MCP-compatible tool definitions. Use this to share LTAI's capabilities with other MCP clients.", "discovery",
-            async _ =>
-            {
-                var tools = AllTools.Select(t => new { name = t.Name, description = t.Description, category = t.Category, has_handler = t.Handler != null });
-                return JsonToolResult.Success(new { protocol = "2024-11-05", server_name = "LTAI", version = "7.0.0", tools, total = AllTools.Length });
-            }),
+            async _ => await Task.FromResult(McpToolAdapter.Export(AllTools))),
 
         // ═══ System — 7 tools ═══
         new("models_list", "List all registered model providers and their models", "system",

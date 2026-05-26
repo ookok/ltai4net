@@ -60,14 +60,13 @@ public sealed class SmartDnsResolver
 public sealed class ProxyPool
 {
     private readonly List<string> _proxies;
-    private readonly HttpClient _http;
+    private static readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(10) };
     private readonly ILogger<ProxyPool> _logger;
     private int _roundRobinIndex;
 
     public ProxyPool(IEnumerable<string> proxies, ILogger<ProxyPool> logger)
     {
         _proxies = proxies.ToList();
-        _http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
         _logger = logger;
     }
 

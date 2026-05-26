@@ -16,7 +16,7 @@ public sealed record ImageSearchResult(
 
 public sealed class ImageSearchService : IDisposable
 {
-    private readonly HttpClient _http;
+    private static readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(15) };
     private readonly ILogger<ImageSearchService> _logger;
 
     public string UnsplashAccessKey { get; set; } = "";
@@ -25,10 +25,9 @@ public sealed class ImageSearchService : IDisposable
     public ImageSearchService(ILogger<ImageSearchService>? logger = null)
     {
         _logger = logger ?? NullLogger<ImageSearchService>.Instance;
-        _http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
     }
 
-    public void Dispose() { _http?.Dispose(); }
+    public void Dispose() { }
 
     public async Task<List<ImageSearchResult>> SearchAsync(string query, int count = 10, string source = "unsplash")
     {

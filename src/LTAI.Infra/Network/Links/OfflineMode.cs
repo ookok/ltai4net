@@ -23,7 +23,7 @@ public sealed class DualMode : IDisposable
     private readonly ConcurrentQueue<SyncQueueItem> _queue = new();
     private int _queueCount;
     private readonly object _queueLock = new();
-    private readonly HttpClient _http;
+    private static readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(3) };
     private readonly ILogger<DualMode>? _logger;
     private const int MaxQueueSize = 1000;
 
@@ -35,11 +35,10 @@ public sealed class DualMode : IDisposable
 
     private DualMode()
     {
-        _http = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
         _logger = null;
     }
 
-    public void Dispose() { _http?.Dispose(); }
+    public void Dispose() { }
 
     public async Task Check()
     {

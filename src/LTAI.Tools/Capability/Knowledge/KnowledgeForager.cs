@@ -26,7 +26,7 @@ public sealed class KnowledgeForager : IDisposable
     private readonly ConcurrentDictionary<string, EntityNode> _entities = new();
     private readonly List<EntityRelation> _relations = new();
     private readonly List<Dictionary<string, object>> _projects = new();
-    private readonly HttpClient _client;
+    private static readonly HttpClient _client = new() { Timeout = TimeSpan.FromSeconds(30) };
     private readonly ILogger<KnowledgeForager> _logger;
     private readonly string _storeDir;
     private readonly object _lock = new();
@@ -36,12 +36,11 @@ public sealed class KnowledgeForager : IDisposable
         _logger = logger ?? NullLogger<KnowledgeForager>.Instance;
         _storeDir = Path.Combine(Environment.GetEnvironmentVariable("LTAI_WORKSPACE") ?? Directory.GetCurrentDirectory(), ".livingtree", "forager");
         Directory.CreateDirectory(_storeDir);
-        _client = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
         LoadFoodMap();
         LoadGraph();
     }
 
-    public void Dispose() { _client?.Dispose(); }
+    public void Dispose() { }
 
     public void RegisterSite(string domain, string url, string category, int scanHours = 24, int priority = 5)
     {

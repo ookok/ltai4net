@@ -79,7 +79,7 @@ public sealed class NetworkResilience : IDisposable
     private static readonly Lazy<NetworkResilience> _instance = new(() => new NetworkResilience());
     public static NetworkResilience Instance => _instance.Value;
 
-    private readonly HttpClient _http;
+    private static readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(30) };
     private readonly List<MirrorMapping> _mirrors;
     private readonly ConcurrentDictionary<string, List<DomainIP>> _domainIPs;
     private readonly ConcurrentBag<ProxyEntry> _proxies;
@@ -93,7 +93,6 @@ public sealed class NetworkResilience : IDisposable
 
     private NetworkResilience()
     {
-        _http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
         _mirrors = new List<MirrorMapping>();
         _domainIPs = new ConcurrentDictionary<string, List<DomainIP>>(StringComparer.OrdinalIgnoreCase);
         _proxies = new ConcurrentBag<ProxyEntry>();

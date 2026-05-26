@@ -8,19 +8,21 @@ public sealed class SelfUpdater : IDisposable
     private static readonly Lazy<SelfUpdater> _instance = new(() => new SelfUpdater());
     public static SelfUpdater Instance => _instance.Value;
 
-    private readonly HttpClient _http;
+    private static readonly HttpClient _http = new()
+    {
+        Timeout = TimeSpan.FromSeconds(30),
+        DefaultRequestHeaders = { { "User-Agent", "LTAI/3.0" } }
+    };
     private readonly string _projectRoot;
     private const string GitHubReleases = "https://api.github.com/repos/ookok/ltai4net/releases/latest";
     private const string GiteeReleases = "https://gitee.com/api/v5/repos/ookok/ltai4net/releases/latest";
 
     private SelfUpdater()
     {
-        _http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
-        _http.DefaultRequestHeaders.UserAgent.ParseAdd("LTAI/3.0");
         _projectRoot = AppDomain.CurrentDomain.BaseDirectory;
     }
 
-    public void Dispose() { _http?.Dispose(); }
+    public void Dispose() { }
 
     public async Task<Dictionary<string, object>> CheckUpdateAsync(bool useMirror = false)
     {

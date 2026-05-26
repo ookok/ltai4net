@@ -15,17 +15,16 @@ public sealed class TranslateConfig
 
 public sealed class TranslateService : IDisposable
 {
-    private readonly HttpClient _http;
+    private static readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(15) };
     private readonly ILogger<TranslateService> _logger;
     public TranslateConfig Config { get; set; } = new();
 
     public TranslateService(ILogger<TranslateService>? logger = null)
     {
         _logger = logger ?? NullLogger<TranslateService>.Instance;
-        _http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
     }
 
-    public void Dispose() { _http?.Dispose(); }
+    public void Dispose() { }
 
     public async Task<string?> TranslateAsync(string text, string from = "auto", string to = "zh")
     {

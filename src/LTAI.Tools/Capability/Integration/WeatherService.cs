@@ -23,7 +23,7 @@ public sealed record WeatherData(
 
 public sealed class WeatherService : IDisposable
 {
-    private readonly HttpClient _http;
+    private static readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(15) };
     private readonly ILogger<WeatherService> _logger;
     private readonly string _owmBaseUrl;
     private readonly string _qweatherGeoUrl;
@@ -37,13 +37,12 @@ public sealed class WeatherService : IDisposable
         ILogger<WeatherService>? logger = null)
     {
         _logger = logger ?? NullLogger<WeatherService>.Instance;
-        _http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
         _owmBaseUrl = options.Value.IntegrationUrls.WeatherOpenWeatherMap;
         _qweatherGeoUrl = options.Value.IntegrationUrls.WeatherQWeatherGeo;
         _qweatherNowUrl = options.Value.IntegrationUrls.WeatherQWeatherNow;
     }
 
-    public void Dispose() { _http?.Dispose(); }
+    public void Dispose() { }
 
     public async Task<WeatherData?> GetWeatherAsync(string city, string source = "openweathermap")
     {

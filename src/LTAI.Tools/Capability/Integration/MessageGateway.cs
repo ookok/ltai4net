@@ -38,7 +38,7 @@ public sealed class MessageGateway : IDisposable
 
     private readonly ConcurrentDictionary<string, GatewayMessage> _messages = new();
     private readonly Lock _lock = new();
-    private readonly HttpClient _http;
+    private static readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(30) };
     private readonly ILogger<MessageGateway> _logger;
 
     private string _smtpHost = "";
@@ -50,10 +50,9 @@ public sealed class MessageGateway : IDisposable
     private MessageGateway(ILogger<MessageGateway>? logger = null)
     {
         _logger = logger ?? NullLogger<MessageGateway>.Instance;
-        _http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
     }
 
-    public void Dispose() { _http?.Dispose(); }
+    public void Dispose() { }
 
     public void ConfigureSmtp(string host, int port, string user, string pass, bool useSsl = true)
     {

@@ -1,3 +1,4 @@
+using System.Net.Http;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -433,7 +434,9 @@ public static class DocRoutesEndpoints
                     {
                         var encoded = Uri.EscapeDataString(request.Query);
                         var url = $"https://html.duckduckgo.com/html/?q={encoded}";
-                        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+                        var httpFactory = context.RequestServices.GetRequiredService<IHttpClientFactory>();
+                        using var http = httpFactory.CreateClient("Default");
+                        http.Timeout = TimeSpan.FromSeconds(10);
                         var html = await http.GetStringAsync(url).ConfigureAwait(false);
                         var linkMatches = Regex.Matches(html, @"<a[^>]*class=""result__a""[^>]*href=""([^""]+)""[^>]*>([^<]+)</a>");
 

@@ -284,12 +284,12 @@ public class InteractiveSetupWizard
     {
         try
         {
-            var client = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
-            client.DefaultRequestHeaders.Authorization = new global::System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", apiKey);
-
             var baseUrl = endpoint.TrimEnd('/');
-            var response = await client.GetStringAsync($"{baseUrl}/models", ct);
-            using var doc = JsonDocument.Parse(response);
+            var request = new HttpRequestMessage(HttpMethod.Get, $"{baseUrl}/models");
+            request.Headers.Authorization = new global::System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", apiKey);
+            var response = await _hfClient.SendAsync(request, ct);
+            var responseBody = await response.Content.ReadAsStringAsync(ct);
+            using var doc = JsonDocument.Parse(responseBody);
             var models = new List<string>();
 
             if (doc.RootElement.TryGetProperty("data", out var data))

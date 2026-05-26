@@ -19,17 +19,16 @@ public sealed class SmsConfig
 
 public sealed class SmsGateway : IDisposable
 {
-    private readonly HttpClient _http;
+    private static readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(10) };
     private readonly ILogger<SmsGateway> _logger;
     public SmsConfig Config { get; set; } = new();
 
     public SmsGateway(ILogger<SmsGateway>? logger = null)
     {
         _logger = logger ?? NullLogger<SmsGateway>.Instance;
-        _http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
     }
 
-    public void Dispose() { _http?.Dispose(); }
+    public void Dispose() { }
 
     public async Task<bool> SendAsync(string message, string? phone = null)
     {

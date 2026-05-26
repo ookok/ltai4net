@@ -6,19 +6,21 @@ namespace LTAI.Tools.Integration;
 
 public sealed class TelegramBot : IDisposable
 {
-    private readonly HttpClient _http;
+    private static readonly HttpClient _http = new()
+    {
+        Timeout = TimeSpan.FromSeconds(15),
+        BaseAddress = new Uri("https://api.telegram.org/")
+    };
     private readonly ILogger<TelegramBot> _logger;
     private readonly string _token;
 
     public TelegramBot(ILogger<TelegramBot> logger, string? token = null)
     {
-        _http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
-        _http.BaseAddress = new Uri("https://api.telegram.org/");
         _logger = logger;
         _token = token ?? OptionService.Get("LTAI_TELEGRAM_TOKEN") ?? "";
     }
 
-    public void Dispose() { _http?.Dispose(); }
+    public void Dispose() { }
 
     public async Task<bool> SendMessageAsync(long chatId, string text, CancellationToken ct = default)
     {
@@ -67,18 +69,17 @@ public sealed class TelegramBot : IDisposable
 
 public sealed class WechatWorkNotifier : IDisposable
 {
-    private readonly HttpClient _http;
+    private static readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(10) };
     private readonly ILogger<WechatWorkNotifier> _logger;
     private readonly string _webhookUrl;
 
     public WechatWorkNotifier(ILogger<WechatWorkNotifier> logger, string? webhookUrl = null)
     {
-        _http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
         _logger = logger;
         _webhookUrl = webhookUrl ?? OptionService.Get("LTAI_WEWORK_WEBHOOK") ?? "";
     }
 
-    public void Dispose() { _http?.Dispose(); }
+    public void Dispose() { }
 
     public async Task<bool> SendTextAsync(string content, List<string>? mentionedList = null, CancellationToken ct = default)
     {
@@ -121,6 +122,8 @@ public sealed class WechatWorkNotifier : IDisposable
 
 public sealed class AutoUpdater
 {
+    private static readonly HttpClient _checkHttp = new() { Timeout = TimeSpan.FromSeconds(10) };
+    private static readonly HttpClient _downloadHttp = new() { Timeout = TimeSpan.FromMinutes(5) };
     private readonly ILogger<AutoUpdater> _logger;
     private readonly string _updateUrl;
     private readonly string _currentVersion;
@@ -139,7 +142,7 @@ public sealed class AutoUpdater
 
         try
         {
-            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+            var http = _checkHttp;
             var json = await http.GetStringAsync(_updateUrl, ct).ConfigureAwait(false);
             var doc = JsonDocument.Parse(json);
             var latestVersion = doc.RootElement.TryGetProperty("version", out var v) ? v.GetString() ?? "" : "";
@@ -166,7 +169,7 @@ public sealed class AutoUpdater
     {
         try
         {
-            using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
+            var http = _downloadHttp;
             var bytes = await http.GetByteArrayAsync(downloadUrl, ct).ConfigureAwait(false);
             await File.WriteAllBytesAsync(savePath, bytes, ct).ConfigureAwait(false);
             _logger.LogInformation("Update downloaded: {Size} bytes to {Path}", bytes.Length, savePath);

@@ -29,7 +29,7 @@ public sealed class MCPCallResult
 
 public sealed class MCPClient
 {
-    private readonly HttpClient _http;
+    private static readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(30) };
     private readonly string _serverUrl;
     private readonly ILogger<MCPClient> _logger;
     private int _requestId;
@@ -40,7 +40,6 @@ public sealed class MCPClient
     public MCPClient(string serverUrl, ILogger<MCPClient>? logger = null)
     {
         _serverUrl = serverUrl.TrimEnd('/');
-        _http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
         _logger = logger ?? NullLogger<MCPClient>.Instance;
     }
 

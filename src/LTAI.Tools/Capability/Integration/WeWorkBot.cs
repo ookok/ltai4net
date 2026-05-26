@@ -10,8 +10,8 @@ public sealed class WeWorkBot : IDisposable
 {
     public static readonly Lazy<WeWorkBot> Instance = new(() => new WeWorkBot());
 
+    private static readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(15) };
     private readonly ILogger<WeWorkBot> _logger;
-    private readonly HttpClient _http;
     private string _webhookUrl = "";
     private Func<string, string, Task<string>>? _llmCallback;
     private string _token = "";
@@ -21,10 +21,9 @@ public sealed class WeWorkBot : IDisposable
     private WeWorkBot(ILogger<WeWorkBot>? logger = null)
     {
         _logger = logger ?? NullLogger<WeWorkBot>.Instance;
-        _http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
     }
 
-    public void Dispose() { _http?.Dispose(); }
+    public void Dispose() { }
 
     public void Configure(string token, string encodingAesKey, string corpId, string? webhookUrl = null)
     {

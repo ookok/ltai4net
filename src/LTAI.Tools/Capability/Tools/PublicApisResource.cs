@@ -19,14 +19,13 @@ public sealed class PublicApisResource
     public static PublicApisResource Instance => _instance.Value;
 
     private const string RepoUrl = "https://raw.githubusercontent.com/public-apis/public-apis/master/README.md";
-    private readonly HttpClient _http;
+    private static readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(30) };
     private readonly Dictionary<string, List<PublicApisEntry>> _categories = new();
     private readonly object _lock = new();
     private bool _loaded;
 
     private PublicApisResource()
     {
-        _http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
     }
 
     public async Task LoadAsync()

@@ -52,7 +52,7 @@ public sealed class ExternalAccess : IDisposable
     private static readonly Lazy<ExternalAccess> _instance = new(() => new ExternalAccess());
     public static ExternalAccess Instance => _instance.Value;
 
-    private readonly HttpClient _http;
+    private static readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(15) };
     private readonly List<string> _searchEngines;
     private readonly List<string> _gitHubMirrors;
     private readonly List<string> _dohProviders;
@@ -70,7 +70,6 @@ public sealed class ExternalAccess : IDisposable
 
     private ExternalAccess()
     {
-        _http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
         _searchEngines = new List<string> { "duckduckgo", "searxng", "bing", "brave", "mojeek", "marginalia" };
         _gitHubMirrors = new List<string>
         {
@@ -121,7 +120,7 @@ public sealed class ExternalAccess : IDisposable
         _logger = logger;
     }
 
-    public void Dispose() { _http?.Dispose(); }
+    public void Dispose() { }
 
     public async Task<List<ExternalSearchResult>> DeepSearchAsync(string query, int maxResults = 20,
         CancellationToken cancellationToken = default)

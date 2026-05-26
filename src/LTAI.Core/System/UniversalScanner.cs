@@ -27,15 +27,17 @@ public sealed class UniversalScanner
     public static UniversalScanner Instance => _instance.Value;
     private static readonly Lazy<UniversalScanner> _instance = new(() => new UniversalScanner());
 
-    private readonly HttpClient _http;
+    private static readonly HttpClient _http = new()
+    {
+        Timeout = TimeSpan.FromSeconds(5),
+        DefaultRequestHeaders = { { "User-Agent", "LTAI-UniversalScanner/1.0" } }
+    };
     private readonly ConcurrentDictionary<string, ServiceEndpoint> _discovered = new();
     private readonly ILogger<UniversalScanner> _logger;
 
     public UniversalScanner(ILogger<UniversalScanner>? logger = null)
     {
         _logger = logger ?? NullLogger<UniversalScanner>.Instance;
-        _http = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
-        _http.DefaultRequestHeaders.Add("User-Agent", "LTAI-UniversalScanner/1.0");
     }
 
     public List<ServiceEndpoint> DiscoverFromDescription(string description)

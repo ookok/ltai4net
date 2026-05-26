@@ -9,17 +9,16 @@ namespace LTAI.Infra.Network.Discovery;
 
 public sealed class ServiceDiscovery : IDisposable
 {
-    private readonly HttpClient _http;
+    private static readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(10) };
     private readonly ILogger<ServiceDiscovery> _logger;
     private readonly ConcurrentDictionary<string, PeerInfo> _localRegistry = new();
 
     public ServiceDiscovery(ILogger<ServiceDiscovery> logger)
     {
-        _http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
         _logger = logger;
     }
 
-    public void Dispose() { _http?.Dispose(); }
+    public void Dispose() { }
 
     public async Task<DiscoveryResponse?> QueryAsync(string discoveryEndpoint, CancellationToken cancellationToken = default)
     {

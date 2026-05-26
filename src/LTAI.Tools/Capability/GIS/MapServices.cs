@@ -84,14 +84,13 @@ public sealed class UnifiedMapService
 
 internal sealed class BaiduMapService
 {
-    private readonly HttpClient _http;
+    private static readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(10) };
     private readonly ILogger _logger;
     private readonly string _ak;
     private readonly string _sk;
 
     public BaiduMapService(ILogger logger, string ak = "", string sk = "")
     {
-        _http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
         _logger = logger;
         _ak = ak;
         _sk = sk;
@@ -198,13 +197,12 @@ internal sealed class BaiduMapService
 
 internal sealed class AmapService
 {
-    private readonly HttpClient _http;
+    private static readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(10) };
     private readonly ILogger _logger;
     private readonly string _key;
 
     public AmapService(ILogger logger, string key = "")
     {
-        _http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
         _logger = logger;
         _key = key;
     }
@@ -364,13 +362,12 @@ internal sealed class AmapService
 
 internal sealed class TencentMapService
 {
-    private readonly HttpClient _http;
+    private static readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(10) };
     private readonly ILogger _logger;
     private readonly string _key;
 
     public TencentMapService(ILogger logger, string key = "")
     {
-        _http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
         _logger = logger;
         _key = key;
     }
@@ -488,13 +485,12 @@ internal sealed class TencentMapService
 
 internal sealed class TiandituService
 {
-    private readonly HttpClient _http;
+    private static readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(10) };
     private readonly ILogger _logger;
     private readonly string _tk;
 
     public TiandituService(ILogger logger, string tk = "")
     {
-        _http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
         _logger = logger;
         _tk = tk;
     }
