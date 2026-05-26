@@ -1,12 +1,17 @@
 using System.Diagnostics;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
+using AvaloniaEdit;
+using AvaloniaEdit.Highlighting;
 using LTAI.Knowledge.Core;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 
 namespace LTAI.Desktop;
 
@@ -14,7 +19,9 @@ public sealed class MdEditorView : UserControl
 {
     private readonly string _workspaceRoot;
     private TreeView _fileTree;
-    private TextBox _editor;
+    private TextBox _mdEditor;
+    private TextEditor _codeEditor;
+    private ScrollViewer _editorScroller;
     private ScrollViewer _previewScroller;
     private StackPanel _previewPanel;
     private readonly TextBlock _statusBar;
@@ -48,6 +55,18 @@ public sealed class MdEditorView : UserControl
         [".sh"] = "Shell", [".ps1"] = "PowerShell", [".sql"] = "SQL",
         [".graphql"] = "GraphQL", [".proto"] = "Protobuf"
     };
+
+    private string EditorText
+    {
+        get => _isCodeFile ? _codeEditor.Text : (_mdEditor.Text ?? "");
+        set
+        {
+            if (_isCodeFile)
+                _codeEditor.Text = value;
+            else
+                _mdEditor.Text = value;
+        }
+    }
 
     public MdEditorView()
     {
@@ -197,28 +216,46 @@ public sealed class MdEditorView : UserControl
 
     private Border BuildEditor()
     {
-        _editor = new TextBox
+        _mdEditor = new TextBox
         {
             FontFamily = new("Consolas"),
             FontSize = 13,
             Foreground = LtaiTheme.Sbb(LtaiTheme.TextPrimary),
             Background = LtaiTheme.Sbb(Color.Parse("#0d1117")),
             AcceptsReturn = true,
-            TextWrapping = TextWrapping.NoWrap,
+            TextWrapping = TextWrapping.Wrap,
             BorderThickness = new(0)
         };
+        _mdEditor.TextChanged += OnEditorTextChanged;
 
-        _editor.TextChanged += (_, _) =>
+        _codeEditor = new TextEditor
         {
-            _previewTimer.Stop();
-            _previewTimer.Start();
+            FontFamily = new("Cascadia Code, Consolas, monospace"),
+            FontSize = 13,
+            Foreground = LtaiTheme.Sbb(LtaiTheme.TextPrimary),
+            Background = LtaiTheme.Sbb(Color.Parse("#0a0e14")),
+            ShowLineNumbers = true,
+            WordWrap = false,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            Options = { ShowTabs = false, ShowSpaces = false, ConvertTabsToSpaces = true, IndentationSize = 4 }
         };
+        _codeEditor.TextChanged += OnEditorTextChanged;
+
+        _mdEditor.IsVisible = true;
+        _codeEditor.IsVisible = false;
+
+        var editorStack = new Grid();
+        editorStack.Children.Add(_mdEditor);
+        editorStack.Children.Add(_codeEditor);
+
+        _editorScroller = new ScrollViewer { Content = editorStack };
 
         return new Border
         {
             BorderBrush = LtaiTheme.Sbb(LtaiTheme.Border),
             BorderThickness = new(1, 0),
-            Child = new ScrollViewer { Content = _editor }
+            Child = _editorScroller
         };
     }
 
@@ -247,6 +284,12 @@ public sealed class MdEditorView : UserControl
             BorderThickness = new(1, 0, 0, 0),
             Child = panel
         };
+    }
+
+    private void OnEditorTextChanged(object? sender, EventArgs e)
+    {
+        _previewTimer.Stop();
+        _previewTimer.Start();
     }
 
     private void PopulateFileTree()
@@ -350,20 +393,19 @@ public sealed class MdEditorView : UserControl
 
             if (_isCodeFile)
             {
-                _editor.FontFamily = new("Cascadia Code, Consolas, monospace");
-                _editor.Foreground = LtaiTheme.Sbb(LtaiTheme.TextPrimary);
-                _editor.Background = LtaiTheme.Sbb(Color.Parse("#0a0e14"));
-                _editor.TextWrapping = TextWrapping.NoWrap;
+                _mdEditor.IsVisible = false;
+                _codeEditor.IsVisible = true;
+                SetupSyntaxHighlighting(ext);
+                _codeEditor.Text = content;
+                _ = CheckSyntaxAsync(path, content, _detectedLanguage);
             }
             else
             {
-                _editor.FontFamily = new("Consolas");
-                _editor.Foreground = LtaiTheme.Sbb(LtaiTheme.TextPrimary);
-                _editor.Background = LtaiTheme.Sbb(Color.Parse("#0d1117"));
-                _editor.TextWrapping = TextWrapping.Wrap;
+                _codeEditor.IsVisible = false;
+                _mdEditor.IsVisible = true;
+                _mdEditor.Text = content;
             }
 
-            _editor.Text = content;
             _currentFile = path;
             _saveBtn.IsEnabled = true;
             UpdateStatusForCurrentFile();
@@ -375,21 +417,297 @@ public sealed class MdEditorView : UserControl
         }
     }
 
+    private void SetupSyntaxHighlighting(string ext)
+    {
+        var highlightingName = ext.ToLowerInvariant() switch
+        {
+            ".cs" => "C#",
+            ".csproj" => "XML",
+            ".xml" => "XML",
+            ".html" => "HTML",
+            ".css" => "CSS",
+            ".js" => "JavaScript",
+            ".ts" => "TypeScript",
+            ".json" => "JSON",
+            ".py" => "Python",
+            ".java" => "Java",
+            ".php" => "PHP",
+            ".cpp" or ".c" or ".h" or ".hpp" => "C++",
+            ".sql" => "SQL",
+            ".yaml" or ".yml" => "YAML",
+            _ => null
+        };
+
+        if (highlightingName != null)
+        {
+            var highlighting = HighlightingManager.Instance.GetDefinition(highlightingName);
+            if (highlighting != null)
+                _codeEditor.SyntaxHighlighting = highlighting;
+        }
+    }
+
+    private sealed record DiagnosticItem(int Line, string Message, string Severity);
+
+    private async Task CheckSyntaxAsync(string path, string code, string language)
+    {
+        var items = await Task.Run(() => language switch
+        {
+            "C#" or "C# Script" => CheckCSharp(code, path),
+            "JSON" => CheckJson(code),
+            "XML" or "MSBuild" or "HTML" => CheckXml(code),
+            "YAML" => CheckYaml(code),
+            "Python" => CheckPython(code),
+            "JavaScript" or "TypeScript" or "TSX" or "JSX" => CheckJavaScript(code),
+            "SQL" => CheckSql(code),
+            _ => new List<DiagnosticItem>()
+        });
+
+        Dispatcher.UIThread.Post(() => ShowDiagnostics(items));
+    }
+
+    private static List<DiagnosticItem> CheckCSharp(string code, string path)
+    {
+        try
+        {
+            var tree = CSharpSyntaxTree.ParseText(code, path: path);
+            return tree.GetDiagnostics()
+                .Where(d => d.Severity == DiagnosticSeverity.Error)
+                .Select(d => new DiagnosticItem(
+                    d.Location.GetLineSpan().StartLinePosition.Line + 1,
+                    d.GetMessage(),
+                    d.Severity == DiagnosticSeverity.Error ? "error" : "warning"))
+                .ToList();
+        }
+        catch { return new(); }
+    }
+
+    private static List<DiagnosticItem> CheckJson(string code)
+    {
+        try
+        {
+            System.Text.Json.JsonDocument.Parse(code);
+            return new();
+        }
+        catch (System.Text.Json.JsonException ex)
+        {
+            return new() { new(GetJsonErrorLine(code, ex.BytePositionInLine > 0 ? -1 : 0), $"JSON: {ex.Message}", "error") };
+        }
+    }
+
+    private static int GetJsonErrorLine(string code, long _)
+    {
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(code);
+            return 0; // no error
+        }
+        catch (System.Text.Json.JsonException ex)
+        {
+            var offset = ex.BytePositionInLine > 0 ? (int)ex.BytePositionInLine : code.Length;
+            var lines = code[..Math.Min(offset, code.Length)].Split('\n');
+            return lines.Length;
+        }
+    }
+
+    private static List<DiagnosticItem> CheckXml(string code)
+    {
+        try
+        {
+            using var reader = System.Xml.XmlReader.Create(new System.IO.StringReader($"<root>{code}</root>"),
+                new System.Xml.XmlReaderSettings { ConformanceLevel = System.Xml.ConformanceLevel.Fragment });
+            while (reader.Read()) { }
+            return new();
+        }
+        catch (System.Xml.XmlException ex)
+        {
+            return new() { new(ex.LineNumber, $"XML: {ex.Message}", "error") };
+        }
+    }
+
+    private static List<DiagnosticItem> CheckYaml(string code)
+    {
+        var items = new List<DiagnosticItem>();
+        var lines = code.Split('\n');
+        var indentStack = new Stack<int>();
+        indentStack.Push(0);
+        for (int i = 0; i < lines.Length; i++)
+        {
+            var line = lines[i];
+            if (string.IsNullOrWhiteSpace(line) || line.TrimStart().StartsWith('#')) continue;
+            var indent = line.Length - line.TrimStart().Length;
+            if (line.Contains('\t') && line.TrimStart().StartsWith('-'))
+                items.Add(new(i + 1, "YAML: tabs not allowed (use spaces)", "warning"));
+
+            if (indent > indentStack.Peek() && indent - indentStack.Peek() > 1 && !line.TrimStart().StartsWith('-'))
+                items.Add(new(i + 1, "YAML: inconsistent indentation", "warning"));
+
+            if (indent > 0 && indent != indentStack.Peek())
+                indentStack.Push(indent);
+        }
+        return items;
+    }
+
+    private static List<DiagnosticItem> CheckPython(string code)
+    {
+        var items = new List<DiagnosticItem>();
+        var lines = code.Split('\n');
+        for (int i = 0; i < lines.Length; i++)
+        {
+            var line = lines[i];
+            if (string.IsNullOrWhiteSpace(line) || line.TrimStart().StartsWith('#')) continue;
+            if (line.Contains('\t'))
+                items.Add(new(i + 1, "Python: use spaces, not tabs (PEP 8)", "warning"));
+
+            var trimmed = line.TrimStart();
+            if (trimmed.StartsWith("def ") && !trimmed.EndsWith(':'))
+                items.Add(new(i + 1, "Python: function definition missing ':'", "error"));
+            if (trimmed.StartsWith("class ") && !trimmed.EndsWith(':'))
+                items.Add(new(i + 1, "Python: class definition missing ':'", "error"));
+            if ((trimmed.StartsWith("if ") || trimmed.StartsWith("elif ") || trimmed.StartsWith("else")) && !trimmed.EndsWith(':') && !trimmed.StartsWith("else"))
+                items.Add(new(i + 1, "Python: condition missing ':'", "error"));
+            if ((trimmed.StartsWith("for ") || trimmed.StartsWith("while ")) && !trimmed.EndsWith(':'))
+                items.Add(new(i + 1, "Python: loop missing ':'", "error"));
+            if (trimmed.StartsWith("try:") && !trimmed.EndsWith(':'))
+                items.Add(new(i + 1, "Python: try block missing ':'", "error"));
+        }
+        return items;
+    }
+
+    private static List<DiagnosticItem> CheckJavaScript(string code)
+    {
+        var items = new List<DiagnosticItem>();
+        var lines = code.Split('\n');
+        var braceDepth = 0;
+        var parenDepth = 0;
+        for (int i = 0; i < lines.Length; i++)
+        {
+            var line = lines[i];
+            braceDepth += line.Count(c => c == '{') - line.Count(c => c == '}');
+            parenDepth += line.Count(c => c == '(') - line.Count(c => c == ')');
+            if (braceDepth < 0) { items.Add(new(i + 1, "JS: unexpected '}'", "error")); braceDepth = 0; }
+            if (parenDepth < 0) { items.Add(new(i + 1, "JS: unexpected ')'", "error")); parenDepth = 0; }
+        }
+        if (braceDepth > 0) items.Add(new(lines.Length, $"JS: {braceDepth} unclosed '{{'", "warning"));
+        if (parenDepth > 0) items.Add(new(lines.Length, $"JS: {parenDepth} unclosed '('", "warning"));
+        return items;
+    }
+
+    private static List<DiagnosticItem> CheckSql(string code)
+    {
+        var items = new List<DiagnosticItem>();
+        var upper = code.ToUpperInvariant();
+        var keywords = new[] { "SELECT", "FROM", "WHERE", "INSERT", "UPDATE", "DELETE", "CREATE", "DROP", "ALTER" };
+        var hasKeyword = keywords.Any(k => upper.Contains(k));
+        if (!hasKeyword && code.Length > 10 && !code.TrimStart().StartsWith("--"))
+            items.Add(new(1, "SQL: no recognizable SQL keywords found", "warning"));
+        if (upper.Contains("DROP") || upper.Contains("DELETE") || upper.Contains("TRUNCATE"))
+            items.Add(new(1, "SQL: destructive operation (DROP/DELETE/TRUNCATE)", "warning"));
+        return items;
+    }
+
+    private void ShowDiagnostics(List<DiagnosticItem> diagnostics)
+    {
+        var existingPanel = _previewPanel.Children
+            .OfType<StackPanel>()
+            .FirstOrDefault(p => p.Name == "DiagnosticsPanel");
+        if (existingPanel != null)
+            _previewPanel.Children.Remove(existingPanel);
+
+        if (diagnostics.Count == 0)
+        {
+            _previewPanel.Children.Add(new TextBlock
+            {
+                Text = "✓ No issues detected",
+                Foreground = LtaiTheme.Sbb(LtaiTheme.AccentSystem),
+                FontSize = 11,
+                Margin = new(0, 4, 0, 0),
+                Name = "DiagnosticsPanel"
+            });
+            return;
+        }
+
+        var panel = new StackPanel { Name = "DiagnosticsPanel", Spacing = 4, Margin = new(0, 8, 0, 0) };
+
+        var errors = diagnostics.Count(d => d.Severity == "error");
+        var warnings = diagnostics.Count(d => d.Severity == "warning");
+        var summary = errors > 0 ? $"Errors: {errors}, Warnings: {warnings}" : $"Warnings: {warnings}";
+        panel.Children.Add(new TextBlock
+        {
+            Text = summary,
+            Foreground = errors > 0 ? Brushes.OrangeRed : Brushes.Goldenrod,
+            FontSize = 12,
+            FontWeight = FontWeight.Bold,
+            Margin = new(0, 0, 0, 4)
+        });
+
+        foreach (var d in diagnostics.Take(15))
+        {
+            var color = d.Severity == "error" ? Colors.OrangeRed : Colors.Goldenrod;
+            panel.Children.Add(new TextBlock
+            {
+                Text = $"  [{d.Line}] {d.Message}",
+                Foreground = LtaiTheme.Sbb(color),
+                FontFamily = new("Consolas"),
+                FontSize = 11,
+                TextWrapping = TextWrapping.Wrap
+            });
+        }
+
+        _previewPanel.Children.Add(panel);
+    }
+
+    private void ShowDiagnostics(List<Microsoft.CodeAnalysis.Diagnostic> diagnostics)
+    {
+        var existingPanel = _previewPanel.Children
+            .OfType<StackPanel>()
+            .FirstOrDefault(p => p.Name == "DiagnosticsPanel");
+        if (existingPanel != null)
+            _previewPanel.Children.Remove(existingPanel);
+
+        if (diagnostics.Count == 0) return;
+
+        var panel = new StackPanel { Name = "DiagnosticsPanel", Spacing = 4, Margin = new(0, 8, 0, 0) };
+
+        panel.Children.Add(new TextBlock
+        {
+            Text = $"Errors: {diagnostics.Count}",
+            Foreground = Brushes.OrangeRed,
+            FontSize = 12,
+            FontWeight = FontWeight.Bold,
+            Margin = new(0, 0, 0, 4)
+        });
+
+        foreach (var d in diagnostics.Take(10))
+        {
+            var line = d.Location.GetLineSpan().StartLinePosition.Line + 1;
+            panel.Children.Add(new TextBlock
+            {
+                Text = $"  [{line}] {d.GetMessage()}",
+                Foreground = LtaiTheme.Sbb(Colors.OrangeRed),
+                FontFamily = new("Consolas"),
+                FontSize = 11,
+                TextWrapping = TextWrapping.Wrap
+            });
+        }
+
+        _previewPanel.Children.Add(panel);
+    }
+
     private void UpdateStatusForCurrentFile()
     {
         if (_currentFile == null) return;
         var fileName = Path.GetFileName(_currentFile);
-        var lines = _editor.Text?.Count(c => c == '\n') + 1 ?? 0;
+        var lines = EditorText.Count(c => c == '\n') + 1;
         var lang = _isCodeFile ? $" | {_detectedLanguage}" : " | Markdown";
         _statusBar.Text = $"{fileName} | {lines} lines{lang}";
     }
 
     private async Task SaveFileAsync()
     {
-        if (_currentFile == null || !_editor.IsEnabled) return;
+        if (_currentFile == null) return;
         try
         {
-            await File.WriteAllTextAsync(_currentFile, _editor.Text);
+            await File.WriteAllTextAsync(_currentFile, EditorText);
             UpdateStatusForCurrentFile();
             _statusBar.Text = $"Saved: {Path.GetFileName(_currentFile)}";
         }
@@ -411,7 +729,7 @@ public sealed class MdEditorView : UserControl
     private void RefreshPreview()
     {
         _previewPanel.Children.Clear();
-        var text = _editor.Text;
+        var text = EditorText;
         if (string.IsNullOrEmpty(text))
         {
             _previewPanel.Children.Add(new TextBlock
