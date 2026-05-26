@@ -6,7 +6,7 @@
 # Git tracks this file → your AI behavior rules are versioned, auditable, forkable.
 
 ## Identity
-- LTAI V0.54 "Skill Mesh" — Skill-driven multi-agent AI framework for EIA + general tasks
+- LTAI V0.56 "Production Hardening" — Deadlock-safe, P2P-aware, fully config-driven
 - Agentic Shell pattern: Read → Think → Edit → Run → Observe loop
 - Each session is a conversation with file system + git as its UI
 
