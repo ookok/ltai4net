@@ -36,22 +36,22 @@ public sealed class LTAIOptions
     public string LogsDirectory { get; init; } = "logs";
 
     public string ResolveDataPath(string subPath) =>
-        Path.Combine(AppContext.BaseDirectory, DataDirectory, subPath);
+        Path.Combine(Environment.GetEnvironmentVariable("LTAI_DATA_DIR") ?? Path.Combine(AppContext.BaseDirectory, DataDirectory), subPath);
 
     public string ResolveSkillsPath(string? subPath = null) =>
-        Path.Combine(AppContext.BaseDirectory, SkillsDirectory, subPath ?? "");
+        Path.Combine(Environment.GetEnvironmentVariable("LTAI_SKILLS_DIR") ?? Path.Combine(AppContext.BaseDirectory, SkillsDirectory), subPath ?? "");
 
     public string ResolveToolsPath(string? subPath = null) =>
-        Path.Combine(AppContext.BaseDirectory, ToolsDirectory, subPath ?? "");
+        Path.Combine(Environment.GetEnvironmentVariable("LTAI_TOOLS_DIR") ?? Path.Combine(AppContext.BaseDirectory, ToolsDirectory), subPath ?? "");
 
     public string ResolvePromptsPath(string? subPath = null) =>
-        Path.Combine(AppContext.BaseDirectory, PromptsDirectory, subPath ?? "");
+        Path.Combine(Environment.GetEnvironmentVariable("LTAI_PROMPTS_DIR") ?? Path.Combine(AppContext.BaseDirectory, PromptsDirectory), subPath ?? "");
 
     public string ResolveMemoryPath(string? subPath = null) =>
-        Path.Combine(AppContext.BaseDirectory, MemoryDirectory, subPath ?? "");
+        Path.Combine(Environment.GetEnvironmentVariable("LTAI_MEMORY_DIR") ?? Path.Combine(AppContext.BaseDirectory, MemoryDirectory), subPath ?? "");
 
     public string ResolveModelsPath(string? subPath = null) =>
-        Path.Combine(AppContext.BaseDirectory, ModelsDirectory, subPath ?? "");
+        Path.Combine(Environment.GetEnvironmentVariable("LTAI_MODELS_DIR") ?? Path.Combine(AppContext.BaseDirectory, ModelsDirectory), subPath ?? "");
 
     [JsonPropertyName("integration_urls")]
     public IntegrationUrlsConfig IntegrationUrls { get; init; } = new();

@@ -77,13 +77,19 @@ public sealed class OnnxParallelEngine : IDisposable
 
         await Task.WhenAll(tasks.Where(t => t != null).Cast<Task>()).ConfigureAwait(false);
 
+        var intent = intentTask != null ? await intentTask.ConfigureAwait(false) : HeuristicIntent(query);
+        var entities = entityTask != null ? await entityTask.ConfigureAwait(false) : new List<string>();
+        var (sentiment, sentimentScore) = sentimentTask != null
+            ? await sentimentTask.ConfigureAwait(false)
+            : (HeuristicSentiment(query), 0.5f);
+
         var result = new ParallelInferenceResult
         {
-            Intent = intentTask?.Result ?? HeuristicIntent(query),
+            Intent = intent,
             IntentConfidence = 0.7f,
-            Entities = entityTask?.Result ?? new List<string>(),
-            Sentiment = sentimentTask?.Result.Item1 ?? HeuristicSentiment(query),
-            SentimentScore = sentimentTask?.Result.Item2 ?? 0.5f,
+            Entities = entities,
+            Sentiment = sentiment,
+            SentimentScore = sentimentScore,
             TotalInferenceMs = sw.ElapsedMilliseconds
         };
 

@@ -24,7 +24,7 @@ public static class EntryPoint
 {
     public static async Task RunAsync(string[] args)
     {
-        var configPath = Path.Combine(AppContext.BaseDirectory, "appsettings.json");
+        var configPath = Path.Combine(OptionService.Get("paths.config") ?? AppContext.BaseDirectory, "appsettings.json");
         var status = FirstRunDetector.Check(configPath);
         if (status.IsFirstRun)
         {

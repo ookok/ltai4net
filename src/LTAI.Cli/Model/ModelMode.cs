@@ -8,6 +8,7 @@ using System.Text;
 using System.Threading.Tasks;
 using LTAI.Core.Governors;
 using LTAI.Core.Setup;
+using LTAI.Knowledge.Core;
 
 namespace LTAI.Cli.Model;
 
@@ -17,6 +18,8 @@ internal static class ModelMode
     {
         get
         {
+            var configured = OptionService.Get("paths.models");
+            if (configured != null) return configured;
             var baseDir = AppContext.BaseDirectory;
             var rootDir = FindRootDirectory(baseDir, "models");
             if (rootDir != null)
@@ -217,12 +220,13 @@ internal static class ModelMode
         Console.WriteLine();
 
         // 清除 local_llm.json 等配置
+        var configDir = OptionService.Get("paths.config") ?? AppContext.BaseDirectory;
         var configFiles = new[]
         {
-            Path.Combine(AppContext.BaseDirectory, "local_llm.json"),
-            Path.Combine(AppContext.BaseDirectory, "local_l0.json"),
-            Path.Combine(AppContext.BaseDirectory, "local_l1.json"),
-            Path.Combine(AppContext.BaseDirectory, "local_l2.json")
+            Path.Combine(configDir, "local_llm.json"),
+            Path.Combine(configDir, "local_l0.json"),
+            Path.Combine(configDir, "local_l1.json"),
+            Path.Combine(configDir, "local_l2.json")
         };
         foreach (var cf in configFiles)
         {
@@ -239,7 +243,7 @@ internal static class ModelMode
             Console.WriteLine("🔄 Restarting setup wizard...");
             Console.WriteLine();
 
-            var configPath = Path.Combine(AppContext.BaseDirectory, "appsettings.json");
+            var configPath = Path.Combine(OptionService.Get("paths.config") ?? AppContext.BaseDirectory, "appsettings.json");
             var wizard = new InteractiveSetupWizard(configPath);
             Task.Run(() => wizard.RunAsync()).GetAwaiter().GetResult();
         }

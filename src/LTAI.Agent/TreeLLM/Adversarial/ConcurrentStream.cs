@@ -287,7 +287,7 @@ public sealed class ConcurrentStream
 
         if (flashTask.IsCompletedSuccessfully)
         {
-            flashOutput = flashTask.Result;
+            flashOutput = await flashTask.ConfigureAwait(false);
             flashLatency = flashSw.ElapsedMilliseconds;
         }
         else
@@ -304,7 +304,7 @@ public sealed class ConcurrentStream
 
         if (proTask.IsCompletedSuccessfully)
         {
-            proOutput = proTask.Result;
+            proOutput = await proTask.ConfigureAwait(false);
             proLatency = proSw.ElapsedMilliseconds;
         }
         else

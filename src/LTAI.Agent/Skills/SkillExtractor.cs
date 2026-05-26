@@ -18,6 +18,7 @@ public sealed class SkillExtractor
     private readonly IChatClient _llm;
     private readonly ILogger<SkillExtractor> _logger;
     private readonly string _skillsRoot;
+    private readonly object _lock = new();
     private readonly Dictionary<string, (int Successes, List<string> ToolSequence, string Query, string Response)> _pendingExtractions = new();
 
     private int MinSuccessesForL0 => int.TryParse(OptionService.Get("min_successes_for_l0"), out var v) ? v : 3;
@@ -38,16 +39,21 @@ public sealed class SkillExtractor
 
     public void RecordSuccess(string patternKey, List<string> toolSequence, string query, string response)
     {
-        if (_pendingExtractions.TryGetValue(patternKey, out var entry))
+        int successes;
+        lock (_lock)
         {
-            _pendingExtractions[patternKey] = (entry.Successes + 1, toolSequence, query, response);
-        }
-        else
-        {
-            _pendingExtractions[patternKey] = (1, toolSequence, query, response);
+            if (_pendingExtractions.TryGetValue(patternKey, out var entry))
+            {
+                successes = entry.Successes + 1;
+                _pendingExtractions[patternKey] = (successes, toolSequence, query, response);
+            }
+            else
+            {
+                successes = 1;
+                _pendingExtractions[patternKey] = (1, toolSequence, query, response);
+            }
         }
 
-        var (successes, _, _, _) = _pendingExtractions[patternKey];
         var existing = _registry.Get(patternKey);
 
         if (existing == null && successes >= MinSuccessesForL0)
@@ -55,20 +61,18 @@ public sealed class SkillExtractor
             _logger.LogInformation("SkillExtractor: {Pattern} reached {Count} successes — triggering L0 skill creation",
                 patternKey, successes);
 
-            var capturedQuery = query;
-            var capturedResponse = response;
-            var capturedTools = toolSequence;
-            _ = ExtractAsync(patternKey, "general", CancellationToken.None)
-                .ContinueWith(t =>
+            _ = HandleAutoCreateL0Async(patternKey);
+
+            async Task HandleAutoCreateL0Async(string key)
+            {
+                var skill = await ExtractAsync(key, "general", CancellationToken.None).ConfigureAwait(false);
+                if (skill != null)
                 {
-                    if (t is { IsCompletedSuccessfully: true, Result: not null })
-                    {
-                        _registry.Register(t.Result);
-                        _pendingExtractions.Remove(patternKey, out _);
-                        _logger.LogInformation("SkillExtractor: auto-created L0 skill '{Name}'",
-                            t.Result.Name);
-                    }
-                });
+                    _registry.Register(skill);
+                    _pendingExtractions.Remove(key, out _);
+                    _logger.LogInformation("SkillExtractor: auto-created L0 skill '{Name}'", skill.Name);
+                }
+            }
         }
         else if (existing != null)
         {
@@ -122,8 +126,12 @@ public sealed class SkillExtractor
 
     public async Task<Skill?> ExtractAsync(string patternKey, string domain, CancellationToken ct = default)
     {
-        if (!_pendingExtractions.TryGetValue(patternKey, out var entry))
-            return null;
+        (int Successes, List<string> ToolSequence, string Query, string Response) entry;
+        lock (_lock)
+        {
+            if (!_pendingExtractions.TryGetValue(patternKey, out entry))
+                return null;
+        }
 
         if (entry.Successes < MinSuccessesForL0)
             return null;
@@ -136,19 +144,24 @@ public sealed class SkillExtractor
 
     public async Task<List<Skill>> ExtractAllReadyAsync(CancellationToken ct = default)
     {
-        var ready = _pendingExtractions
-            .Where(kv => kv.Value.Successes >= MinSuccessesForL0)
-            .Where(kv => _registry.Get(kv.Key) == null)
-            .ToList();
+        List<string> readyKeys;
+        lock (_lock)
+        {
+            readyKeys = _pendingExtractions
+                .Where(kv => kv.Value.Successes >= MinSuccessesForL0)
+                .Where(kv => _registry.Get(kv.Key) == null)
+                .Select(kv => kv.Key)
+                .ToList();
+        }
 
         var extracted = new List<Skill>();
-        foreach (var (key, _) in ready)
+        foreach (var key in readyKeys)
         {
             var skill = await ExtractAsync(key, "general", ct).ConfigureAwait(false);
             if (skill != null)
             {
                 extracted.Add(skill);
-                _pendingExtractions.Remove(key, out _);
+                lock (_lock) _pendingExtractions.Remove(key, out _);
             }
         }
 

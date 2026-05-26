@@ -92,7 +92,7 @@ public static class ServiceCollectionExtensions
             return new LTAI.Knowledge.Core.KnowledgeGraph(logger, dataPath);
         });
 
-        var synapticDir = System.IO.Path.Combine(AppContext.BaseDirectory, "synaptic");
+        var synapticDir = OptionService.Get("paths.synaptic") ?? System.IO.Path.Combine(AppContext.BaseDirectory, "synaptic");
         services.AddSingleton<DualMemoryStore>(sp =>
         {
             var logger = sp.GetService<ILogger<DualMemoryStore>>();
@@ -258,7 +258,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ModelAutoDownloader>(sp =>
         {
             var logger = sp.GetService<ILogger<ModelAutoDownloader>>();
-            var modelsRoot = Path.Combine(AppContext.BaseDirectory, OptionService.Get("ModelsDirectory") ?? "models");
+            var modelsRoot = OptionService.Get("paths.models") ?? Path.Combine(AppContext.BaseDirectory, OptionService.Get("ModelsDirectory") ?? "models");
             return new ModelAutoDownloader(modelsRoot, logger);
         });
 
@@ -542,7 +542,7 @@ public static class ServiceCollectionExtensions
             var modelsDir = OptionService.Get("ModelsDirectory") ?? "models";
             var modelDir = Path.Combine(synapticDir, modelsDir, "local_llm");
             
-            var userConfigPath = Path.Combine(AppContext.BaseDirectory, "local_llm.json");
+            var userConfigPath = Path.Combine(OptionService.Get("paths.config") ?? AppContext.BaseDirectory, "local_llm.json");
             string? preferredEngine = null;
             if (System.IO.File.Exists(userConfigPath))
             {

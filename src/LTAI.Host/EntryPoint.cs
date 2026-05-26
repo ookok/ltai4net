@@ -43,9 +43,9 @@ public static class EntryPoint
 
         var secretsPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Desktop), "secrets_export.json");
         SecretVault.LoadFromJsonFile(secretsPath);
-        SecretVault.LoadFromJsonFile(Path.Combine(AppContext.BaseDirectory, "secrets_export.json"));
+        SecretVault.LoadFromJsonFile(Path.Combine(OptionService.Get("paths.config") ?? AppContext.BaseDirectory, "secrets_export.json"));
 
-        var configPath = Path.Combine(AppContext.BaseDirectory, "appsettings.json");
+        var configPath = Path.Combine(OptionService.Get("paths.config") ?? AppContext.BaseDirectory, "appsettings.json");
         var status = FirstRunDetector.Check(configPath);
         if (status.IsFirstRun)
         {

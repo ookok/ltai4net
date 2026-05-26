@@ -82,7 +82,8 @@ internal static class MdToolBridge
             if (result is Task task)
             {
                 await task.ConfigureAwait(false);
-                result = ((dynamic)task).Result;
+                var resultProp = task.GetType().GetProperty("Result");
+                result = resultProp?.GetValue(task);
             }
 
             if (result == null)

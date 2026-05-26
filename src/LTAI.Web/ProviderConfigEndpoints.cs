@@ -74,7 +74,7 @@ public static class ProviderConfigEndpoints
         // Run setup wizard endpoint
         api.MapPost("/setup", async () =>
         {
-            var configPath = Path.Combine(AppContext.BaseDirectory, "appsettings.json");
+            var configPath = Path.Combine(OptionService.Get("paths.config") ?? AppContext.BaseDirectory, "appsettings.json");
             var wizard = new InteractiveSetupWizard(configPath);
             await wizard.RunAsync().ConfigureAwait(false);
             return Results.Ok(new { status = "setup_complete" });

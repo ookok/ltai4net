@@ -41,7 +41,7 @@ public static class EntryPoint
 
         Console.Title = "LTAI Dev Console";
 
-        var configPath = Path.Combine(AppContext.BaseDirectory, "appsettings.json");
+        var configPath = Path.Combine(OptionService.Get("paths.config") ?? AppContext.BaseDirectory, "appsettings.json");
         var status = FirstRunDetector.Check(configPath);
         if (status.IsFirstRun)
         {
@@ -55,7 +55,7 @@ public static class EntryPoint
 
         var ltaiOptions = new LTAIOptions();
         var config = new ConfigurationBuilder()
-            .SetBasePath(AppContext.BaseDirectory)
+            .SetBasePath(OptionService.Get("paths.config") ?? AppContext.BaseDirectory)
             .AddJsonFile("appsettings.json", optional: true)
             .Build();
         config.GetSection(LTAIOptions.SectionName).Bind(ltaiOptions);
