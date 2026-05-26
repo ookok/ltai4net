@@ -140,19 +140,9 @@ public class Program
     private static void ScanEntryPoints()
     {
         var entryTypes = new List<Type>();
-        foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
-        {
-            if (assembly.IsDynamic) continue;
-            try
-            {
-                foreach (var type in assembly.GetTypes())
-                {
-                    if (typeof(ILTAIEntryPoint).IsAssignableFrom(type) && !type.IsInterface && !type.IsAbstract)
-                        entryTypes.Add(type);
-                }
-            }
-            catch { }
-        }
+
+        ScanLoadedAssemblies(entryTypes);
+        LoadPluginAssemblies(entryTypes);
 
         foreach (var type in entryTypes)
         {
@@ -169,6 +159,43 @@ public class Program
                         }
                         catch { }
                     }
+                }
+            }
+            catch { }
+        }
+    }
+
+    private static void ScanLoadedAssemblies(List<Type> entryTypes)
+    {
+        foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+        {
+            if (assembly.IsDynamic) continue;
+            try
+            {
+                foreach (var type in assembly.GetTypes())
+                {
+                    if (typeof(ILTAIEntryPoint).IsAssignableFrom(type) && !type.IsInterface && !type.IsAbstract)
+                        entryTypes.Add(type);
+                }
+            }
+            catch { }
+        }
+    }
+
+    private static void LoadPluginAssemblies(List<Type> entryTypes)
+    {
+        var pluginsDir = Path.Combine(AppContext.BaseDirectory, "plugins");
+        if (!Directory.Exists(pluginsDir)) return;
+
+        foreach (var dll in Directory.GetFiles(pluginsDir, "*.dll"))
+        {
+            try
+            {
+                var assembly = Assembly.LoadFrom(dll);
+                foreach (var type in assembly.GetTypes())
+                {
+                    if (typeof(ILTAIEntryPoint).IsAssignableFrom(type) && !type.IsInterface && !type.IsAbstract)
+                        entryTypes.Add(type);
                 }
             }
             catch { }

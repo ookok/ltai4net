@@ -36,7 +36,7 @@ public sealed class KnowledgeBase
 
         if (indexVector)
         {
-            Task.Run(async () =>
+            _ = Task.Run(async () =>
             {
                 try
                 {

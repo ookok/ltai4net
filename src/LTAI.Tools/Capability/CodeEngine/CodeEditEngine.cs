@@ -439,12 +439,6 @@ public sealed class CodeEditEngine
         return (errors, warnings);
     }
 
-    [Obsolete("Use ValidateSyntaxAsync instead to avoid sync-over-async deadlocks")]
-    private (List<string> Errors, List<string> Warnings) ValidateSyntax(string filePath)
-    {
-        return ValidateSyntaxAsync(filePath).GetAwaiter().GetResult();
-    }
-
     public void CleanupSnapshots(int keepLast = 50)
     {
         try

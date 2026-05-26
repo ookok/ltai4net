@@ -1,3 +1,5 @@
+using LTAI.Infra.Network;
+using LTAI.Infra.Network.Interfaces;
 using LTAI.Knowledge.Core;
 using LTAI.Models;
 using Microsoft.Extensions.Hosting;
@@ -9,6 +11,8 @@ public sealed class SkillSyncService : BackgroundService
 {
     private readonly SkillPublisher _publisher;
     private readonly SkillRegistry _registry;
+    private readonly IP2PNode? _p2pNode;
+    private readonly GossipDiscovery? _gossipDiscovery;
     private readonly ILogger<SkillSyncService> _logger;
     private readonly string _skillsRoot;
 
@@ -19,12 +23,16 @@ public sealed class SkillSyncService : BackgroundService
         SkillPublisher publisher,
         SkillRegistry registry,
         ILogger<SkillSyncService> logger,
+        IP2PNode? p2pNode = null,
+        GossipDiscovery? gossipDiscovery = null,
         string? skillsRoot = null)
     {
         _publisher = publisher;
         _registry = registry;
         _logger = logger;
         _skillsRoot = skillsRoot ?? OptionService.Get("paths.skills") ?? Path.Combine(AppContext.BaseDirectory, "skills");
+        _p2pNode = p2pNode;
+        _gossipDiscovery = gossipDiscovery;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -58,8 +66,33 @@ public sealed class SkillSyncService : BackgroundService
         {
             try
             {
+                if (_gossipDiscovery != null)
+                {
+                    _logger.LogDebug("Running gossip cycle");
+                    await _gossipDiscovery.RunGossipCycleAsync(ct).ConfigureAwait(false);
+                }
+
+                if (_p2pNode != null)
+                {
+                    var knownPeers = await _p2pNode.GetKnownPeersAsync(ct).ConfigureAwait(false);
+                    foreach (var peer in knownPeers)
+                    {
+                        if (string.IsNullOrEmpty(peer.Address)) continue;
+                        var peerAddr = $"{peer.Address}:{peer.Port}";
+                        _logger.LogDebug("Exchanging skills with peer {Peer}", peerAddr);
+                        try
+                        {
+                            var (imported, skipped, errors) = await _publisher.SyncWithPeerAsync(peerAddr, ct).ConfigureAwait(false);
+                            if (imported > 0 || skipped > 0)
+                                _logger.LogInformation("Skill sync with {Peer}: imported={Imported} skipped={Skipped} errors={Errors}",
+                                    peerAddr, imported, skipped, errors);
+                        }
+                        catch (Exception ex) { _logger.LogDebug(ex, "Skill sync with {Peer} failed", peerAddr); }
+                    }
+                }
+
                 var manifest = await _publisher.GetLocalSkillManifestAsync(ct).ConfigureAwait(false);
-                _logger.LogDebug("Peer exchange cycle: {Count} local skills", manifest.Count);
+                _logger.LogDebug("Peer exchange cycle complete: {Count} local skills", manifest.Count);
             }
             catch (OperationCanceledException) { break; }
             catch (Exception ex) { _logger.LogWarning(ex, "Peer exchange cycle failed"); }

@@ -1,4 +1,6 @@
 using System.Collections.Concurrent;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using LTAI.Knowledge.Core.Models;
 using LTAI.Models;
 using Microsoft.Extensions.Logging;
@@ -229,11 +231,12 @@ public sealed class MemoryFilesService
             var stats = _knowledgeGraph.GetStats();
             if (stats is not Dictionary<string, object> dict) return MemoryMode.Files;
 
-            if (dict.TryGetValue("predictability", out var predObj))
+            if (dict.TryGetValue("predictability", out var predObj) && predObj != null)
             {
-                var pred = (dynamic)predObj;
-                double pi = (double)pred.pi;
-                if (pi > 0.6)
+                var json = JsonSerializer.Serialize(predObj);
+                var snapshot = JsonSerializer.Deserialize<PredictabilitySnapshot>(json,
+                    new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                if (snapshot?.Pi > 0.6)
                 {
                     _mode = _files.Count > 0 ? MemoryMode.Files : MemoryMode.Classic;
                 }
@@ -352,4 +355,8 @@ public sealed class MemoryFilesService
         var sanitized = new string(name.Select(c => invalid.Contains(c) ? '_' : c).ToArray());
         return sanitized.Length > 50 ? sanitized[..50] : sanitized;
     }
+
+    private sealed record PredictabilitySnapshot(
+        [property: JsonPropertyName("pi")] double Pi,
+        [property: JsonPropertyName("reliability")] string? Reliability);
 }

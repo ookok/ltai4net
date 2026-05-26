@@ -348,7 +348,7 @@ public static class ServiceCollectionExtensions
         {
             var logger = sp.GetService<ILogger<PromptTemplateStore>>();
             var promptsName = OptionService.Get("PromptsDirectory") ?? "prompts";
-            var dir = Directory.GetCurrentDirectory();
+            var dir = OptionService.Get("LTAI_WORKSPACE") ?? Directory.GetCurrentDirectory();
             string? promptsDir = null;
             for (int i = 0; i < 5 && dir != null; i++)
             {

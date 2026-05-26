@@ -117,7 +117,7 @@ public sealed class UnifiedRewardModel : IRewardModel
 
     public float EvaluateSync(RewardEvaluationRequest request)
     {
-        var signal = EvaluateAsync(request).GetAwaiter().GetResult();
+        var signal = Task.Run(() => EvaluateAsync(request)).GetAwaiter().GetResult();
         return signal.OverallScore;
     }
 

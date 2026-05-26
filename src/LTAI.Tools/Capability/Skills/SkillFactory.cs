@@ -21,7 +21,7 @@ public sealed class SkillFactory
 
     public void DiscoverSkills()
     {
-        var skillsDir = Path.Combine(Directory.GetCurrentDirectory(), ".livingtree", "skills");
+        var skillsDir = Path.Combine(Environment.GetEnvironmentVariable("LTAI_WORKSPACE") ?? Directory.GetCurrentDirectory(), ".livingtree", "skills");
         if (!Directory.Exists(skillsDir)) return;
 
         foreach (var file in Directory.GetFiles(skillsDir, "*.json"))

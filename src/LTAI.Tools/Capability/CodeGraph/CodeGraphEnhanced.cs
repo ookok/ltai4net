@@ -149,7 +149,7 @@ public sealed class CodeGraphEnhanced : IDisposable
         if (parser == null) return;
 
         _languages.Add(parser.LanguageName);
-        var symbols = parser.ParseFileAsync(file, content).GetAwaiter().GetResult();
+        var symbols = Task.Run(() => parser.ParseFileAsync(file, content)).GetAwaiter().GetResult();
         var relativePath = global::System.IO.Path.GetRelativePath(_rootDir, file).Replace('\\', '/');
 
         foreach (var symbol in symbols)

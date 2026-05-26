@@ -1,5 +1,7 @@
 using System.Diagnostics;
 using System.IO.Compression;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using LTAI.Knowledge.Core;
 using LTAI.Models;
@@ -249,6 +251,14 @@ public sealed class SkillPublisher : ISkillExchangeProvider
             var skill = await _loader.LoadAsync(skillFile, ct).ConfigureAwait(false);
             if (skill == null) return null;
 
+            var content = await File.ReadAllTextAsync(skillFile, ct).ConfigureAwait(false);
+            var computedHash = ComputeSha256(content);
+
+            var existing = _registry.Get(skill.Name);
+            if (existing?.ContentHash != null && !string.Equals(computedHash, existing.ContentHash, StringComparison.OrdinalIgnoreCase))
+                _logger.LogWarning("Content hash mismatch importing {Name}: existing={Existing} imported={Imported}",
+                    skill.Name, existing.ContentHash, computedHash);
+
             var destDir = Path.Combine(_skillsRoot, skill.LayerDir);
             Directory.CreateDirectory(destDir);
 
@@ -274,7 +284,7 @@ public sealed class SkillPublisher : ISkillExchangeProvider
                 }
             }
 
-            skill = skill with { SourceFile = destFile };
+            skill = skill with { SourceFile = destFile, ContentHash = computedHash };
             _registry.Register(skill);
             _logger.LogInformation("Imported skill {Name} from package {Path}", skill.Name, zipPath);
             return skill;
@@ -341,6 +351,15 @@ public sealed class SkillPublisher : ISkillExchangeProvider
                     }
 
                     var content = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+                    var computedHash = ComputeSha256(content);
+
+                    if (local != null && local.ContentHash != null)
+                    {
+                        if (!string.Equals(computedHash, local.ContentHash, StringComparison.OrdinalIgnoreCase))
+                            _logger.LogWarning("Content hash mismatch for {Name}: existing={Existing} remote={Remote}",
+                                name, local.ContentHash, computedHash);
+                    }
+
                     var tempFile = Path.Combine(Path.GetTempPath(), $"ltai_peer_{Guid.NewGuid():N}.md");
                     try
                     {
@@ -353,10 +372,11 @@ public sealed class SkillPublisher : ISkillExchangeProvider
                         var destFile = Path.Combine(destDir, $"{skill.Name}.md");
                         await File.WriteAllTextAsync(destFile, content, ct).ConfigureAwait(false);
 
-                        skill = skill with { SourceFile = destFile };
+                        skill = skill with { SourceFile = destFile, ContentHash = computedHash };
                         _registry.Register(skill);
                         imported++;
-                        _logger.LogInformation("Synced skill {Name} v{Version} from peer {Peer}", skill.Name, skill.Version, peerAddress);
+                        _logger.LogInformation("Synced skill {Name} v{Version} hash={Hash} from peer {Peer}",
+                            skill.Name, skill.Version, computedHash[..8], peerAddress);
                     }
                     finally
                     {
@@ -386,6 +406,15 @@ public sealed class SkillPublisher : ISkillExchangeProvider
         return _registry.All.Values
             .Select(s => (s.Name, s.Version, s.Domain, s.Description ?? ""))
             .ToList();
+    }
+
+    public async Task<string?> GetSkillContentAsync(string skillName, CancellationToken ct)
+    {
+        var skill = _registry.Get(skillName);
+        if (skill?.SourceFile == null || !File.Exists(skill.SourceFile))
+            return null;
+
+        return await File.ReadAllTextAsync(skill.SourceFile, ct).ConfigureAwait(false);
     }
 
     private static string ApplyToken(string repoUrl, string? token)
@@ -451,6 +480,12 @@ public sealed class SkillPublisher : ISkillExchangeProvider
         if (Version.TryParse(remoteVersion, out var r) && Version.TryParse(localVersion, out var l))
             return r > l;
         return string.Compare(remoteVersion, localVersion, StringComparison.OrdinalIgnoreCase) > 0;
+    }
+
+    private static string ComputeSha256(string content)
+    {
+        var hashBytes = SHA256.HashData(Encoding.UTF8.GetBytes(content));
+        return Convert.ToHexStringLower(hashBytes);
     }
 
     private sealed record SkillManifestEntry

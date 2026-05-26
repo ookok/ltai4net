@@ -150,7 +150,6 @@ public sealed class LTAIAgent : AIAgent
         _inputFilter?.Analyze(userMessages.Last());
         _logger.LogInformation("LTAI agent (stream): {Query}", query[..Math.Min(query.Length, 200)]);
 
-        var useWorkflow = options?.AdditionalProperties?.TryGetValue("useWorkflow", out var wf) == true && wf is true;
         var forceChat = options?.AdditionalProperties?.TryGetValue("forceChat", out var fc) == true && fc is true;
         bool shouldUseCoordinator = !forceChat && _coordinator != null && ShouldUseCoordinator(query);
 
@@ -200,26 +199,6 @@ public sealed class LTAIAgent : AIAgent
 
         if (streamError != null)
             yield return new AgentResponseUpdate(ChatRole.Assistant, $"Error: {streamError}");
-    }
-
-    private async IAsyncEnumerable<AgentResponseUpdate> StreamWorkflowAsync(string query, [EnumeratorCancellation] CancellationToken ct)
-    {
-        await foreach (var evt in GovernorWorkflow.ExecuteWorkflowStreamingAsync(_livingTree, query, ct))
-        {
-            switch (evt)
-            {
-                case ProgressEvent progress:
-                    yield return new AgentResponseUpdate(ChatRole.Assistant, $"\n[{progress.GetType().Name}]\n");
-                    break;
-                case WorkflowOutputEvent output when output.Data is GovernorResult gr:
-                    var response = gr.IsBlocked ? $"[Blocked: {gr.BlockReason}]" : gr.Response;
-                    yield return new AgentResponseUpdate(ChatRole.Assistant, response);
-                    break;
-                case WorkflowErrorEvent err:
-                    yield return new AgentResponseUpdate(ChatRole.Assistant, $"\n[Error: {err.Exception?.Message ?? "Unknown"}]\n");
-                    break;
-            }
-        }
     }
 
     protected override ValueTask<AgentSession> CreateSessionCoreAsync(CancellationToken cancellationToken = default)

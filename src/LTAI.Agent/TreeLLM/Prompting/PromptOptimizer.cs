@@ -1,3 +1,5 @@
+using LTAI.Knowledge.Core;
+
 namespace LTAI.Agent.Prompting;
 
 public sealed class RoleTemplate
@@ -132,7 +134,7 @@ public sealed class PromptOptimizer
         foreach (System.Text.RegularExpressions.Match m in templateMatches)
         {
             var key = m.Groups[1].Value;
-            var envVal = Environment.GetEnvironmentVariable(key);
+            var envVal = OptionService.Get(key) ?? Environment.GetEnvironmentVariable(key);
             if (!string.IsNullOrEmpty(envVal))
                 vars[key] = envVal;
         }

@@ -115,7 +115,7 @@ public static class ServiceCollectionExtensions
         JinaEmbeddingConfig config;
         if (!File.Exists(Path.Combine(modelDir, "model.onnx")))
         {
-            config = JinaModelDownloader.DownloadModelAsync(cacheDir, variant).GetAwaiter().GetResult();
+            config = Task.Run(() => JinaModelDownloader.DownloadModelAsync(cacheDir, variant)).GetAwaiter().GetResult();
         }
         else
         {
@@ -135,7 +135,7 @@ public static class ServiceCollectionExtensions
 #pragma warning disable CS0618
             var logger = sp.GetService<ILogger<JinaEmbeddingBackend>>();
             var backend = new JinaEmbeddingBackend(config, logger);
-            backend.InitializeAsync().GetAwaiter().GetResult();
+            Task.Run(() => backend.InitializeAsync()).GetAwaiter().GetResult();
             return backend;
         });
 #pragma warning restore CS0618
@@ -302,7 +302,7 @@ public static class ServiceCollectionExtensions
         // Markdown-based knowledge graph (lat.md folder)
         services.AddSingleton(sp =>
         {
-            var rootPath = Directory.GetCurrentDirectory();
+            var rootPath = OptionService.Get("LTAI_WORKSPACE") ?? Directory.GetCurrentDirectory();
             var embedding = sp.GetService<IEmbeddingBackend>();
             var vectorStore = sp.GetService<IVectorStore>();
             var graph = new MarkdownKnowledgeGraph(rootPath, embedding, vectorStore);

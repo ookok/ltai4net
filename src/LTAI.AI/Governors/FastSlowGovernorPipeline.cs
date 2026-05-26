@@ -182,7 +182,7 @@ public sealed class FastSlowGovernorPipeline : IDisposable
             cellId, invalidationEvent.AffectedPlanIds.Count, reason);
 
         // 触发重规划 (异步)
-        Task.Run(async () =>
+        _ = Task.Run(async () =>
         {
             try
             {

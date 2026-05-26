@@ -29,7 +29,18 @@ public static class ServiceCollectionExtensions
             return new PersistentMessageQueue(queuePath, logger);
         });
 
-        services.AddSingleton<IP2PNode, P2PNode>();
+        services.AddSingleton<P2PNode>(sp =>
+        {
+            var options = sp.GetRequiredService<IOptions<LTAIOptions>>();
+            var logger = sp.GetRequiredService<ILogger<P2PNode>>();
+            var httpFactory = sp.GetRequiredService<IHttpClientFactory>();
+            var queue = sp.GetRequiredService<PersistentMessageQueue>();
+            var skillExchange = sp.GetService<ISkillExchangeProvider>();
+            var node = new P2PNode(httpFactory, options, logger, queue);
+            node.SkillExchangeProvider = skillExchange;
+            return node;
+        });
+        services.AddSingleton<IP2PNode>(sp => sp.GetRequiredService<P2PNode>());
         services.AddSingleton<ServiceDiscovery>();
         services.AddSingleton<SmartDnsResolver>();
 
@@ -50,11 +61,23 @@ public static class ServiceCollectionExtensions
 
         services.AddSingleton<GossipDiscovery>(sp =>
         {
-            var p2pNode = sp.GetRequiredService<IP2PNode>();
+            var p2pNode = (P2PNode)sp.GetRequiredService<IP2PNode>();
             var httpFactory = sp.GetRequiredService<IHttpClientFactory>();
             var logger = sp.GetRequiredService<ILogger<GossipDiscovery>>();
             var skillExchange = sp.GetService<ISkillExchangeProvider>();
-            return new GossipDiscovery(p2pNode, httpFactory, logger, skillExchange);
+            var gossipDiscovery = new GossipDiscovery(p2pNode, httpFactory, logger, skillExchange);
+
+            p2pNode.GossipReceiver = request =>
+            {
+                var peers = request.Peers.Select(p => (
+                    !string.IsNullOrEmpty(p.Id) ? p.Id : $"{p.Address}:{p.Port}",
+                    p.Address,
+                    p.Port
+                )).ToList();
+                gossipDiscovery.ReceiveGossip(request.From, peers);
+            };
+
+            return gossipDiscovery;
         });
 
         return services;

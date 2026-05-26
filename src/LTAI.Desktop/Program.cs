@@ -28,11 +28,11 @@ public static class Program
         ServiceLocator.SetProvider(provider);
 
         var toolRegistry = provider.GetRequiredService<AIToolRegistry>();
-        toolRegistry.RegisterAllToolCategoriesAsync().GetAwaiter().GetResult();
-        provider.RegisterMarkdownToolsAsync(toolRegistry).GetAwaiter().GetResult();
+        Task.Run(() => toolRegistry.RegisterAllToolCategoriesAsync()).GetAwaiter().GetResult();
+        Task.Run(() => provider.RegisterMarkdownToolsAsync(toolRegistry)).GetAwaiter().GetResult();
 
         var lts = provider.GetRequiredService<ILivingTreeSystem>();
-        lts.InitializeAsync().GetAwaiter().GetResult();
+        Task.Run(() => lts.InitializeAsync()).GetAwaiter().GetResult();
 
         BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
     }

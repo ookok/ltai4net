@@ -103,7 +103,7 @@ Propose a fix. Return JSON: {{""improvement"": ""..."" , ""fixed_code"": ""...""
             var improvement = json.TryGetProperty("improvement", out var imp) ? imp.GetString() ?? "" : "";
             var fixedCode = json.TryGetProperty("fixed_code", out var fc) ? fc.GetString() ?? originalCode : originalCode;
 
-            var hotfixDir = Path.Combine(Directory.GetCurrentDirectory(), ".livingtree", "hotfixes");
+            var hotfixDir = Path.Combine(Environment.GetEnvironmentVariable("LTAI_WORKSPACE") ?? Directory.GetCurrentDirectory(), ".livingtree", "hotfixes");
             Directory.CreateDirectory(hotfixDir);
             var hotfixPath = Path.Combine(hotfixDir, $"{SantizeFileName(toolName)}_{DateTime.UtcNow:yyyyMMdd_HHmmss}.json");
             File.WriteAllText(hotfixPath, JsonSerializer.Serialize(new { toolName, originalCode, fixedCode, improvement },

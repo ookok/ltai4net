@@ -7,13 +7,14 @@ using LTAI.AI.Interfaces;
 using LTAI.Core.Configuration;
 using LTAI.Core.System;
 using LTAI.DNA;
+using LTAI.Knowledge.Core;
 using LTAI.Tools.CodeEngine;
 using LTAI.Tools.Reasoning;
 using Microsoft.Extensions.Options;
 
 namespace LTAI.TUI;
 
-public enum TuiView { Dashboard, Chat, Code, Git, Help, Session, LLMConfig, Models, Service, Pipeline, Editor }
+public enum TuiView { Dashboard, Chat, Code, Git, Help, Session, LLMConfig, Models, Service, Pipeline, Editor, ComposeTool }
 
 public enum TuiTheme { Dark, Light, HighContrast }
 
@@ -38,8 +39,10 @@ public sealed class TuiApp
     private readonly IOptions<LTAIOptions>? _configOptions;
     private readonly AgenticLoop? _agenticLoop;
     private readonly TuiEditor _editor;
+    private readonly ComposeToolView _composeView;
 
     private TuiView _currentView = TuiView.Dashboard;
+    private int _selectedComposeToolIndex = -1;
     private TuiTheme _theme = TuiTheme.Dark;
     private readonly string _projectRoot;
     private bool _running = true;
@@ -72,7 +75,7 @@ public sealed class TuiApp
         _modelMgr = modelMgr;
         _configOptions = options;
         _agenticLoop = agenticLoop;
-        _projectRoot = Directory.GetCurrentDirectory();
+        _projectRoot = OptionService.Get("LTAI_WORKSPACE") ?? Directory.GetCurrentDirectory();
         _llmConfig = new LLMConfigPanel(options);
         _session = new SessionTracker();
         _taskPulse = new TaskPulseRenderer();
@@ -84,6 +87,7 @@ public sealed class TuiApp
         _notify = new NotificationService();
         _search = new SessionSearch(_chatHistory);
         _editor = new TuiEditor();
+        _composeView = new ComposeToolView();
     }
 
     public async Task RunAsync()
@@ -132,6 +136,7 @@ public sealed class TuiApp
             case TuiView.Service: RenderServiceViewStub(); break;
             case TuiView.Pipeline: RenderPipelineView(); break;
             case TuiView.Editor: RenderEditorView(); break;
+            case TuiView.ComposeTool: RenderComposeView(); break;
         }
 
         AnsiConsole.Write(new Rule());
@@ -148,7 +153,7 @@ public sealed class TuiApp
         {
             TuiView.Dashboard => "Dashboard", TuiView.Chat => "Chat", TuiView.Code => "Code",
             TuiView.Git => "Git", TuiView.Help => "Help", TuiView.Session => "Session",
-            TuiView.LLMConfig => "LLM Config", TuiView.Models => "Models", TuiView.Service => "Service", TuiView.Pipeline => "Pipeline", TuiView.Editor => "Editor",
+            TuiView.LLMConfig => "LLM Config", TuiView.Models => "Models", TuiView.Service => "Service", TuiView.Pipeline => "Pipeline",             TuiView.Editor => "Editor", TuiView.ComposeTool => "Compose Tools",
             _ => ""
         };
         AnsiConsole.MarkupLine($"[grey]View: {name} | Session: {_session.SessionId} | Turns: {_session.TotalTurns} | Tokens: {_session.TotalTokens} | ? help | q quit[/]");
@@ -636,16 +641,17 @@ public sealed class TuiApp
 
         switch (key.Key)
         {
-            case ConsoleKey.D1 or ConsoleKey.NumPad1: _currentView = TuiView.Dashboard; break;
-            case ConsoleKey.D2 or ConsoleKey.NumPad2: _currentView = TuiView.Chat; break;
-            case ConsoleKey.D3 or ConsoleKey.NumPad3: _currentView = TuiView.Code; break;
-            case ConsoleKey.D4 or ConsoleKey.NumPad4: _currentView = TuiView.Git; break;
-            case ConsoleKey.D5 or ConsoleKey.NumPad5: _currentView = TuiView.Help; break;
-            case ConsoleKey.D6 or ConsoleKey.NumPad6: _currentView = TuiView.Session; break;
-            case ConsoleKey.D7 or ConsoleKey.NumPad7: _currentView = TuiView.LLMConfig; break;
-            case ConsoleKey.D8 or ConsoleKey.NumPad8: _currentView = TuiView.Models; break;
-            case ConsoleKey.D9 or ConsoleKey.NumPad9: _currentView = TuiView.Service; break;
+            case ConsoleKey.D1 or ConsoleKey.NumPad1: HandleNumKey(1); break;
+            case ConsoleKey.D2 or ConsoleKey.NumPad2: HandleNumKey(2); break;
+            case ConsoleKey.D3 or ConsoleKey.NumPad3: HandleNumKey(3); break;
+            case ConsoleKey.D4 or ConsoleKey.NumPad4: HandleNumKey(4); break;
+            case ConsoleKey.D5 or ConsoleKey.NumPad5: HandleNumKey(5); break;
+            case ConsoleKey.D6 or ConsoleKey.NumPad6: HandleNumKey(6); break;
+            case ConsoleKey.D7 or ConsoleKey.NumPad7: HandleNumKey(7); break;
+            case ConsoleKey.D8 or ConsoleKey.NumPad8: HandleNumKey(8); break;
+            case ConsoleKey.D9 or ConsoleKey.NumPad9: HandleNumKey(9); break;
             case ConsoleKey.D0 or ConsoleKey.NumPad0 or ConsoleKey.F10: _currentView = TuiView.Pipeline; break;
+            case ConsoleKey.F11: _currentView = TuiView.ComposeTool; _selectedComposeToolIndex = -1; break;
             case ConsoleKey.C when key.Modifiers == 0: _currentView = TuiView.Chat; break;
             case ConsoleKey.L when key.Modifiers == 0: _showLLMPanel = !_showLLMPanel; _currentView = _showLLMPanel ? TuiView.LLMConfig : _currentView; break;
             case ConsoleKey.T when key.Modifiers == 0: _innovation.ToggleThoughtChain(); break;
@@ -683,7 +689,33 @@ public sealed class TuiApp
             case ConsoleKey.R when _currentView == TuiView.Service: await ServiceActionAsync("restart"); break;
             case ConsoleKey.F when _currentView == TuiView.Models: await FilterModelsAsync(); break;
             case ConsoleKey.Y when _currentView == TuiView.Models: await SyncModelsAsync(); break;
+            case ConsoleKey.F when _currentView == TuiView.ComposeTool:
+                if (_selectedComposeToolIndex < 0) _selectedComposeToolIndex = 0; else _selectedComposeToolIndex = -1; break;
+            case ConsoleKey.Escape when _currentView == TuiView.ComposeTool && _selectedComposeToolIndex >= 0: _selectedComposeToolIndex = -1; break;
         }
+    }
+
+    private void HandleNumKey(int n)
+    {
+        if (_currentView == TuiView.ComposeTool)
+        {
+            _selectedComposeToolIndex = n - 1;
+            return;
+        }
+
+        _currentView = n switch
+        {
+            1 => TuiView.Dashboard,
+            2 => TuiView.Chat,
+            3 => TuiView.Code,
+            4 => TuiView.Git,
+            5 => TuiView.Help,
+            6 => TuiView.Session,
+            7 => TuiView.LLMConfig,
+            8 => TuiView.Models,
+            9 => TuiView.Service,
+            _ => _currentView
+        };
     }
 
     private async Task HandleChatInputAsync()
@@ -1088,5 +1120,24 @@ public sealed class TuiApp
                 await Task.Delay(800);
             }
         }
+    }
+
+    private void RenderComposeView()
+    {
+        if (_selectedComposeToolIndex >= 0 && _selectedComposeToolIndex < _composeView.ToolCount)
+        {
+            var tool = _composeView.GetTool(_selectedComposeToolIndex);
+            if (tool != null)
+            {
+                AnsiConsole.MarkupLine("[bold cyan]Compose Tool Flowchart[/] — f list | Esc back");
+                AnsiConsole.Write(new Rule());
+                AnsiConsole.Write(_composeView.RenderFlowChart(tool));
+                return;
+            }
+        }
+
+        AnsiConsole.MarkupLine("[bold cyan]Compose Tools[/] — 1-9 detail | f flowchart | Esc back");
+        AnsiConsole.Write(new Rule());
+        AnsiConsole.Write(_composeView.RenderAllComposeTools());
     }
 }

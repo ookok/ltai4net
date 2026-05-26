@@ -1,4 +1,5 @@
 using System.Text.Json;
+using LTAI.Knowledge.Core;
 
 namespace LTAI.Agent.Hosting;
 
@@ -122,8 +123,8 @@ public sealed class FoundryHostConfig
 
     public static FoundryHostConfig CreateDefault() => new()
     {
-        ProjectEndpoint = Environment.GetEnvironmentVariable("AZURE_AI_PROJECT_ENDPOINT") ?? "",
-        ModelDeploymentName = Environment.GetEnvironmentVariable("AZURE_AI_MODEL_DEPLOYMENT_NAME") ?? "gpt-5.4-mini"
+        ProjectEndpoint = OptionService.Get("AZURE_AI_PROJECT_ENDPOINT") ?? Environment.GetEnvironmentVariable("AZURE_AI_PROJECT_ENDPOINT") ?? "",
+        ModelDeploymentName = OptionService.Get("AZURE_AI_MODEL_DEPLOYMENT_NAME") ?? Environment.GetEnvironmentVariable("AZURE_AI_MODEL_DEPLOYMENT_NAME") ?? "gpt-5.4-mini"
     };
 
     public Dictionary<string, string> DeploymentChecklist => new()

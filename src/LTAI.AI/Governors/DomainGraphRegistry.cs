@@ -92,7 +92,7 @@ public sealed class DomainGraphRegistry : IDisposable
             if (registryInfo != null && registryInfo.Source != null)
             {
                 _logger.LogDebug("Triggering lazy load for domain: {Domain}", domain);
-                _ = Task.Run(() => LoadGraphAsync(domain));
+                _ = Task.Run(async () => await LoadGraphAsync(domain));
             }
         }
 

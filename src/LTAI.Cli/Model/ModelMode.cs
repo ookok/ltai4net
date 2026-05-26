@@ -241,7 +241,7 @@ internal static class ModelMode
 
             var configPath = Path.Combine(AppContext.BaseDirectory, "appsettings.json");
             var wizard = new InteractiveSetupWizard(configPath);
-            wizard.RunAsync().GetAwaiter().GetResult();
+            Task.Run(() => wizard.RunAsync()).GetAwaiter().GetResult();
         }
         else
         {

@@ -8,7 +8,9 @@ public static class ToolCallRepairer
 {
     private static readonly ConcurrentDictionary<string, HashSet<string>> _sessionToolCalls = new();
     private static readonly object _stormLock = new();
-    private const int StormWindowMax = 20;
+    private static readonly int StormWindowMax = int.TryParse(Knowledge.Core.OptionService.Get("repairer_storm_window"), out var sw) ? sw : 20;
+    private static readonly int LoopWindowSize = int.TryParse(Knowledge.Core.OptionService.Get("repairer_loop_window"), out var lw) ? lw : 5;
+    private static readonly int LoopThreshold = int.TryParse(Knowledge.Core.OptionService.Get("repairer_loop_threshold"), out var lt) ? lt : 3;
 
     private static readonly Regex TruncationTrailingCommaRegex = new(
         @",\s*(?=\})", RegexOptions.Compiled, TimeSpan.FromMilliseconds(100));
@@ -202,8 +204,6 @@ public static class ToolCallRepairer
 
     private static readonly ConcurrentDictionary<string, Queue<(string Hash, DateTime Time)>> _loopHistory = new();
     private static readonly object _loopLock = new();
-    private const int LoopWindowSize = 5;
-    private const int LoopThreshold = 3;
 
     /// <summary>
     /// SHA256-based tool call loop detection with circuit breaker.

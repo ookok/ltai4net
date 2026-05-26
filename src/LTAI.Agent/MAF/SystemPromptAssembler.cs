@@ -1,4 +1,5 @@
 using LTAI.Agent.Skills;
+using LTAI.Knowledge.Core;
 using LTAI.Models;
 
 namespace LTAI.Agent.MAF;
@@ -157,7 +158,7 @@ public sealed class SystemPromptAssembler
 
 public sealed class PromptLayerContext
 {
-    public string WorkspaceRoot { get; init; } = Directory.GetCurrentDirectory();
+    public string WorkspaceRoot { get; init; } = OptionService.Get("LTAI_WORKSPACE") ?? Directory.GetCurrentDirectory();
     public string? CurrentDir { get; init; }
     public string? Platform { get; init; }
     public string? Date { get; init; }

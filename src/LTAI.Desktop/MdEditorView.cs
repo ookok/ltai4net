@@ -6,6 +6,7 @@ using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
+using LTAI.Knowledge.Core;
 
 namespace LTAI.Desktop;
 
@@ -23,7 +24,8 @@ public sealed class MdEditorView : UserControl
 
     public MdEditorView()
     {
-        _workspaceRoot = Environment.GetEnvironmentVariable("LTAI_WORKSPACE")
+        _workspaceRoot = OptionService.Get("LTAI_WORKSPACE")
+                      ?? Environment.GetEnvironmentVariable("LTAI_WORKSPACE")
                       ?? Directory.GetCurrentDirectory();
 
         Background = LtaiTheme.Sbb(LtaiTheme.Bg);

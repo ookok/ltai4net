@@ -14,7 +14,7 @@ public sealed class ToolOrchestrator
 
     public ToolOrchestrator()
     {
-        _snapshotDir = Path.Combine(Directory.GetCurrentDirectory(), ".livingtree", "snapshots");
+        _snapshotDir = Path.Combine(Environment.GetEnvironmentVariable("LTAI_WORKSPACE") ?? Directory.GetCurrentDirectory(), ".livingtree", "snapshots");
         Directory.CreateDirectory(_snapshotDir);
     }
 

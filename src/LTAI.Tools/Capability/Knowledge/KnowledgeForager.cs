@@ -34,7 +34,7 @@ public sealed class KnowledgeForager : IDisposable
     public KnowledgeForager(ILogger<KnowledgeForager>? logger = null)
     {
         _logger = logger ?? NullLogger<KnowledgeForager>.Instance;
-        _storeDir = Path.Combine(Directory.GetCurrentDirectory(), ".livingtree", "forager");
+        _storeDir = Path.Combine(Environment.GetEnvironmentVariable("LTAI_WORKSPACE") ?? Directory.GetCurrentDirectory(), ".livingtree", "forager");
         Directory.CreateDirectory(_storeDir);
         _client = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
         LoadFoodMap();

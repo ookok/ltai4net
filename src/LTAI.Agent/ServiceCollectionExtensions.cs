@@ -1,4 +1,5 @@
 using LTAI.DNA.Safety;
+using LTAI.Knowledge.Core;
 using LTAI.Models;
 using HarnessProfile = LTAI.Core.Configuration.HarnessProfile;
 using Microsoft.Agents.AI;
@@ -45,7 +46,7 @@ public static class ServiceCollectionExtensions
             var httpClientFactory = sp.GetService<IHttpClientFactory>();
             var http = httpClientFactory?.CreateClient("Marketplace") ?? new HttpClient();
             var logger = sp.GetRequiredService<ILogger<MarketplaceClient>>();
-            var baseUrl = Environment.GetEnvironmentVariable("LTAI_MARKETPLACE_URL");
+            var baseUrl = OptionService.Get("LTAI_MARKETPLACE_URL") ?? Environment.GetEnvironmentVariable("LTAI_MARKETPLACE_URL");
             return new MarketplaceClient(http, logger, baseUrl);
         });
         services.AddSingleton<SkillExtractor>();

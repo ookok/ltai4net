@@ -7,6 +7,7 @@ using LTAI.Core.Configuration;
 using LTAI.Infra.Network.Interfaces;
 using LTAI.Infra.Network.Messaging;
 using LTAI.Infra.Network.Models;
+using LTAI.Models;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -31,6 +32,9 @@ public sealed class P2PNode : IP2PNode, IAsyncDisposable
 
     public string PeerId { get; }
     public int LocalPort => _options.Value.Network.P2PPort;
+
+    public ISkillExchangeProvider? SkillExchangeProvider { get; set; }
+    public Action<GossipRequest>? GossipReceiver { get; set; }
 
     public P2PNode(
         IHttpClientFactory httpClientFactory,
@@ -307,6 +311,98 @@ public sealed class P2PNode : IP2PNode, IAsyncDisposable
                 response.ContentType = "application/json";
                 await response.OutputStream.WriteAsync(bytes, ct).ConfigureAwait(false);
                 response.StatusCode = 200;
+            }
+            else if (request.HttpMethod == "POST" && request.Url?.AbsolutePath == "/p2p/gossip")
+            {
+                using var reader = new StreamReader(request.InputStream);
+                var body = await reader.ReadToEndAsync(ct).ConfigureAwait(false);
+                var gossipRequest = JsonSerializer.Deserialize<GossipRequest>(body, JsonOpts);
+
+                if (gossipRequest != null)
+                {
+                    GossipReceiver?.Invoke(gossipRequest);
+
+                    foreach (var peer in gossipRequest.Peers)
+                    {
+                        var peerId = !string.IsNullOrEmpty(peer.Id) ? peer.Id : $"{peer.Address}:{peer.Port}";
+                        _knownPeers[peerId] = new PeerInfo
+                        {
+                            PeerId = peerId,
+                            Address = peer.Address,
+                            Port = peer.Port,
+                            IsActive = true,
+                            LastSeen = DateTime.UtcNow
+                        };
+                    }
+
+                    _logger.LogDebug("Received gossip from {From} with {Count} peers",
+                        gossipRequest.From, gossipRequest.Peers.Count);
+
+                    var ack = JsonSerializer.Serialize(new { status = "ok" }, JsonOpts);
+                    var ackBytes = Encoding.UTF8.GetBytes(ack);
+                    response.ContentLength64 = ackBytes.Length;
+                    response.ContentType = "application/json";
+                    await response.OutputStream.WriteAsync(ackBytes, ct).ConfigureAwait(false);
+                    response.StatusCode = 200;
+                }
+                else
+                {
+                    response.StatusCode = 400;
+                }
+            }
+            else if (request.HttpMethod == "GET" && request.Url?.AbsolutePath == "/p2p/skills")
+            {
+                if (SkillExchangeProvider != null)
+                {
+                    var manifest = await SkillExchangeProvider.GetLocalSkillManifestAsync(ct).ConfigureAwait(false);
+                    var manifestJson = JsonSerializer.Serialize(manifest.Select(m => new
+                    {
+                        name = m.Name,
+                        version = m.Version,
+                        domain = m.Domain,
+                        description = m.Description
+                    }), JsonOpts);
+                    var bytes = Encoding.UTF8.GetBytes(manifestJson);
+                    response.ContentLength64 = bytes.Length;
+                    response.ContentType = "application/json";
+                    await response.OutputStream.WriteAsync(bytes, ct).ConfigureAwait(false);
+                    response.StatusCode = 200;
+                }
+                else
+                {
+                    response.StatusCode = 503;
+                }
+            }
+            else if (request.HttpMethod == "GET" && request.Url?.AbsolutePath != null
+                     && request.Url.AbsolutePath.StartsWith("/p2p/skills/")
+                     && request.Url.AbsolutePath.EndsWith("/download"))
+            {
+                if (SkillExchangeProvider != null)
+                {
+                    var rawName = request.Url.AbsolutePath["/p2p/skills/".Length..];
+                    var skillName = Uri.UnescapeDataString(
+                        rawName.EndsWith("/download", StringComparison.OrdinalIgnoreCase)
+                            ? rawName[..^"/download".Length]
+                            : rawName);
+
+                    var content = await SkillExchangeProvider.GetSkillContentAsync(skillName, ct).ConfigureAwait(false);
+                    if (content != null)
+                    {
+                        var bytes = Encoding.UTF8.GetBytes(content);
+                        response.ContentLength64 = bytes.Length;
+                        response.ContentType = "text/markdown; charset=utf-8";
+                        await response.OutputStream.WriteAsync(bytes, ct).ConfigureAwait(false);
+                        response.StatusCode = 200;
+                    }
+                    else
+                    {
+                        response.StatusCode = 404;
+                    }
+                }
+                else
+                {
+                    response.StatusCode = 503;
+                }
             }
             else
             {

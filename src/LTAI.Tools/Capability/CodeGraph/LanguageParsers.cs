@@ -17,7 +17,7 @@ public sealed class CSharpParser : ILanguageParser
     public Task<List<CodeSymbol>> ParseFileAsync(string filePath, string content)
     {
         var symbols = new List<CodeSymbol>();
-        var relativePath = GetRelativePath(filePath);
+        var relativePath = LanguageParserHelper.GetRelativePath(filePath);
         var lines = content.Split('\n');
 
         var classStack = new Stack<(string name, int line)>();
@@ -85,12 +85,6 @@ public sealed class CSharpParser : ILanguageParser
         return imports;
     }
 
-    private static string GetRelativePath(string filePath)
-    {
-        var cwd = Directory.GetCurrentDirectory();
-        return Path.GetRelativePath(cwd, filePath).Replace('\\', '/');
-    }
-
     private static List<string> ExtractMethodCalls(string[] lines, int methodStart)
     {
         var calls = new List<string>();
@@ -125,7 +119,7 @@ public sealed class PythonParser : ILanguageParser
     public Task<List<CodeSymbol>> ParseFileAsync(string filePath, string content)
     {
         var symbols = new List<CodeSymbol>();
-        var relativePath = GetRelativePath(filePath);
+        var relativePath = LanguageParserHelper.GetRelativePath(filePath);
         var lines = content.Split('\n');
         var currentClass = "";
 
@@ -186,8 +180,6 @@ public sealed class PythonParser : ILanguageParser
         return imports;
     }
 
-    private static string GetRelativePath(string filePath) => Path.GetRelativePath(Directory.GetCurrentDirectory(), filePath).Replace('\\', '/');
-
     private static List<string> ExtractPythonCalls(string[] lines, int start)
     {
         var calls = new List<string>();
@@ -222,7 +214,7 @@ public sealed class TypeScriptParser : ILanguageParser
     public Task<List<CodeSymbol>> ParseFileAsync(string filePath, string content)
     {
         var symbols = new List<CodeSymbol>();
-        var relativePath = GetRelativePath(filePath);
+        var relativePath = LanguageParserHelper.GetRelativePath(filePath);
         var lines = content.Split('\n');
         var currentClass = "";
 
@@ -286,8 +278,6 @@ public sealed class TypeScriptParser : ILanguageParser
         return imports;
     }
 
-    private static string GetRelativePath(string filePath) => Path.GetRelativePath(Directory.GetCurrentDirectory(), filePath).Replace('\\', '/');
-
     private static List<string> ExtractTSCalls(string[] lines, int start)
     {
         var calls = new List<string>();
@@ -322,7 +312,7 @@ public sealed class JavaScriptParser : ILanguageParser
     public Task<List<CodeSymbol>> ParseFileAsync(string filePath, string content)
     {
         var symbols = new List<CodeSymbol>();
-        var relativePath = GetRelativePath(filePath);
+        var relativePath = LanguageParserHelper.GetRelativePath(filePath);
         var lines = content.Split('\n');
         var currentClass = "";
 
@@ -386,8 +376,6 @@ public sealed class JavaScriptParser : ILanguageParser
         return imports;
     }
 
-    private static string GetRelativePath(string filePath) => Path.GetRelativePath(Directory.GetCurrentDirectory(), filePath).Replace('\\', '/');
-
     private static List<string> ExtractJSCalls(string[] lines, int start)
     {
         var calls = new List<string>();
@@ -422,7 +410,7 @@ public sealed class GoParser : ILanguageParser
     public Task<List<CodeSymbol>> ParseFileAsync(string filePath, string content)
     {
         var symbols = new List<CodeSymbol>();
-        var relativePath = GetRelativePath(filePath);
+        var relativePath = LanguageParserHelper.GetRelativePath(filePath);
         var lines = content.Split('\n');
         var currentPackage = "";
 
@@ -488,8 +476,6 @@ public sealed class GoParser : ILanguageParser
         return imports;
     }
 
-    private static string GetRelativePath(string filePath) => Path.GetRelativePath(Directory.GetCurrentDirectory(), filePath).Replace('\\', '/');
-
     private static List<string> ExtractGoCalls(string[] lines, int start)
     {
         var calls = new List<string>();
@@ -524,7 +510,7 @@ public sealed class RustParser : ILanguageParser
     public Task<List<CodeSymbol>> ParseFileAsync(string filePath, string content)
     {
         var symbols = new List<CodeSymbol>();
-        var relativePath = GetRelativePath(filePath);
+        var relativePath = LanguageParserHelper.GetRelativePath(filePath);
         var lines = content.Split('\n');
         var currentMod = "";
 
@@ -590,8 +576,6 @@ public sealed class RustParser : ILanguageParser
         return imports;
     }
 
-    private static string GetRelativePath(string filePath) => Path.GetRelativePath(Directory.GetCurrentDirectory(), filePath).Replace('\\', '/');
-
     private static List<string> ExtractRustCalls(string[] lines, int start)
     {
         var calls = new List<string>();
@@ -626,7 +610,7 @@ public sealed class JavaParser : ILanguageParser
     public Task<List<CodeSymbol>> ParseFileAsync(string filePath, string content)
     {
         var symbols = new List<CodeSymbol>();
-        var relativePath = GetRelativePath(filePath);
+        var relativePath = LanguageParserHelper.GetRelativePath(filePath);
         var lines = content.Split('\n');
         var currentClass = "";
 
@@ -690,8 +674,6 @@ public sealed class JavaParser : ILanguageParser
         return imports;
     }
 
-    private static string GetRelativePath(string filePath) => Path.GetRelativePath(Directory.GetCurrentDirectory(), filePath).Replace('\\', '/');
-
     private static List<string> ExtractJavaCalls(string[] lines, int start)
     {
         var calls = new List<string>();
@@ -726,7 +708,7 @@ public sealed class CppParser : ILanguageParser
     public Task<List<CodeSymbol>> ParseFileAsync(string filePath, string content)
     {
         var symbols = new List<CodeSymbol>();
-        var relativePath = GetRelativePath(filePath);
+        var relativePath = LanguageParserHelper.GetRelativePath(filePath);
         var lines = content.Split('\n');
         var currentNamespace = "";
         var isHeader = filePath.EndsWith(".h") || filePath.EndsWith(".hpp");
@@ -780,7 +762,6 @@ public sealed class CppParser : ILanguageParser
         return imports;
     }
 
-    private static string GetRelativePath(string filePath) => Path.GetRelativePath(Directory.GetCurrentDirectory(), filePath).Replace('\\', '/');
     private static List<string> ExtractCppCalls(string[] lines, int start)
     {
         var calls = new List<string>();
@@ -813,7 +794,7 @@ public sealed class PhpParser : ILanguageParser
     public Task<List<CodeSymbol>> ParseFileAsync(string filePath, string content)
     {
         var symbols = new List<CodeSymbol>();
-        var relativePath = GetRelativePath(filePath);
+        var relativePath = LanguageParserHelper.GetRelativePath(filePath);
         var lines = content.Split('\n');
         var currentClass = "";
 
@@ -859,7 +840,6 @@ public sealed class PhpParser : ILanguageParser
         return imports;
     }
 
-    private static string GetRelativePath(string filePath) => Path.GetRelativePath(Directory.GetCurrentDirectory(), filePath).Replace('\\', '/');
     private static List<string> ExtractPhpCalls(string[] lines, int start)
     {
         var calls = new List<string>();
@@ -892,7 +872,7 @@ public sealed class RubyParser : ILanguageParser
     public Task<List<CodeSymbol>> ParseFileAsync(string filePath, string content)
     {
         var symbols = new List<CodeSymbol>();
-        var relativePath = GetRelativePath(filePath);
+        var relativePath = LanguageParserHelper.GetRelativePath(filePath);
         var lines = content.Split('\n');
         var currentClass = "";
 
@@ -936,7 +916,6 @@ public sealed class RubyParser : ILanguageParser
         return imports;
     }
 
-    private static string GetRelativePath(string filePath) => Path.GetRelativePath(Directory.GetCurrentDirectory(), filePath).Replace('\\', '/');
     private static List<string> ExtractRubyCalls(string[] lines, int start)
     {
         var calls = new List<string>();
@@ -969,7 +948,7 @@ public sealed class SwiftParser : ILanguageParser
     public Task<List<CodeSymbol>> ParseFileAsync(string filePath, string content)
     {
         var symbols = new List<CodeSymbol>();
-        var relativePath = GetRelativePath(filePath);
+        var relativePath = LanguageParserHelper.GetRelativePath(filePath);
         var lines = content.Split('\n');
         var currentType = "";
 
@@ -1014,8 +993,6 @@ public sealed class SwiftParser : ILanguageParser
         foreach (Match m in matches) imports.Add(m.Groups[1].Value);
         return imports;
     }
-
-    private static string GetRelativePath(string filePath) => Path.GetRelativePath(Directory.GetCurrentDirectory(), filePath).Replace('\\', '/');
     private static List<string> ExtractSwiftCalls(string[] lines, int start)
     {
         var calls = new List<string>();
@@ -1048,7 +1025,7 @@ public sealed class KotlinParser : ILanguageParser
     public Task<List<CodeSymbol>> ParseFileAsync(string filePath, string content)
     {
         var symbols = new List<CodeSymbol>();
-        var relativePath = GetRelativePath(filePath);
+        var relativePath = LanguageParserHelper.GetRelativePath(filePath);
         var lines = content.Split('\n');
         var currentClass = "";
 
@@ -1094,7 +1071,6 @@ public sealed class KotlinParser : ILanguageParser
         return imports;
     }
 
-    private static string GetRelativePath(string filePath) => Path.GetRelativePath(Directory.GetCurrentDirectory(), filePath).Replace('\\', '/');
     private static List<string> ExtractKotlinCalls(string[] lines, int start)
     {
         var calls = new List<string>();
@@ -1127,7 +1103,7 @@ public sealed class VueParser : ILanguageParser
     public Task<List<CodeSymbol>> ParseFileAsync(string filePath, string content)
     {
         var symbols = new List<CodeSymbol>();
-        var relativePath = GetRelativePath(filePath);
+        var relativePath = LanguageParserHelper.GetRelativePath(filePath);
 
         // 提取 script 块内容
         var scriptMatch = Regex.Match(content, @"<script[^>]*>(.*?)</script>", RegexOptions.Singleline);
@@ -1181,7 +1157,6 @@ public sealed class VueParser : ILanguageParser
         return imports;
     }
 
-    private static string GetRelativePath(string filePath) => Path.GetRelativePath(Directory.GetCurrentDirectory(), filePath).Replace('\\', '/');
     private static double CountVueBranches(string[] lines, int start)
     {
         var count = 0;
@@ -1190,4 +1165,10 @@ public sealed class VueParser : ILanguageParser
             count += Regex.Matches(lines[i], @"\b(if|else|for|while|switch|case|catch|&&|\|\|)\b").Count;
         return count;
     }
+}
+
+internal static class LanguageParserHelper
+{
+    public static string GetRelativePath(string filePath) =>
+        System.IO.Path.GetRelativePath(System.IO.Directory.GetCurrentDirectory(), filePath).Replace('\\', '/');
 }

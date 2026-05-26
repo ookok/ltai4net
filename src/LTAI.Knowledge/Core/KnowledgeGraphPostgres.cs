@@ -26,7 +26,7 @@ public class KnowledgeGraphPostgres : IDisposable
     {
         _logger = logger;
         _connectionString = connectionString
-            ?? Environment.GetEnvironmentVariable("LTAI_PG_CONNECTION_STRING")
+            ?? OptionService.Get("LTAI_PG_CONNECTION_STRING") ?? Environment.GetEnvironmentVariable("LTAI_PG_CONNECTION_STRING")
             ?? throw new InvalidOperationException(
                 "PostgreSQL connection string must be provided via constructor parameter " +
                 "or LTAI_PG_CONNECTION_STRING environment variable.");

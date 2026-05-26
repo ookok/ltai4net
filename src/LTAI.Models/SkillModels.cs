@@ -4,6 +4,7 @@ public interface ISkillExchangeProvider
 {
     Task<List<(string Name, string Version, string Domain, string Description)>> GetLocalSkillManifestAsync(CancellationToken ct);
     Task<(int Imported, int Skipped, int Errors)> SyncWithPeerAsync(string peerAddress, CancellationToken ct);
+    Task<string?> GetSkillContentAsync(string skillName, CancellationToken ct);
 }
 
 /// <summary>

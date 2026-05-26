@@ -123,6 +123,13 @@ public sealed class GossipDiscovery
     };
 }
 
+public sealed record GossipRequest
+{
+    public string From { get; init; } = "";
+    public List<PeerEntry> Peers { get; init; } = new();
+    public DateTime Timestamp { get; init; } = DateTime.UtcNow;
+}
+
 public sealed record GossipResponse
 {
     public List<PeerEntry> Peers { get; init; } = new();

@@ -77,6 +77,21 @@ public sealed class LTAIOptions
 
     [JsonPropertyName("supertonic")]
     public SupertonicOptions Supertonic { get; init; } = new();
+
+    [JsonPropertyName("bootstrap_peers")]
+    public List<string> BootstrapPeers { get; set; } = new();
+
+    [JsonPropertyName("enable_skill_gossip")]
+    public bool EnableSkillGossip { get; set; } = false;
+
+    [JsonPropertyName("gossip_interval_seconds")]
+    public int GossipIntervalSeconds { get; set; } = 30;
+
+    [JsonPropertyName("max_gossip_peers")]
+    public int MaxGossipPeers { get; set; } = 20;
+
+    [JsonPropertyName("gossip_fanout")]
+    public int GossipFanout { get; set; } = 3;
 }
 
 public sealed class EconomyOptions

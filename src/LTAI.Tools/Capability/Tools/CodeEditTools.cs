@@ -407,7 +407,7 @@ public sealed class CodeEditTools
 
             if (!string.IsNullOrEmpty(snapshotId))
             {
-                var snapshotDir = Path.Combine(Directory.GetCurrentDirectory(), ".livingtree", "edit_snapshots");
+                var snapshotDir = Path.Combine(Environment.GetEnvironmentVariable("LTAI_WORKSPACE") ?? Directory.GetCurrentDirectory(), ".livingtree", "edit_snapshots");
                 var snapshotFile = Path.Combine(snapshotDir, $"{snapshotId}_{Path.GetFileName(path)}");
                 if (File.Exists(snapshotFile))
                     originalContent = File.ReadAllText(snapshotFile);
