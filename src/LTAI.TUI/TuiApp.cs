@@ -5,6 +5,7 @@ using LTAI.Agent.MAF;
 using LTAI.AI.Governors;
 using LTAI.AI.Interfaces;
 using LTAI.Core.Configuration;
+using LTAI.Core.Setup;
 using LTAI.Core.System;
 using LTAI.DNA;
 using LTAI.Knowledge.Core;
@@ -115,7 +116,8 @@ public sealed class TuiApp
     private void RenderView()
     {
         AnsiConsole.Cursor.SetPosition(0, 3);
-        var headerMarkup = $"[bold cyan]LTAI Dev Console[/]  {DnaStatusLine()}  [green]Mode:{_lts.Mode}[/] [blue]v5.5[/]  [grey]CPU:{Environment.ProcessorCount}c MEM:{Environment.WorkingSet / 1024 / 1024}MB[/]";
+        var model = _llmConfig.SelectedModel;
+        var headerMarkup = $"[bold cyan]LTAI Dev Console[/]  {DnaStatusLine()}  [green]Mode:{_lts.Mode}[/] [blue]v5.5[/]  [yellow]Model:{model}[/]  [grey]CPU:{Environment.ProcessorCount}c MEM:{Environment.WorkingSet / 1024 / 1024}MB[/]";
         AnsiConsole.MarkupLine(headerMarkup);
 
         if (_showLLMPanel)
@@ -616,6 +618,7 @@ public sealed class TuiApp
 
             [yellow]Chat:[/]
               Enter  - Send   Esc - Exit
+              Tab   - Switch model   Z - Setup wizard
               Ctrl+V - Paste file/folder path
               @path  - Load file content
               @@path - Load folder structure
@@ -670,6 +673,13 @@ public sealed class TuiApp
             case ConsoleKey.F8 when key.Modifiers == 0: await RunTestAsync(); break;
             case ConsoleKey.F11: _currentView = TuiView.ComposeTool; _selectedComposeToolIndex = -1; break;
             case ConsoleKey.C when key.Modifiers == 0: _currentView = TuiView.Chat; break;
+            case ConsoleKey.Tab when _currentView == TuiView.Chat && key.Modifiers == 0:
+                _llmConfig.CycleModel();
+                AnsiConsole.MarkupLine($"[yellow]⚡ Switched to:[/] [bold]{_llmConfig.SelectedModel}[/]");
+                break;
+            case ConsoleKey.Z when key.Modifiers == 0 && (_currentView == TuiView.Chat || _currentView == TuiView.Dashboard):
+                await JumpToSetupAsync();
+                break;
             case ConsoleKey.L when key.Modifiers == 0: _showLLMPanel = !_showLLMPanel; _currentView = _showLLMPanel ? TuiView.LLMConfig : _currentView; break;
             case ConsoleKey.T when key.Modifiers == 0: _innovation.ToggleThoughtChain(); break;
             case ConsoleKey.S when key.Modifiers == 0: _diffSplitView = !_diffSplitView; break;
@@ -1086,6 +1096,22 @@ public sealed class TuiApp
         var info = _modelMgr.SyncInfo();
         AnsiConsole.MarkupLine($"[green]Synced:[/] {info.GetType().GetProperty("total_providers")?.GetValue(info)} providers");
         await Task.Delay(800);
+    }
+
+    private async Task JumpToSetupAsync()
+    {
+        AnsiConsole.MarkupLine("[yellow]Launching setup wizard (full-screen)...[/]");
+        await Task.Delay(400);
+        AnsiConsole.Clear();
+
+        var configPath = Path.Combine(OptionService.Get("paths.config") ?? AppContext.BaseDirectory, "appsettings.json");
+        var wizard = new InteractiveSetupWizard(configPath);
+        await wizard.RunAsync();
+
+        AnsiConsole.Clear();
+        AnsiConsole.MarkupLine("[green]✓ Configuration updated. Restart to apply model changes.[/]");
+        await Task.Delay(2000);
+        AnsiConsole.Clear();
     }
 
     private void RenderEditorView()
