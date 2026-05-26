@@ -53,6 +53,11 @@ public partial class MainWindow : Window
             new("Task DAG",        "9", new TaskDagView(svc)),
             new("KG Explorer",     "0", new KnowledgeGraphExplorer(svc)),
             new("EIA Workbench",   "E", new EiaWorkbenchView(svc)),
+            new("DNA Evolution",   "D", new DnaEvolutionView(svc)),
+            new("Skill Evolution", "V", new SkillEvolutionView(svc)),
+            new("Dream Replay",    "W", new DreamReplayView(svc)),
+            new("Parliament",      "J", new ParliamentView(svc)),
+            new("Evolution Timeline", "O", new EvolutionTimelineView(svc)),
         };
 
         _buttonStack = new StackPanel { Spacing = 2, Margin = new(4) };
@@ -274,6 +279,17 @@ public partial class MainWindow : Window
                     case Key.D0: ActivateView(9); break;
                     case Key.E: ActivateView(10); break;
                     case Key.T: LtaiTheme.Toggle(); break;
+                    default: handled = false; break;
+                }
+                break;
+            case KeyModifiers.Control | KeyModifiers.Shift:
+                switch (e.Key)
+                {
+                    case Key.D: ActivateView(11); break;
+                    case Key.V: ActivateView(12); break;
+                    case Key.W: ActivateView(13); break;
+                    case Key.J: ActivateView(14); break;
+                    case Key.O: ActivateView(15); break;
                     default: handled = false; break;
                 }
                 break;
