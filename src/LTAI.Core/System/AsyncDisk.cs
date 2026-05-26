@@ -12,7 +12,7 @@ public interface IAsyncDisk
     Task FlushNowAsync(string path);
     Task FlushAllAsync();
     void Start();
-    void Stop();
+    Task StopAsync(CancellationToken ct = default);
     Dictionary<string, object> Stats();
 }
 
@@ -28,6 +28,7 @@ public sealed class AsyncDisk : IAsyncDisk
     private readonly int _batchInterval = 5000;
     private readonly int _maxBatchSize = 100;
     private CancellationTokenSource? _cts;
+    private Task? _flushLoopTask;
     private readonly ILogger<AsyncDisk> _logger;
 
     public AsyncDisk() : this(NullLogger<AsyncDisk>.Instance) { }
@@ -121,7 +122,7 @@ public sealed class AsyncDisk : IAsyncDisk
         _cts = new CancellationTokenSource();
         var token = _cts.Token;
 
-        Task.Run(async () =>
+        _flushLoopTask = Task.Run(async () =>
         {
             while (!token.IsCancellationRequested)
             {
@@ -137,17 +138,30 @@ public sealed class AsyncDisk : IAsyncDisk
                 if (_dirty.Count > 0)
                     await _flushBatchAsync().ConfigureAwait(false);
             }
-        }, token);
+        }, token).ContinueWith(t =>
+        {
+            if (t.IsFaulted && t.Exception != null)
+                _logger.LogError(t.Exception, "AsyncDisk background loop faulted");
+        }, TaskScheduler.Default);
 
         _logger.LogInformation("AsyncDisk background loop started");
     }
 
-    public void Stop()
+    public async Task StopAsync(CancellationToken ct = default)
     {
         _cts?.Cancel();
+        if (_flushLoopTask != null)
+        {
+            try
+            {
+                await Task.WhenAny(_flushLoopTask, Task.Delay(TimeSpan.FromSeconds(10), ct)).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) { }
+        }
         _cts?.Dispose();
         _cts = null;
-        Task.Run(async () => await _flushBatchAsync().ConfigureAwait(false)).GetAwaiter().GetResult();
+        _flushLoopTask = null;
+        await _flushBatchAsync().ConfigureAwait(false);
         _logger.LogInformation("AsyncDisk stopped, all pending flushed");
     }
 

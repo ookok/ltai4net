@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.RegularExpressions;
+using LTAI.Knowledge.Core;
 using LTAI.Models;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
@@ -32,7 +33,7 @@ public sealed class SkillExtractor
         _registry = registry;
         _llm = llm;
         _logger = logger;
-        _skillsRoot = skillsRoot ?? Path.Combine(AppContext.BaseDirectory, "skills");
+        _skillsRoot = skillsRoot ?? OptionService.Get("paths.skills") ?? Path.Combine(AppContext.BaseDirectory, "skills");
     }
 
     public void RecordSuccess(string patternKey, List<string> toolSequence, string query, string response)
@@ -51,21 +52,71 @@ public sealed class SkillExtractor
 
         if (existing == null && successes >= MinSuccessesForL0)
         {
-            _logger.LogInformation("SkillExtractor: {Pattern} reached {Count} successes — candidate for L0 skill",
+            _logger.LogInformation("SkillExtractor: {Pattern} reached {Count} successes — triggering L0 skill creation",
                 patternKey, successes);
+
+            var capturedQuery = query;
+            var capturedResponse = response;
+            var capturedTools = toolSequence;
+            _ = ExtractAsync(patternKey, "general", CancellationToken.None)
+                .ContinueWith(t =>
+                {
+                    if (t is { IsCompletedSuccessfully: true, Result: not null })
+                    {
+                        _registry.Register(t.Result);
+                        _pendingExtractions.Remove(patternKey, out _);
+                        _logger.LogInformation("SkillExtractor: auto-created L0 skill '{Name}'",
+                            t.Result.Name);
+                    }
+                });
         }
         else if (existing != null)
         {
             existing.Evolution.RecordSuccess();
-            SkillLoader.SaveEvolution(existing.SourceFile!, existing.Evolution);
+            if (existing.SourceFile != null)
+                SkillLoader.SaveEvolution(existing.SourceFile, existing.Evolution);
 
             var suggestedLayer = _registry.SuggestLayer(existing.Evolution.SuccessRate, existing.Evolution.TotalUses);
             if (suggestedLayer > existing.Layer)
             {
-                _logger.LogInformation("SkillExtractor: {Name} qualifies for promotion {From} → {To} (rate={Rate:F2}, uses={Uses})",
-                    existing.Name, existing.Layer, suggestedLayer,
-                    existing.Evolution.SuccessRate, existing.Evolution.TotalUses);
+                var promoted = _registry.Promote(existing.Name, suggestedLayer.Value);
+                if (promoted != null && existing.SourceFile != null)
+                {
+                    var newDir = Path.Combine(_skillsRoot, promoted.LayerDir);
+                    Directory.CreateDirectory(newDir);
+                    var newPath = Path.Combine(newDir, $"{promoted.Name}.md");
+                    try
+                    {
+                        File.Move(existing.SourceFile, newPath, overwrite: false);
+                        promoted.SourceFile = newPath;
+                        SkillLoader.SaveEvolution(newPath, promoted.Evolution);
+
+                        var oldMeta = existing.SourceFile + ".meta.json";
+                        var newMeta = newPath + ".meta.json";
+                        if (File.Exists(oldMeta)) File.Move(oldMeta, newMeta, overwrite: false);
+
+                        _logger.LogInformation("SkillExtractor: PROMOTED {Name} {From} → {To} files moved to {Dir} (rate={Rate:F2}, uses={Uses})",
+                            promoted.Name, existing.Layer, suggestedLayer.Value,
+                            promoted.LayerDir, promoted.Evolution.SuccessRate, promoted.Evolution.TotalUses);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "SkillExtractor: promotion file move failed for {Name}", existing.Name);
+                    }
+                }
             }
+        }
+    }
+
+    public void RecordFailure(string patternKey)
+    {
+        _registry.RecordFailure(patternKey);
+
+        var skill = _registry.Get(patternKey);
+        if (skill != null && !skill.IsActive && skill.Evolution.TotalUses >= 20)
+        {
+            _logger.LogWarning("SkillExtractor: {Name} deactivated — rate={Rate:F2}, uses={Uses}",
+                skill.Name, skill.Evolution.SuccessRate, skill.Evolution.TotalUses);
         }
     }
 

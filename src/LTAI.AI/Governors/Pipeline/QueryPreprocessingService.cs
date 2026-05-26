@@ -1,7 +1,6 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
 using LTAI.Core.Configuration;
-using LTAI.Core.Interfaces;
 using LTAI.Core.Messaging;
 using LTAI.Core.Models;
 using LTAI.Core.System;
@@ -40,7 +39,7 @@ public sealed record PreprocessingResult
 
 public sealed class QueryPreprocessingService
 {
-    private readonly ICognitiveMesh _mesh;
+    private readonly InputGovernor _input;
     private readonly IChatClient _llm;
     private readonly DNAOrchestrator? _dna;
     private readonly IOptions<LTAIOptions> _options;
@@ -53,7 +52,7 @@ public sealed class QueryPreprocessingService
     private readonly ILogger _logger;
 
     public QueryPreprocessingService(
-        ICognitiveMesh mesh,
+        InputGovernor input,
         IChatClient llm,
         DNAOrchestrator? dna,
         IOptions<LTAIOptions> options,
@@ -65,7 +64,7 @@ public sealed class QueryPreprocessingService
         PromptTemplateStore prompts,
         ILogger logger)
     {
-        _mesh = mesh;
+        _input = input;
         _llm = llm;
         _dna = dna;
         _options = options;
@@ -163,7 +162,7 @@ public sealed class QueryPreprocessingService
         string? extractedEntity = null;
         try
         {
-            var inputResult = await _mesh.SendAsync(new Handshake
+            var inputResult = await _input.ProcessAsync(new Handshake
             {
                 To = "input", Action = "process",
                 Payload = new Dictionary<string, object?> { ["query"] = query }

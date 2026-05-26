@@ -59,6 +59,8 @@ public static class EntryPoint
 
         var toolRegistry = app.Services.GetRequiredService<AIToolRegistry>();
         await toolRegistry.RegisterAllToolCategoriesAsync().ConfigureAwait(false);
+        await app.Services.RegisterMarkdownToolsAsync(toolRegistry).ConfigureAwait(false);
+        await app.Services.RegisterCodeActToolsAsync(toolRegistry).ConfigureAwait(false);
 
         var lts = app.Services.GetRequiredService<ILivingTreeSystem>();
         await lts.InitializeAsync().ConfigureAwait(false);
@@ -72,6 +74,7 @@ public static class EntryPoint
 
 internal sealed class WebAppEntryPointAdapter : ILTAIEntryPoint
 {
+    public bool CanHandle(string command) => string.Equals(command, "webapp", StringComparison.OrdinalIgnoreCase);
     public Task RunAsync(string[] args) => EntryPoint.RunAsync(args);
 }
 

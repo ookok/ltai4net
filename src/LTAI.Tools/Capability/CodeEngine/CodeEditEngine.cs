@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using LTAI.Tools.CodeGraph;
+using LTAI.Tools.Tools;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -52,7 +53,7 @@ public sealed class CodeEditEngine
         ILogger<CodeEditEngine>? logger = null)
     {
         _workspace = workspace ?? Directory.GetCurrentDirectory();
-        _snapshotDir = Path.Combine(_workspace, ".livingtree", "edit_snapshots");
+        _snapshotDir = Path.Combine(OptionService.Get("paths.livingtree") ?? Path.Combine(_workspace, ".livingtree"), "edit_snapshots");
         Directory.CreateDirectory(_snapshotDir);
         _parser = parser;
         _logger = logger ?? NullLogger<CodeEditEngine>.Instance;

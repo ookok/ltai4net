@@ -9,6 +9,7 @@ using Avalonia.Threading;
 using LTAI.Core.Configuration;
 using LTAI.Core.Governors;
 using LTAI.Core.Setup;
+using LTAI.Knowledge.Core;
 using Microsoft.Extensions.Options;
 
 namespace LTAI.Desktop;
@@ -270,7 +271,7 @@ public sealed class LLMConfigView : UserControl
 
     private static void TestLocalModelFiles(TextBlock result, string modelName)
     {
-        var baseDir = Path.Combine(AppContext.BaseDirectory, "assets", "models");
+        var baseDir = OptionService.Get("paths.models") ?? Path.Combine(AppContext.BaseDirectory, "assets", "models");
         if (!Directory.Exists(baseDir))
         {
             result.Text = "No models directory";
@@ -425,7 +426,7 @@ public sealed class LLMConfigView : UserControl
 
     private static string? FindModelFile(string modelName)
     {
-        var baseDir = Path.Combine(AppContext.BaseDirectory, "assets", "models");
+        var baseDir = OptionService.Get("paths.models") ?? Path.Combine(AppContext.BaseDirectory, "assets", "models");
         if (!Directory.Exists(baseDir)) return null;
 
         var search = modelName.ToLowerInvariant();
@@ -711,7 +712,7 @@ public sealed class LLMConfigView : UserControl
                 EngineType: "gguf");
 
             var downloader = new ModelDownloader();
-            var modelsDir = Path.Combine(AppContext.BaseDirectory, "assets", "models");
+            var modelsDir = OptionService.Get("paths.models") ?? Path.Combine(AppContext.BaseDirectory, "assets", "models");
             var lastPct = 0;
 
             await downloader.DownloadAsync(localInfo, modelsDir, new Progress<ModelDownloadProgress>(p =>
@@ -744,7 +745,7 @@ public sealed class LLMConfigView : UserControl
             btn.Content = "..."; btn.IsEnabled = false;
 
             var fileName = model.DownloadUrl.Split('/').Last();
-            var dir = Path.Combine(AppContext.BaseDirectory, "assets", "models", model.Layer.ToString().ToLowerInvariant());
+            var dir = Path.Combine(OptionService.Get("paths.models") ?? Path.Combine(AppContext.BaseDirectory, "assets", "models"), model.Layer.ToString().ToLowerInvariant());
             var path = Path.Combine(dir, fileName);
             if (File.Exists(path))
             {
@@ -785,7 +786,7 @@ public sealed class LLMConfigView : UserControl
 
     private static bool IsModelInstalled(LocalModelInfo model)
     {
-        var dir = Path.Combine(AppContext.BaseDirectory, "assets", "models", model.Layer.ToString().ToLowerInvariant());
+        var dir = Path.Combine(OptionService.Get("paths.models") ?? Path.Combine(AppContext.BaseDirectory, "assets", "models"), model.Layer.ToString().ToLowerInvariant());
         if (!Directory.Exists(dir)) return false;
         var name = model.Url.Split('/').Last();
         return File.Exists(Path.Combine(dir, name));
@@ -932,8 +933,7 @@ public sealed class LLMConfigView : UserControl
     {
         var envVar = GetEnvVarName(provider);
         if (envVar == null) return "";
-        return Environment.GetEnvironmentVariable(envVar, EnvironmentVariableTarget.Process)
-            ?? Environment.GetEnvironmentVariable(envVar, EnvironmentVariableTarget.User) ?? "";
+        return OptionService.Get(envVar) ?? "";
     }
 
     private static (ComboBox box, Button testBtn, TextBlock result, Button srvBtn) LayerSectionFull(StackPanel root, string label, List<string> providers, string currentProvider, string currentModel)

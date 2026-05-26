@@ -31,7 +31,6 @@ public static class ServiceCollectionExtensions
 
         services.AddSingleton<IProviderRegistry, ProviderRegistry>();
         services.AddSingleton(sp => sp.GetRequiredService<IOptions<LTAIOptions>>().Value.Harness);
-        services.AddSingleton<ICognitiveMesh, CognitiveMesh>();
         services.AddSingleton<AIToolRegistry>();
         services.AddSingleton<TaskJournal>();
 

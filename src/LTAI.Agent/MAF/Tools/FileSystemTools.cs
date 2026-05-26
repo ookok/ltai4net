@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Text.Json;
+using LTAI.Knowledge.Core;
 
 namespace LTAI.Agent.Tools;
 
@@ -7,13 +8,27 @@ namespace LTAI.Agent.Tools;
 public sealed class FileSystemTools
 {
     private static readonly string _workspaceRoot = Path.GetFullPath(
-        Environment.GetEnvironmentVariable("LTAI_WORKSPACE") ?? Directory.GetCurrentDirectory());
+        OptionService.Get("LTAI_WORKSPACE") ?? Directory.GetCurrentDirectory());
 
     private static string ResolveSafePath(string path)
     {
         var fullPath = Path.GetFullPath(path, _workspaceRoot);
         if (!fullPath.StartsWith(_workspaceRoot, StringComparison.OrdinalIgnoreCase))
             throw new UnauthorizedAccessException($"Path '{path}' is outside the workspace root '{_workspaceRoot}'. Only files within the workspace can be accessed.");
+
+        if (Directory.Exists(fullPath))
+        {
+            var info = new DirectoryInfo(fullPath);
+            if (info.LinkTarget != null || (info.Attributes & FileAttributes.ReparsePoint) != 0)
+                throw new UnauthorizedAccessException($"Directory '{path}' is a symlink/junction and cannot be accessed.");
+        }
+        else if (File.Exists(fullPath))
+        {
+            var info = new FileInfo(fullPath);
+            if (info.LinkTarget != null || (info.Attributes & FileAttributes.ReparsePoint) != 0)
+                throw new UnauthorizedAccessException($"File '{path}' is a symlink and cannot be accessed.");
+        }
+
         return fullPath;
     }
 

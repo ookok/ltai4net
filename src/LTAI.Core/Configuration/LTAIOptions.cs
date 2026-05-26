@@ -1,3 +1,4 @@
+using System.IO;
 using System.Text.Json.Serialization;
 using LTAI.Core.Network;
 
@@ -15,6 +16,42 @@ public sealed class LTAIOptions
 
     [JsonPropertyName("data_directory")]
     public string DataDirectory { get; init; } = ".livingtree";
+
+    [JsonPropertyName("skills_directory")]
+    public string SkillsDirectory { get; init; } = "skills";
+
+    [JsonPropertyName("tools_directory")]
+    public string ToolsDirectory { get; init; } = "tools";
+
+    [JsonPropertyName("prompts_directory")]
+    public string PromptsDirectory { get; init; } = "prompts";
+
+    [JsonPropertyName("memory_directory")]
+    public string MemoryDirectory { get; init; } = "memory";
+
+    [JsonPropertyName("models_directory")]
+    public string ModelsDirectory { get; init; } = "models";
+
+    [JsonPropertyName("logs_directory")]
+    public string LogsDirectory { get; init; } = "logs";
+
+    public string ResolveDataPath(string subPath) =>
+        Path.Combine(AppContext.BaseDirectory, DataDirectory, subPath);
+
+    public string ResolveSkillsPath(string? subPath = null) =>
+        Path.Combine(AppContext.BaseDirectory, SkillsDirectory, subPath ?? "");
+
+    public string ResolveToolsPath(string? subPath = null) =>
+        Path.Combine(AppContext.BaseDirectory, ToolsDirectory, subPath ?? "");
+
+    public string ResolvePromptsPath(string? subPath = null) =>
+        Path.Combine(AppContext.BaseDirectory, PromptsDirectory, subPath ?? "");
+
+    public string ResolveMemoryPath(string? subPath = null) =>
+        Path.Combine(AppContext.BaseDirectory, MemoryDirectory, subPath ?? "");
+
+    public string ResolveModelsPath(string? subPath = null) =>
+        Path.Combine(AppContext.BaseDirectory, ModelsDirectory, subPath ?? "");
 
     [JsonPropertyName("integration_urls")]
     public IntegrationUrlsConfig IntegrationUrls { get; init; } = new();

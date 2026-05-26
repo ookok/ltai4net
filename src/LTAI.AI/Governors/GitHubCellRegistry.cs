@@ -114,18 +114,12 @@ public sealed class GitHubCellRegistry : IDisposable
         _cacheDirectory = Path.Combine(AppContext.BaseDirectory, "synaptic", "github_cache");
         Directory.CreateDirectory(_cacheDirectory);
 
-        _httpClient = new HttpClient
+        _httpClient = new HttpClient(new GitHubAuthHandler(_config.Token ?? "", new Uri(_config.ApiBaseUrl).Host))
         {
             BaseAddress = new Uri(_config.ApiBaseUrl),
             Timeout = _config.DownloadTimeout
         };
         _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("LTAI-CellAI/1.0");
-
-        if (!string.IsNullOrEmpty(_config.Token))
-        {
-            _httpClient.DefaultRequestHeaders.Authorization =
-                new AuthenticationHeaderValue("token", _config.Token);
-        }
     }
 
     /// <summary>

@@ -5,6 +5,7 @@ using LTAI.Knowledge.Services;
 using LTAI.Knowledge.Vector.Embedding;
 using LTAI.Knowledge.Vector.Interfaces;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -25,7 +26,7 @@ public static class ServiceCollectionExtensions
         string? tokenizerPath = null,
         int dimension = 384)
     {
-        var modelPath = onnxModelPath ?? Path.Combine(AppContext.BaseDirectory, "models", "l0", "model.onnx");
+        var modelPath = onnxModelPath ?? Path.Combine(OptionService.Get("paths.models") ?? Path.Combine(AppContext.BaseDirectory, "models"), "l0", "model.onnx");
         var tokPath = tokenizerPath ?? Path.Combine(Path.GetDirectoryName(modelPath)!, "tokenizer.json");
 
         if (File.Exists(modelPath))
@@ -108,7 +109,7 @@ public static class ServiceCollectionExtensions
         string? cacheDir = null)
     {
         var preset = JinaModelPresets.GetPreset(variant);
-        cacheDir ??= Path.Combine(AppContext.BaseDirectory, ".livingtree", "models", "embedding");
+        cacheDir ??= Path.Combine(OptionService.Get("paths.livingtree") ?? Path.Combine(AppContext.BaseDirectory, ".livingtree"), "models", "embedding");
         var modelDir = Path.Combine(cacheDir, "jina", preset.ModelName);
 
         JinaEmbeddingConfig config;
@@ -238,6 +239,40 @@ public static class ServiceCollectionExtensions
             return new AgenticRAG(docStore, reranker, decomposer, logger, hybrid);
         });
         services.AddSingleton<DocumentIngestionPipeline>();
+        services.AddSingleton<MemoryFileLoader>();
+        services.AddSingleton<MemoryFilesService>(sp =>
+        {
+            var loader = sp.GetRequiredService<MemoryFileLoader>();
+            var kg = sp.GetRequiredService<KnowledgeGraph>();
+            var logger = sp.GetRequiredService<ILogger<MemoryFilesService>>();
+            return new MemoryFilesService(loader, kg, logger);
+        });
+        services.AddSingleton<PromptLoader>();
+        services.AddSingleton<PromptService>(sp =>
+        {
+            var loader = sp.GetRequiredService<PromptLoader>();
+            var logger = sp.GetRequiredService<ILogger<PromptService>>();
+            return new PromptService(loader, logger);
+        });
+
+        services.AddSingleton<PromptAbTestManager>(sp =>
+        {
+            var promptService = sp.GetRequiredService<PromptService>();
+            var logger = sp.GetRequiredService<ILogger<PromptAbTestManager>>();
+            var mgr = new PromptAbTestManager(promptService, logger);
+            promptService.SetAbTestManager(mgr);
+            return mgr;
+        });
+
+        services.AddSingleton<OptionLoader>();
+        services.AddSingleton<OptionService>(sp =>
+        {
+            var loader = sp.GetRequiredService<OptionLoader>();
+            var defaults = sp.GetRequiredService<IOptions<LTAIOptions>>().Value;
+            var config = sp.GetService<IConfiguration>();
+            var logger = sp.GetRequiredService<ILogger<OptionService>>();
+            return new OptionService(loader, defaults, config, logger);
+        });
 
         services.AddSingleton<Bm25Scorer>();
         services.AddSingleton<CompiledTruthStore>(sp =>

@@ -1,3 +1,6 @@
+using LTAI.Knowledge.Core;
+using LTAI.Models;
+
 namespace LTAI.Agent.MAF;
 
 /// <summary>
@@ -10,9 +13,23 @@ public sealed class AgentHookPipeline
     private readonly List<Func<ToolUseContext, object?, CancellationToken, Task>> _postToolHooks = new();
     private readonly List<Func<string, CancellationToken, Task>> _sessionStartHooks = new();
     private readonly List<Func<string, CancellationToken, Task>> _sessionEndHooks = new();
+    private readonly PermissionStore? _permissionStore;
+    private AgentProfile? _activeProfile;
+
+    public AgentProfile? ActiveProfile
+    {
+        get => _activeProfile;
+        set => _activeProfile = value;
+    }
 
     public event Action<ToolUseContext, ToolUseResult>? OnToolBlocked;
     public event Action<ToolUseContext>? OnToolApproved;
+    public event Action<ToolUseContext, string, bool>? OnPermissionGranted;
+
+    public AgentHookPipeline(PermissionStore? permissionStore = null)
+    {
+        _permissionStore = permissionStore;
+    }
 
     /// <summary>
     /// Register a hook that fires BEFORE a tool executes.
@@ -38,6 +55,18 @@ public sealed class AgentHookPipeline
     /// </summary>
     public async Task<ToolUseResult> RunPreToolHooksAsync(ToolUseContext ctx, CancellationToken ct)
     {
+        if (_activeProfile != null && !_activeProfile.CanInvoke(ctx.ToolName, ctx.Args))
+        {
+            OnToolBlocked?.Invoke(ctx, ToolUseResult.Blocked);
+            return ToolUseResult.Blocked;
+        }
+
+        if (_permissionStore != null && _permissionStore.IsAllowed(ctx.ToolName, ctx.Args))
+        {
+            OnToolApproved?.Invoke(ctx);
+            return ToolUseResult.Allowed;
+        }
+
         foreach (var hook in _preToolHooks)
         {
             var result = await hook(ctx, ct).ConfigureAwait(false);
@@ -51,6 +80,17 @@ public sealed class AgentHookPipeline
         OnToolApproved?.Invoke(ctx);
         return ToolUseResult.Allowed;
     }
+
+    public void RememberPermission(string toolName, string pattern, bool allow)
+    {
+        if (_permissionStore == null) return;
+        if (allow)
+            _permissionStore.Grant(toolName, pattern);
+        else
+            _permissionStore.Deny(toolName, pattern);
+    }
+
+    public PermissionRule[] GetPermissionRules() => _permissionStore?.GetAll() ?? Array.Empty<PermissionRule>();
 
     public async Task RunPostToolHooksAsync(ToolUseContext ctx, object? result, CancellationToken ct)
     {
@@ -122,7 +162,7 @@ public static class BuiltInHooks
         if (ctx.ToolName is "WriteFile" or "DeleteFile" or "ReadFile")
         {
             var args = ctx.Args ?? "";
-            var root = Environment.GetEnvironmentVariable("LTAI_WORKSPACE") ?? Directory.GetCurrentDirectory();
+            var root = OptionService.Get("LTAI_WORKSPACE") ?? Directory.GetCurrentDirectory();
             if (args.Contains("..") || args.Contains("/etc/") || args.Contains("C:\\Windows"))
                 return Task.FromResult(ToolUseResult.Blocked);
         }

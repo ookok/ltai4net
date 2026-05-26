@@ -8,6 +8,7 @@ using LTAI.Infra.Network.Interfaces;
 using LTAI.Infra.Network.Links;
 using LTAI.Infra.Network.Messaging;
 using LTAI.Infra.Network.Perception;
+using LTAI.Models;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -46,6 +47,15 @@ public static class ServiceCollectionExtensions
         services.AddSingleton(sp => ExternalAccess.Instance);
 
         services.AddSingleton<Bridge.A2aP2pBridge>();
+
+        services.AddSingleton<GossipDiscovery>(sp =>
+        {
+            var p2pNode = sp.GetRequiredService<IP2PNode>();
+            var httpFactory = sp.GetRequiredService<IHttpClientFactory>();
+            var logger = sp.GetRequiredService<ILogger<GossipDiscovery>>();
+            var skillExchange = sp.GetService<ISkillExchangeProvider>();
+            return new GossipDiscovery(p2pNode, httpFactory, logger, skillExchange);
+        });
 
         return services;
     }

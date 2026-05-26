@@ -51,7 +51,7 @@ public sealed class EndToEndTestRunner
             _tracer.RecordStageStart(traceId, TraceStage.Router, testCase.Query);
             
             // 执行路由
-            var result = _router.Route(testCase.Query);
+            var result = await _router.RouteAsync(testCase.Query);
             
             _tracer.RecordStageEnd(traceId, TraceStage.Router, result.Route, success: true, metadata: new Dictionary<string, object>
             {

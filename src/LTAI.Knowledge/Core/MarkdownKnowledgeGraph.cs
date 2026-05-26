@@ -80,11 +80,11 @@ public sealed class MarkdownKnowledgeGraph
     private readonly IVectorStore? _vectorStore;
     private readonly ChunkingStrategyType _chunkingStrategy;
 
-    private static readonly Regex HeadingRegex = new(@"^(#{1,6})\s+(.+)$", RegexOptions.Multiline);
-    private static readonly Regex WikiLinkRegex = new(@"\[\[([^\]]+)\]\]");
-    private static readonly Regex FrontmatterRegex = new(@"^---\s*\n(.*?)\n---\s*\n", RegexOptions.Singleline);
-    private static readonly Regex YamlKeyRegex = new(@"^(\w[\w-]*)\s*:\s*(.+)$", RegexOptions.Multiline);
-    private static readonly Regex FirstParagraphRegex = new(@"^#+\s+.+\n\n((?:(?!#).)*?)(?=\n(#+\s|```|\n$|$))", RegexOptions.Singleline);
+    private static readonly Regex HeadingRegex = new(@"^(#{1,6})\s+(.+)$", RegexOptions.Multiline | RegexOptions.Compiled);
+    private static readonly Regex WikiLinkRegex = new(@"\[\[([^\]]+)\]\]", RegexOptions.Compiled);
+    private static readonly Regex FrontmatterRegex = new(@"^---\s*\n(.*?)\n---\s*\n", RegexOptions.Singleline | RegexOptions.Compiled);
+    private static readonly Regex YamlKeyRegex = new(@"^(\w[\w-]*)\s*:\s*(.+)$", RegexOptions.Multiline | RegexOptions.Compiled);
+    private static readonly Regex FirstParagraphRegex = new(@"^#+\s+.+\n\n((?:(?!#).)*?)(?=\n(#+\s|```|\n$|$))", RegexOptions.Singleline | RegexOptions.Compiled);
 
     public MarkdownKnowledgeGraph(string rootPath, IEmbeddingBackend? embedding = null, IVectorStore? vectorStore = null, ChunkingStrategyType chunkingStrategy = ChunkingStrategyType.Paragraph)
     {

@@ -17,6 +17,7 @@ public sealed class ConnectionPool : IDisposable
     private int _consecutiveErrors;
     private DateTime _lastRecreate = DateTime.UtcNow;
     private bool _disposed;
+    private CancellationTokenSource? _pooledCts;
 
     private const int RING_SIZE = 200;
     private const double BACKOFF_BASE_MS = 500;
@@ -28,6 +29,34 @@ public sealed class ConnectionPool : IDisposable
         _config = config ?? new PoolConfig();
         _logger = logger;
         _client = CreateSession();
+    }
+
+    private CancellationTokenSource RentCts(int timeoutMs)
+    {
+        var cts = Interlocked.Exchange(ref _pooledCts, null);
+        if (cts != null)
+        {
+            if (cts.TryReset())
+            {
+                cts.CancelAfter(timeoutMs);
+                return cts;
+            }
+            cts.Dispose();
+        }
+        return new CancellationTokenSource(timeoutMs);
+    }
+
+    private void ReturnCts(CancellationTokenSource cts)
+    {
+        if (!cts.TryReset())
+        {
+            cts.Dispose();
+            return;
+        }
+        if (Interlocked.CompareExchange(ref _pooledCts, cts, null) != null)
+        {
+            cts.Dispose();
+        }
     }
 
     public HttpClient GetClient()
@@ -79,25 +108,25 @@ public sealed class ConnectionPool : IDisposable
         var stats = _providerStats.GetOrAdd(providerName, _ => new ProviderPoolStats { Provider = providerName });
         var sw = System.Diagnostics.Stopwatch.StartNew();
 
+        var client = _client;
+        if (client == null)
+        {
+            await RecreateSession().ConfigureAwait(false);
+            client = _client;
+            if (client == null) return (503, "", 0);
+        }
+
+        var request = new HttpRequestMessage(method, url);
+
+        if (headers != null)
+            foreach (var h in headers) request.Headers.TryAddWithoutValidation(h.Key, h.Value);
+
+        if (jsonPayload != null)
+            request.Content = new StringContent(jsonPayload, System.Text.Encoding.UTF8, "application/json");
+
+        var cts = RentCts(timeoutMs);
         try
         {
-            var client = _client;
-            if (client == null)
-            {
-                await RecreateSession().ConfigureAwait(false);
-                client = _client;
-                if (client == null) return (503, "", 0);
-            }
-
-            var request = new HttpRequestMessage(method, url);
-
-            if (headers != null)
-                foreach (var h in headers) request.Headers.TryAddWithoutValidation(h.Key, h.Value);
-
-            if (jsonPayload != null)
-                request.Content = new StringContent(jsonPayload, System.Text.Encoding.UTF8, "application/json");
-
-            using var cts = new CancellationTokenSource(timeoutMs);
             var response = await client.SendAsync(request, cts.Token).ConfigureAwait(false);
             var body = await response.Content.ReadAsStringAsync(cts.Token).ConfigureAwait(false);
 
@@ -137,6 +166,10 @@ public sealed class ConnectionPool : IDisposable
             _logger?.LogDebug("ConnectionPool: {Provider} request failed: {Message}", providerName, ex.Message);
             return (0, "", sw.Elapsed.TotalMilliseconds);
         }
+        finally
+        {
+            ReturnCts(cts);
+        }
     }
 
     public async IAsyncEnumerable<string> StreamRequestAsync(
@@ -156,7 +189,7 @@ public sealed class ConnectionPool : IDisposable
         if (jsonPayload != null)
             request.Content = new StringContent(jsonPayload, System.Text.Encoding.UTF8, "application/json");
 
-        using var cts = new CancellationTokenSource(timeoutMs);
+        using var cts = RentCts(timeoutMs);
         var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false);
         using var stream = await response.Content.ReadAsStreamAsync(cts.Token).ConfigureAwait(false);
         using var reader = new StreamReader(stream);
@@ -235,5 +268,7 @@ public sealed class ConnectionPool : IDisposable
         _disposed = true;
         try { _client.CancelPendingRequests(); } catch { /* non-fatal */ }
         _client.Dispose();
+        _pooledCts?.Dispose();
+        _pooledCts = null;
     }
 }

@@ -18,7 +18,6 @@ using LTAI.Agent.Prefetch;
 using LTAI.Agent.Prompting;
 using LTAI.Agent.Routing;
 using LTAI.Agent.Tools;
-using LTAI.Agent.Workflows;
 
 namespace LTAI.Agent;
 
@@ -26,9 +25,29 @@ public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddLTAIAgent(this IServiceCollection services)
     {
+        services.AddHttpClient("SkillPublisher");
         services.AddSingleton<Skills.SkillRegistry>();
         services.AddSingleton<SkillLoader>();
         services.AddSingleton<SkillInstaller>();
+        services.AddSingleton<SkillPublisher>(sp =>
+        {
+            var registry = sp.GetRequiredService<Skills.SkillRegistry>();
+            var loader = sp.GetRequiredService<Skills.SkillLoader>();
+            var httpFactory = sp.GetRequiredService<IHttpClientFactory>();
+            var http = httpFactory.CreateClient("SkillPublisher");
+            var logger = sp.GetRequiredService<ILogger<SkillPublisher>>();
+            return new SkillPublisher(registry, loader, http, logger);
+        });
+        services.AddSingleton<ISkillExchangeProvider>(sp => sp.GetRequiredService<SkillPublisher>());
+        services.AddHostedService<SkillSyncService>();
+        services.AddSingleton<MarketplaceClient>(sp =>
+        {
+            var httpClientFactory = sp.GetService<IHttpClientFactory>();
+            var http = httpClientFactory?.CreateClient("Marketplace") ?? new HttpClient();
+            var logger = sp.GetRequiredService<ILogger<MarketplaceClient>>();
+            var baseUrl = Environment.GetEnvironmentVariable("LTAI_MARKETPLACE_URL");
+            return new MarketplaceClient(http, logger, baseUrl);
+        });
         services.AddSingleton<SkillExtractor>();
         services.AddSingleton<SkillRuntime>();
         services.AddSingleton<SkillAwareDecomposer>();
@@ -47,6 +66,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<PlannerCriticWorkflow>();
         services.AddSingleton<PlannerIntegration>();
         services.AddSingleton<UnifiedPlanningPipeline>();
+        services.AddSingleton<LTAICoordinator>();
         services.AddSingleton<AdversarialSelfPlay>(sp =>
         {
             var instance = AdversarialSelfPlay.Instance;

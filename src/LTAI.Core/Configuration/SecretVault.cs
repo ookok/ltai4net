@@ -8,6 +8,8 @@ public sealed class SecretVault
     private static readonly Lazy<SecretVault> _instance = new(() => new SecretVault());
     public static SecretVault Instance => _instance.Value;
 
+    public static Func<string, string?>? EnvResolver { get; set; }
+
     private readonly Dictionary<string, string> _cache = new();
     private readonly Dictionary<string, string> _envMap = new();
     private readonly object _lock = new();
@@ -16,6 +18,9 @@ public sealed class SecretVault
     {
         InitializeEnvMap();
     }
+
+    private static string? ResolveEnv(string envVar) =>
+        EnvResolver?.Invoke(envVar) ?? Environment.GetEnvironmentVariable(envVar);
 
     public string Get(string key, string defaultValue = "")
     {
@@ -26,7 +31,7 @@ public sealed class SecretVault
 
             if (_envMap.TryGetValue(key, out var envVar))
             {
-                var envValue = Environment.GetEnvironmentVariable(envVar);
+                var envValue = ResolveEnv(envVar);
                 if (!string.IsNullOrEmpty(envValue))
                 {
                     _cache[key] = envValue;
@@ -57,7 +62,7 @@ public sealed class SecretVault
             var result = new Dictionary<string, string>();
             foreach (var (key, envVar) in _envMap)
             {
-                var envValue = Environment.GetEnvironmentVariable(envVar);
+                var envValue = ResolveEnv(envVar);
                 if (!string.IsNullOrEmpty(envValue))
                     result[key] = envValue;
             }
@@ -129,7 +134,7 @@ public sealed class SecretVault
     {
         lock (_lock)
         {
-            var envCount = _envMap.Keys.Count(k => !string.IsNullOrEmpty(Environment.GetEnvironmentVariable(_envMap[k])));
+            var envCount = _envMap.Keys.Count(k => !string.IsNullOrEmpty(ResolveEnv(_envMap[k])));
             return new Dictionary<string, object>
             {
                 ["memory_secrets"] = _cache.Count,
@@ -168,6 +173,7 @@ public sealed class SecretVault
         _envMap["groq_api_key"] = "GROQ_API_KEY";
         _envMap["kiro_api_key"] = "KIRO_API_KEY";
         _envMap["opencode_api_key"] = "OPENCODE_API_KEY";
+        _envMap["kunlun_api_key"] = "KUNLUN_API_KEY";
         _envMap["tianditu_key"] = "TIANDITU_KEY";
         _envMap["baidu_map_ak"] = "BAIDU_MAP_AK";
         _envMap["baidu_map_sk"] = "BAIDU_MAP_SK";

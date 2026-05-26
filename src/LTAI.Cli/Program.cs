@@ -1,5 +1,6 @@
+using System.Reflection;
 using LTAI.Cli.Commands;
-using LTAI.Core.Messaging;
+using LTAI.Core.Interfaces;
 using LTAI.Core.Setup;
 using Microsoft.Extensions.DependencyInjection;
 using Spectre.Console;
@@ -9,16 +10,21 @@ namespace LTAI.Cli;
 
 public class Program
 {
+    private static readonly Dictionary<string, ILTAIEntryPoint> _entryPoints = new();
+
     public static async Task<int> Main(string[] args)
     {
-        TriggerEntryPointRegistrations();
+        ScanEntryPoints();
 
         if (args.Length > 0)
         {
             var cmd = args[0].ToLowerInvariant();
 
-            var entry = LTAIEntryPointRegistry.Get(cmd);
-            if (entry != null) { await entry.RunAsync(args[1..]); return 0; }
+            if (_entryPoints.TryGetValue(cmd, out var entry))
+            {
+                await entry.RunAsync(args[1..]);
+                return 0;
+            }
 
             if (cmd is "setup") { await RunSetupAsync(); return 0; }
         }
@@ -131,13 +137,41 @@ public class Program
         return 0;
     }
 
-    private static void TriggerEntryPointRegistrations()
+    private static void ScanEntryPoints()
     {
-#if !SKIP_HOST_MODULES
-        LTAI.Host.HostEntryPointRegistration.Initialize();
-        LTAI.MCP.McpEntryPointRegistration.Initialize();
-        LTAI.TUI.TuiEntryPointRegistration.Initialize();
-        LTAI.WebApp.WebAppEntryPointRegistration.Initialize();
-#endif
+        var entryTypes = new List<Type>();
+        foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+        {
+            if (assembly.IsDynamic) continue;
+            try
+            {
+                foreach (var type in assembly.GetTypes())
+                {
+                    if (typeof(ILTAIEntryPoint).IsAssignableFrom(type) && !type.IsInterface && !type.IsAbstract)
+                        entryTypes.Add(type);
+                }
+            }
+            catch { }
+        }
+
+        foreach (var type in entryTypes)
+        {
+            try
+            {
+                if (Activator.CreateInstance(type, type.IsPublic) is ILTAIEntryPoint entry)
+                {
+                    foreach (var candidate in new[] { "host", "serve", "mcp", "tui", "webapp" })
+                    {
+                        try
+                        {
+                            if (entry.CanHandle(candidate))
+                                _entryPoints.TryAdd(candidate, entry);
+                        }
+                        catch { }
+                    }
+                }
+            }
+            catch { }
+        }
     }
 }

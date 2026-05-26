@@ -2,6 +2,8 @@ using System.Collections.Concurrent;
 using LTAI.AI.Interfaces;
 using System.Text.Json;
 using LTAI.AI.Governors;
+using LTAI.Agent.MAF;
+using LTAI.Models;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
@@ -93,7 +95,31 @@ public static class SseAgentEndpoints
                 var system = sp.GetService<ILivingTreeSystem>();
                 var chatClient = sp.GetService<IChatClient>();
 
-                if (system is not null)
+                var loop = sp.GetService<AgenticLoop>();
+                if (loop != null)
+                {
+                    _ = Task.Run(async () =>
+                    {
+                        task.Status = "running";
+                        task.UseAgenticLoop = true;
+                        task.SessionId = loop.SessionId;
+                        task.PartAssembler = loop.PartAssembler;
+                        try
+                        {
+                            var result = await loop.RunAsync(prompt, CancellationToken.None).ConfigureAwait(false);
+                            task.Result = result.FinalOutput;
+                            task.Status = result.Completed ? "completed" : "failed";
+                            task.Complete();
+                        }
+                        catch (Exception ex)
+                        {
+                            task.Error = ex.Message;
+                            task.Status = "failed";
+                            task.Complete();
+                        }
+                    });
+                }
+                else if (system is not null)
                 {
                     _ = Task.Run(async () =>
                     {
@@ -102,7 +128,7 @@ public static class SseAgentEndpoints
                         {
                             task.StepsCompleted = 2;
                             var response = await system.ChatAsync(prompt).ConfigureAwait(false);
-                        task.Result = response;
+                            task.Result = response;
                             task.Status = "completed";
                             task.StepsCompleted = Steps.Length;
                             task.Complete();
@@ -182,43 +208,157 @@ public static class SseAgentEndpoints
         {
             context.Response.ContentType = "text/event-stream";
             context.Response.Headers["Cache-Control"] = "no-cache";
+            context.Response.Headers["Connection"] = "keep-alive";
 
             if (!_tasks.TryGetValue(taskId, out var task))
             {
-                await context.Response.WriteAsync("data: {\"error\":\"Task not found\"}\n\n");
+                await WriteSseData(context, new { type = "error", error = "Task not found" });
                 return;
             }
 
+            var ct = context.RequestAborted;
+
+            if (task.SessionId != null)
+            {
+                var partStore = context.RequestServices.GetService<PartStreamStore>();
+                if (partStore != null)
+                {
+                    var history = await partStore.ReplayAsync(task.SessionId, ct);
+                    foreach (var part in history)
+                    {
+                        var typeName = part switch { TextPart => "text", ReasoningPart => "reasoning", ToolInvocationPart => "tool", FilePart => "file", AgentPart => "agent", _ => "part" };
+                        await WriteSseEvent(context, "part:replay", new
+                        {
+                            task_id = taskId,
+                            part_id = part.Id,
+                            type = typeName
+                        });
+                    }
+                }
+            }
+
+            if (task.UseAgenticLoop && task.PartAssembler != null)
+            {
+                var assembler = task.PartAssembler;
+
+                foreach (var part in assembler.Snapshot())
+                {
+                    if (ct.IsCancellationRequested) return;
+                    await WriteSseEvent(context, "part:appended", new
+                    {
+                        task_id = taskId,
+                        part_id = part.Id,
+                        type = part.GetType().Name
+                    });
+                }
+
+                var tcs = new TaskCompletionSource();
+                Action<Part> onAppended = async (p) =>
+                {
+                    try
+                    {
+                        await WriteSseEvent(context, "part:appended", new
+                        {
+                            task_id = taskId,
+                            part_id = p.Id,
+                            type = p switch
+                            {
+                                TextPart => "text",
+                                ReasoningPart => "reasoning",
+                                ToolInvocationPart => "tool-invocation",
+                                FilePart => "file",
+                                AgentPart => "agent",
+                                _ => "unknown"
+                            }
+                        });
+                    }
+                    catch { tcs.TrySetResult(); }
+                };
+
+                Action<Part> onUpdated = async (p) =>
+                {
+                    try
+                    {
+                        if (p is ToolInvocationPart tip)
+                        {
+                            await WriteSseEvent(context, "part:updated", new
+                            {
+                                task_id = taskId,
+                                part_id = p.Id,
+                                type = "tool-invocation",
+                                tool_name = tip.ToolName,
+                                state = tip.State.ToString().ToLowerInvariant(),
+                                output = tip.Output,
+                                error = tip.Error
+                            });
+                        }
+                        else if (p is TextPart tp)
+                        {
+                            await WriteSseEvent(context, "part:updated", new
+                            {
+                                task_id = taskId,
+                                part_id = p.Id,
+                                type = "text",
+                                text = tp.Text.Length > 200 ? tp.Text[^200..] : tp.Text
+                            });
+                        }
+                    }
+                    catch { tcs.TrySetResult(); }
+                };
+
+                assembler.OnPartAppended += onAppended;
+                assembler.OnPartUpdated += onUpdated;
+
+                try
+                {
+                    await Task.WhenAny(tcs.Task, Task.Delay(TimeSpan.FromMinutes(30), ct));
+                }
+                finally
+                {
+                    assembler.OnPartAppended -= onAppended;
+                    assembler.OnPartUpdated -= onUpdated;
+                }
+
+                if (!ct.IsCancellationRequested)
+                {
+                    await WriteSseEvent(context, "message:finished", new
+                    {
+                        task_id = taskId,
+                        status = task.Status,
+                        result = task.Result
+                    });
+                }
+
+                await context.Response.Body.FlushAsync().ConfigureAwait(false);
+                return;
+            }
+
+            // Fallback: legacy polling-based streaming
             var lastStep = 0;
             while ((task.Status == "running" || task.Status == "pending")
-                   && !context.RequestAborted.IsCancellationRequested)
+                   && !ct.IsCancellationRequested)
             {
                 if (task.StepsCompleted > lastStep && task.StepsCompleted <= Steps.Length)
                 {
                     lastStep = task.StepsCompleted;
                     var stepName = Steps[lastStep - 1];
-                    var msg = $"Executing {stepName.Replace('_', ' ')}...";
-                    var sseData = JsonSerializer.Serialize(new { type = "progress", step = stepName, message = msg });
-                    await context.Response.WriteAsync($"data: {sseData}\n\n");
-                    await context.Response.Body.FlushAsync().ConfigureAwait(false);
+                    await WriteSseData(context, new
+                    {
+                        type = "progress",
+                        step = stepName,
+                        message = $"Executing {stepName.Replace('_', ' ')}..."
+                    });
                 }
 
-                await Task.WhenAny(task.Completion, Task.Delay(200, context.RequestAborted)).ConfigureAwait(false);
+                await Task.WhenAny(task.Completion, Task.Delay(200, ct)).ConfigureAwait(false);
             }
 
-            if (context.RequestAborted.IsCancellationRequested)
-                return;
+            if (ct.IsCancellationRequested) return;
 
             if (task.Status == "completed")
-            {
-                var completeData = JsonSerializer.Serialize(new { type = "complete", result = task.Result });
-                await context.Response.WriteAsync($"data: {completeData}\n\n");
-            }
+                await WriteSseData(context, new { type = "complete", result = task.Result });
             else if (task.Status == "failed")
-            {
-                var errorData = JsonSerializer.Serialize(new { type = "error", error = task.Error });
-                await context.Response.WriteAsync($"data: {errorData}\n\n");
-            }
+                await WriteSseData(context, new { type = "error", error = task.Error });
 
             await context.Response.Body.FlushAsync().ConfigureAwait(false);
         });
@@ -235,6 +375,20 @@ public static class SseAgentEndpoints
             });
             await context.Response.WriteAsync(JsonSerializer.Serialize(tasks)).ConfigureAwait(false);
         });
+    }
+
+    private static async Task WriteSseEvent(HttpContext context, string eventType, object data)
+    {
+        var json = JsonSerializer.Serialize(data);
+        await context.Response.WriteAsync($"event: {eventType}\ndata: {json}\n\n");
+        await context.Response.Body.FlushAsync().ConfigureAwait(false);
+    }
+
+    private static async Task WriteSseData(HttpContext context, object data)
+    {
+        var json = JsonSerializer.Serialize(data);
+        await context.Response.WriteAsync($"data: {json}\n\n");
+        await context.Response.Body.FlushAsync().ConfigureAwait(false);
     }
 }
 
@@ -273,6 +427,10 @@ public sealed class SseTask
         get { lock (_lock) return _stepsCompleted; }
         set { lock (_lock) _stepsCompleted = value; }
     }
+
+    public bool UseAgenticLoop { get; set; }
+    public string? SessionId { get; set; }
+    public PartAssembler? PartAssembler { get; set; }
 
     private readonly TaskCompletionSource _completionSource = new(TaskCreationOptions.RunContinuationsAsynchronously);
     public Task Completion => _completionSource.Task;

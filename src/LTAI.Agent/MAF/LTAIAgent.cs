@@ -4,6 +4,8 @@ using LTAI.AI.Interfaces;
 using LTAI.AI.Governors;
 using LTAI.Agent.Skills;
 using LTAI.Agent.Skills.Runtime;
+using LTAI.Agent.Workflows;
+using LTAI.Models;
 using Microsoft.Agents.AI;
 using Microsoft.Agents.AI.Workflows;
 using Microsoft.Extensions.AI;
@@ -20,6 +22,7 @@ public sealed class LTAIAgent : AIAgent
     private readonly SkillRegistry _skillRegistry;
     private readonly SkillExtractor? _skillExtractor;
     private readonly MultiRoundOrchestrator? _multiRound;
+    private readonly LTAICoordinator? _coordinator;
     private readonly ILogger<LTAIAgent> _logger;
     private readonly LogiInputFilter? _inputFilter;
     private readonly LogiOutputFilter? _outputFilter;
@@ -33,6 +36,7 @@ public sealed class LTAIAgent : AIAgent
         ILogger<LTAIAgent> logger,
         SkillExtractor? skillExtractor = null,
         MultiRoundOrchestrator? multiRound = null,
+        LTAICoordinator? coordinator = null,
         LogiInputFilter? inputFilter = null,
         LogiOutputFilter? outputFilter = null)
     {
@@ -41,6 +45,7 @@ public sealed class LTAIAgent : AIAgent
         _logger = logger;
         _skillExtractor = skillExtractor;
         _multiRound = multiRound;
+        _coordinator = coordinator;
         _inputFilter = inputFilter;
         _outputFilter = outputFilter;
 
@@ -77,24 +82,26 @@ public sealed class LTAIAgent : AIAgent
 
         try
         {
-            if (_multiRound != null && query.Length > 200)
+            if (_coordinator != null && ShouldUseCoordinator(query))
             {
-                var result = new System.Text.StringBuilder();
-                var lastContent = "";
-                await foreach (var evt in _multiRound.ExecuteAsync(query, ct: cancellationToken))
-                {
-                    if (evt.Phase is MultiRoundPhase.RoundComplete or MultiRoundPhase.Complete)
+                var teamResult = await _coordinator.RunTeamAsync(
+                    new AgentTeam
                     {
-                        lastContent = evt.Content;
-                        result.AppendLine(evt.Content);
-                    }
-                    else if (evt.Phase == MultiRoundPhase.PlanReady)
-                    {
-                        result.AppendLine($"[{evt.Description}]");
-                    }
-                }
+                        Name = "LTAI Router",
+                        Goal = query,
+                        Members = new List<TeamMember>
+                        {
+                            new() { Name = "code", Role = "Code analysis and editing" },
+                            new() { Name = "eia", Role = "Environmental impact assessment and modeling" },
+                            new() { Name = "chat", Role = "Conversation and general knowledge" },
+                            new() { Name = "reasoning", Role = "Logic, planning, and reasoning" }
+                        },
+                        MaxConcurrency = 3
+                    },
+                    query,
+                    cancellationToken).ConfigureAwait(false);
 
-                var finalResult = result.Length > 0 ? result.ToString().Trim() : lastContent;
+                var finalResult = teamResult.FinalOutput ?? teamResult.Error ?? "No output from coordinator";
                 if (_outputFilter != null)
                 {
                     var (allowed, blockReason) = _outputFilter.Review(finalResult);
@@ -103,26 +110,10 @@ public sealed class LTAIAgent : AIAgent
                 }
                 ltaSession?.AddTurn(userMessages.Last().Text ?? query, finalResult);
                 RecordSkillPattern(query, finalResult);
+                _logger.LogInformation(
+                    "LTAICoordinator: Completed {Completed}/{Total} tasks in {Time}ms",
+                    teamResult.CompletedTasks, teamResult.TotalTasks, teamResult.TotalMs);
                 return new AgentResponse(new ChatMessage(ChatRole.Assistant, finalResult));
-            }
-
-            var useWorkflow = options?.AdditionalProperties?.TryGetValue("useWorkflow", out var wf) == true && wf is true;
-            var forceChat = options?.AdditionalProperties?.TryGetValue("forceChat", out var fc) == true && fc is true;
-            bool shouldUseWorkflow = useWorkflow || (!forceChat && ShouldUseWorkflow(query));
-
-            if (shouldUseWorkflow)
-            {
-                var wfResult = await GovernorWorkflow.ExecuteWorkflowAsync(_livingTree, query, cancellationToken).ConfigureAwait(false);
-                var result = wfResult.IsBlocked ? $"[Blocked: {wfResult.BlockReason}]" : wfResult.Response;
-                if (_outputFilter != null)
-                {
-                    var (allowed, blockReason) = _outputFilter.Review(result);
-                    if (blockReason != null) result = $"[Blocked: {blockReason}]";
-                    else if (allowed != null) result = allowed;
-                }
-                ltaSession?.AddTurn(userMessages.Last().Text ?? query, result);
-                RecordSkillPattern(query, result);
-                return new AgentResponse(new ChatMessage(ChatRole.Assistant, result));
             }
 
             var response = await _chatAgent.RunAsync(messages, session, options, cancellationToken).ConfigureAwait(false);
@@ -164,40 +155,54 @@ public sealed class LTAIAgent : AIAgent
 
         var useWorkflow = options?.AdditionalProperties?.TryGetValue("useWorkflow", out var wf) == true && wf is true;
         var forceChat = options?.AdditionalProperties?.TryGetValue("forceChat", out var fc) == true && fc is true;
-        bool shouldUseWorkflow = useWorkflow || (!forceChat && ShouldUseWorkflow(query));
+        bool shouldUseCoordinator = !forceChat && _coordinator != null && ShouldUseCoordinator(query);
 
-        if (shouldUseWorkflow)
+        if (shouldUseCoordinator)
         {
-            await foreach (var update in StreamWorkflowAsync(query, cancellationToken))
-                yield return update;
+            yield return new AgentResponseUpdate(ChatRole.Assistant, $"[Coordinator decomposing: {query[..Math.Min(query.Length, 80)]}...]");
+            var teamResult = await _coordinator.RunTeamAsync(
+                new AgentTeam
+                {
+                    Name = "LTAI Router Stream",
+                    Goal = query,
+                    Members = new List<TeamMember>
+                    {
+                        new() { Name = "code", Role = "Code analysis and editing" },
+                        new() { Name = "chat", Role = "Conversation and general knowledge" }
+                    },
+                    MaxConcurrency = 2
+                },
+                query,
+                cancellationToken).ConfigureAwait(false);
+            var finalResult = teamResult.FinalOutput ?? teamResult.Error ?? "No output";
+            yield return new AgentResponseUpdate(ChatRole.Assistant, finalResult);
+            yield break;
         }
-        else
+
+        await using var enumerator = _chatAgent.RunStreamingAsync(messages, session, options, cancellationToken).GetAsyncEnumerator(cancellationToken);
+        string? streamError = null;
+
+        while (true)
         {
-            await using var enumerator = _chatAgent.RunStreamingAsync(messages, session, options, cancellationToken).GetAsyncEnumerator(cancellationToken);
-            string? streamError = null;
-
-            while (true)
+            AgentResponseUpdate update;
+            try
             {
-                AgentResponseUpdate update;
-                try
-                {
-                    if (!await enumerator.MoveNextAsync()) break;
-                    update = enumerator.Current;
-                }
-                catch (OperationCanceledException) { yield break; }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "LTAI agent stream error");
-                    streamError = ex.Message;
-                    break;
-                }
-
-                yield return update;
+                if (!await enumerator.MoveNextAsync()) break;
+                update = enumerator.Current;
+            }
+            catch (OperationCanceledException) { yield break; }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "LTAI agent stream error");
+                streamError = ex.Message;
+                break;
             }
 
-            if (streamError != null)
-                yield return new AgentResponseUpdate(ChatRole.Assistant, $"Error: {streamError}");
+            yield return update;
         }
+
+        if (streamError != null)
+            yield return new AgentResponseUpdate(ChatRole.Assistant, $"Error: {streamError}");
     }
 
     private async IAsyncEnumerable<AgentResponseUpdate> StreamWorkflowAsync(string query, [EnumeratorCancellation] CancellationToken ct)
@@ -257,8 +262,47 @@ public sealed class LTAIAgent : AIAgent
         return ValueTask.FromResult<AgentSession>(session);
     }
 
+    private bool ShouldUseCoordinator(string query)
+    {
+        if (_coordinator == null) return false;
+        if (string.IsNullOrWhiteSpace(query)) return false;
+        if (query.Length < 30) return false;
+
+        var lower = query.ToLowerInvariant();
+
+        var coordinatorKeywords = new[]
+        {
+            "同时", "并行", "并行执行", "协作", "协同",
+            "orchestrate", "parallel", "concurrently", "team",
+            "多人", "多任务", "多模块", "多个任务",
+            "方案", "方案比选", "优化方案", "比选方案",
+            "综合评估", "综合", "全面评估",
+            "eia and code", "code and eia",
+            "分析", "审查", "review", "analyze", "比较", "compare",
+            "设计", "design", "架构", "architecture", "规划", "plan",
+            "重构", "refactor", "优化", "optimize",
+            "pipeline", "workflow", "流程", "编排", "orchestrate"
+        };
+
+        foreach (var kw in coordinatorKeywords)
+            if (lower.Contains(kw)) return true;
+
+        var matchedSkills = _skillRegistry.MatchByTrigger(query);
+        if (matchedSkills.Any(s => s.IsReliable))
+            return true;
+
+        var wordCount = query.Split((char[])[' ', '\t', '\n', '\r'], StringSplitOptions.RemoveEmptyEntries).Length;
+        if (wordCount > 50) return true;
+
+        var sentenceCount = query.Count(c => c is '.' or '。' or '!' or '！' or '?' or '？');
+        if (sentenceCount >= 3) return true;
+
+        return false;
+    }
+
     private bool ShouldUseWorkflow(string query)
     {
+        if (_coordinator != null) return false;
         if (string.IsNullOrWhiteSpace(query)) return false;
         var trimmed = query.Trim();
         if (trimmed.Length < 10) return false;

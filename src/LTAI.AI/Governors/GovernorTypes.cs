@@ -1,3 +1,5 @@
+using LTAI.Models;
+
 namespace LTAI.AI.Governors;
 
 public sealed record GovernorInput
@@ -38,6 +40,7 @@ public sealed record GovernorOutput
     public string? ReflexCommand { get; init; }
     public bool IsBlocked { get; init; }
     public string? BlockReason { get; init; }
+    public Part[] Parts { get; init; } = Array.Empty<Part>();
 
     public static GovernorOutput Success(string response, string traceId) => new() { Response = response, TraceId = traceId };
     public static GovernorOutput Reflex(string command, string traceId) => new() { IsReflex = true, ReflexCommand = command, TraceId = traceId };

@@ -93,24 +93,16 @@ public sealed class ResourceTree
         MountPoint? best = null;
         var bestLen = 0;
 
-        foreach (var kvp in _mounts)
+        var sorted = _mounts.OrderByDescending(kvp => kvp.Key.Length);
+        foreach (var kvp in sorted)
         {
             var mountPath = kvp.Key.TrimEnd('/');
-            if (mountPath == "/" && best == null)
-            {
-                best = kvp.Value;
-                bestLen = 1;
-                continue;
-            }
-
             if (normalized.StartsWith(mountPath, StringComparison.OrdinalIgnoreCase)
                 && (normalized.Length == mountPath.Length || normalized[mountPath.Length] == '/'))
             {
-                if (mountPath.Length > bestLen)
-                {
-                    best = kvp.Value;
-                    bestLen = mountPath.Length;
-                }
+                best = kvp.Value;
+                bestLen = mountPath.Length;
+                break;
             }
         }
 

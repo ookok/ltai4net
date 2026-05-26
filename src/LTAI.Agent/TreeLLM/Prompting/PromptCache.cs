@@ -70,11 +70,13 @@ public sealed class PromptCache
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
     {
         var text = await GetOrComputeAsync(prompt, model, cancellationToken).ConfigureAwait(false);
+        var textMemory = text.AsMemory();
         const int chunkSize = 8;
-        for (int i = 0; i < text.Length; i += chunkSize)
+        for (int i = 0; i < textMemory.Length; i += chunkSize)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            yield return new ChatResponseUpdate(ChatRole.Assistant, text[i..Math.Min(i + chunkSize, text.Length)]);
+            var slice = textMemory.Slice(i, Math.Min(chunkSize, textMemory.Length - i));
+            yield return new ChatResponseUpdate(ChatRole.Assistant, new string(slice.Span));
         }
     }
 

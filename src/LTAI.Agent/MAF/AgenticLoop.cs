@@ -1,38 +1,70 @@
 using System.Diagnostics;
 using System.Text;
+using LTAI.Agent.Tools;
 using LTAI.AI.Interfaces;
 using LTAI.Core.System;
+using LTAI.Knowledge.Core;
+using LTAI.Models;
+using LTAI.Tools.CodeEngine;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace LTAI.Agent.MAF;
 
-/// <summary>
-/// Agentic Shell: Read → Think → Edit → Run → Observe cycle.
-/// Claude Code design philosophy: the agent owns the terminal loop,
-/// file system + git are its UI, each iteration produces an audit trail.
-/// </summary>
 public sealed class AgenticLoop
 {
     private readonly ILivingTreeSystem _lts;
     private readonly ILogger<AgenticLoop> _logger;
     private readonly AgentHookPipeline _hooks;
+    private readonly SystemPromptAssembler? _promptAssembler;
+    private readonly MemoryFilesService? _memoryFiles;
+    private readonly CSharpCompilationService? _roslynDiagnostics;
+    private readonly PartStreamStore? _partStore;
+    private readonly PartAssembler _assembler;
     private readonly string _workspaceRoot;
+    private readonly string _projectLanguage;
+    private readonly string _sessionId;
     private int _iterationCount;
     private const int MaxIterations = 20;
 
     public int IterationCount => _iterationCount;
     public List<LoopStep> History { get; } = new();
+    public PartAssembler PartAssembler => _assembler;
+    public string SessionId => _sessionId;
 
     public AgenticLoop(ILivingTreeSystem lts, AgentHookPipeline hooks,
+        SystemPromptAssembler? promptAssembler = null,
+        MemoryFilesService? memoryFiles = null,
+        CSharpCompilationService? roslynDiagnostics = null,
+        PartStreamStore? partStore = null,
         ILogger<AgenticLoop>? logger = null)
     {
         _lts = lts;
         _hooks = hooks;
+        _promptAssembler = promptAssembler;
+        _memoryFiles = memoryFiles;
+        _roslynDiagnostics = roslynDiagnostics;
+        _partStore = partStore;
         _logger = logger ?? NullLogger<AgenticLoop>.Instance;
-        _workspaceRoot = Environment.GetEnvironmentVariable("LTAI_WORKSPACE")
+        _workspaceRoot = OptionService.Get("LTAI_WORKSPACE")
             ?? Directory.GetCurrentDirectory();
+        _projectLanguage = DiagnosticParser.DetectLanguage(_workspaceRoot);
+        _sessionId = Guid.NewGuid().ToString("N")[..8];
+        _assembler = new PartAssembler();
+
+        _assembler.OnPartAppended += async p =>
+        {
+            _logger.LogDebug("PartAppended: {Id} {Type}", p.Id, p.GetType().Name);
+            if (_partStore != null)
+                await _partStore.AppendAsync(_sessionId, p, CancellationToken.None).ConfigureAwait(false);
+        };
+        _assembler.OnPartUpdated += async p =>
+        {
+            _logger.LogDebug("PartUpdated: {Id} {Type}", p.Id, p.GetType().Name);
+            if (_partStore != null)
+                await _partStore.AppendAsync(_sessionId, p, CancellationToken.None).ConfigureAwait(false);
+        };
     }
 
     /// <summary>
@@ -88,9 +120,26 @@ public sealed class AgenticLoop
         step.Phase = LoopPhase.Read;
         try
         {
-            context.State["build_ok"] = await CheckBuildAsync(ct).ConfigureAwait(false) ? "true" : "false";
+            var (buildOk, buildOutput) = await CheckBuildWithOutputAsync(ct).ConfigureAwait(false);
+            context.State["build_ok"] = buildOk ? "true" : "false";
             context.State["git_clean"] = await CheckGitCleanAsync(ct).ConfigureAwait(false) ? "true" : "false";
             context.State["last_output"] = step.Observation ?? "(first run)";
+
+            var diagLines = new List<string>();
+            if (!buildOk)
+            {
+                diagLines.Add(DiagnosticParser.BuildDiagnosticContext(
+                    DiagnosticParser.ParseBuildOutput(buildOutput, _projectLanguage)));
+            }
+            if (_roslynDiagnostics != null && _projectLanguage == "dotnet")
+            {
+                var roslynResult = await _roslynDiagnostics.AnalyzeWorkspaceAsync(_workspaceRoot, ct)
+                    .ConfigureAwait(false);
+                if (roslynResult.Diagnostics.Count > 0)
+                    diagLines.Add(roslynResult.ToPromptContext());
+            }
+            context.State["build_diagnostics"] = string.Join("\n", diagLines);
+
             step.Phase = LoopPhase.Think;
         }
         catch (Exception ex)
@@ -102,24 +151,75 @@ public sealed class AgenticLoop
         }
 
         // 2. THINK: reason about next action
-        var thinking = await _lts.ChatAsync(
-            $"You are in an agentic loop. Task: {context.Task}\n" +
+        var memoryContext = "";
+        if (_memoryFiles != null && _iterationCount == 1)
+        {
+            memoryContext = BuildMemoryContext(context.Task);
+        }
+
+        var diagCtx = context.State.GetValueOrDefault("build_diagnostics", "");
+
+        var gitCleanBool = context.State.TryGetValue("git_clean", out var gc) && gc == "true";
+        var buildOkBool = context.State.TryGetValue("build_ok", out var bo) && bo == "true";
+
+        var systemPrompt = _promptAssembler?.Assemble(new PromptLayerContext
+        {
+            WorkspaceRoot = _workspaceRoot,
+            CurrentDir = _workspaceRoot,
+            Platform = Environment.OSVersion.Platform.ToString().ToLowerInvariant(),
+            Date = DateTime.Now.ToString("yyyy-MM-dd"),
+            Shell = "pwsh",
+            GitClean = gitCleanBool,
+            BuildOk = buildOkBool,
+            BuildDiagnostics = diagCtx,
+            MemoryContext = memoryContext,
+            TaskInstructions = $"Agentic loop iteration {_iterationCount}/{MaxIterations}",
+        }) ?? "";
+
+        var taskPrompt = $"Task: {context.Task}\n" +
             $"Environment: build_ok={context.State["build_ok"]}, git_clean={context.State["git_clean"]}\n" +
-            $"Last observation: {context.State["last_output"]}\n\n" +
-            "Based on the above, what should be the NEXT action? Respond with:\n" +
+            $"Last observation: {context.State["last_output"]}\n" +
+            (string.IsNullOrEmpty(diagCtx) ? "" : $"{diagCtx}\n") +
+            "\nBased on the above, what should be the NEXT action? Respond with:\n" +
             "ACTION: <read|edit|run|observe|done>\n" +
             "DETAIL: <what to do>\n\n" +
             "If the task appears complete, respond with ACTION: done\n" +
-            "If a previous edit caused errors, respond with ACTION: edit to fix them",
+            "If a previous edit caused errors, respond with ACTION: edit to fix them";
+
+        var thinking = await _lts.ChatAsync(
+            systemPrompt + "\n\n" + taskPrompt,
             ct).ConfigureAwait(false);
+
+        _assembler.FeedText(thinking);
 
         var (action, detail) = ParseAction(thinking);
         step.Thinking = thinking;
         step.Action = action;
         step.Detail = detail;
+        step.Parts = _assembler.Snapshot();
+
+        if (action == "read")
+        {
+            step.Phase = LoopPhase.Read;
+            var readPart = new ToolInvocationPart(
+                Guid.NewGuid().ToString("N")[..8],
+                "read", detail, ToolState.Executing);
+            _assembler.StartToolInvocation(readPart);
+
+            var readPaths = await ReadFilesAsync(detail, ct).ConfigureAwait(false);
+
+            _assembler.UpdateToolState(readPart.Id,
+                readPaths.Count > 0 ? ToolState.Completed : ToolState.Error,
+                readPaths.Count > 0 ? readPaths.Count : null,
+                readPaths.Count == 0 ? "No files found or readable" : null);
+
+            step.Observation = readPaths.Count > 0
+                ? $"Read {readPaths.Count} file(s)"
+                : $"No readable files found for: {detail}";
+        }
 
         // 3. EDIT: make changes (with hook check)
-        if (action == "edit")
+        else if (action == "edit")
         {
             step.Phase = LoopPhase.Edit;
 
@@ -139,7 +239,14 @@ public sealed class AgenticLoop
                 return step;
             }
 
+            var editPart = new ToolInvocationPart(
+                Guid.NewGuid().ToString("N")[..8],
+                "edit", detail, ToolState.Executing);
+            _assembler.StartToolInvocation(editPart);
+
             await _lts.ChatAsync(detail, ct).ConfigureAwait(false);
+            _assembler.UpdateToolState(editPart.Id, ToolState.Completed, null);
+
             await _hooks.RunPostToolHooksAsync(hookCtx, null, ct).ConfigureAwait(false);
         }
 
@@ -162,12 +269,56 @@ public sealed class AgenticLoop
                 return step;
             }
 
+            var buildPart = new ToolInvocationPart(
+                Guid.NewGuid().ToString("N")[..8],
+                "dotnet build", "--no-restore", ToolState.Executing);
+            _assembler.StartToolInvocation(buildPart);
+
             context.State["build_ok"] = await CheckBuildAsync(ct).ConfigureAwait(false) ? "true" : "false";
+            if (context.State["build_ok"] == "false")
+            {
+                var (_, runBuildOutput) = await CheckBuildWithOutputAsync(ct).ConfigureAwait(false);
+                context.State["build_diagnostics"] = DiagnosticParser.BuildDiagnosticContext(
+                    DiagnosticParser.ParseBuildOutput(runBuildOutput, _projectLanguage));
+            }
             if (context.State["build_ok"] == "true")
                 context.State["git_clean"] = await CheckGitCleanAsync(ct).ConfigureAwait(false) ? "true" : "false";
 
+            _assembler.UpdateToolState(buildPart.Id,
+                context.State["build_ok"] == "true" ? ToolState.Completed : ToolState.Error,
+                context.State["build_ok"] == "true" ? "Build succeeded" : "Build failed");
+
             step.Observation = $"Build: {context.State["build_ok"]}, Git: {context.State["git_clean"]}";
             await _hooks.RunPostToolHooksAsync(hookCtx, null, ct).ConfigureAwait(false);
+
+            if (context.State["build_ok"] == "true")
+            {
+                var testFailures = new List<TestFailure>();
+                try
+                {
+                    var testPart = new ToolInvocationPart(
+                        Guid.NewGuid().ToString("N")[..8],
+                        "dotnet test", "--no-build", ToolState.Executing);
+                    _assembler.StartToolInvocation(testPart);
+
+                    var testOutput = await CaptureTestOutputAsync(ct).ConfigureAwait(false);
+                    if (!string.IsNullOrEmpty(testOutput))
+                    {
+                        testFailures = TestResultParser.Parse(testOutput);
+                        if (testFailures.Count > 0)
+                        {
+                            var failureContext = TestResultParser.BuildFailureContext(testFailures);
+                            step.Observation += $"\n\n{failureContext}";
+                            _logger.LogInformation("AgenticLoop: Found {Count} test failures", testFailures.Count);
+                        }
+                    }
+
+                    _assembler.UpdateToolState(testPart.Id,
+                        testFailures.Count == 0 ? ToolState.Completed : ToolState.Error,
+                        testFailures.Count == 0 ? "All tests passed" : $"{testFailures.Count} failures");
+                }
+                catch { /* test runner not available */ }
+            }
         }
 
         // 5. OBSERVE: read results and decide
@@ -215,7 +366,38 @@ public sealed class AgenticLoop
         return (action, detail);
     }
 
+    private string BuildMemoryContext(string task)
+    {
+        try
+        {
+            var relevant = _memoryFiles!.RetrieveRelevant(task, topK: 3);
+            if (relevant.Count == 0) return "";
+
+            var sb = new StringBuilder();
+            sb.AppendLine("Relevant knowledge from memory files:");
+            foreach (var mf in relevant)
+            {
+                if (!string.IsNullOrEmpty(mf.Summary))
+                    sb.AppendLine($"- [{mf.Domain}] {mf.Summary}");
+                foreach (var fact in mf.Facts.Take(5))
+                    sb.AppendLine($"  • {fact.Statement}");
+            }
+            sb.AppendLine();
+            return sb.ToString();
+        }
+        catch
+        {
+            return "";
+        }
+    }
+
     private async Task<bool> CheckBuildAsync(CancellationToken ct)
+    {
+        var (success, _) = await CheckBuildWithOutputAsync(ct).ConfigureAwait(false);
+        return success;
+    }
+
+    private async Task<(bool success, string output)> CheckBuildWithOutputAsync(CancellationToken ct)
     {
         try
         {
@@ -228,11 +410,13 @@ public sealed class AgenticLoop
                 CreateNoWindow = true
             };
             using var p = Process.Start(psi);
-            if (p == null) return false;
+            if (p == null) return (false, "");
+            var output = await p.StandardOutput.ReadToEndAsync(ct).ConfigureAwait(false);
+            var error = await p.StandardError.ReadToEndAsync(ct).ConfigureAwait(false);
             await p.WaitForExitAsync(ct).ConfigureAwait(false);
-            return p.ExitCode == 0;
+            return (p.ExitCode == 0, error + "\n" + output);
         }
-        catch { return false; }
+        catch { return (false, ""); }
     }
 
     private async Task<bool> CheckGitCleanAsync(CancellationToken ct)
@@ -252,6 +436,87 @@ public sealed class AgenticLoop
         }
         catch { return false; }
     }
+
+    private async Task<string> CaptureTestOutputAsync(CancellationToken ct)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo("dotnet", "test --no-build --verbosity normal")
+            {
+                WorkingDirectory = _workspaceRoot,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            using var p = Process.Start(psi);
+            if (p == null) return "";
+            var output = await p.StandardOutput.ReadToEndAsync(ct).ConfigureAwait(false);
+            var error = await p.StandardError.ReadToEndAsync(ct).ConfigureAwait(false);
+            await p.WaitForExitAsync(ct).ConfigureAwait(false);
+            return output + "\n" + error;
+        }
+        catch { return ""; }
+    }
+
+    private async Task<List<string>> ReadFilesAsync(string detail, CancellationToken ct)
+    {
+        var paths = new List<string>();
+        var matches = System.Text.RegularExpressions.Regex.Matches(detail, @"""([^""]+)""|'([^']+)'|([^\s,;]+)");
+        foreach (System.Text.RegularExpressions.Match m in matches)
+        {
+            var p = m.Groups[1].Success ? m.Groups[1].Value :
+                    m.Groups[2].Success ? m.Groups[2].Value :
+                    m.Groups[3].Value;
+            if (!string.IsNullOrWhiteSpace(p))
+                paths.Add(p);
+        }
+        if (paths.Count == 0 && !string.IsNullOrWhiteSpace(detail))
+            paths.Add(detail.Trim());
+
+        var readPaths = new List<string>();
+        foreach (var path in paths)
+        {
+            var fullPath = Path.GetFullPath(path, _workspaceRoot);
+            if (!fullPath.StartsWith(_workspaceRoot, StringComparison.OrdinalIgnoreCase))
+                continue;
+            if (!File.Exists(fullPath))
+                continue;
+
+            try
+            {
+                var content = await File.ReadAllTextAsync(fullPath, ct).ConfigureAwait(false);
+                DiagnosticInfo[]? diags = null;
+                if (_roslynDiagnostics != null && fullPath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
+                {
+                    var analysis = await _roslynDiagnostics.AnalyzeFilesAsync(
+                        new[] { fullPath }, ct).ConfigureAwait(false);
+                    var diagList = new List<DiagnosticInfo>();
+                    foreach (var d in analysis.Diagnostics)
+                    {
+                        diagList.Add(new DiagnosticInfo
+                        {
+                            FilePath = d.FilePath,
+                            LineNumber = d.Line,
+                            ColumnNumber = d.Column,
+                            Severity = d.Severity,
+                            Code = d.Code,
+                            Message = d.Message
+                        });
+                    }
+                    diags = diagList.ToArray();
+                }
+                _assembler.AddFilePart(fullPath, content, diags);
+                readPaths.Add(fullPath);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "ReadFiles: Failed to read {Path}", path);
+            }
+        }
+
+        return readPaths;
+    }
 }
 
 public enum LoopPhase { Read, Think, Edit, Run, Observe, Done, Success, Failed }
@@ -264,6 +529,7 @@ public sealed class LoopStep
     public string Action { get; set; } = "";
     public string Detail { get; set; } = "";
     public string? Observation { get; set; }
+    public Part[] Parts { get; set; } = Array.Empty<Part>();
 }
 
 public sealed class LoopContext

@@ -1,4 +1,3 @@
-using LTAI.Core.Interfaces;
 using LTAI.Core.Models;
 using LTAI.Knowledge.Vector.Interfaces;
 using Microsoft.Extensions.AI;
@@ -12,11 +11,10 @@ public sealed class ContextGovernor : LayerGovernor
     private readonly IVectorStore _vectorStore;
 
     public ContextGovernor(
-        ICognitiveMesh mesh,
         IChatClient llm,
         ILogger<ContextGovernor> logger,
         IVectorStore vectorStore)
-        : base("context", mesh, llm, logger)
+        : base("context", llm, logger)
     {
         _vectorStore = vectorStore;
     }

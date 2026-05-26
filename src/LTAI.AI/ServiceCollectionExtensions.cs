@@ -66,6 +66,8 @@ public static class ServiceCollectionExtensions
             var pipeline = new ChatClientBuilder(multiClient)
                 .UseLogging(loggerFactory)
                 .UseOpenTelemetry()
+                .Use((innerClient, services) =>
+                    new NormalizingChatClient(innerClient, services.GetRequiredService<ILogger<NormalizingChatClient>>()))
                 .Build();
 
             return new RescueParsingChatClient(pipeline, sp.GetService<ILogger<RescueParsingChatClient>>());
@@ -256,7 +258,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ModelAutoDownloader>(sp =>
         {
             var logger = sp.GetService<ILogger<ModelAutoDownloader>>();
-            var modelsRoot = global::System.IO.Path.Combine(AppContext.BaseDirectory, "models");
+            var modelsRoot = Path.Combine(AppContext.BaseDirectory, OptionService.Get("ModelsDirectory") ?? "models");
             return new ModelAutoDownloader(modelsRoot, logger);
         });
 
@@ -266,8 +268,8 @@ public static class ServiceCollectionExtensions
             var config = new SpeculativeDecoderConfig
             {
                 DraftSteps = 6,
-                DraftModelPath = global::System.IO.Path.Combine(synapticDir, "models", "smollm2-135m", "model.onnx"),
-                DraftTokenizerPath = global::System.IO.Path.Combine(synapticDir, "models", "smollm2-135m", "tokenizer.json")
+                DraftModelPath = Path.Combine(synapticDir, OptionService.Get("ModelsDirectory") ?? "models", "smollm2-135m", "model.onnx"),
+                DraftTokenizerPath = Path.Combine(synapticDir, OptionService.Get("ModelsDirectory") ?? "models", "smollm2-135m", "tokenizer.json")
             };
             return new SpeculativeDecoder(config, logger);
         });
@@ -275,14 +277,14 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<LoraTrainer>(sp =>
         {
             var logger = sp.GetService<ILogger<LoraTrainer>>();
-            var modelDir = System.IO.Path.Combine(synapticDir, "models");
+            var modelDir = Path.Combine(synapticDir, OptionService.Get("ModelsDirectory") ?? "models");
             return new LoraTrainer(modelDir, logger);
         });
 
         services.AddSingleton<SynapticTrainer>(sp =>
         {
             var logger = sp.GetService<ILogger<SynapticTrainer>>();
-            var modelDir = System.IO.Path.Combine(synapticDir, "models");
+            var modelDir = Path.Combine(synapticDir, OptionService.Get("ModelsDirectory") ?? "models");
             var loraTrainer = sp.GetService<LoraTrainer>();
             return new SynapticTrainer(modelDir, logger, loraTrainer);
         });
@@ -345,11 +347,12 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<PromptTemplateStore>(sp =>
         {
             var logger = sp.GetService<ILogger<PromptTemplateStore>>();
+            var promptsName = OptionService.Get("PromptsDirectory") ?? "prompts";
             var dir = Directory.GetCurrentDirectory();
             string? promptsDir = null;
             for (int i = 0; i < 5 && dir != null; i++)
             {
-                var candidate = Path.Combine(dir, "prompts");
+                var candidate = Path.Combine(dir, promptsName);
                 if (Directory.Exists(candidate)) { promptsDir = candidate; break; }
                 dir = Path.GetDirectoryName(dir);
             }
@@ -424,24 +427,10 @@ public static class ServiceCollectionExtensions
             {
                 Owner = "ltai-org",
                 Repository = "ltai-cells",
-                Token = Environment.GetEnvironmentVariable("GITHUB_TOKEN"),
+                Token = OptionService.Get("GITHUB_TOKEN"),
                 MaxDownloadSizeMB = 100
             };
             return new GitHubCellRegistry(config, packageManager, logger!);
-        });
-
-        services.AddSingleton<SizeGovernor>(sp =>
-        {
-            var packageManager = sp.GetRequiredService<CellPackageManager>();
-            var logger = sp.GetService<ILogger<SizeGovernor>>();
-            var config = new SizeGovernorConfig
-            {
-                MaxCellSizeMB = 50,
-                MaxTotalSizeMB = 500,
-                EnableAutoCompression = true,
-                EnableQuantization = true
-            };
-            return new SizeGovernor(config, packageManager, logger);
         });
 
         services.AddSingleton<CascadeLoader>(sp =>
@@ -491,7 +480,7 @@ public static class ServiceCollectionExtensions
             {
                 Owner = "ltai-org",
                 Repository = "ltai-graphs",
-                Token = Environment.GetEnvironmentVariable("GITHUB_TOKEN"),
+                Token = OptionService.Get("GITHUB_TOKEN"),
                 MaxDownloadSizeMB = 200
             };
             return new GitHubGraphRegistry(config, packageManager, logger!);
@@ -550,10 +539,10 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IL1InferenceEngine>(sp =>
         {
             var logger = sp.GetService<ILoggerFactory>();
-            var modelDir = System.IO.Path.Combine(synapticDir, "models", "local_llm");
+            var modelsDir = OptionService.Get("ModelsDirectory") ?? "models";
+            var modelDir = Path.Combine(synapticDir, modelsDir, "local_llm");
             
-            // 尝试读取用户配置
-            var userConfigPath = System.IO.Path.Combine(AppContext.BaseDirectory, "local_llm.json");
+            var userConfigPath = Path.Combine(AppContext.BaseDirectory, "local_llm.json");
             string? preferredEngine = null;
             if (System.IO.File.Exists(userConfigPath))
             {
@@ -592,7 +581,7 @@ public static class ServiceCollectionExtensions
 
         services.AddSingleton<LocalLlmBootstrapConfig>(sp =>
         {
-            var modelDir = System.IO.Path.Combine(synapticDir, "models", "local_llm");
+            var modelDir = Path.Combine(synapticDir, OptionService.Get("ModelsDirectory") ?? "models", "local_llm");
             return new LocalLlmBootstrapConfig
             {
                 ModelDir = modelDir,
@@ -705,6 +694,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<SelfGovernor>();
         services.AddSingleton<SystemGuardian>();
         services.AddSingleton<QueryPreprocessingService>();
+        services.AddSingleton<GovernorSet>();
         services.AddSingleton<LivingTreeSystem>();
         services.AddSingleton<ILivingTreeSystem>(sp => sp.GetRequiredService<LivingTreeSystem>());
 
@@ -753,8 +743,7 @@ public static class ServiceCollectionExtensions
             _             => $"{p}_API_KEY"
         };
 
-        return Environment.GetEnvironmentVariable(envVar)
-            ?? Environment.GetEnvironmentVariable(envVar, EnvironmentVariableTarget.User);
+        return OptionService.Get(envVar);
     }
 
     private static IChatClient? CreateProviderChatClient(

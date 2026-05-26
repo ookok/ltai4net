@@ -1,6 +1,5 @@
 using LTAI.AI.Governors;
 using LTAI.Core.Execution;
-using LTAI.Core.Interfaces;
 using LTAI.DNA;
 using Microsoft.Extensions.AI;
 
@@ -12,7 +11,6 @@ public interface ILivingTreeSystem
     bool DNAEnabled { get; }
     IChatClient LLMClient { get; }
 
-    ICognitiveMesh Mesh { get; }
     SystemGuardian Guardian { get; }
     DNAStatus? DNAStatus { get; }
     InputGovernor InputGovernor { get; }

@@ -75,6 +75,7 @@ public static class CapabilityServiceCollectionExtensions
                 parser: sp.GetRequiredService<ParserRegistry>().GetParser(CodeLanguage.CSharp),
                 logger: sp.GetRequiredService<ILogger<CodeEditEngine>>()));
         services.AddSingleton<BuildPipeline>();
+        services.AddSingleton<CSharpCompilationService>();
         services.AddSingleton<TestHarness>(sp =>
             new TestHarness(sp.GetService<CodeGraphEnhanced>(),
                 sp.GetRequiredService<ILogger<TestHarness>>()));

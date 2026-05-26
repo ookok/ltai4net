@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using LTAI.Core.Interfaces;
+using LTAI.Knowledge.Core;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
@@ -285,14 +286,14 @@ public static class OpenCodeBridgeEndpoints
 
             var envProviders = new Dictionary<string, bool>
             {
-                ["openai"] = !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("OPENAI_API_KEY")),
-                ["anthropic"] = !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY")),
-                ["google"] = !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("GOOGLE_API_KEY")),
-                ["deepseek"] = !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("DEEPSEEK_API_KEY")),
-                ["ollama"] = !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("OLLAMA_HOST")),
-                ["groq"] = !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("GROQ_API_KEY")),
-                ["xai"] = !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("XAI_API_KEY")),
-                ["openrouter"] = !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("OPENROUTER_API_KEY")),
+                ["openai"] = !string.IsNullOrWhiteSpace(OptionService.Get("OPENAI_API_KEY")),
+                ["anthropic"] = !string.IsNullOrWhiteSpace(OptionService.Get("ANTHROPIC_API_KEY")),
+                ["google"] = !string.IsNullOrWhiteSpace(OptionService.Get("GOOGLE_API_KEY")),
+                ["deepseek"] = !string.IsNullOrWhiteSpace(OptionService.Get("DEEPSEEK_API_KEY")),
+                ["ollama"] = !string.IsNullOrWhiteSpace(OptionService.Get("OLLAMA_HOST")),
+                ["groq"] = !string.IsNullOrWhiteSpace(OptionService.Get("GROQ_API_KEY")),
+                ["xai"] = !string.IsNullOrWhiteSpace(OptionService.Get("XAI_API_KEY")),
+                ["openrouter"] = !string.IsNullOrWhiteSpace(OptionService.Get("OPENROUTER_API_KEY")),
             };
 
             foreach (var (provider, available) in envProviders)

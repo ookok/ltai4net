@@ -1,6 +1,11 @@
+using LTAI.Agent.MAF;
+using LTAI.Knowledge.Core;
+using LTAI.Models;
 using LTAI.Core.Messaging;
 using LTAI.Agent.CodeAct;
 using LTAI.Agent.Evolution;
+using LTAI.Agent.Skills;
+using LTAI.Agent.Tools;
 using Microsoft.Agents.AI;
 using Microsoft.Agents.AI.Hosting;
 using Microsoft.Agents.AI.Hosting.A2A;
@@ -14,7 +19,14 @@ public static class MAFServiceCollectionExtensions
 {
     public static IServiceCollection AddLTAIMAF(this IServiceCollection services)
     {
+        services.AddSingleton<PermissionStore>();
+        services.AddSingleton<AgentHookPipeline>(sp =>
+        {
+            var permissionStore = sp.GetRequiredService<PermissionStore>();
+            return new AgentHookPipeline(permissionStore);
+        });
         services.AddSingleton<LTAIAgent>();
+        services.AddSingleton<AgentProfile>(_ => AgentProfile.CreateBuild());
         services.AddSingleton(sp =>
         {
             var rawAgent = sp.GetRequiredService<LTAIAgent>();
@@ -50,10 +62,61 @@ public static class MAFServiceCollectionExtensions
         services.AddSingleton<ExperienceDebugger>();
         services.AddSingleton<DecisionLog>();
         services.AddSingleton<PluginRegistry>();
+        services.AddSingleton<AgenticLoop>();
+        services.AddSingleton<SystemPromptAssembler>(sp =>
+        {
+            var sr = sp.GetService<SkillRegistry>();
+            return new SystemPromptAssembler(sr);
+        });
+        services.AddSingleton<PartStreamStore>(sp =>
+        {
+            var root = OptionService.Get("LTAI_WORKSPACE") ?? Directory.GetCurrentDirectory();
+            return new PartStreamStore(root);
+        });
         services.AddSingleton<LTAI.Knowledge.Core.TokenSavingsTracker>();
         services.AddSingleton<HarnessEvolutionEngine>();
 
+        services.AddSingleton<ServiceDispatcher>();
+        services.AddSingleton<ToolLoader>();
+        services.AddSingleton<MarkdownToolExecutor>(sp =>
+        {
+            var logger = sp.GetRequiredService<ILogger<MarkdownToolExecutor>>();
+            var httpClientFactory = sp.GetService<IHttpClientFactory>();
+            var chatClient = sp.GetService<IChatClient>();
+            return new MarkdownToolExecutor(logger, httpClientFactory, chatClient, sp);
+        });
+        services.AddSingleton<ToolService>(sp =>
+        {
+            var loader = sp.GetRequiredService<ToolLoader>();
+            var executor = sp.GetRequiredService<MarkdownToolExecutor>();
+            var logger = sp.GetRequiredService<ILogger<ToolService>>();
+            return new ToolService(loader, executor, logger, sp);
+        });
+        services.AddSingleton<MdToolSynthesizer>(sp =>
+        {
+            var llm = sp.GetRequiredService<IChatClient>();
+            var loader = sp.GetRequiredService<ToolLoader>();
+            var toolService = sp.GetRequiredService<ToolService>();
+            var logger = sp.GetRequiredService<ILogger<MdToolSynthesizer>>();
+            return new MdToolSynthesizer(llm, loader, toolService, logger);
+        });
+
         return services;
+    }
+
+    public static async Task RegisterMarkdownToolsAsync(this IServiceProvider sp, AIToolRegistry registry)
+    {
+        var toolService = sp.GetService<ToolService>();
+        if (toolService == null) return;
+
+        if (!toolService.IsLoaded)
+            await toolService.LoadAllAsync().ConfigureAwait(false);
+
+        await toolService.RegisterIntoRegistryAsync(registry).ConfigureAwait(false);
+
+        var loggerFactory = sp.GetService<ILoggerFactory>();
+        var logger = loggerFactory?.CreateLogger("LTAI.MAF.MDTools");
+        logger?.LogInformation("Registered {Count} markdown-defined tools", toolService.Count);
     }
 
     public static async Task RegisterCodeActToolsAsync(this IServiceProvider sp, AIToolRegistry registry)

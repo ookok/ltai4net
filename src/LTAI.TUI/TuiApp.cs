@@ -1,18 +1,19 @@
-using Spectre.Console.Rendering;
-using LTAI.AI.Interfaces;
 using System.Text;
 using Spectre.Console;
+using Spectre.Console.Rendering;
+using LTAI.Agent.MAF;
 using LTAI.AI.Governors;
-using LTAI.DNA;
-using LTAI.Tools.Reasoning;
-using LTAI.Tools.CodeEngine;
+using LTAI.AI.Interfaces;
 using LTAI.Core.Configuration;
 using LTAI.Core.System;
+using LTAI.DNA;
+using LTAI.Tools.CodeEngine;
+using LTAI.Tools.Reasoning;
 using Microsoft.Extensions.Options;
 
 namespace LTAI.TUI;
 
-public enum TuiView { Dashboard, Chat, Code, Git, Help, Session, LLMConfig, Models, Service, Pipeline }
+public enum TuiView { Dashboard, Chat, Code, Git, Help, Session, LLMConfig, Models, Service, Pipeline, Editor }
 
 public enum TuiTheme { Dark, Light, HighContrast }
 
@@ -35,6 +36,8 @@ public sealed class TuiApp
     private readonly ServiceManager? _service;
     private readonly ModelManager? _modelMgr;
     private readonly IOptions<LTAIOptions>? _configOptions;
+    private readonly AgenticLoop? _agenticLoop;
+    private readonly TuiEditor _editor;
 
     private TuiView _currentView = TuiView.Dashboard;
     private TuiTheme _theme = TuiTheme.Dark;
@@ -58,7 +61,8 @@ public sealed class TuiApp
         MultiLangCodeAnalyzer? analyzer = null,
         IOptions<LTAIOptions>? options = null,
         ServiceManager? service = null,
-        ModelManager? modelMgr = null)
+        ModelManager? modelMgr = null,
+        AgenticLoop? agenticLoop = null)
     {
         _lts = lts;
         _dna = dna;
@@ -67,6 +71,7 @@ public sealed class TuiApp
         _service = service;
         _modelMgr = modelMgr;
         _configOptions = options;
+        _agenticLoop = agenticLoop;
         _projectRoot = Directory.GetCurrentDirectory();
         _llmConfig = new LLMConfigPanel(options);
         _session = new SessionTracker();
@@ -78,6 +83,7 @@ public sealed class TuiApp
         _ctxView = new ContextWindowView();
         _notify = new NotificationService();
         _search = new SessionSearch(_chatHistory);
+        _editor = new TuiEditor();
     }
 
     public async Task RunAsync()
@@ -125,6 +131,7 @@ public sealed class TuiApp
             case TuiView.Models: RenderModelsView(); break;
             case TuiView.Service: RenderServiceViewStub(); break;
             case TuiView.Pipeline: RenderPipelineView(); break;
+            case TuiView.Editor: RenderEditorView(); break;
         }
 
         AnsiConsole.Write(new Rule());
@@ -141,7 +148,7 @@ public sealed class TuiApp
         {
             TuiView.Dashboard => "Dashboard", TuiView.Chat => "Chat", TuiView.Code => "Code",
             TuiView.Git => "Git", TuiView.Help => "Help", TuiView.Session => "Session",
-            TuiView.LLMConfig => "LLM Config", TuiView.Models => "Models", TuiView.Service => "Service", TuiView.Pipeline => "Pipeline",
+            TuiView.LLMConfig => "LLM Config", TuiView.Models => "Models", TuiView.Service => "Service", TuiView.Pipeline => "Pipeline", TuiView.Editor => "Editor",
             _ => ""
         };
         AnsiConsole.MarkupLine($"[grey]View: {name} | Session: {_session.SessionId} | Turns: {_session.TotalTurns} | Tokens: {_session.TotalTokens} | ? help | q quit[/]");
@@ -643,7 +650,12 @@ public sealed class TuiApp
             case ConsoleKey.L when key.Modifiers == 0: _showLLMPanel = !_showLLMPanel; _currentView = _showLLMPanel ? TuiView.LLMConfig : _currentView; break;
             case ConsoleKey.T when key.Modifiers == 0: _innovation.ToggleThoughtChain(); break;
             case ConsoleKey.S when key.Modifiers == 0: _diffSplitView = !_diffSplitView; break;
-            case ConsoleKey.E when key.Modifiers == 0: ExportSession(); break;
+            case ConsoleKey.E when key.Modifiers == 0:
+                if (_currentView == TuiView.Code && _loadedFileContent != null)
+                    await HandleEditorAsync();
+                else
+                    ExportSession();
+                break;
             case ConsoleKey.M when key.Modifiers == 0: await MemoryConsolidateAsync(); break;
             case ConsoleKey.K when key.Modifiers == 0: await KnowledgeGraphPreviewAsync(); break;
             case ConsoleKey.B when key.Modifiers == 0: await MultiModelBranchAsync(); break;
@@ -677,7 +689,67 @@ public sealed class TuiApp
     private async Task HandleChatInputAsync()
     {
         if (_currentView != TuiView.Chat) return;
-        await Task.CompletedTask;
+
+        var input = await _inputBox.ReadInputAsync("You");
+        if (string.IsNullOrWhiteSpace(input)) return;
+
+        _chatHistory.Add(("You", input));
+
+        if (input.StartsWith("@") || input.Contains("[File:") || input.Contains("[Folder:"))
+        {
+            _knowledgeItems.Add(Path.GetFileName(input));
+            if (_knowledgeItems.Count > 10) _knowledgeItems.RemoveAt(0);
+
+            var pathMatch = System.Text.RegularExpressions.Regex.Match(input, @"@(\S+)");
+            if (pathMatch.Success)
+            {
+                var fp = pathMatch.Groups[1].Value.Trim();
+                if (!File.Exists(fp)) fp = Path.Combine(_projectRoot, fp);
+                if (File.Exists(fp))
+                {
+                    _loadedFilePath = fp;
+                    _loadedFileContent = File.ReadAllText(fp);
+                }
+            }
+        }
+
+        _session.AddTask("chat", "running");
+        var startTime = DateTime.Now;
+
+        string fullResponse;
+        try
+        {
+            if (_agenticLoop != null)
+            {
+                var agenticLayout = new AgenticChatLayout(_agenticLoop);
+                fullResponse = await agenticLayout.ChatAsync(input, CancellationToken.None);
+            }
+            else
+            {
+                var chatLayout = new ChatLayout(_lts, _configOptions?.Value, _loadedFileContent);
+                chatLayout.UpdateRouteInfo("delegate_l2", "conf=0.8");
+                fullResponse = await chatLayout.ChatAsync(input);
+            }
+        }
+        catch (Exception ex)
+        {
+            AnsiConsole.MarkupLine($"[red]Error: {ex.Message}[/]");
+            fullResponse = $"[Error: {ex.Message}]";
+        }
+
+        _chatHistory.Add(("LTAI", fullResponse));
+        _innovation.RecordInteraction(input, fullResponse);
+
+        var task = _session.ActiveTasks.Find(t => t.Name == "chat" && t.Status == "running");
+        if (task != null) { task.Status = "done"; task.CompletedAt = DateTime.Now; task.Result = "completed"; }
+
+        var latency = (DateTime.Now - startTime).TotalMilliseconds;
+        _session.RecordTurn(input.Length / 4, fullResponse.Length / 4, latency);
+
+        _innovation.AddThought("input", input, ThoughtType.Action);
+        _innovation.AddThought("response", fullResponse[..Math.Min(fullResponse.Length, 120)], ThoughtType.Reasoning);
+
+        _notify.Notify("LTAI", $"Response ready ({fullResponse.Length} chars, {latency:F0}ms)");
     }
 
     private async Task PromptAnalyzeFileAsync()
@@ -965,5 +1037,56 @@ public sealed class TuiApp
         var info = _modelMgr.SyncInfo();
         AnsiConsole.MarkupLine($"[green]Synced:[/] {info.GetType().GetProperty("total_providers")?.GetValue(info)} providers");
         await Task.Delay(800);
+    }
+
+    private void RenderEditorView()
+    {
+        AnsiConsole.MarkupLine("[bold cyan]MD Editor[/] — E to open file | Ctrl+S Save | Esc Back");
+        AnsiConsole.Write(new Rule());
+
+        if (_loadedFileContent != null)
+        {
+            var fileName = _loadedFilePath ?? "loaded content";
+            var lines = _loadedFileContent.Split('\n');
+            var preview = string.Join("\n", lines.Take(15));
+            AnsiConsole.MarkupLine($"[green]File:[/] {EscapeM(fileName)} ([yellow]{lines.Length}[/] lines)");
+            AnsiConsole.MarkupLine($"[grey]Press E to edit[/]");
+            AnsiConsole.WriteLine();
+            AnsiConsole.MarkupLine(EscapeM(preview.Length > 500 ? preview[..500] + "..." : preview));
+        }
+        else
+        {
+            AnsiConsole.MarkupLine("[grey]No file loaded. Use @path in Chat to load a file, then press E to edit.[/]");
+            AnsiConsole.MarkupLine("[grey]Or press E to create a new markdown file.[/]");
+        }
+    }
+
+    private async Task HandleEditorAsync()
+    {
+        AnsiConsole.Clear();
+        string? savedContent;
+
+        if (_loadedFileContent != null)
+        {
+            savedContent = await _editor.EditAsync(_loadedFilePath, _loadedFileContent);
+            if (savedContent != null)
+            {
+                _loadedFileContent = savedContent;
+                AnsiConsole.MarkupLine($"[green]Saved: {_loadedFilePath}[/]");
+                await Task.Delay(800);
+            }
+        }
+        else
+        {
+            var newPath = Path.Combine(_projectRoot, "untitled.md");
+            savedContent = await _editor.EditAsync(newPath, "# New Document\n\n");
+            if (savedContent != null && savedContent != "# New Document\n\n")
+            {
+                _loadedFilePath = newPath;
+                _loadedFileContent = savedContent;
+                AnsiConsole.MarkupLine($"[green]Saved: {newPath}[/]");
+                await Task.Delay(800);
+            }
+        }
     }
 }

@@ -44,7 +44,7 @@ public sealed class ToolSynthesizer
 
     public ToolSynthesizer(ILogger<ToolSynthesizer>? logger = null)
     {
-        _storeDir = Path.Combine(Directory.GetCurrentDirectory(), ".livingtree", "synthesized_tools");
+        _storeDir = Path.Combine(OptionService.Get("paths.livingtree") ?? Path.Combine(AppContext.BaseDirectory, ".livingtree"), "synthesized_tools");
         Directory.CreateDirectory(_storeDir);
         _logger = logger ?? NullLogger<ToolSynthesizer>.Instance;
         LoadRegistry();

@@ -1,28 +1,36 @@
 using System.Collections.Concurrent;
 using System.Net.Http.Json;
+using System.Text.Json;
 using LTAI.Infra.Network.Interfaces;
+using LTAI.Models;
 using Microsoft.Extensions.Logging;
 
 namespace LTAI.Infra.Network;
 
-/// <summary>
-/// Gossip-based decentralized peer discovery for P2P network.
-/// Each node maintains a partial view and periodically exchanges peers.
-/// </summary>
 public sealed class GossipDiscovery
 {
     private readonly IP2PNode _p2pNode;
     private readonly HttpClient _http;
     private readonly ILogger<GossipDiscovery> _logger;
+    private readonly ISkillExchangeProvider? _skillExchange;
     private readonly ConcurrentDictionary<string, (string Address, int Port, DateTime LastSeen)> _peers = new();
     private const int MaxPeers = 20;
     private const int GossipFanout = 3;
 
-    public GossipDiscovery(IP2PNode p2pNode, IHttpClientFactory httpFactory, ILogger<GossipDiscovery> logger)
+    private static readonly JsonSerializerOptions JsonOpts = new()
+    {
+        PropertyNameCaseInsensitive = true,
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+    };
+
+    public GossipDiscovery(IP2PNode p2pNode, IHttpClientFactory httpFactory,
+        ILogger<GossipDiscovery> logger,
+        ISkillExchangeProvider? skillExchange = null)
     {
         _p2pNode = p2pNode;
         _http = httpFactory.CreateClient("p2p");
         _logger = logger;
+        _skillExchange = skillExchange;
     }
 
     public async Task RunGossipCycleAsync(CancellationToken ct)
@@ -48,11 +56,48 @@ public sealed class GossipDiscovery
                         foreach (var rp in remotePeers.Peers)
                             _peers[rp.Id] = (rp.Address, rp.Port, DateTime.UtcNow);
                 }
+
+                await ExchangeSkillsAsync(peer.Address, peer.Port, ct).ConfigureAwait(false);
             }
             catch (Exception ex) { _logger.LogDebug(ex, "Gossip to {Peer} failed", peer.PeerId); }
         }
 
         PruneStale(TimeSpan.FromMinutes(10));
+    }
+
+    public async Task ExchangeSkillsAsync(string peerAddress, int peerPort, CancellationToken ct)
+    {
+        if (_skillExchange == null) return;
+
+        try
+        {
+            var manifest = await _skillExchange.GetLocalSkillManifestAsync(ct).ConfigureAwait(false);
+            var manifestUrl = $"http://{peerAddress}:{peerPort}/p2p/skills";
+            var content = new StringContent(
+                JsonSerializer.Serialize(manifest.Select(m => new
+                {
+                    name = m.Name,
+                    version = m.Version,
+                    domain = m.Domain,
+                    description = m.Description
+                }), JsonOpts),
+                System.Text.Encoding.UTF8,
+                "application/json");
+
+            var response = await _http.PostAsync(manifestUrl, content, ct).ConfigureAwait(false);
+            if (response.IsSuccessStatusCode)
+                _logger.LogDebug("Exchanged skill manifest with {Peer}:{Port}", peerAddress, peerPort);
+
+            var peerAddr = $"{peerAddress}:{peerPort}";
+            var (imported, skipped, errors) = await _skillExchange.SyncWithPeerAsync(peerAddr, ct).ConfigureAwait(false);
+            if (imported > 0 || skipped > 0)
+                _logger.LogInformation("Skill exchange with {Peer}: imported={Imported}, skipped={Skipped}, errors={Errors}",
+                    peerAddr, imported, skipped, errors);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Skill exchange with {Peer}:{Port} failed", peerAddress, peerPort);
+        }
     }
 
     public void ReceiveGossip(string fromPeer, List<(string Id, string Address, int Port)> peers)

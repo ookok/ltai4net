@@ -6,7 +6,9 @@ using LTAI.Core.Interfaces;
 using LTAI.Core.Messaging;
 using LTAI.AI.Governors;
 using LTAI.AI.Providers;
+using LTAI.Agent;
 using LTAI.Agent.Tools;
+using LTAI.Knowledge.Core;
 using LTAI.Core.Messaging;
 using LTAI.Tools;
 using LTAI.Core;
@@ -58,7 +60,10 @@ public static class EntryPoint
         config.GetSection(LTAIOptions.SectionName).Bind(ltaiOptions);
 
         if (ltaiOptions.AI.Providers.Count == 0)
-            ltaiOptions.AI.Providers["deepseek"] = new ProviderConfig { Endpoint = "https://api.deepseek.com", Model = "deepseek-chat" };
+        {
+            ltaiOptions.AI.Providers["deepseek"] = new ProviderConfig { Endpoint = OptionService.Get("deepseek.endpoint") ?? "https://api.deepseek.com", Model = OptionService.Get("deepseek.model") ?? "deepseek-chat" };
+            Console.WriteLine("Providers loaded from config: deepseek");
+        }
 
         services.AddSingleton(Options.Create(ltaiOptions));
         services.AddLTAICore();
@@ -82,10 +87,10 @@ public static class EntryPoint
         var transport = sp.GetRequiredService<IMCPTransport>();
         await transport.StartAsync(server).ConfigureAwait(false);
     }
-}
 
 internal sealed class McpEntryPointAdapter : ILTAIEntryPoint
 {
+    public bool CanHandle(string command) => string.Equals(command, "mcp", StringComparison.OrdinalIgnoreCase);
     public Task RunAsync(string[] args) => EntryPoint.RunAsync(args);
 }
 
@@ -93,4 +98,5 @@ public static class McpEntryPointRegistration
 {
     static McpEntryPointRegistration() { LTAIEntryPointRegistry.Register("mcp", new McpEntryPointAdapter()); }
     public static void Initialize() { }
+}
 }

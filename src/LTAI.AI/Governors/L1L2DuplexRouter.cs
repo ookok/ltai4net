@@ -180,7 +180,7 @@ public sealed class L1L2DuplexRouter
         _tempScheduler.UpdateStatus($"query_{trace.Query.GetHashCode()}", trace.LearningStatus);
     }
 
-    public DuplexRouteResult Route(string query)
+    public async Task<DuplexRouteResult> RouteAsync(string query)
     {
         var trimmed = query.Trim();
 
@@ -328,15 +328,13 @@ public sealed class L1L2DuplexRouter
                         {
                             var pattern = SelectCollaborationPattern(trimmed, complexity);
                             var recursiveResponse = "";
-                            
-                            var enumerator = _recursivePipeline.GenerateRecursiveAsync(
-                                trimmed, 
-                                recursionRounds: paceDecision.RecommendedRounds, 
-                                pattern: pattern).GetAsyncEnumerator();
-                            
-                            while (enumerator.MoveNextAsync().GetAwaiter().GetResult())
+
+                            await foreach (var chunk in _recursivePipeline.GenerateRecursiveAsync(
+                                trimmed,
+                                recursionRounds: paceDecision.RecommendedRounds,
+                                pattern: pattern))
                             {
-                                recursiveResponse += enumerator.Current;
+                                recursiveResponse += chunk;
                             }
                             
                             if (!string.IsNullOrEmpty(recursiveResponse))
@@ -368,17 +366,17 @@ public sealed class L1L2DuplexRouter
             {
                 try
                 {
-                    var localResponse = _localLlm.GenerateAsync(trimmed, ct: CancellationToken.None).GetAwaiter().GetResult();
+                    var localResponse = await _localLlm.GenerateAsync(trimmed, ct: CancellationToken.None).ConfigureAwait(false);
                     if (!string.IsNullOrEmpty(localResponse))
                     {
                         // 评估 L1 响应质量 (使用 RewardModel 替代启发式评分)
-                        var rewardSignal = _rewardModel.EvaluateAsync(new RewardEvaluationRequest
+                        var rewardSignal = await _rewardModel.EvaluateAsync(new RewardEvaluationRequest
                         {
                             Query = trimmed,
                             Response = localResponse,
                             Complexity = complexity,
                             Route = "local_llm"
-                        }).GetAwaiter().GetResult();
+                        }).ConfigureAwait(false);
                         var qualityScore = rewardSignal.OverallScore;
                         
                         return new DuplexRouteResult
@@ -862,14 +860,13 @@ Think step by step, then output ONLY the JSON.";
     /// <summary>
     /// 构建二值向量索引 (从现有知识/图谱)
     /// </summary>
-    public void BuildBinaryIndex(LTAI.Knowledge.Vector.Embedding.LocalEmbeddingBackend embeddingBackend, CodeGraphEnhanced? codeGraph = null)
+    public async Task BuildBinaryIndexAsync(LTAI.Knowledge.Vector.Embedding.LocalEmbeddingBackend embeddingBackend, CodeGraphEnhanced? codeGraph = null)
     {
         if (_binaryIndex == null) return;
 
-        // 1. 从本地知识库构建
         foreach (var (key, item) in _knowledge.GetAll())
         {
-            var floatVec = embeddingBackend.EmbedAsync(new[] { item.Answer }).GetAwaiter().GetResult()[0];
+            var floatVec = (await embeddingBackend.EmbedAsync(new[] { item.Answer }).ConfigureAwait(false))[0];
             var binaryVec = BinaryVector.FromFloatVector(floatVec);
             _binaryIndex.Add($"kb_{key}", binaryVec);
         }

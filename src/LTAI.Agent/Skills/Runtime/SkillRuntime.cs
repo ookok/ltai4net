@@ -1,3 +1,4 @@
+using LTAI.Agent.Skills;
 using LTAI.Models;
 using Microsoft.Extensions.Logging;
 
@@ -106,7 +107,14 @@ public sealed class SkillRuntime
             steps.Add(new SkillStepResult(-1, false, "Cancelled", TimeSpan.Zero));
         }
 
-        skill.Evolution.RecordSuccess();
+        var allPassed = steps.All(s => s.Success);
+        if (allPassed)
+            skill.Evolution.RecordSuccess();
+        else
+            skill.Evolution.RecordFailure();
+
+        if (skill.SourceFile != null)
+            SkillLoader.SaveEvolution(skill.SourceFile, skill.Evolution);
 
         return new SkillRunResult(
             skill.Name,

@@ -229,9 +229,9 @@ public sealed class TeachingRuleExtractor
     {
         var conceptPatterns = new[]
         {
-            new Regex(@"(?:concept|概念|key|关键|核心)[\s:：]*([^\n\.]+)", RegexOptions.IgnoreCase),
-            new Regex(@"(?:important|重要|main|主要)[\s:：]*([^\n\.]+)", RegexOptions.IgnoreCase),
-            new Regex(@"(?:step|步骤|first|首先|second|其次)[\s:：]*([^\n\.]+)", RegexOptions.IgnoreCase),
+            new Regex(@"(?:concept|概念|key|关键|核心)[\s:：]*([^\n\.]+)", RegexOptions.IgnoreCase | RegexOptions.Compiled),
+            new Regex(@"(?:important|重要|main|主要)[\s:：]*([^\n\.]+)", RegexOptions.IgnoreCase | RegexOptions.Compiled),
+            new Regex(@"(?:step|步骤|first|首先|second|其次)[\s:：]*([^\n\.]+)", RegexOptions.IgnoreCase | RegexOptions.Compiled),
         };
 
         var concepts = new List<string>();

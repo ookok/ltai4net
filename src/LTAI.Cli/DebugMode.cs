@@ -3,7 +3,9 @@ using LTAI.AI.Interfaces;
 using System.Text;
 using LTAI.AI;
 using LTAI.AI.Governors;
+using LTAI.Agent;
 using LTAI.Agent.Tools;
+using LTAI.Agent.MAF;
 using LTAI.Cli.Debug;
 using LTAI.Core;
 using LTAI.Core.Configuration;
@@ -60,6 +62,7 @@ internal static class DebugMode
 
         var toolRegistry = sp.GetRequiredService<AIToolRegistry>();
         await toolRegistry.RegisterAllToolCategoriesAsync().ConfigureAwait(false);
+        await sp.RegisterMarkdownToolsAsync(toolRegistry).ConfigureAwait(false);
         Console.WriteLine($"可用 {toolRegistry.ListTools().Count()} 个工具（查询时按需选择）");
 
         var hasProvider = options.AI.Providers.Any(kv => !string.IsNullOrEmpty(kv.Value.Endpoint));

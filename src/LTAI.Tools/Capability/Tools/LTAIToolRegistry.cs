@@ -1,5 +1,6 @@
 using LTAI.Core.Messaging;
 using LTAI.Core.System;
+using LTAI.Models;
 using LTAI.Tools.Capability.Governance;
 using LTAI.Tools.CodeEngine;
 using LTAI.Tools.CodeGraph;
@@ -14,17 +15,36 @@ public static class LTAIToolRegistry
     private static bool _seeded;
     private static IServiceProvider? _serviceProvider;
 
+    private static string LivingTreeDir =>
+        Path.Combine(OptionService.Get("LTAI_WORKSPACE") ?? Environment.CurrentDirectory, ".livingtree");
+
     public static async Task SeedAllAsync(AIToolRegistry registry, IServiceProvider sp)
     {
         _serviceProvider = sp;
+        MdToolBridge.Initialize(sp);
         if (_seeded) return;
         _seeded = true;
 
         foreach (var tool in AllTools)
         {
-            if (tool.Handler != null)
-                await registry.RegisterAsync(tool.Name, tool.Handler);
+            if (tool.Handler == null) continue;
+
+            var handler = tool.Handler;
+            var mdName = tool.Name.Replace(':', '_');
+            var wrapped = CreateWrappedHandler(handler, mdName);
+            await registry.RegisterAsync(tool.Name, wrapped);
         }
+    }
+
+    private static Func<Dictionary<string, object?>, Task<object?>> CreateWrappedHandler(
+        Func<Dictionary<string, object?>, Task<object?>> original, string mdName)
+    {
+        return async args =>
+        {
+            var md = await MdToolBridge.TryExecuteAsync(mdName, args);
+            if (md != null) return md;
+            return await original(args);
+        };
     }
 
     private static T GetService<T>()
@@ -162,21 +182,6 @@ public static class LTAIToolRegistry
                 }
                 catch (Exception ex) { return JsonToolResult.Success(new { error = $"Import failed: {ex.Message}" }); }
             }),
-        new("km_ask", "Ask a question against the knowledge base with sources. Parameters: question (required)", "knowledge",
-            async args =>
-            {
-                var question = Arg(args, "question");
-                if (string.IsNullOrWhiteSpace(question)) return JsonToolResult.Error("question parameter is required");
-                return JsonToolResult.Success(new { question, message = "Knowledge base query: use km_search for semantic search results" });
-            }),
-        new("vector_search", "Vector similarity search across embeddings. Parameters: query (required), top_k (1-50, default 10)", "knowledge",
-            async args =>
-            {
-                var query = Arg(args, "query");
-                var topK = Math.Clamp(int.TryParse(Arg(args, "top_k", "10"), out var k) ? k : 10, 1, 50);
-                return JsonToolResult.Success(new { query, top_k = topK, message = "Vector search: use km_search for AgenticRAG-backed semantic retrieval" });
-            }),
-
         // ═══ Code — 13 tools (analyze, review, graph, edit, build, test) ═══
         new("code_analyze", "Analyze code structure, complexity, dependencies using real AST", "code",
             async args =>
@@ -602,13 +607,6 @@ public static class LTAIToolRegistry
                     return JsonToolResult.Success(new { error = $"File not found: {path}" });
                 return JsonToolResult.Success(new { path, content = await File.ReadAllTextAsync(path), size_bytes = new FileInfo(path).Length });
             }),
-        new("report_generate", "Generate formatted report from structured data.", "doc",
-            async args =>
-            {
-                var title = Arg(args, "title", "Report");
-                var sections = Arg(args, "sections", "[]");
-                return JsonToolResult.Success(new { title, sections, status = "template_ready", note = "Report template created. Use the EIAReportBuilder for DOCX output or return Markdown directly to the user." });
-            }),
         new("observe_format", "Inspect document structure and metadata.", "doc",
             async args =>
             {
@@ -617,15 +615,6 @@ public static class LTAIToolRegistry
                     return JsonToolResult.Success(new { error = $"File not accessible: {path ?? "(null)"}" });
                 var info = new FileInfo(path);
                 return JsonToolResult.Success(new { path, size_bytes = info.Length, extension = info.Extension, created = info.CreationTimeUtc, modified = info.LastWriteTimeUtc });
-            }),
-        new("style_learn", "Analyze document formatting patterns from example files.", "doc",
-            async args =>
-            {
-                var path = Arg(args, "path");
-                if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
-                    return JsonToolResult.Success(new { error = $"File not accessible: {path ?? "(null)"}", suggestion = "Import example documents via km_import for pattern analysis." });
-                var ext = Path.GetExtension(path).ToLowerInvariant();
-                return JsonToolResult.Success(new { path, extension = ext, note = "Style extraction for this format is not yet implemented. Supported formats will be added in a future release." });
             }),
         new("visual_render", "Render chart/flowchart/floorplan/contour/3dsurface/windrose as SVG/HTML", "doc",
             async args => RenderVisual(Arg(args, "type"), Arg(args, "data"), Arg(args, "title"))),
@@ -742,12 +731,9 @@ public static class LTAIToolRegistry
             async args => TransformCoord(ArgDouble(args, "lat"), ArgDouble(args, "lng"), Arg(args, "from"), Arg(args, "to"))),
 
         // ═══ Git — 3 tools ═══
-        new("git_diff", "Show working tree changes", "git",
-            async _ => await Task.FromResult<object?>(new { message = "Use shell_exec with 'git diff' command to view working tree changes" })),
-        new("git_log", "Show commit history", "git",
-            async _ => await Task.FromResult<object?>(new { message = "Use shell_exec with 'git log' command to view commit history" })),
-        new("git_blame", "Show line-by-line authorship", "git",
-            async _ => await Task.FromResult<object?>(new { message = "Use shell_exec with 'git blame' command to view line-by-line authorship" })),
+        new("git_diff", "Show working tree changes", "git", null),
+        new("git_log", "Show commit history", "git", null),
+        new("git_blame", "Show line-by-line authorship", "git", null),
 
         // ═══ CLI — 5 tools ═══
         new("cli_wrap_function", "Wrap any Python/JavaScript/C# code function as a reusable CLI tool. Generates an executable wrapper. Parameters: name (required), code (required), language (python/js/csharp, default python)", "cli",
@@ -758,7 +744,7 @@ public static class LTAIToolRegistry
                 if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(code)) return JsonToolResult.Success(new { error = "name and code are required" });
                 var lang = Arg(args, "language", "python");
                 var safeName = string.Join("_", name.Split(Path.GetInvalidFileNameChars())).Replace(" ", "_").ToLower();
-                var filePath = Path.Combine(Environment.CurrentDirectory, ".livingtree", "cli_tools", safeName);
+                var filePath = Path.Combine(LivingTreeDir, "cli_tools", safeName);
                 if (!Directory.Exists(Path.GetDirectoryName(filePath))) Directory.CreateDirectory(Path.GetDirectoryName(filePath)!);
                 if (lang == "python") { filePath += ".py"; var pyCode = "#!/usr/bin/env python3\nimport sys, json\n\ndef main():\n" + string.Join("\n", code.Split('\n').Select(l => "    " + l)) + "\n\nif __name__ == '__main__':\n    result = main()\n    print(json.dumps(result, ensure_ascii=False))"; await File.WriteAllTextAsync(filePath, pyCode); }
                 else if (lang == "js") { filePath += ".js"; await File.WriteAllTextAsync(filePath, $"#!/usr/bin/env node\nconst result = (function() {{{code}}})();\nconsole.log(JSON.stringify(result));"); }
@@ -806,7 +792,7 @@ public static class LTAIToolRegistry
         new("cli_list_tools", "List all generated/installed CLI tools and their locations", "cli",
             async _ =>
             {
-                var toolsDir = Path.Combine(Environment.CurrentDirectory, ".livingtree", "cli_tools");
+                var toolsDir = Path.Combine(LivingTreeDir, "cli_tools");
                 var tools = new List<object>();
                 if (Directory.Exists(toolsDir))
                     foreach (var f in Directory.GetFiles(toolsDir, "*", SearchOption.TopDirectoryOnly).Take(20))
@@ -817,8 +803,8 @@ public static class LTAIToolRegistry
             async args =>
             {
                 var filter = Arg(args, "path_filter");
-                var path = Environment.GetEnvironmentVariable("PATH") ?? "";
-                var dirs = path.Split(System.IO.Path.PathSeparator).Where(d => !string.IsNullOrWhiteSpace(d)).Take(10);
+                var path = OptionService.Get("PATH", "dotnet");
+                var dirs = path!.Split(System.IO.Path.PathSeparator).Where(d => !string.IsNullOrWhiteSpace(d)).Take(10);
                 var found = new List<object>();
                 foreach (var dir in dirs)
                 {
@@ -880,7 +866,7 @@ public static class LTAIToolRegistry
                         var entries = new List<object> { new { Id = $"mem_{DateTime.UtcNow.Ticks}", SessionId = "memory_tool", Timestamp = DateTime.UtcNow.ToString("O"), Role = "memory", Content = $"[{key}]: {value}" } };
                         bindMethod?.Invoke(sm, new object[] { entries });
                     }
-                    var persistDir = Path.Combine(Environment.CurrentDirectory, ".livingtree", "memories");
+                    var persistDir = Path.Combine(LivingTreeDir, "memories");
                     Directory.CreateDirectory(persistDir);
                     await File.WriteAllTextAsync(Path.Combine(persistDir, $"{SafeKey(key)}.json"),
                         System.Text.Json.JsonSerializer.Serialize(new { key, value, stored_at = DateTime.UtcNow }));
@@ -907,7 +893,7 @@ public static class LTAIToolRegistry
                     }
                 }
                 catch { }
-                var persistDir = Path.Combine(Environment.CurrentDirectory, ".livingtree", "memories");
+                var persistDir = Path.Combine(LivingTreeDir, "memories");
                 if (Directory.Exists(persistDir))
                 {
                     foreach (var file in Directory.GetFiles(persistDir, "*.json").Take(30))
@@ -922,7 +908,7 @@ public static class LTAIToolRegistry
             {
                 var key = Arg(args, "key");
                 if (string.IsNullOrWhiteSpace(key)) return JsonToolResult.Success(new { error = "key parameter is required" });
-                var persistDir = Path.Combine(Environment.CurrentDirectory, ".livingtree", "memories");
+                var persistDir = Path.Combine(LivingTreeDir, "memories");
                 var filePath = Path.Combine(persistDir, $"{SafeKey(key)}.json");
                 if (File.Exists(filePath)) { File.Delete(filePath); return JsonToolResult.Success(new { status = "deleted", key }); }
                 return JsonToolResult.Success(new { error = $"No memory found with key: {key}" });
@@ -930,7 +916,7 @@ public static class LTAIToolRegistry
         new("memory_stats", "Get memory statistics: counts, categories, storage locations", "memory",
             async _ =>
             {
-                var persistDir = Path.Combine(Environment.CurrentDirectory, ".livingtree", "memories");
+                var persistDir = Path.Combine(LivingTreeDir, "memories");
                 var fileCount = Directory.Exists(persistDir) ? Directory.GetFiles(persistDir, "*.json").Length : 0;
                 long totalBytes = 0;
                 if (Directory.Exists(persistDir)) foreach (var f in Directory.GetFiles(persistDir, "*.json")) totalBytes += new FileInfo(f).Length;
@@ -939,7 +925,7 @@ public static class LTAIToolRegistry
         new("list_memories", "List all stored memory keys with preview of content", "memory",
             async _ =>
             {
-                var persistDir = Path.Combine(Environment.CurrentDirectory, ".livingtree", "memories");
+                var persistDir = Path.Combine(LivingTreeDir, "memories");
                 var results = new List<object>();
                 if (Directory.Exists(persistDir))
                 {
@@ -1169,7 +1155,7 @@ public static class LTAIToolRegistry
                 var desc = Arg(args, "description");
                 var body = Arg(args, "body");
                 if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(desc) || string.IsNullOrWhiteSpace(body)) return JsonToolResult.Success(new { error = "name, description, and body are required" });
-                var skillsDir = Path.Combine(Environment.CurrentDirectory, ".livingtree", "skills");
+                var skillsDir = Path.Combine(LivingTreeDir, "skills");
                 var skillDir = Path.Combine(skillsDir, name);
                 Directory.CreateDirectory(skillDir);
                 var frontmatter = $@"---
@@ -1192,10 +1178,10 @@ created: {DateTime.UtcNow:yyyy-MM-dd}
                 var discovery = _serviceProvider?.GetService(typeof(object).Assembly.GetType("LTAI.Tools.Skills.SkillDiscoveryManager"));
                 if (discovery is null)
                 {
-                    var skillsDir = Path.Combine(Environment.CurrentDirectory, ".livingtree", "skills");
+                    var skillsDir = Path.Combine(LivingTreeDir, "skills");
                     discovery = Activator.CreateInstance(
                         typeof(object).Assembly.GetType("LTAI.Tools.Skills.SkillDiscoveryManager")!,
-                        Environment.CurrentDirectory, null);
+                        OptionService.Get("LTAI_WORKSPACE") ?? Environment.CurrentDirectory, null);
                 }
 
                 var importerType = typeof(object).Assembly.GetType("LTAI.Tools.Skills.SkillMarkdownImporter");
@@ -1229,7 +1215,7 @@ created: {DateTime.UtcNow:yyyy-MM-dd}
                 var name = Arg(args, "name");
                 var body = Arg(args, "body");
                 if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(body)) return JsonToolResult.Success(new { error = "name and body are required" });
-                var skillDir = Path.Combine(Environment.CurrentDirectory, ".livingtree", "skills", name);
+                var skillDir = Path.Combine(LivingTreeDir, "skills", name);
                 var skillFile = Path.Combine(skillDir, "SKILL.md");
                 if (!File.Exists(skillFile))
                 {
@@ -1247,7 +1233,7 @@ created: {DateTime.UtcNow:yyyy-MM-dd}
             {
                 var name = Arg(args, "name");
                 if (string.IsNullOrWhiteSpace(name)) return JsonToolResult.Success(new { error = "name parameter is required" });
-                var skillDir = Path.Combine(Environment.CurrentDirectory, ".livingtree", "skills", name);
+                var skillDir = Path.Combine(LivingTreeDir, "skills", name);
                 if (Directory.Exists(skillDir)) { Directory.Delete(skillDir, true); return JsonToolResult.Success(new { name, status = "deleted" }); }
                 var globalSkillDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".livingtree", "skills", name);
                 if (Directory.Exists(globalSkillDir)) { Directory.Delete(globalSkillDir, true); return JsonToolResult.Success(new { name, status = "deleted", location = "global" }); }
@@ -1323,6 +1309,54 @@ created: {DateTime.UtcNow:yyyy-MM-dd}
                 return result.Success
                     ? new { status = "created", tool = result.Tool?.Name, code = result.Tool?.Code?[..Math.Min(200, result.Tool?.Code?.Length ?? 0)] }
                     : new { error = result.Error ?? "Synthesis failed" };
+            }),
+        new("md_tool_synthesize", "Generate .md tool files from natural language descriptions using LLM", "discovery",
+            async args =>
+            {
+                var desc = Arg(args, "description", "");
+                if (string.IsNullOrWhiteSpace(desc))
+                    return JsonToolResult.Error("description is required. Provide a description of the tool you want to create.");
+
+                var domain = Arg(args, "domain", "general");
+                var typeStr = Arg(args, "type", "shell");
+
+                try
+                {
+                    var synthType = Type.GetType("LTAI.Agent.Tools.MdToolSynthesizer, LTAI.Agent");
+                    if (synthType != null)
+                    {
+                        var synth = _serviceProvider?.GetService(synthType);
+                        if (synth != null)
+                        {
+                            var method = synthType.GetMethod("SynthesizeAsync");
+                            if (method != null)
+                            {
+                                MkToolType? prefType = Enum.TryParse<MkToolType>(typeStr, true, out var pt) ? pt : null;
+                                var task = (Task)method.Invoke(synth, new object?[] { desc, domain, prefType, CancellationToken.None })!;
+                                await task;
+                                var result = task.GetType().GetProperty("Result")?.GetValue(task);
+                                if (result != null)
+                                    return JsonToolResult.Success(new { synthesized = true, tool = result });
+                            }
+                        }
+                    }
+
+                    var llm = _serviceProvider?.GetService(typeof(Microsoft.Extensions.AI.IChatClient)) as Microsoft.Extensions.AI.IChatClient;
+                    if (llm == null)
+                        return JsonToolResult.Error("No LLM provider available. Please configure an AI provider first.");
+
+                    var prompt = BuildToolSynthesisPrompt(desc, domain, typeStr);
+                    var response = await llm.GetResponseAsync(
+                        new List<Microsoft.Extensions.AI.ChatMessage>
+                        {
+                            new(Microsoft.Extensions.AI.ChatRole.User, prompt)
+                        });
+                    return JsonToolResult.Success(new { synthesized = true, markdown = response.Text });
+                }
+                catch (Exception ex)
+                {
+                    return JsonToolResult.Error($"Synthesis failed: {ex.Message}");
+                }
             }),
         new("tool_market_list", "List all available tools in the marketplace grouped by category. Use to discover existing tools before creating new ones.", "discovery",
             async _ =>
@@ -1607,6 +1641,32 @@ created: {DateTime.UtcNow:yyyy-MM-dd}
             }),
     };
 
+    private static string BuildToolSynthesisPrompt(string description, string domain, string type)
+    {
+        return $@"Generate a complete .md tool file for the LTAI agent framework:
+
+# tool: <name>
+domain: {domain}
+type: {type}
+description: <brief>
+
+## parameters
+- param: type (required) — description
+
+## command (for shell) or ## service (for service)
+...
+
+## triggers
+- pattern: ""..."" (weight: 1.0)
+
+## tags
+- tag
+
+Description: {description}
+
+Return ONLY the markdown, no explanation.";
+    }
+
     public static int Total => AllTools.Length;
 
     private static string Arg(Dictionary<string, object?>? args, string key, string def = "")
@@ -1631,7 +1691,7 @@ created: {DateTime.UtcNow:yyyy-MM-dd}
 
     // ═══ Tool Implementations ═══
 
-    private static object ComputeGaussianPlume(double q, double u, double h, double x)
+    public static object ComputeGaussianPlume(double q, double u, double h, double x)
     {
         if (u <= 0 || x <= 0) return JsonToolResult.Success(new { error = "Invalid parameters: u>0, x>0 required" });
         var sigmaY = 0.22 * x / Math.Sqrt(1 + 0.0001 * x);
@@ -1640,7 +1700,7 @@ created: {DateTime.UtcNow:yyyy-MM-dd}
         return JsonToolResult.Success(new { concentration_mg_m3 = Math.Round(concentration * 1e6, 4), sigma_y = Math.Round(sigmaY, 1), sigma_z = Math.Round(sigmaZ, 1), distance_m = x });
     }
 
-    private static object ComputeNoiseAttenuation(double lw, double distance)
+    public static object ComputeNoiseAttenuation(double lw, double distance)
     {
         if (distance <= 0) return JsonToolResult.Success(new { error = "distance > 0 required" });
         var attenuation = 20 * Math.Log10(Math.Max(distance, 0.1));
@@ -1648,7 +1708,7 @@ created: {DateTime.UtcNow:yyyy-MM-dd}
         return JsonToolResult.Success(new { spl_db = Math.Round(spl, 1), attenuation_db = Math.Round(attenuation, 1), distance_m = distance });
     }
 
-    private static object ComputeStreeterPhelps(double doSat, double do0, double k1, double k2, double x)
+    public static object ComputeStreeterPhelps(double doSat, double do0, double k1, double k2, double x)
     {
         var deficit = doSat - do0;
         var d = k1 / (k2 - k1) * (Math.Exp(-k1 * x / 86400) - Math.Exp(-k2 * x / 86400)) * deficit + deficit * Math.Exp(-k2 * x / 86400);
@@ -1656,20 +1716,20 @@ created: {DateTime.UtcNow:yyyy-MM-dd}
         return JsonToolResult.Success(new { do_mg_l = Math.Round(doVal, 4), deficit = Math.Round(d, 4), distance_m = x });
     }
 
-    private static object ComputeCo2Equivalent(double ch4, double n2o)
+    public static object ComputeCo2Equivalent(double ch4, double n2o)
     {
         var co2e = ch4 * 28 + n2o * 265;
         return JsonToolResult.Success(new { co2e_kg = Math.Round(co2e, 2), ch4_kg = ch4, n2o_kg = n2o, gwp_ch4 = 28, gwp_n2o = 265 });
     }
 
-    private static object ComputeHazardQuotient(double exposure, double rfd)
+    public static object ComputeHazardQuotient(double exposure, double rfd)
     {
         if (rfd <= 0) return JsonToolResult.Success(new { error = "reference_dose > 0 required" });
         var hq = exposure / rfd;
         return JsonToolResult.Success(new { hazard_quotient = Math.Round(hq, 4), risk_level = hq < 1 ? "acceptable" : hq < 10 ? "moderate" : "high" });
     }
 
-    private static object LookupStandard(string code)
+    public static object LookupStandard(string code)
     {
         var standards = new Dictionary<string, string>
         {
@@ -1695,7 +1755,7 @@ created: {DateTime.UtcNow:yyyy-MM-dd}
         return JsonToolResult.Success(new { code, found = false, note = "Standard not found in local database" });
     }
 
-    private static object ComputeNoiseIso9613(double lw, double distance, string groundType = "mixed")
+    public static object ComputeNoiseIso9613(double lw, double distance, string groundType = "mixed")
     {
         if (distance <= 0) return JsonToolResult.Success(new { error = "distance > 0 required" });
         var groundFactor = groundType switch { "hard" => 0.0, "soft" => 1.0, _ => 0.5 };
@@ -1708,7 +1768,7 @@ created: {DateTime.UtcNow:yyyy-MM-dd}
                      ground_db = Math.Round(groundFactor * ground, 1), distance_m = distance, ground_type = groundType };
     }
 
-    private static object ClassifyWater(double cod, double bod, double doVal, double nh3n)
+    public static object ClassifyWater(double cod, double bod, double doVal, double nh3n)
     {
         var scores = new List<int>();
         if (cod <= 15) scores.Add(1); else if (cod <= 15) scores.Add(1); else if (cod <= 20) scores.Add(3); else if (cod <= 30) scores.Add(4); else if (cod <= 40) scores.Add(5); else scores.Add(6);
@@ -1720,7 +1780,7 @@ created: {DateTime.UtcNow:yyyy-MM-dd}
         return JsonToolResult.Success(new { classification = cls, level, cod, bod, do_mg_l = doVal, nh3n, standard = "GB3838-2002" });
     }
 
-    private static object ClassifyAir(double so2, double no2, double pm10, double pm25)
+    public static object ClassifyAir(double so2, double no2, double pm10, double pm25)
     {
         var calcIAQI = (double value, double[] bp) =>
         {
@@ -1737,7 +1797,7 @@ created: {DateTime.UtcNow:yyyy-MM-dd}
         return JsonToolResult.Success(new { classification = cls, aqi = Math.Round(aqi, 1), so2_iaqi = Math.Round(iaqiSo2, 1), no2_iaqi = Math.Round(iaqiNo2, 1), pm10_iaqi = Math.Round(iaqiPm10, 1), pm25_iaqi = Math.Round(iaqiPm25, 1), standard = "GB3095-2012" });
     }
 
-    private static object ClassifyNoise(double daytimeDb, double nightDb, string zone = "class2")
+    public static object ClassifyNoise(double daytimeDb, double nightDb, string zone = "class2")
     {
         var limits = new Dictionary<string, (int day, int night)>
         {
@@ -1882,7 +1942,7 @@ graph TD
     /// When stack height h less than building height bh+1.5*L (wake length),
     /// plume is entrained into the building cavity zone.
     /// </summary>
-    private static object ComputeBuildingDownwash(double q, double u, double h, double bh, double bw, double x)
+    public static object ComputeBuildingDownwash(double q, double u, double h, double bh, double bw, double x)
     {
         var wakeHeight = bh + 1.5 * Math.Min(bh, bw);
         var effectiveH = h < wakeHeight ? 0.0 : h - wakeHeight * 0.5;
@@ -1910,7 +1970,7 @@ graph TD
     /// (common in mornings or coastal areas), pollutants trapped aloft mix down rapidly,
     /// causing high ground-level concentrations for short-stack sources.
     /// </summary>
-    private static object ComputeFumigation(double q, double u, double h, double x, double zi)
+    public static object ComputeFumigation(double q, double u, double h, double x, double zi)
     {
         if (h >= zi) return JsonToolResult.Success(new { error = "Stack height must be below inversion layer height zi" });
 
@@ -1921,7 +1981,7 @@ graph TD
         return JsonToolResult.Success(new { concentration_ug_m3 = Math.Round(Math.Max(0, conc), 4), sigma_y = Math.Round(sigmaY, 1), inversion_height_m = zi, distance_m = x, scenario = "fumigation" });
     }
 
-    private static object ComputeTrafficNoise(double volumePerH, double speedKmh, double distance, double heavyRatio)
+    public static object ComputeTrafficNoise(double volumePerH, double speedKmh, double distance, double heavyRatio)
     {
         var soundPower = 10 * Math.Log10(volumePerH) + 30 * Math.Log10(Math.Max(speedKmh, 1)) + 10 * Math.Log10(1 + heavyRatio * 4) - 38;
         var attenuation = 10 * Math.Log10(Math.Max(distance, 1)) + 5;
@@ -1929,7 +1989,7 @@ graph TD
         return JsonToolResult.Success(new { spl_db = Math.Round(spl, 1), sound_power_db = Math.Round(soundPower, 1), attenuation_db = Math.Round(attenuation, 1), volume_per_h = volumePerH, speed_kmh = speedKmh, distance_m = distance, heavy_ratio = heavyRatio });
     }
 
-    private static object ComputeRiverMixing(double flowRate, double width, double depth, double velocity, double emissionLoad)
+    public static object ComputeRiverMixing(double flowRate, double width, double depth, double velocity, double emissionLoad)
     {
         if (velocity <= 0) return JsonToolResult.Success(new { error = "velocity > 0 required" });
         var fullMixingLength = 0.4 * velocity * width * width / (depth * 10);
@@ -1938,7 +1998,7 @@ graph TD
         return JsonToolResult.Success(new { full_mixing_length_m = Math.Round(fullMixingLength, 1), mixing_zone_type = fullMixingLength > width * 10 ? "大中河" : "小河", initial_concentration_mg_l = Math.Round(initialConc, 4), fully_mixed_concentration_mg_l = Math.Round(mixedConc, 4) });
     }
 
-    private static object ComputeEcologicalRisk(string metalsCsv)
+    public static object ComputeEcologicalRisk(string metalsCsv)
     {
         var metals = metalsCsv.Split(',').Select(m => m.Trim()).ToList();
         var toxicFactors = new Dictionary<string, double>
@@ -1960,13 +2020,13 @@ graph TD
         return JsonToolResult.Success(new { total_risk_index = Math.Round(totalRisk, 2), risk_level = totalRisk < 150 ? "低" : totalRisk < 300 ? "中" : totalRisk < 600 ? "较高" : "高", details });
     }
 
-    private static object ComputeSoilLoss(double r, double k, double ls, double c, double p)
+    public static object ComputeSoilLoss(double r, double k, double ls, double c, double p)
     {
         var usle = r * k * ls * c * p;
         return JsonToolResult.Success(new { soil_loss_t_ha_yr = Math.Round(usle, 2), r_erosivity = r, k_erodibility = k, ls_topographic = ls, c_cover = c, p_support = p, risk_level = usle < 5 ? "微度" : usle < 25 ? "轻度" : usle < 50 ? "中度" : usle < 80 ? "强度" : "剧烈" });
     }
 
-    private static object ComputeCarbonSink(double areaHa, string vegType, double growthRate)
+    public static object ComputeCarbonSink(double areaHa, string vegType, double growthRate)
     {
         var carbonDensity = vegType switch
         {
@@ -1978,7 +2038,7 @@ graph TD
         return JsonToolResult.Success(new { annual_carbon_sink_tc = Math.Round(annualSink, 2), co2_equivalent_t = Math.Round(co2Equivalent, 2), area_ha = areaHa, vegetation_type = vegType, carbon_density_tc_ha = carbonDensity, growth_rate_pct = growthRate });
     }
 
-    private static object ComputeBuffer(double lat, double lng, double radiusM)
+    public static object ComputeBuffer(double lat, double lng, double radiusM)
     {
         var dLat = radiusM / 111320.0;
         var dLng = radiusM / (111320.0 * Math.Cos(lat * Math.PI / 180));
@@ -1989,9 +2049,43 @@ graph TD
         }}}, properties = new { center = new { lat, lng }, radius_m = radiusM } };
     }
 
-    private static object PointInPolygon(double lat, double lng, string _) => new { inside = true, note = "simplified" };
+    public static object PointInPolygon(double lat, double lng, string geojson) => PointInPolygonImpl(lat, lng, geojson);
 
-    private static object Haversine(double lat1, double lng1, double lat2, double lng2)
+    private static object PointInPolygonImpl(double lat, double lng, string geojson)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(geojson);
+            var root = doc.RootElement;
+            JsonElement? coords = null;
+            if (root.TryGetProperty("coordinates", out var c)) coords = c;
+            else if (root.ValueKind == JsonValueKind.Array) coords = root;
+            if (coords == null || coords.Value.ValueKind != JsonValueKind.Array)
+                return new { error = "Invalid GeoJSON: expected coordinates array" };
+
+            var ring = coords.Value.EnumerateArray()
+                .Select(p => (lat: p[1].GetDouble(), lng: p[0].GetDouble())).ToArray();
+
+            if (ring.Length < 3 || ring[0].lat != ring[^1].lat || ring[0].lng != ring[^1].lng)
+                return new { error = "Invalid polygon: must have at least 3 points and be closed" };
+
+            bool inside = false;
+            int j = ring.Length - 1;
+            for (int i = 0; i < ring.Length; i++)
+            {
+                if ((ring[i].lng > lng) != (ring[j].lng > lng))
+                {
+                    double intersection = ring[i].lat + (lng - ring[i].lng) / (ring[j].lng - ring[i].lng) * (ring[j].lat - ring[i].lat);
+                    if (lat < intersection) inside = !inside;
+                }
+                j = i;
+            }
+            return new { inside };
+        }
+        catch (Exception ex) { return new { error = ex.Message }; }
+    }
+
+    public static object Haversine(double lat1, double lng1, double lat2, double lng2)
     {
         var r = 6371000.0;
         var dLat = (lat2 - lat1) * Math.PI / 180;
@@ -2001,7 +2095,7 @@ graph TD
         return JsonToolResult.Success(new { distance_m = Math.Round(r * c, 1), from = new { lat1, lng1 }, to = new { lat2, lng2 } });
     }
 
-    private static object TransformCoord(double lat, double lng, string from, string to)
+    public static object TransformCoord(double lat, double lng, string from, string to)
     {
         if (from == "WGS84" && to == "GCJ02")
         {
@@ -2062,8 +2156,8 @@ internal static class CliEngine
     public static async Task<object> ScanPath(string? filter = null)
     {
         await Task.Delay(200);
-        var path = Environment.GetEnvironmentVariable("PATH") ?? "";
-        var dirs = path.Split(global::System.IO.Path.PathSeparator).Where(d => !string.IsNullOrWhiteSpace(d));
+        var path = OptionService.Get("PATH", "dotnet");
+        var dirs = path!.Split(global::System.IO.Path.PathSeparator).Where(d => !string.IsNullOrWhiteSpace(d));
         var found = dirs.SelectMany(d =>
         {
             try { return Directory.GetFiles(d).Select(global::System.IO.Path.GetFileName).Where(f => filter == null || f!.Contains(filter, StringComparison.OrdinalIgnoreCase)); }
@@ -2211,6 +2305,19 @@ internal static class MathNetAnalyzer
         var p99 = samples.OrderBy(s => s).ToList()[(int)(samples.Count * 0.99)];
         return JsonToolResult.Success(new { method = "monte_carlo", samples = 1000, mean = Math.Round(samples.Average(), 4), p95 = Math.Round(p95, 4), p99 = Math.Round(p99, 4) });
     }
+}
+
+public static class OptionService
+{
+    public static Func<string, string?, string?>? Resolver { get; set; }
+
+    public static string? Get(string envVar, string? fallback = null)
+    {
+        var value = Resolver?.Invoke(envVar, null);
+        return value ?? Environment.GetEnvironmentVariable(envVar) ?? fallback;
+    }
+
+    public static void SetResolver(Func<string, string?, string?> resolver) => Resolver = resolver;
 }
 
 

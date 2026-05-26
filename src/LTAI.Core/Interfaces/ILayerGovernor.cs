@@ -8,5 +8,4 @@ public interface ILayerGovernor
     LayerStats Stats { get; }
 
     Task<Handshake> ProcessAsync(Handshake incoming, CancellationToken cancellationToken = default);
-    Task SendAsync(Handshake handshake, CancellationToken cancellationToken = default);
 }

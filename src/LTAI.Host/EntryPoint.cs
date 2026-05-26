@@ -19,6 +19,7 @@ using LTAI.Planning.Planning;
 using LTAI.Knowledge.Memory;
 using LTAI.Knowledge.Document;
 using LTAI.Knowledge.Vector;
+using LTAI.Knowledge.Core;
 using LTAI.Infra.Network;
 using LTAI.Infra.Network.Interfaces;
 using LTAI.Infra.Network.Bridge;
@@ -73,7 +74,7 @@ public static class EntryPoint
         builder.Host.UseSerilog((ctx, lc) => lc
             .MinimumLevel.Information()
             .WriteTo.Console()
-            .WriteTo.File(Path.Combine(AppContext.BaseDirectory, "logs", "ltai-.log"), rollingInterval: RollingInterval.Day));
+            .WriteTo.File(Path.Combine(OptionService.Get("paths.logs") ?? Path.Combine(AppContext.BaseDirectory, "logs"), "ltai-.log"), rollingInterval: RollingInterval.Day));
 
         builder.Services.AddLTAICore();
         builder.Services.AddLTAIAgent();
@@ -82,9 +83,9 @@ public static class EntryPoint
         var l0ProviderConfig = ltaiOptions.AI.Providers.TryGetValue(l0.Provider, out var l0p) ? l0p : null;
         var l0ApiKey = l0ProviderConfig?.ApiKey ?? "";
         if (string.IsNullOrEmpty(l0ApiKey))
-            l0ApiKey = Environment.GetEnvironmentVariable($"{l0.Provider.ToUpperInvariant()}_API_KEY") ?? "";
+            l0ApiKey = OptionService.Get($"{l0.Provider.ToUpperInvariant()}_API_KEY") ?? "";
 
-        var onnxEmbeddingPath = System.IO.Path.Combine(AppContext.BaseDirectory, "models", "l0", "model.onnx");
+        var onnxEmbeddingPath = System.IO.Path.Combine(OptionService.Get("paths.models") ?? System.IO.Path.Combine(AppContext.BaseDirectory, "models"), "l0", "model.onnx");
         var l0Endpoint = l0ProviderConfig != null ? $"{l0ProviderConfig.Endpoint.TrimEnd('/')}/v1" : null;
         builder.Services.AddLTAIVectorAuto(
             apiEndpoint: l0Endpoint, apiKey: l0ApiKey, apiModel: l0.Model, onnxModelPath: onnxEmbeddingPath);
@@ -116,18 +117,19 @@ public static class EntryPoint
         logger.LogInformation("L1={L1} L2={L2} L0={L0}", ltaiOptions.AI.L1.Model, ltaiOptions.AI.L2.Model, ltaiOptions.AI.L0.Model);
         logger.LogInformation("ONNX training: {Enabled}", ltaiOptions.AI.OnnxEnabled ? "enabled" : "disabled");
 
-        var token = Environment.GetEnvironmentVariable("A2A_BEARER_TOKEN") ?? "";
+        var token = OptionService.Get("A2A_BEARER_TOKEN") ?? "";
         if (string.IsNullOrWhiteSpace(token))
         {
             token = Convert.ToHexString(RandomNumberGenerator.GetBytes(32)).ToLowerInvariant();
             Environment.SetEnvironmentVariable("A2A_BEARER_TOKEN", token, EnvironmentVariableTarget.Process);
-            logger.LogInformation("Generated new A2A Bearer token: {Token}...", token[..16]);
+            logger.LogInformation("Generated new A2A Bearer token: {Token}...", token[..4]);
         }
 
         var toolRegistry = sp.GetRequiredService<AIToolRegistry>();
         sp.GetRequiredService<LTAI.Agent.Evolution.PluginRegistry>().Discover();
         await LTAI.Agent.Tools.ToolRegistryExtensions.RegisterAllToolCategoriesAsync(toolRegistry, logger).ConfigureAwait(false);
         await sp.RegisterCodeActToolsAsync(toolRegistry).ConfigureAwait(false);
+        await sp.RegisterMarkdownToolsAsync(toolRegistry).ConfigureAwait(false);
 
         var lts = sp.GetRequiredService<ILivingTreeSystem>();
         await lts.InitializeAsync().ConfigureAwait(false);
@@ -145,6 +147,8 @@ public static class EntryPoint
 
 internal sealed class HostEntryPointAdapter : ILTAIEntryPoint
 {
+    private static readonly HashSet<string> _modes = new(StringComparer.OrdinalIgnoreCase) { "host", "serve" };
+    public bool CanHandle(string command) => _modes.Contains(command);
     public Task RunAsync(string[] args) => EntryPoint.RunAsync(args);
 }
 

@@ -7,7 +7,6 @@ namespace LTAI.AI.Governors;
 
 public abstract class LayerGovernor : ILayerGovernor
 {
-    protected readonly ICognitiveMesh Mesh;
     protected readonly IChatClient LLM;
     protected readonly ILogger Logger;
     private LayerStats _stats;
@@ -15,24 +14,15 @@ public abstract class LayerGovernor : ILayerGovernor
     public string LayerName { get; }
     public LayerStats Stats => _stats;
 
-    protected LayerGovernor(string layerName, ICognitiveMesh mesh, IChatClient llm, ILogger logger)
+    protected LayerGovernor(string layerName, IChatClient llm, ILogger logger)
     {
         LayerName = layerName;
-        Mesh = mesh;
         LLM = llm;
         Logger = logger;
         _stats = new LayerStats { LayerName = layerName };
     }
 
     public abstract Task<Handshake> ProcessAsync(Handshake incoming, CancellationToken cancellationToken = default);
-
-    public async Task SendAsync(Handshake handshake, CancellationToken cancellationToken = default)
-    {
-        handshake = handshake with { From = LayerName };
-        await Mesh.SendAsync(handshake, cancellationToken).ConfigureAwait(false);
-        _stats.MessagesSent++;
-        _stats.LastActive = DateTime.UtcNow;
-    }
 
     protected Handshake CreateHandshake(string to, string action, Dictionary<string, object?>? payload = null,
         HandshakePriority priority = HandshakePriority.Normal)

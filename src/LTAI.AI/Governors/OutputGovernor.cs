@@ -8,8 +8,8 @@ namespace LTAI.AI.Governors;
 
 public sealed class OutputGovernor : LayerGovernor
 {
-    public OutputGovernor(ICognitiveMesh mesh, IChatClient llm, ILogger<OutputGovernor> logger)
-        : base("output", mesh, llm, logger) { }
+    public OutputGovernor(IChatClient llm, ILogger<OutputGovernor> logger)
+        : base("output", llm, logger) { }
 
     public override Task<Handshake> ProcessAsync(Handshake incoming, CancellationToken cancellationToken = default)
     {

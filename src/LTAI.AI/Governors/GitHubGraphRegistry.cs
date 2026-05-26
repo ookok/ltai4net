@@ -50,18 +50,12 @@ public sealed class GitHubGraphRegistry : IDisposable
         _cacheDirectory = Path.Combine(AppContext.BaseDirectory, "synaptic", "graph_cache");
         Directory.CreateDirectory(_cacheDirectory);
 
-        _httpClient = new HttpClient
+        _httpClient = new HttpClient(new GitHubAuthHandler(_config.Token ?? "", new Uri(_config.ApiBaseUrl).Host))
         {
             BaseAddress = new Uri(_config.ApiBaseUrl),
             Timeout = _config.DownloadTimeout
         };
         _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("LTAI-GraphAI/1.0");
-
-        if (!string.IsNullOrEmpty(_config.Token))
-        {
-            _httpClient.DefaultRequestHeaders.Authorization =
-                new AuthenticationHeaderValue("token", _config.Token);
-        }
     }
 
     /// <summary>

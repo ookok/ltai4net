@@ -2,6 +2,7 @@ using Avalonia;
 using LTAI.AI.Interfaces;
 using LTAI.AI;
 using LTAI.AI.Governors;
+using LTAI.Agent;
 using LTAI.Agent.Tools;
 using LTAI.Core.Messaging;
 using LTAI.Core;
@@ -27,6 +28,7 @@ public static class Program
 
         var toolRegistry = provider.GetRequiredService<AIToolRegistry>();
         toolRegistry.RegisterAllToolCategoriesAsync().GetAwaiter().GetResult();
+        provider.RegisterMarkdownToolsAsync(toolRegistry).GetAwaiter().GetResult();
 
         var lts = provider.GetRequiredService<ILivingTreeSystem>();
         lts.InitializeAsync().GetAwaiter().GetResult();

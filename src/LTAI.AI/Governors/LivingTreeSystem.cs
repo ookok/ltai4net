@@ -24,7 +24,6 @@ namespace LTAI.AI.Governors;
 
 public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
 {
-    private readonly ICognitiveMesh _mesh;
     private readonly TaskJournal _journal;
     private readonly IChatClient _llm;
     private readonly ProviderFanOutRace? _fanOut;
@@ -33,12 +32,7 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
     private readonly DNAOrchestrator? _dna;
     private readonly IOptions<LTAIOptions> _options;
 
-    private readonly InputGovernor _input;
-    private readonly ContextGovernor _context;
-    private readonly RoutingGovernor _routing;
-    private readonly OutputGovernor _output;
-    private readonly SelfGovernor _self;
-    private readonly SystemGuardian _guardian;
+    private readonly GovernorSet _gov;
     private readonly ReasoningOrchestrator? _reasoning;
     private readonly L1L2DuplexRouter? _duplexRouter;
     private readonly SynapticMemory? _synapticMemory;
@@ -85,28 +79,21 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
         return FlashModel;
     }
 
-    public SystemGuardian Guardian => _guardian;
-    public SystemMode Mode => _guardian.Mode;
+    public SystemGuardian Guardian => _gov.Guardian;
+    public SystemMode Mode => _gov.Guardian.Mode;
     public bool DNAEnabled => _dna != null;
     public DNAStatus? DNAStatus => _dna?.GetStatus();
-    public ICognitiveMesh Mesh => _mesh;
-    public InputGovernor InputGovernor => _input;
-    public ContextGovernor ContextGovernor => _context;
-    public RoutingGovernor RoutingGovernor => _routing;
+    public InputGovernor InputGovernor => _gov.Input;
+    public ContextGovernor ContextGovernor => _gov.Context;
+    public RoutingGovernor RoutingGovernor => _gov.Routing;
     public IChatClient LLMClient => _llm;
     public TaskPipeline TaskPipeline => _taskPipeline;
 
     public LivingTreeSystem(
-        ICognitiveMesh mesh,
         TaskJournal journal,
         IChatClient llm,
         IOptions<LTAIOptions> options,
-        InputGovernor input,
-        ContextGovernor context,
-        RoutingGovernor routing,
-        OutputGovernor output,
-        SelfGovernor self,
-        SystemGuardian guardian,
+        GovernorSet gov,
         AIToolRegistry toolRegistry,
         ILogger<LivingTreeSystem> logger,
         ProviderFanOutRace? fanOut = null,
@@ -128,19 +115,13 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
         IParliamentBridge? parliamentBridge = null,
         QueryPreprocessingService? preprocessor = null)
     {
-        _mesh = mesh;
         _journal = journal;
         _llm = llm;
         _fanOut = fanOut;
         _toolRegistry = toolRegistry;
         _logger = logger;
         _options = options;
-        _input = input;
-        _context = context;
-        _routing = routing;
-        _output = output;
-        _self = self;
-        _guardian = guardian;
+        _gov = gov;
         _dna = dna;
         _reasoning = reasoning;
         _duplexRouter = duplexRouter;
@@ -158,7 +139,7 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
         _verifiableRegistry = verifiableRegistry;
         _parliamentBridge = parliamentBridge;
         _preprocessor = preprocessor ?? new QueryPreprocessingService(
-            _mesh, _llm, _dna, _options, _guardian, _toolRegistry,
+            _gov.Input, _llm, _dna, _options, _gov.Guardian, _toolRegistry,
             _metaCognition, _patternRouter, _planExecutor, _prompts, _logger);
         _taskPipeline = new TaskPipeline(_journal);
         _taskPipeline.LlmDecomposer = LlmDecomposeAsync;
@@ -166,13 +147,7 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
 
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
     {
-        await _mesh.RegisterAsync(_input, cancellationToken).ConfigureAwait(false);
-        await _mesh.RegisterAsync(_context, cancellationToken).ConfigureAwait(false);
-        await _mesh.RegisterAsync(_routing, cancellationToken).ConfigureAwait(false);
-        await _mesh.RegisterAsync(_output, cancellationToken).ConfigureAwait(false);
-        await _mesh.RegisterAsync(_self, cancellationToken).ConfigureAwait(false);
-
-        _guardian.StartMonitoring(TimeSpan.FromSeconds(15));
+        _gov.Guardian.StartMonitoring(TimeSpan.FromSeconds(15));
         _logger.LogInformation("LivingTreeSystem v6.0 initialized with 5 governors, DNA: {DNA}",
             _dna != null ? "enabled" : "disabled");
 
@@ -193,10 +168,10 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
 
         try
         {
-            if (_guardian.Mode == SystemMode.LifeSupport)
+            if (_gov.Guardian.Mode == SystemMode.LifeSupport)
             {
                 _journal.Complete(entry, "emergency");
-                return await _guardian.EmergencyChatAsync(query, cancellationToken).ConfigureAwait(false);
+                return await _gov.Guardian.EmergencyChatAsync(query, cancellationToken).ConfigureAwait(false);
             }
 
             if (_journal.IsPaused)
@@ -236,7 +211,7 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
         catch (Exception ex)
         {
             _journal.Fail(entry, ex.Message);
-            _guardian.RecordError();
+            _gov.Guardian.RecordError();
             _logger.LogError(ex, "Chat failed");
             throw;
         }
@@ -291,7 +266,7 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
 
         if (_duplexRouter != null)
         {
-            var routeResult = _duplexRouter.Route(query);
+            var routeResult = await _duplexRouter.RouteAsync(query);
             if (routeResult.CanAnswerLocally)
             {
                 // Layer 4: verify the cached answer
@@ -324,7 +299,7 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
             // because the teaching model doesn't see Layer 1's injected context
             if (routeResult.Route == "delegate_l2" && layer1Context == null && layer2Context == null)
             {
-                var ctxResult = await _mesh.SendAsync(new Handshake
+                var ctxResult = await _gov.Context.ProcessAsync(new Handshake
                 {
                     To = "context", Action = "preload",
                     Payload = new Dictionary<string, object?> { ["query"] = query },
@@ -358,7 +333,7 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
                         else
                         {
                             _duplexRouter.LearnFromL2(query, teachingResult);
-                            _context.AddTurn(query, teachingResult.Answer);
+                            _gov.Context.AddTurn(query, teachingResult.Answer);
                             _metaCognition.RecordOutcome(query, true);
                             yield return teachingResult.Answer;
                             yield break;
@@ -367,7 +342,7 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
                     else
                     {
                         _duplexRouter.LearnFromL2(query, teachingResult);
-                        _context.AddTurn(query, teachingResult.Answer);
+                        _gov.Context.AddTurn(query, teachingResult.Answer);
                         _metaCognition.RecordOutcome(query, true);
                         yield return teachingResult.Answer;
                         yield break;
@@ -409,7 +384,7 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
         // Inject multi-turn conversation history as context (skip for Layer1 bypass)
         if (!layer1HighConfidence)
         {
-            var history = _context.CompressHistory();
+            var history = _gov.Context.CompressHistory();
             if (history.Length > 0)
                 messages.Insert(0, new ChatMessage(ChatRole.System,
                     $"【此前对话】\n{history}\n\n请基于以上对话历史理解用户当前问题的上下文。"));
@@ -440,6 +415,7 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
                 if (streamResponse == null) { yield return "Error connecting to provider."; yield break; }
 
                 var streamChunks = new List<string>();
+                var toolList = new Dictionary<string, ToolInvocationPart>();
                 Exception? streamError = null;
                 try
                 {
@@ -459,6 +435,20 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
                         {
                             streamChunks.Add(update.Text);
                             responseText.Append(update.Text);
+                        }
+                        if (update.AdditionalProperties != null
+                            && update.AdditionalProperties.TryGetValue("NormalizedParts", out var partsObj)
+                            && partsObj is List<Part> parts)
+                        {
+                            foreach (var part in parts)
+                            {
+                                if (part is ToolInvocationPart toolPart && !string.IsNullOrEmpty(toolPart.ToolName))
+                                {
+                                    var key = toolPart.Id ?? toolPart.ToolName;
+                                    if (!toolList.ContainsKey(key))
+                                        toolList[key] = toolPart;
+                                }
+                            }
                         }
                     }
                 }
@@ -618,39 +608,42 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
         // Post-response follow-up: generate related questions from tool context
         if (!groundingFailed && !layer1HighConfidence && finalResponse.Length > 50)
         {
-            _context.AddTurn(query, finalResponse);
+            _gov.Context.AddTurn(query, finalResponse);
             var toolCtx = layer1Context ?? layer2Context ?? autoSearchContext;
             if (!string.IsNullOrWhiteSpace(toolCtx) && toolCtx.Length > 100)
             {
                 var followup = await GenerateFollowupAsync(finalResponse, toolCtx, cancellationToken).ConfigureAwait(false);
                 if (followup != null)
-                {
                     yield return "\n\n---\n您可能还想了解：\n" + followup;
-                }
             }
         }
 
-        _bavtRouter.Spend(1.0); // Track streaming path cost
+        foreach (var tailOutput in ProcessStreamingTail(finalResponse, query, layer1Context, layer2Context,
+            autoSearchContext, pre, model, totalToolCalls, groundingFailed, layer1HighConfidence,
+            metaAssessment.Familiarity, patternMatched, label, retryLevel, _erlLoop.SuccessRate,
+            _erlLoop.TotalTrials, (float)_bavtRouter.BudgetRatio))
+        {
+            yield return tailOutput;
+        }
+    }
 
-        // Queue theory: backpressure-aware retry — reduce maxRetries when queue is congested
+    private IEnumerable<string> ProcessStreamingTail(
+        string finalResponse, string query, string? layer1Context, string? layer2Context,
+        string? autoSearchContext, Pipeline.PreprocessingResult pre, string model, int totalToolCalls,
+        bool groundingFailed, bool layer1HighConfidence, double metaFamiliarity, bool patternMatched,
+        string label, int retryLevel, double erlRate, int erlTotalTrials, float bavtBudgetRatio)
+    {
+        _bavtRouter.Spend(1.0);
+
         if (_workQueue.PendingCount > 10)
+            _logger.LogInformation("Backpressure: queue depth {Depth}, reducing aggressiveness", _workQueue.PendingCount);
+
+        if (bavtBudgetRatio < 0.5f && _requestCount > 10)
         {
-            _logger.LogInformation("Backpressure: queue depth {Depth}, reducing aggressiveness",
-                _workQueue.PendingCount);
+            var eta = bavtBudgetRatio < 0.1f ? "critical" : bavtBudgetRatio < 0.3f ? "low" : "moderate";
+            _logger.LogInformation("BudgetRecovery: ratio={Ratio:F2}, status={Eta}", bavtBudgetRatio, eta);
         }
 
-        // BAVTRouter recovery: estimate time to budget recovery
-        if (_bavtRouter.BudgetRatio < 0.5f && _requestCount > 10)
-        {
-            var eta = (_bavtRouter.BudgetRatio < 0.1f) ? "critical" :
-                      (_bavtRouter.BudgetRatio < 0.3f) ? "low" : "moderate";
-            _logger.LogInformation("BudgetRecovery: ratio={Ratio:F2}, status={Eta}, recommended={Rec}",
-                _bavtRouter.BudgetRatio, eta,
-                _bavtRouter.BudgetRatio < 0.3f ? "skip_non_essential_ops" : "normal");
-        }
-
-        // Confidence calibration: back-propagate ERL outcomes to MetaCog familiarity
-        var erlRate = _erlLoop.SuccessRate;
         if (erlRate > 0 && erlRate < 0.5f && pre.PatternToolName != null)
             _metaCognition.ReinforceDomain(pre.PatternToolName, -0.05f);
         else if (erlRate > 0.7f && pre.PatternToolName != null)
@@ -659,39 +652,32 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
         if (groundingFailed)
         {
             _metaCognition.RecordOutcome(query, false);
-            _logger.LogWarning("MetaCognition: recorded grounding failure for query: {Query}", query[..Math.Min(query.Length, 60)]);
+            _logger.LogWarning("MetaCognition: grounding failure for {Q}", query[..Math.Min(query.Length, 60)]);
         }
         else if (layer1HighConfidence)
         {
             _metaCognition.RecordOutcome(query, true);
-            if (pre.PatternToolName != null)
-                _metaCognition.ReinforceDomain(pre.PatternToolName, 0.1f);
+            if (pre.PatternToolName != null) _metaCognition.ReinforceDomain(pre.PatternToolName, 0.1f);
         }
         else
         {
-            var hasFailure = finalResponse.Contains("未找到相关信息")
-                || finalResponse.Contains("无法")
-                || finalResponse.Length <= 20;
+            var hasFailure = finalResponse.Contains("未找到相关信息") || finalResponse.Contains("无法") || finalResponse.Length <= 20;
             _metaCognition.RecordOutcome(query, !hasFailure);
         }
 
-        // DreamCycle realtime: instant quality reflection (rate-limited to prevent backlog)
         if (!groundingFailed && !layer1HighConfidence && finalResponse.Length > 100
             && DateTime.UtcNow - _lastDreamCycleTrigger > DreamCycleMinInterval)
         {
             _lastDreamCycleTrigger = DateTime.UtcNow;
             _workQueue.Enqueue(async ct =>
             {
-                try { if (_dreamCycle != null) await _dreamCycle.ForceReflectionAsync(); }
-                catch (Exception ex) { _logger.LogWarning(ex, "DreamCycle realtime reflection failed"); }
-            }, "DreamCycle realtime");
+                try { if (_dreamCycle != null) await _dreamCycle.ForceReflectionAsync(); } catch { }
+            }, "DreamCycle");
         }
 
-        // Tool synthesis: track tool combo success → auto-discover effective patterns
         if (!groundingFailed && totalToolCalls > 1 && pre.PatternToolName != null)
             _erlLoop.RecordTrial($"combo_{pre.PatternToolName}_{totalToolCalls}", finalResponse[..Math.Min(finalResponse.Length, 80)], "tool_combo", 0.85f, true);
 
-        // Knowledge graph auto-build: extract entities from tool results for future lookup
         if (!groundingFailed && !string.IsNullOrWhiteSpace(layer1Context))
             _workQueue.Enqueue(async ct =>
             {
@@ -699,260 +685,165 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
                 {
                     var entities = System.Text.RegularExpressions.Regex.Matches(layer1Context, @"[\u4e00-\u9fff]{2,8}(?:有限)?(?:公司|企业|集团|科技|银行|大学|医院)");
                     foreach (System.Text.RegularExpressions.Match m in entities.Take(5))
-                        if (m.Value.Length > 2)
-                            _metaCognition.ReinforceDomain($"entity_{m.Value}", 0.01f);
+                        if (m.Value.Length > 2) _metaCognition.ReinforceDomain($"entity_{m.Value}", 0.01f);
                 }
-                catch (Exception ex) { _logger.LogWarning(ex, "Knowledge graph entity extraction failed"); }
+                catch { }
             }, "KnowledgeGraphBuild");
 
-        // Adversarial self-test: periodic quality audit
         if (++_bgRequestCount % 50 == 49)
             _workQueue.Enqueue(async ct =>
             {
                 try { await _llm.GetResponseAsync("系统自检：总结最近运行状态", new ChatOptions { ModelId = FlashModel, Temperature = 0f, MaxOutputTokens = 64 }, ct); }
-                catch (Exception ex) { _logger.LogWarning(ex, "Adversarial self-test LLM call failed"); }
+                catch { }
             }, "AdversarialSelfTest");
 
-        // Query cache: store successful responses with adaptive TTL
         if (!groundingFailed && finalResponse.Length > 50)
         {
-            var ttl = query.Contains("今天") || query.Contains("星期") || query.Contains("时间") ? 60 :
-                      query.Contains("git") || query.Contains("提交") ? 2 :
-                      query.Contains("目录") || query.Contains("文件") ? 10 :
-                      query.Length < 20 ? 3 : 5;
-            var weightedTtl = (int)(ttl * (groundingFailed ? 0.3 : 1.0) * Math.Max(0.5f, metaAssessment.Familiarity));
-            _queryCache[query] = (finalResponse, DateTime.UtcNow.AddMinutes(weightedTtl));
+            var ttl = query.Contains("今天") || query.Contains("星期") ? 60 :
+                      query.Contains("git") ? 2 :
+                      query.Contains("目录") ? 10 : query.Length < 20 ? 3 : 5;
+            _queryCache[query] = (finalResponse, DateTime.UtcNow.AddMinutes((int)(ttl * Math.Max(0.5f, metaFamiliarity))));
         }
 
-        // Persona consistency: track response style (concise/detailed/balanced)
-        _personaStyle = finalResponse.Length < 150 ? "concise" :
-            finalResponse.Count(c => c == '\n') > 5 ? "detailed" : "balanced";
+        _personaStyle = retryLevel >= 2 ? "concise" :
+            finalResponse.Length < 150 ? "concise" : finalResponse.Count(c => c == '\n') > 5 ? "detailed" : "balanced";
 
-        // Resource-adaptive: skip LLM verification when system under memory pressure
         if (Environment.WorkingSet > 2L * 1024 * 1024 * 1024)
-            _logger.LogDebug("ResourceGuard: high memory usage ({Mem}MB), considering degradation",
-                Environment.WorkingSet / 1024 / 1024);
+            _logger.LogDebug("ResourceGuard: high memory ({Mem}MB)", Environment.WorkingSet / 1024 / 1024);
 
-        // Auto LoRA: trigger fine-tuning when domain consistently fails
         if (groundingFailed && _requestCount % 10 == 0 && _synapticMemory != null)
         {
             var samples = _synapticMemory.GetTrainingSamples(maxCount: 50);
             if (samples.Count >= 20)
-                _workQueue.Enqueue(async ct =>
-                {
-                    try { await TriggerPeriodicTraining(); } catch (Exception ex) { _logger.LogWarning(ex, "AutoLoRA periodic training trigger failed"); }
-                }, "AutoLoRA");
+                _workQueue.Enqueue(async ct => { try { await TriggerPeriodicTraining(); } catch { } }, "AutoLoRA");
         }
 
-        // L0 self-learning: back-propagate wrong routing decisions
         if (groundingFailed && label == "fast" && !layer1HighConfidence)
         {
-            _erlLoop.RecordTrial($"l0_reroute_{query[..Math.Min(query.Length, 30)]}",
-                "should_be_deep", "fast_misroute", 0.3f, false);
-            _logger.LogInformation("L0 self-learning: fast→deep reroute for pattern: {Pattern}",
-                query[..Math.Min(query.Length, 40)]);
+            _erlLoop.RecordTrial($"l0_reroute_{query[..Math.Min(query.Length, 30)]}", "should_be_deep", "fast_misroute", 0.3f, false);
+            _logger.LogInformation("L0 self-learning: fast→deep for {P}", query[..Math.Min(query.Length, 40)]);
         }
 
-        // Session memory: store structured dialogue summary after meaningful exchanges
-        if (!groundingFailed && finalResponse.Length > 200 && _context.CompressHistory().Length > 300)
+        if (!groundingFailed && finalResponse.Length > 200 && _gov.Context.CompressHistory().Length > 300)
             _workQueue.Enqueue(async ct =>
             {
                 try
                 {
-                    var weight = metaAssessment.Familiarity * 0.5f + (float)_erlLoop.SuccessRate * 0.5f;
+                    var w = (float)(metaFamiliarity * 0.5 + erlRate * 0.5);
                     _synapticMemory?.Store(new SynapticExperience
                     {
                         Type = SynapseType.Interaction, Query = query, Response = finalResponse[..Math.Min(finalResponse.Length, 500)],
-                        Label = "session_memory", Confidence = weight, Reward = weight,
-                        Metadata = $"style={_personaStyle},weight={weight:F2}"
+                        Label = "session_memory", Confidence = w, Reward = w, Metadata = $"style={_personaStyle}"
                     });
                 }
-                catch (Exception ex) { _logger.LogWarning(ex, "Session memory synaptic storage failed"); }
+                catch { }
             }, "SessionMemory");
 
-        // Anomaly auto-report: detect ERL degradation and generate insight
-        if (erlRate < 0.4f && _erlLoop.TotalTrials > 10)
+        if (erlRate < 0.4f && erlTotalTrials > 10)
         {
-            _logger.LogWarning("Anomaly: ERL success rate dropped to {Rate:F2} ({Trials} trials). " +
-                "Consider: 1) Check model health 2) Increase pre-emptive tool execution 3) Review grounding failures",
-                erlRate, _erlLoop.TotalTrials);
+            _logger.LogWarning("Anomaly: ERL rate {R:F2} over {T} trials", erlRate, erlTotalTrials);
             _evolutionStore?.RecordLesson(new EvolutionLesson
             {
-                Category = LessonCategory.QualityRegression.ToString(),
-                Severity = 0.7f,
-                Summary = $"ERL success rate critical: {erlRate:F2} over {_erlLoop.TotalTrials} trials",
-                Mitigation = "Enable stricter grounding checks, force pre-emptive tool execution",
-                SourceStage = "anomaly_report"
+                Category = LessonCategory.QualityRegression.ToString(), Severity = 0.7f,
+                Summary = $"ERL critical: {erlRate:F2} over {erlTotalTrials} trials",
+                Mitigation = "Enable stricter grounding checks", SourceStage = "anomaly_report"
             });
         }
 
-        // Explainability trace: append decision metadata to every response
         if (finalResponse.Length > 10)
         {
             var trace = $"\n\n---\n[决策: L0={label}, L1={patternMatched}, L2={layer2Context != null}, " +
                 $"Model={model}, Tools={totalToolCalls}, Grounding={!groundingFailed}, " +
-                $"Familiarity={metaAssessment.Familiarity:F2}, Budget={_bavtRouter.BudgetRatio:F2}, " +
-                $"Time={DateTime.UtcNow:HH:mm:ss}]";
+                $"Familiarity={metaFamiliarity:F2}, Budget={bavtBudgetRatio:F2}]";
             yield return trace;
         }
 
-        // Counterfactual reasoning: try alternative tool set on repeated grounding failure
         if (groundingFailed && totalToolCalls > 0 && patternMatched && pre.PatternToolName != null)
-            _erlLoop.RecordTrial($"counterfactual_{pre.PatternToolName}",
-                $"Would different tools help?", "counterfactual", 0.4f, false);
+            _erlLoop.RecordTrial($"counterfactual_{pre.PatternToolName}", "Would different tools help?", "counterfactual", 0.4f, false);
 
-        // Auto regression test: generate test case from grounding failure
         if (groundingFailed && retryLevel >= 2)
             _workQueue.Enqueue(async ct =>
             {
                 try
                 {
-                    var testCase = $"// Regression: {query[..Math.Min(query.Length, 60)]}\n" +
-                        $"// Expected: grounded answer with tools. Actual: grounding failed L{retryLevel}\n" +
-                        $"// Tools used: {totalToolCalls}. Pattern: {pre.PatternToolName ?? "none"}";
                     _synapticMemory?.Store(new SynapticExperience
                     {
-                        Type = SynapseType.Correction, Query = query, Response = testCase,
-                        Label = "regression_test", Confidence = 0.3f, Reward = 0.1f,
-                        Metadata = $"retry_level={retryLevel}"
+                        Type = SynapseType.Correction, Query = query,
+                        Response = $"// Regression: {query[..Math.Min(query.Length, 60)]}\n// grounding failed L{retryLevel}",
+                        Label = "regression_test", Confidence = 0.3f, Reward = 0.1f, Metadata = $"retry={retryLevel}"
                     });
                 }
-                catch (Exception ex) { _logger.LogWarning(ex, "Regression test synaptic storage failed"); }
+                catch { }
             }, "RegressionTest");
 
-        // Emotion-aware: detect user frustration (3+ retries on same query pattern)
-        if (retryLevel >= 2)
-        {
-            _personaStyle = "concise";
-            _logger.LogInformation("Emotion: detected frustration pattern, switching to concise mode");
-        }
+        if (retryLevel >= 2) _personaStyle = "concise";
 
-        // Self-code-repair: capture crash context for auto-analysis
         if (groundingFailed && finalResponse.Length < 20 && _dna != null)
             _workQueue.Enqueue(async ct =>
             {
-                try
-                {
-                    await _dna.Consciousness.ProcessExperienceAsync(
-                        $"SYSTEM CRASH: empty response after L{retryLevel} retries. Query: '{query[..Math.Min(query.Length, 60)]}'. Model: {model}",
-                        new Dictionary<string, object?>(), ct);
-                }
-                catch (Exception ex) { _logger.LogWarning(ex, "Self-code-repair DNA experience processing failed"); }
+                try { await _dna.Consciousness.ProcessExperienceAsync($"CRASH: empty response L{retryLevel}. Q: '{query[..Math.Min(query.Length, 60)]}'", new Dictionary<string, object?>(), ct); }
+                catch { }
             }, "SelfRepair");
 
-        // Digital twin sandbox: pre-execution safety check for shell_exec commands
         if (!groundingFailed && pre.PatternToolName == "shell_exec" && layer1Context != null)
         {
             var cmd = layer1Context;
             if (cmd.Contains("rm ") || cmd.Contains("del ") || cmd.Contains("format") || cmd.Contains("DROP"))
             {
-                _logger.LogWarning("Sandbox: blocked dangerous command in shell_exec: {Cmd}", cmd[..Math.Min(cmd.Length, 80)]);
+                _logger.LogWarning("Sandbox: blocked {Cmd}", cmd[..Math.Min(cmd.Length, 80)]);
                 _evolutionStore?.RecordLesson(new EvolutionLesson
                 {
-                    Category = LessonCategory.SafetyViolation.ToString(),
-                    Severity = 0.9f,
-                    Summary = $"Dangerous command blocked: {cmd[..Math.Min(cmd.Length, 60)]}",
-                    Mitigation = "Use VfsAdapter for safe file operations",
-                    SourceStage = "sandbox"
+                    Category = LessonCategory.SafetyViolation.ToString(), Severity = 0.9f,
+                    Summary = $"Blocked: {cmd[..Math.Min(cmd.Length, 60)]}",
+                    Mitigation = "Use VfsAdapter", SourceStage = "sandbox"
                 });
             }
         }
 
-        // Federated learning: share EvolutionLessons for cross-instance learning
         if (_evolutionStore != null && _requestCount % 100 == 0)
             _workQueue.Enqueue(async ct =>
             {
-                try
-                {
-                    var lessons = _evolutionStore.GetActiveLessons(10);
-                    if (lessons.Count > 0)
-                        _logger.LogInformation("Federated: {Count} active lessons available for cross-instance sharing",
-                            lessons.Count);
-                }
-                catch (Exception ex) { _logger.LogWarning(ex, "Federated learning lesson retrieval failed"); }
-            }, "FederatedLearning");
+                try { var lessons = _evolutionStore.GetActiveLessons(10); } catch { }
+            }, "Federated");
 
-        // Self-evolution: auto-suggest architecture improvements
         if (_requestCount % 200 == 0 && _evolutionStore != null)
             _workQueue.Enqueue(async ct =>
             {
                 try
                 {
                     var active = _evolutionStore.GetActiveLessons(20);
-                    var highSeverity = active.Where(l => l.Severity >= 0.7f).ToList();
-                    if (highSeverity.Count >= 3)
-                    {
-                        _logger.LogWarning("SelfEvolution: {Count} high-severity lessons suggest architecture review. " +
-                            "Top issues: {Issues}", highSeverity.Count,
-                            string.Join(", ", highSeverity.Take(3).Select(l => l.Summary[..Math.Min(l.Summary.Length, 40)])));
+                    var high = active.Where(l => l.Severity >= 0.7f).ToList();
+                    if (high.Count >= 3)
                         _evolutionStore.RecordLesson(new EvolutionLesson
                         {
-                            Category = LessonCategory.GeneralWarning.ToString(),
-                            Severity = 0.5f,
-                            Summary = $"Auto-architecture-review: {highSeverity.Count} critical issues, {active.Count} total active",
-                            Mitigation = "Review L4 grounding thresholds, increase pre-emptive tool execution, or add Layer1 patterns",
-                            SourceStage = "self_evolution"
+                            Category = LessonCategory.GeneralWarning.ToString(), Severity = 0.5f,
+                            Summary = $"Review: {high.Count} critical", SourceStage = "self_evolution"
                         });
-                    }
                 }
-                catch (Exception ex) { _logger.LogWarning(ex, "Self-evolution architecture review failed"); }
+                catch { }
             }, "SelfEvolution");
 
-        // Multi-agent debate: fork to SentientParliament on complex grounded queries
         if (!groundingFailed && finalResponse.Length > 300 && totalToolCalls >= 2)
         {
-            _erlLoop.RecordTrial($"debate_{query[..Math.Min(query.Length, 40)]}",
-                finalResponse[..Math.Min(finalResponse.Length, 100)], "multi_agent", 0.85f, true);
-
+            _erlLoop.RecordTrial($"debate_{query[..Math.Min(query.Length, 40)]}", finalResponse[..Math.Min(finalResponse.Length, 100)], "multi_agent", 0.85f, true);
             if (_parliamentBridge is { IsAvailable: true })
             {
-                try
+                _ = Task.Run(async () =>
                 {
-                    var verdict = await _parliamentBridge.DeliberateAsync(query, finalResponse).ConfigureAwait(false);
-                    if (!verdict.IsConsensus && verdict.AvgConfidence < 0.6f)
-                        _logger.LogWarning("Parliament: no consensus (conf={Conf:F2}, voters={Voters})",
-                            verdict.AvgConfidence, verdict.VoterCount);
-                    else
-                        _logger.LogDebug("Parliament: verified (conf={Conf:F2})", verdict.AvgConfidence);
-                }
-                catch (Exception ex) { _logger.LogDebug(ex, "Parliament deliberation skipped"); }
+                    try { await _parliamentBridge.DeliberateAsync(query, finalResponse); } catch { }
+                });
             }
         }
 
-        // Quantum-inspired optimization: Q-value guided tool selection hint
         if (totalToolCalls >= 2 && !groundingFailed)
-            _erlLoop.RecordTrial($"qvalue_{string.Join("+", totalToolCalls)}",
-                $"Tools={totalToolCalls}, Success=True", "quantum_opt", 0.9f, true);
+            _erlLoop.RecordTrial($"qvalue_{totalToolCalls}", $"Tools={totalToolCalls}", "quantum_opt", 0.9f, true);
 
-        // Predictive preload: use speculative search result if available
-        if (_predictiveSearchResult != null && autoSearchContext == null && layer1Context == null)
-        {
-            autoSearchContext = $"【预测性预加载搜索结果】{_predictiveSearchResult}";
-            _logger.LogInformation("PredictivePreload: used speculative search ({Len} chars)",
-                _predictiveSearchResult.Length);
-            _predictiveSearchResult = null;
-        }
-
-        // Confidence-aware formatting: high confidence → structured output hint
-        if (!groundingFailed && metaAssessment.Familiarity > 0.5f && finalResponse.Length > 100)
-        {
+        if (!groundingFailed && metaFamiliarity > 0.5f && finalResponse.Length > 100)
             yield return "\n\n> 置信度: 高 | 格式建议: 结构化表格";
-        }
 
-        // Prompt evolution: trigger GEPAPromptOptimizer every ~500 requests
         if (_requestCount % 500 == 0 && _prompts is not null)
-            _workQueue.Enqueue(async ct =>
-            {
-                try
-                {
-                    _prompts.Reload();
-                    _logger.LogInformation("PromptEvolution: reloaded {Count} templates for potential A/B updates",
-                        _prompts.ListTemplates().Count);
-                }
-                catch (Exception ex) { _logger.LogWarning(ex, "Prompt evolution template reload failed"); }
-            }, "PromptEvolution");
+            _workQueue.Enqueue(async ct => { try { _prompts.Reload(); } catch { } }, "PromptEvolution");
 
-        // Conversation fork: detect "换个角度" → snapshot context for future branch
         if (query.Contains("换个角度") || query.Contains("另一个角度"))
             _workQueue.Enqueue(async ct =>
             {
@@ -961,45 +852,21 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
                     _synapticMemory?.Store(new SynapticExperience
                     {
                         Type = SynapseType.Interaction, Query = query, Response = finalResponse[..Math.Min(finalResponse.Length, 300)],
-                        Label = "fork_branch", Confidence = 0.7f, Reward = 0.7f,
-                        Metadata = $"context_snapshot={_context.CompressHistory()[..Math.Min(_context.CompressHistory().Length, 200)]}"
+                        Label = "fork_branch", Confidence = 0.7f, Reward = 0.7f, Metadata = $"ctx={_gov.Context.CompressHistory()[..Math.Min(_gov.Context.CompressHistory().Length, 200)]}"
                     });
                 }
-                catch (Exception ex) { _logger.LogWarning(ex, "Conversation fork synaptic storage failed"); }
-            }, "ConversationFork");
+                catch { }
+            }, "Fork");
 
-        // Hardware-aware routing: GPU detection for ONNX preference
-        if (_requestCount == 1)
-        {
-            try
-            {
-                var hasGpu = System.Runtime.Intrinsics.X86.Avx2.IsSupported;
-                _logger.LogInformation("HardwareRoute: GPU={Gpu}, ONNX={(hasGpu ? \"preferred\" : \"fallback\")}",
-                    hasGpu, hasGpu ? "preferred" : "fallback");
-            }
-            catch (Exception ex) { _logger.LogWarning(ex, "Hardware GPU detection failed"); }
-        }
-
-        // Proactive notification: push on long responses (> 500 chars, > 30s answer time)
         if (finalResponse.Length > 500 && !groundingFailed)
-            _workQueue.Enqueue(async ct =>
-            {
-                try
-                {
-                    _logger.LogInformation("Notify: long response ready ({Len} chars) for query: {Q}",
-                        finalResponse.Length, query[..Math.Min(query.Length, 40)]);
-                    // Future: telegram_notify / wework_notify hook
-                }
-                catch (Exception ex) { _logger.LogWarning(ex, "Proactive notification logging failed"); }
-            }, "ProactiveNotify");
+            _logger.LogInformation("Notify: long response ({Len}) for {Q}", finalResponse.Length, query[..Math.Min(query.Length, 40)]);
 
         if (Interlocked.Increment(ref _requestCount) % 20 == 0)
         {
             var metrics = _metaCognition.GetMetrics();
-            _logger.LogInformation("MetaCognition periodic: queries={Q} delegations={D} rate={R:F2} domains={Dom} familiarity={F:F2}",
-                metrics["total_queries"], metrics["total_delegations"],
-                metrics["delegation_rate"], metrics["domain_count"],
-                metrics["avg_familiarity"]);
+            _logger.LogInformation("MetaCognition: q={Q} d={D} r={R:F2} dom={Dom} fam={F:F2}",
+                metrics["total_queries"], metrics["total_delegations"], metrics["delegation_rate"],
+                metrics["domain_count"], metrics["avg_familiarity"]);
         }
     }
 
@@ -1040,7 +907,7 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
             catch (Exception ex) { _logger.LogDebug(ex, "DNA consciousness processing skipped"); }
         }
 
-        var inputResult = await _mesh.SendAsync(new Handshake
+        var inputResult = await _gov.Input.ProcessAsync(new Handshake
         {
             To = "input", Action = "process",
             Payload = new Dictionary<string, object?> { ["query"] = query },
@@ -1054,7 +921,7 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
 
         if (_duplexRouter != null)
         {
-            var routeResult = _duplexRouter.Route(query);
+            var routeResult = await _duplexRouter.RouteAsync(query);
             if (routeResult.CanAnswerLocally)
             {
                 _erlLoop.RecordTrial(query[..Math.Min(query.Length, 60)], routeResult.LocalResponse, "l1_success", 0.8, true);
@@ -1063,7 +930,7 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
 
             if (routeResult.Route == "delegate_l2")
             {
-                var ctxResult = await _mesh.SendAsync(new Handshake
+                var ctxResult = await _gov.Context.ProcessAsync(new Handshake
                 {
                     To = "context", Action = "preload",
                     Payload = inputResult.Payload, ReplyTo = traceId
@@ -1075,7 +942,7 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
                 if (teachingResult != null)
                 {
                     _duplexRouter.LearnFromL2(query, teachingResult);
-                    _context.AddTurn(query, teachingResult.Answer);
+                    _gov.Context.AddTurn(query, teachingResult.Answer);
                     _duplexRouter.CacheResponse(query, teachingResult.Answer, "delegate_l2", "general", routeResult.Confidence);
                     _erlLoop.RecordTrial(query[..Math.Min(query.Length, 60)], teachingResult.Answer, "l2_teaching", 0.9, true);
                     return GovernorOutput.Success(teachingResult.Answer, traceId);
@@ -1083,7 +950,7 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
             }
         }
 
-        var contextResult = await _mesh.SendAsync(new Handshake
+        var contextResult = await _gov.Context.ProcessAsync(new Handshake
         {
             To = "context", Action = "preload",
             Payload = inputResult.Payload, ReplyTo = traceId
@@ -1092,7 +959,7 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
         var preloadedContext = contextResult.Payload?.GetValueOrDefault("context")?.ToString() ?? "";
         _elasticMemory.Store($"ctx_{traceId}", preloadedContext[..Math.Min(preloadedContext.Length, 500)]);
 
-        var routingResult = await _mesh.SendAsync(new Handshake
+        var routingResult = await _gov.Routing.ProcessAsync(new Handshake
         {
             To = "routing", Action = "select_provider",
             Payload = inputResult.Payload, ReplyTo = traceId
@@ -1171,14 +1038,14 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
             catch (Exception ex) { _logger.LogDebug(ex, "DNA output safety check skipped"); }
         }
 
-        var outputResult = await _mesh.SendAsync(new Handshake
+        var outputResult = await _gov.Output.ProcessAsync(new Handshake
         {
             To = "output", Action = "review",
             Payload = new Dictionary<string, object?> { ["response"] = response },
             ReplyTo = traceId
         }, cancellationToken);
 
-        _context.AddTurn(query, response);
+        _gov.Context.AddTurn(query, response);
         response = outputResult.Payload?.GetValueOrDefault("response")?.ToString() ?? response;
 
         _duplexRouter?.CacheResponse(query, response, label, "general", 0.7f);
@@ -1200,7 +1067,7 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
 
         _workQueue.Enqueue(async ct =>
         {
-            try { await _mesh.SendAsync(new Handshake
+            try { await _gov.Self.ProcessAsync(new Handshake
             {
                 To = "self", Action = "start_trace",
                 Payload = new Dictionary<string, object?> { ["trace_id"] = traceId }
@@ -1213,7 +1080,7 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
 
     private async Task<string> CollaborativeChatAsync(string prompt, ChatOptions baseOptions, CancellationToken ct)
     {
-        var history = _context.CompressHistory();
+        var history = _gov.Context.CompressHistory();
         var iterativePrompt = string.IsNullOrEmpty(history)
             ? prompt
             : $"Previous conversation:\n{history}\n\nCurrent query:\n{prompt}\n\nPlease provide a thorough, well-reasoned response.";
@@ -1261,7 +1128,7 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
 
     private async Task SilentSelfCheckAsync(string response)
     {
-        try { await _output.SilentSelfCheckAsync(response); }
+        try { await _gov.Output.SilentSelfCheckAsync(response); }
         catch (Exception ex) { _logger.LogDebug(ex, "Silent self-check skipped"); }
     }
 

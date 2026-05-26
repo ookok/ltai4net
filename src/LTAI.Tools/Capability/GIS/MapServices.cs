@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using LTAI.Tools.Tools;
 using Microsoft.Extensions.Logging;
 
 namespace LTAI.Tools.GIS;
@@ -21,7 +22,7 @@ public sealed class UnifiedMapService
         _tencent = new TencentMapService(logger, Env("TENCENT_MAP_KEY"));
     }
 
-    private static string Env(string name) => Environment.GetEnvironmentVariable(name) ?? "";
+    private static string Env(string name) => OptionService.Get(name) ?? "";
 
     public async Task<GeoAddress?> GeocodeAsync(string address, string provider = "auto", CancellationToken ct = default)
     {

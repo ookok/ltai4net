@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text.RegularExpressions;
 using LTAI.DNA.Regulation;
 using Microsoft.Extensions.Logging;
@@ -14,6 +15,7 @@ public sealed class CausalMemoryEngine
     private readonly TemporalMemoryFabric _fabric;
     private readonly IRegulationProvider _regulationStore;
     private readonly ILogger<CausalMemoryEngine> _logger;
+    private readonly ConcurrentDictionary<string, MemoryEvent> _authoritativeIndex = new();
 
     public CausalMemoryEngine(
         TemporalMemoryFabric fabric,
@@ -44,6 +46,7 @@ public sealed class CausalMemoryEngine
         };
 
         _fabric.RecordEvent(evt);
+        _authoritativeIndex.TryAdd(evt.Id, evt);
 
         if (evt.GraphTriplet != null &&
             System.Text.RegularExpressions.Regex.IsMatch(evt.GraphTriplet, @"(GB|HJ)\s*\d{2,5}[-—]\d{4}"))
@@ -95,13 +98,12 @@ public sealed class CausalMemoryEngine
     public async Task<MemoryQueryResult?> FindAuthoritativeAnswerAsync(string query, CancellationToken ct)
     {
         var results = await _fabric.QueryAsync(query, topK: 10).ConfigureAwait(false);
-        var allEvents = _fabric.QueryTimeRange(DateTime.UtcNow.AddHours(-24), DateTime.UtcNow, count: 1000);
-        var eventMap = allEvents.ToDictionary(e => e.Id, e => e);
         return results
             .Where(r =>
             {
-                var evt = eventMap.GetValueOrDefault(r.Id);
-                var source = evt?.Metadata.GetValueOrDefault("epistemic_source", "");
+                var source = _authoritativeIndex.TryGetValue(r.Id, out var evt)
+                    ? evt.Metadata.GetValueOrDefault("epistemic_source", "")
+                    : "";
                 return source != "UserClaim";
             })
             .MaxBy(r => r.Score);

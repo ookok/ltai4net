@@ -111,80 +111,80 @@ public sealed class ConcurrentStream
         var weaveCount = 0;
         var earlyDispatched = false;
 
-        while (!flashTcs.Task.IsCompleted || !proTcs.Task.IsCompleted)
+        try
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            await flashTcs.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            yield break;
+        }
+        catch { }
 
-            if (flashTcs.Task.IsCompleted && flashFull != null)
+        if (flashFull != null)
+        {
+            var words = flashFull.Split(' ');
+            var currentCount = flashTokens.Count;
+            for (var i = currentCount; i < words.Length; i++)
             {
-                var words = flashFull.Split(' ');
-                var currentCount = flashTokens.Count;
+                flashTokens.Add(words[i]);
 
-                for (var i = currentCount; i < words.Length; i++)
+                yield return new StreamEvent
                 {
-                    flashTokens.Add(words[i]);
+                    Kind = StreamEventKind.FlashToken,
+                    Text = words[i],
+                    Provider = flashModel,
+                    Sequence = ++seq,
+                    Timestamp = DateTime.UtcNow
+                };
 
+                var tokenCount = i + 1;
+
+                if (!earlyDispatched && tokenCount >= EARLY_DISPATCH_TOKENS)
+                {
+                    earlyDispatched = true;
                     yield return new StreamEvent
                     {
-                        Kind = StreamEventKind.FlashToken,
-                        Text = words[i],
+                        Kind = StreamEventKind.EarlyDispatch,
+                        Text = string.Join(" ", flashTokens),
                         Provider = flashModel,
                         Sequence = ++seq,
-                        Timestamp = DateTime.UtcNow
+                        Timestamp = DateTime.UtcNow,
+                        Metadata = new Dictionary<string, object>
+                        {
+                            ["tokens_received"] = tokenCount,
+                            ["elapsed_ms"] = sw.ElapsedMilliseconds
+                        }
                     };
+                }
 
-                    var tokenCount = i + 1;
-
-                    if (!earlyDispatched && tokenCount >= EARLY_DISPATCH_TOKENS)
+                if (proTcs.Task.IsCompleted && proFull != null && weaveCount < MAX_PRO_INSIGHTS)
+                {
+                    if (_IsWeavePoint(flashTokens, weaveCount))
                     {
-                        earlyDispatched = true;
-                        yield return new StreamEvent
+                        var proInsights = _ExtractInsights(proFull, MAX_PRO_INSIGHTS);
+                        if (weaveCount < proInsights.Count)
                         {
-                            Kind = StreamEventKind.EarlyDispatch,
-                            Text = string.Join(" ", flashTokens),
-                            Provider = flashModel,
-                            Sequence = ++seq,
-                            Timestamp = DateTime.UtcNow,
-                            Metadata = new Dictionary<string, object>
-                            {
-                                ["tokens_received"] = tokenCount,
-                                ["elapsed_ms"] = sw.ElapsedMilliseconds
-                            }
-                        };
-                    }
+                            var insight = proInsights[weaveCount];
+                            weaveCount++;
 
-                    if (proTcs.Task.IsCompleted && proFull != null && weaveCount < MAX_PRO_INSIGHTS)
-                    {
-                        if (_IsWeavePoint(flashTokens, weaveCount))
-                        {
-                            var proInsights = _ExtractInsights(proFull, MAX_PRO_INSIGHTS);
-                            if (weaveCount < proInsights.Count)
+                            yield return new StreamEvent
                             {
-                                var insight = proInsights[weaveCount];
-                                weaveCount++;
-
-                                yield return new StreamEvent
+                                Kind = StreamEventKind.ProInsight,
+                                Text = insight,
+                                Provider = proModel,
+                                Sequence = ++seq,
+                                Timestamp = DateTime.UtcNow,
+                                Metadata = new Dictionary<string, object>
                                 {
-                                    Kind = StreamEventKind.ProInsight,
-                                    Text = insight,
-                                    Provider = proModel,
-                                    Sequence = ++seq,
-                                    Timestamp = DateTime.UtcNow,
-                                    Metadata = new Dictionary<string, object>
-                                    {
-                                        ["weave_index"] = weaveCount,
-                                        ["insight_source"] = "pro_model"
-                                    }
-                                };
-                            }
+                                    ["weave_index"] = weaveCount,
+                                    ["insight_source"] = "pro_model"
+                                }
+                            };
                         }
                     }
                 }
-
-                break;
             }
-
-            await Task.Delay(50, cancellationToken).ConfigureAwait(false);
         }
 
         if (flashError != null && flashFull == null)
@@ -282,35 +282,38 @@ public sealed class ConcurrentStream
         var flashLatency = 0L;
         var proLatency = 0L;
 
-        try
+        try { await Task.WhenAll(flashTask, proTask).ConfigureAwait(false); }
+        catch { }
+
+        if (flashTask.IsCompletedSuccessfully)
         {
-            flashOutput = await flashTask.ConfigureAwait(false);
+            flashOutput = flashTask.Result;
             flashLatency = flashSw.ElapsedMilliseconds;
         }
-        catch (Exception ex)
+        else
         {
             flashSw.Stop();
             events.Add(new StreamEvent
             {
                 Kind = StreamEventKind.Error,
-                Text = ex.Message,
+                Text = flashTask.Exception?.InnerException?.Message ?? "Flash task failed",
                 Provider = flashModel,
                 Sequence = events.Count
             });
         }
 
-        try
+        if (proTask.IsCompletedSuccessfully)
         {
-            proOutput = await proTask.ConfigureAwait(false);
+            proOutput = proTask.Result;
             proLatency = proSw.ElapsedMilliseconds;
         }
-        catch (Exception ex)
+        else
         {
             proSw.Stop();
             events.Add(new StreamEvent
             {
                 Kind = StreamEventKind.Error,
-                Text = ex.Message,
+                Text = proTask.Exception?.InnerException?.Message ?? "Pro task failed",
                 Provider = proModel,
                 Sequence = events.Count
             });

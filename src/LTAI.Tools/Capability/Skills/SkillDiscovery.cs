@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using LTAI.Tools.Tools;
 using Microsoft.Extensions.Logging;
 
 namespace LTAI.Tools.Skills;
@@ -27,7 +28,7 @@ public sealed class SkillDiscoveryManager
     public SkillDiscoveryManager(string? workspace = null, ILogger<SkillDiscoveryManager>? logger = null)
     {
         _workspace = workspace ?? Directory.GetCurrentDirectory();
-        _globalDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".livingtree", "skills");
+        _globalDir = OptionService.Get("paths.skills") ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".livingtree", "skills");
         _logger = logger ?? NullLogger<SkillDiscoveryManager>.Instance;
     }
 

@@ -1,6 +1,7 @@
 using System.Text.Json;
 using LTAI.Core.Configuration;
 using LTAI.Core.Setup;
+using LTAI.Knowledge.Core;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
@@ -22,7 +23,7 @@ public static class ProviderConfigEndpoints
 
             foreach (var (name, pc) in config.AI.Providers)
             {
-                var hasKey = !string.IsNullOrEmpty(Environment.GetEnvironmentVariable(
+                var hasKey = !string.IsNullOrEmpty(OptionService.Get(
                     GetEnvVarName(name)));
                 providers.Add(new
                 {
@@ -82,9 +83,9 @@ public static class ProviderConfigEndpoints
         // Health with provider status
         api.MapGet("/health", () =>
         {
-            var deepseekKey = Environment.GetEnvironmentVariable("DEEPSEEK_API_KEY");
-            var aliyunKey = Environment.GetEnvironmentVariable("DASHSCOPE_API_KEY");
-            var siliconflowKey = Environment.GetEnvironmentVariable("SILICONFLOW_API_KEY");
+            var deepseekKey = OptionService.Get("DEEPSEEK_API_KEY");
+            var aliyunKey = OptionService.Get("DASHSCOPE_API_KEY");
+            var siliconflowKey = OptionService.Get("SILICONFLOW_API_KEY");
 
             return Results.Ok(new
             {

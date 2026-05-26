@@ -41,11 +41,12 @@ public sealed class ResponseCache
     private static readonly Lazy<ResponseCache> _instance = new(() => new ResponseCache());
     public static ResponseCache Instance => _instance.Value;
 
-    private readonly ConcurrentDictionary<string, CacheEntry> _entries = new();
+    private readonly Dictionary<string, LinkedListNode<(string Key, CacheEntry Entry)>> _index = new();
+    private readonly LinkedList<(string Key, CacheEntry Entry)> _order = new();
+    private readonly object _lock = new();
     private readonly ILogger<ResponseCache> _logger;
     private const int MaxEntries = 500;
     private long _totalHits;
-    private string? _oldestKey;
 
     public ResponseCache() : this(NullLogger<ResponseCache>.Instance) { }
 
@@ -54,7 +55,16 @@ public sealed class ResponseCache
         _logger = logger ?? NullLogger<ResponseCache>.Instance;
     }
 
-    public IReadOnlyDictionary<string, CacheEntry> Entries => _entries;
+    public IReadOnlyDictionary<string, CacheEntry> Entries
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return _order.ToDictionary(n => n.Key, n => n.Entry);
+            }
+        }
+    }
 
     public static string MakeKey(string query, string model)
     {
@@ -66,57 +76,61 @@ public sealed class ResponseCache
     public string? Get(string query, string model)
     {
         var key = MakeKey(query, model);
-        if (_entries.TryGetValue(key, out var entry))
+        lock (_lock)
         {
+            if (!_index.TryGetValue(key, out var node))
+                return null;
+
+            var entry = node.Value.Entry;
             var age = (DateTime.UtcNow - entry.CreatedAt).TotalSeconds;
             if (age > entry.TtlSeconds)
             {
-                _entries.TryRemove(key, out _);
+                _order.Remove(node);
+                _index.Remove(key);
                 _logger.LogDebug("Cache entry expired: {Key}", key);
                 return null;
             }
 
             entry.Hits++;
             Interlocked.Increment(ref _totalHits);
+            _order.Remove(node);
+            _order.AddFirst(node);
             _logger.LogDebug("Cache hit: {Key}, Hits: {Hits}", key, entry.Hits);
             return entry.Response;
         }
-        return null;
     }
 
     public void Set(string query, string response, string model, int ttlSeconds = 300)
     {
         var key = MakeKey(query, model);
-        var entry = new CacheEntry(key, response, DateTime.UtcNow, ttlSeconds, 0, 0);
-
-        if (_entries.Count >= MaxEntries)
+        lock (_lock)
         {
-            var oldestKey = _oldestKey;
-            if (oldestKey != null && _entries.TryRemove(oldestKey, out _))
-                _logger.LogDebug("Evicted oldest cache entry: {Key}", oldestKey);
-            else if (_entries.Count >= MaxEntries)
-            {
-                foreach (var kvp in _entries)
-                {
-                    if (oldestKey == null || kvp.Value.CreatedAt < _entries[oldestKey].CreatedAt)
-                        oldestKey = kvp.Key;
-                }
-                if (oldestKey != null)
-                    _entries.TryRemove(oldestKey, out _);
-            }
-        }
+            if (_index.TryGetValue(key, out var existing))
+                _order.Remove(existing);
 
-        _entries[key] = entry;
-        if (_oldestKey == null || entry.CreatedAt < (_entries.TryGetValue(_oldestKey, out var ok) ? ok.CreatedAt : DateTime.MaxValue))
-            _oldestKey = key;
-        _logger.LogDebug("Cached response: {Key}, TTL: {TtlSeconds}s", key, ttlSeconds);
+            while (_index.Count >= MaxEntries && _order.Last != null)
+            {
+                _index.Remove(_order.Last.Value.Key);
+                _order.RemoveLast();
+            }
+
+            var entry = new CacheEntry(key, response, DateTime.UtcNow, ttlSeconds, 0, 0);
+            var node = new LinkedListNode<(string, CacheEntry)>((key, entry));
+            _index[key] = node;
+            _order.AddFirst(node);
+            _logger.LogDebug("Cached response: {Key}, TTL: {TtlSeconds}s", key, ttlSeconds);
+        }
     }
 
     public void Invalidate(string? query = null, string? model = null)
     {
         if (query == null && model == null)
         {
-            _entries.Clear();
+            lock (_lock)
+            {
+                _index.Clear();
+                _order.Clear();
+            }
             _logger.LogInformation("Invalidated all cache entries");
             return;
         }
@@ -124,8 +138,15 @@ public sealed class ResponseCache
         if (query != null)
         {
             var key = MakeKey(query, model ?? "");
-            _entries.TryRemove(key, out _);
-            _logger.LogInformation("Invalidated cache entry: {Key}", key);
+            lock (_lock)
+            {
+                if (_index.TryGetValue(key, out var node))
+                {
+                    _order.Remove(node);
+                    _index.Remove(key);
+                    _logger.LogInformation("Invalidated cache entry: {Key}", key);
+                }
+            }
         }
     }
 
@@ -134,21 +155,24 @@ public sealed class ResponseCache
         get
         {
             var totalHits = Interlocked.Read(ref _totalHits);
-            var count = _entries.Count;
+            int count;
+            lock (_lock) { count = _index.Count; }
             return count > 0 ? (double)totalHits / count : 0.0;
         }
     }
 
     public Dictionary<string, object> Stats()
     {
-        var count = _entries.Count;
-        return new Dictionary<string, object>
+        lock (_lock)
         {
-            ["entry_count"] = count,
-            ["max_entries"] = MaxEntries,
-            ["total_hits"] = Interlocked.Read(ref _totalHits),
-            ["hit_rate"] = HitRate
-        };
+            return new Dictionary<string, object>
+            {
+                ["entry_count"] = _index.Count,
+                ["max_entries"] = MaxEntries,
+                ["total_hits"] = Interlocked.Read(ref _totalHits),
+                ["hit_rate"] = HitRate
+            };
+        }
     }
 }
 

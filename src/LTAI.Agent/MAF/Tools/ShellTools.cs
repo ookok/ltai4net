@@ -8,11 +8,15 @@ namespace LTAI.Agent.Tools;
 [Description("Command-line and script execution tools")]
 public sealed class ShellTools
 {
-    private static readonly HashSet<string> _dangerousCommands = new(StringComparer.OrdinalIgnoreCase)
+    private static readonly HashSet<string> _dangerousPatterns = new(StringComparer.OrdinalIgnoreCase)
     {
-        "rm -rf /", "rm -rf /*", "del /f /s C:\\", "format", "shutdown /s", "shutdown -h",
-        ":(){ :|:& };:", "mkfs", "dd if=/dev/zero", "> /dev/sda"
+        "rm -rf /", "rm -rf /*", "del /f /s C:\\", "format", "shutdown", "reboot",
+        ":(){ :|:& };:", "mkfs", "dd if=/dev/zero", "> /dev/sda",
+        "chmod 777 /", "wget", "curl", "nc ", "ncat ",
+        "sudo ", "su ", "passwd", "chown", "kill -9 -1", "killall"
     };
+
+    private static readonly char[] _shellMetacharacters = { ';', '&', '|', '`', '$', '>', '<', '\n', '\r' };
 
     [Description("Execute a shell command and return stdout/stderr/exit code. Commands timeout after 60 seconds. DANGEROUS commands are blocked. Command is piped via stdin for safety.")]
     public static async Task<string> ExecuteCommand(
@@ -20,10 +24,27 @@ public sealed class ShellTools
         [Description("Working directory for the command")] string? workingDirectory = null,
         CancellationToken cancellationToken = default)
     {
-        foreach (var dangerous in _dangerousCommands)
+        if (string.IsNullOrWhiteSpace(command))
+            return JsonSerializer.Serialize(new { error = "Command cannot be empty" });
+
+        if (command.Length > 4096)
+            return JsonSerializer.Serialize(new { error = "Command exceeds 4096 character limit" });
+
+        foreach (var dangerous in _dangerousPatterns)
         {
             if (command.Contains(dangerous, StringComparison.OrdinalIgnoreCase))
                 return JsonSerializer.Serialize(new { error = $"Blocked dangerous command pattern: {dangerous}" });
+        }
+
+        var words = command.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        foreach (var word in words)
+        {
+            if (word.IndexOfAny(_shellMetacharacters) >= 0)
+            {
+                if (word.StartsWith('$') && word.Length > 1 && word.All(c => char.IsLetterOrDigit(c) || c == '_' || c == '{' || c == '}'))
+                    continue;
+                return JsonSerializer.Serialize(new { error = $"Blocked shell metacharacter in command: '{word}'" });
+            }
         }
 
         string shellExe;

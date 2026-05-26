@@ -1,4 +1,5 @@
 using System.Text.Json;
+using LTAI.Tools.Tools;
 using Microsoft.Extensions.Logging;
 
 namespace LTAI.Tools.Integration;
@@ -14,7 +15,7 @@ public sealed class TelegramBot : IDisposable
         _http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
         _http.BaseAddress = new Uri("https://api.telegram.org/");
         _logger = logger;
-        _token = token ?? Environment.GetEnvironmentVariable("LTAI_TELEGRAM_TOKEN") ?? "";
+        _token = token ?? OptionService.Get("LTAI_TELEGRAM_TOKEN") ?? "";
     }
 
     public void Dispose() { _http?.Dispose(); }
@@ -74,7 +75,7 @@ public sealed class WechatWorkNotifier : IDisposable
     {
         _http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
         _logger = logger;
-        _webhookUrl = webhookUrl ?? Environment.GetEnvironmentVariable("LTAI_WEWORK_WEBHOOK") ?? "";
+        _webhookUrl = webhookUrl ?? OptionService.Get("LTAI_WEWORK_WEBHOOK") ?? "";
     }
 
     public void Dispose() { _http?.Dispose(); }
@@ -128,7 +129,7 @@ public sealed class AutoUpdater
     {
         _logger = logger;
         _currentVersion = "0.51.0";
-        _updateUrl = updateUrl ?? Environment.GetEnvironmentVariable("LTAI_UPDATE_URL") ?? "";
+        _updateUrl = updateUrl ?? OptionService.Get("LTAI_UPDATE_URL") ?? "";
     }
 
     public async Task<UpdateCheckResult> CheckForUpdatesAsync(CancellationToken ct = default)

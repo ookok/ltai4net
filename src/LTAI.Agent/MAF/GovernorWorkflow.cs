@@ -1,7 +1,6 @@
 using System.Diagnostics;
 using LTAI.AI.Interfaces;
 using LTAI.AI.Governors;
-using LTAI.Core.Interfaces;
 using LTAI.Core.Models;
 using Microsoft.Agents.AI.Workflows;
 
@@ -32,7 +31,7 @@ public sealed class ClassifiedQuery
     public string TraceId { get; init; } = "";
 }
 
-internal sealed partial class PreProcessExecutor(ICognitiveMesh mesh) : Executor("PreProcess")
+internal sealed partial class PreProcessExecutor(InputGovernor inputGovernor) : Executor("PreProcess")
 {
     protected override ProtocolBuilder ConfigureProtocol(ProtocolBuilder builder) => builder;
 
@@ -40,7 +39,7 @@ internal sealed partial class PreProcessExecutor(ICognitiveMesh mesh) : Executor
     private async ValueTask<ClassifiedQuery> HandleAsync(GovernorQuery query, IWorkflowContext ctx, CancellationToken ct)
     {
         var traceId = query.TraceId ?? Guid.NewGuid().ToString("N");
-        var inputResult = await mesh.SendAsync(new Handshake
+        var inputResult = await inputGovernor.ProcessAsync(new Handshake
         {
             To = "input", Action = "process",
             Payload = new Dictionary<string, object?> { ["query"] = query.Text },
@@ -59,18 +58,6 @@ internal sealed partial class PreProcessExecutor(ICognitiveMesh mesh) : Executor
             await ctx.YieldOutputAsync(new GovernorResult { Response = reflexResponse, TraceId = traceId, Label = "reflex" });
             return new ClassifiedQuery { Text = query.Text, Label = "reflex", TraceId = traceId };
         }
-
-        var contextResult = await mesh.SendAsync(new Handshake
-        {
-            To = "context", Action = "preload",
-            Payload = inputResult.Payload, ReplyTo = traceId
-        }, ct);
-
-        var routingResult = await mesh.SendAsync(new Handshake
-        {
-            To = "routing", Action = "select_provider",
-            Payload = inputResult.Payload, ReplyTo = traceId
-        }, ct);
 
         var label = inputResult.Payload?.GetValueOrDefault("label")?.ToString() ?? "deep";
         var complexity = inputResult.Payload?.GetValueOrDefault("complexity") is float c ? c : 0.5f;
@@ -115,7 +102,7 @@ public static class GovernorWorkflow
 
     public static Workflow BuildGovernorWorkflow(ILivingTreeSystem system)
     {
-        var preExec = new PreProcessExecutor(system.Mesh);
+        var preExec = new PreProcessExecutor(system.InputGovernor);
         var pipelineExec = new PipelineExecutor(system);
 
         var builder = new WorkflowBuilder(preExec);

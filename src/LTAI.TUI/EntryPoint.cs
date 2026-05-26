@@ -4,9 +4,7 @@ using System.Text;
 using LTAI.AI;
 using LTAI.Core.Interfaces;
 using LTAI.Core.Messaging;
-using LTAI.AI.Governors;
 using LTAI.Agent.Tools;
-using LTAI.Core.Messaging;
 using LTAI.Tools;
 using LTAI.Tools.CodeEngine;
 using LTAI.Tools.Reasoning;
@@ -16,9 +14,12 @@ using LTAI.Core.Setup;
 using LTAI.Core.System;
 using LTAI.DNA;
 using LTAI.Agent;
+using LTAI.Agent.MAF;
 using LTAI.Knowledge.Memory;
 using LTAI.Knowledge.Vector;
 using LTAI.TUI;
+using LTAI.Core.Configuration;
+using LTAI.Knowledge.Core;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -61,9 +62,13 @@ public static class EntryPoint
 
         if (ltaiOptions.AI.Providers.Count == 0)
         {
-            ltaiOptions.AI.Providers["deepseek"] = new ProviderConfig { Endpoint = "https://api.deepseek.com", Model = "deepseek-v4-pro" };
-            ltaiOptions.AI.Providers["deepseek-fast"] = new ProviderConfig { Endpoint = "https://api.deepseek.com", Model = "deepseek-v4-flash" };
-            Console.WriteLine("未检测到提供商配置，使用 DeepSeek 默认配置。");
+            var deepseekEndpoint = OptionService.Get("deepseek.endpoint") ?? "https://api.deepseek.com";
+            var deepseekModel = OptionService.Get("deepseek.model") ?? "deepseek-v4-pro";
+            var fastEndpoint = OptionService.Get("deepseek.fast.endpoint") ?? "https://api.deepseek.com";
+            var fastModel = OptionService.Get("deepseek.fast.model") ?? "deepseek-v4-flash";
+            ltaiOptions.AI.Providers["deepseek"] = new ProviderConfig { Endpoint = deepseekEndpoint, Model = deepseekModel };
+            ltaiOptions.AI.Providers["deepseek-fast"] = new ProviderConfig { Endpoint = fastEndpoint, Model = fastModel };
+            Console.WriteLine($"Providers loaded from config: deepseek({deepseekModel}), deepseek-fast({fastModel})");
         }
 
         services.AddSingleton(Options.Create(ltaiOptions));
@@ -79,6 +84,8 @@ public static class EntryPoint
 
         var toolRegistry = sp.GetRequiredService<AIToolRegistry>();
         await toolRegistry.RegisterAllToolCategoriesAsync();
+        await sp.RegisterMarkdownToolsAsync(toolRegistry).ConfigureAwait(false);
+        await sp.RegisterCodeActToolsAsync(toolRegistry).ConfigureAwait(false);
 
         var lts = sp.GetRequiredService<ILivingTreeSystem>();
         await lts.InitializeAsync();
@@ -89,14 +96,16 @@ public static class EntryPoint
         var options = sp.GetService<IOptions<LTAIOptions>>();
         var svc = sp.GetService<ServiceManager>();
         var modelMgr = sp.GetService<ModelManager>();
+        var agenticLoop = sp.GetService<AgenticLoop>();
 
-        var app = new TuiApp(lts, dna, reasoning, analyzer, options, svc, modelMgr);
+        var app = new TuiApp(lts, dna, reasoning, analyzer, options, svc, modelMgr, agenticLoop);
         await app.RunAsync();
     }
 }
 
 internal sealed class TuiEntryPointAdapter : ILTAIEntryPoint
 {
+    public bool CanHandle(string command) => string.Equals(command, "tui", StringComparison.OrdinalIgnoreCase);
     public Task RunAsync(string[] args) => EntryPoint.RunAsync(args);
 }
 

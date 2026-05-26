@@ -1,5 +1,11 @@
 namespace LTAI.Models;
 
+public interface ISkillExchangeProvider
+{
+    Task<List<(string Name, string Version, string Domain, string Description)>> GetLocalSkillManifestAsync(CancellationToken ct);
+    Task<(int Imported, int Skipped, int Errors)> SyncWithPeerAsync(string peerAddress, CancellationToken ct);
+}
+
 /// <summary>
 /// Skill layer: L0=atomic pattern, L1=task, L2=workflow, L3=domain, L4=meta.
 /// Higher layers reference lower layers, never copy.
@@ -66,6 +72,14 @@ public sealed record SkillEvolution
 /// A Skill is the atomic unit of intelligence. Encoded as .md file.
 /// Only Skills are worth distributing. Everything else is local runtime detail.
 /// </summary>
+public sealed record SkillVersionEntry
+{
+    public string Version { get; init; } = "1.0.0";
+    public DateTime SavedAt { get; init; } = DateTime.UtcNow;
+    public string FilePath { get; init; } = "";
+    public string Reason { get; init; } = "";
+}
+
 public sealed record Skill
 {
     public string Name { get; init; } = "";
@@ -82,6 +96,20 @@ public sealed record Skill
     public string? SourceFile { get; set; }
     public string? Description { get; init; }
     public List<string> Tags { get; init; } = new();
+    public List<SkillVersionEntry> VersionHistory { get; init; } = new();
+
+    public string? Author { get; init; }
+    public string? License { get; init; }
+    public string? SourceUrl { get; init; }
+    public string? MarketplaceId { get; init; }
+    public string? MinRuntimeVersion { get; init; }
+    public long DownloadCount { get; set; }
+    public double AverageRating { get; set; }
+    public int RatingCount { get; set; }
+    public DateTime? PublishedAt { get; set; }
+    public DateTime? UpdatedAt { get; set; }
+    public string? Changelog { get; set; }
+    public string? ContentHash { get; init; }
 
     public bool IsActive => Evolution.SuccessRate >= 0.3 || Evolution.TotalUses < 5;
     public bool IsReliable => Evolution.SuccessRate >= 0.7 && Evolution.TotalUses >= 5;
@@ -96,4 +124,34 @@ public sealed record Skill
         SkillLayer.L4 => "l4_meta",
         _ => "unknown"
     };
+
+    public Skill PromoteTo(SkillLayer newLayer) => this with
+    {
+        Layer = newLayer,
+        Evolution = Evolution with
+        {
+            UpgradedFrom = Name,
+            UpgradeGeneration = Evolution.UpgradeGeneration + 1
+        }
+    };
+
+    public Skill Deactivate() => this with
+    {
+        Confidence = 0,
+        Evolution = Evolution with { LastUsedAt = DateTime.UtcNow }
+    };
+}
+
+public sealed record MarketplaceSearchResult
+{
+    public string MarketplaceId { get; init; } = "";
+    public string Name { get; init; } = "";
+    public string Description { get; init; } = "";
+    public string Author { get; init; } = "";
+    public double AverageRating { get; init; }
+    public int DownloadCount { get; init; }
+    public SkillLayer Layer { get; init; }
+    public string Domain { get; init; } = "";
+    public string Version { get; init; } = "1.0.0";
+    public List<string> Tags { get; init; } = new();
 }

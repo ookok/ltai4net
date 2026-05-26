@@ -14,7 +14,7 @@ public sealed class SkillLoader
 
     private static readonly Regex HeaderLine = new(@"^#+\s*skill:\s*(.+)$", RegexOptions.Compiled);
     private static readonly Regex KeyValue = new(@"^(\w[\w_]*):\s*(.+)$", RegexOptions.Compiled);
-    private static readonly Regex TriggerPattern = new(@"^\s*-\s*pattern:\s*""(.+)""\s*$", RegexOptions.Compiled);
+    private static readonly Regex TriggerPattern = new(@"^\s*-\s*pattern:\s*""(.+?)""", RegexOptions.Compiled);
     private static readonly Regex TriggerWeight = new(@"weight:\s*([\d.]+)", RegexOptions.Compiled);
     private static readonly Regex ListItem = new(@"^\s*-\s*(.+)$", RegexOptions.Compiled);
     private static readonly Regex StepLine = new(@"^(\d+)\.\s+(.+)$", RegexOptions.Compiled);
@@ -44,6 +44,8 @@ public sealed class SkillLoader
             var requiresSection = false;
             var stepsSection = false;
             var verifySection = false;
+            var triggersSection = false;
+            var tagsSection = false;
 
             foreach (var raw in lines)
             {
@@ -56,9 +58,11 @@ public sealed class SkillLoader
                     var sectionName = line[3..].Trim().ToLowerInvariant();
                     section = sectionName;
                     if (sectionName == "requires" || sectionName == "依赖") requiresSection = true;
-                    else if (sectionName.Contains("步骤")) { stepsSection = true; requiresSection = false; }
-                    else if (sectionName.Contains("验证")) { verifySection = true; stepsSection = false; }
-                    else { requiresSection = false; stepsSection = false; verifySection = false; }
+                    else if (sectionName.Contains("步骤")) { stepsSection = true; requiresSection = false; triggersSection = false; }
+                    else if (sectionName.Contains("验证")) { verifySection = true; stepsSection = false; triggersSection = false; }
+                    else if (sectionName.Contains("trigger") || sectionName.Contains("触发")) { triggersSection = true; requiresSection = false; stepsSection = false; verifySection = false; tagsSection = false; }
+                    else if (sectionName.Contains("tags") || sectionName.Contains("标签")) { tagsSection = true; triggersSection = false; requiresSection = false; stepsSection = false; verifySection = false; }
+                    else { requiresSection = false; stepsSection = false; verifySection = false; triggersSection = false; }
                     continue;
                 }
 
@@ -99,12 +103,36 @@ public sealed class SkillLoader
                             case "confidence":
                                 if (double.TryParse(value, out var c)) skill = skill with { Confidence = c };
                                 break;
+                            case "author": skill = skill with { Author = value }; break;
+                            case "license": skill = skill with { License = value }; break;
+                            case "source_url": skill = skill with { SourceUrl = value }; break;
+                            case "marketplace_id": skill = skill with { MarketplaceId = value }; break;
+                            case "min_runtime_version": skill = skill with { MinRuntimeVersion = value }; break;
+                            case "content_hash": skill = skill with { ContentHash = value }; break;
                         }
                         continue;
                     }
                 }
 
-                if (section == "triggers" || section == "触发")
+                if (requiresSection)
+                {
+                    var item = ListItem.Match(line);
+                    if (item.Success)
+                    {
+                        var val = item.Groups[1].Value.Trim().Trim('"');
+                        requires.Add(val);
+                    }
+                    continue;
+                }
+
+                if (tagsSection)
+                {
+                    if (line.StartsWith("- "))
+                        tags.Add(line[2..].Trim());
+                    continue;
+                }
+
+                if (triggersSection)
                 {
                     var pm = TriggerPattern.Match(line);
                     if (pm.Success)
@@ -119,17 +147,6 @@ public sealed class SkillLoader
                         }
 
                         triggers.Add(trigger);
-                    }
-                    continue;
-                }
-
-                if (requiresSection)
-                {
-                    var item = ListItem.Match(line);
-                    if (item.Success)
-                    {
-                        var val = item.Groups[1].Value.Trim().Trim('"');
-                        requires.Add(val);
                     }
                     continue;
                 }
@@ -229,5 +246,64 @@ public sealed class SkillLoader
         var metaPath = filePath + ".meta.json";
         var json = System.Text.Json.JsonSerializer.Serialize(evolution, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
         File.WriteAllText(metaPath, json);
+    }
+
+    public static void SaveVersioned(string filePath, Skill skill, string reason)
+    {
+        var dir = Path.GetDirectoryName(filePath)!;
+        var versionsDir = Path.Combine(dir, "versions");
+        Directory.CreateDirectory(versionsDir);
+
+        var timestamp = DateTime.UtcNow.ToString("yyyyMMddHHmmss");
+        var baseName = Path.GetFileNameWithoutExtension(filePath);
+        var versionedMd = Path.Combine(versionsDir, $"{baseName}_v{skill.Version}_{timestamp}.md");
+
+        File.Copy(filePath, versionedMd, overwrite: true);
+
+        var metaPath = filePath + ".meta.json";
+        if (File.Exists(metaPath))
+        {
+            var versionedMeta = Path.Combine(versionsDir, $"{baseName}_v{skill.Version}_{timestamp}.md.meta.json");
+            File.Copy(metaPath, versionedMeta, overwrite: true);
+        }
+
+        var entry = new SkillVersionEntry
+        {
+            Version = skill.Version,
+            SavedAt = DateTime.UtcNow,
+            FilePath = versionedMd,
+            Reason = reason
+        };
+
+        var history = skill.VersionHistory.ToList();
+        history.Add(entry);
+        skill = skill with { VersionHistory = history };
+    }
+
+    public static List<SkillVersionEntry> ListVersions(string filePath)
+    {
+        var dir = Path.GetDirectoryName(filePath)!;
+        var versionsDir = Path.Combine(dir, "versions");
+        if (!Directory.Exists(versionsDir)) return new();
+
+        var baseName = Path.GetFileNameWithoutExtension(filePath);
+        var versionFiles = Directory.GetFiles(versionsDir, $"{baseName}_v*.md")
+            .Where(f => !f.EndsWith(".meta.json", StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(f => f);
+
+        return versionFiles.Select(f =>
+        {
+            var name = Path.GetFileNameWithoutExtension(f);
+            var parts = name.Split('_');
+            return new SkillVersionEntry
+            {
+                Version = parts.Length >= 3 ? parts[^2].TrimStart('v') : "?",
+                SavedAt = parts.Length >= 4 && DateTime.TryParseExact(
+                    parts[^1], "yyyyMMddHHmmss", null,
+                    System.Globalization.DateTimeStyles.None, out var dt) ? dt : new FileInfo(f).CreationTimeUtc,
+                FilePath = f,
+                Reason = "archived"
+            };
+        }).ToList();
     }
 }

@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using LTAI.Knowledge.Core;
 using LTAI.Models;
 using Microsoft.Extensions.Logging;
 
@@ -11,6 +12,7 @@ namespace LTAI.Agent.Skills;
 public sealed class SkillRegistry
 {
     private readonly SkillLoader _loader;
+    private readonly MarketplaceClient? _marketplace;
     private readonly ILogger<SkillRegistry> _logger;
     private readonly ConcurrentDictionary<string, Skill> _skills = new();
     private readonly ConcurrentDictionary<string, List<Skill>> _byDomain = new();
@@ -19,11 +21,17 @@ public sealed class SkillRegistry
 
     public IReadOnlyDictionary<string, Skill> All => _skills;
 
-    public SkillRegistry(SkillLoader loader, ILogger<SkillRegistry> logger, string? skillsRoot = null)
+    public event Action<Skill>? SkillInstalled;
+    public event Action<Skill>? SkillUpdated;
+    public event Action<string>? SkillRemoved;
+
+    public SkillRegistry(SkillLoader loader, ILogger<SkillRegistry> logger, string? skillsRoot = null,
+        MarketplaceClient? marketplace = null)
     {
         _loader = loader;
         _logger = logger;
-        _skillsRoot = skillsRoot ?? Path.Combine(AppContext.BaseDirectory, "skills");
+        _skillsRoot = skillsRoot ?? OptionService.Get("paths.skills") ?? Path.Combine(AppContext.BaseDirectory, "skills");
+        _marketplace = marketplace;
     }
 
     public async Task LoadAllAsync(CancellationToken ct = default)
@@ -56,6 +64,89 @@ public sealed class SkillRegistry
     {
         _skills.TryGetValue(name, out var skill);
         return skill;
+    }
+
+    public void Register(Skill skill)
+    {
+        if (!_skills.TryAdd(skill.Name, skill))
+            return;
+
+        _byDomain.GetOrAdd(skill.Domain, _ => new List<Skill>()).Add(skill);
+        _byLayer.GetOrAdd(skill.Layer, _ => new List<Skill>()).Add(skill);
+        _logger.LogInformation("SkillRegistry: registered {Name} ({Layer}) from {Domain}",
+            skill.Name, skill.Layer, skill.Domain);
+    }
+
+    public Skill? Promote(string skillName, SkillLayer newLayer)
+    {
+        if (!_skills.TryGetValue(skillName, out var old))
+            return null;
+
+        if (old.SourceFile != null)
+            SkillLoader.SaveVersioned(old.SourceFile, old, $"promote to {newLayer}");
+
+        var promoted = old.PromoteTo(newLayer);
+        _skills[skillName] = promoted;
+
+        if (_byLayer.TryGetValue(old.Layer, out var oldList))
+            oldList.RemoveAll(s => s.Name == skillName);
+        _byLayer.GetOrAdd(newLayer, _ => new List<Skill>()).Add(promoted);
+
+        _logger.LogInformation("SkillRegistry: promoted {Name} from {From} to {To}",
+            skillName, old.Layer, newLayer);
+        return promoted;
+    }
+
+    public async Task<Skill?> RollbackSkillAsync(string skillName, int versionIndex = 0)
+    {
+        if (!_skills.TryGetValue(skillName, out var current))
+            return null;
+
+        if (current.SourceFile == null)
+            return null;
+
+        var versions = SkillLoader.ListVersions(current.SourceFile);
+        if (versionIndex < 0 || versionIndex >= versions.Count)
+            return null;
+
+        var target = versions[versionIndex];
+        if (!File.Exists(target.FilePath))
+            return null;
+
+        SkillLoader.SaveVersioned(current.SourceFile, current, $"rollback to v{target.Version}");
+
+        var restored = await _loader.LoadAsync(target.FilePath).ConfigureAwait(false);
+        if (restored == null)
+            return null;
+
+        File.Copy(target.FilePath, current.SourceFile, overwrite: true);
+
+        var prevMeta = current.SourceFile + ".meta.json";
+        var targetMeta = target.FilePath + ".meta.json";
+        if (File.Exists(targetMeta))
+            File.Copy(targetMeta, prevMeta, overwrite: true);
+
+        _skills[skillName] = restored;
+        if (_byLayer.TryGetValue(current.Layer, out var oldList))
+            oldList.RemoveAll(s => s.Name == skillName);
+        _byLayer.GetOrAdd(restored.Layer, _ => new List<Skill>()).Add(restored);
+        if (_byDomain.TryGetValue(current.Domain, out var domainList))
+            domainList.RemoveAll(s => s.Name == skillName);
+        _byDomain.GetOrAdd(restored.Domain, _ => new List<Skill>()).Add(restored);
+
+        _logger.LogInformation("SkillRegistry: rolled back {Name} to version {Version}",
+            skillName, target.Version);
+        return restored;
+    }
+
+    public void RecordFailure(string skillName)
+    {
+        if (_skills.TryGetValue(skillName, out var skill))
+        {
+            skill.Evolution.RecordFailure();
+            if (skill.SourceFile != null)
+                SkillLoader.SaveEvolution(skill.SourceFile, skill.Evolution);
+        }
     }
 
     public List<Skill> GetByDomain(string domain)
@@ -136,8 +227,8 @@ public sealed class SkillRegistry
     {
         if (totalUses < 3) return SkillLayer.L0;
         if (totalUses < 10) return SkillLayer.L1;
-        if (successRate >= 0.7 && totalUses >= 10) return SkillLayer.L2;
         if (successRate >= 0.85 && totalUses >= 50) return SkillLayer.L3;
+        if (successRate >= 0.7 && totalUses >= 10) return SkillLayer.L2;
         return null;
     }
 
@@ -156,4 +247,78 @@ public sealed class SkillRegistry
         ["active"] = _skills.Values.Count(s => s.IsActive),
         ["reliable"] = _skills.Values.Count(s => s.IsReliable)
     };
+
+    public async Task<List<MarketplaceSearchResult>> SearchMarketplaceAsync(
+        string query, string? domain = null, SkillLayer? layer = null, CancellationToken ct = default)
+    {
+        return _marketplace != null
+            ? await _marketplace.SearchAsync(query, domain, layer, ct: ct).ConfigureAwait(false)
+            : new List<MarketplaceSearchResult>();
+    }
+
+    public async Task<Skill?> InstallFromMarketplaceAsync(string marketplaceId, CancellationToken ct = default)
+    {
+        if (_marketplace == null) return null;
+
+        var content = await _marketplace.DownloadAsync(marketplaceId, ct).ConfigureAwait(false);
+        if (string.IsNullOrEmpty(content)) return null;
+
+        var tempFile = Path.GetTempFileName() + ".md";
+        await File.WriteAllTextAsync(tempFile, content, ct).ConfigureAwait(false);
+        var skill = await _loader.LoadAsync(tempFile, ct).ConfigureAwait(false);
+        try { File.Delete(tempFile); } catch { }
+
+        if (skill == null) return null;
+
+        skill = skill with { MarketplaceId = marketplaceId };
+
+        var dir = Path.Combine(_skillsRoot, skill.LayerDir);
+        Directory.CreateDirectory(dir);
+        var filePath = Path.Combine(dir, $"{skill.Name}.md");
+        await File.WriteAllTextAsync(filePath, content, ct).ConfigureAwait(false);
+
+        skill = skill with { SourceFile = filePath };
+        Register(skill);
+        SkillInstalled?.Invoke(skill);
+        return skill;
+    }
+
+    public async Task<bool> CheckForUpdatesAsync(string skillName, CancellationToken ct = default)
+    {
+        var skill = Get(skillName);
+        if (skill?.MarketplaceId == null || _marketplace == null) return false;
+        var newVersion = await _marketplace.CheckForUpdateAsync(skill.MarketplaceId,
+            skill.Version, ct).ConfigureAwait(false);
+        return newVersion != null;
+    }
+
+    public async Task<bool> RateSkillAsync(string skillName, int rating, string? review = null,
+        CancellationToken ct = default)
+    {
+        var skill = Get(skillName);
+        if (skill?.MarketplaceId == null || _marketplace == null) return false;
+        return await _marketplace.RateAsync(skill.MarketplaceId, rating, review, ct).ConfigureAwait(false);
+    }
+
+    public bool Uninstall(string skillName)
+    {
+        if (!_skills.TryRemove(skillName, out var skill)) return false;
+        if (_byDomain.TryGetValue(skill.Domain, out var domainList))
+            domainList.RemoveAll(s => s.Name == skillName);
+        if (_byLayer.TryGetValue(skill.Layer, out var layerList))
+            layerList.RemoveAll(s => s.Name == skillName);
+        SkillRemoved?.Invoke(skillName);
+        return true;
+    }
+
+    public List<Skill> GetByTag(string tag) =>
+        All.Values.Where(s => s.Tags.Any(t => t.Equals(tag, StringComparison.OrdinalIgnoreCase))).ToList();
+
+    public List<Skill> Search(string query) =>
+        All.Values.Where(s =>
+            s.Name.Contains(query, StringComparison.OrdinalIgnoreCase) ||
+            (s.Description?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false) ||
+            s.Tags.Any(t => t.Contains(query, StringComparison.OrdinalIgnoreCase)) ||
+            s.Triggers.Any(t => t.Pattern.Contains(query, StringComparison.OrdinalIgnoreCase))
+        ).ToList();
 }

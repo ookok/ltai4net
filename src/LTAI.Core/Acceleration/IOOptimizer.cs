@@ -7,85 +7,91 @@ namespace LTAI.Core.Acceleration;
 public sealed class LruCache<T>
 {
     private readonly int _maxSize;
-    private readonly double _ttlSeconds;
-    private readonly ConcurrentDictionary<string, CacheEntry<T>> _data = new();
+    private readonly TimeSpan _ttl;
+    private readonly Dictionary<string, LinkedListNode<(string Key, CacheEntry<T> Entry)>> _index = new();
+    private readonly LinkedList<(string Key, CacheEntry<T> Entry)> _order = new();
+    private readonly object _lock = new();
     private long _hits;
     private long _misses;
-    private string? _oldestKey;
-
-    private sealed record CacheEntry<TVal>(TVal Value, double Timestamp);
 
     public LruCache(int maxSize = 1000, double ttlSeconds = 300)
     {
         _maxSize = maxSize;
-        _ttlSeconds = ttlSeconds;
+        _ttl = TimeSpan.FromSeconds(ttlSeconds);
     }
 
     public T? Get(string key)
     {
-        if (!_data.TryGetValue(key, out var entry))
+        lock (_lock)
         {
-            Interlocked.Increment(ref _misses);
-            return default;
-        }
+            if (!_index.TryGetValue(key, out var node))
+            {
+                Interlocked.Increment(ref _misses);
+                return default;
+            }
 
-        var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-        if (now - entry.Timestamp > _ttlSeconds)
-        {
-            _data.TryRemove(key, out _);
-            Interlocked.Increment(ref _misses);
-            return default;
-        }
+            if (DateTime.UtcNow - node.Value.Entry.Timestamp > _ttl)
+            {
+                _order.Remove(node);
+                _index.Remove(key);
+                Interlocked.Increment(ref _misses);
+                return default;
+            }
 
-        var updated = entry with { Timestamp = now };
-        _data.TryUpdate(key, updated, entry);
-        Interlocked.Increment(ref _hits);
-        return entry.Value;
+            _order.Remove(node);
+            _order.AddFirst(node);
+            Interlocked.Increment(ref _hits);
+            return node.Value.Entry.Value;
+        }
     }
 
     public void Set(string key, T value)
     {
-        _data[key] = new CacheEntry<T>(value, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
-
-        if (_data.Count > _maxSize)
+        lock (_lock)
         {
-            var oldestKey = _oldestKey;
-            if (oldestKey != null && _data.TryRemove(oldestKey, out _))
+            if (_index.TryGetValue(key, out var existing))
+                _order.Remove(existing);
+
+            while (_index.Count >= _maxSize && _order.Last != null)
             {
-                _oldestKey = null;
-                return;
+                _index.Remove(_order.Last.Value.Key);
+                _order.RemoveLast();
             }
 
-            double oldestTs = double.MaxValue;
-            string? foundKey = null;
-            foreach (var kvp in _data)
-            {
-                if (kvp.Value.Timestamp < oldestTs)
-                {
-                    oldestTs = kvp.Value.Timestamp;
-                    foundKey = kvp.Key;
-                }
-            }
-            if (foundKey != null)
-                _data.TryRemove(foundKey, out _);
+            var entry = new CacheEntry<T>(value, DateTime.UtcNow);
+            var node = new LinkedListNode<(string, CacheEntry<T>)>((key, entry));
+            _index[key] = node;
+            _order.AddFirst(node);
         }
     }
 
     public Dictionary<string, object> GetStats()
     {
         var total = _hits + _misses;
-        return new Dictionary<string, object>
+        lock (_lock)
         {
-            ["size"] = _data.Count,
-            ["max_size"] = _maxSize,
-            ["hits"] = _hits,
-            ["misses"] = _misses,
-            ["hit_rate"] = total > 0 ? (double)_hits / total : 0
-        };
+            return new Dictionary<string, object>
+            {
+                ["size"] = _index.Count,
+                ["max_size"] = _maxSize,
+                ["hits"] = _hits,
+                ["misses"] = _misses,
+                ["hit_rate"] = total > 0 ? (double)_hits / total : 0
+            };
+        }
     }
 
-    public void Clear() => _data.Clear();
+    public void Clear()
+    {
+        lock (_lock)
+        {
+            _index.Clear();
+            _order.Clear();
+        }
+    }
 }
+
+public sealed record CacheEntry<TVal>(TVal Value, DateTime Timestamp);
 
 public sealed class EmbeddingCache
 {

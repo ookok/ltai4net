@@ -1,6 +1,5 @@
 using LTAI.AI.Utilities;
 using LTAI.Core.Configuration;
-using LTAI.Core.Interfaces;
 using LTAI.Core.Models;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
@@ -15,9 +14,9 @@ public sealed class InputGovernor : LayerGovernor
     private readonly HybridIntentRouter? _hybridRouter;
     private readonly IOptions<LTAIOptions> _options;
 
-    public InputGovernor(ICognitiveMesh mesh, IChatClient llm, ILogger<InputGovernor> logger,
+    public InputGovernor(IChatClient llm, ILogger<InputGovernor> logger,
         IOptions<LTAIOptions> options, HybridIntentRouter? hybridRouter = null)
-        : base("input", mesh, llm, logger)
+        : base("input", llm, logger)
     {
         _options = options;
         _hybridRouter = hybridRouter;
