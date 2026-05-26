@@ -28,6 +28,7 @@ public sealed record PreprocessingResult
     public string? PatternToolName { get; init; }
     public string? AutoSearchContext { get; init; }
     public string? Layer2Context { get; init; }
+    public string? ContextMapContext { get; init; }
     public bool PatternMatched { get; init; }
     public bool IsFuzzyQuery { get; init; }
     public string? ClarifyMessage { get; init; }
@@ -49,6 +50,7 @@ public sealed class QueryPreprocessingService
     private readonly QueryPatternRouter _patternRouter;
     private readonly L1PlanExecutor _planExecutor;
     private readonly PromptTemplateStore _prompts;
+    private readonly ContextMap? _contextMap;
     private readonly ILogger _logger;
 
     public QueryPreprocessingService(
@@ -62,6 +64,7 @@ public sealed class QueryPreprocessingService
         QueryPatternRouter patternRouter,
         L1PlanExecutor planExecutor,
         PromptTemplateStore prompts,
+        ContextMap? contextMap,
         ILogger logger)
     {
         _input = input;
@@ -74,6 +77,7 @@ public sealed class QueryPreprocessingService
         _patternRouter = patternRouter;
         _planExecutor = planExecutor;
         _prompts = prompts;
+        _contextMap = contextMap;
         _logger = logger;
     }
 
@@ -300,6 +304,20 @@ public sealed class QueryPreprocessingService
             }
         }
 
+        string? contextMapContext = null;
+        if (_contextMap != null)
+        {
+            var map = _contextMap.Store.BuildContextMap();
+            if (!string.IsNullOrWhiteSpace(map) && map.Split('\n').Length > 2)
+            {
+                contextMapContext = map;
+                if (!string.IsNullOrWhiteSpace(patternToolName))
+                    _contextMap.Store.RecordUse($"domain:{patternToolName}");
+                if (!string.IsNullOrWhiteSpace(extractedEntity))
+                    _contextMap.Store.RecordUse($"entity:{extractedEntity}");
+            }
+        }
+
         return result with
         {
             Label = label,
@@ -312,6 +330,7 @@ public sealed class QueryPreprocessingService
             PatternToolName = patternToolName,
             AutoSearchContext = autoSearchContext,
             Layer2Context = layer2Context,
+            ContextMapContext = contextMapContext,
             PatternMatched = patternResult.Matched,
             DateTag = dateTag,
             BudgetRatio = (float)budgetRatio,

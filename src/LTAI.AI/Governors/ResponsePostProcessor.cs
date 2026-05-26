@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
 using LTAI.AI.Governors.Pipeline;
@@ -26,6 +27,7 @@ public sealed class ResponsePostProcessor
     private readonly DNAOrchestrator? _dna;
     private readonly PromptTemplateStore? _prompts;
     private readonly ContextGovernor _context;
+    private readonly ContextMapStore? _contextMap;
     private readonly IChatClient _llm;
     private readonly string _flashModel;
 
@@ -54,6 +56,7 @@ public sealed class ResponsePostProcessor
         DNAOrchestrator? dna,
         PromptTemplateStore? prompts,
         ContextGovernor context,
+        ContextMapStore? contextMap,
         IChatClient llm,
         string flashModel)
     {
@@ -69,6 +72,7 @@ public sealed class ResponsePostProcessor
         _dna = dna;
         _prompts = prompts;
         _context = context;
+        _contextMap = contextMap;
         _llm = llm;
         _flashModel = flashModel;
     }
@@ -109,6 +113,24 @@ public sealed class ResponsePostProcessor
         {
             var hasFailure = finalResponse.Contains("未找到相关信息") || finalResponse.Contains("无法") || finalResponse.Length <= 20;
             _metaCognition.RecordOutcome(query, !hasFailure);
+        }
+
+        if (_contextMap != null && !groundingFailed)
+        {
+            var entities = new List<string>();
+            if (!string.IsNullOrWhiteSpace(layer1Context))
+            {
+                var matches = Regex.Matches(layer1Context, @"[\u4e00-\u9fff]{2,8}");
+                foreach (Match m in matches.Take(5))
+                    entities.Add(m.Value);
+            }
+
+            var toolSequence = totalToolCalls > 0 ? new List<string> { "tool_exec" } : null;
+            var domain = pre.PatternToolName ?? "general";
+
+            _contextMap.Distill(query, finalResponse, domain,
+                (float)(groundingFailed ? 0.3 : 0.7), toolSequence, entities);
+            _contextMap.Save();
         }
 
         if (!groundingFailed && !layer1HighConfidence && finalResponse.Length > 100

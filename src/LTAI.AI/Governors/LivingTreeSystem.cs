@@ -41,6 +41,8 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
     private readonly BackgroundWorkQueue _workQueue;
     private readonly ToolSelector _toolSelector;
     private readonly PromptTemplateStore _prompts;
+    private readonly ContextMapStore? _contextMapStore;
+    private readonly ContextMap? _contextMap;
 
     private readonly BAVTRouter _bavtRouter = new(100.0);
     private readonly ERLLoop _erlLoop = new();
@@ -93,7 +95,9 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
         IParliamentBridge? parliamentBridge = null,
         QueryPreprocessingService? preprocessor = null,
         ReActLoopOrchestrator? reActOrchestrator = null,
-        ModelDispatchService? modelDispatch = null)
+        ModelDispatchService? modelDispatch = null,
+        ContextMapStore? contextMapStore = null,
+        ContextMap? contextMap = null)
     {
         _journal = journal;
         _llm = llm;
@@ -113,18 +117,20 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
         _workQueue = workQueue ?? new BackgroundWorkQueue();
         _toolSelector = toolSelector ?? new ToolSelector(toolRegistry);
         _prompts = prompts ?? new PromptTemplateStore();
+        _contextMapStore = contextMapStore ?? (new ContextMapStore(new Microsoft.Extensions.Logging.Abstractions.NullLogger<ContextMapStore>()));
+        _contextMap = contextMap ?? new ContextMap(_contextMapStore);
         _evolutionStore = evolutionStore;
         _verifiableRegistry = verifiableRegistry;
         _parliamentBridge = parliamentBridge;
         _preprocessor = preprocessor ?? new QueryPreprocessingService(
             _gov.Input, _llm, _dna, _options, _gov.Guardian, _toolRegistry,
-            _metaCognition, _patternRouter, _planExecutor, _prompts, _logger);
+            _metaCognition, _patternRouter, _planExecutor, _prompts, _contextMap, _logger);
         _reActOrchestrator = reActOrchestrator ?? throw new ArgumentNullException(nameof(reActOrchestrator));
         _modelDispatch = modelDispatch ?? throw new ArgumentNullException(nameof(modelDispatch));
         _postProcessor = new ResponsePostProcessor(
             _bavtRouter, _workQueue, logger, _metaCognition, _dreamCycle, _erlLoop,
             _synapticMemory, _evolutionStore, _parliamentBridge, _dna, _prompts,
-            _gov.Context, _llm, FlashModel);
+            _gov.Context, _contextMapStore, _llm, FlashModel);
         _taskPipeline = new TaskPipeline(_journal);
         _taskPipeline.LlmDecomposer = (_modelDispatch ?? throw new InvalidOperationException("ModelDispatchService is required")).LlmDecomposeAsync;
     }

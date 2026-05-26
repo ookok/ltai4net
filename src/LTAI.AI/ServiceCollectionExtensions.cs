@@ -373,6 +373,18 @@ public static class ServiceCollectionExtensions
 
         services.AddSingleton<CellAnswerStore>();
         services.AddSingleton<SemanticQueryCache>();
+        services.AddSingleton<ContextMapStore>(sp =>
+        {
+            var logger = sp.GetRequiredService<ILogger<ContextMapStore>>();
+            var workspace = OptionService.Get("LTAI_WORKSPACE") ?? Directory.GetCurrentDirectory();
+            var persistPath = Path.Combine(workspace, ".livingtree", "context_map.json");
+            return new ContextMapStore(logger, maxTokens: 200, persistPath);
+        });
+        services.AddSingleton<ContextMap>(sp =>
+        {
+            var store = sp.GetRequiredService<ContextMapStore>();
+            return new ContextMap(store);
+        });
         services.AddSingleton<TeachingRuleExtractor>(sp =>
         {
             var answerStore = sp.GetRequiredService<CellAnswerStore>();
