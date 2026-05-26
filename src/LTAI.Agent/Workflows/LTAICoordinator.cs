@@ -34,6 +34,8 @@ public sealed class LTAICoordinator : IAsyncDisposable
     private readonly ILogger<LTAICoordinator> _logger;
     private AbTestResult? _lastAbResult;
 
+    public ConcurrentDictionary<string, SubSession> ActiveSessions { get; } = new();
+
     public LTAICoordinator(
         ILivingTreeSystem lts,
         SkillAwareDecomposer decomposer,
@@ -63,34 +65,54 @@ public sealed class LTAICoordinator : IAsyncDisposable
         var sw = Stopwatch.StartNew();
         var events = new List<CoordinatorEvent>();
 
-        var systemPrompt = BuildSystemPrompt(agentName, role);
-
-        var member = new TeamMember
+        var session = new SubSession
         {
-            Name = agentName,
+            AgentName = agentName,
             Role = role,
-            SystemPrompt = systemPrompt
+            Goal = prompt
         };
+        ActiveSessions[session.SessionId] = session;
 
-        var pool = new AgentPool(_lts, _promptService);
-        pool.Register(member);
-
-        events.Add(new(CoordinatorEventType.TaskStarted, agentName, agentName));
-        var output = await pool.RunAgentAsync(agentName, prompt, ct).ConfigureAwait(false);
-        events.Add(new(CoordinatorEventType.Completed, agentName, agentName, output));
-
-        sw.Stop();
-        RecordAbFeedback(output != null);
-        return new TeamResult
+        try
         {
-            Success = true,
-            FinalOutput = output,
-            Events = events,
-            TaskGraph = Array.Empty<CoordinatorTask>(),
-            CompletedTasks = 1,
-            TotalTasks = 1,
-            TotalMs = sw.ElapsedMilliseconds
-        };
+            var systemPrompt = BuildSystemPrompt(agentName, role);
+
+            var member = new TeamMember
+            {
+                Name = agentName,
+                Role = role,
+                SystemPrompt = systemPrompt
+            };
+
+            var pool = new AgentPool(_lts, _promptService);
+            pool.Register(member);
+
+            events.Add(new(CoordinatorEventType.TaskStarted, agentName, agentName));
+            var output = await pool.RunAgentAsync(agentName, prompt, ct).ConfigureAwait(false);
+            events.Add(new(CoordinatorEventType.Completed, agentName, agentName, output));
+
+            session.Result = output;
+            session.CompletedAt = DateTime.UtcNow;
+
+            sw.Stop();
+            RecordAbFeedback(output != null);
+            return new TeamResult
+            {
+                Success = true,
+                FinalOutput = output,
+                Events = events,
+                TaskGraph = Array.Empty<CoordinatorTask>(),
+                CompletedTasks = 1,
+                TotalTasks = 1,
+                TotalMs = sw.ElapsedMilliseconds
+            };
+        }
+        catch (Exception ex)
+        {
+            session.Result = $"Error: {ex.Message}";
+            session.CompletedAt = DateTime.UtcNow;
+            throw;
+        }
     }
 
     public async Task<TeamResult> RunTeamAsync(
@@ -407,6 +429,8 @@ public sealed class LTAICoordinator : IAsyncDisposable
             Goal = goal,
             AllowedTools = allowedTools ?? new List<string> { "read", "list", "search", "git_status", "git_diff", "git_log" }
         };
+
+        ActiveSessions[session.SessionId] = session;
 
         _logger.LogInformation("LTAICoordinator: Spawning subagent {Agent} session {Session} for: {Goal}",
             agentName, session.SessionId, goal[..Math.Min(goal.Length, 100)]);

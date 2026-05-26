@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Text;
 using Spectre.Console;
 using Spectre.Console.Rendering;
@@ -11,11 +12,12 @@ using LTAI.DNA;
 using LTAI.Knowledge.Core;
 using LTAI.Tools.CodeEngine;
 using LTAI.Tools.Reasoning;
+using LTAI.Agent.Workflows;
 using Microsoft.Extensions.Options;
 
 namespace LTAI.TUI;
 
-public enum TuiView { Dashboard, Chat, Code, Git, Help, Session, LLMConfig, Models, Service, Pipeline, Editor, ComposeTool }
+public enum TuiView { Dashboard, Chat, Code, Git, Help, Session, LLMConfig, Models, Service, Pipeline, Editor, ComposeTool, Swarm, MemoryTimeline }
 
 public enum TuiTheme { Dark, Light, HighContrast }
 
@@ -41,6 +43,8 @@ public sealed class TuiApp
     private readonly AgenticLoop? _agenticLoop;
     private readonly TuiEditor _editor;
     private readonly ComposeToolView _composeView;
+    private readonly SwarmView _swarmView;
+    private readonly MemoryTimeline _memoryTimeline;
 
     private TuiView _currentView = TuiView.Dashboard;
     private int _selectedComposeToolIndex = -1;
@@ -55,7 +59,6 @@ public sealed class TuiApp
     private string? _loadedFileContent;
     private string? _loadedFilePath;
     private string _lastBuildOutput = "";
-    private bool _diffSplitView;
 
     private static readonly string[] TaskPhases = { "input", "context", "routing", "reasoning", "generation", "review", "output" };
 
@@ -67,7 +70,8 @@ public sealed class TuiApp
         IOptions<LTAIOptions>? options = null,
         ServiceManager? service = null,
         ModelManager? modelMgr = null,
-        AgenticLoop? agenticLoop = null)
+        AgenticLoop? agenticLoop = null,
+        LTAICoordinator? coordinator = null)
     {
         _lts = lts;
         _dna = dna;
@@ -90,6 +94,32 @@ public sealed class TuiApp
         _search = new SessionSearch(_chatHistory);
         _editor = new TuiEditor();
         _composeView = new ComposeToolView();
+        _swarmView = new SwarmView(coordinator);
+        _memoryTimeline = CreateMemoryTimeline(lts);
+    }
+
+    private static MemoryTimeline CreateMemoryTimeline(ILivingTreeSystem lts)
+    {
+        DualMemoryStore? dualStore = null;
+        SynapticMemory? synapticMemory = null;
+
+        try
+        {
+            var ltsType = lts.GetType();
+            var synField = ltsType.GetField("_synapticMemory", BindingFlags.NonPublic | BindingFlags.Instance);
+            synapticMemory = synField?.GetValue(lts) as SynapticMemory;
+
+            var dreamField = ltsType.GetField("_dreamCycle", BindingFlags.NonPublic | BindingFlags.Instance);
+            var dreamCycle = dreamField?.GetValue(lts);
+            if (dreamCycle != null)
+            {
+                var dualField = dreamCycle.GetType().GetField("_dualMemoryStore", BindingFlags.NonPublic | BindingFlags.Instance);
+                dualStore = dualField?.GetValue(dreamCycle) as DualMemoryStore;
+            }
+        }
+        catch { }
+
+        return new MemoryTimeline(dualStore, synapticMemory, null);
     }
 
     public async Task RunAsync()
@@ -141,6 +171,8 @@ public sealed class TuiApp
             case TuiView.Pipeline: RenderPipelineView(); break;
             case TuiView.Editor: RenderEditorView(); break;
             case TuiView.ComposeTool: RenderComposeView(); break;
+            case TuiView.Swarm: RenderSwarmView(); break;
+            case TuiView.MemoryTimeline: RenderMemoryTimelineView(); break;
         }
 
         AnsiConsole.Write(new Rule());
@@ -157,7 +189,7 @@ public sealed class TuiApp
         {
             TuiView.Dashboard => "Dashboard", TuiView.Chat => "Chat", TuiView.Code => "Code",
             TuiView.Git => "Git", TuiView.Help => "Help", TuiView.Session => "Session",
-            TuiView.LLMConfig => "LLM Config", TuiView.Models => "Models", TuiView.Service => "Service", TuiView.Pipeline => "Pipeline",             TuiView.Editor => "Editor", TuiView.ComposeTool => "Compose Tools",
+            TuiView.LLMConfig => "LLM Config", TuiView.Models => "Models", TuiView.Service => "Service", TuiView.Pipeline => "Pipeline",             TuiView.Editor => "Editor", TuiView.ComposeTool => "Compose Tools", TuiView.Swarm => "Swarm", TuiView.MemoryTimeline => "Memory Timeline",
             _ => ""
         };
         AnsiConsole.MarkupLine($"[grey]View: {name} | Session: {_session.SessionId} | Turns: {_session.TotalTurns} | Tokens: {_session.TotalTokens} | ? help | q quit[/]");
@@ -270,7 +302,7 @@ public sealed class TuiApp
         return new Panel("""
             [yellow]1-9[/] View: Dash/Chat/Code/Git/Help/Session/LLM/Models/Service
             [yellow]c[/] Chat  [yellow]l[/] LLM  [yellow]t[/] Think  [yellow]k[/] Graph  [yellow]p[/] Prompts
-            [yellow]d[/] Diff  [yellow]e[/] Export  [yellow]m[/] Memory  [yellow]b[/] Branch
+            [yellow]d[/] Diff  [yellow]e[/] Export  [yellow]m[/] Memory  [yellow]b[/] Branch  [yellow]s[/] Swarm  [yellow]n[/] MemTimeline
             [yellow]Ctrl+T[/] Theme  [yellow]Ctrl+F[/] Search  [yellow]q[/] Quit
             """)
             .RoundedBorder()
@@ -684,7 +716,8 @@ public sealed class TuiApp
                 break;
             case ConsoleKey.L when key.Modifiers == 0: _showLLMPanel = !_showLLMPanel; _currentView = _showLLMPanel ? TuiView.LLMConfig : _currentView; break;
             case ConsoleKey.T when key.Modifiers == 0: _innovation.ToggleThoughtChain(); break;
-            case ConsoleKey.S when key.Modifiers == 0: _diffSplitView = !_diffSplitView; break;
+            case ConsoleKey.S when key.Modifiers == 0: _currentView = TuiView.Swarm; break;
+            case ConsoleKey.N when key.Modifiers == 0: _currentView = TuiView.MemoryTimeline; break;
             case ConsoleKey.E when key.Modifiers == 0:
                 if (_currentView == TuiView.Code && _loadedFileContent != null)
                     await HandleEditorAsync();
@@ -1137,6 +1170,20 @@ public sealed class TuiApp
             AnsiConsole.MarkupLine("[grey]No file loaded. Use @path in Chat to load a file, then press E to edit.[/]");
             AnsiConsole.MarkupLine("[grey]Or press E to create a new markdown file.[/]");
         }
+    }
+
+    private void RenderSwarmView()
+    {
+        AnsiConsole.MarkupLine("[bold yellow]Agent Swarm[/] — Real-time task tree and sub-agent status");
+        AnsiConsole.Write(new Rule());
+        AnsiConsole.Write(_swarmView.Render());
+    }
+
+    private void RenderMemoryTimelineView()
+    {
+        AnsiConsole.MarkupLine("[bold cyan]Memory Timeline[/] — Chronological system memories with confidence decay");
+        AnsiConsole.Write(new Rule());
+        AnsiConsole.Write(_memoryTimeline.Render());
     }
 
     private async Task HandleEditorAsync()
