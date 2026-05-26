@@ -190,11 +190,15 @@ public class InteractiveSetupWizard
         Console.WriteLine($"端点: {endpoint}");
         Console.WriteLine();
 
-        var apiKey = ReadSecret($"API Key ({selectedProvider})");
-        if (string.IsNullOrWhiteSpace(apiKey))
+        var apiKey = TryReuseProviderApiKey(selectedProvider, layerName);
+        if (apiKey == null)
         {
-            Console.WriteLine("  ⚠️  未提供 API Key");
-            return;
+            apiKey = ReadSecret($"API Key ({selectedProvider})");
+            if (string.IsNullOrWhiteSpace(apiKey))
+            {
+                Console.WriteLine("  ⚠️  未提供 API Key");
+                return;
+            }
         }
 
         Console.WriteLine();
@@ -691,6 +695,27 @@ public class InteractiveSetupWizard
         if (p == "OPENAI") return "OPENAI_API_KEY";
         if (p == "ANTHROPIC") return "ANTHROPIC_API_KEY";
         return $"{p}_API_KEY";
+    }
+
+    private string? TryReuseProviderApiKey(string selectedProvider, string layerName)
+    {
+        if (layerName != "L2") return null;
+
+        var l1Provider = _options.AI.L1.Provider;
+        if (string.IsNullOrEmpty(l1Provider)) return null;
+        if (!string.Equals(selectedProvider, l1Provider, StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        var envVarName = GetProviderEnvVar(selectedProvider, layerName);
+        var existingKey = Environment.GetEnvironmentVariable(envVarName);
+        if (!string.IsNullOrWhiteSpace(existingKey))
+        {
+            Console.WriteLine($"  ✓ {layerName} 与 L1 使用相同提供商 ({selectedProvider})");
+            Console.WriteLine($"  🔑 自动复用已配置的 API Key ({envVarName})");
+            return existingKey;
+        }
+
+        return null;
     }
 
     private static void SetPersistentEnvVar(string name, string value)
