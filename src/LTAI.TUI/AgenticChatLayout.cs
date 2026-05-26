@@ -1,3 +1,4 @@
+using System.Linq;
 using LTAI.Agent.MAF;
 using LTAI.Models;
 using Spectre.Console;
@@ -103,10 +104,21 @@ public sealed class AgenticChatLayout
     {
         var rows = new List<IRenderable>();
 
+        var headerLine = $"Step {_loop.IterationCount} — {DescribePhase()}";
         rows.Add(new Panel(new Markup($"[bold blue]LTAI AgenticLoop[/] — {Markup.Escape(task.Length > 80 ? task[..80] + "..." : task)}"))
             .Border(BoxBorder.Rounded).BorderColor(Color.Blue));
 
-        rows.Add(new Markup($"[grey]Iteration: {_loop.IterationCount} | Session: {_sessionId}[/]"));
+        rows.Add(new Markup($"[grey]{headerLine} | Session: {_sessionId}[/]"));
+
+        if (_tools.Count > 0)
+        {
+            var completedTools = _tools.Values.Count(t => t.State == ToolState.Completed);
+            var stepsLine = "";
+            if (completedTools > 0)
+                stepsLine += $"[blue]Progress:[/] {completedTools}/{_tools.Count} tools complete  ";
+            stepsLine += GetAnimatedIndicator();
+            rows.Add(new Markup(stepsLine));
+        }
 
         if (!string.IsNullOrEmpty(_reasoningText))
         {
@@ -126,12 +138,20 @@ public sealed class AgenticChatLayout
             toolsTable.AddColumn("Output");
             foreach (var (_, tr) in _tools)
             {
+                var stateIcon = tr.State switch
+                {
+                    ToolState.Completed => "✓",
+                    ToolState.Error => "✗",
+                    ToolState.Executing => "⏳",
+                    ToolState.Pending => "○",
+                    _ => "?"
+                };
                 var stateColor = tr.State switch
                 {
-                    ToolState.Completed => "[green]Completed[/]",
-                    ToolState.Error => "[red]Error[/]",
-                    ToolState.Executing => "[yellow]Executing[/]",
-                    _ => "[grey]Pending[/]"
+                    ToolState.Completed => $"[green]{stateIcon} Completed[/]",
+                    ToolState.Error => $"[red]{stateIcon} Error[/]",
+                    ToolState.Executing => $"[yellow]{stateIcon} Executing[/]",
+                    _ => $"[grey]{stateIcon} Pending[/]"
                 };
                 var output = tr.Output != null && tr.Output.Length > 60
                     ? Markup.Escape(tr.Output[..60] + "...")
@@ -154,5 +174,31 @@ public sealed class AgenticChatLayout
         }
 
         return new Rows(rows);
+    }
+
+    private string DescribePhase()
+    {
+        if (_tools.Values.Any(t => t.State == ToolState.Executing))
+            return "Executing tools";
+        if (_tools.Values.Any(t => t.State == ToolState.Completed))
+            return "Processing results";
+        if (!string.IsNullOrEmpty(_reasoningText))
+            return "Reasoning";
+        if (_textBuffer.Count > 0)
+            return "Generating response";
+        return "Analyzing task";
+    }
+
+    private static string GetAnimatedIndicator()
+    {
+        var frame = Environment.TickCount / 300 % 4;
+        return frame switch
+        {
+            0 => "[cyan]◐[/] Processing",
+            1 => "[cyan]◓[/] Processing",
+            2 => "[cyan]◑[/] Processing",
+            3 => "[cyan]◒[/] Processing",
+            _ => ""
+        };
     }
 }

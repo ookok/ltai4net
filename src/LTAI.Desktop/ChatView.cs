@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Text;
 using Avalonia.Controls;
 using Avalonia.Input;
@@ -248,6 +249,24 @@ public sealed class ChatView : UserControl
         var aiContent = new StackPanel { Spacing = 4 };
         aiBubble.Children.Add(aiContent);
 
+        var statusDots = new TextBlock
+        {
+            Text = "⚪",
+            Foreground = LtaiTheme.Sbb(LtaiTheme.AccentDNA),
+            FontSize = 16,
+            Margin = new(4, 0)
+        };
+        var dotTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
+        var dotFrames = new[] { "⚪", "⚫", "⚪" };
+        var dotIdx = 0;
+        dotTimer.Tick += (_, _) =>
+        {
+            dotIdx = (dotIdx + 1) % dotFrames.Length;
+            Dispatcher.UIThread.Post(() => statusDots.Text = dotFrames[dotIdx]);
+        };
+        dotTimer.Start();
+        aiContent.Children.Add(statusDots);
+
         var thinkPanel = new Border
         {
             Background = LtaiTheme.Sbb(LtaiTheme.ThinkBg),
@@ -276,8 +295,23 @@ public sealed class ChatView : UserControl
         thinkPanel.Child = thinkInner;
         aiContent.Children.Add(thinkPanel);
 
+        var toolPanel = new StackPanel { Spacing = 2, IsVisible = false, Margin = new(0, 2) };
+        var toolTitle = new TextBlock
+        {
+            Text = "Tools",
+            Foreground = LtaiTheme.Sbb(LtaiTheme.AccentDNA),
+            FontSize = 10,
+            FontStyle = FontStyle.Italic,
+            Margin = new(0, 0, 0, 2)
+        };
+        toolPanel.Children.Add(toolTitle);
+        aiContent.Children.Add(toolPanel);
+
         var responsePanel = new StackPanel { Spacing = 2 };
         aiContent.Children.Add(responsePanel);
+
+        Border? taskBanner = null;
+        var firstTokenReceived = false;
 
         _cts = new CancellationTokenSource();
         var responseBuf = new StringBuilder();
@@ -309,10 +343,86 @@ public sealed class ChatView : UserControl
                 }
                 else
                 {
-                    responseBuf.Append(token);
-                    _tokens++;
-                    if (_tokens % 8 == 0)
-                        RenderResponse(responsePanel, responseBuf.ToString());
+                    if (dotTimer.IsEnabled)
+                    {
+                        dotTimer.Stop();
+                        Dispatcher.UIThread.Post(() => aiContent.Children.Remove(statusDots));
+                    }
+
+                    if (token.StartsWith("[tool:"))
+                    {
+                        var match = System.Text.RegularExpressions.Regex.Match(token, @"\[tool:(\w+)\]");
+                        if (match.Success)
+                        {
+                            var toolName = match.Groups[1].Value;
+                            Dispatcher.UIThread.Post(() =>
+                            {
+                                if (taskBanner?.Child is TextBlock tbb)
+                                    tbb.Text = "⚡ Executing tools...";
+                                toolPanel.IsVisible = true;
+                                var toolRow = new DockPanel { Margin = new(0, 1) };
+                                toolRow.Children.Add(new TextBlock
+                                {
+                                    Text = $"🔧 {toolName}",
+                                    Foreground = LtaiTheme.Sbb(LtaiTheme.AccentInfo),
+                                    FontFamily = new("Consolas"),
+                                    FontSize = 11
+                                });
+
+                                var progressBar = new ProgressBar
+                                {
+                                    IsIndeterminate = true,
+                                    Width = 80,
+                                    Height = 4,
+                                    Margin = new(8, 0, 0, 0)
+                                };
+                                DockPanel.SetDock(progressBar, Dock.Right);
+                                toolRow.Children.Add(progressBar);
+
+                                toolPanel.Children.Add(toolRow);
+                            });
+                        }
+                    }
+                    else if (token.StartsWith("[tool-result:"))
+                    {
+                        Dispatcher.UIThread.Post(() =>
+                        {
+                            var lastRow = toolPanel.Children.OfType<DockPanel>().LastOrDefault();
+                            if (lastRow != null)
+                            {
+                                var lastText = lastRow.Children.OfType<TextBlock>().FirstOrDefault();
+                                if (lastText != null)
+                                    lastText.Text = lastText.Text.Replace("🔧", "✅");
+                                var pb = lastRow.Children.OfType<ProgressBar>().FirstOrDefault();
+                                if (pb != null) lastRow.Children.Remove(pb);
+                            }
+                        });
+                    }
+                    else
+                    {
+                        if (!firstTokenReceived)
+                        {
+                            firstTokenReceived = true;
+                            taskBanner = new Border
+                            {
+                                Background = LtaiTheme.Sbb(LtaiTheme.BgPanel),
+                                CornerRadius = new(4),
+                                Padding = new(6, 3),
+                                Margin = new(0, 0, 0, 4),
+                                Child = new TextBlock
+                                {
+                                    Text = "⚡ Processing...",
+                                    Foreground = LtaiTheme.Sbb(LtaiTheme.AccentInfo),
+                                    FontSize = 11
+                                }
+                            };
+                            Dispatcher.UIThread.Post(() => aiContent.Children.Insert(0, taskBanner));
+                        }
+                        responseBuf.Append(token);
+                        _tokens++;
+                        if (_tokens % 8 == 0)
+                            RenderResponse(responsePanel, responseBuf.ToString());
+                    }
                 }
 
                 _scroller.ScrollToEnd();
@@ -323,6 +433,9 @@ public sealed class ChatView : UserControl
 
             if (thinkPanel.IsVisible && thinkBuf.Length > 0 && thinkText.Text?.Length == 0)
                 thinkText.Text = thinkBuf.ToString();
+
+            if (taskBanner?.Child is TextBlock tb)
+                Dispatcher.UIThread.Post(() => tb.Text = "✅ Complete");
 
             var aiFullText = responseBuf.ToString();
             var thinkCopy = thinkBuf.Length > 0 ? $"<thinking>\n{thinkBuf}\n</thinking>\n\n" : "";
@@ -336,6 +449,8 @@ public sealed class ChatView : UserControl
         {
             responseBuf.Append(" [cancelled]");
             RenderResponse(responsePanel, responseBuf.ToString());
+            if (taskBanner?.Child is TextBlock tb)
+                Dispatcher.UIThread.Post(() => tb.Text = "⏹ Stopped");
             AddAICopyButton(responseBuf.ToString());
         }
         catch (Exception ex)
@@ -403,6 +518,14 @@ public sealed class ChatView : UserControl
                 MarkdownRenderer.Render(part.Content, stb.Inlines!);
                 panel.Children.Add(stb);
             }
+        }
+
+        var imageMatches = System.Text.RegularExpressions.Regex.Matches(raw, @"!\[.*?\]\(([^)]+)\)|@""([^""]+)""");
+        foreach (System.Text.RegularExpressions.Match m in imageMatches)
+        {
+            var imgPath = m.Groups[1].Success ? m.Groups[1].Value : m.Groups[2].Value;
+            if (!string.IsNullOrWhiteSpace(imgPath))
+                RenderInlineImage(panel, imgPath);
         }
     }
 
@@ -480,6 +603,35 @@ public sealed class ChatView : UserControl
         }
 
         return parts;
+    }
+
+    private void RenderInlineImage(StackPanel panel, string path)
+    {
+        try
+        {
+            if (!File.Exists(path)) return;
+            var ext = Path.GetExtension(path).ToLowerInvariant();
+            if (ext is ".png" or ".jpg" or ".jpeg" or ".gif" or ".bmp" or ".webp")
+            {
+                var image = new Image
+                {
+                    Source = new Avalonia.Media.Imaging.Bitmap(path),
+                    MaxWidth = 400,
+                    MaxHeight = 300,
+                    Stretch = Stretch.Uniform
+                };
+                var border = new Border
+                {
+                    BorderBrush = LtaiTheme.Sbb(LtaiTheme.Border),
+                    BorderThickness = new(1),
+                    CornerRadius = new(4),
+                    Margin = new(0, 4),
+                    Child = image
+                };
+                panel.Children.Add(border);
+            }
+        }
+        catch { }
     }
 
     private async Task PickFilesAsync()
