@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using LiteDB;
+using LTAI.Core.Providers;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 
@@ -70,6 +71,7 @@ public sealed class DualMemoryStore : IDisposable
     private readonly ConsolidationConfig _config;
     private readonly RetrievalWeights _retrievalWeights;
     private readonly IEmbeddingGenerator<string, Embedding<float>>? _embeddingGenerator;
+    private readonly TextRetrievalBooster? _booster;
     private readonly object _lock = new();
     private DateTime _lastConsolidation = DateTime.MinValue;
     private int _totalConsolidations;
@@ -80,11 +82,13 @@ public sealed class DualMemoryStore : IDisposable
         ConsolidationConfig? config = null,
         RetrievalWeights? retrievalWeights = null,
         IEmbeddingGenerator<string, Embedding<float>>? embeddingGenerator = null,
+        TextRetrievalBooster? booster = null,
         ILogger<DualMemoryStore>? logger = null)
     {
         _config = config ?? new ConsolidationConfig();
         _retrievalWeights = retrievalWeights ?? new RetrievalWeights();
         _embeddingGenerator = embeddingGenerator;
+        _booster = booster;
         _logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<DualMemoryStore>.Instance;
 
         var connectionString = $"Filename={dbPath};Connection=Shared";
@@ -214,6 +218,19 @@ public sealed class DualMemoryStore : IDisposable
             .Select(x => x.Episode)
             .ToList();
 
+        if (_embeddingGenerator == null && _booster != null && scored.Count > 0)
+        {
+            try
+            {
+                var rerankCandidates = scored.Select(e => (e, e.Query, (double)e.Confidence)).ToList();
+                var reranked = await _booster.ReRankAsync(query, rerankCandidates, limit);
+                return reranked.Select(r => r.Item).ToList();
+            }
+            catch
+            {
+            }
+        }
+
         return scored;
     }
 
@@ -309,9 +326,19 @@ public sealed class DualMemoryStore : IDisposable
 
         var intersection = queryWords.Intersect(episodeWords).Count();
         var union = queryWords.Union(episodeWords).Count();
-
-        // 基础 Jaccard 相似度
         var jaccard = union > 0 ? (double)intersection / union : 0.0;
+
+        if (_booster != null)
+        {
+            try
+            {
+                var boostedTask = _booster.EnhancedTextSimilarityAsync(query, episode.Query);
+                boostedTask.Wait(500);
+                if (boostedTask.IsCompletedSuccessfully)
+                    jaccard = Math.Max(jaccard, boostedTask.Result);
+            }
+            catch { }
+        }
 
         // 领域匹配奖励
         var domainBonus = query.Contains(episode.Domain, StringComparison.OrdinalIgnoreCase) ? 0.1 : 0.0;

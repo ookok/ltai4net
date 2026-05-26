@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using LTAI.Core.Providers;
 using LTAI.Knowledge.Core.Models;
 using LTAI.Models;
 using Microsoft.Extensions.Logging;
@@ -12,6 +13,7 @@ public sealed class MemoryFilesService
     private readonly MemoryFileLoader _loader;
     private readonly KnowledgeGraph _knowledgeGraph;
     private readonly ILogger<MemoryFilesService> _logger;
+    private readonly TextRetrievalBooster? _booster;
     private readonly ConcurrentDictionary<string, MemoryFile> _files = new();
     private readonly ConcurrentDictionary<string, List<string>> _byDomain = new();
     private readonly ConcurrentDictionary<string, List<string>> _byTag = new();
@@ -26,11 +28,13 @@ public sealed class MemoryFilesService
         MemoryFileLoader loader,
         KnowledgeGraph knowledgeGraph,
         ILogger<MemoryFilesService> logger,
-        string? memoryRoot = null)
+        string? memoryRoot = null,
+        TextRetrievalBooster? booster = null)
     {
         _loader = loader;
         _knowledgeGraph = knowledgeGraph;
         _logger = logger;
+        _booster = booster;
         _memoryRoot = memoryRoot ?? OptionService.Get("paths.memory") ?? Path.Combine(AppContext.BaseDirectory, "memory");
     }
 
@@ -130,6 +134,19 @@ public sealed class MemoryFilesService
 
             if (score > 0)
                 score += (float)mf.Confidence * 0.2f;
+
+            if (_booster != null && score > 0)
+            {
+                try
+                {
+                    var boostedTask = _booster.EnhancedTextSimilarityAsync(task,
+                        $"{mf.Topic} {string.Join(" ", mf.Tags)} {mf.Summary}");
+                    boostedTask.Wait(300);
+                    if (boostedTask.IsCompletedSuccessfully)
+                        score = (float)Math.Max(score, boostedTask.Result * 2);
+                }
+                catch { }
+            }
 
             if (score > 0)
                 scored.Add((mf, score));

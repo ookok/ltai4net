@@ -1,5 +1,6 @@
 using LTAI.Knowledge.Core;
 using LTAI.Core.Interfaces;
+using LTAI.Core.Providers;
 using LTAI.Models;
 using Microsoft.Extensions.Logging;
 
@@ -17,6 +18,7 @@ public static class ContextHubBuilder
         ContextMapStore? contextMap = null,
         SynapticMemory? synapticMemory = null,
         ContextGovernor? contextGovernor = null,
+        TextRetrievalBooster? booster = null,
         ILogger<ContextHub>? logger = null)
     {
         var hub = new ContextHub(logger);

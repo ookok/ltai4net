@@ -1,4 +1,5 @@
 using LTAI.Core.Configuration;
+using LTAI.Core.Providers;
 using LTAI.Core.System;
 using LTAI.Knowledge.Core;
 using LTAI.Knowledge.Services;
@@ -245,7 +246,8 @@ public static class ServiceCollectionExtensions
             var loader = sp.GetRequiredService<MemoryFileLoader>();
             var kg = sp.GetRequiredService<KnowledgeGraph>();
             var logger = sp.GetRequiredService<ILogger<MemoryFilesService>>();
-            return new MemoryFilesService(loader, kg, logger);
+            var booster = sp.GetService<TextRetrievalBooster>();
+            return new MemoryFilesService(loader, kg, logger, booster: booster);
         });
         services.AddSingleton<PromptLoader>();
         services.AddSingleton<PromptService>(sp =>

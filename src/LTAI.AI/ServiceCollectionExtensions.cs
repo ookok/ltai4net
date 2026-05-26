@@ -3,6 +3,7 @@ using LTAI.AI.Governors;
 using LTAI.AI.Governors.Pipeline;
 using LTAI.AI.Interfaces;
 using LTAI.AI.Providers;
+using LTAI.Core.Providers;
 using LTAI.Tools.Skills;
 using LTAI.Core.Configuration;
 using LTAI.Core.Governors;
@@ -99,7 +100,8 @@ public static class ServiceCollectionExtensions
             var dbPath = System.IO.Path.Combine(synapticDir, "dual_memory.db");
             Directory.CreateDirectory(synapticDir);
             var embeddingGenerator = sp.GetService<IEmbeddingGenerator<string, Embedding<float>>>();
-            return new DualMemoryStore(dbPath, config: null, retrievalWeights: null, embeddingGenerator, logger);
+            var booster = sp.GetService<TextRetrievalBooster>();
+            return new DualMemoryStore(dbPath, config: null, retrievalWeights: null, embeddingGenerator, booster, logger);
         });
 
         services.AddSingleton<MemoryQualityMonitor>(sp =>
@@ -369,6 +371,9 @@ public static class ServiceCollectionExtensions
             var logger = sp.GetService<ILogger<BackgroundWorkQueue>>();
             return new BackgroundWorkQueue(capacity: 64, logger);
         });
+
+        services.AddSingleton<TextRetrievalBooster>(sp =>
+            new TextRetrievalBooster(sp.GetRequiredService<IChatClient>(), sp.GetService<ILogger<TextRetrievalBooster>>()));
 
         services.AddSingleton<SkillTree>(sp =>
         {
@@ -727,6 +732,7 @@ public static class ServiceCollectionExtensions
                 contextMap: sp.GetService<ContextMapStore>(),
                 synapticMemory: sp.GetService<SynapticMemory>(),
                 contextGovernor: sp.GetService<ContextGovernor>(),
+                booster: sp.GetService<TextRetrievalBooster>(),
                 logger: sp.GetService<ILogger<ContextHub>>()
             );
         });
