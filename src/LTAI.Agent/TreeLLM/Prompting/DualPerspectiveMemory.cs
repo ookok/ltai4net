@@ -39,8 +39,8 @@ public sealed class DualPerspectiveMemory
         var opts = options ?? new PerspectiveOptions();
 
         var memoryEvents = await RetrieveMemoryEvents(sessionId, query, opts).ConfigureAwait(false);
-        var knowledgeDocs = _agenticRAG.Search(query, RAGMode.Iterative,
-            domain: opts.Domain ?? "personal_preference");
+        var knowledgeDocs = await _agenticRAG.SearchAsync(query, RAGMode.Iterative,
+            domain: opts.Domain ?? "personal_preference").ConfigureAwait(false);
 
         var reweightedDocs = ReweightDocs(knowledgeDocs, SelfPerspectiveWeights);
         var reweightedMemory = ReweightMemoryEvents(memoryEvents, SelfPerspectiveWeights);
@@ -60,8 +60,8 @@ public sealed class DualPerspectiveMemory
         var opts = options ?? new PerspectiveOptions();
 
         var memoryEvents = await RetrieveMemoryEvents(sessionId, query, opts).ConfigureAwait(false);
-        var knowledgeDocs = _agenticRAG.Search(query, RAGMode.Iterative,
-            domain: opts.Domain ?? "general_knowledge");
+        var knowledgeDocs = await _agenticRAG.SearchAsync(query, RAGMode.Iterative,
+            domain: opts.Domain ?? "general_knowledge").ConfigureAwait(false);
 
         var reweightedDocs = ReweightDocs(knowledgeDocs, ThirdPartyPerspectiveWeights);
         var reweightedMemory = ReweightMemoryEvents(memoryEvents, ThirdPartyPerspectiveWeights);

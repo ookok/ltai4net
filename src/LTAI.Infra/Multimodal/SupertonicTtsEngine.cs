@@ -23,10 +23,10 @@ public sealed class SupertonicTtsEngine : ITtsEngine, IDisposable
     private readonly SupertonicTtsConfig _config;
     private readonly ILogger<SupertonicTtsEngine> _logger;
     private readonly HttpClient _http;
-    private readonly Lazy<bool> _isAvailable;
+    private bool _isAvailable;
 
     public string EngineName => "Supertonic";
-    public bool IsAvailable => _isAvailable.Value;
+    public bool IsAvailable => _isAvailable;
 
     public SupertonicTtsEngine(SupertonicTtsConfig config, ILogger<SupertonicTtsEngine>? logger = null)
     {
@@ -36,15 +36,16 @@ public sealed class SupertonicTtsEngine : ITtsEngine, IDisposable
         {
             Timeout = TimeSpan.FromSeconds(config.TimeoutSeconds)
         };
-        _isAvailable = new Lazy<bool>(() =>
+        _isAvailable = false;
+        _ = Task.Run(async () =>
         {
             try
             {
-                return Task.Run(() => CheckAvailabilityAsync()).GetAwaiter().GetResult();
+                _isAvailable = await CheckAvailabilityAsync().ConfigureAwait(false);
             }
             catch
             {
-                return false;
+                _isAvailable = false;
             }
         });
     }

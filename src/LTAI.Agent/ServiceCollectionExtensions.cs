@@ -51,7 +51,6 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<SkillExtractor>();
         services.AddSingleton<SkillRuntime>();
         services.AddSingleton<SkillAwareDecomposer>();
-        services.AddSingleton<MultiRoundOrchestrator>();
         services.AddSingleton<IntentRouter>();
         services.AddSingleton<UnifiedSemanticRouter>();
         services.AddSingleton<UnifiedIntentRouter>();

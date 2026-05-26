@@ -3,9 +3,9 @@ using System.Text.Json;
 using LTAI.AI.Interfaces;
 using LTAI.AI.Governors;
 using LTAI.Agent.Skills;
-using LTAI.Agent.Skills.Runtime;
 using LTAI.Agent.Workflows;
 using LTAI.Models;
+using LTAI.Tools.Tools;
 using Microsoft.Agents.AI;
 using Microsoft.Agents.AI.Workflows;
 using Microsoft.Extensions.AI;
@@ -21,7 +21,6 @@ public sealed class LTAIAgent : AIAgent
     private readonly ILivingTreeSystem _livingTree;
     private readonly SkillRegistry _skillRegistry;
     private readonly SkillExtractor? _skillExtractor;
-    private readonly MultiRoundOrchestrator? _multiRound;
     private readonly LTAICoordinator? _coordinator;
     private readonly ILogger<LTAIAgent> _logger;
     private readonly LogiInputFilter? _inputFilter;
@@ -35,7 +34,6 @@ public sealed class LTAIAgent : AIAgent
         SkillRegistry skillRegistry,
         ILogger<LTAIAgent> logger,
         SkillExtractor? skillExtractor = null,
-        MultiRoundOrchestrator? multiRound = null,
         LTAICoordinator? coordinator = null,
         LogiInputFilter? inputFilter = null,
         LogiOutputFilter? outputFilter = null)
@@ -44,7 +42,6 @@ public sealed class LTAIAgent : AIAgent
         _skillRegistry = skillRegistry;
         _logger = logger;
         _skillExtractor = skillExtractor;
-        _multiRound = multiRound;
         _coordinator = coordinator;
         _inputFilter = inputFilter;
         _outputFilter = outputFilter;
@@ -270,19 +267,8 @@ public sealed class LTAIAgent : AIAgent
 
         var lower = query.ToLowerInvariant();
 
-        var coordinatorKeywords = new[]
-        {
-            "同时", "并行", "并行执行", "协作", "协同",
-            "orchestrate", "parallel", "concurrently", "team",
-            "多人", "多任务", "多模块", "多个任务",
-            "方案", "方案比选", "优化方案", "比选方案",
-            "综合评估", "综合", "全面评估",
-            "eia and code", "code and eia",
-            "分析", "审查", "review", "analyze", "比较", "compare",
-            "设计", "design", "架构", "architecture", "规划", "plan",
-            "重构", "refactor", "优化", "optimize",
-            "pipeline", "workflow", "流程", "编排", "orchestrate"
-        };
+        var coordinatorKeywords = (OptionService.Get("coordinator_keywords") ?? "")
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
         foreach (var kw in coordinatorKeywords)
             if (lower.Contains(kw)) return true;
@@ -312,14 +298,8 @@ public sealed class LTAIAgent : AIAgent
         if (matchedSkills.Any(s => s.IsReliable))
             return true;
 
-        var workflowKeywords = new[]
-        {
-            "分析", "审查", "review", "analyze", "比较", "compare",
-            "设计", "design", "架构", "architecture", "规划", "plan",
-            "重构", "refactor", "优化", "optimize", "调试", "debug",
-            "为什么", "why", "如何", "how to", "解释", "explain",
-            "pipeline", "workflow", "流程", "编排", "orchestrate"
-        };
+        var workflowKeywords = (OptionService.Get("workflow_keywords") ?? "")
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
         var lower = query.ToLowerInvariant();
         foreach (var kw in workflowKeywords)

@@ -20,9 +20,9 @@ public sealed class SkillExtractor
     private readonly string _skillsRoot;
     private readonly Dictionary<string, (int Successes, List<string> ToolSequence, string Query, string Response)> _pendingExtractions = new();
 
-    private const int MinSuccessesForL0 = 3;
-    private const int MinSuccessesForL1 = 5;
-    private const int MinSuccessesForL2 = 10;
+    private int MinSuccessesForL0 => int.TryParse(OptionService.Get("min_successes_for_l0"), out var v) ? v : 3;
+    private int MinSuccessesForL1 => int.TryParse(OptionService.Get("min_successes_for_l1"), out var v) ? v : 5;
+    private int MinSuccessesForL2 => int.TryParse(OptionService.Get("min_successes_for_l2"), out var v) ? v : 10;
 
     public SkillExtractor(
         SkillRegistry registry,

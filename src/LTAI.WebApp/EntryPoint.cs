@@ -13,6 +13,7 @@ using LTAI.DNA;
 using LTAI.Agent;
 using LTAI.Knowledge.Memory;
 using LTAI.Planning.Metrics;
+using LTAI.Knowledge.Core;
 using LTAI.Knowledge.Vector;
 using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.Options;
@@ -38,6 +39,20 @@ public static class EntryPoint
         var ltaiSection = builder.Configuration.GetSection(LTAIOptions.SectionName);
         builder.Services.Configure<LTAIOptions>(ltaiSection);
         var ltaiOptions = ltaiSection.Get<LTAIOptions>() ?? new LTAIOptions();
+
+        if (ltaiOptions.AI.Providers.Count == 0)
+        {
+            ltaiOptions.AI.Providers["deepseek"] = new ProviderConfig
+            {
+                Endpoint = OptionService.Get("deepseek.endpoint") ?? "https://api.deepseek.com",
+                Model = OptionService.Get("deepseek.model") ?? "deepseek-v4-pro"
+            };
+            ltaiOptions.AI.Providers["deepseek-fast"] = new ProviderConfig
+            {
+                Endpoint = OptionService.Get("deepseek.fast.endpoint") ?? "https://api.deepseek.com",
+                Model = OptionService.Get("deepseek.fast.model") ?? "deepseek-v4-flash"
+            };
+        }
 
         builder.Services.AddLTAICore();
         builder.Services.AddLTAIVectorAuto(apiModel: ltaiOptions.AI.L0.Model);

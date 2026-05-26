@@ -160,11 +160,11 @@ public sealed class PlannerIntegration
         return sb.ToString();
     }
 
-    public RefinedPlan? GetPlan(string intent, string domain,
+    public async Task<RefinedPlan?> GetPlanAsync(string intent, string domain,
         Func<string, string, CancellationToken, Task<string>>? llmCall = null,
         CancellationToken cancellationToken = default)
     {
-        return _diffusionPlanner.Refine(intent, domain, llmCall, cancellationToken).GetAwaiter().GetResult();
+        return await _diffusionPlanner.Refine(intent, domain, llmCall, cancellationToken).ConfigureAwait(false);
     }
 
     public GTSMTrajectory? GetGtsmPlan(string task, GTSMMode mode = GTSMMode.Auto, string domain = "general")

@@ -39,16 +39,16 @@ public sealed class DagRagPipeline
 
         var searchTasks = new List<Task<List<KnowledgeSearchResult>>>
         {
-            Task.Run(() => _agenticRAG.Search(question, RAGMode.Iterative, domain: opts.Domain ?? "general"), cancellationToken),
-            Task.Run(() => _agenticRAG.Search(question, RAGMode.MultiAgent, domain: opts.Domain ?? "general"), cancellationToken),
-            Task.Run(() => _agenticRAG.Search(question, RAGMode.Reflective, domain: opts.Domain ?? "general"), cancellationToken)
+            _agenticRAG.SearchAsync(question, RAGMode.Iterative, domain: opts.Domain ?? "general"),
+            _agenticRAG.SearchAsync(question, RAGMode.MultiAgent, domain: opts.Domain ?? "general"),
+            _agenticRAG.SearchAsync(question, RAGMode.Reflective, domain: opts.Domain ?? "general")
         };
 
         var variants = GenerateQueryVariants(question);
         foreach (var variant in variants.Take(_maxParallelSearches - 3))
         {
-            searchTasks.Add(Task.Run(() =>
-                _agenticRAG.Search(variant, RAGMode.Iterative, domain: opts.Domain ?? "general"), cancellationToken));
+            searchTasks.Add(
+                _agenticRAG.SearchAsync(variant, RAGMode.Iterative, domain: opts.Domain ?? "general"));
         }
 
         var allResults = await Task.WhenAll(searchTasks).ConfigureAwait(false);
@@ -83,15 +83,15 @@ public sealed class DagRagPipeline
 
         var searchTasks = new List<Task<List<KnowledgeSearchResult>>>
         {
-            Task.Run(() => _agenticRAG.Search(question, RAGMode.Iterative, domain: opts.Domain ?? "general"), cancellationToken),
-            Task.Run(() => _agenticRAG.Search(question, RAGMode.MultiAgent, domain: opts.Domain ?? "general"), cancellationToken)
+            _agenticRAG.SearchAsync(question, RAGMode.Iterative, domain: opts.Domain ?? "general"),
+            _agenticRAG.SearchAsync(question, RAGMode.MultiAgent, domain: opts.Domain ?? "general")
         };
 
         var variants = GenerateQueryVariants(question);
         foreach (var variant in variants.Take(_maxParallelSearches - 2))
         {
-            searchTasks.Add(Task.Run(() =>
-                _agenticRAG.Search(variant, RAGMode.Iterative, domain: opts.Domain ?? "general"), cancellationToken));
+            searchTasks.Add(
+                _agenticRAG.SearchAsync(variant, RAGMode.Iterative, domain: opts.Domain ?? "general"));
         }
 
         var allResults = await Task.WhenAll(searchTasks).ConfigureAwait(false);

@@ -65,7 +65,7 @@ public sealed class PredictivePrefetchBridge
         if (prefetched.Count > 0)
             return prefetched;
 
-        return _rag.Search(query, RAGMode.Iterative, domain: domain);
+        return await _rag.SearchAsync(query, RAGMode.Iterative, domain: domain).ConfigureAwait(false);
     }
 
     public void LearnAndPredict(string sessionId, string currentQuery, string? nextQuery = null)
@@ -98,7 +98,7 @@ public sealed class PredictivePrefetchBridge
 
             try
             {
-                var results = _rag.Search(pred.QueryText, RAGMode.Iterative, domain: "general");
+                var results = await _rag.SearchAsync(pred.QueryText, RAGMode.Iterative, domain: "general").ConfigureAwait(false);
                 if (results.Count > 0)
                 {
                     _prefetched[key] = results;

@@ -1,7 +1,6 @@
 using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using System.Text;
-using System.Text.Json;
 using System.Text.RegularExpressions;
 using LTAI.AI.Interfaces;
 using LTAI.AI.Governors.Pipeline;
@@ -15,7 +14,6 @@ using LTAI.DNA;
 using LTAI.Models;
 using LTAI.Tools.Reasoning;
 using LTAI.AI.Providers;
-using LTAI.AI.Utilities;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -26,7 +24,6 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
 {
     private readonly TaskJournal _journal;
     private readonly IChatClient _llm;
-    private readonly ProviderFanOutRace? _fanOut;
     private readonly AIToolRegistry _toolRegistry;
     private readonly ILogger<LivingTreeSystem> _logger;
     private readonly DNAOrchestrator? _dna;
@@ -44,18 +41,18 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
     private readonly BackgroundWorkQueue _workQueue;
     private readonly ToolSelector _toolSelector;
     private readonly PromptTemplateStore _prompts;
-    private readonly ModelHealthTracker _health;
 
     private readonly BAVTRouter _bavtRouter = new(100.0);
     private readonly ERLLoop _erlLoop = new();
     private readonly ElasticMemoryOrchestrator _elasticMemory = new();
-    private readonly StructuredReflectionEngine _reflectionEngine = new();
     private readonly CoEchoDetector _echoDetector = new();
     private readonly TaskPipeline _taskPipeline;
     private readonly ICrossRunEvolutionStore? _evolutionStore;
     private readonly IVerifiableRegistry? _verifiableRegistry;
     private readonly IParliamentBridge? _parliamentBridge;
     private readonly QueryPreprocessingService _preprocessor;
+    private readonly ReActLoopOrchestrator _reActOrchestrator;
+    private readonly ModelDispatchService _modelDispatch;
     private int _requestCount;
     private int _bgRequestCount;
     private const int TrainingInterval = 50;
@@ -63,21 +60,9 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
     private string _personaStyle = "balanced";
     private DateTime _lastDreamCycleTrigger = DateTime.MinValue;
     private static readonly TimeSpan DreamCycleMinInterval = TimeSpan.FromMinutes(2);
-    private string? _predictiveSearchResult;
-
-    private static readonly Regex TextToolCall = new(
-        @"【TOOL:(\w[\w_]*)\s+(.*?)】", RegexOptions.Compiled);
 
     private string DefaultModel => _options.Value.AI.L2.Model;
     private string FlashModel => _options.Value.AI.L1.Model;
-
-    private string GetDegradedModel(string model)
-    {
-        var chain = _options.Value.ModelPricing?.DegradationChain;
-        if (chain != null && chain.TryGetValue(model, out var fallback))
-            return fallback;
-        return FlashModel;
-    }
 
     public SystemGuardian Guardian => _gov.Guardian;
     public SystemMode Mode => _gov.Guardian.Mode;
@@ -96,7 +81,6 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
         GovernorSet gov,
         AIToolRegistry toolRegistry,
         ILogger<LivingTreeSystem> logger,
-        ProviderFanOutRace? fanOut = null,
         DNAOrchestrator? dna = null,
         ReasoningOrchestrator? reasoning = null,
         L1L2DuplexRouter? duplexRouter = null,
@@ -109,15 +93,15 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
         BackgroundWorkQueue? workQueue = null,
         ToolSelector? toolSelector = null,
         PromptTemplateStore? prompts = null,
-        ModelHealthTracker? health = null,
         ICrossRunEvolutionStore? evolutionStore = null,
         IVerifiableRegistry? verifiableRegistry = null,
         IParliamentBridge? parliamentBridge = null,
-        QueryPreprocessingService? preprocessor = null)
+        QueryPreprocessingService? preprocessor = null,
+        ReActLoopOrchestrator? reActOrchestrator = null,
+        ModelDispatchService? modelDispatch = null)
     {
         _journal = journal;
         _llm = llm;
-        _fanOut = fanOut;
         _toolRegistry = toolRegistry;
         _logger = logger;
         _options = options;
@@ -134,21 +118,22 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
         _workQueue = workQueue ?? new BackgroundWorkQueue();
         _toolSelector = toolSelector ?? new ToolSelector(toolRegistry);
         _prompts = prompts ?? new PromptTemplateStore();
-        _health = health ?? new ModelHealthTracker();
         _evolutionStore = evolutionStore;
         _verifiableRegistry = verifiableRegistry;
         _parliamentBridge = parliamentBridge;
         _preprocessor = preprocessor ?? new QueryPreprocessingService(
             _gov.Input, _llm, _dna, _options, _gov.Guardian, _toolRegistry,
             _metaCognition, _patternRouter, _planExecutor, _prompts, _logger);
+        _reActOrchestrator = reActOrchestrator!;
+        _modelDispatch = modelDispatch!;
         _taskPipeline = new TaskPipeline(_journal);
-        _taskPipeline.LlmDecomposer = LlmDecomposeAsync;
+        _taskPipeline.LlmDecomposer = (_modelDispatch ?? throw new InvalidOperationException("ModelDispatchService is required")).LlmDecomposeAsync;
     }
 
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
     {
         _gov.Guardian.StartMonitoring(TimeSpan.FromSeconds(15));
-        _logger.LogInformation("LivingTreeSystem v6.0 initialized with 5 governors, DNA: {DNA}",
+        _logger.LogInformation("LivingTreeSystem v6.0 initialized with 6 governors, DNA: {DNA}",
             _dna != null ? "enabled" : "disabled");
 
         if (_evolutionStore != null)
@@ -351,259 +336,18 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
             }
         }
 
-        var selectedTools = _toolSelector.SelectTools(query, _toolRegistry.GetTools());
-
-        // Cross-run memory: inject relevant past experiences as context
-        string? memoryContext = null;
-        if (_synapticMemory != null && layer1Context == null)
+        await foreach (var chunk in _reActOrchestrator.RunReActLoopAsync(
+            query, model, label, dateTag,
+            layer1Context, layer1HighConfidence, autoSearchContext, layer2Context,
+            metaContext, metaAssessment, patternMatched, toolCount, budgetRatio, cancellationToken))
         {
-            var similar = _synapticMemory.FindSimilar(query, maxResults: 2, minReward: 0.7f);
-            if (similar.Count > 0)
-            {
-                var memSb = new StringBuilder();
-                memSb.AppendLine("【跨运行记忆】以下是以往相似问题的成功回答，可参考其结构和关键信息：");
-                foreach (var exp in similar)
-                {
-                    var snippet = exp.Response.Length > 500 ? exp.Response[..500] + "..." : exp.Response;
-                    memSb.AppendLine($"--- 历史问答 (置信度={exp.Confidence:F2}, 奖励={exp.Reward:F2}) ---");
-                    memSb.AppendLine(snippet);
-                }
-                memoryContext = memSb.ToString();
-                _logger.LogInformation("SynapticMemory: injected {Count} similar past experiences", similar.Count);
-            }
+            yield return chunk;
         }
 
-        var (messages, streamOptions) = BuildSystemMessages(
-            model, layer1Context, autoSearchContext, layer2Context,
-            metaContext, metaAssessment, label, toolCount, dateTag, query,
-            selectedTools);
-
-        if (memoryContext != null)
-            messages.Insert(0, new ChatMessage(ChatRole.System, memoryContext));
-
-        // Inject multi-turn conversation history as context (skip for Layer1 bypass)
-        if (!layer1HighConfidence)
-        {
-            var history = _gov.Context.CompressHistory();
-            if (history.Length > 0)
-                messages.Insert(0, new ChatMessage(ChatRole.System,
-                    $"【此前对话】\n{history}\n\n请基于以上对话历史理解用户当前问题的上下文。"));
-        }
-
-        // ReAct loop: stream response, detect tool calls, execute them, and retry
-        var useStreaming = label != "fast" && label != "reflex";
-        var fullResponse = new StringBuilder();
-        var totalToolCalls = patternMatched ? 1 : 0; // Layer 1 tools count too
-        var retryLevel = 0;
-        var groundingFailed = false;
-        const int maxToolRounds = 5;
-        for (int round = 0; round < maxToolRounds; round++)
-        {
-            var toolCalls = new List<FunctionCallContent>();
-            var responseText = new StringBuilder();
-            var reasoningText = new StringBuilder();
-
-            if (useStreaming)
-            {
-                IAsyncEnumerable<ChatResponseUpdate>? streamResponse = null;
-                try { streamResponse = _llm.GetStreamingResponseAsync(messages, streamOptions, cancellationToken); }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "Stream init failed for query: {Query}", query[..Math.Min(query.Length, 60)]);
-                }
-
-                if (streamResponse == null) { yield return "Error connecting to provider."; yield break; }
-
-                var streamChunks = new List<string>();
-                var toolList = new Dictionary<string, ToolInvocationPart>();
-                Exception? streamError = null;
-                try
-                {
-                    await foreach (var update in streamResponse)
-                    {
-                        foreach (var content in update.Contents)
-                        {
-                            if (content is FunctionCallContent fcc)
-                                toolCalls.Add(fcc);
-                            else if (content is TextReasoningContent rc && !string.IsNullOrEmpty(rc.Text))
-                            {
-                                reasoningText.Append(rc.Text);
-                                streamChunks.Add($"<thinking>{rc.Text}</thinking>");
-                            }
-                        }
-                        if (!string.IsNullOrEmpty(update.Text))
-                        {
-                            streamChunks.Add(update.Text);
-                            responseText.Append(update.Text);
-                        }
-                        if (update.AdditionalProperties != null
-                            && update.AdditionalProperties.TryGetValue("NormalizedParts", out var partsObj)
-                            && partsObj is List<Part> parts)
-                        {
-                            foreach (var part in parts)
-                            {
-                                if (part is ToolInvocationPart toolPart && !string.IsNullOrEmpty(toolPart.ToolName))
-                                {
-                                    var key = toolPart.Id ?? toolPart.ToolName;
-                                    if (!toolList.ContainsKey(key))
-                                        toolList[key] = toolPart;
-                                }
-                            }
-                        }
-                    }
-                }
-                catch (Exception ex)
-                {
-                    streamError = ex;
-                    _logger.LogWarning(ex, "Stream iteration failed, using partial response: {Len} chars",
-                        responseText.Length);
-                }
-
-                foreach (var chunk in streamChunks)
-                    yield return chunk;
-
-                if (streamError != null && responseText.Length == 0)
-                {
-                    yield return "模型调用失败，请稍后重试。";
-                    yield break;
-                }
-            }
-            else
-            {
-                var response = await _llm.GetResponseAsync(messages, streamOptions, cancellationToken).ConfigureAwait(false);
-                responseText.Append(response.Text ?? "");
-                if (response.Messages != null)
-                {
-                    foreach (var msg in response.Messages)
-                        if (msg.Contents?.OfType<FunctionCallContent>() is { } fccs)
-                            toolCalls.AddRange(fccs);
-                }
-                var text = responseText.ToString();
-                if (!string.IsNullOrEmpty(text))
-                    yield return text;
-            }
-
-            fullResponse.Append(responseText.ToString());
-
-            // Text-based tool calls: fallback when model doesn't emit FunctionCallContent.
-            // Parse 【TOOL:name key=val】 patterns from the response text.
-            if (toolCalls.Count == 0)
-            {
-                var textCalls = ParseTextToolCalls(responseText.ToString());
-                if (textCalls.Count > 0)
-                {
-                    toolCalls.AddRange(textCalls);
-                    _logger.LogInformation("TextToolCall: parsed {Count} tool calls from response text", textCalls.Count);
-                }
-            }
-
-            if (toolCalls.Count == 0)
-            {
-                // Layer 4+5: Answer grounding verification + multi-level retry escalation
-                if (!layer1HighConfidence)
-                {
-                    var toolContextForVerification = layer1Context ?? layer2Context ?? autoSearchContext;
-                    var verification = _groundingVerifier.Verify(
-                        responseText.ToString(), query, toolContextForVerification,
-                        totalToolCalls > 0, totalToolCalls, layer1Context != null);
-
-                    if (!verification.IsGrounded)
-                    {
-                        retryLevel++;
-                        var escalation = await EscalateGroundingFailure(
-                            query, retryLevel, verification, messages,
-                            layer1Context, layer2Context, autoSearchContext,
-                            responseText.ToString(), toolContextForVerification, cancellationToken).ConfigureAwait(false);
-
-                        switch (escalation.Action)
-                        {
-                            case EscalationAction.YieldAndBreak:
-                                groundingFailed = true;
-                                foreach (var chunk in escalation.YieldChunks!)
-                                    yield return chunk;
-                                yield break;
-                            case EscalationAction.Break:
-                                groundingFailed = true;
-                                yield break;
-                            case EscalationAction.Continue:
-                                messages.Add(new ChatMessage(ChatRole.System, escalation.RetryMessage!));
-                                continue;
-                        }
-                    }
-                    _logger.LogDebug("Grounding check passed");
-
-                    // LLM-based semantic verification as second pass (only on first attempt with tool data).
-                    // Skipped when budget is low — prioritise essential processing over verification.
-                    if (retryLevel == 0 && !string.IsNullOrWhiteSpace(toolContextForVerification)
-                        && toolContextForVerification!.Length > 200
-                        && budgetRatio > 0.3f)
-                    {
-                        var llmVerification = await _groundingVerifier.VerifyWithLLMAsync(
-                            responseText.ToString(), toolContextForVerification,
-                            _llm, FlashModel, cancellationToken).ConfigureAwait(false);
-
-                        if (!llmVerification.IsGrounded)
-                        {
-                            retryLevel = 1;
-                            _logger.LogWarning("LLM grounding check failed: {Issue}", llmVerification.Issue);
-                            messages.Add(new ChatMessage(ChatRole.System,
-                                $"【语义验证失败】{llmVerification.RetryInstruction}"));
-                            continue;
-                        }
-                        _logger.LogDebug("LLM grounding check passed");
-                    }
-                }
-                break;
-            }
-
-            totalToolCalls += toolCalls.Count;
-
-            // Execute tool calls and feed results back into the conversation
-            var assistantReply = responseText.ToString();
-            var assistantContents = new List<AIContent>(toolCalls);
-            if (reasoningText.Length > 0)
-                assistantContents.Insert(0, new TextReasoningContent(reasoningText.ToString()));
-            messages.Add(new ChatMessage(ChatRole.Assistant, assistantReply) { Contents = assistantContents });
-
-            foreach (var tc in toolCalls)
-        {
-            yield return "\uD83D\uDCCB ";
-            try
-            {
-                    var args = new Dictionary<string, object?>();
-                    if (tc.Arguments != null)
-                    {
-                        foreach (var kv in tc.Arguments)
-                            args[kv.Key] = kv.Value;
-                    }
-                    var result = await _toolRegistry.InvokeAsync(tc.Name, args, cancellationToken).ConfigureAwait(false);
-                    var resultText = ToolCallRepairer.CapToolResult(result?.ToString() ?? "");
-                    messages.Add(new ChatMessage(ChatRole.Tool, "") { Contents = new List<AIContent> { new FunctionResultContent(tc.CallId, resultText) } });
-                    _logger.LogInformation("ReAct: executed {Tool} (callId={Id})", tc.Name, tc.CallId);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "ReAct: tool {Tool} failed", tc.Name);
-                    messages.Add(new ChatMessage(ChatRole.Tool, "") { Contents = new List<AIContent> { new FunctionResultContent(tc.CallId, $"Error: {ex.Message}") } });
-                }
-            }
-
-            if (!useStreaming)
-            {
-                // For non-streaming (fast/reflex), continue the loop silently
-                continue;
-            }
-        }
-
-        // MetaCognitiveLayer: record outcome for self-learning
-        var finalResponse = fullResponse.ToString();
-
-        // Model health tracking
-        if (!string.IsNullOrEmpty(finalResponse) && finalResponse.Length > 20
-            && !finalResponse.Contains("模型调用失败") && !groundingFailed)
-            _health.RecordSuccess(model);
-        else if (!layer1HighConfidence)
-            _health.RecordFailure(model);
+        var finalResponse = _reActOrchestrator.FinalResponse ?? "";
+        var groundingFailed = _reActOrchestrator.GroundingFailed;
+        var totalToolCalls = _reActOrchestrator.TotalToolCalls;
+        var retryLevel = _reActOrchestrator.RetryLevel;
 
         // Post-response follow-up: generate related questions from tool context
         if (!groundingFailed && !layer1HighConfidence && finalResponse.Length > 50)
@@ -982,39 +726,8 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
         var maxTokens = _options.Value.AI.MaxTokens > 0 ? _options.Value.AI.MaxTokens : 4096;
         var options = new ChatOptions { ModelId = model, Temperature = temperature, MaxOutputTokens = maxTokens, Tools = _toolRegistry.GetTools().ToList() };
 
-        try
-        {
-            response = label switch
-            {
-                "fast" or "reflex" => (await _llm.GetResponseAsync(fullPrompt, options, cancellationToken)).Text ?? "",
-                _ when _fanOut != null => (await _fanOut.RaceAsync(fullPrompt, maxConcurrent: 3, cancellationToken: cancellationToken)).Answer,
-                _ => await CollaborativeChatAsync(fullPrompt, options, cancellationToken)
-            };
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            var fallbackModel = GetDegradedModel(model);
-            if (fallbackModel != model)
-            {
-                var reflection = _reflectionEngine.Reflect(model, ex.Message, 1);
-                _logger.LogWarning("Model {Model} failed, reflection={Action} fallback={Fallback}: {Error}",
-                    model, reflection.Action, fallbackModel, ex.Message);
-                options.ModelId = fallbackModel;
-                options.Temperature = 0.3f;
-                response = (await _llm.GetResponseAsync(fullPrompt, options, cancellationToken)).Text ?? "";
-
-                _evolutionStore?.RecordLesson(new EvolutionLesson
-                {
-                    Category = LessonCategory.ModelDegradation.ToString(),
-                    Severity = 0.6f,
-                    Summary = $"Model {model} failed and degraded to {fallbackModel}",
-                    Mitigation = $"Use {fallbackModel} as fallback; monitor {model} error rate",
-                    SourceRun = traceId,
-                    SourceStage = "l2_response"
-                });
-            }
-            else { throw; }
-        }
+        response = await _modelDispatch.DispatchAndRunAsync(
+            label, fullPrompt, options, model, traceId, _evolutionStore, cancellationToken).ConfigureAwait(false);
 
         _bavtRouter.Spend(1.0);
         _erlLoop.RecordTrial(query[..Math.Min(query.Length, 60)], response[..Math.Min(response.Length, 100)], "l2_response", 0.7, true);
@@ -1076,54 +789,6 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
         }, "SelfGovernor trace");
 
         return GovernorOutput.Success(response, traceId);
-    }
-
-    private async Task<string> CollaborativeChatAsync(string prompt, ChatOptions baseOptions, CancellationToken ct)
-    {
-        var history = _gov.Context.CompressHistory();
-        var iterativePrompt = string.IsNullOrEmpty(history)
-            ? prompt
-            : $"Previous conversation:\n{history}\n\nCurrent query:\n{prompt}\n\nPlease provide a thorough, well-reasoned response.";
-
-        var messages = new List<ChatMessage> { new(ChatRole.User, iterativePrompt) };
-        var sb = new System.Text.StringBuilder();
-        string? lastModel = null;
-
-        await foreach (var update in _llm.GetStreamingResponseAsync(messages, baseOptions, ct))
-        {
-            if (!string.IsNullOrEmpty(update.Text))
-                sb.Append(update.Text);
-            lastModel ??= update.ModelId;
-        }
-        var response = sb.ToString();
-
-        if (string.IsNullOrWhiteSpace(response))
-            throw new InvalidOperationException("Empty streaming response");
-
-        // Fire-and-forget review: doesn't block the critical path
-        var capturedResponse = response;
-        var capturedPrompt = iterativePrompt;
-        _workQueue.Enqueue(async ct =>
-        {
-            try
-            {
-                var reviewPrompt = $"Review this response for accuracy and completeness. If it needs improvement, provide the improved version:\n\n{capturedResponse}";
-                var reviewOptions = new ChatOptions { ModelId = baseOptions.ModelId, Temperature = 0.1f, MaxOutputTokens = 2048 };
-                var reviewed = await _llm.CompleteAsync(reviewPrompt, reviewOptions, ct).ConfigureAwait(false);
-                if (!string.IsNullOrWhiteSpace(reviewed))
-                {
-                    _synapticMemory?.Store(new SynapticExperience
-                    {
-                        Type = SynapseType.Correction, Query = capturedPrompt, Response = reviewed,
-                        Label = "reviewed", Confidence = 0.85f, Reward = 0.9f,
-                        Metadata = $"model={baseOptions.ModelId},original_len={capturedResponse.Length}"
-                    });
-                }
-            }
-            catch (Exception ex) { _logger.LogWarning(ex, "LLM review background task failed"); }
-        }, "LLM review");
-
-        return response;
     }
 
     private async Task SilentSelfCheckAsync(string response)
@@ -1190,248 +855,6 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
         }
     }
 
-    private void RecordSelfHealingLesson(string query, int retryLevel, string checkType)
-    {
-        if (_evolutionStore == null) return;
-
-        try
-        {
-            _evolutionStore.RecordLesson(new EvolutionLesson
-            {
-                Category = LessonCategory.QualityRegression.ToString(),
-                Severity = Math.Min(0.3f + retryLevel * 0.2f, 1.0f),
-                Summary = $"Repeated grounding failures (L{retryLevel} retries, type={checkType}): {query[..Math.Min(query.Length, 80)]}",
-                Mitigation = retryLevel >= 3
-                    ? "Add Layer1 pattern or pre-emptive tool execution for this query type"
-                    : "Enable stricter grounding verification for this domain",
-                SourceRun = Guid.NewGuid().ToString("N")[..8],
-                SourceStage = "l5_retry_escalation"
-            });
-            _logger.LogInformation("Self-healing: recorded lesson (severity={Sev}, L{Level})",
-                Math.Min(0.3f + retryLevel * 0.2f, 1.0f), retryLevel);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogDebug(ex, "Failed to record self-healing lesson");
-        }
-    }
-
-    private async Task<string?> ForceExecuteForRetryAsync(string query, CancellationToken ct)
-    {
-        // Force auto-search as last-resort data injection before retry
-        if (_toolRegistry.HasTool("web_search"))
-        {
-            try
-            {
-                var result = await _toolRegistry.InvokeAsync("web_search",
-                    new Dictionary<string, object?> { ["query"] = query, ["maxResults"] = 3 }, ct);
-                var text = result?.ToString();
-                if (!string.IsNullOrWhiteSpace(text) && text.Length > 50)
-                {
-                    var truncated = text.Length > 2000 ? text[..2000] : text;
-                    return $"【强制搜索】以下是为确保事实准确性而强制执行的搜索结果：\n{truncated}";
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogDebug(ex, "ForceExecuteForRetry web_search failed");
-            }
-        }
-
-        // Also try filesystem_list for relevant queries
-        if (_toolRegistry.HasTool("shell_exec") && query.Contains("文件"))
-        {
-            try
-            {
-                var result = await _toolRegistry.InvokeAsync("shell_exec",
-                    new Dictionary<string, object?> { ["command"] = query.Contains("目录") ? "ls -la" : "dir", ["workingDirectory"] = null! }, ct);
-                var text = result?.ToString();
-                if (!string.IsNullOrWhiteSpace(text) && text.Length > 10)
-                    return $"【强制命令执行】以下是为确保准确性而强制执行的命令结果：\n{text[..Math.Min(text.Length, 2000)]}";
-            }
-            catch (Exception ex)
-            {
-                _logger.LogDebug(ex, "ForceExecuteForRetry shell_exec failed");
-            }
-        }
-
-        return null;
-    }
-
-    private enum EscalationAction { Continue, Break, YieldAndBreak }
-
-    private sealed record EscalationResult(
-        EscalationAction Action,
-        List<string>? YieldChunks = null,
-        string? RetryMessage = null)
-    {
-        public static EscalationResult ContinueLoop(string msg) => new(EscalationAction.Continue, RetryMessage: msg);
-        public static EscalationResult BreakLoop => new(EscalationAction.Break);
-        public static EscalationResult YieldAndBreak(List<string> chunks) => new(EscalationAction.YieldAndBreak, YieldChunks: chunks);
-    }
-
-    private async Task<EscalationResult> EscalateGroundingFailure(
-        string query, int retryLevel, GroundingResult verification,
-        List<ChatMessage> messages, string? layer1Context, string? layer2Context,
-        string? autoSearchContext, string? responseText,
-        string? toolContextForVerification, CancellationToken ct)
-    {
-        var metaMetrics = _metaCognition.GetMetrics();
-
-        // CIPO online: at first grounding failure, L1 generates corrected answer direction
-        if (retryLevel == 1 && !string.IsNullOrWhiteSpace(responseText)
-            && !string.IsNullOrWhiteSpace(toolContextForVerification))
-        {
-            try
-            {
-                var ctxSnippet = toolContextForVerification.Length > 1500 ? toolContextForVerification[..1500] : toolContextForVerification;
-                var cipoPrompt = $"Tool data:\n{ctxSnippet}\n\nWrong answer:\n{responseText[..Math.Min(responseText.Length, 500)]}\n\nGenerate a brief corrected answer direction (1-2 sentences) based ONLY on the tool data:";
-                var cipoResult = await _llm.GetResponseAsync(cipoPrompt, new ChatOptions { ModelId = FlashModel, Temperature = 0.1f, MaxOutputTokens = 200, Tools = new List<AITool>() }, ct).ConfigureAwait(false);
-                var correction = cipoResult.Text?.Trim();
-                if (!string.IsNullOrWhiteSpace(correction))
-                    messages.Add(new ChatMessage(ChatRole.System,
-                        $"【CIPO在线纠正 - 仅修正错误部分】问题: {verification.Issue}\n正确方向: {correction}\n保留原有回答中正确的部分，只修正上述问题。"));
-            }
-            catch (Exception ex) { _logger.LogWarning(ex, "CIPO online correction generation failed"); }
-        }
-        var avgFamiliarity = metaMetrics.TryGetValue("avg_familiarity", out var af)
-            ? Convert.ToSingle(af) : 0.1f;
-        var erlSuccessRate = _erlLoop.SuccessRate;
-
-        // Blend ERL global success rate (actual outcomes) with MetaCog domain familiarity (learning).
-        // High ERL success → system is generally doing well → fewer retries needed.
-        // High familiarity → domain is well-known → fewer retries needed.
-        var blendedConfidence = (float)(avgFamiliarity * 0.6 + erlSuccessRate * 0.4);
-        var maxRetries = Math.Clamp((int)(6 - blendedConfidence * 5), 2, 5);
-
-        // Budget-aware cap: low budget → fewer retries, save resources
-        var budgetRatio = _bavtRouter.BudgetRatio;
-        if (budgetRatio < 0.5f) maxRetries = Math.Min(maxRetries, 3);
-        if (budgetRatio < 0.2f) maxRetries = Math.Min(maxRetries, 2);
-
-        var forceToolLevel = blendedConfidence < 0.3f ? 1 : 2;
-
-        _logger.LogWarning("Grounding check failed L{Level}/{Max}: {Issue} (type={Type}, fam={Fam:F2}, erl={ERL:F2}, budget={Bud:F2})",
-            retryLevel, maxRetries, verification.Issue, verification.CheckType, avgFamiliarity, erlSuccessRate, budgetRatio);
-
-        if (retryLevel >= maxRetries)
-        {
-            _metaCognition.RecordOutcome(query, false);
-            RecordSelfHealingLesson(query, retryLevel, verification.CheckType);
-
-            var allContext = new List<string>();
-            if (layer1Context != null) allContext.Add(layer1Context);
-            if (layer2Context != null) allContext.Add(layer2Context);
-            if (autoSearchContext != null) allContext.Add(autoSearchContext);
-
-            if (allContext.Count > 0)
-                return EscalationResult.YieldAndBreak(allContext);
-
-            allContext.Add(_prompts.Render("honest_fallback"));
-            return EscalationResult.YieldAndBreak(allContext);
-        }
-
-        if (retryLevel >= forceToolLevel)
-        {
-            var forcedContext = await ForceExecuteForRetryAsync(query, ct).ConfigureAwait(false);
-            if (forcedContext != null)
-                messages.Add(new ChatMessage(ChatRole.System, _prompts.Render("force_tool_exec", new Dictionary<string, string>
-                {
-                    ["level"] = retryLevel.ToString(),
-                    ["context"] = forcedContext
-                })));
-        }
-
-        var templateName = retryLevel >= maxRetries - 1 ? "grounding_failed_severe" : "grounding_failed";
-        return EscalationResult.ContinueLoop(_prompts.Render(templateName, new Dictionary<string, string>
-        {
-            ["level"] = retryLevel.ToString(),
-            ["check_type"] = verification.CheckType,
-            ["retry_instruction"] = verification.RetryInstruction ?? ""
-        }));
-    }
-
-    private static List<FunctionCallContent> ParseTextToolCalls(string text)
-    {
-        var calls = new List<FunctionCallContent>();
-        foreach (Match m in TextToolCall.Matches(text))
-        {
-            var toolName = m.Groups[1].Value;
-            var argsStr = m.Groups[2].Value;
-            var args = new Dictionary<string, object?>();
-
-            foreach (Match am in Regex.Matches(argsStr, @"(\w[\w_]*)=(""[^""]*""|[^\s】]+)"))
-            {
-                var key = am.Groups[1].Value;
-                var val = am.Groups[2].Value.Trim('"');
-                if (val is "null" or "null!") val = null;
-                args[key] = val;
-            }
-
-            var callId = $"text_{toolName}_{Guid.NewGuid():N}"[..64];
-            calls.Add(new FunctionCallContent(callId, toolName, args));
-        }
-        return calls;
-    }
-
-    private (List<ChatMessage> Messages, ChatOptions Options) BuildSystemMessages(
-        string model,
-        string? layer1Context, string? autoSearchContext, string? layer2Context,
-        string? metaContext, MetaCognitiveAssessment metaAssessment, string label,
-        int toolCount, string dateTag, string query,
-        List<AITool> selectedTools)
-    {
-        var messages = new List<ChatMessage>();
-        var options = new ChatOptions
-        {
-            ModelId = model,
-            Temperature = 0.3f,
-            MaxOutputTokens = 4096,
-            Tools = selectedTools
-        };
-
-        if (layer1Context != null)
-            messages.Add(new ChatMessage(ChatRole.System, layer1Context));
-        if (autoSearchContext != null)
-            messages.Add(new ChatMessage(ChatRole.System, autoSearchContext));
-        if (layer2Context != null)
-            messages.Add(new ChatMessage(ChatRole.System, layer2Context));
-
-        var allLayersEmpty = layer1Context == null && layer2Context == null && autoSearchContext == null;
-        if (allLayersEmpty && metaAssessment.ShouldDelegate && label != "fast" && label != "reflex")
-        {
-            messages.Add(new ChatMessage(ChatRole.System, _prompts.Render("all_layers_empty")));
-        }
-
-        var selCount = selectedTools.Count;
-        if (selCount > 0)
-        {
-            var toolNames = string.Join("、", selectedTools.Take(10).Select(t => t.Name));
-            if (layer1Context != null)
-            {
-                messages.Add(new ChatMessage(ChatRole.System, _prompts.Render("layer1_tool_summary", new Dictionary<string, string>
-                {
-                    ["tool_names"] = toolNames,
-                    ["tool_count"] = selCount.ToString()
-                })));
-            }
-            else
-            {
-                messages.Add(new ChatMessage(ChatRole.System, _prompts.Render("layer_tool_rules", new Dictionary<string, string>
-                {
-                    ["tool_names"] = toolNames,
-                    ["tool_count"] = selCount.ToString()
-                })));
-            }
-        }
-
-        if (metaContext != null)
-            messages.Add(new ChatMessage(ChatRole.System, metaContext));
-
-        messages.Add(new ChatMessage(ChatRole.User, $"{dateTag}\n{query}"));
-        return (messages, options);
-    }
-
     private async Task<bool> IsQueryAmbiguousAsync(string query, CancellationToken ct)
     {
         try
@@ -1496,98 +919,9 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
         }
     }
 
-    private async IAsyncEnumerable<string> LlmDecomposeAsync(
-        IChatClient llm, string task, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
-    {
-        var prompt = $"""
-            Break down the following task into numbered subtasks. Each subtask should be a single, actionable step.
-            Return ONLY the numbered list, one per line. No explanations.
-
-            Task: {task}
-            """;
-
-        List<string> results;
-        try
-        {
-            var response = await llm.GetResponseAsync(prompt, cancellationToken: ct).ConfigureAwait(false);
-            var text = response.Text ?? "";
-            results = new List<string>();
-
-            foreach (var line in text.Split('\n', StringSplitOptions.RemoveEmptyEntries))
-            {
-                var trimmed = line.Trim();
-                if (trimmed.Length > 5 && (char.IsDigit(trimmed[0]) || trimmed[0] == '-' || trimmed[0] == '*'))
-                    results.Add(trimmed);
-            }
-
-            if (results.Count == 0)
-                results.Add(task);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "LLM task decomposition failed, using original task");
-            results = new List<string> { task };
-        }
-
-        foreach (var result in results)
-            yield return result;
-    }
-
     public async ValueTask DisposeAsync()
     {
         await _workQueue.DisposeAsync().ConfigureAwait(false);
         GC.SuppressFinalize(this);
     }
-
-    private static string CompressToolResult(string raw, int maxLen = 4000)
-    {
-        if (raw.Length <= maxLen) return raw;
-
-        try
-        {
-            using var doc = JsonDocument.Parse(raw);
-            return CompressJsonElement(doc.RootElement, maxLen);
-        }
-        catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"JSON compression failed: {ex.Message}"); return raw[..maxLen]; }
-    }
-
-    private static string CompressJsonElement(JsonElement root, int maxLen)
-    {
-        var sb = new StringBuilder();
-        if (root.TryGetProperty("items", out var items))
-        {
-            sb.AppendLine($"count={items.GetArrayLength()}");
-            foreach (var item in items.EnumerateArray().Take(15))
-            {
-                var name = item.TryGetProperty("name", out var n) ? n.GetString() : "";
-                var title = item.TryGetProperty("title", out var t) ? t.GetString() : "";
-                var snippet = item.TryGetProperty("snippet", out var s) ? s.GetString() ?? "" : "";
-                var type = item.TryGetProperty("type", out var tp) ? tp.GetString() : "";
-                var size = item.TryGetProperty("size", out var sz) && sz.TryGetInt64(out var szVal) ? $"{szVal}B" : "";
-                var label = name + title;
-                if (label.Length > 0)
-                    sb.AppendLine($"- {label}{(size.Length > 0 ? $" ({size})" : "")}{(snippet.Length > 0 ? $": {snippet[..Math.Min(snippet.Length, 60)]}" : "")}");
-                if (sb.Length > maxLen) { sb.AppendLine("...(truncated)"); break; }
-            }
-        }
-        else if (root.TryGetProperty("results", out var results))
-        {
-            foreach (var r in results.EnumerateArray().Take(10))
-            {
-                var t = r.TryGetProperty("title", out var title) ? title.GetString() ?? "" : "";
-                if (t.Length > 0) sb.AppendLine($"- {t[..Math.Min(t.Length, 80)]}");
-            }
-        }
-        else if (root.TryGetProperty("stdout", out var stdout))
-        {
-            var s = stdout.GetString() ?? "";
-            sb.AppendLine(s[..Math.Min(s.Length, maxLen)]);
-        }
-        else
-        {
-            return root.ToString()[..maxLen];
-        }
-        return sb.ToString().Length <= maxLen ? sb.ToString() : sb.ToString()[..maxLen];
-    }
-
 }

@@ -293,7 +293,7 @@ public sealed class MctsAgentReasoner
     {
         try
         {
-            var docs = _agenticRAG.Search(node.State, RAGMode.Iterative, maxRounds: 1);
+            var docs = await _agenticRAG.SearchAsync(node.State, RAGMode.Iterative, maxRounds: 1).ConfigureAwait(false);
 
             var opts = new Prompting.PromptBuildOptions
             {

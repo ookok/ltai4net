@@ -41,7 +41,7 @@ public sealed class NestedRagLoop
         _logger = logger;
     }
 
-    public NestedRagResult Search(
+    public async Task<NestedRagResult> SearchAsync(
         string query, string domain = "general",
         int maxNestedRounds = 3, int subQueriesPerRound = 4)
     {
@@ -57,7 +57,7 @@ public sealed class NestedRagLoop
 
             foreach (var subQ in subQuestions)
             {
-                var sources = _agenticRAG.Search(subQ, RAGMode.Iterative, domain: domain);
+                var sources = await _agenticRAG.SearchAsync(subQ, RAGMode.Iterative, domain: domain).ConfigureAwait(false);
                 var confidence = sources.Count > 0
                     ? Math.Min(0.95, sources.Average(s => s.Score) * 2.0)
                     : 0.1;

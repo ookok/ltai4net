@@ -67,7 +67,7 @@ public sealed class SessionRagService
         var sessionContext = _structMemory.GetContextBlock(question, memoryEvents, memorySynthesis);
         opts.SessionContext = string.IsNullOrEmpty(sessionContext) ? null : sessionContext;
 
-        var longTermDocs = _agenticRAG.Search(question, RAGMode.Iterative, domain: opts.Domain ?? "general");
+        var longTermDocs = await _agenticRAG.SearchAsync(question, RAGMode.Iterative, domain: opts.Domain ?? "general").ConfigureAwait(false);
 
         // Pass REAL history to budget check (was previously empty list)
         var historyTokens = historyMessages.Sum(m => _contextBudget.EstimateTokens(
@@ -139,7 +139,7 @@ public sealed class SessionRagService
         var (memoryEvents, memorySynthesis) = await _structMemory.RetrieveForQuery(question).ConfigureAwait(false);
         opts.SessionContext = _structMemory.GetContextBlock(question, memoryEvents, memorySynthesis);
 
-        var longTermDocs = _agenticRAG.Search(question, RAGMode.Iterative, domain: opts.Domain ?? "general");
+        var longTermDocs = await _agenticRAG.SearchAsync(question, RAGMode.Iterative, domain: opts.Domain ?? "general").ConfigureAwait(false);
         var prompt = await _promptBuilder.BuildSinglePrompt(question, longTermDocs, opts).ConfigureAwait(false);
 
         var fullAnswer = "";

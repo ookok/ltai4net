@@ -27,8 +27,8 @@ public sealed class ContextProviderRouter
 
         var (mode, reason) = ClassifyMode(query, queryShape, opts);
 
-        var docs = _agenticRAG.Search(query, RAGMode.Iterative,
-            domain: opts.Domain ?? "general");
+        var docs = await _agenticRAG.SearchAsync(query, RAGMode.Iterative,
+            domain: opts.Domain ?? "general").ConfigureAwait(false);
 
         var retrievalQuality = ComputeRetrievalQuality(docs);
 

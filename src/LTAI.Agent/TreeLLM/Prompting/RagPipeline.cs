@@ -46,7 +46,7 @@ public sealed class RagPipeline
         var sw = Stopwatch.StartNew();
         var opts = options ?? PromptBuildOptions.Default;
 
-        var docs = _agenticRAG.Search(question, RAGMode.Iterative, domain: opts.Domain ?? "general");
+        var docs = await _agenticRAG.SearchAsync(question, RAGMode.Iterative, domain: opts.Domain ?? "general").ConfigureAwait(false);
 
         var prompt = await _promptBuilder.BuildSinglePrompt(question, docs, opts).ConfigureAwait(false);
 
@@ -80,7 +80,7 @@ public sealed class RagPipeline
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         var opts = options ?? PromptBuildOptions.Default;
-        var docs = _agenticRAG.Search(question, RAGMode.Iterative, domain: opts.Domain ?? "general");
+        var docs = await _agenticRAG.SearchAsync(question, RAGMode.Iterative, domain: opts.Domain ?? "general").ConfigureAwait(false);
         var prompt = await _promptBuilder.BuildSinglePrompt(question, docs, opts).ConfigureAwait(false);
 
         await foreach (var update in _chatClient.GetStreamingResponseAsync(prompt, cancellationToken: cancellationToken))

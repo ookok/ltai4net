@@ -61,8 +61,17 @@ public static class EntryPoint
 
         if (ltaiOptions.AI.Providers.Count == 0)
         {
-            ltaiOptions.AI.Providers["deepseek"] = new ProviderConfig { Endpoint = OptionService.Get("deepseek.endpoint") ?? "https://api.deepseek.com", Model = OptionService.Get("deepseek.model") ?? "deepseek-chat" };
-            Console.WriteLine("Providers loaded from config: deepseek");
+            ltaiOptions.AI.Providers["deepseek"] = new ProviderConfig
+            {
+                Endpoint = OptionService.Get("deepseek.endpoint") ?? "https://api.deepseek.com",
+                Model = OptionService.Get("deepseek.model") ?? "deepseek-v4-pro"
+            };
+            ltaiOptions.AI.Providers["deepseek-fast"] = new ProviderConfig
+            {
+                Endpoint = OptionService.Get("deepseek.fast.endpoint") ?? "https://api.deepseek.com",
+                Model = OptionService.Get("deepseek.fast.model") ?? "deepseek-v4-flash"
+            };
+            Console.WriteLine($"Providers loaded from config: deepseek({ltaiOptions.AI.Providers["deepseek"].Model}), deepseek-fast({ltaiOptions.AI.Providers["deepseek-fast"].Model})");
         }
 
         services.AddSingleton(Options.Create(ltaiOptions));

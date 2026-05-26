@@ -9,6 +9,7 @@ using LTAI.Core;
 using LTAI.Core.Configuration;
 using LTAI.DNA;
 using LTAI.Planning.Metrics;
+using LTAI.Knowledge.Core;
 using LTAI.Knowledge.Vector;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -53,7 +54,15 @@ public static class Program
         if (ltaiOptions.AI.Providers.Count == 0)
         {
             ltaiOptions.AI.Providers["deepseek"] = new ProviderConfig
-                { Endpoint = "https://api.deepseek.com", Model = "deepseek-chat" };
+            {
+                Endpoint = OptionService.Get("deepseek.endpoint") ?? "https://api.deepseek.com",
+                Model = OptionService.Get("deepseek.model") ?? "deepseek-v4-pro"
+            };
+            ltaiOptions.AI.Providers["deepseek-fast"] = new ProviderConfig
+            {
+                Endpoint = OptionService.Get("deepseek.fast.endpoint") ?? "https://api.deepseek.com",
+                Model = OptionService.Get("deepseek.fast.model") ?? "deepseek-v4-flash"
+            };
         }
 
         services.AddSingleton(Options.Create(ltaiOptions));

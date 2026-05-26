@@ -160,7 +160,7 @@ public sealed class KnowledgeGraphBridge
                        $"Reasoning: {teaching.ReasoningSteps}\n\n" +
                        $"Concepts: {teaching.KeyConcepts}\n\n" +
                        $"Explanation: {teaching.SimplifiedExplanation}";
-            return IngestWithJsonModeAsync(text).GetAwaiter().GetResult();
+            return Task.Run(() => IngestWithJsonModeAsync(text)).GetAwaiter().GetResult();
         }
 
         var triplets = ExtractTripletsFromTeaching(query, teaching);
@@ -175,7 +175,7 @@ public sealed class KnowledgeGraphBridge
 
         if (useJsonMode)
         {
-            return IngestWithJsonModeAsync(combinedText).GetAwaiter().GetResult();
+            return Task.Run(() => IngestWithJsonModeAsync(combinedText)).GetAwaiter().GetResult();
         }
 
         var triplets = KnowledgeGraph.ExtractTripletsRegex(combinedText);

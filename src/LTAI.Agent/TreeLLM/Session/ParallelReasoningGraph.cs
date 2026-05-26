@@ -208,7 +208,7 @@ public sealed class ParallelReasoningGraph
                 : "";
 
             var prompt = BuildNodePrompt(node.Task, parentContext, node.Depth);
-            var docs = _agenticRAG.Search(node.Task, RAGMode.Iterative, maxRounds: 2);
+            var docs = await _agenticRAG.SearchAsync(node.Task, RAGMode.Iterative, maxRounds: 2).ConfigureAwait(false);
 
             var builtPrompt = await _promptBuilder.BuildSinglePrompt(prompt, docs,
                 new Prompting.PromptBuildOptions

@@ -34,7 +34,7 @@ public sealed class PersonalModelEmulator
         if (!string.IsNullOrEmpty(preferenceBlock))
             parts.Add(preferenceBlock);
 
-        var knowledgeBlock = BuildKnowledgeBlock(currentQuery, opts);
+        var knowledgeBlock = await BuildKnowledgeBlock(currentQuery, opts).ConfigureAwait(false);
         if (!string.IsNullOrEmpty(knowledgeBlock))
             parts.Add(knowledgeBlock);
 
@@ -63,8 +63,8 @@ public sealed class PersonalModelEmulator
         var personalSystemPrompt = await BuildPersonalSystemPrompt(sessionId, question, perOpts).ConfigureAwait(false);
         promptOpts.SessionContext = (promptOpts.SessionContext ?? "") + "\n" + personalSystemPrompt;
 
-        var longTermDocs = _agenticRAG.Search(question, RAGMode.Iterative,
-            domain: promptOpts.Domain ?? "general");
+        var longTermDocs = await _agenticRAG.SearchAsync(question, RAGMode.Iterative,
+            domain: promptOpts.Domain ?? "general").ConfigureAwait(false);
 
         var (sysPrompt, userPrompt) = await _promptBuilder.BuildPrompt(question, longTermDocs, promptOpts).ConfigureAwait(false);
 
@@ -101,7 +101,7 @@ public sealed class PersonalModelEmulator
     private async Task<string> BuildPreferenceBlock(
         string sessionId, string query, PersonalModelOptions opts)
     {
-        var preferences = _agenticRAG.Search(query, domain: "preferences", maxRounds: 1);
+        var preferences = await _agenticRAG.SearchAsync(query, domain: "preferences", maxRounds: 1).ConfigureAwait(false);
         if (preferences.Count == 0) return "";
 
         var sb = new StringBuilder();
@@ -116,11 +116,11 @@ public sealed class PersonalModelEmulator
         return sb.ToString();
     }
 
-    private string BuildKnowledgeBlock(string query, PersonalModelOptions opts)
+    private async Task<string> BuildKnowledgeBlock(string query, PersonalModelOptions opts)
     {
         if (!opts.IncludeDomainKnowledge) return "";
 
-        var knowledgeDocs = _agenticRAG.Search(query, domain: "domain_knowledge", maxRounds: 2);
+        var knowledgeDocs = await _agenticRAG.SearchAsync(query, domain: "domain_knowledge", maxRounds: 2).ConfigureAwait(false);
         if (knowledgeDocs.Count == 0) return "";
 
         var sb = new StringBuilder();

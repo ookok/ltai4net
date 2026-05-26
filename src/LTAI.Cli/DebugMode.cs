@@ -15,6 +15,8 @@ using LTAI.Knowledge.Vector;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using LTAI.Knowledge.Core;
 using Spectre.Console;
 
 namespace LTAI.Cli;
@@ -50,7 +52,24 @@ internal static class DebugMode
             .Build();
 
         var services = new ServiceCollection();
-        services.Configure<LTAIOptions>(configuration.GetSection(LTAIOptions.SectionName));
+
+        var ltaiOptions = new LTAIOptions();
+        configuration.GetSection(LTAIOptions.SectionName).Bind(ltaiOptions);
+        if (ltaiOptions.AI.Providers.Count == 0)
+        {
+            ltaiOptions.AI.Providers["deepseek"] = new ProviderConfig
+            {
+                Endpoint = OptionService.Get("deepseek.endpoint") ?? "https://api.deepseek.com",
+                Model = OptionService.Get("deepseek.model") ?? "deepseek-v4-pro"
+            };
+            ltaiOptions.AI.Providers["deepseek-fast"] = new ProviderConfig
+            {
+                Endpoint = OptionService.Get("deepseek.fast.endpoint") ?? "https://api.deepseek.com",
+                Model = OptionService.Get("deepseek.fast.model") ?? "deepseek-v4-flash"
+            };
+        }
+        services.AddSingleton(Options.Create(ltaiOptions));
+
         services.AddLogging(b => b.AddConsole().SetMinimumLevel(LogLevel.Warning));
         services.AddLTAICore();
         services.AddLTAIVectorAuto();

@@ -98,7 +98,7 @@ public static class SseAgentEndpoints
                 var loop = sp.GetService<AgenticLoop>();
                 if (loop != null)
                 {
-                    _ = Task.Run(async () =>
+                    var t = Task.Run(async () =>
                     {
                         task.Status = "running";
                         task.UseAgenticLoop = true;
@@ -118,10 +118,15 @@ public static class SseAgentEndpoints
                             task.Complete();
                         }
                     });
+                    t.ContinueWith(t2 =>
+                    {
+                        if (t2.Exception != null)
+                            Console.Error.WriteLine($"SseAgent loop task faulted: {task.TaskId}: {t2.Exception}");
+                    }, TaskContinuationOptions.OnlyOnFaulted);
                 }
                 else if (system is not null)
                 {
-                    _ = Task.Run(async () =>
+                    var t = Task.Run(async () =>
                     {
                         task.Status = "running";
                         try
@@ -140,10 +145,15 @@ public static class SseAgentEndpoints
                             task.Complete();
                         }
                     });
+                    t.ContinueWith(t2 =>
+                    {
+                        if (t2.Exception != null)
+                            Console.Error.WriteLine($"SseAgent system task faulted: {task.TaskId}: {t2.Exception}");
+                    }, TaskContinuationOptions.OnlyOnFaulted);
                 }
                 else if (chatClient is not null)
                 {
-                    _ = Task.Run(async () =>
+                    var t = Task.Run(async () =>
                     {
                         task.Status = "running";
                         try
@@ -162,6 +172,11 @@ public static class SseAgentEndpoints
                             task.Complete();
                         }
                     });
+                    t.ContinueWith(t2 =>
+                    {
+                        if (t2.Exception != null)
+                            Console.Error.WriteLine($"SseAgent chatClient task faulted: {task.TaskId}: {t2.Exception}");
+                    }, TaskContinuationOptions.OnlyOnFaulted);
                 }
                 else
                 {

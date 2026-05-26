@@ -42,7 +42,7 @@ public class AgenticRAG
         _logger = logger ?? new NullLogger<AgenticRAG>();
     }
 
-    public List<KnowledgeSearchResult> Search(string query, RAGMode mode = RAGMode.Iterative,
+    public async Task<List<KnowledgeSearchResult>> SearchAsync(string query, RAGMode mode = RAGMode.Iterative,
         int maxRounds = 3, int maxTokens = 50000, string domain = "general")
     {
         var sw = Stopwatch.StartNew();
@@ -61,7 +61,7 @@ public class AgenticRAG
         {
             try
             {
-                results = _hybridRecall.SearchAsync(query, domain, maxRounds * 3).GetAwaiter().GetResult();
+                results = await _hybridRecall.SearchAsync(query, domain, maxRounds * 3).ConfigureAwait(false);
                 _logger.LogInformation("AgenticRAG: Hybrid recall returned {Count} results in {Ms}ms",
                     results.Count, sw.ElapsedMilliseconds);
             }

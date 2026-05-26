@@ -81,7 +81,7 @@ public sealed class RetrievalEvaluator
         List<int> kValues)
     {
         return Evaluate(
-            q => rag.Search(q, RAGMode.Iterative),
+            q => Task.Run(() => rag.SearchAsync(q, RAGMode.Iterative)).GetAwaiter().GetResult(),
             queries,
             kValues);
     }

@@ -16,7 +16,7 @@ public static class LTAIToolRegistry
     private static IServiceProvider? _serviceProvider;
 
     private static string LivingTreeDir =>
-        Path.Combine(OptionService.Get("LTAI_WORKSPACE") ?? Environment.CurrentDirectory, ".livingtree");
+        Path.Combine(OptionService.Get("LTAI_WORKSPACE") ?? Environment.CurrentDirectory, OptionService.Get("paths.DataDirectory") ?? ".livingtree");
 
     public static async Task SeedAllAsync(AIToolRegistry registry, IServiceProvider sp)
     {
@@ -1219,7 +1219,7 @@ created: {DateTime.UtcNow:yyyy-MM-dd}
                 var skillFile = Path.Combine(skillDir, "SKILL.md");
                 if (!File.Exists(skillFile))
                 {
-                    var globalSkillDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".livingtree", "skills", name);
+                    var globalSkillDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), OptionService.Get("paths.DataDirectory") ?? ".livingtree", "skills", name);
                     var globalSkillFile = Path.Combine(globalSkillDir, "SKILL.md");
                     if (!File.Exists(globalSkillFile)) return JsonToolResult.Success(new { error = $"Skill '{name}' not found in project or global skills" });
                     await File.AppendAllTextAsync(globalSkillFile, "\n\n" + body);
@@ -1235,8 +1235,8 @@ created: {DateTime.UtcNow:yyyy-MM-dd}
                 if (string.IsNullOrWhiteSpace(name)) return JsonToolResult.Success(new { error = "name parameter is required" });
                 var skillDir = Path.Combine(LivingTreeDir, "skills", name);
                 if (Directory.Exists(skillDir)) { Directory.Delete(skillDir, true); return JsonToolResult.Success(new { name, status = "deleted" }); }
-                var globalSkillDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".livingtree", "skills", name);
-                if (Directory.Exists(globalSkillDir)) { Directory.Delete(globalSkillDir, true); return JsonToolResult.Success(new { name, status = "deleted", location = "global" }); }
+                var globalSkillDir2 = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), OptionService.Get("paths.DataDirectory") ?? ".livingtree", "skills", name);
+                if (Directory.Exists(globalSkillDir2)) { Directory.Delete(globalSkillDir2, true); return JsonToolResult.Success(new { name, status = "deleted", location = "global" }); }
                 return JsonToolResult.Success(new { error = $"Skill '{name}' not found" });
             }),
         new("skill_explain", "Explain what a skill does by reading its SKILL.md body and providing a summary. Parameters: name (required)", "management",

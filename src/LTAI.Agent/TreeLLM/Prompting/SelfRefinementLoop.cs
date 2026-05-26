@@ -140,7 +140,7 @@ public sealed class SelfRefinementLoop
     private async Task<string> GenerateAsync(
         string problem, List<string> sources, RefinementConfig cfg)
     {
-        var docs = _agenticRAG.Search(problem, RAGMode.Iterative, maxRounds: 2, domain: "general");
+        var docs = await _agenticRAG.SearchAsync(problem, RAGMode.Iterative, maxRounds: 2, domain: "general").ConfigureAwait(false);
         foreach (var d in docs) sources.Add(d.Title ?? "");
 
         var opts = new PromptBuildOptions
@@ -177,7 +177,7 @@ public sealed class SelfRefinementLoop
         string problem, string currentSolution, string verification,
         List<Issue> issues, List<string> sources, RefinementConfig cfg)
     {
-        var docs = _agenticRAG.Search(problem, RAGMode.Iterative, maxRounds: 1, domain: "general");
+        var docs = await _agenticRAG.SearchAsync(problem, RAGMode.Iterative, maxRounds: 1, domain: "general").ConfigureAwait(false);
         foreach (var d in docs) sources.Add(d.Title ?? "");
 
         var refinePrompt = BuildRefinePrompt(problem, currentSolution, verification, issues);

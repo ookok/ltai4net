@@ -184,8 +184,8 @@ public sealed class KnowQLQueryService
         KnowQLQuery query, string? domain, KnowQLBudget budget, CancellationToken ct)
     {
         var fields = new List<KnowQLField>();
-        var searchResults = _agenticRAG.Search(query.Ask, RAGMode.Iterative,
-            domain: domain ?? "general");
+        var searchResults = await _agenticRAG.SearchAsync(query.Ask, RAGMode.Iterative,
+            domain: domain ?? "general").ConfigureAwait(false);
         var results = searchResults.Take(budget.MaxDepth).ToList();
 
         foreach (var result in results)

@@ -225,10 +225,16 @@ public sealed class SkillRegistry
 
     public SkillLayer? SuggestLayer(double successRate, int totalUses)
     {
-        if (totalUses < 3) return SkillLayer.L0;
-        if (totalUses < 10) return SkillLayer.L1;
-        if (successRate >= 0.85 && totalUses >= 50) return SkillLayer.L3;
-        if (successRate >= 0.7 && totalUses >= 10) return SkillLayer.L2;
+        var l1Uses = int.TryParse(OptionService.Get("suggestion_l1_uses"), out var v1) ? v1 : 3;
+        var l2Uses = int.TryParse(OptionService.Get("suggestion_l2_uses"), out var v2) ? v2 : 10;
+        var l2Rate = float.TryParse(OptionService.Get("suggestion_l2_rate"), out var r2) ? r2 : 0.7f;
+        var l3Uses = int.TryParse(OptionService.Get("suggestion_l3_uses"), out var v3) ? v3 : 50;
+        var l3Rate = float.TryParse(OptionService.Get("suggestion_l3_rate"), out var r3) ? r3 : 0.85f;
+
+        if (totalUses < l1Uses) return SkillLayer.L0;
+        if (totalUses < l2Uses) return SkillLayer.L1;
+        if (successRate >= l3Rate && totalUses >= l3Uses) return SkillLayer.L3;
+        if (successRate >= l2Rate && totalUses >= l2Uses) return SkillLayer.L2;
         return null;
     }
 

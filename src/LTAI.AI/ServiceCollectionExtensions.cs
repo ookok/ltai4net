@@ -695,6 +695,8 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<SystemGuardian>();
         services.AddSingleton<QueryPreprocessingService>();
         services.AddSingleton<GovernorSet>();
+        services.AddSingleton<ReActLoopOrchestrator>();
+        services.AddSingleton<ModelDispatchService>();
         services.AddSingleton<LivingTreeSystem>();
         services.AddSingleton<ILivingTreeSystem>(sp => sp.GetRequiredService<LivingTreeSystem>());
 

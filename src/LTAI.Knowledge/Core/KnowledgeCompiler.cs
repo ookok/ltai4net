@@ -182,7 +182,7 @@ public sealed class KnowledgeCompiler
         {
             var (name, type) = ParseFieldSpec(fieldSpec);
             var searchQuery = $"{taskDescription} {name} {domain}";
-            var searchResults = _agenticRAG.Search(searchQuery, RAGMode.Iterative, domain: domain);
+            var searchResults = await _agenticRAG.SearchAsync(searchQuery, RAGMode.Iterative, domain: domain).ConfigureAwait(false);
             var knResults = searchResults.ToList();
 
             if (knResults.Count == 0) continue;

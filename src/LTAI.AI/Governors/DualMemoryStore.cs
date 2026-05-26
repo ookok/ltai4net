@@ -146,7 +146,7 @@ public sealed class DualMemoryStore : IDisposable
     /// </summary>
     public void StoreEpisode(RawEpisode episode)
     {
-        StoreEpisodeAsync(episode).GetAwaiter().GetResult();
+        Task.Run(() => StoreEpisodeAsync(episode)).GetAwaiter().GetResult();
     }
 
     /// <summary>
@@ -222,7 +222,7 @@ public sealed class DualMemoryStore : IDisposable
     /// </summary>
     public List<RawEpisode> FindSimilarEpisodes(string query, string? domain = null, int limit = 10)
     {
-        return FindSimilarEpisodesAsync(query, domain, limit).GetAwaiter().GetResult();
+        return Task.Run(() => FindSimilarEpisodesAsync(query, domain, limit)).GetAwaiter().GetResult();
     }
 
     /// <summary>

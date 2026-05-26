@@ -229,8 +229,10 @@ public sealed class MemoryFilesService
             var stats = _knowledgeGraph.GetStats();
             if (stats is not Dictionary<string, object> dict) return MemoryMode.Files;
 
-            if (dict.TryGetValue("pi", out var piObj) && piObj is double pi)
+            if (dict.TryGetValue("predictability", out var predObj))
             {
+                var pred = (dynamic)predObj;
+                double pi = (double)pred.pi;
                 if (pi > 0.6)
                 {
                     _mode = _files.Count > 0 ? MemoryMode.Files : MemoryMode.Classic;

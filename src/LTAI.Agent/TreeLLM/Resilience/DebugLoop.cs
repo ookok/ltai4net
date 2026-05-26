@@ -182,6 +182,7 @@ public sealed class DebugLoop
     public DebugSession Debug(string target, string args, DebugLevel level = DebugLevel.SemiAuto,
         int maxAttempts = 3)
     {
+        // Debug-only sync wrapper: blocking is acceptable in debug/diagnostic paths
         return DebugAsync(target, args, level, maxAttempts).GetAwaiter().GetResult();
     }
 
