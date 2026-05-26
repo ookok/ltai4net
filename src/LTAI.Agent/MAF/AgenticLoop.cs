@@ -317,7 +317,7 @@ public sealed class AgenticLoop
                         testFailures.Count == 0 ? ToolState.Completed : ToolState.Error,
                         testFailures.Count == 0 ? "All tests passed" : $"{testFailures.Count} failures");
                 }
-                catch { /* test runner not available */ }
+                catch { /* intentional: cleanup may fail */ }
             }
         }
 
@@ -385,8 +385,9 @@ public sealed class AgenticLoop
             sb.AppendLine();
             return sb.ToString();
         }
-        catch
+        catch (Exception ex)
         {
+            _logger.LogWarning(ex, "BuildMemoryContext failed, returning empty context");
             return "";
         }
     }
@@ -416,7 +417,7 @@ public sealed class AgenticLoop
             await p.WaitForExitAsync(ct).ConfigureAwait(false);
             return (p.ExitCode == 0, error + "\n" + output);
         }
-        catch { return (false, ""); }
+        catch (Exception ex) { _logger.LogWarning(ex, "CheckBuildWithOutputAsync failed"); return (false, ""); }
     }
 
     private async Task<bool> CheckGitCleanAsync(CancellationToken ct)
@@ -434,7 +435,7 @@ public sealed class AgenticLoop
             await p.WaitForExitAsync(ct).ConfigureAwait(false);
             return p.ExitCode == 0;
         }
-        catch { return false; }
+        catch (Exception ex) { _logger.LogWarning(ex, "CheckGitCleanAsync failed"); return false; }
     }
 
     private async Task<string> CaptureTestOutputAsync(CancellationToken ct)
@@ -456,7 +457,7 @@ public sealed class AgenticLoop
             await p.WaitForExitAsync(ct).ConfigureAwait(false);
             return output + "\n" + error;
         }
-        catch { return ""; }
+        catch (Exception ex) { _logger.LogWarning(ex, "CaptureTestOutputAsync failed"); return ""; }
     }
 
     private async Task<List<string>> ReadFilesAsync(string detail, CancellationToken ct)

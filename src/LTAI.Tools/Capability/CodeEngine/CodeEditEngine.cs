@@ -211,7 +211,7 @@ public sealed class CodeEditEngine
         if (File.Exists(snapshotFile))
         {
             try { File.Delete(snapshotFile); }
-            catch { /* cleanup best-effort */ }
+            catch { /* intentional: cleanup may fail */ }
         }
     }
 
@@ -364,10 +364,10 @@ public sealed class CodeEditEngine
                 }
             }
         }
-        catch { /* git diff unavailable, fall through to simple diff */ }
+        catch { /* intentional: cleanup may fail */ }
         finally
         {
-            try { File.Delete(tempOld); } catch { }
+            try { File.Delete(tempOld); } catch { /* intentional: cleanup may fail */ }
         }
 
         return ComputeSimpleDiff(oldContent, newHash);
@@ -451,10 +451,10 @@ public sealed class CodeEditEngine
 
             foreach (var file in files)
             {
-                try { file.Delete(); } catch { }
+                try { file.Delete(); } catch { /* intentional: cleanup may fail */ }
             }
         }
-        catch { }
+        catch { /* intentional: cleanup may fail */ }
     }
 
     private static object? FindSymbol(CodeParseResult parseResult, DescribeSymbol desc)

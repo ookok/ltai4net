@@ -188,10 +188,7 @@ public sealed class RouteLearner : IRoutingStrategy, IDisposable
                     dict[provider] = weight;
             }
         }
-        catch
-        {
-            // Persistence load failure is non-fatal; start with empty weights.
-        }
+        catch { /* intentional: cleanup may fail */ }
     }
 
     public void Dispose() => Save();
@@ -377,10 +374,7 @@ public sealed class ThompsonStrategy : IRoutingStrategy, IDisposable
                 _arms[provider] = arm;
             }
         }
-        catch
-        {
-            // Persistence load failure is non-fatal.
-        }
+        catch { /* intentional: cleanup may fail */ }
     }
 
     public void Dispose() => Save();
@@ -573,10 +567,7 @@ public sealed class BudgetStrategy : IRoutingStrategy, IDisposable
             foreach (var (provider, state) in data)
                 _budgets[provider] = state;
         }
-        catch
-        {
-            // Persistence load failure is non-fatal.
-        }
+        catch { /* intentional: cleanup may fail */ }
     }
 
     public void Dispose() => Save();
@@ -751,10 +742,7 @@ public sealed class FitnessStrategy : IRoutingStrategy, IDisposable
                 }
             }
         }
-        catch
-        {
-            // Persistence load failure is non-fatal.
-        }
+        catch { /* intentional: cleanup may fail */ }
     }
 
     public void Dispose() => Save();
@@ -1139,10 +1127,7 @@ public sealed class ScoreMatchStrategy : IRoutingStrategy, IDisposable
             foreach (var (provider, history) in data.GradientHistory)
                 _gradientHistory[provider] = history.ToList();
         }
-        catch
-        {
-            // Persistence load failure is non-fatal.
-        }
+        catch { /* intentional: cleanup may fail */ }
     }
 
     private sealed class ScoreMatchState

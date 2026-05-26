@@ -112,7 +112,7 @@ public sealed class SkillPublisher : ISkillExchangeProvider
         }
         finally
         {
-            try { if (Directory.Exists(tempDir)) Directory.Delete(tempDir, true); } catch { }
+            try { if (Directory.Exists(tempDir)) Directory.Delete(tempDir, true); } catch { /* intentional: cleanup may fail */ }
         }
     }
 
@@ -190,7 +190,7 @@ public sealed class SkillPublisher : ISkillExchangeProvider
         }
         finally
         {
-            try { if (Directory.Exists(tempDir)) Directory.Delete(tempDir, true); } catch { }
+            try { if (Directory.Exists(tempDir)) Directory.Delete(tempDir, true); } catch { /* intentional: cleanup may fail */ }
         }
     }
 
@@ -296,7 +296,7 @@ public sealed class SkillPublisher : ISkillExchangeProvider
         }
         finally
         {
-            try { if (Directory.Exists(tempDir)) Directory.Delete(tempDir, true); } catch { }
+            try { if (Directory.Exists(tempDir)) Directory.Delete(tempDir, true); } catch { /* intentional: cleanup may fail */ }
         }
     }
 
@@ -380,7 +380,7 @@ public sealed class SkillPublisher : ISkillExchangeProvider
                     }
                     finally
                     {
-                        try { File.Delete(tempFile); } catch { }
+                        try { File.Delete(tempFile); } catch { /* intentional: cleanup may fail */ }
                     }
                 }
                 catch (Exception ex)
@@ -462,7 +462,7 @@ public sealed class SkillPublisher : ISkillExchangeProvider
         }
         catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested)
         {
-            try { proc.Kill(entireProcessTree: true); } catch { }
+            try { proc.Kill(entireProcessTree: true); } catch { /* intentional: cleanup may fail */ }
             throw new TimeoutException($"Git command timed out after {GitTimeoutMs}ms: git {sanitized}");
         }
 

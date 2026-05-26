@@ -141,7 +141,7 @@ internal sealed class BaiduMapService
                 };
             }
         }
-        catch { /* non-fatal */ }
+        catch (Exception ex) { _logger.LogWarning(ex, "Baidu reverse geocode failed"); }
         return null;
     }
 
@@ -169,7 +169,7 @@ internal sealed class BaiduMapService
                 }
             }
         }
-        catch { /* non-fatal */ }
+        catch (Exception ex) { _logger.LogWarning(ex, "Baidu POI search failed"); }
         return results;
     }
 
@@ -191,7 +191,7 @@ internal sealed class BaiduMapService
                 };
             }
         }
-        catch { /* non-fatal */ }
+        catch (Exception ex) { _logger.LogWarning(ex, "Baidu route failed"); }
         return null;
     }
 }
@@ -231,7 +231,7 @@ internal sealed class AmapService
                 };
             }
         }
-        catch { /* non-fatal */ }
+        catch (Exception ex) { _logger.LogWarning(ex, "Amap geocode failed"); }
         return null;
     }
 
@@ -256,7 +256,7 @@ internal sealed class AmapService
                 };
             }
         }
-        catch { /* non-fatal */ }
+        catch (Exception ex) { _logger.LogWarning(ex, "Amap reverse geocode failed"); }
         return null;
     }
 
@@ -291,7 +291,7 @@ internal sealed class AmapService
                 }
             }
         }
-        catch { /* non-fatal */ }
+        catch (Exception ex) { _logger.LogWarning(ex, "Amap POI search failed"); }
         return results;
     }
 
@@ -313,7 +313,7 @@ internal sealed class AmapService
                 };
             }
         }
-        catch { /* non-fatal */ }
+        catch (Exception ex) { _logger.LogWarning(ex, "Amap route failed"); }
         return null;
     }
 
@@ -339,7 +339,7 @@ internal sealed class AmapService
                 };
             }
         }
-        catch { /* non-fatal */ }
+        catch (Exception ex) { _logger.LogWarning(ex, "Amap weather failed"); }
         return null;
     }
 
@@ -357,7 +357,7 @@ internal sealed class AmapService
                 City = doc.RootElement.TryGetProperty("city", out var c) ? c.GetString() ?? "" : ""
             };
         }
-        catch { /* non-fatal */ }
+        catch (Exception ex) { _logger.LogWarning(ex, "Amap IP location failed"); }
         return null;
     }
 }
@@ -424,7 +424,7 @@ internal sealed class TencentMapService
                 };
             }
         }
-        catch { /* non-fatal */ }
+        catch (Exception ex) { _logger.LogWarning(ex, "Tencent reverse geocode failed"); }
         return null;
     }
 
@@ -475,7 +475,7 @@ internal sealed class TencentMapService
                 };
             }
         }
-        catch { /* non-fatal */ }
+        catch (Exception ex) { _logger.LogWarning(ex, "Tencent route failed"); }
         return null;
     }
 
@@ -516,7 +516,7 @@ internal sealed class TiandituService
                 };
             }
         }
-        catch { /* non-fatal */ }
+        catch (Exception ex) { _logger.LogWarning(ex, "Tianditu geocode failed"); }
         return null;
     }
 }

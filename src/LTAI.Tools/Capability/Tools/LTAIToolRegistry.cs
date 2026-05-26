@@ -6,6 +6,7 @@ using LTAI.Tools.CodeEngine;
 using LTAI.Tools.CodeGraph;
 using LTAI.Tools.Review;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using System.Text.Json;
 
 namespace LTAI.Tools.Tools;
@@ -14,6 +15,7 @@ public static class LTAIToolRegistry
 {
     private static bool _seeded;
     private static IServiceProvider? _serviceProvider;
+    private static ILogger? _logger;
 
     private static string LivingTreeDir =>
         Path.Combine(OptionService.Get("LTAI_WORKSPACE") ?? Environment.CurrentDirectory, OptionService.Get("paths.DataDirectory") ?? ".livingtree");
@@ -21,6 +23,7 @@ public static class LTAIToolRegistry
     public static async Task SeedAllAsync(AIToolRegistry registry, IServiceProvider sp)
     {
         _serviceProvider = sp;
+        _logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger("LTAI.Tools.Tools.LTAIToolRegistry");
         MdToolBridge.Initialize(sp);
         if (_seeded) return;
         _seeded = true;
@@ -105,7 +108,7 @@ public static class LTAIToolRegistry
                         results.Add(new { title = System.Net.WebUtility.HtmlDecode(linkMatches[i].Groups[2].Value.Trim()), url = System.Net.WebUtility.HtmlDecode(linkMatches[i].Groups[1].Value.Trim()), snippet = System.Net.WebUtility.HtmlDecode(snippetMatches[i].Groups[1].Value.Trim()) });
                     return JsonToolResult.Success(new { query, source = "DuckDuckGo", results });
                 }
-                catch { return JsonToolResult.Success(new { query, error = "Search failed", results }); }
+                catch (Exception ex) { _logger?.LogWarning(ex, "search: DuckDuckGo search failed"); return JsonToolResult.Success(new { query, error = "Search failed", results }); }
             }),
         new("search_apis", "Search 1400+ public APIs by keyword", "web",
             async args => { await PublicApisResource.Instance.LoadAsync(); var r = PublicApisResource.Instance.Search(Arg(args, "query")); return r; }),
@@ -137,7 +140,7 @@ public static class LTAIToolRegistry
                         results.Add(new { title = System.Net.WebUtility.HtmlDecode(links[i].Groups[2].Value.Trim()), url = System.Net.WebUtility.HtmlDecode(links[i].Groups[1].Value.Trim()), snippet = System.Net.WebUtility.HtmlDecode(snippets[i].Groups[1].Value.Trim()) });
                     return JsonToolResult.Success(new { query, platform = platform.Name, category = platform.Category, results });
                 }
-                catch { return JsonToolResult.Success(new { query, platform = platform.Name, error = "Search failed", results = new List<object>() }); }
+                catch (Exception ex) { _logger?.LogWarning(ex, "platform_search: search failed"); return JsonToolResult.Success(new { query, platform = platform.Name, error = "Search failed", results = new List<object>() }); }
             }),
 
         // ═══ Knowledge — 4 tools ═══
@@ -261,7 +264,7 @@ public static class LTAIToolRegistry
                     // Try resolving via direct type if assembly reflection fails
                     try { so = _serviceProvider?.GetService(
                         Type.GetType("LTAI.Infra.Sandbox.SandboxOrchestrator, LTAI.Infra")!); }
-                    catch { }
+                    catch (Exception ex) { _logger?.LogWarning(ex, "sandbox_exec: type resolution fallback failed"); }
                 }
                 if (so != null)
                 {
@@ -374,7 +377,7 @@ public static class LTAIToolRegistry
                     var graph = GetService<CodeGraphEnhanced>();
                     return await Task.FromResult<object?>(graph.GetStatus());
                 }
-                catch { return JsonToolResult.Success(new { status = "not_initialized", hint = "Call code_graph:index first" }); }
+                catch (Exception ex) { _logger?.LogWarning(ex, "code_graph:status: failed"); return JsonToolResult.Success(new { status = "not_initialized", hint = "Call code_graph:index first" }); }
             }),
 
         // Code Edit tools (surgical AST-aware edits with diff, validation, rollback)
@@ -554,7 +557,7 @@ public static class LTAIToolRegistry
                         if (arr.ValueKind == System.Text.Json.JsonValueKind.Array)
                             symbols = arr.EnumerateArray().Select(e => e.GetString() ?? "").Where(s => !string.IsNullOrEmpty(s)).ToList();
                     }
-                    catch { symbols = symbolsJson.Split(',', ';').Select(s => s.Trim()).Where(s => !string.IsNullOrEmpty(s)).ToList(); }
+                    catch (Exception ex) { _logger?.LogWarning(ex, "code_test:affected: JSON parse failed, falling back to string split"); symbols = symbolsJson.Split(',', ';').Select(s => s.Trim()).Where(s => !string.IsNullOrEmpty(s)).ToList(); }
 
                     var result = await harness.RunAffectedTestsAsync(
                         Arg(args, "path", Directory.GetCurrentDirectory()),
@@ -763,7 +766,7 @@ public static class LTAIToolRegistry
                 var entries = new List<object>();
                 if (File.Exists(Path.Combine(cloneDir, "package.json")))
                 {
-                    try { var json = System.Text.Json.JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(cloneDir, "package.json"))); if (json.RootElement.TryGetProperty("scripts", out var scripts)) foreach (var s in scripts.EnumerateObject()) entries.Add(new { name = s.Name, type = "npm_script" }); } catch { }
+                    try { var json = System.Text.Json.JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(cloneDir, "package.json"))); if (json.RootElement.TryGetProperty("scripts", out var scripts)) foreach (var s in scripts.EnumerateObject()) entries.Add(new { name = s.Name, type = "npm_script" }); } catch (Exception ex) { _logger?.LogWarning(ex, "cli_from_repo: package.json parse failed"); }
                 }
                 if (File.Exists(Path.Combine(cloneDir, "Makefile")))
                 {
@@ -821,11 +824,11 @@ public static class LTAIToolRegistry
                                     var proc = System.Diagnostics.Process.Start(psi);
                                     if (proc != null) { proc.WaitForExit(3000); var output = proc.StandardOutput.ReadToEnd().Trim(); if (!string.IsNullOrWhiteSpace(output)) found.Add(new { name, path = file, version = output.Split('\n')[0] }); }
                                 }
-                                catch { found.Add(new { name, path = file }); }
+                                catch (Exception ex) { _logger?.LogWarning(ex, "cli_scan_path: version probe failed for {File}", file); found.Add(new { name, path = file }); }
                             }
                         }
                     }
-                    catch { }
+                    catch (Exception ex) { _logger?.LogWarning(ex, "cli_scan_path: directory listing failed"); }
                 }
                 return JsonToolResult.Success(new { scanned_dirs = dirs.Count(), found_count = found.Count, filter, sample = found.Take(15) });
             }),
@@ -892,13 +895,13 @@ public static class LTAIToolRegistry
                         if (task is Task t) { await t; var result = t.GetType().GetProperty("Result")?.GetValue(t); if (result != null) return result; }
                     }
                 }
-                catch { }
+                catch (Exception ex) { _logger?.LogWarning(ex, "recall: StructMemory retrieval failed, falling back to file search"); }
                 var persistDir = Path.Combine(LivingTreeDir, "memories");
                 if (Directory.Exists(persistDir))
                 {
                     foreach (var file in Directory.GetFiles(persistDir, "*.json").Take(30))
                     {
-                        try { var json = await File.ReadAllTextAsync(file); var mem = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, object>>(json); if (mem != null && mem.TryGetValue("value", out var v) && v?.ToString()?.Contains(query, StringComparison.OrdinalIgnoreCase) == true) results.Add(mem); } catch { }
+                        try { var json = await File.ReadAllTextAsync(file); var mem = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, object>>(json); if (mem != null && mem.TryGetValue("value", out var v) && v?.ToString()?.Contains(query, StringComparison.OrdinalIgnoreCase) == true) results.Add(mem); } catch (Exception ex) { _logger?.LogWarning(ex, "recall: file read failed for {File}", file); }
                     }
                 }
                 return JsonToolResult.Success(new { query, results = results.Take(count), total = results.Count });
@@ -931,7 +934,7 @@ public static class LTAIToolRegistry
                 {
                     foreach (var file in Directory.GetFiles(persistDir, "*.json").Take(50))
                     {
-                        try { var json = await File.ReadAllTextAsync(file); var mem = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, object>>(json); if (mem != null) { var v = mem.TryGetValue("value", out var val) ? val?.ToString() : ""; results.Add(new { key = mem.GetValueOrDefault("key"), preview = v?[..Math.Min(120, v?.Length ?? 0)], bytes = json.Length }); } } catch { }
+                        try { var json = await File.ReadAllTextAsync(file); var mem = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, object>>(json); if (mem != null) { var v = mem.TryGetValue("value", out var val) ? val?.ToString() : ""; results.Add(new { key = mem.GetValueOrDefault("key"), preview = v?[..Math.Min(120, v?.Length ?? 0)], bytes = json.Length }); } } catch (Exception ex) { _logger?.LogWarning(ex, "list_memories: file read failed for {File}", file); }
                     }
                 }
                 return JsonToolResult.Success(new { total = results.Count, memories = results });
@@ -952,7 +955,7 @@ public static class LTAIToolRegistry
                         return JsonToolResult.Success(new { emotional_context = ctx, flashbulbs = fbs });
                     }
                 }
-                catch { }
+                catch (Exception ex) { _logger?.LogWarning(ex, "emotion_state: EmotionalMemory not available"); }
                 return JsonToolResult.Success(new { message = "Emotional memory not available" });
             }),
         new("persona_query", "Query the user persona model: traits, preferences, knowledge gaps. Parameters: query (optional, what aspect of persona to retrieve - traits/preferences/knowledge/domains/summary)", "memory",
@@ -972,7 +975,7 @@ public static class LTAIToolRegistry
                         return JsonToolResult.Success(new { aspect, context = ctx[..Math.Min(1000, ctx.Length)], stats });
                     }
                 }
-                catch { }
+                catch (Exception ex) { _logger?.LogWarning(ex, "persona_query: PersonaModel not available"); }
                 return JsonToolResult.Error("Persona model not available");
             }),
         new("mem_optimize", "Optimize and compress memory context using preference optimization. Parameters: context (required), max_tokens (optional, default 2000)", "memory",

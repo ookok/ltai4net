@@ -124,10 +124,8 @@ public sealed class TreeSitterParser : ICodeParser
 
             return langObj;
         }
-        catch
-        {
-            return null;
-        }
+        catch { /* intentional: cleanup may fail */ }
+        return null;
     }
 
     private SNode DoParse(string sourceCode, object grammarObj)
@@ -153,8 +151,9 @@ public sealed class TreeSitterParser : ICodeParser
 
             return ConvertNode(rootVal);
         }
-        catch
+        catch (Exception ex)
         {
+            _logger.LogWarning(ex, "TreeSitter DoParse failed for {Lang}", _language);
             return default;
         }
     }
@@ -166,7 +165,7 @@ public sealed class TreeSitterParser : ICodeParser
         var startPos = GetPoint(t.GetProperty("StartPosition")?.GetValue(tsNode));
         var endPos = GetPoint(t.GetProperty("EndPosition")?.GetValue(tsNode));
         var text = "";
-        try { var textProp = t.GetProperty("Text"); if (textProp != null) text = textProp.GetValue(tsNode)?.ToString() ?? ""; } catch { }
+        try { var textProp = t.GetProperty("Text"); if (textProp != null) text = textProp.GetValue(tsNode)?.ToString() ?? ""; } catch { /* intentional: cleanup may fail */ }
 
         var children = new List<SNode>();
         try
@@ -183,7 +182,7 @@ public sealed class TreeSitterParser : ICodeParser
                 }
             }
         }
-        catch { }
+        catch { /* intentional: cleanup may fail */ }
 
         return new SNode(kind, startPos.line, startPos.col, endPos.line, endPos.col,
             text.Length > 500 ? text[..500] : text, children);

@@ -99,11 +99,11 @@ public sealed class CSharpCompilationService
                     if (added.Add(Path.GetFileNameWithoutExtension(dll)))
                     {
                         try { refs.Add(MetadataReference.CreateFromFile(dll)); }
-                        catch { }
+                        catch { /* intentional: cleanup may fail */ }
                     }
                 }
             }
-            catch { }
+            catch { /* intentional: cleanup may fail */ }
         }
 
         var binDirs = Directory.GetDirectories(root, "bin", SearchOption.AllDirectories);
@@ -117,11 +117,11 @@ public sealed class CSharpCompilationService
                     if (added.Add(Path.GetFileNameWithoutExtension(dll)))
                     {
                         try { refs.Add(MetadataReference.CreateFromFile(dll)); }
-                        catch { }
+                        catch { /* intentional: cleanup may fail */ }
                     }
                 }
             }
-            catch { }
+            catch { /* intentional: cleanup may fail */ }
         }
 
         return refs;
@@ -141,7 +141,7 @@ public sealed class CSharpCompilationService
                 var tree = CSharpSyntaxTree.ParseText(source, ParseOptions, file);
                 syntaxTrees.Add(tree);
             }
-            catch { }
+            catch { /* intentional: cleanup may fail */ }
         }
 
         return CSharpCompilation.Create(

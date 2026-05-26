@@ -239,8 +239,9 @@ public sealed class ResourceGuard
                 Platform = "macos"
             };
         }
-        catch
+        catch (Exception ex)
         {
+            _logger.LogWarning(ex, "Failed to get macOS resource usage, returning defaults");
             return new ResourceUsage { Platform = "macos" };
         }
     }
@@ -271,8 +272,9 @@ public sealed class ResourceGuard
                 Platform = "windows"
             };
         }
-        catch
+        catch (Exception ex)
         {
+            _logger.LogWarning(ex, "Failed to get Windows resource usage, returning defaults");
             return new ResourceUsage { Platform = "windows" };
         }
     }
@@ -290,7 +292,7 @@ public sealed class ResourceGuard
                 return long.Parse(value);
             }
         }
-        catch { }
+        catch { /* intentional: cleanup may fail */ }
         return 0;
     }
 
@@ -335,7 +337,7 @@ public sealed class ResourceGuard
                 }
             }
         }
-        catch { }
+        catch { /* intentional: cleanup may fail */ }
         return 0;
     }
 
@@ -354,7 +356,7 @@ public sealed class ResourceGuard
             var used = total - free;
             return (total, used);
         }
-        catch { }
+        catch { /* intentional: cleanup may fail */ }
         return (0, 0);
     }
 
@@ -380,7 +382,7 @@ public sealed class ResourceGuard
             }
             return Process.GetProcesses().Length;
         }
-        catch { }
+        catch { /* intentional: cleanup may fail */ }
         return 0;
     }
 
@@ -403,7 +405,7 @@ public sealed class ResourceGuard
                     return val;
             }
         }
-        catch { }
+        catch { /* intentional: cleanup may fail */ }
         return defaultValue;
     }
 

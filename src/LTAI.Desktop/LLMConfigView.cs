@@ -10,6 +10,7 @@ using LTAI.Core.Configuration;
 using LTAI.Core.Governors;
 using LTAI.Core.Setup;
 using LTAI.Knowledge.Core;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace LTAI.Desktop;
@@ -57,11 +58,13 @@ public sealed class LLMConfigView : UserControl
     };
 
     private static readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(10) };
+    private static ILogger? _logger;
 
     public LLMConfigView(LTAIService svc)
     {
         _opts = ServiceLocator.Get<IOptions<LTAIOptions>>().Value;
         _providerReg = ServiceLocator.Get<IProviderRegistry>();
+        _logger = ServiceLocator.Get<ILoggerFactory>()?.CreateLogger<LLMConfigView>();
         var ai = _opts.AI;
 
         Background = LtaiTheme.Sbb(LtaiTheme.Bg);
@@ -325,8 +328,9 @@ public sealed class LLMConfigView : UserControl
                 : $"{provider} port {port} responded {(int)resp.StatusCode}";
             result.Foreground = LtaiTheme.Sbb(ok ? LtaiTheme.AccentSystem : LtaiTheme.AccentWarning);
         }
-        catch
+        catch (Exception ex)
         {
+            _logger?.LogWarning(ex, "TestLocalProviderEndpoint: {Provider} port {Port} probe failed", provider, port);
             result.Text = $"{provider} not running (port {port}). Click Start button.";
             result.Foreground = LtaiTheme.Sbb(LtaiTheme.AccentDanger);
         }
@@ -459,7 +463,7 @@ public sealed class LLMConfigView : UserControl
             return output.Split('\n').Any(line =>
                 line.TrimStart().StartsWith(modelName, StringComparison.OrdinalIgnoreCase));
         }
-        catch { return false; }
+        catch (Exception ex) { _logger?.LogWarning(ex, "IsModelLoaded: ollama list check failed for {Model}", modelName); return false; }
     }
 
     private static async Task<bool> LoadModelIntoOllamaAsync(string modelName, string modelPath)
@@ -494,10 +498,10 @@ public sealed class LLMConfigView : UserControl
             });
             if (proc == null) return false;
             await proc.WaitForExitAsync();
-            try { File.Delete(modelfile); } catch { }
+            try { File.Delete(modelfile); } catch { /* intentional: cleanup may fail */ }
             return proc.ExitCode == 0;
         }
-        catch { return false; }
+        catch (Exception ex) { _logger?.LogWarning(ex, "LoadModelIntoOllama: failed for {Model}", modelName); return false; }
     }
 
     private static async Task StopModelAsync(string modelName)
@@ -512,7 +516,7 @@ public sealed class LLMConfigView : UserControl
             });
             if (proc != null) await proc.WaitForExitAsync();
         }
-        catch { }
+        catch { /* intentional: cleanup may fail */ }
     }
 
     private static string EscapeArg(string arg)
@@ -804,13 +808,13 @@ public sealed class LLMConfigView : UserControl
         long ram = 0, vram = 0, disk = 0;
         int cpu = Environment.ProcessorCount;
         try { ram = GC.GetGCMemoryInfo().TotalAvailableMemoryBytes / (1024 * 1024); }
-        catch { ram = 8192; }
+        catch (Exception ex) { _logger?.LogWarning(ex, "DetectHardware: GC memory info failed, using default 8GB"); ram = 8192; }
         try
         {
             var drive = new DriveInfo(Path.GetPathRoot(AppContext.BaseDirectory) ?? "C:\\");
             disk = drive.AvailableFreeSpace / (1024 * 1024);
         }
-        catch { }
+        catch (Exception ex) { _logger?.LogWarning(ex, "DetectHardware: drive info failed"); }
         try
         {
             var proc = Process.Start(new ProcessStartInfo
@@ -829,7 +833,7 @@ public sealed class LLMConfigView : UserControl
                 proc.Dispose();
             }
         }
-        catch { }
+        catch (Exception ex) { _logger?.LogWarning(ex, "DetectHardware: nvidia-smi probe failed"); }
         return new HardwareInfo(ram, vram, cpu, disk);
     }
 
@@ -898,7 +902,7 @@ public sealed class LLMConfigView : UserControl
         if (envVar == null) return;
 
         Environment.SetEnvironmentVariable(envVar, key.Trim(), EnvironmentVariableTarget.Process);
-        try { Environment.SetEnvironmentVariable(envVar, key.Trim(), EnvironmentVariableTarget.User); } catch { }
+        try { Environment.SetEnvironmentVariable(envVar, key.Trim(), EnvironmentVariableTarget.User); } catch (Exception ex) { _logger?.LogWarning(ex, "SaveApiKey: User-level env var set failed for {Var}", envVar); }
     }
 
     private static void SetLayerConfig(LayerConfig cfg, string? provider, string? model, float? temperature)

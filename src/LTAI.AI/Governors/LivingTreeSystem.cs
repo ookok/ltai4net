@@ -415,7 +415,7 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
             _lastDreamCycleTrigger = DateTime.UtcNow;
             _workQueue.Enqueue(async ct =>
             {
-                try { if (_dreamCycle != null) await _dreamCycle.ForceReflectionAsync(); } catch { }
+                try { if (_dreamCycle != null) await _dreamCycle.ForceReflectionAsync(); } catch (Exception ex) { _logger.LogWarning(ex, "DreamCycle: trigger failed"); }
             }, "DreamCycle");
         }
 
@@ -431,14 +431,14 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
                     foreach (System.Text.RegularExpressions.Match m in entities.Take(5))
                         if (m.Value.Length > 2) _metaCognition.ReinforceDomain($"entity_{m.Value}", 0.01f);
                 }
-                catch { }
+                catch (Exception ex) { _logger.LogWarning(ex, "Reinforce: entity extraction failed"); }
             }, "KnowledgeGraphBuild");
 
         if (++_bgRequestCount % 50 == 49)
             _workQueue.Enqueue(async ct =>
             {
                 try { await _llm.GetResponseAsync("系统自检：总结最近运行状态", new ChatOptions { ModelId = FlashModel, Temperature = 0f, MaxOutputTokens = 64 }, ct); }
-                catch { }
+                catch (Exception ex) { _logger.LogWarning(ex, "SelfTest: adversarial self-test failed"); }
             }, "AdversarialSelfTest");
 
         if (!groundingFailed && finalResponse.Length > 50)
@@ -459,7 +459,7 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
         {
             var samples = _synapticMemory.GetTrainingSamples(maxCount: 50);
             if (samples.Count >= 20)
-                _workQueue.Enqueue(async ct => { try { await TriggerPeriodicTraining(); } catch { } }, "AutoLoRA");
+                _workQueue.Enqueue(async ct => { try { await TriggerPeriodicTraining(); } catch (Exception ex) { _logger.LogWarning(ex, "AutoLoRA: periodic training trigger failed"); } }, "AutoLoRA");
         }
 
         if (groundingFailed && label == "fast" && !layer1HighConfidence)
@@ -480,7 +480,7 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
                         Label = "session_memory", Confidence = w, Reward = w, Metadata = $"style={_personaStyle}"
                     });
                 }
-                catch { }
+                catch (Exception ex) { _logger.LogWarning(ex, "SessionMemory: store failed"); }
             }, "SessionMemory");
 
         if (erlRate < 0.4f && erlTotalTrials > 10)
@@ -517,7 +517,7 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
                         Label = "regression_test", Confidence = 0.3f, Reward = 0.1f, Metadata = $"retry={retryLevel}"
                     });
                 }
-                catch { }
+                catch (Exception ex) { _logger.LogWarning(ex, "RegressionTest: store failed"); }
             }, "RegressionTest");
 
         if (retryLevel >= 2) _personaStyle = "concise";
@@ -526,7 +526,7 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
             _workQueue.Enqueue(async ct =>
             {
                 try { await _dna.Consciousness.ProcessExperienceAsync($"CRASH: empty response L{retryLevel}. Q: '{query[..Math.Min(query.Length, 60)]}'", new Dictionary<string, object?>(), ct); }
-                catch { }
+                catch (Exception ex) { _logger.LogWarning(ex, "SelfRepair: DNA experience processing failed"); }
             }, "SelfRepair");
 
         if (!groundingFailed && pre.PatternToolName == "shell_exec" && layer1Context != null)
@@ -547,7 +547,7 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
         if (_evolutionStore != null && _requestCount % 100 == 0)
             _workQueue.Enqueue(async ct =>
             {
-                try { var lessons = _evolutionStore.GetActiveLessons(10); } catch { }
+                try { var lessons = _evolutionStore.GetActiveLessons(10); } catch (Exception ex) { _logger.LogWarning(ex, "Federation: lesson retrieval failed"); }
             }, "Federated");
 
         if (_requestCount % 200 == 0 && _evolutionStore != null)
@@ -564,7 +564,7 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
                             Summary = $"Review: {high.Count} critical", SourceStage = "self_evolution"
                         });
                 }
-                catch { }
+                catch (Exception ex) { _logger.LogWarning(ex, "MetaAssess: evolution assessment failed"); }
             }, "SelfEvolution");
 
         if (!groundingFailed && finalResponse.Length > 300 && totalToolCalls >= 2)
@@ -574,7 +574,7 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
             {
                 _ = Task.Run(async () =>
                 {
-                    try { await _parliamentBridge.DeliberateAsync(query, finalResponse); } catch { }
+                    try { await _parliamentBridge.DeliberateAsync(query, finalResponse); } catch (Exception ex) { _logger.LogWarning(ex, "Parliament: deliberation failed"); }
                 });
             }
         }
@@ -586,7 +586,7 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
             yield return "\n\n> 置信度: 高 | 格式建议: 结构化表格";
 
         if (_requestCount % 500 == 0 && _prompts is not null)
-            _workQueue.Enqueue(async ct => { try { _prompts.Reload(); } catch { } }, "PromptEvolution");
+            _workQueue.Enqueue(async ct => { try { _prompts.Reload(); } catch (Exception ex) { _logger.LogWarning(ex, "PromptEvolution: reload failed"); } }, "PromptEvolution");
 
         if (query.Contains("换个角度") || query.Contains("另一个角度"))
             _workQueue.Enqueue(async ct =>
@@ -599,7 +599,7 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
                         Label = "fork_branch", Confidence = 0.7f, Reward = 0.7f, Metadata = $"ctx={_gov.Context.CompressHistory()[..Math.Min(_gov.Context.CompressHistory().Length, 200)]}"
                     });
                 }
-                catch { }
+                catch (Exception ex) { _logger.LogWarning(ex, "Fork: store failed"); }
             }, "Fork");
 
         if (finalResponse.Length > 500 && !groundingFailed)

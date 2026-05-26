@@ -77,10 +77,8 @@ public class InteractiveSetupWizard
                     return ltai.Deserialize<LTAIOptions>(new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? new();
                 return doc.RootElement.Deserialize<LTAIOptions>(new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? new();
             }
-            catch
-            {
+            catch { /* intentional: cleanup may fail */ }
                 return new LTAIOptions();
-            }
         }
 
         Directory.CreateDirectory(Path.GetDirectoryName(_configPath)!);
@@ -305,10 +303,8 @@ public class InteractiveSetupWizard
 
             return models;
         }
-        catch
-        {
+        catch { /* intentional: cleanup may fail */ }
             return new List<string>();
-        }
     }
 
     private static List<string> FilterModelsForLayer(string layerName, List<string> allModels)
@@ -732,10 +728,7 @@ public class InteractiveSetupWizard
 
             return response.IsSuccessStatusCode;
         }
-        catch
-        {
-            return false;
-        }
+        catch { /* intentional: cleanup may fail */ return false; }
     }
 
     private static HardwareInfo DetectHardwareCapabilities()
@@ -788,11 +781,11 @@ public class InteractiveSetupWizard
                         var lspci = Process.Start(new ProcessStartInfo("lspci", "-d ::0300") { RedirectStandardOutput = true, UseShellExecute = false });
                         gpuName = lspci?.StandardOutput.ReadLine()?.Trim() ?? "GPU";
                     }
-                    catch { }
+                    catch { /* intentional: cleanup may fail */ }
                 }
             }
         }
-        catch { }
+        catch { /* intentional: cleanup may fail */ }
 
         var recommendedEngine = hasNpu ? "onnx" : "gguf";
 

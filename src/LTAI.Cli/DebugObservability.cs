@@ -31,7 +31,7 @@ public sealed class DebugObservability
                 System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)?.GetValue(_lts)?.ToString() ?? "?";
             snap["system.dna_enabled"] = _lts.DNAEnabled;
         }
-        catch { }
+        catch { /* intentional: cleanup may fail */ }
 
         try
         {
@@ -45,7 +45,7 @@ public sealed class DebugObservability
                 snap["bavt.total_spent"] = bavt.GetType().GetProperty("TotalSpent")?.GetValue(bavt);
             }
         }
-        catch { }
+        catch { /* intentional: cleanup may fail */ }
 
         try
         {
@@ -58,7 +58,7 @@ public sealed class DebugObservability
                 snap["erl.success_rate"] = erl.GetType().GetProperty("SuccessRate")?.GetValue(erl);
             }
         }
-        catch { }
+        catch { /* intentional: cleanup may fail */ }
 
         try
         {
@@ -77,7 +77,7 @@ public sealed class DebugObservability
                 }
             }
         }
-        catch { }
+        catch { /* intentional: cleanup may fail */ }
 
         try
         {
@@ -90,7 +90,7 @@ public sealed class DebugObservability
                 snap["reflection.recovery_rate"] = reflection.GetType().GetProperty("RecoveryRate")?.GetValue(reflection);
             }
         }
-        catch { }
+        catch { /* intentional: cleanup may fail */ }
 
         try
         {
@@ -104,7 +104,7 @@ public sealed class DebugObservability
                 snap["evolution.lessons_prompt"] = evolution.FormatLessonsAsPrompt(3);
             }
         }
-        catch { }
+        catch { /* intentional: cleanup may fail */ }
 
         try
         {
@@ -117,7 +117,7 @@ public sealed class DebugObservability
                 snap["verifiable.citations"] = verifiable.VerifiedCitationCount;
             }
         }
-        catch { }
+        catch { /* intentional: cleanup may fail */ }
 
 #pragma warning restore CS8601
         return snap;

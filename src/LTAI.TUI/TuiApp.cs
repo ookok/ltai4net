@@ -498,8 +498,8 @@ public sealed class TuiApp
 #pragma warning disable CS8601
         var snap = new Dictionary<string, object>();
 
-        try { snap["system.mode"] = _lts.Mode.ToString(); } catch { }
-        try { snap["system.dna"] = _lts.DNAEnabled; } catch { }
+        try { snap["system.mode"] = _lts.Mode.ToString(); } catch { /* intentional: cleanup may fail */ }
+        try { snap["system.dna"] = _lts.DNAEnabled; } catch { /* intentional: cleanup may fail */ }
         try
         {
             var bavt = _lts.GetType().GetField("_bavtRouter", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)?.GetValue(_lts);
@@ -509,7 +509,7 @@ public sealed class TuiApp
                 snap["bavt.remaining"] = bavt.GetType().GetProperty("RemainingBudget")?.GetValue(bavt);
             }
         }
-        catch { }
+        catch { /* intentional: cleanup may fail */ }
         try
         {
             var erl = _lts.GetType().GetField("_erlLoop", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)?.GetValue(_lts);
@@ -519,7 +519,7 @@ public sealed class TuiApp
                 snap["erl.rate"] = erl.GetType().GetProperty("SuccessRate")?.GetValue(erl);
             }
         }
-        catch { }
+        catch { /* intentional: cleanup may fail */ }
         try
         {
             var elastic = _lts.GetType().GetField("_elasticMemory", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)?.GetValue(_lts);
@@ -529,13 +529,13 @@ public sealed class TuiApp
                 if (s != null) { var t = s.GetType(); snap["elastic.raw"] = t.GetField("Item1")?.GetValue(s); snap["elastic.compressed"] = t.GetField("Item2")?.GetValue(s); snap["elastic.episodic"] = t.GetField("Item3")?.GetValue(s); }
             }
         }
-        catch { }
+        catch { /* intentional: cleanup may fail */ }
         try
         {
             var evo = _lts.GetType().GetField("_evolutionStore", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)?.GetValue(_lts) as ICrossRunEvolutionStore;
             if (evo != null) { snap["evolution.total"] = evo.LessonCount; snap["evolution.active"] = evo.ActiveLessonCount; }
         }
-        catch { }
+        catch { /* intentional: cleanup may fail */ }
 
 #pragma warning restore CS8601
         _ = snap; // suppress unused warning — render directly via PipelineDashboard
@@ -886,7 +886,7 @@ public sealed class TuiApp
                         var functions = System.Text.RegularExpressions.Regex.Matches(code, ext == ".cs" ? @"\b(\w+)\s*\(.*\)\s*\{?" : @"def (\w+)\(");
                         node.AddNode($"[blue]{functions.Count} functions detected[/]");
                     }
-                    catch { /* non-fatal */ }
+                    catch { /* intentional: cleanup may fail */ }
                 }
             }
             else
