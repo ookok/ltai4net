@@ -21,6 +21,33 @@ public sealed class MdEditorView : UserControl
     private Button? _saveBtn;
     private readonly DispatcherTimer _previewTimer;
     private string? _currentFile;
+    private bool _isCodeFile;
+    private string _detectedLanguage = "plaintext";
+
+    private static readonly HashSet<string> CodeExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".cs", ".csproj", ".csx", ".py", ".js", ".ts", ".tsx", ".jsx",
+        ".go", ".rs", ".java", ".kt", ".swift", ".c", ".cpp", ".h", ".hpp",
+        ".php", ".rb", ".vue", ".svelte", ".html", ".css", ".scss",
+        ".json", ".xml", ".yaml", ".yml", ".toml", ".sh", ".ps1",
+        ".sql", ".graphql", ".proto", ".dockerfile", ".env", ".gitignore"
+    };
+
+    private static readonly Dictionary<string, string> LanguageMap = new(StringComparer.OrdinalIgnoreCase)
+    {
+        [".cs"] = "C#", [".csproj"] = "MSBuild", [".csx"] = "C# Script",
+        [".py"] = "Python", [".js"] = "JavaScript", [".ts"] = "TypeScript",
+        [".tsx"] = "TSX", [".jsx"] = "JSX", [".go"] = "Go",
+        [".rs"] = "Rust", [".java"] = "Java", [".kt"] = "Kotlin",
+        [".swift"] = "Swift", [".c"] = "C", [".cpp"] = "C++",
+        [".h"] = "C/C++ Header", [".hpp"] = "C++ Header",
+        [".php"] = "PHP", [".rb"] = "Ruby", [".vue"] = "Vue",
+        [".svelte"] = "Svelte", [".html"] = "HTML", [".css"] = "CSS",
+        [".scss"] = "SCSS", [".json"] = "JSON", [".xml"] = "XML",
+        [".yaml"] = "YAML", [".yml"] = "YAML", [".toml"] = "TOML",
+        [".sh"] = "Shell", [".ps1"] = "PowerShell", [".sql"] = "SQL",
+        [".graphql"] = "GraphQL", [".proto"] = "Protobuf"
+    };
 
     public MdEditorView()
     {
@@ -231,6 +258,8 @@ public sealed class MdEditorView : UserControl
         WalkDir("tools", "Tools");
         WalkDir("memory", "Memory");
         WalkDir("config", "Config");
+
+        WalkCodeDir("src", "Source Code");
     }
 
     private void WalkDir(string relPath, string label)
@@ -265,6 +294,42 @@ public sealed class MdEditorView : UserControl
         }
     }
 
+    private void WalkCodeDir(string relPath, string label)
+    {
+        var absPath = Path.Combine(_workspaceRoot, relPath);
+        if (!Directory.Exists(absPath)) return;
+        var rootItem = new TreeViewItem { Header = label, IsExpanded = false };
+        AddCodeDirectory(rootItem, absPath);
+        _fileTree.Items.Add(rootItem);
+    }
+
+    private static void AddCodeDirectory(TreeViewItem parent, string dir, int depth = 0)
+    {
+        if (depth > 4) return;
+
+        foreach (var subDir in Directory.GetDirectories(dir).OrderBy(Path.GetFileName))
+        {
+            var name = Path.GetFileName(subDir);
+            if (name.StartsWith('.') || name is "obj" or "bin" or "node_modules" or "dist") continue;
+            var item = new TreeViewItem { Header = name };
+            AddCodeDirectory(item, subDir, depth + 1);
+            if (item.Items.Count > 0 || Directory.GetFiles(subDir).Any(f => CodeExtensions.Contains(Path.GetExtension(f))))
+                parent.Items.Add(item);
+        }
+
+        foreach (var file in Directory.GetFiles(dir).OrderBy(Path.GetFileName))
+        {
+            var ext = Path.GetExtension(file);
+            if (!CodeExtensions.Contains(ext)) continue;
+            var item = new TreeViewItem
+            {
+                Header = Path.GetFileName(file),
+                Tag = file
+            };
+            parent.Items.Add(item);
+        }
+    }
+
     private async void OnFileTreeDoubleTapped(object? sender, RoutedEventArgs e)
     {
         var item = _fileTree.SelectedItem as TreeViewItem;
@@ -279,10 +344,29 @@ public sealed class MdEditorView : UserControl
         try
         {
             var content = await File.ReadAllTextAsync(path);
+            var ext = Path.GetExtension(path);
+            _isCodeFile = CodeExtensions.Contains(ext);
+            _detectedLanguage = LanguageMap.GetValueOrDefault(ext, ext.Length > 0 ? ext.TrimStart('.').ToUpper() : "plaintext");
+
+            if (_isCodeFile)
+            {
+                _editor.FontFamily = new("Cascadia Code, Consolas, monospace");
+                _editor.Foreground = LtaiTheme.Sbb(LtaiTheme.TextPrimary);
+                _editor.Background = LtaiTheme.Sbb(Color.Parse("#0a0e14"));
+                _editor.TextWrapping = TextWrapping.NoWrap;
+            }
+            else
+            {
+                _editor.FontFamily = new("Consolas");
+                _editor.Foreground = LtaiTheme.Sbb(LtaiTheme.TextPrimary);
+                _editor.Background = LtaiTheme.Sbb(Color.Parse("#0d1117"));
+                _editor.TextWrapping = TextWrapping.Wrap;
+            }
+
             _editor.Text = content;
             _currentFile = path;
             _saveBtn.IsEnabled = true;
-            _statusBar.Text = Path.GetFileName(path);
+            UpdateStatusForCurrentFile();
             RefreshPreview();
         }
         catch (Exception ex)
@@ -291,12 +375,22 @@ public sealed class MdEditorView : UserControl
         }
     }
 
+    private void UpdateStatusForCurrentFile()
+    {
+        if (_currentFile == null) return;
+        var fileName = Path.GetFileName(_currentFile);
+        var lines = _editor.Text?.Count(c => c == '\n') + 1 ?? 0;
+        var lang = _isCodeFile ? $" | {_detectedLanguage}" : " | Markdown";
+        _statusBar.Text = $"{fileName} | {lines} lines{lang}";
+    }
+
     private async Task SaveFileAsync()
     {
         if (_currentFile == null || !_editor.IsEnabled) return;
         try
         {
             await File.WriteAllTextAsync(_currentFile, _editor.Text);
+            UpdateStatusForCurrentFile();
             _statusBar.Text = $"Saved: {Path.GetFileName(_currentFile)}";
         }
         catch (Exception ex)
@@ -330,6 +424,12 @@ public sealed class MdEditorView : UserControl
             return;
         }
 
+        if (_isCodeFile)
+        {
+            RenderCodePreview(text);
+            return;
+        }
+
         var stb = new SelectableTextBlock
         {
             Foreground = LtaiTheme.Sbb(LtaiTheme.TextPrimary),
@@ -338,6 +438,72 @@ public sealed class MdEditorView : UserControl
         };
         MarkdownRenderer.Render(text, stb.Inlines!);
         _previewPanel.Children.Add(stb);
+    }
+
+    private void RenderCodePreview(string text)
+    {
+        var lines = text.Split('\n');
+        var totalLines = lines.Length;
+        var totalChars = text.Length;
+        var blankLines = lines.Count(l => string.IsNullOrWhiteSpace(l));
+
+        var header = new TextBlock
+        {
+            Text = $"Code Preview: {_detectedLanguage}",
+            Foreground = LtaiTheme.Sbb(LtaiTheme.AccentDNA),
+            FontSize = 14,
+            FontWeight = FontWeight.Bold,
+            Margin = new(0, 0, 0, 8)
+        };
+
+        var fileInfo = new TextBlock
+        {
+            Text = $"File: {Path.GetFileName(_currentFile ?? "untitled")}",
+            Foreground = LtaiTheme.Sbb(LtaiTheme.TextSecondary),
+            FontSize = 12,
+            TextWrapping = TextWrapping.Wrap
+        };
+
+        var stats = new StackPanel { Spacing = 2, Margin = new(0, 4, 0, 0) };
+        stats.Children.Add(new TextBlock { Text = $"{totalChars:N0} characters", Foreground = LtaiTheme.Sbb(LtaiTheme.TextDim), FontSize = 11 });
+        stats.Children.Add(new TextBlock { Text = $"{totalLines:N0} lines", Foreground = LtaiTheme.Sbb(LtaiTheme.TextDim), FontSize = 11 });
+        stats.Children.Add(new TextBlock { Text = $"{blankLines:N0} blank lines", Foreground = LtaiTheme.Sbb(LtaiTheme.TextDim), FontSize = 11 });
+
+        var outlineText = $"namespace {ExtractNamespace(text) ?? "—"}\n" +
+                          $"classes: {ExtractClasses(text)}  methods: {ExtractMethods(text)}";
+
+        var outline = new TextBlock
+        {
+            Text = outlineText,
+            Foreground = LtaiTheme.Sbb(LtaiTheme.TextSecondary),
+            FontFamily = new("Consolas"),
+            FontSize = 12,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new(0, 8, 0, 0)
+        };
+
+        _previewPanel.Children.Add(header);
+        _previewPanel.Children.Add(fileInfo);
+        _previewPanel.Children.Add(stats);
+        _previewPanel.Children.Add(new Border { Height = 1, Background = LtaiTheme.Sbb(LtaiTheme.Border), Margin = new(0, 6) });
+        _previewPanel.Children.Add(outline);
+    }
+
+    private static string? ExtractNamespace(string text)
+    {
+        var match = System.Text.RegularExpressions.Regex.Match(text, @"namespace\s+([\w.]+)");
+        return match.Success ? match.Groups[1].Value : null;
+    }
+
+    private static int ExtractClasses(string text)
+    {
+        return System.Text.RegularExpressions.Regex.Matches(text, @"\b(?:class|struct|record|interface|enum)\s+\w+").Count;
+    }
+
+    private static int ExtractMethods(string text)
+    {
+        return System.Text.RegularExpressions.Regex.Matches(text,
+            @"\b(?:public|private|protected|internal|static|async|virtual|override|abstract|sealed)\s+(?:static\s+)?(?:async\s+)?[\w<>\[\],\s]+\s+(\w+)\s*\(").Count;
     }
 
     private void OnNewFile(object? sender, RoutedEventArgs e)
@@ -454,6 +620,45 @@ public sealed class MdEditorView : UserControl
             "## tags\n" +
             "- config\n")));
 
+        flyout.Items.Add(new MenuItem { Header = "-" });
+
+        flyout.Items.Add(CreateNewMenuItem("C# File", _ => CreateNewCodeFile("src", ".cs",
+            "namespace LTAI;\n" +
+            "\n" +
+            "public sealed class NewClass\n" +
+            "{\n" +
+            "    public void DoSomething()\n" +
+            "    {\n" +
+            "    }\n" +
+            "}\n")));
+
+        flyout.Items.Add(CreateNewMenuItem("Python File", _ => CreateNewCodeFile("src", ".py",
+            "#!/usr/bin/env python3\n" +
+            "\"\"\"Module description.\"\"\"\n" +
+            "\n" +
+            "\n" +
+            "def main():\n" +
+            "    pass\n" +
+            "\n" +
+            "\n" +
+            "if __name__ == \"__main__\":\n" +
+            "    main()\n")));
+
+        flyout.Items.Add(CreateNewMenuItem("TypeScript File", _ => CreateNewCodeFile("src", ".ts",
+            "export interface Options {\n" +
+            "    name: string;\n" +
+            "}\n" +
+            "\n" +
+            "export function main(options: Options): void {\n" +
+            "    console.log(options.name);\n" +
+            "}\n")));
+
+        flyout.Items.Add(CreateNewMenuItem("JSON Config", _ => CreateNewCodeFile("config", ".json",
+            "{\n" +
+            "    \"name\": \"example\",\n" +
+            "    \"version\": \"1.0.0\"\n" +
+            "}\n")));
+
         if (sender is Button btn)
             flyout.ShowAt(btn);
     }
@@ -547,5 +752,89 @@ public sealed class MdEditorView : UserControl
         await OpenFileAsync(filePath);
         PopulateFileTree();
         _statusBar.Text = $"Created: {name}.md";
+    }
+
+    private async void CreateNewCodeFile(string relDir, string extension, string template)
+    {
+        var dialog = new TextBox
+        {
+            Watermark = $"Enter file name (without {extension})",
+            FontFamily = new("Consolas"),
+            FontSize = 13,
+            Foreground = LtaiTheme.Sbb(LtaiTheme.TextPrimary),
+            Background = LtaiTheme.Sbb(LtaiTheme.BgInput),
+            MinWidth = 300
+        };
+
+        var panel = new StackPanel { Spacing = 8, Margin = new(12) };
+        panel.Children.Add(new TextBlock
+        {
+            Text = $"Create new {extension} file in {relDir}/",
+            Foreground = LtaiTheme.Sbb(LtaiTheme.TextPrimary),
+            FontSize = 13
+        });
+        panel.Children.Add(dialog);
+
+        var btnStack = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4, HorizontalAlignment = HorizontalAlignment.Right };
+        var cancelBtn = new Button
+        {
+            Content = "Cancel",
+            Background = LtaiTheme.Sbb(LtaiTheme.BgPanel),
+            Foreground = LtaiTheme.Sbb(LtaiTheme.TextSecondary)
+        };
+        var okBtn = new Button
+        {
+            Content = "Create",
+            Background = LtaiTheme.Sbb(LtaiTheme.AccentSystem),
+            Foreground = Brushes.White,
+            FontWeight = FontWeight.Bold
+        };
+        btnStack.Children.Add(cancelBtn);
+        btnStack.Children.Add(okBtn);
+        panel.Children.Add(btnStack);
+
+        var popup = new Border
+        {
+            Background = LtaiTheme.Sbb(LtaiTheme.BgPanel),
+            BorderBrush = LtaiTheme.Sbb(LtaiTheme.Border),
+            BorderThickness = new(1),
+            CornerRadius = new(6),
+            Child = panel,
+            MaxWidth = 400
+        };
+
+        var overlay = new Panel();
+        overlay.Children.Add(popup);
+        popup.HorizontalAlignment = HorizontalAlignment.Center;
+        popup.VerticalAlignment = VerticalAlignment.Center;
+
+        var host = new Border { Child = overlay, Background = LtaiTheme.Sbb(Color.Parse("#66000000")) };
+        var container = this.Parent ?? this;
+        if (container is Panel parentPanel)
+            parentPanel.Children.Add(host);
+
+        var tcs = new TaskCompletionSource<string?>();
+
+        cancelBtn.Click += (_, _) => { tcs.TrySetResult(null); };
+        okBtn.Click += (_, _) => tcs.TrySetResult(dialog.Text?.Trim());
+        dialog.KeyDown += (_, e) =>
+        {
+            if (e.Key == Key.Enter) tcs.TrySetResult(dialog.Text?.Trim());
+            if (e.Key == Key.Escape) tcs.TrySetResult(null);
+        };
+
+        _ = dialog.Focus();
+
+        var name = await tcs.Task;
+        if (container is Panel p) p.Children.Remove(host);
+        if (string.IsNullOrWhiteSpace(name)) return;
+
+        var dir = Path.Combine(_workspaceRoot, relDir);
+        Directory.CreateDirectory(dir);
+        var filePath = Path.Combine(dir, $"{name}{extension}");
+        await File.WriteAllTextAsync(filePath, template);
+        await OpenFileAsync(filePath);
+        PopulateFileTree();
+        _statusBar.Text = $"Created: {name}{extension}";
     }
 }
