@@ -5,6 +5,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using LTAI.Core.Governors;
 using LTAI.Models;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
@@ -17,6 +18,7 @@ public sealed class MarkdownToolExecutor
     private readonly IHttpClientFactory? _httpClientFactory;
     private readonly IChatClient? _chatClient;
     private readonly IServiceProvider? _serviceProvider;
+    private readonly IMicroKernel? _kernel;
     private Func<string, MkTool?>? _toolResolver;
 
     private static readonly Regex VariablePattern = new(@"\{\{(\w+)\}\}", RegexOptions.Compiled);
@@ -31,12 +33,14 @@ public sealed class MarkdownToolExecutor
         ILogger<MarkdownToolExecutor> logger,
         IHttpClientFactory? httpClientFactory = null,
         IChatClient? chatClient = null,
-        IServiceProvider? serviceProvider = null)
+        IServiceProvider? serviceProvider = null,
+        IMicroKernel? kernel = null)
     {
         _logger = logger;
         _httpClientFactory = httpClientFactory;
         _chatClient = chatClient;
         _serviceProvider = serviceProvider;
+        _kernel = kernel;
     }
 
     public void SetToolResolver(Func<string, MkTool?> resolver)
@@ -90,6 +94,25 @@ public sealed class MarkdownToolExecutor
         {
             shellExe = "/bin/bash";
             shellArgs = new[] { "--noprofile", "--norc" };
+        }
+
+        if (_kernel != null)
+        {
+            var result = await _kernel.ExecuteAsync(new KernelOp
+            {
+                Command = shellExe,
+                Arguments = string.Join(" ", shellArgs),
+                Stdin = command,
+                Timeout = TimeSpan.FromSeconds(tool.TimeoutSec)
+            }, CancellationToken.None).ConfigureAwait(false);
+
+            return new
+            {
+                exitCode = result.Success ? 0 : 1,
+                stdout = Truncate(result.Data ?? "", tool.MaxOutputLines),
+                stderr = Truncate(result.Error ?? "", tool.MaxOutputLines),
+                command
+            };
         }
 
         var psi = new ProcessStartInfo

@@ -137,6 +137,19 @@ public static class LocalModelRegistry
             Layer: ModelLayer.L0,
             EngineType: "onnx"),
 
+        // ==================== L0: Tool-Calling Models (ONNX, Distilled) ====================
+        new LocalModelInfo(
+            Version: "needle-26m-onnx",
+            Name: "Needle 26M (ONNX) - 端侧工具路由",
+            Url: "https://huggingface.co/CactusCompute/needle-26m",
+            MirrorUrl: "https://hf-mirror.com/CactusCompute/needle-26m",
+            Sha256: "auto_verify",
+            RecommendedMemoryMB: 128,
+            DiskSizeMB: 52,
+            Description: "Needle 26M 蒸馏工具调用模型。移除FFN层，专为端侧意图识别+工具路由。26M参数，512MB设备即可运行。",
+            Layer: ModelLayer.L0,
+            EngineType: "onnx"),
+
         // ==================== L1: Small ONNX LLMs (Edge-Native) ====================
         new LocalModelInfo(
             Version: "smollm2-360m-onnx",
@@ -307,6 +320,19 @@ public static class LocalModelRegistry
             Description: "DeepSeek R1 + Llama 8B 蒸馏版，英文推理能力强。适合英文技术场景。",
             Layer: ModelLayer.L2,
             EngineType: "gguf"),
+
+        // ==================== L0: Supertonic TTS Models (ONNX) ====================
+        new LocalModelInfo(
+            Version: "supertonic-3-onnx",
+            Name: "Supertonic 3 (ONNX) - 31语言TTS",
+            Url: "https://huggingface.co/Supertone/supertonic-3/resolve/main/model.onnx",
+            MirrorUrl: "https://hf-mirror.com/Supertone/supertonic-3/resolve/main/model.onnx",
+            Sha256: "auto_verify",
+            RecommendedMemoryMB: 512,
+            DiskSizeMB: 400,
+            Description: "Supertone Supertonic 3，31语言端侧TTS。99M参数，CPU推理，44.1kHz输出。支持表情标签。",
+            Layer: ModelLayer.L0,
+            EngineType: "onnx"),
     };
 
     public static LocalModelInfo SelectBestModel(long availableMemoryMB, ModelLayer layer, string preferredLanguage = "zh", string preferredEngine = "onnx")

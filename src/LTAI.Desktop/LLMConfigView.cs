@@ -60,6 +60,8 @@ public sealed class LLMConfigView : UserControl
     private static readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(10) };
     private static ILogger? _logger;
 
+    public static IMicroKernel? Kernel { get; set; }
+
     public LLMConfigView(LTAIService svc)
     {
         _opts = ServiceLocator.Get<IOptions<LTAIOptions>>().Value;
@@ -452,6 +454,23 @@ public sealed class LLMConfigView : UserControl
     {
         try
         {
+            if (Kernel != null)
+            {
+                try
+                {
+                    var kResult = await Kernel.ExecuteAsync(new KernelOp
+                    {
+                        Command = "ollama",
+                        Arguments = "list",
+                        Timeout = TimeSpan.FromSeconds(10)
+                    }).ConfigureAwait(false);
+                    if (kResult.Success)
+                        return kResult.Data.Split('\n').Any(line =>
+                            line.TrimStart().StartsWith(modelName, StringComparison.OrdinalIgnoreCase));
+                }
+                catch { /* fall through to Process.Start */ }
+            }
+
             using var proc = Process.Start(new ProcessStartInfo
             {
                 FileName = "ollama", Arguments = "list",
@@ -487,6 +506,22 @@ public sealed class LLMConfigView : UserControl
                 await File.WriteAllTextAsync(modelfile, $"FROM \"{modelPath}\"\n");
             }
 
+            if (Kernel != null)
+            {
+                try
+                {
+                    var kResult = await Kernel.ExecuteAsync(new KernelOp
+                    {
+                        Command = "ollama",
+                        Arguments = $"create {EscapeArg(modelName)} -f \"{modelfile}\"",
+                        Timeout = TimeSpan.FromSeconds(120)
+                    }).ConfigureAwait(false);
+                    try { File.Delete(modelfile); } catch { /* intentional: cleanup may fail */ }
+                    return kResult.Success;
+                }
+                catch { /* fall through to Process.Start */ }
+            }
+
             using var proc = Process.Start(new ProcessStartInfo
             {
                 FileName = "ollama",
@@ -508,6 +543,21 @@ public sealed class LLMConfigView : UserControl
     {
         try
         {
+            if (Kernel != null)
+            {
+                try
+                {
+                    await Kernel.ExecuteAsync(new KernelOp
+                    {
+                        Command = "ollama",
+                        Arguments = $"stop {EscapeArg(modelName)}",
+                        Timeout = TimeSpan.FromSeconds(10)
+                    }).ConfigureAwait(false);
+                    return;
+                }
+                catch { /* fall through to Process.Start */ }
+            }
+
             using var proc = Process.Start(new ProcessStartInfo
             {
                 FileName = "ollama",
@@ -817,20 +867,38 @@ public sealed class LLMConfigView : UserControl
         catch (Exception ex) { _logger?.LogWarning(ex, "DetectHardware: drive info failed"); }
         try
         {
-            var proc = Process.Start(new ProcessStartInfo
+            if (Kernel != null)
             {
-                FileName = "nvidia-smi",
-                Arguments = "--query-gpu=memory.total --format=csv,noheader,nounits",
-                RedirectStandardOutput = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            });
-            if (proc != null)
+                try
+                {
+                    var kResult = Kernel.ExecuteAsync(new KernelOp
+                    {
+                        Command = "nvidia-smi",
+                        Arguments = "--query-gpu=memory.total --format=csv,noheader,nounits",
+                        Timeout = TimeSpan.FromSeconds(5)
+                    }).GetAwaiter().GetResult();
+                    if (kResult.Success && long.TryParse(kResult.Data.Trim().Split('\n')[0].Trim(), out var nv)) vram = nv;
+                }
+                catch (Exception ex) { _logger?.LogWarning(ex, "DetectHardware: nvidia-smi probe via kernel failed"); }
+            }
+
+            if (vram == 0)
             {
-                proc.WaitForExit(3000);
-                var txt = proc.StandardOutput.ReadToEnd();
-                if (long.TryParse(txt.Trim().Split('\n')[0].Trim(), out var nv)) vram = nv;
-                proc.Dispose();
+                var proc = Process.Start(new ProcessStartInfo
+                {
+                    FileName = "nvidia-smi",
+                    Arguments = "--query-gpu=memory.total --format=csv,noheader,nounits",
+                    RedirectStandardOutput = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                });
+                if (proc != null)
+                {
+                    proc.WaitForExit(3000);
+                    var txt = proc.StandardOutput.ReadToEnd();
+                    if (long.TryParse(txt.Trim().Split('\n')[0].Trim(), out var nv)) vram = nv;
+                    proc.Dispose();
+                }
             }
         }
         catch (Exception ex) { _logger?.LogWarning(ex, "DetectHardware: nvidia-smi probe failed"); }

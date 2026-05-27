@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using LTAI.Core.Governors;
 using LTAI.Tools.CodeGraph;
 using LTAI.Tools.Tools;
 using Microsoft.Extensions.Logging;
@@ -48,14 +49,16 @@ public sealed class CodeEditEngine
     private readonly ICodeParser? _parser;
     private readonly ILogger<CodeEditEngine> _logger;
     private readonly Lock _snapshotLock = new();
+    private IMicroKernel? _kernel;
 
     public CodeEditEngine(string? workspace = null, ICodeParser? parser = null,
-        ILogger<CodeEditEngine>? logger = null)
+        IMicroKernel? kernel = null, ILogger<CodeEditEngine>? logger = null)
     {
         _workspace = workspace ?? Directory.GetCurrentDirectory();
         _snapshotDir = Path.Combine(OptionService.Get("paths.livingtree") ?? Path.Combine(_workspace, ".livingtree"), "edit_snapshots");
         Directory.CreateDirectory(_snapshotDir);
         _parser = parser;
+        _kernel = kernel;
         _logger = logger ?? NullLogger<CodeEditEngine>.Instance;
     }
 
@@ -333,6 +336,20 @@ public sealed class CodeEditEngine
         try
         {
             File.WriteAllText(tempOld, oldContent);
+
+            if (_kernel != null)
+            {
+                var result = _kernel.GitOpAsync("diff", $"--no-index --unified=3 {tempOld} {filePath}", CancellationToken.None)
+                    .GetAwaiter().GetResult();
+                if (result.Success && !string.IsNullOrEmpty(result.Data))
+                {
+                    var diffOutput = result.Data;
+                    var added = Regex.Matches(diffOutput, @"^\+[^+]", RegexOptions.Multiline).Count;
+                    var removed = Regex.Matches(diffOutput, @"^-[^-]", RegexOptions.Multiline).Count;
+                    var unchanged = Regex.Matches(diffOutput, @"^ [^ ]|^$", RegexOptions.Multiline).Count;
+                    return new DiffResult { FilePath = filePath, UnifiedDiff = diffOutput, LinesAdded = added, LinesRemoved = removed, LinesUnchanged = unchanged };
+                }
+            }
 
             var psi = new ProcessStartInfo("git", $"diff --no-index --unified=3 {tempOld} {filePath}")
             {

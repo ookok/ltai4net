@@ -1,3 +1,4 @@
+using LTAI.Core.Governors;
 using LTAI.Core.Messaging;
 using LTAI.Core.System;
 using LTAI.Models;
@@ -13,6 +14,7 @@ namespace LTAI.Tools.Tools;
 
 public static class LTAIToolRegistry
 {
+    public static IMicroKernel? Kernel { get; set; }
     private static bool _seeded;
     private static IServiceProvider? _serviceProvider;
     private static ILogger? _logger;
@@ -760,9 +762,17 @@ public static class LTAIToolRegistry
                 var repoUrl = Arg(args, "repo_url");
                 if (string.IsNullOrWhiteSpace(repoUrl)) return JsonToolResult.Success(new { error = "repo_url parameter is required" });
                 var cloneDir = Path.Combine(Path.GetTempPath(), "ltai_cli", Guid.NewGuid().ToString("N")[..8]);
-                var psi = new System.Diagnostics.ProcessStartInfo("git", $"clone --depth 1 {repoUrl} {cloneDir}") { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
-                var proc = System.Diagnostics.Process.Start(psi) ?? throw new InvalidOperationException("Failed to start git process");
-                await proc.WaitForExitAsync();
+                if (Kernel != null)
+                {
+                    var cloneResult = await Kernel.GitOpAsync("clone", $"--depth 1 {repoUrl} {cloneDir}", CancellationToken.None).ConfigureAwait(false);
+                    if (!cloneResult.Success) return JsonToolResult.Success(new { error = cloneResult.Error ?? "git clone failed" });
+                }
+                else
+                {
+                    var psi = new System.Diagnostics.ProcessStartInfo("git", $"clone --depth 1 {repoUrl} {cloneDir}") { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
+                    var proc = System.Diagnostics.Process.Start(psi) ?? throw new InvalidOperationException("Failed to start git process");
+                    await proc.WaitForExitAsync();
+                }
                 var entries = new List<object>();
                 if (File.Exists(Path.Combine(cloneDir, "package.json")))
                 {
@@ -820,9 +830,20 @@ public static class LTAIToolRegistry
                             {
                                 try
                                 {
-                                    var psi = new System.Diagnostics.ProcessStartInfo(file, "--version") { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
-                                    var proc = System.Diagnostics.Process.Start(psi);
-                                    if (proc != null) { proc.WaitForExit(3000); var output = proc.StandardOutput.ReadToEnd().Trim(); if (!string.IsNullOrWhiteSpace(output)) found.Add(new { name, path = file, version = output.Split('\n')[0] }); }
+                                    if (Kernel != null)
+                                    {
+                                        var verResult = await Kernel.ExecuteAsync(new KernelOp { Command = file, Arguments = "--version", WorkingDirectory = dir, Timeout = TimeSpan.FromSeconds(3) }, CancellationToken.None).ConfigureAwait(false);
+                                        if (verResult.Success && !string.IsNullOrWhiteSpace(verResult.Data))
+                                            found.Add(new { name, path = file, version = verResult.Data.Split('\n')[0] });
+                                        else
+                                            found.Add(new { name, path = file });
+                                    }
+                                    else
+                                    {
+                                        var psi = new System.Diagnostics.ProcessStartInfo(file, "--version") { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
+                                        var proc = System.Diagnostics.Process.Start(psi);
+                                        if (proc != null) { proc.WaitForExit(3000); var output = proc.StandardOutput.ReadToEnd().Trim(); if (!string.IsNullOrWhiteSpace(output)) found.Add(new { name, path = file, version = output.Split('\n')[0] }); }
+                                    }
                                 }
                                 catch (Exception ex) { _logger?.LogWarning(ex, "cli_scan_path: version probe failed for {File}", file); found.Add(new { name, path = file }); }
                             }
@@ -2135,6 +2156,19 @@ internal static class CliEngine
 
         try
         {
+            if (LTAIToolRegistry.Kernel != null)
+            {
+                var result = await LTAIToolRegistry.Kernel.ExecuteAsync(new KernelOp
+                {
+                    Command = command,
+                    Arguments = args,
+                    Timeout = TimeSpan.FromSeconds(60)
+                }, CancellationToken.None).ConfigureAwait(false);
+                return result.Success
+                    ? JsonToolResult.Success(new { exitCode = 0, stdout = result.Data ?? "", stderr = result.Error ?? "" })
+                    : JsonToolResult.Success(new { error = result.Error ?? "Command failed", stdout = result.Data ?? "" });
+            }
+
             var psi = new global::System.Diagnostics.ProcessStartInfo(command, args)
             {
                 RedirectStandardOutput = true, RedirectStandardError = true,

@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using LTAI.Core.Governors;
 using LTAI.Models;
 using Microsoft.Extensions.Logging;
 
@@ -16,6 +17,7 @@ public sealed class SkillStepExecutor
     private readonly SkillExpressionEngine _expr;
     private readonly SkillHookEngine _hooks;
     private readonly ILogger<SkillStepExecutor> _logger;
+    private readonly IMicroKernel? _kernel;
 
     public SkillStepExecutor(
         SkillRegistry registry,
@@ -23,7 +25,8 @@ public sealed class SkillStepExecutor
         SkillVarScope scope,
         SkillExpressionEngine expr,
         SkillHookEngine hooks,
-        ILogger<SkillStepExecutor>? logger = null)
+        ILogger<SkillStepExecutor>? logger = null,
+        IMicroKernel? kernel = null)
     {
         _registry = registry;
         _runtime = runtime;
@@ -31,6 +34,7 @@ public sealed class SkillStepExecutor
         _expr = expr;
         _hooks = hooks;
         _logger = logger ?? new NullLogger<SkillStepExecutor>();
+        _kernel = kernel;
     }
 
     public async Task<SkillValue> ExecuteStepAsync(SkillStep step, CancellationToken ct)
@@ -86,6 +90,30 @@ public sealed class SkillStepExecutor
     {
         try
         {
+            if (_kernel != null)
+            {
+                try
+                {
+                    var shellExe = OperatingSystem.IsWindows() ? "cmd.exe" : "/bin/bash";
+                    var shellArgs = OperatingSystem.IsWindows() ? $"/c \"{command}\"" : $"-c \"{command}\"";
+
+                    var kResult = await _kernel.ExecuteAsync(new KernelOp
+                    {
+                        Command = shellExe,
+                        Arguments = shellArgs,
+                        Timeout = TimeSpan.FromSeconds(30)
+                    }, ct).ConfigureAwait(false);
+
+                    var kOutput = kResult.Data ?? "";
+                    var kError = kResult.Error ?? "";
+                    if (!string.IsNullOrEmpty(kError))
+                        kOutput += "\n" + kError;
+
+                    return SkillValue.FromString(kOutput.Trim());
+                }
+                catch { }
+            }
+
             var psi = new System.Diagnostics.ProcessStartInfo
             {
                 FileName = OperatingSystem.IsWindows() ? "cmd.exe" : "/bin/bash",

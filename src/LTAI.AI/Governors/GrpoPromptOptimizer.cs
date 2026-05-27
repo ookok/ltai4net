@@ -72,6 +72,8 @@ public sealed record RewardScores
 /// GRPO (Group Relative Policy Optimization) prompt evolution loop.
 /// Uses population of prompt variants, evaluates via L1 reward model,
 /// crosses over and mutates the best performers.
+/// Subspace-aware: constrains mutations to stay within shared prompt subspaces
+/// (Universal Weight Subspace Hypothesis applied to prompt representation).
 /// </summary>
 public sealed class GrpoPromptOptimizer
 {
@@ -80,12 +82,19 @@ public sealed class GrpoPromptOptimizer
     private readonly List<PromptVariant> _population = new();
     private readonly double _learningRate;
     private int _generation;
+    private readonly WeightSubspaceAnalyzer? _subspaceAnalyzer;
+    private readonly List<float[]> _promptEmbeddings = new();
+    private readonly double _subspaceConstraintWeight;
 
     public GrpoPromptOptimizer(IChatClient l1Client, double learningRate = 0.02,
+        WeightSubspaceAnalyzer? subspaceAnalyzer = null,
+        double subspaceConstraintWeight = 0.3,
         ILogger<GrpoPromptOptimizer>? logger = null)
     {
         _l1Client = l1Client;
         _learningRate = learningRate;
+        _subspaceAnalyzer = subspaceAnalyzer;
+        _subspaceConstraintWeight = subspaceConstraintWeight;
         _logger = logger ?? NullLogger<GrpoPromptOptimizer>.Instance;
     }
 
@@ -159,8 +168,48 @@ public sealed class GrpoPromptOptimizer
         ["generation"] = _generation,
         ["population"] = _population.Count,
         ["best_fitness"] = _population.Count > 0 ? _population.Max(p => p.Fitness) : 0,
-        ["best_prompt"] = GetBest()?.Text?[..Math.Min(GetBest()?.Text?.Length ?? 0, 200)] ?? ""
+        ["best_prompt"] = GetBest()?.Text?[..Math.Min(GetBest()?.Text?.Length ?? 0, 200)] ?? "",
+        ["subspace_constrained"] = _subspaceAnalyzer != null,
+        ["prompt_embeddings_count"] = _promptEmbeddings.Count
     };
+
+    public void RegisterPromptEmbedding(string prompt, float[] embedding)
+    {
+        _promptEmbeddings.Add(embedding);
+        if (_subspaceAnalyzer != null)
+        {
+            _subspaceAnalyzer.Analyze(new[] { embedding }, $"prompt_{prompt.GetHashCode()}");
+        }
+    }
+
+    public double ComputeSubspaceAlignment(string prompt)
+    {
+        if (_subspaceAnalyzer == null || _promptEmbeddings.Count < 2)
+            return 0.5;
+
+        var embedding = EncodePrompt(prompt);
+        var subspace = _subspaceAnalyzer.Analyze(_promptEmbeddings.ToArray(), "prompt_universal");
+
+        if (subspace.Basis.Length == 0) return 0.5;
+
+        var projection = _subspaceAnalyzer.ProjectVector(embedding, subspace);
+        var reconstructed = _subspaceAnalyzer.ReconstructVector(projection, subspace);
+
+        var error = 0.0;
+        for (int i = 0; i < Math.Min(embedding.Length, reconstructed.Length); i++)
+            error += Math.Abs(embedding[i] - reconstructed[i]);
+
+        return 1.0 - Math.Min(1.0, error / embedding.Length);
+    }
+
+    private static float[] EncodePrompt(string prompt)
+    {
+        var dim = 64;
+        var encoded = new float[dim];
+        for (int i = 0; i < dim && i < prompt.Length; i++)
+            encoded[i] = (float)prompt[i] / 255f;
+        return encoded;
+    }
 }
 
 public sealed record PromptVariant

@@ -3,6 +3,7 @@ using LTAI.Agent.Intelligence;
 using LTAI.Agent.Resilience;
 using LTAI.Agent.Routing;
 using LTAI.Agent.Session;
+using LTAI.Knowledge.Core;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace LTAI.Agent;
@@ -31,7 +32,15 @@ public static class TreeLLMServiceCollectionExtensions
         services.AddSingleton<AdversarialGate>();
         services.AddSingleton<TokenCircuitBreaker>();
         services.AddSingleton<FluidCollective>();
-        services.AddSingleton<DebugLoop>();
+        services.AddSingleton<DebugLoop>(sp =>
+        {
+            var chatClient = sp.GetRequiredService<Microsoft.Extensions.AI.IChatClient>();
+            var correctionMemory = sp.GetService<LTAI.AI.Governors.CorrectionMemory>();
+            var logger = sp.GetService<Microsoft.Extensions.Logging.ILogger<DebugLoop>>();
+            var harnessProfile = sp.GetService<LTAI.Core.Configuration.HarnessProfile>();
+            var workspace = OptionService.Get("LTAI_WORKSPACE") ?? Directory.GetCurrentDirectory();
+            return new DebugLoop(chatClient, correctionMemory, logger, null, harnessProfile, workspace);
+        });
         services.AddSingleton<ErrorInterceptor>();
         services.AddSingleton<MultiModelConsensus>();
         services.AddSingleton<StreamingGrammarGuard>();

@@ -179,6 +179,61 @@ public static class ServiceCollectionExtensions
             return new AdaptiveDepthController(logger, paceTracker);
         });
 
+        services.AddSingleton<WeightSubspaceAnalyzer>(sp =>
+        {
+            var logger = sp.GetService<ILogger<WeightSubspaceAnalyzer>>();
+            return new WeightSubspaceAnalyzer(varianceRetentionThreshold: 0.95, minComponents: 4, logger);
+        });
+
+        services.AddSingleton<SubspaceCompressor>(sp =>
+        {
+            var analyzer = sp.GetRequiredService<WeightSubspaceAnalyzer>();
+            var logger = sp.GetService<ILogger<SubspaceCompressor>>();
+            return new SubspaceCompressor(analyzer, logger);
+        });
+
+        services.AddSingleton<IslandSampler>(sp =>
+        {
+            var logger = sp.GetService<ILogger<IslandSampler>>();
+            return new IslandSampler(gridSize: 6, logger);
+        });
+
+        services.AddSingleton<ExperimentAnalyzer>(sp =>
+        {
+            var evolutionStore = sp.GetService<ICrossRunEvolutionStore>();
+            var harnessEvo = sp.GetService<HarnessEvolution>();
+            var synapticMemory = sp.GetService<SynapticMemory>();
+            var subspaceAnalyzer = sp.GetService<WeightSubspaceAnalyzer>();
+            var logger = sp.GetService<ILogger<ExperimentAnalyzer>>();
+            return new ExperimentAnalyzer(evolutionStore, harnessEvo, synapticMemory, subspaceAnalyzer, logger);
+        });
+
+        services.AddSingleton<ParallelExperimentRunner>(sp =>
+        {
+            var llm = sp.GetRequiredService<IChatClient>();
+            var analyzer = sp.GetRequiredService<ExperimentAnalyzer>();
+            var islandSampler = sp.GetRequiredService<IslandSampler>();
+            var synapticMemory = sp.GetRequiredService<SynapticMemory>();
+            var logger = sp.GetService<ILogger<ParallelExperimentRunner>>();
+            return new ParallelExperimentRunner(llm, analyzer, islandSampler, synapticMemory, 4, logger);
+        });
+
+        services.AddSingleton<CognitionSeeder>(sp =>
+        {
+            var synapticMemory = sp.GetRequiredService<SynapticMemory>();
+            var dualMemory = sp.GetRequiredService<DualMemoryStore>();
+            var subspaceAnalyzer = sp.GetService<WeightSubspaceAnalyzer>();
+            var logger = sp.GetService<ILogger<CognitionSeeder>>();
+            return new CognitionSeeder(synapticMemory, dualMemory, subspaceAnalyzer, logger);
+        });
+
+        services.AddSingleton<SkillEvolutionBridge>(sp =>
+        {
+            var analyzer = sp.GetRequiredService<ExperimentAnalyzer>();
+            var logger = sp.GetService<ILogger<SkillEvolutionBridge>>();
+            return new SkillEvolutionBridge(analyzer, logger);
+        });
+
         services.AddSingleton<TieredLoraManager>(sp =>
         {
             var logger = sp.GetService<ILogger<TieredLoraManager>>();
@@ -223,13 +278,6 @@ public static class ServiceCollectionExtensions
             var correctionLoRA = sp.GetService<SelfCorrectionLoRA>();
             var logger = sp.GetService<ILogger<SpinSelfPlayLoop>>();
             return new SpinSelfPlayLoop(loraManager, depthController, synapticMemory, correctionMemory, correctionLoRA, logger);
-        });
-
-        services.AddSingleton<MoERouter>(sp =>
-        {
-            var depthController = sp.GetRequiredService<AdaptiveDepthController>();
-            var logger = sp.GetService<ILogger<MoERouter>>();
-            return new MoERouter(depthController, logger);
         });
 
         services.AddSingleton<NeuralDependencyGraph>(sp =>
@@ -401,12 +449,6 @@ public static class ServiceCollectionExtensions
             var answerStore = sp.GetRequiredService<CellAnswerStore>();
             var logger = sp.GetService<ILogger<TeachingRuleExtractor>>();
             return new TeachingRuleExtractor(answerStore, logger);
-        });
-        services.AddSingleton<CostAwareRouter>(sp =>
-        {
-            var options = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<LTAI.Core.Configuration.LTAIOptions>>();
-            var logger = sp.GetService<ILogger<CostAwareRouter>>();
-            return new CostAwareRouter(options, logger);
         });
         services.AddSingleton<KnowledgeGapDetector>(sp =>
         {
@@ -652,27 +694,6 @@ public static class ServiceCollectionExtensions
                 : throw new InvalidOperationException("SelectiveThinkingPipeline requires both IL1InferenceEngine and IChatClient to be registered");
         });
 
-        services.AddSingleton<L1L2DuplexRouter>(sp =>
-        {
-            var inference = sp.GetRequiredService<SynapticInference>();
-            var memory = sp.GetRequiredService<SynapticMemory>();
-            var graphBridge = sp.GetRequiredService<KnowledgeGraphBridge>();
-            var domainGraphRegistry = sp.GetRequiredService<DomainGraphRegistry>();
-            var domainDiscovery = sp.GetRequiredService<DomainDiscoveryService>();
-            var localLlm = sp.GetService<IL1InferenceEngine>();
-            var metaCognition = sp.GetRequiredService<MetaCognitiveLayer>();
-            var skillTree = sp.GetRequiredService<SkillTree>();
-            var cache = sp.GetRequiredService<SemanticQueryCache>();
-            var ruleExtractor = sp.GetRequiredService<TeachingRuleExtractor>();
-            var costRouter = sp.GetRequiredService<CostAwareRouter>();
-            var knowledge = sp.GetRequiredService<LocalKnowledgeBase>();
-            var classifier = sp.GetRequiredService<LocalIntentClassifier>();
-            var cellRegistry = sp.GetRequiredService<CellAIRegistry>();
-            var llm = sp.GetService<IChatClient>();
-            var logger = sp.GetService<ILogger<L1L2DuplexRouter>>();
-            return new L1L2DuplexRouter(inference, memory, graphBridge, domainGraphRegistry, domainDiscovery, localLlm, metaCognition, skillTree, cache, ruleExtractor, costRouter, knowledge, classifier, cellRegistry, llm, logger);
-        });
-
         services.AddSingleton<IHostedService>(sp =>
         {
             var opts = sp.GetRequiredService<IOptions<LTAIOptions>>();
@@ -707,7 +728,8 @@ public static class ServiceCollectionExtensions
 
             var transport = sp.GetService<IFederatedTransport>();
             var logger = sp.GetService<ILogger<FederatedLearningService>>();
-            return new FederatedLearningService(transport, logger);
+            var subspaceAnalyzer = sp.GetRequiredService<WeightSubspaceAnalyzer>();
+            return new FederatedLearningService(transport, logger, subspaceAnalyzer: subspaceAnalyzer);
         });
 
         services.AddSingleton<InputGovernor>();
@@ -719,7 +741,6 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<QueryPreprocessingService>();
         services.AddSingleton<GovernorSet>();
         services.AddSingleton<ReActLoopOrchestrator>();
-        services.AddSingleton<ModelDispatchService>();
         services.AddSingleton<ContextHub>(sp =>
         {
             return ContextHubBuilder.Build(
@@ -733,12 +754,139 @@ public static class ServiceCollectionExtensions
                 synapticMemory: sp.GetService<SynapticMemory>(),
                 contextGovernor: sp.GetService<ContextGovernor>(),
                 booster: sp.GetService<TextRetrievalBooster>(),
+                dualRouteRetriever: sp.GetService<DualRouteRetriever>(),
                 logger: sp.GetService<ILogger<ContextHub>>()
             );
         });
 
         services.AddSingleton<LivingTreeSystem>();
         services.AddSingleton<ILivingTreeSystem>(sp => sp.GetRequiredService<LivingTreeSystem>());
+
+        services.AddSingleton<LTAI.Core.Governors.RuleLoader>(sp =>
+        {
+            var workspace = OptionService.Get("LTAI_WORKSPACE") ?? Directory.GetCurrentDirectory();
+            var rulesDir = Path.Combine(workspace, "rules");
+            var logger = sp.GetService<ILogger<LTAI.Core.Governors.RuleLoader>>();
+            return new LTAI.Core.Governors.RuleLoader(rulesDir, logger);
+        });
+
+        services.AddSingleton<L0IntentClassifier>(sp =>
+        {
+            var loader = sp.GetRequiredService<LTAI.Core.Governors.RuleLoader>();
+            var logger = sp.GetService<ILogger<L0IntentClassifier>>();
+            return new L0IntentClassifier(loader, logger: logger);
+        });
+
+        services.AddSingleton<LoopTrapDetector>();
+
+        services.AddSingleton<MemoryGraph>();
+        services.AddSingleton<DualRouteRetriever>(sp =>
+        {
+            var graph = sp.GetRequiredService<MemoryGraph>();
+            var logger = sp.GetService<ILogger<DualRouteRetriever>>();
+            return new DualRouteRetriever(graph, null, null, logger);
+        });
+
+        services.AddSingleton<CoordinationScheduler>();
+        services.AddSingleton<RecursiveCausalAudit>();
+        services.AddSingleton<SemanticAnchor>(sp =>
+        {
+            var router = sp.GetRequiredService<ParetoRouter>();
+            var logger = sp.GetService<ILogger<SemanticAnchor>>();
+            return new SemanticAnchor(router, logger: logger);
+        });
+
+        services.AddSingleton<CPSProcessingService>(sp =>
+        {
+            var router = sp.GetRequiredService<ParetoRouter>();
+            var classifier = sp.GetRequiredService<L0IntentClassifier>();
+            var teacher = sp.GetRequiredService<BootstrapTeacher>();
+            var genePool = sp.GetRequiredService<GenePool>();
+            var annealer = sp.GetRequiredService<SimulatedAnnealer>();
+            var geneToRule = sp.GetRequiredService<GeneToRule>();
+            var llm = sp.GetRequiredService<IChatClient>();
+            var options = sp.GetRequiredService<IOptions<LTAIOptions>>();
+            var logger = sp.GetService<ILogger<CPSProcessingService>>();
+
+            var flashModel = options.Value.AI.L1.Model;
+            var defaultModel = options.Value.AI.L2.Model;
+
+            Func<string, CancellationToken, Task<string>> l1Invoke = async (q, ct) =>
+            {
+                var chatOptions = new ChatOptions { ModelId = flashModel, Temperature = 0.2f, MaxOutputTokens = 1024 };
+                var response = await llm.GetResponseAsync(q, chatOptions, ct).ConfigureAwait(false);
+                return response?.Text ?? "";
+            };
+
+            Func<string, CancellationToken, Task<string>> l2Invoke = async (q, ct) =>
+            {
+                var chatOptions = new ChatOptions { ModelId = defaultModel, Temperature = 0.3f, MaxOutputTokens = 4096 };
+                var response = await llm.GetResponseAsync(q, chatOptions, ct).ConfigureAwait(false);
+                return response?.Text ?? "";
+            };
+
+            return new CPSProcessingService(router, classifier.ToFunc(), teacher, genePool, annealer, geneToRule,
+                l1Invoke, l2Invoke, logger, sp.GetService<LoopTrapDetector>());
+        });
+
+        services.AddHostedService<EvolutionLoopHostedService>(sp =>
+        {
+            var router = sp.GetRequiredService<ParetoRouter>();
+            var teacher = sp.GetRequiredService<BootstrapTeacher>();
+            var genePool = sp.GetRequiredService<GenePool>();
+            var annealer = sp.GetRequiredService<SimulatedAnnealer>();
+            var geneToRule = sp.GetRequiredService<GeneToRule>();
+            var architect = sp.GetRequiredService<ArchitectLoop>();
+            var logger = sp.GetService<ILogger<EvolutionLoopHostedService>>();
+            return new EvolutionLoopHostedService(router, teacher, genePool, annealer, geneToRule, architect,
+                logger: logger);
+        });
+
+        services.AddSingleton<SupertonicService>(sp =>
+        {
+            var assetsDir = Path.Combine(Directory.GetCurrentDirectory(), "assets", "supertonic");
+            var modelPath = Path.Combine(assetsDir, "model.onnx");
+            var logger = sp.GetService<ILogger<SupertonicService>>();
+            return new SupertonicService(modelPath, assetsDir, logger);
+        });
+
+        services.AddSingleton<SharedReplayBuffer>(sp =>
+        {
+            var logger = sp.GetService<ILogger<SharedReplayBuffer>>();
+            return new SharedReplayBuffer(10000, logger);
+        });
+
+        services.AddSingleton<MultiPolicyTrainer>(sp =>
+        {
+            var replayBuffer = sp.GetRequiredService<SharedReplayBuffer>();
+            var logger = sp.GetService<ILogger<MultiPolicyTrainer>>();
+            return new MultiPolicyTrainer(replayBuffer, 64, TimeSpan.FromSeconds(30), logger);
+        });
+
+        services.AddSingleton<NeedleToolRouter>(sp =>
+        {
+            var modelPath = Path.Combine(Directory.GetCurrentDirectory(), "assets", "needle", "model.onnx");
+            var logger = sp.GetService<ILogger<NeedleToolRouter>>();
+            return new NeedleToolRouter(modelPath, logger);
+        });
+
+        services.AddSingleton<ElasticWorkerPool>(sp =>
+        {
+            var logger = sp.GetService<ILogger<ElasticWorkerPool>>();
+            return new ElasticWorkerPool(new ElasticWorkerConfig
+            {
+                MinWorkers = 2,
+                MaxWorkers = 16,
+                ScaleUpDelay = TimeSpan.FromSeconds(5),
+                ScaleDownDelay = TimeSpan.FromSeconds(30)
+            }, logger);
+        });
+
+        services.AddSingleton<DataflowPipeline>(sp =>
+        {
+            var logger = sp.GetService<ILogger<DataflowPipeline>>();
+            return new DataflowPipeline(logger);
+        });
 
         return services;
     }

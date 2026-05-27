@@ -1,5 +1,7 @@
 using System.Text;
 using System.Text.Json;
+using System.Threading;
+using LTAI.Core.Governors;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
@@ -8,6 +10,7 @@ namespace LTAI.Web;
 
 public static class CodeApiEndpoints
 {
+    public static IMicroKernel? Kernel { get; set; }
     private static readonly string CodeRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "output", "code"));
 
     private static readonly HashSet<string> ExcludedDirs = new(StringComparer.OrdinalIgnoreCase)
@@ -413,6 +416,17 @@ public static class CodeApiEndpoints
     {
         try
         {
+            if (Kernel != null)
+            {
+                try
+                {
+                    var kResult = Kernel.GitOpAsync("diff", "-- .", CancellationToken.None).GetAwaiter().GetResult();
+                    if (kResult.Success)
+                        return string.IsNullOrWhiteSpace(kResult.Data) ? "no changes" : kResult.Data;
+                }
+                catch { }
+            }
+
             var startInfo = new System.Diagnostics.ProcessStartInfo
             {
                 FileName = "git",

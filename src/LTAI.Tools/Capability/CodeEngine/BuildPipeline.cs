@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using LTAI.Core.Governors;
 
 namespace LTAI.Tools.CodeEngine;
 
@@ -44,6 +45,7 @@ public sealed class BuildFixAttempt
 public sealed class BuildPipeline
 {
     private readonly ILogger<BuildPipeline> _logger;
+    private readonly IMicroKernel? _kernel;
 
     private static readonly Regex s_msbuildPattern = new(
         @"^(?<file>[^(]+)\((?<line>\d+),(?<col>\d+)\):\s+(?<severity>error|warning)\s+(?<code>[A-Z]{2}\d+):\s+(?<message>.+)$",
@@ -65,9 +67,10 @@ public sealed class BuildPipeline
         @"^(?<file>[^:]+):(?<line>\d+):(?<col>\d+)?\s*(?<severity>error|warning|Error|Warning)[:\s]+(?<message>.+)$",
         RegexOptions.Multiline | RegexOptions.Compiled);
 
-    public BuildPipeline(ILogger<BuildPipeline>? logger = null)
+    public BuildPipeline(ILogger<BuildPipeline>? logger = null, IMicroKernel? kernel = null)
     {
         _logger = logger ?? NullLogger<BuildPipeline>.Instance;
+        _kernel = kernel;
     }
 
     public async Task<BuildResult> BuildAsync(string? rootPath = null, string? configuration = null)
@@ -334,9 +337,30 @@ public sealed class BuildPipeline
         }
     }
 
-    private static async Task<(int exitCode, string output)> RunProcessAsync(
+    private async Task<(int exitCode, string output)> RunProcessAsync(
         string command, string args, string workingDir, int timeoutMs = 120000)
     {
+        if (_kernel != null)
+        {
+            var kResult = await _kernel.ExecuteAsync(new KernelOp
+            {
+                Command = command,
+                Arguments = args,
+                WorkingDirectory = workingDir,
+                Timeout = TimeSpan.FromMilliseconds(timeoutMs),
+            }).ConfigureAwait(false);
+
+            var combinedOutput = (kResult.Data ?? "") + "\n" + (kResult.Error ?? "");
+
+            if (kResult.Success)
+                return (0, combinedOutput);
+
+            if (kResult.Error?.Contains("timed out", StringComparison.OrdinalIgnoreCase) == true)
+                return (-1, combinedOutput + "\n[BUILD TIMED OUT]\n");
+
+            return (-1, combinedOutput);
+        }
+
         var psi = new ProcessStartInfo(command, args)
         {
             WorkingDirectory = workingDir,

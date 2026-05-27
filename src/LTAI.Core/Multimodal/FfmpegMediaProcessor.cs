@@ -1,3 +1,5 @@
+using LTAI.Core.Governors;
+
 namespace LTAI.Core.Multimodal;
 
 public sealed class MediaResult
@@ -12,19 +14,35 @@ public sealed class MediaResult
 public sealed class FfmpegMediaProcessor
 {
     private readonly string? _ffmpegPath;
+    private readonly IMicroKernel? _kernel;
 
-    public FfmpegMediaProcessor(string? ffmpegPath = null)
+    public FfmpegMediaProcessor(string? ffmpegPath = null, IMicroKernel? kernel = null)
     {
+        _kernel = kernel;
         _ffmpegPath = ffmpegPath ?? FindFfmpeg();
     }
 
     public bool IsAvailable => !string.IsNullOrEmpty(_ffmpegPath) && global::System.IO.File.Exists(_ffmpegPath);
 
-    private static string? FindFfmpeg()
+    private string? FindFfmpeg()
     {
         var names = new[] { "ffmpeg", "ffmpeg.exe" };
         foreach (var name in names)
         {
+            if (_kernel != null)
+            {
+                try
+                {
+                    var kResult = _kernel.ExecuteAsync(new KernelOp
+                    {
+                        Command = name,
+                        Arguments = "-version",
+                        Timeout = TimeSpan.FromSeconds(5)
+                    }).GetAwaiter().GetResult();
+                    if (kResult.Success) return name;
+                }
+                catch { /* non-fatal */ }
+            }
             try
             {
                 var startInfo = new global::System.Diagnostics.ProcessStartInfo
@@ -64,6 +82,29 @@ public sealed class FfmpegMediaProcessor
         {
             await global::System.IO.File.WriteAllBytesAsync(inputFile, videoData).ConfigureAwait(false);
             var args = $"-i \"{inputFile}\" -vn -acodec pcm_s16le -ar {sampleRate} -ac 1 -f {outputFormat} \"{outputFile}\" -y";
+
+            if (_kernel != null)
+            {
+                try
+                {
+                    var kResult = await _kernel.ExecuteAsync(new KernelOp
+                    {
+                        Command = _ffmpegPath!,
+                        Arguments = args,
+                        Timeout = TimeSpan.FromSeconds(120)
+                    }).ConfigureAwait(false);
+                    if (kResult.Success && global::System.IO.File.Exists(outputFile))
+                    {
+                        var audioData = await global::System.IO.File.ReadAllBytesAsync(outputFile).ConfigureAwait(false);
+                        return new MediaResult
+                        {
+                            Ok = true, Data = audioData, Format = outputFormat,
+                            DurationSeconds = audioData.Length / (double)(sampleRate * 2)
+                        };
+                    }
+                }
+                catch { /* fall through to Process.Start */ }
+            }
 
             var psi = new global::System.Diagnostics.ProcessStartInfo
             {
@@ -112,6 +153,22 @@ public sealed class FfmpegMediaProcessor
         {
             await global::System.IO.File.WriteAllBytesAsync(inputFile, audioData).ConfigureAwait(false);
             var args = $"-i \"{inputFile}\" -ar 16000 -ac 1 \"{outputFile}\" -y";
+
+            if (_kernel != null)
+            {
+                try
+                {
+                    var kResult = await _kernel.ExecuteAsync(new KernelOp
+                    {
+                        Command = _ffmpegPath!,
+                        Arguments = args,
+                        Timeout = TimeSpan.FromSeconds(120)
+                    }).ConfigureAwait(false);
+                    if (kResult.Success && global::System.IO.File.Exists(outputFile))
+                        return new MediaResult { Ok = true, Data = await global::System.IO.File.ReadAllBytesAsync(outputFile).ConfigureAwait(false), Format = outputFormat };
+                }
+                catch { /* fall through to Process.Start */ }
+            }
 
             var psi = new global::System.Diagnostics.ProcessStartInfo
             {

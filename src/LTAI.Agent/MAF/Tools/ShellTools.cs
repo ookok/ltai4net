@@ -2,12 +2,15 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text.Json;
+using LTAI.Core.Governors;
 
 namespace LTAI.Agent.Tools;
 
 [Description("Command-line and script execution tools")]
 public sealed class ShellTools
 {
+    public static IMicroKernel? Kernel { get; set; }
+
     private static readonly HashSet<string> _dangerousPatterns = new(StringComparer.OrdinalIgnoreCase)
     {
         "rm -rf /", "rm -rf /*", "del /f /s C:\\", "format", "shutdown", "reboot",
@@ -58,6 +61,25 @@ public sealed class ShellTools
         {
             shellExe = "/bin/bash";
             shellArgs = new[] { "--noprofile", "--norc" };
+        }
+
+        if (Kernel != null)
+        {
+            var kResult = await Kernel.ExecuteAsync(new KernelOp
+            {
+                Command = shellExe,
+                Arguments = string.Join(" ", shellArgs),
+                Stdin = command,
+                WorkingDirectory = workingDirectory,
+                Timeout = TimeSpan.FromSeconds(60)
+            }, cancellationToken).ConfigureAwait(false);
+
+            var kOut = kResult.Data ?? "";
+            var kErr = kResult.Error ?? "";
+            if (kOut.Length > 10000) kOut = kOut[..10000] + "\n... (truncated)";
+            if (kErr.Length > 10000) kErr = kErr[..10000] + "\n... (truncated)";
+
+            return JsonSerializer.Serialize(new { exitCode = kResult.Success ? 0 : 1, stdout = kOut, stderr = kErr, command });
         }
 
         var psi = new ProcessStartInfo

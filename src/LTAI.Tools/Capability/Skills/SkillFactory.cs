@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text.Json;
+using LTAI.Core.Governors;
 using Microsoft.Extensions.Logging;
 
 namespace LTAI.Tools.Skills;
@@ -9,6 +10,8 @@ public record SkillSpec(string Name, string Description, Dictionary<string, obje
 
 public sealed class SkillFactory
 {
+    public static IMicroKernel? Kernel { get; set; }
+
     private readonly Dictionary<string, SkillSpec> _skills = new();
     private readonly Dictionary<string, object> _instances = new();
     private readonly ILogger<SkillFactory> _logger;
@@ -104,10 +107,10 @@ public sealed class SkillFactory
         var spec = GetSkill(name);
         if (spec == null) return (false, "Skill not found");
 
-        return await Task.Run(() => ExecuteInIsolation(spec, "{}"));
+        return await ExecuteInIsolationAsync(spec, "{}");
     }
 
-    private static (bool Success, string Output) ExecuteInIsolation(SkillSpec spec, string inputData)
+    private static async Task<(bool Success, string Output)> ExecuteInIsolationAsync(SkillSpec spec, string inputData)
     {
         var tmpDir = Path.Combine(Path.GetTempPath(), $"ltai_skill_{Guid.NewGuid():N}");
         try
@@ -126,6 +129,19 @@ result = execute(input_data) if 'execute' in dir() else {{'error': 'no execute f
 print(json.dumps(result, default=str))
 ";
             File.WriteAllText(codeFile, code);
+
+            if (Kernel != null)
+            {
+                var kResult = await Kernel.ExecuteAsync(new KernelOp
+                {
+                    Command = "python",
+                    Arguments = $"\"{codeFile}\" \"{inputData}\"",
+                    WorkingDirectory = tmpDir,
+                    Timeout = TimeSpan.FromSeconds(30)
+                }).ConfigureAwait(false);
+
+                return (kResult.Success, kResult.Data.Length > 0 ? kResult.Data : kResult.Error);
+            }
 
             var psi = new ProcessStartInfo
             {

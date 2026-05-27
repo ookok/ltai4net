@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using LTAI.Core.Governors;
 using LTAI.Tools.CodeEngine;
 using Microsoft.Extensions.Logging;
 
@@ -8,6 +9,7 @@ namespace LTAI.Tools.Review;
 
 public sealed class CodeReviewEngine
 {
+    public static IMicroKernel? Kernel { get; set; }
     private readonly ILogger<CodeReviewEngine> _logger;
     private readonly MultiLangCodeAnalyzer _analyzer;
 
@@ -268,6 +270,12 @@ public sealed class CodeReviewEngine
 
     private static string RunGit(string arguments)
     {
+        if (Kernel != null)
+        {
+            var result = Kernel.GitOpAsync("diff", arguments, CancellationToken.None).GetAwaiter().GetResult();
+            if (result.Success) return result.Data ?? "";
+        }
+
         var psi = new System.Diagnostics.ProcessStartInfo("git", arguments)
         {
             RedirectStandardOutput = true, RedirectStandardError = true,

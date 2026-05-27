@@ -115,17 +115,20 @@ public sealed class FitnessLandscape
         if (weights == null || weights.Count == 0)
         {
             return candidates.MaxBy(t =>
-                t.Fitness.Reliability + t.Fitness.CostEfficiency + t.Fitness.Speed + t.Fitness.Safety);
+                ShouldHardCutoff(t.Fitness) ? 0.0
+                : t.Fitness.Reliability + t.Fitness.CostEfficiency + t.Fitness.Speed + t.Fitness.Safety
+                - QualityPenalty(t.Fitness));
         }
 
         return candidates.MaxBy(t =>
         {
+            if (ShouldHardCutoff(t.Fitness)) return 0.0;
             var score = 0.0;
             if (weights.TryGetValue("Reliability", out var w)) score += w * t.Fitness.Reliability;
             if (weights.TryGetValue("CostEfficiency", out w)) score += w * t.Fitness.CostEfficiency;
             if (weights.TryGetValue("Speed", out w)) score += w * t.Fitness.Speed;
             if (weights.TryGetValue("Safety", out w)) score += w * t.Fitness.Safety;
-            return score;
+            return score - QualityPenalty(t.Fitness);
         });
     }
 
@@ -218,5 +221,31 @@ public sealed class FitnessLandscape
                 count++;
         }
         return count;
+    }
+
+    private const double QualityFloor = 0.10;
+    private const double PenaltySharpness = 5.0;
+    private const double HardCutoffThreshold = 0.3;
+
+    public static bool ShouldHardCutoff(FitnessVector f)
+    {
+        return f.Reliability < HardCutoffThreshold ||
+               f.CostEfficiency < HardCutoffThreshold ||
+               f.Speed < HardCutoffThreshold ||
+               f.Safety < HardCutoffThreshold;
+    }
+
+    private static double QualityPenalty(FitnessVector f)
+    {
+        double penalty = 0;
+        if (f.Reliability < QualityFloor)
+            penalty += Math.Exp((QualityFloor - f.Reliability) * PenaltySharpness) - 1;
+        if (f.CostEfficiency < QualityFloor)
+            penalty += Math.Exp((QualityFloor - f.CostEfficiency) * PenaltySharpness) - 1;
+        if (f.Speed < QualityFloor)
+            penalty += Math.Exp((QualityFloor - f.Speed) * PenaltySharpness) - 1;
+        if (f.Safety < QualityFloor)
+            penalty += Math.Exp((QualityFloor - f.Safety) * PenaltySharpness) - 1;
+        return penalty;
     }
 }

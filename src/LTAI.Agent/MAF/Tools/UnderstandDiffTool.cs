@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using LTAI.Core.Governors;
 using LTAI.Tools.CodeGraph;
 
 namespace LTAI.Agent.Tools;
@@ -6,6 +7,7 @@ namespace LTAI.Agent.Tools;
 [System.ComponentModel.Description("Understand code changes and their impact")]
 public static class UnderstandDiffTool
 {
+    public static IMicroKernel? Kernel { get; set; }
     /// <summary>
     /// Simple git-based impact analysis (backward-compatible overload).
     /// </summary>
@@ -75,6 +77,13 @@ public static class UnderstandDiffTool
 
     private static async Task<List<string>> GetChangedFilesAsync(string repoPath)
     {
+        if (Kernel != null)
+        {
+            var kResult = await Kernel.GitOpAsync("diff", "--name-only HEAD~1", System.Threading.CancellationToken.None).ConfigureAwait(false);
+            if (kResult.Success)
+                return kResult.Data.Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(f => f.Trim()).ToList();
+        }
+
         var psi = new ProcessStartInfo
         {
             FileName = "git", Arguments = "diff --name-only HEAD~1",

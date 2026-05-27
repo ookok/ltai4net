@@ -10,6 +10,8 @@ public sealed class HardwareDetector
         public bool HasGpu => VramMB > 0;
     }
 
+    public static IMicroKernel? Kernel { get; set; }
+
     public static HardwareInfo Detect()
     {
         long ramMB = 8192, vramMB = 0;
@@ -33,31 +35,65 @@ public sealed class HardwareDetector
         }
         catch (Exception ex) { }
 
+        var gpuHandled = false;
+
         try
         {
-            using var proc = global::System.Diagnostics.Process.Start(new global::System.Diagnostics.ProcessStartInfo
+            if (Kernel != null)
             {
-                FileName = "nvidia-smi",
-                Arguments = "--query-gpu=memory.total,name --format=csv,noheader,nounits",
-                RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true
-            });
-            if (proc != null)
-            {
-                proc.WaitForExit(3000);
-                var output = proc.StandardOutput.ReadToEnd().Trim();
-                if (output.Length > 0)
+                var result = Kernel.ExecuteAsync(new KernelOp
                 {
-                    var lines = output.Split('\n');
-                    if (long.TryParse(lines[0].Split(',')[0].Trim(), out var vram))
+                    Command = "nvidia-smi",
+                    Arguments = "--query-gpu=memory.total,name --format=csv,noheader,nounits",
+                    Timeout = TimeSpan.FromSeconds(10)
+                }).GetAwaiter().GetResult();
+
+                if (result.Success)
+                {
+                    var output = result.Data.Trim();
+                    if (output.Length > 0)
                     {
-                        vramMB = vram;
-                        gpuName = lines[0].Split(',').Skip(1).FirstOrDefault()?.Trim();
+                        var lines = output.Split('\n');
+                        if (long.TryParse(lines[0].Split(',')[0].Trim(), out var vram))
+                        {
+                            vramMB = vram;
+                            gpuName = lines[0].Split(',').Skip(1).FirstOrDefault()?.Trim();
+                        }
                     }
+                    gpuHandled = true;
                 }
-                proc.Dispose();
             }
         }
         catch (Exception ex) { }
+
+        if (!gpuHandled)
+        {
+            try
+            {
+                using var proc = global::System.Diagnostics.Process.Start(new global::System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = "nvidia-smi",
+                    Arguments = "--query-gpu=memory.total,name --format=csv,noheader,nounits",
+                    RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true
+                });
+                if (proc != null)
+                {
+                    proc.WaitForExit(3000);
+                    var output = proc.StandardOutput.ReadToEnd().Trim();
+                    if (output.Length > 0)
+                    {
+                        var lines = output.Split('\n');
+                        if (long.TryParse(lines[0].Split(',')[0].Trim(), out var vram))
+                        {
+                            vramMB = vram;
+                            gpuName = lines[0].Split(',').Skip(1).FirstOrDefault()?.Trim();
+                        }
+                    }
+                    proc.Dispose();
+                }
+            }
+            catch (Exception ex) { }
+        }
 
         return new HardwareInfo(ramMB, vramMB, cpu, diskMB, gpuName);
     }

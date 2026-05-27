@@ -1,4 +1,5 @@
 using System.Text.Json;
+using LTAI.Core.Governors;
 using Microsoft.Extensions.Logging;
 
 namespace LTAI.Tools.Integration;
@@ -14,6 +15,8 @@ public sealed class SelfUpdater : IDisposable
         DefaultRequestHeaders = { { "User-Agent", "LTAI/3.0" } }
     };
     private readonly string _projectRoot;
+    private IMicroKernel? _kernel;
+    public void SetKernel(IMicroKernel kernel) => _kernel = kernel;
     private const string GitHubReleases = "https://api.github.com/repos/ookok/ltai4net/releases/latest";
     private const string GiteeReleases = "https://gitee.com/api/v5/repos/ookok/ltai4net/releases/latest";
 
@@ -65,6 +68,14 @@ public sealed class SelfUpdater : IDisposable
 
         try
         {
+            if (_kernel != null)
+            {
+                var result = await _kernel.GitOpAsync("pull", "--ff-only origin master", CancellationToken.None).ConfigureAwait(false);
+                if (!result.Success)
+                    return new Dictionary<string, object> { ["error"] = result.Error ?? "git pull failed" };
+                return new Dictionary<string, object> { ["result"] = result.Data ?? "up to date", ["branch"] = "master" };
+            }
+
             var startInfo = new System.Diagnostics.ProcessStartInfo
             {
                 FileName = "git",

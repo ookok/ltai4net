@@ -3,7 +3,9 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using LibGit2Sharp;
 using LTAI.AI.Governors;
+using LTAI.Core.Governors;
 using LTAI.Core.Configuration;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
@@ -26,6 +28,9 @@ public sealed class DebugLoop
     private readonly HarnessProfile? _harnessProfile;
     private readonly ConcurrentDictionary<string, DebugSession> _sessions = new();
     private readonly ConcurrentDictionary<string, string> _backups = new();
+    private readonly string _repoPath;
+    private readonly IMicroKernel? _kernel;
+    private readonly IProjectSpecProvider? _projectSpec;
 
     private const int MaxSourceLines = 400;
     private const int ContextPadding = 30;
@@ -170,13 +175,17 @@ public sealed class DebugLoop
 
     public DebugLoop(IChatClient chatClient, CorrectionMemory? correctionMemory = null,
         ILogger<DebugLoop>? logger = null, string? persistPath = null,
-        HarnessProfile? harnessProfile = null)
+        HarnessProfile? harnessProfile = null, string? repoPath = null,
+        IMicroKernel? kernel = null, IProjectSpecProvider? projectSpec = null)
     {
         _chatClient = chatClient;
         _correctionMemory = correctionMemory;
         _logger = logger;
         _persistPath = persistPath ?? Path.Combine("livingtree", "meta", "debug_loop.json");
         _harnessProfile = harnessProfile;
+        _repoPath = repoPath ?? Repository.Discover(Directory.GetCurrentDirectory()) ?? "";
+        _kernel = kernel;
+        _projectSpec = projectSpec;
     }
 
     public DebugSession Debug(string target, string args, DebugLevel level = DebugLevel.SemiAuto,
@@ -285,12 +294,30 @@ public sealed class DebugLoop
     {
         try
         {
+            var runCmd = _projectSpec?.GetRunCommand() ?? "dotnet run";
+            var spaceIdx = runCmd.IndexOf(' ');
+            var exe = spaceIdx > 0 ? runCmd[..spaceIdx] : runCmd;
+            var action = spaceIdx > 0 ? runCmd[(spaceIdx + 1)..] + " " : "";
+
+            if (_kernel != null)
+            {
+                var result = _kernel.ExecuteAsync(new KernelOp
+                {
+                    Command = exe,
+                    Arguments = $"{action}--project {target} {args}",
+                    Timeout = TimeSpan.FromMilliseconds(timeoutMs)
+                }, CancellationToken.None).ConfigureAwait(false).GetAwaiter().GetResult();
+
+                if (result.Success && string.IsNullOrWhiteSpace(result.Error)) return null;
+                return ParseError(result.Error ?? "", result.Data ?? "", target);
+            }
+
             using var process = new Process
             {
                 StartInfo = new ProcessStartInfo
                 {
-                    FileName = "dotnet",
-                    Arguments = $"run --project {target} {args}",
+                    FileName = exe,
+                    Arguments = $"{action}--project {target} {args}",
                     RedirectStandardOutput = true,
                     RedirectStandardError = true,
                     UseShellExecute = false,
@@ -1014,8 +1041,9 @@ public sealed class DebugLoop
 
         try
         {
-            if (File.Exists(filePath))
-                _backups[filePath] = File.ReadAllText(filePath);
+            var content = GetHeadVersion(filePath) ?? (File.Exists(filePath) ? File.ReadAllText(filePath) : null);
+            if (content != null)
+                _backups[filePath] = content;
         }
         catch (Exception ex)
         {
@@ -1029,10 +1057,10 @@ public sealed class DebugLoop
         {
             try
             {
-                using var _ = Process.Start("git", $"checkout -- \"{filePath}\"");
+                original = GetHeadVersion(filePath);
+                if (original == null) return;
             }
-            catch (Exception ex) { _logger?.LogWarning(ex, "DebugLoop: git checkout fallback failed"); }
-            return;
+            catch (Exception ex) { _logger?.LogWarning(ex, "DebugLoop: git checkout fallback failed"); return; }
         }
 
         try
@@ -1051,13 +1079,27 @@ public sealed class DebugLoop
     {
         try
         {
-            using var process = Process.Start("git", $"rev-parse HEAD");
-            if (process == null) return null;
-            process.WaitForExit(5000);
-            if (process.ExitCode == 0)
-                return process.StandardOutput.ReadToEnd().Trim();
+            var repoPath = Repository.Discover(Directory.GetCurrentDirectory());
+            if (string.IsNullOrEmpty(repoPath)) return null;
+            using var repo = new Repository(repoPath);
+            return repo.Head.Tip?.Sha;
         }
-        catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"DebugLoop: Failed to capture git state: {ex.Message}"); }
+        catch (Exception) { return null; }
+    }
+
+    private string? GetHeadVersion(string filePath)
+    {
+        if (string.IsNullOrEmpty(_repoPath)) return null;
+        try
+        {
+            using var repo = new Repository(_repoPath);
+            var headCommit = repo.Head.Tip;
+            if (headCommit == null) return null;
+            var entry = headCommit[filePath];
+            if (entry?.Target is Blob blob)
+                return blob.GetContentText();
+        }
+        catch { }
         return null;
     }
 

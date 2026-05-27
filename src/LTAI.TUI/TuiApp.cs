@@ -15,6 +15,7 @@ using LTAI.Tools.CodeEngine;
 using LTAI.Tools.Reasoning;
 using LTAI.Agent.Skills;
 using LTAI.Agent.Workflows;
+using LTAI.Core.Governors;
 using Microsoft.Extensions.Options;
 
 namespace LTAI.TUI;
@@ -73,6 +74,8 @@ public sealed class TuiApp
     private string _lastBuildOutput = "";
 
     private static readonly string[] TaskPhases = { "input", "context", "routing", "reasoning", "generation", "review", "output" };
+
+    public static IMicroKernel? Kernel { get; set; }
 
     public TuiApp(
         ILivingTreeSystem lts,
@@ -1218,6 +1221,11 @@ public sealed class TuiApp
 
     private static string RunGit(string args)
     {
+        if (Kernel != null)
+        {
+            var result = Kernel.GitOpAsync("git", args, CancellationToken.None).GetAwaiter().GetResult();
+            if (result.Success) return result.Data;
+        }
         var psi = new System.Diagnostics.ProcessStartInfo("git", args)
         { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
         using var p = System.Diagnostics.Process.Start(psi); if (p == null) return "";
@@ -1500,6 +1508,34 @@ public sealed class TuiApp
         }
 
         _lastBuildOutput = "";
+
+        if (Kernel != null)
+        {
+            await AnsiConsole.Status().StartAsync($"[cyan]{status}[/]", async ctx =>
+            {
+                var result = await Kernel.ExecuteAsync(new KernelOp
+                {
+                    Command = "dotnet",
+                    Arguments = args,
+                    WorkingDirectory = buildDir
+                });
+                _lastBuildOutput = result.Data;
+                var icon = result.Success ? "green" : "red";
+                var msg = result.Success ? "Success" : $"Failed ({result.Error})";
+                ctx.Status($"[{icon}]{msg}[/]");
+            });
+
+            AnsiConsole.WriteLine();
+            var kPreview = _lastBuildOutput.Length > 600 ? _lastBuildOutput[^600..] : _lastBuildOutput;
+            AnsiConsole.MarkupLine($"[grey]{EscapeM(kPreview)}[/]");
+            var kOk = _lastBuildOutput.Contains("Build succeeded") || _lastBuildOutput.Contains("Build succeeded.");
+            _notify.Notify("LTAI", kOk ? $"dotnet {args} succeeded" : $"dotnet {args} completed (check output)");
+            AnsiConsole.MarkupLine("[grey](Press any key to return)[/]");
+            while (!Console.KeyAvailable) await Task.Delay(50);
+            Console.ReadKey(true);
+            return;
+        }
+
         var sb = new StringBuilder();
 
         await AnsiConsole.Status().StartAsync($"[cyan]{status}[/]", async ctx =>

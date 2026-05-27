@@ -1,6 +1,7 @@
 using LTAI.Knowledge.Core;
 using LTAI.Core.Interfaces;
 using LTAI.Core.Providers;
+using LTAI.Core.Governors;
 using LTAI.Models;
 using Microsoft.Extensions.Logging;
 
@@ -19,9 +20,15 @@ public static class ContextHubBuilder
         SynapticMemory? synapticMemory = null,
         ContextGovernor? contextGovernor = null,
         TextRetrievalBooster? booster = null,
+        DualRouteRetriever? dualRouteRetriever = null,
         ILogger<ContextHub>? logger = null)
     {
         var hub = new ContextHub(logger);
+
+        if (dualRouteRetriever != null)
+        {
+            hub.RegisterDualRouteMemory(dualRouteRetriever);
+        }
 
         if (dualMemory != null)
         {

@@ -19,7 +19,6 @@ public static class WebApplicationExtensions
         app.MapCodeApiEndpoints();
         app.MapGithubAuthEndpoints();
         app.MapSseAgentEndpoints();
-        app.MapOpenCodeBridgeEndpoints();
         app.MapDocRoutesEndpoints();
         app.MapCognitionStreamEndpoints();
         app.MapWorkspaceEndpoints();

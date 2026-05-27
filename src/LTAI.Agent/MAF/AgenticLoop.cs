@@ -2,6 +2,8 @@ using System.Diagnostics;
 using System.Text;
 using LTAI.Agent.Tools;
 using LTAI.AI.Interfaces;
+using LTAI.Core.Configuration;
+using LTAI.Core.Governors;
 using LTAI.Core.System;
 using LTAI.Knowledge.Core;
 using LTAI.Models;
@@ -21,6 +23,8 @@ public sealed class AgenticLoop : IAsyncDisposable
     private readonly MemoryFilesService? _memoryFiles;
     private readonly CSharpCompilationService? _roslynDiagnostics;
     private readonly PartStreamStore? _partStore;
+    private readonly IMicroKernel? _kernel;
+    private readonly IProjectSpecProvider? _projectSpec;
     private readonly PartAssembler _assembler;
     private readonly Action<Part> _onPartAppendedHandler;
     private readonly Action<Part> _onPartUpdatedHandler;
@@ -40,6 +44,8 @@ public sealed class AgenticLoop : IAsyncDisposable
         MemoryFilesService? memoryFiles = null,
         CSharpCompilationService? roslynDiagnostics = null,
         PartStreamStore? partStore = null,
+        IMicroKernel? kernel = null,
+        IProjectSpecProvider? projectSpecProvider = null,
         ILogger<AgenticLoop>? logger = null)
     {
         _lts = lts;
@@ -48,6 +54,8 @@ public sealed class AgenticLoop : IAsyncDisposable
         _memoryFiles = memoryFiles;
         _roslynDiagnostics = roslynDiagnostics;
         _partStore = partStore;
+        _kernel = kernel;
+        _projectSpec = projectSpecProvider;
         _logger = logger ?? NullLogger<AgenticLoop>.Instance;
         _workspaceRoot = OptionService.Get("LTAI_WORKSPACE")
             ?? Directory.GetCurrentDirectory();
@@ -260,9 +268,12 @@ public sealed class AgenticLoop : IAsyncDisposable
         {
             step.Phase = LoopPhase.Run;
 
+            var buildCmd = _projectSpec?.GetBuildCommand() ?? "dotnet build --no-restore";
+            var (buildName, buildArgs) = SplitCommand(buildCmd);
+
             var hookCtx = new ToolUseContext
             {
-                ToolName = "dotnet build",
+                ToolName = buildCmd,
                 SessionId = "agentic_loop"
             };
 
@@ -276,7 +287,7 @@ public sealed class AgenticLoop : IAsyncDisposable
 
             var buildPart = new ToolInvocationPart(
                 Guid.NewGuid().ToString("N")[..8],
-                "dotnet build", "--no-restore", ToolState.Executing);
+                buildName, buildArgs, ToolState.Executing);
             _assembler.StartToolInvocation(buildPart);
 
             context.State["build_ok"] = await CheckBuildAsync(ct).ConfigureAwait(false) ? "true" : "false";
@@ -301,9 +312,11 @@ public sealed class AgenticLoop : IAsyncDisposable
                 var testFailures = new List<TestFailure>();
                 try
                 {
+                    var testCmd = _projectSpec?.GetTestCommand() ?? "dotnet test --no-build";
+                    var (testName, testArgs) = SplitCommand(testCmd);
                     var testPart = new ToolInvocationPart(
                         Guid.NewGuid().ToString("N")[..8],
-                        "dotnet test", "--no-build", ToolState.Executing);
+                        testName, testArgs, ToolState.Executing);
                     _assembler.StartToolInvocation(testPart);
 
                     var testOutput = await CaptureTestOutputAsync(ct).ConfigureAwait(false);
@@ -405,9 +418,25 @@ public sealed class AgenticLoop : IAsyncDisposable
 
     private async Task<(bool success, string output)> CheckBuildWithOutputAsync(CancellationToken ct)
     {
+        if (_kernel != null)
+        {
+            var buildCmd = _projectSpec?.GetBuildCommand() ?? "dotnet build --no-restore";
+            var (buildExe, buildArgs) = SplitCommand(buildCmd);
+            var result = await _kernel.ExecuteAsync(new KernelOp
+            {
+                Command = buildExe,
+                Arguments = buildArgs,
+                WorkingDirectory = _workspaceRoot,
+                Timeout = TimeSpan.FromMinutes(3)
+            }, ct).ConfigureAwait(false);
+            return (result.Success, result.Data ?? result.Error ?? "");
+        }
+
         try
         {
-            var psi = new ProcessStartInfo("dotnet", "build --no-restore")
+            var buildCmd = _projectSpec?.GetBuildCommand() ?? "dotnet build --no-restore";
+            var (buildExe, buildArgs) = SplitCommand(buildCmd);
+            var psi = new ProcessStartInfo(buildExe, buildArgs)
             {
                 WorkingDirectory = _workspaceRoot,
                 RedirectStandardOutput = true,
@@ -427,6 +456,12 @@ public sealed class AgenticLoop : IAsyncDisposable
 
     private async Task<bool> CheckGitCleanAsync(CancellationToken ct)
     {
+        if (_kernel != null)
+        {
+            var result = await _kernel.GitOpAsync("diff", "--quiet", ct).ConfigureAwait(false);
+            return result.Success;
+        }
+
         try
         {
             var psi = new ProcessStartInfo("git", "diff --quiet")
@@ -445,9 +480,25 @@ public sealed class AgenticLoop : IAsyncDisposable
 
     private async Task<string> CaptureTestOutputAsync(CancellationToken ct)
     {
+        if (_kernel != null)
+        {
+            var testCmd = _projectSpec?.GetTestCommand() ?? "dotnet test --no-build --verbosity normal";
+            var (testExe, testArgs) = SplitCommand(testCmd);
+            var result = await _kernel.ExecuteAsync(new KernelOp
+            {
+                Command = testExe,
+                Arguments = testArgs,
+                WorkingDirectory = _workspaceRoot,
+                Timeout = TimeSpan.FromMinutes(5)
+            }, ct).ConfigureAwait(false);
+            return result.Data ?? result.Error ?? "";
+        }
+
         try
         {
-            var psi = new ProcessStartInfo("dotnet", "test --no-build --verbosity normal")
+            var testCmd = _projectSpec?.GetTestCommand() ?? "dotnet test --no-build --verbosity normal";
+            var (testExe, testArgs) = SplitCommand(testCmd);
+            var psi = new ProcessStartInfo(testExe, testArgs)
             {
                 WorkingDirectory = _workspaceRoot,
                 RedirectStandardOutput = true,
@@ -522,6 +573,12 @@ public sealed class AgenticLoop : IAsyncDisposable
         }
 
         return readPaths;
+    }
+
+    private static (string Command, string Args) SplitCommand(string combined)
+    {
+        var idx = combined.IndexOf(' ');
+        return idx < 0 ? (combined, "") : (combined[..idx], combined[(idx + 1)..]);
     }
 
     public async ValueTask DisposeAsync()

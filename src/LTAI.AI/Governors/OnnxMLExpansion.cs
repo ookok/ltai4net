@@ -550,3 +550,134 @@ public sealed class OnnxModelPipeline : IDisposable
 
     public void Dispose() => _parallel.Dispose();
 }
+
+// ============================================================================
+// 6. Subspace Compressor — PCA-based weight/embedding compression
+//    Aligns with Universal Weight Subspace Hypothesis (Kaushik et al. 2025)
+//    Complements OnnxInt8Quantizer: INT8 → 4x, Subspace → up to 10x
+// ============================================================================
+
+public sealed record SubspaceCompressionResult
+{
+    public int OriginalDim { get; init; }
+    public int CompressedDim { get; init; }
+    public double CompressionRatio => OriginalDim > 0 ? 1.0 - (double)CompressedDim / OriginalDim : 0;
+    public double ExplainedVariance { get; init; }
+    public float[]? CompressedWeights { get; init; }
+    public float[][]? BasisVectors { get; init; }
+    public bool Success { get; init; }
+    public string? Error { get; init; }
+}
+
+public sealed class SubspaceCompressor : IDisposable
+{
+    private readonly WeightSubspaceAnalyzer _analyzer;
+    private readonly ILogger<SubspaceCompressor> _logger;
+    private readonly ConcurrentDictionary<string, SubspaceComponents> _compressed = new();
+    private int _totalCompressed;
+
+    public SubspaceCompressor(WeightSubspaceAnalyzer analyzer,
+        ILogger<SubspaceCompressor>? logger = null)
+    {
+        _analyzer = analyzer;
+        _logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<SubspaceCompressor>.Instance;
+    }
+
+    public SubspaceCompressionResult Compress(float[][] weights, string modelId,
+        double targetVariance = 0.95)
+    {
+        var n = weights.Length;
+        var m = weights[0].Length;
+
+        var subspace = _analyzer.Analyze(weights, modelId);
+        var k = 0;
+        double cumulativeVariance = 0;
+        var totalVariance = subspace.SingularValues.Select(v => (double)v * v).Sum();
+
+        for (int i = 0; i < subspace.SingularValues.Length && cumulativeVariance < targetVariance * totalVariance; i++)
+        {
+            cumulativeVariance += (double)subspace.SingularValues[i] * subspace.SingularValues[i];
+            k = i + 1;
+        }
+
+        k = Math.Max(1, k);
+
+        var basis = subspace.Basis.Take(k).ToArray();
+        var projection = _analyzer.Project(weights, subspace);
+
+        _compressed[modelId] = subspace;
+        Interlocked.Increment(ref _totalCompressed);
+
+        var ratio = (double)(n * k) / (n * m);
+        _logger.LogInformation(
+            "SubspaceCompressor: {Id} {OrigDim}→{ProjDim} ({Ratio:P0} compression, {Var:P2} explained)",
+            modelId, m, k, 1.0 - ratio, cumulativeVariance / totalVariance);
+
+        return new SubspaceCompressionResult
+        {
+            OriginalDim = m,
+            CompressedDim = k,
+            ExplainedVariance = cumulativeVariance / totalVariance,
+            CompressedWeights = FlattenProjection(projection),
+            BasisVectors = basis,
+            Success = true
+        };
+    }
+
+    public float[]? Decompress(SubspaceCompressionResult result, int originalDim)
+    {
+        if (!result.Success || result.CompressedWeights == null || result.BasisVectors == null)
+            return null;
+
+        var n = result.CompressedWeights.Length / result.CompressedDim;
+        var output = new float[n * originalDim];
+
+        for (int i = 0; i < n; i++)
+        {
+            for (int d = 0; d < originalDim; d++)
+            {
+                var val = 0f;
+                for (int j = 0; j < result.CompressedDim; j++)
+                {
+                    var basisVal = j < result.BasisVectors.Length && d < result.BasisVectors[j].Length
+                        ? result.BasisVectors[j][d] : 0;
+                    val += result.CompressedWeights[i * result.CompressedDim + j] * basisVal;
+                }
+                output[i * originalDim + d] = val;
+            }
+        }
+
+        return output;
+    }
+
+    public double ComputeUniversalCompressionRatio()
+    {
+        var universal = _analyzer.GetUniversalSubspace();
+        if (universal == null) return 1.0;
+
+        return (double)universal.Rank / universal.OriginalDim;
+    }
+
+    public Dictionary<string, object> GetStats() => new()
+    {
+        ["total_compressed"] = _totalCompressed,
+        ["cached"] = _compressed.Count,
+        ["universal_compression_ratio"] = ComputeUniversalCompressionRatio(),
+        ["analyzer_stats"] = _analyzer.GetStats()
+    };
+
+    public void Dispose() { }
+
+    private static float[] FlattenProjection(WeightProjection proj)
+    {
+        var projectedMatrix = proj.Projected;
+        if (projectedMatrix.Length == 0) return Array.Empty<float>();
+        var n = projectedMatrix.Length;
+        var k = projectedMatrix[0].Length;
+        var flat = new float[n * k];
+        for (int i = 0; i < n; i++)
+        for (int j = 0; j < k; j++)
+            flat[i * k + j] = projectedMatrix[i][j];
+        return flat;
+    }
+}

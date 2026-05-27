@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text.RegularExpressions;
 using LTAI.Tools.CodeGraph;
+using LTAI.Core.Governors;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -36,6 +37,7 @@ public sealed class TestHarness
 {
     private readonly CodeGraphEnhanced? _codeGraph;
     private readonly ILogger<TestHarness> _logger;
+    private readonly IMicroKernel? _kernel;
 
     private static readonly Regex s_dotNetPassedPattern = new(
         @"Passed\s+(?<name>[^(]+)\s*\((?<duration>[\d.]+)\s*\w*\)",
@@ -79,10 +81,11 @@ public sealed class TestHarness
         @"(?<status>PASS|FAIL|SKIP|OK|ERROR)[:\s]+(?<name>.+)$",
         RegexOptions.Multiline | RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
-    public TestHarness(CodeGraphEnhanced? codeGraph = null, ILogger<TestHarness>? logger = null)
+    public TestHarness(CodeGraphEnhanced? codeGraph = null, ILogger<TestHarness>? logger = null, IMicroKernel? kernel = null)
     {
         _codeGraph = codeGraph;
         _logger = logger ?? NullLogger<TestHarness>.Instance;
+        _kernel = kernel;
     }
 
     public async Task<TestResult> RunTestsAsync(
@@ -476,9 +479,30 @@ public sealed class TestHarness
             : output.Substring(start, Math.Min(500, end - start)).Trim();
     }
 
-    private static async Task<(int exitCode, string output)> RunProcessAsync(
+    private async Task<(int exitCode, string output)> RunProcessAsync(
         string command, string args, string workingDir, int timeoutMs)
     {
+        if (_kernel != null)
+        {
+            var kResult = await _kernel.ExecuteAsync(new KernelOp
+            {
+                Command = command,
+                Arguments = args,
+                WorkingDirectory = workingDir,
+                Timeout = TimeSpan.FromMilliseconds(timeoutMs),
+            }).ConfigureAwait(false);
+
+            var combinedOutput = (kResult.Data ?? "") + "\n" + (kResult.Error ?? "");
+
+            if (kResult.Success)
+                return (0, combinedOutput);
+
+            if (kResult.Error?.Contains("timed out", StringComparison.OrdinalIgnoreCase) == true)
+                return (-1, combinedOutput + "\n[TEST TIMED OUT]\n");
+
+            return (-1, combinedOutput);
+        }
+
         var psi = new ProcessStartInfo(command, args)
         {
             WorkingDirectory = workingDir,

@@ -59,17 +59,6 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<Wsl2Manager>();
         services.AddSingleton<ResourceGuard>();
 
-        services.AddSingleton<HotPathObjectPool>();
-
-        services.AddSingleton<IEventBusV2, EventBusV2>();
-        services.AddSingleton<IEventBus, EventBus>();
-        services.AddSingleton<ISessionStore, InMemorySessionStore>();
-
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<ITextClassifier>(
-            ClassificationRegistry.EndpointCategory));
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<ITextClassifier>(
-            ClassificationRegistry.Intent));
-
         return services;
     }
 }

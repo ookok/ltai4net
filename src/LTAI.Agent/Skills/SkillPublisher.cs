@@ -3,6 +3,7 @@ using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using LTAI.Core.Governors;
 using LTAI.Knowledge.Core;
 using LTAI.Models;
 using Microsoft.Extensions.Logging;
@@ -16,6 +17,7 @@ public sealed class SkillPublisher : ISkillExchangeProvider
     private readonly HttpClient _http;
     private readonly ILogger<SkillPublisher> _logger;
     private readonly string _skillsRoot;
+    private readonly IMicroKernel? _kernel;
 
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
@@ -36,13 +38,15 @@ public sealed class SkillPublisher : ISkillExchangeProvider
         SkillLoader loader,
         HttpClient http,
         ILogger<SkillPublisher> logger,
-        string? skillsRoot = null)
+        string? skillsRoot = null,
+        IMicroKernel? kernel = null)
     {
         _registry = registry;
         _loader = loader;
         _http = http;
         _logger = logger;
         _skillsRoot = skillsRoot ?? OptionService.Get("paths.skills") ?? Path.Combine(AppContext.BaseDirectory, "skills");
+        _kernel = kernel;
     }
 
     public async Task<(bool Success, string? CommitSha)> PublishSkillToGitAsync(
@@ -428,12 +432,19 @@ public sealed class SkillPublisher : ISkillExchangeProvider
         return repoUrl;
     }
 
-    private static async Task<string> RunGitAsync(string args, string workDir, CancellationToken ct)
+    private async Task<string> RunGitAsync(string args, string workDir, CancellationToken ct)
     {
         var sanitized = args.Trim();
         foreach (var dangerous in DangerousGitArgs)
             if (sanitized.Contains(dangerous, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException($"Dangerous git command blocked: '{sanitized}' matched pattern '{dangerous}'");
+
+        if (_kernel != null)
+        {
+            var result = await _kernel.GitOpAsync("git", sanitized, ct).ConfigureAwait(false);
+            if (result.Success) return result.Data ?? "";
+            throw new InvalidOperationException($"Git op failed: {result.Error}");
+        }
 
         var processArgs = sanitized;
         using var proc = new Process

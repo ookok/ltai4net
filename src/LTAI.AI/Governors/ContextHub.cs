@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using LTAI.Core.Governors;
 using Microsoft.Extensions.Logging;
 
 namespace LTAI.AI.Governors;
@@ -128,5 +129,59 @@ public sealed class ContextHub : IContextHub
 
         foreach (var item in toEvict)
             _logger.LogDebug("ContextHub: would evict {Kind}:{Id} (priority={Pri:F3})", item.Kind, item.Id, item.Relevance * item.Confidence);
+    }
+
+    public void RegisterDualRouteMemory(DualRouteRetriever retriever)
+    {
+        RegisterStore(ContextDomain.Memory, (query, topK) =>
+        {
+            var cts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+            try
+            {
+                var result = retriever.QueryAsync(query, topK, enableSystem2: true, ct: cts.Token)
+                    .GetAwaiter().GetResult();
+
+                var items = new List<ContextItem>();
+                foreach (var r in result.Results)
+                {
+                    items.Add(new ContextItem
+                    {
+                        Id = r.Node.Id,
+                        Domain = ContextDomain.Memory,
+                        Kind = r.Node.LayerLevel switch
+                        {
+                            0 => ContextKind.Episode,
+                            1 => ContextKind.Synapse,
+                            2 => ContextKind.Entity,
+                            _ => ContextKind.MapEntry
+                        },
+                        Summary = r.Node.Summary,
+                        Detail = r.Node.Content,
+                        Relevance = (float)r.Score,
+                        Confidence = r.Route == "system2" ? 0.9f : 0.6f,
+                        UseCount = r.Node.AccessCount,
+                        Links = new Dictionary<string, string>
+                        {
+                            ["route"] = r.Route,
+                            ["domain"] = r.Node.Domain,
+                            ["layer"] = r.Node.LayerLevel.ToString()
+                        }
+                    });
+                }
+
+                _logger.LogDebug("ContextHub[DualRoute]: {S1Count} system1 + {S2Count} system2 = {Total} results (dominant={Route})",
+                    result.Results.Count(r => r.Route.Contains("system1")),
+                    result.Results.Count(r => r.Route.Contains("system2")),
+                    items.Count,
+                    result.DominantRoute);
+
+                return items;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "ContextHub[DualRoute]: query failed");
+                return new List<ContextItem>();
+            }
+        });
     }
 }

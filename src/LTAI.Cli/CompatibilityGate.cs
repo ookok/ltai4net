@@ -1,13 +1,24 @@
 using System.Reflection;
+using LTAI.Core.Configuration;
+using LTAI.Core.Governors;
 using Microsoft.Extensions.AI;
 using Microsoft.Agents.AI;
 using Spectre.Console;
 
 namespace LTAI.Cli;
 
-public static class CompatibilityGate
+public class CompatibilityGate
 {
-    public static async Task<int> RunAsync(string[] args)
+    private readonly IMicroKernel? _kernel;
+    private readonly IProjectSpecProvider? _projectSpec;
+
+    public CompatibilityGate(IMicroKernel? kernel = null, IProjectSpecProvider? projectSpec = null)
+    {
+        _kernel = kernel;
+        _projectSpec = projectSpec;
+    }
+
+    public async Task<int> RunAsync(string[] args)
     {
         // build + test flags (for local CI simulation)
         var runBuild = args.Contains("--build");
@@ -135,13 +146,31 @@ public static class CompatibilityGate
         catch (Exception ex) { return new GateCheck(false, "AIFunctionFactory", ex.Message); }
     }
 
-    private static async Task<GateCheck> CheckProjectBuildAsync()
+    private async Task<GateCheck> CheckProjectBuildAsync()
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
+        var buildCmd = _projectSpec?.GetBuildCommand() ?? "dotnet build";
+        var spaceIdx = buildCmd.IndexOf(' ');
+        var exe = spaceIdx > 0 ? buildCmd[..spaceIdx] : buildCmd;
+        var action = spaceIdx > 0 ? buildCmd[(spaceIdx + 1)..] + " " : "";
+
+        if (_kernel != null)
+        {
+            var result = await _kernel.ExecuteAsync(new KernelOp
+            {
+                Command = exe,
+                Arguments = $"{action}src/LTAI.Agent/LTAI.Agent.csproj --no-restore"
+            }).ConfigureAwait(false);
+            sw.Stop();
+            return result.Success
+                ? new GateCheck(true, "Build Agent", $"{sw.ElapsedMilliseconds}ms")
+                : new GateCheck(false, "Build Agent", result.Error);
+        }
+
         using var p = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
         {
-            FileName = "dotnet",
-            Arguments = "build src/LTAI.Agent/LTAI.Agent.csproj --no-restore",
+            FileName = exe,
+            Arguments = $"{action}src/LTAI.Agent/LTAI.Agent.csproj --no-restore",
             RedirectStandardOutput = true, RedirectStandardError = true,
             UseShellExecute = false, CreateNoWindow = true
         });
@@ -153,13 +182,31 @@ public static class CompatibilityGate
             : new GateCheck(false, "Build Agent", $"exit {p.ExitCode}");
     }
 
-    private static async Task<GateCheck> CheckTestsPassingAsync()
+    private async Task<GateCheck> CheckTestsPassingAsync()
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
+        var testCmd = _projectSpec?.GetTestCommand() ?? "dotnet test";
+        var spaceIdx = testCmd.IndexOf(' ');
+        var exe = spaceIdx > 0 ? testCmd[..spaceIdx] : testCmd;
+        var action = spaceIdx > 0 ? testCmd[(spaceIdx + 1)..] + " " : "";
+
+        if (_kernel != null)
+        {
+            var result = await _kernel.ExecuteAsync(new KernelOp
+            {
+                Command = exe,
+                Arguments = $"{action}tests/LTAI.Tests/LTAI.Tests.csproj --no-restore --filter FullyQualifiedName~AIAgent"
+            }).ConfigureAwait(false);
+            sw.Stop();
+            return result.Success
+                ? new GateCheck(true, "Tests", $"{sw.ElapsedMilliseconds}ms")
+                : new GateCheck(false, "Tests", result.Error);
+        }
+
         using var p = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
         {
-            FileName = "dotnet",
-            Arguments = "test tests/LTAI.Tests/LTAI.Tests.csproj --no-restore --filter FullyQualifiedName~AIAgent",
+            FileName = exe,
+            Arguments = $"{action}tests/LTAI.Tests/LTAI.Tests.csproj --no-restore --filter FullyQualifiedName~AIAgent",
             RedirectStandardOutput = true, RedirectStandardError = true,
             UseShellExecute = false, CreateNoWindow = true
         });

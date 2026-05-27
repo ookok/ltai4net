@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
+using LTAI.Core.Governors;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -18,6 +19,8 @@ public record PackageResult(
 public sealed class PkgManager
 {
     public static readonly Lazy<PkgManager> Instance = new(() => new PkgManager());
+
+    public static IMicroKernel? Kernel { get; set; }
 
     private readonly ILogger<PkgManager> _logger;
 
@@ -188,6 +191,24 @@ public sealed class PkgManager
 
     private static async Task<(int ExitCode, string Output)> RunDotnetAsync(string arguments)
     {
+        if (Kernel != null)
+        {
+            var kResult = await Kernel.ExecuteAsync(new KernelOp
+            {
+                Command = "dotnet",
+                Arguments = arguments,
+                Timeout = TimeSpan.FromSeconds(60)
+            }).ConfigureAwait(false);
+
+            var kOutput = kResult.Data ?? "";
+            var kError = kResult.Error ?? "";
+            var kCombined = kOutput;
+            if (!kResult.Success && kError.Length > 0)
+                kCombined += "\n[STDERR]\n" + kError;
+
+            return (kResult.Success ? 0 : 1, kCombined.TrimEnd('\n'));
+        }
+
         var psi = new ProcessStartInfo
         {
             FileName = "dotnet",

@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using LTAI.Core.Governors;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -31,6 +32,7 @@ public sealed class ShellEnv
 {
     private static readonly Lazy<ShellEnv> _instance = new(() => new ShellEnv(AutoLogger<ShellEnv>.Create()));
     public static ShellEnv Instance => _instance.Value;
+    public static IMicroKernel? Kernel { get; set; }
 
     private readonly ILogger<ShellEnv> _logger;
     private readonly object _statsLock = new();
@@ -93,9 +95,39 @@ public sealed class ShellEnv
     {
         try
         {
+            var platformTool = OperatingSystem.IsWindows() ? "where" : "which";
+
+            if (Kernel != null)
+            {
+                try
+                {
+                    var kResult = Kernel.ExecuteAsync(new KernelOp
+                    {
+                        Command = platformTool,
+                        Arguments = toolName,
+                        Timeout = TimeSpan.FromSeconds(5)
+                    }).GetAwaiter().GetResult();
+
+                    if (kResult.Success && !string.IsNullOrEmpty(kResult.Data))
+                    {
+                        var kPath = kResult.Data.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()?.Trim();
+                        var kVersion = ProbeVersion(toolName);
+                        return new ToolInfo
+                        {
+                            Name = toolName,
+                            Found = true,
+                            Path = kPath,
+                            Version = kVersion,
+                            InstallHint = null
+                        };
+                    }
+                }
+                catch { }
+            }
+
             var psi = new ProcessStartInfo
             {
-                FileName = OperatingSystem.IsWindows() ? "where" : "which",
+                FileName = platformTool,
                 Arguments = toolName,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
@@ -153,6 +185,27 @@ public sealed class ShellEnv
                 "gh" => "--version",
                 _ => "--version"
             };
+
+            if (Kernel != null)
+            {
+                try
+                {
+                    var kResult = Kernel.ExecuteAsync(new KernelOp
+                    {
+                        Command = toolName,
+                        Arguments = versionArgs,
+                        Timeout = TimeSpan.FromSeconds(5)
+                    }).GetAwaiter().GetResult();
+
+                    if (kResult.Success)
+                    {
+                        var kOutput = (kResult.Data + kResult.Error).Trim();
+                        if (!string.IsNullOrEmpty(kOutput))
+                            return kOutput.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
+                    }
+                }
+                catch { }
+            }
 
             var psi = new ProcessStartInfo
             {
@@ -254,11 +307,53 @@ public sealed class ShellEnv
 
         try
         {
+            var fullWorkdir = Path.GetFullPath(AvoidTraversal(workdir));
+
+            if (Kernel != null)
+            {
+                try
+                {
+                    var shellExe = OperatingSystem.IsWindows() ? "cmd.exe" : "/bin/bash";
+                    var shellArgs = OperatingSystem.IsWindows() ? $"/c {command}" : $"-c \"{command}\"";
+
+                    var kResult = await Kernel.ExecuteAsync(new KernelOp
+                    {
+                        Command = shellExe,
+                        Arguments = shellArgs,
+                        WorkingDirectory = fullWorkdir,
+                        Timeout = TimeSpan.FromSeconds(timeoutSec)
+                    }).ConfigureAwait(false);
+
+                    var kStdout = kResult.Data ?? "";
+                    var kStderr = kResult.Error ?? "";
+                    var kTruncated = false;
+                    if (kStdout.Length > maxOutput)
+                    {
+                        kStdout = kStdout[..maxOutput] + $"\n... [truncated at {maxOutput} chars]";
+                        kTruncated = true;
+                    }
+
+                    lock (_statsLock) { _runCount++; }
+
+                    return new ShellResult
+                    {
+                        Command = command,
+                        Workdir = workdir,
+                        Stdout = kStdout,
+                        Stderr = kStderr,
+                        ExitCode = kResult.Success ? 0 : 1,
+                        ElapsedMs = sw.ElapsedMilliseconds,
+                        Truncated = kTruncated
+                    };
+                }
+                catch { }
+            }
+
             var psi = new ProcessStartInfo
             {
                 FileName = OperatingSystem.IsWindows() ? "cmd.exe" : "/bin/bash",
                 Arguments = OperatingSystem.IsWindows() ? $"/c {command}" : $"-c \"{command}\"",
-                WorkingDirectory = Path.GetFullPath(AvoidTraversal(workdir)),
+                WorkingDirectory = fullWorkdir,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,

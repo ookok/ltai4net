@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using LTAI.Core.Governors;
 
 namespace LTAI.Tools.Evolution;
 
@@ -9,6 +10,7 @@ public record DocSection(string Title, string Content, string Category);
 
 public sealed class SelfDocumenter
 {
+    public static IMicroKernel? Kernel { get; set; }
     private readonly string _workspace;
     private readonly string _outputDir;
 
@@ -108,6 +110,12 @@ Directories:
     {
         try
         {
+            if (Kernel != null)
+            {
+                var result = Kernel.GitOpAsync("log", "--oneline -10", CancellationToken.None).GetAwaiter().GetResult();
+                if (result.Success && !string.IsNullOrEmpty(result.Data)) return result.Data;
+            }
+
             var psi = new System.Diagnostics.ProcessStartInfo("git", "log --oneline -10")
             {
                 WorkingDirectory = _workspace, RedirectStandardOutput = true,

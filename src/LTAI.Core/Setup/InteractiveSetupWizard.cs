@@ -45,6 +45,27 @@ public class InteractiveSetupWizard
         Console.WriteLine($"硬件检测: {hwInfo.CpuCores} 核 | {hwInfo.MemoryMB}MB 内存 | GPU: {(hwInfo.HasGpu ? hwInfo.GpuName : "无")} | NPU: {(hwInfo.HasNpu ? "有" : "无")}");
         Console.WriteLine($"推荐引擎: {hwInfo.RecommendedEngine.ToUpper()}");
         Console.WriteLine();
+        Console.WriteLine("═══════════════════════════════════════════════════════");
+        Console.WriteLine("  快速引导: 一键下载所有 L0 本地模型 (推荐)");
+        Console.WriteLine("═══════════════════════════════════════════════════════");
+        Console.WriteLine();
+        Console.WriteLine("  这将自动检测设备配置，筛选适合的 L0 模型并一键下载:");
+        Console.WriteLine("  - Embedding 模型 (BGE/Jina) — 向量检索");
+        Console.WriteLine("  - OCR 模型 (RapidOCR) — 文字识别");
+        Console.WriteLine("  - TTS 模型 (Supertonic) — 语音合成");
+        Console.WriteLine("  - Router 模型 (Needle) — 工具路由");
+        Console.WriteLine();
+        Console.WriteLine("  [0] 快速引导: 下载所有兼容的 L0 模型 (★推荐)");
+        Console.WriteLine("  [Enter] 跳过，进入手动配置");
+        Console.WriteLine();
+
+        var quickChoice = ReadChoice("选择", "", new[] { "0", "" });
+        if (quickChoice == "0")
+        {
+            await QuickBootstrapAsync(hwInfo, cancellationToken).ConfigureAwait(false);
+            Console.WriteLine();
+        }
+
         Console.WriteLine("系统已预配置默认值，仅需提供 API Key 即可使用。");
         Console.WriteLine("直接按 Enter 跳过，将使用本地模式运行。");
         Console.WriteLine();
@@ -827,6 +848,77 @@ public class InteractiveSetupWizard
             current = Path.GetDirectoryName(current);
         }
         return null;
+    }
+
+    private async Task QuickBootstrapAsync(HardwareInfo hwInfo, CancellationToken ct)
+    {
+        var downloader = new L0BootstrapDownloader(_modelDownloader, GetModelsDir());
+        var items = downloader.Scan();
+
+        Console.WriteLine();
+        Console.WriteLine("━━━ 扫描结果 ━━━");
+        Console.WriteLine($"设备级别: {DeviceProfiler.Profile().Tier} | 可用内存: {hwInfo.MemoryMB} MB");
+        Console.WriteLine();
+
+        foreach (var item in items)
+        {
+            var icon = item.Status switch
+            {
+                L0DownloadStatus.AlreadyInstalled => "✓",
+                L0DownloadStatus.Recommended => "★",
+                L0DownloadStatus.Optional => "○",
+                L0DownloadStatus.TooBig => "✗",
+                _ => "?"
+            };
+            Console.WriteLine($"  [{icon}] {item.Name} ({item.DiskSizeMB}MB) [{item.Category}]");
+        }
+
+        var toDownload = items.Where(i => i.Status is L0DownloadStatus.Recommended or L0DownloadStatus.Optional).ToList();
+        Console.WriteLine();
+        Console.WriteLine($"待下载: {toDownload.Count} 个模型, {toDownload.Sum(i => i.DiskSizeMB)} MB");
+        Console.WriteLine();
+
+        if (toDownload.Count == 0)
+        {
+            Console.WriteLine("所有兼容模型已安装。");
+            Console.WriteLine();
+            return;
+        }
+
+        Console.Write("确认下载？(Y/n) ");
+        var confirm = Console.ReadLine()?.Trim();
+        if (!string.IsNullOrWhiteSpace(confirm) && confirm.Equals("n", StringComparison.OrdinalIgnoreCase))
+        {
+            Console.WriteLine("已取消。");
+            Console.WriteLine();
+            return;
+        }
+
+        Console.WriteLine();
+        var progress = new Progress<L0DownloadItem>(item =>
+        {
+            if (item.Status == L0DownloadStatus.Downloading)
+                Console.Write(".");
+        });
+
+        var result = await downloader.BootstrapAsync(downloadOptional: true, progress, ct: ct).ConfigureAwait(false);
+
+        Console.WriteLine();
+        Console.WriteLine();
+        Console.WriteLine($"━━━ 下载完成 ━━━");
+        Console.WriteLine($"  成功: {result.Downloaded} | 跳过: {result.Skipped} | 失败: {result.Failed}");
+        Console.WriteLine($"  下载量: {result.TotalDownloadMB} MB | 耗时: {result.Elapsed.TotalSeconds:F0}s");
+        Console.WriteLine();
+
+        foreach (var item in result.Items.Where(i => i.Status == L0DownloadStatus.Downloaded))
+            Console.WriteLine($"  ✓ {item.Name} → {item.LocalPath}");
+        foreach (var item in result.Items.Where(i => i.Status == L0DownloadStatus.Failed))
+            Console.WriteLine($"  ✗ {item.Name}: {item.Error}");
+        foreach (var item in result.Items.Where(i => i.Status == L0DownloadStatus.AlreadyInstalled))
+            Console.WriteLine($"  ◎ {item.Name} (已安装)");
+
+        Console.WriteLine();
+        Console.WriteLine(result.Summary);
     }
 
     private record HardwareInfo(int CpuCores, long MemoryMB, bool HasGpu, string GpuName, bool HasNpu, string RecommendedEngine);

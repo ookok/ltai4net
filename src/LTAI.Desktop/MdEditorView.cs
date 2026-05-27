@@ -10,6 +10,7 @@ using Avalonia.Threading;
 using AvaloniaEdit;
 using AvaloniaEdit.Highlighting;
 using AvaloniaEdit.Rendering;
+using LTAI.Core.Governors;
 using LTAI.Knowledge.Core;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -18,6 +19,8 @@ namespace LTAI.Desktop;
 
 public sealed class MdEditorView : UserControl
 {
+    public static IMicroKernel? Kernel { get; set; }
+
     private readonly string _workspaceRoot;
     private TreeView _fileTree;
     private TextBox _mdEditor;
@@ -1057,6 +1060,26 @@ public sealed class MdEditorView : UserControl
             _outputPanel.Text = $"$ {fileName} {args}\n\n";
             _outputPanel.IsVisible = true;
         });
+
+        if (Kernel != null)
+        {
+            var result = await Kernel.ExecuteAsync(new KernelOp
+            {
+                Command = fileName,
+                Arguments = args,
+                WorkingDirectory = workingDir
+            });
+
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (!string.IsNullOrEmpty(result.Data))
+                    _outputPanel.Text += result.Data + "\n";
+                if (!string.IsNullOrEmpty(result.Error))
+                    _outputPanel.Text += result.Error + "\n";
+                _outputPanel.Text += $"\n--- kernel result: {(result.Success ? "ok" : "failed")} ({result.ElapsedMs}ms) ---\n";
+            });
+            return;
+        }
 
         var psi = new ProcessStartInfo(fileName, args)
         {

@@ -1,0 +1,430 @@
+using System.Collections.Concurrent;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+
+namespace LTAI.Core.Governors;
+
+public sealed record MemoryNode
+{
+    public string Id { get; init; } = Guid.NewGuid().ToString("N")[..12];
+    public string Content { get; init; } = "";
+    public string Summary { get; init; } = "";
+    public float[]? Embedding { get; init; }
+    public int LayerLevel { get; init; } // 0=detail, 1=summary, 2=concept, 3=domain
+    public string Domain { get; init; } = "general";
+    public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
+    public DateTime LastAccessedAt { get; set; } = DateTime.UtcNow;
+    public int AccessCount { get; set; }
+    public double Importance { get; set; } = 0.5;
+    public HashSet<string> Tags { get; init; } = new();
+    public Dictionary<string, string> Metadata { get; init; } = new();
+}
+
+public sealed record MemoryEdge
+{
+    public string SourceId { get; init; } = "";
+    public string TargetId { get; init; } = "";
+    public MemoryEdgeType Type { get; init; }
+    public double Weight { get; init; } = 1.0;
+    public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
+}
+
+public enum MemoryEdgeType
+{
+    SimilarTo,     // System-1: semantic similarity edge
+    ParentOf,      // System-2: hierarchical parent-child
+    ChildOf,       // reverse: child → parent
+    CoOccurred,    // temporal proximity
+    ReferencedBy   // explicit reference
+}
+
+public sealed class HierarchyLayer
+{
+    public int Level { get; init; }
+    public string Label { get; init; } = ""; // detail, summary, concept, domain
+    public int NodeCount => _nodes.Count;
+    public double CompressionRatio { get; init; } = 1.0;
+    public ConcurrentDictionary<string, MemoryNode> Nodes => _nodes;
+    private readonly ConcurrentDictionary<string, MemoryNode> _nodes = new();
+}
+
+public sealed class MemoryGraph
+{
+    private readonly ConcurrentDictionary<string, MemoryNode> _nodes = new();
+    private readonly ConcurrentDictionary<string, MemoryEdge> _edges = new();
+    private readonly List<HierarchyLayer> _hierarchy = new();
+    private readonly ILogger<MemoryGraph> _logger;
+    private readonly int _maxNodes;
+    private readonly Func<string, string, string>? _summarizer;
+    private static readonly JsonSerializerOptions _jsonOpts = new() { WriteIndented = true };
+
+    public int NodeCount => _nodes.Count;
+    public int EdgeCount => _edges.Count;
+    public IReadOnlyList<HierarchyLayer> Hierarchy => _hierarchy.AsReadOnly();
+
+    public MemoryGraph(int maxNodes = 10000, Func<string, string, string>? summarizer = null, ILogger<MemoryGraph>? logger = null)
+    {
+        _maxNodes = maxNodes;
+        _summarizer = summarizer;
+        _logger = logger ?? NullLogger<MemoryGraph>.Instance;
+
+        _hierarchy.Add(new HierarchyLayer { Level = 0, Label = "detail", CompressionRatio = 1.0 });
+        _hierarchy.Add(new HierarchyLayer { Level = 1, Label = "summary", CompressionRatio = 0.3 });
+        _hierarchy.Add(new HierarchyLayer { Level = 2, Label = "concept", CompressionRatio = 0.1 });
+        _hierarchy.Add(new HierarchyLayer { Level = 3, Label = "domain", CompressionRatio = 0.03 });
+    }
+
+    public MemoryNode AddNode(MemoryNode node)
+    {
+        if (_nodes.Count >= _maxNodes)
+            PruneStaleNodes();
+
+        _nodes[node.Id] = node;
+        var layer = _hierarchy.FirstOrDefault(l => l.Level == node.LayerLevel);
+        layer?.Nodes[node.Id] = node;
+
+        _logger.LogDebug("MemoryGraph: added node {Id} at layer {Layer} ({Domain})",
+            node.Id, node.LayerLevel, node.Domain);
+
+        if (node.LayerLevel == 0 && _summarizer != null)
+            TryAutoSummarize(node);
+
+        if (node.LayerLevel == 1 && _summarizer != null)
+            TryAutoConceptualize(node);
+
+        return node;
+    }
+
+    private void TryAutoSummarize(MemoryNode detailNode)
+    {
+        var sameDomainDetails = _nodes.Values
+            .Where(n => n.LayerLevel == 0 && n.Domain == detailNode.Domain)
+            .ToList();
+
+        if (sameDomainDetails.Count < 5) return;
+
+        var existingSummary = _nodes.Values.FirstOrDefault(n =>
+            n.LayerLevel == 1 && n.Domain == detailNode.Domain &&
+            n.Summary.Contains("auto-summary"));
+
+        if (existingSummary != null)
+        {
+            var combinedContent = string.Join(" | ", sameDomainDetails
+                .OrderByDescending(n => n.AccessCount)
+                .Take(10)
+                .Select(n => n.Content.Length < 200 ? n.Content : n.Summary));
+            var updated = existingSummary with { Summary = _summarizer(combinedContent, detailNode.Domain), LastAccessedAt = DateTime.UtcNow };
+            _nodes[existingSummary.Id] = updated;
+            var layer = _hierarchy.FirstOrDefault(l => l.Level == 1);
+            layer?.Nodes[existingSummary.Id] = updated;
+            return;
+        }
+
+        var contents = sameDomainDetails
+            .OrderByDescending(n => n.Importance)
+            .Take(10)
+            .Select(n => n.Content.Length < 200 ? n.Content : n.Summary);
+
+        var newSummary = new MemoryNode
+        {
+            LayerLevel = 1,
+            Domain = detailNode.Domain,
+            Summary = $"auto-summary: {_summarizer(string.Join(" | ", contents), detailNode.Domain)}",
+            Content = "",
+            Importance = sameDomainDetails.Average(n => n.Importance) * 0.8,
+            Tags = new HashSet<string>(sameDomainDetails.SelectMany(n => n.Tags).Distinct().Take(10)),
+            Metadata = new Dictionary<string, string> { ["source"] = "auto-summarize" }
+        };
+
+        AddNode(newSummary);
+        foreach (var detail in sameDomainDetails.Take(5))
+        {
+            AddEdge(new MemoryEdge
+            {
+                SourceId = newSummary.Id,
+                TargetId = detail.Id,
+                Type = MemoryEdgeType.ParentOf,
+                Weight = 1.0 / (detail.Importance + 1)
+            });
+        }
+
+        _logger.LogInformation("MemoryGraph: auto-summarized {Count} detail nodes in domain '{Domain}' → summary node {Id}",
+            sameDomainDetails.Count, detailNode.Domain, newSummary.Id);
+    }
+
+    private void TryAutoConceptualize(MemoryNode summaryNode)
+    {
+        var sameDomainSummaries = _nodes.Values
+            .Where(n => n.LayerLevel == 1 && n.Domain == summaryNode.Domain)
+            .ToList();
+
+        if (sameDomainSummaries.Count < 5) return;
+
+        var existingConcept = _nodes.Values.FirstOrDefault(n =>
+            n.LayerLevel == 2 && n.Domain == summaryNode.Domain &&
+            n.Summary.Contains("auto-concept"));
+
+        if (existingConcept != null)
+        {
+            var combinedContent = string.Join("\n", sameDomainSummaries
+                .OrderByDescending(n => n.Importance)
+                .Take(8)
+                .Select(n => n.Summary));
+            var updated = existingConcept with { Summary = $"auto-concept: {_summarizer!(combinedContent, summaryNode.Domain)}", LastAccessedAt = DateTime.UtcNow };
+            _nodes[existingConcept.Id] = updated;
+            var layer = _hierarchy.FirstOrDefault(l => l.Level == 2);
+            layer?.Nodes[existingConcept.Id] = updated;
+            return;
+        }
+
+        var summaries = sameDomainSummaries
+            .OrderByDescending(n => n.Importance)
+            .Take(8)
+            .Select(n => n.Summary);
+
+        var tags = new HashSet<string>(sameDomainSummaries
+            .SelectMany(n => n.Tags)
+            .GroupBy(t => t)
+            .OrderByDescending(g => g.Count())
+            .Take(5)
+            .Select(g => g.Key));
+
+        var newConcept = new MemoryNode
+        {
+            LayerLevel = 2,
+            Domain = summaryNode.Domain,
+            Summary = $"auto-concept: {_summarizer!(string.Join("\n", summaries), summaryNode.Domain)}",
+            Content = "",
+            Importance = sameDomainSummaries.Average(n => n.Importance) * 0.6,
+            Tags = tags,
+            Metadata = new Dictionary<string, string> { ["source"] = "auto-conceptualize" }
+        };
+
+        AddNode(newConcept);
+        foreach (var summary in sameDomainSummaries.Take(5))
+        {
+            AddEdge(new MemoryEdge
+            {
+                SourceId = newConcept.Id,
+                TargetId = summary.Id,
+                Type = MemoryEdgeType.ParentOf,
+                Weight = 1.0 / (summary.Importance + 1)
+            });
+        }
+
+        _logger.LogInformation("MemoryGraph: auto-conceptualized {Count} summary nodes in domain '{Domain}' → concept node {Id}",
+            sameDomainSummaries.Count, summaryNode.Domain, newConcept.Id);
+    }
+
+    public void TriggerAutoConceptualize(string domain)
+    {
+        var summaries = _nodes.Values
+            .Where(n => n.LayerLevel == 1 && n.Domain == domain)
+            .ToList();
+
+        if (summaries.Count == 0) return;
+
+        var dummy = summaries[0] with { };
+        if (_summarizer != null)
+            TryAutoConceptualize(dummy);
+    }
+
+    public void TriggerAutoSummarize(string domain)
+    {
+        var details = _nodes.Values
+            .Where(n => n.LayerLevel == 0 && n.Domain == domain)
+            .ToList();
+
+        if (details.Count == 0) return;
+
+        var dummy = details[0] with { };
+        if (_summarizer != null)
+            TryAutoSummarize(dummy);
+    }
+
+    public MemoryEdge AddEdge(MemoryEdge edge)
+    {
+        var key = $"{edge.SourceId}->{edge.TargetId}::{edge.Type}";
+        _edges[key] = edge;
+
+        if (edge.Type == MemoryEdgeType.ParentOf)
+        {
+            var reverse = new MemoryEdge
+            {
+                SourceId = edge.TargetId,
+                TargetId = edge.SourceId,
+                Type = MemoryEdgeType.ChildOf,
+                Weight = edge.Weight
+            };
+            _edges[$"{reverse.SourceId}->{reverse.TargetId}::{reverse.Type}"] = reverse;
+        }
+
+        return edge;
+    }
+
+    public MemoryNode? GetNode(string id)
+    {
+        if (_nodes.TryGetValue(id, out var node))
+        {
+            node.LastAccessedAt = DateTime.UtcNow;
+            node.AccessCount++;
+            return node;
+        }
+        return null;
+    }
+
+    public IReadOnlyList<MemoryNode> GetChildren(string parentId)
+    {
+        var children = new List<MemoryNode>();
+        foreach (var kv in _edges)
+        {
+            if (kv.Value.SourceId == parentId && kv.Value.Type == MemoryEdgeType.ParentOf)
+            {
+                var child = GetNode(kv.Value.TargetId);
+                if (child != null) children.Add(child);
+            }
+        }
+        return children;
+    }
+
+    public IReadOnlyList<MemoryNode> GetNeighbors(string nodeId, int maxDepth = 1)
+    {
+        var visited = new HashSet<string> { nodeId };
+        var result = new List<MemoryNode>();
+
+        var queue = new Queue<(string id, int depth)>();
+        queue.Enqueue((nodeId, 0));
+
+        while (queue.Count > 0)
+        {
+            var (currentId, depth) = queue.Dequeue();
+            if (depth > maxDepth) continue;
+
+            foreach (var kv in _edges)
+            {
+                var isSource = kv.Value.SourceId == currentId;
+                var isTarget = kv.Value.TargetId == currentId;
+                if (!isSource && !isTarget) continue;
+
+                var neighborId = isSource ? kv.Value.TargetId : kv.Value.SourceId;
+                if (!visited.Add(neighborId)) continue;
+
+                var neighbor = GetNode(neighborId);
+                if (neighbor != null)
+                {
+                    result.Add(neighbor);
+                    queue.Enqueue((neighborId, depth + 1));
+                }
+            }
+        }
+
+        return result;
+    }
+
+    public IReadOnlyList<MemoryNode> QueryByDomain(string domain)
+    {
+        return _nodes.Values
+            .Where(n => n.Domain == domain)
+            .OrderByDescending(n => n.Importance)
+            .ToList();
+    }
+
+    public IReadOnlyList<MemoryNode> QueryByLayer(int layerLevel)
+    {
+        return _nodes.Values
+            .Where(n => n.LayerLevel == layerLevel)
+            .OrderByDescending(n => n.Importance)
+            .ToList();
+    }
+
+    public IReadOnlyList<MemoryNode> TopDownTraverse(string? rootDomain = null, int maxResults = 20)
+    {
+        var results = new List<MemoryNode>();
+        var seen = new HashSet<string>();
+
+        var domains = rootDomain != null
+            ? new[] { rootDomain }
+            : _nodes.Values.Where(n => n.LayerLevel == 3).Select(n => n.Domain).Distinct();
+
+        foreach (var domain in domains)
+        {
+            var domainNodes = QueryByDomain(domain)
+                .Where(n => n.LayerLevel == 3)
+                .Take(2);
+
+            foreach (var domainNode in domainNodes)
+            {
+                if (seen.Add(domainNode.Id))
+                    results.Add(domainNode);
+
+                var children = GetChildren(domainNode.Id);
+                foreach (var child in children.Take(3))
+                {
+                    if (results.Count >= maxResults) break;
+                    if (seen.Add(child.Id))
+                        results.Add(child);
+
+                    var grandchildren = GetChildren(child.Id);
+                    foreach (var gc in grandchildren.Take(2))
+                    {
+                        if (results.Count >= maxResults) break;
+                        if (seen.Add(gc.Id))
+                            results.Add(gc);
+                    }
+                }
+            }
+
+            if (results.Count >= maxResults) break;
+        }
+
+        return results;
+    }
+
+    public void BuildHierarchy()
+    {
+        foreach (var node in _nodes.Values.Where(n => n.LayerLevel > 0))
+        {
+            var lowerNodes = _nodes.Values
+                .Where(n => n.LayerLevel == node.LayerLevel - 1 && n.Domain == node.Domain)
+                .Take(5)
+                .ToList();
+
+            foreach (var lower in lowerNodes)
+            {
+                AddEdge(new MemoryEdge
+                {
+                    SourceId = node.Id,
+                    TargetId = lower.Id,
+                    Type = MemoryEdgeType.ParentOf,
+                    Weight = 1.0 / (node.LayerLevel + 1)
+                });
+            }
+        }
+
+        _logger.LogInformation("MemoryGraph: hierarchy built — {NodeCount} nodes across {LayerCount} layers",
+            _nodes.Count, _hierarchy.Count);
+    }
+
+    private void PruneStaleNodes()
+    {
+        var cutoff = DateTime.UtcNow.AddDays(-30);
+        var staleIds = _nodes.Values
+            .Where(n => n.LastAccessedAt < cutoff && n.Importance < 0.3)
+            .Select(n => n.Id)
+            .Take(_nodes.Count / 10)
+            .ToList();
+
+        foreach (var id in staleIds)
+        {
+            _nodes.TryRemove(id, out _);
+            var edgeKeys = _edges.Where(kv => kv.Value.SourceId == id || kv.Value.TargetId == id)
+                .Select(kv => kv.Key).ToList();
+            foreach (var key in edgeKeys) _edges.TryRemove(key, out _);
+        }
+
+        if (staleIds.Count > 0)
+            _logger.LogDebug("MemoryGraph: pruned {Count} stale nodes", staleIds.Count);
+    }
+}

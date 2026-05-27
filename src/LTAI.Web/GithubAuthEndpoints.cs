@@ -2,6 +2,7 @@ using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using LTAI.Core.Governors;
 using LTAI.Knowledge.Core;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -11,6 +12,8 @@ namespace LTAI.Web;
 
 public static class GithubAuthEndpoints
 {
+    public static IMicroKernel? Kernel { get; set; }
+
     private static readonly Lazy<string> TokenPath = new(() =>
         Path.Combine(OptionService.Get("paths.data") ?? Path.Combine(AppContext.BaseDirectory, "data"), "github_token.json"));
 
@@ -260,6 +263,33 @@ public static class GithubAuthEndpoints
                 var authedUrl = token != null && !string.IsNullOrEmpty(token.AccessToken)
                     ? $"https://oauth2:{Uri.EscapeDataString(token.AccessToken)}@github.com/{request.RepoFullName}.git"
                     : $"https://github.com/{request.RepoFullName}.git";
+
+                if (Kernel != null)
+                {
+                    try
+                    {
+                        var kResult = await Kernel.ExecuteAsync(new KernelOp
+                        {
+                            Command = "git",
+                            Arguments = $"clone --branch {branch} --single-branch -- \"{authedUrl}\" \"{targetPath}\"",
+                            Timeout = TimeSpan.FromSeconds(60)
+                        }, CancellationToken.None).ConfigureAwait(false);
+
+                        if (kResult.Success)
+                        {
+                            context.Response.ContentType = "application/json";
+                            await context.Response.WriteAsync(JsonSerializer.Serialize(new
+                            {
+                                repo = request.RepoFullName,
+                                branch,
+                                path = targetPath,
+                                cloned = true
+                            })).ConfigureAwait(false);
+                            return;
+                        }
+                    }
+                    catch { }
+                }
 
                 var psi = new System.Diagnostics.ProcessStartInfo
                 {
