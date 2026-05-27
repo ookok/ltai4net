@@ -14,6 +14,7 @@ public sealed class EvolutionLoopHostedService : BackgroundService
     private readonly ArchitectLoop _architect;
     private readonly ICPSProcessingService? _cps;
     private readonly CoordinationScheduler? _scheduler;
+    private readonly MemoryGraph? _memoryGraph;
     private readonly ILogger<EvolutionLoopHostedService> _logger;
 
     private readonly TimeSpan _evolutionInterval;
@@ -33,6 +34,7 @@ public sealed class EvolutionLoopHostedService : BackgroundService
         TimeSpan? deployInterval = null,
         ICPSProcessingService? cps = null,
         CoordinationScheduler? scheduler = null,
+        MemoryGraph? memoryGraph = null,
         ILogger<EvolutionLoopHostedService>? logger = null)
     {
         _router = router;
@@ -43,6 +45,7 @@ public sealed class EvolutionLoopHostedService : BackgroundService
         _architect = architect;
         _cps = cps;
         _scheduler = scheduler;
+        _memoryGraph = memoryGraph;
         _evolutionInterval = evolutionInterval ?? TimeSpan.FromMinutes(2);
         _architectInterval = architectInterval ?? TimeSpan.FromMinutes(5);
         _deployInterval = deployInterval ?? TimeSpan.FromMinutes(10);
@@ -110,6 +113,8 @@ public sealed class EvolutionLoopHostedService : BackgroundService
                         _logger.LogInformation("Deployed {Count} top genes to ParetoRouter", deployed);
 
                     _genePool.DecayUnused(TimeSpan.FromHours(1));
+
+                    _memoryGraph?.PruneStaleNodes();
                 }
                 catch (Exception ex)
                 {

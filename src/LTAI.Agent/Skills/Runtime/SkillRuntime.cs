@@ -45,6 +45,7 @@ public sealed class SkillRuntime
 
         try
         {
+            var retryCount = 0;
             for (int i = 0; i < skill.Steps.Count; i++)
             {
                 ct.ThrowIfCancellationRequested();
@@ -53,9 +54,13 @@ public sealed class SkillRuntime
                 var beforeResult = await _hooks.RunBeforeStepAsync(i, _scope, _expr).ConfigureAwait(false);
                 if (beforeResult.ShouldRetry)
                 {
+                    retryCount++;
+                    await Task.Delay(Math.Min(100 * (1 << Math.Min(retryCount, 4)), 3000), ct).ConfigureAwait(false);
                     i--;
                     continue;
                 }
+
+                retryCount = 0;
 
                 SkillValue result;
                 try
@@ -67,9 +72,13 @@ public sealed class SkillRuntime
                     var errResult = await _hooks.RunOnErrorAsync(i, _scope, _expr, ex.Message).ConfigureAwait(false);
                     if (errResult.ShouldRetry)
                     {
+                        retryCount++;
+                        await Task.Delay(Math.Min(200 * (1 << Math.Min(retryCount, 4)), 5000), ct).ConfigureAwait(false);
                         i--;
                         continue;
                     }
+
+                    retryCount = 0;
 
                     steps.Add(new SkillStepResult(step.Index, false, ex.Message, TimeSpan.Zero));
                     output.AppendLine($"[Error: {ex.Message}]");
@@ -85,7 +94,11 @@ public sealed class SkillRuntime
                 steps.Add(new SkillStepResult(step.Index, true, text, TimeSpan.Zero));
 
                 if (afterResult.ShouldRetry && i > 0)
+                {
+                    retryCount++;
+                    await Task.Delay(Math.Min(100 * (1 << Math.Min(retryCount, 4)), 3000), ct).ConfigureAwait(false);
                     i -= 2;
+                }
             }
 
             foreach (var rule in skill.Verification)

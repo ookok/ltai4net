@@ -449,9 +449,9 @@ public sealed class MemoryGraph
             _nodes.Count, _hierarchy.Count);
     }
 
-    private void PruneStaleNodes()
+    public void PruneStaleNodes()
     {
-        var cutoff = DateTime.UtcNow.AddDays(-30);
+        var cutoff = DateTime.UtcNow.AddDays(-7);
         var staleIds = _nodes.Values
             .Where(n => n.LastAccessedAt < cutoff && n.Importance < 0.3)
             .Select(n => n.Id)

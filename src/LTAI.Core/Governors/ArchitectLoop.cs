@@ -312,6 +312,14 @@ public sealed class ArchitectLoop
     {
         if (proposal.Status != ProposalStatus.Approved) return false;
 
+        if (proposal.Risk > 0.7)
+        {
+            _logger.LogWarning("[HITL-REQUIRED] High-risk proposal {P}: risk={Risk:F2}, action={Action}, desc={Desc} — human approval needed before deployment",
+                proposal.Id, proposal.Risk, proposal.Action, proposal.Description);
+            proposal.Status = ProposalStatus.Pending;
+            return false;
+        }
+
         if (proposal.Risk > 0.3)
         {
             var shadowRouter = _counterfactualGate.CloneRouter(_router);

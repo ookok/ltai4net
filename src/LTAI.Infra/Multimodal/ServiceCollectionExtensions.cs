@@ -21,6 +21,9 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<MultimodalOrchestrator>();
         services.AddHostedService<OCREngineCleanupService>();
 
+        services.AddSingleton<LTAI.Core.Multimodal.WhisperSttEngine>();
+        services.AddSingleton<LTAI.Core.Multimodal.FfmpegMediaProcessor>();
+
         services.AddSingleton<ITtsEngine>(sp =>
         {
             var options = sp.GetService<Microsoft.Extensions.Options.IOptions<LTAI.Core.Configuration.LTAIOptions>>()?.Value;

@@ -219,6 +219,12 @@ public sealed class RecursiveCausalAudit
         return steps;
     }
 
+    private static readonly Regex MeasurableEffect = new(
+        @"\d+%|\d+\.\d+|\bincrease\b|\bdecrease\b|\breduce\b|\braise\b|\blower\b|\bhigher\b|" +
+        @"\b升\b|\b降\b|\b提高\b|\b降低\b|\b增加\b|\b减少\b|\b大于\b|\b小于\b|" +
+        @"\bleads?\sto\b|\bresults?\sin\b|\bcauses?\b|\b导致\b|\b引起\b",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
     private static bool HasCausalAnchor(string step)
     {
         var causalMarkers = new[]
@@ -226,8 +232,13 @@ public sealed class RecursiveCausalAudit
             "because", "since", "therefore", "thus", "hence", "so",
             "因为", "所以", "因此", "由于", "由此", "从而", "于是"
         };
-        return causalMarkers.Any(m =>
+
+        var hasMarker = causalMarkers.Any(m =>
             step.Contains(m, StringComparison.OrdinalIgnoreCase));
+
+        if (!hasMarker) return false;
+
+        return MeasurableEffect.IsMatch(step);
     }
 
     private static bool ContradictsPriorStep(string prior, string current)

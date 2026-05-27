@@ -32,7 +32,9 @@ public sealed class AgenticLoop : IAsyncDisposable
     private readonly string _projectLanguage;
     private readonly string _sessionId;
     private int _iterationCount;
+    private int _consecutiveBuildFailures;
     private const int MaxIterations = 20;
+    private const int DebugLoopTriggerThreshold = 3;
 
     public int IterationCount => _iterationCount;
     public List<LoopStep> History { get; } = new();
@@ -293,9 +295,22 @@ public sealed class AgenticLoop : IAsyncDisposable
             context.State["build_ok"] = await CheckBuildAsync(ct).ConfigureAwait(false) ? "true" : "false";
             if (context.State["build_ok"] == "false")
             {
+                _consecutiveBuildFailures++;
                 var (_, runBuildOutput) = await CheckBuildWithOutputAsync(ct).ConfigureAwait(false);
                 context.State["build_diagnostics"] = DiagnosticParser.BuildDiagnosticContext(
                     DiagnosticParser.ParseBuildOutput(runBuildOutput, _projectLanguage));
+
+                if (_consecutiveBuildFailures >= DebugLoopTriggerThreshold)
+                {
+                    _logger.LogWarning("AgenticLoop: {Count} consecutive build failures — escalating fix strategy",
+                        _consecutiveBuildFailures);
+                    context.State["build_diagnostics"] +=
+                        "\n[CRITICAL: 3+ consecutive failures. Re-analyze ALL recent edits. Consider reverting the last change and trying a different approach.]";
+                }
+            }
+            else
+            {
+                _consecutiveBuildFailures = 0;
             }
             if (context.State["build_ok"] == "true")
                 context.State["git_clean"] = await CheckGitCleanAsync(ct).ConfigureAwait(false) ? "true" : "false";

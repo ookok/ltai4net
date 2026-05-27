@@ -726,7 +726,7 @@ public static class ServiceCollectionExtensions
             if (!opts.Value.AI.OnnxEnabled)
                 return new NoOpHostedService();
 
-            var transport = sp.GetService<IFederatedTransport>();
+            var transport = sp.GetService<IFederatedTransport>() ?? new InMemoryFederatedTransport();
             var logger = sp.GetService<ILogger<FederatedLearningService>>();
             var subspaceAnalyzer = sp.GetRequiredService<WeightSubspaceAnalyzer>();
             return new FederatedLearningService(transport, logger, subspaceAnalyzer: subspaceAnalyzer);
@@ -873,7 +873,7 @@ public static class ServiceCollectionExtensions
             var scheduler = sp.GetService<CoordinationScheduler>();
             var logger = sp.GetService<ILogger<EvolutionLoopHostedService>>();
             return new EvolutionLoopHostedService(router, teacher, genePool, annealer, geneToRule, architect,
-                cps: cps, scheduler: scheduler, logger: logger);
+                cps: cps, scheduler: scheduler, memoryGraph: sp.GetService<MemoryGraph>(), logger: logger);
         });
 
         services.AddSingleton<SupertonicService>(sp =>
@@ -895,6 +895,18 @@ public static class ServiceCollectionExtensions
             var replayBuffer = sp.GetRequiredService<SharedReplayBuffer>();
             var logger = sp.GetService<ILogger<MultiPolicyTrainer>>();
             return new MultiPolicyTrainer(replayBuffer, 64, TimeSpan.FromSeconds(30), logger);
+        });
+
+        services.AddSingleton<ToolRecommender>(sp =>
+        {
+            var logger = sp.GetService<ILogger<ToolRecommender>>();
+            return new ToolRecommender(logger);
+        });
+
+        services.AddSingleton<IidChangePointDetector>(sp =>
+        {
+            var logger = sp.GetService<ILogger<IidChangePointDetector>>();
+            return new IidChangePointDetector(logger);
         });
 
         services.AddSingleton<NeedleToolRouter>(sp =>

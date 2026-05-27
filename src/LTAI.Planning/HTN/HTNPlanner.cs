@@ -108,6 +108,43 @@ public sealed class HTNPlanner
         return root;
     }
 
+    public (PlanNode Primary, List<PlanNode> Alternatives) DecomposeWithAlternatives(
+        string task, string domain, List<string> availableTools, int maxAlternatives = 2)
+    {
+        var primary = DecomposeTask(task, domain, availableTools);
+        var alternatives = new List<PlanNode>();
+
+        var templates = _templates.Values
+            .Where(t => t.Domain == domain && t.Id != (primary.Children.FirstOrDefault()?.Id ?? ""))
+            .OrderByDescending(t => t.SuccessRate)
+            .Take(maxAlternatives)
+            .ToList();
+
+        foreach (var alt in templates)
+        {
+            var altPlan = InstantiateTemplate(alt, $"alt_{Guid.NewGuid():N}"[..12], task);
+            alternatives.Add(altPlan);
+        }
+
+        if (alternatives.Count == 0 && primary.Children.Count > 1)
+        {
+            var reversed = new PlanNode
+            {
+                Id = $"alt_rev_{Guid.NewGuid():N}"[..12],
+                Type = PlanNodeType.Task,
+                Name = domain,
+                Description = $"Alternative: {task}",
+                Children = primary.Children.AsEnumerable().Reverse().Select(c => c with { }).ToList()
+            };
+            alternatives.Add(reversed);
+        }
+
+        _logger.LogInformation("HTN: Generated {Count} alternatives for domain {Domain}",
+            alternatives.Count, domain);
+
+        return (primary, alternatives);
+    }
+
     public void StorePlan(PlanNode plan, bool success)
     {
         lock (_lock)

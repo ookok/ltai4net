@@ -12,6 +12,9 @@ using Microsoft.Extensions.Logging;
 
 namespace LTAI.Agent.Tools;
 
+[AttributeUsage(AttributeTargets.Method)]
+public sealed class ToolMethodAttribute : Attribute { }
+
 public sealed class MarkdownToolExecutor
 {
     private readonly ILogger<MarkdownToolExecutor> _logger;
@@ -20,6 +23,7 @@ public sealed class MarkdownToolExecutor
     private readonly IServiceProvider? _serviceProvider;
     private readonly IMicroKernel? _kernel;
     private Func<string, MkTool?>? _toolResolver;
+    private static readonly SemaphoreSlim ComposeConcurrencyGate = new(8, 8);
 
     private static readonly Regex VariablePattern = new(@"\{\{(\w+)\}\}", RegexOptions.Compiled);
     private static readonly Regex IfPattern = new(@"\{\{#if\s+(\w+)\}\}(.*?)\{\{/if\}\}", RegexOptions.Compiled | RegexOptions.Singleline);
@@ -218,7 +222,7 @@ public sealed class MarkdownToolExecutor
                         continue;
                     }
                     var stepArgs = BuildStepArgs(step, args, results);
-                    parallelTasks.Add(ExecuteWithTimeout(resolved, stepArgs, resolved.TimeoutSec));
+                    parallelTasks.Add(ExecuteWithConcurrencyGate(resolved, stepArgs, resolved.TimeoutSec));
                     parallelNames.Add(step.Name);
                 }
                 continue;
@@ -264,6 +268,19 @@ public sealed class MarkdownToolExecutor
         if (completed == task)
             return await task;
         return new { error = $"Step timed out after {timeoutSec}s", timeout = true };
+    }
+
+    private async Task<object?> ExecuteWithConcurrencyGate(MkTool tool, Dictionary<string, object?> args, int timeoutSec)
+    {
+        await ComposeConcurrencyGate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            return await ExecuteWithTimeout(tool, args, timeoutSec).ConfigureAwait(false);
+        }
+        finally
+        {
+            ComposeConcurrencyGate.Release();
+        }
     }
 
     private async Task<object?> ExecuteStepWithTimeoutAsync(
@@ -331,6 +348,10 @@ public sealed class MarkdownToolExecutor
         var method = FindMethod(serviceType, tool.ServiceMethod, args);
         if (method == null)
             return new { error = $"Method '{tool.ServiceMethod}' not found on {serviceType.Name}" };
+
+        var hasToolAttr = method.GetCustomAttributes(typeof(ToolMethodAttribute), inherit: true).Length > 0;
+        if (!hasToolAttr && !method.IsPublic)
+            return new { error = $"Method '{tool.ServiceMethod}' is not marked with [ToolMethod] and is not public" };
 
         using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(tool.TimeoutSec));
         var resultTask = Task.Run(async () =>

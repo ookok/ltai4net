@@ -70,6 +70,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<PlannerCriticWorkflow>();
         services.AddSingleton<PlannerIntegration>();
         services.AddSingleton<UnifiedPlanningPipeline>();
+        services.AddSingleton<TaskQueue>();
         services.AddSingleton<LTAICoordinator>();
 
         services.AddSingleton<GitWorktreeManager>(sp =>

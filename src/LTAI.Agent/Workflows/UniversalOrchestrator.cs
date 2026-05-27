@@ -15,17 +15,20 @@ public sealed class UniversalOrchestrator
     private readonly ILogger<UniversalOrchestrator> _logger;
     private readonly UnifiedSemanticRouter _router;
     private readonly HarnessProfile _harness;
+    private readonly SentientParliament? _parliament;
     private readonly Dictionary<string, BaseAgent> _agents = new();
     private const int MaxRecursionDepth = 3;
 
     public UniversalOrchestrator(
         ILogger<UniversalOrchestrator> logger,
         UnifiedSemanticRouter router,
-        HarnessProfile? harness = null)
+        HarnessProfile? harness = null,
+        SentientParliament? parliament = null)
     {
         _logger = logger;
         _router = router;
         _harness = harness ?? HarnessProfile.For(HarnessMode.Hybrid);
+        _parliament = parliament;
     }
 
     public void RegisterAgent(string name, BaseAgent agent)
@@ -58,6 +61,8 @@ public sealed class UniversalOrchestrator
             OrchestrationMode.Direct => await ExecuteDirectAsync(messages, session, 0, ct),
             OrchestrationMode.Handoff => await ExecuteHandoffAsync(messages, session, 0, ct),
             OrchestrationMode.FanOut => await ExecuteFanOutAsync(messages, session, ct).ConfigureAwait(false),
+            OrchestrationMode.Parliament => await ExecuteParliamentAsync(messages, session, ct).ConfigureAwait(false),
+            OrchestrationMode.Sequential => await ExecuteSequentialAsync(messages, session, ct).ConfigureAwait(false),
             _ => await ExecuteDirectAsync(messages, session, 0, ct).ConfigureAwait(false)
         };
     }
@@ -143,6 +148,57 @@ public sealed class UniversalOrchestrator
     {
         var text = $"{original.Text}\n\n---\n## Critic Review\n{critic.Text}";
         return new(new ChatMessage(ChatRole.Assistant, text));
+    }
+
+    private async Task<AgentResponse> ExecuteParliamentAsync(
+        IEnumerable<ChatMessage> messages, AgentSession? session, CancellationToken ct)
+    {
+        if (_parliament == null)
+        {
+            _logger.LogWarning("Orchestrator: Parliament mode requested but SentientParliament not available, falling back to FanOut");
+            return await ExecuteFanOutAsync(messages, session, ct).ConfigureAwait(false);
+        }
+
+        var msgList = messages.ToList();
+        var userMsg = msgList.LastOrDefault(m => m.Role == ChatRole.User);
+        var query = userMsg?.Text ?? "";
+
+        var result = await _parliament.DeliberateAsync(query, msgList, session, ct).ConfigureAwait(false);
+
+        _logger.LogInformation("Orchestrator: Parliament verdict={Verdict} passed={Passed}/{Total} consensus={Consensus:F2}",
+            result.Verdict, result.PassedVotes, result.TotalAgents, result.ConsensusScore);
+
+        if (result.Verdict == ParliamentVerdict.Passed && !string.IsNullOrEmpty(result.FinalResponse))
+        {
+            return new(new ChatMessage(ChatRole.Assistant, result.FinalResponse));
+        }
+
+        return await ExecuteFanOutAsync(messages, session, ct).ConfigureAwait(false);
+    }
+
+    private async Task<AgentResponse> ExecuteSequentialAsync(
+        IEnumerable<ChatMessage> messages, AgentSession? session, CancellationToken ct)
+    {
+        var msgList = messages.ToList();
+        var userMsg = msgList.LastOrDefault(m => m.Role == ChatRole.User);
+        var routes = await _router.RouteAllAsync(userMsg?.Text ?? "", ct);
+        var results = new List<string>();
+
+        foreach (var route in routes.Take(3))
+        {
+            var key = route.TargetAgent.ToString().ToLowerInvariant();
+            if (!_agents.TryGetValue(key, out var agent)) continue;
+
+            var response = await agent.RunAsync(messages, session, null, ct).ConfigureAwait(false);
+            results.Add($"[{route.TargetAgent}]: {response.Text}");
+
+            messages = messages.Append(new ChatMessage(ChatRole.Assistant, response.Text ?? ""));
+        }
+
+        var merged = results.Count > 0
+            ? string.Join("\n\n", results)
+            : "No agents available for sequential execution.";
+        return new(new ChatMessage(ChatRole.Assistant, merged));
     }
 
     private static string CompressContext(List<ChatMessage> messages, string lastResponse)

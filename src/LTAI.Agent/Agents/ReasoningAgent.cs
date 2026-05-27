@@ -12,15 +12,18 @@ public sealed class ReasoningAgent : BaseAgent
     private readonly int _maxSearchDepth;
     private readonly int _maxIterations;
     private readonly int _maxTokensPerRequest;
+    private readonly LTAI.Core.Governors.MemoryGraph? _memoryGraph;
     private const double ExplorationConstant = 1.414;
 
     public ReasoningAgent(
         LTAIAgentCard card,
         IChatClient brain,
         SkillRegistry skills,
-        ILogger<ReasoningAgent> logger)
+        ILogger<ReasoningAgent> logger,
+        LTAI.Core.Governors.MemoryGraph? memoryGraph = null)
         : base(card, brain, skills, logger)
     {
+        _memoryGraph = memoryGraph;
         _maxSearchDepth = card.Options.TryGetValue("maxSearchDepth", out var d) && d is int depth ? depth : 5;
         _maxIterations = card.Options.TryGetValue("maxIterations", out var it) && it is int iterations ? iterations : 20;
         _maxTokensPerRequest = card.Options.TryGetValue("maxTokensPerRequest", out var mt) && mt is int maxTok ? maxTok : 8000;
@@ -37,6 +40,14 @@ public sealed class ReasoningAgent : BaseAgent
             return await CallBrainAsync(msgList, ct: ct).ConfigureAwait(false);
 
         var result = await ExecuteMctsAsync(query, context.Session, ct).ConfigureAwait(false);
+
+        if (result.Length < 100 || result.Contains("0%", StringComparison.Ordinal))
+        {
+            var scResult = await SelfConsistencyCheckAsync(query, ct).ConfigureAwait(false);
+            if (!string.IsNullOrEmpty(scResult))
+                result += scResult;
+        }
+
         return new AgentResponse(new ChatMessage(ChatRole.Assistant, result));
     }
 
@@ -78,6 +89,26 @@ public sealed class ReasoningAgent : BaseAgent
 
         _logger.LogInformation("ReasoningAgent [{Name}]: MCTS complete, tokens={Tokens}/{Max}",
             Name, accumulatedTokens, _maxTokensPerRequest);
+
+        if (_memoryGraph != null)
+        {
+            try
+            {
+                var bestPath = GetBestPath(root);
+                var summary = $"MCTS: {query[..Math.Min(query.Length, 80)]}";
+                _memoryGraph.AddNode(new LTAI.Core.Governors.MemoryNode
+                {
+                    Content = summary,
+                    Summary = bestPath,
+                    Domain = "reasoning",
+                    LayerLevel = 1,
+                    Importance = 0.6,
+                    Tags = new HashSet<string> { "mcts", $"depth{root.Children.Count}" }
+                });
+            }
+            catch { }
+        }
+
         return BuildResult(root, root.Children.Sum(c => c.VisitCount));
     }
 
@@ -135,6 +166,51 @@ public sealed class ReasoningAgent : BaseAgent
             [new(ChatRole.User, $"Rate relevance to \"{orig}\":\n{n.State}\nScore (0.0-1.0):")],
             ct: ct);
         return double.TryParse(r.Text?.Trim(), out var v) ? Math.Clamp(v, 0, 1) : 0.5;
+    }
+
+    private async Task<string> SelfConsistencyCheckAsync(string query, CancellationToken ct)
+    {
+        try
+        {
+            var samples = new List<string>();
+            for (int i = 0; i < 3; i++)
+            {
+                var temp = 0.3 + i * 0.3;
+                var response = await CallBrainAsync(
+                    [new(ChatRole.User, query)],
+                    ct: ct).ConfigureAwait(false);
+                var text = response?.Text?.Trim() ?? "";
+                if (text.Length > 10)
+                    samples.Add(text[..Math.Min(text.Length, 200)]);
+            }
+
+            if (samples.Count < 2) return "";
+
+            var allSimilar = true;
+            for (int i = 1; i < samples.Count; i++)
+            {
+                var overlap = samples[i].Split(' ').Intersect(samples[0].Split(' ')).Count();
+                if (overlap < 3) { allSimilar = false; break; }
+            }
+
+            if (!allSimilar)
+                return "\n\n⚠️ Self-consistency check: responses diverged. Confidence may be low.";
+        }
+        catch { }
+        return "";
+    }
+
+    private static string GetBestPath(MctsNode root)
+    {
+        var path = new List<string>();
+        var cur = root;
+        while (cur.Children.Count > 0)
+        {
+            cur = cur.Children.OrderByDescending(c => c.TotalValue / Math.Max(c.VisitCount, 1)).First();
+            path.Add(cur.State.Length > 120 ? cur.State[..120] + "..." : cur.State);
+            if (path.Count >= 5) break;
+        }
+        return string.Join(" → ", path);
     }
 
     private static string BuildResult(MctsNode root, int totalVisits)

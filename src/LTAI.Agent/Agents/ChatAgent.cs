@@ -13,6 +13,7 @@ public sealed class ChatAgent : BaseAgent
 {
     private readonly List<(string role, string content)> _conversationHistory = new();
     private readonly PersonaDriftDetector? _driftDetector;
+    private readonly LTAI.Knowledge.Core.MemoryFilesService? _memoryFiles;
     private const int MaxHistoryTurns = 20;
 
     public ChatAgent(
@@ -20,9 +21,11 @@ public sealed class ChatAgent : BaseAgent
         IChatClient brain,
         SkillRegistry skills,
         ILogger<ChatAgent> logger,
-        Personality? personality = null)
+        Personality? personality = null,
+        LTAI.Knowledge.Core.MemoryFilesService? memoryFiles = null)
         : base(card, brain, skills, logger)
     {
+        _memoryFiles = memoryFiles;
         if (personality != null)
             _driftDetector = new PersonaDriftDetector(personality);
     }
@@ -39,6 +42,22 @@ public sealed class ChatAgent : BaseAgent
             return await HandleSlashCommand(query, ct).ConfigureAwait(false);
 
         var msgList = new List<ChatMessage>(context.FullHistory);
+
+        if (_memoryFiles != null && _conversationHistory.Count <= 2)
+        {
+            try
+            {
+                var relevant = _memoryFiles.RetrieveRelevant(query, topK: 3);
+                if (relevant.Count > 0)
+                {
+                    var memoryCtx = string.Join("\n", relevant.Take(3).Select(m =>
+                        $"[{m.Domain}] {m.Summary}"));
+                    msgList.Insert(0, new ChatMessage(ChatRole.System,
+                        $"[Relevant Memory]\n{memoryCtx}"));
+                }
+            }
+            catch { }
+        }
 
         if (_conversationHistory.Count > 6)
         {

@@ -84,10 +84,18 @@ public sealed class GroundingVerificationService
                 return new EscalationResult(EscalationAction.Continue, RetryMessage: retry2);
 
             default:
-                return new EscalationResult(EscalationAction.YieldAndBreak, YieldChunks: new List<string>
+                var fallbackMsg = "\n\n[注意: 模型回答可能不够准确，建议重新描述问题或提供更多信息]";
+                try
                 {
-                    "\n\n[注意: 模型回答可能不够准确，建议重新描述问题或提供更多信息]"
-                });
+                    var semanticMsg = _prompts.Render("semantic_verify_failed", new Dictionary<string, string>
+                    {
+                        ["retry_instruction"] = verification.Issue
+                    });
+                    if (!string.IsNullOrWhiteSpace(semanticMsg))
+                        fallbackMsg = semanticMsg;
+                }
+                catch { }
+                return new EscalationResult(EscalationAction.YieldAndBreak, YieldChunks: new List<string> { fallbackMsg });
         }
     }
 
