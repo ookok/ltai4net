@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using LTAI.Core.System;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -127,6 +128,30 @@ public sealed record KernelSandboxConfig
             }
         };
     }
+
+    public static KernelSandboxConfig NicheIsolation(string workspaceRoot, string niche, string? worktreePath = null)
+    {
+        var ws = Path.GetFullPath(workspaceRoot);
+        var nicheDir = worktreePath ?? Path.Combine(ws, "worktrees", niche);
+        return new KernelSandboxConfig
+        {
+            AllowedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                nicheDir,
+                Path.Combine(nicheDir, "src"),
+                Path.Combine(nicheDir, "tests"),
+                Path.Combine(nicheDir, "docs"),
+                Path.Combine(ws, "rules"),
+                Path.Combine(ws, "skills"),
+            },
+            BlockedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                Path.Combine(nicheDir, ".git"),
+                Path.Combine(nicheDir, "bin"),
+                Path.Combine(nicheDir, "obj"),
+            }
+        };
+    }
 }
 
 // ============================================================================
@@ -138,6 +163,7 @@ public sealed record KernelOp
     public string Command { get; init; } = "";
     public string? Arguments { get; init; }
     public string? WorkingDirectory { get; init; }
+    public string? Niche { get; init; }
     public string? Stdin { get; init; }
     public TimeSpan Timeout { get; init; } = TimeSpan.FromSeconds(60);
     public Dictionary<string, string> Environment { get; init; } = new();
@@ -289,6 +315,11 @@ public interface IMicroKernel
     string Subscribe(string eventType, KernelEventCallback callback, string? niche = null);
     bool Unsubscribe(string subscriptionId);
 
+    string IssueCapToken(string subject, KernelPermission permissions, string targetPath, TimeSpan ttl);
+    Task<KernelResult> WriteFileWithToken(string capToken, string content, CancellationToken ct = default);
+    bool RevokeCapToken(string capToken);
+    CapTokenInfo? ValidateCapToken(string capToken);
+
     IReadOnlyList<KernelAuditEntry> GetAuditTrail(int limit = 100);
     IReadOnlyList<KernelVitalSign> GetVitalSigns();
     KernelVitalSign GetAggregatedVitals();
@@ -319,6 +350,9 @@ public sealed class MicroKernel : IMicroKernel
 
     private readonly ConcurrentDictionary<string, (string EventType, string? Niche, KernelEventCallback Callback)> _subscriptions = new();
     private readonly ConcurrentQueue<KernelSnapshot> _snapshots = new();
+    private readonly KernelCapToken _capToken;
+
+    private readonly ConcurrentDictionary<string, KernelSandboxConfig> _nicheSandboxes = new();
 
     private readonly ConcurrentDictionary<string, (long[] Latencies, long Successes, long Failures)> _vitals = new();
     private readonly object _vitalsLock = new();
@@ -356,12 +390,27 @@ public sealed class MicroKernel : IMicroKernel
         _circuitBreaker = new KernelCircuitBreaker(_sandboxConfig.RollbackFailureThreshold);
         _circuitBreaker.OnRollbackTriggered += async (count) => await HandleRollbackAsync(count);
         _concurrencyGate = new SemaphoreSlim(_sandboxConfig.MaxConcurrentOps);
+        _capToken = new KernelCapToken(_workspaceRoot);
 
         foreach (var p in _vitalPrimitives)
             _vitals[p] = (Array.Empty<long>(), 0, 0);
     }
 
     public bool IsHealthy => !_circuitBreaker.IsOpen;
+
+    public void SetNicheSandbox(string niche, KernelSandboxConfig config)
+    {
+        _nicheSandboxes[niche] = config;
+        _logger.LogInformation("MicroKernel: registered sandbox for niche '{Niche}' (allowedPaths={AllowedCount})",
+            niche, config.AllowedPaths.Count);
+    }
+
+    private KernelSandboxConfig GetSandboxForNiche(string? niche)
+    {
+        if (!string.IsNullOrEmpty(niche) && _nicheSandboxes.TryGetValue(niche, out var nicheConfig))
+            return nicheConfig;
+        return _sandboxConfig;
+    }
 
     // ========================================================================
     // Primitive 1: ExecuteAsync — CLI / Process execution (sandboxed)
@@ -1194,30 +1243,32 @@ public sealed class MicroKernel : IMicroKernel
     // Sandbox Validation
     // ========================================================================
 
-    private (string FullPath, DiffSafetyResult Check) ValidatePath(string path, KernelPermission permission)
+    private (string FullPath, DiffSafetyResult Check) ValidatePath(string path, KernelPermission permission, string? niche = null)
     {
         var fullPath = Path.GetFullPath(
             Path.IsPathRooted(path) ? path : Path.Combine(_workspaceRoot, path));
 
-        var isInAllowed = _sandboxConfig.AllowedPaths.Any(allowed =>
+        var config = GetSandboxForNiche(niche);
+
+        var isInAllowed = config.AllowedPaths.Any(allowed =>
             fullPath.StartsWith(allowed, StringComparison.OrdinalIgnoreCase));
 
         if (!isInAllowed)
             return (fullPath, new DiffSafetyResult
             {
                 Safe = false,
-                Reason = $"Path '{fullPath}' is not in allowed sandbox paths",
+                Reason = $"Path '{fullPath}' is not in allowed sandbox paths{(niche != null ? $" [niche: {niche}]" : "")}",
                 RiskScore = 0.9
             });
 
-        var isBlocked = _sandboxConfig.BlockedPaths.Any(blocked =>
+        var isBlocked = config.BlockedPaths.Any(blocked =>
             fullPath.StartsWith(blocked, StringComparison.OrdinalIgnoreCase));
 
         if (isBlocked)
             return (fullPath, new DiffSafetyResult
             {
                 Safe = false,
-                Reason = $"Path '{fullPath}' is blocked by sandbox",
+                Reason = $"Path '{fullPath}' is blocked by sandbox{(niche != null ? $" [niche: {niche}]" : "")}",
                 RiskScore = 1.0
             });
 
@@ -1227,7 +1278,7 @@ public sealed class MicroKernel : IMicroKernel
     private DiffSafetyResult ValidateExecutePath(KernelOp op)
     {
         var workingDir = op.WorkingDirectory ?? _workspaceRoot;
-        var (_, dirCheck) = ValidatePath(workingDir, KernelPermission.Execute);
+        var (_, dirCheck) = ValidatePath(workingDir, KernelPermission.Execute, op.Niche);
         if (!dirCheck.Safe) return dirCheck;
 
         if (_diffAgent == null)
@@ -1238,7 +1289,8 @@ public sealed class MicroKernel : IMicroKernel
             Condition = $"command=\"{(op.Command ?? "")}\"",
             Action = $"exec:{(op.Arguments ?? "")}",
             TargetModule = workingDir,
-            RouteLabel = op.RequiredPermission.ToString()
+            RouteLabel = op.RequiredPermission.ToString(),
+            Niche = op.Niche ?? "general"
         };
 
         return _diffAgent.EvaluateGene(gene);
@@ -1288,6 +1340,69 @@ public sealed class MicroKernel : IMicroKernel
                 RiskScore = 0.5
             };
         }
+    }
+
+    // ========================================================================
+    // Capability Token — object-capability security model
+    // ========================================================================
+
+    public string IssueCapToken(string subject, KernelPermission permissions, string targetPath, TimeSpan ttl)
+    {
+        return _capToken.Issue(subject, permissions, targetPath, ttl);
+    }
+
+    public async Task<KernelResult> WriteFileWithToken(string capToken, string content, CancellationToken ct = default)
+    {
+        var sw = Stopwatch.StartNew();
+        var traceId = Guid.NewGuid().ToString("N")[..8];
+
+        try
+        {
+            var info = ValidateCapToken(capToken);
+            if (info is not { Valid: true })
+            {
+                sw.Stop();
+                return KernelResult.Fail($"CapToken rejected: {info?.Reason ?? "invalid"}", sw.ElapsedMilliseconds);
+            }
+
+            if ((info.Permissions & KernelPermission.Write) == 0)
+            {
+                sw.Stop();
+                return KernelResult.Fail($"CapToken lacks Write permission", sw.ElapsedMilliseconds);
+            }
+
+            var hash = (uint)content.GetHashCode();
+            var fullPath = Path.GetFullPath(Path.Combine(info.TargetPath, $"{hash:x}.capwrite"));
+
+            var dir = Path.GetDirectoryName(fullPath);
+            if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+                Directory.CreateDirectory(dir);
+
+            await File.WriteAllTextAsync(fullPath, content, ct).ConfigureAwait(false);
+            sw.Stop();
+
+            Audit(traceId, "write_file_with_token", true, sw.ElapsedMilliseconds,
+                $"{content.Length} bytes → {fullPath} by {info.Subject}");
+            RecordVital("write_file", true, sw.ElapsedMilliseconds);
+            return KernelResult.Ok($"Written {content.Length} bytes by token", sw.ElapsedMilliseconds, traceId);
+        }
+        catch (Exception ex)
+        {
+            sw.Stop();
+            return KernelResult.Fail(ex.Message, sw.ElapsedMilliseconds);
+        }
+    }
+
+    public bool RevokeCapToken(string capToken)
+    {
+        _capToken.Revoke(capToken);
+        return true;
+    }
+
+    public CapTokenInfo? ValidateCapToken(string capToken)
+    {
+        var result = _capToken.Validate(capToken);
+        return result.Valid ? result : (result.Reason != null ? result : null);
     }
 
     // ========================================================================

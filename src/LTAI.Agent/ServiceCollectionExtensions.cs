@@ -330,6 +330,9 @@ public static class ServiceCollectionExtensions
             kernel.GenePool = sp.GetService<GenePool>();
             kernel.Teacher = sp.GetService<BootstrapTeacher>();
 
+            foreach (var niche in new[] { "code", "eia", "chat", "reasoning" })
+                kernel.SetNicheSandbox(niche, KernelSandboxConfig.NicheIsolation(workspace, niche));
+
             MicroKernel.Default = kernel;
             return kernel;
         });
