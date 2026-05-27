@@ -200,7 +200,8 @@ public sealed class MarkdownToolExecutor
         if (_toolResolver == null)
             return new { error = "Tool resolver not configured for compose execution" };
 
-        using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(tool.TimeoutSec));
+        var effectiveTimeout = tool.Steps.Any(s => s.Parallel) ? tool.TimeoutSec : tool.TimeoutSec;
+        using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(effectiveTimeout));
 
         var results = new Dictionary<string, object?>();
         var stepResults = new List<object>();
@@ -367,6 +368,13 @@ public sealed class MarkdownToolExecutor
 
                 if (!method.IsStatic && instance == null)
                     return new { error = $"Service instance '{tool.ServiceName}' could not be resolved" };
+
+                var safeTypes = new HashSet<Type> { typeof(string), typeof(int), typeof(long), typeof(double), typeof(float), typeof(bool), typeof(CancellationToken), typeof(Dictionary<string, object>) };
+                foreach (var p in method.GetParameters())
+                {
+                    if (!safeTypes.Contains(p.ParameterType) && !p.ParameterType.IsEnum)
+                        return new { error = $"Unsafe parameter type '{p.ParameterType.Name}' on method '{tool.ServiceMethod}'" };
+                }
 
                 var methodArgs = BuildMethodArgs(method, args);
                 var result = method.Invoke(instance, methodArgs);

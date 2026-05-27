@@ -909,6 +909,28 @@ public static class ServiceCollectionExtensions
             return new IidChangePointDetector(logger);
         });
 
+        services.AddSingleton<OnnxParallelEngine>(sp =>
+        {
+            var assetsDir = Path.Combine(Directory.GetCurrentDirectory(), "assets", "onnx");
+            var logger = sp.GetService<ILogger<OnnxParallelEngine>>();
+            return new OnnxParallelEngine(
+                Path.Combine(assetsDir, "intent_model.onnx"),
+                Path.Combine(assetsDir, "entity_model.onnx"),
+                Path.Combine(assetsDir, "sentiment_model.onnx"),
+                logger);
+        });
+
+        services.AddSingleton<OnnxModelPipeline>(sp =>
+        {
+            var assetsDir = Path.Combine(Directory.GetCurrentDirectory(), "assets", "onnx");
+            var logger = sp.GetService<ILogger<OnnxModelPipeline>>();
+            return new OnnxModelPipeline(
+                Path.Combine(assetsDir, "intent_model.onnx"),
+                Path.Combine(assetsDir, "domain_model.onnx"),
+                Path.Combine(assetsDir, "tool_model.onnx"),
+                logger);
+        });
+
         services.AddSingleton<NeedleToolRouter>(sp =>
         {
             var modelPath = Path.Combine(Directory.GetCurrentDirectory(), "assets", "needle", "model.onnx");

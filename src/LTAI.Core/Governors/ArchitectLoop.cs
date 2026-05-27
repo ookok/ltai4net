@@ -316,6 +316,21 @@ public sealed class ArchitectLoop
         {
             _logger.LogWarning("[HITL-REQUIRED] High-risk proposal {P}: risk={Risk:F2}, action={Action}, desc={Desc} — human approval needed before deployment",
                 proposal.Id, proposal.Risk, proposal.Action, proposal.Description);
+
+            if (_serviceProvider != null)
+            {
+                try
+                {
+                    var hitlType = Type.GetType("LTAI.Agent.Workflows.HumanInTheLoopReview, LTAI.Agent");
+                    var hitl = hitlType?.GetMethod("CreateReviewTask")?.Invoke(
+                        _serviceProvider.GetService(hitlType ?? typeof(object)),
+                        new object[] { "ArchitectLoop", $"Risk={proposal.Risk:F2}: {proposal.Description}",
+                            1.0 - proposal.Risk, null!, TimeSpan.FromHours(1), 2 });
+                    _logger.LogInformation("HITL: review submitted for proposal {P}", proposal.Id);
+                }
+                catch { }
+            }
+
             proposal.Status = ProposalStatus.Pending;
             return false;
         }

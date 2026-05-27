@@ -27,6 +27,7 @@ public sealed class LTAICoordinator : IAsyncDisposable
     private readonly ILivingTreeSystem _lts;
     private readonly SkillAwareDecomposer _decomposer;
     private readonly PlannerIntegration _planner;
+    private readonly UnifiedPlanningPipeline? _pipeline;
     private readonly SystemPromptAssembler? _promptAssembler;
     private readonly PromptService? _promptService;
     private readonly AgentProfile? _profile;
@@ -40,6 +41,7 @@ public sealed class LTAICoordinator : IAsyncDisposable
         ILivingTreeSystem lts,
         SkillAwareDecomposer decomposer,
         PlannerIntegration planner,
+        UnifiedPlanningPipeline? pipeline = null,
         SystemPromptAssembler? promptAssembler = null,
         PromptService? promptService = null,
         AgentProfile? profile = null,
@@ -48,6 +50,7 @@ public sealed class LTAICoordinator : IAsyncDisposable
         _lts = lts;
         _decomposer = decomposer;
         _planner = planner;
+        _pipeline = pipeline;
         _promptAssembler = promptAssembler;
         _promptService = promptService;
         _profile = profile;

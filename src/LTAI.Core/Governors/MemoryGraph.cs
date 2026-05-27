@@ -270,6 +270,7 @@ public sealed class MemoryGraph
         {
             node.LastAccessedAt = DateTime.UtcNow;
             node.AccessCount++;
+            node.Importance = Math.Min(1.0, 0.3 + (node.AccessCount * 0.05) + (node.Importance > 0.5 ? 0.1 : 0));
             return node;
         }
         return null;

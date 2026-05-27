@@ -74,6 +74,15 @@ public sealed class ToolService
         }
 
         _cachedAll = _tools.Values.OrderBy(t => t.Domain).ThenBy(t => t.Name).ToList().AsReadOnly();
+
+        foreach (var tool in _tools.Values)
+        {
+            foreach (var step in tool.Steps)
+            {
+                if (step.ToolRef != null && !_tools.ContainsKey(step.ToolRef))
+                    _logger.LogWarning("Tool '{Tool}' references '{Ref}' which is not loaded", tool.Name, step.ToolRef);
+            }
+        }
     }
 
     public MkTool? Resolve(string name)

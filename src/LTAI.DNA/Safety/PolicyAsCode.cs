@@ -85,10 +85,36 @@ public sealed class PolicyAsCode
     public IReadOnlyList<PolicyVersion> Versions => _versions.AsReadOnly();
     public PolicyMetrics Metrics => _metrics;
 
+    private FileSystemWatcher? _watcher;
+
     public PolicyAsCode(ILogger<PolicyAsCode>? logger = null)
     {
         _logger = logger;
         _ruleEngine = new EnhancedRuleEngine().WithStrategy(ConflictStrategy.Salience);
+    }
+
+    public void EnableHotReload(string rulesDirectory)
+    {
+        if (!Directory.Exists(rulesDirectory)) return;
+        _watcher = new FileSystemWatcher(rulesDirectory, "*.yaml")
+        {
+            NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName,
+            EnableRaisingEvents = true
+        };
+        _watcher.Changed += (_, e) =>
+        {
+            try
+            {
+                var content = File.ReadAllText(e.FullPath);
+                LoadFromYaml(content);
+                _logger?.LogInformation("PolicyAsCode: hot-reloaded rules from {File}", e.Name);
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogWarning(ex, "PolicyAsCode: hot-reload failed for {File}", e.Name);
+            }
+        };
+        _logger?.LogInformation("PolicyAsCode: hot-reload enabled on {Dir}", rulesDirectory);
     }
 
     public void LoadFromYaml(string yamlContent)

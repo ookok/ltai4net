@@ -192,11 +192,14 @@ public sealed class MultimodalOrchestrator
     private readonly RapidOCREngine? _rapidOcr;
     private readonly VisionAnalyzer _vision;
     private readonly SpeechEngine _speech;
+    private readonly LTAI.Core.Multimodal.WhisperSttEngine? _whisper;
 
     public MultimodalOrchestrator(ILogger<MultimodalOrchestrator> logger, OCREngine ocr,
-        VisionAnalyzer vision, SpeechEngine speech, RapidOCREngine? rapidOcr = null)
+        VisionAnalyzer vision, SpeechEngine speech, RapidOCREngine? rapidOcr = null,
+        LTAI.Core.Multimodal.WhisperSttEngine? whisper = null)
     {
         _logger = logger; _ocr = ocr; _vision = vision; _speech = speech; _rapidOcr = rapidOcr;
+        _whisper = whisper;
     }
 
     public async Task<string> ProcessFileAsync(string filePath, string? task = null, CancellationToken ct = default)
@@ -214,5 +217,16 @@ public sealed class MultimodalOrchestrator
             ".wav" or ".mp3" or ".m4a" => await _speech.RecognizeFromFileAsync(filePath, ct),
             _ => $"Unsupported format: {ext}"
         };
+    }
+
+    public async Task<string> ProcessSpeechAsync(string audioFilePath, CancellationToken ct = default)
+    {
+        if (_whisper != null)
+        {
+            var audioData = await File.ReadAllBytesAsync(audioFilePath, ct).ConfigureAwait(false);
+            var result = await _whisper.TranscribeAsync(audioData).ConfigureAwait(false);
+            return result?.Text ?? "";
+        }
+        return await _speech.RecognizeFromFileAsync(audioFilePath, ct).ConfigureAwait(false);
     }
 }

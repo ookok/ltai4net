@@ -76,6 +76,14 @@ public sealed class ParetoRouter
         var sw = global::System.Diagnostics.Stopwatch.StartNew();
 
         Interlocked.Increment(ref _totalDecisions);
+
+        if (_totalDecisions % 1000 == 0 && _totalDecisions > 0)
+        {
+            var dim = _projectionMatrix.Length > 0 ? _projectionMatrix[0].Length : 768;
+            InitializeProjectionMatrix(dim);
+            _logger.LogDebug("ParetoRouter: projection refreshed at {N} decisions", _totalDecisions);
+        }
+
         var isShadow = ShouldShadowRoute();
 
         if (triggerOverride != null)
