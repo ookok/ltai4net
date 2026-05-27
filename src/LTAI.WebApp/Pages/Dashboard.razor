@@ -1,13 +1,91 @@
 @page "/"
 @using LTAI.DNA.Models
+@using LTAI.Core.Governors
 @inject DNAOrchestrator? DNA
 @inject LTAIMetricsCollector? Metrics
+@inject CPSProcessingService? CPS
+@inject CoordinationScheduler? Scheduler
+@inject ParetoRouter? Pareto
+@inject IMicroKernel? Kernel
 
-<PageTitle>Dashboard — LTAI</PageTitle>
+<PageTitle>Dashboard — LTAI V1.0</PageTitle>
 
-<h2>Dashboard</h2>
+<h2>LTAI Agent OS — Dashboard</h2>
 
 <div class="grid-3">
+    <div class="card">
+        <h3>⚡ CPS Performance</h3>
+        @if (CPS != null)
+        {
+            try
+            {
+                var stats = CPS.GetPerformanceStats();
+                <div class="metric"><span>Processed</span><span class="val">@stats.TotalProcessed</span></div>
+                <div class="metric"><span>Avg Latency</span><span class="val">@stats.AvgLatencyMs ms</span></div>
+                <div class="metric"><span>Est. Tokens</span><span class="val">@stats.EstimatedTotalTokens</span></div>
+                foreach (var kv in stats.RouteDistribution.Take(4))
+                {
+                    <div class="metric"><span>Route: @kv.Key</span><span class="val">@kv.Value</span></div>
+                }
+            }
+            catch { <p class="muted">CPS stats unavailable</p> }
+        }
+        else { <p class="muted">CPS not loaded</p> }
+    </div>
+
+    <div class="card">
+        <h3>🫀 System Health</h3>
+        @if (Scheduler != null)
+        {
+            try
+            {
+                var running = Scheduler.IsRunning;
+                <div class="metric"><span>Scheduler</span><span class="val @(running ? "green" : "red")">@(running ? "Running" : "Stopped")</span></div>
+                <div class="metric"><span>Queue Depth</span><span class="val">@Scheduler.QueueDepth</span></div>
+                <div class="metric"><span>Events</span><span class="val">@Scheduler.EventsProcessed</span></div>
+                <div class="metric"><span>Rules Fired</span><span class="val">@Scheduler.RulesTriggered</span></div>
+            }
+            catch { <p class="muted">Scheduler stats unavailable</p> }
+        }
+        @if (Kernel != null)
+        {
+            try
+            {
+                var v = Kernel.GetAggregatedVitals();
+                <div class="metric"><span>Kernel</span><span class="val @(Kernel.IsHealthy ? "green" : "red")">@(Kernel.IsHealthy ? "Healthy" : "Degraded")</span></div>
+                <div class="metric"><span>P50 Latency</span><span class="val">@v.P50LatencyMs ms</span></div>
+                <div class="metric"><span>P99 Latency</span><span class="val">@v.P99LatencyMs ms</span></div>
+            }
+            catch { <p class="muted">Kernel stats unavailable</p> }
+        }
+    </div>
+
+    <div class="card">
+        <h3>🎯 Pareto Router</h3>
+        @if (Pareto != null)
+        {
+            try
+            {
+                <div class="metric"><span>Frontier Size</span><span class="val">@Pareto.FrontierSize</span></div>
+                <div class="metric"><span>Decisions</span><span class="val">@Pareto.TotalDecisions</span></div>
+                <div class="metric"><span>Shadow Rate</span>
+                    <div class="bar"><div class="fill purple" style="width:@(Pareto.ShadowRate*100)%"></div></div>
+                    <span>@Pareto.ShadowRate.ToString("P0")</span>
+                </div>
+            }
+            catch { <p class="muted">Pareto stats unavailable</p> }
+        }
+        @if (Metrics != null)
+        {
+            var s = Metrics.GetSnapshot();
+            <div class="metric"><span>Requests</span><span class="val">@s.TotalRequests</span></div>
+            <div class="metric"><span>Tokens</span><span class="val">@s.TotalTokens</span></div>
+            <div class="metric"><span>Memory</span><span class="val">@s.MemoryMb MB</span></div>
+        }
+    </div>
+</div>
+
+<div class="grid-2" style="margin-top:1rem">
     <div class="card">
         <h3>DNA Status</h3>
         @if (DNA != null)
@@ -17,43 +95,12 @@
                 <div class="bar"><div class="fill cyan" style="width:@(DNA.Consciousness.State.AwarenessScore*100)%"></div></div>
                 <span>@DNA.Consciousness.State.AwarenessScore.ToString("F2")</span>
             </div>
-            <div class="metric"><span>Evolution Rules</span><span class="val">@DNA.SelfEvo.Rules.Count</span></div>
-            <div class="metric"><span>Mutation Rate</span>
-                <div class="bar"><div class="fill green" style="width:@(DNA.SelfEvo.MutationRate*100)%"></div></div>
-                <span>@DNA.SelfEvo.MutationRate.ToString("F3")</span>
-            </div>
             <div class="metric"><span>Safety</span><span class="val @(DNA.Safety.Posture.ToString().ToLower())">@DNA.Safety.Posture</span></div>
-            <div class="metric"><span>Biorhythm</span><span class="val">@BioPhase E:@BioEnergy</span></div>
+            <div class="metric"><span>Evolution Rules</span><span class="val">@DNA.SelfEvo.Rules.Count</span></div>
         }
         else { <p class="muted">DNA module not loaded</p> }
     </div>
 
-    <div class="card">
-        <h3>Hormones</h3>
-        @if (DNA != null)
-        {
-            <div class="metric"><span>Dopamine</span><div class="bar"><div class="fill magenta" style="width:@(DNA?.Life?.Hormones?.Dopamine ?? 0*100)%"></div></div><span>@DNA?.Life?.Hormones?.Dopamine ?? 0.ToString("F2")</span></div>
-            <div class="metric"><span>Serotonin</span><div class="bar"><div class="fill yellow" style="width:@(DNA?.Life?.Hormones?.Serotonin ?? 0*100)%"></div></div><span>@DNA?.Life?.Hormones?.Serotonin ?? 0.ToString("F2")</span></div>
-            <div class="metric"><span>Cortisol</span><div class="bar"><div class="fill red" style="width:@(DNA?.Life?.Hormones?.Cortisol ?? 0*100)%"></div></div><span>@DNA?.Life?.Hormones?.Cortisol ?? 0.ToString("F2")</span></div>
-            <div class="metric"><span>Oxytocin</span><div class="bar"><div class="fill blue" style="width:@(DNA?.Life?.Hormones?.Oxytocin ?? 0*100)%"></div></div><span>@DNA?.Life?.Hormones?.Oxytocin ?? 0.ToString("F2")</span></div>
-        }
-    </div>
-
-    <div class="card">
-        <h3>System</h3>
-        @if (Metrics != null)
-        {
-            var s = Metrics.GetSnapshot();
-            <div class="metric"><span>Requests</span><span class="val">@s.TotalRequests</span></div>
-            <div class="metric"><span>Tokens</span><span class="val">@s.TotalTokens</span></div>
-            <div class="metric"><span>Avg Latency</span><span class="val">@s.AvgLatencyMs.ToString("F0")ms</span></div>
-            <div class="metric"><span>Memory</span><span class="val">@s.MemoryMb MB</span></div>
-            <div class="metric"><span>Active Tasks</span><span class="val">@s.ActiveTasks</span></div>
-        }
-    </div>
-</div>
-
-<div class="grid-2" style="margin-top:1rem">
     <div class="card">
         <h3>Evolution Rules</h3>
         @if (DNA != null)
@@ -68,7 +115,9 @@
             }
         }
     </div>
+</div>
 
+<div class="grid-2" style="margin-top:1rem">
     <div class="card">
         <h3>Personality</h3>
         @if (DNA != null)
@@ -81,30 +130,20 @@
             <div class="metric"><span>Neuroticism</span><div class="bar"><div class="fill red" style="width:@(p.Neuroticism*100)%"></div></div><span>@p.Neuroticism.ToString("F2")</span></div>
         }
     </div>
+
+    <div class="card">
+        <h3>Hormones</h3>
+        @if (DNA != null)
+        {
+            <div class="metric"><span>Dopamine</span><div class="bar"><div class="fill magenta" style="width:@(DNA?.Life?.Hormones?.Dopamine ?? 0*100)%"></div></div><span>@DNA?.Life?.Hormones?.Dopamine ?? 0.ToString("F2")</span></div>
+            <div class="metric"><span>Serotonin</span><div class="bar"><div class="fill yellow" style="width:@(DNA?.Life?.Hormones?.Serotonin ?? 0*100)%"></div></div><span>@DNA?.Life?.Hormones?.Serotonin ?? 0.ToString("F2")</span></div>
+            <div class="metric"><span>Cortisol</span><div class="bar"><div class="fill red" style="width:@(DNA?.Life?.Hormones?.Cortisol ?? 0*100)%"></div></div><span>@DNA?.Life?.Hormones?.Cortisol ?? 0.ToString("F2")</span></div>
+            <div class="metric"><span>Oxytocin</span><div class="bar"><div class="fill blue" style="width:@(DNA?.Life?.Hormones?.Oxytocin ?? 0*100)%"></div></div><span>@DNA?.Life?.Hormones?.Oxytocin ?? 0.ToString("F2")</span></div>
+        }
+    </div>
 </div>
 
 @code {
-    private string BioPhase
-    {
-        get
-        {
-            var bio = DNA?.Life?.Biorhythm;
-            if (bio != null)
-                return $"{bio.Phase}";
-            return "--";
-        }
-    }
-    private string BioEnergy
-    {
-        get
-        {
-            var bio = DNA?.Life?.Biorhythm;
-            if (bio != null)
-                return $"{bio.EnergyLevel:F1}";
-            return "--";
-        }
-    }
-
     protected override async Task OnInitializedAsync()
     {
         while (true) { await Task.Delay(3000); StateHasChanged(); }

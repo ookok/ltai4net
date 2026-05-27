@@ -129,6 +129,17 @@ public sealed class SkillStepExecutor
             normalized.Contains("|", StringComparison.Ordinal))
             return false;
 
+        // detect eval / exec / source-based escapes
+        if (firstToken is "eval" or "exec" or "source" or "." &&
+            ShellMetaChars.IsMatch(normalized))
+            return false;
+
+        // detect nested shell escapes: bash -c "...|bash..." or sh -c "...|sh..."
+        if ((firstToken is "bash" or "sh" or "zsh" or "pwsh" or "powershell") &&
+            normalized.Contains("-c", StringComparison.Ordinal) &&
+            ShellMetaChars.IsMatch(normalized))
+            return false;
+
         return true;
     }
 

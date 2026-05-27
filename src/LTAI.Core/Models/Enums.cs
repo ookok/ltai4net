@@ -8,14 +8,6 @@ public enum HandshakePriority
     Critical
 }
 
-public enum GovernorLevel
-{
-    Embedding,
-    L1,
-    L2,
-    Auto
-}
-
 public enum JournalStatus
 {
     Pending,

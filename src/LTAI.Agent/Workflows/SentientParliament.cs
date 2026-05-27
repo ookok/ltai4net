@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using LTAI.Agent.Agents;
 using LTAI.Agent.Routing;
+using LTAI.Core.Interfaces;
 using LTAI.Core.Observability;
 using LTAI.Knowledge.Memory;
 using LTAI.Models;
@@ -10,7 +11,7 @@ using Microsoft.Extensions.Logging;
 
 namespace LTAI.Agent.Workflows;
 
-public sealed class SentientParliament
+public sealed class SentientParliament : IParliamentBridge
 {
     private readonly ILogger<SentientParliament> _logger;
     private readonly UnifiedSemanticRouter _router;
@@ -20,6 +21,29 @@ public sealed class SentientParliament
 
     public bool EnableExternalGrounding { get; set; }
     public Func<string, CancellationToken, Task<string>>? GroundingCallback { get; set; }
+
+    // IParliamentBridge
+    public bool IsAvailable => _agents.Count > 0;
+
+    async Task<LTAI.Core.Interfaces.ParliamentVerdict> IParliamentBridge.DeliberateAsync(
+        string query, string response, CancellationToken ct)
+    {
+        var history = new List<ChatMessage>
+        {
+            new(ChatRole.User, query),
+            new(ChatRole.Assistant, response)
+        };
+
+        var result = await DeliberateAsync(query, history, null, ct).ConfigureAwait(false);
+
+        return new LTAI.Core.Interfaces.ParliamentVerdict
+        {
+            IsConsensus = result.Verdict == ParliamentVerdict.Passed,
+            AvgConfidence = result.ConsensusScore,
+            RevisionNotes = result.FinalResponse,
+            VoterCount = result.TotalAgents
+        };
+    }
 
     public SentientParliament(ILogger<SentientParliament> logger, UnifiedSemanticRouter router)
     {

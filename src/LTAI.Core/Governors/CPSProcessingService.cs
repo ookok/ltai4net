@@ -11,6 +11,15 @@ public interface ICPSProcessingService
     int GetTotalProcessed();
 }
 
+public sealed record CPSPerformanceStats
+{
+    public int TotalProcessed { get; init; }
+    public long AvgLatencyMs { get; init; }
+    public long EstimatedTotalTokens { get; init; }
+    public Dictionary<string, int> RouteDistribution { get; init; } = new();
+    public List<string> RecentDecisions { get; init; } = new();
+}
+
 public sealed record CPSResult
 {
     public bool Success { get; init; }
@@ -42,6 +51,9 @@ public sealed class CPSProcessingService : ICPSProcessingService
     private readonly RecursiveCausalAudit? _causalAudit;
     private readonly SemanticAnchor? _semanticAnchor;
     private int _totalProcessed;
+    private long _totalLatencyMs;
+    private long _totalTokensEstimated;
+    private readonly ConcurrentQueue<string> _recentDecisions = new();
 
     private static readonly TimeSpan L3DecisionTimeout = TimeSpan.FromMilliseconds(50);
 
@@ -165,6 +177,12 @@ public sealed class CPSProcessingService : ICPSProcessingService
         sw.Stop();
 
         var totalMs = sw.ElapsedMilliseconds;
+        Interlocked.Add(ref _totalLatencyMs, totalMs);
+        Interlocked.Add(ref _totalTokensEstimated, EstimateTokens(response));
+
+        var decisionTrace = $"route={decision.Route} conf={decision.Confidence:F2} intent={intentLabel} latency={totalMs}ms";
+        _recentDecisions.Enqueue(decisionTrace);
+        while (_recentDecisions.Count > 100) _recentDecisions.TryDequeue(out _);
         if (totalMs > L3DecisionTimeout.TotalMilliseconds)
         {
             _logger.LogWarning("CPS L3 decision exceeded SLA: {LatMs}ms (limit {LimitMs}ms) for '{Query}'",
@@ -309,4 +327,38 @@ public sealed class CPSProcessingService : ICPSProcessingService
     }
 
     public int GetTotalProcessed() => _totalProcessed;
+
+    public CPSPerformanceStats GetPerformanceStats()
+    {
+        var total = _totalProcessed > 0 ? _totalProcessed : 1;
+        return new CPSPerformanceStats
+        {
+            TotalProcessed = _totalProcessed,
+            AvgLatencyMs = _totalLatencyMs / total,
+            EstimatedTotalTokens = _totalTokensEstimated,
+            RouteDistribution = _routeDistribution.ToDictionary(kv => kv.Key, kv => kv.Value),
+            RecentDecisions = _recentDecisions.ToList()
+        };
+    }
+
+    public string ExplainLastDecision()
+    {
+        var decisions = _recentDecisions.ToList();
+        if (decisions.Count == 0) return "No decisions recorded yet.";
+
+        var last = decisions.Last();
+        var stats = GetPerformanceStats();
+        return $"## CPS Decision Trace\n\n" +
+               $"**Last**: {last}\n\n" +
+               $"**Summary**: {stats.TotalProcessed} queries processed, " +
+               $"avg {stats.AvgLatencyMs}ms latency, " +
+               $"~{stats.EstimatedTotalTokens} tokens\n\n" +
+               $"**Routes**: {string.Join(", ", stats.RouteDistribution.Select(kv => $"{kv.Key}={kv.Value}"))}";
+    }
+
+    private static int EstimateTokens(string text)
+    {
+        if (string.IsNullOrEmpty(text)) return 0;
+        return text.Length / 4;
+    }
 }

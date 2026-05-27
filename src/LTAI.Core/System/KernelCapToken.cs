@@ -87,6 +87,9 @@ public sealed class KernelCapToken
                 !Path.EndsInDirectorySeparator(path))
                 return new CapTokenInfo { Reason = "target path not found", Subject = subject };
 
+            if (_revoked.ContainsKey(token))
+                return new CapTokenInfo { Reason = "token revoked during validation", Subject = subject };
+
             return new CapTokenInfo
             {
                 Valid = true,

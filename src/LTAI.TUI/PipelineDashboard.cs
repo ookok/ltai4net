@@ -1,5 +1,6 @@
 using LTAI.AI.Governors;
 using LTAI.AI.Interfaces;
+using LTAI.Core.Governors;
 using Spectre.Console;
 using Spectre.Console.Rendering;
 
@@ -8,6 +9,10 @@ namespace LTAI.TUI;
 public sealed class PipelineDashboard
 {
     private readonly ILivingTreeSystem _lts;
+    private readonly CPSProcessingService? _cps;
+    private readonly CoordinationScheduler? _scheduler;
+    private readonly ParetoRouter? _router;
+    private readonly IMicroKernel? _kernel;
 
     private readonly Table _layersTable;
     private readonly Table _routingTable;
@@ -16,6 +21,9 @@ public sealed class PipelineDashboard
     private readonly Table _elasticTable;
     private readonly Table _evolutionTable;
     private readonly Table _verifiableTable;
+    private readonly Table _cpsTable;
+    private readonly Table _healthTable;
+    private readonly Table _paretoTable;
 
     private static readonly Style GreenStyle = new(Color.Green);
     private static readonly Style YellowStyle = new(Color.Yellow);
@@ -23,9 +31,17 @@ public sealed class PipelineDashboard
     private static readonly Style CyanStyle = new(Color.Cyan1);
     private static readonly Style DimStyle = new(Color.Grey);
 
-    public PipelineDashboard(ILivingTreeSystem lts)
+    public PipelineDashboard(ILivingTreeSystem lts,
+        CPSProcessingService? cps = null,
+        CoordinationScheduler? scheduler = null,
+        ParetoRouter? router = null,
+        IMicroKernel? kernel = null)
     {
         _lts = lts;
+        _cps = cps;
+        _scheduler = scheduler;
+        _router = router;
+        _kernel = kernel;
 
         _layersTable = new Table().Border(TableBorder.Rounded).BorderColor(Color.Cyan1)
             .AddColumn("Layer").AddColumn("Model").AddColumn("Status");
@@ -40,6 +56,15 @@ public sealed class PipelineDashboard
         _evolutionTable = new Table().Border(TableBorder.Rounded).BorderColor(Color.Yellow)
             .AddColumn("Metric").AddColumn("Value");
         _verifiableTable = new Table().Border(TableBorder.Rounded).BorderColor(Color.Green)
+            .AddColumn("Metric").AddColumn("Value");
+
+        _cpsTable = new Table().Border(TableBorder.Rounded).BorderColor(Color.Aqua)
+            .AddColumn("Metric").AddColumn("Value");
+
+        _healthTable = new Table().Border(TableBorder.Rounded).BorderColor(Color.Orange1)
+            .AddColumn("Metric").AddColumn("Value");
+
+        _paretoTable = new Table().Border(TableBorder.Rounded).BorderColor(Color.Purple)
             .AddColumn("Metric").AddColumn("Value");
     }
 
@@ -150,6 +175,54 @@ public sealed class PipelineDashboard
             }
         }
         catch { }
+
+        if (_cps != null)
+        {
+            try
+            {
+                var stats = _cps.GetPerformanceStats();
+                snap["cps.total"] = stats.TotalProcessed;
+                snap["cps.latency"] = $"{stats.AvgLatencyMs}ms";
+                snap["cps.tokens"] = stats.EstimatedTotalTokens;
+                snap["cps.routes"] = string.Join(",", stats.RouteDistribution.Select(kv => $"{kv.Key}:{kv.Value}"));
+            }
+            catch { }
+        }
+
+        if (_scheduler != null)
+        {
+            try
+            {
+                snap["scheduler.running"] = _scheduler.IsRunning;
+                snap["scheduler.queue"] = _scheduler.QueueDepth;
+                snap["scheduler.events"] = _scheduler.EventsProcessed;
+                snap["scheduler.rules"] = _scheduler.RulesTriggered;
+            }
+            catch { }
+        }
+
+        if (_router != null)
+        {
+            try
+            {
+                snap["pareto.size"] = _router.FrontierSize;
+                snap["pareto.decisions"] = _router.TotalDecisions;
+                snap["pareto.shadow"] = $"{_router.ShadowRate:P0}";
+            }
+            catch { }
+        }
+
+        if (_kernel != null)
+        {
+            try
+            {
+                snap["kernel.healthy"] = _kernel.IsHealthy;
+                var vitals = _kernel.GetAggregatedVitals();
+                snap["kernel.p50"] = $"{vitals.P50LatencyMs}ms";
+                snap["kernel.p99"] = $"{vitals.P99LatencyMs}ms";
+            }
+            catch { }
+        }
 #pragma warning restore CS8601
     }
 
@@ -190,6 +263,26 @@ public sealed class PipelineDashboard
         _verifiableTable.Rows.Clear();
         _verifiableTable.AddRow("Measurements", snap.GetValueOrDefault("verifiable.measurements")?.ToString() ?? "0");
         _verifiableTable.AddRow("Citations", snap.GetValueOrDefault("verifiable.citations")?.ToString() ?? "0");
+
+        _cpsTable.Rows.Clear();
+        _cpsTable.AddRow("Processed", snap.GetValueOrDefault("cps.total")?.ToString() ?? "0");
+        _cpsTable.AddRow("Avg Latency", snap.GetValueOrDefault("cps.latency")?.ToString() ?? "?");
+        _cpsTable.AddRow("Est. Tokens", snap.GetValueOrDefault("cps.tokens")?.ToString() ?? "0");
+        _cpsTable.AddRow("Routes", snap.GetValueOrDefault("cps.routes")?.ToString() ?? "?");
+
+        _healthTable.Rows.Clear();
+        var running = snap.GetValueOrDefault("scheduler.running") is true;
+        _healthTable.AddRow("Scheduler", running ? "[green]running[/]" : "[red]stopped[/]");
+        _healthTable.AddRow("Queue Depth", snap.GetValueOrDefault("scheduler.queue")?.ToString() ?? "?");
+        _healthTable.AddRow("Events", snap.GetValueOrDefault("scheduler.events")?.ToString() ?? "0");
+        _healthTable.AddRow("Kernel", snap.GetValueOrDefault("kernel.healthy") is true ? "[green]healthy[/]" : "[red]degraded[/]");
+        _healthTable.AddRow("P50", snap.GetValueOrDefault("kernel.p50")?.ToString() ?? "?");
+        _healthTable.AddRow("P99", snap.GetValueOrDefault("kernel.p99")?.ToString() ?? "?");
+
+        _paretoTable.Rows.Clear();
+        _paretoTable.AddRow("Frontier Size", snap.GetValueOrDefault("pareto.size")?.ToString() ?? "0");
+        _paretoTable.AddRow("Decisions", snap.GetValueOrDefault("pareto.decisions")?.ToString() ?? "0");
+        _paretoTable.AddRow("Shadow Rate", snap.GetValueOrDefault("pareto.shadow")?.ToString() ?? "?");
     }
 
     private IRenderable BuildLayout()
@@ -209,10 +302,16 @@ public sealed class PipelineDashboard
         bottomRow.Add(new Panel(_evolutionTable).Header("Cross-Run Evolution").BorderColor(Color.Yellow).Padding(1, 1));
         bottomRow.Add(new Panel(_verifiableTable).Header("Verifiable Registry").BorderColor(Color.Green).Padding(1, 1));
 
+        var cpsRow = new List<IRenderable>();
+        cpsRow.Add(new Panel(_cpsTable).Header("CPS Performance").BorderColor(Color.Aqua).Padding(1, 1));
+        cpsRow.Add(new Panel(_healthTable).Header("System Health").BorderColor(Color.Orange1).Padding(1, 1));
+        cpsRow.Add(new Panel(_paretoTable).Header("Pareto Router").BorderColor(Color.Purple).Padding(1, 1));
+
         return new Panel(new Rows(
             new Columns(topRow),
             new Columns(midRow),
-            new Columns(bottomRow)))
+            new Columns(bottomRow),
+            new Columns(cpsRow)))
             .Header(new PanelHeader("[bold cyan]Pipeline Dashboard[/]"))
             .BorderColor(Color.Cyan1)
             .Padding(1, 1);

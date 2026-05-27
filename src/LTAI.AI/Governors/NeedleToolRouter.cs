@@ -32,6 +32,7 @@ public sealed record NeedleRouteResult
 public sealed class NeedleToolRouter : IDisposable
 {
     private readonly ILogger<NeedleToolRouter> _logger;
+    private readonly Acceleration.OnnxAccelerator? _accelerator;
     private InferenceSession? _session;
     private readonly int _vocabSize = 30000;
     private readonly int _maxLength = 128;
@@ -91,9 +92,11 @@ public sealed class NeedleToolRouter : IDisposable
         }
     }
 
-    public NeedleToolRouter(string? modelPath = null, ILogger<NeedleToolRouter>? logger = null)
+    public NeedleToolRouter(string? modelPath = null, ILogger<NeedleToolRouter>? logger = null,
+        Acceleration.OnnxAccelerator? accelerator = null)
     {
         _logger = logger ?? NullLogger<NeedleToolRouter>.Instance;
+        _accelerator = accelerator;
         _numToolCategories = ToolCategories.Length;
         LoadModel(modelPath);
     }
@@ -111,12 +114,13 @@ public sealed class NeedleToolRouter : IDisposable
 
         try
         {
-            _session = new InferenceSession(modelPath, new SessionOptions
+            var options = _accelerator?.CreateSessionOptions() ?? new SessionOptions
             {
                 GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL,
                 IntraOpNumThreads = 1,
                 InterOpNumThreads = 1
-            });
+            };
+            _session = new InferenceSession(modelPath, options);
 
             _isLoaded = true;
             _logger.LogInformation("Needle model loaded: {Size}KB, {Inputs} inputs, {Outputs} outputs",

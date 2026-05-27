@@ -27,7 +27,7 @@ public sealed class DashboardView : UserControl
 
         root.Children.Add(new TextBlock
         {
-            Text = "LTAI V0.51 - Sentient Mesh",
+            Text = "LTAI V1.0 - Agent OS",
             FontSize = 22,
             FontWeight = FontWeight.Bold,
             Foreground = LtaiTheme.Sbb(LtaiTheme.TextPrimary)

@@ -55,6 +55,51 @@ public sealed class HTNPlanner
         _logger = logger;
     }
 
+    public PlanNode DecomposeWithValidation(string task, string domain, List<string> availableTools, int maxRetries = 3)
+    {
+        for (int attempt = 0; attempt < maxRetries; attempt++)
+        {
+            var plan = DecomposeTask(task, domain, availableTools);
+            if (ValidatePlan(plan, availableTools)) return plan;
+
+            _logger.LogWarning("HTN: Plan validation failed (attempt {Attempt}/{Max}), retrying with broader domain",
+                attempt + 1, maxRetries);
+            domain = "general";
+        }
+
+        _logger.LogError("HTN: All {Max} decomposition attempts failed for task '{Task}'", maxRetries, task);
+        return new PlanNode
+        {
+            Id = $"fallback_{Guid.NewGuid():N}"[..12],
+            Type = PlanNodeType.Task,
+            Name = "fallback",
+            Description = task,
+            Children = new List<PlanNode>
+            {
+                new() { Type = PlanNodeType.ToolCall, Name = "direct_execution", Description = task,
+                    ToolCalls = availableTools.Take(5).ToList() }
+            }
+        };
+    }
+
+    private static bool ValidatePlan(PlanNode plan, List<string> availableTools)
+    {
+        if (plan.Children.Count == 0) return false;
+
+        foreach (var child in plan.Children)
+        {
+            if (child.Type == PlanNodeType.ToolCall && child.ToolCalls.Count == 0)
+                return false;
+
+            if (child.Type == PlanNodeType.SubTask && child.ToolCalls.Count == 0 &&
+                availableTools.Count == 0)
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
     public PlanNode DecomposeTask(string task, string domain, List<string> availableTools)
     {
         var rootId = $"root_{Guid.NewGuid():N}"[..12];

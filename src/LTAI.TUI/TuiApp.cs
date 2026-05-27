@@ -28,6 +28,10 @@ public sealed class TuiApp
 {
     private readonly ILivingTreeSystem _lts;
     private readonly DNAOrchestrator? _dna;
+    private readonly LTAI.Core.Governors.CPSProcessingService? _cps;
+    private readonly LTAI.Core.Governors.CoordinationScheduler? _scheduler;
+    private readonly LTAI.Core.Governors.ParetoRouter? _paretoRouter;
+    private readonly LTAI.Core.Governors.IMicroKernel? _kernel;
     private readonly ReasoningOrchestrator? _reasoning;
     private readonly MultiLangCodeAnalyzer? _analyzer;
     private readonly LLMConfigPanel _llmConfig;
@@ -86,7 +90,11 @@ public sealed class TuiApp
         AgenticLoop? agenticLoop = null,
         LTAICoordinator? coordinator = null,
         KnowledgeGraph? knowledgeGraph = null,
-        SkillRegistry? skillRegistry = null)
+        SkillRegistry? skillRegistry = null,
+        LTAI.Core.Governors.CPSProcessingService? cps = null,
+        LTAI.Core.Governors.CoordinationScheduler? scheduler = null,
+        LTAI.Core.Governors.ParetoRouter? paretoRouter = null,
+        LTAI.Core.Governors.IMicroKernel? kernel = null)
     {
         _lts = lts;
         _dna = dna;
@@ -110,6 +118,10 @@ public sealed class TuiApp
         _editor = new TuiEditor();
         _composeView = new ComposeToolView();
         _swarmView = new SwarmView(coordinator);
+        _cps = cps;
+        _scheduler = scheduler;
+        _paretoRouter = paretoRouter;
+        _kernel = kernel;
         _memoryTimeline = CreateMemoryTimeline(lts);
         _kgBrowser = new KgBrowserView(knowledgeGraph);
         _dnaView = new DnaEvolutionView(dna);
@@ -205,7 +217,7 @@ public sealed class TuiApp
         AnsiConsole.Cursor.SetPosition(0, 3);
         var model = _llmConfig.SelectedModel;
         var layer = _llmConfig.ActiveLayerName;
-        var headerMarkup = $"[bold cyan]LTAI Dev Console[/]  {DnaStatusLine()}  [green]Mode:{_lts.Mode}[/] [blue]v5.5[/]  [yellow]{layer}:{model}[/]  [grey]CPU:{Environment.ProcessorCount}c MEM:{Environment.WorkingSet / 1024 / 1024}MB[/]";
+        var headerMarkup = $"[bold cyan]LTAI Dev Console[/]  {DnaStatusLine()}  [green]Mode:{_lts.Mode}[/] [blue]V1.0[/]  [yellow]{layer}:{model}[/]  [grey]CPU:{Environment.ProcessorCount}c MEM:{Environment.WorkingSet / 1024 / 1024}MB[/]";
         AnsiConsole.MarkupLine(headerMarkup);
 
         if (_showLLMPanel)
@@ -325,7 +337,7 @@ public sealed class TuiApp
 
     private IRenderable CreateDnaPanel()
     {
-        if (_dna == null) return new Panel("[cyan]LTAI V0.51[/]").RoundedBorder().Header("[cyan]V0.51 Sentient Mesh[/]");
+        if (_dna == null) return new Panel("[cyan]LTAI V1.0[/]").RoundedBorder().Header("[cyan]V1.0 Agent OS[/]");
         var c = _dna.Consciousness.State;
         return new Panel($$"""
             [cyan]状态:[/] {{c.Level}} (知觉度 {{c.AwarenessScore:F2}})
@@ -334,7 +346,7 @@ public sealed class TuiApp
             [grey]适应度:[/] {{_dna.GetStatus().FitnessScore:F2}}
             """)
             .RoundedBorder()
-            .Header("[cyan]小树 V0.51[/]");
+            .Header("[cyan]小树 V1.0[/]");
     }
 
     private IRenderable CreateSystemPanel()
@@ -606,7 +618,7 @@ public sealed class TuiApp
 
     private void RenderPipelineView()
     {
-        var dashboard = new PipelineDashboard(_lts);
+        var dashboard = new PipelineDashboard(_lts, _cps, _scheduler, _paretoRouter, _kernel);
 #pragma warning disable CS8601
         var snap = new Dictionary<string, object>();
 

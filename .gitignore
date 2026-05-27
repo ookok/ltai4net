@@ -41,3 +41,6 @@ dist/
 
 ## Models (large binary files)
 models/
+
+## AI assistant artifacts
+.reasonix/

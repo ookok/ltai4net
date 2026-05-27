@@ -1,4 +1,5 @@
 using LTAI.Agent.Routing;
+using LTAI.Core.Governors;
 using LTAI.DNA;
 using LTAI.DNA.Regulation;
 using LTAI.DNA.Safety;
@@ -28,8 +29,8 @@ public static class V7StatusEndpoints
 
             var status = new
             {
-                version = "0.51.0",
-                name = "LTAI Sentient Mesh",
+                version = "1.0.0",
+                name = "LTAI Agent OS",
                 uptime = DateTime.UtcNow - System.Diagnostics.Process.GetCurrentProcess().StartTime.ToUniversalTime(),
                 dna = dna == null ? null : new
                 {
@@ -58,14 +59,62 @@ public static class V7StatusEndpoints
                 evolution = evolution == null ? null : evolution.GetStats()
             };
 
+            // Compute CPS, Scheduler, Pareto, Kernel stats
+            object? cpsStats = null;
+            object? schedulerStats = null;
+            object? paretoStats = null;
+            object? kernelStats = null;
+
+            var cpsService = sp.GetService<CPSProcessingService>();
+            if (cpsService != null)
+            {
+                var s = cpsService.GetPerformanceStats();
+                cpsStats = new { total_processed = s.TotalProcessed, avg_latency_ms = s.AvgLatencyMs, est_tokens = s.EstimatedTotalTokens, routes = s.RouteDistribution };
+            }
+
+            var sch = sp.GetService<CoordinationScheduler>();
+            if (sch != null)
+            {
+                schedulerStats = new { running = sch.IsRunning, queue_depth = sch.QueueDepth, events_processed = sch.EventsProcessed, rules_triggered = sch.RulesTriggered };
+            }
+
+            var pr = sp.GetService<ParetoRouter>();
+            if (pr != null)
+            {
+                paretoStats = new { frontier_size = pr.FrontierSize, total_decisions = pr.TotalDecisions, shadow_rate = pr.ShadowRate };
+            }
+
+            var mk = sp.GetService<IMicroKernel>();
+            if (mk != null)
+            {
+                var v = mk.GetAggregatedVitals();
+                kernelStats = new { healthy = mk.IsHealthy, p50_ms = v.P50LatencyMs, p99_ms = v.P99LatencyMs };
+            }
+
+            var fullStatus = new
+            {
+                version = "1.0.0",
+                name = "LTAI Agent OS",
+                uptime = DateTime.UtcNow - System.Diagnostics.Process.GetCurrentProcess().StartTime.ToUniversalTime(),
+                dna = status.dna,
+                safety_gate = status.safety_gate,
+                router = status.router,
+                regulation = status.regulation,
+                evolution = status.evolution,
+                cps = cpsStats,
+                scheduler = schedulerStats,
+                pareto = paretoStats,
+                kernel = kernelStats
+            };
+
             ctx.Response.ContentType = "application/json";
-            await ctx.Response.WriteAsJsonAsync(status, ctx.RequestAborted).ConfigureAwait(false);
+            await ctx.Response.WriteAsJsonAsync(fullStatus, ctx.RequestAborted).ConfigureAwait(false);
         });
 
         app.MapGet("/api/v7/health", (HttpContext ctx) =>
         {
             ctx.Response.StatusCode = 200;
-            return Results.Ok(new { status = "healthy", version = "0.51.0" });
+            return Results.Ok(new { status = "healthy", version = "1.0.0" });
         });
     }
 }

@@ -1,19 +1,25 @@
 @page "/chat"
+@using LTAI.Core.Governors
 @inject LivingTreeSystem LTS
+@inject CPSProcessingService? CPS
 @inject NavigationManager Nav
 @implements IAsyncDisposable
 
-<PageTitle>Chat — LTAI</PageTitle>
+<PageTitle>Chat — LTAI V1.0</PageTitle>
 
 <div class="chat-layout">
     <div class="chat-sidebar">
-        <h3>Project</h3>
+        <h3>Session</h3>
         <button @onclick="LoadPromptTemplate" class="sm">📋 Templates</button>
-        <button @onclick="BranchMultiModel" class="sm">🔀 Branch</button>
+        @if (!_sending) {
+            <button @onclick="SendAsync" class="sm primary" disabled="@(string.IsNullOrWhiteSpace(Input))">▶ Send</button>
+        } else {
+            <button @onclick="AbortAsync" class="sm danger">⏹ Abort</button>
+        }
         <div style="margin-top:0.5rem">
-            <span class="muted">Model: @_model</span><br/>
             <span class="muted">Turns: @_history.Count/2</span><br/>
-            <span class="muted">Tokens: @_totalTokens</span>
+            <span class="muted">Tokens: @_totalTokens</span><br/>
+            <span class="muted">Route: @_lastRoute</span>
         </div>
     </div>
 
@@ -44,19 +50,32 @@
 
         <div class="chat-input">
             <div class="input-actions">
-                <button @onclick="LoadPromptTemplate" title="Prompt template" class="icon">📋</button>
                 <span class="muted">@_attachedFile @_diffLabel</span>
+                @if (CPS != null)
+                {
+                    <button @onclick="ShowDecisionTrace" class="icon" title="Explain decision">🔍</button>
+                }
             </div>
-            <textarea @bind="Input" @bind:event="oninput" @onkeydown="OnKeyDown" placeholder="Type... (&#64;path to load, Shift+Enter new line)"></textarea>
+            <textarea @bind="Input" @bind:event="oninput" @onkeydown="OnKeyDown"
+                placeholder="Type your message... (Shift+Enter for new line)"></textarea>
             <button @onclick="SendAsync" disabled="@(_sending || string.IsNullOrWhiteSpace(Input))">
                 @(_sending ? "⏳" : "Send")
             </button>
         </div>
-        @if (_diffContent != null)
+        @if (_showDecisionTrace && CPS != null)
+        {
+            <div class="decision-trace">
+                <h4>🔍 Decision Trace</h4>
+                <pre>@CPS.ExplainLastDecision()</pre>
+                <button @onclick="() => _showDecisionTrace = false" class="sm">Close</button>
+            </div>
+        }
+        @if (_diffContent != null && !_showDecisionTrace)
         {
             <div class="diff-preview">
-                <h4>Diff: @_diffLabel</h4>
+                <h4>@_diffLabel</h4>
                 <pre>@_diffContent</pre>
+                <button @onclick="SaveGeneratedFile" class="sm">💾 Save</button>
             </div>
         }
     </div>
@@ -67,12 +86,14 @@
     private bool _sending;
     private bool _streaming;
     private string _streamBuffer = "";
-    private string _model = "auto";
+    private string _lastRoute = "?";
     private int _totalTokens;
     private string _attachedFile = "";
     private string? _diffContent = null;
     private string? _diffLabel;
     private string? _originalContent;
+    private bool _showDecisionTrace;
+    private string? _generatedFileContent;
     private readonly List<ChatMessage> _history = new();
     private CancellationTokenSource? _streamCts;
 
@@ -95,6 +116,7 @@
         _sending = true;
         _streaming = true;
         _streamBuffer = "";
+        _showDecisionTrace = false;
         _history.Add(new("You", query, DateTime.Now));
         await InvokeAsync(StateHasChanged);
 
@@ -118,14 +140,19 @@
                 if (!line.StartsWith("data: ")) continue;
 
                 var data = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, System.Text.Json.JsonElement>>(line[6..]);
-                if (data != null && data.TryGetValue("text", out var t))
+                if (data != null)
                 {
-                    var token = t.GetString() ?? "";
-                    fullResponse.Append(token);
-                    _streamBuffer = RenderStreamContent(fullResponse.ToString());
-                    _totalTokens++;
-                    await InvokeAsync(StateHasChanged);
+                    if (data.TryGetValue("text", out var t))
+                    {
+                        var token = t.GetString() ?? "";
+                        fullResponse.Append(token);
+                        _streamBuffer = RenderStreamContent(fullResponse.ToString());
+                        _totalTokens++;
+                    }
+                    if (data.TryGetValue("route", out var r))
+                        _lastRoute = r.GetString() ?? "?";
                 }
+                await InvokeAsync(StateHasChanged);
             }
 
             var final = fullResponse.ToString();
@@ -134,10 +161,11 @@
             if (_originalContent != null)
             {
                 var generated = ExtractCodeBlock(final);
-                _diffLabel = $" Original: {_originalContent.Length}B → Generated: {generated.Length}B";
+                _generatedFileContent = generated;
+                _diffLabel = $"Original: {_originalContent.Length}B → Generated: {generated.Length}B";
             }
         }
-        catch (OperationCanceledException) { }
+        catch (OperationCanceledException) { _history.Add(new("LTAI", "[aborted]", DateTime.Now)); }
         catch (Exception ex) { _history.Add(new("Error", ex.Message, DateTime.Now)); }
         finally
         {
@@ -146,6 +174,23 @@
             _streamBuffer = "";
             await InvokeAsync(StateHasChanged);
         }
+    }
+
+    private async Task AbortAsync()
+    {
+        _streamCts?.Cancel();
+    }
+
+    private void ShowDecisionTrace()
+    {
+        _showDecisionTrace = !_showDecisionTrace;
+    }
+
+    private async Task SaveGeneratedFile()
+    {
+        if (_generatedFileContent == null || _attachedFile == null) return;
+        var outputPath = Path.ChangeExtension(_attachedFile, ".generated" + Path.GetExtension(_attachedFile));
+        await File.WriteAllTextAsync(outputPath, _generatedFileContent);
     }
 
     private string ResolveInput()
@@ -167,7 +212,7 @@
             if (!File.Exists(file)) file = Path.Combine(Directory.GetCurrentDirectory(), file);
             if (File.Exists(file))
             {
-                _attachedFile = Path.GetFileName(file);
+                _attachedFile = file;
                 _originalContent = File.ReadAllText(file);
                 var content = _originalContent[..Math.Min(_originalContent.Length, 5000)];
                 q = $"[File: {_attachedFile}]\n```{Path.GetExtension(file).TrimStart('.')}\n{content}\n```\n\nAnalyze/edit this file.";
@@ -220,12 +265,10 @@
     private async Task LoadPromptTemplate()
     {
         var templates = new[] { "Code Review", "Refactor", "Generate Tests", "Document", "Explain", "Fix Bugs", "Optimize", "Add Error Handling" };
-        if (templates.Length == 0) return;
         var selected = templates[_templateIndex % templates.Length];
         _templateIndex++;
         Input = $"[Template: {selected}] ";
     }
 
-    private async Task BranchMultiModel() { Input = "/branch " + Input; await SendAsync(); }
     public async ValueTask DisposeAsync() { _streamCts?.Cancel(); _streamCts?.Dispose(); }
 }

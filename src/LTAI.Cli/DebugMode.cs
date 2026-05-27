@@ -288,6 +288,83 @@ internal static class DebugMode
         return text.Length <= maxLen ? text : text[..maxLen] + "...";
     }
 
+    public static async Task RunBatchAsync(string layer = "all")
+    {
+        var testFile = FindTestFile();
+        if (testFile == null)
+        {
+            Console.WriteLine("ERROR: docs/testprompts.txt not found");
+            return;
+        }
+
+        var tests = ParseTestPrompts(testFile, layer);
+        Console.WriteLine($"=== LTAI Test Suite: {tests.Count} tests (layer={layer}) ===\n");
+
+        var pass = 0; var fail = 0;
+        foreach (var (id, layerName, query) in tests)
+        {
+            Console.Write($"[{layerName}] [{id}] ");
+            try
+            {
+                await RunAsync(query, 1, null, null, false).ConfigureAwait(false);
+                Console.WriteLine("OK");
+                pass++;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"FAIL: {ex.Message}");
+                fail++;
+            }
+        }
+
+        Console.WriteLine($"\n=== Results: {pass} PASS, {fail} FAIL ===");
+    }
+
+    private static string? FindTestFile()
+    {
+        var candidates = new[]
+        {
+            Path.Combine(AppContext.BaseDirectory, "docs", "testprompts.txt"),
+            Path.Combine(Directory.GetCurrentDirectory(), "docs", "testprompts.txt"),
+            Path.Combine(FindRootDirectory(AppContext.BaseDirectory, "docs") ?? "", "docs", "testprompts.txt")
+        };
+        return candidates.FirstOrDefault(File.Exists);
+    }
+
+    private static List<(string Id, string Layer, string Query)> ParseTestPrompts(string path, string filterLayer)
+    {
+        var results = new List<(string, string, string)>();
+        var currentLayer = "";
+        var currentId = "";
+
+        foreach (var line in File.ReadLines(path))
+        {
+            var trimmed = line.Trim();
+            if (string.IsNullOrEmpty(trimmed) || trimmed.StartsWith("# 编号") || trimmed.StartsWith("# 使用") || trimmed.StartsWith("# 验证"))
+                continue;
+
+            if (trimmed.StartsWith("## L")) { currentLayer = trimmed[3..].Split(' ')[0]; continue; }
+            if (trimmed.StartsWith("## 跨层")) { currentLayer = "CHAOS"; continue; }
+
+            if (trimmed.StartsWith("# ") && trimmed.Contains("-") && trimmed.Length > 5)
+            {
+                var parts = trimmed[2..].Split(' ', 2);
+                if (parts.Length >= 1 && parts[0].Contains("-"))
+                    currentId = parts[0];
+                continue;
+            }
+
+            if (!string.IsNullOrEmpty(currentId) && !trimmed.StartsWith("#") && !trimmed.StartsWith("##"))
+            {
+                if (filterLayer == "all" || filterLayer == currentLayer)
+                    results.Add((currentId, currentLayer, trimmed));
+                currentId = "";
+            }
+        }
+
+        return results;
+    }
+
     private static string? FindRootDirectory(string startDir, string markerDir)
     {
         var current = startDir;

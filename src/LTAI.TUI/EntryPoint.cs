@@ -99,8 +99,14 @@ public static class EntryPoint
         var agenticLoop = sp.GetService<AgenticLoop>();
         var kg = sp.GetService<KnowledgeGraph>();
         var skillRegistry = sp.GetService<LTAI.Agent.Skills.SkillRegistry>();
+        var cps = sp.GetService<LTAI.Core.Governors.CPSProcessingService>();
+        var scheduler = sp.GetService<LTAI.Core.Governors.CoordinationScheduler>();
+        var paretoRouter = sp.GetService<LTAI.Core.Governors.ParetoRouter>();
+        var kernel = sp.GetService<LTAI.Core.Governors.IMicroKernel>();
 
-        var app = new TuiApp(lts, dna, reasoning, analyzer, options, svc, modelMgr, agenticLoop, knowledgeGraph: kg, skillRegistry: skillRegistry);
+        var app = new TuiApp(lts, dna, reasoning, analyzer, options, svc, modelMgr, agenticLoop,
+            knowledgeGraph: kg, skillRegistry: skillRegistry,
+            cps: cps, scheduler: scheduler, paretoRouter: paretoRouter, kernel: kernel);
         await app.RunAsync();
     }
 }

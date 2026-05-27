@@ -1,115 +1,120 @@
-# LTAI (LivingTree AI) V0.51
+# LTAI — Agent OS V1.0
 
-ONNX-native multilayered AI agent framework for .NET 10. Edge-first L0-L1-L2 architecture with autonomous self-evolution, 10 research paper integrations, and multi-provider intelligent routing.
+6-layer Agent OS framework for .NET 10. Microkernel architecture with capability-based security, Pareto-optimal routing, autonomous evolution, and full-stack safety auditing.
 
 ## Quick Start
 
 ```bash
-# Clone & run first-launch setup wizard
+# Download CLI (single binary)
+curl -L https://github.com/ookok/ltai4net/releases/latest/download/ltai-win-x64.exe -o ltai.exe
+
+# First-run setup
+./ltai init
+./ltai install
+./ltai up          # starts TUI by default
+```
+
+Or build from source:
+```bash
 git clone https://github.com/ookok/ltai4net
 cd ltai4net
-dotnet run --project src/LTAI.Host
-
-# Or use one-line Jina embeddings (config-driven, no code change):
-# Edit appsettings.json: "l0": {"model": "jina-embeddings-v5-omni-small"}
+dotnet build
+dotnet run --project src/LTAI.Cli -- init
+dotnet run --project src/LTAI.Cli -- up
 ```
 
-## Architecture
+## Architecture (6-layer Agent OS)
 
 ```
-Host Layer (Web API / TUI / MCP / Desktop / WebApp)
-        │
-LivingTreeSystem (462行, 18参数, 5 Governor)
-  ├─ DNA Safety → Input Intent → L1/L2 Route → Provider Select → LLM Call
-  ├─ 自动: BAVT(预算) + ERL(学习) + ElasticMemory + StructuredReflection
-  └─ 自动: CoEchoDetect + OTESelector (Provider去重)
-        │
-  ┌─────┼─────┐
-  ▼     ▼     ▼
- L0    L1    L2
-Embed  Local Cloud
-Jina   Qwen  DSv4
-ONNX   ONNX  API
-        │
-  OnnxModelPipeline (intent→domain→tool→param 4级本地)
-        │
-Tool Ecosystem (70+ tools) + Knowledge (71 files)
-        │
-ONNX/ML.NET Training Loop (SynapticTrainer→InferenceSession)
+L5  IAgent Apps     — CodeAgent, ChatAgent, EIAAgent, ReasoningAgent
+L4  Evolution       — GenePool (GA), ArchitectLoop (LLM), SemanticDiffAgent
+L3  Cognitive       — ParetoRouter (Q/S/C 3D), RecursiveCausalAudit
+L2  Runtime         — CoordinationScheduler, WorktreeManager, EvolutionLoop
+L1  I/O Layer       — SkillSystem, MemoryGraph, MultimodalOrchestrator
+L0  MicroKernel     — 11 primitives + CapToken + quotas + sandbox + audit
 ```
 
-## Module Map (17 projects, 635 .cs files)
+**Layer contract**: upper calls lower, lower never knows upper, peers communicate via events, safety spans all layers.
 
-| Project | Files | Role |
-|---------|-------|------|
-| LTAI.Core | 83 | Config, DI, messaging, LTAIHostBuilder |
-| LTAI.Models | 5 | Shared models, ExecutionModels |
-| LTAI.Agent | 116 | Agents(Chat/Code/EIA/Reasoning), Middleware, MAF, TreeLLM |
-| LTAI.AI | 85 | LivingTreeSystem, Governors, ONNX engines, Paper implementations |
-| LTAI.DNA | 23 | Consciousness, Safety, LifeEngine (32→23 simplified) |
-| LTAI.Knowledge | 71 | Vector+Document+Memory (AgenticRAG, BM25, Jina, ONNX embeddings) |
-| LTAI.Tools | 74 | General/Code/GIS/Integration tools |
-| LTAI.Planning | 38 | Execution+Metrics |
-| LTAI.Infra | 41 | Sandbox+Browser+Network+Multimodal |
-| LTAI.Economy | 15 | Cost optimization, budget tracking |
-| LTAI.Web | 17 | REST API, SSE endpoints |
-| LTAI.Host | 5 | ASP.NET Core host |
-| LTAI.TUI | 16 | Terminal UI (Spectre.Console) |
-| LTAI.MCP | 9 | MCP protocol server |
-| LTAI.Desktop | 19 | .NET MAUI |
-| LTAI.WebApp | 6 | Blazor Server |
-| LTAI.Cli | 12 | CLI tools |
+## 8 Core Capabilities
 
-## Key Features
+| Capability | Rating | Key Components |
+|-----------|:------:|---------------|
+| **Perception** | 7.5 | HybridIntentRouter, MultimodalOrchestrator, PromptShield, ContextMoE |
+| **Planning** | 7.0 | HTNPlanner, UniversalOrchestrator(5 modes), TaskQueue DAG |
+| **Tools** | 9.0 | SkillRegistry(40+), ToolService(120+), MarkdownToolExecutor |
+| **Memory** | 8.5 | ContextMoE(5-tier), KnowledgeBase, MemoryGraph, KnowledgeGraph |
+| **Decision** | 8.5 | ParetoRouter(3D), BootstrapTeacher, MCTS Reasoning, CausalAudit |
+| **Feedback** | 8.3 | AgenticLoop, BackpressurePipeline, DebugLoop, PartStreamStore |
+| **Evolution** | 7.5 | GenePool(GA), SimulatedAnnealer, FederatedLearning |
+| **Safety** | 9.2 | 3-layer cmd blocking, PolicyAsCode(16 rules), CapToken, HITL |
 
-### L0-L1-L2 ONNX-Native Routing
-- **L0**: Jina-v5-Omni (768-dim multimodal), BGE-Large/Small/M3 ONNX embeddings
-- **L1**: Qwen2.5-1.5B, Phi-3.5-Mini, SmolLM2-360M ONNX — edge-native local inference
-- **OnnxParallelEngine**: intent + entity + sentiment 3-model parallel inference
-- **OnnxModelPipeline**: 4-stage intent→domain→tool→param local pipeline (<10% L2 calls)
-- **L2**: DeepSeek-v4, Qwen-Max, GPT-4o cloud API with MultiProvider routing
+## CLI Commands
 
-### Self-Evolution Training Loop
-```
-Training samples → SynapticTrainer(ML.NET) → ONNX weights export
-    → SynapticInference(InferenceSession, no ML.NET overhead)
-    → IidChangePointDetector(anomaly detection)
-    → ToolRecommender(collaborative filtering)
-```
+| Command | Description |
+|---------|-------------|
+| `ltai init` | Interactive setup: paths, channels, API keys, sandbox |
+| `ltai install` | Download L0-L5 core runtime |
+| `ltai setup` | Configure L0/L1/L2 models and providers |
+| `ltai add <tui\|desktop\|webapi\|mcp\|webapp>` | Install component |
+| `ltai remove <component>` | Uninstall component |
+| `ltai up [component]` | Start component (default: tui) |
+| `ltai down` | Stop all components |
+| `ltai ps` | List component status |
+| `ltai update [cli\|core\|all]` | Self-update |
 
-### Research Papers Integrated (10 papers)
-| Paper | Component |
-|-------|-----------|
-| ATLAS (2605.15198) | FunctionalTokenRouter + LatentAnchoredGRPO |
-| HSD (2605.13834) | OrthogonalRouter (KnowledgeGraph ⊥ ContextGovernor) |
-| MP-MoE (ICML 2026) | CoEchoDetector + OTESelector (Provider pruning) |
-| ERL (2602.13949) | ERLLoop (experience→reflection→consolidation) |
-| BAVT (2603.12634) | BAVTRouter (budget-annealed routing) |
-| AutoAgent (2603.09716) | ElasticMemoryOrchestrator (3-layer memory) |
-| Learning Beyond Gradients | HeuristicRegistry + HLFeedbackCycle |
-| Confidence Gate | ConfidenceCalibrator (evidence tool -25%) |
-| Structured Reflection | StructuredReflectionEngine (diagnose→repair→retry) |
-| Dr. Zero (2601.07055) | ToolRecommender (collaborative filtering) |
+## Module Map (17 projects)
 
-### Configuration-Driven
-- `appsettings.json`: `"l0": {"model": "jina-embeddings-v5-omni-small"}` → auto-detect, auto-download
-- First-run `InteractiveSetupWizard`: step-by-step model/API selection with HF downloads
-- All 5 hosts use `AddLTAIVectorAuto()` → auto-detect L0 model from config
+| Project | Role |
+|---------|------|
+| LTAI.Core | MicroKernel, ParetoRouter, config, messaging, session |
+| LTAI.Agent | Agents, AgenticLoop, MAF, TreeLLM, Workflows |
+| LTAI.AI | LivingTreeSystem, ONNX engines, Governors, Paper impls |
+| LTAI.DNA | Consciousness, Safety, LifeEngine, PolicyAsCode |
+| LTAI.Knowledge | Vector+Document+Memory (RAG, BM25, ONNX embeddings) |
+| LTAI.Tools | 120+ .md tools, BuildPipeline, TestHarness |
+| LTAI.Planning | HTN planning, execution, metrics, SelfHealer |
+| LTAI.Infra | Sandbox, Browser, Network, Multimodal |
+| LTAI.Economy | Cost optimization, budget tracking |
+| LTAI.Web | REST API (~80 routes), SSE endpoints |
+| LTAI.Host | ASP.NET Core host entry point |
+| LTAI.TUI | Terminal UI (Spectre.Console, 10-panel dashboard) |
+| LTAI.MCP | MCP protocol client + server |
+| LTAI.Desktop | .NET MAUI desktop app |
+| LTAI.WebApp | Blazor Server web UI |
+| LTAI.Cli | CLI Bootstrapper (installer/launcher) |
+| LTAI.Models | Shared POCOs |
+
+## Key Safety Mechanisms
+
+| Layer | Mechanism |
+|------|-----------|
+| L0 | CapToken (HMAC capability security), path/network/command sandbox, resource quotas |
+| L1 | 3-layer command blocking (8+32+6 patterns), PromptShield (10 injection + 5 output) |
+| L4 | SemanticDiffAgent (18 danger patterns), CounterfactualGate (shadow routing) |
+| All | PolicyAsCode (16 rules, hot-reload), full audit trail, HITL for high-risk proposals |
+
+## Observability
+
+- `CPSProcessingService.ExplainLastDecision()` — human-readable decision trace
+- `CPSProcessingService.GetPerformanceStats()` — latency/tokens/routes
+- `CoordinationScheduler.GetHealthReport()` — event bus status
+- `IMicroKernel.GetAuditTrail()` / `GetVitalSigns()` — kernel audit + P50/P99
+- `GET /api/v7/status` — JSON dashboard (cps/scheduler/pareto/kernel)
+- Pipeline Dashboard (TUI 10 panels, Desktop, WebApp)
 
 ## Build
 
 ```bash
-dotnet build LTAI.sln        # 16/16 projects (Desktop needs Android workload)
-dotnet run --project src/LTAI.Host
+dotnet build           # 17 projects
+dotnet test            # xUnit test suite
+docker-compose up      # Docker deployment
 ```
 
-## SDK Versions
+## Documentation
 
-- .NET 10
-- Microsoft.Agents.AI 1.6.2
-- Microsoft.Extensions.AI 10.6.0
-- Microsoft.ML 4.0.0 + OnnxRuntime 1.22.0
-- LLamaSharp 0.26.0 (GGUF local models)
+- [Full Architecture](docs/architecture.md) — 6-layer design, 8-thread capability matrix, onboarding guide
+- [REASONIX.md](REASONIX.md) — Auto-pinned session context for Reasonix Code
 
 ## License
 

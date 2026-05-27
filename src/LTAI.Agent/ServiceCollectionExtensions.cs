@@ -267,6 +267,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<LTAI.Core.Interfaces.IAgentFactory>(sp => sp.GetRequiredService<Agents.ChatAgentFactory>());
         services.AddSingleton<LTAI.Core.Interfaces.IAgentFactory>(sp => sp.GetRequiredService<Agents.ReasoningAgentFactory>());
         services.AddHostedService<ReflectiveIdlingService>();
+        services.AddHostedService<StartupRecoveryService>();
 
         services.AddSingleton<IMicroKernel>(sp =>
         {

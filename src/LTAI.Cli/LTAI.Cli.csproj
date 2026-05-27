@@ -11,6 +11,15 @@
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(PublishAot)' == 'true'">
+    <PublishTrimmed>true</PublishTrimmed>
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+    <StripSymbols>true</StripSymbols>
+    <OptimizationPreference>Speed</OptimizationPreference>
   </PropertyGroup>
 
   <ItemGroup>
@@ -19,11 +28,28 @@
     <ProjectReference Include="..\LTAI.Core\LTAI.Core.csproj" />
     <ProjectReference Include="..\LTAI.Knowledge\LTAI.Knowledge.csproj" />
     <ProjectReference Include="..\LTAI.Agent\LTAI.Agent.csproj" />
+    <ProjectReference Include="..\LTAI.Web\LTAI.Web.csproj" />
+    <ProjectReference Include="..\LTAI.TUI\LTAI.TUI.csproj" />
+    <ProjectReference Include="..\LTAI.MCP\LTAI.MCP.csproj" />
+    <ProjectReference Include="..\LTAI.WebApp\LTAI.WebApp.csproj" />
   </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Spectre.Console.Cli" Version="0.55.0" />
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.1" />
+  </ItemGroup>
+
+  <!-- Embed runtime .md assets into single-file binary -->
+  <ItemGroup>
+    <EmbeddedResource Include="..\..\skills\**\*.md" LinkBase="skills" />
+    <EmbeddedResource Include="..\..\tools\**\*.md" LinkBase="tools" />
+    <EmbeddedResource Include="..\..\prompts\**\*.md" LinkBase="prompts" />
+    <EmbeddedResource Include="..\..\rules\**\*.md" LinkBase="rules" />
+  </ItemGroup>
+
+  <!-- Runtime config: copy to output for development, embedded for publish -->
+  <ItemGroup>
+    <Content Include="..\..\config\**\*" LinkBase="config" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

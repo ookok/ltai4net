@@ -176,6 +176,15 @@ public sealed class GenePool
 
     public Gene AddGene(Gene gene)
     {
+        if (_genes.Count >= _maxPopulation && !_genes.ContainsKey(gene.Id))
+        {
+            var worst = _genes.Values.OrderBy(g => g.Fitness).First();
+            _genes.TryRemove(worst.Id, out _);
+            foreach (var (niche, ids) in _nicheGeneIds)
+                ids.Remove(worst.Id);
+            _logger.LogDebug("Gene pool full ({Count}/{Max}), evicted {EvictedId}", _genes.Count, _maxPopulation, worst.Id);
+        }
+
         _genes[gene.Id] = gene;
         _nicheGeneIds.AddOrUpdate(gene.Niche,
             _ => new List<string> { gene.Id },

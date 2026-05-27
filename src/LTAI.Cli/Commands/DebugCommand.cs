@@ -28,10 +28,25 @@ public sealed class DebugCommand : AsyncCommand<DebugCommand.Settings>
         [Description("Generate a report")]
         [DefaultValue(false)]
         public bool GenerateReport { get; init; }
+
+        [CommandOption("--batch")]
+        [Description("Run tests from testprompts.txt file")]
+        [DefaultValue(false)]
+        public bool Batch { get; init; }
+
+        [CommandOption("--layer")]
+        [Description("Filter batch by layer (L0-L5, CHAOS, all)")]
+        public string? Layer { get; init; }
     }
 
     protected override async Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken cancellation)
     {
+        if (settings.Batch)
+        {
+            await DebugMode.RunBatchAsync(settings.Layer ?? "all").ConfigureAwait(false);
+            return 0;
+        }
+
         await DebugMode.RunAsync(
             settings.Query, settings.Count, settings.Difficulty, settings.Domain, settings.GenerateReport).ConfigureAwait(false);
         return 0;

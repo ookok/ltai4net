@@ -21,7 +21,7 @@ public sealed class DiagnosticsView : UserControl
 
         root.Children.Add(new TextBlock
         {
-            Text = "LTAI V0.51 - Diagnostics",
+            Text = "LTAI V1.0 - Diagnostics",
             FontSize = 20,
             FontWeight = FontWeight.Bold,
             Foreground = LtaiTheme.Sbb(LtaiTheme.TextPrimary)
@@ -54,7 +54,7 @@ public sealed class DiagnosticsView : UserControl
         var harness = ServiceLocator.Get<HarnessProfile>();
 
         _content.Text = string.Format(
-            "LTAI V0.51.0 - Sentient Mesh\n\n" +
+            "LTAI V1.0 - Agent OS\n\n" +
             "Architecture:\n" +
             "  BaseAgent + IAnalysisStrategy pattern\n" +
             "  UnifiedSafetyGate with staircase penalty\n" +

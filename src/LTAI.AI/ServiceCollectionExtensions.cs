@@ -11,6 +11,7 @@ using LTAI.Core.Messaging;
 using LTAI.Core.Network;
 using LTAI.Core.System;
 using LTAI.Knowledge.Core;
+using LTAI.Tools;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -931,11 +932,18 @@ public static class ServiceCollectionExtensions
                 logger);
         });
 
+        services.AddSingleton<Acceleration.OnnxAccelerator>(sp =>
+        {
+            var logger = sp.GetService<ILogger<Acceleration.OnnxAccelerator>>();
+            return new Acceleration.OnnxAccelerator(logger);
+        });
+
         services.AddSingleton<NeedleToolRouter>(sp =>
         {
             var modelPath = Path.Combine(Directory.GetCurrentDirectory(), "assets", "needle", "model.onnx");
             var logger = sp.GetService<ILogger<NeedleToolRouter>>();
-            return new NeedleToolRouter(modelPath, logger);
+            var accel = sp.GetService<Acceleration.OnnxAccelerator>();
+            return new NeedleToolRouter(modelPath, logger, accel);
         });
 
         services.AddSingleton<ElasticWorkerPool>(sp =>
@@ -955,6 +963,8 @@ public static class ServiceCollectionExtensions
             var logger = sp.GetService<ILogger<DataflowPipeline>>();
             return new DataflowPipeline(logger);
         });
+
+        services.AddLTAITools();
 
         return services;
     }

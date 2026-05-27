@@ -50,35 +50,95 @@ public sealed class PipelineView : UserControl
     {
         var p = System.Diagnostics.Process.GetCurrentProcess();
         var lts = _svc.LTS;
+        var cps = _svc.CPS;
+        var scheduler = _svc.Scheduler;
+        var router = _svc.Router;
+        var kernel = _svc.Kernel;
 
-        _content.Text = string.Format(
-            "LTAI Pipeline Status\n\n" +
-            "Routing Layer\n" +
-            "  Mode:        {0}\n" +
-            "  Intent Router: Active\n" +
-            "  Semantic Router: Active\n\n" +
-            "Governors\n" +
-            "  Input:       Active\n" +
-            "  Context:     Active\n" +
-            "  Routing:     Active\n" +
-            "  Output:      Active\n" +
-            "  Self:        Active\n\n" +
-            "System\n" +
-            "  PID:         {1}\n" +
-            "  Threads:     {2}\n" +
-            "  Memory:      {3} MB\n" +
-            "  Uptime:      {4}\n" +
-            "  .NET:        {5}\n\n" +
-            "DNA\n" +
-            "  State:       {6}\n" +
-            "  Safety:      {7}",
-            lts.Mode,
-            p.Id,
-            p.Threads.Count,
-            p.WorkingSet64 / 1024 / 1024,
-            DateTime.Now - p.StartTime,
-            Environment.Version,
-            _svc.DNA?.Consciousness.State.Level.ToString() ?? "Offline",
-            _svc.DNA?.Safety.Posture.ToString() ?? "N/A");
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("LTAI Pipeline Status\n");
+
+        // CPS Stats
+        if (cps != null)
+        {
+            try
+            {
+                var stats = cps.GetPerformanceStats();
+                sb.AppendLine("CPS Performance");
+                sb.AppendLine($"  Processed:    {stats.TotalProcessed}");
+                sb.AppendLine($"  Avg Latency:  {stats.AvgLatencyMs}ms");
+                sb.AppendLine($"  Est. Tokens:  {stats.EstimatedTotalTokens}");
+                sb.AppendLine($"  Routes:       {string.Join(", ", stats.RouteDistribution.Select(kv => $"{kv.Key}:{kv.Value}"))}");
+                sb.AppendLine();
+            }
+            catch { }
+        }
+
+        // Scheduler Health
+        if (scheduler != null)
+        {
+            try
+            {
+                sb.AppendLine("System Health");
+                sb.AppendLine($"  Scheduler:    {(scheduler.IsRunning ? "Running" : "Stopped")}");
+                sb.AppendLine($"  Queue Depth:  {scheduler.QueueDepth}");
+                sb.AppendLine($"  Events:       {scheduler.EventsProcessed}");
+                sb.AppendLine($"  Rules Fired:  {scheduler.RulesTriggered}");
+                sb.AppendLine();
+            }
+            catch { }
+        }
+
+        // ParetoRouter
+        if (router != null)
+        {
+            try
+            {
+                sb.AppendLine("Pareto Router");
+                sb.AppendLine($"  Frontier:     {router.FrontierSize} points");
+                sb.AppendLine($"  Decisions:    {router.TotalDecisions}");
+                sb.AppendLine($"  Shadow Rate:  {router.ShadowRate:P0}");
+                sb.AppendLine();
+            }
+            catch { }
+        }
+
+        // Kernel Vitals
+        if (kernel != null)
+        {
+            try
+            {
+                var vitals = kernel.GetAggregatedVitals();
+                sb.AppendLine("MicroKernel");
+                sb.AppendLine($"  Healthy:      {kernel.IsHealthy}");
+                sb.AppendLine($"  P50:          {vitals.P50LatencyMs}ms");
+                sb.AppendLine($"  P99:          {vitals.P99LatencyMs}ms");
+                sb.AppendLine();
+            }
+            catch { }
+        }
+
+        // Routing + Governors
+        sb.AppendLine("Routing Layer");
+        sb.AppendLine($"  Mode:        {lts.Mode}");
+        sb.AppendLine($"  Intent Router: Active");
+        sb.AppendLine($"  Semantic Router: Active");
+        sb.AppendLine();
+
+        // System
+        sb.AppendLine("System");
+        sb.AppendLine($"  PID:         {p.Id}");
+        sb.AppendLine($"  Threads:     {p.Threads.Count}");
+        sb.AppendLine($"  Memory:      {p.WorkingSet64 / 1024 / 1024} MB");
+        sb.AppendLine($"  Uptime:      {DateTime.Now - p.StartTime}");
+        sb.AppendLine($"  .NET:        {Environment.Version}");
+        sb.AppendLine();
+
+        // DNA
+        sb.AppendLine("DNA");
+        sb.AppendLine($"  State:       {_svc.DNA?.Consciousness.State.Level.ToString() ?? "Offline"}");
+        sb.AppendLine($"  Safety:      {_svc.DNA?.Safety.Posture.ToString() ?? "N/A"}");
+
+        _content.Text = sb.ToString();
     }
 }

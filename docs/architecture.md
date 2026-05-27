@@ -148,3 +148,68 @@ LTAI 是严格映射为现代操作系统层级模型的 Agent 框架：由底�
 - 自动重要性增长, ParetoRouter 投影刷新
 - OnnxML 模型 DI, PolicyAsCode 热加载
 - HITL 反射接线
+
+## 开发者上手路径
+
+### 最小理解集 (先看这 5 个文件)
+
+| 文件 | 作用 | 为什么先看 |
+|------|------|-----------|
+| `src/LTAI.Core/Governors/MicroKernel.cs` | L0 微内核 (11 原语) | 所有操作的唯一入口 |
+| `src/LTAI.Core/Governors/CPSProcessingService.cs` | 中央路由处理器 | 理解"查询→决策→执行"全链路 |
+| `src/LTAI.Core/Governors/ParetoRouter.cs` | 3D Pareto 路由决策 | 理解路由选择逻辑 |
+| `src/LTAI.Agent/MAF/AgenticLoop.cs` | Read→Think→Edit→Run→Observe | 理解代码执行循环 |
+| `src/LTAI.Agent/Skills/Runtime/SkillRuntime.cs` | 技能执行管道 | 理解工具调用链 |
+
+### 架构复杂度地图
+
+```
+复杂度低 ↓                                       复杂度高 ↓
+MicroKernel (11 primitives)     ParetoRouter (3D + shadow + lock)
+SkillRegistry (CRUD)            ArchitectLoop (22 actions + 3 safety gates)
+ChatAgent (conversation)        GenePool (GA + crossover + niche sharing)
+CoordinationScheduler (events)  DebugLoop (error analysis + fix generation)
+```
+
+### 常见调试入口
+
+- **查询路由异常**: 检查 `ParetoRouter.Decide` → 查看 `CPSProcessingService.ExplainLastDecision()`
+- **Agent 不响应**: 检查 `CoordinationScheduler.IsRunning` → `CoordinationScheduler.GetHealthReport()`
+- **工具调用失败**: 检查 `SkillStepExecutor.RunShellAsync` → 查看 `BlockedShellPatterns` 是否误拦截
+- **记忆不注入**: 检查 `MemoryFilesService.RetrieveRelevant` → `ChatAgent.ExecuteLogicAsync`
+- **进化停止**: 检查 `EvolutionLoopHostedService` 是否运行 → `GenePool.Evolve` 是否被调用
+
+### 已知复杂度区域
+
+| 区域 | 复杂度 | 原因 |
+|------|--------|------|
+| ArchitectLoop | 🔴 高 | 22 种动作 + LLM 诊断/提案 + 3 重安全闸 |
+| DebugLoop | 🔴 高 | 错误分析 + 策略匹配 + 自适应温度 + git 回滚 |
+| GenePool | 🟡 中 | 8 种基因操作 + niche 分享 + 交叉变异 |
+| ParetoRouter | 🟡 中 | 3D 投影 + 路由锁定 + 影子路由 + 基因驱动 |
+| 事件系统 | 🟡 中 | 12 种事件类型 + 4 条引导规则 + 100ms 轮询 |
+| MicroKernel | 🟢 低 | 11 个独立原语, 无业务逻辑 |
+
+## 性能特征
+
+| 指标 | 典型值 | 说明 |
+|------|--------|------|
+| L3 决策延迟 | < 50ms | ParetoRouter 纯矩阵运算, SLA 告警阈值 |
+| L1 推理延迟 | 1-5s | Qwen2.5-1.5B ONNX 本地推理 |
+| L2 推理延迟 | 2-10s | DeepSeek-v4 / Qwen-Max API 调用 |
+| 并发原语 | ≤ 16 | MicroKernel SemaphoreSlim |
+| 并发进程 | ≤ 4 | MicroKernel 进程配额 |
+| 内存节点 | ≤ 10,000 | MemoryGraph 硬上限 |
+| 基因池 | ≤ 200 | GenePool maxPopulation |
+| 审计条目 | ≤ 1,000 | 环形 FIFO 淘汰 |
+
+### 成本模型
+
+ParetoRouter 的 Quality/Speed/Cost 三维路由决策中：
+- **reflex**: 0 token, 0 成本, ~1ms (纯关键字/缓存)
+- **local**: ~500 tokens, 极低成本, ~50ms (L0 ONNX 模型)
+- **L1**: ~2,000 tokens, 低成本, 1-5s (本地 Qwen ONNX)
+- **L2**: ~8,000 tokens, API 成本, 2-10s (云端 DeepSeek/Qwen)
+
+BootstrapTeacher 三阶段自适应路由确保：Teaching 阶段 100% L2 (学习), Shadowing 阶段 10% L2 (验证), Autonomous 阶段 2% L2 (抽查)。
+

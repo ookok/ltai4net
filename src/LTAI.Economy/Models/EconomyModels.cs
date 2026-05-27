@@ -3,9 +3,6 @@ using System.Text.Json.Serialization;
 namespace LTAI.Economy.Models;
 
 [JsonConverter(typeof(JsonStringEnumConverter))]
-public enum Metabolite { ATP, Glucose, Oxygen, Nadph }
-
-[JsonConverter(typeof(JsonStringEnumConverter))]
 public enum OperationType { Basal, Active, Peak }
 
 [JsonConverter(typeof(JsonStringEnumConverter))]

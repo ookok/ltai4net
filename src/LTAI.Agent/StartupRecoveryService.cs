@@ -1,5 +1,6 @@
 using LTAI.AI.Interfaces;
 using LTAI.Planning.Planning;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
 namespace LTAI.Agent;
@@ -7,7 +8,7 @@ namespace LTAI.Agent;
 /// <summary>
 /// Startup recovery: restores planning checkpoints and agent state on boot.
 /// </summary>
-public sealed class StartupRecoveryService
+public sealed class StartupRecoveryService : IHostedService
 {
     private readonly ILivingTreeSystem _lts;
     private readonly TaskCheckpoint _checkpoint;
@@ -20,6 +21,13 @@ public sealed class StartupRecoveryService
         _lts = lts; _checkpoint = checkpoint;
         _logger = logger;
     }
+
+    public async Task StartAsync(CancellationToken ct)
+    {
+        await RecoverAsync(ct).ConfigureAwait(false);
+    }
+
+    public Task StopAsync(CancellationToken ct) => Task.CompletedTask;
 
     public async Task RecoverAsync(CancellationToken ct = default)
     {

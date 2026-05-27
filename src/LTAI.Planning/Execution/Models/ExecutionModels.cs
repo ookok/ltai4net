@@ -637,8 +637,6 @@ public sealed class ResolvedSkill
     public int UsedCount { get; set; }
 }
 
-public enum RLMSplitter { ByItem, ByAspect, ByChunk, Custom }
-
 public sealed class RLMTask
 {
     public string Id { get; set; } = "";

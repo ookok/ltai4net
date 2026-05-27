@@ -28,7 +28,7 @@ public record SmallLlmConfig
     public int MaxNewTokens { get; init; } = 256;
 }
 
-public sealed class OnnxSmallLlmEngine : IL1InferenceEngine
+public sealed class OnnxSmallLlmEngine : IL1InferenceEngine, ILocalLlmEngine
 {
     private readonly SmallLlmConfig _config;
     private readonly ILogger<OnnxSmallLlmEngine> _logger;

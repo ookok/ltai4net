@@ -222,7 +222,10 @@ public sealed class RecursiveCausalAudit
     private static readonly Regex MeasurableEffect = new(
         @"\d+%|\d+\.\d+|\bincrease\b|\bdecrease\b|\breduce\b|\braise\b|\blower\b|\bhigher\b|" +
         @"\b升\b|\b降\b|\b提高\b|\b降低\b|\b增加\b|\b减少\b|\b大于\b|\b小于\b|" +
-        @"\bleads?\sto\b|\bresults?\sin\b|\bcauses?\b|\b导致\b|\b引起\b",
+        @"\bleads?\sto\b|\bresults?\sin\b|\bcauses?\b|\b导致\b|\b引起\b|" +
+        @"\b改善\b|\b恶化\b|\b优化\b|\b退化\b|\b显著\b|\b明显\b|\b大幅度\b|" +
+        @"\b提升了?\b|\b下降了?\b|\b增长了?\b|\b缩减了?\b|\b翻倍\b|\b减半\b|" +
+        @"\d+\s*倍|\d+\s*个|\d+\s*次|\d+\s*条",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     private static bool HasCausalAnchor(string step)

@@ -90,9 +90,18 @@ public sealed class LTAIService
     public ILivingTreeSystem LTS { get; }
     public DNAOrchestrator? DNA { get; }
     public LTAIMetricsCollector? Metrics { get; }
+    public LTAI.Core.Governors.CPSProcessingService? CPS { get; }
+    public LTAI.Core.Governors.CoordinationScheduler? Scheduler { get; }
+    public LTAI.Core.Governors.ParetoRouter? Router { get; }
+    public LTAI.Core.Governors.IMicroKernel? Kernel { get; }
 
-    public LTAIService(ILivingTreeSystem lts, DNAOrchestrator? dna = null, LTAIMetricsCollector? metrics = null)
+    public LTAIService(ILivingTreeSystem lts, DNAOrchestrator? dna = null, LTAIMetricsCollector? metrics = null,
+        LTAI.Core.Governors.CPSProcessingService? cps = null,
+        LTAI.Core.Governors.CoordinationScheduler? scheduler = null,
+        LTAI.Core.Governors.ParetoRouter? router = null,
+        LTAI.Core.Governors.IMicroKernel? kernel = null)
     {
         LTS = lts; DNA = dna; Metrics = metrics;
+        CPS = cps; Scheduler = scheduler; Router = router; Kernel = kernel;
     }
 }
