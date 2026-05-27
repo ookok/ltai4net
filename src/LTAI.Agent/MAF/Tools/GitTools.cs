@@ -744,4 +744,57 @@ public sealed class GitTools
             return JsonSerializer.Serialize(new { error = ex.Message });
         }
     }
+
+    [Description("Clone a remote git repository to a local directory.")]
+    public static async Task<string> GitClone(
+        [Description("Remote URL to clone from")] string url,
+        [Description("Local target directory")] string? targetDir = null,
+        [Description("Branch to checkout")] string? branch = null,
+        [Description("Shallow clone (--depth 1)")] bool shallow = false,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var repoName = Path.GetFileNameWithoutExtension(
+                url.TrimEnd('/').EndsWith(".git", StringComparison.OrdinalIgnoreCase)
+                    ? url.TrimEnd('/')[..^4].Split('/').Last()
+                    : url.TrimEnd('/').Split('/').Last());
+            var localPath = targetDir ?? Path.Combine(Directory.GetCurrentDirectory(), repoName);
+
+            if (Directory.Exists(localPath) && Directory.EnumerateFileSystemEntries(localPath).Any())
+                return JsonSerializer.Serialize(new
+                {
+                    error = $"Target directory '{localPath}' already exists and is not empty"
+                });
+
+            var cloneOptions = new CloneOptions
+            {
+                BranchName = branch,
+                IsBare = false,
+                Checkout = true
+            };
+
+            if (shallow)
+            {
+                cloneOptions.FetchOptions.Depth = 1;
+            }
+
+            var clonePath = await Task.Run(() =>
+                Repository.Clone(url, localPath, cloneOptions), cancellationToken);
+
+            using var repo = new Repository(clonePath);
+            return JsonSerializer.Serialize(new
+            {
+                cloned = true,
+                url,
+                path = clonePath,
+                branch = repo.Head.FriendlyName,
+                commit = repo.Head.Tip?.Sha[..8]
+            }, JsonOpts);
+        }
+        catch (Exception ex)
+        {
+            return JsonSerializer.Serialize(new { error = ex.Message });
+        }
+    }
 }

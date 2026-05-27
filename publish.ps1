@@ -1,24 +1,39 @@
-# LTAI V1.0 multi-platform publish
-# Usage: .\publish.ps1 [-AOT] [-Platform win-x64|linux-x64|osx-arm64]
-param([switch]$AOT, [string]$Platform = "win-x64")
+# LTAI V1.0 multi-platform publish (single-file self-contained)
+# Usage: .\publish.ps1 [-Platform win-x64|linux-x64|osx-arm64]
+param([string]$Platform = "win-x64")
 
 Set-Location $PSScriptRoot
 
-$mode = if ($AOT) { "AOT" } else { "JIT" }
-Write-Host "=== LTAI V1.0 Publish ($mode, $Platform) ===" -ForegroundColor Cyan
+Write-Host "=== LTAI V1.0 Publish (single-file, $Platform) ===" -ForegroundColor Cyan
 
-$publishArgs = @("-c", "Release", "-r", $Platform, "--self-contained")
-if ($AOT) { $publishArgs += "--property:PublishAot=true" }
+$outDir = "dist/release/$Platform"
+New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+
+$publishArgs = @(
+    "-c", "Release",
+    "-r", $Platform,
+    "-p:PublishSingleFile=true",
+    "-p:SelfContained=true",
+    "-p:IncludeNativeLibrariesForSelfExtract=true",
+    "-o", $outDir
+)
 
 @("LTAI.Cli","LTAI.Host","LTAI.MCP","LTAI.TUI","LTAI.WebApp") | ForEach-Object {
     Write-Host "  $_ ... " -NoNewline
-    $dir = "dist/$Platform/$_"
-    & dotnet publish "src/$_/$_.csproj" @publishArgs -o $dir 2>&1 > $null
+    & dotnet publish "src/$_/$_.csproj" @publishArgs 2>&1 | Out-Null
     if ($LASTEXITCODE -eq 0) { Write-Host "OK" -ForegroundColor Green }
     else { Write-Host "FAIL (exit $LASTEXITCODE)" -ForegroundColor Red }
 }
 
-# Copy CLI to root dist
+# Generate platform-specific CLI shortcut
 $ext = if ($Platform -like "win*") { ".exe" } else { "" }
-Copy-Item "dist/$Platform/LTAI.Cli/ltai$ext" "dist/ltai-$Platform$ext" -Force -ErrorAction SilentlyContinue
-Write-Host "Binary: dist/ltai-$Platform$ext" -ForegroundColor Cyan
+Copy-Item "$outDir/LTAI.Cli$ext" "dist/ltai-$Platform$ext" -Force -ErrorAction SilentlyContinue
+
+Write-Host ""
+Write-Host "Output: $outDir/" -ForegroundColor Cyan
+Get-ChildItem "$outDir/*$ext" | ForEach-Object {
+    $sizeMB = [math]::Round($_.Length / 1MB, 1)
+    Write-Host "  $($_.Name)  ($sizeMB MB)" -ForegroundColor White
+}
+Write-Host ""
+Write-Host "CLI binary: dist/ltai-$Platform$ext" -ForegroundColor Green

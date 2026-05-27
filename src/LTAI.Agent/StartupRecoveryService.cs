@@ -22,9 +22,17 @@ public sealed class StartupRecoveryService : IHostedService
         _logger = logger;
     }
 
-    public async Task StartAsync(CancellationToken ct)
+    public Task StartAsync(CancellationToken ct)
     {
-        await RecoverAsync(ct).ConfigureAwait(false);
+        // Fire-and-forget: don't block host startup on recovery.
+        // Recovery runs in background; failures are logged, not fatal.
+        _ = Task.Run(async () =>
+        {
+            try { await RecoverAsync(ct).ConfigureAwait(false); }
+            catch (Exception ex) { _logger.LogError(ex, "Startup recovery failed (non-fatal)"); }
+        }, ct);
+
+        return Task.CompletedTask;
     }
 
     public Task StopAsync(CancellationToken ct) => Task.CompletedTask;

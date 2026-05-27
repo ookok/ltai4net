@@ -305,16 +305,33 @@ public sealed class CPSProcessingService : ICPSProcessingService
         return (quality, speed, cost);
     }
 
+    /// <summary>
+    /// Deterministic projection of text → float[dim] via FNV-1a hash mixing.
+    /// Produces well-distributed vectors for ParetoRouter routing decisions.
+    /// Replaces the old raw-byte dump that produced collapsed, semantically meaningless embeddings.
+    /// </summary>
     private static float[] HashEmbedWithProfile(string text, string domain, int dim)
     {
         var emb = new float[dim];
-        var domainBytes = global::System.Text.Encoding.UTF8.GetBytes(domain);
-        for (var i = 0; i < Math.Min(domainBytes.Length, dim - 3); i++)
-            emb[i] = domainBytes[i] / 255f;
-        var textBytes = global::System.Text.Encoding.UTF8.GetBytes(text);
-        var offset = Math.Min(domainBytes.Length + 1, dim - 3);
-        for (var i = 0; i < Math.Min(textBytes.Length, dim - offset - 3); i++)
-            emb[offset + i] = textBytes[i] / 255f;
+        var data = $"{domain}|{text}";
+        Span<byte> bytes = stackalloc byte[global::System.Text.Encoding.UTF8.GetMaxByteCount(data.Length)];
+        var byteCount = global::System.Text.Encoding.UTF8.GetBytes(data, bytes);
+
+        // FNV-1a hash per dimension with offset seeding for distribution
+        for (var d = 0; d < dim; d++)
+        {
+            uint hash = 2166136261u ^ (uint)(d * 16777619);
+            for (var i = 0; i < byteCount; i++)
+            {
+                hash ^= bytes[i];
+                hash *= 16777619;
+            }
+            // Re-hash to spread across dimension axes
+            hash ^= (uint)(d * 2654435761);
+            hash *= 16777619;
+            emb[d] = (hash % 10000u) / 10000f;
+        }
+
         return emb;
     }
 

@@ -384,6 +384,9 @@ public sealed class MicroKernel : IMicroKernel
 
     private readonly ConcurrentDictionary<string, KernelSandboxConfig> _nicheSandboxes = new();
 
+    // Per-config PathPrefixSet cache for O(log n) sandbox path lookups (was O(n))
+    private readonly ConcurrentDictionary<KernelSandboxConfig, (PathPrefixSet Allowed, PathPrefixSet Blocked)> _pathPrefixCache = new();
+
     private int _activeProcesses;
     private long _totalBytesWritten;
 
@@ -1321,11 +1324,14 @@ public sealed class MicroKernel : IMicroKernel
             Path.IsPathRooted(path) ? path : Path.Combine(_workspaceRoot, path));
 
         var config = GetSandboxForNiche(niche);
+        var (allowedSet, blockedSet) = _pathPrefixCache.GetOrAdd(config, static cfg =>
+        {
+            var allowed = new PathPrefixSet(cfg.AllowedPaths);
+            var blocked = new PathPrefixSet(cfg.BlockedPaths);
+            return (allowed, blocked);
+        });
 
-        var isInAllowed = config.AllowedPaths.Any(allowed =>
-            fullPath.StartsWith(allowed, StringComparison.OrdinalIgnoreCase));
-
-        if (!isInAllowed)
+        if (!allowedSet.ContainsPrefix(fullPath))
             return (fullPath, new DiffSafetyResult
             {
                 Safe = false,
@@ -1333,10 +1339,7 @@ public sealed class MicroKernel : IMicroKernel
                 RiskScore = 0.9
             });
 
-        var isBlocked = config.BlockedPaths.Any(blocked =>
-            fullPath.StartsWith(blocked, StringComparison.OrdinalIgnoreCase));
-
-        if (isBlocked)
+        if (blockedSet.ContainsPrefix(fullPath))
             return (fullPath, new DiffSafetyResult
             {
                 Safe = false,
