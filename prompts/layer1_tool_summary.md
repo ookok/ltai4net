@@ -1,3 +1,10 @@
+# prompt: layer1_tool_summary
+domain: tooling
+description: Layer1 auto-tool summary rules — anti-hallucination guard for pre-fetched data
+## triggers
+layer1 tool, auto tool, tool summary, pre-fetched data
+
+## template
 你可以使用以下工具: {tool_names} 等共 {tool_count} 个。
 【关键规则】上面已经通过自动工具获取了真实数据，你的任务是：
 1) 严格基于上述【Layer1 自动执行工具】的结果回答用户，一字一句都要有数据依据。

@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using LTAI.Core.System;
 using Microsoft.Extensions.Logging;
+using System.Text.RegularExpressions;
 
 namespace LTAI.AI.Governors;
 
@@ -9,6 +10,8 @@ public sealed class PromptTemplateStore
     private readonly ConcurrentDictionary<string, SimplePromptTemplate> _templates = new();
     private readonly string _promptsDir;
     private readonly ILogger<PromptTemplateStore>? _logger;
+
+    private static readonly Regex TemplateSection = new(@"##\s+template\s*\n(.*?)(?=##\s+\w|\z)", RegexOptions.Singleline | RegexOptions.Compiled);
 
     public PromptTemplateStore(string? promptsDir = null, ILogger<PromptTemplateStore>? logger = null)
     {
@@ -24,18 +27,27 @@ public sealed class PromptTemplateStore
             Directory.CreateDirectory(_promptsDir);
         }
 
-        foreach (var file in Directory.GetFiles(_promptsDir, "*.prompt"))
+        foreach (var file in Directory.GetFiles(_promptsDir, "*.md"))
         {
             var name = Path.GetFileNameWithoutExtension(file);
             var content = File.ReadAllText(file);
-            _templates[name] = new SimplePromptTemplate(content);
-            _logger?.LogDebug("Loaded prompt template: {Name} ({Len} chars)", name, content.Length);
+            var templateBody = ExtractTemplateBody(content) ?? content;
+            _templates[name] = new SimplePromptTemplate(templateBody);
+            _logger?.LogDebug("Loaded prompt template: {Name} ({Len} chars)", name, templateBody.Length);
         }
 
-        SeedDefaults(); // Always ensure required templates exist
+        SeedDefaults();
 
         _logger?.LogInformation("PromptTemplateStore: loaded {Count} templates from {Dir}",
             _templates.Count, _promptsDir);
+    }
+
+    private static string? ExtractTemplateBody(string fileContent)
+    {
+        var match = TemplateSection.Match(fileContent);
+        if (!match.Success) return null;
+        var body = match.Groups[1].Value.Trim();
+        return body.Length > 0 ? body : null;
     }
 
     private void SeedDefaults()
@@ -53,11 +65,13 @@ public sealed class PromptTemplateStore
 
         foreach (var (name, content) in defaults)
         {
-            _templates[name] = new SimplePromptTemplate(content);
-            var path = Path.Combine(_promptsDir, $"{name}.prompt");
+            if (!_templates.ContainsKey(name))
+                _templates[name] = new SimplePromptTemplate(content);
+
+            var path = Path.Combine(_promptsDir, $"{name}.md");
             if (!File.Exists(path))
             {
-                try { File.WriteAllText(path, content); } catch { }
+                try { File.WriteAllText(path, $"# prompt: {name}\n## template\n{content}\n"); } catch { }
             }
         }
 

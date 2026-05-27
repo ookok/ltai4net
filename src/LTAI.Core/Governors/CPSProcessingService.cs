@@ -27,10 +27,12 @@ public sealed class CPSProcessingService : ICPSProcessingService
 {
     private readonly ParetoRouter _paretoRouter;
     private readonly Func<string, CancellationToken, string>? _intentClassifier;
+    private readonly Func<string, int, float[]>? _embedder;
     private readonly BootstrapTeacher _teacher;
     private readonly GenePool _genePool;
     private readonly SimulatedAnnealer _annealer;
     private readonly GeneToRule _geneToRule;
+    private readonly Func<string, CancellationToken, Task<string>> _l0Invoke;
     private readonly Func<string, CancellationToken, Task<string>> _l1Invoke;
     private readonly Func<string, CancellationToken, Task<string>> _l2Invoke;
     private readonly ILogger<CPSProcessingService> _logger;
@@ -49,14 +51,18 @@ public sealed class CPSProcessingService : ICPSProcessingService
         Func<string, CancellationToken, Task<string>> l1Invoke,
         Func<string, CancellationToken, Task<string>> l2Invoke,
         ILogger<CPSProcessingService>? logger = null,
-        LoopTrapDetector? loopDetector = null)
+        LoopTrapDetector? loopDetector = null,
+        Func<string, CancellationToken, Task<string>>? l0Invoke = null,
+        Func<string, int, float[]>? embedder = null)
     {
         _paretoRouter = paretoRouter;
         _intentClassifier = intentClassifier;
+        _embedder = embedder;
         _teacher = teacher;
         _genePool = genePool;
         _annealer = annealer;
         _geneToRule = geneToRule;
+        _l0Invoke = l0Invoke;
         _l1Invoke = l1Invoke;
         _l2Invoke = l2Invoke;
         _logger = logger ?? NullLogger<CPSProcessingService>.Instance;
@@ -69,7 +75,9 @@ public sealed class CPSProcessingService : ICPSProcessingService
         Interlocked.Increment(ref _totalProcessed);
 
         var intentLabel = _intentClassifier?.Invoke(query, ct) ?? "general";
-        var embedding = _paretoRouter.ProjectEmbedding(HashEmbed(query, 768));
+        var embedding = _embedder != null
+            ? _embedder(query, 768)
+            : HashEmbedWithProfile(query, intentLabel, 768);
 
         var trap = _loopDetector?.Check("process", query, embedding);
         if (trap?.Trapped == true)
@@ -182,14 +190,29 @@ public sealed class CPSProcessingService : ICPSProcessingService
 
     private async Task<string> HandleLocalAsync(string query, CancellationToken ct)
     {
-        return await Task.FromResult($"local response for: {query[..Math.Min(query.Length, 50)]}").ConfigureAwait(false);
+        if (_l0Invoke != null)
+        {
+            try
+            {
+                var result = await _l0Invoke(query, ct).ConfigureAwait(false);
+                if (!string.IsNullOrWhiteSpace(result))
+                    return result;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "L0 local model invocation failed");
+            }
+        }
+        return $"ack: local fallback for '{query[..Math.Min(query.Length, 30)]}'";
     }
 
-    private async Task<string> HandleL1Async(string query, CancellationToken ct)
+    private async Task<string> HandleL1Async(string query, CancellationToken ct, bool isL2Fallback = false)
     {
         try
         {
-            var prompt = $"Answer concisely: {query}";
+            var prompt = isL2Fallback
+                ? $"Provide a detailed answer to: {query}"
+                : $"Answer concisely: {query}";
             return await _l1Invoke(prompt, ct).ConfigureAwait(false);
         }
         catch (Exception ex)
@@ -209,7 +232,7 @@ public sealed class CPSProcessingService : ICPSProcessingService
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "L2 invocation failed, falling back to L1");
-            return await HandleL1Async(query, ct).ConfigureAwait(false);
+            return await HandleL1Async(query, ct, isL2Fallback: true).ConfigureAwait(false);
         }
     }
 
@@ -222,12 +245,16 @@ public sealed class CPSProcessingService : ICPSProcessingService
         return (quality, speed, cost);
     }
 
-    private static float[] HashEmbed(string text, int dim)
+    private static float[] HashEmbedWithProfile(string text, string domain, int dim)
     {
         var emb = new float[dim];
-        var bytes = global::System.Text.Encoding.UTF8.GetBytes(text);
-        for (var i = 0; i < Math.Min(bytes.Length, dim); i++)
-            emb[i] = bytes[i] / 255f;
+        var domainBytes = global::System.Text.Encoding.UTF8.GetBytes(domain);
+        for (var i = 0; i < Math.Min(domainBytes.Length, dim - 3); i++)
+            emb[i] = domainBytes[i] / 255f;
+        var textBytes = global::System.Text.Encoding.UTF8.GetBytes(text);
+        var offset = Math.Min(domainBytes.Length + 1, dim - 3);
+        for (var i = 0; i < Math.Min(textBytes.Length, dim - offset - 3); i++)
+            emb[offset + i] = textBytes[i] / 255f;
         return emb;
     }
 

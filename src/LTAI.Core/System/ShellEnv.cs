@@ -32,7 +32,6 @@ public sealed class ShellEnv
 {
     private static readonly Lazy<ShellEnv> _instance = new(() => new ShellEnv(AutoLogger<ShellEnv>.Create()));
     public static ShellEnv Instance => _instance.Value;
-    public static IMicroKernel? Kernel { get; set; }
 
     private readonly ILogger<ShellEnv> _logger;
     private readonly object _statsLock = new();
@@ -97,11 +96,11 @@ public sealed class ShellEnv
         {
             var platformTool = OperatingSystem.IsWindows() ? "where" : "which";
 
-            if (Kernel != null)
+            if (MicroKernel.Default != null)
             {
                 try
                 {
-                    var kResult = Kernel.ExecuteAsync(new KernelOp
+                    var kResult = MicroKernel.Default?.ExecuteAsync(new KernelOp
                     {
                         Command = platformTool,
                         Arguments = toolName,
@@ -186,11 +185,11 @@ public sealed class ShellEnv
                 _ => "--version"
             };
 
-            if (Kernel != null)
+            if (MicroKernel.Default != null)
             {
                 try
                 {
-                    var kResult = Kernel.ExecuteAsync(new KernelOp
+                    var kResult = MicroKernel.Default?.ExecuteAsync(new KernelOp
                     {
                         Command = toolName,
                         Arguments = versionArgs,
@@ -309,14 +308,14 @@ public sealed class ShellEnv
         {
             var fullWorkdir = Path.GetFullPath(AvoidTraversal(workdir));
 
-            if (Kernel != null)
+            if (MicroKernel.Default != null)
             {
                 try
                 {
                     var shellExe = OperatingSystem.IsWindows() ? "cmd.exe" : "/bin/bash";
                     var shellArgs = OperatingSystem.IsWindows() ? $"/c {command}" : $"-c \"{command}\"";
 
-                    var kResult = await Kernel.ExecuteAsync(new KernelOp
+                    var kResult = await MicroKernel.Default.ExecuteAsync(new KernelOp
                     {
                         Command = shellExe,
                         Arguments = shellArgs,

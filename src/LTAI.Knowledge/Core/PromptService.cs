@@ -22,7 +22,7 @@ public sealed class PromptService : IAsyncDisposable
     public int PromptCount => _prompts.Count;
     public int TemplateCount => _templates.Count;
 
-    private static readonly Regex Placeholder = new(@"\{\{(\w+)\}\}", RegexOptions.Compiled);
+    private static readonly Regex Placeholder = new(@"\{\{(\w+)\}\}|\{(\w+)\}", RegexOptions.Compiled);
 
     public PromptService(
         PromptLoader loader,
@@ -185,7 +185,7 @@ public sealed class PromptService : IAsyncDisposable
         var matches = Placeholder.Matches(template);
         foreach (Match match in matches)
         {
-            var varName = match.Groups[1].Value;
+            var varName = match.Groups[1].Success ? match.Groups[1].Value : match.Groups[2].Value;
             var placeholder = match.Value;
 
             if (variables.TryGetValue(varName, out var value))
@@ -210,12 +210,6 @@ public sealed class PromptService : IAsyncDisposable
                 }
             }
         }
-
-        template = Placeholder.Replace(template, m =>
-        {
-            var varName = m.Groups[1].Value;
-            return missing.Contains(varName) ? m.Value : $"[{varName}]";
-        });
 
         return new PromptRenderResult
         {

@@ -9,7 +9,6 @@ namespace LTAI.Tools.Review;
 
 public sealed class CodeReviewEngine
 {
-    public static IMicroKernel? Kernel { get; set; }
     private readonly ILogger<CodeReviewEngine> _logger;
     private readonly MultiLangCodeAnalyzer _analyzer;
 
@@ -270,9 +269,9 @@ public sealed class CodeReviewEngine
 
     private static string RunGit(string arguments)
     {
-        if (Kernel != null)
+        if (MicroKernel.Default != null)
         {
-            var result = Kernel.GitOpAsync("diff", arguments, CancellationToken.None).GetAwaiter().GetResult();
+            var result = MicroKernel.Default.GitOpAsync("diff", arguments, CancellationToken.None).GetAwaiter().GetResult();
             if (result.Success) return result.Data ?? "";
         }
 

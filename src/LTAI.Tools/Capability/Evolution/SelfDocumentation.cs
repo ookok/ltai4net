@@ -10,7 +10,6 @@ public record DocSection(string Title, string Content, string Category);
 
 public sealed class SelfDocumenter
 {
-    public static IMicroKernel? Kernel { get; set; }
     private readonly string _workspace;
     private readonly string _outputDir;
 
@@ -110,9 +109,9 @@ Directories:
     {
         try
         {
-            if (Kernel != null)
+            if (MicroKernel.Default != null)
             {
-                var result = Kernel.GitOpAsync("log", "--oneline -10", CancellationToken.None).GetAwaiter().GetResult();
+                var result = MicroKernel.Default.GitOpAsync("log", "--oneline -10", CancellationToken.None).GetAwaiter().GetResult();
                 if (result.Success && !string.IsNullOrEmpty(result.Data)) return result.Data;
             }
 

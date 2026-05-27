@@ -81,9 +81,13 @@ public sealed class L0IntentClassifier
         var domain = Classify(query);
         var (q, s, c) = GetProfile(domain);
         var emb = new float[dim];
-        var bytes = global::System.Text.Encoding.UTF8.GetBytes(domain);
-        for (var i = 0; i < Math.Min(bytes.Length, dim); i++)
-            emb[i] = bytes[i] / 255f;
+        var domainBytes = global::System.Text.Encoding.UTF8.GetBytes(domain);
+        for (var i = 0; i < Math.Min(domainBytes.Length, dim - 3); i++)
+            emb[i] = domainBytes[i] / 255f;
+        var queryBytes = global::System.Text.Encoding.UTF8.GetBytes(query);
+        var queryOffset = Math.Min(domainBytes.Length + 1, dim - 3);
+        for (var i = 0; i < Math.Min(queryBytes.Length, dim - queryOffset - 3); i++)
+            emb[queryOffset + i] = queryBytes[i] / 255f;
         emb[dim - 3] = q;
         emb[dim - 2] = s;
         emb[dim - 1] = c;

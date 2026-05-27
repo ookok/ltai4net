@@ -117,12 +117,12 @@ public sealed class BootstrapTeacher
 
             BootstrapPhase.Shadowing =>
                 l0Confidence < 0.7f ||
-                new Random().NextDouble() < ShadowRate ||
-                (curiosity > 10 && new Random().NextDouble() < 0.05),
+                Random.Shared.NextDouble() < ShadowRate ||
+                (curiosity > 10 && Random.Shared.NextDouble() < 0.05),
 
             BootstrapPhase.Autonomous =>
                 l0Confidence < 0.5f ||
-                new Random().NextDouble() < AutonomousSpotCheckRate,
+                Random.Shared.NextDouble() < AutonomousSpotCheckRate,
 
             _ => true
         };

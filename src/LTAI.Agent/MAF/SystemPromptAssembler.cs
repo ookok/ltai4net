@@ -49,20 +49,27 @@ public sealed class SystemPromptAssembler
 
     private string LoadAgentsMd(string workspaceRoot)
     {
-        if (_agentsMdContent != null)
-            return _agentsMdContent;
-
         try
         {
             var path = Path.Combine(workspaceRoot, "AGENTS.md");
-            if (File.Exists(path))
+            if (!File.Exists(path))
             {
-                _agentsMdContent = File.ReadAllText(path);
-                _agentsMdLoadedAt = DateTime.UtcNow;
-                return _agentsMdContent;
+                _agentsMdContent = null;
+                return "";
             }
+
+            var lastWrite = File.GetLastWriteTimeUtc(path);
+            if (_agentsMdContent != null && _agentsMdLoadedAt >= lastWrite)
+                return _agentsMdContent;
+
+            _agentsMdContent = File.ReadAllText(path);
+            _agentsMdLoadedAt = DateTime.UtcNow;
+            return _agentsMdContent;
         }
-        catch { }
+        catch
+        {
+            if (_agentsMdContent != null) return _agentsMdContent;
+        }
 
         return "";
     }

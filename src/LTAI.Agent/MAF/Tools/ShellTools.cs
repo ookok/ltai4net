@@ -9,8 +9,6 @@ namespace LTAI.Agent.Tools;
 [Description("Command-line and script execution tools")]
 public sealed class ShellTools
 {
-    public static IMicroKernel? Kernel { get; set; }
-
     private static readonly HashSet<string> _dangerousPatterns = new(StringComparer.OrdinalIgnoreCase)
     {
         "rm -rf /", "rm -rf /*", "del /f /s C:\\", "format", "shutdown", "reboot",
@@ -63,9 +61,9 @@ public sealed class ShellTools
             shellArgs = new[] { "--noprofile", "--norc" };
         }
 
-        if (Kernel != null)
+        if (MicroKernel.Default != null)
         {
-            var kResult = await Kernel.ExecuteAsync(new KernelOp
+            var kResult = await MicroKernel.Default.ExecuteAsync(new KernelOp
             {
                 Command = shellExe,
                 Arguments = string.Join(" ", shellArgs),

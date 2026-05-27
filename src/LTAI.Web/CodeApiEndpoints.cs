@@ -10,7 +10,6 @@ namespace LTAI.Web;
 
 public static class CodeApiEndpoints
 {
-    public static IMicroKernel? Kernel { get; set; }
     private static readonly string CodeRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "output", "code"));
 
     private static readonly HashSet<string> ExcludedDirs = new(StringComparer.OrdinalIgnoreCase)
@@ -416,11 +415,11 @@ public static class CodeApiEndpoints
     {
         try
         {
-            if (Kernel != null)
+            if (MicroKernel.Default != null)
             {
                 try
                 {
-                    var kResult = Kernel.GitOpAsync("diff", "-- .", CancellationToken.None).GetAwaiter().GetResult();
+                    var kResult = MicroKernel.Default.GitOpAsync("diff", "-- .", CancellationToken.None).GetAwaiter().GetResult();
                     if (kResult.Success)
                         return string.IsNullOrWhiteSpace(kResult.Data) ? "no changes" : kResult.Data;
                 }

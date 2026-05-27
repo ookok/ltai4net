@@ -14,7 +14,6 @@ namespace LTAI.Tools.Tools;
 
 public static class LTAIToolRegistry
 {
-    public static IMicroKernel? Kernel { get; set; }
     private static bool _seeded;
     private static IServiceProvider? _serviceProvider;
     private static ILogger? _logger;
@@ -762,9 +761,9 @@ public static class LTAIToolRegistry
                 var repoUrl = Arg(args, "repo_url");
                 if (string.IsNullOrWhiteSpace(repoUrl)) return JsonToolResult.Success(new { error = "repo_url parameter is required" });
                 var cloneDir = Path.Combine(Path.GetTempPath(), "ltai_cli", Guid.NewGuid().ToString("N")[..8]);
-                if (Kernel != null)
+                if (MicroKernel.Default != null)
                 {
-                    var cloneResult = await Kernel.GitOpAsync("clone", $"--depth 1 {repoUrl} {cloneDir}", CancellationToken.None).ConfigureAwait(false);
+                    var cloneResult = await MicroKernel.Default.GitOpAsync("clone", $"--depth 1 {repoUrl} {cloneDir}", CancellationToken.None).ConfigureAwait(false);
                     if (!cloneResult.Success) return JsonToolResult.Success(new { error = cloneResult.Error ?? "git clone failed" });
                 }
                 else
@@ -830,9 +829,9 @@ public static class LTAIToolRegistry
                             {
                                 try
                                 {
-                                    if (Kernel != null)
-                                    {
-                                        var verResult = await Kernel.ExecuteAsync(new KernelOp { Command = file, Arguments = "--version", WorkingDirectory = dir, Timeout = TimeSpan.FromSeconds(3) }, CancellationToken.None).ConfigureAwait(false);
+                                if (MicroKernel.Default != null)
+                                {
+                                    var verResult = await MicroKernel.Default.ExecuteAsync(new KernelOp { Command = file, Arguments = "--version", WorkingDirectory = dir, Timeout = TimeSpan.FromSeconds(3) }, CancellationToken.None).ConfigureAwait(false);
                                         if (verResult.Success && !string.IsNullOrWhiteSpace(verResult.Data))
                                             found.Add(new { name, path = file, version = verResult.Data.Split('\n')[0] });
                                         else
@@ -2156,9 +2155,9 @@ internal static class CliEngine
 
         try
         {
-            if (LTAIToolRegistry.Kernel != null)
+            if (MicroKernel.Default != null)
             {
-                var result = await LTAIToolRegistry.Kernel.ExecuteAsync(new KernelOp
+                var result = await MicroKernel.Default.ExecuteAsync(new KernelOp
                 {
                     Command = command,
                     Arguments = args,

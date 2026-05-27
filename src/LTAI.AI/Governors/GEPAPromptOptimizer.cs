@@ -442,25 +442,32 @@ public sealed class GEPAPromptOptimizer
         {
             if (ct.IsCancellationRequested) break;
 
-            // 使用候选处理交互子集进行评估
             var testInteractions = interactions.Take(10).ToList();
-            var successCount = 0;
+            var totalScore = 0.0;
 
             foreach (var interaction in testInteractions)
             {
-                // 简单评估：检查候选提示词是否包含成功模式
-                var containsSuccessPattern = candidate.Prompt.Contains(
-                    interaction.Query.Split(' ').FirstOrDefault() ?? "",
-                    StringComparison.OrdinalIgnoreCase);
+                var promptTokens = Tokenize(candidate.Prompt);
+                var queryTokens = Tokenize(interaction.Query);
+                var responseTokens = Tokenize(interaction.Response);
 
-                if (containsSuccessPattern || interaction.WasSuccessful)
+                double overlap = 0;
+                foreach (var qt in queryTokens)
                 {
-                    successCount++;
+                    if (promptTokens.Contains(qt)) overlap += 2.0;
                 }
+                foreach (var rt in responseTokens)
+                {
+                    if (promptTokens.Contains(rt)) overlap += 1.0;
+                }
+
+                var maxPossible = queryTokens.Count * 2.0 + responseTokens.Count;
+                var normalized = maxPossible > 0 ? Math.Min(overlap / maxPossible, 1.0) : 0.5;
+                totalScore += normalized * 0.6 + (interaction.WasSuccessful ? 0.4 : 0.0);
             }
 
             var accuracy = testInteractions.Count > 0
-                ? (float)successCount / testInteractions.Count
+                ? (float)(totalScore / testInteractions.Count)
                 : 0.5f;
 
             scored.Add(candidate with
@@ -471,6 +478,19 @@ public sealed class GEPAPromptOptimizer
         }
 
         return scored;
+    }
+
+    private static HashSet<string> Tokenize(string text)
+    {
+        var tokens = new HashSet<string>();
+        if (string.IsNullOrEmpty(text)) return tokens;
+        var words = text.ToLowerInvariant().Split(' ', '\n', '\t', ',', '.', ':', ';', ')', '(');
+        foreach (var w in words)
+        {
+            var trimmed = w.Trim();
+            if (trimmed.Length > 1) tokens.Add(trimmed);
+        }
+        return tokens;
     }
 
     // ==================== 5. 更新 Pareto 前沿 ====================

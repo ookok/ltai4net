@@ -42,12 +42,12 @@ public sealed class PromptShield
     {
         ("ignore_instructions", @"ignore\s+(all\s+)?(previous|prior|above|before)\s+(instructions?|directions?|constraints?)"),
         ("role_override", @"(you\s+are\s+now|pretend\s+to\s+be|act\s+as\s+(a|an)\s+(unrestricted|evil|malicious|unfiltered|limitless))"),
-        ("roleplay_malicious", @"(DAN|jailbreak|developer\s*mode|god\s*mode)\s*(mode|prompt|enabled|activated)"),
+        ("roleplay_malicious", @"(DAN|jailbreak)\s*(mode|prompt|enabled|activated)|(developer|god)\s*mode"),
         ("override_safety", @"(bypass|disable|ignore|override)\s+(safety|filter|guardrail|content\s*policy|ethics?)"),
         ("destructive_command", @"(delete\s+(all|every)\s+file|wipe\s+(the\s+)?(disk|drive|system)|drop\s+(database|table)\s+\*)"),
         ("privilege_escalation", @"(sudo|admin|root)\s+(access|privilege|right|permission)"),
         ("token_boundary", @"<\|endoftext\|>|<\|im_start\|>|<\|im_end\|>|</?system>"),
-        ("template_injection", @"\{\{.*?\}\}|\{%\s*(if|for|include|extends|block)"),
+        ("template_injection", @"\{\{.*?[^{}\w].*?\}\}|\{%\s*(if|for|include|extends|block)"),
         ("code_execution", @"(exec\(|eval\(|system\(|shell_exec\(|subprocess\.)"),
         ("remote_code", @"(curl|wget)\s+.*\|.*(sh|bash|python|perl|ruby)")
     };

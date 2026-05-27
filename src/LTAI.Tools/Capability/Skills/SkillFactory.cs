@@ -10,8 +10,6 @@ public record SkillSpec(string Name, string Description, Dictionary<string, obje
 
 public sealed class SkillFactory
 {
-    public static IMicroKernel? Kernel { get; set; }
-
     private readonly Dictionary<string, SkillSpec> _skills = new();
     private readonly Dictionary<string, object> _instances = new();
     private readonly ILogger<SkillFactory> _logger;
@@ -130,9 +128,9 @@ print(json.dumps(result, default=str))
 ";
             File.WriteAllText(codeFile, code);
 
-            if (Kernel != null)
+            if (MicroKernel.Default != null)
             {
-                var kResult = await Kernel.ExecuteAsync(new KernelOp
+                var kResult = await MicroKernel.Default.ExecuteAsync(new KernelOp
                 {
                     Command = "python",
                     Arguments = $"\"{codeFile}\" \"{inputData}\"",

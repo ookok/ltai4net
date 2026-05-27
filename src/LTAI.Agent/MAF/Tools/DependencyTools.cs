@@ -8,7 +8,6 @@ namespace LTAI.Agent.Tools;
 [Description("Windows package manager tools for automatic dependency installation and environment self-healing")]
 public sealed class DependencyTools
 {
-    public static IMicroKernel? Kernel { get; set; }
     private static readonly HashSet<string> ChocoKeywords = new(StringComparer.OrdinalIgnoreCase)
     {
         "visualstudio", "dotnet-sdk", "dotnet-runtime", "msbuild", "sql-server",
@@ -156,9 +155,9 @@ public sealed class DependencyTools
 
     private static async Task<(bool success, string output)> CheckCommandAsync(string command, CancellationToken ct)
     {
-        if (Kernel != null)
+        if (MicroKernel.Default != null)
         {
-            var kResult = await Kernel.ExecuteAsync(new KernelOp
+            var kResult = await MicroKernel.Default.ExecuteAsync(new KernelOp
             {
                 Command = OperatingSystem.IsWindows() ? "cmd.exe" : "/bin/bash",
                 Arguments = OperatingSystem.IsWindows() ? $"/c \"{command}\"" : $"-c \"{command}\"",

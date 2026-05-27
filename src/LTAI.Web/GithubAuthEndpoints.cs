@@ -12,8 +12,6 @@ namespace LTAI.Web;
 
 public static class GithubAuthEndpoints
 {
-    public static IMicroKernel? Kernel { get; set; }
-
     private static readonly Lazy<string> TokenPath = new(() =>
         Path.Combine(OptionService.Get("paths.data") ?? Path.Combine(AppContext.BaseDirectory, "data"), "github_token.json"));
 
@@ -264,11 +262,11 @@ public static class GithubAuthEndpoints
                     ? $"https://oauth2:{Uri.EscapeDataString(token.AccessToken)}@github.com/{request.RepoFullName}.git"
                     : $"https://github.com/{request.RepoFullName}.git";
 
-                if (Kernel != null)
+                if (MicroKernel.Default != null)
                 {
                     try
                     {
-                        var kResult = await Kernel.ExecuteAsync(new KernelOp
+                        var kResult = await MicroKernel.Default.ExecuteAsync(new KernelOp
                         {
                             Command = "git",
                             Arguments = $"clone --branch {branch} --single-branch -- \"{authedUrl}\" \"{targetPath}\"",

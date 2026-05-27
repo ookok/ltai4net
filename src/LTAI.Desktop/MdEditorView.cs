@@ -19,8 +19,6 @@ namespace LTAI.Desktop;
 
 public sealed class MdEditorView : UserControl
 {
-    public static IMicroKernel? Kernel { get; set; }
-
     private readonly string _workspaceRoot;
     private TreeView _fileTree;
     private TextBox _mdEditor;
@@ -1061,9 +1059,9 @@ public sealed class MdEditorView : UserControl
             _outputPanel.IsVisible = true;
         });
 
-        if (Kernel != null)
+        if (MicroKernel.Default != null)
         {
-            var result = await Kernel.ExecuteAsync(new KernelOp
+            var result = await MicroKernel.Default.ExecuteAsync(new KernelOp
             {
                 Command = fileName,
                 Arguments = args,

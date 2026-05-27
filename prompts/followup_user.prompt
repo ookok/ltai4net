@@ -1,5 +1,0 @@
-Answer: {answer}
-
-Context: {context}
-
-Generate 2-3 natural follow-up questions the user might ask next.

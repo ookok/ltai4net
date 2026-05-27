@@ -60,8 +60,6 @@ public sealed class LLMConfigView : UserControl
     private static readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(10) };
     private static ILogger? _logger;
 
-    public static IMicroKernel? Kernel { get; set; }
-
     public LLMConfigView(LTAIService svc)
     {
         _opts = ServiceLocator.Get<IOptions<LTAIOptions>>().Value;
@@ -454,11 +452,11 @@ public sealed class LLMConfigView : UserControl
     {
         try
         {
-            if (Kernel != null)
+            if (MicroKernel.Default != null)
             {
                 try
                 {
-                    var kResult = await Kernel.ExecuteAsync(new KernelOp
+                    var kResult = await MicroKernel.Default.ExecuteAsync(new KernelOp
                     {
                         Command = "ollama",
                         Arguments = "list",
@@ -506,11 +504,11 @@ public sealed class LLMConfigView : UserControl
                 await File.WriteAllTextAsync(modelfile, $"FROM \"{modelPath}\"\n");
             }
 
-            if (Kernel != null)
+            if (MicroKernel.Default != null)
             {
                 try
                 {
-                    var kResult = await Kernel.ExecuteAsync(new KernelOp
+                    var kResult = await MicroKernel.Default.ExecuteAsync(new KernelOp
                     {
                         Command = "ollama",
                         Arguments = $"create {EscapeArg(modelName)} -f \"{modelfile}\"",
@@ -543,11 +541,11 @@ public sealed class LLMConfigView : UserControl
     {
         try
         {
-            if (Kernel != null)
+            if (MicroKernel.Default != null)
             {
                 try
                 {
-                    await Kernel.ExecuteAsync(new KernelOp
+                    await MicroKernel.Default.ExecuteAsync(new KernelOp
                     {
                         Command = "ollama",
                         Arguments = $"stop {EscapeArg(modelName)}",
@@ -867,11 +865,11 @@ public sealed class LLMConfigView : UserControl
         catch (Exception ex) { _logger?.LogWarning(ex, "DetectHardware: drive info failed"); }
         try
         {
-            if (Kernel != null)
+            if (MicroKernel.Default != null)
             {
                 try
                 {
-                    var kResult = Kernel.ExecuteAsync(new KernelOp
+                    var kResult = MicroKernel.Default.ExecuteAsync(new KernelOp
                     {
                         Command = "nvidia-smi",
                         Arguments = "--query-gpu=memory.total --format=csv,noheader,nounits",

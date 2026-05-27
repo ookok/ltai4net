@@ -1,3 +1,10 @@
+# prompt: plan_user
+domain: planning
+description: Planner user prompt with tools list and query context
+## triggers
+plan user, task plan, planner user
+
+## template
 Available tools:
 {tools}
 

@@ -116,8 +116,6 @@ public static class ServiceCollectionExtensions
                 lts, promptService, config, backpressure, logger);
         });
 
-        services.AddSingleton<IMicroKernel>(sp => sp.GetRequiredService<MicroKernel>());
-
         services.AddSingleton<IProjectSpecProvider>(sp =>
         {
             var workspace = OptionService.Get("LTAI_WORKSPACE") ?? Directory.GetCurrentDirectory();
@@ -280,9 +278,60 @@ public static class ServiceCollectionExtensions
             }
             catch { }
 
-            return new MicroKernel(workspace, http,
+            Func<string, string, CancellationToken, Task<string>>? skillHandler = null;
+            try
+            {
+                var skillRegistry = sp.GetService<Skills.SkillRegistry>();
+                var skillRuntime = sp.GetService<SkillRuntime>();
+                if (skillRegistry != null && skillRuntime != null)
+                {
+                    skillHandler = async (skillName, input, ct) =>
+                    {
+                        var skill = skillRegistry.Get(skillName);
+                        if (skill == null) return $"Skill '{skillName}' not found";
+                        skillRuntime.InjectContext(input, "general", "microkernel");
+                        var result = await skillRuntime.RunAsync(skill, ct);
+                        return result.Output;
+                    };
+                }
+            }
+            catch { }
+
+            Func<string, int, CancellationToken, Task<string>>? memoryHandler = null;
+            try
+            {
+                var kb = sp.GetService<LTAI.Knowledge.Core.KnowledgeBase>();
+                if (kb != null)
+                {
+                    memoryHandler = async (query, topK, ct) =>
+                    {
+                        var results = await kb.SearchAsync(query, topK).ConfigureAwait(false);
+                        return results.Count == 0
+                            ? "No matching knowledge found."
+                            : string.Join("\n---\n",
+                                results.Select(r =>
+                                    $"[{r.Domain}] {r.Title} (score={r.Score:F2}): {r.Content[..Math.Min(r.Content.Length, 300)]}"));
+                    };
+                }
+            }
+            catch { }
+
+            var sandboxConfig = KernelSandboxConfig.DevelopmentDefaults(workspace);
+            var diffAgent = sp.GetService<SemanticDiffAgent>();
+
+            var kernel = new MicroKernel(workspace, http,
                 gitOpHandler: gitHandler,
+                skillHandler: skillHandler,
+                memoryHandler: memoryHandler,
+                sandboxConfig: sandboxConfig,
+                diffAgent: diffAgent,
                 logger: logger);
+
+            kernel.GenePool = sp.GetService<GenePool>();
+            kernel.Teacher = sp.GetService<BootstrapTeacher>();
+
+            MicroKernel.Default = kernel;
+            return kernel;
         });
 
         services.AddSingleton<ParetoRouter>(sp =>

@@ -31,9 +31,10 @@ public sealed class PromptCoach
     public string Coach(string userInput, string domain = "general")
     {
         var template = _domainTemplates.GetValueOrDefault(domain, _domainTemplates["general"]);
+        var sanitized = System.Net.WebUtility.HtmlEncode(userInput);
         return $"You are a prompt engineering coach. Optimize the following query for an AI reasoning model.\n\n" +
                $"Task domain: {domain}\nStructure guideline:\n{template}\n\n" +
-               $"User query: {userInput}\n\n" +
+               $"User query: {sanitized}\n\n" +
                $"Generate a JSON with: meta_prompt (optimized query), pre_analysis (context notes), complexity (1-10)";
     }
 

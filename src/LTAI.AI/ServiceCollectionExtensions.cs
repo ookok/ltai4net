@@ -825,8 +825,27 @@ public static class ServiceCollectionExtensions
                 return response?.Text ?? "";
             };
 
+            Func<string, CancellationToken, Task<string>>? l0Invoke = null;
+            var l1Engine = sp.GetService<IL1InferenceEngine>();
+            if (l1Engine != null)
+            {
+                l0Invoke = async (q, ct) =>
+                {
+                    try
+                    {
+                        if (l1Engine.IsReady)
+                            return await l1Engine.GenerateAsync($"Answer: {q}", 0.6f, 256, ct).ConfigureAwait(false);
+                    }
+                    catch { }
+                    return "";
+                };
+            }
+
+            Func<string, int, float[]> embedder = (q, d) => classifier.ClassifyToEmbedding(q, d);
+
             return new CPSProcessingService(router, classifier.ToFunc(), teacher, genePool, annealer, geneToRule,
-                l1Invoke, l2Invoke, logger, sp.GetService<LoopTrapDetector>());
+                l1Invoke, l2Invoke, logger, sp.GetService<LoopTrapDetector>(),
+                l0Invoke: l0Invoke, embedder: embedder);
         });
 
         services.AddHostedService<EvolutionLoopHostedService>(sp =>

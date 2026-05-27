@@ -10,8 +10,6 @@ public sealed class HardwareDetector
         public bool HasGpu => VramMB > 0;
     }
 
-    public static IMicroKernel? Kernel { get; set; }
-
     public static HardwareInfo Detect()
     {
         long ramMB = 8192, vramMB = 0;
@@ -39,9 +37,9 @@ public sealed class HardwareDetector
 
         try
         {
-            if (Kernel != null)
+            if (MicroKernel.Default != null)
             {
-                var result = Kernel.ExecuteAsync(new KernelOp
+                var result = MicroKernel.Default?.ExecuteAsync(new KernelOp
                 {
                     Command = "nvidia-smi",
                     Arguments = "--query-gpu=memory.total,name --format=csv,noheader,nounits",

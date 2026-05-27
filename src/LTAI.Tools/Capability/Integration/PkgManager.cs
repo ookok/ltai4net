@@ -20,8 +20,6 @@ public sealed class PkgManager
 {
     public static readonly Lazy<PkgManager> Instance = new(() => new PkgManager());
 
-    public static IMicroKernel? Kernel { get; set; }
-
     private readonly ILogger<PkgManager> _logger;
 
     private PkgManager(ILogger<PkgManager>? logger = null)
@@ -191,9 +189,9 @@ public sealed class PkgManager
 
     private static async Task<(int ExitCode, string Output)> RunDotnetAsync(string arguments)
     {
-        if (Kernel != null)
+        if (MicroKernel.Default != null)
         {
-            var kResult = await Kernel.ExecuteAsync(new KernelOp
+            var kResult = await MicroKernel.Default.ExecuteAsync(new KernelOp
             {
                 Command = "dotnet",
                 Arguments = arguments,

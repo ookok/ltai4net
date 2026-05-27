@@ -1,5 +1,6 @@
 using System.Text.Json;
 using LTAI.Core.Acceleration;
+using LTAI.Core.Governors;
 using LTAI.Core.Life;
 using LTAI.Core.Prefs;
 using LTAI.Core.Resilience;
@@ -75,10 +76,53 @@ public static class CoreEndpoints
         endpoints.MapGet("/api/core/plasticity", () =>
             Results.Json(SynapticPlasticity.Instance.Stats()));
 
-        endpoints.MapGet("/api/core/health", () =>
+        endpoints.MapGet("/api/core/health", (HttpContext context) =>
         {
             var (reportCount, trustCount, overallHealth) = SystemHealth.Instance.Stats();
-            return Results.Json(new { report_count = reportCount, trust_profile_count = trustCount, overall_health = overallHealth });
+            var kernel = context.RequestServices.GetService(typeof(IMicroKernel)) as IMicroKernel;
+            var auditTrail = kernel?.GetAuditTrail(10);
+            var vitals = kernel?.GetVitalSigns();
+            var aggregated = kernel?.GetAggregatedVitals();
+            var snapshots = kernel?.GetSnapshots();
+            return Results.Json(new
+            {
+                report_count = reportCount,
+                trust_profile_count = trustCount,
+                overall_health = overallHealth,
+                microkernel_healthy = kernel?.IsHealthy ?? true,
+                microkernel_vitals = aggregated != null ? new
+                {
+                    aggregated.Primitive,
+                    aggregated.CallCount,
+                    aggregated.SuccessRate,
+                    aggregated.AvgLatencyMs,
+                    aggregated.P50LatencyMs,
+                    aggregated.P95LatencyMs,
+                    aggregated.P99LatencyMs
+                } : null,
+                microkernel_per_primitive = vitals?.Select(v => new
+                {
+                    v.Primitive,
+                    v.CallCount,
+                    v.SuccessCount,
+                    v.FailureCount,
+                    v.SuccessRate,
+                    v.AvgLatencyMs,
+                    v.P50LatencyMs,
+                    v.P95LatencyMs
+                }).ToList(),
+                microkernel_snapshots = snapshots?.Select(s => new
+                {
+                    s.Id, s.Description, s.CapturedAt,
+                    configCount = s.ConfigState.Count,
+                    geneCount = s.ActiveGeneIds.Count
+                }).ToList(),
+                microkernel_audit = auditTrail?.Select(a => new
+                {
+                    a.TraceId, a.Primitive, a.Success, a.ElapsedMs,
+                    a.Summary, a.RiskScore
+                }).ToList()
+            });
         });
 
         endpoints.MapPost("/api/core/health/trust", async (HttpContext context, CancellationToken ct) =>

@@ -75,8 +75,6 @@ public sealed class TuiApp
 
     private static readonly string[] TaskPhases = { "input", "context", "routing", "reasoning", "generation", "review", "output" };
 
-    public static IMicroKernel? Kernel { get; set; }
-
     public TuiApp(
         ILivingTreeSystem lts,
         DNAOrchestrator? dna = null,
@@ -1221,9 +1219,9 @@ public sealed class TuiApp
 
     private static string RunGit(string args)
     {
-        if (Kernel != null)
+        if (MicroKernel.Default != null)
         {
-            var result = Kernel.GitOpAsync("git", args, CancellationToken.None).GetAwaiter().GetResult();
+            var result = MicroKernel.Default.GitOpAsync("git", args, CancellationToken.None).GetAwaiter().GetResult();
             if (result.Success) return result.Data;
         }
         var psi = new System.Diagnostics.ProcessStartInfo("git", args)
@@ -1509,11 +1507,11 @@ public sealed class TuiApp
 
         _lastBuildOutput = "";
 
-        if (Kernel != null)
+        if (MicroKernel.Default != null)
         {
             await AnsiConsole.Status().StartAsync($"[cyan]{status}[/]", async ctx =>
             {
-                var result = await Kernel.ExecuteAsync(new KernelOp
+                var result = await MicroKernel.Default.ExecuteAsync(new KernelOp
                 {
                     Command = "dotnet",
                     Arguments = args,

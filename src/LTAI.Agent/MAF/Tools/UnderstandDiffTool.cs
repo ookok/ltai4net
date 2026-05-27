@@ -7,7 +7,6 @@ namespace LTAI.Agent.Tools;
 [System.ComponentModel.Description("Understand code changes and their impact")]
 public static class UnderstandDiffTool
 {
-    public static IMicroKernel? Kernel { get; set; }
     /// <summary>
     /// Simple git-based impact analysis (backward-compatible overload).
     /// </summary>
@@ -77,9 +76,9 @@ public static class UnderstandDiffTool
 
     private static async Task<List<string>> GetChangedFilesAsync(string repoPath)
     {
-        if (Kernel != null)
+        if (MicroKernel.Default != null)
         {
-            var kResult = await Kernel.GitOpAsync("diff", "--name-only HEAD~1", System.Threading.CancellationToken.None).ConfigureAwait(false);
+            var kResult = await MicroKernel.Default.GitOpAsync("diff", "--name-only HEAD~1", System.Threading.CancellationToken.None).ConfigureAwait(false);
             if (kResult.Success)
                 return kResult.Data.Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(f => f.Trim()).ToList();
         }
