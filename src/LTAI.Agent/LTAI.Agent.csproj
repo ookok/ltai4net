@@ -8,8 +8,8 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.Agents.AI" Version="1.6.2" />
-    <PackageReference Include="Microsoft.Agents.AI.Abstractions" Version="1.6.2" />
+    <PackageReference Include="Microsoft.Agents.AI" Version="1.7.0" />
+    <PackageReference Include="Microsoft.Agents.AI.Abstractions" Version="1.7.0" />
     <PackageReference Include="Microsoft.Agents.AI.Workflows" Version="1.6.2" />
     <PackageReference Include="Microsoft.Agents.AI.Hosting.A2A.AspNetCore" Version="1.6.1-preview.260514.1" />
     <PackageReference Include="Microsoft.Agents.AI.Hosting" Version="1.6.1-preview.260514.1" />
