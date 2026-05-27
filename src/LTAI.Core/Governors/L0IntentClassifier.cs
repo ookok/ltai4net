@@ -24,19 +24,23 @@ public sealed class L0IntentClassifier
             _logger.LogWarning("No intent rules loaded from {Dir}, using built-in fallback", _rulesDir);
     }
 
-    public string Classify(string query)
+    public string Classify(string query) => ClassifyWithConfidence(query).Domain;
+
+    public (string Domain, float Confidence) ClassifyWithConfidence(string query)
     {
         var rules = _rules;
         if (rules.Count == 0)
-            return FallbackClassify(query);
+            return (FallbackClassify(query), 0.3f);
 
         var text = query.ToLowerInvariant();
         var bestDomain = "general";
         var bestScore = 0;
+        var maxPossible = 0;
 
         foreach (var rule in rules)
         {
             var score = 0;
+            var ruleMax = rule.Keywords.Length + rule.Patterns.Length * 2;
 
             foreach (var kw in rule.Keywords)
             {
@@ -54,18 +58,19 @@ public sealed class L0IntentClassifier
             {
                 bestScore = score;
                 bestDomain = rule.Domain;
+                maxPossible = ruleMax;
             }
         }
 
+        var confidence = maxPossible > 0 ? Math.Min((float)bestScore / maxPossible, 1.0f) : 0.0f;
+
         if (bestScore > 0)
         {
-            _logger.LogDebug("Intent '{Domain}' matched (score={Score}, keywords={HasKw}, regex={HasRe})",
-                bestDomain, bestScore,
-                rules.First(r => r.Domain == bestDomain).Keywords.Length,
-                rules.First(r => r.Domain == bestDomain).Patterns.Length);
+            _logger.LogDebug("Intent '{Domain}' matched (score={Score}/{Max}, confidence={Conf:F2})",
+                bestDomain, bestScore, maxPossible, confidence);
         }
 
-        return bestDomain;
+        return (bestDomain, confidence);
     }
 
     public (float Quality, float Speed, float Cost) GetProfile(string domain)
@@ -181,16 +186,35 @@ public sealed class L0IntentClassifier
     private static string FallbackClassify(string query)
     {
         var text = query.ToLowerInvariant();
-        if (text.Contains("代码") || text.Contains("函数") || text.Contains("bug") || text.Contains("class"))
+
+        if (text.Contains("代码") || text.Contains("函数") || text.Contains("bug") || text.Contains("class") ||
+            text.Contains("code") || text.Contains("function") || text.Contains("debug") || text.Contains("compile") ||
+            text.Contains("refactor") || text.Contains("build") || text.Contains("test"))
             return "code";
-        if (text.Contains("计算") || text.Contains("公式") || text.Contains("数学"))
+
+        if (text.Contains("计算") || text.Contains("公式") || text.Contains("数学") ||
+            text.Contains("math") || text.Contains("calculate") || text.Contains("equation") || text.Contains("proof"))
             return "math";
-        if (text.Contains("翻译") || text.Contains("translate"))
+
+        if (text.Contains("翻译") || text.Contains("translate") || text.Contains("translation"))
             return "translation";
-        if (text.Contains("总结") || text.Contains("摘要") || text.Contains("概括"))
+
+        if (text.Contains("总结") || text.Contains("摘要") || text.Contains("概括") ||
+            text.Contains("summarize") || text.Contains("summary") || text.Contains("tldr"))
             return "summarization";
-        if (text.Contains("环评") || text.Contains("PM2.5") || text.Contains("排放"))
+
+        if (text.Contains("环评") || text.Contains("PM2.5") || text.Contains("排放") ||
+            text.Contains("eia") || text.Contains("environment") || text.Contains("emission") || text.Contains("pollution"))
             return "eia";
+
+        if (text.Contains("对话") || text.Contains("聊天") || text.Contains("chat") || text.Contains("conversation") ||
+            text.Contains("hello") || text.Contains("help"))
+            return "chat";
+
+        if (text.Contains("推理") || text.Contains("逻辑") || text.Contains("reasoning") || text.Contains("analyze") ||
+            text.Contains("why") || text.Contains("explain"))
+            return "reasoning";
+
         return "general";
     }
 }

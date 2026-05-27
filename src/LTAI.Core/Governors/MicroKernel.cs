@@ -47,6 +47,7 @@ public sealed record KernelHttpRequest
     public string Url { get; init; } = "";
     public string Method { get; init; } = "GET";
     public string? Body { get; init; }
+    public string? Niche { get; init; }
     public Dictionary<string, string> Headers { get; init; } = new();
     public TimeSpan Timeout { get; init; } = TimeSpan.FromSeconds(30);
 }
@@ -81,10 +82,13 @@ public sealed record KernelSandboxConfig
     public HashSet<string> BlockedPaths { get; init; } = new(StringComparer.OrdinalIgnoreCase);
     public HashSet<string> AllowedDomains { get; init; } = new(StringComparer.OrdinalIgnoreCase);
     public HashSet<string> BlockedDomains { get; init; } = new(StringComparer.OrdinalIgnoreCase);
+    public HashSet<string> AllowedCommands { get; init; } = new(StringComparer.OrdinalIgnoreCase);
     public TimeSpan DefaultProcessTimeout { get; init; } = TimeSpan.FromSeconds(120);
     public long MaxFileReadBytes { get; init; } = 50 * 1024 * 1024;
     public long MaxFileWriteBytes { get; init; } = 10 * 1024 * 1024;
     public int MaxConcurrentOps { get; init; } = 16;
+    public int MaxConcurrentProcesses { get; init; } = 4;
+    public long MaxTotalBytesWritten { get; init; } = 100 * 1024 * 1024;
     public int RollbackFailureThreshold { get; init; } = 10;
     public bool EnforceNetworkFence { get; init; } = true;
 
@@ -125,6 +129,31 @@ public sealed record KernelSandboxConfig
             {
                 "169.254.169.254",
                 "metadata.google.internal"
+            },
+            AllowedCommands = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                "dotnet",
+                "git",
+                "npm",
+                "npx",
+                "node",
+                "python",
+                "python3",
+                "pwsh",
+                "powershell",
+                "cmd",
+                "bash",
+                "wsl",
+                "docker",
+                "curl",
+                "gh",
+                "7z",
+                "tar",
+                "zip",
+                "unzip",
+                "ffmpeg",
+                "ffprobe",
+                "sqlite3",
             }
         };
     }
@@ -271,6 +300,7 @@ public sealed record KernelSnapshot
     public DateTime CapturedAt { get; init; } = DateTime.UtcNow;
     public Dictionary<string, string> ConfigState { get; init; } = new();
     public List<string> ActiveGeneIds { get; init; } = new();
+    public Dictionary<string, double> GeneFitnessValues { get; init; } = new();
     public List<KernelVitalSign> VitalsAtCapture { get; init; } = new();
 }
 
@@ -354,6 +384,9 @@ public sealed class MicroKernel : IMicroKernel
 
     private readonly ConcurrentDictionary<string, KernelSandboxConfig> _nicheSandboxes = new();
 
+    private int _activeProcesses;
+    private long _totalBytesWritten;
+
     private readonly ConcurrentDictionary<string, (long[] Latencies, long Successes, long Failures)> _vitals = new();
     private readonly object _vitalsLock = new();
     private static readonly string[] _vitalPrimitives =
@@ -426,9 +459,19 @@ public sealed class MicroKernel : IMicroKernel
             if (_circuitBreaker.IsOpen)
                 return AuditAndFail(traceId, "execute", "Circuit breaker open — too many failures", sw);
 
+            if (Interlocked.Increment(ref _activeProcesses) > _sandboxConfig.MaxConcurrentProcesses)
+            {
+                Interlocked.Decrement(ref _activeProcesses);
+                return AuditAndFail(traceId, "execute",
+                    $"Process limit exceeded ({_activeProcesses - 1}/{_sandboxConfig.MaxConcurrentProcesses})", sw);
+            }
+
             var sandboxCheck = ValidateExecutePath(op);
             if (!sandboxCheck.Safe)
+            {
+                Interlocked.Decrement(ref _activeProcesses);
                 return AuditAndFail(traceId, "execute", sandboxCheck.Reason, sw, sandboxCheck.RiskScore);
+            }
 
             await _concurrencyGate!.WaitAsync(ct).ConfigureAwait(false);
 
@@ -487,11 +530,13 @@ public sealed class MicroKernel : IMicroKernel
             finally
             {
                 _concurrencyGate.Release();
+                Interlocked.Decrement(ref _activeProcesses);
             }
         }
         catch (OperationCanceledException)
         {
             sw.Stop();
+            Interlocked.Decrement(ref _activeProcesses);
             Audit(traceId, "execute", false, sw.ElapsedMilliseconds, "timeout");
             RecordVital("execute", false, sw.ElapsedMilliseconds);
             _circuitBreaker.RecordFailure();
@@ -500,6 +545,7 @@ public sealed class MicroKernel : IMicroKernel
         catch (Exception ex)
         {
             sw.Stop();
+            Interlocked.Decrement(ref _activeProcesses);
             Audit(traceId, "execute", false, sw.ElapsedMilliseconds, ex.Message);
             RecordVital("execute", false, sw.ElapsedMilliseconds);
             _circuitBreaker.RecordFailure();
@@ -566,6 +612,13 @@ public sealed class MicroKernel : IMicroKernel
 
             if (content.Length > _sandboxConfig.MaxFileWriteBytes)
                 return AuditAndFail(traceId, "write_file", $"Content too large: {content.Length} bytes (> {_sandboxConfig.MaxFileWriteBytes})", sw);
+
+            if (Interlocked.Add(ref _totalBytesWritten, content.Length) > _sandboxConfig.MaxTotalBytesWritten)
+            {
+                Interlocked.Add(ref _totalBytesWritten, -content.Length);
+                return AuditAndFail(traceId, "write_file",
+                    $"Total write quota exceeded ({_totalBytesWritten}/{_sandboxConfig.MaxTotalBytesWritten})", sw);
+            }
 
             var dir = Path.GetDirectoryName(fullPath);
             if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
@@ -634,7 +687,7 @@ public sealed class MicroKernel : IMicroKernel
 
         try
         {
-            var fenceCheck = ValidateNetworkFence(req.Url);
+            var fenceCheck = ValidateNetworkFence(req.Url, req.Niche);
             if (!fenceCheck.Safe)
                 return AuditAndFail(traceId, "http", fenceCheck.Reason, sw, fenceCheck.RiskScore);
 
@@ -914,16 +967,21 @@ public sealed class MicroKernel : IMicroKernel
             if (GenePool == null)
                 return Task.FromResult(KernelResult.Fail("GenePool not configured", sw.ElapsedMilliseconds));
 
-            GenePool.DecayUnused(TimeSpan.FromSeconds(1));
+            var removed = GenePool.RemoveGene(geneId);
 
             sw.Stop();
             var traceId = Guid.NewGuid().ToString("N")[..8];
-            Audit(traceId, "gene", true, sw.ElapsedMilliseconds, $"unloaded {geneId}");
-            PublishEvent("gene.unloaded", null, new Dictionary<string, object>
+            if (removed)
             {
-                ["geneId"] = geneId
-            });
-            return Task.FromResult(KernelResult.Ok($"Gene {geneId} unloaded", sw.ElapsedMilliseconds, traceId));
+                Audit(traceId, "gene", true, sw.ElapsedMilliseconds, $"unloaded {geneId}");
+                PublishEvent("gene.unloaded", null, new Dictionary<string, object>
+                {
+                    ["geneId"] = geneId
+                });
+                return Task.FromResult(KernelResult.Ok($"Gene {geneId} unloaded", sw.ElapsedMilliseconds, traceId));
+            }
+
+            return Task.FromResult(KernelResult.Fail($"Gene '{geneId}' not found in pool", sw.ElapsedMilliseconds));
         }
         catch (Exception ex)
         {
@@ -943,7 +1001,9 @@ public sealed class MicroKernel : IMicroKernel
         try
         {
             var vitalsSnapshot = GetVitalSigns();
-            var activeGenes = GenePool?.SelectTopN(20).Select(g => g.Id).ToList() ?? new List<string>();
+            var topGenes = GenePool?.SelectTopN(20).ToList() ?? new List<Gene>();
+            var activeGeneIds = topGenes.Select(g => g.Id).ToList();
+            var geneFitnessSnapshot = topGenes.ToDictionary(g => g.Id, g => g.Fitness);
             var configState = new Dictionary<string, string>();
 
             if (Teacher != null)
@@ -955,11 +1015,16 @@ public sealed class MicroKernel : IMicroKernel
                 configState["Teacher.Phase"] = Teacher.Phase.ToString();
             }
 
+            configState["Sandbox.MaxConcurrentProcesses"] = _sandboxConfig.MaxConcurrentProcesses.ToString();
+            configState["Sandbox.MaxTotalBytesWritten"] = _sandboxConfig.MaxTotalBytesWritten.ToString();
+            configState["Kernel.TotalBytesWritten"] = _totalBytesWritten.ToString();
+
             var snapshot = new KernelSnapshot
             {
                 Description = description,
                 ConfigState = configState,
-                ActiveGeneIds = activeGenes,
+                ActiveGeneIds = activeGeneIds,
+                GeneFitnessValues = geneFitnessSnapshot,
                 VitalsAtCapture = vitalsSnapshot.ToList()
             };
 
@@ -1020,6 +1085,13 @@ public sealed class MicroKernel : IMicroKernel
                         }
                     }
                 }
+            }
+
+            if (GenePool != null && snapshot.GeneFitnessValues.Count > 0)
+            {
+                foreach (var (geneId, fitness) in snapshot.GeneFitnessValues)
+                    GenePool.UpdateFitness(geneId, fitness);
+                _logger.LogInformation("Restored fitness for {Count} genes", snapshot.GeneFitnessValues.Count);
             }
 
             sw.Stop();
@@ -1212,7 +1284,7 @@ public sealed class MicroKernel : IMicroKernel
         return _auditTrail.TakeLast(limit).ToList().AsReadOnly();
     }
 
-    private void Audit(string traceId, string primitive, bool success, long elapsedMs, string? summary, double? riskScore = null)
+    private void Audit(string traceId, string primitive, bool success, long elapsedMs, string? summary, double riskScore = 0.0)
     {
         var entry = new KernelAuditEntry
         {
@@ -1230,7 +1302,7 @@ public sealed class MicroKernel : IMicroKernel
             _auditTrail.TryDequeue(out _);
     }
 
-    private KernelResult AuditAndFail(string traceId, string primitive, string reason, Stopwatch sw, double? riskScore = null)
+    private KernelResult AuditAndFail(string traceId, string primitive, string reason, Stopwatch sw, double riskScore = 0.0)
     {
         sw.Stop();
         Audit(traceId, primitive, false, sw.ElapsedMilliseconds, reason, riskScore);
@@ -1281,6 +1353,19 @@ public sealed class MicroKernel : IMicroKernel
         var (_, dirCheck) = ValidatePath(workingDir, KernelPermission.Execute, op.Niche);
         if (!dirCheck.Safe) return dirCheck;
 
+        var config = GetSandboxForNiche(op.Niche);
+        if (config.AllowedCommands.Count > 0)
+        {
+            var cmdName = Path.GetFileNameWithoutExtension((op.Command ?? "").Trim('"'));
+            if (!string.IsNullOrEmpty(cmdName) && !config.AllowedCommands.Contains(cmdName))
+                return new DiffSafetyResult
+                {
+                    Safe = false,
+                    Reason = $"Command '{cmdName}' is not in allowed command whitelist{(op.Niche != null ? $" [niche: {op.Niche}]" : "")}",
+                    RiskScore = 0.85
+                };
+        }
+
         if (_diffAgent == null)
             return new DiffSafetyResult { Safe = true };
 
@@ -1296,9 +1381,10 @@ public sealed class MicroKernel : IMicroKernel
         return _diffAgent.EvaluateGene(gene);
     }
 
-    private DiffSafetyResult ValidateNetworkFence(string url)
+    private DiffSafetyResult ValidateNetworkFence(string url, string? niche = null)
     {
-        if (!_sandboxConfig.EnforceNetworkFence)
+        var config = GetSandboxForNiche(niche);
+        if (!config.EnforceNetworkFence)
             return new DiffSafetyResult { Safe = true };
 
         try
@@ -1306,26 +1392,26 @@ public sealed class MicroKernel : IMicroKernel
             var uri = new Uri(url);
             var host = uri.Host.ToLowerInvariant();
 
-            var isAllowed = _sandboxConfig.AllowedDomains.Count == 0
-                || _sandboxConfig.AllowedDomains.Any(d =>
+            var isAllowed = config.AllowedDomains.Count == 0
+                || config.AllowedDomains.Any(d =>
                     host == d || host.EndsWith("." + d, StringComparison.Ordinal));
 
             if (!isAllowed)
                 return new DiffSafetyResult
                 {
                     Safe = false,
-                    Reason = $"Domain '{host}' is not in allowed network fence",
+                    Reason = $"Domain '{host}' is not in allowed network fence{(niche != null ? $" [niche: {niche}]" : "")}",
                     RiskScore = 0.75
                 };
 
-            var isBlocked = _sandboxConfig.BlockedDomains.Any(d =>
+            var isBlocked = config.BlockedDomains.Any(d =>
                 host == d || host.EndsWith("." + d, StringComparison.Ordinal));
 
             if (isBlocked)
                 return new DiffSafetyResult
                 {
                     Safe = false,
-                    Reason = $"Domain '{host}' is blocked by network fence",
+                    Reason = $"Domain '{host}' is blocked by network fence{(niche != null ? $" [niche: {niche}]" : "")}",
                     RiskScore = 0.95
                 };
 
@@ -1378,7 +1464,9 @@ public sealed class MicroKernel : IMicroKernel
             if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
                 Directory.CreateDirectory(dir);
 
-            await File.WriteAllTextAsync(fullPath, content, ct).ConfigureAwait(false);
+            var tmpPath = fullPath + ".tmp." + Guid.NewGuid().ToString("N")[..8];
+            await File.WriteAllTextAsync(tmpPath, content, ct).ConfigureAwait(false);
+            File.Move(tmpPath, fullPath, true);
             sw.Stop();
 
             Audit(traceId, "write_file_with_token", true, sw.ElapsedMilliseconds,

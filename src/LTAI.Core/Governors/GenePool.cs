@@ -577,6 +577,18 @@ public sealed class GenePool
             _logger.LogDebug("Decayed {Count} stale genes", staleIds.Count);
     }
 
+    public bool RemoveGene(string geneId)
+    {
+        if (_genes.TryRemove(geneId, out _))
+        {
+            foreach (var (niche, ids) in _nicheGeneIds)
+                ids.Remove(geneId);
+            _logger.LogDebug("Removed gene {GeneId}", geneId);
+            return true;
+        }
+        return false;
+    }
+
     private static List<string> Tokenize(string input)
     {
         var tokens = new List<string>();

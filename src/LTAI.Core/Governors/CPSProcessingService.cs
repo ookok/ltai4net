@@ -39,7 +39,11 @@ public sealed class CPSProcessingService : ICPSProcessingService
 
     private readonly ConcurrentDictionary<string, int> _routeDistribution = new();
     private readonly LoopTrapDetector? _loopDetector;
+    private readonly RecursiveCausalAudit? _causalAudit;
+    private readonly SemanticAnchor? _semanticAnchor;
     private int _totalProcessed;
+
+    private static readonly TimeSpan L3DecisionTimeout = TimeSpan.FromMilliseconds(50);
 
     public CPSProcessingService(
         ParetoRouter paretoRouter,
@@ -53,7 +57,9 @@ public sealed class CPSProcessingService : ICPSProcessingService
         ILogger<CPSProcessingService>? logger = null,
         LoopTrapDetector? loopDetector = null,
         Func<string, CancellationToken, Task<string>>? l0Invoke = null,
-        Func<string, int, float[]>? embedder = null)
+        Func<string, int, float[]>? embedder = null,
+        RecursiveCausalAudit? causalAudit = null,
+        SemanticAnchor? semanticAnchor = null)
     {
         _paretoRouter = paretoRouter;
         _intentClassifier = intentClassifier;
@@ -67,6 +73,8 @@ public sealed class CPSProcessingService : ICPSProcessingService
         _l2Invoke = l2Invoke;
         _logger = logger ?? NullLogger<CPSProcessingService>.Instance;
         _loopDetector = loopDetector;
+        _causalAudit = causalAudit;
+        _semanticAnchor = semanticAnchor;
     }
 
     public async Task<CPSResult> ProcessAsync(string query, CancellationToken ct = default)
@@ -155,8 +163,42 @@ public sealed class CPSProcessingService : ICPSProcessingService
         _routeDistribution.AddOrUpdate(decision.Route, 1, (_, v) => v + 1);
 
         sw.Stop();
+
+        var totalMs = sw.ElapsedMilliseconds;
+        if (totalMs > L3DecisionTimeout.TotalMilliseconds)
+        {
+            _logger.LogWarning("CPS L3 decision exceeded SLA: {LatMs}ms (limit {LimitMs}ms) for '{Query}'",
+                totalMs, (int)L3DecisionTimeout.TotalMilliseconds, query[..Math.Min(query.Length, 40)]);
+        }
+
+        if (_semanticAnchor != null && _semanticAnchor.AnchoredLabels == 0)
+        {
+            _logger.LogWarning("CPS semantic anchor has no anchored labels — routing may be unstable");
+        }
+
+        if (_causalAudit != null && source == "l2_deep")
+        {
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    var auditResult = await _causalAudit.AuditAsync(query, response, response,
+                        CancellationToken.None).ConfigureAwait(false);
+                    if (!auditResult.Passed)
+                    {
+                        _logger.LogWarning("CPS causal audit failed for L2 response: {Violations}",
+                            string.Join("; ", auditResult.Violations.Take(3)));
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "CPS causal audit background task failed");
+                }
+            });
+        }
+
         _logger.LogInformation("CPS[{Route}] latency={LatMs}ms query='{Query}'",
-            decision.Route, sw.ElapsedMilliseconds, query[..Math.Min(query.Length, 60)]);
+            decision.Route, totalMs, query[..Math.Min(query.Length, 60)]);
 
         return new CPSResult
         {

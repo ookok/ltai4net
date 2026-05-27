@@ -86,10 +86,59 @@ public sealed class SkillStepExecutor
         };
     }
 
+    private static readonly HashSet<string> BlockedShellPatterns = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "rm -rf /", "rm -rf /*", "rm -rf ~", "rm -rf .",
+        "del /f /s C:\\", "del /f /s /q",
+        "format", "mkfs",
+        "shutdown", "reboot", "halt", "poweroff",
+        ":(){ :|:& };:", "fork bomb",
+        "dd if=/dev/zero", "dd if=/dev/urandom",
+        "> /dev/sda", "> /dev/hda",
+        "chmod 777 /", "chmod -R 777",
+        "wget ", " | sh", " | bash",
+        "curl ", " | sh", " | bash",
+        "reg delete", "reg add",
+        "sc stop", "sc delete",
+        "taskkill /f", "taskkill /im",
+        "Remove-Item -Recurse", "Remove-Item -Force",
+        "mv / /dev/null", "mv /* /dev/null",
+        "echo > /dev/", "cat /dev/",
+        "eval ", "exec ",
+        "crontab -", "at now",
+        "base64 -d", "eval $(echo ",
+    };
+
+    private static readonly Regex ShellMetaChars = new(@"[;&|`$(){}\[\]<>!\n\r]", RegexOptions.Compiled);
+
+    private bool ValidateShellCommand(string command)
+    {
+        if (string.IsNullOrWhiteSpace(command)) return false;
+
+        var normalized = command.Trim();
+        foreach (var pattern in BlockedShellPatterns)
+            if (normalized.Contains(pattern, StringComparison.OrdinalIgnoreCase))
+                return false;
+
+        var firstToken = normalized.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries)[0];
+        if (firstToken.Length == 0) return false;
+
+        // detect base64-encoded payloads
+        if (firstToken.Equals("echo", StringComparison.OrdinalIgnoreCase) &&
+            ShellMetaChars.IsMatch(normalized) &&
+            normalized.Contains("|", StringComparison.Ordinal))
+            return false;
+
+        return true;
+    }
+
     private async Task<SkillValue> RunShellAsync(string command, CancellationToken ct)
     {
         try
         {
+            if (!ValidateShellCommand(command))
+                return SkillValue.FromString($"[Blocked: dangerous command detected]");
+
             if (_kernel != null)
             {
                 try

@@ -339,6 +339,48 @@ public sealed class MemoryGraph
             .ToList();
     }
 
+    public IReadOnlyList<MemoryNode> Search(string query, int topK = 10)
+    {
+        if (string.IsNullOrWhiteSpace(query))
+            return new List<MemoryNode>();
+
+        var terms = query.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var scored = new List<(MemoryNode Node, double Score)>();
+
+        foreach (var node in _nodes.Values)
+        {
+            var score = 0.0;
+            foreach (var term in terms)
+            {
+                if (node.Content.Contains(term, StringComparison.OrdinalIgnoreCase))
+                    score += 1.0;
+                if (node.Summary.Contains(term, StringComparison.OrdinalIgnoreCase))
+                    score += 2.0;
+                if (node.Tags.Any(t => t.Contains(term, StringComparison.OrdinalIgnoreCase)))
+                    score += 3.0;
+                if (node.Domain.Contains(term, StringComparison.OrdinalIgnoreCase))
+                    score += 0.5;
+            }
+
+            if (score > 0)
+            {
+                score *= node.Importance;
+                scored.Add((node, score));
+            }
+        }
+
+        return scored
+            .OrderByDescending(x => x.Score)
+            .Take(topK)
+            .Select(x =>
+            {
+                x.Node.LastAccessedAt = DateTime.UtcNow;
+                x.Node.AccessCount++;
+                return x.Node;
+            })
+            .ToList();
+    }
+
     public IReadOnlyList<MemoryNode> TopDownTraverse(string? rootDomain = null, int maxResults = 20)
     {
         var results = new List<MemoryNode>();

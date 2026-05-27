@@ -31,6 +31,17 @@ public sealed record CoordinationEvent
     public Guid Id { get; init; } = Guid.NewGuid();
 }
 
+public sealed record CoordinationSchedulerHealth
+{
+    public bool IsRunning { get; init; }
+    public int QueueDepth { get; init; }
+    public int EventsProcessed { get; init; }
+    public int RulesTriggered { get; init; }
+    public int RuleCount { get; init; }
+    public int DynamicRuleCount { get; init; }
+    public List<string> RegisteredDynamicTypes { get; init; } = new();
+}
+
 public sealed record CoordinationRule
 {
     public CoordinationEventType Trigger { get; init; }
@@ -60,6 +71,22 @@ public sealed class CoordinationScheduler
     public int EventsProcessed => _eventsProcessed;
     public int RulesTriggered => _rulesTriggered;
     public int RuleCount => _rules.Values.Sum(v => v.Count);
+    public int QueueDepth => _eventQueue.Count;
+    public bool IsRunning => _dispatchLoop is { IsCompleted: false };
+
+    public CoordinationSchedulerHealth GetHealthReport()
+    {
+        return new CoordinationSchedulerHealth
+        {
+            IsRunning = IsRunning,
+            QueueDepth = QueueDepth,
+            EventsProcessed = _eventsProcessed,
+            RulesTriggered = _rulesTriggered,
+            RuleCount = RuleCount,
+            DynamicRuleCount = _dynamicRules.Count,
+            RegisteredDynamicTypes = _registeredDynamicTypes.Keys.ToList()
+        };
+    }
 
     public CoordinationScheduler(ILogger<CoordinationScheduler>? logger = null)
     {

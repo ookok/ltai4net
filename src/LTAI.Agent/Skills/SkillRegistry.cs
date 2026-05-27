@@ -49,14 +49,21 @@ public sealed class SkillRegistry
         {
             if (file.EndsWith(".meta.json", StringComparison.OrdinalIgnoreCase)) continue;
 
-            var skill = await _loader.LoadAsync(file, ct).ConfigureAwait(false);
-            if (skill == null) continue;
+            try
+            {
+                var skill = await _loader.LoadAsync(file, ct).ConfigureAwait(false);
+                if (skill == null) continue;
 
-            _skills[skill.Name] = skill;
-            _byDomain.GetOrAdd(skill.Domain, _ => new List<Skill>()).Add(skill);
-            _byLayer.GetOrAdd(skill.Layer, _ => new List<Skill>()).Add(skill);
+                _skills[skill.Name] = skill;
+                _byDomain.GetOrAdd(skill.Domain, _ => new List<Skill>()).Add(skill);
+                _byLayer.GetOrAdd(skill.Layer, _ => new List<Skill>()).Add(skill);
 
-            _logger.LogDebug("Loaded skill: {Name} ({Layer}) from {Domain}", skill.Name, skill.Layer, skill.Domain);
+                _logger.LogDebug("Loaded skill: {Name} ({Layer}) from {Domain}", skill.Name, skill.Layer, skill.Domain);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to load skill from {File}, skipping", file);
+            }
         }
     }
 

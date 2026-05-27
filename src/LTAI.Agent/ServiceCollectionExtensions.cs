@@ -316,16 +316,46 @@ public static class ServiceCollectionExtensions
             try
             {
                 var kb = sp.GetService<LTAI.Knowledge.Core.KnowledgeBase>();
-                if (kb != null)
+                var memGraph = sp.GetService<MemoryGraph>();
+                if (kb != null || memGraph != null)
                 {
                     memoryHandler = async (query, topK, ct) =>
                     {
-                        var results = await kb.SearchAsync(query, topK).ConfigureAwait(false);
-                        return results.Count == 0
+                        var parts = new List<string>();
+
+                        if (kb != null)
+                        {
+                            try
+                            {
+                                var results = await kb.SearchAsync(query, topK).ConfigureAwait(false);
+                                if (results.Count > 0)
+                                {
+                                    parts.Add("[KnowledgeBase]");
+                                    parts.AddRange(results.Select(r =>
+                                        $"[{r.Domain}] {r.Title} (score={r.Score:F2}): {r.Content[..Math.Min(r.Content.Length, 300)]}"));
+                                }
+                            }
+                            catch { }
+                        }
+
+                        if (memGraph != null)
+                        {
+                            try
+                            {
+                                var graphResults = memGraph.Search(query, topK);
+                                if (graphResults.Count > 0)
+                                {
+                                    parts.Add("[MemoryGraph]");
+                                    parts.AddRange(graphResults.Select(n =>
+                                        $"[{n.Domain}] L{n.LayerLevel} {n.Summary[..Math.Min(n.Summary.Length, 200)]} (importance={n.Importance:F2})"));
+                                }
+                            }
+                            catch { }
+                        }
+
+                        return parts.Count == 0
                             ? "No matching knowledge found."
-                            : string.Join("\n---\n",
-                                results.Select(r =>
-                                    $"[{r.Domain}] {r.Title} (score={r.Score:F2}): {r.Content[..Math.Min(r.Content.Length, 300)]}"));
+                            : string.Join("\n---\n", parts);
                     };
                 }
             }
@@ -414,7 +444,8 @@ public static class ServiceCollectionExtensions
             return new ArchitectLoop(router, teacher, genePool, annealer, geneToRule, l2Architect,
                 counterfactualGate: counterfactual, minLoopInterval: TimeSpan.FromMinutes(5),
                 intentClassifier: intentClassifier, semanticAnchor: semanticAnchor,
-                diffAgent: diffAgent, serviceProvider: sp, logger: logger);
+                diffAgent: diffAgent, serviceProvider: sp,
+                causalAudit: sp.GetService<RecursiveCausalAudit>(), logger: logger);
         });
 
         services.AddSingleton<CounterfactualGate>(sp =>

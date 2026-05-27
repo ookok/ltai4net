@@ -105,6 +105,22 @@ public sealed class BootstrapTeacher
             currentPhase = _phase;
             total = _totalQueries;
             curiosity = _curiosityBudget;
+
+            var phaseAge = DateTime.UtcNow - _phaseStartedAt;
+            if (currentPhase == BootstrapPhase.Teaching && phaseAge > TimeSpan.FromHours(1))
+            {
+                _logger.LogWarning("Teaching phase timed out after {Hours:F1}h — forcing advance to Shadowing",
+                    phaseAge.TotalHours);
+                AdvanceToShadowing();
+                currentPhase = _phase;
+            }
+            else if (currentPhase == BootstrapPhase.Shadowing && phaseAge > TimeSpan.FromHours(2))
+            {
+                _logger.LogWarning("Shadowing phase timed out after {Hours:F1}h — forcing advance to Autonomous",
+                    phaseAge.TotalHours);
+                AdvanceToAutonomous();
+                currentPhase = _phase;
+            }
         }
 
         var decision = _router.Decide(embedding);
@@ -339,6 +355,16 @@ public sealed class BootstrapTeacher
     }
 
     public Action<CoordinationEvent>? CoordinationPublisher { get; set; }
+
+    public void AdvanceToShadowing()
+    {
+        ForceAdvancePhaseAsync(BootstrapPhase.Shadowing).GetAwaiter().GetResult();
+    }
+
+    public void AdvanceToAutonomous()
+    {
+        ForceAdvancePhaseAsync(BootstrapPhase.Autonomous).GetAwaiter().GetResult();
+    }
 
     public Task ForceAdvancePhaseAsync(BootstrapPhase targetPhase, CancellationToken ct = default)
     {

@@ -101,6 +101,7 @@ public sealed class ArchitectLoop
     private readonly SemanticAnchor? _semanticAnchor;
     private readonly SemanticDiffAgent? _diffAgent;
     private readonly IServiceProvider? _serviceProvider;
+    private readonly RecursiveCausalAudit? _causalAudit;
     private readonly ILogger<ArchitectLoop> _logger;
 
     private readonly ConcurrentDictionary<string, IAgent> _deployedAgents = new();
@@ -135,6 +136,7 @@ public sealed class ArchitectLoop
         SemanticAnchor? semanticAnchor = null,
         SemanticDiffAgent? diffAgent = null,
         IServiceProvider? serviceProvider = null,
+        RecursiveCausalAudit? causalAudit = null,
         ILogger<ArchitectLoop>? logger = null)
     {
         _router = router;
@@ -148,6 +150,7 @@ public sealed class ArchitectLoop
         _semanticAnchor = semanticAnchor;
         _diffAgent = diffAgent;
         _serviceProvider = serviceProvider;
+        _causalAudit = causalAudit;
         _minLoopInterval = minLoopInterval ?? TimeSpan.FromMinutes(5);
         _logger = logger ?? NullLogger<ArchitectLoop>.Instance;
         _lastLoop = DateTime.MinValue;
@@ -201,6 +204,25 @@ public sealed class ArchitectLoop
 
             if (diagnosis != null)
             {
+                if (_causalAudit != null)
+                {
+                    try
+                    {
+                        var auditResult = await _causalAudit.AuditAsync(
+                            prompt, response, $"issue={diagnosis.Issue} cause={diagnosis.RootCause}", ct).ConfigureAwait(false);
+                        if (!auditResult.Passed)
+                        {
+                            _logger.LogWarning("Diagnosis #{D} causal audit FAILED: {Violations} — discarding",
+                                diagnosis.Id, string.Join("; ", auditResult.Violations.Take(3)));
+                            return null;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogDebug(ex, "Causal audit skipped for diagnosis #{D}", diagnosis.Id);
+                    }
+                }
+
                 _diagnosisHistory.Enqueue(diagnosis);
                 while (_diagnosisHistory.Count > 50)
                     _diagnosisHistory.TryDequeue(out _);
@@ -518,6 +540,7 @@ public sealed class ArchitectLoop
                         var deployed = await factory.CreateAsync(config, ct).ConfigureAwait(false);
                         await deployed.ActivateAsync(ct).ConfigureAwait(false);
                         _deployedAgents[deployed.AgentId] = deployed;
+                        PublishAgentEvent("agent.deployed", deployed.AgentId, deployed.Niche);
                         _logger.LogInformation("DeployAgent: deployed {AgentId} ({Niche}) via {FactoryId}",
                             deployed.AgentId, deployed.Niche, factory.FactoryId);
                     }
@@ -532,6 +555,7 @@ public sealed class ArchitectLoop
                         _deployedAgents.TryRemove(agentId?.ToString() ?? "", out var removed))
                     {
                         await removed.DeactivateAsync(ct).ConfigureAwait(false);
+                        PublishAgentEvent("agent.undeployed", removed.AgentId, removed.Niche);
                         _logger.LogInformation("UndeployAgent: deactivated {AgentId}", removed.AgentId);
                     }
                     else
@@ -878,6 +902,21 @@ public sealed class ArchitectLoop
     }
 
     public IReadOnlyList<ArchitectureDiagnosis> GetDiagnosisHistory() => _diagnosisHistory.ToList();
+
+    public IReadOnlyList<IAgent> GetDeployedAgents() => _deployedAgents.Values.ToList().AsReadOnly();
+
+    private void PublishAgentEvent(string eventType, string agentId, string niche)
+    {
+        try
+        {
+            if (_serviceProvider?.GetService(typeof(CoordinationScheduler)) is CoordinationScheduler scheduler)
+            {
+                scheduler.PublishDynamic(eventType, "ArchitectLoop",
+                    $"agent_id={agentId} niche={niche}");
+            }
+        }
+        catch { }
+    }
 
     private void ApplyProposalToShadow(ArchitectureProposal proposal, ParetoRouter shadow)
     {

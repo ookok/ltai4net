@@ -12,11 +12,14 @@ public sealed class EvolutionLoopHostedService : BackgroundService
     private readonly SimulatedAnnealer _annealer;
     private readonly GeneToRule _geneToRule;
     private readonly ArchitectLoop _architect;
+    private readonly ICPSProcessingService? _cps;
+    private readonly CoordinationScheduler? _scheduler;
     private readonly ILogger<EvolutionLoopHostedService> _logger;
 
     private readonly TimeSpan _evolutionInterval;
     private readonly TimeSpan _architectInterval;
     private readonly TimeSpan _deployInterval;
+    private readonly TimeSpan _cpsHealthInterval;
 
     public EvolutionLoopHostedService(
         ParetoRouter router,
@@ -28,6 +31,8 @@ public sealed class EvolutionLoopHostedService : BackgroundService
         TimeSpan? evolutionInterval = null,
         TimeSpan? architectInterval = null,
         TimeSpan? deployInterval = null,
+        ICPSProcessingService? cps = null,
+        CoordinationScheduler? scheduler = null,
         ILogger<EvolutionLoopHostedService>? logger = null)
     {
         _router = router;
@@ -36,24 +41,28 @@ public sealed class EvolutionLoopHostedService : BackgroundService
         _annealer = annealer;
         _geneToRule = geneToRule;
         _architect = architect;
+        _cps = cps;
+        _scheduler = scheduler;
         _evolutionInterval = evolutionInterval ?? TimeSpan.FromMinutes(2);
         _architectInterval = architectInterval ?? TimeSpan.FromMinutes(5);
         _deployInterval = deployInterval ?? TimeSpan.FromMinutes(10);
+        _cpsHealthInterval = TimeSpan.FromMinutes(15);
         _logger = logger ?? NullLogger<EvolutionLoopHostedService>.Instance;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        _logger.LogInformation("Evolution Loop started: evolution={EvoMin}m, architect={ArchMin}m, deploy={DeployMin}m",
-            _evolutionInterval.TotalMinutes, _architectInterval.TotalMinutes, _deployInterval.TotalMinutes);
+        _logger.LogInformation("Evolution Loop started: evolution={EvoMin}m, architect={ArchMin}m, deploy={DeployMin}m, cpsHealth={CpsMin}m",
+            _evolutionInterval.TotalMinutes, _architectInterval.TotalMinutes, _deployInterval.TotalMinutes, _cpsHealthInterval.TotalMinutes);
 
         var evolutionClock = Task.Delay(_evolutionInterval, stoppingToken);
         var architectClock = Task.Delay(_architectInterval, stoppingToken);
         var deployClock = Task.Delay(_deployInterval, stoppingToken);
+        var cpsHealthClock = _cps != null ? Task.Delay(_cpsHealthInterval, stoppingToken) : Task.Delay(Timeout.Infinite, stoppingToken);
 
         while (!stoppingToken.IsCancellationRequested)
         {
-            var completed = await Task.WhenAny(evolutionClock, architectClock, deployClock).ConfigureAwait(false);
+            var completed = await Task.WhenAny(evolutionClock, architectClock, deployClock, cpsHealthClock).ConfigureAwait(false);
 
             if (completed == evolutionClock)
             {
@@ -107,6 +116,34 @@ public sealed class EvolutionLoopHostedService : BackgroundService
                     _logger.LogWarning(ex, "Deploy cycle failed");
                 }
                 deployClock = Task.Delay(_deployInterval, stoppingToken);
+            }
+
+            if (completed == cpsHealthClock && _cps != null)
+            {
+                try
+                {
+                    var result = await _cps.ProcessAsync("system health check: verify routing pipeline", stoppingToken).ConfigureAwait(false);
+                    _logger.LogDebug("CPS health: route={Route} confidence={Conf:F2} latency={LatencyMs}ms",
+                        result.Route, result.Confidence, result.LatencyMs);
+
+                    var dist = _cps.GetRouteDistribution();
+                    if (dist.Count > 0)
+                    {
+                        _logger.LogInformation("CPS route distribution: {Dist}",
+                            string.Join(", ", dist.Take(5).Select(d => d)));
+
+                        if (_scheduler != null)
+                        {
+                            _scheduler.PublishDynamic("cps.health_check", "EvolutionLoop",
+                                $"route={result.Route} confidence={result.Confidence:F2} processed={_cps.GetTotalProcessed()}");
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "CPS health check failed");
+                }
+                cpsHealthClock = Task.Delay(_cpsHealthInterval, stoppingToken);
             }
         }
 

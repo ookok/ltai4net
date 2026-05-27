@@ -789,6 +789,17 @@ public static class ServiceCollectionExtensions
 
         services.AddSingleton<CoordinationScheduler>();
         services.AddSingleton<RecursiveCausalAudit>();
+
+        services.AddHostedService<CoordinationSchedulerHostedService>(sp =>
+        {
+            var scheduler = sp.GetRequiredService<CoordinationScheduler>();
+            var teacher = sp.GetRequiredService<BootstrapTeacher>();
+            var genePool = sp.GetRequiredService<GenePool>();
+            var annealer = sp.GetRequiredService<SimulatedAnnealer>();
+            var architect = sp.GetRequiredService<ArchitectLoop>();
+            var logger = sp.GetService<ILogger<CoordinationSchedulerHostedService>>();
+            return new CoordinationSchedulerHostedService(scheduler, teacher, genePool, annealer, architect, logger);
+        });
         services.AddSingleton<SemanticAnchor>(sp =>
         {
             var router = sp.GetRequiredService<ParetoRouter>();
@@ -845,7 +856,9 @@ public static class ServiceCollectionExtensions
 
             return new CPSProcessingService(router, classifier.ToFunc(), teacher, genePool, annealer, geneToRule,
                 l1Invoke, l2Invoke, logger, sp.GetService<LoopTrapDetector>(),
-                l0Invoke: l0Invoke, embedder: embedder);
+                l0Invoke: l0Invoke, embedder: embedder,
+                causalAudit: sp.GetService<RecursiveCausalAudit>(),
+                semanticAnchor: sp.GetService<SemanticAnchor>());
         });
 
         services.AddHostedService<EvolutionLoopHostedService>(sp =>
@@ -856,9 +869,11 @@ public static class ServiceCollectionExtensions
             var annealer = sp.GetRequiredService<SimulatedAnnealer>();
             var geneToRule = sp.GetRequiredService<GeneToRule>();
             var architect = sp.GetRequiredService<ArchitectLoop>();
+            var cps = sp.GetService<CPSProcessingService>();
+            var scheduler = sp.GetService<CoordinationScheduler>();
             var logger = sp.GetService<ILogger<EvolutionLoopHostedService>>();
             return new EvolutionLoopHostedService(router, teacher, genePool, annealer, geneToRule, architect,
-                logger: logger);
+                cps: cps, scheduler: scheduler, logger: logger);
         });
 
         services.AddSingleton<SupertonicService>(sp =>
