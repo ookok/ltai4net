@@ -105,7 +105,7 @@ public sealed class AgentWorktreeSession : IAsyncDisposable
         try
         {
             var createResult = await _worktreeManager.CreateWorktreeAsync(
-                agentId, baseBranch, ct).ConfigureAwait(false);
+                agentId, baseBranch, ct: ct).ConfigureAwait(false);
 
             if (!createResult.Success)
             {

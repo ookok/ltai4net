@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -19,6 +20,7 @@ public sealed class KernelCapToken
 {
     private readonly byte[] _signingKey;
     private readonly string _workspaceRoot;
+    private readonly ConcurrentDictionary<string, DateTime> _revoked = new();
 
     public KernelCapToken(string workspaceRoot, byte[]? signingKey = null)
     {
@@ -51,6 +53,9 @@ public sealed class KernelCapToken
 
     public CapTokenInfo Validate(string token)
     {
+        if (_revoked.ContainsKey(token))
+            return new CapTokenInfo { Reason = "token revoked" };
+
         try
         {
             var combined = Convert.FromBase64String(token.PadRight(
@@ -99,6 +104,7 @@ public sealed class KernelCapToken
 
     public void Revoke(string token)
     {
+        _revoked[token] = DateTime.UtcNow;
     }
 
     public string ResolvePath(string targetPath)

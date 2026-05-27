@@ -1,24 +1,28 @@
 using LTAI.Core.Interfaces;
-using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace LTAI.Agent.Agents;
 
 public sealed class CodeAgentAdapter : IAgent
 {
-    private readonly CodeAgent _codeAgent;
-    public string AgentId => $"code-{_codeAgent.Name}";
+    private readonly IServiceProvider _sp;
+    private CodeAgent? _codeAgent;
+
+    public string AgentId => "code-primary";
     public string Niche => "code";
     public string Description => "Code generation, review, and refactoring agent";
     public bool IsActive { get; private set; }
 
-    public CodeAgentAdapter(CodeAgent codeAgent)
+    public CodeAgentAdapter(IServiceProvider sp)
     {
-        _codeAgent = codeAgent;
+        _sp = sp;
     }
 
     public Task<string> HandleAsync(string query, Dictionary<string, object> context, CancellationToken ct)
-        => Task.FromResult(_codeAgent.Name);
+    {
+        _codeAgent ??= _sp.GetRequiredService<CodeAgent>();
+        return Task.FromResult(_codeAgent.Name);
+    }
 
     public Task ActivateAsync(CancellationToken ct) { IsActive = true; return Task.CompletedTask; }
     public Task DeactivateAsync(CancellationToken ct) { IsActive = false; return Task.CompletedTask; }

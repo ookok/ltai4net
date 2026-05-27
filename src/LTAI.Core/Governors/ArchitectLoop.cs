@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using LTAI.Core.Interfaces;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -61,7 +63,10 @@ public enum ArchitectureAction
     AdjustTeachingQuota,
     AdjustAccuracyThreshold,
     AdjustShadowingQuota,
-    AdjustShadowingThreshold
+    AdjustShadowingThreshold,
+    DeployAgent,
+    UndeployAgent,
+    HotSwapAgent
 }
 
 public enum ProposalStatus
@@ -95,7 +100,10 @@ public sealed class ArchitectLoop
     private readonly L0IntentClassifier? _intentClassifier;
     private readonly SemanticAnchor? _semanticAnchor;
     private readonly SemanticDiffAgent? _diffAgent;
+    private readonly IServiceProvider? _serviceProvider;
     private readonly ILogger<ArchitectLoop> _logger;
+
+    private readonly ConcurrentDictionary<string, IAgent> _deployedAgents = new();
 
     private readonly ConcurrentQueue<ArchitectureDiagnosis> _diagnosisHistory = new();
     private readonly ConcurrentQueue<ArchitectureProposal> _proposalHistory = new();
@@ -126,6 +134,7 @@ public sealed class ArchitectLoop
         L0IntentClassifier? intentClassifier = null,
         SemanticAnchor? semanticAnchor = null,
         SemanticDiffAgent? diffAgent = null,
+        IServiceProvider? serviceProvider = null,
         ILogger<ArchitectLoop>? logger = null)
     {
         _router = router;
@@ -138,6 +147,7 @@ public sealed class ArchitectLoop
         _intentClassifier = intentClassifier;
         _semanticAnchor = semanticAnchor;
         _diffAgent = diffAgent;
+        _serviceProvider = serviceProvider;
         _minLoopInterval = minLoopInterval ?? TimeSpan.FromMinutes(5);
         _logger = logger ?? NullLogger<ArchitectLoop>.Instance;
         _lastLoop = DateTime.MinValue;
@@ -487,6 +497,78 @@ public sealed class ArchitectLoop
                         var newThresh = Math.Clamp(Convert.ToDouble(st), 0.80, 0.99);
                         _teacher.ShadowingAccuracyThreshold = newThresh;
                         _logger.LogInformation("ShadowingAccuracyThreshold adjusted to {Threshold:F3}", newThresh);
+                    }
+                    break;
+
+                case ArchitectureAction.DeployAgent:
+                    if (_serviceProvider != null &&
+                        proposal.Parameters.TryGetValue("niche", out var niche) &&
+                        proposal.Parameters.TryGetValue("factory_id", out var factoryId))
+                    {
+                        var nicheStr = niche?.ToString() ?? "general";
+                        var factories = _serviceProvider.GetServices<IAgentFactory>();
+                        var factory = factories.FirstOrDefault(f =>
+                            string.Equals(f.FactoryId, factoryId?.ToString(), StringComparison.OrdinalIgnoreCase));
+                        if (factory == null)
+                        {
+                            _logger.LogWarning("DeployAgent: factory '{FactoryId}' not found", factoryId);
+                            break;
+                        }
+                        var config = new Dictionary<string, object> { ["niche"] = nicheStr };
+                        var deployed = await factory.CreateAsync(config, ct).ConfigureAwait(false);
+                        await deployed.ActivateAsync(ct).ConfigureAwait(false);
+                        _deployedAgents[deployed.AgentId] = deployed;
+                        _logger.LogInformation("DeployAgent: deployed {AgentId} ({Niche}) via {FactoryId}",
+                            deployed.AgentId, deployed.Niche, factory.FactoryId);
+                    }
+                    else
+                    {
+                        _logger.LogWarning("DeployAgent: missing serviceProvider or parameters");
+                    }
+                    break;
+
+                case ArchitectureAction.UndeployAgent:
+                    if (proposal.Parameters.TryGetValue("agent_id", out var agentId) &&
+                        _deployedAgents.TryRemove(agentId?.ToString() ?? "", out var removed))
+                    {
+                        await removed.DeactivateAsync(ct).ConfigureAwait(false);
+                        _logger.LogInformation("UndeployAgent: deactivated {AgentId}", removed.AgentId);
+                    }
+                    else
+                    {
+                        _logger.LogWarning("UndeployAgent: agent '{AgentId}' not found",
+                            proposal.Parameters.GetValueOrDefault("agent_id"));
+                    }
+                    break;
+
+                case ArchitectureAction.HotSwapAgent:
+                    if (proposal.Parameters.TryGetValue("agent_id", out var swapId) &&
+                        proposal.Parameters.TryGetValue("factory_id", out var swapFactoryId) &&
+                        _serviceProvider != null)
+                    {
+                        var idStr = swapId?.ToString() ?? "";
+                        if (_deployedAgents.TryRemove(idStr, out var oldAgent))
+                            await oldAgent.DeactivateAsync(ct).ConfigureAwait(false);
+
+                        var factories = _serviceProvider.GetServices<IAgentFactory>();
+                        var factory = factories.FirstOrDefault(f =>
+                            string.Equals(f.FactoryId, swapFactoryId?.ToString(), StringComparison.OrdinalIgnoreCase));
+                        if (factory != null)
+                        {
+                            var config = new Dictionary<string, object>
+                            {
+                                ["niche"] = proposal.Parameters.GetValueOrDefault("niche")?.ToString() ?? "general"
+                            };
+                            var newAgent = await factory.CreateAsync(config, ct).ConfigureAwait(false);
+                            await newAgent.ActivateAsync(ct).ConfigureAwait(false);
+                            _deployedAgents[newAgent.AgentId] = newAgent;
+                            _logger.LogInformation("HotSwapAgent: {OldId} → {NewId} via {FactoryId}",
+                                idStr, newAgent.AgentId, factory.FactoryId);
+                        }
+                    }
+                    else
+                    {
+                        _logger.LogWarning("HotSwapAgent: missing parameters or serviceProvider");
                     }
                     break;
             }

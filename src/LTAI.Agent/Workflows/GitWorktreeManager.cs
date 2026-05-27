@@ -20,6 +20,7 @@ public sealed record WorktreeCreateResult
     public bool Success { get; init; }
     public string WorktreePath { get; init; } = "";
     public string Branch { get; init; } = "";
+    public string Niche { get; init; } = "";
     public string Error { get; init; } = "";
 }
 
@@ -51,6 +52,7 @@ public sealed class GitWorktreeManager : IDisposable
     public async Task<WorktreeCreateResult> CreateWorktreeAsync(
         string agentId,
         string baseBranch = "main",
+        string? niche = null,
         CancellationToken ct = default)
     {
         var timestamp = DateTime.UtcNow;
@@ -74,6 +76,7 @@ public sealed class GitWorktreeManager : IDisposable
                     return new WorktreeCreateResult
                     {
                         Success = false,
+                        Niche = niche ?? "",
                         Error = $"Base branch '{baseBranch}' not found. Available: {string.Join(", ", _repo.Branches.Select(b => b.FriendlyName))}"
                     };
                 }
@@ -95,13 +98,14 @@ public sealed class GitWorktreeManager : IDisposable
             {
                 Success = true,
                 WorktreePath = worktreePath,
-                Branch = branchName
+                Branch = branchName,
+                Niche = niche ?? ""
             };
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to create worktree for agent {Agent}", agentId);
-            return new WorktreeCreateResult { Success = false, Error = ex.Message };
+            return new WorktreeCreateResult { Success = false, Niche = niche ?? "", Error = ex.Message };
         }
     }
 

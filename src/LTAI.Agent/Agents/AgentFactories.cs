@@ -14,8 +14,7 @@ public sealed class CodeAgentFactory : LTAI.Core.Interfaces.IAgentFactory
 
     public Task<IAgent> CreateAsync(Dictionary<string, object> config, CancellationToken ct)
     {
-        var codeAgent = _sp.GetRequiredService<CodeAgent>();
-        return Task.FromResult<IAgent>(new CodeAgentAdapter(codeAgent));
+        return Task.FromResult<IAgent>(new CodeAgentAdapter(_sp));
     }
 }
 

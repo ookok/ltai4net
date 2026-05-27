@@ -42,6 +42,7 @@ public sealed class ParetoRouter
     private float _shadowRate = 0.10f;
     private readonly ParetoDistanceMetric _metric;
     private readonly object _mergeLock = new();
+    private readonly GenePool? _genePool;
 
     private readonly string[] _routeHistory;
     private int _routeHistoryIndex;
@@ -55,10 +56,12 @@ public sealed class ParetoRouter
     public ParetoRouter(
         int embeddingDim = 768,
         ParetoDistanceMetric metric = ParetoDistanceMetric.Cosine,
-        ILogger<ParetoRouter>? logger = null)
+        ILogger<ParetoRouter>? logger = null,
+        GenePool? genePool = null)
     {
         _logger = logger ?? NullLogger<ParetoRouter>.Instance;
         _metric = metric;
+        _genePool = genePool;
         _projectionMatrix = InitializeProjectionMatrix(embeddingDim);
         _routeHistory = new string[RouteHistorySize];
         SeedDefaultFrontier();
@@ -384,6 +387,44 @@ public sealed class ParetoRouter
 
     private void SeedDefaultFrontier()
     {
+        if (_genePool != null)
+        {
+            try
+            {
+                var topGenes = _genePool.SelectTopN(5);
+                if (topGenes.Count > 0)
+                {
+                    var geneSeeds = topGenes.Select(g => new ParetoPoint
+                    {
+                        Id = $"gene_{g.Id}",
+                        Label = g.RouteLabel switch
+                        {
+                            "reflex" => "reflex",
+                            "local" => "local",
+                            "L1" => "L1",
+                            "L2" => "L2",
+                            _ => "L1"
+                        },
+                        Quality = (float)Math.Clamp(g.Fitness, 0, 1),
+                        Speed = g.RouteLabel switch { "reflex" => 1.0f, "L1" => 0.5f, "L2" => 0.15f, _ => 0.5f },
+                        Cost = g.RouteLabel switch { "reflex" => 0.0f, "L1" => 0.15f, "L2" => 1.0f, _ => 0.15f },
+                    }).ToList();
+
+                    foreach (var seed in geneSeeds)
+                        _frontier[seed.Id] = seed;
+
+                    PruneDominated();
+                    _logger.LogInformation("ParetoRouter initialized with {Count} gene-driven seed points",
+                        _frontier.Count);
+                    return;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "GenePool seed loading failed, falling back to hardcoded seeds");
+            }
+        }
+
         var seeds = new[]
         {
             new ParetoPoint { Id = "seed_reflex",   Label = "reflex",  Quality = 0.30f, Speed = 1.00f, Cost = 0.00f },
@@ -397,7 +438,7 @@ public sealed class ParetoRouter
             _frontier[seed.Id] = seed;
 
         PruneDominated();
-        _logger.LogInformation("ParetoRouter initialized with {Count} seed points (after Pareto pruning)",
+        _logger.LogInformation("ParetoRouter initialized with {Count} hardcoded seed points (after Pareto pruning)",
             _frontier.Count);
     }
 }

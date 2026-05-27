@@ -250,6 +250,21 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<AgentRegistryLock>();
         services.AddSingleton<IAgentFactory, AgentFactory>();
         services.AddSingleton<PredictivePrefetcher>();
+
+        services.AddSingleton<Agents.CodeAgentAdapter>();
+        services.AddSingleton<Agents.EIAAgentAdapter>();
+        services.AddSingleton<Agents.ChatAgentAdapter>();
+        services.AddSingleton<Agents.ReasoningAgentAdapter>();
+
+        services.AddSingleton<Agents.CodeAgentFactory>();
+        services.AddSingleton<Agents.EIAAgentFactory>();
+        services.AddSingleton<Agents.ChatAgentFactory>();
+        services.AddSingleton<Agents.ReasoningAgentFactory>();
+
+        services.AddSingleton<LTAI.Core.Interfaces.IAgentFactory>(sp => sp.GetRequiredService<Agents.CodeAgentFactory>());
+        services.AddSingleton<LTAI.Core.Interfaces.IAgentFactory>(sp => sp.GetRequiredService<Agents.EIAAgentFactory>());
+        services.AddSingleton<LTAI.Core.Interfaces.IAgentFactory>(sp => sp.GetRequiredService<Agents.ChatAgentFactory>());
+        services.AddSingleton<LTAI.Core.Interfaces.IAgentFactory>(sp => sp.GetRequiredService<Agents.ReasoningAgentFactory>());
         services.AddHostedService<ReflectiveIdlingService>();
 
         services.AddSingleton<IMicroKernel>(sp =>
@@ -340,7 +355,8 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ParetoRouter>(sp =>
         {
             var logger = sp.GetService<ILogger<ParetoRouter>>();
-            return new ParetoRouter(embeddingDim: 768, metric: ParetoDistanceMetric.Cosine, logger: logger);
+            var genePool = sp.GetService<GenePool>();
+            return new ParetoRouter(embeddingDim: 768, metric: ParetoDistanceMetric.Cosine, logger: logger, genePool: genePool);
         });
 
         services.AddSingleton<BootstrapTeacher>(sp =>
@@ -398,7 +414,7 @@ public static class ServiceCollectionExtensions
             return new ArchitectLoop(router, teacher, genePool, annealer, geneToRule, l2Architect,
                 counterfactualGate: counterfactual, minLoopInterval: TimeSpan.FromMinutes(5),
                 intentClassifier: intentClassifier, semanticAnchor: semanticAnchor,
-                diffAgent: diffAgent, logger: logger);
+                diffAgent: diffAgent, serviceProvider: sp, logger: logger);
         });
 
         services.AddSingleton<CounterfactualGate>(sp =>
