@@ -33,6 +33,7 @@ public sealed class DebugLoop
     private readonly string _repoPath;
     private readonly IMicroKernel? _kernel;
     private readonly IProjectSpecProvider? _projectSpec;
+    private readonly Action<DebugSession>? _onFixed;
 
     private const int MaxSourceLines = 400;
     private const int ContextPadding = 30;
@@ -178,11 +179,13 @@ public sealed class DebugLoop
     public DebugLoop(IChatClient chatClient, CorrectionMemory? correctionMemory = null,
         ILogger<DebugLoop>? logger = null, string? persistPath = null,
         HarnessProfile? harnessProfile = null, string? repoPath = null,
-        IMicroKernel? kernel = null, IProjectSpecProvider? projectSpec = null)
+        IMicroKernel? kernel = null, IProjectSpecProvider? projectSpec = null,
+        Action<DebugSession>? onFixed = null)
     {
         _chatClient = chatClient;
         _correctionMemory = correctionMemory;
         _logger = logger;
+        _onFixed = onFixed;
         _persistPath = persistPath ?? Path.Combine("livingtree", "meta", "debug_loop.json");
         _harnessProfile = harnessProfile;
         _repoPath = repoPath ?? Repository.Discover(Directory.GetCurrentDirectory()) ?? "";
@@ -238,6 +241,7 @@ public sealed class DebugLoop
                 {
                     session.Fixed = true;
                     _logger?.LogInformation("DebugLoop [{Id}]: Target ran successfully", session.Id);
+                    _onFixed?.Invoke(session);
                     break;
                 }
 
@@ -268,6 +272,7 @@ public sealed class DebugLoop
                     {
                         session.Fixed = true;
                         _logger?.LogInformation("DebugLoop [{Id}]: Fix verified — target runs successfully", session.Id);
+                        _onFixed?.Invoke(session);
                         RecordCorrection(error, fix);
                     }
                     else

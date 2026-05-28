@@ -39,7 +39,24 @@ public static class TreeLLMServiceCollectionExtensions
             var logger = sp.GetService<Microsoft.Extensions.Logging.ILogger<DebugLoop>>();
             var harnessProfile = sp.GetService<LTAI.Core.Configuration.HarnessProfile>();
             var workspace = OptionService.Get("LTAI_WORKSPACE") ?? Directory.GetCurrentDirectory();
-            return new DebugLoop(chatClient, correctionMemory, logger, null, harnessProfile, workspace);
+            var crossRunStore = sp.GetService<LTAI.AI.Governors.ICrossRunEvolutionStore>();
+            Action<LTAI.Agent.Models.DebugSession>? onFixed = crossRunStore != null
+                ? (session) =>
+                {
+                    var lesson = new LTAI.AI.Governors.EvolutionLesson
+                    {
+                        Category = "QualityRegression",
+                        Severity = 0.6f,
+                        Summary = $"DebugLoop fixed: {session.Target}",
+                        Mitigation = $"Auto-fix applied after {session.Attempts.Count} attempt(s)",
+                        SourceStage = "debug_loop",
+                        SourceRun = session.Id
+                    };
+                    crossRunStore.RecordLesson(lesson);
+                }
+                : null;
+            return new DebugLoop(chatClient, correctionMemory, logger, null, harnessProfile, workspace,
+                onFixed: onFixed);
         });
         services.AddSingleton<ErrorInterceptor>();
         services.AddSingleton<MultiModelConsensus>();

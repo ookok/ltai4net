@@ -61,7 +61,8 @@ public sealed class ParetoRouter
         ILogger<ParetoRouter>? logger = null,
         GenePool? genePool = null,
         AuditLogService? auditLog = null,
-        ParetoRouterConfig? config = null)
+        ParetoRouterConfig? config = null,
+        IEnumerable<IRouteProvider>? routeProviders = null)
     {
         config ??= new ParetoRouterConfig();
         _logger = logger ?? NullLogger<ParetoRouter>.Instance;
@@ -74,7 +75,7 @@ public sealed class ParetoRouter
         _shadowRate = config.ShadowRate;
         _projectionMatrix = InitializeProjectionMatrix(embeddingDim);
         _routeHistory = new string[_routeHistorySize];
-        SeedDefaultFrontier();
+        SeedDefaultFrontier(routeProviders);
     }
 
     public int FrontierSize => _frontier.Count;
@@ -422,8 +423,27 @@ public sealed class ParetoRouter
         return matrix;
     }
 
-    private void SeedDefaultFrontier()
+    private void SeedDefaultFrontier(IEnumerable<IRouteProvider>? externalProviders = null)
     {
+        // Register external route providers first (e.g., from DI)
+        if (externalProviders != null)
+        {
+            foreach (var provider in externalProviders)
+            {
+                var point = new ParetoPoint
+                {
+                    Id = $"route_{provider.Label}",
+                    Label = provider.Label,
+                    Quality = provider.Quality,
+                    Speed = provider.Speed,
+                    Cost = provider.Cost
+                };
+                _frontier[point.Id] = point;
+                _logger.LogDebug("ParetoRouter: registered external route '{Label}' (Q={Q:F2}, S={S:F2}, C={C:F2})",
+                    provider.Label, provider.Quality, provider.Speed, provider.Cost);
+            }
+        }
+
         if (_genePool != null)
         {
             try

@@ -8,7 +8,7 @@ using Microsoft.Extensions.Logging;
 
 namespace LTAI.Knowledge.Core;
 
-public class KnowledgeGraph : IDisposable
+public class KnowledgeGraph : IKnowledgeStore, IDisposable
 {
     private readonly Dictionary<string, Entity> _nodesIndex = new();
     private readonly Dictionary<string, Dictionary<string, List<string>>> _adjacency = new();
@@ -863,4 +863,134 @@ public class KnowledgeGraph : IDisposable
     private static string EscapeDot(string s) =>
         s.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\n", "\\n");
 
+    // ── IKnowledgeStore implementation ──
+
+    public string AddKnowledge(string title, string content, string domain = "general",
+        string category = "document", string source = "manual", string author = "system",
+        double importance = 0.0, bool skipDedup = false, bool indexVector = true)
+    {
+        var entityId = EntityId(title);
+        var entity = new Entity(entityId, title);
+        entity.Properties["content"] = content;
+        entity.Properties["domain"] = domain;
+        entity.Properties["category"] = category;
+        entity.Properties["source"] = source;
+        entity.Properties["author"] = author;
+        entity.Properties["importance"] = importance;
+        AddEntity(entity);
+        return entity.Id;
+    }
+
+    public DocumentEntity? Retrieve(string id)
+    {
+        _lock.EnterReadLock();
+        try
+        {
+            if (_nodesIndex.TryGetValue(id, out var entity))
+            {
+                return new DocumentEntity
+                {
+                    Id = entity.Id,
+                    Title = entity.Label,
+                    Content = entity.Properties?.GetValueOrDefault("content")?.ToString() ?? "",
+                    Domain = entity.Properties?.GetValueOrDefault("domain")?.ToString() ?? "general",
+                    Category = entity.Properties?.GetValueOrDefault("category")?.ToString() ?? "document",
+                    Source = entity.Properties?.GetValueOrDefault("source")?.ToString() ?? "",
+                    Author = entity.Properties?.GetValueOrDefault("author")?.ToString() ?? "",
+                    CreatedAt = 0
+                };
+            }
+            return null;
+        }
+        finally { _lock.ExitReadLock(); }
+    }
+
+    public void Delete(string id)
+    {
+        _lock.EnterWriteLock();
+        try
+        {
+            _nodesIndex.Remove(id);
+            _adjacency.Remove(id);
+            _triplets.RemoveAll(t => t.Subject == id || t.Object == id);
+            using var cmd = _db.CreateCommand();
+            cmd.CommandText = "DELETE FROM entities WHERE id = @id";
+            cmd.Parameters.AddWithValue("@id", id);
+            cmd.ExecuteNonQuery();
+            cmd.CommandText = "DELETE FROM triplets WHERE subject = @id OR object = @id";
+            cmd.ExecuteNonQuery();
+        }
+        finally { _lock.ExitWriteLock(); }
+    }
+
+    public async Task<List<KnowledgeSearchResult>> Search(string query, int topK = 10, string? domain = null)
+    {
+        var results = new List<KnowledgeSearchResult>();
+        var entities = SearchEntities(query, topK);
+        foreach (var e in entities)
+        {
+            if (domain != null && (e.Properties?.GetValueOrDefault("domain")?.ToString() != domain))
+                continue;
+            results.Add(new KnowledgeSearchResult
+            {
+                Id = e.Id,
+                Title = e.Label,
+                Content = e.Properties?.GetValueOrDefault("content")?.ToString() ?? "",
+                Score = 1.0,
+                Domain = e.Properties?.GetValueOrDefault("domain")?.ToString() ?? "general",
+                Source = e.Properties?.GetValueOrDefault("source")?.ToString() ?? "knowledge_graph"
+            });
+        }
+        return await Task.FromResult(results);
+    }
+
+    public List<KnowledgeSearchResult> SearchKeyword(string[] keywords,
+        bool caseSensitive = false, int topK = 20)
+    {
+        var query = string.Join(" AND ", keywords.Select(k => $"\"{k}\""));
+        var entities = SearchEntities(query, topK);
+        return entities.Select(e => new KnowledgeSearchResult
+        {
+            Id = e.Id,
+            Title = e.Label,
+            Content = e.Properties?.GetValueOrDefault("content")?.ToString() ?? "",
+            Score = 0.9,
+            Domain = e.Properties?.GetValueOrDefault("domain")?.ToString() ?? "general",
+            Source = e.Properties?.GetValueOrDefault("source")?.ToString() ?? "knowledge_graph"
+        }).ToList();
+    }
+
+    public List<DocumentEntity> ListDocuments(string? domain = null, string? category = null)
+    {
+        _lock.EnterReadLock();
+        try
+        {
+            return _nodesIndex.Values
+                .Where(e => domain == null ||
+                    (e.Properties?.GetValueOrDefault("domain")?.ToString() == domain))
+                .Select(e => new DocumentEntity
+                {
+                    Id = e.Id,
+                    Title = e.Label,
+                    Content = e.Properties?.GetValueOrDefault("content")?.ToString() ?? "",
+                    Domain = e.Properties?.GetValueOrDefault("domain")?.ToString() ?? "general",
+                    Category = e.Properties?.GetValueOrDefault("category")?.ToString() ?? "document",
+                    Source = e.Properties?.GetValueOrDefault("source")?.ToString() ?? "",
+                    Author = e.Properties?.GetValueOrDefault("author")?.ToString() ?? "",
+                    CreatedAt = 0
+                }).ToList();
+        }
+        finally { _lock.ExitReadLock(); }
+    }
+
+    Task<DocumentStoreStats> IKnowledgeStore.GetStats()
+    {
+        var stats = GetStats();
+        return Task.FromResult(new DocumentStoreStats
+        {
+            TotalDocuments = stats.TryGetValue("entities", out var e) ? Convert.ToInt32(e) : 0,
+            TotalChunks = stats.TryGetValue("triplets", out var t) ? Convert.ToInt32(t) : 0,
+            TotalRelations = 0
+        });
+    }
 }
