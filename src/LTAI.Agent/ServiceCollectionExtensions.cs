@@ -500,15 +500,30 @@ public static class ServiceCollectionExtensions
 
             // ShellEnv (L0 — singleton instance)
             global::LTAI.Core.System.ShellEnv.Instance.ExternalSafetyGate =
-                (tool, input) => safetyGate.EvaluateToolCall(tool, input);
+                (tool, input) =>
+                {
+                    // Delegate to ShellCommandValidator first (3-layer defense)
+                    var (allowed, reason) = global::LTAI.Agent.Tools.ShellCommandValidator.Validate(input);
+                    if (!allowed) return false;
+                    // Then UnifiedSafetyGate as second layer
+                    return safetyGate.EvaluateToolCall(tool, input);
+                };
 
             // ShellTools (L1 — static class)
             global::LTAI.Tools.General.ShellTools.ExternalSafetyGate =
-                (tool, input) => safetyGate.EvaluateToolCall(tool, input);
+                (tool, input) =>
+                {
+                    var (allowed, _) = global::LTAI.Agent.Tools.ShellCommandValidator.Validate(input);
+                    return allowed ? safetyGate.EvaluateToolCall(tool, input) : false;
+                };
 
             // MAF ShellTools (L1 — Agent.Tools namespace)
             global::LTAI.Agent.Tools.ShellTools.ExternalSafetyGate =
-                (tool, input) => safetyGate.EvaluateToolCall(tool, input);
+                (tool, input) =>
+                {
+                    var (allowed, _) = global::LTAI.Agent.Tools.ShellCommandValidator.Validate(input);
+                    return allowed ? safetyGate.EvaluateToolCall(tool, input) : false;
+                };
 
             return new SafetyGateWireUp(); // marker singleton to ensure wiring runs once
         });

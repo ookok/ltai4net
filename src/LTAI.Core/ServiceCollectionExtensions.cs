@@ -61,6 +61,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<Wsl2Manager>();
         services.AddSingleton<ResourceGuard>();
         services.AddSingleton<AuditLogService>();
+        services.AddSingleton<IMemoryEventBus, MemoryEventBus>();
         services.AddHostedService<MemoryGraphCleanupService>();
 
         return services;

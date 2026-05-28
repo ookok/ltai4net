@@ -35,6 +35,7 @@ public sealed class UnifiedSafetyGate
     private readonly ILogger<UnifiedSafetyGate> _logger;
     private readonly SafetyCoordinator _coordinator;
     private readonly PolicyAsCode _policy;
+    private readonly Func<string, string, bool>? _externalToolValidator;
     private readonly float _encodedInjectionRiskThreshold;
     private readonly float _cumulativeRiskThreshold;
     private readonly float _injectionScorePerHit;
@@ -71,11 +72,13 @@ public sealed class UnifiedSafetyGate
         ILogger<UnifiedSafetyGate> logger,
         SafetyCoordinator coordinator,
         PolicyAsCode policy,
-        IOptions<LTAIOptions> options)
+        IOptions<LTAIOptions> options,
+        Func<string, string, bool>? externalToolValidator = null)
     {
         _logger = logger;
         _coordinator = coordinator;
         _policy = policy;
+        _externalToolValidator = externalToolValidator;
         var t = options.Value.Thresholds;
         _encodedInjectionRiskThreshold = t.EncodedInjectionRiskThreshold;
         _cumulativeRiskThreshold = t.CumulativeRiskThreshold;
@@ -159,6 +162,11 @@ public sealed class UnifiedSafetyGate
     {
         if (string.IsNullOrWhiteSpace(input)) return false;
 
+        // Priority 1: External validator (e.g., ShellCommandValidator from LTAI.Agent)
+        if (_externalToolValidator != null)
+            return _externalToolValidator(toolName, input);
+
+        // Priority 2: Built-in patterns as fallback
         var blockedPatterns = new[]
         {
             @"rm\s+-rf\s+/", @"\|\s*(bash|sh|pwsh)\b",

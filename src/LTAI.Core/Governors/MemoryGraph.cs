@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using LTAI.Core.Interfaces;
+using LTAI.Core.System;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -60,6 +61,7 @@ public sealed class MemoryGraph
     private readonly ILogger<MemoryGraph> _logger;
     private readonly int _maxNodes;
     private readonly Func<string, string, string>? _summarizer;
+    private readonly IMemoryEventBus? _eventBus;
     private static readonly JsonSerializerOptions _jsonOpts = new() { WriteIndented = true };
 
     // Inverted index: lowercase term → set of node IDs containing that term
@@ -70,11 +72,13 @@ public sealed class MemoryGraph
     public int EdgeCount => _edges.Count;
     public IReadOnlyList<HierarchyLayer> Hierarchy => _hierarchy.AsReadOnly();
 
-    public MemoryGraph(int maxNodes = 10000, Func<string, string, string>? summarizer = null, ILogger<MemoryGraph>? logger = null)
+    public MemoryGraph(int maxNodes = 10000, Func<string, string, string>? summarizer = null,
+        ILogger<MemoryGraph>? logger = null, IMemoryEventBus? eventBus = null)
     {
         _maxNodes = maxNodes;
         _summarizer = summarizer;
         _logger = logger ?? NullLogger<MemoryGraph>.Instance;
+        _eventBus = eventBus;
 
         _hierarchy.Add(new HierarchyLayer { Level = 0, Label = "detail", CompressionRatio = 1.0 });
         _hierarchy.Add(new HierarchyLayer { Level = 1, Label = "summary", CompressionRatio = 0.3 });
@@ -88,6 +92,24 @@ public sealed class MemoryGraph
     private void PublishEvent(string eventType, Dictionary<string, object> data)
     {
         OnChange?.Invoke(eventType, data);
+
+        // Also publish to cross-component event bus
+        if (_eventBus != null)
+        {
+            var memEventType = eventType switch
+            {
+                "add_node" => MemoryEventType.NodeAdded,
+                "prune" => MemoryEventType.NodePruned,
+                _ => MemoryEventType.NodeAdded
+            };
+            _eventBus.Publish(new MemoryEvent
+            {
+                Type = memEventType,
+                Source = "MemoryGraph",
+                Detail = eventType,
+                Metadata = data
+            });
+        }
     }
 
     /// <summary>Add a node's terms to the inverted index.</summary>

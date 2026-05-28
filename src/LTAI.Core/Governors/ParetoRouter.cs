@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Numerics;
+using LTAI.Core.System;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -43,6 +44,7 @@ public sealed class ParetoRouter
     private readonly ParetoDistanceMetric _metric;
     private readonly object _mergeLock = new();
     private readonly GenePool? _genePool;
+    private readonly AuditLogService? _auditLog;
 
     private readonly string[] _routeHistory;
     private int _routeHistoryIndex;
@@ -57,11 +59,13 @@ public sealed class ParetoRouter
         int embeddingDim = 768,
         ParetoDistanceMetric metric = ParetoDistanceMetric.Cosine,
         ILogger<ParetoRouter>? logger = null,
-        GenePool? genePool = null)
+        GenePool? genePool = null,
+        AuditLogService? auditLog = null)
     {
         _logger = logger ?? NullLogger<ParetoRouter>.Instance;
         _metric = metric;
         _genePool = genePool;
+        _auditLog = auditLog;
         _projectionMatrix = InitializeProjectionMatrix(embeddingDim);
         _routeHistory = new string[RouteHistorySize];
         SeedDefaultFrontier();
@@ -132,6 +136,14 @@ public sealed class ParetoRouter
             while (_shadowLog.Count > 100)
                 _shadowLog.TryDequeue(out _);
         }
+
+        // Audit: record routing decision
+        _auditLog?.Record("ParetoRouter", "route_decision",
+            $"route={decision.Route}, conf={decision.Confidence:F2}, " +
+            $"shadow={decision.IsShadowRouted}, trigger={triggerOverride ?? "embedding"}",
+            subject: triggerOverride,
+            riskScore: 1.0 - decision.Confidence,
+            result: decision.Route);
 
         return decision;
     }
