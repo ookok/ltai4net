@@ -1,6 +1,7 @@
 using LTAI.Core.Acceleration;
 using LTAI.Core.Configuration;
 using LTAI.Core.Execution;
+using LTAI.Core.Governors;
 using LTAI.Core.Interfaces;
 using LTAI.Core.Life;
 using LTAI.Core.Messaging;
@@ -59,6 +60,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<DaemonManager>();
         services.AddSingleton<Wsl2Manager>();
         services.AddSingleton<ResourceGuard>();
+        services.AddHostedService<MemoryGraphCleanupService>();
 
         return services;
     }

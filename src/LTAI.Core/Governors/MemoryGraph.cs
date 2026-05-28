@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using LTAI.Core.Interfaces;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -61,6 +62,10 @@ public sealed class MemoryGraph
     private readonly Func<string, string, string>? _summarizer;
     private static readonly JsonSerializerOptions _jsonOpts = new() { WriteIndented = true };
 
+    // Inverted index: lowercase term → set of node IDs containing that term
+    private readonly ConcurrentDictionary<string, HashSet<string>> _termIndex = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly char[] IndexSplitChars = [' ', '\t', '\n', '\r', ',', '.', '!', '?', ';', ':', '(', ')', '[', ']', '{', '}', '"', '\'', '<', '>', '/', '\\', '|', '@', '#', '$', '%', '^', '&', '*', '+', '=', '~', '`'];
+
     public int NodeCount => _nodes.Count;
     public int EdgeCount => _edges.Count;
     public IReadOnlyList<HierarchyLayer> Hierarchy => _hierarchy.AsReadOnly();
@@ -77,6 +82,47 @@ public sealed class MemoryGraph
         _hierarchy.Add(new HierarchyLayer { Level = 3, Label = "domain", CompressionRatio = 0.03 });
     }
 
+    /// <summary>Event raised when the graph changes (node added/removed/pruned).</summary>
+    public event Action<string, Dictionary<string, object>>? OnChange;
+
+    private void PublishEvent(string eventType, Dictionary<string, object> data)
+    {
+        OnChange?.Invoke(eventType, data);
+    }
+
+    /// <summary>Add a node's terms to the inverted index.</summary>
+    private void IndexNode(MemoryNode node)
+    {
+        var textToIndex = $"{node.Content} {node.Summary} {string.Join(" ", node.Tags)} {node.Domain}"
+            .ToLowerInvariant();
+        var terms = textToIndex.Split(IndexSplitChars, StringSplitOptions.RemoveEmptyEntries)
+            .Where(t => t.Length > 1)
+            .Distinct();
+
+        foreach (var term in terms)
+        {
+            var ids = _termIndex.GetOrAdd(term, _ => new HashSet<string>());
+            lock (ids) { ids.Add(node.Id); }
+        }
+    }
+
+    /// <summary>Remove a node's terms from the inverted index.</summary>
+    private void RemoveFromIndex(MemoryNode node)
+    {
+        var terms = node.Content.ToLowerInvariant().Split(IndexSplitChars, StringSplitOptions.RemoveEmptyEntries)
+            .Concat(node.Summary.ToLowerInvariant().Split(IndexSplitChars, StringSplitOptions.RemoveEmptyEntries))
+            .Where(t => t.Length > 1)
+            .Distinct();
+
+        foreach (var term in terms)
+        {
+            if (_termIndex.TryGetValue(term, out var ids))
+            {
+                lock (ids) { ids.Remove(node.Id); }
+            }
+        }
+    }
+
     public MemoryNode AddNode(MemoryNode node)
     {
         if (_nodes.Count >= _maxNodes)
@@ -86,6 +132,8 @@ public sealed class MemoryGraph
         var layer = _hierarchy.FirstOrDefault(l => l.Level == node.LayerLevel);
         layer?.Nodes[node.Id] = node;
 
+        IndexNode(node);
+
         _logger.LogDebug("MemoryGraph: added node {Id} at layer {Layer} ({Domain})",
             node.Id, node.LayerLevel, node.Domain);
 
@@ -94,6 +142,14 @@ public sealed class MemoryGraph
 
         if (node.LayerLevel == 1 && _summarizer != null)
             TryAutoConceptualize(node);
+
+        PublishEvent("add_node", new Dictionary<string, object>
+        {
+            ["node_id"] = node.Id,
+            ["layer"] = node.LayerLevel,
+            ["domain"] = node.Domain,
+            ["importance"] = node.Importance
+        });
 
         return node;
     }
@@ -271,7 +327,12 @@ public sealed class MemoryGraph
         {
             node.LastAccessedAt = DateTime.UtcNow;
             node.AccessCount++;
-            node.Importance = Math.Min(1.0, 0.3 + (node.AccessCount * 0.05) + (node.Importance > 0.5 ? 0.1 : 0));
+            // Importance: never drop below current, only grow.
+            // Base: 0.5 (initial) scaled by access frequency + content richness bonus
+            var accessImportance = 0.5 + Math.Min(node.AccessCount * 0.03, 0.4);
+            var contentBonus = Math.Min(node.Content.Length / 5000.0, 0.1);
+            var newImportance = Math.Min(1.0, accessImportance + contentBonus);
+            node.Importance = Math.Max(node.Importance, newImportance);
             return node;
         }
         return null;
@@ -346,17 +407,60 @@ public sealed class MemoryGraph
         if (string.IsNullOrWhiteSpace(query))
             return new List<MemoryNode>();
 
-        var terms = query.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        var scored = new List<(MemoryNode Node, double Score)>();
+        var terms = query.Split(IndexSplitChars, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(t => t.Length > 1)
+            .Select(t => t.ToLowerInvariant())
+            .Distinct()
+            .ToArray();
 
-        foreach (var node in _nodes.Values)
+        if (terms.Length == 0)
+            return new List<MemoryNode>();
+
+        // Phase 1: Inverted index — find candidate node IDs
+        var candidateIds = new HashSet<string>();
+        foreach (var term in terms)
         {
-            var score = 0.0;
-            foreach (var term in terms)
+            if (_termIndex.TryGetValue(term, out var ids))
             {
-                if (node.Content.Contains(term, StringComparison.OrdinalIgnoreCase))
+                lock (ids)
+                {
+                    foreach (var id in ids)
+                        candidateIds.Add(id);
+                }
+            }
+            // If a term isn't in the index, fall back to scanning all tags/domains
+            // (these are short fields, cheap to scan)
+            foreach (var node in _nodes.Values)
+            {
+                if (node.Tags.Any(t => t.Contains(term, StringComparison.OrdinalIgnoreCase)) ||
+                    node.Domain.Contains(term, StringComparison.OrdinalIgnoreCase))
+                {
+                    candidateIds.Add(node.Id);
+                }
+            }
+        }
+
+        if (candidateIds.Count == 0)
+            return new List<MemoryNode>();
+
+        // Phase 2: Score candidates
+        var scored = new List<(MemoryNode Node, double Score)>();
+        var termSet = new HashSet<string>(terms);
+
+        foreach (var id in candidateIds)
+        {
+            if (!_nodes.TryGetValue(id, out var node)) continue;
+
+            double score = 0;
+            // Count how many of the query terms appear (BM25-like term frequency)
+            var contentLower = node.Content.ToLowerInvariant();
+            var summaryLower = node.Summary.ToLowerInvariant();
+
+            foreach (var term in termSet)
+            {
+                if (contentLower.Contains(term, StringComparison.Ordinal))
                     score += 1.0;
-                if (node.Summary.Contains(term, StringComparison.OrdinalIgnoreCase))
+                if (summaryLower.Contains(term, StringComparison.Ordinal))
                     score += 2.0;
                 if (node.Tags.Any(t => t.Contains(term, StringComparison.OrdinalIgnoreCase)))
                     score += 3.0;
@@ -511,21 +615,29 @@ public sealed class MemoryGraph
     {
         var cutoff = DateTime.UtcNow.AddDays(-7);
         var staleIds = _nodes.Values
-            .Where(n => n.LastAccessedAt < cutoff && n.Importance < 0.3)
+            .Where(n => n.LastAccessedAt < cutoff && n.Importance <= 0.3)
             .Select(n => n.Id)
-            .Take(_nodes.Count / 10)
+            // Allow full cleanup — no arbitrary 10% cap
             .ToList();
 
         foreach (var id in staleIds)
         {
-            _nodes.TryRemove(id, out _);
+            if (_nodes.TryRemove(id, out var removedNode))
+            {
+                RemoveFromIndex(removedNode);
+            }
+            // Also remove from hierarchy layers
+            foreach (var layer in _hierarchy)
+                layer.Nodes.TryRemove(id, out _);
+            // Remove all incident edges
             var edgeKeys = _edges.Where(kv => kv.Value.SourceId == id || kv.Value.TargetId == id)
                 .Select(kv => kv.Key).ToList();
             foreach (var key in edgeKeys) _edges.TryRemove(key, out _);
         }
 
         if (staleIds.Count > 0)
-            _logger.LogDebug("MemoryGraph: pruned {Count} stale nodes", staleIds.Count);
+            _logger.LogInformation("MemoryGraph: pruned {Count} stale nodes (remaining={Remaining})",
+                staleIds.Count, _nodes.Count);
     }
 
     private static string BuildContextFromRetrieved(IReadOnlyList<MemoryNode> retrieved)
@@ -544,4 +656,57 @@ public sealed record MemPiSearchResult
     public bool MemPiUsed { get; init; }
     public double RetrievalConfidence { get; init; }
     public double MaxRetrievalScore { get; init; }
+}
+
+/// <summary>
+/// Background service that periodically prunes stale nodes from MemoryGraph.
+/// Runs every hour and cleans nodes that haven't been accessed in 7+ days with Importance ≤ 0.3.
+/// </summary>
+public sealed class MemoryGraphCleanupService : IHostedService, IDisposable
+{
+    private readonly MemoryGraph _graph;
+    private readonly ILogger<MemoryGraphCleanupService> _logger;
+    private Timer? _timer;
+
+    public MemoryGraphCleanupService(MemoryGraph graph, ILogger<MemoryGraphCleanupService> logger)
+    {
+        _graph = graph;
+        _logger = logger;
+    }
+
+    public Task StartAsync(CancellationToken ct)
+    {
+        _timer = new Timer(DoCleanup, null, TimeSpan.FromMinutes(10), TimeSpan.FromHours(1));
+        _logger.LogInformation("MemoryGraphCleanupService started (interval=1h, initial=10min)");
+        return Task.CompletedTask;
+    }
+
+    public Task StopAsync(CancellationToken ct)
+    {
+        _timer?.Change(Timeout.Infinite, Timeout.Infinite);
+        _logger.LogInformation("MemoryGraphCleanupService stopped");
+        return Task.CompletedTask;
+    }
+
+    public void Dispose()
+    {
+        _timer?.Dispose();
+    }
+
+    private void DoCleanup(object? state)
+    {
+        try
+        {
+            var before = _graph.NodeCount;
+            _graph.PruneStaleNodes();
+            var after = _graph.NodeCount;
+            if (before > 0)
+                _logger.LogInformation("MemoryGraph cleanup: {Before} → {After} nodes ({Removed} removed)",
+                    before, after, before - after);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "MemoryGraph cleanup cycle failed");
+        }
+    }
 }
