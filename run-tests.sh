@@ -1,117 +1,62 @@
 #!/usr/bin/env bash
-# LTAI Agent OS — Test Suite Runner with Audit Log Validation
-# Usage: ./run-tests.sh [layer] [-report]
-# Example: ./run-tests.sh L0 -report
-
+# ═══════════════════════════════════════════════
+# LTAI 一键测试脚本 — Linux / macOS / WSL
+# ═══════════════════════════════════════════════
 set -euo pipefail
 
-SPECFILE="${SPECFILE:-docs/test_expected.csv}"
-PROMPTS="${PROMPTS:-docs/testprompts.txt}"
-CLI="${CLI:-dotnet run --project src/LTAI.Cli --}"
-LAYER="${1:-L0}"
-REPORT="${2:-}"
+RED='\033[0;31m'; GREEN='\033[0;32m'; CYAN='\033[0;36m'; NC='\033[0m'
+STEP=0
 
-RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'; CYAN='\033[0;36m'; NC='\033[0m'
+next() { STEP=$((STEP+1)); echo -e "\n${CYAN}═══ [$STEP/$TOTAL] $1 ═══${NC}"; }
 
-declare -A EXPECTED=() PATTERNS=()
-
-load_specs() {
-    while IFS=',' read -r id expected pattern; do
-        [[ -z "$id" || "$id" == "ID" ]] && continue
-        EXPECTED["$id"]="$expected"
-        PATTERNS["$id"]="$pattern"
-    done < "$SPECFILE"
-}
-
-run_test() {
-    local id="$1" query="$2"
-    local expected="${EXPECTED[$id]:-?}"
-    local pattern="${PATTERNS[$id]:-}"
-    
-    echo -ne "  ${CYAN}[$id]${NC} "
-    
-    local start=$(date +%s%N 2>/dev/null || echo 0)
-    local output
-    output=$($CLI debug --query "$query" 2>&1) || true
-    local end=$(date +%s%N 2>/dev/null || echo 0)
-    local elapsed=$(( (end - start) / 1000000 ))
-    
-    local matched=0
-    if [ -n "$pattern" ]; then
-        IFS='|' read -ra PATS <<< "$pattern"
-        for p in "${PATS[@]}"; do
-            if echo "$output" | grep -qiE "$p"; then
-                matched=1; break
-            fi
-        done
+# 依赖检查
+for cmd in dotnet reportgenerator; do
+    if ! command -v "$cmd" &>/dev/null; then
+        echo -e "${RED}缺少依赖: $cmd${NC}"
+        echo "  dotnet: https://dotnet.microsoft.com/download"
+        echo "  reportgenerator: dotnet tool install -g dotnet-reportgenerator-globaltool"
+        exit 1
     fi
-    
-    case "$expected" in
-        "❌")
-            if [ $matched -eq 1 ]; then
-                echo -e "${GREEN}PASS${NC} (${elapsed}ms)"; return 0
-            else
-                echo -e "${RED}FAIL${NC} (${elapsed}ms) expected blocked"; return 1
-            fi
-            ;;
-        "✅")
-            if [ $matched -eq 1 ]; then
-                echo -e "${GREEN}PASS${NC} (${elapsed}ms)"; return 0
-            else
-                echo -e "${RED}FAIL${NC} (${elapsed}ms) no match for: ${pattern:0:40}"; return 1
-            fi
-            ;;
-        "⚠️")
-            echo -e "${YELLOW}PASS*${NC} (${elapsed}ms)"; return 0
-            ;;
-        *)
-            [ $matched -eq 1 ] && echo -e "${GREEN}PASS${NC} (${elapsed}ms)" || echo -e "${RED}FAIL${NC} (${elapsed}ms)"
-            return $(( 1 - matched ))
-            ;;
-    esac
-}
+done
 
-main() {
-    load_specs
-    
-    echo ""
-    echo -e "${CYAN}=== LTAI Agent OS Test Suite (Audit-Validated) ===${NC}"
-    echo -e "Layer: ${YELLOW}${LAYER}${NC}"
-    echo ""
-    
-    local pass=0 fail=0 current_layer="" current_id=""
-    
-    while IFS= read -r line; do
-        [[ "$line" =~ ^#.* ]] && continue
-        [[ -z "$line" ]] && continue
-        
-        if [[ "$line" =~ ^##[[:space:]]+L([0-5]) ]]; then
-            current_layer="L${BASH_REMATCH[1]}"; continue
-        fi
-        if [[ "$line" =~ ^##[[:space:]]+跨层 ]]; then
-            current_layer="CHAOS"; continue
-        fi
-        if [[ "$line" =~ ^#[[:space:]]+(L[0-5]|CHAOS)-[A-Z0-9-]+ ]]; then
-            current_id="${BASH_REMATCH[1]}"; continue
-        fi
-        
-        if [[ -n "$current_layer" && -n "$current_id" && -n "$line" ]]; then
-            if [[ "$LAYER" == "all" || "$current_layer" == "$LAYER" ]]; then
-                if run_test "$current_id" "$line"; then
-                    ((pass++))
-                else
-                    ((fail++))
-                fi
-            fi
-            current_id=""
-        fi
-    done < "$PROMPTS"
-    
-    echo ""
-    echo -e "${CYAN}=== Results ===${NC}"
-    echo -e "  PASS: ${GREEN}${pass}${NC}  FAIL: ${RED}${fail}${NC}"
-    
-    [ "$REPORT" = "-report" ] && echo "Report: docs/test_report_$(date +%Y%m%d-%H%M%S).csv"
-}
+TOTAL=6
 
-main
+# ── 1. 清理 ──
+next "清理上次构建"
+rm -rf coverage-report TestResults
+dotnet clean LTAI.sln -c Release -q 2>/dev/null || true
+
+# ── 2. 还原 ──
+next "还原 NuGet 包"
+dotnet restore LTAI.sln
+
+# ── 3. 构建 ──
+next "编译所有项目"
+dotnet build LTAI.sln -c Release --no-restore -warnaserror
+
+# ── 4. 运行全部测试 + 覆盖率 ──
+next "运行全部测试（并行 xUnit）"
+dotnet test LTAI.sln -c Release --no-build \
+    --settings tests/runsettings.xml \
+    --collect:"XPlat Code Coverage" \
+    --logger "trx;LogFileName=test-results.trx" \
+    -m:4 \
+    || echo -e "${RED}⚠ 部分测试失败 — 查看上方详情${NC}"
+
+# ── 5. 覆盖率报告 ──
+next "生成覆盖率报告"
+reportgenerator \
+    -reports:tests/**/TestResults/**/coverage.cobertura.xml \
+    -targetdir:coverage-report \
+    -reporttypes:Html
+
+echo -e "${GREEN}✅ 覆盖率报告: coverage-report/index.html${NC}"
+
+# ── 6. 汇总 ──
+next "汇总"
+echo -e "${GREEN}════════════════════════════════════════${NC}"
+echo -e "${GREEN}  全部完成${NC}"
+echo -e "${GREEN}  ⚡ 测试结果:  tests/**/TestResults/test-results.trx${NC}"
+echo -e "${GREEN}  📊 覆盖率:    coverage-report/index.html${NC}"
+echo -e "${GREEN}  💡 负载测试:  k6 run tests/loadtest/loadtest.js --vus 10 --duration 30s${NC}"
+echo -e "${GREEN}════════════════════════════════════════${NC}"

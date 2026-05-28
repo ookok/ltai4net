@@ -20,93 +20,16 @@ public sealed class TuiInputBox
 
     public async Task<string> ReadInputAsync(string prompt = "Query")
     {
-        _buffer.Clear();
-        _cursorPos = 0;
-        _multiLineBuffer.Clear();
-
-        AnsiConsole.Markup($"[green]{prompt}:[/] ");
-        AnsiConsole.Markup("[dim](Ctrl+V paste | Alt+Enter newline | ↑↓ history | Esc cancel)[/]");
-        AnsiConsole.WriteLine();
-
-        while (true)
+        Console.WriteLine();
+        Console.Write($"{prompt}: ");
+        var line = Console.ReadLine() ?? "";
+        if (!string.IsNullOrWhiteSpace(line))
         {
-            var key = Console.ReadKey(true);
-
-            if (key.Key == ConsoleKey.Enter && key.Modifiers == ConsoleModifiers.Alt)
-            {
-                _multiLineBuffer.Add(new StringBuilder(_buffer.ToString()));
-                _buffer.Clear();
-                _cursorPos = 0;
-                AnsiConsole.WriteLine();
-                continue;
-            }
-
-            if (key.Key == ConsoleKey.Enter)
-            {
-                var result = GetFinalContent();
-                AnsiConsole.WriteLine();
-                if (!string.IsNullOrWhiteSpace(result))
-                {
-                    _history.Add(result);
-                    _historyIdx = _history.Count;
-                }
-                return result;
-            }
-
-            if (key.Key == ConsoleKey.Escape)
-            {
-                AnsiConsole.WriteLine();
-                return "";
-            }
-
-            if (key.Key == ConsoleKey.UpArrow && _history.Count > 0)
-            {
-                NavigateHistory(-1);
-                RedrawInput(prompt);
-                continue;
-            }
-
-            if (key.Key == ConsoleKey.DownArrow && _history.Count > 0)
-            {
-                NavigateHistory(1);
-                RedrawInput(prompt);
-                continue;
-            }
-
-            if (key.Key == ConsoleKey.LeftArrow) { _cursorPos = Math.Max(0, _cursorPos - 1); continue; }
-            if (key.Key == ConsoleKey.RightArrow) { _cursorPos = Math.Min(_buffer.Length, _cursorPos + 1); continue; }
-            if (key.Key == ConsoleKey.Backspace && _cursorPos > 0) { _buffer.Remove(_cursorPos - 1, 1); _cursorPos--; RedrawInput(prompt); continue; }
-            if (key.Key == ConsoleKey.Delete && _cursorPos < _buffer.Length) { _buffer.Remove(_cursorPos, 1); RedrawInput(prompt); continue; }
-            if (key.Key == ConsoleKey.Home) { _cursorPos = 0; continue; }
-            if (key.Key == ConsoleKey.End) { _cursorPos = _buffer.Length; continue; }
-
-            if (key.Modifiers == ConsoleModifiers.Control && key.Key == ConsoleKey.V)
-            {
-                var pasted = await ReadClipboardAsync();
-                if (!string.IsNullOrEmpty(pasted))
-                {
-                    var resolved = await ResolvePastedContentAsync(pasted);
-                    _buffer.Insert(_cursorPos, resolved);
-                    _cursorPos += resolved.Length;
-                    RedrawInput(prompt);
-                }
-                continue;
-            }
-
-            if (key.Modifiers == ConsoleModifiers.Control && key.Key == ConsoleKey.K)
-            {
-                _buffer.Length = _cursorPos;
-                RedrawInput(prompt);
-                continue;
-            }
-
-            if (key.KeyChar >= 32)
-            {
-                _buffer.Insert(_cursorPos, key.KeyChar);
-                _cursorPos++;
-                RedrawInput(prompt);
-            }
+            _history.Add(line);
+            _historyIdx = _history.Count;
         }
+        Console.WriteLine();
+        return line;
     }
 
     private string GetFinalContent()

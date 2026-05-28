@@ -22,8 +22,8 @@ public class Program
         {
             var cmd = args[0].ToLowerInvariant();
 
-            if (cmd is "init") { await RunInitAsync(args[1..]); return 0; }
-            if (cmd is "install") { await RunInstallAsync(args[1..]); return 0; }
+
+
             if (cmd is "setup") { await RunSetupAsync(args[1..]); return 0; }
             if (cmd is "add") { await RunAddAsync(args[1..]); return 0; }
             if (cmd is "remove" or "rm") { await RunRemoveAsync(args[1..]); return 0; }
@@ -35,6 +35,7 @@ public class Program
             if (cmd is "git") { await RunGitAsync(args[1..]); return 0; }
             if (cmd is "dev") { await RunDevAsync(args[1..]); return 0; }
             if (cmd is "model") { await RunModelAsync(args[1..]); return 0; }
+            if (cmd is "debug" or "test") { await RunDebugAsync(args[1..]); return 0; }
 
             if (_entryPoints.TryGetValue(cmd, out var entry))
             {
@@ -45,95 +46,6 @@ public class Program
 
         PrintBanner();
         return 0;
-    }
-
-    // ════════════════════════════════════════════════════════════════
-    // ltai init — interactive first-run setup
-    // ════════════════════════════════════════════════════════════════
-
-    private static async Task RunInitAsync(string[] args)
-    {
-        var config = CliConfig.Load();
-        var batchFile = args.FirstOrDefault(a => a.StartsWith("--config="))?[9..];
-
-        if (batchFile != null && File.Exists(batchFile))
-        {
-            config = System.Text.Json.JsonSerializer.Deserialize<CliConfig>(File.ReadAllText(batchFile))!;
-            config.Save();
-            AnsiConsole.MarkupLine("[green]Batch config loaded from {0}[/]", batchFile);
-            return;
-        }
-
-        AnsiConsole.Write(new FigletText("LTAI OS").Color(Color.Cyan1));
-        AnsiConsole.MarkupLine("[bold cyan]Welcome to LTAI Agent OS Setup[/]\n");
-
-        config.InstallPath = AnsiConsole.Ask("Install path", config.InstallPath);
-        config.ReleaseChannel = AnsiConsole.Prompt(
-            new SelectionPrompt<string>()
-                .Title("Select release channel")
-                .AddChoices("stable", "beta", "dev"));
-
-        AnsiConsole.MarkupLine("\n[bold]Model Configuration[/]");
-        config.L0Endpoint = AnsiConsole.Ask("L0 Model Endpoint (Ollama)", config.L0Endpoint);
-        config.L1ApiKey = AnsiConsole.Prompt(
-            new TextPrompt<string>("L1 API Key (optional)")
-                .AllowEmpty().Secret()) ?? "";
-        config.L2ApiKey = AnsiConsole.Prompt(
-            new TextPrompt<string>("L2 API Key (optional)")
-                .AllowEmpty().Secret()) ?? "";
-        config.L2Endpoint = AnsiConsole.Ask("L2 API Endpoint", config.L2Endpoint);
-        config.WorkspaceRoot = AnsiConsole.Ask("Workspace Root", Directory.GetCurrentDirectory());
-        config.SandboxRoot = AnsiConsole.Ask("Sandbox Root", Path.Combine(config.InstallPath, "sandbox"));
-
-        config.Save();
-        AnsiConsole.MarkupLine($"\n[green]Config saved to {CliConfig.ConfigPath}[/]");
-        AnsiConsole.MarkupLine("[dim]Next: run 'ltai install' to download the core runtime[/]");
-    }
-
-    // ════════════════════════════════════════════════════════════════
-    // ltai install — download core runtime
-    // ════════════════════════════════════════════════════════════════
-
-    private static async Task RunInstallAsync(string[] args)
-    {
-        var config = CliConfig.Load();
-        Directory.CreateDirectory(config.InstallPath);
-
-        await AnsiConsole.Progress()
-            .StartAsync(async ctx =>
-            {
-                var task = ctx.AddTask("[cyan]Downloading LTAI Core Runtime[/]");
-                task.MaxValue = 5;
-
-                var coreDir = Path.Combine(config.InstallPath, "core");
-                Directory.CreateDirectory(coreDir);
-
-                task.Increment(1);
-                AnsiConsole.MarkupLine("  [dim]Extracting L0 MicroKernel...[/]");
-                ResourceExtractor.EnsureExtracted(config.InstallPath);
-
-                task.Increment(1);
-                AnsiConsole.MarkupLine("  [dim]Extracting L1 Perception Layer...[/]");
-
-                task.Increment(1);
-                AnsiConsole.MarkupLine("  [dim]Extracting L2 Coordination Layer...[/]");
-
-                task.Increment(1);
-                AnsiConsole.MarkupLine("  [dim]Extracting L3-L5 Upper Layers...[/]");
-
-                task.Increment(1);
-                config.Components.Add(new InstalledComponent
-                {
-                    Name = "core", Version = "1.0.0",
-                    Path = coreDir, Type = "core"
-                });
-                config.Save();
-
-                task.StopTask();
-            });
-
-        AnsiConsole.MarkupLine("[green]Installation complete.[/]");
-        AnsiConsole.MarkupLine("[dim]Next: run 'ltai setup' to configure, then 'ltai add webapp' and 'ltai up'[/]");
     }
 
     // ════════════════════════════════════════════════════════════════
@@ -210,37 +122,32 @@ public class Program
         config.SetEnv();
 
         var target = args.FirstOrDefault()?.ToLowerInvariant();
-        var targets = target != null
-            ? new[] { target }
-            : new[] { "tui" };
+        var name = target ?? "tui";
 
-        foreach (var name in targets)
+        // 查找目标 exe（同目录下找子目录）
+        var baseDir = AppContext.BaseDirectory;
+        var exeName = $"LTAI.{name.Substring(0, 1).ToUpper()}{name[1..]}.exe";
+        var exePath = Path.Combine(baseDir, name, exeName);
+        if (!File.Exists(exePath))
+            exePath = Path.Combine(baseDir, "..", name, exeName);
+        if (!File.Exists(exePath))
+            exePath = Path.Combine(baseDir, $"{name}.exe");
+
+        if (!File.Exists(exePath))
         {
-            if (ProcessLauncher.IsRunning(name))
-            {
-                AnsiConsole.MarkupLine($"[yellow]{name} already running[/]");
-                continue;
-            }
-
-            var entry = _entryPoints.GetValueOrDefault(name);
-            if (entry != null)
-            {
-                AnsiConsole.MarkupLine($"[cyan]Starting {name}...[/]");
-                _ = Task.Run(() => entry.RunAsync(Array.Empty<string>()));
-                await Task.Delay(500);
-            }
-            else
-            {
-                AnsiConsole.MarkupLine($"[yellow]{name}: entry point not found — run 'ltai install' first[/]");
-            }
+            AnsiConsole.MarkupLine($"[red]Cannot find {exeName}. Publish the component first.[/]");
+            return;
         }
 
-        if (targets.Contains("tui"))
-            AnsiConsole.MarkupLine("[green]TUI started[/]");
-        if (targets.Contains("webapp") || targets.Contains("webapi"))
-            AnsiConsole.MarkupLine("[green]WebApp available at http://localhost:8080[/]");
-        if (targets.Contains("mcp"))
-            AnsiConsole.MarkupLine("[green]MCP Server listening on ws://localhost:8081[/]");
+        AnsiConsole.MarkupLine($"[cyan]Starting {name}...[/]");
+        var psi = new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = exePath,
+            UseShellExecute = false,
+            Arguments = ""
+        };
+        var proc = System.Diagnostics.Process.Start(psi)!;
+        proc.WaitForExit();
     }
 
     // ════════════════════════════════════════════════════════════════
@@ -280,7 +187,7 @@ public class Program
             table.AddRow(comp.Name, "-", "[dim]stopped[/]", comp.Version);
 
         if (table.Rows.Count == 0)
-            AnsiConsole.MarkupLine("[dim]No components registered. Run 'ltai install' and 'ltai add <component>'[/]");
+            AnsiConsole.MarkupLine("[dim]No components registered. Run 'ltai setup' and 'ltai add <component>'[/]");
         else
             AnsiConsole.Write(table);
 
@@ -653,7 +560,7 @@ public class Program
             else
             {
                 AnsiConsole.MarkupLine("[red]✗ no API key configured[/]");
-                AnsiConsole.MarkupLine("[dim]  Run 'ltai init' or 'ltai env set LTAI_L2_API_KEY <key>'[/]");
+                AnsiConsole.MarkupLine("[dim]  Run 'ltai env set LTAI_L2_API_KEY <key>'[/]");
                 allOk = false;
             }
         }
@@ -826,6 +733,37 @@ public class Program
         var cwd = Directory.GetCurrentDirectory();
         var sln = Directory.GetFiles(cwd, "*.sln").FirstOrDefault();
         return sln;
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    // ltai debug — E2E pipeline trace & batch test runner
+    // ════════════════════════════════════════════════════════════════
+
+    private static async Task RunDebugAsync(string[] args)
+    {
+        var queryIdx = Array.IndexOf(args, "--query");
+        var batch = args.Any(a => a is "--batch" or "-b");
+        var layer = args.SkipWhile(a => a != "--layer").Skip(1).FirstOrDefault();
+        var count = args.SkipWhile(a => a != "--count").Skip(1).FirstOrDefault();
+        var report = args.Any(a => a is "--report" or "-r");
+
+        if (batch)
+        {
+            await DebugMode.RunBatchAsync(layer ?? "all").ConfigureAwait(false);
+            return;
+        }
+
+        if (queryIdx >= 0 && queryIdx + 1 < args.Length)
+        {
+            var query = args[queryIdx + 1];
+            var countVal = int.TryParse(count, out var c) ? c : 1;
+            await DebugMode.RunAsync(query, countVal, null, null, report).ConfigureAwait(false);
+            return;
+        }
+
+        // Default: run heuristic batch
+        var defaultCount = int.TryParse(count, out var n) ? n : 20;
+        await DebugMode.RunAsync(null, defaultCount, null, null, report).ConfigureAwait(false);
     }
 
     // ════════════════════════════════════════════════════════════════
@@ -1639,25 +1577,34 @@ public class Program
         AnsiConsole.MarkupLine("[bold cyan]V1.0 — Agent OS Bootstrapper[/]");
         AnsiConsole.MarkupLine("");
         AnsiConsole.MarkupLine("[bold]Quick Start:[/]");
-        AnsiConsole.MarkupLine("  ltai init          Configure your environment");
-        AnsiConsole.MarkupLine("  ltai install       Download core runtime");
         AnsiConsole.MarkupLine("  ltai up            Start TUI (default)");
         AnsiConsole.MarkupLine("");
         AnsiConsole.MarkupLine("[bold]Commands:[/]");
-        AnsiConsole.MarkupLine("  init, install, setup, add, remove, up, down, ps, update, env, git, dev, model");
+        AnsiConsole.MarkupLine("  setup, add, remove, up, down, ps, update, env, git, dev, model");
     }
 
     private static void ScanEntryPoints()
     {
+        // 触发已知注册类的静态构造函数，确保 LTAIEntryPointRegistry 被填充
+        try { var t = typeof(LTAI.TUI.TuiEntryPointRegistration); } catch { }
+
         var entryTypes = new List<Type>();
         ScanLoadedAssemblies(entryTypes);
         LoadPluginAssemblies(entryTypes);
+
+        // 合并 LTAIEntryPointRegistry 的注册项
+        foreach (var mode in LTAI.Core.Messaging.LTAIEntryPointRegistry.RegisteredModes)
+        {
+            var entry = LTAI.Core.Messaging.LTAIEntryPointRegistry.Get(mode);
+            if (entry != null)
+                _entryPoints.TryAdd(mode, entry);
+        }
 
         foreach (var type in entryTypes)
         {
             try
             {
-                if (Activator.CreateInstance(type, type.IsPublic) is ILTAIEntryPoint entry)
+                if (Activator.CreateInstance(type, nonPublic: true) is ILTAIEntryPoint entry)
                 {
                     foreach (var candidate in new[] { "host", "serve", "mcp", "tui", "webapp", "core", "webapi", "desktop" })
                     {

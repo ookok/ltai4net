@@ -21,8 +21,9 @@ public class InteractiveSetupWizard
     private readonly ModelDownloader _modelDownloader;
     private LTAIOptions _options;
     private bool _isDirty;
+    private bool _quickBootstrapped;
 
-    private static readonly HttpClient _hfClient = new() { Timeout = TimeSpan.FromMinutes(30) };
+    private static readonly HttpClient _hfClient = new() { Timeout = TimeSpan.FromSeconds(15) };
 
     public InteractiveSetupWizard(string configPath, IHttpClientFactory? httpClientFactory = null)
     {
@@ -70,7 +71,8 @@ public class InteractiveSetupWizard
         Console.WriteLine("直接按 Enter 跳过，将使用本地模式运行。");
         Console.WriteLine();
 
-        await ConfigureLayerAsync("L0", "Embedding 层 (向量检索 / 知识库)", hwInfo, cancellationToken);
+        if (!_quickBootstrapped)
+            await ConfigureLayerAsync("L0", "Embedding 层 (向量检索 / 知识库)", hwInfo, cancellationToken);
         await ConfigureLayerAsync("L1", "Fast 层 (快速推理/日常对话)", hwInfo, cancellationToken);
         await ConfigureLayerAsync("L2", "Deep 层 (深度推理/复杂任务)", hwInfo, cancellationToken);
 
@@ -108,10 +110,37 @@ public class InteractiveSetupWizard
 
     private void SaveConfig()
     {
-        var wrapper = new { LTAI = _options };
-        var json = JsonSerializer.Serialize(wrapper, new JsonSerializerOptions { WriteIndented = true });
-        File.WriteAllText(_configPath, json);
+        // 手动序列化以绕过 JsonSerializerIsReflectionEnabledByDefault=false
+        var sb = new StringBuilder();
+        sb.AppendLine("{");
+        sb.AppendLine("  \"ltai\": {");
+        sb.AppendLine("    \"ai\": {");
+        sb.AppendLine("      \"providers\": {");
+        var first = true;
+        foreach (var kv in _options.AI.Providers)
+        {
+            if (!first) sb.AppendLine(",");
+            first = false;
+            sb.Append($"        \"{EscapeJson(kv.Key)}\": {{");
+            sb.Append($"\"endpoint\": \"{EscapeJson(kv.Value.Endpoint)}\"");
+            sb.Append($",\"model\": \"{EscapeJson(kv.Value.Model)}\"");
+            sb.Append($",\"apiKey\": \"{EscapeJson(kv.Value.ApiKey)}\"");
+            sb.Append("}");
+        }
+        sb.AppendLine();
+        sb.AppendLine("      },");
+        sb.AppendLine($"      \"l0\": {{ \"provider\": \"{EscapeJson(_options.AI.L0.Provider)}\", \"model\": \"{EscapeJson(_options.AI.L0.Model)}\" }},");
+        sb.AppendLine($"      \"l1\": {{ \"provider\": \"{EscapeJson(_options.AI.L1.Provider)}\", \"model\": \"{EscapeJson(_options.AI.L1.Model)}\" }},");
+        sb.AppendLine($"      \"l2\": {{ \"provider\": \"{EscapeJson(_options.AI.L2.Provider)}\", \"model\": \"{EscapeJson(_options.AI.L2.Model)}\" }},");
+        sb.AppendLine($"      \"maxTokens\": {_options.AI.MaxTokens}");
+        sb.AppendLine("    }");
+        sb.AppendLine("  }");
+        sb.AppendLine("}");
+        File.WriteAllText(_configPath, sb.ToString());
     }
+
+    private static string EscapeJson(string? s) =>
+        (s ?? "").Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\n", "\\n").Replace("\r", "\\r").Replace("\t", "\\t");
 
     private async Task ConfigureLayerAsync(string layerName, string description, HardwareInfo hwInfo, CancellationToken ct)
     {
@@ -292,8 +321,11 @@ public class InteractiveSetupWizard
             Model = recommended
         };
 
+        // 只在环境变量未设置时才写注册表（注册表写操作广播 WM_SETTINGCHANGE 可能卡顿）
         var envVarName = GetProviderEnvVar(selectedProvider, layerName);
-        SetPersistentEnvVar(envVarName, apiKey);
+        var existingKey = Environment.GetEnvironmentVariable(envVarName);
+        if (string.IsNullOrWhiteSpace(existingKey) || existingKey != apiKey)
+            SetPersistentEnvVar(envVarName, apiKey);
 
         var layerConfig = _options.AI.GetLayerConfig(layerName);
         layerConfig.GetType().GetProperty("Provider")?.SetValue(layerConfig, selectedProvider);
@@ -305,15 +337,40 @@ public class InteractiveSetupWizard
         Console.WriteLine($"  🔑 API Key 已存入环境变量 {envVarName}（永久保存）");
     }
 
+    /// <summary>
+    /// 对已知提供商直接返回内置模型列表，避免慢速的 /models API 调用
+    /// </summary>
+    private static List<string> GetBuiltinModels(string provider)
+    {
+        var p = provider.ToLowerInvariant();
+        if (p == "deepseek")
+            return new() { "deepseek-chat", "deepseek-reasoner", "deepseek-v4-pro", "deepseek-v4-flash" };
+        if (p == "openai")
+            return new() { "gpt-4o", "gpt-4o-mini", "gpt-4", "gpt-3.5-turbo" };
+        if (p == "siliconflow")
+            return new() { "deepseek-ai/DeepSeek-V3", "deepseek-ai/DeepSeek-R1", "Qwen/Qwen2.5-72B-Instruct" };
+        if (p == "aliyun")
+            return new() { "qwen-max", "qwen-plus", "qwen-turbo" };
+        if (p == "zhipu")
+            return new() { "glm-4-plus", "glm-4-air", "glm-4-flash" };
+        if (p == "baidu")
+            return new() { "ernie-4.0", "ernie-3.5", "ernie-speed" };
+        if (p == "moonshot")
+            return new() { "moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k" };
+        return new(); // 未知提供商，走 API 查询
+    }
+
     private static async Task<List<string>> FetchModelListAsync(string endpoint, string apiKey, CancellationToken ct)
     {
         try
         {
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeoutCts.CancelAfter(TimeSpan.FromSeconds(5));
             var baseUrl = endpoint.TrimEnd('/');
             var request = new HttpRequestMessage(HttpMethod.Get, $"{baseUrl}/models");
             request.Headers.Authorization = new global::System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", apiKey);
-            var response = await _hfClient.SendAsync(request, ct);
-            var responseBody = await response.Content.ReadAsStringAsync(ct);
+            var response = await _hfClient.SendAsync(request, timeoutCts.Token);
+            var responseBody = await response.Content.ReadAsStringAsync(timeoutCts.Token);
             using var doc = JsonDocument.Parse(responseBody);
             var models = new List<string>();
 
@@ -328,7 +385,7 @@ public class InteractiveSetupWizard
 
             return models;
         }
-        catch { /* intentional: cleanup may fail */ }
+        catch { /* timeout or network error: skip model list */ }
             return new List<string>();
     }
 
@@ -361,9 +418,9 @@ public class InteractiveSetupWizard
                     !m.Contains("ocr", c) && !m.Contains("asr", c) &&
                     !m.Contains("tts", c) && !m.Contains("speech", c) &&
                     !m.Contains("omni", c))
-                .OrderBy(m => m.Contains("flash", c) || m.Contains("turbo", c) || m.Contains("lite", c) ? 3 :
-                              m.Contains("plus", c) || m.Contains("air", c) ? 2 :
-                              m.Contains("pro", c) || m.Contains("max", c) || m.Contains("ultra", c) ? 0 : 1)
+                .OrderByDescending(m => m.Contains("flash", c) || m.Contains("turbo", c) || m.Contains("lite", c) || m.Contains("chat", c) ? 3 :
+                                        m.Contains("plus", c) || m.Contains("air", c) ? 2 :
+                                        m.Contains("pro", c) || m.Contains("max", c) || m.Contains("ultra", c) ? 0 : 1)
                 .ThenBy(m => m.Length)
                 .ToList();
         }
@@ -720,20 +777,31 @@ public class InteractiveSetupWizard
 
     private string? TryReuseProviderApiKey(string selectedProvider, string layerName)
     {
-        if (layerName != "L2") return null;
-
-        var l1Provider = _options.AI.L1.Provider;
-        if (string.IsNullOrEmpty(l1Provider)) return null;
-        if (!string.Equals(selectedProvider, l1Provider, StringComparison.OrdinalIgnoreCase))
-            return null;
-
+        // 先查环境变量中是否已存在该提供商的 API Key
         var envVarName = GetProviderEnvVar(selectedProvider, layerName);
-        var existingKey = Environment.GetEnvironmentVariable(envVarName);
-        if (!string.IsNullOrWhiteSpace(existingKey))
+        var keyFromEnv = Environment.GetEnvironmentVariable(envVarName);
+        if (!string.IsNullOrWhiteSpace(keyFromEnv))
         {
-            Console.WriteLine($"  ✓ {layerName} 与 L1 使用相同提供商 ({selectedProvider})");
-            Console.WriteLine($"  🔑 自动复用已配置的 API Key ({envVarName})");
-            return existingKey;
+            Console.WriteLine($"  ✓ 检测到环境变量 {envVarName}，自动填充");
+            return keyFromEnv;
+        }
+
+        // L2 可以复用 L1 同提供商的 Key
+        if (layerName == "L2")
+        {
+            var l1Provider = _options.AI.L1.Provider;
+            if (!string.IsNullOrEmpty(l1Provider) &&
+                string.Equals(selectedProvider, l1Provider, StringComparison.OrdinalIgnoreCase))
+            {
+                var l1EnvVar = GetProviderEnvVar(selectedProvider, "L1");
+                var keyFromL1 = Environment.GetEnvironmentVariable(l1EnvVar);
+                if (!string.IsNullOrWhiteSpace(keyFromL1))
+                {
+                    Console.WriteLine($"  ✓ {layerName} 与 L1 使用相同提供商 ({selectedProvider})");
+                    Console.WriteLine($"  🔑 自动复用 L1 的 API Key ({l1EnvVar})");
+                    return keyFromL1;
+                }
+            }
         }
 
         return null;
@@ -838,6 +906,13 @@ public class InteractiveSetupWizard
         return new HardwareInfo(cores, memMB, hasGpu, gpuName, hasNpu, recommendedEngine);
     }
 
+    private static bool IsCoreModel(string version) => version switch
+    {
+        _ when version.Contains("bge-small", StringComparison.OrdinalIgnoreCase) => true,
+        _ when version.Contains("rapidocr", StringComparison.OrdinalIgnoreCase) => true,
+        _ => false
+    };
+
     private static string? FindRootDirectory(string startDir, string markerDir)
     {
         var current = startDir;
@@ -862,8 +937,10 @@ public class InteractiveSetupWizard
 
         foreach (var item in items)
         {
+            // 已安装的模型：核心模型标 ★，可选模型标 ✓
             var icon = item.Status switch
             {
+                L0DownloadStatus.AlreadyInstalled when IsCoreModel(item.Version) => "★",
                 L0DownloadStatus.AlreadyInstalled => "✓",
                 L0DownloadStatus.Recommended => "★",
                 L0DownloadStatus.Optional => "○",
@@ -873,15 +950,19 @@ public class InteractiveSetupWizard
             Console.WriteLine($"  [{icon}] {item.Name} ({item.DiskSizeMB}MB) [{item.Category}]");
         }
 
-        var toDownload = items.Where(i => i.Status is L0DownloadStatus.Recommended or L0DownloadStatus.Optional).ToList();
+        var toDownload = items.Where(i => i.Status == L0DownloadStatus.Recommended).ToList();
+        var optional = items.Count(i => i.Status == L0DownloadStatus.Optional);
         Console.WriteLine();
-        Console.WriteLine($"待下载: {toDownload.Count} 个模型, {toDownload.Sum(i => i.DiskSizeMB)} MB");
+        Console.WriteLine($"待下载: {toDownload.Count} 个核心模型 ({toDownload.Sum(i => i.DiskSizeMB)} MB)");
+        if (optional > 0)
+            Console.WriteLine($"  另有 {optional} 个可选模型可手动安装");
         Console.WriteLine();
 
         if (toDownload.Count == 0)
         {
             Console.WriteLine("所有兼容模型已安装。");
             Console.WriteLine();
+            _quickBootstrapped = true;
             return;
         }
 
@@ -901,7 +982,7 @@ public class InteractiveSetupWizard
                 Console.Write(".");
         });
 
-        var result = await downloader.BootstrapAsync(downloadOptional: true, progress, ct: ct).ConfigureAwait(false);
+        var result = await downloader.BootstrapAsync(downloadOptional: false, progress, ct: ct).ConfigureAwait(false);
 
         Console.WriteLine();
         Console.WriteLine();
@@ -918,7 +999,21 @@ public class InteractiveSetupWizard
             Console.WriteLine($"  ◎ {item.Name} (已安装)");
 
         Console.WriteLine();
+        _quickBootstrapped = true;
+        // 标记 L0 已配置，跳过后续的 L0 配置步骤
+        var downloadedModels = result.Items
+            .Where(i => i.Status is L0DownloadStatus.Downloaded or L0DownloadStatus.AlreadyInstalled)
+            .ToList();
+        if (downloadedModels.Count > 0)
+        {
+            var l0 = _options.AI.GetLayerConfig("L0");
+            l0.GetType().GetProperty("Provider")?.SetValue(l0, "local");
+            l0.GetType().GetProperty("Model")?.SetValue(l0, downloadedModels[0].Version);
+            _isDirty = true;
+        }
+
         Console.WriteLine(result.Summary);
+        Console.WriteLine("  L0 本地模型已就绪，将跳过手动配置。");
     }
 
     private record HardwareInfo(int CpuCores, long MemoryMB, bool HasGpu, string GpuName, bool HasNpu, string RecommendedEngine);

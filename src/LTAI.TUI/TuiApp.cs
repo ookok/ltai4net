@@ -199,12 +199,8 @@ public sealed class TuiApp
 
     public async Task RunAsync()
     {
-        AnsiConsole.Clear();
+        Console.Clear();
         ApplyTheme();
-        AnsiConsole.Write(new FigletText("LTAI TUI").Color(Color.Cyan1));
-
-        AnsiConsole.Write(new Rule("小树 AI — 开发控制台"));
-        AnsiConsole.MarkupLine("[grey]推荐字体: Maple Mono NF | ? 帮助  Ctrl+T 主题[/]");
 
         while (_running)
         {
@@ -830,7 +826,7 @@ public sealed class TuiApp
                 case ConsoleKey.Escape:
                     _kgBrowser.HandleKey(key);
                     return;
-                case ConsoleKey.S when key.Modifiers == 0:
+                case ConsoleKey.S when key.Modifiers == ConsoleModifiers.Control:
                     _kgBrowser.EnterSearchMode();
                     return;
             }
@@ -839,76 +835,28 @@ public sealed class TuiApp
 
         switch (key.Key)
         {
-            case ConsoleKey.D1 or ConsoleKey.NumPad1: HandleNumKey(1); break;
-            case ConsoleKey.D2 or ConsoleKey.NumPad2: HandleNumKey(2); break;
-            case ConsoleKey.D3 or ConsoleKey.NumPad3: HandleNumKey(3); break;
-            case ConsoleKey.D4 or ConsoleKey.NumPad4: HandleNumKey(4); break;
-            case ConsoleKey.D5 or ConsoleKey.NumPad5: HandleNumKey(5); break;
-            case ConsoleKey.D6 or ConsoleKey.NumPad6: HandleNumKey(6); break;
-            case ConsoleKey.D7 or ConsoleKey.NumPad7: HandleNumKey(7); break;
-            case ConsoleKey.D8 or ConsoleKey.NumPad8: HandleNumKey(8); break;
-            case ConsoleKey.D9 or ConsoleKey.NumPad9: HandleNumKey(9); break;
-            case ConsoleKey.D0 or ConsoleKey.NumPad0 or ConsoleKey.F10: _currentView = TuiView.Pipeline; break;
-            case ConsoleKey.F7 when key.Modifiers == 0: await RunBuildAsync(); break;
-            case ConsoleKey.F5 when key.Modifiers == 0: await RunProjectAsync(); break;
-            case ConsoleKey.F8 when key.Modifiers == 0: await RunTestAsync(); break;
-            case ConsoleKey.F11: _currentView = TuiView.ComposeTool; _selectedComposeToolIndex = -1; break;
-            case ConsoleKey.C when key.Modifiers == 0: _currentView = TuiView.Chat; break;
-            case ConsoleKey.Tab when _currentView == TuiView.Chat && key.Modifiers == 0:
-                _llmConfig.CycleModel();
-                AnsiConsole.MarkupLine($"[yellow]⚡ {_llmConfig.ActiveLayerName}:[/] [bold]{_llmConfig.SelectedModel}[/]");
+            case ConsoleKey.P when key.Modifiers == ConsoleModifiers.Control:
+                await ShowCommandPaletteAsync();
                 break;
-            case ConsoleKey.Z when key.Modifiers == 0 && (_currentView == TuiView.Chat || _currentView == TuiView.Dashboard):
-                await JumpToSetupAsync();
-                break;
-            case ConsoleKey.L when key.Modifiers == 0: _showLLMPanel = !_showLLMPanel; _currentView = _showLLMPanel ? TuiView.LLMConfig : _currentView; break;
-            case ConsoleKey.T when key.Modifiers == 0: _innovation.ToggleThoughtChain(); break;
-            case ConsoleKey.S when key.Modifiers == 0: _currentView = TuiView.Swarm; break;
-            case ConsoleKey.N when key.Modifiers == 0: _currentView = TuiView.MemoryTimeline; break;
-            case ConsoleKey.E when key.Modifiers == 0:
-                if (_currentView == TuiView.Code && _loadedFileContent != null)
-                    await HandleEditorAsync();
-                else
-                    ExportSession();
-                break;
-            case ConsoleKey.M when key.Modifiers == 0: await MemoryConsolidateAsync(); break;
-            case ConsoleKey.K when key.Modifiers == 0: _currentView = TuiView.KgBrowser; break;
-            case ConsoleKey.B when key.Modifiers == 0: await MultiModelBranchAsync(); break;
-            case ConsoleKey.P when key.Modifiers == 0: await PromptTemplateAsync(); break;
-            case ConsoleKey.F when key.Modifiers == ConsoleModifiers.Control: _search.Search(); break;
-            case ConsoleKey.H when key.Modifiers == ConsoleModifiers.Control: _currentView = TuiView.Health; break;
-            case ConsoleKey.F3 when key.Modifiers == 0: _search.NextMatch(); break;
-            case ConsoleKey.F3 when key.Modifiers == ConsoleModifiers.Shift: _search.PrevMatch(); break;
-            case ConsoleKey.G: _currentView = TuiView.Git; break;
-            case ConsoleKey.X when key.Modifiers == 0: _currentView = TuiView.DnaEvolution; break;
-            case ConsoleKey.W when key.Modifiers == 0: _currentView = TuiView.DreamReplay; break;
-            case ConsoleKey.J when key.Modifiers == 0: _currentView = TuiView.Parliament; break;
-            case ConsoleKey.O when key.Modifiers == 0: _currentView = TuiView.Evolution; break;
-            case ConsoleKey.V when key.Modifiers == 0: _currentView = TuiView.SkillEvolution; break;
-            case ConsoleKey.D when key.Modifiers == 0: _currentView = TuiView.Diff; break;
-            case ConsoleKey.Oem2 or ConsoleKey.Divide: _currentView = TuiView.Help; break;
-            case ConsoleKey.U when key.Modifiers == 0 && _currentView != TuiView.Service: _currentView = TuiView.Funnel; break;
-            case ConsoleKey.Q: _running = false; break;
             case ConsoleKey.Enter when _currentView == TuiView.Chat:
             case ConsoleKey.Enter when _currentView == TuiView.Dashboard:
             case ConsoleKey.Enter when _currentView == TuiView.Session:
                 _currentView = TuiView.Chat;
                 await HandleChatInputAsync();
                 break;
-            case ConsoleKey.Escape when _currentView == TuiView.Chat: _currentView = TuiView.Dashboard; break;
-            case ConsoleKey.Escape when _showLLMPanel: _showLLMPanel = false; break;
-            case ConsoleKey.A when _currentView == TuiView.Code: await PromptAnalyzeFileAsync(); break;
+            case ConsoleKey.Escape:
+                if (_currentView == TuiView.Chat) _currentView = TuiView.Dashboard;
+                else if (_showLLMPanel) _showLLMPanel = false;
+                else _currentView = TuiView.Dashboard;
+                break;
+        }
 
-            case ConsoleKey.I when _currentView == TuiView.Service: await ServiceActionAsync("install"); break;
-            case ConsoleKey.U when _currentView == TuiView.Service: await ServiceActionAsync("uninstall"); break;
-            case ConsoleKey.S when _currentView == TuiView.Service: await ServiceActionAsync("start"); break;
-            case ConsoleKey.T when _currentView == TuiView.Service: await ServiceActionAsync("stop"); break;
-            case ConsoleKey.R when _currentView == TuiView.Service: await ServiceActionAsync("restart"); break;
-            case ConsoleKey.F when _currentView == TuiView.Models: await FilterModelsAsync(); break;
-            case ConsoleKey.Y when _currentView == TuiView.Models: await SyncModelsAsync(); break;
-            case ConsoleKey.F when _currentView == TuiView.ComposeTool:
-                if (_selectedComposeToolIndex < 0) _selectedComposeToolIndex = 0; else _selectedComposeToolIndex = -1; break;
-            case ConsoleKey.Escape when _currentView == TuiView.ComposeTool && _selectedComposeToolIndex >= 0: _selectedComposeToolIndex = -1; break;
+        // 未匹配的字符键 → 进入聊天输入
+        if (key.Modifiers == ConsoleModifiers.None && key.KeyChar >= 32 && !char.IsControl(key.KeyChar))
+        {
+            if (_currentView != TuiView.Chat)
+                _currentView = TuiView.Chat;
+            await HandleChatInputAsync();
         }
     }
 
@@ -939,8 +887,13 @@ public sealed class TuiApp
     {
         if (_currentView != TuiView.Chat) return;
 
+        Console.WriteLine();
         var input = await _inputBox.ReadInputAsync("You");
-        if (string.IsNullOrWhiteSpace(input)) return;
+        if (string.IsNullOrWhiteSpace(input))
+        {
+            Console.WriteLine();
+            return;
+        }
 
         _chatHistory.Add(("You", input));
 
@@ -971,21 +924,13 @@ public sealed class TuiApp
         string fullResponse;
         try
         {
-            if (_agenticLoop != null)
-            {
-                var agenticLayout = new AgenticChatLayout(_agenticLoop, _funnelView);
-                fullResponse = await agenticLayout.ChatAsync(input, CancellationToken.None);
-            }
-            else
-            {
-                var modelOverride = _llmConfig.GetModelForChat();
-                _funnelView.SetModelInfo(_llmConfig.ActiveLayerName, _llmConfig.SelectedModel);
-                _funnelView.RecordStage("Routing", $"{_llmConfig.ActiveLayerName} → {_llmConfig.SelectedModel}");
+            var modelOverride = _llmConfig.GetModelForChat();
+            _funnelView.SetModelInfo(_llmConfig.ActiveLayerName, _llmConfig.SelectedModel);
+            _funnelView.RecordStage("Routing", $"{_llmConfig.ActiveLayerName} → {_llmConfig.SelectedModel}");
 
-                var chatLayout = new ChatLayout(_lts, _configOptions?.Value, _loadedFileContent, _funnelView);
-                chatLayout.UpdateRouteInfo("delegate_l2", "conf=0.8");
-                fullResponse = await chatLayout.ChatAsync(input, modelOverride);
-            }
+            var chatLayout = new ChatLayout(_lts, _configOptions?.Value, _loadedFileContent, _funnelView);
+            chatLayout.UpdateRouteInfo("delegate_l2", "conf=0.8");
+            fullResponse = await chatLayout.ChatAsync(input, modelOverride);
         }
         catch (Exception ex)
         {
@@ -1011,6 +956,10 @@ public sealed class TuiApp
         _innovation.AddThought("response", fullResponse[..Math.Min(fullResponse.Length, 120)], ThoughtType.Reasoning);
 
         _notify.Notify("LTAI", $"Response ready ({fullResponse.Length} chars, {latency:F0}ms)");
+
+        Console.WriteLine();
+        Console.WriteLine("[dim]Press any key to continue...[/]");
+        Console.ReadKey(true);
     }
 
     private async Task PromptAnalyzeFileAsync()
@@ -1133,6 +1082,45 @@ public sealed class TuiApp
             AnsiConsole.MarkupLine($"[white]{EscapeM(preview)}[/]");
         }
 
+    }
+
+    private async Task ShowCommandPaletteAsync()
+    {
+        Console.WriteLine();
+        Console.Write("Command: ");
+        var cmd = (Console.ReadLine() ?? "").Trim().ToLowerInvariant();
+        Console.WriteLine();
+
+        switch (cmd)
+        {
+            case "1": case "dashboard": case "home": _currentView = TuiView.Dashboard; break;
+            case "2": case "chat": _currentView = TuiView.Chat; break;
+            case "3": case "code": _currentView = TuiView.Code; break;
+            case "4": case "git": _currentView = TuiView.Git; break;
+            case "5": case "help": _currentView = TuiView.Help; break;
+            case "6": case "session": _currentView = TuiView.Session; break;
+            case "7": case "llm": case "config": _showLLMPanel = true; _currentView = TuiView.LLMConfig; break;
+            case "8": case "models": _currentView = TuiView.Models; break;
+            case "9": case "service": _currentView = TuiView.Service; break;
+            case "build": await RunBuildAsync(); break;
+            case "run": await RunProjectAsync(); break;
+            case "test": await RunTestAsync(); break;
+            case "pipeline": _currentView = TuiView.Pipeline; break;
+            case "analysis": case "evolve": _currentView = TuiView.DnaEvolution; break;
+            case "diff": _currentView = TuiView.Diff; break;
+            case "kg": case "knowledge": _currentView = TuiView.KgBrowser; break;
+            case "memory": _currentView = TuiView.MemoryTimeline; break;
+            case "health": _currentView = TuiView.Health; break;
+            case "funnel": _currentView = TuiView.Funnel; break;
+            case "swarm": _currentView = TuiView.Swarm; break;
+            case "parliament": _currentView = TuiView.Parliament; break;
+            case "evolution": _currentView = TuiView.Evolution; break;
+            case "skill": case "skillevo": _currentView = TuiView.SkillEvolution; break;
+            case "dream": _currentView = TuiView.DreamReplay; break;
+            case "compse": case "tool": _currentView = TuiView.ComposeTool; _selectedComposeToolIndex = -1; break;
+            case "quit": case "exit": case "q": _running = false; break;
+            default: Console.WriteLine($"Unknown command: {cmd}"); break;
+        }
     }
 
     private async Task MultiModelBranchAsync()

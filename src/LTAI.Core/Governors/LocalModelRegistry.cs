@@ -91,8 +91,8 @@ public static class LocalModelRegistry
         new LocalModelInfo(
             Version: "rapidocr-det-v4-onnx",
             Name: "RapidOCR Detection (PP-OCRv4 DB) — 文本检测",
-            Url: "https://huggingface.co/SWHL/RapidOCR/resolve/main/ch_PP-OCRv4_det_infer.onnx",
-            MirrorUrl: "https://hf-mirror.com/SWHL/RapidOCR/resolve/main/ch_PP-OCRv4_det_infer.onnx",
+            Url: "https://huggingface.co/SWHL/RapidOCR/resolve/main/PP-OCRv4/ch_PP-OCRv4_det_infer.onnx",
+            MirrorUrl: "https://hf-mirror.com/SWHL/RapidOCR/resolve/main/PP-OCRv4/ch_PP-OCRv4_det_infer.onnx",
             Sha256: "auto_verify",
             RecommendedMemoryMB: 512,
             DiskSizeMB: 5,
@@ -103,8 +103,8 @@ public static class LocalModelRegistry
         new LocalModelInfo(
             Version: "rapidocr-rec-v4-onnx",
             Name: "RapidOCR Recognition (PP-OCRv4 CRNN) — 文字识别",
-            Url: "https://huggingface.co/SWHL/RapidOCR/resolve/main/ch_PP-OCRv4_rec_infer.onnx",
-            MirrorUrl: "https://hf-mirror.com/SWHL/RapidOCR/resolve/main/ch_PP-OCRv4_rec_infer.onnx",
+            Url: "https://huggingface.co/SWHL/RapidOCR/resolve/main/PP-OCRv4/ch_PP-OCRv4_rec_infer.onnx",
+            MirrorUrl: "https://hf-mirror.com/SWHL/RapidOCR/resolve/main/PP-OCRv4/ch_PP-OCRv4_rec_infer.onnx",
             Sha256: "auto_verify",
             RecommendedMemoryMB: 512,
             DiskSizeMB: 9,
@@ -115,8 +115,8 @@ public static class LocalModelRegistry
         new LocalModelInfo(
             Version: "rapidocr-vocab",
             Name: "RapidOCR Vocabulary (PP-OCRv4 keys) — 字符映射表",
-            Url: "https://huggingface.co/SWHL/RapidOCR/resolve/main/ppocr_keys_v1.txt",
-            MirrorUrl: "https://hf-mirror.com/SWHL/RapidOCR/resolve/main/ppocr_keys_v1.txt",
+            Url: "https://cdn.jsdelivr.net/gh/PaddlePaddle/PaddleOCR@main/ppocr/utils/ppocr_keys_v1.txt",
+            MirrorUrl: "https://cdn.jsdelivr.net/gh/PaddlePaddle/PaddleOCR@main/ppocr/utils/ppocr_keys_v1.txt",
             Sha256: "auto_verify",
             RecommendedMemoryMB: 256,
             DiskSizeMB: 1,
@@ -141,8 +141,8 @@ public static class LocalModelRegistry
         new LocalModelInfo(
             Version: "needle-26m-onnx",
             Name: "Needle 26M (ONNX) - 端侧工具路由",
-            Url: "https://huggingface.co/CactusCompute/needle-26m",
-            MirrorUrl: "https://hf-mirror.com/CactusCompute/needle-26m",
+            Url: "https://huggingface.co/CactusCompute/needle-26m/resolve/main/model.onnx",
+            MirrorUrl: "https://hf-mirror.com/CactusCompute/needle-26m/resolve/main/model.onnx",
             Sha256: "auto_verify",
             RecommendedMemoryMB: 128,
             DiskSizeMB: 52,
@@ -321,18 +321,6 @@ public static class LocalModelRegistry
             Layer: ModelLayer.L2,
             EngineType: "gguf"),
 
-        // ==================== L0: Supertonic TTS Models (ONNX) ====================
-        new LocalModelInfo(
-            Version: "supertonic-3-onnx",
-            Name: "Supertonic 3 (ONNX) - 31语言TTS",
-            Url: "https://huggingface.co/Supertone/supertonic-3/resolve/main/model.onnx",
-            MirrorUrl: "https://hf-mirror.com/Supertone/supertonic-3/resolve/main/model.onnx",
-            Sha256: "auto_verify",
-            RecommendedMemoryMB: 512,
-            DiskSizeMB: 400,
-            Description: "Supertone Supertonic 3，31语言端侧TTS。99M参数，CPU推理，44.1kHz输出。支持表情标签。",
-            Layer: ModelLayer.L0,
-            EngineType: "onnx"),
     };
 
     public static LocalModelInfo SelectBestModel(long availableMemoryMB, ModelLayer layer, string preferredLanguage = "zh", string preferredEngine = "onnx")

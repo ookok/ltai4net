@@ -72,6 +72,7 @@ public static class Program
         services.AddLTAIAI();
         services.AddLTAIDNA();
         services.AddLTAIMetrics();
+        services.AddLTAIAgent();
         services.AddSingleton<LTAIService>();
 
         return services;

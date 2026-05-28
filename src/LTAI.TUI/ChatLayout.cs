@@ -126,7 +126,7 @@ public sealed class ChatLayout
         if (_hasResponse)
         {
             var t = _responseBuffer.ToString();
-            rows.Add(new Panel(new Markup(Markup.Escape(t.Length > 2000 ? t[..2000] + "\n[dim]...[/]" : t)))
+            rows.Add(new Panel(new Markup(t.Length > 2000 ? t[..2000] + "\n[dim]...[/]" : t))
                 .RoundedBorder().Header("Response").BorderColor(Color.Green).Padding(1, 1));
         }
 

@@ -436,9 +436,15 @@ public static class ServiceCollectionExtensions
         {
             var genePool = sp.GetRequiredService<GenePool>();
             var router = sp.GetRequiredService<ParetoRouter>();
-            var lts = sp.GetRequiredService<LTAI.AI.Interfaces.ILivingTreeSystem>();
             var logger = sp.GetService<ILogger<SimulatedAnnealer>>();
-            Func<string, CancellationToken, Task<string>> l1Eval = (query, ct) => lts.ChatAsync(query, ct);
+            // 延迟解析 ILivingTreeSystem 以打破循环依赖
+            // SimulatedAnnealer → ILivingTreeSystem → CPSProcessingService → SimulatedAnnealer
+            var serviceProvider = sp;
+            Func<string, CancellationToken, Task<string>> l1Eval = async (query, ct) =>
+            {
+                var lts = serviceProvider.GetRequiredService<LTAI.AI.Interfaces.ILivingTreeSystem>();
+                return await lts.ChatAsync(query, ct).ConfigureAwait(false);
+            };
             return new SimulatedAnnealer(genePool, router, l1Eval, logger: logger);
         });
 
@@ -460,13 +466,18 @@ public static class ServiceCollectionExtensions
             var genePool = sp.GetRequiredService<GenePool>();
             var annealer = sp.GetRequiredService<SimulatedAnnealer>();
             var geneToRule = sp.GetRequiredService<GeneToRule>();
-            var lts = sp.GetRequiredService<LTAI.AI.Interfaces.ILivingTreeSystem>();
+            // 延迟解析 ILivingTreeSystem 以打破循环依赖
+            var serviceProvider = sp;
+            Func<string, CancellationToken, Task<string>> l2Architect = async (query, ct) =>
+            {
+                var lts = serviceProvider.GetRequiredService<LTAI.AI.Interfaces.ILivingTreeSystem>();
+                return await lts.ChatAsync(query, ct).ConfigureAwait(false);
+            };
             var logger = sp.GetService<ILogger<ArchitectLoop>>();
             var counterfactual = sp.GetRequiredService<CounterfactualGate>();
             var intentClassifier = sp.GetService<L0IntentClassifier>();
             var semanticAnchor = sp.GetService<SemanticAnchor>();
             var diffAgent = sp.GetRequiredService<SemanticDiffAgent>();
-            Func<string, CancellationToken, Task<string>> l2Architect = (query, ct) => lts.ChatAsync(query, ct);
             return new ArchitectLoop(router, teacher, genePool, annealer, geneToRule, l2Architect,
                 counterfactualGate: counterfactual, minLoopInterval: TimeSpan.FromMinutes(5),
                 intentClassifier: intentClassifier, semanticAnchor: semanticAnchor,

@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RunSettings>
+  <!-- ═══ LTAI 测试运行配置 ═══ -->
+  <DataCollectionRunSettings>
+    <DataCollectors>
+      <DataCollector friendlyName="XPlat Code Coverage">
+        <Configuration>
+          <Format>cobertura,json</Format>
+          <Exclude>
+            <!-- 跳过测试项目自身 -->
+            [LTAI.Tests]*</Exclude>
+          <ExcludeByAttribute>
+            <!-- 跳过 CompilerGenerated / DebuggerDisplay 等 -->
+            System.CodeDom.Compiler.GeneratedCodeAttribute
+          </ExcludeByAttribute>
+          <IncludeByAssembly>
+            <!-- 只度量我们自己项目的覆盖率 -->
+            <Include>LTAI.Core</Include>
+            <Include>LTAI.Agent</Include>
+            <Include>LTAI.AI</Include>
+            <Include>LTAI.DNA</Include>
+            <Include>LTAI.Knowledge</Include>
+            <Include>LTAI.Models</Include>
+            <Include>LTAI.Tools</Include>
+            <Include>LTAI.Planning</Include>
+            <Include>LTAI.Infra</Include>
+            <Include>LTAI.Economy</Include>
+            <Include>LTAI.MCP</Include>
+          </IncludeByAssembly>
+        </Configuration>
+      </DataCollector>
+    </DataCollectors>
+  </DataCollectionRunSettings>
+
+  <!-- ═══ 并行度（利用多核加速） ═══ -->
+  <RunConfiguration>
+    <MaxCpuCount>0</MaxCpuCount>     <!-- 0 = 使用所有可用核心 -->
+    <ResultsDirectory>TestResults</ResultsDirectory>
+    <EnvironmentVariables>
+      <LTAI_SKIP_ONNX>true</LTAI_SKIP_ONNX>      <!-- CI/本地跳过 ONNX 模型加载 -->
+      <LTAI_SKIP_NETWORK>true</LTAI_SKIP_NETWORK> <!-- 跳过真实网络调用 -->
+    </EnvironmentVariables>
+  </RunConfiguration>
+
+  <!-- ═══ 部分测试需要更长超时 ═══ -->
+  <TestRunParameters>
+    <Parameter name="TimeoutShort" value="5000" />
+    <Parameter name="TimeoutLong" value="30000" />
+  </TestRunParameters>
+</RunSettings>

@@ -33,6 +33,7 @@ public static class EntryPoint
     {
         Console.OutputEncoding = Encoding.UTF8;
         Console.InputEncoding = Encoding.UTF8;
+        Console.TreatControlCAsInput = true;
 
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
         {
@@ -78,6 +79,7 @@ public static class EntryPoint
         services.AddLTAIMemory();
         services.AddLTAIDNA();
         services.AddLTAICapability();
+        services.AddLTAIAgent();
         services.AddLTAIMAF();
 
         var sp = services.BuildServiceProvider();

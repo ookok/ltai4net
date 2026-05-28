@@ -1,39 +1,50 @@
-# LTAI V1.0 multi-platform publish (single-file self-contained)
+# LTAI 发布脚本 — 自包含 JIT（目录发布，非 single file）
 # Usage: .\publish.ps1 [-Platform win-x64|linux-x64|osx-arm64]
 param([string]$Platform = "win-x64")
 
 Set-Location $PSScriptRoot
 
-Write-Host "=== LTAI V1.0 Publish (single-file, $Platform) ===" -ForegroundColor Cyan
+$outRoot = "dist/$Platform"
+Write-Host "=== LTAI Publish (self-contained JIT, $Platform) ===" -ForegroundColor Cyan
+Write-Host "Output: $outRoot/" -ForegroundColor Cyan
+Write-Host ""
 
-$outDir = "dist/release/$Platform"
-New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+$ext = if ($Platform -like "win*") { ".exe" } else { "" }
+
+$apps = @(
+    @{ Name = "LTAI.Cli";    Dir = "";      Desc = "CLI" }
+    @{ Name = "LTAI.TUI";    Dir = "tui";   Desc = "Terminal UI" }
+    @{ Name = "LTAI.Host";   Dir = "host";  Desc = "Web Host" }
+    @{ Name = "LTAI.MCP";    Dir = "mcp";   Desc = "MCP Server" }
+)
 
 $publishArgs = @(
     "-c", "Release",
     "-r", $Platform,
-    "-p:PublishSingleFile=true",
-    "-p:SelfContained=true",
-    "-p:IncludeNativeLibrariesForSelfExtract=true",
-    "-o", $outDir
+    "--self-contained", "true",
+    "-p:SatelliteResourceLanguages=zh-Hans%3Ben",
+    "-p:IncludeSymbols=false"
 )
 
-@("LTAI.Cli","LTAI.Host","LTAI.MCP","LTAI.TUI","LTAI.WebApp") | ForEach-Object {
-    Write-Host "  $_ ... " -NoNewline
-    & dotnet publish "src/$_/$_.csproj" @publishArgs 2>&1 | Out-Null
-    if ($LASTEXITCODE -eq 0) { Write-Host "OK" -ForegroundColor Green }
-    else { Write-Host "FAIL (exit $LASTEXITCODE)" -ForegroundColor Red }
+foreach ($app in $apps) {
+    $outDir = if ($app.Dir -eq "") { $outRoot } else { "$outRoot/$($app.Dir)" }
+    $proj = "src/$($app.Name)/$($app.Name).csproj"
+    
+    Write-Host "  [$($app.Desc)] $($app.Name) ... " -NoNewline
+    
+    & dotnet publish $proj @publishArgs -o $outDir *>&1 | Out-Null
+    
+    if ($LASTEXITCODE -eq 0) {
+        $exePath = "$outDir/$($app.Name)$ext"
+        $size = if (Test-Path $exePath) { "{0:N0} KB" -f ((Get-Item $exePath).Length / 1KB) } else { "?" }
+        Write-Host "OK ($size)" -ForegroundColor Green
+    } else {
+        Write-Host "FAIL (exit $LASTEXITCODE)" -ForegroundColor Red
+    }
 }
 
-# Generate platform-specific CLI shortcut
-$ext = if ($Platform -like "win*") { ".exe" } else { "" }
-Copy-Item "$outDir/LTAI.Cli$ext" "dist/ltai-$Platform$ext" -Force -ErrorAction SilentlyContinue
-
 Write-Host ""
-Write-Host "Output: $outDir/" -ForegroundColor Cyan
-Get-ChildItem "$outDir/*$ext" | ForEach-Object {
-    $sizeMB = [math]::Round($_.Length / 1MB, 1)
-    Write-Host "  $($_.Name)  ($sizeMB MB)" -ForegroundColor White
-}
-Write-Host ""
-Write-Host "CLI binary: dist/ltai-$Platform$ext" -ForegroundColor Green
+Write-Host "=== Done ===" -ForegroundColor Cyan
+Write-Host "CLI:        $outRoot/LTAI.Cli$ext" -ForegroundColor Green
+Write-Host "Web Host:   $outRoot/host/LTAI.Host$ext" -ForegroundColor Green
+Write-Host "MCP Server: $outRoot/mcp/LTAI.MCP$ext" -ForegroundColor Green

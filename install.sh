@@ -105,18 +105,17 @@ main() {
     ok "LTAI CLI installed successfully!"
     echo ""
     echo -e "  ${BOLD}Next steps:${NC}"
-    echo -e "    ltai init          Configure your environment"
-    echo -e "    ltai install       Download core runtime"
+    echo -e "    ltai setup         Configure AI providers and models"
     echo -e "    ltai up            Start TUI"
     echo ""
 
-    # auto-run init if first install
+    # auto-run setup if first install
     local ext=""
     [ "$platform" = windows-* ] && ext=".exe"
     if [ -t 0 ]; then
-        read -rp "  Run 'ltai init' now? [Y/n] " answer
+        read -rp "  Run 'ltai setup' now? [Y/n] " answer
         if [ "$answer" != "n" ] && [ "$answer" != "N" ]; then
-            "${INSTALL_DIR}/bin/ltai${ext}" init
+            "${INSTALL_DIR}/bin/ltai${ext}" setup
         fi
     fi
 }

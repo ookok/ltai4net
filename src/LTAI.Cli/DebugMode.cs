@@ -4,8 +4,8 @@ using System.Text;
 using LTAI.AI;
 using LTAI.AI.Governors;
 using LTAI.Agent;
-using LTAI.Agent.Tools;
 using LTAI.Agent.MAF;
+using LTAI.Agent.Tools;
 using LTAI.Cli.Debug;
 using LTAI.Core;
 using LTAI.Core.Configuration;
@@ -14,6 +14,7 @@ using LTAI.Core.Setup;
 using LTAI.Knowledge.Vector;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using LTAI.Knowledge.Core;
@@ -42,47 +43,63 @@ internal static class DebugMode
 
         if (!File.Exists(configPath) || new FileInfo(configPath).Length < 30)
         {
-            Console.WriteLine("未检测到配置文件，正在运行配置向导...");
-            var wizard = new InteractiveSetupWizard(configPath);
-            await wizard.RunAsync().ConfigureAwait(false);
+            Console.WriteLine("未检测到配置文件，使用环境变量自动生成...");
+            AutoBootstrapConfig(configPath);
         }
 
         var configuration = new ConfigurationBuilder()
             .AddJsonFile(configPath, optional: true, reloadOnChange: false)
             .Build();
 
-        var services = new ServiceCollection();
-
-        var ltaiOptions = new LTAIOptions();
-        configuration.GetSection(LTAIOptions.SectionName).Bind(ltaiOptions);
-        if (ltaiOptions.AI.Providers.Count == 0)
-        {
-            ltaiOptions.AI.Providers["deepseek"] = new ProviderConfig
+        Console.Write("正在初始化服务容器...");
+        var host = Host.CreateDefaultBuilder()
+            .ConfigureAppConfiguration(cfg => cfg.AddJsonFile(configPath, optional: true, reloadOnChange: false))
+            .ConfigureServices((ctx, services) =>
             {
-                Endpoint = OptionService.Get("deepseek.endpoint") ?? "https://api.deepseek.com",
-                Model = OptionService.Get("deepseek.model") ?? "deepseek-v4-pro"
-            };
-            ltaiOptions.AI.Providers["deepseek-fast"] = new ProviderConfig
-            {
-                Endpoint = OptionService.Get("deepseek.fast.endpoint") ?? "https://api.deepseek.com",
-                Model = OptionService.Get("deepseek.fast.model") ?? "deepseek-v4-flash"
-            };
-        }
-        services.AddSingleton(Options.Create(ltaiOptions));
+                var ltaiOptions = new LTAIOptions();
+                ctx.Configuration.GetSection(LTAIOptions.SectionName).Bind(ltaiOptions);
+                if (ltaiOptions.AI.Providers.Count == 0)
+                {
+                    ltaiOptions.AI.Providers["deepseek"] = new ProviderConfig
+                    {
+                        Endpoint = OptionService.Get("deepseek.endpoint") ?? "https://api.deepseek.com",
+                        Model = OptionService.Get("deepseek.model") ?? "deepseek-v4-pro"
+                    };
+                    ltaiOptions.AI.Providers["deepseek-fast"] = new ProviderConfig
+                    {
+                        Endpoint = OptionService.Get("deepseek.fast.endpoint") ?? "https://api.deepseek.com",
+                        Model = OptionService.Get("deepseek.fast.model") ?? "deepseek-v4-flash"
+                    };
+                }
+                services.AddSingleton(Options.Create(ltaiOptions));
 
-        services.AddLogging(b => b.AddConsole().SetMinimumLevel(LogLevel.Warning));
-        services.AddLTAICore();
-        services.AddLTAIVectorAuto();
-        services.AddLTAIAI();
+                services.AddLTAICore();
+                services.AddLTAIVectorAuto();
+                services.AddLTAIAgent();
+                services.AddLTAIAI();
+            })
+            .ConfigureHostOptions(o => o.ServicesStartConcurrently = false)
+            .Build();
+        Console.WriteLine(" OK");
 
-        var sp = services.BuildServiceProvider();
+        // 和 Host 启动方式一致: 创建 scope 再解析
+        using var scope = host.Services.CreateScope();
+        var sp = scope.ServiceProvider;
+
+        Console.Write("正在创建 LivingTree 系统...");
+        Console.Out.Flush();
         var livingTree = sp.GetRequiredService<ILivingTreeSystem>();
-        var options = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<LTAIOptions>>().Value;
+        Console.WriteLine(" OK");
 
+        Console.Write("正在加载配置...");
+        var options = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<LTAIOptions>>().Value;
+        Console.WriteLine(" OK");
+
+        Console.Write("正在注册工具...");
         var toolRegistry = sp.GetRequiredService<AIToolRegistry>();
         await toolRegistry.RegisterAllToolCategoriesAsync().ConfigureAwait(false);
         await sp.RegisterMarkdownToolsAsync(toolRegistry).ConfigureAwait(false);
-        Console.WriteLine($"可用 {toolRegistry.ListTools().Count()} 个工具（查询时按需选择）");
+        Console.WriteLine($" OK ({toolRegistry.ListTools().Count()} 个工具)");
 
         var hasProvider = options.AI.Providers.Any(kv => !string.IsNullOrEmpty(kv.Value.Endpoint));
         if (!hasProvider)
@@ -91,8 +108,9 @@ internal static class DebugMode
             return;
         }
 
-        try { await livingTree.InitializeAsync(); }
-        catch (Exception ex) { Console.WriteLine($"初始化失败: {ex.Message}"); return; }
+        Console.Write("正在初始化 LivingTree...");
+        try { await livingTree.InitializeAsync().ConfigureAwait(false); Console.WriteLine(" OK"); }
+        catch (Exception ex) { Console.WriteLine($" 失败: {ex.Message}"); return; }
 
         if (!string.IsNullOrEmpty(query))
         {
@@ -363,6 +381,48 @@ internal static class DebugMode
         }
 
         return results;
+    }
+
+    /// <summary>
+    /// Auto-generate a minimal appsettings.json from environment variables.
+    /// Avoids System.Text.Json reflection serialization to work around
+    /// JsonSerializerIsReflectionEnabledByDefault=false in the project.
+    /// </summary>
+    private static void AutoBootstrapConfig(string configPath)
+    {
+        var apiKey = Environment.GetEnvironmentVariable("DEEPSEEK_API_KEY")
+                  ?? Environment.GetEnvironmentVariable("OPENAI_API_KEY")
+                  ?? "";
+
+        var dir = Path.GetDirectoryName(configPath);
+        if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+
+        // Build JSON manually to avoid reflection-based serialization
+        var json = $$"""
+{
+  "ltai": {
+    "ai": {
+      "providers": {
+        "deepseek": {
+          "endpoint": "https://api.deepseek.com",
+          "model": "deepseek-v4-pro",
+          "apiKey": "{{apiKey}}"
+        },
+        "deepseek-fast": {
+          "endpoint": "https://api.deepseek.com",
+          "model": "deepseek-v4-flash",
+          "apiKey": "{{apiKey}}"
+        }
+      },
+      "l1": { "provider": "deepseek-fast", "model": "deepseek-chat" },
+      "l2": { "provider": "deepseek", "model": "deepseek-reasoner" },
+      "l0": { "provider": "local", "model": "embed" },
+      "maxTokens": 8192
+    }
+  }
+}
+""";
+        File.WriteAllText(configPath, json);
     }
 
     private static string? FindRootDirectory(string startDir, string markerDir)

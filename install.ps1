@@ -56,12 +56,11 @@ Write-Host ""
 Write-Ok "LTAI CLI installed!"
 Write-Host ""
 Write-Host "  Next steps:"
-Write-Host "    ltai init          Configure your environment"
-Write-Host "    ltai install       Download core runtime"
+Write-Host "    ltai setup         Configure AI providers and models"
 Write-Host "    ltai up            Start TUI"
 Write-Host ""
 
-$answer = Read-Host "  Run 'ltai init' now? [Y/n]"
+$answer = Read-Host "  Run 'ltai setup' now? [Y/n]"
 if ($answer -ne "n" -and $answer -ne "N") {
-    & "${outPath}" init
+    & "${outPath}" setup
 }

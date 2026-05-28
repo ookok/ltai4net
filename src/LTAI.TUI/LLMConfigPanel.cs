@@ -73,7 +73,7 @@ public sealed class LLMConfigPanel
 
         return new Panel(new Markup(sb.ToString().TrimEnd()))
         {
-            Header = new PanelHeader($"[yellow]LLM [{ActiveLayerName}] — {SelectedModel}[/]"),
+            Header = new PanelHeader($"[yellow]LLM [[{ActiveLayerName}]] — {Markup.Escape(SelectedModel)}[/]"),
             Border = BoxBorder.Rounded
         };
     }

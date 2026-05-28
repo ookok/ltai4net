@@ -75,7 +75,7 @@ public static class ServiceCollectionExtensions
                     new ToolCallRepairMiddleware(innerClient,
                         sessionId: Guid.NewGuid().ToString("N")[..12],
                         logger: services.GetService<ILogger<ToolCallRepairMiddleware>>()))
-                .Build();
+                .Build(services: sp);
 
             return new RescueParsingChatClient(pipeline, sp.GetService<ILogger<RescueParsingChatClient>>());
         });

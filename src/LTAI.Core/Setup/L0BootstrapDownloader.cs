@@ -270,10 +270,7 @@ public sealed class L0BootstrapDownloader
     {
         if (version.Contains("bge-small", StringComparison.OrdinalIgnoreCase))
             return true;
-        if (version.Contains("jina", StringComparison.OrdinalIgnoreCase) &&
-            version.Contains("nano", StringComparison.OrdinalIgnoreCase))
-            return true;
-        if (version.Contains("needle", StringComparison.OrdinalIgnoreCase))
+        if (version.Contains("rapidocr", StringComparison.OrdinalIgnoreCase))
             return true;
 
         return false;
