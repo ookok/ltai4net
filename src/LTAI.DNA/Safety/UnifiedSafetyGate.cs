@@ -78,6 +78,8 @@ public sealed class UnifiedSafetyGate
         _logger = logger;
         _coordinator = coordinator;
         _policy = policy;
+        // externalToolValidator is wired by LTAI.Agent.ServiceCollectionExtensions SafetyGateWireUp
+        // If null, EvaluateToolCall will throw — this is intentional to force proper DI wiring.
         _externalToolValidator = externalToolValidator;
         var t = options.Value.Thresholds;
         _encodedInjectionRiskThreshold = t.EncodedInjectionRiskThreshold;
@@ -162,20 +164,12 @@ public sealed class UnifiedSafetyGate
     {
         if (string.IsNullOrWhiteSpace(input)) return false;
 
-        // Priority 1: External validator (e.g., ShellCommandValidator from LTAI.Agent)
-        if (_externalToolValidator != null)
-            return _externalToolValidator(toolName, input);
-
-        // Priority 2: Built-in patterns as fallback
-        var blockedPatterns = new[]
-        {
-            @"rm\s+-rf\s+/", @"\|\s*(bash|sh|pwsh)\b",
-            @"(curl|wget)\s+\S+\s*\|\s*\w+", @"\b(Invoke-Expression|iex)\b",
-            @"chmod\s+777\s+/", @":\(\)\s*\{\s*:\|:\s*&\s*\}\s*;"
-        };
-
-        return !blockedPatterns.Any(p =>
-            Regex.IsMatch(input, p, RegexOptions.IgnoreCase));
+        // Delegated to ShellCommandValidator via DI wiring (LTAI.Agent ServiceCollectionExtensions)
+        // The external validator provides 3-layer defense (16 regex patterns + 18 unsafe prefixes)
+        return _externalToolValidator?.Invoke(toolName, input)
+            ?? throw new InvalidOperationException(
+                "EvaluateToolCall requires an external validator. " +
+                "Ensure LTAI.Agent.ServiceCollectionExtensions SafetyGateWireUp is registered.");
     }
 
     public Dictionary<string, object> GetStats()

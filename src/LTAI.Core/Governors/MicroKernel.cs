@@ -83,6 +83,7 @@ public sealed record KernelSandboxConfig
     public HashSet<string> AllowedDomains { get; init; } = new(StringComparer.OrdinalIgnoreCase);
     public HashSet<string> BlockedDomains { get; init; } = new(StringComparer.OrdinalIgnoreCase);
     public HashSet<string> AllowedCommands { get; init; } = new(StringComparer.OrdinalIgnoreCase);
+    public HashSet<int> AllowedPorts { get; init; } = new() { 80, 443 };
     public TimeSpan DefaultProcessTimeout { get; init; } = TimeSpan.FromSeconds(120);
     public long MaxFileReadBytes { get; init; } = 50 * 1024 * 1024;
     public long MaxFileWriteBytes { get; init; } = 10 * 1024 * 1024;
@@ -328,9 +329,9 @@ public sealed record KernelAuditEntry
 
 public interface IMicroKernel
 {
-    Task<KernelResult> ExecuteAsync(KernelOp op, CancellationToken ct = default);
-    Task<KernelResult> ReadFileAsync(string path, CancellationToken ct = default);
-    Task<KernelResult> WriteFileAsync(string path, string content, CancellationToken ct = default);
+    Task<KernelResult> ExecuteAsync(KernelOp op, CancellationToken ct = default, string? capToken = null);
+    Task<KernelResult> ReadFileAsync(string path, CancellationToken ct = default, string? capToken = null);
+    Task<KernelResult> WriteFileAsync(string path, string content, CancellationToken ct = default, string? capToken = null);
     Task<KernelResult> GitOpAsync(string opCode, string args, CancellationToken ct = default);
     Task<KernelResult> HttpRequestAsync(KernelHttpRequest req, CancellationToken ct = default);
     Task<KernelResult> InvokeSkillAsync(string skillName, string input, CancellationToken ct = default);
@@ -378,6 +379,7 @@ public sealed class MicroKernel : IMicroKernel
     private Func<string, string, CancellationToken, Task<string>>? _skillHandler;
     private Func<string, int, CancellationToken, Task<string>>? _memoryHandler;
     private readonly int _maxAuditEntries;
+    private readonly AuditLogService? _auditLog;
     private readonly ConcurrentDictionary<string, (Task Task, CancellationTokenSource Cts)> _scheduledTasks = new();
 
     private readonly ConcurrentDictionary<string, (string EventType, string? Niche, KernelEventCallback Callback)> _subscriptions = new();
@@ -416,7 +418,8 @@ public sealed class MicroKernel : IMicroKernel
         SemanticDiffAgent? diffAgent = null,
         int maxAuditEntries = 1000,
         ILogger? logger = null,
-        ITraceContext? traceContext = null)
+        ITraceContext? traceContext = null,
+        AuditLogService? auditLog = null)
     {
         _workspaceRoot = Path.GetFullPath(workspaceRoot);
         _http = http ?? new HttpClient();
@@ -431,6 +434,7 @@ public sealed class MicroKernel : IMicroKernel
         _traceContext = traceContext;
         _circuitBreaker.OnRollbackTriggered += async (count) => await HandleRollbackAsync(count);
         _concurrencyGate = new SemaphoreSlim(_sandboxConfig.MaxConcurrentOps);
+        _auditLog = auditLog;
         _capToken = new KernelCapToken(_workspaceRoot);
 
         foreach (var p in _vitalPrimitives)
@@ -457,8 +461,11 @@ public sealed class MicroKernel : IMicroKernel
     // Primitive 1: ExecuteAsync — CLI / Process execution (sandboxed)
     // ========================================================================
 
-    public async Task<KernelResult> ExecuteAsync(KernelOp op, CancellationToken ct = default)
+    public async Task<KernelResult> ExecuteAsync(KernelOp op, CancellationToken ct = default, string? capToken = null)
     {
+        if (capToken != null && !ValidateCapToken(capToken, KernelPermission.Execute, null))
+            return KernelResult.Fail("CapToken validation failed", 0);
+
         var sw = Stopwatch.StartNew();
         var traceId = Guid.NewGuid().ToString("N")[..8];
 
@@ -565,8 +572,11 @@ public sealed class MicroKernel : IMicroKernel
     // Primitive 2: ReadFileAsync (sandboxed)
     // ========================================================================
 
-    public async Task<KernelResult> ReadFileAsync(string path, CancellationToken ct = default)
+    public async Task<KernelResult> ReadFileAsync(string path, CancellationToken ct = default, string? capToken = null)
     {
+        if (capToken != null && !ValidateCapToken(capToken, KernelPermission.Read, path))
+            return KernelResult.Fail("CapToken validation failed", 0);
+
         var sw = Stopwatch.StartNew();
         var traceId = Guid.NewGuid().ToString("N")[..8];
 
@@ -607,8 +617,11 @@ public sealed class MicroKernel : IMicroKernel
     // Primitive 3: WriteFileAsync — atomic temp+rename (sandboxed)
     // ========================================================================
 
-    public async Task<KernelResult> WriteFileAsync(string path, string content, CancellationToken ct = default)
+    public async Task<KernelResult> WriteFileAsync(string path, string content, CancellationToken ct = default, string? capToken = null)
     {
+        if (capToken != null && !ValidateCapToken(capToken, KernelPermission.Write, path))
+            return KernelResult.Fail("CapToken validation failed", 0);
+
         var sw = Stopwatch.StartNew();
         var traceId = Guid.NewGuid().ToString("N")[..8];
 
@@ -865,7 +878,21 @@ public sealed class MicroKernel : IMicroKernel
 
     // ========================================================================
     // Evolution Primitive 1: AdjustParameterAsync
+    // Generic config mutation — the kernel knows NO business logic.
+    // Components register handlers via AddConfigHandler to receive parameter changes.
     // ========================================================================
+
+    private readonly Dictionary<string, Action<string, object>> _configHandlers = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Register a handler for a component's parameter changes.
+    /// Called at DI startup — e.g., BootstrapTeacher registers itself for "bootstrap" component.
+    /// This keeps the kernel free of upper-layer business logic.
+    /// </summary>
+    public void AddConfigHandler(string component, Action<string, object> handler)
+    {
+        _configHandlers[component.ToLowerInvariant()] = handler;
+    }
 
     public async Task<KernelResult> AdjustParameterAsync(string component, string key, object value, CancellationToken ct = default)
     {
@@ -874,39 +901,23 @@ public sealed class MicroKernel : IMicroKernel
 
         try
         {
-            switch (component.ToLowerInvariant())
+            var comp = component.ToLowerInvariant();
+
+            // Route to registered handler (generic, no kernel business logic)
+            if (_configHandlers.TryGetValue(comp, out var handler))
             {
-                case "teacher" or "bootstrapteacher":
-                    if (Teacher == null)
-                        return KernelResult.Fail("Teacher not configured", sw.ElapsedMilliseconds);
-
-                    switch (key.ToLowerInvariant())
-                    {
-                        case "teachingquota":
-                            Teacher.TeachingQuota = Convert.ToInt32(value);
-                            break;
-                        case "teachingaccuracythreshold":
-                            Teacher.TeachingAccuracyThreshold = Convert.ToDouble(value);
-                            break;
-                        case "shadowingaccuracythreshold":
-                            Teacher.ShadowingAccuracyThreshold = Convert.ToDouble(value);
-                            break;
-                        case "stalematethreshold":
-                            Teacher.StalemateThreshold = Convert.ToInt32(value);
-                            break;
-                        case "stalematerelaxstep":
-                            Teacher.StalemateRelaxStep = Convert.ToDouble(value);
-                            break;
-                        case "maxrelaxation":
-                            Teacher.MaxRelaxation = Convert.ToDouble(value);
-                            break;
-                        default:
-                            return KernelResult.Fail($"Unknown parameter '{key}' for component '{component}'", sw.ElapsedMilliseconds);
-                    }
-                    break;
-
-                default:
-                    return KernelResult.Fail($"Unknown component '{component}'", sw.ElapsedMilliseconds);
+                handler(key, value);
+            }
+            // Legacy fallback: Teacher wiring — temporary backward compat
+            else if (comp is "teacher" or "bootstrapteacher" && Teacher != null)
+            {
+                ApplyTeacherParameter(key, value);
+            }
+            else
+            {
+                return KernelResult.Fail(
+                    $"Unknown component '{component}'. Register a config handler via AddConfigHandler first.",
+                    sw.ElapsedMilliseconds);
             }
 
             sw.Stop();
@@ -922,6 +933,24 @@ public sealed class MicroKernel : IMicroKernel
             sw.Stop();
             Audit(traceId, "config", false, sw.ElapsedMilliseconds, ex.Message);
             return KernelResult.Fail(ex.Message, sw.ElapsedMilliseconds);
+        }
+    }
+
+    /// <summary>
+    /// Legacy: apply Teacher parameters directly. Remove once BootstrapTeacher
+    /// registers via AddConfigHandler("bootstrap", ...).
+    /// </summary>
+    private void ApplyTeacherParameter(string key, object value)
+    {
+        switch (key.ToLowerInvariant())
+        {
+            case "teachingquota": Teacher!.TeachingQuota = Convert.ToInt32(value); break;
+            case "teachingaccuracythreshold": Teacher!.TeachingAccuracyThreshold = Convert.ToDouble(value); break;
+            case "shadowingaccuracythreshold": Teacher!.ShadowingAccuracyThreshold = Convert.ToDouble(value); break;
+            case "stalematethreshold": Teacher!.StalemateThreshold = Convert.ToInt32(value); break;
+            case "stalematerelaxstep": Teacher!.StalemateRelaxStep = Convert.ToDouble(value); break;
+            case "maxrelaxation": Teacher!.MaxRelaxation = Convert.ToDouble(value); break;
+            default: throw new ArgumentException($"Unknown Teacher parameter '{key}'");
         }
     }
 
@@ -944,7 +973,9 @@ public sealed class MicroKernel : IMicroKernel
 
             var activated = gene with { Niche = niche, Source = "kernel_loaded", CreatedAt = DateTime.UtcNow };
             GenePool.AddGene(activated);
-            GenePool.UpdateFitness(geneId, 0.7);
+            // Initial fitness comes from the gene's existing fitness, not a kernel default.
+            // The kernel does not decide gene quality — the evaluation layer does.
+            GenePool.UpdateFitness(geneId, gene.Fitness);
 
             sw.Stop();
             var traceId = Guid.NewGuid().ToString("N")[..8];
@@ -1424,6 +1455,16 @@ public sealed class MicroKernel : IMicroKernel
                     RiskScore = 0.95
                 };
 
+            // Port validation — only standard ports allowed by default (80, 443)
+            var port = uri.Port;
+            if (config.AllowedPorts.Count > 0 && !config.AllowedPorts.Contains(port))
+                return new DiffSafetyResult
+                {
+                    Safe = false,
+                    Reason = $"Port {port} is not in allowed ports{(niche != null ? $" [niche: {niche}]" : "")}",
+                    RiskScore = 0.80
+                };
+
             return new DiffSafetyResult { Safe = true };
         }
         catch
@@ -1441,13 +1482,51 @@ public sealed class MicroKernel : IMicroKernel
     // Capability Token — object-capability security model
     // ========================================================================
 
+    /// <summary>
+    /// Validate a CapToken for a primitive call. If token is null, operation proceeds
+    /// as kernel-internal (trusted caller). If non-null, the token must be valid
+    /// with the required permission and (optionally) path binding.
+    /// </summary>
+    private bool ValidateCapToken(string capToken, KernelPermission required, string? targetPath)
+    {
+        var info = _capToken.Validate(capToken);
+        if (!info.Valid)
+        {
+            _logger.LogWarning("CapToken rejected: {Reason}", info.Reason);
+            return false;
+        }
+        if ((info.Permissions & required) == 0)
+        {
+            _logger.LogWarning("CapToken lacks permission {Required} (has {Actual})", required, info.Permissions);
+            return false;
+        }
+        if (targetPath != null && info.TargetPath != null &&
+            !targetPath.StartsWith(info.TargetPath, StringComparison.OrdinalIgnoreCase))
+        {
+            _logger.LogWarning("CapToken path mismatch: {Target} not under {TokenPath}", targetPath, info.TargetPath);
+            return false;
+        }
+        return true;
+    }
+
     public string IssueCapToken(string subject, KernelPermission permissions, string targetPath, TimeSpan ttl)
     {
-        return _capToken.Issue(subject, permissions, targetPath, ttl);
+        var token = _capToken.Issue(subject, permissions, targetPath, ttl);
+        _auditLog?.Record("MicroKernel", "issue_token",
+            $"sub={subject}, perm={permissions}, path={targetPath}, ttl={ttl.TotalMinutes}min",
+            subject: subject,
+            result: "issued");
+        return token;
     }
 
     public async Task<KernelResult> WriteFileWithToken(string capToken, string content, CancellationToken ct = default)
     {
+        var validation = _capToken.Validate(capToken);
+        _auditLog?.Record("MicroKernel", "write_file_with_token",
+            $"valid={validation.Valid}, sub={validation.Subject}, path={validation.TargetPath}",
+            subject: validation.Subject,
+            riskScore: validation.Valid ? 0.0 : 1.0,
+            result: validation.Valid ? "allowed" : "blocked");
         var sw = Stopwatch.StartNew();
         var traceId = Guid.NewGuid().ToString("N")[..8];
 

@@ -157,16 +157,14 @@ public sealed class GenePool
     private readonly ConcurrentDictionary<string, List<string>> _nicheGeneIds = new();
     private readonly List<GeneGeneration> _history = new();
     private readonly Random _rng = new();
-    private readonly int _maxPopulation;
+    private readonly GenePoolConfig _config;
     private readonly ILogger<GenePool> _logger;
     private int _generation;
     private int _shareCounter;
 
-    private const int ShareInterval = 5;
-
-    public GenePool(int maxPopulation = 200, ILogger<GenePool>? logger = null)
+    public GenePool(GenePoolConfig? config = null, ILogger<GenePool>? logger = null)
     {
-        _maxPopulation = maxPopulation;
+        _config = config ?? new GenePoolConfig();
         _logger = logger ?? NullLogger<GenePool>.Instance;
     }
 
@@ -177,7 +175,7 @@ public sealed class GenePool
 
     public Gene AddGene(Gene gene)
     {
-        if (_genes.Count >= _maxPopulation && !_genes.ContainsKey(gene.Id))
+        if (_genes.Count >= _config.MaxPopulation && !_genes.ContainsKey(gene.Id))
         {
             // Find worst unprotected gene (protected genes are immune to eviction)
             var worst = _genes.Values
@@ -191,7 +189,7 @@ public sealed class GenePool
             foreach (var (niche, ids) in _nicheGeneIds)
                 ids.Remove(worst.Id);
             _logger.LogDebug("Gene pool full ({Count}/{Max}), evicted {EvictedId} (protected={Protected})",
-                _genes.Count, _maxPopulation, worst.Id, _genes.Values.Count(g => g.IsProtected));
+                _genes.Count, _config.MaxPopulation, worst.Id, _genes.Values.Count(g => g.IsProtected));
         }
 
         _genes[gene.Id] = gene;
@@ -370,7 +368,7 @@ public sealed class GenePool
             {
                 foreach (var eliteGene in bestPerNiche[sourceNiche])
                 {
-                    if (_genes.Count >= _maxPopulation) break;
+                    if (_genes.Count >= _config.MaxPopulation) break;
 
                     var sharedGene = new Gene
                     {
@@ -399,10 +397,15 @@ public sealed class GenePool
             shared, niches.Count);
     }
 
-    public GeneGeneration Evolve(int eliteCount = 5, int crossoverCount = 10, int mutateCount = 15)
+    public GeneGeneration Evolve(int eliteCount = 0, int crossoverCount = 0, int mutateCount = 0)
     {
+        // Use config defaults when called without explicit parameters
+        if (eliteCount == 0) eliteCount = _config.EliteCount;
+        if (crossoverCount == 0) crossoverCount = _config.CrossoverCount;
+        if (mutateCount == 0) mutateCount = _config.MutateCount;
+
         _shareCounter++;
-        if (_shareCounter % ShareInterval == 0)
+        if (_shareCounter % _config.ShareInterval == 0)
             ShareAcrossNiches();
 
         var niches = GetNiches();
@@ -434,7 +437,7 @@ public sealed class GenePool
                 var parent1 = SelectByFitness(niche);
                 var parent2 = SelectByFitness(niche);
                 if (parent1 == null || parent2 == null) continue;
-                if (_genes.Count >= _maxPopulation) break;
+                if (_genes.Count >= _config.MaxPopulation) break;
 
                 var child = Crossover(parent1, parent2);
                 AddGene(child);
@@ -445,7 +448,7 @@ public sealed class GenePool
             {
                 var parent = SelectByFitness(niche);
                 if (parent == null) continue;
-                if (_genes.Count >= _maxPopulation) break;
+                if (_genes.Count >= _config.MaxPopulation) break;
 
                 var strength = 0.1 + _rng.NextDouble() * 0.2;
                 var child = Mutate(parent, strength);
@@ -470,15 +473,17 @@ public sealed class GenePool
         };
 
         _history.Add(gen);
-        while (_history.Count > 50) _history.RemoveAt(0);
+        while (_history.Count > _config.HistoryMaxSize) _history.RemoveAt(0);
 
         // Plateau detection: warn and respond if max fitness hasn't improved in 10+ generations
         if (_history.Count >= 10)
         {
-            var recent = _history.TakeLast(10).ToList();
+            var window = (int)_config.PlateauWindow;
+            var recent = _history.TakeLast(window).ToList();
             var currentMax = recent[^1].MaxFitness;
-            var plateaued = recent.All(g => g.MaxFitness <= currentMax + 0.01 && g.MaxFitness >= currentMax - 0.01);
-            if (plateaued && currentMax < 0.95)
+            var plateaued = recent.All(g => g.MaxFitness <= currentMax + _config.PlateauTolerance
+                                         && g.MaxFitness >= currentMax - _config.PlateauTolerance);
+            if (plateaued && currentMax < _config.PlateauFitnessThreshold)
             {
                 _logger.LogWarning("GenePool: PLATEAU detected — max fitness {Max:F3} unchanged over {Count} generations. Injecting diversity...",
                     currentMax, _history.Count);

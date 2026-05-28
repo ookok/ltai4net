@@ -427,7 +427,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<GenePool>(sp =>
         {
             var logger = sp.GetService<ILogger<GenePool>>();
-            return new GenePool(maxPopulation: 200, logger: logger);
+            return new GenePool(config: new GenePoolConfig { MaxPopulation = 200 }, logger: logger);
         });
 
         services.AddSingleton<SimulatedAnnealer>(sp =>
@@ -526,6 +526,31 @@ public static class ServiceCollectionExtensions
                 };
 
             return new SafetyGateWireUp(); // marker singleton to ensure wiring runs once
+        });
+
+        // Wire MemoryEventBus subscribers
+        services.AddSingleton<EventBusWireUp>(sp =>
+        {
+            var eventBus = sp.GetRequiredService<LTAI.Core.System.IMemoryEventBus>();
+            var auditLog = sp.GetService<LTAI.Core.System.AuditLogService>();
+
+            // AuditLogService: record all memory events
+            if (auditLog != null)
+            {
+                eventBus.SubscribeAll(evt =>
+                {
+                    auditLog.Record(
+                        evt.Source,
+                        evt.Type.ToString(),
+                        evt.Detail,
+                        riskScore: evt.Metadata.TryGetValue("importance", out var imp)
+                            ? Convert.ToDouble(imp) : null,
+                        result: "recorded"
+                    );
+                });
+            }
+
+            return new EventBusWireUp();
         });
 
         return services;
@@ -763,3 +788,4 @@ public static class ServiceCollectionExtensions
 /// Marker type for DI — ensures the UnifiedSafetyGate delegate wiring runs exactly once at startup.
 /// </summary>
 file sealed record SafetyGateWireUp;
+file sealed record EventBusWireUp;
