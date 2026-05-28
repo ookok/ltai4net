@@ -77,13 +77,6 @@ public sealed class ParetoRouter
 
         Interlocked.Increment(ref _totalDecisions);
 
-        if (_totalDecisions % 1000 == 0 && _totalDecisions > 0)
-        {
-            var dim = _projectionMatrix.Length > 0 ? _projectionMatrix[0].Length : 768;
-            InitializeProjectionMatrix(dim);
-            _logger.LogDebug("ParetoRouter: projection refreshed at {N} decisions", _totalDecisions);
-        }
-
         var isShadow = ShouldShadowRoute();
 
         if (triggerOverride != null)
@@ -255,6 +248,24 @@ public sealed class ParetoRouter
         PruneDominated();
     }
 
+    /// <summary>
+    /// Explicitly recalibrate the projection matrix and re-score all frontier points.
+    /// Call this only when model embedding dimension changes — not automatically every N decisions.
+    /// </summary>
+    public void RecalibrateFrontier(int newEmbeddingDim)
+    {
+        lock (_mergeLock)
+        {
+            var newMatrix = InitializeProjectionMatrix(newEmbeddingDim);
+            for (var i = 0; i < 3 && i < newMatrix.Length; i++)
+            {
+                _projectionMatrix[i] = new float[newMatrix[i].Length];
+                Array.Copy(newMatrix[i], _projectionMatrix[i], newMatrix[i].Length);
+            }
+        }
+        _logger.LogInformation("ParetoRouter: projection matrix recalibrated to dim={Dim}", newEmbeddingDim);
+    }
+
     public void UpdateProjectionMatrix(float[][] matrix)
     {
         lock (_mergeLock)
@@ -382,7 +393,7 @@ public sealed class ParetoRouter
 
     private static float[][] InitializeProjectionMatrix(int embeddingDim)
     {
-        var rng = new Random(42);
+        var rng = Random.Shared;  // Non-deterministic — matrix actually changes on each refresh
         var matrix = new float[3][];
         for (var i = 0; i < 3; i++)
         {
@@ -435,7 +446,7 @@ public sealed class ParetoRouter
 
         var seeds = new[]
         {
-            new ParetoPoint { Id = "seed_reflex",   Label = "reflex",  Quality = 0.30f, Speed = 1.00f, Cost = 0.00f },
+            new ParetoPoint { Id = "seed_reflex",   Label = "reflex",  Quality = 0.45f, Speed = 1.00f, Cost = 0.00f },
             new ParetoPoint { Id = "seed_local",    Label = "local",   Quality = 0.55f, Speed = 0.80f, Cost = 0.05f },
             new ParetoPoint { Id = "seed_l1",       Label = "L1",      Quality = 0.75f, Speed = 0.50f, Cost = 0.15f },
             new ParetoPoint { Id = "seed_l2",       Label = "L2",      Quality = 0.95f, Speed = 0.15f, Cost = 1.00f },

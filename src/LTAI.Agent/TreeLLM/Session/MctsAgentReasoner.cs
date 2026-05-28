@@ -1,4 +1,7 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Security.Cryptography;
+using System.Text;
 using LTAI.Core.System;
 using LTAI.Knowledge.Core;
 using LTAI.Knowledge.Core.Models;
@@ -87,6 +90,10 @@ public sealed class MctsAgentReasoner
     private readonly AgenticRAG _agenticRAG;
     private readonly ILogger<MctsAgentReasoner>? _logger;
 
+    // Memoization cache: task hash → MctsResult
+    private static readonly ConcurrentDictionary<string, MctsResult> _memoCache = new();
+    private const int MaxMemoCacheSize = 200;
+
     public MctsAgentReasoner(
         IChatClient chatClient,
         Prompting.PromptBuilder promptBuilder,
@@ -106,6 +113,15 @@ public sealed class MctsAgentReasoner
     {
         var cfg = config ?? new MctsConfig();
         var sw = Stopwatch.StartNew();
+
+        // Memoization: check cache by task hash
+        var taskHash = ComputeTaskHash(taskDescription, cfg);
+        if (_memoCache.TryGetValue(taskHash, out var cached))
+        {
+            _logger?.LogDebug("MCTS cache hit: {Hash} — returning cached result (sims={Sims})",
+                taskHash, cached.Simulations);
+            return cached;
+        }
 
         var root = new MctsNode
         {
@@ -141,7 +157,7 @@ public sealed class MctsAgentReasoner
             "MCTS: simulations={Sims} nodes={Nodes} bestValue={Value:F3} chain={ChainLen} {Ms}ms",
             simulations, CountNodes(root), bestValue, reasoningChain.Count, sw.ElapsedMilliseconds);
 
-        return new MctsResult
+        var result = new MctsResult
         {
             BestReasoningChain = reasoningChain,
             BestValue = Math.Round(bestValue, 4),
@@ -151,6 +167,16 @@ public sealed class MctsAgentReasoner
             Root = root,
             NodeDepthStats = ComputeDepthStats(root)
         };
+
+        // Store in memoization cache (LRU by insertion order)
+        _memoCache[taskHash] = result;
+        if (_memoCache.Count > MaxMemoCacheSize)
+        {
+            var oldest = _memoCache.OrderBy(kv => kv.Value.ElapsedMs).FirstOrDefault();
+            if (oldest.Key != null) _memoCache.TryRemove(oldest.Key, out _);
+        }
+
+        return result;
     }
 
     private async Task<MctsNode> Selection(MctsNode node, MctsConfig cfg, CancellationToken ct)
@@ -479,6 +505,20 @@ public sealed class MctsAgentReasoner
 
         Traverse(root, "", 0);
         return string.Join("\n", lines);
+    }
+
+    /// <summary>Compute a deterministic hash for memoization key.</summary>
+    private static string ComputeTaskHash(string taskDescription, MctsConfig config)
+    {
+        var input = $"{taskDescription}|{config.MaxSimulations}|{config.MaxDepth}|{config.ExplorationConstant}|{config.MaxBranches}";
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(input));
+        return Convert.ToHexStringLower(hash)[..16];
+    }
+
+    /// <summary>Clear the memoization cache (e.g., after significant context change).</summary>
+    public static void ClearMemoCache()
+    {
+        _memoCache.Clear();
     }
 }
 
