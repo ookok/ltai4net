@@ -32,6 +32,8 @@ public sealed class GitWorktreeManager : IDisposable
     private readonly ConcurrentDictionary<string, DateTime> _worktreeTimestamps = new();
     private readonly Repository _repo;
     private readonly SemaphoreSlim _repoLock = new(1, 1);
+    private const int MaxWorktrees = 50;
+    private readonly string _timestampFile;
 
     public GitWorktreeManager(
         string repoRoot,
@@ -41,10 +43,14 @@ public sealed class GitWorktreeManager : IDisposable
         _repoRoot = Path.GetFullPath(repoRoot);
         _worktreesDir = Path.GetFullPath(
             worktreesDir ?? Path.Combine(_repoRoot, ".livingtree", "worktrees"));
+        _timestampFile = Path.Combine(_worktreesDir, ".timestamps.json");
         _logger = logger ?? NullLogger<GitWorktreeManager>.Instance;
         _repo = new Repository(_repoRoot);
 
         Directory.CreateDirectory(_worktreesDir);
+
+        // Restore persisted timestamps (survive process restart)
+        LoadPersistedTimestamps();
     }
 
     public string GetWorktreesDir() => _worktreesDir;
@@ -56,6 +62,21 @@ public sealed class GitWorktreeManager : IDisposable
         CancellationToken ct = default)
     {
         var timestamp = DateTime.UtcNow;
+
+        // Enforce max worktrees limit — prevent unbounded disk growth
+        if (_worktreeTimestamps.Count >= MaxWorktrees)
+        {
+            var oldest = _worktreeTimestamps.OrderBy(kv => kv.Value).First();
+            _logger.LogWarning("Max worktrees ({Max}) reached — evicting oldest: {Branch}",
+                MaxWorktrees, oldest.Key);
+            // Find and remove the oldest worktree by path
+            var oldestPath = Path.Combine(_worktreesDir, oldest.Key.Replace('/', '_'));
+            if (Directory.Exists(oldestPath))
+                await RemoveWorktreeAsync(oldestPath, force: true, ct).ConfigureAwait(false);
+            else
+                _worktreeTimestamps.TryRemove(oldest.Key, out _);
+        }
+
         var branchName = $"worktree/{agentId}/{timestamp:yyyyMMdd-HHmmss}";
         var worktreePath = Path.Combine(_worktreesDir, branchName.Replace('/', '_'));
 
@@ -90,6 +111,7 @@ public sealed class GitWorktreeManager : IDisposable
             }
 
             _worktreeTimestamps[branchName] = timestamp;
+            PersistTimestamps();
 
             _logger.LogInformation("Created worktree for agent {Agent}: branch={Branch}, path={Path}",
                 agentId, branchName, worktreePath);
@@ -367,12 +389,54 @@ public sealed class GitWorktreeManager : IDisposable
     public void Touch(string branchName)
     {
         _worktreeTimestamps[branchName] = DateTime.UtcNow;
+        PersistTimestamps();
     }
 
     public void Dispose()
     {
+        PersistTimestamps();
         _repoLock.Dispose();
         _repo.Dispose();
+    }
+
+    // ========================================================================
+    // Timestamp persistence — survives process restart
+    // ========================================================================
+    private void LoadPersistedTimestamps()
+    {
+        try
+        {
+            if (File.Exists(_timestampFile))
+            {
+                var json = File.ReadAllText(_timestampFile);
+                var entries = System.Text.Json.JsonSerializer
+                    .Deserialize<Dictionary<string, DateTime>>(json);
+                if (entries != null)
+                {
+                    foreach (var (branch, time) in entries)
+                        _worktreeTimestamps[branch] = time;
+                    _logger.LogDebug("Loaded {Count} persisted worktree timestamps", entries.Count);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to load persisted worktree timestamps");
+        }
+    }
+
+    private void PersistTimestamps()
+    {
+        try
+        {
+            var dict = _worktreeTimestamps.ToDictionary(kv => kv.Key, kv => kv.Value);
+            var json = System.Text.Json.JsonSerializer.Serialize(dict);
+            File.WriteAllText(_timestampFile, json);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to persist worktree timestamps");
+        }
     }
 
     private string? ReadWorktreePath(string worktreeName)

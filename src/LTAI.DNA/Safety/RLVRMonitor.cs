@@ -4,6 +4,13 @@ namespace LTAI.DNA.Safety;
 
 public sealed class RLVRMonitor
 {
+    /// <summary>
+    /// Fired when any method enters critical degradation (confidence gap > CriticalGapThreshold).
+    /// Parameter 1: method name. Parameter 2: gap value.
+    /// Wire this in DI startup to trigger evolution via CoordinationScheduler.
+    /// </summary>
+    public event Action<string, double>? OnCriticalDegradation;
+
     private readonly Dictionary<string, List<RLVRSignal>> _history = new();
     private readonly Dictionary<string, int> _collapseSteps = new();
     private readonly int _windowSize;
@@ -73,7 +80,11 @@ public sealed class RLVRMonitor
                 : "normal";
 
             if (warning == "critical")
+            {
                 _collapseSteps[method] = window.Last().Cycle;
+                // Fire degradation event — higher layers can catch this to trigger evolution
+                OnCriticalDegradation?.Invoke(method, confidenceGap);
+            }
 
             return new RiseThenFallPattern
             {

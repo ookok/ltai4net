@@ -134,7 +134,7 @@ public sealed class ArchitectLoop
         TimeSpan? minLoopInterval = null,
         L0IntentClassifier? intentClassifier = null,
         SemanticAnchor? semanticAnchor = null,
-        SemanticDiffAgent? diffAgent = null,
+        SemanticDiffAgent? diffAgent = null, // TODO: make required after test suites updated
         IServiceProvider? serviceProvider = null,
         RecursiveCausalAudit? causalAudit = null,
         ILogger<ArchitectLoop>? logger = null)
@@ -322,13 +322,24 @@ public sealed class ArchitectLoop
                 try
                 {
                     var hitlType = Type.GetType("LTAI.Agent.Workflows.HumanInTheLoopReview, LTAI.Agent");
-                    var hitl = hitlType?.GetMethod("CreateReviewTask")?.Invoke(
-                        _serviceProvider.GetService(hitlType ?? typeof(object)),
-                        new object[] { "ArchitectLoop", $"Risk={proposal.Risk:F2}: {proposal.Description}",
-                            1.0 - proposal.Risk, null!, TimeSpan.FromHours(1), 2, proposal.Risk });
-                    _logger.LogInformation("HITL: review submitted for proposal {P}", proposal.Id);
+                    if (hitlType == null)
+                    {
+                        _logger.LogWarning("HITL review unavailable: LTAI.Agent assembly not loaded — Risk={Risk} proposal {P} cannot be reviewed",
+                            proposal.Risk, proposal.Id);
+                    }
+                    else
+                    {
+                        var hitl = hitlType.GetMethod("CreateReviewTask")?.Invoke(
+                            _serviceProvider.GetService(hitlType),
+                            new object[] { "ArchitectLoop", $"Risk={proposal.Risk:F2}: {proposal.Description}",
+                                1.0 - proposal.Risk, null!, TimeSpan.FromHours(1), 2, proposal.Risk });
+                        _logger.LogInformation("HITL: review submitted for proposal {P}", proposal.Id);
+                    }
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "HITL review failed for proposal {P}", proposal.Id);
+                }
             }
 
             proposal.Status = ProposalStatus.Pending;
@@ -353,7 +364,14 @@ public sealed class ArchitectLoop
                 proposal.Id, cfResult.DistributionShift, cfResult.RegretScore);
         }
 
-        if (_diffAgent != null)
+        // SemanticDiffAgent gate — REQUIRED for production safety.
+        // If null (test environment), log CRITICAL warning.
+        if (_diffAgent == null)
+        {
+            _logger.LogWarning("CRITICAL: SemanticDiffAgent is null — proposal {P} proceeds WITHOUT semantic safety check!",
+                proposal.Id);
+        }
+        else
         {
             var safetyResult = _diffAgent.EvaluateProposal(proposal);
             if (!safetyResult.Safe)
@@ -594,24 +612,34 @@ public sealed class ArchitectLoop
                         _serviceProvider != null)
                     {
                         var idStr = swapId?.ToString() ?? "";
-                        if (_deployedAgents.TryRemove(idStr, out var oldAgent))
-                            await oldAgent.DeactivateAsync(ct).ConfigureAwait(false);
 
+                        // Create new agent FIRST — creation failure leaves old agent running
                         var factories = _serviceProvider.GetServices<IAgentFactory>();
                         var factory = factories.FirstOrDefault(f =>
                             string.Equals(f.FactoryId, swapFactoryId?.ToString(), StringComparison.OrdinalIgnoreCase));
-                        if (factory != null)
+                        if (factory == null)
                         {
-                            var config = new Dictionary<string, object>
-                            {
-                                ["niche"] = proposal.Parameters.GetValueOrDefault("niche")?.ToString() ?? "general"
-                            };
-                            var newAgent = await factory.CreateAsync(config, ct).ConfigureAwait(false);
-                            await newAgent.ActivateAsync(ct).ConfigureAwait(false);
-                            _deployedAgents[newAgent.AgentId] = newAgent;
-                            _logger.LogInformation("HotSwapAgent: {OldId} → {NewId} via {FactoryId}",
-                                idStr, newAgent.AgentId, factory.FactoryId);
+                            _logger.LogWarning("HotSwapAgent: factory '{Factory}' not found", swapFactoryId);
+                            break;
                         }
+
+                        var config = new Dictionary<string, object>
+                        {
+                            ["niche"] = proposal.Parameters.GetValueOrDefault("niche")?.ToString() ?? "general"
+                        };
+                        var newAgent = await factory.CreateAsync(config, ct).ConfigureAwait(false);
+                        await newAgent.ActivateAsync(ct).ConfigureAwait(false);
+
+                        // NOW remove old agent (safe — new one is ready)
+                        if (_deployedAgents.TryRemove(idStr, out var oldAgent))
+                        {
+                            try { await oldAgent.DeactivateAsync(ct).ConfigureAwait(false); }
+                            catch (Exception ex) { _logger.LogWarning(ex, "HotSwapAgent: old agent deactivation failed (non-fatal)"); }
+                        }
+
+                        _deployedAgents[newAgent.AgentId] = newAgent;
+                        _logger.LogInformation("HotSwapAgent: {OldId} → {NewId} via {FactoryId}",
+                            idStr, newAgent.AgentId, factory.FactoryId);
                     }
                     else
                     {

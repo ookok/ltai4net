@@ -29,19 +29,21 @@ public sealed class CoordinationSchedulerHostedService : BackgroundService
         _logger = logger ?? NullLogger<CoordinationSchedulerHostedService>.Instance;
     }
 
-    protected override Task ExecuteAsync(CancellationToken stoppingToken)
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         _logger.LogInformation("Starting CoordinationScheduler dispatch loop");
 
         _scheduler.RegisterBootstrapRules(_teacher, _genePool, _annealer, _architect);
         _scheduler.Start();
 
-        stoppingToken.Register(() =>
+        // Avoid sync-over-async deadlock: async-wait on stoppingToken instead
+        try
         {
-            _logger.LogInformation("Stopping CoordinationScheduler");
-            _scheduler.StopAsync().GetAwaiter().GetResult();
-        });
+            await Task.Delay(Timeout.Infinite, stoppingToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) { }
 
-        return Task.CompletedTask;
+        _logger.LogInformation("Stopping CoordinationScheduler");
+        await _scheduler.StopAsync().ConfigureAwait(false);
     }
 }

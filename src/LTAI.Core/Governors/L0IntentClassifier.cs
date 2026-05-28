@@ -64,6 +64,14 @@ public sealed class L0IntentClassifier
 
         var confidence = maxPossible > 0 ? Math.Min((float)bestScore / maxPossible, 1.0f) : 0.0f;
 
+        // Low confidence fallback: if we can't classify confidently, mark as general
+        // to avoid routing a fuzzy match to a high-cost model tier
+        if (confidence < 0.5f)
+        {
+            _logger.LogInformation("Intent low confidence ({Conf:F2}) — falling back to 'general'", confidence);
+            return ("general", confidence);
+        }
+
         if (bestScore > 0)
         {
             _logger.LogDebug("Intent '{Domain}' matched (score={Score}/{Max}, confidence={Conf:F2})",

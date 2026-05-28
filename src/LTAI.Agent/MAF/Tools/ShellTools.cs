@@ -9,6 +9,12 @@ namespace LTAI.Agent.Tools;
 [Description("Command-line and script execution tools")]
 public sealed class ShellTools
 {
+    /// <summary>
+    /// External safety gate delegate — wired to UnifiedSafetyGate.EvaluateToolCall at DI startup.
+    /// Signature: (toolName, input) => isSafe. Set by ServiceCollectionExtensions.
+    /// </summary>
+    public static Func<string, string, bool>? ExternalSafetyGate { get; set; }
+
     private static readonly HashSet<string> _dangerousPatterns = new(StringComparer.OrdinalIgnoreCase)
     {
         "rm -rf /", "rm -rf /*", "del /f /s C:\\", "format", "shutdown", "reboot",
@@ -47,6 +53,10 @@ public sealed class ShellTools
                 return JsonSerializer.Serialize(new { error = $"Blocked shell metacharacter in command: '{word}'" });
             }
         }
+
+        // UnifiedSafetyGate integration (wired at DI startup)
+        if (ExternalSafetyGate != null && !ExternalSafetyGate("shell", command))
+            return JsonSerializer.Serialize(new { error = "Blocked by external safety gate" });
 
         string shellExe;
         string[] shellArgs;

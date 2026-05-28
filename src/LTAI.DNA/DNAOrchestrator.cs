@@ -84,6 +84,11 @@ public sealed class DNAOrchestrator
         _metaOptimizer = metaOptimizer;
         _compiler = compiler;
         _rlvr = rlvr;
+        _rlvr.OnCriticalDegradation += (method, gap) =>
+        {
+            _logger.LogWarning("DNA: Critical degradation detected in '{Method}' (gap={Gap:F3}) — evolution signal recommended",
+                method, gap);
+        };
         _identityNarrative = identityNarrative;
         _personality = personality;
         _contextEngineer = contextEngineer;
