@@ -49,7 +49,7 @@ public sealed class DebugQueryL4L5Tests
     [Fact]
     public void L4_GEN_01_GeneEvolution_GenePoolEvolves()
     {
-        var pool = new GenePool(maxPopulation: 20);
+        var pool = new GenePool(config: new GenePoolConfig { MaxPopulation = 20 });
 
         // Seed initial genes
         var seed = new Gene
@@ -81,7 +81,7 @@ public sealed class DebugQueryL4L5Tests
     [Fact]
     public async Task L4_GEN_02_SimulatedAnnealing_AnnealerStep()
     {
-        var pool = new GenePool(maxPopulation: 20);
+        var pool = new GenePool(config: new GenePoolConfig { MaxPopulation = 20 });
         var router = new ParetoRouter(embeddingDim: 4, metric: ParetoDistanceMetric.Euclidean);
 
         var annealer = new SimulatedAnnealer(pool, router);
@@ -150,7 +150,7 @@ public sealed class DebugQueryL4L5Tests
     [Fact]
     public void L4_FED_05_FederatedLearning_ShareAcrossNiches()
     {
-        var pool = new GenePool(maxPopulation: 30);
+        var pool = new GenePool(config: new GenePoolConfig { MaxPopulation = 30 });
 
         // Add genes in different niches
         var geneA = new Gene

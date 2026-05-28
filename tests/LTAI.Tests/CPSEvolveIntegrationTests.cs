@@ -41,7 +41,7 @@ public sealed class CPSEvolveIntegrationTests
     [Fact]
     public void GenePool_SeedEvolve_FitnessConverges()
     {
-        var pool = new GenePool(maxPopulation: 50);
+        var pool = new GenePool(config: new GenePoolConfig { MaxPopulation = 50 });
 
         var seeds = new List<Gene>
         {

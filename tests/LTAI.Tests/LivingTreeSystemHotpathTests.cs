@@ -50,7 +50,7 @@ public sealed class LivingTreeSystemHotpathTests
     {
         var router = new ParetoRouter(embeddingDim: 4, metric: ParetoDistanceMetric.Euclidean);
         var teacher = new BootstrapTeacher(router);
-        var genePool = new GenePool(maxPopulation: 20);
+        var genePool = new GenePool(config: new GenePoolConfig { MaxPopulation = 20 });
         var annealer = new SimulatedAnnealer(genePool, router);
         var geneToRule = new GeneToRule(genePool, router);
 

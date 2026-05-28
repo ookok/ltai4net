@@ -64,7 +64,9 @@ public static class ServiceCollectionExtensions
                 externalSafetyGate: (tool, input) => safetyGate.EvaluateToolCall(tool, input));
         });
         services.AddSingleton<SkillAwareDecomposer>();
+#pragma warning disable CS0618 // IntentRouter is [Obsolete] but still needed for agent-level routing
         services.AddSingleton<IntentRouter>();
+#pragma warning restore CS0618
         services.AddSingleton<UnifiedSemanticRouter>();
         services.AddSingleton<UnifiedIntentRouter>();
         services.AddSingleton<SpatialCache>();

@@ -382,7 +382,7 @@ public sealed class CPSEvolvePipelineTests
     {
         var router = CreateRouter();
         var teacher = new BootstrapTeacher(router);
-        var pool = new GenePool(maxPopulation: 50);
+        var pool = new GenePool(config: new GenePoolConfig { MaxPopulation = 50 });
         var annealer = new SimulatedAnnealer(pool, router);
         var geneToRule = new GeneToRule(pool, router);
 
