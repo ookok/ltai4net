@@ -93,6 +93,14 @@ public sealed class PolicyAsCode
     {
         _logger = logger;
         _ruleEngine = new EnhancedRuleEngine().WithStrategy(ConflictStrategy.Salience);
+
+        // Default: require signature verification for policy file integrity
+        // Caller must call SetSigningKey() before loading external policy files.
+        // Without a signing key, external policy loading will be rejected.
+        _requireSignature = true;
+        _logger?.LogWarning(
+            "PolicyAsCode: No signing key configured. External policy file loading requires SetSigningKey(). " +
+            "Without a key, only default built-in policies are active.");
     }
 
     /// <summary>
@@ -111,8 +119,15 @@ public sealed class PolicyAsCode
     /// </summary>
     private bool VerifySignature(string filePath)
     {
-        if (_signingKey == null || !_requireSignature)
-            return true; // signing not configured — allow
+        if (!_requireSignature)
+            return true; // signing disabled — allow all
+
+        if (_signingKey == null)
+        {
+            _logger?.LogWarning("PolicyAsCode: Signature verification required but no signing key set. Rejecting '{File}'.",
+                filePath);
+            return false; // require signature but no key — reject
+        }
 
         var sigPath = filePath + ".sig";
         if (!File.Exists(sigPath))

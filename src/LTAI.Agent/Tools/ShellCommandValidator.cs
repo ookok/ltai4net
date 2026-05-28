@@ -107,6 +107,7 @@ public static class ShellCommandValidator
 
     /// <summary>
     /// Validate a shell command against all three defense layers.
+    /// Checks the full command AND each line individually to prevent \n-based bypass.
     /// </summary>
     /// <returns>A tuple of (Allowed, Reason). If not allowed, Reason explains why.</returns>
     public static (bool Allowed, string Reason) Validate(string command)
@@ -116,10 +117,29 @@ public static class ShellCommandValidator
 
         var trimmed = command.Trim();
 
+        // Anti-bypass: validate each line individually (prevents \n/bin/sh bypass)
+        var lines = trimmed.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        foreach (var line in lines)
+        {
+            var lineTrimmed = line.Trim();
+            if (string.IsNullOrWhiteSpace(lineTrimmed)) continue;
+
+            var lineResult = ValidateLine(lineTrimmed);
+            if (!lineResult.Allowed)
+                return lineResult;
+        }
+
+        // Also validate the full joined command (catches multi-line constructs)
+        return ValidateLine(trimmed);
+    }
+
+    /// <summary>Validate a single line (or the full joined command).</summary>
+    private static (bool Allowed, string Reason) ValidateLine(string text)
+    {
         // Layer 1: Known dangerous patterns
         foreach (var (name, pattern) in DangerousPatterns)
         {
-            if (pattern.IsMatch(trimmed))
+            if (pattern.IsMatch(text))
             {
                 return (false, $"Blocked by dangerous pattern [{name}]: command matched destructive signature");
             }
@@ -128,24 +148,20 @@ public static class ShellCommandValidator
         // Layer 2: Remote code execution
         foreach (var (name, pattern) in RemoteExecutionPatterns)
         {
-            if (pattern.IsMatch(trimmed))
+            if (pattern.IsMatch(text))
             {
                 return (false, $"Blocked by remote execution pattern [{name}]: command attempts to fetch and execute remote code");
             }
         }
 
-        // Layer 3: Injection structural detection — check for dangerous constructs
-        // that are not part of a legitimate command's arguments
+        // Layer 3: Injection structural detection
         foreach (var pattern in InjectionPatterns)
         {
-            var match = pattern.Match(trimmed);
+            var match = pattern.Match(text);
             if (match.Success)
             {
-                // Allow eval/injection only in well-known safe contexts
-                // (e.g., echo "hello $(whoami)" is relatively safe, but curl | sh is not)
-                // For maximum safety, block all subshell injection in dynamic commands
-                var prefix = trimmed[..Math.Min(match.Index, trimmed.Length)];
-                if (IsAllowedContext(prefix, trimmed))
+                var prefix = text[..Math.Min(match.Index, text.Length)];
+                if (IsAllowedContext(prefix, text))
                     continue;
 
                 return (false, $"Blocked by injection pattern: command contains dangerous construct '{match.Value}'");
@@ -153,7 +169,7 @@ public static class ShellCommandValidator
         }
 
         // Check for unsafe command prefixes
-        var firstWord = trimmed.Split(' ', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
+        var firstWord = text.Split(' ', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
         if (firstWord != null && UnsafeCommandPrefixes.Contains(firstWord))
         {
             return (false, $"Blocked by privilege control: '{firstWord}' requires administrative privileges not granted in this context");

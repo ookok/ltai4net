@@ -60,6 +60,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<DaemonManager>();
         services.AddSingleton<Wsl2Manager>();
         services.AddSingleton<ResourceGuard>();
+        services.AddSingleton<AuditLogService>();
         services.AddHostedService<MemoryGraphCleanupService>();
 
         return services;
