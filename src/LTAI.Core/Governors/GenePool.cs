@@ -58,6 +58,7 @@ public sealed record Gene
     public double Fitness { get; set; }
     public int Trials { get; set; }
     public int Successes { get; set; }
+    public bool IsProtected { get; set; }
     public string Source { get; init; } = "seed";
     public string Niche { get; init; } = "general";
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
@@ -178,11 +179,19 @@ public sealed class GenePool
     {
         if (_genes.Count >= _maxPopulation && !_genes.ContainsKey(gene.Id))
         {
-            var worst = _genes.Values.OrderBy(g => g.Fitness).First();
+            // Find worst unprotected gene (protected genes are immune to eviction)
+            var worst = _genes.Values
+                .Where(g => !g.IsProtected)
+                .OrderBy(g => g.Fitness)
+                .FirstOrDefault();
+
+            if (worst == null) return gene; // all protected, reject new gene
+
             _genes.TryRemove(worst.Id, out _);
             foreach (var (niche, ids) in _nicheGeneIds)
                 ids.Remove(worst.Id);
-            _logger.LogDebug("Gene pool full ({Count}/{Max}), evicted {EvictedId}", _genes.Count, _maxPopulation, worst.Id);
+            _logger.LogDebug("Gene pool full ({Count}/{Max}), evicted {EvictedId} (protected={Protected})",
+                _genes.Count, _maxPopulation, worst.Id, _genes.Values.Count(g => g.IsProtected));
         }
 
         _genes[gene.Id] = gene;
@@ -399,9 +408,25 @@ public sealed class GenePool
         var niches = GetNiches();
         var born = 0;
 
+        // Unprotect all genes before selecting new elites
+        foreach (var kv in _genes)
+        {
+            _genes[kv.Key] = kv.Value with { IsProtected = false };
+        }
+
         foreach (var niche in niches.Append("general"))
         {
             var nicheGenes = SelectTopN(eliteCount, niche);
+
+            // Mark elite genes as protected from eviction
+            foreach (var elite in nicheGenes)
+            {
+                if (_genes.TryGetValue(elite.Id, out var existing))
+                {
+                    _genes[elite.Id] = existing with { IsProtected = true };
+                }
+            }
+
             born += nicheGenes.Count(g => _genes.ContainsKey(g.Id));
 
             for (var i = 0; i < crossoverCount / Math.Max(1, niches.Count); i++)
@@ -446,6 +471,44 @@ public sealed class GenePool
 
         _history.Add(gen);
         while (_history.Count > 50) _history.RemoveAt(0);
+
+        // Plateau detection: warn and respond if max fitness hasn't improved in 10+ generations
+        if (_history.Count >= 10)
+        {
+            var recent = _history.TakeLast(10).ToList();
+            var currentMax = recent[^1].MaxFitness;
+            var plateaued = recent.All(g => g.MaxFitness <= currentMax + 0.01 && g.MaxFitness >= currentMax - 0.01);
+            if (plateaued && currentMax < 0.95)
+            {
+                _logger.LogWarning("GenePool: PLATEAU detected — max fitness {Max:F3} unchanged over {Count} generations. Injecting diversity...",
+                    currentMax, _history.Count);
+
+                // Response 1: Boost mutation strength by 2x for next iteration
+                var boostedMutate = (int)(mutateCount * 1.5);
+                var boostedCross = (int)(crossoverCount * 1.3);
+
+                // Response 2: Inject random genes (5% of population)
+                var injectCount = Math.Max(3, _genes.Count / 20);
+                for (var i = 0; i < injectCount; i++)
+                {
+                    var novelty = new Gene
+                    {
+                        Condition = $"random_plateau_breaker_{_generation}_{i}",
+                        Action = "explore",
+                        Fitness = 0.1 + _rng.NextDouble() * 0.2,
+                        Niche = niches[_rng.Next(niches.Count)],
+                        IsProtected = false
+                    };
+                    AddGene(novelty);
+                }
+
+                // Response 3: Clear recent history to prevent repeated plateau warnings
+                _history.Clear();
+
+                _logger.LogInformation("GenePool: plateau response — injected {Inject} random genes, boosted mutation {Old}→{New}",
+                    injectCount, mutateCount, boostedMutate);
+            }
+        }
 
         _logger.LogInformation("Generation {Gen}: pop={Pop}, avgF={Avg:F3}, maxF={Max:F3}, born={Born}",
             _generation, _genes.Count, gen.AvgFitness, gen.MaxFitness, born);

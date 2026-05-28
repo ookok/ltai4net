@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
@@ -115,6 +116,31 @@ public sealed class FederatedLearningService : BackgroundService
         }
     }
 
+    // Basic dangerous patterns for received skills
+    /// <summary>Structured dangerous command pattern detection (replaces old substring blacklist).</summary>
+    private static readonly (string Name, Regex Pattern)[] ForbiddenSkillPatterns =
+    {
+        ("recursive_delete", new Regex(
+            @"(?:rm\s+(?:-rf|/f\s*/s)\s*[/\\])|(?:del\s+/[fq]\s*[/\\])", RegexOptions.IgnoreCase | RegexOptions.Compiled)),
+        ("disk_destroy", new Regex(
+            @"(?:dd\s+(?:if\s*=\s*)?/dev/|mkfs|format\s+[a-z]:|fdisk)", RegexOptions.IgnoreCase | RegexOptions.Compiled)),
+        ("system_shutdown", new Regex(
+            @"(?:shutdown|poweroff|halt|reboot|init\s+[06])", RegexOptions.IgnoreCase | RegexOptions.Compiled)),
+        ("remote_code", new Regex(
+            @"(?:curl|wget)\s+.*?[\|]\s*(?:sh|bash|zsh|dash|fish)", RegexOptions.IgnoreCase | RegexOptions.Compiled)),
+        ("dangerous_db", new Regex(
+            @"\b(?:DROP\s+(?:TABLE|DATABASE)|TRUNCATE\s+TABLE|DELETE\s+FROM|ALTER\s+TABLE\s+.*\s+DROP)\b",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled)),
+        ("code_exec", new Regex(
+            @"(?:eval\(|exec\(|system\(|shell_exec\(|subprocess\.|os\.system|Process\.Start)",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled)),
+        ("fork_bomb", new Regex(
+            @":\(\)\s*\{|:\|:|while\s+true\s*;?\s*do\s+fork", RegexOptions.IgnoreCase | RegexOptions.Compiled)),
+        ("reverse_shell", new Regex(
+            @"(?:nc\s+(?:-e\s+|[\w.]+:?\d+\s+-e\s+)|socat\s+|mkfifo\s+)",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled)),
+    };
+
     private async Task ReceiveSkillAsync(string payload, CancellationToken ct)
     {
         try
@@ -122,6 +148,18 @@ public sealed class FederatedLearningService : BackgroundService
             var msg = JsonSerializer.Deserialize<SkillShareMessage>(payload);
             if (msg == null || string.IsNullOrEmpty(msg.File) || string.IsNullOrEmpty(msg.Content))
                 return;
+
+            // Structured safety check: reject received skills with dangerous patterns (regex-based)
+            foreach (var (name, pattern) in ForbiddenSkillPatterns)
+            {
+                if (pattern.IsMatch(msg.Content))
+                {
+                    _logger.LogWarning(
+                        "FederatedLearning: REJECTED received skill '{File}' — matched dangerous pattern '{Name}'",
+                        msg.File, name);
+                    return;
+                }
+            }
 
             var destDir = DetermineLayerDir(msg.Content);
             var destPath = Path.Combine(_skillsRoot, destDir, msg.File);
