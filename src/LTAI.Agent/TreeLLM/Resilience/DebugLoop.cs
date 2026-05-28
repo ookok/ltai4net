@@ -35,8 +35,7 @@ public sealed class DebugLoop
     private readonly IProjectSpecProvider? _projectSpec;
     private readonly Action<DebugSession>? _onFixed;
 
-    private const int MaxSourceLines = 400;
-    private const int ContextPadding = 30;
+    private readonly DebugLoopConfig _config;
 
     private const string TracePrompt = """
         You are an expert C# debugger performing single-step execution tracing. Simulate stepping through the code to find the ROOT CAUSE of the error — NOT just the crash site.
@@ -180,12 +179,14 @@ public sealed class DebugLoop
         ILogger<DebugLoop>? logger = null, string? persistPath = null,
         HarnessProfile? harnessProfile = null, string? repoPath = null,
         IMicroKernel? kernel = null, IProjectSpecProvider? projectSpec = null,
-        Action<DebugSession>? onFixed = null)
+        Action<DebugSession>? onFixed = null,
+        DebugLoopConfig? config = null)
     {
         _chatClient = chatClient;
         _correctionMemory = correctionMemory;
         _logger = logger;
         _onFixed = onFixed;
+        _config = config ?? new DebugLoopConfig();
         _persistPath = persistPath ?? Path.Combine("livingtree", "meta", "debug_loop.json");
         _harnessProfile = harnessProfile;
         _repoPath = repoPath ?? Repository.Discover(Directory.GetCurrentDirectory()) ?? "";
@@ -904,23 +905,23 @@ public sealed class DebugLoop
         return $"// AUTO_FIX_ATTEMPT_{attemptNum + 1}: LLM unavailable, review error at line {error.LineNumber}\n";
     }
 
-    private static string? ReadFileSnippet(string filePath, int errorLine)
+    private string? ReadFileSnippet(string filePath, int errorLine)
     {
         try
         {
             var allLines = File.ReadAllLines(filePath);
 
-            if (allLines.Length <= MaxSourceLines)
+            if (allLines.Length <= _config.MaxSourceLines)
                 return File.ReadAllText(filePath);
 
-            var start = Math.Max(0, errorLine - ContextPadding - 1);
-            var end = Math.Min(allLines.Length, errorLine + ContextPadding);
+            var start = Math.Max(0, errorLine - _config.ContextPadding - 1);
+            var end = Math.Min(allLines.Length, errorLine + _config.ContextPadding);
             var count = end - start;
 
-            if (count > MaxSourceLines)
+            if (count > _config.MaxSourceLines)
             {
-                start = Math.Max(0, errorLine - MaxSourceLines / 2 - 1);
-                end = Math.Min(allLines.Length, start + MaxSourceLines);
+                start = Math.Max(0, errorLine - _config.MaxSourceLines / 2 - 1);
+                end = Math.Min(allLines.Length, start + _config.MaxSourceLines);
             }
 
             var sb = new StringBuilder();
@@ -938,13 +939,13 @@ public sealed class DebugLoop
         }
     }
 
-    private static string[] ReadSourceContext(string filePath, int errorLine)
+    private string[] ReadSourceContext(string filePath, int errorLine)
     {
         try
         {
             var allLines = File.ReadAllLines(filePath);
-            var start = Math.Max(0, errorLine - ContextPadding - 1);
-            var end = Math.Min(allLines.Length, errorLine + ContextPadding);
+            var start = Math.Max(0, errorLine - _config.ContextPadding - 1);
+            var end = Math.Min(allLines.Length, errorLine + _config.ContextPadding);
             return allLines[start..end];
         }
         catch (Exception ex)

@@ -33,6 +33,7 @@ public sealed class AgenticLoop : IAsyncDisposable
     private readonly CacheFirstContextBuilder? _cacheCtx;
     private readonly BackpressurePipeline? _backpressure;
     private readonly DebugLoop? _debugLoop;
+    private readonly Core.System.AuditLogService? _auditLog;
     private readonly PartAssembler _assembler;
     private readonly Action<Part> _onPartAppendedHandler;
     private readonly Action<Part> _onPartUpdatedHandler;
@@ -60,6 +61,7 @@ public sealed class AgenticLoop : IAsyncDisposable
         BackpressurePipeline? backpressure = null,
         DebugLoop? debugLoop = null,
         AgenticLoopConfig? config = null,
+        Core.System.AuditLogService? auditLog = null,
         ILogger<AgenticLoop>? logger = null)
     {
         _lts = lts;
@@ -74,6 +76,7 @@ public sealed class AgenticLoop : IAsyncDisposable
         _cacheCtx = cacheContext;
         _backpressure = backpressure;
         _debugLoop = debugLoop;
+        _auditLog = auditLog;
         _config = config ?? new AgenticLoopConfig();
         _logger = logger ?? NullLogger<AgenticLoop>.Instance;
         _workspaceRoot = OptionService.Get("LTAI_WORKSPACE")
@@ -546,6 +549,13 @@ public sealed class AgenticLoop : IAsyncDisposable
             step.Phase = LoopPhase.Done;
             step.Observation = "Max iterations reached. Stopping.";
         }
+
+        // Audit: record iteration result
+        _auditLog?.Record("AgenticLoop", "iteration",
+            $"iter={_iterationCount}, phase={step.Phase}, failures={_consecutiveBuildFailures}, action={action}",
+            riskScore: _consecutiveBuildFailures > 0
+                ? Math.Min(1.0, _consecutiveBuildFailures / 5.0) : 0.0,
+            result: step.Phase == LoopPhase.Done ? "completed" : step.Phase.ToString());
 
         return step;
     }

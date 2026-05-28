@@ -62,7 +62,7 @@ public record ConsolidationConfig
 
 // ==================== 双记忆系统 ====================
 
-public sealed class DualMemoryStore : IDisposable
+public sealed class DualMemoryStore : LTAI.Knowledge.Core.IKnowledgeStore, IDisposable
 {
     private readonly LiteDatabase _db;
     private readonly ILiteCollection<RawEpisode> _episodes;
@@ -637,6 +637,130 @@ public sealed class DualMemoryStore : IDisposable
         {
             _logger.LogWarning(ex, "Error disposing DualMemoryStore");
         }
+    }
+
+    // ── IKnowledgeStore implementation ──
+
+    public string AddKnowledge(string title, string content, string domain = "general",
+        string category = "document", string source = "manual", string author = "system",
+        double importance = 0.0, bool skipDedup = false, bool indexVector = true)
+    {
+        var episode = new RawEpisode
+        {
+            Query = title,
+            FullTrajectory = content,
+            Domain = domain,
+            ImportanceScore = (float)Math.Clamp(importance, 1, 10),
+            Timestamp = DateTime.UtcNow
+        };
+        _episodes.Insert(episode);
+        _logger.LogDebug("DualMemoryStore: added knowledge '{Title}' (id={Id})", title, episode.Id);
+        return episode.Id.ToString();
+    }
+
+    public LTAI.Knowledge.Core.Models.DocumentEntity? Retrieve(string id)
+    {
+        try
+        {
+            var oid = new LiteDB.ObjectId(id);
+            var ep = _episodes.FindById(oid);
+            if (ep != null)
+            {
+                return new LTAI.Knowledge.Core.Models.DocumentEntity
+                {
+                    Id = ep.Id.ToString(),
+                    Title = ep.Query,
+                    Content = ep.FinalAnswer,
+                    Domain = ep.Domain,
+                    Category = "episode",
+                    Source = "dual_memory",
+                    Author = "system",
+                    CreatedAt = 0
+                };
+            }
+        }
+        catch { /* invalid id or not found */ }
+        return null;
+    }
+
+    public void Delete(string id)
+    {
+        try
+        {
+            var oid = new LiteDB.ObjectId(id);
+            _episodes.Delete(oid);
+        }
+        catch { /* invalid id */ }
+    }
+
+    public async Task<List<LTAI.Knowledge.Core.Models.KnowledgeSearchResult>> Search(
+        string query, int topK = 10, string? domain = null)
+    {
+        return await Task.Run(() =>
+        {
+            var results = _episodes.FindAll()
+                .Where(e => domain == null || e.Domain == domain)
+                .Where(e => e.Query.Contains(query, StringComparison.OrdinalIgnoreCase)
+                    || e.FinalAnswer.Contains(query, StringComparison.OrdinalIgnoreCase))
+                .Take(topK)
+                .Select(e => new LTAI.Knowledge.Core.Models.KnowledgeSearchResult
+                {
+                    Id = e.Id.ToString(),
+                    Title = e.Query,
+                    Content = e.FinalAnswer,
+                    Score = e.ImportanceScore / 10.0,
+                    Domain = e.Domain,
+                    Source = "dual_memory"
+                }).ToList();
+            return results;
+        }).ConfigureAwait(false);
+    }
+
+    public List<LTAI.Knowledge.Core.Models.KnowledgeSearchResult> SearchKeyword(
+        string[] keywords, bool caseSensitive = false, int topK = 20)
+    {
+        var comparison = caseSensitive ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
+        return _episodes.FindAll()
+            .Where(e => keywords.Any(k =>
+                e.Query.Contains(k, comparison) || e.FinalAnswer.Contains(k, comparison)))
+            .Take(topK)
+            .Select(e => new LTAI.Knowledge.Core.Models.KnowledgeSearchResult
+            {
+                Id = e.Id.ToString(),
+                Title = e.Query,
+                Content = e.FinalAnswer,
+                Score = e.ImportanceScore / 10.0,
+                Domain = e.Domain,
+                Source = "dual_memory"
+            }).ToList();
+    }
+
+    public List<LTAI.Knowledge.Core.Models.DocumentEntity> ListDocuments(
+        string? domain = null, string? category = null)
+    {
+        return _episodes.FindAll()
+            .Where(e => domain == null || e.Domain == domain)
+            .Select(e => new LTAI.Knowledge.Core.Models.DocumentEntity
+            {
+                Id = e.Id.ToString(),
+                Title = e.Query,
+                Content = e.FinalAnswer,
+                Domain = e.Domain,
+                Category = "episode",
+                Source = "dual_memory",
+                Author = "system",
+                CreatedAt = 0
+            }).ToList();
+    }
+
+    async Task<LTAI.Knowledge.Core.Models.DocumentStoreStats> LTAI.Knowledge.Core.IKnowledgeStore.GetStats()
+    {
+        return await Task.FromResult(new LTAI.Knowledge.Core.Models.DocumentStoreStats
+        {
+            TotalDocuments = _episodes.Count(),
+            TotalChunks = _lessons.Count(),
+            TotalRelations = 0
+        });
     }
 }
 
