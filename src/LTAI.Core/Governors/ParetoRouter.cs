@@ -51,23 +51,29 @@ public sealed class ParetoRouter
     private readonly object _routeLock = new();
     private int _routeLockCounter;
     private string _lockedRoute = "";
-    private const int RouteHistorySize = 32;
-    private const float JitterThreshold = 0.40f;
-    private const int LockDuration = 20;
+    private readonly int _routeHistorySize;
+    private readonly float _jitterThreshold;
+    private readonly int _lockDuration;
 
     public ParetoRouter(
         int embeddingDim = 768,
         ParetoDistanceMetric metric = ParetoDistanceMetric.Cosine,
         ILogger<ParetoRouter>? logger = null,
         GenePool? genePool = null,
-        AuditLogService? auditLog = null)
+        AuditLogService? auditLog = null,
+        ParetoRouterConfig? config = null)
     {
+        config ??= new ParetoRouterConfig();
         _logger = logger ?? NullLogger<ParetoRouter>.Instance;
         _metric = metric;
         _genePool = genePool;
         _auditLog = auditLog;
+        _routeHistorySize = config.RouteHistorySize;
+        _jitterThreshold = config.JitterThreshold;
+        _lockDuration = config.LockDuration;
+        _shadowRate = config.ShadowRate;
         _projectionMatrix = InitializeProjectionMatrix(embeddingDim);
-        _routeHistory = new string[RouteHistorySize];
+        _routeHistory = new string[_routeHistorySize];
         SeedDefaultFrontier();
     }
 
@@ -118,7 +124,7 @@ public sealed class ParetoRouter
         RecordRouteDecision(route);
 
         var jitter = GetJitter();
-        if (jitter > JitterThreshold)
+        if (jitter > _jitterThreshold)
             EnterRouteLock(FindModeRoute());
 
         var decision = new ParetoDecision
@@ -202,7 +208,7 @@ public sealed class ParetoRouter
     {
         lock (_routeLock)
         {
-            _routeHistory[_routeHistoryIndex % RouteHistorySize] = route;
+            _routeHistory[_routeHistoryIndex % _routeHistorySize] = route;
             _routeHistoryIndex++;
         }
     }
@@ -227,9 +233,9 @@ public sealed class ParetoRouter
         lock (_routeLock)
         {
             _lockedRoute = modeRoute;
-            _routeLockCounter = LockDuration;
+            _routeLockCounter = _lockDuration;
             _logger.LogWarning("Jitter detected ({Jitter:F2}) — locking route to '{Route}' for {Duration} decisions",
-                GetJitter(), modeRoute, LockDuration);
+                GetJitter(), modeRoute, _lockDuration);
         }
     }
 

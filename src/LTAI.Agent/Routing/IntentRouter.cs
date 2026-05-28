@@ -10,6 +10,9 @@ public sealed class IntentRoute
     public List<string> MatchedKeywords { get; init; } = new();
 }
 
+[Obsolete("Use HybridIntentRouter (LTAI.AI.Governors) instead. IntentRouter is the old 5-agent router " +
+    "that will be removed in a future release. HybridIntentRouter provides fast/deep classification " +
+    "with L0 embedding fallback and is registered in DI.")]
 public sealed class IntentRouter
 {
     private static readonly IntentRouteDefinition[] _routes =

@@ -39,10 +39,9 @@ public sealed class AgenticLoop : IAsyncDisposable
     private readonly string _workspaceRoot;
     private readonly string _projectLanguage;
     private readonly string _sessionId;
+    private readonly AgenticLoopConfig _config;
     private int _iterationCount;
     private int _consecutiveBuildFailures;
-    private const int MaxIterations = 20;
-    private const int DebugLoopTriggerThreshold = 3;
 
     public int IterationCount => _iterationCount;
     public List<LoopStep> History { get; } = new();
@@ -60,6 +59,7 @@ public sealed class AgenticLoop : IAsyncDisposable
         CacheFirstContextBuilder? cacheContext = null,
         BackpressurePipeline? backpressure = null,
         DebugLoop? debugLoop = null,
+        AgenticLoopConfig? config = null,
         ILogger<AgenticLoop>? logger = null)
     {
         _lts = lts;
@@ -74,6 +74,7 @@ public sealed class AgenticLoop : IAsyncDisposable
         _cacheCtx = cacheContext;
         _backpressure = backpressure;
         _debugLoop = debugLoop;
+        _config = config ?? new AgenticLoopConfig();
         _logger = logger ?? NullLogger<AgenticLoop>.Instance;
         _workspaceRoot = OptionService.Get("LTAI_WORKSPACE")
             ?? Directory.GetCurrentDirectory();
@@ -131,7 +132,7 @@ public sealed class AgenticLoop : IAsyncDisposable
             State = new Dictionary<string, string>()
         };
 
-        while (_iterationCount < MaxIterations)
+        while (_iterationCount < _config.MaxIterations)
         {
             ct.ThrowIfCancellationRequested();
             _iterationCount++;
@@ -219,7 +220,7 @@ public sealed class AgenticLoop : IAsyncDisposable
             BuildOk = buildOkBool,
             BuildDiagnostics = diagCtx,
             MemoryContext = memoryContext,
-            TaskInstructions = $"Agentic loop iteration {_iterationCount}/{MaxIterations}",
+            TaskInstructions = $"Agentic loop iteration {_iterationCount}/{_config.MaxIterations}",
         }) ?? "";
 
         var taskPrompt = $"Task: {context.Task}\n" +
@@ -357,7 +358,7 @@ public sealed class AgenticLoop : IAsyncDisposable
                         failedGates.Count);
 
                     // Escalate to DebugLoop for auto-fix when approaching threshold
-                    if (_debugLoop != null && _consecutiveBuildFailures >= DebugLoopTriggerThreshold - 1)
+                    if (_debugLoop != null && _consecutiveBuildFailures >= _config.DebugLoopTriggerThreshold - 1)
                     {
                         try
                         {
@@ -421,7 +422,7 @@ public sealed class AgenticLoop : IAsyncDisposable
                 context.State["build_diagnostics"] = ModelsDiagnosticParser.BuildDiagnosticContext(
                     ModelsDiagnosticParser.ParseBuildOutput(runBuildOutput, _projectLanguage));
 
-                if (_consecutiveBuildFailures >= DebugLoopTriggerThreshold)
+                if (_consecutiveBuildFailures >= _config.DebugLoopTriggerThreshold)
                 {
                     _logger.LogWarning("AgenticLoop: {Count} consecutive build failures — escalating to DebugLoop",
                         _consecutiveBuildFailures);
@@ -540,7 +541,7 @@ public sealed class AgenticLoop : IAsyncDisposable
             step.Observation = "Task marked as complete by the agent.";
         }
 
-        if (_iterationCount >= MaxIterations)
+        if (_iterationCount >= _config.MaxIterations)
         {
             step.Phase = LoopPhase.Done;
             step.Observation = "Max iterations reached. Stopping.";

@@ -4,7 +4,7 @@ using Microsoft.Extensions.Logging;
 
 namespace LTAI.Knowledge.Core;
 
-public sealed class KnowledgeBase
+public sealed class KnowledgeBase : IKnowledgeStore
 {
     private readonly DocumentStore _docStore;
     private readonly IVectorStore _vectorStore;
