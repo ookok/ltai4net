@@ -1,6 +1,10 @@
 using System.Diagnostics;
 using System.Text;
+using LTAI.Agent.Resilience;
 using LTAI.Agent.Tools;
+using LTAI.Agent.Workflows;
+using ModelsDiagnosticInfo = LTAI.Models.DiagnosticInfo;
+using ModelsDiagnosticParser = LTAI.Models.DiagnosticParser;
 using LTAI.AI.Interfaces;
 using LTAI.Core.Configuration;
 using LTAI.Core.Governors;
@@ -27,6 +31,8 @@ public sealed class AgenticLoop : IAsyncDisposable
     private readonly IProjectSpecProvider? _projectSpec;
     private readonly ToolCallRepairPipeline? _repairPipeline;
     private readonly CacheFirstContextBuilder? _cacheCtx;
+    private readonly BackpressurePipeline? _backpressure;
+    private readonly DebugLoop? _debugLoop;
     private readonly PartAssembler _assembler;
     private readonly Action<Part> _onPartAppendedHandler;
     private readonly Action<Part> _onPartUpdatedHandler;
@@ -52,6 +58,8 @@ public sealed class AgenticLoop : IAsyncDisposable
         IProjectSpecProvider? projectSpecProvider = null,
         ToolCallRepairPipeline? repairPipeline = null,
         CacheFirstContextBuilder? cacheContext = null,
+        BackpressurePipeline? backpressure = null,
+        DebugLoop? debugLoop = null,
         ILogger<AgenticLoop>? logger = null)
     {
         _lts = lts;
@@ -64,10 +72,12 @@ public sealed class AgenticLoop : IAsyncDisposable
         _projectSpec = projectSpecProvider;
         _repairPipeline = repairPipeline;
         _cacheCtx = cacheContext;
+        _backpressure = backpressure;
+        _debugLoop = debugLoop;
         _logger = logger ?? NullLogger<AgenticLoop>.Instance;
         _workspaceRoot = OptionService.Get("LTAI_WORKSPACE")
             ?? Directory.GetCurrentDirectory();
-        _projectLanguage = DiagnosticParser.DetectLanguage(_workspaceRoot);
+        _projectLanguage = ModelsDiagnosticParser.DetectLanguage(_workspaceRoot);
         _sessionId = Guid.NewGuid().ToString("N")[..8];
         _assembler = new PartAssembler();
 
@@ -164,8 +174,8 @@ public sealed class AgenticLoop : IAsyncDisposable
             var diagLines = new List<string>();
             if (!buildOk)
             {
-                diagLines.Add(DiagnosticParser.BuildDiagnosticContext(
-                    DiagnosticParser.ParseBuildOutput(buildOutput, _projectLanguage)));
+                diagLines.Add(ModelsDiagnosticParser.BuildDiagnosticContext(
+                    ModelsDiagnosticParser.ParseBuildOutput(buildOutput, _projectLanguage)));
             }
             if (_roslynDiagnostics != null && _projectLanguage == "dotnet")
             {
@@ -330,10 +340,56 @@ public sealed class AgenticLoop : IAsyncDisposable
             await _hooks.RunPostToolHooksAsync(hookCtx, null, ct).ConfigureAwait(false);
         }
 
-        // 4. RUN: execute tests/build to validate
+        // 4. RUN: execute tests/build to validate (with backpressure gate)
         if (action == "run" || (action == "edit" && _iterationCount % 3 == 0))
         {
             step.Phase = LoopPhase.Run;
+
+            // BackpressurePipeline: lint→typecheck→test→review before full build
+            if (_backpressure != null && action == "edit")
+            {
+                var bpResult = await _backpressure.CheckAsync(
+                    _workspaceRoot, _sessionId, context.Task, ct).ConfigureAwait(false);
+                if (!bpResult.AllPassed)
+                {
+                    var failedGates = bpResult.GateResults.Where(g => !g.Passed).ToList();
+                    _logger.LogWarning("AgenticLoop: Backpressure blocked edit — {Count} gate(s) failed",
+                        failedGates.Count);
+
+                    // Escalate to DebugLoop for auto-fix when approaching threshold
+                    if (_debugLoop != null && _consecutiveBuildFailures >= DebugLoopTriggerThreshold - 1)
+                    {
+                        try
+                        {
+                            var bpDiagnostics = string.Join("\n", failedGates.Select(g =>
+                                $"[{g.GateName}] {g.Reason} (errors: {g.ErrorCount}, warnings: {g.WarningCount})"));
+                            var debugSession = await _debugLoop.DebugAsync(
+                                _workspaceRoot, bpDiagnostics,
+                                LTAI.Agent.Models.DebugLevel.SemiAuto, 3, 120000, ct).ConfigureAwait(false);
+
+                            if (debugSession.Fixed)
+                            {
+                                _logger.LogInformation("DebugLoop fixed Backpressure failure");
+                                _consecutiveBuildFailures = 0;
+                                // Don't return — let the main loop re-execute with the fix applied
+                            }
+                            else
+                            {
+                                _logger.LogWarning("DebugLoop could not fix Backpressure (attempts={Count})",
+                                    debugSession.Attempts.Count);
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogWarning(ex, "DebugLoop escalation from Backpressure failed");
+                        }
+                    }
+
+                    step.Observation = $"Backpressure blocked: {string.Join("; ", failedGates.Select(g => g.GateName))}";
+                    step.Phase = LoopPhase.Failed;
+                    return step;
+                }
+            }
 
             var buildCmd = _projectSpec?.GetBuildCommand() ?? "dotnet build --no-restore";
             var (buildName, buildArgs) = SplitCommand(buildCmd);
@@ -362,15 +418,49 @@ public sealed class AgenticLoop : IAsyncDisposable
             {
                 _consecutiveBuildFailures++;
                 var (_, runBuildOutput) = await CheckBuildWithOutputAsync(ct).ConfigureAwait(false);
-                context.State["build_diagnostics"] = DiagnosticParser.BuildDiagnosticContext(
-                    DiagnosticParser.ParseBuildOutput(runBuildOutput, _projectLanguage));
+                context.State["build_diagnostics"] = ModelsDiagnosticParser.BuildDiagnosticContext(
+                    ModelsDiagnosticParser.ParseBuildOutput(runBuildOutput, _projectLanguage));
 
                 if (_consecutiveBuildFailures >= DebugLoopTriggerThreshold)
                 {
-                    _logger.LogWarning("AgenticLoop: {Count} consecutive build failures — escalating fix strategy",
+                    _logger.LogWarning("AgenticLoop: {Count} consecutive build failures — escalating to DebugLoop",
                         _consecutiveBuildFailures);
                     context.State["build_diagnostics"] +=
                         "\n[CRITICAL: 3+ consecutive failures. Re-analyze ALL recent edits. Consider reverting the last change and trying a different approach.]";
+
+                    // Auto-escalate to DebugLoop for root-cause analysis
+                    if (_debugLoop != null)
+                    {
+                        try
+                        {
+                            var buildOutput = context.State.GetValueOrDefault("build_diagnostics", "")?.ToString() ?? "";
+                            var debugSession = await _debugLoop.DebugAsync(
+                                _workspaceRoot, buildOutput,
+                                LTAI.Agent.Models.DebugLevel.SemiAuto, 3, 120000, ct).ConfigureAwait(false);
+
+                            if (debugSession.Fixed)
+                            {
+                                _logger.LogInformation("DebugLoop applied fix — retrying build");
+                                _consecutiveBuildFailures = 0; // reset after fix
+                            }
+                            else if (debugSession.Escalated)
+                            {
+                                _logger.LogWarning("DebugLoop escalated — marking problem as unfixable");
+                                step.Phase = LoopPhase.Failed;
+                                step.Observation = "Unfixable: DebugLoop escalated after max attempts";
+                                return step;
+                            }
+                            else
+                            {
+                                _logger.LogWarning("DebugLoop could not fix automatically (attempts={Count})",
+                                    debugSession.Attempts.Count);
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogWarning(ex, "DebugLoop escalation failed");
+                        }
+                    }
                 }
             }
             else
@@ -635,15 +725,15 @@ public sealed class AgenticLoop : IAsyncDisposable
             try
             {
                 var content = await File.ReadAllTextAsync(fullPath, ct).ConfigureAwait(false);
-                DiagnosticInfo[]? diags = null;
+                ModelsDiagnosticInfo[]? diags = null;
                 if (_roslynDiagnostics != null && fullPath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
                 {
                     var analysis = await _roslynDiagnostics.AnalyzeFilesAsync(
                         new[] { fullPath }, ct).ConfigureAwait(false);
-                    var diagList = new List<DiagnosticInfo>();
+                    var diagList = new List<ModelsDiagnosticInfo>();
                     foreach (var d in analysis.Diagnostics)
                     {
-                        diagList.Add(new DiagnosticInfo
+                        diagList.Add(new ModelsDiagnosticInfo
                         {
                             FilePath = d.FilePath,
                             LineNumber = d.Line,

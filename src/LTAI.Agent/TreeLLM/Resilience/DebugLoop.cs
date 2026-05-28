@@ -28,6 +28,8 @@ public sealed class DebugLoop
     private readonly HarnessProfile? _harnessProfile;
     private readonly ConcurrentDictionary<string, DebugSession> _sessions = new();
     private readonly ConcurrentDictionary<string, string> _backups = new();
+    private readonly ConcurrentDictionary<string, int> _globalAttemptCounts = new(StringComparer.OrdinalIgnoreCase);
+    private const int GlobalMaxDebugAttempts = 9; // 3 per call × 3 outer retries
     private readonly string _repoPath;
     private readonly IMicroKernel? _kernel;
     private readonly IProjectSpecProvider? _projectSpec;
@@ -208,6 +210,20 @@ public sealed class DebugLoop
         };
 
         _sessions[session.Id] = session;
+
+        // Global circuit breaker: prevent infinite DebugLoop cycles
+        var targetKey = $"{target}:{level}";
+        var globalCount = _globalAttemptCounts.AddOrUpdate(targetKey, 1, (_, v) => v + 1);
+        if (globalCount > GlobalMaxDebugAttempts)
+        {
+            _logger?.LogWarning(
+                "DebugLoop circuit breaker: target '{Target}' exceeded {Max} global attempts ({Count}) — marking unfixable",
+                target, GlobalMaxDebugAttempts, globalCount);
+            session.Escalated = true;
+            session.TotalDurationMs = 0;
+            return session;
+        }
+
         var sw = Stopwatch.StartNew();
 
         try
