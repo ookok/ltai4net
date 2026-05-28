@@ -62,14 +62,30 @@ public sealed class HumanInTheLoopReview
         return _regulatoryAgents.Contains(agentName, StringComparer.OrdinalIgnoreCase);
     }
 
+    /// <summary>
+    /// High-risk threshold: operations with risk score above this value
+    /// get forced TimeoutPolicy.Reject to prevent silent auto-approval on timeout.
+    /// </summary>
+    private const double HighRiskThreshold = 0.7;
+
     public ReviewTask CreateReviewTask(
         string agentName,
         string output,
         double qualityScore,
         Dictionary<string, object?>? metadata = null,
         TimeSpan? slaTimeout = null,
-        TimeoutPolicy timeoutPolicy = TimeoutPolicy.Escalate)
+        TimeoutPolicy timeoutPolicy = TimeoutPolicy.Escalate,
+        double riskScore = 0.0)
     {
+        // Security: high-risk operations MUST be rejected on timeout, never auto-approved
+        if (riskScore >= HighRiskThreshold && timeoutPolicy != TimeoutPolicy.Reject)
+        {
+            _logger.LogWarning(
+                "HITL: Forcing TimeoutPolicy.Reject for high-risk operation (risk={RiskScore:F2} >= {Threshold:F2}) on {Agent}",
+                riskScore, HighRiskThreshold, agentName);
+            timeoutPolicy = TimeoutPolicy.Reject;
+        }
+
         var task = new ReviewTask
         {
             Title = $"{agentName} Output Review",

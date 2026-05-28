@@ -34,6 +34,7 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
     private readonly ContextHub? _contextHub;
     private readonly CPSProcessingService? _cpsProcessor;
     private readonly ReActLoopOrchestrator? _reActOrchestrator;
+    private readonly LTAI.AI.Providers.PrefixCacheStore? _prefixCache;
     private readonly TaskPipeline _taskPipeline = new(null!);
 
     private string DefaultModel => _options.Value.AI.L2.Model;
@@ -61,7 +62,8 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
         BackgroundWorkQueue? workQueue = null,
         ContextHub? contextHub = null,
         CPSProcessingService? cpsProcessor = null,
-        ReActLoopOrchestrator? reActOrchestrator = null)
+        ReActLoopOrchestrator? reActOrchestrator = null,
+        LTAI.AI.Providers.PrefixCacheStore? prefixCache = null)
     {
         _journal = journal;
         _llm = llm;
@@ -74,14 +76,25 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
         _contextHub = contextHub;
         _cpsProcessor = cpsProcessor;
         _reActOrchestrator = reActOrchestrator;
+        _prefixCache = prefixCache;
     }
 
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
     {
         _gov.Guardian.StartMonitoring(TimeSpan.FromSeconds(15));
-        _logger.LogInformation("LivingTreeSystem v6.0 initialized, DNA: {DNA}, CPS: {CPS}",
+
+        // Lock the immutable prefix for DeepSeek cache optimization
+        if (_prefixCache != null && !_prefixCache.PrefixLocked)
+        {
+            var sysPrompt = "LTAI Agent OS V1.0 — 6-layer microkernel architecture";
+            var toolsJson = string.Join(",", _toolRegistry.ListTools().Select(t => t.ToString()));
+            _prefixCache.LockPrefix(sysPrompt, toolsJson);
+        }
+
+        _logger.LogInformation("LivingTreeSystem v6.0 initialized, DNA: {DNA}, CPS: {CPS}, Cache: {Cache}",
             _dna != null ? "enabled" : "disabled",
-            _cpsProcessor != null ? "enabled" : "disabled");
+            _cpsProcessor != null ? "enabled" : "disabled",
+            _prefixCache?.GetCacheStats() ?? "disabled");
     }
 
     // ========================================================================

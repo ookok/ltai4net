@@ -311,6 +311,8 @@ public sealed record KernelSnapshot
 public sealed record KernelAuditEntry
 {
     public string TraceId { get; init; } = "";
+    /// <summary>Unified correlation ID from ITraceContext — links MicroKernel audit entries to ParetoRouter, ArchitectLoop, and PartStreamStore events.</summary>
+    public string? CorrelationId { get; init; }
     public string Primitive { get; init; } = "";
     public bool Success { get; init; }
     public long ElapsedMs { get; init; }
@@ -399,6 +401,7 @@ public sealed class MicroKernel : IMicroKernel
 
     private SemaphoreSlim? _concurrencyGate;
     private int _rollbackInProgress;
+    private readonly ITraceContext? _traceContext;
 
     public GenePool? GenePool { get; set; }
     public BootstrapTeacher? Teacher { get; set; }
@@ -412,7 +415,8 @@ public sealed class MicroKernel : IMicroKernel
         KernelSandboxConfig? sandboxConfig = null,
         SemanticDiffAgent? diffAgent = null,
         int maxAuditEntries = 1000,
-        ILogger? logger = null)
+        ILogger? logger = null,
+        ITraceContext? traceContext = null)
     {
         _workspaceRoot = Path.GetFullPath(workspaceRoot);
         _http = http ?? new HttpClient();
@@ -424,6 +428,7 @@ public sealed class MicroKernel : IMicroKernel
         _maxAuditEntries = maxAuditEntries;
         _logger = logger ?? NullLogger.Instance;
         _circuitBreaker = new KernelCircuitBreaker(_sandboxConfig.RollbackFailureThreshold);
+        _traceContext = traceContext;
         _circuitBreaker.OnRollbackTriggered += async (count) => await HandleRollbackAsync(count);
         _concurrencyGate = new SemaphoreSlim(_sandboxConfig.MaxConcurrentOps);
         _capToken = new KernelCapToken(_workspaceRoot);
@@ -1292,6 +1297,7 @@ public sealed class MicroKernel : IMicroKernel
         var entry = new KernelAuditEntry
         {
             TraceId = traceId,
+            CorrelationId = _traceContext?.TraceId,
             Primitive = primitive,
             Success = success,
             ElapsedMs = elapsedMs,

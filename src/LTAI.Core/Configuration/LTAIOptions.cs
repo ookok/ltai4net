@@ -506,29 +506,29 @@ public sealed class ModelPricingConfig
     [JsonPropertyName("input_per_1m")]
     public Dictionary<string, double> InputPer1M { get; init; } = new()
     {
-        ["gpt-4o"] = 2.50, ["gpt-4o-mini"] = 0.15,
-        ["claude-sonnet"] = 3.00, ["claude-haiku"] = 0.25,
-        ["deepseek-v3"] = 0.27, ["deepseek-r1"] = 0.55,
-        ["deepseek-v4-pro"] = 3.0, ["deepseek-v4-flash"] = 1.0,
+        ["gpt-4o"] = 18.0, ["gpt-4o-mini"] = 1.0,
+        ["claude-sonnet"] = 22.0, ["claude-haiku"] = 1.8,
+        ["deepseek-v3"] = 2.0, ["deepseek-r1"] = 4.0,
+        ["deepseek-v4-pro"] = 3.13, ["deepseek-v4-flash"] = 1.01,
         ["qwen-max"] = 0.40, ["qwen-turbo"] = 0.08,
         ["qwen3.6-plus"] = 2.90, ["qwen3.6-flash"] = 0.73,
         ["qwen3.6-max"] = 8.70, ["qwq-plus"] = 5.80,
         ["qvq-max"] = 8.70, ["sensetime"] = 0.0,
-        ["default"] = 0.50
+        ["default"] = 1.01
     };
 
     [JsonPropertyName("output_per_1m")]
     public Dictionary<string, double> OutputPer1M { get; init; } = new()
     {
-        ["gpt-4o"] = 10.00, ["gpt-4o-mini"] = 0.60,
-        ["claude-sonnet"] = 15.00, ["claude-haiku"] = 1.25,
-        ["deepseek-v3"] = 1.10, ["deepseek-r1"] = 2.19,
-        ["deepseek-v4-pro"] = 6.0, ["deepseek-v4-flash"] = 2.0,
+        ["gpt-4o"] = 72.0, ["gpt-4o-mini"] = 4.0,
+        ["claude-sonnet"] = 110.0, ["claude-haiku"] = 9.0,
+        ["deepseek-v3"] = 8.0, ["deepseek-r1"] = 16.0,
+        ["deepseek-v4-pro"] = 6.26, ["deepseek-v4-flash"] = 2.02,
         ["qwen-max"] = 1.60, ["qwen-turbo"] = 0.32,
         ["qwen3.6-plus"] = 17.40, ["qwen3.6-flash"] = 2.90,
         ["qwen3.6-max"] = 43.50, ["qwq-plus"] = 11.60,
         ["qvq-max"] = 17.40, ["sensetime"] = 0.0,
-        ["default"] = 2.00
+        ["default"] = 4.0
     };
 
     [JsonPropertyName("degradation_chain")]

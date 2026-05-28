@@ -25,6 +25,8 @@ public sealed class AgenticLoop : IAsyncDisposable
     private readonly PartStreamStore? _partStore;
     private readonly IMicroKernel? _kernel;
     private readonly IProjectSpecProvider? _projectSpec;
+    private readonly ToolCallRepairPipeline? _repairPipeline;
+    private readonly CacheFirstContextBuilder? _cacheCtx;
     private readonly PartAssembler _assembler;
     private readonly Action<Part> _onPartAppendedHandler;
     private readonly Action<Part> _onPartUpdatedHandler;
@@ -48,6 +50,8 @@ public sealed class AgenticLoop : IAsyncDisposable
         PartStreamStore? partStore = null,
         IMicroKernel? kernel = null,
         IProjectSpecProvider? projectSpecProvider = null,
+        ToolCallRepairPipeline? repairPipeline = null,
+        CacheFirstContextBuilder? cacheContext = null,
         ILogger<AgenticLoop>? logger = null)
     {
         _lts = lts;
@@ -58,6 +62,8 @@ public sealed class AgenticLoop : IAsyncDisposable
         _partStore = partStore;
         _kernel = kernel;
         _projectSpec = projectSpecProvider;
+        _repairPipeline = repairPipeline;
+        _cacheCtx = cacheContext;
         _logger = logger ?? NullLogger<AgenticLoop>.Instance;
         _workspaceRoot = OptionService.Get("LTAI_WORKSPACE")
             ?? Directory.GetCurrentDirectory();
@@ -92,6 +98,21 @@ public sealed class AgenticLoop : IAsyncDisposable
         History.Clear();
 
         await _hooks.RunSessionStartHooksAsync("agentic_loop", ct).ConfigureAwait(false);
+
+        _repairPipeline?.ResetStormWindow();
+
+        // Cache-First: lock immutable prefix at session start (Reasonix Pillar 1)
+        if (_cacheCtx != null && !_cacheCtx.PrefixLocked)
+        {
+            var systemPrompt = _promptAssembler?.Assemble(new PromptLayerContext
+            {
+                WorkspaceRoot = _workspaceRoot,
+                Platform = Environment.OSVersion.Platform.ToString(),
+                Date = DateTime.Now.ToString("yyyy-MM-dd"),
+                Shell = "pwsh"
+            }) ?? "";
+            _cacheCtx.LockPrefix(systemPrompt, "");
+        }
 
         var context = new LoopContext
         {
@@ -201,13 +222,57 @@ public sealed class AgenticLoop : IAsyncDisposable
             "If the task appears complete, respond with ACTION: done\n" +
             "If a previous edit caused errors, respond with ACTION: edit to fix them";
 
-        var thinking = await _lts.ChatAsync(
-            systemPrompt + "\n\n" + taskPrompt,
-            ct).ConfigureAwait(false);
+        var promptForModel = _cacheCtx != null
+            ? systemPrompt + "\n\n" + taskPrompt  // prefix already cached via CacheFirstContextBuilder
+            : systemPrompt + "\n\n" + taskPrompt;
+
+        var thinking = await _lts.ChatAsync(promptForModel, ct).ConfigureAwait(false);
+
+        // NEEDS_PRO: model self-reports that task exceeds current capability (Reasonix Pillar 3)
+        if (DetectNeedsPro(thinking))
+        {
+            _logger.LogInformation("AgenticLoop: NEEDS_PRO detected — retrying with Pro tier");
+            _assembler.FeedText("[NEEDS_PRO — upgrading to Pro tier for this turn]");
+
+            // Retry with an explicit instruction that Pro is available
+            var proPrompt = systemPrompt + "\n\n" +
+                "[SYSTEM: You are now running on the Pro tier. Full reasoning capability available.]\n\n" +
+                taskPrompt;
+            thinking = await _lts.ChatAsync(proPrompt, ct).ConfigureAwait(false);
+
+            // Strip the NEEDS_PRO marker from the retried response if present
+            if (DetectNeedsPro(thinking))
+            {
+                thinking = thinking.Split('\n', 2, StringSplitOptions.RemoveEmptyEntries)
+                    .Skip(1).FirstOrDefault() ?? thinking;
+            }
+        }
+
+        // Cache-First: append assistant response to log
+        _cacheCtx?.AppendToLog("assistant", thinking);
+        _cacheCtx?.AdvanceTurn();
 
         _assembler.FeedText(thinking);
 
-        var (action, detail) = ParseAction(thinking);
+        // Tool-Call Repair Pipeline (adapted from DeepSeek-Reasonix Pillar 2)
+        RepairResult repair;
+        string action, detail;
+        if (_repairPipeline != null)
+        {
+            repair = _repairPipeline.Repair(thinking, step.Action);
+            action = repair.Action;
+            detail = repair.Detail;
+            if (repair.AppliedFixes.Count > 0)
+            {
+                _logger.LogDebug("AgenticLoop: Repair fixes applied: {Fixes}",
+                    string.Join(", ", repair.AppliedFixes));
+            }
+        }
+        else
+        {
+            (action, detail) = ParseAction(thinking);
+        }
+
         step.Thinking = thinking;
         step.Action = action;
         step.Detail = detail;
@@ -358,7 +423,19 @@ public sealed class AgenticLoop : IAsyncDisposable
         if (action == "observe" || action == "run" || action == "edit")
         {
             step.Phase = LoopPhase.Observe;
-            step.Observation ??= $"Iteration {_iterationCount}: {action} completed. Build={context.State["build_ok"]}";
+            var obs = $"Iteration {_iterationCount}: {action} completed. Build={context.State["build_ok"]}";
+            step.Observation ??= obs;
+
+            // Cache-First: compress large tool results before logging (Reasonix Pillar 3)
+            if (_cacheCtx != null && step.Observation != null && step.Observation.Length > 3000)
+            {
+                var compressed = CompressToolResult(step.Observation);
+                _cacheCtx.AppendToLog("tool", compressed, action);
+            }
+            else
+            {
+                _cacheCtx?.AppendToLog("tool", step.Observation ?? obs, action);
+            }
 
             if (context.State["build_ok"] == "true" && action == "done")
             {
@@ -594,6 +671,42 @@ public sealed class AgenticLoop : IAsyncDisposable
     {
         var idx = combined.IndexOf(' ');
         return idx < 0 ? (combined, "") : (combined[..idx], combined[(idx + 1)..]);
+    }
+
+    // ========================================================================
+    // Tool result compression (Reasonix Pillar 3)
+    // Results >3000 chars are compressed to a summary for the append-only log.
+    // The full result is still available via read_file when needed.
+    // ========================================================================
+    private static string CompressToolResult(string result)
+    {
+        if (result.Length <= 3000) return result;
+
+        const int headLines = 15;
+        const int tailLines = 10;
+
+        var lines = result.Split('\n');
+        if (lines.Length <= headLines + tailLines + 5)
+            return result; // not enough lines to meaningfully compress
+
+        var head = string.Join('\n', lines.Take(headLines));
+        var tail = string.Join('\n', lines.TakeLast(tailLines));
+
+        return $"{head}\n\n... [{lines.Length - headLines - tailLines} lines compressed] ...\n\n{tail}\n\n" +
+               $"[Tool result compressed: {result.Length} chars → ~{head.Length + tail.Length + 100} chars. " +
+               $"Use read_file to retrieve full content if needed.]";
+    }
+
+    // ========================================================================
+    // NEEDS_PRO detection (Reasonix Pillar 3)
+    // If the model outputs <<<NEEDS_PRO>>> in the first line of its response,
+    // the system should retry with a higher-capability model.
+    // ========================================================================
+    public static bool DetectNeedsPro(string response)
+    {
+        if (string.IsNullOrEmpty(response)) return false;
+        var firstLine = response.Split('\n', 2, StringSplitOptions.RemoveEmptyEntries)[0].Trim();
+        return firstLine.Contains("<<<NEEDS_PRO>>>", StringComparison.OrdinalIgnoreCase);
     }
 
     public async ValueTask DisposeAsync()

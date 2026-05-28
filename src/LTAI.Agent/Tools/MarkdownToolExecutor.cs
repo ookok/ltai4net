@@ -22,6 +22,7 @@ public sealed class MarkdownToolExecutor
     private readonly IChatClient? _chatClient;
     private readonly IServiceProvider? _serviceProvider;
     private readonly IMicroKernel? _kernel;
+    private readonly Func<string, string, bool>? _externalSafetyGate;
     private Func<string, MkTool?>? _toolResolver;
     private static readonly SemaphoreSlim ComposeConcurrencyGate = new(8, 8);
 
@@ -38,13 +39,15 @@ public sealed class MarkdownToolExecutor
         IHttpClientFactory? httpClientFactory = null,
         IChatClient? chatClient = null,
         IServiceProvider? serviceProvider = null,
-        IMicroKernel? kernel = null)
+        IMicroKernel? kernel = null,
+        Func<string, string, bool>? externalSafetyGate = null)
     {
         _logger = logger;
         _httpClientFactory = httpClientFactory;
         _chatClient = chatClient;
         _serviceProvider = serviceProvider;
         _kernel = kernel;
+        _externalSafetyGate = externalSafetyGate;
     }
 
     public void SetToolResolver(Func<string, MkTool?> resolver)
@@ -86,6 +89,10 @@ public sealed class MarkdownToolExecutor
             if (command.Contains(dangerous, StringComparison.OrdinalIgnoreCase))
                 return new { error = $"Blocked dangerous command pattern: {dangerous}", blocked = true };
         }
+
+        // External safety gate: wired to UnifiedSafetyGate at DI startup
+        if (_externalSafetyGate != null && !_externalSafetyGate("shell", command))
+            return new { error = "Blocked by external safety gate policy", blocked = true };
 
         string shellExe;
         string[] shellArgs;

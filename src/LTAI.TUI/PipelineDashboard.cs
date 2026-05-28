@@ -1,5 +1,6 @@
 using LTAI.AI.Governors;
 using LTAI.AI.Interfaces;
+using LTAI.AI.Providers;
 using LTAI.Core.Governors;
 using Spectre.Console;
 using Spectre.Console.Rendering;
@@ -13,6 +14,8 @@ public sealed class PipelineDashboard
     private readonly CoordinationScheduler? _scheduler;
     private readonly ParetoRouter? _router;
     private readonly IMicroKernel? _kernel;
+    private readonly BudgetTracker? _budget;
+    private readonly PrefixCacheStore? _prefixCache;
 
     private readonly Table _layersTable;
     private readonly Table _routingTable;
@@ -23,6 +26,8 @@ public sealed class PipelineDashboard
     private readonly Table _verifiableTable;
     private readonly Table _cpsTable;
     private readonly Table _healthTable;
+    private readonly Table _costTable;
+    private readonly Table _cacheTable;
     private readonly Table _paretoTable;
 
     private static readonly Style GreenStyle = new(Color.Green);
@@ -35,13 +40,17 @@ public sealed class PipelineDashboard
         CPSProcessingService? cps = null,
         CoordinationScheduler? scheduler = null,
         ParetoRouter? router = null,
-        IMicroKernel? kernel = null)
+        IMicroKernel? kernel = null,
+        BudgetTracker? budget = null,
+        PrefixCacheStore? prefixCache = null)
     {
         _lts = lts;
         _cps = cps;
         _scheduler = scheduler;
         _router = router;
         _kernel = kernel;
+        _budget = budget;
+        _prefixCache = prefixCache;
 
         _layersTable = new Table().Border(TableBorder.Rounded).BorderColor(Color.Cyan1)
             .AddColumn("Layer").AddColumn("Model").AddColumn("Status");
@@ -64,6 +73,10 @@ public sealed class PipelineDashboard
         _healthTable = new Table().Border(TableBorder.Rounded).BorderColor(Color.Orange1)
             .AddColumn("Metric").AddColumn("Value");
 
+        _costTable = new Table().Border(TableBorder.Rounded).BorderColor(Color.Gold1)
+            .AddColumn("Metric").AddColumn("Value");
+        _cacheTable = new Table().Border(TableBorder.Rounded).BorderColor(Color.Silver)
+            .AddColumn("Metric").AddColumn("Value");
         _paretoTable = new Table().Border(TableBorder.Rounded).BorderColor(Color.Purple)
             .AddColumn("Metric").AddColumn("Value");
     }
@@ -223,6 +236,20 @@ public sealed class PipelineDashboard
             }
             catch { }
         }
+
+        // Pillar 4: Cost Transparency
+        if (_budget != null)
+        {
+            snap["cost.daily"] = _budget.DailySpent;
+        }
+
+        if (_prefixCache != null)
+        {
+            snap["cache.stats"] = _prefixCache.GetCacheStats();
+            snap["cache.hits"] = _prefixCache.CacheHits;
+            snap["cache.misses"] = _prefixCache.CacheMisses;
+            snap["cache.savings"] = _prefixCache.EstimatedSavingsTokens;
+        }
 #pragma warning restore CS8601
     }
 
@@ -279,6 +306,41 @@ public sealed class PipelineDashboard
         _healthTable.AddRow("P50", snap.GetValueOrDefault("kernel.p50")?.ToString() ?? "?");
         _healthTable.AddRow("P99", snap.GetValueOrDefault("kernel.p99")?.ToString() ?? "?");
 
+        // Pillar 4: Cost Transparency (color-coded per-turn and per-session)
+        _costTable.Rows.Clear();
+        var dailySpent = snap.GetValueOrDefault("cost.daily");
+        var dailySpentVal = dailySpent is decimal dc ? dc : 0m;
+        var dailyStr = $"¥{dailySpentVal:F4}";
+        var dailyColor = dailySpentVal switch
+        {
+            < 0.5m => "green",
+            < 2.0m => "yellow",
+            _ => "red"
+        };
+        _costTable.AddRow("今日费用 (Session)", $"[{dailyColor}]{dailyStr}[/]");
+        _costTable.AddRow("模型层级", $"[dim]{snap.GetValueOrDefault("system.mode")?.ToString() ?? "auto"}[/]");
+
+        // Per-turn estimate from CPS avg tokens (RMB: ~￥1/1M input default)
+        var estTokens = snap.GetValueOrDefault("cps.tokens");
+        var tokens = estTokens is long tks ? tks : 0;
+        var perTurnCost = tokens > 0 ? tokens / 1_000_000.0 * 1.01 : 0;
+        var perTurnColor = perTurnCost switch
+        {
+            < 0.5 => "green",
+            < 2.0 => "yellow",
+            _ => "red"
+        };
+        _costTable.AddRow("估算每轮费用", $"[{perTurnColor}]¥{perTurnCost:F4}[/]");
+
+        _cacheTable.Rows.Clear();
+        var cacheHits = snap.GetValueOrDefault("cache.hits")?.ToString() ?? "0";
+        var cacheMisses = snap.GetValueOrDefault("cache.misses")?.ToString() ?? "0";
+        var cacheSavings = snap.GetValueOrDefault("cache.savings");
+        var savings = cacheSavings is long s ? s : 0;
+        _cacheTable.AddRow("Cache Hits", $"[green]{cacheHits}[/]");
+        _cacheTable.AddRow("Cache Misses", $"[dim]{cacheMisses}[/]");
+        _cacheTable.AddRow("Est. Token Savings", $"[green]{savings:N0}[/]");
+
         _paretoTable.Rows.Clear();
         _paretoTable.AddRow("Frontier Size", snap.GetValueOrDefault("pareto.size")?.ToString() ?? "0");
         _paretoTable.AddRow("Decisions", snap.GetValueOrDefault("pareto.decisions")?.ToString() ?? "0");
@@ -302,14 +364,19 @@ public sealed class PipelineDashboard
         bottomRow.Add(new Panel(_evolutionTable).Header("Cross-Run Evolution").BorderColor(Color.Yellow).Padding(1, 1));
         bottomRow.Add(new Panel(_verifiableTable).Header("Verifiable Registry").BorderColor(Color.Green).Padding(1, 1));
 
+        var costRow = new List<IRenderable>();
+        costRow.Add(new Panel(_costTable).Header("💰 Cost (Pillar 4)").BorderColor(Color.Gold1).Padding(1, 1));
+        costRow.Add(new Panel(_cacheTable).Header("📦 Prefix Cache").BorderColor(Color.Silver).Padding(1, 1));
+        costRow.Add(new Panel(_paretoTable).Header("Pareto Router").BorderColor(Color.Purple).Padding(1, 1));
+
         var cpsRow = new List<IRenderable>();
         cpsRow.Add(new Panel(_cpsTable).Header("CPS Performance").BorderColor(Color.Aqua).Padding(1, 1));
         cpsRow.Add(new Panel(_healthTable).Header("System Health").BorderColor(Color.Orange1).Padding(1, 1));
-        cpsRow.Add(new Panel(_paretoTable).Header("Pareto Router").BorderColor(Color.Purple).Padding(1, 1));
 
         return new Panel(new Rows(
             new Columns(topRow),
             new Columns(midRow),
+            new Columns(costRow),
             new Columns(bottomRow),
             new Columns(cpsRow)))
             .Header(new PanelHeader("[bold cyan]Pipeline Dashboard[/]"))

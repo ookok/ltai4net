@@ -18,7 +18,7 @@ public sealed class SkillRuntime
     private SkillHookEngine _hooks;
     private SkillBranchEngine _branches;
 
-    public SkillRuntime(SkillRegistry registry, ILogger<SkillRuntime>? logger = null)
+    public SkillRuntime(SkillRegistry registry, ILogger<SkillRuntime>? logger = null, Func<string, string, bool>? externalSafetyGate = null)
     {
         _registry = registry;
         _logger = logger ?? new NullLogger<SkillRuntime>();
@@ -27,7 +27,7 @@ public sealed class SkillRuntime
         _expr = new SkillExpressionEngine(_scope);
         _hooks = new SkillHookEngine();
         _branches = new SkillBranchEngine(_expr);
-        _executor = new SkillStepExecutor(_registry, this, _scope, _expr, _hooks);
+        _executor = new SkillStepExecutor(_registry, this, _scope, _expr, _hooks, externalSafetyGate: externalSafetyGate);
     }
 
     public void InjectContext(string query, string domain, string model)

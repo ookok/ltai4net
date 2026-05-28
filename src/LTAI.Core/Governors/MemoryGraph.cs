@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using LTAI.Core.Interfaces;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -382,6 +383,62 @@ public sealed class MemoryGraph
             .ToList();
     }
 
+    /// <summary>
+    /// Mem-π enhanced search: keyword retrieval first, then Mem-π generative guidance
+    /// if retrieval confidence is low. Returns both retrieved nodes and any generated guidance.
+    /// </summary>
+    public async Task<MemPiSearchResult> SearchWithGuidanceAsync(
+        string query,
+        IMemPiGuidance? memPi,
+        int topK = 10,
+        double retrievalConfidenceThreshold = 0.3,
+        CancellationToken ct = default)
+    {
+        // Phase 1: keyword retrieval (fast, always runs)
+        var retrieved = Search(query, topK);
+        var maxScore = retrieved.Count > 0
+            ? retrieved.Max(n => n.Importance * n.AccessCount)
+            : 0.0;
+        var avgImportance = retrieved.Count > 0
+            ? retrieved.Average(n => n.Importance)
+            : 0.0;
+
+        // Phase 2: Mem-π generative guidance if retrieval is weak
+        string? generatedGuidance = null;
+        var memPiUsed = false;
+
+        if (memPi != null && memPi.IsAvailable &&
+            (avgImportance < retrievalConfidenceThreshold || retrieved.Count < 3))
+        {
+            if (memPi.ShouldAttemptGuidance(query))
+            {
+                try
+                {
+                    var context = BuildContextFromRetrieved(retrieved);
+                    var mpResult = await memPi.GenerateGuidanceAsync(context, query, ct).ConfigureAwait(false);
+                    if (mpResult.Generated && !string.IsNullOrWhiteSpace(mpResult.Guidance))
+                    {
+                        generatedGuidance = mpResult.Guidance;
+                        memPiUsed = true;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "MemoryGraph: MemPi guidance failed, falling back to retrieval-only");
+                }
+            }
+        }
+
+        return new MemPiSearchResult
+        {
+            RetrievedNodes = retrieved,
+            GeneratedGuidance = generatedGuidance,
+            MemPiUsed = memPiUsed,
+            RetrievalConfidence = avgImportance,
+            MaxRetrievalScore = maxScore
+        };
+    }
+
     public IReadOnlyList<MemoryNode> TopDownTraverse(string? rootDomain = null, int maxResults = 20)
     {
         var results = new List<MemoryNode>();
@@ -470,4 +527,21 @@ public sealed class MemoryGraph
         if (staleIds.Count > 0)
             _logger.LogDebug("MemoryGraph: pruned {Count} stale nodes", staleIds.Count);
     }
+
+    private static string BuildContextFromRetrieved(IReadOnlyList<MemoryNode> retrieved)
+    {
+        if (retrieved.Count == 0) return "(no recent memories)";
+        return string.Join(" | ", retrieved.Take(5).Select(n =>
+            n.Content.Length < 100 ? n.Content : n.Summary));
+    }
+}
+
+/// <summary>Result of Mem-π enhanced memory search.</summary>
+public sealed record MemPiSearchResult
+{
+    public IReadOnlyList<MemoryNode> RetrievedNodes { get; init; } = Array.Empty<MemoryNode>();
+    public string? GeneratedGuidance { get; init; }
+    public bool MemPiUsed { get; init; }
+    public double RetrievalConfidence { get; init; }
+    public double MaxRetrievalScore { get; init; }
 }

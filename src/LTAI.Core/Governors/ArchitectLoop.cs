@@ -325,7 +325,7 @@ public sealed class ArchitectLoop
                     var hitl = hitlType?.GetMethod("CreateReviewTask")?.Invoke(
                         _serviceProvider.GetService(hitlType ?? typeof(object)),
                         new object[] { "ArchitectLoop", $"Risk={proposal.Risk:F2}: {proposal.Description}",
-                            1.0 - proposal.Risk, null!, TimeSpan.FromHours(1), 2 });
+                            1.0 - proposal.Risk, null!, TimeSpan.FromHours(1), 2, proposal.Risk });
                     _logger.LogInformation("HITL: review submitted for proposal {P}", proposal.Id);
                 }
                 catch { }

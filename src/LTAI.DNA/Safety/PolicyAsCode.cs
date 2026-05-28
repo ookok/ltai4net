@@ -86,11 +86,65 @@ public sealed class PolicyAsCode
     public PolicyMetrics Metrics => _metrics;
 
     private FileSystemWatcher? _watcher;
+    private byte[]? _signingKey;
+    private bool _requireSignature;
 
     public PolicyAsCode(ILogger<PolicyAsCode>? logger = null)
     {
         _logger = logger;
         _ruleEngine = new EnhancedRuleEngine().WithStrategy(ConflictStrategy.Salience);
+    }
+
+    /// <summary>
+    /// Set an HMAC signing key for policy file integrity verification.
+    /// When set, hot-reload and LoadFromYaml/LoadFromJson will verify signatures.
+    /// </summary>
+    public void SetSigningKey(byte[] key, bool requireSignature = true)
+    {
+        _signingKey = key;
+        _requireSignature = requireSignature;
+    }
+
+    /// <summary>
+    /// Verify that a policy file has a valid .sig signature file.
+    /// The .sig file contains the HMACSHA256 hash as a hex string.
+    /// </summary>
+    private bool VerifySignature(string filePath)
+    {
+        if (_signingKey == null || !_requireSignature)
+            return true; // signing not configured — allow
+
+        var sigPath = filePath + ".sig";
+        if (!File.Exists(sigPath))
+        {
+            _logger?.LogWarning("PolicyAsCode: Missing signature file {SigFile} — policy NOT loaded", sigPath);
+            return false;
+        }
+
+        try
+        {
+            var content = File.ReadAllBytes(filePath);
+            var expectedSig = File.ReadAllText(sigPath).Trim();
+
+            using var hmac = new HMACSHA256(_signingKey);
+            var actualHash = Convert.ToHexStringLower(hmac.ComputeHash(content));
+
+            if (!CryptographicOperations.FixedTimeEquals(
+                Encoding.UTF8.GetBytes(actualHash),
+                Encoding.UTF8.GetBytes(expectedSig)))
+            {
+                _logger?.LogWarning("PolicyAsCode: Signature mismatch for {File} — policy NOT loaded", filePath);
+                return false;
+            }
+
+            _logger?.LogDebug("PolicyAsCode: Signature verified for {File}", filePath);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "PolicyAsCode: Signature verification failed for {File}", filePath);
+            return false;
+        }
     }
 
     public void EnableHotReload(string rulesDirectory)
@@ -105,6 +159,13 @@ public sealed class PolicyAsCode
         {
             try
             {
+                // Security: verify signature before loading
+                if (!VerifySignature(e.FullPath))
+                {
+                    _logger?.LogWarning("PolicyAsCode: Hot-reload rejected for {File} — signature verification failed", e.Name);
+                    return;
+                }
+
                 var content = File.ReadAllText(e.FullPath);
                 LoadFromYaml(content);
                 _logger?.LogInformation("PolicyAsCode: hot-reloaded rules from {File}", e.Name);

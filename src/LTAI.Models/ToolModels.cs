@@ -80,6 +80,14 @@ public sealed record MkTool
     public MkToolEvolution Evolution { get; init; } = new();
     public string? SourceFile { get; set; }
 
+    /// <summary>
+    /// When true, this tool has no side effects and can be safely executed in parallel
+    /// with other parallel-safe tools. Set for read-only operations (read_file, search, web_search).
+    /// Default false — tools with side effects (write_file, shell, http mutate) remain serial.
+    /// Adapted from DeepSeek-Reasonix Pillar 1 parallelSafe.
+    /// </summary>
+    public bool ParallelSafe { get; set; }
+
     public bool IsReliable => Evolution.IsReliable;
 
     public static MkTool Create(string name, MkToolType type, string description,

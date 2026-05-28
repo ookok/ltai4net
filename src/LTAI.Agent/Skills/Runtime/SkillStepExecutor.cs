@@ -18,6 +18,7 @@ public sealed class SkillStepExecutor
     private readonly SkillHookEngine _hooks;
     private readonly ILogger<SkillStepExecutor> _logger;
     private readonly IMicroKernel? _kernel;
+    private readonly Func<string, string, bool>? _externalSafetyGate;
 
     public SkillStepExecutor(
         SkillRegistry registry,
@@ -26,7 +27,8 @@ public sealed class SkillStepExecutor
         SkillExpressionEngine expr,
         SkillHookEngine hooks,
         ILogger<SkillStepExecutor>? logger = null,
-        IMicroKernel? kernel = null)
+        IMicroKernel? kernel = null,
+        Func<string, string, bool>? externalSafetyGate = null)
     {
         _registry = registry;
         _runtime = runtime;
@@ -35,6 +37,7 @@ public sealed class SkillStepExecutor
         _hooks = hooks;
         _logger = logger ?? new NullLogger<SkillStepExecutor>();
         _kernel = kernel;
+        _externalSafetyGate = externalSafetyGate;
     }
 
     public async Task<SkillValue> ExecuteStepAsync(SkillStep step, CancellationToken ct)
@@ -149,6 +152,10 @@ public sealed class SkillStepExecutor
         {
             if (!ValidateShellCommand(command))
                 return SkillValue.FromString($"[Blocked: dangerous command detected]");
+
+            // External safety gate: wired to UnifiedSafetyGate at DI startup
+            if (_externalSafetyGate != null && !_externalSafetyGate("shell", command))
+                return SkillValue.FromString($"[Blocked: external safety gate policy violation]");
 
             if (_kernel != null)
             {

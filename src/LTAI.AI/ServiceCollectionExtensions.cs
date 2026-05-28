@@ -7,6 +7,7 @@ using LTAI.Core.Providers;
 using LTAI.Tools.Skills;
 using LTAI.Core.Configuration;
 using LTAI.Core.Governors;
+using LTAI.Core.Interfaces;
 using LTAI.Core.Messaging;
 using LTAI.Core.Network;
 using LTAI.Core.System;
@@ -70,6 +71,10 @@ public static class ServiceCollectionExtensions
                 .UseOpenTelemetry()
                 .Use((innerClient, services) =>
                     new NormalizingChatClient(innerClient, services.GetRequiredService<ILogger<NormalizingChatClient>>()))
+                .Use((innerClient, services) =>
+                    new ToolCallRepairMiddleware(innerClient,
+                        sessionId: Guid.NewGuid().ToString("N")[..12],
+                        logger: services.GetService<ILogger<ToolCallRepairMiddleware>>()))
                 .Build();
 
             return new RescueParsingChatClient(pipeline, sp.GetService<ILogger<RescueParsingChatClient>>());
@@ -644,6 +649,15 @@ public static class ServiceCollectionExtensions
                 return new OnnxSmallLlmEngine(config, logger?.CreateLogger<OnnxSmallLlmEngine>());
             }
         });
+
+        // Mem-π: Adaptive Memory Guidance engine (wraps local LLM for generate-or-abstain)
+        services.AddSingleton<MemPiGuidanceEngine>(sp =>
+        {
+            var engine = sp.GetRequiredService<ILocalLlmEngine>();
+            var logger = sp.GetService<ILogger<MemPiGuidanceEngine>>();
+            return new MemPiGuidanceEngine(engine, config: null, logger);
+        });
+        services.AddSingleton<IMemPiGuidance>(sp => sp.GetRequiredService<MemPiGuidanceEngine>());
 
         services.AddSingleton<LocalLlmBootstrapConfig>(sp =>
         {

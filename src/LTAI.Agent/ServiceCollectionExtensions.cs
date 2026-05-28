@@ -1,4 +1,5 @@
 using LTAI.Core.Governors;
+using LTAI.Core.Interfaces;
 using LTAI.DNA.Safety;
 using LTAI.Knowledge.Core;
 using LTAI.Models;
@@ -53,7 +54,14 @@ public static class ServiceCollectionExtensions
             return new MarketplaceClient(http, logger, baseUrl);
         });
         services.AddSingleton<SkillExtractor>();
-        services.AddSingleton<SkillRuntime>();
+        services.AddSingleton<SkillRuntime>(sp =>
+        {
+            var registry = sp.GetRequiredService<Skills.SkillRegistry>();
+            var logger = sp.GetService<ILogger<SkillRuntime>>();
+            var safetyGate = sp.GetRequiredService<UnifiedSafetyGate>();
+            return new SkillRuntime(registry, logger,
+                externalSafetyGate: (tool, input) => safetyGate.EvaluateToolCall(tool, input));
+        });
         services.AddSingleton<SkillAwareDecomposer>();
         services.AddSingleton<IntentRouter>();
         services.AddSingleton<UnifiedSemanticRouter>();
@@ -251,6 +259,17 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<AgentRegistryLock>();
         services.AddSingleton<IAgentFactory, AgentFactory>();
         services.AddSingleton<PredictivePrefetcher>();
+
+        // ProAct: idle-time anticipation (arXiv:2605.25971)
+        services.AddSingleton<ProActAnticipator>(sp =>
+        {
+            var memoryGraph = sp.GetRequiredService<MemoryGraph>();
+            var cps = sp.GetService<ICPSProcessingService>();
+            var memPi = sp.GetService<IMemPiGuidance>();
+            var logger = sp.GetService<ILogger<ProActAnticipator>>();
+            return new ProActAnticipator(memoryGraph, cps, memPi, config: null, logger);
+        });
+        services.AddSingleton<IProActCache>(sp => sp.GetRequiredService<ProActAnticipator>());
 
         services.AddSingleton<Agents.CodeAgentAdapter>();
         services.AddSingleton<Agents.EIAAgentAdapter>();
@@ -463,6 +482,28 @@ public static class ServiceCollectionExtensions
             var seeder = new ParetoRouterSeeder(router, logger);
             seeder.SeedFromDomainProfiles();
             return seeder;
+        });
+
+        // ============================================================================
+        // Wire UnifiedSafetyGate delegates into all shell execution paths.
+        // This closes the SEC-003 gap: ShellEnv, ShellTools, SkillStepExecutor,
+        // and MarkdownToolExecutor all funnel through the same safety gate.
+        // Uses delegates (Func<string,string,bool>) to avoid LTAI.Core / LTAI.Tools
+        // taking a hard dependency on LTAI.DNA.
+        // ============================================================================
+        services.AddSingleton(sp =>
+        {
+            var safetyGate = sp.GetRequiredService<UnifiedSafetyGate>();
+
+            // ShellEnv (L0 — singleton instance)
+            global::LTAI.Core.System.ShellEnv.Instance.ExternalSafetyGate =
+                (tool, input) => safetyGate.EvaluateToolCall(tool, input);
+
+            // ShellTools (L1 — static class)
+            global::LTAI.Tools.General.ShellTools.ExternalSafetyGate =
+                (tool, input) => safetyGate.EvaluateToolCall(tool, input);
+
+            return new SafetyGateWireUp(); // marker singleton to ensure wiring runs once
         });
 
         return services;
@@ -695,3 +736,8 @@ public static class ServiceCollectionExtensions
         }
     }
 }
+
+/// <summary>
+/// Marker type for DI — ensures the UnifiedSafetyGate delegate wiring runs exactly once at startup.
+/// </summary>
+file sealed record SafetyGateWireUp;

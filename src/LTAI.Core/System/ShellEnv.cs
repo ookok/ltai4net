@@ -38,6 +38,12 @@ public sealed class ShellEnv
     private int _blockedCount;
     private int _runCount;
     private List<ToolInfo>? _cachedProbe;
+    /// <summary>
+    /// Delegate for external safety validation. Returns true if the command is safe.
+    /// Set during DI startup to wire UnifiedSafetyGate without hard dependency.
+    /// Signature: (toolName, input) => isSafe
+    /// </summary>
+    public Func<string, string, bool>? ExternalSafetyGate { get; set; }
 
     private static readonly string[] _dangerousPatterns = new[]
     {
@@ -287,6 +293,7 @@ public sealed class ShellEnv
 
     public async Task<ShellResult> Execute(string command, string workdir = ".", int timeoutSec = 30, int maxOutput = 50000)
     {
+        // Layer 1: local dangerous pattern check
         var blockReason = IsDangerous(command);
         if (blockReason != null)
         {
@@ -298,6 +305,22 @@ public sealed class ShellEnv
                 Workdir = workdir,
                 Blocked = true,
                 BlockReason = blockReason,
+                ExitCode = -1
+            };
+        }
+
+        // Layer 2: External safety gate (wired to UnifiedSafetyGate at DI startup)
+        if (ExternalSafetyGate != null && !ExternalSafetyGate("shell", command))
+        {
+            var safetyReason = "Blocked by external safety gate";
+            lock (_statsLock) { _blockedCount++; }
+            _logger.LogWarning("External safety gate blocked: {Command}", command);
+            return new ShellResult
+            {
+                Command = command,
+                Workdir = workdir,
+                Blocked = true,
+                BlockReason = safetyReason,
                 ExitCode = -1
             };
         }

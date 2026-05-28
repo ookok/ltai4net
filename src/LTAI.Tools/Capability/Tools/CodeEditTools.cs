@@ -20,6 +20,38 @@ public sealed class CodeEditTools
         _logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<CodeEditTools>.Instance;
     }
 
+    [Description("Replace code by exact text match (SEARCH/REPLACE). The SEARCH text must appear exactly once in the file. Safer than line-number editing. Adapted from DeepSeek-Reasonix.")]
+    public async Task<string> EditSearchReplace(
+        [Description("Absolute or relative file path")] string path,
+        [Description("Exact text to find (must be unique in the file)")] string search,
+        [Description("Text to substitute in place of search")] string replace,
+        CancellationToken cancellationToken = default)
+    {
+        var result = await _engine.ApplyEditAsync(new EditOp
+        {
+            FilePath = path,
+            Kind = EditOpKind.SearchReplace,
+            SearchText = search,
+            ReplaceText = replace,
+        }).ConfigureAwait(false);
+
+        return JsonSerializer.Serialize(new
+        {
+            result.Success,
+            result.WouldCompile,
+            result.SnapshotId,
+            errors = result.Errors,
+            warnings = result.Warnings,
+            diff = result.Diff?.UnifiedDiff,
+            diffStats = result.Diff != null ? new
+            {
+                result.Diff.LinesAdded,
+                result.Diff.LinesRemoved,
+                result.Diff.LinesUnchanged,
+            } : null,
+        });
+    }
+
     [Description("Replace a range of lines in a file. startLine/endLine are 1-based line numbers. Returns the unified diff.")]
     public async Task<string> EditReplaceRange(
         [Description("Absolute or relative file path")] string path,

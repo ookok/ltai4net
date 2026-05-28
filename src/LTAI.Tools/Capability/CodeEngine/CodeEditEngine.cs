@@ -9,7 +9,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 namespace LTAI.Tools.CodeEngine;
 
-public enum EditOpKind { ReplaceRange, InsertAfterLine, DeleteRange, ReplaceFunction }
+public enum EditOpKind { ReplaceRange, InsertAfterLine, DeleteRange, ReplaceFunction, SearchReplace }
 
 public sealed record EditOp
 {
@@ -19,6 +19,8 @@ public sealed record EditOp
     public int EndLine { get; init; }
     public string? NewCode { get; init; }
     public string? FunctionName { get; init; }
+    public string? SearchText { get; init; }
+    public string? ReplaceText { get; init; }
 }
 
 public sealed record DiffResult
@@ -73,6 +75,7 @@ public sealed class CodeEditEngine
                 EditOpKind.InsertAfterLine => ApplyInsertAfterLine(op),
                 EditOpKind.DeleteRange => ApplyDeleteRange(op),
                 EditOpKind.ReplaceFunction => await ApplyReplaceFunctionAsync(op),
+                EditOpKind.SearchReplace => ApplySearchReplace(op),
                 _ => new EditResult { Success = false, Errors = new() { $"Unknown operation: {op.Kind}" } },
             };
 
@@ -267,6 +270,58 @@ public sealed class CodeEditEngine
 
         lines.InsertRange(insertLine, newCodeLines);
         var newContent = string.Join('\n', lines);
+        var newHash = HashContent(newContent);
+
+        File.WriteAllText(op.FilePath, newContent);
+
+        return new EditResult { Success = true, SnapshotId = "", OriginalHash = originalHash, NewHash = newHash };
+    }
+
+    /// <summary>
+    /// SEARCH/REPLACE edit mode (adapted from DeepSeek-Reasonix).
+    /// Finds the exact SEARCH text in the file (must be unique) and replaces it with REPLACE text.
+    /// This is safer than line-number-based editing because it doesn't depend on line positions.
+    /// </summary>
+    private EditResult ApplySearchReplace(EditOp op)
+    {
+        if (!File.Exists(op.FilePath))
+            return new() { Success = false, Errors = new() { $"File not found: {op.FilePath}" } };
+
+        if (string.IsNullOrEmpty(op.SearchText))
+            return new() { Success = false, Errors = new() { "SearchText is required for SearchReplace" } };
+
+        var content = File.ReadAllText(op.FilePath);
+        var originalHash = HashContent(content);
+
+        // Verify SEARCH text exists and is unique
+        var searchText = op.SearchText;
+        var firstIndex = content.IndexOf(searchText, StringComparison.Ordinal);
+        if (firstIndex < 0)
+            return new()
+            {
+                Success = false,
+                Errors = new() { "SEARCH text not found in file. The file may have changed since you last read it." },
+                SnapshotId = "",
+                OriginalHash = originalHash,
+            };
+
+        var secondIndex = content.IndexOf(searchText, firstIndex + 1, StringComparison.Ordinal);
+        if (secondIndex >= 0)
+            return new()
+            {
+                Success = false,
+                Errors = new()
+                {
+                    $"SEARCH text is not unique — found at positions {firstIndex} and {secondIndex}. " +
+                    "Provide more surrounding context to make the match unique."
+                },
+                SnapshotId = "",
+                OriginalHash = originalHash,
+            };
+
+        // Apply replacement
+        var replaceText = op.ReplaceText ?? "";
+        var newContent = content[..firstIndex] + replaceText + content[(firstIndex + searchText.Length)..];
         var newHash = HashContent(newContent);
 
         File.WriteAllText(op.FilePath, newContent);

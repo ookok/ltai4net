@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using LTAI.Core.Interfaces;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -50,6 +51,8 @@ public sealed class CPSProcessingService : ICPSProcessingService
     private readonly LoopTrapDetector? _loopDetector;
     private readonly RecursiveCausalAudit? _causalAudit;
     private readonly SemanticAnchor? _semanticAnchor;
+    private readonly IMemPiGuidance? _memPi;
+    private readonly IProActCache? _proActCache;
     private int _totalProcessed;
     private long _totalLatencyMs;
     private long _totalTokensEstimated;
@@ -71,7 +74,9 @@ public sealed class CPSProcessingService : ICPSProcessingService
         Func<string, CancellationToken, Task<string>>? l0Invoke = null,
         Func<string, int, float[]>? embedder = null,
         RecursiveCausalAudit? causalAudit = null,
-        SemanticAnchor? semanticAnchor = null)
+        SemanticAnchor? semanticAnchor = null,
+        IMemPiGuidance? memPi = null,
+        IProActCache? proActCache = null)
     {
         _paretoRouter = paretoRouter;
         _intentClassifier = intentClassifier;
@@ -87,12 +92,65 @@ public sealed class CPSProcessingService : ICPSProcessingService
         _loopDetector = loopDetector;
         _causalAudit = causalAudit;
         _semanticAnchor = semanticAnchor;
+        _memPi = memPi;
+        _proActCache = proActCache;
     }
 
     public async Task<CPSResult> ProcessAsync(string query, CancellationToken ct = default)
     {
         var sw = global::System.Diagnostics.Stopwatch.StartNew();
         Interlocked.Increment(ref _totalProcessed);
+
+        // ProAct: check if query was anticipated — instant response from cache
+        if (_proActCache != null)
+        {
+            var match = _proActCache.TryMatch(query);
+            if (match?.PreComputedResponse != null)
+            {
+                sw.Stop();
+                _logger.LogInformation("CPS[ProAct-HIT] latency={LatMs}ms query='{Query}'",
+                    sw.ElapsedMilliseconds, query[..Math.Min(query.Length, 60)]);
+                return new CPSResult
+                {
+                    Success = true,
+                    Route = "reflex",
+                    Response = match.PreComputedResponse,
+                    Confidence = match.Confidence,
+                    Source = "proact_cache",
+                    LatencyMs = sw.ElapsedMilliseconds,
+                    Metadata = new Dictionary<string, object>
+                    {
+                        ["proact"] = true,
+                        ["proact_confidence"] = match.Confidence,
+                        ["proact_context"] = match.PreRetrievedContext ?? ""
+                    }
+                };
+            }
+        }
+
+        // ProAct: record this interaction for future anticipation
+        _proActCache?.RecordInteraction(query);
+
+        // Mem-π guidance: try to generate context-aware hints before routing
+        var memPiGuidance = "";
+        if (_memPi != null && _memPi.IsAvailable && _memPi.ShouldAttemptGuidance(query))
+        {
+            try
+            {
+                var mpResult = await _memPi.GenerateGuidanceAsync(query, query, ct).ConfigureAwait(false);
+                if (mpResult.Generated && !string.IsNullOrWhiteSpace(mpResult.Guidance))
+                {
+                    memPiGuidance = mpResult.Guidance;
+                    _logger.LogDebug("[CPS-MemPi] Guidance: {Guidance} (conf={Conf:F2}, {Lat}ms)",
+                        mpResult.Guidance[..Math.Min(mpResult.Guidance.Length, 80)],
+                        mpResult.Confidence, mpResult.LatencyMs);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "[CPS-MemPi] Guidance generation failed, falling through");
+            }
+        }
 
         var intentLabel = _intentClassifier?.Invoke(query, ct) ?? "general";
         var embedding = _embedder != null
@@ -132,6 +190,11 @@ public sealed class CPSProcessingService : ICPSProcessingService
         string response;
         string source;
 
+        // Inject Mem-π guidance into the query for non-reflex routes
+        var augmentedQuery = string.IsNullOrEmpty(memPiGuidance)
+            ? query
+            : $"{query}\n\n[MemPi-Guidance]: {memPiGuidance}";
+
         if (decision.Route == "reflex")
         {
             response = HandleReflex(query, intentLabel);
@@ -139,19 +202,19 @@ public sealed class CPSProcessingService : ICPSProcessingService
         }
         else if (decision.Route == "local")
         {
-            response = await HandleLocalAsync(query, ct).ConfigureAwait(false);
-            source = "l0_cache";
+            response = await HandleLocalAsync(augmentedQuery, ct).ConfigureAwait(false);
+            source = string.IsNullOrEmpty(memPiGuidance) ? "l0_cache" : "l0_cache+mempi";
         }
         else if (decision.Route == "L1" || (!useL2 && decision.Confidence > 0.6f))
         {
-            response = await HandleL1Async(query, ct).ConfigureAwait(false);
-            source = "l1_fast";
+            response = await HandleL1Async(augmentedQuery, ct).ConfigureAwait(false);
+            source = string.IsNullOrEmpty(memPiGuidance) ? "l1_fast" : "l1_fast+mempi";
             await _teacher.RecordL0DecisionAsync(embedding, decision.Route, ct).ConfigureAwait(false);
         }
         else
         {
-            response = await HandleL2Async(query, ct).ConfigureAwait(false);
-            source = "l2_deep";
+            response = await HandleL2Async(augmentedQuery, ct).ConfigureAwait(false);
+            source = string.IsNullOrEmpty(memPiGuidance) ? "l2_deep" : "l2_deep+mempi";
 
             var (q, s, c) = EstimateMetrics(response);
             await _teacher.RecordL2DecisionAsync(embedding, decision.Route, q, s, c, ct).ConfigureAwait(false);
@@ -230,7 +293,8 @@ public sealed class CPSProcessingService : ICPSProcessingService
             {
                 ["intent"] = intentLabel,
                 ["shadow"] = decision.IsShadowRouted,
-                ["phase"] = _teacher.GetStats().Phase.ToString()
+                ["phase"] = _teacher.GetStats().Phase.ToString(),
+                ["mempi"] = !string.IsNullOrEmpty(memPiGuidance)
             }
         };
     }

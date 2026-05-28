@@ -41,15 +41,18 @@ public sealed class BudgetTracker
 
             if (_dailySpent >= ai.DailyBudgetUsd)
                 throw new InvalidOperationException(
-                    $"Daily budget exceeded: {_dailySpent:F2} / {ai.DailyBudgetUsd} USD. Reset at midnight UTC.");
+                    $"每日预算超限: ¥{_dailySpent:F2} / ¥{ai.DailyBudgetUsd}。UTC 午夜重置。");
         }
     }
 
     public void EstimateCost(int totalTokens, string modelKey)
     {
         var pricing = _options.Value.ModelPricing;
-        var inputCostPer1M = pricing.InputPer1M.GetValueOrDefault(modelKey, pricing.InputPer1M.GetValueOrDefault("default", 0.50));
-        var outputCostPer1M = pricing.OutputPer1M.GetValueOrDefault(modelKey, pricing.OutputPer1M.GetValueOrDefault("default", 2.00));
+        // DeepSeek official pricing (CNY/1M tokens, 永久降价, 2026-04):
+        //   v4-flash:  input ￥1.01, output ￥2.02, cache-hit ￥0.02
+        //   v4-pro:    input ￥3.13, output ￥6.26
+        var inputCostPer1M = pricing.InputPer1M.GetValueOrDefault(modelKey, pricing.InputPer1M.GetValueOrDefault("default", 1.01));
+        var outputCostPer1M = pricing.OutputPer1M.GetValueOrDefault(modelKey, pricing.OutputPer1M.GetValueOrDefault("default", 2.02));
 
         var inputTokens = (int)(totalTokens * 0.3);
         var outputTokens = totalTokens - inputTokens;

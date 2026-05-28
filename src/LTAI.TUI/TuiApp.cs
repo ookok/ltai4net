@@ -32,6 +32,8 @@ public sealed class TuiApp
     private readonly LTAI.Core.Governors.CoordinationScheduler? _scheduler;
     private readonly LTAI.Core.Governors.ParetoRouter? _paretoRouter;
     private readonly LTAI.Core.Governors.IMicroKernel? _kernel;
+    private readonly LTAI.AI.Providers.BudgetTracker? _budget;
+    private readonly LTAI.AI.Providers.PrefixCacheStore? _prefixCache;
     private readonly ReasoningOrchestrator? _reasoning;
     private readonly MultiLangCodeAnalyzer? _analyzer;
     private readonly LLMConfigPanel _llmConfig;
@@ -94,7 +96,9 @@ public sealed class TuiApp
         LTAI.Core.Governors.CPSProcessingService? cps = null,
         LTAI.Core.Governors.CoordinationScheduler? scheduler = null,
         LTAI.Core.Governors.ParetoRouter? paretoRouter = null,
-        LTAI.Core.Governors.IMicroKernel? kernel = null)
+        LTAI.Core.Governors.IMicroKernel? kernel = null,
+        LTAI.AI.Providers.BudgetTracker? budget = null,
+        LTAI.AI.Providers.PrefixCacheStore? prefixCache = null)
     {
         _lts = lts;
         _dna = dna;
@@ -122,6 +126,8 @@ public sealed class TuiApp
         _scheduler = scheduler;
         _paretoRouter = paretoRouter;
         _kernel = kernel;
+        _budget = budget;
+        _prefixCache = prefixCache;
         _memoryTimeline = CreateMemoryTimeline(lts);
         _kgBrowser = new KgBrowserView(knowledgeGraph);
         _dnaView = new DnaEvolutionView(dna);
@@ -618,7 +624,7 @@ public sealed class TuiApp
 
     private void RenderPipelineView()
     {
-        var dashboard = new PipelineDashboard(_lts, _cps, _scheduler, _paretoRouter, _kernel);
+        var dashboard = new PipelineDashboard(_lts, _cps, _scheduler, _paretoRouter, _kernel, _budget, _prefixCache);
 #pragma warning disable CS8601
         var snap = new Dictionary<string, object>();
 

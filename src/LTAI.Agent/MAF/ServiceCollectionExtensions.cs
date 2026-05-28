@@ -1,4 +1,5 @@
 using LTAI.Agent.MAF;
+using LTAI.DNA.Safety;
 using LTAI.Knowledge.Core;
 using LTAI.Models;
 using LTAI.Core.Messaging;
@@ -83,7 +84,9 @@ public static class MAFServiceCollectionExtensions
             var logger = sp.GetRequiredService<ILogger<MarkdownToolExecutor>>();
             var httpClientFactory = sp.GetService<IHttpClientFactory>();
             var chatClient = sp.GetService<IChatClient>();
-            return new MarkdownToolExecutor(logger, httpClientFactory, chatClient, sp);
+            var safetyGate = sp.GetRequiredService<UnifiedSafetyGate>();
+            return new MarkdownToolExecutor(logger, httpClientFactory, chatClient, sp,
+                externalSafetyGate: (tool, input) => safetyGate.EvaluateToolCall(tool, input));
         });
         services.AddSingleton<ToolService>(sp =>
         {

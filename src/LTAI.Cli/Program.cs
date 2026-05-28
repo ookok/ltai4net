@@ -34,6 +34,7 @@ public class Program
             if (cmd is "env") { await RunEnvAsync(args[1..]); return 0; }
             if (cmd is "git") { await RunGitAsync(args[1..]); return 0; }
             if (cmd is "dev") { await RunDevAsync(args[1..]); return 0; }
+            if (cmd is "model") { await RunModelAsync(args[1..]); return 0; }
 
             if (_entryPoints.TryGetValue(cmd, out var entry))
             {
@@ -828,6 +829,249 @@ public class Program
     }
 
     // ════════════════════════════════════════════════════════════════
+    // ltai model — local ONNX model download & management
+    // ════════════════════════════════════════════════════════════════
+
+    private static async Task RunModelAsync(string[] args)
+    {
+        var sub = args.FirstOrDefault()?.ToLowerInvariant();
+
+        if (sub == "download")
+        {
+            await RunModelDownloadAsync(args[1..]);
+            return;
+        }
+        if (sub == "list")
+        {
+            RunModelListAsync(args[1..]);
+            return;
+        }
+        if (sub == "set")
+        {
+            RunModelSetAsync(args[1..]);
+            return;
+        }
+        if (sub == "tier" || sub == "cost")
+        {
+            RunModelTierAsync();
+            return;
+        }
+
+        // Default: show available models
+        RunModelListAsync(Array.Empty<string>());
+    }
+
+    private static void RunModelSetAsync(string[] args)
+    {
+        var tier = args.FirstOrDefault()?.ToLowerInvariant();
+        var config = CliConfig.Load();
+
+        switch (tier)
+        {
+            case "flash":
+                config.ReleaseChannel = "flash";
+                AnsiConsole.MarkupLine("[green]模型层级设为 [bold]flash[/] (v4-flash)[/]");
+                AnsiConsole.MarkupLine("[dim]输入 ￥1.01/1M, 输出 ￥2.02/1M, 缓存命中 ￥0.02/1M[/]");
+                break;
+            case "auto":
+                config.ReleaseChannel = "auto";
+                AnsiConsole.MarkupLine("[green]模型层级设为 [bold]auto[/] (flash优先自动升级)[/]");
+                AnsiConsole.MarkupLine("[dim]flash ￥1.01/2.02 → 自动升级时 pro ￥3.13/6.26[/]");
+                break;
+            case "pro":
+                config.ReleaseChannel = "pro";
+                AnsiConsole.MarkupLine("[green]模型层级设为 [bold]pro[/] (v4-pro, 永久降价)[/]");
+                AnsiConsole.MarkupLine("[dim]输入 ￥3.13/1M, 输出 ￥6.26/1M[/]");
+                break;
+            default:
+                AnsiConsole.MarkupLine("[red]Usage: ltai model set [flash|auto|pro][/]");
+                AnsiConsole.MarkupLine("[dim]flash — 仅快速模型  ￥1/4 每百万token[/]");
+                AnsiConsole.MarkupLine("[dim]auto  — flash优先自动升级 (默认)[/]");
+                AnsiConsole.MarkupLine("[dim]pro   — 仅深度模型  ￥4/16 每百万token[/]");
+                return;
+        }
+
+        config.Save();
+    }
+
+    private static void RunModelTierAsync()
+    {
+        var config = CliConfig.Load();
+        var currentTier = config.ReleaseChannel?.ToLowerInvariant() switch
+        {
+            "flash" => "flash",
+            "pro" => "pro",
+            _ => "auto"
+        };
+
+        var table = new Table()
+            .Border(TableBorder.Rounded)
+            .AddColumn("[bold]Tier[/]")
+            .AddColumn(new TableColumn("[bold]Model[/]").Width(20))
+            .AddColumn("[bold]Cost Multiplier[/]")
+            .AddColumn("[bold]Behavior[/]");
+
+        var tiers = new[]
+        {
+            ("flash", "v4-flash", "￥1.01/2.02 每百万token", "仅快速模型。缓存命中 ￥0.02/1M。"),
+            ("auto", "v4-flash → v4-pro", "flash ￥1.01/2.02, pro ￥3.13/6.26", "Flash优先，<<<NEEDS_PRO>>> 自动升级。"),
+            ("pro", "v4-pro", "￥3.13/6.26 每百万token", "仅深度模型。永久降价。")
+        };
+
+        foreach (var (tier, model, cost, desc) in tiers)
+        {
+            var isCurrent = tier == currentTier;
+            var prefix = isCurrent ? "[green]▶[/]" : " ";
+            var tierStyle = isCurrent ? $"bold green" : "";
+            table.AddRow(
+                new Markup($"{prefix} [{tierStyle}]{tier}[/]"),
+                new Markup(model),
+                new Markup(cost),
+                new Markup($"[dim]{desc}[/]"));
+        }
+
+        AnsiConsole.Write(table);
+        AnsiConsole.MarkupLine("");
+        AnsiConsole.MarkupLine($"[bold]Current:[/] [green]{currentTier}[/]");
+        AnsiConsole.MarkupLine("[dim]Auto-compress: tool results >3000 tokens capped at turn end[/]");
+        AnsiConsole.MarkupLine("[dim]Budget tracker: daily token limit + cost limit with degradation[/]");
+        AnsiConsole.MarkupLine("[dim]Change with: ltai model set [flash|auto|pro][/]");
+    }
+
+    private static async Task RunModelDownloadAsync(string[] args)
+    {
+        var layer = args.FirstOrDefault()?.ToLowerInvariant() ?? "l0";
+        var modelsRoot = Path.Combine(
+            Environment.GetEnvironmentVariable("LTAI_HOME")
+                ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".ltai"),
+            "models");
+
+        Directory.CreateDirectory(modelsRoot);
+
+        var downloader = new LTAI.Core.Network.ModelAutoDownloader(modelsRoot,
+            logger: null, maxRetries: 3);
+        downloader.OnProgress += p =>
+        {
+            if (p.Status == "downloading" && p.TotalBytes > 0)
+                AnsiConsole.MarkupLine($"  [dim]{p.Percent:F0}% {p.DownloadedBytes/1024/1024}/{p.TotalBytes/1024/1024} MB[/]");
+        };
+
+        var models = layer switch
+        {
+            "l0" => LTAI.Core.Governors.LocalModelRegistry.GetByLayer(LTAI.Core.Governors.ModelLayer.L0),
+            "l1" => LTAI.Core.Governors.LocalModelRegistry.GetByLayer(LTAI.Core.Governors.ModelLayer.L1),
+            "l2" => LTAI.Core.Governors.LocalModelRegistry.GetByLayer(LTAI.Core.Governors.ModelLayer.L2),
+            "all" => LTAI.Core.Governors.LocalModelRegistry.AvailableModels,
+            _ => LTAI.Core.Governors.LocalModelRegistry.GetByVersion(layer) is { } m
+                ? new[] { m }
+                : Array.Empty<LTAI.Core.Governors.LocalModelInfo>()
+        };
+
+        if (models.Count == 0)
+        {
+            AnsiConsole.MarkupLine($"[red]No models found for: {layer}[/]");
+            return;
+        }
+
+        AnsiConsole.MarkupLine($"[bold cyan]Downloading {models.Count} model(s) for layer '{layer}'...[/]");
+        AnsiConsole.MarkupLine($"[dim]Target: {modelsRoot}[/]");
+        AnsiConsole.MarkupLine("");
+
+        var totalSize = models.Sum(m => m.DiskSizeMB);
+        var downloaded = 0;
+        var failed = 0;
+
+        foreach (var model in models)
+        {
+            AnsiConsole.Markup($"[bold]{model.Name}[/] [dim]({model.DiskSizeMB}MB)[/] ");
+            try
+            {
+                var result = await downloader.DownloadAsync(model);
+                if (result.Success)
+                {
+                    downloaded++;
+                    AnsiConsole.MarkupLine($"[green]✓ {result.FileSizeBytes/1024/1024}MB[/]");
+                }
+                else
+                {
+                    failed++;
+                    AnsiConsole.MarkupLine($"[red]✗ {result.Error}[/]");
+                }
+            }
+            catch (Exception ex)
+            {
+                failed++;
+                AnsiConsole.MarkupLine($"[red]✗ {ex.Message}[/]");
+            }
+        }
+
+        AnsiConsole.MarkupLine("");
+        AnsiConsole.MarkupLine($"[bold]Done:[/] [green]{downloaded} downloaded[/], [red]{failed} failed[/], [dim]{totalSize}MB total[/]");
+        AnsiConsole.MarkupLine($"[dim]Models stored in: {modelsRoot}[/]");
+    }
+
+    private static void RunModelListAsync(string[] args)
+    {
+        var layerFilter = args.FirstOrDefault()?.ToLowerInvariant();
+        var models = layerFilter switch
+        {
+            "l0" => LTAI.Core.Governors.LocalModelRegistry.GetByLayer(LTAI.Core.Governors.ModelLayer.L0),
+            "l1" => LTAI.Core.Governors.LocalModelRegistry.GetByLayer(LTAI.Core.Governors.ModelLayer.L1),
+            "l2" => LTAI.Core.Governors.LocalModelRegistry.GetByLayer(LTAI.Core.Governors.ModelLayer.L2),
+            _ => LTAI.Core.Governors.LocalModelRegistry.AvailableModels
+        };
+
+        var table = new Table()
+            .Border(TableBorder.Rounded)
+            .AddColumn("[bold]Layer[/]")
+            .AddColumn(new TableColumn("[bold]Model[/]").Width(40))
+            .AddColumn(new TableColumn("[bold]Size[/]").Width(10))
+            .AddColumn("[bold]Engine[/]")
+            .AddColumn(new TableColumn("[bold]Description[/]").Width(50));
+
+        foreach (var m in models.OrderBy(m => m.Layer).ThenBy(m => m.DiskSizeMB))
+        {
+            var layerLabel = m.Layer switch
+            {
+                LTAI.Core.Governors.ModelLayer.L0 => "[cyan]L0[/]",
+                LTAI.Core.Governors.ModelLayer.L1 => "[yellow]L1[/]",
+                LTAI.Core.Governors.ModelLayer.L2 => "[magenta]L2[/]",
+                _ => "?"
+            };
+
+            var sizeLabel = m.DiskSizeMB >= 1024
+                ? $"{m.DiskSizeMB / 1024.0:F1} GB"
+                : $"{m.DiskSizeMB} MB";
+
+            var engineLabel = m.EngineType.ToUpperInvariant() switch
+            {
+                "ONNX" => "[green]ONNX[/]",
+                "GGUF" => "[dim]GGUF[/]",
+                _ => m.EngineType
+            };
+
+            // Check if downloaded
+            var modelDir = Path.Combine(
+                Environment.GetEnvironmentVariable("LTAI_HOME")
+                    ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".ltai"),
+                "models", m.Version);
+            var downloaded = Directory.Exists(modelDir) && Directory.GetFiles(modelDir).Length > 0;
+            var prefix = downloaded ? "[green]✓[/]" : " ";
+
+            table.AddRow(
+                new Markup(layerLabel),
+                new Markup($"{prefix} {m.Name}"),
+                new Markup(sizeLabel),
+                new Markup(engineLabel),
+                new Markup($"[dim]{m.Description}[/]"));
+        }
+
+        AnsiConsole.Write(table);
+        AnsiConsole.MarkupLine("");
+        AnsiConsole.MarkupLine("[dim]Run 'ltai model download l0' to download recommended L0 models.[/]");
+    }
+
+    // ════════════════════════════════════════════════════════════════
     // ltai git — native Git operations via libgit2sharp (no git CLI needed)
     // ════════════════════════════════════════════════════════════════
 
@@ -1400,7 +1644,7 @@ public class Program
         AnsiConsole.MarkupLine("  ltai up            Start TUI (default)");
         AnsiConsole.MarkupLine("");
         AnsiConsole.MarkupLine("[bold]Commands:[/]");
-        AnsiConsole.MarkupLine("  init, install, setup, add, remove, up, down, ps, update, env, git, dev");
+        AnsiConsole.MarkupLine("  init, install, setup, add, remove, up, down, ps, update, env, git, dev, model");
     }
 
     private static void ScanEntryPoints()
