@@ -2110,8 +2110,19 @@ public sealed class ToolDef
 internal static class CliEngine
 {
     private static readonly List<object> _generatedTools = new();
-    private static readonly HashSet<string> DangerousCommands = new()
-    { "rm", "dd", "shutdown", "reboot", "sudo", "mkfs", "fdisk", "format", "del /f", "rd /s", "format c:" };
+
+    // Structured dangerous command patterns (replaces old DangerousCommands substring match)
+    private static readonly (string Name, System.Text.RegularExpressions.Regex Pattern)[] DangerousPatterns = new[]
+    {
+        ("recursive_delete", new System.Text.RegularExpressions.Regex(
+            @"^\s*(?:sudo\s+)?(?:rm|del|rd)\s+(?:-rf|/f\s*/s)\s+[/\\]", System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled)),
+        ("disk_destroy", new System.Text.RegularExpressions.Regex(
+            @"(?:dd\s+(?:if\s*=\s*)?/dev/|mkfs|fdisk|format\s+[a-z]:)", System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled)),
+        ("system_shutdown", new System.Text.RegularExpressions.Regex(
+            @"^(?:sudo\s+)?(?:shutdown|reboot|poweroff|halt)\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled)),
+        ("privilege", new System.Text.RegularExpressions.Regex(
+            @"^(?:sudo|su)\s+(?:rm|dd|mkfs|shutdown|reboot|passwd|useradd)", System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled)),
+    };
 
     public static object WrapFunction(string name, string code, string language = "python")
     {
@@ -2150,8 +2161,11 @@ internal static class CliEngine
 
     public static async Task<object> Execute(string command, string args)
     {
-        if (DangerousCommands.Any(d => command.Contains(d, StringComparison.OrdinalIgnoreCase)))
-            return JsonToolResult.Success(new { blocked = true, reason = "Dangerous command blocked by safety gate", command });
+        foreach (var (name, pattern) in DangerousPatterns)
+        {
+            if (pattern.IsMatch(command))
+                return JsonToolResult.Success(new { blocked = true, reason = $"Blocked by dangerous pattern [{name}]", command });
+        }
 
         try
         {
