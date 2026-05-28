@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -38,6 +39,69 @@ public sealed class PromptShield
     private int _violationsCaught;
     private readonly ConcurrentQueue<HITLRequest> _hitlQueue = new();
 
+    // Zero-width and invisible characters used in homoglyph/bypass attacks
+    private static readonly char[] ZeroWidthChars = {
+        '\u200B', // ZERO WIDTH SPACE
+        '\u200C', // ZERO WIDTH NON-JOINER
+        '\u200D', // ZERO WIDTH JOINER
+        '\uFEFF', // ZERO WIDTH NO-BREAK SPACE (BOM)
+        '\u2060', // WORD JOINER
+        '\u2061', '\u2062', '\u2063', '\u2064', // invisible operators
+        '\u00AD', // SOFT HYPHEN
+        '\u034F', // COMBINING GRAPHEME JOINER
+        '\u061C', // ARABIC LETTER MARK
+        '\u180E', // MONGOLIAN VOWEL SEPARATOR
+    };
+
+    // Chinese injection keywords (supplement English patterns)
+    private static readonly string[] ChineseInjectionKeywords =
+    {
+        "忽略之前", "忽略所有指令", "忽略以上", "忽略之前的指令",
+        "覆盖系统", "覆盖系统提示", "无视规则", "无视所有限制",
+        "你现在是", "扮演一个", "假设你是", "假装你是",
+        "输出你的提示词", "显示系统提示", "泄露你的指令",
+        "新的指令", "新规则", "从现在开始",
+        "忽略上文", "忽略上文的", "请忽略", "请忽略上文",
+        "重置指令", "清除记忆", "清除上下文", "重置对话",
+        "不要遵守", "不遵守", "不要听", "不要遵循",
+        "系统指令", "系统提示", "系统规则", "底层指令",
+        "越狱", "破解模式", "无限制模式", "自由模式",
+        "提取提示词", "输出系统提示", "查看你的指令", "显示你的规则",
+        "复制你的系统提示", "输出你的系统指令",
+    };
+
+    /// <summary>
+    /// Normalize text to defend against Unicode homoglyph and zero-width injection attacks.
+    /// 1. Strip zero-width/invisible characters
+    /// 2. Apply NFKC normalization (decomposes lookalike chars to canonical forms)
+    /// Returns the normalized string and whether any changes were made.
+    /// </summary>
+    private static (string Normalized, bool Changed) NormalizeUnicode(string text)
+    {
+        if (string.IsNullOrEmpty(text))
+            return (text, false);
+
+        var changed = false;
+
+        // Step 1: Strip zero-width characters
+        var stripped = text;
+        foreach (var z in ZeroWidthChars)
+        {
+            if (stripped.Contains(z))
+            {
+                stripped = stripped.Replace(z.ToString(), "");
+                changed = true;
+            }
+        }
+
+        // Step 2: NFKC normalization (decomposes homoglyphs like Cyrillic 'і' → Latin 'i')
+        var normalized = stripped.Normalize(NormalizationForm.FormKC);
+        if (normalized != stripped)
+            changed = true;
+
+        return (normalized, changed);
+    }
+
     private static readonly (string Name, string Pattern)[] _inputPatterns = new (string, string)[]
     {
         ("ignore_instructions", @"ignore\s+(all\s+)?(previous|prior|above|before)\s+(instructions?|directions?|constraints?)"),
@@ -45,6 +109,8 @@ public sealed class PromptShield
         ("roleplay_malicious", @"(DAN|jailbreak)\s*(mode|prompt|enabled|activated)|(developer|god)\s*mode"),
         ("override_safety", @"(bypass|disable|ignore|override)\s+(safety|filter|guardrail|content\s*policy|ethics?)"),
         ("destructive_command", @"(delete\s+(all|every)\s+file|wipe\s+(the\s+)?(disk|drive|system)|drop\s+(database|table)\s+\*)"),
+        ("destructive_command_zh", @"(?:删除\s*(?:所有|全部)\s*(?:文件|数据)|格式化\s*(?:磁盘|硬盘|系统)|清空\s*(?:数据库|全部)\s*(?:数据|记录|表)|删除\s*系统\s*文件|销毁\s*(?:所有|全部)\s*数据|drop\s*(?:database|table)\s+)"),
+        ("indirect_injection", @"(?:以下(?:是|的)?(?:文档|内容|信息|资料|知识|上下文)(?:中|里|内)?(?:的)?(?:内容|信息|指令|要求)|检索到(?:的)?(?:以下|如下)(?:文档|内容)|根据(?:以下|如下)(?:文档|资料))"),
         ("privilege_escalation", @"(sudo|admin|root)\s+(access|privilege|right|permission)"),
         ("token_boundary", @"<\|endoftext\|>|<\|im_start\|>|<\|im_end\|>|</?system>"),
         ("template_injection", @"\{\{.*?[^{}\w].*?\}\}|\{%\s*(if|for|include|extends|block)"),
@@ -58,7 +124,10 @@ public sealed class PromptShield
         ("api_keys", @"(sk-[a-zA-Z0-9]{20,}|AIza[0-9A-Za-z\-_]{35}|AKIA[0-9A-Z]{16}|ghp_[a-zA-Z0-9]{36})", "Potential API key in output"),
         ("harmful_urls", @"https?://(?:pastebin\.com|bit\.ly|tinyurl\.com|shorturl\.at)/(?:raw|dl)/\w+", "Suspicious URL detected"),
         ("hate_speech", @"\b(?:kill\s+(?:all|every(?:one|body))|exterminate\s+(?:all|every)|ethnic\s+cleansing)\b", "Hate speech or violence detected"),
-        ("self_harm", @"\b(?:suicide|self[- ]?harm|kill\s+(?:yourself|myself)|end\s+it\s+all)\b", "Self-harm content detected")
+        ("hate_speech_zh", @"(?:杀死\s*(?:所有人|全部|一切)|种族\s*(?:灭绝|清洗)|消灭\s*(?:所有|一切|全部)|暴力\s*(?:伤害|袭击|攻击))", "Hate speech or violence detected (Chinese)"),
+        ("self_harm", @"\b(?:suicide|self[- ]?harm|kill\s+(?:yourself|myself)|end\s+it\s+all)\b", "Self-harm content detected"),
+        ("self_harm_zh", @"(?:自杀|自残|自我伤害|结束(?:自己|生命)|伤害\s*自己)", "Self-harm content detected (Chinese)"),
+        ("internal_config", @"(?:api[_-]?key|api[_-]?secret|connection[_-]?string|password|secret|token|auth[_-]?token|bearer\s+[a-zA-Z0-9]{16,})", "Potential internal configuration or secret leaked")
     };
 
     public PromptShield(ILogger<PromptShield> logger)
@@ -73,8 +142,25 @@ public sealed class PromptShield
             return new ShieldResult { Passed = true, Layer = "input", OriginalText = text ?? string.Empty, SanitizedText = text ?? string.Empty };
         }
 
-        var sanitized = text;
+        // Step 0: Unicode normalization — defend against homoglyph + zero-width attacks
+        var (normalized, unicodeChanged) = NormalizeUnicode(text);
+        if (unicodeChanged)
+        {
+            _logger.LogInformation("PromptShield: Unicode normalization applied (homoglyph/zero-width defense)");
+        }
+
+        var sanitized = normalized;
         var violations = new List<string>();
+
+        // Step 0.5: Chinese injection keyword detection
+        foreach (var keyword in ChineseInjectionKeywords)
+        {
+            if (sanitized.Contains(keyword, StringComparison.OrdinalIgnoreCase))
+            {
+                violations.Add($"chinese_injection:{keyword}");
+                sanitized = sanitized.Replace(keyword, "[BLOCKED]", StringComparison.OrdinalIgnoreCase);
+            }
+        }
 
         foreach (var (name, pattern) in _inputPatterns)
         {
@@ -235,7 +321,8 @@ public sealed class PromptShield
         if (!outputResult.Passed)
         {
             Escalate("output_violation", $"Output shield detected: {string.Join(", ", outputResult.Violations)}", "system",
-                outputResult.Violations.Contains("hate_speech") || outputResult.Violations.Contains("self_harm") ? "critical" : "medium");
+                outputResult.Violations.Contains("hate_speech") || outputResult.Violations.Contains("hate_speech_zh") ||
+                outputResult.Violations.Contains("self_harm") || outputResult.Violations.Contains("self_harm_zh") ? "critical" : "medium");
         }
 
         return outputResult;

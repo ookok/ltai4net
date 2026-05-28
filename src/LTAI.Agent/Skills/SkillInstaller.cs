@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using LTAI.Knowledge.Core;
 using LTAI.Models;
@@ -176,20 +178,71 @@ public sealed class SkillInstaller
             var skill = await _loader.LoadAsync(tempFile, ct).ConfigureAwait(false);
             if (skill == null) return null;
 
+            // Compute content hash for integrity verification
+            var contentHash = ComputeSha256(content);
+
+            // If the skill declares a content_hash, verify it matches the actual content
+            if (!string.IsNullOrEmpty(skill.ContentHash))
+            {
+                if (!string.Equals(skill.ContentHash, contentHash, StringComparison.OrdinalIgnoreCase))
+                {
+                    _logger.LogError(
+                        "Content hash mismatch for skill '{Skill}' from {Source}: declared={Declared} actual={Actual}",
+                        skill.Name, source, skill.ContentHash, contentHash);
+                    return null;
+                }
+                _logger.LogInformation("Content hash verified for skill '{Skill}': {Hash}", skill.Name, contentHash);
+            }
+            else
+            {
+                // Auto-populate hash for downloaded skills that don't declare one
+                skill = skill with { ContentHash = contentHash };
+                _logger.LogInformation("Content hash computed for skill '{Skill}': {Hash}", skill.Name, contentHash);
+            }
+
             var destDir = Path.Combine(_skillsRoot, skill.LayerDir);
             Directory.CreateDirectory(destDir);
 
             var destFile = Path.Combine(destDir, $"{skill.Name}.md");
             await File.WriteAllTextAsync(destFile, content, ct).ConfigureAwait(false);
 
+            // Write hash sidecar file for runtime verification
+            var hashFile = destFile + ".sha256";
+            await File.WriteAllTextAsync(hashFile, contentHash, ct).ConfigureAwait(false);
+
             _registry.Register(skill);
 
-            _logger.LogInformation("Installed skill {Name} from {Source}", skill.Name, source);
+            _logger.LogInformation("Installed skill {Name} from {Source} (hash={Hash})", skill.Name, source, contentHash);
             return skill;
         }
         finally
         {
             try { File.Delete(tempFile); } catch { }
         }
+    }
+
+    /// <summary>Compute SHA256 content hash for integrity verification.</summary>
+    private static string ComputeSha256(string content)
+    {
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(content));
+        return Convert.ToHexStringLower(hash);
+    }
+
+    /// <summary>Verify a file's content matches its .sha256 sidecar or embedded hash.</summary>
+    public static bool VerifyFileIntegrity(string filePath)
+    {
+        if (!File.Exists(filePath)) return false;
+
+        // Check sidecar .sha256 file first
+        var hashFilePath = filePath + ".sha256";
+        if (File.Exists(hashFilePath))
+        {
+            var expectedHash = File.ReadAllText(hashFilePath).Trim();
+            var content = File.ReadAllText(filePath);
+            var actualHash = ComputeSha256(content);
+            return string.Equals(expectedHash, actualHash, StringComparison.OrdinalIgnoreCase);
+        }
+
+        return true; // No sidecar = legacy file, skip
     }
 }

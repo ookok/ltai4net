@@ -14,7 +14,7 @@ public sealed record PlanNode
     public string Name { get; init; } = "";
     public string Description { get; init; } = "";
     public List<string> ToolCalls { get; init; } = new();
-    public List<PlanNode> Children { get; init; } = new();
+    public List<PlanNode> Children { get; set; } = new();
     public Dictionary<string, string> Parameters { get; init; } = new();
     public string? ParentPlanId { get; set; }
     public bool IsReusable { get; set; } = true;
@@ -55,11 +55,12 @@ public sealed class HTNPlanner
         _logger = logger;
     }
 
-    public PlanNode DecomposeWithValidation(string task, string domain, List<string> availableTools, int maxRetries = 3)
+    public PlanNode DecomposeWithValidation(string task, string domain, List<string> availableTools,
+        int maxRetries = 3, int maxTools = 5)
     {
         for (int attempt = 0; attempt < maxRetries; attempt++)
         {
-            var plan = DecomposeTask(task, domain, availableTools);
+            var plan = DecomposeTask(task, domain, availableTools, maxTools);
             if (ValidatePlan(plan, availableTools)) return plan;
 
             _logger.LogWarning("HTN: Plan validation failed (attempt {Attempt}/{Max}), retrying with broader domain",
@@ -68,6 +69,7 @@ public sealed class HTNPlanner
         }
 
         _logger.LogError("HTN: All {Max} decomposition attempts failed for task '{Task}'", maxRetries, task);
+        var effectiveTools = Math.Max(1, Math.Min(maxTools, availableTools.Count));
         return new PlanNode
         {
             Id = $"fallback_{Guid.NewGuid():N}"[..12],
@@ -77,7 +79,7 @@ public sealed class HTNPlanner
             Children = new List<PlanNode>
             {
                 new() { Type = PlanNodeType.ToolCall, Name = "direct_execution", Description = task,
-                    ToolCalls = availableTools.Take(5).ToList() }
+                    ToolCalls = availableTools.Take(effectiveTools).ToList() }
             }
         };
     }
@@ -100,7 +102,7 @@ public sealed class HTNPlanner
         return true;
     }
 
-    public PlanNode DecomposeTask(string task, string domain, List<string> availableTools)
+    public PlanNode DecomposeTask(string task, string domain, List<string> availableTools, int maxTools = 5)
     {
         var rootId = $"root_{Guid.NewGuid():N}"[..12];
         var root = new PlanNode
@@ -113,10 +115,14 @@ public sealed class HTNPlanner
         if (template != null)
         {
             _logger.LogInformation("HTN: Reusing template {Template} for domain {Domain}", template.Name, domain);
-            return InstantiateTemplate(template, rootId, task);
+            var instantiated = InstantiateTemplate(template, rootId, task);
+            // Cap reused template children
+            if (instantiated.Children.Count > maxTools)
+                instantiated.Children = instantiated.Children.Take(maxTools).ToList();
+            return instantiated;
         }
 
-        var subTasks = DecomposeByPattern(task, domain);
+        var subTasks = DecomposeByPattern(task, domain, maxTools);
         foreach (var (name, desc, tools) in subTasks)
         {
             var subPlan = FindBestSubPlan(name, domain);
@@ -141,11 +147,12 @@ public sealed class HTNPlanner
 
         if (root.Children.Count == 0)
         {
+            var effectiveTools = Math.Max(1, Math.Min(maxTools, availableTools.Count));
             root.Children.Add(new PlanNode
             {
                 Type = PlanNodeType.ToolCall, Name = "direct_execution",
                 Description = task,
-                ToolCalls = availableTools.Take(3).ToList(),
+                ToolCalls = availableTools.Take(effectiveTools).ToList(),
                 ParentPlanId = rootId
             });
         }
@@ -154,9 +161,9 @@ public sealed class HTNPlanner
     }
 
     public (PlanNode Primary, List<PlanNode> Alternatives) DecomposeWithAlternatives(
-        string task, string domain, List<string> availableTools, int maxAlternatives = 2)
+        string task, string domain, List<string> availableTools, int maxAlternatives = 2, int maxTools = 5)
     {
-        var primary = DecomposeTask(task, domain, availableTools);
+        var primary = DecomposeTask(task, domain, availableTools, maxTools);
         var alternatives = new List<PlanNode>();
 
         var templates = _templates.Values
@@ -314,7 +321,7 @@ public sealed class HTNPlanner
     }
 
     private List<(string name, string desc, List<string> tools)> DecomposeByPattern(
-        string task, string domain)
+        string task, string domain, int maxTools = 5)
     {
         var result = new List<(string, string, List<string>)>();
         var lower = task.ToLowerInvariant();
@@ -347,7 +354,7 @@ public sealed class HTNPlanner
         if (result.Count == 0)
             result.Add(("General Processing", task, new List<string> { "km_search", "shell" }));
 
-        return result.Take(5).ToList();
+        return result.Take(maxTools).ToList();
     }
 
     private PlanTemplate CreateTemplate(PlanNode plan)

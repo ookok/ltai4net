@@ -20,6 +20,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<SpeechEngine>();
         services.AddSingleton<MultimodalOrchestrator>();
         services.AddHostedService<OCREngineCleanupService>();
+        services.AddHostedService<RapidOcrInitService>();
 
         services.AddSingleton<LTAI.Core.Multimodal.WhisperSttEngine>();
         services.AddSingleton<LTAI.Core.Multimodal.FfmpegMediaProcessor>();
@@ -114,5 +115,26 @@ public static class ServiceCollectionExtensions
     {
         public Task StartAsync(CancellationToken ct) => Task.CompletedTask;
         public Task StopAsync(CancellationToken ct) { ocr.Dispose(); return Task.CompletedTask; }
+    }
+
+    internal sealed class RapidOcrInitService(RapidOCREngine rapidOcr, ILogger<RapidOcrInitService> logger) : IHostedService
+    {
+        public async Task StartAsync(CancellationToken ct)
+        {
+            try
+            {
+                await rapidOcr.InitializeAsync(ct).ConfigureAwait(false);
+                if (rapidOcr.IsReady)
+                    logger.LogInformation("RapidOCR ONNX models loaded successfully");
+                else
+                    logger.LogWarning("RapidOCR models not found — will use Tesseract fallback");
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "RapidOCR initialization failed — will use Tesseract fallback");
+            }
+        }
+
+        public Task StopAsync(CancellationToken ct) => Task.CompletedTask;
     }
 }

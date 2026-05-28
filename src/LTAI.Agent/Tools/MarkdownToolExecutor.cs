@@ -25,14 +25,10 @@ public sealed class MarkdownToolExecutor
     private readonly Func<string, string, bool>? _externalSafetyGate;
     private Func<string, MkTool?>? _toolResolver;
     private static readonly SemaphoreSlim ComposeConcurrencyGate = new(8, 8);
+    private static readonly ToolRateLimiter ToolRateGate = new(maxCallsPerWindow: 10, windowSeconds: 60);
 
     private static readonly Regex VariablePattern = new(@"\{\{(\w+)\}\}", RegexOptions.Compiled);
     private static readonly Regex IfPattern = new(@"\{\{#if\s+(\w+)\}\}(.*?)\{\{/if\}\}", RegexOptions.Compiled | RegexOptions.Singleline);
-    private static readonly HashSet<string> DangerousCommands = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "rm -rf /", "rm -rf /*", "del /f /s C:\\", "format", "shutdown /s",
-        "shutdown -h", ":(){ :|:& };:", "mkfs", "dd if=/dev/zero", "> /dev/sda"
-    };
 
     public MarkdownToolExecutor(
         ILogger<MarkdownToolExecutor> logger,
@@ -57,6 +53,14 @@ public sealed class MarkdownToolExecutor
 
     public async Task<object?> ExecuteAsync(MkTool tool, Dictionary<string, object?> args)
     {
+        // Rate limit check: per tool type, sliding window
+        var toolType = tool.Type.ToString().ToLowerInvariant();
+        if (!ToolRateGate.AllowCall(toolType))
+        {
+            _logger.LogWarning("Rate limit exceeded for tool type '{Type}' (tool={Name})", toolType, tool.Name);
+            return new { error = $"Rate limit exceeded for {toolType} tools. Try again later.", rate_limited = true };
+        }
+
         try
         {
             var result = tool.Type switch
@@ -84,10 +88,12 @@ public sealed class MarkdownToolExecutor
     {
         var command = FillTemplate(tool.Template, args);
 
-        foreach (var dangerous in DangerousCommands)
+        // Layer 1-3: ShellCommandValidator structural analysis (replaces old DangerousCommands)
+        var (allowed, reason) = ShellCommandValidator.Validate(command);
+        if (!allowed)
         {
-            if (command.Contains(dangerous, StringComparison.OrdinalIgnoreCase))
-                return new { error = $"Blocked dangerous command pattern: {dangerous}", blocked = true };
+            _logger.LogWarning("Shell command blocked: {Reason} — command={Cmd}", reason, Truncate(command, 3));
+            return new { error = $"Blocked: {reason}", blocked = true };
         }
 
         // External safety gate: wired to UnifiedSafetyGate at DI startup

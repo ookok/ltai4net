@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.RegularExpressions;
 using LTAI.Models;
 using Microsoft.Extensions.Logging;
@@ -30,6 +32,15 @@ public sealed class SkillLoader
         try
         {
             var text = await File.ReadAllTextAsync(filePath, ct).ConfigureAwait(false);
+
+            // Integrity check: if a .sha256 sidecar exists, verify content matches
+            if (!SkillInstaller.VerifyFileIntegrity(filePath))
+            {
+                _logger.LogWarning(
+                    "Content hash mismatch for {Path} — file may have been tampered with. Refusing to load.",
+                    filePath);
+                return null;
+            }
 
             var skill = new Skill { SourceFile = filePath };
             var lines = text.Split('\n');

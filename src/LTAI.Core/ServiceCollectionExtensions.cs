@@ -46,6 +46,7 @@ public static class ServiceCollectionExtensions
 
         services.AddSingleton(sp => ShellEnv.Instance);
         services.AddSingleton(sp => PromptShield.Instance);
+        services.AddSingleton<IConcurrencyGuard>(sp => ConcurrencyGuard.Instance);
         services.AddSingleton(sp => ResourceTree.Instance);
         services.AddSingleton(sp => UniversalScanner.Instance);
         services.AddSingleton(sp => AtomicModification.Instance);

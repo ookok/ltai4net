@@ -1,6 +1,7 @@
 using LTAI.Agent.Agents;
 using LTAI.Agent.Routing;
 using LTAI.Core.Configuration;
+using LTAI.Core.System;
 using LTAI.Models;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
@@ -16,19 +17,24 @@ public sealed class UniversalOrchestrator
     private readonly UnifiedSemanticRouter _router;
     private readonly HarnessProfile _harness;
     private readonly SentientParliament? _parliament;
+    private readonly IConcurrencyGuard? _concurrencyGuard;
     private readonly Dictionary<string, BaseAgent> _agents = new();
     private const int MaxRecursionDepth = 3;
+    private const int FanOutTimeoutMs = 60_000;
+    private const int DefaultMaxConcurrent = 3;
 
     public UniversalOrchestrator(
         ILogger<UniversalOrchestrator> logger,
         UnifiedSemanticRouter router,
         HarnessProfile? harness = null,
-        SentientParliament? parliament = null)
+        SentientParliament? parliament = null,
+        IConcurrencyGuard? concurrencyGuard = null)
     {
         _logger = logger;
         _router = router;
         _harness = harness ?? HarnessProfile.For(HarnessMode.Hybrid);
         _parliament = parliament;
+        _concurrencyGuard = concurrencyGuard;
     }
 
     public void RegisterAgent(string name, BaseAgent agent)
@@ -134,14 +140,103 @@ public sealed class UniversalOrchestrator
         var userMsg = msgList.LastOrDefault(m => m.Role == ChatRole.User);
         var routes = await _router.RouteAllAsync(userMsg?.Text ?? "", ct);
 
-        var tasks = routes.Take(3)
-            .Where(r => _agents.ContainsKey(r.TargetAgent.ToString().ToLowerInvariant()))
-            .Select(r => _agents[r.TargetAgent.ToString().ToLowerInvariant()].RunAsync(messages, session, null, ct));
+        // Resource-aware concurrency limit
+        var availableSlots = GetAvailableConcurrencySlots();
+        var maxConcurrent = Math.Min(availableSlots, DefaultMaxConcurrent);
 
-        var results = await Task.WhenAll(tasks).ConfigureAwait(false);
+        var selected = routes
+            .Where(r => _agents.ContainsKey(r.TargetAgent.ToString().ToLowerInvariant()))
+            .Take(maxConcurrent)
+            .ToList();
+
+        if (selected.Count == 0)
+        {
+            _logger.LogWarning("FanOut: no agents available for {Count} routes (slots={Slots})",
+                routes.Count, availableSlots);
+            return new(new ChatMessage(ChatRole.Assistant,
+                $"No agents available. Current concurrency: {DefaultMaxConcurrent - availableSlots}/{DefaultMaxConcurrent}"));
+        }
+
+        _logger.LogInformation("FanOut: executing {Count} agents concurrently (slots={Slots}/{Max})",
+            selected.Count, availableSlots, DefaultMaxConcurrent);
+
+        // Timed parallel execution
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeoutCts.CancelAfter(FanOutTimeoutMs);
+        var timeoutToken = timeoutCts.Token;
+
+        var agentTasks = selected
+            .Select(r => _agents[r.TargetAgent.ToString().ToLowerInvariant()]
+                .RunAsync(messages, session, null, timeoutToken))
+            .ToList();
+
+        AgentResponse[] results;
+        try
+        {
+            var completed = await Task.WhenAll(agentTasks).ConfigureAwait(false);
+            results = completed;
+        }
+        catch (OperationCanceledException)
+        {
+            _logger.LogWarning("FanOut: {Count}/{Total} agents timed out after {Timeout}ms",
+                agentTasks.Count(t => !t.IsCompletedSuccessfully), agentTasks.Count, FanOutTimeoutMs);
+            results = agentTasks
+                .Select(t => t.IsCompletedSuccessfully ? t.Result
+                    : new AgentResponse(new ChatMessage(ChatRole.Assistant,
+                        $"[Agent timeout after {FanOutTimeoutMs}ms]")))
+                .ToArray();
+        }
+
         var merged = string.Join("\n\n---\n\n",
             results.Select((r, i) => $"### Response {i + 1}\n{r.Text}"));
         return new(new ChatMessage(ChatRole.Assistant, merged + $"\n\n---\n**{results.Length} agents contributed**"));
+    }
+
+    private async Task<AgentResponse> ExecuteSequentialAsync(
+        IEnumerable<ChatMessage> messages, AgentSession? session, CancellationToken ct)
+    {
+        var msgList = messages.ToList();
+        var userMsg = msgList.LastOrDefault(m => m.Role == ChatRole.User);
+        var routes = await _router.RouteAllAsync(userMsg?.Text ?? "", ct);
+        var results = new List<string>();
+
+        // Resource-aware sequential limit
+        var availableSlots = GetAvailableConcurrencySlots();
+        var maxSteps = Math.Min(availableSlots, DefaultMaxConcurrent);
+        var step = 0;
+
+        foreach (var route in routes)
+        {
+            if (step >= maxSteps) break;
+            var key = route.TargetAgent.ToString().ToLowerInvariant();
+            if (!_agents.TryGetValue(key, out var agent)) continue;
+
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeoutCts.CancelAfter(FanOutTimeoutMs);
+
+            try
+            {
+                _logger.LogInformation("Sequential: step {Step}/{Max} → {Agent}",
+                    step + 1, maxSteps, route.TargetAgent);
+                var response = await agent.RunAsync(messages, session, null, timeoutCts.Token)
+                    .ConfigureAwait(false);
+                results.Add($"[{route.TargetAgent}]: {response.Text}");
+                messages = messages.Append(new ChatMessage(ChatRole.Assistant, response.Text ?? ""));
+                step++;
+            }
+            catch (OperationCanceledException)
+            {
+                _logger.LogWarning("Sequential: agent {Agent} timed out after {Timeout}ms",
+                    route.TargetAgent, FanOutTimeoutMs);
+                results.Add($"[{route.TargetAgent}]: [Timed out after {FanOutTimeoutMs}ms]");
+                step++;
+            }
+        }
+
+        var merged = results.Count > 0
+            ? string.Join("\n\n", results)
+            : "No agents available for sequential execution.";
+        return new(new ChatMessage(ChatRole.Assistant, merged));
     }
 
     private static AgentResponse MergeWithCritic(AgentResponse original, AgentResponse critic)
@@ -176,29 +271,17 @@ public sealed class UniversalOrchestrator
         return await ExecuteFanOutAsync(messages, session, ct).ConfigureAwait(false);
     }
 
-    private async Task<AgentResponse> ExecuteSequentialAsync(
-        IEnumerable<ChatMessage> messages, AgentSession? session, CancellationToken ct)
+
+
+    private int GetAvailableConcurrencySlots()
     {
-        var msgList = messages.ToList();
-        var userMsg = msgList.LastOrDefault(m => m.Role == ChatRole.User);
-        var routes = await _router.RouteAllAsync(userMsg?.Text ?? "", ct);
-        var results = new List<string>();
+        if (_concurrencyGuard == null)
+            return DefaultMaxConcurrent;
 
-        foreach (var route in routes.Take(3))
-        {
-            var key = route.TargetAgent.ToString().ToLowerInvariant();
-            if (!_agents.TryGetValue(key, out var agent)) continue;
-
-            var response = await agent.RunAsync(messages, session, null, ct).ConfigureAwait(false);
-            results.Add($"[{route.TargetAgent}]: {response.Text}");
-
-            messages = messages.Append(new ChatMessage(ChatRole.Assistant, response.Text ?? ""));
-        }
-
-        var merged = results.Count > 0
-            ? string.Join("\n\n", results)
-            : "No agents available for sequential execution.";
-        return new(new ChatMessage(ChatRole.Assistant, merged));
+        var stats = _concurrencyGuard.Stats();
+        var running = stats.TryGetValue("running", out var r) ? Convert.ToInt32(r) : 0;
+        var available = DefaultMaxConcurrent - running;
+        return Math.Max(0, available);
     }
 
     private static string CompressContext(List<ChatMessage> messages, string lastResponse)

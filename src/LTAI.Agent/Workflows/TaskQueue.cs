@@ -27,6 +27,10 @@ public sealed class TaskQueue
 
     public void Enqueue(IReadOnlyList<CoordinatorTask> tasks)
     {
+        if (HasCycle(tasks, out var cycleInfo))
+            throw new InvalidOperationException(
+                $"DAG cycle detected: {cycleInfo}. Tasks would deadlock.");
+
         lock (_lock)
         {
             _totalCount = tasks.Count;
@@ -56,6 +60,66 @@ public sealed class TaskQueue
                 }
             }
         }
+    }
+
+    /// <summary>Detect cycles in the task dependency graph using DFS.</summary>
+    private static bool HasCycle(IReadOnlyList<CoordinatorTask> tasks, out string cycleInfo)
+    {
+        // Build adjacency: taskId → list of dependency IDs
+        var adjacency = tasks.ToDictionary(t => t.Id, t => t.DependsOn);
+        var allIds = new HashSet<string>(tasks.Select(t => t.Id));
+        var visited = new HashSet<string>();
+        var inPath = new HashSet<string>();
+        string? captured = null;
+
+        bool Dfs(string node, List<string> path)
+        {
+            if (inPath.Contains(node))
+            {
+                var cycleStart = path.IndexOf(node);
+                var cycle = path.Skip(cycleStart).Concat(new[] { node });
+                captured = $"cycle: {string.Join(" → ", cycle)}";
+                return true;
+            }
+
+            if (visited.Contains(node))
+                return false;
+
+            visited.Add(node);
+            inPath.Add(node);
+            path.Add(node);
+
+            if (adjacency.TryGetValue(node, out var deps))
+            {
+                foreach (var dep in deps)
+                {
+                    // dep may reference a task outside this batch (already in queue) — skip if unknown
+                    if (!allIds.Contains(dep) && !adjacency.ContainsKey(dep))
+                        continue;
+                    if (Dfs(dep, path))
+                        return true;
+                }
+            }
+
+            path.RemoveAt(path.Count - 1);
+            inPath.Remove(node);
+            return false;
+        }
+
+        foreach (var t in tasks)
+        {
+            if (!visited.Contains(t.Id))
+            {
+                if (Dfs(t.Id, new List<string>()))
+                {
+                    cycleInfo = captured ?? "unknown cycle";
+                    return true;
+                }
+            }
+        }
+
+        cycleInfo = "";
+        return false;
     }
 
     public bool TryDequeue(out string taskId, out CoordinatorTask task)
@@ -210,5 +274,55 @@ public sealed class TaskQueue
             targets.Add((depId, cascadeError));
             CollectDependents(depId, targets, cascadeError);
         }
+    }
+
+    /// <summary>
+    /// Detect stuck tasks whose dependencies can never be satisfied (deadlock).
+    /// Returns IDs of tasks that are still Pending but their upstream tasks are all Failed/Completed
+    /// yet they never transitioned — indicating a dependency on a task that was never enqueued.
+    /// </summary>
+    public HashSet<string> DetectDeadlocks()
+    {
+        lock (_lock)
+        {
+            var deadlocked = new HashSet<string>();
+            var allIds = new HashSet<string>(_tasks.Keys);
+
+            foreach (var (id, task) in _tasks)
+            {
+                if (task.Status != CoordinatorTaskStatus.Pending)
+                    continue;
+
+                // Check if ALL dependencies are resolved (completed or failed)
+                // but the task is still pending — means a dep ID points to something not in this set
+                if (task.DependsOn.Count > 0 && task.DependsOn.All(d =>
+                    {
+                        if (!_tasks.TryGetValue(d, out var depTask))
+                            return true; // dependency never existed — orphaned
+                        return depTask.Status is CoordinatorTaskStatus.Completed or CoordinatorTaskStatus.Failed;
+                    }))
+                {
+                    deadlocked.Add(id);
+                }
+            }
+
+            return deadlocked;
+        }
+    }
+
+    /// <summary>
+    /// Force-resolve deadlocked tasks by failing them.
+    /// </summary>
+    public int ResolveDeadlocks()
+    {
+        var deadlocked = DetectDeadlocks();
+        foreach (var id in deadlocked)
+        {
+            if (_tasks.TryGetValue(id, out var t))
+            {
+                Fail(id, $"Deadlock detected: dependencies resolved but task never transitioned");
+            }
+        }
+        return deadlocked.Count;
     }
 }

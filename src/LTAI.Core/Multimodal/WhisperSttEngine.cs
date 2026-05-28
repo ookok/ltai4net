@@ -1,3 +1,4 @@
+using System.Net.Http.Headers;
 using System.Text.Json;
 
 namespace LTAI.Core.Multimodal;
@@ -17,9 +18,19 @@ public sealed class WhisperSttEngine : IDisposable
     private readonly string _ollamaUrl;
     private readonly string _sttModel;
 
+    private static readonly Dictionary<string, string> FormatMimeMap = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["wav"] = "audio/wav",
+        ["mp3"] = "audio/mpeg",
+        ["m4a"] = "audio/mp4",
+        ["ogg"] = "audio/ogg",
+        ["flac"] = "audio/flac",
+        ["webm"] = "audio/webm",
+    };
+
     public WhisperSttEngine(string ollamaUrl = "http://localhost:11434", string sttModel = "whisper:latest")
     {
-        _http = new HttpClient { Timeout = TimeSpan.FromSeconds(60) };
+        _http = new HttpClient { Timeout = TimeSpan.FromSeconds(120) };
         _ollamaUrl = ollamaUrl.TrimEnd('/');
         _sttModel = sttModel;
     }
@@ -36,30 +47,55 @@ public sealed class WhisperSttEngine : IDisposable
 
         try
         {
-            var audioB64 = Convert.ToBase64String(audioBytes);
-            var payload = new
-            {
-                model = _sttModel,
-                prompt = $"Transcribe this audio to text: [base64:{audioB64}]",
-                stream = false,
-                options = new { temperature = 0.0 }
-            };
+            var mimeType = FormatMimeMap.GetValueOrDefault(format, "audio/wav");
+            var fileName = $"audio.{format.TrimStart('.')}";
 
-            var json = JsonSerializer.Serialize(payload);
-            var content = new StringContent(json, global::System.Text.Encoding.UTF8, new global::System.Net.Http.Headers.MediaTypeHeaderValue("application/json"));
+            // Attempt 1: Ollama /api/transcribe (multipart — preferred for v0.3+)
+            using var formContent = new MultipartFormDataContent();
+            var audioContent = new ByteArrayContent(audioBytes);
+            audioContent.Headers.ContentType = new MediaTypeHeaderValue(mimeType);
+            formContent.Add(audioContent, "file", fileName);
+            formContent.Add(new StringContent(_sttModel), "model");
 
-            var response = await _http.PostAsync($"{_ollamaUrl}/api/generate", content);
+            var response = await _http.PostAsync($"{_ollamaUrl}/api/transcribe", formContent);
             if (response.IsSuccessStatusCode)
             {
                 var respJson = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
                 using var doc = JsonDocument.Parse(respJson);
-                var text = doc.RootElement.TryGetProperty("response", out var r) ? r.GetString()?.Trim() ?? "" : "";
+                var text = doc.RootElement.TryGetProperty("text", out var t) ? t.GetString()?.Trim() ?? "" : "";
+                var language = doc.RootElement.TryGetProperty("language", out var l) ? l.GetString() ?? "" : "";
+
+                if (!string.IsNullOrEmpty(text))
+                {
+                    return new WhisperTranscribeResult
+                    {
+                        Ok = true,
+                        Text = text,
+                        Language = language,
+                        DurationSeconds = doc.RootElement.TryGetProperty("duration", out var d) ? d.GetDouble() : 0
+                    };
+                }
+            }
+
+            // Attempt 2: OpenAI-compatible /v1/audio/transcriptions
+            using var openAiForm = new MultipartFormDataContent();
+            var openAiAudio = new ByteArrayContent(audioBytes);
+            openAiAudio.Headers.ContentType = new MediaTypeHeaderValue(mimeType);
+            openAiForm.Add(openAiAudio, "file", fileName);
+            openAiForm.Add(new StringContent("whisper-1"), "model");
+
+            var openAiResponse = await _http.PostAsync($"{_ollamaUrl}/v1/audio/transcriptions", openAiForm);
+            if (openAiResponse.IsSuccessStatusCode)
+            {
+                var respJson = await openAiResponse.Content.ReadAsStringAsync().ConfigureAwait(false);
+                using var doc = JsonDocument.Parse(respJson);
+                var text = doc.RootElement.TryGetProperty("text", out var t) ? t.GetString()?.Trim() ?? "" : "";
 
                 if (!string.IsNullOrEmpty(text))
                     return new WhisperTranscribeResult { Ok = true, Text = text, Language = DetectLanguage(text) };
             }
         }
-        catch { /* non-fatal */ }
+        catch { /* non-fatal — fall through to error result */ }
 
         return new WhisperTranscribeResult { Error = "Whisper model not available. Run: ollama pull whisper" };
     }

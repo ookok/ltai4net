@@ -66,7 +66,7 @@ public sealed class PlannerIntegration
         return result.ToString();
     }
 
-    private string? ExecuteHtnPlan(string task, string domain)
+    private string? ExecuteHtnPlan(string task, string domain, int maxTools = 5)
     {
         var tools = new List<string> { "filesystem", "shell", "http", "code", "git", "search", "math", "text" };
 
@@ -80,7 +80,7 @@ public sealed class PlannerIntegration
             }
         }
 
-        var root = _htnPlanner.DecomposeTask(task, domain, tools);
+        var root = _htnPlanner.DecomposeTask(task, domain, tools, maxTools: maxTools);
 
         if (root.Children.Count == 0 && root.ToolCalls.Count == 0)
             return null;

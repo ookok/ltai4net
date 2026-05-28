@@ -1,5 +1,6 @@
 using LTAI.Core.Governors;
 using LTAI.Core.Interfaces;
+using LTAI.Core.System;
 using LTAI.DNA.Safety;
 using LTAI.Knowledge.Core;
 using LTAI.Models;
@@ -72,7 +73,9 @@ public static class ServiceCollectionExtensions
             var logger = sp.GetRequiredService<ILogger<UniversalOrchestrator>>();
             var router = sp.GetRequiredService<UnifiedSemanticRouter>();
             var harness = sp.GetService<HarnessProfile>();
-            return new UniversalOrchestrator(logger, router, harness);
+            var concurrencyGuard = sp.GetService<IConcurrencyGuard>();
+            return new UniversalOrchestrator(logger, router, harness,
+                concurrencyGuard: concurrencyGuard);
         });
         services.AddSingleton<ToolRetriever>();
         services.AddSingleton<PlannerCriticWorkflow>();
@@ -501,6 +504,10 @@ public static class ServiceCollectionExtensions
 
             // ShellTools (L1 — static class)
             global::LTAI.Tools.General.ShellTools.ExternalSafetyGate =
+                (tool, input) => safetyGate.EvaluateToolCall(tool, input);
+
+            // MAF ShellTools (L1 — Agent.Tools namespace)
+            global::LTAI.Agent.Tools.ShellTools.ExternalSafetyGate =
                 (tool, input) => safetyGate.EvaluateToolCall(tool, input);
 
             return new SafetyGateWireUp(); // marker singleton to ensure wiring runs once

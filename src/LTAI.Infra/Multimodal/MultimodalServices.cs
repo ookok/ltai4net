@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
+using LTAI.Core.System;
 using Microsoft.Extensions.Logging;
 
 namespace LTAI.Infra.Multimodal;
@@ -206,7 +207,7 @@ public sealed class MultimodalOrchestrator
     {
         if (!File.Exists(filePath)) return "Error: File not found";
         var ext = Path.GetExtension(filePath).ToLowerInvariant();
-        return ext switch
+        var result = ext switch
         {
             ".png" or ".jpg" or ".jpeg" or ".webp" or ".bmp" or ".gif" =>
                 (task?.Contains("ocr") == true || task?.Contains("text") == true)
@@ -217,16 +218,50 @@ public sealed class MultimodalOrchestrator
             ".wav" or ".mp3" or ".m4a" => await _speech.RecognizeFromFileAsync(filePath, ct),
             _ => $"Unsupported format: {ext}"
         };
+
+        // Shield: check extracted multimodal content for prompt injection
+        if (result.StartsWith("Error:") || result.StartsWith("Unsupported"))
+            return result;
+
+        var shieldResult = PromptShield.Instance.SanitizeInput(result);
+        if (!shieldResult.Passed)
+        {
+            _logger.LogWarning(
+                "Multimodal shield blocked: {Path} — violations: {Violations}",
+                filePath, string.Join(", ", shieldResult.Violations));
+            return $"[Blocked] The extracted content was flagged by safety shield ({string.Join(", ", shieldResult.Violations)})";
+        }
+
+        return result;
     }
 
     public async Task<string> ProcessSpeechAsync(string audioFilePath, CancellationToken ct = default)
     {
+        string text;
         if (_whisper != null)
         {
             var audioData = await File.ReadAllBytesAsync(audioFilePath, ct).ConfigureAwait(false);
             var result = await _whisper.TranscribeAsync(audioData).ConfigureAwait(false);
-            return result?.Text ?? "";
+            text = result?.Text ?? "";
         }
-        return await _speech.RecognizeFromFileAsync(audioFilePath, ct).ConfigureAwait(false);
+        else
+        {
+            text = await _speech.RecognizeFromFileAsync(audioFilePath, ct).ConfigureAwait(false);
+        }
+
+        // Shield: check recognized speech for prompt injection
+        if (string.IsNullOrEmpty(text) || text.StartsWith("Error:") || text.StartsWith("Recognition error"))
+            return text;
+
+        var shieldResult = PromptShield.Instance.SanitizeInput(text);
+        if (!shieldResult.Passed)
+        {
+            _logger.LogWarning(
+                "Speech shield blocked: {Path} — violations: {Violations}",
+                audioFilePath, string.Join(", ", shieldResult.Violations));
+            return $"[Blocked] The recognized speech was flagged by safety shield ({string.Join(", ", shieldResult.Violations)})";
+        }
+
+        return text;
     }
 }
