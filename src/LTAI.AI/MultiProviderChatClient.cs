@@ -127,7 +127,7 @@ public sealed class MultiProviderChatClient : IChatClient
 /// OpenAI-compatible chat client via direct HTTP calls.
 /// Works with Deepseek, OpenAI, Groq, etc. — any OpenAI-compatible API.
 /// </summary>
-internal sealed class OpenAiHttpClient : IChatClient
+public sealed class OpenAiHttpClient : IChatClient
 {
     private readonly HttpClient _http;
     private readonly string _endpoint;
@@ -199,12 +199,6 @@ public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddLTAIAI(this IServiceCollection services)
     {
-        services.AddSingleton<BudgetTracker>(sp =>
-        {
-            var opts = sp.GetRequiredService<IOptions<LTAIOptions>>().Value;
-            return new BudgetTracker(opts.AI.GlobalTokenBudget, opts.AI.PerUserTokenBudget);
-        });
-
         services.AddSingleton<IChatClient>(sp =>
         {
             var opts = sp.GetRequiredService<IOptions<LTAIOptions>>().Value;
@@ -212,33 +206,24 @@ public static class ServiceCollectionExtensions
             var httpFactory = sp.GetRequiredService<IHttpClientFactory>();
             var router = new MultiProviderChatClient(opts, logger);
 
-            // Register all configured providers (scan env vars for API keys)
             foreach (var provider in MultiProviderChatClient.DefaultProviders)
             {
                 var apiKey = Environment.GetEnvironmentVariable(provider.envVar);
                 if (string.IsNullOrEmpty(apiKey)) continue;
-
                 try
                 {
                     var client = new OpenAiHttpClient(httpFactory.CreateClient(), provider.endpoint, provider.model, apiKey, logger as ILogger);
                     router.Register(provider.name, client);
-                    logger?.LogInformation("Registered '{P}' → {E} model={M}", provider.name, provider.endpoint, provider.model);
                 }
                 catch (Exception ex)
                 {
-                    logger?.LogWarning(ex, "Failed to register '{P}'", provider.name);
+                    logger?.LogWarning(ex, "Failed to register provider");
                 }
             }
-
-            var registered = string.Join(", ", router.RegisteredProviders);
-            logger?.LogInformation("Active providers: {Count} [{Providers}]", router.RegisteredProviders.Count(), registered);
-
             return router;
         });
 
-        // Also register as concrete type for runtime provider switching
         services.AddSingleton(sp => (MultiProviderChatClient)sp.GetRequiredService<IChatClient>());
-
         return services;
     }
 }

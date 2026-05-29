@@ -18,6 +18,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\LTAI.Core\LTAI.Core.csproj" />
+    <ProjectReference Include="..\LTAI.AI\LTAI.AI.csproj" />
   </ItemGroup>
 
 </Project>

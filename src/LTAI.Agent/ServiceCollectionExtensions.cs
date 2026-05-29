@@ -1,3 +1,5 @@
+using LTAI.AI;
+using LTAI.Core.Safety;
 using LTAI.Agent.Tools;
 using LTAI.Core.Configuration;
 using Microsoft.Agents.AI;
@@ -33,7 +35,7 @@ public static class ServiceCollectionExtensions
             var loggerFactory = sp.GetRequiredService<ILoggerFactory>();
             var llm = sp.GetRequiredService<IChatClient>();
 
-            // Tools for function calling (wired via ChatOptions.Tools → MAF pipeline → LLM)
+            // ── Tools for function calling ──
             var fs = new FileSystemTools(ws);
             var shell = new ShellTools(ws);
             var tools = new List<AITool>
@@ -44,7 +46,15 @@ public static class ServiceCollectionExtensions
                 AIFunctionFactory.Create(shell.ExecuteCommand),
             };
 
-            // Context compression
+            // ── Safety guardrail (dedicated LLM client, not the pipeline) ──
+            var safetyLogger = loggerFactory.CreateLogger<SafetyCoordinator>();
+            var safetyApiKey = Environment.GetEnvironmentVariable(opts.AI.ApiKeyEnv ?? "DEEPSEEK_API_KEY") ?? "";
+            var safetyHttp = sp.GetRequiredService<IHttpClientFactory>().CreateClient();
+            var safetyClient = new OpenAiHttpClient(safetyHttp,
+                "https://api.deepseek.com/v1", "deepseek-chat", safetyApiKey);
+            var safety = new SafetyCoordinator(safetyClient, safetyLogger);
+
+            // ── Context compression ──
             var compaction = new CompactionProvider(
                 new PipelineCompactionStrategy(
                     new ContextWindowCompactionStrategy(64000, opts.AI.MaxTokens),
@@ -52,7 +62,7 @@ public static class ServiceCollectionExtensions
                         CompactionTriggers.TokensExceed(64000), 2)
                 ), loggerFactory: loggerFactory);
 
-            // Chat history
+            // ── Chat history ──
             var chatHistory = new InMemoryChatHistoryProvider();
 
             return new ChatClientAgent(llm,
@@ -67,7 +77,7 @@ public static class ServiceCollectionExtensions
                         Tools = tools,
                     },
                     ChatHistoryProvider = chatHistory,
-                    AIContextProviders = [compaction],
+                    AIContextProviders = [safety, compaction],
                     EnableMessageInjection = true,
                     RequirePerServiceCallChatHistoryPersistence = true,
                 },
