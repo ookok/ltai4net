@@ -1,5 +1,5 @@
 using Spectre.Console;
-using LTAI.Agent.Agents;
+using LTAI.Agent;
 using LTAI.Core.Configuration;
 using Microsoft.Extensions.Options;
 

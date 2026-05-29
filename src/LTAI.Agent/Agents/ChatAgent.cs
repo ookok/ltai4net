@@ -1,21 +1,28 @@
-using LTAI.Agent.MAF;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
-using Microsoft.Extensions.Logging;
 
-namespace LTAI.Agent.Agents;
+namespace LTAI.Agent;
 
+/// <summary>Thin convenience wrapper. Real pipeline is in AIAgent (MAF).</summary>
 public sealed class ChatAgent
 {
-    private readonly LTAIAgent _agent;
-    public ChatAgent(LTAIAgent agent) => _agent = agent;
+    private readonly AIAgent _agent;
+    private AgentSession? _session;
 
-    public async Task<string> ChatAsync(string message, AgentSession? session = null, CancellationToken ct = default)
+    public ChatAgent(AIAgent agent) => _agent = agent;
+
+    public async Task<string> ChatAsync(string message, CancellationToken ct = default)
     {
-        var r = await _agent.RunAsync([new ChatMessage(ChatRole.User, message)], session, cancellationToken: ct).ConfigureAwait(false);
+        _session ??= await _agent.CreateSessionAsync(ct);
+        var r = await _agent.RunAsync(
+            [new ChatMessage(ChatRole.User, message)], _session, cancellationToken: ct);
         return r.Messages?.LastOrDefault()?.Text ?? "";
     }
 
-    public IAsyncEnumerable<AgentResponseUpdate> ChatStreamingAsync(string message, AgentSession? s = null, CancellationToken ct = default)
-        => _agent.RunStreamingAsync([new ChatMessage(ChatRole.User, message)], s, cancellationToken: ct);
+    public IAsyncEnumerable<AgentResponseUpdate> ChatStreamingAsync(string message, CancellationToken ct = default)
+    {
+        _session ??= _agent.CreateSessionAsync(ct).GetAwaiter().GetResult();
+        return _agent.RunStreamingAsync(
+            [new ChatMessage(ChatRole.User, message)], _session, cancellationToken: ct);
+    }
 }

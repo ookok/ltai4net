@@ -1,5 +1,5 @@
 using System.Text;
-using LTAI.Agent.Agents;
+using LTAI.Agent;
 using Spectre.Console;
 
 namespace LTAI.TUI;
