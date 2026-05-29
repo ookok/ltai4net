@@ -12,14 +12,44 @@ namespace LTAI.AI;
 
 /// <summary>
 /// Multi-LLM provider router with automatic degradation chain.
-/// Registers providers externally via Register().
+/// Auto-registers all providers with valid API keys at startup.
 /// </summary>
 public sealed class MultiProviderChatClient : IChatClient
 {
+    /// <summary>All known providers: (envVar, endpoint, model, displayName).</summary>
+    public static readonly (string envVar, string endpoint, string model, string name)[] DefaultProviders =
+    {
+        ("DEEPSEEK_API_KEY",     "https://api.deepseek.com/v1",              "deepseek-chat",                "DeepSeek"),
+        ("SILICONFLOW_API_KEY",  "https://api.siliconflow.cn/v1",           "deepseek-ai/DeepSeek-V2.5",    "SiliconFlow"),
+        ("DASHSCOPE_API_KEY",    "https://dashscope.aliyuncs.com/compatible-mode/v1", "qwen-plus",          "Aliyun"),
+        ("ZHIPU_API_KEY",        "https://open.bigmodel.cn/api/paas/v4",    "glm-4-plus",                   "Zhipu"),
+        ("DOUBAO_API_KEY",       "https://ark.cn-beijing.volces.com/api/v3","ep-XXXXXX",                    "Doubao"),
+        ("HUNYUAN_API_KEY",      "https://api.hunyuan.cloud.tencent.com/v1","hunyuan-pro",                  "Hunyuan"),
+        ("BAIDU_API_KEY",        "https://aip.baidubce.com/rpc/2.0/ai_custom", "ernie-4.0",                "Baidu"),
+        ("SPARK_API_KEY",        "https://spark-api.xf-yun.com/v3.5/chat",  "spark-3.5",                    "iFlytek"),
+        ("MOONSHOT_API_KEY",     "https://api.moonshot.cn/v1",              "moonshot-v1-8k",               "Moonshot"),
+        ("BAICHUAN_API_KEY",     "https://api.baichuan-ai.com/v1",          "Baichuan4",                    "Baichuan"),
+        ("YI_API_KEY",           "https://api.lingyiwanwu.com/v1",          "yi-large",                     "Yi"),
+        ("STEP_API_KEY",         "https://api.stepfun.com/v1",              "step-2-16k",                   "StepFun"),
+        ("MINIMAX_API_KEY",      "https://api.minimax.chat/v1",             "MiniMax-Text-01",              "Minimax"),
+        ("OPENAI_API_KEY",       "https://api.openai.com/v1",               "gpt-4o",                       "OpenAI"),
+        ("GROQ_API_KEY",         "https://api.groq.com/openai/v1",          "llama-3.3-70b-versatile",      "Groq"),
+        ("OPENROUTER_API_KEY",   "https://openrouter.ai/api/v1",            "deepseek/deepseek-chat",       "OpenRouter"),
+        ("TOGETHER_API_KEY",     "https://api.together.xyz/v1",             "mistralai/Mixtral-8x22B",      "TogetherAI"),
+        ("MISTRAL_API_KEY",      "https://api.mistral.ai/v1",               "mistral-large-latest",         "Mistral"),
+        ("PERPLEXITY_API_KEY",   "https://api.perplexity.ai",               "sonar-pro",                    "Perplexity"),
+        ("XAI_API_KEY",          "https://api.x.ai/v1",                     "grok-2-1212",                  "XAI"),
+        ("COHERE_API_KEY",       "https://api.cohere.ai/v1",                "command-r-plus",               "Cohere"),
+        ("FIREWORKS_API_KEY",    "https://api.fireworks.ai/inference/v1",   "accounts/fireworks/models/llama-v3p3-70b-instruct", "Fireworks"),
+    };
+
     private readonly Dictionary<string, IChatClient> _clients = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string> _degradation = new(StringComparer.OrdinalIgnoreCase);
     private readonly ILogger<MultiProviderChatClient> _logger;
-    private readonly string _defaultProvider;
+    private string _defaultProvider;
+
+    public IEnumerable<string> RegisteredProviders => _clients.Keys;
+    public string ActiveProvider { get => _defaultProvider; set => _defaultProvider = value; }
 
     public MultiProviderChatClient(LTAIOptions options, ILogger<MultiProviderChatClient>? logger = null)
     {
@@ -179,30 +209,35 @@ public static class ServiceCollectionExtensions
         {
             var opts = sp.GetRequiredService<IOptions<LTAIOptions>>().Value;
             var logger = sp.GetService<ILogger<MultiProviderChatClient>>();
-            var http = sp.GetRequiredService<IHttpClientFactory>().CreateClient();
+            var httpFactory = sp.GetRequiredService<IHttpClientFactory>();
             var router = new MultiProviderChatClient(opts, logger);
 
-            // Register default provider via OpenAI-compatible HTTP
-            var apiKey = Environment.GetEnvironmentVariable(opts.AI.ApiKeyEnv ?? "DEEPSEEK_API_KEY");
-            if (!string.IsNullOrEmpty(apiKey))
+            // Register all configured providers (scan env vars for API keys)
+            foreach (var provider in MultiProviderChatClient.DefaultProviders)
             {
-                var endpoint = opts.AI.Providers.GetValueOrDefault(opts.AI.DefaultProvider)?.Endpoint
-                    ?? "https://api.deepseek.com/v1";
-                var model = opts.AI.Model;
+                var apiKey = Environment.GetEnvironmentVariable(provider.envVar);
+                if (string.IsNullOrEmpty(apiKey)) continue;
 
-                var client = new OpenAiHttpClient(http, endpoint, model, apiKey, logger as ILogger);
-                router.Register(opts.AI.DefaultProvider, client);
-                logger?.LogInformation("Registered '{P}' → {E} model={M}",
-                    opts.AI.DefaultProvider, endpoint, model);
+                try
+                {
+                    var client = new OpenAiHttpClient(httpFactory.CreateClient(), provider.endpoint, provider.model, apiKey, logger as ILogger);
+                    router.Register(provider.name, client);
+                    logger?.LogInformation("Registered '{P}' → {E} model={M}", provider.name, provider.endpoint, provider.model);
+                }
+                catch (Exception ex)
+                {
+                    logger?.LogWarning(ex, "Failed to register '{P}'", provider.name);
+                }
             }
-            else
-            {
-                logger?.LogWarning("No API key for {Key}, LLM will fail",
-                    opts.AI.ApiKeyEnv ?? "DEEPSEEK_API_KEY");
-            }
+
+            var registered = string.Join(", ", router.RegisteredProviders);
+            logger?.LogInformation("Active providers: {Count} [{Providers}]", router.RegisteredProviders.Count(), registered);
 
             return router;
         });
+
+        // Also register as concrete type for runtime provider switching
+        services.AddSingleton(sp => (MultiProviderChatClient)sp.GetRequiredService<IChatClient>());
 
         return services;
     }
