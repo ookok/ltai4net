@@ -21,7 +21,7 @@ public sealed record AgentContext(
     List<ChatMessage> FullHistory,
     AgentSession? Session);
 
-public sealed class SessionStub : AgentSession {} class SkillRegistry
+public sealed class SessionStub : AgentSession {} public class SkillRegistry
 {
     private readonly Dictionary<string, Func<object, CancellationToken, Task<object>>> _skills = new();
 
@@ -148,6 +148,11 @@ public abstract class BaseAgent : AIAgent
         JsonElement state, JsonSerializerOptions? o = null, CancellationToken ct = default)
         => ValueTask.FromResult<AgentSession>(new SessionStub());
 }
+
+
+
+
+
 
 
 
