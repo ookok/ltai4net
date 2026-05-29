@@ -219,11 +219,7 @@ public sealed class MultimediaTools
         catch (Exception ex) { return "Error: " + ex.Message; }
     }
 
-    private string? ResolvePath(string path)
-    {
-        var fp = Path.GetFullPath(Path.Combine(_ws, path));
-        return fp.StartsWith(_ws, StringComparison.OrdinalIgnoreCase) ? fp : null;
-    }
+    private string? ResolvePath(string path) => LTAI.Core.PathUtils.SafeResolvePath(_ws, path);
 
     private static async Task<(int ExitCode, string Stdout, string Stderr)> RunProcessAsync(
         string file, string args, int timeoutSec = 30)

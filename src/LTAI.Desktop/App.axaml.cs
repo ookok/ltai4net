@@ -13,6 +13,8 @@ public class App : Application
     public static LTAIService? Ltais { get; set; }
     public static LTAI.Agent.ChatAgent? ChatAgent { get; set; }
     public static Microsoft.Extensions.Options.IOptions<LTAI.Core.Configuration.LTAIOptions>? Options { get; set; }
+    public static LTAI.AI.MultiProviderChatClient? Router { get; set; }
+    public static System.Net.Http.IHttpClientFactory? HttpFactory { get; set; }
 
     public override void Initialize()
     {

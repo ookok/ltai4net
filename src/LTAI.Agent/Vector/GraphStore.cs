@@ -12,6 +12,8 @@ public sealed class GraphStore : IDisposable
 {
     private readonly LiteDatabase _db;
     private readonly string _dbPath;
+    private readonly SemaphoreSlim _compactLock = new(1, 1);
+
 
     public GraphStore(string dbPath)
     {
@@ -250,8 +252,13 @@ public sealed class GraphStore : IDisposable
         return (pruned, before, after);
     }
 
-    /// <summary>Compact the database file (LiteDB's native rebuild).</summary>
-    public void Compact() => _db.Rebuild();
+    /// <summary>Thread-safe compact with exclusive lock (prevents concurrent Rebuild corruption).</summary>
+    public void Compact()
+    {
+        _compactLock.Wait();
+        try { _db.Rebuild(); }
+        finally { _compactLock.Release(); }
+    }
 
     public string Stats()
     {

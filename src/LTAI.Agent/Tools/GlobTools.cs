@@ -101,11 +101,7 @@ public sealed class GlobTools
         return results.Take(limit).Select(r => r.path).ToArray();
     }
 
-    private string? ResolvePath(string path)
-    {
-        var fp = Path.GetFullPath(Path.Combine(_ws, path));
-        return fp.StartsWith(_ws, StringComparison.OrdinalIgnoreCase) ? fp : null;
-    }
+    private string? ResolvePath(string path) => LTAI.Core.PathUtils.SafeResolvePath(_ws, path);
 
     private static Regex GlobToRegex(string glob)
     {

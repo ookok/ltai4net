@@ -20,10 +20,19 @@ public sealed class BudgetTracker
 
     public (bool allowed, long remaining) TryConsume(string userId, int tokens)
     {
-        var userTotal = _userTokens.AddOrUpdate(userId, tokens, (_, old) => old + tokens);
-        var global = Interlocked.Add(ref _globalTotal, tokens);
-        return (userTotal <= _perUserMax && global <= _globalMax,
-                Math.Min(_perUserMax - userTotal, _globalMax - global));
+        // Check before adding — prevents overdraft from large bursts
+        var currentUser = _userTokens.GetValueOrDefault(userId);
+        var currentGlobal = Interlocked.Read(ref _globalTotal);
+        var newUser = currentUser + tokens;
+        var newGlobal = currentGlobal + tokens;
+
+        if (newUser > _perUserMax || newGlobal > _globalMax)
+            return (false, Math.Min(_perUserMax - currentUser, _globalMax - currentGlobal));
+
+        // Budget OK — atomically add
+        _userTokens.AddOrUpdate(userId, tokens, (_, old) => old + tokens);
+        Interlocked.Add(ref _globalTotal, tokens);
+        return (true, Math.Min(_perUserMax - newUser, _globalMax - newGlobal));
     }
 
     public void Reset(string? userId = null)

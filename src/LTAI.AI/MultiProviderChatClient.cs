@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net.Http.Json;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
@@ -48,6 +49,12 @@ public sealed class MultiProviderChatClient : IChatClient
     private readonly ILogger<MultiProviderChatClient> _logger;
     private string _defaultProvider;
 
+    // Circuit breaker state per provider
+    private readonly ConcurrentDictionary<string, int> _providerFailures = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, DateTime> _providerCooldowns = new(StringComparer.OrdinalIgnoreCase);
+    private const int MaxFailuresBeforeCooldown = 3;
+    private static readonly TimeSpan CooldownDuration = TimeSpan.FromSeconds(30);
+
     public IEnumerable<string> RegisteredProviders => _clients.Keys;
     public string ActiveProvider { get => _defaultProvider; set => _defaultProvider = value; }
 
@@ -79,11 +86,20 @@ public sealed class MultiProviderChatClient : IChatClient
     {
         var provider = options?.ModelId ?? _defaultProvider;
         bool anyAttempted = false;
+        string? lastFailedProvider = null;
         foreach (var p in DegradationChain(provider))
         {
             if (!_clients.TryGetValue(p, out var client)) continue;
             anyAttempted = true;
             var success = false;
+
+            // Notify user of fallback switch-over
+            if (lastFailedProvider != null)
+            {
+                yield return new ChatResponseUpdate(ChatRole.Assistant,
+                    $"\n\n_[Stream from '{lastFailedProvider}' failed midway, falling back to '{p}']_\n\n");
+            }
+
             var innerStream = client.GetStreamingResponseAsync(messages, options, ct);
             await using (var enumerator = innerStream.GetAsyncEnumerator(ct))
             {
@@ -97,6 +113,7 @@ public sealed class MultiProviderChatClient : IChatClient
                     catch (Exception ex) when (ex is not OperationCanceledException)
                     {
                         _logger.LogWarning(ex, "Streaming from '{P}' failed, degrading", p);
+                        lastFailedProvider = p;
                         break;
                     }
                     success = true;
@@ -117,17 +134,62 @@ public sealed class MultiProviderChatClient : IChatClient
         foreach (var p in DegradationChain(provider))
         {
             if (!_clients.TryGetValue(p, out var client)) continue;
+
+            // Circuit breaker: skip providers in cooldown
+            if (_providerCooldowns.TryGetValue(p, out var cooldownUntil) && cooldownUntil > DateTime.UtcNow)
+            {
+                _logger.LogDebug("Provider '{P}' in cooldown until {Cooldown}, skipping", p, cooldownUntil);
+                continue;
+            }
+
             try
             {
-                return await client.GetResponseAsync(messages, options, ct).ConfigureAwait(false);
+                // Add 15s per-provider timeout
+                using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                timeoutCts.CancelAfter(TimeSpan.FromSeconds(15));
+
+                var result = await client.GetResponseAsync(messages, options, timeoutCts.Token)
+                    .ConfigureAwait(false);
+
+                // Success — reset failure count
+                _providerFailures.TryRemove(p, out _);
+                _providerCooldowns.TryRemove(p, out _);
+
+                return result;
             }
-            catch (Exception ex)
+            catch (TimeoutException)
+            {
+                _logger.LogWarning("Provider '{P}' timed out after 15s, degrading", p);
+                RecordFailure(p);
+                continue;
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                // Timeout from our CTS (not user cancellation)
+                _logger.LogWarning("Provider '{P}' timed out, degrading", p);
+                RecordFailure(p);
+                continue;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 _logger.LogWarning(ex, "Provider '{P}' failed, degrading to fallback", p);
+                RecordFailure(p);
                 continue;
             }
         }
         return new ChatResponse(new ChatMessage(ChatRole.Assistant, $"All providers failed for '{provider}'"));
+    }
+
+    private void RecordFailure(string provider)
+    {
+        var count = _providerFailures.AddOrUpdate(provider, 1, (_, c) => c + 1);
+        if (count >= MaxFailuresBeforeCooldown)
+        {
+            var until = DateTime.UtcNow + CooldownDuration;
+            _providerCooldowns[provider] = until;
+            _logger.LogWarning("Provider '{P}' failed {Count} times — cooling down until {Until}",
+                provider, count, until);
+        }
     }
 
     private IEnumerable<string> DegradationChain(string provider)
@@ -272,7 +334,8 @@ public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddLTAIAI(this IServiceCollection services)
     {
-        services.AddSingleton<IChatClient>(sp =>
+        // Step 1: Register the raw MultiProviderChatClient (not as IChatClient — we'll wrap it)
+        services.AddSingleton<MultiProviderChatClient>(sp =>
         {
             var opts = sp.GetRequiredService<IOptions<LTAIOptions>>().Value;
             var logger = sp.GetService<ILogger<MultiProviderChatClient>>();
@@ -296,7 +359,21 @@ public static class ServiceCollectionExtensions
             return router;
         });
 
-        services.AddSingleton(sp => (MultiProviderChatClient)sp.GetRequiredService<IChatClient>());
+        // Step 2: Wrap with SafeChatClient for output safety interception
+        services.AddSingleton<IChatClient>(sp =>
+        {
+            var router = sp.GetRequiredService<MultiProviderChatClient>();
+            var logger = sp.GetService<ILogger<LTAI.Core.Safety.SafeChatClient>>();
+
+            // Build a safety LLM from the first available provider
+            var opts = sp.GetRequiredService<IOptions<LTAIOptions>>().Value;
+            var httpFactory = sp.GetRequiredService<IHttpClientFactory>();
+            var safetyKey = Environment.GetEnvironmentVariable(opts.AI.ApiKeyEnv ?? "DEEPSEEK_API_KEY") ?? "";
+            IChatClient safetyClient = new OpenAiHttpClient(
+                httpFactory.CreateClient(), "https://api.deepseek.com/v1", "deepseek-chat", safetyKey);
+
+            return new LTAI.Core.Safety.SafeChatClient(router, safetyClient, logger);
+        });
 
         // Embedding client (API-based, no local model)
         services.AddSingleton<EmbeddingClient>(sp =>

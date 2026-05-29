@@ -46,6 +46,9 @@ public sealed class MultiEditTools
             if (!File.Exists(fp))
                 return $"Error: File not found — '{edit.Path}'";
 
+            var sizeError = LTAI.Core.PathUtils.CheckFileSize(fp);
+            if (sizeError != null) return sizeError;
+
             var content = await File.ReadAllTextAsync(fp);
             int idx;
 
@@ -95,11 +98,7 @@ public sealed class MultiEditTools
         }
     }
 
-    private string? ResolvePath(string path)
-    {
-        var fp = Path.GetFullPath(Path.Combine(_ws, path));
-        return fp.StartsWith(_ws, StringComparison.OrdinalIgnoreCase) ? fp : null;
-    }
+    private string? ResolvePath(string path) => LTAI.Core.PathUtils.SafeResolvePath(_ws, path);
 
     private static int CountOccurrences(string text, string pattern)
     {

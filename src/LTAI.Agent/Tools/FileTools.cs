@@ -110,11 +110,7 @@ public sealed class FileTools
         return "Path not found";
     }
 
-    private string? Resolve(string p)
-    {
-        var f = Path.GetFullPath(Path.Combine(_ws, p));
-        return f.StartsWith(_ws, StringComparison.OrdinalIgnoreCase) ? f : null;
-    }
+    private string? Resolve(string path) => LTAI.Core.PathUtils.SafeResolvePath(_ws, path);
 
     private static void CopyDirectoryRecursive(string src, string dst)
     {

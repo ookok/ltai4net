@@ -21,6 +21,8 @@ public static class Program
 
         App.ChatAgent = provider.GetRequiredService<ChatAgent>();
         App.Options = provider.GetRequiredService<IOptions<LTAIOptions>>();
+        App.Router = provider.GetService<MultiProviderChatClient>();
+        App.HttpFactory = provider.GetService<IHttpClientFactory>();
 
         BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
     }

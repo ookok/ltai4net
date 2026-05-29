@@ -226,11 +226,7 @@ public sealed class CodeAnalysisTools
         rel.Contains("/obj/") || rel.Contains("/bin/") || rel.Contains("node_modules/")
         || rel.Contains("/dist/") || rel.Contains("/.git/") || rel.Contains("/.vs/");
 
-    private string? ResolvePath(string path)
-    {
-        var fp = Path.GetFullPath(Path.Combine(_ws, path));
-        return fp.StartsWith(_ws, StringComparison.OrdinalIgnoreCase) ? fp : null;
-    }
+    private string? ResolvePath(string path) => LTAI.Core.PathUtils.SafeResolvePath(_ws, path);
 
     private static string Truncate(string text, int max) => text.Length <= max ? text : text[..max] + "...";
 }

@@ -45,6 +45,22 @@ public static class ServiceCollectionExtensions
         var graphStore = new GraphStore(dbPath);
         services.AddSingleton(graphStore);
 
+        // Step 2b: Knowledge/Code graph (registered in DI so lifecycle is managed)
+        services.AddSingleton<KnowledgeGraph>(sp =>
+        {
+            var store = sp.GetRequiredService<GraphStore>();
+            var embedder = sp.GetRequiredService<EmbeddingClient>();
+            var logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger<KnowledgeGraph>();
+            return new KnowledgeGraph(store, embedder, logger);
+        });
+        services.AddSingleton<CodeGraph>(sp =>
+        {
+            var store = sp.GetRequiredService<GraphStore>();
+            var embedder = sp.GetRequiredService<EmbeddingClient>();
+            var logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger<CodeGraph>();
+            return new CodeGraph(store, embedder, logger, Directory.GetCurrentDirectory());
+        });
+
         // Step 3: Workflow orchestrator
         services.AddSingleton<WorkflowOrchestrator>(sp =>
             new WorkflowOrchestrator(agents.Values, agents["chat"],
@@ -102,8 +118,8 @@ public static class ServiceCollectionExtensions
             WorkingDirectory = ws,
             Timeout = TimeSpan.FromSeconds(60),
             MaxOutputBytes = 64 * 1024,
-            AcknowledgeUnsafe = true,
-        }).AsAIFunction(requireApproval: false));
+            AcknowledgeUnsafe = false,
+        }).AsAIFunction(requireApproval: true));
         if (canRead && canWrite)
         {
             tools.Add(AIFunctionFactory.Create(edit.EditFile));
@@ -140,7 +156,7 @@ public static class ServiceCollectionExtensions
 
         // Web tools
         var httpFactory = sp.GetRequiredService<IHttpClientFactory>();
-        var web = new WebTools(httpFactory);
+        var web = new WebTools(httpFactory, sp.GetService<ILogger<WebTools>>());
         if (name == "LTAI-Chat" || name == "LTAI-Data")
         {
             tools.Add(AIFunctionFactory.Create(web.WebSearch));
@@ -306,6 +322,7 @@ public static class ServiceCollectionExtensions
             tools.Add(AIFunctionFactory.Create(SystemTools.CheckPort));
             tools.Add(AIFunctionFactory.Create(SystemTools.HttpCheck));
             tools.Add(AIFunctionFactory.Create(SystemTools.Whois));
+            tools.Add(AIFunctionFactory.Create(SystemTools.SetEnv));
         }
 
         // Container tools (Docker sandbox)
@@ -345,11 +362,9 @@ public static class ServiceCollectionExtensions
                 new SummarizationCompactionStrategy(llm, CompactionTriggers.TokensExceed(64000), 2)
             ), loggerFactory: loggerFactory);
 
-        // KB & Code graphs for context augmentation
-        var graphStore = sp.GetRequiredService<GraphStore>();
-        var embedder = sp.GetRequiredService<EmbeddingClient>();
-        var kbGraph = new KnowledgeGraph(graphStore, embedder, loggerFactory.CreateLogger<KnowledgeGraph>());
-        var codeGraph = new CodeGraph(graphStore, embedder, loggerFactory.CreateLogger<CodeGraph>(), ws);
+        // KB & Code graphs for context augmentation (resolved from DI for lifecycle management)
+        var kbGraph = sp.GetRequiredService<KnowledgeGraph>();
+        var codeGraph = sp.GetRequiredService<CodeGraph>();
 
         AIAgent agent = new ChatClientAgent(llm, new ChatClientAgentOptions
         {

@@ -40,6 +40,9 @@ public sealed class EditFileTools
         if (!File.Exists(fp))
             return $"Error: File not found — '{path}'";
 
+        var sizeError = LTAI.Core.PathUtils.CheckFileSize(fp);
+        if (sizeError != null) return sizeError;
+
         var content = await File.ReadAllTextAsync(fp);
 
         var first = content.IndexOf(search, StringComparison.Ordinal);
@@ -56,11 +59,7 @@ public sealed class EditFileTools
         return $"Applied edit to '{path}' ({search.Length} chars replaced → {replace.Length} chars)";
     }
 
-    private string? ResolvePath(string path)
-    {
-        var fp = Path.GetFullPath(Path.Combine(_ws, path));
-        return fp.StartsWith(_ws, StringComparison.OrdinalIgnoreCase) ? fp : null;
-    }
+    private string? ResolvePath(string path) => LTAI.Core.PathUtils.SafeResolvePath(_ws, path);
 
     private static int CountOccurrences(string text, string pattern)
     {

@@ -140,7 +140,8 @@ public sealed class IntegrationTools
         {
             var req = new HttpRequestMessage(HttpMethod.Get, $"https://api.unsplash.com/search/photos?query={E(query)}&per_page={Math.Clamp(count,1,10)}");
             req.Headers.Add("Authorization", $"Client-ID {key}");
-            var j = await H().SendAsync(req).Result.Content.ReadFromJsonAsync<JsonElement>();
+            using var imgResp = await H().SendAsync(req);
+            var j = await imgResp.Content.ReadFromJsonAsync<JsonElement>();
             var sb = new StringBuilder($"## Image: {query}\n");
             foreach (var r in j.GetProperty("results").EnumerateArray())
             {
@@ -162,25 +163,52 @@ public sealed class IntegrationTools
     private async Task<string?> G(string url, string dataPath, Func<JsonElement, string> fmt)
     {
         if (url.Contains("null")) return null;
-        var j = await H().GetFromJsonAsync<JsonElement>(url);
-        return j.TryGetProperty(dataPath, out var d) ? fmt(d) : $"API error: {GStr(j,"info")}";
+        try
+        {
+            var j = await H().GetFromJsonAsync<JsonElement>(url);
+            return j.TryGetProperty(dataPath, out var d) ? fmt(d) : $"API error: {GStr(j,"info")}";
+        }
+        catch (Exception ex)
+        {
+            // Sanitize: strip API keys from any leaked URL in exception messages
+            var safe = SanitizeUrl(ex.Message);
+            return $"API request failed: {safe}";
+        }
+    }
+
+    private static string SanitizeUrl(string msg)
+    {
+        // Redact common API key patterns in URLs
+        return System.Text.RegularExpressions.Regex.Replace(msg,
+            @"(key|ak|tk|appid|secret|token)=[^&\s""']+",
+            "$1=***REDACTED***",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
     }
 
     private async Task<string?> GA(string url, string arrPath, Func<JsonElement, string> fmt)
     {
         if (url.Contains("null")) return null;
-        var j = await H().GetFromJsonAsync<JsonElement>(url);
-        if (!j.TryGetProperty(arrPath, out var arr)) return $"API error: {GStr(j,"info")}";
-        return "## Results\n" + string.Join("\n", arr.EnumerateArray().Select(fmt));
+        try
+        {
+            var j = await H().GetFromJsonAsync<JsonElement>(url);
+            if (!j.TryGetProperty(arrPath, out var arr)) return $"API error: {GStr(j,"info")}";
+            return "## Results\n" + string.Join("\n", arr.EnumerateArray().Select(fmt));
+        }
+        catch (Exception ex) { return $"API request failed: {SanitizeUrl(ex.Message)}"; }
     }
 
     private async Task<string?> T(string url, object body, string resPath, Func<JsonElement, string> fmt)
     {
         if (url.Contains("null")) return null;
-        using var req = new HttpRequestMessage(HttpMethod.Post, url);
-        req.Content = JsonContent.Create(body);
-        var j = await H().SendAsync(req).Result.Content.ReadFromJsonAsync<JsonElement>();
-        return j.TryGetProperty(resPath, out var d) ? fmt(d) : $"API error: {GStr(j,"msg")}";
+        try
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Post, url);
+            req.Content = JsonContent.Create(body);
+            using var tResp = await H().SendAsync(req);
+            var j = await tResp.Content.ReadFromJsonAsync<JsonElement>();
+            return j.TryGetProperty(resPath, out var d) ? fmt(d) : $"API error: {GStr(j,"msg")}";
+        }
+        catch (Exception ex) { return $"API request failed: {SanitizeUrl(ex.Message)}"; }
     }
 
     private static string MD5(string s) { using var m = System.Security.Cryptography.MD5.Create(); return Convert.ToHexString(m.ComputeHash(Encoding.UTF8.GetBytes(s))).ToLowerInvariant(); }

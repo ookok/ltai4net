@@ -162,11 +162,140 @@ public partial class MainWindow : Window
         _statusTimer = new DispatcherTimer(TimeSpan.FromSeconds(2), DispatcherPriority.Background, (_, _) => UpdateStatusBar());
         _statusTimer.Start();
 
+        // First-run setup: if no API keys configured, prompt user
+        Dispatcher.UIThread.Post(async () => await ShowSetupIfNeededAsync());
+
         ActivateView(1);
 
         KeyDown += OnKeyDown;
         LtaiTheme.ThemeChanged += OnThemeChanged;
         DetachedFromVisualTree += (_, _) => LtaiTheme.ThemeChanged -= OnThemeChanged;
+    }
+
+    private async Task ShowSetupIfNeededAsync()
+    {
+        // Check if any providers have API keys
+        var hasKey = App.Router?.RegisteredProviders.Any() == true;
+        if (hasKey) return;
+
+        // Check env vars directly (in case keys exist but weren't registered at startup)
+        var knownVars = new[] { "DEEPSEEK_API_KEY", "OPENAI_API_KEY", "SILICONFLOW_API_KEY",
+            "DASHSCOPE_API_KEY", "ZHIPU_API_KEY", "BRAVE_API_KEY", "SERPER_API_KEY" };
+        if (knownVars.Any(v => !string.IsNullOrEmpty(Environment.GetEnvironmentVariable(v))))
+            return; // Keys exist — restart would register them
+
+        // Show setup dialog
+        var dialog = new Window
+        {
+            Title = "LTAI — First Run Setup",
+            Width = 500,
+            Height = 300,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+        };
+
+        var stack = new StackPanel { Spacing = 10, Margin = new(20) };
+        stack.Children.Add(new TextBlock
+        {
+            Text = "No API keys detected. Enter an API key to get started.",
+            TextWrapping = TextWrapping.Wrap,
+            FontSize = 14,
+            Foreground = Brushes.White,
+        });
+
+        var providerBox = new ComboBox
+        {
+            ItemsSource = new[] { "DeepSeek", "OpenAI", "SiliconFlow", "Aliyun (Qwen)", "Zhipu (GLM)", "Groq", "Other (custom)" },
+            SelectedIndex = 0,
+            Margin = new(0, 10),
+        };
+        stack.Children.Add(providerBox);
+
+        var keyBox = new TextBox
+        {
+            PlaceholderText = "Paste your API key here...",
+            Margin = new(0, 5),
+        };
+        stack.Children.Add(keyBox);
+
+        var envVarLabel = new TextBlock
+        {
+            Text = "Environment variable: DEEPSEEK_API_KEY",
+            FontSize = 11,
+            Foreground = new SolidColorBrush(Color.Parse("#888888")),
+        };
+        stack.Children.Add(envVarLabel);
+
+        var btnPanel = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10, HorizontalAlignment = HorizontalAlignment.Right };
+        var skipBtn = new Button { Content = "Skip", Width = 80 };
+        var saveBtn = new Button { Content = "Save & Continue", Width = 120, Classes = { "accent" } };
+
+        providerBox.SelectionChanged += (_, _) =>
+        {
+            envVarLabel.Text = providerBox.SelectedItem?.ToString() switch
+            {
+                "DeepSeek" => "Environment variable: DEEPSEEK_API_KEY",
+                "OpenAI" => "Environment variable: OPENAI_API_KEY",
+                "SiliconFlow" => "Environment variable: SILICONFLOW_API_KEY",
+                "Aliyun (Qwen)" => "Environment variable: DASHSCOPE_API_KEY",
+                "Zhipu (GLM)" => "Environment variable: ZHIPU_API_KEY",
+                "Groq" => "Environment variable: GROQ_API_KEY",
+                "Other (custom)" => "Enter custom variable name below:",
+                _ => ""
+            };
+        };
+
+        saveBtn.Click += (_, _) =>
+        {
+            var providerName = providerBox.SelectedItem?.ToString() ?? "DeepSeek";
+            var envVar = providerName switch
+            {
+                "DeepSeek" => "DEEPSEEK_API_KEY",
+                "OpenAI" => "OPENAI_API_KEY",
+                "SiliconFlow" => "SILICONFLOW_API_KEY",
+                "Aliyun (Qwen)" => "DASHSCOPE_API_KEY",
+                "Zhipu (GLM)" => "ZHIPU_API_KEY",
+                "Groq" => "GROQ_API_KEY",
+                _ => "DEEPSEEK_API_KEY"
+            };
+            var key = keyBox.Text?.Trim();
+            if (!string.IsNullOrEmpty(key))
+            {
+                Environment.SetEnvironmentVariable(envVar, key);
+                try { Environment.SetEnvironmentVariable(envVar, key, EnvironmentVariableTarget.User); } catch { }
+
+                // Register with router dynamically
+                if (App.Router != null && App.HttpFactory != null)
+                {
+                    var endpoints = new Dictionary<string, (string ep, string model)>
+                    {
+                        ["DeepSeek"] = ("https://api.deepseek.com/v1", "deepseek-chat"),
+                        ["OpenAI"] = ("https://api.openai.com/v1", "gpt-4o"),
+                        ["SiliconFlow"] = ("https://api.siliconflow.cn/v1", "deepseek-ai/DeepSeek-V2.5"),
+                        ["Aliyun (Qwen)"] = ("https://dashscope.aliyuncs.com/compatible-mode/v1", "qwen-plus"),
+                        ["Zhipu (GLM)"] = ("https://open.bigmodel.cn/api/paas/v4", "glm-4-plus"),
+                        ["Groq"] = ("https://api.groq.com/openai/v1", "llama-3.3-70b-versatile"),
+                    };
+                    if (endpoints.TryGetValue(providerName, out var ep))
+                    {
+                        var http = App.HttpFactory.CreateClient();
+                        http.Timeout = TimeSpan.FromSeconds(30);
+                        var client = new LTAI.AI.OpenAiHttpClient(http, ep.ep, ep.model, key);
+                        App.Router.Register(providerName, client);
+                        App.Router.ActiveProvider = providerName;
+                    }
+                }
+            }
+            dialog.Close();
+        };
+
+        skipBtn.Click += (_, _) => dialog.Close();
+
+        btnPanel.Children.Add(skipBtn);
+        btnPanel.Children.Add(saveBtn);
+        stack.Children.Add(btnPanel);
+        dialog.Content = stack;
+
+        await dialog.ShowDialog(this);
     }
 
     private void ActivateView(int index)

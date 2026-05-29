@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using LTAI.Core;
 
 namespace LTAI.Agent.Tools;
 
@@ -10,9 +11,11 @@ namespace LTAI.Agent.Tools;
 public sealed class MemoryTools
 {
     private readonly string _memDir;
+    private readonly string _ws;
 
     public MemoryTools(string ws)
     {
+        _ws = ws;
         _memDir = Path.Combine(ws, ".livingtree", "memories");
         Directory.CreateDirectory(_memDir);
     }
@@ -30,6 +33,10 @@ public sealed class MemoryTools
         var filename = SanitizeName(name) + ".md";
         var filePath = Path.Combine(_memDir, filename);
 
+        // Path traversal guard
+        if (PathUtils.SafeResolvePath(_ws, Path.Combine(".livingtree", "memories", filename)) == null)
+            return "Error: Invalid memory name";
+
         var header = $"---\nname: {name}\npriority: {priority}\nscope: {scope}\n---\n\n";
         await File.WriteAllTextAsync(filePath, header + content);
 
@@ -43,6 +50,10 @@ public sealed class MemoryTools
         var filePath = FindMemoryFile(name);
         if (filePath == null) return $"Memory '{name}' not found";
 
+        // Path traversal guard
+        if (PathUtils.SafeResolvePath(_ws, Path.Combine(".livingtree", "memories", Path.GetFileName(filePath))) == null)
+            return "Error: Invalid memory name";
+
         File.Delete(filePath);
         return $"🗑️ Forgotten '{name}'";
     }
@@ -54,12 +65,15 @@ public sealed class MemoryTools
         var filePath = FindMemoryFile(name);
         if (filePath == null) return $"Memory '{name}' not found";
 
+        var sizeError = PathUtils.CheckFileSize(filePath, maxBytes: 10 * 1024 * 1024);
+        if (sizeError != null) return sizeError;
+
         var content = await File.ReadAllTextAsync(filePath);
         return content;
     }
 
     [Description("List all saved memories")]
-    public string ListMemories()
+    public async Task<string> ListMemories()
     {
         if (!Directory.Exists(_memDir))
             return "No memories stored yet.";
@@ -73,7 +87,24 @@ public sealed class MemoryTools
         {
             var name = Path.GetFileNameWithoutExtension(f);
             var fi = new FileInfo(f);
-            var preview = File.ReadAllText(f).Split('\n').FirstOrDefault(l => !l.StartsWith("---"))?.Trim();
+
+            // Read only first few lines to build preview (avoids loading large files)
+            string? preview = null;
+            try
+            {
+                using var reader = new StreamReader(new FileStream(f, FileMode.Open, FileAccess.Read, FileShare.Read, 4096, useAsync: true));
+                string? line;
+                while ((line = await reader.ReadLineAsync()) != null)
+                {
+                    if (!line.StartsWith("---"))
+                    {
+                        preview = line.Trim();
+                        break;
+                    }
+                }
+            }
+            catch { /* skip unreadable files */ }
+
             if (preview?.Length > 80) preview = preview[..80] + "...";
             sb.AppendLine($"- **{name}** ({FormatSize(fi.Length)}) — {preview ?? ""}");
         }
@@ -82,17 +113,22 @@ public sealed class MemoryTools
 
     private string? FindMemoryFile(string name)
     {
-        var exact = Path.Combine(_memDir, SanitizeName(name) + ".md");
+        var safeName = SanitizeName(name);
+        var exact = Path.Combine(_memDir, safeName + ".md");
         if (File.Exists(exact)) return exact;
 
-        // Fuzzy match
+        // Fuzzy match — only if exact not found
         return Directory.GetFiles(_memDir, "*.md")
             .FirstOrDefault(f => Path.GetFileNameWithoutExtension(f)
                 .Contains(name, StringComparison.OrdinalIgnoreCase));
     }
 
-    private static string SanitizeName(string name) =>
-        string.Join("_", name.Split(Path.GetInvalidFileNameChars()));
+    private static string SanitizeName(string name)
+    {
+        // Remove path separators AND dots to prevent path traversal
+        var invalid = Path.GetInvalidFileNameChars();
+        return string.Join("_", name.Select(c => invalid.Contains(c) || c == '.' ? '_' : c));
+    }
 
     private static string FormatSize(long bytes) =>
         bytes < 1024 ? $"{bytes} B" : $"{bytes / 1024.0:F1} KB";

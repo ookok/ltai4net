@@ -337,7 +337,7 @@ public sealed class OfficeTools
         catch (Exception ex) { return "Error: " + ex.Message; }
     }
 
-    private string? ResolvePath(string p) { var f = Path.GetFullPath(Path.Combine(_ws, p)); return f.StartsWith(_ws, StringComparison.OrdinalIgnoreCase) ? f : null; }
+    private string? ResolvePath(string path) => LTAI.Core.PathUtils.SafeResolvePath(_ws, path);
     private static DocumentFormat.OpenXml.Packaging.WorksheetPart? ResolveSheet(DocumentFormat.OpenXml.Packaging.WorkbookPart wb, string name)
     {
         var s = wb.Workbook!.Descendants<SS.Sheet>().FirstOrDefault(x => x.Name == name);

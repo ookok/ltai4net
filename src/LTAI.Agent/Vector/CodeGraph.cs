@@ -42,10 +42,23 @@ public sealed class CodeGraph : AIContextProvider
 
         _parser ??= new Tools.TreeSitterParser();
 
-        var files = Directory.GetFiles(dir, "*.*", SearchOption.AllDirectories)
+        var files = Directory.EnumerateFiles(dir, "*.*", new EnumerationOptions
+        {
+            RecurseSubdirectories = true,
+            AttributesToSkip = FileAttributes.System | FileAttributes.Hidden | FileAttributes.ReparsePoint,
+        })
             .Where(f => SourceExts.Contains(Path.GetExtension(f)))
-            .Where(f => !f.Contains("\\obj\\") && !f.Contains("\\bin\\") && !f.Contains("\\dist\\")
-                     && !f.Contains("\\node_modules\\") && !f.Contains("\\.git\\"))
+            .Where(f =>
+            {
+                // Fast path: skip well-known non-source directories
+                var rel = f.AsSpan(dir.Length);
+                return !rel.Contains("\\obj\\", StringComparison.OrdinalIgnoreCase)
+                    && !rel.Contains("\\bin\\", StringComparison.OrdinalIgnoreCase)
+                    && !rel.Contains("\\dist\\", StringComparison.OrdinalIgnoreCase)
+                    && !rel.Contains("\\node_modules\\", StringComparison.OrdinalIgnoreCase)
+                    && !rel.Contains("\\.git\\", StringComparison.OrdinalIgnoreCase)
+                    && !rel.Contains("\\packages\\", StringComparison.OrdinalIgnoreCase);
+            })
             .ToList();
 
         int sc = 0, na = 0;
@@ -154,5 +167,6 @@ public sealed class CodeGraph : AIContextProvider
         return string.Join("\n", lines[start..end]);
     }
 
-    public void Dispose() { _parser?.Dispose(); _store.Dispose(); }
+    // NOTE: GraphStore is owned by DI (singleton) — do NOT dispose here; only dispose owned parser
+    public void Dispose() { _parser?.Dispose(); }
 }

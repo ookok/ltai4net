@@ -14,29 +14,29 @@ public sealed class FlowchartTools
     public FlowchartTools(IHttpClientFactory? httpF = null) => _httpF = httpF;
 
     [Description("Generate flowchart. Nodes: A[Label], edges: A-->B. renderSvg=true to also save SVG")]
-    public string Flowchart(string direction = "TB", string? nodes = null, string? edges = null,
+    public async Task<string> Flowchart(string direction = "TB", string? nodes = null, string? edges = null,
         string? title = null, bool renderSvg = false)
-        => Wrap("flowchart " + direction, title, renderSvg, nodes, edges);
+        => await WrapAsync("flowchart " + direction, title, renderSvg, nodes, edges);
 
     [Description("Sequence diagram: A->>B: Message. renderSvg=true to save SVG")]
-    public string SequenceDiagram(string messages, string? title = null, bool renderSvg = false)
-        => Wrap("sequenceDiagram", title, renderSvg, messages);
+    public async Task<string> SequenceDiagram(string messages, string? title = null, bool renderSvg = false)
+        => await WrapAsync("sequenceDiagram", title, renderSvg, messages);
 
     [Description("Class diagram: class Foo { +int x; +void Bar() }. renderSvg=true")]
-    public string ClassDiagram(string classes, string? relationships = null, bool renderSvg = false)
-        => Wrap("classDiagram", null, renderSvg, classes, relationships);
+    public async Task<string> ClassDiagram(string classes, string? relationships = null, bool renderSvg = false)
+        => await WrapAsync("classDiagram", null, renderSvg, classes, relationships);
 
     [Description("Gantt chart: TaskName, start, end. renderSvg=true")]
-    public string GanttChart(string tasks, string? title = null, string dateFormat = "YYYY-MM-DD", bool renderSvg = false)
-        => Wrap("gantt", title, renderSvg, $"dateFormat {dateFormat}\n{tasks}");
+    public async Task<string> GanttChart(string tasks, string? title = null, string dateFormat = "YYYY-MM-DD", bool renderSvg = false)
+        => await WrapAsync("gantt", title, renderSvg, $"dateFormat {dateFormat}\n{tasks}");
 
     [Description("ER diagram: CUSTOMER ||--o{ ORDER : places. renderSvg=true")]
-    public string ErDiagram(string relationships, bool renderSvg = false)
-        => Wrap("erDiagram", null, renderSvg, relationships);
+    public async Task<string> ErDiagram(string relationships, bool renderSvg = false)
+        => await WrapAsync("erDiagram", null, renderSvg, relationships);
 
     // ─── Build Mermaid + optional SVG ───
 
-    private string Wrap(string header, string? title, bool renderSvg, params string?[] sections)
+    private async Task<string> WrapAsync(string header, string? title, bool renderSvg, params string?[] sections)
     {
         var sb = new StringBuilder();
         sb.AppendLine("```mermaid");
@@ -58,10 +58,10 @@ public sealed class FlowchartTools
             var url = "https://quickchart.io/mermaid?format=svg&width=900&height=700&graph=" + Uri.EscapeDataString(mermaid);
             var http = _httpF.CreateClient();
             http.Timeout = TimeSpan.FromSeconds(15);
-            var svgBytes = http.GetByteArrayAsync(url).Result;
+            var svgBytes = await http.GetByteArrayAsync(url);
             var svgPath = Path.Combine(Path.GetTempPath(), $"ltai_diagram_{Guid.NewGuid():N}.svg");
-            File.WriteAllBytes(svgPath, svgBytes);
-            return $"{mermaid}\n\n📊 SVG saved: `{svgPath}` ({(svgBytes.Length / 1024.0):F1} KB)";
+            await File.WriteAllBytesAsync(svgPath, svgBytes);
+            return $"{mermaid}\n\n📊 SVG saved: `{svgPath}` ({(svgBytes.Length / 1024.0):F1} KB)\n> ⚠️ Temp file not auto-cleaned. Delete after use.";
         }
         catch (Exception ex)
         {

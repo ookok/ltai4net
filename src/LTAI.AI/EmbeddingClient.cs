@@ -78,10 +78,11 @@ public sealed class EmbeddingClient : IDisposable
         return texts.Select(FastEmb).ToArray();
     }
 
-    private static async Task<EmbeddingResult?> CallEmbeddingApiAsync(
+    private async Task<EmbeddingResult?> CallEmbeddingApiAsync(
         string endpoint, string model, string apiKey, string[] texts, CancellationToken ct)
     {
-        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+        var http = _httpFactory.CreateClient();
+        http.Timeout = TimeSpan.FromSeconds(30);
 
         var request = new
         {

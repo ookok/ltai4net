@@ -25,16 +25,24 @@ public sealed class JobTools
     {
         try
         {
+            // Parse command into executable + argument array to avoid shell injection
+            var parts = ParseCommand(command);
+            if (parts.Length == 0)
+                return "Error: Empty command";
+
             var psi = new ProcessStartInfo
             {
-                FileName = OperatingSystem.IsWindows() ? "cmd.exe" : "/bin/bash",
-                Arguments = OperatingSystem.IsWindows() ? $"/c \"{command}\"" : $"-c \"{command.Replace("\"", "\\\"")}\"",
+                FileName = parts[0],
                 WorkingDirectory = cwd ?? Directory.GetCurrentDirectory(),
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,
                 CreateNoWindow = true,
             };
+
+            // Add arguments individually — no shell interpretation
+            for (int i = 1; i < parts.Length; i++)
+                psi.ArgumentList.Add(parts[i]);
 
             var proc = new Process { StartInfo = psi };
             var output = new StringBuilder();
@@ -63,6 +71,63 @@ public sealed class JobTools
         {
             return $"Failed to start job: {ex.Message}";
         }
+    }
+
+    /// <summary>Parse a command string into [executable, arg1, arg2, ...].
+    /// Rejects shell metacharacters outside quotes — no shell interpretation.</summary>
+    private static string[] ParseCommand(string command)
+    {
+        if (string.IsNullOrWhiteSpace(command)) return [];
+
+        var tokens = new List<string>();
+        var current = new StringBuilder();
+        bool inQuote = false;
+        char quoteChar = '\0';
+
+        for (int i = 0; i < command.Length; i++)
+        {
+            var c = command[i];
+
+            if (inQuote)
+            {
+                if (c == quoteChar)
+                {
+                    inQuote = false;
+                    continue;
+                }
+                current.Append(c);
+                continue;
+            }
+
+            if (c == '\'' || c == '"')
+            {
+                inQuote = true;
+                quoteChar = c;
+                continue;
+            }
+
+            // Shell metacharacters are rejected — no pipe/redirect/chaining
+            if (c is '$' or '`' or '|' or '>' or '<' or '&' or ';' or '(' or ')' or '#')
+                throw new InvalidOperationException(
+                    $"Shell metacharacter '{c}' is not allowed. Use explicit commands (e.g. write a script file for pipelines).");
+
+            if (c == ' ' || c == '\t')
+            {
+                if (current.Length > 0)
+                {
+                    tokens.Add(current.ToString());
+                    current.Clear();
+                }
+                continue;
+            }
+
+            current.Append(c);
+        }
+
+        if (current.Length > 0)
+            tokens.Add(current.ToString());
+
+        return tokens.ToArray();
     }
 
     [Description("List all background jobs")]

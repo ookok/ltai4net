@@ -13,6 +13,7 @@ public sealed class WorkflowOrchestrator
     private readonly ILogger<WorkflowOrchestrator> _logger;
     private readonly Dictionary<string, AIAgent> _specialists;
     private readonly AIAgent _defaultAgent;
+    private readonly SemaphoreSlim _concurrencyThrottle = new(2, 2); // Max 2 concurrent agents
 
     public WorkflowOrchestrator(
         IEnumerable<AIAgent> allAgents,
@@ -48,7 +49,16 @@ public sealed class WorkflowOrchestrator
             new(ChatRole.User, task)
         };
 
-        var routingResponse = await _defaultAgent.RunAsync(routingMessages, cancellationToken: ct);
+        AgentResponse routingResponse;
+        try
+        {
+            routingResponse = await _defaultAgent.RunAsync(routingMessages, cancellationToken: ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Orchestrator routing failed for task: {Task}", task);
+            return new AgentResponse { Messages = [new ChatMessage(ChatRole.Assistant, $"Routing failed: {ex.Message}")] };
+        }
         var decision = routingResponse.Messages?.LastOrDefault()?.Text ?? "";
 
         // Check if the orchestrator decided to hand off
@@ -61,10 +71,18 @@ public sealed class WorkflowOrchestrator
                 // Extract the task for the specialist
                 var specialistTask = ExtractHandoffTask(decision, name) ?? task;
                 
-                var result = await agent.RunAsync(
-                    [new ChatMessage(ChatRole.User, specialistTask)],
-                    cancellationToken: ct);
-                return result;
+                try
+                {
+                    var result = await agent.RunAsync(
+                        [new ChatMessage(ChatRole.User, specialistTask)],
+                        cancellationToken: ct);
+                    return result;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Specialist agent '{Agent}' failed for task: {Task}", name, specialistTask);
+                    return new AgentResponse { Messages = [new ChatMessage(ChatRole.Assistant, $"Agent '{name}' failed: {ex.Message}")] };
+                }
             }
         }
 
@@ -91,9 +109,17 @@ public sealed class WorkflowOrchestrator
 
         foreach (var agent in agents)
         {
-            var response = await agent.RunAsync(messages, cancellationToken: ct);
-            var text = response.Messages?.LastOrDefault()?.Text ?? "(no output)";
-            messages = [new ChatMessage(ChatRole.User, text)];
+            try
+            {
+                var response = await agent.RunAsync(messages, cancellationToken: ct);
+                var text = response.Messages?.LastOrDefault()?.Text ?? "(no output)";
+                messages = [new ChatMessage(ChatRole.User, text)];
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Sequential agent '{Agent}' failed", agent.Name);
+                messages = [new ChatMessage(ChatRole.User, $"Agent '{agent.Name}' failed: {ex.Message}")];
+            }
         }
 
         return messages[0].Text ?? "";
@@ -113,17 +139,35 @@ public sealed class WorkflowOrchestrator
         _logger.LogInformation("Concurrent: {Agents} on: {Task}",
             string.Join(", ", agents.Select(a => a.Name)), task);
 
-        var results = await Task.WhenAll(agents.Select(agent =>
-            agent.RunAsync([new ChatMessage(ChatRole.User, task)], cancellationToken: ct)
-        ));
+        var results = await Task.WhenAll(agents.Select(async agent =>
+        {
+            await _concurrencyThrottle.WaitAsync(ct);
+            try
+            {
+                var agentResponse = await agent.RunAsync(
+                    [new ChatMessage(ChatRole.User, task)], cancellationToken: ct);
+                return (name: agent.Name, response: (AgentResponse?)agentResponse, error: (string?)null);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Concurrent agent '{Agent}' failed", agent.Name);
+                return (name: agent.Name, response: (AgentResponse?)null, error: (string?)ex.Message);
+            }
+            finally
+            {
+                _concurrencyThrottle.Release();
+            }
+        }));
 
         var sb = new System.Text.StringBuilder();
         sb.AppendLine("## Concurrent Results\n");
-        for (int i = 0; i < agents.Length; i++)
+        foreach (var (name, response, error) in results)
         {
-            var text = results[i].Messages?.LastOrDefault()?.Text ?? "(no response)";
-            sb.AppendLine($"### {agents[i].Name}");
-            sb.AppendLine(text);
+            sb.AppendLine($"### {name}");
+            if (error != null)
+                sb.AppendLine($"❌ Failed: {error}");
+            else
+                sb.AppendLine(response?.Messages?.LastOrDefault()?.Text ?? "(no response)");
             sb.AppendLine();
         }
         return sb.ToString();

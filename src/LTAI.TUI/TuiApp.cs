@@ -32,6 +32,12 @@ public sealed class TuiApp
         AnsiConsole.Write(new FigletText("LTAI").Color(Color.Green));
         AnsiConsole.MarkupLine("[grey]LivingTree AI — Simplified[/]");
 
+        // First-run setup: if no API keys configured, show interactive wizard
+        if (!_llmConfig.HasAnyConfiguredProvider())
+        {
+            _llmConfig.ShowSetupWizard();
+        }
+
         while (_running)
         {
             ShowHeader();

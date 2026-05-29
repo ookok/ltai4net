@@ -104,9 +104,11 @@ public sealed class SystemTools
         if (!string.IsNullOrEmpty(name))
         {
             var val = Environment.GetEnvironmentVariable(name);
-            return val != null
-                ? $"**{name}** = `{val}`"
-                : $"Variable '{name}' not set.";
+            if (val == null) return $"Variable '{name}' not set.";
+            // Redact secrets in single-var lookup too (not just in list-all mode)
+            if (name.Contains("KEY") || name.Contains("SECRET") || name.Contains("PASSWORD") || name.Contains("TOKEN"))
+                val = val.Length > 8 ? val[..8] + "..." : "***";
+            return $"**{name}** = `{val}`";
         }
 
         sb.AppendLine("## Environment Variables\n");
@@ -124,6 +126,23 @@ public sealed class SystemTools
         }
 
         return sb.ToString();
+    }
+
+    [Description("设置环境变量。必须传入 confirmed=true 才能执行——AI 必须先向用户展示变更并取得确认。")]
+    public static string SetEnv(
+        [Description("变量名")] string name,
+        [Description("变量值")] string value,
+        [Description("必须为 true 才会实际执行设置")] bool confirmed = false)
+    {
+        if (!confirmed)
+            return "⚠️ 设置环境变量需要用户确认。请向用户展示要设置的变量名和值，确认后调用 SetEnv 并传入 confirmed=true。";
+
+        // 进程级设置只影响当前进程及其子进程，不会持久化到系统
+        Environment.SetEnvironmentVariable(name, value);
+        var preview = name.Contains("KEY") || name.Contains("SECRET") || name.Contains("PASSWORD") || name.Contains("TOKEN")
+            ? value.Length > 8 ? value[..8] + "..." : "***"
+            : value;
+        return $"✅ `{name}` = `{preview}`  (仅当前进程有效，重启后丢失)";
     }
 
     [Description("Ping a host to check connectivity")]
@@ -208,10 +227,18 @@ public sealed class SystemTools
         {
             using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(Math.Clamp(timeoutSec, 1, 60)) };
             var sw = Stopwatch.StartNew();
-            var resp = await http.GetAsync(url);
+            var resp = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
             sw.Stop();
 
-            var body = await resp.Content.ReadAsStringAsync();
+            // Read only first 2KB to avoid downloading large responses
+            using var stream = await resp.Content.ReadAsStreamAsync();
+            var buffer = new byte[2048];
+            var bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length);
+            var bodyPreview = System.Text.Encoding.UTF8.GetString(buffer, 0, bytesRead)
+                .Replace("\n", " ").Replace("\r", "");
+            if (bodyPreview.Length > 200) bodyPreview = bodyPreview[..200] + "...";
+            if (bytesRead == buffer.Length) bodyPreview += " [truncated]";
+
             return $"""
                 ## HTTP Check: {url}
 
@@ -221,7 +248,7 @@ public sealed class SystemTools
                 | Time | {sw.ElapsedMilliseconds}ms |
                 | Content-Type | {resp.Content.Headers.ContentType} |
                 | Content-Length | {FormatSize(resp.Content.Headers.ContentLength ?? 0)} |
-                | Body Preview | {body[..Math.Min(body.Length, 200)].Replace("\n", " ")} |
+                | Body Preview | {bodyPreview} |
                 """;
         }
         catch (Exception ex)

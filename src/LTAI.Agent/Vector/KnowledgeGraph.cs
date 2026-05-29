@@ -157,5 +157,6 @@ public sealed class KnowledgeGraph : AIContextProvider
         return words;
     }
 
-    public void Dispose() => _store.Dispose();
+    // NOTE: GraphStore is owned by DI (singleton) — do NOT dispose here
+    public void Dispose() { }
 }

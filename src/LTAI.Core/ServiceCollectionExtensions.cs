@@ -1,4 +1,6 @@
+using LTAI.Core.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using OpenTelemetry;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Trace;
@@ -11,6 +13,9 @@ public static class ServiceCollectionExtensions
         bool enableOpenTelemetry = true)
     {
         services.AddHttpClient();
+
+        // Validate LTAIOptions at startup (catches misconfiguration early)
+        services.AddSingleton<IValidateOptions<LTAIOptions>, LTAIOptionsValidator>();
 
         if (enableOpenTelemetry)
         {

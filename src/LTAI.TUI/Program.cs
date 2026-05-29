@@ -43,7 +43,8 @@ public static class Program
         var options = sp.GetRequiredService<IOptions<LTAIOptions>>();
         var chatAgent = sp.GetRequiredService<ChatAgent>();
         var router = sp.GetRequiredService<MultiProviderChatClient>();
-        var llmConfig = new LLMConfigPanel(options, router);
+        var httpFactory = sp.GetRequiredService<IHttpClientFactory>();
+        var llmConfig = new LLMConfigPanel(options, router, httpFactory);
 
         var app = new TuiApp(chatAgent, llmConfig, options, Directory.GetCurrentDirectory());
         await app.RunAsync();

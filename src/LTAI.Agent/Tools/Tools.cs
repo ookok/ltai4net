@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using LTAI.Core;
 
 namespace LTAI.Agent.Tools;
 
@@ -14,16 +15,18 @@ public sealed class FileSystemTools
     [Description("Read a file")]
     public async Task<string> ReadFile([Description("Path")] string path)
     {
-        var fp = Path.GetFullPath(Path.Combine(_ws, path));
-        if (!fp.StartsWith(_ws, StringComparison.OrdinalIgnoreCase)) return "Error: path escape";
+        var fp = PathUtils.SafeResolvePath(_ws, path);
+        if (fp == null) return "Error: path escape";
+        var sizeError = PathUtils.CheckFileSize(fp);
+        if (sizeError != null) return sizeError;
         return await File.ReadAllTextAsync(fp);
     }
 
     [Description("Write a file")]
     public async Task<string> WriteFile([Description("Path")] string path, [Description("Content")] string content)
     {
-        var fp = Path.GetFullPath(Path.Combine(_ws, path));
-        if (!fp.StartsWith(_ws, StringComparison.OrdinalIgnoreCase)) return "Error: path escape";
+        var fp = PathUtils.SafeResolvePath(_ws, path);
+        if (fp == null) return "Error: path escape";
         Directory.CreateDirectory(Path.GetDirectoryName(fp)!);
         await File.WriteAllTextAsync(fp, content);
         return $"Written {content.Length} bytes";
@@ -32,8 +35,8 @@ public sealed class FileSystemTools
     [Description("List directory")]
     public string[] ListFiles([Description("Path")] string path)
     {
-        var fp = Path.GetFullPath(Path.Combine(_ws, path));
-        if (!fp.StartsWith(_ws)) return ["Error: path escape"];
+        var fp = PathUtils.SafeResolvePath(_ws, path);
+        if (fp == null) return ["Error: path escape"];
         return Directory.Exists(fp) ? Directory.GetFileSystemEntries(fp).Select(Path.GetFileName).OfType<string>().ToArray() : [];
     }
 }

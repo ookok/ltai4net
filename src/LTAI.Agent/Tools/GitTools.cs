@@ -1,5 +1,4 @@
 using System.ComponentModel;
-using System.Diagnostics;
 using System.Text;
 using LibGit2Sharp;
 
@@ -58,15 +57,52 @@ public sealed class GitTools
         return sb.ToString();
     }
 
-    [Description("差异比较（使用 git diff 命令）")]
+    [Description("差异比较（基于 LibGit2Sharp）")]
     public string GitDiff(string? @ref = null, string? file = null)
-        => Shell($"git diff {@ref ?? "HEAD"}{(file != null ? $" -- {file}" : "")}");
+    {
+        using var repo = Open();
+        Commit? commit = @ref != null ? repo.Lookup<Commit>(@ref) : repo.Head.Tip;
+        if (commit == null) return "(no commits)";
+        var patch = repo.Diff.Compare<Patch>(commit.Tree, null,
+            file != null ? new[] { file } : null);
+        return string.IsNullOrWhiteSpace(patch.Content) ? "(no diff)" : patch.Content;
+    }
 
-    [Description("文件追溯（blame）")]
-    public string GitBlame(string file) => Shell($"git blame {file}");
+    [Description("文件追溯（blame，基于 LibGit2Sharp）")]
+    public string GitBlame(string file)
+    {
+        using var repo = Open();
+        var sb = new StringBuilder($"## Blame: {file}\n");
+        var blame = repo.Blame(file, new BlameOptions());
+        foreach (var hunk in blame)
+        {
+            var commit = hunk.FinalCommit;
+            sb.AppendLine($"  L{hunk.FinalStartLineNumber,4}: {commit.Sha[..8]} {commit.Author.Name,-15} {commit.MessageShort.Trim()}");
+        }
+        return sb.ToString();
+    }
 
-    [Description("显示提交详情")]
-    public string GitShow(string? @ref = null) => Shell($"git show {@ref ?? "HEAD"} --stat");
+    [Description("显示提交详情（基于 LibGit2Sharp）")]
+    public string GitShow(string? @ref = null)
+    {
+        using var repo = Open();
+        Commit? commit = @ref != null ? repo.Lookup<Commit>(@ref) : repo.Head.Tip;
+        if (commit == null) return "Commit not found";
+        var sb = new StringBuilder($"## {commit.Sha}\n");
+        sb.AppendLine($"Author: {commit.Author.Name} <{commit.Author.Email}>");
+        sb.AppendLine($"Date:   {commit.Author.When:yyyy-MM-dd HH:mm:ss}");
+        sb.AppendLine();
+        sb.AppendLine(commit.Message.TrimEnd());
+        sb.AppendLine();
+        if (commit.Tree != null)
+        {
+            var parentTree = commit.Parents.FirstOrDefault()?.Tree;
+            var patch = repo.Diff.Compare<Patch>(parentTree, commit.Tree);
+            if (!string.IsNullOrWhiteSpace(patch.Content))
+                sb.AppendLine(patch.Content);
+        }
+        return sb.ToString();
+    }
 
     // ═══ Branch ═══
 
@@ -220,8 +256,26 @@ public sealed class GitTools
         };
     }
 
-    [Description("变基（rebase）")]
-    public string GitRebase(string? target = null) => Shell($"git rebase {target ?? "@{upstream}"}");
+    [Description("变基（rebase，基于 LibGit2Sharp）")]
+    public string GitRebase(string? target = null)
+    {
+        using var repo = Open();
+        Branch? upstream = target != null ? repo.Branches[target] : repo.Head.TrackedBranch;
+        if (upstream == null) return "No upstream branch to rebase onto";
+        var sig = Sig();
+        var result = repo.Rebase.Start(
+            repo.Head,
+            upstream,
+            null,
+            new Identity(sig.Name, sig.Email),
+            new RebaseOptions());
+        return result.Status switch
+        {
+            RebaseStatus.Complete => "✅ Rebase completed",
+            RebaseStatus.Conflicts => "❌ Rebase conflicts — resolve and continue with 'git rebase --continue'",
+            var s => $"Rebase: {s}"
+        };
+    }
 
     [Description("同步 fork（fetch + merge upstream）")]
     public string GitSyncFork(string upstream = "upstream", string branch = "master")
@@ -305,21 +359,14 @@ public sealed class GitTools
 
     // ═══ Review ═══
 
-    [Description("审查未提交的更改")]
-    public string GitReviewChanges() => Shell("git diff");
-
-    private static string Truncate(string text, int max) => text.Length <= max ? text : text[..max] + $"\n... (truncated {text.Length - max} chars)";
-
-    private static string Shell(string cmd)
+    [Description("审查未提交的更改（基于 LibGit2Sharp）")]
+    public string GitReviewChanges()
     {
-        try
-        {
-            var psi = new ProcessStartInfo("git", cmd) { RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true };
-            using var p = Process.Start(psi)!;
-            var output = p.StandardOutput.ReadToEnd();
-            p.WaitForExit(10000);
-            return string.IsNullOrWhiteSpace(output) ? "(no output)" : output;
-        }
-        catch (Exception ex) { return $"Error: {ex.Message}"; }
+        using var repo = Open();
+        if (repo.Head.Tip == null) return "(no commits yet)";
+        var patch = repo.Diff.Compare<Patch>(repo.Head.Tip.Tree, null);
+        return string.IsNullOrWhiteSpace(patch.Content) ? "(no uncommitted changes)" : patch.Content;
     }
+
+    // Removed Shell() — all operations now use LibGit2Sharp natively
 }

@@ -91,9 +91,9 @@ public sealed class ContainerTools
 
             return $"❌ Docker not available: {error.Trim()}";
         }
-        catch
+        catch (Exception ex)
         {
-            return "❌ Docker not installed or not in PATH";
+            return $"❌ Docker check failed: {ex.Message}";
         }
     }
 

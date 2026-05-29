@@ -7,6 +7,16 @@ namespace LTAI.Core.Safety;
 /// <summary>
 /// MAF AIContextProvider that checks input/output for safety concerns.
 /// Uses a dedicated IChatClient (not the agent pipeline) to avoid recursion.
+///
+/// NOTE: This provider only blocks INPUT (via ProvideAIContextAsync modifying the context).
+/// OUTPUT checking in StoreAIContextAsync is AUDIT-ONLY — the response has already been
+/// delivered to the user by the time this runs. For output blocking, use SafeChatClient
+/// decorator which wraps IChatClient and intercepts responses before they reach the caller.
+///
+/// Recursion guard: _isChecking (AsyncLocal) prevents re-entrant safety checks when
+/// the safety LLM call triggers another AIContextProvider. Relies on MAF running in
+/// the same SynchronizationContext — Flow across ExecutionContext boundaries may
+/// create a new AsyncLocal instance.
 /// </summary>
 public sealed class SafetyCoordinator : AIContextProvider
 {
@@ -102,7 +112,7 @@ public sealed class SafetyCoordinator : AIContextProvider
         catch (Exception ex)
         {
             _logger?.LogWarning(ex, "Safety check failed for {Direction}", direction);
-            return (true, "");
+            return (false, "Safety LLM unavailable — blocking by default (fail-closed)");
         }
         finally
         {

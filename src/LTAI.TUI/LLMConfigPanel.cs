@@ -1,6 +1,8 @@
 using LTAI.AI;
 using LTAI.Core.Configuration;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Logging.Abstractions;
 using Spectre.Console;
 
 namespace LTAI.TUI;
@@ -24,8 +26,6 @@ public sealed class LLMConfigPanel
         ["StepFun (Step)"] = new("STEP_API_KEY",        "https://api.stepfun.com/v1",           "step-2-16k"),
         ["Minimax"] = new("MINIMAX_API_KEY",             "https://api.minimax.chat/v1",          "MiniMax-Text-01"),
         ["OpenAI"]      = new("OPENAI_API_KEY",          "https://api.openai.com/v1",            "gpt-4o"),
-        ["Anthropic"]   = new("ANTHROPIC_API_KEY",       "https://api.anthropic.com/v1",         "claude-3-5-sonnet-20241022"),
-        ["Gemini"]      = new("GEMINI_API_KEY",          "https://generativelanguage.googleapis.com/v1beta", "gemini-2.0-flash"),
         ["Groq"]        = new("GROQ_API_KEY",            "https://api.groq.com/openai/v1",       "llama-3.3-70b-versatile"),
         ["OpenRouter"]  = new("OPENROUTER_API_KEY",      "https://openrouter.ai/api/v1",         "deepseek/deepseek-chat"),
         ["Together AI"] = new("TOGETHER_API_KEY",        "https://api.together.xyz/v1",          "mistralai/Mixtral-8x22B-Instruct-v0.1"),
@@ -41,6 +41,7 @@ public sealed class LLMConfigPanel
 
     private readonly IOptions<LTAIOptions>? _options;
     private readonly MultiProviderChatClient? _router;
+    private readonly IHttpClientFactory? _httpFactory;
     private string _provider;
     private string _l1Model;
     private string _l2Model;
@@ -54,10 +55,13 @@ public sealed class LLMConfigPanel
     public float Temperature => _temperature;
     public int MaxTokens => _maxTokens;
 
-    public LLMConfigPanel(IOptions<LTAIOptions>? options = null, MultiProviderChatClient? router = null)
+    public LLMConfigPanel(IOptions<LTAIOptions>? options = null,
+        MultiProviderChatClient? router = null,
+        IHttpClientFactory? httpFactory = null)
     {
         _options = options;
         _router = router;
+        _httpFactory = httpFactory;
         _provider = DetectActiveProvider();
         _l1Model = options?.Value.AI.GetLayerConfig("fast").Model ?? "deepseek-v4-flash";
         _l2Model = options?.Value.AI.GetLayerConfig("deep").Model ?? "deepseek-v4-pro";
@@ -71,6 +75,83 @@ public sealed class LLMConfigPanel
         return "DeepSeek";
     }
 
+    /// <summary>Returns true if any provider has a valid API key set.</summary>
+    public bool HasAnyConfiguredProvider()
+    {
+        return KnownProviders.Any(kv =>
+            !string.IsNullOrEmpty(kv.Value.EnvVar) &&
+            !string.IsNullOrEmpty(Environment.GetEnvironmentVariable(kv.Value.EnvVar)));
+    }
+
+    /// <summary>Show an interactive first-run prompt when no providers are configured.</summary>
+    public void ShowSetupWizard()
+    {
+        AnsiConsole.Clear();
+        AnsiConsole.Write(new FigletText("Welcome!").Color(Color.Green));
+        AnsiConsole.MarkupLine("[yellow]No API keys detected. Let's set one up to get started.[/]\n");
+
+        var options = KnownProviders
+            .Where(kv => !string.IsNullOrEmpty(kv.Value.EnvVar))
+            .Select(kv => kv.Key)
+            .Prepend("[yellow]Enter a custom API key manually[/]")
+            .ToList();
+
+        var choice = AnsiConsole.Prompt(
+            new SelectionPrompt<string>()
+                .Title("Choose a provider to configure:")
+                .PageSize(15)
+                .MoreChoicesText("[grey](scroll down for more)[/]")
+                .AddChoices(options));
+
+        if (choice == "[yellow]Enter a custom API key manually[/]")
+        {
+            var envVar = AnsiConsole.Ask<string>("[yellow]Environment variable name:[/]");
+            var key = AnsiConsole.Prompt(new TextPrompt<string>($"[yellow]API Key value:[/]").Secret());
+            if (!string.IsNullOrEmpty(envVar) && !string.IsNullOrEmpty(key))
+            {
+                Environment.SetEnvironmentVariable(envVar, key);
+                var providerName = envVar.Replace("_API_KEY", "").Replace("_KEY", "");
+                RegisterProviderWithRouter(providerName, envVar, key);
+                _provider = providerName;
+                AnsiConsole.MarkupLine($"[green]✅ Set {envVar}[/]");
+            }
+        }
+        else if (KnownProviders.TryGetValue(choice, out var info))
+        {
+            var key = AnsiConsole.Prompt(new TextPrompt<string>($"[yellow]Enter {choice} API Key:[/]").Secret());
+            if (!string.IsNullOrEmpty(key))
+            {
+                Environment.SetEnvironmentVariable(info.EnvVar, key);
+                RegisterProviderWithRouter(choice, info.EnvVar, key);
+                _provider = choice;
+                AnsiConsole.MarkupLine($"[green]✅ {choice} configured[/]");
+            }
+        }
+
+        AnsiConsole.MarkupLine("\n[grey]Press any key to continue...[/]");
+        System.Console.ReadKey(true);
+    }
+
+    /// <summary>Register a new provider with the runtime router so it's immediately usable.</summary>
+    private void RegisterProviderWithRouter(string name, string envVar, string apiKey)
+    {
+        if (_router == null || !KnownProviders.TryGetValue(name, out var info)) return;
+
+        try
+        {
+            var http = _httpFactory?.CreateClient() ?? new HttpClient();
+            http.Timeout = TimeSpan.FromSeconds(30);
+            var client = new OpenAiHttpClient(http, info.Endpoint, info.Model, apiKey);
+            _router.Register(name, client);
+            _router.ActiveProvider = name;
+            AnsiConsole.MarkupLine($"[green]✓ {name} registered and ready[/]");
+        }
+        catch (Exception ex)
+        {
+            AnsiConsole.MarkupLine($"[red]Failed to register {name}: {ex.Message}[/]");
+        }
+    }
+
     public void Render()
     {
         AnsiConsole.Write(new Rule("[bold cyan]LLM Configuration[/]").RuleStyle(Style.Plain));
@@ -82,28 +163,34 @@ public sealed class LLMConfigPanel
         provTable.AddColumn("Provider");
         provTable.AddColumn("API Key");
         provTable.AddColumn("Endpoint");
-        foreach (var (name, info) in KnownProviders)
+        foreach (var (name, pInfo) in KnownProviders)
         {
-            if (string.IsNullOrEmpty(info.EnvVar))
-                provTable.AddRow(name, "[dim](local)[/]", $"[dim]{info.Endpoint}[/]");
+            if (string.IsNullOrEmpty(pInfo.EnvVar))
+                provTable.AddRow(name, "[dim](local)[/]", $"[dim]{pInfo.Endpoint}[/]");
             else
             {
-                var hasKey = !string.IsNullOrEmpty(Environment.GetEnvironmentVariable(info.EnvVar));
+                var hasKey = !string.IsNullOrEmpty(Environment.GetEnvironmentVariable(pInfo.EnvVar));
+                var registered = _router?.RegisteredProviders.Contains(name) == true;
+                var status = hasKey
+                    ? (registered ? "[green]✓[/]" : "[yellow]✓ (restart needed)[/]")
+                    : "[dim]not set[/]";
                 provTable.AddRow(
                     name == _provider ? $"[bold]{name}[/]" : name,
-                    hasKey ? "[green]✓[/]" : "[dim]not set[/]",
-                    $"[dim]{info.Endpoint}[/]");
+                    status,
+                    $"[dim]{pInfo.Endpoint}[/]");
             }
         }
         AnsiConsole.Write(provTable);
         AnsiConsole.WriteLine();
 
         var prov = CurrentProvider;
-        var keyOk = prov == null || string.IsNullOrEmpty(prov.EnvVar) || !string.IsNullOrEmpty(Environment.GetEnvironmentVariable(prov.EnvVar));
+        var hasApiKey = prov == null || string.IsNullOrEmpty(prov.EnvVar) || !string.IsNullOrEmpty(Environment.GetEnvironmentVariable(prov.EnvVar));
+        var isRegistered = prov == null || _router?.RegisteredProviders.Contains(_provider) == true;
 
         var table = new Table().Border(TableBorder.Rounded);
-        table.AddColumn("Layer"); table.AddColumn("Model"); table.AddColumn("Temperature"); table.AddColumn("Max Tokens"); table.AddColumn("Key");
-        table.AddRow("L1 (Fast)", _l1Model, $"{_temperature:F1}", $"{_maxTokens}", keyOk ? "[green]✓[/]" : "[red]No Key[/]");
+        table.AddColumn("Layer"); table.AddColumn("Model"); table.AddColumn("Temperature"); table.AddColumn("Max Tokens"); table.AddColumn("Status");
+        table.AddRow("L1 (Fast)", _l1Model, $"{_temperature:F1}", $"{_maxTokens}",
+            !hasApiKey ? "[red]No Key[/]" : (!isRegistered ? "[yellow]Key set, restart to activate[/]" : "[green]Ready[/]"));
         AnsiConsole.Write(table);
         AnsiConsole.WriteLine();
         AnsiConsole.MarkupLine("[dim]P: switch provider | K: set API key | T: temperature | M: max tokens[/]");
@@ -146,10 +233,19 @@ public sealed class LLMConfigPanel
             AnsiConsole.MarkupLine($"[yellow]{_provider} is a local provider — no API key needed.[/]");
             return;
         }
+
         var key = AnsiConsole.Prompt(new TextPrompt<string>($"[yellow]Enter {_provider} API Key ({info.EnvVar}):[/]").Secret());
         if (string.IsNullOrWhiteSpace(key)) return;
-        Environment.SetEnvironmentVariable(info.EnvVar, key, EnvironmentVariableTarget.User);
-        AnsiConsole.MarkupLine($"[green]✓ {info.EnvVar} saved[/]");
+
+        // Set process-level env var so current session sees it
+        Environment.SetEnvironmentVariable(info.EnvVar, key);
+        // Also save to user profile for persistence across restarts
+        try { Environment.SetEnvironmentVariable(info.EnvVar, key, EnvironmentVariableTarget.User); } catch { /* best effort */ }
+
+        // Register with the router immediately (no restart needed)
+        RegisterProviderWithRouter(_provider, info.EnvVar, key);
+
+        AnsiConsole.MarkupLine($"[green]✓ {info.EnvVar} set and registered[/]");
     }
 
     private void AdjustTemperature()
