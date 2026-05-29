@@ -1,5 +1,4 @@
 using System.Reflection;
-using System.Text.Json;
 using Spectre.Console;
 using LTAI.Core;
 using LTAI.Knowledge.Core;
@@ -8,7 +7,7 @@ namespace LTAI.Cli;
 
 partial class Program
 {
-    public static async Task<int> Main(string[] args)
+    public static int Main(string[] args)
     {
         AnsiConsole.Write(new FigletText("LTAI CLI").Color(Color.Green));
         AnsiConsole.MarkupLine("[grey]LivingTree AI — MS Agent Framework 1.8.0[/]");
@@ -16,18 +15,17 @@ partial class Program
         if (args.Length == 0)
         {
             ShowHelp();
+            AnsiConsole.MarkupLine("\n[grey]Press any key to exit...[/]");
+            System.Console.ReadKey(true);
             return 0;
         }
 
-        var cmd = args[0].ToLowerInvariant();
-        switch (cmd)
+        return args[0].ToLowerInvariant() switch
         {
-            case "env": return ShowEnv();
-            case "version":
-            case "--version":
-            case "-v": return ShowVersion();
-            default: ShowHelp(); return 0;
-        }
+            "env" => ShowEnv(),
+            "version" or "--version" or "-v" => ShowVersion(),
+            _ => ShowHelp()
+        };
     }
 
     private static int ShowHelp()

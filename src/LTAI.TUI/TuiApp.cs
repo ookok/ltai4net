@@ -73,6 +73,14 @@ public sealed class TuiApp
     private async Task HandleInputAsync()
     {
         var key = Console.ReadKey(true);
+
+        // Route to LLM config panel when in config view
+        if (_currentView == TuiView.LLMConfig)
+        {
+            _llmConfig.HandleKey(key);
+            return;
+        }
+
         switch (key.KeyChar)
         {
             case '1': _currentView = TuiView.Dashboard; break;
