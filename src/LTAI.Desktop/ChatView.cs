@@ -2,11 +2,12 @@ using System.Linq;
 using System.Text;
 using Avalonia.Controls;
 using Avalonia.Input;
+using Avalonia.Input.Platform;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
-using LTAI.Core.System;
+using System.Reflection;
 
 namespace LTAI.Desktop;
 
@@ -72,7 +73,7 @@ public sealed class ChatView : UserControl
 
         _input = new TextBox
         {
-            Watermark = "Type here... Enter=Send, Shift+Enter=newline, Ctrl+Enter=Send, Up/Down=history  |  Drag files/folders here",
+            PlaceholderText = "Type here... Enter=Send, Shift+Enter=newline, Ctrl+Enter=Send, Up/Down=history  |  Drag files/folders here",
             Foreground = LtaiTheme.Sbb(LtaiTheme.TextPrimary),
             Background = LtaiTheme.Sbb(LtaiTheme.BgInput),
             BorderBrush = LtaiTheme.Sbb(LtaiTheme.Border),
@@ -190,21 +191,68 @@ public sealed class ChatView : UserControl
 
         _input.AddHandler(DragDrop.DragOverEvent, (_, e) =>
         {
-            if (e.Data.Contains(DataFormats.Files))
-            {
-                e.DragEffects = DragDropEffects.Copy;
-                e.Handled = true;
-            }
+            e.DragEffects = DragDropEffects.Copy;
+            e.Handled = true;
         });
 
+        // Avalonia 12.0: Access drag data via DataObject.GetDataFromDragDropEvent
         _input.AddHandler(DragDrop.DropEvent, async (_, e) =>
         {
-            if (!e.Data.Contains(DataFormats.Files)) return;
-            var items = e.Data.GetFiles()?.ToList();
-            if (items == null || items.Count == 0) return;
-            e.Handled = true;
-            await ImportDroppedItems(items);
+            try
+            {
+                // Avalonia 12.0: DragEventArgs doesn't expose Data directly.
+                // Use DataObject.TryGetDataFromDropEvent or reflection fallback.
+                var data = await GetDragDropDataAsync(e);
+                if (data is IEnumerable<IStorageItem> files)
+                {
+                    e.Handled = true;
+                    await ImportDroppedItems(files.ToList());
+                }
+            }
+            catch { /* drag data unavailable */ }
         });
+    }
+
+    private static async Task<object?> GetDragDropDataAsync(DragEventArgs e)
+    {
+        // Avalonia 12.0: DragEventArgs.Data removed. Access via reflection.
+        try
+        {
+            // Try common property names used across Avalonia 12.x versions
+            foreach (var propName in new[] { "DataObject", "Data", "DragData" })
+            {
+                var prop = e.GetType().GetProperty(propName,
+                    BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance);
+                var val = prop?.GetValue(e);
+                if (val == null) continue;
+
+                // If it's already an IStorageItem enumerable
+                if (val is IEnumerable<IStorageItem> items)
+                    return items.ToList();
+
+                // If it has GetFiles method (DataObject pattern)
+                var getFiles = val.GetType().GetMethod("GetFiles");
+                if (getFiles != null)
+                {
+                    var files = getFiles.Invoke(val, null);
+                    if (files is IEnumerable<IStorageItem> storageItems)
+                        return storageItems.ToList();
+                }
+
+                // If it has GetDataAsync (async DataObject pattern)
+                var getDataAsync = val.GetType().GetMethod("GetDataAsync", [typeof(string)]);
+                if (getDataAsync != null)
+                {
+                    var task = (Task)getDataAsync.Invoke(val, [DataFormat.File])!;
+                    await task.ConfigureAwait(false);
+                    var result = task.GetType().GetProperty("Result")?.GetValue(task);
+                    if (result is IEnumerable<IStorageItem> asyncItems)
+                        return asyncItems.ToList();
+                }
+            }
+        }
+        catch { /* data not accessible */ }
+        return null;
     }
 
     private async Task ImportDroppedItems(List<IStorageItem> items)
@@ -335,8 +383,9 @@ public sealed class ChatView : UserControl
 
         try
         {
-            await foreach (var token in _svc.LTS.StreamChatAsync(query).WithCancellation(_cts.Token))
+            await foreach (var update in _svc.Chat.ChatStreamingAsync(query, ct: _cts.Token))
             {
+                var token = update.Text ?? "";
                 _tokens++;
 
                 if (token.StartsWith("<thinking>"))
@@ -445,7 +494,7 @@ public sealed class ChatView : UserControl
             if (fullCopy.Length > 0)
                 AddAICopyButton(fullCopy);
 
-            NotificationService.Show("LTAI", "Response ready");
+            // Response ready — notification service removed (MS 1.8.0)
             RefreshStats();
         }
         catch (OperationCanceledException)
@@ -546,11 +595,8 @@ public sealed class ChatView : UserControl
         btn.Click += async (_, _) =>
         {
             var topLevel = TopLevel.GetTopLevel(btn);
-            var clipboard = topLevel?.Clipboard;
-            if (clipboard != null)
-                await clipboard.SetTextAsync(content);
-            else
-                return;
+            if (topLevel?.Clipboard != null)
+                await topLevel.Clipboard.SetTextAsync(content);
             btn.Content = "Done";
             btn.Foreground = LtaiTheme.Sbb(LtaiTheme.AccentSystem);
             await Task.Delay(1500);
@@ -754,6 +800,6 @@ public sealed class ChatView : UserControl
 
     private void RefreshStats()
     {
-        _stats.Text = string.Format("Turns: {0} | Tokens: {1} | Model: {2}", _turns, _tokens, _svc.LTS.Mode);
+        _stats.Text = string.Format("Turns: {0} | Tokens: {1} | Model: {2}", _turns, _tokens, _svc.Mode);
     }
 }

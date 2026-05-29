@@ -14,7 +14,7 @@
 
   <ItemGroup>
     <PackageReference Include="Spectre.Console" Version="0.55.2" />
-    <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="10.*" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="10.0.8" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.8" />
     <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.8" />
   </ItemGroup>
@@ -22,8 +22,7 @@
   <ItemGroup>
     <ProjectReference Include="..\LTAI.Core\LTAI.Core.csproj" />
     <ProjectReference Include="..\LTAI.AI\LTAI.AI.csproj" />
-    <ProjectReference Include="..\LTAI.DNA\LTAI.DNA.csproj" />
-    <ProjectReference Include="..\LTAI.Tools\LTAI.Tools.csproj" />
+
     <ProjectReference Include="..\LTAI.Knowledge\LTAI.Knowledge.csproj" />
     <ProjectReference Include="..\LTAI.Agent\LTAI.Agent.csproj" />
   </ItemGroup>

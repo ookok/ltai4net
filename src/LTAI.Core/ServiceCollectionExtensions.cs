@@ -1,17 +1,9 @@
-using LTAI.Core.Acceleration;
-using LTAI.Core.Configuration;
-using LTAI.Core.Execution;
-using LTAI.Core.Governors;
-using LTAI.Core.Interfaces;
-using LTAI.Core.Messaging;
-using LTAI.Core.Multimodal;
-using LTAI.Core.Network;
-using LTAI.Core.Prefs;
-using LTAI.Core.System;
-using LTAI.Core.Session;
+using LTAI.Core.Safety;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.DependencyInjection.Extensions;
-using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Logging;
+using OpenTelemetry;
+using OpenTelemetry.Resources;
+using OpenTelemetry.Trace;
 
 namespace LTAI.Core;
 
@@ -20,40 +12,34 @@ public static class ServiceCollectionExtensions
     public static IServiceCollection AddLTAICore(this IServiceCollection services)
     {
         services.AddHttpClient();
+        services.AddSingleton<SafetyCoordinator>();
+        return services;
+    }
 
-        services.AddSingleton(sp => new HttpAccelerator(sp.GetRequiredService<IOptions<LTAIOptions>>().Value.HttpAccelerator));
-        services.AddSingleton(sp => HttpAccelerator.CreateAcceleratedClient(
-            sp.GetRequiredService<IOptions<LTAIOptions>>().Value.HttpAccelerator));
+    public static IServiceCollection AddLTAIOpenTelemetry(this IServiceCollection services, string serviceName = "ltai-agent")
+    {
+        var otlpEndpoint = Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT");
 
-        services.AddSingleton(SecretVault.Instance);
-        services.AddSingleton<DataPathResolver>();
+        services.AddOpenTelemetry()
+            .ConfigureResource(resource => resource
+                .AddService(serviceName, serviceVersion: "1.0.0")
+                .AddAttributes(new Dictionary<string, object>
+                {
+                    ["deployment.environment"] = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT") ?? "development",
+                    ["host.name"] = Environment.MachineName
+                }))
+            .WithTracing(tracing =>
+            {
+                tracing
+                    .AddSource("LTAI.Agent", "LTAI.Core", "LTAI.AI")
+                    .AddAspNetCoreInstrumentation()
+                    .AddHttpClientInstrumentation();
 
-        services.AddSingleton<IProviderRegistry, ProviderRegistry>();
-        services.AddSingleton(sp => sp.GetRequiredService<IOptions<LTAIOptions>>().Value.Harness);
-        services.AddSingleton<AIToolRegistry>();
-        services.AddSingleton<TaskJournal>();
-
-        services.AddSingleton(sp => HardwareAcceleration.Instance);
-        services.AddSingleton(sp => ResponseCache.Instance);
-
-        services.AddSingleton(sp => ShellEnv.Instance);
-        services.AddSingleton(sp => PromptShield.Instance);
-        services.AddSingleton<IConcurrencyGuard>(sp => ConcurrencyGuard.Instance);
-        services.AddSingleton(sp => ResourceTree.Instance);
-        services.AddSingleton(sp => UniversalScanner.Instance);
-        services.AddSingleton(sp => AtomicModification.Instance);
-
-        services.AddSingleton<SocialLoadModel>();
-        services.AddSingleton(sp => DpoPrefs.Instance);
-
-        services.AddSingleton<ServiceManager>();
-        services.AddSingleton<ModelManager>();
-        services.AddSingleton<DaemonManager>();
-        services.AddSingleton<Wsl2Manager>();
-        services.AddSingleton<ResourceGuard>();
-        services.AddSingleton<AuditLogService>();
-        services.AddSingleton<IMemoryEventBus, MemoryEventBus>();
-        services.AddHostedService<MemoryGraphCleanupService>();
+                if (!string.IsNullOrEmpty(otlpEndpoint))
+                    tracing.AddOtlpExporter(o => o.Endpoint = new Uri(otlpEndpoint));
+                else
+                    tracing.AddConsoleExporter();
+            });
 
         return services;
     }

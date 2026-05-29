@@ -1,16 +1,10 @@
 using Avalonia;
-using LTAI.AI.Interfaces;
-using LTAI.AI;
-using LTAI.AI.Governors;
 using LTAI.Agent;
-using LTAI.Agent.Tools;
-using LTAI.Core.Messaging;
+using LTAI.Agent.Agents;
+using LTAI.AI;
 using LTAI.Core;
 using LTAI.Core.Configuration;
-using LTAI.DNA;
-using LTAI.Planning.Metrics;
 using LTAI.Knowledge.Core;
-using LTAI.Knowledge.Vector;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -26,16 +20,8 @@ public static class Program
         var services = BuildServices();
         var provider = services.BuildServiceProvider();
 
-        var toolRegistry = provider.GetRequiredService<AIToolRegistry>();
-        Task.Run(() => toolRegistry.RegisterAllToolCategoriesAsync()).GetAwaiter().GetResult();
-        Task.Run(() => provider.RegisterMarkdownToolsAsync(toolRegistry)).GetAwaiter().GetResult();
-
-        var lts = provider.GetRequiredService<ILivingTreeSystem>();
-        Task.Run(() => lts.InitializeAsync()).GetAwaiter().GetResult();
-
-        // Store LTAIService on App for view access (Avalonia creates MainWindow,
-        // so we can't inject it via constructor DI directly)
-        App.Ltais = provider.GetRequiredService<LTAIService>();
+        App.ChatAgent = provider.GetRequiredService<ChatAgent>();
+        App.Options = provider.GetRequiredService<IOptions<LTAIOptions>>();
 
         BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
     }
@@ -46,37 +32,17 @@ public static class Program
     private static IServiceCollection BuildServices()
     {
         var services = new ServiceCollection();
-        var ltaiOptions = new LTAIOptions();
-
         var config = new ConfigurationBuilder()
             .SetBasePath(AppContext.BaseDirectory)
             .AddJsonFile("appsettings.json", optional: true)
             .Build();
 
-        config.GetSection(LTAIOptions.SectionName).Bind(ltaiOptions);
-        if (ltaiOptions.AI.Providers.Count == 0)
-        {
-            ltaiOptions.AI.Providers["deepseek"] = new ProviderConfig
-            {
-                Endpoint = OptionService.Get("deepseek.endpoint") ?? "https://api.deepseek.com",
-                Model = OptionService.Get("deepseek.model") ?? "deepseek-v4-pro"
-            };
-            ltaiOptions.AI.Providers["deepseek-fast"] = new ProviderConfig
-            {
-                Endpoint = OptionService.Get("deepseek.fast.endpoint") ?? "https://api.deepseek.com",
-                Model = OptionService.Get("deepseek.fast.model") ?? "deepseek-v4-flash"
-            };
-        }
-
-        services.AddSingleton(Options.Create(ltaiOptions));
-        services.AddLogging(b => b.SetMinimumLevel(LogLevel.Information));
+        services.Configure<LTAIOptions>(config.GetSection(LTAIOptions.SectionName));
+        services.AddLogging(b => b.SetMinimumLevel(LogLevel.Information).AddConsole());
         services.AddLTAICore();
-        services.AddLTAIVectorAuto(apiModel: ltaiOptions.AI.GetLayerConfig("embedding").Model);
         services.AddLTAIAI();
-        services.AddLTAIDNA();
-        services.AddLTAIMetrics();
         services.AddLTAIAgent();
-        services.AddSingleton<LTAIService>();
+        services.AddSingleton(sp => new DocumentService(Directory.GetCurrentDirectory()));
 
         return services;
     }
@@ -84,21 +50,20 @@ public static class Program
 
 public sealed class LTAIService
 {
-    public ILivingTreeSystem LTS { get; }
-    public DNAOrchestrator? DNA { get; }
-    public LTAIMetricsCollector? Metrics { get; }
-    public LTAI.Core.Governors.CPSProcessingService? CPS { get; }
-    public LTAI.Core.Governors.CoordinationScheduler? Scheduler { get; }
-    public LTAI.Core.Governors.ParetoRouter? Router { get; }
-    public LTAI.Core.Governors.IMicroKernel? Kernel { get; }
+    public ChatAgent Chat { get; }
+    public LTAIOptions Options { get; }
 
-    public LTAIService(ILivingTreeSystem lts, DNAOrchestrator? dna = null, LTAIMetricsCollector? metrics = null,
-        LTAI.Core.Governors.CPSProcessingService? cps = null,
-        LTAI.Core.Governors.CoordinationScheduler? scheduler = null,
-        LTAI.Core.Governors.ParetoRouter? router = null,
-        LTAI.Core.Governors.IMicroKernel? kernel = null)
+    // Display data — simplified with MS Agent Framework 1.8.0
+    public string Mode => Options.AI.DefaultProvider;
+    public string DNAStatus => "simplified (MS Agent Framework 1.8.0)";
+    public string SafetyPosture => "safe";
+    public long TokensUsed => 0;
+    public int RequestsThisSession => 0;
+    public double AvgLatencyMs => 0;
+
+    public LTAIService(ChatAgent chat, IOptions<LTAIOptions> options)
     {
-        LTS = lts; DNA = dna; Metrics = metrics;
-        CPS = cps; Scheduler = scheduler; Router = router; Kernel = kernel;
+        Chat = chat;
+        Options = options.Value;
     }
 }

@@ -8,15 +8,41 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.Agents.AI" Version="1.6.2" />
-    <PackageReference Include="Microsoft.Agents.AI.Abstractions" Version="1.6.2" />
-    <PackageReference Include="Microsoft.Agents.AI.Workflows" Version="1.6.2" />
-    <PackageReference Include="Microsoft.Agents.AI.Hosting.A2A.AspNetCore" Version="1.6.1-preview.260514.1" />
-    <PackageReference Include="Microsoft.Agents.AI.Hosting" Version="1.6.1-preview.260514.1" />
-    <PackageReference Include="Microsoft.Agents.AI.Harness" Version="1.6.1-preview.260514.1" />
-    <PackageReference Include="Microsoft.Agents.AI.Hyperlight" Version="1.6.1-preview.260514.1" />
+    <PackageReference Include="Microsoft.Agents.AI" Version="1.8.0" />
+    <PackageReference Include="Microsoft.Agents.AI.Abstractions" Version="1.8.0" />
+    <PackageReference Include="Microsoft.Agents.AI.Workflows" Version="1.8.0" />
     <PackageReference Include="Microsoft.Extensions.AI" Version="10.6.0" />
-    <PackageReference Include="Serilog.AspNetCore" Version="9.0.0" />
+    <PackageReference Include="Serilog.AspNetCore" Version="10.0.0" />
+    <PackageReference Include="CliWrap" Version="3.10.1" />
+    <PackageReference Include="AngleSharp" Version="1.4.0" />
+    <PackageReference Include="NetTopologySuite" Version="2.6.0" />
+    <PackageReference Include="UnitsNet" Version="5.75.0" />
+    <PackageReference Include="CsvHelper" Version="33.1.0" />
+    <PackageReference Include="DocumentFormat.OpenXml" Version="3.5.1" />
+    <PackageReference Include="ProjNET" Version="2.1.0" />
+    <PackageReference Include="DiffPlex" Version="1.9.0" />
+    <PackageReference Include="NuGet.Protocol" Version="7.6.0" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Workspaces" Version="5.3.0" />
+    <PackageReference Include="Microsoft.CodeAnalysis.Workspaces.Common" Version="5.3.0" />
+    <PackageReference Include="DnsClient" Version="1.8.0" />
+    <PackageReference Include="SSH.NET" Version="2025.1.0" />
+    <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks" Version="10.0.8" />
+    <PackageReference Include="Dapper" Version="2.1.79" />
+    <PackageReference Include="Npgsql" Version="10.0.3" />
+    <PackageReference Include="MySqlConnector" Version="2.5.0" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.8" />
+    <PackageReference Include="Microsoft.Data.SqlClient" Version="7.0.1" />
+    <PackageReference Include="Docker.DotNet" Version="3.125.15" />
+    <PackageReference Include="Docker.DotNet.BasicAuth" Version="3.125.15" />
+    <PackageReference Include="KubernetesClient" Version="19.0.2" />
+    <PackageReference Include="MathNet.Numerics" Version="5.0.0" />
+    <PackageReference Include="DynamicExpresso.Core" Version="2.19.3" />
+    <PackageReference Include="OllamaSharp" Version="5.4.25" />
+    <PackageReference Include="Microsoft.Extensions.AI.OpenAI" Version="10.6.0" />
+    <PackageReference Include="SixLabors.ImageSharp" Version="3.1.7" />
+    <PackageReference Include="FFMpegCore" Version="5.4.0" />
+    <PackageReference Include="MetadataExtractor" Version="2.9.3" />
+    <PackageReference Include="PdfPig" Version="0.1.14" />
     <PackageReference Include="LibGit2Sharp" Version="0.31.0" />
   </ItemGroup>
 
@@ -25,13 +51,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\LTAI.Models\LTAI.Models.csproj" />
     <ProjectReference Include="..\LTAI.Core\LTAI.Core.csproj" />
-    <ProjectReference Include="..\LTAI.AI\LTAI.AI.csproj" />
-    <ProjectReference Include="..\LTAI.Knowledge\LTAI.Knowledge.csproj" />
-    <ProjectReference Include="..\LTAI.Tools\LTAI.Tools.csproj" />
-    <ProjectReference Include="..\LTAI.Planning\LTAI.Planning.csproj" />
-    <ProjectReference Include="..\LTAI.Infra\LTAI.Infra.csproj" />
   </ItemGroup>
 
 </Project>

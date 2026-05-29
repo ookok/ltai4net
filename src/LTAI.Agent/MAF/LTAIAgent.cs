@@ -1,310 +1,88 @@
 using System.Runtime.CompilerServices;
 using System.Text.Json;
-using LTAI.AI.Interfaces;
-using LTAI.AI.Governors;
-using LTAI.Agent.Skills;
-using LTAI.Agent.Workflows;
-using LTAI.Models;
-using LTAI.Tools.Tools;
 using Microsoft.Agents.AI;
 using Microsoft.Agents.AI.Workflows;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
-using ChatMessage = Microsoft.Extensions.AI.ChatMessage;
-using ChatRole = Microsoft.Extensions.AI.ChatRole;
 
-namespace LTAI.Agent;
+namespace LTAI.Agent.MAF;
 
 public sealed class LTAIAgent : AIAgent
 {
     private readonly ChatClientAgent _chatAgent;
-    private readonly ILivingTreeSystem _livingTree;
-    private readonly SkillRegistry _skillRegistry;
-    private readonly SkillExtractor? _skillExtractor;
-    private readonly LTAICoordinator? _coordinator;
     private readonly ILogger<LTAIAgent> _logger;
-    private readonly LogiInputFilter? _inputFilter;
-    private readonly LogiOutputFilter? _outputFilter;
 
     public override string? Name => "LTAI";
-    public override string? Description => "LivingTree AI Agent with bio-inspired governance";
+    public override string? Description => "LivingTree AI Agent";
 
-    public LTAIAgent(
-        ILivingTreeSystem livingTree,
-        SkillRegistry skillRegistry,
-        ILogger<LTAIAgent> logger,
-        SkillExtractor? skillExtractor = null,
-        LTAICoordinator? coordinator = null,
-        LogiInputFilter? inputFilter = null,
-        LogiOutputFilter? outputFilter = null)
+    public LTAIAgent(LivingTreeChatClient chatClient, ILogger<LTAIAgent> logger)
     {
-        _livingTree = livingTree;
-        _skillRegistry = skillRegistry;
         _logger = logger;
-        _skillExtractor = skillExtractor;
-        _coordinator = coordinator;
-        _inputFilter = inputFilter;
-        _outputFilter = outputFilter;
-
-        _chatAgent = new ChatClientAgent(
-            new LivingTreeChatClient(livingTree, null),
-            new ChatClientAgentOptions
-            {
-                Name = "LTAI",
-                Description = "LivingTree AI Agent with bio-inspired governance"
-            });
+        _chatAgent = new ChatClientAgent(chatClient, new ChatClientAgentOptions
+        {
+            Name = "LTAI", Description = "LivingTree AI Agent"
+        });
     }
 
     protected override async Task<AgentResponse> RunCoreAsync(
-        IEnumerable<ChatMessage> messages,
-        AgentSession? session = null,
-        AgentRunOptions? options = null,
-        CancellationToken cancellationToken = default)
-    {
-        var msgList = messages.ToList();
-        var userMessages = msgList.Where(m => m.Role == ChatRole.User).ToList();
-
-        if (userMessages.Count == 0)
-            return new AgentResponse(new ChatMessage(ChatRole.Assistant, "No user message received."));
-
-        var query = string.Join("\n", userMessages.Select(m => m.Text ?? ""));
-        var ltaSession = session as LTAIAgentSession;
-
-        _inputFilter?.Analyze(userMessages.Last());
-        _logger.LogInformation("LTAI agent: {Query}", query[..Math.Min(query.Length, 200)]);
-
-        var sessionHistory = ltaSession?.GetCompressedHistory();
-        if (!string.IsNullOrEmpty(sessionHistory))
-            query = $"Previous conversation:\n{sessionHistory}\n\nCurrent query:\n{query}";
-
-        try
-        {
-            if (_coordinator != null && ShouldUseCoordinator(query))
-            {
-                var teamResult = await _coordinator.RunTeamAsync(
-                    new AgentTeam
-                    {
-                        Name = "LTAI Router",
-                        Goal = query,
-                        Members = new List<TeamMember>
-                        {
-                            new() { Name = "code", Role = "Code analysis and editing" },
-                            new() { Name = "eia", Role = "Environmental impact assessment and modeling" },
-                            new() { Name = "chat", Role = "Conversation and general knowledge" },
-                            new() { Name = "reasoning", Role = "Logic, planning, and reasoning" }
-                        },
-                        MaxConcurrency = 3
-                    },
-                    query,
-                    cancellationToken).ConfigureAwait(false);
-
-                var finalResult = teamResult.FinalOutput ?? teamResult.Error ?? "No output from coordinator";
-                if (_outputFilter != null)
-                {
-                    var (allowed, blockReason) = _outputFilter.Review(finalResult);
-                    if (blockReason != null) finalResult = $"[Blocked: {blockReason}]";
-                    else if (allowed != null) finalResult = allowed;
-                }
-                ltaSession?.AddTurn(userMessages.Last().Text ?? query, finalResult);
-                RecordSkillPattern(query, finalResult);
-                _logger.LogInformation(
-                    "LTAICoordinator: Completed {Completed}/{Total} tasks in {Time}ms",
-                    teamResult.CompletedTasks, teamResult.TotalTasks, teamResult.TotalMs);
-                return new AgentResponse(new ChatMessage(ChatRole.Assistant, finalResult));
-            }
-
-            var response = await _chatAgent.RunAsync(messages, session, options, cancellationToken).ConfigureAwait(false);
-            var text = response.Text ?? "";
-            if (_outputFilter != null)
-            {
-                var (allowed, blockReason) = _outputFilter.Review(text);
-                if (blockReason != null) text = $"[Blocked: {blockReason}]";
-                else if (allowed != null) text = allowed;
-            }
-            ltaSession?.AddTurn(userMessages.Last().Text ?? query, text);
-            return new AgentResponse(new ChatMessage(ChatRole.Assistant, text));
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "LTAI agent error");
-            return new AgentResponse(new ChatMessage(ChatRole.Assistant, $"Error: {ex.Message}"));
-        }
-    }
+        IEnumerable<ChatMessage> messages, AgentSession? session = null,
+        AgentRunOptions? options = null, CancellationToken ct = default)
+        => await _chatAgent.RunAsync(messages, session, options, ct).ConfigureAwait(false);
 
     protected override async IAsyncEnumerable<AgentResponseUpdate> RunCoreStreamingAsync(
-        IEnumerable<ChatMessage> messages,
-        AgentSession? session = null,
-        AgentRunOptions? options = null,
-        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        IEnumerable<ChatMessage> messages, AgentSession? session = null,
+        AgentRunOptions? options = null, [EnumeratorCancellation] CancellationToken ct = default)
     {
-        var msgList = messages.ToList();
-        var userMessages = msgList.Where(m => m.Role == ChatRole.User).ToList();
-
-        if (userMessages.Count == 0)
-        {
-            yield return new AgentResponseUpdate(ChatRole.Assistant, "No user message received.");
-            yield break;
-        }
-
-        var query = string.Join("\n", userMessages.Select(m => m.Text ?? ""));
-        _inputFilter?.Analyze(userMessages.Last());
-        _logger.LogInformation("LTAI agent (stream): {Query}", query[..Math.Min(query.Length, 200)]);
-
-        var forceChat = options?.AdditionalProperties?.TryGetValue("forceChat", out var fc) == true && fc is true;
-        bool shouldUseCoordinator = !forceChat && _coordinator != null && ShouldUseCoordinator(query);
-
-        if (shouldUseCoordinator)
-        {
-            yield return new AgentResponseUpdate(ChatRole.Assistant, $"[Coordinator decomposing: {query[..Math.Min(query.Length, 80)]}...]");
-            var teamResult = await _coordinator.RunTeamAsync(
-                new AgentTeam
-                {
-                    Name = "LTAI Router Stream",
-                    Goal = query,
-                    Members = new List<TeamMember>
-                    {
-                        new() { Name = "code", Role = "Code analysis and editing" },
-                        new() { Name = "chat", Role = "Conversation and general knowledge" }
-                    },
-                    MaxConcurrency = 2
-                },
-                query,
-                cancellationToken).ConfigureAwait(false);
-            var finalResult = teamResult.FinalOutput ?? teamResult.Error ?? "No output";
-            yield return new AgentResponseUpdate(ChatRole.Assistant, finalResult);
-            yield break;
-        }
-
-        await using var enumerator = _chatAgent.RunStreamingAsync(messages, session, options, cancellationToken).GetAsyncEnumerator(cancellationToken);
-        string? streamError = null;
-
-        while (true)
-        {
-            AgentResponseUpdate update;
-            try
-            {
-                if (!await enumerator.MoveNextAsync()) break;
-                update = enumerator.Current;
-            }
-            catch (OperationCanceledException) { yield break; }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "LTAI agent stream error");
-                streamError = ex.Message;
-                break;
-            }
-
-            yield return update;
-        }
-
-        if (streamError != null)
-            yield return new AgentResponseUpdate(ChatRole.Assistant, $"Error: {streamError}");
+        await foreach (var u in _chatAgent.RunStreamingAsync(messages, session, options, ct))
+            yield return u;
     }
 
-    protected override ValueTask<AgentSession> CreateSessionCoreAsync(CancellationToken cancellationToken = default)
+    protected override ValueTask<AgentSession> CreateSessionCoreAsync(CancellationToken ct)
+        => ValueTask.FromResult<AgentSession>(new LTAIAgentSession());
+
+    protected override ValueTask<JsonElement> SerializeSessionCoreAsync(AgentSession session, JsonSerializerOptions? options, CancellationToken ct)
+        => ValueTask.FromResult(JsonSerializer.SerializeToElement(session, options));
+
+    protected override ValueTask<AgentSession> DeserializeSessionCoreAsync(JsonElement data, JsonSerializerOptions? options, CancellationToken ct)
+        => ValueTask.FromResult<AgentSession>(JsonSerializer.Deserialize<LTAIAgentSession>(data.GetRawText(), options) ?? new LTAIAgentSession());
+}
+
+internal sealed class LTAIAgentSession : AgentSession
+{
+    public string SessionId { get; set; } = Guid.NewGuid().ToString("N")[..16];
+    public List<ChatMessage> History { get; set; } = new();
+    public int TurnCount { get; set; }
+}
+
+public sealed class LivingTreeChatClient : IChatClient
+{
+    private readonly IChatClient _inner;
+    private readonly ILogger<LivingTreeChatClient>? _logger;
+
+    public LivingTreeChatClient(IChatClient inner, ILogger<LivingTreeChatClient>? logger = null)
     {
-        return ValueTask.FromResult<AgentSession>(new LTAIAgentSession());
+        _inner = inner;
+        _logger = logger;
     }
 
-    protected override ValueTask<JsonElement> SerializeSessionCoreAsync(
-        AgentSession session,
-        JsonSerializerOptions? jsonSerializerOptions = null,
-        CancellationToken cancellationToken = default)
+    public ChatClientMetadata? Metadata =>
+        new("LTAI", new Uri("https://github.com/ltai-org/ltai4net"));
+
+    public async Task<ChatResponse> GetResponseAsync(
+        IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken ct = default)
     {
-        var ltsAgentSession = session as LTAIAgentSession;
-        var data = new Dictionary<string, object?>
-        {
-            ["session_id"] = ltsAgentSession?.SessionId ?? Guid.NewGuid().ToString("N"),
-            ["agent_name"] = Name,
-            ["agent_id"] = Id,
-            ["turn_count"] = ltsAgentSession?.TurnCount ?? 0,
-            ["last_intent"] = ltsAgentSession?.LastIntent ?? "",
-            ["pipeline"] = new { mode = _livingTree.Mode.ToString(), dna = _livingTree.DNAEnabled }
-        };
-        var json = JsonSerializer.SerializeToElement(data);
-        return ValueTask.FromResult(json);
+        _logger?.LogDebug("LivingTreeChatClient forwarding {Count} messages", messages.Count());
+        return await _inner.GetResponseAsync(messages, options, ct).ConfigureAwait(false);
     }
 
-    protected override ValueTask<AgentSession> DeserializeSessionCoreAsync(
-        JsonElement serializedState,
-        JsonSerializerOptions? jsonSerializerOptions = null,
-        CancellationToken cancellationToken = default)
+    public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+        IEnumerable<ChatMessage> messages, ChatOptions? options = null,
+        [EnumeratorCancellation] CancellationToken ct = default)
     {
-        var session = new LTAIAgentSession();
-        if (serializedState.TryGetProperty("last_intent", out var li))
-            session.LastIntent = li.GetString();
-        if (serializedState.TryGetProperty("turn_count", out var tc) && tc.TryGetInt32(out var turns))
-            session.TurnCount = turns;
-        return ValueTask.FromResult<AgentSession>(session);
+        await foreach (var chunk in _inner.GetStreamingResponseAsync(messages, options, ct))
+            yield return chunk;
     }
 
-    private bool ShouldUseCoordinator(string query)
-    {
-        if (_coordinator == null) return false;
-        if (string.IsNullOrWhiteSpace(query)) return false;
-        if (query.Length < 30) return false;
-
-        var lower = query.ToLowerInvariant();
-
-        var coordinatorKeywords = (OptionService.Get("coordinator_keywords") ?? "")
-            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-
-        foreach (var kw in coordinatorKeywords)
-            if (lower.Contains(kw)) return true;
-
-        var matchedSkills = _skillRegistry.MatchByTrigger(query);
-        if (matchedSkills.Any(s => s.IsReliable))
-            return true;
-
-        var wordCount = query.Split((char[])[' ', '\t', '\n', '\r'], StringSplitOptions.RemoveEmptyEntries).Length;
-        if (wordCount > 50) return true;
-
-        var sentenceCount = query.Count(c => c is '.' or '。' or '!' or '！' or '?' or '？');
-        if (sentenceCount >= 3) return true;
-
-        return false;
-    }
-
-    private bool ShouldUseWorkflow(string query)
-    {
-        if (_coordinator != null) return false;
-        if (string.IsNullOrWhiteSpace(query)) return false;
-        var trimmed = query.Trim();
-        if (trimmed.Length < 10) return false;
-        if (trimmed.StartsWith('/') && trimmed.Length < 30) return false;
-
-        var matchedSkills = _skillRegistry.MatchByTrigger(query);
-        if (matchedSkills.Any(s => s.IsReliable))
-            return true;
-
-        var workflowKeywords = (OptionService.Get("workflow_keywords") ?? "")
-            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-
-        var lower = query.ToLowerInvariant();
-        foreach (var kw in workflowKeywords)
-            if (lower.Contains(kw)) return true;
-
-        var wordCount = trimmed.Split((char[])[' ', '\t', '\n', '\r'], StringSplitOptions.RemoveEmptyEntries).Length;
-        if (wordCount > 50) return true;
-
-        var sentenceCount = trimmed.Count(c => c is '.' or '。' or '!' or '！' or '?' or '？');
-        if (sentenceCount >= 3) return true;
-
-        return false;
-    }
-
-    private void RecordSkillPattern(string query, string response)
-    {
-        if (_skillExtractor == null) return;
-        if (string.IsNullOrEmpty(response) || response.Length < 20) return;
-        if (response.StartsWith("Error") || response.StartsWith("[Blocked")) return;
-
-        var matchedSkills = _skillRegistry.MatchByTrigger(query);
-        foreach (var skill in matchedSkills.Take(3))
-        {
-            var patternKey = $"skill_{skill.Name}";
-            var toolNames = skill.Steps.Where(s => s.ToolName != null).Select(s => s.ToolName!).ToList();
-            _skillExtractor.RecordSuccess(patternKey, toolNames, query, response);
-        }
-    }
+    object? IChatClient.GetService(Type? t, object? k) => _inner.GetService(t ?? typeof(IChatClient), k);
+    void IDisposable.Dispose() { }
 }
