@@ -247,7 +247,20 @@ public static class ServiceCollectionExtensions
 
             tools.Add(AIFunctionFactory.Create(git.GitTag));
             tools.Add(AIFunctionFactory.Create(git.GitStash));
-            tools.Add(AIFunctionFactory.Create(git.GitStashPop));
+            tools.Add(AIFunctionFactory.Create(git.GitStashList));
+            tools.Add(AIFunctionFactory.Create(git.GitDiff));
+            tools.Add(AIFunctionFactory.Create(git.GitBlame));
+            tools.Add(AIFunctionFactory.Create(git.GitShow));
+            tools.Add(AIFunctionFactory.Create(git.GitRebase));
+            tools.Add(AIFunctionFactory.Create(git.GitReviewChanges));
+            tools.Add(AIFunctionFactory.Create(git.GitReset));
+            tools.Add(AIFunctionFactory.Create(git.GitPush));
+            tools.Add(AIFunctionFactory.Create(git.GitPull));
+            tools.Add(AIFunctionFactory.Create(git.GitFetch));
+            tools.Add(AIFunctionFactory.Create(git.GitCommitAndPush));
+            tools.Add(AIFunctionFactory.Create(git.GitUndoLast));
+            tools.Add(AIFunctionFactory.Create(git.GitCleanupBranches));
+            tools.Add(AIFunctionFactory.Create(git.GitBranchDelete));
         }
 
         // Job & Task management tools
