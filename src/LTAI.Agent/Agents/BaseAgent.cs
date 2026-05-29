@@ -21,7 +21,7 @@ public sealed record AgentContext(
     List<ChatMessage> FullHistory,
     AgentSession? Session);
 
-public sealed class SkillRegistry
+public sealed class SessionStub : AgentSession {} class SkillRegistry
 {
     private readonly Dictionary<string, Func<object, CancellationToken, Task<object>>> _skills = new();
 
@@ -138,14 +138,19 @@ public abstract class BaseAgent : AIAgent
     }
 
     protected override ValueTask<AgentSession> CreateSessionCoreAsync(CancellationToken cancellationToken = default)
-        => ValueTask.FromResult<AgentSession>(new LTAIAgentSession());
+        => ValueTask.FromResult<AgentSession>(new SessionStub());
 
     protected override ValueTask<JsonElement> SerializeSessionCoreAsync(
         AgentSession session, JsonSerializerOptions? o = null, CancellationToken ct = default)
-        => ValueTask.FromResult(JsonSerializer.SerializeToElement(new { sessionId = (session as LTAIAgentSession)?.SessionId }));
+        => ValueTask.FromResult(JsonSerializer.SerializeToElement(new { x = 1 }));
 
     protected override ValueTask<AgentSession> DeserializeSessionCoreAsync(
         JsonElement state, JsonSerializerOptions? o = null, CancellationToken ct = default)
-        => ValueTask.FromResult<AgentSession>(new LTAIAgentSession());
+        => ValueTask.FromResult<AgentSession>(new SessionStub());
 }
+
+
+
+
+
 
