@@ -6,6 +6,10 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 namespace LTAI.Core.Governors;
 
+/// <summary>
+/// A point on the Pareto frontier, representing (Quality, Speed, Cost)
+/// trade-off for a routing strategy (reflex/local/L1/L2).
+/// </summary>
 public sealed record ParetoPoint
 {
     public string Id { get; init; } = Guid.NewGuid().ToString("N")[..8];
@@ -16,6 +20,10 @@ public sealed record ParetoPoint
     public float[] Embedding { get; init; } = Array.Empty<float>();
 }
 
+/// <summary>
+/// Result of a Pareto-routing decision, including the chosen route,
+/// confidence score, nearest frontier point, and shadow-route flag.
+/// </summary>
 public sealed record ParetoDecision
 {
     public string Route { get; init; } = "local";
@@ -25,6 +33,11 @@ public sealed record ParetoDecision
     public long ElapsedUs { get; init; }
 }
 
+/// <summary>
+/// Distance metric for Pareto nearest-neighbor lookup.
+/// Cosine is the default — it's scale-invariant and works well with
+/// normalized embedding vectors.
+/// </summary>
 public enum ParetoDistanceMetric
 {
     Euclidean,
@@ -32,6 +45,19 @@ public enum ParetoDistanceMetric
     Mahalanobis
 }
 
+/// <summary>
+/// Pareto-frontier multi-objective router for LLM provider/strategy selection.
+/// Maintains a Pareto front of (Quality × Speed × Cost) trade-off points and
+/// routes each query to the nearest frontier point.
+/// Supports:
+///   - Embedding projection (768D → 3D) for fast nearest-neighbor lookup
+///   - Shadow routing (default 10% explore) to discover new Pareto-optimal points
+///   - Jitter detection with route locking to prevent oscillation
+///   - Audit logging for every routing decision
+/// Callers: LTAI.Core.L0IntentClassifier, LTAI.Agent.Routing.UnifiedIntentRouter,
+///          LTAI.AI.Governors.LivingTreeSystem.
+/// Thread-safe: all mutable state uses ConcurrentDictionary, Interlocked, or locks.
+/// </summary>
 public sealed class ParetoRouter
 {
     private readonly ILogger<ParetoRouter> _logger;
@@ -39,7 +65,6 @@ public sealed class ParetoRouter
     private readonly float[][] _projectionMatrix; // [3, embeddingDim]
     private readonly ConcurrentQueue<ParetoDecision> _shadowLog = new();
     private int _totalDecisions;
-    private int _shadowDecisions;
     private float _shadowRate = 0.10f;
     private readonly ParetoDistanceMetric _metric;
     private readonly object _mergeLock = new();

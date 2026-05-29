@@ -23,7 +23,6 @@ public sealed class TuiApp
     private readonly ChatLayout _chat;
 
     private TuiView _currentView = TuiView.Dashboard;
-    private TuiTheme _theme = TuiTheme.Dark;
     private readonly string _projectRoot;
     private bool _running = true;
     private static readonly string[] QuickActions = { "1: Dashboard", "2: Chat", "3: Code", "4: Config", "Q: Quit" };

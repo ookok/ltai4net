@@ -21,6 +21,13 @@ public record GPUInfo(
     public static GPUInfo None => new(false, "cpu", "Unavailable", 0, 0, "N/A");
 }
 
+/// <summary>
+/// GPU/hardware acceleration detection and management.
+/// Singleton — cached GPU info to avoid repeated detection.
+/// Supports CUDA, MPS (Apple Silicon), CPU fallback.
+/// Callers: LTAI.Core.Acceleration.IOOptimizer, LTAI.Core.LTAIHostBuilder,
+///          LTAI.AI.Governors.HardwareDetector.
+/// </summary>
 public sealed class HardwareAcceleration
 {
     private static readonly Lazy<HardwareAcceleration> _instance = new(() => new HardwareAcceleration());

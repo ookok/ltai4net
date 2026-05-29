@@ -6,12 +6,6 @@
     <ProjectReference Include="..\LTAI.DNA\LTAI.DNA.csproj" />
     <ProjectReference Include="..\LTAI.Models\LTAI.Models.csproj" />
     <ProjectReference Include="..\LTAI.Tools\LTAI.Tools.csproj" />
-    <ProjectReference Include="..\LTAI.Economy\LTAI.Economy.csproj" />
-  </ItemGroup>
-
-  <!-- Dead-code archive: files with no DI registration and no consumers -->
-  <ItemGroup>
-    <Compile Remove="Governors/_Archive/**" />
   </ItemGroup>
 
   <ItemGroup>

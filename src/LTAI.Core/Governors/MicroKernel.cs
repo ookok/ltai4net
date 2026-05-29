@@ -9,7 +9,11 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace LTAI.Core.Governors;
 
 // ============================================================================
-// Kernel Result — unified return type for all primitives
+// Kernel Result — unified return type for all 13 primitives (8 core + 5 evolution).
+// Every primitive operation in MicroKernel returns KernelResult, ensuring
+// consistent error handling, tracing, and metrics capture across the board.
+// Used by: MicroKernel primitives (ExecuteAsync, ReadFileAsync, etc.),
+// and consumed by callers in LTAI.Agent, LTAI.Tools, LTAI.Web.
 // ============================================================================
 
 public sealed record KernelResult
@@ -39,7 +43,10 @@ public sealed record KernelResult
 }
 
 // ============================================================================
-// Kernel HTTP Request model
+// Kernel HTTP Request model — for the HttpRequestAsync primitive.
+// Encapsulates URL, method, headers, body, niche binding, and timeout.
+// Network fence validation (ValidateNetworkFence) is applied before dispatch.
+// Used by: MicroKernel.HttpRequestAsync, LTAI.Tools HttpTools, LTAI.Agent.
 // ============================================================================
 
 public sealed record KernelHttpRequest
@@ -212,6 +219,10 @@ public sealed class KernelCircuitBreaker
     private int _consecutiveFailures;
     private DateTime _lastFailure = DateTime.MinValue;
     private readonly object _lock = new();
+    /// <summary>
+    /// Fired when consecutive failures exceed the threshold.
+    /// Raised in RecordFailure when _failureCount >= _failureThreshold.
+    /// </summary>
     public event Action<int>? OnRollbackTriggered;
 
     public KernelCircuitBreaker(int failureThreshold = 5, TimeSpan? cooldown = null)
@@ -249,12 +260,18 @@ public sealed class KernelCircuitBreaker
 
     public void RecordFailure()
     {
+        int count;
         lock (_lock)
         {
             _failureCount++;
             _consecutiveFailures++;
             _lastFailure = DateTime.UtcNow;
+            count = _consecutiveFailures;
         }
+
+        // Fire rollback trigger when threshold is crossed
+        if (count >= _failureThreshold)
+            OnRollbackTriggered?.Invoke(count);
     }
 }
 
@@ -277,7 +294,13 @@ public sealed record KernelVitalSign
 }
 
 // ============================================================================
-// Kernel Event — for publish/subscribe mechanism
+// Kernel Event — for publish/subscribe mechanism.
+// MicroKernel uses typed events for cross-component communication:
+// "config.changed", "gene.loaded", "system.snapshot", "system.rollback", etc.
+// Subscribers register via Subscribe() / Unsubscribe().
+// Events are dispatched fire-and-forget on background tasks
+// (see PublishEvent — failures are logged but never crash the caller).
+// Used by: GenePool, BootstrapTeacher, CoordinationScheduler, LTAI.Agent.
 // ============================================================================
 
 public sealed record KernelEvent
@@ -432,7 +455,13 @@ public sealed class MicroKernel : IMicroKernel
         _logger = logger ?? NullLogger.Instance;
         _circuitBreaker = new KernelCircuitBreaker(_sandboxConfig.RollbackFailureThreshold);
         _traceContext = traceContext;
-        _circuitBreaker.OnRollbackTriggered += async (count) => await HandleRollbackAsync(count);
+        // ⚠️ async void: Action<int> delegate forces fire-and-forget.
+        // Wrap in try/catch because ANY exception from async void crashes the process.
+        _circuitBreaker.OnRollbackTriggered += count =>
+        {
+            try { _ = HandleRollbackAsync(count); }
+            catch (Exception ex) { _logger.LogError(ex, "Rollback handler crashed (async void)"); }
+        };
         _concurrencyGate = new SemaphoreSlim(_sandboxConfig.MaxConcurrentOps);
         _auditLog = auditLog;
         _capToken = new KernelCapToken(_workspaceRoot);
@@ -459,8 +488,23 @@ public sealed class MicroKernel : IMicroKernel
 
     // ========================================================================
     // Primitive 1: ExecuteAsync — CLI / Process execution (sandboxed)
+    // Implements L2 sandbox: validates the command is on the allowlist,
+    // checks process caps, enforces timeouts, and applies CapToken security.
+    // Uses atomic temp+rename for writes. Circuit breaker blocks when
+    // failures exceed RollbackFailureThreshold.
+    // Callers: LTAI.Agent.MAF.AgenticLoop, LTAI.Tools.ShellTools.
     // ========================================================================
 
+    /// <summary>
+    /// Execute a CLI command inside the kernel sandbox.
+    /// Validates the command against <see cref="KernelSandboxConfig.AllowedCommands"/>,
+    /// checks <see cref="KernelSandboxConfig.MaxConcurrentProcesses"/>, applies CapToken-based
+    /// permission enforcement, and records audit + vital sign telemetry.
+    /// </summary>
+    /// <param name="op">The operation descriptor (command, args, working dir, timeout).</param>
+    /// <param name="ct">Cancellation token for timeout or user cancellation.</param>
+    /// <param name="capToken">Optional capability token for delegated execution.</param>
+    /// <returns><see cref="KernelResult"/> with stdout on success, error description on failure.</returns>
     public async Task<KernelResult> ExecuteAsync(KernelOp op, CancellationToken ct = default, string? capToken = null)
     {
         if (capToken != null && !ValidateCapToken(capToken, KernelPermission.Execute, null))
@@ -569,9 +613,21 @@ public sealed class MicroKernel : IMicroKernel
     }
 
     // ========================================================================
-    // Primitive 2: ReadFileAsync (sandboxed)
+    // Primitive 2: ReadFileAsync — sandboxed file read
+    // Validates path is within AllowedPaths and not in BlockedPaths.
+    // Enforces MaxFileReadBytes limit, uses atomic reads.
+    // Callers: LTAI.Tools.FileSystemTools, LTAI.Agent.CodeAct.
     // ========================================================================
 
+    /// <summary>
+    /// Read a file's text content, validated against sandbox path rules.
+    /// Path is resolved relative to the workspace unless absolute.
+    /// Enforces <see cref="KernelSandboxConfig.MaxFileReadBytes"/> to prevent OOM on large files.
+    /// </summary>
+    /// <param name="path">Absolute or workspace-relative file path.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <param name="capToken">Optional capability token for delegated reads.</param>
+    /// <returns><see cref="KernelResult"/> with file content on success.</returns>
     public async Task<KernelResult> ReadFileAsync(string path, CancellationToken ct = default, string? capToken = null)
     {
         if (capToken != null && !ValidateCapToken(capToken, KernelPermission.Read, path))
@@ -615,8 +671,17 @@ public sealed class MicroKernel : IMicroKernel
 
     // ========================================================================
     // Primitive 3: WriteFileAsync — atomic temp+rename (sandboxed)
+    // Writes to a temp file first, then atomically moves to target path.
+    // Enforces MaxFileWriteBytes per-call and MaxTotalBytesWritten aggregate quota.
+    // Creates parent directories automatically.
+    // Callers: LTAI.Tools.FileSystemTools, LTAI.Agent.CodeRefinement.
     // ========================================================================
 
+    /// <summary>
+    /// Atomically write content to a file via temp+rename pattern.
+    /// Validates path against sandbox, enforces per-file and aggregate byte quotas.
+    /// Creates parent directories as needed.
+    /// </summary>
     public async Task<KernelResult> WriteFileAsync(string path, string content, CancellationToken ct = default, string? capToken = null)
     {
         if (capToken != null && !ValidateCapToken(capToken, KernelPermission.Write, path))
@@ -665,9 +730,19 @@ public sealed class MicroKernel : IMicroKernel
     }
 
     // ========================================================================
-    // Primitive 4: GitOpAsync
+    // Primitive 4: GitOpAsync — delegated git operations
+    // Routes to an externally-provided git handler (e.g., GitWorktreeManager
+    // or a direct shell-based git implementation). The kernel does NOT
+    // interpret git output — it delegates to the handler.
+    // Callers: LTAI.Agent.Workflows.GitWorktreeManager, LTAI.Tools.CodeGraph.
     // ========================================================================
 
+    /// <summary>
+    /// Execute a git operation via the configured git handler.
+    /// </summary>
+    /// <param name="opCode">Operation code (e.g., "diff", "status", "commit").</param>
+    /// <param name="args">Arguments passed to the handler.</param>
+    /// <returns>Handler's string result wrapped in KernelResult.</returns>
     public async Task<KernelResult> GitOpAsync(string opCode, string args, CancellationToken ct = default)
     {
         var sw = Stopwatch.StartNew();
@@ -698,9 +773,17 @@ public sealed class MicroKernel : IMicroKernel
     }
 
     // ========================================================================
-    // Primitive 5: HttpRequestAsync (network-fenced)
+    // Primitive 5: HttpRequestAsync — network-fenced HTTP calls
+    // Validates target URL against AllowedDomains / BlockedDomains,
+    // checks port allowlist, enforces network fence for niche-isolated
+    // execution. Uses shared HttpClient from DI.
+    // Callers: LTAI.Tools.HttpTools, LTAI.Agent.MCPEndpoints.
     // ========================================================================
 
+    /// <summary>
+    /// Perform an HTTP request through the sandboxed network fence.
+    /// Domain, port, and protocol are validated before dispatch.
+    /// </summary>
     public async Task<KernelResult> HttpRequestAsync(KernelHttpRequest req, CancellationToken ct = default)
     {
         var sw = Stopwatch.StartNew();
@@ -760,9 +843,15 @@ public sealed class MicroKernel : IMicroKernel
     }
 
     // ========================================================================
-    // Primitive 6: InvokeSkillAsync
+    // Primitive 6: InvokeSkillAsync — skill execution
+    // Delegates to an externally-provided skill handler (SkillRegistry or
+    // SkillLoader). The kernel does not interpret skill outputs.
+    // Callers: LTAI.Agent.Skills.SkillRegistry, LTAI.Tools.Skills.
     // ========================================================================
 
+    /// <summary>
+    /// Invoke a named skill with input, delegating to the registered skill handler.
+    /// </summary>
     public async Task<KernelResult> InvokeSkillAsync(string skillName, string input, CancellationToken ct = default)
     {
         var sw = Stopwatch.StartNew();
@@ -793,9 +882,14 @@ public sealed class MicroKernel : IMicroKernel
     }
 
     // ========================================================================
-    // Primitive 7: QueryMemoryAsync
+    // Primitive 7: QueryMemoryAsync — memory retrieval
+    // Delegates to the memory handler (e.g., DualMemoryStore or MemoryGraph).
+    // Callers: LTAI.Agent.Prefetch, LTAI.Knowledge.Core.MemoryGraph.
     // ========================================================================
 
+    /// <summary>
+    /// Query memory with a natural-language query, returning topK results.
+    /// </summary>
     public async Task<KernelResult> QueryMemoryAsync(string query, int topK, CancellationToken ct = default)
     {
         var sw = Stopwatch.StartNew();
@@ -826,9 +920,16 @@ public sealed class MicroKernel : IMicroKernel
     }
 
     // ========================================================================
-    // Primitive 8: ScheduleAsync
+    // Primitive 8: ScheduleAsync — recurring task scheduling
+    // Runs a shell command on a timer. Recurring tasks loop until cancelled.
+    // Uses a CancellationTokenSource linked to the caller's token.
+    // ⚠️ Lifetime management: call CancelScheduleAsync to release resources.
+    // Callers: LTAI.Agent.Workflows.TaskQueue, LTAI.Core.CoordinationScheduler.
     // ========================================================================
 
+    /// <summary>
+    /// Schedule a shell command to run once or on a recurring interval.
+    /// </summary>
     public Task<KernelResult> ScheduleAsync(string taskId, string command, TimeSpan interval, bool recurring, CancellationToken ct = default)
     {
         if (_scheduledTasks.ContainsKey(taskId))
@@ -880,6 +981,10 @@ public sealed class MicroKernel : IMicroKernel
     // Evolution Primitive 1: AdjustParameterAsync
     // Generic config mutation — the kernel knows NO business logic.
     // Components register handlers via AddConfigHandler to receive parameter changes.
+    // ⚠️ _configHandlers is a plain Dictionary — all access happens on the
+    //    AdjustParameterAsync call path which is serialized per-call, so no
+    //    concurrent access issue in practice. However, AddConfigHandler (called
+    //    during DI setup) and AdjustParameterAsync must not run concurrently.
     // ========================================================================
 
     private readonly Dictionary<string, Action<string, object>> _configHandlers = new(StringComparer.OrdinalIgnoreCase);

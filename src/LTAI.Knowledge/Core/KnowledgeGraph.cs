@@ -870,18 +870,23 @@ public class KnowledgeGraph : IKnowledgeStore, IDisposable
 
     // ── IKnowledgeStore implementation ──
 
+    /// <summary>
+    /// Add a knowledge entity to the graph with metadata properties.
+    /// ⚠️ FIX: Entity.Properties defaults to null — must init before indexing.
+    /// Callers: LTAI.Knowledge.Core.KnowledgeBase, LTAI.Agent.Workflows.SkillGraphMaintainer.
+    /// </summary>
     public string AddKnowledge(string title, string content, string domain = "general",
         string category = "document", string source = "manual", string author = "system",
         double importance = 0.0, bool skipDedup = false, bool indexVector = true)
     {
         var entityId = EntityId(title);
-        var entity = new Entity(entityId, title);
-        entity.Properties["content"] = content;
-        entity.Properties["domain"] = domain;
-        entity.Properties["category"] = category;
-        entity.Properties["source"] = source;
-        entity.Properties["author"] = author;
-        entity.Properties["importance"] = importance;
+        var entity = new Entity(entityId, title, new Dictionary<string, object>());
+        entity.Properties!["content"] = content;
+        entity.Properties!["domain"] = domain;
+        entity.Properties!["category"] = category;
+        entity.Properties!["source"] = source;
+        entity.Properties!["author"] = author;
+        entity.Properties!["importance"] = importance;
         AddEntity(entity);
         return entity.Id;
     }

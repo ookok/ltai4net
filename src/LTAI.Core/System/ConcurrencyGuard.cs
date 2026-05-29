@@ -24,6 +24,14 @@ public interface IConcurrencyGuard
     Dictionary<string, object> Stats();
 }
 
+/// <summary>
+/// Centralized background task manager for the entire LTAI system.
+/// Provides fire-and-forget spawn, tracking, cancellation, and stats.
+/// Singleton via Instance — used by all layers to avoid runaway tasks.
+/// Thread-safe: ConcurrentDictionary for task storage, lock for stats aggregation.
+/// Callers: LTAI.Core.Governors.MicroKernel, LTAI.Agent.Workflows.UnifiedPlanningPipeline,
+///          LTAI.AI.Governors.LivingTreeSystem, LTAI.Web.
+/// </summary>
 public sealed class ConcurrencyGuard : IConcurrencyGuard
 {
     private static readonly Lazy<ConcurrencyGuard> _instance = new(() => new ConcurrencyGuard());

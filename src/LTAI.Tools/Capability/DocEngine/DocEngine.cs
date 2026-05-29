@@ -1,18 +1,46 @@
+using System.Collections.Concurrent;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace LTAI.Tools.DocEngine;
 
+/// <summary>
+/// Specification for a complete document to be generated.
+/// </summary>
 public record DocSpec(string Name, string TemplateType, List<DocSectionSpec> Sections, Dictionary<string, object> Metadata);
 
+/// <summary>
+/// A single section within a document template.
+/// </summary>
 public record DocSectionSpec(string Name, int Order, string Prompt, bool FoldContext);
 
+/// <summary>
+/// Progress update during streaming document generation.
+/// </summary>
 public record GenerationProgress(string Section, string Status, string? Content);
 
+/// <summary>
+/// Template-driven document generation engine.
+/// Supports built-in EIA/emergency/feasibility templates PLUS any
+/// user-registered template via <see cref="RegisterTemplate"/>.
+///
+/// Each template is a list of <see cref="DocSectionSpec"/> sections
+/// generated sequentially. The optional "fold context" feature passes
+/// summaries of prior sections into each new section's prompt,
+/// enabling coherent multi-section documents.
+///
+/// Usage:
+///   var engine = new DocEngine();
+///   engine.RegisterTemplate("api_doc", new List&lt;DocSectionSpec&gt; { ... });
+///   var doc = await engine.GenerateAsync("api_doc", data, chatFn);
+///
+/// Callers: LTAI.Tools.Capability.DocEngine.DocForge, LTAI.Web.InnovationEndpoints,
+///          LTAI.Cli.Commands.AutoFixCommand.
+/// </summary>
 public sealed class DocEngine
 {
     private readonly ILogger<DocEngine> _logger;
-    private readonly Dictionary<string, List<DocSectionSpec>> _templates = new();
+    private readonly ConcurrentDictionary<string, List<DocSectionSpec>> _templates = new();
 
     public DocEngine(ILogger<DocEngine>? logger = null)
     {
@@ -20,8 +48,27 @@ public sealed class DocEngine
         InitializeTemplates();
     }
 
+    /// <summary>
+    /// Register a custom document template at runtime.
+    /// Enables domain-specific document generation without modifying this class.
+    /// Overwrites any existing template with the same name.
+    /// </summary>
+    public void RegisterTemplate(string name, List<DocSectionSpec> sections)
+    {
+        _templates[name] = sections;
+        _logger.LogInformation("DocEngine: registered template '{Name}' with {Count} sections", name, sections.Count);
+    }
+
+    /// <summary>Remove a previously registered template. No-op if not found.</summary>
+    public void UnregisterTemplate(string name)
+    {
+        if (_templates.TryRemove(name, out _))
+            _logger.LogInformation("DocEngine: unregistered template '{Name}'", name);
+    }
+
     private void InitializeTemplates()
     {
+        // ── Domain-specific: Chinese EIA (Environmental Impact Assessment) ──
         _templates["eia_report"] = new()
         {
             new("项目概况", 1, "Describe the project overview, location, scale, and investment", false),
@@ -54,12 +101,53 @@ public sealed class DocEngine
             new("风险评估", 6, "Risk identification and countermeasures", true),
             new("结论", 7, "Feasibility conclusion and recommendations", true)
         };
+
+        // ── Generic templates (language-agnostic, use-case agnostic) ──
+
+        _templates["general_report"] = new()
+        {
+            new("Executive Summary", 1, "Write an executive summary covering key findings and recommendations", false),
+            new("Introduction", 2, "Introduce the subject, scope, and methodology", false),
+            new("Background", 3, "Provide context, prior work, and relevant background information", true),
+            new("Analysis", 4, "Detailed analysis with data, evidence, and reasoning", true),
+            new("Discussion", 5, "Interpret findings, discuss implications and trade-offs", true),
+            new("Conclusion", 6, "Summarize findings and state conclusions", true),
+            new("Recommendations", 7, "Provide actionable recommendations based on the analysis", true)
+        };
+
+        _templates["api_doc"] = new()
+        {
+            new("Overview", 1, "API overview: purpose, base URL, authentication, versioning", false),
+            new("Endpoints", 2, "List all endpoints with methods, paths, and brief descriptions", false),
+            new("Authentication", 3, "Authentication methods, token format, and authorization scopes", false),
+            new("Request Format", 4, "Request structure: headers, query parameters, request body schemas", true),
+            new("Response Format", 5, "Response structure: status codes, response body schemas, error formats", true),
+            new("Error Handling", 6, "Error codes, error response format, retry strategy", true),
+            new("Examples", 7, "Complete request/response examples for common use cases", true),
+            new("Rate Limits", 8, "Rate limiting policy, quota management, and best practices", true)
+        };
+
+        _templates["technical_spec"] = new()
+        {
+            new("Introduction", 1, "Purpose, scope, definitions, and references", false),
+            new("Architecture Overview", 2, "System architecture, components, and data flow", false),
+            new("Component Design", 3, "Detailed design of each component: interfaces, dependencies, states", true),
+            new("Data Model", 4, "Data models, schemas, relationships, and storage details", true),
+            new("API Specification", 5, "Public API surface: endpoints, contracts, error codes", true),
+            new("Security", 6, "Security model: authentication, authorization, data protection", true),
+            new("Deployment", 7, "Deployment requirements, configuration, and operational notes", true),
+            new("Testing Strategy", 8, "Testing approach: unit, integration, e2e, and performance", true)
+        };
     }
 
+    /// <summary>Get all registered template type names.</summary>
     public List<string> GetTemplateTypes() => _templates.Keys.ToList();
 
+    /// <summary>
+    /// Get a template by type name. Falls back to "general_report" if not found.
+    /// </summary>
     public List<DocSectionSpec> GetTemplate(string type) =>
-        _templates.GetValueOrDefault(type) ?? _templates["eia_report"];
+        _templates.GetValueOrDefault(type) ?? _templates.GetValueOrDefault("general_report", _templates.First().Value);
 
     public async Task<string> GenerateAsync(string templateType, Dictionary<string, string> data,
         Func<string, string, Task<string>> chatFn, bool foldContext = false)

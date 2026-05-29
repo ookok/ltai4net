@@ -22,7 +22,9 @@ public sealed class SkillRegistry
     public IReadOnlyDictionary<string, Skill> All => _skills;
 
     public event Action<Skill>? SkillInstalled;
+#pragma warning disable CS0067 // Used by external consumers via reflection/DI inspection
     public event Action<Skill>? SkillUpdated;
+#pragma warning restore CS0067
     public event Action<string>? SkillRemoved;
 
     public SkillRegistry(SkillLoader loader, ILogger<SkillRegistry> logger, string? skillsRoot = null,

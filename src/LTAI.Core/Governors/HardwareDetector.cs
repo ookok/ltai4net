@@ -22,7 +22,7 @@ public sealed class HardwareDetector
             var gcMem = GC.GetGCMemoryInfo();
             ramMB = gcMem.TotalAvailableMemoryBytes / (1024 * 1024);
         }
-        catch (Exception ex) { }
+        catch { /* hardware detection is best-effort */ }
 
         try
         {
@@ -31,7 +31,7 @@ public sealed class HardwareDetector
             if (root != null)
                 diskMB = new DriveInfo(root).AvailableFreeSpace / (1024 * 1024);
         }
-        catch (Exception ex) { }
+        catch { /* hardware detection is best-effort */ }
 
         var gpuHandled = false;
 
@@ -46,9 +46,9 @@ public sealed class HardwareDetector
                     Timeout = TimeSpan.FromSeconds(10)
                 }).GetAwaiter().GetResult();
 
-                if (result.Success)
+                if (result?.Success == true)
                 {
-                    var output = result.Data.Trim();
+                    var output = (result.Data ?? "").Trim();
                     if (output.Length > 0)
                     {
                         var lines = output.Split('\n');
@@ -62,7 +62,7 @@ public sealed class HardwareDetector
                 }
             }
         }
-        catch (Exception ex) { }
+        catch { /* nvidia-smi via MicroKernel not available */ }
 
         if (!gpuHandled)
         {
@@ -90,7 +90,7 @@ public sealed class HardwareDetector
                     proc.Dispose();
                 }
             }
-            catch (Exception ex) { }
+            catch { /* fallback nvidia-smi not available */ }
         }
 
         return new HardwareInfo(ramMB, vramMB, cpu, diskMB, gpuName);

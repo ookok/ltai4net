@@ -1,6 +1,5 @@
 using System.Runtime.CompilerServices;
 using System.Text.Json;
-using LTAI.DNA.Consciousness;
 using LTAI.DNA.Safety;
 using LTAI.Models;
 using Microsoft.Agents.AI;
@@ -21,13 +20,11 @@ public sealed class ChatAgent : BaseAgent
         IChatClient brain,
         SkillRegistry skills,
         ILogger<ChatAgent> logger,
-        Personality? personality = null,
         LTAI.Knowledge.Core.MemoryFilesService? memoryFiles = null)
         : base(card, brain, skills, logger)
     {
         _memoryFiles = memoryFiles;
-        if (personality != null)
-            _driftDetector = new PersonaDriftDetector(personality);
+        _driftDetector = new PersonaDriftDetector();
     }
 
     protected override async Task<AgentResponse> ExecuteLogicAsync(
@@ -56,7 +53,10 @@ public sealed class ChatAgent : BaseAgent
                         $"[Relevant Memory]\n{memoryCtx}"));
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                _logger?.LogDebug(ex, "ChatAgent: Memory retrieval failed (non-fatal)");
+            }
         }
 
         if (_conversationHistory.Count > 6)

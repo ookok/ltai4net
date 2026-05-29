@@ -4,7 +4,6 @@ using LTAI.Knowledge.Core;
 using LTAI.Models;
 using LTAI.Core.Messaging;
 using LTAI.Agent.CodeAct;
-using LTAI.Agent.Evolution;
 using LTAI.Agent.Skills;
 using LTAI.Agent.Tools;
 using Microsoft.Agents.AI;
@@ -59,10 +58,7 @@ public static class MAFServiceCollectionExtensions
 
         services.AddA2AServer("LTAI");
 
-        services.AddSingleton<HarnessSnapshot>();
-        services.AddSingleton<ExperienceDebugger>();
-        services.AddSingleton<DecisionLog>();
-        services.AddSingleton<PluginRegistry>();
+        // Evolution/ directory deleted (dead code — endpoints never wired)
         services.AddSingleton<AgenticLoop>();
         services.AddSingleton<DocumentStyleLearner>();
         services.AddSingleton<SystemPromptAssembler>(sp =>
@@ -76,7 +72,7 @@ public static class MAFServiceCollectionExtensions
             return new PartStreamStore(root);
         });
         services.AddSingleton<LTAI.Knowledge.Core.TokenSavingsTracker>();
-        services.AddSingleton<HarnessEvolutionEngine>();
+        // HarnessEvolutionEngine deleted (dead code)
 
         services.AddSingleton<ServiceDispatcher>();
         services.AddSingleton<ToolLoader>();

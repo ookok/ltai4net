@@ -54,6 +54,15 @@ public sealed record CoordinationRule
     public TimeSpan? DebounceWindow { get; init; }
 }
 
+/// <summary>
+/// Cross-component coordination scheduler — the event backbone for L0-L4 communication.
+/// Components publish CoordinationEvents (ParetoRouteChanged, BootstrapPhaseAdvanced,
+/// GenePoolEvolved, etc.) which trigger registered CoordinationRule handlers.
+/// Supports dynamic rules, debouncing, priority ordering, and health monitoring.
+/// Thread-safe: ConcurrentDictionary for rules; queue is Channel-based for backpressure.
+/// Callers: MicroKernel, BootstrapTeacher, ParetoRouter, GenePool, ArchitectLoop.
+/// Maps /api/coordination/* endpoints via LTAI.Web.
+/// </summary>
 public sealed class CoordinationScheduler
 {
     private readonly ConcurrentDictionary<CoordinationEventType, List<CoordinationRule>> _rules = new();

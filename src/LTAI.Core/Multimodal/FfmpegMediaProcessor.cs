@@ -11,6 +11,13 @@ public sealed class MediaResult
     public string Error { get; set; } = "";
 }
 
+/// <summary>
+/// FFmpeg-based media processor for audio extraction and conversion.
+/// Wraps FFmpeg CLI with both MicroKernel and direct Process.Start execution paths.
+/// Temp files are created in %TEMP%/ltai_media and cleaned up in finally blocks.
+/// Callers: LTAI.Core.Multimodal.TtsEngine, LTAI.Web.AudioEndpoints, LTAI.Infra.
+/// Thread-safe: each method creates unique temp files per call.
+/// </summary>
 public sealed class FfmpegMediaProcessor
 {
     private readonly string? _ffmpegPath;
@@ -131,12 +138,9 @@ public sealed class FfmpegMediaProcessor
         catch (Exception ex) { return new MediaResult { Error = ex.Message }; }
         finally
         {
-            try
-            {
-                if (global::System.IO.File.Exists(inputFile)) global::System.IO.File.Delete(inputFile);
-                if (global::System.IO.File.Exists(outputFile)) global::System.IO.File.Delete(outputFile);
-            }
-            catch { /* non-fatal */ }
+            // File.Delete is idempotent on non-existent paths — pre-check is unnecessary
+            try { global::System.IO.File.Delete(inputFile); } catch { /* best-effort cleanup */ }
+            try { global::System.IO.File.Delete(outputFile); } catch { /* best-effort cleanup */ }
         }
     }
 
@@ -189,12 +193,8 @@ public sealed class FfmpegMediaProcessor
         catch (Exception ex) { return new MediaResult { Error = ex.Message }; }
         finally
         {
-            try
-            {
-                if (global::System.IO.File.Exists(inputFile)) global::System.IO.File.Delete(inputFile);
-                if (global::System.IO.File.Exists(outputFile)) global::System.IO.File.Delete(outputFile);
-            }
-            catch { /* non-fatal */ }
+            try { global::System.IO.File.Delete(inputFile); } catch { /* best-effort cleanup */ }
+            try { global::System.IO.File.Delete(outputFile); } catch { /* best-effort cleanup */ }
         }
     }
 }

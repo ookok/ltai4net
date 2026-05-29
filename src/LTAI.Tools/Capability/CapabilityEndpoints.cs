@@ -3,14 +3,10 @@ using System.Text;
 using System.Text.Json;
 using LTAI.Tools.CodeEngine;
 using LTAI.Tools.CodeGraph;
-using LTAI.Tools.Crawler;
 using LTAI.Tools.DocEngine;
-using LTAI.Tools.Documents;
 using LTAI.Tools.Evolution;
-using LTAI.Tools.GIS;
 using LTAI.Tools.Integration;
 using LTAI.Tools.Knowledge;
-using LTAI.Tools.Lsp;
 using LTAI.Core.System;
 using LTAI.Tools.Pipeline;
 using LTAI.Tools.Reasoning;
@@ -85,18 +81,7 @@ public static class CapabilityEndpoints
             return Results.Json(results);
         });
 
-        endpoints.MapPost("/api/doc/parse", async (
-            HttpContext context, DocumentProcessor processor, CancellationToken ct) =>
-        {
-            using var reader = new StreamReader(context.Request.Body);
-            var body = await reader.ReadToEndAsync(ct).ConfigureAwait(false);
-            var req = JsonSerializer.Deserialize<DocParseRequest>(body);
-            if (req == null || string.IsNullOrWhiteSpace(req.FilePath))
-                return Results.Json(new { error = "filePath required" }, statusCode: 400);
-            var text = await processor.ExtractTextAsync(req.FilePath, ct).ConfigureAwait(false);
-            var sections = await processor.ExtractSectionsAsync(req.FilePath, ct).ConfigureAwait(false);
-            return Results.Json(new { text, sections });
-        });
+        // api/doc/parse endpoint removed (DocumentProcessor deleted)
 
         endpoints.MapPost("/api/reason/math", async (HttpContext ctx, MathReasoner reasoner, CancellationToken ct) =>
         {
@@ -149,27 +134,6 @@ public static class CapabilityEndpoints
             var report = await orch.ReasonAsync(req.Query, types, ct).ConfigureAwait(false);
             return Results.Json(report);
         });
-
-        endpoints.MapGet("/api/gis/geocode", async (string address, UnifiedMapService gis, CancellationToken ct) =>
-            Results.Json(await gis.GeocodeAsync(address, ct: ct)));
-
-        endpoints.MapGet("/api/gis/reverse", async (double lng, double lat, UnifiedMapService gis, CancellationToken ct) =>
-            Results.Json(await gis.ReverseGeocodeAsync(lng, lat, ct: ct)));
-
-        endpoints.MapGet("/api/gis/poi", async (string keyword, string city, UnifiedMapService gis, CancellationToken ct) =>
-            Results.Json(await gis.SearchPOIAsync(keyword, city, ct: ct)));
-
-        endpoints.MapGet("/api/gis/route", async (string from, string to, string mode, UnifiedMapService gis, CancellationToken ct) =>
-        {
-            var fromParts = from.Split(',');
-            var toParts = to.Split(',');
-            var fromPoint = new GeoPoint { Lng = double.Parse(fromParts[0]), Lat = double.Parse(fromParts[1]) };
-            var toPoint = new GeoPoint { Lng = double.Parse(toParts[0]), Lat = double.Parse(toParts[1]) };
-            return Results.Json(await gis.GetRouteAsync(fromPoint, toPoint, mode, ct: ct).ConfigureAwait(false));
-        });
-
-        endpoints.MapGet("/api/gis/weather", async (string city, UnifiedMapService gis, CancellationToken ct) =>
-            Results.Json(await gis.GetWeatherAsync(city, ct: ct)));
 
         endpoints.MapGet("/api/review", () => Results.Json(new { message = "POST /api/review with target param" }));
 
@@ -315,8 +279,7 @@ public static class CapabilityEndpoints
         endpoints.MapGet("/api/codegraph/blast", (CodeGraphEnhanced graph, string entity, int maxDepth = 2) =>
             Results.Ok(graph.BlastRadius(entity, maxDepth)));
 
-        endpoints.MapPost("/api/crawler/fetch", async (LightCrawler crawler, string url) =>
-            Results.Ok(await crawler.FetchAsync(url)));
+        // crawler/fetch endpoint removed (LightCrawler deleted)
 
         endpoints.MapPost("/api/evolution/discovery/stats", (SelfDiscovery discovery) =>
             Results.Ok(discovery.GetStats()));
@@ -350,42 +313,6 @@ public static class CapabilityEndpoints
 
         endpoints.MapPost("/api/knowledge/forager/brief", async (KnowledgeForager forager) =>
             Results.Ok(await forager.GenerateDailyBriefAsync()));
-
-        endpoints.Map("/api/lsp", async (HttpContext context, LspServer lspServer) =>
-        {
-            if (context.WebSockets.IsWebSocketRequest)
-            {
-                using var ws = await context.WebSockets.AcceptWebSocketAsync().ConfigureAwait(false);
-                await HandleLspWebSocket(ws, lspServer).ConfigureAwait(false);
-            }
-            else
-            {
-                context.Response.ContentType = "application/json";
-                context.Response.StatusCode = 200;
-                await context.Response.WriteAsync(
-                    JsonSerializer.Serialize(new { protocol = "lsp", transport = "websocket", version = "3.17" }));
-            }
-        });
-    }
-
-    private static async Task HandleLspWebSocket(WebSocket ws, LspServer lspServer)
-    {
-        var buffer = new byte[1024 * 64];
-        while (ws.State == WebSocketState.Open)
-        {
-            var result = await ws.ReceiveAsync(new ArraySegment<byte>(buffer), CancellationToken.None).ConfigureAwait(false);
-            if (result.MessageType == WebSocketMessageType.Close) break;
-
-            var json = Encoding.UTF8.GetString(buffer, 0, result.Count);
-            var response = await lspServer.HandleMessageAsync(json).ConfigureAwait(false);
-
-            if (response != null)
-            {
-                var responseBytes = Encoding.UTF8.GetBytes(response);
-                await ws.SendAsync(new ArraySegment<byte>(responseBytes),
-                    WebSocketMessageType.Text, true, CancellationToken.None).ConfigureAwait(false);
-            }
-        }
     }
 
     private static CodeLanguage DetectLanguage(string code)
@@ -418,11 +345,6 @@ public sealed record SearchRequest
     public string Query { get; init; } = string.Empty;
     public string[]? Sources { get; init; }
     public int? MaxResults { get; init; }
-}
-
-public sealed record DocParseRequest
-{
-    public string FilePath { get; init; } = string.Empty;
 }
 
 public sealed record NotifyRequest

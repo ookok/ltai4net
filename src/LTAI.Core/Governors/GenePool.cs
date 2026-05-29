@@ -99,7 +99,10 @@ public sealed record Gene
         var parts = new List<string>();
 
         foreach (var (key, value) in gene.ConditionThresholds)
-            parts.Add($"{key}{value switch { >= 0 => ">=" }}_{Math.Abs(value):F2}");
+        {
+            var op = value switch { >= 0 => ">=", < 0 => "<", _ => "?" };
+            parts.Add($"{key}{op}_{Math.Abs(value):F2}");
+        }
 
         foreach (var label in gene.ConditionLabels)
             parts.Add($"label==\"{label}\"");

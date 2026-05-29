@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using System.Text;
-using LTAI.Agent.Resilience;
 using LTAI.Agent.Tools;
 using LTAI.Agent.Workflows;
 using ModelsDiagnosticInfo = LTAI.Models.DiagnosticInfo;
@@ -32,7 +31,6 @@ public sealed class AgenticLoop : IAsyncDisposable
     private readonly ToolCallRepairPipeline? _repairPipeline;
     private readonly CacheFirstContextBuilder? _cacheCtx;
     private readonly BackpressurePipeline? _backpressure;
-    private readonly DebugLoop? _debugLoop;
     private readonly Core.System.AuditLogService? _auditLog;
     private readonly PartAssembler _assembler;
     private readonly Action<Part> _onPartAppendedHandler;
@@ -60,7 +58,6 @@ public sealed class AgenticLoop : IAsyncDisposable
         ToolCallRepairPipeline? repairPipeline = null,
         CacheFirstContextBuilder? cacheContext = null,
         BackpressurePipeline? backpressure = null,
-        DebugLoop? debugLoop = null,
         AgenticLoopConfig? config = null,
         Core.System.AuditLogService? auditLog = null,
         StructMemory? structMemory = null,
@@ -78,7 +75,6 @@ public sealed class AgenticLoop : IAsyncDisposable
         _structMemory = structMemory;
         _cacheCtx = cacheContext;
         _backpressure = backpressure;
-        _debugLoop = debugLoop;
         _auditLog = auditLog;
         _config = config ?? new AgenticLoopConfig();
         _logger = logger ?? NullLogger<AgenticLoop>.Instance;
@@ -88,17 +84,27 @@ public sealed class AgenticLoop : IAsyncDisposable
         _sessionId = Guid.NewGuid().ToString("N")[..8];
         _assembler = new PartAssembler();
 
-        _onPartAppendedHandler = async p =>
+        // ⚠️ Action<Part> + async = async void. Any exception crashes the process.
+        // Wrap in try-catch to prevent unhandled exception on ThreadPool.
+        _onPartAppendedHandler = p =>
         {
-            _logger.LogDebug("PartAppended: {Id} {Type}", p.Id, p.GetType().Name);
-            if (_partStore != null)
-                await _partStore.AppendAsync(_sessionId, p, CancellationToken.None).ConfigureAwait(false);
+            try
+            {
+                _logger.LogDebug("PartAppended: {Id} {Type}", p.Id, p.GetType().Name);
+                if (_partStore != null)
+                    _ = _partStore.AppendAsync(_sessionId, p, CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception ex) { _logger.LogWarning(ex, "PartAppended handler failed (async void)"); }
         };
-        _onPartUpdatedHandler = async p =>
+        _onPartUpdatedHandler = p =>
         {
-            _logger.LogDebug("PartUpdated: {Id} {Type}", p.Id, p.GetType().Name);
-            if (_partStore != null)
-                await _partStore.AppendAsync(_sessionId, p, CancellationToken.None).ConfigureAwait(false);
+            try
+            {
+                _logger.LogDebug("PartUpdated: {Id} {Type}", p.Id, p.GetType().Name);
+                if (_partStore != null)
+                    _ = _partStore.AppendAsync(_sessionId, p, CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception ex) { _logger.LogWarning(ex, "PartUpdated handler failed (async void)"); }
         };
 
         _assembler.OnPartAppended += _onPartAppendedHandler;
@@ -366,35 +372,6 @@ public sealed class AgenticLoop : IAsyncDisposable
                     _logger.LogWarning("AgenticLoop: Backpressure blocked edit — {Count} gate(s) failed",
                         failedGates.Count);
 
-                    // Escalate to DebugLoop for auto-fix when approaching threshold
-                    if (_debugLoop != null && _consecutiveBuildFailures >= _config.DebugLoopTriggerThreshold - 1)
-                    {
-                        try
-                        {
-                            var bpDiagnostics = string.Join("\n", failedGates.Select(g =>
-                                $"[{g.GateName}] {g.Reason} (errors: {g.ErrorCount}, warnings: {g.WarningCount})"));
-                            var debugSession = await _debugLoop.DebugAsync(
-                                _workspaceRoot, bpDiagnostics,
-                                LTAI.Agent.Models.DebugLevel.SemiAuto, 3, 120000, ct).ConfigureAwait(false);
-
-                            if (debugSession.Fixed)
-                            {
-                                _logger.LogInformation("DebugLoop fixed Backpressure failure");
-                                _consecutiveBuildFailures = 0;
-                                // Don't return — let the main loop re-execute with the fix applied
-                            }
-                            else
-                            {
-                                _logger.LogWarning("DebugLoop could not fix Backpressure (attempts={Count})",
-                                    debugSession.Attempts.Count);
-                            }
-                        }
-                        catch (Exception ex)
-                        {
-                            _logger.LogWarning(ex, "DebugLoop escalation from Backpressure failed");
-                        }
-                    }
-
                     step.Observation = $"Backpressure blocked: {string.Join("; ", failedGates.Select(g => g.GateName))}";
                     step.Phase = LoopPhase.Failed;
                     return step;
@@ -433,44 +410,10 @@ public sealed class AgenticLoop : IAsyncDisposable
 
                 if (_consecutiveBuildFailures >= _config.DebugLoopTriggerThreshold)
                 {
-                    _logger.LogWarning("AgenticLoop: {Count} consecutive build failures — escalating to DebugLoop",
+                    _logger.LogWarning("AgenticLoop: {Count} consecutive build failures (DebugLoop removed)",
                         _consecutiveBuildFailures);
                     context.State["build_diagnostics"] +=
                         "\n[CRITICAL: 3+ consecutive failures. Re-analyze ALL recent edits. Consider reverting the last change and trying a different approach.]";
-
-                    // Auto-escalate to DebugLoop for root-cause analysis
-                    if (_debugLoop != null)
-                    {
-                        try
-                        {
-                            var buildOutput = context.State.GetValueOrDefault("build_diagnostics", "")?.ToString() ?? "";
-                            var debugSession = await _debugLoop.DebugAsync(
-                                _workspaceRoot, buildOutput,
-                                LTAI.Agent.Models.DebugLevel.SemiAuto, 3, 120000, ct).ConfigureAwait(false);
-
-                            if (debugSession.Fixed)
-                            {
-                                _logger.LogInformation("DebugLoop applied fix — retrying build");
-                                _consecutiveBuildFailures = 0; // reset after fix
-                            }
-                            else if (debugSession.Escalated)
-                            {
-                                _logger.LogWarning("DebugLoop escalated — marking problem as unfixable");
-                                step.Phase = LoopPhase.Failed;
-                                step.Observation = "Unfixable: DebugLoop escalated after max attempts";
-                                return step;
-                            }
-                            else
-                            {
-                                _logger.LogWarning("DebugLoop could not fix automatically (attempts={Count})",
-                                    debugSession.Attempts.Count);
-                            }
-                        }
-                        catch (Exception ex)
-                        {
-                            _logger.LogWarning(ex, "DebugLoop escalation failed");
-                        }
-                    }
                 }
             }
             else

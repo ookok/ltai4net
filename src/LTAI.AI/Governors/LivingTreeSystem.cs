@@ -3,7 +3,6 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using LTAI.AI.Interfaces;
-using LTAI.AI.Governors.Pipeline;
 using LTAI.Core.Configuration;
 using LTAI.Core.Execution;
 using LTAI.Core.Governors;
@@ -30,10 +29,7 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
     private readonly DNAOrchestrator? _dna;
     private readonly IOptions<LTAIOptions> _options;
     private readonly GovernorSet _gov;
-    private readonly BackgroundWorkQueue _workQueue;
-    private readonly ContextHub? _contextHub;
     private readonly CPSProcessingService? _cpsProcessor;
-    private readonly ReActLoopOrchestrator? _reActOrchestrator;
     private readonly LTAI.AI.Providers.PrefixCacheStore? _prefixCache;
     private readonly TaskPipeline _taskPipeline = new(null!);
 
@@ -59,10 +55,7 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
         ILogger<LivingTreeSystem> logger,
         DNAOrchestrator? dna = null,
         ReasoningOrchestrator? reasoning = null,
-        BackgroundWorkQueue? workQueue = null,
-        ContextHub? contextHub = null,
         CPSProcessingService? cpsProcessor = null,
-        ReActLoopOrchestrator? reActOrchestrator = null,
         LTAI.AI.Providers.PrefixCacheStore? prefixCache = null)
     {
         _journal = journal;
@@ -72,10 +65,7 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
         _options = options;
         _gov = gov;
         _dna = dna;
-        _workQueue = workQueue ?? new BackgroundWorkQueue();
-        _contextHub = contextHub;
         _cpsProcessor = cpsProcessor;
-        _reActOrchestrator = reActOrchestrator;
         _prefixCache = prefixCache;
     }
 
@@ -152,42 +142,17 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
                     cpsResult.Confidence);
             }
 
-            // Sync path: try ReAct loop with tools (not just raw L2)
-            if (_reActOrchestrator != null)
-            {
-                var sb = new System.Text.StringBuilder();
-                await foreach (var chunk in _reActOrchestrator.RunReActLoopAsync(
-                    query, DefaultModel, "deep", "", null, false, null, null, null,
-                    new MetaCognitiveAssessment
-                    {
-                        Familiarity = 0.5f, Novelty = 0.4f, Certainty = 0.4f,
-                        ShouldDelegate = true, DelegationReason = "sync ChatAsync fallback"
-                    }, false, 0, 1.0f, cancellationToken))
-                {
-                    sb.Append(chunk);
-                }
-                var reactResponse = sb.ToString();
-                if (!string.IsNullOrWhiteSpace(reactResponse))
-                {
-                    _journal.Complete(entry, $"react:{reactResponse.Length}chars");
-                    _workQueue.Enqueue(async ct => { try { await SilentSelfCheckAsync(reactResponse); } catch { } }, "SilentSelfCheck");
-                    return reactResponse;
-                }
-            }
+            // ReAct loop replaced with direct LLM call (Phase 5 simplification)
 
             var response = await ProcessTypedAsync(GovernorInput.Create(query), cancellationToken).ConfigureAwait(false);
             _journal.Complete(entry, response.Response[..Math.Min(response.Response.Length, 500)]);
 
             var reply = response.Response;
-            _workQueue.Enqueue(async ct => { try { await SilentSelfCheckAsync(reply); } catch (Exception ex) { _logger.LogWarning(ex, "SilentSelfCheck failed"); } }, "SilentSelfCheck");
+            _ = Task.Run(async () => { try { await SilentSelfCheckAsync(reply); } catch { } }, cancellationToken);
 
             if (_dna != null && !string.IsNullOrEmpty(reply))
             {
-                _workQueue.Enqueue(async ct =>
-                {
-                    try { await _dna.ProcessAsync(query, reply, ct); }
-                    catch (Exception ex) { _logger.LogWarning(ex, "DNA process failed"); }
-                }, "DNA process");
+                _ = Task.Run(async () => { try { await _dna.ProcessAsync(query, reply, cancellationToken); } catch (Exception ex) { _logger.LogWarning(ex, "DNA process failed"); } }, cancellationToken);
             }
 
             return reply;
@@ -238,45 +203,11 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
             }
         }
 
-        string? hubContext = null;
-        if (_contextHub != null)
-        {
-            try
-            {
-                var contextItems = _contextHub.Query(query, topK: 3);
-                if (contextItems.Count > 0)
-                {
-                    hubContext = "[Context]\n" + string.Join("\n",
-                        contextItems.Select(c => $"- [{c.Domain}/{c.Kind}] {c.Summary}"));
-                }
-            }
-            catch { }
-        }
+        // ContextHub removed (Phase 5 simplification)
 
         var prompt = query;
-        if (hubContext != null)
-            prompt = hubContext + "\n\n" + prompt;
 
-        if (_reActOrchestrator != null)
-        {
-            _logger.LogDebug("[StreamReAct] CPS low confidence, falling back to ReAct loop");
-            var meta = new MetaCognitiveAssessment
-            {
-                Familiarity = 0.5f,
-                Novelty = 0.4f,
-                Certainty = 0.4f,
-                ShouldDelegate = true,
-                DelegationReason = "CPS low confidence",
-                Assessment = "Delegating to ReAct loop for complex task"
-            };
-
-            await foreach (var chunk in _reActOrchestrator.RunReActLoopAsync(
-                prompt, DefaultModel, "deep", "", null, false, null, null, null, meta, false, 0, 1.0f, cancellationToken))
-            {
-                yield return chunk;
-            }
-            yield break;
-        }
+        // ReAct streaming loop removed (Phase 5 simplification)
 
         _logger.LogDebug("[StreamL2Direct] Routing to L2 cloud streaming");
         var streamOptions = new ChatOptions { ModelId = DefaultModel, Temperature = 0.3f, MaxOutputTokens = 4096 };
@@ -350,7 +281,7 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        await _workQueue.DisposeAsync().ConfigureAwait(false);
+        // _workQueue removed (Phase 5 simplification)
         GC.SuppressFinalize(this);
     }
 }

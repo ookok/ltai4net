@@ -81,9 +81,9 @@ public sealed class CodeGraphSyncService : BackgroundService
             };
             foreach (var ext in extensions) _watcher.Filters.Add(ext);
 
-            _watcher.Changed += (_, _) => DebouncedReindex();
-            _watcher.Created += (_, _) => DebouncedReindex();
-            _watcher.Renamed += (_, _) => DebouncedReindex();
+            _watcher.Changed += (_, _) => { try { _ = DebouncedReindexAsync(); } catch { /* best-effort */ } };
+            _watcher.Created += (_, _) => { try { _ = DebouncedReindexAsync(); } catch { /* best-effort */ } };
+            _watcher.Renamed += (_, _) => { try { _ = DebouncedReindexAsync(); } catch { /* best-effort */ } };
 
             ct.Register(() => _watcher?.Dispose());
         }
@@ -94,14 +94,22 @@ public sealed class CodeGraphSyncService : BackgroundService
     }
 
     private DateTime _lastFileChange = DateTime.MinValue;
-    private async void DebouncedReindex()
-    {
-        _lastFileChange = DateTime.UtcNow;
-        await Task.Delay(3000).ConfigureAwait(false);
-        if ((DateTime.UtcNow - _lastFileChange).TotalSeconds < 2) return;
 
+    /// <summary>
+    /// Debounced re-index triggered by file system changes.
+    /// Waits 3s for quiescence, then re-indexes. If another change occurs
+    /// within 2s of the delay completing, the index is skipped (stale guard).
+    /// ⚠️ Called from FileSystemWatcher event handlers — exceptions are caught
+    /// at the caller site to prevent process crashes from async void.
+    /// </summary>
+    private async Task DebouncedReindexAsync()
+    {
         try
         {
+            _lastFileChange = DateTime.UtcNow;
+            await Task.Delay(3000).ConfigureAwait(false);
+            if ((DateTime.UtcNow - _lastFileChange).TotalSeconds < 2) return;
+
             await _codeGraph.IndexAsync().ConfigureAwait(false);
             _logger.LogDebug("CodeGraphSyncService: Re-indexed after file change");
         }

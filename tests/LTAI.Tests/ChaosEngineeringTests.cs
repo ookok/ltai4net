@@ -1,7 +1,7 @@
 using LTAI.Agent.Agents;
 using LTAI.Core.Configuration;
 using LTAI.Models;
-using LTAI.Agent.Routing;
+// Routing deleted — tests to be updated in Phase 10
 using LTAI.DNA.Safety;
 using LTAI.Models;
 using Microsoft.Agents.AI;

@@ -23,7 +23,6 @@ public sealed class HybridRecallEngine
     private readonly IVectorStore _vectorStore;
     private readonly DocumentStore _docStore;
     private readonly KnowledgeGraph _knowledgeGraph;
-    private readonly Reranker _reranker;
     private readonly ILogger<HybridRecallEngine> _logger;
 
     private const double HyDEWeight = 0.35;
@@ -36,14 +35,12 @@ public sealed class HybridRecallEngine
         IVectorStore vectorStore,
         DocumentStore docStore,
         KnowledgeGraph knowledgeGraph,
-        Reranker reranker,
         ILogger<HybridRecallEngine>? logger = null)
     {
         _llm = llm;
         _vectorStore = vectorStore;
         _docStore = docStore;
         _knowledgeGraph = knowledgeGraph;
-        _reranker = reranker;
         _logger = logger ?? new NullLogger<HybridRecallEngine>();
     }
 
@@ -106,29 +103,10 @@ public sealed class HybridRecallEngine
         // 5. RRF (Reciprocal Rank Fusion) merging
         var fused = FuseByRRF(allCandidates, topK);
 
-        // 6. Reranker fine-grained scoring
+        // 6. Score-based ordering
         if (fused.Count > 0 && fused.Count > topK / 2)
         {
-            var candidates = fused.Select(r => new Dictionary<string, object>
-            {
-                ["id"] = r.Id, ["text"] = r.Content,
-                ["score"] = r.Score, ["source"] = r.Source
-            }).ToList();
-
-            var reranked = _reranker.Rerank(candidates, query, topK);
-            fused = reranked.RankedDocs.Select(rd =>
-            {
-                var doc = _docStore.GetDocument(rd.DocId);
-                return new KnowledgeSearchResult
-                {
-                    Id = rd.DocId,
-                    Title = doc?.Title ?? rd.Text[..Math.Min(rd.Text.Length, 100)],
-                    Content = rd.Text,
-                    Domain = domain,
-                    Score = rd.CombinedScore,
-                    Source = "hybrid_fused"
-                };
-            }).ToList();
+            fused = fused.OrderByDescending(r => r.Score).Take(topK).ToList();
         }
 
         sw.Stop();
@@ -263,28 +241,12 @@ public sealed class HybridRecallEngine
             AddCandidate(allCandidates, $"kg_{t.Subject}_{t.Predicate}", "kg",
                 $"{t.Subject} {t.Predicate} {t.Object}", domain, KbWeight * t.Confidence, 0);
 
-        // 6. RRF fusion + Rerank
+        // 6. RRF fusion + score-based ordering
         var fused = FuseByRRF(allCandidates, topK);
 
         if (fused.Count > topK / 2)
         {
-            var candidates = fused.Select(r => new Dictionary<string, object>
-            {
-                ["id"] = r.Id, ["text"] = r.Content, ["score"] = r.Score, ["source"] = r.Source
-            }).ToList();
-
-            var reranked = _reranker.Rerank(candidates, query, topK);
-            fused = reranked.RankedDocs.Select(rd =>
-            {
-                var doc = _docStore.GetDocument(rd.DocId);
-                return new KnowledgeSearchResult
-                {
-                    Id = rd.DocId,
-                    Title = doc?.Title ?? rd.Text[..Math.Min(rd.Text.Length, 100)],
-                    Content = rd.Text, Domain = domain,
-                    Score = rd.CombinedScore, Source = "enhanced_fused"
-                };
-            }).ToList();
+            fused = fused.OrderByDescending(r => r.Score).Take(topK).ToList();
         }
 
         sw.Stop();

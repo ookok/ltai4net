@@ -181,6 +181,42 @@ public sealed class OpenAIProviderChatClient : IChatClient
             MaxOutputTokenCount = options?.MaxOutputTokens
         };
 
+        // --- Structured output (response_format) ---
+        // Read the schema from AdditionalProperties (set by WithStructuredOutput extension)
+        if (options?.AdditionalProperties?.TryGetValue("structured_schema", out var schemaRaw) == true
+            && schemaRaw is string schemaJson && !string.IsNullOrEmpty(schemaJson))
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(schemaJson);
+                var root = doc.RootElement;
+
+                var type = root.TryGetProperty("type", out var typeProp) ? typeProp.GetString() : null;
+
+                if (type == "json_schema" && root.TryGetProperty("json_schema", out var js))
+                {
+                    // Build OpenAI ChatResponseFormat from the json_schema definition
+                    var name = js.TryGetProperty("name", out var nameProp) ? nameProp.GetString() : "structured_output";
+                    var schemaEl = js.TryGetProperty("schema", out var schemaProp) ? schemaProp : root;
+
+                    oaiOptions.ResponseFormat = OpenAI.Chat.ChatResponseFormat.CreateJsonSchemaFormat(
+                        name,
+                        System.BinaryData.FromObjectAsJson(schemaEl),
+                        jsonSchemaIsStrict: true
+                    );
+                }
+                else if (type == "text")
+                {
+                    oaiOptions.ResponseFormat = OpenAI.Chat.ChatResponseFormat.CreateTextFormat();
+                }
+            }
+            catch
+            {
+                // If response_format parsing fails, proceed without it
+            }
+        }
+
+        // --- Tools ---
         if (options?.Tools is { Count: > 0 })
         {
             foreach (var t in options.Tools)
@@ -192,6 +228,7 @@ public sealed class OpenAIProviderChatClient : IChatClient
             }
         }
 
+        // --- Reasoning (thinking) ---
         if (options?.Reasoning is { Effort: not ReasoningEffort.None })
         {
             var raw = GetRawData(oaiOptions);

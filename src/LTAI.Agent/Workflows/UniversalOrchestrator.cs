@@ -1,6 +1,6 @@
 using LTAI.Agent.Agents;
-using LTAI.Agent.Routing;
 using LTAI.Core.Configuration;
+using LTAI.Core.Governors;
 using LTAI.Core.System;
 using LTAI.Models;
 using Microsoft.Agents.AI;
@@ -14,9 +14,8 @@ public enum OrchestrationMode { Direct, Handoff, Sequential, FanOut, Parliament 
 public sealed class UniversalOrchestrator
 {
     private readonly ILogger<UniversalOrchestrator> _logger;
-    private readonly UnifiedSemanticRouter _router;
+    private readonly IntentRouter _router;
     private readonly HarnessProfile _harness;
-    private readonly SentientParliament? _parliament;
     private readonly IConcurrencyGuard? _concurrencyGuard;
     private readonly Dictionary<string, BaseAgent> _agents = new();
     private const int MaxRecursionDepth = 3;
@@ -25,15 +24,12 @@ public sealed class UniversalOrchestrator
 
     public UniversalOrchestrator(
         ILogger<UniversalOrchestrator> logger,
-        UnifiedSemanticRouter router,
         HarnessProfile? harness = null,
-        SentientParliament? parliament = null,
         IConcurrencyGuard? concurrencyGuard = null)
     {
         _logger = logger;
-        _router = router;
+        _router = new IntentRouter();
         _harness = harness ?? HarnessProfile.For(HarnessMode.Hybrid);
-        _parliament = parliament;
         _concurrencyGuard = concurrencyGuard;
     }
 
@@ -51,7 +47,7 @@ public sealed class UniversalOrchestrator
         return _harness.Mode switch
         {
             HarnessMode.Controlled => OrchestrationMode.Direct,
-            HarnessMode.Evolutionary => OrchestrationMode.Parliament,
+            HarnessMode.Evolutionary => OrchestrationMode.FanOut,
             _ => OrchestrationMode.FanOut
         };
     }
@@ -248,26 +244,7 @@ public sealed class UniversalOrchestrator
     private async Task<AgentResponse> ExecuteParliamentAsync(
         IEnumerable<ChatMessage> messages, AgentSession? session, CancellationToken ct)
     {
-        if (_parliament == null)
-        {
-            _logger.LogWarning("Orchestrator: Parliament mode requested but SentientParliament not available, falling back to FanOut");
-            return await ExecuteFanOutAsync(messages, session, ct).ConfigureAwait(false);
-        }
-
-        var msgList = messages.ToList();
-        var userMsg = msgList.LastOrDefault(m => m.Role == ChatRole.User);
-        var query = userMsg?.Text ?? "";
-
-        var result = await _parliament.DeliberateAsync(query, msgList, session, ct).ConfigureAwait(false);
-
-        _logger.LogInformation("Orchestrator: Parliament verdict={Verdict} passed={Passed}/{Total} consensus={Consensus:F2}",
-            result.Verdict, result.PassedVotes, result.TotalAgents, result.ConsensusScore);
-
-        if (result.Verdict == ParliamentVerdict.Passed && !string.IsNullOrEmpty(result.FinalResponse))
-        {
-            return new(new ChatMessage(ChatRole.Assistant, result.FinalResponse));
-        }
-
+        _logger.LogWarning("Orchestrator: Parliament removed, falling back to FanOut");
         return await ExecuteFanOutAsync(messages, session, ct).ConfigureAwait(false);
     }
 

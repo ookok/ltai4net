@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text.RegularExpressions;
 
 namespace LTAI.Knowledge.Core;
@@ -10,7 +11,7 @@ public sealed class HallucinationGuard
     private static readonly Lazy<HallucinationGuard> _instance = new(() => new HallucinationGuard());
     public static HallucinationGuard Instance => _instance.Value;
 
-    private readonly List<HallucinationRecord> _history = new();
+    private readonly ConcurrentQueue<HallucinationRecord> _history = new();
     private double _globalRate;
     private int _totalChecks;
 
@@ -40,8 +41,14 @@ public sealed class HallucinationGuard
         var score = checks.Count > 0 ? checks.Average(c => (c.NgramScore + c.KeywordScore) / 2) : 1.0;
         var passed = flagged.Count == 0 || (double)flagged.Count / checks.Count < 0.2;
 
-        _history.Add(new HallucinationRecord(score, flagged.Count, checks.Count));
-        _globalRate = _history.TakeLast(50).Average(r => (double)r.Flagged / r.Total);
+        _history.Enqueue(new HallucinationRecord(score, flagged.Count, checks.Count));
+        while (_history.Count > 50) _history.TryDequeue(out _);
+
+        // Compute global rate safely — guard against DivisionByZero and empty history
+        var recent = _history.ToArray();
+        _globalRate = recent.Length > 0
+            ? recent.Average(r => r.Total > 0 ? (double)r.Flagged / r.Total : 0.0)
+            : 0.0;
 
         return new HallucinationVerdict(passed, Math.Round(score, 3),
             passed ? "passed" : $"{flagged.Count} suspicious sentences",
@@ -70,7 +77,7 @@ public sealed class HallucinationGuard
     {
         ["total_checks"] = _totalChecks,
         ["hallucination_rate"] = Math.Round(_globalRate, 3),
-        ["recent"] = _history.TakeLast(10).Select(r => new { r.Score, r.Flagged, r.Total }).ToList(),
+        ["recent"] = _history.ToArray().TakeLast(10).Select(r => new { r.Score, r.Flagged, r.Total }).ToList(),
         ["status"] = _globalRate < 0.1 ? "healthy" : _globalRate < 0.3 ? "warning" : "critical"
     };
 

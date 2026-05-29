@@ -113,7 +113,7 @@ public sealed class SkillGraphEvolver
             SkillEdgeType.Prerequisite, 1.5, 1);
     }
 
-    public void LearnFromExperimentTraces(List<ExperimentTrace> traces)
+    public void LearnFromExperimentTraces(List<SkillGraphEvolver.ExperimentTrace> traces)
     {
         foreach (var trace in traces)
         {
@@ -178,7 +178,7 @@ public sealed class SkillGraphEvolver
         }
     }
 
-    public async Task RunEpochAsync(List<ExperimentTrace>? traces = null, CancellationToken ct = default)
+    public async Task RunEpochAsync(List<SkillGraphEvolver.ExperimentTrace>? traces = null, CancellationToken ct = default)
     {
         _logger.LogInformation("SkillGraphEvolver epoch started");
 
@@ -196,4 +196,7 @@ public sealed class SkillGraphEvolver
 
     private static string NormalizeName(string name) =>
         name.ToLower().Replace(' ', '_').Replace('-', '_').Replace('.', '_');
+
+    /// <summary>Experiment trace record — replaces deleted ExperimentAnalyzer.</summary>
+    public sealed record ExperimentTrace(string Task, bool Success, double Score, string Domain, List<string>? ToolSequence = null, double Reward = 0);
 }

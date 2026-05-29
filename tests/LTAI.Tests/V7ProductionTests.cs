@@ -3,7 +3,7 @@ using LTAI.Core.Configuration;
 using LTAI.Models;
 using System.Runtime.CompilerServices;
 using LTAI.Agent.Agents;
-using LTAI.Agent.Routing;
+// Routing deleted — tests to be updated in Phase 10
 using LTAI.Agent.Workflows;
 using LTAI.DNA.Safety;
 using LTAI.Models;

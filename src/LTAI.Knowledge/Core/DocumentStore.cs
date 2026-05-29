@@ -222,7 +222,7 @@ public sealed class DocumentStore : IDisposable
             Bm25Score = r.Score, VectorScore = r.Score, RrfScore = r.Score, Source = r.Source
         }).ToList();
 
-        var reranked = CodeSearchReranker.Rerank(scoredDocs, query).Take(topK).ToList();
+        var reranked = scoredDocs.OrderByDescending(d => d.VectorScore + d.Bm25Score).Take(topK).ToList();
 
         var result = new List<KnowledgeSearchResult>();
         foreach (var doc in reranked)

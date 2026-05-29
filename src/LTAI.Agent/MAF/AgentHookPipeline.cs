@@ -24,7 +24,9 @@ public sealed class AgentHookPipeline
 
     public event Action<ToolUseContext, ToolUseResult>? OnToolBlocked;
     public event Action<ToolUseContext>? OnToolApproved;
+#pragma warning disable CS0067 // Reserved for future extensibility
     public event Action<ToolUseContext, string, bool>? OnPermissionGranted;
+#pragma warning restore CS0067
 
     public AgentHookPipeline(PermissionStore? permissionStore = null)
     {

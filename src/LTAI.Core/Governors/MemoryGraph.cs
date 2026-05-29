@@ -53,6 +53,23 @@ public sealed class HierarchyLayer
     private readonly ConcurrentDictionary<string, MemoryNode> _nodes = new();
 }
 
+/// <summary>
+/// Hierarchical memory graph implementing a four-level cognitive memory model:
+///   Level 0 (detail): raw observations, conversation fragments
+///   Level 1 (summary): auto-summarized groupings of detail nodes
+///   Level 2 (concept): auto-conceptualized groupings of summary nodes
+///   Level 3 (domain): domain-level abstractions (currently manual)
+///
+/// Auto-summarization and auto-conceptualization trigger when ≥5 nodes exist
+/// at the source level in the same domain. Uses a pluggable summarizer function.
+/// Inverted term index enables fast text-based search.
+/// Event bus integration for cross-component memory change notifications.
+///
+/// Callers: LTAI.Agent.Prefetch, LTAI.Knowledge.Core.KnowledgeGraph,
+///          LTAI.Core.Life.DigitalTwin.
+/// Thread-safe: all collections are ConcurrentDictionary; term index uses
+/// per-key locks for thread-safe set mutation.
+/// </summary>
 public sealed class MemoryGraph
 {
     private readonly ConcurrentDictionary<string, MemoryNode> _nodes = new();
@@ -89,9 +106,11 @@ public sealed class MemoryGraph
     /// <summary>Event raised when the graph changes (node added/removed/pruned).</summary>
     public event Action<string, Dictionary<string, object>>? OnChange;
 
-    private void PublishEvent(string eventType, Dictionary<string, object> data)
+    private void PublishEvent(string eventType, Dictionary<string, object?> data)
     {
-        OnChange?.Invoke(eventType, data);
+        // Convert Dictionary<string, object?> to Dictionary<string, object> for the OnChange event
+        var onChangeData = data.ToDictionary(kv => kv.Key, kv => kv.Value!);
+        OnChange?.Invoke(eventType, onChangeData);
 
         // Also publish to cross-component event bus
         if (_eventBus != null)
@@ -165,7 +184,7 @@ public sealed class MemoryGraph
         if (node.LayerLevel == 1 && _summarizer != null)
             TryAutoConceptualize(node);
 
-        PublishEvent("add_node", new Dictionary<string, object>
+        PublishEvent("add_node", new Dictionary<string, object?>
         {
             ["node_id"] = node.Id,
             ["layer"] = node.LayerLevel,
@@ -194,7 +213,7 @@ public sealed class MemoryGraph
                 .OrderByDescending(n => n.AccessCount)
                 .Take(10)
                 .Select(n => n.Content.Length < 200 ? n.Content : n.Summary));
-            var updated = existingSummary with { Summary = _summarizer(combinedContent, detailNode.Domain), LastAccessedAt = DateTime.UtcNow };
+            var updated = existingSummary! with { Summary = _summarizer!(combinedContent, detailNode.Domain), LastAccessedAt = DateTime.UtcNow };
             _nodes[existingSummary.Id] = updated;
             var layer = _hierarchy.FirstOrDefault(l => l.Level == 1);
             layer?.Nodes[existingSummary.Id] = updated;
@@ -210,7 +229,7 @@ public sealed class MemoryGraph
         {
             LayerLevel = 1,
             Domain = detailNode.Domain,
-            Summary = $"auto-summary: {_summarizer(string.Join(" | ", contents), detailNode.Domain)}",
+            Summary = $"auto-summary: {_summarizer!(string.Join(" | ", contents), detailNode.Domain)}",
             Content = "",
             Importance = sameDomainDetails.Average(n => n.Importance) * 0.8,
             Tags = new HashSet<string>(sameDomainDetails.SelectMany(n => n.Tags).Distinct().Take(10)),

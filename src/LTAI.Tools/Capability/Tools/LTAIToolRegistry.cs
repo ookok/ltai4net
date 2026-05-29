@@ -1,7 +1,9 @@
 using LTAI.Core.Governors;
 using LTAI.Core.Messaging;
 using LTAI.Core.System;
+using LTAI.Core.StructuredOutput;
 using LTAI.Models;
+using Microsoft.Extensions.AI;
 using LTAI.Tools.Capability.Governance;
 using LTAI.Tools.CodeEngine;
 using LTAI.Tools.CodeGraph;
@@ -276,7 +278,8 @@ public static class LTAIToolRegistry
                         var req = Activator.CreateInstance(reqType);
                         reqType.GetProperty("Code")?.SetValue(req, Arg(args, "code"));
                         reqType.GetProperty("Language")?.SetValue(req, Arg(args, "language", "python"));
-                        var task = (Task)m.Invoke(so, new[] { req, CancellationToken.None });
+                        var invokeResult = m.Invoke(so, new[] { req, CancellationToken.None });
+                        if (invokeResult is not Task task) return JsonToolResult.Error("Sandbox execution did not return a Task");
                         if (task != null) { await task; return task.GetType().GetProperty("Result")?.GetValue(task); }
                     }
                 }
@@ -754,17 +757,7 @@ public static class LTAIToolRegistry
         new("mathnet_stats", "Math.NET statistical analysis: interpolation/fitting/FFT/Monte Carlo for EIA data", "eia_pro",
             async args => MathNetAnalyzer.Analyze(Arg(args, "data_csv"), Arg(args, "method"))),
 
-        // ═══ GIS — 5 tools ═══
-        new("geocode", "Geocode address to latitude/longitude", "gis",
-            async args => { var svc = GetService<LTAI.Tools.GIS.UnifiedMapService>(); return await svc.GeocodeAsync(Arg(args, "address")); }),
-        new("gis_buffer", "Create buffer polygon around point, return GeoJSON", "gis",
-            async args => ComputeBuffer(ArgDouble(args, "lat"), ArgDouble(args, "lng"), ArgDouble(args, "radius_m"))),
-        new("spatial_search", "Check if point is inside polygon", "gis",
-            async args => PointInPolygon(ArgDouble(args, "lat"), ArgDouble(args, "lng"), Arg(args, "geojson"))),
-        new("distance_calc", "Calculate Haversine distance between coordinates", "gis",
-            async args => Haversine(ArgDouble(args, "lat1"), ArgDouble(args, "lng1"), ArgDouble(args, "lat2"), ArgDouble(args, "lng2"))),
-        new("coordinate_transform", "Transform between WGS84/GCJ02/CGCS2000", "gis",
-            async args => TransformCoord(ArgDouble(args, "lat"), ArgDouble(args, "lng"), Arg(args, "from"), Arg(args, "to"))),
+        // GIS tools removed (speculative module deleted)
 
         // ═══ Git — 3 tools ═══
         new("git_diff", "Show working tree changes", "git", null),
@@ -939,6 +932,7 @@ public static class LTAIToolRegistry
                 try
                 {
                     var smType = typeof(object).Assembly.GetType("LTAI.Vector.Knowledge.StructMemory");
+                    if (smType == null) return JsonToolResult.Error("StructMemory type not found");
                     var sm = _serviceProvider?.GetService(smType);
                     if (sm != null)
                     {
@@ -1021,7 +1015,8 @@ public static class LTAIToolRegistry
                     if (pm != null)
                     {
                         var ctxMethod = pm.GetType().GetMethod("GetContextForQuery");
-                        var ctx = (ctxMethod?.Invoke(pm, new object[] { aspect }) ?? string.Empty).ToString();
+                        var ctxRaw = ctxMethod?.Invoke(pm, new object[] { aspect }) ?? string.Empty;
+                        var ctx = ctxRaw?.ToString() ?? "";
                         var statsMethod = pm.GetType().GetMethod("GetStats");
                         var stats = statsMethod?.Invoke(pm, null);
                         return JsonToolResult.Success(new { aspect, context = ctx[..Math.Min(1000, ctx.Length)], stats });
@@ -1071,40 +1066,7 @@ public static class LTAIToolRegistry
                 var ok = await gw.SendSmtpAsync(to, subject, body);
                 return JsonToolResult.Success(new { success = ok, platform = "smtp", to });
             }),
-        new("sms_send", "Send SMS via Aliyun/Tencent Cloud SMS", "integration",
-            async args => {
-                var sms = GetService<LTAI.Tools.Integration.SmsGateway>();
-                var msg = Arg(args, "message"); var phone = Arg(args, "phone");
-                if (string.IsNullOrWhiteSpace(msg)) return JsonToolResult.Success(new { error = "message required" });
-                var ok = await sms.SendAsync(msg, string.IsNullOrWhiteSpace(phone) ? null : phone);
-                return JsonToolResult.Success(new { success = ok, phone = phone ?? sms.Config.PhoneNumbers.FirstOrDefault() });
-            }),
-        new("translate", "Translate text using Baidu Translate API", "integration",
-            async args => {
-                var svc = GetService<LTAI.Tools.Integration.TranslateService>();
-                var text = Arg(args, "text"); var from = Arg(args, "from", "auto"); var to = Arg(args, "to", "zh");
-                if (string.IsNullOrWhiteSpace(text)) return JsonToolResult.Success(new { error = "text required" });
-                var result = await svc.TranslateAsync(text, from, to);
-                return JsonToolResult.Success(new { success = result != null, text, from, to, translation = result });
-            }),
-        new("image_search", "Search images via Unsplash/Pixabay", "integration",
-            async args => {
-                var svc = GetService<LTAI.Tools.Integration.ImageSearchService>();
-                var query = Arg(args, "query"); var count = (int)ArgDouble(args, "count", 10);
-                var source = Arg(args, "source", "unsplash");
-                if (string.IsNullOrWhiteSpace(query)) return JsonToolResult.Success(new { error = "query required" });
-                var results = await svc.SearchAsync(query, count, source);
-                return JsonToolResult.Success(new { success = true, query, count = results.Count, results = results.Select(r => new { r.Id, r.Url, r.Description, r.Author, r.Source }) });
-            }),
-        new("weather", "Get current weather by city name", "integration",
-            async args => {
-                var svc = GetService<LTAI.Tools.Integration.WeatherService>();
-                var city = Arg(args, "city"); var source = Arg(args, "source", "openweathermap");
-                if (string.IsNullOrWhiteSpace(city)) return JsonToolResult.Success(new { error = "city required" });
-                var data = await svc.GetWeatherAsync(city, source);
-                return data != null ? new { success = true, data.City, data.Weather, data.Description, data.Temperature, data.Humidity, data.WindSpeed, data.Source }
-                    : new { error = "Weather data not available", city };
-            }),
+        // sms_send/translate/image_search/weather removed (service modules deleted)
         new("github_status", "Get GitHub release status and latest version", "integration",
             async args => {
                 var updater = GetService<LTAI.Tools.Integration.AutoUpdater>();
@@ -1112,17 +1074,7 @@ public static class LTAIToolRegistry
                 return JsonToolResult.Success(new { result.CurrentVersion, result.LatestVersion, result.HasUpdate, result.ReleaseNotes });
             }),
 
-        // ═══ GIS — 5 new tools ═══
-        new("reverse_geocode", "Convert lat/lng coordinates to human-readable address", "gis",
-            async args => { var svc = GetService<LTAI.Tools.GIS.UnifiedMapService>(); return await svc.ReverseGeocodeAsync(ArgDouble(args, "lng"), ArgDouble(args, "lat")); }),
-        new("poi_search", "Search for Points of Interest (restaurants, hospitals, etc.) nearby", "gis",
-            async args => { var svc = GetService<LTAI.Tools.GIS.UnifiedMapService>(); return await svc.SearchPOIAsync(Arg(args, "keyword"), Arg(args, "city")); }),
-        new("route_plan", "Plan a route between two locations (driving/walking/transit/bicycling)", "gis",
-            async args => { var svc = GetService<LTAI.Tools.GIS.UnifiedMapService>(); var from = ParseGeoPoint(Arg(args, "from")); var to = ParseGeoPoint(Arg(args, "to")); if (from == null || to == null) return JsonToolResult.Success(new { error = "from and to must be 'lng,lat' format" }); return await svc.GetRouteAsync(from, to, Arg(args, "mode", "driving")); }),
-        new("ip_location", "Lookup geographic location of an IP address", "gis",
-            async args => { var svc = GetService<LTAI.Tools.GIS.UnifiedMapService>(); return await svc.GetIPLocationAsync(Arg(args, "ip")); }),
-        new("map_weather", "Get weather by city name via Amap API (alternative to weather tool)", "gis",
-            async args => { var svc = GetService<LTAI.Tools.GIS.UnifiedMapService>(); return await svc.GetWeatherAsync(Arg(args, "city")); }),
+        // GIS tools removed (speculative module deleted)
 
         // ═══ Communication — 1 tool (wework_send removed per v7.0 Phase 0) ═══
         new("telegram_send", "Send message or code block to a Telegram chat", "communication",
@@ -1230,12 +1182,13 @@ created: {DateTime.UtcNow:yyyy-MM-dd}
                 var markdown = Arg(args, "markdown");
                 if (string.IsNullOrWhiteSpace(markdown)) return JsonToolResult.Success(new { error = "markdown parameter is required. Provide the Markdown document content to import." });
 
-                var discovery = _serviceProvider?.GetService(typeof(object).Assembly.GetType("LTAI.Tools.Skills.SkillDiscoveryManager"));
+                var discType = typeof(object).Assembly.GetType("LTAI.Tools.Skills.SkillDiscoveryManager");
+                if (discType == null) return JsonToolResult.Success(new { error = "SkillDiscoveryManager type not available" });
+                var discovery = _serviceProvider?.GetService(discType);
                 if (discovery is null)
                 {
                     var skillsDir = Path.Combine(LivingTreeDir, "skills");
-                    discovery = Activator.CreateInstance(
-                        typeof(object).Assembly.GetType("LTAI.Tools.Skills.SkillDiscoveryManager") ?? throw new InvalidOperationException("SkillDiscoveryManager type not found"),
+                    discovery = Activator.CreateInstance(discType,
                         OptionService.Get("LTAI_WORKSPACE") ?? Environment.CurrentDirectory, null);
                 }
 
@@ -1313,18 +1266,18 @@ created: {DateTime.UtcNow:yyyy-MM-dd}
             {
                 var query = Arg(args, "query").ToLower();
                 var category = Arg(args, "category");
-                var results = AllTools
+                var results = AllTools!
                     .Where(t => (string.IsNullOrEmpty(query) || t.Name.Contains(query, StringComparison.OrdinalIgnoreCase) || t.Description.Contains(query, StringComparison.OrdinalIgnoreCase))
                              && (string.IsNullOrEmpty(category) || t.Category.Contains(category, StringComparison.OrdinalIgnoreCase)))
                     .Select(t => new { t.Name, t.Description, t.Category, has_handler = t.Handler != null })
                     .Take(30).ToList();
-                return JsonToolResult.Success(new { query, category, results, total = AllTools.Length, matched = results.Count });
+                return JsonToolResult.Success(new { query, category, results, total = AllTools!.Length, matched = results.Count });
             }),
         new("tool_enable", "Enable a tool by name. Disabled tools are filtered from suggestions and blocked from invocation. Parameters: name (required)", "management",
             async args =>
             {
                 var name = Arg(args, "name");
-                var tool = AllTools.FirstOrDefault(t => string.Equals(t.Name, name, StringComparison.OrdinalIgnoreCase));
+                var tool = AllTools!.FirstOrDefault(t => string.Equals(t.Name, name, StringComparison.OrdinalIgnoreCase));
                 if (tool is null) return JsonToolResult.Success(new { error = $"Tool '{name}' not found. Use tool_search to find available tools." });
                 ToolGate.Instance.Enable(name);
                 return JsonToolResult.Success(new { name, status = "enabled", description = tool.Description, category = tool.Category });
@@ -1333,7 +1286,7 @@ created: {DateTime.UtcNow:yyyy-MM-dd}
             async args =>
             {
                 var name = Arg(args, "name");
-                var tool = AllTools.FirstOrDefault(t => string.Equals(t.Name, name, StringComparison.OrdinalIgnoreCase));
+                var tool = AllTools!.FirstOrDefault(t => string.Equals(t.Name, name, StringComparison.OrdinalIgnoreCase));
                 if (tool is null) return JsonToolResult.Success(new { error = $"Tool '{name}' not found" });
                 ToolGate.Instance.Disable(name);
                 return JsonToolResult.Success(new { name, status = "disabled", description = tool.Description, disabled_tools = ToolGate.Instance.DisabledCount });
@@ -1341,13 +1294,13 @@ created: {DateTime.UtcNow:yyyy-MM-dd}
         new("tool_stats", "Get comprehensive statistics about all registered tools: counts by category, handlers, and status", "management",
             async _ =>
             {
-                var byCategory = AllTools.GroupBy(t => t.Category).ToDictionary(g => g.Key, g => new { total = g.Count(), with_handlers = g.Count(t => t.Handler != null), without_handlers = g.Count(t => t.Handler == null) });
+                var byCategory = AllTools!.GroupBy(t => t.Category).ToDictionary(g => g.Key, g => new { total = g.Count(), with_handlers = g.Count(t => t.Handler != null), without_handlers = g.Count(t => t.Handler == null) });
                 return new
                 {
-                    total = AllTools.Length,
-                    with_handlers = AllTools.Count(t => t.Handler != null),
-                    without_handlers = AllTools.Count(t => t.Handler == null),
-                    categories = AllTools.Select(t => t.Category).Distinct().Count(),
+                    total = AllTools!.Length,
+                    with_handlers = AllTools!.Count(t => t.Handler != null),
+                    without_handlers = AllTools!.Count(t => t.Handler == null),
+                    categories = AllTools!.Select(t => t.Category).Distinct().Count(),
                     by_category = byCategory
                 };
             }),
@@ -1498,7 +1451,139 @@ created: {DateTime.UtcNow:yyyy-MM-dd}
         new("mcp_call", "Call a specific tool on a remote MCP server. Use mcp_discover first to find available tools. Parameters: server_url (required), tool_name (required), arguments (JSON object, optional)", "discovery",
             async args => await McpToolAdapter.CallAsync(args)),
         new("mcp_export", "Export current LTAI tools as MCP-compatible tool definitions. Use this to share LTAI's capabilities with other MCP clients.", "discovery",
-            async _ => await Task.FromResult(McpToolAdapter.Export(AllTools))),
+            async _ => await Task.FromResult(McpToolAdapter.Export(AllTools!))),
+
+        // ═══ Reasoning — 2 tools ═══
+        new("structured_query", "Query the LLM with a structured JSON output schema. Use this when you need typed, validated data instead of free text. Parameters: query (required, the question to ask), schema_description (required, describe the JSON structure you want, e.g. 'array of {name, severity, description} objects'), properties_list (required, comma-separated property names/types, e.g. 'name:string, severity:string, description:string'). Returns validated JSON matching the requested schema.", "reasoning",
+            async args =>
+            {
+                var query = Arg(args, "query");
+                var schemaDesc = Arg(args, "schema_description", "object");
+                var propsList = Arg(args, "properties_list", "");
+
+                if (string.IsNullOrWhiteSpace(query))
+                    return JsonToolResult.Error("query parameter is required");
+
+                // Build a JSON schema from the properties list
+                var schema = new JsonSchema("QueryResult");
+                if (!string.IsNullOrWhiteSpace(propsList))
+                {
+                    foreach (var prop in propsList.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                    {
+                        var parts = prop.Split(':', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                        var propName = parts.Length > 0 ? parts[0] : "field";
+                        var propType = parts.Length > 1 ? parts[1].ToLowerInvariant() : "string";
+
+                        switch (propType)
+                        {
+                            case "number":
+                            case "float":
+                            case "double":
+                            case "int":
+                                schema = schema.WithProperty(propName, new NumberProperty(propName));
+                                break;
+                            case "bool":
+                            case "boolean":
+                                schema = schema.WithProperty(propName, new BooleanProperty(propName));
+                                break;
+                            default:
+                                schema = schema.WithProperty(propName, new StringProperty(propName));
+                                break;
+                        }
+                    }
+                }
+                else
+                {
+                    schema = schema.WithProperty("result", new StringProperty(schemaDesc));
+                }
+
+                var chatClient = GetService<IChatClient>();
+                if (chatClient == null)
+                    return JsonToolResult.Error("IChatClient not available");
+
+                var options = new ChatOptions { AdditionalProperties = [] };
+                var ctxJson = System.Text.Json.JsonSerializer.Serialize(schema.ToResponseFormat());
+                options.AdditionalProperties["structured_schema"] = ctxJson;
+                var response = await chatClient.GetResponseAsync(query, options).ConfigureAwait(false);
+                var rawText = response.Text ?? "";
+
+                // Validate the output
+                var validation = OutputValidator.Validate(rawText, schema);
+                if (!validation.IsValid)
+                {
+                    // Return the best-effort response with validation warnings
+                    return JsonToolResult.Success(new
+                    {
+                        query,
+                        raw = rawText,
+                        validation_error = validation.ErrorMessage,
+                        note = "Response did not fully match the requested schema. Raw output is included."
+                    });
+                }
+
+                return JsonToolResult.Success(new { query, result = rawText, validated = true });
+            }),
+        new("analyze", "Deep analysis of a topic with structured reasoning. Parameters: topic (required), analysis_type (optional, one of: swot, pros_cons, comparison, cause_effect, timeline, default: pros_cons)", "reasoning",
+            async args =>
+            {
+                var topic = Arg(args, "topic");
+                var analysisType = Arg(args, "analysis_type", "pros_cons");
+
+                if (string.IsNullOrWhiteSpace(topic))
+                    return JsonToolResult.Error("topic parameter is required");
+
+                var schema = analysisType switch
+                {
+                    "swot" => new JsonSchema("SWOT")
+                        .WithProperty("strengths", new ArrayProperty(new StringProperty("Strength")))
+                        .WithProperty("weaknesses", new ArrayProperty(new StringProperty("Weakness")))
+                        .WithProperty("opportunities", new ArrayProperty(new StringProperty("Opportunity")))
+                        .WithProperty("threats", new ArrayProperty(new StringProperty("Threat"))),
+                    "pros_cons" => new JsonSchema("ProsCons")
+                        .WithProperty("pros", new ArrayProperty(new StringProperty("Pro")))
+                        .WithProperty("cons", new ArrayProperty(new StringProperty("Con")))
+                        .WithProperty("verdict", new StringProperty("Overall verdict")),
+                    "cause_effect" => new JsonSchema("CauseEffect")
+                        .WithProperty("causes", new ArrayProperty(
+                            new ObjectProperty(new Dictionary<string, FieldProperty>
+                            {
+                                ["cause"] = new StringProperty("The cause"),
+                                ["mechanism"] = new StringProperty("How it leads to the effect"),
+                                ["confidence"] = new StringProperty("Confidence: high/medium/low")
+                            })))
+                        .WithProperty("effects", new ArrayProperty(
+                            new ObjectProperty(new Dictionary<string, FieldProperty>
+                            {
+                                ["effect"] = new StringProperty("The effect"),
+                                ["severity"] = new StringProperty("Severity: high/medium/low"),
+                                ["mitigation"] = new StringProperty("Possible mitigation")
+                            }))),
+                    _ => new JsonSchema("Analysis")
+                        .WithProperty("findings", new ArrayProperty(new StringProperty("Finding")))
+                        .WithProperty("conclusion", new StringProperty("Conclusion"))
+                };
+
+                var options = new ChatOptions { AdditionalProperties = [] };
+                var ctxJson = System.Text.Json.JsonSerializer.Serialize(schema.ToResponseFormat());
+                options.AdditionalProperties["structured_schema"] = ctxJson;
+                var chatClient = GetService<IChatClient>();
+                if (chatClient == null)
+                    return JsonToolResult.Error("IChatClient not available");
+
+                var prompt = $"Please perform a {analysisType} analysis of: {topic}";
+                var response = await chatClient.GetResponseAsync(prompt, options).ConfigureAwait(false);
+                var rawText = response.Text ?? "";
+
+                var validation = OutputValidator.Validate(rawText, schema);
+                return JsonToolResult.Success(new
+                {
+                    topic,
+                    analysis_type = analysisType,
+                    result = rawText,
+                    validated = validation.IsValid,
+                    validation_error = validation.IsValid ? null : validation.ErrorMessage
+                });
+            }),
 
         // ═══ System — 7 tools ═══
         new("models_list", "List all registered model providers and their models", "system",
@@ -1707,14 +1792,7 @@ Return ONLY the markdown, no explanation.";
     private static double ArgDouble(Dictionary<string, object?>? args, string key, double def = 0)
         => args?.TryGetValue(key, out var v) == true && double.TryParse(v?.ToString(), out var d) ? d : def;
 
-    private static LTAI.Tools.GIS.GeoPoint? ParseGeoPoint(string s)
-    {
-        if (string.IsNullOrWhiteSpace(s)) return null;
-        var parts = s.Split(',');
-        if (parts.Length >= 2 && double.TryParse(parts[0].Trim(), out var lng) && double.TryParse(parts[1].Trim(), out var lat))
-            return new LTAI.Tools.GIS.GeoPoint { Lng = lng, Lat = lat };
-        return null;
-    }
+    // ParseGeoPoint removed (GIS module deleted)
 
     // ═══ Tool Implementations ═══
 

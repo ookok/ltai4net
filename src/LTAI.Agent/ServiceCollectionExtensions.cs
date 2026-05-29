@@ -4,13 +4,11 @@ using LTAI.Core.System;
 using LTAI.DNA.Safety;
 using LTAI.Knowledge.Core;
 using LTAI.Models;
-using LTAI.Tools.GIS;
 using HarnessProfile = LTAI.Core.Configuration.HarnessProfile;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using LTAI.Agent.Adversarial;
 using LTAI.Agent.Agents;
 using LTAI.Agent.Feedback;
 using LTAI.Agent.Skills;
@@ -19,9 +17,7 @@ using LTAI.Agent.Workflows;
 using LTAI.Agent.Federation;
 using LTAI.Agent.MAF;
 using LTAI.Agent.Middleware;
-using LTAI.Agent.Prefetch;
-using LTAI.Agent.Prompting;
-using LTAI.Agent.Routing;
+// Routing replaced by LLM-based IntentRouter in LTAI.Core.Governors
 using LTAI.Agent.Tools;
 using LTAI.Core.Configuration;
 
@@ -45,7 +41,7 @@ public static class ServiceCollectionExtensions
             return new SkillPublisher(registry, loader, http, logger);
         });
         services.AddSingleton<ISkillExchangeProvider>(sp => sp.GetRequiredService<SkillPublisher>());
-        services.AddHostedService<SkillSyncService>();
+        // SkillSyncService removed (depended on dead Infra/Network)
         services.AddSingleton<MarketplaceClient>(sp =>
         {
             var httpClientFactory = sp.GetService<IHttpClientFactory>();
@@ -64,25 +60,17 @@ public static class ServiceCollectionExtensions
                 externalSafetyGate: (tool, input) => safetyGate.EvaluateToolCall(tool, input));
         });
         services.AddSingleton<SkillAwareDecomposer>();
-#pragma warning disable CS0618 // IntentRouter is [Obsolete] but still needed for agent-level routing
-        services.AddSingleton<IntentRouter>();
-#pragma warning restore CS0618
-        services.AddSingleton<UnifiedSemanticRouter>();
-        services.AddSingleton<UnifiedIntentRouter>();
-        services.AddSingleton<SpatialCache>();
         services.AddSingleton<UniversalOrchestrator>(sp =>
         {
             var logger = sp.GetRequiredService<ILogger<UniversalOrchestrator>>();
-            var router = sp.GetRequiredService<UnifiedSemanticRouter>();
             var harness = sp.GetService<HarnessProfile>();
             var concurrencyGuard = sp.GetService<IConcurrencyGuard>();
-            return new UniversalOrchestrator(logger, router, harness,
+            return new UniversalOrchestrator(logger, harness,
                 concurrencyGuard: concurrencyGuard);
         });
         services.AddSingleton<ToolRetriever>();
         services.AddSingleton<PlannerCriticWorkflow>();
-        services.AddSingleton<PlannerIntegration>();
-        services.AddSingleton<UnifiedPlanningPipeline>();
+        // PlannerIntegration/UnifiedPlanningPipeline removed (dead Execution subsystem)
         services.AddSingleton<TaskQueue>();
         services.AddSingleton<LTAICoordinator>();
 
@@ -235,15 +223,6 @@ public static class ServiceCollectionExtensions
             return new SkillGraphMarkdownBridge(graph, skillsRoot);
         });
 
-        services.AddSingleton<AdversarialSelfPlay>(sp =>
-        {
-            var instance = AdversarialSelfPlay.Instance;
-            instance.SetLogger(sp.GetRequiredService<ILogger<AdversarialSelfPlay>>());
-            return instance;
-        });
-        services.AddSingleton<SelfRefinementLoop>();
-        services.AddSingleton<AgentParliament>();
-
         // Register BuiltInHooks on AgentHookPipeline
         services.AddSingleton<AgentHookPipeline>(sp =>
         {
@@ -253,8 +232,6 @@ public static class ServiceCollectionExtensions
             pipeline.OnPreToolUse(BuiltInHooks.NetworkSafetyHook);
             return pipeline;
         });
-        services.AddSingleton<SentientParliament>();
-        services.AddSingleton<ShadowRouter>();
         services.AddSingleton<HumanInTheLoopReview>();
         services.AddSingleton<FeedbackCollector>();
         services.AddSingleton<ABExperimentEngine>();
@@ -263,18 +240,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<AgentRegistry>();
         services.AddSingleton<AgentRegistryLock>();
         services.AddSingleton<IAgentFactory, AgentFactory>();
-        services.AddSingleton<PredictivePrefetcher>();
 
-        // ProAct: idle-time anticipation (arXiv:2605.25971)
-        services.AddSingleton<ProActAnticipator>(sp =>
-        {
-            var memoryGraph = sp.GetRequiredService<MemoryGraph>();
-            var cps = sp.GetService<ICPSProcessingService>();
-            var memPi = sp.GetService<IMemPiGuidance>();
-            var logger = sp.GetService<ILogger<ProActAnticipator>>();
-            return new ProActAnticipator(memoryGraph, cps, memPi, config: null, logger);
-        });
-        services.AddSingleton<IProActCache>(sp => sp.GetRequiredService<ProActAnticipator>());
 
         services.AddSingleton<Agents.CodeAgentAdapter>();
         services.AddSingleton<Agents.EIAAgentAdapter>();
@@ -290,8 +256,8 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<LTAI.Core.Interfaces.IAgentFactory>(sp => sp.GetRequiredService<Agents.EIAAgentFactory>());
         services.AddSingleton<LTAI.Core.Interfaces.IAgentFactory>(sp => sp.GetRequiredService<Agents.ChatAgentFactory>());
         services.AddSingleton<LTAI.Core.Interfaces.IAgentFactory>(sp => sp.GetRequiredService<Agents.ReasoningAgentFactory>());
-        services.AddHostedService<ReflectiveIdlingService>();
-        services.AddHostedService<StartupRecoveryService>();
+        // Prefetch/ and IdlingService removed (dead weight: arXiv paper ref with Task.Delay loop)
+        // StartupRecoveryService removed (depended on dead TaskCheckpoint)
 
         services.AddSingleton<IMicroKernel>(sp =>
         {

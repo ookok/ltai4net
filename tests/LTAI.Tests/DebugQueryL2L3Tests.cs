@@ -1,6 +1,6 @@
 using LTAI.Core.Governors;
 using LTAI.Core.Configuration;
-using LTAI.Agent.Routing;
+// Routing deleted — tests to be updated in Phase 10
 using LTAI.Agent.Agents;
 using LTAI.Agent.Skills;
 using LTAI.Models;

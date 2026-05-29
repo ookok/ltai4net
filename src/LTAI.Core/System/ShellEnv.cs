@@ -113,7 +113,7 @@ public sealed class ShellEnv
                         Timeout = TimeSpan.FromSeconds(5)
                     }).GetAwaiter().GetResult();
 
-                    if (kResult.Success && !string.IsNullOrEmpty(kResult.Data))
+                    if (kResult?.Success == true && !string.IsNullOrEmpty(kResult.Data))
                     {
                         var kPath = kResult.Data.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()?.Trim();
                         var kVersion = ProbeVersion(toolName);
@@ -202,7 +202,7 @@ public sealed class ShellEnv
                         Timeout = TimeSpan.FromSeconds(5)
                     }).GetAwaiter().GetResult();
 
-                    if (kResult.Success)
+                    if (kResult?.Success == true)
                     {
                         var kOutput = (kResult.Data + kResult.Error).Trim();
                         if (!string.IsNullOrEmpty(kOutput))

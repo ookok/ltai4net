@@ -3,12 +3,10 @@ using LTAI.Core.Configuration;
 using LTAI.Core.Execution;
 using LTAI.Core.Governors;
 using LTAI.Core.Interfaces;
-using LTAI.Core.Life;
 using LTAI.Core.Messaging;
 using LTAI.Core.Multimodal;
 using LTAI.Core.Network;
 using LTAI.Core.Prefs;
-using LTAI.Core.Resilience;
 using LTAI.Core.System;
 using LTAI.Core.Session;
 using Microsoft.Extensions.DependencyInjection;
@@ -37,13 +35,6 @@ public static class ServiceCollectionExtensions
 
         services.AddSingleton(sp => HardwareAcceleration.Instance);
         services.AddSingleton(sp => ResponseCache.Instance);
-
-        services.AddSingleton(sp => DigitalTwin.Instance);
-        services.AddSingleton(sp => AutonomousGrowth.Instance);
-        services.AddSingleton(sp => SynapticPlasticity.Instance);
-
-        services.AddSingleton(sp => ResilienceBrain.Instance);
-        services.AddSingleton(sp => SystemHealth.Instance);
 
         services.AddSingleton(sp => ShellEnv.Instance);
         services.AddSingleton(sp => PromptShield.Instance);

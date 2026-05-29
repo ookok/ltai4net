@@ -11,15 +11,13 @@ public sealed class InputGovernor : LayerGovernor
 {
     private static readonly string[] SpinalCommands = { "/help", "/status", "/pause", "/resume", "/restart" };
 
-    private readonly HybridIntentRouter? _hybridRouter;
     private readonly IOptions<LTAIOptions> _options;
 
     public InputGovernor(IChatClient llm, ILogger<InputGovernor> logger,
-        IOptions<LTAIOptions> options, HybridIntentRouter? hybridRouter = null)
+        IOptions<LTAIOptions> options)
         : base("input", llm, logger)
     {
         _options = options;
-        _hybridRouter = hybridRouter;
     }
 
     public override async Task<Handshake> ProcessAsync(Handshake incoming, CancellationToken cancellationToken = default)
@@ -45,15 +43,7 @@ public sealed class InputGovernor : LayerGovernor
         string label;
         string emotion;
 
-        if (_hybridRouter != null)
-        {
-            var intent = await _hybridRouter.ClassifyAsync(query, cancellationToken).ConfigureAwait(false);
-            label = intent.Label;
-            complexity = intent.Complexity;
-            Logger.LogInformation("Hybrid intent: label={Label}, confidence={Conf:F2}, source={Source}",
-                intent.Label, intent.Confidence, intent.Source);
-        }
-        else
+        // HybridIntentRouter removed (Phase 5 simplification)
         {
             (complexity, label) = ClassifyIntent(query);
         }

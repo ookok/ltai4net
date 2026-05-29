@@ -1,13 +1,9 @@
 using LTAI.Tools.CodeEngine;
 using LTAI.Tools.CodeGraph;
-using LTAI.Tools.Crawler;
 using LTAI.Tools.DocEngine;
-using LTAI.Tools.Documents;
 using LTAI.Tools.Evolution;
-using LTAI.Tools.GIS;
 using LTAI.Tools.Integration;
 using LTAI.Tools.Knowledge;
-using LTAI.Tools.Lsp;
 using LTAI.Tools.Pipeline;
 using LTAI.Tools.Reasoning;
 using LTAI.Tools.Review;
@@ -29,17 +25,13 @@ public static class CapabilityServiceCollectionExtensions
     {
         services.AddSingleton<ParserRegistry>();
         services.AddSingleton<MultiLangCodeAnalyzer>();
-        services.AddSingleton<LspServer>();
         services.AddSingleton<UnifiedSearchEngine>();
-        services.AddSingleton<DocumentProcessor>();
-
         services.AddSingleton<MathReasoner>();
         services.AddSingleton<FormalLogicEngine>();
         services.AddSingleton<DialecticalReasoner>();
         services.AddSingleton<AttributionReasoner>();
         services.AddSingleton<ReasoningOrchestrator>();
 
-        services.AddSingleton<UnifiedMapService>();
         services.AddSingleton<CodeReviewEngine>();
 
         services.AddSingleton<TelegramBot>();
@@ -63,8 +55,6 @@ public static class CapabilityServiceCollectionExtensions
 
         services.AddSingleton<CodeGraphEnhanced>(sp =>
             new CodeGraphEnhanced(sp.GetRequiredService<DataPathResolver>()));
-
-        services.AddSingleton<LightCrawler>();
 
         services.AddSingleton<SelfModifier>();
         services.AddSingleton<SelfDiscovery>();
@@ -91,11 +81,6 @@ public static class CapabilityServiceCollectionExtensions
         services.AddSingleton<WXBizMsgCrypt>();
         services.AddSingleton<WeWorkBot>();
         services.AddSingleton<PkgManager>();
-
-        services.AddSingleton<TranslateService>();
-        services.AddSingleton<ImageSearchService>();
-        services.AddSingleton<WeatherService>();
-        services.AddSingleton<SmsGateway>();
 
         return services;
     }

@@ -148,9 +148,10 @@ public sealed class ChatView : UserControl
         // Shift+Enter → insert newline
         if (e.Key == Key.Enter && e.KeyModifiers == KeyModifiers.Shift)
         {
-            var idx = _input.CaretIndex;
-            _input.Text = _input.Text[..idx] + "\n" + _input.Text[idx..];
-            _input.CaretIndex = idx + 1;
+            var idx = _input!.CaretIndex;
+            var text = _input!.Text ?? "";
+            _input!.Text = text[..idx] + "\n" + text[idx..];
+            _input!.CaretIndex = idx + 1;
             e.Handled = true;
             return;
         }
@@ -651,7 +652,10 @@ public sealed class ChatView : UserControl
                 panel.Children.Add(border);
             }
         }
-        catch { }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"ChatView: Failed to render inline image: {ex.Message}");
+        }
     }
 
     private async Task PickFilesAsync()

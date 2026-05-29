@@ -106,7 +106,10 @@ public sealed class ReasoningAgent : BaseAgent
                     Tags = new HashSet<string> { "mcts", $"depth{root.Children.Count}" }
                 });
             }
-            catch { }
+            catch
+            {
+                // Memory store failure is non-fatal — MCTS result is still returned
+            }
         }
 
         return BuildResult(root, root.Children.Sum(c => c.VisitCount));
@@ -196,7 +199,10 @@ public sealed class ReasoningAgent : BaseAgent
             if (!allSimilar)
                 return "\n\n⚠️ Self-consistency check: responses diverged. Confidence may be low.";
         }
-        catch { }
+        catch
+        {
+            // Self-consistency check failure is non-fatal — return empty warning
+        }
         return "";
     }
 

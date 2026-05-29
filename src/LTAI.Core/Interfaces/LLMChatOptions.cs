@@ -9,4 +9,12 @@ public sealed record LLMChatOptions
     public bool EnableCoach { get; init; }
     public bool EnableOnto { get; init; }
     public Dictionary<string, object?>? ExtraParams { get; init; }
+
+    /// <summary>
+    /// Structured output schema as serialized JSON (response_format).
+    /// When set, the provider will constrain its output to match this schema.
+    /// Set via <c>options.WithStructuredOutput(schema)</c> from LTAI.AI or
+    /// directly as <c>options with { StructuredSchemaJson = json }</c>.
+    /// </summary>
+    public string? StructuredSchemaJson { get; init; }
 }

@@ -8,8 +8,7 @@ public sealed class ServiceDispatcher
 {
     private static readonly HashSet<string> _allowedTypeNames = new(StringComparer.OrdinalIgnoreCase)
     {
-        "LTAIToolRegistry", "UnifiedMapService", "MessageGateway", "SmsGateway",
-        "TranslateService", "ImageSearchService", "WeatherService", "AutoUpdater",
+        "LTAIToolRegistry", "MessageGateway",
         "PkgManager", "ModelManager", "ServiceManager", "DaemonManager",
         "ResourceGuard", "Wsl2Manager", "CodeEditTools", "CodeGraphEnhanced",
         "BuildPipeline", "TestHarness", "ApiToolCatalog"

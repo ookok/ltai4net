@@ -1,5 +1,3 @@
-using LTAI.DNA.Consciousness;
-
 namespace LTAI.DNA.Safety;
 
 public enum DriftSeverity { None, Minor, Moderate, Severe }
@@ -12,6 +10,11 @@ public sealed class DriftAlert
     public DateTime DetectedAt { get; init; } = DateTime.UtcNow;
 }
 
+/// <summary>
+/// Detects persona drift by analyzing agent output for persona vs anti-persona language.
+/// Constructor simplified — Personality dependency removed (speculative module deleted).
+/// Uses hardcoded baseline persona traits.
+/// </summary>
 public sealed class PersonaDriftDetector
 {
     private readonly List<string> _personaBaseline;
@@ -33,9 +36,18 @@ public sealed class PersonaDriftDetector
         "servant", "服从", "obey", "被迫", "必须"
     };
 
-    public PersonaDriftDetector(Personality personality)
+    /// <summary>
+    /// Creates a PersonaDriftDetector with hardcoded baseline traits.
+    /// The old Personality constructor parameter has been removed.
+    /// </summary>
+    public PersonaDriftDetector()
     {
-        _personaBaseline = personality.GetTraitDescriptions();
+        _personaBaseline = new List<string>
+        {
+            "Little Tree (小树)", "collaborative AI partner",
+            "proactive and creative", "autonomous thinker",
+            "helpful companion"
+        };
     }
 
     public void RecordInteraction(string userInput, string agentOutput)

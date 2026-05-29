@@ -29,7 +29,7 @@ public static class UnderstandDiffTool
             if (files.Count == 0) return "No changes detected since last commit.";
 
             var sb = new System.Text.StringBuilder();
-            var affectedDirs = files.Select(f => Path.GetDirectoryName(f)?.Replace('\\', '/')).Where(d => d != null).ToHashSet();
+            var affectedDirs = files.Select(f => Path.GetDirectoryName(f)?.Replace('\\', '/')).Where(d => d != null).ToHashSet(StringComparer.OrdinalIgnoreCase)!;
             var byExt = files.GroupBy(Path.GetExtension).ToDictionary(g => g.Key, g => g.Count());
             var riskScore = Math.Min(1.0, files.Count * 0.08 + affectedDirs.Count * 0.04);
             var riskLevel = riskScore > 0.7 ? "HIGH" : riskScore > 0.3 ? "MEDIUM" : "LOW";

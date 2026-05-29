@@ -32,11 +32,11 @@ public sealed class CodeGraphKnowledgeBridge
             _knowledgeGraph.AddEntity(new LTAI.Knowledge.Core.Models.Entity(
                 kgId,
                 node.Name,
-                new Dictionary<string, object?>
+                new Dictionary<string, object>
                 {
-                    ["kind"] = node.Kind,
-                    ["file"] = node.File,
-                    ["line"] = node.Line,
+                    ["kind"] = node.Kind ?? "",
+                    ["file"] = node.File ?? "",
+                    ["line"] = node.Line.ToString(),
                     ["fingerprint"] = node.Fingerprint.ToString()
                 }));
             _syncedNodes++;

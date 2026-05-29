@@ -4,6 +4,7 @@ using System.Text.RegularExpressions;
 using LTAI.Knowledge.Core.Models;
 using LTAI.Knowledge.Vector.Interfaces;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace LTAI.Knowledge.Core;
 
@@ -14,7 +15,6 @@ public class AgenticRAG
     private const int MaxCacheEntries = 200;
 
     private readonly DocumentStore _docStore;
-    private readonly Reranker _reranker;
     private readonly QueryDecomposer _decomposer;
     private readonly RAGCircuitBreaker _circuitBreaker;
     private readonly HybridRecallEngine? _hybridRecall;
@@ -30,12 +30,11 @@ public class AgenticRAG
         @"^(现在几|今天星期|今天是|日期|时间)"
     };
 
-    public AgenticRAG(DocumentStore docStore, Reranker reranker,
+    public AgenticRAG(DocumentStore docStore,
         QueryDecomposer decomposer, ILogger<AgenticRAG>? logger = null,
         HybridRecallEngine? hybridRecall = null)
     {
         _docStore = docStore;
-        _reranker = reranker;
         _decomposer = decomposer;
         _circuitBreaker = new RAGCircuitBreaker();
         _hybridRecall = hybridRecall;
@@ -94,16 +93,18 @@ public class AgenticRAG
 
             if (candidates.Count > 0)
             {
-                var reranked = _reranker.Rerank(candidates, query, 10);
-                var rerankedResults = reranked.RankedDocs.Select(rd =>
+                var reranked = candidates
+                    .OrderByDescending(c => (double)c["score"])
+                    .Take(10)
+                    .ToList();
+                var rerankedResults = reranked.Select(c => new KnowledgeSearchResult
                 {
-                    var doc = _docStore.GetDocument(rd.DocId);
-                    return new KnowledgeSearchResult
-                    {
-                        Id = rd.DocId, Title = doc?.Title ?? rd.Text[..Math.Min(rd.Text.Length, 100)],
-                        Content = rd.Text, Domain = domain,
-                        Score = rd.CombinedScore, Source = "rag_round" + round
-                    };
+                    Id = c["id"]?.ToString() ?? "",
+                    Title = c["text"]?.ToString()?[..Math.Min((c["text"]?.ToString() ?? "").Length, 100)] ?? "",
+                    Content = c["text"]?.ToString() ?? "",
+                    Domain = domain,
+                    Score = Convert.ToDouble(c["score"]),
+                    Source = "rag_round" + round
                 }).ToList();
 
                 double confidence = rerankedResults.Count > 0 ? Math.Min(0.9, rerankedResults.Count / 20.0) : 0.0;

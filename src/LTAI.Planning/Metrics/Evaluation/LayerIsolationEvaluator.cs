@@ -33,12 +33,9 @@ public sealed record IsolationReport
 public sealed class LayerIsolationEvaluator
 {
     private readonly DocumentStore _docStore;
-    private readonly Reranker _reranker;
-
-    public LayerIsolationEvaluator(DocumentStore docStore, Reranker reranker)
+    public LayerIsolationEvaluator(DocumentStore docStore)
     {
         _docStore = docStore;
-        _reranker = reranker;
     }
 
     public IsolationReport Evaluate(string query, string originalDocContent,
@@ -275,8 +272,7 @@ public sealed class LayerIsolationEvaluator
             };
         }
 
-        var reranked = _reranker.Rerank(candidates, query, topK);
-        var rankedTexts = reranked.RankedDocs.Select(r => r.Text).ToList();
+        var rankedTexts = candidates.OrderByDescending(c => (double)c["score"]).Select(c => c["text"]?.ToString() ?? "").ToList();
 
         var expectedFirst = expectedChunks.Count > 0 ? expectedChunks[0][..Math.Min(expectedChunks[0].Length, 20)] : "";
         int firstMatchIndex = -1;

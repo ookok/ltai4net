@@ -160,7 +160,6 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<TemporalCompressor>();
         services.AddSingleton<SignalCleaner>();
         services.AddSingleton<StructMemory>();
-        services.AddSingleton<Reranker>();
         services.AddSingleton<QueryDecomposer>();
         services.AddSingleton<HybridRecallEngine>(sp =>
         {
@@ -168,18 +167,16 @@ public static class ServiceCollectionExtensions
             var vectorStore = sp.GetRequiredService<IVectorStore>();
             var docStore = sp.GetRequiredService<DocumentStore>();
             var kg = sp.GetRequiredService<KnowledgeGraph>();
-            var reranker = sp.GetRequiredService<Reranker>();
             var logger = sp.GetService<ILogger<HybridRecallEngine>>();
-            return new HybridRecallEngine(llm, vectorStore, docStore, kg, reranker, logger);
+            return new HybridRecallEngine(llm, vectorStore, docStore, kg, logger);
         });
         services.AddSingleton<AgenticRAG>(sp =>
         {
             var docStore = sp.GetRequiredService<DocumentStore>();
-            var reranker = sp.GetRequiredService<Reranker>();
             var decomposer = sp.GetRequiredService<QueryDecomposer>();
             var logger = sp.GetService<ILogger<AgenticRAG>>();
             var hybrid = sp.GetService<HybridRecallEngine>();
-            return new AgenticRAG(docStore, reranker, decomposer, logger, hybrid);
+            return new AgenticRAG(docStore, decomposer, logger, hybrid);
         });
         services.AddSingleton<DocumentIngestionPipeline>();
         services.AddSingleton<MemoryFileLoader>();
@@ -218,7 +215,7 @@ public static class ServiceCollectionExtensions
             return new OptionService(loader, defaults, config, logger);
         });
 
-        services.AddSingleton<Bm25Scorer>();
+        // BM25 scorer removed; using FTS5 full-text search
         services.AddSingleton<CompiledTruthStore>(sp =>
         {
             return new CompiledTruthStore(sp.GetRequiredService<DataPathResolver>());
@@ -232,16 +229,7 @@ public static class ServiceCollectionExtensions
             return new SemanticCompactionEngine(chatClient!, structMemory, logger);
         });
 
-        services.AddSingleton<KnowQLQueryService>(sp =>
-        {
-            var artifactStore = sp.GetRequiredService<ArtifactStore>();
-            var provenanceTracker = sp.GetRequiredService<ProvenanceTracker>();
-            var agenticRAG = sp.GetRequiredService<AgenticRAG>();
-            var kg = sp.GetRequiredService<KnowledgeGraph>();
-            var logger = sp.GetService<ILogger<KnowQLQueryService>>();
-            return new KnowQLQueryService(artifactStore,
-                provenanceTracker, agenticRAG, kg, logger);
-        });
+        // KnowQL query service removed; using direct LLM query instead
 
         // Markdown-based knowledge graph (lat.md folder)
         services.AddSingleton(sp =>

@@ -42,7 +42,7 @@ public sealed class CPSProcessingService : ICPSProcessingService
     private readonly GenePool _genePool;
     private readonly SimulatedAnnealer _annealer;
     private readonly GeneToRule _geneToRule;
-    private readonly Func<string, CancellationToken, Task<string>> _l0Invoke;
+    private readonly Func<string, CancellationToken, Task<string>>? _l0Invoke;
     private readonly Func<string, CancellationToken, Task<string>> _l1Invoke;
     private readonly Func<string, CancellationToken, Task<string>> _l2Invoke;
     private readonly ILogger<CPSProcessingService> _logger;
@@ -52,7 +52,6 @@ public sealed class CPSProcessingService : ICPSProcessingService
     private readonly RecursiveCausalAudit? _causalAudit;
     private readonly SemanticAnchor? _semanticAnchor;
     private readonly IMemPiGuidance? _memPi;
-    private readonly IProActCache? _proActCache;
     private int _totalProcessed;
     private long _totalLatencyMs;
     private long _totalTokensEstimated;
@@ -75,8 +74,7 @@ public sealed class CPSProcessingService : ICPSProcessingService
         Func<string, int, float[]>? embedder = null,
         RecursiveCausalAudit? causalAudit = null,
         SemanticAnchor? semanticAnchor = null,
-        IMemPiGuidance? memPi = null,
-        IProActCache? proActCache = null)
+        IMemPiGuidance? memPi = null)
     {
         _paretoRouter = paretoRouter;
         _intentClassifier = intentClassifier;
@@ -93,43 +91,12 @@ public sealed class CPSProcessingService : ICPSProcessingService
         _causalAudit = causalAudit;
         _semanticAnchor = semanticAnchor;
         _memPi = memPi;
-        _proActCache = proActCache;
     }
 
     public async Task<CPSResult> ProcessAsync(string query, CancellationToken ct = default)
     {
         var sw = global::System.Diagnostics.Stopwatch.StartNew();
         Interlocked.Increment(ref _totalProcessed);
-
-        // ProAct: check if query was anticipated — instant response from cache
-        if (_proActCache != null)
-        {
-            var match = _proActCache.TryMatch(query);
-            if (match?.PreComputedResponse != null)
-            {
-                sw.Stop();
-                _logger.LogInformation("CPS[ProAct-HIT] latency={LatMs}ms query='{Query}'",
-                    sw.ElapsedMilliseconds, query[..Math.Min(query.Length, 60)]);
-                return new CPSResult
-                {
-                    Success = true,
-                    Route = "reflex",
-                    Response = match.PreComputedResponse,
-                    Confidence = match.Confidence,
-                    Source = "proact_cache",
-                    LatencyMs = sw.ElapsedMilliseconds,
-                    Metadata = new Dictionary<string, object>
-                    {
-                        ["proact"] = true,
-                        ["proact_confidence"] = match.Confidence,
-                        ["proact_context"] = match.PreRetrievedContext ?? ""
-                    }
-                };
-            }
-        }
-
-        // ProAct: record this interaction for future anticipation
-        _proActCache?.RecordInteraction(query);
 
         // Mem-π guidance: try to generate context-aware hints before routing
         var memPiGuidance = "";

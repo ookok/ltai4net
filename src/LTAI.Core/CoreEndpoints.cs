@@ -1,9 +1,7 @@
 using System.Text.Json;
 using LTAI.Core.Acceleration;
 using LTAI.Core.Governors;
-using LTAI.Core.Life;
 using LTAI.Core.Prefs;
-using LTAI.Core.Resilience;
 using LTAI.Core.System;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -28,117 +26,6 @@ public static class CoreEndpoints
             var (compressed, filter, savedPct) = TokenCompressor.Compress(request.Content);
             return Results.Json(new { compressed, filter, saved_pct = savedPct });
         });
-
-        endpoints.MapPost("/api/core/twin/simulate", async (HttpContext context, CancellationToken ct) =>
-        {
-            using var reader = new StreamReader(context.Request.Body);
-            var body = await reader.ReadToEndAsync(ct).ConfigureAwait(false);
-            var request = JsonSerializer.Deserialize<TwinSimulateRequest>(body);
-            if (request == null)
-                return Results.Json(new { error = "simulation parameters required" }, statusCode: 400);
-            var snapshot = new TwinSnapshot(
-                request.SynapseWeights ?? new Dictionary<string, double>(),
-                new Dictionary<string, string>(),
-                request.PoolHealth,
-                request.EconStats ?? new Dictionary<string, double>(),
-                new Dictionary<string, double>(),
-                DateTime.UtcNow);
-            var result = DigitalTwin.Instance.Simulate(snapshot, request.Hours ?? 24, request.Checkpoints ?? 6);
-            return Results.Json(result);
-        });
-
-        endpoints.MapPost("/api/core/behavior/execute", (HttpContext context) =>
-        {
-            using var reader = new StreamReader(context.Request.Body);
-            var body = reader.ReadToEnd();
-            var request = JsonSerializer.Deserialize<BehaviorExecuteRequest>(body);
-            if (request == null)
-                return Results.Json(new { error = "tree and context required" }, statusCode: 400);
-            var root = BehaviorTreeFactory.BuildAgenticTree(
-                request.TaskSteps ?? new List<string>(),
-                request.FallbackSteps ?? new List<string>(),
-                request.PreChecks ?? new List<string>());
-            var ctx = new TreeContext(
-                request.Context ?? "",
-                new Dictionary<string, string>(),
-                new List<string>(),
-                new List<string>(),
-                new List<string>(),
-                0,
-                10);
-            var status = root.Tick(ctx);
-            return Results.Json(new { status = status.ToString(), history = ctx.History, results = ctx.Results, errors = ctx.Errors });
-        });
-
-        endpoints.MapGet("/api/core/growth", () =>
-            Results.Json(AutonomousGrowth.Instance.Status()));
-
-        endpoints.MapGet("/api/core/plasticity", () =>
-            Results.Json(SynapticPlasticity.Instance.Stats()));
-
-        endpoints.MapGet("/api/core/health", (HttpContext context) =>
-        {
-            var (reportCount, trustCount, overallHealth) = SystemHealth.Instance.Stats();
-            var kernel = context.RequestServices.GetService(typeof(IMicroKernel)) as IMicroKernel;
-            var auditTrail = kernel?.GetAuditTrail(10);
-            var vitals = kernel?.GetVitalSigns();
-            var aggregated = kernel?.GetAggregatedVitals();
-            var snapshots = kernel?.GetSnapshots();
-            return Results.Json(new
-            {
-                report_count = reportCount,
-                trust_profile_count = trustCount,
-                overall_health = overallHealth,
-                microkernel_healthy = kernel?.IsHealthy ?? true,
-                microkernel_vitals = aggregated != null ? new
-                {
-                    aggregated.Primitive,
-                    aggregated.CallCount,
-                    aggregated.SuccessRate,
-                    aggregated.AvgLatencyMs,
-                    aggregated.P50LatencyMs,
-                    aggregated.P95LatencyMs,
-                    aggregated.P99LatencyMs
-                } : null,
-                microkernel_per_primitive = vitals?.Select(v => new
-                {
-                    v.Primitive,
-                    v.CallCount,
-                    v.SuccessCount,
-                    v.FailureCount,
-                    v.SuccessRate,
-                    v.AvgLatencyMs,
-                    v.P50LatencyMs,
-                    v.P95LatencyMs
-                }).ToList(),
-                microkernel_snapshots = snapshots?.Select(s => new
-                {
-                    s.Id, s.Description, s.CapturedAt,
-                    configCount = s.ConfigState.Count,
-                    geneCount = s.ActiveGeneIds.Count
-                }).ToList(),
-                microkernel_audit = auditTrail?.Select(a => new
-                {
-                    a.TraceId, a.Primitive, a.Success, a.ElapsedMs,
-                    a.Summary, a.RiskScore
-                }).ToList()
-            });
-        });
-
-        endpoints.MapPost("/api/core/health/trust", async (HttpContext context, CancellationToken ct) =>
-        {
-            using var reader = new StreamReader(context.Request.Body);
-            var body = await reader.ReadToEndAsync(ct).ConfigureAwait(false);
-            var request = JsonSerializer.Deserialize<TrustRequest>(body);
-            if (request == null || string.IsNullOrWhiteSpace(request.AgentId))
-                return Results.Json(new { error = "agentId required" }, statusCode: 400);
-            SystemHealth.Instance.RecordTrust(request.AgentId, request.Success, request.Latency ?? 0, false);
-            var score = SystemHealth.Instance.GetTrustScore(request.AgentId);
-            return Results.Json(new { agent_id = request.AgentId, trust_score = score });
-        });
-
-        endpoints.MapGet("/api/core/resilience", () =>
-            Results.Json(ResilienceBrain.Instance.Stats()));
 
         endpoints.MapGet("/api/core/shell/tools", () =>
             Results.Json(new { summary = ShellEnv.Instance.ProbeSummary() }));
@@ -229,30 +116,6 @@ public static class CoreEndpoints
 public sealed record CompressRequest
 {
     public string Content { get; init; } = string.Empty;
-}
-
-public sealed record TwinSimulateRequest
-{
-    public Dictionary<string, double>? SynapseWeights { get; init; }
-    public double PoolHealth { get; init; }
-    public Dictionary<string, double>? EconStats { get; init; }
-    public double? Hours { get; init; }
-    public int? Checkpoints { get; init; }
-}
-
-public sealed record BehaviorExecuteRequest
-{
-    public List<string>? TaskSteps { get; init; }
-    public List<string>? FallbackSteps { get; init; }
-    public List<string>? PreChecks { get; init; }
-    public string Context { get; init; } = string.Empty;
-}
-
-public sealed record TrustRequest
-{
-    public string AgentId { get; init; } = string.Empty;
-    public bool Success { get; init; }
-    public double? Latency { get; init; }
 }
 
 public sealed record ShellExecRequest

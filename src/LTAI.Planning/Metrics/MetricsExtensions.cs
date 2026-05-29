@@ -34,8 +34,7 @@ public static class MetricsExtensions
         services.AddSingleton<LayerIsolationEvaluator>(sp =>
         {
             var docStore = sp.GetRequiredService<DocumentStore>();
-            var reranker = sp.GetRequiredService<Reranker>();
-            return new LayerIsolationEvaluator(docStore, reranker);
+            return new LayerIsolationEvaluator(docStore);
         });
 
         return services;

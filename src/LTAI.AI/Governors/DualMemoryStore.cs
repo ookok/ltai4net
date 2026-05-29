@@ -60,7 +60,17 @@ public record ConsolidationConfig
     public bool EnableGatedConsolidation { get; init; } = true;  // 启用门控整合
 }
 
-// ==================== 双记忆系统 ====================
+// ==================== 双记忆系统 (Dual Memory Store) ====================
+// Implements the dual-memory theory of cognition:
+//   - Episodic (Level-0): raw, immutable experience traces
+//   - Abstract (Level-1): consolidated lessons derived from episodes
+// Consolidation uses a quality gate (GatedConsolidation) to avoid
+// premature abstraction from noisy or insufficient data.
+// Implements IKnowledgeStore for unified search across both levels.
+// LiteDB-backed with optional embedding-based retrieval.
+// Callers: LTAI.Agent.Prefetch, LTAI.Knowledge.Core.KnowledgeBase,
+//          LTAI.AI.Governors.LivingTreeSystem.
+// ============================================================================
 
 public sealed class DualMemoryStore : LTAI.Knowledge.Core.IKnowledgeStore, IDisposable
 {
@@ -113,7 +123,10 @@ public sealed class DualMemoryStore : LTAI.Knowledge.Core.IKnowledgeStore, IDisp
     // ==================== 原始记忆操作 (Episodic Store) ====================
 
     /// <summary>
-    /// 存储原始记忆 - 追加不可变
+    /// Store an episodic memory (append-only, immutable after writing).
+    /// Auto-generates embedding vector if IEmbeddingGenerator is configured.
+    /// Thread-safe via lock on LiteDB insert.
+    /// Callers: LTAI.Agent.MAF.AgenticLoop, LTAI.AI.Governors.LivingTreeSystem.
     /// </summary>
     public async Task StoreEpisodeAsync(RawEpisode episode)
     {
@@ -146,7 +159,11 @@ public sealed class DualMemoryStore : LTAI.Knowledge.Core.IKnowledgeStore, IDisp
     }
 
     /// <summary>
-    /// 存储原始记忆 (同步包装器)
+    /// Synchronous wrapper for StoreEpisodeAsync.
+    /// ⚠️ Sync-over-async bridge: uses Task.Run to offload from caller's
+    /// SynchronizationContext, avoiding deadlocks in ASP.NET paths.
+    /// Intended for synchronous callers that cannot be converted to async.
+    /// Callers: Legacy synchronous paths in LTAI.AI.Governors.
     /// </summary>
     public void StoreEpisode(RawEpisode episode)
     {
@@ -167,7 +184,11 @@ public sealed class DualMemoryStore : LTAI.Knowledge.Core.IKnowledgeStore, IDisp
     }
 
     /// <summary>
-    /// 检索相似原始记忆 - 使用向量相似度 (优先) 或 统一评分公式
+    /// Find similar episodes by vector cosine similarity (preferred) or
+    /// unified scoring formula (Jaccard + recency + importance).
+    /// Uses Query().Where() for LiteDB-level domain pre-filtering.
+    /// Optionally re-ranks via TextRetrievalBooster if configured.
+    /// Callers: LTAI.Knowledge.Core.AgenticRAG, LTAI.Agent.Prefetch.
     /// </summary>
     public async Task<List<RawEpisode>> FindSimilarEpisodesAsync(string query, string? domain = null, int limit = 10)
     {
@@ -235,7 +256,9 @@ public sealed class DualMemoryStore : LTAI.Knowledge.Core.IKnowledgeStore, IDisp
     }
 
     /// <summary>
-    /// 同步包装器
+    /// Synchronous wrapper for FindSimilarEpisodesAsync.
+    /// ⚠️ Sync-over-async bridge. Uses Task.Run to prevent deadlocks.
+    /// Callers: Legacy synchronous paths.
     /// </summary>
     public List<RawEpisode> FindSimilarEpisodes(string query, string? domain = null, int limit = 10)
     {
@@ -317,7 +340,14 @@ public sealed class DualMemoryStore : LTAI.Knowledge.Core.IKnowledgeStore, IDisp
     }
 
     /// <summary>
-    /// 计算语义相关性 (可扩展为向量余弦相似度)
+    /// Compute Jaccard similarity between query and episode text.
+    /// Optionally boosts score using TextRetrievalBooster if available.
+    /// ⚠️ Uses async-with-timeout: waits up to 500ms for booster result,
+    /// falls back to pure Jaccard if booster times out/fails.
+    /// This is called from sync paths, so blocking is unavoidable without
+    /// restructuring the caller chain — ConfigureAwait(false) mitigates
+    /// ASP.NET deadlock risk.
+    /// Callers: ComputeTextScore → FindSimilarEpisodesAsync.
     /// </summary>
     private double ComputeSemanticRelevance(string query, RawEpisode episode)
     {
@@ -332,18 +362,21 @@ public sealed class DualMemoryStore : LTAI.Knowledge.Core.IKnowledgeStore, IDisp
         {
             try
             {
-                var boostedTask = _booster.EnhancedTextSimilarityAsync(query, episode.Query);
-                boostedTask.Wait(500);
-                if (boostedTask.IsCompletedSuccessfully)
+                // Use task.Run to avoid deadlock; timeout at 500ms, fallback to Jaccard
+                var boostedTask = Task.Run(() => _booster.EnhancedTextSimilarityAsync(query, episode.Query));
+                if (boostedTask.Wait(500) && boostedTask.IsCompletedSuccessfully)
                     jaccard = Math.Max(jaccard, boostedTask.Result);
             }
-            catch { }
+            catch
+            {
+                // Booster failure is non-fatal — fall back to pure Jaccard score
+            }
         }
 
-        // 领域匹配奖励
+        // Domain match bonus
         var domainBonus = query.Contains(episode.Domain, StringComparison.OrdinalIgnoreCase) ? 0.1 : 0.0;
 
-        // 成功经历奖励
+        // Successful experience bonus
         var successBonus = episode.WasSuccessful ? 0.05 : 0.0;
 
         return Math.Min(1.0, jaccard + domainBonus + successBonus);
@@ -693,34 +726,47 @@ public sealed class DualMemoryStore : LTAI.Knowledge.Core.IKnowledgeStore, IDisp
         catch { /* invalid id */ }
     }
 
+    /// <summary>
+    /// Search raw episodes by domain-prefiltered text match.
+    /// ⚠️ LiteDB doesn't natively support string.Contains in query engine,
+    /// so text filtering is done in-memory. However, domain filter IS pushed
+    /// to LiteDB's query engine to reduce the candidate set from 100K→~domain-size.
+    /// Callers: LTAI.Knowledge.Core.KnowledgeBase, LTAI.Agent.Prefetch.
+    /// </summary>
     public async Task<List<LTAI.Knowledge.Core.Models.KnowledgeSearchResult>> Search(
         string query, int topK = 10, string? domain = null)
     {
-        return await Task.Run(() =>
-        {
-            var results = _episodes.FindAll()
-                .Where(e => domain == null || e.Domain == domain)
-                .Where(e => e.Query.Contains(query, StringComparison.OrdinalIgnoreCase)
-                    || e.FinalAnswer.Contains(query, StringComparison.OrdinalIgnoreCase))
-                .Take(topK)
-                .Select(e => new LTAI.Knowledge.Core.Models.KnowledgeSearchResult
-                {
-                    Id = e.Id.ToString(),
-                    Title = e.Query,
-                    Content = e.FinalAnswer,
-                    Score = e.ImportanceScore / 10.0,
-                    Domain = e.Domain,
-                    Source = "dual_memory"
-                }).ToList();
-            return results;
-        }).ConfigureAwait(false);
+        // Push domain filter to LiteDB engine; text match is LINQ-to-Objects
+        // because LiteDB doesn't support StringComparison in BSON expressions.
+        var queryable = string.IsNullOrEmpty(domain)
+            ? _episodes.Query().ToEnumerable()
+            : _episodes.Query().Where(e => e.Domain == domain).ToEnumerable();
+
+        return queryable
+            .Where(e => e.Query.Contains(query, StringComparison.OrdinalIgnoreCase)
+                     || e.FinalAnswer.Contains(query, StringComparison.OrdinalIgnoreCase))
+            .Take(topK)
+            .Select(e => new LTAI.Knowledge.Core.Models.KnowledgeSearchResult
+            {
+                Id = e.Id.ToString(),
+                Title = e.Query,
+                Content = e.FinalAnswer,
+                Score = e.ImportanceScore / 10.0,
+                Domain = e.Domain,
+                Source = "dual_memory"
+            }).ToList();
     }
 
+    /// <summary>
+    /// Search episodes by keyword match. Iterates via Query() enumerable
+    /// (no full-collection materialization in LiteDB).
+    /// Callers: LTAI.Knowledge.Core.AgenticRAG.
+    /// </summary>
     public List<LTAI.Knowledge.Core.Models.KnowledgeSearchResult> SearchKeyword(
         string[] keywords, bool caseSensitive = false, int topK = 20)
     {
         var comparison = caseSensitive ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
-        return _episodes.FindAll()
+        return _episodes.Query().ToEnumerable()
             .Where(e => keywords.Any(k =>
                 e.Query.Contains(k, comparison) || e.FinalAnswer.Contains(k, comparison)))
             .Take(topK)

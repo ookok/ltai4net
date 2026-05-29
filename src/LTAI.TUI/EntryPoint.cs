@@ -18,7 +18,6 @@ using LTAI.Agent.MAF;
 using LTAI.Knowledge.Memory;
 using LTAI.Knowledge.Vector;
 using LTAI.TUI;
-using LTAI.Core.Configuration;
 using LTAI.Knowledge.Core;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;

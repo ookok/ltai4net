@@ -129,10 +129,14 @@ public sealed class HTNPlanner
             if (subPlan != null)
             {
                 _logger.LogInformation("HTN: Reusing sub-plan {Name} for domain {Domain}", subPlan.Name, domain);
-                subPlan.ParentPlanId = rootId;
-                subPlan.ReuseCount++;
-                subPlan.LastUsedAt = DateTime.UtcNow;
-                root.Children.Add(subPlan);
+                // Use record `with` to avoid mutating the shared plan in _planLibrary (thread safety)
+                var updatedSubPlan = subPlan with
+                {
+                    ParentPlanId = rootId,
+                    ReuseCount = subPlan.ReuseCount + 1,
+                    LastUsedAt = DateTime.UtcNow
+                };
+                root.Children.Add(updatedSubPlan);
             }
             else
             {
@@ -309,14 +313,22 @@ public sealed class HTNPlanner
         {
             if (_planLibrary.TryGetValue(subPlanId, out var subPlan))
             {
-                subPlan.ReuseCount++;
-                subPlan.LastUsedAt = DateTime.UtcNow;
-                root.Children.Add(subPlan);
+                // Use record `with` to avoid mutating the shared plan in _planLibrary (thread safety)
+                var updatedSubPlan = subPlan with
+                {
+                    ReuseCount = subPlan.ReuseCount + 1,
+                    LastUsedAt = DateTime.UtcNow
+                };
+                root.Children.Add(updatedSubPlan);
             }
         }
 
-        template.LastUsedAt = DateTime.UtcNow;
-        template.SuccessCount++;
+        // Use record `with` to avoid mutating the shared template (thread safety)
+        template = template with
+        {
+            LastUsedAt = DateTime.UtcNow,
+            SuccessCount = template.SuccessCount + 1
+        };
         return root;
     }
 

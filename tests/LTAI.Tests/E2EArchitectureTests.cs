@@ -1,6 +1,6 @@
 using LTAI.Agent;
 using LTAI.Models;
-using LTAI.Agent.Routing;
+// Routing deleted — tests to be updated in Phase 10
 using LTAI.Agent.Workflows;
 using LTAI.Core.Configuration;
 using LTAI.DNA.Safety;

@@ -1,5 +1,5 @@
 using System.Diagnostics;
-using LTAI.DNA.Consciousness;
+// Personality removed (speculative DNA module deleted)
 using LTAI.DNA.Safety;
 using LTAI.Models;
 using Microsoft.Agents.AI;
@@ -51,8 +51,7 @@ public sealed class AgentFactory : IAgentFactory
             AgentType.Reasoning => new Agents.ReasoningAgent(card, chatClient, _skillRegistry,
                 loggerFactory.CreateLogger<Agents.ReasoningAgent>()),
             _ => new Agents.ChatAgent(card, chatClient, _skillRegistry,
-                loggerFactory.CreateLogger<Agents.ChatAgent>(),
-                _sp.GetService<Personality>())
+                loggerFactory.CreateLogger<Agents.ChatAgent>())
         };
 
         agent = ApplyUnifiedSafety(agent, card);

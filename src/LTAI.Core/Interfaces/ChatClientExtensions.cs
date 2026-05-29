@@ -16,11 +16,20 @@ public static class ChatClientExtensions
 
     public static ChatOptions ToChatOptions(this LLMChatOptions llmOptions)
     {
-        return new ChatOptions
+        var options = new ChatOptions
         {
             ModelId = llmOptions.Model,
             Temperature = llmOptions.Temperature,
             MaxOutputTokens = llmOptions.MaxTokens,
         };
+
+        // Forward structured output schema if set
+        if (!string.IsNullOrEmpty(llmOptions.StructuredSchemaJson))
+        {
+            options.AdditionalProperties = [];
+            options.AdditionalProperties["structured_schema"] = llmOptions.StructuredSchemaJson;
+        }
+
+        return options;
     }
 }

@@ -30,6 +30,17 @@ public sealed class GateVerdict
         new() { Action = GateAction.BlockWithRedaction, Reason = reason };
 }
 
+/// <summary>
+/// Centralized safety gate for all LLM inputs/outputs/tool calls.
+/// Three-layer defense:
+///   1. Encoded injection detection (base64, hex, unicode)
+///   2. Keyword injection scoring (Chinese + English patterns)
+///   3. Policy evaluation via PolicyAsCode + SafetyCoordinator
+/// Session-based strike system: 1st violation = warn, 2nd = 1min freeze, 3rd = 5min freeze.
+/// Thread-safe: uses ConcurrentDictionary for sessions, lock per-session for risk history.
+/// Callers: LTAI.Agent.MAF.MAFMiddleware, LTAI.Web.SseAgentEndpoints,
+///          LTAI.MCP.MCPServer.
+/// </summary>
 public sealed class UnifiedSafetyGate
 {
     private readonly ILogger<UnifiedSafetyGate> _logger;

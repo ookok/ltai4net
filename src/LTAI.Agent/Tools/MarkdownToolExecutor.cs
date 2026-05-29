@@ -311,7 +311,7 @@ public sealed class MarkdownToolExecutor
 
         var stepArgs = BuildStepArgs(step, globalArgs, prevResults);
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        cts.CancelAfter(TimeSpan.FromSeconds(Math.Min(timeoutSec, resolved.TimeoutSec)));
+        cts.CancelAfter(TimeSpan.FromSeconds(Math.Min(timeoutSec, resolved!.TimeoutSec)));
 
         var task = ExecuteAsync(resolved, stepArgs);
         var completed = await Task.WhenAny(task, Task.Delay(TimeSpan.FromSeconds(timeoutSec), CancellationToken.None))

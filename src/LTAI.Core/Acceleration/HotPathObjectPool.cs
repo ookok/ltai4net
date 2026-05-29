@@ -64,6 +64,14 @@ public sealed class PooledJsonDocument : IDisposable
     }
 }
 
+/// <summary>
+/// Object pool for hot-path JSON parsing and buffer reuse.
+/// Reduces GC pressure by pooling byte buffers (10K/64K/256K slabs),
+/// StringBuilder instances, and PooledJsonDocument wrappers.
+/// Thread-safe via ConcurrentBag — no locks on hot path.
+/// Callers: LTAI.Core.Acceleration.MemoryOptimizer, LTAI.AI.Providers.
+/// Singleton via Instance property.
+/// </summary>
 public sealed class HotPathObjectPool
 {
     private const int Size10K = 10 * 1024;

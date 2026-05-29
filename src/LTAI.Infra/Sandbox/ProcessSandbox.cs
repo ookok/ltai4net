@@ -55,7 +55,8 @@ public sealed class ProcessSandbox : ISandbox
 
             if (!string.IsNullOrEmpty(request.Stdin))
             {
-                await process.StandardInput.WriteAsync(request.Stdin).ConfigureAwait(false);
+                await process.StandardInput.WriteAsync(request.Stdin.AsMemory(), cancellationToken).ConfigureAwait(false);
+                await process.StandardInput.FlushAsync(cancellationToken).ConfigureAwait(false);
                 process.StandardInput.Close();
             }
 
@@ -81,11 +82,9 @@ public sealed class ProcessSandbox : ISandbox
             sw.Stop();
             Cleanup(tempFile);
 
-            var memKb = 0L;
-            if (!process.HasExited)
-            {
-                try { memKb = process.PeakWorkingSet64 / 1024; } catch { }
-            }
+            // PeakWorkingSet64 throws if process has exited. try-catch handles the race.
+            long memKb = 0;
+            try { memKb = process.PeakWorkingSet64 / 1024; } catch { }
 
             return new SandboxResult
             {
