@@ -54,25 +54,21 @@ public sealed class CliConfig
     {
         var dir = Path.GetDirectoryName(ConfigPath)!;
         Directory.CreateDirectory(dir);
-        // 手动序列化以绕过 JsonSerializerIsReflectionEnabledByDefault=false
-        var json = $$"""
-{
-  "installPath": "{{EscapeJson(InstallPath)}}",
-  "workspaceRoot": "{{EscapeJson(WorkspaceRoot)}}",
-  "releaseChannel": "{{EscapeJson(ReleaseChannel)}}",
-  "l0Endpoint": "{{EscapeJson(L0Endpoint)}}",
-  "l1ApiKey": "{{EscapeJson(L1ApiKey)}}",
-  "l2Endpoint": "{{EscapeJson(L2Endpoint)}}",
-  "l2ApiKey": "{{EscapeJson(L2ApiKey)}}",
-  "sandboxRoot": "{{EscapeJson(SandboxRoot)}}",
-  "lastUpdateCheck": "{{LastUpdateCheck:O}}"
-}
-""";
-        File.WriteAllText(ConfigPath, json);
+        using var stream = File.Create(ConfigPath);
+        using var writer = new Utf8JsonWriter(stream, new JsonWriterOptions { Indented = true });
+        writer.WriteStartObject();
+        writer.WriteString("installPath", InstallPath);
+        writer.WriteString("workspaceRoot", WorkspaceRoot);
+        writer.WriteString("releaseChannel", ReleaseChannel);
+        writer.WriteString("l0Endpoint", L0Endpoint);
+        writer.WriteString("l1ApiKey", L1ApiKey);
+        writer.WriteString("l2Endpoint", L2Endpoint);
+        writer.WriteString("l2ApiKey", L2ApiKey);
+        writer.WriteString("sandboxRoot", SandboxRoot);
+        writer.WriteString("lastUpdateCheck", LastUpdateCheck.ToString("O"));
+        writer.WriteEndObject();
+        writer.Flush();
     }
-
-    private static string EscapeJson(string? s) =>
-        (s ?? "").Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\n", "\\n").Replace("\r", "\\r").Replace("\t", "\\t");
 
     public void SetEnv()
     {

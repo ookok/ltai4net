@@ -31,7 +31,7 @@
     <ProjectReference Include="..\LTAI.Web\LTAI.Web.csproj" />
     <ProjectReference Include="..\LTAI.TUI\LTAI.TUI.csproj" />
     <ProjectReference Include="..\LTAI.MCP\LTAI.MCP.csproj" />
-    <ProjectReference Include="..\LTAI.WebApp\LTAI.WebApp.csproj" />
+    <!-- WebApp reference removed: not needed at compile time. Add back if CLI needs Blazor types. -->
   </ItemGroup>
 
   <ItemGroup>

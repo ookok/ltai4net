@@ -100,9 +100,9 @@ public sealed class QueryPreprocessingService
 
         var ai = _options.Value.AI;
         var unconfigured = new List<string>();
-        if (!ai.L0.IsConfigured) unconfigured.Add("L0 (Embedding)");
-        if (!ai.L1.IsConfigured) unconfigured.Add("L1 (Fast Model)");
-        if (!ai.L2.IsConfigured) unconfigured.Add("L2 (Deep Model)");
+        if (!ai.GetLayerConfig("embedding").IsConfigured) unconfigured.Add("Embedding");
+        if (!ai.GetLayerConfig("fast").IsConfigured) unconfigured.Add("Fast Model");
+        if (!ai.GetLayerConfig("deep").IsConfigured) unconfigured.Add("Deep Model");
         if (unconfigured.Count > 0)
         {
             return result with
@@ -184,8 +184,8 @@ public sealed class QueryPreprocessingService
             _logger.LogWarning(ex, "L0 intent classification failed, falling back to 'deep'");
         }
 
-        var defaultModel = _options.Value.AI.L2.Model;
-        var flashModel = _options.Value.AI.L1.Model;
+        var defaultModel = _options.Value.AI.GetLayerConfig("deep").Model;
+        var flashModel = _options.Value.AI.GetLayerConfig("fast").Model;
         var model = label switch { "fast" or "reflex" => flashModel, "deep" => defaultModel, _ => defaultModel };
 
         var budgetRatio = budgetRouter.BudgetRatio;
@@ -356,7 +356,7 @@ public sealed class QueryPreprocessingService
         try
         {
             var prompt = $"用户的提问比较模糊：\"{query}\"\n\n请生成2-3个可能的澄清问题，帮助用户明确意图。每行一个问题，以数字开头。";
-            var response = await _llm.GetResponseAsync(prompt, new ChatOptions { ModelId = _options.Value.AI.L1.Model, Temperature = 0.3f, MaxOutputTokens = 200 }, ct).ConfigureAwait(false);
+            var response = await _llm.GetResponseAsync(prompt, new ChatOptions { ModelId = _options.Value.AI.GetLayerConfig("fast").Model, Temperature = 0.3f, MaxOutputTokens = 200 }, ct).ConfigureAwait(false);
             var text = response.Text;
             return !string.IsNullOrWhiteSpace(text) && text.Length > 10 ? text : null;
         }

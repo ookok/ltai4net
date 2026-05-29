@@ -81,6 +81,9 @@ public sealed class CodeGraphEnhanced : IDisposable
     {
         using var cmd = _db.CreateCommand();
         cmd.CommandText = """
+            PRAGMA journal_mode=WAL;
+            PRAGMA synchronous=NORMAL;
+            PRAGMA cache_size=-8000;
             CREATE TABLE IF NOT EXISTS nodes (
                 id TEXT PRIMARY KEY, name TEXT, file TEXT, kind TEXT, line INTEGER,
                 end_line INTEGER, parent_class TEXT, route TEXT, source_code TEXT, complexity REAL, fingerprint INTEGER);

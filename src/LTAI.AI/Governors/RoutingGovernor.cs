@@ -24,25 +24,16 @@ public sealed class RoutingGovernor : LayerGovernor
         string model;
         float temperature;
 
-        if (label == "reflex")
-        {
-            return Task.FromResult(new Handshake
-            {
-                From = LayerName,
-                Action = "provider_selected",
-                Payload = new Dictionary<string, object?> { ["provider"] = "none" }
-            });
-        }
-
+        // L0/reflex has been merged into L1 fast — only fast and deep remain
         if (label == "fast")
         {
-            var l1 = aiConfig.L1;
+            var l1 = aiConfig.GetLayerConfig("fast");
             model = l1.Model;
             temperature = l1.Temperature ?? aiConfig.DefaultTemperature;
         }
         else
         {
-            var l2 = aiConfig.L2;
+            var l2 = aiConfig.GetLayerConfig("deep");
             model = l2.Model;
             temperature = l2.Temperature ?? aiConfig.DefaultTemperature;
         }

@@ -34,13 +34,12 @@ public sealed class StructureAwareRouter
     ///   3. Return best cluster + tier recommendation
     public (MoEExpert expert, HrmReasoningTier tier, float affinityScore) Route(string query)
     {
-        var network = _loraManager.GetNetwork(HrmReasoningTier.FastThink)
-            ?? _loraManager.GetNetwork(HrmReasoningTier.DeepThink);
+        var network = _loraManager.GetNetwork(HrmReasoningTier.Fast);
 
         if (network is null)
         {
             _logger.LogDebug("No LoRA network available, defaulting to General");
-            return (MoEExpert.General, HrmReasoningTier.FastThink, 0.5f);
+            return (MoEExpert.General, HrmReasoningTier.Fast, 0.5f);
         }
 
         // Encode query as feature vector (same encoding used by the network)
@@ -73,15 +72,15 @@ public sealed class StructureAwareRouter
         if (bestScore < 0.3f)
         {
             _logger.LogDebug("Structural affinity too low ({Score:F2}), falling back to MoE keyword routing", bestScore);
-            return (MoEExpert.General, HrmReasoningTier.FastThink, bestScore);
+            return (MoEExpert.General, HrmReasoningTier.Fast, bestScore);
         }
 
         var tier = bestExpert switch
         {
-            MoEExpert.Code => HrmReasoningTier.DeepThink,
-            MoEExpert.Math => HrmReasoningTier.DeepThink,
-            MoEExpert.Reasoning => HrmReasoningTier.FullReason,
-            _ => HrmReasoningTier.FastThink
+            MoEExpert.Code => HrmReasoningTier.Deep,
+            MoEExpert.Math => HrmReasoningTier.Deep,
+            MoEExpert.Reasoning => HrmReasoningTier.Deep,
+            _ => HrmReasoningTier.Fast
         };
 
         _logger.LogDebug("Structure route: {Expert} tier={Tier} affinity={Score:F3}",

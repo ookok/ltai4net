@@ -238,7 +238,8 @@ public sealed class SkillRegistry
         var l3Uses = int.TryParse(OptionService.Get("suggestion_l3_uses"), out var v3) ? v3 : 50;
         var l3Rate = float.TryParse(OptionService.Get("suggestion_l3_rate"), out var r3) ? r3 : 0.85f;
 
-        if (totalUses < l1Uses) return SkillLayer.L0;
+        // L0 has been removed — new skills start at L1
+        if (totalUses < l1Uses) return SkillLayer.L1;
         if (totalUses < l2Uses) return SkillLayer.L1;
         if (successRate >= l3Rate && totalUses >= l3Uses) return SkillLayer.L3;
         if (successRate >= l2Rate && totalUses >= l2Uses) return SkillLayer.L2;
@@ -251,7 +252,7 @@ public sealed class SkillRegistry
         ["domains"] = _byDomain.Count,
         ["by_layer"] = new Dictionary<string, int>
         {
-            ["L0"] = GetByLayer(SkillLayer.L0).Count,
+            // L0 fully removed
             ["L1"] = GetByLayer(SkillLayer.L1).Count,
             ["L2"] = GetByLayer(SkillLayer.L2).Count,
             ["L3"] = GetByLayer(SkillLayer.L3).Count,

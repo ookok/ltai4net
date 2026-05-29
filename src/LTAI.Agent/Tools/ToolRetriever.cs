@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Text.Json;
 using LTAI.Knowledge.Vector.Interfaces;
 using LTAI.Tools.Tools;
 using Microsoft.Extensions.Logging;
@@ -17,6 +18,9 @@ public sealed class ToolRetriever
     private readonly ILogger<ToolRetriever> _logger;
     private readonly Dictionary<string, (ToolDef Tool, float[] Embedding)> _toolIndex = new();
     private readonly ConcurrentDictionary<string, (int Successes, int Failures)> _feedback = new();
+    private static readonly string FeedbackPath = Path.Combine(
+        OptionService.Get("LTAI_WORKSPACE") ?? Environment.CurrentDirectory,
+        OptionService.Get("paths.DataDirectory") ?? ".livingtree", "meta", "tool_feedback.json");
     private bool _initialized;
 
     private static readonly string[] CoreTools =
@@ -34,22 +38,27 @@ public sealed class ToolRetriever
     {
         if (_initialized) return;
 
-        foreach (var tool in LTAIToolRegistry.AllTools.Where(t => t.Handler != null))
+        var tools = LTAIToolRegistry.AllTools.Where(t => t.Handler != null).ToList();
+        var descriptions = tools.Select(t => $"{t.Name}: {t.Description}").ToList();
+
+        // Batch-embed all tool descriptions in a single backend call
+        var embeddings = await _vectorStore.EmbedBatchAsync(descriptions, ct).ConfigureAwait(false);
+
+        for (int i = 0; i < tools.Count && i < embeddings.Length; i++)
         {
             try
             {
-                var desc = $"{tool.Name}: {tool.Description}";
-                var emb = await _vectorStore.EmbedAsync(desc, ct).ConfigureAwait(false);
-                _toolIndex[tool.Name] = (tool, emb);
+                _toolIndex[tools[i].Name] = (tools[i], embeddings[i]);
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "ToolRetriever: failed to index {Tool}", tool.Name);
+                _logger.LogWarning(ex, "ToolRetriever: failed to index {Tool}", tools[i].Name);
             }
         }
 
+        LoadFeedback();
         _initialized = true;
-        _logger.LogInformation("ToolRetriever: indexed {Count} tools", _toolIndex.Count);
+        _logger.LogInformation("ToolRetriever: indexed {Count} tools, {FbCount} feedback entries", _toolIndex.Count, _feedback.Count);
     }
 
     public async Task<IReadOnlyList<ToolDefResult>> RetrieveToolsAsync(
@@ -111,6 +120,32 @@ public sealed class ToolRetriever
         _feedback.AddOrUpdate(toolName,
             _ => success ? (1, 0) : (0, 1),
             (_, v) => success ? (v.Successes + 1, v.Failures) : (v.Successes, v.Failures + 1));
+        SaveFeedback();
+    }
+
+    private void LoadFeedback()
+    {
+        try
+        {
+            if (!File.Exists(FeedbackPath)) return;
+            var json = File.ReadAllText(FeedbackPath);
+            var data = JsonSerializer.Deserialize<Dictionary<string, int[]>>(json);
+            if (data == null) return;
+            foreach (var kv in data)
+                _feedback[kv.Key] = (kv.Value[0], kv.Value[1]);
+        }
+        catch { /* best-effort: start fresh */ }
+    }
+
+    private void SaveFeedback()
+    {
+        try
+        {
+            var data = _feedback.ToDictionary(kv => kv.Key, kv => new[] { kv.Value.Successes, kv.Value.Failures });
+            // Use AsyncDisk for non-blocking batched write instead of synchronous File.WriteAllText
+            LTAI.Core.System.AsyncDisk.Instance.WriteJson(FeedbackPath, data);
+        }
+        catch { /* best-effort: feedback loss acceptable */ }
     }
 
     private static float CosineSimilarity(float[] a, float[] b)

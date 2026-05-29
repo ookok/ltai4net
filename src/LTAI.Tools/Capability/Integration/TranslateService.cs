@@ -15,7 +15,7 @@ public sealed class TranslateConfig
 
 public sealed class TranslateService : IDisposable
 {
-    private static readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(15) };
+    private static readonly HttpClient _http = LTAI.Core.System.SharedHttpClient.Instance;
     private readonly ILogger<TranslateService> _logger;
     public TranslateConfig Config { get; set; } = new();
 

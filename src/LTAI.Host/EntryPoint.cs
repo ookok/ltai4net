@@ -51,7 +51,7 @@ public static class EntryPoint
         {
             FirstRunDetector.PrintDiagnostics(status);
             Console.WriteLine("检测到未配置，启动配置向导...");
-            await new InteractiveSetupWizard(configPath).RunAsync().ConfigureAwait(false);
+            // InteractiveSetupWizard removed
         }
 
         builder.Configuration.AddJsonFile(configPath, optional: false, reloadOnChange: true);
@@ -93,7 +93,7 @@ public static class EntryPoint
         builder.Services.AddLTAICore();
         builder.Services.AddLTAIAgent();
 
-        var l0 = ltaiOptions.AI.L0;
+        var l0 = ltaiOptions.AI.GetLayerConfig("embedding");
         var l0ProviderConfig = ltaiOptions.AI.Providers.TryGetValue(l0.Provider, out var l0p) ? l0p : null;
         var l0ApiKey = l0ProviderConfig?.ApiKey ?? "";
         if (string.IsNullOrEmpty(l0ApiKey))
@@ -107,7 +107,7 @@ public static class EntryPoint
         builder.Services.AddLTAIDocument(); builder.Services.AddLTAIDNA(); builder.Services.AddLTAIMemory();
         builder.Services.AddLTAITreeLLM(); builder.Services.AddLTAIExecution(); builder.Services.AddLTAICapability();
         builder.Services.AddLTAIEconomy(); builder.Services.AddLTAISandbox(); builder.Services.AddLTAIMetrics();
-        builder.Services.AddLTAIMultimodal(); builder.Services.AddLTAIMAF();
+        builder.Services.AddLTAIMAF();
         builder.Services.AddLTAINetwork();
 
         builder.Services.AddOpenTelemetry()
@@ -128,7 +128,8 @@ public static class EntryPoint
         var logger = sp.GetRequiredService<ILogger<Program>>();
 
         logger.LogInformation("LTAI Agent Mesh starting on {Port}", ltaiOptions.Web.Port);
-        logger.LogInformation("L1={L1} L2={L2} L0={L0}", ltaiOptions.AI.L1.Model, ltaiOptions.AI.L2.Model, ltaiOptions.AI.L0.Model);
+        logger.LogInformation("Fast={Fast} Deep={Deep} Embed={Embed}",
+            ltaiOptions.AI.GetLayerConfig("fast").Model, ltaiOptions.AI.GetLayerConfig("deep").Model, ltaiOptions.AI.GetLayerConfig("embedding").Model);
         logger.LogInformation("ONNX training: {Enabled}", ltaiOptions.AI.OnnxEnabled ? "enabled" : "disabled");
 
         var token = OptionService.Get("A2A_BEARER_TOKEN") ?? "";

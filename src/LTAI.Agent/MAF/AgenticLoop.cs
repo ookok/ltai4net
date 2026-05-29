@@ -37,6 +37,7 @@ public sealed class AgenticLoop : IAsyncDisposable
     private readonly PartAssembler _assembler;
     private readonly Action<Part> _onPartAppendedHandler;
     private readonly Action<Part> _onPartUpdatedHandler;
+    private readonly StructMemory? _structMemory;
     private readonly string _workspaceRoot;
     private readonly string _projectLanguage;
     private readonly string _sessionId;
@@ -62,6 +63,7 @@ public sealed class AgenticLoop : IAsyncDisposable
         DebugLoop? debugLoop = null,
         AgenticLoopConfig? config = null,
         Core.System.AuditLogService? auditLog = null,
+        StructMemory? structMemory = null,
         ILogger<AgenticLoop>? logger = null)
     {
         _lts = lts;
@@ -73,6 +75,7 @@ public sealed class AgenticLoop : IAsyncDisposable
         _kernel = kernel;
         _projectSpec = projectSpecProvider;
         _repairPipeline = repairPipeline;
+        _structMemory = structMemory;
         _cacheCtx = cacheContext;
         _backpressure = backpressure;
         _debugLoop = debugLoop;
@@ -108,6 +111,7 @@ public sealed class AgenticLoop : IAsyncDisposable
     public async Task<AgenticLoopResult> RunAsync(string task, CancellationToken ct = default)
     {
         var sw = Stopwatch.StartNew();
+        var deadline = DateTime.UtcNow + _config.MaxTotalDuration;
         _iterationCount = 0;
         History.Clear();
 
@@ -138,6 +142,8 @@ public sealed class AgenticLoop : IAsyncDisposable
         while (_iterationCount < _config.MaxIterations)
         {
             ct.ThrowIfCancellationRequested();
+            if (DateTime.UtcNow > deadline)
+                throw new TimeoutException($"AgenticLoop exceeded total duration of {_config.MaxTotalDuration}");
             _iterationCount++;
 
             var step = await ExecuteOneIteration(context, ct).ConfigureAwait(false);
@@ -521,14 +527,28 @@ public sealed class AgenticLoop : IAsyncDisposable
             step.Observation ??= obs;
 
             // Cache-First: compress large tool results before logging (Reasonix Pillar 3)
+            string toolResult;
             if (_cacheCtx != null && step.Observation != null && step.Observation.Length > 3000)
             {
                 var compressed = CompressToolResult(step.Observation);
                 _cacheCtx.AppendToLog("tool", compressed, action);
+                toolResult = compressed;
             }
             else
             {
-                _cacheCtx?.AppendToLog("tool", step.Observation ?? obs, action);
+                toolResult = step.Observation ?? obs;
+                _cacheCtx?.AppendToLog("tool", toolResult, action);
+            }
+
+            // Persist tool result to StructMemory so it enters vectors.db and
+            // becomes retrievable in future sessions (closes the memory loop).
+            if (_structMemory != null && step.Action != null && !string.IsNullOrEmpty(toolResult))
+            {
+                var toolId = Guid.NewGuid().ToString("N")[..12];
+                _ = _structMemory.BindEvents(_sessionId, new()
+                {
+                    new() { ["role"] = "tool", ["content"] = $"[{step.Action}]\n{toolResult}" }
+                }, toolId).ConfigureAwait(false);
             }
 
             if (context.State["build_ok"] == "true" && action == "done")

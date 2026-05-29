@@ -25,7 +25,6 @@ public static class Program
     {
         var services = BuildServices();
         var provider = services.BuildServiceProvider();
-        ServiceLocator.SetProvider(provider);
 
         var toolRegistry = provider.GetRequiredService<AIToolRegistry>();
         Task.Run(() => toolRegistry.RegisterAllToolCategoriesAsync()).GetAwaiter().GetResult();
@@ -33,6 +32,10 @@ public static class Program
 
         var lts = provider.GetRequiredService<ILivingTreeSystem>();
         Task.Run(() => lts.InitializeAsync()).GetAwaiter().GetResult();
+
+        // Store LTAIService on App for view access (Avalonia creates MainWindow,
+        // so we can't inject it via constructor DI directly)
+        App.Ltais = provider.GetRequiredService<LTAIService>();
 
         BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
     }
@@ -68,7 +71,7 @@ public static class Program
         services.AddSingleton(Options.Create(ltaiOptions));
         services.AddLogging(b => b.SetMinimumLevel(LogLevel.Information));
         services.AddLTAICore();
-        services.AddLTAIVectorAuto(apiModel: ltaiOptions.AI.L0.Model);
+        services.AddLTAIVectorAuto(apiModel: ltaiOptions.AI.GetLayerConfig("embedding").Model);
         services.AddLTAIAI();
         services.AddLTAIDNA();
         services.AddLTAIMetrics();
@@ -77,13 +80,6 @@ public static class Program
 
         return services;
     }
-}
-
-public sealed class ServiceLocator
-{
-    private static IServiceProvider? _provider;
-    public static void SetProvider(IServiceProvider p) => _provider = p;
-    public static T Get<T>() where T : notnull => _provider!.GetRequiredService<T>();
 }
 
 public sealed class LTAIService

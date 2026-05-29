@@ -22,12 +22,13 @@ public static class WebApplicationExtensions
         app.MapDocRoutesEndpoints();
         app.MapCognitionStreamEndpoints();
         app.MapWorkspaceEndpoints();
-        app.MapCellGraphEndpoints();
+        // app.MapCellGraphEndpoints() removed — CellAI types deleted
         app.MapCoreEndpoints();
         app.MapProviderConfigApi();
         app.MapFeedbackEndpoints();
         app.MapToolDashboardEndpoints();
         app.MapParliamentEndpoints();
+        app.MapKnowledgeGraphEndpoints();
         app.MapPlanningInnovationEndpoints();
         app.MapInnovationEndpoints();
         app.MapV7StatusEndpoints();

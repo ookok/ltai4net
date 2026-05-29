@@ -30,7 +30,8 @@ public static class EntryPoint
         {
             FirstRunDetector.PrintDiagnostics(status);
             Console.WriteLine("检测到未配置，启动配置向导...");
-            await new InteractiveSetupWizard(configPath).RunAsync().ConfigureAwait(false);
+            // InteractiveSetupWizard removed — configure provider manually
+            Console.WriteLine("Configuration: set LTAI.AI.provider in appsettings.json");
         }
 
         var builder = WebApplication.CreateBuilder(args);
@@ -55,7 +56,7 @@ public static class EntryPoint
         }
 
         builder.Services.AddLTAICore();
-        builder.Services.AddLTAIVectorAuto(apiModel: ltaiOptions.AI.L0.Model);
+        builder.Services.AddLTAIVectorAuto(apiModel: ltaiOptions.AI.GetLayerConfig("embedding").Model);
         builder.Services.AddLTAIAI();
         builder.Services.AddLTAIDNA();
         builder.Services.AddLTAIMemory();

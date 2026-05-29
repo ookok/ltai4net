@@ -46,6 +46,9 @@ public sealed class UnifiedBrainStore : IDisposable
     {
         using var cmd = _conn.CreateCommand();
         cmd.CommandText = """
+            PRAGMA journal_mode=WAL;
+            PRAGMA synchronous=NORMAL;
+            PRAGMA cache_size=-8000;
             CREATE TABLE IF NOT EXISTS documents (
                 id TEXT NOT NULL UNIQUE,
                 title TEXT NOT NULL,

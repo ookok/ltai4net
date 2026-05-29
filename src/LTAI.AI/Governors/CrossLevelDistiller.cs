@@ -28,7 +28,7 @@ public record CrossLevelDistillResult
 
 /// Cross-level knowledge distillation for HRM.
 /// Two directions:
-///   L2 → L1: Full model (teacher) distills reasoning into LoRA (student)
+///   L2 → L1: Deep model (teacher) distills reasoning into L1 LoRA (student)
 ///   L1 → L2: Fast LoRA judgment enriches L2 prompt with tier context
 public sealed class CrossLevelDistiller
 {
@@ -55,7 +55,7 @@ public sealed class CrossLevelDistiller
     public async Task<CrossLevelDistillResult> DistillL2ToL1Async(
         IChatClient l2Client,
         List<TrainingSample> samples,
-        HrmReasoningTier targetTier = HrmReasoningTier.FastThink,
+        HrmReasoningTier targetTier = HrmReasoningTier.Fast,
         CancellationToken ct = default)
     {
         var studentNetwork = _loraManager.GetNetwork(targetTier);
@@ -63,7 +63,7 @@ public sealed class CrossLevelDistiller
         {
             return new CrossLevelDistillResult
             {
-                SourceTier = HrmReasoningTier.FullReason,
+                SourceTier = HrmReasoningTier.Deep,
                 TargetTier = targetTier,
                 Success = false
             };
@@ -111,7 +111,7 @@ public sealed class CrossLevelDistiller
                     {
                         Query = sample.Text[..Math.Min(sample.Text.Length, 100)],
                         Complexity = teacherDecision.Complexity,
-                        SourceTier = HrmReasoningTier.FullReason,
+                        SourceTier = HrmReasoningTier.Deep,
                         TargetTier = targetTier,
                         TeacherResponse = teacherText[..Math.Min(teacherText.Length, 200)],
                         StudentPrediction = studentLabel,
@@ -130,7 +130,7 @@ public sealed class CrossLevelDistiller
         {
             return new CrossLevelDistillResult
             {
-                SourceTier = HrmReasoningTier.FullReason,
+                SourceTier = HrmReasoningTier.Deep,
                 TargetTier = targetTier, SamplesUsed = distillationData.Count, Success = false
             };
         }
@@ -155,7 +155,7 @@ public sealed class CrossLevelDistiller
 
         return new CrossLevelDistillResult
         {
-            SourceTier = HrmReasoningTier.FullReason,
+            SourceTier = HrmReasoningTier.Deep,
             TargetTier = targetTier,
             SamplesUsed = distillationData.Count,
             AvgKLDistance = avgKL,
@@ -172,8 +172,8 @@ public sealed class CrossLevelDistiller
         CancellationToken ct = default)
     {
         var decision = _depthController.Decide(originalQuery);
-        var fastNetwork = _loraManager.GetNetwork(HrmReasoningTier.FastThink);
-        var deepNetwork = _loraManager.GetNetwork(HrmReasoningTier.DeepThink);
+        var fastNetwork = _loraManager.GetNetwork(HrmReasoningTier.Fast);
+        var deepNetwork = _loraManager.GetNetwork(HrmReasoningTier.Fast);
 
         var contextParts = new List<string>
         {
@@ -187,7 +187,7 @@ public sealed class CrossLevelDistiller
             try
             {
                 var (idx, conf) = fastNetwork.Predict(originalQuery);
-                contextParts.Add($"L1-FastThink: intent={_loraManager.GetNetwork(HrmReasoningTier.FastThink)
+                contextParts.Add($"L1-Fast: intent={_loraManager.GetNetwork(HrmReasoningTier.Fast)
                     ?.MapClassLabel(idx) ?? "unknown"} (conf={conf:F2})");
             }
             catch { }
@@ -199,7 +199,7 @@ public sealed class CrossLevelDistiller
             try
             {
                 var (idx, conf) = deepNetwork.Predict(originalQuery);
-                contextParts.Add($"L1-DeepThink: intent={_loraManager.GetNetwork(HrmReasoningTier.DeepThink)
+                contextParts.Add($"L1-Deep: intent={_loraManager.GetNetwork(HrmReasoningTier.Fast)
                     ?.MapClassLabel(idx) ?? "unknown"} (conf={conf:F2})");
             }
             catch { }
@@ -216,7 +216,7 @@ public sealed class CrossLevelDistiller
         var enhancedPrompt = string.Join("\n", contextParts) + $"\n\n--- Original Query ---\n{originalQuery}";
 
         // If L2 needs to reason, return enhanced; otherwise just pass through
-        if (decision.Tier < HrmReasoningTier.FullReason)
+        if (decision.Tier == HrmReasoningTier.Fast)
         {
             _logger.LogDebug("L1→L2: Tier={Tier} does not need L2, skipping prompt enhancement", decision.Tier);
             return originalQuery;
@@ -277,18 +277,15 @@ public sealed class CrossLevelDistiller
     {
         return tier switch
         {
-            HrmReasoningTier.Reflex => 0,
-            HrmReasoningTier.FastThink => 0,
-            HrmReasoningTier.DeepThink => 1,
-            HrmReasoningTier.FullReason => 4,
-            HrmReasoningTier.Escalate => 4,
+            HrmReasoningTier.Fast => 0,
+            HrmReasoningTier.Deep => 4,
             _ => 3
         };
     }
 
     private static string MapIndexToLabel(int idx)
     {
-        return idx switch { 0 => "fast", 1 => "deep", 2 => "code", 3 => "chat", 4 => "reasoning", _ => "chat" };
+        return idx switch { 0 => "fast", 1 => "deep", 2 => "code", 3 => "chat", 4 => "deep", _ => "chat" };
     }
 
     private void TrimLog()

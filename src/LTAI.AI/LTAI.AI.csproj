@@ -9,6 +9,11 @@
     <ProjectReference Include="..\LTAI.Economy\LTAI.Economy.csproj" />
   </ItemGroup>
 
+  <!-- Dead-code archive: files with no DI registration and no consumers -->
+  <ItemGroup>
+    <Compile Remove="Governors/_Archive/**" />
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.AI" Version="10.6.0" />
     <PackageReference Include="Microsoft.Extensions.AI.OpenAI" Version="10.6.0" />

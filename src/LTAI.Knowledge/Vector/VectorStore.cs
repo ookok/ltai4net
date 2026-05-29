@@ -99,6 +99,38 @@ public sealed class VectorStore : IVectorStore, IDisposable
         return result;
     }
 
+    /// <summary>Batch-embed multiple texts in one backend call (far faster than N sequential calls when N &gt; 3).</summary>
+    public async Task<float[][]> EmbedBatchAsync(IReadOnlyList<string> texts, CancellationToken ct = default)
+    {
+        if (texts.Count == 0) return [];
+        if (texts.Count == 1) return [await EmbedAsync(texts[0], ct).ConfigureAwait(false)];
+
+        var uncached = new List<(int Index, string Text)>();
+        var results = new float[texts.Count][];
+
+        for (int i = 0; i < texts.Count; i++)
+        {
+            var key = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(texts[i])))[..20];
+            if (_embeddingCache.TryGetValue(key, out var cached))
+                results[i] = cached;
+            else
+                uncached.Add((i, texts[i]));
+        }
+
+        if (uncached.Count == 0) return results;
+
+        var batch = await _embeddingBackend.EmbedAsync(uncached.Select(u => u.Text).ToList(), ct).ConfigureAwait(false);
+        for (int j = 0; j < uncached.Count && j < batch.Length; j++)
+        {
+            var (idx, text) = uncached[j];
+            results[idx] = batch[j];
+            var key = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text)))[..20];
+            if (_embeddingCache.Count < MaxEmbeddingCache)
+                _embeddingCache[key] = batch[j];
+        }
+        return results;
+    }
+
     public Task AddVectorsAsync(
         IReadOnlyList<(string Id, float[] Vector)> items,
         CancellationToken cancellationToken = default)

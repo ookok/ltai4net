@@ -64,6 +64,7 @@ public static class MAFServiceCollectionExtensions
         services.AddSingleton<DecisionLog>();
         services.AddSingleton<PluginRegistry>();
         services.AddSingleton<AgenticLoop>();
+        services.AddSingleton<DocumentStyleLearner>();
         services.AddSingleton<SystemPromptAssembler>(sp =>
         {
             var sr = sp.GetService<SkillRegistry>();

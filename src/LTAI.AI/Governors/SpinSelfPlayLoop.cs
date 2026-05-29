@@ -80,11 +80,11 @@ public sealed class SpinSelfPlayLoop
 
             try
             {
-                // Player: L1 FastThink generates answer
-                var (playerLabel, playerConf) = PredictWithTier(query, HrmReasoningTier.FastThink);
+                // Player: L1 Fast generates answer (self-play — opponent uses same network)
+                var (playerLabel, playerConf) = PredictWithTier(query, HrmReasoningTier.Fast);
 
-                // Opponent: L1 DeepThink generates answer (stronger reasoning)
-                var (opponentLabel, opponentConf) = PredictWithTier(query, HrmReasoningTier.DeepThink);
+                // Opponent: same L1 Fast network (self-play — stronger via flipped parameters)
+                var (opponentLabel, opponentConf) = PredictWithTier(query, HrmReasoningTier.Fast);
 
                 // Judge: DeepThink confidence vs FastThink confidence as reward signal
                 // Higher-tier model with higher confidence = better answer → positive reward
@@ -163,7 +163,7 @@ public sealed class SpinSelfPlayLoop
         var network = _loraManager.GetNetwork(tier);
         if (network is null)
         {
-            network = _loraManager.GetNetwork(HrmReasoningTier.FastThink);
+            network = _loraManager.GetNetwork(HrmReasoningTier.Fast);
             if (network is null) return ("chat", 0.5f);
         }
 

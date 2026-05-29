@@ -15,7 +15,7 @@ L4  Evolution      — GenePool (mutation/crossover), ArchitectLoop, SemanticDif
 L3  Cognitive      — ParetoRouter (multi-obj routing), RecursiveCausalAudit
 L2  Runtime        — CoordinationScheduler, GitWorktreeManager, NicheIsolation
 L1  I/O Layer      — SkillSystem ↔ MicroKernel bridge, MemoryGraph, KnowledgeBase
-L0  MicroKernel    — 11 primitives + CapToken (HMAC-signed capability security)
+L0  MicroKernel    — 13 primitives (8 core + 5 evolution) + CapToken (HMAC-signed capability security)
 ```
 Layer contract: upper calls lower (L4→L0), lower never knows upper, peer layers communicate via `CoordinationScheduler` events.
 
@@ -51,7 +51,6 @@ docker-compose up
 - **Four-pillar .md system**: tools, prompts, skills, and memory share `.md` loader; `MdToolBridge` wraps .md tools with C# fallback
 
 ## Watch out for
-- **Dockerfile** references stale project names (LTAI.Vector, LTAI.MAF, LTAI.Browser) — `COPY` steps will fail
 - `models/`, `dist/`, `*.meta.json` are gitignored — never committed
 - `Directory.Build.props` requires `IsExeProject` / `IsTestProject` flags on exe/test .csproj, or output lands in `dist/lib/`
 - `tools/` directory is the primary extensibility surface, not C# code

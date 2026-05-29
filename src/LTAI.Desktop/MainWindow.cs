@@ -27,7 +27,7 @@ public partial class MainWindow : Window
     private readonly List<ViewEntry> _views;
     private int _activeIndex = 1;
 
-    public MainWindow()
+    public MainWindow(LTAIService svc)
     {
         Title = "LTAI V0.56 — Production Hardening";
         Width = 1280;
@@ -38,26 +38,12 @@ public partial class MainWindow : Window
         if (File.Exists(iconPath))
             Icon = new WindowIcon(iconPath);
 
-        var svc = ServiceLocator.Get<LTAIService>();
-
         _views = new List<ViewEntry>
         {
-            new("Dashboard",       "1", new DashboardView(svc)),
-            new("Chat",            "2", new ChatView(svc)),
-            new("LLM Config",      "3", new LLMConfigView(svc)),
-            new("Pipeline",        "4", new PipelineView(svc)),
-            new("Session",         "5", new SessionView(svc)),
-            new("Diagnostics",     "6", new DiagnosticsView(svc)),
-            new("Skill Workshop",  "7", new SkillWorkshopView(svc)),
-            new("Prompt Lab",      "8", new PromptLabView(svc)),
-            new("Task DAG",        "9", new TaskDagView(svc)),
-            new("KG Explorer",     "0", new KnowledgeGraphExplorer(svc)),
-            new("EIA Workbench",   "E", new EiaWorkbenchView(svc)),
-            new("DNA Evolution",   "D", new DnaEvolutionView(svc)),
-            new("Skill Evolution", "V", new SkillEvolutionView(svc)),
-            new("Dream Replay",    "W", new DreamReplayView(svc)),
-            new("Parliament",      "J", new ParliamentView(svc)),
-            new("Evolution Timeline", "O", new EvolutionTimelineView(svc)),
+            new("Dashboard", "1", new DashboardView(svc)),
+            new("Chat",      "2", new ChatView(svc)),
+            new("Code",      "3", new ChatView(svc)),
+            new("Config",    "4", new ChatView(svc)),
         };
 
         _buttonStack = new StackPanel { Spacing = 2, Margin = new(4) };

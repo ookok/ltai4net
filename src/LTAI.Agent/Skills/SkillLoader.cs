@@ -101,8 +101,8 @@ public sealed class SkillLoader
                             case "layer":
                                 skill = skill with { Layer = value.ToLowerInvariant() switch
                                 {
-                                    "0" or "l0" => SkillLayer.L0,
-                                    "1" or "l1" => SkillLayer.L1,
+                                    // L0 has been fully removed — layer:0 maps directly to L1
+                                    "0" or "l0" or "1" or "l1" => SkillLayer.L1,
                                     "2" or "l2" => SkillLayer.L2,
                                     "3" or "l3" => SkillLayer.L3,
                                     "4" or "l4" => SkillLayer.L4,

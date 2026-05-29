@@ -18,6 +18,21 @@ public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddLTAIVector(this IServiceCollection services)
     {
+        // Try to use the system's configured LLM provider for embedding (same API key).
+        // Only fall back to hash-based local embedding if no API provider is configured.
+        try
+        {
+            var sp = services.BuildServiceProvider();
+            var options = sp.GetService<Microsoft.Extensions.Options.IOptions<LTAIOptions>>();
+            var provider = options?.Value?.AI?.Providers?.Values?.FirstOrDefault(p => !string.IsNullOrEmpty(p.ApiKey));
+            if (provider != null && !string.IsNullOrEmpty(provider.Endpoint) && !string.IsNullOrEmpty(provider.ApiKey))
+            {
+                return AddLTAIVectorWithL0(services, provider.Endpoint, provider.ApiKey,
+                    provider.Model ?? "BAAI/bge-large-zh-v1.5", 1024);
+            }
+        }
+        catch { /* fall back to local hash embedding */ }
+
         return AddLTAIVectorLocal(services);
     }
 
@@ -72,22 +87,7 @@ public static class ServiceCollectionExtensions
     {
         // Auto-detect Jina: if the L0 model starts with "jina-", use the Jina backend.
         // This is the config-driven approach: just set l0.model in appsettings.json.
-        if (allowJina && !string.IsNullOrEmpty(apiModel) && apiModel.StartsWith("jina-", StringComparison.OrdinalIgnoreCase))
-        {
-            var variant = apiModel.Contains("nano", StringComparison.OrdinalIgnoreCase)
-                ? JinaModelVariant.OmniNano
-                : JinaModelVariant.OmniSmall;
-            return AddLTAIVectorWithJina(services, variant);
-        }
-
-        // Allow explicit Jina model override
-        if (allowJina && !string.IsNullOrEmpty(jinaModel))
-        {
-            var variant = jinaModel.Contains("nano", StringComparison.OrdinalIgnoreCase)
-                ? JinaModelVariant.OmniNano
-                : JinaModelVariant.OmniSmall;
-            return AddLTAIVectorWithJina(services, variant);
-        }
+        // Jina local models removed — skip to API embedding fallback
         if (!string.IsNullOrEmpty(apiEndpoint) && !string.IsNullOrEmpty(apiKey))
         {
             return AddLTAIVectorWithL0(services, apiEndpoint, apiKey, apiModel, apiDimension);
@@ -104,48 +104,8 @@ public static class ServiceCollectionExtensions
     /// Downloads the model from HuggingFace if not cached locally.
     /// Supports jina-embeddings-v5-omni-small (768-dim) and jina-embeddings-v5-omni-nano (512-dim).
     /// </summary>
-    public static IServiceCollection AddLTAIVectorWithJina(
-        this IServiceCollection services,
-        JinaModelVariant variant = JinaModelVariant.OmniSmall,
-        string? cacheDir = null)
-    {
-        var preset = JinaModelPresets.GetPreset(variant);
-        cacheDir ??= Path.Combine(OptionService.Get("paths.livingtree") ?? Path.Combine(AppContext.BaseDirectory, ".livingtree"), "models", "embedding");
-        var modelDir = Path.Combine(cacheDir, "jina", preset.ModelName);
-
-        JinaEmbeddingConfig config;
-        if (!File.Exists(Path.Combine(modelDir, "model.onnx")))
-        {
-            config = Task.Run(() => JinaModelDownloader.DownloadModelAsync(cacheDir, variant)).GetAwaiter().GetResult();
-        }
-        else
-        {
-            config = new JinaEmbeddingConfig
-            {
-                ModelName = preset.ModelName,
-                Dimension = preset.Dimension,
-                HuggingFaceRepo = preset.HuggingFaceRepo,
-                OnnxModelPath = Path.Combine(modelDir, "model.onnx"),
-                OnnxTokenizerPath = Path.Combine(modelDir, "tokenizer.json")
-            };
-        }
-
-        services.AddSingleton<JinaEmbeddingConfig>(config);
-        services.AddSingleton<IEmbeddingBackend>(sp =>
-        {
-#pragma warning disable CS0618
-            var logger = sp.GetService<ILogger<JinaEmbeddingBackend>>();
-            var backend = new JinaEmbeddingBackend(config, logger);
-            Task.Run(() => backend.InitializeAsync()).GetAwaiter().GetResult();
-            return backend;
-        });
-#pragma warning restore CS0618
-
-        services.AddSingleton<IEmbeddingGenerator<string, Embedding<float>>>(sp =>
-            CreateWrappedGenerator(sp, sp.GetRequiredService<IEmbeddingBackend>()));
-
-        return services;
-    }
+    // AddLTAIVectorWithJina removed — ONNX/Jina local models deleted (2025-05)
+    // JinaEmbeddingBackend, OnnxEmbeddingBackend, and JinaModelPresets have all been removed.
 
     private static IServiceCollection AddLTAIVectorInternal(
         IServiceCollection services,
@@ -156,33 +116,9 @@ public static class ServiceCollectionExtensions
         int? dimension = null,
         string? onnxModelPath = null)
     {
+        // ONNX embedding removed — only API-based embedding is supported
         switch (embeddingType.ToLowerInvariant())
         {
-            case "onnx":
-                services.AddSingleton<IEmbeddingBackend>(sp =>
-                {
-                    var config = new OnnxEmbeddingConfig
-                    {
-                        ModelPath = onnxModelPath!,
-                        TokenizerPath = null,
-                        Dimension = dimension ?? 384,
-                        ModelName = model ?? "onnx-embedding"
-                    };
-                    var backend = new OnnxEmbeddingBackend(config, sp.GetRequiredService<ILogger<OnnxEmbeddingBackend>>());
-                    
-                    // 异步初始化 (Fire and Forget with logging)
-                    _ = backend.InitializeAsync().ContinueWith(t =>
-                    {
-                        if (t.IsFaulted)
-                        {
-                            sp.GetRequiredService<ILogger<OnnxEmbeddingBackend>>().LogError(t.Exception, "ONNX Embedding init failed");
-                        }
-                    });
-
-                    return backend;
-                });
-                break;
-
             case "api":
                 services.AddSingleton<IEmbeddingBackend>(sp =>
 #pragma warning disable CS0618
@@ -214,6 +150,12 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<MultiDocFusion>();
 
         services.AddSingleton<KnowledgeBase>();
+        services.AddSingleton<KnowledgeGraph>(sp =>
+        {
+            var logger = sp.GetRequiredService<ILogger<KnowledgeGraph>>();
+            var dataPath = sp.GetService<DataPathResolver>();
+            return new KnowledgeGraph(logger, dataPath);
+        });
         services.AddSingleton<RelationEngine>();
         services.AddSingleton<TemporalCompressor>();
         services.AddSingleton<SignalCleaner>();

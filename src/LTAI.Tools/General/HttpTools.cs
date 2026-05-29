@@ -1,14 +1,14 @@
 using System.ComponentModel;
 using System.Net.Http.Json;
+using LTAI.Core.System;
 
 namespace LTAI.Tools.General;
 
 public static class HttpTools
 {
-    private static readonly HttpClient _client = new()
-    {
-        Timeout = TimeSpan.FromSeconds(30)
-    };
+    // Use process-wide shared HttpClient instead of a private one,
+    // enabling connection pooling across all tool categories.
+    private static readonly HttpClient _client = SharedHttpClient.Instance;
 
     [Description("Fetches content from a URL")]
     public static async Task<string> FetchAsync(

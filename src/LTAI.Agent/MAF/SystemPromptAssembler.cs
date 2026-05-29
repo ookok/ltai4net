@@ -81,7 +81,7 @@ public sealed class SystemPromptAssembler
             $"Workspace Root: {ctx.WorkspaceRoot}",
             $"Current Directory: {ctx.CurrentDir ?? ctx.WorkspaceRoot}",
             $"Platform: {ctx.Platform ?? Environment.OSVersion.Platform.ToString().ToLowerInvariant()}",
-            $"Date: {ctx.Date ?? DateTime.Now.ToString("yyyy-MM-dd")}",
+            $"Date: {ctx.Date ?? DateTime.Now.ToString("yyyy-MM-dd (dddd)")}",
         };
 
         if (!string.IsNullOrEmpty(ctx.Shell))
@@ -131,8 +131,7 @@ public sealed class SystemPromptAssembler
             {
                 var layerName = kv.Key switch
                 {
-                    SkillLayer.L0 => "L0 Atomic",
-                    SkillLayer.L1 => "L1 Task",
+                    SkillLayer.L1 => "L1 Atomic & Task",
                     SkillLayer.L2 => "L2 Workflow",
                     SkillLayer.L3 => "L3 Domain",
                     SkillLayer.L4 => "L4 Meta",

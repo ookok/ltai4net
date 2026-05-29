@@ -63,6 +63,9 @@ public sealed class CompiledTruthStore : IDisposable
     {
         using var cmd = _conn.CreateCommand();
         cmd.CommandText = """
+            PRAGMA journal_mode=WAL;
+            PRAGMA synchronous=NORMAL;
+            PRAGMA cache_size=-8000;
             CREATE TABLE IF NOT EXISTS compiled_pages (
                 page_id TEXT NOT NULL UNIQUE,
                 entity_type TEXT NOT NULL DEFAULT 'concept',

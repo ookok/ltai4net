@@ -37,8 +37,8 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
     private readonly LTAI.AI.Providers.PrefixCacheStore? _prefixCache;
     private readonly TaskPipeline _taskPipeline = new(null!);
 
-    private string DefaultModel => _options.Value.AI.L2.Model;
-    private string FlashModel => _options.Value.AI.L1.Model;
+    private string DefaultModel => _options.Value.AI.GetLayerConfig("deep").Model;
+    private string FlashModel => _options.Value.AI.GetLayerConfig("fast").Model;
 
     public SystemGuardian Guardian => _gov.Guardian;
     public SystemMode Mode => _gov.Guardian.Mode;
@@ -102,6 +102,7 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
     // ========================================================================
     public async Task<string> ChatAsync(string query, CancellationToken cancellationToken = default)
     {
+        using var activity = LTAI.Core.Telemetry.LTAIDiagnostics.StartRequest("ChatAsync", query);
         var entry = _journal.Add(query);
 
         try
@@ -129,7 +130,15 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
                 }
             }
 
-            if (_cpsProcessor != null)
+            // Realtime-sensitive queries (date/time/weather/news) must bypass CPS fast path
+            var needsRealtime = query.Contains("今天") || query.Contains("星期") ||
+                query.Contains("date", StringComparison.OrdinalIgnoreCase) ||
+                query.Contains("time", StringComparison.OrdinalIgnoreCase) ||
+                query.Contains("weather", StringComparison.OrdinalIgnoreCase) ||
+                query.Contains("news", StringComparison.OrdinalIgnoreCase) ||
+                query.Contains("now", StringComparison.OrdinalIgnoreCase);
+
+            if (_cpsProcessor != null && !needsRealtime)
             {
                 _logger.LogTrace("[CPS-Chat] Routing via CPS");
                 var cpsResult = await _cpsProcessor.ProcessAsync(query, cancellationToken).ConfigureAwait(false);
@@ -139,8 +148,31 @@ public sealed class LivingTreeSystem : ILivingTreeSystem, IAsyncDisposable
                     _logger.LogInformation("[CPS-Chat] Fast path (confidence={Confidence})", cpsResult.Confidence);
                     return cpsResult.Response;
                 }
-                _logger.LogDebug("[CPS-Chat] Low confidence ({Confidence}), falling to L2 direct",
+                _logger.LogDebug("[CPS-Chat] Low confidence ({Confidence}), falling to tools path",
                     cpsResult.Confidence);
+            }
+
+            // Sync path: try ReAct loop with tools (not just raw L2)
+            if (_reActOrchestrator != null)
+            {
+                var sb = new System.Text.StringBuilder();
+                await foreach (var chunk in _reActOrchestrator.RunReActLoopAsync(
+                    query, DefaultModel, "deep", "", null, false, null, null, null,
+                    new MetaCognitiveAssessment
+                    {
+                        Familiarity = 0.5f, Novelty = 0.4f, Certainty = 0.4f,
+                        ShouldDelegate = true, DelegationReason = "sync ChatAsync fallback"
+                    }, false, 0, 1.0f, cancellationToken))
+                {
+                    sb.Append(chunk);
+                }
+                var reactResponse = sb.ToString();
+                if (!string.IsNullOrWhiteSpace(reactResponse))
+                {
+                    _journal.Complete(entry, $"react:{reactResponse.Length}chars");
+                    _workQueue.Enqueue(async ct => { try { await SilentSelfCheckAsync(reactResponse); } catch { } }, "SilentSelfCheck");
+                    return reactResponse;
+                }
             }
 
             var response = await ProcessTypedAsync(GovernorInput.Create(query), cancellationToken).ConfigureAwait(false);

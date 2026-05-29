@@ -84,18 +84,18 @@ public sealed partial class ThreeModelIntelligence
 
     public void ConfigureL0Embedding(LTAI.Core.Configuration.IProviderRegistry registry, LTAI.Core.Configuration.AIConfig aiConfig)
     {
-        var l0 = aiConfig.L0;
-        if (!l0.IsConfigured) return;
+        var embed = aiConfig.GetLayerConfig("embedding");
+        if (!embed.IsConfigured) return;
 
-        if (aiConfig.Providers.TryGetValue(l0.Provider, out var configured))
+        if (aiConfig.Providers.TryGetValue(embed.Provider, out var configured))
         {
 #pragma warning disable CS0618
-            _embeddingBackend = new APIEmbeddingBackend(null, configured.Endpoint, configured.ApiKey, l0.Model);
+            _embeddingBackend = new APIEmbeddingBackend(null, configured.Endpoint, configured.ApiKey, embed.Model);
 #pragma warning restore CS0618
             return;
         }
 
-        var config = registry.ResolveConfig(l0.Provider, l0.Model);
+        var config = registry.ResolveConfig(embed.Provider, embed.Model);
         if (config != null)
 #pragma warning disable CS0618
             _embeddingBackend = new APIEmbeddingBackend(null, config.Endpoint, config.ApiKey, config.Model);

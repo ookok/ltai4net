@@ -18,10 +18,8 @@ public record TieredTrainingResult
 
 /// Manages tier-specific LoRA networks for HRM (Hierarchical Reasoning Model).
 /// Each reasoning tier gets its own IntentClassifierNetwork with appropriate rank:
-///   Reflex: no network (hash-based cache)
-///   FastThink: rank-4 LoRA, 256→128→64→N
-///   DeepThink: rank-8 LoRA, same arch
-///   FullReason: no LoRA (uses L2 cloud model)
+///   Fast: rank-8 LoRA, 256→128→64→N (covers all L1 queries; merges previous FastThink+DeepThink)
+///   Deep: no LoRA (uses L2 cloud model)
 public sealed class TieredLoraManager
 {
     private readonly Dictionary<HrmReasoningTier, IntentClassifierNetwork> _networks = new();
@@ -33,13 +31,12 @@ public sealed class TieredLoraManager
     public static readonly string[] DefaultLabels = { "fast", "deep", "code", "chat", "reasoning" };
 
     // Tier-specific configs
+    // L0/Reflex/Escalate removed — only Fast (L1) and Deep (L2) remain.
+    // Fast uses rank-8 (merged previous FastThink rank-4 + DeepThink rank-8).
     private static readonly Dictionary<HrmReasoningTier, (int rank, bool enabled)> TierConfig = new()
     {
-        [HrmReasoningTier.Reflex]     = (0, false),
-        [HrmReasoningTier.FastThink]  = (4, true),
-        [HrmReasoningTier.DeepThink]  = (8, true),
-        [HrmReasoningTier.FullReason] = (0, false),
-        [HrmReasoningTier.Escalate]   = (0, false)
+        [HrmReasoningTier.Fast] = (8, true),
+        [HrmReasoningTier.Deep] = (0, false)
     };
 
     public TieredLoraManager(

@@ -67,7 +67,7 @@ public sealed class InputGovernor : LayerGovernor
         {
             try
             {
-                var flashModel = _options.Value.AI.L1.Model;
+                var flashModel = _options.Value.AI.GetLayerConfig("fast").Model;
                 var prompt = $"从以下查询中提取核心实体名称。规则：1) 如果查询包含特定的人名、公司名、地名、产品名、概念名等实体，返回实体名称；否则返回空。2) 去掉“公司”、“有限”、“集团”、“科技”等通用后缀，只保留核心名称。3) 只返回实体本身，不要解释。\n查询: {query}";
                 var response = await LLM.GetResponseAsync(prompt,
                     new ChatOptions { ModelId = flashModel, Temperature = 0.1f, MaxOutputTokens = 100 },

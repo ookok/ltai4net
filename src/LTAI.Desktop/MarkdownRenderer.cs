@@ -9,10 +9,39 @@ public static class MarkdownRenderer
     public static InlineCollection Render(string text, InlineCollection inlines)
     {
         var lines = text.Split('\n');
+        var inTable = false;
+        var orderedCounter = 0;
+
         for (int li = 0; li < lines.Length; li++)
         {
             var line = lines[li];
             if (li > 0) inlines.Add(new LineBreak());
+
+            // Tables: detect |---| separator or |...| data rows
+            if (line.TrimStart().StartsWith('|') && line.TrimEnd().EndsWith('|'))
+            {
+                // Skip separator rows like |---|---|
+                if (System.Text.RegularExpressions.Regex.IsMatch(line, @"^\|[\s\-:]+\|"))
+                {
+                    inTable = true;
+                    continue;
+                }
+                inTable = true;
+                // Render table row as monospace with column separators in accent color
+                var cells = line.Split('|', StringSplitOptions.RemoveEmptyEntries);
+                inlines.Add(Run("  ", LtaiTheme.TextSecondary));
+                foreach (var cell in cells)
+                {
+                    inlines.Add(Run(cell.Trim(), LtaiTheme.TextPrimary, style: FontStyle.Italic));
+                    inlines.Add(Run(" │ ", LtaiTheme.AccentDNA)); // box-drawing vertical bar
+                }
+                continue;
+            }
+            else if (inTable)
+            {
+                inTable = false;
+                orderedCounter = 0;
+            }
 
             if (line.StartsWith("### "))
                 inlines.Add(Run(line[4..], LtaiTheme.TextPrimary, weight: FontWeight.Bold, fontSize: 15));
@@ -31,7 +60,21 @@ public static class MarkdownRenderer
             else if (line.StartsWith("```"))
                 inlines.Add(Run(line, LtaiTheme.TextDim, style: FontStyle.Italic));
             else
-                RenderInline(line, inlines);
+            {
+                // Ordered list: detect "N. " at line start
+                var olMatch = System.Text.RegularExpressions.Regex.Match(line, @"^(\d+)\.\s");
+                if (olMatch.Success && int.TryParse(olMatch.Groups[1].Value, out var num))
+                {
+                    orderedCounter = num;
+                    inlines.Add(Run($"  {num}. ", LtaiTheme.AccentDNA));
+                    RenderInline(line[olMatch.Length..], inlines);
+                }
+                else
+                {
+                    orderedCounter = 0;
+                    RenderInline(line, inlines);
+                }
+            }
         }
         return inlines;
     }

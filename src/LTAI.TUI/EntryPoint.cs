@@ -35,10 +35,7 @@ public static class EntryPoint
         Console.InputEncoding = Encoding.UTF8;
         Console.TreatControlCAsInput = true;
 
-        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-        {
-            try { ConsoleFont.SetMapleMono(); } catch { }
-        }
+        // ConsoleFont removed — TUI simplified
 
         Console.Title = "LTAI Dev Console";
 
@@ -48,7 +45,8 @@ public static class EntryPoint
         {
             FirstRunDetector.PrintDiagnostics(status);
             Console.WriteLine("检测到未配置，启动配置向导...");
-            await new InteractiveSetupWizard(configPath).RunAsync();
+            // InteractiveSetupWizard removed — configure provider manually
+            Console.WriteLine("Configuration: set LTAI.AI.provider in appsettings.json");
         }
 
         var services = new ServiceCollection();
@@ -74,7 +72,7 @@ public static class EntryPoint
 
         services.AddSingleton(Options.Create(ltaiOptions));
         services.AddLTAICore();
-        services.AddLTAIVectorAuto(apiModel: ltaiOptions.AI.L0.Model);
+        services.AddLTAIVectorAuto(apiModel: ltaiOptions.AI.GetLayerConfig("embedding").Model);
         services.AddLTAIAI();
         services.AddLTAIMemory();
         services.AddLTAIDNA();
@@ -106,9 +104,9 @@ public static class EntryPoint
         var paretoRouter = sp.GetService<LTAI.Core.Governors.ParetoRouter>();
         var kernel = sp.GetService<LTAI.Core.Governors.IMicroKernel>();
 
-        var app = new TuiApp(lts, dna, reasoning, analyzer, options, svc, modelMgr, agenticLoop,
-            knowledgeGraph: kg, skillRegistry: skillRegistry,
-            cps: cps, scheduler: scheduler, paretoRouter: paretoRouter, kernel: kernel);
+        var llmConfig = new LLMConfigPanel(options);
+        var app = new TuiApp(lts, analyzer, llmConfig, options, agenticLoop,
+            skillRegistry: skillRegistry, projectRoot: AppContext.BaseDirectory);
         await app.RunAsync();
     }
 }

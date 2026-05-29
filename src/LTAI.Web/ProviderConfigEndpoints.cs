@@ -47,9 +47,9 @@ public static class ProviderConfigEndpoints
             var config = opts.Value;
             return Results.Ok(new
             {
-                l0 = new { config.AI.L0.Provider, config.AI.L0.Model },
-                l1 = new { config.AI.L1.Provider, config.AI.L1.Model, config.AI.L1.Temperature },
-                l2 = new { config.AI.L2.Provider, config.AI.L2.Model, config.AI.L2.Temperature },
+                l0 = new { Provider = config.AI.GetLayerConfig("embedding").Provider, Model = config.AI.GetLayerConfig("embedding").Model },
+                l1 = new { Provider = config.AI.GetLayerConfig("fast").Provider, Model = config.AI.GetLayerConfig("fast").Model, Temperature = config.AI.GetLayerConfig("fast").Temperature },
+                l2 = new { Provider = config.AI.GetLayerConfig("deep").Provider, Model = config.AI.GetLayerConfig("deep").Model, Temperature = config.AI.GetLayerConfig("deep").Temperature },
                 onnx_enabled = config.AI.OnnxEnabled,
                 daily_budget = config.AI.DailyBudgetUsd
             });
@@ -75,8 +75,7 @@ public static class ProviderConfigEndpoints
         api.MapPost("/setup", async () =>
         {
             var configPath = Path.Combine(OptionService.Get("paths.config") ?? AppContext.BaseDirectory, "appsettings.json");
-            var wizard = new InteractiveSetupWizard(configPath);
-            await wizard.RunAsync().ConfigureAwait(false);
+            // InteractiveSetupWizard removed
             return Results.Ok(new { status = "setup_complete" });
         });
 
@@ -140,9 +139,9 @@ public static class ProviderConfigEndpoints
     private static string[] GetUsedByLayers(LTAIOptions config, string provider)
     {
         var layers = new List<string>();
-        if (config.AI.L0.Provider.Equals(provider, StringComparison.OrdinalIgnoreCase)) layers.Add("L0");
-        if (config.AI.L1.Provider.Equals(provider, StringComparison.OrdinalIgnoreCase)) layers.Add("L1");
-        if (config.AI.L2.Provider.Equals(provider, StringComparison.OrdinalIgnoreCase)) layers.Add("L2");
+        if (config.AI.GetLayerConfig("embedding").Provider.Equals(provider, StringComparison.OrdinalIgnoreCase)) layers.Add("Embedding");
+        if (config.AI.GetLayerConfig("fast").Provider.Equals(provider, StringComparison.OrdinalIgnoreCase)) layers.Add("Fast");
+        if (config.AI.GetLayerConfig("deep").Provider.Equals(provider, StringComparison.OrdinalIgnoreCase)) layers.Add("Deep");
         return layers.ToArray();
     }
 }

@@ -46,8 +46,7 @@ public sealed class SelfCorrectionLoRA
             samples = _trainingBuffer.ToList();
         }
 
-        var network = _loraManager.GetNetwork(HrmReasoningTier.FastThink)
-            ?? _loraManager.GetNetwork(HrmReasoningTier.DeepThink);
+        var network = _loraManager.GetNetwork(HrmReasoningTier.Fast);
         if (network is null) return 0;
 
         // Construct augmented training inputs: prefix query with "[self-correct] wrong:... → "
@@ -56,10 +55,11 @@ public sealed class SelfCorrectionLoRA
         {
             var augmentedInput = $"[self-correct, error={sample.errorType}] Query: {sample.query[..global::System.Math.Min(sample.query.Length, 200)]} Wrong: {sample.wrong[..global::System.Math.Min(sample.wrong.Length, 150)]}";
             var decision = _depthController.Decide(sample.correct);
+            // L0/Reflex merged into Fast; DeepThink merged into Fast; FullReason→Deep
             var targetIdx = decision.Tier switch
             {
-                HrmReasoningTier.Reflex => 0, HrmReasoningTier.FastThink => 0,
-                HrmReasoningTier.DeepThink => 1, HrmReasoningTier.FullReason => 4,
+                HrmReasoningTier.Fast => 0,
+                HrmReasoningTier.Deep => 4,
                 _ => 3
             };
             trainingData.Add((augmentedInput, targetIdx));
@@ -78,8 +78,7 @@ public sealed class SelfCorrectionLoRA
     /// Correct a potentially wrong output
     public (string? corrected, float confidence) TryCorrect(string query, string candidateOutput)
     {
-        var network = _loraManager.GetNetwork(HrmReasoningTier.FastThink)
-            ?? _loraManager.GetNetwork(HrmReasoningTier.DeepThink);
+        var network = _loraManager.GetNetwork(HrmReasoningTier.Fast);
         if (network is null) return (null, 0);
 
         var correctionQuery = $"[self-correct] Query: {query[..global::System.Math.Min(query.Length, 200)]} Candidate: {candidateOutput[..global::System.Math.Min(candidateOutput.Length, 150)]}";

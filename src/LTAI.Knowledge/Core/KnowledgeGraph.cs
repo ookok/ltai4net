@@ -42,6 +42,9 @@ public class KnowledgeGraph : IKnowledgeStore, IDisposable
     {
         using var cmd = _db.CreateCommand();
         cmd.CommandText = """
+            PRAGMA journal_mode=WAL;
+            PRAGMA synchronous=NORMAL;
+            PRAGMA cache_size=-8000;
             CREATE TABLE IF NOT EXISTS entities (
                 id TEXT PRIMARY KEY, label TEXT, properties TEXT);
             CREATE TABLE IF NOT EXISTS triplets (
@@ -420,12 +423,14 @@ public class KnowledgeGraph : IKnowledgeStore, IDisposable
         _lock.EnterWriteLock();
         try
         {
+            using var tx = _db.BeginTransaction();
             int count = 0;
             foreach (var t in triplets)
             {
                 PersistTriplet(t);
                 count++;
             }
+            tx.Commit();
             return count;
         }
         finally { _lock.ExitWriteLock(); }

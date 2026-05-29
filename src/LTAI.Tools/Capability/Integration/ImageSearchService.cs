@@ -16,7 +16,7 @@ public sealed record ImageSearchResult(
 
 public sealed class ImageSearchService : IDisposable
 {
-    private static readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(15) };
+    private static readonly HttpClient _http = LTAI.Core.System.SharedHttpClient.Instance;
     private readonly ILogger<ImageSearchService> _logger;
 
     public string UnsplashAccessKey { get; set; } = "";

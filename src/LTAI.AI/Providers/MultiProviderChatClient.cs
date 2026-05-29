@@ -41,7 +41,7 @@ public sealed class MultiProviderChatClient : IChatClient
         get
         {
             var ai = _options.Value.AI;
-            return new ChatClientMetadata(ai.L2.Model);
+            return new ChatClientMetadata(ai.GetLayerConfig("deep").Model);
         }
     }
 
@@ -53,7 +53,7 @@ public sealed class MultiProviderChatClient : IChatClient
         if (DateTime.UtcNow < _circuitOpenUntil)
             throw new InvalidOperationException($"Circuit breaker open until {_circuitOpenUntil:O}");
 
-        var modelKey = options?.ModelId ?? _options.Value.AI.L2.Model;
+        var modelKey = options?.ModelId ?? _options.Value.AI.GetLayerConfig("deep").Model;
         var (client, config) = ResolveClient(modelKey);
 
         var chatOptions = BuildOptions(options, config, modelKey);
@@ -112,22 +112,22 @@ public sealed class MultiProviderChatClient : IChatClient
         _budget.CheckBudget();
 
         var ai = _options.Value.AI;
-        var modelKey = options?.ModelId ?? ai.L2.Model;
+        var modelKey = options?.ModelId ?? ai.GetLayerConfig("deep").Model;
 
         if (_providerClients.Count == 0)
         {
-            var whichLayer = modelKey == ai.L2.Model ? "L2 (Deep)" :
-                             modelKey == ai.L1.Model ? "L1 (Fast)" :
-                             modelKey == ai.L0.Model ? "L0 (Embedding)" : modelKey;
+            var whichLayer = modelKey == ai.GetLayerConfig("deep").Model ? "Deep" :
+                             modelKey == ai.GetLayerConfig("fast").Model ? "Fast" :
+                             modelKey == ai.GetLayerConfig("embedding").Model ? "Embedding" : modelKey;
             yield return new ChatResponseUpdate(ChatRole.Assistant, $"[Model Not Configured] {whichLayer} 层的模型未配置。\n\n请在 Settings → LLM Config 中为此层设置 Provider 和 Model，并确保已填写 API Key。");
             yield break;
         }
 
-        var useFlashFirst = modelKey == ai.L2.Model && !string.IsNullOrEmpty(ai.L1.Model);
+        var useFlashFirst = modelKey == ai.GetLayerConfig("deep").Model && !string.IsNullOrEmpty(ai.GetLayerConfig("fast").Model);
         if (useFlashFirst)
         {
-            var (flashClient, flashConfig) = ResolveClient(ai.L1.Model);
-            var flashOptions = BuildOptions(options, flashConfig, ai.L1.Model);
+            var (flashClient, flashConfig) = ResolveClient(ai.GetLayerConfig("fast").Model);
+            var flashOptions = BuildOptions(options, flashConfig, ai.GetLayerConfig("fast").Model);
 
             var flashBuf = new StringBuilder();
             var needsPro = false;
@@ -148,8 +148,8 @@ public sealed class MultiProviderChatClient : IChatClient
                             CheckNeedsPro(flashBuf, out needsPro);
                             if (needsPro)
                             {
-                                _logger.LogInformation("Flash model self-reported NEEDS_PRO, escalating to {Pro}", ai.L2.Model);
-                                flashResults.Add(new ChatResponseUpdate(ChatRole.Assistant, "\n[escalating to " + ai.L2.Model + "]\n"));
+                                _logger.LogInformation("Flash model self-reported NEEDS_PRO, escalating to {Pro}", ai.GetLayerConfig("deep").Model);
+                                flashResults.Add(new ChatResponseUpdate(ChatRole.Assistant, "\n[escalating to " + ai.GetLayerConfig("deep").Model + "]\n"));
                                 break;
                             }
                         }
@@ -159,7 +159,7 @@ public sealed class MultiProviderChatClient : IChatClient
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Flash model failed for {Model}, falling back to Pro {Pro}", ai.L1.Model, ai.L2.Model);
+                _logger.LogWarning(ex, "Flash model failed for {Model}, falling back to Pro {Pro}", ai.GetLayerConfig("fast").Model, ai.GetLayerConfig("deep").Model);
                 if (msgList != null && msgList.Count > msgCount)
                 {
                     var removed = msgList.Count - msgCount;
@@ -235,7 +235,7 @@ public sealed class MultiProviderChatClient : IChatClient
 
         if (providerName == null)
         {
-            providerName = aiConfig.DefaultProvider;
+            providerName = aiConfig.Provider;
             config = aiConfig.Providers.GetValueOrDefault(providerName);
         }
 
@@ -278,7 +278,7 @@ public sealed class MultiProviderChatClient : IChatClient
         var chain = _options.Value.ModelPricing.DegradationChain;
         if (chain.TryGetValue(model, out var fallback))
             return fallback;
-        return _options.Value.AI.L1.Model;
+        return _options.Value.AI.GetLayerConfig("fast").Model;
     }
 
     void IDisposable.Dispose()

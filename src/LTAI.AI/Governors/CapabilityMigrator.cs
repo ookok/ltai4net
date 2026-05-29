@@ -33,7 +33,7 @@ public sealed class CapabilityMigrator
         _logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<CapabilityMigrator>.Instance;
         _archiveDir = global::System.IO.Path.Combine(
             global::System.IO.Path.GetDirectoryName(
-                _loraManager.GetLatestWeightsPath(HrmReasoningTier.FastThink)
+                _loraManager.GetLatestWeightsPath(HrmReasoningTier.Fast)
                 ?? global::System.IO.Path.Combine(AppContext.BaseDirectory, "synaptic", "models"))
             ?? global::System.IO.Path.Combine(AppContext.BaseDirectory, "synaptic", "models"),
             "archive");

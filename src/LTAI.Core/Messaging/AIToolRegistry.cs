@@ -38,6 +38,7 @@ public sealed class AIToolRegistry
 
     public async Task<object?> InvokeAsync(string toolName, Dictionary<string, object?> parameters, CancellationToken cancellationToken = default)
     {
+        using var _ = LTAI.Core.Telemetry.LTAIDiagnostics.StartToolCall(toolName);
         if (_tools.TryGetValue(toolName, out var tool) && tool is AIFunction func)
         {
             _logger.LogInformation("Invoking tool: {Tool}", toolName);

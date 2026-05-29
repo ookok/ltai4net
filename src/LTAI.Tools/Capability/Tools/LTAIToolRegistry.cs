@@ -380,6 +380,38 @@ public static class LTAIToolRegistry
                 }
                 catch (Exception ex) { _logger?.LogWarning(ex, "code_graph:status: failed"); return JsonToolResult.Success(new { status = "not_initialized", hint = "Call code_graph:index first" }); }
             }),
+        new("code_graph:callees", "Find all functions/types that a given symbol directly calls (callees). Parameters: symbol (required, the symbol name), depth (optional, default 1).", "code",
+            async args =>
+            {
+                var symbol = Arg(args, "symbol");
+                if (string.IsNullOrWhiteSpace(symbol)) return JsonToolResult.Error("symbol parameter is required");
+                var depth = int.TryParse(Arg(args, "depth", "1"), out var d) ? d : 1;
+                try
+                {
+                    var graph = GetService<CodeGraphEnhanced>();
+                    var callees = graph.GetCallees(symbol, depth);
+                    return JsonToolResult.Success(new
+                    {
+                        symbol,
+                        depth,
+                        count = callees.Count,
+                        callees = callees.Select(c => new { c.Name, c.File, c.Line, c.Kind, c.ParentClass }).ToList()
+                    });
+                }
+                catch (Exception ex) { return JsonToolResult.Success(new { symbol, error = $"Callees lookup failed: {ex.Message}" }); }
+            }),
+        new("code_graph:index", "Trigger full code graph indexing: re-parses all source files and rebuilds the symbol database. Use this when source files have changed or on first run. No parameters needed.", "code",
+            async _ =>
+            {
+                try
+                {
+                    var graph = GetService<CodeGraphEnhanced>();
+                    await graph.IndexAsync();
+                    var status = graph.GetStatus();
+                    return JsonToolResult.Success(new { status = "ok", message = "Indexing complete", details = status });
+                }
+                catch (Exception ex) { return JsonToolResult.Success(new { status = "error", message = ex.Message }); }
+            }),
 
         // Code Edit tools (surgical AST-aware edits with diff, validation, rollback)
         new("code_edit:replace_range", "Replace a range of lines. startLine/endLine are 1-based. Returns unified diff + syntax diagnostics.", "code_edit",
@@ -1620,6 +1652,20 @@ created: {DateTime.UtcNow:yyyy-MM-dd}
                 var results = catalog.Search(query);
                 return results.Select(r => new { r.Name, r.Description, r.Category, r.Free, r.Parameters });
             }),
+
+        // ═══ Date/Time — 1 tool ═══
+        // Note: MAF ToolRegistryExtensions also registers "datetime_now" with timezoneOffset param.
+        // This tool provides a parameter-free version with richer output (local time, dayOfWeek, timezone, unix timestamp).
+        new("today_info", "Returns the current local date, time, day of week, timezone, and Unix timestamp. No parameters needed. Use this for: 'what day is it', '今天星期几', 'current time', 'now'.", "system",
+            async _ => Task.FromResult<object?>(new
+            {
+                utc = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ"),
+                local = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+                day_of_week = DateTime.Now.DayOfWeek.ToString(),
+                timezone = TimeZoneInfo.Local.StandardName,
+                utc_offset = TimeZoneInfo.Local.BaseUtcOffset.ToString(@"hh\:mm"),
+                unix_timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds()
+            })),
     };
 
     private static string BuildToolSynthesisPrompt(string description, string domain, string type)

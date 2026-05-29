@@ -1,16 +1,13 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using LTAI.Core.System;
 using Microsoft.Extensions.Logging;
 
 namespace LTAI.Tools.Search;
 
 public sealed class UnifiedSearchEngine : IDisposable
 {
-    private static readonly HttpClient _http = new()
-    {
-        Timeout = TimeSpan.FromSeconds(15),
-        DefaultRequestHeaders = { { "User-Agent", "LTAI/5.5" } }
-    };
+    private static readonly HttpClient _http = SharedHttpClient.Instance;
     private readonly ILogger<UnifiedSearchEngine> _logger;
 
     public UnifiedSearchEngine(ILogger<UnifiedSearchEngine> logger)

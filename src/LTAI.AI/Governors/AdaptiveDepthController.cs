@@ -4,11 +4,15 @@ namespace LTAI.AI.Governors;
 
 public enum HrmReasoningTier
 {
-    Reflex = 0,     // <5ms, hash-match cache, no inference
-    FastThink = 1,  // <50ms, L1 LoRA rank-4, simple queries
-    DeepThink = 2,  // <500ms, L1 LoRA rank-8, moderate complexity
-    FullReason = 3, // >500ms, L2 full model, high complexity/code/creative
-    Escalate = 4    // team-mode, multi-agent handoff
+    /// <summary>
+    /// Fast reasoning — L1 flash model. Handles simple to moderate queries.
+    /// Merged from previous Reflex, FastThink, DeepThink.
+    /// </summary>
+    Fast = 0,
+    /// <summary>
+    /// Deep reasoning — L2 pro model. For high complexity / code / creative.
+    /// </summary>
+    Deep = 1
 }
 
 public sealed record DepthDecision
@@ -41,8 +45,7 @@ public sealed class AdaptiveDepthController
     private int _escalationCount;
     private readonly Dictionary<HrmReasoningTier, int> _tierCounts = new()
     {
-        [HrmReasoningTier.Reflex] = 0, [HrmReasoningTier.FastThink] = 0,
-        [HrmReasoningTier.DeepThink] = 0, [HrmReasoningTier.FullReason] = 0
+        [HrmReasoningTier.Fast] = 0, [HrmReasoningTier.Deep] = 0
     };
 
     // HölderPO p-annealing (arXiv:2605.12058)
@@ -54,13 +57,11 @@ public sealed class AdaptiveDepthController
     public float CurrentHolderP => _holderP;
 
     // Tier baselines: (thinking tokens, max recursion, rank, model name)
+    // L0 Reflex has been merged into L1 Fast; Escalate removed.
     private static readonly Dictionary<HrmReasoningTier, (int tokens, int recursion, int rank, string model)> TierConfig = new()
     {
-        [HrmReasoningTier.Reflex]     = (100,  0, 0, "cache"),
-        [HrmReasoningTier.FastThink]  = (500,  1, 4, "l1_fast"),
-        [HrmReasoningTier.DeepThink]  = (2000, 2, 8, "l1_deep"),
-        [HrmReasoningTier.FullReason] = (8000, 3, 0, "l2_full"),
-        [HrmReasoningTier.Escalate]   = (16000,4, 0, "l2_team")
+        [HrmReasoningTier.Fast] = (2000, 2, 8, "l1_fast"),
+        [HrmReasoningTier.Deep] = (8000, 3, 0, "l2_full")
     };
 
     // Complexity keywords (cross-lingual)
@@ -102,16 +103,16 @@ public sealed class AdaptiveDepthController
         // Determine hardness via token-level difficulty heuristics
         var isHard = complexity > 0.55f || IsIntrinsicallyHard(query);
 
-        // Select tier
+        // Select tier (binary: Fast[L1] vs Deep[L2])
         var tier = forceTier ?? SelectTier(complexity, userPatienceMs, contextAvailable);
 
         // Get tier config
         var (tokens, recursion, rank, model) = TierConfig[tier];
 
-        // Adjust based on PACE tracking — if converged, boost complexity to escape plateau
+        // Adjust based on PACE tracking — if converged, boost to Deep
         var isPlateau = _paceTracker is not null && _paceTracker.IsConverged("global", minUpdates: 5);
-        if (isPlateau && tier < HrmReasoningTier.DeepThink)
-            tier = HrmReasoningTier.DeepThink;
+        if (isPlateau && tier == HrmReasoningTier.Fast)
+            tier = HrmReasoningTier.Deep;
 
         var (adjTokens, adjRank) = AdjustForContext(tier, tokens, rank, contextAvailable);
 
@@ -119,7 +120,7 @@ public sealed class AdaptiveDepthController
 
         lock (_tierCounts) { _tierCounts[tier] = _tierCounts.GetValueOrDefault(tier) + 1; }
         _totalDecisions++;
-        if (tier >= HrmReasoningTier.FullReason) _escalationCount++;
+        if (tier == HrmReasoningTier.Deep) _escalationCount++;
 
         var decision = new DepthDecision
         {
@@ -191,29 +192,17 @@ public sealed class AdaptiveDepthController
 
     private HrmReasoningTier SelectTier(float complexity, double patienceMs, int contextAvailable)
     {
-        // Reflex: very simple, short, no complexity indicators
-        if (complexity < 0.2f) return HrmReasoningTier.Reflex;
+        // Binary decision: Fast (L1 flash) for simple queries, Deep (L2 pro) for complex ones
+        // Thresholds calibrated to match previous Reflex+FastThink+DeepThink vs FullReason
+        if (complexity < 0.55f && patienceMs < 5000)
+            return HrmReasoningTier.Fast;
 
-        // FastThink: moderate, quick response expected
-        if (complexity < 0.4f || patienceMs < 2000) return HrmReasoningTier.FastThink;
-
-        // DeepThink: substantial complexity, adequate patience
-        if (complexity < 0.65f && patienceMs >= 2000) return HrmReasoningTier.DeepThink;
-
-        // Escalate: very high complexity with multi-step interleaving
-        if (complexity > 0.85f && patienceMs > 8000)
-            return HrmReasoningTier.Escalate;
-
-        // FullReason: high complexity, adequate context
-        if (contextAvailable >= 8192) return HrmReasoningTier.FullReason;
-
-        return HrmReasoningTier.DeepThink;
+        // High complexity or adequate patience/capacity → Deep
+        return HrmReasoningTier.Deep;
     }
 
     private (int tokens, int rank) AdjustForContext(HrmReasoningTier tier, int baseTokens, int baseRank, int contextAvailable)
     {
-        if (tier == HrmReasoningTier.Reflex) return (baseTokens, baseRank);
-
         var maxTokens = (int)(contextAvailable / 4.0); // context overhead ratio
         var tokens = Math.Min(baseTokens, maxTokens);
         tokens = Math.Max(tokens, 100);
@@ -253,11 +242,8 @@ public sealed class AdaptiveDepthController
         if (isHard) parts.Add("hard_query");
         parts.Add(tier switch
         {
-            HrmReasoningTier.Reflex => "cache_or_hash_match",
-            HrmReasoningTier.FastThink => "fast_lora_rank4",
-            HrmReasoningTier.DeepThink => "deep_lora_rank8",
-            HrmReasoningTier.FullReason => "full_model_L2",
-            HrmReasoningTier.Escalate => "multi_agent_team",
+            HrmReasoningTier.Fast => "l1_fast_flash",
+            HrmReasoningTier.Deep => "l2_full_pro",
             _ => "unknown"
         });
         return string.Join("; ", parts);

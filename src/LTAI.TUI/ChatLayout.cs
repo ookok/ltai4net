@@ -13,7 +13,7 @@ public sealed class ChatLayout
     private readonly LTAIOptions? _options;
     private readonly List<(string role, string content)> _history = new();
     private readonly string? _loadedFileContent;
-    private readonly FunnelView? _funnelView;
+    // FunnelView removed — TUI simplified
 
     private readonly Table _routingTable;
     private readonly Table _toolsTable;
@@ -24,12 +24,12 @@ public sealed class ChatLayout
     private bool _hasResponse;
     private bool _hasThinking;
 
-    public ChatLayout(ILivingTreeSystem lts, LTAIOptions? options, string? loadedFileContent = null, FunnelView? funnelView = null)
+    public ChatLayout(ILivingTreeSystem lts, LTAIOptions? options, string? loadedFileContent = null)
     {
         _lts = lts;
         _options = options;
         _loadedFileContent = loadedFileContent;
-        _funnelView = funnelView;
+        // _funnelView removed
 
         _routingTable = new Table().Border(TableBorder.None).HideHeaders().Expand()
             .AddColumn("").AddColumn("");
@@ -58,11 +58,11 @@ public sealed class ChatLayout
 
         var fullResponse = "";
         var layout = BuildLayout();
-        var modelName = modelOverride ?? _options?.AI.L2.Model ?? "?";
+        var modelName = modelOverride ?? _options?.AI.GetLayerConfig("deep").Model ?? "?";
 
         await AnsiConsole.Live(layout).AutoClear(false).StartAsync(async ctx =>
         {
-            _funnelView?.RecordStage("Model Dispatch", modelName);
+            // FunnelView removed
 
             await foreach (var chunk in _lts.StreamChatAsync(input, modelOverride))
             {
@@ -88,12 +88,17 @@ public sealed class ChatLayout
         return fullResponse;
     }
 
+    public void Render()
+    {
+        AnsiConsole.Write(BuildLayout());
+    }
+
     private IRenderable BuildLayout()
     {
         var rows = new List<IRenderable>();
 
-        var l1 = _options?.AI.L1.Model ?? "?";
-        var l2 = _options?.AI.L2.Model ?? "?";
+        var l1 = _options?.AI.GetLayerConfig("fast").Model ?? "?";
+        var l2 = _options?.AI.GetLayerConfig("deep").Model ?? "?";
         rows.Add(new Panel(new Markup($"[bold cyan]LTAI Chat[/]  [dim]L1:{Markup.Escape(l1)} L2:{Markup.Escape(l2)}[/]"))
             .RoundedBorder().BorderColor(Color.Cyan1).Padding(1, 0));
 
@@ -126,14 +131,132 @@ public sealed class ChatLayout
         if (_hasResponse)
         {
             var t = _responseBuffer.ToString();
-            rows.Add(new Panel(new Markup(t.Length > 2000 ? t[..2000] + "\n[dim]...[/]" : t))
+            rows.Add(new Panel(new Rows(RenderMarkdown(t)))
                 .RoundedBorder().Header("Response").BorderColor(Color.Green).Padding(1, 1));
         }
 
-        rows.Add(new Panel(new Markup($"[dim]{(l1)} / {(l2)}[/]"))
+        rows.Add(new Panel(new Markup($"[dim]{Markup.Escape(l1)} / {Markup.Escape(l2)}[/]"))
             .RoundedBorder().BorderColor(Color.Grey).Padding(1, 0));
 
         return new Rows(rows);
+    }
+
+    /// <summary>
+    /// Convert markdown text to Spectre.Console renderables.
+    /// Supports: code fences, **bold**, *italic*, inline `code`, ### headings.
+    /// </summary>
+    private static List<IRenderable> RenderMarkdown(string text, int maxLength = 8000)
+    {
+        if (string.IsNullOrEmpty(text))
+            return new List<IRenderable> { new Markup("") };
+
+        if (text.Length > maxLength)
+            text = text[..maxLength] + "\n[dim]... (truncated)[/]";
+
+        var result = new List<IRenderable>();
+        var lines = text.Split('\n');
+        var inCodeBlock = false;
+        var codeLines = new List<string>();
+        var codeLanguage = "";
+
+        foreach (var line in lines)
+        {
+            if (line.TrimStart().StartsWith("```"))
+            {
+                if (inCodeBlock)
+                {
+                    var codeText = string.Join("\n", codeLines);
+                    var panel = new Panel(new Text(codeText, new Style(foreground: Color.Silver)))
+                        .RoundedBorder().BorderColor(Color.Blue).Padding(1, 0);
+                    if (codeLanguage.Length > 0)
+                        panel = panel.Header($"[dim]{Markup.Escape(codeLanguage)}[/]", Justify.Left);
+                    result.Add(panel);
+                    codeLines.Clear();
+                    codeLanguage = "";
+                    inCodeBlock = false;
+                }
+                else
+                {
+                    inCodeBlock = true;
+                    codeLanguage = line.TrimStart()[3..].Trim();
+                }
+                continue;
+            }
+
+            if (inCodeBlock)
+            {
+                codeLines.Add(line);
+                continue;
+            }
+
+            result.Add(new Markup(ProcessInlineMarkdown(line)));
+        }
+
+        if (inCodeBlock && codeLines.Count > 0)
+        {
+            var panel = new Panel(new Text(string.Join("\n", codeLines), new Style(foreground: Color.Silver)))
+                .RoundedBorder().BorderColor(Color.Blue).Padding(1, 0);
+            result.Add(panel);
+        }
+
+        return result;
+    }
+
+    /// <summary>Apply markdown inline formatting on an escaped line.</summary>
+    private static string ProcessInlineMarkdown(string rawLine)
+    {
+        // Escape Spectre markup special chars first, then apply markdown patterns
+        var s = rawLine;
+
+        // Headings (# ## ###)
+        var trimmed = s.TrimStart();
+        if (trimmed.StartsWith("### ") || trimmed.StartsWith("## ") || trimmed.StartsWith("# "))
+        {
+            var level = trimmed.TakeWhile(c => c == '#').Count();
+            var text = trimmed[(level + 1)..];
+            s = s[..(s.Length - trimmed.Length)] + $"[bold underline]{Markup.Escape(text)}[/]";
+            return s;
+        }
+
+        // Must escape before applying markdown patterns to avoid Spectre parsing issues
+        s = Markup.Escape(s);
+
+        // Bold: **text** → [bold]text[/]
+        s = ReplaceMd(s, "**", "bold");
+
+        // Italic: *text* → [italic]text[/]
+        s = ReplaceMd(s, "*", "italic");
+
+        // Inline code: `text` → [italic lime]text[/]
+        s = ReplaceMd(s, "`", "italic lime");
+
+        return s;
+    }
+
+    /// <summary>Replace markdown paired delimiters with Spectre markup tags.</summary>
+    private static string ReplaceMd(string text, string marker, string spectreStyle)
+    {
+        int idx = 0;
+        while (true)
+        {
+            var open = text.IndexOf(marker, idx, StringComparison.Ordinal);
+            if (open < 0) break;
+
+            var close = text.IndexOf(marker, open + marker.Length, StringComparison.Ordinal);
+            if (close < 0) break;
+
+            var inner = text[(open + marker.Length)..close];
+            if (string.IsNullOrWhiteSpace(inner))
+            {
+                idx = close + marker.Length;
+                continue;
+            }
+
+            var replacement = $"[{spectreStyle}]{inner}[/]";
+            text = text[..open] + replacement + text[(close + marker.Length)..];
+            idx = open + replacement.Length;
+        }
+        return text;
     }
 
     public void UpdateRouteInfo(string route, string confidence)

@@ -108,16 +108,20 @@ public sealed class ModelManager
             });
         }
 
+        var resolvedFast = aiConfig.GetLayerConfig("fast");
+        var resolvedDeep = aiConfig.GetLayerConfig("deep");
+        var resolvedEmbed = aiConfig.GetLayerConfig("embedding");
+
         return new
         {
             configured_providers = providers,
             layers = new
             {
-                l0 = new { aiConfig.L0.Provider, aiConfig.L0.Model },
-                l1 = new { aiConfig.L1.Provider, aiConfig.L1.Model, aiConfig.L1.Temperature },
-                l2 = new { aiConfig.L2.Provider, aiConfig.L2.Model, aiConfig.L2.Temperature }
+                l0 = new { resolvedEmbed.Provider, resolvedEmbed.Model },
+                l1 = new { resolvedFast.Provider, resolvedFast.Model, Temperature = resolvedFast.Temperature },
+                l2 = new { resolvedDeep.Provider, resolvedDeep.Model, Temperature = resolvedDeep.Temperature }
             },
-            default_provider = aiConfig.DefaultProvider,
+            default_provider = aiConfig.Provider,
             daily_budget_usd = aiConfig.DailyBudgetUsd,
             total_registered = _registry.AllProviders.Count()
         };

@@ -13,11 +13,14 @@ public interface ISkillExchangeProvider
 /// </summary>
 public enum SkillLayer
 {
-    L0 = 0,
-    L1 = 1,
-    L2 = 2,
-    L3 = 3,
-    L4 = 4
+    /// <summary>
+    /// L0 has been fully removed. Layer:0 in skill files maps to L1.
+    /// L1=Atomic&Tasks, L2=Workflow, L3=Domain, L4=Meta.
+    /// </summary>
+    L1 = 0,
+    L2 = 1,
+    L3 = 2,
+    L4 = 3
 }
 
 public sealed record SkillTrigger
@@ -118,7 +121,6 @@ public sealed record Skill
     public string FullPath => $"{Domain}/{Name}";
     public string LayerDir => Layer switch
     {
-        SkillLayer.L0 => "l0_atomic",
         SkillLayer.L1 => "l1_task",
         SkillLayer.L2 => "l2_workflow",
         SkillLayer.L3 => "l3_domain",

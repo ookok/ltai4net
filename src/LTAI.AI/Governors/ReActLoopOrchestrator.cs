@@ -5,6 +5,7 @@ using LTAI.AI.Providers;
 using LTAI.AI.Utilities;
 using LTAI.Core.Configuration;
 using LTAI.Core.Messaging;
+using LTAI.Knowledge.Core;
 using LTAI.Core.Models;
 using LTAI.Core.System;
 using LTAI.Models;
@@ -31,12 +32,13 @@ public sealed class ReActLoopOrchestrator
     private readonly ICrossRunEvolutionStore? _evolutionStore;
     private readonly HarnessEvolution? _harnessEvo;
     private readonly ModelHealthTracker _health;
+    private readonly StructMemory? _structMemory;
 
     private static readonly Regex TextToolCall = new(
         @"【TOOL:(\w[\w_]*)\s+(.*?)】", RegexOptions.Compiled);
 
-    private string DefaultModel => _options.Value.AI.L2.Model;
-    private string FlashModel => _options.Value.AI.L1.Model;
+    private string DefaultModel => _options.Value.AI.GetLayerConfig("deep").Model;
+    private string FlashModel => _options.Value.AI.GetLayerConfig("fast").Model;
 
     public string? FinalResponse { get; private set; }
     public string ModelUsed { get; private set; } = "";
@@ -62,7 +64,8 @@ public sealed class ReActLoopOrchestrator
         ERLLoop? erlLoop = null,
         ICrossRunEvolutionStore? evolutionStore = null,
         HarnessEvolution? harnessEvo = null,
-        ModelHealthTracker? health = null)
+        ModelHealthTracker? health = null,
+        StructMemory? structMemory = null)
     {
         _llm = llm;
         _toolRegistry = toolRegistry;
@@ -79,6 +82,7 @@ public sealed class ReActLoopOrchestrator
         _evolutionStore = evolutionStore;
         _harnessEvo = harnessEvo;
         _health = health ?? new ModelHealthTracker();
+        _structMemory = structMemory;
     }
 
     public async IAsyncEnumerable<string> RunReActLoopAsync(
@@ -336,6 +340,16 @@ public sealed class ReActLoopOrchestrator
                     var resultText = ToolCallRepairer.CapToolResult(result?.ToString() ?? "");
                     messages.Add(new ChatMessage(ChatRole.Tool, "") { Contents = new List<AIContent> { new FunctionResultContent(tc.CallId, resultText) } });
                     _logger.LogInformation("ReAct: executed {Tool} (callId={Id})", tc.Name, tc.CallId);
+
+                    // Persist tool result to StructMemory so it enters vectors.db
+                    if (_structMemory != null && !string.IsNullOrEmpty(resultText))
+                    {
+                        var toolId = Guid.NewGuid().ToString("N")[..12];
+                        _ = _structMemory.BindEvents("react_" + (Label ?? "deep"), new()
+                        {
+                            new() { ["role"] = "tool", ["content"] = $"[{tc.Name}]\n{resultText}" }
+                        }, toolId).ConfigureAwait(false);
+                    }
                 }
                 catch (Exception ex)
                 {

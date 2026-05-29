@@ -23,7 +23,7 @@ public sealed record WeatherData(
 
 public sealed class WeatherService : IDisposable
 {
-    private static readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(15) };
+    private static readonly HttpClient _http = LTAI.Core.System.SharedHttpClient.Instance;
     private readonly ILogger<WeatherService> _logger;
     private readonly string _owmBaseUrl;
     private readonly string _qweatherGeoUrl;

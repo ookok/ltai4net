@@ -72,12 +72,14 @@ public sealed class ChatView : UserControl
 
         _input = new TextBox
         {
-            Watermark = "Type here... Enter=Send, Shift+Enter=newline, Up/Down=history  |  Drag files/folders here",
+            Watermark = "Type here... Enter=Send, Shift+Enter=newline, Ctrl+Enter=Send, Up/Down=history  |  Drag files/folders here",
             Foreground = LtaiTheme.Sbb(LtaiTheme.TextPrimary),
             Background = LtaiTheme.Sbb(LtaiTheme.BgInput),
+            BorderBrush = LtaiTheme.Sbb(LtaiTheme.Border),
+            BorderThickness = new(1),
             FontFamily = new("Consolas"),
             MinHeight = 72,
-            AcceptsReturn = true,
+            AcceptsReturn = false,   // Enter sends; Shift+Enter inserts newline manually
             TextWrapping = TextWrapping.Wrap
         };
         _input.KeyDown += OnInputKey;
@@ -143,7 +145,17 @@ public sealed class ChatView : UserControl
 
     private void OnInputKey(object? s, KeyEventArgs e)
     {
-        if (e.Key == Key.Enter && e.KeyModifiers == KeyModifiers.None)
+        // Shift+Enter → insert newline
+        if (e.Key == Key.Enter && e.KeyModifiers == KeyModifiers.Shift)
+        {
+            var idx = _input.CaretIndex;
+            _input.Text = _input.Text[..idx] + "\n" + _input.Text[idx..];
+            _input.CaretIndex = idx + 1;
+            e.Handled = true;
+            return;
+        }
+        // Enter (plain or Ctrl) → send
+        if (e.Key == Key.Enter && e.KeyModifiers is KeyModifiers.None or KeyModifiers.Control)
         {
             if (_isSending) return;
             e.Handled = true;
@@ -239,6 +251,7 @@ public sealed class ChatView : UserControl
         var query = _input.Text?.Trim();
         if (string.IsNullOrWhiteSpace(query)) return;
         _history.Add(query);
+        if (_history.Count > 100) _history.RemoveRange(0, _history.Count - 100);
         _historyIdx = -1;
         _input.Text = "";
         _turns++;
@@ -350,53 +363,40 @@ public sealed class ChatView : UserControl
                         Dispatcher.UIThread.Post(() => aiContent.Children.Remove(statusDots));
                     }
 
-                    if (token.StartsWith("[tool:"))
+                    // Detect ReAct tool calls via 📋 emoji (U+1F4CB = "\uD83D\uDCCB")
+                    // The emoji is a visual indicator that the next text is a tool invocation.
+                    // We show a spinner in the tool panel and advance on each new 📋.
+                    if (token.Contains("\uD83D\uDCCB"))
                     {
-                        var match = System.Text.RegularExpressions.Regex.Match(token, @"\[tool:(\w+)\]");
-                        if (match.Success)
-                        {
-                            var toolName = match.Groups[1].Value;
-                            Dispatcher.UIThread.Post(() =>
-                            {
-                                if (taskBanner?.Child is TextBlock tbb)
-                                    tbb.Text = "⚡ Executing tools...";
-                                toolPanel.IsVisible = true;
-                                var toolRow = new DockPanel { Margin = new(0, 1) };
-                                toolRow.Children.Add(new TextBlock
-                                {
-                                    Text = $"🔧 {toolName}",
-                                    Foreground = LtaiTheme.Sbb(LtaiTheme.AccentInfo),
-                                    FontFamily = new("Consolas"),
-                                    FontSize = 11
-                                });
-
-                                var progressBar = new ProgressBar
-                                {
-                                    IsIndeterminate = true,
-                                    Width = 80,
-                                    Height = 4,
-                                    Margin = new(8, 0, 0, 0)
-                                };
-                                DockPanel.SetDock(progressBar, Dock.Right);
-                                toolRow.Children.Add(progressBar);
-
-                                toolPanel.Children.Add(toolRow);
-                            });
-                        }
-                    }
-                    else if (token.StartsWith("[tool-result:"))
-                    {
+                        var toolName = token.Replace("\uD83D\uDCCB", "").Trim();
+                        if (string.IsNullOrWhiteSpace(toolName)) toolName = "tool";
+                        var currentToolName = toolName;
                         Dispatcher.UIThread.Post(() =>
                         {
-                            var lastRow = toolPanel.Children.OfType<DockPanel>().LastOrDefault();
-                            if (lastRow != null)
+                            if (taskBanner?.Child is TextBlock tbb)
+                                tbb.Text = "⚡ Executing tools...";
+                            toolPanel.IsVisible = true;
+
+                            var toolRow = new DockPanel { Margin = new(0, 1) };
+                            toolRow.Children.Add(new TextBlock
                             {
-                                var lastText = lastRow.Children.OfType<TextBlock>().FirstOrDefault();
-                                if (lastText != null)
-                                    lastText.Text = lastText.Text.Replace("🔧", "✅");
-                                var pb = lastRow.Children.OfType<ProgressBar>().FirstOrDefault();
-                                if (pb != null) lastRow.Children.Remove(pb);
-                            }
+                                Text = $"🔧 {currentToolName}",
+                                Foreground = LtaiTheme.Sbb(LtaiTheme.AccentInfo),
+                                FontFamily = new("Consolas"),
+                                FontSize = 11
+                            });
+
+                            var progressBar = new ProgressBar
+                            {
+                                IsIndeterminate = true,
+                                Width = 80,
+                                Height = 4,
+                                Margin = new(8, 0, 0, 0)
+                            };
+                            DockPanel.SetDock(progressBar, Dock.Right);
+                            toolRow.Children.Add(progressBar);
+
+                            toolPanel.Children.Add(toolRow);
                         });
                     }
                     else
@@ -559,18 +559,12 @@ public sealed class ChatView : UserControl
         return btn;
     }
 
-    private static string CleanResponse(string raw)
-    {
-        var sb = new StringBuilder(raw.Length);
-        foreach (var ch in raw)
-        {
-            if (ch == '\uD83D') continue;
-            sb.Append(ch);
-        }
-        var result = sb.ToString();
-        result = result.Replace("\uDD0D", "").Replace("\uDCCB", "");
-        return result;
-    }
+    /// <summary>
+    /// Clean raw response for rendering. Previously stripped surrogate pairs
+    /// (which killed emoji like 📋 from ReAct tool calls). Now passes through
+    /// all characters — code-block fences and markdown are handled elsewhere.
+    /// </summary>
+    private static string CleanResponse(string raw) => raw;
 
     private static List<(string Content, bool IsCode)> SplitCodeBlocks(string text)
     {
@@ -607,17 +601,41 @@ public sealed class ChatView : UserControl
         return parts;
     }
 
-    private void RenderInlineImage(StackPanel panel, string path)
+    private async void RenderInlineImage(StackPanel panel, string path)
     {
         try
         {
-            if (!File.Exists(path)) return;
-            var ext = Path.GetExtension(path).ToLowerInvariant();
-            if (ext is ".png" or ".jpg" or ".jpeg" or ".gif" or ".bmp" or ".webp")
+            var isUrl = path.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+                        path.StartsWith("https://", StringComparison.OrdinalIgnoreCase);
+
+            string localPath;
+            if (isUrl)
+            {
+                // Download URL image to temp file
+                using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+                var ext = ".png";
+                // Try to guess extension from URL
+                var urlPath = new Uri(path).AbsolutePath;
+                var urlExt = Path.GetExtension(urlPath)?.ToLowerInvariant();
+                if (urlExt is ".png" or ".jpg" or ".jpeg" or ".gif" or ".bmp" or ".webp")
+                    ext = urlExt;
+
+                localPath = Path.Combine(Path.GetTempPath(), $"ltai_img_{Guid.NewGuid():N}{ext}");
+                var bytes = await http.GetByteArrayAsync(path);
+                await File.WriteAllBytesAsync(localPath, bytes);
+            }
+            else
+            {
+                if (!File.Exists(path)) return;
+                localPath = path;
+            }
+
+            var ext2 = Path.GetExtension(localPath).ToLowerInvariant();
+            if (ext2 is ".png" or ".jpg" or ".jpeg" or ".gif" or ".bmp" or ".webp")
             {
                 var image = new Image
                 {
-                    Source = new Avalonia.Media.Imaging.Bitmap(path),
+                    Source = new Avalonia.Media.Imaging.Bitmap(localPath),
                     MaxWidth = 400,
                     MaxHeight = 300,
                     Stretch = Stretch.Uniform

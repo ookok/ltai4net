@@ -1,38 +1,30 @@
 @page "/config"
 @inject IConfiguration Configuration
+@inject Microsoft.Extensions.Options.IOptions<LTAI.Core.Configuration.LTAIOptions> Options
 
 <PageTitle>Config — LTAI</PageTitle>
-<h2>System Configuration</h2>
+<h2>LLM Configuration</h2>
 
 <div class="card">
-    <h3>LLM Providers</h3>
-    <table>
-        <tr><th>Provider</th><th>Model</th><th>Endpoint</th></tr>
-        @foreach (var (key, val) in Configuration.GetSection("LTAI:AI:Providers").GetChildren().ToDictionary(c => c.Key, c => c))
-        {
-            <tr>
-                <td>@key</td>
-                <td>@val["Model"]</td>
-                <td>@val["Endpoint"]</td>
-            </tr>
-        }
-    </table>
+    <h3>Provider</h3>
+    <div class="metric"><span>Provider</span><span class="val">@Options.Value.AI.Provider</span></div>
+    <div class="metric"><span>Mode</span><span class="val">@Options.Value.AI.Mode</span></div>
 </div>
 
 <div class="card">
-    <h3>Settings</h3>
-    <div class="metric"><span>Deep Model</span><span class="val">@Configuration["LTAI:AI:DeepModel"]</span></div>
-    <div class="metric"><span>Fast Model</span><span class="val">@Configuration["LTAI:AI:FastModel"]</span></div>
-    <div class="metric"><span>Daily Budget</span><span class="val">$@Configuration["LTAI:AI:DailyBudgetUsd"]</span></div>
-    <div class="metric"><span>Rate Limit</span><span class="val">@Configuration["LTAI:Web:RateLimitPerMinute"]/min</span></div>
+    <h3>L1 — Fast Model</h3>
+    <div class="metric"><span>Model</span><span class="val">@Options.Value.AI.GetLayerConfig("fast").Model</span></div>
+    <div class="metric"><span>Temperature</span><span class="val">@Options.Value.AI.DefaultTemperature</span></div>
 </div>
 
 <div class="card">
-    <h3>v7.0 Module Status</h3>
-    <div class="metric"><span>DNA</span><span class="val green">Active</span></div>
-    <div class="metric"><span>Agent</span><span class="val green">v7.0</span></div>
-    <div class="metric"><span>Safety Gate</span><span class="val green">Unified</span></div>
-    <div class="metric"><span>Router</span><span class="val green">Semantic</span></div>
-    <div class="metric"><span>Evo Loop</span><span class="val grey">Observing</span></div>
-    <div class="metric"><span>Network</span><span class="val grey">Off</span></div>
+    <h3>L2 — Deep Model</h3>
+    <div class="metric"><span>Model</span><span class="val">@Options.Value.AI.GetLayerConfig("deep").Model</span></div>
+    <div class="metric"><span>Temperature</span><span class="val">@Options.Value.AI.DefaultTemperature</span></div>
+</div>
+
+<div class="card">
+    <h3>Limits</h3>
+    <div class="metric"><span>Max Tokens</span><span class="val">@Options.Value.AI.MaxTokens</span></div>
+    <div class="metric"><span>Daily Budget</span><span class="val">$@Options.Value.AI.DailyBudgetUsd</span></div>
 </div>

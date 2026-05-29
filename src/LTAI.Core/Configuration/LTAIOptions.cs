@@ -146,40 +146,41 @@ public sealed class AIConfig
     [JsonPropertyName("onnx_enabled")]
     public bool OnnxEnabled { get; set; } = false;
 
-    [JsonPropertyName("default_provider")]
-    public string DefaultProvider { get; init; } = "deepseek";
+    /// <summary>
+    /// Unified provider name (replaces L0/L1/L2 separate config).
+    /// One provider handles fast inference + deep reasoning + embedding.
+    /// Default: deepseek.
+    /// </summary>
+    [JsonPropertyName("provider")]
+    public string Provider { get; init; } = "deepseek";
 
-    [JsonPropertyName("l0")]
-    public LayerConfig L0 { get; init; } = new()
-    {
-        Provider = "siliconflow",
-        Model = "BAAI/bge-large-zh-v1.5"
-    };
+    /// <summary>
+    /// Mode preference: fast (cheapest/fastest), balanced (default), quality (deepest).
+    /// Controls model selection within the chosen provider.
+    /// </summary>
+    [JsonPropertyName("mode")]
+    public string Mode { get; init; } = "balanced";
 
-    [JsonPropertyName("l1")]
-    public LayerConfig L1 { get; init; } = new()
-    {
-        Provider = "deepseek",
-        Model = "deepseek-v4-flash",
-        Temperature = 0.3f
-    };
+    // L0/L1/L2 properties have been removed — use Provider + Mode for unified config.
+    // Derive specific layer configs via GetLayerConfig().
 
-    [JsonPropertyName("l2")]
-    public LayerConfig L2 { get; init; } = new()
-    {
-        Provider = "deepseek",
-        Model = "deepseek-v4-pro",
-        Temperature = 0.3f
-    };
-
+    /// <summary>
+    /// Returns the fast (L1) model name derived from Provider + Mode.
+    /// </summary>
     [JsonPropertyName("fast_model")]
-    public string FastModel => L1.Model;
+    public string FastModel => ResolveModels().fast.Model;
 
+    /// <summary>
+    /// Returns the deep (L2) model name derived from Provider + Mode.
+    /// </summary>
     [JsonPropertyName("deep_model")]
-    public string DeepModel => L2.Model;
+    public string DeepModel => ResolveModels().deep.Model;
 
+    /// <summary>
+    /// Returns the embedding model name derived from Provider + Mode.
+    /// </summary>
     [JsonPropertyName("embedding_model")]
-    public string EmbeddingModel => L0.Model;
+    public string EmbeddingModel => ResolveModels().embedding.Model;
 
     [JsonPropertyName("daily_budget_usd")]
     public decimal DailyBudgetUsd { get; set; } = 10.00m;
@@ -211,18 +212,65 @@ public sealed class AIConfig
     [JsonPropertyName("roles")]
     public Dictionary<string, AiRoleConfig> Roles { get; init; } = new();
 
+    /// <summary>
+    /// Resolve layer config from Provider + Mode (no backward compat).
+    /// L0/embedding, L1/fast, L2/deep are all auto-derived.
+    /// </summary>
     public LayerConfig GetLayerConfig(string layer)
     {
+        var resolved = ResolveModels();
         return layer.ToUpperInvariant() switch
         {
-            "L0" => L0,
-            "L1" => L1,
-            "L2" => L2,
-            "FAST" => L1,
-            "DEEP" => L2,
-            "EMBEDDING" => L0,
-            _ => L2
+            "L0" or "EMBEDDING" => resolved.embedding,
+            "L1" or "FAST" => resolved.fast,
+            "L2" or "DEEP" => resolved.deep,
+            _ => resolved.fast
         };
+    }
+
+    /// <summary>
+    /// Auto-derive fast/deep/embedding model configs from Provider + Mode only.
+    /// No backward-compat fallback to L0/L1/L2 properties (those have been removed).
+    /// </summary>
+    private (LayerConfig fast, LayerConfig deep, LayerConfig embedding) ResolveModels()
+    {
+        var provider = Provider?.ToLowerInvariant() ?? "deepseek";
+        var mode = Mode?.ToLowerInvariant() ?? "balanced";
+
+        (string fastModel, string deepModel, string embedModel) = provider switch
+        {
+            "deepseek" => mode switch
+            {
+                "fast" => ("deepseek-v4-flash", "deepseek-v4-flash", "BAAI/bge-large-zh-v1.5"),
+                "quality" => ("deepseek-v4-pro", "deepseek-v4-pro", "BAAI/bge-large-zh-v1.5"),
+                _ => ("deepseek-v4-flash", "deepseek-v4-pro", "BAAI/bge-large-zh-v1.5")
+            },
+            "qwen" => mode switch
+            {
+                "fast" => ("qwen-turbo", "qwen-turbo", "text-embedding-v2"),
+                "quality" => ("qwen-max", "qwen-max", "text-embedding-v2"),
+                _ => ("qwen-plus", "qwen-max", "text-embedding-v2")
+            },
+            "siliconflow" => ("deepseek-ai/DeepSeek-V3", "deepseek-ai/DeepSeek-R1", "BAAI/bge-large-zh-v1.5"),
+            "openai" => mode switch
+            {
+                "fast" => ("gpt-4o-mini", "gpt-4o-mini", "text-embedding-3-small"),
+                "quality" => ("gpt-4o", "gpt-4o", "text-embedding-3-large"),
+                _ => ("gpt-4o-mini", "gpt-4o", "text-embedding-3-small")
+            },
+            _ => mode switch
+            {
+                "fast" => ("deepseek-v4-flash", "deepseek-v4-flash", "BAAI/bge-large-zh-v1.5"),
+                "quality" => ("deepseek-v4-pro", "deepseek-v4-pro", "BAAI/bge-large-zh-v1.5"),
+                _ => ("deepseek-v4-flash", "deepseek-v4-pro", "BAAI/bge-large-zh-v1.5")
+            }
+        };
+
+        var fast = new LayerConfig { Provider = provider, Model = fastModel, Temperature = DefaultTemperature };
+        var deep = new LayerConfig { Provider = provider, Model = deepModel, Temperature = DefaultTemperature };
+        var embedding = new LayerConfig { Provider = provider, Model = embedModel };
+
+        return (fast, deep, embedding);
     }
 
     public AiRoleConfig GetRoleConfig(string role)
@@ -230,20 +278,21 @@ public sealed class AIConfig
         if (Roles.TryGetValue(role, out var config) && config != null)
             return config;
 
-        var fallbackLayer = role.ToLowerInvariant() switch
+        // L0/L1/L2 removed — use Provider + derived models
+        var resolved = ResolveModels();
+        var fallback = role.ToLowerInvariant() switch
         {
-            "keywords" => L1,
-            "extract" => L1,
-            "query" => L2,
-            _ => L2
+            "keywords" or "extract" => resolved.fast,
+            "query" => resolved.deep,
+            _ => resolved.deep
         };
 
         return new AiRoleConfig
         {
-            Provider = fallbackLayer.Provider,
-            Model = fallbackLayer.Model,
-            Temperature = fallbackLayer.Temperature,
-            MaxTokens = fallbackLayer.MaxTokens
+            Provider = fallback.Provider,
+            Model = fallback.Model,
+            Temperature = fallback.Temperature,
+            MaxTokens = fallback.MaxTokens
         };
     }
 }

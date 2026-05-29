@@ -6,6 +6,8 @@ public interface IVectorStore
 {
     Task<float[]> EmbedAsync(string text, CancellationToken cancellationToken = default);
 
+    Task<float[][]> EmbedBatchAsync(IReadOnlyList<string> texts, CancellationToken ct = default);
+
     Task AddVectorsAsync(IReadOnlyList<(string Id, float[] Vector)> items, CancellationToken cancellationToken = default);
 
     Task<IReadOnlyList<VectorSearchResult>> SearchSimilarAsync(
