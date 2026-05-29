@@ -1,7 +1,7 @@
 using System.Reflection;
 using Spectre.Console;
 using LTAI.Core;
-using LTAI.Knowledge.Core;
+
 
 namespace LTAI.Cli;
 

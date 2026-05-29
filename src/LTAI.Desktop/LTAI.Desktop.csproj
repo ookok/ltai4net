@@ -33,6 +33,6 @@
     <ProjectReference Include="..\LTAI.Agent\LTAI.Agent.csproj" />
     <ProjectReference Include="..\LTAI.AI\LTAI.AI.csproj" />
 
-    <ProjectReference Include="..\LTAI.Knowledge\LTAI.Knowledge.csproj" />
+
   </ItemGroup>
 </Project>

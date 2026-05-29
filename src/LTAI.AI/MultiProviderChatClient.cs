@@ -78,16 +78,37 @@ public sealed class MultiProviderChatClient : IChatClient
         [EnumeratorCancellation] CancellationToken ct = default)
     {
         var provider = options?.ModelId ?? _defaultProvider;
+        bool anyAttempted = false;
         foreach (var p in DegradationChain(provider))
         {
-            if (_clients.TryGetValue(p, out var client))
+            if (!_clients.TryGetValue(p, out var client)) continue;
+            anyAttempted = true;
+            var success = false;
+            var innerStream = client.GetStreamingResponseAsync(messages, options, ct);
+            await using (var enumerator = innerStream.GetAsyncEnumerator(ct))
             {
-                await foreach (var u in client.GetStreamingResponseAsync(messages, options, ct))
-                    yield return u;
-                yield break;
+                while (true)
+                {
+                    try
+                    {
+                        if (!await enumerator.MoveNextAsync().ConfigureAwait(false))
+                            break;
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    {
+                        _logger.LogWarning(ex, "Streaming from '{P}' failed, degrading", p);
+                        break;
+                    }
+                    success = true;
+                    yield return enumerator.Current;
+                }
             }
+            if (success) yield break;
         }
-        yield return new ChatResponseUpdate(ChatRole.Assistant, $"All providers failed for '{provider}'");
+        yield return new ChatResponseUpdate(ChatRole.Assistant,
+            anyAttempted
+                ? $"All providers failed for '{provider}'"
+                : $"No providers available for '{provider}'");
     }
 
     private async Task<ChatResponse> TryCallWithDegradation(
@@ -183,8 +204,55 @@ public sealed class OpenAiHttpClient : IChatClient
         IEnumerable<ChatMessage> messages, ChatOptions? options = null,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
-        var response = await GetResponseAsync(messages, options, ct).ConfigureAwait(false);
-        yield return new ChatResponseUpdate(ChatRole.Assistant, response.Messages?.LastOrDefault()?.Text ?? "");
+        var requestBody = new
+        {
+            model = _model,
+            stream = true,
+            messages = messages.Select(m => new
+            {
+                role = m.Role == ChatRole.System ? "system" :
+                       m.Role == ChatRole.Assistant ? "assistant" : "user",
+                content = m.Text ?? ""
+            }).ToList()
+        };
+
+        using var req = new HttpRequestMessage(HttpMethod.Post, $"{_endpoint}/chat/completions");
+        req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _apiKey);
+        req.Content = JsonContent.Create(requestBody, options: JsonOpts);
+
+        using var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
+        resp.EnsureSuccessStatusCode();
+
+        using var stream = await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+        using var reader = new StreamReader(stream);
+
+        while (!ct.IsCancellationRequested)
+        {
+            var line = await reader.ReadLineAsync(ct).ConfigureAwait(false);
+            if (line == null) break; // end of stream
+            if (string.IsNullOrEmpty(line)) continue;
+            if (!line.StartsWith("data: ", StringComparison.Ordinal)) continue;
+
+            var data = line[6..];
+            if (data == "[DONE]") break;
+
+            StreamingChunkJson? chunk;
+            try
+            {
+                chunk = JsonSerializer.Deserialize<StreamingChunkJson>(data, JsonOpts);
+            }
+            catch (JsonException ex)
+            {
+                _logger?.LogWarning(ex, "SSE parse error: {Data}", data);
+                continue;
+            }
+
+            var delta = chunk?.Choices?.FirstOrDefault()?.Delta?.Content;
+            if (!string.IsNullOrEmpty(delta))
+            {
+                yield return new ChatResponseUpdate(ChatRole.Assistant, delta);
+            }
+        }
     }
 
     object? IChatClient.GetService(Type? t, object? k) => null;
@@ -193,6 +261,11 @@ public sealed class OpenAiHttpClient : IChatClient
     private sealed record ChatResponseJson(ChoiceJson[]? Choices);
     private sealed record ChoiceJson(MessageJson? Message);
     private sealed record MessageJson(string? Content);
+
+    // SSE streaming chunk types
+    private sealed record StreamingChunkJson(StreamingChoiceJson[]? Choices);
+    private sealed record StreamingChoiceJson(DeltaJson? Delta, string? FinishReason);
+    private sealed record DeltaJson(string? Content);
 }
 
 public static class ServiceCollectionExtensions
@@ -224,6 +297,11 @@ public static class ServiceCollectionExtensions
         });
 
         services.AddSingleton(sp => (MultiProviderChatClient)sp.GetRequiredService<IChatClient>());
+
+        // Embedding client (API-based, no local model)
+        services.AddSingleton<EmbeddingClient>(sp =>
+            new EmbeddingClient(sp.GetRequiredService<IHttpClientFactory>(),
+                sp.GetService<ILogger<EmbeddingClient>>()));
         return services;
     }
 }

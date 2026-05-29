@@ -3,7 +3,7 @@ using LTAI.Agent;
 using LTAI.AI;
 using LTAI.Core;
 using LTAI.Core.Configuration;
-using LTAI.Knowledge.Core;
+
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -41,7 +41,7 @@ public static class Program
         services.AddLTAICore();
         services.AddLTAIAI();
         services.AddLTAIAgent();
-        services.AddSingleton(sp => new DocumentService(Directory.GetCurrentDirectory()));
+
 
         return services;
     }

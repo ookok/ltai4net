@@ -1,13 +1,13 @@
 using LTAI.Agent;
-
 using LTAI.AI;
 using LTAI.Core;
 using LTAI.Core.Configuration;
-using LTAI.Knowledge.Core;
+
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Serilog;
 
 namespace LTAI.TUI;
 
@@ -18,8 +18,15 @@ public static class Program
         Console.OutputEncoding = System.Text.Encoding.UTF8;
         Console.Title = "LTAI Dev Console";
 
+        Log.Logger = new LoggerConfiguration()
+            .MinimumLevel.Information()
+            .Enrich.WithProperty("Application", "LTAI")
+            .WriteTo.Console(outputTemplate: "[{Timestamp:HH:mm:ss} {Level:u3}] {Message:lj} {Properties:j}{NewLine}")
+            .WriteTo.File("logs/ltai-agent-.log", rollingInterval: RollingInterval.Day)
+            .CreateLogger();
+
         var services = new ServiceCollection();
-        services.AddLogging(b => b.SetMinimumLevel(LogLevel.Information));
+        services.AddLogging(b => { b.ClearProviders(); b.AddSerilog(dispose: true); });
 
         var config = new ConfigurationBuilder()
             .SetBasePath(AppContext.BaseDirectory)
@@ -30,7 +37,7 @@ public static class Program
         services.AddLTAICore();
         services.AddLTAIAI();
         services.AddLTAIAgent();
-        services.AddSingleton(_ => new DocumentService(Directory.GetCurrentDirectory()));
+        
 
         var sp = services.BuildServiceProvider();
         var options = sp.GetRequiredService<IOptions<LTAIOptions>>();

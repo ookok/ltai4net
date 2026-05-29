@@ -47,6 +47,17 @@ public sealed class SafetyCoordinator : AIContextProvider
         if (!allowed)
         {
             _logger?.LogWarning("Safety blocked input: {Reason}", reason);
+            // Return a modified context instructing the agent to reject
+            return new AIContext
+            {
+                Messages =
+                [
+                    new ChatMessage(ChatRole.System,
+                        $"The user's last message was blocked by safety filter. " +
+                        $"Do NOT process it. Politely inform the user: \"I cannot process that " +
+                        $"request because it was flagged by our safety system. Reason: {reason}\"."),
+                ],
+            };
         }
         return context.AIContext!;
     }

@@ -2,7 +2,10 @@ using LiteDB;
 
 namespace LTAI.Agent.Vector;
 
-/// <summary>Simple LiteDB-backed vector store for semantic search.</summary>
+/// <summary>
+/// Simple LiteDB-backed vector store for semantic search.
+/// DEPRECATED — use GraphStore instead (unified graph + vector, same LiteDB engine).
+/// </summary>
 public sealed class LiteDbVectorStore : IDisposable
 {
     private readonly LiteDatabase _db;
@@ -13,9 +16,16 @@ public sealed class LiteDbVectorStore : IDisposable
         _db = new LiteDatabase(dbPath);
     }
 
+    public void EnsureCollection(string collection)
+    {
+        var col = _db.GetCollection(collection);
+        col.EnsureIndex("v");
+    }
+
     public void Upsert(string collection, string id, float[] vector, Dictionary<string, object?>? metadata = null)
     {
         var col = _db.GetCollection(collection);
+        col.EnsureIndex("v");
         var doc = new BsonDocument { ["_id"] = id, ["v"] = new BsonArray(vector.Select(f => new BsonValue((double)f))) };
         if (metadata != null)
             foreach (var (k, v) in metadata) doc[k] = v switch { string s => s, int i => i, double d => d, float f => (double)f, bool b => b, null => BsonValue.Null, _ => v.ToString() };

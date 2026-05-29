@@ -388,6 +388,38 @@ public sealed class ChatView : UserControl
                 var token = update.Text ?? "";
                 _tokens++;
 
+                // Parse structured ToolResult JSON
+                if (TryParseToolResult(token, out var tResult))
+                {
+                    if (tResult.success)
+                    {
+                        statusDots.Text = "✅";
+                        responseBuf.Append($" [OK: {Truncate(tResult.output, 80)}]");
+                    }
+                    else
+                    {
+                        statusDots.Text = "❌";
+                        responseBuf.Append($" [ERROR: {tResult.error}]");
+                    }
+                    continue;
+                }
+
+                // Budget hints → show as dimmed status
+                if (token.StartsWith("[budget:") || token.StartsWith("[note:"))
+                {
+                    statusDots.Text = "💰";
+                    responseBuf.Append($" {token}");
+                    continue;
+                }
+
+                // Handoff → update task banner
+                if (token.StartsWith("HANDOFF TO "))
+                {
+                    if (taskBanner?.Child is TextBlock tb2)
+                        tb2.Text = $"🔄 {token}";
+                    continue;
+                }
+
                 if (token.StartsWith("<thinking>"))
                 {
                     inThinking = true;
@@ -524,6 +556,14 @@ public sealed class ChatView : UserControl
         panel.Children.Clear();
 
         var cleaned = CleanResponse(raw);
+
+        // Detect diff blocks: ---/+++/@@ pattern
+        if (IsDiffContent(cleaned))
+        {
+            RenderDiffBlock(panel, cleaned);
+            return;
+        }
+
         var parts = SplitCodeBlocks(cleaned);
 
         foreach (var part in parts)
@@ -540,14 +580,39 @@ public sealed class ChatView : UserControl
                     CornerRadius = new(4),
                     Padding = new(8, 8, 8, 8)
                 };
-                codeBorder.Child = new SelectableTextBlock
+                // Syntax-highlighted code block
+                // Line-by-line rendering with gutter line numbers
+                var codeStack = new StackPanel();
+                var lang = "csharp";
+                var keywords = MarkdownRenderer.GetKeywords(lang);
+                var codeLines = part.Content.Split('\n');
+                var linePad = codeLines.Length.ToString().Length;
+                for (int li = 0; li < codeLines.Length; li++)
                 {
-                    Text = part.Content,
-                    Foreground = LtaiTheme.Sbb(LtaiTheme.TextPrimary),
-                    FontFamily = new("Consolas"),
-                    FontSize = 12,
-                    TextWrapping = TextWrapping.Wrap
-                };
+                    var lineRow = new DockPanel { Margin = new(0, 0, 0, 0) };
+                    // Line number gutter
+                    lineRow.Children.Add(new TextBlock
+                    {
+                        Text = (li + 1).ToString().PadLeft(linePad),
+                        Foreground = LtaiTheme.Sbb(LtaiTheme.TextDim),
+                        FontFamily = new("Consolas"),
+                        FontSize = 11,
+                        Width = 30,
+                        TextAlignment = Avalonia.Media.TextAlignment.Right,
+                        Margin = new(0, 0, 8, 0),
+                    });
+                    // Code content
+                    var tb = new TextBlock { FontFamily = new("Consolas"), FontSize = 12, TextWrapping = TextWrapping.Wrap };
+                    var tokens = MarkdownRenderer.TokenizeLine(codeLines[li], keywords);
+                    if (tokens.Count > 0)
+                        foreach (var (text, color) in tokens)
+                            tb.Inlines!.Add(new Avalonia.Controls.Documents.Run { Text = text, Foreground = LtaiTheme.Sbb(color) });
+                    else
+                        tb.Text = " ";
+                    lineRow.Children.Add(tb);
+                    codeStack.Children.Add(lineRow);
+                }
+                codeBorder.Child = codeStack;
                 codeRow.Children.Add(codeBorder);
 
                 var copyBtn = CopyButton(part.Content);
@@ -612,6 +677,82 @@ public sealed class ChatView : UserControl
     /// all characters — code-block fences and markdown are handled elsewhere.
     /// </summary>
     private static string CleanResponse(string raw) => raw;
+
+    // ─── Diff rendering ───
+
+    private static bool IsDiffContent(string text)
+    {
+        var lines = text.Split('\n');
+        var diffMarkers = lines.Count(l => l.StartsWith("--- ") || l.StartsWith("+++ ") || l.StartsWith("@@ "));
+        return diffMarkers >= 2;
+    }
+
+    private void RenderDiffBlock(StackPanel panel, string diff)
+    {
+        var border = new Border
+        {
+            Background = LtaiTheme.Sbb(LtaiTheme.CodeBg),
+            BorderBrush = LtaiTheme.Sbb(LtaiTheme.CodeBorder),
+            BorderThickness = new(1),
+            CornerRadius = new(4),
+            Padding = new(8),
+            Margin = new(0, 4),
+        };
+        var stack = new StackPanel();
+        var lines = diff.Split('\n');
+
+        foreach (var line in lines)
+        {
+            var color = LtaiTheme.TextPrimary;
+            var prefix = "";
+
+            if (line.StartsWith("--- ") || line.StartsWith("+++ "))
+            {
+                color = LtaiTheme.AccentInfo;
+                prefix = "  ";
+            }
+            else if (line.StartsWith("@@ "))
+            {
+                color = LtaiTheme.AccentDNA;
+                prefix = "  ";
+            }
+            else if (line.StartsWith("+") && !line.StartsWith("+++"))
+            {
+                color = Color.Parse("#4CAF50"); // green
+                prefix = "+";
+            }
+            else if (line.StartsWith("-") && !line.StartsWith("---"))
+            {
+                color = Color.Parse("#F44336"); // red
+                prefix = "-";
+            }
+            else
+            {
+                prefix = " ";
+            }
+
+            var tb = new TextBlock
+            {
+                Text = prefix + " " + line,
+                FontFamily = new("Consolas"),
+                FontSize = 12,
+                Foreground = LtaiTheme.Sbb(color),
+            };
+            stack.Children.Add(tb);
+        }
+        border.Child = stack;
+        panel.Children.Add(border);
+    }
+
+    // ─── File preview (first N lines) ───
+
+    private static string TruncateFilePreview(string content, string path, int maxLines = 10)
+    {
+        var lines = content.Split('\n');
+        if (lines.Length <= maxLines) return content;
+        var preview = string.Join("\n", lines.Take(maxLines));
+        return $"{preview}\n\n... ({lines.Length - maxLines} more lines) — use read_file with range to see more";
+    }
 
     private static List<(string Content, bool IsCode)> SplitCodeBlocks(string text)
     {
@@ -802,4 +943,26 @@ public sealed class ChatView : UserControl
     {
         _stats.Text = string.Format("Turns: {0} | Tokens: {1} | Model: {2}", _turns, _tokens, _svc.Mode);
     }
+
+    private static bool TryParseToolResult(string text, out (bool success, string output, string error) result)
+    {
+        result = default;
+        text = text.Trim();
+        if (!text.StartsWith('{') || !text.EndsWith('}')) return false;
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(text);
+            var root = doc.RootElement;
+            if (!root.TryGetProperty("success", out var s)) return false;
+            var ok = s.GetBoolean();
+            var output = ok && root.TryGetProperty("output", out var o) ? o.GetString() ?? "" : "";
+            var err = !ok && root.TryGetProperty("error", out var e) ? e.GetString() ?? "" : "";
+            result = (ok, output, err);
+            return true;
+        }
+        catch { return false; }
+    }
+
+    private static string Truncate(string text, int max) =>
+        text.Length <= max ? text : text[..max] + "...";
 }
