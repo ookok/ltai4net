@@ -15,7 +15,7 @@ public sealed class TuiApp
     private readonly string _projectRoot;
     private readonly ChatLayout _chatLayout;
 
-    private TuiView _currentView = TuiView.Dashboard;
+    private TuiView _currentView = TuiView.Chat;
     private bool _running = true;
 
     public TuiApp(ChatAgent chat, LLMConfigPanel llmConfig, IOptions<LTAIOptions> config, string projectRoot)
