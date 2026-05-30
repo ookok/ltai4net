@@ -7,24 +7,48 @@ using System.Text.Json.Serialization;
 
 namespace LTAI.Core.Configuration;
 
+/// <summary>
+/// Configuration for a single LLM provider (endpoint + model + API key env var).
+/// API keys are NEVER stored in config files — only in environment variables, managed via
+/// <see cref="SecretManager"/>. Keys are read from env var at runtime.
+/// <b>Consumers:</b> MultiProviderChatClient, EmbeddingClient (via GetApiKey/SetApiKey);
+/// ConfigView, LLMConfigPanel (UI display/edit).
+/// </summary>
 public sealed class ProviderConfig
 {
     public string Endpoint { get; set; } = "";
     public string Model { get; set; } = "";
 
-    /// <summary>Read API key from environment variable (not from config file).</summary>
+    /// <summary>
+    /// Read API key from environment variable via <see cref="SecretManager"/>.
+    /// NEVER reads from config files — keys stay in env vars only.
+    /// <b>Callers:</b> MultiProviderChatClient, EmbeddingClient.
+    /// </summary>
     public string? GetApiKey() =>
-        SecretManager.Get(this.EnvVar);
+        this.EnvVar != null ? SecretManager.Get(this.EnvVar) : null;
 
-    /// <summary>Set API key to environment variable (persisted to User scope).</summary>
-    public void SetApiKey(string key) =>
-        SecretManager.Set(this.EnvVar, key);
+    /// <summary>
+    /// Set API key to environment variable (persisted to User scope on Windows).
+    /// <b>Callers:</b> ConfigView, LLMConfigPanel (UI key input).
+    /// </summary>
+    public void SetApiKey(string key)
+    {
+        if (this.EnvVar != null) SecretManager.Set(this.EnvVar, key);
+    }
 
-    /// <summary>The environment variable name for this provider's API key.</summary>
+    /// <summary>
+    /// The environment variable name for this provider's API key.
+    /// E.g. "DEEPSEEK_API_KEY". Set at config load time from KnownKeys.
+    /// </summary>
     [JsonIgnore]
     public string? EnvVar { get; set; }
 }
 
+/// <summary>
+/// AI model configuration including provider selection, token budgets, and degradation chain.
+/// Loaded from appsettings.json under "LTAI:AI".
+/// <b>Consumers:</b> MultiProviderChatClient (DI service setup), TuiApp, ConfigView.
+/// </summary>
 public sealed class AIConfig
 {
     public string DefaultProvider { get; init; } = "deepseek";
@@ -32,13 +56,20 @@ public sealed class AIConfig
     public int MaxTokens { get; init; } = 4096;
     public double Temperature { get; init; } = 0.7;
     public string? ApiKeyEnv { get; init; } = "DEEPSEEK_API_KEY";
+    /// <summary>Operational mode: "balanced", "fast", "precise", etc.</summary>
     public string Mode { get; init; } = "balanced";
+    /// <summary>Known LLM providers keyed by alias (e.g. "deepseek-fast", "deepseek-pro").</summary>
     public Dictionary<string, ProviderConfig> Providers { get; init; } = new();
+    /// <summary>Degradation chain: on provider failure, try next in sequence."ProviderAlias" → "FallbackAlias".</summary>
     public Dictionary<string, string>? DegradationChain { get; init; }
     public long GlobalTokenBudget { get; init; } = 1_000_000;
     public long PerUserTokenBudget { get; init; } = 200_000;
 
-    /// <summary>Get config for a named layer (fast/deep/etc). UI convenience.</summary>
+    /// <summary>
+    /// Resolve ProviderConfig by layer name ("fast"/"deep"/"pro"/"embedding"/custom).
+    /// Falls back to a default ProviderConfig with model name only if layer not found.
+    /// <b>Callers:</b> MultiProviderChatClient (builds IChatClient per layer), LLMConfigPanel.
+    /// </summary>
     public ProviderConfig GetLayerConfig(string layer) => layer.ToLowerInvariant() switch
     {
         "fast" or "l1" => Providers.GetValueOrDefault("deepseek-fast") ?? new ProviderConfig { Model = "deepseek-v4-flash" },
@@ -48,18 +79,31 @@ public sealed class AIConfig
     };
 }
 
+/// <summary>
+/// HTTP/SSE endpoint configuration for the ASP.NET Core host.
+/// Loaded from appsettings.json under "LTAI:Web".
+/// <b>Consumers:</b> TuiApp, Program files (bind port).
+/// </summary>
 public sealed class WebConfig
 {
     public int Port { get; init; } = 5100;
     public string[] CorsOrigins { get; init; } = Array.Empty<string>();
 }
 
+/// <summary>
+/// Vector store configuration (local SQLite vs remote).
+/// <b>Consumers:</b> KgStore, Reranker (initialization).
+/// </summary>
 public sealed class VectorConfig
 {
     public string Provider { get; init; } = "local";
     public int EmbeddingDim { get; init; } = 384;
 }
 
+/// <summary>
+/// Agent workflow parallelism and sandbox settings.
+/// <b>Consumers:</b> WorkflowOrchestrator, CoordinationScheduler.
+/// </summary>
 public sealed class HarnessProfile
 {
     public string Name { get; set; } = "development";
@@ -68,6 +112,13 @@ public sealed class HarnessProfile
     public bool EnableAuditTrail { get; set; } = true;
 }
 
+/// <summary>
+/// Root configuration object, loaded from appsettings.json under section "LTAI".
+/// Holds AI, Web, Vector, and Harness sub-configs plus runtime directory resolution.
+/// Validated at startup by <see cref="LTAIOptionsValidator"/>.
+/// <b>Consumers:</b> All projects via DI — Agent/ServiceCollectionExtensions.cs,
+/// MultiProviderChatClient, Desktop/Program.cs, TUI/Program.cs, test files.
+/// </summary>
 public sealed class LTAIOptions
 {
     public const string SectionName = "LTAI";
@@ -84,18 +135,35 @@ public sealed class LTAIOptions
     public int MaxHistoryMessages { get; init; } = 200;
     public bool EnableObservability { get; init; } = true;
 
+    /// <summary>
+    /// Resolve a path under the data directory. Env var LTAI_DATA_DIR overrides default.
+    /// <b>Callers:</b> Agent/ServiceCollectionExtensions.cs (KgStore initialization).
+    /// </summary>
     public string ResolveDataPath(string subPath) =>
         Path.Combine(EnvDataDir ?? AppContext.BaseDirectory, DataDirectory, subPath);
 
+    /// <summary>
+    /// Resolve a path under the tools directory. Env var LTAI_TOOLS_DIR overrides default.
+    /// <b>Callers:</b> Agent/ServiceCollectionExtensions.cs.
+    /// </summary>
     public string ResolveToolsPath(string? subPath = null) =>
         Path.Combine(EnvToolsDir ?? AppContext.BaseDirectory, ToolsDirectory, subPath ?? "");
 
+    /// <summary>
+    /// Resolve a path under the prompts directory. Env var LTAI_PROMPTS_DIR overrides default.
+    /// <b>Callers:</b> Agent/ServiceCollectionExtensions.cs.
+    /// </summary>
     public string ResolvePromptsPath(string? subPath = null) =>
         Path.Combine(EnvPromptsDir ?? AppContext.BaseDirectory, PromptsDirectory, subPath ?? "");
 
+    /// <summary>
+    /// Resolve a path under the memory directory. Env var LTAI_MEMORY_DIR overrides default.
+    /// <b>Callers:</b> Desktop/MainWindow.cs.
+    /// </summary>
     public string ResolveMemoryPath(string? subPath = null) =>
         Path.Combine(EnvMemoryDir ?? AppContext.BaseDirectory, MemoryDirectory, subPath ?? "");
 
+    // ══ Env var overrides (private — consumers use Resolve* methods) ══
     private static string? EnvDataDir => Environment.GetEnvironmentVariable("LTAI_DATA_DIR");
     private static string? EnvToolsDir => Environment.GetEnvironmentVariable("LTAI_TOOLS_DIR");
     private static string? EnvPromptsDir => Environment.GetEnvironmentVariable("LTAI_PROMPTS_DIR");
@@ -103,17 +171,37 @@ public sealed class LTAIOptions
 }
 
 /// <summary>
-/// All environment variables the system uses, with descriptions.
-/// Used by TUI/Desktop/CLI to show users what keys are available and what each is for.
-/// Config files store endpoint/model only — keys are NEVER stored in config files.
+/// Registry of all environment variables the system uses, with descriptions and pricing.
+/// Serves as the single source of truth for:
+///   - UI panels (which keys to show, their endpoints/models)
+///   - Cost calculation (per-provider ¥/1M tokens)
+///   - Provider config initialization (endpoint + model defaults)
+/// Keys are NEVER stored in config files — only env vars, accessed via <see cref="SecretManager"/>.
+/// <b>Consumers:</b> ConfigView, MainWindow, LLMConfigPanel (display);
+/// EmbeddingClient, MultiProviderChatClient (provider init);
+/// UsageTracker (pricing lookup).
 /// </summary>
 public static class KnownKeys
 {
+    /// <summary>
+    /// Record for a single known API key's metadata.
+    /// </summary>
+    /// <param name="EnvVar">Environment variable name, e.g. "DEEPSEEK_API_KEY".</param>
+    /// <param name="Service">Display name, e.g. "DeepSeek".</param>
+    /// <param name="Description">Human-readable description with pricing.</param>
+    /// <param name="Url">Link to the API key management page.</param>
+    /// <param name="Endpoint">Default API endpoint URL.</param>
+    /// <param name="Model">Default model name for this provider.</param>
+    /// <param name="PriceInPerM">Input price per million tokens (¥).</param>
+    /// <param name="PriceOutPerM">Output price per million tokens (¥).</param>
     public sealed record KeyInfo(string EnvVar, string Service, string Description,
         string? Url = null, string? Endpoint = null, string? Model = null,
         decimal PriceInPerM = 0, decimal PriceOutPerM = 0);
 
-    /// <summary>All known keys. Source of truth for all UI panels.</summary>
+    /// <summary>
+    /// All known keys. Source of truth for UI panels and cost calculation.
+    /// <b>Consumers:</b> ConfigView, MainWindow, LLMConfigPanel, UsageTracker.
+    /// </summary>
     public static readonly KeyInfo[] All =
     [
         // ── LLM Providers (官方 ¥/1M tokens 价格，来源各官网定价页) ──
@@ -156,13 +244,21 @@ public static class KnownKeys
         new("UNSPLASH_KEY",         "Unsplash",       "图片搜索 API",      "https://unsplash.com/developers"),
     ];
 
-    /// <summary>Generate DefaultProviders format: (envVar, endpoint, model, name).</summary>
+    /// <summary>
+    /// Generate default provider configurations in tuple format.
+    /// Filters to providers that have both an endpoint and a model defined.
+    /// <b>Callers:</b> MultiProviderChatClient (initialize default providers).
+    /// </summary>
     public static (string envVar, string endpoint, string model, string name)[] GetDefaultProviders() =>
         All.Where(k => k.Endpoint != null && k.Model != null)
            .Select(k => (k.EnvVar, k.Endpoint!, k.Model!, k.Service))
            .ToArray();
 
-    /// <summary>Get all keys grouped by service category.</summary>
+    /// <summary>
+    /// Get all keys grouped by service category for UI display.
+    /// Categories: "LLM Providers", "Map / GIS", "Web Search", "Weather", "Translation", "Image", "Other".
+    /// <b>Consumers:</b> ConfigView (category tabs).
+    /// </summary>
     public static ILookup<string, KeyInfo> ByCategory =>
         All.ToLookup(k => k.Service.Contains("API") ? "LLM Providers"
                       : k.EnvVar.Contains("MAP") || k.EnvVar.Contains("TIANDITU") ? "Map / GIS"
@@ -174,28 +270,151 @@ public static class KnownKeys
 }
 
 /// <summary>
-/// Real-time token and cost tracker for all LLM calls.
-/// Accumulates across the entire session. Thread-safe.
-/// Uses per-provider pricing from <see cref="KnownKeys.All"/>.
+/// Interface for token/cost tracking. Inject via DI for per-scope tracking,
+/// or use static <see cref="UsageTracker.Current"/> for existing callers.
+/// Implementations must be thread-safe.
 /// </summary>
-public static class UsageTracker
+public interface IUsageTracker
 {
+    /// <summary>Record token usage from an API call.</summary>
+    void Record(int prompt, int completion, string model = "");
+    /// <summary>Record a response cache hit.</summary>
+    void RecordCacheHit();
+    /// <summary>Record a response cache miss.</summary>
+    void RecordCacheMiss();
+    /// <summary>Total prompt tokens.</summary>
+    long PromptTokens { get; }
+    /// <summary>Total completion tokens.</summary>
+    long CompletionTokens { get; }
+    /// <summary>Total requests.</summary>
+    long Requests { get; }
+    /// <summary>Estimated cost in ¥.</summary>
+    decimal EstimatedCost { get; }
+    /// <summary>Cache hit count.</summary>
+    long CacheHits { get; }
+    /// <summary>Cache miss count.</summary>
+    long CacheMisses { get; }
+    /// <summary>Cache hit rate (0-100%).</summary>
+    double CacheHitRate { get; }
+    /// <summary>Context usage ratio 0.0-1.0.</summary>
+    double ContextRatio(int contextWindowOverride = 0);
+    /// <summary>Context usage text (e.g. "12,345/64,000 (19.3%)").</summary>
+    string ContextText(int contextWindowOverride = 0);
+    /// <summary>One-line summary of session stats.</summary>
+    string Summary();
+    /// <summary>Cost display string (¥ prefix).</summary>
+    string CostDisplay { get; }
+    /// <summary>Active model name.</summary>
+    string ActiveModel { get; }
+    /// <summary>Account balance display.</summary>
+    string BalanceDisplay { get; }
+    /// <summary>Fetch balance from provider API (best-effort).</summary>
+    Task FetchBalanceAsync(string defaultProvider, string? apiKey = null);
+    /// <summary>Set active model name.</summary>
+    void SetActiveModel(string model);
+    /// <summary>Set context window size.</summary>
+    void SetContextWindowSize(int size);
+}
+
+/// <summary>
+/// Default implementation of <see cref="IUsageTracker"/>.
+/// Thread-safe via Interlocked and lock. Uses per-provider pricing from <see cref="KnownKeys.All"/>.
+/// Supports optional scoped tracking (see <see cref="BeginScope"/>) for per-request cost attribution.
+/// <b>Consumers:</b> Cli/Program.cs (dashboard), DashboardView, SessionStatsPanel,
+/// TuiApp (status bar), CoreTests, MultiProviderChatClient (Record calls).
+/// 
+/// Backward-compat static forwarding: all static members delegate to <see cref="Default"/>,
+/// so existing callers like <c>UsageTracker.Record(...)</c> continue to work unchanged.
+/// New code should inject <see cref="IUsageTracker"/> via DI.
+/// </summary>
+public sealed class UsageTracker : IUsageTracker
+{
+    /// <summary>Global default instance. All static methods forward here.</summary>
+    public static readonly UsageTracker Default = new();
+
+    /// <summary>Current scoped tracker (if set via DI), or <see cref="Default"/>.</summary>
+    internal static readonly AsyncLocal<UsageTracker?> Scoped = new();
+
+    private static UsageTracker Current => Scoped.Value ?? Default;
+
+    // ── Instance methods ──
+
+    public UsageTracker() { }
+
+    /// <summary>
+    /// Begin a scoped cost tracking session. Records token/cost deltas on dispose.
+    /// Useful for per-request or per-conversation cost attribution in multi-tenant scenarios.
+    /// Nested scopes are supported — each records from its start snapshot.
+    /// Example:
+    /// <code>
+    /// using (var scope = UsageTracker.BeginScope())
+    /// {
+    ///     await llm.GetResponseAsync(...);
+    ///     Console.WriteLine($"This request cost {scope.Cost:F4}¥");
+    /// }
+    /// </code>
+    /// </summary>
+    public UsageScope BeginScope() => new(
+        Interlocked.Read(ref _promptTokens),
+        Interlocked.Read(ref _completionTokens),
+        _totalCost);
+
+    /// <summary>Static forwarding to <see cref="Default"/>.</summary>
+    public static UsageScope BeginScopeStatic() => Default.BeginScope();
+
+    /// <summary>
+    /// Records token/cost deltas within a scope. Created by <see cref="BeginScope"/>.
+    /// Dispose to record the scope's contribution to the aggregate.
+    /// </summary>
+    public sealed class UsageScope : IDisposable
+    {
+        private readonly long _startPrompt;
+        private readonly long _startCompletion;
+        private readonly double _startCost;
+        internal UsageScope(long startPrompt, long startCompletion, double startCost)
+        {
+            _startPrompt = startPrompt;
+            _startCompletion = startCompletion;
+            _startCost = startCost;
+        }
+
+        /// <summary>Prompt tokens used within this scope.</summary>
+        public long PromptDelta => Interlocked.Read(ref _promptTokens) - _startPrompt;
+        /// <summary>Completion tokens used within this scope.</summary>
+        public long CompletionDelta => Interlocked.Read(ref _completionTokens) - _startCompletion;
+        /// <summary>Estimated cost (¥) within this scope.</summary>
+        public decimal Cost => (decimal)(Volatile.Read(ref _totalCost) - _startCost);
+
+        public void Dispose() { }
+    }
+
+    // ══ Shared state (static, shared by Default + any scoped instances) ══
     private static long _promptTokens;
     private static long _completionTokens;
     private static double _totalCost;
     private static readonly object _costLock = new();
     private static long _requests;
     private static readonly Stopwatch _timer = Stopwatch.StartNew();
+    private static string _activeModel = "";
+    private static long _cacheHits;
+    private static long _cacheMisses;
+    private static int _contextWindowSize = 64000;
+    private static double _balance;
+    private static string _balanceCurrency = "";
+    private static string _balanceSource = "";
+    private static readonly HttpClient _balanceHttp = new() { Timeout = TimeSpan.FromSeconds(5) };
 
-    /// <summary>Record token usage from an API call. Looks up pricing by model name.</summary>
-    public static void Record(int prompt, int completion, string model = "")
+    // ══ IUsageTracker explicit implementation (accessible when cast to interface) ══
+    void IUsageTracker.Record(int prompt, int completion, string model) => RecordInternal(prompt, completion, model);
+
+    /// <summary>Core Record logic — called by both static forwarder and interface impl.</summary>
+    private static void RecordInternal(int prompt, int completion, string model)
     {
         Interlocked.Add(ref _promptTokens, prompt);
         Interlocked.Add(ref _completionTokens, completion);
         Interlocked.Increment(ref _requests);
         if (!string.IsNullOrEmpty(model)) _activeModel = model;
 
-        // Look up provider pricing from KnownKeys by model name prefix match
         var key = KnownKeys.All.FirstOrDefault(k =>
             !string.IsNullOrEmpty(k.Model) && model.StartsWith(k.Model, StringComparison.OrdinalIgnoreCase));
         double cost;
@@ -212,131 +431,120 @@ public static class UsageTracker
         lock (_costLock) { _totalCost += cost; }
     }
 
+    /// <summary>Static forwarding — delegates to <see cref="Default"/>.</summary>
+    public static void Record(int prompt, int completion, string model = "") => RecordInternal(prompt, completion, model);
+
+    // ══ IUsageTracker explicit implementation (cast to interface to access) ══
+    long IUsageTracker.PromptTokens => Interlocked.Read(ref _promptTokens);
+    long IUsageTracker.CompletionTokens => Interlocked.Read(ref _completionTokens);
+    long IUsageTracker.Requests => Interlocked.Read(ref _requests);
+    decimal IUsageTracker.EstimatedCost { get { lock (_costLock) { return (decimal)_totalCost; } } }
+    string IUsageTracker.CostDisplay => $"¥{((IUsageTracker)this).EstimatedCost:F4}";
+    string IUsageTracker.ActiveModel => string.IsNullOrEmpty(_activeModel) ? "N/A" : _activeModel;
+    void IUsageTracker.SetActiveModel(string model) => _activeModel = model;
+    void IUsageTracker.RecordCacheHit() => Interlocked.Increment(ref _cacheHits);
+    void IUsageTracker.RecordCacheMiss() => Interlocked.Increment(ref _cacheMisses);
+    long IUsageTracker.CacheHits => Interlocked.Read(ref _cacheHits);
+    long IUsageTracker.CacheMisses => Interlocked.Read(ref _cacheMisses);
+    double IUsageTracker.CacheHitRate =>
+        CacheHits + CacheMisses > 0 ? (double)CacheHits / (CacheHits + CacheMisses) * 100 : 0;
+    double IUsageTracker.ContextRatio(int ovr) => CalcContextRatio(ovr);
+    string IUsageTracker.ContextText(int ovr) => CalcContextText(ovr);
+    string IUsageTracker.BalanceDisplay => BalanceDisplayStatic;
+    void IUsageTracker.SetContextWindowSize(int size) => _contextWindowSize = size;
+    async Task IUsageTracker.FetchBalanceAsync(string p, string? k) => await FetchBalanceStaticAsync(p, k);
+    string IUsageTracker.Summary() => BuildSummary();
+
+    // ══ Public static members (same names as before — backward compatible) ══
     public static long PromptTokens => Interlocked.Read(ref _promptTokens);
     public static long CompletionTokens => Interlocked.Read(ref _completionTokens);
     public static long TotalTokens => PromptTokens + CompletionTokens;
     public static long Requests => Interlocked.Read(ref _requests);
     public static TimeSpan Uptime => _timer.Elapsed;
-
-    /// <summary>Accumulated cost in RMB, calculated per-provider from KnownKeys pricing.</summary>
     public static decimal EstimatedCost { get { lock (_costLock) { return (decimal)_totalCost; } } }
-
-    /// <summary>Cost estimate as string with ¥ symbol.</summary>
     public static string CostDisplay => $"¥{EstimatedCost:F4}";
-
-    // ═══════════════════════════════════════════
-    //  Context & cache tracking
-    // ═══════════════════════════════════════════
-
-    private static string _activeModel = "";
-    private static long _cacheHits;
-    private static long _cacheMisses;
-    private static int _contextWindowSize = 64000;
-
-    /// <summary>Currently active model name.</summary>
     public static string ActiveModel => string.IsNullOrEmpty(_activeModel) ? "N/A" : _activeModel;
-
-    /// <summary>Set the active model name (called after each API call).</summary>
     public static void SetActiveModel(string model) => _activeModel = model;
-
-    /// <summary>Cache hit/miss tracking.</summary>
     public static void RecordCacheHit() => Interlocked.Increment(ref _cacheHits);
     public static void RecordCacheMiss() => Interlocked.Increment(ref _cacheMisses);
     public static long CacheHits => Interlocked.Read(ref _cacheHits);
     public static long CacheMisses => Interlocked.Read(ref _cacheMisses);
     public static double CacheHitRate =>
         CacheHits + CacheMisses > 0 ? (double)CacheHits / (CacheHits + CacheMisses) * 100 : 0;
-
-    /// <summary>Set the context window size (from config).</summary>
     public static void SetContextWindowSize(int size) => _contextWindowSize = size;
+    public static double ContextRatio(int contextWindowOverride = 0) => CalcContextRatio(contextWindowOverride);
+    public static string ContextText(int contextWindowOverride = 0) => CalcContextText(contextWindowOverride);
+    public static string BalanceDisplay => BalanceDisplayStatic;
+    public static async Task FetchBalanceAsync(string defaultProvider, string? apiKey = null)
+        => await FetchBalanceStaticAsync(defaultProvider, apiKey);
+    public static string Summary() => BuildSummary();
 
-    /// <summary>Context usage as ratio 0.0-1.0 (for UI ProgressBar rendering).</summary>
-    public static double ContextRatio(int contextWindowOverride = 0)
+    // ══ Internal helpers (shared by static + interface impl) ══
+    private static double CalcContextRatio(int ovr)
     {
-        var maxTokens = contextWindowOverride > 0 ? contextWindowOverride : _contextWindowSize;
-        if (maxTokens <= 0) return 0;
-        var used = PromptTokens % (maxTokens + 1);
-        return Math.Clamp((double)used / maxTokens, 0, 1);
+        var max = ovr > 0 ? ovr : _contextWindowSize;
+        if (max <= 0) return 0;
+        return Math.Clamp((double)(PromptTokens % (max + 1)) / max, 0, 1);
     }
-
-    /// <summary>Context usage text description.</summary>
-    public static string ContextText(int contextWindowOverride = 0)
+    private static string CalcContextText(int ovr)
     {
-        var maxTokens = contextWindowOverride > 0 ? contextWindowOverride : _contextWindowSize;
-        if (maxTokens <= 0) return "";
-        var used = PromptTokens % (maxTokens + 1);
-        return $"{used:N0}/{maxTokens:N0} ({(double)used / maxTokens * 100:F0}%)";
+        var max = ovr > 0 ? ovr : _contextWindowSize;
+        if (max <= 0) return "";
+        return $"{PromptTokens:N0}/{max:N0} ({(double)PromptTokens / max * 100:F1}%)";
     }
-
-    // ═══════════════════════════════════════════
-    //  Balance tracking
-    // ═══════════════════════════════════════════
-
-    private static double _balance;
-    private static string _balanceCurrency = "";
-    private static string _balanceSource = "";
-
-    /// <summary>Account balance from provider (e.g. ¥12.34). Empty if unavailable.</summary>
-    public static string BalanceDisplay =>
+    private static string BalanceDisplayStatic =>
         string.IsNullOrEmpty(_balanceSource) ? "N/A"
         : $"{_balanceCurrency}{_balance:F2} ({_balanceSource})";
-
-    /// <summary>Asynchronously fetch balance from the default provider's API.</summary>
-    public static async Task FetchBalanceAsync(string defaultProvider, string? apiKey = null)
+    private static async Task FetchBalanceStaticAsync(string defaultProvider, string? apiKey)
     {
         try
         {
             if (string.IsNullOrEmpty(apiKey)) return;
-            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
-
-            // Try known balance APIs based on provider name
             if (defaultProvider.Contains("siliconflow", StringComparison.OrdinalIgnoreCase))
             {
-                http.DefaultRequestHeaders.Authorization = new("Bearer", apiKey);
-                var resp = await http.GetStringAsync("https://api.siliconflow.cn/v1/user/balance");
-                using var json = JsonDocument.Parse(resp);
+                using var req = new HttpRequestMessage(HttpMethod.Get, "https://api.siliconflow.cn/v1/user/balance");
+                req.Headers.Authorization = new("Bearer", apiKey);
+                using var resp = await _balanceHttp.SendAsync(req);
+                resp.EnsureSuccessStatusCode();
+                var body = await resp.Content.ReadAsStringAsync();
+                using var json = JsonDocument.Parse(body);
                 var bal = json.RootElement.GetProperty("balance").GetDouble();
-                _balance = bal;
-                _balanceCurrency = "¥";
-                _balanceSource = "SiliconFlow";
-            }
-            else if (defaultProvider.Contains("deepseek", StringComparison.OrdinalIgnoreCase))
-            {
-                // DeepSeek has no public balance API — use estimated remaining from budget
-                _balanceSource = "";
+                _balance = bal; _balanceCurrency = "¥"; _balanceSource = "SiliconFlow";
             }
             else if (defaultProvider.Contains("openrouter", StringComparison.OrdinalIgnoreCase))
             {
-                http.DefaultRequestHeaders.Authorization = new("Bearer", apiKey);
-                var resp = await http.GetStringAsync("https://openrouter.ai/api/v1/auth/key");
-                using var json = JsonDocument.Parse(resp);
+                using var req = new HttpRequestMessage(HttpMethod.Get, "https://openrouter.ai/api/v1/auth/key");
+                req.Headers.Authorization = new("Bearer", apiKey);
+                using var resp = await _balanceHttp.SendAsync(req);
+                resp.EnsureSuccessStatusCode();
+                var body = await resp.Content.ReadAsStringAsync();
+                using var json = JsonDocument.Parse(body);
                 var credits = json.RootElement.GetProperty("data").GetProperty("credits").GetDouble();
-                _balance = credits;
-                _balanceCurrency = "$";
-                _balanceSource = "OpenRouter";
+                _balance = credits; _balanceCurrency = "$"; _balanceSource = "OpenRouter";
             }
-            // Add more providers as their balance APIs become available
         }
-        catch
-        {
-            // Balance fetch is best-effort; silently ignore failures
-        }
+        catch { /* best-effort */ }
     }
-
-    public static string Summary()
+    private static string BuildSummary()
     {
         var p = PromptTokens;
         var c = CompletionTokens;
         return $"Tokens: {p:N0}+{c:N0}={TotalTokens:N0} | "
              + $"Requests: {Requests} | "
-             + $"Cost: ${EstimatedCost:F4} | "
-             + $"Uptime: {Uptime:hh\\:mm\\:ss}";
+             + $"Cost: ¥{EstimatedCost:F4} | "
+             + $"Uptime: {_timer.Elapsed:hh\\:mm\\:ss}";
     }
 }
 
 /// <summary>
 /// Centralized API key manager. Keys stored ONLY in environment variables.
 /// Config files (provider_endpoints.md, appsettings.json) store endpoint/model only — never keys.
+/// ⚠ Cache has no TTL — if an env var changes externally, SecretManager returns stale value
+/// until Invalidate() is called.
+/// <b>Consumers:</b> MultiProviderChatClient, EmbeddingClient (Get for LLM calls);
+/// WebTools, IntegrationTools (Get for web/map APIs);
+/// Cli/Program.cs, ConfigView (Set for key configuration);
+/// Tests (CoreTests).
 /// </summary>
 public static class SecretManager
 {

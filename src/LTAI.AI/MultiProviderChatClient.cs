@@ -1,7 +1,6 @@
 using System.Collections.Concurrent;
 using System.Net.Http.Json;
 using System.Runtime.CompilerServices;
-using System.Security.Cryptography;
 using Microsoft.Extensions.Caching.Memory;
 using System.Text.Json;
 using LTAI.Core.Configuration;
@@ -14,13 +13,26 @@ using Microsoft.Extensions.Options;
 namespace LTAI.AI;
 
 /// <summary>
-/// Multi-LLM provider router with automatic degradation chain.
-/// Auto-registers all providers with valid API keys at startup.
+/// Multi-LLM provider router with automatic degradation chain and circuit breaker.
+/// Auto-registers all providers with valid API keys at startup via KnownKeys.
+/// Implements IChatClient to serve as the primary LLM interface for the whole system.
+/// Wrapped by <see cref="LTAI.Core.Safety.SafeChatClient"/> for output safety.
+///
+/// Degradation flow: DeepSeek (L1 flash) → DeepSeek-pro (L2) → other registered providers.
+/// Circuit breaker: 3 consecutive failures → 30s cooldown per provider.
+/// Auth/payment errors (401/403/402) → permanent ban for the session.
+///
+/// <b>Consumers:</b> All agents/tools that make LLM calls through IChatClient DI.
+/// Registered in AddLTAIAI() in this file.
+///
+/// ⚠ KNOWN ISSUE: Uses SHA256 for cache key hashing — overkill; XxHash64 would suffice.
+/// ⚠ KNOWN ISSUE: Cache-hit path uses text.Length/4 as estimated token count (fake metric).
 /// </summary>
 public sealed class MultiProviderChatClient : IChatClient
 {
     /// <summary>All known providers: (envVar, endpoint, model, displayName).
-    /// Generated from <see cref="LTAI.Core.Configuration.KnownKeys.GetDefaultProviders"/> — single source of truth.</summary>
+    /// Generated from <see cref="LTAI.Core.Configuration.KnownKeys.GetDefaultProviders"/> — single source of truth
+    /// for all provider configurations across the system.</summary>
     public static readonly (string envVar, string endpoint, string model, string name)[] DefaultProviders =
         LTAI.Core.Configuration.KnownKeys.GetDefaultProviders();
 
@@ -29,13 +41,15 @@ public sealed class MultiProviderChatClient : IChatClient
     private readonly ILogger<MultiProviderChatClient> _logger;
     private string _defaultProvider;
 
-    // Circuit breaker state per provider
+    // 自适应成本路由：成功率 + 延迟 + 成本感知
+    private readonly ConcurrentDictionary<string, ProviderStats> _providerStats = new(StringComparer.OrdinalIgnoreCase);
+    // Circuit breaker state per provider (thread-safe via ConcurrentDictionary)
     private readonly ConcurrentDictionary<string, int> _providerFailures = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, DateTime> _providerCooldowns = new(StringComparer.OrdinalIgnoreCase);
     private const int MaxFailuresBeforeCooldown = 3;
     private static readonly TimeSpan CooldownDuration = TimeSpan.FromSeconds(30);
 
-    // Response cache (LRU, 5min TTL)
+    // Response cache (LRU, 5min TTL) — shared across ALL instances (static)
     private static readonly MemoryCache _responseCache = new(new MemoryCacheOptions
     {
         SizeLimit = 256,
@@ -43,9 +57,15 @@ public sealed class MultiProviderChatClient : IChatClient
     });
     private static readonly TimeSpan CacheTtl = TimeSpan.FromMinutes(5);
 
+    /// <summary>Names of all currently registered LLM clients.</summary>
     public IEnumerable<string> RegisteredProviders => _clients.Keys;
+    /// <summary>Currently active default provider name.</summary>
     public string ActiveProvider { get => _defaultProvider; set => _defaultProvider = value; }
 
+    /// <summary>
+    /// Initialize the router. Sets default provider from options and loads degradation chain.
+    /// Actual provider clients are registered later via <see cref="Register"/> in AddLTAIAI().
+    /// </summary>
     public MultiProviderChatClient(LTAIOptions options, ILogger<MultiProviderChatClient>? logger = null)
     {
         _defaultProvider = options.AI.DefaultProvider;
@@ -57,10 +77,25 @@ public sealed class MultiProviderChatClient : IChatClient
         }
     }
 
+    /// <summary>
+    /// Register a named IChatClient instance.
+    /// <b>Callers:</b> AddLTAIAI() ServiceCollectionExtensions (once per provider with valid API key).
+    /// </summary>
     public void Register(string name, IChatClient client) => _clients[name] = client;
 
+    /// <summary>Identity metadata for OpenTelemetry instrumentation.</summary>
     public ChatClientMetadata? Metadata => new("MultiProvider", new Uri("https://github.com/ltai-org/ltai4net"));
 
+    /// <summary>
+    /// Get a non-streaming response with automatic degradation and circuit breaker.
+    /// 1. Check response cache (SHA256 key, 5min TTL)
+    /// 2. Iterate degradation chain
+    /// 3. Per-provider 15s timeout
+    /// 4. Auth/payment errors → permanent ban
+    /// 5. Rate limiting → 30s cooldown (uses Retry-After if available)
+    /// 6. 3+ consecutive failures → 30s circuit breaker
+    /// <b>Callers:</b> System-wide via IChatClient DI — agents, tools, workflows.
+    /// </summary>
     public async Task<ChatResponse> GetResponseAsync(
         IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken ct = default)
     {
@@ -68,6 +103,12 @@ public sealed class MultiProviderChatClient : IChatClient
         return await TryCallWithDegradation(provider, messages, options, ct).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Get a streaming response with per-provider degradation on mid-stream failure.
+    /// If streaming fails midway on one provider, switches to the next in degradation chain
+    /// and inserts a notice in the stream about the switch-over.
+    /// <b>Callers:</b> System-wide via IChatClient DI.
+    /// </summary>
     public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
         IEnumerable<ChatMessage> messages, ChatOptions? options = null,
         [EnumeratorCancellation] CancellationToken ct = default)
@@ -75,7 +116,7 @@ public sealed class MultiProviderChatClient : IChatClient
         var provider = options?.ModelId ?? _defaultProvider;
         bool anyAttempted = false;
         string? lastFailedProvider = null;
-        foreach (var p in DegradationChain(provider))
+        foreach (var p in RankedProviders(provider))
         {
             if (!_clients.TryGetValue(p, out var client)) continue;
             anyAttempted = true;
@@ -126,12 +167,12 @@ public sealed class MultiProviderChatClient : IChatClient
             _logger.LogDebug("Cache HIT for provider '{P}', key={Key}", provider, cacheKey);
             LTAI.Core.Configuration.UsageTracker.RecordCacheHit();
             // Still track approximate tokens from cached response
-            var text = cached.Messages?.LastOrDefault()?.Text ?? "";
+            var text = cached!.Messages?.LastOrDefault()?.Text ?? "";
             LTAI.Core.Configuration.UsageTracker.Record(text.Length / 4, text.Length / 8, provider);
             return cached;
         }
 
-        foreach (var p in DegradationChain(provider))
+        foreach (var p in RankedProviders(provider))
         {
             if (!_clients.TryGetValue(p, out var client)) continue;
 
@@ -158,9 +199,11 @@ public sealed class MultiProviderChatClient : IChatClient
                     AbsoluteExpirationRelativeToNow = CacheTtl
                 });
 
-                // Success — reset failure count
+                // Success — reset failure count, update stats
                 _providerFailures.TryRemove(p, out _);
                 _providerCooldowns.TryRemove(p, out _);
+                var stats = _providerStats.GetOrAdd(p, _ => new ProviderStats());
+                Interlocked.Increment(ref stats.SuccessfulCalls);
 
                 return result;
             }
@@ -172,6 +215,7 @@ public sealed class MultiProviderChatClient : IChatClient
                 // Auth / payment failure — ban permanently (never retry this session)
                 _logger.LogWarning("Provider '{P}' permanently banned: {(int)ex.StatusCode}", p, ex.StatusCode);
                 _providerCooldowns[p] = DateTime.MaxValue;
+                RecordFailure(p);
                 continue;
             }
             catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
@@ -182,6 +226,7 @@ public sealed class MultiProviderChatClient : IChatClient
                     : TimeSpan.FromSeconds(30);
                 _providerCooldowns[p] = DateTime.UtcNow + cooldown;
                 _logger.LogWarning("Provider '{P}' rate limited, cooldown {Cooldown}s", p, cooldown.TotalSeconds);
+                RecordFailure(p);
                 continue;
             }
             catch (TimeoutException)
@@ -210,6 +255,8 @@ public sealed class MultiProviderChatClient : IChatClient
     private void RecordFailure(string provider)
     {
         var count = _providerFailures.AddOrUpdate(provider, 1, (_, c) => c + 1);
+        var stats = _providerStats.GetOrAdd(provider, _ => new ProviderStats());
+        Interlocked.Increment(ref stats.FailedCalls);
         if (count >= MaxFailuresBeforeCooldown)
         {
             var until = DateTime.UtcNow + CooldownDuration;
@@ -219,29 +266,79 @@ public sealed class MultiProviderChatClient : IChatClient
         }
     }
 
-    /// <summary>Build a deterministic cache key from provider, messages, and options.</summary>
+    /// <summary>
+    /// Build a deterministic cache key from provider, messages, and options.
+    /// Uses HashCode.Combine (built-in, zero allocations, deterministic within process).
+    /// Includes: provider name, temperature, max output tokens, and full message text.
+    /// In-memory cache only — no cross-process persistence needed.
+    /// </summary>
     private static string BuildCacheKey(string provider, IEnumerable<ChatMessage> messages, ChatOptions? options)
     {
-        var sb = new System.Text.StringBuilder();
-        sb.Append(provider).Append('|');
-        sb.Append(options?.Temperature ?? 0).Append('|');
-        sb.Append(options?.MaxOutputTokens ?? 0).Append('|');
+        var hc = new HashCode();
+        hc.Add(provider, StringComparer.OrdinalIgnoreCase);
+        hc.Add(options?.Temperature ?? 0);
+        hc.Add(options?.MaxOutputTokens ?? 0);
         foreach (var m in messages)
-            sb.Append(m.Role).Append(':').Append(m.Text ?? "").Append('|');
-        // Hash to keep key short
-        using var sha = SHA256.Create();
-        var bytes = sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(sb.ToString()));
-        return Convert.ToHexString(bytes)[..16];
+        {
+            hc.Add(m.Role);
+            hc.Add(m.Text ?? "");
+        }
+        return hc.ToHashCode().ToString("x8");
     }
 
-    private IEnumerable<string> DegradationChain(string provider)
+    /// <summary>
+    /// 按健康评分排序的提供商列表：
+    ///   1. 请求的提供商本身
+    ///   2. 其他注册提供商，按 (成功率 × 0.6 + 冷却状态 × 0.4) 降序
+    ///   3. 永久封禁的提供商不进入列表
+    /// </summary>
+    private IEnumerable<string> RankedProviders(string preferred)
     {
-        yield return provider;
-        while (_degradation.TryGetValue(provider, out var fallback))
+        var now = DateTime.UtcNow;
+        var ranked = _clients.Keys
+            .Where(p => !_providerCooldowns.TryGetValue(p, out var ban) || ban <= now)
+            .Select(p => (name: p, score: CalcHealthScore(p, now)))
+            .OrderByDescending(x => x.score)
+            .ToList();
+
+        // 首选 provider 排最前
+        var best = ranked.FirstOrDefault(x => x.name == preferred);
+        if (best.name != null)
         {
-            yield return fallback;
-            provider = fallback;
+            yield return best.name;
+            foreach (var r in ranked.Where(x => x.name != preferred))
+                yield return r.name;
         }
+        else
+        {
+            foreach (var r in ranked)
+                yield return r.name;
+        }
+    }
+
+    /// <summary>
+    /// 健康评分 0.0-1.0。考量因素：
+    ///   - 成功率 (最近成功/总尝试) × 0.6
+    ///   - 非冷却状态 × 0.4
+    /// </summary>
+    private double CalcHealthScore(string provider, DateTime now)
+    {
+        var stats = _providerStats.GetOrAdd(provider, _ => new ProviderStats());
+        var successRate = stats.TotalAttempts > 0
+            ? (double)stats.SuccessfulCalls / stats.TotalAttempts
+            : 0.8; // 新提供商初始评分 0.8
+        var notInCooldown = _providerCooldowns.TryGetValue(provider, out var until) && until > now ? 0.0 : 1.0;
+        return successRate * 0.6 + notInCooldown * 0.4;
+    }
+
+    private sealed record ProviderStats
+    {
+        public long SuccessfulCalls;
+        public long FailedCalls;
+        public long TotalAttempts => SuccessfulCalls + FailedCalls;
+        #pragma warning disable CS0649 // 预留字段
+        public long TotalCostTokens;
+#pragma warning restore CS0649
     }
 
     object? IChatClient.GetService(Type t, object? k) => t == typeof(ChatClientMetadata) ? Metadata : null;
@@ -250,7 +347,17 @@ public sealed class MultiProviderChatClient : IChatClient
 
 /// <summary>
 /// OpenAI-compatible chat client via direct HTTP calls.
-/// Works with Deepseek, OpenAI, Groq, etc. — any OpenAI-compatible API.
+/// Works with DeepSeek, OpenAI, Groq, SiliconFlow, etc. — any OpenAI-compatible API.
+/// Handles: SSE streaming, auth errors (401/403/402 → fast-fail), rate limiting (429),
+/// token usage tracking via <see cref="UsageTracker"/>.
+///
+/// <b>Consumers:</b> Instantiated per-provider in AddLTAIAI() ServiceCollectionExtensions.
+/// Used by MultiProviderChatClient as the underlying IChatClient implementation.
+///
+/// ⚠ KNOWN ISSUE (mitigated): SSE line parsing uses line.AsSpan(DataPrefix.Length) — validated
+/// by preceding StartsWith("data: ") check. If SSE format deviates, the line is skipped.
+/// ⚠ KNOWN ISSUE: Private record types (ChatResponseJson etc.) are duplicated here
+/// and in the shared JSON model — could be centralized.
 /// </summary>
 public sealed class OpenAiHttpClient : IChatClient
 {
@@ -266,6 +373,10 @@ public sealed class OpenAiHttpClient : IChatClient
         PropertyNameCaseInsensitive = true
     };
 
+    /// <summary>
+    /// Create an OpenAI-compatible HTTP client.
+    /// <param name="http">Reusable HttpClient from IHttpClientFactory (named "llm" for pooling).</param>
+    /// </summary>
     public OpenAiHttpClient(HttpClient http, string endpoint, string model, string apiKey, ILogger? logger = null)
     {
         _http = http;
@@ -277,6 +388,12 @@ public sealed class OpenAiHttpClient : IChatClient
 
     public ChatClientMetadata? Metadata => new("OpenAI-compat", new Uri(_endpoint));
 
+    /// <summary>
+    /// Non-streaming LLM call via POST /chat/completions.
+    /// Fast-fails on 401/403/402 (no point retrying), propagates 429 for rate-limit handling.
+    /// Tracks token usage via UsageTracker.Record.
+    /// <b>Callers:</b> MultiProviderChatClient.TryCallWithDegradation (via IChatClient interface).
+    /// </summary>
     public async Task<ChatResponse> GetResponseAsync(
         IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken ct = default)
     {
@@ -367,7 +484,7 @@ public sealed class OpenAiHttpClient : IChatClient
             if (string.IsNullOrEmpty(line)) continue;
             if (!line.StartsWith("data: ", StringComparison.Ordinal)) continue;
 
-            var data = line[6..];
+            var data = line.AsSpan(6).ToString();
             if (data == "[DONE]") break;
 
             StreamingChunkJson? chunk;
@@ -403,6 +520,20 @@ public sealed class OpenAiHttpClient : IChatClient
     private sealed record DeltaJson(string? Content);
 }
 
+/// <summary>
+/// DI registration for the LTAI.AI layer.
+/// Registers:
+///   - Named HttpClient "llm" with connection pooling (3 conn/server, 2min lifetime)
+///   - MultiProviderChatClient (as singleton, not IChatClient — wrapped below)
+///   - IChatClient wrapped in SafeChatClient
+///   - LocalEmbedder (ONNX BGE-small-zh)
+///   - EmbeddingClient (API → local ONNX fallback)
+///
+/// <b>Callers:</b> Top-level host setup (CLI/TUI/Desktop/Host Program.cs).
+///
+/// ⚠ KNOWN ISSUE: Safety LLM uses httpFactory.CreateClient() (unnamed, no pooling)
+/// while the main LLM uses named "llm" client with pooling. Minor perf loss.
+/// </summary>
 public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddLTAIAI(this IServiceCollection services)

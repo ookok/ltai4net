@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
@@ -5,14 +6,32 @@ using Microsoft.Extensions.Logging;
 namespace LTAI.Agent.Workflows;
 
 /// <summary>
-/// Task decomposition orchestrator.
-/// Routes tasks to specialist agents via direct agent invocation.
+/// Multi-agent orchestrator. Routes tasks to specialist agents via LLM-based routing.
+/// Supports: handoff (LLM decides specialist), sequential chain, concurrent fan-out.
+///
+/// <b>Consumers:</b> ChatAgent (delegates complex tasks via RunWorkflowAsync),
+/// WorkflowTools (agent tool interface), ServiceCollectionExtensions (DI setup).
+///
+/// Routing flow:
+///   1. Default agent analyzes task, picks specialist via "HANDOFF TO &lt;name&gt;:" marker
+///   2. If no handoff, default agent answers directly
+///   3. Sequential/Concurrent modes run explicit agent chains
+///
+/// &#x26a0; Thread safety: _concurrencyThrottle limits concurrent fan-out to 2 agents.
 /// </summary>
 public sealed class WorkflowOrchestrator
 {
+    /// <summary>
+    /// JSON handoff marker template for LLM system prompt.
+    /// Example: {"handoff_to":"code","task":"Find all places that use HttpClient"}
+    /// Must be a const to avoid raw string literal escaping issues.
+    /// Use <see cref="TryParseJsonHandoff"/> to parse this from agent output.
+    /// </summary>
+    private const string HandoffJsonExample = """{"handoff_to":"code","task":"Find all places using HttpClient"}""";
+
     private readonly ILogger<WorkflowOrchestrator> _logger;
-    private readonly Dictionary<string, AIAgent> _specialists;
-    private readonly AIAgent _defaultAgent;
+    private readonly Dictionary<string, AIAgent> _specialists;  // non-default agents by name
+    private readonly AIAgent _defaultAgent;                      // orchestrator + fallback
     private readonly SemaphoreSlim _concurrencyThrottle = new(2, 2); // Max 2 concurrent agents
 
     public WorkflowOrchestrator(
@@ -29,22 +48,29 @@ public sealed class WorkflowOrchestrator
 
     /// <summary>
     /// Route a task to a specialist agent by name.
-    /// The orchestrator decides which agent to use based on the task description.
+    /// Supports two handoff markers (checked in order):
+    ///   1. JSON structured: {"handoff_to":"name","task":"..."} — embedded anywhere in response
+    ///   2. String fallback: "HANDOFF TO name: task" — backward compatible
+    /// If no marker is found, the orchestrator's response is returned directly.
     /// </summary>
     public async Task<AgentResponse> ExecuteHandoffAsync(
         string task,
+        string? traceId = null,
         CancellationToken ct = default)
     {
         // Use orchestrator agent to decide routing
+        var specialistsDesc = string.Join("\n", _specialists.Select(s => $"  - {s.Key}"));
         var routingMessages = new List<ChatMessage>
         {
             new(ChatRole.System, $"""
                 You are the orchestrator. Available specialists:
-                {string.Join("\n", _specialists.Select(s => $"  - {s.Key}"))}
-                
-                Analyze the user's request and respond with:
-                HANDOFF TO <agent-name>: <task-for-specialist>
-                or answer directly if the request is simple.
+                {specialistsDesc}
+
+                Analyze the user's request. Choose ONE:
+                A) Complex task → respond with JSON: {HandoffJsonExample}
+                B) Simple request → answer directly
+
+                Example: {HandoffJsonExample}
                 """),
             new(ChatRole.User, task)
         };
@@ -61,34 +87,47 @@ public sealed class WorkflowOrchestrator
         }
         var decision = routingResponse.Messages?.LastOrDefault()?.Text ?? "";
 
-        // Check if the orchestrator decided to hand off
+        // Priority 1: Try structured JSON handoff marker
+        var jsonHandoff = TryParseJsonHandoff(decision);
+        if (jsonHandoff != null && _specialists.TryGetValue(jsonHandoff.Value.name, out var jsonAgent))
+        {
+            _logger.LogInformation("Handoff (JSON) '{Task}' → {Agent} [trace={Trace}]", task, jsonHandoff.Value.name, traceId ?? "");
+            return await RunAgentSafely(jsonAgent, jsonHandoff.Value.name, jsonHandoff.Value.task ?? task, ct, traceId);
+        }
+
+        // Priority 2: Fall back to string marker "HANDOFF TO name: task"
         foreach (var (name, agent) in _specialists)
         {
             if (decision.Contains($"HANDOFF TO {name}", StringComparison.OrdinalIgnoreCase))
             {
-                _logger.LogInformation("Handoff '{Task}' → {Agent}", task, name);
-                
-                // Extract the task for the specialist
+                _logger.LogInformation("Handoff (string) '{Task}' → {Agent} [trace={Trace}]", task, name, traceId ?? "");
                 var specialistTask = ExtractHandoffTask(decision, name) ?? task;
-                
-                try
-                {
-                    var result = await agent.RunAsync(
-                        [new ChatMessage(ChatRole.User, specialistTask)],
-                        cancellationToken: ct);
-                    return result;
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "Specialist agent '{Agent}' failed for task: {Task}", name, specialistTask);
-                    return new AgentResponse { Messages = [new ChatMessage(ChatRole.Assistant, $"Agent '{name}' failed: {ex.Message}")] };
-                }
+                return await RunAgentSafely(agent, name, specialistTask, ct, traceId);
             }
         }
 
         // No handoff - orchestrator answered directly
-        _logger.LogInformation("Direct answer (no handoff): {Task}", task);
+        _logger.LogInformation("Direct answer (no handoff): {Task} [trace={Trace}]", task, traceId ?? "");
         return routingResponse;
+    }
+
+    /// <summary>
+    /// Run a specialist agent with error handling. Shared by JSON and string handoff paths.
+    /// </summary>
+    private async Task<AgentResponse> RunAgentSafely(AIAgent agent, string name, string specialistTask, CancellationToken ct,
+        string? traceId = null)
+    {
+        try
+        {
+            return await agent.RunAsync(
+                [new ChatMessage(ChatRole.User, specialistTask)],
+                cancellationToken: ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Specialist agent '{Agent}' failed for task: {Task} [trace={Trace}]", name, specialistTask, traceId ?? "");
+            return new AgentResponse { Messages = [new ChatMessage(ChatRole.Assistant, $"Agent '{name}' failed: {ex.Message}")] };
+        }
     }
 
     /// <summary>
@@ -97,13 +136,14 @@ public sealed class WorkflowOrchestrator
     public async Task<string> ExecuteSequentialAsync(
         string[] agentNames,
         string task,
+        string? traceId = null,
         CancellationToken ct = default)
     {
         var agents = ResolveAgents(agentNames);
         if (agents.Length == 0) return "No valid agents specified.";
 
-        _logger.LogInformation("Sequential: {Agents} → {Task}",
-            string.Join(" → ", agents.Select(a => a.Name)), task);
+        _logger.LogInformation("Sequential: {Agents} → {Task} [trace={Trace}]",
+            string.Join(" → ", agents.Select(a => a.Name)), task, traceId ?? "");
 
         var messages = new List<ChatMessage> { new(ChatRole.User, task) };
 
@@ -131,13 +171,14 @@ public sealed class WorkflowOrchestrator
     public async Task<string> ExecuteConcurrentAsync(
         string[] agentNames,
         string task,
+        string? traceId = null,
         CancellationToken ct = default)
     {
         var agents = ResolveAgents(agentNames);
         if (agents.Length == 0) return "No valid agents specified.";
 
-        _logger.LogInformation("Concurrent: {Agents} on: {Task}",
-            string.Join(", ", agents.Select(a => a.Name)), task);
+        _logger.LogInformation("Concurrent: {Agents} on: {Task} [trace={Trace}]",
+            string.Join(", ", agents.Select(a => a.Name)), task, traceId ?? "");
 
         var results = await Task.WhenAll(agents.Select(async agent =>
         {
@@ -195,5 +236,45 @@ public sealed class WorkflowOrchestrator
         // Strip leading punctuation
         if (after.StartsWith(':')) after = after[1..].Trim();
         return string.IsNullOrEmpty(after) ? null : after;
+    }
+
+    /// <summary>
+    /// Try to extract a structured JSON handoff marker from the assistant's response.
+    /// Looks for JSON in code fences or inline: {"handoff_to":"name","task":"..."}
+    /// Returns null if no valid handoff JSON is found.
+    /// </summary>
+    private static (string name, string? task)? TryParseJsonHandoff(string decision)
+    {
+        // Try to find JSON object in the text — look for {"handoff_to": ...}
+        var jsonPattern = System.Text.RegularExpressions.Regex.Match(
+            decision, @"\{(?:[^{}]|(?:\{[^{}]*\}))*""handoff_to""\s*:\s*""([^""]+)""[^}]*\}",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+        if (!jsonPattern.Success)
+            return null;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(jsonPattern.Value,
+                new JsonDocumentOptions { AllowTrailingCommas = true });
+            var root = doc.RootElement;
+
+            if (!root.TryGetProperty("handoff_to", out var nameProp))
+                return null;
+
+            var name = nameProp.GetString() ?? "";
+            if (string.IsNullOrWhiteSpace(name))
+                return null;
+
+            var task = root.TryGetProperty("task", out var taskProp)
+                ? taskProp.GetString()
+                : null;
+
+            return (name, task);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 }

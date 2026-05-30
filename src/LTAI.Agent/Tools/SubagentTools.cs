@@ -49,36 +49,42 @@ public sealed class SubagentTools
     [Description("Explore codebase: wide-net read-only investigation, returns a distilled conclusion")]
     public Task<string> Explore(
         [Description("Concrete investigation question")] string task,
+        string? traceId = null,
         CancellationToken ct = default)
-        => SpawnAsync(task, "explore", ct: ct);
+        => SpawnAsync(task, "explore", traceId: traceId, ct: ct);
 
     [Description("Research: combine web search with code reading, returns synthesis")]
     public Task<string> Research(
         [Description("Research question requiring web + code")] string task,
+        string? traceId = null,
         CancellationToken ct = default)
-        => SpawnAsync(task, "research", ct: ct);
+        => SpawnAsync(task, "research", traceId: traceId, ct: ct);
 
     [Description("Review code changes: flags correctness/security/missing-tests")]
     public Task<string> Review(
         [Description("Focus area or 'general'")] string task,
+        string? traceId = null,
         CancellationToken ct = default)
-        => SpawnAsync(task, "review", ct: ct);
+        => SpawnAsync(task, "review", traceId: traceId, ct: ct);
 
     [Description("Security review: injection/auth/secrets/deserialization")]
     public Task<string> SecurityReview(
         [Description("Scope hint or 'full'")] string task,
+        string? traceId = null,
         CancellationToken ct = default)
-        => SpawnAsync(task, "security_review", ct: ct);
+        => SpawnAsync(task, "security_review", traceId: traceId, ct: ct);
 
     [Description("Spawn an isolated subagent. Each spawn pays a prefix-cache miss + full child loop — prefer direct tools.")]
     public Task<string> SpawnSubagent(
         [Description("The subtask to perform")] string task,
         [Description("Optional type: explore, research, review, security_review")] string? type = null,
         [Description("Optional system prompt override")] string? system = null,
+        string? traceId = null,
         CancellationToken ct = default)
-        => SpawnAsync(task, type, system, ct);
+        => SpawnAsync(task, type, system, traceId, ct);
 
-    private async Task<string> SpawnAsync(string task, string? type, string? systemOverride = null, CancellationToken ct = default)
+    private async Task<string> SpawnAsync(string task, string? type, string? systemOverride = null,
+        string? traceId = null, CancellationToken ct = default)
     {
         // ── Budget check ──
         string? budgetHint;
@@ -91,6 +97,9 @@ public sealed class SubagentTools
                 return ToolResult.Error($"Budget exceeded: {_spawnCount} spawns (max {MaxSpawns}). " +
                     "Use direct tools instead of spawning more subagents.");
         }
+
+        if (!string.IsNullOrEmpty(traceId))
+            System.Diagnostics.Debug.WriteLine($"[Subagent {_spawnCount}] type={type} trace={traceId}");
 
         var sw = Stopwatch.StartNew();
         var systemPrompt = systemOverride ?? GetSystemPrompt(type ?? "generic");

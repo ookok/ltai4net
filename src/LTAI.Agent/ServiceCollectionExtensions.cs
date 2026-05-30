@@ -19,17 +19,6 @@ public static class ServiceCollectionExtensions
 {
 #pragma warning disable MAAI001
 
-    private static string? _stableSessionId;
-    private static readonly object _sessionLock = new();
-
-    internal static string GetStableSessionId()
-    {
-        if (_stableSessionId == null)
-            lock (_sessionLock)
-                _stableSessionId ??= $"ltai-{Environment.MachineName}-{Environment.ProcessId}-{DateTime.UtcNow:yyyyMMdd}";
-        return _stableSessionId;
-    }
-
     public static IServiceCollection AddLTAIAgent(this IServiceCollection services)
     {
         // Step 1: Build agents (no workflow dep)
@@ -71,14 +60,24 @@ public static class ServiceCollectionExtensions
             new WorkflowOrchestrator(agents.Values, agents["chat"],
                 sp.GetRequiredService<ILogger<WorkflowOrchestrator>>()));
 
-        // Step 3: ChatAgent + workflow (default L1=flash, auto-upgrade to L2=pro)
+        // Step 3b: Token budget tracker (from AI config, optional)
+        services.AddSingleton<LTAI.AI.BudgetTracker>(sp =>
+        {
+            var opts = sp.GetRequiredService<IOptions<LTAIOptions>>().Value;
+            return new LTAI.AI.BudgetTracker(
+                globalMax: opts.AI.GlobalTokenBudget,
+                perUserMax: opts.AI.PerUserTokenBudget);
+        });
+
+        // Step 3c: ChatAgent + workflow (default L1=flash, auto-upgrade to L2=pro)
         services.AddSingleton<ChatAgent>(sp =>
         {
             var wf = sp.GetRequiredService<WorkflowOrchestrator>();
             var chat = BuildOrchestrator(sp, agents.Values.ToArray());
             // Pro agent for complex task auto-upgrade (uses "deepseek-pro" provider)
             var proAgent = agents.TryGetValue("chat-pro", out var p) ? p : chat;
-            return new ChatAgent(chat, proAgent, wf);
+            var budget = sp.GetService<LTAI.AI.BudgetTracker>();
+            return new ChatAgent(chat, proAgent, wf, budget);
         });
 
         return services;
@@ -86,21 +85,78 @@ public static class ServiceCollectionExtensions
 
     private static Dictionary<string, AIAgent> BuildAllAgents(IServiceProvider sp)
     {
+        // Try loading from agents/*.agent.md files first
+        var fileDefs = AgentRegistry.LoadAll();
+        if (fileDefs.Count > 0)
+        {
+            var result = new Dictionary<string, AIAgent>(StringComparer.OrdinalIgnoreCase);
+            foreach (var def in fileDefs)
+            {
+                var key = def.Name?.ToLowerInvariant().Replace("ltai-", "") ?? "unknown";
+                var canRead = def.Permissions.Contains("read");
+                var canWrite = def.Permissions.Contains("write");
+                var canList = def.Permissions.Contains("list");
+                var canExec = def.Permissions.Contains("exec");
+                result[key] = BuildAgent(sp, def.Name ?? key, def.Description,
+                    canRead, canWrite, canList, canExec,
+                    modelId: def.ModelId,
+                    temperature: (float)def.Temperature,
+                    topP: (float)def.TopP);
+            }
+            return result;
+        }
+
+        // Fallback: hardcoded defaults (no agents/*.agent.md files found)
         return new(StringComparer.OrdinalIgnoreCase)
         {
-            ["chat"]     = BuildAgent(sp, "LTAI-Chat",   "通用对话助手",     true, true, true, true),
-            ["chat-pro"] = BuildAgent(sp, "LTAI-Chat-Pro","深度推理助手(Pro)",true, true, true, true, modelId: "deepseek-pro"),
-            ["code"]     = BuildAgent(sp, "LTAI-Code",   "代码分析助手",     true, true, true, false),
-            ["math"]     = BuildAgent(sp, "LTAI-Math",   "数学计算助手",     false, false, false, true),
-            ["data"]     = BuildAgent(sp, "LTAI-Data",   "数据处理助手",     true, true, true, true),
-            ["system"]   = BuildAgent(sp, "LTAI-System", "系统管理助手",    false, false, false, true),
-            ["llm"]      = BuildAgent(sp, "LTAI-LLM",    "纯对话助手",      false, false, false, false),
+            // 任务类型 → temperature/topP 参考：AI编程 0.3/0.95 | 工具调用 0.3/0.95 | 通用问答 0.8/0.95 | 数学推理 1.0/0.95
+            ["chat"]     = BuildAgent(sp, "LTAI-Chat",   "通用对话助手",     true, true, true, true, temperature: 0.3f, topP: 0.95f),
+            ["chat-pro"] = BuildAgent(sp, "LTAI-Chat-Pro","深度推理助手(Pro)",true, true, true, true, modelId: "deepseek-pro", temperature: 0.3f, topP: 0.95f),
+            ["code"]     = BuildAgent(sp, "LTAI-Code",   "代码分析助手",     true, true, true, false, temperature: 0.3f, topP: 0.95f),
+            ["math"]     = BuildAgent(sp, "LTAI-Math",   "数学计算助手",     false, false, false, true, temperature: 1.0f, topP: 0.95f),
+            ["data"]     = BuildAgent(sp, "LTAI-Data",   "数据处理助手",     true, true, true, true, temperature: 0.3f, topP: 0.95f),
+            ["system"]   = BuildAgent(sp, "LTAI-System", "系统管理助手",    false, false, false, true, temperature: 0.3f, topP: 0.95f),
+            ["llm"]      = BuildAgent(sp, "LTAI-LLM",    "纯对话助手",      false, false, false, false, temperature: 0.8f, topP: 0.95f),
+            ["writer"]   = BuildAgent(sp, "LTAI-Writer", "创意写作助手",     true, true, true, true, temperature: 0.8f, topP: 0.95f),
+            ["frontend"] = BuildAgent(sp, "LTAI-Frontend","前端网页开发助手", true, true, true, true, temperature: 0.8f, topP: 0.95f),
         };
     }
 
+    /// <summary>
+    /// ─────────────────────────────────────────────────────
+    ///  TOOL REGISTRATION MATRIX (agent × tool category)
+    /// ─────────────────────────────────────────────────────
+    ///                     Chat  Code  Math  Data  System  LLM  Writer  Frontend
+    ///  Filesystem R/W       ✅    ✅    —     ✅     —      —     ✅      ✅
+    ///  Shell/Exec           ✅    —     ✅    ✅     ✅     —     ✅      ✅
+    ///  Search/Symbols       ✅    ✅    —     —     —      —     ✅      ✅
+    ///  EIA                  ✅    —     —     ✅     ✅     —
+    ///  Web                  ✅    —     —     ✅     —      —     ✅      ✅
+    ///  Multimedia           ✅    ✅    —     ✅     ✅     —     ✅      ✅
+    ///  Office               ✅    ✅    —     ✅     —      —
+    ///  Memory               ✅    —     —     —     ✅     —     ✅      —
+    ///  Git                  ✅    ✅    —     —     ✅     —     ✅      ✅
+    ///  Plan/Flowchart       ✅    ✅    —     ✅     —      —     ✅      ✅
+    ///  GIS/Weather/Trans    ✅    —     —     ✅     ✅     —     ✅      ✅
+    ///  System/Network       ✅    —     —     —     ✅     —     ✅      —
+    ///  Subagent             ✅    —     —     —     —      —     ✅      ✅
+    ///  Task/Jobs            ✅    ✅    —     —     ✅     —     ✅      ✅
+    ///  Container            ✅    —     ✅    ✅     ✅     —     —       ✅
+    /// ─────────────────────────────────────────────────────
+    ///  Permission flags: canRead, canWrite, canList, canExec
+    ///  Add new tools by inserting a new section below.
+    /// ─────────────────────────────────────────────────────
+    /// </summary>
     private static AIAgent BuildAgent(IServiceProvider sp, string name, string description,
         bool canRead, bool canWrite, bool canList, bool canExec,
-        string? modelId = null)
+        string? modelId = null, float? temperature = null, float? topP = null) {
+        return BuildAgentImpl(sp, name, description, canRead, canWrite, canList, canExec, modelId, temperature, topP);
+    }
+
+    // Original implementation
+    private static AIAgent BuildAgentImpl(IServiceProvider sp, string name, string description,
+        bool canRead, bool canWrite, bool canList, bool canExec,
+        string? modelId = null, float? temperature = null, float? topP = null)
     {
         var ws = Directory.GetCurrentDirectory();
         var opts = sp.GetRequiredService<IOptions<LTAIOptions>>().Value;
@@ -143,14 +199,14 @@ public static class ServiceCollectionExtensions
 
         // Code analysis tools (Roslyn-based for C#, pattern-based for others)
         var codeAnalysis = new CodeAnalysisTools(ws);
-        if (canRead && (name == "LTAI-Chat" || name == "LTAI-Code"))
+        if (canRead && (name is "LTAI-Chat" or "LTAI-Code" or "LTAI-Frontend"))
         {
             tools.Add(AIFunctionFactory.Create(codeAnalysis.GetSymbols));
             tools.Add(AIFunctionFactory.Create(codeAnalysis.FindInCode));
         }
 
         // EIA (Environmental Impact Assessment) tools
-        if (name is "LTAI-Chat" or "LTAI-Data" or "LTAI-System")
+        if (name is "LTAI-Chat" or "LTAI-Data" or "LTAI-System" or "LTAI-Writer" or "LTAI-Frontend")
         {
             tools.Add(AIFunctionFactory.Create(EiaTools.ClassifyAirQuality));
             tools.Add(AIFunctionFactory.Create(EiaTools.ClassifyNoise));
@@ -197,7 +253,7 @@ public static class ServiceCollectionExtensions
         // Memory tools (persistent memory across sessions)
         var memDir = opts.ResolveDataPath("memories");
         var memory = new MemoryTools(ws, memDir);
-        if (name is "LTAI-Chat" or "LTAI-System")
+        if (name is "LTAI-Chat" or "LTAI-System" or "LTAI-Writer")
         {
             tools.Add(AIFunctionFactory.Create(memory.Remember));
             tools.Add(AIFunctionFactory.Create(memory.Forget));
@@ -217,7 +273,7 @@ public static class ServiceCollectionExtensions
         }
 
         // Plan approval workflow tools
-        if (name is "LTAI-Chat" or "LTAI-Code")
+        if (name is "LTAI-Chat" or "LTAI-Code" or "LTAI-Writer" or "LTAI-Frontend")
         {
             tools.Add(AIFunctionFactory.Create(PlanTools.SubmitPlan));
             tools.Add(AIFunctionFactory.Create(PlanTools.MarkStepComplete));
@@ -226,7 +282,7 @@ public static class ServiceCollectionExtensions
         }
 
         // Flowchart / diagram tools (Mermaid + SVG)
-        if (name is "LTAI-Chat" or "LTAI-Code" or "LTAI-Data")
+        if (name is "LTAI-Chat" or "LTAI-Code" or "LTAI-Data" or "LTAI-Writer" or "LTAI-Frontend")
         {
             var diagram = new FlowchartTools(httpFactory);
             tools.Add(AIFunctionFactory.Create(diagram.Flowchart));
@@ -237,13 +293,13 @@ public static class ServiceCollectionExtensions
         }
 
         // Choice/selection tool
-        if (name == "LTAI-Chat")
+        if (name is "LTAI-Chat" or "LTAI-Writer" or "LTAI-Frontend")
         {
             tools.Add(AIFunctionFactory.Create(ChoiceTools.AskChoice));
         }
 
         // Subagent tools (explore, research, review, spawn_subagent)
-        if (name == "LTAI-Chat")
+        if (name is "LTAI-Chat" or "LTAI-Writer" or "LTAI-Frontend")
         {
             var sub = new SubagentTools(sp, llm, ws);
             tools.Add(AIFunctionFactory.Create(sub.Explore));
@@ -254,7 +310,7 @@ public static class ServiceCollectionExtensions
         }
 
         // Git tools (LibGit2Sharp, no CLI)
-        if (name is "LTAI-Chat" or "LTAI-Code" or "LTAI-System")
+        if (name is "LTAI-Chat" or "LTAI-Code" or "LTAI-System" or "LTAI-Writer" or "LTAI-Frontend")
         {
             var git = new GitTools(ws);
             tools.Add(AIFunctionFactory.Create(git.GitStatus));
@@ -288,7 +344,7 @@ public static class ServiceCollectionExtensions
         }
 
         // Job & Task management tools
-        if (name is "LTAI-Chat" or "LTAI-System" or "LTAI-Code")
+        if (name is "LTAI-Chat" or "LTAI-System" or "LTAI-Code" or "LTAI-Writer" or "LTAI-Frontend")
         {
             tools.Add(AIFunctionFactory.Create(TaskTools.TodoWrite));
             tools.Add(AIFunctionFactory.Create(TaskTools.TodoComplete));
@@ -305,7 +361,7 @@ public static class ServiceCollectionExtensions
         }
 
         // Integration tools (GIS, weather, translate, image)
-        if (name is "LTAI-Chat" or "LTAI-Data" or "LTAI-System")
+        if (name is "LTAI-Chat" or "LTAI-Data" or "LTAI-System" or "LTAI-Writer" or "LTAI-Frontend")
         {
             var integ = new IntegrationTools(httpFactory);
             tools.Add(AIFunctionFactory.Create(integ.Geocode));
@@ -319,7 +375,7 @@ public static class ServiceCollectionExtensions
         }
 
         // System & Network tools
-        if (name is "LTAI-Chat" or "LTAI-System")
+        if (name is "LTAI-Chat" or "LTAI-System" or "LTAI-Writer")
         {
             tools.Add(AIFunctionFactory.Create(SystemTools.SystemInfo));
             tools.Add(AIFunctionFactory.Create(SystemTools.ListProcesses));
@@ -343,13 +399,13 @@ public static class ServiceCollectionExtensions
         }
 
         // File download tool (confirm=true 才下载)
-        if (canRead && canWrite && name is "LTAI-Chat" or "LTAI-Code")
+        if (canRead && canWrite && name is "LTAI-Chat" or "LTAI-Code" or "LTAI-Writer" or "LTAI-Frontend")
         {
             tools.Add(AIFunctionFactory.Create(FileDownloadTool.DownloadFile));
         }
 
         // Workflow tools (lazy-resolve via IServiceProvider to avoid circular DI)
-        if (name == "LTAI-Chat")
+        if (name is "LTAI-Chat" or "LTAI-Writer" or "LTAI-Frontend")
         {
             var wfTools = new WorkflowTools(sp);
             tools.Add(AIFunctionFactory.Create(wfTools.WorkflowHandoff));
@@ -385,11 +441,10 @@ public static class ServiceCollectionExtensions
         var kbGraph = sp.GetRequiredService<KbGraph>();
         var codeGraph = sp.GetRequiredService<CgGraph>();
 
-        // CodeAct: Hyperlight 沙箱 — 原生 SDK 尚未发布，暂不可用
-        // 参见: https://github.com/hyperlight-dev/hyperlight-sandbox
-        // 当 Hyperlight.HyperlightSandbox.Api 发布到 nuget.org 后取消注释以下代码：
-        // HyperlightCodeActProvider? codeAct = null;
-        // ...
+        // Wasmtime sandbox: WASM-based code execution with WASI capability restrictions.
+        // Recommended over Hyperlight (v0.4, pre-1.0) for general-purpose sandboxing.
+        // See sandbox-roadmap MEMORY.md for the full evaluation.
+        var wasmtimeSandbox = new WasmtimeSandbox(ws, loggerFactory.CreateLogger<WasmtimeSandbox>());
 
         // Skills provider: loads SKILL.md from skills/ (框架自动去重合并)
         var skillsDir = new[] {
@@ -419,13 +474,14 @@ public static class ServiceCollectionExtensions
                 + "示例：<<<NEEDS_PRO: 需要分析6个模块的循环依赖问题>>>",
             ChatOptions = new ChatOptions
             {
-                Temperature = (float)opts.AI.Temperature,
+                Temperature = temperature ?? (float)opts.AI.Temperature,
+                TopP = topP ?? 0.95f,
                 MaxOutputTokens = opts.AI.MaxTokens,
                 Tools = tools,
                 ModelId = modelId,
             },
             ChatHistoryProvider = new InMemoryChatHistoryProvider(),
-            AIContextProviders = [shellEnv, safety, compaction, kbGraph, codeGraph, skillsProvider],
+            AIContextProviders = [shellEnv, safety, compaction, kbGraph, codeGraph, wasmtimeSandbox, skillsProvider],
             EnableMessageInjection = true,
             RequirePerServiceCallChatHistoryPersistence = true,
         }, loggerFactory, sp);

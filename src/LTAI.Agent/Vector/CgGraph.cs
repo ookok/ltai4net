@@ -81,11 +81,15 @@ public sealed class CgGraph : AIContextProvider
             })
             .ToList();
 
-        // Parallel file indexing: read + parse across CPU cores, write serialized
+        // Parallel file indexing: read + parse across CPU cores, write serialized.
+        // Uses Parallel.ForEachAsync (not Parallel.ForEach + async lambda) to avoid
+        // thread-pool starvation caused by synchronous-wait-for-async anti-pattern.
         int sc = 0, na = 0;
-        var syncLock = new object();
+        var writeGate = new SemaphoreSlim(1, 1);
 
-        Parallel.ForEach(files, new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount }, file =>
+        await Parallel.ForEachAsync(files,
+            new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount },
+            async (file, ct) =>
         {
             var lw = File.GetLastWriteTimeUtc(file);
             if (_indexedFiles.TryGetValue(file, out var pw) && pw >= lw) return;
@@ -94,7 +98,7 @@ public sealed class CgGraph : AIContextProvider
 
             try
             {
-                var code = File.ReadAllText(file);        // sync read in thread pool
+                var code = await File.ReadAllTextAsync(file, ct).ConfigureAwait(false);
                 var ext = Path.GetExtension(file);
                 var fileName = Path.GetFileName(file);
                 var lineCount = code.Split('\n').Length;
@@ -103,12 +107,13 @@ public sealed class CgGraph : AIContextProvider
                 var symbols = _parser.ExtractSymbols(code, ext);
 
                 // Serialize writes to KgStore (SQLite is single-writer)
-                lock (syncLock)
+                await writeGate.WaitAsync(ct).ConfigureAwait(false);
+                try
                 {
-                    _store.DeleteSource(rel);
+                    await _store.DeleteSource(rel);
                     int fileNodeCount = 1; // file node
 
-                    var fid = _store.UpsertNode(
+                    var fid = await _store.UpsertNode(
                         extId: $"file:{rel}",
                         kind: "file",
                         name: fileName,
@@ -117,12 +122,12 @@ public sealed class CgGraph : AIContextProvider
                         source: rel,
                         props: new() { ["path"] = rel, ["ext"] = ext, ["lines"] = lineCount });
 
-                    _store.AddDoc(fid, code, "code", rel);
+                    await _store.AddDoc(fid, code, "code", rel);
 
                     foreach (var (kind, name, line, _) in symbols)
                     {
                         var safeName = name.Replace("<", "_").Replace(">", "_").Replace("(", "_").Replace(")", "_");
-                        var nid = _store.UpsertNode(
+                        var nid = await _store.UpsertNode(
                             extId: $"{kind}:{Path.GetFileNameWithoutExtension(file)}:{safeName}",
                             kind: MapKind(kind),
                             name: safeName,
@@ -131,10 +136,10 @@ public sealed class CgGraph : AIContextProvider
                             source: rel,
                             props: new() { ["file"] = rel, ["line"] = line, ["ext"] = ext });
 
-                        _store.AddEdge(fid, nid, "defines");
+                        await _store.AddEdge(fid, nid, "defines");
 
                         var ctx = GetContext(code, line);
-                        _store.AddDoc(nid, ctx, "code", $"{rel}:L{line}");
+                        await _store.AddDoc(nid, ctx, "code", $"{rel}:L{line}");
                         fileNodeCount++;
                     }
 
@@ -142,19 +147,20 @@ public sealed class CgGraph : AIContextProvider
                     _indexedFiles[file] = lw;
                     Interlocked.Increment(ref sc);
                 }
+                finally { writeGate.Release(); }
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 _logger.LogWarning(ex, "CgGraph: failed to index {File}", file);
             }
-        });
+        }).ConfigureAwait(false);
 
         _built = true;
 
         // Maintenance
         if (sc > 0 || _indexedFiles.Count % 10 == 0)
         {
-            var (p, before, after) = _store.RunMaintenance(_ws, TimeSpan.FromDays(30));
+            var (p, before, after) = await _store.RunMaintenanceAsync(_ws, TimeSpan.FromDays(30));
             _logger.LogInformation("CgGraph: GC {P} stale, {Before}B→{After}B", p, before, after);
         }
 
@@ -264,9 +270,23 @@ public sealed class CgGraph : AIContextProvider
         if (!_built) await BuildAsync();
     }
 
+    /// <summary>
+    /// L0 短路判断（复用 KbGraph 逻辑）：简单查询不触发 LLM。
+    /// </summary>
+    private static bool IsSimpleQuery(string query)
+    {
+        if (string.IsNullOrWhiteSpace(query) || query.Length > 50) return false;
+        var wordCount = query.Split([' ', '，', '。', '、'], StringSplitOptions.RemoveEmptyEntries).Length;
+        if (wordCount > 4) return false;
+        if (query.Any(c => c is '_' or '.' or '/' or '\\' or '(' or ')' or '[' or ']' or '<' or '>'))
+            return false;
+        return true;
+    }
+
     private async Task<string> RewriteQueryAsync(string query, CancellationToken ct)
     {
-        if (_rewriter == null) return query;
+        // L0 短路
+        if (_rewriter == null || IsSimpleQuery(query)) return query;
         try
         {
             var prompt = $"""

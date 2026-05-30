@@ -5,24 +5,31 @@ using Microsoft.Extensions.Logging;
 namespace LTAI.Core.Safety;
 
 /// <summary>
-/// MAF AIContextProvider that checks input/output for safety concerns.
-/// Uses a dedicated IChatClient (not the agent pipeline) to avoid recursion.
+/// MAF AIContextProvider that checks agent input for safety BEFORE processing.
+/// Uses a dedicated safety IChatClient (separate from the agent pipeline) to avoid recursion.
 ///
-/// NOTE: This provider only blocks INPUT (via ProvideAIContextAsync modifying the context).
-/// OUTPUT checking in StoreAIContextAsync is AUDIT-ONLY — the response has already been
-/// delivered to the user by the time this runs. For output blocking, use SafeChatClient
-/// decorator which wraps IChatClient and intercepts responses before they reach the caller.
+/// ⚠ IMPORTANT DESIGN NOTE:
+///   - INPUT blocking: ProvideAIContextAsync replaces agent context with a system refusal
+///     message. This blocks the agent FROM responding to unsafe prompts.
+///   - OUTPUT checking: StoreAIContextAsync is AUDIT-ONLY — the response has already been
+///     delivered to the user by the time this runs. For true output blocking, use
+///     <see cref="SafeChatClient"/> which wraps IChatClient at a lower level.
 ///
-/// Recursion guard: _isChecking (AsyncLocal) prevents re-entrant safety checks when
-/// the safety LLM call triggers another AIContextProvider. Relies on MAF running in
-/// the same SynchronizationContext — Flow across ExecutionContext boundaries may
-/// create a new AsyncLocal instance.
+/// ⚠ Recursion guard: _safeLock (SemaphoreSlim) prevents re-entrant safety checks.
+/// Uses non-blocking Wait(0) — no ExecutionContext dependency, safe across
+/// ConfigureAwait(false) boundaries.
+///
+/// <b>Consumers:</b> Registered in Agent/ServiceCollectionExtensions.cs as an
+/// AIContextProvider in the MAF pipeline.
 /// </summary>
 public sealed class SafetyCoordinator : AIContextProvider
 {
     private readonly IChatClient _llm;
     private readonly ILogger<SafetyCoordinator>? _logger;
-    private readonly AsyncLocal<bool> _isChecking = new();
+    // SemaphoreSlim(1,1) with Wait(0) for non-blocking re-entrancy check.
+    // More robust than AsyncLocal<bool> because it is not subject to
+    // ExecutionContext flow issues across ConfigureAwait(false) boundaries.
+    private readonly SemaphoreSlim _safeLock = new(1, 1);
 
     private static readonly string SafetySystemPrompt = """
         You are a content safety guardrail. Analyze the text below and respond with ONLY one of:
@@ -45,6 +52,11 @@ public sealed class SafetyCoordinator : AIContextProvider
         _logger = logger;
     }
 
+    /// <summary>
+    /// MAF pipeline hook: checks the latest user message for safety before processing.
+    /// If unsafe, replaces the agent context with a system refusal message.
+    /// Called by MAF kernel during agent invocation.
+    /// </summary>
     protected override async ValueTask<AIContext> ProvideAIContextAsync(InvokingContext context, CancellationToken ct = default)
     {
         var msgs = context.AIContext?.Messages;
@@ -72,6 +84,12 @@ public sealed class SafetyCoordinator : AIContextProvider
         return context.AIContext!;
     }
 
+    /// <summary>
+    /// MAF pipeline hook: audits generated output AFTER delivery (audit-only, no blocking).
+    /// ⚠ Response has already been delivered to the user by this point.
+    /// For true output blocking, wrap the IChatClient with <see cref="SafeChatClient"/>.
+    /// Called by MAF kernel after agent invocation completes.
+    /// </summary>
     protected override async ValueTask StoreAIContextAsync(InvokedContext context, CancellationToken ct = default)
     {
         var response = context.ResponseMessages?.LastOrDefault();
@@ -88,7 +106,9 @@ public sealed class SafetyCoordinator : AIContextProvider
     {
         if (text.Length > 100_000) return (false, "Input exceeds 100k chars");
 
-        if (_isChecking.Value)
+        // Non-blocking try: if already inside a safety check, skip (safe pass-through).
+        // SemaphoreSlim.Wait(0) is synchronous and thread-safe — no ExecutionContext dependency.
+        if (!_safeLock.Wait(0))
         {
             _logger?.LogDebug("Safety recursion guard triggered");
             return (true, "");
@@ -96,7 +116,6 @@ public sealed class SafetyCoordinator : AIContextProvider
 
         try
         {
-            _isChecking.Value = true;
             var response = await _llm.GetResponseAsync([
                 new ChatMessage(ChatRole.System, SafetySystemPrompt),
                 new ChatMessage(ChatRole.User, text)
@@ -105,9 +124,15 @@ public sealed class SafetyCoordinator : AIContextProvider
             var verdict = response.Messages?.LastOrDefault()?.Text?.Trim() ?? "SAFE";
             _logger?.LogDebug("Safety verdict ({Direction}): {Verdict}", direction, verdict);
 
-            return verdict.StartsWith("UNSAFE", StringComparison.OrdinalIgnoreCase)
-                ? (false, verdict.Length > 7 ? verdict[7..].TrimStart(':', ' ') : "Blocked")
-                : (true, "");
+            const string unsafePrefix = "UNSAFE:";
+            if (verdict.StartsWith(unsafePrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                var reason = verdict.Length > unsafePrefix.Length
+                    ? verdict[unsafePrefix.Length..].TrimStart(':', ' ')
+                    : "Blocked";
+                return (false, reason);
+            }
+            return (true, "");
         }
         catch (Exception ex)
         {
@@ -116,7 +141,7 @@ public sealed class SafetyCoordinator : AIContextProvider
         }
         finally
         {
-            _isChecking.Value = false;
+            _safeLock.Release();
         }
     }
 }

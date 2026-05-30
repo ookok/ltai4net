@@ -11,10 +11,17 @@ using Microsoft.ML.OnnxRuntime.Tensors;
 namespace LTAI.AI;
 
 /// <summary>
-/// Local ONNX-based sentence embedding using all-MiniLM-L6-v2.
-/// 384-dim, official ONNX export from sentence-transformers, 90MB.
-/// Processes in-process without any external API call.
-/// Falls back gracefully if the model file is not found.
+/// Local ONNX-based sentence embedding using BGE-small-zh (or compatible MiniLM model).
+/// 384-dim output, runs in-process without any external API call.
+/// Falls back gracefully if the model file is not found (Available = false).
+///
+/// <b>Consumers:</b> EmbeddingClient (used as local fallback when API embedder unavailable).
+/// Registered in AddLTAIAI() as singleton.
+///
+/// ⚠ KNOWN ISSUE: MeanPool reads hiddenDim from model but truncates to 384 —
+/// if the ONNX model outputs 768-dim (BGE), the last 384 dimensions are silently dropped.
+/// ⚠ KNOWN ISSUE: Manual WordPiece tokenizer may not match the model's original tokenizer.
+/// ⚠ KNOWN ISSUE: L2Normalize modifies the array in-place AND returns it (aliasing).
 /// </summary>
 public sealed class LocalEmbedder : IDisposable
 {
@@ -26,10 +33,10 @@ public sealed class LocalEmbedder : IDisposable
     private readonly string? _modelPath;
     private bool _disposed;
 
-    /// <summary>Whether the ONNX model is loaded and ready.</summary>
+    /// <summary>Whether the ONNX model is loaded and ready (false if model file not found).</summary>
     public bool Available => _session != null;
 
-    /// <summary>Embedding dimension (384 for all-MiniLM-L6-v2).</summary>
+    /// <summary>Embedding dimension (384).</summary>
     public int Dim => Dimension;
 
     // Special tokens for BERT
@@ -39,7 +46,12 @@ public sealed class LocalEmbedder : IDisposable
     private const int UnkTokenId = 100;
 
     /// <summary>
-    /// Initializes a new instance. Searches for the model in standard locations.
+    /// Initialize embedder. Searches for model.onnx + vocab.txt in:
+    ///   1. AppContext.BaseDirectory/models/minilm-l6-v2/
+    ///   2. CWD/models/minilm-l6-v2/
+    ///   3. project root/models/minilm-l6-v2/
+    /// If not found, Available=false (no error thrown — callers check Available).
+    /// <b>Called by:</b> DI container via AddLTAIAI().
     /// </summary>
     public LocalEmbedder()
     {
@@ -64,12 +76,15 @@ public sealed class LocalEmbedder : IDisposable
         }
         catch (Exception)
         {
-            // Available = false
+            // Available = false — model corrupt or incompatible
         }
     }
 
     /// <summary>
     /// Generate embedding vector for the given text.
+    /// Runs full ONNX pipeline: tokenize → infer → mean pool → L2 normalize.
+    /// <b>Callers:</b> EmbeddingClient (local fallback path), KgStore.
+    /// Throws InvalidOperationException if model not loaded.
     /// </summary>
     public float[] Generate(string text)
     {
@@ -272,9 +287,17 @@ public sealed class LocalEmbedder : IDisposable
     {
         int batchSize = embedding.Dimensions[0];   // 1
         int seqLen = embedding.Dimensions[1];      // 512
-        int hiddenDim = embedding.Dimensions[2];   // 768 (BGE hidden size)
+        int hiddenDim = embedding.Dimensions[2];   // e.g. 768 (BGE) or 384 (MiniLM)
 
-        var result = new float[Dimension];  // 384 — MiniLM outputs 384
+        // Runtime dimension check: warn if model output doesn't match expected Dimension
+        if (hiddenDim != Dimension)
+        {
+            System.Diagnostics.Debug.WriteLine(
+                $"[LocalEmbedder] WARNING: model outputs {hiddenDim}-dim but Dimension={Dimension}; " +
+                $"{(hiddenDim > Dimension ? "truncating" : "padding")} to {Dimension}.");
+        }
+
+        var result = new float[Dimension];
 
         // Mean pool: average over sequence length for non-padding tokens
         float[] sum = new float[hiddenDim];

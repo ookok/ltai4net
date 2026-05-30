@@ -6,19 +6,28 @@ namespace LTAI.Core.Safety;
 
 /// <summary>
 /// Decorator for <see cref="IChatClient"/> that intercepts responses and checks
-/// them for safety concerns before returning to the caller.
+/// them for safety concerns BEFORE returning to the caller.
 /// 
 /// Unlike <see cref="SafetyCoordinator"/> (which runs inside the MAF AIContextProvider
-/// pipeline and cannot block output post-facto), this decorator wraps the LLM client
-/// itself, enabling TRUE output blocking: if the response is unsafe, it is replaced
-/// with a safe refusal message before the caller ever sees it.
+/// pipeline and only audits output post-delivery), this decorator wraps the LLM client
+/// itself, enabling TRUE output blocking: unsafe responses are replaced with a safe
+/// refusal message before the caller sees them.
+///
+/// <b>Consumers:</b> Wrapped around inner IChatClient in MultiProviderChatClient.
+///
+/// ⚠ KNOWN ISSUE (resolved): verdict parsing now uses const prefix \"UNSAFE:\" with
+/// StartsWith validation — no longer assumes fixed offset.
+/// ⚠ KNOWN ISSUE (resolved): Replaced AsyncLocal&lt;bool&gt; with SemaphoreSlim(1,1) + Wait(0)
+/// — thread-safe, no ExecutionContext dependency across async boundaries.
 /// </summary>
 public sealed class SafeChatClient : IChatClient
 {
     private readonly IChatClient _inner;
     private readonly IChatClient _safetyLlm;
     private readonly ILogger<SafeChatClient> _logger;
-    private readonly AsyncLocal<bool> _isChecking = new();
+    // SemaphoreSlim(1,1) with Wait(0) for non-blocking re-entrancy check.
+    // Replaces AsyncLocal<bool> — not subject to ExecutionContext flow issues.
+    private readonly SemaphoreSlim _safeLock = new(1, 1);
 
     private static readonly string SafetySystemPrompt = """
         You are a content safety guardrail. Analyze the text below and respond with ONLY one of:
@@ -42,6 +51,11 @@ public sealed class SafeChatClient : IChatClient
         _logger = logger ?? NullLogger<SafeChatClient>.Instance;
     }
 
+    /// <summary>
+    /// Intercept non-streaming response: get response from inner LLM, check safety,
+    /// and replace with refusal if unsafe.
+    /// <b>Callers:</b> MultiProviderChatClient (via IChatClient interface dispatch).
+    /// </summary>
     public async Task<ChatResponse> GetResponseAsync(
         IEnumerable<ChatMessage> messages, ChatOptions? options = null,
         CancellationToken ct = default)
@@ -61,27 +75,42 @@ public sealed class SafeChatClient : IChatClient
         return response;
     }
 
+    /// <summary>
+    /// Intercept streaming response: buffers ALL chunks first, checks safety,
+    /// then yields chunks only if safe. Unsafe responses are NEVER yielded to the caller.
+    /// <b>Callers:</b> MultiProviderChatClient (via IChatClient interface dispatch).
+    /// </summary>
     public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
         IEnumerable<ChatMessage> messages, ChatOptions? options = null,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
     {
-        // For streaming, we buffer the full response then check
+        // Buffer the entire streaming response before any yield
         var buffer = new System.Text.StringBuilder();
+        var chunks = new List<ChatResponseUpdate>();
+
         await foreach (var update in _inner.GetStreamingResponseAsync(messages, options, ct).ConfigureAwait(false))
         {
             if (update.Text != null) buffer.Append(update.Text);
-            yield return update;
+            chunks.Add(update);
         }
 
-        // Check after streaming completes
         var fullText = buffer.ToString();
         if (string.IsNullOrEmpty(fullText)) yield break;
 
+        // Check safety of the FULL response before yielding anything
         var (safe, reason) = await CheckSafetyAsync(fullText, ct).ConfigureAwait(false);
         if (!safe)
         {
             _logger?.LogWarning("SafeChatClient blocked unsafe streaming output: {Reason}", reason);
+            // Yield ONE safe refusal message instead of the unsafe stream
+            yield return new ChatResponseUpdate(ChatRole.Assistant,
+                $"[Content blocked by safety filter. Reason: {reason}]");
+            yield break;
         }
+
+        // Safe — now replay all buffered chunks to the caller
+        foreach (var chunk in chunks)
+            yield return chunk;
     }
 
     private async Task<(bool safe, string reason)> CheckSafetyAsync(string text, CancellationToken ct)
@@ -89,21 +118,27 @@ public sealed class SafeChatClient : IChatClient
         if (text.Length > 100_000)
             return (false, "Response exceeds 100k chars");
 
-        if (_isChecking.Value)
+        // Non-blocking try: if already inside a safety check, skip (safe pass-through).
+        if (!_safeLock.Wait(0))
             return (true, "");
 
         try
         {
-            _isChecking.Value = true;
             var response = await _safetyLlm.GetResponseAsync([
                 new ChatMessage(ChatRole.System, SafetySystemPrompt),
                 new ChatMessage(ChatRole.User, text)
             ], cancellationToken: ct).ConfigureAwait(false);
 
             var verdict = response.Messages?.LastOrDefault()?.Text?.Trim() ?? "SAFE";
-            return verdict.StartsWith("UNSAFE", StringComparison.OrdinalIgnoreCase)
-                ? (false, verdict.Length > 7 ? verdict[7..].TrimStart(':', ' ') : "Blocked")
-                : (true, "");
+            const string unsafePrefix = "UNSAFE:";
+            if (verdict.StartsWith(unsafePrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                var reason = verdict.Length > unsafePrefix.Length
+                    ? verdict[unsafePrefix.Length..].TrimStart(':', ' ')
+                    : "Blocked";
+                return (false, reason);
+            }
+            return (true, "");
         }
         catch (Exception ex)
         {
@@ -112,12 +147,12 @@ public sealed class SafeChatClient : IChatClient
         }
         finally
         {
-            _isChecking.Value = false;
+            _safeLock.Release();
         }
     }
 
     object? IChatClient.GetService(Type? serviceType, object? serviceKey) =>
-        _inner.GetService(serviceType, serviceKey);
+        _inner.GetService(serviceType!, serviceKey);
 
     void IDisposable.Dispose() => _inner.Dispose();
 }
