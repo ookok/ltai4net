@@ -1,6 +1,8 @@
 <Project>
   <PropertyGroup>
     <NoWarn>$(NoWarn);MSB3243;NU1510;MAAIW001</NoWarn>
+    <!-- Chinese-only: exclude satellite resources for other locales, save ~10MB per output -->
+    <SatelliteResourceLanguages>zh-Hans;zh-Hant;zh-CN</SatelliteResourceLanguages>
 
     <!-- Microsoft Agent Framework — 无上限浮动，restore 自动拉最新版（含 major 升级） -->
     <MAFVersion>[1.8.0,)</MAFVersion>
