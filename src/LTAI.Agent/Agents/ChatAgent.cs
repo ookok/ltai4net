@@ -176,7 +176,12 @@ public sealed class ChatAgent
             needsTool = true;
             toolHint = "请调用 GetCurrentDateTime 工具获取当前的准确日期和时间，不要自行估计。";
         }
-        else if (msgLower.Contains("天气") || msgLower.Contains("位置") || msgLower.Contains("在哪") ||
+        else if (msgLower.Contains("天气"))
+        {
+            needsTool = true;
+            toolHint = "请先调用 IpLocation 工具获取用户城市，再调用 Weather 工具查询该城市的天气。";
+        }
+        else if (msgLower.Contains("位置") || msgLower.Contains("在哪") ||
             msgLower.Contains("城市") || msgLower.Contains("这里"))
         {
             needsTool = true;
