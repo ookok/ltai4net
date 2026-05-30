@@ -165,32 +165,9 @@ public sealed class ChatAgent
         var isCantAnswer = cantPatterns.Any(p => lower.Contains(p));
         if (!isCantAnswer) return text;
 
-        // 判断原始问题是否需要 tool
-        var msgLower = originalMessage.ToLowerInvariant();
-        var needsTool = false;
-        string? toolHint = null;
-
-        if (msgLower.Contains("星期") || msgLower.Contains("几号") || msgLower.Contains("日期") ||
-            msgLower.Contains("时间") || msgLower.Contains("几点"))
-        {
-            needsTool = true;
-            toolHint = "请调用 GetCurrentDateTime 工具获取当前的准确日期和时间，不要自行估计。";
-        }
-        else if (msgLower.Contains("天气"))
-        {
-            needsTool = true;
-            toolHint = "请先调用 IpLocation 工具获取用户城市，再调用 Weather 工具查询该城市的天气。";
-        }
-        else if (msgLower.Contains("位置") || msgLower.Contains("在哪") ||
-            msgLower.Contains("城市") || msgLower.Contains("这里"))
-        {
-            needsTool = true;
-            toolHint = "请调用 IpLocation 工具获取用户位置，然后回答。";
-        }
-
-        if (!needsTool) return text;
-
-        var forcePrompt = $"{toolHint}\n\n用户的问题是: {originalMessage}\n\n请使用工具后重新回答。";
+        // 通用 tool call 强制：LLM 拒绝猜测时，让它自查工具列表
+        // 不需要每个 tool 硬编码——LLM 自己知道哪个工具能解决问题
+        var forcePrompt = "你的回答看起来在猜测或拒绝，但你有可用的工具能获取准确信息。检查你的工具列表，如果有能回答用户问题的工具，请调用它。不要自行猜测、估计或拒绝。\n\n用户的问题是: " + originalMessage;
         try
         {
             var forceResult = await _proAgent.RunAsync(
