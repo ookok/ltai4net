@@ -404,9 +404,39 @@ public sealed partial class KgStore : IDisposable
         LIMIT @limit;
         """;
 
+    /// <summary>
+    /// FTS5 special characters that cause syntax errors if passed literally.
+    /// Includes NEAR-group operators (@), prefix boost (^), and others.
+    /// </summary>
+    private static readonly System.Text.RegularExpressions.Regex Fts5SpecialChars =
+        new(@"[()@^+\-~*:""]", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    /// <summary>
+    /// Sanitize a query string for FTS5 MATCH syntax: remove/replace special characters
+    /// that would cause "syntax error near ..." exceptions.
+    /// FTS5 special chars: ^ * " ( ) + - ~ @ :
+    /// </summary>
+    private static string SanitizeFts5Query(string query)
+    {
+        if (string.IsNullOrWhiteSpace(query)) return query;
+
+        // Replace FTS5 special chars with space (breaks them into separate tokens)
+        var sanitized = Fts5SpecialChars.Replace(query, " ");
+
+        // Collapse multiple spaces
+        sanitized = System.Text.RegularExpressions.Regex.Replace(sanitized, @"\s+", " ").Trim();
+
+        return sanitized.Length > 0 ? sanitized : query;
+    }
+
     public List<(long nodeId, string text, double rank, string kind)> SearchFts(
         string query, int topN = 30, string? kindFilter = null)
     {
+        // Sanitize FTS5 query to prevent syntax errors (e.g. "@" in email/username)
+        query = SanitizeFts5Query(query);
+        if (string.IsNullOrWhiteSpace(query))
+            return [];
+
         // Check result cache first
         var cacheKey = $"fts:{query}:{topN}:{kindFilter}";
         if (_resultCache.TryGetValue(cacheKey, out List<(long, string, double, string)>? cached))
