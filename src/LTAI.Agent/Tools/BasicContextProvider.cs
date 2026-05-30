@@ -20,12 +20,15 @@ public sealed class BasicContextProvider : AIContextProvider
         InvokingContext context, CancellationToken ct = default)
     {
         var info = BuildContextString();
+        var msg = new ChatMessage(ChatRole.System, $"[基础信息] {info}");
+
+        var msgs = context.AIContext?.Messages?.ToList() ?? new List<ChatMessage>();
+        msgs.Insert(0, msg); // 插在最前面，让 LLM 最先看到
+
         return new AIContext
         {
-            Instructions = context.AIContext?.Instructions != null
-                ? info + "\n" + context.AIContext.Instructions
-                : info,
-            Messages = context.AIContext?.Messages,
+            Instructions = context.AIContext?.Instructions,
+            Messages = msgs,
             Tools = context.AIContext?.Tools,
         };
     }
