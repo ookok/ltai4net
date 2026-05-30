@@ -146,7 +146,7 @@ public sealed class GitTools
         var merged = repo.Branches.Where(b => !b.IsCurrentRepositoryHead && !b.IsRemote
             && repo.Head.TrackingDetails?.AheadBy > 0 != true).ToList();
         foreach (var b in merged)
-            try { repo.Branches.Remove(b.FriendlyName); } catch { }
+            try { repo.Branches.Remove(b.FriendlyName); } catch { /* non-fatal: branch may be protected */ }
         return $"Cleaned up {merged.Count} merged branches";
     }
 

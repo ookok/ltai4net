@@ -14,6 +14,7 @@ namespace LTAI.AI;
 public sealed class EmbeddingClient : IDisposable
 {
     /// <summary>Provider configs for embedding: (envVar, endpoint, model, name, dim)</summary>
+    /// <summary>Embedding providers. Endpoint/model from KnownKeys (source of truth).</summary>
     public static readonly (string envVar, string endpoint, string model, string name, int dim)[] DefaultProviders =
     {
         ("DEEPSEEK_API_KEY",     "https://api.deepseek.com/v1",              "deepseek-embedding",          "DeepSeek", 1024),
@@ -25,24 +26,28 @@ public sealed class EmbeddingClient : IDisposable
     private readonly IHttpClientFactory _httpFactory;
     private readonly ILogger<EmbeddingClient> _logger;
     private readonly (string name, string endpoint, string model, int dim, string apiKey)[] _availableProviders;
+    private readonly LocalEmbedder? _local;
 
     public int Dimension { get; private set; } = 384;
 
-    public EmbeddingClient(IHttpClientFactory httpFactory, ILogger<EmbeddingClient>? logger = null)
+    public EmbeddingClient(IHttpClientFactory httpFactory, LocalEmbedder? local = null, ILogger<EmbeddingClient>? logger = null)
     {
         _httpFactory = httpFactory;
         _logger = logger ?? NullLogger<EmbeddingClient>.Instance;
 
         _availableProviders = DefaultProviders
-            .Select(p => (p.name, p.endpoint, p.model, p.dim, apiKey: Environment.GetEnvironmentVariable(p.envVar) ?? ""))
+            .Select(p => (p.name, p.endpoint, p.model, p.dim, apiKey: LTAI.Core.Configuration.SecretManager.Get(p.envVar) ?? ""))
             .Where(p => !string.IsNullOrEmpty(p.apiKey))
             .ToArray();
+        _local = local;
 
-        if (_availableProviders.Length > 0)
+        if (_local?.Available == true)
+            Dimension = _local.Dim;
+        else if (_availableProviders.Length > 0)
             Dimension = _availableProviders[0].dim;
 
-        _logger.LogInformation("EmbeddingClient: {Count} providers available, dim={Dim}",
-            _availableProviders.Length, Dimension);
+        _logger.LogInformation("EmbeddingClient: {Count} API providers, local BGE={Local}, dim={Dim}",
+            _availableProviders.Length, _local?.Available == true, Dimension);
     }
 
     /// <summary>Generate embedding for a single text.</summary>
@@ -72,6 +77,14 @@ public sealed class EmbeddingClient : IDisposable
             {
                 _logger.LogWarning(ex, "Embedding provider {Provider} failed", name);
             }
+        }
+
+        // Fallback 1: Local ONNX BGE (512d, no API key needed)
+        if (_local?.Available == true)
+        {
+            Dimension = _local.Dim;
+            _logger.LogDebug("Embedding via local BGE: {Count} texts", texts.Length);
+            return texts.Select(t => _local.Generate(t)).ToArray();
         }
 
         _logger.LogWarning("No embedding API available, using n-gram fallback");

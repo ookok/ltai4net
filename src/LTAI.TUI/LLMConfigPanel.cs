@@ -1,3 +1,5 @@
+using System.Net.Http;
+using System.Text.Json;
 using LTAI.AI;
 using LTAI.Core.Configuration;
 using Microsoft.Extensions.Logging;
@@ -10,38 +12,23 @@ namespace LTAI.TUI;
 public sealed class LLMConfigPanel
 {
     public record ProviderInfo(string EnvVar, string Endpoint, string Model);
-    private static readonly Dictionary<string, ProviderInfo> KnownProviders = new()
+    private static readonly Dictionary<string, ProviderInfo> KnownProviders = BuildKnownProviders();
+    private static Dictionary<string, ProviderInfo> BuildKnownProviders()
     {
-        ["DeepSeek"]    = new("DEEPSEEK_API_KEY",       "https://api.deepseek.com/v1",           "deepseek-chat"),
-        ["SiliconFlow"] = new("SILICONFLOW_API_KEY",    "https://api.siliconflow.cn/v1",        "deepseek-ai/DeepSeek-V2.5"),
-        ["Aliyun (Qwen)"] = new("DASHSCOPE_API_KEY",    "https://dashscope.aliyuncs.com/compatible-mode/v1", "qwen-plus"),
-        ["Zhipu (GLM)"] = new("ZHIPU_API_KEY",          "https://open.bigmodel.cn/api/paas/v4", "glm-4-plus"),
-        ["ByteDance (Doubao)"] = new("DOUBAO_API_KEY",  "https://ark.cn-beijing.volces.com/api/v3", "ep-XXXXXX"),
-        ["Tencent (Hunyuan)"] = new("HUNYUAN_API_KEY",  "https://api.hunyuan.cloud.tencent.com/v1", "hunyuan-pro"),
-        ["Baidu (ERNIE)"] = new("BAIDU_API_KEY",        "https://aip.baidubce.com/rpc/2.0/ai_custom", "ernie-4.0"),
-        ["iFlytek (Spark)"] = new("SPARK_API_KEY",      "https://spark-api.xf-yun.com/v3.5/chat", "spark-3.5"),
-        ["Moonshot (Kimi)"] = new("MOONSHOT_API_KEY",   "https://api.moonshot.cn/v1",           "moonshot-v1-8k"),
-        ["Baichuan"] = new("BAICHUAN_API_KEY",          "https://api.baichuan-ai.com/v1",       "Baichuan4"),
-        ["Yi (01.AI)"] = new("YI_API_KEY",              "https://api.lingyiwanwu.com/v1",       "yi-large"),
-        ["StepFun (Step)"] = new("STEP_API_KEY",        "https://api.stepfun.com/v1",           "step-2-16k"),
-        ["Minimax"] = new("MINIMAX_API_KEY",             "https://api.minimax.chat/v1",          "MiniMax-Text-01"),
-        ["OpenAI"]      = new("OPENAI_API_KEY",          "https://api.openai.com/v1",            "gpt-4o"),
-        ["Groq"]        = new("GROQ_API_KEY",            "https://api.groq.com/openai/v1",       "llama-3.3-70b-versatile"),
-        ["OpenRouter"]  = new("OPENROUTER_API_KEY",      "https://openrouter.ai/api/v1",         "deepseek/deepseek-chat"),
-        ["Together AI"] = new("TOGETHER_API_KEY",        "https://api.together.xyz/v1",          "mistralai/Mixtral-8x22B-Instruct-v0.1"),
-        ["Mistral"]     = new("MISTRAL_API_KEY",         "https://api.mistral.ai/v1",            "mistral-large-latest"),
-        ["Perplexity"]  = new("PERPLEXITY_API_KEY",      "https://api.perplexity.ai",            "sonar-pro"),
-        ["X.AI (Grok)"] = new("XAI_API_KEY",             "https://api.x.ai/v1",                  "grok-2-1212"),
-        ["Cohere"]      = new("COHERE_API_KEY",          "https://api.cohere.ai/v1",             "command-r-plus"),
-        ["Fireworks AI"] = new("FIREWORKS_API_KEY",      "https://api.fireworks.ai/inference/v1","accounts/fireworks/models/llama-v3p3-70b-instruct"),
-        ["Ollama"]      = new("",                        "http://localhost:11434/v1",            "llama3.2"),
-        ["LMStudio"]    = new("",                        "http://localhost:1234/v1",             "local-model"),
-        ["vLLM"]        = new("",                        "http://localhost:8000/v1",             "meta-llama/Llama-3.2-3B-Instruct"),
-    };
+        var d = LTAI.Core.Configuration.KnownKeys.All
+            .Where(k => k.Endpoint != null && k.Model != null)
+            .ToDictionary(k => k.Service, k => new ProviderInfo(k.EnvVar, k.Endpoint!, k.Model!));
+        // Local providers (no API key needed)
+        d["Ollama"]   = new("", "http://localhost:11434/v1", "llama3.2");
+        d["LMStudio"] = new("", "http://localhost:1234/v1",  "local-model");
+        d["vLLM"]     = new("", "http://localhost:8000/v1",  "meta-llama/Llama-3.2-3B-Instruct");
+        return d;
+    }
 
     private readonly IOptions<LTAIOptions>? _options;
     private readonly MultiProviderChatClient? _router;
     private readonly IHttpClientFactory? _httpFactory;
+    private readonly ILogger<LLMConfigPanel>? _logger;
     private string _provider;
     private string _l1Model;
     private string _l2Model;
@@ -54,14 +41,17 @@ public sealed class LLMConfigPanel
     public string L2Model => _l2Model;
     public float Temperature => _temperature;
     public int MaxTokens => _maxTokens;
+    private List<string>? _availableModels;
 
     public LLMConfigPanel(IOptions<LTAIOptions>? options = null,
         MultiProviderChatClient? router = null,
-        IHttpClientFactory? httpFactory = null)
+        IHttpClientFactory? httpFactory = null,
+        ILogger<LLMConfigPanel>? logger = null)
     {
         _options = options;
         _router = router;
         _httpFactory = httpFactory;
+        _logger = logger;
         _provider = DetectActiveProvider();
         _l1Model = options?.Value.AI.GetLayerConfig("fast").Model ?? "deepseek-v4-flash";
         _l2Model = options?.Value.AI.GetLayerConfig("deep").Model ?? "deepseek-v4-pro";
@@ -193,7 +183,81 @@ public sealed class LLMConfigPanel
             !hasApiKey ? "[red]No Key[/]" : (!isRegistered ? "[yellow]Key set, restart to activate[/]" : "[green]Ready[/]"));
         AnsiConsole.Write(table);
         AnsiConsole.WriteLine();
-        AnsiConsole.MarkupLine("[dim]P: switch provider | K: set API key | T: temperature | M: max tokens[/]");
+        AnsiConsole.MarkupLine("[dim]P: switch provider | K: set API key | T: temperature | M: max tokens | L: select L1/L2 model[/]");
+    }
+
+    /// <summary>Interactive model selection for L1 and L2.</summary>
+    private void SelectModels()
+    {
+        var info = CurrentProvider;
+        if (info == null || string.IsNullOrEmpty(info.EnvVar)) return;
+        if (string.IsNullOrEmpty(SecretManager.Get(info.EnvVar)))
+        {
+            AnsiConsole.MarkupLine("[red]Set API key first (press K)[/]");
+            return;
+        }
+
+        // Fetch models if not cached
+        if (_availableModels == null)
+            _availableModels = FetchModels(info);
+
+        if (_availableModels == null || _availableModels.Count == 0)
+        {
+            AnsiConsole.MarkupLine("[yellow]No models available from API. Using defaults.[/]");
+            return;
+        }
+
+        var prompt = new SelectionPrompt<string>()
+            .Title("[yellow]Select L1 (flash) model:[/]")
+            .PageSize(10)
+            .AddChoices(_availableModels);
+        var l1 = AnsiConsole.Prompt(prompt);
+        if (!string.IsNullOrEmpty(l1)) _l1Model = l1;
+
+        var prompt2 = new SelectionPrompt<string>()
+            .Title("[yellow]Select L2 (pro) model:[/]")
+            .PageSize(10)
+            .AddChoices(_availableModels);
+        var l2 = AnsiConsole.Prompt(prompt2);
+        if (!string.IsNullOrEmpty(l2)) _l2Model = l2;
+
+        AnsiConsole.MarkupLine($"[green]L1: {_l1Model}  L2: {_l2Model}[/]");
+    }
+
+    /// <summary>Fetch available models from the provider's /v1/models API.</summary>
+    private List<string> FetchModels(ProviderInfo info)
+    {
+        if (_httpFactory == null || string.IsNullOrEmpty(info.Endpoint) || string.IsNullOrEmpty(info.EnvVar))
+            return [];
+
+        try
+        {
+            var apiKey = SecretManager.Get(info.EnvVar);
+            if (string.IsNullOrEmpty(apiKey)) return [];
+
+            var http = _httpFactory.CreateClient();
+            var req = new HttpRequestMessage(HttpMethod.Get, $"{info.Endpoint.TrimEnd('/')}/models");
+            req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", apiKey);
+            var resp = http.Send(req);
+
+            if (!resp.IsSuccessStatusCode) return [];
+
+            using var json = JsonDocument.Parse(resp.Content.ReadAsStream());
+            var models = json.RootElement.GetProperty("data")
+                .EnumerateArray()
+                .Select(m => m.GetProperty("id").GetString() ?? "")
+                .Where(id => !string.IsNullOrEmpty(id))
+                .OrderBy(id => id)
+                .ToList();
+
+            _logger?.LogInformation("Fetched {Count} models from {Provider}", models.Count, info.EnvVar);
+            return models;
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "Failed to fetch models from {Provider}", info.EnvVar);
+            return [];
+        }
     }
 
     public void HandleKey(ConsoleKeyInfo key)
@@ -204,6 +268,7 @@ public sealed class LLMConfigPanel
             case ConsoleKey.K: TrySetApiKey(); break;
             case ConsoleKey.T: AdjustTemperature(); break;
             case ConsoleKey.M: AdjustMaxTokens(); break;
+            case ConsoleKey.L: SelectModels(); break;
         }
     }
 
@@ -215,7 +280,14 @@ public sealed class LLMConfigPanel
         _provider = choice;
 
         var info = CurrentProvider;
-        if (info != null) _l1Model = info.Model;
+        if (info != null)
+        {
+            _l1Model = info.Model;
+            _l2Model = info.Model;
+            _availableModels = null; // reset cache
+            // Try to fetch available models from API
+            try { _availableModels = FetchModels(info); } catch { /* API unavailable — use defaults */ }
+        }
 
         // Update runtime provider in the router
         if (_router != null) _router.ActiveProvider = _provider;

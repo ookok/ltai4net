@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
 using System.Net.Http.Json;
 using System.Runtime.CompilerServices;
+using System.Security.Cryptography;
+using Microsoft.Extensions.Caching.Memory;
 using System.Text.Json;
 using LTAI.Core.Configuration;
 using Microsoft.Extensions.AI;
@@ -17,32 +19,10 @@ namespace LTAI.AI;
 /// </summary>
 public sealed class MultiProviderChatClient : IChatClient
 {
-    /// <summary>All known providers: (envVar, endpoint, model, displayName).</summary>
+    /// <summary>All known providers: (envVar, endpoint, model, displayName).
+    /// Generated from <see cref="LTAI.Core.Configuration.KnownKeys.GetDefaultProviders"/> — single source of truth.</summary>
     public static readonly (string envVar, string endpoint, string model, string name)[] DefaultProviders =
-    {
-        ("DEEPSEEK_API_KEY",     "https://api.deepseek.com/v1",              "deepseek-chat",                "DeepSeek"),
-        ("SILICONFLOW_API_KEY",  "https://api.siliconflow.cn/v1",           "deepseek-ai/DeepSeek-V2.5",    "SiliconFlow"),
-        ("DASHSCOPE_API_KEY",    "https://dashscope.aliyuncs.com/compatible-mode/v1", "qwen-plus",          "Aliyun"),
-        ("ZHIPU_API_KEY",        "https://open.bigmodel.cn/api/paas/v4",    "glm-4-plus",                   "Zhipu"),
-        ("DOUBAO_API_KEY",       "https://ark.cn-beijing.volces.com/api/v3","ep-XXXXXX",                    "Doubao"),
-        ("HUNYUAN_API_KEY",      "https://api.hunyuan.cloud.tencent.com/v1","hunyuan-pro",                  "Hunyuan"),
-        ("BAIDU_API_KEY",        "https://aip.baidubce.com/rpc/2.0/ai_custom", "ernie-4.0",                "Baidu"),
-        ("SPARK_API_KEY",        "https://spark-api.xf-yun.com/v3.5/chat",  "spark-3.5",                    "iFlytek"),
-        ("MOONSHOT_API_KEY",     "https://api.moonshot.cn/v1",              "moonshot-v1-8k",               "Moonshot"),
-        ("BAICHUAN_API_KEY",     "https://api.baichuan-ai.com/v1",          "Baichuan4",                    "Baichuan"),
-        ("YI_API_KEY",           "https://api.lingyiwanwu.com/v1",          "yi-large",                     "Yi"),
-        ("STEP_API_KEY",         "https://api.stepfun.com/v1",              "step-2-16k",                   "StepFun"),
-        ("MINIMAX_API_KEY",      "https://api.minimax.chat/v1",             "MiniMax-Text-01",              "Minimax"),
-        ("OPENAI_API_KEY",       "https://api.openai.com/v1",               "gpt-4o",                       "OpenAI"),
-        ("GROQ_API_KEY",         "https://api.groq.com/openai/v1",          "llama-3.3-70b-versatile",      "Groq"),
-        ("OPENROUTER_API_KEY",   "https://openrouter.ai/api/v1",            "deepseek/deepseek-chat",       "OpenRouter"),
-        ("TOGETHER_API_KEY",     "https://api.together.xyz/v1",             "mistralai/Mixtral-8x22B",      "TogetherAI"),
-        ("MISTRAL_API_KEY",      "https://api.mistral.ai/v1",               "mistral-large-latest",         "Mistral"),
-        ("PERPLEXITY_API_KEY",   "https://api.perplexity.ai",               "sonar-pro",                    "Perplexity"),
-        ("XAI_API_KEY",          "https://api.x.ai/v1",                     "grok-2-1212",                  "XAI"),
-        ("COHERE_API_KEY",       "https://api.cohere.ai/v1",                "command-r-plus",               "Cohere"),
-        ("FIREWORKS_API_KEY",    "https://api.fireworks.ai/inference/v1",   "accounts/fireworks/models/llama-v3p3-70b-instruct", "Fireworks"),
-    };
+        LTAI.Core.Configuration.KnownKeys.GetDefaultProviders();
 
     private readonly Dictionary<string, IChatClient> _clients = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string> _degradation = new(StringComparer.OrdinalIgnoreCase);
@@ -54,6 +34,14 @@ public sealed class MultiProviderChatClient : IChatClient
     private readonly ConcurrentDictionary<string, DateTime> _providerCooldowns = new(StringComparer.OrdinalIgnoreCase);
     private const int MaxFailuresBeforeCooldown = 3;
     private static readonly TimeSpan CooldownDuration = TimeSpan.FromSeconds(30);
+
+    // Response cache (LRU, 5min TTL)
+    private static readonly MemoryCache _responseCache = new(new MemoryCacheOptions
+    {
+        SizeLimit = 256,
+        ExpirationScanFrequency = TimeSpan.FromMinutes(1)
+    });
+    private static readonly TimeSpan CacheTtl = TimeSpan.FromMinutes(5);
 
     public IEnumerable<string> RegisteredProviders => _clients.Keys;
     public string ActiveProvider { get => _defaultProvider; set => _defaultProvider = value; }
@@ -131,6 +119,18 @@ public sealed class MultiProviderChatClient : IChatClient
     private async Task<ChatResponse> TryCallWithDegradation(
         string provider, IEnumerable<ChatMessage> messages, ChatOptions? options, CancellationToken ct)
     {
+        // Check response cache first
+        var cacheKey = BuildCacheKey(provider, messages, options);
+        if (_responseCache.TryGetValue<ChatResponse>(cacheKey, out var cached))
+        {
+            _logger.LogDebug("Cache HIT for provider '{P}', key={Key}", provider, cacheKey);
+            LTAI.Core.Configuration.UsageTracker.RecordCacheHit();
+            // Still track approximate tokens from cached response
+            var text = cached.Messages?.LastOrDefault()?.Text ?? "";
+            LTAI.Core.Configuration.UsageTracker.Record(text.Length / 4, text.Length / 8, provider);
+            return cached;
+        }
+
         foreach (var p in DegradationChain(provider))
         {
             if (!_clients.TryGetValue(p, out var client)) continue;
@@ -151,11 +151,38 @@ public sealed class MultiProviderChatClient : IChatClient
                 var result = await client.GetResponseAsync(messages, options, timeoutCts.Token)
                     .ConfigureAwait(false);
 
+                // Store in cache (miss path)
+                _responseCache.Set(cacheKey, result, new MemoryCacheEntryOptions
+                {
+                    Size = 1,
+                    AbsoluteExpirationRelativeToNow = CacheTtl
+                });
+
                 // Success — reset failure count
                 _providerFailures.TryRemove(p, out _);
                 _providerCooldowns.TryRemove(p, out _);
 
                 return result;
+            }
+            catch (HttpRequestException ex) when (ex.StatusCode is
+                System.Net.HttpStatusCode.Unauthorized or
+                System.Net.HttpStatusCode.Forbidden or
+                (System.Net.HttpStatusCode)402)
+            {
+                // Auth / payment failure — ban permanently (never retry this session)
+                _logger.LogWarning("Provider '{P}' permanently banned: {(int)ex.StatusCode}", p, ex.StatusCode);
+                _providerCooldowns[p] = DateTime.MaxValue;
+                continue;
+            }
+            catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
+            {
+                // Rate limited — use Retry-After header if available
+                var cooldown = ex.Message.Contains("retry after:")
+                    ? TimeSpan.FromSeconds(30)  // fallback
+                    : TimeSpan.FromSeconds(30);
+                _providerCooldowns[p] = DateTime.UtcNow + cooldown;
+                _logger.LogWarning("Provider '{P}' rate limited, cooldown {Cooldown}s", p, cooldown.TotalSeconds);
+                continue;
             }
             catch (TimeoutException)
             {
@@ -190,6 +217,21 @@ public sealed class MultiProviderChatClient : IChatClient
             _logger.LogWarning("Provider '{P}' failed {Count} times — cooling down until {Until}",
                 provider, count, until);
         }
+    }
+
+    /// <summary>Build a deterministic cache key from provider, messages, and options.</summary>
+    private static string BuildCacheKey(string provider, IEnumerable<ChatMessage> messages, ChatOptions? options)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.Append(provider).Append('|');
+        sb.Append(options?.Temperature ?? 0).Append('|');
+        sb.Append(options?.MaxOutputTokens ?? 0).Append('|');
+        foreach (var m in messages)
+            sb.Append(m.Role).Append(':').Append(m.Text ?? "").Append('|');
+        // Hash to keep key short
+        using var sha = SHA256.Create();
+        var bytes = sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(sb.ToString()));
+        return Convert.ToHexString(bytes)[..16];
     }
 
     private IEnumerable<string> DegradationChain(string provider)
@@ -254,10 +296,27 @@ public sealed class OpenAiHttpClient : IChatClient
         req.Content = JsonContent.Create(request, options: JsonOpts);
 
         using var resp = await _http.SendAsync(req, ct).ConfigureAwait(false);
+
+        // Fast-fail on auth/payment errors — no point retrying these
+        if (resp.StatusCode == System.Net.HttpStatusCode.Unauthorized ||      // 401
+            resp.StatusCode == System.Net.HttpStatusCode.Forbidden ||         // 403
+            (int)resp.StatusCode == 402)                                     // Payment Required
+        {
+            throw new HttpRequestException($"Provider auth/payment failure ({(int)resp.StatusCode})", null, resp.StatusCode);
+        }
+        if (resp.StatusCode == System.Net.HttpStatusCode.TooManyRequests)    // 429
+        {
+            var retryAfter = resp.Headers.RetryAfter?.Delta;
+            throw new HttpRequestException($"Rate limited, retry after: {retryAfter}", null, resp.StatusCode);
+        }
         resp.EnsureSuccessStatusCode();
 
         var json = await resp.Content.ReadFromJsonAsync<ChatResponseJson>(JsonOpts, ct).ConfigureAwait(false);
         var text = json?.Choices?.FirstOrDefault()?.Message?.Content ?? "";
+
+        // Track token usage
+        if (json?.Usage != null)
+            LTAI.Core.Configuration.UsageTracker.Record(json.Usage.PromptTokens, json.Usage.CompletionTokens, _model);
 
         return new ChatResponse(new ChatMessage(ChatRole.Assistant, text));
     }
@@ -283,6 +342,19 @@ public sealed class OpenAiHttpClient : IChatClient
         req.Content = JsonContent.Create(requestBody, options: JsonOpts);
 
         using var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
+
+        // Fast-fail on auth/payment/rate-limit (same as non-streaming)
+        if (resp.StatusCode == System.Net.HttpStatusCode.Unauthorized ||
+            resp.StatusCode == System.Net.HttpStatusCode.Forbidden ||
+            (int)resp.StatusCode == 402)
+        {
+            throw new HttpRequestException($"Provider auth/payment failure ({(int)resp.StatusCode})", null, resp.StatusCode);
+        }
+        if (resp.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
+        {
+            var retryAfter = resp.Headers.RetryAfter?.Delta;
+            throw new HttpRequestException($"Rate limited, retry after: {retryAfter}", null, resp.StatusCode);
+        }
         resp.EnsureSuccessStatusCode();
 
         using var stream = await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
@@ -320,9 +392,10 @@ public sealed class OpenAiHttpClient : IChatClient
     object? IChatClient.GetService(Type? t, object? k) => null;
     void IDisposable.Dispose() { }
 
-    private sealed record ChatResponseJson(ChoiceJson[]? Choices);
+    private sealed record ChatResponseJson(ChoiceJson[]? Choices, UsageJson? Usage);
     private sealed record ChoiceJson(MessageJson? Message);
     private sealed record MessageJson(string? Content);
+    private sealed record UsageJson(int PromptTokens, int CompletionTokens);
 
     // SSE streaming chunk types
     private sealed record StreamingChunkJson(StreamingChoiceJson[]? Choices);
@@ -334,6 +407,17 @@ public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddLTAIAI(this IServiceCollection services)
     {
+        // Named HttpClient with connection pooling for LLM API calls
+        // Reuses TCP+TLS connections to avoid ~200ms handshake overhead per request
+        services.AddHttpClient("llm")
+            .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
+            {
+                MaxConnectionsPerServer = 3,
+                PooledConnectionLifetime = TimeSpan.FromMinutes(2),
+                PooledConnectionIdleTimeout = TimeSpan.FromSeconds(30),
+                EnableMultipleHttp2Connections = true,
+            });
+
         // Step 1: Register the raw MultiProviderChatClient (not as IChatClient — we'll wrap it)
         services.AddSingleton<MultiProviderChatClient>(sp =>
         {
@@ -344,12 +428,34 @@ public static class ServiceCollectionExtensions
 
             foreach (var provider in MultiProviderChatClient.DefaultProviders)
             {
-                var apiKey = Environment.GetEnvironmentVariable(provider.envVar);
+                var apiKey = LTAI.Core.Configuration.SecretManager.Get(provider.envVar);
                 if (string.IsNullOrEmpty(apiKey)) continue;
                 try
                 {
-                    var client = new OpenAiHttpClient(httpFactory.CreateClient(), provider.endpoint, provider.model, apiKey, logger as ILogger);
-                    router.Register(provider.name, client);
+                    var isDefault = string.Equals(provider.name, opts.AI.DefaultProvider, StringComparison.OrdinalIgnoreCase);
+
+                    if (isDefault)
+                    {
+                        // L1 (flash): from config deepseek-fast, fallback deepseek-v4-flash
+                        var l1 = opts.AI.GetLayerConfig("fast");
+                        var l1Ep = !string.IsNullOrEmpty(l1.Endpoint) ? l1.Endpoint : provider.endpoint;
+                        var l1Http = httpFactory.CreateClient("llm");
+                        var l1Client = new OpenAiHttpClient(l1Http, l1Ep, l1.Model, apiKey, logger as ILogger);
+                        router.Register("deepseek", l1Client);
+
+                        // L2 (pro): from config deepseek, fallback deepseek-v4-pro
+                        var l2 = opts.AI.GetLayerConfig("pro");
+                        var l2Ep = !string.IsNullOrEmpty(l2.Endpoint) ? l2.Endpoint : provider.endpoint;
+                        var l2Http = httpFactory.CreateClient("llm");
+                        var l2Client = new OpenAiHttpClient(l2Http, l2Ep, l2.Model, apiKey, logger as ILogger);
+                        router.Register("deepseek-pro", l2Client);
+                    }
+                    else
+                    {
+                        var http = httpFactory.CreateClient("llm");
+                        var client = new OpenAiHttpClient(http, provider.endpoint, provider.model, apiKey, logger as ILogger);
+                        router.Register(provider.name, client);
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -368,16 +474,20 @@ public static class ServiceCollectionExtensions
             // Build a safety LLM from the first available provider
             var opts = sp.GetRequiredService<IOptions<LTAIOptions>>().Value;
             var httpFactory = sp.GetRequiredService<IHttpClientFactory>();
-            var safetyKey = Environment.GetEnvironmentVariable(opts.AI.ApiKeyEnv ?? "DEEPSEEK_API_KEY") ?? "";
+            var safetyKey = LTAI.Core.Configuration.SecretManager.Get(opts.AI.ApiKeyEnv ?? "DEEPSEEK_API_KEY") ?? "";
             IChatClient safetyClient = new OpenAiHttpClient(
                 httpFactory.CreateClient(), "https://api.deepseek.com/v1", "deepseek-chat", safetyKey);
 
             return new LTAI.Core.Safety.SafeChatClient(router, safetyClient, logger);
         });
 
-        // Embedding client (API-based, no local model)
+        // Local ONNX embedder (BGE-small-zh, zero API dependency)
+        services.AddSingleton<LocalEmbedder>();
+
+        // Embedding client (API → local BGE → FastEmb fallback)
         services.AddSingleton<EmbeddingClient>(sp =>
             new EmbeddingClient(sp.GetRequiredService<IHttpClientFactory>(),
+                sp.GetService<LocalEmbedder>(),
                 sp.GetService<ILogger<EmbeddingClient>>()));
         return services;
     }

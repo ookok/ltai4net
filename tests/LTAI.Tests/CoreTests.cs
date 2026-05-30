@@ -1,0 +1,97 @@
+using Xunit;
+using LTAI.Agent.Vector;
+using LTAI.Core.Configuration;
+
+namespace LTAI.Tests;
+
+public class KgStoreTests : IDisposable
+{
+    private readonly string _dir;
+    public KgStoreTests() { _dir = Path.Combine(Path.GetTempPath(), "ltai-test-" + Guid.NewGuid().ToString("N")[..8]); Directory.CreateDirectory(_dir); }
+    public void Dispose() { try { Directory.Delete(_dir, recursive: true); } catch { } }
+
+    [Fact]
+    public void CreateStore_NodeUpsertAndGet_Works()
+    {
+        using var store = new KgStore(Path.Combine(_dir, "test.db"));
+        var id = store.UpsertNode(extId: "test:1", kind: "class", name: "TestClass",
+            ns: "LTAI.Tests", signature: "", source: "test.cs");
+        Assert.True(id > 0);
+
+        var node = store.GetNode(id);
+        Assert.NotNull(node);
+        Assert.Equal("class", node.Kind);
+        Assert.Equal("TestClass", node.Name);
+    }
+
+    [Fact]
+    public void FtsSearch_BasicQuery_ReturnsResults()
+    {
+        using var store = new KgStore(Path.Combine(_dir, "fts.db"));
+        var id = store.UpsertNode("doc:1", "document", "TestDoc");
+        store.AddDoc(id, "This is a test document about authentication");
+        // Use the writer connection directly to ensure visibility
+        store.OptimizeFts();
+
+        var results = store.SearchFts("authentication");
+        Assert.NotEmpty(results);
+        Assert.Contains(results, r => r.nodeId == id);
+    }
+
+    [Fact]
+    public void EdgeTraversal_Bfs_ReturnsNeighbors()
+    {
+        using var store = new KgStore(Path.Combine(_dir, "graph.db"));
+        var a = store.UpsertNode("n:a", "class", "ClassA");
+        var b = store.UpsertNode("n:b", "method", "MethodB");
+        store.AddEdge(a, b, "calls");
+
+        var neighbors = store.TraverseBfs([a], maxDepth: 1);
+        Assert.Contains(neighbors, n => n.Id == b);
+    }
+}
+
+public class SecretManagerTests
+{
+    [Fact]
+    public void SetAndGet_EnvironmentVariable_Works()
+    {
+        var key = "LTAI_TEST_KEY_" + Guid.NewGuid().ToString("N")[..8];
+        SecretManager.Set(key, "test-value", persistent: false);
+        Assert.Equal("test-value", SecretManager.Get(key));
+        SecretManager.Invalidate(key);
+    }
+
+    [Fact]
+    public void Has_ReturnsCorrectValue()
+    {
+        var key = "LTAI_TEST_HAS_" + Guid.NewGuid().ToString("N")[..8];
+        Assert.False(SecretManager.Has(key));
+        SecretManager.Set(key, "value", persistent: false);
+        Assert.True(SecretManager.Has(key));
+        SecretManager.Invalidate(key);
+    }
+}
+
+public class UsageTrackerTests
+{
+    [Fact]
+    public void Record_IncreasesCounters()
+    {
+        var before = UsageTracker.TotalTokens;
+        UsageTracker.Record(100, 50, "deepseek-chat");
+        Assert.Equal(before + 150, UsageTracker.TotalTokens);
+        Assert.Equal("deepseek-chat", UsageTracker.ActiveModel);
+    }
+
+    [Fact]
+    public void CacheTracking_Works()
+    {
+        var hitsBefore = UsageTracker.CacheHits;
+        var missesBefore = UsageTracker.CacheMisses;
+        UsageTracker.RecordCacheHit();
+        UsageTracker.RecordCacheMiss();
+        Assert.Equal(hitsBefore + 1, UsageTracker.CacheHits);
+        Assert.Equal(missesBefore + 1, UsageTracker.CacheMisses);
+    }
+}

@@ -1,0 +1,307 @@
+// Copyright (c) LTAI. All rights reserved.
+
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
+using LTAI.AI;
+using LTAI.Agent.Tools;
+using Microsoft.Agents.AI;
+using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Logging;
+
+namespace LTAI.Agent.Vector;
+
+/// <summary>
+/// Multi-language Code Graph (SQLite + FTS5 + CTE).
+/// Pipeline: LLM rewrite → FTS5 BM25 → CTE graph expansion → context injection.
+/// </summary>
+public sealed class CgGraph : AIContextProvider
+{
+    private readonly KgStore _store;
+    private readonly IChatClient? _rewriter;
+    private readonly ILogger<CgGraph> _logger;
+    private readonly string _ws;
+    private bool _built;
+    private readonly Dictionary<string, DateTime> _indexedFiles = new(StringComparer.OrdinalIgnoreCase);
+    private TreeSitterParser? _parser;
+
+    private static readonly HashSet<string> SourceExts = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".cs", ".py", ".js", ".jsx", ".ts", ".tsx", ".go", ".rs", ".java",
+        ".sh", ".bash", ".json", ".html", ".css",
+    };
+
+    /// <summary>
+    /// Initializes a new instance.
+    /// </summary>
+    /// <param name="store">SQLite KgStore.</param>
+    /// <param name="rewriter">Optional LLM for query→keyword rewriting. If null, raw query is used.</param>
+    /// <param name="logger">Logger.</param>
+    /// <param name="ws">Workspace root for code indexing.</param>
+    public CgGraph(KgStore store, IChatClient? rewriter = null,
+        ILogger<CgGraph>? logger = null, string? ws = null)
+        : base(null, null, null)
+    {
+        _store = store ?? throw new ArgumentNullException(nameof(store));
+        _rewriter = rewriter;
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _ws = ws ?? Directory.GetCurrentDirectory();
+    }
+
+    // ═══════════════════════════════════════════
+    //  Build / Incremental index
+    // ═══════════════════════════════════════════
+
+    public async Task<string> BuildAsync(string? directory = null)
+    {
+        var dir = directory ?? _ws;
+        if (!Directory.Exists(dir)) return "Directory not found";
+
+        _parser ??= new TreeSitterParser();
+
+        var files = Directory.EnumerateFiles(dir, "*.*", new EnumerationOptions
+        {
+            RecurseSubdirectories = true,
+            AttributesToSkip = FileAttributes.System | FileAttributes.Hidden | FileAttributes.ReparsePoint,
+        })
+            .Where(f => SourceExts.Contains(Path.GetExtension(f)))
+            .Where(f =>
+            {
+                var rel = f.AsSpan(dir.Length);
+                return !rel.Contains("\\obj\\", StringComparison.OrdinalIgnoreCase)
+                    && !rel.Contains("\\bin\\", StringComparison.OrdinalIgnoreCase)
+                    && !rel.Contains("\\dist\\", StringComparison.OrdinalIgnoreCase)
+                    && !rel.Contains("\\node_modules\\", StringComparison.OrdinalIgnoreCase)
+                    && !rel.Contains("\\.git\\", StringComparison.OrdinalIgnoreCase)
+                    && !rel.Contains("\\packages\\", StringComparison.OrdinalIgnoreCase);
+            })
+            .ToList();
+
+        // Parallel file indexing: read + parse across CPU cores, write serialized
+        int sc = 0, na = 0;
+        var syncLock = new object();
+
+        Parallel.ForEach(files, new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount }, file =>
+        {
+            var lw = File.GetLastWriteTimeUtc(file);
+            if (_indexedFiles.TryGetValue(file, out var pw) && pw >= lw) return;
+
+            var rel = Path.GetRelativePath(_ws, file).Replace('\\', '/');
+
+            try
+            {
+                var code = File.ReadAllText(file);        // sync read in thread pool
+                var ext = Path.GetExtension(file);
+                var fileName = Path.GetFileName(file);
+                var lineCount = code.Split('\n').Length;
+
+                // Parse AST (CPU-bound, no I/O)
+                var symbols = _parser.ExtractSymbols(code, ext);
+
+                // Serialize writes to KgStore (SQLite is single-writer)
+                lock (syncLock)
+                {
+                    _store.DeleteSource(rel);
+                    int fileNodeCount = 1; // file node
+
+                    var fid = _store.UpsertNode(
+                        extId: $"file:{rel}",
+                        kind: "file",
+                        name: fileName,
+                        ns: rel,
+                        signature: ext,
+                        source: rel,
+                        props: new() { ["path"] = rel, ["ext"] = ext, ["lines"] = lineCount });
+
+                    _store.AddDoc(fid, code, "code", rel);
+
+                    foreach (var (kind, name, line, _) in symbols)
+                    {
+                        var safeName = name.Replace("<", "_").Replace(">", "_").Replace("(", "_").Replace(")", "_");
+                        var nid = _store.UpsertNode(
+                            extId: $"{kind}:{Path.GetFileNameWithoutExtension(file)}:{safeName}",
+                            kind: MapKind(kind),
+                            name: safeName,
+                            ns: rel,
+                            signature: $"L{line}",
+                            source: rel,
+                            props: new() { ["file"] = rel, ["line"] = line, ["ext"] = ext });
+
+                        _store.AddEdge(fid, nid, "defines");
+
+                        var ctx = GetContext(code, line);
+                        _store.AddDoc(nid, ctx, "code", $"{rel}:L{line}");
+                        fileNodeCount++;
+                    }
+
+                    Interlocked.Add(ref na, fileNodeCount);
+                    _indexedFiles[file] = lw;
+                    Interlocked.Increment(ref sc);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "CgGraph: failed to index {File}", file);
+            }
+        });
+
+        _built = true;
+
+        // Maintenance
+        if (sc > 0 || _indexedFiles.Count % 10 == 0)
+        {
+            var (p, before, after) = _store.RunMaintenance(_ws, TimeSpan.FromDays(30));
+            _logger.LogInformation("CgGraph: GC {P} stale, {Before}B→{After}B", p, before, after);
+        }
+
+        return $"Built: {sc} files, {na} symbols\n{_store.Stats()}";
+    }
+
+    // ═══════════════════════════════════════════
+    //  Query
+    // ═══════════════════════════════════════════
+
+    public async Task<string> QueryAsync(string query, int topK = 5, CancellationToken ct = default)
+    {
+        await EnsureBuiltAsync();
+
+        var keywords = await RewriteQueryAsync(query, ct);
+        if (string.IsNullOrWhiteSpace(keywords)) keywords = query;
+
+        _logger.LogInformation("CgGraph: \"{Q}\" → keywords: \"{K}\"", query, keywords);
+
+        var ftsHits = _store.SearchFts(keywords, topN: topK * 2);
+        if (ftsHits.Count == 0) return "No relevant code found.";
+
+        var seen = new HashSet<long>();
+        var lines = new List<string> { "## Relevant Code:\n" };
+
+        foreach (var hit in ftsHits.Take(topK))
+        {
+            if (!seen.Add(hit.nodeId)) continue;
+            var node = _store.GetNode(hit.nodeId);
+            if (node == null) continue;
+
+            var icon = node.Kind switch
+            {
+                "class" => "📦", "method" => "🔧", "interface" => "📐",
+                "file" => "📄", "enum" => "🔢", "struct" => "🏗️", _ => "▪️"
+            };
+            lines.Add($"{icon} **[{node.Kind}]** `{node.Name}` — {node.Namespace}");
+
+            // 1-hop neighbors
+            foreach (var edge in _store.GetEdges(hit.nodeId).Take(5))
+            {
+                var neighborId = edge.Src == hit.nodeId ? edge.Dst : edge.Src;
+                if (!seen.Add(neighborId)) continue;
+                var neighbor = _store.GetNode(neighborId);
+                if (neighbor == null) continue;
+                lines.Add($"  ══ {edge.Relation} ══ [{neighbor.Kind}] `{neighbor.Name}`");
+            }
+
+            // Doc snippet
+            foreach (var doc in _store.GetDocs(hit.nodeId).Take(1))
+            {
+                var snippet = doc.Text.Length > 150 ? doc.Text[..150] + "…" : doc.Text;
+                lines.Add($"  ```\n{snippet}\n```");
+            }
+            lines.Add("");
+        }
+
+        return string.Join("\n", lines);
+    }
+
+    // ═══════════════════════════════════════════
+    //  AIContextProvider
+    // ═══════════════════════════════════════════
+
+    protected override async ValueTask<AIContext> ProvideAIContextAsync(
+        InvokingContext ctx, CancellationToken ct = default)
+    {
+        var msgs = ctx.AIContext?.Messages;
+        if (msgs == null) return ctx.AIContext!;
+
+        var userMsg = msgs.LastOrDefault(m => m.Role == ChatRole.User);
+        if (userMsg?.Text == null || userMsg.Text.Length < 5)
+            return ctx.AIContext!;
+
+        try
+        {
+            if (!_built) await BuildAsync();
+
+            var result = await QueryAsync(userMsg.Text, topK: 3, ct: ct);
+            if (string.IsNullOrEmpty(result) || result.StartsWith("No relevant"))
+                return ctx.AIContext!;
+
+            _logger.LogInformation("CgGraph: injected context for: \"{Q}\"", userMsg.Text);
+
+            return new AIContext
+            {
+                Instructions = ctx.AIContext?.Instructions != null
+                    ? ctx.AIContext.Instructions + "\n\n" + result
+                    : result,
+                Messages = ctx.AIContext?.Messages,
+                Tools = ctx.AIContext?.Tools,
+            };
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "CgGraph query failed");
+            return ctx.AIContext!;
+        }
+    }
+
+    // ═══════════════════════════════════════════
+    //  Private
+    // ═══════════════════════════════════════════
+
+    private async Task EnsureBuiltAsync()
+    {
+        if (!_built) await BuildAsync();
+    }
+
+    private async Task<string> RewriteQueryAsync(string query, CancellationToken ct)
+    {
+        if (_rewriter == null) return query;
+        try
+        {
+            var prompt = $"""
+                You are a code search assistant. Convert the following query into
+                3-8 keywords (class names, method names, file names, error terms, etc.).
+                Return ONLY space-separated keywords.
+                Query: {query}
+                Keywords:
+                """;
+            var resp = await _rewriter.GetResponseAsync(
+                [new ChatMessage(ChatRole.User, prompt)], cancellationToken: ct).ConfigureAwait(false);
+            return resp.Text?.Trim() ?? query;
+        }
+        catch { return query; }
+    }
+
+    private static string MapKind(string tsKind) => tsKind.ToLowerInvariant() switch
+    {
+        "class" => "class",
+        "method" or "function" or "method_declaration" => "method",
+        "interface" => "interface",
+        "enum" => "enum",
+        "property" or "variable" => "property",
+        "struct" => "struct",
+        "record" => "record",
+        _ => tsKind.ToLowerInvariant().Replace("_declaration", "").Replace("_definition", "")
+    };
+
+    private static string GetContext(string code, int lineNum)
+    {
+        var lines = code.Split('\n');
+        var start = Math.Max(0, lineNum - 3);
+        var end = Math.Min(lines.Length, lineNum + 2);
+        return string.Join("\n", lines[start..end]);
+    }
+
+    public void Dispose() => _parser?.Dispose();
+}

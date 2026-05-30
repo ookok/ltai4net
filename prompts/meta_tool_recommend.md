@@ -1,8 +1,0 @@
-# prompt: meta_tool_recommend
-domain: system
-description: Meta: tool recommendation for low-confidence domain
-## triggers
-meta tool, tool recommend, low confidence tool
-
-## template
-【系统自评】该领域熟悉度低（置信度={certainty}，原因: {reason}）。请务必使用工具，不得推测。

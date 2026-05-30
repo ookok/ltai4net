@@ -2,6 +2,7 @@ using System.Reflection;
 using System.Text.Json;
 using Spectre.Console;
 using LTAI.Core;
+using LTAI.Agent.Vector;
 
 namespace LTAI.Cli;
 
@@ -24,6 +25,9 @@ partial class Program
         return command switch
         {
             "env" => HandleEnv(args[1..]),
+            "migrate" => HandleMigrate(args[1..]),
+            "textpad" => HandleTextPad(args[1..]),
+            "dashboard" or "dash" => HandleDashboard(),
             "version" or "--version" or "-v" => ShowVersion(),
             _ => ShowHelp()
         };
@@ -39,6 +43,9 @@ partial class Program
         table.AddRow("env set <name> <value>", "Set an environment variable");
         table.AddRow("env export <path>", "Export env vars to JSON file");
         table.AddRow("env import <path>", "Import env vars from JSON file");
+        table.AddRow("migrate", "迁移 LiteDB → SQLite 知识图谱");
+        table.AddRow("textpad [path]", "文件浏览器/编辑器");
+        table.AddRow("dashboard", "实时仪表盘");
         table.AddRow("version", "Show version");
         AnsiConsole.Write(table);
         return 0;
@@ -159,7 +166,7 @@ partial class Program
             return 1;
         }
 
-        Environment.SetEnvironmentVariable(name, value);
+        LTAI.Core.Configuration.SecretManager.Set(name, value);
         AnsiConsole.MarkupLine($"[green]✅ {name}[/] = [green]{preview}[/]");
         return 0;
     }
@@ -314,7 +321,7 @@ partial class Program
         var setCount = 0;
         foreach (var (key, val) in import)
         {
-            Environment.SetEnvironmentVariable(key, val);
+            LTAI.Core.Configuration.SecretManager.Set(key, val);
             setCount++;
         }
 
@@ -328,6 +335,135 @@ partial class Program
         var ver = Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "1.0.0";
         AnsiConsole.MarkupLine($"[bold]LTAI CLI[/] v{ver}");
         AnsiConsole.MarkupLine("[grey]Agent Framework: Microsoft.Agents.AI 1.8.0[/]");
+        return 0;
+    }
+
+    // ═══════════════════════════════════════════
+    //  migrate — LiteDB → SQLite 知识图谱迁移
+    // ═══════════════════════════════════════════
+
+    private static int HandleMigrate(string[] args)
+    {
+        AnsiConsole.MarkupLine("[bold]知识图谱迁移[/]");
+        var ws = Directory.GetCurrentDirectory();
+        var oldDb = Path.Combine(ws, ".livingtree", "graph.db");
+        var newDb = Path.Combine(ws, ".livingtree", "kg.db");
+
+        // Step 1: 检查是否有旧 LiteDB 数据库
+        if (File.Exists(oldDb))
+        {
+            AnsiConsole.MarkupLine($"[yellow]发现旧 LiteDB 数据库: {oldDb}[/]");
+            AnsiConsole.MarkupLine("[grey]LiteDB 已被 SQLite 替代。旧数据无法自动迁移（LiteDB 依赖已移除）。[/]");
+            AnsiConsole.MarkupLine("[grey]你可以手动重命名或删除旧文件以释放磁盘空间。[/]");
+        }
+        else
+        {
+            AnsiConsole.MarkupLine("[green]✓ 无旧 LiteDB 数据库[/]");
+        }
+
+        // Step 2: 检查新 SQLite 数据库
+        var store = new LTAI.Agent.Vector.KgStore(newDb);
+        var stats = store.Stats();
+        AnsiConsole.MarkupLine($"[green]✓ SQLite 知识图谱: {newDb}[/]");
+        AnsiConsole.MarkupLine(stats);
+        store.Dispose();
+        return 0;
+    }
+
+    // ═══════════════════════════════════════════
+    //  textpad — 文件浏览器/编辑器
+    // ═══════════════════════════════════════════
+
+    private static int HandleTextPad(string[] args)
+    {
+        var path = args.Length > 0 ? args[0] : ".";
+        var root = Path.GetFullPath(path);
+        if (!Directory.Exists(root) && !File.Exists(root))
+        {
+            AnsiConsole.MarkupLine($"[red]路径不存在: {root}[/]");
+            return 1;
+        }
+        if (File.Exists(root))
+        {
+            // 直接查看文件
+            var content = File.ReadAllText(root);
+            var panel = new Panel(content.EscapeMarkup())
+                .Header($"[bold]{Path.GetFileName(root)}[/]").BorderColor(Color.Green).Expand();
+            AnsiConsole.Write(panel);
+            return 0;
+        }
+        // 目录浏览器
+        var running = true;
+        var currentDir = root;
+        while (running)
+        {
+            Console.Clear();
+            AnsiConsole.MarkupLine($"[bold]文件浏览器[/] — [grey]{currentDir}[/]");
+            var items = new List<string>();
+            try
+            {
+                items.AddRange(Directory.GetDirectories(currentDir)
+                    .Select(d => $"[cyan]📁 {Path.GetFileName(d)}/[/]"));
+                items.AddRange(Directory.GetFiles(currentDir)
+                    .Select(f => $"[grey]📄 {Path.GetFileName(f)}[/]"));
+            }
+            catch { AnsiConsole.MarkupLine("[red]无法读取目录[/]"); break; }
+            if (items.Count == 0) { AnsiConsole.MarkupLine("[grey](空目录)[/]"); break; }
+            var choice = AnsiConsole.Prompt(
+                new SelectionPrompt<string>().Title("[yellow]选择文件/目录:[/]").PageSize(20).AddChoices(items));
+            if (string.IsNullOrEmpty(choice)) break;
+            var fp = Path.GetFullPath(Path.Combine(currentDir, choice.Replace("📁 ", "").Replace("📄 ", "")));
+            // Strip markup tags
+            var clean = fp;
+            if (Directory.Exists(clean)) { currentDir = clean; continue; }
+            if (!File.Exists(clean)) break;
+            var ext = Path.GetExtension(clean).ToLowerInvariant();
+            if (ext is ".md" or ".txt")
+            {
+                // 渲染 Markdown / 文本
+                var text = File.ReadAllText(clean);
+                AnsiConsole.Write(new Panel(text.EscapeMarkup())
+                    .Header($"[bold]{Path.GetFileName(clean)}[/]").BorderColor(Color.Blue).Expand());
+            }
+            else
+            {
+                var lines = File.ReadAllLines(clean);
+                var sb = new System.Text.StringBuilder();
+                for (int i = 0; i < Math.Min(lines.Length, 200); i++)
+                    sb.AppendLine($"[grey]{i + 1,4}[/] {lines[i].EscapeMarkup()}");
+                if (lines.Length > 200)
+                    sb.AppendLine($"[grey]... 仅显示前 200 行，共 {lines.Length} 行[/]");
+                AnsiConsole.Write(new Panel(sb.ToString().TrimEnd())
+                    .Header($"[bold]{Path.GetFileName(clean)}[/]").BorderColor(Color.Green).Expand());
+            }
+            AnsiConsole.MarkupLine("[grey]按任意键继续...[/]");
+            System.Console.ReadKey(true);
+        }
+        return 0;
+    }
+
+    // ═══════════════════════════════════════════
+    //  dashboard — 实时仪表盘
+    // ═══════════════════════════════════════════
+
+    private static int HandleDashboard()
+    {
+        var table = new Table();
+        table.AddColumn("指标"); table.AddColumn("值");
+        table.AddRow("当前模型", LTAI.Core.Configuration.UsageTracker.ActiveModel);
+        table.AddRow("输入 Token", LTAI.Core.Configuration.UsageTracker.PromptTokens.ToString("N0"));
+        table.AddRow("输出 Token", LTAI.Core.Configuration.UsageTracker.CompletionTokens.ToString("N0"));
+        table.AddRow("请求次数", LTAI.Core.Configuration.UsageTracker.Requests.ToString("N0"));
+        table.AddRow("缓存命中", $"{LTAI.Core.Configuration.UsageTracker.CacheHitRate:F1}%");
+        table.AddRow("预估费用", LTAI.Core.Configuration.UsageTracker.CostDisplay);
+        table.AddRow("余额", LTAI.Core.Configuration.UsageTracker.BalanceDisplay);
+        AnsiConsole.Write(table);
+
+        var pct = LTAI.Core.Configuration.UsageTracker.ContextRatio();
+        var ctxChart = new BarChart().Width(50).HideValues()
+            .AddItem("上下文", pct * 100, Color.Yellow)
+            .AddItem("剩余", (1 - pct) * 100, Color.Grey35);
+        AnsiConsole.Write(ctxChart);
         return 0;
     }
 }

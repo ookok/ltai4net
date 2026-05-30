@@ -20,7 +20,8 @@ public sealed class OfficeTools
         if (!File.Exists(fp)) return "Error: File not found";
         try
         {
-            using var doc = SpreadsheetDocument.Open(fp, false);
+            using var ms = ReadViaMmap(fp);
+            using var doc = SpreadsheetDocument.Open(ms, false);
             var wb = doc.WorkbookPart!;
             var sp = ResolveSheet(wb, sheet);
             if (sp == null) return "Sheet not found";
@@ -92,7 +93,7 @@ public sealed class OfficeTools
     [Description("Copy Excel range preserving styles")]
     public string ExcelCopyRange(string srcPath, string srcRange, string tgtPath, string tgtCell, bool create = false)
     {
-        return "Style-preserving copy: " + srcPath + " -> " + tgtPath;
+        return "ExcelCopyRange: not yet implemented (OpenXml style-preserving copy is complex). Use ExcelRead + ExcelWrite instead.";
     }
 
     [Description("Read Word document")]
@@ -103,7 +104,8 @@ public sealed class OfficeTools
         if (!File.Exists(fp)) return "Not found";
         try
         {
-            using var doc = WordprocessingDocument.Open(fp, false);
+            using var ms = ReadViaMmap(fp);
+            using var doc = WordprocessingDocument.Open(ms, false);
             var body = doc.MainDocumentPart?.Document.Body;
             if (body == null) return "Empty";
             var sb = new StringBuilder();
@@ -338,6 +340,32 @@ public sealed class OfficeTools
     }
 
     private string? ResolvePath(string path) => LTAI.Core.PathUtils.SafeResolvePath(_ws, path);
+
+    /// <summary>Read file into MemoryStream via mmap (fast large-file reads, minimal heap).</summary>
+    private static MemoryStream ReadViaMmap(string path)
+    {
+        var info = new FileInfo(path);
+        if (!info.Exists) throw new FileNotFoundException("", path);
+
+        // Only mmap files > 1MB to avoid overhead on small files
+        if (info.Length > 1_024 * 1_024)
+        {
+            try
+            {
+                using var mmf = System.IO.MemoryMappedFiles.MemoryMappedFile.CreateFromFile(
+                    path, FileMode.Open, null, 0, System.IO.MemoryMappedFiles.MemoryMappedFileAccess.Read);
+                using var view = mmf.CreateViewStream(0, 0, System.IO.MemoryMappedFiles.MemoryMappedFileAccess.Read);
+                var ms = new MemoryStream((int)info.Length);
+                view.CopyTo(ms);
+                ms.Position = 0;
+                return ms;
+            }
+            catch { /* fallback to FileStream */ }
+        }
+        // Small file or mmap failed: plain read
+        var bytes = File.ReadAllBytes(path);
+        return new MemoryStream(bytes);
+    }
     private static DocumentFormat.OpenXml.Packaging.WorksheetPart? ResolveSheet(DocumentFormat.OpenXml.Packaging.WorkbookPart wb, string name)
     {
         var s = wb.Workbook!.Descendants<SS.Sheet>().FirstOrDefault(x => x.Name == name);

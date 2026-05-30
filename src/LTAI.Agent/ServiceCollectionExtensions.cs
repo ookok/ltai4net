@@ -1,4 +1,5 @@
 using LTAI.AI;
+using LTAI.AI.Compaction;
 using LTAI.Core.Safety;
 using LTAI.Agent.Tools;
 using LTAI.Agent.Vector;
@@ -40,25 +41,29 @@ public static class ServiceCollectionExtensions
             return agents;
         });
 
-        // Step 2: Graph / Vector stores
-        var dbPath = Path.Combine(Directory.GetCurrentDirectory(), ".livingtree", "graph.db");
-        var graphStore = new GraphStore(dbPath);
-        services.AddSingleton(graphStore);
-
-        // Step 2b: Knowledge/Code graph (registered in DI so lifecycle is managed)
-        services.AddSingleton<KnowledgeGraph>(sp =>
+        // Step 2: SQLite Knowledge Graph store
+        services.AddSingleton<KgStore>(sp =>
         {
-            var store = sp.GetRequiredService<GraphStore>();
-            var embedder = sp.GetRequiredService<EmbeddingClient>();
-            var logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger<KnowledgeGraph>();
-            return new KnowledgeGraph(store, embedder, logger);
+            var opts = sp.GetRequiredService<IOptions<LTAIOptions>>().Value;
+            return new KgStore(opts.ResolveDataPath("kg.db"));
         });
-        services.AddSingleton<CodeGraph>(sp =>
+
+        // Step 2b: Knowledge/Code graph providers (registered in DI so lifecycle is managed)
+        // Both support FTS5-only mode (no LLM, no embedding) and enhanced mode with LLM rewriting + reranking.
+        services.AddSingleton<KbGraph>(sp =>
         {
-            var store = sp.GetRequiredService<GraphStore>();
-            var embedder = sp.GetRequiredService<EmbeddingClient>();
-            var logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger<CodeGraph>();
-            return new CodeGraph(store, embedder, logger, Directory.GetCurrentDirectory());
+            var store = sp.GetRequiredService<KgStore>();
+            var llm = sp.GetService<IChatClient>();
+            var reranker = sp.GetService<Reranker>();
+            var logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger<KbGraph>();
+            return new KbGraph(store, llm, reranker, logger);
+        });
+        services.AddSingleton<CgGraph>(sp =>
+        {
+            var store = sp.GetRequiredService<KgStore>();
+            var llm = sp.GetService<IChatClient>();
+            var logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger<CgGraph>();
+            return new CgGraph(store, llm, logger, Directory.GetCurrentDirectory());
         });
 
         // Step 3: Workflow orchestrator
@@ -66,11 +71,14 @@ public static class ServiceCollectionExtensions
             new WorkflowOrchestrator(agents.Values, agents["chat"],
                 sp.GetRequiredService<ILogger<WorkflowOrchestrator>>()));
 
-        // Step 3: ChatAgent + workflow
+        // Step 3: ChatAgent + workflow (default L1=flash, auto-upgrade to L2=pro)
         services.AddSingleton<ChatAgent>(sp =>
         {
             var wf = sp.GetRequiredService<WorkflowOrchestrator>();
-            return new ChatAgent(BuildOrchestrator(sp, agents.Values.ToArray()), wf);
+            var chat = BuildOrchestrator(sp, agents.Values.ToArray());
+            // Pro agent for complex task auto-upgrade (uses "deepseek-pro" provider)
+            var proAgent = agents.TryGetValue("chat-pro", out var p) ? p : chat;
+            return new ChatAgent(chat, proAgent, wf);
         });
 
         return services;
@@ -80,17 +88,19 @@ public static class ServiceCollectionExtensions
     {
         return new(StringComparer.OrdinalIgnoreCase)
         {
-            ["chat"]   = BuildAgent(sp, "LTAI-Chat",   "通用对话助手",   true, true, true, true),
-            ["code"]   = BuildAgent(sp, "LTAI-Code",   "代码分析助手",   true, true, true, false),
-            ["math"]   = BuildAgent(sp, "LTAI-Math",   "数学计算助手",   false, false, false, true),
-            ["data"]   = BuildAgent(sp, "LTAI-Data",   "数据处理助手",   true, true, true, true),
-            ["system"] = BuildAgent(sp, "LTAI-System", "系统管理助手",  false, false, false, true),
-            ["llm"]    = BuildAgent(sp, "LTAI-LLM",    "纯对话助手",    false, false, false, false),
+            ["chat"]     = BuildAgent(sp, "LTAI-Chat",   "通用对话助手",     true, true, true, true),
+            ["chat-pro"] = BuildAgent(sp, "LTAI-Chat-Pro","深度推理助手(Pro)",true, true, true, true, modelId: "deepseek-pro"),
+            ["code"]     = BuildAgent(sp, "LTAI-Code",   "代码分析助手",     true, true, true, false),
+            ["math"]     = BuildAgent(sp, "LTAI-Math",   "数学计算助手",     false, false, false, true),
+            ["data"]     = BuildAgent(sp, "LTAI-Data",   "数据处理助手",     true, true, true, true),
+            ["system"]   = BuildAgent(sp, "LTAI-System", "系统管理助手",    false, false, false, true),
+            ["llm"]      = BuildAgent(sp, "LTAI-LLM",    "纯对话助手",      false, false, false, false),
         };
     }
 
     private static AIAgent BuildAgent(IServiceProvider sp, string name, string description,
-        bool canRead, bool canWrite, bool canList, bool canExec)
+        bool canRead, bool canWrite, bool canList, bool canExec,
+        string? modelId = null)
     {
         var ws = Directory.GetCurrentDirectory();
         var opts = sp.GetRequiredService<IOptions<LTAIOptions>>().Value;
@@ -113,13 +123,10 @@ public static class ServiceCollectionExtensions
             tools.Add(AIFunctionFactory.Create(dirTree.DirectoryTree));
             tools.Add(AIFunctionFactory.Create(glob.Glob));
         }
-        if (canExec) tools.Add(new LocalShellExecutor(new LocalShellExecutorOptions
+        if (canExec)
         {
-            WorkingDirectory = ws,
-            Timeout = TimeSpan.FromSeconds(60),
-            MaxOutputBytes = 64 * 1024,
-            AcknowledgeUnsafe = false,
-        }).AsAIFunction(requireApproval: true));
+            tools.Add(AIFunctionFactory.Create(new SafeShellTool(ws).RunCommand));
+        }
         if (canRead && canWrite)
         {
             tools.Add(AIFunctionFactory.Create(edit.EditFile));
@@ -188,7 +195,8 @@ public static class ServiceCollectionExtensions
         }
 
         // Memory tools (persistent memory across sessions)
-        var memory = new MemoryTools(ws);
+        var memDir = opts.ResolveDataPath("memories");
+        var memory = new MemoryTools(ws, memDir);
         if (name is "LTAI-Chat" or "LTAI-System")
         {
             tools.Add(AIFunctionFactory.Create(memory.Remember));
@@ -334,6 +342,12 @@ public static class ServiceCollectionExtensions
             tools.Add(AIFunctionFactory.Create(ContainerTools.CheckDockerAsync));
         }
 
+        // File download tool (confirm=true 才下载)
+        if (canRead && canWrite && name is "LTAI-Chat" or "LTAI-Code")
+        {
+            tools.Add(AIFunctionFactory.Create(FileDownloadTool.DownloadFile));
+        }
+
         // Workflow tools (lazy-resolve via IServiceProvider to avoid circular DI)
         if (name == "LTAI-Chat")
         {
@@ -343,7 +357,7 @@ public static class ServiceCollectionExtensions
             tools.Add(AIFunctionFactory.Create(wfTools.WorkflowConcurrent));
         }
 
-        var safetyKey = Environment.GetEnvironmentVariable(opts.AI.ApiKeyEnv ?? "DEEPSEEK_API_KEY") ?? "";
+        var safetyKey = LTAI.Core.Configuration.SecretManager.Get(opts.AI.ApiKeyEnv ?? "DEEPSEEK_API_KEY") ?? "";
         var safetyHttp = sp.GetRequiredService<IHttpClientFactory>().CreateClient();
         var safetyClient = new OpenAiHttpClient(safetyHttp, "https://api.deepseek.com/v1", "deepseek-chat", safetyKey);
         var safety = new SafetyCoordinator(safetyClient, loggerFactory.CreateLogger<SafetyCoordinator>());
@@ -356,15 +370,39 @@ public static class ServiceCollectionExtensions
             }),
             new ShellEnvironmentProviderOptions { ProbeTimeout = TimeSpan.FromSeconds(5) });
 
+        LTAI.Core.Configuration.UsageTracker.SetContextWindowSize(opts.AI.MaxTokens);
         var compaction = new CompactionProvider(
             new PipelineCompactionStrategy(
                 new ContextWindowCompactionStrategy(64000, opts.AI.MaxTokens),
-                new SummarizationCompactionStrategy(llm, CompactionTriggers.TokensExceed(64000), 2)
+                new VerifiedSummarizationStrategy(
+                    summarizer: llm,
+                    verifier: llm,
+                    trigger: CompactionTriggers.TokensExceed(64000),
+                    minimumPreservedGroups: 2)
             ), loggerFactory: loggerFactory);
 
-        // KB & Code graphs for context augmentation (resolved from DI for lifecycle management)
-        var kbGraph = sp.GetRequiredService<KnowledgeGraph>();
-        var codeGraph = sp.GetRequiredService<CodeGraph>();
+        // KB & Code graphs for context augmentation (SQLite FTS5 + CTE)
+        var kbGraph = sp.GetRequiredService<KbGraph>();
+        var codeGraph = sp.GetRequiredService<CgGraph>();
+
+        // CodeAct: Hyperlight 沙箱 — 原生 SDK 尚未发布，暂不可用
+        // 参见: https://github.com/hyperlight-dev/hyperlight-sandbox
+        // 当 Hyperlight.HyperlightSandbox.Api 发布到 nuget.org 后取消注释以下代码：
+        // HyperlightCodeActProvider? codeAct = null;
+        // ...
+
+        // Skills provider: loads SKILL.md from skills/ (框架自动去重合并)
+        var skillsDir = new[] {
+            Path.Combine(AppContext.BaseDirectory, "skills"),
+            Path.Combine(Directory.GetCurrentDirectory(), "skills"),
+            Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "skills"),
+        }.FirstOrDefault(Directory.Exists) ?? Path.Combine(Directory.GetCurrentDirectory(), "skills");
+        Directory.CreateDirectory(skillsDir);
+
+        var skillsProvider = new Microsoft.Agents.AI.AgentSkillsProviderBuilder()
+            .UseFileSkills([skillsDir])
+            .UseFileScriptRunner(LTAI.Agent.Tools.SkillScriptRunner.RunAsync)
+            .Build();
 
         AIAgent agent = new ChatClientAgent(llm, new ChatClientAgentOptions
         {
@@ -384,9 +422,10 @@ public static class ServiceCollectionExtensions
                 Temperature = (float)opts.AI.Temperature,
                 MaxOutputTokens = opts.AI.MaxTokens,
                 Tools = tools,
+                ModelId = modelId,
             },
             ChatHistoryProvider = new InMemoryChatHistoryProvider(),
-            AIContextProviders = [shellEnv, safety, compaction, kbGraph, codeGraph],
+            AIContextProviders = [shellEnv, safety, compaction, kbGraph, codeGraph, skillsProvider],
             EnableMessageInjection = true,
             RequirePerServiceCallChatHistoryPersistence = true,
         }, loggerFactory, sp);

@@ -16,14 +16,18 @@ public sealed class ChatLayout
 
     public async Task RenderAsync()
     {
-        AnsiConsole.MarkupLine("[bold]Chat — type your message, empty line to return[/]");
+        Console.Clear();
+        var headerHeight = 2; // title + separator
+        RenderHeader();
 
         while (true)
         {
-            var input = AnsiConsole.Ask<string>("[grey]>[/]");
+            // Input line: always at the bottom of the visible area
+            var input = PromptAtBottom();
             if (string.IsNullOrEmpty(input)) return;
 
             _history.Add(("user", input));
+            RenderUserMsg(input);
 
             // Check for slash commands
             var cmdStatus = "";
@@ -31,72 +35,113 @@ public sealed class ChatLayout
             {
                 if (!string.IsNullOrEmpty(cmdStatus))
                     AnsiConsole.MarkupLine(cmdStatus);
-                if (!_running) return; // /exit triggered
-                continue; // don't send to agent
+                if (!_running) return;
+                continue;
             }
 
+            // Streaming response
             var content = new StringBuilder();
             var statusLine = "";
             var hasFirstToken = false;
-            var isComplete = false;
-            var frameIdx = 0;
+            var done = false;
 
-            await AnsiConsole.Live(new Panel("")
-                .Header("[yellow]LTAI ⚪[/]")
-                .BorderColor(Color.Yellow))
-            .StartAsync(async ctx =>
-            {
-                var animTask = Task.Run(async () =>
+            await AnsiConsole.Live(new Panel("").BorderColor(Color.Yellow))
+                .AutoClear(false)
+                .StartAsync(async ctx =>
                 {
-                    while (!isComplete)
+                    var animTask = AnimateAsync(ctx, content, statusLine, hasFirstToken, done);
+
+                    await foreach (var update in _chat.ChatStreamingAsync(input))
                     {
-                        await Task.Delay(250);
-                        if (isComplete) break;
-                        frameIdx++;
-                        var dot = DotFrames[frameIdx % 3];
-                        var status = !hasFirstToken
-                            ? $"{dot} [yellow]Thinking...[/]"
-                            : $"{dot} [green]Processing...[/]";
-                        if (!string.IsNullOrEmpty(statusLine))
-                            status += $"\n[grey]{statusLine}[/]";
-                        ctx.UpdateTarget(
-                            new Panel(content.Length > 0 ? $"{content}\n\n[grey]{status}[/]" : status)
-                                .Header($"[yellow]LTAI {dot}[/]").BorderColor(Color.Yellow));
-                        ctx.Refresh();
+                        var token = update.Text ?? "";
+                        if (TryParseToolResult(token, out var parsed))
+                        {
+                            statusLine = parsed.success
+                                ? $"✓ {Truncate(parsed.output, 60)}"
+                                : $"✗ [red]{parsed.error.EscapeMarkup()}[/]";
+                            continue;
+                        }
+                        if (token.StartsWith("HANDOFF TO "))
+                        { statusLine = $"→ [yellow]{token.EscapeMarkup()}[/]"; continue; }
+                        if (token.StartsWith("[budget:") || token.StartsWith("[note:"))
+                        { statusLine = $"[grey]{token.EscapeMarkup()}[/]"; continue; }
+                        if (!string.IsNullOrWhiteSpace(token)) hasFirstToken = true;
+                        content.Append(token);
                     }
+                    done = true;
+                    ctx.UpdateTarget(new Panel(content.Length > 0 ? content.ToString() : "[red]No response[/]")
+                        .BorderColor(Color.Green));
+                    ctx.Refresh();
                 });
-
-                await foreach (var update in _chat.ChatStreamingAsync(input))
-                {
-                    var token = update.Text ?? "";
-                    if (TryParseToolResult(token, out var parsed))
-                    {
-                        statusLine = parsed.success ? $":check_mark: {Truncate(parsed.output, 60)}" : $":cross_mark: [red]{parsed.error.EscapeMarkup()}[/]";
-                        continue;
-                    }
-                    if (token.StartsWith("HANDOFF TO ")) { statusLine = $":arrow_right: [yellow]{token.EscapeMarkup()}[/]"; continue; }
-                    if (token.StartsWith("[budget:") || token.StartsWith("[note:")) { statusLine = $":information: [grey]{token.EscapeMarkup()}[/]"; continue; }
-                    if (!string.IsNullOrWhiteSpace(token)) hasFirstToken = true;
-                    content.Append(token);
-                }
-                isComplete = true;
-                ctx.UpdateTarget(
-                    new Panel(content.Length > 0
-                        ? $"{content}{(string.IsNullOrEmpty(statusLine) ? "" : $"\n\n[grey]{statusLine}[/]")}"
-                        : "[red]No response[/]")
-                        .Header("[yellow]LTAI ✅[/]").BorderColor(Color.Green));
-                ctx.Refresh();
-            });
 
             var response = content.ToString();
             _history.Add(("assistant", response));
             if (string.IsNullOrWhiteSpace(response)) continue;
 
-            // Diff or markdown rendering
-            if (IsDiffContent(response))
-                RenderDiffBlock(response);
-            else
-                RenderMarkdown(response);
+            // Render response + plan detection
+            if (IsDiffContent(response)) RenderDiffBlock(response);
+            else RenderMarkdown(response);
+
+            if (response.Contains("## Plan:") || response.Contains("approve"))
+            {
+                var ps = LTAI.Agent.Tools.PlanTools.PlanStatus();
+                if (!ps.Contains("No active plan"))
+                {
+                    AnsiConsole.MarkupLine("\n[bold yellow]📋 输入 [cyan]/approve[/] 批准执行计划[/]");
+                }
+            }
+        }
+    }
+
+    /// <summary>Keep input prompt at the last visible line of the terminal.</summary>
+    private static string PromptAtBottom()
+    {
+        var y = Console.WindowHeight - 1;
+        Console.SetCursorPosition(0, y);
+        Console.Write(new string(' ', Console.WindowWidth - 1));
+        Console.SetCursorPosition(0, y);
+        AnsiConsole.Markup("[grey]>[/] ");
+        return Console.ReadLine() ?? "";
+    }
+
+    private static void RenderHeader()
+    {
+        Console.SetCursorPosition(0, 0);
+        AnsiConsole.MarkupLine("[bold]LTAI 聊天[/] — [grey]输入空行返回[/]");
+        AnsiConsole.MarkupLine("[dim]─[/]" + new string('─', Console.WindowWidth - 2));
+    }
+
+    private void RenderUserMsg(string msg)
+    {
+        var y = Console.CursorTop;
+        if (y >= Console.WindowHeight - 2)
+        {
+            // Scroll by clearing and redrawing header
+            Console.Clear();
+            RenderHeader();
+        }
+        AnsiConsole.MarkupLine($"[cyan]你:[/] {msg.EscapeMarkup()}");
+    }
+
+    private async Task AnimateAsync(LiveDisplayContext ctx, StringBuilder content,
+        string statusLine, bool hasFirstToken, bool done)
+    {
+        var frameIdx = 0;
+        while (!done)
+        {
+            await Task.Delay(250);
+            frameIdx++;
+            var dot = DotFrames[frameIdx % 3];
+            var status = !hasFirstToken
+                ? $"{dot} 思考中..."
+                : $"{dot} 处理中...";
+            if (!string.IsNullOrEmpty(statusLine))
+                status += $"\n[grey]{statusLine}[/]";
+            var display = content.Length > 0
+                ? $"{content}\n\n[grey]{status}[/]"
+                : $"[grey]{status}[/]";
+            ctx.UpdateTarget(new Panel(display).BorderColor(Color.Yellow));
+            ctx.Refresh();
         }
     }
 
@@ -128,8 +173,6 @@ public sealed class ChatLayout
             }
         }
     }
-
-    // ─── Diff detection & rendering ───
 
     private static bool IsDiffContent(string text)
     {

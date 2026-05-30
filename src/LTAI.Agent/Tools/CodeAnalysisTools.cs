@@ -82,7 +82,7 @@ public sealed class CodeAnalysisTools
                     if (!string.IsNullOrEmpty(syms) && !syms.Contains("No symbols"))
                     { sb.AppendLine($"\n## {rel}"); sb.AppendLine(syms); }
                 }
-                catch { }
+                catch { /* non-C# file — skip silently */ }
             }
         }
         return sb.Length > 0 ? sb.ToString() : "No symbols found.";

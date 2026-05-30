@@ -9,11 +9,32 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.AI" Version="10.6.0" />
-    <!-- Providers registered via MultiProviderChatClient.Register() -->
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.21.0" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\LTAI.Core\LTAI.Core.csproj" />
   </ItemGroup>
+
+  <!-- Download all-MiniLM-L6-v2 ONNX (90MB, 384d) -->
+  <Target Name="DownloadEmbeddingModel" BeforeTargets="Build"
+          Condition="!Exists('$(MSBuildThisFileDirectory)../../models/minilm-l6-v2/model.onnx')">
+    <MakeDir Directories="$(MSBuildThisFileDirectory)../../models/minilm-l6-v2/" />
+    <Exec Command="curl -sL --connect-timeout 10 --max-time 300 &quot;https://hf-mirror.com/sentence-transformers/all-MiniLM-L6-v2/resolve/main/onnx/model.onnx&quot; -o &quot;$(MSBuildThisFileDirectory)../../models/minilm-l6-v2/model.onnx&quot;" IgnoreExitCode="true" />
+    <Exec Command="curl -sL --connect-timeout 10 --max-time 60 &quot;https://hf-mirror.com/sentence-transformers/all-MiniLM-L6-v2/resolve/main/vocab.txt&quot; -o &quot;$(MSBuildThisFileDirectory)../../models/minilm-l6-v2/vocab.txt&quot;" IgnoreExitCode="true" />
+    <Message Text="all-MiniLM-L6-v2 downloaded ✅ models/minilm-l6-v2/" Importance="High" Condition="Exists('$(MSBuildThisFileDirectory)../../models/minilm-l6-v2/model.onnx')" />
+  </Target>
+
+  <!-- 发布时嵌入模型文件到输出目录 -->
+  <Target Name="PublishEmbeddingModel" AfterTargets="Publish"
+          Condition="Exists('$(MSBuildThisFileDirectory)../../models/minilm-l6-v2/model.onnx')">
+    <Copy SourceFiles="$(MSBuildThisFileDirectory)../../models/minilm-l6-v2/model.onnx"
+          DestinationFolder="$(PublishDir)models/minilm-l6-v2/"
+          SkipUnchangedFiles="true" />
+    <Copy SourceFiles="$(MSBuildThisFileDirectory)../../models/minilm-l6-v2/vocab.txt"
+          DestinationFolder="$(PublishDir)models/minilm-l6-v2/"
+          SkipUnchangedFiles="true" />
+    <Message Text="all-MiniLM-L6-v2 embedded in publish output ✅ (~90MB)" Importance="High" />
+  </Target>
 
 </Project>

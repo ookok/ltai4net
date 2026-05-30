@@ -24,6 +24,13 @@ public static class Program
         App.Router = provider.GetService<MultiProviderChatClient>();
         App.HttpFactory = provider.GetService<IHttpClientFactory>();
 
+        // Async balance fetch (non-blocking)
+        var opts = provider.GetRequiredService<IOptions<LTAIOptions>>();
+        _ = LTAI.Core.Configuration.UsageTracker.FetchBalanceAsync(
+            opts.Value.AI.DefaultProvider,
+            LTAI.Core.Configuration.SecretManager.Get("SILICONFLOW_API_KEY")
+            ?? LTAI.Core.Configuration.SecretManager.Get("OPENROUTER_API_KEY"));
+
         BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
     }
 
@@ -54,17 +61,36 @@ public sealed class LTAIService
     public ChatAgent Chat { get; }
     public LTAIOptions Options { get; }
 
-    // Display data — simplified with MS Agent Framework 1.8.0
     public string Mode => Options.AI.DefaultProvider;
     public string DNAStatus => "simplified (MS Agent Framework 1.8.0)";
     public string SafetyPosture => "safe";
-    public long TokensUsed => 0;
-    public int RequestsThisSession => 0;
-    public double AvgLatencyMs => 0;
+
+    // Real tracking data
+    private long _tokensUsed;
+    private long _totalMs;
+    private int _requests;
+    private readonly System.Diagnostics.Stopwatch _sessionTimer = System.Diagnostics.Stopwatch.StartNew();
+
+    public long TokensUsed => Interlocked.Read(ref _tokensUsed);
+    public int RequestsThisSession => Interlocked.CompareExchange(ref _requests, 0, 0);
+    public double AvgLatencyMs => _requests > 0 ? (double)_totalMs / _requests : 0;
+    public TimeSpan Uptime => _sessionTimer.Elapsed;
 
     public LTAIService(ChatAgent chat, IOptions<LTAIOptions> options)
     {
         Chat = chat;
         Options = options.Value;
+    }
+
+    public async Task<string> ChatAsync(string message, CancellationToken ct = default)
+    {
+        Interlocked.Increment(ref _requests);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var response = await Chat.ChatAsync(message, ct);
+        sw.Stop();
+        Interlocked.Add(ref _totalMs, sw.ElapsedMilliseconds);
+        // Estimate tokens: roughly characters / 4
+        Interlocked.Add(ref _tokensUsed, (response?.Length ?? 0) / 4);
+        return response ?? "";
     }
 }

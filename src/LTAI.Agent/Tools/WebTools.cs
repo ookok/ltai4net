@@ -65,10 +65,9 @@ public sealed class WebTools
         if (uri.Scheme is not "http" and not "https")
             return "Error: Only http/https URLs are supported";
 
-        if (uri.Host.Equals("127.0.0.1") || uri.Host.Equals("localhost") ||
-            uri.Host.Equals("::1") || uri.Host.StartsWith("10.") ||
-            uri.Host.StartsWith("172.16.") || uri.Host.StartsWith("192.168."))
-            return "Error: Internal/private IP addresses are not allowed";
+        // ⚠️ SSRF 防护：阻止内网地址
+        if (IsPrivateHost(uri.Host))
+            return "Error: Cannot fetch private/internal URLs";
 
         try
         {
@@ -204,7 +203,7 @@ public sealed class WebTools
     /// <summary>Brave Search API — needs BRAVE_API_KEY env var.</summary>
     private async Task<string?> TryBraveSearchAsync(HttpClient http, string query, int topK)
     {
-        var apiKey = Environment.GetEnvironmentVariable("BRAVE_API_KEY");
+        var apiKey = LTAI.Core.Configuration.SecretManager.Get("BRAVE_API_KEY");
         if (string.IsNullOrEmpty(apiKey)) return null;
 
         try
@@ -241,10 +240,30 @@ public sealed class WebTools
         }
     }
 
+    /// <summary>SSRF 防护：检查是否是私有/内网地址。</summary>
+    private static bool IsPrivateHost(string host)
+    {
+        if (host.Equals("127.0.0.1") || host.Equals("localhost") ||
+            host.Equals("::1") || host.Equals("[::1]"))
+            return true;
+        if (System.Net.IPAddress.TryParse(host, out var ip))
+        {
+            byte[] b = ip.GetAddressBytes();
+            if (b.Length == 4)
+            {
+                if (b[0] == 10) return true;
+                if (b[0] == 172 && b[1] >= 16 && b[1] <= 31) return true;
+                if (b[0] == 192 && b[1] == 168) return true;
+                if (b[0] == 127) return true;
+            }
+        }
+        return false;
+    }
+
     /// <summary>Serper (Google) API — needs SERPER_API_KEY env var. Free tier: 2500 searches/month.</summary>
     private async Task<string?> TrySerperSearchAsync(HttpClient http, string query, int topK)
     {
-        var apiKey = Environment.GetEnvironmentVariable("SERPER_API_KEY");
+        var apiKey = LTAI.Core.Configuration.SecretManager.Get("SERPER_API_KEY");
         if (string.IsNullOrEmpty(apiKey)) return null;
 
         try

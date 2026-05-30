@@ -15,7 +15,7 @@ public sealed class IntegrationTools
     private readonly IHttpClientFactory _httpF;
     public IntegrationTools(IHttpClientFactory h) => _httpF = h;
     private HttpClient H() => _httpF.CreateClient();
-    private string? K(string n) => Environment.GetEnvironmentVariable(n)?.Trim();
+    private string? K(string n) => LTAI.Core.Configuration.SecretManager.Get(n)?.Trim();
 
     // ═══════════════════════════════════════════
     //  GIS — 4 providers
@@ -74,7 +74,7 @@ public sealed class IntegrationTools
     public async Task<string> IpLocation(string? ip = null)
     {
         if (!string.IsNullOrEmpty(K("AMAP_KEY")))
-            try { return await G($"https://restapi.amap.com/v3/ip?key={K("AMAP_KEY")}&output=JSON{(ip != null ? $"&ip={E(ip)}" : "")}", "province", r => $"🌐 {r}"); } catch { }
+            try { return await G($"https://restapi.amap.com/v3/ip?key={K("AMAP_KEY")}&output=JSON{(ip != null ? $"&ip={E(ip)}" : "")}", "province", r => $"🌐 {r}"); } catch { /* AMAP not configured — fallback */ }
         try { var j = await H().GetFromJsonAsync<JsonElement>(ip != null ? $"http://ip-api.com/json/{ip}" : "http://ip-api.com/json"); return $"🌐 {GStr(j,"city")}, {GStr(j,"regionName")}, {GStr(j,"country")}"; } catch (Exception ex) { return $"IP error: {ex.Message}"; }
     }
 
@@ -99,7 +99,7 @@ public sealed class IntegrationTools
             if (n.TryGetProperty("humidity", out var hu)) sb.Append($" | 湿度 {hu}%");
             try { var fj = await h.GetFromJsonAsync<JsonElement>($"https://devapi.qweather.com/v7/weather/24h?key={key}&location={loc}");
                 sb.Append("\n未来几小时:"); foreach (var hh in fj.GetProperty("hourly").EnumerateArray().Take(4))
-                    sb.Append($" {GStr(hh,"fxTime")[11..16]} {GStr(hh,"temp")}°C {GStr(hh,"text")}"); } catch { }
+                    sb.Append($" {GStr(hh,"fxTime")[11..16]} {GStr(hh,"temp")}°C {GStr(hh,"text")}"); } catch { /* hourly forecast not available */ }
             return sb.ToString();
         }
         catch (Exception ex) { return $"Weather error: {ex.Message}"; }

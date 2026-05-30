@@ -40,10 +40,11 @@ public partial class MainWindow : Window
 
         _views = new List<ViewEntry>
         {
-            new("Dashboard", "1", new DashboardView(svc)),
-            new("Chat",      "2", new ChatView(svc)),
-            new("Code",      "3", new ChatView(svc)),
-            new("Config",    "4", new ChatView(svc)),
+            new("仪表盘", "1", new DashboardView(svc)),
+            new("聊天",    "2", new ChatView(svc)),
+            new("代码",    "3", new TextPadView(svc.Options.ResolveDataPath("../.."))),
+            new("技能",    "4", new SkillsView()),
+            new("配置",    "5", new ConfigView()),
         };
 
         _buttonStack = new StackPanel { Spacing = 2, Margin = new(4) };
@@ -179,9 +180,8 @@ public partial class MainWindow : Window
         if (hasKey) return;
 
         // Check env vars directly (in case keys exist but weren't registered at startup)
-        var knownVars = new[] { "DEEPSEEK_API_KEY", "OPENAI_API_KEY", "SILICONFLOW_API_KEY",
-            "DASHSCOPE_API_KEY", "ZHIPU_API_KEY", "BRAVE_API_KEY", "SERPER_API_KEY" };
-        if (knownVars.Any(v => !string.IsNullOrEmpty(Environment.GetEnvironmentVariable(v))))
+        var knownVars = LTAI.Core.Configuration.KnownKeys.All.Select(k => k.EnvVar).ToArray();
+        if (knownVars.Any(v => LTAI.Core.Configuration.SecretManager.Has(v)))
             return; // Keys exist — restart would register them
 
         // Show setup dialog
@@ -260,8 +260,7 @@ public partial class MainWindow : Window
             var key = keyBox.Text?.Trim();
             if (!string.IsNullOrEmpty(key))
             {
-                Environment.SetEnvironmentVariable(envVar, key);
-                try { Environment.SetEnvironmentVariable(envVar, key, EnvironmentVariableTarget.User); } catch { }
+                LTAI.Core.Configuration.SecretManager.Set(envVar, key);
 
                 // Register with router dynamically
                 if (App.Router != null && App.HttpFactory != null)
@@ -420,5 +419,24 @@ public partial class MainWindow : Window
             default: handled = false; break;
         }
         if (handled) e.Handled = true;
+    }
+}
+
+/// <summary>Placeholder for views not yet implemented (Code, Config).</summary>
+public sealed class StubView : UserControl
+{
+    private readonly TextBlock _text;
+
+    public StubView(string title, object? svc = null)
+    {
+        _text = new TextBlock
+        {
+            Text = $"# {title}\n\n视图尚未实现。\n\n可用快捷键:\n- Ctrl+1: 仪表盘\n- Ctrl+2: 聊天\n- Ctrl+3: 代码\n- Ctrl+4: 技能\n- Ctrl+5: {title}",
+            Foreground = LtaiTheme.Sbb(LtaiTheme.TextSecondary),
+            FontSize = 14,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new(20),
+        };
+        Content = new ScrollViewer { Content = _text };
     }
 }

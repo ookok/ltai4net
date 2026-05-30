@@ -13,10 +13,10 @@ public sealed class MemoryTools
     private readonly string _memDir;
     private readonly string _ws;
 
-    public MemoryTools(string ws)
+    public MemoryTools(string ws, string? dataDir = null)
     {
         _ws = ws;
-        _memDir = Path.Combine(ws, ".livingtree", "memories");
+        _memDir = dataDir ?? Path.Combine(ws, ".livingtree", "memories");
         Directory.CreateDirectory(_memDir);
     }
 

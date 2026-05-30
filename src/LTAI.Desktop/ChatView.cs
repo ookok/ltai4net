@@ -73,7 +73,7 @@ public sealed class ChatView : UserControl
 
         _input = new TextBox
         {
-            PlaceholderText = "Type here... Enter=Send, Shift+Enter=newline, Ctrl+Enter=Send, Up/Down=history  |  Drag files/folders here",
+            PlaceholderText = "输入消息... Enter=发送, Shift+Enter=换行, Ctrl+Enter=发送, ↑↓=历史  |  拖入文件/文件夹",
             Foreground = LtaiTheme.Sbb(LtaiTheme.TextPrimary),
             Background = LtaiTheme.Sbb(LtaiTheme.BgInput),
             BorderBrush = LtaiTheme.Sbb(LtaiTheme.Border),
@@ -277,7 +277,7 @@ public sealed class ChatView : UserControl
                     sb.AppendLine(snippet);
                 }
             }
-            catch { }
+            catch { /* user cancelled — OK */ }
         }
         if (sb.Length > 0)
         {
@@ -526,7 +526,44 @@ public sealed class ChatView : UserControl
             if (fullCopy.Length > 0)
                 AddAICopyButton(fullCopy);
 
-            // Response ready — notification service removed (MS 1.8.0)
+            // Plan detection: if response contains a plan, add approve button
+            if (aiFullText.Contains("## Plan:") || aiFullText.Contains("approve"))
+            {
+                var planStatus = LTAI.Agent.Tools.PlanTools.PlanStatus();
+                if (!planStatus.Contains("No active plan"))
+                {
+                    Dispatcher.UIThread.Post(() =>
+                    {
+                        var approveBtn = new Button
+                        {
+                            Content = "✅ Approve Plan",
+                            Background = LtaiTheme.Sbb(LtaiTheme.AccentDNA),
+                            Foreground = LtaiTheme.Sbb("#ffffff"),
+                            FontWeight = FontWeight.Bold,
+                            Margin = new(0, 4, 0, 0),
+                            HorizontalAlignment = HorizontalAlignment.Left
+                        };
+                        approveBtn.Click += (_, _) =>
+                        {
+                            var result = LTAI.Agent.Tools.PlanTools.ApprovePlan()
+                                       + "\n"
+                                       + LTAI.Agent.Tools.PlanTools.StartExecution();
+                            var statusBlock = new TextBlock
+                            {
+                                Text = result,
+                                Foreground = LtaiTheme.Sbb(LtaiTheme.AccentInfo),
+                                FontSize = 11,
+                                TextWrapping = TextWrapping.Wrap
+                            };
+                            responsePanel.Children.Add(statusBlock);
+                            approveBtn.IsEnabled = false;
+                            approveBtn.Content = "✅ Approved";
+                        };
+                        responsePanel.Children.Add(approveBtn);
+                    });
+                }
+            }
+
             RefreshStats();
         }
         catch (OperationCanceledException)

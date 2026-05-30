@@ -49,7 +49,7 @@ public sealed class SystemTools
                 sb.AppendLine($"| Disk {drive.Name} | {FormatSize(drive.AvailableFreeSpace)} free / {FormatSize(drive.TotalSize)} total {pct} |");
             }
         }
-        catch { }
+        catch { /* drive access denied on some systems */ }
 
         return sb.ToString();
     }
@@ -80,7 +80,7 @@ public sealed class SystemTools
                         : "N/A";
                     sb.AppendLine($"| {p.Id} | {p.ProcessName} | {cpu} | {FormatSize(p.WorkingSet64)} | {p.Threads.Count} |");
                 }
-                catch { }
+                catch { /* process exited between enum and stat */ }
                 finally { p.Dispose(); }
             }
 
@@ -184,7 +184,7 @@ public sealed class SystemTools
                 var reverse = await Dns.GetHostEntryAsync(entries[0]);
                 sb.AppendLine($"\nPTR: {reverse.HostName}");
             }
-            catch { }
+            catch { /* no PTR record for this IP */ }
 
             return sb.ToString();
         }
