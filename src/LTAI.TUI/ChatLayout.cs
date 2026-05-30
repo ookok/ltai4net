@@ -48,7 +48,9 @@ public sealed class ChatLayout
                 .AutoClear(false)
                 .StartAsync(async ctx =>
                 {
-                    var animTask = AnimateAsync(ctx, content, statusLine, hasFirstToken, done);
+#pragma warning disable CS1998 // async without await — fine as fire-and-forget animation
+                    var animTask = AnimateAsync(ctx, content, statusLine, hasFirstToken, () => done);
+#pragma warning restore CS1998
 
                     await foreach (var update in _chat.ChatStreamingAsync(input))
                     {
@@ -123,10 +125,10 @@ public sealed class ChatLayout
     }
 
     private async Task AnimateAsync(LiveDisplayContext ctx, StringBuilder content,
-        string statusLine, bool hasFirstToken, bool done)
+        string statusLine, bool hasFirstToken, Func<bool> isDone)
     {
         var frameIdx = 0;
-        while (!done)
+        while (!isDone())
         {
             await Task.Delay(250);
             frameIdx++;
