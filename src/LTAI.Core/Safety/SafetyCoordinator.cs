@@ -102,9 +102,30 @@ public sealed class SafetyCoordinator : AIContextProvider
         }
     }
 
+    // Shared verdict cache with SafeChatClient — key = HashCode.Combine(text.GetHashCode(), text.Length)
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<long, (bool safe, string reason, DateTime cached)>
+        _verdictCache = new(4, 64);
+    private static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(60);
+    private const int MaxCachedTextLength = 200;
+
+    private static long VerdictCacheKey(string text) =>
+        HashCode.Combine(text.GetHashCode(), text.Length);
+
     private async Task<(bool allow, string reason)> CheckAsync(string text, string direction)
     {
         if (text.Length > 100_000) return (false, "Input exceeds 100k chars");
+
+        // Cache hit for short texts — reuse verdict from a recent identical check
+        if (text.Length <= MaxCachedTextLength)
+        {
+            var key = VerdictCacheKey(text);
+            if (_verdictCache.TryGetValue(key, out var cached) &&
+                DateTime.UtcNow - cached.cached < CacheTtl)
+            {
+                _logger?.LogDebug("SafetyCached({Direction}): HIT for text len={Len}", direction, text.Length);
+                return (cached.safe, cached.reason);
+            }
+        }
 
         // Non-blocking try: if already inside a safety check, skip (safe pass-through).
         // SemaphoreSlim.Wait(0) is synchronous and thread-safe — no ExecutionContext dependency.
@@ -125,14 +146,27 @@ public sealed class SafetyCoordinator : AIContextProvider
             _logger?.LogDebug("Safety verdict ({Direction}): {Verdict}", direction, verdict);
 
             const string unsafePrefix = "UNSAFE:";
+            (bool allow, string reason) result;
             if (verdict.StartsWith(unsafePrefix, StringComparison.OrdinalIgnoreCase))
             {
                 var reason = verdict.Length > unsafePrefix.Length
                     ? verdict[unsafePrefix.Length..].TrimStart(':', ' ')
                     : "Blocked";
-                return (false, reason);
+                result = (false, reason);
             }
-            return (true, "");
+            else
+            {
+                result = (true, "");
+            }
+
+            // Cache for short texts (shared with SafeChatClient)
+            if (text.Length <= MaxCachedTextLength)
+            {
+                var key = VerdictCacheKey(text);
+                _verdictCache[key] = (result.allow, result.reason, DateTime.UtcNow);
+            }
+
+            return result;
         }
         catch (Exception ex)
         {

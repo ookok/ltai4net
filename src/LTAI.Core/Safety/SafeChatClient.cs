@@ -101,14 +101,22 @@ public sealed class SafeChatClient : IChatClient
             if (safetyHalt) break; // Stop consuming if safety check failed
 
             if (update.Text != null) buffer.Append(update.Text);
-            pendingChunks.Add(update);
 
-            // Yield after first meaningful content (>= 10 chars) for fast first-token
-            if (!firstChunkYielded && buffer.Length >= 10)
+            if (firstChunkYielded)
             {
-                foreach (var c in pendingChunks) yield return c;
-                pendingChunks.Clear();
-                firstChunkYielded = true;
+                // After first yield, pass through remaining chunks immediately
+                yield return update;
+            }
+            else
+            {
+                pendingChunks.Add(update);
+                // Yield after first meaningful content (>= 10 chars)
+                if (buffer.Length >= 10)
+                {
+                    foreach (var c in pendingChunks) yield return c;
+                    pendingChunks.Clear();
+                    firstChunkYielded = true;
+                }
             }
         }
 
@@ -146,10 +154,31 @@ public sealed class SafeChatClient : IChatClient
         }
     }
 
+    // ══ Verdict cache: avoid redundant safety LLM calls for repeated short texts ══
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<long, (bool safe, string reason, DateTime cached)>
+        _verdictCache = new(Environment.ProcessorCount, 64);
+    private static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(60);
+    private const int MaxCachedTextLength = 200;
+
+    private static long VerdictCacheKey(string text) =>
+        HashCode.Combine(text.GetHashCode(), text.Length);
+
     private async Task<(bool safe, string reason)> CheckSafetyAsync(string text, CancellationToken ct)
     {
         if (text.Length > 100_000)
             return (false, "Response exceeds 100k chars");
+
+        // Cache hit for short texts (greetings, common phrases) — saves one LLM call
+        if (text.Length <= MaxCachedTextLength)
+        {
+            var key = VerdictCacheKey(text);
+            if (_verdictCache.TryGetValue(key, out var cached) &&
+                DateTime.UtcNow - cached.cached < CacheTtl)
+            {
+                _logger?.LogDebug("SafeChatClient cache HIT for text len={Len}", text.Length);
+                return (cached.safe, cached.reason);
+            }
+        }
 
         // Non-blocking try: if already inside a safety check, skip (safe pass-through).
         if (!_safeLock.Wait(0))
@@ -164,14 +193,27 @@ public sealed class SafeChatClient : IChatClient
 
             var verdict = response.Messages?.LastOrDefault()?.Text?.Trim() ?? "SAFE";
             const string unsafePrefix = "UNSAFE:";
+            (bool safe, string reason) result;
             if (verdict.StartsWith(unsafePrefix, StringComparison.OrdinalIgnoreCase))
             {
                 var reason = verdict.Length > unsafePrefix.Length
                     ? verdict[unsafePrefix.Length..].TrimStart(':', ' ')
                     : "Blocked";
-                return (false, reason);
+                result = (false, reason);
             }
-            return (true, "");
+            else
+            {
+                result = (true, "");
+            }
+
+            // Cache for short texts
+            if (text.Length <= MaxCachedTextLength)
+            {
+                var key = VerdictCacheKey(text);
+                _verdictCache[key] = (result.safe, result.reason, DateTime.UtcNow);
+            }
+
+            return result;
         }
         catch (Exception ex)
         {
