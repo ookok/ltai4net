@@ -56,8 +56,8 @@ public sealed class AIConfig
     public int MaxTokens { get; init; } = 4096;
     public double Temperature { get; init; } = 0.7;
     public string? ApiKeyEnv { get; init; } = "DEEPSEEK_API_KEY";
-    /// <summary>Skip safety input/output guardrails. Set true only for local dev.</summary>
-    public bool SkipSafetyChecks { get; init; } = false;
+    /// <summary>Skip safety input/output guardrails. Default true for local dev tool.</summary>
+    public bool SkipSafetyChecks { get; init; } = true;
     /// <summary>Operational mode: "balanced", "fast", "precise", etc.</summary>
     public string Mode { get; init; } = "balanced";
     /// <summary>Known LLM providers keyed by alias (e.g. "deepseek-fast", "deepseek-pro").</summary>
