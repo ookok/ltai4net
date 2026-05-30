@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Net.Http.Json;
 using System.Runtime.CompilerServices;
 using LTAI.AI;
 using LTAI.Agent.Workflows;
@@ -147,8 +148,9 @@ public sealed class ChatAgent
     }
 
     /// <summary>
-    /// Tool call enforcement：检测 LLM 本应调 tool 却试图自行猜测/拒绝的场景。
-    /// 匹配关键词后发送强制 tool call 指令让模型重试。
+    /// Tool call enforcement：C# 直接调 tool 注入结果，不依赖 LLM 主动调用。
+    /// 检测到 LLM 拒绝/猜测模式后，分析用户问题类型，从 C# 侧执行对应工具，
+    /// 将真实数据注入后让 LLM 重新组织回答。
     /// 最多强制 1 次（防循环）。
     /// </summary>
     private async Task<string> EnforceToolCallAsync(string text, string originalMessage,
@@ -157,34 +159,78 @@ public sealed class ChatAgent
         if (string.IsNullOrWhiteSpace(text)) return text;
         var lower = text.ToLowerInvariant();
 
-        // 检测"无法获取/不知道/没有权限"等拒绝模式
         var cantPatterns = new[] { "无法获取", "无法确定", "无法提供", "没有权限", "无法访问",
-            "我不知道", "我不确定", "cannot", "can't", "unable to", "don't have",
-            "no access", "not have access", "not able to" };
+            "无法直接", "无法知道", "不知道当前", "不知道今天",
+            "我不知道", "我不确定", "没有内置", "没有实时",
+            "cannot", "can't", "unable to", "don't have", "don't know",
+            "no access", "not have access", "not able to", "i don't" };
 
-        var isCantAnswer = cantPatterns.Any(p => lower.Contains(p));
-        if (!isCantAnswer) return text;
+        if (!cantPatterns.Any(p => lower.Contains(p))) return text;
 
-        // 通用 tool call 强制：LLM 拒绝猜测时，让它自查工具列表
-        // 不需要每个 tool 硬编码——LLM 自己知道哪个工具能解决问题
-        var forcePrompt = "你的回答看起来在猜测或拒绝，但你有可用的工具能获取准确信息。请检查以下常用工具：\n"
-            + "- GetCurrentDateTime: 获取当前准确日期和时间\n"
-            + "- IpLocation: 获取用户IP归属地（城市/地区）\n"
-            + "- Weather(城市): 查询指定城市的天气\n"
-            + "- WebSearch: 搜索互联网获取实时信息\n"
-            + "- 以及其他你已有的工具\n\n"
-            + "请调用能回答用户问题的工具，不要自行猜测。\n\n用户的问题是: " + originalMessage;
+        // Phase 1: 通用重试 — 让 LLM 自查工具列表（覆盖所有 150+ 工具）
+        var msgLower = originalMessage.ToLowerInvariant();
+        var hasSpecificTool = msgLower.Contains("星期") || msgLower.Contains("几号") || msgLower.Contains("日期") ||
+            msgLower.Contains("时间") || msgLower.Contains("几点") || msgLower.Contains("天气") ||
+            msgLower.Contains("位置") || msgLower.Contains("在哪") || msgLower.Contains("这里");
+
+        var retryPrompt = hasSpecificTool
+            ? "不要猜测，调用你已有的工具获取真实数据后回答。\n\n用户的问题是: " + originalMessage
+            : "你的回答在猜测。检查你的工具列表，调用能回答用户问题的工具获取真实信息。\n\n用户的问题是: " + originalMessage;
+
         try
         {
-            var forceResult = await _proAgent.RunAsync(
-                [new ChatMessage(ChatRole.User, forcePrompt)], session,
+            var retryResult = await _proAgent.RunAsync(
+                [new ChatMessage(ChatRole.User, retryPrompt)], session,
                 cancellationToken: ct).ConfigureAwait(false);
-            var retry = forceResult.Messages?.LastOrDefault()?.Text ?? "";
-            if (!string.IsNullOrWhiteSpace(retry) && retry.Length > 10)
-                return $"[工具调用]\n\n{retry}";
+            var retryText = retryResult.Messages?.LastOrDefault()?.Text ?? "";
+            if (!string.IsNullOrWhiteSpace(retryText) && retryText.Length > 5 &&
+                !cantPatterns.Any(p => retryText.ToLowerInvariant().Contains(p)))
+                return $"[工具]\n\n{retryText}";
+        }
+        catch { }
+
+        // Phase 2: 高频场景走 C# 侧直接获取数据注入（LLM 两轮都不调 tool 时的兜底）
+        string? toolData = null;
+        if (msgLower.Contains("星期") || msgLower.Contains("几号") || msgLower.Contains("日期") ||
+            msgLower.Contains("时间") || msgLower.Contains("几点"))
+            toolData = "当前真实时间: " + LTAI.Agent.Tools.SystemTools.GetCurrentDateTime();
+        else if (msgLower.Contains("天气"))
+            toolData = await FetchIpLocationAsync(ct) is string loc
+                ? $"[用户位置: {loc}] 用户问天气，请用 Weather(\"{loc.Split(',')[0].Trim()}\") 查天气。"
+                : null;
+        else if (msgLower.Contains("位置") || msgLower.Contains("在哪") || msgLower.Contains("这里"))
+            toolData = await FetchIpLocationAsync(ct);
+
+        if (toolData == null) return text;
+
+        var injectPrompt = $"以下是通过工具获取的真实数据:\n{toolData}\n\n请用这些数据直接回答用户。\n\n用户的问题是: {originalMessage}";
+        try
+        {
+            var result = await _proAgent.RunAsync(
+                [new ChatMessage(ChatRole.User, injectPrompt)], session,
+                cancellationToken: ct).ConfigureAwait(false);
+            var finalText = result.Messages?.LastOrDefault()?.Text ?? "";
+            if (!string.IsNullOrWhiteSpace(finalText) && finalText.Length > 5)
+                return $"[工具]\n\n{finalText}";
         }
         catch { }
         return text;
+    }
+
+    private static async Task<string?> FetchIpLocationAsync(CancellationToken ct)
+    {
+        try
+        {
+            var http = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+            var json = await http.GetFromJsonAsync<System.Text.Json.JsonElement>(
+                "http://ip-api.com/json/?fields=city,regionName,country,query", ct);
+            var city = json.GetProperty("city").GetString() ?? "";
+            var region = json.GetProperty("regionName").GetString() ?? "";
+            var country = json.GetProperty("country").GetString() ?? "";
+            var ip = json.GetProperty("query").GetString() ?? "";
+            return $"IP归属地: {city}, {region}, {country} (IP: {ip})";
+        }
+        catch { return null; }
     }
 
     /// <summary>
