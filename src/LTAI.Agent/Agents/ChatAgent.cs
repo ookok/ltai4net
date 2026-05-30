@@ -167,37 +167,7 @@ public sealed class ChatAgent
 
         if (!cantPatterns.Any(p => lower.Contains(p))) return text;
 
-        // 高频已知场景：不走 LLM 重试（模型仍然会猜），C# 直接调 tool 注入真实数据
-        var msgLower = originalMessage.ToLowerInvariant();
-        string? toolData = null;
-
-        if (msgLower.Contains("星期") || msgLower.Contains("几号") || msgLower.Contains("日期") ||
-            msgLower.Contains("时间") || msgLower.Contains("几点"))
-            toolData = "当前真实时间: " + LTAI.Agent.Tools.SystemTools.GetCurrentDateTime();
-        else if (msgLower.Contains("天气"))
-            toolData = await FetchIpLocationAsync(ct) is string loc
-                ? $"[用户位置: {loc}] 用户问天气，请用 Weather(\"{loc.Split(',')[0].Trim()}\") 查天气。"
-                : null;
-        else if (msgLower.Contains("位置") || msgLower.Contains("在哪") || msgLower.Contains("这里"))
-            toolData = await FetchIpLocationAsync(ct);
-
-        if (toolData != null)
-        {
-            var injectPrompt = $"以下是通过工具获取的真实数据:\n{toolData}\n\n请用这些数据直接回答用户。\n\n用户的问题是: {originalMessage}";
-            try
-            {
-                var result = await _proAgent.RunAsync(
-                    [new ChatMessage(ChatRole.User, injectPrompt)], session,
-                    cancellationToken: ct).ConfigureAwait(false);
-                var finalText = result.Messages?.LastOrDefault()?.Text ?? "";
-                if (!string.IsNullOrWhiteSpace(finalText) && finalText.Length > 5)
-                    return $"[工具]\n\n{finalText}";
-            }
-            catch { }
-            return text;
-        }
-
-        // 其他 147+ 工具：通用重试让 LLM 自查工具列表
+        // LLM 拒绝猜测 → 通用重试让其自查工具列表
         var retryPrompt = "你的回答在猜测。检查你的工具列表，调用能回答用户问题的工具获取真实信息。\n\n用户的问题是: " + originalMessage;
         try
         {
@@ -212,21 +182,7 @@ public sealed class ChatAgent
         return text;
     }
 
-    private static async Task<string?> FetchIpLocationAsync(CancellationToken ct)
-    {
-        try
-        {
-            var http = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(5) };
-            var json = await http.GetFromJsonAsync<System.Text.Json.JsonElement>(
-                "http://ip-api.com/json/?fields=city,regionName,country,query", ct);
-            var city = json.GetProperty("city").GetString() ?? "";
-            var region = json.GetProperty("regionName").GetString() ?? "";
-            var country = json.GetProperty("country").GetString() ?? "";
-            var ip = json.GetProperty("query").GetString() ?? "";
-            return $"IP归属地: {city}, {region}, {country} (IP: {ip})";
-        }
-        catch { return null; }
-    }
+
 
     /// <summary>
     /// Reflection Loop：用启发式规则检查输出质量，不合格时让模型自省修正。
