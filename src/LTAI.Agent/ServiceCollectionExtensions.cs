@@ -393,6 +393,8 @@ public static class ServiceCollectionExtensions
             tools.Add(AIFunctionFactory.Create(SystemTools.HttpCheck));
             tools.Add(AIFunctionFactory.Create(SystemTools.Whois));
             tools.Add(AIFunctionFactory.Create(SystemTools.SetEnv));
+            tools.Add(AIFunctionFactory.Create(SystemTools.GetCurrentDirectory));
+            tools.Add(AIFunctionFactory.Create(SystemTools.ListDirectory));
         }
 
         // Container tools (Docker sandbox)

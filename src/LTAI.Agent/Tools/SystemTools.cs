@@ -303,6 +303,54 @@ public sealed class SystemTools
         return sb.ToString();
     }
 
+    [Description("Get the CURRENT WORKING DIRECTORY path. Call this when the user asks what directory you are in, or what the current path is.")]
+    public static string GetCurrentDirectory()
+    {
+        return Directory.GetCurrentDirectory();
+    }
+
+    [Description("List files and subdirectories in a given path. Returns names with sizes for files. Use this when asked to browse or explore the local file system.")]
+    public static string ListDirectory(
+        [Description("Directory path (default: current working directory)")] string path = ".")
+    {
+        try
+        {
+            var fp = Path.GetFullPath(Path.Combine(Directory.GetCurrentDirectory(), path));
+            if (!Directory.Exists(fp)) return $"Directory not found: {fp}";
+
+            var sb = new StringBuilder();
+            sb.AppendLine($"## 📂 {fp}\n");
+            sb.AppendLine("| Name | Type | Size |");
+            sb.AppendLine("|------|------|------|");
+
+            foreach (var d in Directory.GetDirectories(fp).OrderBy(Path.GetFileName))
+            {
+                var name = Path.GetFileName(d);
+                var subDirs = Directory.GetDirectories(d).Length;
+                var files = Directory.GetFiles(d).Length;
+                sb.AppendLine($"| 📁 {name} | Directory | {subDirs} dirs, {files} files |");
+            }
+
+            foreach (var f in Directory.GetFiles(fp).OrderBy(Path.GetFileName))
+            {
+                var fi = new FileInfo(f);
+                var size = fi.Length switch
+                {
+                    < 1024 => $"{fi.Length} B",
+                    < 1048576 => $"{fi.Length / 1024.0:F1} KB",
+                    _ => $"{fi.Length / 1048576.0:F1} MB"
+                };
+                sb.AppendLine($"| 📄 {fi.Name} | File | {size} |");
+            }
+
+            return sb.ToString();
+        }
+        catch (Exception ex)
+        {
+            return $"Error listing directory: {ex.Message}";
+        }
+    }
+
     /// <summary>Whois lookup for a domain (uses whois-servers).</summary>
     [Description("WHOIS lookup for domain registration info")]
     public static async Task<string> Whois(

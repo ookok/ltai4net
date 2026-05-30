@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using System.Runtime.CompilerServices;
 using Microsoft.Extensions.Caching.Memory;
 using System.Text.Json;
+using System.Text;
 using LTAI.Core.Configuration;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
@@ -155,7 +156,12 @@ public sealed class MultiProviderChatClient : IChatClient
                     yield return enumerator.Current;
                 }
             }
-            if (success) yield break;
+            if (success)
+            {
+                // 兜底：流式成功时记录一次请求（精准 token 由 OpenAiHttpClient 从 usage 字段追记）
+                LTAI.Core.Configuration.UsageTracker.Record(10, 10, p);
+                yield break;
+            }
         }
         yield return new ChatResponseUpdate(ChatRole.Assistant,
             anyAttempted
@@ -296,32 +302,31 @@ public sealed class MultiProviderChatClient : IChatClient
     }
 
     /// <summary>
-    /// 按健康评分排序的提供商列表：
-    ///   1. 请求的提供商本身
-    ///   2. 其他注册提供商，按 (成功率 × 0.6 + 冷却状态 × 0.4) 降序
-    ///   3. 永久封禁的提供商不进入列表
+    /// 沿配置的降级链依次返回可用的 provider，不串到无关 provider。
+    /// 降级链如：deepseek → deepseek-pro → (无配置则结束)。
+    /// 不在降级链中的 provider 不进入选择列表。
     /// </summary>
     private IEnumerable<string> RankedProviders(string preferred)
     {
-        var now = DateTime.UtcNow;
-        var ranked = _clients.Keys
-            .Where(p => !_providerCooldowns.TryGetValue(p, out var ban) || ban <= now)
-            .Select(p => (name: p, score: CalcHealthScore(p, now)))
-            .OrderByDescending(x => x.score)
-            .ToList();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var current = preferred;
 
-        // 首选 provider 排最前
-        var best = ranked.FirstOrDefault(x => x.name == preferred);
-        if (best.name != null)
+        while (current != null && seen.Add(current))
         {
-            yield return best.name;
-            foreach (var r in ranked.Where(x => x.name != preferred))
-                yield return r.name;
-        }
-        else
-        {
-            foreach (var r in ranked)
-                yield return r.name;
+            // 跳过冷却中的 provider
+            if (_providerCooldowns.TryGetValue(current, out var until) && until > DateTime.UtcNow)
+            {
+                _logger.LogDebug("Provider '{P}' in cooldown, skipping in degradation chain", current);
+                current = _degradation.GetValueOrDefault(current);
+                continue;
+            }
+
+            if (_clients.ContainsKey(current))
+            {
+                yield return current;
+            }
+
+            current = _degradation.GetValueOrDefault(current);
         }
     }
 
@@ -358,15 +363,13 @@ public sealed class MultiProviderChatClient : IChatClient
 /// OpenAI-compatible chat client via direct HTTP calls.
 /// Works with DeepSeek, OpenAI, Groq, SiliconFlow, etc. — any OpenAI-compatible API.
 /// Handles: SSE streaming, auth errors (401/403/402 → fast-fail), rate limiting (429),
-/// token usage tracking via <see cref="UsageTracker"/>.
+/// token usage tracking via <see cref="UsageTracker"/>, and tool calling (function calling).
 ///
 /// <b>Consumers:</b> Instantiated per-provider in AddLTAIAI() ServiceCollectionExtensions.
 /// Used by MultiProviderChatClient as the underlying IChatClient implementation.
 ///
 /// ⚠ KNOWN ISSUE (mitigated): SSE line parsing uses line.AsSpan(DataPrefix.Length) — validated
 /// by preceding StartsWith("data: ") check. If SSE format deviates, the line is skipped.
-/// ⚠ KNOWN ISSUE: Private record types (ChatResponseJson etc.) are duplicated here
-/// and in the shared JSON model — could be centralized.
 /// </summary>
 public sealed class OpenAiHttpClient : IChatClient
 {
@@ -382,10 +385,6 @@ public sealed class OpenAiHttpClient : IChatClient
         PropertyNameCaseInsensitive = true
     };
 
-    /// <summary>
-    /// Create an OpenAI-compatible HTTP client.
-    /// <param name="http">Reusable HttpClient from IHttpClientFactory (named "llm" for pooling).</param>
-    /// </summary>
     public OpenAiHttpClient(HttpClient http, string endpoint, string model, string apiKey, ILogger? logger = null)
     {
         _http = http;
@@ -397,71 +396,67 @@ public sealed class OpenAiHttpClient : IChatClient
 
     public ChatClientMetadata? Metadata => new("OpenAI-compat", new Uri(_endpoint));
 
-    /// <summary>
-    /// Non-streaming LLM call via POST /chat/completions.
-    /// Fast-fails on 401/403/402 (no point retrying), propagates 429 for rate-limit handling.
-    /// Tracks token usage via UsageTracker.Record.
-    /// <b>Callers:</b> MultiProviderChatClient.TryCallWithDegradation (via IChatClient interface).
-    /// </summary>
+    // ─────────────────────────────────────────────────────────────────
+    //  Non-streaming chat completion with tool calling support
+    // ─────────────────────────────────────────────────────────────────
     public async Task<ChatResponse> GetResponseAsync(
         IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken ct = default)
     {
-        var request = new
-        {
-            model = _model,
-            messages = messages.Select(m => new
-            {
-                role = m.Role == ChatRole.System ? "system" :
-                       m.Role == ChatRole.Assistant ? "assistant" : "user",
-                content = m.Text ?? ""
-            }).ToList()
-        };
+        var request = BuildRequestBody(messages, options, stream: false);
 
         using var req = new HttpRequestMessage(HttpMethod.Post, $"{_endpoint}/chat/completions");
         req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _apiKey);
         req.Content = JsonContent.Create(request, options: JsonOpts);
 
-        using var resp = await _http.SendAsync(req, ct).ConfigureAwait(false);
+        using var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
 
-        // Fast-fail on auth/payment errors — no point retrying these
-        if (resp.StatusCode == System.Net.HttpStatusCode.Unauthorized ||      // 401
-            resp.StatusCode == System.Net.HttpStatusCode.Forbidden ||         // 403
-            (int)resp.StatusCode == 402)                                     // Payment Required
+        // Log 400+ response body for debugging
+        if (!resp.IsSuccessStatusCode)
         {
-            throw new HttpRequestException($"Provider auth/payment failure ({(int)resp.StatusCode})", null, resp.StatusCode);
+            var errBody = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+            _logger?.LogWarning("LLM API {Method} {Uri} → {Status}: {Body}",
+                req.Method, req.RequestUri, (int)resp.StatusCode, errBody);
         }
-        if (resp.StatusCode == System.Net.HttpStatusCode.TooManyRequests)    // 429
-        {
-            var retryAfter = resp.Headers.RetryAfter?.Delta;
-            throw new HttpRequestException($"Rate limited, retry after: {retryAfter}", null, resp.StatusCode);
-        }
-        resp.EnsureSuccessStatusCode();
+
+        CheckHttpError(resp);
 
         var json = await resp.Content.ReadFromJsonAsync<ChatResponseJson>(JsonOpts, ct).ConfigureAwait(false);
-        var text = json?.Choices?.FirstOrDefault()?.Message?.Content ?? "";
 
         // Track token usage
         if (json?.Usage != null)
             LTAI.Core.Configuration.UsageTracker.Record(json.Usage.PromptTokens, json.Usage.CompletionTokens, _model);
 
-        return new ChatResponse(new ChatMessage(ChatRole.Assistant, text));
+        var choice = json?.Choices?.FirstOrDefault();
+        if (choice?.Message == null)
+            return new ChatResponse(new ChatMessage(ChatRole.Assistant, ""));
+
+        // Parse tool_calls from response
+        if (choice.Message.ToolCalls is { Length: > 0 } calls)
+        {
+            var contents = new List<AIContent>();
+            foreach (var tc in calls)
+            {
+                var argsDict = ParseArgs(tc.Function.Arguments);
+                contents.Add(new FunctionCallContent(tc.Id, tc.Function.Name, argsDict));
+            }
+            return new ChatResponse([new ChatMessage(ChatRole.Assistant, contents)]);
+        }
+
+        return new ChatResponse(new ChatMessage(ChatRole.Assistant, choice.Message.Content ?? ""));
     }
 
+    // ─────────────────────────────────────────────────────────────────
+    //  Streaming chat completion with tool calling support
+    // ─────────────────────────────────────────────────────────────────
     public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
         IEnumerable<ChatMessage> messages, ChatOptions? options = null,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
-        var requestBody = new
-        {
-            model = _model,
-            stream = true,
-            messages = messages.Select(m => new
-            {
-                role = m.Role == ChatRole.System ? "system" :
-                       m.Role == ChatRole.Assistant ? "assistant" : "user",
-                content = m.Text ?? ""
-            }).ToList()
-        };
+        var sl = messages.ToList();
+        _logger?.LogInformation("[OpenAiHttpClient-Streaming] Request: messages={Count}, tools={Tools}",
+            sl.Count, options?.Tools?.Count ?? 0);
+
+        var requestBody = BuildRequestBody(sl, options, stream: true);
 
         using var req = new HttpRequestMessage(HttpMethod.Post, $"{_endpoint}/chat/completions");
         req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _apiKey);
@@ -469,27 +464,26 @@ public sealed class OpenAiHttpClient : IChatClient
 
         using var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
 
-        // Fast-fail on auth/payment/rate-limit (same as non-streaming)
-        if (resp.StatusCode == System.Net.HttpStatusCode.Unauthorized ||
-            resp.StatusCode == System.Net.HttpStatusCode.Forbidden ||
-            (int)resp.StatusCode == 402)
+        // Log 400+ response body for debugging
+        if (!resp.IsSuccessStatusCode)
         {
-            throw new HttpRequestException($"Provider auth/payment failure ({(int)resp.StatusCode})", null, resp.StatusCode);
+            var errBody = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+            _logger?.LogWarning("LLM API {Method} {Uri} → {Status}: {Body}",
+                req.Method, req.RequestUri, (int)resp.StatusCode, errBody);
         }
-        if (resp.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
-        {
-            var retryAfter = resp.Headers.RetryAfter?.Delta;
-            throw new HttpRequestException($"Rate limited, retry after: {retryAfter}", null, resp.StatusCode);
-        }
-        resp.EnsureSuccessStatusCode();
+
+        CheckHttpError(resp);
 
         using var stream = await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
         using var reader = new StreamReader(stream);
 
+        // Tool call delta accumulation (by index)
+        var toolCallAccum = new Dictionary<int, (string id, string name, StringBuilder args)>();
+
         while (!ct.IsCancellationRequested)
         {
             var line = await reader.ReadLineAsync(ct).ConfigureAwait(false);
-            if (line == null) break; // end of stream
+            if (line == null) break;
             if (string.IsNullOrEmpty(line)) continue;
             if (!line.StartsWith("data: ", StringComparison.Ordinal)) continue;
 
@@ -507,26 +501,257 @@ public sealed class OpenAiHttpClient : IChatClient
                 continue;
             }
 
-            var delta = chunk?.Choices?.FirstOrDefault()?.Delta?.Content;
-            if (!string.IsNullOrEmpty(delta))
+            // Track usage from final SSE message (usage-only chunk before [DONE])
+            if (chunk?.Usage is { } usage && (chunk.Choices == null || chunk.Choices.Length == 0))
             {
-                yield return new ChatResponseUpdate(ChatRole.Assistant, delta);
+                LTAI.Core.Configuration.UsageTracker.Record(usage.PromptTokens, usage.CompletionTokens, _model);
+            }
+
+            var choice = chunk?.Choices?.FirstOrDefault();
+            if (choice == null) continue;
+
+            // Handle tool call deltas
+            if (choice.Delta?.ToolCalls is { Length: > 0 } toolCallDeltas)
+            {
+                foreach (var tc in toolCallDeltas)
+                {
+                    if (!toolCallAccum.TryGetValue(tc.Index, out var acc))
+                    {
+                        toolCallAccum[tc.Index] = (
+                            tc.Id ?? "",
+                            tc.Function?.Name ?? "",
+                            new StringBuilder(tc.Function?.Arguments ?? ""));
+                    }
+                    else
+                    {
+                        var sb = acc.args;
+                        if (tc.Id != null) acc.id = tc.Id;
+                        if (tc.Function?.Name != null) acc.name = tc.Function.Name;
+                        if (tc.Function?.Arguments != null) sb.Append(tc.Function.Arguments);
+                        toolCallAccum[tc.Index] = (acc.id, acc.name, sb);
+                    }
+                }
+            }
+
+            // Text content delta (only when no tool calls)
+            if (choice.Delta?.Content is { Length: > 0 } deltaText && toolCallAccum.Count == 0)
+            {
+                yield return new ChatResponseUpdate(ChatRole.Assistant, deltaText);
+            }
+
+            // Finish_reason: tool_calls
+            if (choice.FinishReason == "tool_calls" && toolCallAccum.Count > 0)
+            {
+                var contents = new List<AIContent>();
+                foreach (var (_, (id, name, args)) in toolCallAccum)
+                {
+                    var argsDict = ParseArgs(args.ToString());
+                    contents.Add(new FunctionCallContent(id, name, argsDict));
+                }
+                yield return new ChatResponseUpdate(ChatRole.Assistant, contents);
+                toolCallAccum.Clear();
             }
         }
+
+        // Edge case: tool calls accumulated but no finish_reason yielded
+        if (toolCallAccum.Count > 0)
+        {
+            var contents = new List<AIContent>();
+            foreach (var (_, (id, name, args)) in toolCallAccum)
+            {
+                var argsDict = ParseArgs(args.ToString());
+                contents.Add(new FunctionCallContent(id, name, argsDict));
+            }
+            yield return new ChatResponseUpdate(ChatRole.Assistant, contents);
+        }
+    }
+
+    /// <summary>Track token usage from a streaming SSE chunk (usage field, last message before [DONE]).</summary>
+    private void TrackStreamingUsage(StreamingChunkJson? chunk)
+    {
+        if (chunk?.Usage is { } usage)
+            LTAI.Core.Configuration.UsageTracker.Record(usage.PromptTokens, usage.CompletionTokens, _model);
+    }
+
+    /// <summary>Parse a JSON arguments string into a dictionary for FunctionCallContent.</summary>
+    private static Dictionary<string, object?>? ParseArgs(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return null;
+        try
+        {
+            return JsonSerializer.Deserialize<Dictionary<string, object?>>(json, JsonOpts);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    //  Request building helpers
+    // ─────────────────────────────────────────────────────────────────
+    private object BuildRequestBody(IEnumerable<ChatMessage> messages, ChatOptions? options, bool stream)
+    {
+        var msgList = messages.ToList();
+        _logger?.LogInformation("[OpenAiHttpClient] Request: model={Model}, stream={Stream}, messages={Count}, tools={Tools}",
+            _model, stream, msgList.Count,
+            options?.Tools?.Count ?? 0);
+
+        var body = new Dictionary<string, object?>
+        {
+            ["model"] = _model,
+            ["messages"] = SerializeMessages(msgList),
+        };
+
+        // Only send stream: true for streaming requests; omit for non-streaming
+        if (stream) body["stream"] = true;
+
+        // Serialize tools if present
+        if (options?.Tools is { Count: > 0 } tools)
+        {
+            body["tools"] = SerializeTools(tools);
+            body["tool_choice"] = "auto";
+        }
+
+        // Pass through common options
+        if (options?.Temperature is not null) body["temperature"] = options.Temperature;
+        if (options?.MaxOutputTokens is not null) body["max_tokens"] = options.MaxOutputTokens;
+        if (options?.TopP is not null) body["top_p"] = options.TopP;
+        if (options?.FrequencyPenalty is not null) body["frequency_penalty"] = options.FrequencyPenalty;
+        if (options?.PresencePenalty is not null) body["presence_penalty"] = options.PresencePenalty;
+        if (options?.StopSequences is { Count: > 0 }) body["stop"] = options.StopSequences;
+
+        return body;
+    }
+
+    /// <summary>
+    /// Serialize ChatMessage list to OpenAI API format.
+    /// Handles: system/user/assistant roles, tool results (FunctionResultContent),
+    /// and assistant tool calls (FunctionCallContent).
+    /// </summary>
+    private static List<object> SerializeMessages(IEnumerable<ChatMessage> messages)
+    {
+        var result = new List<object>();
+        foreach (var m in messages)
+        {
+            // Tool result message (from function invocation)
+            var resultContent = m.Contents.OfType<FunctionResultContent>().FirstOrDefault();
+            if (resultContent != null)
+            {
+                result.Add(new Dictionary<string, object?>
+                {
+                    ["role"] = "tool",
+                    ["tool_call_id"] = resultContent.CallId,
+                    ["content"] = resultContent.Result?.ToString() ?? "",
+                });
+                continue;
+            }
+
+            // Assistant message with tool calls
+            var calls = m.Contents.OfType<FunctionCallContent>().ToList();
+            if (calls is { Count: > 0 })
+            {
+                var dict = new Dictionary<string, object?>
+                {
+                    ["role"] = "assistant",
+                    ["content"] = m.Text,
+                    ["tool_calls"] = calls.Select(fc => new Dictionary<string, object?>
+                    {
+                        ["id"] = fc.CallId,
+                        ["type"] = "function",
+                        ["function"] = new Dictionary<string, object?>
+                        {
+                            ["name"] = fc.Name,
+                            ["arguments"] = fc.Arguments is not null ? JsonSerializer.Serialize(fc.Arguments, JsonOpts) : "{}",
+                        }
+                    }).ToList(),
+                };
+                result.Add(dict);
+                continue;
+            }
+
+            // Regular text message (skip empty assistant text when it has contents with tool calls)
+            var text = m.Text ?? "";
+            result.Add(new Dictionary<string, object?>
+            {
+                ["role"] = m.Role == ChatRole.System ? "system" :
+                           m.Role == ChatRole.Assistant ? "assistant" : "user",
+                ["content"] = text,
+            });
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// Serialize AITool list to OpenAI-compatible tools array (dedup by name).
+    /// Only AIFunction tools are supported (converted to "function" type).
+    /// </summary>
+    private List<object> SerializeTools(IList<AITool> tools)
+    {
+        var result = new List<object>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var tool in tools)
+        {
+            if (tool is AIFunction func && !string.IsNullOrEmpty(func.Name) && seen.Add(func.Name))
+            {
+                var fn = new Dictionary<string, object?>
+                {
+                    ["name"] = func.Name,
+                    ["description"] = func.Description ?? "",
+                };
+                if (func.JsonSchema is { } schema)
+                    fn["parameters"] = schema;
+                result.Add(new Dictionary<string, object?>
+                {
+                    ["type"] = "function",
+                    ["function"] = fn,
+                });
+            }
+        }
+        var dupCount = tools.Count - seen.Count;
+        if (dupCount > 0)
+            _logger?.LogWarning("Deduplicated {Count} duplicate tool names", dupCount);
+        return result;
+    }
+
+    /// <summary>Unified HTTP error checking for auth/payment/rate-limit.</summary>
+    private static void CheckHttpError(HttpResponseMessage resp)
+    {
+        if (resp.StatusCode == System.Net.HttpStatusCode.Unauthorized ||
+            resp.StatusCode == System.Net.HttpStatusCode.Forbidden ||
+            (int)resp.StatusCode == 402)
+        {
+            throw new HttpRequestException($"Provider auth/payment failure ({(int)resp.StatusCode})", null, resp.StatusCode);
+        }
+        if (resp.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
+        {
+            var retryAfter = resp.Headers.RetryAfter?.Delta;
+            throw new HttpRequestException($"Rate limited, retry after: {retryAfter}", null, resp.StatusCode);
+        }
+        resp.EnsureSuccessStatusCode();
     }
 
     object? IChatClient.GetService(Type? t, object? k) => null;
     void IDisposable.Dispose() { }
 
+    // ─────────────────────────────────────────────────────────────────
+    //  JSON serialization records for request/response
+    // ─────────────────────────────────────────────────────────────────
+
+    // Non-streaming response types
     private sealed record ChatResponseJson(ChoiceJson[]? Choices, UsageJson? Usage);
     private sealed record ChoiceJson(MessageJson? Message);
-    private sealed record MessageJson(string? Content);
+    private sealed record MessageJson(string? Content, ToolCallJson[]? ToolCalls);
+    private sealed record ToolCallJson(string Id, string Type, FunctionJson Function);
+    private sealed record FunctionJson(string Name, string Arguments);
     private sealed record UsageJson(int PromptTokens, int CompletionTokens);
 
-    // SSE streaming chunk types
-    private sealed record StreamingChunkJson(StreamingChoiceJson[]? Choices);
+    // Streaming (SSE) chunk types
+    private sealed record StreamingChunkJson(StreamingChoiceJson[]? Choices, UsageJson? Usage);
     private sealed record StreamingChoiceJson(DeltaJson? Delta, string? FinishReason);
-    private sealed record DeltaJson(string? Content);
+    private sealed record DeltaJson(string? Content, ToolCallDeltaJson[]? ToolCalls);
+    private sealed record ToolCallDeltaJson(int Index, string? Id, string? Type, FunctionDeltaJson? Function);
+    private sealed record FunctionDeltaJson(string? Name, string? Arguments);
 }
 
 /// <summary>

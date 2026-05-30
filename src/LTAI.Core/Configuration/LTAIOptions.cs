@@ -207,7 +207,7 @@ public static class KnownKeys
     public static readonly KeyInfo[] All =
     [
         // ── LLM Providers (官方 ¥/1M tokens 价格，来源各官网定价页) ──
-        new("DEEPSEEK_API_KEY",     "DeepSeek",       "¥0.5/¥2 per 1M",     "https://platform.deepseek.com/api_keys", "https://api.deepseek.com/v1", "deepseek-chat", 0.5m, 2.0m),
+        new("DEEPSEEK_API_KEY",     "DeepSeek",       "输入¥1/输出¥2/缓存¥0.02 per 1M", "https://platform.deepseek.com/api_keys", "https://api.deepseek.com/v1", "deepseek-chat", 1.0m, 2.0m),
         new("SILICONFLOW_API_KEY",  "SiliconFlow",    "¥1/¥2 per 1M",       "https://cloud.siliconflow.cn/", "https://api.siliconflow.cn/v1", "deepseek-ai/DeepSeek-V2.5", 1.0m, 2.0m),
         new("DASHSCOPE_API_KEY",    "Aliyun(Qwen)",   "¥0.8/¥2 per 1M",     "https://dashscope.console.aliyun.com/", "https://dashscope.aliyuncs.com/compatible-mode/v1", "qwen-plus", 0.8m, 2.0m),
         new("ZHIPU_API_KEY",        "Zhipu(GLM)",     "¥1/¥2 per 1M",       "https://open.bigmodel.cn/", "https://open.bigmodel.cn/api/paas/v4", "glm-4-plus", 1.0m, 2.0m),
@@ -229,6 +229,7 @@ public static class KnownKeys
         new("XAI_API_KEY",          "X.AI(Grok)",     "¥3/¥5 per 1M",       "https://console.x.ai/", "https://api.x.ai/v1", "grok-2-1212", 3.0m, 5.0m),
         new("COHERE_API_KEY",       "Cohere",         "≈¥5/¥15 per 1M",    "https://dashboard.cohere.com/", "https://api.cohere.ai/v1", "command-r-plus", 5.0m, 15.0m),
         new("FIREWORKS_API_KEY",    "Fireworks AI",   "¥0.9/¥0.9 per 1M",   "https://fireworks.ai/", "https://api.fireworks.ai/inference/v1", "accounts/fireworks/models/llama-v3p3-70b-instruct", 0.9m, 0.9m),
+        new("MIMO_API_KEY",         "小米 MiMo",     "输入¥1/输出¥2 per 1M", "https://dev.mi.com/", "https://api.mimo.mi.com/v1", "deepseek-v4", 1.0m, 2.0m),
         // ── Web Search ──
         new("BRAVE_API_KEY",        "Brave Search",   "网页搜索（默认）",  "https://brave.com/search/api/"),
         new("SERPER_API_KEY",       "Serper(Google)", "Google 搜索（备用）", "https://serper.dev/"),
@@ -405,6 +406,8 @@ public sealed class UsageTracker : IUsageTracker
     private static string _balanceCurrency = "";
     private static string _balanceSource = "";
     private static readonly HttpClient _balanceHttp = new() { Timeout = TimeSpan.FromSeconds(5) };
+    /// <summary>Model context window cache, populated from provider /v1/models API.</summary>
+    private static readonly ConcurrentDictionary<string, int> _modelContextCache = new(StringComparer.OrdinalIgnoreCase);
 
     // ══ IUsageTracker explicit implementation (accessible when cast to interface) ══
     void IUsageTracker.Record(int prompt, int completion, string model) => RecordInternal(prompt, completion, model);
@@ -482,15 +485,51 @@ public sealed class UsageTracker : IUsageTracker
     public static string Summary() => BuildSummary();
 
     // ══ Internal helpers (shared by static + interface impl) ══
+    /// <summary>Refresh model info cache from provider API (GET /v1/models).</summary>
+    public static async Task RefreshModelInfoAsync(string endpoint, string apiKey)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(endpoint) || string.IsNullOrEmpty(apiKey)) return;
+            using var req = new HttpRequestMessage(HttpMethod.Get, $"{endpoint.TrimEnd('/')}/models");
+            req.Headers.Authorization = new("Bearer", apiKey);
+            using var resp = await _balanceHttp.SendAsync(req).ConfigureAwait(false);
+            resp.EnsureSuccessStatusCode();
+            var body = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
+            using var json = JsonDocument.Parse(body);
+            foreach (var model in json.RootElement.GetProperty("data").EnumerateArray())
+            {
+                var id = model.GetProperty("id").GetString();
+                if (id == null) continue;
+                if (model.TryGetProperty("max_context_length", out var ctx))
+                    _modelContextCache[id] = ctx.GetInt32();
+                else if (model.TryGetProperty("context_length", out var ctx2))
+                    _modelContextCache[id] = ctx2.GetInt32();
+            }
+        }
+        catch { /* best-effort */ }
+    }
+
+    /// <summary>Get effective context window: API cache > hardcoded fallback > configured MaxTokens.</summary>
+    private static int EffectiveContextWindow(int ovr)
+    {
+        if (ovr > 0) return ovr;
+        var modelLimit = !string.IsNullOrEmpty(_activeModel)
+            ? _modelContextCache.TryGetValue(_activeModel, out var cached)
+                ? cached
+                : KnownContextWindows.TryGetValue(_activeModel, out var known) ? known : 0
+            : 0;
+        return Math.Max(modelLimit, _contextWindowSize);
+    }
     private static double CalcContextRatio(int ovr)
     {
-        var max = ovr > 0 ? ovr : _contextWindowSize;
+        var max = EffectiveContextWindow(ovr);
         if (max <= 0) return 0;
         return Math.Clamp((double)(PromptTokens % (max + 1)) / max, 0, 1);
     }
     private static string CalcContextText(int ovr)
     {
-        var max = ovr > 0 ? ovr : _contextWindowSize;
+        var max = EffectiveContextWindow(ovr);
         if (max <= 0) return "";
         return $"{PromptTokens:N0}/{max:N0} ({(double)PromptTokens / max * 100:F1}%)";
     }
@@ -502,7 +541,36 @@ public sealed class UsageTracker : IUsageTracker
         try
         {
             if (string.IsNullOrEmpty(apiKey)) return;
-            if (defaultProvider.Contains("siliconflow", StringComparison.OrdinalIgnoreCase))
+
+            if (defaultProvider.Contains("deepseek", StringComparison.OrdinalIgnoreCase))
+            {
+                using var req = new HttpRequestMessage(HttpMethod.Get, "https://api.deepseek.com/user/balance");
+                req.Headers.Authorization = new("Bearer", apiKey);
+                using var resp = await _balanceHttp.SendAsync(req);
+                resp.EnsureSuccessStatusCode();
+                var body = await resp.Content.ReadAsStringAsync();
+                using var json = JsonDocument.Parse(body);
+                var root = json.RootElement;
+                // DeepSeek balance API 实际格式：
+                // {"is_available":true,"balance_infos":[{"currency":"CNY","total_balance":"110.00",...}]}
+                if (root.TryGetProperty("balance_infos", out var infos) && infos.GetArrayLength() > 0)
+                {
+                    var info = infos[0];
+                    var totalStr = info.GetProperty("total_balance").GetString() ?? "0";
+                    var currency = info.GetProperty("currency").GetString() ?? "CNY";
+                    _balance = double.Parse(totalStr, System.Globalization.NumberStyles.Any,
+                        System.Globalization.CultureInfo.InvariantCulture);
+                    _balanceCurrency = currency == "CNY" ? "¥" : currency;
+                    _balanceSource = "DeepSeek";
+                }
+                else
+                {
+                    // Fallback: 旧格式
+                    var bal = root.TryGetProperty("balance", out var b) ? b.GetDouble() : 0;
+                    _balance = bal; _balanceCurrency = "¥"; _balanceSource = "DeepSeek";
+                }
+            }
+            else if (defaultProvider.Contains("siliconflow", StringComparison.OrdinalIgnoreCase))
             {
                 using var req = new HttpRequestMessage(HttpMethod.Get, "https://api.siliconflow.cn/v1/user/balance");
                 req.Headers.Authorization = new("Bearer", apiKey);
@@ -524,9 +592,92 @@ public sealed class UsageTracker : IUsageTracker
                 var credits = json.RootElement.GetProperty("data").GetProperty("credits").GetDouble();
                 _balance = credits; _balanceCurrency = "$"; _balanceSource = "OpenRouter";
             }
+            else if (defaultProvider.Contains("zhipu", StringComparison.OrdinalIgnoreCase))
+            {
+                using var req = new HttpRequestMessage(HttpMethod.Get, "https://open.bigmodel.cn/api/llm/balance");
+                req.Headers.Authorization = new("Bearer", apiKey);
+                using var resp = await _balanceHttp.SendAsync(req);
+                resp.EnsureSuccessStatusCode();
+                var body = await resp.Content.ReadAsStringAsync();
+                using var json = JsonDocument.Parse(body);
+                var bal = json.RootElement.GetProperty("data").GetProperty("total_balance").GetDouble();
+                _balance = bal; _balanceCurrency = "¥"; _balanceSource = "Zhipu(GLM)";
+            }
+            else if (defaultProvider.Contains("aliyun", StringComparison.OrdinalIgnoreCase) ||
+                     defaultProvider.Contains("dashscope", StringComparison.OrdinalIgnoreCase))
+            {
+                using var req = new HttpRequestMessage(HttpMethod.Get,
+                    "https://dashscope.aliyuncs.com/api/v1/services/llm/balance");
+                req.Headers.Authorization = new("Bearer", apiKey);
+                using var resp = await _balanceHttp.SendAsync(req);
+                resp.EnsureSuccessStatusCode();
+                var body = await resp.Content.ReadAsStringAsync();
+                using var json = JsonDocument.Parse(body);
+                var bal = json.RootElement.GetProperty("available_balance").GetDouble();
+                _balance = bal; _balanceCurrency = "¥"; _balanceSource = "Aliyun(Qwen)";
+            }
+            else if (defaultProvider.Contains("moonshot", StringComparison.OrdinalIgnoreCase))
+            {
+                using var req = new HttpRequestMessage(HttpMethod.Get, "https://api.moonshot.cn/v1/balance");
+                req.Headers.Authorization = new("Bearer", apiKey);
+                using var resp = await _balanceHttp.SendAsync(req);
+                resp.EnsureSuccessStatusCode();
+                var body = await resp.Content.ReadAsStringAsync();
+                using var json = JsonDocument.Parse(body);
+                var bal = json.RootElement.GetProperty("available_balance").GetDouble();
+                _balance = bal; _balanceCurrency = "¥"; _balanceSource = "Moonshot(Kimi)";
+            }
         }
         catch { /* best-effort */ }
     }
+
+    /// <summary>Known context windows for common models (used when config MaxTokens is smaller).</summary>
+    private static readonly Dictionary<string, int> KnownContextWindows = new(StringComparer.OrdinalIgnoreCase)
+    {
+        // DeepSeek (V4 全系列 1M context, 384K output)
+        ["deepseek-chat"] = 1048576,
+        ["deepseek-reasoner"] = 1048576,
+        ["deepseek-v4-flash"] = 1048576,
+        ["deepseek-v4-pro"] = 1048576,
+        ["deepseek-v3"] = 65536,
+        // OpenAI
+        ["gpt-4o"] = 131072,
+        ["gpt-4o-mini"] = 131072,
+        ["gpt-4-turbo"] = 131072,
+        ["gpt-4"] = 8192,
+        ["gpt-3.5-turbo"] = 16384,
+        // Aliyun / DashScope
+        ["qwen-plus"] = 131072,
+        ["qwen-max"] = 32768,
+        ["qwen-turbo"] = 131072,
+        ["qwen-long"] = 1048576,
+        // Zhipu
+        ["glm-4-plus"] = 131072,
+        ["glm-4"] = 131072,
+        ["glm-4-flash"] = 131072,
+        // Moonshot
+        ["moonshot-v1-8k"] = 8192,
+        ["moonshot-v1-32k"] = 32768,
+        ["moonshot-v1-128k"] = 131072,
+        // Claude
+        ["claude-3-5-sonnet"] = 204800,
+        ["claude-3-haiku"] = 204800,
+        ["claude-3-opus"] = 204800,
+        // Groq
+        ["llama-3.3-70b"] = 131072,
+        ["llama-3.1-8b"] = 131072,
+        ["mixtral-8x7b"] = 32768,
+        // Mistral
+        ["mistral-large"] = 131072,
+        ["mistral-small"] = 32768,
+        // Perplexity
+        ["sonar-pro"] = 131072,
+        ["sonar"] = 131072,
+        // X.AI
+        ["grok-2"] = 131072,
+        // Fireworks
+        ["llama-v3p3"] = 131072,
+    };
     private static string BuildSummary()
     {
         var p = PromptTokens;

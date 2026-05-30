@@ -39,8 +39,9 @@ public sealed class TuiApp
             _llmConfig.ShowSetupWizard();
         }
 
-        // 异步获取余额（不阻塞）
+        // 异步获取余额 + 模型信息（不阻塞）
         _ = FetchBalanceAsync();
+        _ = FetchModelInfoAsync();
 
         while (_running)
         {
@@ -80,6 +81,31 @@ public sealed class TuiApp
                   ?? LTAI.Core.Configuration.SecretManager.Get("OPENROUTER_API_KEY");
         if (apiKey != null)
             await UsageTracker.FetchBalanceAsync(_config.Value.AI.DefaultProvider, apiKey);
+    }
+
+    private async Task FetchModelInfoAsync()
+    {
+        // Find the default provider's endpoint from KnownKeys
+        var options = _config.Value;
+        var providerName = options.AI.DefaultProvider;
+        var keyInfo = KnownKeys.All.FirstOrDefault(k =>
+            k.EnvVar != null && k.Endpoint != null &&
+            k.Service.Contains(providerName, StringComparison.OrdinalIgnoreCase));
+        if (keyInfo == null) return;
+
+        var apiKey = SecretManager.Get(keyInfo.EnvVar!);
+        if (string.IsNullOrEmpty(apiKey)) return;
+
+        // Also try DEEPSEEK_API_KEY as fallback for standard endpoint
+        apiKey ??= SecretManager.Get("DEEPSEEK_API_KEY");
+        if (string.IsNullOrEmpty(apiKey)) return;
+
+        // Try the configured endpoint first, then the default provider endpoint
+        var endpoint = options.AI.Providers.GetValueOrDefault("deepseek-fast")?.Endpoint
+                    ?? options.AI.Providers.GetValueOrDefault("deepseek-pro")?.Endpoint
+                    ?? keyInfo.Endpoint;
+        if (!string.IsNullOrEmpty(endpoint))
+            await UsageTracker.RefreshModelInfoAsync(endpoint, apiKey);
     }
 
     private void ShowDashboard()

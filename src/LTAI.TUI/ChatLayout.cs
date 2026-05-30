@@ -38,51 +38,86 @@ public sealed class ChatLayout
                 continue;
             }
 
-            // Streaming response
+            // Streaming response (ESC 取消)
             var content = new StringBuilder();
             var statusLine = "";
             var hasFirstToken = false;
             var done = false;
+            var cts = new CancellationTokenSource();
+
+            // 后台监控 ESC 按键（每 100ms 检测，独立于流式循环）
+            var escTask = Task.Run(async () =>
+            {
+                try
+                {
+                    while (!cts.Token.IsCancellationRequested)
+                    {
+                        if (Console.KeyAvailable)
+                        {
+                            var key = Console.ReadKey(true);
+                            if (key.Key == ConsoleKey.Escape)
+                            {
+                                cts.Cancel();
+                                return;
+                            }
+                        }
+                        await Task.Delay(100, cts.Token);
+                    }
+                }
+                catch (OperationCanceledException) { /* 正常取消 */ }
+            }, cts.Token);
 
             await AnsiConsole.Live(new Panel("").BorderColor(Color.Yellow))
                 .AutoClear(false)
                 .StartAsync(async ctx =>
                 {
-#pragma warning disable CS1998 // async without await — fine as fire-and-forget animation
                     var animTask = AnimateAsync(ctx, content, statusLine, hasFirstToken, () => done);
-#pragma warning restore CS1998
 
-                    await foreach (var update in _chat.ChatStreamingAsync(input))
+                    try
                     {
-                        var token = update.Text ?? "";
-                        if (TryParseToolResult(token, out var parsed))
+                        await foreach (var update in _chat.ChatStreamingAsync(input).WithCancellation(cts.Token))
                         {
-                            statusLine = parsed.success
-                                ? $"✓ {Truncate(parsed.output, 60)}"
-                                : $"✗ [red]{parsed.error.EscapeMarkup()}[/]";
-                            continue;
+                            if (cts.Token.IsCancellationRequested)
+                            {
+                                statusLine = "[red]⏹ 用户取消[/]";
+                                break;
+                            }
+
+                            var token = update.Text ?? "";
+                            if (string.IsNullOrEmpty(token))
+                            {
+                                if (!hasFirstToken) statusLine = "🛠 调用工具中...";
+                                continue;
+                            }
+                            if (TryParseToolResult(token, out var parsed))
+                            {
+                                statusLine = parsed.success
+                                    ? $"✓ {Truncate(parsed.output, 60)}"
+                                    : $"✗ [red]{parsed.error.EscapeMarkup()}[/]";
+                                continue;
+                            }
+                            if (token.StartsWith("HANDOFF TO "))
+                            { statusLine = $"→ [yellow]{token.EscapeMarkup()}[/]"; continue; }
+                            if (token.StartsWith("[budget:") || token.StartsWith("[note:"))
+                            { statusLine = $"[grey]{token.EscapeMarkup()}[/]"; continue; }
+                            hasFirstToken = true;
+                            content.Append(token);
                         }
-                        if (token.StartsWith("HANDOFF TO "))
-                        { statusLine = $"→ [yellow]{token.EscapeMarkup()}[/]"; continue; }
-                        if (token.StartsWith("[budget:") || token.StartsWith("[note:"))
-                        { statusLine = $"[grey]{token.EscapeMarkup()}[/]"; continue; }
-                        if (!string.IsNullOrWhiteSpace(token)) hasFirstToken = true;
-                        content.Append(token);
                     }
+                    catch (OperationCanceledException)
+                    {
+                        statusLine = "[red]⏹ 用户取消[/]";
+                    }
+
                     done = true;
-                    // 给动画一个 tick 来检测 done 并退出
-                    await Task.Delay(10);
+                    await Task.WhenAny(animTask, Task.Delay(500));
+                    ctx.UpdateTarget(new Text(""));
+                    ctx.Refresh();
                     var rawText = content.ToString();
                     if (rawText.Length > 0)
-                    {
-                        ctx.UpdateTarget(new Text(""));
                         RenderMarkdown(rawText);
-                    }
                     else
-                    {
-                        ctx.UpdateTarget(new Panel("[red]No response[/]").BorderColor(Color.Red));
-                    }
-                    ctx.Refresh();
+                        AnsiConsole.MarkupLine("[red]⏹ 已取消[/]");
                 });
 
             var response = content.ToString();
@@ -102,15 +137,90 @@ public sealed class ChatLayout
         }
     }
 
-    /// <summary>Keep input prompt at the last visible line of the terminal.</summary>
+    /// <summary>在输入框上方显示一行统计（底部区域，不滚动掉）。</summary>
+    private static void ShowStatsLine()
+    {
+        var requests = LTAI.Core.Configuration.UsageTracker.Requests;
+        if (requests == 0)
+        {
+            AnsiConsole.MarkupLine("[grey]等待首次请求...  输入消息开始对话[/]");
+            return;
+        }
+
+        var modelName = LTAI.Core.Configuration.UsageTracker.ActiveModel;
+        var ctxText = LTAI.Core.Configuration.UsageTracker.ContextText();
+        var ctxPct = LTAI.Core.Configuration.UsageTracker.ContextRatio();
+        var barLen = 10;
+        var filled = (int)(ctxPct * barLen);
+        var bar = new string('▓', filled).PadRight(barLen, '░');
+        var balance = LTAI.Core.Configuration.UsageTracker.BalanceDisplay;
+
+        var stats = $"[grey]模型:[/] {modelName.EscapeMarkup()}  " +
+                    $"[grey]上下文:[/] {bar} [grey]{ctxText.EscapeMarkup()}[/]  " +
+                    $"[grey]Token:[/] {LTAI.Core.Configuration.UsageTracker.TotalTokens:N0}  " +
+                    $"[grey]费用:[/] {LTAI.Core.Configuration.UsageTracker.CostDisplay.EscapeMarkup()}  " +
+                    $"[grey]余额:[/] {balance.EscapeMarkup()}  " +
+                    $"[grey]缓存:[/] {LTAI.Core.Configuration.UsageTracker.CacheHitRate:F1}%  " +
+                    $"[grey]请求:[/] {requests}";
+        AnsiConsole.MarkupLine(stats);
+    }
+
+    // 输入历史
+    private static readonly List<string> _inputHistory = new();
+    private static int _histIdx = -1;
+
+    /// <summary>在底部显示输入框 + 统计（固定位置，不引发滚动）。</summary>
     private static string PromptAtBottom()
     {
         var y = Console.WindowHeight - 1;
-        Console.SetCursorPosition(0, y);
+        var statsY = Math.Max(0, y - 1);
+
+        // 统计行（固定位置，不影响聊天内容）
+        Console.SetCursorPosition(0, statsY);
         Console.Write(new string(' ', Console.WindowWidth - 1));
+        Console.SetCursorPosition(0, statsY);
+        var requests = LTAI.Core.Configuration.UsageTracker.Requests;
+        if (requests > 0)
+        {
+            var m = LTAI.Core.Configuration.UsageTracker.ActiveModel.EscapeMarkup();
+            var c = LTAI.Core.Configuration.UsageTracker.ContextText();
+            var p = LTAI.Core.Configuration.UsageTracker.ContextRatio();
+            var bar = new string('▓', (int)(p * 10)).PadRight(10, '░');
+            var b = LTAI.Core.Configuration.UsageTracker.BalanceDisplay.EscapeMarkup();
+            AnsiConsole.Markup(
+                $"[grey]模型:[/] {m}  [grey]上下文:[/] {bar} [grey]{c}[/]  " +
+                $"[grey]Token:[/] {LTAI.Core.Configuration.UsageTracker.TotalTokens:N0}  " +
+                $"[grey]费用:[/] {LTAI.Core.Configuration.UsageTracker.CostDisplay.EscapeMarkup()}  " +
+                $"[grey]余额:[/] {b}  " +
+                $"[grey]缓存:[/] {LTAI.Core.Configuration.UsageTracker.CacheHitRate:F1}%  " +
+                $"[grey]请求:[/] {requests}");
+        }
+
+        // TextPrompt 编辑（成熟组件）
         Console.SetCursorPosition(0, y);
-        AnsiConsole.Markup("[grey]>[/] ");
-        return Console.ReadLine() ?? "";
+        var prompt = new TextPrompt<string>("[grey]>[/] ")
+            .AllowEmpty();
+        if (_inputHistory.Count > 0)
+        {
+            // 仅当 ↑ 键按下时填入历史（ReadKey 快速检测，不循环）
+            if (Console.KeyAvailable)
+            {
+                var k = Console.ReadKey(true);
+                if (k.Key == ConsoleKey.UpArrow)
+                {
+                    _histIdx = _inputHistory.Count - 1;
+                    prompt.DefaultValue(_inputHistory[_histIdx]);
+                }
+            }
+        }
+        var input = AnsiConsole.Prompt(prompt);
+
+        if (!string.IsNullOrWhiteSpace(input))
+            _inputHistory.Add(input);
+        if (input?.Trim() == "/")
+            input = SlashCommands.ShowPicker();
+
+        return input ?? "";
     }
 
     private static void RenderHeader()
