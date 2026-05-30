@@ -3,7 +3,7 @@ name: LTAI-Frontend
 description: 前端网页开发助手
 temperature: 0.8
 topP: 0.95
-permissions: [read, write, list, exec]
+permissions: ["read", "write", "list", "exec"]
 tools: [filesystem, shell, search, symbols, media, git, plan, diagram, choice, subagent, task, job, container, download]
 ---
 

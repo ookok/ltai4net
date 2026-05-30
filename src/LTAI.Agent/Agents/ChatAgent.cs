@@ -58,6 +58,30 @@ public sealed class ChatAgent
     }
 
     /// <summary>
+    /// 预加载：初始化 session + 发送最小 HTTP 请求预热网络连接（DNS/TLS/keep-alive），
+    /// 让用户的首条消息响应更快。
+    /// </summary>
+    public async Task WarmUpAsync(CancellationToken ct = default)
+    {
+        // 1. 创建 session（内存操作）
+        await GetOrCreateSessionAsync(ct).ConfigureAwait(false);
+
+        // 2. 发送极简请求预热 HTTP 连接（cost ≈ 10 tokens）
+        try
+        {
+            using var warmCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            warmCts.CancelAfter(TimeSpan.FromSeconds(8)); // 超时 8 秒，不阻塞 UI
+            var warmMsg = new[] { new ChatMessage(ChatRole.User, ".") };
+            _ = await _agent.RunAsync(warmMsg, _session!, cancellationToken: warmCts.Token)
+                .ConfigureAwait(false);
+        }
+        catch
+        {
+            // 预热超时或失败不影响主流程
+        }
+    }
+
+    /// <summary>
     /// Send a message and get a non-streaming response.
     /// Checks token budget before calling LLM; returns friendly message if budget exceeded.
     /// Auto-upgrades to Pro model if flash response contains &lt;&lt;&lt;NEEDS_PRO&gt;&gt;&gt;.

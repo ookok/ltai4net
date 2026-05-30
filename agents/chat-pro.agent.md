@@ -4,7 +4,7 @@ description: 深度推理助手(Pro)
 temperature: 0.3
 topP: 0.95
 modelId: deepseek-pro
-permissions: [read, write, list, exec]
+permissions: ["read", "write", "list", "exec"]
 inheritTools: chat
 ---
 

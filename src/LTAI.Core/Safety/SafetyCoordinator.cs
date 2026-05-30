@@ -105,8 +105,15 @@ public sealed class SafetyCoordinator : AIContextProvider
     // Shared verdict cache with SafeChatClient — key = HashCode.Combine(text.GetHashCode(), text.Length)
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<long, (bool safe, string reason, DateTime cached)>
         _verdictCache = new(4, 64);
-    private static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(60);
-    private const int MaxCachedTextLength = 200;
+    private static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(300);
+    private const int MaxCachedTextLength = 500;
+    // 常见安全/简短指令直接跳过 LLM 审核
+    private static readonly HashSet<string> SafePrefixes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "你好", "hi", "hello", "早上好", "下午好", "晚上好", "再见", "谢谢", "感谢",
+        "查看", "读取", "读", "打开", "列出", "搜索", "查找", "找", "显示",
+        "llm", "deepseek", "help", "/", "clear", "cls",
+    };
 
     private static long VerdictCacheKey(string text) =>
         HashCode.Combine(text.GetHashCode(), text.Length);
@@ -114,6 +121,17 @@ public sealed class SafetyCoordinator : AIContextProvider
     private async Task<(bool allow, string reason)> CheckAsync(string text, string direction)
     {
         if (text.Length > 100_000) return (false, "Input exceeds 100k chars");
+
+        // 快速通道：常见安全短文本直接放行（无需 LLM 审核）
+        if (text.Length <= 50)
+        {
+            var trimmed = text.TrimStart();
+            if (SafePrefixes.Any(p => trimmed.StartsWith(p, StringComparison.OrdinalIgnoreCase)))
+            {
+                _logger?.LogDebug("SafetyFastPath({Direction}): OK (safe prefix)", direction);
+                return (true, "");
+            }
+        }
 
         // Cache hit for short texts — reuse verdict from a recent identical check
         if (text.Length <= MaxCachedTextLength)

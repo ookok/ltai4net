@@ -20,12 +20,13 @@ public sealed class SearchTools
 
     public SearchTools(string ws) => _ws = ws;
 
-    [Description("Recursively search file contents for a pattern (grep)")]
+    [Description("Recursively search file contents for a pattern (grep). 路径越界需用户确认。")]
     public async Task<string> SearchContent(
         [Description("Search pattern (substring or regex)")] string pattern,
         [Description("File glob pattern like '*.cs', '*.md'")] string glob = "*",
         [Description("Lines of context around each match (0-20)")] int context = 0,
-        [Description("Case sensitive search")] bool caseSensitive = false)
+        [Description("Case sensitive search")] bool caseSensitive = false,
+        [Description("跨沙箱确认标记")] bool confirm = false)
     {
         var root = ResolvePath(".");
         if (root == null) return "Error: Path escape";
@@ -133,7 +134,7 @@ public sealed class SearchTools
         return results.OrderBy(r => r).ToArray();
     }
 
-    private string? ResolvePath(string path) => LTAI.Core.PathUtils.SafeResolvePath(_ws, path);
+
 
     private static bool IsBinaryExtension(string ext)
         => ext is ".dll" or ".exe" or ".so" or ".dylib" or ".png" or ".jpg" or ".jpeg"
@@ -145,4 +146,6 @@ public sealed class SearchTools
         var regex = "^" + Regex.Escape(glob).Replace(@"\*", ".*").Replace(@"\?", ".") + "$";
         return Regex.IsMatch(name, regex, RegexOptions.IgnoreCase);
     }
+
+    private string? ResolvePath(string path) => LTAI.Core.PathUtils.SafeResolvePath(_ws, path);
 }

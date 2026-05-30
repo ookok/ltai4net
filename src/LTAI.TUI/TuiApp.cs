@@ -30,8 +30,6 @@ public sealed class TuiApp
     public async Task RunAsync()
     {
         SkillsPanelView.Initialize(_projectRoot);
-        AnsiConsole.Write(new FigletText("LTAI").Color(Color.Green));
-        AnsiConsole.MarkupLine("[grey]LivingTree AI — 轻量版[/]");
 
         // 首次运行向导：无 API Key 时自动弹出
         if (!_llmConfig.HasAnyConfiguredProvider())
@@ -43,29 +41,8 @@ public sealed class TuiApp
         _ = FetchBalanceAsync();
         _ = FetchModelInfoAsync();
 
-        while (_running)
-        {
-            ShowHeader();
-            switch (_currentView)
-            {
-                case TuiView.Dashboard:
-                    ShowDashboard();
-                    break;
-                case TuiView.Chat:
-                    await _chatLayout.RenderAsync();
-                    break;
-                case TuiView.LLMConfig:
-                    _llmConfig.Render();
-                    break;
-                case TuiView.TextPad:
-                    TextPadView.Render(_projectRoot);
-                    break;
-                case TuiView.Skills:
-                    SkillsPanelView.Render();
-                    break;
-            }
-            await HandleInputAsync();
-        }
+        // 直接进入聊天
+        await _chatLayout.RenderAsync();
     }
 
     private void ShowHeader()
@@ -77,10 +54,26 @@ public sealed class TuiApp
 
     private async Task FetchBalanceAsync()
     {
-        var apiKey = LTAI.Core.Configuration.SecretManager.Get("SILICONFLOW_API_KEY")
-                  ?? LTAI.Core.Configuration.SecretManager.Get("OPENROUTER_API_KEY");
+        var provider = _config.Value.AI.DefaultProvider;
+        var apiKey = provider switch
+        {
+            { } p when p.Contains("deepseek", StringComparison.OrdinalIgnoreCase)
+                => SecretManager.Get("DEEPSEEK_API_KEY"),
+            { } p when p.Contains("siliconflow", StringComparison.OrdinalIgnoreCase)
+                => SecretManager.Get("SILICONFLOW_API_KEY"),
+            { } p when p.Contains("openrouter", StringComparison.OrdinalIgnoreCase)
+                => SecretManager.Get("OPENROUTER_API_KEY"),
+            { } p when p.Contains("zhipu", StringComparison.OrdinalIgnoreCase)
+                => SecretManager.Get("ZHIPU_API_KEY"),
+            { } p when p.Contains("aliyun", StringComparison.OrdinalIgnoreCase)
+                  || p.Contains("dashscope", StringComparison.OrdinalIgnoreCase)
+                => SecretManager.Get("DASHSCOPE_API_KEY"),
+            { } p when p.Contains("moonshot", StringComparison.OrdinalIgnoreCase)
+                => SecretManager.Get("MOONSHOT_API_KEY"),
+            _ => null
+        };
         if (apiKey != null)
-            await UsageTracker.FetchBalanceAsync(_config.Value.AI.DefaultProvider, apiKey);
+            await UsageTracker.FetchBalanceAsync(provider, apiKey);
     }
 
     private async Task FetchModelInfoAsync()

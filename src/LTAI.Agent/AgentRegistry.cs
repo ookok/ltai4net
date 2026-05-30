@@ -140,7 +140,7 @@ public static class AgentRegistry
 
     public static AgentFileDef? Parse(string text)
     {
-        var match = Regex.Match(text, "^---\n(.*?)\n---\n(.*)", RegexOptions.Singleline);
+        var match = Regex.Match(text, "^---[\r]?\n(.*?)[\r]?\n---[\r]?\n(.*)", RegexOptions.Singleline);
         if (!match.Success) return null;
 
         var frontmatter = match.Groups[1].Value;

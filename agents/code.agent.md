@@ -3,7 +3,7 @@ name: LTAI-Code
 description: 代码分析助手
 temperature: 0.3
 topP: 0.95
-permissions: [read, write, list]
+permissions: ["read", "write", "list"]
 tools: [filesystem, search, symbols, media, office, git, plan, diagram, task, download]
 ---
 

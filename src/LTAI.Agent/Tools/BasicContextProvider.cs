@@ -12,7 +12,6 @@ namespace LTAI.Agent.Tools;
 public sealed class BasicContextProvider : AIContextProvider
 {
     private static string? _cachedLocation;
-    private static readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(5) };
 
     public BasicContextProvider() : base(null, null, null) { }
 
@@ -20,7 +19,8 @@ public sealed class BasicContextProvider : AIContextProvider
         InvokingContext context, CancellationToken ct = default)
     {
         var info = BuildContextString();
-        var msg = new ChatMessage(ChatRole.System, $"[基础信息] {info}");
+        var confirmRule = "\n[操作规则] 当工具返回「尚未获得权限」时，请向用户展示路径并询问是否允许，用户同意后重新调用相同工具并设置 confirm=true。不要尝试其他工具代替。";
+        var msg = new ChatMessage(ChatRole.System, $"[基础信息] {info}{confirmRule}");
 
         var msgs = context.AIContext?.Messages?.ToList() ?? new List<ChatMessage>();
         msgs.Insert(0, msg); // 插在最前面，让 LLM 最先看到
@@ -54,23 +54,7 @@ public sealed class BasicContextProvider : AIContextProvider
 
     private static string GetLocation()
     {
-        if (_cachedLocation != null) return _cachedLocation;
-        try
-        {
-            var task = _http.GetFromJsonAsync<JsonElement>(
-                "http://ip-api.com/json/?fields=city,regionName,country&lang=zh-CN");
-            task.Wait(TimeSpan.FromSeconds(3));
-            if (!task.IsCompletedSuccessfully) return "未知";
-            var json = task.Result;
-            var city = json.GetProperty("city").GetString() ?? "";
-            var region = json.GetProperty("regionName").GetString() ?? "";
-            var country = json.GetProperty("country").GetString() ?? "";
-            _cachedLocation = $"{country} {region} {city}";
-            return _cachedLocation;
-        }
-        catch
-        {
-            return "未知";
-        }
+        // 跳过 ip-api.com 查询（节省 0-3s 首 token 延迟），默认返回本地
+        return _cachedLocation ??= "本地";
     }
 }

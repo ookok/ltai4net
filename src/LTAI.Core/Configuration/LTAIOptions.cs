@@ -52,7 +52,7 @@ public sealed class ProviderConfig
 public sealed class AIConfig
 {
     public string DefaultProvider { get; init; } = "deepseek";
-    public string Model { get; init; } = "deepseek-chat";
+    public string Model { get; init; } = "deepseek-v4-flash";
     public int MaxTokens { get; init; } = 4096;
     public double Temperature { get; init; } = 0.7;
     public string? ApiKeyEnv { get; init; } = "DEEPSEEK_API_KEY";
@@ -196,9 +196,11 @@ public static class KnownKeys
     /// <param name="Model">Default model name for this provider.</param>
     /// <param name="PriceInPerM">Input price per million tokens (¥).</param>
     /// <param name="PriceOutPerM">Output price per million tokens (¥).</param>
+    /// <param name="PriceInCachePerM">Cached input price per million tokens (¥, default = PriceInPerM).</param>
     public sealed record KeyInfo(string EnvVar, string Service, string Description,
         string? Url = null, string? Endpoint = null, string? Model = null,
-        decimal PriceInPerM = 0, decimal PriceOutPerM = 0);
+        decimal PriceInPerM = 0, decimal PriceOutPerM = 0,
+        decimal PriceInCachePerM = 0);
 
     /// <summary>
     /// All known keys. Source of truth for UI panels and cost calculation.
@@ -207,7 +209,7 @@ public static class KnownKeys
     public static readonly KeyInfo[] All =
     [
         // ── LLM Providers (官方 ¥/1M tokens 价格，来源各官网定价页) ──
-        new("DEEPSEEK_API_KEY",     "DeepSeek",       "输入¥1/输出¥2/缓存¥0.02 per 1M", "https://platform.deepseek.com/api_keys", "https://api.deepseek.com/v1", "deepseek-chat", 1.0m, 2.0m),
+        new("DEEPSEEK_API_KEY",     "DeepSeek",       "输入¥1/输出¥2/缓存¥0.02 per 1M", "https://platform.deepseek.com/api_keys", "https://api.deepseek.com/v1", "deepseek-v4-flash", 1.0m, 2.0m, 0.02m),
         new("SILICONFLOW_API_KEY",  "SiliconFlow",    "¥1/¥2 per 1M",       "https://cloud.siliconflow.cn/", "https://api.siliconflow.cn/v1", "deepseek-ai/DeepSeek-V2.5", 1.0m, 2.0m),
         new("DASHSCOPE_API_KEY",    "Aliyun(Qwen)",   "¥0.8/¥2 per 1M",     "https://dashscope.console.aliyun.com/", "https://dashscope.aliyuncs.com/compatible-mode/v1", "qwen-plus", 0.8m, 2.0m),
         new("ZHIPU_API_KEY",        "Zhipu(GLM)",     "¥1/¥2 per 1M",       "https://open.bigmodel.cn/", "https://open.bigmodel.cn/api/paas/v4", "glm-4-plus", 1.0m, 2.0m),
@@ -281,6 +283,8 @@ public interface IUsageTracker
 {
     /// <summary>Record token usage from an API call.</summary>
     void Record(int prompt, int completion, string model = "");
+    /// <summary>Record token usage with cache breakdown (三档计价).</summary>
+    void RecordWithCache(int prompt, int completion, int cacheHit, int cacheMiss, string model);
     /// <summary>Record a response cache hit.</summary>
     void RecordCacheHit();
     /// <summary>Record a response cache miss.</summary>
@@ -317,6 +321,24 @@ public interface IUsageTracker
     void SetActiveModel(string model);
     /// <summary>Set context window size.</summary>
     void SetContextWindowSize(int size);
+    /// <summary>Cache hit tokens (from API).</summary>
+    long CacheHitTokens { get; }
+    /// <summary>Cache miss tokens (from API).</summary>
+    long CacheMissTokens { get; }
+    /// <summary>Tool call count.</summary>
+    long ToolCalls { get; }
+    /// <summary>Cache saved amount display.</summary>
+    string CacheSavedDisplay { get; }
+    /// <summary>Record streaming metrics for t/s calculation.</summary>
+    void RecordStreamingMetrics(long completionTokens, long elapsedMs);
+    /// <summary>Current tokens-per-second (null if insufficient data).</summary>
+    double? CurrentTps { get; }
+    /// <summary>Tool call count.</summary>
+    string TpsDisplay { get; }
+    /// <summary>Set currently executing tool name (for TUI animation).</summary>
+    void SetActiveTool(string toolName);
+    /// <summary>Currently executing tool name, empty if none.</summary>
+    string CurrentTool { get; }
 }
 
 /// <summary>
@@ -399,8 +421,14 @@ public sealed class UsageTracker : IUsageTracker
     private static long _requests;
     private static readonly Stopwatch _timer = Stopwatch.StartNew();
     private static string _activeModel = "";
-    private static long _cacheHits;
-    private static long _cacheMisses;
+    private static long _cacheHits;          // 计数：缓存响应命中次数（缓存层）
+    private static long _cacheMisses;        // 计数：缓存响应未命中次数
+    private static long _cacheHitTokens;     // Token 级：API 返回的 prompt_cache_hit_tokens
+    private static long _cacheMissTokens;    // Token 级：API 返回的 prompt_cache_miss_tokens
+    private static long _toolCalls;          // Tool call 累计次数
+    private static string _currentTool = ""; // 当前正在执行的工具名（供 TUI 动画读取）
+    private static long _lastStreamTokens;   // 最近一次流式 completion tokens
+    private static long _lastStreamElapsedMs; // 最近一次流式耗时(ms)
     private static int _contextWindowSize = 64000;
     private static double _balance;
     private static string _balanceCurrency = "";
@@ -411,6 +439,7 @@ public sealed class UsageTracker : IUsageTracker
 
     // ══ IUsageTracker explicit implementation (accessible when cast to interface) ══
     void IUsageTracker.Record(int prompt, int completion, string model) => RecordInternal(prompt, completion, model);
+    void IUsageTracker.RecordWithCache(int prompt, int completion, int cacheHit, int cacheMiss, string model) => RecordInternal(prompt, completion, cacheHit, cacheMiss, model);
 
     /// <summary>Core Record logic — called by both static forwarder and interface impl.</summary>
     private static void RecordInternal(int prompt, int completion, string model)
@@ -436,8 +465,38 @@ public sealed class UsageTracker : IUsageTracker
         lock (_costLock) { _totalCost += cost; }
     }
 
+    /// <summary>Record with cache token breakdown — 三档计价 (cacheHit / cacheMiss / output).</summary>
+    private static void RecordInternal(int prompt, int completion, int cacheHit, int cacheMiss, string model)
+    {
+        Interlocked.Add(ref _promptTokens, prompt);
+        Interlocked.Add(ref _completionTokens, completion);
+        Interlocked.Add(ref _cacheHitTokens, cacheHit);
+        Interlocked.Add(ref _cacheMissTokens, cacheMiss);
+        Interlocked.Increment(ref _requests);
+        if (!string.IsNullOrEmpty(model)) _activeModel = model;
+
+        var key = KnownKeys.All.FirstOrDefault(k =>
+            !string.IsNullOrEmpty(k.Model) && model.StartsWith(k.Model, StringComparison.OrdinalIgnoreCase));
+        double cost;
+        if (key != null && (key.PriceInPerM > 0 || key.PriceOutPerM > 0))
+        {
+            var cachePrice = key.PriceInCachePerM > 0 ? (double)key.PriceInCachePerM : (double)key.PriceInPerM;
+            cost = (cacheHit / 1_000_000.0) * cachePrice
+                 + (cacheMiss / 1_000_000.0) * (double)key.PriceInPerM
+                 + (completion / 1_000_000.0) * (double)key.PriceOutPerM;
+        }
+        else
+        {
+            cost = (prompt / 1_000_000.0) * 1.0
+                 + (completion / 1_000_000.0) * 4.0;
+        }
+        lock (_costLock) { _totalCost += cost; }
+    }
+
     /// <summary>Static forwarding — delegates to <see cref="Default"/>.</summary>
     public static void Record(int prompt, int completion, string model = "") => RecordInternal(prompt, completion, model);
+    public static void RecordWithCache(int prompt, int completion, int cacheHit, int cacheMiss, string model)
+        => RecordInternal(prompt, completion, cacheHit, cacheMiss, model);
 
     // ══ IUsageTracker explicit implementation (cast to interface to access) ══
     long IUsageTracker.PromptTokens => Interlocked.Read(ref _promptTokens);
@@ -445,20 +504,44 @@ public sealed class UsageTracker : IUsageTracker
     long IUsageTracker.Requests => Interlocked.Read(ref _requests);
     decimal IUsageTracker.EstimatedCost { get { lock (_costLock) { return (decimal)_totalCost; } } }
     string IUsageTracker.CostDisplay => $"¥{((IUsageTracker)this).EstimatedCost:F4}";
-    string IUsageTracker.ActiveModel => string.IsNullOrEmpty(_activeModel) ? "N/A" : _activeModel;
+    string IUsageTracker.ActiveModel => !string.IsNullOrEmpty(_activeModel) ? _activeModel : "deepseek-v4-flash";
     void IUsageTracker.SetActiveModel(string model) => _activeModel = model;
     void IUsageTracker.RecordCacheHit() => Interlocked.Increment(ref _cacheHits);
     void IUsageTracker.RecordCacheMiss() => Interlocked.Increment(ref _cacheMisses);
     long IUsageTracker.CacheHits => Interlocked.Read(ref _cacheHits);
     long IUsageTracker.CacheMisses => Interlocked.Read(ref _cacheMisses);
-    double IUsageTracker.CacheHitRate =>
-        CacheHits + CacheMisses > 0 ? (double)CacheHits / (CacheHits + CacheMisses) * 100 : 0;
+    double IUsageTracker.CacheHitRate
+    {
+        get
+        {
+            var hitT = Interlocked.Read(ref _cacheHitTokens);
+            var missT = Interlocked.Read(ref _cacheMissTokens);
+            if (hitT + missT > 0)
+                return (double)hitT / (hitT + missT) * 100;
+            var hitC = Interlocked.Read(ref _cacheHits);
+            var missC = Interlocked.Read(ref _cacheMisses);
+            return hitC + missC > 0 ? (double)hitC / (hitC + missC) * 100 : 0;
+        }
+    }
     double IUsageTracker.ContextRatio(int ovr) => CalcContextRatio(ovr);
     string IUsageTracker.ContextText(int ovr) => CalcContextText(ovr);
     string IUsageTracker.BalanceDisplay => BalanceDisplayStatic;
     void IUsageTracker.SetContextWindowSize(int size) => _contextWindowSize = size;
     async Task IUsageTracker.FetchBalanceAsync(string p, string? k) => await FetchBalanceStaticAsync(p, k);
     string IUsageTracker.Summary() => BuildSummary();
+    long IUsageTracker.CacheHitTokens => Interlocked.Read(ref _cacheHitTokens);
+    long IUsageTracker.CacheMissTokens => Interlocked.Read(ref _cacheMissTokens);
+    long IUsageTracker.ToolCalls => Interlocked.Read(ref _toolCalls);
+    string IUsageTracker.CacheSavedDisplay => CacheSavedDisplay;
+    void IUsageTracker.RecordStreamingMetrics(long completionTokens, long elapsedMs)
+    {
+        Interlocked.Exchange(ref _lastStreamTokens, completionTokens);
+        Interlocked.Exchange(ref _lastStreamElapsedMs, elapsedMs);
+    }
+    double? IUsageTracker.CurrentTps => CurrentTps;
+    string IUsageTracker.TpsDisplay => TpsDisplay;
+    void IUsageTracker.SetActiveTool(string toolName) => _currentTool = toolName;
+    string IUsageTracker.CurrentTool => _currentTool;
 
     // ══ Public static members (same names as before — backward compatible) ══
     public static long PromptTokens => Interlocked.Read(ref _promptTokens);
@@ -468,14 +551,76 @@ public sealed class UsageTracker : IUsageTracker
     public static TimeSpan Uptime => _timer.Elapsed;
     public static decimal EstimatedCost { get { lock (_costLock) { return (decimal)_totalCost; } } }
     public static string CostDisplay => $"¥{EstimatedCost:F4}";
-    public static string ActiveModel => string.IsNullOrEmpty(_activeModel) ? "N/A" : _activeModel;
+    public static string ActiveModel => !string.IsNullOrEmpty(_activeModel) ? _activeModel : "deepseek-v4-flash";
     public static void SetActiveModel(string model) => _activeModel = model;
     public static void RecordCacheHit() => Interlocked.Increment(ref _cacheHits);
     public static void RecordCacheMiss() => Interlocked.Increment(ref _cacheMisses);
     public static long CacheHits => Interlocked.Read(ref _cacheHits);
     public static long CacheMisses => Interlocked.Read(ref _cacheMisses);
-    public static double CacheHitRate =>
-        CacheHits + CacheMisses > 0 ? (double)CacheHits / (CacheHits + CacheMisses) * 100 : 0;
+    public static void RecordCacheTokens(long hitTokens, long missTokens)
+    {
+        Interlocked.Add(ref _cacheHitTokens, hitTokens);
+        Interlocked.Add(ref _cacheMissTokens, missTokens);
+    }
+    public static long CacheHitTokens => Interlocked.Read(ref _cacheHitTokens);
+    public static long CacheMissTokens => Interlocked.Read(ref _cacheMissTokens);
+    public static double CacheHitRate
+    {
+        get
+        {
+            var hitT = Interlocked.Read(ref _cacheHitTokens);
+            var missT = Interlocked.Read(ref _cacheMissTokens);
+            if (hitT + missT > 0)
+                return (double)hitT / (hitT + missT) * 100;
+            // Fallback: 计数比（缓存层命中）
+            var hitC = Interlocked.Read(ref _cacheHits);
+            var missC = Interlocked.Read(ref _cacheMisses);
+            return hitC + missC > 0 ? (double)hitC / (hitC + missC) * 100 : 0;
+        }
+    }
+    /// <summary>缓存节省金额 (¥) = cacheHitTokens × (missPrice − hitPrice) / 1M</summary>
+    public static string CacheSavedDisplay
+    {
+        get
+        {
+            var hitT = Interlocked.Read(ref _cacheHitTokens);
+            if (hitT == 0) return "¥0.0000";
+            // DeepSeek V4 Flash: miss=¥1.0/M, hit=¥0.02/M
+            var saved = hitT / 1_000_000.0 * (1.0 - 0.02);
+            return $"¥{saved:F4}";
+        }
+    }
+    public static void RecordToolCall() => Interlocked.Increment(ref _toolCalls);
+    public static long ToolCalls => Interlocked.Read(ref _toolCalls);
+    /// <summary>设置当前正在执行的工具名（用于 TUI 动画实时显示）。</summary>
+    public static void SetActiveTool(string toolName) => _currentTool = toolName;
+    /// <summary>当前正在执行的工具名，空字符串表示无活跃工具。</summary>
+    public static string CurrentTool => _currentTool;
+    /// <summary>记录流式请求的 token 数和耗时，用于计算响应速率。</summary>
+    public static void RecordStreamingMetrics(long completionTokens, long elapsedMs)
+    {
+        Interlocked.Exchange(ref _lastStreamTokens, completionTokens);
+        Interlocked.Exchange(ref _lastStreamElapsedMs, elapsedMs);
+    }
+    /// <summary>最近一次流式请求的响应速率 (tokens/sec)，不可用时返回 null。</summary>
+    public static double? CurrentTps
+    {
+        get
+        {
+            var tok = Interlocked.Read(ref _lastStreamTokens);
+            var ms = Interlocked.Read(ref _lastStreamElapsedMs);
+            if (ms < 500 || tok < 4) return null; // 同 Reasonix 最小阈值
+            return Math.Round(tok * 1000.0 / ms, 1);
+        }
+    }
+    public static string TpsDisplay
+    {
+        get
+        {
+            var tps = CurrentTps;
+            return tps.HasValue ? $"{tps:F0} t/s" : "";
+        }
+    }
     public static void SetContextWindowSize(int size) => _contextWindowSize = size;
     public static double ContextRatio(int contextWindowOverride = 0) => CalcContextRatio(contextWindowOverride);
     public static string ContextText(int contextWindowOverride = 0) => CalcContextText(contextWindowOverride);
@@ -514,11 +659,13 @@ public sealed class UsageTracker : IUsageTracker
     private static int EffectiveContextWindow(int ovr)
     {
         if (ovr > 0) return ovr;
-        var modelLimit = !string.IsNullOrEmpty(_activeModel)
-            ? _modelContextCache.TryGetValue(_activeModel, out var cached)
-                ? cached
-                : KnownContextWindows.TryGetValue(_activeModel, out var known) ? known : 0
-            : 0;
+        // 优先从当前模型名查 KnownContextWindows（API 缓存优先）
+        var modelKey = _activeModel;
+        if (string.IsNullOrEmpty(modelKey))
+            modelKey = "deepseek-v4-flash"; // 默认 Fallback
+        var modelLimit = _modelContextCache.TryGetValue(modelKey, out var cached)
+            ? cached
+            : KnownContextWindows.TryGetValue(modelKey, out var known) ? known : 0;
         return Math.Max(modelLimit, _contextWindowSize);
     }
     private static double CalcContextRatio(int ovr)

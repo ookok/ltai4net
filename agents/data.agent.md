@@ -3,7 +3,7 @@ name: LTAI-Data
 description: 数据处理助手
 temperature: 0.3
 topP: 0.95
-permissions: [read, write, list, exec]
+permissions: ["read", "write", "list", "exec"]
 tools: [filesystem, shell, search, eia, web, media, office, git, plan, diagram, job, container, download]
 ---
 

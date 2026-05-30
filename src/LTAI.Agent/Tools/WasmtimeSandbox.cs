@@ -99,12 +99,18 @@ public sealed class WasmtimeSandbox : AIContextProvider
     //  Sandboxed shell command
     // ═══════════════════════════════════════════
 
-    [Description("Execute a command in the sandbox with restricted permissions")]
+    [Description("Execute a command in the sandbox with restricted permissions. 不能用来读取文件——读取文件请用 ReadFileContent 工具。")]
     public async Task<string> ExecuteSandboxedCommandAsync(
         [Description("Shell command to run")] string command,
         [Description("Working directory (relative to sandbox)")] string workDir = ".",
         CancellationToken ct = default)
     {
+        // 拦截尝试用命令行读取文件的行为，重定向到 ReadFileContent
+        var readCmdPatterns = new[] { "Get-Content", "gc ", "cat ", "type ", "more ", ".ReadAllText", "ReadFile" };
+        if (readCmdPatterns.Any(p => command.Contains(p, StringComparison.OrdinalIgnoreCase)) &&
+            (command.Contains(":\\") || command.Contains("./") || command.Contains(".\\")))
+            return "❌ 读取文件请使用 ReadFileContent 工具（【推荐】读取文件内容的首选工具），不要用命令行。";
+
         var resolvedDir = PathUtils.SafeResolvePath(_sandboxDir, workDir);
         if (resolvedDir == null)
             return ToolResult.Error("Working directory escapes sandbox");

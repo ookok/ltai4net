@@ -159,7 +159,8 @@ public sealed class MultiProviderChatClient : IChatClient
             if (success)
             {
                 // 兜底：流式成功时记录一次请求（精准 token 由 OpenAiHttpClient 从 usage 字段追记）
-                LTAI.Core.Configuration.UsageTracker.Record(10, 10, p);
+                // 传空模型名，保持 OpenAiHttpClient 已记录的真实模型名不被覆盖
+                LTAI.Core.Configuration.UsageTracker.Record(10, 10);
                 yield break;
             }
         }
@@ -180,7 +181,10 @@ public sealed class MultiProviderChatClient : IChatClient
             LTAI.Core.Configuration.UsageTracker.RecordCacheHit();
             // Still track approximate tokens from cached response
             var text = cached!.Messages?.LastOrDefault()?.Text ?? "";
-            LTAI.Core.Configuration.UsageTracker.Record(text.Length / 4, text.Length / 8, provider);
+            var promptT = text.Length / 4;
+            var completionT = text.Length / 8;
+            LTAI.Core.Configuration.UsageTracker.Record(promptT, completionT, provider);
+            LTAI.Core.Configuration.UsageTracker.RecordCacheTokens(promptT, 0); // 全部 prompt 命中缓存
             return cached;
         }
 
@@ -424,7 +428,10 @@ public sealed class OpenAiHttpClient : IChatClient
 
         // Track token usage
         if (json?.Usage != null)
-            LTAI.Core.Configuration.UsageTracker.Record(json.Usage.PromptTokens, json.Usage.CompletionTokens, _model);
+            LTAI.Core.Configuration.UsageTracker.RecordWithCache(
+                json.Usage.PromptTokens, json.Usage.CompletionTokens,
+                json.Usage.PromptCacheHitTokens ?? 0, json.Usage.PromptCacheMissTokens ?? 0,
+                _model);
 
         var choice = json?.Choices?.FirstOrDefault();
         if (choice?.Message == null)
@@ -452,6 +459,10 @@ public sealed class OpenAiHttpClient : IChatClient
         IEnumerable<ChatMessage> messages, ChatOptions? options = null,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
+        // 流式计时和 tool call 追踪
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        long completionTokens = 0;
+
         var sl = messages.ToList();
         _logger?.LogInformation("[OpenAiHttpClient-Streaming] Request: messages={Count}, tools={Tools}",
             sl.Count, options?.Tools?.Count ?? 0);
@@ -504,7 +515,13 @@ public sealed class OpenAiHttpClient : IChatClient
             // Track usage from final SSE message (usage-only chunk before [DONE])
             if (chunk?.Usage is { } usage && (chunk.Choices == null || chunk.Choices.Length == 0))
             {
-                LTAI.Core.Configuration.UsageTracker.Record(usage.PromptTokens, usage.CompletionTokens, _model);
+                LTAI.Core.Configuration.UsageTracker.RecordWithCache(
+                    usage.PromptTokens, usage.CompletionTokens,
+                    usage.PromptCacheHitTokens ?? 0, usage.PromptCacheMissTokens ?? 0,
+                    _model);
+                // 用 API 返回的精确 completion tokens 覆盖流式估算值（更准确）
+                if (usage.CompletionTokens > 0)
+                    completionTokens = usage.CompletionTokens;
             }
 
             var choice = chunk?.Choices?.FirstOrDefault();
@@ -536,12 +553,17 @@ public sealed class OpenAiHttpClient : IChatClient
             // Text content delta (only when no tool calls)
             if (choice.Delta?.Content is { Length: > 0 } deltaText && toolCallAccum.Count == 0)
             {
+                // chars→tokens 估算：中文每字约 1.5-2 token，英文约 0.25-0.3 token
+                // 用浮点累加避免短 delta（1-3 字符）被整数除法吞掉
+                completionTokens += (int)Math.Ceiling(deltaText.Length / 3.0);
                 yield return new ChatResponseUpdate(ChatRole.Assistant, deltaText);
             }
 
-            // Finish_reason: tool_calls
+            // Finish_reason: tool_calls → 记录 tool call
             if (choice.FinishReason == "tool_calls" && toolCallAccum.Count > 0)
             {
+                for (int i = 0; i < toolCallAccum.Count; i++)
+                    LTAI.Core.Configuration.UsageTracker.RecordToolCall();
                 var contents = new List<AIContent>();
                 foreach (var (_, (id, name, args)) in toolCallAccum)
                 {
@@ -556,6 +578,8 @@ public sealed class OpenAiHttpClient : IChatClient
         // Edge case: tool calls accumulated but no finish_reason yielded
         if (toolCallAccum.Count > 0)
         {
+            for (int i = 0; i < toolCallAccum.Count; i++)
+                LTAI.Core.Configuration.UsageTracker.RecordToolCall();
             var contents = new List<AIContent>();
             foreach (var (_, (id, name, args)) in toolCallAccum)
             {
@@ -564,13 +588,20 @@ public sealed class OpenAiHttpClient : IChatClient
             }
             yield return new ChatResponseUpdate(ChatRole.Assistant, contents);
         }
+
+        // 记录流式响应速率指标
+        sw.Stop();
+        LTAI.Core.Configuration.UsageTracker.RecordStreamingMetrics(completionTokens, sw.ElapsedMilliseconds);
     }
 
     /// <summary>Track token usage from a streaming SSE chunk (usage field, last message before [DONE]).</summary>
     private void TrackStreamingUsage(StreamingChunkJson? chunk)
     {
         if (chunk?.Usage is { } usage)
-            LTAI.Core.Configuration.UsageTracker.Record(usage.PromptTokens, usage.CompletionTokens, _model);
+            LTAI.Core.Configuration.UsageTracker.RecordWithCache(
+                usage.PromptTokens, usage.CompletionTokens,
+                usage.PromptCacheHitTokens ?? 0, usage.PromptCacheMissTokens ?? 0,
+                _model);
     }
 
     /// <summary>Parse a JSON arguments string into a dictionary for FunctionCallContent.</summary>
@@ -744,7 +775,8 @@ public sealed class OpenAiHttpClient : IChatClient
     private sealed record MessageJson(string? Content, ToolCallJson[]? ToolCalls);
     private sealed record ToolCallJson(string Id, string Type, FunctionJson Function);
     private sealed record FunctionJson(string Name, string Arguments);
-    private sealed record UsageJson(int PromptTokens, int CompletionTokens);
+    private sealed record UsageJson(int PromptTokens, int CompletionTokens,
+        int? PromptCacheHitTokens = null, int? PromptCacheMissTokens = null);
 
     // Streaming (SSE) chunk types
     private sealed record StreamingChunkJson(StreamingChoiceJson[]? Choices, UsageJson? Usage);
@@ -777,10 +809,12 @@ public static class ServiceCollectionExtensions
         services.AddHttpClient("llm")
             .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
             {
-                MaxConnectionsPerServer = 3,
-                PooledConnectionLifetime = TimeSpan.FromMinutes(2),
-                PooledConnectionIdleTimeout = TimeSpan.FromSeconds(30),
+                MaxConnectionsPerServer = 6,
+                PooledConnectionLifetime = TimeSpan.FromMinutes(10),
+                PooledConnectionIdleTimeout = TimeSpan.FromMinutes(2),
                 EnableMultipleHttp2Connections = true,
+                // 启用自动解压（API 返回可能为 gzip）
+                AutomaticDecompression = System.Net.DecompressionMethods.GZip | System.Net.DecompressionMethods.Deflate,
             });
 
         // Step 1: Register the raw MultiProviderChatClient (not as IChatClient — we'll wrap it)

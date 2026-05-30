@@ -24,14 +24,18 @@ public sealed class EditFileTools
         if (fp != null) _readTracker.Add(fp);
     }
 
-    [Description("Apply a SEARCH/REPLACE edit to an existing file. Call read_file first — SEARCH text must match exactly.")]
+    private string? ResolvePath(string path) => LTAI.Core.PathUtils.SafeResolvePath(_ws, path);
+
+    [Description("Apply a SEARCH/REPLACE edit to an existing file. Call read_file first — SEARCH text must match exactly. 路径越界需用户确认。")]
     public async Task<string> EditFile(
         [Description("File path relative to workspace")] string path,
         [Description("Exact text to find (must be unique in the file)")] string search,
-        [Description("Replacement text")] string replace)
+        [Description("Replacement text")] string replace,
+        [Description("跨沙箱确认标记")] bool confirm = false)
     {
-        var fp = ResolvePath(path);
-        if (fp == null) return "Error: Path escape";
+        var (fp, denied) = LTAI.Core.PathUtils.TryResolveWithPermission(_ws, path, confirm);
+        if (fp == null)
+            return $"⚠️ 需要编辑工作区外的文件，尚未获得权限。\n\n工作区: `{_ws}`\n目标路径: `{denied}`\n\n请向用户展示以上路径，询问是否允许访问。用户同意后重新调用 edit_file 并设置 confirm=true。";
 
         if (!_readTracker.Contains(fp))
             return "Error: File has not been read this session — call read_file first. " +
@@ -59,7 +63,7 @@ public sealed class EditFileTools
         return $"Applied edit to '{path}' ({search.Length} chars replaced → {replace.Length} chars)";
     }
 
-    private string? ResolvePath(string path) => LTAI.Core.PathUtils.SafeResolvePath(_ws, path);
+
 
     private static int CountOccurrences(string text, string pattern)
     {

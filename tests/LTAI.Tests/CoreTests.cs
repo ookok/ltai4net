@@ -81,9 +81,9 @@ public class UsageTrackerTests
     public void Record_IncreasesCounters()
     {
         var before = UsageTracker.TotalTokens;
-        UsageTracker.Record(100, 50, "deepseek-chat");
+        UsageTracker.Record(100, 50, "deepseek-v4-flash");
         Assert.True(UsageTracker.TotalTokens > before);
-        Assert.Equal("deepseek-chat", UsageTracker.ActiveModel);
+        Assert.Equal("deepseek-v4-flash", UsageTracker.ActiveModel);
     }
 
     [Fact]
@@ -287,7 +287,7 @@ public class UsageTrackerScopeTests
         var before = UsageTracker.TotalTokens;
         using (var scope = UsageTracker.BeginScope())
         {
-            UsageTracker.Record(200, 100, "deepseek-chat");
+            UsageTracker.Record(200, 100, "deepseek-v4-flash");
             Assert.True(scope.PromptDelta + scope.CompletionDelta >= 300);
         }
     }

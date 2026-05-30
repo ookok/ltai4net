@@ -3,7 +3,7 @@ name: LTAI-Writer
 description: 创意写作助手
 temperature: 0.8
 topP: 0.95
-permissions: [read, write, list, exec]
+permissions: ["read", "write", "list", "exec"]
 inheritTools: chat
 ---
 

@@ -25,14 +25,15 @@ public sealed class DirectoryTreeTools
 
     public DirectoryTreeTools(string ws) => _ws = ws;
 
-    [Description("Recursively list directory structure with auto-collapse")]
+    [Description("Recursively list directory structure with auto-collapse. 路径越界需用户确认。")]
     public async Task<string> DirectoryTree(
         [Description("Root path (default: workspace)")] string path = ".",
         [Description("Maximum recursion depth (1-5, default: 2)")] int maxDepth = DefaultMaxDepth,
-        [Description("If true, include dependency directories (.git, node_modules, etc.)")] bool includeDeps = false)
+        [Description("If true, include dependency directories (.git, node_modules, etc.)")] bool includeDeps = false,
+        [Description("跨沙箱确认标记")] bool confirm = false)
     {
-        var root = ResolvePath(path);
-        if (root == null) return "Error: Path escape";
+        var (root, denied) = LTAI.Core.PathUtils.TryResolveWithPermission(_ws, path, confirm);
+        if (root == null) return $"⚠️ 路径在工作区外: `{denied}`\n请向用户展示路径，用户同意后设置 confirm=true 重新调用";
         if (!Directory.Exists(root)) return "Error: Directory not found";
 
         maxDepth = Math.Clamp(maxDepth, 1, 5);

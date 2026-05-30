@@ -12,14 +12,16 @@ public sealed class FileTools
 
     public FileTools(string ws) => _ws = ws;
 
-    [Description("Copy a file or directory")]
+    [Description("Copy a file or directory. 路径越界需用户确认。")]
     public string CopyFile(
         [Description("Source path")] string source,
-        [Description("Destination path")] string destination)
+        [Description("Destination path")] string destination,
+        [Description("跨沙箱确认标记")] bool confirm = false)
     {
-        var src = Resolve(source);
-        var dst = Resolve(destination);
-        if (src == null || dst == null) return "Error: Path escape";
+        var src = Resolve(source, confirm, out var denied);
+        if (src == null) return $"⚠️ 源路径在工作区外: `{denied}`\n请向用户展示路径，用户同意后设置 confirm=true 重新调用";
+        var dst = Resolve(destination, confirm, out denied);
+        if (dst == null) return $"⚠️ 目标路径在工作区外: `{denied}`\n请向用户展示路径，用户同意后设置 confirm=true 重新调用";
         if (!File.Exists(src) && !Directory.Exists(src)) return "Source not found";
         if (File.Exists(dst) || Directory.Exists(dst)) return "Destination already exists";
 
@@ -35,14 +37,16 @@ public sealed class FileTools
         catch (Exception ex) { return $"Error: {ex.Message}"; }
     }
 
-    [Description("Move/rename a file or directory")]
+    [Description("Move/rename a file or directory. 路径越界需用户确认。")]
     public string MoveFile(
         [Description("Source path")] string source,
-        [Description("Destination path")] string destination)
+        [Description("Destination path")] string destination,
+        [Description("跨沙箱确认标记")] bool confirm = false)
     {
-        var src = Resolve(source);
-        var dst = Resolve(destination);
-        if (src == null || dst == null) return "Error: Path escape";
+        var src = Resolve(source, confirm, out var denied);
+        if (src == null) return $"⚠️ 源路径在工作区外: `{denied}`\n请向用户展示路径，用户同意后设置 confirm=true 重新调用";
+        var dst = Resolve(destination, confirm, out denied);
+        if (dst == null) return $"⚠️ 目标路径在工作区外: `{denied}`\n请向用户展示路径，用户同意后设置 confirm=true 重新调用";
         if (!File.Exists(src) && !Directory.Exists(src)) return "Source not found";
         if (File.Exists(dst) || Directory.Exists(dst)) return "Destination already exists";
 
@@ -58,24 +62,26 @@ public sealed class FileTools
         catch (Exception ex) { return $"Error: {ex.Message}"; }
     }
 
-    [Description("Delete a file")]
+    [Description("Delete a file. 路径越界需用户确认。")]
     public string DeleteFile(
-        [Description("Path to file")] string path)
+        [Description("Path to file")] string path,
+        [Description("跨沙箱确认标记")] bool confirm = false)
     {
-        var fp = Resolve(path);
-        if (fp == null) return "Error: Path escape";
+        var fp = Resolve(path, confirm, out var denied);
+        if (fp == null) return $"⚠️ 路径在工作区外: `{denied}`\n请向用户展示路径，用户同意后设置 confirm=true 重新调用";
         if (!File.Exists(fp)) return "File not found";
         try { File.Delete(fp); return $"Deleted {Path.GetFileName(fp)}"; }
         catch (Exception ex) { return $"Error: {ex.Message}"; }
     }
 
-    [Description("Recursively delete a directory")]
+    [Description("Recursively delete a directory. 路径越界需用户确认。")]
     public string DeleteDirectory(
         [Description("Path to directory")] string path,
-        [Description("Allow deleting non-empty")] bool recursive = true)
+        [Description("Allow deleting non-empty")] bool recursive = true,
+        [Description("跨沙箱确认标记")] bool confirm = false)
     {
-        var fp = Resolve(path);
-        if (fp == null) return "Error: Path escape";
+        var fp = Resolve(path, confirm, out var denied);
+        if (fp == null) return $"⚠️ 路径在工作区外: `{denied}`\n请向用户展示路径，用户同意后设置 confirm=true 重新调用";
         if (!Directory.Exists(fp)) return "Directory not found";
         try
         {
@@ -87,12 +93,13 @@ public sealed class FileTools
         catch (Exception ex) { return $"Error: {ex.Message}"; }
     }
 
-    [Description("Get file or directory metadata (size, modified, type)")]
+    [Description("Get file or directory metadata (size, modified, type). 路径越界需用户确认。")]
     public string GetFileInfo(
-        [Description("Path")] string path)
+        [Description("Path")] string path,
+        [Description("跨沙箱确认标记")] bool confirm = false)
     {
-        var fp = Resolve(path);
-        if (fp == null) return "Error: Path escape";
+        var fp = Resolve(path, confirm, out var denied);
+        if (fp == null) return $"⚠️ 路径在工作区外: `{denied}`\n请向用户展示路径，用户同意后设置 confirm=true 重新调用";
 
         if (File.Exists(fp))
         {
@@ -110,6 +117,12 @@ public sealed class FileTools
         return "Path not found";
     }
 
+    private string? Resolve(string path, bool confirm, out string? denied)
+    {
+        var (fp, d) = LTAI.Core.PathUtils.TryResolveWithPermission(_ws, path, confirm);
+        denied = d;
+        return fp;
+    }
     private string? Resolve(string path) => LTAI.Core.PathUtils.SafeResolvePath(_ws, path);
 
     private static void CopyDirectoryRecursive(string src, string dst)

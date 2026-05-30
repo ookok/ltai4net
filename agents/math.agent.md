@@ -3,7 +3,7 @@ name: LTAI-Math
 description: 数学计算助手
 temperature: 1.0
 topP: 0.95
-permissions: [exec]
+permissions: ["exec"]
 tools: [shell, container]
 ---
 

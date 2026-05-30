@@ -86,4 +86,75 @@ public static class PathUtils
             return $"Cannot check file size: {ex.Message}";
         }
     }
+
+    /// <summary>
+    /// 尝试解析路径，支持跨沙箱权限确认。
+    /// 优先走 SafeResolvePath，越界时检查 PathPermissionStore。
+    /// 返回 (解析路径, 越界全路径)。若 resolvedPath != null 可直接使用；
+    /// 若 resolvedPath == null 且 deniedFullPath != null，说明需要用户确认。
+    /// </summary>
+    public static (string? resolvedPath, string? deniedFullPath) TryResolveWithPermission(
+        string ws, string path, bool confirm = false)
+    {
+        var fp = SafeResolvePath(ws, path);
+        if (fp != null) return (fp, null);
+
+        // 越界：获取完整路径供确认提示
+        string fullPath;
+        try { fullPath = Path.GetFullPath(Path.Combine(ws, path)); }
+        catch { return (null, null); }
+
+        // 检查是否已授权
+        if (PathPermissionStore.IsGranted(fullPath))
+            return (fullPath, null);
+
+        if (confirm)
+        {
+            PathPermissionStore.Grant(fullPath);
+            return (fullPath, null);
+        }
+
+        return (null, fullPath);
+    }
+
+    /// <summary>
+    /// 会话级路径权限存储。跨沙箱文件访问需要用户确认后放行。
+    /// 调用 <see cref="Grant"/> 授予权限，<see cref="IsGranted"/> 检查权限。
+    /// </summary>
+    public static class PathPermissionStore
+    {
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> _grants = new();
+
+        /// <summary>授予对指定路径的跨沙箱访问权限。</summary>
+        public static void Grant(string path)
+        {
+            try
+            {
+                var fp = Path.GetFullPath(path.Trim().Trim('"', '\''));
+                _grants[fp] = true;
+            }
+            catch { }
+        }
+
+        /// <summary>检查路径是否已被授予跨沙箱访问权限。</summary>
+        public static bool IsGranted(string path)
+        {
+            try
+            {
+                var fp = Path.GetFullPath(path.Trim().Trim('"', '\''));
+                return _grants.TryGetValue(fp, out var ok) && ok;
+            }
+            catch { return false; }
+        }
+
+        /// <summary>撤销对指定路径的权限。</summary>
+        public static void Revoke(string path)
+        {
+            try { _grants.Remove(Path.GetFullPath(path), out _); }
+            catch { }
+        }
+
+        /// <summary>清空所有已授予的权限。</summary>
+        public static void Clear() => _grants.Clear();
+    }
 }

@@ -176,7 +176,10 @@ public static class ServiceCollectionExtensions
         var dirTree = new DirectoryTreeTools(ws);
         var glob = new GlobTools(ws);
 
-        if (canRead) tools.Add(AIFunctionFactory.Create(fs.ReadFile));
+        if (canRead) tools.Add(AIFunctionFactory.Create(
+            (string path) => fs.ReadFileContent(path),
+            "ReadFileContent", "Read a file"));
+        if (canRead) tools.Add(AIFunctionFactory.Create(fs.ListTools));
         if (canWrite) tools.Add(AIFunctionFactory.Create(fs.WriteFile));
         if (canList)
         {
@@ -472,7 +475,9 @@ public static class ServiceCollectionExtensions
             .UseFileScriptRunner(LTAI.Agent.Tools.SkillScriptRunner.RunAsync)
             .Build();
 
-        AIAgent agent = new ChatClientAgent(llm, new ChatClientAgentOptions
+        // 插入工具结果捕获装饰器
+        var instrumentedLlm = new ToolResultCapturingChatClient(llm);
+        AIAgent agent = new ChatClientAgent(instrumentedLlm, new ChatClientAgentOptions
         {
             Name = name,
             Description = $"你是 {name}，{description}。\n"
@@ -494,12 +499,15 @@ public static class ServiceCollectionExtensions
                 ModelId = modelId,
             },
             ChatHistoryProvider = new InMemoryChatHistoryProvider(),
+            // Tool RAG: 动态工具召回（放第一个）
             AIContextProviders = safety != null
-                ? [shellEnv, safety, compaction, kbGraph, codeGraph, wasmtimeSandbox, new BasicContextProvider(), skillsProvider]
-                : [shellEnv, compaction, kbGraph, codeGraph, wasmtimeSandbox, new BasicContextProvider(), skillsProvider],
+                ? [new LTAI.Agent.Tools.ToolRetrievalProvider(), shellEnv, safety, compaction, kbGraph, codeGraph, wasmtimeSandbox, new BasicContextProvider(), skillsProvider]
+                : [new LTAI.Agent.Tools.ToolRetrievalProvider(), shellEnv, compaction, kbGraph, codeGraph, wasmtimeSandbox, new BasicContextProvider(), skillsProvider],
             EnableMessageInjection = true,
             RequirePerServiceCallChatHistoryPersistence = true,
         }, loggerFactory, sp);
+
+        // AdditionalTools 由 WithDefaultAgentMiddleware 在 ChatClientAgent 构造时设置
 
         agent = new LoggingAgent(agent, log);
         agent = new ToolApprovalAgent(agent);

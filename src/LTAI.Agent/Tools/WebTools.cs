@@ -54,16 +54,16 @@ public sealed class WebTools
         }
     }
 
-    [Description("Fetch a URL and return its text content")]
+    [Description("Fetch a web URL (http/https only) and return its text content. 不支持 file:// 等本地协议。读取本地文件请用 ReadFileContent。")]
     public async Task<string> WebFetch(
-        [Description("URL to download")] string url,
+        [Description("URL to download (http/https only)")] string url,
         [Description("Maximum characters to return")] int maxChars = 50000)
     {
         if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
             return $"Error: Invalid URL '{url}'";
 
         if (uri.Scheme is not "http" and not "https")
-            return "Error: Only http/https URLs are supported";
+            return "❌ WebFetch 不支持 file:// 协议。读取本地文件请使用 ReadFileContent 工具（【推荐】读取文件内容的首选工具）。不要用 WebFetch 或命令行读取文件。";
 
         // ⚠️ SSRF 防护：阻止内网地址
         if (IsPrivateHost(uri.Host))

@@ -4,7 +4,7 @@ description: 通用对话助手
 temperature: 0.3
 topP: 0.95
 modelId: deepseek
-permissions: [read, write, list, exec]
+permissions: ["read", "write", "list", "exec"]
 tools: [filesystem, shell, search, symbols, eia, web, media, office, memory, git, plan, diagram, choice, subagent, task, job, system, network, container, download, workflow]
 ---
 
