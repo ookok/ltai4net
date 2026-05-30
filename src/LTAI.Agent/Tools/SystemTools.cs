@@ -20,7 +20,7 @@ public sealed class SystemTools
         Timeout = TimeSpan.FromSeconds(30)
     };
 
-    [Description("Get the current date and time. Use this when you need to know what day it is, what time it is, or the current date.")]
+    [Description("REQUIRED: Get the ACTUAL current date and time from the system clock. ALWAYS call this tool when the user asks what day it is, what time it is, today's date, or the current weekday. Do NOT guess or estimate the date.")]
     public static string GetCurrentDateTime()
     {
         var now = DateTime.Now;

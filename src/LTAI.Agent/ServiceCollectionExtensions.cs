@@ -473,6 +473,7 @@ public static class ServiceCollectionExtensions
         {
             Name = name,
             Description = $"你是 {name}，{description}。\n"
+                + "关于日期：当用户询问\"今天星期几\"\"现在几点\"等时间日期问题时，请直接调用 GetCurrentDateTime 工具获取实时时间，不要自行估算。\n"
                 + "工具调用注意：\n"
                 + "1. 参数必须是正确的JSON类型（数字不要加引号，布尔值用true/false）\n"
                 + "2. 不要用Markdown代码块包围工具调用\n"
