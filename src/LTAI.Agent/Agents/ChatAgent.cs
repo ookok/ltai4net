@@ -167,30 +167,10 @@ public sealed class ChatAgent
 
         if (!cantPatterns.Any(p => lower.Contains(p))) return text;
 
-        // Phase 1: 通用重试 — 让 LLM 自查工具列表（覆盖所有 150+ 工具）
+        // 高频已知场景：不走 LLM 重试（模型仍然会猜），C# 直接调 tool 注入真实数据
         var msgLower = originalMessage.ToLowerInvariant();
-        var hasSpecificTool = msgLower.Contains("星期") || msgLower.Contains("几号") || msgLower.Contains("日期") ||
-            msgLower.Contains("时间") || msgLower.Contains("几点") || msgLower.Contains("天气") ||
-            msgLower.Contains("位置") || msgLower.Contains("在哪") || msgLower.Contains("这里");
-
-        var retryPrompt = hasSpecificTool
-            ? "不要猜测，调用你已有的工具获取真实数据后回答。\n\n用户的问题是: " + originalMessage
-            : "你的回答在猜测。检查你的工具列表，调用能回答用户问题的工具获取真实信息。\n\n用户的问题是: " + originalMessage;
-
-        try
-        {
-            var retryResult = await _proAgent.RunAsync(
-                [new ChatMessage(ChatRole.User, retryPrompt)], session,
-                cancellationToken: ct).ConfigureAwait(false);
-            var retryText = retryResult.Messages?.LastOrDefault()?.Text ?? "";
-            if (!string.IsNullOrWhiteSpace(retryText) && retryText.Length > 5 &&
-                !cantPatterns.Any(p => retryText.ToLowerInvariant().Contains(p)))
-                return $"[工具]\n\n{retryText}";
-        }
-        catch { }
-
-        // Phase 2: 高频场景走 C# 侧直接获取数据注入（LLM 两轮都不调 tool 时的兜底）
         string? toolData = null;
+
         if (msgLower.Contains("星期") || msgLower.Contains("几号") || msgLower.Contains("日期") ||
             msgLower.Contains("时间") || msgLower.Contains("几点"))
             toolData = "当前真实时间: " + LTAI.Agent.Tools.SystemTools.GetCurrentDateTime();
@@ -201,17 +181,32 @@ public sealed class ChatAgent
         else if (msgLower.Contains("位置") || msgLower.Contains("在哪") || msgLower.Contains("这里"))
             toolData = await FetchIpLocationAsync(ct);
 
-        if (toolData == null) return text;
+        if (toolData != null)
+        {
+            var injectPrompt = $"以下是通过工具获取的真实数据:\n{toolData}\n\n请用这些数据直接回答用户。\n\n用户的问题是: {originalMessage}";
+            try
+            {
+                var result = await _proAgent.RunAsync(
+                    [new ChatMessage(ChatRole.User, injectPrompt)], session,
+                    cancellationToken: ct).ConfigureAwait(false);
+                var finalText = result.Messages?.LastOrDefault()?.Text ?? "";
+                if (!string.IsNullOrWhiteSpace(finalText) && finalText.Length > 5)
+                    return $"[工具]\n\n{finalText}";
+            }
+            catch { }
+            return text;
+        }
 
-        var injectPrompt = $"以下是通过工具获取的真实数据:\n{toolData}\n\n请用这些数据直接回答用户。\n\n用户的问题是: {originalMessage}";
+        // 其他 147+ 工具：通用重试让 LLM 自查工具列表
+        var retryPrompt = "你的回答在猜测。检查你的工具列表，调用能回答用户问题的工具获取真实信息。\n\n用户的问题是: " + originalMessage;
         try
         {
-            var result = await _proAgent.RunAsync(
-                [new ChatMessage(ChatRole.User, injectPrompt)], session,
+            var retryResult = await _proAgent.RunAsync(
+                [new ChatMessage(ChatRole.User, retryPrompt)], session,
                 cancellationToken: ct).ConfigureAwait(false);
-            var finalText = result.Messages?.LastOrDefault()?.Text ?? "";
-            if (!string.IsNullOrWhiteSpace(finalText) && finalText.Length > 5)
-                return $"[工具]\n\n{finalText}";
+            var retryText = retryResult.Messages?.LastOrDefault()?.Text ?? "";
+            if (!string.IsNullOrWhiteSpace(retryText) && retryText.Length > 5)
+                return $"[工具]\n\n{retryText}";
         }
         catch { }
         return text;

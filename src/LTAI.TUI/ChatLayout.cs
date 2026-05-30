@@ -70,6 +70,8 @@ public sealed class ChatLayout
                         content.Append(token);
                     }
                     done = true;
+                    // 给动画一个 tick 来检测 done 并退出
+                    await Task.Delay(10);
                     var rawText = content.ToString();
                     if (rawText.Length > 0)
                     {
