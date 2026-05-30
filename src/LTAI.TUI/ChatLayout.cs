@@ -17,7 +17,6 @@ public sealed class ChatLayout
     public async Task RenderAsync()
     {
         Console.Clear();
-        var headerHeight = 2; // title + separator
         RenderHeader();
 
         while (true)

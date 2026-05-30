@@ -83,7 +83,11 @@ public sealed class TreeSitterParser : IDisposable
 
     /// <summary>Get the TreeSitter language for a file extension.</summary>
     public bool TryGetLanguage(string extension, out string langId)
-        => ExtToLang.TryGetValue(extension, out langId);
+    {
+        // ExtToLang values are never null; TryGetValue ensures non-null on success
+        var result = ExtToLang.TryGetValue(extension, out langId!);
+        return result;
+    }
 
     /// <summary>Parse source code and return the AST tree.</summary>
     public Tree? Parse(string code, string extension)

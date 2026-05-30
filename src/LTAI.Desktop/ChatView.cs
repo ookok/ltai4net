@@ -13,6 +13,9 @@ namespace LTAI.Desktop;
 
 public sealed class ChatView : UserControl
 {
+    // 共享 HttpClient — 复用连接池，避免 socket 耗尽
+    private static readonly HttpClient _sharedHttp = new() { Timeout = TimeSpan.FromSeconds(10) };
+
     private readonly LTAIService _svc;
     private readonly TextBox _input;
     private readonly StackPanel _outputStack;
@@ -837,7 +840,7 @@ public sealed class ChatView : UserControl
             if (isUrl)
             {
                 // Download URL image to temp file
-                using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+                using var resp = await _sharedHttp.GetAsync(path);
                 var ext = ".png";
                 // Try to guess extension from URL
                 var urlPath = new Uri(path).AbsolutePath;
@@ -846,7 +849,7 @@ public sealed class ChatView : UserControl
                     ext = urlExt;
 
                 localPath = Path.Combine(Path.GetTempPath(), $"ltai_img_{Guid.NewGuid():N}{ext}");
-                var bytes = await http.GetByteArrayAsync(path);
+                var bytes = await resp.Content.ReadAsByteArrayAsync();
                 await File.WriteAllBytesAsync(localPath, bytes);
             }
             else

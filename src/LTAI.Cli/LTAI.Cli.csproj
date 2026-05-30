@@ -27,4 +27,10 @@
     <ProjectReference Include="..\LTAI.Agent\LTAI.Agent.csproj" />
   </ItemGroup>
 
+
+  <!-- 应用图标 (SVG source; convert to .ico for Windows .exe: https://convertio.co/svg-ico/) -->
+  <ItemGroup>
+    <Content Include="Assets/ltai-cli.svg" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

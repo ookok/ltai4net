@@ -1,14 +1,19 @@
 namespace LTAI.Core;
 
 /// <summary>
-/// Sandbox-safe path resolution shared across all file system tools.
+/// Sandbox-safe path resolution shared across ALL file system tools.
 /// Guards against: path traversal (../), prefix collision, and symlink escapes.
+/// Called by 11 tool classes: <see cref="LTAI.Agent.Tools.CodeAnalysisTools"/>,
+/// DirectoryTreeTools, EditFileTools, FileTools, GlobTools, MemoryTools,
+/// MultiEditTools, MultimediaTools, OfficeTools, SearchTools, Tools.
 /// </summary>
 public static class PathUtils
 {
     /// <summary>
     /// Resolve and validate a path within workspace <paramref name="ws"/>.
-    /// Returns the full resolved path if safe, or <c>null</c> if the path escapes the workspace.
+    /// Returns the full resolved path if safe, or <c>null</c> if the path escapes.
+    /// <b>Callers:</b> All 11 file-system tool classes listed above — every tool that
+    /// touches a file path must route through this method for sandbox enforcement.
     /// </summary>
     public static string? SafeResolvePath(string ws, string path)
     {
@@ -51,6 +56,7 @@ public static class PathUtils
 
     /// <summary>
     /// Resolve and validate a path, throwing <see cref="UnauthorizedAccessException"/> if unsafe.
+    /// <b>Callers:</b> EditFileTools, Tools — convenience wrapper that throws instead of returning null.
     /// </summary>
     public static string RequireSafePath(string ws, string path)
     {
@@ -61,6 +67,8 @@ public static class PathUtils
     /// <summary>
     /// Check that a file is below the maximum allowed size.
     /// Returns null if OK, or an error message string if too large.
+    /// Default max: 100 MiB. Called before read_file / write_file to prevent OOM.
+    /// <b>Callers:</b> FileTools, MultimediaTools, OfficeTools, SearchTools.
     /// </summary>
     public static string? CheckFileSize(string fp, long maxBytes = 100 * 1024 * 1024)
     {

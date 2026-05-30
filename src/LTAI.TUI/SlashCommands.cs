@@ -18,6 +18,7 @@ public static class SlashCommands
         new("compact", "聊天",  "压缩汇总历史消息", "压缩,汇总"),
         new("model",   "设置",  "切换 AI 模型", "", "model-id"),
         new("status",  "信息",  "显示当前配置和统计", "状态,统计"),
+        new("monitor", "信息",  "实时仪表盘 — Provider 状态/延迟/成本", "监控,仪表盘"),
         new("cost",    "信息",  "显示本轮预估费用", "费用,花费"),
         new("memory",  "扩展",  "管理记忆文件", "记忆"),
         new("skill",   "扩展",  "列出/运行技能", "", "技能名"),
@@ -77,6 +78,7 @@ public static class SlashCommands
             "compact" => ("Summarizing older turns...", true),
             "model" => !string.IsNullOrEmpty(args) ? ($"Switched model to '{args}'", true) : ("Usage: /model <model-id>", true),
             "status" => Status(),
+            "monitor" => Monitor(),
             "cost" => ("Cost tracking: see model provider dashboard", true),
             "memory" => ("Memory: use `remember` / `forget` tools", true),
             "skill" => !string.IsNullOrEmpty(args) ? ($"Running skill '{args}'...", true) : ("Skills: use `run_skill` tool", true),
@@ -114,6 +116,35 @@ public static class SlashCommands
         return (string.Join("\n", lines), true);
     }
 
+    private static (string, bool) Monitor()
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("[bold yellow]📊 LTAI 实时监控[/]\n");
+
+        // Provider 状态
+        sb.AppendLine("[bold]Provider 统计[/]");
+        sb.AppendLine("| Provider | 状态 | Token | 缓存命中 |");
+        sb.AppendLine("|----------|------|-------|----------|");
+        sb.AppendLine($"| DeepSeek | [green]✅[/] | {LTAI.Core.Configuration.UsageTracker.PromptTokens:N0} | {LTAI.Core.Configuration.UsageTracker.CacheHitRate:F1}% |");
+        sb.AppendLine();
+
+        // 会话统计
+        sb.AppendLine("[bold]会话统计[/]");
+        sb.AppendLine($"Token: {LTAI.Core.Configuration.UsageTracker.TotalTokens:N0} | 请求: {LTAI.Core.Configuration.UsageTracker.Requests}");
+        sb.AppendLine($"费用: {LTAI.Core.Configuration.UsageTracker.CostDisplay}");
+        sb.AppendLine($"缓存命中: {LTAI.Core.Configuration.UsageTracker.CacheHitRate:F1}%");
+        sb.AppendLine($"上下文: {LTAI.Core.Configuration.UsageTracker.ContextText()}");
+        sb.AppendLine($"运行时间: {LTAI.Core.Configuration.UsageTracker.Uptime:hh\\:mm\\:ss}");
+        sb.AppendLine();
+
+        // 模型信息
+        sb.AppendLine("[bold]模型[/]");
+        sb.AppendLine($"当前: {LTAI.Core.Configuration.UsageTracker.ActiveModel}");
+        sb.AppendLine($"余额: {LTAI.Core.Configuration.UsageTracker.BalanceDisplay}");
+
+        return (sb.ToString(), true);
+    }
+
     private static (string, bool) Status()
     {
         return ($"[bold]LTAI 状态[/]\n"
@@ -124,7 +155,7 @@ public static class SlashCommands
               + $"缓存: {LTAI.Core.Configuration.UsageTracker.CacheHitRate:F1}% | 上下文: {LTAI.Core.Configuration.UsageTracker.ContextText()}", true);
     }
 
-    /// <summary>Change working directory. Updates shared root path for all tools.</summary>
+    /// <summary>Change working directory, validated against sandbox root.</summary>
     private static (string, bool) ChangeDir(string path)
     {
         if (string.IsNullOrWhiteSpace(path))
@@ -133,14 +164,18 @@ public static class SlashCommands
         {
             var newDir = Path.GetFullPath(Path.Combine(Directory.GetCurrentDirectory(), path));
             if (!Directory.Exists(newDir)) return ($"目录不存在: {newDir}", true);
+            // 沙箱检查：不能逃逸工作区根目录
+            var root = Path.GetFullPath(_rootPath).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+            if (!newDir.StartsWith(root, StringComparison.OrdinalIgnoreCase))
+                return ($"拒绝: 路径 '{path}' 逃逸了工作区 '{_rootPath}'", true);
             Directory.SetCurrentDirectory(newDir);
             return ($"已切换到: {newDir}", true);
         }
         catch (Exception ex) { return ($"切换失败: {ex.Message}", true); }
     }
 
-    /// <summary>Update the shared root path reference (called by TuiApp on startup).</summary>
-    public static void UpdateRootPath(string root) => _rootPath = root;
+    /// <summary>Set the sandbox root (called by TuiApp on startup).</summary>
+    public static void SetRootPath(string root) => _rootPath = root;
     private static string _rootPath = Directory.GetCurrentDirectory();
 
     private static int Levenshtein(string a, string b)

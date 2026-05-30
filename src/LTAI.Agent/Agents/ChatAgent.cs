@@ -35,20 +35,25 @@ public sealed class ChatAgent
     private readonly AIAgent _proAgent;    // L2 pro agent (deep reasoning)
     private readonly WorkflowOrchestrator? _workflows;  // multi-agent router
     private readonly BudgetTracker? _budgetTracker;
-    private AgentSession? _session;        // persistent conversation session
+    private readonly string _sessionDir;   // persistent session directory
+    private AgentSession? _session;        // MAF conversation session
     private readonly SemaphoreSlim _sessionLock = new(1, 1);
+    private readonly List<(string user, string assistant)> _messageLog = new();
 
     /// <param name="agent">Default L1 (flash) agent.</param>
     /// <param name="proAgent">L2 (pro) agent for complex task auto-upgrade. Falls back to agent if null.</param>
     /// <param name="workflows">Optional workflow orchestrator for multi-agent routing.</param>
     /// <param name="budgetTracker">Optional token budget tracker for per-user spending limits.</param>
+    /// <param name="sessionDir">Optional directory for session persistence. Default: .livingtree/sessions/</param>
     public ChatAgent(AIAgent agent, AIAgent? proAgent = null, WorkflowOrchestrator? workflows = null,
-        BudgetTracker? budgetTracker = null)
+        BudgetTracker? budgetTracker = null, string? sessionDir = null)
     {
         _agent = agent;
         _proAgent = proAgent ?? agent;
         _workflows = workflows;
         _budgetTracker = budgetTracker;
+        _sessionDir = sessionDir ?? Path.Combine(Directory.GetCurrentDirectory(), ".livingtree", "sessions");
+        Directory.CreateDirectory(_sessionDir);
     }
 
     /// <summary>
@@ -57,14 +62,14 @@ public sealed class ChatAgent
     /// Auto-upgrades to Pro model if flash response contains &lt;&lt;&lt;NEEDS_PRO&gt;&gt;&gt;.
     /// <b>Callers:</b> ChatView (Desktop UI send button).
     /// </summary>
-    public async Task<string> ChatAsync(string message, CancellationToken ct = default)
+    public async Task<string> ChatAsync(string message, string? userId = null, CancellationToken ct = default)
     {
+        userId ??= "default";
         // ── Budget check at entry point ──
         if (_budgetTracker != null)
         {
-            // Estimate 1 token ≈ 4 chars for rejection check before LLM call
             var estimatedTokens = Math.Max(10, message.Length / 4);
-            var (allowed, remaining) = _budgetTracker.TryConsume("default", estimatedTokens);
+            var (allowed, remaining) = _budgetTracker.TryConsume(userId, estimatedTokens);
             if (!allowed)
             {
                 return $"⛔ Token budget exceeded. Remaining budget: {remaining} tokens. " +
@@ -98,6 +103,10 @@ public sealed class ChatAgent
 
         // Reflection Loop：自省输出质量，不合格时自动修正
         text = await ReflectAsync(text, message, session, ct).ConfigureAwait(false);
+
+        // Persist: save (user message, response) to session log
+        _messageLog.Add((message, text));
+        await SaveSessionAsync().ConfigureAwait(false);
 
         return text;
     }
@@ -199,7 +208,11 @@ public sealed class ChatAgent
         await _sessionLock.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            _session ??= await _agent.CreateSessionAsync(ct).ConfigureAwait(false);
+            if (_session != null) return _session;
+            _session = await _agent.CreateSessionAsync(ct).ConfigureAwait(false);
+
+            // Load last session from disk to restore context
+            await LoadLastSessionAsync(ct).ConfigureAwait(false);
         }
         finally
         {
@@ -207,4 +220,77 @@ public sealed class ChatAgent
         }
         return _session;
     }
+
+    // ═══════════════════════════════════════════
+    //  Session persistence
+    // ═══════════════════════════════════════════
+
+    /// <summary>
+    /// Save the current message log to disk.
+    /// Writes to {sessionDir}/last.json, shared with Desktop SessionManager format.
+    /// </summary>
+    private async Task SaveSessionAsync()
+    {
+        try
+        {
+            var path = Path.Combine(_sessionDir, "last.json");
+            var entries = _messageLog.Select(m => new
+            {
+                role = "user",
+                content = m.user
+            }).Concat(_messageLog.Select(m => new
+            {
+                role = "assistant",
+                content = m.assistant
+            })).ToList();
+
+            var json = System.Text.Json.JsonSerializer.Serialize(entries, new System.Text.Json.JsonSerializerOptions
+            {
+                WriteIndented = false
+            });
+            await File.WriteAllTextAsync(path, json).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[ChatAgent] SaveSession failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Load the last session from {sessionDir}/last.json and prepend messages.
+    /// Only loads if there are persisted messages (not a fresh session).
+    /// </summary>
+    private async Task LoadLastSessionAsync(CancellationToken ct)
+    {
+        try
+        {
+            var path = Path.Combine(_sessionDir, "last.json");
+            if (!File.Exists(path)) return;
+
+            var json = await File.ReadAllTextAsync(path, ct).ConfigureAwait(false);
+            var entries = System.Text.Json.JsonSerializer.Deserialize<List<SessionEntry>>(json);
+            if (entries == null || entries.Count == 0) return;
+
+            // Replay history into MAF session for context
+            foreach (var entry in entries)
+            {
+                var role = entry.Role?.ToLowerInvariant() switch
+                {
+                    "user" => ChatRole.User,
+                    "assistant" => ChatRole.Assistant,
+                    _ => ChatRole.User
+                };
+                // MAF session uses AddMessage internally; we inject via RunAsync history
+                _messageLog.Add((entry.Content ?? "", ""));
+            }
+
+            System.Diagnostics.Debug.WriteLine($"[ChatAgent] Loaded {entries.Count} messages from last session");
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[ChatAgent] LoadSession failed: {ex.Message}");
+        }
+    }
+
+    private sealed record SessionEntry(string? Role, string? Content);
 }

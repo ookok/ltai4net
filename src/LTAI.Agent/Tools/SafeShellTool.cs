@@ -42,10 +42,32 @@ public sealed class SafeShellTool
             return $"⚠️ 需要执行 shell 命令，但尚未确认。\n命令: `{command}`\n目录: {cwd}\n"
                  + "请用户确认后重新调用，设置 confirm=true。";
 
-        // ⚠️ 安全：禁止危险命令
+        // ⚠️ 安全：禁止危险命令（token 级白名单 + 模式匹配双重防护）
         var cmdLower = command.ToLowerInvariant();
-        var dangerous = new[] { "rm -rf /", "rm -rf ~", "sudo ", "> /dev/", "dd if=", ":(){ :|:& };:", "eval ", "exec " };
-        if (dangerous.Any(d => cmdLower.Contains(d)))
+        var parts = command.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var executable = parts.Length > 0 ? parts[0].Trim() : "";
+        var executableName = Path.GetFileName(executable.AsSpan()).ToString();
+
+        // 1. 按可执行文件名阻止（token 级，无假阳性）
+        var blockedExes = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "sudo", "su", "chmod", "chown", "mkfs", "fdisk",
+            "dd", "shutdown", "reboot", "init", "halt", "poweroff",
+            "passwd", "useradd", "usermod", "groupadd", "fuser", "kill",
+            "mount", "umount", "iptables", "ufw", "systemctl",
+        };
+        if (blockedExes.Contains(executableName))
+            return "❌ 命令包含危险操作，已阻止";
+
+        // 2. 按命令全文模式匹配（捕获复合危险命令）
+        var dangerousPatterns = new[]
+        {
+            "rm -rf /", "rm -rf ~", "rm -rf --no-preserve-root",
+            ":(){ :|:& };:", "eval ", "exec ",
+            "> /dev/", "dd if=", "wget -O - | sh", "curl .* | sh",
+            "bash -c", "python -c '", "perl -e '",
+        };
+        if (dangerousPatterns.Any(p => cmdLower.Contains(p)))
             return "❌ 命令包含危险操作，已阻止";
 
         // 白名单检查

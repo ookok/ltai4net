@@ -64,7 +64,7 @@ public sealed class KbGraph : AIContextProvider
         {
             try
             {
-                var localEmb = new LocalEmbedder();
+                var localEmb = GetSharedEmbedder();
                 if (localEmb.Available)
                 {
                     var queryEmb = localEmb.Generate(query);
@@ -87,7 +87,6 @@ public sealed class KbGraph : AIContextProvider
                     ftsHits = ftsHits.Where(h => fusedIds.Contains(h.nodeId)).ToList();
                     _logger.LogInformation("KbGraph: FTS5+Vector RRF fusion, {N} results", ftsHits.Count);
                 }
-                localEmb.Dispose();
             }
             catch (Exception ex)
             {
@@ -184,7 +183,7 @@ public sealed class KbGraph : AIContextProvider
     public async Task<string> IngestDocument(string id, string title, string content,
         string source = "", string lang = "zh")
     {
-        var nodeId = _store.UpsertNode(
+        var nodeId = await _store.UpsertNode(
             extId: $"doc:{id}",
             kind: "document",
             name: title,
@@ -192,16 +191,16 @@ public sealed class KbGraph : AIContextProvider
             signature: $"len:{content.Length}",
             source: source);
 
-        _store.AddDoc(nodeId, content, lang, source);
+        await _store.AddDoc(nodeId, content, lang, source);
 
         var concepts = ExtractConcepts(title, content);
         foreach (var concept in concepts.Take(15))
         {
-            var cid = _store.UpsertNode(
+            var cid = await _store.UpsertNode(
                 extId: $"concept:{concept.ToLowerInvariant().Replace(" ", "_")}",
                 kind: "concept",
                 name: concept);
-            _store.AddEdge(nodeId, cid, "contains");
+            await _store.AddEdge(nodeId, cid, "contains");
         }
 
         _logger.LogInformation("KbGraph: ingested '{Id}' ({T}) with {C} concepts",
@@ -217,19 +216,19 @@ public sealed class KbGraph : AIContextProvider
             ["content"] = content,
             ["category"] = category
         };
-        var nodeId = _store.UpsertNode(
+        var nodeId = await _store.UpsertNode(
             extId: $"fact:{id}",
             kind: "fact",
             name: content.Length > 100 ? content[..100] + "…" : content,
             ns: category,
             props: props);
 
-        _store.AddDoc(nodeId, content, "zh", source: "");
+        await _store.AddDoc(nodeId, content, "zh", source: "");
 
         if (sourceId != null)
         {
             var src = _store.GetNodeByExtId(sourceId);
-            if (src != null) _store.AddEdge(src.Id, nodeId, "has_fact");
+            if (src != null) await _store.AddEdge(src.Id, nodeId, "has_fact");
         }
         return $"Ingested fact '{id}'";
     }
@@ -242,9 +241,25 @@ public sealed class KbGraph : AIContextProvider
     /// LLM query expansion: generates 3 groups of search terms —
     /// core keywords, synonyms/related terms, and English equivalents (for Chinese queries).
     /// </summary>
+    /// <summary>
+    /// L0 短路判断：简单查询直接返回，不触发 LLM rewrite。
+    /// 简单条件：≤4 个词、无特殊符号、无代码标记。
+    /// </summary>
+    private static bool IsSimpleQuery(string query)
+    {
+        if (string.IsNullOrWhiteSpace(query) || query.Length > 50) return false;
+        var wordCount = query.Split([' ', '，', '。', '、'], StringSplitOptions.RemoveEmptyEntries).Length;
+        if (wordCount > 4) return false;
+        // 包含代码特殊字符 → 走 LLM
+        if (query.Any(c => c is '_' or '.' or '/' or '\\' or '(' or ')' or '[' or ']' or '<' or '>'))
+            return false;
+        return true;
+    }
+
     private async Task<string> ExpandQueryAsync(string query, CancellationToken ct)
     {
-        if (_rewriter == null) return query;
+        // L0 短路：简单查询不触发 LLM
+        if (_rewriter == null || IsSimpleQuery(query)) return query;
         try
         {
             var prompt = $"""
@@ -274,6 +289,11 @@ public sealed class KbGraph : AIContextProvider
         }
         catch { return query; }
     }
+
+    // 共享 LocalEmbedder 实例 — 避免每次查询都加载 90MB ONNX 模型
+    private static readonly Lazy<LocalEmbedder> _sharedEmbedder = new(() => new LocalEmbedder(), true);
+
+    private static LocalEmbedder GetSharedEmbedder() => _sharedEmbedder.Value;
 
     private static string FormatNode(NodeRow node)
     {

@@ -9,7 +9,7 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.AI" Version="10.6.0" />
-    <PackageReference Include="Microsoft.Agents.AI" Version="1.8.0" />
+    <PackageReference Include="Microsoft.Agents.AI" Version="$(MAFVersion)" />
     <PackageReference Include="OpenTelemetry.Extensions.Hosting" Version="1.15.3" />
     <PackageReference Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.15.2" />
     <PackageReference Include="OpenTelemetry.Instrumentation.Http" Version="1.15.1" />

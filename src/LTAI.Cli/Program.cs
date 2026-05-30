@@ -10,8 +10,9 @@ partial class Program
 {
     public static int Main(string[] args)
     {
+        Console.Title = "LTAI CLI";
         AnsiConsole.Write(new FigletText("LTAI CLI").Color(Color.Green));
-        AnsiConsole.MarkupLine("[grey]LivingTree AI — MS Agent Framework 1.8.0[/]");
+        AnsiConsole.MarkupLine("[grey]LivingTree AI — Agent Framework[/] [blue]⚡[/]");
 
         if (args.Length == 0)
         {
@@ -28,6 +29,7 @@ partial class Program
             "migrate" => HandleMigrate(args[1..]),
             "textpad" => HandleTextPad(args[1..]),
             "dashboard" or "dash" => HandleDashboard(),
+            "health" or "--health" or "hc" => HandleHealth(),
             "version" or "--version" or "-v" => ShowVersion(),
             _ => ShowHelp()
         };
@@ -45,7 +47,8 @@ partial class Program
         table.AddRow("env import <path>", "Import env vars from JSON file");
         table.AddRow("migrate", "迁移 LiteDB → SQLite 知识图谱");
         table.AddRow("textpad [path]", "文件浏览器/编辑器");
-        table.AddRow("dashboard", "实时仪表盘");
+        table.AddRow("dashboard or dash", "实时仪表盘");
+        table.AddRow("health", "系统健康检查 — 组件/磁盘/缓存诊断");
         table.AddRow("version", "Show version");
         AnsiConsole.Write(table);
         return 0;
@@ -336,6 +339,98 @@ partial class Program
         AnsiConsole.MarkupLine($"[bold]LTAI CLI[/] v{ver}");
         AnsiConsole.MarkupLine("[grey]Agent Framework: Microsoft.Agents.AI 1.8.0[/]");
         return 0;
+    }
+
+    // ═══════════════════════════════════════════
+    //  health — 系统健康检查
+    // ═══════════════════════════════════════════
+
+    private static int HandleHealth()
+    {
+        AnsiConsole.MarkupLine("[bold]🔍 LTAI 系统健康检查[/]\n");
+
+        var allPass = true;
+
+        // 1. KgStore 可访问性
+        try
+        {
+            var dbPath = Path.Combine(Directory.GetCurrentDirectory(), ".livingtree", "kg.db");
+            if (File.Exists(dbPath))
+            {
+                using var store = new KgStore(dbPath);
+                AnsiConsole.MarkupLine($"[green]✅ KgStore[/] — 节点: [bold]{store.NodeCount()}[/] — {new FileInfo(dbPath).Length / 1024}KB");
+                store.Dispose();
+            }
+            else
+            {
+                AnsiConsole.MarkupLine("[yellow]⚠️  KgStore[/] — 数据库尚未创建 (首次运行会自动创建)");
+            }
+        }
+        catch (Exception ex)
+        {
+            AnsiConsole.MarkupLine($"[red]❌ KgStore[/] — {ex.Message.EscapeMarkup()}");
+            allPass = false;
+        }
+
+        // 2. LLM 提供商
+        try
+        {
+            var keys = new[] { ("DeepSeek","DEEPSEEK_API_KEY"), ("OpenAI","OPENAI_API_KEY"),
+                ("SiliconFlow","SILICONFLOW_API_KEY"), ("Brave","BRAVE_API_KEY") };
+            foreach (var (name, env) in keys)
+            {
+                var hasKey = !string.IsNullOrEmpty(LTAI.Core.Configuration.SecretManager.Get(env));
+                AnsiConsole.MarkupLine(hasKey
+                    ? $"[green]  ✅ {name}[/] — API Key 已配置"
+                    : $"[grey]  —   {name}[/] — 未设置 (可选)");
+            }
+        }
+        catch (Exception ex)
+        {
+            AnsiConsole.MarkupLine($"[red]  ❌ LLM 提供商检查失败: {ex.Message.EscapeMarkup()}[/]");
+            allPass = false;
+        }
+
+        // 3. 磁盘空间
+        try
+        {
+            var drive = DriveInfo.GetDrives().FirstOrDefault(d => d.IsReady);
+            if (drive != null)
+            {
+                var freeGb = drive.AvailableFreeSpace / 1.0 / (1024 * 1024 * 1024);
+                var status = freeGb > 1 ? "[green]" : "[yellow]";
+                AnsiConsole.MarkupLine($"{status}  💾 磁盘[/] — {drive.Name} 剩余 {freeGb:F1}GB");
+            }
+        }
+        catch { /* skip disk check on restricted systems */ }
+
+        // 4. 缓存 / 运行时状态
+        AnsiConsole.MarkupLine($"[grey]  📊 缓存命中[/] — {LTAI.Core.Configuration.UsageTracker.CacheHitRate:F1}% ({LTAI.Core.Configuration.UsageTracker.CacheHits}/{LTAI.Core.Configuration.UsageTracker.CacheMisses + LTAI.Core.Configuration.UsageTracker.CacheHits})");
+        AnsiConsole.MarkupLine($"[grey]  💰 费用[/] — {LTAI.Core.Configuration.UsageTracker.CostDisplay} | {LTAI.Core.Configuration.UsageTracker.TotalTokens:N0} tokens[/]");
+        AnsiConsole.MarkupLine($"[grey]  🕐 运行时间[/] — {LTAI.Core.Configuration.UsageTracker.Uptime:hh\\:mm\\:ss}");
+
+        // 5. 网络可达性
+        try
+        {
+            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
+            var pingTask = http.GetAsync("https://api.deepseek.com/v1/models");
+            if (pingTask.Wait(TimeSpan.FromSeconds(3)))
+            {
+                using var resp = pingTask.Result;
+                AnsiConsole.MarkupLine(resp.IsSuccessStatusCode
+                    ? $"[green]  ✅ 网络[/] — DeepSeek API 可达 ({resp.StatusCode})"
+                    : $"[yellow]  ⚠️  网络[/] — DeepSeek 返回 {(int)resp.StatusCode}");
+            }
+            else
+                AnsiConsole.MarkupLine("[yellow]  ⚠️  网络[/] — DeepSeek API 超时 (3s)");
+        }
+        catch (Exception ex)
+        {
+            AnsiConsole.MarkupLine($"[yellow]  ⚠️  网络[/] — {ex.Message.EscapeMarkup()}");
+        }
+
+        AnsiConsole.MarkupLine(allPass ? "\n[bold green]✅ 所有检查通过[/]" : "\n[bold yellow]⚠️  部分检查未通过，请查看上方详情[/]");
+        return allPass ? 0 : 1;
     }
 
     // ═══════════════════════════════════════════

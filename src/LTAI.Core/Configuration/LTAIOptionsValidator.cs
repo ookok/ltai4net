@@ -3,11 +3,19 @@ using Microsoft.Extensions.Options;
 namespace LTAI.Core.Configuration;
 
 /// <summary>
-/// Validates <see cref="LTAIOptions"/> at startup to catch misconfiguration early.
-/// Registered via <c>services.AddSingleton&lt;IValidateOptions&lt;LTAIOptions&gt;, LTAIOptionsValidator&gt;()</c>.
+/// Startup-time validator for <see cref="LTAIOptions"/>.
+/// Catches misconfiguration (empty provider, invalid port, etc.) before the app starts.
+/// Registered via <c>services.AddSingleton&lt;IValidateOptions&lt;LTAIOptions&gt;, LTAIOptionsValidator&gt;()</c>
+/// in <see cref="ServiceCollectionExtensions.AddLTAICore"/>.
+/// <b>Consumers:</b> Called automatically by .NET Options validation at DI resolution time.
 /// </summary>
 public sealed class LTAIOptionsValidator : IValidateOptions<LTAIOptions>
 {
+    /// <summary>
+    /// Validate all LTAIOptions fields. Returns Fail with error list if any check fails.
+    /// Validates: AI.DefaultProvider not empty, MaxTokens 1-1M, Temperature 0-2,
+    /// Global/PerUser budgets >0, Web.Port 1-65535, MaxHistoryMessages 1-10000.
+    /// </summary>
     public ValidateOptionsResult Validate(string? name, LTAIOptions options)
     {
         var errors = new List<string>();

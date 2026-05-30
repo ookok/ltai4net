@@ -27,4 +27,10 @@
     <ProjectReference Include="..\LTAI.Agent\LTAI.Agent.csproj" />
   </ItemGroup>
 
+
+  <!-- 应用图标 -->
+  <ItemGroup>
+    <Content Include="Assets/ltai-tui.svg" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

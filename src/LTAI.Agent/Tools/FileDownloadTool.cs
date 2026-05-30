@@ -9,6 +9,12 @@ namespace LTAI.Agent.Tools;
 /// </summary>
 public static class FileDownloadTool
 {
+    // 共享 HttpClient — 复用连接池，避免 socket 耗尽
+    private static readonly HttpClient _sharedHttp = new()
+    {
+        Timeout = TimeSpan.FromMinutes(10)
+    };
+
     [Description("从 URL 下载文件到本地工作目录，需要用户确认才能执行。")]
     public static async Task<string> DownloadFile(
         [Description("文件下载地址")] string url,
@@ -25,6 +31,18 @@ public static class FileDownloadTool
             IsPrivateHost(uri.Host))
             return "Error: 不支持的 URL";
 
+        // DNS rebinding 防护：解析到 IP 后二次验证
+        try
+        {
+            var addresses = await System.Net.Dns.GetHostAddressesAsync(uri.Host);
+            if (addresses.Any(addr => IsPrivateIP(addr)))
+                return "Error: 目标地址解析到内网 IP，已阻止下载";
+        }
+        catch
+        {
+            return "Error: DNS 解析失败";
+        }
+
         var ws = Directory.GetCurrentDirectory();
         var fp = Path.GetFullPath(Path.Combine(ws, savePath));
 
@@ -36,8 +54,7 @@ public static class FileDownloadTool
             var dir = Path.GetDirectoryName(fp);
             if (dir != null) Directory.CreateDirectory(dir);
 
-            using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
-            using var resp = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
+            using var resp = await _sharedHttp.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
             resp.EnsureSuccessStatusCode();
 
             var totalBytes = resp.Content.Headers.ContentLength ?? -1;
@@ -64,19 +81,75 @@ public static class FileDownloadTool
     /// <summary>SSRF 防护：检查是否是私有/内网地址。</summary>
     private static bool IsPrivateHost(string host)
     {
+        if (string.IsNullOrEmpty(host)) return true;
         if (host.Equals("127.0.0.1") || host.Equals("localhost") ||
-            host.Equals("::1") || host.Equals("[::1]"))
+            host.Equals("::1") || host.Equals("[::1]") ||
+            host.Equals("0.0.0.0") || host.Equals("[::]"))
             return true;
         if (System.Net.IPAddress.TryParse(host, out var ip))
         {
             byte[] b = ip.GetAddressBytes();
-            if (b.Length == 4)
+            if (b.Length == 4) // IPv4
             {
                 if (b[0] == 10) return true;
                 if (b[0] == 172 && b[1] >= 16 && b[1] <= 31) return true;
                 if (b[0] == 192 && b[1] == 168) return true;
                 if (b[0] == 127) return true;
+                if (b[0] == 169 && b[1] == 254) return true; // link-local
+                if (b[0] == 0) return true; // 0.0.0.0/8
             }
+            else if (b.Length == 16) // IPv6
+            {
+                // IPv4-mapped IPv6 (::ffff:10.x.x.x)
+                if (b[10] == 0xff && b[11] == 0xff)
+                {
+                    if (b[12] == 10) return true;
+                    if (b[12] == 172 && b[13] >= 16 && b[13] <= 31) return true;
+                    if (b[12] == 192 && b[13] == 168) return true;
+                    if (b[12] == 127) return true;
+                    if (b[12] == 169 && b[13] == 254) return true;
+                    if (b[12] == 0) return true;
+                }
+                // Unique local address (fc00::/7)
+                if ((b[0] & 0xfe) == 0xfc) return true;
+                // Link-local (fe80::/10)
+                if (b[0] == 0xfe && (b[1] & 0xc0) == 0x80) return true;
+                // Loopback (::1) already checked above
+            }
+        }
+        return false;
+    }
+
+    /// <summary>DNS rebinding 防护：检查 IP 是否属于私有地址段。</summary>
+    private static bool IsPrivateIP(System.Net.IPAddress ip)
+    {
+        byte[] b = ip.GetAddressBytes();
+        if (b.Length == 4) // IPv4
+        {
+            if (b[0] == 10) return true;
+            if (b[0] == 172 && b[1] >= 16 && b[1] <= 31) return true;
+            if (b[0] == 192 && b[1] == 168) return true;
+            if (b[0] == 127) return true;
+            if (b[0] == 169 && b[1] == 254) return true;
+            if (b[0] == 0) return true;
+        }
+        else if (b.Length == 16) // IPv6
+        {
+            if (b[10] == 0xff && b[11] == 0xff)
+            {
+                if (b[12] == 10) return true;
+                if (b[12] == 172 && b[13] >= 16 && b[13] <= 31) return true;
+                if (b[12] == 192 && b[13] == 168) return true;
+                if (b[12] == 127) return true;
+                if (b[12] == 169 && b[13] == 254) return true;
+                if (b[12] == 0) return true;
+            }
+            if ((b[0] & 0xfe) == 0xfc) return true;       // ULA
+            if (b[0] == 0xfe && (b[1] & 0xc0) == 0x80) return true; // link-local
+            if (b[0] == 0 && b[1] == 0 && b[2] == 0 && b[3] == 0
+             && b[4] == 0 && b[5] == 0 && b[6] == 0 && b[7] == 0
+             && b[8] == 0 && b[9] == 0 && b[10] == 0 && b[11] == 0
+             && b[12] == 0 && b[13] == 0 && b[14] == 0 && b[15] == 1) return true; // ::1
         }
         return false;
     }

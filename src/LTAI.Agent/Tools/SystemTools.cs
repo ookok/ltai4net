@@ -14,6 +14,12 @@ namespace LTAI.Agent.Tools;
 /// </summary>
 public sealed class SystemTools
 {
+    // 共享 HttpClient — 复用连接池，避免 socket 耗尽
+    private static readonly HttpClient _sharedHttp = new()
+    {
+        Timeout = TimeSpan.FromSeconds(30)
+    };
+
     [Description("Get system information: OS, CPU, memory, disk, runtime")]
     public static string SystemInfo()
     {
@@ -225,9 +231,9 @@ public sealed class SystemTools
     {
         try
         {
-            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(Math.Clamp(timeoutSec, 1, 60)) };
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(Math.Clamp(timeoutSec, 1, 60)));
             var sw = Stopwatch.StartNew();
-            var resp = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
+            var resp = await _sharedHttp.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, cts.Token);
             sw.Stop();
 
             // Read only first 2KB to avoid downloading large responses
@@ -287,9 +293,12 @@ public sealed class SystemTools
         try
         {
             // Use rdap.org for free WHOIS replacement
-            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
-            http.DefaultRequestHeaders.UserAgent.ParseAdd("LTAI/1.0");
-            var resp = await http.GetStringAsync($"https://rdap.org/domain/{domain}");
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+            using var req = new HttpRequestMessage(HttpMethod.Get, $"https://rdap.org/domain/{domain}");
+            req.Headers.UserAgent.ParseAdd("LTAI/1.0");
+            using var httpResp = await _sharedHttp.SendAsync(req, cts.Token);
+            httpResp.EnsureSuccessStatusCode();
+            var resp = await httpResp.Content.ReadAsStringAsync();
             using var doc = System.Text.Json.JsonDocument.Parse(resp);
 
             var sb = new StringBuilder();

@@ -66,7 +66,10 @@ public static class TextPadView
                 .Where(f => TextExts.Contains(Path.GetExtension(f)))
                 .Select(f => $"{Icon(f)} {Path.GetFileName(f)}"));
         }
-        catch { }
+        catch
+        {
+            // 非关键：文件读取失败时返回空列表
+        }
         return items;
     }
 

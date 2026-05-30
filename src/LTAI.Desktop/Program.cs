@@ -86,7 +86,7 @@ public sealed class LTAIService
     {
         Interlocked.Increment(ref _requests);
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        var response = await Chat.ChatAsync(message, ct);
+        var response = await Chat.ChatAsync(message, userId: null, ct: ct);
         sw.Stop();
         Interlocked.Add(ref _totalMs, sw.ElapsedMilliseconds);
         // Estimate tokens: roughly characters / 4

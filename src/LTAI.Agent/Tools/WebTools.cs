@@ -243,18 +243,39 @@ public sealed class WebTools
     /// <summary>SSRF 防护：检查是否是私有/内网地址。</summary>
     private static bool IsPrivateHost(string host)
     {
+        if (string.IsNullOrEmpty(host)) return true;
         if (host.Equals("127.0.0.1") || host.Equals("localhost") ||
-            host.Equals("::1") || host.Equals("[::1]"))
+            host.Equals("::1") || host.Equals("[::1]") ||
+            host.Equals("0.0.0.0") || host.Equals("[::]"))
             return true;
         if (System.Net.IPAddress.TryParse(host, out var ip))
         {
             byte[] b = ip.GetAddressBytes();
-            if (b.Length == 4)
+            if (b.Length == 4) // IPv4
             {
                 if (b[0] == 10) return true;
                 if (b[0] == 172 && b[1] >= 16 && b[1] <= 31) return true;
                 if (b[0] == 192 && b[1] == 168) return true;
                 if (b[0] == 127) return true;
+                if (b[0] == 169 && b[1] == 254) return true; // link-local
+                if (b[0] == 0) return true; // 0.0.0.0/8
+            }
+            else if (b.Length == 16) // IPv6
+            {
+                // IPv4-mapped IPv6 (::ffff:10.x.x.x)
+                if (b[10] == 0xff && b[11] == 0xff)
+                {
+                    if (b[12] == 10) return true;
+                    if (b[12] == 172 && b[13] >= 16 && b[13] <= 31) return true;
+                    if (b[12] == 192 && b[13] == 168) return true;
+                    if (b[12] == 127) return true;
+                    if (b[12] == 169 && b[13] == 254) return true;
+                    if (b[12] == 0) return true;
+                }
+                // Unique local address (fc00::/7)
+                if ((b[0] & 0xfe) == 0xfc) return true;
+                // Link-local (fe80::/10)
+                if (b[0] == 0xfe && (b[1] & 0xc0) == 0x80) return true;
             }
         }
         return false;

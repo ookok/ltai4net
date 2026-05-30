@@ -59,7 +59,7 @@ public sealed class TextPadView : UserControl
             LineNumbersForeground = LtaiTheme.Sbb(LtaiTheme.TextDim),
             WordWrap = false,
         };
-        try { _editor.SyntaxHighlighting = HighlightingManager.Instance.GetDefinition("C#"); } catch { }
+        try { _editor.SyntaxHighlighting = HighlightingManager.Instance.GetDefinition("C#"); } catch { /* 语法高亮定义不可用（非关键）*/ }
 
         _toggleBtn = new Button
         {
@@ -148,7 +148,10 @@ public sealed class TextPadView : UserControl
                 items.Add(node);
             }
         }
-        catch { }
+        catch
+        {
+            // 非关键：语法高亮设置失败时跳过
+        }
     }
 
     private void OnTreeSelectionChanged(object? s, SelectionChangedEventArgs e)
@@ -171,7 +174,7 @@ public sealed class TextPadView : UserControl
                 ".md" => "Markdown", ".yaml" or ".yml" => "YAML",
                 ".sh" or ".bash" => "PowerShell", _ => null,
             };
-            try { _editor.SyntaxHighlighting = hlName != null ? HighlightingManager.Instance.GetDefinition(hlName) : null; } catch { }
+            try { _editor.SyntaxHighlighting = hlName != null ? HighlightingManager.Instance.GetDefinition(hlName) : null; } catch { /* 语法高亮不可用 */ }
             _editor.IsReadOnly = !CodeExts.Contains(ext);
             _isReadOnly = _editor.IsReadOnly;
             _toggleBtn.Content = _isReadOnly ? "🔓 编辑" : "🔒 只读";

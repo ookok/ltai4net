@@ -7,6 +7,9 @@ using WP = DocumentFormat.OpenXml.Wordprocessing;
 
 namespace LTAI.Agent.Tools;
 
+// OpenXml 的 StringValue/UInt32Value 隐式转换在有效 OpenXml 文件中不会为 null。
+// CS8604 在此文件中是安全的设计约束，不是 bug。
+#pragma warning disable CS8604
 public sealed class OfficeTools
 {
     private readonly string _ws;
@@ -38,7 +41,7 @@ public sealed class OfficeTools
                 var vals = new List<string>();
                 for (int c = c1; c <= c2; c++)
                 {
-                    var cl = cells.FirstOrDefault(x => GetColIdx(x.CellReference!) == c);
+                    var cl = cells.FirstOrDefault(x => x.CellReference?.Value != null && GetColIdx(x.CellReference) == c);
                     vals.Add(GetVal(cl, sst));
                 }
                 sb.AppendLine("R" + r + ": " + string.Join(" | ", vals));
@@ -186,10 +189,10 @@ public sealed class OfficeTools
                 var cells = row.Descendants<SS.Cell>().ToList();
                 for (int c = c1; c <= c2; c++)
                 {
-                    var cl = cells.FirstOrDefault(x => GetColIdx(x.CellReference!) == c);
+                    var cl = cells.FirstOrDefault(x => x.CellReference?.Value != null && GetColIdx(x.CellReference) == c);
                     if (cl == null) continue;
 
-                    var ref_ = cl.CellReference!;
+                    var ref_ = cl.CellReference?.Value ?? "?";
                     var val = GetVal(cl, wb.SharedStringTablePart?.SharedStringTable);
                     sb.AppendLine("### " + ref_ + " = \"" + (val.Length > 30 ? val[..30] + "..." : val) + "\"");
 
@@ -370,11 +373,11 @@ public sealed class OfficeTools
     {
         var s = wb.Workbook!.Descendants<SS.Sheet>().FirstOrDefault(x => x.Name == name);
         if (s == null && int.TryParse(name, out int i)) s = wb.Workbook.Descendants<SS.Sheet>().Skip(i).FirstOrDefault();
-        return s?.Id != null ? (DocumentFormat.OpenXml.Packaging.WorksheetPart)wb.GetPartById(s.Id) : null;
+        return s?.Id?.Value != null ? (DocumentFormat.OpenXml.Packaging.WorksheetPart)wb.GetPartById(s.Id) : null;
     }
     private static (int, int, int, int) ParseRange(string? r, List<SS.Row> rows)
     {
-        if (string.IsNullOrEmpty(r)) return (1, rows.Count > 0 ? (int)(uint)rows.Max(x => x.RowIndex!) : 100, 1, 10);
+        if (string.IsNullOrEmpty(r)) return (1, rows.Count > 0 ? (int)(rows.Max(x => (uint?)x.RowIndex) ?? 100) : 100, 1, 10);
         var m = System.Text.RegularExpressions.Regex.Match(r, @"([A-Z]+)(\d+):([A-Z]+)(\d+)");
         if (m.Success) return (int.Parse(m.Groups[2].Value), int.Parse(m.Groups[4].Value), GetColIdx(m.Groups[1].Value), GetColIdx(m.Groups[3].Value));
         return (1, 100, 1, 10);
@@ -389,9 +392,18 @@ public sealed class OfficeTools
     private static SS.Cell GetOrCreateCell(SS.SheetData d, string r)
     {
         var m = System.Text.RegularExpressions.Regex.Match(r, @"([A-Z]+)(\d+)");
+        if (!m.Success) throw new ArgumentException($"Invalid cell reference: {r}");
         var row = uint.Parse(m.Groups[2].Value);
         var re = d.Elements<SS.Row>().FirstOrDefault(x => x.RowIndex == row) ?? d.AppendChild(new SS.Row { RowIndex = row });
-        return re.Elements<SS.Cell>().FirstOrDefault(x => x.CellReference == r) ?? re.AppendChild(new SS.Cell { CellReference = r });
+        return re.Elements<SS.Cell>().FirstOrDefault(x => x.CellReference?.Value == r) ?? re.AppendChild(new SS.Cell { CellReference = r });
     }
-    private static int GetColIdx(string r) { int i = 0; foreach (char c in r.Where(char.IsLetter)) i = i * 26 + (char.ToUpper(c) - 'A' + 1); return i; }
+    private static int GetColIdx(string r)
+    {
+        if (string.IsNullOrEmpty(r)) return 0;
+        int i = 0;
+        foreach (char c in r.Where(char.IsLetter))
+            i = i * 26 + (char.ToUpper(c) - 'A' + 1);
+        return i;
+    }
 }
+#pragma warning restore CS8604

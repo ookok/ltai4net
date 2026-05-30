@@ -74,7 +74,7 @@ public sealed class IntegrationTools
     public async Task<string> IpLocation(string? ip = null)
     {
         if (!string.IsNullOrEmpty(K("AMAP_KEY")))
-            try { return await G($"https://restapi.amap.com/v3/ip?key={K("AMAP_KEY")}&output=JSON{(ip != null ? $"&ip={E(ip)}" : "")}", "province", r => $"🌐 {r}"); } catch { /* AMAP not configured — fallback */ }
+            try { return await G($"https://restapi.amap.com/v3/ip?key={K("AMAP_KEY")}&output=JSON{(ip != null ? $"&ip={E(ip)}" : "")}", "province", r => $"🌐 {r}") ?? "No location data"; } catch { /* AMAP not configured — fallback */ }
         try { var j = await H().GetFromJsonAsync<JsonElement>(ip != null ? $"http://ip-api.com/json/{ip}" : "http://ip-api.com/json"); return $"🌐 {GStr(j,"city")}, {GStr(j,"regionName")}, {GStr(j,"country")}"; } catch (Exception ex) { return $"IP error: {ex.Message}"; }
     }
 

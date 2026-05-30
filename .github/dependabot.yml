@@ -1,40 +1,6 @@
 version: 2
 updates:
-
-  - package-ecosystem: "nuget"
-    directory: "/src/LTAI.Agent"
-    schedule:
-      interval: "daily"
-      time: "09:00"
-      timezone: "Asia/Shanghai"
-    allow:
-      - dependency-name: "Microsoft.Agents.AI*"
-    labels:
-      - "dependencies"
-      - "agent-framework"
-    open-pull-requests-limit: 3
-    assignees:
-      - "developer"
-    commit-message:
-      prefix: "deps(agent)"
-      include: "scope"
-
-  - package-ecosystem: "nuget"
-    directory: "/src/LTAI.Tools"
-    schedule:
-      interval: "daily"
-      time: "09:00"
-      timezone: "Asia/Shanghai"
-    allow:
-      - dependency-name: "Microsoft.Agents.AI*"
-    labels:
-      - "dependencies"
-      - "agent-framework"
-    open-pull-requests-limit: 1
-    commit-message:
-      prefix: "deps(tools)"
-      include: "scope"
-
+  # NuGet 依赖自动更新 — 每周一检查，创建 PR
   - package-ecosystem: "nuget"
     directory: "/"
     schedule:
@@ -42,8 +8,15 @@ updates:
       day: "monday"
       time: "09:00"
       timezone: "Asia/Shanghai"
+    open-pull-requests-limit: 10
     labels:
       - "dependencies"
-    open-pull-requests-limit: 5
-    ignore:
+      - "auto-update"
+    # 只关注 MAF 相关包，避免非 MAF 包升级的噪音
+    allow:
       - dependency-name: "Microsoft.Agents.AI*"
+    # 给 MAF 浮动范围开绿灯 — CPM 已通过属性管理
+    versioning-strategy: increase
+    commit-message:
+      prefix: "deps"
+      include: "scope"

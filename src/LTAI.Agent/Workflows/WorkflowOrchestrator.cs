@@ -33,6 +33,9 @@ public sealed class WorkflowOrchestrator
     private readonly Dictionary<string, AIAgent> _specialists;  // non-default agents by name
     private readonly AIAgent _defaultAgent;                      // orchestrator + fallback
     private readonly SemaphoreSlim _concurrencyThrottle = new(2, 2); // Max 2 concurrent agents
+    private readonly Dictionary<string, int> _specialistFailures = new(StringComparer.OrdinalIgnoreCase);
+    private const int SpecialistCircuitBreaker = 3;  // consecutive failures → stop routing
+    private const int RetryDelayMs = 500;
 
     public WorkflowOrchestrator(
         IEnumerable<AIAgent> allAgents,
@@ -112,21 +115,77 @@ public sealed class WorkflowOrchestrator
     }
 
     /// <summary>
-    /// Run a specialist agent with error handling. Shared by JSON and string handoff paths.
+    /// Run a specialist agent with retry (1x), fallback to default agent, and circuit breaker.
+    /// If the specialist fails:
+    ///   1. Increment failure count (circuit breaker @ 3 → stop routing to this specialist)
+    ///   2. Retry once after 500ms delay
+    ///   3. If retry also fails, fall back to default agent for the answer
     /// </summary>
     private async Task<AgentResponse> RunAgentSafely(AIAgent agent, string name, string specialistTask, CancellationToken ct,
         string? traceId = null)
     {
+        // Circuit breaker check
+        if (_specialistFailures.TryGetValue(name, out var failures) && failures >= SpecialistCircuitBreaker)
+        {
+            _logger.LogWarning("Circuit breaker open for '{Agent}' ({Fails} consecutive failures) — skipping", name, failures);
+            return await FallbackToDefaultAsync(name, specialistTask, ct, traceId);
+        }
+
+        for (int attempt = 0; attempt <= 1; attempt++)
+        {
+            try
+            {
+                var result = await agent.RunAsync(
+                    [new ChatMessage(ChatRole.User, specialistTask)],
+                    cancellationToken: ct);
+                // Success — reset circuit
+                _specialistFailures.Remove(name);
+                return result;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogError(ex, "Specialist '{Agent}' failed (attempt {A}) for task: {Task} [trace={Trace}]",
+                    name, attempt + 1, specialistTask, traceId ?? "");
+
+                // Track failure for circuit breaker
+                _specialistFailures[name] = _specialistFailures.GetValueOrDefault(name) + 1;
+
+                if (attempt == 0)
+                {
+                    // Retry once after brief delay
+                    _logger.LogInformation("Retrying '{Agent}' in {Delay}ms...", name, RetryDelayMs);
+                    try { await Task.Delay(RetryDelayMs, ct); } catch { break; }
+                }
+            }
+        }
+
+        // Retries exhausted — fall back to default agent
+        _logger.LogWarning("Falling back to default agent after '{Agent}' failed", name);
+        return await FallbackToDefaultAsync(name, specialistTask, ct, traceId);
+    }
+
+    /// <summary>
+    /// Fallback: route the task to the default orchestrator agent for a direct answer.
+    /// </summary>
+    private async Task<AgentResponse> FallbackToDefaultAsync(string specialistName, string task,
+        CancellationToken ct, string? traceId = null)
+    {
+        _logger.LogInformation("Fallback: default agent answering '{Task}' (originally for '{Agent}') [trace={Trace}]",
+            task, specialistName, traceId ?? "");
         try
         {
-            return await agent.RunAsync(
-                [new ChatMessage(ChatRole.User, specialistTask)],
+            var result = await _defaultAgent.RunAsync(
+                [new ChatMessage(ChatRole.User, task)],
                 cancellationToken: ct);
+            var text = result.Messages?.LastOrDefault()?.Text ?? "";
+            return new AgentResponse { Messages = [new ChatMessage(ChatRole.Assistant,
+                $"[Fallback from {specialistName}]\n\n{text}")] };
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Specialist agent '{Agent}' failed for task: {Task} [trace={Trace}]", name, specialistTask, traceId ?? "");
-            return new AgentResponse { Messages = [new ChatMessage(ChatRole.Assistant, $"Agent '{name}' failed: {ex.Message}")] };
+            _logger.LogError(ex, "Fallback default agent also failed for task: {Task}", task);
+            return new AgentResponse { Messages = [new ChatMessage(ChatRole.Assistant,
+                $"Specialist '{specialistName}' and default agent both failed: {ex.Message}")] };
         }
     }
 

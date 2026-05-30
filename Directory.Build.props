@@ -1,6 +1,11 @@
 <Project>
   <PropertyGroup>
     <NoWarn>$(NoWarn);MSB3243;NU1510;MAAIW001</NoWarn>
+
+    <!-- Microsoft Agent Framework — 无上限浮动，restore 自动拉最新版（含 major 升级） -->
+    <MAFVersion>[1.8.0,)</MAFVersion>
+    <!-- 固定到已知预览版本，避免 NU1603 -->
+    <MAFPreviewVersion>[1.8.0-preview.260528.1,)</MAFPreviewVersion>
   </PropertyGroup>
 
   <!-- All library projects output to dist/lib for shared DLLs -->

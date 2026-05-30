@@ -119,11 +119,11 @@ public sealed partial class KgStore : IDisposable
         });
     }
 
-    /// <summary>Execute a write command with exclusive lock.</summary>
-    private T WriteLock<T>(Func<SqliteCommand, T> action, string sql,
+    /// <summary>Execute a write command with exclusive async lock.</summary>
+    private async Task<T> WriteLockAsync<T>(Func<SqliteCommand, T> action, string sql,
         Action<SqliteCommand>? bindParams = null)
     {
-        _writeLock.Wait();
+        await _writeLock.WaitAsync().ConfigureAwait(false);
         try
         {
             var cmd = GetPreparedWrite(sql);
@@ -134,9 +134,9 @@ public sealed partial class KgStore : IDisposable
         finally { _writeLock.Release(); }
     }
 
-    private void WriteLockVoid(string sql, Action<SqliteCommand>? bindParams = null)
+    private async Task WriteLockVoidAsync(string sql, Action<SqliteCommand>? bindParams = null)
     {
-        _writeLock.Wait();
+        await _writeLock.WaitAsync().ConfigureAwait(false);
         try
         {
             var cmd = GetPreparedWrite(sql);
@@ -160,12 +160,12 @@ public sealed partial class KgStore : IDisposable
         SELECT id FROM Nodes WHERE ext_id = @ext_id;
         """;
 
-    public long UpsertNode(string extId, string kind, string name,
+    public async Task<long> UpsertNode(string extId, string kind, string name,
         string? ns = null, string? signature = null,
         string? source = null, Dictionary<string, object?>? props = null)
     {
         var propsJson = props != null ? JsonSerializer.Serialize(props, KgStoreInternals.JsonOpts) : null;
-        return WriteLock(cmd =>
+        return await WriteLockAsync(cmd =>
         {
             return (long)cmd.ExecuteScalar()!;
         }, SQL_UPSERT_NODE, cmd =>
@@ -231,28 +231,28 @@ public sealed partial class KgStore : IDisposable
 
     private const string SQL_DELETE_NODE = "DELETE FROM Nodes WHERE id = @id;";
 
-    public bool DeleteNode(long id)
+    public async Task<bool> DeleteNode(long id)
     {
-        var deleted = WriteLock(cmd => cmd.ExecuteNonQuery() > 0, SQL_DELETE_NODE,
+        var deleted = await WriteLockAsync(cmd => cmd.ExecuteNonQuery() > 0, SQL_DELETE_NODE,
             cmd => cmd.Parameters.AddWithValue("@id", id));
-        if (deleted) IncrementalVacuum(50);
+        if (deleted) await IncrementalVacuumAsync(50);
         return deleted;
     }
 
     private const string SQL_DELETE_SOURCE = "DELETE FROM Nodes WHERE source = @src;";
 
-    public int DeleteSource(string source)
+    public async Task<int> DeleteSource(string source)
     {
-        var count = WriteLock(cmd => cmd.ExecuteNonQuery(), SQL_DELETE_SOURCE,
+        var count = await WriteLockAsync(cmd => cmd.ExecuteNonQuery(), SQL_DELETE_SOURCE,
             cmd => cmd.Parameters.AddWithValue("@src", source));
-        if (count > 0) IncrementalVacuum(200);
+        if (count > 0) await IncrementalVacuumAsync(200);
         return count;
     }
 
-    private void IncrementalVacuum(int pages)
+    private async Task IncrementalVacuumAsync(int pages)
     {
         if (_disposed) return;
-        WriteLockVoid($"PRAGMA incremental_vacuum({pages});");
+        await WriteLockVoidAsync($"PRAGMA incremental_vacuum({pages});");
     }
 
     private const string SQL_NODE_COUNT = "SELECT COUNT(*) FROM Nodes;";
@@ -272,11 +272,11 @@ public sealed partial class KgStore : IDisposable
         VALUES (@src, @dst, @rel, @weight, @props);
         """;
 
-    public void AddEdge(long srcId, long dstId, string relation, double weight = 1.0,
+    public async Task AddEdge(long srcId, long dstId, string relation, double weight = 1.0,
         Dictionary<string, object?>? props = null)
     {
         var propsJson = props != null ? JsonSerializer.Serialize(props, KgStoreInternals.JsonOpts) : null;
-        WriteLockVoid(SQL_ADD_EDGE, cmd =>
+        await WriteLockVoidAsync(SQL_ADD_EDGE, cmd =>
         {
             cmd.Parameters.AddWithValue("@src", srcId);
             cmd.Parameters.AddWithValue("@dst", dstId);
@@ -300,11 +300,11 @@ public sealed partial class KgStore : IDisposable
         return ReadEdgeRows(cmd.ExecuteReader());
     }
 
-    public int DeleteEdges(long nodeId, string? relation = null)
+    public async Task<int> DeleteEdges(long nodeId, string? relation = null)
     {
         var sql = new StringBuilder("DELETE FROM Edges WHERE src = @nid OR dst = @nid");
         if (relation != null) sql.Append(" AND rel = @rel");
-        return WriteLock(cmd => cmd.ExecuteNonQuery(), sql.ToString(), cmd =>
+        return await WriteLockAsync(cmd => cmd.ExecuteNonQuery(), sql.ToString(), cmd =>
         {
             cmd.Parameters.AddWithValue("@nid", nodeId);
             if (relation != null) cmd.Parameters.AddWithValue("@rel", relation);
@@ -321,8 +321,8 @@ public sealed partial class KgStore : IDisposable
         SELECT last_insert_rowid();
         """;
 
-    public long AddDoc(long nodeId, string text, string? lang = "code", string? source = null)
-        => WriteLock(cmd => (long)cmd.ExecuteScalar()!, SQL_ADD_DOC, cmd =>
+    public async Task<long> AddDoc(long nodeId, string text, string? lang = "code", string? source = null)
+        => await WriteLockAsync(cmd => (long)cmd.ExecuteScalar()!, SQL_ADD_DOC, cmd =>
         {
             cmd.Parameters.AddWithValue("@nid", nodeId);
             cmd.Parameters.AddWithValue("@text", text);
@@ -330,9 +330,9 @@ public sealed partial class KgStore : IDisposable
             cmd.Parameters.AddWithValue("@src", (object?)source ?? DBNull.Value);
         });
 
-    public void ReplaceDocs(long nodeId, List<(string text, string? lang, string? source)> docs)
+    public async Task ReplaceDocsAsync(long nodeId, List<(string text, string? lang, string? source)> docs)
     {
-        _writeLock.Wait();
+        await _writeLock.WaitAsync();
         try
         {
             using var tx = _writer.BeginTransaction();
@@ -543,8 +543,8 @@ public sealed partial class KgStore : IDisposable
     //  Meta
     // ═══════════════════════════════════════════
 
-    public void SetMeta(string key, string value)
-        => WriteLockVoid("INSERT OR REPLACE INTO Meta(key, value) VALUES (@key, @value);",
+    public async Task SetMeta(string key, string value)
+        => await WriteLockVoidAsync("INSERT OR REPLACE INTO Meta(key, value) VALUES (@key, @value);",
             cmd => { cmd.Parameters.AddWithValue("@key", key); cmd.Parameters.AddWithValue("@value", value); });
 
     public string? GetMeta(string key)
@@ -559,7 +559,7 @@ public sealed partial class KgStore : IDisposable
     //  Maintenance
     // ═══════════════════════════════════════════
 
-    public (int pruned, long beforeBytes, long afterBytes) RunMaintenance(
+    public async Task<(int pruned, long beforeBytes, long afterBytes)> RunMaintenanceAsync(
         string rootDir, TimeSpan? timeToLive = null)
     {
         var before = new FileInfo(_dbPath).Length;
@@ -568,10 +568,10 @@ public sealed partial class KgStore : IDisposable
         if (timeToLive.HasValue)
         {
             var cutoff = DateTime.UtcNow - timeToLive.Value;
-            pruned += PruneBefore(cutoff);
+            pruned += await PruneBefore(cutoff);
         }
 
-        Compact();
+        await CompactAsync();
 
         // Invalidate all cached results after maintenance
         _resultCache.Compact(1.0);
@@ -580,29 +580,29 @@ public sealed partial class KgStore : IDisposable
         return (pruned, before, after);
     }
 
-    public int PruneBefore(DateTime cutoff)
+    public async Task<int> PruneBefore(DateTime cutoff)
     {
         var cutoffStr = cutoff.ToString("O");
-        var count = WriteLock(cmd => (int)(long)cmd.ExecuteScalar()!,
+        var count = await WriteLockAsync(cmd => (int)(long)cmd.ExecuteScalar()!,
             "SELECT COUNT(*) FROM Nodes WHERE updated_at < @cutoff;",
             cmd => cmd.Parameters.AddWithValue("@cutoff", cutoffStr));
 
         if (count > 0)
         {
-            WriteLockVoid("DELETE FROM Nodes WHERE updated_at < @cutoff;",
+            await WriteLockVoidAsync("DELETE FROM Nodes WHERE updated_at < @cutoff;",
                 cmd => cmd.Parameters.AddWithValue("@cutoff", cutoffStr));
         }
         return count;
     }
 
-    public void OptimizeFts()
+    public async Task OptimizeFtsAsync()
     {
-        WriteLockVoid("INSERT INTO FTS_Index(FTS_Index) VALUES('optimize');");
+        await WriteLockVoidAsync("INSERT INTO FTS_Index(FTS_Index) VALUES('optimize');");
     }
 
-    public int RebuildFts()
+    public async Task<int> RebuildFtsAsync()
     {
-        return WriteLock(cmd =>
+        return await WriteLockAsync(cmd =>
         {
             cmd.ExecuteNonQuery();
             cmd.CommandText = "SELECT COUNT(*) FROM FTS_Index;";
@@ -610,9 +610,9 @@ public sealed partial class KgStore : IDisposable
         }, "DELETE FROM FTS_Index; INSERT INTO FTS_Index SELECT text, node_id, kind FROM Docs JOIN Nodes ON Nodes.id = Docs.node_id;");
     }
 
-    public void Compact()
+    public async Task CompactAsync()
     {
-        _writeLock.Wait();
+        await _writeLock.WaitAsync();
         try
         {
             using var vacCmd = _writer.CreateCommand();
@@ -621,7 +621,7 @@ public sealed partial class KgStore : IDisposable
             using var optCmd = _writer.CreateCommand();
             optCmd.CommandText = "PRAGMA optimize;";
             optCmd.ExecuteNonQuery();
-            OptimizeFts();
+            await OptimizeFtsAsync();
         }
         finally { _writeLock.Release(); }
     }
@@ -762,7 +762,7 @@ public sealed partial class KgStore : IDisposable
     // ═══════════════════════════════════════════
 
     /// <summary>Insert or update a vector embedding for a node.</summary>
-    public void InsertVector(long nodeId, float[] embedding)
+    public async Task InsertVectorAsync(long nodeId, float[] embedding)
     {
         if (embedding.Length != 384)
             throw new ArgumentException($"MiniLM requires 384-dim vectors, got {embedding.Length}");
@@ -770,7 +770,7 @@ public sealed partial class KgStore : IDisposable
         var blob = new byte[embedding.Length * 4];
         Buffer.BlockCopy(embedding, 0, blob, 0, blob.Length);
 
-        WriteLockVoid(SQL_INSERT_VEC, cmd =>
+        await WriteLockVoidAsync(SQL_INSERT_VEC, cmd =>
         {
             cmd.Parameters.AddWithValue("@nid", nodeId);
             cmd.Parameters.AddWithValue("@vec", blob);
@@ -779,18 +779,25 @@ public sealed partial class KgStore : IDisposable
 
     /// <summary>
     /// Vector similarity search by cosine distance (in-memory, linear scan).
+    /// Optional <paramref name="kindFilter"/> restricts scan to specific node kinds
+    /// (e.g., "method", "document", "concept") — acts as IVF partition by kind.
     /// Returns (nodeId, distance) sorted closest-first.
+    /// Linear scan of 100K 384-dim vectors takes ~100ms. Fine for ≤100K nodes.
     /// </summary>
-    public List<(long nodeId, double distance)> SearchVector(float[] query, int topN = 30)
+    public List<(long nodeId, double distance)> SearchVector(float[] query, int topN = 30, string? kindFilter = null)
     {
         if (query.Length != 384)
             throw new ArgumentException($"MiniLM requires 384-dim vectors, got {query.Length}");
 
-        // Read all vectors from the table
+        // Read vectors — filter by kind if specified (IVF-like partition)
         var candidates = new List<(long nodeId, float[] vec)>();
         using (var cmd = _reader.CreateCommand())
         {
-            cmd.CommandText = "SELECT node_id, vec FROM VecNodes;";
+            cmd.CommandText = kindFilter != null
+                ? "SELECT v.node_id, v.vec FROM VecNodes v JOIN Nodes n ON n.id = v.node_id WHERE n.kind = @kind;"
+                : "SELECT node_id, vec FROM VecNodes;";
+            if (kindFilter != null)
+                cmd.Parameters.AddWithValue("@kind", kindFilter);
             using var rdr = cmd.ExecuteReader();
             while (rdr.Read())
             {
@@ -815,9 +822,9 @@ public sealed partial class KgStore : IDisposable
     }
 
     /// <summary>Delete the vector embedding for a node.</summary>
-    public void DeleteVector(long nodeId)
+    public async Task DeleteVectorAsync(long nodeId)
     {
-        WriteLockVoid(SQL_DELETE_VEC, cmd =>
+        await WriteLockVoidAsync(SQL_DELETE_VEC, cmd =>
         {
             cmd.Parameters.AddWithValue("@nid", nodeId);
         });
@@ -851,7 +858,9 @@ public sealed partial class KgStore : IDisposable
 
     private void InitSchema()
     {
-        ExecuteOnWriter("""
+        // 构造函数中执行，无并发风险，直接使用 writer 连接
+        using var cmd = _writer.CreateCommand();
+        cmd.CommandText = """
             CREATE TABLE IF NOT EXISTS Meta (
                 key   TEXT PRIMARY KEY,
                 value TEXT
@@ -928,12 +937,13 @@ public sealed partial class KgStore : IDisposable
                 vec       BLOB NOT NULL,
                 updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
             );
-            """);
+            """;
+        cmd.ExecuteNonQuery();
     }
 
-    private void ExecuteOnWriter(string sql)
+    private async Task ExecuteOnWriterAsync(string sql)
     {
-        _writeLock.Wait();
+        await _writeLock.WaitAsync();
         try
         {
             using var cmd = _writer.CreateCommand();

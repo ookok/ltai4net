@@ -85,7 +85,10 @@ public sealed class SkillsView : UserControl
                             return l[12..].Trim().Trim('"').Trim('\'');
             }
         }
-        catch { }
+        catch
+        {
+            // 非关键：技能文件解析失败时返回空
+        }
         return "";
     }
 

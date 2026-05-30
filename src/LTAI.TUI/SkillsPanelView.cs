@@ -91,7 +91,10 @@ public static class SkillsPanelView
                 }
             }
         }
-        catch { }
+        catch
+        {
+            // 非关键：技能名称解析失败时回退到文件名
+        }
         return Path.GetFileNameWithoutExtension(skillMd);
     }
 
@@ -111,6 +114,9 @@ public static class SkillsPanelView
             if (dir != null) Directory.CreateDirectory(dir);
             File.WriteAllText(_usageFile, JsonSerializer.Serialize(usage));
         }
-        catch { }
+        catch
+        {
+            // 非关键：技能执行失败时跳过
+        }
     }
 }
