@@ -79,10 +79,8 @@ public sealed class ChatLayout
             _history.Add(("assistant", response));
             if (string.IsNullOrWhiteSpace(response)) continue;
 
-            // Render response + plan detection
-            if (IsDiffContent(response)) RenderDiffBlock(response);
-            else RenderMarkdown(response);
-
+            // Response already shown in Live panel above — no need to re-render
+            // Only handle plan detection and non-streaming actions
             if (response.Contains("## Plan:") || response.Contains("approve"))
             {
                 var ps = LTAI.Agent.Tools.PlanTools.PlanStatus();
