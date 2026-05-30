@@ -49,11 +49,13 @@ public sealed class KbGraph : AIContextProvider
     public async Task<List<string>> QueryAsync(string query, int topK = 10,
         bool expandGraph = true, CancellationToken ct = default)
     {
-        // Stage 1: LLM query expansion → keywords + synonyms
+        // Stage 1: Query expansion — skip LLM rewriter for simple queries and dev mode
+        // (FastEmb intent classification already filtered casual chat earlier)
         var expanded = await ExpandQueryAsync(query, ct);
         if (string.IsNullOrWhiteSpace(expanded)) expanded = query;
 
-        _logger.LogInformation("KbGraph: \"{Q}\" → expanded: \"{E}\"", query, expanded);
+        if (!string.Equals(query, expanded, StringComparison.Ordinal))
+            _logger.LogInformation("KbGraph: \"{Q}\" → expanded: \"{E}\"", query, expanded);
 
         // Stage 2: FTS5 BM25 recall (weighted by node kind)
         var ftsHits = _store.SearchFts(expanded, topN: topK * 3);

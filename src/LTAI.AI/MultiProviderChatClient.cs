@@ -57,6 +57,9 @@ public sealed class MultiProviderChatClient : IChatClient
     });
     private static readonly TimeSpan CacheTtl = TimeSpan.FromMinutes(5);
 
+    // LLM call counter — increments on every actual HTTP request
+    private static long _callCounter;
+
     /// <summary>Names of all currently registered LLM clients.</summary>
     public IEnumerable<string> RegisteredProviders => _clients.Keys;
     /// <summary>Currently active default provider name.</summary>
@@ -119,6 +122,9 @@ public sealed class MultiProviderChatClient : IChatClient
         foreach (var p in RankedProviders(provider))
         {
             if (!_clients.TryGetValue(p, out var client)) continue;
+            var callNum = Interlocked.Increment(ref _callCounter);
+            _logger.LogInformation("LLM streaming call #{CallNum} → provider={Provider}", callNum, p);
+
             anyAttempted = true;
             var success = false;
 
@@ -185,6 +191,9 @@ public sealed class MultiProviderChatClient : IChatClient
 
             try
             {
+                var callNum = Interlocked.Increment(ref _callCounter);
+                _logger.LogInformation("LLM call #{CallNum} → provider={Provider}", callNum, p);
+
                 // Add 15s per-provider timeout
                 using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
                 timeoutCts.CancelAfter(TimeSpan.FromSeconds(15));
