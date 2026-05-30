@@ -167,7 +167,13 @@ public sealed class ChatAgent
 
         // 通用 tool call 强制：LLM 拒绝猜测时，让它自查工具列表
         // 不需要每个 tool 硬编码——LLM 自己知道哪个工具能解决问题
-        var forcePrompt = "你的回答看起来在猜测或拒绝，但你有可用的工具能获取准确信息。检查你的工具列表，如果有能回答用户问题的工具，请调用它。不要自行猜测、估计或拒绝。\n\n用户的问题是: " + originalMessage;
+        var forcePrompt = "你的回答看起来在猜测或拒绝，但你有可用的工具能获取准确信息。请检查以下常用工具：\n"
+            + "- GetCurrentDateTime: 获取当前准确日期和时间\n"
+            + "- IpLocation: 获取用户IP归属地（城市/地区）\n"
+            + "- Weather(城市): 查询指定城市的天气\n"
+            + "- WebSearch: 搜索互联网获取实时信息\n"
+            + "- 以及其他你已有的工具\n\n"
+            + "请调用能回答用户问题的工具，不要自行猜测。\n\n用户的问题是: " + originalMessage;
         try
         {
             var forceResult = await _proAgent.RunAsync(
