@@ -204,7 +204,7 @@ public static class ServiceCollectionExtensions
 
         // Code analysis tools (Roslyn-based for C#, pattern-based for others)
         var codeAnalysis = new CodeAnalysisTools(ws);
-        if (canRead && (name is "LTAI-Chat" or "LTAI-Code" or "LTAI-Frontend"))
+        if (canRead && (name.StartsWith("LTAI-Chat") || name is "LTAI-Code" or "LTAI-Frontend"))
         {
             tools.Add(AIFunctionFactory.Create(codeAnalysis.GetSymbols));
             tools.Add(AIFunctionFactory.Create(codeAnalysis.FindInCode));
@@ -225,7 +225,7 @@ public static class ServiceCollectionExtensions
         // Web tools
         var httpFactory = sp.GetRequiredService<IHttpClientFactory>();
         var web = new WebTools(httpFactory, sp.GetService<ILogger<WebTools>>());
-        if (name == "LTAI-Chat" || name == "LTAI-Data")
+        if (name.StartsWith("LTAI-Chat") || name == "LTAI-Data")
         {
             tools.Add(AIFunctionFactory.Create(web.WebSearch));
             tools.Add(AIFunctionFactory.Create(web.WebFetch));
@@ -258,7 +258,7 @@ public static class ServiceCollectionExtensions
         // Memory tools (persistent memory across sessions)
         var memDir = opts.ResolveDataPath("memories");
         var memory = new MemoryTools(ws, memDir);
-        if (name is "LTAI-Chat" or "LTAI-System" or "LTAI-Writer")
+        if (name.StartsWith("LTAI-Chat") || name is "LTAI-System" or "LTAI-Writer")
         {
             tools.Add(AIFunctionFactory.Create(memory.Remember));
             tools.Add(AIFunctionFactory.Create(memory.Forget));
@@ -278,7 +278,7 @@ public static class ServiceCollectionExtensions
         }
 
         // Plan approval workflow tools
-        if (name is "LTAI-Chat" or "LTAI-Code" or "LTAI-Writer" or "LTAI-Frontend")
+        if (name.StartsWith("LTAI-Chat") || name is "LTAI-Code" or "LTAI-Writer" or "LTAI-Frontend")
         {
             tools.Add(AIFunctionFactory.Create(PlanTools.SubmitPlan));
             tools.Add(AIFunctionFactory.Create(PlanTools.MarkStepComplete));
@@ -287,7 +287,7 @@ public static class ServiceCollectionExtensions
         }
 
         // Flowchart / diagram tools (Mermaid + SVG)
-        if (name is "LTAI-Chat" or "LTAI-Code" or "LTAI-Data" or "LTAI-Writer" or "LTAI-Frontend")
+        if (name.StartsWith("LTAI-Chat") || name is "LTAI-Code" or "LTAI-Data" or "LTAI-Writer" or "LTAI-Frontend")
         {
             var diagram = new FlowchartTools(httpFactory);
             tools.Add(AIFunctionFactory.Create(diagram.Flowchart));
@@ -315,7 +315,7 @@ public static class ServiceCollectionExtensions
         }
 
         // Git tools (LibGit2Sharp, no CLI)
-        if (name is "LTAI-Chat" or "LTAI-Code" or "LTAI-System" or "LTAI-Writer" or "LTAI-Frontend")
+        if (name.StartsWith("LTAI-Chat") || name is "LTAI-Code" or "LTAI-System" or "LTAI-Writer" or "LTAI-Frontend")
         {
             var git = new GitTools(ws);
             tools.Add(AIFunctionFactory.Create(git.GitStatus));
@@ -349,7 +349,7 @@ public static class ServiceCollectionExtensions
         }
 
         // Job & Task management tools
-        if (name is "LTAI-Chat" or "LTAI-System" or "LTAI-Code" or "LTAI-Writer" or "LTAI-Frontend")
+        if (name.StartsWith("LTAI-Chat") || name is "LTAI-System" or "LTAI-Code" or "LTAI-Writer" or "LTAI-Frontend")
         {
             tools.Add(AIFunctionFactory.Create(TaskTools.TodoWrite));
             tools.Add(AIFunctionFactory.Create(TaskTools.TodoComplete));
@@ -380,7 +380,7 @@ public static class ServiceCollectionExtensions
         }
 
         // System & Network tools
-        if (name is "LTAI-Chat" or "LTAI-System" or "LTAI-Writer")
+        if (name is "LTAI-Chat" or "LTAI-Chat-Pro" or "LTAI-System" or "LTAI-Writer")
         {
             tools.Add(AIFunctionFactory.Create(SystemTools.SystemInfo));
             tools.Add(AIFunctionFactory.Create(SystemTools.ListProcesses));
@@ -404,7 +404,7 @@ public static class ServiceCollectionExtensions
         }
 
         // File download tool (confirm=true 才下载)
-        if (canRead && canWrite && name is "LTAI-Chat" or "LTAI-Code" or "LTAI-Writer" or "LTAI-Frontend")
+        if (canRead && canWrite && (name.StartsWith("LTAI-Chat") || name is "LTAI-Code" or "LTAI-Writer" or "LTAI-Frontend"))
         {
             tools.Add(AIFunctionFactory.Create(FileDownloadTool.DownloadFile));
         }
