@@ -57,9 +57,12 @@ public static class ServiceCollectionExtensions
 
         // Step 3: Workflow orchestrator (with optional vector routing)
         services.AddSingleton<WorkflowOrchestrator>(sp =>
-            new WorkflowOrchestrator(agents.Values, agents["chat"],
+        {
+            var all = sp.GetRequiredService<Dictionary<string, AIAgent>>();
+            return new WorkflowOrchestrator(all.Values, all["chat"],
                 sp.GetRequiredService<ILogger<WorkflowOrchestrator>>(),
-                sp.GetService<EmbeddingClient>()));
+                sp.GetService<EmbeddingClient>());
+        });
 
         // Step 3b: Token budget tracker (from AI config, optional)
         services.AddSingleton<LTAI.AI.BudgetTracker>(sp =>
@@ -73,10 +76,11 @@ public static class ServiceCollectionExtensions
         // Step 3c: ChatAgent + workflow (default L1=flash, auto-upgrade to L2=pro)
         services.AddSingleton<ChatAgent>(sp =>
         {
+            var all = sp.GetRequiredService<Dictionary<string, AIAgent>>();
             var wf = sp.GetRequiredService<WorkflowOrchestrator>();
-            var chat = BuildOrchestrator(sp, agents.Values.ToArray());
+            var chat = BuildOrchestrator(sp, all.Values.ToArray());
             // Pro agent for complex task auto-upgrade (uses "deepseek-pro" provider)
-            var proAgent = agents.TryGetValue("chat-pro", out var p) ? p : chat;
+            var proAgent = all.TryGetValue("chat-pro", out var p) ? p : chat;
             var budget = sp.GetService<LTAI.AI.BudgetTracker>();
             return new ChatAgent(chat, proAgent, wf, budget);
         });
