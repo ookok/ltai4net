@@ -382,6 +382,7 @@ public static class ServiceCollectionExtensions
         // System & Network tools
         if (name is "LTAI-Chat" or "LTAI-Chat-Pro" or "LTAI-System" or "LTAI-Writer")
         {
+            tools.Add(AIFunctionFactory.Create(SystemTools.GetCurrentDateTime));
             tools.Add(AIFunctionFactory.Create(SystemTools.SystemInfo));
             tools.Add(AIFunctionFactory.Create(SystemTools.ListProcesses));
             tools.Add(AIFunctionFactory.Create(SystemTools.GetEnv));
