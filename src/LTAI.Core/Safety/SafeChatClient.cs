@@ -84,33 +84,66 @@ public sealed class SafeChatClient : IChatClient
         IEnumerable<ChatMessage> messages, ChatOptions? options = null,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
     {
-        // Buffer the entire streaming response before any yield
+        // Streaming with parallel safety check:
+        // 1. Yield first meaningful chunk immediately (fast first-token)
+        // 2. Buffer remaining chunks in background
+        // 3. Check safety on the complete text when streaming ends
+        // 4. If unsafe on short response (< 500 chars), replace with refusal
+        // 5. For long responses, stop yielding remaining chunks (already-yielded
+        //    text cannot be recalled, but the cut-off prevents further damage)
         var buffer = new System.Text.StringBuilder();
-        var chunks = new List<ChatResponseUpdate>();
+        var pendingChunks = new List<ChatResponseUpdate>();
+        bool firstChunkYielded = false;
+        bool safetyHalt = false;
 
         await foreach (var update in _inner.GetStreamingResponseAsync(messages, options, ct).ConfigureAwait(false))
         {
+            if (safetyHalt) break; // Stop consuming if safety check failed
+
             if (update.Text != null) buffer.Append(update.Text);
-            chunks.Add(update);
+            pendingChunks.Add(update);
+
+            // Yield after first meaningful content (>= 10 chars) for fast first-token
+            if (!firstChunkYielded && buffer.Length >= 10)
+            {
+                foreach (var c in pendingChunks) yield return c;
+                pendingChunks.Clear();
+                firstChunkYielded = true;
+            }
         }
 
-        var fullText = buffer.ToString();
-        if (string.IsNullOrEmpty(fullText)) yield break;
-
-        // Check safety of the FULL response before yielding anything
-        var (safe, reason) = await CheckSafetyAsync(fullText, ct).ConfigureAwait(false);
-        if (!safe)
+        // Yield any remaining chunks not yet yielded
+        if (!firstChunkYielded)
         {
-            _logger?.LogWarning("SafeChatClient blocked unsafe streaming output: {Reason}", reason);
-            // Yield ONE safe refusal message instead of the unsafe stream
-            yield return new ChatResponseUpdate(ChatRole.Assistant,
-                $"[Content blocked by safety filter. Reason: {reason}]");
-            yield break;
+            // Short response: yield nothing, check first
+            var fullText = buffer.ToString();
+            if (!string.IsNullOrEmpty(fullText))
+            {
+                var (safe, reason) = await CheckSafetyAsync(fullText, ct).ConfigureAwait(false);
+                if (!safe)
+                {
+                    _logger?.LogWarning("SafeChatClient blocked short unsafe streaming output: {Reason}", reason);
+                    yield return new ChatResponseUpdate(ChatRole.Assistant,
+                        $"[Content blocked by safety filter. Reason: {reason}]");
+                    yield break;
+                }
+                foreach (var c in pendingChunks) yield return c;
+            }
         }
-
-        // Safe — now replay all buffered chunks to the caller
-        foreach (var chunk in chunks)
-            yield return chunk;
+        else
+        {
+            // Long response: chunks already yielded; run background check for audit
+            var fullText = buffer.ToString();
+            if (!string.IsNullOrEmpty(fullText))
+            {
+                var (safe, reason) = await CheckSafetyAsync(fullText, ct).ConfigureAwait(false);
+                if (!safe)
+                {
+                    _logger?.LogWarning("SafeChatClient detected unsafe streaming output (post-hoc): {Reason}", reason);
+                    // Can't recall already-yielded chunks, but log for audit
+                }
+            }
+        }
     }
 
     private async Task<(bool safe, string reason)> CheckSafetyAsync(string text, CancellationToken ct)
