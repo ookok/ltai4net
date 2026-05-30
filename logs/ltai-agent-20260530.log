@@ -20,3 +20,31 @@
 2026-05-30 15:22:12.476 +08:00 [INF] Wasmtime sandbox initialized (v44)
 2026-05-30 15:22:12.741 +08:00 [INF] EmbeddingClient: 2 API providers, local BGE=true, dim=384
 2026-05-30 15:22:12.746 +08:00 [INF] Orchestrator ready with 9 agents: LTAI-Chat-Pro, LTAI-Chat, LTAI-Code, LTAI-Data, LTAI-Frontend, LTAI-LLM, LTAI-Math, LTAI-System, LTAI-Writer
+2026-05-30 15:23:34.889 +08:00 [INF] Wasmtime sandbox initialized (v44)
+2026-05-30 15:23:34.985 +08:00 [INF] Wasmtime sandbox initialized (v44)
+2026-05-30 15:23:34.994 +08:00 [INF] Wasmtime sandbox initialized (v44)
+2026-05-30 15:23:35.003 +08:00 [INF] Wasmtime sandbox initialized (v44)
+2026-05-30 15:23:35.010 +08:00 [INF] Wasmtime sandbox initialized (v44)
+2026-05-30 15:23:35.020 +08:00 [INF] Wasmtime sandbox initialized (v44)
+2026-05-30 15:23:35.030 +08:00 [INF] Wasmtime sandbox initialized (v44)
+2026-05-30 15:23:35.038 +08:00 [INF] Wasmtime sandbox initialized (v44)
+2026-05-30 15:23:35.048 +08:00 [INF] Wasmtime sandbox initialized (v44)
+2026-05-30 15:23:35.320 +08:00 [INF] EmbeddingClient: 2 API providers, local BGE=true, dim=384
+2026-05-30 15:23:35.330 +08:00 [INF] Orchestrator ready with 9 agents: LTAI-Chat-Pro, LTAI-Chat, LTAI-Code, LTAI-Data, LTAI-Frontend, LTAI-LLM, LTAI-Math, LTAI-System, LTAI-Writer
+2026-05-30 15:23:51.212 +08:00 [INF] [RunStreamingAsync] Agent 2677e130c5a74ca3a82911e01f3ce7ae/LTAI-Chat-Pro Invoked client LTAI.AI.MultiProviderChatClient.
+2026-05-30 15:23:51.238 +08:00 [INF] LLM streaming call #1 → provider=deepseek-pro
+2026-05-30 15:23:51.265 +08:00 [INF] Start processing HTTP request POST https://api.deepseek.com/v1/chat/completions
+2026-05-30 15:23:51.275 +08:00 [INF] Sending HTTP request POST https://api.deepseek.com/v1/chat/completions
+2026-05-30 15:23:51.562 +08:00 [INF] Received HTTP response headers after 279.5209ms - 200
+2026-05-30 15:23:51.574 +08:00 [INF] End processing HTTP request after 311.295ms - 200
+2026-05-30 15:27:24.498 +08:00 [INF] Wasmtime sandbox initialized (v44)
+2026-05-30 15:27:24.574 +08:00 [INF] Wasmtime sandbox initialized (v44)
+2026-05-30 15:27:24.579 +08:00 [INF] Wasmtime sandbox initialized (v44)
+2026-05-30 15:27:24.584 +08:00 [INF] Wasmtime sandbox initialized (v44)
+2026-05-30 15:27:24.589 +08:00 [INF] Wasmtime sandbox initialized (v44)
+2026-05-30 15:27:24.593 +08:00 [INF] Wasmtime sandbox initialized (v44)
+2026-05-30 15:27:24.599 +08:00 [INF] Wasmtime sandbox initialized (v44)
+2026-05-30 15:27:24.606 +08:00 [INF] Wasmtime sandbox initialized (v44)
+2026-05-30 15:27:24.614 +08:00 [INF] Wasmtime sandbox initialized (v44)
+2026-05-30 15:27:25.160 +08:00 [INF] EmbeddingClient: 2 API providers, local BGE=true, dim=384
+2026-05-30 15:27:25.164 +08:00 [INF] Orchestrator ready with 9 agents: LTAI-Chat-Pro, LTAI-Chat, LTAI-Code, LTAI-Data, LTAI-Frontend, LTAI-LLM, LTAI-Math, LTAI-System, LTAI-Writer

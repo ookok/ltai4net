@@ -61,7 +61,7 @@ public static class Program
         var llmConfig = new LLMConfigPanel(options, router, httpFactory);
 
         var app = new TuiApp(chatAgent, llmConfig, options, Directory.GetCurrentDirectory());
-        Console.Clear();
+        try { Console.Clear(); } catch { /* non-interactive terminal */ }
         await app.RunAsync();
     }
 }

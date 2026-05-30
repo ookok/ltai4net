@@ -26,15 +26,20 @@ public sealed class DateContextProvider : AIContextProvider
         if (!IsTimeQuery(userMsg.Text))
             return ValueTask.FromResult(context.AIContext!);
 
+        System.Diagnostics.Debug.WriteLine($"[DateContextProvider] injecting date for: \"{userMsg.Text}\"");
         var dateStr = _cachedDate ??= FormatDate();
-        var instruction = $"当前真实日期时间: {dateStr}。请直接使用这个日期回答用户的时间/日期问题。";
+        var dateMessage = new ChatMessage(ChatRole.System,
+            $"[当前真实日期时间: {dateStr}] 请直接用这个日期回答。");
+
+        var messages = context.AIContext?.Messages?.ToList() ?? new List<ChatMessage>();
+        // Insert after the first system message (before user message)
+        var insertAt = Math.Min(1, messages.Count);
+        messages.Insert(insertAt, dateMessage);
 
         return ValueTask.FromResult(new AIContext
         {
-            Instructions = context.AIContext?.Instructions != null
-                ? instruction + "\n" + context.AIContext.Instructions
-                : instruction,
-            Messages = context.AIContext?.Messages,
+            Instructions = context.AIContext?.Instructions,
+            Messages = messages,
             Tools = context.AIContext?.Tools,
         });
     }
