@@ -70,8 +70,16 @@ public sealed class ChatLayout
                         content.Append(token);
                     }
                     done = true;
-                    ctx.UpdateTarget(new Panel(content.Length > 0 ? content.ToString() : "[red]No response[/]")
-                        .BorderColor(Color.Green));
+                    var rawText = content.ToString();
+                    if (rawText.Length > 0)
+                    {
+                        ctx.UpdateTarget(new Text(""));
+                        RenderMarkdown(rawText);
+                    }
+                    else
+                    {
+                        ctx.UpdateTarget(new Panel("[red]No response[/]").BorderColor(Color.Red));
+                    }
                     ctx.Refresh();
                 });
 
@@ -148,6 +156,118 @@ public sealed class ChatLayout
     /// Render markdown text to Spectre.Console markup.
     /// Supports: bold, italic, inline code, links, headers, lists, tables, code blocks.
     /// </summary>
+    /// <summary>
+    /// Syntax highlighting keyword sets per language (ported from Desktop MarkdownRenderer).
+    /// </summary>
+    private static readonly Dictionary<string, HashSet<string>> CodeKeywords = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["csharp"] = new() { "class", "struct", "interface", "enum", "record", "namespace", "using",
+            "public", "private", "protected", "internal", "static", "readonly", "virtual", "abstract",
+            "override", "async", "await", "new", "return", "if", "else", "for", "foreach", "while",
+            "do", "switch", "case", "break", "continue", "try", "catch", "finally", "throw",
+            "var", "void", "int", "string", "bool", "double", "float", "long", "char", "object",
+            "true", "false", "null", "this", "base", "in", "out", "ref", "is", "as", "typeof",
+            "get", "set", "value", "where", "select", "from" },
+        ["python"] = new() { "class", "def", "return", "if", "elif", "else", "for", "while",
+            "try", "except", "finally", "import", "from", "as", "with", "yield", "lambda",
+            "True", "False", "None", "self", "and", "or", "not", "in", "is", "async", "await",
+            "raise", "pass", "break", "continue", "global", "nonlocal" },
+        ["javascript"] = new() { "function", "class", "const", "let", "var", "return", "if", "else",
+            "for", "while", "do", "switch", "case", "break", "continue", "try", "catch", "finally",
+            "throw", "new", "this", "async", "await", "import", "export", "default", "from",
+            "true", "false", "null", "undefined" },
+        ["bash"] = new() { "if", "then", "else", "elif", "fi", "for", "while", "do", "done",
+            "case", "esac", "function", "return", "exit", "export", "source", "echo", "read",
+            "set", "unset", "declare", "local" },
+        ["go"] = new() { "func", "return", "if", "else", "for", "range", "switch", "case",
+            "break", "continue", "go", "defer", "select", "chan", "map", "struct", "interface",
+            "type", "package", "import", "var", "const", "nil", "true", "false" },
+        ["rust"] = new() { "fn", "let", "mut", "return", "if", "else", "for", "while", "loop",
+            "match", "break", "continue", "struct", "enum", "impl", "trait", "pub", "use",
+            "mod", "crate", "self", "super", "where", "as", "in", "ref", "move", "async",
+            "await", "true", "false", "Some", "None", "Ok", "Err" },
+        ["java"] = new() { "class", "interface", "enum", "extends", "implements", "public",
+            "private", "protected", "static", "final", "abstract", "synchronized", "volatile",
+            "return", "if", "else", "for", "while", "do", "switch", "case", "break", "continue",
+            "try", "catch", "finally", "throw", "throws", "new", "this", "super", "import",
+            "package", "null", "true", "false", "void", "int", "long", "double", "float",
+            "boolean", "char", "String", "var" },
+    };
+
+    /// <summary>
+    /// Highlight a single line of code using keyword sets.
+    /// Returns Spectre.Console markup string.
+    /// </summary>
+    private static string HighlightCodeLine(string line, HashSet<string>? keywords)
+    {
+        if (keywords == null || string.IsNullOrWhiteSpace(line))
+            return line.EscapeMarkup();
+
+        // Tokenize: split on word boundaries, preserve whitespace/punctuation
+        var result = new System.Text.StringBuilder();
+        int i = 0;
+        while (i < line.Length)
+        {
+            if (char.IsLetterOrDigit(line[i]) || line[i] == '_')
+            {
+                var start = i;
+                while (i < line.Length && (char.IsLetterOrDigit(line[i]) || line[i] == '_')) i++;
+                var word = line[start..i];
+                if (keywords.Contains(word))
+                    result.Append($"[cyan]{word.EscapeMarkup()}[/]");
+                else
+                    result.Append(word.EscapeMarkup());
+            }
+            else
+            {
+                // String literals
+                if (line[i] == '"' || line[i] == '\'')
+                {
+                    var quote = line[i];
+                    result.Append("[green]");
+                    result.Append(quote);
+                    i++;
+                    while (i < line.Length && line[i] != quote)
+                    {
+                        if (line[i] == '\\' && i + 1 < line.Length)
+                        { result.Append(line[i++]); }
+                        result.Append(line[i++]);
+                    }
+                    if (i < line.Length) result.Append(line[i++]);
+                    result.Append("[/]");
+                }
+                // Comments
+                else if (i + 1 < line.Length && line[i] == '/' && line[i + 1] == '/')
+                {
+                    result.Append($"[grey]{line[i..].EscapeMarkup()}[/]");
+                    break;
+                }
+                else if (line[i] == '#')
+                {
+                    result.Append($"[grey]{line[i..].EscapeMarkup()}[/]");
+                    break;
+                }
+                // Numbers
+                else if (char.IsDigit(line[i]))
+                {
+                    var start = i;
+                    while (i < line.Length && (char.IsDigit(line[i]) || line[i] == '.' || line[i] == 'f' || line[i] == 'L' || line[i] == 'd'))
+                        i++;
+                    result.Append($"[yellow]{line[start..i].EscapeMarkup()}[/]");
+                }
+                else
+                {
+                    result.Append(line[i].ToString().EscapeMarkup());
+                    i++;
+                }
+            }
+        }
+        return result.ToString();
+    }
+
+    /// <summary>
+    /// Render markdown: code blocks with syntax highlighting, inline formatting, tables, lists.
+    /// </summary>
     private static void RenderMarkdown(string text)
     {
         var blocks = text.Split("```", StringSplitOptions.None);
@@ -155,19 +275,24 @@ public sealed class ChatLayout
         {
             if (bi % 2 == 1)
             {
-                // Code block
+                // Code block with syntax highlighting
                 var codeLines = blocks[bi].Split('\n');
-                var lang = codeLines[0].Trim();
+                var lang = codeLines[0].Trim().ToLowerInvariant();
                 var lines = codeLines.Skip(1).ToArray();
+                CodeKeywords.TryGetValue(lang, out var keywords);
                 var pad = lines.Length.ToString().Length;
                 var sb = new StringBuilder();
                 for (int ln = 0; ln < lines.Length; ln++)
-                    sb.AppendLine($"[grey]{(ln + 1).ToString().PadLeft(pad)}[/] {lines[ln].EscapeMarkup()}");
-                AnsiConsole.Write(new Panel(sb.ToString().TrimEnd()).Header($"[yellow]{lang}[/]").BorderColor(Color.Blue));
+                {
+                    var highlighted = HighlightCodeLine(lines[ln], keywords);
+                    sb.AppendLine($"[grey]{(ln + 1).ToString().PadLeft(pad)}[/] {highlighted}");
+                }
+                var header = string.IsNullOrEmpty(lang) ? "code" : lang;
+                AnsiConsole.Write(new Panel(sb.ToString().TrimEnd()).Header($"[yellow]{header.EscapeMarkup()}[/]").BorderColor(Color.Blue));
             }
             else if (!string.IsNullOrWhiteSpace(blocks[bi]))
             {
-                // Text block — convert markdown inline formatting to Spectre markup
+                // Text block
                 foreach (var line in blocks[bi].Split('\n'))
                 {
                     var trimmed = line.TrimEnd();
@@ -199,45 +324,25 @@ public sealed class ChatLayout
     /// </summary>
     private static string MdToSpectre(string text)
     {
-        // Escape existing Spectre markup brackets FIRST
         text = text.Replace("[", "[[").Replace("]", "]]");
-
-        // Bold: **text** or __text__ → [bold]text[/]
-        text = System.Text.RegularExpressions.Regex.Replace(text,
-            @"\*\*(.+?)\*\*", m => $"[bold]{m.Groups[1].Value}[/]");
-        text = System.Text.RegularExpressions.Regex.Replace(text,
-            @"__(.+?)__", m => $"[bold]{m.Groups[1].Value}[/]");
-
-        // Italic: *text* or _text_ → [italic]text[/]
-        text = System.Text.RegularExpressions.Regex.Replace(text,
-            @"\*(.+?)\*", m => $"[italic]{m.Groups[1].Value}[/]");
-        text = System.Text.RegularExpressions.Regex.Replace(text,
-            @"_(.+?)_", m => $"[italic]{m.Groups[1].Value}[/]");
-
-        // Inline code: `code` → [grey]code[/]
+        text = System.Text.RegularExpressions.Regex.Replace(text, @"\*\*(.+?)\*\*", m => $"[bold]{m.Groups[1].Value}[/]");
+        text = System.Text.RegularExpressions.Regex.Replace(text, @"__(.+?)__", m => $"[bold]{m.Groups[1].Value}[/]");
+        text = System.Text.RegularExpressions.Regex.Replace(text, @"\*(.+?)\*", m => $"[italic]{m.Groups[1].Value}[/]");
+        text = System.Text.RegularExpressions.Regex.Replace(text, @"_(.+?)_", m => $"[italic]{m.Groups[1].Value}[/]");
         text = System.Text.RegularExpressions.Regex.Replace(text,
             @"``(.+?)``|`(.+?)`", m => $"[grey]{(m.Groups[1].Success ? m.Groups[1].Value : m.Groups[2].Value)}[/]");
-
-        // Links: [text](url) → [link=url]text[/]
         text = System.Text.RegularExpressions.Regex.Replace(text,
             @"\[(.+?)\]\((.+?)\)", m => $"[link={m.Groups[2].Value}]{m.Groups[1].Value}[/]");
-
-        // Strikethrough: ~~text~~ → [strikethrough]text[/]
-        text = System.Text.RegularExpressions.Regex.Replace(text,
-            @"~~(.+?)~~", m => $"[strikethrough]{m.Groups[1].Value}[/]");
-
+        text = System.Text.RegularExpressions.Regex.Replace(text, @"~~(.+?)~~", m => $"[strikethrough]{m.Groups[1].Value}[/]");
         return text;
     }
 
     /// <summary>
-    /// Render a markdown table row. Very basic — just pipes + alignment.
+    /// Render a markdown table row.
     /// </summary>
     private static void RenderTableLine(string line)
     {
-        // Skip separator rows (|---|---|)
-        if (System.Text.RegularExpressions.Regex.IsMatch(line, @"^\|[\s\-:]+\|"))
-            return;
-
+        if (System.Text.RegularExpressions.Regex.IsMatch(line, @"^\|[\s\-:]+\|")) return;
         var cells = line.Split('|', StringSplitOptions.RemoveEmptyEntries);
         var formatted = string.Join(" [grey]│[/] ", cells.Select(c => MdToSpectre(c.Trim())));
         AnsiConsole.MarkupLine($" [grey]│[/] {formatted} [grey]│[/]");

@@ -9,3 +9,14 @@
 2026-05-30 13:29:50.787 +08:00 [INF] Wasmtime sandbox initialized (v44)
 2026-05-30 13:29:51.384 +08:00 [INF] EmbeddingClient: 2 API providers, local BGE=true, dim=384
 2026-05-30 13:29:51.387 +08:00 [INF] Orchestrator ready with 9 agents: LTAI-Chat-Pro, LTAI-Chat, LTAI-Code, LTAI-Data, LTAI-Frontend, LTAI-LLM, LTAI-Math, LTAI-System, LTAI-Writer
+2026-05-30 15:22:12.369 +08:00 [INF] Wasmtime sandbox initialized (v44)
+2026-05-30 15:22:12.442 +08:00 [INF] Wasmtime sandbox initialized (v44)
+2026-05-30 15:22:12.447 +08:00 [INF] Wasmtime sandbox initialized (v44)
+2026-05-30 15:22:12.452 +08:00 [INF] Wasmtime sandbox initialized (v44)
+2026-05-30 15:22:12.457 +08:00 [INF] Wasmtime sandbox initialized (v44)
+2026-05-30 15:22:12.462 +08:00 [INF] Wasmtime sandbox initialized (v44)
+2026-05-30 15:22:12.466 +08:00 [INF] Wasmtime sandbox initialized (v44)
+2026-05-30 15:22:12.471 +08:00 [INF] Wasmtime sandbox initialized (v44)
+2026-05-30 15:22:12.476 +08:00 [INF] Wasmtime sandbox initialized (v44)
+2026-05-30 15:22:12.741 +08:00 [INF] EmbeddingClient: 2 API providers, local BGE=true, dim=384
+2026-05-30 15:22:12.746 +08:00 [INF] Orchestrator ready with 9 agents: LTAI-Chat-Pro, LTAI-Chat, LTAI-Code, LTAI-Data, LTAI-Frontend, LTAI-LLM, LTAI-Math, LTAI-System, LTAI-Writer
