@@ -493,8 +493,8 @@ public static class ServiceCollectionExtensions
             },
             ChatHistoryProvider = new InMemoryChatHistoryProvider(),
             AIContextProviders = safety != null
-                ? [shellEnv, safety, compaction, kbGraph, codeGraph, wasmtimeSandbox, new DateContextProvider(), skillsProvider]
-                : [shellEnv, compaction, kbGraph, codeGraph, wasmtimeSandbox, new DateContextProvider(), skillsProvider],
+                ? [shellEnv, safety, compaction, kbGraph, codeGraph, wasmtimeSandbox, skillsProvider]
+                : [shellEnv, compaction, kbGraph, codeGraph, wasmtimeSandbox, skillsProvider],
             EnableMessageInjection = true,
             RequirePerServiceCallChatHistoryPersistence = true,
         }, loggerFactory, sp);

@@ -101,6 +101,9 @@ public sealed class ChatAgent
             text = $"[Auto-upgraded to Pro: {reason}]\n\n{text}";
         }
 
+        // Tool call enforcement：如果 LLM 本应调 tool 却试图猜测，强制重试
+        text = await EnforceToolCallAsync(text, message, session, ct).ConfigureAwait(false);
+
         // Reflection Loop：自省输出质量，不合格时自动修正
         text = await ReflectAsync(text, message, session, ct).ConfigureAwait(false);
 
@@ -141,6 +144,59 @@ public sealed class ChatAgent
         if (_workflows == null)
             return Task.FromResult("Workflow orchestrator not available.");
         return _workflows.ExecuteSequentialAsync(agentNames, task, traceId: GetOrCreateTraceId(), ct: ct);
+    }
+
+    /// <summary>
+    /// Tool call enforcement：检测 LLM 本应调 tool 却试图自行猜测/拒绝的场景。
+    /// 匹配关键词后发送强制 tool call 指令让模型重试。
+    /// 最多强制 1 次（防循环）。
+    /// </summary>
+    private async Task<string> EnforceToolCallAsync(string text, string originalMessage,
+        AgentSession session, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return text;
+        var lower = text.ToLowerInvariant();
+
+        // 检测"无法获取/不知道/没有权限"等拒绝模式
+        var cantPatterns = new[] { "无法获取", "无法确定", "无法提供", "没有权限", "无法访问",
+            "我不知道", "我不确定", "cannot", "can't", "unable to", "don't have",
+            "no access", "not have access", "not able to" };
+
+        var isCantAnswer = cantPatterns.Any(p => lower.Contains(p));
+        if (!isCantAnswer) return text;
+
+        // 判断原始问题是否需要 tool
+        var msgLower = originalMessage.ToLowerInvariant();
+        var needsTool = false;
+        string? toolHint = null;
+
+        if (msgLower.Contains("星期") || msgLower.Contains("几号") || msgLower.Contains("日期") ||
+            msgLower.Contains("时间") || msgLower.Contains("几点"))
+        {
+            needsTool = true;
+            toolHint = "请调用 GetCurrentDateTime 工具获取当前的准确日期和时间，不要自行估计。";
+        }
+        else if (msgLower.Contains("天气") || msgLower.Contains("位置") || msgLower.Contains("在哪") ||
+            msgLower.Contains("城市") || msgLower.Contains("这里"))
+        {
+            needsTool = true;
+            toolHint = "请调用 IpLocation 工具获取用户位置，然后回答。";
+        }
+
+        if (!needsTool) return text;
+
+        var forcePrompt = $"{toolHint}\n\n用户的问题是: {originalMessage}\n\n请使用工具后重新回答。";
+        try
+        {
+            var forceResult = await _proAgent.RunAsync(
+                [new ChatMessage(ChatRole.User, forcePrompt)], session,
+                cancellationToken: ct).ConfigureAwait(false);
+            var retry = forceResult.Messages?.LastOrDefault()?.Text ?? "";
+            if (!string.IsNullOrWhiteSpace(retry) && retry.Length > 10)
+                return $"[工具调用]\n\n{retry}";
+        }
+        catch { }
+        return text;
     }
 
     /// <summary>
