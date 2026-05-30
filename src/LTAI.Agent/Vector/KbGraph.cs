@@ -152,6 +152,13 @@ public sealed class KbGraph : AIContextProvider
         if (userMsg?.Text == null || userMsg.Text.Length < 5)
             return context.AIContext!;
 
+        // Skip KG query for simple greetings — no knowledge needed
+        if (IsSimpleGreeting(userMsg.Text))
+        {
+            _logger.LogDebug("KbGraph: skipped greeting query \"{Q}\"", userMsg.Text);
+            return context.AIContext!;
+        }
+
         try
         {
             var results = await QueryAsync(userMsg.Text, topK: 5, ct: ct);
@@ -288,6 +295,28 @@ public sealed class KbGraph : AIContextProvider
             return string.IsNullOrWhiteSpace(result) ? query : result;
         }
         catch { return query; }
+    }
+
+    /// <summary>
+    /// Quick check: is this a simple greeting/conversation opener that doesn't need KG?
+    /// Returns true for short messages with only greeting words and common particles.
+    /// Avoids wasteful FTS5 queries on trivial input.
+    /// </summary>
+    private static readonly System.Text.RegularExpressions.Regex GreetingPattern = new(
+        @"^(你好|您好|hi|hello|hey|早上好|下午好|晚上好|再见|拜拜|谢谢|感谢|好的|ok|嗯|嗨|嘿嘿|在吗|在不在|help|\?|？|\.\.\.)$",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    /// <summary>Shared greeting detection — also used by CgGraph to skip code search.</summary>
+    internal static bool IsSimpleGreeting(string text)
+    {
+        var trimmed = text.Trim();
+        // Pure greeting with < 10 chars
+        if (trimmed.Length <= 8 && GreetingPattern.IsMatch(trimmed))
+            return true;
+        // Single word + punctuation
+        if (trimmed.Length <= 4 && trimmed.All(c => char.IsLetter(c) || c is '?' or '？' or '!' or '！' or '.'))
+            return true;
+        return false;
     }
 
     // 共享 LocalEmbedder 实例 — 避免每次查询都加载 90MB ONNX 模型
