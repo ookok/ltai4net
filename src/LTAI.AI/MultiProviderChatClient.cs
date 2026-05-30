@@ -596,14 +596,16 @@ public static class ServiceCollectionExtensions
             return router;
         });
 
-        // Step 2: Wrap with SafeChatClient for output safety interception
+        // Step 2: Wrap with SafeChatClient for output safety interception (optional)
         services.AddSingleton<IChatClient>(sp =>
         {
             var router = sp.GetRequiredService<MultiProviderChatClient>();
-            var logger = sp.GetService<ILogger<LTAI.Core.Safety.SafeChatClient>>();
-
-            // Build a safety LLM from the first available provider
             var opts = sp.GetRequiredService<IOptions<LTAIOptions>>().Value;
+
+            if (opts.AI.SkipSafetyChecks)
+                return router; // Bypass safety in dev mode
+
+            var logger = sp.GetService<ILogger<LTAI.Core.Safety.SafeChatClient>>();
             var httpFactory = sp.GetRequiredService<IHttpClientFactory>();
             var safetyKey = LTAI.Core.Configuration.SecretManager.Get(opts.AI.ApiKeyEnv ?? "DEEPSEEK_API_KEY") ?? "";
             IChatClient safetyClient = new OpenAiHttpClient(

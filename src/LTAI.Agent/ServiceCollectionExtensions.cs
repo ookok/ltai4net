@@ -418,10 +418,15 @@ public static class ServiceCollectionExtensions
             tools.Add(AIFunctionFactory.Create(wfTools.WorkflowConcurrent));
         }
 
-        var safetyKey = LTAI.Core.Configuration.SecretManager.Get(opts.AI.ApiKeyEnv ?? "DEEPSEEK_API_KEY") ?? "";
-        var safetyHttp = sp.GetRequiredService<IHttpClientFactory>().CreateClient();
-        var safetyClient = new OpenAiHttpClient(safetyHttp, "https://api.deepseek.com/v1", "deepseek-chat", safetyKey);
-        var safety = new SafetyCoordinator(safetyClient, loggerFactory.CreateLogger<SafetyCoordinator>());
+        // Safety guardrail (optional — skip for local dev to reduce latency)
+        SafetyCoordinator? safety = null;
+        if (!opts.AI.SkipSafetyChecks)
+        {
+            var safetyKey = LTAI.Core.Configuration.SecretManager.Get(opts.AI.ApiKeyEnv ?? "DEEPSEEK_API_KEY") ?? "";
+            var safetyHttp = sp.GetRequiredService<IHttpClientFactory>().CreateClient();
+            var safetyClient = new OpenAiHttpClient(safetyHttp, "https://api.deepseek.com/v1", "deepseek-chat", safetyKey);
+            safety = new SafetyCoordinator(safetyClient, loggerFactory.CreateLogger<SafetyCoordinator>());
+        }
 
         var shellEnv = new ShellEnvironmentProvider(
             new LocalShellExecutor(new LocalShellExecutorOptions
@@ -486,7 +491,9 @@ public static class ServiceCollectionExtensions
                 ModelId = modelId,
             },
             ChatHistoryProvider = new InMemoryChatHistoryProvider(),
-            AIContextProviders = [shellEnv, safety, compaction, kbGraph, codeGraph, wasmtimeSandbox, skillsProvider],
+            AIContextProviders = safety != null
+                ? [shellEnv, safety, compaction, kbGraph, codeGraph, wasmtimeSandbox, skillsProvider]
+                : [shellEnv, compaction, kbGraph, codeGraph, wasmtimeSandbox, skillsProvider],
             EnableMessageInjection = true,
             RequirePerServiceCallChatHistoryPersistence = true,
         }, loggerFactory, sp);
