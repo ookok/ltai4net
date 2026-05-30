@@ -144,6 +144,10 @@ public sealed class ChatLayout
         }
     }
 
+    /// <summary>
+    /// Render markdown text to Spectre.Console markup.
+    /// Supports: bold, italic, inline code, links, headers, lists, tables, code blocks.
+    /// </summary>
     private static void RenderMarkdown(string text)
     {
         var blocks = text.Split("```", StringSplitOptions.None);
@@ -151,6 +155,7 @@ public sealed class ChatLayout
         {
             if (bi % 2 == 1)
             {
+                // Code block
                 var codeLines = blocks[bi].Split('\n');
                 var lang = codeLines[0].Trim();
                 var lines = codeLines.Skip(1).ToArray();
@@ -162,15 +167,80 @@ public sealed class ChatLayout
             }
             else if (!string.IsNullOrWhiteSpace(blocks[bi]))
             {
-                foreach (var para in blocks[bi].Split('\n', StringSplitOptions.RemoveEmptyEntries))
+                // Text block — convert markdown inline formatting to Spectre markup
+                foreach (var line in blocks[bi].Split('\n'))
                 {
-                    if (para.StartsWith("# ")) AnsiConsole.MarkupLine($"[bold yellow]{para[2..].EscapeMarkup()}[/]");
-                    else if (para.StartsWith("## ")) AnsiConsole.MarkupLine($"[bold]{para[3..].EscapeMarkup()}[/]");
-                    else if (para.StartsWith("- ") || para.StartsWith("* ")) AnsiConsole.MarkupLine($"  [green]•[/] {para[2..].EscapeMarkup()}");
-                    else AnsiConsole.MarkupLine(para.EscapeMarkup());
+                    var trimmed = line.TrimEnd();
+                    if (string.IsNullOrWhiteSpace(trimmed)) { AnsiConsole.WriteLine(); continue; }
+
+                    if (trimmed.StartsWith("# "))
+                        AnsiConsole.MarkupLine($"[bold yellow]{MdToSpectre(trimmed[2..])}[/]");
+                    else if (trimmed.StartsWith("## "))
+                        AnsiConsole.MarkupLine($"[bold]{MdToSpectre(trimmed[3..])}[/]");
+                    else if (trimmed.StartsWith("### "))
+                        AnsiConsole.MarkupLine($"[bold cyan]{MdToSpectre(trimmed[4..])}[/]");
+                    else if (trimmed.StartsWith("- ") || trimmed.StartsWith("* "))
+                        AnsiConsole.MarkupLine($"  [green]•[/] {MdToSpectre(trimmed[2..])}");
+                    else if (trimmed.StartsWith("1. ") || trimmed.StartsWith("2. ") || trimmed.StartsWith("3. "))
+                        AnsiConsole.MarkupLine($"  [grey]{trimmed[..3]}[/]{MdToSpectre(trimmed[3..])}");
+                    else if (trimmed.StartsWith("|") && trimmed.EndsWith("|"))
+                        RenderTableLine(trimmed);
+                    else if (trimmed.StartsWith("> "))
+                        AnsiConsole.MarkupLine($"  [grey]│[/] [italic]{MdToSpectre(trimmed[2..])}[/]");
+                    else
+                        AnsiConsole.MarkupLine(MdToSpectre(trimmed));
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// Convert markdown inline formatting to Spectre.Console markup.
+    /// </summary>
+    private static string MdToSpectre(string text)
+    {
+        // Escape existing Spectre markup brackets FIRST
+        text = text.Replace("[", "[[").Replace("]", "]]");
+
+        // Bold: **text** or __text__ → [bold]text[/]
+        text = System.Text.RegularExpressions.Regex.Replace(text,
+            @"\*\*(.+?)\*\*", m => $"[bold]{m.Groups[1].Value}[/]");
+        text = System.Text.RegularExpressions.Regex.Replace(text,
+            @"__(.+?)__", m => $"[bold]{m.Groups[1].Value}[/]");
+
+        // Italic: *text* or _text_ → [italic]text[/]
+        text = System.Text.RegularExpressions.Regex.Replace(text,
+            @"\*(.+?)\*", m => $"[italic]{m.Groups[1].Value}[/]");
+        text = System.Text.RegularExpressions.Regex.Replace(text,
+            @"_(.+?)_", m => $"[italic]{m.Groups[1].Value}[/]");
+
+        // Inline code: `code` → [grey]code[/]
+        text = System.Text.RegularExpressions.Regex.Replace(text,
+            @"``(.+?)``|`(.+?)`", m => $"[grey]{(m.Groups[1].Success ? m.Groups[1].Value : m.Groups[2].Value)}[/]");
+
+        // Links: [text](url) → [link=url]text[/]
+        text = System.Text.RegularExpressions.Regex.Replace(text,
+            @"\[(.+?)\]\((.+?)\)", m => $"[link={m.Groups[2].Value}]{m.Groups[1].Value}[/]");
+
+        // Strikethrough: ~~text~~ → [strikethrough]text[/]
+        text = System.Text.RegularExpressions.Regex.Replace(text,
+            @"~~(.+?)~~", m => $"[strikethrough]{m.Groups[1].Value}[/]");
+
+        return text;
+    }
+
+    /// <summary>
+    /// Render a markdown table row. Very basic — just pipes + alignment.
+    /// </summary>
+    private static void RenderTableLine(string line)
+    {
+        // Skip separator rows (|---|---|)
+        if (System.Text.RegularExpressions.Regex.IsMatch(line, @"^\|[\s\-:]+\|"))
+            return;
+
+        var cells = line.Split('|', StringSplitOptions.RemoveEmptyEntries);
+        var formatted = string.Join(" [grey]│[/] ", cells.Select(c => MdToSpectre(c.Trim())));
+        AnsiConsole.MarkupLine($" [grey]│[/] {formatted} [grey]│[/]");
     }
 
     private static bool IsDiffContent(string text)

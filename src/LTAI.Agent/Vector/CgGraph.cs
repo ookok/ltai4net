@@ -228,6 +228,10 @@ public sealed class CgGraph : AIContextProvider
     protected override async ValueTask<AIContext> ProvideAIContextAsync(
         InvokingContext ctx, CancellationToken ct = default)
     {
+        // Skip unless code index has been manually built (not auto-triggered
+        // on first query, because TreeSitter native parser can crash on some files).
+        if (!_built) return ctx.AIContext!;
+
         var msgs = ctx.AIContext?.Messages;
         if (msgs == null) return ctx.AIContext!;
 
@@ -241,7 +245,6 @@ public sealed class CgGraph : AIContextProvider
 
         try
         {
-            if (!_built) await BuildAsync();
 
             var result = await QueryAsync(userMsg.Text, topK: 3, ct: ct);
             if (string.IsNullOrEmpty(result) || result.StartsWith("No relevant"))

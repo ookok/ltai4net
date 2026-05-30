@@ -2,6 +2,7 @@ using LTAI.Agent;
 using LTAI.AI;
 using LTAI.Core;
 using LTAI.Core.Configuration;
+using Spectre.Console;
 
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -16,7 +17,12 @@ public static class Program
     public static async Task Main(string[] args)
     {
         Console.OutputEncoding = System.Text.Encoding.UTF8;
-        Console.Title = "LTAI Dev Console";
+        Console.Title = "LTAI";
+
+        // Show splash immediately — no waiting for DI
+        AnsiConsole.Write(new FigletText("LTAI").Color(Color.Green));
+        AnsiConsole.MarkupLine("[grey]LivingTree AI — 轻量版[/]");
+        AnsiConsole.MarkupLine("[yellow]正在初始化...[/]");
 
         Log.Logger = new LoggerConfiguration()
             .MinimumLevel.Information()
@@ -37,9 +43,17 @@ public static class Program
         services.AddLTAICore();
         services.AddLTAIAI();
         services.AddLTAIAgent();
-        
 
-        var sp = services.BuildServiceProvider();
+        // Warm up in background while showing splash
+        var sp = await Task.Run(() =>
+        {
+            var sp = services.BuildServiceProvider();
+            // Force eager resolve of key singletons in background thread
+            _ = sp.GetRequiredService<ChatAgent>();
+            _ = sp.GetRequiredService<MultiProviderChatClient>();
+            return sp;
+        });
+
         var options = sp.GetRequiredService<IOptions<LTAIOptions>>();
         var chatAgent = sp.GetRequiredService<ChatAgent>();
         var router = sp.GetRequiredService<MultiProviderChatClient>();
@@ -47,6 +61,7 @@ public static class Program
         var llmConfig = new LLMConfigPanel(options, router, httpFactory);
 
         var app = new TuiApp(chatAgent, llmConfig, options, Directory.GetCurrentDirectory());
+        Console.Clear();
         await app.RunAsync();
     }
 }

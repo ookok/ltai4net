@@ -14,30 +14,40 @@ namespace LTAI.Desktop;
 public static class Program
 {
     [STAThread]
-    public static void Main(string[] args)
-    {
-        var services = BuildServices();
-        var provider = services.BuildServiceProvider();
-
-        App.ChatAgent = provider.GetRequiredService<ChatAgent>();
-        App.Options = provider.GetRequiredService<IOptions<LTAIOptions>>();
-        App.Router = provider.GetService<MultiProviderChatClient>();
-        App.HttpFactory = provider.GetService<IHttpClientFactory>();
-
-        // Async balance fetch (non-blocking)
-        var opts = provider.GetRequiredService<IOptions<LTAIOptions>>();
-        _ = LTAI.Core.Configuration.UsageTracker.FetchBalanceAsync(
-            opts.Value.AI.DefaultProvider,
-            LTAI.Core.Configuration.SecretManager.Get("SILICONFLOW_API_KEY")
-            ?? LTAI.Core.Configuration.SecretManager.Get("OPENROUTER_API_KEY"));
-
+    public static void Main(string[] args) =>
         BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
-    }
 
     public static AppBuilder BuildAvaloniaApp()
         => AppBuilder.Configure<App>().UsePlatformDetect().LogToTrace();
 
-    private static IServiceCollection BuildServices()
+    /// <summary>
+    /// Initialize LTAI services in background. Called from App.OnFrameworkInitializationCompleted
+    /// after the main window is shown, so the UI doesn't freeze during DI warmup.
+    /// </summary>
+    public static async Task InitializeServicesAsync()
+    {
+        var services = BuildServiceCollection();
+        var provider = await Task.Run(() => services.BuildServiceProvider());
+
+        // Resolve eagerly (triggers DI chain including 9 agents, KgStore, Wasmtime, etc.)
+        var chatAgent = await Task.Run(() => provider.GetRequiredService<ChatAgent>());
+        var options = await Task.Run(() => provider.GetRequiredService<IOptions<LTAIOptions>>());
+
+        // Set on App for UI access
+        App.ChatAgent = chatAgent;
+        App.Options = options;
+        App.Ltais = new LTAIService(chatAgent, options);
+        App.Router = await Task.Run(() => provider.GetService<MultiProviderChatClient>());
+        App.HttpFactory = await Task.Run(() => provider.GetService<IHttpClientFactory>());
+
+        // Balance fetch (non-blocking)
+        _ = LTAI.Core.Configuration.UsageTracker.FetchBalanceAsync(
+            options.Value.AI.DefaultProvider,
+            LTAI.Core.Configuration.SecretManager.Get("SILICONFLOW_API_KEY")
+            ?? LTAI.Core.Configuration.SecretManager.Get("OPENROUTER_API_KEY"));
+    }
+
+    private static IServiceCollection BuildServiceCollection()
     {
         var services = new ServiceCollection();
         var config = new ConfigurationBuilder()

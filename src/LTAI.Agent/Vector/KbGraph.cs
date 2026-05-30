@@ -315,11 +315,17 @@ public sealed class KbGraph : AIContextProvider
     private static readonly string[] SkipAnchors =
     [
         "你好 您好 hi hello hey 嗨 嘿嘿",
-        "谢谢 感谢 多谢 辛苦了 好的 ok 嗯",
+        "谢谢 感谢 多谢 辛苦了 好的 ok 嗯 哈哈",
         "再见 拜拜 明天见 回头聊",
         "今天星期几 几点了 现在几点 今天几号",
-        "1+1 一加一 算一下 计算",
+        "1+1 一加一 算一下 计算",              // simple math
         "在吗 在不在 有空吗 测试 试一下",
+        "你会做什么 你能做什么 你会写代码吗",   // capability questions
+        "你会什么 你有什么功能 你能干嘛",
+        "帮我个忙 帮我一下 我问你个问题",
+        "你好聪明 你真厉害 你太棒了",           // compliments
+        "不懂 不知道 不会 没听懂 再说一遍",
+        "测试测试 只是测试 试试看",
     ];
 
     private static float[]? _knowledgeCentroid;

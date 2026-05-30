@@ -25,7 +25,20 @@ public class App : Application
     {
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
-            desktop.MainWindow = new MainWindow(Ltais!);
+            // Show window immediately with loading state
+            var window = new MainWindow(null);
+            desktop.MainWindow = window;
+
+            // Initialize services in background (DI chain + warmup)
+            _ = Task.Run(async () =>
+            {
+                await Program.InitializeServicesAsync();
+                // Update window on UI thread when ready
+                await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() =>
+                {
+                    window.DataContext = Ltais;
+                });
+            });
         }
         base.OnFrameworkInitializationCompleted();
     }

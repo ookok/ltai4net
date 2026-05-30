@@ -28,13 +28,15 @@ public sealed class LocalEmbedder : IDisposable
     private const int MaxLength = 512;
     private const int Dimension = 384;
 
-    private readonly InferenceSession? _session;
-    private readonly Dictionary<string, int>? _vocab;
+    private readonly Lazy<InferenceSession?> _sessionLazy;
+    private readonly Lazy<Dictionary<string, int>?> _vocabLazy;
     private readonly string? _modelPath;
+    private readonly string? _vocabPath;
     private bool _disposed;
+    private InferenceSession? _session => _sessionLazy.IsValueCreated ? _sessionLazy.Value : null;
 
-    /// <summary>Whether the ONNX model is loaded and ready (false if model file not found).</summary>
-    public bool Available => _session != null;
+    /// <summary>Whether the ONNX model is available. Triggers lazy load on first check.</summary>
+    public bool Available => _sessionLazy.Value != null;
 
     /// <summary>Embedding dimension (384).</summary>
     public int Dim => Dimension;
@@ -53,31 +55,37 @@ public sealed class LocalEmbedder : IDisposable
     /// If not found, Available=false (no error thrown — callers check Available).
     /// <b>Called by:</b> DI container via AddLTAIAI().
     /// </summary>
+    /// <summary>
+    /// Constructor: finds model files but does NOT load the ONNX model (lazy).
+    /// Model is loaded on first <see cref="Generate"/> or <see cref="Available"/> access.
+    /// This keeps cold start fast (~1ms vs ~500ms for ONNX loading).
+    /// </summary>
     public LocalEmbedder()
     {
         _modelPath = FindModelFile("model.onnx");
-        var vocabPath = FindModelFile("vocab.txt");
+        _vocabPath = FindModelFile("vocab.txt");
 
-        if (_modelPath == null || vocabPath == null)
+        _sessionLazy = new Lazy<InferenceSession?>(() =>
         {
-            return; // Available = false
-        }
+            if (_modelPath == null || _vocabPath == null) return null;
+            try
+            {
+                var opts = new SessionOptions();
+                opts.EnableMemoryPattern = true;
+                opts.ExecutionMode = ExecutionMode.ORT_SEQUENTIAL;
+                opts.GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL;
+                var session = new InferenceSession(_modelPath, opts);
+                return session;
+            }
+            catch { return null; }
+        }, LazyThreadSafetyMode.ExecutionAndPublication);
 
-        try
+        _vocabLazy = new Lazy<Dictionary<string, int>?>(() =>
         {
-            var opts = new SessionOptions();
-            // Optimize for CPU inference
-            opts.EnableMemoryPattern = true;
-            opts.ExecutionMode = ExecutionMode.ORT_SEQUENTIAL;
-            opts.GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL;
-
-            _session = new InferenceSession(_modelPath, opts);
-            _vocab = LoadVocab(vocabPath);
-        }
-        catch (Exception)
-        {
-            // Available = false — model corrupt or incompatible
-        }
+            if (_vocabPath == null) return null;
+            try { return LoadVocab(_vocabPath); }
+            catch { return null; }
+        }, LazyThreadSafetyMode.ExecutionAndPublication);
     }
 
     /// <summary>
@@ -88,11 +96,13 @@ public sealed class LocalEmbedder : IDisposable
     /// </summary>
     public float[] Generate(string text)
     {
-        if (_session == null || _vocab == null)
+        var session = _sessionLazy.Value;
+        var vocab = _vocabLazy.Value;
+        if (session == null || vocab == null)
             throw new InvalidOperationException(
                 "LocalEmbedder not available. Run 'dotnet build' to download the embedding model.");
 
-        var tokens = Tokenize(text);
+        var tokens = Tokenize(text, vocab);
 
         // Create input tensors
         var inputIds = new DenseTensor<long>(new[] { 1, tokens.Count });
@@ -114,7 +124,7 @@ public sealed class LocalEmbedder : IDisposable
             NamedOnnxValue.CreateFromTensor("token_type_ids", tokenTypeIds),
         };
 
-        using var results = _session.Run(inputs);
+        using var results = session.Run(inputs);
 
         // all-MiniLM-L6-v2 output: last_hidden_state (batch, seq_len, 384)
         var embedding = results.First().AsTensor<float>();
@@ -130,7 +140,7 @@ public sealed class LocalEmbedder : IDisposable
     //  BERT WordPiece Tokenizer
     // ═══════════════════════════════════════════
 
-    private List<Token> Tokenize(string text)
+    private List<Token> Tokenize(string text, Dictionary<string, int> vocab)
     {
         // Normalize: lowercase for CJK mixed text, collapse whitespace
         var normalized = NormalizeText(text);
@@ -141,7 +151,7 @@ public sealed class LocalEmbedder : IDisposable
 
         foreach (var word in words)
         {
-            var wordPieces = WordPiece(word);
+            var wordPieces = WordPiece(word, vocab);
             pieces.AddRange(wordPieces);
 
             if (pieces.Count >= MaxLength - 1) break;
@@ -160,7 +170,7 @@ public sealed class LocalEmbedder : IDisposable
         var tokens = new List<Token>();
         foreach (var piece in pieces)
         {
-            var id = _vocab!.GetValueOrDefault(piece, UnkTokenId);
+            var id = vocab.GetValueOrDefault(piece, UnkTokenId);
             tokens.Add(new Token(id, 1));
         }
 
@@ -228,9 +238,9 @@ public sealed class LocalEmbedder : IDisposable
         return words;
     }
 
-    private List<string> WordPiece(string word)
+    private List<string> WordPiece(string word, Dictionary<string, int> vocab)
     {
-        if (_vocab!.ContainsKey(word))
+        if (vocab.ContainsKey(word))
             return [word];
 
         var pieces = new List<string>();
@@ -248,7 +258,7 @@ public sealed class LocalEmbedder : IDisposable
                     ? new string(chars[start..end])
                     : "##" + new string(chars[start..end]);
 
-                if (_vocab!.ContainsKey(sub))
+                if (vocab.ContainsKey(sub))
                 {
                     found = sub;
                     break;
