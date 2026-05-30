@@ -20,6 +20,24 @@ public sealed class SystemTools
         Timeout = TimeSpan.FromSeconds(30)
     };
 
+    [Description("Get the current date and time. Use this when you need to know what day it is, what time it is, or the current date.")]
+    public static string GetCurrentDateTime()
+    {
+        var now = DateTime.Now;
+        var weekday = now.DayOfWeek switch
+        {
+            DayOfWeek.Monday => "星期一",
+            DayOfWeek.Tuesday => "星期二",
+            DayOfWeek.Wednesday => "星期三",
+            DayOfWeek.Thursday => "星期四",
+            DayOfWeek.Friday => "星期五",
+            DayOfWeek.Saturday => "星期六",
+            DayOfWeek.Sunday => "星期日",
+            _ => now.DayOfWeek.ToString()
+        };
+        return $"当前时间: {now:yyyy-MM-dd HH:mm:ss}\n当前日期: {now:yyyy年MM月dd日}\n星期: {weekday}";
+    }
+
     [Description("Get system information: OS, CPU, memory, disk, runtime")]
     public static string SystemInfo()
     {

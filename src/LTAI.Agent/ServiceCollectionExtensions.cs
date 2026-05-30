@@ -472,7 +472,6 @@ public static class ServiceCollectionExtensions
         AIAgent agent = new ChatClientAgent(llm, new ChatClientAgentOptions
         {
             Name = name,
-            // NOTE: No DateTime.Now — timestamps destroy prefix caching.
             Description = $"你是 {name}，{description}。\n"
                 + "工具调用注意：\n"
                 + "1. 参数必须是正确的JSON类型（数字不要加引号，布尔值用true/false）\n"
