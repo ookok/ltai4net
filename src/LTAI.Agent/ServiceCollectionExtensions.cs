@@ -55,10 +55,11 @@ public static class ServiceCollectionExtensions
             return new CgGraph(store, llm, logger, Directory.GetCurrentDirectory());
         });
 
-        // Step 3: Workflow orchestrator
+        // Step 3: Workflow orchestrator (with optional vector routing)
         services.AddSingleton<WorkflowOrchestrator>(sp =>
             new WorkflowOrchestrator(agents.Values, agents["chat"],
-                sp.GetRequiredService<ILogger<WorkflowOrchestrator>>()));
+                sp.GetRequiredService<ILogger<WorkflowOrchestrator>>(),
+                sp.GetService<EmbeddingClient>()));
 
         // Step 3b: Token budget tracker (from AI config, optional)
         services.AddSingleton<LTAI.AI.BudgetTracker>(sp =>

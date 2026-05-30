@@ -1,4 +1,5 @@
 using System.Text.Json;
+using LTAI.AI;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
@@ -32,6 +33,7 @@ public sealed class WorkflowOrchestrator
     private readonly ILogger<WorkflowOrchestrator> _logger;
     private readonly Dictionary<string, AIAgent> _specialists;  // non-default agents by name
     private readonly AIAgent _defaultAgent;                      // orchestrator + fallback
+    private readonly EmbeddingClient? _embedder;                  // semantic agent router
     private readonly SemaphoreSlim _concurrencyThrottle = new(2, 2); // Max 2 concurrent agents
     private readonly Dictionary<string, int> _specialistFailures = new(StringComparer.OrdinalIgnoreCase);
     private const int SpecialistCircuitBreaker = 3;  // consecutive failures → stop routing
@@ -40,10 +42,12 @@ public sealed class WorkflowOrchestrator
     public WorkflowOrchestrator(
         IEnumerable<AIAgent> allAgents,
         AIAgent defaultAgent,
-        ILogger<WorkflowOrchestrator> logger)
+        ILogger<WorkflowOrchestrator> logger,
+        EmbeddingClient? embedder = null)
     {
         _logger = logger;
         _defaultAgent = defaultAgent;
+        _embedder = embedder;
         _specialists = allAgents
             .Where(a => !string.Equals(a.Name, defaultAgent.Name, StringComparison.OrdinalIgnoreCase))
             .ToDictionary(a => a.Name!, StringComparer.OrdinalIgnoreCase);
@@ -61,8 +65,25 @@ public sealed class WorkflowOrchestrator
         string? traceId = null,
         CancellationToken ct = default)
     {
-        // Use orchestrator agent to decide routing
-        var specialistsDesc = string.Join("\n", _specialists.Select(s => $"  - {s.Key}"));
+        // Use orchestrator agent to decide routing.
+        // If embedder is available, select top-5 agents by semantic similarity
+        // instead of dumping all specialists into the prompt (avoid prompt bloat).
+        string specialistsDesc;
+        string[] candidateNames;
+
+        if (_embedder != null && _specialists.Count > 5)
+        {
+            candidateNames = AgentRegistry.SelectTopK(task, _embedder, k: 5);
+            specialistsDesc = string.Join("\n", candidateNames.Select(n => $"  - {n}"));
+            _logger.LogDebug("Vector router: selected {N}/{Total} candidates",
+                candidateNames.Length, _specialists.Count);
+        }
+        else
+        {
+            candidateNames = _specialists.Keys.ToArray();
+            specialistsDesc = string.Join("\n", _specialists.Select(s => $"  - {s.Key}"));
+        }
+
         var routingMessages = new List<ChatMessage>
         {
             new(ChatRole.System, $"""

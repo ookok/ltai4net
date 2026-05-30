@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using LTAI.AI;
 
 namespace LTAI.Agent;
 
@@ -16,12 +17,23 @@ public sealed record AgentFileDef
     /// <summary>Tool category names enabled for this agent.</summary>
     public string[] Tools { get; init; } = [];
     public string Prompt { get; init; } = "";
+
+    /// <summary>Cached embedding vector for semantic routing.</summary>
+    public float[]? Embedding { get; init; }
+
+    /// <summary>Text used for embedding — combines description + tools.</summary>
+    public string CapabilityText =>
+        $"{Description} | tools: {string.Join(", ", Tools)} | {Prompt.Truncate(200)}";
 }
 
 public static class AgentRegistry
 {
+    private static List<AgentFileDef>? _cached;
+
     public static List<AgentFileDef> LoadAll()
     {
+        if (_cached != null) return _cached;
+
         var result = new List<AgentFileDef>();
         var searchDirs = new[]
         {
@@ -44,8 +56,81 @@ public static class AgentRegistry
             }
             break;
         }
+        _cached = result;
         return result;
     }
+
+    /// <summary>Invalidate cache (e.g., when agents/*.agent.md files change).</summary>
+    public static void InvalidateCache() => _cached = null;
+
+    /// <summary>
+    /// Compute embeddings for all agents (lazy, cached per def).
+    /// Call this once at startup or when agents change.
+    /// </summary>
+    public static async Task EnsureEmbeddingsAsync(EmbeddingClient embedder,
+        CancellationToken ct = default)
+    {
+        var agents = LoadAll();
+        foreach (var def in agents)
+        {
+            if (def.Embedding != null) continue; // already computed
+            try
+            {
+                var emb = await embedder.GenerateAsync(def.CapabilityText, ct).ConfigureAwait(false);
+                // Since AgentFileDef is a record, we need to update via index
+                var idx = agents.IndexOf(def);
+                if (idx >= 0)
+                    agents[idx] = def with { Embedding = emb };
+            }
+            catch
+            {
+                // Skip agent if embedding fails — will not be selectable via vector
+            }
+        }
+    }
+
+    /// <summary>
+    /// Select top-K agents by semantic similarity to the task.
+    /// Returns agent names suitable for routing.
+    /// Falls back to all agent names if embeddings not computed yet.
+    /// </summary>
+    public static string[] SelectTopK(string task, EmbeddingClient embedder,
+        int k = 5, CancellationToken ct = default)
+    {
+        var agents = LoadAll();
+        if (agents.Count == 0) return [];
+
+        // Ensure embeddings (compute on demand if missing)
+        var hasMissing = agents.Any(a => a.Embedding == null);
+        if (hasMissing)
+        {
+            // Compute synchronously — fine for first call (blocking, but fast ~50ms)
+            ComputeEmbeddingsSync(agents, embedder);
+        }
+
+        // If still no embeddings (embedder unavailable), return all
+        if (agents.All(a => a.Embedding == null))
+            return agents.Select(a => a.Name).Where(n => n != null).Cast<string>().Take(k).ToArray();
+
+        // Compute task embedding using FastEmb fallback (always available, no API call)
+        var taskEmb = EmbeddingClient.FastEmb(task);
+
+        var scored = agents
+            .Where(a => a.Embedding != null)
+            .Select(a => (name: a.Name, score: CosineSimilarity(taskEmb, a.Embedding!)))
+            .OrderByDescending(x => x.score)
+            .Take(k)
+            .Select(x => x.name)
+            .Where(n => n != null)
+            .Cast<string>()
+            .ToArray();
+
+        return scored.Length > 0 ? scored : agents.Select(a => a.Name).Cast<string>().Take(k).ToArray();
+    }
+
+    // ═══════════════════════════════════════════
+    //  Parser
+    // ═══════════════════════════════════════════
 
     public static AgentFileDef? ParseFile(string path)
     {
@@ -87,6 +172,37 @@ public static class AgentRegistry
         return def;
     }
 
+    // ═══════════════════════════════════════════
+    //  Private
+    // ═══════════════════════════════════════════
+
+    private static void ComputeEmbeddingsSync(List<AgentFileDef> agents, EmbeddingClient embedder)
+    {
+        for (int i = 0; i < agents.Count; i++)
+        {
+            if (agents[i].Embedding != null) continue;
+            try
+            {
+                var emb = embedder.GenerateAsync(agents[i].CapabilityText)
+                    .GetAwaiter().GetResult();
+                agents[i] = agents[i] with { Embedding = emb };
+            }
+            catch
+            {
+                // Skip individual failures
+            }
+        }
+    }
+
+    private static float CosineSimilarity(float[] a, float[] b)
+    {
+        int len = Math.Min(a.Length, b.Length);
+        float dot = 0, na = 0, nb = 0;
+        for (int i = 0; i < len; i++)
+        { dot += a[i] * b[i]; na += a[i] * a[i]; nb += b[i] * b[i]; }
+        return na > 0 && nb > 0 ? dot / (MathF.Sqrt(na) * MathF.Sqrt(nb)) : 0;
+    }
+
     private static string[]? ParseJsonArray(string json)
     {
         try
@@ -94,9 +210,12 @@ public static class AgentRegistry
             var arr = JsonSerializer.Deserialize<string[]>(json);
             return arr?.Length > 0 ? arr : null;
         }
-        catch
-        {
-            return null;
-        }
+        catch { return null; }
     }
+}
+
+file static class StringExt
+{
+    public static string Truncate(this string s, int max) =>
+        s.Length <= max ? s : s[..max] + "...";
 }
