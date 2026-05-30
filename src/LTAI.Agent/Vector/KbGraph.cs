@@ -152,10 +152,10 @@ public sealed class KbGraph : AIContextProvider
         if (userMsg?.Text == null || userMsg.Text.Length < 5)
             return context.AIContext!;
 
-        // Skip KG query for simple greetings — no knowledge needed
-        if (IsSimpleGreeting(userMsg.Text))
+        // Skip KG query for casual chat — embedding-based intent classification
+        if (!IsKnowledgeQuery(userMsg.Text))
         {
-            _logger.LogDebug("KbGraph: skipped greeting query \"{Q}\"", userMsg.Text);
+            _logger.LogDebug("KbGraph: skipped casual query \"{Q}\"", userMsg.Text);
             return context.AIContext!;
         }
 
@@ -298,25 +298,78 @@ public sealed class KbGraph : AIContextProvider
     }
 
     /// <summary>
-    /// Quick check: is this a simple greeting/conversation opener that doesn't need KG?
-    /// Returns true for short messages with only greeting words and common particles.
-    /// Avoids wasteful FTS5 queries on trivial input.
+    /// Centroid embeddings for knowledge-seeking vs casual chat intent classification.
+    /// Uses FastEmb (zero API cost, pure math) to decide whether a query needs KG lookup.
     /// </summary>
-    private static readonly System.Text.RegularExpressions.Regex GreetingPattern = new(
-        @"^(你好|您好|hi|hello|hey|早上好|下午好|晚上好|再见|拜拜|谢谢|感谢|好的|ok|嗯|嗨|嘿嘿|在吗|在不在|help|\?|？|\.\.\.)$",
-        System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled);
+    private static readonly string[] KnowledgeAnchors =
+    [
+        "查找资料 搜索文档 查询信息 寻找代码",
+        "什么是 是什么 怎么用 如何使用 如何实现",
+        "为什么 原因 区别 对比 分析 比较",
+        "代码在哪里 函数定义 方法实现 类结构",
+        "解释一下 说明 介绍 总结 概括",
+        "错误 问题 故障 异常 解决 修复",
+        "配置 安装 部署 设置 参数 选项",
+    ];
 
-    /// <summary>Shared greeting detection — also used by CgGraph to skip code search.</summary>
-    internal static bool IsSimpleGreeting(string text)
+    private static readonly string[] SkipAnchors =
+    [
+        "你好 您好 hi hello hey 嗨 嘿嘿",
+        "谢谢 感谢 多谢 辛苦了 好的 ok 嗯",
+        "再见 拜拜 明天见 回头聊",
+        "今天星期几 几点了 现在几点 今天几号",
+        "1+1 一加一 算一下 计算",
+        "在吗 在不在 有空吗 测试 试一下",
+    ];
+
+    private static float[]? _knowledgeCentroid;
+    private static float[]? _skipCentroid;
+    private static readonly object _centroidLock = new();
+
+    private static void EnsureCentroids()
     {
-        var trimmed = text.Trim();
-        // Pure greeting with < 10 chars
-        if (trimmed.Length <= 8 && GreetingPattern.IsMatch(trimmed))
-            return true;
-        // Single word + punctuation
-        if (trimmed.Length <= 4 && trimmed.All(c => char.IsLetter(c) || c is '?' or '？' or '!' or '！' or '.'))
-            return true;
-        return false;
+        if (_knowledgeCentroid != null) return;
+        lock (_centroidLock)
+        {
+            if (_knowledgeCentroid != null) return;
+            _knowledgeCentroid = ComputeCentroid(KnowledgeAnchors);
+            _skipCentroid = ComputeCentroid(SkipAnchors);
+        }
+    }
+
+    private static float[] ComputeCentroid(string[] anchors)
+    {
+        const int dim = 384;
+        var sum = new float[dim];
+        int count = 0;
+        foreach (var anchor in anchors)
+        {
+            var emb = LTAI.AI.EmbeddingClient.FastEmb(anchor, dim);
+            for (int i = 0; i < dim; i++) sum[i] += emb[i];
+            count++;
+        }
+        if (count > 0)
+            for (int i = 0; i < dim; i++) sum[i] /= count;
+        return sum;
+    }
+
+    private static float CosineSimilarity(float[] a, float[] b)
+    {
+        int len = Math.Min(a.Length, b.Length);
+        float dot = 0, na = 0, nb = 0;
+        for (int i = 0; i < len; i++)
+        { dot += a[i] * b[i]; na += a[i] * a[i]; nb += b[i] * b[i]; }
+        return na > 0 && nb > 0 ? dot / (MathF.Sqrt(na) * MathF.Sqrt(nb)) : 0;
+    }
+
+    /// <summary>Intent-based KG gate. Uses FastEmb + cosine similarity.</summary>
+    internal static bool IsKnowledgeQuery(string text)
+    {
+        EnsureCentroids();
+        var emb = LTAI.AI.EmbeddingClient.FastEmb(text.Trim(), 384);
+        var knowledgeScore = CosineSimilarity(emb, _knowledgeCentroid!);
+        var skipScore = CosineSimilarity(emb, _skipCentroid!);
+        return knowledgeScore > skipScore + 0.05f;
     }
 
     // 共享 LocalEmbedder 实例 — 避免每次查询都加载 90MB ONNX 模型

@@ -235,8 +235,8 @@ public sealed class CgGraph : AIContextProvider
         if (userMsg?.Text == null || userMsg.Text.Length < 5)
             return ctx.AIContext!;
 
-        // Skip code search for simple greetings
-        if (KbGraph.IsSimpleGreeting(userMsg.Text))
+        // Skip code search for casual chat
+        if (!KbGraph.IsKnowledgeQuery(userMsg.Text))
             return ctx.AIContext!;
 
         try
