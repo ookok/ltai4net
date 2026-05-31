@@ -45,3 +45,13 @@ models/
 ## AI assistant artifacts
 .reasonix/
 .opencode/
+
+## Scratch / temp files
+fix_*.py
+run_fix*.py
+*_b64.txt
+tmp_*
+null
+
+## Logs
+logs/
