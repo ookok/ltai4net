@@ -427,6 +427,9 @@ public sealed class UsageTracker : IUsageTracker
     private static long _cacheMissTokens;    // Token 级：API 返回的 prompt_cache_miss_tokens
     private static long _toolCalls;          // Tool call 累计次数
     private static string _currentTool = ""; // 当前正在执行的工具名（供 TUI 动画读取）
+    private static long _lastToolCallMs;
+    private static long _lastLlmCallMs;
+    private static readonly System.Diagnostics.Stopwatch _currentToolStopwatch = new();
     private static long _lastStreamTokens;   // 最近一次流式 completion tokens
     private static long _lastStreamElapsedMs; // 最近一次流式耗时(ms)
     private static int _contextWindowSize = 64000;
@@ -596,6 +599,44 @@ public sealed class UsageTracker : IUsageTracker
     public static void SetActiveTool(string toolName) => _currentTool = toolName;
     /// <summary>当前正在执行的工具名，空字符串表示无活跃工具。</summary>
     public static string CurrentTool => _currentTool;
+    /// <summary>开始工具调用计时。每次调用前重置，支持重入。</summary>
+    public static void StartToolTimer()
+    {
+        _currentToolStopwatch.Restart();
+    }
+    /// <summary>停止工具调用计时并记录耗时 (ms)。</summary>
+    public static void StopToolTimer()
+    {
+        _currentToolStopwatch.Stop();
+        Interlocked.Exchange(ref _lastToolCallMs, _currentToolStopwatch.ElapsedMilliseconds);
+    }
+    /// <summary>最近一次工具调用耗时 (ms)。</summary>
+    public static long ToolCallMs => Interlocked.Read(ref _lastToolCallMs);
+    /// <summary>最近一次工具调用耗时格式化显示。</summary>
+    public static string ToolCallTimeDisplay
+    {
+        get
+        {
+            var ms = Interlocked.Read(ref _lastToolCallMs);
+            return ms >= 1000 ? $"{ms / 1000.0:F1}s" : ms > 0 ? $"{ms}ms" : "";
+        }
+    }
+    /// <summary>记录最近一次 LLM 调用耗时 (ms)。</summary>
+    public static void RecordLlmCallDuration(long latencyMs)
+    {
+        Interlocked.Exchange(ref _lastLlmCallMs, latencyMs);
+    }
+    /// <summary>最近一次 LLM 调用耗时 (ms)。</summary>
+    public static long LlmCallMs => Interlocked.Read(ref _lastLlmCallMs);
+    /// <summary>最近一次 LLM 调用耗时格式化显示。</summary>
+    public static string LlmCallTimeDisplay
+    {
+        get
+        {
+            var ms = Interlocked.Read(ref _lastLlmCallMs);
+            return ms >= 1000 ? $"{ms / 1000.0:F1}s" : ms > 0 ? $"{ms}ms" : "";
+        }
+    }
     /// <summary>记录流式请求的 token 数和耗时，用于计算响应速率。</summary>
     public static void RecordStreamingMetrics(long completionTokens, long elapsedMs)
     {

@@ -63,6 +63,19 @@ public static class MarkdownRenderer
             { inlines.Add(Run("  \u2022 ", color: LtaiTheme.AccentDNA)); RenderSpan(line[2..], inlines); continue; }
             var ol = Regex.Match(line, @"^(\d+)\.\s");
             if (ol.Success) { inlines.Add(Run($"  {ol.Groups[1].Value}. ", color: LtaiTheme.AccentDNA)); RenderSpan(line[ol.Length..], inlines); continue; }
+            var trimmedLine = line.TrimStart();
+            if (trimmedLine.StartsWith('|') && line.TrimEnd().EndsWith('|'))
+            {
+                if (Regex.IsMatch(trimmedLine, @"^\|[\s\-:]+\|$")) continue;
+                var cells = trimmedLine.Split('|', StringSplitOptions.RemoveEmptyEntries)
+                    .Select(c => c.Trim()).ToList();
+                for (int ci = 0; ci < cells.Count; ci++)
+                {
+                    if (ci > 0) inlines.Add(Run(" \u2502 ", color: LtaiTheme.TextDim, font: "Consolas"));
+                    RenderSpan(cells[ci], inlines);
+                }
+                continue;
+            }
             RenderSpan(line, inlines);
         }
         return inlines;
@@ -167,38 +180,33 @@ public static class MarkdownRenderer
 
     public static void RenderSpan(string text, InlineCollection inlines)
     {
-        int i = 0;
-        while (i < text.Length)
+        var regex = new Regex(
+            @"\*\*(.+?)\*\*|__(.+?)__|\*(.+?)\*|_(.+?)_|`(.+?)`|\[(.+?)\]\(([^)]+)\)|~~(.+?)~~");
+        int pos = 0;
+        foreach (Match m in regex.Matches(text))
         {
-            var ci = text.IndexOf('`', i);
-            var bi = text.IndexOf("**", i);
-            var ii = text.IndexOf('*', i);
+            if (m.Index > pos)
+                inlines.Add(Run(text[pos..m.Index]));
 
-            var next = MinPos(ci, bi, ii);
-            if (next < 0) { inlines.Add(Run(text[i..])); break; }
+            if (m.Groups[1].Success)       // **bold**
+                inlines.Add(Run(m.Groups[1].Value, weight: FontWeight.Bold));
+            else if (m.Groups[2].Success)  // __bold__
+                inlines.Add(Run(m.Groups[2].Value, weight: FontWeight.Bold));
+            else if (m.Groups[3].Success)  // *italic*
+                inlines.Add(Run(m.Groups[3].Value, italic: true));
+            else if (m.Groups[4].Success)  // _italic_
+                inlines.Add(Run(m.Groups[4].Value, italic: true));
+            else if (m.Groups[5].Success)  // `code`
+                inlines.Add(Run(m.Groups[5].Value, color: LtaiTheme.AccentInfo, font: "Consolas"));
+            else if (m.Groups[6].Success)  // [link](url)
+                inlines.Add(Run(m.Groups[6].Value, color: LtaiTheme.AccentInfo, italic: true));
+            else if (m.Groups[8].Success)  // ~~strikethrough~~
+                inlines.Add(Run(m.Groups[8].Value, color: LtaiTheme.TextDim));
 
-            if (next == ci)
-            {
-                if (ci > i) inlines.Add(Run(text[i..ci]));
-                var end = text.IndexOf('`', ci + 1);
-                if (end > ci) { inlines.Add(Run(text[(ci + 1)..end], color: LtaiTheme.AccentInfo, font: "Consolas")); i = end + 1; }
-                else { inlines.Add(Run(text[ci..])); break; }
-            }
-            else if (next == bi)
-            {
-                if (bi > i) inlines.Add(Run(text[i..bi]));
-                var end = text.IndexOf("**", bi + 2);
-                if (end > bi) { inlines.Add(Run(text[(bi + 2)..end], weight: FontWeight.Bold)); i = end + 2; }
-                else { inlines.Add(Run(text[bi..])); break; }
-            }
-            else
-            {
-                if (ii > i) inlines.Add(Run(text[i..ii]));
-                var end = text.IndexOf('*', ii + 1);
-                if (end > ii) { inlines.Add(Run(text[(ii + 1)..end], italic: true)); i = end + 1; }
-                else { inlines.Add(Run(text[ii..])); break; }
-            }
+            pos = m.Index + m.Length;
         }
+        if (pos < text.Length)
+            inlines.Add(Run(text[pos..]));
     }
 
     private static Run Run(string text, Color? color = null, FontWeight? weight = null,
@@ -211,12 +219,6 @@ public static class MarkdownRenderer
         FontStyle = italic ? FontStyle.Italic : FontStyle.Normal,
         FontFamily = font != null ? new(font) : new("Consolas"),
     };
-
-    private static int MinPos(int a, int b, int c)
-    {
-        var vals = new[] { a, b, c }.Where(v => v >= 0).ToArray();
-        return vals.Length > 0 ? vals.Min() : -1;
-    }
 
     // ─── Public helpers for ChatView code block syntax highlighting ───
 

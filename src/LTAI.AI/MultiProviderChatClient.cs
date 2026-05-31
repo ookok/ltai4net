@@ -592,6 +592,7 @@ public sealed class OpenAiHttpClient : IChatClient
         // 记录流式响应速率指标
         sw.Stop();
         LTAI.Core.Configuration.UsageTracker.RecordStreamingMetrics(completionTokens, sw.ElapsedMilliseconds);
+        LTAI.Core.Configuration.UsageTracker.RecordLlmCallDuration(sw.ElapsedMilliseconds);
     }
 
     /// <summary>Track token usage from a streaming SSE chunk (usage field, last message before [DONE]).</summary>

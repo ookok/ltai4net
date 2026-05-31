@@ -61,6 +61,7 @@ public sealed class ObservableToolAgent : DelegatingAIAgent
                     {
                         yield return new AgentResponseUpdate(ChatRole.Assistant, $"⏳ 正在调用 {fc.Name}...\n");
                         LTAI.Core.Configuration.UsageTracker.SetActiveTool(fc.Name);
+                        LTAI.Core.Configuration.UsageTracker.StartToolTimer();
                         break;
                     }
                 }
@@ -73,6 +74,7 @@ public sealed class ObservableToolAgent : DelegatingAIAgent
                 {
                     if (content is FunctionResultContent frc && frc.Result != null)
                     {
+                        LTAI.Core.Configuration.UsageTracker.StopToolTimer();
                         var resultStr = frc.Result?.ToString() ?? "(null)";
                         if (resultStr.Length > 200)
                             resultStr = resultStr[..200] + "...";

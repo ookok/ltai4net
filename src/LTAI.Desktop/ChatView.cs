@@ -20,7 +20,7 @@ public sealed class ChatView : UserControl
     private readonly TextBox _input;
     private readonly StackPanel _outputStack;
     private readonly ScrollViewer _scroller;
-    private readonly TextBlock _stats;
+    private readonly StackPanel _footerStats;
     private readonly Button _actionBtn;
     private readonly List<string> _history = [];
     private int _historyIdx = -1;
@@ -35,10 +35,6 @@ public sealed class ChatView : UserControl
 
         var root = new DockPanel { Margin = new(16) };
 
-        _stats = new TextBlock { Foreground = LtaiTheme.Sbb(LtaiTheme.TextDim), FontSize = 12 };
-        DockPanel.SetDock(_stats, Dock.Top);
-        root.Children.Add(_stats);
-
         var modelHeader = new TextBlock
         {
             Text = "LTAI Chat",
@@ -49,10 +45,24 @@ public sealed class ChatView : UserControl
         DockPanel.SetDock(modelHeader, Dock.Top);
         root.Children.Add(modelHeader);
 
-        var inputBar = new DockPanel { Margin = new(0, 8) };
+        // ── Footer (multi-line stats + input bar) ──
+        _footerStats = new StackPanel { Spacing = 1 };
+        var footerBorder = new Border
+        {
+            Background = LtaiTheme.Sbb(LtaiTheme.BgPanel),
+            BorderBrush = LtaiTheme.Sbb(LtaiTheme.Border),
+            BorderThickness = new(1, 0, 0, 0),
+            Padding = new(0, 6, 0, 0),
+        };
+        var footerStack = new StackPanel();
+        footerStack.Children.Add(_footerStats);
 
-        var toolbox = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
-
+        var toolbox = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 4,
+            Margin = new(0, 6, 0, 0)
+        };
         var fileBtn = new Button
         {
             Content = "Files", Width = 52,
@@ -61,7 +71,6 @@ public sealed class ChatView : UserControl
             FontSize = 11
         };
         fileBtn.Click += async (_, _) => await PickFilesAsync();
-
         var folderBtn = new Button
         {
             Content = "Folder", Width = 55,
@@ -70,7 +79,6 @@ public sealed class ChatView : UserControl
             FontSize = 11
         };
         folderBtn.Click += async (_, _) => await PickFolderAsync();
-
         toolbox.Children.Add(fileBtn);
         toolbox.Children.Add(folderBtn);
 
@@ -83,7 +91,7 @@ public sealed class ChatView : UserControl
             BorderThickness = new(1),
             FontFamily = new("Consolas"),
             MinHeight = 72,
-            AcceptsReturn = false,   // Enter sends; Shift+Enter inserts newline manually
+            AcceptsReturn = false,
             TextWrapping = TextWrapping.Wrap
         };
         _input.KeyDown += OnInputKey;
@@ -102,31 +110,30 @@ public sealed class ChatView : UserControl
             else _ = SendAsync();
         };
 
-        var inputStack = new StackPanel { Spacing = 4 };
-        inputStack.Children.Add(toolbox);
-        inputStack.Children.Add(_input);
-        DockPanel.SetDock(inputBar, Dock.Bottom);
-
+        var inputRow = new DockPanel { Margin = new(0, 4, 0, 0) };
         var btnPanel = new DockPanel { Margin = new(4, 0, 0, 0) };
         btnPanel.Children.Add(_actionBtn);
         DockPanel.SetDock(btnPanel, Dock.Right);
-        inputBar.Children.Add(btnPanel);
-        inputBar.Children.Add(inputStack);
+        inputRow.Children.Add(btnPanel);
+        inputRow.Children.Add(_input);
 
-        root.Children.Add(inputBar);
+        footerStack.Children.Add(toolbox);
+        footerStack.Children.Add(inputRow);
+        footerBorder.Child = footerStack;
+        DockPanel.SetDock(footerBorder, Dock.Bottom);
+        root.Children.Add(footerBorder);
 
+        // ── Messages area ──
         _outputStack = new StackPanel { Spacing = 8 };
         _scroller = new ScrollViewer { Content = _outputStack };
         root.Children.Add(_scroller);
 
         SetupDragDrop();
-
         Content = root;
 
         void OnThemeChanged()
         {
             Background = LtaiTheme.Sbb(LtaiTheme.Bg);
-            _stats.Foreground = LtaiTheme.Sbb(LtaiTheme.TextDim);
             _input.Foreground = LtaiTheme.Sbb(LtaiTheme.TextPrimary);
             _input.Background = LtaiTheme.Sbb(LtaiTheme.BgInput);
             _actionBtn.Background = _isSending
@@ -302,6 +309,15 @@ public sealed class ChatView : UserControl
     {
         var query = _input.Text?.Trim();
         if (string.IsNullOrWhiteSpace(query)) return;
+
+        // Handle slash commands
+        if (query.StartsWith('/'))
+        {
+            _input.Text = "";
+            TryHandleSlashCommand(query);
+            return;
+        }
+
         _history.Add(query);
         if (_history.Count > 100) _history.RemoveRange(0, _history.Count - 100);
         _historyIdx = -1;
@@ -979,9 +995,231 @@ public sealed class ChatView : UserControl
         _aiBubbleStack.Children.Add(copyRow);
     }
 
+    // ── 命令处理 ──
+
+    private static readonly string[] KnownCommands = [
+        "help", "new", "exit", "status", "pwd", "plan", "approve",
+        "ls", "cd", "config", "model", "cost", "retry", "compact",
+        "memory", "skill", "mode", "undo", "monitor"
+    ];
+
+    private bool TryHandleSlashCommand(string input)
+    {
+        var parts = input.Trim().Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
+        var cmdName = parts[0][1..].ToLowerInvariant();
+        if (string.IsNullOrEmpty(cmdName)) cmdName = "help";
+        var args = parts.Length > 1 ? parts[1] : "";
+
+        switch (cmdName)
+        {
+            case "help":
+            case "?":
+            case "帮助":
+                ShowHelp();
+                return true;
+
+            case "new":
+            case "reset":
+            case "clear":
+            case "新":
+            case "新建":
+                _outputStack.Children.Clear();
+                _turns = 0;
+                _tokens = 0;
+                RefreshStats();
+                AddSystemBubble("✅ 会话已重置");
+                return true;
+
+            case "exit":
+            case "quit":
+            case "q":
+            case "退出":
+                (TopLevel.GetTopLevel(this) as Window)?.Close();
+                return true;
+
+            case "status":
+            case "状态":
+            case "统计":
+                ShowStatus();
+                return true;
+
+            case "pwd":
+            case "目录":
+                AddSystemBubble($"📁 {Directory.GetCurrentDirectory()}");
+                return true;
+
+            case "plan":
+            case "计划状态":
+                AddSystemBubble(LTAI.Agent.Tools.PlanTools.PlanStatus());
+                return true;
+
+            case "approve":
+            case "yes":
+            case "confirm":
+            case "批准":
+            case "确认":
+                AddSystemBubble(LTAI.Agent.Tools.PlanTools.ApprovePlan()
+                    + "\n" + LTAI.Agent.Tools.PlanTools.StartExecution());
+                return true;
+
+            case "ls":
+            case "dir":
+            case "列表":
+                var dir = Directory.GetCurrentDirectory();
+                var entries = Directory.GetFileSystemEntries(dir)
+                    .Take(30)
+                    .Select(e =>
+                    {
+                        var name = Path.GetFileName(e);
+                        return Directory.Exists(e) ? $"📁 {name}" : $"📄 {name}";
+                    });
+                AddSystemBubble($"📂 {dir}\n" + string.Join("\n", entries));
+                return true;
+
+            case "cd":
+                if (string.IsNullOrWhiteSpace(args))
+                {
+                    AddSystemBubble("用法: /cd <目录路径>");
+                    return true;
+                }
+                try
+                {
+                    Directory.SetCurrentDirectory(args);
+                    AddSystemBubble($"📂 {Directory.GetCurrentDirectory()}");
+                }
+                catch (Exception ex)
+                {
+                    AddSystemBubble($"❌ {ex.Message}");
+                }
+                return true;
+
+            default:
+                var closest = KnownCommands
+                    .Select(c => (name: c, dist: Levenshtein(cmdName, c)))
+                    .Where(x => x.dist <= 3)
+                    .OrderBy(x => x.dist)
+                    .FirstOrDefault();
+                var msg = closest.name != null
+                    ? $"⚠️ 未知命令 '/{cmdName}'。您是不是想输入 '/{closest.name}'？"
+                    : $"⚠️ 未知命令 '/{cmdName}'。输入 /help 查看可用命令。";
+                AddSystemBubble(msg);
+                return true;
+        }
+    }
+
+    private void ShowHelp()
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("可用命令：");
+        sb.AppendLine();
+        sb.AppendLine("/help, /?     — 显示此帮助");
+        sb.AppendLine("/new, /clear  — 新建会话");
+        sb.AppendLine("/exit, /quit  — 退出应用");
+        sb.AppendLine("/status       — 显示统计信息");
+        sb.AppendLine("/pwd          — 显示当前目录");
+        sb.AppendLine("/ls           — 列出当前目录");
+        sb.AppendLine("/cd <路径>    — 切换工作目录");
+        sb.AppendLine("/plan         — 查看计划状态");
+        sb.AppendLine("/approve      — 批准当前计划");
+        AddSystemBubble(sb.ToString().TrimEnd());
+    }
+
+    private void ShowStatus()
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine($"回合: {_turns}");
+        sb.AppendLine($"Token: {_tokens:N0}");
+        sb.AppendLine($"模型: {_svc.Mode}");
+        sb.AppendLine($"目录: {Directory.GetCurrentDirectory()}");
+        AddSystemBubble(sb.ToString().TrimEnd());
+    }
+
+    private void AddSystemBubble(string text)
+    {
+        var b = new Border
+        {
+            Background = LtaiTheme.Sbb(LtaiTheme.BgPanel),
+            BorderBrush = LtaiTheme.Sbb(LtaiTheme.AccentSystem),
+            BorderThickness = new(1),
+            CornerRadius = new(6),
+            Padding = new(10),
+            Margin = new(0, 4)
+        };
+        var stb = new SelectableTextBlock
+        {
+            Text = text,
+            Foreground = LtaiTheme.Sbb(LtaiTheme.TextPrimary),
+            FontFamily = new("Consolas"),
+            FontSize = 13,
+            TextWrapping = TextWrapping.Wrap
+        };
+        b.Child = stb;
+        _outputStack.Children.Add(b);
+        _scroller.ScrollToEnd();
+    }
+
+    private static int Levenshtein(string a, string b)
+    {
+        var m = a.Length; var n = b.Length;
+        var d = new int[m + 1, n + 1];
+        for (int i = 0; i <= m; i++) d[i, 0] = i;
+        for (int j = 0; j <= n; j++) d[0, j] = j;
+        for (int j = 1; j <= n; j++)
+            for (int i = 1; i <= m; i++)
+                d[i, j] = a[i - 1] == b[j - 1]
+                    ? d[i - 1, j - 1]
+                    : Math.Min(Math.Min(d[i - 1, j] + 1, d[i, j - 1] + 1), d[i - 1, j - 1] + 1);
+        return d[m, n];
+    }
+
     private void RefreshStats()
     {
-        _stats.Text = string.Format("Turns: {0} | Tokens: {1} | Model: {2}", _turns, _tokens, _svc.Mode);
+        _footerStats.Children.Clear();
+        var dim = new SolidColorBrush(LtaiTheme.TextDim);
+
+        TextBlock Line(string text) => new()
+        {
+            Text = text,
+            Foreground = dim,
+            FontSize = 11,
+            FontFamily = new("Consolas"),
+            TextWrapping = TextWrapping.NoWrap
+        };
+
+        var r = LTAI.Core.Configuration.UsageTracker.Requests;
+
+        if (r > 0)
+        {
+            var l = $"模型: {LTAI.Core.Configuration.UsageTracker.ActiveModel}  " +
+                    $"Token: {LTAI.Core.Configuration.UsageTracker.TotalTokens:N0}  " +
+                    $"费用: {LTAI.Core.Configuration.UsageTracker.CostDisplay}";
+            var tps = LTAI.Core.Configuration.UsageTracker.CurrentTps;
+            if (tps.HasValue) l += $"  速率: {tps:F0} t/s";
+            l += $"  请求: {r}";
+            _footerStats.Children.Add(Line(l));
+
+            var l2 = $"缓存: {LTAI.Core.Configuration.UsageTracker.CacheHitRate:F1}%  " +
+                     $"余额: {LTAI.Core.Configuration.UsageTracker.BalanceDisplay}";
+            var tc = LTAI.Core.Configuration.UsageTracker.ToolCalls;
+            if (tc > 0) l2 += $"  工具: {tc}次";
+            var saved = LTAI.Core.Configuration.UsageTracker.CacheSavedDisplay;
+            if (saved != "¥0.0000") l2 += $"  节省: {saved}";
+            _footerStats.Children.Add(Line(l2));
+
+            var llmTime = LTAI.Core.Configuration.UsageTracker.LlmCallTimeDisplay;
+            var toolTime = LTAI.Core.Configuration.UsageTracker.ToolCallTimeDisplay;
+            if (!string.IsNullOrEmpty(llmTime) || !string.IsNullOrEmpty(toolTime))
+            {
+                var timing = new List<string>();
+                if (!string.IsNullOrEmpty(llmTime)) timing.Add($"LLM: {llmTime}");
+                if (!string.IsNullOrEmpty(toolTime)) timing.Add($"工具: {toolTime}");
+                _footerStats.Children.Add(Line(string.Join("  ", timing)));
+            }
+        }
+        else
+        {
+            _footerStats.Children.Add(Line("等待首次请求...  输入消息开始对话"));
+        }
     }
 
     private static bool TryParseToolResult(string text, out (bool success, string output, string error) result)
