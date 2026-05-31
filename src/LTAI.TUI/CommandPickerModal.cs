@@ -140,7 +140,7 @@ public static class CommandPickerModal
                 foreach (var item in group)
                 {
                     var isSelected = item == items[selectedIdx];
-                    var prefix = isSelected ? "  [reverse] " : "  ";
+                    var prefix = isSelected ? "  [black on cyan] " : "  ";
                     var suffix = isSelected ? " [/]" : "";
                     var line = $"{prefix}{item.DisplayText}{suffix}";
 

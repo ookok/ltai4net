@@ -45,7 +45,7 @@ public static class SkillScriptRunner
     private static async Task<string> RunProcess(string exe, string args, string fullPath, CancellationToken ct)
     {
         var sb = new StringBuilder();
-        var process = new Process
+        using var process = new Process
         {
             StartInfo = new ProcessStartInfo
             {

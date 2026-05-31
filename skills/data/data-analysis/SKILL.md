@@ -2,6 +2,7 @@
 name: data-analysis
 description: 数据分析——结构化数据探索/统计摘要/可视化方案/异常检测
 license: MIT
+allowedTools: [ReadFileContent, SearchContent, Glob, CSharpScript]
 ---
 
 # Data Analysis 数据分析

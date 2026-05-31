@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Text;
 using System.Text.Json;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
@@ -18,6 +19,11 @@ public sealed class SubagentTools
     private int _spawnCount;
     private int _totalTurns;
     private readonly object _budgetLock = new();
+
+    /// <summary>子 Agent 消息流式回调：spawnCount, role, content</summary>
+    public static event Action<int, string, string>? OnSubagentMessage;
+    /// <summary>子 Agent 完成回调：spawnCount</summary>
+    public static event Action<int>? OnSubagentComplete;
 
     private const int MaxSpawns = 10;
     private const int TotalTurnLimit = 50;
@@ -136,7 +142,6 @@ public sealed class SubagentTools
         if (!string.IsNullOrEmpty(traceId))
             System.Diagnostics.Debug.WriteLine($"[Subagent {_spawnCount}] type={type} trace={traceId}");
 
-        var sw = Stopwatch.StartNew();
         var systemPrompt = systemOverride ?? GetSystemPrompt(type ?? "generic");
         var isReadOnly = ReadOnlyTypes.Contains(type ?? "");
 
@@ -153,30 +158,88 @@ public sealed class SubagentTools
 
         try
         {
+            var capturedSpawn = _spawnCount;
+            var capturedType = type ?? "generic";
+
             var agent = new ChatClientAgent(_llm, new ChatClientAgentOptions
             {
-                Name = $"subagent-{_spawnCount}",
+                Name = $"subagent-{capturedSpawn}",
                 Description = systemPrompt,
                 ChatOptions = chatOptions,
                 ChatHistoryProvider = new InMemoryChatHistoryProvider(),
             }, null, _sp);
 
-            ct.ThrowIfCancellationRequested();
             var session = await agent.CreateSessionAsync(ct);
-            ct.ThrowIfCancellationRequested();
-            var response = await agent.RunAsync([new ChatMessage(ChatRole.User, task)], session, cancellationToken: ct);
-            var result = response.Messages?.LastOrDefault()?.Text ?? "(no output)";
+            var sw = Stopwatch.StartNew();
+            var messageBuf = new StringBuilder();
+            var messages = new List<(string role, string content)>();
+
+            // 触发用户消息事件
+            OnSubagentMessage?.Invoke(capturedSpawn, "user", task);
+
+            // 使用流式执行，每 token 触发 UI 事件
+            await foreach (var update in agent.RunStreamingAsync(
+                [new ChatMessage(ChatRole.User, task)], session, cancellationToken: ct))
+            {
+                // 收集文本 token
+                if (!string.IsNullOrEmpty(update.Text))
+                {
+                    messageBuf.Append(update.Text);
+                }
+
+                // 处理工具调用/结果
+                if (update.Contents?.Count > 0)
+                {
+                    foreach (var c in update.Contents)
+                    {
+                        if (c is FunctionCallContent fc)
+                        {
+                            var msg = $"🛠 调用 {fc.Name}";
+                            OnSubagentMessage?.Invoke(capturedSpawn, "assistant", msg);
+                        }
+                        if (c is FunctionResultContent frc)
+                        {
+                            var resultStr = frc.Result?.ToString() ?? "";
+                            var preview = resultStr.Length > 80 ? resultStr[..80] + "..." : resultStr;
+                            OnSubagentMessage?.Invoke(capturedSpawn, "assistant", $"  📄 {preview}");
+                        }
+                    }
+                }
+
+                // 每收到完整句子或工具调用就触发事件
+                if (update.Contents?.Count > 0 || (update.Text?.Contains('\n') == true))
+                {
+                    var text = messageBuf.ToString().Trim();
+                    if (text.Length > 0)
+                    {
+                        OnSubagentMessage?.Invoke(capturedSpawn, "assistant", text);
+                        messages.Add(("assistant", text));
+                        messageBuf.Clear();
+                    }
+                }
+            }
+
+            // 最后的文本
+            var finalText = messageBuf.ToString().Trim();
+            if (finalText.Length > 0)
+            {
+                OnSubagentMessage?.Invoke(capturedSpawn, "assistant", finalText);
+                messages.Add(("assistant", finalText));
+            }
 
             var elapsed = sw.ElapsedMilliseconds;
+            var resultText = messages.Count > 0 ? messages[^1].Item2 : "(no output)";
+
             var output = JsonSerializer.Serialize(new
             {
                 success = true,
-                output = Truncate(result, 8000),
-                spawnCount = _spawnCount,
+                output = Truncate(resultText, 8000),
+                spawnCount = capturedSpawn,
                 elapsedMs = elapsed,
-                type = type ?? "generic",
+                type = capturedType,
             });
 
+            OnSubagentComplete?.Invoke(capturedSpawn);
             return budgetHint != null ? $"{output}\n{budgetHint}" : output;
         }
         catch (OperationCanceledException)

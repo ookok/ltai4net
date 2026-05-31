@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace LTAI.Agent.Tools;
 
@@ -13,6 +14,11 @@ namespace LTAI.Agent.Tools;
 /// </summary>
 public static class ToolCallRepairer
 {
+    private static readonly Regex TrailingCommaRx = new(@",\s*([}\]])", RegexOptions.Compiled);
+    private static readonly Regex SingleQuoteRx = new("'([^']+)'", RegexOptions.Compiled);
+    private static readonly Regex UnquotedPropRx = new(@"\{?\s*(\w+)\s*:", RegexOptions.Compiled);
+    private static readonly Regex ArrayCommaRx = new(@",\s*\]", RegexOptions.Compiled);
+    private static readonly Dictionary<string, int> _identicalCount = new(StringComparer.Ordinal);
     private static readonly JsonSerializerOptions LenientJson = new()
     {
         PropertyNameCaseInsensitive = true,
@@ -61,17 +67,16 @@ public static class ToolCallRepairer
         }
 
         // Remove trailing commas before closing braces
-        repaired = System.Text.RegularExpressions.Regex.Replace(repaired, @",\s*([}\]])", "$1");
+        repaired = TrailingCommaRx.Replace(repaired, "$1");
 
         // Fix single quotes to double quotes
-        repaired = System.Text.RegularExpressions.Regex.Replace(repaired, "'([^']+)'", "\"$1\"");
+        repaired = SingleQuoteRx.Replace(repaired, "\"$1\"");
 
         // Fix unquoted property names (Python-style: {name: "value"} → {"name": "value"})
-        repaired = System.Text.RegularExpressions.Regex.Replace(repaired,
-            @"\{?\s*(\w+)\s*:", "{\"$1\":");
+        repaired = UnquotedPropRx.Replace(repaired, "{\"$1\":");
 
         // Fix trailing comma after last array element
-        repaired = System.Text.RegularExpressions.Regex.Replace(repaired, @",\s*\]", "]");
+        repaired = ArrayCommaRx.Replace(repaired, "]");
 
         // Step 3: Try parse again
         try
@@ -132,8 +137,9 @@ public static class ToolCallRepairer
             while (history.Count >= MaxHistoryEntries)
                 history.Dequeue();
 
-            // Count identical calls
-            var identical = history.Count(h => h.args == arguments);
+            // Count identical calls — 使用字典 O(1) 查找而非 O(n) Count
+            var identical = _identicalCount.TryGetValue(arguments, out var cnt) ? cnt : 0;
+            _identicalCount[arguments] = identical + 1;
             history.Enqueue((toolName, arguments, now));
 
             if (identical >= MaxIdenticalCalls)
@@ -151,19 +157,19 @@ public static class ToolCallRepairer
     /// </summary>
     public static string? FuzzyMatchToolName(string called, IEnumerable<string> registered)
     {
-        // Exact match
-        if (registered.Any(r => r.Equals(called, StringComparison.OrdinalIgnoreCase)))
-            return called;
+        // 单次遍历：先精确匹配，再包含匹配（避免 Any+FirstOrDefault 重复遍历）
+        foreach (var r in registered)
+        {
+            if (r.Equals(called, StringComparison.OrdinalIgnoreCase))
+                return r;
+        }
 
-        // Case-insensitive
-        var ci = registered.FirstOrDefault(r => r.Equals(called, StringComparison.OrdinalIgnoreCase));
-        if (ci != null) return ci;
-
-        // Contains
-        var contains = registered.FirstOrDefault(r =>
-            r.Contains(called, StringComparison.OrdinalIgnoreCase) ||
-            called.Contains(r, StringComparison.OrdinalIgnoreCase));
-        if (contains != null) return contains;
+        foreach (var r in registered)
+        {
+            if (r.Contains(called, StringComparison.OrdinalIgnoreCase) ||
+                called.Contains(r, StringComparison.OrdinalIgnoreCase))
+                return r;
+        }
 
         // Levenshtein (edit distance ≤ 3)
         foreach (var r in registered)

@@ -2,6 +2,7 @@
 name: performance-profile
 description: 性能分析——定位瓶颈/内存/IO/延迟热点，给出优化建议
 license: MIT
+allowedTools: [ReadFileContent, SearchContent, Glob, RunCommand]
 ---
 
 # Performance Profile 性能分析

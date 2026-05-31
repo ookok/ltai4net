@@ -46,13 +46,29 @@ public sealed class SearchTools
         var files = new List<string>();
         try
         {
+            var rootSpan = root.AsSpan();
             foreach (var f in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
             {
+                // 检查跳过目录（不分配 Split 数组）
                 var relPath = Path.GetRelativePath(root, f).Replace('\\', '/');
-                var parts = relPath.Split('/');
-                if (parts.Take(parts.Length - 1).Any(p => SkipDirs.Contains(p))) continue;
+                var relSpan = relPath.AsSpan();
+                var skip = false;
+                while (relSpan.Length > 0)
+                {
+                    var slashIdx = relSpan.IndexOf('/');
+                    var seg = slashIdx >= 0 ? relSpan[..slashIdx] : relSpan;
+                    if (seg.Length > 0 && SkipDirs.Contains(seg.ToString())) { skip = true; break; }
+                    if (slashIdx < 0) break;
+                    relSpan = relSpan[(slashIdx + 1)..];
+                }
+                if (skip) continue;
+
                 if (IsBinaryExtension(Path.GetExtension(f))) continue;
-                if (new FileInfo(f).Length > 1_000_000) continue;
+                try
+                {
+                    if (new FileInfo(f).Length > 1_000_000) continue;
+                }
+                catch { continue; }
                 if (glob != "*" && !FileMatchesGlob(Path.GetFileName(f), glob)) continue;
                 files.Add(f);
             }
@@ -154,10 +170,16 @@ public sealed class SearchTools
             or ".gif" or ".bmp" or ".ico" or ".pdf" or ".zip" or ".gz" or ".tar"
             or ".obj" or ".lib" or ".pdb" or ".meta.json";
 
+    private static readonly ConcurrentDictionary<string, Regex> _globCache = new(StringComparer.OrdinalIgnoreCase);
+
     private static bool FileMatchesGlob(string name, string glob)
     {
-        var regex = "^" + Regex.Escape(glob).Replace(@"\*", ".*").Replace(@"\?", ".") + "$";
-        return Regex.IsMatch(name, regex, RegexOptions.IgnoreCase);
+        var regex = _globCache.GetOrAdd(glob, g =>
+        {
+            var pattern = "^" + Regex.Escape(g).Replace(@"\*", ".*").Replace(@"\?", ".") + "$";
+            return new Regex(pattern, RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        });
+        return regex.IsMatch(name);
     }
 
     private string? ResolvePath(string path) => LTAI.Core.PathUtils.SafeResolvePath(_ws, path);

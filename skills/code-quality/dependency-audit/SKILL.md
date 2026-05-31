@@ -2,6 +2,7 @@
 name: dependency-audit
 description: 依赖审计——检查过期包/已知漏洞/冗余依赖/许可合规
 license: MIT
+allowedTools: [ReadFileContent, SearchContent, Glob, DirectoryTree]
 ---
 
 # Dependency Audit 依赖审计

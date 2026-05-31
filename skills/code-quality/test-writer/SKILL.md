@@ -2,6 +2,7 @@
 name: test-writer
 description: 单元测试编写——按 Arrange-Act-Assert 模式生成 xUnit 测试
 license: MIT
+allowedTools: [ReadFileContent, SearchContent, Glob]
 ---
 
 # Test Writer 测试编写

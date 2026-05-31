@@ -2,6 +2,7 @@
 name: security-audit
 description: 安全审计——OWASP 风格检查注入/认证/密钥/配置风险
 license: MIT
+allowedTools: [ReadFileContent, SearchContent, FindInCode, Glob, DirectoryTree]
 ---
 
 # Security Audit 安全审计

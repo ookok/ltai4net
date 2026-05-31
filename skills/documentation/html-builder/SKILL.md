@@ -2,6 +2,7 @@
 name: html-builder
 description: HTML 页面生成——响应式布局/语义化标签/纯 CSS 或 Tailwind/Bootstrap
 license: MIT
+allowedTools: [ReadFileContent, WriteFileContent, Glob]
 ---
 
 # HTML Builder 网页生成

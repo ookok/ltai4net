@@ -7,6 +7,8 @@ using Avalonia.Media;
 
 namespace LTAI.Desktop;
 
+public sealed record SessionTreeItem(SessionInfo Info, int Depth);
+
 /// <summary>
 /// 会话 + 统计合并面板。可折叠，不挤占聊天窗口。
 /// </summary>
@@ -17,6 +19,7 @@ public sealed class SessionStatsPanel : UserControl
     private readonly TextBlock _statsText;
     private readonly SessionManager _sessions;
     private bool _expanded;
+    private bool _suppressSelection;
 
     /// <summary>展开/折叠切换事件。</summary>
     public event Action<string?>? SessionSelected;
@@ -55,9 +58,9 @@ public sealed class SessionStatsPanel : UserControl
           Foreground = LtaiTheme.Sbb(LtaiTheme.TextPrimary), VerticalAlignment = VerticalAlignment.Center });
 
         var newBtn = new Button
-        { Content = "➕", FontSize = 10, Width = 24, Height = 20,
+        { Content = "  ➕  新建", FontSize = 11, Width = 60, Height = 24,
           Background = LtaiTheme.Sbb(LtaiTheme.AccentDNA),
-          Foreground = LtaiTheme.Sbb("#ffffff") };
+          Foreground = LtaiTheme.Sbb("#ffffff"), CornerRadius = new(4) };
         newBtn.Click += (_, _) => NewSessionClicked?.Invoke();
         sessionHeader.Children.Add(newBtn);
         content.Children.Add(sessionHeader);
@@ -71,39 +74,47 @@ public sealed class SessionStatsPanel : UserControl
         };
         _sessionList.SelectionChanged += (_, _) =>
         {
-            if (_sessionList.SelectedItem is SessionInfo info)
-                SessionSelected?.Invoke(info.Name);
+            if (_suppressSelection) return;
+            if (_sessionList.SelectedItem is SessionTreeItem item)
+                SessionSelected?.Invoke(item.Info.Name);
         };
-        _sessionList.ItemTemplate = new FuncDataTemplate<SessionInfo>((info, _) =>
+        _sessionList.ItemTemplate = new FuncDataTemplate<SessionTreeItem>((item, _) =>
         {
-            var dock = new DockPanel { Margin = new(2, 1) };
+            var dock = new DockPanel { Margin = new(2 + item.Depth * 12, 1) };
 
             var delBtn = new Button
             {
-                Content = "🗑",
-                Width = 18, Height = 16,
-                FontSize = 9,
+                Content = "✕",
+                FontSize = 10,
+                Width = 22, Height = 20,
                 Background = LtaiTheme.Sbb(Colors.Transparent),
                 BorderThickness = new(0),
                 Padding = new(0),
-                Cursor = new Cursor(StandardCursorType.Hand)
             };
+            delBtn.PointerEntered += (_, _) => delBtn.Background = LtaiTheme.Sbb(Color.Parse("#f8514940"));
+            delBtn.PointerExited += (_, _) => delBtn.Background = LtaiTheme.Sbb(Colors.Transparent);
             delBtn.Click += async (_, _) =>
             {
-                if (await ConfirmDeleteAsync(info.Name))
+                try
                 {
-                    _sessions.DeleteSession(info.Name);
-                    Refresh();
+                    if (await ConfirmDeleteAsync(item.Info.Name))
+                    {
+                        _sessions.DeleteSession(item.Info.Name);
+                        Refresh();
+                    }
                 }
+                catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"Delete session: {ex.Message}"); }
             };
             DockPanel.SetDock(delBtn, Dock.Right);
             dock.Children.Add(delBtn);
 
+            var icon = item.Depth == 0 ? "💬" : "🔧";
             dock.Children.Add(new TextBlock
             {
-                Text = info.DisplayName,
+                Text = $"{icon} {item.Info.DisplayName}",
                 VerticalAlignment = VerticalAlignment.Center,
-                Foreground = LtaiTheme.Sbb(LtaiTheme.TextPrimary)
+                Foreground = LtaiTheme.Sbb(item.Depth == 0 ? LtaiTheme.TextPrimary : LtaiTheme.TextSecondary),
+                FontSize = item.Depth == 0 ? 11 : 10
             });
 
             return dock;
@@ -130,13 +141,47 @@ public sealed class SessionStatsPanel : UserControl
 
     public void Refresh()
     {
-        // 刷新会话列表
         var sessions = _sessions.ListSessions();
-        _sessionList.ItemsSource = sessions;
+        var flatList = new List<SessionTreeItem>();
+        foreach (var s in sessions)
+        {
+            if (s.ParentId != null) continue;
+            flatList.Add(new SessionTreeItem(s, 0));
+            var children = sessions.Where(c => c.ParentId == s.Name).OrderBy(c => c.Name);
+            foreach (var c in children)
+            {
+                // 读取子会话元数据中的耗时
+                var label = c.DisplayName;
+                try
+                {
+                    var metaPath = Path.Combine(
+                        Path.GetDirectoryName(Directory.GetFiles(Path.Combine(Directory.GetCurrentDirectory(), ".livingtree", "sessions"), $"{c.Name}.meta.json").FirstOrDefault() ?? ""),
+                        $"{c.Name}.meta.json");
+                    if (File.Exists(metaPath))
+                    {
+                        var meta = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(File.ReadAllText(metaPath));
+                        if (meta.TryGetProperty("ElapsedMs", out var el) && el.GetInt64() > 0)
+                        {
+                            var ms = el.GetInt64();
+                            var timeStr = $"{ms / 1000}.{(ms % 1000) / 100}s";
+                            label = $"[{timeStr}] {c.DisplayName}";
+                        }
+                    }
+                }
+                catch { }
+                flatList.Add(new SessionTreeItem(new SessionInfo(c.Name, label, c.ParentId), 1));
+            }
+        }
+        _suppressSelection = true;
+        _sessionList.ItemsSource = flatList;
         if (!string.IsNullOrEmpty(_sessions.CurrentSession))
-            _sessionList.SelectedItem = sessions.FirstOrDefault(s => s.Name == _sessions.CurrentSession);
+        {
+            var current = flatList.FirstOrDefault(f => f.Info.Name == _sessions.CurrentSession);
+            if (current != null)
+                _sessionList.SelectedItem = current;
+        }
+        _suppressSelection = false;
 
-        // 刷新统计
         _statsText.Text = $"模型: {LTAI.Core.Configuration.UsageTracker.ActiveModel}\n"
                         + $"Token: {LTAI.Core.Configuration.UsageTracker.PromptTokens:N0}+{LTAI.Core.Configuration.UsageTracker.CompletionTokens:N0}={LTAI.Core.Configuration.UsageTracker.TotalTokens:N0}\n"
                         + $"请求: {LTAI.Core.Configuration.UsageTracker.Requests}  缓存: {LTAI.Core.Configuration.UsageTracker.CacheHitRate:F1}%\n"

@@ -2,6 +2,7 @@
 name: refactor-plan
 description: 重构计划——分析依赖、风险评估、分步执行方案
 license: MIT
+allowedTools: [ReadFileContent, SearchContent, FindInCode, Glob, DirectoryTree]
 ---
 
 # Refactor Plan 重构计划

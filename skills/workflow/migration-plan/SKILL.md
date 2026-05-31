@@ -2,6 +2,7 @@
 name: migration-plan
 description: 代码迁移——版本升级/框架迁移/API 替换的分步方案
 license: MIT
+allowedTools: [ReadFileContent, SearchContent, FindInCode, Glob, DirectoryTree]
 ---
 
 # Migration Plan 代码迁移

@@ -2,6 +2,7 @@
 name: git-workflow
 description: Git 工作流——提交信息规范/分支策略/PR 模板/常用操作流程
 license: MIT
+allowedTools: [ReadFileContent, Glob, RunCommand]
 ---
 
 # Git Workflow

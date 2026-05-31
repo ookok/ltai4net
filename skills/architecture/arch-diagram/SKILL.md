@@ -2,6 +2,7 @@
 name: arch-diagram
 description: 生成项目架构图（分层/组件/部署），导出为 SVG
 license: MIT
+allowedTools: [ReadFileContent, SearchContent, Glob, DirectoryTree]
 ---
 
 # Architecture Diagram Skill

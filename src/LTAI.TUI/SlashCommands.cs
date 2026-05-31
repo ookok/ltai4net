@@ -28,6 +28,9 @@ public static class SlashCommands
     /// <summary>Current active provider name.</summary>
     public static string? ActiveProvider { get; set; }
 
+    /// <summary>共享 HttpClient（避免每次 new 导致 socket 泄漏）</summary>
+    private static readonly HttpClient _sharedHttp = new() { Timeout = TimeSpan.FromSeconds(30) };
+
     /// <summary>Known LLM providers from KnownKeys + local providers.</summary>
     public static readonly Dictionary<string, ProviderInfo> KnownProviders = BuildKnownProviders();
 
@@ -97,14 +100,40 @@ public static class SlashCommands
     {
         if (string.IsNullOrEmpty(prefix)) return [];
 
+        // 当前缀为 "/" 时返回所有命令
+        if (prefix == "/")
+        {
+            var allItems = new List<SuggestionItem>();
+            foreach (var spec in Commands)
+            {
+                allItems.Add(new SuggestionItem(
+                    $"/{spec.Cmd}  [dim]{spec.Group}[/]",
+                    $"/{spec.Cmd}",
+                    spec.Group,
+                    IsAlias: false));
+                var aliases = spec.Aliases
+                    .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                foreach (var alias in aliases)
+                {
+                    allItems.Add(new SuggestionItem(
+                        $"[/]{alias}  [dim]{spec.Group} → /{spec.Cmd}[/]",
+                        $"/{spec.Cmd}",
+                        spec.Group,
+                        IsAlias: true));
+                }
+            }
+            return allItems;
+        }
+
+        // 去掉前导 "/" 进行匹配
+        var sp = prefix.StartsWith("/") ? prefix[1..] : prefix;
+
         // 收集匹配的命令名（主名）
         var matchedCmds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var k in ByName.Keys)
         {
-            if (k.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-            {
+            if (k.StartsWith(sp, StringComparison.OrdinalIgnoreCase))
                 matchedCmds.Add(ByName[k].Cmd);
-            }
         }
 
         // 对每个匹配的主命令，生成 SuggestionItem
@@ -123,7 +152,7 @@ public static class SlashCommands
             // 别名条目（只显示别名本身，补全到主名）
             var aliases = spec.Aliases
                 .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                .Where(a => a.Length > 0 && a.StartsWith(prefix[1..], StringComparison.OrdinalIgnoreCase));
+                .Where(a => a.Length > 0 && a.StartsWith(sp, StringComparison.OrdinalIgnoreCase));
             foreach (var alias in aliases)
             {
                 items.Add(new SuggestionItem(
@@ -425,8 +454,7 @@ public static class SlashCommands
             var key = LTAI.Core.Configuration.SecretManager.Get(info.EnvVar);
             if (!string.IsNullOrEmpty(key) && Router != null && !Router.RegisteredProviders.Contains(choice))
             {
-                var http = HttpFactory?.CreateClient() ?? new HttpClient();
-                http.Timeout = TimeSpan.FromSeconds(30);
+                var http = _sharedHttp;
                 var client = new LTAI.AI.OpenAiHttpClient(http, info.Endpoint, info.Model, key);
                 Router.Register(choice, client);
             }
@@ -458,8 +486,7 @@ public static class SlashCommands
         LTAI.Core.Configuration.SecretManager.Set(info.EnvVar, key);
 
         // Register with router immediately
-        var http = HttpFactory?.CreateClient() ?? new HttpClient();
-        http.Timeout = TimeSpan.FromSeconds(30);
+        var http = _sharedHttp;
         var client = new LTAI.AI.OpenAiHttpClient(http, info.Endpoint, info.Model, key);
         Router?.Register(providerName, client);
 
@@ -536,8 +563,7 @@ public static class SlashCommands
     {
         try
         {
-            var http = HttpFactory?.CreateClient() ?? new HttpClient();
-            http.Timeout = TimeSpan.FromSeconds(15);
+            var http = _sharedHttp;
             var req = new HttpRequestMessage(HttpMethod.Get, $"{endpoint.TrimEnd('/')}/models");
             req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
             using var resp = http.Send(req);
@@ -636,9 +662,8 @@ public static class SlashCommands
                 if (providerName != null && Router != null)
                 {
                     var info = KnownProviders[providerName];
-                    var http = HttpFactory?.CreateClient() ?? new HttpClient();
-                    http.Timeout = TimeSpan.FromSeconds(30);
-                    var client = new LTAI.AI.OpenAiHttpClient(http, info.Endpoint, info.Model, value);
+					var http = _sharedHttp;
+					var client = new LTAI.AI.OpenAiHttpClient(http, info.Endpoint, info.Model, value);
                     Router.Register(providerName, client);
                 }
                 imported++;
@@ -781,14 +806,22 @@ public static class SlashCommands
 
     private static int Levenshtein(string a, string b)
     {
-        var dp = new int[a.Length + 1, b.Length + 1];
-        for (int i = 0; i <= a.Length; i++) dp[i, 0] = i;
-        for (int j = 0; j <= b.Length; j++) dp[0, j] = j;
+        if (string.IsNullOrEmpty(a)) return b?.Length ?? 0;
+        if (string.IsNullOrEmpty(b)) return a.Length;
+        var prev = new int[b.Length + 1];
+        var curr = new int[b.Length + 1];
+        for (int j = 0; j <= b.Length; j++) prev[j] = j;
         for (int i = 1; i <= a.Length; i++)
+        {
+            curr[0] = i;
             for (int j = 1; j <= b.Length; j++)
-                dp[i, j] = Math.Min(Math.Min(dp[i - 1, j] + 1, dp[i, j - 1] + 1),
-                    dp[i - 1, j - 1] + (a[i - 1] == b[j - 1] ? 0 : 1));
-        return dp[a.Length, b.Length];
+            {
+                int cost = a[i - 1] == b[j - 1] ? 0 : 1;
+                curr[j] = Math.Min(Math.Min(curr[j - 1] + 1, prev[j] + 1), prev[j - 1] + cost);
+            }
+            (prev, curr) = (curr, prev);
+        }
+        return prev[b.Length];
     }
 
     private sealed record SlashSpec(string Cmd, string Group, string Summary,

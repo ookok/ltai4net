@@ -2,6 +2,7 @@
 name: architecture-review
 description: 架构审查——评估模块划分/依赖方向/扩展性/技术债务
 license: MIT
+allowedTools: [ReadFileContent, SearchContent, Glob, DirectoryTree]
 ---
 
 # Architecture Review 架构审查

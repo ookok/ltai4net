@@ -37,14 +37,48 @@ public sealed class FileSystemTools
             var sizeError = PathUtils.CheckFileSize(fp);
             if (sizeError != null) return sizeError;
             var content = await File.ReadAllTextAsync(fp);
+            var fi = new FileInfo(fp);
+            var ext = fi.Extension.ToLowerInvariant();
+            var summary = DescribeDoc(content, ext);
             if (content.Length > 10000)
-                return $"[file: {fp}, {content.Length} chars (showing first 10000)]\n{content[..10000]}";
-            return $"[file: {fp}, {content.Length} chars]\n{content}";
+                return $"[file: {fp}, {fi.Length / 1024}KB, {content.Length} chars — {summary}]\n{content[..10000]}";
+            return $"[file: {fp}, {fi.Length / 1024}KB, {content.Length} chars — {summary}]\n{content}";
         }
         catch (Exception ex)
         {
             return $"Error reading '{path}': {ex.GetType().Name}: {ex.Message}";
         }
+    }
+
+    private static string DescribeDoc(string content, string ext)
+    {
+        if (ext is ".json" or ".jsonc")
+        {
+            try
+            {
+                using var doc = System.Text.Json.JsonDocument.Parse(content);
+                var count = doc.RootElement.EnumerateObject().Count();
+                var arrLen = doc.RootElement.ValueKind == System.Text.Json.JsonValueKind.Array
+                    ? doc.RootElement.GetArrayLength() : 0;
+                if (arrLen > 0) return $"JSON 数组 ({arrLen} 项)";
+                return $"JSON 对象 ({count} 个顶级键)";
+            }
+            catch { return "JSON (解析失败)"; }
+        }
+        if (ext is ".md" or ".markdown")
+        {
+            var headings = System.Text.RegularExpressions.Regex.Matches(content, @"^#{1,6}\s", System.Text.RegularExpressions.RegexOptions.Multiline).Count;
+            var lines = content.Split('\n').Length;
+            return $"Markdown ({lines} 行, {headings} 个标题)";
+        }
+        if (ext is ".html" or ".htm")
+        {
+            var tagCount = System.Text.RegularExpressions.Regex.Matches(content, @"<(\w+)", System.Text.RegularExpressions.RegexOptions.Multiline).Count;
+            var lines = content.Split('\n').Length;
+            return $"HTML ({lines} 行, ~{tagCount} 标签)";
+        }
+        var totalLines = content.Split('\n').Length;
+        return $"{totalLines} 行";
     }
 
     [Description("写入/创建文件。用于创建新文件或覆盖已有文件内容。\n"

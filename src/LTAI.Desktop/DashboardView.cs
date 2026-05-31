@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Avalonia.Controls;
 using Avalonia.Layout;
 using Avalonia.Media;
@@ -16,6 +17,7 @@ public sealed class DashboardView : UserControl
     private readonly ProgressBar _cacheBar;
     private readonly TextBlock _cacheLabel;
     private readonly DispatcherTimer _timer;
+    private static readonly Process _cachedProcess = Process.GetCurrentProcess();
 
     public DashboardView(LTAIService svc)
     {
@@ -76,14 +78,18 @@ public sealed class DashboardView : UserControl
         _timer = new DispatcherTimer(TimeSpan.FromSeconds(2), DispatcherPriority.Background, (_, _) => Refresh());
         _timer.Start();
         DetachedFromVisualTree += (_, _) => _timer.Stop();
+        AttachedToVisualTree += (_, _) =>
+        {
+            Refresh();
+            if (!_timer.IsEnabled) _timer.Start();
+        };
         Refresh();
     }
 
     private void Refresh()
     {
-        var p = System.Diagnostics.Process.GetCurrentProcess();
-        var uptime = DateTime.Now - p.StartTime;
-        _sysText.Text = $"模式: {_svc.Mode}\nDNA: {_svc.DNAStatus}\n安全: {_svc.SafetyPosture}\nPID: {p.Id}\n运行: {uptime:hh\\:mm\\:ss}";
+        _cachedProcess.Refresh();
+        _sysText.Text = $"模式: {_svc.Mode}\nDNA: {_svc.DNAStatus}\n安全: {_svc.SafetyPosture}\nPID: {_cachedProcess.Id}\n运行: {(_cachedProcess.StartTime != default ? DateTime.Now - _cachedProcess.StartTime : TimeSpan.Zero):hh\\:mm\\:ss}";
         _healthText.Text = $"GC 内存: {GC.GetTotalMemory(false) / 1024 / 1024} MB\n线程: {ThreadPool.ThreadCount}\n.NET: {Environment.Version}";
         _sessionText.Text = $"模型: {LTAI.Core.Configuration.UsageTracker.ActiveModel}\n"
                           + $"Token: {LTAI.Core.Configuration.UsageTracker.PromptTokens:N0}+{LTAI.Core.Configuration.UsageTracker.CompletionTokens:N0}={LTAI.Core.Configuration.UsageTracker.TotalTokens:N0}\n"

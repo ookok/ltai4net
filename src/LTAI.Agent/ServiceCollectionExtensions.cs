@@ -579,7 +579,7 @@ public static class ServiceCollectionExtensions
             .UseOptions(o =>
             {
                 o.ScriptApproval = true;
-                o.SkillsInstructionPrompt =
+                 o.SkillsInstructionPrompt =
                     """
                     你拥有领域专精技能（skills），每个技能包含专门的指令、参考文档和资产。
 
@@ -588,8 +588,9 @@ public static class ServiceCollectionExtensions
                     </available_skills>
 
                     当任务匹配某个技能的领域时：
-                    1. 用 `load_skill` 加载技能指令
+                    1. 用 `load_skill` 加载技能指令（示例：load_skill("code-review")）
                     2. 遵循技能提供的指引
+                    3. 如果技能声明了 allowedTools，请优先使用这些工具
                     {resource_instructions}
                     {script_instructions}
                     只加载所需技能，不要全部加载。

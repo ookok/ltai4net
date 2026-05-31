@@ -37,7 +37,6 @@ public sealed class BackgroundJobService
                 process.Start();
                 entry.Output = await process.StandardOutput.ReadToEndAsync();
                 entry.Error = await process.StandardError.ReadToEndAsync();
-                process.WaitForExit();
                 entry.ExitCode = process.ExitCode;
             }
             catch (Exception ex)

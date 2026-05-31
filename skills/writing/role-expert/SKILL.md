@@ -2,6 +2,7 @@
 name: role-expert
 description: 角色扮演——以指定专家身份分析问题，提供领域专业视角
 license: MIT
+allowedTools: [ReadFileContent]
 ---
 
 # Role Expert 领域专家模式

@@ -31,10 +31,6 @@ public static class MarkdownRenderer
             "true", "false", "null", "undefined" },
     };
 
-    private static readonly Regex KeywordRx = new(@"\b([a-zA-Z_]\w*)\b");
-    private static readonly Regex StringRx = new(@"""([^""\\]*(\\.[^""\\]*)*)""|'[^']*'");
-    private static readonly Regex CommentRx = new(@"(//[^\n]*|#[^\n]*)");
-    private static readonly Regex NumberRx = new(@"\b(\d+\.?\d*[fFlLdD]?)\b");
     private static readonly Regex OrderedListRx = new(@"^(\d+)\.\s");
     private static readonly Regex TableSepRx = new(@"^\|[\s\-:]+\|$");
     private static readonly Regex InlineFormatRx = new(
@@ -44,7 +40,6 @@ public static class MarkdownRenderer
     {
         var lines = text.Split('\n');
         var inCode = false;
-        var codeLang = "";
         var codeBuf = new System.Text.StringBuilder();
 
         for (int li = 0; li < lines.Length; li++)
@@ -52,10 +47,11 @@ public static class MarkdownRenderer
             var line = lines[li];
             if (li > 0 && !inCode) inlines.Add(new LineBreak());
 
+            // 代码围栏由 ChatView.SplitCodeBlocks 预处理，此处不处理
             if (line.TrimStart().StartsWith("```"))
             {
-                if (!inCode) { inCode = true; codeLang = line.TrimStart()[3..].Trim(); codeBuf.Clear(); continue; }
-                else { inCode = false; AddCodeBlock(codeBuf.ToString().TrimEnd(), codeLang, inlines); continue; }
+                if (!inCode) { inCode = true; codeBuf.Clear(); continue; }
+                else { inCode = false; codeBuf.Clear(); continue; }
             }
             if (inCode) { codeBuf.AppendLine(line); continue; }
 
@@ -85,103 +81,6 @@ public static class MarkdownRenderer
         return inlines;
     }
 
-    private static void AddCodeBlock(string code, string lang, InlineCollection inlines)
-    {
-        var border = new Border
-        {
-            Background = LtaiTheme.Sbb(LtaiTheme.CodeBg),
-            BorderBrush = LtaiTheme.Sbb(LtaiTheme.CodeBorder),
-            BorderThickness = new(1),
-            CornerRadius = new(4),
-            Padding = new(8),
-            Margin = new(0, 2),
-        };
-        var stack = new StackPanel();
-
-        // Determine keyword set
-        var keywords = KeywordSets.Values.FirstOrDefault();
-        foreach (var (k, v) in KeywordSets)
-            if (lang.Contains(k, StringComparison.OrdinalIgnoreCase)) { keywords = v; break; }
-
-        foreach (var line in code.Split('\n'))
-        {
-            var tb = new TextBlock
-            {
-                FontFamily = new("Consolas"),
-                FontSize = 12,
-                TextWrapping = TextWrapping.NoWrap,
-            };
-
-            // Tokenize and colorize
-            var tokens = Tokenize(line);
-            foreach (var (text, type) in tokens)
-            {
-                var color = type switch
-                {
-                    "keyword" => LtaiTheme.AccentDNA,
-                    "string" => LtaiTheme.AccentSystem,
-                    "comment" => LtaiTheme.TextDim,
-                    "number" => LtaiTheme.AccentInfo,
-                    _ => LtaiTheme.TextPrimary,
-                };
-                tb.Inlines!.Add(new Run { Text = text, Foreground = LtaiTheme.Sbb(color) });
-            }
-
-            // If no tokens (empty line), add a space to preserve line height
-            if (tb.Inlines == null || tb.Inlines.Count == 0)
-                tb.Text = " ";
-
-            stack.Children.Add(tb);
-        }
-        border.Child = stack;
-    }
-
-    private static List<(string text, string type)> Tokenize(string line)
-    {
-        var tokens = new List<(string, string)>();
-        int i = 0;
-
-        while (i < line.Length)
-        {
-            // Comments
-            var cm = CommentRx.Match(line, i);
-            if (cm.Success && cm.Index == i) { tokens.Add((cm.Value, "comment")); i = cm.Index + cm.Length; continue; }
-
-            // Strings
-            var sm = StringRx.Match(line, i);
-            if (sm.Success && sm.Index == i) { tokens.Add((sm.Value, "string")); i = sm.Index + sm.Length; continue; }
-
-            // Numbers
-            var nm = NumberRx.Match(line, i);
-            if (nm.Success && nm.Index == i) { tokens.Add((nm.Value, "number")); i = nm.Index + nm.Length; continue; }
-
-            // Keywords
-            var km = KeywordRx.Match(line, i);
-            if (km.Success && km.Index == i)
-            {
-                var kw = km.Groups[1].Value;
-                var isKeyword = KeywordSets.Values.Any(ks => ks.Contains(kw));
-                tokens.Add((kw, isKeyword ? "keyword" : "text"));
-                i = km.Index + km.Length;
-                continue;
-            }
-
-            // Plain text
-            var next = new[] { cm, sm, nm, km }
-                .Where(m => m.Success && m.Index >= i)
-                .Select(m => (int?)m.Index)
-                .DefaultIfEmpty(null)
-                .Min();
-
-            if (next.HasValue && next.Value > i)
-            { tokens.Add((line[i..next.Value], "text")); i = next.Value; }
-            else if (next.HasValue) { i = next.Value; }
-            else { tokens.Add((line[i..], "text")); break; }
-        }
-
-        return tokens;
-    }
-
     public static void RenderSpan(string text, InlineCollection inlines)
     {
         int pos = 0;
@@ -201,7 +100,10 @@ public static class MarkdownRenderer
             else if (m.Groups[5].Success)  // `code`
                 inlines.Add(Run(m.Groups[5].Value, color: LtaiTheme.AccentInfo, font: "Consolas"));
             else if (m.Groups[6].Success)  // [link](url)
-                inlines.Add(Run(m.Groups[6].Value, color: LtaiTheme.AccentInfo, italic: true));
+            {
+                inlines.Add(Run(m.Groups[6].Value, color: LtaiTheme.AccentInfo));
+                inlines.Add(Run($" ({m.Groups[7].Value})", color: LtaiTheme.TextDim, size: 11));
+            }
             else if (m.Groups[8].Success)  // ~~strikethrough~~
                 inlines.Add(Run(m.Groups[8].Value, color: LtaiTheme.TextDim));
 
@@ -232,46 +134,38 @@ public static class MarkdownRenderer
         return [];
     }
 
-    public static string ExtractCodeLang(string code)
-    {
-        var first = code.TrimStart();
-        if (first.StartsWith("```")) { var end = first.IndexOf('\n', 3); return end > 3 ? first[3..end].Trim() : ""; }
-        return "";
-    }
+    private static readonly Regex TokenRx = new(
+        @"//[^\n]*|#[^\n]*                        # comment
+        |""(?:[^""\\]+|\\.)*""                      # double-quoted string
+        |'[^']*'                                    # single-quoted string
+        |\b(\d+\.?\d*[fFlLdD]?)\b                   # number
+        |\b([a-zA-Z_]\w*)\b                         # identifier
+        |.                                          # any other char (fallback)
+        ",
+        RegexOptions.Compiled | RegexOptions.IgnorePatternWhitespace);
 
     public static List<(string text, Color color)> TokenizeLine(string line, string[] keywords)
     {
         var tokens = new List<(string, Color)>();
-        int i = 0;
-        while (i < line.Length)
+        var kws = keywords.Length > 0 ? new HashSet<string>(keywords, StringComparer.Ordinal) : null;
+
+        foreach (Match m in TokenRx.Matches(line))
         {
-            var cm = CommentRx.Match(line, i);
-            if (cm.Success && cm.Index == i) { tokens.Add((cm.Value, LtaiTheme.TextDim)); i = cm.Index + cm.Length; continue; }
+            if (!m.Success) continue;
 
-            var sm = StringRx.Match(line, i);
-            if (sm.Success && sm.Index == i) { tokens.Add((sm.Value, LtaiTheme.AccentSystem)); i = sm.Index + sm.Length; continue; }
-
-            var nm = NumberRx.Match(line, i);
-            if (nm.Success && nm.Index == i) { tokens.Add((nm.Value, LtaiTheme.AccentInfo)); i = nm.Index + nm.Length; continue; }
-
-            var km = KeywordRx.Match(line, i);
-            if (km.Success && km.Index == i)
+            if (m.Groups[1].Success)  // number
+                tokens.Add((m.Value, LtaiTheme.AccentInfo));
+            else if (m.Groups[2].Success)  // identifier (potential keyword)
             {
-                var kw = km.Groups[1].Value;
-                var isKw = keywords.Contains(kw);
-                tokens.Add((kw, isKw ? LtaiTheme.AccentDNA : LtaiTheme.TextPrimary));
-                i = km.Index + km.Length;
-                continue;
+                var kw = m.Groups[2].Value;
+                tokens.Add((kw, kws?.Contains(kw) == true ? LtaiTheme.AccentDNA : LtaiTheme.TextPrimary));
             }
-
-            if (cm.Success && cm.Index > i) { tokens.Add((line[i..cm.Index], LtaiTheme.TextPrimary)); i = cm.Index; continue; }
-            if (sm.Success && sm.Index > i) { tokens.Add((line[i..sm.Index], LtaiTheme.TextPrimary)); i = sm.Index; continue; }
-            if (nm.Success && nm.Index > i) { tokens.Add((line[i..nm.Index], LtaiTheme.TextPrimary)); i = nm.Index; continue; }
-            if (km.Success && km.Index > i) { tokens.Add((line[i..km.Index], LtaiTheme.TextPrimary)); i = km.Index; continue; }
-
-            tokens.Add((line[i..], LtaiTheme.TextPrimary));
-            break;
+            else if (m.Value.Length == 1 && (m.Value[0] == '/' || m.Value[0] == '#'))
+                tokens.Add((m.Value, LtaiTheme.TextDim));  // comment start matched as single char due to line end
+            else
+                tokens.Add((m.Value, LtaiTheme.TextPrimary));
         }
+
         return tokens;
     }
 }

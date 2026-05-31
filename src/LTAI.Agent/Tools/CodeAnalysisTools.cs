@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Text.RegularExpressions;
 using LTAI.AI;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -109,15 +110,34 @@ public sealed class CodeAnalysisTools
             var tree = CSharpSyntaxTree.ParseText(content);
             var root = tree.GetRoot();
             var syms = new List<(string kind, string name, int line)>();
+            var types = new[] { typeof(TypeDeclarationSyntax), typeof(MethodDeclarationSyntax),
+                typeof(PropertyDeclarationSyntax), typeof(EnumDeclarationSyntax) };
+            var kindMap = new Dictionary<Type, string>
+            {
+                [typeof(ClassDeclarationSyntax)] = "class", [typeof(StructDeclarationSyntax)] = "struct",
+                [typeof(InterfaceDeclarationSyntax)] = "interface", [typeof(RecordDeclarationSyntax)] = "record",
+                [typeof(MethodDeclarationSyntax)] = "method",
+                [typeof(PropertyDeclarationSyntax)] = "property",
+                [typeof(EnumDeclarationSyntax)] = "enum",
+            };
 
-            foreach (var n in root.DescendantNodes().OfType<TypeDeclarationSyntax>())
-                syms.Add((n.Keyword.Text, n.Identifier.Text, tree.GetLineSpan(n.Span).StartLinePosition.Line + 1));
-            foreach (var n in root.DescendantNodes().OfType<MethodDeclarationSyntax>())
-                syms.Add(("method", n.Identifier.Text, tree.GetLineSpan(n.Span).StartLinePosition.Line + 1));
-            foreach (var n in root.DescendantNodes().OfType<PropertyDeclarationSyntax>())
-                syms.Add(("property", n.Identifier.Text, tree.GetLineSpan(n.Span).StartLinePosition.Line + 1));
-            foreach (var n in root.DescendantNodes().OfType<EnumDeclarationSyntax>())
-                syms.Add(("enum", n.Identifier.Text, tree.GetLineSpan(n.Span).StartLinePosition.Line + 1));
+            // 单次树遍历（替代 5 次）
+            foreach (var n in root.DescendantNodes())
+            {
+                var type = n.GetType();
+                if (kindMap.TryGetValue(type, out var kind))
+                {
+                    var identifier = type switch
+                    {
+                        Type _ when n is TypeDeclarationSyntax tds => tds.Identifier.Text,
+                        Type _ when n is MethodDeclarationSyntax mds => mds.Identifier.Text,
+                        Type _ when n is PropertyDeclarationSyntax pds => pds.Identifier.Text,
+                        Type _ when n is EnumDeclarationSyntax eds => eds.Identifier.Text,
+                        _ => ""
+                    };
+                    syms.Add((kind, identifier, tree.GetLineSpan(n.Span).StartLinePosition.Line + 1));
+                }
+            }
 
             if (syms.Count == 0 && root.DescendantNodes().OfType<GlobalStatementSyntax>().Any())
                 syms.Add(("program", "Top-level statements", 1));
@@ -170,6 +190,9 @@ public sealed class CodeAnalysisTools
     {
         var lines = content.Split('\n');
         var results = new List<(int line, int col, string snippet)>();
+        // 预编译定义检测正则（只编译一次，非每行）
+        var defPattern = $@"\b(?:class|struct|interface|enum|def|fn|function)\s+{Regex.Escape(name)}\b";
+        var defRegex = new Regex(defPattern, RegexOptions.Compiled);
         for (int i = 0; i < lines.Length; i++)
         {
             var t = lines[i].Trim();
@@ -177,7 +200,7 @@ public sealed class CodeAnalysisTools
             var idx = t.IndexOf(name, StringComparison.Ordinal);
             if (idx < 0) continue;
             var role = "reference";
-            if (System.Text.RegularExpressions.Regex.IsMatch(t, $@"\b(?:class|struct|interface|enum|def|fn|function)\s+{System.Text.RegularExpressions.Regex.Escape(name)}\b")) role = "definition";
+            if (defRegex.IsMatch(t)) role = "definition";
             else if (t.Contains(name + "(")) role = "call";
             if (kind != "any" && !MatchKind(role, kind)) continue;
             results.Add((i + 1, idx + 1, t));

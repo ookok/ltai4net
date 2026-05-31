@@ -2,6 +2,7 @@
 name: code-review
 description: 代码审查——检查变更的正确性、安全性、性能、风格和测试覆盖
 license: MIT
+allowedTools: [ReadFileContent, SearchContent, FindInCode, Glob, DirectoryTree]
 ---
 
 # Code Review 代码审查

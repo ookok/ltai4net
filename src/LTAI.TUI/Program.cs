@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Reflection;
 using LTAI.Agent;
 using LTAI.AI;
 using LTAI.Core;
@@ -17,9 +18,16 @@ public static class Program
 {
     public static async Task Main(string[] args)
     {
-        // 检测 Windows Terminal，不在则自动安装并重启动
-        if (!EnsureWindowsTerminal())
-            return; // 重启动后旧进程退出
+        // ── Alacritty 自嵌入：首次运行解压，以后复用 ──
+        if (args.Length == 0 || args[0] != "--in-alacritty")
+        {
+            var alacritty = EnsureAlacritty();
+            if (alacritty != null)
+            {
+                RelaunchInAlacritty(alacritty);
+                return; // 旧进程退出
+            }
+        }
 
         Console.OutputEncoding = System.Text.Encoding.UTF8;
         Console.InputEncoding = System.Text.Encoding.UTF8;
@@ -87,128 +95,75 @@ public static class Program
         await app.RunAsync();
     }
 
-    /// <summary>检测 Windows Terminal，不在时尝试安装并重启动。</summary>
-    private static bool EnsureWindowsTerminal()
+    /// <summary>将嵌入的 Alacritty 解压到 %LOCALAPPDATA%/LTAI/ 并返回路径。</summary>
+    private static string? EnsureAlacritty()
     {
-        // 环境变量 LTAI_NO_WT=1/true/yes 跳过 → 用 cmd.exe
-        var noWt = Environment.GetEnvironmentVariable("LTAI_NO_WT") ?? "";
-        if (noWt is "1" or "true" or "yes")
-            return true;
+        var baseDir = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "LTAI", "Alacritty");
 
-        // 已经在 Windows Terminal 中 → 跳过
-        if (Environment.GetEnvironmentVariable("WT_SESSION") != null)
-            return true;
+        Directory.CreateDirectory(baseDir);
 
-        // 查找 wt.exe
-        var wtPath = FindWindowsTerminal();
-        if (wtPath != null)
-            return RelaunchInTerminal(wtPath);
+        var exePath = Path.Combine(baseDir, "alacritty.exe");
+        var ymlPath = Path.Combine(baseDir, "alacritty.yml");
+        var asm = Assembly.GetExecutingAssembly();
 
-        // wt.exe 不存在 → 尝试安装（30s 超时）
-        AnsiConsole.MarkupLine("[yellow]Windows Terminal 未找到，正在自动安装...[/]");
         try
         {
-            using var proc = Process.Start(new ProcessStartInfo
+            // 只解压一次（二次启动直接复用）
+            if (!File.Exists(exePath) || new FileInfo(exePath).Length == 0)
             {
-                FileName = "winget",
-                Arguments = "install --exact --id Microsoft.WindowsTerminal --silent --accept-package-agreements",
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-            });
-
-            if (proc == null)
-            {
-                AnsiConsole.MarkupLine("[red]无法启动 winget 安装程序[/]");
-                return true;
+                using var stream = asm.GetManifestResourceStream("LTAI.TUI.Assets.Alacritty.alacritty.exe");
+                if (stream == null) return null;
+                using var fs = new FileStream(exePath, FileMode.Create, FileAccess.Write);
+                stream.CopyTo(fs);
             }
 
-            // 等待安装完成（最多 30s）
-            var exited = proc.WaitForExit(30_000);
-            proc.StandardOutput.ReadToEnd();
-            proc.StandardError.ReadToEnd();
-
-            if (!exited || proc.ExitCode != 0)
+            if (!File.Exists(ymlPath))
             {
-                AnsiConsole.MarkupLine($"[red]Windows Terminal 安装失败 (exit={proc.ExitCode})[/]");
-                return true;
+                using var stream = asm.GetManifestResourceStream("LTAI.TUI.Assets.Alacritty.alacritty.yml");
+                if (stream == null) return null;
+                using var fs = new FileStream(ymlPath, FileMode.Create, FileAccess.Write);
+                stream.CopyTo(fs);
             }
 
-            AnsiConsole.MarkupLine("[green]Windows Terminal 安装成功！正在启动...[/]");
+            return exePath;
         }
         catch (Exception ex)
         {
-            AnsiConsole.MarkupLine($"[red]安装过程出错:[/] {ex.Message.EscapeMarkup()}");
-            return true; // 继续用 cmd.exe
+            AnsiConsole.MarkupLine($"[red]解压 Alacritty 失败:[/] {ex.Message.EscapeMarkup()}");
+            return null;
         }
-
-        // 重新查找（刚安装的需要刷新 PATH）
-        wtPath = FindWindowsTerminal();
-        if (wtPath == null)
-        {
-            AnsiConsole.MarkupLine("[red]安装后仍未找到 wt.exe，请手动启动 Windows Terminal[/]");
-            return true;
-        }
-
-        return RelaunchInTerminal(wtPath);
     }
 
-    /// <summary>查找 wt.exe 路径。</summary>
-    private static string? FindWindowsTerminal()
-    {
-        // 常见位置
-        var candidates = new[]
-        {
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "Microsoft", "WindowsApps", "wt.exe"),
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
-                "WindowsApps", "wt.exe"),
-        };
-
-        foreach (var c in candidates)
-        {
-            if (File.Exists(c)) return c;
-        }
-
-        // 搜索 PATH
-        try
-        {
-            var paths = Environment.GetEnvironmentVariable("PATH")?.Split(Path.PathSeparator) ?? [];
-            foreach (var dir in paths)
-            {
-                try
-                {
-                    var test = Path.Combine(dir, "wt.exe");
-                    if (File.Exists(test)) return test;
-                }
-                catch { /* 跳过无效路径 */ }
-            }
-        }
-        catch { /* PATH 访问失败 */ }
-
-        return null;
-    }
-
-    /// <summary>在当前 Windows Terminal 窗口中重启动。</summary>
-    private static bool RelaunchInTerminal(string wtPath)
+    /// <summary>在 Alacritty 终端中重启动当前进程。</summary>
+    private static void RelaunchInAlacritty(string alacrittyExe)
     {
         try
         {
-            var cmd = Environment.CommandLine;
-            // wt -d . <原始命令>
+            var ymlPath = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "LTAI", "Alacritty", "alacritty.yml");
+
             var psi = new ProcessStartInfo
             {
-                FileName = wtPath,
-                Arguments = $"-d . -- {cmd}",
-                UseShellExecute = true,
+                FileName = alacrittyExe,
+                UseShellExecute = false,
+                CreateNoWindow = true,
             };
+            psi.ArgumentList.Add("--config-file");
+            psi.ArgumentList.Add(ymlPath);
+            psi.ArgumentList.Add("-e");
+            psi.ArgumentList.Add(Environment.ProcessPath!);
+            psi.ArgumentList.Add("--in-alacritty");
+            foreach (var arg in Environment.GetCommandLineArgs().Skip(1))
+                psi.ArgumentList.Add(arg);
+
             Process.Start(psi);
-            return false; // 告诉 Main 退出当前进程
         }
         catch (Exception ex)
         {
-            AnsiConsole.MarkupLine($"[red]启动 Windows Terminal 失败:[/] {ex.Message.EscapeMarkup()}");
-            return true; // 继续用 cmd.exe
+            AnsiConsole.MarkupLine($"[red]启动 Alacritty 失败:[/] {ex.Message.EscapeMarkup()}");
         }
     }
 }

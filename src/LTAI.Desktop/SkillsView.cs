@@ -75,9 +75,10 @@ public sealed class SkillsView : UserControl
         try
         {
             var text = File.ReadAllText(path);
-            if (text.StartsWith("---\n") || text.StartsWith("---\r\n"))
+            text = text.Replace("\r\n", "\n").Replace("\r", "\n");
+            if (text.StartsWith("---\n"))
             {
-                var end = text.IndexOf("\n---", 4, StringComparison.Ordinal);
+                var end = text.IndexOf("\n---\n", 4, StringComparison.Ordinal);
                 if (end > 0)
                     foreach (var l in text[4..end].Split('\n'))
                         if (l.StartsWith("description:", StringComparison.OrdinalIgnoreCase))

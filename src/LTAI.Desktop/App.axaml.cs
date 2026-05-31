@@ -1,15 +1,14 @@
 using Avalonia;
+using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
+using Avalonia.Media;
+using Avalonia.Threading;
 
 namespace LTAI.Desktop;
 
 public class App : Application
 {
-    /// <summary>
-    /// LTAI service instance, set by Program.Main() before Avalonia starts.
-    /// Accessed by MainWindow and views that need it.
-    /// </summary>
     public static LTAIService? Ltais { get; set; }
     public static LTAI.Agent.ChatAgent? ChatAgent { get; set; }
     public static Microsoft.Extensions.Options.IOptions<LTAI.Core.Configuration.LTAIOptions>? Options { get; set; }
@@ -25,20 +24,36 @@ public class App : Application
     {
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
-            // Show window immediately with loading state
-            var window = new MainWindow(null);
-            desktop.MainWindow = window;
-
-            // Initialize services in background (DI chain + warmup)
-            _ = Task.Run(async () =>
+            LTAIService? svc = null;
+            try
             {
-                await Program.InitializeServicesAsync();
-                // Update window on UI thread when ready
-                await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() =>
+                Program.InitializeServicesAsync().GetAwaiter().GetResult();
+                svc = Ltais;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Init error: {ex.Message}");
+                // 初始化失败时创建带错误信息的窗口
+                var errWindow = new Window
                 {
-                    window.DataContext = Ltais;
-                });
-            });
+                    Title = "LTAI — 初始化失败",
+                    Width = 500, Height = 200,
+                    Content = new TextBlock
+                    {
+                        Text = $"服务初始化失败:\n{ex.Message}\n\n请检查网络连接和配置后重试。",
+                        TextWrapping = TextWrapping.Wrap,
+                        Foreground = new SolidColorBrush(Colors.White),
+                        Margin = new(20)
+                    }
+                };
+                desktop.MainWindow = errWindow;
+                errWindow.Show();
+                base.OnFrameworkInitializationCompleted();
+                return;
+            }
+
+            var window = new MainWindow(svc!);
+            desktop.MainWindow = window;
         }
         base.OnFrameworkInitializationCompleted();
     }

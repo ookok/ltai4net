@@ -11,6 +11,7 @@ namespace LTAI.Desktop;
 /// </summary>
 public sealed class ConfigView : UserControl
 {
+    private static readonly System.Net.Http.HttpClient _sharedHttp = new() { Timeout = TimeSpan.FromSeconds(10) };
     private readonly TextBlock _content;
     private readonly ComboBox _l1ModelBox;
     private readonly ComboBox _l2ModelBox;
@@ -88,9 +89,8 @@ public sealed class ConfigView : UserControl
             var keyInfo = KnownKeys.All.FirstOrDefault(k => SecretManager.Has(k.EnvVar));
             var endpoint = keyInfo?.Endpoint ?? "https://api.deepseek.com/v1";
 
-            using var http = new System.Net.Http.HttpClient { Timeout = System.TimeSpan.FromSeconds(10) };
-            http.DefaultRequestHeaders.Authorization = new("Bearer", apiKey);
-            var resp = await http.GetAsync($"{endpoint.TrimEnd('/')}/models");
+            _sharedHttp.DefaultRequestHeaders.Authorization = new("Bearer", apiKey);
+            using var resp = await _sharedHttp.GetAsync($"{endpoint.TrimEnd('/')}/models");
             if (!resp.IsSuccessStatusCode)
             { _statusBar.Text = $"⚠️ API 返回 {(int)resp.StatusCode}"; return; }
 

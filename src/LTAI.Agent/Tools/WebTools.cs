@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
@@ -10,6 +11,16 @@ public sealed class WebTools
 {
     private readonly IHttpClientFactory _httpFactory;
     private readonly ILogger<WebTools> _logger;
+
+    private static readonly Regex DuckResultRx = new(
+        @"<a\s+rel=""nofollow""\s+class=""result__a""\s+href=""([^""]+)"">(.*?)</a>",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    private static readonly Regex DuckSnippetRx = new(
+        @"<a\s+class=""result__snippet""[^>]*>(.*?)</a>",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    private static readonly Regex HtmlTagRx = new(@"<[^>]+>", RegexOptions.Compiled);
 
     public WebTools(IHttpClientFactory httpFactory, ILogger<WebTools>? logger = null)
     {
@@ -77,41 +88,45 @@ public sealed class WebTools
             if (contentLength > maxChars * 4L)
                 return $"Content too large: {contentLength.Value:N0} bytes (max {maxChars} chars requested). Use a more specific query.";
 
-            var buffer = new char[maxChars + 1024];
+            var buffer = System.Buffers.ArrayPool<char>.Shared.Rent(maxChars + 1024);
             int totalChars = 0;
             bool isHtml = response.Content.Headers.ContentType?.MediaType?.Contains("text/html") == true;
 
             using var stream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
             using var reader = new StreamReader(stream);
 
-            while (totalChars < maxChars)
+            try
             {
-                var chunkSize = Math.Min(4096, maxChars + 1024 - totalChars);
-                var chunk = new char[chunkSize];
-                var charsRead = await reader.ReadAsync(chunk, 0, chunkSize).ConfigureAwait(false);
-                if (charsRead == 0) break;
-
-                Array.Copy(chunk, 0, buffer, totalChars, charsRead);
-                totalChars += charsRead;
-
-                if (!isHtml && totalChars > 100)
+                while (totalChars < maxChars)
                 {
-                    var preview = new string(buffer, 0, Math.Min(totalChars, 500));
-                    isHtml = preview.Contains("<html", StringComparison.OrdinalIgnoreCase)
-                          || preview.Contains("<!DOCTYPE", StringComparison.OrdinalIgnoreCase);
+                    var chunkSize = Math.Min(4096, maxChars + 1024 - totalChars);
+                    var charsRead = await reader.ReadAsync(buffer, totalChars, chunkSize).ConfigureAwait(false);
+                    if (charsRead == 0) break;
+                    totalChars += charsRead;
+
+                    if (!isHtml && totalChars > 100)
+                    {
+                        var preview = new string(buffer, 0, Math.Min(totalChars, 500));
+                        isHtml = preview.Contains("<html", StringComparison.OrdinalIgnoreCase)
+                              || preview.Contains("<!DOCTYPE", StringComparison.OrdinalIgnoreCase);
+                    }
                 }
+
+                var content = new string(buffer, 0, totalChars);
+
+                if (isHtml)
+                    content = StripHtml(content);
+
+                if (content.Length > maxChars)
+                    content = content[..maxChars] +
+                        $"\n... (truncated, more content available)";
+
+                return content;
             }
-
-            var content = new string(buffer, 0, totalChars);
-
-            if (isHtml)
-                content = StripHtml(content);
-
-            if (content.Length > maxChars)
-                content = content[..maxChars] +
-                    $"\n... (truncated, more content available)";
-
-            return content;
+            finally
+            {
+                System.Buffers.ArrayPool<char>.Shared.Return(buffer);
+            }
         }
         catch (OperationCanceledException)
         {
@@ -190,13 +205,9 @@ public sealed class WebTools
 
             var html = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
 
-            var resultMatches = Regex.Matches(html,
-                @"<a\s+rel=""nofollow""\s+class=""result__a""\s+href=""([^""]+)"">(.*?)</a>",
-                RegexOptions.IgnoreCase);
+            var resultMatches = DuckResultRx.Matches(html);
 
-            var snippetMatches = Regex.Matches(html,
-                @"<a\s+class=""result__snippet""[^>]*>(.*?)</a>",
-                RegexOptions.IgnoreCase);
+            var snippetMatches = DuckSnippetRx.Matches(html);
 
             if (resultMatches.Count == 0)
             {
@@ -346,7 +357,13 @@ public sealed class WebTools
                 var ansTitle = answerBox.TryGetProperty("title", out var at) ? at.GetString() : null;
                 var ansSnippet = answerBox.TryGetProperty("snippet", out var asn) ? asn.GetString() : null;
                 if (ansTitle != null || ansSnippet != null)
-                    sb.Insert(0, $"**💡 Knowledge Panel**\n{ansTitle ?? ""}: {ansSnippet ?? ""}\n\n");
+                {
+                    var header = $"**💡 Knowledge Panel**\n{ansTitle ?? ""}: {ansSnippet ?? ""}\n\n";
+                    // 前置 Knowledge Panel（用新 StringBuilder 避免 Insert O(n)）
+                    var result = new StringBuilder(header, header.Length + sb.Length);
+                    result.Append(sb);
+                    return result.ToString();
+                }
             }
 
             return sb.Length > 0 ? sb.ToString() : null;
@@ -494,6 +511,6 @@ public sealed class WebTools
 
     private static string StripHtmlTags(string html)
     {
-        return Regex.Replace(html, @"<[^>]+>", "");
+        return HtmlTagRx.Replace(html, "");
     }
 }

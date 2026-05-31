@@ -2,6 +2,7 @@
 name: logging-audit
 description: 日志审计——结构化日志/级别选择/敏感信息屏蔽/性能影响
 license: MIT
+allowedTools: [ReadFileContent, SearchContent, FindInCode, Glob]
 ---
 
 # Logging Audit 日志审计

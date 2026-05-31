@@ -48,6 +48,26 @@ public static class ConfirmationModal
         string details = "",
         string? extraInfo = null)
     {
+        return ShowInline(null!, null!, title, message, details, extraInfo, useAnsiConsole: true);
+    }
+
+    /// <summary>
+    /// 在 Live Display 的 Layout 面板内显示确认模态窗口。
+    /// </summary>
+    public static ConfirmChoice ShowInline(
+        Layout layout, LiveDisplayContext ctx,
+        string title, string message,
+        string details = "", string? extraInfo = null)
+    {
+        return ShowInline(layout, ctx, title, message, details, extraInfo, useAnsiConsole: false);
+    }
+
+    private static ConfirmChoice ShowInline(
+        Layout? layout, LiveDisplayContext? ctx,
+        string title, string message,
+        string details, string? extraInfo,
+        bool useAnsiConsole)
+    {
         // 构建模态面板内容
         var rows = new List<IRenderable>();
         var termWidth = Math.Min(Console.WindowWidth, 120);
@@ -97,13 +117,20 @@ public static class ConfirmationModal
         {
             Header = new PanelHeader($"[bold yellow]⚠️  {title.EscapeMarkup()}[/]"),
             Border = BoxBorder.Rounded,
-            Padding = new Padding(2, 1, 2, 1),
+            Padding = new Padding(3, 2, 3, 2),
             Expand = true,
         };
 
         // 在 live 区域下方渲染模态窗口
-        // 注意：如果在 AnsiConsole.Live 内部调用，会渲染到 live 区域下方
-        AnsiConsole.Write(panel);
+        if (useAnsiConsole)
+        {
+            AnsiConsole.Write(panel);
+        }
+        else if (layout != null && ctx != null)
+        {
+            layout["Messages"].Update(panel);
+            ctx.Refresh();
+        }
 
         // 等待键盘输入
         while (true)
@@ -119,10 +146,10 @@ public static class ConfirmationModal
                 case ConsoleKey.N:
                     return ConfirmChoice.No;
                 case ConsoleKey.D:
-                    // 显示详情并使用分页浏览
                     ShowDetails(details, title);
                     // 详情关闭后重新渲染模态窗口
-                    AnsiConsole.Write(panel);
+                    if (useAnsiConsole) { AnsiConsole.Write(panel); }
+                    else if (layout != null && ctx != null) { layout["Messages"].Update(panel); ctx.Refresh(); }
                     break;
                 case ConsoleKey.Escape:
                     return ConfirmChoice.No;
@@ -217,12 +244,11 @@ public static class ConfirmationModal
     /// 在消息发送前扫描路径并弹出确认窗口。
     /// 替代 ChatLayout.PreAuthorizePaths 的裸 Console I/O。
     /// </summary>
-    internal static void AuthorizePaths(string input)
+    internal static void AuthorizePaths(Layout layout, LiveDisplayContext ctx, string input)
     {
         if (string.IsNullOrWhiteSpace(input)) return;
 
         var ws = Directory.GetCurrentDirectory();
-        // 匹配 Windows 路径和 Unix 路径
         var pathMatches = System.Text.RegularExpressions.Regex.Matches(input,
             @"[A-Za-z]:\\[^\s""'<>|]+|/[^\s""'<>|]+|~/[^\s""'<>|]+",
             System.Text.RegularExpressions.RegexOptions.IgnoreCase);
@@ -238,7 +264,8 @@ public static class ConfirmationModal
             if (LTAI.Core.PathUtils.PathPermissionStore.IsGranted(fullPath)) continue;
             if (!File.Exists(fullPath) && !Directory.Exists(fullPath)) continue;
 
-            var choice = Show(
+            var choice = ShowInline(
+                layout, ctx,
                 "路径访问确认",
                 $"检测到工作区外的路径",
                 fullPath,

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Linq;
 using System.Text;
 using Avalonia.Controls;
@@ -32,12 +33,53 @@ public sealed class ChatView : UserControl
     private readonly LTAI.Desktop.ToolRendering.ToolResultRendererRegistry _toolRenderers;
     private TextBlock? _currentResponseText;
 
+    private readonly Dictionary<int, string> _subSessions = new();
+    private readonly Dictionary<int, Stopwatch> _subStartTimes = new();
+    private string? _parentSession;
+
     public SessionManager SessionManager => _sessionManager;
 
     public async Task LoadSessionAsync(string name)
     {
         if (!await _sessionManager.LoadSessionAsync(name).ConfigureAwait(false)) return;
         _outputStack.Children.Clear();
+
+        // 子会话显示返回父会话按钮
+        var sessions = _sessionManager.ListSessions();
+        var sessionInfo = sessions.FirstOrDefault(s => s.Name == name);
+        if (sessionInfo?.ParentId != null)
+        {
+            var parentName = sessionInfo.ParentId;
+            var backBtn = new Button
+            {
+                Content = "🔙 返回父会话",
+                FontSize = 11, Height = 22,
+                Background = LtaiTheme.Sbb(LtaiTheme.AccentInfo),
+                Foreground = LtaiTheme.Sbb("#ffffff"),
+                BorderThickness = new(0), CornerRadius = new(4),
+                Margin = new(0, 4),
+                Cursor = new Cursor(StandardCursorType.Hand)
+            };
+            backBtn.Click += async (_, _) => await LoadSessionAsync(parentName);
+            _outputStack.Children.Add(new Border
+            {
+                Background = LtaiTheme.Sbb(LtaiTheme.BgPanel),
+                BorderBrush = LtaiTheme.Sbb(LtaiTheme.AccentInfo),
+                BorderThickness = new(1), CornerRadius = new(6),
+                Padding = new(8), Margin = new(0, 0, 0, 6),
+                Child = new StackPanel
+                {
+                    Spacing = 4,
+                    Children =
+                    {
+                        new TextBlock { Text = "📋 子任务详情", FontWeight = FontWeight.Bold, FontSize = 12, Foreground = LtaiTheme.Sbb(LtaiTheme.AccentInfo) },
+                        new TextBlock { Text = "子 Agent 的完整对话记录", FontSize = 11, Foreground = LtaiTheme.Sbb(LtaiTheme.TextSecondary) },
+                        backBtn
+                    }
+                }
+            });
+        }
+
         foreach (var msg in _sessionManager.Messages)
         {
             var label = msg.Role == ChatRole.User ? "[You]" : "[LTAI]";
@@ -51,13 +93,20 @@ public sealed class ChatView : UserControl
     public async Task ResetSessionAsync()
     {
         if (_sessionManager.MessageCount > 0)
-            await _sessionManager.SaveSessionAsync().ConfigureAwait(false);
+            await _sessionManager.SaveSessionAsync();
         _sessionManager.NewSession();
         _outputStack.Children.Clear();
         _turns = 0;
         _tokens = 0;
         RefreshStats();
         AddSystemBubble("✅ 新会话已创建");
+    }
+
+    /// <summary>从外部设置输入文本并自动发送（用于"问 AI"功能）。</summary>
+    public async Task SendContentAsync(string text)
+    {
+        _input.Text = text;
+        await SendAsync();
     }
 
     public ChatView(LTAIService svc, SessionManager? sessionManager = null)
@@ -193,7 +242,14 @@ public sealed class ChatView : UserControl
         }
 
         LtaiTheme.ThemeChanged += OnThemeChanged;
-        DetachedFromVisualTree += (_, _) => LtaiTheme.ThemeChanged -= OnThemeChanged;
+        DetachedFromVisualTree += (_, _) =>
+        {
+            LtaiTheme.ThemeChanged -= OnThemeChanged;
+            LTAI.Agent.Tools.SubagentTools.OnSubagentMessage -= OnSubagentMessage;
+            LTAI.Agent.Tools.SubagentTools.OnSubagentComplete -= OnSubagentComplete;
+        };
+        LTAI.Agent.Tools.SubagentTools.OnSubagentMessage += OnSubagentMessage;
+        LTAI.Agent.Tools.SubagentTools.OnSubagentComplete += OnSubagentComplete;
 
         RefreshStats();
     }
@@ -1293,4 +1349,39 @@ public sealed class ChatView : UserControl
 
     private static string Truncate(string text, int max) =>
         text.Length <= max ? text : text[..max] + "...";
+
+    private void OnSubagentMessage(int spawnId, string role, string content)
+    {
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (!_subSessions.TryGetValue(spawnId, out var subName))
+            {
+                subName = _sessionManager.CreateChildSession(_sessionManager.CurrentSession, $"子任务 #{spawnId}");
+                _subSessions[spawnId] = subName;
+                _subStartTimes[spawnId] = Stopwatch.StartNew();
+            }
+            _sessionManager.LoadSession(subName);
+            if (role == "user" || role == "User")
+                _sessionManager.AddMessage(ChatRole.User, content);
+            else
+                _sessionManager.AddMessage(ChatRole.Assistant, content);
+            _sessionManager.SaveSession(subName);
+            _sessionManager.LoadSession(_sessionManager.CurrentSession);
+        });
+    }
+
+    private void OnSubagentComplete(int spawnId)
+    {
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (!_subSessions.TryGetValue(spawnId, out var subName)) return;
+
+            var elapsed = _subStartTimes.TryGetValue(spawnId, out var sw) ? sw.ElapsedMilliseconds : 0;
+            var label = elapsed > 0
+                ? $"子任务 #{spawnId} ({elapsed / 1000}.{(elapsed % 1000) / 100}s)"
+                : $"子任务 #{spawnId}";
+            _sessionManager.SaveMetadata(subName, new { ElapsedMs = elapsed, Label = label });
+            AddSystemBubble($"✅ {label} 完成 — 在左侧会话列表中点击查看详情");
+        });
+    }
 }

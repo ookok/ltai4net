@@ -101,7 +101,7 @@ public sealed class SafeShellTool
         timeoutSec = Math.Clamp(timeoutSec, 5, 600);
 
         var sb = new StringBuilder();
-        var process = new Process
+        using var process = new Process
         {
             StartInfo = new ProcessStartInfo
             {
@@ -124,24 +124,10 @@ public sealed class SafeShellTool
         {
             process.Start();
 
-            // 并读 stdout + stderr
-            var readTasks = new[]
-            {
-                Task.Run(async () =>
-                {
-                    var buf = new char[4096];
-                    int len;
-                    while ((len = await process.StandardOutput.ReadAsync(buf)) > 0)
-                        output.Append(buf, 0, len);
-                }),
-                Task.Run(async () =>
-                {
-                    var buf = new char[4096];
-                    int len;
-                    while ((len = await process.StandardError.ReadAsync(buf)) > 0)
-                        error.Append(buf, 0, len);
-                }),
-            };
+            // 并读 stdout + stderr（直接 async，不 Task.Run）
+            var buf = new char[4096];
+            var stdoutTask = ReadStreamAsync(process.StandardOutput, output, buf);
+            var stderrTask = ReadStreamAsync(process.StandardError, error, buf);
 
             using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSec));
             try { await process.WaitForExitAsync(timeoutCts.Token).ConfigureAwait(false); }
@@ -154,7 +140,7 @@ public sealed class SafeShellTool
                      + $"部分输出:\n{Truncate(output.ToString(), 2000)}";
             }
 
-            await Task.WhenAll(readTasks);
+            await Task.WhenAll(stdoutTask, stderrTask).ConfigureAwait(false);
 
             var exitCode = process.ExitCode;
             var outText = output.ToString();
@@ -179,5 +165,12 @@ public sealed class SafeShellTool
     }
 
     private static string Truncate(string text, int max) =>
-        text.Length <= max ? text : text[..max] + $"\n... (输出截断，共 {text.Length} 字符)";
+        text.Length <= max ? text : text[..max] + "...";
+
+    private static async Task ReadStreamAsync(StreamReader reader, StringBuilder sb, char[] buffer)
+    {
+        int len;
+        while ((len = await reader.ReadAsync(buffer).ConfigureAwait(false)) > 0)
+            sb.Append(buffer, 0, len);
+    }
 }

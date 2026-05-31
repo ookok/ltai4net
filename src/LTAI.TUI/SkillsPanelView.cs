@@ -21,8 +21,8 @@ public static class SkillsPanelView
     public static void Render()
     {
         Console.Clear();
-        AnsiConsole.MarkupLine("[bold]技能管理[/]");
-        AnsiConsole.MarkupLine("[grey]Esc: 返回  F: 遗忘技能[/]\n");
+        AnsiConsole.Write(new Rule("[bold]技能管理[/]") { Style = Style.Parse("bold") });
+        AnsiConsole.MarkupLine("[dim]Esc: 返回  |  F: 遗忘技能[/]\n");
 
         if (_skillsDir == null || !Directory.Exists(_skillsDir))
         {
@@ -37,7 +37,7 @@ public static class SkillsPanelView
         table.AddColumn("状态");
         table.AddColumn("上次使用");
 
-        var allMds = Directory.GetFiles(_skillsDir, "SKILL.md", SearchOption.AllDirectories).OrderBy(Path.GetFileName);
+        var allMds = Directory.GetFiles(_skillsDir, "SKILL.md", SearchOption.AllDirectories).OrderBy(md => Path.GetFileName(Path.GetDirectoryName(md) ?? ""));
         foreach (var md in allMds)
         {
             var desc = GetDescription(md);

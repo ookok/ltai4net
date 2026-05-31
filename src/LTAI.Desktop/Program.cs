@@ -45,10 +45,17 @@ public static class Program
         App.HttpFactory = await Task.Run(() => provider.GetService<IHttpClientFactory>());
 
         // Balance fetch (non-blocking)
-        _ = LTAI.Core.Configuration.UsageTracker.FetchBalanceAsync(
-            options.Value.AI.DefaultProvider,
-            LTAI.Core.Configuration.SecretManager.Get("SILICONFLOW_API_KEY")
-            ?? LTAI.Core.Configuration.SecretManager.Get("OPENROUTER_API_KEY"));
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await LTAI.Core.Configuration.UsageTracker.FetchBalanceAsync(
+                    options.Value.AI.DefaultProvider,
+                    LTAI.Core.Configuration.SecretManager.Get("SILICONFLOW_API_KEY")
+                    ?? LTAI.Core.Configuration.SecretManager.Get("OPENROUTER_API_KEY"));
+            }
+            catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"Balance fetch failed: {ex.Message}"); }
+        });
     }
 
     private static IServiceCollection BuildServiceCollection()

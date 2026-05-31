@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Avalonia.Media;
 
 namespace LTAI.Desktop;
@@ -10,9 +11,12 @@ public static class LtaiTheme
 
     public static event Action? ThemeChanged;
 
+    private static readonly ConcurrentDictionary<Color, SolidColorBrush> _brushCache = new();
+
     public static void Toggle()
     {
         Current = Current == AppTheme.Dark ? AppTheme.Light : AppTheme.Dark;
+        _brushCache.Clear();
         ThemeChanged?.Invoke();
     }
 
@@ -34,7 +38,9 @@ public static class LtaiTheme
     public static Color ToolBg     => Current == AppTheme.Dark ? Color.Parse("#1b2a1b") : Color.Parse("#f0fff0");
     public static Color ChatUser   => Current == AppTheme.Dark ? Color.Parse("#58a6ff") : Color.Parse("#0969da");
     public static Color ChatAI     => Current == AppTheme.Dark ? Color.Parse("#3fb950") : Color.Parse("#1a7f37");
+    public static Color BubbleUserBg => Current == AppTheme.Dark ? Color.Parse("#0d1b2a") : Color.Parse("#e8f0fe");
+    public static Color BubbleAIBg   => Current == AppTheme.Dark ? Color.Parse("#0d1f0d") : Color.Parse("#e6f4e6");
 
-    public static SolidColorBrush Sbb(Color c) => new(c);
-    public static SolidColorBrush Sbb(string hex) => new(Color.Parse(hex));
+    public static SolidColorBrush Sbb(Color c) => _brushCache.GetOrAdd(c, static key => new SolidColorBrush(key));
+    public static SolidColorBrush Sbb(string hex) => Sbb(Color.Parse(hex));
 }

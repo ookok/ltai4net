@@ -2,6 +2,7 @@
 name: ui-design
 description: UI/UX 设计审查——布局/色彩/无障碍/交互/一致性检查
 license: MIT
+allowedTools: [ReadFileContent, SearchContent, Glob, DirectoryTree]
 ---
 
 # UI Design Review

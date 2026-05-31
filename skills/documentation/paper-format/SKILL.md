@@ -2,6 +2,7 @@
 name: paper-format
 description: 论文排版——学术写作格式/引文规范/LaTeX 模板/GB/T 7714
 license: MIT
+allowedTools: [ReadFileContent, WriteFileContent]
 ---
 
 # Paper Format 论文排版

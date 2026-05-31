@@ -2,6 +2,7 @@
 name: ppt-maker
 description: PPT 生成——生成演示文稿大纲/内容/演讲备注/Marp 或 Reveal.js 格式
 license: MIT
+allowedTools: [ReadFileContent, WriteFileContent]
 ---
 
 # PPT Maker 演示文稿生成

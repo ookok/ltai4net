@@ -2,6 +2,7 @@
 name: de-ai-fy
 description: 去 AI 化润色——消除 AI 写作痕迹，让文字像人写的
 license: MIT
+allowedTools: [ReadFileContent]
 ---
 
 # 去 AI 化润色指南

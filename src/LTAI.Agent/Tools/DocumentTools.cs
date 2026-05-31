@@ -16,9 +16,13 @@ using Microsoft.Extensions.Logging;
 
 namespace LTAI.Agent.Tools;
 
-[ToolDomain("office")]
+[ToolDomain("document")]
 public sealed class DocumentTools
 {
+    private static readonly Regex SectionPattern = new(@"\{\{#(\w+)\}\}(.*?)\{\{/\1\}\}",
+        RegexOptions.Compiled | RegexOptions.Singleline);
+    private static readonly Regex PlaceholderPattern = new(@"\{\{[^}]*\}\}", RegexOptions.Compiled);
+    private static readonly int[] Pow26 = [1, 26, 676, 17576, 456976, 11881376];
     private readonly string _ws;
     private readonly KbGraph? _kbGraph;
     private readonly ILogger<DocumentTools>? _logger;
@@ -643,8 +647,7 @@ public sealed class DocumentTools
             }
 
             // Handle {{#section}}...{{/section}} conditional blocks
-            var sectionPattern = new Regex(@"\{\{#(\w+)\}\}(.*?)\{\{/\1\}\}", RegexOptions.Singleline);
-            result = sectionPattern.Replace(result, m =>
+            result = SectionPattern.Replace(result, m =>
             {
                 var key = m.Groups[1].Value;
                 var content = m.Groups[2].Value;
@@ -654,7 +657,7 @@ public sealed class DocumentTools
             });
 
             // Cleanup unmatched {{...}} placeholders
-            result = Regex.Replace(result, @"\{\{[^}]*\}\}", "");
+            result = PlaceholderPattern.Replace(result, "");
             return result;
         }
         catch (Exception ex) { return $"Template error: {ex.Message}"; }
@@ -803,13 +806,24 @@ public sealed class DocumentTools
         return (col, row);
     }
 
-    private static int ColLetterToIndex(string col) =>
-        col.Select((c, i) => (c - (char.IsUpper(c) ? 'A' : 'a') + 1) * (int)Math.Pow(26, col.Length - 1 - i)).Sum();
+    private static int ColLetterToIndex(string col)
+    {
+        int result = 0;
+        for (int i = 0; i < col.Length; i++)
+            result = result * 26 + (char.ToUpperInvariant(col[i]) - 'A' + 1);
+        return result;
+    }
     private static string ColIndexToLetter(int idx)
     {
-        var r = "";
-        while (idx > 0) { idx--; r = (char)('A' + idx % 26) + r; idx /= 26; }
-        return r;
+        var buf = new char[8];
+        int pos = buf.Length;
+        while (idx > 0)
+        {
+            idx--;
+            buf[--pos] = (char)('A' + idx % 26);
+            idx /= 26;
+        }
+        return new string(buf, pos, buf.Length - pos);
     }
 
     private static void AddSlide(PresentationPart presPart, SlideMasterPart masterPart, ref uint slideId, List<string> lines, P.SlideIdList slideIdList)

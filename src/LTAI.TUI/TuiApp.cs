@@ -38,11 +38,51 @@ public sealed class TuiApp
         }
 
         // 异步获取余额 + 模型信息（不阻塞）
-        _ = FetchBalanceAsync();
-        _ = FetchModelInfoAsync();
+        _ = Task.Run(async () =>
+        {
+            try { await FetchBalanceAsync(); }
+            catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"FetchBalanceAsync: {ex.Message}"); }
+        });
+        _ = Task.Run(async () =>
+        {
+            try { await FetchModelInfoAsync(); }
+            catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"FetchModelInfoAsync: {ex.Message}"); }
+        });
 
-        // 直接进入聊天
-        await _chatLayout.RenderAsync();
+        // 主循环：多视图导航
+        while (_running)
+        {
+            var target = await _chatLayout.RenderAsync();
+            if (target == null) { _running = false; break; }
+            if (target == TuiView.Chat) continue;
+
+            // 临时切换到其他视图，完成后回到聊天
+            _currentView = target.Value;
+            switch (target)
+            {
+                case TuiView.Dashboard:
+                    Console.Clear();
+                    ShowHeader();
+                    ShowDashboard();
+                    AnsiConsole.Write(new Rule("[grey]—[/]") { Style = Style.Parse("grey") });
+                    AnsiConsole.MarkupLine("[dim]按任意键返回聊天...[/]");
+                    Console.ReadKey(true);
+                    break;
+                case TuiView.TextPad:
+                    Console.Clear();
+                    ShowHeader();
+                    TextPadView.Render(_projectRoot);
+                    break;
+                case TuiView.LLMConfig:
+                    _llmConfig.ShowSetupWizard();
+                    break;
+                case TuiView.Skills:
+                    Console.Clear();
+                    ShowHeader();
+                    SkillsPanelView.Render();
+                    break;
+            }
+        }
     }
 
     private void ShowHeader()
@@ -107,7 +147,7 @@ public sealed class TuiApp
         table.AddColumn("指标");
         table.AddColumn("值");
         table.AddRow("引擎", "LTAI (MS Agent Framework 1.8.0)");
-        table.AddRow("聊天", _chat != null ? "就绪" : "N/A");
+        table.AddRow("聊天", "就绪");
         table.AddRow("模型", _config.Value.AI.Model);
         table.AddRow("提供商", _config.Value.AI.DefaultProvider);
         table.AddRow("项目目录", _projectRoot);
@@ -165,24 +205,5 @@ public sealed class TuiApp
         AnsiConsole.Write(cacheChart);
     }
 
-    private async Task HandleInputAsync()
-    {
-        var key = Console.ReadKey(true);
-
-        if (_currentView == TuiView.LLMConfig)
-        {
-            _llmConfig.HandleKey(key);
-            return;
-        }
-
-        switch (key.KeyChar)
-        {
-            case '1': _currentView = TuiView.Dashboard; break;
-            case '2': _currentView = TuiView.Chat; break;
-            case '3': _currentView = TuiView.LLMConfig; break;
-            case '4': _currentView = TuiView.TextPad; break;
-            case '5': _currentView = TuiView.Skills; break;
-            case 'q': case 'Q': _running = false; break;
-        }
-    }
 }
+

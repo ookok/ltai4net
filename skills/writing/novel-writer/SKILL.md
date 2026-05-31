@@ -2,6 +2,7 @@
 name: novel-writer
 description: 小说撰写——人物设定/情节结构/章回规划/对话描写/风格模仿
 license: MIT
+allowedTools: [ReadFileContent]
 ---
 
 # Novel Writer 小说撰写

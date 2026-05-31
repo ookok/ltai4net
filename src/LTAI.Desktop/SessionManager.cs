@@ -5,9 +5,6 @@ using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
-using Avalonia.Controls;
-using Avalonia.Layout;
-using Avalonia.Media;
 using Microsoft.Extensions.AI;
 
 namespace LTAI.Desktop;
@@ -15,7 +12,7 @@ namespace LTAI.Desktop;
 /// <summary>
 /// 会话管理：创建/切换/删除对话，持久化到 .livingtree/sessions/
 /// </summary>
-public sealed record SessionInfo(string Name, string DisplayName);
+public sealed record SessionInfo(string Name, string DisplayName, string? ParentId = null);
 
 public sealed class SessionManager
 {
@@ -48,8 +45,53 @@ public sealed class SessionManager
         return Directory.GetFiles(_sessionsDir, "*.json")
             .Select(f => Path.GetFileNameWithoutExtension(f))
             .OrderByDescending(f => f)
-            .Select(f => new SessionInfo(f, FormatSessionName(f)))
+            .Select(f =>
+            {
+                var meta = ReadMetadata(f);
+                return new SessionInfo(f, FormatSessionName(f), meta.ParentId);
+            })
             .ToArray();
+    }
+
+    public SessionInfo[] ListChildSessions(string parentId)
+    {
+        return ListSessions().Where(s => s.ParentId == parentId).ToArray();
+    }
+
+    public string CreateChildSession(string parentId, string label)
+    {
+        _sessionCounter++;
+        var name = $"sub-{parentId}-{_sessionCounter}";
+        SaveMetadata(name, new SessionMeta { ParentId = parentId, Label = label });
+        _messages.Clear();
+        _currentSession = name;
+        return name;
+    }
+
+    private sealed record SessionMeta
+    {
+        public string? ParentId { get; init; }
+        public string? Label { get; init; }
+        public long ElapsedMs { get; init; }
+    }
+
+    private SessionMeta ReadMetadata(string name)
+    {
+        var path = Path.Combine(_sessionsDir, $"{name}.meta.json");
+        try { return JsonSerializer.Deserialize<SessionMeta>(File.ReadAllText(path)) ?? new SessionMeta(); }
+        catch { return new SessionMeta(); }
+    }
+
+    public void SaveMetadata(string name, object meta)
+    {
+        var path = Path.Combine(_sessionsDir, $"{name}.meta.json");
+        File.WriteAllText(path, JsonSerializer.Serialize(meta));
+    }
+
+    private void SaveMetadata(string name, SessionMeta meta)
+    {
+        var path = Path.Combine(_sessionsDir, $"{name}.meta.json");
+        File.WriteAllText(path, JsonSerializer.Serialize(meta));
     }
 
     internal static string FormatSessionName(string raw)
@@ -170,9 +212,16 @@ public sealed class SessionManager
 
     private static byte[] ComputeEncryptionKey()
     {
-        using var sha256 = SHA256.Create();
-        var material = $"{Environment.MachineName}-LTAI-v3";
-        return sha256.ComputeHash(Encoding.UTF8.GetBytes(material));
+        // 使用持久化密钥文件（不依赖 MachineName，重命名后不丢失数据）
+        var keyFile = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "LTAI", "encryption.key");
+        if (File.Exists(keyFile))
+            return File.ReadAllBytes(keyFile);
+        var key = RandomNumberGenerator.GetBytes(32);
+        Directory.CreateDirectory(Path.GetDirectoryName(keyFile)!);
+        File.WriteAllBytes(keyFile, key);
+        return key;
     }
 
     private static string Encrypt(string plaintext)

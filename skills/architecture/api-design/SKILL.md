@@ -2,6 +2,7 @@
 name: api-design
 description: API 设计审查——RESTful 路由/状态码/请求响应模型/版本控制
 license: MIT
+allowedTools: [ReadFileContent, SearchContent, Glob, DirectoryTree]
 ---
 
 # API Design Review

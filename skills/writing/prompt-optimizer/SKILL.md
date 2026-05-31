@@ -2,6 +2,7 @@
 name: prompt-optimizer
 description: 提示词优化——审查/重构 AI 提示词，提升输出质量和一致性
 license: MIT
+allowedTools: [ReadFileContent]
 ---
 
 # Prompt Optimizer 提示词优化

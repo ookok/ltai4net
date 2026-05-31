@@ -2,6 +2,7 @@
 name: doc-generator
 description: 文档生成——XML 注释/README/变更日志 + Office 文档（Word/Excel/PPT）流水线
 license: MIT
+allowedTools: [ReadFileContent, WriteFileContent, Glob, BuildDocument]
 ---
 
 # Doc Generator 文档生成

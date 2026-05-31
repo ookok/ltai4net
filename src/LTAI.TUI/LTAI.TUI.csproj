@@ -37,4 +37,10 @@
     <Content Include="Assets/ltai-tui.svg" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
+  <!-- Alacritty 终端嵌入为资源 -->
+  <ItemGroup>
+    <EmbeddedResource Include="Assets\Alacritty\alacritty.exe" />
+    <EmbeddedResource Include="Assets\Alacritty\alacritty.yml" />
+  </ItemGroup>
+
 </Project>

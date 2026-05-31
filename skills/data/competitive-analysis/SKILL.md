@@ -2,6 +2,7 @@
 name: competitive-analysis
 description: 生成竞品分析对比图（表格+雷达图+定位图），导出 SVG
 license: MIT
+allowedTools: [ReadFileContent, SearchContent, WebSearch]
 ---
 
 # Competitive Analysis Skill

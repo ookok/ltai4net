@@ -2,6 +2,7 @@
 name: error-handling
 description: 错误处理审查——异常类型/空值处理/边界情况/fail-fast 原则
 license: MIT
+allowedTools: [ReadFileContent, SearchContent, FindInCode, Glob]
 ---
 
 # Error Handling 错误处理审查

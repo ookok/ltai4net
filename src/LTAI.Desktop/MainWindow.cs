@@ -13,6 +13,7 @@ namespace LTAI.Desktop;
 
 public partial class MainWindow : Window
 {
+    private ChatView? _chatView;
     private readonly Border _sidebar;
     private readonly ContentControl _contentArea;
     private readonly Button _collapseBtn;
@@ -23,6 +24,9 @@ public partial class MainWindow : Window
     private readonly TextBlock _statusBar;
     private readonly DispatcherTimer _statusTimer;
     private readonly SessionStatsPanel _statsPanel;
+    private DateTime _lastCpuSample = DateTime.UtcNow;
+    private TimeSpan _lastCpuTime = TimeSpan.Zero;
+    private static readonly Process _cachedProcess = Process.GetCurrentProcess();
 
     private sealed record ViewEntry(string Name, string Shortcut, Control View);
     private readonly List<ViewEntry> _views;
@@ -30,7 +34,7 @@ public partial class MainWindow : Window
 
     public MainWindow(LTAIService svc)
     {
-        Title = "LTAI V0.56 — Production Hardening";
+        Title = "LTAI — AI 助手";
         Width = 1280;
         Height = 800;
         Background = new SolidColorBrush(Color.Parse("#0d1117"));
@@ -41,12 +45,13 @@ public partial class MainWindow : Window
 
         var sessionManager = new SessionManager();
         var chatView = new ChatView(svc, sessionManager);
+        _chatView = chatView;
 
         _views = new List<ViewEntry>
         {
             new("仪表盘", "1", new DashboardView(svc)),
             new("聊天",    "2", chatView),
-            new("代码",    "3", new TextPadView(svc.Options.ResolveDataPath("../.."))),
+            new("代码",    "3", CreateTextPadView(svc)),
             new("技能",    "4", new SkillsView()),
             new("配置",    "5", new ConfigView()),
         };
@@ -58,7 +63,6 @@ public partial class MainWindow : Window
             var idx = i;
             var btn = new Button
             {
-                Content = entry.Shortcut == "0" ? $" {entry.Shortcut}  {entry.Name}" : $" {entry.Shortcut}   {entry.Name}",
                 HorizontalContentAlignment = HorizontalAlignment.Left,
                 Background = LtaiTheme.Sbb(Colors.Transparent),
                 Foreground = LtaiTheme.Sbb(LtaiTheme.TextSecondary),
@@ -68,6 +72,15 @@ public partial class MainWindow : Window
                 BorderThickness = new(0),
                 CornerRadius = new(4)
             };
+            var icons = new[] { "📊", "💬", "📝", "⚡", "⚙️" };
+            var icon = i < icons.Length ? icons[i] : "📄";
+            var btnGrid = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,Auto,*") };
+            btnGrid.Children.Add(new TextBlock { Text = icon, Width = 22, Foreground = LtaiTheme.Sbb(LtaiTheme.TextSecondary) });
+            btnGrid.Children.Add(new TextBlock { Text = entry.Shortcut, Width = 16, Margin = new(0,0,2,0), Foreground = LtaiTheme.Sbb(LtaiTheme.TextDim), FontFamily = new("Consolas") });
+            Grid.SetColumn(btnGrid.Children[^1], 1);
+            btnGrid.Children.Add(new TextBlock { Text = entry.Name, Foreground = LtaiTheme.Sbb(LtaiTheme.TextSecondary) });
+            Grid.SetColumn(btnGrid.Children[^1], 2);
+            btn.Content = btnGrid;
             btn.PointerEntered += (_, _) =>
             {
                 if (idx != _activeIndex)
@@ -92,13 +105,13 @@ public partial class MainWindow : Window
 
         _collapseBtn = new Button
         {
-            Content = "<<",
+            Content = "◀ 折叠",
             HorizontalContentAlignment = HorizontalAlignment.Center,
             Background = LtaiTheme.Sbb(Colors.Transparent),
             Foreground = LtaiTheme.Sbb(LtaiTheme.TextDim),
-            FontSize = 12,
+            FontSize = 11,
             Height = 28,
-            Padding = new(0),
+            Padding = new(4, 0),
             BorderThickness = new(0),
             CornerRadius = new(4)
         };
@@ -184,6 +197,17 @@ public partial class MainWindow : Window
         KeyDown += OnKeyDown;
         LtaiTheme.ThemeChanged += OnThemeChanged;
         DetachedFromVisualTree += (_, _) => LtaiTheme.ThemeChanged -= OnThemeChanged;
+    }
+
+    private TextPadView CreateTextPadView(LTAIService svc)
+    {
+        var tp = new TextPadView(svc.Options.ResolveDataPath("../.."));
+        tp.AskAiRequested += context =>
+        {
+            ActivateView(1);
+            _chatView?.SendContentAsync($"分析以下文件/目录:\n{context}\n\n请查看并给出建议。");
+        };
+        return tp;
     }
 
     private async Task ShowSetupIfNeededAsync()
@@ -341,13 +365,14 @@ public partial class MainWindow : Window
         {
             _expandedWidth = _sidebar.Width;
             _sidebar.Width = 48;
-            _collapseBtn.Content = ">>";
+            _collapseBtn.Content = "▶ 展开";
             foreach (var (i, entry) in _views.Index())
             {
                 if (i < _buttonStack.Children.Count && _buttonStack.Children[i] is Button btn)
                 {
-                    var s = entry.Shortcut;
-                    btn.Content = s.Length == 1 ? $" {s}" : s;
+                    var icons = new[] { "📊", "💬", "📝", "⚡", "⚙️" };
+                    var icon = i < icons.Length ? icons[i] : "📄";
+                    btn.Content = $" {icon}";
                     btn.HorizontalContentAlignment = HorizontalAlignment.Center;
                     btn.Padding = new(0);
                 }
@@ -356,12 +381,20 @@ public partial class MainWindow : Window
         else
         {
             _sidebar.Width = _expandedWidth;
-            _collapseBtn.Content = "<<";
+            _collapseBtn.Content = "◀ 折叠";
             foreach (var (i, entry) in _views.Index())
             {
                 if (i < _buttonStack.Children.Count && _buttonStack.Children[i] is Button btn)
                 {
-                    btn.Content = entry.Shortcut == "0" ? $" {entry.Shortcut}  {entry.Name}" : $" {entry.Shortcut}   {entry.Name}";
+                    var icons = new[] { "📊", "💬", "📝", "⚡", "⚙️" };
+                    var icon = i < icons.Length ? icons[i] : "📄";
+                    var btnGrid = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,Auto,*") };
+                    btnGrid.Children.Add(new TextBlock { Text = icon, Width = 22, Foreground = LtaiTheme.Sbb(LtaiTheme.TextSecondary) });
+                    btnGrid.Children.Add(new TextBlock { Text = entry.Shortcut, Width = 16, Margin = new(0,0,2,0), Foreground = LtaiTheme.Sbb(LtaiTheme.TextDim), FontFamily = new("Consolas") });
+                    Grid.SetColumn(btnGrid.Children[^1], 1);
+                    btnGrid.Children.Add(new TextBlock { Text = entry.Name, Foreground = LtaiTheme.Sbb(LtaiTheme.TextSecondary) });
+                    Grid.SetColumn(btnGrid.Children[^1], 2);
+                    btn.Content = btnGrid;
                     btn.HorizontalContentAlignment = HorizontalAlignment.Left;
                     btn.Padding = new(8, 0);
                 }
@@ -380,10 +413,17 @@ public partial class MainWindow : Window
 
     private void UpdateStatusBar()
     {
-        using var process = Process.GetCurrentProcess();
-        var cpu = Environment.ProcessorCount;
-        var mem = process.WorkingSet64 / 1024.0 / 1024.0;
-        _statusBar.Text = string.Format("CPU: {0}c  MEM: {1:F0}MB", cpu, mem);
+        _cachedProcess.Refresh();
+        var now = DateTime.UtcNow;
+        var cpuTime = _cachedProcess.TotalProcessorTime;
+        var elapsed = (now - _lastCpuSample).TotalSeconds;
+        var cpuUsage = elapsed > 0.5
+            ? (cpuTime - _lastCpuTime).TotalSeconds / (Environment.ProcessorCount * elapsed) * 100
+            : 0.0;
+        _lastCpuSample = now;
+        _lastCpuTime = cpuTime;
+        var mem = _cachedProcess.WorkingSet64 / 1024.0 / 1024.0;
+        _statusBar.Text = string.Format("CPU: {0:F1}%  MEM: {1:F0}MB", cpuUsage, mem);
     }
 
     private void OnKeyDown(object? sender, KeyEventArgs e)
@@ -424,8 +464,8 @@ public partial class MainWindow : Window
                 if (e.Key == Key.Escape)
                 {
                     ActivateView(1); // switch to Chat
-                    var chatView = _contentArea.Content as ChatView;
-                    chatView?.Cancel();
+                    _chatView = _contentArea.Content as ChatView;
+                    _chatView?.Cancel();
                 }
                 else handled = false;
                 break;

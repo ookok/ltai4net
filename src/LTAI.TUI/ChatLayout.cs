@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -13,21 +14,50 @@ public sealed class ChatLayout
     private readonly ChatAgent _chat;
     private readonly List<(string role, string content)> _history = new();
     private readonly Layout _layout;
+    private readonly Queue<ConsoleKeyInfo> _pendingKeys = new();
+    public TuiView? LastRequestedView { get; private set; }
+    private int _toolCallCount;
+    private int _subagentProgress;
+    private const int MaxHistory = 200;
+    private const int RefreshIntervalMs = 33;
+    private DateTime _lastRefresh = DateTime.MinValue;
+    private readonly StringBuilder _cachedMessages = new();
+    private int _cachedHistoryCount = 0;
+    private int _lastStreamRenderLen = 0;
+
+    private void ThrottledRefresh(LiveDisplayContext ctx)
+    {
+        var now = DateTime.UtcNow;
+        if ((now - _lastRefresh).TotalMilliseconds >= RefreshIntervalMs)
+        {
+            ctx.Refresh();
+            _lastRefresh = now;
+        }
+    }
+
+    private void TrimHistory()
+    {
+        if (_history.Count <= MaxHistory) return;
+        _history.RemoveRange(0, _history.Count - MaxHistory);
+        _cachedMessages.Clear();
+        _cachedHistoryCount = 0;
+    }
     private static readonly string[] PulseFrames = [
-        "[yellow]█[/].......",
-        ".[yellow]█[/]......",
-        "..[yellow]█[/].....",
-        "...[yellow]█[/]....",
-        "....[yellow]█[/]...",
-        ".....[yellow]█[/]..",
-        "......[yellow]█[/].",
-        ".......[yellow]█[/]",
-        "......[yellow]█[/].",
-        ".....[yellow]█[/]..",
-        "....[yellow]█[/]...",
-        "...[yellow]█[/]....",
-        "..[yellow]█[/].....",
-        ".[yellow]█[/]......",
+        "[yellow]▁▂▃▄▅▆▇█▇▆▅▄▃▂▁[/]",
+        "[yellow]▂▃▄▅▆▇█▇▆▅▄▃▂▁▁[/]",
+        "[yellow]▃▄▅▆▇█▇▆▅▄▃▂▁▁▂[/]",
+        "[yellow]▄▅▆▇█▇▆▅▄▃▂▁▁▂▃[/]",
+        "[yellow]▅▆▇█▇▆▅▄▃▂▁▁▂▃▄[/]",
+        "[yellow]▆▇█▇▆▅▄▃▂▁▁▂▃▄▅[/]",
+        "[yellow]▇█▇▆▅▄▃▂▁▁▂▃▄▅▆[/]",
+        "[yellow]█▇▆▅▄▃▂▁▁▂▃▄▅▆▇[/]",
+        "[yellow]▇▆▅▄▃▂▁▁▂▃▄▅▆▇█[/]",
+        "[yellow]▆▅▄▃▂▁▁▂▃▄▅▆▇█▇[/]",
+        "[yellow]▅▄▃▂▁▁▂▃▄▅▆▇█▇▆[/]",
+        "[yellow]▄▃▂▁▁▂▃▄▅▆▇█▇▆▅[/]",
+        "[yellow]▃▂▁▁▂▃▄▅▆▇█▇▆▅▄[/]",
+        "[yellow]▂▁▁▂▃▄▅▆▇█▇▆▅▄▃[/]",
+        "[yellow]▁▁▂▃▄▅▆▇█▇▆▅▄▃▂[/]",
     ];
 
     public ChatLayout(ChatAgent chat)
@@ -41,18 +71,48 @@ public sealed class ChatLayout
                 new Layout("Footer").Size(6));
 
         _layout["Header"].Update(
-            new Panel("[bold]LTAI 聊天[/] — [grey]ESC 退出，Enter 发送，Shift+Enter 换行，/ 命令[/]")
+            new Panel("[bold]LTAI 聊天[/] — [grey]Esc=退出  Enter=发送  Shift+Enter=换行  Ctrl+V=粘贴  1-5=视图  /help=帮助[/]")
                 .Border(BoxBorder.None).Expand());
+
+        _layout["Messages"].Update(
+            new Panel(
+                "[bold yellow]💬 欢迎使用 LTAI[/]\n\n" +
+                "[grey]可用命令:[/]\n" +
+                "  [cyan]/new[/]     — 新建会话\n" +
+                "  [cyan]/help[/]    — 显示帮助\n" +
+                "  [cyan]/exit[/]    — 退出\n" +
+                "  [cyan]/model[/]   — 管理模型\n" +
+                "  [cyan]/config[/]  — 配置 LLM\n\n" +
+                "[grey]快捷键:[/]\n" +
+                "  [cyan]1-5[/]       — 切换视图\n" +
+                "  [cyan]↑↓[/]       — 历史消息\n" +
+                "  [cyan]/[/]         — 打开命令选择器\n\n" +
+                "[dim]直接输入消息开始对话，或输入 [yellow]/[/] 浏览全部命令[/]")
+                .Border(BoxBorder.Rounded)
+                .Header(new PanelHeader("[bold yellow]💬 LTAI[/]"))
+                .Expand());
 
         _layout["Footer"].Update(
             new Panel("[grey]等待首次请求...  输入消息开始对话[/]")
                 .Border(BoxBorder.None).Expand());
+
+        LTAI.Agent.Tools.SubagentTools.OnSubagentComplete += (id) => _subagentProgress = -1;
+        LTAI.Agent.Tools.SubagentTools.OnSubagentMessage += (id, role, content) =>
+        {
+            Interlocked.Increment(ref _subagentProgress);
+        };
     }
 
-    public async Task RenderAsync()
+    public async Task<TuiView?> RenderAsync()
     {
+        LastRequestedView = TuiView.Chat;
         // 预热 LLM session（后台异步，不阻塞 UI 启动）
         var warmupTask = _chat.WarmUpAsync();
+        _ = warmupTask.ContinueWith(t =>
+        {
+            if (t.IsFaulted)
+                System.Diagnostics.Debug.WriteLine($"WarmUp failed: {t.Exception?.InnerException?.Message}");
+        }, TaskContinuationOptions.OnlyOnFaulted);
 
         await AnsiConsole.Live(_layout)
             .AutoClear(false)
@@ -66,21 +126,35 @@ public sealed class ChatLayout
                 while (true)
                 {
                     // 刷新：消息 + footer（含 "> " 输入框）
-                    UpdateMessages("");
-                    UpdateFooter(inputBuf.ToString(), "", showWatermark);
-                    ctx.Refresh();
+                    lock (_layout) { UpdateMessages(""); UpdateFooter(inputBuf.ToString(), "", showWatermark); ctx.Refresh(); }
                     showWatermark = false; // 只显示一次水印
 
-                    // 读按键（阻塞）
-                    var key = Console.ReadKey(true);
+                    // 读按键（优先消化缓冲键）
+                    ConsoleKeyInfo key;
+                    lock (_pendingKeys)
+                    {
+                        if (_pendingKeys.Count > 0) { key = _pendingKeys.Dequeue(); }
+                        else { key = Console.ReadKey(true); }
+                    }
 
-                    if (key.Key == ConsoleKey.Escape) return;
+                    // ── 视图切换：仅在输入为空时生效（避免误触） ──
+                    if (inputBuf.Length == 0 && (key.KeyChar == '1' || key.KeyChar == '3' || key.KeyChar == '4' || key.KeyChar == '5'))
+                    {
+                        LastRequestedView = key.KeyChar switch
+                        {
+                            '1' => TuiView.Dashboard, '3' => TuiView.LLMConfig,
+                            '4' => TuiView.TextPad, '5' => TuiView.Skills, _ => TuiView.Chat
+                        };
+                        return;
+                    }
+                    if (key.Key == ConsoleKey.Escape || key.KeyChar == 'q' || key.KeyChar == 'Q')
+                    { LastRequestedView = null; return; }
 
                     // Ctrl+V → 粘贴
                     if (key.Key == ConsoleKey.V && (key.Modifiers & ConsoleModifiers.Control) != 0)
                     {
                         try { inputBuf.Append(TextCopy.ClipboardService.GetText() ?? ""); }
-                        catch { }
+                        catch { lock (_layout) { UpdateFooter(inputBuf.ToString(), "[red]粘贴失败: 剪贴板不可用[/]"); ctx.Refresh(); } }
                         continue;
                     }
 
@@ -99,24 +173,22 @@ public sealed class ChatLayout
 
                         if (string.IsNullOrEmpty(input))
                         {
-                            UpdateMessages("");
-                            UpdateFooter("", "");
-                            ctx.Refresh();
-                            return;
+                            // 空输入 → 无操作，不退出
+                            lock (_layout) { UpdateMessages(""); UpdateFooter("", ""); ctx.Refresh(); }
+                            continue;
                         }
 
                         if (input.StartsWith('/'))
                         {
                             if (await HandleSlashCommandAsync(input)) continue;
-                            return;
+                            LastRequestedView = null; return;
                         }
 
                         _history.Add(("user", input));
-                        UpdateMessages("");
-                        UpdateFooter("", "");
-                        ctx.Refresh();
+                        TrimHistory();
+                        lock (_layout) { UpdateMessages(""); UpdateFooter("", ""); ctx.Refresh(); }
 
-                        PreAuthorizePaths(input);
+                        ConfirmationModal.AuthorizePaths(_layout, ctx, input);
                         await StreamResponseAsync(ctx, input);
                         continue;
                     }
@@ -141,30 +213,82 @@ public sealed class ChatLayout
                             if (cmd == null) continue;
 
                             if (await HandleSlashCommandAsync(cmd)) continue;
-                            return;
+                            LastRequestedView = null; return;
                         }
                     }
                 }
             });
+        return LastRequestedView;
     }
 
-    // ── 消息面板 ──
+    // ── 消息面板（增量渲染） ──
+
+    private void UpdateHeader()
+    {
+        var planStatus = LTAI.Agent.Tools.PlanTools.PlanStatus();
+        var hasPlan = planStatus.Contains("Current Step") || planStatus.Contains("executing");
+        var planTag = hasPlan ? "  [bold yellow]📋 计划执行中[/]" : "";
+        _layout["Header"].Update(
+            new Panel($"[bold]LTAI 聊天[/]{planTag} — [grey]Esc=退出  Enter=发送  S+Enter=换行  1-5=视图  /help=帮助[/]")
+                .Border(BoxBorder.None).Expand());
+    }
 
     private void UpdateMessages(string streamingContent)
     {
         var sb = new StringBuilder();
-        foreach (var (role, content) in _history)
+
+        // 使用缓存的已渲染历史，避免每 token 重新处理
+        if (_cachedMessages.Length > 0)
+            sb.Append(_cachedMessages);
+
+        // 渲染新增的历史条目
+        for (int i = _cachedHistoryCount; i < _history.Count; i++)
         {
+            var (role, content) = _history[i];
             if (role == "user")
-                sb.AppendLine($"[cyan]你:[/] {content.EscapeMarkup()}");
+                sb.AppendLine($"[bold cyan]┃[/] [cyan]你:[/] {content.EscapeMarkup()}");
             else
-                sb.AppendLine(MdToPanelContent(content));
+                sb.AppendLine($"[bold green]┃[/] {MdToPanelContent(content)}");
         }
+
+        // 更新历史缓存
+        if (_cachedHistoryCount < _history.Count)
+        {
+            _cachedMessages.Clear();
+            _cachedMessages.Append(sb);
+            _cachedHistoryCount = _history.Count;
+        }
+
+        // 流式内容增量：只处理上次渲染后的新增部分
         if (!string.IsNullOrEmpty(streamingContent))
-            sb.Append(MdToPanelContent(streamingContent));
+        {
+            // 新会话重置跟踪
+            if (streamingContent.Length < _lastStreamRenderLen)
+                _lastStreamRenderLen = 0;
+
+            if (streamingContent.Length > _lastStreamRenderLen)
+            {
+                var delta = streamingContent[_lastStreamRenderLen..];
+                sb.Append(MdToPanelContent(delta));
+                _lastStreamRenderLen = streamingContent.Length;
+            }
+        }
+        else
+        {
+            _lastStreamRenderLen = 0;
+        }
+
+        var result = sb.ToString().TrimEnd();
+        if (_history.Count == 0 && string.IsNullOrEmpty(streamingContent) && _cachedHistoryCount == 0)
+        {
+            // 首次空状态保留欢迎屏
+            return;
+        }
+        if (!string.IsNullOrEmpty(streamingContent) && _history.Count > 0 && _history[^1].role == "user")
+            result = $"[bold green]┃[/] {result}";
 
         _layout["Messages"].Update(
-            new Panel(sb.ToString().TrimEnd())
+            new Panel(result)
                 .Border(BoxBorder.None)
                 .Expand());
     }
@@ -179,43 +303,23 @@ public sealed class ChatLayout
         if (r > 0)
         {
             var m = UsageTracker.ActiveModel.EscapeMarkup();
-            var c = UsageTracker.ContextText();
-            var pct = UsageTracker.ContextRatio();
             var b = UsageTracker.BalanceDisplay.EscapeMarkup();
             var tps = UsageTracker.TpsDisplay;
             var tc = UsageTracker.ToolCalls;
             var saved = UsageTracker.CacheSavedDisplay;
 
-            // 第1行：模型 | Token | 费用 | 速率 | 请求
-            var l1 = $"[grey]模型:[/] {m}  " +
-                     $"[grey]Token:[/] {UsageTracker.TotalTokens:N0}  " +
+            // 第1行：模型 · Token · 费用 · 速率 · 请求
+            var l1 = $"{m}  ·  [grey]Token:[/] {UsageTracker.TotalTokens:N0}  ·  " +
                      $"[grey]费用:[/] {UsageTracker.CostDisplay.EscapeMarkup()}";
-            if (!string.IsNullOrEmpty(tps)) l1 += $"  [grey]速率:[/] {tps}";
-            l1 += $"  [grey]请求:[/] {r}";
+            if (!string.IsNullOrEmpty(tps)) l1 += $"  ·  [grey]速率:[/] {tps}";
+            l1 += $"  ·  [grey]请求:[/] {r}";
             renders.Add(new Markup(l1));
 
-            // 上下文进度（ContextText 已包含百分比）
-            var ctxPctStr = $"[grey]上下文:[/] {c}";
-            renders.Add(new Markup(ctxPctStr));
-
-            // 第2行：余额 | 缓存% | 节省 | 工具
-            var l2 = $"[grey]余额:[/] {b}  [grey]缓存:[/] {UsageTracker.CacheHitRate:F1}%";
-            if (saved != "¥0.0000") l2 += $"  [grey]节省:[/] {saved}";
-            if (tc > 0) l2 += $"  [grey]工具:[/] {tc}次";
+            // 第2行：余额 · 缓存 · 工具 · 节省（仅在有数据时显示）
+            var l2 = $"[grey]余额:[/] {b}  ·  [grey]缓存:[/] {UsageTracker.CacheHitRate:F1}%";
+            if (tc > 0) l2 += $"  ·  [grey]工具:[/] {tc}次";
+            if (saved != "¥0.0000") l2 += $"  ·  [grey]节省:[/] {saved}";
             renders.Add(new Markup(l2));
-
-            // 计时行：LLM 调用耗时 | 工具调用耗时
-            var llmTime = UsageTracker.LlmCallTimeDisplay;
-            var toolTime = UsageTracker.ToolCallTimeDisplay;
-            if (!string.IsNullOrEmpty(llmTime) || !string.IsNullOrEmpty(toolTime))
-            {
-                var timingParts = new List<string>();
-                if (!string.IsNullOrEmpty(llmTime))
-                    timingParts.Add($"[grey]LLM:[/] {llmTime}");
-                if (!string.IsNullOrEmpty(toolTime))
-                    timingParts.Add($"[grey]工具:[/] {toolTime}");
-                renders.Add(new Markup(string.Join("  ", timingParts)));
-            }
         }
         else
         {
@@ -229,8 +333,8 @@ public sealed class ChatLayout
         // 输入行：首次空时显示水印+光标，之后始终只显示光标
         var showWatermark = string.IsNullOrEmpty(inputText) && isFirstEmpty;
         var inputDisplay = showWatermark
-            ? $"[bold green]❯[/] [bold yellow]█[/][grey] 输入消息 Enter发送 Shift+Enter换行 Ctrl+V粘贴 /new /exit[/]"
-            : $"[bold green]❯[/] {inputText}[bold yellow]█[/]";
+            ? $"[bold green]▎[/] [dim]│[/][grey] 输入消息  Enter=发送  S+Enter=换行  Ctrl+V=粘贴  /[/]"
+            : $"[bold green]▎[/] {inputText}[bold yellow]│[/]";
         renders.Add(new Markup(inputDisplay));
 
         _layout["Footer"].Update(
@@ -307,24 +411,34 @@ public sealed class ChatLayout
             if (Regex.IsMatch(trimmed, @"^\|[\s\-:]+\|$")) return "";
             var cells = trimmed.Split('|', StringSplitOptions.RemoveEmptyEntries)
                 .Select(c => c.Trim())
-                .Select(c => InlineMdToSpectre(c.EscapeMarkup()));
+                .Select(c => InlineMdToSpectre(c));
             return "[grey]│[/] " + string.Join(" [grey]│[/] ", cells) + " [grey]│[/]";
         }
 
-        var spectre = InlineMdToSpectre(body.EscapeMarkup());
+        var spectre = InlineMdToSpectre(body);
         return prefix + spectre + suffix;
     }
 
+    private static readonly Regex InlineMdRx = new(
+        @"\*\*(.+?)\*\*|__(.+?)__|\*(.+?)\*|_(.+?)_|``(.+?)``|`(.+?)`|\[\[(.+?)\]\]\((.+?)\)|~~(.+?)~~",
+        RegexOptions.Compiled);
+
     private static string InlineMdToSpectre(string text)
     {
-        text = Regex.Replace(text, @"\*\*(.+?)\*\*", m => $"[bold]{m.Groups[1].Value}[/]");
-        text = Regex.Replace(text, @"__(.+?)__", m => $"[bold]{m.Groups[1].Value}[/]");
-        text = Regex.Replace(text, @"\*(.+?)\*", m => $"[italic]{m.Groups[1].Value}[/]");
-        text = Regex.Replace(text, @"_(.+?)_", m => $"[italic]{m.Groups[1].Value}[/]");
-        text = Regex.Replace(text, @"``(.+?)``|`(.+?)`",
-            m => $"[grey]{(m.Groups[1].Success ? m.Groups[1].Value : m.Groups[2].Value)}[/]");
-        text = Regex.Replace(text, @"\[(.+?)\]\((.+?)\)", m => $"[link={m.Groups[2].Value}]{m.Groups[1].Value}[/]");
-        text = Regex.Replace(text, @"~~(.+?)~~", m => $"[strikethrough]{m.Groups[1].Value}[/]");
+        // 先转义方括号，再合并为一次正则替换
+        text = text.Replace("[", "[[").Replace("]", "]]");
+        text = InlineMdRx.Replace(text, m =>
+        {
+            if (m.Groups[1].Success) return $"[bold]{m.Groups[1].Value}[/]";
+            if (m.Groups[2].Success) return $"[bold]{m.Groups[2].Value}[/]";
+            if (m.Groups[3].Success) return $"[italic]{m.Groups[3].Value}[/]";
+            if (m.Groups[4].Success) return $"[italic]{m.Groups[4].Value}[/]";
+            if (m.Groups[5].Success) return $"[grey]{m.Groups[5].Value}[/]";
+            if (m.Groups[6].Success) return $"[grey]{m.Groups[6].Value}[/]";
+            if (m.Groups[7].Success) return $"[link={m.Groups[8].Value}]{m.Groups[7].Value}[/]";
+            if (m.Groups[9].Success) return $"[strikethrough]{m.Groups[9].Value}[/]";
+            return m.Value;
+        });
         return text;
     }
 
@@ -333,35 +447,19 @@ public sealed class ChatLayout
     private async Task StreamResponseAsync(LiveDisplayContext ctx, string input)
     {
         var content = new StringBuilder();
-        var cts = new CancellationTokenSource();
-        int frameIdx = 0;
+        using var cts = new CancellationTokenSource();
+        var sharedFrameIdx = 0;
         string statusText = "";
 
-        // 后台 ESC 监控
-        var escTask = Task.Run(async () =>
-        {
-            try
-            {
-                while (!cts.Token.IsCancellationRequested)
-                {
-                    if (Console.KeyAvailable)
-                    {
-                        var k = Console.ReadKey(true);
-                        if (k.Key == ConsoleKey.Escape) { cts.Cancel(); return; }
-                    }
-                    await Task.Delay(100, cts.Token);
-                }
-            }
-            catch (OperationCanceledException) { }
-        }, cts.Token);
-
         // 初始等待提示
-        frameIdx = 0;
+        content.AppendLine("[dim]━━━ 思考中 ━━━[/]");
+        _toolCallCount = 0;
+        var toolTimer = Stopwatch.StartNew();
         UpdateFooter("", $"[grey]{PulseFrames[0]} 思考中...[/]");
         ctx.Refresh();
 
         // 后台脉冲动画（每 250ms 更新一次，即使无 token）
-        var spinCts = CancellationTokenSource.CreateLinkedTokenSource(cts.Token);
+        using var spinCts = CancellationTokenSource.CreateLinkedTokenSource(cts.Token);
         var spinTask = Task.Run(async () =>
         {
             try
@@ -369,8 +467,13 @@ public sealed class ChatLayout
                 while (!spinCts.Token.IsCancellationRequested)
                 {
                     await Task.Delay(250, spinCts.Token).ConfigureAwait(false);
-                    var pulse = PulseFrames[frameIdx++ % PulseFrames.Length];
-                    var line = $"{pulse} 思考中...";
+                        var idx = Interlocked.Increment(ref sharedFrameIdx);
+                        var pulse = PulseFrames[idx % PulseFrames.Length];
+                        var elapsed = toolTimer.Elapsed;
+                        var timeStr = elapsed.TotalSeconds >= 60
+                            ? $"{(int)elapsed.TotalMinutes}m{elapsed.Seconds}s"
+                            : $"{elapsed.TotalSeconds:F1}s";
+                        var line = $"{pulse} 思考中... [{timeStr}]";
                     if (!string.IsNullOrEmpty(statusText))
                         line += $"  {statusText}";
                     lock (_layout)
@@ -381,12 +484,20 @@ public sealed class ChatLayout
                 }
             }
             catch (OperationCanceledException) { }
+            catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"spinTask: {ex.Message}"); }
         }, spinCts.Token);
 
         try
         {
             await foreach (var update in _chat.ChatStreamingAsync(input).WithCancellation(cts.Token))
             {
+                // 内联检查 ESC（缓冲非 ESC 按键）
+                if (Console.KeyAvailable)
+                {
+                    var k = Console.ReadKey(true);
+                    if (k.Key == ConsoleKey.Escape) { cts.Cancel(); break; }
+                    lock (_pendingKeys) { _pendingKeys.Enqueue(k); }
+                }
                 if (cts.Token.IsCancellationRequested) break;
 
                 var token = update.Text ?? "";
@@ -398,13 +509,17 @@ public sealed class ChatLayout
                         {
                             if (c is Microsoft.Extensions.AI.FunctionCallContent fc)
                             {
+                                _toolCallCount++;
                                 var n = fc.Name ?? "";
                                 var a = fc.Arguments is Dictionary<string, object?> args
                                     ? string.Join(", ", args.Select(kv => $"{kv.Key}={kv.Value}"))
                                     : "";
-                                var msg = $"🛠 调用 {n}({Truncate(a, 50)})";
+                                var msg = $"🛠 [{_toolCallCount}] {n}({Truncate(a, 50)})";
                                 content.AppendLine(msg);
-                                statusText = msg;
+                                var elapsedStr = FormatElapsed(toolTimer.Elapsed);
+                                statusText = $"{msg} [{elapsedStr}]";
+                                if (n.Contains("SubmitPlan") || n.Contains("ApprovePlan") || n.Contains("StartExecution"))
+                                    UpdateHeader();
                             }
                             // 显示工具调用结果
                             if (c is Microsoft.Extensions.AI.FunctionResultContent frc)
@@ -416,7 +531,8 @@ public sealed class ChatLayout
                                 // 弹出模态窗口替代 LLM 往返确认流程。
                                 if (TryParseConfirmRequest(resultStr, out var confirmInfo))
                                 {
-                                    var choice = ConfirmationModal.Show(
+                                    var choice = ConfirmationModal.ShowInline(
+                                        _layout, ctx,
                                         confirmInfo.Title,
                                         confirmInfo.Message,
                                         resultStr,
@@ -449,57 +565,72 @@ public sealed class ChatLayout
                             }
                         }
                     }
-                    UpdateMessages(content.ToString());
-                    UpdateFooter("", $"{PulseFrames[frameIdx++ % PulseFrames.Length]} 处理中...  {statusText}");
-                    ctx.Refresh();
+                    lock (_layout) { UpdateMessages(content.ToString()); UpdateFooter("", $"{PulseFrames[Interlocked.Increment(ref sharedFrameIdx) % PulseFrames.Length]} 处理中...  {statusText}"); }
+                    ThrottledRefresh(ctx);
                     continue;
                 }
                 if (TryParseToolResult(token, out var parsed))
                 {
-                    var msg = parsed.success
-                        ? $"✅ {Truncate(parsed.output, 60)}"
-                        : $"❌ {parsed.error.EscapeMarkup()}";
-                    content.AppendLine(msg);
-                    statusText = msg;
-                    UpdateMessages(content.ToString());
-                    UpdateFooter("", $"{PulseFrames[frameIdx++ % PulseFrames.Length]} 处理中...  {statusText}");
-                    ctx.Refresh();
+                    // 检测子 Agent 结果 → 显示耗时
+                    var subMatch = System.Text.RegularExpressions.Regex.Match(token, @"\""type\"":\s*\""(\w+)\"".*\""spawnCount\"":\s*(\d+).*\""elapsedMs\"":\s*(\d+)");
+                    if (subMatch.Success)
+                    {
+                        var st = subMatch.Groups[1].Value;
+                        var sc = subMatch.Groups[2].Value;
+                        var ms = int.Parse(subMatch.Groups[3].Value);
+                        var timeStr = ms >= 1000 ? $"{ms / 1000}.{(ms % 1000) / 100}s" : $"{ms}ms";
+                        var preview = Truncate(parsed.output.Replace("\n", " "), 50);
+                        var msg = $"🔧 [bold]子任务 #{sc} ({st})[/] [grey]{timeStr}[/] — {preview.EscapeMarkup()}";
+                        content.AppendLine(msg);
+                        statusText = $"子任务 #{sc} 完成 ({timeStr})";
+                    }
+                    else
+                    {
+                        var msg = parsed.success
+                            ? $"✅ {Truncate(parsed.output, 60)}"
+                            : $"❌ {parsed.error.EscapeMarkup()}";
+                        content.AppendLine(msg);
+                        statusText = msg;
+                    }
+                    lock (_layout) { UpdateMessages(content.ToString()); UpdateFooter("", $"{PulseFrames[Interlocked.Increment(ref sharedFrameIdx) % PulseFrames.Length]} 处理中...  {statusText}"); }
+                    ThrottledRefresh(ctx);
                     continue;
                 }
                 if (token.StartsWith("HANDOFF TO "))
                 {
                     content.AppendLine($"→ {token}"); statusText = $"→ {token}";
-                    UpdateMessages(content.ToString());
-                    UpdateFooter("", $"{PulseFrames[frameIdx++ % PulseFrames.Length]} {statusText}");
-                    ctx.Refresh();
+                    lock (_layout) { UpdateMessages(content.ToString()); UpdateFooter("", $"{PulseFrames[Interlocked.Increment(ref sharedFrameIdx) % PulseFrames.Length]} {statusText}"); }
+                    ThrottledRefresh(ctx);
                     continue;
                 }
                 if (token.StartsWith("[budget:") || token.StartsWith("[note:"))
                 {
-                    content.AppendLine(token); statusText = token;
-                    UpdateMessages(content.ToString());
-                    UpdateFooter("", $"{PulseFrames[frameIdx++ % PulseFrames.Length]} {statusText}");
-                    ctx.Refresh();
+                    // Escape 方括号避免重渲时 Spectre MarkupException
+                    var safeToken = token.Replace("[", "\\[").Replace("]", "\\]");
+                    content.AppendLine(safeToken); statusText = token;
+                    lock (_layout) { UpdateMessages(content.ToString()); UpdateFooter("", $"{PulseFrames[Interlocked.Increment(ref sharedFrameIdx) % PulseFrames.Length]} {statusText}"); }
+                    ThrottledRefresh(ctx);
                     continue;
                 }
 
                 content.Append(token);
 
                 // 实时刷新：消息 + 动画
-                UpdateMessages(content.ToString());
-                var pulse = PulseFrames[frameIdx++ % PulseFrames.Length];
-                UpdateFooter("", $"{pulse} 处理中...  {statusText}");
-                ctx.Refresh();
+                lock (_layout) { UpdateMessages(content.ToString()); var pulse = PulseFrames[Interlocked.Increment(ref sharedFrameIdx) % PulseFrames.Length]; UpdateFooter("", $"{pulse} 处理中...  {statusText}"); }
+                ThrottledRefresh(ctx);
             }
         }
         catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            content.AppendLine($"\n[red]⚠ 流式响应错误: {ex.Message.EscapeMarkup()}[/]");
+        }
 
-        cts.Cancel();
         spinCts.Cancel();
-        try { await spinTask; } catch { }
-        try { await escTask; } catch { }
+        try { await spinTask; } catch { /* 已取消或异常 */ }
 
         _history.Add(("assistant", content.ToString()));
+        TrimHistory();
     }
 
     // ── Slash 命令 ──
@@ -510,6 +641,9 @@ public sealed class ChatLayout
             string.Equals(input, "/clear", StringComparison.OrdinalIgnoreCase))
         {
             _history.Clear();
+            _cachedMessages.Clear();
+            _cachedHistoryCount = 0;
+            _lastStreamRenderLen = 0;
             return true;
         }
         if (string.Equals(input, "/exit", StringComparison.OrdinalIgnoreCase) ||
@@ -646,8 +780,6 @@ public sealed class ChatLayout
     private static string Truncate(string text, int max) =>
         text.Length <= max ? text : text[..max] + "...";
 
-    private static void PreAuthorizePaths(string input)
-    {
-        ConfirmationModal.AuthorizePaths(input);
-    }
+    private static string FormatElapsed(TimeSpan t) =>
+        t.TotalSeconds >= 60 ? $"{(int)t.TotalMinutes}m{t.Seconds}s" : $"{t.TotalSeconds:F1}s";
 }

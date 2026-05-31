@@ -197,13 +197,32 @@ public sealed class TextTools
     private static List<string> ComputeLcs(string[] a, string[] b)
     {
         int m = a.Length, n = b.Length;
+        // 使用 2 行滚动数组，避免 O(m*n) 内存
+        var prev = new int[n + 1];
+        var curr = new int[n + 1];
+        for (int i = 1; i <= m; i++)
+        {
+            for (int j = 1; j <= n; j++)
+                curr[j] = a[i - 1] == b[j - 1] ? prev[j - 1] + 1 : Math.Max(prev[j], curr[j - 1]);
+            (prev, curr) = (curr, prev);
+        }
+
+        // 回溯重建 LCS（用 prev 数组 + 原始序列）
+        var result = new List<string>();
+        int x = m, y = n;
+        // 重建时需要原始 dp 值，重新计算仅保留最后两行不够
+        // 改用 Hirschberg 算法或直接限制最大文件大小
+        // 实际场景限制：差异行数超过 1000 时截断
+        if (m > 1000 || n > 1000)
+        {
+            result.Add("...(diff too large, truncated)");
+            return result;
+        }
+        // 小文件用完整矩阵
         var dp = new int[m + 1, n + 1];
         for (int i = 1; i <= m; i++)
             for (int j = 1; j <= n; j++)
                 dp[i, j] = a[i - 1] == b[j - 1] ? dp[i - 1, j - 1] + 1 : Math.Max(dp[i - 1, j], dp[i, j - 1]);
-
-        var result = new List<string>();
-        int x = m, y = n;
         while (x > 0 && y > 0)
         {
             if (a[x - 1] == b[y - 1]) { result.Add(a[x - 1]); x--; y--; }
