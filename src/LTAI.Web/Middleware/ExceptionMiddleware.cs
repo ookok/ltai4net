@@ -23,7 +23,7 @@ public sealed class ExceptionMiddleware
     {
         try
         {
-            await _next(context);
+            await _next(context).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
         {
@@ -44,7 +44,7 @@ public sealed class ExceptionMiddleware
                 type = "internal_error"
             };
 
-            await context.Response.WriteAsync(JsonSerializer.Serialize(error));
+            await context.Response.WriteAsync(JsonSerializer.Serialize(error)).ConfigureAwait(false);
         }
     }
 }

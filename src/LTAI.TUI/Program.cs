@@ -87,12 +87,12 @@ public static class Program
         var llmConfig = new LLMConfigPanel(options, router, httpFactory);
 
         // 等待预热完成（最多 6 秒）
-        try { await warmupTask.WaitAsync(TimeSpan.FromSeconds(6)); }
+        try { await warmupTask.WaitAsync(TimeSpan.FromSeconds(6)).ConfigureAwait(false); }
         catch { /* 预热超时不影响主流程 */ }
 
         var app = new TuiApp(chatAgent, llmConfig, options, Directory.GetCurrentDirectory());
         try { Console.Clear(); } catch { /* non-interactive terminal */ }
-        await app.RunAsync();
+        await app.RunAsync().ConfigureAwait(false);
     }
 
     /// <summary>将嵌入的 Alacritty 解压到 %LOCALAPPDATA%/LTAI/ 并返回路径。</summary>

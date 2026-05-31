@@ -1,4 +1,4 @@
-// Copyright (c) LTAI. All rights reserved.
+﻿// Copyright (c) LTAI. All rights reserved.
 
 using System;
 using System.Collections.Generic;
@@ -52,13 +52,13 @@ public sealed class Reranker
         if (candidates.Count == 0) return [];
 
         // Phase 1: Embedding similarity scoring (parallel)
-        var queryEmb = await _embedder.GenerateAsync(query, ct);
+        var queryEmb = await _embedder.GenerateAsync(query, ct).ConfigureAwait(false);
         var embTasks = candidates.Select(n =>
         {
             var text = $"{n.Kind} {n.Name} {n.Namespace} {n.Signature}";
             return _embedder.GenerateAsync(text, ct);
         }).ToList();
-        var embeddings = await Task.WhenAll(embTasks);
+        var embeddings = await Task.WhenAll(embTasks).ConfigureAwait(false);
 
         var scored = candidates
             .Select((n, i) => (node: n, score: CosineSim(queryEmb, embeddings[i])))
@@ -69,7 +69,7 @@ public sealed class Reranker
         if (scored.Count == 0) return [];
 
         // Phase 2: LLM reranking
-        var reranked = await RerankWithLLMAsync(query, scored, ct);
+        var reranked = await RerankWithLLMAsync(query, scored, ct).ConfigureAwait(false);
 
         return reranked.Take(topK).ToList();
     }
@@ -109,7 +109,7 @@ public sealed class Reranker
             var response = await _llm.GetResponseAsync([
                 new ChatMessage(ChatRole.System, "You are a strict relevance ranker. Output only a JSON array of scores."),
                 new ChatMessage(ChatRole.User, sb.ToString())
-            ], cancellationToken: ct);
+            ], cancellationToken: ct).ConfigureAwait(false);
 
             var text = response.Text?.Trim() ?? "";
             List<double>? scores;

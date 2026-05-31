@@ -1,4 +1,4 @@
-using System.ComponentModel;
+﻿using System.ComponentModel;
 using System.Net.Http;
 using LTAI.AI;
 
@@ -39,7 +39,7 @@ public static class FileDownloadTool
         // DNS rebinding 防护：解析到 IP 后二次验证
         try
         {
-            var addresses = await System.Net.Dns.GetHostAddressesAsync(uri.Host);
+            var addresses = await System.Net.Dns.GetHostAddressesAsync(uri.Host).ConfigureAwait(false);
             if (addresses.Any(addr => IsPrivateIP(addr)))
                 return "Error: 目标地址解析到内网 IP，已阻止下载";
         }
@@ -59,19 +59,19 @@ public static class FileDownloadTool
             var dir = Path.GetDirectoryName(fp);
             if (dir != null) Directory.CreateDirectory(dir);
 
-            using var resp = await _sharedHttp.Value.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
+            using var resp = await _sharedHttp.Value.GetAsync(url, HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
             resp.EnsureSuccessStatusCode();
 
             var totalBytes = resp.Content.Headers.ContentLength ?? -1;
-            await using var stream = await resp.Content.ReadAsStreamAsync();
+            await using var stream = await resp.Content.ReadAsStreamAsync().ConfigureAwait(false);
             await using var fileStream = File.Create(fp);
 
             var buffer = new byte[81920];
             long readBytes = 0;
             int bytesRead;
-            while ((bytesRead = await stream.ReadAsync(buffer)) > 0)
+            while ((bytesRead = await stream.ReadAsync(buffer).ConfigureAwait(false)) > 0)
             {
-                await fileStream.WriteAsync(buffer.AsMemory(0, bytesRead));
+                await fileStream.WriteAsync(buffer.AsMemory(0, bytesRead)).ConfigureAwait(false);
                 readBytes += bytesRead;
             }
 

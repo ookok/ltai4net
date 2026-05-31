@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
 using Spectre.Console;
@@ -84,7 +85,7 @@ public static class TextPadView
     {
         var actions = new List<string>();
         // 项目感知操作
-        var hasProject = File.Exists(Path.Combine(_currentDir, "*.csproj")) || File.Exists(Path.Combine(_currentDir, "*.sln"));
+        var hasProject = Directory.GetFiles(_currentDir, "*.csproj").Any() || Directory.GetFiles(_currentDir, "*.sln").Any();
         if (hasProject)
         {
             actions.Add("[yellow]🛠 Build[/]");

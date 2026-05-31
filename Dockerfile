@@ -27,8 +27,13 @@ FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
 WORKDIR /app
 COPY --from=publish /app .
 
-# Create data directory for session persistence
-RUN mkdir -p .livingtree/sessions
+# Install curl for health checks
+RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/* && \
+    mkdir -p .livingtree/sessions
+
+# Create non-root user for security
+RUN adduser --disabled-password --gecos '' ltai && chown -R ltai:ltai /app
+USER ltai
 
 EXPOSE 5100
 

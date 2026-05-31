@@ -37,8 +37,8 @@ public sealed class MultiProviderChatClient : IChatClient
     public static readonly (string envVar, string endpoint, string model, string name)[] DefaultProviders =
         LTAI.Core.Configuration.KnownKeys.GetDefaultProviders();
 
-    private readonly Dictionary<string, IChatClient> _clients = new(StringComparer.OrdinalIgnoreCase);
-    private readonly Dictionary<string, string> _degradation = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, IChatClient> _clients = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, string> _degradation = new(StringComparer.OrdinalIgnoreCase);
     private readonly ILogger<MultiProviderChatClient> _logger;
     private string _defaultProvider;
 
@@ -57,6 +57,7 @@ public sealed class MultiProviderChatClient : IChatClient
         ExpirationScanFrequency = TimeSpan.FromMinutes(1)
     });
     private static readonly TimeSpan CacheTtl = TimeSpan.FromMinutes(5);
+    private static int _responseCacheSizeLimit = 256;
 
     // LLM call counter — increments on every actual HTTP request
     private static long _callCounter;
@@ -77,15 +78,17 @@ public sealed class MultiProviderChatClient : IChatClient
         if (options.AI.DegradationChain != null)
         {
             foreach (var (k, v) in options.AI.DegradationChain)
-                _degradation[k] = v;
+                _degradation.TryAdd(k, v);
         }
+        if (options.AI.ResponseCacheSize > 0)
+            _responseCacheSizeLimit = options.AI.ResponseCacheSize;
     }
 
     /// <summary>
     /// Register a named IChatClient instance.
     /// <b>Callers:</b> AddLTAIAI() ServiceCollectionExtensions (once per provider with valid API key).
     /// </summary>
-    public void Register(string name, IChatClient client) => _clients[name] = client;
+    public void Register(string name, IChatClient client) => _clients.TryAdd(name, client);
 
     /// <summary>Identity metadata for OpenTelemetry instrumentation.</summary>
     public ChatClientMetadata? Metadata => new("MultiProvider", new Uri("https://github.com/ltai-org/ltai4net"));
@@ -321,7 +324,7 @@ public sealed class MultiProviderChatClient : IChatClient
             if (_providerCooldowns.TryGetValue(current, out var until) && until > DateTime.UtcNow)
             {
                 _logger.LogDebug("Provider '{P}' in cooldown, skipping in degradation chain", current);
-                current = _degradation.GetValueOrDefault(current);
+                current = _degradation.TryGetValue(current, out var next) ? next : null;
                 continue;
             }
 
@@ -330,7 +333,7 @@ public sealed class MultiProviderChatClient : IChatClient
                 yield return current;
             }
 
-            current = _degradation.GetValueOrDefault(current);
+            current = _degradation.TryGetValue(current, out var next2) ? next2 : null;
         }
     }
 

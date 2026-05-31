@@ -1,4 +1,4 @@
-// Copyright (c) LTAI. All rights reserved.
+﻿// Copyright (c) LTAI. All rights reserved.
 
 using System;
 using System.Collections.Generic;
@@ -62,7 +62,7 @@ public sealed class KbGraph : AIContextProvider
         }
         else
         {
-            expanded = await ExpandQueryAsync(query, ct);
+            expanded = await ExpandQueryAsync(query, ct).ConfigureAwait(false);
         }
         if (string.IsNullOrWhiteSpace(expanded)) expanded = query;
 
@@ -70,7 +70,7 @@ public sealed class KbGraph : AIContextProvider
             _logger.LogInformation("KbGraph: \"{Q}\" → expanded: \"{E}\"", query, expanded);
 
         // Stage 2: FTS5 BM25 recall (weighted by node kind)
-        var ftsHits = _store.SearchFts(expanded, topN: topK * 3);
+        var ftsHits = await _store.SearchFts(expanded, topN: topK * 3).ConfigureAwait(false);
 
         // Stage 2b: Optional hybrid search (FTS5 + sqlite-vec RRF)
         // Uses LocalEmbedder (BGE ONNX) for vector embeddings, no API key required.
@@ -82,7 +82,7 @@ public sealed class KbGraph : AIContextProvider
                 if (localEmb.Available)
                 {
                     var queryEmb = localEmb.Generate(query);
-                    var vecHits = _store.SearchVector(queryEmb, topN: topK * 3);
+                    var vecHits = await _store.SearchVector(queryEmb, topN: topK * 3).ConfigureAwait(false);
 
                     // RRF fusion: combine FTS5 BM25 + vector cosine distance ranks
                     var rrf = new Dictionary<long, double>();
@@ -119,7 +119,7 @@ public sealed class KbGraph : AIContextProvider
         if (expandGraph && ftsHits.Count > 0)
         {
             var startIds = ftsHits.Take(3).Select(h => h.nodeId).ToList();
-            var bfsNodes = _store.TraverseBfs(startIds, maxDepth: 2, maxNodes: 10);
+            var bfsNodes = await _store.TraverseBfs(startIds, maxDepth: 2, maxNodes: 10).ConfigureAwait(false);
             resultIds = new HashSet<long>(bfsNodes.Select(n => n.Id));
             foreach (var h in ftsHits) resultIds.Add(h.nodeId);
         }
@@ -134,23 +134,23 @@ public sealed class KbGraph : AIContextProvider
         foreach (var nodeId in resultIds.Take(topK))
         {
             if (!seen.Add(nodeId)) continue;
-            var node = _store.GetNode(nodeId);
+            var node = await _store.GetNode(nodeId).ConfigureAwait(false);
             if (node == null) continue;
 
             output.Add(FormatNode(node));
 
             // Show related docs
-            foreach (var doc in _store.GetDocs(nodeId).Take(2))
+            foreach (var doc in (await _store.GetDocs(nodeId).ConfigureAwait(false)).Take(2))
             {
                 var snippet = doc.Text.Length > 200 ? doc.Text[..200] + "…" : doc.Text;
                 output.Add($"  └─ {snippet}");
             }
 
             // Show neighbor edges
-            foreach (var edge in _store.GetEdges(nodeId).Take(3))
+            foreach (var edge in (await _store.GetEdges(nodeId).ConfigureAwait(false)).Take(3))
             {
                 var neighborId = edge.Src == nodeId ? edge.Dst : edge.Src;
-                var neighbor = _store.GetNode(neighborId);
+                var neighbor = await _store.GetNode(neighborId).ConfigureAwait(false);
                 if (neighbor != null)
                     output.Add($"  ══ {edge.Relation} ══ [{neighbor.Kind}] {neighbor.Name}");
             }
@@ -181,7 +181,7 @@ public sealed class KbGraph : AIContextProvider
 
         try
         {
-            var results = await QueryAsync(userMsg.Text, topK: 5, ct: ct);
+            var results = await QueryAsync(userMsg.Text, topK: 5, ct: ct).ConfigureAwait(false);
             if (results.Count == 0) return context.AIContext!;
 
             var block = "## Relevant Knowledge:\n" + string.Join("\n", results.Select(r => "- " + r));
@@ -216,9 +216,9 @@ public sealed class KbGraph : AIContextProvider
             name: title,
             ns: source,
             signature: $"len:{content.Length}",
-            source: source);
+            source: source).ConfigureAwait(false);
 
-        await _store.AddDoc(nodeId, content, lang, source);
+        await _store.AddDoc(nodeId, content, lang, source).ConfigureAwait(false);
 
         var concepts = ExtractConcepts(title, content);
         foreach (var concept in concepts.Take(15))
@@ -226,8 +226,8 @@ public sealed class KbGraph : AIContextProvider
             var cid = await _store.UpsertNode(
                 extId: $"concept:{concept.ToLowerInvariant().Replace(" ", "_")}",
                 kind: "concept",
-                name: concept);
-            await _store.AddEdge(nodeId, cid, "contains");
+                name: concept).ConfigureAwait(false);
+            await _store.AddEdge(nodeId, cid, "contains").ConfigureAwait(false);
         }
 
         _logger.LogInformation("KbGraph: ingested '{Id}' ({T}) with {C} concepts",
@@ -248,14 +248,14 @@ public sealed class KbGraph : AIContextProvider
             kind: "fact",
             name: content.Length > 100 ? content[..100] + "…" : content,
             ns: category,
-            props: props);
+            props: props).ConfigureAwait(false);
 
-        await _store.AddDoc(nodeId, content, "zh", source: "");
+        await _store.AddDoc(nodeId, content, "zh", source: "").ConfigureAwait(false);
 
         if (sourceId != null)
         {
-            var src = _store.GetNodeByExtId(sourceId);
-            if (src != null) await _store.AddEdge(src.Id, nodeId, "has_fact");
+            var src = await _store.GetNodeByExtId(sourceId).ConfigureAwait(false);
+            if (src != null) await _store.AddEdge(src.Id, nodeId, "has_fact").ConfigureAwait(false);
         }
         return $"Ingested fact '{id}'";
     }
@@ -323,7 +323,7 @@ public sealed class KbGraph : AIContextProvider
                 title: title,
                 content: trimmed,
                 source: sourceLabel,
-                lang: "zh");
+                lang: "zh").ConfigureAwait(false);
             ingested++;
         }
 
@@ -349,7 +349,7 @@ public sealed class KbGraph : AIContextProvider
         int ok = 0, fail = 0;
         foreach (var file in files)
         {
-            var result = await IngestOfficeFile(file);
+            var result = await IngestOfficeFile(file).ConfigureAwait(false);
             if (result.StartsWith("Error")) fail++;
             else ok++;
         }

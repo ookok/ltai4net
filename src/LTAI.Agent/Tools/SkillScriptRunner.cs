@@ -1,4 +1,4 @@
-#pragma warning disable MAAI001
+﻿#pragma warning disable MAAI001
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
@@ -39,7 +39,7 @@ public static class SkillScriptRunner
             default: return $"不支持: {ext}。支持的: .py .js .sh .ps1 .csx .cs";
         }
 
-        return await RunProcess(exe, scriptArgs, fullPath, cancellationToken);
+        return await RunProcess(exe, scriptArgs, fullPath, cancellationToken).ConfigureAwait(false);
     }
 
     private static async Task<string> RunProcess(string exe, string args, string fullPath, CancellationToken ct)
@@ -78,8 +78,8 @@ public static class SkillScriptRunner
                 return $"⏱️ 超时 (60s)";
             }
 
-            var output = await outTask;
-            var error = await errTask;
+            var output = await outTask.ConfigureAwait(false);
+            var error = await errTask.ConfigureAwait(false);
 
             if (!string.IsNullOrEmpty(output)) sb.Append(output.TrimEnd());
             if (!string.IsNullOrEmpty(error)) sb.AppendLine($"\n[stderr]\n{error.TrimEnd()}");

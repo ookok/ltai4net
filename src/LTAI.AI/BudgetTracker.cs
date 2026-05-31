@@ -1,4 +1,4 @@
-using System.Collections.Concurrent;
+using System.Collections.Generic;
 
 namespace LTAI.AI;
 
@@ -9,7 +9,7 @@ public sealed class BudgetTracker
 {
     private readonly long _globalMax;
     private readonly long _perUserMax;
-    private readonly ConcurrentDictionary<string, long> _userTokens = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, long> _userTokens = new(StringComparer.OrdinalIgnoreCase);
     private long _globalTotal;
     private readonly object _budgetLock = new();
 
@@ -38,7 +38,7 @@ public sealed class BudgetTracker
     {
         lock (_budgetLock)
         {
-            if (userId != null && _userTokens.TryRemove(userId, out var removed))
+            if (userId != null && _userTokens.Remove(userId, out var removed))
                 _globalTotal -= removed;
             else if (userId == null)
             {
@@ -48,6 +48,6 @@ public sealed class BudgetTracker
         }
     }
 
-    public long GetUserTotal(string userId) { lock (_budgetLock) return _userTokens.GetValueOrDefault(userId); }
+    public long GetUserTotal(string userId) { lock (_budgetLock) return _userTokens.TryGetValue(userId, out var v) ? v : 0; }
     public long GlobalTotal { get { lock (_budgetLock) return _globalTotal; } }
 }

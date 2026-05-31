@@ -1,4 +1,4 @@
-using System.ComponentModel;
+﻿using System.ComponentModel;
 using System.Text;
 using LTAI.AI;
 
@@ -23,7 +23,7 @@ public sealed class FlowchartTools
     [ToolExample("生成用户注册的流程图")]
     public async Task<string> Flowchart(string direction = "TB", string? nodes = null, string? edges = null,
         string? title = null, bool renderSvg = false)
-        => await WrapAsync("flowchart " + direction, title, renderSvg, nodes, edges);
+        => await WrapAsync("flowchart " + direction, title, renderSvg, nodes, edges).ConfigureAwait(false);
 
     [Description("生成时序图/序列图。展示对象之间的消息交互顺序，可渲染为 SVG。\n"
         + "适用场景：绘制 API 调用时序、展示系统间消息交互、用户操作流程的时间顺序。\n"
@@ -31,7 +31,7 @@ public sealed class FlowchartTools
         + "关键参数：messages — 消息序列数组；title — 图表标题；renderSvg — 是否保存 SVG。")]
     [ToolExample("画一个用户登录的时序图")]
     public async Task<string> SequenceDiagram(string messages, string? title = null, bool renderSvg = false)
-        => await WrapAsync("sequenceDiagram", title, renderSvg, messages);
+        => await WrapAsync("sequenceDiagram", title, renderSvg, messages).ConfigureAwait(false);
 
     [Description("生成 UML 类图。展示类结构、属性和方法。\n"
         + "适用场景：设计系统类结构、展示继承关系、记录领域模型。\n"
@@ -39,7 +39,7 @@ public sealed class FlowchartTools
         + "关键参数：classes — 类定义数组；relationships — 关系定义数组；renderSvg — 是否保存 SVG。")]
     [ToolExample("画一个订单系统的类图")]
     public async Task<string> ClassDiagram(string classes, string? relationships = null, bool renderSvg = false)
-        => await WrapAsync("classDiagram", null, renderSvg, classes, relationships);
+        => await WrapAsync("classDiagram", null, renderSvg, classes, relationships).ConfigureAwait(false);
 
     [Description("生成甘特图。展示项目任务的时间线和依赖关系。\n"
         + "适用场景：项目进度规划、任务时间线展示、里程碑追踪。\n"
@@ -47,7 +47,7 @@ public sealed class FlowchartTools
         + "关键参数：tasks — 任务数组（名称、开始、结束）；title — 图表标题；dateFormat — 日期格式。")]
     [ToolExample("画一个项目进度的甘特图")]
     public async Task<string> GanttChart(string tasks, string? title = null, string dateFormat = "YYYY-MM-DD", bool renderSvg = false)
-        => await WrapAsync("gantt", title, renderSvg, $"dateFormat {dateFormat}\n{tasks}");
+        => await WrapAsync("gantt", title, renderSvg, $"dateFormat {dateFormat}\n{tasks}").ConfigureAwait(false);
 
     [Description("生成 ER 实体关系图。展示数据库表之间的关联关系。\n"
         + "适用场景：数据库设计、展示表间关系、领域模型建模。\n"
@@ -55,7 +55,7 @@ public sealed class FlowchartTools
         + "关键参数：relationships — 关系定义数组；renderSvg — 是否保存 SVG。")]
     [ToolExample("画一个数据库的 ER 图")]
     public async Task<string> ErDiagram(string relationships, bool renderSvg = false)
-        => await WrapAsync("erDiagram", null, renderSvg, relationships);
+        => await WrapAsync("erDiagram", null, renderSvg, relationships).ConfigureAwait(false);
 
     // ─── Build Mermaid + optional SVG ───
 
@@ -81,9 +81,9 @@ public sealed class FlowchartTools
             var url = "https://quickchart.io/mermaid?format=svg&width=900&height=700&graph=" + Uri.EscapeDataString(mermaid);
             var http = _httpF.CreateClient();
             http.Timeout = TimeSpan.FromSeconds(15);
-            var svgBytes = await http.GetByteArrayAsync(url);
+            var svgBytes = await http.GetByteArrayAsync(url).ConfigureAwait(false);
             var svgPath = Path.Combine(Path.GetTempPath(), $"ltai_diagram_{Guid.NewGuid():N}.svg");
-            await File.WriteAllBytesAsync(svgPath, svgBytes);
+            await File.WriteAllBytesAsync(svgPath, svgBytes).ConfigureAwait(false);
             return $"{mermaid}\n\n📊 SVG saved: `{svgPath}` ({(svgBytes.Length / 1024.0):F1} KB)\n> ⚠️ Temp file not auto-cleaned. Delete after use.";
         }
         catch (Exception ex)

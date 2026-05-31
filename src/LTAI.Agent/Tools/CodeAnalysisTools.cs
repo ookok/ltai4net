@@ -1,4 +1,4 @@
-using System.ComponentModel;
+﻿using System.ComponentModel;
 using System.Text.RegularExpressions;
 using LTAI.AI;
 using Microsoft.CodeAnalysis;
@@ -36,10 +36,10 @@ public sealed class CodeAnalysisTools
     {
         var fp = ResolvePath(path);
         if (fp == null) return "Error: Path escape";
-        if (Directory.Exists(fp)) return await GetSymbolsFromDirAsync(fp);
+        if (Directory.Exists(fp)) return await GetSymbolsFromDirAsync(fp).ConfigureAwait(false);
         if (!File.Exists(fp)) return "File not found";
 
-        var content = await File.ReadAllTextAsync(fp);
+        var content = await File.ReadAllTextAsync(fp).ConfigureAwait(false);
         var ext = Path.GetExtension(fp);
         var fileName = Path.GetFileName(fp);
 
@@ -66,7 +66,7 @@ public sealed class CodeAnalysisTools
         if (fp == null) return "Error: Path escape";
         if (!File.Exists(fp)) return "File not found";
 
-        var content = await File.ReadAllTextAsync(fp);
+        var content = await File.ReadAllTextAsync(fp).ConfigureAwait(false);
         var ext = Path.GetExtension(fp);
 
         if (CsExts.Contains(ext))
@@ -88,7 +88,7 @@ public sealed class CodeAnalysisTools
                 if (ShouldSkip(rel)) continue;
                 try
                 {
-                    var content = await File.ReadAllTextAsync(file);
+                    var content = await File.ReadAllTextAsync(file).ConfigureAwait(false);
                     var syms = CsExts.Contains(ext)
                         ? GetCSharpSymbols(content, Path.GetFileName(file))
                         : GetTreeSitterSymbols(content, ext, Path.GetFileName(file));

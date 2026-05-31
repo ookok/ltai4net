@@ -15,8 +15,7 @@ internal static class VerdictCache
     public static (bool safe, string reason)? Get(string text)
     {
         if (text.Length > 500) return null;
-        var key = (ulong)text.Length << 32 | (uint)string.GetHashCode(text, StringComparison.Ordinal);
-        if (_cache.TryGetValue(key, out (bool safe, string reason) cached))
+        if (_cache.TryGetValue(text, out (bool safe, string reason) cached))
             return cached;
         return null;
     }
@@ -24,10 +23,10 @@ internal static class VerdictCache
     public static void Set(string text, bool safe, string reason)
     {
         if (text.Length > 500) return;
-        var key = (ulong)text.Length << 32 | (uint)string.GetHashCode(text, StringComparison.Ordinal);
-        var entry = _cache.CreateEntry(key);
-        entry.Value = (safe, reason);
-        entry.AbsoluteExpirationRelativeToNow = CacheTtl;
-        entry.Size = 1;
+        _cache.Set(text, (safe, reason), new MemoryCacheEntryOptions
+        {
+            AbsoluteExpirationRelativeToNow = CacheTtl,
+            Size = 1
+        });
     }
 }

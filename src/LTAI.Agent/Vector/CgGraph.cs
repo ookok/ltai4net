@@ -1,4 +1,4 @@
-// Copyright (c) LTAI. All rights reserved.
+﻿// Copyright (c) LTAI. All rights reserved.
 
 using System;
 using System.Collections.Generic;
@@ -116,7 +116,7 @@ public sealed class CgGraph : AIContextProvider
                 // Single transaction per file: all writes batched in one lock + transaction
                 await _store.ExecuteInTransactionAsync(async () =>
                 {
-                    await _store.DeleteSource(rel);
+                    await _store.DeleteSource(rel).ConfigureAwait(false);
                     int fileNodeCount = 1;
 
                     var fid = await _store.UpsertNode(
@@ -126,13 +126,13 @@ public sealed class CgGraph : AIContextProvider
                         ns: rel,
                         signature: ext,
                         source: rel,
-                        props: new() { ["path"] = rel, ["ext"] = ext, ["lines"] = lineCount });
+                        props: new() { ["path"] = rel, ["ext"] = ext, ["lines"] = lineCount }).ConfigureAwait(false);
 
-                    await _store.AddDoc(fid, code, "code", rel);
+                    await _store.AddDoc(fid, code, "code", rel).ConfigureAwait(false);
                     var fileEmb = _embedder != null
                         ? await _embedder.GenerateAsync($"{fileName} {rel}", ct).ConfigureAwait(false)
                         : LTAI.AI.EmbeddingClient.FastEmb($"{fileName} {rel}");
-                    await _store.InsertVectorAsync(fid, fileEmb);
+                    await _store.InsertVectorAsync(fid, fileEmb).ConfigureAwait(false);
 
                     // Collect method/function nodes for intra-file CALLS
                     var methodNodes = new List<(long nid, string name, int line)>();
@@ -146,16 +146,16 @@ public sealed class CgGraph : AIContextProvider
                             ns: rel,
                             signature: $"L{line}",
                             source: rel,
-                            props: new() { ["file"] = rel, ["line"] = line, ["ext"] = ext });
+                            props: new() { ["file"] = rel, ["line"] = line, ["ext"] = ext }).ConfigureAwait(false);
 
-                        await _store.AddEdge(fid, nid, "defines");
+                        await _store.AddEdge(fid, nid, "defines").ConfigureAwait(false);
                         var symEmb = _embedder != null
                             ? await _embedder.GenerateAsync($"{safeName} {kind}", ct).ConfigureAwait(false)
                             : LTAI.AI.EmbeddingClient.FastEmb($"{safeName} {kind}");
-                        await _store.InsertVectorAsync(nid, symEmb);
+                        await _store.InsertVectorAsync(nid, symEmb).ConfigureAwait(false);
 
                         var ctx = GetContext(code, line);
-                        await _store.AddDoc(nid, ctx, "code", $"{rel}:L{line}");
+                        await _store.AddDoc(nid, ctx, "code", $"{rel}:L{line}").ConfigureAwait(false);
                         fileNodeCount++;
 
                         var mappedKind = MapKind(kind);
@@ -174,14 +174,14 @@ public sealed class CgGraph : AIContextProvider
                                 if (callerId == calleeId) continue;
                                 if (ctx.Contains(calleeName) || ctx.Contains(calleeName + "("))
                                 {
-                                    await _store.AddEdge(callerId, calleeId, "CALLS", weight: 0.8);
+                                    await _store.AddEdge(callerId, calleeId, "CALLS", weight: 0.8).ConfigureAwait(false);
                                 }
                             }
                         }
                     }
 
                     Interlocked.Add(ref na, fileNodeCount);
-                }); // transaction + lock released here
+                }).ConfigureAwait(false); // transaction + lock released here
 
                 _indexedFiles[file] = lw;
                 Interlocked.Increment(ref sc);
@@ -201,7 +201,7 @@ public sealed class CgGraph : AIContextProvider
         await PruneDeletedFilesAsync(files).ConfigureAwait(false);
 
         // Persist current file list for next build's diff
-        await _store.SetMeta("cg:files", string.Join("\n", files));
+        await _store.SetMeta("cg:files", string.Join("\n", files)).ConfigureAwait(false);
 
         // Rebuild IVF centroids for fast vector search
         await _store.RebuildCentroidsAsync().ConfigureAwait(false);
@@ -209,11 +209,11 @@ public sealed class CgGraph : AIContextProvider
         // Maintenance
         if (sc > 0 || _indexedFiles.Count % 10 == 0)
         {
-            var (p, before, after) = await _store.RunMaintenanceAsync(_ws, TimeSpan.FromDays(30));
+            var (p, before, after) = await _store.RunMaintenanceAsync(_ws, TimeSpan.FromDays(30)).ConfigureAwait(false);
             _logger.LogInformation("CgGraph: GC {P} stale, {Before}B→{After}B", p, before, after);
         }
 
-        return $"Built: {sc} files, {na} symbols\n{_store.Stats()}";
+        return $"Built: {sc} files, {na} symbols\n{await _store.Stats().ConfigureAwait(false)}";
     }
 
     // ═══════════════════════════════════════════
@@ -224,12 +224,12 @@ public sealed class CgGraph : AIContextProvider
     {
         if (!_built) return "Code graph not built — run /build command first.";
 
-        var keywords = await RewriteQueryAsync(query, ct);
+        var keywords = await RewriteQueryAsync(query, ct).ConfigureAwait(false);
         if (string.IsNullOrWhiteSpace(keywords)) keywords = query;
 
         _logger.LogInformation("CgGraph: \"{Q}\" → keywords: \"{K}\"", query, keywords);
 
-        var ftsHits = _store.SearchFts(keywords, topN: topK * 2);
+        var ftsHits = await _store.SearchFts(keywords, topN: topK * 2).ConfigureAwait(false);
         if (ftsHits.Count == 0) return "No relevant code found.";
 
         var seen = new HashSet<long>();
@@ -238,7 +238,7 @@ public sealed class CgGraph : AIContextProvider
         foreach (var hit in ftsHits.Take(topK))
         {
             if (!seen.Add(hit.nodeId)) continue;
-            var node = _store.GetNode(hit.nodeId);
+            var node = await _store.GetNode(hit.nodeId).ConfigureAwait(false);
             if (node == null) continue;
 
             var icon = node.Kind switch
@@ -249,17 +249,17 @@ public sealed class CgGraph : AIContextProvider
             lines.Add($"{icon} **[{node.Kind}]** `{node.Name}` — {node.Namespace}");
 
             // 1-hop neighbors
-            foreach (var edge in _store.GetEdges(hit.nodeId).Take(5))
+            foreach (var edge in (await _store.GetEdges(hit.nodeId).ConfigureAwait(false)).Take(5))
             {
                 var neighborId = edge.Src == hit.nodeId ? edge.Dst : edge.Src;
                 if (!seen.Add(neighborId)) continue;
-                var neighbor = _store.GetNode(neighborId);
+                var neighbor = await _store.GetNode(neighborId).ConfigureAwait(false);
                 if (neighbor == null) continue;
                 lines.Add($"  ══ {edge.Relation} ══ [{neighbor.Kind}] `{neighbor.Name}`");
             }
 
             // Doc snippet
-            foreach (var doc in _store.GetDocs(hit.nodeId).Take(1))
+            foreach (var doc in (await _store.GetDocs(hit.nodeId).ConfigureAwait(false)).Take(1))
             {
                 var snippet = doc.Text.Length > 150 ? doc.Text[..150] + "…" : doc.Text;
                 lines.Add($"  ```\n{snippet}\n```");
@@ -295,7 +295,7 @@ public sealed class CgGraph : AIContextProvider
         try
         {
 
-            var result = await QueryAsync(userMsg.Text, topK: 3, ct: ct);
+            var result = await QueryAsync(userMsg.Text, topK: 3, ct: ct).ConfigureAwait(false);
             if (string.IsNullOrEmpty(result) || result.StartsWith("No relevant"))
                 return ctx.AIContext!;
 
@@ -386,7 +386,7 @@ public sealed class CgGraph : AIContextProvider
     {
         try
         {
-            var methods = _store.GetNodesByKind("method");
+            var methods = await _store.GetNodesByKind("method").ConfigureAwait(false);
             if (methods.Count < 2) return;
 
             _logger.LogInformation("CgGraph: inferring cross-file CALLS for {N} methods", methods.Count);
@@ -405,7 +405,7 @@ public sealed class CgGraph : AIContextProvider
                 int added = 0;
                 foreach (var caller in methods)
                 {
-                    var docs = _store.GetDocs(caller.Id);
+                    var docs = await _store.GetDocs(caller.Id).ConfigureAwait(false);
                     var docText = string.Join("\n", docs.Select(d => d.Text));
                     if (string.IsNullOrWhiteSpace(docText)) continue;
 
@@ -418,13 +418,13 @@ public sealed class CgGraph : AIContextProvider
                         foreach (var calleeId in calleeIds)
                         {
                             if (!seen.Add(calleeId)) continue;
-                            await _store.AddEdge(caller.Id, calleeId, "CALLS", weight: 0.6);
+                            await _store.AddEdge(caller.Id, calleeId, "CALLS", weight: 0.6).ConfigureAwait(false);
                             added++;
                         }
                     }
                 }
                 _logger.LogInformation("CgGraph: added {N} cross-file CALLS edges", added);
-            });
+            }).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -444,7 +444,7 @@ public sealed class CgGraph : AIContextProvider
     {
         try
         {
-            var prevRaw = _store.GetMeta("cg:files");
+            var prevRaw = await _store.GetMeta("cg:files").ConfigureAwait(false);
             if (string.IsNullOrEmpty(prevRaw)) return;
 
             var prevSet = new HashSet<string>(
@@ -459,7 +459,7 @@ public sealed class CgGraph : AIContextProvider
                 if (currentSet.Contains(missing)) continue;
                 var rel = Path.GetRelativePath(_ws, missing).Replace('\\', '/');
                 _logger.LogInformation("CgGraph: pruning deleted file \"{Rel}\"", rel);
-                await _store.DeleteSource(rel);
+                await _store.DeleteSource(rel).ConfigureAwait(false);
                 _indexedFiles.Remove(missing);
             }
         }

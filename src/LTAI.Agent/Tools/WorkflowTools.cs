@@ -1,4 +1,4 @@
-using System.ComponentModel;
+﻿using System.ComponentModel;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using LTAI.AI;
@@ -29,7 +29,7 @@ public sealed class WorkflowTools
     public async Task<string> WorkflowHandoff(
         [Description("Task description for agent orchestration")] string task)
     {
-        var response = await Wf.ExecuteHandoffAsync(task);
+        var response = await Wf.ExecuteHandoffAsync(task).ConfigureAwait(false);
         return response.Messages?.LastOrDefault()?.Text ?? "(no response)";
     }
 
@@ -44,7 +44,7 @@ public sealed class WorkflowTools
     {
         return await Wf.ExecuteSequentialAsync(
             agentNames.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries),
-            task);
+            task).ConfigureAwait(false);
     }
 
     [Description("同时并行执行多个 Agent，然后合并结果。\n"
@@ -58,6 +58,6 @@ public sealed class WorkflowTools
     {
         return await Wf.ExecuteConcurrentAsync(
             agentNames.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries),
-            task);
+            task).ConfigureAwait(false);
     }
 }

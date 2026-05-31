@@ -1,4 +1,4 @@
-using System.ComponentModel;
+﻿using System.ComponentModel;
 using LTAI.AI;
 using LTAI.Core;
 
@@ -48,7 +48,7 @@ public sealed class MemoryTools
             return "Error: Invalid memory name";
 
         var header = $"---\nname: {name}\npriority: {priority}\nscope: {scope}\n---\n\n";
-        await File.WriteAllTextAsync(filePath, header + content);
+        await File.WriteAllTextAsync(filePath, header + content).ConfigureAwait(false);
 
         // Prune oldest if over limit
         try
@@ -108,7 +108,7 @@ public sealed class MemoryTools
             var sizeError = PathUtils.CheckFileSize(filePath, maxBytes: 10 * 1024 * 1024);
             if (sizeError != null) return sizeError;
 
-            var content = await File.ReadAllTextAsync(filePath);
+            var content = await File.ReadAllTextAsync(filePath).ConfigureAwait(false);
             return content;
         }
 
@@ -166,7 +166,7 @@ public sealed class MemoryTools
             {
                 using var reader = new StreamReader(new FileStream(f, FileMode.Open, FileAccess.Read, FileShare.Read, 4096, useAsync: true));
                 string? line;
-                while ((line = await reader.ReadLineAsync()) != null)
+                while ((line = await reader.ReadLineAsync().ConfigureAwait(false)) != null)
                 {
                     if (!line.StartsWith("---"))
                     {

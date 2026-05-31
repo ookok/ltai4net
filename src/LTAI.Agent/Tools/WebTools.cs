@@ -1,4 +1,4 @@
-using System.ComponentModel;
+﻿using System.ComponentModel;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -177,8 +177,8 @@ public sealed class WebTools
             if (body != null && (method.Equals("POST", StringComparison.OrdinalIgnoreCase) || method.Equals("PUT", StringComparison.OrdinalIgnoreCase) || method.Equals("PATCH", StringComparison.OrdinalIgnoreCase)))
                 req.Content = new StringContent(body, System.Text.Encoding.UTF8, "application/json");
 
-            using var resp = await http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead);
-            var respBody = await resp.Content.ReadAsStringAsync();
+            using var resp = await http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
+            var respBody = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
 
             if (respBody.Length > 50000)
                 respBody = respBody[..50000] + $"\n... (truncated, {respBody.Length - 50000} more chars)";

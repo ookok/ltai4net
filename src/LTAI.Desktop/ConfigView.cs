@@ -90,11 +90,11 @@ public sealed class ConfigView : UserControl
             var endpoint = keyInfo?.Endpoint ?? "https://api.deepseek.com/v1";
 
             _sharedHttp.DefaultRequestHeaders.Authorization = new("Bearer", apiKey);
-            using var resp = await _sharedHttp.GetAsync($"{endpoint.TrimEnd('/')}/models");
+            using var resp = await _sharedHttp.GetAsync($"{endpoint.TrimEnd('/')}/models").ConfigureAwait(false);
             if (!resp.IsSuccessStatusCode)
             { _statusBar.Text = $"⚠️ API 返回 {(int)resp.StatusCode}"; return; }
 
-            using var json = System.Text.Json.JsonDocument.Parse(await resp.Content.ReadAsStreamAsync());
+            using var json = System.Text.Json.JsonDocument.Parse(await resp.Content.ReadAsStreamAsync().ConfigureAwait(false));
             var models = json.RootElement.GetProperty("data")
                 .EnumerateArray()
                 .Select(m => m.GetProperty("id").GetString() ?? "")

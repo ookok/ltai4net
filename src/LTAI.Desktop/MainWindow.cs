@@ -99,8 +99,8 @@ public partial class MainWindow : Window
         _buttonStack.Children.Add(spacer);
 
         _statsPanel = new SessionStatsPanel(sessionManager);
-        _statsPanel.SessionSelected += async name => { if (name != null) await chatView.LoadSessionAsync(name); };
-        _statsPanel.NewSessionClicked += async () => await chatView.ResetSessionAsync();
+        _statsPanel.SessionSelected += async name => { if (name != null) await chatView.LoadSessionAsync(name).ConfigureAwait(false); };
+        _statsPanel.NewSessionClicked += async () => await chatView.ResetSessionAsync().ConfigureAwait(false);
         _buttonStack.Children.Add(_statsPanel);
 
         _collapseBtn = new Button
@@ -190,7 +190,7 @@ public partial class MainWindow : Window
         _statusTimer.Start();
 
         // First-run setup: if no API keys configured, prompt user
-        Dispatcher.UIThread.Post(async () => await ShowSetupIfNeededAsync());
+        Dispatcher.UIThread.InvokeAsync(async () => await ShowSetupIfNeededAsync());
 
         ActivateView(1);
 
@@ -331,7 +331,7 @@ public partial class MainWindow : Window
         stack.Children.Add(btnPanel);
         dialog.Content = stack;
 
-        await dialog.ShowDialog(this);
+        await dialog.ShowDialog(this).ConfigureAwait(false);
     }
 
     private void ActivateView(int index)

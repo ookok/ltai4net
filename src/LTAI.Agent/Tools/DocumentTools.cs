@@ -1,4 +1,4 @@
-using System.ComponentModel;
+﻿using System.ComponentModel;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Text.Json;
@@ -617,12 +617,12 @@ public sealed class DocumentTools
     [Description("保存文档模板到知识图谱（含样式定义）。\n"
         + "适用场景：保存常用的报告模板以便重复使用、管理文档模板库。\n"
         + "关键参数：name — 模板名称；content — 模板内容（含 {{key}} 占位符）；stylesJson — 可选样式 JSON。")]
-    public async Task<string> SaveTemplateAsync(string name, string content, string? stylesJson = null) { await Task.CompletedTask; return "Template saved (stub)"; }
+    public async Task<string> SaveTemplateAsync(string name, string content, string? stylesJson = null) { await Task.CompletedTask.ConfigureAwait(false); return "Template saved (stub)"; }
 
     [Description("从知识图谱加载已保存的文档模板。\n"
         + "适用场景：重新使用之前保存的模板、查看已有模板内容。\n"
         + "关键参数：name — 模板名称。")]
-    public async Task<string> LoadTemplateAsync(string name) { await Task.CompletedTask; return "Template loaded (stub)"; }
+    public async Task<string> LoadTemplateAsync(string name) { await Task.CompletedTask.ConfigureAwait(false); return "Template loaded (stub)"; }
 
     [Description("渲染文档模板。将 {{key}} 占位符替换为实际数据，处理 {{#section}}...{{/section}} 条件区块。\n"
         + "适用场景：填充模板生成最终内容、数据驱动的文档生成。\n"
@@ -717,9 +717,9 @@ public sealed class DocumentTools
         var ext = Path.GetExtension(outputPath).ToLowerInvariant();
         return ext switch
         {
-            ".docx" => await BuildWordDocument(query, outputPath, templateName, stylesJson),
-            ".pptx" => await BuildPptDocument(query, outputPath, templateName, stylesJson),
-            ".xlsx" => await BuildExcelDocument(query, outputPath, templateName, stylesJson),
+            ".docx" => await BuildWordDocument(query, outputPath, templateName, stylesJson).ConfigureAwait(false),
+            ".pptx" => await BuildPptDocument(query, outputPath, templateName, stylesJson).ConfigureAwait(false),
+            ".xlsx" => await BuildExcelDocument(query, outputPath, templateName, stylesJson).ConfigureAwait(false),
             _ => $"Unsupported format: {ext}. Supported: .docx, .pptx, .xlsx"
         };
     }
@@ -729,7 +729,7 @@ public sealed class DocumentTools
         var content = query;
         if (_kbGraph != null)
         {
-            var results = await _kbGraph.QueryAsync(query, 5);
+            var results = await _kbGraph.QueryAsync(query, 5).ConfigureAwait(false);
             if (results.Count > 0)
                 content = string.Join("\n", results);
         }

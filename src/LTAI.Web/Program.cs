@@ -50,9 +50,9 @@ try
     // ── Middleware pipeline (order matters) ──
     app.UseMiddleware<ExceptionMiddleware>();    // 1. Catch all exceptions
     app.UseSerilogRequestLogging();              // 2. Log every request
-    app.UseMiddleware<ApiKeyMiddleware>();       // 3. Auth
-    app.UseMiddleware<RateLimitMiddleware>();    // 4. Rate limit
-    app.UseCors();                               // 5. CORS
+    app.UseCors();                               // 3. CORS (before auth — OPTIONS preflight needs no auth)
+    app.UseMiddleware<ApiKeyMiddleware>();       // 4. Auth
+    app.UseMiddleware<RateLimitMiddleware>();    // 5. Rate limit
 
     app.UseSwagger();
     app.UseSwaggerUI();
@@ -67,7 +67,7 @@ try
         {
             var kgStore = sp.GetRequiredService<KgStore>();
             using var conn = new SqliteConnection($"Data Source={kgStore.DbPath};Mode=ReadOnly;");
-            await conn.OpenAsync();
+            await conn.OpenAsync().ConfigureAwait(false);
             checks.Add(new { name = "kgstore", status = "healthy" });
         }
         catch (Exception ex)

@@ -23,6 +23,7 @@ public sealed class LocalEmbedder : IDisposable
 {
     private const int MaxLength = 512;
     private const int DefaultDimension = 384;
+    private static readonly System.Text.RegularExpressions.Regex WhitespaceRegex = new(@"\s+", System.Text.RegularExpressions.RegexOptions.Compiled);
 
     private InferenceSession? _session;
     private Dictionary<string, int>? _vocab;
@@ -70,6 +71,13 @@ public sealed class LocalEmbedder : IDisposable
         }
     }
 
+    /// <summary>Eagerly load the model on a background thread. Safe to call multiple times.</summary>
+    public async Task PreWarmAsync()
+    {
+        if (_loadAttempted) return;
+        await Task.Run(() => EnsureLoaded()).ConfigureAwait(false);
+    }
+
     /// <summary>Actual embedding dimension of the loaded model.</summary>
     public int Dim => _actualDimension;
 
@@ -93,6 +101,8 @@ public sealed class LocalEmbedder : IDisposable
     {
         BaseModelsDirectory ??= FindBaseModelsDirectory();
         (_currentModelName, _modelPath, _vocabPath) = DetectCurrentModel();
+        // Eager pre-warm on background thread to avoid blocking first use
+        _ = PreWarmAsync();
     }
 
     private void EnsureLoaded()
@@ -284,7 +294,7 @@ public sealed class LocalEmbedder : IDisposable
                    .Replace('\n', ' ')
                    .Replace('\t', ' ');
         // Collapse multiple spaces
-        text = System.Text.RegularExpressions.Regex.Replace(text, @"\s+", " ");
+        text = WhitespaceRegex.Replace(text, " ");
         return text.Trim();
     }
 

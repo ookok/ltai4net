@@ -1,4 +1,4 @@
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Threading;
@@ -35,8 +35,8 @@ public sealed class BackgroundJobService
                 };
                 using var process = new Process { StartInfo = psi };
                 process.Start();
-                entry.Output = await process.StandardOutput.ReadToEndAsync();
-                entry.Error = await process.StandardError.ReadToEndAsync();
+                entry.Output = await process.StandardOutput.ReadToEndAsync().ConfigureAwait(false);
+                entry.Error = await process.StandardError.ReadToEndAsync().ConfigureAwait(false);
                 entry.ExitCode = process.ExitCode;
             }
             catch (Exception ex)
@@ -101,7 +101,7 @@ public sealed class BackgroundJobService
         var sw = Stopwatch.StartNew();
         var timeout = TimeSpan.FromSeconds(Math.Clamp(timeoutSec, 1, 600));
         while (!entry.Completed && sw.Elapsed < timeout)
-            await Task.Delay(500);
+            await Task.Delay(500).ConfigureAwait(false);
 
         if (!entry.Completed)
             return $"Job #{jobId} did not complete within {timeoutSec}s.";

@@ -142,8 +142,6 @@ public static class ToolRegistry
         CancellationToken ct = default)
     {
         if (_initialized) return;
-        lock (_lock) { if (_initialized) return; }
-
         var list = tools.ToList();
         var texts = list.Select(BuildEmbeddingText).ToArray();
 
@@ -167,10 +165,10 @@ public static class ToolRegistry
         }
 
         // ── BM25 倒排索引 ──
-        BuildBm25Index(texts);
-
         lock (_lock)
         {
+            if (_initialized) return;
+            BuildBm25Index(texts);
             _tools.AddRange(defs);
             _initialized = true;
         }
@@ -226,33 +224,45 @@ public static class ToolRegistry
 
         if (queryTerms.Length == 0) return [];
 
-        var scores = new float[_totalDocs];
-
-        foreach (var term in queryTerms)
-        {
-            float idf = ComputeIdf(term);
-            if (idf <= 0) continue;
-
-            foreach (var (docId, tf) in _invertedIndex[term])
-            {
-                double docLen = _docLengths[docId];
-                double numerator = tf * (Bm25K1 + 1);
-                double denominator = tf + Bm25K1 * (1 - Bm25B + Bm25B * docLen / _avgDocLen);
-                scores[docId] += idf * (float)(numerator / denominator);
-            }
-        }
-
+        var pool = System.Buffers.ArrayPool<float>.Shared;
+        var scores = pool.Rent(_totalDocs);
+        Array.Clear(scores, 0, _totalDocs);
         var top = new PriorityQueue<(int docId, double score), double>(Bm25TopN);
-        for (int i = 0; i < scores.Length; i++)
+        float k1 = Bm25K1, b = Bm25B;
+        double avgDl = _avgDocLen;
+
+        try
         {
-            if (scores[i] <= 0) continue;
-            if (top.Count < Bm25TopN)
-                top.Enqueue((i, scores[i]), scores[i]);
-            else if (scores[i] > top.Peek().score)
+            foreach (var term in queryTerms)
             {
-                top.DequeueEnqueue((i, scores[i]), scores[i]);
+                float idf = ComputeIdf(term);
+                if (idf <= 0) continue;
+
+                foreach (var (docId, tf) in _invertedIndex[term])
+                {
+                    double docLen = _docLengths[docId];
+                    double numerator = tf * (k1 + 1);
+                    double denominator = tf + k1 * (1 - b + b * docLen / avgDl);
+                    scores[docId] += idf * (float)(numerator / denominator);
+                }
+            }
+
+            for (int i = 0; i < _totalDocs; i++)
+            {
+                if (scores[i] <= 0) continue;
+                if (top.Count < Bm25TopN)
+                    top.Enqueue((i, scores[i]), scores[i]);
+                else if (scores[i] > top.Peek().score)
+                {
+                    top.DequeueEnqueue((i, scores[i]), scores[i]);
+                }
             }
         }
+        finally
+        {
+            pool.Return(scores);
+        }
+
         return top.UnorderedItems.Select(x => (x.Element.docId, (float)x.Element.score)).ToList();
     }
 

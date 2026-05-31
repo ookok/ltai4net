@@ -1,4 +1,4 @@
-using System.ComponentModel;
+﻿using System.ComponentModel;
 using System.Diagnostics;
 using System.Net;
 using System.Net.NetworkInformation;
@@ -168,7 +168,7 @@ public sealed class SystemTools
         try
         {
             using var ping = new Ping();
-            var reply = await ping.SendPingAsync(host, Math.Clamp(timeoutMs, 100, 30000));
+            var reply = await ping.SendPingAsync(host, Math.Clamp(timeoutMs, 100, 30000)).ConfigureAwait(false);
 
             return reply.Status == IPStatus.Success
                 ? $"✅ **{host}** reachable — {reply.RoundtripTime}ms (TTL={reply.Options?.Ttl ?? 0})"
@@ -186,7 +186,7 @@ public sealed class SystemTools
     {
         try
         {
-            var entries = await Dns.GetHostAddressesAsync(host);
+            var entries = await Dns.GetHostAddressesAsync(host).ConfigureAwait(false);
             var sb = new StringBuilder();
             sb.AppendLine($"## DNS Lookup: {host}\n");
 
@@ -195,7 +195,7 @@ public sealed class SystemTools
 
             try
             {
-                var reverse = await Dns.GetHostEntryAsync(entries[0]);
+                var reverse = await Dns.GetHostEntryAsync(entries[0]).ConfigureAwait(false);
                 sb.AppendLine($"\nPTR: {reverse.HostName}");
             }
             catch { }
@@ -219,7 +219,7 @@ public sealed class SystemTools
         {
             using var client = new TcpClient();
             var task = client.ConnectAsync(host, port);
-            if (await Task.WhenAny(task, Task.Delay(timeoutMs)) == task && task.IsCompletedSuccessfully)
+            if (await Task.WhenAny(task, Task.Delay(timeoutMs)).ConfigureAwait(false) == task && task.IsCompletedSuccessfully)
             {
                 client.Close();
                 return $"✅ Port **{port}** on **{host}** is OPEN";
@@ -241,12 +241,12 @@ public sealed class SystemTools
         {
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(Math.Clamp(timeoutSec, 1, 60)));
             var sw = Stopwatch.StartNew();
-            var resp = await _sharedHttp.Value.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, cts.Token);
+            var resp = await _sharedHttp.Value.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false);
             sw.Stop();
 
-            using var stream = await resp.Content.ReadAsStreamAsync();
+            using var stream = await resp.Content.ReadAsStreamAsync().ConfigureAwait(false);
             var buffer = new byte[2048];
-            var bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length);
+            var bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length).ConfigureAwait(false);
             var bodyPreview = Encoding.UTF8.GetString(buffer, 0, bytesRead)
                 .Replace("\n", " ").Replace("\r", "");
             if (bodyPreview.Length > 200) bodyPreview = bodyPreview[..200] + "...";
@@ -349,9 +349,9 @@ public sealed class SystemTools
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
             using var req = new HttpRequestMessage(HttpMethod.Get, $"https://rdap.org/domain/{domain}");
             req.Headers.UserAgent.ParseAdd("LTAI/1.0");
-            using var httpResp = await _sharedHttp.Value.SendAsync(req, cts.Token);
+            using var httpResp = await _sharedHttp.Value.SendAsync(req, cts.Token).ConfigureAwait(false);
             httpResp.EnsureSuccessStatusCode();
-            var resp = await httpResp.Content.ReadAsStringAsync();
+            var resp = await httpResp.Content.ReadAsStringAsync().ConfigureAwait(false);
             using var doc = JsonDocument.Parse(resp);
 
             var sb = new StringBuilder();
@@ -417,8 +417,8 @@ public sealed class SystemTools
             };
             using var process = new Process { StartInfo = psi };
             process.Start();
-            var output = await process.StandardOutput.ReadToEndAsync();
-            var error = await process.StandardError.ReadToEndAsync();
+            var output = await process.StandardOutput.ReadToEndAsync().ConfigureAwait(false);
+            var error = await process.StandardError.ReadToEndAsync().ConfigureAwait(false);
             process.WaitForExit(TimeSpan.FromMinutes(5));
 
             var sb = new StringBuilder();
@@ -464,8 +464,8 @@ public sealed class SystemTools
                 process.Kill();
                 return $"Command timed out after {timeoutSec}s";
             }
-            var output = await outputTask;
-            var error = await errorTask;
+            var output = await outputTask.ConfigureAwait(false);
+            var error = await errorTask.ConfigureAwait(false);
 
             var sb = new StringBuilder();
             sb.AppendLine($"## Command: {command}\n");
@@ -499,8 +499,8 @@ public sealed class SystemTools
             };
             using var process = new Process { StartInfo = psi };
             process.Start();
-            var output = await process.StandardOutput.ReadToEndAsync();
-            var error = await process.StandardError.ReadToEndAsync();
+            var output = await process.StandardOutput.ReadToEndAsync().ConfigureAwait(false);
+            var error = await process.StandardError.ReadToEndAsync().ConfigureAwait(false);
             process.WaitForExit(TimeSpan.FromSeconds(10));
 
             if (process.ExitCode != 0)

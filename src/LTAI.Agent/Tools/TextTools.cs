@@ -1,4 +1,4 @@
-using System.ComponentModel;
+﻿using System.ComponentModel;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Text.Json;
@@ -27,7 +27,7 @@ public sealed class TextTools
         var sizeError = PathUtils.CheckFileSize(fp);
         if (sizeError != null) return sizeError;
 
-        var content = await File.ReadAllTextAsync(fp);
+        var content = await File.ReadAllTextAsync(fp).ConfigureAwait(false);
         var first = content.IndexOf(search, StringComparison.Ordinal);
         var last = content.LastIndexOf(search, StringComparison.Ordinal);
 
@@ -35,7 +35,7 @@ public sealed class TextTools
         if (first != last) return $"Error: SEARCH text appears {CountOccurrences(content, search)} times. Use MultiEdit with force:true for ambiguous matches.";
 
         var newContent = content[..first] + replace + content[(first + search.Length)..];
-        await File.WriteAllTextAsync(fp, newContent);
+        await File.WriteAllTextAsync(fp, newContent).ConfigureAwait(false);
         return $"Edited {Path.GetFileName(fp)}: replaced \"{search[..Math.Min(search.Length, 50)]}\"";
     }
 
@@ -61,7 +61,7 @@ public sealed class TextTools
             var sizeError = PathUtils.CheckFileSize(fp);
             if (sizeError != null) return sizeError;
 
-            var content = await File.ReadAllTextAsync(fp);
+            var content = await File.ReadAllTextAsync(fp).ConfigureAwait(false);
             int idx = force ? content.IndexOf(edit.Search, StringComparison.Ordinal) :
                 content.IndexOf(edit.Search, StringComparison.Ordinal);
             if (idx == -1) return $"Error: SEARCH not found in '{edit.Path}'";
@@ -85,7 +85,7 @@ public sealed class TextTools
         {
             foreach (var (fp, _, updated) in prepared)
             {
-                await File.WriteAllTextAsync(fp, updated);
+                await File.WriteAllTextAsync(fp, updated).ConfigureAwait(false);
                 applied.Add(fp);
             }
             return $"Applied {edits.Length} edit(s) across {prepared.Select(p => p.path).Distinct().Count()} file(s): "
@@ -94,7 +94,7 @@ public sealed class TextTools
         catch (Exception ex)
         {
             foreach (var (fp, original, _) in prepared)
-                if (applied.Contains(fp)) await File.WriteAllTextAsync(fp, original);
+                if (applied.Contains(fp)) await File.WriteAllTextAsync(fp, original).ConfigureAwait(false);
             return $"Error during write: {ex.Message}. Rolled back {applied.Count} file(s).";
         }
     }

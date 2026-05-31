@@ -40,19 +40,19 @@ public sealed class TuiApp
         // 异步获取余额 + 模型信息（不阻塞）
         _ = Task.Run(async () =>
         {
-            try { await FetchBalanceAsync(); }
+            try { await FetchBalanceAsync().ConfigureAwait(false); }
             catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"FetchBalanceAsync: {ex.Message}"); }
         });
         _ = Task.Run(async () =>
         {
-            try { await FetchModelInfoAsync(); }
+            try { await FetchModelInfoAsync().ConfigureAwait(false); }
             catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"FetchModelInfoAsync: {ex.Message}"); }
         });
 
         // 主循环：多视图导航
         while (_running)
         {
-            var target = await _chatLayout.RenderAsync();
+            var target = await _chatLayout.RenderAsync().ConfigureAwait(false);
             if (target == null) { _running = false; break; }
             if (target == TuiView.Chat) continue;
 
@@ -113,7 +113,7 @@ public sealed class TuiApp
             _ => null
         };
         if (apiKey != null)
-            await UsageTracker.FetchBalanceAsync(provider, apiKey);
+            await UsageTracker.FetchBalanceAsync(provider, apiKey).ConfigureAwait(false);
     }
 
     private async Task FetchModelInfoAsync()
@@ -138,7 +138,7 @@ public sealed class TuiApp
                     ?? options.AI.Providers.GetValueOrDefault("deepseek-pro")?.Endpoint
                     ?? keyInfo.Endpoint;
         if (!string.IsNullOrEmpty(endpoint))
-            await UsageTracker.RefreshModelInfoAsync(endpoint, apiKey);
+            await UsageTracker.RefreshModelInfoAsync(endpoint, apiKey).ConfigureAwait(false);
     }
 
     private void ShowDashboard()

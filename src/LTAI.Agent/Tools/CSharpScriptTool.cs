@@ -1,4 +1,4 @@
-using System.ComponentModel;
+﻿using System.ComponentModel;
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
@@ -44,7 +44,7 @@ public sealed class CSharpScriptTool
             Debug.WriteLine($"[C#Script #{id}] 执行中...");
 
             object? result = await CSharpScript.EvaluateAsync<object>(code, DefaultOptions, cancellationToken: ct)
-                .WaitAsync(TimeSpan.FromSeconds(60), ct);
+                .WaitAsync(TimeSpan.FromSeconds(60), ct).ConfigureAwait(false);
 
             sw.Stop();
 

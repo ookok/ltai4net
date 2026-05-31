@@ -1,4 +1,4 @@
-using System.ComponentModel;
+﻿using System.ComponentModel;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
@@ -31,13 +31,13 @@ public sealed class IntegrationTools
     public async Task<string> Geocode(string address, string provider = "amap") => (provider.ToLowerInvariant() switch
     {
         "amap" or "高德" => await G($"https://restapi.amap.com/v3/geocode/geo?key={K("AMAP_KEY")}&address={E(address)}&output=JSON", "geocodes",
-            r => $"📍 {r[0].GetProperty("formatted_address")}\n坐标: {r[0].GetProperty("location")}"),
+            r => $"📍 {r[0].GetProperty("formatted_address")}\n坐标: {r[0].GetProperty("location")}").ConfigureAwait(false),
         "tencent" or "腾讯" => await G($"https://apis.map.qq.com/ws/geocoder/v1/?key={K("TENCENT_MAP_KEY")}&address={E(address)}", "result",
-            r => $"📍 {r.GetProperty("address")}\n坐标: {r.GetProperty("location").GetProperty("lng")},{r.GetProperty("location").GetProperty("lat")}"),
+            r => $"📍 {r.GetProperty("address")}\n坐标: {r.GetProperty("location").GetProperty("lng")},{r.GetProperty("location").GetProperty("lat")}").ConfigureAwait(false),
         "baidu" or "百度" => await G($"https://api.map.baidu.com/geocoding/v3/?ak={K("BAIDU_MAP_KEY")}&address={E(address)}&output=json", "result",
-            r => $"📍 {r.GetProperty("level")}\n坐标(BD09): {r.GetProperty("location").GetProperty("lng")},{r.GetProperty("location").GetProperty("lat")}"),
+            r => $"📍 {r.GetProperty("level")}\n坐标(BD09): {r.GetProperty("location").GetProperty("lng")},{r.GetProperty("location").GetProperty("lat")}").ConfigureAwait(false),
         "tianditu" or "天地图" => await T($"https://api.tianditu.gov.cn/v2/geocoding?tk={K("TIANDITU_KEY")}", new { keyWord = address }, "location",
-            r => $"📍 坐标: {r.GetProperty("lon")},{r.GetProperty("lat")}"),
+            r => $"📍 坐标: {r.GetProperty("lon")},{r.GetProperty("lat")}").ConfigureAwait(false),
         _ => $"Unknown provider. Use: amap, tencent, baidu, tianditu"
     }) ?? "Missing API key for " + provider;
 
@@ -49,14 +49,14 @@ public sealed class IntegrationTools
     public async Task<string> ReverseGeocode(string location, string provider = "amap") => (provider.ToLowerInvariant() switch
     {
         "amap" or "高德" => await G($"https://restapi.amap.com/v3/geocode/regeo?key={K("AMAP_KEY")}&location={E(location)}&output=JSON", "regeocode",
-            r => $"📍 {r.GetProperty("formatted_address")}"),
+            r => $"📍 {r.GetProperty("formatted_address")}").ConfigureAwait(false),
         "tencent" or "腾讯" => await G($"https://apis.map.qq.com/ws/geocoder/v1/?key={K("TENCENT_MAP_KEY")}&location={E(location)}", "result",
-            r => $"📍 {r.GetProperty("address")}"),
+            r => $"📍 {r.GetProperty("address")}").ConfigureAwait(false),
         "baidu" or "百度" => await G($"https://api.map.baidu.com/reverse_geocoding/v3/?ak={K("BAIDU_MAP_KEY")}&location={E(location)}&output=json", "result",
-            r => $"📍 {r.GetProperty("formatted_address")}"),
+            r => $"📍 {r.GetProperty("formatted_address")}").ConfigureAwait(false),
         "tianditu" or "天地图" => await T($"https://api.tianditu.gov.cn/v2/geocoding?tk={K("TIANDITU_KEY")}",
             new { lon = location.Split(',')[0], lat = location.Split(',')[1] }, "location",
-            r => $"📍 {r.GetProperty("address")}"),
+            r => $"📍 {r.GetProperty("address")}").ConfigureAwait(false),
         _ => $"Unknown provider"
     }) ?? "Missing API key";
 
@@ -69,11 +69,11 @@ public sealed class IntegrationTools
     public async Task<string> PoiSearch(string keyword, string? city = null, int count = 10, string provider = "amap") => (provider.ToLowerInvariant() switch
     {
         "amap" or "高德" => await GA($"https://restapi.amap.com/v3/place/text?key={K("AMAP_KEY")}&keywords={E(keyword)}&offset={count}&output=JSON{(city != null ? $"&city={E(city)}" : "")}", "pois",
-            r => $"- **{r.GetProperty("name")}**  地址: {GStr(r,"address")}  坐标: {r.GetProperty("location")}"),
+            r => $"- **{r.GetProperty("name")}**  地址: {GStr(r,"address")}  坐标: {r.GetProperty("location")}").ConfigureAwait(false),
         "tencent" or "腾讯" => await GA($"https://apis.map.qq.com/ws/place/v1/search?key={K("TENCENT_MAP_KEY")}&keyword={E(keyword)}&count={count}", "data",
-            r => $"- **{r.GetProperty("title")}**  地址: {GStr(r,"address")}"),
+            r => $"- **{r.GetProperty("title")}**  地址: {GStr(r,"address")}").ConfigureAwait(false),
         "baidu" or "百度" => await GA($"https://api.map.baidu.com/place/v2/search?ak={K("BAIDU_MAP_KEY")}&query={E(keyword)}&output=json&page_size={count}", "results",
-            r => $"- **{r.GetProperty("name")}**  地址: {GStr(r,"address")}"),
+            r => $"- **{r.GetProperty("name")}**  地址: {GStr(r,"address")}").ConfigureAwait(false),
         _ => $"Unknown provider"
     }) ?? "Missing API key";
 
@@ -84,7 +84,7 @@ public sealed class IntegrationTools
     public async Task<string> DistanceCalc(string from, string to, int type = 1, string provider = "amap") => (provider.ToLowerInvariant() switch
     {
         "amap" or "高德" => await GA($"https://restapi.amap.com/v3/distance?key={K("AMAP_KEY")}&origins={E(from)}&destination={E(to)}&type={type}&output=JSON", "results",
-            r => { var d = double.Parse(r.GetProperty("distance").GetString() ?? "0"); return $"距离: {d / 1000:F1} km"; }),
+            r => { var d = double.Parse(r.GetProperty("distance").GetString() ?? "0"); return $"距离: {d / 1000:F1} km"; }).ConfigureAwait(false),
         _ => $"Only amap supports distance"
     }) ?? "Missing API key";
 
@@ -95,8 +95,8 @@ public sealed class IntegrationTools
     public async Task<string> IpLocation(string? ip = null)
     {
         if (!string.IsNullOrEmpty(K("AMAP_KEY")))
-            try { return await G($"https://restapi.amap.com/v3/ip?key={K("AMAP_KEY")}&output=JSON{(ip != null ? $"&ip={E(ip)}" : "")}", "province", r => $"🌐 {r}") ?? "No location data"; } catch { /* AMAP not configured — fallback */ }
-        try { var j = await H().GetFromJsonAsync<JsonElement>(ip != null ? $"http://ip-api.com/json/{ip}" : "http://ip-api.com/json"); return $"🌐 {GStr(j,"city")}, {GStr(j,"regionName")}, {GStr(j,"country")}"; } catch (Exception ex) { return $"IP error: {ex.Message}"; }
+            try { return await G($"https://restapi.amap.com/v3/ip?key={K("AMAP_KEY")}&output=JSON{(ip != null ? $"&ip={E(ip)}" : "")}", "province", r => $"🌐 {r}").ConfigureAwait(false) ?? "No location data"; } catch { /* AMAP not configured — fallback */ }
+        try { var j = await H().GetFromJsonAsync<JsonElement>(ip != null ? $"http://ip-api.com/json/{ip}" : "http://ip-api.com/json").ConfigureAwait(false); return $"🌐 {GStr(j,"city")}, {GStr(j,"regionName")}, {GStr(j,"country")}"; } catch (Exception ex) { return $"IP error: {ex.Message}"; }
     }
 
     // ═══════════════════════════════════════════
@@ -116,14 +116,14 @@ public sealed class IntegrationTools
         try
         {
             var h = H();
-            var cj = await h.GetFromJsonAsync<JsonElement>($"https://geoapi.qweather.com/v2/city/lookup?key={key}&location={E(city)}");
+            var cj = await h.GetFromJsonAsync<JsonElement>($"https://geoapi.qweather.com/v2/city/lookup?key={key}&location={E(city)}").ConfigureAwait(false);
             var loc = cj.GetProperty("location")[0].GetProperty("id").GetString() ?? "";
-            var wj = await h.GetFromJsonAsync<JsonElement>($"https://devapi.qweather.com/v7/weather/now?key={key}&location={loc}");
+            var wj = await h.GetFromJsonAsync<JsonElement>($"https://devapi.qweather.com/v7/weather/now?key={key}&location={loc}").ConfigureAwait(false);
             var n = wj.GetProperty("now");
             var sb = new StringBuilder($"🌤️ {city} {GStr(n,"text")} {GStr(n,"temp")}°C (体感 {GStr(n,"feelsLike")}°C)");
             if (n.TryGetProperty("windDir", out var wd)) sb.Append($" | {wd} {GStr(n,"windScale")}级");
             if (n.TryGetProperty("humidity", out var hu)) sb.Append($" | 湿度 {hu}%");
-            try { var fj = await h.GetFromJsonAsync<JsonElement>($"https://devapi.qweather.com/v7/weather/24h?key={key}&location={loc}");
+            try { var fj = await h.GetFromJsonAsync<JsonElement>($"https://devapi.qweather.com/v7/weather/24h?key={key}&location={loc}").ConfigureAwait(false);
                 sb.Append("\n未来几小时:"); foreach (var hh in fj.GetProperty("hourly").EnumerateArray().Take(4))
                     sb.Append($" {GStr(hh,"fxTime")[11..16]} {GStr(hh,"temp")}°C {GStr(hh,"text")}"); } catch { /* hourly forecast not available */ }
             return sb.ToString();
@@ -149,7 +149,7 @@ public sealed class IntegrationTools
         {
             var salt = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString();
             var sign = MD5($"{appId}{text}{salt}{secret}");
-            var j = await H().GetFromJsonAsync<JsonElement>($"https://fanyi-api.baidu.com/api/trans/vip/translate?q={E(text)}&from={from}&to={to}&appid={appId}&salt={salt}&sign={sign}");
+            var j = await H().GetFromJsonAsync<JsonElement>($"https://fanyi-api.baidu.com/api/trans/vip/translate?q={E(text)}&from={from}&to={to}&appid={appId}&salt={salt}&sign={sign}").ConfigureAwait(false);
             if (j.TryGetProperty("error_code", out var ec) && ec.GetString() != "0")
                 return $"Error: {j.GetProperty("error_msg")}";
             return "## 翻译\n" + string.Join("\n", j.GetProperty("trans_result").EnumerateArray().Select(r => $"- {r.GetProperty("dst")}"));
@@ -174,8 +174,8 @@ public sealed class IntegrationTools
         {
             var req = new HttpRequestMessage(HttpMethod.Get, $"https://api.unsplash.com/search/photos?query={E(query)}&per_page={Math.Clamp(count,1,10)}");
             req.Headers.Add("Authorization", $"Client-ID {key}");
-            using var imgResp = await H().SendAsync(req);
-            var j = await imgResp.Content.ReadFromJsonAsync<JsonElement>();
+            using var imgResp = await H().SendAsync(req).ConfigureAwait(false);
+            var j = await imgResp.Content.ReadFromJsonAsync<JsonElement>().ConfigureAwait(false);
             var sb = new StringBuilder($"## Image: {query}\n");
             foreach (var r in j.GetProperty("results").EnumerateArray())
             {
@@ -199,7 +199,7 @@ public sealed class IntegrationTools
         if (url.Contains("null")) return null;
         try
         {
-            var j = await H().GetFromJsonAsync<JsonElement>(url);
+            var j = await H().GetFromJsonAsync<JsonElement>(url).ConfigureAwait(false);
             return j.TryGetProperty(dataPath, out var d) ? fmt(d) : $"API error: {GStr(j,"info")}";
         }
         catch (Exception ex)
@@ -224,7 +224,7 @@ public sealed class IntegrationTools
         if (url.Contains("null")) return null;
         try
         {
-            var j = await H().GetFromJsonAsync<JsonElement>(url);
+            var j = await H().GetFromJsonAsync<JsonElement>(url).ConfigureAwait(false);
             if (!j.TryGetProperty(arrPath, out var arr)) return $"API error: {GStr(j,"info")}";
             return "## Results\n" + string.Join("\n", arr.EnumerateArray().Select(fmt));
         }
@@ -238,8 +238,8 @@ public sealed class IntegrationTools
         {
             using var req = new HttpRequestMessage(HttpMethod.Post, url);
             req.Content = JsonContent.Create(body);
-            using var tResp = await H().SendAsync(req);
-            var j = await tResp.Content.ReadFromJsonAsync<JsonElement>();
+            using var tResp = await H().SendAsync(req).ConfigureAwait(false);
+            var j = await tResp.Content.ReadFromJsonAsync<JsonElement>().ConfigureAwait(false);
             return j.TryGetProperty(resPath, out var d) ? fmt(d) : $"API error: {GStr(j,"msg")}";
         }
         catch (Exception ex) { return $"API request failed: {SanitizeUrl(ex.Message)}"; }

@@ -35,13 +35,12 @@ public sealed class ChatView : UserControl
 
     private readonly Dictionary<int, string> _subSessions = new();
     private readonly Dictionary<int, Stopwatch> _subStartTimes = new();
-    private string? _parentSession;
 
     public SessionManager SessionManager => _sessionManager;
 
     public async Task LoadSessionAsync(string name)
     {
-        if (!await _sessionManager.LoadSessionAsync(name).ConfigureAwait(false)) return;
+        if (!await _sessionManager.LoadSessionAsync(name)) return;
         _outputStack.Children.Clear();
 
         // 子会话显示返回父会话按钮
@@ -93,7 +92,7 @@ public sealed class ChatView : UserControl
     public async Task ResetSessionAsync()
     {
         if (_sessionManager.MessageCount > 0)
-            await _sessionManager.SaveSessionAsync();
+            await _sessionManager.SaveSessionAsync().ConfigureAwait(false);
         _sessionManager.NewSession();
         _outputStack.Children.Clear();
         _turns = 0;

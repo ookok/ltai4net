@@ -1,4 +1,4 @@
-using System.ComponentModel;
+﻿using System.ComponentModel;
 using System.Text;
 using System.Text.RegularExpressions;
 using LTAI.AI;
@@ -36,7 +36,7 @@ public sealed class FileSystemTools
             if (fp == null) return "Error: path escape";
             var sizeError = PathUtils.CheckFileSize(fp);
             if (sizeError != null) return sizeError;
-            var content = await File.ReadAllTextAsync(fp);
+            var content = await File.ReadAllTextAsync(fp).ConfigureAwait(false);
             var fi = new FileInfo(fp);
             var ext = fi.Extension.ToLowerInvariant();
             var summary = DescribeDoc(content, ext);
@@ -90,7 +90,7 @@ public sealed class FileSystemTools
         var fp = PathUtils.SafeResolvePath(_ws, path);
         if (fp == null) return "Error: path escape";
         Directory.CreateDirectory(Path.GetDirectoryName(fp)!);
-        await File.WriteAllTextAsync(fp, content);
+        await File.WriteAllTextAsync(fp, content).ConfigureAwait(false);
         return $"Written {content.Length} bytes to {Path.GetFileName(fp)}";
     }
 
@@ -262,7 +262,7 @@ public sealed class FileSystemTools
         if (!Directory.Exists(root)) return "Error: Directory not found";
         maxDepth = Math.Clamp(maxDepth, 1, 5);
         var sb = new StringBuilder();
-        await BuildTreeAsync(root, "", 0, maxDepth, includeDeps, sb);
+        await BuildTreeAsync(root, "", 0, maxDepth, includeDeps, sb).ConfigureAwait(false);
         return sb.ToString();
     }
 
@@ -329,7 +329,7 @@ public sealed class FileSystemTools
             if (Directory.Exists(entry))
             {
                 sb.AppendLine($"{prefix}{connector}{name}/");
-                await BuildTreeAsync(entry, prefix + childPrefix, depth + 1, maxDepth, includeDeps, sb);
+                await BuildTreeAsync(entry, prefix + childPrefix, depth + 1, maxDepth, includeDeps, sb).ConfigureAwait(false);
             }
             else sb.AppendLine($"{prefix}{connector}{name}");
         }

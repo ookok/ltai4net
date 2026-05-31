@@ -180,7 +180,7 @@ public sealed class ChatLayout
 
                         if (input.StartsWith('/'))
                         {
-                            if (await HandleSlashCommandAsync(input)) continue;
+                            if (await HandleSlashCommandAsync(input).ConfigureAwait(false)) continue;
                             LastRequestedView = null; return;
                         }
 
@@ -189,7 +189,7 @@ public sealed class ChatLayout
                         lock (_layout) { UpdateMessages(""); UpdateFooter("", ""); ctx.Refresh(); }
 
                         ConfirmationModal.AuthorizePaths(_layout, ctx, input);
-                        await StreamResponseAsync(ctx, input);
+                        await StreamResponseAsync(ctx, input).ConfigureAwait(false);
                         continue;
                     }
 
@@ -212,7 +212,7 @@ public sealed class ChatLayout
                             // 取消 → 继续（下一次循环刷新会恢复 Messages）
                             if (cmd == null) continue;
 
-                            if (await HandleSlashCommandAsync(cmd)) continue;
+                            if (await HandleSlashCommandAsync(cmd).ConfigureAwait(false)) continue;
                             LastRequestedView = null; return;
                         }
                     }
@@ -489,7 +489,7 @@ public sealed class ChatLayout
 
         try
         {
-            await foreach (var update in _chat.ChatStreamingAsync(input).WithCancellation(cts.Token))
+            await foreach (var update in _chat.ChatStreamingAsync(input).WithCancellation(cts.Token).ConfigureAwait(false))
             {
                 // 内联检查 ESC（缓冲非 ESC 按键）
                 if (Console.KeyAvailable)
@@ -627,7 +627,7 @@ public sealed class ChatLayout
         }
 
         spinCts.Cancel();
-        try { await spinTask; } catch { /* 已取消或异常 */ }
+        try { await spinTask.ConfigureAwait(false); } catch { /* 已取消或异常 */ }
 
         _history.Add(("assistant", content.ToString()));
         TrimHistory();

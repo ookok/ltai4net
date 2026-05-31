@@ -87,6 +87,19 @@ public static class ServiceCollectionExtensions
         // Step 3c: Background job service
         services.AddSingleton<BackgroundJobService>();
 
+        // Step 3c-bis: Skill Evolution Engine (L1-L3)
+        services.AddSingleton<SkillEvolutionEngine>(sp =>
+        {
+            var llm = sp.GetRequiredService<IChatClient>();
+            var logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger<SkillEvolutionEngine>();
+            var skillsDir = new[] {
+                Path.Combine(AppContext.BaseDirectory, "skills"),
+                Path.Combine(Directory.GetCurrentDirectory(), "skills"),
+                Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "skills"),
+            }.FirstOrDefault(Directory.Exists) ?? Path.Combine(Directory.GetCurrentDirectory(), "skills");
+            return new SkillEvolutionEngine(llm, logger, skillsDir);
+        });
+
         // Step 3d: ChatAgent + workflow (default L1=flash, auto-upgrade to L2=pro)
         services.AddSingleton<ChatAgent>(sp =>
         {
@@ -659,10 +672,22 @@ public static class ServiceCollectionExtensions
                 ModelId = modelId,
             },
             ChatHistoryProvider = new InMemoryChatHistoryProvider(),
-            // Tool RAG: 动态工具召回（放第一个）
+            // Tool RAG: 动态工具召回（放第一个）→ L1 Skill Evolution Ranking
             AIContextProviders = safety != null
-                ? [new LTAI.Agent.Tools.ToolRetrievalProvider(sp.GetRequiredService<LTAI.AI.EmbeddingClient>()), shellEnv, safety, compaction, kbGraph, codeGraph, wasmtimeSandbox, new LTAI.Agent.Tools.InstructionProvider(modelId), new LTAI.Agent.Tools.EnvironmentProvider(), skillsProvider]
-                : [new LTAI.Agent.Tools.ToolRetrievalProvider(sp.GetRequiredService<LTAI.AI.EmbeddingClient>()), shellEnv, compaction, kbGraph, codeGraph, wasmtimeSandbox, new LTAI.Agent.Tools.InstructionProvider(modelId), new LTAI.Agent.Tools.EnvironmentProvider(), skillsProvider],
+                ? [new LTAI.Agent.Tools.ToolRetrievalProvider(sp.GetRequiredService<LTAI.AI.EmbeddingClient>()),
+                   new LTAI.Agent.Tools.SkillRankingProvider(
+                       sp.GetRequiredService<LTAI.Agent.Tools.SkillEvolutionEngine>(),
+                       new LTAI.Agent.ToolResultCapturingChatClient(llm),
+                       sp.GetRequiredService<ILoggerFactory>().CreateLogger<LTAI.Agent.Tools.SkillRankingProvider>()),
+                   shellEnv, safety, compaction, kbGraph, codeGraph, wasmtimeSandbox,
+                   new LTAI.Agent.Tools.InstructionProvider(modelId), new LTAI.Agent.Tools.EnvironmentProvider(), skillsProvider]
+                : [new LTAI.Agent.Tools.ToolRetrievalProvider(sp.GetRequiredService<LTAI.AI.EmbeddingClient>()),
+                   new LTAI.Agent.Tools.SkillRankingProvider(
+                       sp.GetRequiredService<LTAI.Agent.Tools.SkillEvolutionEngine>(),
+                       new LTAI.Agent.ToolResultCapturingChatClient(llm),
+                       sp.GetRequiredService<ILoggerFactory>().CreateLogger<LTAI.Agent.Tools.SkillRankingProvider>()),
+                   shellEnv, compaction, kbGraph, codeGraph, wasmtimeSandbox,
+                   new LTAI.Agent.Tools.InstructionProvider(modelId), new LTAI.Agent.Tools.EnvironmentProvider(), skillsProvider],
             EnableMessageInjection = true,
             RequirePerServiceCallChatHistoryPersistence = true,
         }, loggerFactory, sp);

@@ -94,7 +94,7 @@ public static class EvalChecks
         return (item, ct) =>
         {
             var responseLower = item.Response.ToLowerInvariant();
-            var found = toolNames.Where(t => responseLower.Contains(t.ToLowerInvariant())).ToList();
+            var found = toolNames.Where(t => responseLower.Contains(t.ToLowerInvariant())).ToHashSet(StringComparer.Ordinal);
             var missing = toolNames.Where(t => !found.Contains(t)).ToList();
             var passed = missing.Count == 0;
             var reason = passed

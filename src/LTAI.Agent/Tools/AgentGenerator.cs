@@ -1,4 +1,4 @@
-using System.ComponentModel;
+﻿using System.ComponentModel;
 using System.Text.Json;
 using Microsoft.Extensions.AI;
 using LTAI.AI;
@@ -44,7 +44,7 @@ public sealed class AgentGenerator
 
         try
         {
-            var response = await _llm.GetResponseAsync(prompt);
+            var response = await _llm.GetResponseAsync(prompt).ConfigureAwait(false);
             var text = response.Messages?.LastOrDefault()?.Text ?? "";
             // Extract JSON from potential markdown fences
             if (text.Contains("```"))

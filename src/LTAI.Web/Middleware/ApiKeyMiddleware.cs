@@ -28,14 +28,14 @@ public sealed class ApiKeyMiddleware
         if (context.Request.Path.StartsWithSegments("/health") ||
             context.Request.Path.StartsWithSegments("/swagger"))
         {
-            await _next(context);
+            await _next(context).ConfigureAwait(false);
             return;
         }
 
         // No key configured → dev mode, allow all
         if (string.IsNullOrEmpty(_configuredKey))
         {
-            await _next(context);
+            await _next(context).ConfigureAwait(false);
             return;
         }
 
@@ -48,11 +48,11 @@ public sealed class ApiKeyMiddleware
             context.Response.StatusCode = 401;
             context.Response.ContentType = "application/json";
             await context.Response.WriteAsync(
-                "{\"error\":\"Unauthorized\",\"type\":\"auth_required\"}");
+                "{\"error\":\"Unauthorized\",\"type\":\"auth_required\"}").ConfigureAwait(false);
             return;
         }
 
-        await _next(context);
+        await _next(context).ConfigureAwait(false);
     }
 
     private static string? ExtractBearer(HttpContext context)

@@ -8,7 +8,7 @@ namespace LTAI.Cli;
 
 partial class Program
 {
-    public static int Main(string[] args)
+    public static async Task<int> Main(string[] args)
     {
         Console.Title = "LTAI CLI";
         AnsiConsole.Write(new FigletText("LTAI CLI").Color(Color.Green));
@@ -26,10 +26,10 @@ partial class Program
         return command switch
         {
             "env" => HandleEnv(args[1..]),
-            "migrate" => HandleMigrate(args[1..]),
+            "migrate" => await HandleMigrate(args[1..]).ConfigureAwait(false),
             "textpad" => HandleTextPad(args[1..]),
             "dashboard" or "dash" => HandleDashboard(),
-            "health" or "--health" or "hc" => HandleHealth(),
+            "health" or "--health" or "hc" => await HandleHealth().ConfigureAwait(false),
             "version" or "--version" or "-v" => ShowVersion(),
             _ => ShowHelp()
         };
@@ -345,7 +345,7 @@ partial class Program
     //  health — 系统健康检查
     // ═══════════════════════════════════════════
 
-    private static int HandleHealth()
+    private static async Task<int> HandleHealth()
     {
         AnsiConsole.MarkupLine("[bold]🔍 LTAI 系统健康检查[/]\n");
 
@@ -358,7 +358,8 @@ partial class Program
             if (File.Exists(dbPath))
             {
                 using var store = new KgStore(dbPath);
-                AnsiConsole.MarkupLine($"[green]✅ KgStore[/] — 节点: [bold]{store.NodeCount()}[/] — {new FileInfo(dbPath).Length / 1024}KB");
+                var nodeCount = await store.NodeCount().ConfigureAwait(false);
+                AnsiConsole.MarkupLine($"[green]✅ KgStore[/] — 节点: [bold]{nodeCount}[/] — {new FileInfo(dbPath).Length / 1024}KB");
                 store.Dispose();
             }
             else
@@ -437,7 +438,7 @@ partial class Program
     //  migrate — LiteDB → SQLite 知识图谱迁移
     // ═══════════════════════════════════════════
 
-    private static int HandleMigrate(string[] args)
+    private static async Task<int> HandleMigrate(string[] args)
     {
         AnsiConsole.MarkupLine("[bold]知识图谱迁移[/]");
         var ws = Directory.GetCurrentDirectory();
@@ -458,7 +459,7 @@ partial class Program
 
         // Step 2: 检查新 SQLite 数据库
         var store = new LTAI.Agent.Vector.KgStore(newDb);
-        var stats = store.Stats();
+        var stats = await store.Stats().ConfigureAwait(false);
         AnsiConsole.MarkupLine($"[green]✓ SQLite 知识图谱: {newDb}[/]");
         AnsiConsole.MarkupLine(stats);
         store.Dispose();

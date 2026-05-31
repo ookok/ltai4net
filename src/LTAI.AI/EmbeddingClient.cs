@@ -54,7 +54,7 @@ public sealed class EmbeddingClient : IDisposable
     /// <summary>Generate embedding for a single text.</summary>
     public async Task<float[]> GenerateAsync(string text, CancellationToken ct = default)
     {
-        var results = await GenerateBatchAsync([text], ct);
+        var results = await GenerateBatchAsync([text], ct).ConfigureAwait(false);
         return results.Length > 0 ? results[0] : FastEmb(text);
     }
 
@@ -68,7 +68,7 @@ public sealed class EmbeddingClient : IDisposable
             Dimension = _local.Dim;
             _logger.LogDebug("Embedding via local ONNX: {Count} texts", texts.Length);
             if (texts.Length > 20)
-                return await Task.WhenAll(texts.Select(t => Task.Run(() => _local.Generate(t), ct)));
+                return await Task.WhenAll(texts.Select(t => Task.Run(() => _local.Generate(t), ct))).ConfigureAwait(false);
             return texts.Select(t => _local.Generate(t)).ToArray();
         }
 
@@ -77,7 +77,7 @@ public sealed class EmbeddingClient : IDisposable
         {
             try
             {
-                var result = await CallEmbeddingApiAsync(endpoint, model, apiKey, texts, ct);
+                var result = await CallEmbeddingApiAsync(endpoint, model, apiKey, texts, ct).ConfigureAwait(false);
                 if (result != null)
                 {
                     Dimension = result.Dimension;
@@ -113,10 +113,10 @@ public sealed class EmbeddingClient : IDisposable
         req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", apiKey);
         req.Content = JsonContent.Create(request, options: JsonOpts);
 
-        using var resp = await http.SendAsync(req, ct);
+        using var resp = await http.SendAsync(req, ct).ConfigureAwait(false);
         resp.EnsureSuccessStatusCode();
 
-        var json = await resp.Content.ReadFromJsonAsync<EmbeddingApiResponse>(JsonOpts, ct);
+        var json = await resp.Content.ReadFromJsonAsync<EmbeddingApiResponse>(JsonOpts, ct).ConfigureAwait(false);
         if (json?.Data == null || json.Data.Length == 0) return null;
 
         var dim = json.Data[0].Embedding?.Length ?? 384;

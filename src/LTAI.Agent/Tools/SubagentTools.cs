@@ -1,4 +1,4 @@
-using System.ComponentModel;
+﻿using System.ComponentModel;
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
@@ -169,7 +169,7 @@ public sealed class SubagentTools
                 ChatHistoryProvider = new InMemoryChatHistoryProvider(),
             }, null, _sp);
 
-            var session = await agent.CreateSessionAsync(ct);
+            var session = await agent.CreateSessionAsync(ct).ConfigureAwait(false);
             var sw = Stopwatch.StartNew();
             var messageBuf = new StringBuilder();
             var messages = new List<(string role, string content)>();

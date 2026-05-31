@@ -302,7 +302,7 @@ public sealed class VerifiedSummarizationStrategy : CompactionStrategy
     /// <summary>
     /// Fallback: truncate the oldest groups instead of summarizing them.
     /// </summary>
-    private static async ValueTask<bool> FallbackToTruncationAsync(
+    private static ValueTask<bool> FallbackToTruncationAsync(
         CompactionMessageIndex index,
         List<CompactionMessageGroup> groupsToRemove,
         ILogger logger,
@@ -317,7 +317,7 @@ public sealed class VerifiedSummarizationStrategy : CompactionStrategy
         logger.Log(LogLevel.Information,
             "[VerifiedSummarization] Truncation fallback: removed {Count} groups.", groupsToRemove.Count);
 
-        return await ValueTask.FromResult(true).ConfigureAwait(false);
+        return new ValueTask<bool>(true);
     }
 
     /// <summary>

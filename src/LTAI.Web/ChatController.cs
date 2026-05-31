@@ -42,7 +42,7 @@ public class ChatController : ControllerBase
         try
         {
             var reply = await _agent.ChatAsync(
-                request.Message, request.UserId ?? RequestTraceId(), cts.Token);
+                request.Message, request.UserId ?? RequestTraceId(), cts.Token).ConfigureAwait(false);
             return Ok(new ChatResponse(reply));
         }
         catch (OperationCanceledException) when (!HttpContext.RequestAborted.IsCancellationRequested)
@@ -67,7 +67,7 @@ public class ChatController : ControllerBase
         {
             Response.StatusCode = 400;
             await Response.WriteAsync(
-                "{\"error\":\"message is required\",\"type\":\"validation_error\"}", ct);
+                "{\"error\":\"message is required\",\"type\":\"validation_error\"}", ct).ConfigureAwait(false);
             return;
         }
 
@@ -86,22 +86,22 @@ public class ChatController : ControllerBase
             {
                 if (update.Text == null) continue;
                 var payload = JsonSerializer.Serialize(new { text = update.Text });
-                await Response.WriteAsync($"data: {payload}\n\n", ct);
-                await Response.Body.FlushAsync(ct);
+                await Response.WriteAsync($"data: {payload}\n\n", ct).ConfigureAwait(false);
+                await Response.Body.FlushAsync(ct).ConfigureAwait(false);
             }
-            await Response.WriteAsync("data: [DONE]\n\n", ct);
-            await Response.Body.FlushAsync(ct);
+            await Response.WriteAsync("data: [DONE]\n\n", ct).ConfigureAwait(false);
+            await Response.Body.FlushAsync(ct).ConfigureAwait(false);
         }
-        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        catch (OperationCanceledException) when (!HttpContext.RequestAborted.IsCancellationRequested)
         {
             var err = JsonSerializer.Serialize(new { error = "Stream timed out", type = "timeout" });
-            await Response.WriteAsync($"data: {err}\n\n", ct);
+            await Response.WriteAsync($"data: {err}\n\n", ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Stream chat failed");
             var err = JsonSerializer.Serialize(new { error = "Internal error", type = "internal_error" });
-            await Response.WriteAsync($"data: {err}\n\n", ct);
+            await Response.WriteAsync($"data: {err}\n\n", ct).ConfigureAwait(false);
         }
     }
 

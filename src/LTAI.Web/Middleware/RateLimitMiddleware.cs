@@ -29,7 +29,7 @@ public sealed class RateLimitMiddleware
         // Skip rate limiting for health checks
         if (context.Request.Path.StartsWithSegments("/health"))
         {
-            await _next(context);
+            await _next(context).ConfigureAwait(false);
             return;
         }
 
@@ -63,11 +63,11 @@ public sealed class RateLimitMiddleware
             context.Response.Headers["Retry-After"] = retryAfter.ToString();
             context.Response.ContentType = "application/json";
             await context.Response.WriteAsync(
-                "{\"error\":\"Rate limit exceeded\",\"type\":\"rate_limited\",\"retry_after_seconds\":" + retryAfter + "}");
+                "{\"error\":\"Rate limit exceeded\",\"type\":\"rate_limited\",\"retry_after_seconds\":" + retryAfter + "}").ConfigureAwait(false);
             return;
         }
 
-        await _next(context);
+        await _next(context).ConfigureAwait(false);
     }
 
     private sealed record WindowState(long Count, DateTime WindowStart);

@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using LTAI.AI;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
@@ -151,7 +151,7 @@ public sealed class WorkflowOrchestrator
 
         if (_embedder != null && _specialists.Count > 5)
         {
-            candidateNames = await AgentRegistry.SelectTopKAsync(task, _embedder, k: 5);
+            candidateNames = await AgentRegistry.SelectTopKAsync(task, _embedder, k: 5).ConfigureAwait(false);
             specialistsDesc = string.Join("\n", candidateNames.Select(n => $"  - {n}"));
             _logger.LogDebug("Vector router: selected {N}/{Total} candidates",
                 candidateNames.Length, _specialists.Count);
@@ -180,7 +180,7 @@ public sealed class WorkflowOrchestrator
         AgentResponse routingResponse;
         try
         {
-            routingResponse = await _defaultAgent.RunAsync(routingMessages, cancellationToken: ct);
+            routingResponse = await _defaultAgent.RunAsync(routingMessages, cancellationToken: ct).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -194,7 +194,7 @@ public sealed class WorkflowOrchestrator
         if (jsonHandoff != null && _specialists.TryGetValue(jsonHandoff.Value.name, out var jsonAgent))
         {
             _logger.LogInformation("Handoff (JSON) '{Task}' → {Agent} [trace={Trace}]", task, jsonHandoff.Value.name, traceId ?? "");
-            return await RunAgentSafely(jsonAgent, jsonHandoff.Value.name, jsonHandoff.Value.task ?? task, ct, traceId);
+            return await RunAgentSafely(jsonAgent, jsonHandoff.Value.name, jsonHandoff.Value.task ?? task, ct, traceId).ConfigureAwait(false);
         }
 
         // Priority 2: Fall back to string marker "HANDOFF TO name: task"
@@ -204,7 +204,7 @@ public sealed class WorkflowOrchestrator
             {
                 _logger.LogInformation("Handoff (string) '{Task}' → {Agent} [trace={Trace}]", task, name, traceId ?? "");
                 var specialistTask = ExtractHandoffTask(decision, name) ?? task;
-                return await RunAgentSafely(agent, name, specialistTask, ct, traceId);
+                return await RunAgentSafely(agent, name, specialistTask, ct, traceId).ConfigureAwait(false);
             }
         }
 
@@ -227,7 +227,7 @@ public sealed class WorkflowOrchestrator
         if (_specialistFailures.TryGetValue(name, out var failures) && failures >= SpecialistCircuitBreaker)
         {
             _logger.LogWarning("Circuit breaker open for '{Agent}' ({Fails} consecutive failures) — skipping", name, failures);
-            return await FallbackToDefaultAsync(name, specialistTask, ct, traceId);
+            return await FallbackToDefaultAsync(name, specialistTask, ct, traceId).ConfigureAwait(false);
         }
 
         for (int attempt = 0; attempt <= 1; attempt++)
@@ -236,7 +236,7 @@ public sealed class WorkflowOrchestrator
             {
                 var result = await agent.RunAsync(
                     [new ChatMessage(ChatRole.User, specialistTask)],
-                    cancellationToken: ct);
+                    cancellationToken: ct).ConfigureAwait(false);
                 // Success — reset circuit
                 _specialistFailures.Remove(name);
                 return result;
@@ -253,14 +253,14 @@ public sealed class WorkflowOrchestrator
                 {
                     // Retry once after brief delay
                     _logger.LogInformation("Retrying '{Agent}' in {Delay}ms...", name, RetryDelayMs);
-                    try { await Task.Delay(RetryDelayMs, ct); } catch { break; }
+                    try { await Task.Delay(RetryDelayMs, ct).ConfigureAwait(false); } catch { break; }
                 }
             }
         }
 
         // Retries exhausted — fall back to default agent
         _logger.LogWarning("Falling back to default agent after '{Agent}' failed", name);
-        return await FallbackToDefaultAsync(name, specialistTask, ct, traceId);
+        return await FallbackToDefaultAsync(name, specialistTask, ct, traceId).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -275,7 +275,7 @@ public sealed class WorkflowOrchestrator
         {
             var result = await _defaultAgent.RunAsync(
                 [new ChatMessage(ChatRole.User, task)],
-                cancellationToken: ct);
+                cancellationToken: ct).ConfigureAwait(false);
             var text = result.Messages?.LastOrDefault()?.Text ?? "";
             return new AgentResponse { Messages = [new ChatMessage(ChatRole.Assistant,
                 $"[Fallback from {specialistName}]\n\n{text}")] };
@@ -309,7 +309,7 @@ public sealed class WorkflowOrchestrator
         {
             try
             {
-                var response = await agent.RunAsync(messages, cancellationToken: ct);
+                var response = await agent.RunAsync(messages, cancellationToken: ct).ConfigureAwait(false);
                 var text = response.Messages?.LastOrDefault()?.Text ?? "(no output)";
                 messages = [new ChatMessage(ChatRole.User, text)];
             }
@@ -340,11 +340,11 @@ public sealed class WorkflowOrchestrator
 
         var results = await Task.WhenAll(agents.Select(async agent =>
         {
-            await _concurrencyThrottle.WaitAsync(ct);
+            await _concurrencyThrottle.WaitAsync(ct).ConfigureAwait(false);
             try
             {
                 var agentResponse = await agent.RunAsync(
-                    [new ChatMessage(ChatRole.User, task)], cancellationToken: ct);
+                    [new ChatMessage(ChatRole.User, task)], cancellationToken: ct).ConfigureAwait(false);
                 return (name: agent.Name, response: (AgentResponse?)agentResponse, error: (string?)null);
             }
             catch (Exception ex)
@@ -356,7 +356,7 @@ public sealed class WorkflowOrchestrator
             {
                 _concurrencyThrottle.Release();
             }
-        }));
+        })).ConfigureAwait(false);
 
         var sb = new System.Text.StringBuilder();
         sb.AppendLine("## Concurrent Results\n");

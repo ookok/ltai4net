@@ -1,4 +1,4 @@
-using System.ComponentModel;
+﻿using System.ComponentModel;
 using System.Data;
 using System.Data.Common;
 using System.Text.Json;
@@ -49,7 +49,7 @@ public sealed class DatabaseTools
                        || trimmed.StartsWith("CREATE", StringComparison.OrdinalIgnoreCase);
 
             await using var conn = CreateConnection(provider, connectionString);
-            await conn.OpenAsync(ct);
+            await conn.OpenAsync(ct).ConfigureAwait(false);
             await using var cmd = conn.CreateCommand();
             cmd.CommandText = sql;
 
@@ -76,13 +76,13 @@ public sealed class DatabaseTools
 
             if (isWrite)
             {
-                var rows = await cmd.ExecuteNonQueryAsync(ct);
+                var rows = await cmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
                 return $"[SQL] {rows} row(s) affected.\n\nSQL: {sql}";
             }
 
             var results = new List<Dictionary<string, object?>>();
-            await using var reader = await cmd.ExecuteReaderAsync(ct);
-            while (await reader.ReadAsync(ct))
+            await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
+            while (await reader.ReadAsync(ct).ConfigureAwait(false))
             {
                 var row = new Dictionary<string, object?>();
                 for (int i = 0; i < reader.FieldCount; i++)

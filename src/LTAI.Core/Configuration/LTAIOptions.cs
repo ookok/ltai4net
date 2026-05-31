@@ -56,8 +56,8 @@ public sealed class AIConfig
     public int MaxTokens { get; init; } = 4096;
     public double Temperature { get; init; } = 0.7;
     public string? ApiKeyEnv { get; init; } = "DEEPSEEK_API_KEY";
-    /// <summary>Skip safety input/output guardrails. Default true for local dev tool.</summary>
-    public bool SkipSafetyChecks { get; init; } = true;
+    /// <summary>Skip safety input/output guardrails. Default false for security.</summary>
+    public bool SkipSafetyChecks { get; init; } = false;
     /// <summary>Operational mode: "balanced", "fast", "precise", etc.</summary>
     public string Mode { get; init; } = "balanced";
     /// <summary>Known LLM providers keyed by alias (e.g. "deepseek-fast", "deepseek-pro").</summary>
@@ -66,6 +66,8 @@ public sealed class AIConfig
     public Dictionary<string, string>? DegradationChain { get; init; }
     public long GlobalTokenBudget { get; init; } = 1_000_000;
     public long PerUserTokenBudget { get; init; } = 200_000;
+    /// <summary>Response cache size limit per provider. 0 disables cache.</summary>
+    public int ResponseCacheSize { get; init; } = 256;
 
     /// <summary>
     /// Resolve ProviderConfig by layer name ("fast"/"deep"/"pro"/"embedding"/custom).
@@ -430,7 +432,6 @@ public sealed class UsageTracker : IUsageTracker
     private static string _currentTool = ""; // 当前正在执行的工具名（供 TUI 动画读取）
     private static long _lastToolCallMs;
     private static long _lastLlmCallMs;
-    private static readonly System.Diagnostics.Stopwatch _currentToolStopwatch = new();
     private static long _lastStreamTokens;   // 最近一次流式 completion tokens
     private static long _lastStreamElapsedMs; // 最近一次流式耗时(ms)
     private static int _contextWindowSize = 64000;
@@ -438,6 +439,7 @@ public sealed class UsageTracker : IUsageTracker
     private static string _balanceCurrency = "";
     private static string _balanceSource = "";
     private static readonly HttpClient _balanceHttp = new() { Timeout = TimeSpan.FromSeconds(5) };
+    private static readonly object _balanceLock = new();
     /// <summary>Model context window cache, populated from provider /v1/models API.</summary>
     private static readonly ConcurrentDictionary<string, int> _modelContextCache = new(StringComparer.OrdinalIgnoreCase);
 
@@ -448,15 +450,23 @@ public sealed class UsageTracker : IUsageTracker
     // Last-matched model cache to avoid repeated linear scans of KnownKeys.All
     private static string? _lastLookupModel;
     private static KnownKeys.KeyInfo? _lastLookupKey;
+    private static readonly object _lookupLock = new();
 
     private static KnownKeys.KeyInfo? LookupModel(string model)
     {
         if (string.IsNullOrEmpty(model)) return null;
-        if (string.Equals(_lastLookupModel, model, StringComparison.OrdinalIgnoreCase))
+        var cached = Volatile.Read(ref _lastLookupModel);
+        if (string.Equals(cached, model, StringComparison.OrdinalIgnoreCase))
             return _lastLookupKey;
-        _lastLookupModel = model;
-        return _lastLookupKey = KnownKeys.All.FirstOrDefault(k =>
-            !string.IsNullOrEmpty(k.Model) && model.StartsWith(k.Model, StringComparison.OrdinalIgnoreCase));
+        lock (_lookupLock)
+        {
+            if (string.Equals(_lastLookupModel, model, StringComparison.OrdinalIgnoreCase))
+                return _lastLookupKey;
+            _lastLookupModel = model;
+            _lastLookupKey = KnownKeys.All.FirstOrDefault(k =>
+                !string.IsNullOrEmpty(k.Model) && model.StartsWith(k.Model, StringComparison.OrdinalIgnoreCase));
+            return _lastLookupKey;
+        }
     }
 
     /// <summary>Core Record logic — called by both static forwarder and interface impl.</summary>
@@ -465,7 +475,7 @@ public sealed class UsageTracker : IUsageTracker
         Interlocked.Add(ref _promptTokens, prompt);
         Interlocked.Add(ref _completionTokens, completion);
         Interlocked.Increment(ref _requests);
-        if (!string.IsNullOrEmpty(model)) _activeModel = model;
+        if (!string.IsNullOrEmpty(model)) Interlocked.Exchange(ref _activeModel, model);
 
         var key = LookupModel(model);
         double cost;
@@ -490,7 +500,7 @@ public sealed class UsageTracker : IUsageTracker
         Interlocked.Add(ref _cacheHitTokens, cacheHit);
         Interlocked.Add(ref _cacheMissTokens, cacheMiss);
         Interlocked.Increment(ref _requests);
-        if (!string.IsNullOrEmpty(model)) _activeModel = model;
+        if (!string.IsNullOrEmpty(model)) Interlocked.Exchange(ref _activeModel, model);
 
         var key = LookupModel(model);
         double cost;
@@ -521,7 +531,7 @@ public sealed class UsageTracker : IUsageTracker
     decimal IUsageTracker.EstimatedCost { get { lock (_costLock) { return (decimal)_totalCost; } } }
     string IUsageTracker.CostDisplay => $"¥{((IUsageTracker)this).EstimatedCost:F4}";
     string IUsageTracker.ActiveModel => !string.IsNullOrEmpty(_activeModel) ? _activeModel : "deepseek-v4-flash";
-    void IUsageTracker.SetActiveModel(string model) => _activeModel = model;
+    void IUsageTracker.SetActiveModel(string model) => Interlocked.Exchange(ref _activeModel, model);
     void IUsageTracker.RecordCacheHit() => Interlocked.Increment(ref _cacheHits);
     void IUsageTracker.RecordCacheMiss() => Interlocked.Increment(ref _cacheMisses);
     long IUsageTracker.CacheHits => Interlocked.Read(ref _cacheHits);
@@ -556,7 +566,7 @@ public sealed class UsageTracker : IUsageTracker
     }
     double? IUsageTracker.CurrentTps => CurrentTps;
     string IUsageTracker.TpsDisplay => TpsDisplay;
-    void IUsageTracker.SetActiveTool(string toolName) => _currentTool = toolName;
+    void IUsageTracker.SetActiveTool(string toolName) => Interlocked.Exchange(ref _currentTool, toolName);
     string IUsageTracker.CurrentTool => _currentTool;
 
     // ══ Public static members (same names as before — backward compatible) ══
@@ -568,7 +578,7 @@ public sealed class UsageTracker : IUsageTracker
     public static decimal EstimatedCost { get { lock (_costLock) { return (decimal)_totalCost; } } }
     public static string CostDisplay => $"¥{EstimatedCost:F4}";
     public static string ActiveModel => !string.IsNullOrEmpty(_activeModel) ? _activeModel : "deepseek-v4-flash";
-    public static void SetActiveModel(string model) => _activeModel = model;
+    public static void SetActiveModel(string model) => Interlocked.Exchange(ref _activeModel, model);
     public static void RecordCacheHit() => Interlocked.Increment(ref _cacheHits);
     public static void RecordCacheMiss() => Interlocked.Increment(ref _cacheMisses);
     public static long CacheHits => Interlocked.Read(ref _cacheHits);
@@ -609,19 +619,26 @@ public sealed class UsageTracker : IUsageTracker
     public static void RecordToolCall() => Interlocked.Increment(ref _toolCalls);
     public static long ToolCalls => Interlocked.Read(ref _toolCalls);
     /// <summary>设置当前正在执行的工具名（用于 TUI 动画实时显示）。</summary>
-    public static void SetActiveTool(string toolName) => _currentTool = toolName;
+    public static void SetActiveTool(string toolName) => Interlocked.Exchange(ref _currentTool, toolName);
     /// <summary>当前正在执行的工具名，空字符串表示无活跃工具。</summary>
-    public static string CurrentTool => _currentTool;
+    public static string CurrentTool => _currentTool ?? "";
+    private static readonly AsyncLocal<System.Diagnostics.Stopwatch?> _toolStopwatch = new();
+
     /// <summary>开始工具调用计时。每次调用前重置，支持重入。</summary>
     public static void StartToolTimer()
     {
-        _currentToolStopwatch.Restart();
+        _toolStopwatch.Value = System.Diagnostics.Stopwatch.StartNew();
     }
     /// <summary>停止工具调用计时并记录耗时 (ms)。</summary>
     public static void StopToolTimer()
     {
-        _currentToolStopwatch.Stop();
-        Interlocked.Exchange(ref _lastToolCallMs, _currentToolStopwatch.ElapsedMilliseconds);
+        var sw = _toolStopwatch.Value;
+        if (sw != null)
+        {
+            sw.Stop();
+            Interlocked.Exchange(ref _lastToolCallMs, sw.ElapsedMilliseconds);
+            _toolStopwatch.Value = null;
+        }
     }
     /// <summary>最近一次工具调用耗时 (ms)。</summary>
     public static long ToolCallMs => Interlocked.Read(ref _lastToolCallMs);
@@ -734,9 +751,21 @@ public sealed class UsageTracker : IUsageTracker
         if (max <= 0) return "";
         return $"{PromptTokens:N0}/{max:N0} ({(double)PromptTokens / max * 100:F1}%)";
     }
-    private static string BalanceDisplayStatic =>
-        string.IsNullOrEmpty(_balanceSource) ? "N/A"
-        : $"{_balanceCurrency}{_balance:F2} ({_balanceSource})";
+    private static string BalanceDisplayStatic
+    {
+        get
+        {
+            lock (_balanceLock)
+            {
+                return string.IsNullOrEmpty(_balanceSource) ? "N/A"
+                    : $"{_balanceCurrency}{_balance:F2} ({_balanceSource})";
+            }
+        }
+    }
+    private static void SetBalance(double bal, string currency, string source)
+    {
+        lock (_balanceLock) { _balance = bal; _balanceCurrency = currency; _balanceSource = source; }
+    }
     private static async Task FetchBalanceStaticAsync(string defaultProvider, string? apiKey)
     {
         try
@@ -759,16 +788,15 @@ public sealed class UsageTracker : IUsageTracker
                     var info = infos[0];
                     var totalStr = info.GetProperty("total_balance").GetString() ?? "0";
                     var currency = info.GetProperty("currency").GetString() ?? "CNY";
-                    _balance = double.Parse(totalStr, System.Globalization.NumberStyles.Any,
+                    var bal = double.Parse(totalStr, System.Globalization.NumberStyles.Any,
                         System.Globalization.CultureInfo.InvariantCulture);
-                    _balanceCurrency = currency == "CNY" ? "¥" : currency;
-                    _balanceSource = "DeepSeek";
+                    SetBalance(bal, currency == "CNY" ? "¥" : currency, "DeepSeek");
                 }
                 else
                 {
                     // Fallback: 旧格式
                     var bal = root.TryGetProperty("balance", out var b) ? b.GetDouble() : 0;
-                    _balance = bal; _balanceCurrency = "¥"; _balanceSource = "DeepSeek";
+                    SetBalance(bal, "¥", "DeepSeek");
                 }
             }
             else if (defaultProvider.Contains("siliconflow", StringComparison.OrdinalIgnoreCase))
@@ -780,7 +808,7 @@ public sealed class UsageTracker : IUsageTracker
                 var body = await resp.Content.ReadAsStringAsync();
                 using var json = JsonDocument.Parse(body);
                 var bal = json.RootElement.GetProperty("balance").GetDouble();
-                _balance = bal; _balanceCurrency = "¥"; _balanceSource = "SiliconFlow";
+                SetBalance(bal, "¥", "SiliconFlow");
             }
             else if (defaultProvider.Contains("openrouter", StringComparison.OrdinalIgnoreCase))
             {
@@ -791,7 +819,7 @@ public sealed class UsageTracker : IUsageTracker
                 var body = await resp.Content.ReadAsStringAsync();
                 using var json = JsonDocument.Parse(body);
                 var credits = json.RootElement.GetProperty("data").GetProperty("credits").GetDouble();
-                _balance = credits; _balanceCurrency = "$"; _balanceSource = "OpenRouter";
+                SetBalance(credits, "$", "OpenRouter");
             }
             else if (defaultProvider.Contains("zhipu", StringComparison.OrdinalIgnoreCase))
             {
@@ -802,7 +830,7 @@ public sealed class UsageTracker : IUsageTracker
                 var body = await resp.Content.ReadAsStringAsync();
                 using var json = JsonDocument.Parse(body);
                 var bal = json.RootElement.GetProperty("data").GetProperty("total_balance").GetDouble();
-                _balance = bal; _balanceCurrency = "¥"; _balanceSource = "Zhipu(GLM)";
+                SetBalance(bal, "¥", "Zhipu(GLM)");
             }
             else if (defaultProvider.Contains("aliyun", StringComparison.OrdinalIgnoreCase) ||
                      defaultProvider.Contains("dashscope", StringComparison.OrdinalIgnoreCase))
@@ -815,7 +843,7 @@ public sealed class UsageTracker : IUsageTracker
                 var body = await resp.Content.ReadAsStringAsync();
                 using var json = JsonDocument.Parse(body);
                 var bal = json.RootElement.GetProperty("available_balance").GetDouble();
-                _balance = bal; _balanceCurrency = "¥"; _balanceSource = "Aliyun(Qwen)";
+                SetBalance(bal, "¥", "Aliyun(Qwen)");
             }
             else if (defaultProvider.Contains("moonshot", StringComparison.OrdinalIgnoreCase))
             {
@@ -826,7 +854,7 @@ public sealed class UsageTracker : IUsageTracker
                 var body = await resp.Content.ReadAsStringAsync();
                 using var json = JsonDocument.Parse(body);
                 var bal = json.RootElement.GetProperty("available_balance").GetDouble();
-                _balance = bal; _balanceCurrency = "¥"; _balanceSource = "Moonshot(Kimi)";
+                SetBalance(bal, "¥", "Moonshot(Kimi)");
             }
         }
         catch { /* best-effort */ }

@@ -1,4 +1,4 @@
-// Copyright (c) LTAI. All rights reserved.
+﻿// Copyright (c) LTAI. All rights reserved.
 
 using System.Runtime.CompilerServices;
 using Microsoft.Extensions.AI;
@@ -61,7 +61,7 @@ public sealed class LocalToolExecutorAgent : DelegatingAIAgent
                                 path = args?.TryGetValue("input", out var i) == true ? i?.ToString() ?? "" : "";
 
                             // 异步执行
-                            var result = await executor(path, token);
+                            var result = await executor(path, token).ConfigureAwait(false);
 
                             // yield 结果
                             yield return new AgentResponseUpdate(ChatRole.Tool,

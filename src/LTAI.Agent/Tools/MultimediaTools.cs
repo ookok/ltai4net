@@ -1,4 +1,4 @@
-using System.ComponentModel;
+﻿using System.ComponentModel;
 using System.Text;
 using LTAI.AI;
 using SkiaSharp;
@@ -86,7 +86,7 @@ public sealed class MultimediaTools
             };
             using var data = resized.Encode(fmt, 90);
             Directory.CreateDirectory(Path.GetDirectoryName(outPath)!);
-            await File.WriteAllBytesAsync(outPath, data.ToArray());
+            await File.WriteAllBytesAsync(outPath, data.ToArray()).ConfigureAwait(false);
             return $"Resized to {width}x{height} ({FormatSize(data.Size)})";
         }
         catch (Exception ex) { return "Error: " + ex.Message; }
@@ -126,7 +126,7 @@ public sealed class MultimediaTools
                 _ => SKEncodedImageFormat.Bmp,
             };
             using var data = bitmap.Encode(skFmt, 90);
-            await File.WriteAllBytesAsync(outPath, data.ToArray());
+            await File.WriteAllBytesAsync(outPath, data.ToArray()).ConfigureAwait(false);
             return $"Converted to {ext} ({FormatSize(data.Size)})";
         }
         catch (Exception ex) { return "Error: " + ex.Message; }
@@ -148,7 +148,7 @@ public sealed class MultimediaTools
         {
             var fi = new FileInfo(fp);
             var (code, stdout, stderr) = await RunProcessAsync("ffprobe",
-                $"-v quiet -print_format json -show_format -show_streams \"{fp}\"");
+                $"-v quiet -print_format json -show_format -show_streams \"{fp}\"").ConfigureAwait(false);
             if (code != 0) return "FFprobe not available. Install FFmpeg.\n" + stderr;
 
             using var doc = System.Text.Json.JsonDocument.Parse(stdout);
@@ -198,7 +198,7 @@ public sealed class MultimediaTools
         var outPath = Path.ChangeExtension(fp, ext);
         try
         {
-            var (code, _, stderr) = await RunProcessAsync("ffmpeg", $"-i \"{fp}\" -y -vn \"{outPath}\"", 120);
+            var (code, _, stderr) = await RunProcessAsync("ffmpeg", $"-i \"{fp}\" -y -vn \"{outPath}\"", 120).ConfigureAwait(false);
             if (code != 0) return "FFmpeg failed:\n" + stderr;
 
             var fi = new FileInfo(outPath);
@@ -229,15 +229,15 @@ public sealed class MultimediaTools
                     $"$b.Save('{outPath.Replace("'", "''")}'); $g.Dispose(); $b.Dispose()";
 
                 var (code, _, _) = await RunProcessAsync("powershell",
-                    $"-NoProfile -Command \"{script}\"");
+                    $"-NoProfile -Command \"{script}\"").ConfigureAwait(false);
                 if (code != 0) return "Screenshot failed";
             }
             else
             {
-                var (c1, _, _) = await RunProcessAsync("import", $"-window root \"{outPath}\"", 10);
+                var (c1, _, _) = await RunProcessAsync("import", $"-window root \"{outPath}\"", 10).ConfigureAwait(false);
                 if (c1 != 0)
                 {
-                    var (c2, _, _) = await RunProcessAsync("scrot", $"\"{outPath}\"", 10);
+                    var (c2, _, _) = await RunProcessAsync("scrot", $"\"{outPath}\"", 10).ConfigureAwait(false);
                     if (c2 != 0) return "Screenshot failed. Install ImageMagick or scrot.";
                 }
             }
@@ -268,8 +268,8 @@ public sealed class MultimediaTools
             }
         };
         proc.Start();
-        var stdout = await proc.StandardOutput.ReadToEndAsync();
-        var stderr = await proc.StandardError.ReadToEndAsync();
+        var stdout = await proc.StandardOutput.ReadToEndAsync().ConfigureAwait(false);
+        var stderr = await proc.StandardError.ReadToEndAsync().ConfigureAwait(false);
         var ok = proc.WaitForExit(timeoutSec * 1000);
         if (!ok) { proc.Kill(entireProcessTree: true); return (-1, "", "Timed out"); }
         return (proc.ExitCode, stdout, stderr);

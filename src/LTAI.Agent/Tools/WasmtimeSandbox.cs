@@ -1,4 +1,4 @@
-// Copyright (c) LTAI. All rights reserved.
+﻿// Copyright (c) LTAI. All rights reserved.
 // ═══════════════════════════════════════════════════════════════
 //  WasmtimeSandbox — AIContextProvider for sandboxed code execution
 //
@@ -154,8 +154,8 @@ public sealed class WasmtimeSandbox : AIContextProvider
             var stdoutTask = ReadWithLimitAsync(process.StandardOutput, MaxOutputBytes, cts.Token);
             var stderrTask = ReadWithLimitAsync(process.StandardError, MaxOutputBytes, cts.Token);
 
-            var (stdout, stderr) = (await stdoutTask, await stderrTask);
-            await process.WaitForExitAsync(cts.Token);
+            var (stdout, stderr) = (await stdoutTask, await stderrTask.ConfigureAwait(false));
+            await process.WaitForExitAsync(cts.Token).ConfigureAwait(false);
 
             sw.Stop();
 
