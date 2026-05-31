@@ -337,7 +337,7 @@ partial class Program
     {
         var ver = Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "1.0.0";
         AnsiConsole.MarkupLine($"[bold]LTAI CLI[/] v{ver}");
-        AnsiConsole.MarkupLine("[grey]Agent Framework: Microsoft.Agents.AI 1.8.0[/]");
+        AnsiConsole.MarkupLine("[grey]Agent Framework: Microsoft.Agents.AI (git submodule extern/agent-framework)[/]");
         return 0;
     }
 

@@ -1,0 +1,4 @@
+[submodule "extern/agent-framework"]
+	path = extern/agent-framework
+	url = https://github.com/microsoft/agent-framework
+	branch = main

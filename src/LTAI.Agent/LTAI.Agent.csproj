@@ -11,17 +11,20 @@
     <PackageReference Include="DocumentFormat.OpenXml" Version="3.2.0" />
     <PackageReference Include="LibGit2Sharp" Version="0.31.0" />
     <PackageReference Include="Markdig" Version="1.2.0" />
-    <PackageReference Include="Microsoft.Agents.AI" Version="$(MAFVersion)" />
-    <PackageReference Include="Microsoft.Agents.AI.Abstractions" Version="$(MAFVersion)" />
-    <PackageReference Include="Microsoft.Agents.AI.Tools.Shell" Version="$(MAFPreviewVersion)" />
-    <PackageReference Include="Microsoft.Agents.AI.Workflows" Version="$(MAFVersion)" />
-    <PackageReference Include="Microsoft.Agents.AI.Hyperlight" Version="$(MAFPreviewVersion)" />
+    <ProjectReference Include="..\..\extern\agent-framework\dotnet\src\Microsoft.Agents.AI\Microsoft.Agents.AI.csproj" />
+    <ProjectReference Include="..\..\extern\agent-framework\dotnet\src\Microsoft.Agents.AI.Tools.Shell\Microsoft.Agents.AI.Tools.Shell.csproj" />
+    <ProjectReference Include="..\..\extern\agent-framework\dotnet\src\Microsoft.Agents.AI.Workflows\Microsoft.Agents.AI.Workflows.csproj" />
+    <ProjectReference Include="..\..\extern\agent-framework\dotnet\src\Microsoft.Agents.AI.Hyperlight\Microsoft.Agents.AI.Hyperlight.csproj" />
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.13.0" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Scripting" Version="4.13.0" />
     <PackageReference Include="Microsoft.Extensions.AI" Version="10.6.0" />
 
     <PackageReference Include="Serilog.AspNetCore" Version="10.0.0" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.0-preview.3.25171.6" />
-<!-- LiteDB removed — replaced by KgStore (SQLite FTS5 + CTE) -->
+    <PackageReference Include="Npgsql" Version="9.0.3" />
+    <PackageReference Include="MySqlConnector" Version="2.4.0" />
+    <PackageReference Include="Microsoft.Data.SqlClient" Version="6.0.1" />
+    <!-- LiteDB removed — replaced by KgStore (SQLite FTS5 + CTE) -->
     <PackageReference Include="SkiaSharp" Version="3.116.1" />
     <PackageReference Include="TreeSitter.DotNet" Version="1.3.0" />
     <PackageReference Include="UglyToad.PdfPig" Version="1.7.0-custom-5" />

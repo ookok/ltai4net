@@ -21,9 +21,8 @@
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.8" />
     <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.8" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.8" />
-    <PackageReference Include="Microsoft.Agents.AI" Version="$(MAFVersion)" />
-    <PackageReference Include="Microsoft.Agents.AI.Abstractions" Version="$(MAFVersion)" />
-    <PackageReference Include="Microsoft.Agents.AI.Workflows" Version="$(MAFVersion)" />
+    <ProjectReference Include="..\..\extern\agent-framework\dotnet\src\Microsoft.Agents.AI\Microsoft.Agents.AI.csproj" />
+    <ProjectReference Include="..\..\extern\agent-framework\dotnet\src\Microsoft.Agents.AI.Workflows\Microsoft.Agents.AI.Workflows.csproj" />
     <PackageReference Include="Microsoft.Extensions.AI" Version="10.6.0" />
     <PackageReference Include="DocumentFormat.OpenXml" Version="3.2.0" />
   </ItemGroup>
