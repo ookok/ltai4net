@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Text;
+using LTAI.AI;
 using Microsoft.Agents.AI.Tools.Shell;
 using Microsoft.Extensions.AI;
 
@@ -14,6 +15,7 @@ namespace LTAI.Agent.Tools;
 /// - 大输出分页
 /// - 详细错误信息
 /// </summary>
+[ToolDomain("shell")]
 public sealed class SafeShellTool
 {
     private readonly string _ws;
@@ -30,7 +32,15 @@ public sealed class SafeShellTool
         _httpFactory = httpFactory;
     }
 
-    [Description("执行 shell 命令（需要用户确认）。支持编译、运行、测试等操作。")]
+    [Description("执行 shell 命令。用于运行编译、构建、测试、文件操作等命令行任务。\n"
+        + "适用场景：编译项目(dotnet build/npm run)、运行测试(dotnet test)、执行 git 操作、安装包、运行脚本、文件操作、查看进程。\n"
+        + "不适用场景：需要交互的命令(如 vim/nano)、图形界面程序、sudo 提权操作、长时间运行的服务进程。\n"
+        + "关键参数：command — 要执行的命令；cwd — 工作目录；timeoutSec — 超时秒数。")]
+    [ToolExample("编译这个项目")]
+    [ToolExample("运行测试")]
+    [ToolExample("执行 git push")]
+    [ToolExample("安装 npm 包")]
+    [ToolExample("查看当前目录文件列表")]
     public async Task<string> RunCommand(
         [Description("要执行的 shell 命令")] string command,
         [Description("工作目录（相对于项目根，默认 .）")] string cwd = ".",
@@ -133,8 +143,11 @@ public sealed class SafeShellTool
                 }),
             };
 
-            var exited = process.WaitForExit(timeoutSec * 1000);
-            if (!exited)
+            using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSec));
+            try { await process.WaitForExitAsync(timeoutCts.Token).ConfigureAwait(false); }
+            catch (OperationCanceledException) { process.Kill(entireProcessTree: true); }
+
+            if (!process.HasExited)
             {
                 process.Kill(entireProcessTree: true);
                 return $"⏱️ 命令超时 ({timeoutSec}s)，已终止。\n"

@@ -221,7 +221,7 @@ public sealed class MultiProviderChatClient : IChatClient
                 // Success — reset failure count, update stats
                 _providerFailures.TryRemove(p, out _);
                 _providerCooldowns.TryRemove(p, out _);
-                var stats = _providerStats.GetOrAdd(p, _ => new ProviderStats());
+                var stats = _providerStats.GetOrAdd(p, static _ => new ProviderStats());
                 Interlocked.Increment(ref stats.SuccessfulCalls);
 
                 return result;
@@ -274,7 +274,7 @@ public sealed class MultiProviderChatClient : IChatClient
     private void RecordFailure(string provider)
     {
         var count = _providerFailures.AddOrUpdate(provider, 1, (_, c) => c + 1);
-        var stats = _providerStats.GetOrAdd(provider, _ => new ProviderStats());
+        var stats = _providerStats.GetOrAdd(provider, static _ => new ProviderStats());
         Interlocked.Increment(ref stats.FailedCalls);
         if (count >= MaxFailuresBeforeCooldown)
         {
@@ -341,7 +341,7 @@ public sealed class MultiProviderChatClient : IChatClient
     /// </summary>
     private double CalcHealthScore(string provider, DateTime now)
     {
-        var stats = _providerStats.GetOrAdd(provider, _ => new ProviderStats());
+        var stats = _providerStats.GetOrAdd(provider, static _ => new ProviderStats());
         var successRate = stats.TotalAttempts > 0
             ? (double)stats.SuccessfulCalls / stats.TotalAttempts
             : 0.8; // 新提供商初始评分 0.8
@@ -878,7 +878,7 @@ public static class ServiceCollectionExtensions
             var httpFactory = sp.GetRequiredService<IHttpClientFactory>();
             var safetyKey = LTAI.Core.Configuration.SecretManager.Get(opts.AI.ApiKeyEnv ?? "DEEPSEEK_API_KEY") ?? "";
             IChatClient safetyClient = new OpenAiHttpClient(
-                httpFactory.CreateClient(), "https://api.deepseek.com/v1", "deepseek-chat", safetyKey);
+                httpFactory.CreateClient("safety"), "https://api.deepseek.com/v1", "deepseek-chat", safetyKey);
 
             return new LTAI.Core.Safety.SafeChatClient(router, safetyClient, logger);
         });

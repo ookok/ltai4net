@@ -1,15 +1,22 @@
 using System.ComponentModel;
 using System.Text;
+using LTAI.AI;
 using SkiaSharp;
 
 namespace LTAI.Agent.Tools;
 
+[ToolDomain("multimedia")]
 public sealed class MultimediaTools
 {
     private readonly string _ws;
     public MultimediaTools(string ws) => _ws = ws;
 
-    [Description("Get image information: dimensions, format, file size")]
+    [Description("获取图片信息：尺寸、格式、文件大小、色彩类型。支持 JPG/PNG/WebP/BMP 等格式。\n"
+        + "适用场景：查看图片分辨率、确认图片格式、检查文件大小。\n"
+        + "不适用场景：修改图片（请用 ImageResize/ImageConvert）、获取音频/视频信息（请用 MediaInfo）。\n"
+        + "关键参数：path — 图片文件路径。")]
+    [ToolExample("看看这张图片的分辨率")]
+    [ToolExample("这个图片是什么格式的")]
     public async Task<string> ImageInfo([Description("Path to image file")] string path)
     {
         var fp = ResolvePath(path);
@@ -39,7 +46,12 @@ public sealed class MultimediaTools
         catch (Exception ex) { return "Error: " + ex.Message; }
     }
 
-    [Description("Resize an image to specified dimensions")]
+    [Description("调整图片尺寸到指定宽高像素。保持或改变宽高比。\n"
+        + "适用场景：压缩大图片、生成缩略图、统一图片尺寸。\n"
+        + "不适用场景：转换图片格式（请用 ImageConvert）、裁剪图片（请用其他工具）。\n"
+        + "关键参数：path — 图片路径；width/height — 目标宽高像素；output — 输出路径。")]
+    [ToolExample("把这个图片缩小到 800x600")]
+    [ToolExample("生成一个缩略图")]
     public async Task<string> ImageResize(
         [Description("Path to image file")] string path,
         [Description("Width in pixels")] int width,
@@ -80,7 +92,12 @@ public sealed class MultimediaTools
         catch (Exception ex) { return "Error: " + ex.Message; }
     }
 
-    [Description("Convert image between formats (PNG, JPEG, WebP, BMP)")]
+    [Description("转换图片格式。支持 PNG/JPEG/WebP/BMP 之间的互转。\n"
+        + "适用场景：将 PNG 转为 JPG 减小体积、转换 WebP 为通用格式。\n"
+        + "不适用场景：调整图片尺寸（请用 ImageResize）、获取图片信息（请用 ImageInfo）。\n"
+        + "关键参数：path — 源图片路径；format — 目标格式(png/jpg/webp/bmp)。")]
+    [ToolExample("把这个 png 转成 jpg")]
+    [ToolExample("转换为 WebP 格式")]
     public async Task<string> ImageConvert(
         [Description("Source path")] string path,
         [Description("Target: png, jpg, webp, bmp")] string format)
@@ -115,7 +132,12 @@ public sealed class MultimediaTools
         catch (Exception ex) { return "Error: " + ex.Message; }
     }
 
-    [Description("Get audio/video file information using FFprobe")]
+    [Description("获取音视频文件信息：格式、时长、码率、编码、分辨率。需要 FFprobe。\n"
+        + "适用场景：查看视频分辨率、检查音频采样率、确认媒体文件格式和时长。\n"
+        + "不适用场景：转换音频格式（请用 AudioConvert）、获取图片信息（请用 ImageInfo）。\n"
+        + "关键参数：path — 媒体文件路径。")]
+    [ToolExample("这个视频的分辨率是多少")]
+    [ToolExample("看看这个音频文件的格式")]
     public async Task<string> MediaInfo([Description("Path to media file")] string path)
     {
         var fp = ResolvePath(path);
@@ -155,7 +177,12 @@ public sealed class MultimediaTools
         catch (Exception ex) { return "Error: " + ex.Message + ". Install FFmpeg."; }
     }
 
-    [Description("Convert audio file format using FFmpeg")]
+    [Description("转换音频文件格式。支持 MP3/WAV/OGG/FLAC/AAC。需要 FFmpeg。\n"
+        + "适用场景：将音频转为 MP3 格式、转为 WAV 便于编辑。\n"
+        + "不适用场景：获取音频信息（请用 MediaInfo）、处理图片（请用 ImageConvert/ImageResize）。\n"
+        + "关键参数：path — 源音频路径；format — 目标格式(mp3/wav/ogg/flac/aac)。")]
+    [ToolExample("把这个音频转成 mp3")]
+    [ToolExample("转换为 WAV 格式")]
     public async Task<string> AudioConvert(
         [Description("Source path")] string path,
         [Description("Target: mp3, wav, ogg, flac, aac")] string format)
@@ -180,7 +207,11 @@ public sealed class MultimediaTools
         catch (Exception ex) { return "Error: " + ex.Message; }
     }
 
-    [Description("Capture a screenshot")]
+    [Description("截取屏幕截图。支持 Windows(powershell) 和 Linux(import/scrot)。\n"
+        + "适用场景：获取当前屏幕内容、保存错误界面截图、分享桌面状态。\n"
+        + "不适用场景：录制屏幕视频、截取特定窗口（仅支持全屏截图）。\n"
+        + "关键参数：output — 输出路径，默认 screenshot.png。")]
+    [ToolExample("截个屏")]
     public async Task<string> Screenshot([Description("Output path")] string? output = null)
     {
         var outPath = output != null ? ResolvePath(output) : Path.Combine(_ws, "screenshot.png");

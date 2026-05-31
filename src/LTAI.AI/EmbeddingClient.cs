@@ -6,10 +6,11 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace LTAI.AI;
 
 /// <summary>
-/// Embedding client using OpenAI-compatible /v1/embeddings API.
-/// Uses the same provider chain as MultiProviderChatClient.
-/// Supports: OpenAI, DeepSeek, SiliconFlow, DashScope, etc.
-/// Zero local model dependency.
+/// Embedding client with three-tier priority:
+///   1. Local ONNX (all-MiniLM-L6-v2, 384d, ~50ms, zero API key)
+///   2. Remote API providers (OpenAI / DeepSeek / SiliconFlow / DashScope)
+///   3. BM25 heuristic fallback (FastEmb, word-level sparse)
+/// Local ONNX is the primary path when the model file is present.
 /// </summary>
 public sealed class EmbeddingClient : IDisposable
 {
@@ -60,6 +61,18 @@ public sealed class EmbeddingClient : IDisposable
     /// <summary>Generate embeddings for multiple texts (batched).</summary>
     public async Task<float[][]> GenerateBatchAsync(string[] texts, CancellationToken ct = default)
     {
+        // Priority 1: Local ONNX (fast, local, zero API dependency)
+        // all-MiniLM-L6-v2 ~384d, 50ms per call, always available when model file present.
+        if (_local?.Available == true)
+        {
+            Dimension = _local.Dim;
+            _logger.LogDebug("Embedding via local ONNX: {Count} texts", texts.Length);
+            if (texts.Length > 20)
+                return await Task.WhenAll(texts.Select(t => Task.Run(() => _local.Generate(t), ct)));
+            return texts.Select(t => _local.Generate(t)).ToArray();
+        }
+
+        // Priority 2: Remote API providers (needs valid API key)
         foreach (var (name, endpoint, model, dim, apiKey) in _availableProviders)
         {
             try
@@ -79,15 +92,8 @@ public sealed class EmbeddingClient : IDisposable
             }
         }
 
-        // Fallback 1: Local ONNX BGE (512d, no API key needed)
-        if (_local?.Available == true)
-        {
-            Dimension = _local.Dim;
-            _logger.LogDebug("Embedding via local BGE: {Count} texts", texts.Length);
-            return texts.Select(t => _local.Generate(t)).ToArray();
-        }
-
-        _logger.LogWarning("No embedding API available, using n-gram fallback");
+        // Priority 3: BM25 fallback (word-level sparse, zero deps)
+        _logger.LogWarning("No embedding models available, using BM25 fallback");
         return texts.Select(FastEmb).ToArray();
     }
 
@@ -121,6 +127,23 @@ public sealed class EmbeddingClient : IDisposable
 
         return new EmbeddingResult(embeddings, dim);
     }
+
+    private static readonly HashSet<string> Stopwords = new()
+    {
+        "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
+        "have", "has", "had", "do", "does", "did", "will", "would", "could", "should",
+        "may", "might", "shall", "can", "need", "to", "of", "in", "for", "on",
+        "with", "at", "by", "from", "as", "into", "through", "during", "before", "after",
+        "above", "below", "between", "out", "off", "over", "under", "again", "further",
+        "then", "once", "here", "there", "when", "where", "why", "how", "all", "each",
+        "every", "both", "few", "more", "most", "other", "some", "such", "no", "nor",
+        "not", "only", "own", "same", "so", "than", "too", "very", "just",
+        "this", "that", "these", "those", "what", "which", "who", "whom", "and", "but",
+        "or", "if", "while", "about", "up",
+        "的", "了", "在", "是", "我", "有", "和", "就", "不", "人", "都", "一",
+        "一个", "上", "也", "很", "到", "说", "要", "去", "你", "会", "着",
+        "没有", "看", "好", "自己", "这", "他", "她", "它", "们", "那", "些",
+    };
 
     /// <summary>
     /// BM25 fallback — word-level sparse retrieval, zero dependencies.
@@ -164,23 +187,11 @@ public sealed class EmbeddingClient : IDisposable
         //   - Normal words → medium IDF (~1.5)
         //   - Long/rare words → high IDF (~2.5)
         //   - Numbers → low IDF
-        var stopwords = new HashSet<string> { "the", "a", "an", "is", "are", "was", "were", "be", "been",
-            "being", "have", "has", "had", "do", "does", "did", "will", "would", "could", "should",
-            "may", "might", "shall", "can", "need", "dare", "ought", "used", "to", "of", "in", "for",
-            "on", "with", "at", "by", "from", "as", "into", "through", "during", "before", "after",
-            "above", "below", "between", "out", "off", "over", "under", "again", "further", "then",
-            "once", "here", "there", "when", "where", "why", "how", "all", "each", "every", "both",
-            "few", "more", "most", "other", "some", "such", "no", "nor", "not", "only", "own", "same",
-            "so", "than", "too", "very", "just", "it", "its", "this", "that", "these", "those",
-            "i", "me", "my", "myself", "we", "our", "ours", "ourselves", "you", "your", "yours",
-            "he", "him", "his", "she", "her", "hers", "they", "them", "their", "theirs", "what",
-            "which", "who", "whom", "and", "but", "or", "if", "while", "about", "up" };
-
         foreach (var (term, tf) in tfs)
         {
             // Pseudo-IDF heuristic
             float idf;
-            if (stopwords.Contains(term))
+            if (Stopwords.Contains(term))
                 idf = 0.3f;                         // stopwords
             else if (term.Length == 1 && char.IsDigit(term[0]))
                 idf = 0.5f;                         // single digit
@@ -197,7 +208,7 @@ public sealed class EmbeddingClient : IDisposable
             float score = idf * (tf * (k1 + 1)) / (tf + k1 * (1 - b + b * docLen / avgDocLen));
 
             // Hash term to dimension(s) using 3 seeds
-            int h = term.GetHashCode();
+            var h = (int)StableHash(term);
             foreach (int s in new[] { 17, 31, 97 })
             {
                 var idx = Math.Abs(HashMix(h, s) % dimensions);
@@ -208,7 +219,7 @@ public sealed class EmbeddingClient : IDisposable
             if (term.Length >= 3)
             {
                 var prefix = term[..3];
-                int ph = prefix.GetHashCode();
+                var ph = (int)StableHash(prefix);
                 foreach (int s in new[] { 17, 31 })
                 {
                     var idx = Math.Abs(HashMix(ph, s) % dimensions);
@@ -226,6 +237,17 @@ public sealed class EmbeddingClient : IDisposable
             for (int i = 0; i < dimensions; i++) emb[i] /= norm;
 
         return emb;
+    }
+
+    private static uint StableHash(string s)
+    {
+        uint hash = 2166136261;
+        foreach (char c in s)
+        {
+            hash ^= c;
+            hash *= 16777619;
+        }
+        return hash;
     }
 
     private static int HashMix(int value, int seed)

@@ -3,27 +3,44 @@ using System.Diagnostics;
 using System.Text.Json;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
+using LTAI.AI;
 
 namespace LTAI.Agent.Tools;
 
-/// <summary>
-/// Subagent tools with: budget tracking, tool restriction, structured returns.
-/// Ported from DeepSeek-Reasonix subagent.ts patterns.
-/// </summary>
+[ToolDomain("subagent")]
 public sealed class SubagentTools
 {
     private readonly IServiceProvider _sp;
     private readonly IChatClient _llm;
     private readonly string _ws;
+    private readonly IReadOnlyList<AITool> _allTools;
 
-    // Session-level budget tracking
     private int _spawnCount;
     private int _totalTurns;
     private readonly object _budgetLock = new();
 
-    // Hard limits
     private const int MaxSpawns = 10;
     private const int TotalTurnLimit = 50;
+
+    // Read-only tool name prefixes (for explore/review/security_review)
+    private static readonly HashSet<string> ReadOnlyPrefixes =
+    [
+        "Read", "Search", "Glob", "List", "Get",
+        "DirectoryTree", "Fetch", "Find", "Lookup",
+        "Ping", "Dns", "Check", "Whois", "HttpCheck",
+        "Network", "SystemInfo", "ListProcesses", "GetEnv",
+    ];
+
+    // Tools explicitly denied for ALL subagents (prevent recursion + dangerous ops)
+    private static readonly HashSet<string> DeniedTools =
+    [
+        "SpawnSubagent", "spawn_subagent",
+        "WriteFile", "EditFile", "MultiEdit", "DeleteFile",
+        "MoveFile", "CopyFile",
+        "GitCommit", "GitPush", "GitCommitAndPush",
+        "RunCommand", "SafeShell",
+        "RunInContainer", "RunWithNetwork",
+    ];
 
     private static readonly string SubagentBaseSystem = """
         You are an LTAI subagent. The parent agent spawned you for one focused subtask.
@@ -32,49 +49,68 @@ public sealed class SubagentTools
         - Stay on task. Do not expand scope.
         - Your final message is all the parent sees. Make it complete and self-contained.
         - No follow-up offers, no "let me know if you need more."
-        - Prefer a clear, distilled answer over a long log.
         - Do NOT call spawn_subagent (you are already a subagent — that would create a recursive loop).
         """;
 
-    // Subagent types that restrict to read-only tools
     private static readonly HashSet<string> ReadOnlyTypes = ["explore", "review", "security_review"];
 
-    public SubagentTools(IServiceProvider sp, IChatClient llm, string ws)
+    public SubagentTools(IServiceProvider sp, IChatClient llm, string ws, IReadOnlyList<AITool>? allTools = null)
     {
         _sp = sp;
         _llm = llm;
         _ws = ws;
+        _allTools = allTools ?? [];
     }
 
-    [Description("Explore codebase: wide-net read-only investigation, returns a distilled conclusion")]
+    [Description("在独立的子 Agent 中探索代码库：只读式广域网调查，返回精炼结论。\n"
+        + "适用场景：跨多个文件调查代码结构、搜索项目中某个功能的所有实现位置。\n"
+        + "不适用场景：需要修改代码（只读）、需要结合网络搜索（请用 Research）。\n"
+        + "关键参数：task — 具体的调查问题。")]
+    [ToolExample("调查这个项目中哪些地方用到了 HttpClient")]
     public Task<string> Explore(
         [Description("Concrete investigation question")] string task,
         string? traceId = null,
         CancellationToken ct = default)
         => SpawnAsync(task, "explore", traceId: traceId, ct: ct);
 
-    [Description("Research: combine web search with code reading, returns synthesis")]
+    [Description("结合代码阅读与网络搜索在子 Agent 中进行调研，返回综合分析结果。\n"
+        + "适用场景：需要查资料才能回答的问题、技术选型调研、了解某个库的用法。\n"
+        + "不适用场景：只需代码调查（请用 Explore）、只需代码审查（请用 Review）。\n"
+        + "关键参数：task — 需要调研的问题描述。")]
+    [ToolExample("调研一下 .NET 10 的新特性")]
     public Task<string> Research(
         [Description("Research question requiring web + code")] string task,
         string? traceId = null,
         CancellationToken ct = default)
         => SpawnAsync(task, "research", traceId: traceId, ct: ct);
 
-    [Description("Review code changes: flags correctness/security/missing-tests")]
+    [Description("在子 Agent 中审查代码变更：标记正确性、安全性、缺失测试、隐藏行为变更。\n"
+        + "适用场景：提交代码前审查 diff、检查 PR 的潜在问题、代码质量审计。\n"
+        + "不适用场景：安全专项审查（请用 SecurityReview）。\n"
+        + "关键参数：task — 审查重点或 'general'。")]
+    [ToolExample("审查我当前的代码变更")]
     public Task<string> Review(
         [Description("Focus area or 'general'")] string task,
         string? traceId = null,
         CancellationToken ct = default)
         => SpawnAsync(task, "review", traceId: traceId, ct: ct);
 
-    [Description("Security review: injection/auth/secrets/deserialization")]
+    [Description("在子 Agent 中进行安全专项审查：注入/认证/密钥/反序列化/路径穿越/加密问题。\n"
+        + "适用场景：需要出安全的代码变更提交前审查、发现潜在安全漏洞。\n"
+        + "不适用场景：常规代码审查（请用 Review）。\n"
+        + "关键参数：task — 审查范围或 'full'。")]
+    [ToolExample("安全审查这次提交的变更")]
     public Task<string> SecurityReview(
         [Description("Scope hint or 'full'")] string task,
         string? traceId = null,
         CancellationToken ct = default)
         => SpawnAsync(task, "security_review", traceId: traceId, ct: ct);
 
-    [Description("Spawn an isolated subagent. Each spawn pays a prefix-cache miss + full child loop — prefer direct tools.")]
+    [Description("启动一个隔离的子 Agent 执行独立任务。每次生成会支付 prefix-cache miss + 完整子循环——优先使用直接工具。\n"
+        + "适用场景：需要并行执行独立调查、任务需要隔离环境、长文本分析。\n"
+        + "不适用场景：简单的单步操作（请用直接工具更高效）。\n"
+        + "关键参数：task — 子 Agent 要执行的任务描述。")]
+    [ToolExample("另起一个子任务来分析这个日志文件")]
     public Task<string> SpawnSubagent(
         [Description("The subtask to perform")] string task,
         [Description("Optional type: explore, research, review, security_review")] string? type = null,
@@ -86,7 +122,6 @@ public sealed class SubagentTools
     private async Task<string> SpawnAsync(string task, string? type, string? systemOverride = null,
         string? traceId = null, CancellationToken ct = default)
     {
-        // ── Budget check ──
         string? budgetHint;
         lock (_budgetLock)
         {
@@ -108,17 +143,25 @@ public sealed class SubagentTools
         if (isReadOnly)
             systemPrompt += "\n\nIMPORTANT: You are in read-only mode. Use only read_file, search_content, directory_tree, list_files, glob. Do NOT write/edit/delete any files.";
 
+        var subTools = FilterTools(isReadOnly);
+        var chatOptions = new ChatOptions
+        {
+            Temperature = 0.3f,
+            MaxOutputTokens = 4096,
+            Tools = subTools.Count > 0 ? subTools : null,
+        };
+
         try
         {
             var agent = new ChatClientAgent(_llm, new ChatClientAgentOptions
             {
                 Name = $"subagent-{_spawnCount}",
                 Description = systemPrompt,
-                ChatOptions = new ChatOptions { Temperature = 0.3f, MaxOutputTokens = 4096 },
+                ChatOptions = chatOptions,
                 ChatHistoryProvider = new InMemoryChatHistoryProvider(),
             }, null, _sp);
 
-            ct.ThrowIfCancellationRequested(); // parent abort check
+            ct.ThrowIfCancellationRequested();
             var session = await agent.CreateSessionAsync(ct);
             ct.ThrowIfCancellationRequested();
             var response = await agent.RunAsync([new ChatMessage(ChatRole.User, task)], session, cancellationToken: ct);
@@ -144,6 +187,19 @@ public sealed class SubagentTools
         {
             return ToolResult.FromException(ex, "Subagent failed");
         }
+    }
+
+    private List<AITool> FilterTools(bool readOnly)
+    {
+        return _allTools.Where(t =>
+        {
+            var name = t.Name ?? "";
+            if (DeniedTools.Any(d => name.Equals(d, StringComparison.OrdinalIgnoreCase)))
+                return false;
+            if (readOnly && !ReadOnlyPrefixes.Any(p => name.StartsWith(p, StringComparison.OrdinalIgnoreCase)))
+                return false;
+            return true;
+        }).ToList();
     }
 
     private string? GetBudgetHint()

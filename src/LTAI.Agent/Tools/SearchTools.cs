@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.ComponentModel;
 using System.Text.RegularExpressions;
+using LTAI.AI;
 
 namespace LTAI.Agent.Tools;
 
@@ -8,6 +9,7 @@ namespace LTAI.Agent.Tools;
 /// Content search tools: grep-style search with context lines.
 /// Parallel file scanning for large codebases.
 /// </summary>
+[ToolDomain("core")]
 public sealed class SearchTools
 {
     private readonly string _ws;
@@ -20,7 +22,13 @@ public sealed class SearchTools
 
     public SearchTools(string ws) => _ws = ws;
 
-    [Description("Recursively search file contents for a pattern (grep). 路径越界需用户确认。")]
+    [Description("递归搜索文件内容（grep 风格）。支持子串/正则匹配、上下文行显示、文件类型过滤。\n"
+        + "适用场景：查找某个函数或变量的所有引用位置、搜索日志中的特定错误模式、统计代码中某个模式的出现次数。\n"
+        + "不适用场景：查找文件名（请用 SearchFiles）、目录遍历浏览（请用 DirectoryTree）。\n"
+        + "关键参数：pattern — 搜索模式（子串或正则）；glob — 文件类型过滤如 *.cs *.md；context — 上下文行数。")]
+    [ToolExample("搜索所有用到 HttpClient 的地方")]
+    [ToolExample("查找日志里的 ERROR 关键字")]
+    [ToolExample("搜一下哪个文件定义了这个类")]
     public async Task<string> SearchContent(
         [Description("Search pattern (substring or regex)")] string pattern,
         [Description("File glob pattern like '*.cs', '*.md'")] string glob = "*",
@@ -100,7 +108,12 @@ public sealed class SearchTools
         return $"Found {totalMatches} matches in {fileCount} files:\n{sb}";
     }
 
-    [Description("Search for files by name pattern (parallel)")]
+    [Description("按文件名搜索文件。支持子串匹配，自动排除 git/node_modules 等目录。\n"
+        + "适用场景：根据文件名找文件、搜索所有 .cs 文件、找配置文件。\n"
+        + "不适用场景：搜索文件内容（请用 SearchContent）、按 glob 模式搜索（请用 Glob）。\n"
+        + "关键参数：pattern — 文件名子串或正则；includeDeps — 是否包含依赖目录。")]
+    [ToolExample("找一下这个项目的配置文件在哪")]
+    [ToolExample("搜索所有测试文件")]
     public string[] SearchFiles(
         [Description("Filename substring or regex pattern")] string pattern,
         [Description("Include dependency dirs (.git, node_modules)")] bool includeDeps = false)

@@ -34,13 +34,17 @@ public static class PathUtils
                 return null;
 
             // Check for symlinks that could escape the sandbox
-            var fileTarget = File.ResolveLinkTarget(fp, true);
-            if (fileTarget != null && !fileTarget.FullName.StartsWith(normalizedWs, StringComparison.OrdinalIgnoreCase))
-                return null; // Symlink points outside workspace — reject
+            // Only check existing files — non-existent paths are not symlinks
+            if (File.Exists(fp) || Directory.Exists(fp))
+            {
+                var fileTarget = File.ResolveLinkTarget(fp, true);
+                if (fileTarget != null && !fileTarget.FullName.StartsWith(normalizedWs, StringComparison.OrdinalIgnoreCase))
+                    return null; // Symlink points outside workspace — reject
 
-            var dirTarget = Directory.ResolveLinkTarget(fp, true);
-            if (dirTarget != null && !dirTarget.FullName.StartsWith(normalizedWs, StringComparison.OrdinalIgnoreCase))
-                return null; // Symlink points outside workspace — reject
+                var dirTarget = Directory.ResolveLinkTarget(fp, true);
+                if (dirTarget != null && !dirTarget.FullName.StartsWith(normalizedWs, StringComparison.OrdinalIgnoreCase))
+                    return null; // Symlink points outside workspace — reject
+            }
 
             return fp;
         }
@@ -51,6 +55,10 @@ public static class PathUtils
         catch (ArgumentException)
         {
             return null; // Invalid characters in path
+        }
+        catch (System.IO.IOException)
+        {
+            return null; // Symlink resolution or file not found (ResolveLinkTarget throws)
         }
     }
 

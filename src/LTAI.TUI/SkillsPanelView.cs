@@ -37,13 +37,11 @@ public static class SkillsPanelView
         table.AddColumn("状态");
         table.AddColumn("上次使用");
 
-        foreach (var subDir in Directory.GetDirectories(_skillsDir).OrderBy(Path.GetFileName))
+        var allMds = Directory.GetFiles(_skillsDir, "SKILL.md", SearchOption.AllDirectories).OrderBy(Path.GetFileName);
+        foreach (var md in allMds)
         {
-            var md = Path.Combine(subDir, "SKILL.md");
-            if (!File.Exists(md)) continue;
-
             var desc = GetDescription(md);
-            var name = Path.GetFileName(subDir);
+            var name = Path.GetFileName(Path.GetDirectoryName(md)!)!;
             var lastUsed = usage.TryGetValue(name, out var dt) ? dt : (DateTime?)null;
             var expired = lastUsed.HasValue && (DateTime.UtcNow - lastUsed.Value) > _ttl;
             var neverUsed = !lastUsed.HasValue;

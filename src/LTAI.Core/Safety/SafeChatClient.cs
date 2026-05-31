@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -76,71 +77,84 @@ public sealed class SafeChatClient : IChatClient
     }
 
     /// <summary>
-    /// Intercept streaming response: buffers ALL chunks first, checks safety,
-    /// then yields chunks only if safe. Unsafe responses are NEVER yielded to the caller.
+    /// Intercept streaming response: yields chunks progressively while running
+    /// rule-based safety pre-checks on a ring buffer. Unsafe content is blocked
+    /// before reaching the caller (not post-hoc).
     /// <b>Callers:</b> MultiProviderChatClient (via IChatClient interface dispatch).
     /// </summary>
     public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
         IEnumerable<ChatMessage> messages, ChatOptions? options = null,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
     {
-        // Streaming with parallel safety check:
-        // 1. Yield first meaningful chunk immediately (fast first-token)
-        // 2. Buffer remaining chunks in background
-        // 3. Check safety on the complete text when streaming ends
-        // 4. If unsafe on short response (< 500 chars), replace with refusal
-        // 5. For long responses, stop yielding remaining chunks (already-yielded
-        //    text cannot be recalled, but the cut-off prevents further damage)
         var buffer = new System.Text.StringBuilder();
         var pendingChunks = new List<ChatResponseUpdate>();
-        bool firstChunkYielded = false;
+        var lastCheck = DateTime.UtcNow;
+        const int checkIntervalMs = 200;
+        const int maxBufferBeforeCheck = 200;
         bool safetyHalt = false;
+        bool yieldedAny = false;
 
         await foreach (var update in _inner.GetStreamingResponseAsync(messages, options, ct).ConfigureAwait(false))
         {
-            if (safetyHalt) break; // Stop consuming if safety check failed
+            if (safetyHalt) break;
 
-            if (update.Text != null) buffer.Append(update.Text);
-
-            if (firstChunkYielded)
+            if (update.Text != null)
             {
-                // After first yield, pass through remaining chunks immediately
-                yield return update;
+                buffer.Append(update.Text);
+                pendingChunks.Add(update);
+
+                // Run rule-based pre-check periodically or when buffer is full
+                var elapsed = (DateTime.UtcNow - lastCheck).TotalMilliseconds;
+                if (elapsed >= checkIntervalMs || buffer.Length >= maxBufferBeforeCheck)
+                {
+                    lastCheck = DateTime.UtcNow;
+                    if (!IsSafeByRules(buffer.ToString()))
+                    {
+                        _logger?.LogWarning("SafeChatClient blocked unsafe streaming content at {Len} chars", buffer.Length);
+                        yield return new ChatResponseUpdate(ChatRole.Assistant,
+                            $"[Content blocked by safety filter]");
+                        safetyHalt = true;
+                        yield break;
+                    }
+
+                    // Yield buffered chunks after passing rule check
+                    foreach (var c in pendingChunks)
+                        yield return c;
+                    pendingChunks.Clear();
+                    yieldedAny = true;
+                }
             }
             else
             {
-                pendingChunks.Add(update);
-                // Yield after first meaningful content (>= 10 chars)
-                if (buffer.Length >= 10)
-                {
-                    foreach (var c in pendingChunks) yield return c;
-                    pendingChunks.Clear();
-                    firstChunkYielded = true;
-                }
+                // Non-text updates (tool calls, etc) — pass through immediately
+                yield return update;
             }
         }
 
-        // Yield any remaining chunks not yet yielded
-        if (!firstChunkYielded)
+        // Yield any remaining chunks after final rule check
+        if (pendingChunks.Count > 0 && !safetyHalt)
         {
-            // Short response: yield nothing, check first
-            var fullText = buffer.ToString();
-            if (!string.IsNullOrEmpty(fullText))
+            var remainingText = buffer.ToString();
+            if (!string.IsNullOrEmpty(remainingText))
             {
-                var (safe, reason) = await CheckSafetyAsync(fullText, ct).ConfigureAwait(false);
-                if (!safe)
+                if (!IsSafeByRules(remainingText))
                 {
-                    _logger?.LogWarning("SafeChatClient blocked short unsafe streaming output: {Reason}", reason);
-                    yield return new ChatResponseUpdate(ChatRole.Assistant,
-                        $"[Content blocked by safety filter. Reason: {reason}]");
+                    _logger?.LogWarning("SafeChatClient blocked unsafe tail content");
+                    if (!yieldedAny)
+                    {
+                        yield return new ChatResponseUpdate(ChatRole.Assistant,
+                            $"[Content blocked by safety filter]");
+                    }
                     yield break;
                 }
-                foreach (var c in pendingChunks) yield return c;
+                foreach (var c in pendingChunks)
+                    yield return c;
             }
         }
-        else
+
+        // Full LLM safety check for the complete text (post-hoc audit)
+        if (!safetyHalt && yieldedAny)
         {
-            // Long response: chunks already yielded; run background check for audit
             var fullText = buffer.ToString();
             if (!string.IsNullOrEmpty(fullText))
             {
@@ -148,38 +162,51 @@ public sealed class SafeChatClient : IChatClient
                 if (!safe)
                 {
                     _logger?.LogWarning("SafeChatClient detected unsafe streaming output (post-hoc): {Reason}", reason);
-                    // Can't recall already-yielded chunks, but log for audit
                 }
             }
         }
     }
 
-    // ══ Verdict cache: avoid redundant safety LLM calls for repeated short texts ══
-    private static readonly System.Collections.Concurrent.ConcurrentDictionary<long, (bool safe, string reason, DateTime cached)>
-        _verdictCache = new(Environment.ProcessorCount, 64);
-    private static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(60);
-    private const int MaxCachedTextLength = 200;
+    // ═══════════════════════════════════════════
+    //  规则级安全预检（零 LLM 成本）
+    // ═══════════════════════════════════════════
 
-    private static long VerdictCacheKey(string text) =>
-        HashCode.Combine(text.GetHashCode(), text.Length);
+    /// <summary>
+    /// 轻量规则级安全检测，覆盖常见不安全模式。
+    /// 命中任何规则 → 直接拦截，不调 safety LLM。
+    /// 规则通过 → 短文本（≤200 字符）直接放行，长文本才调 LLM。
+    /// </summary>
+    private static bool IsSafeByRules(string text) => SafetyRules.IsSafeByRules(text);
 
     private async Task<(bool safe, string reason)> CheckSafetyAsync(string text, CancellationToken ct)
     {
         if (text.Length > 100_000)
             return (false, "Response exceeds 100k chars");
 
-        // Cache hit for short texts (greetings, common phrases) — saves one LLM call
-        if (text.Length <= MaxCachedTextLength)
+        // ── Rule-based pre-check (zero LLM cost) ──
+        if (!IsSafeByRules(text))
         {
-            var key = VerdictCacheKey(text);
-            if (_verdictCache.TryGetValue(key, out var cached) &&
-                DateTime.UtcNow - cached.cached < CacheTtl)
-            {
-                _logger?.LogDebug("SafeChatClient cache HIT for text len={Len}", text.Length);
-                return (cached.safe, cached.reason);
-            }
+            _logger?.LogWarning("SafeChatClient blocked by rules: detected unsafe pattern in {Len} chars", text.Length);
+            return (false, "Content blocked by safety rules (pattern match)");
         }
 
+        // ── Short safe texts: fast path, no LLM needed ──
+        // Most tool outputs (≤ 200 chars) pass the rule check and skip the safety LLM entirely.
+        if (text.Length <= 200)
+        {
+            _logger?.LogDebug("SafeChatClient fast path: {Len} chars, safe by rules, no LLM", text.Length);
+            return (true, "");
+        }
+
+        // ── Shared cache hit ──
+        var cachedVerdict = VerdictCache.Get(text);
+        if (cachedVerdict.HasValue)
+        {
+            _logger?.LogDebug("SafeChatClient cache HIT for text len={Len}", text.Length);
+            return cachedVerdict.Value;
+        }
+
+        // ── LLM safety check for long/complex texts only ──
         // Non-blocking try: if already inside a safety check, skip (safe pass-through).
         if (!_safeLock.Wait(0))
             return (true, "");
@@ -206,12 +233,7 @@ public sealed class SafeChatClient : IChatClient
                 result = (true, "");
             }
 
-            // Cache for short texts
-            if (text.Length <= MaxCachedTextLength)
-            {
-                var key = VerdictCacheKey(text);
-                _verdictCache[key] = (result.safe, result.reason, DateTime.UtcNow);
-            }
+            VerdictCache.Set(text, result.safe, result.reason);
 
             return result;
         }

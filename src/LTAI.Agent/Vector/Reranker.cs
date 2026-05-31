@@ -112,7 +112,16 @@ public sealed class Reranker
             ], cancellationToken: ct);
 
             var text = response.Text?.Trim() ?? "";
-            var scores = JsonSerializer.Deserialize<List<double>>(text);
+            List<double>? scores;
+            try
+            {
+                scores = JsonSerializer.Deserialize<List<double>>(text);
+            }
+            catch (JsonException ex)
+            {
+                _logger.LogWarning(ex, "Reranker: LLM returned invalid JSON scores");
+                scores = null;
+            }
 
             if (scores != null && scores.Count == candidates.Count)
             {

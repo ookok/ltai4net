@@ -22,6 +22,7 @@ public partial class MainWindow : Window
     private readonly Grid _grid;
     private readonly TextBlock _statusBar;
     private readonly DispatcherTimer _statusTimer;
+    private readonly SessionStatsPanel _statsPanel;
 
     private sealed record ViewEntry(string Name, string Shortcut, Control View);
     private readonly List<ViewEntry> _views;
@@ -38,10 +39,13 @@ public partial class MainWindow : Window
         if (File.Exists(iconPath))
             Icon = new WindowIcon(iconPath);
 
+        var sessionManager = new SessionManager();
+        var chatView = new ChatView(svc, sessionManager);
+
         _views = new List<ViewEntry>
         {
             new("仪表盘", "1", new DashboardView(svc)),
-            new("聊天",    "2", new ChatView(svc)),
+            new("聊天",    "2", chatView),
             new("代码",    "3", new TextPadView(svc.Options.ResolveDataPath("../.."))),
             new("技能",    "4", new SkillsView()),
             new("配置",    "5", new ConfigView()),
@@ -80,6 +84,11 @@ public partial class MainWindow : Window
 
         var spacer = new Border { Height = 8 };
         _buttonStack.Children.Add(spacer);
+
+        _statsPanel = new SessionStatsPanel(sessionManager);
+        _statsPanel.SessionSelected += async name => { if (name != null) await chatView.LoadSessionAsync(name); };
+        _statsPanel.NewSessionClicked += async () => await chatView.ResetSessionAsync();
+        _buttonStack.Children.Add(_statsPanel);
 
         _collapseBtn = new Button
         {
@@ -160,7 +169,11 @@ public partial class MainWindow : Window
 
         Content = rootPanel;
 
-        _statusTimer = new DispatcherTimer(TimeSpan.FromSeconds(2), DispatcherPriority.Background, (_, _) => UpdateStatusBar());
+        _statusTimer = new DispatcherTimer(TimeSpan.FromSeconds(2), DispatcherPriority.Background, (_, _) =>
+        {
+            UpdateStatusBar();
+            _statsPanel.Refresh();
+        });
         _statusTimer.Start();
 
         // First-run setup: if no API keys configured, prompt user

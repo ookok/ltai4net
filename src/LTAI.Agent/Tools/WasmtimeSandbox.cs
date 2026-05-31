@@ -16,6 +16,7 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Text;
+using LTAI.AI;
 using LTAI.Core;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
@@ -32,6 +33,7 @@ namespace LTAI.Agent.Tools;
 ///   1. <see cref="ExecuteWasmAsync"/> — runs a .wasm binary with WASI capability restrictions
 ///   2. <see cref="ExecuteSandboxedCommandAsync"/> — runs a shell command with sandbox restrictions
 /// </summary>
+[ToolDomain("sandbox")]
 public sealed class WasmtimeSandbox : AIContextProvider
 {
     private readonly string _workspace;
@@ -39,6 +41,7 @@ public sealed class WasmtimeSandbox : AIContextProvider
     private readonly ILogger<WasmtimeSandbox>? _logger;
     private readonly Engine? _wasmEngine;
     private readonly bool _wasmAvailable;
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, Wasmtime.Module> _moduleCache = new();
 
     private const int ShellTimeoutSec = 30;
     private const int WasmTimeoutSec = 60;
@@ -99,7 +102,11 @@ public sealed class WasmtimeSandbox : AIContextProvider
     //  Sandboxed shell command
     // ═══════════════════════════════════════════
 
-    [Description("Execute a command in the sandbox with restricted permissions. 不能用来读取文件——读取文件请用 ReadFileContent 工具。")]
+    [Description("在沙箱中以受限权限执行命令。不能用来读取文件——读取文件请用 ReadFileContent。\n"
+        + "适用场景：在隔离沙箱中运行脚本、测试不受信任的代码、限制网络和文件访问的执行。\n"
+        + "不适用场景：读取文件（请用 ReadFileContent）、正常开发命令（请用 RunCommand 更快）。\n"
+        + "关键参数：command — shell 命令；workDir — 沙箱内工作目录。")]
+    [ToolExample("在沙箱中安全地运行这个脚本")]
     public async Task<string> ExecuteSandboxedCommandAsync(
         [Description("Shell command to run")] string command,
         [Description("Working directory (relative to sandbox)")] string workDir = ".",
@@ -178,7 +185,11 @@ public sealed class WasmtimeSandbox : AIContextProvider
     //  WASM module execution
     // ═══════════════════════════════════════════
 
-    [Description("Execute a .wasm binary with WASI sandbox restrictions")]
+    [Description("执行 .wasm 二进制文件，使用 WASI 沙箱限制（无网络、只读工作区）。\n"
+        + "适用场景：运行 WebAssembly 模块、在沙箱中执行编译后的 Wasm 代码。\n"
+        + "不适用场景：运行 shell 命令（请用 ExecuteSandboxedCommandAsync 或 RunCommand）。\n"
+        + "关键参数：wasmPath — .wasm 文件路径。")]
+    [ToolExample("运行这个 wasm 模块")]
     public async Task<string> ExecuteWasmAsync(
         [Description("Path to .wasm file")] string wasmPath,
         CancellationToken ct = default)
@@ -198,9 +209,13 @@ public sealed class WasmtimeSandbox : AIContextProvider
         {
             var wasmBytes = await File.ReadAllBytesAsync(fp, ct).ConfigureAwait(false);
 
-            // Compile module from bytes
+            // Compile module from bytes (with cache)
             var name = Path.GetFileName(fp);
-            var module = Module.FromBytes(_wasmEngine, name, wasmBytes.AsSpan());
+            if (!_moduleCache.TryGetValue(name, out var module))
+            {
+                module = Module.FromBytes(_wasmEngine, name, wasmBytes.AsSpan());
+                _moduleCache.TryAdd(name, module);
+            }
 
             // Configure WASI: restrict to sandbox + workspace (read-only), no network
             var wasiConfig = new WasiConfiguration()
@@ -256,23 +271,30 @@ public sealed class WasmtimeSandbox : AIContextProvider
     private static async Task<string> ReadWithLimitAsync(
         StreamReader reader, int maxBytes, CancellationToken ct)
     {
-        var buffer = new char[maxBytes];
-        var total = 0;
-        var chunk = new char[4096];
-
-        while (!ct.IsCancellationRequested)
+        var buffer = System.Buffers.ArrayPool<char>.Shared.Rent(maxBytes);
+        var chunk = System.Buffers.ArrayPool<char>.Shared.Rent(4096);
+        try
         {
-            var read = await reader.ReadAsync(chunk, ct).ConfigureAwait(false);
-            if (read == 0) break;
+            var total = 0;
+            while (!ct.IsCancellationRequested)
+            {
+                var read = await reader.ReadAsync(chunk, ct).ConfigureAwait(false);
+                if (read == 0) break;
 
-            var copyLen = Math.Min(read, maxBytes - total);
-            Array.Copy(chunk, 0, buffer, total, copyLen);
-            total += copyLen;
+                var copyLen = Math.Min(read, maxBytes - total);
+                Array.Copy(chunk, 0, buffer, total, copyLen);
+                total += copyLen;
 
-            if (total >= maxBytes) break;
+                if (total >= maxBytes) break;
+            }
+
+            return new string(buffer, 0, total);
         }
-
-        return new string(buffer, 0, total);
+        finally
+        {
+            System.Buffers.ArrayPool<char>.Shared.Return(buffer);
+            System.Buffers.ArrayPool<char>.Shared.Return(chunk);
+        }
     }
 
     protected override ValueTask StoreAIContextAsync(

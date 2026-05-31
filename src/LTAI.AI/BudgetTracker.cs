@@ -11,6 +11,7 @@ public sealed class BudgetTracker
     private readonly long _perUserMax;
     private readonly ConcurrentDictionary<string, long> _userTokens = new(StringComparer.OrdinalIgnoreCase);
     private long _globalTotal;
+    private readonly object _budgetLock = new();
 
     public BudgetTracker(long globalMax = 1_000_000, long perUserMax = 200_000)
     {
@@ -20,32 +21,33 @@ public sealed class BudgetTracker
 
     public (bool allowed, long remaining) TryConsume(string userId, int tokens)
     {
-        // Check before adding — prevents overdraft from large bursts
-        var currentUser = _userTokens.GetValueOrDefault(userId);
-        var currentGlobal = Interlocked.Read(ref _globalTotal);
-        var newUser = currentUser + tokens;
-        var newGlobal = currentGlobal + tokens;
-
-        if (newUser > _perUserMax || newGlobal > _globalMax)
-            return (false, Math.Min(_perUserMax - currentUser, _globalMax - currentGlobal));
-
-        // Budget OK — atomically add
-        _userTokens.AddOrUpdate(userId, tokens, (_, old) => old + tokens);
-        Interlocked.Add(ref _globalTotal, tokens);
-        return (true, Math.Min(_perUserMax - newUser, _globalMax - newGlobal));
+        lock (_budgetLock)
+        {
+            _userTokens.TryGetValue(userId, out var currentUser);
+            var newUser = currentUser + tokens;
+            var newGlobal = _globalTotal + tokens;
+            if (newUser > _perUserMax || newGlobal > _globalMax)
+                return (false, Math.Min(_perUserMax - currentUser, _globalMax - _globalTotal));
+            _userTokens[userId] = newUser;
+            _globalTotal = newGlobal;
+            return (true, _globalMax - _globalTotal);
+        }
     }
 
     public void Reset(string? userId = null)
     {
-        if (userId != null)
-            _userTokens.TryRemove(userId, out _);
-        else
+        lock (_budgetLock)
         {
-            _userTokens.Clear();
-            Interlocked.Exchange(ref _globalTotal, 0);
+            if (userId != null && _userTokens.TryRemove(userId, out var removed))
+                _globalTotal -= removed;
+            else if (userId == null)
+            {
+                _userTokens.Clear();
+                _globalTotal = 0;
+            }
         }
     }
 
-    public long GetUserTotal(string userId) => _userTokens.GetValueOrDefault(userId);
-    public long GlobalTotal => Interlocked.Read(ref _globalTotal);
+    public long GetUserTotal(string userId) { lock (_budgetLock) return _userTokens.GetValueOrDefault(userId); }
+    public long GlobalTotal { get { lock (_budgetLock) return _globalTotal; } }
 }

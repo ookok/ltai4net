@@ -77,7 +77,7 @@ public sealed class ChatLayout
                     if (key.Key == ConsoleKey.Escape) return;
 
                     // Ctrl+V → 粘贴
-                    if (key.Key == ConsoleKey.V && key.Modifiers.HasFlag(ConsoleModifiers.Control))
+                    if (key.Key == ConsoleKey.V && (key.Modifiers & ConsoleModifiers.Control) != 0)
                     {
                         try { inputBuf.Append(TextCopy.ClipboardService.GetText() ?? ""); }
                         catch { }
@@ -87,7 +87,7 @@ public sealed class ChatLayout
                     if (key.Key == ConsoleKey.Enter)
                     {
                         // Shift+Enter → 换行
-                        if (key.Modifiers.HasFlag(ConsoleModifiers.Shift))
+                        if ((key.Modifiers & ConsoleModifiers.Shift) != 0)
                         {
                             inputBuf.Append('\n');
                             continue;

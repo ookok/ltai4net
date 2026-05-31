@@ -6,10 +6,6 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 namespace LTAI.Agent.Tools;
 
-/// <summary>
-/// Web search (DuckDuckGo → Brave → Serper) and fetch tools.
-/// DuckDuckGo requires NO API key. Brave needs BRAVE_API_KEY. Serper needs SERPER_API_KEY.
-/// </summary>
 public sealed class WebTools
 {
     private readonly IHttpClientFactory _httpFactory;
@@ -33,15 +29,12 @@ public sealed class WebTools
             var http = _httpFactory.CreateClient();
             http.Timeout = TimeSpan.FromSeconds(15);
 
-            // Level 1: DuckDuckGo (free, no API key)
             var result = await TryDuckDuckGoAsync(http, query, topK).ConfigureAwait(false);
             if (result != null) return result;
 
-            // Level 2: Brave (if BRAVE_API_KEY set)
             result = await TryBraveSearchAsync(http, query, topK).ConfigureAwait(false);
             if (result != null) return result;
 
-            // Level 3: Serper/Google (if SERPER_API_KEY set — 2500 free searches/month)
             result = await TrySerperSearchAsync(http, query, topK).ConfigureAwait(false);
             if (result != null) return result;
 
@@ -63,9 +56,8 @@ public sealed class WebTools
             return $"Error: Invalid URL '{url}'";
 
         if (uri.Scheme is not "http" and not "https")
-            return "❌ WebFetch 不支持 file:// 协议。读取本地文件请使用 ReadFileContent 工具（【推荐】读取文件内容的首选工具）。不要用 WebFetch 或命令行读取文件。";
+            return "❌ WebFetch 不支持 file:// 协议。读取本地文件请使用 ReadFileContent 工具。";
 
-        // ⚠️ SSRF 防护：阻止内网地址
         if (IsPrivateHost(uri.Host))
             return "Error: Cannot fetch private/internal URLs";
 
@@ -81,12 +73,10 @@ public sealed class WebTools
                 .ConfigureAwait(false);
             response.EnsureSuccessStatusCode();
 
-            // Check Content-Length before downloading
             var contentLength = response.Content.Headers.ContentLength;
             if (contentLength > maxChars * 4L)
                 return $"Content too large: {contentLength.Value:N0} bytes (max {maxChars} chars requested). Use a more specific query.";
 
-            // Bounded read: only download up to maxChars worth of data
             var buffer = new char[maxChars + 1024];
             int totalChars = 0;
             bool isHtml = response.Content.Headers.ContentType?.MediaType?.Contains("text/html") == true;
@@ -104,7 +94,6 @@ public sealed class WebTools
                 Array.Copy(chunk, 0, buffer, totalChars, charsRead);
                 totalChars += charsRead;
 
-                // Detect HTML from first chunk if Content-Type header isn't reliable
                 if (!isHtml && totalChars > 100)
                 {
                     var preview = new string(buffer, 0, Math.Min(totalChars, 500));
@@ -139,11 +128,54 @@ public sealed class WebTools
         }
     }
 
-    // ═══════════════════════════════════════════
-    //  Search providers
-    // ═══════════════════════════════════════════
+    [Description("Send a custom HTTP request (GET/POST/PUT/DELETE) and return the response")]
+    public async Task<string> HttpRequest(
+        [Description("HTTP method (GET, POST, PUT, DELETE)")] string method,
+        [Description("Request URL")] string url,
+        [Description("Optional JSON body for POST/PUT")] string? body = null,
+        [Description("Optional JSON headers object (e.g. {\"Authorization\": \"Bearer xxx\"})")] string? headers = null)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
+            return $"Error: Invalid URL '{url}'";
 
-    /// <summary>DuckDuckGo via HTML endpoint — free, no API key.</summary>
+        if (IsPrivateHost(uri.Host))
+            return "Error: Cannot request private/internal URLs";
+
+        try
+        {
+            var http = _httpFactory.CreateClient();
+            http.Timeout = TimeSpan.FromSeconds(30);
+
+            using var req = new HttpRequestMessage(new HttpMethod(method.ToUpperInvariant()), uri);
+
+            if (headers != null)
+            {
+                try
+                {
+                    using var hDoc = JsonDocument.Parse(headers);
+                    foreach (var prop in hDoc.RootElement.EnumerateObject())
+                        req.Headers.TryAddWithoutValidation(prop.Name, prop.Value.GetString());
+                }
+                catch { }
+            }
+
+            if (body != null && (method.Equals("POST", StringComparison.OrdinalIgnoreCase) || method.Equals("PUT", StringComparison.OrdinalIgnoreCase) || method.Equals("PATCH", StringComparison.OrdinalIgnoreCase)))
+                req.Content = new StringContent(body, System.Text.Encoding.UTF8, "application/json");
+
+            using var resp = await http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead);
+            var respBody = await resp.Content.ReadAsStringAsync();
+
+            if (respBody.Length > 50000)
+                respBody = respBody[..50000] + $"\n... (truncated, {respBody.Length - 50000} more chars)";
+
+            return $"HTTP {(int)resp.StatusCode} {resp.ReasonPhrase}\n\n{respBody}";
+        }
+        catch (Exception ex)
+        {
+            return $"HTTP request failed: {ex.Message}";
+        }
+    }
+
     private async Task<string?> TryDuckDuckGoAsync(HttpClient http, string query, int topK)
     {
         try
@@ -158,12 +190,10 @@ public sealed class WebTools
 
             var html = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
 
-            // Parse result: <a rel="nofollow" class="result__a" href="...">Title</a>
             var resultMatches = Regex.Matches(html,
                 @"<a\s+rel=""nofollow""\s+class=""result__a""\s+href=""([^""]+)"">(.*?)</a>",
                 RegexOptions.IgnoreCase);
 
-            // Parse snippet: <a class="result__snippet" ...>text</a>
             var snippetMatches = Regex.Matches(html,
                 @"<a\s+class=""result__snippet""[^>]*>(.*?)</a>",
                 RegexOptions.IgnoreCase);
@@ -196,11 +226,10 @@ public sealed class WebTools
         catch (Exception ex)
         {
             _logger.LogDebug(ex, "DDG search failed for: {Query}", query);
-            return null; // fall through to next provider
+            return null;
         }
     }
 
-    /// <summary>Brave Search API — needs BRAVE_API_KEY env var.</summary>
     private async Task<string?> TryBraveSearchAsync(HttpClient http, string query, int topK)
     {
         var apiKey = LTAI.Core.Configuration.SecretManager.Get("BRAVE_API_KEY");
@@ -240,7 +269,6 @@ public sealed class WebTools
         }
     }
 
-    /// <summary>SSRF 防护：检查是否是私有/内网地址。</summary>
     private static bool IsPrivateHost(string host)
     {
         if (string.IsNullOrEmpty(host)) return true;
@@ -251,18 +279,17 @@ public sealed class WebTools
         if (System.Net.IPAddress.TryParse(host, out var ip))
         {
             byte[] b = ip.GetAddressBytes();
-            if (b.Length == 4) // IPv4
+            if (b.Length == 4)
             {
                 if (b[0] == 10) return true;
                 if (b[0] == 172 && b[1] >= 16 && b[1] <= 31) return true;
                 if (b[0] == 192 && b[1] == 168) return true;
                 if (b[0] == 127) return true;
-                if (b[0] == 169 && b[1] == 254) return true; // link-local
-                if (b[0] == 0) return true; // 0.0.0.0/8
+                if (b[0] == 169 && b[1] == 254) return true;
+                if (b[0] == 0) return true;
             }
-            else if (b.Length == 16) // IPv6
+            else if (b.Length == 16)
             {
-                // IPv4-mapped IPv6 (::ffff:10.x.x.x)
                 if (b[10] == 0xff && b[11] == 0xff)
                 {
                     if (b[12] == 10) return true;
@@ -272,16 +299,13 @@ public sealed class WebTools
                     if (b[12] == 169 && b[13] == 254) return true;
                     if (b[12] == 0) return true;
                 }
-                // Unique local address (fc00::/7)
                 if ((b[0] & 0xfe) == 0xfc) return true;
-                // Link-local (fe80::/10)
                 if (b[0] == 0xfe && (b[1] & 0xc0) == 0x80) return true;
             }
         }
         return false;
     }
 
-    /// <summary>Serper (Google) API — needs SERPER_API_KEY env var. Free tier: 2500 searches/month.</summary>
     private async Task<string?> TrySerperSearchAsync(HttpClient http, string query, int topK)
     {
         var apiKey = LTAI.Core.Configuration.SecretManager.Get("SERPER_API_KEY");
@@ -302,7 +326,6 @@ public sealed class WebTools
 
             var sb = new System.Text.StringBuilder();
 
-            // Organic results
             if (root.TryGetProperty("organic", out var organic))
             {
                 foreach (var r in organic.EnumerateArray().Take(topK))
@@ -318,15 +341,12 @@ public sealed class WebTools
                 }
             }
 
-            // Also include top answer/knowledge panel if available
             if (root.TryGetProperty("answerBox", out var answerBox))
             {
                 var ansTitle = answerBox.TryGetProperty("title", out var at) ? at.GetString() : null;
                 var ansSnippet = answerBox.TryGetProperty("snippet", out var asn) ? asn.GetString() : null;
                 if (ansTitle != null || ansSnippet != null)
-                {
                     sb.Insert(0, $"**💡 Knowledge Panel**\n{ansTitle ?? ""}: {ansSnippet ?? ""}\n\n");
-                }
             }
 
             return sb.Length > 0 ? sb.ToString() : null;
@@ -338,11 +358,6 @@ public sealed class WebTools
         }
     }
 
-    // ═══════════════════════════════════════════
-    //  HTML processing
-    // ═══════════════════════════════════════════
-
-    /// <summary>Single-pass HTML tag/entity stripper. ~10-50x faster than 9-pass regex.</summary>
     private static string StripHtml(string html)
     {
         if (html.IndexOf('<') < 0 && html.IndexOf('&') < 0)
@@ -357,7 +372,6 @@ public sealed class WebTools
         {
             var c = html[i];
 
-            // Inside <script> — skip until </script>
             if (inScript)
             {
                 if (c == '<' && i + 8 < html.Length &&
@@ -372,7 +386,6 @@ public sealed class WebTools
                 continue;
             }
 
-            // Inside <style> — skip until </style>
             if (inStyle)
             {
                 if (c == '<' && i + 6 < html.Length &&
@@ -387,12 +400,10 @@ public sealed class WebTools
                 continue;
             }
 
-            // Enter a tag
             if (c == '<')
             {
                 inTag = true;
 
-                // Detect script/style start tags
                 if (i + 7 < html.Length)
                 {
                     var next = html.AsSpan(i + 1);
@@ -414,7 +425,6 @@ public sealed class WebTools
 
             if (!inTag && !inScript && !inStyle)
             {
-                // Decode HTML entities
                 if (c == '&')
                 {
                     var entity = DecodeEntity(html, i, out int consumed);
@@ -426,7 +436,6 @@ public sealed class WebTools
                     }
                 }
 
-                // Collapse whitespace
                 if (char.IsWhiteSpace(c))
                 {
                     if (sb.Length == 0 || sb[^1] != ' ')

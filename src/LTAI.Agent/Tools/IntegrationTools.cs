@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
+using LTAI.AI;
 
 namespace LTAI.Agent.Tools;
 
@@ -10,6 +11,7 @@ namespace LTAI.Agent.Tools;
 /// Env vars: AMAP_KEY, TENCENT_MAP_KEY, BAIDU_MAP_KEY, TIANDITU_KEY,
 ///           WEATHER_KEY, UNSPLASH_KEY, BAIDU_TRANSLATE_APPID/SECRET
 /// </summary>
+[ToolDomain("integration")]
 public sealed class IntegrationTools
 {
     private readonly IHttpClientFactory _httpF;
@@ -21,7 +23,11 @@ public sealed class IntegrationTools
     //  GIS — 4 providers
     // ═══════════════════════════════════════════
 
-    [Description("地址转坐标。provider=amap|tencent|baidu|tianditu")]
+    [Description("地址转地理坐标(经纬度)。支持高德/腾讯/百度/天地图。\n"
+        + "适用场景：搜索地址获取经纬度、地图标注、位置服务。\n"
+        + "不适用场景：坐标转地址（请用 ReverseGeocode）、POI 搜索（请用 PoiSearch）。\n"
+        + "关键参数：address — 地址文本；provider — 地图服务商。")]
+    [ToolExample("北京市朝阳区国贸的经纬度是多少")]
     public async Task<string> Geocode(string address, string provider = "amap") => (provider.ToLowerInvariant() switch
     {
         "amap" or "高德" => await G($"https://restapi.amap.com/v3/geocode/geo?key={K("AMAP_KEY")}&address={E(address)}&output=JSON", "geocodes",
@@ -35,7 +41,11 @@ public sealed class IntegrationTools
         _ => $"Unknown provider. Use: amap, tencent, baidu, tianditu"
     }) ?? "Missing API key for " + provider;
 
-    [Description("坐标转地址。provider=amap|tencent|baidu|tianditu")]
+    [Description("地理坐标(经纬度)转地址文本。支持高德/腾讯/百度/天地图。\n"
+        + "适用场景：给定经纬度查询具体地址、位置反向解析。\n"
+        + "不适用场景：地址转坐标（请用 Geocode）。\n"
+        + "关键参数：lat/lng — 经纬度；provider — 地图服务商。")]
+    [ToolExample("116.4,39.9 这个位置是哪里")]
     public async Task<string> ReverseGeocode(string location, string provider = "amap") => (provider.ToLowerInvariant() switch
     {
         "amap" or "高德" => await G($"https://restapi.amap.com/v3/geocode/regeo?key={K("AMAP_KEY")}&location={E(location)}&output=JSON", "regeocode",
@@ -50,7 +60,12 @@ public sealed class IntegrationTools
         _ => $"Unknown provider"
     }) ?? "Missing API key";
 
-    [Description("POI搜索。provider=amap|tencent|baidu")]
+    [Description("搜索周边兴趣点(POI)：餐厅、商店、医院等。支持高德/腾讯/百度。\n"
+        + "适用场景：查找附近的餐厅、找最近的地铁站、搜索周边设施。\n"
+        + "不适用场景：地址转坐标（请用 Geocode）、坐标转地址（请用 ReverseGeocode）。\n"
+        + "关键参数：keywords — 搜索关键词；city — 城市；provider — 地图服务商。")]
+    [ToolExample("附近有什么好吃的")]
+    [ToolExample("找一下附近的地铁站")]
     public async Task<string> PoiSearch(string keyword, string? city = null, int count = 10, string provider = "amap") => (provider.ToLowerInvariant() switch
     {
         "amap" or "高德" => await GA($"https://restapi.amap.com/v3/place/text?key={K("AMAP_KEY")}&keywords={E(keyword)}&offset={count}&output=JSON{(city != null ? $"&city={E(city)}" : "")}", "pois",
@@ -62,7 +77,10 @@ public sealed class IntegrationTools
         _ => $"Unknown provider"
     }) ?? "Missing API key";
 
-    [Description("距离计算。provider=amap")]
+    [Description("计算两个坐标点之间的驾车/步行/骑行距离。支持高德地图。\n"
+        + "适用场景：计算两地驾车距离、估算出行时间和路程长度。\n"
+        + "关键参数：origins — 起点坐标；destination — 终点坐标；type — 交通方式。")]
+    [ToolExample("从天安门到王府井多远")]
     public async Task<string> DistanceCalc(string from, string to, int type = 1, string provider = "amap") => (provider.ToLowerInvariant() switch
     {
         "amap" or "高德" => await GA($"https://restapi.amap.com/v3/distance?key={K("AMAP_KEY")}&origins={E(from)}&destination={E(to)}&type={type}&output=JSON", "results",
@@ -70,7 +88,10 @@ public sealed class IntegrationTools
         _ => $"Only amap supports distance"
     }) ?? "Missing API key";
 
-    [Description("IP定位。优先高德，备用ip-api(免key)")]
+    [Description("根据 IP 地址查询地理位置。优先高德 API，备用 ip-api(无需 key)。\n"
+        + "适用场景：查询某个 IP 的大致城市位置、网络请求来源定位。\n"
+        + "关键参数：ip — IP 地址，为空则查询本机 IP。")]
+    [ToolExample("查一下这个 IP 在哪")]
     public async Task<string> IpLocation(string? ip = null)
     {
         if (!string.IsNullOrEmpty(K("AMAP_KEY")))
@@ -82,7 +103,12 @@ public sealed class IntegrationTools
     //  Weather — 和风天气
     // ═══════════════════════════════════════════
 
-    [Description("查询天气。需要 WEATHER_KEY 环境变量")]
+    [Description("查询指定城市天气情况。需要配置 WEATHER_KEY 环境变量。\n"
+        + "适用场景：查询今天/明天天气、查看气温和降水概率、出行前查天气。\n"
+        + "不适用场景：历史天气查询、空气质量查询（请用 ClassifyAirQuality）。\n"
+        + "关键参数：city — 城市名。")]
+    [ToolExample("北京明天天气怎么样")]
+    [ToolExample("上海今天多少度")]
     public async Task<string> Weather(string city)
     {
         var key = K("WEATHER_KEY") ?? K("HEFENG_KEY");
@@ -109,7 +135,11 @@ public sealed class IntegrationTools
     //  Translate — 百度翻译
     // ═══════════════════════════════════════════
 
-    [Description("翻译文本。需要 BAIDU_TRANSLATE_APPID + BAIDU_TRANSLATE_SECRET")]
+    [Description("翻译文本到目标语言。需要配置百度翻译 API 密钥。\n"
+        + "适用场景：翻译一段文字到中文或英文、理解外语内容。\n"
+        + "关键参数：text — 待翻译文本；to — 目标语言(zh/en/ja等)。")]
+    [ToolExample("把这段英文翻译成中文")]
+    [ToolExample("用英语怎么说")]
     public async Task<string> Translate(string text, string to = "en", string from = "auto")
     {
         var appId = K("BAIDU_TRANSLATE_APPID");
@@ -131,7 +161,11 @@ public sealed class IntegrationTools
     //  Image Search — Unsplash
     // ═══════════════════════════════════════════
 
-    [Description("搜索图片。需要 UNSPLASH_KEY")]
+    [Description("按关键词搜索图片。需要配置 UNSPLASH_KEY 环境变量。\n"
+        + "适用场景：找某个主题的图片、获取配图素材。\n"
+        + "不适用场景：下载文件（请用 DownloadFile）、网页搜索（请用 WebSearch）。\n"
+        + "关键参数：query — 搜索关键词；count — 返回数量。")]
+    [ToolExample("找一些日落的图片")]
     public async Task<string> ImageSearch(string query, int count = 5)
     {
         var key = K("UNSPLASH_KEY");

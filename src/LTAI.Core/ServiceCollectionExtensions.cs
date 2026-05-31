@@ -23,26 +23,33 @@ public static class ServiceCollectionExtensions
     /// </summary>
     /// <param name="enableOpenTelemetry">Set false in unit tests to avoid telemetry initialization overhead.</param>
     public static IServiceCollection AddLTAICore(this IServiceCollection services,
-        bool enableOpenTelemetry = true)
+        bool enableOpenTelemetry = true, bool enableAspNetCoreInstrumentation = false)
     {
         services.AddHttpClient();
+        services.AddHttpClient("safety", client => { client.Timeout = TimeSpan.FromSeconds(15); });
 
         // Validate LTAIOptions at startup (catches misconfiguration early)
         services.AddSingleton<IValidateOptions<LTAIOptions>, LTAIOptionsValidator>();
+        services.AddOptions<LTAIOptions>().ValidateOnStart();
 
         if (enableOpenTelemetry)
         {
             services.AddOpenTelemetry()
-                .WithTracing(tracing => tracing
-                    .AddAspNetCoreInstrumentation()
-                    .AddHttpClientInstrumentation()
-                    .AddSource("LTAI.*")
-                    .AddSource("Microsoft.Agents.AI.*")
-                )
-                .WithMetrics(metrics => metrics
-                    .AddAspNetCoreInstrumentation()
-                    .AddHttpClientInstrumentation()
-                );
+                .WithTracing(tracing =>
+                {
+                    if (enableAspNetCoreInstrumentation)
+                        tracing.AddAspNetCoreInstrumentation();
+                    tracing
+                        .AddHttpClientInstrumentation()
+                        .AddSource("LTAI.*")
+                        .AddSource("Microsoft.Agents.AI.*");
+                })
+                .WithMetrics(metrics =>
+                {
+                    if (enableAspNetCoreInstrumentation)
+                        metrics.AddAspNetCoreInstrumentation();
+                    metrics.AddHttpClientInstrumentation();
+                });
         }
 
         return services;

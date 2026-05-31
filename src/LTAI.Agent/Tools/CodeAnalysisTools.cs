@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using LTAI.AI;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -10,6 +11,7 @@ namespace LTAI.Agent.Tools;
 /// C#: Roslyn AST (mature) | Others: TreeSitter AST (30+ languages).
 /// No regex code parsing.
 /// </summary>
+[ToolDomain("code")]
 public sealed class CodeAnalysisTools
 {
     private readonly string _ws;
@@ -23,7 +25,12 @@ public sealed class CodeAnalysisTools
 
     public CodeAnalysisTools(string ws) => _ws = ws;
 
-    [Description("Get symbol outline (classes, methods, interfaces) from source files")]
+    [Description("获取源代码文件的符号结构：类、方法、接口、属性、枚举等。支持 C#(Roslyn) 和 30+ 语言(TreeSitter)。\n"
+        + "适用场景：了解一个类的结构、查看文件中有哪些方法、浏览接口定义、快速定位代码组织。\n"
+        + "不适用场景：搜索函数调用关系（请用 FindInCode）、搜索文件内容（请用 SearchContent）。\n"
+        + "关键参数：path — 文件或目录路径。")]
+    [ToolExample("这个类里有哪些方法")]
+    [ToolExample("看看这个文件的结构")]
     public async Task<string> GetSymbols([Description("File or directory path")] string path)
     {
         var fp = ResolvePath(path);
@@ -43,7 +50,12 @@ public sealed class CodeAnalysisTools
         return "Unsupported language: " + ext;
     }
 
-    [Description("Find identifier usage in code (definition/call/reference filtering)")]
+    [Description("在代码中搜索标识符的使用位置。支持按角色筛选：定义/调用/引用。\n"
+        + "适用场景：查找某个函数在哪里被调用、找变量的定义位置、确认某个 API 的所有使用处。\n"
+        + "不适用场景：搜索文本内容（请用 SearchContent）、获取代码结构（请用 GetSymbols）。\n"
+        + "关键参数：name — 要搜索的标识符；path — 文件路径；kind — 筛选角色(definition/call/reference/any)。")]
+    [ToolExample("找一下这个方法在哪里被调用的")]
+    [ToolExample("搜索这个类在哪些地方被引用了")]
     public async Task<string> FindInCode(
         [Description("Identifier to search")] string name,
         [Description("File path")] string path,

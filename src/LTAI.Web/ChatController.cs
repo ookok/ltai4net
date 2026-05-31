@@ -71,7 +71,7 @@ public class ChatController : ControllerBase
             return;
         }
 
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(HttpContext.RequestAborted);
         timeoutCts.CancelAfter(StreamTimeout);
 
         Response.Headers["Content-Type"] = "text/event-stream";

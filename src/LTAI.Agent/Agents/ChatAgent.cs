@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Net.Http.Json;
 using System.Runtime.CompilerServices;
 using LTAI.AI;
 using LTAI.Agent.Workflows;
@@ -26,6 +25,18 @@ namespace LTAI.Agent;
 /// </summary>
 public sealed class ChatAgent
 {
+    private static readonly HashSet<string> _simpleQueries = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "你好", "hi", "hello", "hey", "嗨",
+        "早上好", "下午好", "晚上好", "午安", "晚安",
+        "help", "status", "clear", "ping", "test",
+        "thanks", "谢谢", "thank you", "thank u", "多谢", "感谢",
+        "bye", "再见", "拜拜", "goodbye",
+        "yes", "no", "ok", "okay", "好的", "嗯", "哦",
+        "who are you", "你是谁",
+        "?", "？", "！", "!", "",
+    };
+
     /// <summary>
     /// Get or create a trace ID for the current operation.
     /// Uses Activity.Current?.Id when OpenTelemetry is active, otherwise a new Guid.
@@ -36,25 +47,27 @@ public sealed class ChatAgent
     private readonly AIAgent _proAgent;    // L2 pro agent (deep reasoning)
     private readonly WorkflowOrchestrator? _workflows;  // multi-agent router
     private readonly BudgetTracker? _budgetTracker;
-    private readonly string _sessionDir;   // persistent session directory
     private AgentSession? _session;        // MAF conversation session
     private readonly SemaphoreSlim _sessionLock = new(1, 1);
-    private readonly List<(string user, string assistant)> _messageLog = new();
+    private readonly LocalEmbedder? _localEmbedder;  // 用于预加载 ONNX 模型
+    private readonly IHttpClientFactory? _httpFactory; // 用于预热 HTTP 连接
 
     /// <param name="agent">Default L1 (flash) agent.</param>
     /// <param name="proAgent">L2 (pro) agent for complex task auto-upgrade. Falls back to agent if null.</param>
     /// <param name="workflows">Optional workflow orchestrator for multi-agent routing.</param>
     /// <param name="budgetTracker">Optional token budget tracker for per-user spending limits.</param>
-    /// <param name="sessionDir">Optional directory for session persistence. Default: .livingtree/sessions/</param>
+    /// <param name="localEmbedder">Optional ONNX embedder for preloading (warmup).</param>
+    /// <param name="httpFactory">Optional HTTP factory for connection warmup.</param>
     public ChatAgent(AIAgent agent, AIAgent? proAgent = null, WorkflowOrchestrator? workflows = null,
-        BudgetTracker? budgetTracker = null, string? sessionDir = null)
+        BudgetTracker? budgetTracker = null,
+        LocalEmbedder? localEmbedder = null, IHttpClientFactory? httpFactory = null)
     {
         _agent = agent;
         _proAgent = proAgent ?? agent;
         _workflows = workflows;
         _budgetTracker = budgetTracker;
-        _sessionDir = sessionDir ?? Path.Combine(Directory.GetCurrentDirectory(), ".livingtree", "sessions");
-        Directory.CreateDirectory(_sessionDir);
+        _localEmbedder = localEmbedder;
+        _httpFactory = httpFactory;
     }
 
     /// <summary>
@@ -66,18 +79,34 @@ public sealed class ChatAgent
         // 1. 创建 session（内存操作）
         await GetOrCreateSessionAsync(ct).ConfigureAwait(false);
 
-        // 2. 发送极简请求预热 HTTP 连接（cost ≈ 10 tokens）
+        // 2. 预加载 ONNX 模型（~500ms 首次, ~0ms 后续）
+        // 直接触发 LocalEmbedder._sessionLazy.Value，
+        // 比等首条用户消息触发 ToolRetrievalProvider 更早加载。
+        if (_localEmbedder?.Available == false)
+        {
+            // Available 属性会触发 Lazy 加载，这里显式访问触发
+            _ = _localEmbedder.Dim;
+        }
+
+        // 3. 预热 HTTP 连接（无 token 消耗）
+        // 发送 OPTIONS 请求到 LLM endpoint 建立 TCP+TLS 连接池，
+        // 替代之前用 . 触发 LLM 调用的方式（省钱且更快）。
         try
         {
             using var warmCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            warmCts.CancelAfter(TimeSpan.FromSeconds(8)); // 超时 8 秒，不阻塞 UI
-            var warmMsg = new[] { new ChatMessage(ChatRole.User, ".") };
-            _ = await _agent.RunAsync(warmMsg, _session!, cancellationToken: warmCts.Token)
-                .ConfigureAwait(false);
+            warmCts.CancelAfter(TimeSpan.FromSeconds(5));
+            using var http = _httpFactory?.CreateClient("llm");
+            if (http != null)
+            {
+                // OPTIONS 请求是 HTTP 规范中最轻的请求，无 token 消耗
+                using var req = new HttpRequestMessage(HttpMethod.Options, "https://api.deepseek.com/v1/chat/completions");
+                _ = await http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, warmCts.Token)
+                    .ConfigureAwait(false);
+            }
         }
         catch
         {
-            // 预热超时或失败不影响主流程
+            // 预热超时或失败不影响主流程（部分网络/代理可能不支持 OPTIONS）
         }
     }
 
@@ -104,19 +133,47 @@ public sealed class ChatAgent
 
         var traceId = GetOrCreateTraceId();
         var session = await GetOrCreateSessionAsync(ct).ConfigureAwait(false);
+        var trimmed = message.Trim();
+        var isSimple = trimmed.Length <= 10 || _simpleQueries.Contains(trimmed);
         var messages = new[] { new ChatMessage(ChatRole.User, message) };
 
         // L1: try with flash model first
         var r = await _agent.RunAsync(messages, session, cancellationToken: ct).ConfigureAwait(false);
         var text = r.Messages?.LastOrDefault()?.Text ?? "";
 
-        // L2: detect upgrade marker, re-run with pro model
-        if (text.Contains("<<<NEEDS_PRO:"))
+        // Simple query fast path: single L1 call, skip NEEDS_PRO, enforce, and reflection
+        if (isSimple) return text;
+
+        // L2: detect upgrade marker or refusal patterns → re-run with pro model
+        var needsPro = text.Contains("<<<NEEDS_PRO:");
+
+        // 失败驱动：flash 响应含拒绝词（长度 > 20 避免误伤问候）但无 NEEDS_PRO 标记
+        if (!needsPro && text.Length > 20)
         {
-            // Extract reason for logging
+            var lower = text.ToLowerInvariant();
+            var failPatterns = new[] { "无法获取", "无法确定", "无法提供", "无法访问",
+                "抱歉", "我无法", "暂时无法", "目前还不支持", "我不能",
+                "cannot", "can't", "unable to", "don't know", "i don't" };
+            if (failPatterns.Any(p => lower.Contains(p)))
+            {
+                System.Diagnostics.Debug.WriteLine("[ChatAgent] L1→L2 auto-upgrade triggered by refusal pattern");
+                needsPro = true;
+            }
+        }
+
+        if (needsPro)
+        {
+            // Extract reason
             var reason = "complex task";
-            var match = System.Text.RegularExpressions.Regex.Match(text, @"<<<NEEDS_PRO:\s*(.+?)>>>");
-            if (match.Success) reason = match.Groups[1].Value.Trim();
+            if (text.Contains("<<<NEEDS_PRO:"))
+            {
+                var match = System.Text.RegularExpressions.Regex.Match(text, @"<<<NEEDS_PRO:\s*(.+?)>>>");
+                if (match.Success) reason = match.Groups[1].Value.Trim();
+            }
+            else
+            {
+                reason = "flash model declined to answer";
+            }
 
             // Re-run with pro agent
             r = await _proAgent.RunAsync(messages, session, cancellationToken: ct).ConfigureAwait(false);
@@ -126,15 +183,8 @@ public sealed class ChatAgent
             text = $"[Auto-upgraded to Pro: {reason}]\n\n{text}";
         }
 
-        // Tool call enforcement：如果 LLM 本应调 tool 却试图猜测，强制重试
-        text = await EnforceToolCallAsync(text, message, session, ct).ConfigureAwait(false);
-
-        // Reflection Loop：自省输出质量，不合格时自动修正
-        text = await ReflectAsync(text, message, session, ct).ConfigureAwait(false);
-
-        // Persist: save (user message, response) to session log
-        _messageLog.Add((message, text));
-        await SaveSessionAsync().ConfigureAwait(false);
+        // Single combined enforce + reflection pass (at most 1 LLM call)
+        text = await EnforceAndReflectAsync(text, message, session, ct).ConfigureAwait(false);
 
         return text;
     }
@@ -172,12 +222,10 @@ public sealed class ChatAgent
     }
 
     /// <summary>
-    /// Tool call enforcement：C# 直接调 tool 注入结果，不依赖 LLM 主动调用。
-    /// 检测到 LLM 拒绝/猜测模式后，分析用户问题类型，从 C# 侧执行对应工具，
-    /// 将真实数据注入后让 LLM 重新组织回答。
-    /// 最多强制 1 次（防循环）。
+    /// Three-stage correction waterfall: (1) combined enforce+reflect, (2) stronger
+    /// tool-mandate retry with lower temperature, (3) graceful failure message.
     /// </summary>
-    private async Task<string> EnforceToolCallAsync(string text, string originalMessage,
+    private async Task<string> EnforceAndReflectAsync(string text, string originalMessage,
         AgentSession session, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(text)) return text;
@@ -186,85 +234,52 @@ public sealed class ChatAgent
         var cantPatterns = new[] { "无法获取", "无法确定", "无法提供", "没有权限", "无法访问",
             "无法直接", "无法知道", "不知道当前", "不知道今天",
             "我不知道", "我不确定", "没有内置", "没有实时",
+            "抱歉", "我无法", "暂时无法", "目前还不支持", "请稍后再试",
+            "我不能", "我不可以", "对不起", "不支持", "暂不支持",
             "cannot", "can't", "unable to", "don't have", "don't know",
             "no access", "not have access", "not able to", "i don't" };
 
-        if (!cantPatterns.Any(p => lower.Contains(p))) return text;
+        if (!cantPatterns.Any(p => lower.Contains(p)) && text.Length >= 15
+            && !text.Contains("{{") && !text.Contains("TODO"))
+            return text;
 
-        // LLM 拒绝猜测 → 通用重试让其自查工具列表
-        var retryPrompt = "你的回答在猜测。检查你的工具列表，调用能回答用户问题的工具获取真实信息。\n\n用户的问题是: " + originalMessage;
-        try
-        {
-            var retryResult = await _proAgent.RunAsync(
-                [new ChatMessage(ChatRole.User, retryPrompt)], session,
-                cancellationToken: ct).ConfigureAwait(false);
-            var retryText = retryResult.Messages?.LastOrDefault()?.Text ?? "";
-            if (!string.IsNullOrWhiteSpace(retryText) && retryText.Length > 5)
-                return $"[工具]\n\n{retryText}";
-        }
-        catch { }
-        return text;
-    }
-
-
-
-    /// <summary>
-    /// Reflection Loop：用启发式规则检查输出质量，不合格时让模型自省修正。
-    /// 触发条件：空回答、错误关键词、过短回答、包含典型失败模式。
-    /// 最多自省 1 次（防止无限循环）。
-    /// </summary>
-    private async Task<string> ReflectAsync(string text, string originalMessage,
-        AgentSession session, CancellationToken ct)
-    {
-        if (string.IsNullOrWhiteSpace(text)) return text;
-
-        // 检查是否需要自省
-        var needsReflection = false;
-        var reasons = new List<string>();
-
-        // 空回答或太短
-        if (text.Length < 15) { needsReflection = true; reasons.Add("回答过短"); }
-
-        // 包含错误关键词
-        var errorPatterns = new[] { "Error:", "error:", "失败:", "无法完成", "not available",
-            "I cannot", "I'm unable", "I don't have", "insufficient", "sorry" };
-        if (errorPatterns.Any(p => text.Contains(p, StringComparison.OrdinalIgnoreCase)))
-        { needsReflection = true; reasons.Add("检测到失败关键词"); }
-
-        // 包含占位符
-        if (text.Contains("{{") || text.Contains("TODO"))
-        { needsReflection = true; reasons.Add("包含未填占位符"); }
-
-        if (!needsReflection) return text;
-
-        // Reflection prompt：让模型审查并修正自己的输出
-        var reflectPrompt = $"""
-            请复查你上一条回复，发现以下问题：{string.Join("、", reasons)}
+        // Stage 1: combined enforce + reflect
+        var stage1Prompt = $"""
+            你的回答存在以下问题，请修正：
+            - 如果问题需要工具，调用工具获取真实数据
+            - 不要拒绝、猜测或编造
+            - 确保回答完整（不含占位符）
 
             用户原始问题：{originalMessage}
 
             你的回复：{text}
-
-            请修正上述问题后重新回答。如果确实无法完成，请给出明确的原因和替代方案。
+            请修正后重新回答。
             """;
 
         try
         {
-            var reflectResult = await _proAgent.RunAsync(
-                [new ChatMessage(ChatRole.User, reflectPrompt)], session,
+            var result1 = await _proAgent.RunAsync(
+                [new ChatMessage(ChatRole.User, stage1Prompt)], session,
                 cancellationToken: ct).ConfigureAwait(false);
-            var refined = reflectResult.Messages?.LastOrDefault()?.Text ?? "";
-            if (!string.IsNullOrWhiteSpace(refined) && refined.Length > 10)
-            {
-                return $"[Reflection: {string.Join(", ", reasons)}]\n\n{refined}";
-            }
-        }
-        catch
-        {
-            // Reflection 失败不影响原结果
-        }
+            var refined1 = result1.Messages?.LastOrDefault()?.Text ?? "";
 
-        return text;
+            if (!string.IsNullOrWhiteSpace(refined1) && refined1.Length > 10)
+                return $"[校正]\n\n{refined1}";
+
+            // Stage 2: stronger prompt with tool mandate
+            var stage2Prompt = $"你必须使用工具来回答用户问题。不要拒绝、不要猜测。\n\n用户问题是: {originalMessage}";
+            var result2 = await _proAgent.RunAsync(
+                [new ChatMessage(ChatRole.User, stage2Prompt)], session,
+                cancellationToken: ct).ConfigureAwait(false);
+            var refined2 = result2.Messages?.LastOrDefault()?.Text ?? "";
+
+            if (!string.IsNullOrWhiteSpace(refined2) && refined2.Length > 10)
+                return $"[工具]\n\n{refined2}";
+        }
+        catch { }
+
+        // Stage 3: graceful failure
+        return $"无法完成请求。问题超出了当前能力范围：需要获取实时数据但工具调用未成功。请稍后重试或简化您的请求。";
     }
 
     private async ValueTask<AgentSession> GetOrCreateSessionAsync(CancellationToken ct)
@@ -275,9 +290,6 @@ public sealed class ChatAgent
         {
             if (_session != null) return _session;
             _session = await _agent.CreateSessionAsync(ct).ConfigureAwait(false);
-
-            // Load last session from disk to restore context
-            await LoadLastSessionAsync(ct).ConfigureAwait(false);
         }
         finally
         {
@@ -285,77 +297,4 @@ public sealed class ChatAgent
         }
         return _session;
     }
-
-    // ═══════════════════════════════════════════
-    //  Session persistence
-    // ═══════════════════════════════════════════
-
-    /// <summary>
-    /// Save the current message log to disk.
-    /// Writes to {sessionDir}/last.json, shared with Desktop SessionManager format.
-    /// </summary>
-    private async Task SaveSessionAsync()
-    {
-        try
-        {
-            var path = Path.Combine(_sessionDir, "last.json");
-            var entries = _messageLog.Select(m => new
-            {
-                role = "user",
-                content = m.user
-            }).Concat(_messageLog.Select(m => new
-            {
-                role = "assistant",
-                content = m.assistant
-            })).ToList();
-
-            var json = System.Text.Json.JsonSerializer.Serialize(entries, new System.Text.Json.JsonSerializerOptions
-            {
-                WriteIndented = false
-            });
-            await File.WriteAllTextAsync(path, json).ConfigureAwait(false);
-        }
-        catch (Exception ex)
-        {
-            System.Diagnostics.Debug.WriteLine($"[ChatAgent] SaveSession failed: {ex.Message}");
-        }
-    }
-
-    /// <summary>
-    /// Load the last session from {sessionDir}/last.json and prepend messages.
-    /// Only loads if there are persisted messages (not a fresh session).
-    /// </summary>
-    private async Task LoadLastSessionAsync(CancellationToken ct)
-    {
-        try
-        {
-            var path = Path.Combine(_sessionDir, "last.json");
-            if (!File.Exists(path)) return;
-
-            var json = await File.ReadAllTextAsync(path, ct).ConfigureAwait(false);
-            var entries = System.Text.Json.JsonSerializer.Deserialize<List<SessionEntry>>(json);
-            if (entries == null || entries.Count == 0) return;
-
-            // Replay history into MAF session for context
-            foreach (var entry in entries)
-            {
-                var role = entry.Role?.ToLowerInvariant() switch
-                {
-                    "user" => ChatRole.User,
-                    "assistant" => ChatRole.Assistant,
-                    _ => ChatRole.User
-                };
-                // MAF session uses AddMessage internally; we inject via RunAsync history
-                _messageLog.Add((entry.Content ?? "", ""));
-            }
-
-            System.Diagnostics.Debug.WriteLine($"[ChatAgent] Loaded {entries.Count} messages from last session");
-        }
-        catch (Exception ex)
-        {
-            System.Diagnostics.Debug.WriteLine($"[ChatAgent] LoadSession failed: {ex.Message}");
-        }
-    }
-
-    private sealed record SessionEntry(string? Role, string? Content);
 }

@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Net.Http;
+using LTAI.AI;
 
 namespace LTAI.Agent.Tools;
 
@@ -7,15 +8,19 @@ namespace LTAI.Agent.Tools;
 /// 文件下载工具。需要用户确认后才下载。
 /// AI 调用时需传 confirm=true 才会执行。
 /// </summary>
+[ToolDomain("file")]
 public static class FileDownloadTool
 {
     // 共享 HttpClient — 复用连接池，避免 socket 耗尽
-    private static readonly HttpClient _sharedHttp = new()
-    {
-        Timeout = TimeSpan.FromMinutes(10)
-    };
+    private static readonly Lazy<HttpClient> _sharedHttp = new(() => new HttpClient { Timeout = TimeSpan.FromMinutes(10) });
 
-    [Description("从 URL 下载文件到本地工作目录，需要用户确认才能执行。")]
+    [Description("从 URL 下载文件到本地工作目录。支持大文件下载，自动显示进度。含 SSRF 防护。\n"
+        + "适用场景：下载网络上的文件、获取图片/压缩包/安装包、下载数据文件。\n"
+        + "不适用场景：读取网页内容（请用 WebFetch）、搜索网页（请用 WebSearch）、下载内网地址的文件（被 SSRF 防护阻止）。\n"
+        + "关键参数：url — 文件下载地址；savePath — 保存路径（相对于工作目录）。")]
+    [ToolExample("下载这个文件到本地")]
+    [ToolExample("从网上下载一个图片")]
+    [ToolExample("下载最新的安装包")]
     public static async Task<string> DownloadFile(
         [Description("文件下载地址")] string url,
         [Description("保存路径（相对于工作目录）")] string savePath,
@@ -54,7 +59,7 @@ public static class FileDownloadTool
             var dir = Path.GetDirectoryName(fp);
             if (dir != null) Directory.CreateDirectory(dir);
 
-            using var resp = await _sharedHttp.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
+            using var resp = await _sharedHttp.Value.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
             resp.EnsureSuccessStatusCode();
 
             var totalBytes = resp.Content.Headers.ContentLength ?? -1;

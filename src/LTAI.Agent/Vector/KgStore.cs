@@ -11,6 +11,7 @@
 // ═══════════════════════════════════════════════════════════════
 
 using System;
+using System.Buffers;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Data;
@@ -36,9 +37,12 @@ public sealed partial class KgStore : IDisposable
     private readonly SqliteConnection _writer;
     private readonly SqliteConnection _reader;
     private readonly SemaphoreSlim _writeLock = new(1, 1);
+    private readonly AsyncLocal<bool> _ownsWriteLock = new();
     private readonly string _dbPath;
     private bool _disposed;
     public string DbPath => _dbPath;
+
+    private void ThrowIfDisposed() => ObjectDisposedException.ThrowIf(_disposed, this);
 
     // ═══════════════════════════════════════════
     //  Prepared statement cache
@@ -56,6 +60,12 @@ public sealed partial class KgStore : IDisposable
         SizeLimit = 256,
         ExpirationScanFrequency = TimeSpan.FromMinutes(2)
     });
+    private int _cacheStamp; // incremented on every write to invalidate SearchFts cache
+
+    // IVF centroids for approximate nearest neighbor search
+    private float[][]? _centroids;
+    private int _vectorCount;
+    private const int IvfNumCentroids = 32;
 
     // ═══════════════════════════════════════════
     //  Construction
@@ -86,9 +96,11 @@ public sealed partial class KgStore : IDisposable
             PRAGMA journal_mode=WAL;
             PRAGMA synchronous=NORMAL;
             PRAGMA cache_size=-8000;            -- 8MB page cache
-            PRAGMA auto_vacuum=INCREMENTAL;     -- 删除后自动回收页面（新DB生效）
-            PRAGMA mmap_size=268435456;         -- 256MB 内存映射，加速大量读
+            PRAGMA auto_vacuum=INCREMENTAL;
+            PRAGMA mmap_size=268435456;         -- 256MB 内存映射
             PRAGMA foreign_keys=ON;
+            PRAGMA busy_timeout=5000;           -- 5s 等待而非立即失败
+            PRAGMA temp_store=MEMORY;           -- 排序/索引使用内存
         ";
         pragma.ExecuteNonQuery();
     }
@@ -108,22 +120,34 @@ public sealed partial class KgStore : IDisposable
         });
     }
 
-    private SqliteCommand GetPreparedRead(string sql)
+    private SqliteCommand GetPreparedRead(string key, string sql)
     {
-        return _readCmdCache.GetOrAdd(sql, key =>
+        ThrowIfDisposed();
+        if (_readCmdCache.TryGetValue(key, out var cmd))
         {
-            var cmd = _reader.CreateCommand();
-            cmd.CommandText = key;
-            cmd.Prepare();
+            cmd.Parameters.Clear();
             return cmd;
-        });
+        }
+
+        cmd = _reader.CreateCommand();
+        cmd.CommandText = sql;
+        cmd.Prepare();
+        _readCmdCache[key] = cmd;
+        return cmd;
     }
 
-    /// <summary>Execute a write command with exclusive async lock.</summary>
+    /// <summary>Execute a write command with exclusive async lock (reentrant-safe).</summary>
     private async Task<T> WriteLockAsync<T>(Func<SqliteCommand, T> action, string sql,
         Action<SqliteCommand>? bindParams = null)
     {
-        await _writeLock.WaitAsync().ConfigureAwait(false);
+        ThrowIfDisposed();
+        bool acquired = false;
+        if (!_ownsWriteLock.Value)
+        {
+            await _writeLock.WaitAsync().ConfigureAwait(false);
+            _ownsWriteLock.Value = true;
+            acquired = true;
+        }
         try
         {
             var cmd = GetPreparedWrite(sql);
@@ -131,12 +155,19 @@ public sealed partial class KgStore : IDisposable
             bindParams?.Invoke(cmd);
             return action(cmd);
         }
-        finally { _writeLock.Release(); }
+        finally { if (acquired) { _ownsWriteLock.Value = false; _writeLock.Release(); Interlocked.Increment(ref _cacheStamp); } }
     }
 
     private async Task WriteLockVoidAsync(string sql, Action<SqliteCommand>? bindParams = null)
     {
-        await _writeLock.WaitAsync().ConfigureAwait(false);
+        ThrowIfDisposed();
+        bool acquired = false;
+        if (!_ownsWriteLock.Value)
+        {
+            await _writeLock.WaitAsync().ConfigureAwait(false);
+            _ownsWriteLock.Value = true;
+            acquired = true;
+        }
         try
         {
             var cmd = GetPreparedWrite(sql);
@@ -144,7 +175,7 @@ public sealed partial class KgStore : IDisposable
             bindParams?.Invoke(cmd);
             cmd.ExecuteNonQuery();
         }
-        finally { _writeLock.Release(); }
+        finally { if (acquired) { _ownsWriteLock.Value = false; _writeLock.Release(); Interlocked.Increment(ref _cacheStamp); } }
     }
 
     // ═══════════════════════════════════════════
@@ -184,7 +215,7 @@ public sealed partial class KgStore : IDisposable
 
     public NodeRow? GetNode(long id)
     {
-        var cmd = GetPreparedRead(SQL_GET_NODE);
+        var cmd = GetPreparedRead(SQL_GET_NODE, SQL_GET_NODE);
         cmd.Parameters.Clear();
         cmd.Parameters.AddWithValue("@id", id);
         return ReadNodeRow(cmd.ExecuteReader());
@@ -194,7 +225,7 @@ public sealed partial class KgStore : IDisposable
 
     public NodeRow? GetNodeByExtId(string extId)
     {
-        var cmd = GetPreparedRead(SQL_GET_NODE_BY_EXT);
+        var cmd = GetPreparedRead(SQL_GET_NODE_BY_EXT, SQL_GET_NODE_BY_EXT);
         cmd.Parameters.Clear();
         cmd.Parameters.AddWithValue("@ext_id", extId);
         return ReadNodeRow(cmd.ExecuteReader());
@@ -204,7 +235,7 @@ public sealed partial class KgStore : IDisposable
 
     public List<NodeRow> GetNodesByKind(string kind)
     {
-        var cmd = GetPreparedRead(SQL_GET_NODES_BY_KIND);
+        var cmd = GetPreparedRead(SQL_GET_NODES_BY_KIND, SQL_GET_NODES_BY_KIND);
         cmd.Parameters.Clear();
         cmd.Parameters.AddWithValue("@kind", kind);
         return ReadNodeRows(cmd.ExecuteReader());
@@ -214,7 +245,7 @@ public sealed partial class KgStore : IDisposable
 
     public List<NodeRow> GetNodesBySource(string source)
     {
-        var cmd = GetPreparedRead(SQL_GET_NODES_BY_SOURCE);
+        var cmd = GetPreparedRead(SQL_GET_NODES_BY_SOURCE, SQL_GET_NODES_BY_SOURCE);
         cmd.Parameters.Clear();
         cmd.Parameters.AddWithValue("@src", source);
         return ReadNodeRows(cmd.ExecuteReader());
@@ -222,6 +253,7 @@ public sealed partial class KgStore : IDisposable
 
     public List<NodeRow> SearchNodesByName(string namePattern, int limit = 20)
     {
+        ThrowIfDisposed();
         using var cmd = _reader.CreateCommand();
         cmd.CommandText = "SELECT * FROM Nodes WHERE name LIKE @pat ORDER BY kind, name LIMIT @lim;";
         cmd.Parameters.AddWithValue("@pat", $"%{EscapeLike(namePattern)}%");
@@ -259,7 +291,8 @@ public sealed partial class KgStore : IDisposable
 
     public long NodeCount()
     {
-        var cmd = GetPreparedRead(SQL_NODE_COUNT);
+        var cmd = GetPreparedRead(SQL_NODE_COUNT, SQL_NODE_COUNT);
+        cmd.Parameters.Clear();
         return (long)cmd.ExecuteScalar()!;
     }
 
@@ -288,6 +321,7 @@ public sealed partial class KgStore : IDisposable
 
     public List<EdgeRow> GetEdges(long? nodeId = null, string? relation = null)
     {
+        ThrowIfDisposed();
         var sql = new StringBuilder("SELECT * FROM Edges WHERE 1=1");
         if (nodeId.HasValue) sql.Append(" AND (src = @nid OR dst = @nid)");
         if (relation != null) sql.Append(" AND rel = @rel");
@@ -315,6 +349,28 @@ public sealed partial class KgStore : IDisposable
     //  Docs
     // ═══════════════════════════════════════════
 
+    /// <summary>
+    /// Split text into chunks for large documents.
+    /// Each chunk is at most ~chunkLines lines (roughly 5000–8000 chars).
+    /// Returns at least one chunk even for empty text.
+    /// </summary>
+    private static List<string> ChunkText(string text, int chunkLines = 200)
+    {
+        if (string.IsNullOrEmpty(text)) return [""];
+        if (chunkLines <= 0) return [text];
+
+        var lines = text.Split('\n');
+        if (lines.Length <= chunkLines) return [text];
+
+        var chunks = new List<string>(1 + lines.Length / chunkLines);
+        for (int i = 0; i < lines.Length; i += chunkLines)
+        {
+            var end = Math.Min(i + chunkLines, lines.Length);
+            chunks.Add(string.Join('\n', lines[i..end]));
+        }
+        return chunks;
+    }
+
     private const string SQL_ADD_DOC = """
         INSERT INTO Docs(node_id, text, lang, source)
         VALUES (@nid, @text, @lang, @src);
@@ -322,17 +378,32 @@ public sealed partial class KgStore : IDisposable
         """;
 
     public async Task<long> AddDoc(long nodeId, string text, string? lang = "code", string? source = null)
-        => await WriteLockAsync(cmd => (long)cmd.ExecuteScalar()!, SQL_ADD_DOC, cmd =>
+    {
+        var chunks = ChunkText(text);
+        long lastId = 0;
+        foreach (var chunk in chunks)
         {
-            cmd.Parameters.AddWithValue("@nid", nodeId);
-            cmd.Parameters.AddWithValue("@text", text);
-            cmd.Parameters.AddWithValue("@lang", (object?)lang ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@src", (object?)source ?? DBNull.Value);
-        });
+            lastId = await WriteLockAsync(cmd => (long)cmd.ExecuteScalar()!, SQL_ADD_DOC, cmd =>
+            {
+                cmd.Parameters.AddWithValue("@nid", nodeId);
+                cmd.Parameters.AddWithValue("@text", chunk);
+                cmd.Parameters.AddWithValue("@lang", (object?)lang ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("@src", (object?)source ?? DBNull.Value);
+            });
+        }
+        return lastId;
+    }
 
     public async Task ReplaceDocsAsync(long nodeId, List<(string text, string? lang, string? source)> docs)
     {
-        await _writeLock.WaitAsync();
+        ThrowIfDisposed();
+        bool acquired = false;
+        if (!_ownsWriteLock.Value)
+        {
+            await _writeLock.WaitAsync();
+            _ownsWriteLock.Value = true;
+            acquired = true;
+        }
         try
         {
             using var tx = _writer.BeginTransaction();
@@ -343,24 +414,54 @@ public sealed partial class KgStore : IDisposable
 
             foreach (var (text, lang, src) in docs)
             {
-                using var ins = _writer.CreateCommand();
-                ins.CommandText = "INSERT INTO Docs(node_id, text, lang, source) VALUES (@nid, @text, @lang, @src);";
-                ins.Parameters.AddWithValue("@nid", nodeId);
-                ins.Parameters.AddWithValue("@text", text);
-                ins.Parameters.AddWithValue("@lang", (object?)lang ?? DBNull.Value);
-                ins.Parameters.AddWithValue("@src", (object?)src ?? DBNull.Value);
-                ins.ExecuteNonQuery();
+                var chunks = ChunkText(text);
+                foreach (var chunk in chunks)
+                {
+                    using var ins = _writer.CreateCommand();
+                    ins.CommandText = "INSERT INTO Docs(node_id, text, lang, source) VALUES (@nid, @text, @lang, @src);";
+                    ins.Parameters.AddWithValue("@nid", nodeId);
+                    ins.Parameters.AddWithValue("@text", chunk);
+                    ins.Parameters.AddWithValue("@lang", (object?)lang ?? DBNull.Value);
+                    ins.Parameters.AddWithValue("@src", (object?)src ?? DBNull.Value);
+                    ins.ExecuteNonQuery();
+                }
             }
             tx.Commit();
+            _resultCache.Compact(0.5);
         }
-        finally { _writeLock.Release(); }
+        finally { if (acquired) { _ownsWriteLock.Value = false; _writeLock.Release(); } }
+    }
+
+    /// <summary>
+    /// Acquire the write lock once, wrap work in a single transaction,
+    /// compact result cache on commit.  Reentrant-safe: if call-site
+    /// already owns the lock the outer transaction is reused.
+    /// </summary>
+    public async Task ExecuteInTransactionAsync(Func<Task> work)
+    {
+        ThrowIfDisposed();
+        bool acquired = false;
+        if (!_ownsWriteLock.Value)
+        {
+            await _writeLock.WaitAsync();
+            _ownsWriteLock.Value = true;
+            acquired = true;
+        }
+        try
+        {
+            using var tx = _writer.BeginTransaction();
+            await work();
+            tx.Commit();
+            Interlocked.Increment(ref _cacheStamp);
+        }
+        finally { if (acquired) { _ownsWriteLock.Value = false; _writeLock.Release(); } }
     }
 
     private const string SQL_GET_DOCS = "SELECT * FROM Docs WHERE node_id = @nid ORDER BY id;";
 
     public List<DocRow> GetDocs(long nodeId)
     {
-        var cmd = GetPreparedRead(SQL_GET_DOCS);
+        var cmd = GetPreparedRead(SQL_GET_DOCS, SQL_GET_DOCS);
         cmd.Parameters.Clear();
         cmd.Parameters.AddWithValue("@nid", nodeId);
         return ReadDocRows(cmd.ExecuteReader());
@@ -405,26 +506,28 @@ public sealed partial class KgStore : IDisposable
         """;
 
     /// <summary>
-    /// FTS5 special characters that cause syntax errors if passed literally.
-    /// Includes NEAR-group operators (@), prefix boost (^), and others.
+    /// Characters that produce FTS5 syntax errors when used literally in MATCH.
+    /// Preserves ^ (prefix boost), * (wildcard), " (phrase), + - ~ : for power users.
     /// </summary>
     private static readonly System.Text.RegularExpressions.Regex Fts5SpecialChars =
-        new(@"[()@^+\-~*:""]", System.Text.RegularExpressions.RegexOptions.Compiled);
+        new(@"[()@]", System.Text.RegularExpressions.RegexOptions.Compiled);
 
     /// <summary>
-    /// Sanitize a query string for FTS5 MATCH syntax: remove/replace special characters
-    /// that would cause "syntax error near ..." exceptions.
-    /// FTS5 special chars: ^ * " ( ) + - ~ @ :
+    /// Sanitize a query for FTS5 MATCH: remove only characters that cause
+    /// unresolvable syntax errors (unbalanced parens, bare @). Preserves
+    /// valid FTS5 operators: ^ * " + - ~ :
     /// </summary>
     private static string SanitizeFts5Query(string query)
     {
         if (string.IsNullOrWhiteSpace(query)) return query;
 
-        // Replace FTS5 special chars with space (breaks them into separate tokens)
         var sanitized = Fts5SpecialChars.Replace(query, " ");
-
-        // Collapse multiple spaces
         sanitized = System.Text.RegularExpressions.Regex.Replace(sanitized, @"\s+", " ").Trim();
+
+        // Cap query length so that 100 KB paste doesn't choke FTS5
+        const int MaxQueryLength = 500;
+        if (sanitized.Length > MaxQueryLength)
+            sanitized = sanitized[..MaxQueryLength];
 
         return sanitized.Length > 0 ? sanitized : query;
     }
@@ -437,12 +540,12 @@ public sealed partial class KgStore : IDisposable
         if (string.IsNullOrWhiteSpace(query))
             return [];
 
-        // Check result cache first
-        var cacheKey = $"fts:{query}:{topN}:{kindFilter}";
+        // Check result cache first (stamp invalidates on any write)
+        var cacheKey = $"fts:{query}:{topN}:{kindFilter}:{_cacheStamp}";
         if (_resultCache.TryGetValue(cacheKey, out List<(long, string, double, string)>? cached))
             return cached!;
 
-        var cmd = GetPreparedRead(SQL_SEARCH_FTS);
+        var cmd = GetPreparedRead(SQL_SEARCH_FTS, SQL_SEARCH_FTS);
         cmd.Parameters.Clear();
         cmd.Parameters.AddWithValue("@query", query);
         cmd.Parameters.AddWithValue("@kind", (object?)kindFilter ?? DBNull.Value);
@@ -473,6 +576,7 @@ public sealed partial class KgStore : IDisposable
         int maxDepth = 3,
         int maxNodes = 50)
     {
+        ThrowIfDisposed();
         maxDepth = Math.Min(maxDepth, MaxTraversalDepth);
         maxNodes = Math.Min(maxNodes, MaxTraversalNodes);
 
@@ -480,9 +584,7 @@ public sealed partial class KgStore : IDisposable
         if (idList.Count == 0) return [];
 
         var inClause = string.Join(",", idList.Select((_, i) => $"@s{i}"));
-        var relFilter = relation != null
-            ? $"AND e.rel = '{relation.Replace("'", "''")}'"
-            : "";
+        var relClause = relation != null ? "AND e.rel = @rel" : "";
 
         // Weighted BFS: score = path_score * edge_weight * kind_boost
         var sql = $"""
@@ -497,7 +599,7 @@ public sealed partial class KgStore : IDisposable
                            ELSE 1.0
                        END
                 FROM walk w
-                JOIN Edges e ON e.src = w.id {relFilter}
+                JOIN Edges e ON e.src = w.id {relClause}
                 JOIN Nodes n ON n.id = e.dst
                 WHERE w.depth < @maxDepth
                 UNION ALL
@@ -509,7 +611,7 @@ public sealed partial class KgStore : IDisposable
                            ELSE 1.0
                        END
                 FROM walk w
-                JOIN Edges e ON e.dst = w.id {relFilter}
+                JOIN Edges e ON e.dst = w.id {relClause}
                 JOIN Nodes n ON n.id = e.src
                 WHERE w.depth < @maxDepth
             )
@@ -526,6 +628,8 @@ public sealed partial class KgStore : IDisposable
             cmd.Parameters.AddWithValue($"@s{i}", idList[i]);
         cmd.Parameters.AddWithValue("@maxDepth", maxDepth);
         cmd.Parameters.AddWithValue("@maxNodes", maxNodes);
+        if (relation != null)
+            cmd.Parameters.AddWithValue("@rel", relation);
 
         return ReadNodeRows(cmd.ExecuteReader());
     }
@@ -533,7 +637,8 @@ public sealed partial class KgStore : IDisposable
     public List<(NodeRow caller, NodeRow callee, string relation)> GetCallChain(
         long functionNodeId, int depth = 2)
     {
-        // Same weighted approach for call chains
+        ThrowIfDisposed();
+
         var results = new List<(NodeRow, NodeRow, string)>();
 
         using var cmd = _reader.CreateCommand();
@@ -579,6 +684,7 @@ public sealed partial class KgStore : IDisposable
 
     public string? GetMeta(string key)
     {
+        ThrowIfDisposed();
         using var cmd = _reader.CreateCommand();
         cmd.CommandText = "SELECT value FROM Meta WHERE key = @key;";
         cmd.Parameters.AddWithValue("@key", key);
@@ -601,7 +707,8 @@ public sealed partial class KgStore : IDisposable
             pruned += await PruneBefore(cutoff);
         }
 
-        await CompactAsync();
+        if (pruned > 0)
+            await CompactAsync();
 
         // Invalidate all cached results after maintenance
         _resultCache.Compact(1.0);
@@ -642,18 +749,26 @@ public sealed partial class KgStore : IDisposable
 
     public async Task CompactAsync()
     {
-        await _writeLock.WaitAsync();
+        ThrowIfDisposed();
+        bool acquired = false;
+        if (!_ownsWriteLock.Value)
+        {
+            await _writeLock.WaitAsync();
+            _ownsWriteLock.Value = true;
+            acquired = true;
+        }
         try
         {
             using var vacCmd = _writer.CreateCommand();
             vacCmd.CommandText = "VACUUM;";
-            vacCmd.ExecuteNonQuery();
+            await vacCmd.ExecuteNonQueryAsync();
             using var optCmd = _writer.CreateCommand();
             optCmd.CommandText = "PRAGMA optimize;";
-            optCmd.ExecuteNonQuery();
+            await optCmd.ExecuteNonQueryAsync();
             await OptimizeFtsAsync();
+            _resultCache.Compact(0.5);
         }
-        finally { _writeLock.Release(); }
+        finally { if (acquired) { _ownsWriteLock.Value = false; _writeLock.Release(); } }
     }
 
     // ═══════════════════════════════════════════
@@ -675,13 +790,17 @@ public sealed partial class KgStore : IDisposable
 
     private long CountEdges()
     {
-        var cmd = GetPreparedRead("SELECT COUNT(*) FROM Edges;");
+        const string sql = "SELECT COUNT(*) FROM Edges;";
+        var cmd = GetPreparedRead(sql, sql);
+        cmd.Parameters.Clear();
         return (long)cmd.ExecuteScalar()!;
     }
 
     private long CountDocs()
     {
-        var cmd = GetPreparedRead("SELECT COUNT(*) FROM Docs;");
+        const string sql = "SELECT COUNT(*) FROM Docs;";
+        var cmd = GetPreparedRead(sql, sql);
+        cmd.Parameters.Clear();
         return (long)cmd.ExecuteScalar()!;
     }
 
@@ -800,52 +919,112 @@ public sealed partial class KgStore : IDisposable
         var blob = new byte[embedding.Length * 4];
         Buffer.BlockCopy(embedding, 0, blob, 0, blob.Length);
 
+        int centroidId = FindNearestCentroidIndex(embedding);
+
         await WriteLockVoidAsync(SQL_INSERT_VEC, cmd =>
         {
             cmd.Parameters.AddWithValue("@nid", nodeId);
             cmd.Parameters.AddWithValue("@vec", blob);
+            cmd.Parameters.AddWithValue("@cid", centroidId);
         });
+
+        Interlocked.Increment(ref _vectorCount);
     }
 
     /// <summary>
-    /// Vector similarity search by cosine distance (in-memory, linear scan).
-    /// Optional <paramref name="kindFilter"/> restricts scan to specific node kinds
-    /// (e.g., "method", "document", "concept") — acts as IVF partition by kind.
-    /// Returns (nodeId, distance) sorted closest-first.
-    /// Linear scan of 100K 384-dim vectors takes ~100ms. Fine for ≤100K nodes.
+    /// Vector similarity search by cosine distance.
+    /// Uses IVF centroids (if available) to limit the scan to the nearest cluster(s),
+    /// falling back to full linear scan when centroids are not yet built.
     /// </summary>
-    public List<(long nodeId, double distance)> SearchVector(float[] query, int topN = 30, string? kindFilter = null)
+    public List<(long nodeId, float distance)> SearchVector(float[] query, int topN = 30, string? kindFilter = null)
     {
+        ThrowIfDisposed();
         if (query.Length != 384)
             throw new ArgumentException($"MiniLM requires 384-dim vectors, got {query.Length}");
 
-        // Read vectors — filter by kind if specified (IVF-like partition)
-        var candidates = new List<(long nodeId, float[] vec)>();
-        using (var cmd = _reader.CreateCommand())
+        var cents = LoadCentroids();
+        bool useIvf = cents.Length > 0;
+
+        List<(long nodeId, float[] vec)> candidates;
+        if (useIvf)
         {
-            cmd.CommandText = kindFilter != null
-                ? "SELECT v.node_id, v.vec FROM VecNodes v JOIN Nodes n ON n.id = v.node_id WHERE n.kind = @kind;"
-                : "SELECT node_id, vec FROM VecNodes;";
-            if (kindFilter != null)
-                cmd.Parameters.AddWithValue("@kind", kindFilter);
-            using var rdr = cmd.ExecuteReader();
-            while (rdr.Read())
+            // Find nprobe nearest centroids to the query
+            var centScores = new List<(int idx, float sim)>();
+            for (int i = 0; i < cents.Length; i++)
+                centScores.Add((i, CosineSimilarity(query, cents[i])));
+            centScores.Sort((a, b) => b.sim.CompareTo(a.sim));
+
+            int nprobe = Math.Min(3, centScores.Count);
+            var probeIds = centScores.Take(nprobe).Select(c => c.idx).ToList();
+            probeIds.Add(-1); // always include unassigned vectors
+
+            // Build dynamic IN clause
+            var inClause = string.Join(",", probeIds.Select((_, i) => $"@c{i}"));
+            var sql = kindFilter != null
+                ? $"SELECT v.node_id, v.vec FROM VecNodes v JOIN Nodes n ON n.id = v.node_id WHERE v.centroid_id IN ({inClause}) AND n.kind = @kind;"
+                : $"SELECT v.node_id, v.vec FROM VecNodes v WHERE v.centroid_id IN ({inClause});";
+
+            candidates = [];
+            using (var cmd = _reader.CreateCommand())
             {
-                var nid = rdr.GetInt64(0);
-                var blob = (byte[])rdr["vec"];
-                var vec = new float[384];
-                Buffer.BlockCopy(blob, 0, vec, 0, blob.Length);
-                candidates.Add((nid, vec));
+                cmd.CommandText = sql;
+                for (int i = 0; i < probeIds.Count; i++)
+                    cmd.Parameters.AddWithValue($"@c{i}", probeIds[i]);
+                if (kindFilter != null)
+                    cmd.Parameters.AddWithValue("@kind", kindFilter);
+                using var rdr = cmd.ExecuteReader();
+                while (rdr.Read())
+                {
+                    var nid = rdr.GetInt64(0);
+                    var blob = (byte[])rdr["vec"];
+                    var vec = System.Buffers.ArrayPool<float>.Shared.Rent(384);
+                    Buffer.BlockCopy(blob, 0, vec, 0, blob.Length);
+                    candidates.Add((nid, vec));
+                }
+            }
+        }
+        else
+        {
+            // Fallback: full linear scan
+            candidates = [];
+            using (var cmd = _reader.CreateCommand())
+            {
+                cmd.CommandText = kindFilter != null
+                    ? "SELECT v.node_id, v.vec FROM VecNodes v JOIN Nodes n ON n.id = v.node_id WHERE n.kind = @kind;"
+                    : "SELECT node_id, vec FROM VecNodes;";
+                if (kindFilter != null)
+                    cmd.Parameters.AddWithValue("@kind", kindFilter);
+                using var rdr = cmd.ExecuteReader();
+                while (rdr.Read())
+                {
+                    var nid = rdr.GetInt64(0);
+                    var blob = (byte[])rdr["vec"];
+                    var vec = System.Buffers.ArrayPool<float>.Shared.Rent(384);
+                    Buffer.BlockCopy(blob, 0, vec, 0, blob.Length);
+                    candidates.Add((nid, vec));
+                }
             }
         }
 
-        // Compute cosine similarity, sort, take topN
-        var scored = new List<(long nodeId, double dist)>(candidates.Count);
+        // Compute cosine similarity with early termination.
+        // Once topN results have distance < 0.05 (similarity > 0.95),
+        // stop scanning — remaining candidates are unlikely to beat them.
+        var scored = new List<(long nodeId, float dist)>(Math.Min(candidates.Count, 50000));
+        var goodCount = 0;
+        const float earlyThreshold = 0.05f;
+
         foreach (var (nid, vec) in candidates)
         {
             var sim = CosineSimilarity(query, vec);
-            scored.Add((nid, 1.0 - sim)); // distance = 1 - similarity
+            var dist = 1f - sim;
+            scored.Add((nid, dist));
+            if (dist < earlyThreshold) goodCount++;
+
+            if (goodCount >= topN) break;
         }
+
+        foreach (var (_, vec) in candidates)
+            System.Buffers.ArrayPool<float>.Shared.Return(vec);
 
         scored.Sort((a, b) => a.dist.CompareTo(b.dist));
         return scored.Take(topN).ToList();
@@ -860,21 +1039,47 @@ public sealed partial class KgStore : IDisposable
         });
     }
 
-    private static double CosineSimilarity(float[] a, float[] b)
+    private static float CosineSimilarity(ReadOnlySpan<float> a, ReadOnlySpan<float> b)
     {
-        double dot = 0, na = 0, nb = 0;
-        for (int i = 0; i < a.Length; i++)
+        float dot = 0, normA = 0, normB = 0;
+        int i = 0;
+
+        if (System.Numerics.Vector.IsHardwareAccelerated && a.Length >= System.Numerics.Vector<float>.Count)
+        {
+            int vecLen = System.Numerics.Vector<float>.Count;
+            var aVecs = System.Runtime.InteropServices.MemoryMarshal.Cast<float, System.Numerics.Vector<float>>(a);
+            var bVecs = System.Runtime.InteropServices.MemoryMarshal.Cast<float, System.Numerics.Vector<float>>(b);
+            var vdot = System.Numerics.Vector<float>.Zero;
+            var vna = System.Numerics.Vector<float>.Zero;
+            var vnb = System.Numerics.Vector<float>.Zero;
+            for (int j = 0; j < aVecs.Length; j++)
+            {
+                vdot += aVecs[j] * bVecs[j];
+                vna += aVecs[j] * aVecs[j];
+                vnb += bVecs[j] * bVecs[j];
+            }
+            for (int k = 0; k < vecLen; k++)
+            {
+                dot += vdot[k];
+                normA += vna[k];
+                normB += vnb[k];
+            }
+            i += aVecs.Length * vecLen;
+        }
+
+        for (; i < a.Length; i++)
         {
             dot += a[i] * b[i];
-            na += a[i] * a[i];
-            nb += b[i] * b[i];
+            normA += a[i] * a[i];
+            normB += b[i] * b[i];
         }
-        var norm = Math.Sqrt(na) * Math.Sqrt(nb);
-        return norm > 1e-12 ? dot / norm : 0;
+
+        var denom = MathF.Sqrt(normA) * MathF.Sqrt(normB);
+        return denom == 0 ? 0 : dot / denom;
     }
 
     private const string SQL_INSERT_VEC =
-        "INSERT OR REPLACE INTO VecNodes(node_id, vec) VALUES (@nid, @vec);";
+        "INSERT OR REPLACE INTO VecNodes(node_id, vec, centroid_id) VALUES (@nid, @vec, @cid);";
 
     private const string SQL_DELETE_VEC =
         "DELETE FROM VecNodes WHERE node_id = @nid;";
@@ -969,18 +1174,175 @@ public sealed partial class KgStore : IDisposable
             );
             """;
         cmd.ExecuteNonQuery();
+
+        // Migration: add centroid_id column for IVF (existing databases)
+        try { using var m = _writer.CreateCommand(); m.CommandText = "ALTER TABLE VecNodes ADD COLUMN centroid_id INTEGER DEFAULT -1;"; m.ExecuteNonQuery(); }
+        catch { /* column already exists — fine */ }
+    }
+
+    /// <summary>
+    /// Load centroids from Meta cache (row-major float arrays).
+    /// Returns empty array if none exist.
+    /// </summary>
+    private float[][] LoadCentroids()
+    {
+        if (_centroids != null) return _centroids;
+        var raw = GetMeta("vec:centroids");
+        if (string.IsNullOrEmpty(raw)) return [];
+        try { _centroids = JsonSerializer.Deserialize<float[][]>(raw, KgStoreInternals.JsonOpts) ?? []; }
+        catch { _centroids = []; }
+        return _centroids!;
+    }
+
+    /// <summary>
+    /// Persist centroids to Meta.
+    /// </summary>
+    private async Task SaveCentroidsAsync(float[][] centroids)
+    {
+        _centroids = centroids;
+        var json = JsonSerializer.Serialize(centroids, KgStoreInternals.JsonOpts);
+        await SetMeta("vec:centroids", json);
+    }
+
+    /// <summary>
+    /// Find the index of the nearest centroid for a given vector.
+    /// Returns -1 if no centroids exist.
+    /// </summary>
+    private int FindNearestCentroidIndex(float[] vec)
+    {
+        var cents = LoadCentroids();
+        if (cents.Length == 0) return -1;
+        int best = 0;
+        float bestSim = -1f;
+        for (int i = 0; i < cents.Length; i++)
+        {
+            var sim = CosineSimilarity(vec, cents[i]);
+            if (sim > bestSim) { bestSim = sim; best = i; }
+        }
+        return best;
+    }
+
+    /// <summary>
+    /// Rebuild IVF centroids via k-means++ initialization.
+    /// Reads all vectors from VecNodes, clusters into <see cref="IvfNumCentroids"/> centroids,
+    /// updates all centroid_id assignments.
+    /// </summary>
+    public async Task RebuildCentroidsAsync()
+    {
+        ThrowIfDisposed();
+        // Read all vectors (needs to be inside lock for consistency)
+        bool acquired = false;
+        if (!_ownsWriteLock.Value)
+        {
+            await _writeLock.WaitAsync();
+            _ownsWriteLock.Value = true;
+            acquired = true;
+        }
+        try
+        {
+            List<(long nodeId, float[] vec)> all = [];
+            using (var rdr = _reader.CreateCommand())
+            {
+                rdr.CommandText = "SELECT v.node_id, v.vec FROM VecNodes v;";
+                using var reader = rdr.ExecuteReader();
+                while (reader.Read())
+                {
+                    var nid = reader.GetInt64(0);
+                    var blob = (byte[])reader["vec"];
+                    var vec = new float[384];
+                    Buffer.BlockCopy(blob, 0, vec, 0, blob.Length);
+                    all.Add((nid, vec));
+                }
+            }
+
+            if (all.Count < IvfNumCentroids)
+            {
+                _centroids = [];
+                await SaveCentroidsAsync([]);
+                return;
+            }
+
+            // k-means++ initialization
+            int k = Math.Min(IvfNumCentroids, all.Count / 2);
+            var rng = new Random(42);
+            var centroids = new float[k][];
+
+            // First centroid: random pick
+            centroids[0] = all[rng.Next(all.Count)].vec;
+
+            // Remaining centroids: weighted by distance to nearest existing centroid
+            var minDist = new float[all.Count];
+            for (int c = 1; c < k; c++)
+            {
+                float total = 0;
+                for (int i = 0; i < all.Count; i++)
+                {
+                    minDist[i] = 1f - CosineSimilarity(all[i].vec, centroids[c - 1]);
+                    if (c > 1) minDist[i] = Math.Min(minDist[i], 1f - CosineSimilarity(all[i].vec, centroids[0])); // approximate
+                    total += minDist[i];
+                }
+
+                double r = rng.NextDouble() * total;
+                for (int i = 0; i < all.Count; i++)
+                {
+                    r -= minDist[i];
+                    if (r <= 0) { centroids[c] = all[i].vec; break; }
+                }
+            }
+
+            // One round of assignment (not full k-means iteration — good enough)
+            var assignments = new int[all.Count];
+            for (int i = 0; i < all.Count; i++)
+            {
+                int best = 0;
+                float bestScore = -1f;
+                for (int c = 0; c < k; c++)
+                {
+                    var sim = CosineSimilarity(all[i].vec, centroids[c]);
+                    if (sim > bestScore) { bestScore = sim; best = c; }
+                }
+                assignments[i] = best;
+            }
+
+            // Persist centroids
+            await SaveCentroidsAsync(centroids);
+
+            // Bulk-update centroid_id in VecNodes
+            using var tx = _writer.BeginTransaction();
+            using var upd = _writer.CreateCommand();
+            upd.CommandText = "UPDATE VecNodes SET centroid_id = @cid WHERE node_id = @nid;";
+            var cidParam = upd.Parameters.Add("@cid", SqliteType.Integer);
+            var nidParam = upd.Parameters.Add("@nid", SqliteType.Integer);
+            upd.Prepare();
+
+            for (int i = 0; i < all.Count; i++)
+            {
+                cidParam.Value = assignments[i];
+                nidParam.Value = all[i].nodeId;
+                upd.ExecuteNonQuery();
+            }
+            tx.Commit();
+        }
+        finally { if (acquired) { _ownsWriteLock.Value = false; _writeLock.Release(); } }
     }
 
     private async Task ExecuteOnWriterAsync(string sql)
     {
-        await _writeLock.WaitAsync();
+        ThrowIfDisposed();
+        bool acquired = false;
+        if (!_ownsWriteLock.Value)
+        {
+            await _writeLock.WaitAsync();
+            _ownsWriteLock.Value = true;
+            acquired = true;
+        }
         try
         {
             using var cmd = _writer.CreateCommand();
             cmd.CommandText = sql;
             cmd.ExecuteNonQuery();
         }
-        finally { _writeLock.Release(); }
+        finally { if (acquired) { _ownsWriteLock.Value = false; _writeLock.Release(); } }
     }
 
     // ═══════════════════════════════════════════
@@ -993,8 +1355,8 @@ public sealed partial class KgStore : IDisposable
         _disposed = true;
 
         foreach (var cmd in _writeCmdCache.Values) cmd.Dispose();
-        foreach (var cmd in _readCmdCache.Values) cmd.Dispose();
         _writeCmdCache.Clear();
+        foreach (var cmd in _readCmdCache.Values) cmd.Dispose();
         _readCmdCache.Clear();
         _resultCache.Dispose();
 

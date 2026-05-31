@@ -91,10 +91,11 @@ public static class AgentRegistry
 
     /// <summary>
     /// Select top-K agents by semantic similarity to the task.
+    /// Uses ONNX embeddings (priority 1) or BM25 fallback.
     /// Returns agent names suitable for routing.
     /// Falls back to all agent names if embeddings not computed yet.
     /// </summary>
-    public static string[] SelectTopK(string task, EmbeddingClient embedder,
+    public static async Task<string[]> SelectTopKAsync(string task, EmbeddingClient embedder,
         int k = 5, CancellationToken ct = default)
     {
         var agents = LoadAll();
@@ -104,16 +105,23 @@ public static class AgentRegistry
         var hasMissing = agents.Any(a => a.Embedding == null);
         if (hasMissing)
         {
-            // Compute synchronously — fine for first call (blocking, but fast ~50ms)
-            ComputeEmbeddingsSync(agents, embedder);
+            await ComputeEmbeddingsAsync(agents, embedder, ct).ConfigureAwait(false);
         }
 
         // If still no embeddings (embedder unavailable), return all
         if (agents.All(a => a.Embedding == null))
             return agents.Select(a => a.Name).Where(n => n != null).Cast<string>().Take(k).ToArray();
 
-        // Compute task embedding using FastEmb fallback (always available, no API call)
-        var taskEmb = EmbeddingClient.FastEmb(task);
+        // Compute task embedding using ONNX (priority 1) → FastEmb fallback
+        float[] taskEmb;
+        try
+        {
+            taskEmb = await embedder.GenerateAsync(task, ct).ConfigureAwait(false);
+        }
+        catch
+        {
+            taskEmb = EmbeddingClient.FastEmb(task);
+        }
 
         var scored = agents
             .Where(a => a.Embedding != null)
@@ -176,15 +184,16 @@ public static class AgentRegistry
     //  Private
     // ═══════════════════════════════════════════
 
-    private static void ComputeEmbeddingsSync(List<AgentFileDef> agents, EmbeddingClient embedder)
+    private static async Task ComputeEmbeddingsAsync(List<AgentFileDef> agents, EmbeddingClient embedder,
+        CancellationToken ct = default)
     {
         for (int i = 0; i < agents.Count; i++)
         {
             if (agents[i].Embedding != null) continue;
             try
             {
-                var emb = embedder.GenerateAsync(agents[i].CapabilityText)
-                    .GetAwaiter().GetResult();
+                var emb = await embedder.GenerateAsync(agents[i].CapabilityText, ct)
+                    .ConfigureAwait(false);
                 agents[i] = agents[i] with { Embedding = emb };
             }
             catch

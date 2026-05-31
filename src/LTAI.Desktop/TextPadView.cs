@@ -138,7 +138,9 @@ public sealed class TextPadView : UserControl
                     Header = $"📁 {Path.GetFileName(d)}",
                     Foreground = LtaiTheme.Sbb(LtaiTheme.TextPrimary),
                 };
-                node.Expanded += (_, _) => { if (node.Items.Count == 0) BuildTree(node.Items, d); };
+                var capturedNode = node;
+                var capturedDir = d;
+                capturedNode.Expanded += (_, _) => { if (capturedNode.Items.Count == 0) BuildTree(capturedNode.Items, capturedDir); };
                 items.Add(node);
             }
             foreach (var f in Directory.GetFiles(dir).Where(f => TextExts.Contains(Path.GetExtension(f))).OrderBy(Path.GetFileName))

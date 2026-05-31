@@ -23,6 +23,7 @@ public sealed class CgGraph : AIContextProvider
 {
     private readonly KgStore _store;
     private readonly IChatClient? _rewriter;
+    private readonly LTAI.AI.EmbeddingClient? _embedder;
     private readonly ILogger<CgGraph> _logger;
     private readonly string _ws;
     private bool _built;
@@ -43,11 +44,13 @@ public sealed class CgGraph : AIContextProvider
     /// <param name="logger">Logger.</param>
     /// <param name="ws">Workspace root for code indexing.</param>
     public CgGraph(KgStore store, IChatClient? rewriter = null,
+        LTAI.AI.EmbeddingClient? embedder = null,
         ILogger<CgGraph>? logger = null, string? ws = null)
         : base(null, null, null)
     {
         _store = store ?? throw new ArgumentNullException(nameof(store));
         _rewriter = rewriter;
+        _embedder = embedder;
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _ws = ws ?? Directory.GetCurrentDirectory();
     }
@@ -61,7 +64,7 @@ public sealed class CgGraph : AIContextProvider
         var dir = directory ?? _ws;
         if (!Directory.Exists(dir)) return "Directory not found";
 
-        _parser ??= new TreeSitterParser();
+        _parser ??= new TreeSitterParser(_logger);
 
         var files = Directory.EnumerateFiles(dir, "*.*", new EnumerationOptions
         {
@@ -82,10 +85,7 @@ public sealed class CgGraph : AIContextProvider
             .ToList();
 
         // Parallel file indexing: read + parse across CPU cores, write serialized.
-        // Uses Parallel.ForEachAsync (not Parallel.ForEach + async lambda) to avoid
-        // thread-pool starvation caused by synchronous-wait-for-async anti-pattern.
         int sc = 0, na = 0;
-        var writeGate = new SemaphoreSlim(1, 1);
 
         await Parallel.ForEachAsync(files,
             new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount },
@@ -98,20 +98,26 @@ public sealed class CgGraph : AIContextProvider
 
             try
             {
+                var fi = new FileInfo(file);
+                if (fi.Length > 10 * 1024 * 1024)
+                {
+                    _logger.LogWarning("CgGraph: skipping large file {Rel} ({Size} MB)", rel, fi.Length / 1024 / 1024);
+                    _indexedFiles[file] = lw;
+                    Interlocked.Increment(ref sc);
+                    return;
+                }
                 var code = await File.ReadAllTextAsync(file, ct).ConfigureAwait(false);
                 var ext = Path.GetExtension(file);
                 var fileName = Path.GetFileName(file);
                 var lineCount = code.Split('\n').Length;
 
-                // Parse AST (CPU-bound, no I/O)
                 var symbols = _parser.ExtractSymbols(code, ext);
 
-                // Serialize writes to KgStore (SQLite is single-writer)
-                await writeGate.WaitAsync(ct).ConfigureAwait(false);
-                try
+                // Single transaction per file: all writes batched in one lock + transaction
+                await _store.ExecuteInTransactionAsync(async () =>
                 {
                     await _store.DeleteSource(rel);
-                    int fileNodeCount = 1; // file node
+                    int fileNodeCount = 1;
 
                     var fid = await _store.UpsertNode(
                         extId: $"file:{rel}",
@@ -123,7 +129,13 @@ public sealed class CgGraph : AIContextProvider
                         props: new() { ["path"] = rel, ["ext"] = ext, ["lines"] = lineCount });
 
                     await _store.AddDoc(fid, code, "code", rel);
+                    var fileEmb = _embedder != null
+                        ? await _embedder.GenerateAsync($"{fileName} {rel}", ct).ConfigureAwait(false)
+                        : LTAI.AI.EmbeddingClient.FastEmb($"{fileName} {rel}");
+                    await _store.InsertVectorAsync(fid, fileEmb);
 
+                    // Collect method/function nodes for intra-file CALLS
+                    var methodNodes = new List<(long nid, string name, int line)>();
                     foreach (var (kind, name, line, _) in symbols)
                     {
                         var safeName = name.Replace("<", "_").Replace(">", "_").Replace("(", "_").Replace(")", "_");
@@ -137,17 +149,42 @@ public sealed class CgGraph : AIContextProvider
                             props: new() { ["file"] = rel, ["line"] = line, ["ext"] = ext });
 
                         await _store.AddEdge(fid, nid, "defines");
+                        var symEmb = _embedder != null
+                            ? await _embedder.GenerateAsync($"{safeName} {kind}", ct).ConfigureAwait(false)
+                            : LTAI.AI.EmbeddingClient.FastEmb($"{safeName} {kind}");
+                        await _store.InsertVectorAsync(nid, symEmb);
 
                         var ctx = GetContext(code, line);
                         await _store.AddDoc(nid, ctx, "code", $"{rel}:L{line}");
                         fileNodeCount++;
+
+                        var mappedKind = MapKind(kind);
+                        if (mappedKind is "method" or "function")
+                            methodNodes.Add((nid, safeName, line));
+                    }
+
+                    // Intra-file CALLS via name match
+                    if (methodNodes.Count > 1)
+                    {
+                        foreach (var (callerId, callerName, callLine) in methodNodes)
+                        {
+                            var ctx = GetContext(code, callLine);
+                            foreach (var (calleeId, calleeName, _) in methodNodes)
+                            {
+                                if (callerId == calleeId) continue;
+                                if (ctx.Contains(calleeName) || ctx.Contains(calleeName + "("))
+                                {
+                                    await _store.AddEdge(callerId, calleeId, "CALLS", weight: 0.8);
+                                }
+                            }
+                        }
                     }
 
                     Interlocked.Add(ref na, fileNodeCount);
-                    _indexedFiles[file] = lw;
-                    Interlocked.Increment(ref sc);
-                }
-                finally { writeGate.Release(); }
+                }); // transaction + lock released here
+
+                _indexedFiles[file] = lw;
+                Interlocked.Increment(ref sc);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -156,6 +193,18 @@ public sealed class CgGraph : AIContextProvider
         }).ConfigureAwait(false);
 
         _built = true;
+
+        // Post-index: cross-file CALLS inference
+        await InferCrossFileCallsAsync().ConfigureAwait(false);
+
+        // Post-index: detect deleted files and prune orphaned nodes
+        await PruneDeletedFilesAsync(files).ConfigureAwait(false);
+
+        // Persist current file list for next build's diff
+        await _store.SetMeta("cg:files", string.Join("\n", files));
+
+        // Rebuild IVF centroids for fast vector search
+        await _store.RebuildCentroidsAsync().ConfigureAwait(false);
 
         // Maintenance
         if (sc > 0 || _indexedFiles.Count % 10 == 0)
@@ -173,7 +222,7 @@ public sealed class CgGraph : AIContextProvider
 
     public async Task<string> QueryAsync(string query, int topK = 5, CancellationToken ct = default)
     {
-        await EnsureBuiltAsync();
+        if (!_built) return "Code graph not built — run /build command first.";
 
         var keywords = await RewriteQueryAsync(query, ct);
         if (string.IsNullOrWhiteSpace(keywords)) keywords = query;
@@ -272,11 +321,6 @@ public sealed class CgGraph : AIContextProvider
     //  Private
     // ═══════════════════════════════════════════
 
-    private async Task EnsureBuiltAsync()
-    {
-        if (!_built) await BuildAsync();
-    }
-
     /// <summary>
     /// L0 短路判断（复用 KbGraph 逻辑）：简单查询不触发 LLM。
     /// </summary>
@@ -328,6 +372,101 @@ public sealed class CgGraph : AIContextProvider
         var start = Math.Max(0, lineNum - 3);
         var end = Math.Min(lines.Length, lineNum + 2);
         return string.Join("\n", lines[start..end]);
+    }
+
+    // ═══════════════════════════════════════════
+    //  Post-index: cross-file CALLS inference
+    // ═══════════════════════════════════════════
+
+    /// <summary>
+    /// After indexing all files, scan method docs for names of other methods
+    /// across the entire codebase and create CALLS edges.
+    /// </summary>
+    private async Task InferCrossFileCallsAsync()
+    {
+        try
+        {
+            var methods = _store.GetNodesByKind("method");
+            if (methods.Count < 2) return;
+
+            _logger.LogInformation("CgGraph: inferring cross-file CALLS for {N} methods", methods.Count);
+
+            var nameIndex = new Dictionary<string, List<long>>(StringComparer.OrdinalIgnoreCase);
+            foreach (var m in methods)
+            {
+                if (!nameIndex.ContainsKey(m.Name))
+                    nameIndex[m.Name] = new List<long>();
+                nameIndex[m.Name].Add(m.Id);
+            }
+
+            // Batch all CALLS edges in a single transaction
+            await _store.ExecuteInTransactionAsync(async () =>
+            {
+                int added = 0;
+                foreach (var caller in methods)
+                {
+                    var docs = _store.GetDocs(caller.Id);
+                    var docText = string.Join("\n", docs.Select(d => d.Text));
+                    if (string.IsNullOrWhiteSpace(docText)) continue;
+
+                    var seen = new HashSet<long> { caller.Id };
+                    foreach (var (calleeName, calleeIds) in nameIndex)
+                    {
+                        if (calleeName == caller.Name) continue;
+                        if (!docText.Contains(calleeName) && !docText.Contains(calleeName + "(")) continue;
+
+                        foreach (var calleeId in calleeIds)
+                        {
+                            if (!seen.Add(calleeId)) continue;
+                            await _store.AddEdge(caller.Id, calleeId, "CALLS", weight: 0.6);
+                            added++;
+                        }
+                    }
+                }
+                _logger.LogInformation("CgGraph: added {N} cross-file CALLS edges", added);
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "CgGraph: cross-file CALLS inference failed");
+        }
+    }
+
+    // ═══════════════════════════════════════════
+    //  Post-index: orphaned file pruning
+    // ═══════════════════════════════════════════
+
+    /// <summary>
+    /// Prune nodes whose source file was deleted between builds.
+    /// Uses Meta("cg:files") to track the known set across runs.
+    /// </summary>
+    private async Task PruneDeletedFilesAsync(List<string> currentFiles)
+    {
+        try
+        {
+            var prevRaw = _store.GetMeta("cg:files");
+            if (string.IsNullOrEmpty(prevRaw)) return;
+
+            var prevSet = new HashSet<string>(
+                prevRaw.Split('\n', StringSplitOptions.RemoveEmptyEntries),
+                StringComparer.OrdinalIgnoreCase);
+
+            var currentSet = new HashSet<string>(currentFiles, StringComparer.OrdinalIgnoreCase);
+
+            // Files in prevSet but not in currentSet were deleted
+            foreach (var missing in prevSet)
+            {
+                if (currentSet.Contains(missing)) continue;
+                var rel = Path.GetRelativePath(_ws, missing).Replace('\\', '/');
+                _logger.LogInformation("CgGraph: pruning deleted file \"{Rel}\"", rel);
+                await _store.DeleteSource(rel);
+                _indexedFiles.Remove(missing);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "CgGraph: prune deleted files failed");
+        }
     }
 
     public void Dispose() => _parser?.Dispose();

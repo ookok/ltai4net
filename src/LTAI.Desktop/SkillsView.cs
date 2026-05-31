@@ -51,11 +51,10 @@ public sealed class SkillsView : UserControl
         var usage = LoadUsage();
         var lines = new System.Collections.Generic.List<string>();
 
-        foreach (var sub in Directory.GetDirectories(skillsDir).OrderBy(Path.GetFileName))
+        var allMds = Directory.GetFiles(skillsDir, "SKILL.md", SearchOption.AllDirectories).OrderBy(Path.GetFileName);
+        foreach (var md in allMds)
         {
-            var md = Path.Combine(sub, "SKILL.md");
-            if (!File.Exists(md)) continue;
-            var name = Path.GetFileName(sub);
+            var name = Path.GetFileName(Path.GetDirectoryName(md)!)!;
             var desc = GetDesc(md);
             var lastUsed = usage.TryGetValue(name, out var dt) ? dt : (DateTime?)null;
             var expired = lastUsed.HasValue && (DateTime.UtcNow - lastUsed.Value) > TimeSpan.FromDays(30);

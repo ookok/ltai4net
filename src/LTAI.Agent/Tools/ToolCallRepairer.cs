@@ -21,10 +21,11 @@ public static class ToolCallRepairer
         NumberHandling = System.Text.Json.Serialization.JsonNumberHandling.AllowReadingFromString,
     };
 
-    // Track recent tool calls for loop detection
-    private static readonly Dictionary<string, List<(string name, string args, DateTime time)>> _callHistory = new();
+    // Track recent tool calls for loop detection (circular buffer, O(1) dequeue)
+    private static readonly Dictionary<string, Queue<(string name, string args, DateTime time)>> _callHistory = new();
     private static readonly TimeSpan LoopWindow = TimeSpan.FromSeconds(30);
     private const int MaxIdenticalCalls = 3;
+    private const int MaxHistoryEntries = 500;
 
     /// <summary>
     /// Repair tool call arguments. Returns repaired JSON string or error message.
@@ -119,16 +120,21 @@ public static class ToolCallRepairer
         {
             if (!_callHistory.TryGetValue(toolName, out var history))
             {
-                history = new List<(string, string, DateTime)>();
+                history = new Queue<(string, string, DateTime)>();
                 _callHistory[toolName] = history;
             }
 
-            // Clean old entries
-            history.RemoveAll(h => now - h.time > LoopWindow);
+            // Clean old entries (O(1) per expired entry)
+            while (history.TryPeek(out var oldest) && (now - oldest.time > LoopWindow))
+                history.Dequeue();
+
+            // Evict oldest if full (O(1))
+            while (history.Count >= MaxHistoryEntries)
+                history.Dequeue();
 
             // Count identical calls
             var identical = history.Count(h => h.args == arguments);
-            history.Add((toolName, arguments, now));
+            history.Enqueue((toolName, arguments, now));
 
             if (identical >= MaxIdenticalCalls)
             {

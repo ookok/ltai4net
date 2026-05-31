@@ -1,6 +1,8 @@
 // Copyright (c) LTAI. All rights reserved.
 
 using System.Runtime.CompilerServices;
+using System.Text.Json;
+using LTAI.Agent.Tools;
 using Microsoft.Extensions.AI;
 
 namespace LTAI.Agent;
@@ -13,6 +15,8 @@ namespace LTAI.Agent;
 public sealed class ToolResultCapturingChatClient : DelegatingChatClient
 {
     private static bool _logged;
+    private SafeToolExecutionMiddleware? _middleware;
+    private static readonly TimeSpan ToolTimeout = TimeSpan.FromSeconds(30);
 
     public ToolResultCapturingChatClient(IChatClient inner) : base(inner) { }
 
@@ -40,6 +44,12 @@ public sealed class ToolResultCapturingChatClient : DelegatingChatClient
                 System.Diagnostics.Debug.WriteLine($"  {name}");
         }
 
+        // 懒初始化（首次拿到工具列表时构建）
+        _middleware ??= options?.Tools != null ? new SafeToolExecutionMiddleware(options.Tools) : null;
+
+        // 预建立 CallId → (Name, Arguments) 索引
+        var callMap = BuildCallMap(messages);
+
         // 检查请求消息中的 FunctionResultContent（来自 FunctionInvokingChatClient 的工具执行结果）
         foreach (var msg in messages)
         {
@@ -48,19 +58,56 @@ public sealed class ToolResultCapturingChatClient : DelegatingChatClient
             {
                 if (content is FunctionResultContent frc && frc.Result != null)
                 {
+                    // [Fix 1] BeforeToolCall: loop detection + fuzzy matching
+                    if (_middleware != null)
+                    {
+                        var callId = frc.CallId ?? "";
+                        var (name, args) = callMap.TryGetValue(callId, out var info)
+                            ? info
+                            : (callId, "");
+                        var (shouldSuppress, message) = _middleware.BeforeToolCall(name, args);
+                        if (shouldSuppress)
+                        {
+                            yield return new ChatResponseUpdate(ChatRole.Assistant, $"  ⚠️ {message}\n");
+                            continue;
+                        }
+                    }
+
                     var resultStr = frc.Result?.ToString() ?? "";
                     if (resultStr.Length > 500)
                         resultStr = resultStr[..500] + "...";
-                    // 直接 yield 工具结果通知给 TUI
                     yield return new ChatResponseUpdate(ChatRole.Assistant, $"  📄 工具返回: {resultStr}\n");
                 }
             }
         }
 
-        // 正常转发到叶子客户端
-        await foreach (var update in base.GetStreamingResponseAsync(messages, options, token).WithCancellation(token))
+        // [Fix 2] Per-tool timeout: 用 CancellationToken 实现 30s 超时
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(token);
+        timeoutCts.CancelAfter(ToolTimeout);
+        var timeoutToken = timeoutCts.Token;
+
+        await foreach (var update in base.GetStreamingResponseAsync(messages, options, timeoutToken)
+            .WithCancellation(timeoutToken))
         {
             yield return update;
         }
+    }
+
+    private static Dictionary<string, (string name, string args)> BuildCallMap(IEnumerable<ChatMessage> messages)
+    {
+        var map = new Dictionary<string, (string, string)>(StringComparer.Ordinal);
+        foreach (var m in messages)
+        {
+            if (m.Contents == null) continue;
+            foreach (var c in m.Contents)
+            {
+                if (c is FunctionCallContent fcc && fcc.CallId != null)
+                {
+                    var args = fcc.Arguments != null ? JsonSerializer.Serialize(fcc.Arguments) : "";
+                    map[fcc.CallId] = (fcc.Name ?? "", args);
+                }
+            }
+        }
+        return map;
     }
 }

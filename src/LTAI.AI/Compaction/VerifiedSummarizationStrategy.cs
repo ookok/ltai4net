@@ -139,6 +139,9 @@ public sealed class VerifiedSummarizationStrategy : CompactionStrategy
     /// </summary>
     public string VerificationPrompt { get; }
 
+    /// <summary>Safe maximum length for original text to fit within a 32K context window.</summary>
+    private const int MaxOriginalLength = 24000;
+
     /// <inheritdoc/>
     protected override async ValueTask<bool> CompactCoreAsync(CompactionMessageIndex index, ILogger logger, CancellationToken cancellationToken)
     {
@@ -254,10 +257,10 @@ public sealed class VerifiedSummarizationStrategy : CompactionStrategy
                 .Select(m => $"[{m.Role}]: {m.Text ?? "(non-text content)"}"));
 
         // Truncate if too long to avoid hitting token limits on the verifier
-        if (originalText.Length > 32000)
+        if (originalText.Length > MaxOriginalLength)
         {
-            originalText = originalText[^32000..];
-            logger.Log(LogLevel.Debug, "[VerifiedSummarization] Truncated original text to 32000 chars for verification.");
+            originalText = originalText[^MaxOriginalLength..];
+            logger.Log(LogLevel.Debug, "[VerifiedSummarization] Truncated original text to {MaxLen} chars for verification.", MaxOriginalLength);
         }
 
         string verificationPrompt = this.VerificationPrompt
@@ -329,3 +332,4 @@ public sealed class VerifiedSummarizationStrategy : CompactionStrategy
         }
     }
 }
+#pragma warning restore MAAI001

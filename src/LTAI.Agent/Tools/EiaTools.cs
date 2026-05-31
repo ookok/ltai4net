@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using LTAI.AI;
 
 namespace LTAI.Agent.Tools;
 
@@ -6,6 +7,7 @@ namespace LTAI.Agent.Tools;
 /// Environmental Impact Assessment (EIA) tools implementing Chinese standards:
 /// GB 3095-2012, HJ 633-2012, GB 3096-2008, GB 3838-2002, GB/T 3840-1991.
 /// </summary>
+[ToolDomain("eia")]
 public sealed class EiaTools
 {
     // ─── Air Quality Standards (GB 3095-2012 / HJ 633-2012) ───
@@ -20,7 +22,12 @@ public sealed class EiaTools
         ["CO"]   = [5, 10, 35, 60],         // mg/m³
     };
 
-    [Description("Classify air quality per GB 3095-2012 / HJ 633-2012 (Chinese AQI)")]
+    [Description("按 GB 3095-2012 / HJ 633-2012 中国 AQI 标准分类空气质量。输入 SO2/NO2/PM10/PM2.5/O3/CO 浓度。\n"
+        + "适用场景：评估空气质量等级、判断是否适用于户外活动、环评报告中的空气质量评价。\n"
+        + "不适用场景：噪声评价（请用 ClassifyNoise）、水质评价（请用 ClassifyWaterQuality）。\n"
+        + "关键参数：so2/no2/pm10/pm25 — 污染物浓度(µg/m³)；o3/co — 可选。")]
+    [ToolExample("SO2 50 NO2 80 PM10 150 PM2.5 75 空气质量算几级")]
+    [ToolExample("今天的空气质量怎么样")]
     public static string ClassifyAirQuality(
         [Description("SO2 concentration (µg/m³)")] double so2,
         [Description("NO2 concentration (µg/m³)")] double no2,
@@ -109,7 +116,11 @@ public sealed class EiaTools
         ["4b (铁路干线)"]  = (70, 60),
     };
 
-    [Description("Classify environmental noise per GB 3096-2008")]
+    [Description("按 GB 3096-2008 标准分类环境噪声等级。输入昼间和夜间分贝值。\n"
+        + "适用场景：评估噪声是否达标、环评中的噪声评价、判断噪声适用区域类别。\n"
+        + "不适用场景：空气质量评价（请用 ClassifyAirQuality）、水质评价（请用 ClassifyWaterQuality）。\n"
+        + "关键参数：dayLeq — 昼间等效声级 dB(A)；nightLeq — 夜间等效声级 dB(A)。")]
+    [ToolExample("白天 55 分贝晚上 45 分贝噪声超标吗")]
     public static string ClassifyNoise(
         [Description("Daytime noise level Leq dB(A)")] double dayLeq,
         [Description("Nighttime noise level Leq dB(A)")] double nightLeq)
@@ -139,7 +150,11 @@ public sealed class EiaTools
 
     // ─── Water Quality Classification (GB 3838-2002) ───
 
-    [Description("Classify surface water quality per GB 3838-2002")]
+    [Description("按 GB 3838-2002 标准分类地表水水质。输入 DO/COD/NH3-N/TP 参数。\n"
+        + "适用场景：评估地表水水质类别、环评中的水环境评价、判断水体适用功能。\n"
+        + "不适用场景：空气质量评价（请用 ClassifyAirQuality）、噪声评价（请用 ClassifyNoise）。\n"
+        + "关键参数：do_mgL — 溶解氧(mg/L)；cod — 化学需氧量(mg/L)；nh3n — 氨氮(mg/L)；tp — 总磷(mg/L)。")]
+    [ToolExample("DO 6.5 COD 15 NH3-N 0.5 TP 0.1 这水是几类")]
     public static string ClassifyWaterQuality(
         [Description("DO (dissolved oxygen, mg/L)")] double do_mgL,
         [Description("COD (chemical oxygen demand, mg/L)")] double cod,
@@ -205,7 +220,11 @@ public sealed class EiaTools
 
     // ─── Gaussian Plume Dispersion (GB/T 3840-1991) ───
 
-    [Description("Gaussian plume air dispersion model per GB/T 3840-1991")]
+    [Description("高斯烟羽大气扩散模型。按 GB/T 3840-1991 计算下风向污染物浓度。\n"
+        + "适用场景：预测污染源下风向浓度、环评中的大气扩散模拟、评估排放影响范围。\n"
+        + "不适用场景：室内空气质量评价、空气质量分类（请用 ClassifyAirQuality）。\n"
+        + "关键参数：q — 排放速率(g/s)；u — 风速(m/s)；h — 有效源高(m)；x — 下风向距离(m)。")]
+    [ToolExample("排放速率 100g/s 风速 3m/s 源高 50m 下风向 500m 浓度多少")]
     public static string GaussianPlume(
         [Description("Emission rate (g/s)")] double q,
         [Description("Wind speed (m/s)")] double u,
@@ -275,7 +294,11 @@ public sealed class EiaTools
         ["HFC134a"] = 1300,
     };
 
-    [Description("Calculate CO₂-equivalent for greenhouse gases")]
+    [Description("计算温室气体的 CO₂ 当量排放。按 IPCC GWP 100 年指标。\n"
+        + "适用场景：计算碳排放总量、温室气体排放报告、碳足迹评估。\n"
+        + "不适用场景：空气质量分类、高斯扩散模拟。\n"
+        + "关键参数：gas — 气体名称(CO2/CH4/N2O/SF6等)；massKg — 质量(kg)。")]
+    [ToolExample("CH4 排放 100kg 二氧化碳当量是多少")]
     public static string CO2Equivalent(
         [Description("Gas name: CO2, CH4, N2O, SF6, CF4, C2F6, HFC134a")] string gas,
         [Description("Mass in kg")] double massKg)
@@ -299,7 +322,10 @@ public sealed class EiaTools
 
     // ─── Hazard Quotient (Ecological Risk) ───
 
-    [Description("Calculate hazard quotient for ecological risk assessment")]
+    [Description("计算生态风险评价的危害商数(HQ)。HQ = 实测浓度 / PNEC 安全阈值。\n"
+        + "适用场景：生态风险评估、污染物毒性评价、环境安全边界判断。\n"
+        + "关键参数：concentration — 实测浓度(mg/kg 或 mg/L)；pnec — PNEC 安全阈值。")]
+    [ToolExample("实测浓度 10mg/kg PNEC 2mg/kg 风险高吗")]
     public static string HazardQuotient(
         [Description("Measured concentration (mg/kg or mg/L)")] double concentration,
         [Description("PNEC or safe threshold (mg/kg or mg/L)")] double pnec)
@@ -366,7 +392,11 @@ public sealed class EiaTools
         ["HJ 2035-2013"] = "Technical Guidelines for Solid Waste Management / 固体废物处理处置工程技术导则",
     };
 
-    [Description("Look up Chinese environmental standards (GB/HJ codes)")]
+    [Description("查询中国环境标准(GB/HJ 标准号)。返回标准名称、等级划分、限值等信息。\n"
+        + "适用场景：查询某个环评标准的具体限值、确认标准适用范围。\n"
+        + "关键参数：code — 标准号如 GB 3095-2012 或 HJ 633-2012。")]
+    [ToolExample("查一下 GB 3095-2012 的标准")]
+    [ToolExample("HJ 633-2012 是什么标准")]
     public static string LookupStandard(
         [Description("Standard code like 'GB 3095-2012' or 'HJ 633-2012'")] string code)
     {

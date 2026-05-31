@@ -2,11 +2,13 @@
 
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using LTAI.AI;
+using LTAI.Agent.Tools;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
@@ -51,7 +53,17 @@ public sealed class KbGraph : AIContextProvider
     {
         // Stage 1: Query expansion — skip LLM rewriter for simple queries and dev mode
         // (FastEmb intent classification already filtered casual chat earlier)
-        var expanded = await ExpandQueryAsync(query, ct);
+        // Skip LLM-based query expansion for very simple queries
+        string expanded;
+        if (query.Length <= 8 || query.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length <= 2)
+        {
+            // Use original query directly for simple queries
+            expanded = query;
+        }
+        else
+        {
+            expanded = await ExpandQueryAsync(query, ct);
+        }
         if (string.IsNullOrWhiteSpace(expanded)) expanded = query;
 
         if (!string.Equals(query, expanded, StringComparison.Ordinal))
@@ -85,8 +97,14 @@ public sealed class KbGraph : AIContextProvider
                     var fusedIds = rrf.OrderByDescending(x => x.Value)
                                       .Take(topK * 2)
                                       .Select(x => x.Key)
-                                      .ToHashSet();
-                    ftsHits = ftsHits.Where(h => fusedIds.Contains(h.nodeId)).ToList();
+                                      .ToList();
+                    // 重建 ftsHits 为 fusedIds 的并集：
+                    // - BM25+vector 都命中的 → 保留 BM25 元数据
+                    // - 仅 vector 命中的 → 创建占位条目（后续走 node lookup）
+                    var ftsMap = ftsHits.ToDictionary(h => h.nodeId);
+                    ftsHits = fusedIds
+                        .Select(id => ftsMap.TryGetValue(id, out var hit) ? hit : (id, "", 0.0, ""))
+                        .ToList();
                     _logger.LogInformation("KbGraph: FTS5+Vector RRF fusion, {N} results", ftsHits.Count);
                 }
             }
@@ -243,6 +261,103 @@ public sealed class KbGraph : AIContextProvider
     }
 
     // ═══════════════════════════════════════════
+    //  Office document indexing
+    // ═══════════════════════════════════════════
+
+    private static readonly HashSet<string> OfficeExts =
+        new(StringComparer.OrdinalIgnoreCase) { ".docx", ".xlsx", ".pptx" };
+
+    /// <summary>
+    /// Ingest a single Office file (.docx / .xlsx / .pptx) into the KG store.
+    /// Extracts text, chunks by logical sections (paragraphs / sheets / slides),
+    /// stores as "document" nodes with concepts.
+    /// </summary>
+    public async Task<string> IngestOfficeFile(string filePath)
+    {
+        if (!File.Exists(filePath))
+            return $"File not found: {filePath}";
+
+        var ext = Path.GetExtension(filePath);
+        if (!OfficeExts.Contains(ext))
+            return $"Unsupported Office format: {ext}";
+
+        string content;
+        try
+        {
+            content = ext switch
+            {
+                ".docx" => OfficeDocumentReader.ExtractWordText(filePath),
+                ".xlsx" => OfficeDocumentReader.ExtractExcelText(filePath),
+                ".pptx" => OfficeDocumentReader.ExtractPptText(filePath),
+                _ => "",
+            };
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "KbGraph: failed to read {File}", filePath);
+            return $"Error: {ex.Message}";
+        }
+
+        if (string.IsNullOrWhiteSpace(content))
+            return "No text content found in " + Path.GetFileName(filePath);
+
+        var fileName = Path.GetFileName(filePath);
+        var relPath = filePath;
+
+        // Chunk by logical sections (double-newline separation from extractors)
+        var chunks = content.Split(["\n\n"], StringSplitOptions.RemoveEmptyEntries);
+
+        int ingested = 0;
+        foreach (var chunk in chunks)
+        {
+            var trimmed = chunk.Trim();
+            if (trimmed.Length < 20) continue;
+
+            // Use section heading as title (first line or chunk prefix)
+            var title = trimmed.Split('\n')[0];
+            if (title.Length > 100) title = title[..100] + "…";
+            var sourceLabel = $"{fileName}:{title}";
+
+            await IngestDocument(
+                id: $"office:{fileName}:{ingested}:{Guid.NewGuid().ToString("N")[..8]}",
+                title: title,
+                content: trimmed,
+                source: sourceLabel,
+                lang: "zh");
+            ingested++;
+        }
+
+        _logger.LogInformation("KbGraph: ingested '{F}' → {N} chunks", fileName, ingested);
+        return $"Ingested '{fileName}' → {ingested} sections";
+    }
+
+    /// <summary>
+    /// Batch-index all Office files under a directory.
+    /// </summary>
+    public async Task<string> BuildOfficeIndexAsync(string directoryPath)
+    {
+        if (!Directory.Exists(directoryPath))
+            return $"Directory not found: {directoryPath}";
+
+        var files = Directory.EnumerateFiles(directoryPath, "*.*", SearchOption.AllDirectories)
+            .Where(f => OfficeExts.Contains(Path.GetExtension(f)))
+            .ToList();
+
+        if (files.Count == 0)
+            return "No Office files found in " + directoryPath;
+
+        int ok = 0, fail = 0;
+        foreach (var file in files)
+        {
+            var result = await IngestOfficeFile(file);
+            if (result.StartsWith("Error")) fail++;
+            else ok++;
+        }
+
+        return $"Indexed {ok} / {ok + fail} Office documents";
+    }
+
+    // ═══════════════════════════════════════════
     //  Private
     // ═══════════════════════════════════════════
 
@@ -312,6 +427,67 @@ public sealed class KbGraph : AIContextProvider
         "解释一下 说明 介绍 总结 概括",
         "错误 问题 故障 异常 解决 修复",
         "配置 安装 部署 设置 参数 选项",
+        // ── C# /.NET ──
+        "接口 API endpoint 路由 控制器",
+        "类 结构体 枚举 接口 抽象类 继承 多态",
+        "方法 函数 属性 字段 事件 委托 lambda",
+        "配置 依赖注入 DI 中间件 服务注册 容器",
+        "报错 异常 堆栈 日志 调试 断点 运行时 crash",
+        "ORM 数据库 SQL 查询 事务 迁移 索引",
+        "测试 单元测试 xUnit NUnit Moq 断言 mock",
+        "async await Task Task.Run 异步 并行 线程",
+        "LINQ 查询 表达式 IEnumerable IQueryable 集合",
+        "HttpClient 请求 响应 REST API 认证 JWT",
+        "内存 性能 优化 缓存 池化 GC 泄漏 分析",
+        // ── Python ──
+        "Python pip conda venv 虚拟环境 依赖",
+        "pandas numpy matplotlib 数据分析 科学计算",
+        "Django Flask FastAPI 框架 路由 中间件 视图",
+        "async def await asyncio 协程 异步",
+        // ── JavaScript / TypeScript / Node ──
+        "JavaScript JS TypeScript TS Node.js 前端 后端",
+        "React Vue Angular SPA 组件 状态管理 Redux Pinia",
+        "npm yarn pnpm 包管理 依赖 构建 webpack vite",
+        "async await Promise callback 回调 事件循环",
+        "ESLint Prettier Babel TypeScript 类型 接口",
+        // ── Rust ──
+        "Rust cargo 所有权 借用 生命周期 lifetime",
+        "unsafe trait impl 泛型 宏 模式匹配 match",
+        "async await tokio 异步 运行时 并发",
+        // ── Go ──
+        "Go golang go mod 包管理 goroutine channel",
+        "interface struct defer error 错误处理 并发",
+        // ── DevOps & Cloud ──
+        "Docker 容器 镜像 dockerfile compose 编排",
+        "Kubernetes K8s pod service deployment ingress",
+        "CI CD 流水线 持续集成 持续部署 GitHub Actions",
+        "AWS Azure GCP 云服务 对象存储 S3 函数计算",
+        "Linux 服务器 shell bash 命令 进程 文件系统",
+        "Nginx 反向代理 负载均衡 SSL 证书 HTTPS",
+        // ── 前端 / 样式 ──
+        "HTML CSS 布局 flex grid 动画 响应式 移动端",
+        "浏览器 DOM 事件 渲染 性能 缓存 跨域 CORS",
+        // ── Shell / 工具链 ──
+        "命令行 CLI 终端 terminal bash zsh 管道 重定向",
+        "git 版本控制 commit branch merge rebase PR",
+        "正则表达式 regex grep sed awk 文本处理",
+        // ── 网络 / 协议 ──
+        "网络 TCP IP HTTP WebSocket gRPC DNS 代理",
+        "RESTful gRPC GraphQL 序列化 JSON Protobuf",
+        "Socket 长连接 短连接 心跳 重连 超时",
+        // ── 安全 ──
+        "安全 加密 解密 SSL TLS HTTPS 证书 密钥",
+        "XSS CSRF SQL注入 认证 授权 OAuth JWT SSO",
+        "防火墙 入侵检测 审计 权限 沙箱 隔离",
+        // ── 架构 / 设计 ──
+        "架构 微服务 分布式 高可用 负载均衡 容错",
+        "设计模式 单例 工厂 观察者 策略 依赖注入",
+        "CQRS 事件驱动 消息队列 最终一致性 Saga",
+        "数据库 关系型 NoSQL 缓存 Redis 分库分表",
+        // ── 算法 / 数据结构 ──
+        "算法 数据结构 排序 搜索 树 图 哈希表 栈 队列",
+        "时间复杂度 空间复杂度 递归 动态规划 贪心",
+        "机器学习 深度学习 神经网络 NLP CV 训练 推理",
     ];
 
     private static readonly string[] SkipAnchors =
@@ -350,10 +526,23 @@ public sealed class KbGraph : AIContextProvider
         const int dim = 384;
         var sum = new float[dim];
         int count = 0;
+
+        // 优先使用 ONNX LocalEmbedder（BGE 模型），不可用时回退 FastEmb
+        var localEmb = GetSharedEmbedder();
+
         foreach (var anchor in anchors)
         {
-            var emb = LTAI.AI.EmbeddingClient.FastEmb(anchor, dim);
-            for (int i = 0; i < dim; i++) sum[i] += emb[i];
+            float[] emb;
+            if (localEmb.Available)
+            {
+                emb = localEmb.Generate(anchor);
+            }
+            else
+            {
+                emb = LTAI.AI.EmbeddingClient.FastEmb(anchor, dim);
+            }
+            if (emb.Length == 0) continue;
+            for (int i = 0; i < Math.Min(emb.Length, dim); i++) sum[i] += emb[i];
             count++;
         }
         if (count > 0)
@@ -370,9 +559,45 @@ public sealed class KbGraph : AIContextProvider
         return na > 0 && nb > 0 ? dot / (MathF.Sqrt(na) * MathF.Sqrt(nb)) : 0;
     }
 
+    /// <summary>代码模式启发式检测 — 含 C#/代码关键字则强制走 KG。</summary>
+    private static bool ContainsCodePattern(string text)
+    {
+        // C# 语言关键字
+        var codePatterns = new[]
+        {
+            "async", "await", "Task<", "Task.", "IEnumerable", "IQueryable",
+            "namespace ", "class ", "interface ", "struct ", "enum ", "record ",
+            "void ", "int ", "string ", "bool ", "var ", "new ", "null ",
+            "=>", "::", "??", "?.", "??=",
+            ".cs", ".csproj", ".sln",
+            "HttpClient", "HttpResponse", "IActionResult",
+            "ConfigureAwait", "GetAwaiter", "ValueTask",
+            "List<", "Dictionary<", "HashSet<", "Concurrent",
+            "public ", "private ", "protected ", "internal ", "static ",
+            "readonly", "virtual", "override", "abstract", "sealed",
+            "partial", "ref ", "out ", "in ", "params",
+        };
+        if (codePatterns.Any(p => text.Contains(p, StringComparison.OrdinalIgnoreCase)))
+            return true;
+
+        // 包含成对的圆括号且长度 > 10（类函数调用语法）
+        if (text.Length > 10)
+        {
+            int open = 0, close = 0;
+            foreach (var c in text) { if (c == '(') open++; if (c == ')') close++; }
+            if (open >= 2 && close >= 2) return true;
+        }
+
+        return false;
+    }
+
     /// <summary>Intent-based KG gate. Uses FastEmb + cosine similarity.</summary>
     internal static bool IsKnowledgeQuery(string text)
     {
+        // 代码模式 → 强制走 KG（跳过 centroid 分类）
+        if (ContainsCodePattern(text))
+            return true;
+
         EnsureCentroids();
         var emb = LTAI.AI.EmbeddingClient.FastEmb(text.Trim(), 384);
         var knowledgeScore = CosineSimilarity(emb, _knowledgeCentroid!);

@@ -60,11 +60,89 @@ public sealed class WorkflowOrchestrator
     ///   2. String fallback: "HANDOFF TO name: task" — backward compatible
     /// If no marker is found, the orchestrator's response is returned directly.
     /// </summary>
+    // ═══════════════════════════════════════════
+    //  问候/闲聊关键词 — 不走 LLM 路由
+    // ═══════════════════════════════════════════
+
+    private enum GreetingType { None, Greeting, Thanks, Affirm, Farewell, Probing, Test }
+
+    private static readonly HashSet<string> GreetingPrefixes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "你好", "hi", "hello", "hey", "嗨", "嘿嘿",
+        "早上好", "下午好", "晚上好", "晚安",
+    };
+
+    private static readonly HashSet<string> ThanksPrefixes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "谢谢", "感谢", "多谢", "辛苦了", "thanks", "thank", "谢谢啦",
+    };
+
+    private static readonly HashSet<string> AffirmPrefixes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "好的", "ok", "okay", "嗯", "嗯嗯", "是", "对",
+    };
+
+    private static readonly HashSet<string> FarewellPrefixes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "再见", "拜拜", "bye", "明天见", "回头聊",
+    };
+
+    private static readonly HashSet<string> ProbingPrefixes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "你会做什么", "你能做什么", "你会写代码吗", "你会什么", "你有什么功能", "你能干嘛",
+    };
+
+    private static readonly HashSet<string> TestPrefixes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "测试", "试一下", "试试", "在吗", "在不在",
+    };
+
+    /// <summary>
+    /// 快速通道：分类问候/闲聊意图，返回子类型。
+    /// 节省一次 LLM 往返（~5-15秒 + token 费用）。
+    /// </summary>
+    private static GreetingType ClassifyGreeting(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return GreetingType.Greeting;
+
+        var trimmed = text.Trim();
+        if (trimmed.Length > 10) return GreetingType.None;
+
+        if (GreetingPrefixes.Any(p => trimmed.Equals(p, StringComparison.OrdinalIgnoreCase) || trimmed.StartsWith(p))) return GreetingType.Greeting;
+        if (ThanksPrefixes.Any(p => trimmed.Equals(p, StringComparison.OrdinalIgnoreCase) || trimmed.StartsWith(p))) return GreetingType.Thanks;
+        if (AffirmPrefixes.Any(p => trimmed.Equals(p, StringComparison.OrdinalIgnoreCase))) return GreetingType.Affirm;
+        if (FarewellPrefixes.Any(p => trimmed.Equals(p, StringComparison.OrdinalIgnoreCase) || trimmed.StartsWith(p))) return GreetingType.Farewell;
+        if (ProbingPrefixes.Any(p => trimmed.Equals(p, StringComparison.OrdinalIgnoreCase) || trimmed.StartsWith(p))) return GreetingType.Probing;
+        if (TestPrefixes.Any(p => trimmed.Equals(p, StringComparison.OrdinalIgnoreCase) || trimmed.StartsWith(p))) return GreetingType.Test;
+
+        return GreetingType.None;
+    }
+
     public async Task<AgentResponse> ExecuteHandoffAsync(
         string task,
         string? traceId = null,
         CancellationToken ct = default)
     {
+        // ── Fast path: greeting/small-talk → direct answer, no LLM routing ──
+        var gType = ClassifyGreeting(task);
+        if (gType != GreetingType.None && gType != GreetingType.Affirm)
+        {
+            _logger.LogInformation("Greeting fast path ({GType}): \"{Task}\"", gType, task);
+            var response = gType switch
+            {
+                GreetingType.Greeting => "你好 👋 我是 LTAI 助手，有什么可以帮你的？",
+                GreetingType.Thanks => "不客气 😊 还有什么需要帮忙的吗？",
+                GreetingType.Farewell => "再见 👋 随时欢迎回来！",
+                GreetingType.Probing => "我是 LTAI 助手，可以帮你写代码、查资料、分析数据、管理文件等。你想做什么？",
+                GreetingType.Test => "我在呢 ✅ 随时可以开始。",
+                _ => "你好 👋 有什么可以帮你的？",
+            };
+            return new AgentResponse
+            {
+                Messages = [new ChatMessage(ChatRole.Assistant, response)]
+            };
+        }
+
         // Use orchestrator agent to decide routing.
         // If embedder is available, select top-5 agents by semantic similarity
         // instead of dumping all specialists into the prompt (avoid prompt bloat).
@@ -73,7 +151,7 @@ public sealed class WorkflowOrchestrator
 
         if (_embedder != null && _specialists.Count > 5)
         {
-            candidateNames = AgentRegistry.SelectTopK(task, _embedder, k: 5);
+            candidateNames = await AgentRegistry.SelectTopKAsync(task, _embedder, k: 5);
             specialistsDesc = string.Join("\n", candidateNames.Select(n => $"  - {n}"));
             _logger.LogDebug("Vector router: selected {N}/{Total} candidates",
                 candidateNames.Length, _specialists.Count);

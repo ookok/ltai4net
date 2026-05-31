@@ -35,6 +35,10 @@ public static class MarkdownRenderer
     private static readonly Regex StringRx = new(@"""([^""\\]*(\\.[^""\\]*)*)""|'[^']*'");
     private static readonly Regex CommentRx = new(@"(//[^\n]*|#[^\n]*)");
     private static readonly Regex NumberRx = new(@"\b(\d+\.?\d*[fFlLdD]?)\b");
+    private static readonly Regex OrderedListRx = new(@"^(\d+)\.\s");
+    private static readonly Regex TableSepRx = new(@"^\|[\s\-:]+\|$");
+    private static readonly Regex InlineFormatRx = new(
+        @"\*\*(.+?)\*\*|__(.+?)__|\*(.+?)\*|_(.+?)_|`(.+?)`|\[(.+?)\]\(([^)]+)\)|~~(.+?)~~");
 
     public static InlineCollection Render(string text, InlineCollection inlines)
     {
@@ -61,12 +65,12 @@ public static class MarkdownRenderer
             if (line.StartsWith("> ")) { inlines.Add(Run(line, color: LtaiTheme.TextDim, italic: true)); continue; }
             if (line.StartsWith("- ") || line.StartsWith("* "))
             { inlines.Add(Run("  \u2022 ", color: LtaiTheme.AccentDNA)); RenderSpan(line[2..], inlines); continue; }
-            var ol = Regex.Match(line, @"^(\d+)\.\s");
+            var ol = OrderedListRx.Match(line);
             if (ol.Success) { inlines.Add(Run($"  {ol.Groups[1].Value}. ", color: LtaiTheme.AccentDNA)); RenderSpan(line[ol.Length..], inlines); continue; }
             var trimmedLine = line.TrimStart();
             if (trimmedLine.StartsWith('|') && line.TrimEnd().EndsWith('|'))
             {
-                if (Regex.IsMatch(trimmedLine, @"^\|[\s\-:]+\|$")) continue;
+                if (TableSepRx.IsMatch(trimmedLine)) continue;
                 var cells = trimmedLine.Split('|', StringSplitOptions.RemoveEmptyEntries)
                     .Select(c => c.Trim()).ToList();
                 for (int ci = 0; ci < cells.Count; ci++)
@@ -180,10 +184,8 @@ public static class MarkdownRenderer
 
     public static void RenderSpan(string text, InlineCollection inlines)
     {
-        var regex = new Regex(
-            @"\*\*(.+?)\*\*|__(.+?)__|\*(.+?)\*|_(.+?)_|`(.+?)`|\[(.+?)\]\(([^)]+)\)|~~(.+?)~~");
         int pos = 0;
-        foreach (Match m in regex.Matches(text))
+        foreach (Match m in InlineFormatRx.Matches(text))
         {
             if (m.Index > pos)
                 inlines.Add(Run(text[pos..m.Index]));

@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using TreeSitter;
 
 namespace LTAI.Agent.Tools;
@@ -10,6 +11,7 @@ public sealed class TreeSitterParser : IDisposable
 {
     private readonly Parser _parser;
     private readonly Dictionary<string, Language> _languages = new();
+    private readonly ILogger? _logger;
 
     // Language name → (native DLL, native function)
     private static readonly Dictionary<string, (string dll, string fn)> LanguageMap = new()
@@ -76,9 +78,10 @@ public sealed class TreeSitterParser : IDisposable
             ["interface_declaration"] = "interface", ["enum_declaration"] = "enum" },
     };
 
-    public TreeSitterParser()
+    public TreeSitterParser(ILogger? logger = null)
     {
         _parser = new Parser();
+        _logger = logger;
     }
 
     /// <summary>Get the TreeSitter language for a file extension.</summary>
@@ -207,8 +210,9 @@ public sealed class TreeSitterParser : IDisposable
             _languages[langId] = lang;
             return lang;
         }
-        catch
+        catch (Exception ex)
         {
+            _logger?.LogWarning(ex, "TreeSitter: failed to load native DLL \"{Dll}\" for language \"{Lang}\"", spec.dll, langId);
             return null;
         }
     }

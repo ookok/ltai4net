@@ -1,6 +1,7 @@
 using System.Linq;
 using System.Text;
 using Avalonia.Controls;
+using Microsoft.Extensions.AI;
 using Avalonia.Input;
 using Avalonia.Input.Platform;
 using Avalonia.Layout;
@@ -27,10 +28,43 @@ public sealed class ChatView : UserControl
     private CancellationTokenSource? _cts;
     private int _turns, _tokens;
     private bool _isSending;
+    private readonly SessionManager _sessionManager;
+    private readonly LTAI.Desktop.ToolRendering.ToolResultRendererRegistry _toolRenderers;
+    private TextBlock? _currentResponseText;
 
-    public ChatView(LTAIService svc)
+    public SessionManager SessionManager => _sessionManager;
+
+    public async Task LoadSessionAsync(string name)
+    {
+        if (!await _sessionManager.LoadSessionAsync(name).ConfigureAwait(false)) return;
+        _outputStack.Children.Clear();
+        foreach (var msg in _sessionManager.Messages)
+        {
+            var label = msg.Role == ChatRole.User ? "[You]" : "[LTAI]";
+            var color = msg.Role == ChatRole.User ? LtaiTheme.ChatUser : LtaiTheme.AccentSystem;
+            AddBubble(label, msg.Text ?? "", color, LtaiTheme.Border);
+        }
+        _turns = _sessionManager.Messages.Count / 2;
+        RefreshStats();
+    }
+
+    public async Task ResetSessionAsync()
+    {
+        if (_sessionManager.MessageCount > 0)
+            await _sessionManager.SaveSessionAsync().ConfigureAwait(false);
+        _sessionManager.NewSession();
+        _outputStack.Children.Clear();
+        _turns = 0;
+        _tokens = 0;
+        RefreshStats();
+        AddSystemBubble("✅ 新会话已创建");
+    }
+
+    public ChatView(LTAIService svc, SessionManager? sessionManager = null)
     {
         _svc = svc;
+        _sessionManager = sessionManager ?? new SessionManager();
+        _toolRenderers = LTAI.Desktop.ToolRendering.DefaultRenderers.Create();
         Background = LtaiTheme.Sbb(LtaiTheme.Bg);
 
         var root = new DockPanel { Margin = new(16) };
@@ -127,6 +161,23 @@ public sealed class ChatView : UserControl
         _outputStack = new StackPanel { Spacing = 8 };
         _scroller = new ScrollViewer { Content = _outputStack };
         root.Children.Add(_scroller);
+
+        // Auto-load most recent session or start fresh
+        var existing = _sessionManager.ListSessions();
+        if (existing.Length > 0 && _sessionManager.LoadSession(existing[0].Name))
+        {
+            foreach (var msg in _sessionManager.Messages)
+            {
+                var label = msg.Role == ChatRole.User ? "[You]" : "[LTAI]";
+                var color = msg.Role == ChatRole.User ? LtaiTheme.ChatUser : LtaiTheme.AccentSystem;
+                AddBubble(label, msg.Text ?? "", color, LtaiTheme.Border);
+            }
+            _turns = _sessionManager.Messages.Count / 2;
+        }
+        else
+        {
+            _sessionManager.NewSession();
+        }
 
         SetupDragDrop();
         Content = root;
@@ -348,7 +399,6 @@ public sealed class ChatView : UserControl
         };
         dotTimer.Start();
         aiContent.Children.Add(statusDots);
-
         var thinkPanel = new Border
         {
             Background = LtaiTheme.Sbb(LtaiTheme.ThinkBg),
@@ -391,6 +441,7 @@ public sealed class ChatView : UserControl
 
         var responsePanel = new StackPanel { Spacing = 2 };
         aiContent.Children.Add(responsePanel);
+        _currentResponseText = null;
 
         Border? taskBanner = null;
         var firstTokenReceived = false;
@@ -399,6 +450,9 @@ public sealed class ChatView : UserControl
         var responseBuf = new StringBuilder();
         var thinkBuf = new StringBuilder();
         var inThinking = false;
+        var lastRenderedText = "";
+        var lastUiUpdate = DateTime.UtcNow;
+        const int uiThrottleMs = 20;
 
         try
         {
@@ -407,38 +461,21 @@ public sealed class ChatView : UserControl
                 var token = update.Text ?? "";
                 _tokens++;
 
-                // Parse structured ToolResult JSON
-                if (TryParseToolResult(token, out var tResult))
+                // Check tool result renderer registry first
+                var rendered = _toolRenderers.Render(token);
+                if (rendered != null)
                 {
-                    if (tResult.success)
+                    statusDots.Text = "⚡";
+                    responseBuf.Append($" {Truncate(token, 80)}");
+                    Dispatcher.UIThread.Post(() =>
                     {
-                        statusDots.Text = "✅";
-                        responseBuf.Append($" [OK: {Truncate(tResult.output, 80)}]");
-                    }
-                    else
-                    {
-                        statusDots.Text = "❌";
-                        responseBuf.Append($" [ERROR: {tResult.error}]");
-                    }
+                        toolPanel.IsVisible = true;
+                        toolPanel.Children.Add(rendered);
+                    });
                     continue;
                 }
 
-                // Budget hints → show as dimmed status
-                if (token.StartsWith("[budget:") || token.StartsWith("[note:"))
-                {
-                    statusDots.Text = "💰";
-                    responseBuf.Append($" {token}");
-                    continue;
-                }
-
-                // Handoff → update task banner
-                if (token.StartsWith("HANDOFF TO "))
-                {
-                    if (taskBanner?.Child is TextBlock tb2)
-                        tb2.Text = $"🔄 {token}";
-                    continue;
-                }
-
+                // Thinking tags
                 if (token.StartsWith("<thinking>"))
                 {
                     inThinking = true;
@@ -464,71 +501,41 @@ public sealed class ChatView : UserControl
                         Dispatcher.UIThread.Post(() => aiContent.Children.Remove(statusDots));
                     }
 
-                    // Detect ReAct tool calls via 📋 emoji (U+1F4CB = "\uD83D\uDCCB")
-                    // The emoji is a visual indicator that the next text is a tool invocation.
-                    // We show a spinner in the tool panel and advance on each new 📋.
-                    if (token.Contains("\uD83D\uDCCB"))
+                    if (!firstTokenReceived)
                     {
-                        var toolName = token.Replace("\uD83D\uDCCB", "").Trim();
-                        if (string.IsNullOrWhiteSpace(toolName)) toolName = "tool";
-                        var currentToolName = toolName;
-                        Dispatcher.UIThread.Post(() =>
+                        firstTokenReceived = true;
+                        taskBanner = new Border
                         {
-                            if (taskBanner?.Child is TextBlock tbb)
-                                tbb.Text = "⚡ Executing tools...";
-                            toolPanel.IsVisible = true;
-
-                            var toolRow = new DockPanel { Margin = new(0, 1) };
-                            toolRow.Children.Add(new TextBlock
+                            Background = LtaiTheme.Sbb(LtaiTheme.BgPanel),
+                            CornerRadius = new(4),
+                            Padding = new(6, 3),
+                            Margin = new(0, 0, 0, 4),
+                            Child = new TextBlock
                             {
-                                Text = $"🔧 {currentToolName}",
+                                Text = "⚡ Processing...",
                                 Foreground = LtaiTheme.Sbb(LtaiTheme.AccentInfo),
-                                FontFamily = new("Consolas"),
                                 FontSize = 11
-                            });
-
-                            var progressBar = new ProgressBar
-                            {
-                                IsIndeterminate = true,
-                                Width = 80,
-                                Height = 4,
-                                Margin = new(8, 0, 0, 0)
-                            };
-                            DockPanel.SetDock(progressBar, Dock.Right);
-                            toolRow.Children.Add(progressBar);
-
-                            toolPanel.Children.Add(toolRow);
-                        });
+                            }
+                        };
+                        Dispatcher.UIThread.Post(() => aiContent.Children.Insert(0, taskBanner));
                     }
-                    else
+                    responseBuf.Append(token);
+                    _tokens++;
+                    if (_tokens % 8 == 0 && (DateTime.UtcNow - lastUiUpdate).TotalMilliseconds >= uiThrottleMs)
                     {
-                        if (!firstTokenReceived)
+                        lastUiUpdate = DateTime.UtcNow;
+                        var text = responseBuf.ToString();
+                        if (text != lastRenderedText)
                         {
-                            firstTokenReceived = true;
-                            taskBanner = new Border
-                            {
-                                Background = LtaiTheme.Sbb(LtaiTheme.BgPanel),
-                                CornerRadius = new(4),
-                                Padding = new(6, 3),
-                                Margin = new(0, 0, 0, 4),
-                                Child = new TextBlock
-                                {
-                                    Text = "⚡ Processing...",
-                                    Foreground = LtaiTheme.Sbb(LtaiTheme.AccentInfo),
-                                    FontSize = 11
-                                }
-                            };
-                            Dispatcher.UIThread.Post(() => aiContent.Children.Insert(0, taskBanner));
+                            lastRenderedText = text;
+                            UpdateResponseText(responsePanel, text);
                         }
-                        responseBuf.Append(token);
-                        _tokens++;
-                        if (_tokens % 8 == 0)
-                            RenderResponse(responsePanel, responseBuf.ToString());
                     }
                 }
 
                 _scroller.ScrollToEnd();
-                await Task.Yield();
+                if (_tokens % 20 == 0)
+                    await Task.Yield();
             }
 
             RenderResponse(responsePanel, responseBuf.ToString());
@@ -583,6 +590,11 @@ public sealed class ChatView : UserControl
                 }
             }
 
+            // Save session after each completed turn
+            _sessionManager.AddMessage(ChatRole.User, query);
+            _sessionManager.AddMessage(ChatRole.Assistant, responseBuf.ToString());
+            await _sessionManager.SaveSessionAsync().ConfigureAwait(false);
+
             RefreshStats();
         }
         catch (OperationCanceledException)
@@ -602,7 +614,7 @@ public sealed class ChatView : UserControl
         finally
         {
             _cts?.Dispose();
-            _cts = null;
+            if (dotTimer.IsEnabled) dotTimer.Stop();
             SetSending(false);
         }
     }
@@ -643,10 +655,10 @@ public sealed class ChatView : UserControl
                 var keywords = MarkdownRenderer.GetKeywords(lang);
                 var codeLines = part.Content.Split('\n');
                 var linePad = codeLines.Length.ToString().Length;
-                for (int li = 0; li < codeLines.Length; li++)
+                var maxLines = 50;
+                for (int li = 0; li < codeLines.Length && li < maxLines; li++)
                 {
                     var lineRow = new DockPanel { Margin = new(0, 0, 0, 0) };
-                    // Line number gutter
                     lineRow.Children.Add(new TextBlock
                     {
                         Text = (li + 1).ToString().PadLeft(linePad),
@@ -657,7 +669,6 @@ public sealed class ChatView : UserControl
                         TextAlignment = Avalonia.Media.TextAlignment.Right,
                         Margin = new(0, 0, 8, 0),
                     });
-                    // Code content
                     var tb = new TextBlock { FontFamily = new("Consolas"), FontSize = 12, TextWrapping = TextWrapping.Wrap };
                     var tokens = MarkdownRenderer.TokenizeLine(codeLines[li], keywords);
                     if (tokens.Count > 0)
@@ -667,6 +678,18 @@ public sealed class ChatView : UserControl
                         tb.Text = " ";
                     lineRow.Children.Add(tb);
                     codeStack.Children.Add(lineRow);
+                }
+                if (codeLines.Length > maxLines)
+                {
+                    codeStack.Children.Add(new TextBlock
+                    {
+                        Text = $"[... truncated: {codeLines.Length - maxLines} more lines]",
+                        Foreground = LtaiTheme.Sbb(LtaiTheme.TextDim),
+                        FontFamily = new("Consolas"),
+                        FontSize = 11,
+                        FontStyle = FontStyle.Italic,
+                        Margin = new(linePad * 8 + 8, 2, 0, 0)
+                    });
                 }
                 codeBorder.Child = codeStack;
                 codeRow.Children.Add(codeBorder);
@@ -698,7 +721,26 @@ public sealed class ChatView : UserControl
         {
             var imgPath = m.Groups[1].Success ? m.Groups[1].Value : m.Groups[2].Value;
             if (!string.IsNullOrWhiteSpace(imgPath))
-                RenderInlineImage(panel, imgPath);
+                _ = RenderInlineImage(panel, imgPath);
+        }
+    }
+
+    private void UpdateResponseText(StackPanel panel, string text)
+    {
+        if (_currentResponseText == null)
+        {
+            _currentResponseText = new TextBlock
+            {
+                Foreground = LtaiTheme.Sbb(LtaiTheme.TextPrimary),
+                FontSize = 13,
+                TextWrapping = TextWrapping.Wrap,
+                Text = text
+            };
+            panel.Children.Add(_currentResponseText);
+        }
+        else if (_currentResponseText.Text != text)
+        {
+            _currentResponseText.Text = text;
         }
     }
 
@@ -845,7 +887,7 @@ public sealed class ChatView : UserControl
         return parts;
     }
 
-    private async void RenderInlineImage(StackPanel panel, string path)
+    private async Task RenderInlineImage(StackPanel panel, string path)
     {
         try
         {
@@ -855,10 +897,8 @@ public sealed class ChatView : UserControl
             string localPath;
             if (isUrl)
             {
-                // Download URL image to temp file
                 using var resp = await _sharedHttp.GetAsync(path);
                 var ext = ".png";
-                // Try to guess extension from URL
                 var urlPath = new Uri(path).AbsolutePath;
                 var urlExt = Path.GetExtension(urlPath)?.ToLowerInvariant();
                 if (urlExt is ".png" or ".jpg" or ".jpeg" or ".gif" or ".bmp" or ".webp")
@@ -877,9 +917,10 @@ public sealed class ChatView : UserControl
             var ext2 = Path.GetExtension(localPath).ToLowerInvariant();
             if (ext2 is ".png" or ".jpg" or ".jpeg" or ".gif" or ".bmp" or ".webp")
             {
+                var bitmap = await Task.Run(() => new Avalonia.Media.Imaging.Bitmap(localPath));
                 var image = new Image
                 {
-                    Source = new Avalonia.Media.Imaging.Bitmap(localPath),
+                    Source = bitmap,
                     MaxWidth = 400,
                     MaxHeight = 300,
                     Stretch = Stretch.Uniform
@@ -1023,7 +1064,10 @@ public sealed class ChatView : UserControl
             case "clear":
             case "新":
             case "新建":
+                if (_sessionManager.MessageCount > 0)
+                    _sessionManager.SaveSession();
                 _outputStack.Children.Clear();
+                _sessionManager.NewSession();
                 _turns = 0;
                 _tokens = 0;
                 RefreshStats();
@@ -1094,13 +1138,19 @@ public sealed class ChatView : UserControl
                 return true;
 
             default:
-                var closest = KnownCommands
-                    .Select(c => (name: c, dist: Levenshtein(cmdName, c)))
-                    .Where(x => x.dist <= 3)
-                    .OrderBy(x => x.dist)
-                    .FirstOrDefault();
-                var msg = closest.name != null
-                    ? $"⚠️ 未知命令 '/{cmdName}'。您是不是想输入 '/{closest.name}'？"
+                string? bestName = null;
+                var bestDist = int.MaxValue;
+                for (int i = 0; i < KnownCommands.Length; i++)
+                {
+                    var d = Levenshtein(cmdName, KnownCommands[i]);
+                    if (d <= 3 && d < bestDist)
+                    {
+                        bestDist = d;
+                        bestName = KnownCommands[i];
+                    }
+                }
+                var msg = bestName != null
+                    ? $"⚠️ 未知命令 '/{cmdName}'。您是不是想输入 '/{bestName}'？"
                     : $"⚠️ 未知命令 '/{cmdName}'。输入 /help 查看可用命令。";
                 AddSystemBubble(msg);
                 return true;

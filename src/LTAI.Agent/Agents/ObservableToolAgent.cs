@@ -34,20 +34,18 @@ public sealed class ObservableToolAgent : DelegatingAIAgent
         AgentRunOptions? options = null,
         CancellationToken cancellationToken = default)
     {
-        return CoreStreamingAsync(messages, session, options, cancellationToken);
+        return CoreStreamingAsync(messages, session, options, ct: cancellationToken);
     }
 
     private async IAsyncEnumerable<AgentResponseUpdate> CoreStreamingAsync(
         IEnumerable<ChatMessage> messages,
         AgentSession? session = null,
         AgentRunOptions? options = null,
-        CancellationToken cancellationToken = default,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
         var inner = InnerAgent.RunStreamingAsync(messages, session, options, ct);
-        var token = ct != default ? ct : cancellationToken;
 
-        await foreach (var update in inner.WithCancellation(token))
+        await foreach (var update in inner.WithCancellation(ct))
         {
             // Yield original update first
             yield return update;

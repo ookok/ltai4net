@@ -5,9 +5,19 @@
     <SatelliteResourceLanguages>zh-Hans;zh-Hant;zh-CN</SatelliteResourceLanguages>
 
     <!-- Microsoft Agent Framework — 无上限浮动，restore 自动拉最新版（含 major 升级） -->
-    <MAFVersion>[1.8.0,)</MAFVersion>
+    <MAFVersion>[1.8.0,2.0.0)</MAFVersion>
     <!-- 固定到已知预览版本，避免 NU1603 -->
     <MAFPreviewVersion>[1.8.0-preview.260528.1,)</MAFPreviewVersion>
+
+    <Optimize>true</Optimize>
+    <DebugType>embedded</DebugType>
+    <DebugSymbols>false</DebugSymbols>
+    <TieredCompilation>true</TieredCompilation>
+    <TieredCompilationQuickJit>true</TieredCompilationQuickJit>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <Deterministic>true</Deterministic>
+    <ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>
+    <ModuleSkipLocalsInit>true</ModuleSkipLocalsInit>
   </PropertyGroup>
 
   <!-- All library projects output to dist/lib for shared DLLs -->

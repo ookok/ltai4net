@@ -5,20 +5,13 @@ using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Text.Json;
 
 namespace LTAI.Agent.Tools;
 
-/// <summary>
-/// System environment and network diagnostic tools.
-/// Based on mature built-in .NET components (no external dependencies).
-/// </summary>
 public sealed class SystemTools
 {
-    // 共享 HttpClient — 复用连接池，避免 socket 耗尽
-    private static readonly HttpClient _sharedHttp = new()
-    {
-        Timeout = TimeSpan.FromSeconds(30)
-    };
+    private static readonly Lazy<HttpClient> _sharedHttp = new(() => new HttpClient { Timeout = TimeSpan.FromSeconds(30) });
 
     [Description("REQUIRED: Get the ACTUAL current date and time from the system clock. ALWAYS call this tool when the user asks what day it is, what time it is, today's date, or the current weekday. Do NOT guess or estimate the date.")]
     public static string GetCurrentDateTime()
@@ -62,7 +55,6 @@ public sealed class SystemTools
         sb.AppendLine($"| 64-bit OS | {Environment.Is64BitOperatingSystem} |");
         sb.AppendLine($"| 64-bit Process | {Environment.Is64BitProcess} |");
 
-        // Disk space
         try
         {
             foreach (var drive in DriveInfo.GetDrives().Where(d => d.IsReady))
@@ -73,7 +65,7 @@ public sealed class SystemTools
                 sb.AppendLine($"| Disk {drive.Name} | {FormatSize(drive.AvailableFreeSpace)} free / {FormatSize(drive.TotalSize)} total {pct} |");
             }
         }
-        catch { /* drive access denied on some systems */ }
+        catch { }
 
         return sb.ToString();
     }
@@ -95,16 +87,17 @@ public sealed class SystemTools
                 ? Process.GetProcesses()
                 : Process.GetProcessesByName(filter);
 
+            var now = DateTime.Now;
             foreach (var p in processes.Take(limit))
             {
                 try
                 {
-                    var cpu = (DateTime.Now - p.StartTime).TotalSeconds > 0
-                        ? $"{(p.TotalProcessorTime.TotalSeconds / (DateTime.Now - p.StartTime).TotalSeconds * 100):F1}%"
+                    var cpu = (now - p.StartTime).TotalSeconds > 0
+                        ? $"{(p.TotalProcessorTime.TotalSeconds / (now - p.StartTime).TotalSeconds * 100):F1}%"
                         : "N/A";
                     sb.AppendLine($"| {p.Id} | {p.ProcessName} | {cpu} | {FormatSize(p.WorkingSet64)} | {p.Threads.Count} |");
                 }
-                catch { /* process exited between enum and stat */ }
+                catch { }
                 finally { p.Dispose(); }
             }
 
@@ -129,7 +122,6 @@ public sealed class SystemTools
         {
             var val = Environment.GetEnvironmentVariable(name);
             if (val == null) return $"Variable '{name}' not set.";
-            // Redact secrets in single-var lookup too (not just in list-all mode)
             if (name.Contains("KEY") || name.Contains("SECRET") || name.Contains("PASSWORD") || name.Contains("TOKEN"))
                 val = val.Length > 8 ? val[..8] + "..." : "***";
             return $"**{name}** = `{val}`";
@@ -161,7 +153,6 @@ public sealed class SystemTools
         if (!confirmed)
             return "⚠️ 设置环境变量需要用户确认。请向用户展示要设置的变量名和值，确认后调用 SetEnv 并传入 confirmed=true。";
 
-        // 进程级设置只影响当前进程及其子进程，不会持久化到系统
         Environment.SetEnvironmentVariable(name, value);
         var preview = name.Contains("KEY") || name.Contains("SECRET") || name.Contains("PASSWORD") || name.Contains("TOKEN")
             ? value.Length > 8 ? value[..8] + "..." : "***"
@@ -202,13 +193,12 @@ public sealed class SystemTools
             foreach (var addr in entries)
                 sb.AppendLine($"- {addr} ({(addr.AddressFamily == AddressFamily.InterNetworkV6 ? "IPv6" : "IPv4")})");
 
-            // Reverse lookup
             try
             {
                 var reverse = await Dns.GetHostEntryAsync(entries[0]);
                 sb.AppendLine($"\nPTR: {reverse.HostName}");
             }
-            catch { /* no PTR record for this IP */ }
+            catch { }
 
             return sb.ToString();
         }
@@ -251,14 +241,13 @@ public sealed class SystemTools
         {
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(Math.Clamp(timeoutSec, 1, 60)));
             var sw = Stopwatch.StartNew();
-            var resp = await _sharedHttp.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, cts.Token);
+            var resp = await _sharedHttp.Value.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, cts.Token);
             sw.Stop();
 
-            // Read only first 2KB to avoid downloading large responses
             using var stream = await resp.Content.ReadAsStreamAsync();
             var buffer = new byte[2048];
             var bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length);
-            var bodyPreview = System.Text.Encoding.UTF8.GetString(buffer, 0, bytesRead)
+            var bodyPreview = Encoding.UTF8.GetString(buffer, 0, bytesRead)
                 .Replace("\n", " ").Replace("\r", "");
             if (bodyPreview.Length > 200) bodyPreview = bodyPreview[..200] + "...";
             if (bytesRead == buffer.Length) bodyPreview += " [truncated]";
@@ -303,13 +292,13 @@ public sealed class SystemTools
         return sb.ToString();
     }
 
-    [Description("Get the CURRENT WORKING DIRECTORY path. Call this when the user asks what directory you are in, or what the current path is.")]
+    [Description("Get the CURRENT WORKING DIRECTORY path")]
     public static string GetCurrentDirectory()
     {
         return Directory.GetCurrentDirectory();
     }
 
-    [Description("List files and subdirectories in a given path. Returns names with sizes for files. Use this when asked to browse or explore the local file system.")]
+    [Description("List files and subdirectories in a given path")]
     public static string ListDirectory(
         [Description("Directory path (default: current working directory)")] string path = ".")
     {
@@ -351,26 +340,23 @@ public sealed class SystemTools
         }
     }
 
-    /// <summary>Whois lookup for a domain (uses whois-servers).</summary>
     [Description("WHOIS lookup for domain registration info")]
     public static async Task<string> Whois(
         [Description("Domain name (e.g. example.com)")] string domain)
     {
         try
         {
-            // Use rdap.org for free WHOIS replacement
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
             using var req = new HttpRequestMessage(HttpMethod.Get, $"https://rdap.org/domain/{domain}");
             req.Headers.UserAgent.ParseAdd("LTAI/1.0");
-            using var httpResp = await _sharedHttp.SendAsync(req, cts.Token);
+            using var httpResp = await _sharedHttp.Value.SendAsync(req, cts.Token);
             httpResp.EnsureSuccessStatusCode();
             var resp = await httpResp.Content.ReadAsStringAsync();
-            using var doc = System.Text.Json.JsonDocument.Parse(resp);
+            using var doc = JsonDocument.Parse(resp);
 
             var sb = new StringBuilder();
             sb.AppendLine($"## WHOIS: {domain}\n");
 
-            // Parse RDAP response
             if (doc.RootElement.TryGetProperty("events", out var events))
             {
                 foreach (var e in events.EnumerateArray())
@@ -412,4 +398,136 @@ public sealed class SystemTools
         < 1073741824 => $"{bytes / 1048576.0:F1} MB",
         _ => $"{bytes / 1073741824.0:F2} GB"
     };
+
+    [Description("Run a command inside a Docker container. Requires Docker installed and running.")]
+    public async Task<string> RunInContainer(
+        [Description("Docker image name (e.g. 'ubuntu:latest', 'python:3.11')")] string image,
+        [Description("Command to run inside the container")] string command)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = "docker",
+                Arguments = $"run --rm {image} {command}",
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            using var process = new Process { StartInfo = psi };
+            process.Start();
+            var output = await process.StandardOutput.ReadToEndAsync();
+            var error = await process.StandardError.ReadToEndAsync();
+            process.WaitForExit(TimeSpan.FromMinutes(5));
+
+            var sb = new StringBuilder();
+            sb.AppendLine($"## Docker Run: {image}\n");
+            sb.AppendLine($"Exit Code: {process.ExitCode}\n");
+            if (!string.IsNullOrEmpty(output))
+                sb.AppendLine("### Output\n" + output);
+            if (!string.IsNullOrEmpty(error))
+                sb.AppendLine("### Errors\n" + error);
+
+            return sb.ToString();
+        }
+        catch (Exception ex)
+        {
+            return $"Docker run failed: {ex.Message}";
+        }
+    }
+
+    [Description("Run a command with full network access (bypass localhost-only restriction). 用于需要访问外部网络的命令。")]
+    public async Task<string> RunWithNetwork(
+        [Description("Command to run")] string command,
+        [Description("Timeout in seconds")] int timeoutSec = 60)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = Environment.OSVersion.Platform == PlatformID.Win32NT ? "cmd.exe" : "/bin/bash",
+                Arguments = Environment.OSVersion.Platform == PlatformID.Win32NT ? $"/c {command}" : $"-c \"{command}\"",
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            using var process = new Process { StartInfo = psi };
+            process.Start();
+
+            var timeout = TimeSpan.FromSeconds(Math.Clamp(timeoutSec, 1, 600));
+            var outputTask = process.StandardOutput.ReadToEndAsync();
+            var errorTask = process.StandardError.ReadToEndAsync();
+            if (!process.WaitForExit((int)timeout.TotalMilliseconds))
+            {
+                process.Kill();
+                return $"Command timed out after {timeoutSec}s";
+            }
+            var output = await outputTask;
+            var error = await errorTask;
+
+            var sb = new StringBuilder();
+            sb.AppendLine($"## Command: {command}\n");
+            sb.AppendLine($"Exit Code: {process.ExitCode}\n");
+            if (!string.IsNullOrEmpty(output))
+                sb.AppendLine("### Output\n" + output);
+            if (!string.IsNullOrEmpty(error))
+                sb.AppendLine("### Errors\n" + error);
+
+            return sb.ToString();
+        }
+        catch (Exception ex)
+        {
+            return $"Command failed: {ex.Message}";
+        }
+    }
+
+    [Description("Check if Docker is installed and the Docker daemon is running")]
+    public async Task<string> CheckDockerAsync()
+    {
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = "docker",
+                Arguments = "info --format '{{json .}}'",
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            using var process = new Process { StartInfo = psi };
+            process.Start();
+            var output = await process.StandardOutput.ReadToEndAsync();
+            var error = await process.StandardError.ReadToEndAsync();
+            process.WaitForExit(TimeSpan.FromSeconds(10));
+
+            if (process.ExitCode != 0)
+                return $"❌ Docker is not available: {error}";
+
+            using var doc = JsonDocument.Parse(output);
+            var root = doc.RootElement;
+            var version = root.TryGetProperty("ServerVersion", out var v) ? v.GetString() : "?";
+            var containers = root.TryGetProperty("Containers", out var c) ? c.GetInt32() : 0;
+            var running = root.TryGetProperty("ContainersRunning", out var r) ? r.GetInt32() : 0;
+            var images = root.TryGetProperty("Images", out var i) ? i.GetInt32() : 0;
+            var os = root.TryGetProperty("OperatingSystem", out var o) ? o.GetString() : "?";
+
+            return $"""
+                ✅ Docker is available
+
+                | Metric | Value |
+                |--------|-------|
+                | Version | {version} |
+                | OS | {os} |
+                | Containers | {containers} (running: {running}) |
+                | Images | {images} |
+                """;
+        }
+        catch (Exception ex)
+        {
+            return $"❌ Docker check failed: {ex.Message}";
+        }
+    }
 }

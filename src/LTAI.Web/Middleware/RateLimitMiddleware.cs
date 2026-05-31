@@ -13,7 +13,9 @@ public sealed class RateLimitMiddleware
     private readonly RequestDelegate _next;
     private readonly int _maxRequests;
     private readonly int _windowSec;
-    private readonly ConcurrentDictionary<string, WindowState> _windows = new();
+    private readonly ConcurrentDictionary<string, WindowState> _windows = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly TimeSpan CleanupInterval = TimeSpan.FromMinutes(5);
+    private DateTime _lastCleanup = DateTime.UtcNow;
 
     public RateLimitMiddleware(RequestDelegate next)
     {
@@ -33,16 +35,23 @@ public sealed class RateLimitMiddleware
 
         var ip = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
         var now = DateTime.UtcNow;
-        var window = _windows.AddOrUpdate(ip, _ =>
+
+        // Periodic cleanup of stale entries
+        if (now - _lastCleanup > CleanupInterval)
         {
-            return new WindowState { Count = 1, WindowStart = now };
-        }, (_, state) =>
-        {
-            if (now - state.WindowStart > TimeSpan.FromSeconds(_windowSec))
-                return new WindowState { Count = 1, WindowStart = now };
-            state.Count++;
-            return state;
-        });
+            _lastCleanup = now;
+            foreach (var kv in _windows)
+            {
+                if (now - kv.Value.WindowStart > TimeSpan.FromSeconds(_windowSec * 2))
+                    _windows.TryRemove(kv.Key, out _);
+            }
+        }
+
+        var window = _windows.AddOrUpdate(ip,
+            _ => new WindowState(1, now),
+            (_, state) => now - state.WindowStart > TimeSpan.FromSeconds(_windowSec)
+                ? new WindowState(1, now)
+                : state with { Count = state.Count + 1 });
 
         context.Response.Headers["X-RateLimit-Limit"] = _maxRequests.ToString();
         context.Response.Headers["X-RateLimit-Remaining"] = Math.Max(0, _maxRequests - window.Count).ToString();
@@ -61,9 +70,5 @@ public sealed class RateLimitMiddleware
         await _next(context);
     }
 
-    private sealed class WindowState
-    {
-        public int Count;
-        public DateTime WindowStart;
-    }
+    private sealed record WindowState(long Count, DateTime WindowStart);
 }

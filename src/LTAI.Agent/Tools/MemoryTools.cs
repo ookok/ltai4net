@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using LTAI.AI;
 using LTAI.Core;
 
 namespace LTAI.Agent.Tools;
@@ -8,8 +9,12 @@ namespace LTAI.Agent.Tools;
 /// Ported from DeepSeek-Reasonix memory.ts.
 /// Stores memories as .md files in .livingtree/memories/.
 /// </summary>
+[ToolDomain("memory")]
 public sealed class MemoryTools
 {
+    private const int MaxMemories = 500;
+    private static readonly TimeSpan MemoryTtl = TimeSpan.FromDays(365);
+
     private readonly string _memDir;
     private readonly string _ws;
 
@@ -20,7 +25,12 @@ public sealed class MemoryTools
         Directory.CreateDirectory(_memDir);
     }
 
-    [Description("Save a memory for future sessions")]
+    [Description("保存一条记忆供未来会话使用。记忆会在下次对话开始时自动加载到上下文中。\n"
+        + "适用场景：记住用户偏好设置、保存项目相关的重要决策、记录需要长期保留的信息。\n"
+        + "不适用场景：临时会话数据（不需要持久化）、文件内容（请用 WriteFile）。\n"
+        + "关键参数：name — 记忆名称(3-40字符)；content — 记忆内容；priority — 优先级；scope — 作用域。")]
+    [ToolExample("记住我喜欢的代码风格")]
+    [ToolExample("保存这个项目的关键决策")]
     public async Task<string> Remember(
         [Description("Memory name (3-40 chars)")] string name,
         [Description("Content body")] string content,
@@ -40,10 +50,26 @@ public sealed class MemoryTools
         var header = $"---\nname: {name}\npriority: {priority}\nscope: {scope}\n---\n\n";
         await File.WriteAllTextAsync(filePath, header + content);
 
+        // Prune oldest if over limit
+        try
+        {
+            var allFiles = Directory.GetFiles(_memDir, "*.md");
+            if (allFiles.Length > MaxMemories)
+            {
+                var toDelete = allFiles.OrderBy(f => File.GetLastWriteTime(f)).Take(allFiles.Length - MaxMemories).ToArray();
+                foreach (var f in toDelete)
+                    try { File.Delete(f); } catch { }
+            }
+        }
+        catch { }
+
         return $"✅ Remembered '{name}' ({priority} priority, {scope} scope)";
     }
 
-    [Description("Delete a saved memory")]
+    [Description("删除一条已保存的记忆。\n"
+        + "适用场景：清理过时的记忆、删除错误的记录、重置已保存的偏好设置。\n"
+        + "关键参数：name — 要删除的记忆名称。")]
+    [ToolExample("删除之前保存的那条记忆")]
     public string Forget(
         [Description("Memory name to delete")] string name)
     {
@@ -58,21 +84,65 @@ public sealed class MemoryTools
         return $"🗑️ Forgotten '{name}'";
     }
 
-    [Description("Recall the content of a saved memory")]
+    [Description("读取一条已保存记忆的完整内容。\n"
+        + "适用场景：查看之前保存的关键信息、回忆项目决策依据。\n"
+        + "关键参数：name — 要读取的记忆名称。")]
+    [ToolExample("看看我之前保存了什么")]
     public async Task<string> RecallMemory(
         [Description("Memory name")] string name)
     {
         var filePath = FindMemoryFile(name);
-        if (filePath == null) return $"Memory '{name}' not found";
+        if (filePath != null)
+        {
+            // Skip if beyond TTL
+            var lastWrite = File.GetLastWriteTime(filePath);
+            if (DateTime.UtcNow - lastWrite > MemoryTtl)
+            {
+                try { File.Delete(filePath); } catch { }
+                filePath = null;
+            }
+        }
 
-        var sizeError = PathUtils.CheckFileSize(filePath, maxBytes: 10 * 1024 * 1024);
-        if (sizeError != null) return sizeError;
+        if (filePath != null)
+        {
+            var sizeError = PathUtils.CheckFileSize(filePath, maxBytes: 10 * 1024 * 1024);
+            if (sizeError != null) return sizeError;
 
-        var content = await File.ReadAllTextAsync(filePath);
-        return content;
+            var content = await File.ReadAllTextAsync(filePath);
+            return content;
+        }
+
+        // Content-based fallback when no name match found
+        var terms = name.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (terms.Length == 0) return $"Memory '{name}' not found";
+
+        var results = new List<(string title, string preview, int score)>();
+        foreach (var f in Directory.GetFiles(_memDir, "*.md"))
+        {
+            try
+            {
+                var content = File.ReadAllText(f);
+                var fileName = Path.GetFileNameWithoutExtension(f);
+                var score = terms.Sum(t => content.Count(c => char.ToLowerInvariant(c) == char.ToLowerInvariant(t[0])));
+                if (score > 0)
+                {
+                    var preview = content.Length > 500 ? content[..500] + "..." : content;
+                    results.Add(($"📄 {fileName}", preview, score));
+                }
+            }
+            catch { }
+        }
+
+        if (results.Count == 0) return $"Memory '{name}' not found";
+
+        results = results.OrderByDescending(r => r.score).Take(5).ToList();
+        return string.Join("\n\n", results.Select(r => $"{r.title} (relevance: {r.score})\n{r.preview}"));
     }
 
-    [Description("List all saved memories")]
+    [Description("列出所有已保存的记忆列表。\n"
+        + "适用场景：查看有哪些记忆可用、确认记忆名称。\n"
+        + "不适用场景：读取单个记忆内容（请用 RecallMemory）。")]
+    [ToolExample("我有哪些保存的记忆")]
     public async Task<string> ListMemories()
     {
         if (!Directory.Exists(_memDir))
@@ -87,6 +157,8 @@ public sealed class MemoryTools
         {
             var name = Path.GetFileNameWithoutExtension(f);
             var fi = new FileInfo(f);
+
+            if (DateTime.UtcNow - fi.LastWriteTimeUtc > MemoryTtl) continue;
 
             // Read only first few lines to build preview (avoids loading large files)
             string? preview = null;

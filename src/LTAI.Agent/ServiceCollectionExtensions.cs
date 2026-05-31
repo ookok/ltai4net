@@ -37,7 +37,17 @@ public static class ServiceCollectionExtensions
             return new KgStore(opts.ResolveDataPath("kg.db"));
         });
 
-        // Step 2b: Knowledge/Code graph providers (registered in DI so lifecycle is managed)
+        // Step 2b: Reranker (two-stage embedding + LLM rescore)
+        services.AddSingleton<Reranker>(sp =>
+        {
+            var embedder = sp.GetRequiredService<LTAI.AI.EmbeddingClient>();
+            var llm = sp.GetRequiredService<IChatClient>();
+            var store = sp.GetService<KgStore>();
+            var logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger<Reranker>();
+            return new Reranker(embedder, llm, store, logger);
+        });
+
+        // Step 2c: Knowledge/Code graph providers (registered in DI so lifecycle is managed)
         // Both support FTS5-only mode (no LLM, no embedding) and enhanced mode with LLM rewriting + reranking.
         services.AddSingleton<KbGraph>(sp =>
         {
@@ -51,15 +61,16 @@ public static class ServiceCollectionExtensions
         {
             var store = sp.GetRequiredService<KgStore>();
             var llm = sp.GetService<IChatClient>();
+            var embedder = sp.GetService<LTAI.AI.EmbeddingClient>();
             var logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger<CgGraph>();
-            return new CgGraph(store, llm, logger, Directory.GetCurrentDirectory());
+            return new CgGraph(store, llm, embedder, logger, Directory.GetCurrentDirectory());
         });
 
         // Step 3: Workflow orchestrator (with optional vector routing)
         services.AddSingleton<WorkflowOrchestrator>(sp =>
         {
             var all = sp.GetRequiredService<Dictionary<string, AIAgent>>();
-            return new WorkflowOrchestrator(all.Values, all["chat"],
+            return new WorkflowOrchestrator(all.Values, all["router"],
                 sp.GetRequiredService<ILogger<WorkflowOrchestrator>>(),
                 sp.GetService<EmbeddingClient>());
         });
@@ -73,7 +84,10 @@ public static class ServiceCollectionExtensions
                 perUserMax: opts.AI.PerUserTokenBudget);
         });
 
-        // Step 3c: ChatAgent + workflow (default L1=flash, auto-upgrade to L2=pro)
+        // Step 3c: Background job service
+        services.AddSingleton<BackgroundJobService>();
+
+        // Step 3d: ChatAgent + workflow (default L1=flash, auto-upgrade to L2=pro)
         services.AddSingleton<ChatAgent>(sp =>
         {
             var all = sp.GetRequiredService<Dictionary<string, AIAgent>>();
@@ -82,7 +96,9 @@ public static class ServiceCollectionExtensions
             // Pro agent for complex task auto-upgrade (uses "deepseek-pro" provider)
             var proAgent = all.TryGetValue("chat-pro", out var p) ? p : chat;
             var budget = sp.GetService<LTAI.AI.BudgetTracker>();
-            return new ChatAgent(chat, proAgent, wf, budget);
+            return new ChatAgent(chat, proAgent, wf, budget,
+                localEmbedder: sp.GetService<LTAI.AI.LocalEmbedder>(),
+                httpFactory: sp.GetService<IHttpClientFactory>());
         });
 
         return services;
@@ -115,6 +131,7 @@ public static class ServiceCollectionExtensions
         return new(StringComparer.OrdinalIgnoreCase)
         {
             // 任务类型 → temperature/topP 参考：AI编程 0.3/0.95 | 工具调用 0.3/0.95 | 通用问答 0.8/0.95 | 数学推理 1.0/0.95
+            ["router"]   = BuildAgent(sp, "LTAI-Router", "任务调度器(无工具)", false, false, false, false, temperature: 0.3f, topP: 0.95f),
             ["chat"]     = BuildAgent(sp, "LTAI-Chat",   "通用对话助手",     true, true, true, true, temperature: 0.3f, topP: 0.95f),
             ["chat-pro"] = BuildAgent(sp, "LTAI-Chat-Pro","深度推理助手(Pro)",true, true, true, true, modelId: "deepseek-pro", temperature: 0.3f, topP: 0.95f),
             ["code"]     = BuildAgent(sp, "LTAI-Code",   "代码分析助手",     true, true, true, false, temperature: 0.3f, topP: 0.95f),
@@ -124,6 +141,7 @@ public static class ServiceCollectionExtensions
             ["llm"]      = BuildAgent(sp, "LTAI-LLM",    "纯对话助手",      false, false, false, false, temperature: 0.8f, topP: 0.95f),
             ["writer"]   = BuildAgent(sp, "LTAI-Writer", "创意写作助手",     true, true, true, true, temperature: 0.8f, topP: 0.95f),
             ["frontend"] = BuildAgent(sp, "LTAI-Frontend","前端网页开发助手", true, true, true, true, temperature: 0.8f, topP: 0.95f),
+            ["plan"]     = BuildAgent(sp, "LTAI-Plan",   "架构规划师(只读)", true, false, true, false, temperature: 0.5f, topP: 0.95f),
         };
     }
 
@@ -171,11 +189,9 @@ public static class ServiceCollectionExtensions
 
         var tools = new List<AITool>();
         var fs = new FileSystemTools(ws);
-        var edit = new EditFileTools(ws);
-        var multiEdit = new MultiEditTools(ws);
-        var dirTree = new DirectoryTreeTools(ws);
-        var glob = new GlobTools(ws);
+        var text = new TextTools(ws);
 
+        // File operations (read/write/list/copy/move/delete/glob/tree)
         if (canRead) tools.Add(AIFunctionFactory.Create(
             (string path) => fs.ReadFileContent(path),
             "ReadFileContent", "Read a file"));
@@ -184,17 +200,35 @@ public static class ServiceCollectionExtensions
         if (canList)
         {
             tools.Add(AIFunctionFactory.Create(fs.ListFiles));
-            tools.Add(AIFunctionFactory.Create(dirTree.DirectoryTree));
-            tools.Add(AIFunctionFactory.Create(glob.Glob));
+            tools.Add(AIFunctionFactory.Create(fs.Glob));
+            tools.Add(AIFunctionFactory.Create(fs.DirectoryTree));
+        }
+        if (canRead && canWrite)
+        {
+            tools.Add(AIFunctionFactory.Create(fs.CopyFile));
+            tools.Add(AIFunctionFactory.Create(fs.MoveFile));
+            tools.Add(AIFunctionFactory.Create(fs.DeleteFile));
+            tools.Add(AIFunctionFactory.Create(fs.DeleteDirectory));
+            tools.Add(AIFunctionFactory.Create(fs.GetFileInfo));
         }
         if (canExec)
         {
             tools.Add(AIFunctionFactory.Create(new SafeShellTool(ws).RunCommand));
         }
+
+        // Text editing (edit/multi-edit/regex/diff)
         if (canRead && canWrite)
         {
-            tools.Add(AIFunctionFactory.Create(edit.EditFile));
-            tools.Add(AIFunctionFactory.Create(multiEdit.MultiEdit));
+            tools.Add(AIFunctionFactory.Create(text.EditFile));
+            tools.Add(AIFunctionFactory.Create(text.MultiEdit));
+        }
+        if (canRead)
+        {
+            tools.Add(AIFunctionFactory.Create(TextTools.RegexTest));
+        }
+        if (name.StartsWith("LTAI-Chat") || name is "LTAI-Code" or "LTAI-Review" or "LTAI-Writer")
+        {
+            tools.Add(AIFunctionFactory.Create(TextTools.DiffFiles));
         }
 
         // Search tools (grep-style)
@@ -225,13 +259,14 @@ public static class ServiceCollectionExtensions
             tools.Add(AIFunctionFactory.Create(EiaTools.LookupStandard));
         }
 
-        // Web tools
+        // Web tools (search, fetch, custom HTTP requests)
         var httpFactory = sp.GetRequiredService<IHttpClientFactory>();
         var web = new WebTools(httpFactory, sp.GetService<ILogger<WebTools>>());
         if (name.StartsWith("LTAI-Chat") || name == "LTAI-Data")
         {
             tools.Add(AIFunctionFactory.Create(web.WebSearch));
             tools.Add(AIFunctionFactory.Create(web.WebFetch));
+            tools.Add(AIFunctionFactory.Create(web.HttpRequest));
         }
 
         // Multimedia tools (SkiaSharp + FFmpeg)
@@ -247,15 +282,29 @@ public static class ServiceCollectionExtensions
         if (canExec)
             tools.Add(AIFunctionFactory.Create(media.Screenshot));
 
-        // Office tools (Excel/Word via DocumentFormat.OpenXml)
-        var office = new OfficeTools(ws);
+        // Document tools (Excel/Word/PPT/PDF + doc gen pipeline)
+        var doc = new DocumentTools(ws, sp.GetService<KbGraph>(),
+            sp.GetService<ILoggerFactory>()?.CreateLogger<DocumentTools>());
         if (canRead && canWrite)
         {
-            tools.Add(AIFunctionFactory.Create(office.ExcelRead));
-            tools.Add(AIFunctionFactory.Create(office.ExcelWrite));
-            tools.Add(AIFunctionFactory.Create(office.ExcelCopyRange));
-            tools.Add(AIFunctionFactory.Create(office.WordRead));
-            tools.Add(AIFunctionFactory.Create(office.WordWrite));
+            tools.Add(AIFunctionFactory.Create(doc.ExcelRead));
+            tools.Add(AIFunctionFactory.Create(doc.ExcelWrite));
+            tools.Add(AIFunctionFactory.Create(doc.ExcelCopyRange));
+            tools.Add(AIFunctionFactory.Create(doc.ExcelGetStyles));
+            tools.Add(AIFunctionFactory.Create(doc.WordRead));
+            tools.Add(AIFunctionFactory.Create(doc.WordWrite));
+            tools.Add(AIFunctionFactory.Create(doc.WordCopyStyle));
+            tools.Add(AIFunctionFactory.Create(doc.WordGetStyles));
+            tools.Add(AIFunctionFactory.Create(doc.PptRead));
+            tools.Add(AIFunctionFactory.Create(doc.PptWrite));
+            tools.Add(AIFunctionFactory.Create(doc.PptGetStyles));
+            tools.Add(AIFunctionFactory.Create(doc.PptCopyStyle));
+            tools.Add(AIFunctionFactory.Create(doc.PdfRead));
+            tools.Add(AIFunctionFactory.Create(doc.SaveTemplateAsync));
+            tools.Add(AIFunctionFactory.Create(doc.LoadTemplateAsync));
+            tools.Add(AIFunctionFactory.Create(doc.RenderTemplate));
+            tools.Add(AIFunctionFactory.Create(doc.InferContentTypes));
+            tools.Add(AIFunctionFactory.Create(doc.BuildDocumentAsync));
         }
 
         // Memory tools (persistent memory across sessions)
@@ -269,16 +318,7 @@ public static class ServiceCollectionExtensions
             tools.Add(AIFunctionFactory.Create(memory.ListMemories));
         }
 
-        // Filesystem CRUD tools (copy, move, delete, info)
-        var fileOps = new FileTools(ws);
-        if (canRead && canWrite)
-        {
-            tools.Add(AIFunctionFactory.Create(fileOps.CopyFile));
-            tools.Add(AIFunctionFactory.Create(fileOps.MoveFile));
-            tools.Add(AIFunctionFactory.Create(fileOps.DeleteFile));
-            tools.Add(AIFunctionFactory.Create(fileOps.DeleteDirectory));
-            tools.Add(AIFunctionFactory.Create(fileOps.GetFileInfo));
-        }
+
 
         // Plan approval workflow tools
         if (name.StartsWith("LTAI-Chat") || name is "LTAI-Code" or "LTAI-Writer" or "LTAI-Frontend")
@@ -309,12 +349,19 @@ public static class ServiceCollectionExtensions
         // Subagent tools (explore, research, review, spawn_subagent)
         if (name is "LTAI-Chat" or "LTAI-Writer" or "LTAI-Frontend")
         {
-            var sub = new SubagentTools(sp, llm, ws);
+            var sub = new SubagentTools(sp, llm, ws, tools);
             tools.Add(AIFunctionFactory.Create(sub.Explore));
             tools.Add(AIFunctionFactory.Create(sub.Research));
             tools.Add(AIFunctionFactory.Create(sub.Review));
             tools.Add(AIFunctionFactory.Create(sub.SecurityReview));
             tools.Add(AIFunctionFactory.Create(sub.SpawnSubagent));
+        }
+
+        // Agent generator tool (LLM-powered agent config generation)
+        if (name is "LTAI-Chat" or "LTAI-Writer")
+        {
+            var gen = new AgentGenerator(llm);
+            tools.Add(AIFunctionFactory.Create(gen.GenerateAgent));
         }
 
         // Git tools (LibGit2Sharp, no CLI)
@@ -351,21 +398,12 @@ public static class ServiceCollectionExtensions
             tools.Add(AIFunctionFactory.Create(git.GitBranchDelete));
         }
 
-        // Job & Task management tools
+        // Task management tools (todo list)
         if (name.StartsWith("LTAI-Chat") || name is "LTAI-System" or "LTAI-Code" or "LTAI-Writer" or "LTAI-Frontend")
         {
             tools.Add(AIFunctionFactory.Create(TaskTools.TodoWrite));
             tools.Add(AIFunctionFactory.Create(TaskTools.TodoComplete));
             tools.Add(AIFunctionFactory.Create(TaskTools.TodoList));
-        }
-        if (canExec)
-        {
-            var jobs = new JobTools();
-            tools.Add(AIFunctionFactory.Create(jobs.StartJob));
-            tools.Add(AIFunctionFactory.Create(JobTools.ListJobs));
-            tools.Add(AIFunctionFactory.Create(JobTools.GetJobOutput));
-            tools.Add(AIFunctionFactory.Create(jobs.WaitForJob));
-            tools.Add(AIFunctionFactory.Create(JobTools.StopJob));
         }
 
         // Integration tools (GIS, weather, translate, image)
@@ -382,7 +420,7 @@ public static class ServiceCollectionExtensions
             tools.Add(AIFunctionFactory.Create(integ.ImageSearch));
         }
 
-        // System & Network tools
+        // System & Network tools (diagnostics + background jobs + Docker containers)
         if (name is "LTAI-Chat" or "LTAI-Chat-Pro" or "LTAI-System" or "LTAI-Writer")
         {
             tools.Add(AIFunctionFactory.Create(SystemTools.GetCurrentDateTime));
@@ -399,14 +437,21 @@ public static class ServiceCollectionExtensions
             tools.Add(AIFunctionFactory.Create(SystemTools.GetCurrentDirectory));
             tools.Add(AIFunctionFactory.Create(SystemTools.ListDirectory));
         }
-
-        // Container tools (Docker sandbox)
-        var container = new ContainerTools();
+        if (name is "LTAI-Chat" or "LTAI-System" or "LTAI-Code" or "LTAI-Writer" or "LTAI-Frontend")
+        {
+            var bgJobs = sp.GetRequiredService<BackgroundJobService>();
+            tools.Add(AIFunctionFactory.Create(bgJobs.StartJob));
+            tools.Add(AIFunctionFactory.Create(bgJobs.ListJobs));
+            tools.Add(AIFunctionFactory.Create(bgJobs.GetJobOutput));
+            tools.Add(AIFunctionFactory.Create(bgJobs.WaitForJob));
+            tools.Add(AIFunctionFactory.Create(bgJobs.StopJob));
+        }
         if (canExec)
         {
-            tools.Add(AIFunctionFactory.Create(container.RunInContainer));
-            tools.Add(AIFunctionFactory.Create(container.RunWithNetwork));
-            tools.Add(AIFunctionFactory.Create(ContainerTools.CheckDockerAsync));
+            var sys = new SystemTools();
+            tools.Add(AIFunctionFactory.Create(sys.RunInContainer));
+            tools.Add(AIFunctionFactory.Create(sys.RunWithNetwork));
+            tools.Add(AIFunctionFactory.Create(sys.CheckDockerAsync));
         }
 
         // File download tool (confirm=true 才下载)
@@ -422,6 +467,58 @@ public static class ServiceCollectionExtensions
             tools.Add(AIFunctionFactory.Create(wfTools.WorkflowHandoff));
             tools.Add(AIFunctionFactory.Create(wfTools.WorkflowSequential));
             tools.Add(AIFunctionFactory.Create(wfTools.WorkflowConcurrent));
+        }
+
+        // ====== NEW TOOLS (added May 2026) ======
+
+        // Archive tools (zip/tar/gz create & extract)
+        if (canExec)
+        {
+            var archive = new ArchiveTools(ws);
+            tools.Add(AIFunctionFactory.Create(archive.ArchiveCreate));
+            tools.Add(AIFunctionFactory.Create(archive.ArchiveExtract));
+        }
+
+        // Chart tools (bar/line/pie via SkiaSharp)
+        if (canRead && canWrite)
+        {
+            var chart = new ChartTools(ws);
+            tools.Add(AIFunctionFactory.Create(chart.ChartCreate));
+        }
+
+        // Database tools (SQLite queries)
+        if (name is "LTAI-Chat" or "LTAI-Data" or "LTAI-Code")
+        {
+            var db = new DatabaseTools();
+            tools.Add(AIFunctionFactory.Create(db.SqlQuery));
+        }
+
+        // Data transformation tools (JSON query, CSV read/write)
+        if (canRead && canWrite)
+        {
+            var dt = new DataTransformTools(ws);
+            tools.Add(AIFunctionFactory.Create(dt.JsonQuery));
+            tools.Add(AIFunctionFactory.Create(dt.CsvRead));
+            tools.Add(AIFunctionFactory.Create(dt.CsvWrite));
+        }
+
+        // Crypto tools (hash, encrypt, decrypt, base64)
+        if (name.StartsWith("LTAI-Chat") || name is "LTAI-System" or "LTAI-Security" or "LTAI-Writer")
+        {
+            tools.Add(AIFunctionFactory.Create(CryptoTools.HashFile));
+            tools.Add(AIFunctionFactory.Create(CryptoTools.EncryptFile));
+            tools.Add(AIFunctionFactory.Create(CryptoTools.DecryptFile));
+        }
+        if (canRead)
+        {
+            tools.Add(AIFunctionFactory.Create(CryptoTools.Base64Encode));
+            tools.Add(AIFunctionFactory.Create(CryptoTools.Base64Decode));
+        }
+
+        // Markdown rendering tool
+        if (canRead)
+        {
+            tools.Add(AIFunctionFactory.Create(MarkdownTools.RenderMarkdown));
         }
 
         // Safety guardrail (optional — skip for local dev to reduce latency)
@@ -462,7 +559,7 @@ public static class ServiceCollectionExtensions
         // See sandbox-roadmap MEMORY.md for the full evaluation.
         var wasmtimeSandbox = new WasmtimeSandbox(ws, loggerFactory.CreateLogger<WasmtimeSandbox>());
 
-        // Skills provider: loads SKILL.md from skills/ (框架自动去重合并)
+            // Skills provider: loads SKILL.md from skills/ (框架自动去重合并)
         var skillsDir = new[] {
             Path.Combine(AppContext.BaseDirectory, "skills"),
             Path.Combine(Directory.GetCurrentDirectory(), "skills"),
@@ -470,17 +567,79 @@ public static class ServiceCollectionExtensions
         }.FirstOrDefault(Directory.Exists) ?? Path.Combine(Directory.GetCurrentDirectory(), "skills");
         Directory.CreateDirectory(skillsDir);
 
-        var skillsProvider = new Microsoft.Agents.AI.AgentSkillsProviderBuilder()
-            .UseFileSkills([skillsDir])
+        var skillsBuilder = new Microsoft.Agents.AI.AgentSkillsProviderBuilder()
+            .UseFileSkills([skillsDir]);
+
+        if (opts.SkillsUrls is { Length: > 0 })
+            skillsBuilder = skillsBuilder.UseSource(
+                new AgentUrlSkillsSource(opts.SkillsUrls, httpFactory.CreateClient()));
+
+        var skillsProvider = skillsBuilder
             .UseFileScriptRunner(LTAI.Agent.Tools.SkillScriptRunner.RunAsync)
+            .UseOptions(o =>
+            {
+                o.ScriptApproval = true;
+                o.SkillsInstructionPrompt =
+                    """
+                    你拥有领域专精技能（skills），每个技能包含专门的指令、参考文档和资产。
+
+                    <available_skills>
+                    {skills}
+                    </available_skills>
+
+                    当任务匹配某个技能的领域时：
+                    1. 用 `load_skill` 加载技能指令
+                    2. 遵循技能提供的指引
+                    {resource_instructions}
+                    {script_instructions}
+                    只加载所需技能，不要全部加载。
+                    """;
+            })
             .Build();
 
         // 插入工具结果捕获装饰器
         var instrumentedLlm = new ToolResultCapturingChatClient(llm);
+
+        // ── Plan mode 特殊处理 ──
+        var isPlanMode = name == "LTAI-Plan";
+        if (isPlanMode)
+        {
+            tools.Clear();
+            tools.Add(AIFunctionFactory.Create(LTAI.Agent.Tools.PlanTools.PlanExit));
+            if (canRead)
+            {
+                var planFs = new FileSystemTools(ws);
+                tools.Add(AIFunctionFactory.Create((string path) => planFs.ReadFileContent(path), "ReadFileContent", "Read a file"));
+                tools.Add(AIFunctionFactory.Create(planFs.Glob));
+                tools.Add(AIFunctionFactory.Create(planFs.ListFiles));
+                tools.Add(AIFunctionFactory.Create(planFs.DirectoryTree));
+            }
+            var planSearch = new SearchTools(ws);
+            tools.Add(AIFunctionFactory.Create(planSearch.SearchContent));
+            tools.Add(AIFunctionFactory.Create(planSearch.SearchFiles));
+        }
+
         AIAgent agent = new ChatClientAgent(instrumentedLlm, new ChatClientAgentOptions
         {
             Name = name,
-            Description = $"你是 {name}，{description}。\n"
+            Description = isPlanMode
+                ? """
+                <system-reminder>
+                # Plan Mode — 只读模式
+
+                你处于 Plan mode。严禁任何文件修改、shell 执行或系统变更。
+                你只能使用只读工具观察、分析和规划。
+
+                ## 职责
+                阅读代码、搜索信息、构造计划。完成后调用 PlanExit 工具提交计划并退出 Plan mode。
+
+                ## 约束
+                - 绝对禁止：写文件、编辑文件、运行命令、git 操作
+                - 允许：读文件、搜索、glob、目录列表
+                - 完成计划后调用 PlanExit
+                </system-reminder>
+                """
+                : $"你是 {name}，{description}。\n"
                 + "关于日期：当用户询问\"今天星期几\"\"现在几点\"等时间日期问题时，请直接调用 GetCurrentDateTime 工具获取实时时间，不要自行估算。\n"
                 + "工具调用注意：\n"
                 + "1. 参数必须是正确的JSON类型（数字不要加引号，布尔值用true/false）\n"
@@ -501,8 +660,8 @@ public static class ServiceCollectionExtensions
             ChatHistoryProvider = new InMemoryChatHistoryProvider(),
             // Tool RAG: 动态工具召回（放第一个）
             AIContextProviders = safety != null
-                ? [new LTAI.Agent.Tools.ToolRetrievalProvider(), shellEnv, safety, compaction, kbGraph, codeGraph, wasmtimeSandbox, new BasicContextProvider(), skillsProvider]
-                : [new LTAI.Agent.Tools.ToolRetrievalProvider(), shellEnv, compaction, kbGraph, codeGraph, wasmtimeSandbox, new BasicContextProvider(), skillsProvider],
+                ? [new LTAI.Agent.Tools.ToolRetrievalProvider(sp.GetRequiredService<LTAI.AI.EmbeddingClient>()), shellEnv, safety, compaction, kbGraph, codeGraph, wasmtimeSandbox, new LTAI.Agent.Tools.InstructionProvider(modelId), new LTAI.Agent.Tools.EnvironmentProvider(), skillsProvider]
+                : [new LTAI.Agent.Tools.ToolRetrievalProvider(sp.GetRequiredService<LTAI.AI.EmbeddingClient>()), shellEnv, compaction, kbGraph, codeGraph, wasmtimeSandbox, new LTAI.Agent.Tools.InstructionProvider(modelId), new LTAI.Agent.Tools.EnvironmentProvider(), skillsProvider],
             EnableMessageInjection = true,
             RequirePerServiceCallChatHistoryPersistence = true,
         }, loggerFactory, sp);
@@ -523,3 +682,4 @@ public static class ServiceCollectionExtensions
         return agents[0];
     }
 }
+#pragma warning restore MAAI001

@@ -11,6 +11,8 @@
     <RootNamespace>LTAI.Desktop</RootNamespace>
     <AssemblyName>LTAI.Desktop</AssemblyName>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <PublishReadyToRun>true</PublishReadyToRun>
+    <GenerateRuntimeConfigurationFiles>true</GenerateRuntimeConfigurationFiles>
   </PropertyGroup>
 
   <ItemGroup>

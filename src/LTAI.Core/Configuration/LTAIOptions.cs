@@ -130,12 +130,13 @@ public sealed class LTAIOptions
     public HarnessProfile Harness { get; set; } = new();
     public string DataDirectory { get; init; } = ".livingtree";
     public string ToolsDirectory { get; init; } = "tools";
+    public string[] SkillsUrls { get; init; } = Array.Empty<string>();
     public string PromptsDirectory { get; init; } = "prompts";
     public string MemoryDirectory { get; init; } = "memory";
     public string ModelsDirectory { get; init; } = "models";
     public string LogsDirectory { get; init; } = "logs";
     public int MaxHistoryMessages { get; init; } = 200;
-    public bool EnableObservability { get; init; } = true;
+    public bool EnableObservability { get; init; } = false;
 
     /// <summary>
     /// Resolve a path under the data directory. Env var LTAI_DATA_DIR overrides default.
@@ -166,10 +167,10 @@ public sealed class LTAIOptions
         Path.Combine(EnvMemoryDir ?? AppContext.BaseDirectory, MemoryDirectory, subPath ?? "");
 
     // ══ Env var overrides (private — consumers use Resolve* methods) ══
-    private static string? EnvDataDir => Environment.GetEnvironmentVariable("LTAI_DATA_DIR");
-    private static string? EnvToolsDir => Environment.GetEnvironmentVariable("LTAI_TOOLS_DIR");
-    private static string? EnvPromptsDir => Environment.GetEnvironmentVariable("LTAI_PROMPTS_DIR");
-    private static string? EnvMemoryDir => Environment.GetEnvironmentVariable("LTAI_MEMORY_DIR");
+    private static readonly string? EnvDataDir = Environment.GetEnvironmentVariable("LTAI_DATA_DIR");
+    private static readonly string? EnvToolsDir = Environment.GetEnvironmentVariable("LTAI_TOOLS_DIR");
+    private static readonly string? EnvPromptsDir = Environment.GetEnvironmentVariable("LTAI_PROMPTS_DIR");
+    private static readonly string? EnvMemoryDir = Environment.GetEnvironmentVariable("LTAI_MEMORY_DIR");
 }
 
 /// <summary>
@@ -444,6 +445,20 @@ public sealed class UsageTracker : IUsageTracker
     void IUsageTracker.Record(int prompt, int completion, string model) => RecordInternal(prompt, completion, model);
     void IUsageTracker.RecordWithCache(int prompt, int completion, int cacheHit, int cacheMiss, string model) => RecordInternal(prompt, completion, cacheHit, cacheMiss, model);
 
+    // Last-matched model cache to avoid repeated linear scans of KnownKeys.All
+    private static string? _lastLookupModel;
+    private static KnownKeys.KeyInfo? _lastLookupKey;
+
+    private static KnownKeys.KeyInfo? LookupModel(string model)
+    {
+        if (string.IsNullOrEmpty(model)) return null;
+        if (string.Equals(_lastLookupModel, model, StringComparison.OrdinalIgnoreCase))
+            return _lastLookupKey;
+        _lastLookupModel = model;
+        return _lastLookupKey = KnownKeys.All.FirstOrDefault(k =>
+            !string.IsNullOrEmpty(k.Model) && model.StartsWith(k.Model, StringComparison.OrdinalIgnoreCase));
+    }
+
     /// <summary>Core Record logic — called by both static forwarder and interface impl.</summary>
     private static void RecordInternal(int prompt, int completion, string model)
     {
@@ -452,8 +467,7 @@ public sealed class UsageTracker : IUsageTracker
         Interlocked.Increment(ref _requests);
         if (!string.IsNullOrEmpty(model)) _activeModel = model;
 
-        var key = KnownKeys.All.FirstOrDefault(k =>
-            !string.IsNullOrEmpty(k.Model) && model.StartsWith(k.Model, StringComparison.OrdinalIgnoreCase));
+        var key = LookupModel(model);
         double cost;
         if (key != null && (key.PriceInPerM > 0 || key.PriceOutPerM > 0))
         {
@@ -478,8 +492,7 @@ public sealed class UsageTracker : IUsageTracker
         Interlocked.Increment(ref _requests);
         if (!string.IsNullOrEmpty(model)) _activeModel = model;
 
-        var key = KnownKeys.All.FirstOrDefault(k =>
-            !string.IsNullOrEmpty(k.Model) && model.StartsWith(k.Model, StringComparison.OrdinalIgnoreCase));
+        var key = LookupModel(model);
         double cost;
         if (key != null && (key.PriceInPerM > 0 || key.PriceOutPerM > 0))
         {
@@ -889,19 +902,26 @@ public sealed class UsageTracker : IUsageTracker
 /// </summary>
 public static class SecretManager
 {
-    private static readonly ConcurrentDictionary<string, string?> _cache = new();
+    private static readonly ConcurrentDictionary<string, (string? value, DateTime cached)> _cache = new();
+    private static readonly TimeSpan CacheTtl = TimeSpan.FromMinutes(5);
 
-    /// <summary>Read secret: runtime cache → Process env → User env → Machine env.</summary>
-    public static string? Get(string envVar) =>
-        _cache.GetOrAdd(envVar, key =>
-            Environment.GetEnvironmentVariable(key, EnvironmentVariableTarget.Process)
-            ?? Environment.GetEnvironmentVariable(key, EnvironmentVariableTarget.User)
-            ?? Environment.GetEnvironmentVariable(key, EnvironmentVariableTarget.Machine));
+    /// <summary>Read secret: cache (with TTL check) → Process env → User env → Machine env.</summary>
+    public static string? Get(string envVar)
+    {
+        if (_cache.TryGetValue(envVar, out var entry) && (DateTime.UtcNow - entry.cached) < CacheTtl)
+            return entry.value;
+
+        var val = Environment.GetEnvironmentVariable(envVar, EnvironmentVariableTarget.Process)
+               ?? Environment.GetEnvironmentVariable(envVar, EnvironmentVariableTarget.User)
+               ?? Environment.GetEnvironmentVariable(envVar, EnvironmentVariableTarget.Machine);
+        _cache[envVar] = (val, DateTime.UtcNow);
+        return val;
+    }
 
     /// <summary>Write secret to runtime cache + persist to User scope (Windows: encrypted registry).</summary>
-    public static void Set(string envVar, string value, bool persistent = true)
+    public static void Set(string envVar, string? value, bool persistent = false)
     {
-        _cache[envVar] = value;
+        _cache[envVar] = (value, DateTime.UtcNow);
         Environment.SetEnvironmentVariable(envVar, value, EnvironmentVariableTarget.Process);
         if (persistent)
             try { Environment.SetEnvironmentVariable(envVar, value, EnvironmentVariableTarget.User); }

@@ -31,6 +31,10 @@ public static class Program
 
         // Resolve eagerly (triggers DI chain including 9 agents, KgStore, Wasmtime, etc.)
         var chatAgent = await Task.Run(() => provider.GetRequiredService<ChatAgent>());
+
+        // 预热 ONNX 模型 + HTTP 连接（不阻塞 UI，最慢 6 秒超时）
+        _ = chatAgent.WarmUpAsync().WaitAsync(TimeSpan.FromSeconds(6));
+
         var options = await Task.Run(() => provider.GetRequiredService<IOptions<LTAIOptions>>());
 
         // Set on App for UI access

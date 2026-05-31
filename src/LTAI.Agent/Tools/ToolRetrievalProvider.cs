@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using LTAI.AI;
@@ -16,8 +17,8 @@ namespace LTAI.Agent.Tools;
 /// <summary>
 /// MAF AIContextProvider：在每次 agent 调用前按用户意图动态召回工具。
 /// 工作流：
-///   1. 首次调用时初始化 ToolRegistry（对所有已注册工具建索引）
-///   2. 每次请求取用户最后一条消息，做语义检索取 Top-K（默认 8）
+///   1. 首次调用时使用 ONNX（优先）对全部已注册工具建索引
+///   2. 每次请求取用户最后一条消息，做 ONNX 语义检索取 Top-K（默认 8）
 ///   3. 保留兜底工具: ReadFileContent, ListTools, WebFetch, RunCommand
 ///   4. 替换 context.Tools 为召回的子集
 ///
@@ -39,24 +40,49 @@ public sealed class ToolRetrievalProvider : AIContextProvider
 
     private const int DefaultTopK = 8;
     private static bool _initialized;
+    private readonly EmbeddingClient _embedder;
+    private readonly string? _domain;
+    private readonly HashSet<string>? _domainFilter;
 
-    public ToolRetrievalProvider() : base(null, null, null) { }
+    /// <param name="embedder">Embedding 客户端。</param>
+    /// <param name="domain">可选领域过滤。当指定时，Tool RAG 对同 domain 工具加分优先召回。</param>
+    /// <param name="domainFilter">可选的域名白名单。当指定时，只考虑标记了这些领域的工具参与检索。</param>
+    public ToolRetrievalProvider(EmbeddingClient embedder, string? domain = null,
+        HashSet<string>? domainFilter = null) : base(null, null, null)
+    {
+        _embedder = embedder ?? throw new ArgumentNullException(nameof(embedder));
+        _domain = domain;
+        _domainFilter = domainFilter;
+    }
 
-    protected override ValueTask<AIContext> ProvideAIContextAsync(
+    protected override async ValueTask<AIContext> ProvideAIContextAsync(
         InvokingContext context, CancellationToken ct = default)
     {
         var existing = context.AIContext;
         if (existing?.Tools is null || !existing.Tools.Any())
-            return ValueTask.FromResult(existing);
+            return existing!;
 
-        // 首次调用：初始化 ToolRegistry
+        // [Fix 3] 按 domainFilter 过滤工具候选集
+        var candidates = existing.Tools;
+        if (_domainFilter != null && _domainFilter.Count > 0)
+        {
+            candidates = existing.Tools.Where(t =>
+            {
+                var d = GetToolDomain(t);
+                return string.IsNullOrEmpty(d) || _domainFilter.Contains(d);
+            }).ToList();
+            if (!candidates.Any())
+                candidates = existing.Tools;
+        }
+
+        // 首次调用：使用 ONNX（优先）初始化 ToolRegistry
         if (!_initialized)
         {
-            ToolRegistry.Initialize(existing.Tools.ToList());
+            await ToolRegistry.InitializeAsync(candidates.ToList(), _embedder, ct).ConfigureAwait(false);
             _initialized = true;
 #if DEBUG
             System.Diagnostics.Debug.WriteLine("[ToolRAG] Registered tools:");
-            foreach (var t in existing.Tools)
+            foreach (var t in candidates)
                 System.Diagnostics.Debug.WriteLine($"  {t.Name}  ({t.Description})");
 #endif
         }
@@ -67,12 +93,13 @@ public sealed class ToolRetrievalProvider : AIContextProvider
 
         if (!string.IsNullOrWhiteSpace(query))
         {
-            // 语义检索 Top-K
-            var hits = ToolRegistry.SearchTopK(query, DefaultTopK);
+            // ONNX 语义检索 Top-K（支持 domain 加权）
+            var hits = await ToolRegistry.SearchTopKAsync(query, _embedder, _domain, DefaultTopK, ct)
+                .ConfigureAwait(false);
             var hitNames = new HashSet<string>(hits.Select(h => h.Name), StringComparer.OrdinalIgnoreCase);
 
-            // 从原始工具列表中选出：命中的 + 兜底的
-            foreach (var tool in existing.Tools)
+            // 从候选工具列表中选出：命中的 + 兜底的
+            foreach (var tool in candidates)
             {
                 var name = tool.Name ?? "";
                 if (ExcludedTools.Contains(name)) continue;
@@ -85,7 +112,7 @@ public sealed class ToolRetrievalProvider : AIContextProvider
         if (selectedTools.Count < 3)
         {
             selectedTools.Clear();
-            foreach (var tool in existing.Tools)
+            foreach (var tool in candidates)
             {
                 var name = tool.Name ?? "";
                 if (ExcludedTools.Contains(name)) continue;
@@ -94,12 +121,23 @@ public sealed class ToolRetrievalProvider : AIContextProvider
             }
         }
 
-        return ValueTask.FromResult(new AIContext
+        return new AIContext
         {
             Instructions = existing.Instructions,
             Messages = existing.Messages,
             Tools = selectedTools,
-        });
+        };
+    }
+
+    private static string GetToolDomain(AITool tool)
+    {
+        try
+        {
+            if (tool is AIFunction func && func.UnderlyingMethod != null)
+                return func.UnderlyingMethod.GetCustomAttribute<ToolDomainAttribute>(false)?.Domain ?? "";
+        }
+        catch { }
+        return "";
     }
 
     private static string GetUserQuery(InvokingContext context)

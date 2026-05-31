@@ -66,9 +66,13 @@ public static class SkillScriptRunner
             process.Start();
             var outTask = process.StandardOutput.ReadToEndAsync();
             var errTask = process.StandardError.ReadToEndAsync();
-            var exited = process.WaitForExit(60_000);
-
-            if (!exited)
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeoutCts.CancelAfter(60_000);
+            try
+            {
+                await process.WaitForExitAsync(timeoutCts.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested == false)
             {
                 process.Kill(entireProcessTree: true);
                 return $"⏱️ 超时 (60s)";
@@ -92,7 +96,7 @@ public static class SkillScriptRunner
         try
         {
             var prop = script.GetType().GetProperty("FullPath",
-                System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
             return prop?.GetValue(script) as string;
         }
         catch { return null; }
@@ -110,3 +114,4 @@ public static class SkillScriptRunner
     private static string Truncate(string text, int max) =>
         text.Length <= max ? text : text[..max] + $"\n...(截断 {text.Length} 字符)";
 }
+#pragma warning restore MAAI001

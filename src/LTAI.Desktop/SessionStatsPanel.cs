@@ -1,5 +1,7 @@
 using System.Linq;
 using Avalonia.Controls;
+using Avalonia.Controls.Templates;
+using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
 
@@ -67,11 +69,45 @@ public sealed class SessionStatsPanel : UserControl
             Foreground = LtaiTheme.Sbb(LtaiTheme.TextPrimary),
             FontSize = 11,
         };
-        _sessionList.SelectionChanged += (_, e) =>
+        _sessionList.SelectionChanged += (_, _) =>
         {
-            if (_sessionList.SelectedItem is string name)
-                SessionSelected?.Invoke(name);
+            if (_sessionList.SelectedItem is SessionInfo info)
+                SessionSelected?.Invoke(info.Name);
         };
+        _sessionList.ItemTemplate = new FuncDataTemplate<SessionInfo>((info, _) =>
+        {
+            var dock = new DockPanel { Margin = new(2, 1) };
+
+            var delBtn = new Button
+            {
+                Content = "🗑",
+                Width = 18, Height = 16,
+                FontSize = 9,
+                Background = LtaiTheme.Sbb(Colors.Transparent),
+                BorderThickness = new(0),
+                Padding = new(0),
+                Cursor = new Cursor(StandardCursorType.Hand)
+            };
+            delBtn.Click += async (_, _) =>
+            {
+                if (await ConfirmDeleteAsync(info.Name))
+                {
+                    _sessions.DeleteSession(info.Name);
+                    Refresh();
+                }
+            };
+            DockPanel.SetDock(delBtn, Dock.Right);
+            dock.Children.Add(delBtn);
+
+            dock.Children.Add(new TextBlock
+            {
+                Text = info.DisplayName,
+                VerticalAlignment = VerticalAlignment.Center,
+                Foreground = LtaiTheme.Sbb(LtaiTheme.TextPrimary)
+            });
+
+            return dock;
+        });
         content.Children.Add(_sessionList);
 
         // ── 统计信息 ──
@@ -98,7 +134,7 @@ public sealed class SessionStatsPanel : UserControl
         var sessions = _sessions.ListSessions();
         _sessionList.ItemsSource = sessions;
         if (!string.IsNullOrEmpty(_sessions.CurrentSession))
-            _sessionList.SelectedItem = sessions.FirstOrDefault(s => s == _sessions.CurrentSession);
+            _sessionList.SelectedItem = sessions.FirstOrDefault(s => s.Name == _sessions.CurrentSession);
 
         // 刷新统计
         _statsText.Text = $"模型: {LTAI.Core.Configuration.UsageTracker.ActiveModel}\n"
@@ -106,6 +142,50 @@ public sealed class SessionStatsPanel : UserControl
                         + $"请求: {LTAI.Core.Configuration.UsageTracker.Requests}  缓存: {LTAI.Core.Configuration.UsageTracker.CacheHitRate:F1}%\n"
                         + $"费用: {LTAI.Core.Configuration.UsageTracker.CostDisplay}  运行: {LTAI.Core.Configuration.UsageTracker.Uptime:hh':'mm':'ss}\n"
                         + $"余额: {LTAI.Core.Configuration.UsageTracker.BalanceDisplay}";
+    }
+
+    private async Task<bool> ConfirmDeleteAsync(string name)
+    {
+        var topLevel = TopLevel.GetTopLevel(this);
+        if (topLevel is not Window owner) return false;
+
+        var dialog = new Window
+        {
+            Title = "删除会话",
+            Width = 320,
+            Height = 130,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            CanResize = false,
+        };
+
+        var panel = new StackPanel { Spacing = 10, Margin = new(15) };
+        panel.Children.Add(new TextBlock
+        {
+            Text = $"确认删除会话 \"{name}\" ？",
+            TextWrapping = TextWrapping.Wrap,
+            Foreground = LtaiTheme.Sbb(LtaiTheme.TextPrimary)
+        });
+
+        var btnPanel = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 10,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Margin = new(0, 10, 0, 0)
+        };
+        var yesBtn = new Button { Content = "删除", Width = 60 };
+        var noBtn = new Button { Content = "取消", Width = 60 };
+        btnPanel.Children.Add(yesBtn);
+        btnPanel.Children.Add(noBtn);
+        panel.Children.Add(btnPanel);
+        dialog.Content = panel;
+
+        var result = false;
+        yesBtn.Click += (_, _) => { result = true; dialog.Close(); };
+        noBtn.Click += (_, _) => dialog.Close();
+
+        await dialog.ShowDialog(owner);
+        return result;
     }
 
     private void UpdateVisibility()

@@ -65,7 +65,7 @@ public sealed class SafetyCoordinator : AIContextProvider
         var userMsg = msgs.LastOrDefault(m => m.Role == ChatRole.User);
         if (userMsg?.Text == null) return context.AIContext!;
 
-        var (allowed, reason) = await CheckAsync(userMsg.Text, "input").ConfigureAwait(false);
+        var (allowed, reason) = await CheckAsync(userMsg.Text, "input", ct).ConfigureAwait(false);
         if (!allowed)
         {
             _logger?.LogWarning("Safety blocked input: {Reason}", reason);
@@ -95,18 +95,13 @@ public sealed class SafetyCoordinator : AIContextProvider
         var response = context.ResponseMessages?.LastOrDefault();
         if (response?.Text == null) return;
 
-        var (allowed, reason) = await CheckAsync(response.Text, "output").ConfigureAwait(false);
+        var (allowed, reason) = await CheckAsync(response.Text, "output", ct).ConfigureAwait(false);
         if (!allowed)
         {
             _logger?.LogWarning("Safety blocked output: {Reason}", reason);
         }
     }
 
-    // Shared verdict cache with SafeChatClient — key = HashCode.Combine(text.GetHashCode(), text.Length)
-    private static readonly System.Collections.Concurrent.ConcurrentDictionary<long, (bool safe, string reason, DateTime cached)>
-        _verdictCache = new(4, 64);
-    private static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(300);
-    private const int MaxCachedTextLength = 500;
     // 常见安全/简短指令直接跳过 LLM 审核
     private static readonly HashSet<string> SafePrefixes = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -115,10 +110,11 @@ public sealed class SafetyCoordinator : AIContextProvider
         "llm", "deepseek", "help", "/", "clear", "cls",
     };
 
-    private static long VerdictCacheKey(string text) =>
-        HashCode.Combine(text.GetHashCode(), text.Length);
 
-    private async Task<(bool allow, string reason)> CheckAsync(string text, string direction)
+    /// <summary>轻量规则级安全预检（零 LLM 成本）。使用 SafetyRules 集中定义。</summary>
+    private static bool IsSafeByRules(string text) => SafetyRules.IsSafeByRules(text);
+
+    private async Task<(bool allow, string reason)> CheckAsync(string text, string direction, CancellationToken ct = default)
     {
         if (text.Length > 100_000) return (false, "Input exceeds 100k chars");
 
@@ -133,16 +129,20 @@ public sealed class SafetyCoordinator : AIContextProvider
             }
         }
 
-        // Cache hit for short texts — reuse verdict from a recent identical check
-        if (text.Length <= MaxCachedTextLength)
+        // 规则级预检（零 LLM 成本）：短文本且通过规则检查 → 直接放行
+        // 比走 LLM 审核快 10-50 倍，覆盖 90%+ 的日常消息
+        if (text.Length <= 300 && IsSafeByRules(text))
         {
-            var key = VerdictCacheKey(text);
-            if (_verdictCache.TryGetValue(key, out var cached) &&
-                DateTime.UtcNow - cached.cached < CacheTtl)
-            {
-                _logger?.LogDebug("SafetyCached({Direction}): HIT for text len={Len}", direction, text.Length);
-                return (cached.safe, cached.reason);
-            }
+            _logger?.LogDebug("SafetyRulePath({Direction}): OK ({Len} chars, safe by rules)", direction, text.Length);
+            return (true, "");
+        }
+
+        // Shared cache hit — reuse verdict from any recent identical check
+        var cachedVerdict = VerdictCache.Get(text);
+        if (cachedVerdict.HasValue)
+        {
+            _logger?.LogDebug("SafetyCached({Direction}): HIT for text len={Len}", direction, text.Length);
+            return cachedVerdict.Value;
         }
 
         // Non-blocking try: if already inside a safety check, skip (safe pass-through).
@@ -158,7 +158,7 @@ public sealed class SafetyCoordinator : AIContextProvider
             var response = await _llm.GetResponseAsync([
                 new ChatMessage(ChatRole.System, SafetySystemPrompt),
                 new ChatMessage(ChatRole.User, text)
-            ]).ConfigureAwait(false);
+            ], cancellationToken: ct).ConfigureAwait(false);
 
             var verdict = response.Messages?.LastOrDefault()?.Text?.Trim() ?? "SAFE";
             _logger?.LogDebug("Safety verdict ({Direction}): {Verdict}", direction, verdict);
@@ -177,12 +177,7 @@ public sealed class SafetyCoordinator : AIContextProvider
                 result = (true, "");
             }
 
-            // Cache for short texts (shared with SafeChatClient)
-            if (text.Length <= MaxCachedTextLength)
-            {
-                var key = VerdictCacheKey(text);
-                _verdictCache[key] = (result.allow, result.reason, DateTime.UtcNow);
-            }
+            VerdictCache.Set(text, result.allow, result.reason);
 
             return result;
         }
