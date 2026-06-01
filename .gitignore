@@ -52,6 +52,7 @@ run_fix*.py
 *_b64.txt
 tmp_*
 null
+test.txt
 
 ## Logs
 logs/
