@@ -4,7 +4,7 @@ using System.Text.RegularExpressions;
 
 namespace LTAI.Core.Safety;
 
-internal static class SafetyRules
+public static class SafetyRules
 {
     private static readonly SearchValues<string> PemMarkers = SearchValues.Create(["-----BEGIN", "PRIVATE KEY", "RSA"], StringComparison.Ordinal);
     private static readonly Regex ApiKeyRx = new(
