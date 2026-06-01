@@ -545,7 +545,23 @@ public static class ServiceCollectionExtensions
         var hasRemoteEmbedKey = EmbeddingClient.DefaultProviders
             .Any(p => !string.IsNullOrEmpty(LTAI.Core.Configuration.SecretManager.Get(p.envVar)));
         LocalEmbedder.DefaultDisabled = hasRemoteEmbedKey;
-        services.AddSingleton<LocalEmbedder>();
+
+        // P13.1 + P13.2: factory that reads LTAI:Embedding config at resolution
+        // time and binds LocalEmbedder.Options before the ctor runs.
+        services.AddSingleton<LocalEmbedder>(sp =>
+        {
+            var embedOpts = sp.GetService<IOptions<LTAIOptions>>()?.Value.Embedding;
+            if (embedOpts != null)
+            {
+                LocalEmbedder.Options = new EmbeddingOptions
+                {
+                    Gpu = embedOpts.Gpu,
+                    Quantization = embedOpts.Quantization,
+                    DeviceId = embedOpts.DeviceId,
+                };
+            }
+            return new LocalEmbedder();
+        });
 
         // Embedding client (API → local BGE → FastEmb fallback)
         services.AddSingleton<EmbeddingClient>(sp =>

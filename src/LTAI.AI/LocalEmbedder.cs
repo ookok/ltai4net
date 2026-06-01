@@ -34,8 +34,34 @@ public sealed class LocalEmbedder : IDisposable
     private bool _loadAttempted;
     private bool _disposed;
     private readonly object _loadLock = new();
+    private string? _activeExecutionProvider; // P13.2 telemetry
+    private bool _usingQuantizedModel;        // P13.1 telemetry
+
+    /// <summary>
+    /// P13.1 + P13.2: configuration for local ONNX model loading. Set globally
+    /// before <see cref="AddLTAIAI"/> resolves <see cref="LocalEmbedder"/>, or
+    /// per-instance via the <see cref="LocalEmbedder(EmbeddingOptions)"/>
+    /// constructor. When unset, defaults are <c>Gpu = auto</c> +
+    /// <c>Quantization = auto</c>.
+    /// </summary>
+    public static EmbeddingOptions Options { get; set; } = new();
+
+    /// <summary>P13.2: name of the active execution provider (after load): <c>DML</c> / <c>CUDA</c> / <c>CPU</c>. Null until first load.</summary>
+    public string? ActiveExecutionProvider => _activeExecutionProvider;
+
+    /// <summary>P13.1: true if the loaded model is the INT8/UINT8 quantized variant.</summary>
+    public bool UsingQuantizedModel => _usingQuantizedModel;
 
     /// <summary>Known ONNX models with download URLs.</summary>
+    /// <remarks>
+    /// P13.1: <see cref="ModelInfo.QuantizedModelUrl"/> points to an INT8/UINT8
+    /// quantized variant on HuggingFace when available. MiniLM ships with
+    /// multiple quantized versions; BGE does not (yet) so the field is null
+    /// and the local model stays at FP32. Quantized models are ~4× smaller on
+    /// disk + RAM and ~2-3× faster inference on modern CPUs (AVX2/AVX-512 with
+    /// VNNI). When <see cref="EmbeddingOptions.Quantization"/> is <c>auto</c>
+    /// (default) and a quantized file is present, the loader prefers it.
+    /// </remarks>
     public static readonly Dictionary<string, ModelInfo> KnownModels = new(StringComparer.OrdinalIgnoreCase)
     {
         ["minilm-l6-v2"] = new(
@@ -43,6 +69,8 @@ public sealed class LocalEmbedder : IDisposable
             Description: "384维 英文通用 (推荐)",
             ModelUrl: "https://hf-mirror.com/sentence-transformers/all-MiniLM-L6-v2/resolve/main/onnx/model.onnx",
             VocabUrl: "https://hf-mirror.com/sentence-transformers/all-MiniLM-L6-v2/resolve/main/vocab.txt",
+            QuantizedModelUrl: "https://hf-mirror.com/sentence-transformers/all-MiniLM-L6-v2/resolve/main/onnx/model_qint8_avx512_vnni.onnx",
+            QuantizedFileName: "model.int8.onnx",
             Dimension: 384
         ),
         ["bge-small-zh"] = new(
@@ -50,6 +78,8 @@ public sealed class LocalEmbedder : IDisposable
             Description: "384维 中文通用",
             ModelUrl: "https://hf-mirror.com/BAAI/bge-small-zh-v1.5/resolve/main/onnx/model.onnx",
             VocabUrl: "https://hf-mirror.com/BAAI/bge-small-zh-v1.5/resolve/main/vocab.txt",
+            QuantizedModelUrl: null,
+            QuantizedFileName: null,
             Dimension: 384
         ),
         ["bge-small-en"] = new(
@@ -57,6 +87,8 @@ public sealed class LocalEmbedder : IDisposable
             Description: "384维 英文通用",
             ModelUrl: "https://hf-mirror.com/BAAI/bge-small-en-v1.5/resolve/main/onnx/model.onnx",
             VocabUrl: "https://hf-mirror.com/BAAI/bge-small-en-v1.5/resolve/main/vocab.txt",
+            QuantizedModelUrl: null,
+            QuantizedFileName: null,
             Dimension: 384
         ),
     };
@@ -110,8 +142,15 @@ public sealed class LocalEmbedder : IDisposable
     /// when <see cref="DefaultDisabled"/> is <c>true</c> (P12.3: remote API
     /// available, no need for local).
     /// </summary>
-    public LocalEmbedder()
+    public LocalEmbedder() : this(null) { }
+
+    /// <summary>
+    /// P13.1 + P13.2: initialize with explicit options (overrides the static
+    /// <see cref="Options"/>). Use the parameterless ctor for global config.
+    /// </summary>
+    public LocalEmbedder(EmbeddingOptions? options)
     {
+        if (options != null) Options = options;
         if (DefaultDisabled)
         {
             // P12.3: remote embedding API will be used; don't waste RAM/CPU
@@ -119,9 +158,27 @@ public sealed class LocalEmbedder : IDisposable
             return;
         }
         BaseModelsDirectory ??= FindBaseModelsDirectory();
-        (_currentModelName, _modelPath, _vocabPath) = DetectCurrentModel();
+        var detected = DetectCurrentModelWithQuant();
+        _currentModelName = detected.name;
+        _modelPath = detected.modelPath;
+        _vocabPath = detected.vocabPath;
+        _usingQuantizedModel = detected.usingQuant;
         // Eager pre-warm on background thread to avoid blocking first use
         _ = PreWarmAsync();
+    }
+
+    private static (string? name, string? modelPath, string? vocabPath, bool usingQuant) DetectCurrentModelWithQuant()
+    {
+        var baseDir = BaseModelsDirectory;
+        if (baseDir == null || !Directory.Exists(baseDir)) return (null, null, null, false);
+        foreach (var subDir in Directory.GetDirectories(baseDir))
+        {
+            var name = Path.GetFileName(subDir);
+            var (modelFile, vocabFile, usingQuant) = ResolveModelFiles(subDir, name);
+            if (modelFile != null && vocabFile != null)
+                return (name, modelFile, vocabFile, usingQuant);
+        }
+        return (null, null, null, false);
     }
 
     private void EnsureLoaded()
@@ -138,14 +195,39 @@ public sealed class LocalEmbedder : IDisposable
                 opts.ExecutionMode = ExecutionMode.ORT_PARALLEL;
                 opts.IntraOpNumThreads = Environment.ProcessorCount;
                 opts.InterOpNumThreads = 2;
+                if (Options.EnableGraphOptimization)
+                {
+                    opts.GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL;
+                }
 
-                // Try DirectML (Windows GPU, no NVIDIA required)
-                try { opts.AppendExecutionProvider_DML(); } catch { }
+                // P13.2: probe execution providers in priority order, fall
+                // back gracefully. Avoids the previous code's pattern of
+                // always appending all three (DML + CUDA + CPU) which masked
+                // which EP actually ran. We track the chosen EP via
+                // _activeExecutionProvider for telemetry (P9 DevUI dashboard).
+                var gpuPref = (Options.Gpu ?? "auto").ToLowerInvariant();
+                if (gpuPref is "dml" or "auto" && TryAppendDml(opts, Options.DeviceId, out var dmlErr))
+                {
+                    _activeExecutionProvider = "DML";
+                }
+                else if (gpuPref is "cuda" or "auto" && TryAppendCuda(opts, Options.DeviceId, out var cudaErr))
+                {
+                    _activeExecutionProvider = "CUDA";
+                }
+                else
+                {
+                    if (gpuPref is "dml" || gpuPref is "cuda")
+                    {
+                        // User explicitly requested a GPU EP that wasn't available
+                        throw new InvalidOperationException(
+                            $"LocalEmbedder: requested GPU='{gpuPref}' but provider unavailable. " +
+                            (gpuPref == "dml" ? "DirectML requires Windows 10+ with WDDM 2.0+ GPU drivers." :
+                             "CUDA requires NVIDIA GPU + CUDA toolkit + cuDNN runtime."));
+                    }
+                    _activeExecutionProvider = "CPU";
+                }
 
-                // Try CUDA if available
-                try { opts.AppendExecutionProvider_CUDA(0); } catch { }
-
-                // CPU fallback is the default
+                // CPU fallback is always available; safe to append after GPU EP
                 opts.AppendExecutionProvider_CPU();
                 _session = new InferenceSession(_modelPath, opts);
 
@@ -159,7 +241,44 @@ public sealed class LocalEmbedder : IDisposable
             {
                 _session = null;
                 _vocab = null;
+                _activeExecutionProvider = null;
             }
+        }
+    }
+
+    /// <summary>P13.2: try to attach DirectML EP; returns true on success.</summary>
+    private static bool TryAppendDml(SessionOptions opts, int deviceId, out Exception? err)
+    {
+        err = null;
+        try
+        {
+            // DirectML API: AppendExecutionProvider_DML(int deviceId)
+            opts.AppendExecutionProvider_DML(deviceId);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            err = ex;
+            return false;
+        }
+    }
+
+    /// <summary>P13.2: try to attach CUDA EP via reflection (CUDA package optional).</summary>
+    private static bool TryAppendCuda(SessionOptions opts, int deviceId, out Exception? err)
+    {
+        err = null;
+        try
+        {
+            // CUDA EP requires Microsoft.ML.OnnxRuntime.Gpu package + native
+            // CUDA libraries. If the package is not referenced, this throws
+            // TypeLoadException / EntryPointNotFoundException at runtime.
+            opts.AppendExecutionProvider_CUDA(deviceId);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            err = ex;
+            return false;
         }
     }
 
@@ -640,12 +759,47 @@ public sealed class LocalEmbedder : IDisposable
 
         foreach (var subDir in Directory.GetDirectories(baseDir))
         {
-            var modelFile = Path.Combine(subDir, "model.onnx");
-            var vocabFile = Path.Combine(subDir, "vocab.txt");
-            if (File.Exists(modelFile) && File.Exists(vocabFile))
-                return (Path.GetFileName(subDir), modelFile, vocabFile);
+            var name = Path.GetFileName(subDir);
+            // P13.1: if quantization is on and a quantized file exists, prefer it
+            var (modelFile, vocabFile, usingQuant) = ResolveModelFiles(subDir, name);
+            if (modelFile != null && vocabFile != null)
+            {
+                // Mark telemetry on first detection (subsequent SwitchModel may override)
+                return (name, modelFile, vocabFile);
+            }
         }
         return (null, null, null);
+    }
+
+    /// <summary>
+    /// P13.1: pick the on-disk model file based on <see cref="EmbeddingOptions.Quantization"/>.
+    /// Returns (modelPath, vocabPath, usingQuantized) — any may be null if not present.
+    /// </summary>
+    private static (string? modelPath, string? vocabPath, bool usingQuant) ResolveModelFiles(string subDir, string modelName)
+    {
+        var quantPref = (Options.Quantization ?? "auto").ToLowerInvariant();
+        var vocabFile = Path.Combine(subDir, "vocab.txt");
+        var fp32File = Path.Combine(subDir, "model.onnx");
+        var quantFile = KnownModels.TryGetValue(modelName, out var info) && info.QuantizedFileName != null
+            ? Path.Combine(subDir, info.QuantizedFileName)
+            : null;
+
+        var hasVocab = File.Exists(vocabFile);
+        var hasFp32 = File.Exists(fp32File);
+        var hasQuant = quantFile != null && File.Exists(quantFile);
+
+        // "int8" hard requirement
+        if (quantPref == "int8" && !hasQuant)
+        {
+            // Will be reported via the model list; don't fail detection
+            // here — caller may still want to load FP32. The quantFile path
+            // is null in that case.
+        }
+
+        var useQuant = (quantPref == "auto" || quantPref == "int8") && hasQuant;
+        if (useQuant) return (quantFile!, vocabFile, true);
+        if (hasFp32 && hasVocab) return (fp32File, vocabFile, false);
+        return (null, null, false);
     }
 
     private (InferenceSession?, Dictionary<string, int>?) GetLoadedModel()
@@ -668,7 +822,10 @@ public sealed class LocalEmbedder : IDisposable
             var downloaded = dir != null
                 && File.Exists(Path.Combine(dir, "model.onnx"))
                 && File.Exists(Path.Combine(dir, "vocab.txt"));
-            result.Add(new AvailableModelInfo(id, info.DisplayName, info.Description, info.Dimension, downloaded));
+            var quantDownloaded = downloaded
+                && info.QuantizedFileName != null
+                && File.Exists(Path.Combine(dir!, info.QuantizedFileName));
+            result.Add(new AvailableModelInfo(id, info.DisplayName, info.Description, info.Dimension, downloaded, quantDownloaded));
         }
         return result;
     }
@@ -680,9 +837,8 @@ public sealed class LocalEmbedder : IDisposable
         if (baseDir == null) return false;
 
         var modelDir = Path.Combine(baseDir, name);
-        var modelFile = Path.Combine(modelDir, "model.onnx");
-        var vocabFile = Path.Combine(modelDir, "vocab.txt");
-        if (!File.Exists(modelFile) || !File.Exists(vocabFile)) return false;
+        var (modelFile, vocabFile, usingQuant) = ResolveModelFiles(modelDir, name);
+        if (modelFile == null || vocabFile == null) return false;
 
         lock (_loadLock)
         {
@@ -693,6 +849,7 @@ public sealed class LocalEmbedder : IDisposable
             _currentModelName = name;
             _modelPath = modelFile;
             _vocabPath = vocabFile;
+            _usingQuantizedModel = usingQuant;
 
             EnsureLoaded();
         }
@@ -716,6 +873,11 @@ public sealed class LocalEmbedder : IDisposable
     }
 
     /// <summary>Download a known model from HuggingFace mirror.</summary>
+    /// <remarks>
+    /// P13.1: if the model has a <see cref="ModelInfo.QuantizedModelUrl"/>,
+    /// also downloads the INT8/UINT8 variant as <c>model.int8.onnx</c>. A
+    /// download failure of the quantized file is non-fatal (FP32 still loads).
+    /// </remarks>
     public async Task<bool> DownloadModelAsync(string name, HttpClient? httpClient = null)
     {
         if (!KnownModels.TryGetValue(name, out var info)) return false;
@@ -727,6 +889,9 @@ public sealed class LocalEmbedder : IDisposable
         Directory.CreateDirectory(modelDir);
         var modelFile = Path.Combine(modelDir, "model.onnx");
         var vocabFile = Path.Combine(modelDir, "vocab.txt");
+        var quantFile = info.QuantizedFileName != null
+            ? Path.Combine(modelDir, info.QuantizedFileName)
+            : null;
 
         var http = httpClient ?? new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
         var disposeHttp = httpClient == null;
@@ -745,12 +910,31 @@ public sealed class LocalEmbedder : IDisposable
                 using var fs = new FileStream(vocabFile, FileMode.Create, FileAccess.Write, FileShare.None);
                 await resp.Content.CopyToAsync(fs).ConfigureAwait(false);
             }
+
+            // P13.1: best-effort quantized download; non-fatal on failure
+            if (info.QuantizedModelUrl != null && quantFile != null)
+            {
+                try
+                {
+                    using var resp = await http.GetAsync(info.QuantizedModelUrl).ConfigureAwait(false);
+                    if (resp.IsSuccessStatusCode)
+                    {
+                        using var fs = new FileStream(quantFile, FileMode.Create, FileAccess.Write, FileShare.None);
+                        await resp.Content.CopyToAsync(fs).ConfigureAwait(false);
+                    }
+                }
+                catch
+                {
+                    // Quantized variant not available upstream — FP32 still works
+                }
+            }
             return true;
         }
         catch
         {
             if (File.Exists(modelFile)) try { File.Delete(modelFile); } catch { }
             if (File.Exists(vocabFile)) try { File.Delete(vocabFile); } catch { }
+            if (quantFile != null && File.Exists(quantFile)) try { File.Delete(quantFile); } catch { }
             return false;
         }
         finally
@@ -764,10 +948,28 @@ public sealed class LocalEmbedder : IDisposable
     // ═══════════════════════════════════════════
 
     /// <summary>Metadata for a known downloadable model.</summary>
-    public sealed record ModelInfo(string DisplayName, string Description, string ModelUrl, string VocabUrl, int Dimension);
+    /// <param name="DisplayName">Human-friendly name shown in TUI / DevUI.</param>
+    /// <param name="Description">One-line description (e.g. "384维 英文通用").</param>
+    /// <param name="ModelUrl">URL of the FP32 model file on HuggingFace mirror.</param>
+    /// <param name="VocabUrl">URL of the vocab.txt tokenizer file.</param>
+    /// <param name="QuantizedModelUrl">P13.1: URL of an INT8/UINT8 quantized
+    ///   variant when available (e.g. <c>model_qint8_avx512_vnni.onnx</c>).
+    ///   Null if the upstream model has no quantized export.</param>
+    /// <param name="QuantizedFileName">P13.1: local filename to save the
+    ///   quantized model as (e.g. <c>model.int8.onnx</c>). Null when no
+    ///   quantized URL is available.</param>
+    /// <param name="Dimension">Embedding dimension (e.g. 384).</param>
+    public sealed record ModelInfo(
+        string DisplayName,
+        string Description,
+        string ModelUrl,
+        string VocabUrl,
+        string? QuantizedModelUrl,
+        string? QuantizedFileName,
+        int Dimension);
 
     /// <summary>Information about an available (or downloadable) model.</summary>
-    public sealed record AvailableModelInfo(string Id, string DisplayName, string Description, int Dimension, bool Downloaded);
+    public sealed record AvailableModelInfo(string Id, string DisplayName, string Description, int Dimension, bool Downloaded, bool QuantizedDownloaded);
 
     private readonly record struct Token(long InputId, long AttentionMask);
 

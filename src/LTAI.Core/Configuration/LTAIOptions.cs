@@ -84,6 +84,31 @@ public sealed class AIConfig
 }
 
 /// <summary>
+/// P13.1 + P13.2: local ONNX embedding model execution preferences.
+/// Loaded from appsettings.json under "LTAI:Embedding".
+/// <b>Consumers:</b> LTAI.AI.LocalEmbedder (Options), MultiProviderChatClient (AddLTAIAI).
+/// </summary>
+public sealed class EmbeddingConfig
+{
+    /// <summary>
+    /// GPU execution provider preference. <c>auto</c> (default) probes DirectML
+    /// (Windows) → CUDA (NVIDIA) → CPU in order. Other values: <c>dml</c> /
+    /// <c>cuda</c> / <c>cpu</c>. <c>cpu</c> skips GPU probes entirely.
+    /// </summary>
+    public string Gpu { get; init; } = "auto";
+
+    /// <summary>
+    /// Model quantization preference. <c>auto</c> (default) uses INT8 quantized
+    /// <c>model.int8.onnx</c> if downloaded (MiniLM does, BGE doesn't). <c>int8</c>
+    /// requires quantized; <c>fp32</c> forces original FP32. P13.1.
+    /// </summary>
+    public string Quantization { get; init; } = "auto";
+
+    /// <summary>GPU device ID (multi-GPU systems). Default 0.</summary>
+    public int DeviceId { get; init; } = 0;
+}
+
+/// <summary>
 /// HTTP/SSE endpoint configuration for the ASP.NET Core host.
 /// Loaded from appsettings.json under "LTAI:Web".
 /// <b>Consumers:</b> TuiApp, Program files (bind port).
@@ -185,6 +210,7 @@ public sealed class LTAIOptions
     public HarnessProfile Harness { get; set; } = new();
     public McpConfig Mcp { get; init; } = new();
     public DurableConfig Durable { get; init; } = new();
+    public EmbeddingConfig Embedding { get; init; } = new();
     public string DataDirectory { get; init; } = ".livingtree";
     public string ToolsDirectory { get; init; } = "tools";
     public string[] SkillsUrls { get; init; } = Array.Empty<string>();

@@ -12,6 +12,10 @@
     <PackageReference Include="System.ClientModel" Version="1.12.0" />
     <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.21.0" />
     <PackageReference Include="Microsoft.ML.OnnxRuntime.DirectML" Version="1.21.0" />
+    <!-- P13.2: optional CUDA + TensorRT EPs. If the user has no NVIDIA GPU
+         these DLLs are never loaded — TryAppendCuda catches the
+         TypeLoadException. -->
+    <PackageReference Include="Microsoft.ML.OnnxRuntime.Gpu" Version="1.21.0" />
     <ProjectReference Include="..\..\extern\agent-framework\dotnet\src\Microsoft.Agents.AI.OpenAI\Microsoft.Agents.AI.OpenAI.csproj" />
     <ProjectReference Include="..\..\extern\agent-framework\dotnet\src\Microsoft.Agents.AI.Anthropic\Microsoft.Agents.AI.Anthropic.csproj" />
   </ItemGroup>
@@ -20,13 +24,22 @@
     <ProjectReference Include="..\LTAI.Core\LTAI.Core.csproj" />
   </ItemGroup>
 
-  <!-- Download all-MiniLM-L6-v2 ONNX (90MB, 384d) -->
+  <!-- Download all-MiniLM-L6-v2 ONNX (90MB FP32, 23MB INT8 — P13.1 quantization) -->
   <Target Name="DownloadEmbeddingModel" BeforeTargets="Build"
           Condition="!Exists('$(MSBuildThisFileDirectory)../../models/minilm-l6-v2/model.onnx')">
     <MakeDir Directories="$(MSBuildThisFileDirectory)../../models/minilm-l6-v2/" />
     <Exec Command="curl -sL --connect-timeout 10 --max-time 300 &quot;https://hf-mirror.com/sentence-transformers/all-MiniLM-L6-v2/resolve/main/onnx/model.onnx&quot; -o &quot;$(MSBuildThisFileDirectory)../../models/minilm-l6-v2/model.onnx&quot;" IgnoreExitCode="true" />
     <Exec Command="curl -sL --connect-timeout 10 --max-time 60 &quot;https://hf-mirror.com/sentence-transformers/all-MiniLM-L6-v2/resolve/main/vocab.txt&quot; -o &quot;$(MSBuildThisFileDirectory)../../models/minilm-l6-v2/vocab.txt&quot;" IgnoreExitCode="true" />
-    <Message Text="all-MiniLM-L6-v2 downloaded ✅ models/minilm-l6-v2/" Importance="High" Condition="Exists('$(MSBuildThisFileDirectory)../../models/minilm-l6-v2/model.onnx')" />
+    <Message Text="all-MiniLM-L6-v2 FP32 downloaded ✅ models/minilm-l6-v2/" Importance="High" Condition="Exists('$(MSBuildThisFileDirectory)../../models/minilm-l6-v2/model.onnx')" />
+  </Target>
+
+  <!-- P13.1: also download INT8 quantized variant when not present.
+       Saves to model.int8.onnx (preferred by loader when Options.Quantization=auto).
+       Failure is non-fatal (FP32 fallback works). -->
+  <Target Name="DownloadQuantizedEmbeddingModel" BeforeTargets="Build"
+          Condition="!Exists('$(MSBuildThisFileDirectory)../../models/minilm-l6-v2/model.int8.onnx')">
+    <Exec Command="curl -sL --connect-timeout 10 --max-time 300 &quot;https://hf-mirror.com/sentence-transformers/all-MiniLM-L6-v2/resolve/main/onnx/model_qint8_avx512_vnni.onnx&quot; -o &quot;$(MSBuildThisFileDirectory)../../models/minilm-l6-v2/model.int8.onnx&quot;" IgnoreExitCode="true" />
+    <Message Text="all-MiniLM-L6-v2 INT8 quantized downloaded ✅ (23MB vs 90MB FP32)" Importance="High" Condition="Exists('$(MSBuildThisFileDirectory)../../models/minilm-l6-v2/model.int8.onnx')" />
   </Target>
 
   <!-- 发布时嵌入模型文件到输出目录 -->
@@ -38,7 +51,11 @@
     <Copy SourceFiles="$(MSBuildThisFileDirectory)../../models/minilm-l6-v2/vocab.txt"
           DestinationFolder="$(PublishDir)models/minilm-l6-v2/"
           SkipUnchangedFiles="true" />
-    <Message Text="all-MiniLM-L6-v2 embedded in publish output ✅ (~90MB)" Importance="High" />
+    <Copy SourceFiles="$(MSBuildThisFileDirectory)../../models/minilm-l6-v2/model.int8.onnx"
+          DestinationFolder="$(PublishDir)models/minilm-l6-v2/"
+          SkipUnchangedFiles="true"
+          Condition="Exists('$(MSBuildThisFileDirectory)../../models/minilm-l6-v2/model.int8.onnx')" />
+    <Message Text="all-MiniLM-L6-v2 embedded in publish output ✅ (FP32 90MB + INT8 23MB)" Importance="High" />
   </Target>
 
 </Project>

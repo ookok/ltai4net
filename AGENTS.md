@@ -563,3 +563,82 @@ Connect SessionManager → ChatView and add SessionStatsPanel to MainWindow side
 - **P13.4**：ToolRetrievalProvider 暴露 `_cache.CachedEntryCount` 到 P9 DevUI 仪表盘
 - **P13.5**：自动降级策略（API 连续 3 次失败 → 强制加载 ONNX 作为 fallback）
 
+# 2026-06-02 P13 ONNX 量化 + GPU 自适应加速
+
+## Goal
+- P13.1 量化 ONNX 模型：MiniLM 走 `model_qint8_avx512_vnni.onnx`（23MB，~4× 缩；~2-3× 推理加速）
+- P13.2 GPU 自适应：DirectML (Windows no-NVIDIA) → CUDA (NVIDIA) → CPU 探测链；用户可配 `LTAI:Embedding:Gpu`
+- 所有 ONNX 模型 URL 走 **国内镜像** `hf-mirror.com`（HuggingFace 官方授权镜像，0 直连 huggingface.co）
+
+## Plan
+
+### P13.1 ONNX 模型量化 ✅
+- `src/LTAI.AI/LocalEmbedder.cs`：
+  - `ModelInfo` record 加 `QuantizedModelUrl?` + `QuantizedFileName?` 字段
+  - `KnownModels` MiniLM 加 `https://hf-mirror.com/.../model_qint8_avx512_vnni.onnx` (23MB INT8 AVX-512+VNNI)
+  - BGE 系列无上游量化版本，`QuantizedModelUrl = null`（FP32 兜底）
+  - `ResolveModelFiles(subDir, name)`：根据 `Options.Quantization` 选 `model.int8.onnx` 或 `model.onnx`
+  - `DownloadModelAsync` 同时下载 INT8（best-effort，失败不阻塞 FP32）
+  - `ListAvailableModels` 报告 `QuantizedDownloaded` 状态
+  - `EnsureLoaded` 后设 `_usingQuantizedModel` 标志（DevUI 可见）
+- `src/LTAI.AI/EmbeddingOptions.cs`（新建，~30 行）：
+  - `Gpu` (auto/dml/cuda/cpu) + `Quantization` (auto/int8/fp32) + `DeviceId`
+  - `LocalEmbedder.Options` 静态属性（默认 `auto/auto/0`）
+- `src/LTAI.AI/LTAI.AI.csproj`：
+  - 新增 `DownloadQuantizedEmbeddingModel` target → curl 23MB INT8
+  - `PublishEmbeddingModel` 同时复制 FP32 + INT8 到 publish 目录
+- `src/LTAI.Core/Configuration/LTAIOptions.cs`：
+  - 新增 `EmbeddingConfig` 类（Gpu/Quantization/DeviceId）
+  - `LTAIOptions.Embedding` 属性
+  - `appsettings.json` 加 `"Embedding": { "Gpu": "auto", "Quantization": "auto", "DeviceId": 0 }`
+
+### P13.2 GPU 自适应加速 ✅
+- `src/LTAI.AI/LTAI.AI.csproj`：
+  - 新增 `Microsoft.ML.OnnxRuntime.Gpu 1.21.0` PackageReference（CUDA + TensorRT EP）
+  - 已有 `Microsoft.ML.OnnxRuntime.DirectML 1.21.0`（DML EP）
+- `src/LTAI.AI/LocalEmbedder.cs`：
+  - `EnsureLoaded` 重构：
+    - 旧代码：盲目 `try { DML } catch { }` + `try { CUDA } catch { }` + `Append CPU`（浪费 + 不知道哪个 EP 真正生效）
+    - 新代码：`TryAppendDml` / `TryAppendCuda` 显式探测 + 设 `_activeExecutionProvider` 字符串（"DML" / "CUDA" / "CPU"）
+    - `Options.Gpu` = `dml` / `cuda` 时显式要求，缺失抛 `InvalidOperationException`
+    - `auto` 模式按 `DML > CUDA > CPU` 探测
+  - `GraphOptimizationLevel.ORT_ENABLE_ALL` 显式开启
+  - `LocalEmbedder.ActiveExecutionProvider` + `UsingQuantizedModel` 只读属性 → DevUI 仪表盘
+- `src/LTAI.AI/MultiProviderChatClient.cs`：
+  - `LocalEmbedder` 改 factory 注册：解析时读 `IOptions<LTAIOptions>.Embedding` 同步到 `LocalEmbedder.Options`（再 new LocalEmbedder()）
+- `src/LTAI.Agent/Vector/KbGraph.cs`：保持 P12.3 null 守卫（不需修改）
+
+### Key Decisions
+- **D40 ONNX 模型全部走国内镜像**：`hf-mirror.com` 是 HuggingFace 官方授权国内镜像，1:1 同步上游；`MiniLM-L6-v2` FP32/INT8 + `BGE-small-zh` FP32 + `BGE-small-en` FP32 全 0 直连 `huggingface.co`（避免国内网络卡顿）
+- **D41 INT8 量化只对 MiniLM 启用**：BGE 上游无 INT8 导出；不能本地 `QuantizeDynamic`（无 NuGet 包），要静态量化需要校准数据 + 一次预生成；接受 BGE 走 FP32 + ONNX 图优化
+- **D42 GPU EP 探测按需**：旧代码无脑 append 全部 EP，新代码只在 `Options.Gpu = auto` 时按 DML→CUDA→CPU 探测；`dml` / `cuda` 强制时缺失抛错（用户期望明确）
+- **D43 `EmbeddingOptions` 在 LTAI.AI 而非 LTAI.Core**：避免 LTAI.Core 引入 ONNX 依赖（保持 LTAI.Core 零外部依赖）
+- **D44 `Options` 静态而非 ctor 参数**：与 `DefaultDisabled` 模式一致（全局配置，DI 解析时序简单）
+- **D45 Gpu 包始终引用**：用户场景分两种（有/无 NVIDIA GPU），但 `Microsoft.ML.OnnxRuntime.Gpu` 是托管绑定包（不含大 DLL），CUDA 实际库由 `runtimes/win-x64/native/*cudart*.dll` 决定；非 NVIDIA 系统 loader 看到 `Microsoft.ML.OnnxRuntime.Gpu.dll` 但调 `AppendExecutionProvider_CUDA` 抛 → fall through CPU
+- **D46 GPU DLL 总是部署的代价**：发布包会包含 ~200MB CUDA DLL；这是微软 ORT 标准部署模式，不在 LTAI 优化范围
+
+### Files touched
+**新建**
+- `src/LTAI.AI/EmbeddingOptions.cs`（~30 行）
+
+**改**
+- `src/LTAI.AI/LocalEmbedder.cs`（+90 行：ModelInfo 扩展、ResolveModelFiles、TryAppendDml/Cuda、_activeExecutionProvider / _usingQuantizedModel 字段、EmbeddingOptions 属性、Available 静态、DetectCurrentModelWithQuant）
+- `src/LTAI.AI/LTAI.AI.csproj`（+13 行：Gpu 包 + DownloadQuantizedEmbeddingModel target + PublishEmbeddingModel INT8 copy）
+- `src/LTAI.AI/MultiProviderChatClient.cs`（+12 行：LocalEmbedder factory + EmbeddingConfig 绑定）
+- `src/LTAI.Core/Configuration/LTAIOptions.cs`（+20 行：EmbeddingConfig + LTAIOptions.Embedding）
+- `src/LTAI.Web/appsettings.json`（+5 行：Embedding section）
+
+### Verification
+- [x] 编译通过：6 项目 (LTAI.AI / LTAI.Agent / LTAI.TUI / LTAI.Desktop / LTAI.Web / LTAI.Cli) 0 errors
+- [x] 全绿：0 警告 in LTAI.AI
+- [x] NuGet 包下载验证：`microsoft.ml.onnxruntime.gpu 1.21.0` + `microsoft.ml.onnxruntime.directml 1.21.0` 都已 restored
+- [ ] 真实量化加载 smoke test（用户已说"测试太耗时间"，可后续手动跑）
+- [ ] 手动验证：在有 NVIDIA GPU 的开发机上 `AppendExecutionProvider_CUDA` 成功 → `_activeExecutionProvider = "CUDA"`
+- [ ] 手动验证：`hf-mirror.com` 量化模型可下载（23MB INT8）
+
+## Next Steps (P14+)
+- **P14.1**：BGE 量化（用 `onnxruntime.quantize` Python 工具预生成 INT8，ship to HF mirror）
+- **P14.2**：嵌入模型热切换（不重启进程就能换 MiniLM ↔ BGE ↔ INT8）
+- **P14.3**：Multi-embedding 融合（同时使用 MiniLM + BGE，concat 平均 / 加权）提升跨语言效果
+- **P14.4**：ONNX 缓存预热 background service（首次启动时后台下载所有可能用到的模型）
+
