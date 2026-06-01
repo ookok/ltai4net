@@ -56,6 +56,8 @@ public static class Program
         services.AddLTAICore();
         services.AddLTAIAI();
         services.AddLTAIAgent();
+        services.AddSingleton<LTAI.TUI.DevUI.DevUISpanCollector>();
+        services.AddHostedService(sp => sp.GetRequiredService<LTAI.TUI.DevUI.DevUISpanCollector>());
 
         // Warm up in background while showing splash
         var sp = await Task.Run(() =>
@@ -90,7 +92,13 @@ public static class Program
         try { await warmupTask.WaitAsync(TimeSpan.FromSeconds(6)).ConfigureAwait(false); }
         catch { /* 预热超时不影响主流程 */ }
 
-        var app = new TuiApp(chatAgent, llmConfig, options, Directory.GetCurrentDirectory());
+        var app = new TuiApp(
+            chatAgent,
+            llmConfig,
+            options,
+            Directory.GetCurrentDirectory(),
+            sp.GetRequiredService<LTAI.Agent.DevUI.LTAIDevUIService>(),
+            sp.GetRequiredService<LTAI.TUI.DevUI.DevUISpanCollector>());
         try { Console.Clear(); } catch { /* non-interactive terminal */ }
         await app.RunAsync().ConfigureAwait(false);
     }

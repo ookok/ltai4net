@@ -81,6 +81,10 @@ P2.x ─┘（与 P1.1 可并行）
 - `src/LTAI.Agent/Tools/SkillRankingProvider.cs`（-4 行：移除未使用字段）
 - 净变化：**-511 行**
 - 回归接受：5 个死代码装饰器全部删除；tool 执行结果改由 `ChatAgent` 流观察 `FunctionCallContent`/`FunctionResultContent` 注入（MAF `FunctionInvokingChatClient` 自动接入由 `ChatClientAgent.WithDefaultAgentMiddleware` 完成）
+- **P8.x：ToolCallRepairer 不恢复**（用户决定）：DeepSeek 走 OpenAI 兼容协议，MAF 默认 JSON options 正常解析。3 个原职责的处理：
+  - 烂 JSON 修复（尾逗号 / 单引号 / 未引号属性）— 已被 MAF `AIJsonUtilities.DefaultOptions` 的 `AllowTrailingCommas` + case-insensitive 覆盖
+  - 类型强制（`"5"` → `5`，`"true"` → `true`）— 5 行 `NumberHandling.AllowReadingFromString` 补齐（`ServiceCollectionExtensions` 静态 cctor）
+  - Fuzzy tool name match — 不补（国产模型输出规范后可走 P9 重新评估）
 
 ### P4 ✅
 - `src/LTAI.Agent/LTAI.Agent.csproj`（添加 Microsoft.Agents.AI.Hosting ProjectReference）
@@ -174,6 +178,40 @@ P2.x ─┘（与 P1.1 可并行）
   - `src/LTAI.Agent/ServiceCollectionExtensions.cs`（P7.6 Harness refactor + P7.7 DI 注册）
   - `src/LTAI.Cli/Program.cs`（`agents list/show` 子命令）
 
+### P8 ✅（C 路径 — 升 DTFx + InProcessTestHost 0.2.3-preview.1）
+- **D17 选型决定**：升 MAF DTFx 1.18.0 → 1.24.2 + 引入 `Microsoft.DurableTask.InProcessTestHost 0.2.3-preview.1`
+- 原因：DTFx out-of-process SDK 1.18-1.24 **没有内建 in-process sidecar**（`Microsoft.DurableTask.Worker.Grpc` / `Client.Grpc` 1.18+ 全部是客户端）。`InProcessTestHost 0.2.3-preview.1` 是微软提供的 self-host gRPC sidecar 包装（preview，标"for testing"），在同进程内启 Kestrel + `TaskHubGrpcServer` + `InMemoryOrchestrationService`，让 MAF `ConfigureDurableAgents` 能用 gRPC 通道连过去
+- **目录**：
+  - `extern/agent-framework/dotnet/Directory.Packages.props`：`Microsoft.DurableTask.Client/Worker/Client.AzureManaged/Worker.AzureManaged` 1.18.0 → 1.24.2
+  - `src/LTAI.Agent/LTAI.Agent.csproj`：加 `Microsoft.Agents.AI.DurableTask` ProjectReference + `Microsoft.DurableTask.InProcessTestHost 0.2.3-preview.1` PackageReference
+  - `src/LTAI.Agent/Durability/LTAIDurableAgentHost.cs`（新建，~90 行）：`IHostedService`，构造时 `TcpListener` 预留 loopback port（避免 `AddInMemoryDurableTask` 时 port 未知）
+  - `src/LTAI.Agent/Durability/DurableAgentServiceCollectionExtensions.cs`（新建，~80 行）：`AddLTAIDurableAgents` 扩展 — 注册 host + `AddInMemoryDurableTask(registry => {}, new InMemoryDurableTaskOptions { Port = host.Port })` + MAF `ConfigureDurableAgents(opts.AddAIAgentFactory(name, sp => sp.GetRequiredKeyedService<AIAgent>(name)))`
+  - `src/LTAI.Agent/ServiceCollectionExtensions.cs`：Step 1b 调用 `AddLTAIDurableAgents()`
+  - `src/LTAI.Core/Configuration/LTAIOptions.cs`：加 `DurableConfig { Enabled=true, SidecarPort=null }`
+- **架构**：
+  ```
+  LTAI agent (keyed) ──→ DurableAIAgentProxy ──→ IDurableAgentClient (MAF DefaultDurableAgentClient)
+                                                            │ gRPC
+                                                            ▼
+                                              MAF DurableTaskWorker (hosted)
+                                                            │ gRPC
+                                                            ▼
+                                              InProcessTestHost sidecar (Kestrel)
+                                                            │
+                                                            ▼
+                                              InMemoryOrchestrationService
+                                              (state 进程内；重启丢)
+  ```
+- **已知限制**：
+  - 跨进程重启不持久化（InMemoryOrchestrationService 进程内 only）。要持久化需写 `IOrchestrationService` SQLite 适配器（**P8.1 sub-step**）
+  - `InProcessTestHost 0.2.3-preview.1` 是 preview 依赖，标"for testing"
+  - InProcessTestHost 自带 worker（idle，因为我们用空 registry）+ MAF 自带 worker（实际处理 entity）。两个 worker 连同一 sidecar
+  - `Microsoft.DurableTask.Testing.Sidecar` 命名空间类型 + `TaskHubGrpcServer` 来自 InProcessTestHost 包
+- **构建**：LTAI.Agent + LTAI.Web + LTAI.Desktop + LTAI.Cli 全绿（0 errors）
+- **下一步（低优先）**：
+  - P8.1：写 `SQLiteOrchestrationService` 替换 InMemoryOrchestrationService，跨重启持久化
+  - P8.2：smoke test（启动 server → 发请求 → 重启 → 状态还原）— user 已说"测试太耗时间 先做功能"，跳过
+
 ## 验证（每个阶段）
 - `dotnet build src/LTAI.AI` / `dotnet build src/LTAI.Agent` / `dotnet build src/LTAI.Web` / `dotnet build src/LTAI.Desktop`
 - `dotnet test tests/LTAI.Tests`（如有）
@@ -208,3 +246,166 @@ Connect SessionManager → ChatView and add SessionStatsPanel to MainWindow side
 - [ ] 构建通过：`dotnet build src/LTAI.Desktop`
 - [ ] 现有测试通过：`dotnet test tests/LTAI.Tests`
 - [ ] 手动验证：启动桌面端，新建会话、发送消息、关闭重开后会话列表显示历史
+
+# 2026-06-02 P9 DevUI 三端共享 (TUI Dashboard + Desktop 浏览器 + Web REST)
+
+## Goal
+- 把 OpenTelemetry 链路追踪 + AgentCard 抽成共享服务，让 TUI / Desktop / Web 三个端都能开箱即用 DevUI 调试视图
+- 选 C 路径（TUI Dashboard + Desktop 嵌 DevUI 浏览器拉起）
+
+## Plan
+
+### P9.0 LTAIDevUIService（后端共享层）✅
+- `src/LTAI.Agent/DevUI/LTAIDevUIService.cs`（新建，~180 行）
+  - `LTAIAgentCard` record（UI-portable；非 A2A 类型，避免 LTAI.Agent 依赖 A2A 包）
+    - 字段：Name/Description/Version/DocumentationUrl/Skills/Capabilities/DefaultInputModes/DefaultOutputModes/Tags/ModelId/Temperature/TopP/Tools/Permissions
+  - `LTAIAgentSkill` + `LTAIAgentCapabilities`（Stream/PushNotifications/StateTransitionHistory）
+  - `LTAIDevUIService` 类
+    - `ListAgentCards()` → `IReadOnlyList<LTAIAgentCard>`
+    - `GetAgentCard(string name)`
+    - `RunStreamingAsync(name, message, sessionId, ct)` → `IAsyncEnumerable<AgentResponseUpdate>`（每次新建 session，跨调用持久化推迟到 P10+）
+    - `ResolveAgent(name)` 解析 keyed `AIAgent`（P4 Hosting 注册）
+    - `BuildCard(def)` 用 `AgentRegistry.LoadAll()` 填 metadata
+- DI 注册：`ServiceCollectionExtensions.cs` 加 `AddSingleton<LTAIDevUIService>()`（Step 3a）
+- Web 端加 2 个 endpoint：
+  - `GET /ltai/v1/entities` → `devUi.ListAgentCards()`
+  - `GET /ltai/v1/entities/{name}/card` → `devUi.GetAgentCard(name)`
+  - 与 MAF 自带 `/v1/entities`（DevUI auto-discovery）共存；LTAI 的端点附加 ModelId/Tools/Permissions 字段
+
+### P9.1 TUI Dashboard ✅
+- `src/LTAI.TUI/DevUI/DevUISpanCollector.cs`（新建，~150 行）
+  - `BackgroundService` 订阅 `ActivityListener`（`Microsoft.Agents.AI.*` + `LTAI.*` + `OpenTelemetry.*` sources）
+  - 环形 buffer 保留最近 200 spans（`_live` LinkedList 跟踪 in-progress，`_spans` 已完成）
+  - `OnActivityStarted/Stopped` 回调更新状态/延迟
+  - `IReadOnlyList<DevUISpan>` + `Snapshot()` API
+- `src/LTAI.TUI/DevUI/DevUIDashboardView.cs`（新建，~150 行）
+  - Spectre.Console `Layout` 3 区域：header（统计）/ body（agents + spans 双栏）/ footer（token usage）
+  - Agents 表：name/model/T/tools/perms（彩色 RWLX 标记）/description
+  - Spans 表：status（live/OK/ERR 色码）/name/source/kind/duration（按延迟着色）/trace
+  - 颜色规则：`>2s` 红色 / `>500ms` 黄色 / `<500ms` 灰色
+- `TuiApp.cs` 改造：
+  - 构造参数加 `LTAIDevUIService` + `DevUISpanCollector`
+  - `ShowDashboard()` 改为 `DevUIDashboardView.Render(...)`，移除旧的 60 行 usage charts（已被 P9.1 精简版替代）
+  - `TuiView.Dashboard` 路径保持不变（用户按 `1` 进入）
+- `Program.cs` 注册 `DevUISpanCollector` 单例 + HostedService
+- 总 -49 行（TuiApp.cs 75→22 替换） + +330 行新文件 = +281 行
+
+### P9.2 Desktop DevUI ✅
+- 选"启动 in-process Kestrel + 拉起默认浏览器"路径，**不**引入 WebView2 / `Microsoft.Web.WebView2` 依赖
+  - 理由：Avalonia 12 缺原生 WebView2 control；外部浏览器 DevTools / 多 tab / 复制粘贴体验更好；依赖更少
+- `src/LTAI.Desktop/DevUI/DevUIHost.cs`（新建，~190 行）
+  - `IAsyncDisposable` 包装 `WebApplication`
+  - `StartAsync(parentSp, ct)`：`TcpListener(0)` 拿 free port → `WebApplication.CreateBuilder().UseUrls("http://127.0.0.1:PORT")` → 注册 `/v1/entities` + `/v1/entities/{name}/card` + `/` 重定向 `/devui` + 简单 HTML
+  - `OpenInBrowser()`：`Process.Start(new ProcessStartInfo { FileName = BaseUrl+"/devui", UseShellExecute = true })`
+  - 自带 DevUI HTML（~70 行）：title/agent cards with perm pills (RWLX 颜色)/tools pills
+- `DashboardView.cs` 改造：
+  - 加 "Open DevUI in Browser" 按钮 + 状态 TextBlock
+  - Lazy<DevUIHost> 单 host（不每次创建）
+  - Click → `host.StartAsync(App.Services)` → `host.OpenInBrowser()` → 显示状态
+- `App.axaml.cs` 加 `IServiceProvider Services` 静态属性
+- `Program.cs` 设 `App.Services = provider`
+- 总 +33 行（DashboardView）+ +199 行新文件 = +232 行
+
+### Key Decisions
+- **D18 P9.0 LTAIAgentCard 自定义 record 而非 A2A.AgentCard**：LTAI.Agent 不依赖 A2A NuGet；card 字段比 A2A 多（model/temp/tools/perms）；LTAI.Web 在 endpoint 边界手动转 A2A.AgentCard（未来需要时）
+- **D19 P9.1 OTel 监听走 ActivityListener 而非订阅 OTel SDK**：零依赖；MAF/Harness 已 emit 标准 `System.Diagnostics.Activity`（P7.2 默认 console exporter 同源）
+- **D20 P9.2 浏览器拉起 vs WebView2**：选前者。WebView2 嵌入需 Avalonia 第三方包（无官方支持），且浏览器体验更完整
+- **D21 P9.1 旧 ShowDashboard 60 行删掉**：原本是只显示 token/cache rate 的极简版，被 P9.1 三区域（agents + spans + token）替代
+- **D22 P9.2 简单 HTML 内嵌**：P9.2 只暴露 agent list 视图；不复制 MAF DevUI 的 chat UI（chat 由 LTAI.TUI/LTAI.Desktop 自己的 chat view 处理）。P10+ 可升级到 `AddDevUI()` 在 in-process Kestrel 里跑
+- **D23 跨调用 session 持久化暂不做**：P9.0 每次 `RunStreamingAsync` 重新创建 session；P10+ 接入 `AgentSessionStateBag` JSON 持久化（keyed by conversation id）
+
+### Files touched
+
+**新建**
+- `src/LTAI.Agent/DevUI/LTAIDevUIService.cs`（P9.0，~180 行）
+- `src/LTAI.TUI/DevUI/DevUISpanCollector.cs`（P9.1，~150 行）
+- `src/LTAI.TUI/DevUI/DevUIDashboardView.cs`（P9.1，~150 行）
+- `src/LTAI.Desktop/DevUI/DevUIHost.cs`（P9.2，~190 行）
+
+**改**
+- `src/LTAI.Agent/ServiceCollectionExtensions.cs`（+5 行：Step 3a DI 注册）
+- `src/LTAI.TUI/Program.cs`（+9 行：DevUISpanCollector 注册 + 注入）
+- `src/LTAI.TUI/TuiApp.cs`（-49 行：旧 ShowDashboard 删除 + 新构造参数）
+- `src/LTAI.Desktop/App.axaml.cs`（+1 行：Services 属性）
+- `src/LTAI.Desktop/Program.cs`（+1 行：App.Services = provider）
+- `src/LTAI.Desktop/DashboardView.cs`（+42 行：Open DevUI 按钮 + 状态）
+- `src/LTAI.Web/Program.cs`（+15 行：2 个 /ltai/v1/* endpoint）
+
+## Verification
+- [x] 构建通过：5 项目 (LTAI.Agent / LTAI.TUI / LTAI.Desktop / LTAI.Web / LTAI.Cli) 0 errors
+- [x] 全绿：0 警告 in LTAI.Agent / LTAI.TUI / LTAI.Web / LTAI.Cli
+- [ ] 真实 LLM 调用 smoke test（用户已说"测试太耗时间"，可后续手动验证）
+- [ ] TUI Dashboard 按 `1` 看到 10 个 agent + 实时 span 增长
+- [ ] Desktop 仪表盘点 "Open DevUI in Browser" 浏览器打开 DevUI
+- [ ] Web `GET /ltai/v1/entities` 返回 10 个 LTAIAgentCard
+
+## Next Steps (P10+)
+- **P10.1**：把 MAF `AddDevUI()` 集成到 `DevUIHost`（替换内嵌 HTML；chat UI 也能跑）
+- **P10.2**：A2A `AgentCard` 转换器（`LTAIAgentCard` → A2A `AgentCard`，放到 LTAI.Web endpoint 边界）
+- **P10.3**：跨调用 session 持久化（`AgentSessionStateBag` SQLite store）
+- **P10.4**：把 P7.2 OTel console exporter 改为 OTel SDK，配 span/trace 持久化
+- **P10.5**：WebView2 嵌入式（如果用户后续需要 in-DevUI 体验）
+
+# 2026-06-02 P10 Harness 深度集成
+
+## Goal
+- 释放 MAF `HarnessAgent` 还未被 LTAI 用上的能力：BackgroundAgents 互委派 + per-agent OTel source + 中文 HarnessInstructions + 显式 iteration 上限
+
+## Plan
+
+### P10.0 BackgroundAgents 互委派 ✅ (核心)
+- `src/LTAI.Agent/LazyAIAgentProxy.cs`（新建，~75 行）
+  - `AIAgent` 子类，包装 keyed service 解析 + 循环依赖打破
+  - ctor 阶段：`Name` / `Description` 直接来自 `AgentRegistry`（静态已知，**不**触发内层 agent 构造）→ 打破 `HarnessAgent ↔ BackgroundAgentsProvider ↔ HarnessAgent` 循环
+  - `RunCoreAsync` / `RunCoreStreamingAsync` / `CreateSessionCoreAsync` 等 *Core 方法：懒解析 `IServiceProvider.GetKeyedService<AIAgent>(name)`，此时 agent 图已全部建好
+- `ServiceCollectionExtensions.BuildAgentImpl`：
+  - `BackgroundAgents = AgentRegistry.LoadAll().Where(不是自己 && 不是 router).Select(d => (AIAgent)new LazyAIAgentProxy(sp, d.Name)).ToList()` — **9 个 sister agents 委派池**
+  - `BackgroundAgentsProviderOptions.Instructions = 中文版（含 6 个 BackgroundAgents_* 工具说明 + agent 列表）`
+  - 注入的 6 个工具：`BackgroundAgents_StartTask` / `_WaitForFirstCompletion` / `_GetTaskResults` / `_GetAllTasks` / `_ContinueTask` / `_ClearCompletedTask`
+  - **效果**：LTAI-Chat 现在可以异步委派 LTAI-Math 算数值、委派 LTAI-Code 跑代码、委派 LTAI-Data 查数据；并发执行 → 加速多领域任务
+
+### P10.1 OTel SourceName per-agent ✅
+- `OpenTelemetrySourceName = $"LTAI.{name}"`（之前 P7.6 已设，现在正式）
+- 效果：P9.1 的 `DevUISpanCollector` 可按 source 过滤；每 agent 链路独立可观察
+- `ActivityListener.ShouldListenTo` 早先已用 `StartsWith("Microsoft.Agents.AI", StringComparison.Ordinal)` 接收全部 — 已兼容
+
+### P10.2 HarnessInstructions 中文 ✅
+- 之前用 `HarnessAgent.DefaultInstructions`（英文）
+- 改成中文版（6 条一般准则 + 4 工具调用注意 + `<<<NEEDS_PRO>>>` 升级合约）— Plan mode 保留默认（其行为受 plan-mode 系统提示硬约束）
+- `HarnessInstructions` 与 `ChatOptions.Instructions` 由 Harness 内部拼接（`HarnessAgent.BuildInnerAgent` line 158-164）
+
+### P10.3 MaximumIterations 显式 ✅
+- `MaximumIterationsPerRequest = 50`（默认 40）— 给 BackgroundAgents 委派链 + 中间推理留余量
+- 通过 `FunctionInvokingChatClient.MaximumIterationsPerRequest` 生效
+
+### Key Decisions
+- **D24 LazyAIAgentProxy 而非 2-phase build**：`HarnessAgent` 构造期即需要 `BackgroundAgents` 列表解析（`BackgroundAgentsProvider` ctor 调用 `agent.Name`），构造期触发 keyed service 解析会循环。Lazy proxy 让 `Name` 静态已知（`AgentRegistry`），`RunCore*` 懒解析 — 简洁且零侵入
+- **D25 不在 BackgroundAgents 列表中放自己**：self-delegation 会死循环（agent 把任务委派给自己）
+- **D26 排除 router**：`router` 是 MAF `HandoffWorkflowBuilder` 编排用的非用户可见 agent，不应暴露给 BackgroundAgents 用户调用
+- **D27 Plan mode BackgroundAgents 仍开启**：plan mode 只是禁了写工具/PlanExit 工具，BackgroundAgents 委派是只读分析，应保留
+- **D28 中文 HarnessInstructions 不叠加默认英文**：Harness 内部 line 158-164 用 `+` 拼接两段；中文版完全替代默认（agent 自己的 `ChatOptions.Instructions` 已携带身份/角色/职责）
+
+### Files touched
+**新建**
+- `src/LTAI.Agent/LazyAIAgentProxy.cs`（~75 行）
+
+**改**
+- `src/LTAI.Agent/ServiceCollectionExtensions.cs`：
+  - `HarnessInstructions` 字段（中文版覆盖英文默认）
+  - `MaximumIterationsPerRequest = 50`
+  - `BackgroundAgents` 列表（9 sister agents，LazyAIAgentProxy 包装）
+  - `BackgroundAgentsProviderOptions.Instructions`（中文版 BackgroundAgents_* 工具说明）
+  - `OpenTelemetrySourceName` 已存在 P7.6，本步骤确认
+
+## Verification
+- [x] 构建通过：5 项目 (LTAI.Agent / LTAI.TUI / LTAI.Desktop / LTAI.Web / LTAI.Cli) 0 errors
+- [x] 全绿：0 警告 in LTAI.Agent / LTAI.Web / LTAI.Cli
+- [ ] 真实 LLM 调用 smoke test：LTAI-Chat 委派 LTAI-Math 计算表达式 + 委派 LTAI-Code 执行 sandbox 命令
+- [ ] TUI Dashboard 按 `1` 看到 `LTAI.{name}` 命名的 source
+- [ ] LTAI.Desktop 浏览器拉起 DevUI 后能看到 BackgroundAgents 工具列表
+
+## Next Steps (P11+)
+- **P11.1**：BackgroundAgents 委派结果 citation 注入（让 chat 直接看到 LTAI-Math 的算式 / LTAI-Code 的代码）
+- **P11.2**：Agent-as-tool 包装（让 LTAI-Chat 可选将某个 sister agent 注册为单次 tool 调用）
+- **P11.3**：Harness 装饰链定制（如 LTAI-Writer 不需要 ToolApprovalAgent — 写作无需审批）
+- **P11.4**：Cross-agent session 共享（让 LTAI-Math 计算的中间结果能在 LTAI-Code 的 session 中可见）

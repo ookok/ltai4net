@@ -151,6 +151,25 @@ public sealed class HarnessProfile
 }
 
 /// <summary>
+/// MAF Durable Task pipeline (P8) configuration.
+/// </summary>
+public sealed class DurableConfig
+{
+    /// <summary>
+    /// When <c>true</c>, every agent is wrapped in a <c>DurableAIAgentProxy</c>
+    /// and all run state (messages, tool calls, function results) is persisted
+    /// via the in-process DTFx gRPC sidecar. Default <c>true</c>.
+    /// </summary>
+    public bool Enabled { get; init; } = true;
+
+    /// <summary>
+    /// Fixed loopback port for the in-process gRPC sidecar. <c>null</c> = auto
+    /// (any free port). Pin only for debugging / tests.
+    /// </summary>
+    public int? SidecarPort { get; init; }
+}
+
+/// <summary>
 /// Root configuration object, loaded from appsettings.json under section "LTAI".
 /// Holds AI, Web, Vector, and Harness sub-configs plus runtime directory resolution.
 /// Validated at startup by <see cref="LTAIOptionsValidator"/>.
@@ -165,6 +184,7 @@ public sealed class LTAIOptions
     public VectorConfig Vector { get; init; } = new();
     public HarnessProfile Harness { get; set; } = new();
     public McpConfig Mcp { get; init; } = new();
+    public DurableConfig Durable { get; init; } = new();
     public string DataDirectory { get; init; } = ".livingtree";
     public string ToolsDirectory { get; init; } = "tools";
     public string[] SkillsUrls { get; init; } = Array.Empty<string>();

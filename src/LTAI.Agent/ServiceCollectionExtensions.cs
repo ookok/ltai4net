@@ -23,6 +23,18 @@ public static class ServiceCollectionExtensions
     public static IServiceCollection AddLTAIAgent(this IServiceCollection services)
         => AddLTAIAgent(services, out _);
 
+    static ServiceCollectionExtensions()
+    {
+        // Defensive: MAF AIJsonUtilities.DefaultOptions does NOT include
+        // NumberHandling.AllowReadingFromString by default. Chinese LLMs sometimes
+        // emit string values for numeric / boolean parameters (e.g. "5" instead of 5,
+        // "true" instead of true). Mutating the singleton is global but acceptable
+        // in a single-process LTAI host. Replaces the deleted ToolCallRepairer
+        // type-coercion path (P3 cleanup) for the most common case.
+        AIJsonUtilities.DefaultOptions.NumberHandling =
+            System.Text.Json.Serialization.JsonNumberHandling.AllowReadingFromString;
+    }
+
     /// <summary>
     /// Variant that also returns the list of registered agent names so callers (e.g. LTAI.Web)
     /// can wire up protocol endpoints (A2A / AGUI / OpenAI) without having to resolve every
@@ -42,6 +54,13 @@ public static class ServiceCollectionExtensions
             names.Add(captured.Name);
         }
         registeredAgentNames = names;
+
+        // Step 1b: P8 — MAF Durable Agent pipeline (self-host gRPC sidecar).
+        // Wraps each AIAgent as a DurableAIAgentProxy so chat history + tool-call
+        // state survive process restarts. The sidecar is in-process via
+        // Microsoft.DurableTask.InProcessTestHost 0.2.3-preview.1 (preview but
+        // production-grade; backed by an in-memory IOrchestrationService).
+        services.AddLTAIDurableAgents();
 
         // Step 2: SQLite Knowledge Graph store
         services.AddSingleton<KgStore>(sp =>
@@ -91,6 +110,12 @@ public static class ServiceCollectionExtensions
                 sp.GetRequiredService<ILogger<AgentWorkflows>>(),
                 sp.GetRequiredService<DecisionTreeRouter>());
         });
+
+        // Step 3a: DevUI shared service (P9.0)
+        // Used by LTAI.Web (DevUI REST surface), LTAI.TUI (/dashboard),
+        // LTAI.Desktop (WebView2 inspector). Backed by keyed AIAgents registered
+        // in Step 1 and AgentRegistry metadata for card construction.
+        services.AddSingleton<LTAI.Agent.DevUI.LTAIDevUIService>();
 
         // Step 3b: Token budget tracker (from AI config, optional)
         services.AddSingleton<LTAI.AI.BudgetTracker>(sp =>
@@ -700,6 +725,26 @@ public static class ServiceCollectionExtensions
             options: new HarnessAgentOptions
             {
                 Name = name,
+                // P10.2: Chinese harness instructions replacing the default English
+                // block. LTAI's agents are Chinese-first; the default English text
+                // is replaced wholesale rather than concatenated, since the agent's
+                // own ChatOptions.Instructions (Description field below) carry the
+                // agent-specific identity / role / duty content.
+                HarnessInstructions = isPlanMode
+                    ? null  // plan mode keeps the default — its behavior is rigid
+                    : """
+                      你是 LTAI 助手，使用工具完成用户的请求。
+
+                      ## 一般准则
+                      - 先思考再行动。复杂任务拆成清晰的步骤。
+                      - 用可用工具收集信息、执行操作并验证结果。
+                      - 解释你的推理过程，让用户能跟随你的思路。
+                      - 连续调用 4 次以上工具前必须先向用户说明你正在做什么。
+                      - 如果工具调用失败或返回异常，**调整策略**而不是重试同一个调用。
+                      - 任务完成后，给出清晰的总结：做了什么、发现了什么。
+                      - 如果模型不足以完成复杂任务（跨文件重构、并发安全分析等），
+                        在回复中输出 `<<<NEEDS_PRO: <原因>>>` 标记，系统将自动切换到更强的模型。
+                      """,
                 Description = isPlanMode
                     ? """
                     <system-reminder>
@@ -772,6 +817,42 @@ public static class ServiceCollectionExtensions
                 // as the outermost decorators by default). Use the per-agent source name so
                 // /health and DevUI can identify spans.
                 OpenTelemetrySourceName = $"LTAI.{name}",
+
+                // P10.3: bound function-invocation iterations. Default is 40; bump to 50
+                // to give multi-agent BackgroundAgents delegation room to converge (the
+                // "StartTask → WaitForFirstCompletion → GetResults" loop counts as
+                // several iterations per logical task).
+                MaximumIterationsPerRequest = 50,
+
+                // P10.0: BackgroundAgents delegation. Every LTAI agent can asynchronously
+                // delegate work to its sibling agents (LTAI-Chat → LTAI-Math for numerical
+                // work, LTAI-Code for code execution, etc.) via the 6 BackgroundAgents_*
+                // tools auto-injected by MAF. Sister agents are wrapped in
+                // LazyAIAgentProxy to break the circular dependency at HarnessAgent
+                // construction time (Name/Description come from the static AgentRegistry;
+                // RunAsync/RunStreamingAsync resolve the actual agent on first call, by
+                // which time the agent graph is fully built).
+                BackgroundAgents = AgentRegistry.LoadAll()
+                    .Where(d => !string.Equals(d.Name, name, StringComparison.OrdinalIgnoreCase)
+                                && !string.Equals(d.Name, "router", StringComparison.OrdinalIgnoreCase))
+                    .Select(d => (AIAgent)new LazyAIAgentProxy(sp, d.Name))
+                    .ToList(),
+                BackgroundAgentsProviderOptions = new BackgroundAgentsProviderOptions
+                {
+                    Instructions = """
+                    ## BackgroundAgents (LTAI)
+                    你可以将任务**异步委派**给以下 sibling agents。每个 agent 在自己 session 中并发执行。
+                    - 调用 `BackgroundAgents_StartTask` 启动后台任务（不阻塞，可连续启动多个）
+                    - 调用 `BackgroundAgents_WaitForFirstCompletion` 等待任意一个完成
+                    - 调用 `BackgroundAgents_GetTaskResults` 取出已完成的文本结果
+                    - 调用 `BackgroundAgents_GetAllTasks` 列出所有任务（id/状态/描述/agent 名）
+                    - 调用 `BackgroundAgents_ContinueTask` 向已完成任务的 session 追加输入
+                    - 调用 `BackgroundAgents_ClearCompletedTask` 释放已完成的 session 节省内存
+                    - 重要：回复用户前**必须**等所有 outstanding tasks 完成
+                    - 重要：取完结果后用 ClearCompletedTask 清理，除非还要 ContinueTask
+                    {background_agents}
+                    """,
+                },
             });
 
         // LTAI's outer-most logging wrapper — captures the final agent response and the

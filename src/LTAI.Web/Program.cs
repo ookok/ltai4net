@@ -110,6 +110,21 @@ try
 
     app.MapOpenApi();
 
+    // ── P9.0: LTAIDevUIService shared REST surface ──
+    // Backed by the same service used by LTAI.TUI (/dashboard) and
+    // LTAI.Desktop (WebView2 / browser-launched DevUI). Exposes:
+    //   GET /ltai/v1/entities                  -> LTAIAgentCard[]  (10 agents)
+    //   GET /ltai/v1/entities/{name}/card      -> LTAIAgentCard    (single)
+    // These complement MAF's /v1/entities (DevUI auto-discovery) by adding
+    // LTAI-specific fields (model, temperature, tools, permissions).
+    app.MapGet("/ltai/v1/entities", (LTAI.Agent.DevUI.LTAIDevUIService devUi) =>
+        devUi.ListAgentCards());
+    app.MapGet("/ltai/v1/entities/{name}/card", (LTAI.Agent.DevUI.LTAIDevUIService devUi, string name) =>
+    {
+        var card = devUi.GetAgentCard(name);
+        return card is null ? Results.NotFound() : Results.Ok(card);
+    });
+
     // ── P7.1: Map DevUI endpoint (Development-only) ──
     if (app.Environment.IsDevelopment())
     {
