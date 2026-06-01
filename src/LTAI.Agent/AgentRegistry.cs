@@ -67,26 +67,41 @@ public static class AgentRegistry
     /// Compute embeddings for all agents (lazy, cached per def).
     /// Call this once at startup or when agents change.
     /// </summary>
+    /// <remarks>
+    /// P12.1: if a <see cref="ToolEmbeddingCache"/> is supplied, the 10 agent
+    /// descriptions are sent in a single batched ONNX call and persisted to
+    /// <c>%LOCALAPPDATA%/LTAI/tool_embeddings.json</c> keyed by SHA-256 of
+    /// the capability text. On second call (or process restart) the cache
+    /// hit eliminates the embedding work entirely.
+    /// </remarks>
     public static async Task EnsureEmbeddingsAsync(EmbeddingClient embedder,
-        CancellationToken ct = default)
+        ToolEmbeddingCache? cache = null, CancellationToken ct = default)
     {
         var agents = LoadAll();
-        foreach (var def in agents)
+        if (cache != null)
         {
-            if (def.Embedding != null) continue; // already computed
+            // P12.1: 1 batched call, persisted to disk
+            var items = agents
+                .Select(a => (a.Name, a.CapabilityText))
+                .ToList();
             try
             {
-                var emb = await embedder.GenerateAsync(def.CapabilityText, ct).ConfigureAwait(false);
-                // Since AgentFileDef is a record, we need to update via index
-                var idx = agents.IndexOf(def);
-                if (idx >= 0)
-                    agents[idx] = def with { Embedding = emb };
+                var vectors = await cache.GetOrComputeAllAsync(items, ct).ConfigureAwait(false);
+                for (int i = 0; i < agents.Count; i++)
+                {
+                    if (vectors.TryGetValue(agents[i].Name, out var v) && v != null)
+                        agents[i] = agents[i] with { Embedding = v };
+                }
             }
             catch
             {
-                // Skip agent if embedding fails — will not be selectable via vector
+                // Cache path failed — fall through to per-agent computation
+                await ComputeEmbeddingsAsync(agents, embedder, ct).ConfigureAwait(false);
             }
+            return;
         }
+        // Original sequential per-agent fallback (no cache)
+        await ComputeEmbeddingsAsync(agents, embedder, ct).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -96,9 +111,9 @@ public static class AgentRegistry
     /// Falls back to all agent names if embeddings not computed yet.
     /// </summary>
     public static async Task<string[]> SelectTopKAsync(string task, EmbeddingClient embedder,
-        int k = 5, CancellationToken ct = default)
+        ToolEmbeddingCache? cache = null, int k = 5, CancellationToken ct = default)
     {
-        var scored = await SelectTopKWithScoresAsync(task, embedder, k, ct).ConfigureAwait(false);
+        var scored = await SelectTopKWithScoresAsync(task, embedder, cache, k, ct).ConfigureAwait(false);
         return scored.Select(s => s.Name).ToArray();
     }
 
@@ -108,8 +123,13 @@ public static class AgentRegistry
     /// a large margin → trust the top-K; a small margin → ambiguous, fall back
     /// to all specialists.
     /// </summary>
+    /// <remarks>
+    /// P12.1: pass a <see cref="ToolEmbeddingCache"/> to skip the initial
+    /// batched embedding of agent descriptions on subsequent calls.
+    /// </remarks>
     public static async Task<IReadOnlyList<(string Name, float Score)>> SelectTopKWithScoresAsync(
-        string task, EmbeddingClient embedder, int k = 5, CancellationToken ct = default)
+        string task, EmbeddingClient embedder, ToolEmbeddingCache? cache = null,
+        int k = 5, CancellationToken ct = default)
     {
         var agents = LoadAll();
         if (agents.Count == 0) return [];
@@ -118,7 +138,7 @@ public static class AgentRegistry
         var hasMissing = agents.Any(a => a.Embedding == null);
         if (hasMissing)
         {
-            await ComputeEmbeddingsAsync(agents, embedder, ct).ConfigureAwait(false);
+            await EnsureEmbeddingsAsync(embedder, cache, ct).ConfigureAwait(false);
         }
 
         // If still no embeddings (embedder unavailable), return all with 0 score

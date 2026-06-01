@@ -99,9 +99,12 @@ public static class ServiceCollectionExtensions
         });
 
         // Step 3: Workflow orchestrator (with P7.7 decision-tree routing)
+        // P12.1: pass ToolEmbeddingCache so the 10-agent description embeddings
+        // are batched + persisted; cold-start 0 ONNX calls after first run.
         services.AddSingleton<DecisionTreeRouter>(sp => new DecisionTreeRouter(
             sp.GetService<EmbeddingClient>(),
-            sp.GetRequiredService<ILogger<DecisionTreeRouter>>()));
+            sp.GetRequiredService<ILogger<DecisionTreeRouter>>(),
+            sp.GetService<ToolEmbeddingCache>()));
         services.AddSingleton<AgentWorkflows>(sp =>
         {
             var all = sp.GetKeyedServices<AIAgent>(KeyedService.AnyKey)
@@ -785,14 +788,20 @@ public static class ServiceCollectionExtensions
                 // Placed after tool-filtering providers (Tool RAG, Skill ranking) and before the final
                 // instruction providers so memories augment the conversation context.
                 // Tool RAG: 动态工具召回（放第一个）→ L1 Skill Evolution Ranking
+                // P12.2: inject ToolEmbeddingCache so 80+ tool description embeddings are
+                // batched + persisted. Cold start 0 ONNX calls after first run.
                 AIContextProviders = safety != null
-                    ? [new LTAI.Agent.Tools.ToolRetrievalProvider(sp.GetRequiredService<LTAI.AI.EmbeddingClient>()),
+                    ? [new LTAI.Agent.Tools.ToolRetrievalProvider(
+                            sp.GetRequiredService<LTAI.AI.EmbeddingClient>(),
+                            cache: sp.GetService<LTAI.AI.ToolEmbeddingCache>()),
                        new LTAI.Agent.Tools.SkillRankingProvider(
                            sp.GetRequiredService<LTAI.Agent.Tools.SkillEvolutionEngine>(),
                            sp.GetRequiredService<ILoggerFactory>().CreateLogger<LTAI.Agent.Tools.SkillRankingProvider>()),
                        safety, compaction, kbGraph, codeGraph, wasmtimeSandbox, memoryProvider,
                        new LTAI.Agent.Tools.InstructionProvider(modelId), new LTAI.Agent.Tools.EnvironmentProvider(), skillsProvider]
-                    : [new LTAI.Agent.Tools.ToolRetrievalProvider(sp.GetRequiredService<LTAI.AI.EmbeddingClient>()),
+                    : [new LTAI.Agent.Tools.ToolRetrievalProvider(
+                            sp.GetRequiredService<LTAI.AI.EmbeddingClient>(),
+                            cache: sp.GetService<LTAI.AI.ToolEmbeddingCache>()),
                        new LTAI.Agent.Tools.SkillRankingProvider(
                            sp.GetRequiredService<LTAI.Agent.Tools.SkillEvolutionEngine>(),
                            sp.GetRequiredService<ILoggerFactory>().CreateLogger<LTAI.Agent.Tools.SkillRankingProvider>()),

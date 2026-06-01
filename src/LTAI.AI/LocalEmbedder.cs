@@ -61,11 +61,22 @@ public sealed class LocalEmbedder : IDisposable
         ),
     };
 
+    /// <summary>
+    /// P12.3: Global disable flag. When <c>true</c>, the embedder ctor skips
+    /// model detection + eager pre-warm; <see cref="Available"/> always returns
+    /// <c>false</c>. Set by <c>AddLTAIAI()</c> when any remote embedding API
+    /// key is present (to avoid wasting 200 MB RAM + 5-10 s cold start on a
+    /// model the user won't use). Defaults to <c>false</c> for offline / no-key
+    /// deployments.
+    /// </summary>
+    public static bool DefaultDisabled { get; set; }
+
     /// <summary>Whether a model is loaded and available. Triggers lazy load on first check.</summary>
     public bool Available
     {
         get
         {
+            if (DefaultDisabled) return false;
             if (!_loadAttempted) EnsureLoaded();
             return _session != null;
         }
@@ -74,7 +85,7 @@ public sealed class LocalEmbedder : IDisposable
     /// <summary>Eagerly load the model on a background thread. Safe to call multiple times.</summary>
     public async Task PreWarmAsync()
     {
-        if (_loadAttempted) return;
+        if (DefaultDisabled || _loadAttempted) return;
         await Task.Run(() => EnsureLoaded()).ConfigureAwait(false);
     }
 
@@ -95,10 +106,18 @@ public sealed class LocalEmbedder : IDisposable
 
     /// <summary>
     /// Initialize embedder. Auto-detects the models directory and current model.
-    /// Model is loaded lazily on first use.
+    /// Model is loaded lazily on first use. Skips model detection + pre-warm
+    /// when <see cref="DefaultDisabled"/> is <c>true</c> (P12.3: remote API
+    /// available, no need for local).
     /// </summary>
     public LocalEmbedder()
     {
+        if (DefaultDisabled)
+        {
+            // P12.3: remote embedding API will be used; don't waste RAM/CPU
+            // on a 90 MB model we won't touch. Available returns false.
+            return;
+        }
         BaseModelsDirectory ??= FindBaseModelsDirectory();
         (_currentModelName, _modelPath, _vocabPath) = DetectCurrentModel();
         // Eager pre-warm on background thread to avoid blocking first use
@@ -194,6 +213,134 @@ public sealed class LocalEmbedder : IDisposable
             result[i] /= chunkEmbs.Count;
 
         return L2Normalize(result);
+    }
+
+    /// <summary>
+    /// P11.1a: Batched embedding — N texts in 1 session.Run.
+    /// 5-10x throughput vs single-text calls because:
+    ///   - 1 native call vs N
+    ///   - ONNX runtime amortizes graph setup, allocator warmup
+    ///   - GPU exec providers (DML/CUDA) prefer large batches
+    /// Each text is tokenized with [CLS]/[SEP] and padded to the batch's max
+    /// sequence length (capped at <see cref="MaxLength"/>). Texts exceeding
+    /// MaxLength are truncated to MaxLength-1 tokens + [SEP] (sliding window
+    /// is not applied in batch mode — would require multi-pass with the same
+    /// complication; call <see cref="Generate"/> on long texts if needed).
+    /// Returns L2-normalized vectors in the same order as the input.
+    /// </summary>
+    public IReadOnlyList<float[]> GenerateBatch(IReadOnlyList<string> texts)
+    {
+        if (texts.Count == 0) return Array.Empty<float[]>();
+        if (texts.Count == 1) return new[] { Generate(texts[0]) };
+
+        var (session, vocab) = GetLoadedModel();
+        if (session == null || vocab == null)
+        {
+            throw new InvalidOperationException(
+                "LocalEmbedder not available. Use /model download to download an embedding model.");
+        }
+
+        // Tokenize each text (returns list of token IDs with attention mask; padded to MaxLength)
+        var perTextTokens = new List<Token[]>(texts.Count);
+        int actualMaxLen = 0;
+        for (int i = 0; i < texts.Count; i++)
+        {
+            var t = texts[i];
+            var toks = TokenizeToIds(t, vocab);
+            // Find true length (first pad) so we can size the batch tensor tightly
+            int trueLen = toks.Length;
+            while (trueLen > 0 && toks[trueLen - 1].InputId == PadTokenId) trueLen--;
+            if (trueLen > actualMaxLen) actualMaxLen = trueLen;
+            perTextTokens.Add(toks);
+        }
+        if (actualMaxLen == 0) actualMaxLen = 1; // safety
+
+        // Build batched tensors [N, actualMaxLen]
+        var inputIds = new DenseTensor<long>(new[] { texts.Count, actualMaxLen });
+        var attentionMask = new DenseTensor<long>(new[] { texts.Count, actualMaxLen });
+        var tokenTypeIds = new DenseTensor<long>(new[] { texts.Count, actualMaxLen });
+
+        for (int i = 0; i < texts.Count; i++)
+        {
+            var t = perTextTokens[i];
+            for (int j = 0; j < actualMaxLen; j++)
+            {
+                if (j < t.Length)
+                {
+                    inputIds[i, j] = t[j].InputId;
+                    attentionMask[i, j] = t[j].AttentionMask;
+                }
+                else
+                {
+                    inputIds[i, j] = PadTokenId;
+                    attentionMask[i, j] = 0;
+                }
+                tokenTypeIds[i, j] = 0;
+            }
+        }
+
+        var inputs = new List<NamedOnnxValue>
+        {
+            NamedOnnxValue.CreateFromTensor("input_ids", inputIds),
+            NamedOnnxValue.CreateFromTensor("attention_mask", attentionMask),
+            NamedOnnxValue.CreateFromTensor("token_type_ids", tokenTypeIds),
+        };
+
+        using var results = session.Run(inputs);
+        var output = results.First().AsTensor<float>();
+        // output dimensions: [N, actualMaxLen, hiddenDim]
+        int hiddenDim = output.Dimensions[2];
+
+        // Mean-pool per row using the actual attention mask, then L2 normalize
+        var embeddings = new float[texts.Count][];
+        for (int i = 0; i < texts.Count; i++)
+        {
+            var pooled = new float[hiddenDim];
+            int validTokens = 0;
+            for (int j = 0; j < actualMaxLen; j++)
+            {
+                if (attentionMask[i, j] == 0) continue;
+                validTokens++;
+                for (int k = 0; k < hiddenDim; k++)
+                    pooled[k] += output[i, j, k];
+            }
+            if (validTokens > 0)
+            {
+                for (int k = 0; k < hiddenDim; k++)
+                    pooled[k] /= validTokens;
+            }
+            embeddings[i] = L2Normalize(pooled);
+        }
+        return embeddings;
+    }
+
+    /// <summary>Tokenize text to a fixed-length Token[] (padded to MaxLength).</summary>
+    private Token[] TokenizeToIds(string text, Dictionary<string, int> vocab)
+    {
+        var normalized = NormalizeText(text);
+        var words = SplitWords(normalized);
+        var pieces = new List<string>(MaxLength) { "[CLS]" };
+        foreach (var word in words)
+        {
+            pieces.AddRange(WordPiece(word, vocab));
+            if (pieces.Count >= MaxLength - 1) break;
+        }
+        pieces.Add("[SEP]");
+        if (pieces.Count > MaxLength)
+        {
+            pieces = pieces.Take(MaxLength - 1).ToList();
+            pieces.Add("[SEP]");
+        }
+        var tokens = new Token[MaxLength];
+        for (int i = 0; i < pieces.Count; i++)
+        {
+            tokens[i] = new Token(vocab.GetValueOrDefault(pieces[i], UnkTokenId), 1);
+        }
+        for (int i = pieces.Count; i < MaxLength; i++)
+        {
+            tokens[i] = new Token(PadTokenId, 0);
+        }
+        return tokens;
     }
 
     /// <summary>Build padded token list for a range of raw pieces.</summary>

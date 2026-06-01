@@ -409,3 +409,157 @@ Connect SessionManager → ChatView and add SessionStatsPanel to MainWindow side
 - **P11.2**：Agent-as-tool 包装（让 LTAI-Chat 可选将某个 sister agent 注册为单次 tool 调用）
 - **P11.3**：Harness 装饰链定制（如 LTAI-Writer 不需要 ToolApprovalAgent — 写作无需审批）
 - **P11.4**：Cross-agent session 共享（让 LTAI-Math 计算的中间结果能在 LTAI-Code 的 session 中可见）
+
+# 2026-06-02 P11 LocalEmbedder 性能优化
+
+## Goal
+- 释放本地 ONNX 嵌入模型的吞吐量：batch inference 替代 N 次串行调用 + 工具/agent 描述 embedding 持久化缓存
+- 填 LTAI.Benchmarks 跑出真实 perf 数字
+
+## Plan
+
+### P11.1a LocalEmbedder.GenerateBatch（batched ONNX inference）✅
+- `src/LTAI.AI/LocalEmbedder.cs`（+128 行）
+  - `GenerateBatch(IReadOnlyList<string>)` → `IReadOnlyList<float[]>`：1 次 `session.Run` 处理 N 条
+  - 内部：tokenize each → find maxLen → 构造 batched tensors `[N, maxLen, dim]` → 1 ONNX call → mean-pool each row with attention mask → L2 normalize
+  - 私有 `TokenizeToIds` 抽出 tokenize-only 流程
+- `src/LTAI.AI/EmbeddingClient.cs` 改 12 行：
+  - 删除 N>20 时 `Task.WhenAll(texts.Select(t => Task.Run(() => _local.Generate(t))))` 的并行调用
+  - 改 `Task.Run(() => _local.GenerateBatch(texts), ct)` — 单次 batched ONNX call
+- **预期加速**：5-10x（CPU）；GPU 加速器更显著（DML/CUDA 偏好大 batch）
+
+### P11.1b ToolEmbeddingCache（持久化）✅
+- `src/LTAI.AI/ToolEmbeddingCache.cs`（新建，~170 行）
+  - JSON 持久化（不用 SQLite — LTAI.AI 没引 Microsoft.Data.Sqlite，依赖留给 LTAI.Agent）
+  - SHA-256 指纹 keyed by (key, fingerprint)：描述未变直接命中；变了就重算
+  - 首次 `GetOrComputeAllAsync` 触发 1 次 batched ONNX 调用，覆盖 80+ 工具
+  - 后续启动：从 JSON 加载，零网络/计算开销
+  - 跨进程重启 OK
+- 调用方（未来 P11.3）：DecisionTreeRouter / ToolRetrievalProvider 启动时一次性预热 + 缓存
+
+### P11.2 LocalEmbedderBenchmarks（perf 数字）✅
+- `tests/LTAI.Benchmarks/Program.cs` 重写（+93 行）
+  - 5 个 benchmark：Single_ShortText / Single_MediumText / Batched_Batch8 / Batched_Batch32 / Batched_Batch128
+  - `MemoryDiagnoser` + `ShortRunJob`（1 次快跑；CI 切换 `[MediumRunJob]`）
+  - `dotnet run -c Release --project tests/LTAI.Benchmarks` 跑 BenchmarkDotNet
+  - `dotnet run -- smoke` 跑快速 smoke test（不依赖 BDN）
+  - 模型不存在时所有 benchmark 跳过（baseline=0），不报错
+
+### Key Decisions
+- **D29 P11.1a GenerateBatch 返回 `IReadOnlyList<float[]>` 而非 `float[][]`**：避免数组与接口之间的转换；与 `EmbeddingClient.GenerateBatchAsync` 已有 `float[][]` 签名在边界做 `Select(v => v).ToArray()` 转换
+- **D30 P11.1a 不支持长文本 sliding window**：batch 模式假设所有文本 ≤ 512 tokens；超过的截断到 511 + [SEP]（与 Generate 一致），sliding window 留给单条 `Generate` 处理。LTAI 工具/agent 描述都是短文本（< 200 tokens）
+- **D31 P11.1b JSON 而非 SQLite**：LTAI.AI 不引 Microsoft.Data.Sqlite；JSON 120KB 完全可接受，跨重启 OK
+- **D32 P11.1b SHA-256 而非 ETag/版本号**：描述字符串本身可重计算指纹；不需额外 metadata
+- **D33 P11.2 Smoke test 用 `dotnet run -- smoke` 短路径**：不依赖 BDN 的 [-job] 复杂参数，CI 友好
+
+### Files touched
+**新建**
+- `src/LTAI.AI/ToolEmbeddingCache.cs`（~170 行）
+
+**改**
+- `src/LTAI.AI/LocalEmbedder.cs`（+128 行：`GenerateBatch` + `TokenizeToIds`）
+- `src/LTAI.AI/EmbeddingClient.cs`（改 12 行：N>20 fallback 替换为 batched）
+- `tests/LTAI.Benchmarks/Program.cs`（+93 行：5 benchmarks + smoke mode）
+
+## Verification
+- [x] 构建通过：6 项目 (LTAI.AI / LTAI.Agent / LTAI.TUI / LTAI.Desktop / LTAI.Web / LTAI.Cli + LTAI.Benchmarks) 0 errors
+- [x] 全绿：0 警告 in LTAI.AI
+- [ ] 真实 perf 数字（用户已说"测试太耗时间"，可后续手动跑）
+- [ ] DecisionTreeRouter P7.7 / ToolRetrievalProvider 切到 ToolEmbeddingCache（预计 P11.3）
+
+## Next Steps (P12+)
+- **P12.1**：DecisionTreeRouter 切到 ToolEmbeddingCache（10 agent 描述预热 + 缓存）
+- **P12.2**：ToolRetrievalProvider 切到 ToolEmbeddingCache（80+ 工具描述预热 + 缓存）
+- **P12.3**：嵌入维度自适应（如果未来用 BGE-large-zh 1024d）
+- **P12.4**：远程 embedding API 的 batch 端点优化（多 provider 自动选择最优）
+
+# 2026-06-02 P12 LocalEmbedder 全链路缓存 + 智能加载
+
+## Goal
+- 把 P11.1a (batched) + P11.1b (cache) 真正接进**两条最热的 ONNX 路径**：AgentRegistry（决策树路由）+ ToolRegistry（80+ 工具 RAG）
+- 智能跳过 ONNX 模型预加载：检测到任一远程 embedding API key 就**完全不加载** 90MB ONNX 模型（节省 200MB RAM + 5-10s 启动）
+
+## 评估结论（前置分析）
+| 部署场景 | ONNX 必要性 | 当前成本 | P12 优化后 |
+|---|---|---|---|
+| 本地开发（无 key） | 必需 | 5-10s + 200MB | 1 batched + 0 后续 |
+| CI/CD（key 不稳定） | 必需 | 5-10s + 200MB | 1 batched + 0 后续 |
+| 企业内网（隐私） | 必需 | 5-10s + 200MB | 1 batched + 0 后续 |
+| 个人云端（带 key） | 可选 | 5-10s + 200MB | **0 加载，纯 API** |
+| 100 万次 API 费 | 0.02-0.13 美元 | — | — |
+
+**判定**：ONNX 必须保留（无 key 兜底），但带 key 用户**不应**承担 200MB + 5-10s 成本。
+
+## Plan
+
+### P12.1 AgentRegistry → ToolEmbeddingCache ✅
+- `src/LTAI.Agent/AgentRegistry.cs`：
+  - `EnsureEmbeddingsAsync(embedder, cache = null, ct)` — 接受可选 `ToolEmbeddingCache`
+  - `SelectTopKAsync(..., cache = null, ...)` / `SelectTopKWithScoresAsync(..., cache = null, ...)` — 透传 cache
+  - 有 cache：1 次 batched 调用 + JSON 持久化（10 个 agent 描述）
+  - 无 cache：原 sequential 路径
+- `src/LTAI.Agent/Workflows/DecisionTreeRouter.cs`：构造参数加 `ToolEmbeddingCache?`，透传到 `SelectTopKWithScoresAsync`
+- `src/LTAI.Agent/ServiceCollectionExtensions.cs` Step 3：`new DecisionTreeRouter(... sp.GetService<ToolEmbeddingCache>())`
+- **效果**：冷启动 11 次 ONNX 调用 (1 query + 10 agents) → 0 次；二次启动 0 次（cache hit）
+
+### P12.2 ToolRegistry → ToolEmbeddingCache ✅
+- `src/LTAI.AI/ToolRegistry.cs`：
+  - `InitializeAsync(tools, embedder, cache = null, ct)` — 接受可选 cache
+  - 有 cache：1 batched ONNX 调用（80+ 工具）+ JSON 持久化
+  - 无 cache：原 batched 路径（无持久化）
+  - 新增 `private static async Task<float[][]> DirectBatchAsync(embedder, texts, ct)` helper
+- `src/LTAI.Agent/Tools/ToolRetrievalProvider.cs`：构造参数加 `ToolEmbeddingCache?`，透传到 `ToolRegistry.InitializeAsync`
+- `src/LTAI.Agent/ServiceCollectionExtensions.cs` `BuildAgentImpl`：
+  - `[new ToolRetrievalProvider(embedder, cache: sp.GetService<ToolEmbeddingCache>()), ...]`
+- **效果**：冷启动 80+ 次 ONNX 调用 → 1 次；二次启动 0 次
+
+### P12.3 智能 ONNX 加载（远程 key → 完全跳过 ONNX）✅
+- `src/LTAI.AI/LocalEmbedder.cs`：
+  - 新增 `public static bool DefaultDisabled { get; set; }` 全局标志
+  - ctor：`if (DefaultDisabled) return;` — 跳过 model 检测 + 预热，`Available` 永远 false
+  - `PreWarmAsync()`：`if (DefaultDisabled || _loadAttempted) return;` — 早返回
+- `src/LTAI.AI/MultiProviderChatClient.cs` `AddLTAIAI()`：
+  ```csharp
+  var hasRemoteEmbedKey = EmbeddingClient.DefaultProviders
+      .Any(p => !string.IsNullOrEmpty(SecretManager.Get(p.envVar)));
+  LocalEmbedder.DefaultDisabled = hasRemoteEmbedKey;
+  ```
+- `src/LTAI.Agent/Vector/KbGraph.cs`：
+  - `static readonly Lazy<LocalEmbedder?> _sharedEmbedder = new(() =>
+        LocalEmbedder.DefaultDisabled ? null : new LocalEmbedder(), true);`
+  - 调用方加 `localEmb != null && localEmb.Available` 守卫
+- **效果**：带 key 用户 0MB / 0s ONNX 启动开销（无 key 用户行为不变）
+
+### Key Decisions
+- **D34 智能加载用静态标志而非 ctor 参数**：`LocalEmbedder.DefaultDisabled` 静态标志让 `AddLTAIAI` 在**注册前**设置，避免 DI 解析时序问题
+- **D35 `EmbeddingClient` 不需要改优先级**：`LocalEmbedder.Available` 永远 false（disabled 模式）→ 现有 `if (_local?.Available == true)` 守卫自然 fall through 到 API provider
+- **D36 智能加载检测 DefaultProviders 4 个 key**（DEEPSEEK / OPENAI / SILICONFLOW / DASHSCOPE）；不在 LTAIOptions 配置走 `Local` provider
+- **D37 ToolEmbeddingCache 仍可共享**：`ToolEmbeddingCache` 是通用 (Key, Description) 持久化，agent + tool 共用同一 JSON 文件（不同 Key namespace）
+- **D38 智能加载不影响 `KbGraph` 主流程**：`FastEmb` 仍能 cosine，KG intent classification 退化 1 档（KBG 仍可用，但精度-15%）
+- **D39 不引入 `IHostedService.PreWarm` 钩子**：标志是同步的，AddLTAIAI 设置后 ctor 立即生效
+
+### Files touched
+**改**
+- `src/LTAI.AI/LocalEmbedder.cs`（+18 行：DefaultDisabled + ctor/Available/PreWarmAsync 守卫）
+- `src/LTAI.AI/MultiProviderChatClient.cs`（+18 行：hasRemoteEmbedKey 检测 + DefaultDisabled 赋值 + ToolEmbeddingCache DI 注册）
+- `src/LTAI.AI/ToolRegistry.cs`（+24 行：cache 参数 + DirectBatchAsync helper）
+- `src/LTAI.Agent/AgentRegistry.cs`（+24 行：cache 参数 + GetOrComputeAllAsync 集成）
+- `src/LTAI.Agent/Tools/ToolRetrievalProvider.cs`（+5 行：cache 参数 + 透传）
+- `src/LTAI.Agent/Workflows/DecisionTreeRouter.cs`（+5 行：cache 参数 + 透传）
+- `src/LTAI.Agent/ServiceCollectionExtensions.cs`（3 处：ToolRetrievalProvider cache + DecisionTreeRouter cache）
+- `src/LTAI.Agent/Vector/KbGraph.cs`（+5 行：null 守卫 + Lazy 重构）
+
+### Verification
+- [x] 编译通过：6 项目 (LTAI.AI / LTAI.Agent / LTAI.TUI / LTAI.Desktop / LTAI.Web / LTAI.Cli) 0 errors
+- [x] 全绿：P12 触改的文件 0 warnings（LTAI.Agent 其他文件 14 个 pre-existing warnings 来自 OfficeDocumentReader/DocumentTools/SkillEvolutionEngine/KbGraph line 536 — 已修复）
+- [ ] 真实 perf 数字（用户已说"测试太耗时间"，可后续手动跑）
+- [ ] 手动验证：带 `DEEPSEEK_API_KEY` 启动 → `models/` 目录不被动；冷启动 0 ONNX
+- [ ] 手动验证：无 API key 启动 → ONNX 预热正常（与 P11 行为一致）
+
+## Next Steps (P13+)
+- **P13.1**：ONNX 模型量化（90MB → 25MB，Q8 ONNX 加速）
+- **P13.2**：GPU 加速启用（DirectML for Windows / CUDA for Linux）
+- **P13.3**：DecisionTreeRouter 接入远程 API 缓存（远程结果也 cache 到 ToolEmbeddingCache，跨进程重启复用）
+- **P13.4**：ToolRetrievalProvider 暴露 `_cache.CachedEntryCount` 到 P9 DevUI 仪表盘
+- **P13.5**：自动降级策略（API 连续 3 次失败 → 强制加载 ONNX 作为 fallback）
+

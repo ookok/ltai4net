@@ -41,16 +41,19 @@ namespace LTAI.Agent.Workflows;
 public sealed class DecisionTreeRouter
 {
     private readonly EmbeddingClient? _embedder;
+    private readonly ToolEmbeddingCache? _cache;
     private readonly ILogger<DecisionTreeRouter> _logger;
     private readonly DecisionTreeRouterOptions _options;
 
     public DecisionTreeRouter(
         EmbeddingClient? embedder,
         ILogger<DecisionTreeRouter> logger,
+        ToolEmbeddingCache? cache = null,
         DecisionTreeRouterOptions? options = null)
     {
         _embedder = embedder;
         _logger = logger;
+        _cache = cache;
         _options = options ?? new DecisionTreeRouterOptions();
     }
 
@@ -74,8 +77,9 @@ public sealed class DecisionTreeRouter
         }
 
         // Stage 1: top-K by cosine similarity
+        // P12.1: pass cache to skip batched re-embedding of agent descriptions
         var topK = await AgentRegistry
-            .SelectTopKWithScoresAsync(task, _embedder, k: _options.TopK, ct)
+            .SelectTopKWithScoresAsync(task, _embedder, _cache, k: _options.TopK, ct)
             .ConfigureAwait(false);
 
         if (topK.Count == 0)

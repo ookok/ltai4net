@@ -537,6 +537,14 @@ public static class ServiceCollectionExtensions
         });
 
         // Local ONNX embedder (BGE-small-zh, zero API dependency)
+        // P12.3: smart disable — if any remote embedding provider has a key,
+        // skip the 200 MB / 5-10 s pre-warm. Remote API is preferred
+        // (1024-1536d, better quality, no local RAM). The ctor no-ops on
+        // disabled (Available returns false), so consumers fall through to
+        // the API path without ever loading the 90 MB model file.
+        var hasRemoteEmbedKey = EmbeddingClient.DefaultProviders
+            .Any(p => !string.IsNullOrEmpty(LTAI.Core.Configuration.SecretManager.Get(p.envVar)));
+        LocalEmbedder.DefaultDisabled = hasRemoteEmbedKey;
         services.AddSingleton<LocalEmbedder>();
 
         // Embedding client (API → local BGE → FastEmb fallback)
@@ -544,6 +552,13 @@ public static class ServiceCollectionExtensions
             new EmbeddingClient(sp.GetRequiredService<IHttpClientFactory>(),
                 sp.GetService<LocalEmbedder>(),
                 sp.GetService<ILogger<EmbeddingClient>>()));
+
+        // P12: persistent embedding cache — 1 batched ONNX call per change-set,
+        // JSON file under %LOCALAPPDATA%/LTAI/tool_embeddings.json, survives restarts.
+        services.AddSingleton<ToolEmbeddingCache>(sp =>
+            new ToolEmbeddingCache(
+                sp.GetRequiredService<EmbeddingClient>(),
+                sp.GetService<ILogger<ToolEmbeddingCache>>() ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<ToolEmbeddingCache>.Instance));
         return services;
     }
 }

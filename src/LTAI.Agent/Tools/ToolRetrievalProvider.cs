@@ -41,18 +41,21 @@ public sealed class ToolRetrievalProvider : AIContextProvider
     private const int DefaultTopK = 8;
     private static bool _initialized;
     private readonly EmbeddingClient _embedder;
+    private readonly ToolEmbeddingCache? _cache;
     private readonly string? _domain;
     private readonly HashSet<string>? _domainFilter;
 
     /// <param name="embedder">Embedding 客户端。</param>
     /// <param name="domain">可选领域过滤。当指定时，Tool RAG 对同 domain 工具加分优先召回。</param>
     /// <param name="domainFilter">可选的域名白名单。当指定时，只考虑标记了这些领域的工具参与检索。</param>
+    /// <param name="cache">P12.2: 可选 embedding 缓存。注入后工具描述嵌入跨进程重启复用, 冷启动 0 ONNX 调用。</param>
     public ToolRetrievalProvider(EmbeddingClient embedder, string? domain = null,
-        HashSet<string>? domainFilter = null) : base(null, null, null)
+        HashSet<string>? domainFilter = null, ToolEmbeddingCache? cache = null) : base(null, null, null)
     {
         _embedder = embedder ?? throw new ArgumentNullException(nameof(embedder));
         _domain = domain;
         _domainFilter = domainFilter;
+        _cache = cache;
     }
 
     protected override async ValueTask<AIContext> ProvideAIContextAsync(
@@ -78,7 +81,7 @@ public sealed class ToolRetrievalProvider : AIContextProvider
         // 首次调用：使用 ONNX（优先）初始化 ToolRegistry
         if (!_initialized)
         {
-            await ToolRegistry.InitializeAsync(candidates.ToList(), _embedder, ct).ConfigureAwait(false);
+            await ToolRegistry.InitializeAsync(candidates.ToList(), _embedder, _cache, ct).ConfigureAwait(false);
             _initialized = true;
 #if DEBUG
             System.Diagnostics.Debug.WriteLine("[ToolRAG] Registered tools:");
