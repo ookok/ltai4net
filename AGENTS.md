@@ -642,3 +642,58 @@ Connect SessionManager → ChatView and add SessionStatsPanel to MainWindow side
 - **P14.3**：Multi-embedding 融合（同时使用 MiniLM + BGE，concat 平均 / 加权）提升跨语言效果
 - **P14.4**：ONNX 缓存预热 background service（首次启动时后台下载所有可能用到的模型）
 
+# 2026-06-02 P13.6 单文件原则（避免模型碎片化）
+
+## Goal
+- P13.1 同时下 FP32 + INT8 (113MB / 模型) → 违反"控制本地下载模型数量和大小"原则
+- 改为：**每个模型只下 1 个变种**（MiniLM=INT8，BGE=FP32）
+- 用户主动切换 `LTAI:Embedding:Quantization` 时，可选触发 `CleanupStaleVariant` 清掉旧文件
+
+## Plan
+
+### P13.6a 重构 Build Target 按模型拆分 ✅
+- 删除旧的 `DownloadEmbeddingModel` (FP32) + `DownloadQuantizedEmbeddingModel` (INT8) — 两个并行下，导致 113MB/MiniLM
+- 改为 3 个独立 target：
+  - `DownloadEmbeddingModelMiniLM` → **只下 INT8 (23MB)**
+  - `DownloadEmbeddingModelBgeSmallZh` → 只下 FP32 (95MB，无 INT8 上游版本)
+  - `DownloadEmbeddingModelBgeSmallEn` → 只下 FP32 (95MB，无 INT8 上游版本)
+- `PublishEmbeddingModel` 同样拆 3 个（按现有文件复制，不补下）
+- 旧的 `model.onnx` (MiniLM FP32) 文件用户**保留无害** — 卸载 INT8 时自动 fallback
+
+### P13.6b DownloadModelAsync 路径唯一性 ✅
+- `LocalEmbedder.DownloadModelAsync(name)` 现在按 `Options.Quantization` 选**唯一**变种：
+  - `auto` (默认) / `int8` → 下 INT8（如有）
+  - `fp32` → 下 FP32
+  - 只有一个变种被下载到磁盘
+- vocab.txt 始终下载（必需，~500KB）
+
+### P13.6c CleanupStaleVariant（手动 / 编程接口）✅
+- `LocalEmbedder.CleanupStaleVariant(name, targetQuant: true)` 切到 INT8 时删 FP32
+- 不自动调用 — 用户主动触发（TUI `/model cleanup` 或 CLI 命令）
+
+### Key Decisions
+- **D47 单文件原则**：每个模型本地只保留 1 个变种，避免磁盘碎片化
+- **D48 Build target 默认 INT8**：MiniLM `auto` 模式下 build target 走 INT8，FP32 需用户主动触发（设 `Quantization=fp32` + 重新 `dotnet build`）
+- **D49 不自动删除旧变种**：用户可能调试 / 对比 / 切换，留给用户主动清理
+- **D50 vocab.txt 永远下载**：分词器必需，~500KB 不构成优化目标
+
+### Files touched
+**改**
+- `src/LTAI.AI/LTAI.AI.csproj`（拆 3 个 build target + 3 个 publish target）
+- `src/LTAI.AI/LocalEmbedder.cs`（+90 行：DownloadModelAsync 改单变种 + CleanupStaleVariant）
+
+### Verification
+- [x] 编译通过：6 项目 0 errors
+- [x] 0 warnings in P13.6-touched files
+- [ ] 手动验证：删除 `models/minilm-l6-v2/` 后 `dotnet build` 重新触发 build target，确认**只下 INT8 23MB**（不连带下 FP32 90MB）
+
+## 净效果对比
+
+| 场景 | P13.1 (双下) | P13.6 (单下) |
+|---|---|---|
+| MiniLM (default) | 90MB FP32 + 23MB INT8 = **113MB** | 23MB INT8 = **23MB** (-90MB) |
+| BGE-small-zh | 95MB FP32 | 95MB FP32 (不变) |
+| BGE-small-en | 95MB FP32 | 95MB FP32 (不变) |
+| 3 模型合计 | **303MB** | **213MB** (-30%) |
+| 碎片化 | 2 文件/模型 | **1 文件/模型** |
+

@@ -874,9 +874,14 @@ public sealed class LocalEmbedder : IDisposable
 
     /// <summary>Download a known model from HuggingFace mirror.</summary>
     /// <remarks>
-    /// P13.1: if the model has a <see cref="ModelInfo.QuantizedModelUrl"/>,
-    /// also downloads the INT8/UINT8 variant as <c>model.int8.onnx</c>. A
-    /// download failure of the quantized file is non-fatal (FP32 still loads).
+    /// P13.1 + P13.6: respects <see cref="EmbeddingOptions.Quantization"/>.
+    /// <list type="bullet">
+    ///   <item><description><c>auto</c> / <c>int8</c> (default): downloads only the
+    ///     INT8/UINT8 variant as <c>model.int8.onnx</c> if the model has a
+    ///     quantized URL. Models without one (BGE) fall back to FP32.</description></item>
+    ///   <item><description><c>fp32</c>: downloads only the original FP32 <c>model.onnx</c>.</description></item>
+    /// </list>
+    /// Vocab.txt is always downloaded (tokenizer, model-architecture specific, ~500KB).
     /// </remarks>
     public async Task<bool> DownloadModelAsync(string name, HttpClient? httpClient = null)
     {
@@ -887,23 +892,24 @@ public sealed class LocalEmbedder : IDisposable
 
         var modelDir = Path.Combine(baseDir, name);
         Directory.CreateDirectory(modelDir);
-        var modelFile = Path.Combine(modelDir, "model.onnx");
         var vocabFile = Path.Combine(modelDir, "vocab.txt");
-        var quantFile = info.QuantizedFileName != null
-            ? Path.Combine(modelDir, info.QuantizedFileName)
-            : null;
+
+        // P13.6: single-file principle — pick one variant based on Options.Quantization
+        var quantPref = (Options.Quantization ?? "auto").ToLowerInvariant();
+        var wantQuant = (quantPref == "auto" || quantPref == "int8")
+                        && info.QuantizedModelUrl != null
+                        && info.QuantizedFileName != null;
+        var quantFile = wantQuant ? Path.Combine(modelDir, info.QuantizedFileName!) : null;
+        var fp32File = wantQuant ? null : Path.Combine(modelDir, "model.onnx");
+        // The "active" file is whichever variant we end up with
+        var activeFile = (string?)quantFile ?? fp32File;
 
         var http = httpClient ?? new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
         var disposeHttp = httpClient == null;
 
         try
         {
-            using (var resp = await http.GetAsync(info.ModelUrl).ConfigureAwait(false))
-            {
-                resp.EnsureSuccessStatusCode();
-                using var fs = new FileStream(modelFile, FileMode.Create, FileAccess.Write, FileShare.None);
-                await resp.Content.CopyToAsync(fs).ConfigureAwait(false);
-            }
+            // Download vocab (always, regardless of quantization)
             using (var resp = await http.GetAsync(info.VocabUrl).ConfigureAwait(false))
             {
                 resp.EnsureSuccessStatusCode();
@@ -911,36 +917,67 @@ public sealed class LocalEmbedder : IDisposable
                 await resp.Content.CopyToAsync(fs).ConfigureAwait(false);
             }
 
-            // P13.1: best-effort quantized download; non-fatal on failure
-            if (info.QuantizedModelUrl != null && quantFile != null)
+            // Download exactly one model variant
+            var modelUrl = wantQuant ? info.QuantizedModelUrl! : info.ModelUrl;
+            using (var resp = await http.GetAsync(modelUrl).ConfigureAwait(false))
             {
-                try
-                {
-                    using var resp = await http.GetAsync(info.QuantizedModelUrl).ConfigureAwait(false);
-                    if (resp.IsSuccessStatusCode)
-                    {
-                        using var fs = new FileStream(quantFile, FileMode.Create, FileAccess.Write, FileShare.None);
-                        await resp.Content.CopyToAsync(fs).ConfigureAwait(false);
-                    }
-                }
-                catch
-                {
-                    // Quantized variant not available upstream — FP32 still works
-                }
+                resp.EnsureSuccessStatusCode();
+                using var fs = new FileStream(activeFile!, FileMode.Create, FileAccess.Write, FileShare.None);
+                await resp.Content.CopyToAsync(fs).ConfigureAwait(false);
             }
+
             return true;
         }
         catch
         {
-            if (File.Exists(modelFile)) try { File.Delete(modelFile); } catch { }
             if (File.Exists(vocabFile)) try { File.Delete(vocabFile); } catch { }
-            if (quantFile != null && File.Exists(quantFile)) try { File.Delete(quantFile); } catch { }
+            if (activeFile != null && File.Exists(activeFile)) try { File.Delete(activeFile); } catch { }
             return false;
         }
         finally
         {
             if (disposeHttp) http.Dispose();
         }
+    }
+
+    /// <summary>
+    /// P13.6: when switching quantization mode, optionally delete the stale
+    /// variant on disk to avoid fragmentation. Returns the number of files
+    /// removed (0 if no cleanup was needed/possible).
+    /// </summary>
+    /// <param name="name">Model name (e.g. <c>minilm-l6-v2</c>).</param>
+    /// <param name="targetQuant">What we're switching TO (true = keep INT8; false = keep FP32).</param>
+    public int CleanupStaleVariant(string name, bool targetQuant)
+    {
+        if (!KnownModels.TryGetValue(name, out var info)) return 0;
+        var baseDir = BaseModelsDirectory;
+        if (baseDir == null) return 0;
+        var modelDir = Path.Combine(baseDir, name);
+        if (!Directory.Exists(modelDir)) return 0;
+
+        var removed = 0;
+        if (targetQuant)
+        {
+            // Switching to INT8: delete FP32 if present
+            var fp32 = Path.Combine(modelDir, "model.onnx");
+            if (File.Exists(fp32))
+            {
+                try { File.Delete(fp32); removed++; } catch { }
+            }
+        }
+        else
+        {
+            // Switching to FP32: delete INT8 if present
+            if (info.QuantizedFileName != null)
+            {
+                var q = Path.Combine(modelDir, info.QuantizedFileName);
+                if (File.Exists(q))
+                {
+                    try { File.Delete(q); removed++; } catch { }
+                }
+            }
+        }
+        return removed;
     }
 
     // ═══════════════════════════════════════════
