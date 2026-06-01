@@ -7,6 +7,7 @@ using LTAI.Agent.Workflows;
 using LTAI.Core.Configuration;
 using Microsoft.Agents.AI;
 using Microsoft.Agents.AI.Compaction;
+using Microsoft.Agents.AI.Hosting;
 using Microsoft.Agents.AI.Tools.Shell;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
@@ -20,15 +21,27 @@ public static class ServiceCollectionExtensions
 #pragma warning disable MAAI001
 
     public static IServiceCollection AddLTAIAgent(this IServiceCollection services)
-    {
-        // Step 1: Build agents (no workflow dep)
-        Dictionary<string, AIAgent> agents = null!;
+        => AddLTAIAgent(services, out _);
 
-        services.AddSingleton(sp =>
+    /// <summary>
+    /// Variant that also returns the list of registered agent names so callers (e.g. LTAI.Web)
+    /// can wire up protocol endpoints (A2A / AGUI / OpenAI) without having to resolve every
+    /// agent eagerly just to discover their names.
+    /// </summary>
+    public static IServiceCollection AddLTAIAgent(this IServiceCollection services, out IReadOnlyList<string> registeredAgentNames)
+    {
+        var names = new List<string>();
+
+        // Step 1: Register each agent via MAF AddAIAgent (keyed services).
+        // BuildAgentImpl still owns the 80+ tool selection, AIContextProviders,
+        // decorators and Plan Mode handling — only the DI shape changes.
+        foreach (var def in GetAgentDefinitions())
         {
-            agents = BuildAllAgents(sp);
-            return agents;
-        });
+            var captured = def;
+            services.AddAIAgent(captured.Name, (sp, name) => captured.Build(sp, name), ServiceLifetime.Singleton);
+            names.Add(captured.Name);
+        }
+        registeredAgentNames = names;
 
         // Step 2: SQLite Knowledge Graph store
         services.AddSingleton<KgStore>(sp =>
@@ -66,13 +79,17 @@ public static class ServiceCollectionExtensions
             return new CgGraph(store, llm, embedder, logger, Directory.GetCurrentDirectory());
         });
 
-        // Step 3: Workflow orchestrator (with optional vector routing)
-        services.AddSingleton<WorkflowOrchestrator>(sp =>
+        // Step 3: Workflow orchestrator (with P7.7 decision-tree routing)
+        services.AddSingleton<DecisionTreeRouter>(sp => new DecisionTreeRouter(
+            sp.GetService<EmbeddingClient>(),
+            sp.GetRequiredService<ILogger<DecisionTreeRouter>>()));
+        services.AddSingleton<AgentWorkflows>(sp =>
         {
-            var all = sp.GetRequiredService<Dictionary<string, AIAgent>>();
-            return new WorkflowOrchestrator(all.Values, all["router"],
-                sp.GetRequiredService<ILogger<WorkflowOrchestrator>>(),
-                sp.GetService<EmbeddingClient>());
+            var all = sp.GetKeyedServices<AIAgent>(KeyedService.AnyKey)
+                .ToDictionary(a => a.Name!, StringComparer.OrdinalIgnoreCase);
+            return new AgentWorkflows(all.Values, all["router"],
+                sp.GetRequiredService<ILogger<AgentWorkflows>>(),
+                sp.GetRequiredService<DecisionTreeRouter>());
         });
 
         // Step 3b: Token budget tracker (from AI config, optional)
@@ -86,6 +103,15 @@ public static class ServiceCollectionExtensions
 
         // Step 3c: Background job service
         services.AddSingleton<BackgroundJobService>();
+
+        // Step 3c-mcp: MCP client factory (lazy connect to external MCP servers).
+        // Connects on first GetToolsAsync call, then caches the tool list.
+        services.AddSingleton<LTAI.Agent.Mcp.McpClientFactory>();
+
+        // Step 3c-queue: in-process task queue (Channel<T>-based producer/consumer).
+        // Lightweight substitute for MAF DurableTask; persists state in memory
+        // and exposes EnqueueAsync / List / WaitAsync for deferred work.
+        services.AddSingleton<LTAI.Agent.Tasks.TaskQueue>();
 
         // Step 3c-bis: Skill Evolution Engine (L1-L3)
         services.AddSingleton<SkillEvolutionEngine>(sp =>
@@ -103,9 +129,10 @@ public static class ServiceCollectionExtensions
         // Step 3d: ChatAgent + workflow (default L1=flash, auto-upgrade to L2=pro)
         services.AddSingleton<ChatAgent>(sp =>
         {
-            var all = sp.GetRequiredService<Dictionary<string, AIAgent>>();
-            var wf = sp.GetRequiredService<WorkflowOrchestrator>();
-            var chat = BuildOrchestrator(sp, all.Values.ToArray());
+            var all = sp.GetKeyedServices<AIAgent>(KeyedService.AnyKey)
+                .ToDictionary(a => a.Name!, StringComparer.OrdinalIgnoreCase);
+            var wf = sp.GetRequiredService<AgentWorkflows>();
+            var chat = all["chat"];
             // Pro agent for complex task auto-upgrade (uses "deepseek-pro" provider)
             var proAgent = all.TryGetValue("chat-pro", out var p) ? p : chat;
             var budget = sp.GetService<LTAI.AI.BudgetTracker>();
@@ -117,45 +144,63 @@ public static class ServiceCollectionExtensions
         return services;
     }
 
-    private static Dictionary<string, AIAgent> BuildAllAgents(IServiceProvider sp)
+    /// <summary>
+    /// Flat record describing one agent definition. Replaces the inline
+    /// Dictionary&lt;string, AIAgent&gt; building so each agent can be registered
+    /// as a MAF keyed service via <c>AddAIAgent</c>.
+    /// </summary>
+    private sealed record AgentDef(
+        string Name,
+        string Description,
+        bool CanRead,
+        bool CanWrite,
+        bool CanList,
+        bool CanExec,
+        string? ModelId,
+        float? Temperature,
+        float? TopP)
+    {
+        public AIAgent Build(IServiceProvider sp, string name) => BuildAgentImpl(
+            sp, name, Description, CanRead, CanWrite, CanList, CanExec,
+            modelId: ModelId, temperature: Temperature, topP: TopP).GetAwaiter().GetResult();
+    }
+
+    private static IEnumerable<AgentDef> GetAgentDefinitions()
     {
         // Try loading from agents/*.agent.md files first
         var fileDefs = AgentRegistry.LoadAll();
         if (fileDefs.Count > 0)
         {
-            var result = new Dictionary<string, AIAgent>(StringComparer.OrdinalIgnoreCase);
             foreach (var def in fileDefs)
             {
                 var key = def.Name?.ToLowerInvariant().Replace("ltai-", "") ?? "unknown";
-                var canRead = def.Permissions.Contains("read");
-                var canWrite = def.Permissions.Contains("write");
-                var canList = def.Permissions.Contains("list");
-                var canExec = def.Permissions.Contains("exec");
-                result[key] = BuildAgent(sp, def.Name ?? key, def.Description,
-                    canRead, canWrite, canList, canExec,
-                    modelId: def.ModelId,
-                    temperature: (float)def.Temperature,
-                    topP: (float)def.TopP);
+                yield return new AgentDef(
+                    Name: def.Name ?? key,
+                    Description: def.Description,
+                    CanRead: def.Permissions.Contains("read"),
+                    CanWrite: def.Permissions.Contains("write"),
+                    CanList: def.Permissions.Contains("list"),
+                    CanExec: def.Permissions.Contains("exec"),
+                    ModelId: def.ModelId,
+                    Temperature: (float?)def.Temperature,
+                    TopP: (float?)def.TopP);
             }
-            return result;
+            yield break;
         }
 
         // Fallback: hardcoded defaults (no agents/*.agent.md files found)
-        return new(StringComparer.OrdinalIgnoreCase)
-        {
-            // 任务类型 → temperature/topP 参考：AI编程 0.3/0.95 | 工具调用 0.3/0.95 | 通用问答 0.8/0.95 | 数学推理 1.0/0.95
-            ["router"]   = BuildAgent(sp, "LTAI-Router", "任务调度器(无工具)", false, false, false, false, temperature: 0.3f, topP: 0.95f),
-            ["chat"]     = BuildAgent(sp, "LTAI-Chat",   "通用对话助手",     true, true, true, true, temperature: 0.3f, topP: 0.95f),
-            ["chat-pro"] = BuildAgent(sp, "LTAI-Chat-Pro","深度推理助手(Pro)",true, true, true, true, modelId: "deepseek-pro", temperature: 0.3f, topP: 0.95f),
-            ["code"]     = BuildAgent(sp, "LTAI-Code",   "代码分析助手",     true, true, true, false, temperature: 0.3f, topP: 0.95f),
-            ["math"]     = BuildAgent(sp, "LTAI-Math",   "数学计算助手",     false, false, false, true, temperature: 1.0f, topP: 0.95f),
-            ["data"]     = BuildAgent(sp, "LTAI-Data",   "数据处理助手",     true, true, true, true, temperature: 0.3f, topP: 0.95f),
-            ["system"]   = BuildAgent(sp, "LTAI-System", "系统管理助手",    false, false, false, true, temperature: 0.3f, topP: 0.95f),
-            ["llm"]      = BuildAgent(sp, "LTAI-LLM",    "纯对话助手",      false, false, false, false, temperature: 0.8f, topP: 0.95f),
-            ["writer"]   = BuildAgent(sp, "LTAI-Writer", "创意写作助手",     true, true, true, true, temperature: 0.8f, topP: 0.95f),
-            ["frontend"] = BuildAgent(sp, "LTAI-Frontend","前端网页开发助手", true, true, true, true, temperature: 0.8f, topP: 0.95f),
-            ["plan"]     = BuildAgent(sp, "LTAI-Plan",   "架构规划师(只读)", true, false, true, false, temperature: 0.5f, topP: 0.95f),
-        };
+        // 任务类型 → temperature/topP 参考：AI编程 0.3/0.95 | 工具调用 0.3/0.95 | 通用问答 0.8/0.95 | 数学推理 1.0/0.95
+        yield return new("LTAI-Router",   "任务调度器(无工具)",      false, false, false, false, null, 0.3f, 0.95f);
+        yield return new("LTAI-Chat",     "通用对话助手",          true,  true,  true,  true,  null, 0.3f, 0.95f);
+        yield return new("LTAI-Chat-Pro", "深度推理助手(Pro)",      true,  true,  true,  true,  "deepseek-pro", 0.3f, 0.95f);
+        yield return new("LTAI-Code",     "代码分析助手",          true,  true,  true,  false, null, 0.3f, 0.95f);
+        yield return new("LTAI-Math",     "数学计算助手",          false, false, false, true,  null, 1.0f, 0.95f);
+        yield return new("LTAI-Data",     "数据处理助手",          true,  true,  true,  true,  null, 0.3f, 0.95f);
+        yield return new("LTAI-System",   "系统管理助手",          false, false, false, true,  null, 0.3f, 0.95f);
+        yield return new("LTAI-LLM",      "纯对话助手",            false, false, false, false, null, 0.8f, 0.95f);
+        yield return new("LTAI-Writer",   "创意写作助手",          true,  true,  true,  true,  null, 0.8f, 0.95f);
+        yield return new("LTAI-Frontend", "前端网页开发助手",       true,  true,  true,  true,  null, 0.8f, 0.95f);
+        yield return new("LTAI-Plan",     "架构规划师(只读)",       true,  false, true,  false, null, 0.5f, 0.95f);
     }
 
     /// <summary>
@@ -186,11 +231,11 @@ public static class ServiceCollectionExtensions
     private static AIAgent BuildAgent(IServiceProvider sp, string name, string description,
         bool canRead, bool canWrite, bool canList, bool canExec,
         string? modelId = null, float? temperature = null, float? topP = null) {
-        return BuildAgentImpl(sp, name, description, canRead, canWrite, canList, canExec, modelId, temperature, topP);
+        return BuildAgentImpl(sp, name, description, canRead, canWrite, canList, canExec, modelId, temperature, topP).GetAwaiter().GetResult();
     }
 
     // Original implementation
-    private static AIAgent BuildAgentImpl(IServiceProvider sp, string name, string description,
+    private static async Task<AIAgent> BuildAgentImpl(IServiceProvider sp, string name, string description,
         bool canRead, bool canWrite, bool canList, bool canExec,
         string? modelId = null, float? temperature = null, float? topP = null)
     {
@@ -539,18 +584,16 @@ public static class ServiceCollectionExtensions
         if (!opts.AI.SkipSafetyChecks)
         {
             var safetyKey = LTAI.Core.Configuration.SecretManager.Get(opts.AI.ApiKeyEnv ?? "DEEPSEEK_API_KEY") ?? "";
-            var safetyHttp = sp.GetRequiredService<IHttpClientFactory>().CreateClient();
-            var safetyClient = new OpenAiHttpClient(safetyHttp, "https://api.deepseek.com/v1", "deepseek-chat", safetyKey);
+            var safetyClient = OpenAIChatClientFactory.Create("https://api.deepseek.com/v1", "deepseek-chat", safetyKey);
             safety = new SafetyCoordinator(safetyClient, loggerFactory.CreateLogger<SafetyCoordinator>());
         }
 
-        var shellEnv = new ShellEnvironmentProvider(
-            new LocalShellExecutor(new LocalShellExecutorOptions
-            {
-                WorkingDirectory = ws,
-                Timeout = TimeSpan.FromSeconds(10),
-            }),
-            new ShellEnvironmentProviderOptions { ProbeTimeout = TimeSpan.FromSeconds(5) });
+        // LTAI does NOT use MAF's ShellEnvironmentProvider:
+        // - It starts a persistent PowerShell process via LocalShellExecutor, which hangs
+        //   on Windows .NET 10 preview during InitializeAsync (60+ seconds).
+        // - LTAI has its own EnvironmentProvider (line below) + SafeShellTool + WasmtimeSandbox,
+        //   so MAF's auto shell-context probing is redundant.
+        // The variable is kept as null so AIContextProviders can be updated in one place.
 
         LTAI.Core.Configuration.UsageTracker.SetContextWindowSize(opts.AI.MaxTokens);
         var compaction = new CompactionProvider(
@@ -611,9 +654,6 @@ public static class ServiceCollectionExtensions
             })
             .Build();
 
-        // 插入工具结果捕获装饰器
-        var instrumentedLlm = new ToolResultCapturingChatClient(llm);
-
         // ── Plan mode 特殊处理 ──
         var isPlanMode = name == "LTAI-Plan";
         if (isPlanMode)
@@ -633,79 +673,112 @@ public static class ServiceCollectionExtensions
             tools.Add(AIFunctionFactory.Create(planSearch.SearchFiles));
         }
 
-        AIAgent agent = new ChatClientAgent(instrumentedLlm, new ChatClientAgentOptions
+        // Cross-session long-term memory: Mem0 (remote, if MEM0_API_KEY set) or local SQLite+embedding.
+        // Placed after tool-filtering providers (Tool RAG, Skill ranking) and before the final
+        // instruction providers so memories augment the conversation context.
+        var memoryProvider = LTAI.Agent.Memory.MemoryProviderSelector.Select(
+            sp.GetRequiredService<LTAI.AI.EmbeddingClient>(),
+            opts.DataDirectory,
+            loggerFactory);
+
+        // MCP (Model Context Protocol) client tools: connect to external MCP servers
+        // configured in appsettings.json under "LTAI:Mcp:Servers". Lazy + cached — the
+        // factory's first call spawns child stdio processes, subsequent calls reuse the
+        // tool list. Plan mode keeps its read-only set; MCP tools (e.g. filesystem) are
+        // disabled there to maintain strict read-only guarantees.
+        if (!isPlanMode)
         {
-            Name = name,
-            Description = isPlanMode
-                ? """
-                <system-reminder>
-                # Plan Mode — 只读模式
+            var mcpFactory = sp.GetRequiredService<LTAI.Agent.Mcp.McpClientFactory>();
+            var mcpTools = await mcpFactory.GetToolsAsync(opts.Mcp).ConfigureAwait(false);
+            foreach (var mcpTool in mcpTools)
+                tools.Add(mcpTool);
+        }
 
-                你处于 Plan mode。严禁任何文件修改、shell 执行或系统变更。
-                你只能使用只读工具观察、分析和规划。
-
-                ## 职责
-                阅读代码、搜索信息、构造计划。完成后调用 PlanExit 工具提交计划并退出 Plan mode。
-
-                ## 约束
-                - 绝对禁止：写文件、编辑文件、运行命令、git 操作
-                - 允许：读文件、搜索、glob、目录列表
-                - 完成计划后调用 PlanExit
-                </system-reminder>
-                """
-                : $"你是 {name}，{description}。\n"
-                + "关于日期：当用户询问\"今天星期几\"\"现在几点\"等时间日期问题时，请直接调用 GetCurrentDateTime 工具获取实时时间，不要自行估算。\n"
-                + "工具调用注意：\n"
-                + "1. 参数必须是正确的JSON类型（数字不要加引号，布尔值用true/false）\n"
-                + "2. 不要用Markdown代码块包围工具调用\n"
-                + "3. 不要重复调用同一个工具（如果出错，先检查参数再重试）\n"
-                + "\n"
-                + "升级合约：如果当前模型无法完成复杂任务（如跨文件重构、并发安全性分析），\n"
-                + "在回复中输出 <<<NEEDS_PRO: <原因>>> 标记，系统将自动切换到更强的模型重试。\n"
-                + "示例：<<<NEEDS_PRO: 需要分析6个模块的循环依赖问题>>>",
-            ChatOptions = new ChatOptions
+        AIAgent agent = llm.AsHarnessAgent(
+            maxContextWindowTokens: 64000,
+            maxOutputTokens: opts.AI.MaxTokens,
+            options: new HarnessAgentOptions
             {
-                Temperature = temperature ?? (float)opts.AI.Temperature,
-                TopP = topP ?? 0.95f,
-                MaxOutputTokens = opts.AI.MaxTokens,
-                Tools = tools,
-                ModelId = modelId,
-            },
-            ChatHistoryProvider = new InMemoryChatHistoryProvider(),
-            // Tool RAG: 动态工具召回（放第一个）→ L1 Skill Evolution Ranking
-            AIContextProviders = safety != null
-                ? [new LTAI.Agent.Tools.ToolRetrievalProvider(sp.GetRequiredService<LTAI.AI.EmbeddingClient>()),
-                   new LTAI.Agent.Tools.SkillRankingProvider(
-                       sp.GetRequiredService<LTAI.Agent.Tools.SkillEvolutionEngine>(),
-                       new LTAI.Agent.ToolResultCapturingChatClient(llm),
-                       sp.GetRequiredService<ILoggerFactory>().CreateLogger<LTAI.Agent.Tools.SkillRankingProvider>()),
-                   shellEnv, safety, compaction, kbGraph, codeGraph, wasmtimeSandbox,
-                   new LTAI.Agent.Tools.InstructionProvider(modelId), new LTAI.Agent.Tools.EnvironmentProvider(), skillsProvider]
-                : [new LTAI.Agent.Tools.ToolRetrievalProvider(sp.GetRequiredService<LTAI.AI.EmbeddingClient>()),
-                   new LTAI.Agent.Tools.SkillRankingProvider(
-                       sp.GetRequiredService<LTAI.Agent.Tools.SkillEvolutionEngine>(),
-                       new LTAI.Agent.ToolResultCapturingChatClient(llm),
-                       sp.GetRequiredService<ILoggerFactory>().CreateLogger<LTAI.Agent.Tools.SkillRankingProvider>()),
-                   shellEnv, compaction, kbGraph, codeGraph, wasmtimeSandbox,
-                   new LTAI.Agent.Tools.InstructionProvider(modelId), new LTAI.Agent.Tools.EnvironmentProvider(), skillsProvider],
-            EnableMessageInjection = true,
-            RequirePerServiceCallChatHistoryPersistence = true,
-        }, loggerFactory, sp);
+                Name = name,
+                Description = isPlanMode
+                    ? """
+                    <system-reminder>
+                    # Plan Mode — 只读模式
 
-        // AdditionalTools 由 WithDefaultAgentMiddleware 在 ChatClientAgent 构造时设置
+                    你处于 Plan mode。严禁任何文件修改、shell 执行或系统变更。
+                    你只能使用只读工具观察、分析和规划。
 
+                    ## 职责
+                    阅读代码、搜索信息、构造计划。完成后调用 PlanExit 工具提交计划并退出 Plan mode。
+
+                    ## 约束
+                    - 绝对禁止：写文件、编辑文件、运行命令、git 操作
+                    - 允许：读文件、搜索、glob、目录列表
+                    - 完成计划后调用 PlanExit
+                    </system-reminder>
+                    """
+                    : $"你是 {name}，{description}。\n"
+                    + "关于日期：当用户询问\"今天星期几\"\"现在几点\"等时间日期问题时，请直接调用 GetCurrentDateTime 工具获取实时时间，不要自行估算。\n"
+                    + "工具调用注意：\n"
+                    + "1. 参数必须是正确的JSON类型（数字不要加引号，布尔值用true/false）\n"
+                    + "2. 不要用Markdown代码块包围工具调用\n"
+                    + "3. 不要重复调用同一个工具（如果出错，先检查参数再重试）\n"
+                    + "\n"
+                    + "升级合约：如果当前模型无法完成复杂任务（如跨文件重构、并发安全性分析），\n"
+                    + "在回复中输出 <<<NEEDS_PRO: <原因>>> 标记，系统将自动切换到更强的模型重试。\n"
+                    + "示例：<<<NEEDS_PRO: 需要分析6个模块的循环依赖问题>>>",
+                ChatOptions = new ChatOptions
+                {
+                    Temperature = temperature ?? (float)opts.AI.Temperature,
+                    TopP = topP ?? 0.95f,
+                    MaxOutputTokens = opts.AI.MaxTokens,
+                    Tools = tools,
+                    ModelId = modelId,
+                },
+                ChatHistoryProvider = new InMemoryChatHistoryProvider(),
+                // Cross-session long-term memory: Mem0 (remote, if MEM0_API_KEY set) or local SQLite+embedding.
+                // Placed after tool-filtering providers (Tool RAG, Skill ranking) and before the final
+                // instruction providers so memories augment the conversation context.
+                // Tool RAG: 动态工具召回（放第一个）→ L1 Skill Evolution Ranking
+                AIContextProviders = safety != null
+                    ? [new LTAI.Agent.Tools.ToolRetrievalProvider(sp.GetRequiredService<LTAI.AI.EmbeddingClient>()),
+                       new LTAI.Agent.Tools.SkillRankingProvider(
+                           sp.GetRequiredService<LTAI.Agent.Tools.SkillEvolutionEngine>(),
+                           sp.GetRequiredService<ILoggerFactory>().CreateLogger<LTAI.Agent.Tools.SkillRankingProvider>()),
+                       safety, compaction, kbGraph, codeGraph, wasmtimeSandbox, memoryProvider,
+                       new LTAI.Agent.Tools.InstructionProvider(modelId), new LTAI.Agent.Tools.EnvironmentProvider(), skillsProvider]
+                    : [new LTAI.Agent.Tools.ToolRetrievalProvider(sp.GetRequiredService<LTAI.AI.EmbeddingClient>()),
+                       new LTAI.Agent.Tools.SkillRankingProvider(
+                           sp.GetRequiredService<LTAI.Agent.Tools.SkillEvolutionEngine>(),
+                           sp.GetRequiredService<ILoggerFactory>().CreateLogger<LTAI.Agent.Tools.SkillRankingProvider>()),
+                       compaction, kbGraph, codeGraph, wasmtimeSandbox, memoryProvider,
+                       new LTAI.Agent.Tools.InstructionProvider(modelId), new LTAI.Agent.Tools.EnvironmentProvider(), skillsProvider],
+
+                // ── Disable MAF defaults LTAI doesn't need ────────────────────
+                // LTAI uses its own Mem0/EmbeddedMemoryProvider (memoryProvider above).
+                DisableFileMemory = true,
+                // LTAI uses its own tools (WasmtimeSandbox + SafeShellTool), not the file-access provider.
+                DisableFileAccess = true,
+                // LTAI doesn't surface web search to its agents.
+                DisableWebSearch = true,
+                // LTAI doesn't surface the TodoProvider/AgentModeProvider workflow.
+                DisableTodoProvider = true,
+                DisableAgentModeProvider = true,
+                // LTAI has its own AgentSkillsProvider (the one passed above), pre-configured
+                // with script approval + custom instructions. Don't double-register MAF's.
+                DisableAgentSkillsProvider = true,
+
+                // Keep ToolApprovalAgent + OpenTelemetryAgent enabled (HarnessAgent adds them
+                // as the outermost decorators by default). Use the per-agent source name so
+                // /health and DevUI can identify spans.
+                OpenTelemetrySourceName = $"LTAI.{name}",
+            });
+
+        // LTAI's outer-most logging wrapper — captures the final agent response and the
+        // pre-decorator inner-agent state. HarnessAgent's own OpenTelemetryAgent / ToolApprovalAgent
+        // sit just inside this, so the log entry is recorded after both have transformed the run.
         agent = new LoggingAgent(agent, log);
-        agent = new ToolApprovalAgent(agent);
-        agent = new OpenTelemetryAgent(agent, $"LTAI.{name}", autoWireChatClient: true);
         return agent;
-    }
-
-    private static AIAgent BuildOrchestrator(IServiceProvider sp, AIAgent[] agents)
-    {
-        var log = sp.GetRequiredService<ILoggerFactory>().CreateLogger("LTAI.Orchestrator");
-        log.LogInformation("Orchestrator ready with {Count} agents: {Agents}",
-            agents.Length, string.Join(", ", agents.Select(a => a.Name)));
-        return agents[0];
     }
 }
 #pragma warning restore MAAI001

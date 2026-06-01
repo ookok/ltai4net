@@ -313,9 +313,7 @@ public partial class MainWindow : Window
                     };
                     if (endpoints.TryGetValue(providerName, out var ep))
                     {
-                        var http = App.HttpFactory.CreateClient();
-                        http.Timeout = TimeSpan.FromSeconds(30);
-                        var client = new LTAI.AI.OpenAiHttpClient(http, ep.ep, ep.model, key);
+                        var client = LTAI.AI.OpenAIChatClientFactory.Create(ep.ep, ep.model, key);
                         App.Router.Register(providerName, client);
                         App.Router.ActiveProvider = providerName;
                     }

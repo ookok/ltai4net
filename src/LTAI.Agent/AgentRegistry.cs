@@ -98,6 +98,19 @@ public static class AgentRegistry
     public static async Task<string[]> SelectTopKAsync(string task, EmbeddingClient embedder,
         int k = 5, CancellationToken ct = default)
     {
+        var scored = await SelectTopKWithScoresAsync(task, embedder, k, ct).ConfigureAwait(false);
+        return scored.Select(s => s.Name).ToArray();
+    }
+
+    /// <summary>
+    /// Top-K agents with cosine similarity scores. Used by the decision-tree
+    /// router (P7.7) to compute the confidence margin between rank-1 and rank-2:
+    /// a large margin → trust the top-K; a small margin → ambiguous, fall back
+    /// to all specialists.
+    /// </summary>
+    public static async Task<IReadOnlyList<(string Name, float Score)>> SelectTopKWithScoresAsync(
+        string task, EmbeddingClient embedder, int k = 5, CancellationToken ct = default)
+    {
         var agents = LoadAll();
         if (agents.Count == 0) return [];
 
@@ -108,9 +121,17 @@ public static class AgentRegistry
             await ComputeEmbeddingsAsync(agents, embedder, ct).ConfigureAwait(false);
         }
 
-        // If still no embeddings (embedder unavailable), return all
+        // If still no embeddings (embedder unavailable), return all with 0 score
         if (agents.All(a => a.Embedding == null))
-            return agents.Select(a => a.Name).Where(n => n != null).Cast<string>().Take(k).ToArray();
+        {
+            return agents
+                .Select(a => a.Name)
+                .Where(n => n != null)
+                .Cast<string>()
+                .Take(k)
+                .Select(n => (n, 0f))
+                .ToArray();
+        }
 
         // Compute task embedding using ONNX (priority 1) → FastEmb fallback
         float[] taskEmb;
@@ -124,16 +145,13 @@ public static class AgentRegistry
         }
 
         var scored = agents
-            .Where(a => a.Embedding != null)
-            .Select(a => (name: a.Name, score: CosineSimilarity(taskEmb, a.Embedding!)))
+            .Where(a => a.Embedding != null && a.Name != null)
+            .Select(a => (name: a.Name!, score: CosineSimilarity(taskEmb, a.Embedding!)))
             .OrderByDescending(x => x.score)
             .Take(k)
-            .Select(x => x.name)
-            .Where(n => n != null)
-            .Cast<string>()
             .ToArray();
 
-        return scored.Length > 0 ? scored : agents.Select(a => a.Name).Cast<string>().Take(k).ToArray();
+        return scored;
     }
 
     // ═══════════════════════════════════════════
@@ -212,14 +230,21 @@ public static class AgentRegistry
         return na > 0 && nb > 0 ? dot / (MathF.Sqrt(na) * MathF.Sqrt(nb)) : 0;
     }
 
-    private static string[]? ParseJsonArray(string json)
+    private static string[]? ParseJsonArray(string raw)
     {
-        try
-        {
-            var arr = JsonSerializer.Deserialize<string[]>(json);
-            return arr?.Length > 0 ? arr : null;
-        }
-        catch { return null; }
+        // Strip surrounding brackets and whitespace; tolerate both quoted JSON arrays
+        // (`["a", "b"]`) and unquoted CSV-style values (`[a, b]`) which some hand-edited
+        // agent.md files use. Returns null for empty input.
+        var trimmed = raw.Trim();
+        if (trimmed.StartsWith('[')) trimmed = trimmed[1..];
+        if (trimmed.EndsWith(']')) trimmed = trimmed[..^1];
+        if (string.IsNullOrWhiteSpace(trimmed)) return null;
+
+        var items = trimmed.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(s => s.Trim().Trim('"').Trim('\''))
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .ToArray();
+        return items.Length > 0 ? items : null;
     }
 }
 

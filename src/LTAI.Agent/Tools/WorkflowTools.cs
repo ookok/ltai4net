@@ -1,5 +1,4 @@
 ﻿using System.ComponentModel;
-using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using LTAI.AI;
 
@@ -7,18 +6,21 @@ namespace LTAI.Agent.Tools;
 
 /// <summary>
 /// Workflow tools with lazy DI resolution to avoid circular dependencies.
-/// The WorkflowOrchestrator is resolved on first tool invocation, not at construction.
+/// The <see cref="Workflows.AgentWorkflows"/> orchestrator is resolved on first
+/// tool invocation, not at construction. Backed by MAF
+/// <c>HandoffWorkflowBuilder</c> / <c>SequentialWorkflowBuilder</c> /
+/// <c>ConcurrentWorkflowBuilder</c>.
 /// </summary>
 [ToolDomain("workflow")]
 public sealed class WorkflowTools
 {
     private readonly IServiceProvider _sp;
-    private Workflows.WorkflowOrchestrator? _wf;
+    private Workflows.AgentWorkflows? _wf;
 
     public WorkflowTools(IServiceProvider sp) => _sp = sp;
 
-    private Workflows.WorkflowOrchestrator Wf =>
-        _wf ??= _sp.GetRequiredService<Workflows.WorkflowOrchestrator>();
+    private Workflows.AgentWorkflows Wf =>
+        _wf ??= _sp.GetRequiredService<Workflows.AgentWorkflows>();
 
     [Description("执行任务分配工作流：将复杂任务路由到 specialist 子 Agent（代码/架构/聊天/推理等）。\n"
         + "适用场景：需要专业知识才能回答的问题、跨领域复杂任务、自动选择最合适的子 Agent。\n"
@@ -29,7 +31,7 @@ public sealed class WorkflowTools
     public async Task<string> WorkflowHandoff(
         [Description("Task description for agent orchestration")] string task)
     {
-        var response = await Wf.ExecuteHandoffAsync(task).ConfigureAwait(false);
+        var response = await Wf.RunHandoffAsync(task).ConfigureAwait(false);
         return response.Messages?.LastOrDefault()?.Text ?? "(no response)";
     }
 
@@ -42,7 +44,7 @@ public sealed class WorkflowTools
         [Description("Comma-separated agent names like 'LTAI-Code,LTAI-Math'")] string agentNames,
         [Description("Task to execute")] string task)
     {
-        return await Wf.ExecuteSequentialAsync(
+        return await Wf.RunSequentialAsync(
             agentNames.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries),
             task).ConfigureAwait(false);
     }
@@ -56,7 +58,7 @@ public sealed class WorkflowTools
         [Description("Comma-separated agent names like 'LTAI-Code,LTAI-Math'")] string agentNames,
         [Description("Task for each agent")] string task)
     {
-        return await Wf.ExecuteConcurrentAsync(
+        return await Wf.RunConcurrentAsync(
             agentNames.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries),
             task).ConfigureAwait(false);
     }

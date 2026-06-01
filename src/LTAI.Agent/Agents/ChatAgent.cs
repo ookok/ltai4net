@@ -13,7 +13,7 @@ namespace LTAI.Agent;
 /// Supports: direct chat, workflow handoff, sequential/concurrent agent routing.
 ///
 /// Each ChatAsync call generates a <c>traceId</c> (from Activity.Current or new Guid)
-/// propagated through WorkflowOrchestrator and SubagentTools for causal chain tracing.
+/// propagated through AgentWorkflows and SubagentTools for causal chain tracing.
 ///
 /// <b>Consumers:</b> TuiApp, ChatView (UI layer calls ChatAsync/ChatStreamingAsync).
 /// Registered in ServiceCollectionExtensions.AddLTAIAgent() as singleton.
@@ -45,7 +45,7 @@ public sealed class ChatAgent
         Activity.Current?.Id ?? Guid.NewGuid().ToString("n");
     private readonly AIAgent _agent;       // L1 flash agent (fast, cheap)
     private readonly AIAgent _proAgent;    // L2 pro agent (deep reasoning)
-    private readonly WorkflowOrchestrator? _workflows;  // multi-agent router
+    private readonly AgentWorkflows? _workflows;  // multi-agent router
     private readonly BudgetTracker? _budgetTracker;
     private AgentSession? _session;        // MAF conversation session
     private readonly SemaphoreSlim _sessionLock = new(1, 1);
@@ -58,7 +58,7 @@ public sealed class ChatAgent
     /// <param name="budgetTracker">Optional token budget tracker for per-user spending limits.</param>
     /// <param name="localEmbedder">Optional ONNX embedder for preloading (warmup).</param>
     /// <param name="httpFactory">Optional HTTP factory for connection warmup.</param>
-    public ChatAgent(AIAgent agent, AIAgent? proAgent = null, WorkflowOrchestrator? workflows = null,
+    public ChatAgent(AIAgent agent, AIAgent? proAgent = null, AgentWorkflows? workflows = null,
         BudgetTracker? budgetTracker = null,
         LocalEmbedder? localEmbedder = null, IHttpClientFactory? httpFactory = null)
     {
@@ -196,8 +196,34 @@ public sealed class ChatAgent
         await foreach (var update in _agent.RunStreamingAsync(
             [new ChatMessage(ChatRole.User, message)], session, cancellationToken: ct).ConfigureAwait(false))
         {
+            // MAF's FunctionInvokingChatClient (auto-wired by ChatClientAgent) emits
+            // FunctionCallContent / FunctionResultContent in the stream. Surface them
+            // as in-line UX notifications so the user sees tool lifecycle progress.
+            if (update.Contents is { Count: > 0 })
+            {
+                foreach (var content in update.Contents)
+                {
+                    switch (content)
+                    {
+                        case FunctionCallContent fc when !string.IsNullOrEmpty(fc.Name):
+                            LTAI.Core.Configuration.UsageTracker.RecordToolCall();
+                            LTAI.Core.Configuration.UsageTracker.SetActiveTool(fc.Name);
+                            LTAI.Core.Configuration.UsageTracker.StartToolTimer();
+                            yield return new AgentResponseUpdate(ChatRole.Assistant, $"⏳ 正在调用 {fc.Name}...\n");
+                            break;
+                        case FunctionResultContent frc:
+                            LTAI.Core.Configuration.UsageTracker.StopToolTimer();
+                            var preview = frc.Result?.ToString() ?? "(null)";
+                            if (preview.Length > 200) preview = preview[..200] + "...";
+                            yield return new AgentResponseUpdate(ChatRole.Assistant, $"  ✅ 返回: {preview}\n");
+                            break;
+                    }
+                }
+            }
+
             yield return update;
         }
+        LTAI.Core.Configuration.UsageTracker.SetActiveTool("");
     }
 
     /// <summary>
@@ -208,7 +234,7 @@ public sealed class ChatAgent
         if (_workflows == null)
             return Task.FromResult(new AgentResponse(
                 new ChatMessage(ChatRole.Assistant, "Workflow orchestrator not available.")));
-        return _workflows.ExecuteHandoffAsync(task, traceId: GetOrCreateTraceId(), ct: ct);
+        return _workflows.RunHandoffAsync(task, traceId: GetOrCreateTraceId(), ct: ct);
     }
 
     /// <summary>
@@ -218,7 +244,7 @@ public sealed class ChatAgent
     {
         if (_workflows == null)
             return Task.FromResult("Workflow orchestrator not available.");
-        return _workflows.ExecuteSequentialAsync(agentNames, task, traceId: GetOrCreateTraceId(), ct: ct);
+        return _workflows.RunSequentialAsync(agentNames, task, traceId: GetOrCreateTraceId(), ct: ct);
     }
 
     /// <summary>

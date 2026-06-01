@@ -13,16 +13,13 @@ namespace LTAI.Agent.Tools;
 public sealed class SkillRankingProvider : AIContextProvider
 {
     private readonly SkillEvolutionEngine _engine;
-    private readonly ToolResultCapturingChatClient _capturingClient;
     private readonly ILogger<SkillRankingProvider> _logger;
 
     public SkillRankingProvider(
         SkillEvolutionEngine engine,
-        ToolResultCapturingChatClient capturingClient,
         ILogger<SkillRankingProvider> logger) : base(null, null, null)
     {
         _engine = engine;
-        _capturingClient = capturingClient;
         _logger = logger;
     }
 
