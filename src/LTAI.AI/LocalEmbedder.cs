@@ -446,26 +446,35 @@ public sealed class LocalEmbedder : IDisposable
         // output dimensions: [N, actualMaxLen, hiddenDim]
         int hiddenDim = output.Dimensions[2];
 
-        // Mean-pool per row using the actual attention mask, then L2 normalize
+        // Mean-pool per row using the actual attention mask, then L2 normalize.
+        // Use ArrayPool<float> to avoid per-text allocations on the hot path.
         var embeddings = new float[texts.Count][];
-        for (int i = 0; i < texts.Count; i++)
+        var pool = System.Buffers.ArrayPool<float>.Shared;
+        var pooledBuf = pool.Rent(hiddenDim);
+        try
         {
-            var pooled = new float[hiddenDim];
-            int validTokens = 0;
-            for (int j = 0; j < actualMaxLen; j++)
+            for (int i = 0; i < texts.Count; i++)
             {
-                if (attentionMask[i, j] == 0) continue;
-                validTokens++;
-                for (int k = 0; k < hiddenDim; k++)
-                    pooled[k] += output[i, j, k];
+                Array.Clear(pooledBuf, 0, hiddenDim);
+                int validTokens = 0;
+                for (int j = 0; j < actualMaxLen; j++)
+                {
+                    if (attentionMask[i, j] == 0) continue;
+                    validTokens++;
+                    for (int k = 0; k < hiddenDim; k++)
+                        pooledBuf[k] += output[i, j, k];
+                }
+                if (validTokens > 0)
+                {
+                    for (int k = 0; k < hiddenDim; k++)
+                        pooledBuf[k] /= validTokens;
+                }
+                // L2Normalize in-place, then copy result to owned array
+                var emb = L2NormalizeInPlace(pooledBuf, hiddenDim);
+                embeddings[i] = emb;
             }
-            if (validTokens > 0)
-            {
-                for (int k = 0; k < hiddenDim; k++)
-                    pooled[k] /= validTokens;
-            }
-            embeddings[i] = L2Normalize(pooled);
         }
+        finally { pool.Return(pooledBuf); }
         return embeddings;
     }
 
@@ -748,6 +757,26 @@ public sealed class LocalEmbedder : IDisposable
         for (int i = 0; i < vec.Length; i++)
             vec[i] /= norm;
         return vec;
+    }
+
+    /// <summary>L2 normalize the first <c>len</c> elements of <c>buf</c>
+    /// and return a new owned array. Used by <see cref="GenerateBatch"/>
+    /// with rented <see cref="ArrayPool{T}"/> buffers.</summary>
+    private static float[] L2NormalizeInPlace(float[] buf, int len)
+    {
+        float norm = 0;
+        for (int i = 0; i < len; i++) norm += buf[i] * buf[i];
+        norm = MathF.Sqrt(norm);
+        if (norm < 1e-12f)
+        {
+            var fallback = new float[len];
+            fallback.AsSpan().Clear();
+            return fallback;
+        }
+        for (int i = 0; i < len; i++) buf[i] /= norm;
+        var result = new float[len];
+        Array.Copy(buf, result, len);
+        return result;
     }
 
     // ═══════════════════════════════════════════

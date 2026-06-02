@@ -102,7 +102,8 @@ public sealed class YAMLWorkflowRegistry
         {
             if (ext is ".yaml" or ".yml")
             {
-                var content = await File.ReadAllTextAsync(path, ct).ConfigureAwait(false);
+                var raw = await File.ReadAllTextAsync(path, ct).ConfigureAwait(false);
+                var content = LTAI.Core.I18n.WorkflowI18nResolver.Resolve(raw);
                 var workflow = BuildWorkflow(path, content);
                 var type = ProbeWorkflowType(path, content);
                 var version = ProbeWorkflowVersion(path, content);

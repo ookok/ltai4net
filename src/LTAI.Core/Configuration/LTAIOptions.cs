@@ -374,7 +374,7 @@ public static class KnownKeys
         new("OPENAI_API_KEY",       "OpenAI",         "≈¥10/¥30 per 1M",    "https://platform.openai.com/api-keys", "https://api.openai.com/v1", "gpt-4o", 10.0m, 30.0m),
         new("ANTHROPIC_API_KEY",    "Anthropic",      "≈¥22/¥108 per 1M",  "https://console.anthropic.com/",         "https://api.anthropic.com",            "claude-sonnet-4-5", 22.0m, 108.0m),
         new("GROQ_API_KEY",         "Groq",           "免费",               "https://console.groq.com/keys", "https://api.groq.com/openai/v1", "llama-3.3-70b-versatile"),
-        new("OPENROUTER_API_KEY",   "OpenRouter",     "按源模型定价",        "https://openrouter.ai/keys", "https://openrouter.ai/api/v1", "deepseek/deepseek-chat"),
+        new("OPENROUTER_API_KEY",   "OpenRouter",     "按源模型定价",        "https://openrouter.ai/keys", "https://openrouter.ai/api/v1", "deepseek/deepseek-v4-flash"),
         new("TOGETHER_API_KEY",     "Together AI",    "按源模型定价",        "https://api.together.xyz/", "https://api.together.xyz/v1", "mistralai/Mixtral-8x22B-Instruct-v0.1"),
         new("MISTRAL_API_KEY",      "Mistral",        "≈¥8/¥24 per 1M",    "https://console.mistral.ai/", "https://api.mistral.ai/v1", "mistral-large-latest", 8.0m, 24.0m),
         new("PERPLEXITY_API_KEY",   "Perplexity",     "¥2/¥8 per 1M",       "https://docs.perplexity.ai/", "https://api.perplexity.ai", "sonar-pro", 2.0m, 8.0m),
@@ -1013,7 +1013,7 @@ public sealed class UsageTracker : IUsageTracker
     private static readonly Dictionary<string, int> KnownContextWindows = new(StringComparer.OrdinalIgnoreCase)
     {
         // DeepSeek (V4 全系列 1M context, 384K output)
-        ["deepseek-chat"] = 1048576,
+        ["deepseek-v4-flash"] = 1048576,
         ["deepseek-reasoner"] = 1048576,
         ["deepseek-v4-flash"] = 1048576,
         ["deepseek-v4-pro"] = 1048576,
@@ -1067,11 +1067,14 @@ public sealed class UsageTracker : IUsageTracker
     }
 }
 
+#pragma warning disable CA1416 // DPAPI is gated by OperatingSystem.IsWindows() at runtime
+
 /// <summary>
 /// Centralized API key manager. Keys stored ONLY in environment variables.
 /// Config files (provider_endpoints.md, appsettings.json) store endpoint/model only — never keys.
-/// ⚠ Cache has no TTL — if an env var changes externally, SecretManager returns stale value
-/// until Invalidate() is called.
+/// On Windows, secrets are DPAPI-encrypted when persisted to User scope (Set with persistent=true).
+/// On Linux/macOS, falls back to unencrypted User env var store (best-effort).
+/// ⚠ Cache has 5-minute TTL — env var changes need Invalidate() to take effect.
 /// <b>Consumers:</b> MultiProviderChatClient, EmbeddingClient (Get for LLM calls);
 /// WebTools, IntegrationTools (Get for web/map APIs);
 /// Cli/Program.cs, ConfigView (Set for key configuration);
@@ -1081,6 +1084,7 @@ public static class SecretManager
 {
     private static readonly ConcurrentDictionary<string, (string? value, DateTime cached)> _cache = new();
     private static readonly TimeSpan CacheTtl = TimeSpan.FromMinutes(5);
+    private static readonly string? _machineScope = Environment.MachineName;
 
     /// <summary>Read secret: cache (with TTL check) → Process env → User env → Machine env.</summary>
     public static string? Get(string envVar)
@@ -1089,20 +1093,26 @@ public static class SecretManager
             return entry.value;
 
         var val = Environment.GetEnvironmentVariable(envVar, EnvironmentVariableTarget.Process)
-               ?? Environment.GetEnvironmentVariable(envVar, EnvironmentVariableTarget.User)
+               ?? DecryptIfNeeded(Environment.GetEnvironmentVariable(envVar, EnvironmentVariableTarget.User))
                ?? Environment.GetEnvironmentVariable(envVar, EnvironmentVariableTarget.Machine);
         _cache[envVar] = (val, DateTime.UtcNow);
         return val;
     }
 
-    /// <summary>Write secret to runtime cache + persist to User scope (Windows: encrypted registry).</summary>
+    /// <summary>Write secret to runtime cache + persist to User scope (encrypted on Windows).</summary>
     public static void Set(string envVar, string? value, bool persistent = false)
     {
         _cache[envVar] = (value, DateTime.UtcNow);
         Environment.SetEnvironmentVariable(envVar, value, EnvironmentVariableTarget.Process);
         if (persistent)
-            try { Environment.SetEnvironmentVariable(envVar, value, EnvironmentVariableTarget.User); }
+        {
+            try
+            {
+                var encrypted = EncryptIfNeeded(value);
+                Environment.SetEnvironmentVariable(envVar, encrypted, EnvironmentVariableTarget.User);
+            }
             catch { /* non-fatal on Linux if ~/.profile not writable */ }
+        }
     }
 
     /// <summary>Check if a secret is set and non-empty.</summary>
@@ -1110,4 +1120,36 @@ public static class SecretManager
 
     /// <summary>Invalidate cache to force re-read from environment on next Get.</summary>
     public static void Invalidate(string envVar) => _cache.TryRemove(envVar, out _);
+
+    private static readonly bool _isWindows = OperatingSystem.IsWindows();
+
+    /// <summary>DPAPI-encrypt a secret for User-scope env var storage. On non-Windows, returns raw value.</summary>
+    private static string? EncryptIfNeeded(string? value)
+    {
+        if (string.IsNullOrEmpty(value) || !_isWindows) return value;
+        try
+        {
+            var plain = System.Text.Encoding.UTF8.GetBytes(value);
+            var encrypted = System.Security.Cryptography.ProtectedData.Protect(plain, null,
+                System.Security.Cryptography.DataProtectionScope.CurrentUser);
+            return "DPAPI:" + Convert.ToBase64String(encrypted);
+        }
+        catch { return value; }
+    }
+
+    /// <summary>DPAPI-decrypt a User-scope env var. Strips "DPAPI:" prefix before decrypting.</summary>
+    private static string? DecryptIfNeeded(string? value)
+    {
+        if (string.IsNullOrEmpty(value) || !value.StartsWith("DPAPI:") || !_isWindows) return value;
+        try
+        {
+            var encrypted = Convert.FromBase64String(value[6..]);
+            var plain = System.Security.Cryptography.ProtectedData.Unprotect(encrypted, null,
+                System.Security.Cryptography.DataProtectionScope.CurrentUser);
+            return System.Text.Encoding.UTF8.GetString(plain);
+        }
+        catch { return value; }
+    }
 }
+
+#pragma warning restore CA1416

@@ -39,6 +39,7 @@ public static class AgentRegistry
         {
             Path.Combine(AppContext.BaseDirectory, "agents"),
             Path.Combine(Directory.GetCurrentDirectory(), "agents"),
+            Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "agents"),  // repo root
         };
 
         foreach (var dir in searchDirs)
@@ -150,23 +151,34 @@ public static class AgentRegistry
         var agents = LoadAll();
         if (agents.Count == 0) return [];
 
-        // Ensure embeddings (compute on demand if missing)
-        var hasMissing = agents.Any(a => a.Embedding == null);
+        // Ensure embeddings — single pass, no duplicate All() calls
+        var hasMissing = false;
+        for (int i = 0; i < agents.Count; i++)
+        {
+            if (agents[i].Embedding == null) { hasMissing = true; break; }
+        }
         if (hasMissing)
         {
             await EnsureEmbeddingsAsync(embedder, cache, ct).ConfigureAwait(false);
+            // Re-read in case EnsureEmbeddingsAsync replaced the list
+            agents = LoadAll();
         }
 
-        // If still no embeddings (embedder unavailable), return all with 0 score
-        if (agents.All(a => a.Embedding == null))
+        // Check if embedder is unavailable after ensuring (all null → BM25 fallback)
+        var anyEmbedding = false;
+        for (int i = 0; i < agents.Count; i++)
         {
-            return agents
-                .Select(a => a.Name)
-                .Where(n => n != null)
-                .Cast<string>()
-                .Take(k)
-                .Select(n => (n, 0f))
-                .ToArray();
+            if (agents[i].Embedding != null) { anyEmbedding = true; break; }
+        }
+        if (!anyEmbedding)
+        {
+            var fallback = new List<(string, float)>(Math.Min(k, agents.Count));
+            for (int i = 0; i < agents.Count && i < k; i++)
+            {
+                if (agents[i].Name != null)
+                    fallback.Add((agents[i].Name!, 0f));
+            }
+            return fallback;
         }
 
         // Compute task embedding using ONNX (priority 1) → FastEmb fallback
@@ -180,14 +192,17 @@ public static class AgentRegistry
             taskEmb = EmbeddingClient.FastEmb(task);
         }
 
-        var scored = agents
-            .Where(a => a.Embedding != null && a.Name != null)
-            .Select(a => (name: a.Name!, score: CosineSimilarity(taskEmb, a.Embedding!)))
-            .OrderByDescending(x => x.score)
-            .Take(k)
-            .ToArray();
-
-        return scored;
+        // Pre-allocate scored list to avoid LINQ enumerator allocations
+        var candidates = new List<(string name, float score)>(agents.Count);
+        for (int i = 0; i < agents.Count; i++)
+        {
+            var a = agents[i];
+            if (a.Embedding != null && a.Name != null)
+                candidates.Add((a.Name!, CosineSimilarity(taskEmb, a.Embedding!)));
+        }
+        candidates.Sort((a, b) => b.score.CompareTo(a.score));
+        if (candidates.Count > k) candidates.RemoveRange(k, candidates.Count - k);
+        return candidates;
     }
 
     // ═══════════════════════════════════════════

@@ -334,6 +334,11 @@ public sealed partial class KgStore : IDisposable
     public async Task<List<EdgeRow>> GetEdges(long? nodeId = null, string? relation = null)
     {
         ThrowIfDisposed();
+        // Result cache (invalidated on any write via _cacheStamp)
+        var cacheKey = $"edges:{nodeId}:{relation}:{_cacheStamp}";
+        if (_resultCache.TryGetValue(cacheKey, out List<EdgeRow>? cached))
+            return cached!;
+
         var sql = new StringBuilder("SELECT * FROM Edges WHERE 1=1");
         if (nodeId.HasValue) sql.Append(" AND (src = @nid OR dst = @nid)");
         if (relation != null) sql.Append(" AND rel = @rel");
@@ -343,7 +348,14 @@ public sealed partial class KgStore : IDisposable
         cmd.CommandText = sql.ToString();
         if (nodeId.HasValue) cmd.Parameters.AddWithValue("@nid", nodeId.Value);
         if (relation != null) cmd.Parameters.AddWithValue("@rel", relation);
-        return ReadEdgeRows(await cmd.ExecuteReaderAsync().ConfigureAwait(false));
+        var results = ReadEdgeRows(await cmd.ExecuteReaderAsync().ConfigureAwait(false));
+
+        _resultCache.Set(cacheKey, results, new MemoryCacheEntryOptions
+        {
+            Size = 1,
+            AbsoluteExpirationRelativeToNow = TimeSpan.FromSeconds(30)
+        });
+        return results;
     }
 
     public async Task<int> DeleteEdges(long nodeId, string? relation = null)

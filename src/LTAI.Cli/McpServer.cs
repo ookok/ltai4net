@@ -33,8 +33,10 @@ public static class McpServer
     /// Start an MCP server on stdio, exposing the configured read-only
     /// toolset. Returns when the parent process closes stdin (typical
     /// for an IDE-managed child process).
+    /// <param name="workspace">Working directory for file operations.</param>
+    /// <param name="filter">Tool filter: "readonly" (default, safe) or "all" (dangerous — includes shell + write).</param>
     /// </summary>
-    public static async Task<int> RunAsync(string workspace)
+    public static async Task<int> RunAsync(string workspace, string filter = "readonly")
     {
         var builder = Host.CreateApplicationBuilder();
 
@@ -45,7 +47,7 @@ public static class McpServer
         var fs = new FileSystemTools(workspace);
         var search = new SearchTools(workspace);
 
-        var aiTools = new (string Name, AIFunction Function)[]
+        var tools = new List<(string Name, AIFunction Function)>
         {
             ("read_file",      AIFunctionFactory.Create(fs.ReadFileContent, "read_file", "Read a text file (UTF-8) by path.")),
             ("list_files",     AIFunctionFactory.Create(fs.ListFiles, "list_files", "List files in a directory.")),
@@ -56,6 +58,16 @@ public static class McpServer
             ("search_files",   AIFunctionFactory.Create(search.SearchFiles, "search_files", "Filename search by name pattern.")),
             ("regex_test",     AIFunctionFactory.Create(TextTools.RegexTest, "regex_test", "Test a regex pattern against input.")),
         };
+
+        // D1: "all" filter exposes shell and file-write tools (use with caution)
+        if (string.Equals(filter, "all", StringComparison.OrdinalIgnoreCase))
+        {
+            var shell = new SafeShellTool(workspace);
+            tools.Add(("run_command", AIFunctionFactory.Create(shell.RunCommand, "run_command", "Execute a shell command (dangerous — use with caution).")));
+            tools.Add(("write_file",  AIFunctionFactory.Create(fs.WriteFile, "write_file", "Write text content to a file.")));
+        }
+
+        var aiTools = tools.ToArray();
 
         var mcpTools = aiTools.Select(t => McpServerTool.Create(t.Function)).ToArray();
 

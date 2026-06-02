@@ -21,13 +21,32 @@ jobs:
         run: dotnet build
 
       - name: Test
-        run: dotnet test
+        run: dotnet test --logger "trx;LogFileName=test-results.trx"
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results
+          path: "**/TestResults/*.trx"
+
+      - name: Benchmark smoke test
+        run: dotnet run --project tests/LTAI.Benchmarks -- smoke
 
       - name: Publish CLI
-        run: dotnet publish src/LTAI.Cli -c Release -o dist/cli
+        run: dotnet publish src/LTAI.Cli -c Release -o dist/cli --no-self-contained
 
       - name: Upload CLI
         uses: actions/upload-artifact@v4
         with:
           name: ltai-cli
           path: dist/cli/
+
+      - name: Publish Web
+        run: dotnet publish src/LTAI.Web -c Release -o dist/web --no-self-contained
+
+      - name: Upload Web
+        uses: actions/upload-artifact@v4
+        with:
+          name: ltai-web
+          path: dist/web/

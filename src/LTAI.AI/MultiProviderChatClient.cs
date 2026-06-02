@@ -45,8 +45,10 @@ public sealed class MultiProviderChatClient : IChatClient
     // 自适应成本路由：成功率 + 延迟 + 成本感知
     private readonly ConcurrentDictionary<string, ProviderStats> _providerStats = new(StringComparer.OrdinalIgnoreCase);
     // Circuit breaker state per provider (thread-safe via ConcurrentDictionary)
+    // P0: optionally backed by SQLite (CircuitBreakerStore) so cooldown survives process restart
     private readonly ConcurrentDictionary<string, int> _providerFailures = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, DateTime> _providerCooldowns = new(StringComparer.OrdinalIgnoreCase);
+    private readonly LTAI.Core.Configuration.CircuitBreakerStore? _breakerStore;
     private const int MaxFailuresBeforeCooldown = 3;
     private static readonly TimeSpan CooldownDuration = TimeSpan.FromSeconds(30);
 
@@ -71,10 +73,13 @@ public sealed class MultiProviderChatClient : IChatClient
     /// Initialize the router. Sets default provider from options and loads degradation chain.
     /// Actual provider clients are registered later via <see cref="Register"/> in AddLTAIAI().
     /// </summary>
-    public MultiProviderChatClient(LTAIOptions options, ILogger<MultiProviderChatClient>? logger = null)
+    public MultiProviderChatClient(LTAIOptions options,
+        ILogger<MultiProviderChatClient>? logger = null,
+        LTAI.Core.Configuration.CircuitBreakerStore? breakerStore = null)
     {
         _defaultProvider = options.AI.DefaultProvider;
         _logger = logger ?? NullLogger<MultiProviderChatClient>.Instance;
+        _breakerStore = breakerStore;
         if (options.AI.DegradationChain != null)
         {
             foreach (var (k, v) in options.AI.DegradationChain)
@@ -88,6 +93,24 @@ public sealed class MultiProviderChatClient : IChatClient
                 SizeLimit = options.AI.ResponseCacheSize,
                 ExpirationScanFrequency = TimeSpan.FromMinutes(1)
             });
+        }
+
+        // Restore circuit breaker state from SQLite (cross-restart persistence)
+        if (_breakerStore != null)
+        {
+            try
+            {
+                var all = _breakerStore.LoadAllAsync().GetAwaiter().GetResult();
+                var now = DateTime.UtcNow;
+                foreach (var (provider, (failures, cooldownUntil)) in all)
+                {
+                    if (failures > 0)
+                        _providerFailures[provider] = failures;
+                    if (cooldownUntil.HasValue && cooldownUntil.Value > now)
+                        _providerCooldowns[provider] = cooldownUntil.Value;
+                }
+            }
+            catch { /* best-effort; in-memory fallback is still functional */ }
         }
     }
 
@@ -241,6 +264,8 @@ public sealed class MultiProviderChatClient : IChatClient
                 // Success — reset failure count, update stats
                 _providerFailures.TryRemove(p, out _);
                 _providerCooldowns.TryRemove(p, out _);
+                if (_breakerStore != null)
+                    _ = _breakerStore.ClearAsync(p);
                 var stats = _providerStats.GetOrAdd(p, static _ => new ProviderStats());
                 Interlocked.Increment(ref stats.SuccessfulCalls);
 
@@ -294,12 +319,18 @@ public sealed class MultiProviderChatClient : IChatClient
         var count = _providerFailures.AddOrUpdate(provider, 1, (_, c) => c + 1);
         var stats = _providerStats.GetOrAdd(provider, static _ => new ProviderStats());
         Interlocked.Increment(ref stats.FailedCalls);
+        DateTime? until = null;
         if (count >= MaxFailuresBeforeCooldown)
         {
-            var until = DateTime.UtcNow + CooldownDuration;
-            _providerCooldowns[provider] = until;
+            until = DateTime.UtcNow + CooldownDuration;
+            _providerCooldowns[provider] = until.Value;
             _logger.LogWarning("Provider '{P}' failed {Count} times — cooling down until {Until}",
                 provider, count, until);
+        }
+        // Persist circuit breaker state to SQLite (cross-restart)
+        if (_breakerStore != null)
+        {
+            _ = _breakerStore.SaveAsync(provider, count, until);
         }
     }
 
@@ -308,19 +339,24 @@ public sealed class MultiProviderChatClient : IChatClient
     /// Uses HashCode.Combine (built-in, zero allocations, deterministic within process).
     /// Includes: provider name, temperature, max output tokens, and full message text.
     /// In-memory cache only — no cross-process persistence needed.
+    /// Uses SHA-256 for deterministic, collision-free keys.
     /// </summary>
     private static string BuildCacheKey(string provider, IEnumerable<ChatMessage> messages, ChatOptions? options)
     {
-        var hc = new HashCode();
-        hc.Add(provider, StringComparer.OrdinalIgnoreCase);
-        hc.Add(options?.Temperature ?? 0);
-        hc.Add(options?.MaxOutputTokens ?? 0);
+        var sb = new System.Text.StringBuilder();
+        sb.Append(provider.ToUpperInvariant()).Append('|');
+        sb.Append(options?.Temperature ?? 0).Append('|');
+        sb.Append(options?.MaxOutputTokens ?? 0).Append('|');
         foreach (var m in messages)
         {
-            hc.Add(m.Role);
-            hc.Add(m.Text ?? "");
+            sb.Append(m.Role.ToString()).Append(':');
+            sb.Append(m.Text ?? "").Append('|');
         }
-        return hc.ToHashCode().ToString("x8");
+        var input = sb.ToString();
+        var hash = System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes(input));
+        // First 8 bytes (64 bits) — more than enough for 256-entry LRU
+        return Convert.ToHexString(hash, 0, 8).ToLowerInvariant();
     }
 
     /// <summary>
@@ -400,7 +436,7 @@ public static class OpenAIChatClientFactory
     /// The OpenAIClient manages its own HttpClient with built-in connection pooling.
     /// </summary>
     /// <param name="endpoint">Base URL, e.g. "https://api.deepseek.com/v1". Trailing slash is trimmed.</param>
-    /// <param name="model">Model name, e.g. "deepseek-chat".</param>
+    /// <param name="model">Model name, e.g. "deepseek-v4-flash".</param>
     /// <param name="apiKey">Bearer token.</param>
     public static IChatClient Create(
         string endpoint,
@@ -479,7 +515,9 @@ public static class ServiceCollectionExtensions
             var opts = sp.GetRequiredService<IOptions<LTAIOptions>>().Value;
             var logger = sp.GetService<ILogger<MultiProviderChatClient>>();
             var httpFactory = sp.GetRequiredService<IHttpClientFactory>();
-            var router = new MultiProviderChatClient(opts, logger);
+            var breakerPath = opts.ResolveDataPath("circuit_breaker.db");
+            var breakerStore = new LTAI.Core.Configuration.CircuitBreakerStore(breakerPath);
+            var router = new MultiProviderChatClient(opts, logger, breakerStore);
 
             foreach (var provider in MultiProviderChatClient.DefaultProviders)
             {
@@ -538,7 +576,7 @@ public static class ServiceCollectionExtensions
             var logger = sp.GetService<ILogger<LTAI.Core.Safety.SafeChatClient>>();
             var safetyKey = LTAI.Core.Configuration.SecretManager.Get(opts.AI.ApiKeyEnv ?? "DEEPSEEK_API_KEY") ?? "";
             IChatClient safetyClient = OpenAIChatClientFactory.Create(
-                "https://api.deepseek.com/v1", "deepseek-chat", safetyKey);
+                "https://api.deepseek.com/v1", "deepseek-v4-flash", safetyKey);
 
             return new LTAI.Core.Safety.SafeChatClient(router, safetyClient, logger);
         });

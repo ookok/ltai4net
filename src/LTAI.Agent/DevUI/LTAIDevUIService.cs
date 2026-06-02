@@ -61,6 +61,9 @@ public sealed class LTAIDevUIService
 {
     private readonly IServiceProvider _sp;
     private readonly ILogger<LTAIDevUIService> _logger;
+    private readonly object _cardCacheLock = new();
+    private IReadOnlyList<LTAIAgentCard>? _cardCache;
+    private int _cardCacheGeneration;
 
     public LTAIDevUIService(IServiceProvider sp, ILogger<LTAIDevUIService> logger)
     {
@@ -70,6 +73,11 @@ public sealed class LTAIDevUIService
 
     public IReadOnlyList<LTAIAgentCard> ListAgentCards()
     {
+        var gen = Volatile.Read(ref _cardCacheGeneration);
+        var cache = _cardCache;
+        if (cache != null && gen == _cardCacheGeneration)
+            return cache;
+
         var defs = AgentRegistry.LoadAll();
         var cards = new List<LTAIAgentCard>(defs.Count);
         foreach (var def in defs)
@@ -81,11 +89,33 @@ public sealed class LTAIDevUIService
             }
             cards.Add(BuildCard(def));
         }
+        lock (_cardCacheLock)
+        {
+            _cardCache = cards;
+            Volatile.Write(ref _cardCacheGeneration, gen);
+        }
         return cards;
+    }
+
+    public void InvalidateCardCache()
+    {
+        lock (_cardCacheLock)
+        {
+            _cardCache = null;
+            Interlocked.Increment(ref _cardCacheGeneration);
+        }
     }
 
     public LTAIAgentCard? GetAgentCard(string name)
     {
+        // Check cache first
+        var cache = _cardCache;
+        if (cache != null)
+        {
+            var found = cache.FirstOrDefault(c =>
+                string.Equals(c.Name, name, StringComparison.OrdinalIgnoreCase));
+            if (found != null) return found;
+        }
         var def = AgentRegistry.LoadAll().FirstOrDefault(d =>
             string.Equals(d.Name, name, StringComparison.OrdinalIgnoreCase));
         if (def is null || !AgentExists(def.Name))

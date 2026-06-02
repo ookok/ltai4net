@@ -1,3 +1,4 @@
+using System.Text.Json;
 using LTAI.AI;
 using LTAI.AI.Compaction;
 using LTAI.Core.Safety;
@@ -49,10 +50,20 @@ public static class ServiceCollectionExtensions
         // Step 1: Register each agent via MAF AddAIAgent (keyed services).
         // BuildAgentImpl still owns the 80+ tool selection, AIContextProviders,
         // decorators and Plan Mode handling — only the DI shape changes.
+        // P0: per-agent isolation — if one agent fails to build, the others still work.
         foreach (var def in GetAgentDefinitions())
         {
             var captured = def;
-            services.AddAIAgent(captured.Name, (sp, name) => captured.Build(sp, name), ServiceLifetime.Singleton);
+            services.AddAIAgent(captured.Name, (sp, name) =>
+            {
+                var agent = captured.Build(sp, name);
+                if (agent == null)
+                {
+                    // Fallback: return a minimal no-op agent so DI doesn't crash
+                    return new FallbackAgent(captured.Name, captured.Description);
+                }
+                return agent;
+            }, ServiceLifetime.Singleton);
             names.Add(captured.Name);
         }
         registeredAgentNames = names;
@@ -246,9 +257,22 @@ public static class ServiceCollectionExtensions
         float? Temperature,
         float? TopP)
     {
-        public AIAgent Build(IServiceProvider sp, string name) => Task.Run(() =>
-            BuildAgentImpl(sp, name, Description, CanRead, CanWrite, CanList, CanExec,
-                modelId: ModelId, temperature: Temperature, topP: TopP)).GetAwaiter().GetResult();
+        public AIAgent? Build(IServiceProvider sp, string name)
+        {
+            try
+            {
+                return Task.Run(() =>
+                    BuildAgentImpl(sp, name, Description, CanRead, CanWrite, CanList, CanExec,
+                        modelId: ModelId, temperature: Temperature, topP: TopP)).GetAwaiter().GetResult();
+            }
+            catch (Exception ex)
+            {
+                var logger = sp.GetService<Microsoft.Extensions.Logging.ILoggerFactory>()
+                    ?.CreateLogger("LTAI.Agent.BuildAgent");
+                logger?.LogError(ex, "Agent '{Name}' failed to build — skipping DI registration", name);
+                return null;
+            }
+        }
     }
 
     private static IEnumerable<AgentDef> GetAgentDefinitions()
@@ -394,13 +418,16 @@ public static class ServiceCollectionExtensions
         // EIA (Environmental Impact Assessment) tools
         if (name is "LTAI-Chat" or "LTAI-Data" or "LTAI-System" or "LTAI-Writer" or "LTAI-Frontend")
         {
-            tools.Add(AIFunctionFactory.Create(EiaTools.ClassifyAirQuality));
-            tools.Add(AIFunctionFactory.Create(EiaTools.ClassifyNoise));
-            tools.Add(AIFunctionFactory.Create(EiaTools.ClassifyWaterQuality));
-            tools.Add(AIFunctionFactory.Create(EiaTools.GaussianPlume));
-            tools.Add(AIFunctionFactory.Create(EiaTools.CO2Equivalent));
-            tools.Add(AIFunctionFactory.Create(EiaTools.HazardQuotient));
-            tools.Add(AIFunctionFactory.Create(EiaTools.LookupStandard));
+            // C1: EIA tools are in optional LTAI.Agent.Eia project (modularized).
+            // Register them only when the package is referenced. To enable, add
+            // ProjectReference to LTAI.Agent.Eia and uncomment the lines below.
+            //   tools.Add(AIFunctionFactory.Create(EiaTools.ClassifyAirQuality));
+            //   tools.Add(AIFunctionFactory.Create(EiaTools.ClassifyNoise));
+            //   tools.Add(AIFunctionFactory.Create(EiaTools.ClassifyWaterQuality));
+            //   tools.Add(AIFunctionFactory.Create(EiaTools.GaussianPlume));
+            //   tools.Add(AIFunctionFactory.Create(EiaTools.CO2Equivalent));
+            //   tools.Add(AIFunctionFactory.Create(EiaTools.HazardQuotient));
+            //   tools.Add(AIFunctionFactory.Create(EiaTools.LookupStandard));
         }
 
         // Web tools (search, fetch, custom HTTP requests)
@@ -686,7 +713,7 @@ public static class ServiceCollectionExtensions
         if (!opts.AI.SkipSafetyChecks)
         {
             var safetyKey = LTAI.Core.Configuration.SecretManager.Get(opts.AI.ApiKeyEnv ?? "DEEPSEEK_API_KEY") ?? "";
-            var safetyClient = OpenAIChatClientFactory.Create("https://api.deepseek.com/v1", "deepseek-chat", safetyKey);
+            var safetyClient = OpenAIChatClientFactory.Create("https://api.deepseek.com/v1", "deepseek-v4-flash", safetyKey);
             safety = new SafetyCoordinator(safetyClient, loggerFactory.CreateLogger<SafetyCoordinator>());
         }
 
@@ -803,52 +830,14 @@ public static class ServiceCollectionExtensions
             {
                 Name = name,
                 // P10.2: Chinese harness instructions replacing the default English
-                // block. LTAI's agents are Chinese-first; the default English text
-                // is replaced wholesale rather than concatenated, since the agent's
-                // own ChatOptions.Instructions (Description field below) carry the
-                // agent-specific identity / role / duty content.
+                // block. Default is Chinese; switches to English when OS language is en-US.
+                // Uses LTAI.Core.I18n.Locale for culture-aware string selection.
                 HarnessInstructions = isPlanMode
-                    ? null  // plan mode keeps the default — its behavior is rigid
-                    : """
-                      你是 LTAI 助手，使用工具完成用户的请求。
-
-                      ## 一般准则
-                      - 先思考再行动。复杂任务拆成清晰的步骤。
-                      - 用可用工具收集信息、执行操作并验证结果。
-                      - 解释你的推理过程，让用户能跟随你的思路。
-                      - 连续调用 4 次以上工具前必须先向用户说明你正在做什么。
-                      - 如果工具调用失败或返回异常，**调整策略**而不是重试同一个调用。
-                      - 任务完成后，给出清晰的总结：做了什么、发现了什么。
-                      - 如果模型不足以完成复杂任务（跨文件重构、并发安全分析等），
-                        在回复中输出 `<<<NEEDS_PRO: <原因>>>` 标记，系统将自动切换到更强的模型。
-                      """,
+                    ? null  // plan mode keeps the default
+                    : BuildSystemPrompt(),
                 Description = isPlanMode
-                    ? """
-                    <system-reminder>
-                    # Plan Mode — 只读模式
-
-                    你处于 Plan mode。严禁任何文件修改、shell 执行或系统变更。
-                    你只能使用只读工具观察、分析和规划。
-
-                    ## 职责
-                    阅读代码、搜索信息、构造计划。完成后调用 PlanExit 工具提交计划并退出 Plan mode。
-
-                    ## 约束
-                    - 绝对禁止：写文件、编辑文件、运行命令、git 操作
-                    - 允许：读文件、搜索、glob、目录列表
-                    - 完成计划后调用 PlanExit
-                    </system-reminder>
-                    """
-                    : $"你是 {name}，{description}。\n"
-                    + "关于日期：当用户询问\"今天星期几\"\"现在几点\"等时间日期问题时，请直接调用 GetCurrentDateTime 工具获取实时时间，不要自行估算。\n"
-                    + "工具调用注意：\n"
-                    + "1. 参数必须是正确的JSON类型（数字不要加引号，布尔值用true/false）\n"
-                    + "2. 不要用Markdown代码块包围工具调用\n"
-                    + "3. 不要重复调用同一个工具（如果出错，先检查参数再重试）\n"
-                    + "\n"
-                    + "升级合约：如果当前模型无法完成复杂任务（如跨文件重构、并发安全性分析），\n"
-                    + "在回复中输出 <<<NEEDS_PRO: <原因>>> 标记，系统将自动切换到更强的模型重试。\n"
-                    + "示例：<<<NEEDS_PRO: 需要分析6个模块的循环依赖问题>>>",
+                    ? BuildPlanModePrompt()
+                    : BuildAgentDescription(name, description),
                 ChatOptions = new ChatOptions
                 {
                     Temperature = temperature ?? (float)opts.AI.Temperature,
@@ -944,5 +933,130 @@ public static class ServiceCollectionExtensions
         agent = new LoggingAgent(agent, log);
         return agent;
     }
+
+    // ── B3: Bilingual system prompt helpers ──
+
+    private static string BuildSystemPrompt()
+    {
+        if (!LTAI.Core.I18n.Locale.IsChinese)
+        {
+            return LTAI.Core.I18n.Locale.Get("SystemPromptIntro") + "\n\n"
+                + "## General Guidelines\n"
+                + "- Think before acting. Break complex tasks into clear steps.\n"
+                + "- Use available tools to gather information, execute actions, and verify results.\n"
+                + "- Explain your reasoning so the user can follow your thought process.\n"
+                + "- Before calling more than 4 tools in a row, explain what you are doing.\n"
+                + "- If a tool call fails, **adjust your strategy** instead of retrying the same call.\n"
+                + "- After completing a task, give a clear summary: what was done and what was found.\n"
+                + "- If the model is insufficient for complex tasks (cross-file refactoring, concurrency safety analysis, etc.),\n"
+                + "  output `<<<NEEDS_PRO: <reason>>>` to request upgrade to a stronger model.\n";
+        }
+        return LTAI.Core.I18n.Locale.Get("SystemPromptIntro") + "\n\n"
+            + "## 一般准则\n"
+            + "- 先思考再行动。复杂任务拆成清晰的步骤。\n"
+            + "- 用可用工具收集信息、执行操作并验证结果。\n"
+            + "- 解释你的推理过程，让用户能跟随你的思路。\n"
+            + "- 连续调用 4 次以上工具前必须先向用户说明你正在做什么。\n"
+            + "- 如果工具调用失败或返回异常，**调整策略**而不是重试同一个调用。\n"
+            + "- 任务完成后，给出清晰的总结：做了什么、发现了什么。\n"
+            + "- 如果模型不足以完成复杂任务（跨文件重构、并发安全分析等），\n"
+            + "  在回复中输出 `<<<NEEDS_PRO: <原因>>>` 标记，系统将自动切换到更强的模型。\n";
+    }
+
+    private static string BuildPlanModePrompt()
+    {
+        if (!LTAI.Core.I18n.Locale.IsChinese)
+        {
+            return """
+            <system-reminder>
+            # Plan Mode — Read-Only Mode
+
+            You are in Plan Mode. No file modifications, shell execution, or system changes are allowed.
+            You may only use read-only tools to observe, analyze, and plan.
+
+            ## Responsibilities
+            Read code, search for information, construct plans. After completing the plan, call PlanExit to submit it and exit Plan Mode.
+
+            ## Constraints
+            - ABSOLUTELY FORBIDDEN: writing files, editing files, running commands, git operations
+            - ALLOWED: reading files, searching, glob, directory listing
+            - After completing the plan, call PlanExit
+            </system-reminder>
+            """;
+        }
+        return """
+        <system-reminder>
+        # Plan Mode — 只读模式
+
+        你处于 Plan mode。严禁任何文件修改、shell 执行或系统变更。
+        你只能使用只读工具观察、分析和规划。
+
+        ## 职责
+        阅读代码、搜索信息、构造计划。完成后调用 PlanExit 工具提交计划并退出 Plan mode。
+
+        ## 约束
+        - 绝对禁止：写文件、编辑文件、运行命令、git 操作
+        - 允许：读文件、搜索、glob、目录列表
+        - 完成计划后调用 PlanExit
+        </system-reminder>
+        """;
+    }
+
+    private static string BuildAgentDescription(string name, string description)
+    {
+        var isEn = !LTAI.Core.I18n.Locale.IsChinese;
+        var roleLine = isEn
+            ? $"You are {name}, {description}."
+            : $"你是 {name}，{description}。";
+        var dateHint = isEn
+            ? "About dates: when users ask \"what day is it\" or \"what time is it\", call GetCurrentDateTime directly — do not guess."
+            : "关于日期：当用户询问\"今天星期几\"\"现在几点\"等时间日期问题时，请直接调用 GetCurrentDateTime 工具获取实时时间，不要自行估算。";
+        var toolHint = isEn
+            ? "Tool call notes:\n1. Parameters must be correct JSON types (no quotes around numbers, true/false for booleans)\n2. Do not wrap tool calls in Markdown code blocks\n3. Do not call the same tool repeatedly (if it errors, check parameters first)\n\nUpgrade contract: if the current model cannot complete a complex task (cross-file refactoring, concurrency safety analysis, etc.),\noutput <<<NEEDS_PRO: <reason>>> to request automatic upgrade to a stronger model.\nExample: <<<NEEDS_PRO: Need to analyze circular dependency across 6 modules>>>"
+            : "工具调用注意：\n1. 参数必须是正确的JSON类型（数字不要加引号，布尔值用true/false）\n2. 不要用Markdown代码块包围工具调用\n3. 不要重复调用同一个工具（如果出错，先检查参数再重试）\n\n升级合约：如果当前模型无法完成复杂任务（如跨文件重构、并发安全性分析），\n在回复中输出 <<<NEEDS_PRO: <原因>>> 标记，系统将自动切换到更强的模型重试。\n示例：<<<NEEDS_PRO: 需要分析6个模块的循环依赖问题>>>";
+        return $"{roleLine}\n{dateHint}\n{toolHint}\n";
+    }
+}
+
+/// <summary>
+/// P0: Minimal no-op AIAgent used when the real agent fails to build.
+/// Returns a static error message so the caller can surface the failure gracefully.
+/// </summary>
+file sealed class FallbackAgent : AIAgent
+{
+    public FallbackAgent(string name, string description)
+    {
+        Name = name;
+        Description = description;
+    }
+
+    public override string? Name { get; }
+    public override string? Description { get; }
+
+    protected override ValueTask<AgentSession> CreateSessionCoreAsync(CancellationToken ct)
+        => new(new MinimalAgentSession());
+
+    protected override ValueTask<JsonElement> SerializeSessionCoreAsync(
+        AgentSession session, JsonSerializerOptions? jsonOptions, CancellationToken ct)
+        => new(JsonSerializer.SerializeToElement(new { fallback = true }));
+
+    protected override ValueTask<AgentSession> DeserializeSessionCoreAsync(
+        JsonElement state, JsonSerializerOptions? jsonOptions, CancellationToken ct)
+        => new(new MinimalAgentSession());
+
+    protected override Task<AgentResponse> RunCoreAsync(
+        IEnumerable<ChatMessage> messages, AgentSession? session, AgentRunOptions? options, CancellationToken ct)
+        => Task.FromResult(new AgentResponse(new ChatMessage(ChatRole.Assistant,
+            $"[Agent '{Name}' unavailable — build failed. Check logs for details.]")));
+
+    protected override IAsyncEnumerable<AgentResponseUpdate> RunCoreStreamingAsync(
+        IEnumerable<ChatMessage> messages, AgentSession? session, AgentRunOptions? options, CancellationToken ct)
+        => AsyncEnumerable.Repeat(new AgentResponseUpdate(ChatRole.Assistant,
+            $"[Agent '{Name}' unavailable — build failed. Check logs for details.]"), 1);
+}
+
+file sealed class MinimalAgentSession : AgentSession
+{
+    public MinimalAgentSession() : base(new AgentSessionStateBag()) { }
 }
 #pragma warning restore MAAI001

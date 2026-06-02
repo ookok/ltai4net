@@ -96,6 +96,7 @@ public static class SlashCommands
         new("pwd",     "文件",  "显示当前目录", "目录"),
         new("approve", "计划",  "批准当前计划并开始执行", "yes,confirm,批准,确认"),
         new("plan",    "计划",  "查看当前计划状态", "计划状态"),
+        new("lang",    "设置",  "切换界面语言: zh-CN|en-US", "语言,language", "zh-CN|en-US"),
         new("exit",    "高级",  "退出应用", "quit,q,退出"),
     };
 
@@ -296,6 +297,7 @@ public static class SlashCommands
             "jobs" => HandleJobsCommand(args),
             "cost" => ("Cost tracking: see model provider dashboard", true),
             "memory" => ("Memory: use `remember` / `forget` tools", true),
+            "lang" => HandleLangCommand(args),
             "skill" => !string.IsNullOrEmpty(args) ? ($"Running skill '{args}'...", true) : ("Skills: use `run_skill` tool", true),
             "mode" => args switch { "review" => ("Edit mode: review", true), "auto" => ("Edit mode: auto", true), _ => ("Usage: /mode review|auto", true) },
             "ls" => ListDir(args),
@@ -1096,7 +1098,7 @@ public static class SlashCommands
             [
                 info.Model,
                 "gpt-4o", "gpt-4o-mini", "claude-3-opus", "claude-3-sonnet",
-                "deepseek-chat", "deepseek-reasoner", "qwen-plus", "qwen-turbo",
+                "deepseek-v4-flash", "deepseek-reasoner", "qwen-plus", "qwen-turbo",
             ];
             AnsiConsole.MarkupLine("[yellow]无法从 API 获取模型列表，使用常用模型作为参考[/]");
         }
@@ -1292,6 +1294,23 @@ public static class SlashCommands
     // ═══════════════════════════════════════════
     //  /pipe commands — P16.1: list/run sequential/concurrent pipelines
     // ═══════════════════════════════════════════
+
+    // ── B1+B2: TUI /lang command ──
+    private static (string, bool) HandleLangCommand(string args)
+    {
+        var lang = args.Trim().ToLowerInvariant();
+        if (lang == "zh-cn" || lang == "zh" || lang == "cn")
+        {
+            LTAI.Core.I18n.Locale.SetLang("zh-CN");
+            return ("已切换界面语言: 中文", true);
+        }
+        if (lang == "en-us" || lang == "en" || lang == "us")
+        {
+            LTAI.Core.I18n.Locale.SetLang("en-US");
+            return ("Language switched: English", true);
+        }
+        return ($"Usage: /lang zh-CN|en-US (current: {LTAI.Core.I18n.Locale.CurrentLang})", true);
+    }
 
     private static (string, bool) HandlePipeCommand(string args)
     {

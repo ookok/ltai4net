@@ -306,7 +306,7 @@ public partial class MainWindow : Window
                 {
                     var endpoints = new Dictionary<string, (string ep, string model)>
                     {
-                        ["DeepSeek"] = ("https://api.deepseek.com/v1", "deepseek-chat"),
+                        ["DeepSeek"] = ("https://api.deepseek.com/v1", "deepseek-v4-flash"),
                         ["OpenAI"] = ("https://api.openai.com/v1", "gpt-4o"),
                         ["SiliconFlow"] = ("https://api.siliconflow.cn/v1", "deepseek-ai/DeepSeek-V2.5"),
                         ["Aliyun (Qwen)"] = ("https://dashscope.aliyuncs.com/compatible-mode/v1", "qwen-plus"),

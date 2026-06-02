@@ -31,7 +31,8 @@ partial class Program
             "dashboard" or "dash" => HandleDashboard(),
             "health" or "--health" or "hc" => await HandleHealth().ConfigureAwait(false),
             "agents" => HandleAgents(args[1..]),
-            "mcp-server" or "mcp" => await LTAI.CLI.McpServer.RunAsync(Directory.GetCurrentDirectory()).ConfigureAwait(false),
+            "mcp-server" or "mcp" => await LTAI.CLI.McpServer.RunAsync(
+                Directory.GetCurrentDirectory(), args.ElementAtOrDefault(1) ?? "readonly").ConfigureAwait(false),
             "version" or "--version" or "-v" => ShowVersion(),
             _ => ShowHelp()
         };

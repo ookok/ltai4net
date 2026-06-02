@@ -34,10 +34,16 @@ public static class Program
         Console.InputEncoding = System.Text.Encoding.UTF8;
         Console.Title = "LTAI";
 
+        // Detect OS language for i18n (B1+B2)
+        var detectedLang = LTAI.Core.I18n.Locale.CurrentLang;
+        System.Diagnostics.Debug.WriteLine($"Locale detected: {detectedLang}");
+
         // Show splash immediately — no waiting for DI
         AnsiConsole.Write(new FigletText("LTAI").Color(Color.Green));
-        AnsiConsole.MarkupLine("[grey]LivingTree AI — 轻量版[/]");
-        AnsiConsole.MarkupLine("[yellow]正在初始化...[/]");
+        var subtitle = LTAI.Core.I18n.Locale.IsChinese ? "LivingTree AI — 轻量版" : "LivingTree AI — Lightweight Edition";
+        var loading = LTAI.Core.I18n.Locale.Get("Loading");
+        AnsiConsole.MarkupLine($"[grey]{subtitle}[/]");
+        AnsiConsole.MarkupLine($"[yellow]{loading}[/]");
 
         Log.Logger = new LoggerConfiguration()
             .MinimumLevel.Information()

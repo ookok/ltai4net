@@ -382,6 +382,22 @@ try
         app.MapDevUI();
     }
 
+    // ── Readiness Probe (lightweight — just checks KG SQLite) ──
+    app.MapGet("/ready", async (IServiceProvider sp) =>
+    {
+        try
+        {
+            var kgStore = sp.GetRequiredService<KgStore>();
+            using var conn = new SqliteConnection($"Data Source={kgStore.DbPath};Mode=ReadOnly;");
+            await conn.OpenAsync().ConfigureAwait(false);
+            return Results.Json(new { status = "ready", timestamp = DateTime.UtcNow });
+        }
+        catch (Exception ex)
+        {
+            return Results.Json(new { status = "not_ready", error = ex.Message }, statusCode: 503);
+        }
+    });
+
     // ── Health Check (detailed) ──
     app.MapGet("/health", async (IServiceProvider sp) =>
     {
