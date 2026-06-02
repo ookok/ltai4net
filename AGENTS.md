@@ -727,7 +727,7 @@ Connect SessionManager → ChatView and add SessionStatsPanel to MainWindow side
 | # | 任务 | 主题 | 优先级 | 预计 | 依赖 |
 |---|---|---|---|---|---|
 | **P14.1** ✅ | BGE INT8 量化（复用 **Xenova 预量化版** — `Xenova/bge-small-{zh,en}-v1.5/onnx/model_int8.onnx`） | 量化补完 | 🔴 P0 | 0.5d | 无 |
-| **P14.2** | P9.1 DevUI 显示 active EP + quant 状态（P13.2 telemetry 已埋点，未 surface） | 可观测性 | 🔴 P0 | 0.5d | P13.2 ✅ |
+| **P14.2** ✅ | P9.1 DevUI 显示 active EP + quant 状态（P13.2 telemetry 已埋点，未 surface） | 可观测性 | 🔴 P0 | 0.5d | P13.2 ✅ |
 | **P14.3** | TUI `/model` 菜单扩展（`cleanup`/`info`/`quant` 三子命令） | UX | 🔴 P0 | 1d | P13.6 ✅ |
 | **P14.4** | INT8 vs FP32 性能 benchmark（P11.2 BDN 框架 + GPU vs CPU 对照） | 可观测性 | 🟡 P1 | 1d | 无 |
 | **P14.5** | DecisionTreeRouter 远程 API 结果 cache 到 `ToolEmbeddingCache`（P13.3） | 缓存 | 🟡 P1 | 2-3d | P12 ✅ |
@@ -763,7 +763,11 @@ Connect SessionManager → ChatView and add SessionStatsPanel to MainWindow side
 - **收益**：BGE-zh/en 228MB FP32 → 56MB INT8 = **-172MB 磁盘** + 2-3× 推理加速（CPU）
 
 ### 主题 2：可观测性（P14.2 + P14.4 + P14.6）
-- **P14.2**：DevUI dashboard 新增列 `ActiveEP` (DML/CUDA/CPU) + `Quant` (FP32/INT8) — `LocalEmbedder.ActiveExecutionProvider` + `UsingQuantizedModel` 已埋点
+- **P14.2** ✅ 完成 (commit `f7ecf7f`)：TUI DevUI dashboard header 3→5 行
+  - 新增 embed 状态行：`model=<name> <dim>d · EP=DML/CUDA/CPU · quant=INT8/FP32`
+  - 颜色：EP=green (GPU) / grey (CPU) ; quant=green (INT8) / yellow (FP32) ; model=cyan / red (缺失)
+  - 边界处理：(disabled — remote API) / (not loaded yet) / (no model on disk)
+  - telemetry 来源：`LocalEmbedder.ActiveExecutionProvider` / `UsingQuantizedModel` / `CurrentModelName` / `DefaultDisabled` / `ListAvailableModels()`
 - **P14.4**：BDN 跑 INT8 vs FP32 latency/throughput（cache miss 差异 1-3ms vs 5-10ms；GPU EP 对照）
 - **P14.6**：`ToolEmbeddingCache.CachedEntryCount` 暴露到 dashboard，"cache hit" 颜色（绿=全命中 / 黄=部分命中 / 红=全 miss）
 
@@ -867,7 +871,7 @@ P14.15
 
 | 阶段 | 总工时 | 关键产出 |
 |---|---|---|
-| **P0** (3/5 done) | ~4 天 | 可观测性 + 量化补完 + UX 增强（最高 ROI） |
+| **P0** (4/5 done) | ~4 天 | 可观测性 + 量化补完 + UX 增强（最高 ROI） |
 | **P1** | ~4 天 | 缓存完善 + 性能数字（量化投资回报可视化） |
 | **P2** | ~3 周 | 高级 UX + 鲁棒性（生产就绪） |
 | **P3** | ~1 个月 | R&D 类（实验性，可推迟） |
