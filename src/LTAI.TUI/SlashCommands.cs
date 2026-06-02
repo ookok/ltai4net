@@ -21,6 +21,15 @@ public static class SlashCommands
     /// <summary>HTTP client factory for fetching models from provider APIs.</summary>
     public static System.Net.Http.IHttpClientFactory? HttpFactory { get; set; }
 
+    /// <summary>User-defined common-phrase store (injected from DI at startup).</summary>
+    public static LTAI.Agent.Snippets.SnippetStore? SnippetStore { get; set; }
+
+    /// <summary>
+    /// When set, ChatLayout reads and clears this on the next /snippet use.
+    /// Carries the snippet's content to be filled into the input buffer.
+    /// </summary>
+    public static string? PendingSnippetFill { get; set; }
+
     /// <summary>Current L1 (fast) model name.</summary>
     public static string? L1Model { get; set; }
     /// <summary>Current L2 (pro) model name.</summary>
@@ -62,6 +71,8 @@ public static class SlashCommands
         new("cost",    "信息",  "显示本轮预估费用", "费用,花费"),
         new("memory",  "扩展",  "管理记忆文件", "记忆"),
         new("skill",   "扩展",  "列出/运行技能", "", "技能名"),
+        new("snippet", "扩展",  "常用语管理: list|save <key> <text>|use <key>|edit <key>|rename <old> <new>|delete <key>",
+            "snip,常用语,常用,短语", "list|save|use|edit|rename|delete"),
         new("mode",    "代码",  "编辑模式: review|auto", "", "review|auto"),
         new("undo",    "代码",  "撤销上次编辑", "撤销"),
         new("ls",      "文件",  "列出当前目录内容", "dir,列表"),
@@ -262,6 +273,7 @@ public static class SlashCommands
             "compact" => ("Summarizing older turns...", true),
             "model" => HandleModelCommand(args),
             "config" => HandleConfigCommand(args),
+            "snippet" => HandleSnippetCommand(args),
             "status" => Status(),
             "monitor" => Monitor(),
             "cost" => ("Cost tracking: see model provider dashboard", true),
@@ -377,6 +389,143 @@ public static class SlashCommands
             return ($"已删除模型 '{name}'", true);
 
         return ($"模型 '{name}' 不存在或已删除", true);
+    }
+
+    // ═══════════════════════════════════════════
+    //  /snippet commands — user-defined common phrases
+    // ═══════════════════════════════════════════
+
+    private static (string, bool) HandleSnippetCommand(string args)
+    {
+        var store = SnippetStore;
+        if (store == null)
+            return ("常用语存储未初始化", true);
+
+        // Fallback: /snippet <key> with no recognized subcommand → treat as `use <key>`
+        var cmd = LTAI.Agent.Snippets.SnippetCommandParser.Parse(args);
+        if (cmd.Action == LTAI.Agent.Snippets.SnippetAction.Unknown)
+        {
+            var firstToken = args.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? "";
+            if (!string.IsNullOrEmpty(firstToken))
+            {
+                var existing = store.GetAsync(firstToken).GetAwaiter().GetResult();
+                if (existing != null)
+                    cmd = new LTAI.Agent.Snippets.SnippetCommand(
+                        LTAI.Agent.Snippets.SnippetAction.Use, firstToken, "", "", null);
+            }
+        }
+        if (cmd.Error != null)
+            return ($"[red]{cmd.Error}[/]", true);
+
+        return cmd.Action switch
+        {
+            LTAI.Agent.Snippets.SnippetAction.List => SnippetList(store),
+            LTAI.Agent.Snippets.SnippetAction.Save => SnippetSave(store, cmd),
+            LTAI.Agent.Snippets.SnippetAction.Use => SnippetUse(store, cmd),
+            LTAI.Agent.Snippets.SnippetAction.Delete => SnippetDelete(store, cmd),
+            LTAI.Agent.Snippets.SnippetAction.Rename => SnippetRename(store, cmd),
+            LTAI.Agent.Snippets.SnippetAction.Edit => SnippetSave(store,
+                new LTAI.Agent.Snippets.SnippetCommand(
+                    LTAI.Agent.Snippets.SnippetAction.Save, cmd.Key, "", cmd.Content, null)),
+            _ => ($"未知子命令。用法: /snippet list|save|use|edit|rename|delete", true),
+        };
+    }
+
+    private static (string, bool) SnippetList(LTAI.Agent.Snippets.SnippetStore store)
+    {
+        var list = store.ListAsync().GetAwaiter().GetResult();
+        if (list.Count == 0)
+            return ("[yellow]暂无常用语[/]  用法: /snippet save <key> <text>", true);
+
+        var table = new Table().Border(TableBorder.Rounded);
+        table.AddColumn("Key");
+        table.AddColumn("描述");
+        table.AddColumn("长度");
+        table.AddColumn("使用");
+        table.AddColumn("上次使用");
+
+        foreach (var s in list)
+        {
+            var lastUsed = s.LastUsedAt?.ToLocalTime().ToString("yyyy-MM-dd HH:mm") ?? "[grey]从未[/]";
+            var desc = string.IsNullOrEmpty(s.Description) ? "[grey]—[/]" : s.Description.EscapeMarkup();
+            table.AddRow(
+                $"[cyan]{s.Key.EscapeMarkup()}[/]",
+                desc,
+                $"{s.Content.Length}",
+                s.UseCount > 0 ? $"[green]{s.UseCount}[/]" : "[grey]0[/]",
+                lastUsed);
+        }
+
+        AnsiConsole.Write(table);
+        return ($"[grey]共 {list.Count} 条[/]", true);
+    }
+
+    private static (string, bool) SnippetSave(LTAI.Agent.Snippets.SnippetStore store,
+        LTAI.Agent.Snippets.SnippetCommand cmd)
+    {
+        try
+        {
+            store.SaveAsync(new LTAI.Agent.Snippets.Snippet
+            {
+                Key = cmd.Key,
+                Content = cmd.Content,
+                Description = "",
+            }).GetAwaiter().GetResult();
+            return ($"[green]✅ 已保存常用语[/] [cyan]/{cmd.Key}[/] ({cmd.Content.Length} 字符)", true);
+        }
+        catch (ArgumentException ex)
+        {
+            return ($"[red]❌ {ex.Message}[/]", true);
+        }
+    }
+
+    private static (string, bool) SnippetUse(LTAI.Agent.Snippets.SnippetStore store,
+        LTAI.Agent.Snippets.SnippetCommand cmd)
+    {
+        var snippet = store.GetAsync(cmd.Key).GetAwaiter().GetResult();
+        if (snippet == null)
+            return ($"[red]❌ 找不到常用语 '/{cmd.Key}'[/]。输入 /snippet list 查看", true);
+
+        store.TouchAsync(cmd.Key).GetAwaiter().GetResult();
+        // Set pending fill; ChatLayout will read and clear this on next input cycle
+        PendingSnippetFill = snippet.Content;
+        return ($"[green]✅ 已调出常用语[/] [cyan]/{snippet.Key}[/]（{snippet.Content.Length} 字符）。已填入输入框", true);
+    }
+
+    private static (string, bool) SnippetDelete(LTAI.Agent.Snippets.SnippetStore store,
+        LTAI.Agent.Snippets.SnippetCommand cmd)
+    {
+        var existing = store.GetAsync(cmd.Key).GetAwaiter().GetResult();
+        if (existing == null)
+            return ($"[red]❌ 找不到常用语 '/{cmd.Key}'[/]", true);
+
+        var usedHint = existing.UseCount > 0
+            ? $" [yellow]（已使用 {existing.UseCount} 次）[/]"
+            : "";
+        var ok = store.DeleteAsync(cmd.Key).GetAwaiter().GetResult();
+        return ok
+            ? ($"[green]✅ 已删除常用语[/] [cyan]/{cmd.Key}[/]{usedHint}", true)
+            : ($"[red]❌ 删除失败[/]", true);
+    }
+
+    private static (string, bool) SnippetRename(LTAI.Agent.Snippets.SnippetStore store,
+        LTAI.Agent.Snippets.SnippetCommand cmd)
+    {
+        try
+        {
+            var ok = store.RenameAsync(cmd.Key, cmd.NewKey).GetAwaiter().GetResult();
+            return ok
+                ? ($"[green]✅ 已重命名[/] [cyan]/{cmd.Key}[/] → [cyan]/{cmd.NewKey}[/]", true)
+                : ($"[red]❌ 找不到常用语 '/{cmd.Key}'[/]", true);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return ($"[red]❌ {ex.Message}[/]", true);
+        }
+        catch (ArgumentException ex)
+        {
+            return ($"[red]❌ {ex.Message}[/]", true);
+        }
     }
 
     // ═══════════════════════════════════════════

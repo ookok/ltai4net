@@ -180,7 +180,18 @@ public sealed class ChatLayout
 
                         if (input.StartsWith('/'))
                         {
-                            if (await HandleSlashCommandAsync(input).ConfigureAwait(false)) continue;
+                            if (await HandleSlashCommandAsync(input).ConfigureAwait(false))
+                            {
+                                // D61: /snippet use may set a pending fill — load it into the input buffer
+                                var fill = SlashCommands.PendingSnippetFill;
+                                if (!string.IsNullOrEmpty(fill))
+                                {
+                                    SlashCommands.PendingSnippetFill = null;
+                                    inputBuf.Clear();
+                                    inputBuf.Append(fill);
+                                }
+                                continue;
+                            }
                             LastRequestedView = null; return;
                         }
 
@@ -212,7 +223,18 @@ public sealed class ChatLayout
                             // 取消 → 继续（下一次循环刷新会恢复 Messages）
                             if (cmd == null) continue;
 
-                            if (await HandleSlashCommandAsync(cmd).ConfigureAwait(false)) continue;
+                            if (await HandleSlashCommandAsync(cmd).ConfigureAwait(false))
+                            {
+                                // D61: /snippet use may set a pending fill — load it into the input buffer
+                                var fill = SlashCommands.PendingSnippetFill;
+                                if (!string.IsNullOrEmpty(fill))
+                                {
+                                    SlashCommands.PendingSnippetFill = null;
+                                    inputBuf.Clear();
+                                    inputBuf.Append(fill);
+                                }
+                                continue;
+                            }
                             LastRequestedView = null; return;
                         }
                     }

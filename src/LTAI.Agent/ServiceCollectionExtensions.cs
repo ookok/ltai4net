@@ -141,6 +141,17 @@ public static class ServiceCollectionExtensions
         // and exposes EnqueueAsync / List / WaitAsync for deferred work.
         services.AddSingleton<LTAI.Agent.Tasks.TaskQueue>();
 
+        // Step 3c-snippets: User-defined common-phrase store. Shared between
+        // LTAI.TUI and LTAI.Desktop via .livingtree/snippets.json. Supports
+        // /snippet save|use|delete|rename|edit|list — see SnippetCommandParser.
+        services.AddSingleton<LTAI.Agent.Snippets.SnippetStore>(sp =>
+        {
+            var opts = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<LTAIOptions>>().Value;
+            return new LTAI.Agent.Snippets.SnippetStore(
+                opts.ResolveDataPath("snippets.json"),
+                sp.GetRequiredService<ILoggerFactory>().CreateLogger<LTAI.Agent.Snippets.SnippetStore>());
+        });
+
         // Step 3c-bis: Skill Evolution Engine (L1-L3)
         services.AddSingleton<SkillEvolutionEngine>(sp =>
         {

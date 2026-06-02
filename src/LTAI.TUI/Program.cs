@@ -73,6 +73,7 @@ public static class Program
         SlashCommands.Embedder = sp.GetService<LocalEmbedder>();
         SlashCommands.Router = sp.GetService<MultiProviderChatClient>();
         SlashCommands.HttpFactory = sp.GetService<IHttpClientFactory>();
+        SlashCommands.SnippetStore = sp.GetService<LTAI.Agent.Snippets.SnippetStore>();
         var options = sp.GetRequiredService<IOptions<LTAIOptions>>();
         SlashCommands.ActiveProvider = options.Value.AI.DefaultProvider ?? "DeepSeek";
         SlashCommands.L1Model = options.Value.AI.GetLayerConfig("fast").Model;

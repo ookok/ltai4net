@@ -31,6 +31,7 @@ public sealed class ChatView : UserControl
     private bool _isSending;
     private readonly SessionManager _sessionManager;
     private readonly LTAI.Desktop.ToolRendering.ToolResultRendererRegistry _toolRenderers;
+    private readonly LTAI.Agent.Snippets.SnippetStore? _snippetStore;
     private TextBlock? _currentResponseText;
 
     private readonly Dictionary<int, string> _subSessions = new();
@@ -113,6 +114,10 @@ public sealed class ChatView : UserControl
         _svc = svc;
         _sessionManager = sessionManager ?? new SessionManager();
         _toolRenderers = LTAI.Desktop.ToolRendering.DefaultRenderers.Create();
+        // Resolve SnippetStore from DI (if available). null-safe — Desktop must
+        // still function when launched in degraded mode without LTAI.Agent DI.
+        _snippetStore = App.Services?.GetService(typeof(LTAI.Agent.Snippets.SnippetStore))
+            as LTAI.Agent.Snippets.SnippetStore;
         Background = LtaiTheme.Sbb(LtaiTheme.Bg);
 
         var root = new DockPanel { Margin = new(16) };
@@ -1096,7 +1101,7 @@ public sealed class ChatView : UserControl
     private static readonly string[] KnownCommands = [
         "help", "new", "exit", "status", "pwd", "plan", "approve",
         "ls", "cd", "config", "model", "cost", "retry", "compact",
-        "memory", "skill", "mode", "undo", "monitor"
+        "memory", "skill", "mode", "undo", "monitor", "snippet"
     ];
 
     private bool TryHandleSlashCommand(string input)
@@ -1192,6 +1197,13 @@ public sealed class ChatView : UserControl
                 }
                 return true;
 
+            case "snippet":
+            case "snip":
+            case "常用语":
+            case "常用":
+                HandleSnippetCommand(args);
+                return true;
+
             default:
                 string? bestName = null;
                 var bestDist = int.MaxValue;
@@ -1226,7 +1238,146 @@ public sealed class ChatView : UserControl
         sb.AppendLine("/cd <路径>    — 切换工作目录");
         sb.AppendLine("/plan         — 查看计划状态");
         sb.AppendLine("/approve      — 批准当前计划");
+        sb.AppendLine("/snippet      — 常用语: list|save <key> <text>|use <key>|delete <key>|rename|edit");
         AddSystemBubble(sb.ToString().TrimEnd());
+    }
+
+    // ── /snippet — 常用语管理 ──
+
+    private void HandleSnippetCommand(string args)
+    {
+        if (_snippetStore == null)
+        {
+            AddSystemBubble("⚠️ 常用语存储未初始化（需要 LTAI.Agent 服务）");
+            return;
+        }
+
+        // Fallback: /snippet <key> → use <key>
+        var cmd = LTAI.Agent.Snippets.SnippetCommandParser.Parse(args);
+        if (cmd.Action == LTAI.Agent.Snippets.SnippetAction.Unknown)
+        {
+            var firstToken = args.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? "";
+            if (!string.IsNullOrEmpty(firstToken))
+            {
+                var existing = TryGetSnippetAsync(firstToken).GetAwaiter().GetResult();
+                if (existing != null)
+                    cmd = new LTAI.Agent.Snippets.SnippetCommand(
+                        LTAI.Agent.Snippets.SnippetAction.Use, firstToken, "", "", null);
+            }
+        }
+
+        if (cmd.Error != null) { AddSystemBubble($"⚠️ {cmd.Error}"); return; }
+
+        switch (cmd.Action)
+        {
+            case LTAI.Agent.Snippets.SnippetAction.List:
+                ShowSnippetList();
+                break;
+            case LTAI.Agent.Snippets.SnippetAction.Save:
+                TrySaveSnippet(cmd.Key, cmd.Content);
+                break;
+            case LTAI.Agent.Snippets.SnippetAction.Use:
+                TryUseSnippet(cmd.Key);
+                break;
+            case LTAI.Agent.Snippets.SnippetAction.Delete:
+                TryDeleteSnippet(cmd.Key);
+                break;
+            case LTAI.Agent.Snippets.SnippetAction.Rename:
+                TryRenameSnippet(cmd.Key, cmd.NewKey);
+                break;
+            case LTAI.Agent.Snippets.SnippetAction.Edit:
+                TrySaveSnippet(cmd.Key, cmd.Content);
+                break;
+        }
+    }
+
+    private async Task<LTAI.Agent.Snippets.Snippet?> TryGetSnippetAsync(string key)
+        => _snippetStore == null ? null : await _snippetStore.GetAsync(key).ConfigureAwait(false);
+
+    private async void ShowSnippetList()
+    {
+        if (_snippetStore == null) return;
+        var list = await _snippetStore.ListAsync().ConfigureAwait(false);
+        if (list.Count == 0)
+        {
+            AddSystemBubble("📝 暂无常用语\n用法: /snippet save <key> <text>");
+            return;
+        }
+        var sb = new StringBuilder();
+        sb.AppendLine($"📝 常用语 ({list.Count} 条):");
+        foreach (var s in list)
+        {
+            var lastUsed = s.LastUsedAt?.ToLocalTime().ToString("MM-dd HH:mm") ?? "从未";
+            var desc = string.IsNullOrEmpty(s.Description) ? "" : $"  — {s.Description}";
+            var preview = s.Content.Length > 30 ? s.Content[..30] + "..." : s.Content;
+            sb.AppendLine($"  /{s.Key,-16}  {preview,-34}  使用:{s.UseCount,3}  {lastUsed}{desc}");
+        }
+        sb.AppendLine("\n用法: /snippet use <key>");
+        AddSystemBubble(sb.ToString().TrimEnd());
+    }
+
+    private async void TrySaveSnippet(string key, string content)
+    {
+        if (_snippetStore == null) return;
+        try
+        {
+            await _snippetStore.SaveAsync(new LTAI.Agent.Snippets.Snippet
+            {
+                Key = key,
+                Content = content,
+            }).ConfigureAwait(false);
+            AddSystemBubble($"✅ 已保存常用语 /{key}（{content.Length} 字符）");
+        }
+        catch (ArgumentException ex)
+        {
+            AddSystemBubble($"❌ {ex.Message}");
+        }
+    }
+
+    private async void TryUseSnippet(string key)
+    {
+        if (_snippetStore == null) return;
+        var snippet = await _snippetStore.GetAsync(key).ConfigureAwait(false);
+        if (snippet == null)
+        {
+            AddSystemBubble($"❌ 找不到常用语 '/{key}'");
+            return;
+        }
+        await _snippetStore.TouchAsync(key).ConfigureAwait(false);
+        // D61: fill the input box (not auto-send)
+        _input.Text = snippet.Content;
+        _input.CaretIndex = snippet.Content.Length;
+        AddSystemBubble($"✅ 已调出常用语 /{key}（{snippet.Content.Length} 字符）— 已填入输入框");
+    }
+
+    private async void TryDeleteSnippet(string key)
+    {
+        if (_snippetStore == null) return;
+        var existing = await _snippetStore.GetAsync(key).ConfigureAwait(false);
+        if (existing == null)
+        {
+            AddSystemBubble($"❌ 找不到常用语 '/{key}'");
+            return;
+        }
+        var usedHint = existing.UseCount > 0 ? $"（已使用 {existing.UseCount} 次）" : "";
+        var ok = await _snippetStore.DeleteAsync(key).ConfigureAwait(false);
+        AddSystemBubble(ok ? $"✅ 已删除常用语 /{key} {usedHint}" : $"❌ 删除失败");
+    }
+
+    private async void TryRenameSnippet(string oldKey, string newKey)
+    {
+        if (_snippetStore == null) return;
+        try
+        {
+            var ok = await _snippetStore.RenameAsync(oldKey, newKey).ConfigureAwait(false);
+            AddSystemBubble(ok
+                ? $"✅ 已重命名 /{oldKey} → /{newKey}"
+                : $"❌ 找不到常用语 '/{oldKey}'");
+        }
+        catch (Exception ex)
+        {
+            AddSystemBubble($"❌ {ex.Message}");
+        }
     }
 
     private void ShowStatus()
