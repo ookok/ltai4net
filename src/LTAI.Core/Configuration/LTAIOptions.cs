@@ -144,6 +144,17 @@ public sealed class EmbeddingConfig
         }
         return string.IsNullOrWhiteSpace(Quantization) ? "auto" : Quantization.Trim().ToLowerInvariant();
     }
+
+    /// <summary>
+    /// P14.12: when <c>true</c>, the <c>PreWarmEmbeddingModelsHostedService</c>
+    /// spawns a background task on host start that downloads every
+    /// <see cref="LocalEmbedder.KnownModels"/> entry that's not already on
+    /// disk. Default <c>false</c> — users opt in via appsettings.json. The
+    /// service no-ops when <see cref="LocalEmbedder.DefaultDisabled"/> is
+    /// <c>true</c> (remote API key is in use) or when
+    /// <see cref="LocalEmbedder.BaseModelsDirectory"/> is null.
+    /// </summary>
+    public bool PreWarmAllModels { get; init; } = false;
 }
 
 /// <summary>
