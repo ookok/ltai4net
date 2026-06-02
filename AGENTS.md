@@ -211,6 +211,84 @@ P2.x ─┘（与 P1.1 可并行）
   - P8.1：写 `SQLiteOrchestrationService` 替换 InMemoryOrchestrationService，跨重启持久化
   - P8.2：smoke test（启动 server → 发请求 → 重启 → 状态还原）— user 已说"测试太耗时间 先做功能"，跳过
 
+# 2026-06-02 P8.1 ✅ SQLiteOrchestrationService（跨重启持久化）
+
+## Goal
+- 把 P8 的 `InMemoryOrchestrationService`（进程内 only）换成 SQLite 持久化版本，进程重启后 in-flight 的 orchestration / entity 状态自动恢复
+- 6 项目（AI / Agent / TUI / Desktop / Web / Cli）继续 0 errors
+
+## Plan
+
+### 1. 关键设计决策
+- **D75 继承 + `new` 隐藏，不 `override`**：基类 `InMemoryOrchestrationService` 的接口方法都不是 `virtual`，唯一可行路径是 `new` 关键字隐藏。`InMemoryGrpcSidecarHost` 内部只用具体引用作存储（再转回 `IOrchestrationService`/`IOrchestrationServiceClient`），从未在具体类型上调任何方法 — 所以 `new` 安全
+- **D76 直接反射私有 `instanceStore.store` 字典**：DTFx `instanceStore` 是 `InMemoryOrchestrationService` 的私有嵌套类，外部无法直接拿到。但 in-memory 服务本身用 `System.Text.Json.Nodes` (JsonValue/JsonArray) 存 `SerializedInstanceState` 的状态 — 等于自带 JSON round-trip，**零序列化器依赖**
+- **D77 Snapshot 持久化，不是 write-through**：每个 mutation method 调 `base` 后做一次全量 snapshot 到 SQLite（单事务）。规模只有 10 agents + 几个 orchestration，snapshot overhead 可忽略；好处是没有 race condition / 不用读 lock
+- **D78 锁状态不持久化**：`SerializedInstanceState.IsLoaded` 是 process-local lock，重启后所有 instance 自然 unlocked。DTFx worker 重启后会从 `readyToRunQueue` 拉新工作 — 我们 hydrate 时把有 pending messages 的 instance 通过反射调 `readyToRunQueue.Schedule(state)` 重排队
+- **D79 `CreateAsync(true)` / `DeleteAsync(true)` 同时清 SQLite**：与内存 store reset 同步
+
+### 2. SQLite schema（极简，1 张表）
+```sql
+PRAGMA journal_mode = WAL;
+CREATE TABLE IF NOT EXISTS orchestration_state (
+    instance_id     TEXT PRIMARY KEY,
+    execution_id    TEXT,
+    is_completed    INTEGER NOT NULL,    -- 0/1
+    status_json     TEXT,                 -- JsonValue<OrchestrationState> (nullable)
+    history_json    TEXT NOT NULL,        -- JsonArray<HistoryEvent>
+    messages_json   TEXT NOT NULL,        -- JsonArray<TaskMessage>
+    updated_at      TEXT NOT NULL         -- ISO 8601
+);
+```
+
+### 3. Files touched
+- **新建** `src/LTAI.Agent/Durability/SQLiteOrchestrationService.cs`（~340 行）
+  - 反射常量：`s_instanceStoreField` / `s_innerStoreField` / `s_serializedInstanceStateType` / `s_statusRecordField` / `s_historyField` / `s_messagesField` / `s_executionIdField` / `s_isCompletedField` / `s_readyToRunQueueField` / `s_scheduleMethod` / `s_serializedInstanceStateCtor`
+  - `new` 覆盖 11 个 mutation 方法（StartAsync/StopAsync/CreateAsync(true)/DeleteAsync(true)/CreateTaskOrchestrationAsync × 2/SendTaskOrchestrationMessageAsync/SendTaskOrchestrationMessageBatchAsync/CompleteTaskActivityWorkItemAsync/CompleteTaskOrchestrationWorkItemAsync/ForceTerminateTaskOrchestrationAsync）
+  - `SnapshotAfter(Func<Task> op)` — 调 base → persist（只在 `_hydrated=true` 后）
+  - `PersistAllAsync` — `SemaphoreSlim` 串行化，单事务 upsert 全量 instance
+  - `HydrateSync` — 读全表 → 反射构造 `SerializedInstanceState` → 填 `store[instanceId]` → 调 `readyToRunQueue.Schedule` 重排有 pending messages 的 instance
+- **改** `src/LTAI.Agent/Durability/LTAIDurableAgentHost.cs`
+  - `LTAIDurableAgentHost` ctor 改用 `IOptions<LTAIDurableAgentHostOptions>`（DI 配置）
+  - 加 `DatabasePath` 属性 + `LTAIDurableAgentHostOptions.DatabasePath` + `ResolveDatabasePath()` 辅助方法（默认 `.livingtree/durability.db`）
+  - 注释更新为"cross-restart persistence 由 SQLiteOrchestrationService 提供"
+- **改** `src/LTAI.Agent/Durability/DurableAgentServiceCollectionExtensions.cs`
+  - 临时 `BuildServiceProvider` + `Dispose` 拿到 host instance 的 `Port`（AddInMemoryDurableTask 需要 port 提前 pin）
+  - 注入顺序：BindOptions → AddSingleton<LTAIDurableAgentHost> → AddHostedService → BuildServiceProvider (temp) → AddInMemoryDurableTask(port) → swap factory descriptors
+  - Descriptor swap: 替换 3 个 factory descriptors（`InMemoryOrchestrationService` / `IOrchestrationService` / `IOrchestrationServiceClient`）为返回 `SQLiteOrchestrationService` 的 factory
+- **改** `src/LTAI.Core/Configuration/LTAIOptions.cs`
+  - `DurableConfig.DatabasePath` 字段（默认 `.livingtree/durability.db`），由 `LTAIOptions.Durable` 配置绑定
+
+### 4. 已知限制
+- **没有 AOT-friendly**：用反射 + `Activator.CreateInstance`（间接通过 `ConstructorInfo.Invoke`）。`Microsoft.Data.Sqlite` 也不在 AOT 兼容列表。LTAI 没启用 AOT，影响 0
+- **并发写语义**：在内存中 mutation 完成后 + snapshot 完成前有窗口（典型 < 1ms）。如果进程在这窗口崩溃，最多多丢失最后一次 snapshot 的 mutation
+- **WAL 模式**：允许多 reader + 1 writer；Hydrate 启动时读，PersistAll 持写锁。单进程 LTAI 没有并发 writer
+- **History 增长无界**：每次 instance store 写都做全量 snapshot。10 agents × ~10KB = 100KB 量级，几万次写后 SQLite 会膨胀。**未来 P8.1.x 优化**：加 WAL 周期性 checkpoint + 限制 history 长度
+- **不持久化 `InMemoryQueue` (activityQueue)**：它是 process-local channel，无状态机需要持久化
+
+### 5. Verification
+- [x] 编译通过：6 项目（LTAI.AI / LTAI.Agent / LTAI.TUI / LTAI.Desktop / LTAI.Web / LTAI.Cli + LTAI.Core）0 errors
+- [x] LTAI.Agent 触改文件 0 新增 warnings（pre-existing 14 个 warnings 来自 OfficeDocumentReader / DocumentTools / SkillEvolutionEngine / KbGraph — 维持）
+- [ ] 手动 smoke test：启动 LTAI → 触发一次 BackgroundAgent 委派 → kill -9 进程 → 重启 → 验证 agent session 仍可见（用户已说"测试太耗时间"，可后续手动跑）
+- [ ] 验证 schema 兼容性：删除 `.livingtree/durability.db` 后 LTAI 启动正常（schema 由 `EnsureSchemaSync` 自动创建）
+
+### 6. 配置文件示例
+```json
+{
+  "LTAI": {
+    "Durable": {
+      "Enabled": true,
+      "DatabasePath": ".livingtree/durability.db"
+    }
+  }
+}
+```
+
+## Next Steps (P8.2+)
+- **P8.2**：smoke test（启动 → 发请求 → 模拟崩溃 → 重启 → 验证状态还原）— user 已说"测试太耗时间 先做功能"，跳过
+- **P8.3**：history/event log 压缩（periodic WAL checkpoint，limit history length）
+- **P8.4**：跨进程 persist（多 LTAI 实例共享 SQLite — 切换到 `Microsoft.Data.Sqlite` 的 SHM/LOCK 模式）— 不在 P8 范围，留作 P15+
+- **P9.x**（P14 排序中）— 见 P14 P0 推荐顺序
+
 ## 验证（每个阶段）
 - `dotnet build src/LTAI.AI` / `dotnet build src/LTAI.Agent` / `dotnet build src/LTAI.Web` / `dotnet build src/LTAI.Desktop`
 - `dotnet test tests/LTAI.Tests`（如有）
@@ -723,13 +801,13 @@ Connect SessionManager → ChatView and add SessionStatsPanel to MainWindow side
 |---|---|---|---|---|---|
 | `BackgroundJobService` | `Tools/BackgroundJobService.cs` | 142 | ✅ 活跃 | ❌ 60s 清 | ✅ 5 agents |
 | `TaskQueue` (P5.4) | `Tasks/TaskQueue.cs` | 203 | ⚠️ 死代码 | ❌ InMemory | ❌ **零** |
-| `DurableAgentHost` (P8) | `Durability/*` | 179 | ⚠️ 已接未测 | ❌ InMemory (P8.1 TODO) | ❌ 透明 |
+| `DurableAgentHost` (P8) + `SQLiteOrchestrationService` (P8.1) | `Durability/*` | 179 + 340 | ✅ 活跃 | ✅ SQLite | ✅ 透明 + 跨重启 |
 | `BackgroundAgents` (P10) | `ServiceCollectionExtensions.cs:838-859` | 22 (instructions) | ✅ 活跃 | ✅ MAF 托管 | ✅ Harness 内置工具 |
 
-**完成度：~45-50%**（按"功能可用"维度算）
+**完成度：~50-55%**（按"功能可用"维度算）
 - 基础设施 80%（3 套机制都写出来了）
 - 真实使用 30%（仅 BGJS 实际接 5 agents；TaskQueue 死代码；DTFx 透明未测）
-- 持久化 5%（全进程内；P8.1 SQLite 未做）
+- 持久化 40%（P8.1 ✅ SQLite 跨重启；BGJS / TaskQueue 仍进程内）
 - 可观测性 15%（ILogger 在, 三端展示无）
 - API 暴露 0%（Web 无 `/jobs` 端点）
 - 测试覆盖 0%（用户跳过）

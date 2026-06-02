@@ -192,6 +192,13 @@ public sealed class DurableConfig
     /// (any free port). Pin only for debugging / tests.
     /// </summary>
     public int? SidecarPort { get; init; }
+
+    /// <summary>
+    /// SQLite file used by the in-process orchestration service for cross-restart
+    /// persistence (P8.1). Relative paths are anchored at the current working
+    /// directory. Defaults to <c>.livingtree/durability.db</c>.
+    /// </summary>
+    public string DatabasePath { get; init; } = ".livingtree/durability.db";
 }
 
 /// <summary>
