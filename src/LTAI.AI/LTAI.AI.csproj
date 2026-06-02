@@ -24,35 +24,40 @@
     <ProjectReference Include="..\LTAI.Core\LTAI.Core.csproj" />
   </ItemGroup>
 
-  <!-- P13.6: 单文件原则 — MiniLM 默认只下 INT8 (23MB), BGE 无量化版本下 FP32.
-       用户主动设置 LTAI:Embedding:Quantization="fp32" 时再补下 FP32 (90MB).
-       避免同时保留两份模型文件造成磁盘碎片化. -->
+  <!-- P14.1: 全 3 模型走 Xenova 通用 INT8 (~22-33MB), 代替之前 MiniLM AVX-512+VNNI
+       (无 INT8 上游版) + BGE-zh/en FP32 (~95MB). 单文件原则不变.
+       用户主动设置 LTAI:Embedding:Quantization="fp32" 时再补下 FP32 (~90MB).
+       3 模型合计: 213MB (P13.6) → 78MB (P14.1) = -135MB (-63%). -->
 
-  <!-- MiniLM: 只下 INT8 (23MB). FP32 不在 build target 下, 由用户运行时主动触发. -->
+  <!-- MiniLM: Xenova 通用 INT8 (22MB) — 不再走 AVX-512+VNNI 专版 (老 CPU 不可用).
+       P14.1 migration: 因 model.int8.onnx 文件名相同, 删除旧文件以触发 Xenova 重下.
+       只在 INT8 不存在或 vocab 不存在时跑 (避免每次 build 重复删下). -->
   <Target Name="DownloadEmbeddingModelMiniLM" BeforeTargets="Build"
           Condition="!Exists('$(MSBuildThisFileDirectory)../../models/minilm-l6-v2/model.int8.onnx') OR !Exists('$(MSBuildThisFileDirectory)../../models/minilm-l6-v2/vocab.txt')">
     <MakeDir Directories="$(MSBuildThisFileDirectory)../../models/minilm-l6-v2/" />
-    <Exec Command="curl -sL --connect-timeout 10 --max-time 300 &quot;https://hf-mirror.com/sentence-transformers/all-MiniLM-L6-v2/resolve/main/onnx/model_qint8_avx512_vnni.onnx&quot; -o &quot;$(MSBuildThisFileDirectory)../../models/minilm-l6-v2/model.int8.onnx&quot;" IgnoreExitCode="true" />
-    <Exec Command="curl -sL --connect-timeout 10 --max-time 60 &quot;https://hf-mirror.com/sentence-transformers/all-MiniLM-L6-v2/resolve/main/vocab.txt&quot; -o &quot;$(MSBuildThisFileDirectory)../../models/minilm-l6-v2/vocab.txt&quot;" IgnoreExitCode="true" />
-    <Message Text="all-MiniLM-L6-v2 INT8 downloaded ✅ models/minilm-l6-v2/model.int8.onnx (23MB)" Importance="High" Condition="Exists('$(MSBuildThisFileDirectory)../../models/minilm-l6-v2/model.int8.onnx')" />
+    <!-- P14.1: delete stale AVX-512+VNNI variant if present (same filename, different content) -->
+    <Delete Files="$(MSBuildThisFileDirectory)../../models/minilm-l6-v2/model.int8.onnx" Condition="Exists('$(MSBuildThisFileDirectory)../../models/minilm-l6-v2/model.int8.onnx')" />
+    <Exec Command="curl -sL --connect-timeout 10 --max-time 300 &quot;https://hf-mirror.com/Xenova/all-MiniLM-L6-v2/resolve/main/onnx/model_int8.onnx&quot; -o &quot;$(MSBuildThisFileDirectory)../../models/minilm-l6-v2/model.int8.onnx&quot;" IgnoreExitCode="true" />
+    <Exec Command="curl -sL --connect-timeout 10 --max-time 60 &quot;https://hf-mirror.com/Xenova/all-MiniLM-L6-v2/resolve/main/vocab.txt&quot; -o &quot;$(MSBuildThisFileDirectory)../../models/minilm-l6-v2/vocab.txt&quot;" IgnoreExitCode="true" />
+    <Message Text="all-MiniLM-L6-v2 Xenova INT8 downloaded ✅ models/minilm-l6-v2/model.int8.onnx (22MB)" Importance="High" Condition="Exists('$(MSBuildThisFileDirectory)../../models/minilm-l6-v2/model.int8.onnx')" />
   </Target>
 
-  <!-- BGE-small-zh: 无 INT8 上游版本, 下 FP32 -->
+  <!-- BGE-small-zh: Xenova INT8 (23MB) — 上游 BAAI 无 INT8 版本 -->
   <Target Name="DownloadEmbeddingModelBgeSmallZh" BeforeTargets="Build"
-          Condition="!Exists('$(MSBuildThisFileDirectory)../../models/bge-small-zh/model.onnx')">
+          Condition="!Exists('$(MSBuildThisFileDirectory)../../models/bge-small-zh/model.int8.onnx') OR !Exists('$(MSBuildThisFileDirectory)../../models/bge-small-zh/vocab.txt')">
     <MakeDir Directories="$(MSBuildThisFileDirectory)../../models/bge-small-zh/" />
-    <Exec Command="curl -sL --connect-timeout 10 --max-time 300 &quot;https://hf-mirror.com/BAAI/bge-small-zh-v1.5/resolve/main/onnx/model.onnx&quot; -o &quot;$(MSBuildThisFileDirectory)../../models/bge-small-zh/model.onnx&quot;" IgnoreExitCode="true" />
-    <Exec Command="curl -sL --connect-timeout 10 --max-time 60 &quot;https://hf-mirror.com/BAAI/bge-small-zh-v1.5/resolve/main/vocab.txt&quot; -o &quot;$(MSBuildThisFileDirectory)../../models/bge-small-zh/vocab.txt&quot;" IgnoreExitCode="true" />
-    <Message Text="BGE-small-zh FP32 downloaded ✅ models/bge-small-zh/ (~95MB)" Importance="High" Condition="Exists('$(MSBuildThisFileDirectory)../../models/bge-small-zh/model.onnx')" />
+    <Exec Command="curl -sL --connect-timeout 10 --max-time 300 &quot;https://hf-mirror.com/Xenova/bge-small-zh-v1.5/resolve/main/onnx/model_int8.onnx&quot; -o &quot;$(MSBuildThisFileDirectory)../../models/bge-small-zh/model.int8.onnx&quot;" IgnoreExitCode="true" />
+    <Exec Command="curl -sL --connect-timeout 10 --max-time 60 &quot;https://hf-mirror.com/Xenova/bge-small-zh-v1.5/resolve/main/vocab.txt&quot; -o &quot;$(MSBuildThisFileDirectory)../../models/bge-small-zh/vocab.txt&quot;" IgnoreExitCode="true" />
+    <Message Text="BGE-small-zh Xenova INT8 downloaded ✅ models/bge-small-zh/model.int8.onnx (23MB)" Importance="High" Condition="Exists('$(MSBuildThisFileDirectory)../../models/bge-small-zh/model.int8.onnx')" />
   </Target>
 
-  <!-- BGE-small-en: 无 INT8 上游版本, 下 FP32 -->
+  <!-- BGE-small-en: Xenova INT8 (32MB) — 上游 BAAI 无 INT8 版本 -->
   <Target Name="DownloadEmbeddingModelBgeSmallEn" BeforeTargets="Build"
-          Condition="!Exists('$(MSBuildThisFileDirectory)../../models/bge-small-en/model.onnx')">
+          Condition="!Exists('$(MSBuildThisFileDirectory)../../models/bge-small-en/model.int8.onnx') OR !Exists('$(MSBuildThisFileDirectory)../../models/bge-small-en/vocab.txt')">
     <MakeDir Directories="$(MSBuildThisFileDirectory)../../models/bge-small-en/" />
-    <Exec Command="curl -sL --connect-timeout 10 --max-time 300 &quot;https://hf-mirror.com/BAAI/bge-small-en-v1.5/resolve/main/onnx/model.onnx&quot; -o &quot;$(MSBuildThisFileDirectory)../../models/bge-small-en/model.onnx&quot;" IgnoreExitCode="true" />
-    <Exec Command="curl -sL --connect-timeout 10 --max-time 60 &quot;https://hf-mirror.com/BAAI/bge-small-en-v1.5/resolve/main/vocab.txt&quot; -o &quot;$(MSBuildThisFileDirectory)../../models/bge-small-en/vocab.txt&quot;" IgnoreExitCode="true" />
-    <Message Text="BGE-small-en FP32 downloaded ✅ models/bge-small-en/ (~95MB)" Importance="High" Condition="Exists('$(MSBuildThisFileDirectory)../../models/bge-small-en/model.onnx')" />
+    <Exec Command="curl -sL --connect-timeout 10 --max-time 300 &quot;https://hf-mirror.com/Xenova/bge-small-en-v1.5/resolve/main/onnx/model_int8.onnx&quot; -o &quot;$(MSBuildThisFileDirectory)../../models/bge-small-en/model.int8.onnx&quot;" IgnoreExitCode="true" />
+    <Exec Command="curl -sL --connect-timeout 10 --max-time 60 &quot;https://hf-mirror.com/Xenova/bge-small-en-v1.5/resolve/main/vocab.txt&quot; -o &quot;$(MSBuildThisFileDirectory)../../models/bge-small-en/vocab.txt&quot;" IgnoreExitCode="true" />
+    <Message Text="BGE-small-en Xenova INT8 downloaded ✅ models/bge-small-en/model.int8.onnx (32MB)" Importance="High" Condition="Exists('$(MSBuildThisFileDirectory)../../models/bge-small-en/model.int8.onnx')" />
   </Target>
 
   <!-- 发布时嵌入模型文件到输出目录 (按现有文件复制, 不强行补下) -->
@@ -64,29 +69,29 @@
     <Copy SourceFiles="$(MSBuildThisFileDirectory)../../models/minilm-l6-v2/vocab.txt"
           DestinationFolder="$(PublishDir)models/minilm-l6-v2/"
           SkipUnchangedFiles="true" />
-    <Message Text="MiniLM INT8 embedded in publish output ✅ (23MB)" Importance="High" />
+    <Message Text="MiniLM INT8 embedded in publish output ✅ (22MB)" Importance="High" />
   </Target>
 
   <Target Name="PublishEmbeddingModelBgeZh" AfterTargets="Publish"
-          Condition="Exists('$(MSBuildThisFileDirectory)../../models/bge-small-zh/model.onnx')">
-    <Copy SourceFiles="$(MSBuildThisFileDirectory)../../models/bge-small-zh/model.onnx"
+          Condition="Exists('$(MSBuildThisFileDirectory)../../models/bge-small-zh/model.int8.onnx')">
+    <Copy SourceFiles="$(MSBuildThisFileDirectory)../../models/bge-small-zh/model.int8.onnx"
           DestinationFolder="$(PublishDir)models/bge-small-zh/"
           SkipUnchangedFiles="true" />
     <Copy SourceFiles="$(MSBuildThisFileDirectory)../../models/bge-small-zh/vocab.txt"
           DestinationFolder="$(PublishDir)models/bge-small-zh/"
           SkipUnchangedFiles="true" />
-    <Message Text="BGE-small-zh FP32 embedded in publish output ✅ (~95MB)" Importance="High" />
+    <Message Text="BGE-small-zh INT8 embedded in publish output ✅ (23MB)" Importance="High" />
   </Target>
 
   <Target Name="PublishEmbeddingModelBgeEn" AfterTargets="Publish"
-          Condition="Exists('$(MSBuildThisFileDirectory)../../models/bge-small-en/model.onnx')">
-    <Copy SourceFiles="$(MSBuildThisFileDirectory)../../models/bge-small-en/model.onnx"
+          Condition="Exists('$(MSBuildThisFileDirectory)../../models/bge-small-en/model.int8.onnx')">
+    <Copy SourceFiles="$(MSBuildThisFileDirectory)../../models/bge-small-en/model.int8.onnx"
           DestinationFolder="$(PublishDir)models/bge-small-en/"
           SkipUnchangedFiles="true" />
     <Copy SourceFiles="$(MSBuildThisFileDirectory)../../models/bge-small-en/vocab.txt"
           DestinationFolder="$(PublishDir)models/bge-small-en/"
           SkipUnchangedFiles="true" />
-    <Message Text="BGE-small-en FP32 embedded in publish output ✅ (~95MB)" Importance="High" />
+    <Message Text="BGE-small-en INT8 embedded in publish output ✅ (32MB)" Importance="High" />
   </Target>
 
 </Project>

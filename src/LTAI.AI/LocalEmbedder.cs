@@ -54,13 +54,20 @@ public sealed class LocalEmbedder : IDisposable
 
     /// <summary>Known ONNX models with download URLs.</summary>
     /// <remarks>
-    /// P13.1: <see cref="ModelInfo.QuantizedModelUrl"/> points to an INT8/UINT8
-    /// quantized variant on HuggingFace when available. MiniLM ships with
-    /// multiple quantized versions; BGE does not (yet) so the field is null
-    /// and the local model stays at FP32. Quantized models are ~4× smaller on
-    /// disk + RAM and ~2-3× faster inference on modern CPUs (AVX2/AVX-512 with
-    /// VNNI). When <see cref="EmbeddingOptions.Quantization"/> is <c>auto</c>
-    /// (default) and a quantized file is present, the loader prefers it.
+    /// P14.1: <see cref="ModelInfo.QuantizedModelUrl"/> now points to the
+    /// <b>Xenova</b> <c>model_int8.onnx</c> for all 3 models (universal
+    /// INT8 — works on any CPU, ~2-3× faster inference than FP32, ~4× smaller
+    /// on disk and RAM). Xenova is Transformers.js's maintained distribution
+    /// of ONNX-converted sentence-transformers; we use it instead of the
+    /// upstream BAAI/sentence-transformers repos because:
+    /// <list type="bullet">
+    ///   <item><description>Universal INT8 (no AVX-512+VNNI requirement like
+    ///     <c>model_qint8_avx512_vnni.onnx</c> which crashed on older CPUs)</description></item>
+    ///   <item><description>BGE-zh/en now have a quantized export (was missing
+    ///     upstream → 95 MB FP32 stays around without INT8 option)</description></item>
+    /// </list>
+    /// When <see cref="EmbeddingOptions.Quantization"/> is <c>auto</c> (default)
+    /// and a quantized file is present, the loader prefers it.
     /// </remarks>
     public static readonly Dictionary<string, ModelInfo> KnownModels = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -68,8 +75,8 @@ public sealed class LocalEmbedder : IDisposable
             DisplayName: "all-MiniLM-L6-v2",
             Description: "384维 英文通用 (推荐)",
             ModelUrl: "https://hf-mirror.com/sentence-transformers/all-MiniLM-L6-v2/resolve/main/onnx/model.onnx",
-            VocabUrl: "https://hf-mirror.com/sentence-transformers/all-MiniLM-L6-v2/resolve/main/vocab.txt",
-            QuantizedModelUrl: "https://hf-mirror.com/sentence-transformers/all-MiniLM-L6-v2/resolve/main/onnx/model_qint8_avx512_vnni.onnx",
+            VocabUrl: "https://hf-mirror.com/Xenova/all-MiniLM-L6-v2/resolve/main/vocab.txt",
+            QuantizedModelUrl: "https://hf-mirror.com/Xenova/all-MiniLM-L6-v2/resolve/main/onnx/model_int8.onnx",
             QuantizedFileName: "model.int8.onnx",
             Dimension: 384
         ),
@@ -77,18 +84,18 @@ public sealed class LocalEmbedder : IDisposable
             DisplayName: "BAAI/bge-small-zh-v1.5",
             Description: "384维 中文通用",
             ModelUrl: "https://hf-mirror.com/BAAI/bge-small-zh-v1.5/resolve/main/onnx/model.onnx",
-            VocabUrl: "https://hf-mirror.com/BAAI/bge-small-zh-v1.5/resolve/main/vocab.txt",
-            QuantizedModelUrl: null,
-            QuantizedFileName: null,
+            VocabUrl: "https://hf-mirror.com/Xenova/bge-small-zh-v1.5/resolve/main/vocab.txt",
+            QuantizedModelUrl: "https://hf-mirror.com/Xenova/bge-small-zh-v1.5/resolve/main/onnx/model_int8.onnx",
+            QuantizedFileName: "model.int8.onnx",
             Dimension: 384
         ),
         ["bge-small-en"] = new(
             DisplayName: "BAAI/bge-small-en-v1.5",
             Description: "384维 英文通用",
             ModelUrl: "https://hf-mirror.com/BAAI/bge-small-en-v1.5/resolve/main/onnx/model.onnx",
-            VocabUrl: "https://hf-mirror.com/BAAI/bge-small-en-v1.5/resolve/main/vocab.txt",
-            QuantizedModelUrl: null,
-            QuantizedFileName: null,
+            VocabUrl: "https://hf-mirror.com/Xenova/bge-small-en-v1.5/resolve/main/vocab.txt",
+            QuantizedModelUrl: "https://hf-mirror.com/Xenova/bge-small-en-v1.5/resolve/main/onnx/model_int8.onnx",
+            QuantizedFileName: "model.int8.onnx",
             Dimension: 384
         ),
     };
@@ -989,8 +996,8 @@ public sealed class LocalEmbedder : IDisposable
     /// <param name="Description">One-line description (e.g. "384维 英文通用").</param>
     /// <param name="ModelUrl">URL of the FP32 model file on HuggingFace mirror.</param>
     /// <param name="VocabUrl">URL of the vocab.txt tokenizer file.</param>
-    /// <param name="QuantizedModelUrl">P13.1: URL of an INT8/UINT8 quantized
-    ///   variant when available (e.g. <c>model_qint8_avx512_vnni.onnx</c>).
+    /// <param name="QuantizedModelUrl">P14.1: URL of the Xenova INT8
+    ///   (<c>model_int8.onnx</c>) — universal, no AVX-512+VNNI requirement.
     ///   Null if the upstream model has no quantized export.</param>
     /// <param name="QuantizedFileName">P13.1: local filename to save the
     ///   quantized model as (e.g. <c>model.int8.onnx</c>). Null when no
