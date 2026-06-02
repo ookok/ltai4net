@@ -588,6 +588,14 @@ public static class ServiceCollectionExtensions
             new ToolEmbeddingCache(
                 sp.GetRequiredService<EmbeddingClient>(),
                 sp.GetService<ILogger<ToolEmbeddingCache>>() ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<ToolEmbeddingCache>.Instance));
+
+        // P14.12: opt-in background pre-warm of all known embedding models.
+        // Gated by LTAI:Embedding:PreWarmAllModels (default false); no-ops when
+        // remote API key is in use (DefaultDisabled) or no models directory.
+        services.AddHostedService(sp => new PreWarmEmbeddingModelsHostedService(
+            sp.GetRequiredService<IOptions<LTAIOptions>>(),
+            sp.GetService<ILogger<PreWarmEmbeddingModelsHostedService>>() ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<PreWarmEmbeddingModelsHostedService>.Instance,
+            sp.GetService<IHttpClientFactory>()));
         return services;
     }
 }

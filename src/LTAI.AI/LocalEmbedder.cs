@@ -927,8 +927,14 @@ public sealed class LocalEmbedder : IDisposable
     ///   <item><description><c>fp32</c>: downloads only the original FP32 <c>model.onnx</c>.</description></item>
     /// </list>
     /// Vocab.txt is always downloaded (tokenizer, model-architecture specific, ~500KB).
+    /// P14.12: also exposed as a static method for background pre-warm services
+    /// that need to download without instantiating a LocalEmbedder.
     /// </remarks>
     public async Task<bool> DownloadModelAsync(string name, HttpClient? httpClient = null)
+        => await DownloadModelStaticAsync(name, httpClient).ConfigureAwait(false);
+
+    /// <summary>P14.12: same as <see cref="DownloadModelAsync"/> but static.</summary>
+    public static async Task<bool> DownloadModelStaticAsync(string name, HttpClient? httpClient = null)
     {
         if (!KnownModels.TryGetValue(name, out var info)) return false;
 
