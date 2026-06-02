@@ -71,7 +71,7 @@ public static class SlashCommands
         new("retry",   "聊天",  "重发上一条消息", "重试,重发"),
         new("compact", "聊天",  "压缩汇总历史消息", "压缩,汇总"),
         new("config",  "设置",  "配置 LLM: provider|apikey|model|status", "", "provider|apikey|model|l1|l2"),
-        new("model",   "设置",  "管理 ONNX 向量模型: list|download|delete|switch", "", "list|download <id>|delete <id>|switch <id>"),
+        new("model",   "设置",  "管理 ONNX 向量模型: list|download|delete|switch|cleanup|info|quant", "", "list|download <id>|delete <id>|switch <id>|cleanup [name]|info|quant <fp32|int8|auto>"),
         new("status",  "信息",  "显示当前配置和统计", "状态,统计"),
         new("monitor", "信息",  "实时仪表盘 — Provider 状态/延迟/成本", "监控,仪表盘"),
         new("jobs",    "信息",  "后台作业: list|watch <id>|cancel <id>|show <id>", "job,任务",
@@ -323,7 +323,10 @@ public static class SlashCommands
             "switch" => HandleModelSwitch(embedder, subArgs),
             "download" => HandleModelDownload(embedder, subArgs),
             "delete" => HandleModelDelete(embedder, subArgs),
-            _ => ("用法: /model list|download <id>|delete <id>|switch <id>", true),
+            "cleanup" => HandleModelCleanup(embedder, subArgs),
+            "info" => HandleModelInfo(embedder),
+            "quant" => HandleModelQuant(embedder, subArgs),
+            _ => ("用法: /model list|download <id>|delete <id>|switch <id>|cleanup [name]|info|quant <fp32|int8|auto>", true),
         };
     }
 
@@ -401,6 +404,227 @@ public static class SlashCommands
             return ($"已删除模型 '{name}'", true);
 
         return ($"模型 '{name}' 不存在或已删除", true);
+    }
+
+    // ═══════════════════════════════════════════
+    //  P14.3: /model cleanup [name] — delete stale on-disk variant
+    // ═══════════════════════════════════════════
+
+    private static (string, bool) HandleModelCleanup(LTAI.AI.LocalEmbedder embedder, string arg)
+    {
+        var baseDir = LTAI.AI.LocalEmbedder.BaseModelsDirectory;
+        if (baseDir == null) return ("Models 目录未初始化", true);
+
+        var names = string.IsNullOrWhiteSpace(arg)
+            ? LTAI.AI.LocalEmbedder.ListAvailableModels()
+                .Where(m => m.Downloaded || m.QuantizedDownloaded)
+                .Select(m => m.Id).ToList()
+            : new List<string> { arg.Trim() };
+
+        if (names.Count == 0) return ("没有已下载的模型可清理", true);
+
+        int totalFiles = 0;
+        long totalBytes = 0;
+        var details = new List<string>();
+        var currentPref = (LTAI.AI.LocalEmbedder.Options.Quantization ?? "auto").ToLowerInvariant();
+
+        foreach (var name in names)
+        {
+            if (!LTAI.AI.LocalEmbedder.KnownModels.ContainsKey(name))
+            {
+                details.Add($"  [red]✗[/] {name}: 未知模型");
+                continue;
+            }
+            var info = LTAI.AI.LocalEmbedder.KnownModels[name];
+            var modelDir = Path.Combine(baseDir, name);
+            if (!Directory.Exists(modelDir))
+            {
+                details.Add($"  [grey]–[/] {name}: 未下载，跳过");
+                continue;
+            }
+
+            bool targetQuant = currentPref switch
+            {
+                "fp32" => false,
+                "int8" => true,
+                _ => string.Equals(embedder.CurrentModelName, name, StringComparison.OrdinalIgnoreCase)
+                        ? embedder.UsingQuantizedModel
+                        : true,
+            };
+
+            long bytesRemoved = 0;
+            int filesRemoved = 0;
+            if (targetQuant)
+            {
+                var fp32 = Path.Combine(modelDir, "model.onnx");
+                if (File.Exists(fp32) && new FileInfo(fp32).Length > 1024)
+                {
+                    bytesRemoved += new FileInfo(fp32).Length;
+                    try { File.Delete(fp32); filesRemoved++; } catch { }
+                }
+            }
+            else
+            {
+                if (info.QuantizedFileName != null)
+                {
+                    var q = Path.Combine(modelDir, info.QuantizedFileName);
+                    if (File.Exists(q))
+                    {
+                        bytesRemoved += new FileInfo(q).Length;
+                        try { File.Delete(q); filesRemoved++; } catch { }
+                    }
+                }
+            }
+            totalFiles += filesRemoved;
+            totalBytes += bytesRemoved;
+            var kept = targetQuant ? "INT8" : "FP32";
+            if (filesRemoved > 0)
+                details.Add($"  [green]✓[/] {name}: 释放 {FormatBytes(bytesRemoved)}, 保留 {kept}");
+            else
+                details.Add($"  [grey]–[/] {name}: 已单变种（保留 {kept}）");
+        }
+
+        var header = "[bold yellow]模型清理[/]\n";
+        if (totalFiles > 0)
+            header += $"  释放 [green]{FormatBytes(totalBytes)}[/]（{totalFiles} 文件）\n\n";
+        else
+            header += "  没有可清理的旧变种\n\n";
+        return (header + string.Join("\n", details), true);
+    }
+
+    // ═══════════════════════════════════════════
+    //  P14.3: /model info — detailed per-model table
+    // ═══════════════════════════════════════════
+
+    private static (string, bool) HandleModelInfo(LTAI.AI.LocalEmbedder embedder)
+    {
+        var baseDir = LTAI.AI.LocalEmbedder.BaseModelsDirectory;
+        var models = LTAI.AI.LocalEmbedder.ListAvailableModels();
+        var lines = new List<string> { "[bold yellow]ONNX Embedder 详情[/]\n" };
+
+        lines.Add($"  偏好 quant: [cyan]{LTAI.AI.LocalEmbedder.Options.Quantization}[/]  " +
+                  $"GPU: [cyan]{LTAI.AI.LocalEmbedder.Options.Gpu}[/]  " +
+                  $"DeviceId: [cyan]{LTAI.AI.LocalEmbedder.Options.DeviceId}[/]");
+        if (LTAI.AI.LocalEmbedder.DefaultDisabled)
+            lines.Add("  状态: [grey]已禁用（远程 API 接管）[/]");
+        else if (embedder.Available)
+        {
+            var ep = embedder.ActiveExecutionProvider ?? "?";
+            var epColor = ep == "CPU" ? "grey" : "green";
+            var quant = embedder.UsingQuantizedModel ? "INT8" : "FP32";
+            var quantColor = quant == "INT8" ? "green" : "yellow";
+            lines.Add($"  当前: [cyan]{embedder.CurrentModelName}[/]  " +
+                      $"EP: [{epColor}]{ep}[/]  " +
+                      $"quant: [{quantColor}]{quant}[/]  " +
+                      $"Dim: [cyan]{embedder.Dim}[/]");
+        }
+        else
+            lines.Add("  状态: [yellow]未加载（运行 /model list|download）[/]");
+        lines.Add($"  目录: [grey]{baseDir ?? "(not set)"}[/]\n");
+
+        foreach (var m in models)
+        {
+            var isCurrent = string.Equals(m.Id, embedder.CurrentModelName, StringComparison.OrdinalIgnoreCase);
+            var marker = isCurrent ? "[green]●[/]" : " ";
+            lines.Add($"  {marker} [cyan]{m.Id,-16}[/]  {m.DisplayName}");
+            lines.Add($"    [grey]{m.Description}[/]");
+
+            var modelDir = baseDir != null ? Path.Combine(baseDir, m.Id) : null;
+            if (modelDir != null && Directory.Exists(modelDir))
+            {
+                var fp32File = Path.Combine(modelDir, "model.onnx");
+                long fp32Size = 0;
+                var fp32Valid = false;
+                if (File.Exists(fp32File))
+                {
+                    fp32Size = new FileInfo(fp32File).Length;
+                    fp32Valid = fp32Size > 1024;
+                }
+                var fp32Mark = fp32Valid ? "[green]●[/]" : "[grey]○[/]";
+                lines.Add($"    FP32: {fp32Mark} {(fp32Valid ? FormatBytes(fp32Size) : "—")}");
+
+                var qInfo = LTAI.AI.LocalEmbedder.KnownModels[m.Id];
+                if (qInfo.QuantizedFileName != null)
+                {
+                    var qFile = Path.Combine(modelDir, qInfo.QuantizedFileName);
+                    var qValid = File.Exists(qFile) && new FileInfo(qFile).Length > 1024;
+                    var qMark = qValid ? "[green]●[/]" : "[grey]○[/]";
+                    lines.Add($"    INT8: {qMark} {(qValid ? FormatBytes(new FileInfo(qFile).Length) : "—")}");
+                }
+                else
+                    lines.Add("    INT8: [grey](无上游量化版)[/]");
+
+                var vocab = Path.Combine(modelDir, "vocab.txt");
+                if (File.Exists(vocab))
+                    lines.Add($"    Vocab: [green]●[/] {FormatBytes(new FileInfo(vocab).Length)}");
+                else
+                    lines.Add("    Vocab: [red]○[/] —");
+            }
+            else
+                lines.Add("    [yellow](未下载)[/]");
+            lines.Add("");
+        }
+        return (string.Join("\n", lines), true);
+    }
+
+    // ═══════════════════════════════════════════
+    //  P14.3: /model quant <fp32|int8|auto> — toggle global quantization preference
+    // ═══════════════════════════════════════════
+
+    private static (string, bool) HandleModelQuant(LTAI.AI.LocalEmbedder embedder, string arg)
+    {
+        if (string.IsNullOrWhiteSpace(arg))
+            return ($"当前 quant 偏好: [cyan]{LTAI.AI.LocalEmbedder.Options.Quantization}[/]\n" +
+                    $"用法: /model quant fp32|int8|auto", true);
+
+        var val = arg.Trim().ToLowerInvariant();
+        if (val != "fp32" && val != "int8" && val != "auto")
+            return ($"未知 quant 偏好: '{arg}'。可用: fp32|int8|auto", true);
+
+        var oldVal = LTAI.AI.LocalEmbedder.Options.Quantization;
+        LTAI.AI.LocalEmbedder.Options.Quantization = val;
+
+        var msg = $"Quant 偏好: [grey]{oldVal}[/] → [green]{val}[/]\n";
+
+        if (LTAI.AI.LocalEmbedder.DefaultDisabled)
+        {
+            msg += "（embedder 已禁用，下次启动生效）";
+            return (msg, true);
+        }
+
+        if (embedder.CurrentModelName != null)
+        {
+            try
+            {
+                if (embedder.SwitchModel(embedder.CurrentModelName))
+                {
+                    var newQuant = embedder.UsingQuantizedModel ? "INT8" : "FP32";
+                    var qColor = newQuant == "INT8" ? "green" : "yellow";
+                    msg += $"已重新加载 [cyan]{embedder.CurrentModelName}[/] (使用 [{qColor}]{newQuant}[/])";
+                }
+                else
+                {
+                    msg += $"[yellow]⚠[/] 重新加载失败 — 目标 {val} 的变种不存在。\n" +
+                            $"    提示: /model info 看磁盘状态，/model download {embedder.CurrentModelName} 重下";
+                }
+            }
+            catch (Exception ex)
+            {
+                msg += $"[yellow]⚠[/] 重新加载异常: {ex.Message}";
+            }
+        }
+        else
+        {
+            msg += "（无活动模型，下次启动生效）";
+        }
+        return (msg, true);
+    }
+
+    private static string FormatBytes(long bytes)
+    {
+        if (bytes >= 1024L * 1024) return $"{bytes / 1024.0 / 1024.0:F1} MB";
+        if (bytes >= 1024L) return $"{bytes / 1024.0:F1} KB";
+        return $"{bytes} B";
     }
 
     // ═══════════════════════════════════════════
