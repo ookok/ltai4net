@@ -41,6 +41,12 @@ public sealed class ToolEmbeddingCache
 
     public string FilePath => _filePath;
     public int CachedEntryCount => _store.Count;
+    public long CacheHits => Interlocked.Read(ref _hits);
+    public long CacheMisses => Interlocked.Read(ref _misses);
+    public long CacheLookups => CacheHits + CacheMisses;
+    public double HitRate => CacheLookups == 0 ? 0d : (double)CacheHits / CacheLookups;
+    private long _hits;
+    private long _misses;
 
     public async Task<IReadOnlyDictionary<string, float[]>> GetOrComputeAllAsync(
         IReadOnlyList<(string Key, string Description)> items,
@@ -64,10 +70,12 @@ public sealed class ToolEmbeddingCache
                 string.Equals(entry.Fingerprint, fp.Hash, StringComparison.Ordinal))
             {
                 result[key] = entry.Vector;
+                Interlocked.Increment(ref _hits);
             }
             else
             {
                 missing.Add((key, fp.Hash, fp.Description));
+                Interlocked.Increment(ref _misses);
             }
         }
 

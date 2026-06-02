@@ -20,6 +20,7 @@ public sealed class TuiApp
     private readonly DevUISpanCollector _spanCollector;
     private readonly LTAI.Agent.Workflows.YAMLWorkflowRegistry? _workflows;
     private readonly LTAI.AI.LocalEmbedder? _embedder;
+    private readonly LTAI.AI.ToolEmbeddingCache? _embedCache;
 
     private TuiView _currentView = TuiView.Chat;
     private bool _running = true;
@@ -32,7 +33,8 @@ public sealed class TuiApp
         LTAIDevUIService devUi,
         DevUISpanCollector spanCollector,
         LTAI.Agent.Workflows.YAMLWorkflowRegistry? workflows = null,
-        LTAI.AI.LocalEmbedder? embedder = null)
+        LTAI.AI.LocalEmbedder? embedder = null,
+        LTAI.AI.ToolEmbeddingCache? embedCache = null)
     {
         _chat = chat;
         _llmConfig = llmConfig;
@@ -43,6 +45,7 @@ public sealed class TuiApp
         _spanCollector = spanCollector;
         _workflows = workflows;
         _embedder = embedder;
+        _embedCache = embedCache;
     }
 
     public async Task RunAsync()
@@ -161,7 +164,7 @@ public sealed class TuiApp
 
     private void ShowDashboard()
     {
-        DevUIDashboardView.Render(_devUi, _spanCollector, UsageTracker.Default, _workflows, _embedder);
+        DevUIDashboardView.Render(_devUi, _spanCollector, UsageTracker.Default, _workflows, _embedder, _embedCache);
     }
 
 }

@@ -102,7 +102,9 @@ public static class Program
             Directory.GetCurrentDirectory(),
             sp.GetRequiredService<LTAI.Agent.DevUI.LTAIDevUIService>(),
             sp.GetRequiredService<LTAI.TUI.DevUI.DevUISpanCollector>(),
-            sp.GetService<LTAI.Agent.Workflows.YAMLWorkflowRegistry>());
+            sp.GetService<LTAI.Agent.Workflows.YAMLWorkflowRegistry>(),
+            sp.GetService<LTAI.AI.LocalEmbedder>(),
+            sp.GetService<LTAI.AI.ToolEmbeddingCache>());
         try { Console.Clear(); } catch { /* non-interactive terminal */ }
         await app.RunAsync().ConfigureAwait(false);
     }
