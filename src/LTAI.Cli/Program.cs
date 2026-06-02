@@ -30,6 +30,8 @@ partial class Program
             "textpad" => HandleTextPad(args[1..]),
             "dashboard" or "dash" => HandleDashboard(),
             "health" or "--health" or "hc" => await HandleHealth().ConfigureAwait(false),
+            "agents" => HandleAgents(args[1..]),
+            "mcp-server" or "mcp" => await LTAI.CLI.McpServer.RunAsync(Directory.GetCurrentDirectory()).ConfigureAwait(false),
             "version" or "--version" or "-v" => ShowVersion(),
             _ => ShowHelp()
         };
@@ -49,6 +51,10 @@ partial class Program
         table.AddRow("textpad [path]", "文件浏览器/编辑器");
         table.AddRow("dashboard or dash", "实时仪表盘");
         table.AddRow("health", "系统健康检查 — 组件/磁盘/缓存诊断");
+        table.AddRow("mcp-server", "以 MCP server 模式启动（stdio），供 IDE 接入只读工具");
+        table.AddRow("agents", "列出 / 展示 agents/*.agent.md 中注册的 agent 定义");
+        table.AddRow("agents list", "所有 agent 一览（名称、模型、工具数、权限）");
+        table.AddRow("agents show <name>", "查看单个 agent 的完整 prompt + 工具 + 权限");
         table.AddRow("version", "Show version");
         AnsiConsole.Write(table);
         return 0;
@@ -560,6 +566,128 @@ partial class Program
             .AddItem("上下文", pct * 100, Color.Yellow)
             .AddItem("剩余", (1 - pct) * 100, Color.Grey35);
         AnsiConsole.Write(ctxChart);
+        return 0;
+    }
+
+    // ═══════════════════════════════════
+    //  agents list / agents show <name>
+    // ═══════════════════════════════════
+
+    private static int HandleAgents(string[] subArgs)
+    {
+        if (subArgs.Length == 0)
+        {
+            AnsiConsole.MarkupLine("[bold]Usage:[/] ltai agents list | ltai agents show <name>");
+            return ShowAgentsList();
+        }
+        return subArgs[0].ToLowerInvariant() switch
+        {
+            "list" or "ls" => ShowAgentsList(),
+            "show" or "info" => ShowAgentsDetail(subArgs.Length > 1 ? subArgs[1] : null),
+            _ => ShowAgentsDetail(subArgs[0]),
+        };
+    }
+
+    private static int ShowAgentsList()
+    {
+        var defs = LTAI.Agent.AgentRegistry.LoadAll();
+        if (defs.Count == 0)
+        {
+            AnsiConsole.MarkupLine("[yellow]No agents/*.agent.md files found.[/]");
+            AnsiConsole.MarkupLine("[grey]Searched:[/] " +
+                Path.Combine(AppContext.BaseDirectory, "agents") + " and " +
+                Path.Combine(Directory.GetCurrentDirectory(), "agents"));
+            return 1;
+        }
+
+        AnsiConsole.MarkupLine($"[bold]🤖 Registered agents[/] [grey]({defs.Count} from agents/*.agent.md)[/]\n");
+
+        var table = new Table().Border(TableBorder.Rounded);
+        table.AddColumn("[bold]Name[/]");
+        table.AddColumn("[bold]Model[/]");
+        table.AddColumn("[bold]Temp[/]");
+        table.AddColumn("[bold]Tools[/]");
+        table.AddColumn("[bold]Perms[/]");
+        table.AddColumn("[bold]Description[/]");
+
+        foreach (var d in defs.OrderBy(d => d.Name, StringComparer.OrdinalIgnoreCase))
+        {
+            var perms = string.Join("", d.Permissions.Select(p => p switch
+            {
+                "read" => "[green]R[/]",
+                "write" => "[yellow]W[/]",
+                "list" => "[blue]L[/]",
+                "exec" => "[red]X[/]",
+                _ => $"[grey]{p[0]}[/]",
+            }));
+            var desc = d.Description.Length > 60 ? d.Description[..57] + "..." : d.Description;
+            table.AddRow(
+                $"[bold]{d.Name.EscapeMarkup()}[/]",
+                d.ModelId ?? "[grey]default[/]",
+                d.Temperature.ToString("F1"),
+                d.Tools.Length.ToString(),
+                perms,
+                desc.EscapeMarkup());
+        }
+
+        AnsiConsole.Write(table);
+        AnsiConsole.MarkupLine($"\n[grey]Perms legend:[/] [green]R[/]=read [yellow]W[/]=write [blue]L[/]=list [red]X[/]=exec");
+        AnsiConsole.MarkupLine("[grey]Use 'ltai agents show <name>' to view full details.[/]");
+        return 0;
+    }
+
+    private static int ShowAgentsDetail(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            AnsiConsole.MarkupLine("[red]Usage: ltai agents show <name>[/]");
+            return 1;
+        }
+
+        var defs = LTAI.Agent.AgentRegistry.LoadAll();
+        var match = defs.FirstOrDefault(d =>
+            string.Equals(d.Name, name, StringComparison.OrdinalIgnoreCase));
+        if (match is null)
+        {
+            AnsiConsole.MarkupLine($"[red]Agent '{name.EscapeMarkup()}' not found.[/]");
+            AnsiConsole.MarkupLine($"[grey]Available: {string.Join(", ", defs.Select(d => d.Name))}[/]");
+            return 1;
+        }
+
+        var permsTable = new Table().Border(TableBorder.Rounded).Title("[bold]Permissions[/]");
+        permsTable.AddColumn("Flag"); permsTable.AddColumn("Granted");
+        foreach (var p in new[] { "read", "write", "list", "exec" })
+        {
+            var granted = match.Permissions.Contains(p);
+            permsTable.AddRow(p, granted ? "[green]✓[/]" : "[grey]—[/]");
+        }
+
+        var toolsTable = new Table().Border(TableBorder.Rounded).Title($"[bold]Tools[/] [grey]({match.Tools.Length})[/]");
+        toolsTable.AddColumn("#"); toolsTable.AddColumn("Name");
+        for (int i = 0; i < match.Tools.Length; i++)
+            toolsTable.AddRow((i + 1).ToString(), match.Tools[i].EscapeMarkup());
+
+        var grid = new Grid().AddColumn().AddColumn();
+        grid.AddRow(
+            new Panel(permsTable).Header($"[bold]{match.Name.EscapeMarkup()}[/]").BorderColor(Color.Green),
+            new Panel(toolsTable).Header("[bold]Tools[/]").BorderColor(Color.Blue));
+
+        AnsiConsole.Write(new Markup($"[bold]🤖 {match.Name.EscapeMarkup()}[/]\n"));
+        AnsiConsole.MarkupLine($"[grey]Description:[/] {match.Description.EscapeMarkup()}");
+        AnsiConsole.MarkupLine($"[grey]Model:[/] [bold]{match.ModelId ?? "default"}[/]  [grey]Temperature:[/] {match.Temperature:F1}  [grey]TopP:[/] {match.TopP:F2}");
+        if (!string.IsNullOrWhiteSpace(match.InheritTools))
+            AnsiConsole.MarkupLine($"[grey]Inherit tools from:[/] {match.InheritTools.EscapeMarkup()}");
+        AnsiConsole.WriteLine();
+        AnsiConsole.Write(grid);
+
+        if (!string.IsNullOrWhiteSpace(match.Prompt))
+        {
+            AnsiConsole.WriteLine();
+            AnsiConsole.Write(new Panel(match.Prompt.EscapeMarkup())
+                .Header("[bold]System prompt[/]")
+                .BorderColor(Color.Yellow)
+                .Expand());
+        }
         return 0;
     }
 }

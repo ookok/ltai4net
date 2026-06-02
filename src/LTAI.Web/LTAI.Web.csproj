@@ -13,13 +13,19 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.8" />
-    <PackageReference Include="Swashbuckle.AspNetCore" Version="8.1.1" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\LTAI.Core\LTAI.Core.csproj" />
     <ProjectReference Include="..\LTAI.AI\LTAI.AI.csproj" />
     <ProjectReference Include="..\LTAI.Agent\LTAI.Agent.csproj" />
+    <!-- P6: MAF protocol packages (Hosting.AspNetCore + A2A + AGUI + OpenAI) -->
+    <ProjectReference Include="..\..\extern\agent-framework\dotnet\src\Microsoft.Agents.AI.Hosting.AspNetCore\Microsoft.Agents.AI.Hosting.AspNetCore.csproj" />
+    <ProjectReference Include="..\..\extern\agent-framework\dotnet\src\Microsoft.Agents.AI.Hosting.A2A.AspNetCore\Microsoft.Agents.AI.Hosting.A2A.AspNetCore.csproj" />
+    <ProjectReference Include="..\..\extern\agent-framework\dotnet\src\Microsoft.Agents.AI.Hosting.AGUI.AspNetCore\Microsoft.Agents.AI.Hosting.AGUI.AspNetCore.csproj" />
+    <ProjectReference Include="..\..\extern\agent-framework\dotnet\src\Microsoft.Agents.AI.Hosting.OpenAI\Microsoft.Agents.AI.Hosting.OpenAI.csproj" />
+    <!-- P7.1: MAF DevUI (development-only agent browser) -->
+    <ProjectReference Include="..\..\extern\agent-framework\dotnet\src\Microsoft.Agents.AI.DevUI\Microsoft.Agents.AI.DevUI.csproj" />
   </ItemGroup>
 
 </Project>

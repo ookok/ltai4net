@@ -454,8 +454,7 @@ public static class SlashCommands
             var key = LTAI.Core.Configuration.SecretManager.Get(info.EnvVar);
             if (!string.IsNullOrEmpty(key) && Router != null && !Router.RegisteredProviders.Contains(choice))
             {
-                var http = _sharedHttp;
-                var client = new LTAI.AI.OpenAiHttpClient(http, info.Endpoint, info.Model, key);
+                var client = LTAI.AI.OpenAIChatClientFactory.Create(info.Endpoint, info.Model, key);
                 Router.Register(choice, client);
             }
         }
@@ -486,8 +485,7 @@ public static class SlashCommands
         LTAI.Core.Configuration.SecretManager.Set(info.EnvVar, key);
 
         // Register with router immediately
-        var http = _sharedHttp;
-        var client = new LTAI.AI.OpenAiHttpClient(http, info.Endpoint, info.Model, key);
+        var client = LTAI.AI.OpenAIChatClientFactory.Create(info.Endpoint, info.Model, key);
         Router?.Register(providerName, client);
 
         ActiveProvider ??= providerName;
@@ -662,8 +660,7 @@ public static class SlashCommands
                 if (providerName != null && Router != null)
                 {
                     var info = KnownProviders[providerName];
-					var http = _sharedHttp;
-					var client = new LTAI.AI.OpenAiHttpClient(http, info.Endpoint, info.Model, value);
+                    var client = LTAI.AI.OpenAIChatClientFactory.Create(info.Endpoint, info.Model, value);
                     Router.Register(providerName, client);
                 }
                 imported++;

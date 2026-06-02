@@ -3,6 +3,7 @@ using Avalonia.Controls;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
+using LTAI.Desktop.DevUI;
 
 namespace LTAI.Desktop;
 
@@ -17,6 +18,8 @@ public sealed class DashboardView : UserControl
     private readonly ProgressBar _cacheBar;
     private readonly TextBlock _cacheLabel;
     private readonly DispatcherTimer _timer;
+    private readonly TextBlock _devUiStatusText;
+    private readonly Lazy<DevUIHost> _devUiHostLazy = new(() => new DevUIHost());
     private static readonly Process _cachedProcess = Process.GetCurrentProcess();
 
     public DashboardView(LTAIService svc)
@@ -84,6 +87,45 @@ public sealed class DashboardView : UserControl
             if (!_timer.IsEnabled) _timer.Start();
         };
         Refresh();
+
+        // P9.2: DevUI launch button. Starts in-process Kestrel + opens system
+        // browser pointed at /devui (avoids WebView2 dep). The DevUI host
+        // itself is owned by MainWindow so it can outlive view switches.
+        var devUiBtn = new Button
+        {
+            Content = "Open DevUI in Browser",
+            HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Left,
+            Margin = new(0, 8, 0, 0),
+        };
+        devUiBtn.Click += async (_, _) =>
+        {
+            var host = _devUiHostLazy.Value;
+            try
+            {
+                var sp = App.Services
+                    ?? throw new InvalidOperationException("App.Services not initialized");
+                if (host.BaseUrl is null)
+                {
+                    await host.StartAsync(sp);
+                }
+                host.OpenInBrowser();
+                _devUiStatusText.Text = $"[DevUI] running at {host.BaseUrl}/devui (browser-launched)";
+                _devUiStatusText.IsVisible = true;
+            }
+            catch (Exception ex)
+            {
+                _devUiStatusText.Text = $"[DevUI] failed: {ex.Message}";
+                _devUiStatusText.IsVisible = true;
+            }
+        };
+        _devUiStatusText = new TextBlock
+        {
+            Foreground = LtaiTheme.Sbb(LtaiTheme.TextSecondary),
+            FontSize = 11,
+            IsVisible = false,
+        };
+        root.Children.Add(devUiBtn);
+        root.Children.Add(_devUiStatusText);
     }
 
     private void Refresh()

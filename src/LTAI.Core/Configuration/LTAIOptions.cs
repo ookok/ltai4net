@@ -84,6 +84,31 @@ public sealed class AIConfig
 }
 
 /// <summary>
+/// P13.1 + P13.2: local ONNX embedding model execution preferences.
+/// Loaded from appsettings.json under "LTAI:Embedding".
+/// <b>Consumers:</b> LTAI.AI.LocalEmbedder (Options), MultiProviderChatClient (AddLTAIAI).
+/// </summary>
+public sealed class EmbeddingConfig
+{
+    /// <summary>
+    /// GPU execution provider preference. <c>auto</c> (default) probes DirectML
+    /// (Windows) → CUDA (NVIDIA) → CPU in order. Other values: <c>dml</c> /
+    /// <c>cuda</c> / <c>cpu</c>. <c>cpu</c> skips GPU probes entirely.
+    /// </summary>
+    public string Gpu { get; init; } = "auto";
+
+    /// <summary>
+    /// Model quantization preference. <c>auto</c> (default) uses INT8 quantized
+    /// <c>model.int8.onnx</c> if downloaded (MiniLM does, BGE doesn't). <c>int8</c>
+    /// requires quantized; <c>fp32</c> forces original FP32. P13.1.
+    /// </summary>
+    public string Quantization { get; init; } = "auto";
+
+    /// <summary>GPU device ID (multi-GPU systems). Default 0.</summary>
+    public int DeviceId { get; init; } = 0;
+}
+
+/// <summary>
 /// HTTP/SSE endpoint configuration for the ASP.NET Core host.
 /// Loaded from appsettings.json under "LTAI:Web".
 /// <b>Consumers:</b> TuiApp, Program files (bind port).
@@ -105,6 +130,40 @@ public sealed class VectorConfig
 }
 
 /// <summary>
+/// MCP (Model Context Protocol) client configuration.
+/// Each entry spawns a stdio MCP server process and exposes its tools
+/// to the LTAI agent's tool list.
+/// <b>Consumers:</b> Agent/ServiceCollectionExtensions.cs (BuildAgentImpl).
+/// </summary>
+public sealed class McpConfig
+{
+    public McpServerConfig[] Servers { get; init; } = Array.Empty<McpServerConfig>();
+}
+
+/// <summary>
+/// Configuration for a single MCP server (stdio transport).
+/// <b>Example appsettings.json entry:</b>
+/// <code>
+/// {
+///   "LTAI": {
+///     "Mcp": {
+///       "Servers": [
+///         { "Name": "filesystem", "Command": "npx", "Args": ["-y", "@modelcontextprotocol/server-filesystem", "C:\\workspace"] }
+///       ]
+///     }
+///   }
+/// }
+/// </code>
+/// </summary>
+public sealed class McpServerConfig
+{
+    public string Name { get; init; } = "";
+    public string Command { get; init; } = "";
+    public string[] Args { get; init; } = Array.Empty<string>();
+    public Dictionary<string, string>? Env { get; init; }
+}
+
+/// <summary>
 /// Agent workflow parallelism and sandbox settings.
 /// <b>Consumers:</b> WorkflowOrchestrator, CoordinationScheduler.
 /// </summary>
@@ -114,6 +173,25 @@ public sealed class HarnessProfile
     public int MaxConcurrentWorkflows { get; set; } = 4;
     public string? SandboxType { get; set; }
     public bool EnableAuditTrail { get; set; } = true;
+}
+
+/// <summary>
+/// MAF Durable Task pipeline (P8) configuration.
+/// </summary>
+public sealed class DurableConfig
+{
+    /// <summary>
+    /// When <c>true</c>, every agent is wrapped in a <c>DurableAIAgentProxy</c>
+    /// and all run state (messages, tool calls, function results) is persisted
+    /// via the in-process DTFx gRPC sidecar. Default <c>true</c>.
+    /// </summary>
+    public bool Enabled { get; init; } = true;
+
+    /// <summary>
+    /// Fixed loopback port for the in-process gRPC sidecar. <c>null</c> = auto
+    /// (any free port). Pin only for debugging / tests.
+    /// </summary>
+    public int? SidecarPort { get; init; }
 }
 
 /// <summary>
@@ -130,6 +208,9 @@ public sealed class LTAIOptions
     public WebConfig Web { get; init; } = new();
     public VectorConfig Vector { get; init; } = new();
     public HarnessProfile Harness { get; set; } = new();
+    public McpConfig Mcp { get; init; } = new();
+    public DurableConfig Durable { get; init; } = new();
+    public EmbeddingConfig Embedding { get; init; } = new();
     public string DataDirectory { get; init; } = ".livingtree";
     public string ToolsDirectory { get; init; } = "tools";
     public string[] SkillsUrls { get; init; } = Array.Empty<string>();
@@ -226,6 +307,7 @@ public static class KnownKeys
         new("STEP_API_KEY",         "StepFun",        "¥1/¥2 per 1M",       "https://platform.stepfun.com/", "https://api.stepfun.com/v1", "step-2-16k", 1.0m, 2.0m),
         new("MINIMAX_API_KEY",      "Minimax",        "¥0.8/¥1.6 per 1M",   "https://platform.minimax.chat/", "https://api.minimax.chat/v1", "MiniMax-Text-01", 0.8m, 1.6m),
         new("OPENAI_API_KEY",       "OpenAI",         "≈¥10/¥30 per 1M",    "https://platform.openai.com/api-keys", "https://api.openai.com/v1", "gpt-4o", 10.0m, 30.0m),
+        new("ANTHROPIC_API_KEY",    "Anthropic",      "≈¥22/¥108 per 1M",  "https://console.anthropic.com/",         "https://api.anthropic.com",            "claude-sonnet-4-5", 22.0m, 108.0m),
         new("GROQ_API_KEY",         "Groq",           "免费",               "https://console.groq.com/keys", "https://api.groq.com/openai/v1", "llama-3.3-70b-versatile"),
         new("OPENROUTER_API_KEY",   "OpenRouter",     "按源模型定价",        "https://openrouter.ai/keys", "https://openrouter.ai/api/v1", "deepseek/deepseek-chat"),
         new("TOGETHER_API_KEY",     "Together AI",    "按源模型定价",        "https://api.together.xyz/", "https://api.together.xyz/v1", "mistralai/Mixtral-8x22B-Instruct-v0.1"),
@@ -250,6 +332,8 @@ public static class KnownKeys
         new("BAIDU_TRANSLATE_SECRET","百度翻译",      "SECRET",            "https://api.fanyi.baidu.com/"),
         // ── Image ──
         new("UNSPLASH_KEY",         "Unsplash",       "图片搜索 API",      "https://unsplash.com/developers"),
+        // ── Memory ──
+        new("MEM0_API_KEY",         "Mem0",           "跨会话长期记忆",    "https://app.mem0.ai/", "https://api.mem0.ai"),
     ];
 
     /// <summary>

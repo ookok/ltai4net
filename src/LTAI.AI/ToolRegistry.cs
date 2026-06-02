@@ -138,22 +138,49 @@ public static class ToolRegistry
     }
 
     /// <summary>初始化工具注册表：构建向量 embedding + BM25 倒排索引。</summary>
+    /// <remarks>
+    /// P12.2: pass a <see cref="ToolEmbeddingCache"/> to persist tool
+    /// embeddings across process restarts. On first call the cache miss
+    /// triggers a single batched ONNX call for all 80+ tools; on subsequent
+    /// calls (or after a restart) the cache hit eliminates the embedding work
+    /// entirely. Without a cache, falls back to a one-shot batched ONNX call
+    /// (no persistence).
+    /// </remarks>
     public static async Task InitializeAsync(IEnumerable<AITool> tools, EmbeddingClient embedder,
-        CancellationToken ct = default)
+        ToolEmbeddingCache? cache = null, CancellationToken ct = default)
     {
         if (_initialized) return;
         var list = tools.ToList();
         var texts = list.Select(BuildEmbeddingText).ToArray();
 
-        // ── 向量 embedding ──
+        // ── 向量 embedding (P12.2: cache-aware) ──
         float[][] embeddings;
-        try
+        if (cache != null)
         {
-            embeddings = await embedder.GenerateBatchAsync(texts, ct).ConfigureAwait(false);
+            // Persisted batched path: 1 ONNX call on first start, 0 calls on
+            // warm starts (cache hit).
+            try
+            {
+                var items = list
+                    .Select((t, i) => (Key: t.Name ?? "unknown", Description: texts[i]))
+                    .ToList();
+                var vectors = await cache.GetOrComputeAllAsync(items, ct).ConfigureAwait(false);
+                embeddings = list
+                    .Select(t => vectors.TryGetValue(t.Name ?? "unknown", out var v) && v != null
+                        ? v
+                        : EmbeddingClient.FastEmb(BuildEmbeddingText(t)))
+                    .ToArray();
+            }
+            catch
+            {
+                // Cache path failed — fall through to direct batch
+                embeddings = await DirectBatchAsync(embedder, texts, ct).ConfigureAwait(false);
+            }
         }
-        catch
+        else
         {
-            embeddings = texts.Select(t => EmbeddingClient.FastEmb(t)).ToArray();
+            // One-shot batched path (no persistence)
+            embeddings = await DirectBatchAsync(embedder, texts, ct).ConfigureAwait(false);
         }
 
         var defs = new List<ToolDef>();
@@ -372,6 +399,24 @@ public static class ToolRegistry
             _totalDocs = 0;
             _avgDocLen = 0;
             _initialized = false;
+        }
+    }
+
+    /// <summary>
+    /// P12.2: helper — direct batched embedding with FastEmb fallback.
+    /// Used when no <see cref="ToolEmbeddingCache"/> is supplied (or the
+    /// cache path failed). Single ONNX call for all texts.
+    /// </summary>
+    private static async Task<float[][]> DirectBatchAsync(EmbeddingClient embedder,
+        string[] texts, CancellationToken ct)
+    {
+        try
+        {
+            return await embedder.GenerateBatchAsync(texts, ct).ConfigureAwait(false);
+        }
+        catch
+        {
+            return texts.Select(t => EmbeddingClient.FastEmb(t)).ToArray();
         }
     }
 

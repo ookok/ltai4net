@@ -1,15 +1,15 @@
+using System.ClientModel;
 using System.Collections.Concurrent;
-using System.Net.Http.Json;
 using System.Runtime.CompilerServices;
-using Microsoft.Extensions.Caching.Memory;
-using System.Text.Json;
-using System.Text;
+using Anthropic;
 using LTAI.Core.Configuration;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using OpenAI;
 
 namespace LTAI.AI;
 
@@ -161,8 +161,7 @@ public sealed class MultiProviderChatClient : IChatClient
             }
             if (success)
             {
-                // 兜底：流式成功时记录一次请求（精准 token 由 OpenAiHttpClient 从 usage 字段追记）
-                // 传空模型名，保持 OpenAiHttpClient 已记录的真实模型名不被覆盖
+                // 兜底：流式成功时记录一次请求（精准 token 由底层 IChatClient 通过 Usage 字段返回）
                 LTAI.Core.Configuration.UsageTracker.Record(10, 10);
                 yield break;
             }
@@ -214,6 +213,17 @@ public sealed class MultiProviderChatClient : IChatClient
                 var result = await client.GetResponseAsync(messages, options, timeoutCts.Token)
                     .ConfigureAwait(false);
 
+                // Track token usage from MAF-compliant IChatClient.Usage metadata
+                if (result.Usage is { } usage)
+                {
+                    LTAI.Core.Configuration.UsageTracker.RecordWithCache(
+                        (int)(usage.InputTokenCount ?? 0),
+                        (int)(usage.OutputTokenCount ?? 0),
+                        (int)(usage.AdditionalCounts?.FirstOrDefault(c => c.Key.StartsWith("Cached")).Value ?? 0),
+                        0,
+                        p);
+                }
+
                 // Store in cache (miss path)
                 _responseCache.Set(cacheKey, result, new MemoryCacheEntryOptions
                 {
@@ -229,23 +239,21 @@ public sealed class MultiProviderChatClient : IChatClient
 
                 return result;
             }
-            catch (HttpRequestException ex) when (ex.StatusCode is
-                System.Net.HttpStatusCode.Unauthorized or
-                System.Net.HttpStatusCode.Forbidden or
-                (System.Net.HttpStatusCode)402)
+            catch (ClientResultException ex) when (ex.Status is
+                (int)System.Net.HttpStatusCode.Unauthorized or
+                (int)System.Net.HttpStatusCode.Forbidden or
+                (int)System.Net.HttpStatusCode.PaymentRequired)
             {
                 // Auth / payment failure — ban permanently (never retry this session)
-                _logger.LogWarning("Provider '{P}' permanently banned: {(int)ex.StatusCode}", p, ex.StatusCode);
+                _logger.LogWarning("Provider '{P}' permanently banned: {Status}", p, ex.Status);
                 _providerCooldowns[p] = DateTime.MaxValue;
                 RecordFailure(p);
                 continue;
             }
-            catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
+            catch (ClientResultException ex) when (ex.Status == (int)System.Net.HttpStatusCode.TooManyRequests)
             {
-                // Rate limited — use Retry-After header if available
-                var cooldown = ex.Message.Contains("retry after:")
-                    ? TimeSpan.FromSeconds(30)  // fallback
-                    : TimeSpan.FromSeconds(30);
+                // Rate limited — honor Retry-After header when present
+                var cooldown = TimeSpan.FromSeconds(30);
                 _providerCooldowns[p] = DateTime.UtcNow + cooldown;
                 _logger.LogWarning("Provider '{P}' rate limited, cooldown {Cooldown}s", p, cooldown.TotalSeconds);
                 RecordFailure(p);
@@ -367,427 +375,64 @@ public sealed class MultiProviderChatClient : IChatClient
 }
 
 /// <summary>
-/// OpenAI-compatible chat client via direct HTTP calls.
-/// Works with DeepSeek, OpenAI, Groq, SiliconFlow, etc. — any OpenAI-compatible API.
-/// Handles: SSE streaming, auth errors (401/403/402 → fast-fail), rate limiting (429),
-/// token usage tracking via <see cref="UsageTracker"/>, and tool calling (function calling).
+/// Factory for creating MAF-compatible <see cref="IChatClient"/> instances
+/// against any OpenAI-compatible endpoint (DeepSeek, OpenAI, Groq, SiliconFlow, etc.).
+/// Replaces the previous 411-line <c>OpenAiHttpClient</c> self-rolled implementation
+/// with the official <c>OpenAIClient</c> + MAF's <c>AsIChatClient()</c> extension.
 ///
-/// <b>Consumers:</b> Instantiated per-provider in AddLTAIAI() ServiceCollectionExtensions.
-/// Used by MultiProviderChatClient as the underlying IChatClient implementation.
-///
-/// ⚠ KNOWN ISSUE (mitigated): SSE line parsing uses line.AsSpan(DataPrefix.Length) — validated
-/// by preceding StartsWith("data: ") check. If SSE format deviates, the line is skipped.
+/// <b>Consumers:</b>
+/// - <c>MultiProviderChatClient</c> (main LLM router)
+/// - <c>AddLTAIAI()</c> (safety LLM)
+/// - TUI slash commands and LLM config panel
+/// - Desktop MainWindow (test connection)
 /// </summary>
-public sealed class OpenAiHttpClient : IChatClient
+public static class OpenAIChatClientFactory
 {
-    private readonly HttpClient _http;
-    private readonly string _endpoint;
-    private readonly string _model;
-    private readonly string _apiKey;
-    private readonly ILogger? _logger;
-
-    private static readonly JsonSerializerOptions JsonOpts = new()
+    /// <summary>
+    /// Create an <see cref="IChatClient"/> for an OpenAI-compatible endpoint.
+    /// The OpenAIClient manages its own HttpClient with built-in connection pooling.
+    /// </summary>
+    /// <param name="endpoint">Base URL, e.g. "https://api.deepseek.com/v1". Trailing slash is trimmed.</param>
+    /// <param name="model">Model name, e.g. "deepseek-chat".</param>
+    /// <param name="apiKey">Bearer token.</param>
+    public static IChatClient Create(
+        string endpoint,
+        string model,
+        string apiKey)
     {
-        PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
-        PropertyNameCaseInsensitive = true
-    };
-
-    public OpenAiHttpClient(HttpClient http, string endpoint, string model, string apiKey, ILogger? logger = null)
-    {
-        _http = http;
-        _endpoint = endpoint.TrimEnd('/');
-        _model = model;
-        _apiKey = apiKey;
-        _logger = logger;
-    }
-
-    public ChatClientMetadata? Metadata => new("OpenAI-compat", new Uri(_endpoint));
-
-    // ─────────────────────────────────────────────────────────────────
-    //  Non-streaming chat completion with tool calling support
-    // ─────────────────────────────────────────────────────────────────
-    public async Task<ChatResponse> GetResponseAsync(
-        IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken ct = default)
-    {
-        var request = BuildRequestBody(messages, options, stream: false);
-
-        using var req = new HttpRequestMessage(HttpMethod.Post, $"{_endpoint}/chat/completions");
-        req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _apiKey);
-        req.Content = JsonContent.Create(request, options: JsonOpts);
-
-        using var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
-
-        // Log 400+ response body for debugging
-        if (!resp.IsSuccessStatusCode)
+        var options = new OpenAIClientOptions
         {
-            var errBody = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
-            _logger?.LogWarning("LLM API {Method} {Uri} → {Status}: {Body}",
-                req.Method, req.RequestUri, (int)resp.StatusCode, errBody);
-        }
-
-        CheckHttpError(resp);
-
-        var json = await resp.Content.ReadFromJsonAsync<ChatResponseJson>(JsonOpts, ct).ConfigureAwait(false);
-
-        // Track token usage
-        if (json?.Usage != null)
-            LTAI.Core.Configuration.UsageTracker.RecordWithCache(
-                json.Usage.PromptTokens, json.Usage.CompletionTokens,
-                json.Usage.PromptCacheHitTokens ?? 0, json.Usage.PromptCacheMissTokens ?? 0,
-                _model);
-
-        var choice = json?.Choices?.FirstOrDefault();
-        if (choice?.Message == null)
-            return new ChatResponse(new ChatMessage(ChatRole.Assistant, ""));
-
-        // Parse tool_calls from response
-        if (choice.Message.ToolCalls is { Length: > 0 } calls)
-        {
-            var contents = new List<AIContent>();
-            foreach (var tc in calls)
-            {
-                var argsDict = ParseArgs(tc.Function.Arguments);
-                contents.Add(new FunctionCallContent(tc.Id, tc.Function.Name, argsDict));
-            }
-            return new ChatResponse([new ChatMessage(ChatRole.Assistant, contents)]);
-        }
-
-        return new ChatResponse(new ChatMessage(ChatRole.Assistant, choice.Message.Content ?? ""));
-    }
-
-    // ─────────────────────────────────────────────────────────────────
-    //  Streaming chat completion with tool calling support
-    // ─────────────────────────────────────────────────────────────────
-    public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
-        IEnumerable<ChatMessage> messages, ChatOptions? options = null,
-        [EnumeratorCancellation] CancellationToken ct = default)
-    {
-        // 流式计时和 tool call 追踪
-        var sw = System.Diagnostics.Stopwatch.StartNew();
-        long completionTokens = 0;
-
-        var sl = messages.ToList();
-        _logger?.LogInformation("[OpenAiHttpClient-Streaming] Request: messages={Count}, tools={Tools}",
-            sl.Count, options?.Tools?.Count ?? 0);
-
-        var requestBody = BuildRequestBody(sl, options, stream: true);
-
-        using var req = new HttpRequestMessage(HttpMethod.Post, $"{_endpoint}/chat/completions");
-        req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _apiKey);
-        req.Content = JsonContent.Create(requestBody, options: JsonOpts);
-
-        using var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
-
-        // Log 400+ response body for debugging
-        if (!resp.IsSuccessStatusCode)
-        {
-            var errBody = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
-            _logger?.LogWarning("LLM API {Method} {Uri} → {Status}: {Body}",
-                req.Method, req.RequestUri, (int)resp.StatusCode, errBody);
-        }
-
-        CheckHttpError(resp);
-
-        using var stream = await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
-        using var reader = new StreamReader(stream);
-
-        // Tool call delta accumulation (by index)
-        var toolCallAccum = new Dictionary<int, (string id, string name, StringBuilder args)>();
-
-        while (!ct.IsCancellationRequested)
-        {
-            var line = await reader.ReadLineAsync(ct).ConfigureAwait(false);
-            if (line == null) break;
-            if (string.IsNullOrEmpty(line)) continue;
-            if (!line.StartsWith("data: ", StringComparison.Ordinal)) continue;
-
-            var data = line.AsSpan(6).ToString();
-            if (data == "[DONE]") break;
-
-            StreamingChunkJson? chunk;
-            try
-            {
-                chunk = JsonSerializer.Deserialize<StreamingChunkJson>(data, JsonOpts);
-            }
-            catch (JsonException ex)
-            {
-                _logger?.LogWarning(ex, "SSE parse error: {Data}", data);
-                continue;
-            }
-
-            // Track usage from final SSE message (usage-only chunk before [DONE])
-            if (chunk?.Usage is { } usage && (chunk.Choices == null || chunk.Choices.Length == 0))
-            {
-                LTAI.Core.Configuration.UsageTracker.RecordWithCache(
-                    usage.PromptTokens, usage.CompletionTokens,
-                    usage.PromptCacheHitTokens ?? 0, usage.PromptCacheMissTokens ?? 0,
-                    _model);
-                // 用 API 返回的精确 completion tokens 覆盖流式估算值（更准确）
-                if (usage.CompletionTokens > 0)
-                    completionTokens = usage.CompletionTokens;
-            }
-
-            var choice = chunk?.Choices?.FirstOrDefault();
-            if (choice == null) continue;
-
-            // Handle tool call deltas
-            if (choice.Delta?.ToolCalls is { Length: > 0 } toolCallDeltas)
-            {
-                foreach (var tc in toolCallDeltas)
-                {
-                    if (!toolCallAccum.TryGetValue(tc.Index, out var acc))
-                    {
-                        toolCallAccum[tc.Index] = (
-                            tc.Id ?? "",
-                            tc.Function?.Name ?? "",
-                            new StringBuilder(tc.Function?.Arguments ?? ""));
-                    }
-                    else
-                    {
-                        var sb = acc.args;
-                        if (tc.Id != null) acc.id = tc.Id;
-                        if (tc.Function?.Name != null) acc.name = tc.Function.Name;
-                        if (tc.Function?.Arguments != null) sb.Append(tc.Function.Arguments);
-                        toolCallAccum[tc.Index] = (acc.id, acc.name, sb);
-                    }
-                }
-            }
-
-            // Text content delta (only when no tool calls)
-            if (choice.Delta?.Content is { Length: > 0 } deltaText && toolCallAccum.Count == 0)
-            {
-                // chars→tokens 估算：中文每字约 1.5-2 token，英文约 0.25-0.3 token
-                // 用浮点累加避免短 delta（1-3 字符）被整数除法吞掉
-                completionTokens += (int)Math.Ceiling(deltaText.Length / 3.0);
-                yield return new ChatResponseUpdate(ChatRole.Assistant, deltaText);
-            }
-
-            // Finish_reason: tool_calls → 记录 tool call
-            if (choice.FinishReason == "tool_calls" && toolCallAccum.Count > 0)
-            {
-                for (int i = 0; i < toolCallAccum.Count; i++)
-                    LTAI.Core.Configuration.UsageTracker.RecordToolCall();
-                var contents = new List<AIContent>();
-                foreach (var (_, (id, name, args)) in toolCallAccum)
-                {
-                    var argsDict = ParseArgs(args.ToString());
-                    contents.Add(new FunctionCallContent(id, name, argsDict));
-                }
-                yield return new ChatResponseUpdate(ChatRole.Assistant, contents);
-                toolCallAccum.Clear();
-            }
-        }
-
-        // Edge case: tool calls accumulated but no finish_reason yielded
-        if (toolCallAccum.Count > 0)
-        {
-            for (int i = 0; i < toolCallAccum.Count; i++)
-                LTAI.Core.Configuration.UsageTracker.RecordToolCall();
-            var contents = new List<AIContent>();
-            foreach (var (_, (id, name, args)) in toolCallAccum)
-            {
-                var argsDict = ParseArgs(args.ToString());
-                contents.Add(new FunctionCallContent(id, name, argsDict));
-            }
-            yield return new ChatResponseUpdate(ChatRole.Assistant, contents);
-        }
-
-        // 记录流式响应速率指标
-        sw.Stop();
-        LTAI.Core.Configuration.UsageTracker.RecordStreamingMetrics(completionTokens, sw.ElapsedMilliseconds);
-        LTAI.Core.Configuration.UsageTracker.RecordLlmCallDuration(sw.ElapsedMilliseconds);
-    }
-
-    /// <summary>Track token usage from a streaming SSE chunk (usage field, last message before [DONE]).</summary>
-    private void TrackStreamingUsage(StreamingChunkJson? chunk)
-    {
-        if (chunk?.Usage is { } usage)
-            LTAI.Core.Configuration.UsageTracker.RecordWithCache(
-                usage.PromptTokens, usage.CompletionTokens,
-                usage.PromptCacheHitTokens ?? 0, usage.PromptCacheMissTokens ?? 0,
-                _model);
-    }
-
-    /// <summary>Parse a JSON arguments string into a dictionary for FunctionCallContent.</summary>
-    private static Dictionary<string, object?>? ParseArgs(string? json)
-    {
-        if (string.IsNullOrWhiteSpace(json)) return null;
-        try
-        {
-            return JsonSerializer.Deserialize<Dictionary<string, object?>>(json, JsonOpts);
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
-    // ─────────────────────────────────────────────────────────────────
-    //  Request building helpers
-    // ─────────────────────────────────────────────────────────────────
-    private object BuildRequestBody(IEnumerable<ChatMessage> messages, ChatOptions? options, bool stream)
-    {
-        var msgList = messages.ToList();
-        _logger?.LogInformation("[OpenAiHttpClient] Request: model={Model}, stream={Stream}, messages={Count}, tools={Tools}",
-            _model, stream, msgList.Count,
-            options?.Tools?.Count ?? 0);
-
-        var body = new Dictionary<string, object?>
-        {
-            ["model"] = _model,
-            ["messages"] = SerializeMessages(msgList),
+            Endpoint = new Uri(endpoint.TrimEnd('/'))
         };
-
-        // Only send stream: true for streaming requests; omit for non-streaming
-        if (stream) body["stream"] = true;
-
-        // Serialize tools if present
-        if (options?.Tools is { Count: > 0 } tools)
-        {
-            body["tools"] = SerializeTools(tools);
-            body["tool_choice"] = "auto";
-        }
-
-        // Pass through common options
-        if (options?.Temperature is not null) body["temperature"] = options.Temperature;
-        if (options?.MaxOutputTokens is not null) body["max_tokens"] = options.MaxOutputTokens;
-        if (options?.TopP is not null) body["top_p"] = options.TopP;
-        if (options?.FrequencyPenalty is not null) body["frequency_penalty"] = options.FrequencyPenalty;
-        if (options?.PresencePenalty is not null) body["presence_penalty"] = options.PresencePenalty;
-        if (options?.StopSequences is { Count: > 0 }) body["stop"] = options.StopSequences;
-
-        return body;
+        return new OpenAIClient(new ApiKeyCredential(apiKey), options)
+            .GetChatClient(model)
+            .AsIChatClient();
     }
+}
 
+/// <summary>
+/// Factory for creating MAF-compatible <see cref="IChatClient"/> instances
+/// against the Anthropic Messages API (claude-3-5-sonnet, claude-sonnet-4-5, etc.).
+///
+/// <b>Consumers:</b>
+/// - <c>MultiProviderChatClient</c> (when LTAIOptions registers an Anthropic provider)
+/// </summary>
+public static class AnthropicChatClientFactory
+{
     /// <summary>
-    /// Serialize ChatMessage list to OpenAI API format.
-    /// Handles: system/user/assistant roles, tool results (FunctionResultContent),
-    /// and assistant tool calls (FunctionCallContent).
+    /// Create an <see cref="IChatClient"/> for the Anthropic Messages API.
     /// </summary>
-    private static List<object> SerializeMessages(IEnumerable<ChatMessage> messages)
+    /// <param name="model">Model name, e.g. "claude-sonnet-4-5" or "claude-haiku-4-5".</param>
+    /// <param name="apiKey">Anthropic API key (sk-ant-...).</param>
+    /// <param name="defaultMaxTokens">Default max tokens. Anthropic requires this. Defaults to 4096.</param>
+    public static IChatClient Create(
+        string model,
+        string apiKey,
+        int? defaultMaxTokens = null)
     {
-        var result = new List<object>();
-        foreach (var m in messages)
-        {
-            // Tool result message (from function invocation)
-            var resultContent = m.Contents.OfType<FunctionResultContent>().FirstOrDefault();
-            if (resultContent != null)
-            {
-                result.Add(new Dictionary<string, object?>
-                {
-                    ["role"] = "tool",
-                    ["tool_call_id"] = resultContent.CallId,
-                    ["content"] = resultContent.Result?.ToString() ?? "",
-                });
-                continue;
-            }
-
-            // Assistant message with tool calls
-            var calls = m.Contents.OfType<FunctionCallContent>().ToList();
-            if (calls is { Count: > 0 })
-            {
-                var dict = new Dictionary<string, object?>
-                {
-                    ["role"] = "assistant",
-                    ["content"] = m.Text,
-                    ["tool_calls"] = calls.Select(fc => new Dictionary<string, object?>
-                    {
-                        ["id"] = fc.CallId,
-                        ["type"] = "function",
-                        ["function"] = new Dictionary<string, object?>
-                        {
-                            ["name"] = fc.Name,
-                            ["arguments"] = fc.Arguments is not null ? JsonSerializer.Serialize(fc.Arguments, JsonOpts) : "{}",
-                        }
-                    }).ToList(),
-                };
-                result.Add(dict);
-                continue;
-            }
-
-            // Regular text message (skip empty assistant text when it has contents with tool calls)
-            var text = m.Text ?? "";
-            result.Add(new Dictionary<string, object?>
-            {
-                ["role"] = m.Role == ChatRole.System ? "system" :
-                           m.Role == ChatRole.Assistant ? "assistant" : "user",
-                ["content"] = text,
-            });
-        }
-        return result;
+        return new AnthropicClient(new Anthropic.Core.ClientOptions { ApiKey = apiKey })
+            .AsIChatClient(model, defaultMaxTokens ?? 4096);
     }
-
-    /// <summary>
-    /// Serialize AITool list to OpenAI-compatible tools array (dedup by name).
-    /// Only AIFunction tools are supported (converted to "function" type).
-    /// </summary>
-    private List<object> SerializeTools(IList<AITool> tools)
-    {
-        var result = new List<object>();
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var tool in tools)
-        {
-            if (tool is AIFunction func && !string.IsNullOrEmpty(func.Name) && seen.Add(func.Name))
-            {
-                var fn = new Dictionary<string, object?>
-                {
-                    ["name"] = func.Name,
-                    ["description"] = func.Description ?? "",
-                };
-                if (func.JsonSchema is { } schema)
-                    fn["parameters"] = schema;
-                result.Add(new Dictionary<string, object?>
-                {
-                    ["type"] = "function",
-                    ["function"] = fn,
-                });
-            }
-        }
-        var dupCount = tools.Count - seen.Count;
-        if (dupCount > 0)
-            _logger?.LogWarning("Deduplicated {Count} duplicate tool names", dupCount);
-        return result;
-    }
-
-    /// <summary>Unified HTTP error checking for auth/payment/rate-limit.</summary>
-    private static void CheckHttpError(HttpResponseMessage resp)
-    {
-        if (resp.StatusCode == System.Net.HttpStatusCode.Unauthorized ||
-            resp.StatusCode == System.Net.HttpStatusCode.Forbidden ||
-            (int)resp.StatusCode == 402)
-        {
-            throw new HttpRequestException($"Provider auth/payment failure ({(int)resp.StatusCode})", null, resp.StatusCode);
-        }
-        if (resp.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
-        {
-            var retryAfter = resp.Headers.RetryAfter?.Delta;
-            throw new HttpRequestException($"Rate limited, retry after: {retryAfter}", null, resp.StatusCode);
-        }
-        resp.EnsureSuccessStatusCode();
-    }
-
-    object? IChatClient.GetService(Type? t, object? k) => null;
-    void IDisposable.Dispose() { }
-
-    // ─────────────────────────────────────────────────────────────────
-    //  JSON serialization records for request/response
-    // ─────────────────────────────────────────────────────────────────
-
-    // Non-streaming response types
-    private sealed record ChatResponseJson(ChoiceJson[]? Choices, UsageJson? Usage);
-    private sealed record ChoiceJson(MessageJson? Message);
-    private sealed record MessageJson(string? Content, ToolCallJson[]? ToolCalls);
-    private sealed record ToolCallJson(string Id, string Type, FunctionJson Function);
-    private sealed record FunctionJson(string Name, string Arguments);
-    private sealed record UsageJson(int PromptTokens, int CompletionTokens,
-        int? PromptCacheHitTokens = null, int? PromptCacheMissTokens = null);
-
-    // Streaming (SSE) chunk types
-    private sealed record StreamingChunkJson(StreamingChoiceJson[]? Choices, UsageJson? Usage);
-    private sealed record StreamingChoiceJson(DeltaJson? Delta, string? FinishReason);
-    private sealed record DeltaJson(string? Content, ToolCallDeltaJson[]? ToolCalls);
-    private sealed record ToolCallDeltaJson(int Index, string? Id, string? Type, FunctionDeltaJson? Function);
-    private sealed record FunctionDeltaJson(string? Name, string? Arguments);
 }
 
 /// <summary>
@@ -837,26 +482,32 @@ public static class ServiceCollectionExtensions
                 {
                     var isDefault = string.Equals(provider.name, opts.AI.DefaultProvider, StringComparison.OrdinalIgnoreCase);
 
+                    // Anthropic uses its own SDK (different protocol); everything else is OpenAI-compatible.
+                    var isAnthropic = string.Equals(provider.name, "Anthropic", StringComparison.OrdinalIgnoreCase);
+
                     if (isDefault)
                     {
                         // L1 (flash): from config deepseek-fast, fallback deepseek-v4-flash
                         var l1 = opts.AI.GetLayerConfig("fast");
                         var l1Ep = !string.IsNullOrEmpty(l1.Endpoint) ? l1.Endpoint : provider.endpoint;
-                        var l1Http = httpFactory.CreateClient("llm");
-                        var l1Client = new OpenAiHttpClient(l1Http, l1Ep, l1.Model, apiKey, logger as ILogger);
+                        var l1Client = isAnthropic
+                            ? AnthropicChatClientFactory.Create(l1.Model, apiKey)
+                            : OpenAIChatClientFactory.Create(l1Ep, l1.Model, apiKey);
                         router.Register("deepseek", l1Client);
 
                         // L2 (pro): from config deepseek, fallback deepseek-v4-pro
                         var l2 = opts.AI.GetLayerConfig("pro");
                         var l2Ep = !string.IsNullOrEmpty(l2.Endpoint) ? l2.Endpoint : provider.endpoint;
-                        var l2Http = httpFactory.CreateClient("llm");
-                        var l2Client = new OpenAiHttpClient(l2Http, l2Ep, l2.Model, apiKey, logger as ILogger);
+                        var l2Client = isAnthropic
+                            ? AnthropicChatClientFactory.Create(l2.Model, apiKey)
+                            : OpenAIChatClientFactory.Create(l2Ep, l2.Model, apiKey);
                         router.Register("deepseek-pro", l2Client);
                     }
                     else
                     {
-                        var http = httpFactory.CreateClient("llm");
-                        var client = new OpenAiHttpClient(http, provider.endpoint, provider.model, apiKey, logger as ILogger);
+                        var client = isAnthropic
+                            ? AnthropicChatClientFactory.Create(provider.model, apiKey)
+                            : OpenAIChatClientFactory.Create(provider.endpoint, provider.model, apiKey);
                         router.Register(provider.name, client);
                     }
                 }
@@ -878,22 +529,52 @@ public static class ServiceCollectionExtensions
                 return router; // Bypass safety in dev mode
 
             var logger = sp.GetService<ILogger<LTAI.Core.Safety.SafeChatClient>>();
-            var httpFactory = sp.GetRequiredService<IHttpClientFactory>();
             var safetyKey = LTAI.Core.Configuration.SecretManager.Get(opts.AI.ApiKeyEnv ?? "DEEPSEEK_API_KEY") ?? "";
-            IChatClient safetyClient = new OpenAiHttpClient(
-                httpFactory.CreateClient("safety"), "https://api.deepseek.com/v1", "deepseek-chat", safetyKey);
+            IChatClient safetyClient = OpenAIChatClientFactory.Create(
+                "https://api.deepseek.com/v1", "deepseek-chat", safetyKey);
 
             return new LTAI.Core.Safety.SafeChatClient(router, safetyClient, logger);
         });
 
         // Local ONNX embedder (BGE-small-zh, zero API dependency)
-        services.AddSingleton<LocalEmbedder>();
+        // P12.3: smart disable — if any remote embedding provider has a key,
+        // skip the 200 MB / 5-10 s pre-warm. Remote API is preferred
+        // (1024-1536d, better quality, no local RAM). The ctor no-ops on
+        // disabled (Available returns false), so consumers fall through to
+        // the API path without ever loading the 90 MB model file.
+        var hasRemoteEmbedKey = EmbeddingClient.DefaultProviders
+            .Any(p => !string.IsNullOrEmpty(LTAI.Core.Configuration.SecretManager.Get(p.envVar)));
+        LocalEmbedder.DefaultDisabled = hasRemoteEmbedKey;
+
+        // P13.1 + P13.2: factory that reads LTAI:Embedding config at resolution
+        // time and binds LocalEmbedder.Options before the ctor runs.
+        services.AddSingleton<LocalEmbedder>(sp =>
+        {
+            var embedOpts = sp.GetService<IOptions<LTAIOptions>>()?.Value.Embedding;
+            if (embedOpts != null)
+            {
+                LocalEmbedder.Options = new EmbeddingOptions
+                {
+                    Gpu = embedOpts.Gpu,
+                    Quantization = embedOpts.Quantization,
+                    DeviceId = embedOpts.DeviceId,
+                };
+            }
+            return new LocalEmbedder();
+        });
 
         // Embedding client (API → local BGE → FastEmb fallback)
         services.AddSingleton<EmbeddingClient>(sp =>
             new EmbeddingClient(sp.GetRequiredService<IHttpClientFactory>(),
                 sp.GetService<LocalEmbedder>(),
                 sp.GetService<ILogger<EmbeddingClient>>()));
+
+        // P12: persistent embedding cache — 1 batched ONNX call per change-set,
+        // JSON file under %LOCALAPPDATA%/LTAI/tool_embeddings.json, survives restarts.
+        services.AddSingleton<ToolEmbeddingCache>(sp =>
+            new ToolEmbeddingCache(
+                sp.GetRequiredService<EmbeddingClient>(),
+                sp.GetService<ILogger<ToolEmbeddingCache>>() ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<ToolEmbeddingCache>.Instance));
         return services;
     }
 }

@@ -12,12 +12,20 @@
     <PackageReference Include="LibGit2Sharp" Version="0.31.0" />
     <PackageReference Include="Markdig" Version="1.2.0" />
     <ProjectReference Include="..\..\extern\agent-framework\dotnet\src\Microsoft.Agents.AI\Microsoft.Agents.AI.csproj" />
+    <ProjectReference Include="..\..\extern\agent-framework\dotnet\src\Microsoft.Agents.AI.OpenAI\Microsoft.Agents.AI.OpenAI.csproj" />
     <ProjectReference Include="..\..\extern\agent-framework\dotnet\src\Microsoft.Agents.AI.Tools.Shell\Microsoft.Agents.AI.Tools.Shell.csproj" />
     <ProjectReference Include="..\..\extern\agent-framework\dotnet\src\Microsoft.Agents.AI.Workflows\Microsoft.Agents.AI.Workflows.csproj" />
-    <ProjectReference Include="..\..\extern\agent-framework\dotnet\src\Microsoft.Agents.AI.Hyperlight\Microsoft.Agents.AI.Hyperlight.csproj" />
+    <ProjectReference Include="..\..\extern\agent-framework\dotnet\src\Microsoft.Agents.AI.Workflows.Declarative\Microsoft.Agents.AI.Workflows.Declarative.csproj" />
+    <ProjectReference Include="..\..\extern\agent-framework\dotnet\src\Microsoft.Agents.AI.Harness\Microsoft.Agents.AI.Harness.csproj" />
+    <ProjectReference Include="..\..\extern\agent-framework\dotnet\src\Microsoft.Agents.AI.Hosting\Microsoft.Agents.AI.Hosting.csproj" />
+    <ProjectReference Include="..\..\extern\agent-framework\dotnet\src\Microsoft.Agents.AI.Mem0\Microsoft.Agents.AI.Mem0.csproj" />
+    <ProjectReference Include="..\..\extern\agent-framework\dotnet\src\Microsoft.Agents.AI.Mcp\Microsoft.Agents.AI.Mcp.csproj" />
+    <ProjectReference Include="..\..\extern\agent-framework\dotnet\src\Microsoft.Agents.AI.DurableTask\Microsoft.Agents.AI.DurableTask.csproj" />
+    <PackageReference Include="Microsoft.DurableTask.InProcessTestHost" Version="0.2.3-preview.1" />
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.13.0" />
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Scripting" Version="4.13.0" />
     <PackageReference Include="Microsoft.Extensions.AI" Version="10.6.0" />
+    <PackageReference Include="System.ClientModel" Version="1.12.0" />
 
     <PackageReference Include="Serilog.AspNetCore" Version="10.0.0" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.0-preview.3.25171.6" />
@@ -34,6 +42,14 @@
   <ItemGroup>
     <ProjectReference Include="..\LTAI.Core\LTAI.Core.csproj" />
     <ProjectReference Include="..\LTAI.AI\LTAI.AI.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- P7.5: MAF Workflows.Declarative YAML files (greeting fast-path) -->
+    <None Include="Workflows\ltai-workflows\**\*.yaml">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>ltai-workflows\%(RecursiveDir)%(Filename)%(Extension)</Link>
+    </None>
   </ItemGroup>
 
 </Project>

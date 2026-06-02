@@ -40,6 +40,7 @@ public static class Program
         // Set on App for UI access
         App.ChatAgent = chatAgent;
         App.Options = options;
+        App.Services = provider;
         App.Ltais = new LTAIService(chatAgent, options);
         App.Router = await Task.Run(() => provider.GetService<MultiProviderChatClient>());
         App.HttpFactory = await Task.Run(() => provider.GetService<IHttpClientFactory>());

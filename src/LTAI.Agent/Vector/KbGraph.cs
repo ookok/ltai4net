@@ -79,7 +79,7 @@ public sealed class KbGraph : AIContextProvider
             try
             {
                 var localEmb = GetSharedEmbedder();
-                if (localEmb.Available)
+                if (localEmb != null && localEmb.Available)
                 {
                     var queryEmb = localEmb.Generate(query);
                     var vecHits = await _store.SearchVector(queryEmb, topN: topK * 3).ConfigureAwait(false);
@@ -528,12 +528,15 @@ public sealed class KbGraph : AIContextProvider
         int count = 0;
 
         // 优先使用 ONNX LocalEmbedder（BGE 模型），不可用时回退 FastEmb
+        // P12.3: GetSharedEmbedder returns null when remote API is available
+        // (LocalEmbedder.DefaultDisabled) — fall through to FastEmb without
+        // ever loading the 90 MB model file.
         var localEmb = GetSharedEmbedder();
 
         foreach (var anchor in anchors)
         {
             float[] emb;
-            if (localEmb.Available)
+            if (localEmb != null && localEmb.Available)
             {
                 emb = localEmb.Generate(anchor);
             }
@@ -606,9 +609,13 @@ public sealed class KbGraph : AIContextProvider
     }
 
     // 共享 LocalEmbedder 实例 — 避免每次查询都加载 90MB ONNX 模型
-    private static readonly Lazy<LocalEmbedder> _sharedEmbedder = new(() => new LocalEmbedder(), true);
+    // P12.3: respects LocalEmbedder.DefaultDisabled (when remote API key is
+    // present, returns null and callers fall back to FastEmb without ever
+    // touching the local model).
+    private static readonly Lazy<LocalEmbedder?> _sharedEmbedder = new(() =>
+        LocalEmbedder.DefaultDisabled ? null : new LocalEmbedder(), true);
 
-    private static LocalEmbedder GetSharedEmbedder() => _sharedEmbedder.Value;
+    private static LocalEmbedder? GetSharedEmbedder() => _sharedEmbedder.Value;
 
     private static string FormatNode(NodeRow node)
     {

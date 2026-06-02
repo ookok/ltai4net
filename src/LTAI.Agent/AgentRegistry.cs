@@ -67,26 +67,41 @@ public static class AgentRegistry
     /// Compute embeddings for all agents (lazy, cached per def).
     /// Call this once at startup or when agents change.
     /// </summary>
+    /// <remarks>
+    /// P12.1: if a <see cref="ToolEmbeddingCache"/> is supplied, the 10 agent
+    /// descriptions are sent in a single batched ONNX call and persisted to
+    /// <c>%LOCALAPPDATA%/LTAI/tool_embeddings.json</c> keyed by SHA-256 of
+    /// the capability text. On second call (or process restart) the cache
+    /// hit eliminates the embedding work entirely.
+    /// </remarks>
     public static async Task EnsureEmbeddingsAsync(EmbeddingClient embedder,
-        CancellationToken ct = default)
+        ToolEmbeddingCache? cache = null, CancellationToken ct = default)
     {
         var agents = LoadAll();
-        foreach (var def in agents)
+        if (cache != null)
         {
-            if (def.Embedding != null) continue; // already computed
+            // P12.1: 1 batched call, persisted to disk
+            var items = agents
+                .Select(a => (a.Name, a.CapabilityText))
+                .ToList();
             try
             {
-                var emb = await embedder.GenerateAsync(def.CapabilityText, ct).ConfigureAwait(false);
-                // Since AgentFileDef is a record, we need to update via index
-                var idx = agents.IndexOf(def);
-                if (idx >= 0)
-                    agents[idx] = def with { Embedding = emb };
+                var vectors = await cache.GetOrComputeAllAsync(items, ct).ConfigureAwait(false);
+                for (int i = 0; i < agents.Count; i++)
+                {
+                    if (vectors.TryGetValue(agents[i].Name, out var v) && v != null)
+                        agents[i] = agents[i] with { Embedding = v };
+                }
             }
             catch
             {
-                // Skip agent if embedding fails — will not be selectable via vector
+                // Cache path failed — fall through to per-agent computation
+                await ComputeEmbeddingsAsync(agents, embedder, ct).ConfigureAwait(false);
             }
+            return;
         }
+        // Original sequential per-agent fallback (no cache)
+        await ComputeEmbeddingsAsync(agents, embedder, ct).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -96,6 +111,24 @@ public static class AgentRegistry
     /// Falls back to all agent names if embeddings not computed yet.
     /// </summary>
     public static async Task<string[]> SelectTopKAsync(string task, EmbeddingClient embedder,
+        ToolEmbeddingCache? cache = null, int k = 5, CancellationToken ct = default)
+    {
+        var scored = await SelectTopKWithScoresAsync(task, embedder, cache, k, ct).ConfigureAwait(false);
+        return scored.Select(s => s.Name).ToArray();
+    }
+
+    /// <summary>
+    /// Top-K agents with cosine similarity scores. Used by the decision-tree
+    /// router (P7.7) to compute the confidence margin between rank-1 and rank-2:
+    /// a large margin → trust the top-K; a small margin → ambiguous, fall back
+    /// to all specialists.
+    /// </summary>
+    /// <remarks>
+    /// P12.1: pass a <see cref="ToolEmbeddingCache"/> to skip the initial
+    /// batched embedding of agent descriptions on subsequent calls.
+    /// </remarks>
+    public static async Task<IReadOnlyList<(string Name, float Score)>> SelectTopKWithScoresAsync(
+        string task, EmbeddingClient embedder, ToolEmbeddingCache? cache = null,
         int k = 5, CancellationToken ct = default)
     {
         var agents = LoadAll();
@@ -105,12 +138,20 @@ public static class AgentRegistry
         var hasMissing = agents.Any(a => a.Embedding == null);
         if (hasMissing)
         {
-            await ComputeEmbeddingsAsync(agents, embedder, ct).ConfigureAwait(false);
+            await EnsureEmbeddingsAsync(embedder, cache, ct).ConfigureAwait(false);
         }
 
-        // If still no embeddings (embedder unavailable), return all
+        // If still no embeddings (embedder unavailable), return all with 0 score
         if (agents.All(a => a.Embedding == null))
-            return agents.Select(a => a.Name).Where(n => n != null).Cast<string>().Take(k).ToArray();
+        {
+            return agents
+                .Select(a => a.Name)
+                .Where(n => n != null)
+                .Cast<string>()
+                .Take(k)
+                .Select(n => (n, 0f))
+                .ToArray();
+        }
 
         // Compute task embedding using ONNX (priority 1) → FastEmb fallback
         float[] taskEmb;
@@ -124,16 +165,13 @@ public static class AgentRegistry
         }
 
         var scored = agents
-            .Where(a => a.Embedding != null)
-            .Select(a => (name: a.Name, score: CosineSimilarity(taskEmb, a.Embedding!)))
+            .Where(a => a.Embedding != null && a.Name != null)
+            .Select(a => (name: a.Name!, score: CosineSimilarity(taskEmb, a.Embedding!)))
             .OrderByDescending(x => x.score)
             .Take(k)
-            .Select(x => x.name)
-            .Where(n => n != null)
-            .Cast<string>()
             .ToArray();
 
-        return scored.Length > 0 ? scored : agents.Select(a => a.Name).Cast<string>().Take(k).ToArray();
+        return scored;
     }
 
     // ═══════════════════════════════════════════
@@ -212,14 +250,21 @@ public static class AgentRegistry
         return na > 0 && nb > 0 ? dot / (MathF.Sqrt(na) * MathF.Sqrt(nb)) : 0;
     }
 
-    private static string[]? ParseJsonArray(string json)
+    private static string[]? ParseJsonArray(string raw)
     {
-        try
-        {
-            var arr = JsonSerializer.Deserialize<string[]>(json);
-            return arr?.Length > 0 ? arr : null;
-        }
-        catch { return null; }
+        // Strip surrounding brackets and whitespace; tolerate both quoted JSON arrays
+        // (`["a", "b"]`) and unquoted CSV-style values (`[a, b]`) which some hand-edited
+        // agent.md files use. Returns null for empty input.
+        var trimmed = raw.Trim();
+        if (trimmed.StartsWith('[')) trimmed = trimmed[1..];
+        if (trimmed.EndsWith(']')) trimmed = trimmed[..^1];
+        if (string.IsNullOrWhiteSpace(trimmed)) return null;
+
+        var items = trimmed.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(s => s.Trim().Trim('"').Trim('\''))
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .ToArray();
+        return items.Length > 0 ? items : null;
     }
 }
 

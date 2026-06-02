@@ -129,9 +129,7 @@ public sealed class LLMConfigPanel
 
         try
         {
-            var http = _httpFactory?.CreateClient() ?? new HttpClient();
-            http.Timeout = TimeSpan.FromSeconds(30);
-            var client = new OpenAiHttpClient(http, info.Endpoint, info.Model, apiKey);
+            var client = OpenAIChatClientFactory.Create(info.Endpoint, info.Model, apiKey);
             _router.Register(name, client);
             _router.ActiveProvider = name;
             AnsiConsole.MarkupLine($"[green]✓ {name} registered and ready[/]");

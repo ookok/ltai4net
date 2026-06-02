@@ -1,0 +1,262 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
+using LTAI.AI;
+using Microsoft.Agents.AI;
+using Microsoft.Agents.AI.Workflows;
+using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Logging;
+
+namespace LTAI.Agent.Workflows;
+
+/// <summary>
+/// Multi-agent orchestrator built on MAF workflow primitives:
+/// <list type="bullet">
+///   <item>Handoff — <see cref="HandoffWorkflowBuilder"/>: router agent picks a specialist via function-call handoff.</item>
+///   <item>Sequential — <see cref="AgentWorkflowBuilder.CreateSequentialBuilderWith"/>: pipeline of agents, each receives previous output.</item>
+///   <item>Concurrent — <see cref="AgentWorkflowBuilder.CreateConcurrentBuilderWith"/>: fan-out + fan-in aggregator.</item>
+/// </list>
+/// <para>
+/// Replaces the legacy <c>WorkflowOrchestrator</c> (text/JSON handoff markers,
+/// circuit breaker, retry+fallback, vector top-K, concurrency throttle). The
+/// greeting fast-path is now driven by the MAF <c>Workflows.Declarative</c>
+/// YAML file <c>ltai-workflows/greeting.yaml</c> (see
+/// <see cref="YAMLWorkflowHost"/>), editable without recompiling.
+/// </para>
+/// </summary>
+public sealed class AgentWorkflows
+{
+    private readonly ILogger<AgentWorkflows> _logger;
+    private readonly Dictionary<string, AIAgent> _specialists;
+    private readonly AIAgent _router;
+    private readonly DecisionTreeRouter _router2;
+
+    public AgentWorkflows(
+        IEnumerable<AIAgent> allAgents,
+        AIAgent router,
+        ILogger<AgentWorkflows> logger,
+        DecisionTreeRouter? router2 = null)
+    {
+        _logger = logger;
+        _router = router;
+        _router2 = router2 ?? new DecisionTreeRouter(
+            embedder: null,
+            logger: Microsoft.Extensions.Logging.Abstractions.NullLogger<DecisionTreeRouter>.Instance);
+        _specialists = allAgents
+            .Where(a => !string.Equals(a.Name, router.Name, StringComparison.OrdinalIgnoreCase))
+            .ToDictionary(a => a.Name!, StringComparer.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Handoff routing: the <c>router</c> agent receives the user task, emits a
+    /// handoff function call to the chosen specialist, and the specialist's
+    /// response is returned. Uses MAF <see cref="HandoffWorkflowBuilder"/>
+    /// (function-call protocol, replaces the legacy text/JSON marker protocol).
+    /// </summary>
+    public async Task<AgentResponse> RunHandoffAsync(
+        string task,
+        string? traceId = null,
+        CancellationToken ct = default)
+    {
+        // ── Greeting fast-path (YAML workflow, editable without recompile) ──
+        var canned = await YAMLWorkflowHost.RunGreetingFastPathAsync(task, ct).ConfigureAwait(false);
+        if (canned != null)
+        {
+            _logger.LogInformation("Greeting fast path (YAML): \"{Task}\" -> \"{Reply}\"", task, canned);
+            return new AgentResponse { Messages = [new ChatMessage(ChatRole.Assistant, canned)] };
+        }
+
+        // ── P7.7 Decision-tree routing ──
+        // Stage 1: embedding top-K by cosine similarity (default K=3)
+        // Stage 2: confidence margin (top-1 − top-2)
+        // Stage 3: confident → use top-K; ambiguous → fall back to all specialists
+        var routing = await _router2.RouteAsync(task, _specialists.Keys.ToArray(), ct).ConfigureAwait(false);
+        var candidateNames = routing.Candidates;
+
+        // Expose routing diagnostics via the OTel bag (DecisionTreeRouter already logs them).
+        if (routing.Branch == BranchKind.ConfidentTopK)
+        {
+            _logger.LogDebug("Vector router: confident top-{K}, margin={M:F3}, top={T:F3}",
+                routing.Candidates.Count, routing.Margin, routing.TopScore);
+        }
+
+        var candidates = candidateNames
+            .Select(n => _specialists.TryGetValue(n, out var a) ? a : null)
+            .Where(a => a != null)
+            .Cast<AIAgent>()
+            .ToList();
+        if (candidates.Count == 0)
+        {
+            _logger.LogWarning("No specialist candidates available for task: {Task}", task);
+            return new AgentResponse
+            {
+                Messages = [new ChatMessage(ChatRole.Assistant, "No specialists available to handle this task.")]
+            };
+        }
+
+        // ── Build MAF Handoff workflow ──
+        var builder = AgentWorkflowBuilder.CreateHandoffBuilderWith(_router);
+        foreach (var specialist in candidates)
+        {
+            builder.WithHandoff(_router, specialist);
+        }
+        // Terminate after the first non-handoff response (one-shot delegation).
+        builder.WithTerminationCondition(messages => new ValueTask<bool>(true));
+        builder.EmitAgentResponseEvents();
+
+        var workflow = builder.Build();
+        var input = new List<ChatMessage> { new(ChatRole.User, task) };
+
+        // ── Execute and collect the final agent response ──
+        _logger.LogInformation("Handoff workflow start: {Task} [trace={Trace}]", task, traceId ?? "");
+        await using var run = await InProcessExecution.RunStreamingAsync(workflow, input, cancellationToken: ct)
+                                                 .ConfigureAwait(false);
+
+        AgentResponse? lastResponse = null;
+        await foreach (var evt in run.WatchStreamAsync(ct).ConfigureAwait(false))
+        {
+            switch (evt)
+            {
+                case AgentResponseEvent responseEvt when responseEvt.Response is { } resp:
+                    lastResponse = resp;
+                    break;
+                case WorkflowErrorEvent errEvt:
+                    _logger.LogError(errEvt.Exception, "Handoff workflow error [trace={Trace}]", traceId ?? "");
+                    return new AgentResponse
+                    {
+                        Messages = [new ChatMessage(ChatRole.Assistant,
+                            $"Handoff failed: {errEvt.Exception?.Message ?? "unknown error"}")]
+                    };
+            }
+        }
+
+        return lastResponse ?? new AgentResponse
+        {
+            Messages = [new ChatMessage(ChatRole.Assistant, "(workflow produced no agent response)")]
+        };
+    }
+
+    /// <summary>
+    /// Sequential pipeline: each agent receives the previous agent's output as
+    /// the next user message. Uses MAF <see cref="SequentialWorkflowBuilder"/>.
+    /// </summary>
+    public async Task<string> RunSequentialAsync(
+        string[] agentNames,
+        string task,
+        string? traceId = null,
+        CancellationToken ct = default)
+    {
+        var agents = ResolveAgents(agentNames);
+        if (agents.Length == 0) return "No valid agents specified.";
+
+        _logger.LogInformation("Sequential: {Agents} → {Task} [trace={Trace}]",
+            string.Join(" → ", agents.Select(a => a.Name)), task, traceId ?? "");
+
+        var workflow = AgentWorkflowBuilder.CreateSequentialBuilderWith(agents).Build();
+        var input = new List<ChatMessage> { new(ChatRole.User, task) };
+
+        await using var run = await InProcessExecution.RunStreamingAsync(workflow, input, cancellationToken: ct)
+                                                 .ConfigureAwait(false);
+
+        var sb = new StringBuilder();
+        await foreach (var evt in run.WatchStreamAsync(ct).ConfigureAwait(false))
+        {
+            switch (evt)
+            {
+                case WorkflowOutputEvent outputEvt when outputEvt.Data is List<ChatMessage> messages:
+                    AppendTranscript(sb, messages);
+                    break;
+                case WorkflowErrorEvent errEvt:
+                    _logger.LogError(errEvt.Exception, "Sequential workflow error [trace={Trace}]", traceId ?? "");
+                    sb.AppendLine($"[Error: {errEvt.Exception?.Message ?? "unknown"}]");
+                    break;
+            }
+        }
+
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Concurrent fan-out: every agent processes the same task in parallel and
+    /// results are combined. Uses MAF <see cref="ConcurrentWorkflowBuilder"/>
+    /// with a custom aggregator that formats per-agent results as markdown.
+    /// </summary>
+    public async Task<string> RunConcurrentAsync(
+        string[] agentNames,
+        string task,
+        string? traceId = null,
+        CancellationToken ct = default)
+    {
+        var agents = ResolveAgents(agentNames);
+        if (agents.Length == 0) return "No valid agents specified.";
+
+        _logger.LogInformation("Concurrent: {Agents} on: {Task} [trace={Trace}]",
+            string.Join(", ", agents.Select(a => a.Name)), task, traceId ?? "");
+
+        var builder = AgentWorkflowBuilder.CreateConcurrentBuilderWith(agents);
+        builder.WithAggregator(static lists =>
+        {
+            // Per-agent ordered output, last assistant message wins.
+            var sb = new StringBuilder();
+            sb.AppendLine("## Concurrent Results\n");
+            foreach (var list in lists)
+            {
+                if (list.Count == 0) continue;
+                var last = list[^1];
+                var name = !string.IsNullOrEmpty(last.AuthorName) ? last.AuthorName : "(unnamed)";
+                sb.AppendLine($"### {name}");
+                sb.AppendLine(last.Text);
+                sb.AppendLine();
+            }
+            return [new ChatMessage(ChatRole.Assistant, sb.ToString())];
+        });
+        var workflow = builder.Build();
+        var input = new List<ChatMessage> { new(ChatRole.User, task) };
+
+        await using var run = await InProcessExecution.RunStreamingAsync(workflow, input, cancellationToken: ct)
+                                                 .ConfigureAwait(false);
+
+        var collected = new StringBuilder();
+        await foreach (var evt in run.WatchStreamAsync(ct).ConfigureAwait(false))
+        {
+            switch (evt)
+            {
+                case WorkflowOutputEvent outputEvt when outputEvt.Data is List<ChatMessage> messages:
+                    AppendTranscript(collected, messages);
+                    break;
+                case WorkflowErrorEvent errEvt:
+                    _logger.LogError(errEvt.Exception, "Concurrent workflow error [trace={Trace}]", traceId ?? "");
+                    collected.AppendLine($"[Error: {errEvt.Exception?.Message ?? "unknown"}]");
+                    break;
+            }
+        }
+
+        return collected.ToString();
+    }
+
+    private AIAgent[] ResolveAgents(string[] names)
+    {
+        return names
+            .Select(n => string.Equals(n, _router.Name, StringComparison.OrdinalIgnoreCase)
+                ? _router
+                : _specialists.GetValueOrDefault(n))
+            .Where(a => a != null)
+            .Cast<AIAgent>()
+            .ToArray();
+    }
+
+    private static void AppendTranscript(StringBuilder sb, List<ChatMessage> messages)
+    {
+        foreach (var m in messages)
+        {
+            if (string.IsNullOrEmpty(m.Text)) continue;
+            var name = !string.IsNullOrEmpty(m.AuthorName) ? m.AuthorName : "(agent)";
+            sb.AppendLine($"### {name}");
+            sb.AppendLine(m.Text);
+            sb.AppendLine();
+        }
+    }
+}
