@@ -47,6 +47,14 @@ namespace LTAI.Agent.Durability;
 /// are process-local and start fresh — DTFx workflows resume naturally because
 /// the in-memory <c>readyToRunQueue</c> is repopulated from the audit log.
 ///
+/// Source references (DTFx v1.24.2, extern/durabletask-dotnet submodule):
+///   Base class: <see cref="InMemoryOrchestrationService"/>
+///     → src/InProcessTestHost/Sidecar/InMemoryOrchestrationService.cs
+///   gRPC sidecar (TaskHubGrpcServer):
+///     → src/InProcessTestHost/Sidecar/Grpc/TaskHubGrpcServer.cs
+///   AddInMemoryDurableTask extension:
+///     → src/InProcessTestHost/DurableTaskTestExtensions.cs
+///
 /// Concurrency: SQLite is single-writer; we serialize all writes behind a
 /// <see cref="SemaphoreSlim"/>. Reads (Hydrate) are read-only and use a separate
 /// connection.
@@ -61,16 +69,20 @@ namespace LTAI.Agent.Durability;
 /// </summary>
 public sealed class SQLiteOrchestrationService : InMemoryOrchestrationService
 {
+    // Source: src/InProcessTestHost/Sidecar/InMemoryOrchestrationService.cs (private field)
     static readonly FieldInfo s_instanceStoreField =
         typeof(InMemoryOrchestrationService).GetField("instanceStore", BindingFlags.NonPublic | BindingFlags.Instance)
         ?? throw new InvalidOperationException("Could not reflect InMemoryOrchestrationService.instanceStore");
 
+    // Source: nested InMemoryInstanceStore (same file), private field
     static readonly FieldInfo s_innerStoreField = s_instanceStoreField.FieldType
         .GetField("store", BindingFlags.NonPublic | BindingFlags.Instance)
         ?? throw new InvalidOperationException("Could not reflect InMemoryInstanceStore.store");
 
+    // Source: inner type SerializedInstanceState (same file, same nested class)
     static readonly Type s_serializedInstanceStateType = s_innerStoreField.FieldType.GetGenericArguments()[1];
 
+    // Source: SerializedInstanceState public fields (JSON round-trip via System.Text.Json.Nodes)
     static readonly FieldInfo s_statusRecordField =
         s_serializedInstanceStateType.GetField("StatusRecordJson", BindingFlags.Public | BindingFlags.Instance)
         ?? throw new InvalidOperationException("Could not reflect SerializedInstanceState.StatusRecordJson");
@@ -91,14 +103,17 @@ public sealed class SQLiteOrchestrationService : InMemoryOrchestrationService
         s_serializedInstanceStateType.GetField("IsCompleted", BindingFlags.NonPublic | BindingFlags.Instance)
         ?? throw new InvalidOperationException("Could not reflect SerializedInstanceState.IsCompleted");
 
+    // Source: nested InMemoryInstanceStore (same file), private field
     static readonly FieldInfo s_readyToRunQueueField = s_instanceStoreField.FieldType
         .GetField("readyToRunQueue", BindingFlags.NonPublic | BindingFlags.Instance)
         ?? throw new InvalidOperationException("Could not reflect InMemoryInstanceStore.readyToRunQueue");
 
+    // Source: s_readyToRunQueueField.FieldType (ReadyToRunQueue class, same file)
     static readonly MethodInfo s_scheduleMethod = s_readyToRunQueueField.FieldType
         .GetMethod("Schedule", BindingFlags.Public | BindingFlags.Instance)
         ?? throw new InvalidOperationException("Could not reflect ReadyToRunQueue.Schedule");
 
+    // Source: SerializedInstanceState constructor (same file)
     static readonly ConstructorInfo s_serializedInstanceStateCtor = s_serializedInstanceStateType
         .GetConstructor(new[] { typeof(string), typeof(string) })
         ?? throw new InvalidOperationException("Could not reflect SerializedInstanceState ctor");

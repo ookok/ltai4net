@@ -1,0 +1,60 @@
+#
+# Probing / capability questions fast-path workflow.
+#
+kind: Workflow
+trigger:
+
+  kind: OnConversationStart
+  id: workflow_probing
+  actions:
+
+    - kind: SetVariable
+      id: set_normalized
+      variable: Local.NormalizedText
+      value: =Lower(Trim(System.LastMessage.Text))
+
+    # ── Capability / "who are you" questions ──
+    - kind: ConditionGroup
+      id: is_probing
+      conditions:
+        - condition: >-
+            StartsWith(Local.NormalizedText, "what can you do")
+            || StartsWith(Local.NormalizedText, "what do you do")
+            || StartsWith(Local.NormalizedText, "what are you")
+            || StartsWith(Local.NormalizedText, "who are you")
+            || StartsWith(Local.NormalizedText, "are you")
+            || StartsWith(Local.NormalizedText, "help me")
+            || StartsWith(Local.NormalizedText, "你会做什么")
+            || StartsWith(Local.NormalizedText, "你能做什么")
+            || StartsWith(Local.NormalizedText, "你会写代码吗")
+            || StartsWith(Local.NormalizedText, "你会什么")
+            || StartsWith(Local.NormalizedText, "你有什么功能")
+            || StartsWith(Local.NormalizedText, "你能干嘛")
+            || StartsWith(Local.NormalizedText, "你是谁")
+          id: cond_probing
+          actions:
+            - kind: SendActivity
+              id: send_probing
+              activity: "我是 LTAI 助手 — I can help with code, search, data analysis, file management, and more. What would you like to do?"
+
+        # ── Affirmation / acknowledgement ──
+        - condition: >-
+            Local.NormalizedText = "ok"
+            || Local.NormalizedText = "okay"
+            || Local.NormalizedText = "k"
+            || Local.NormalizedText = "kk"
+            || Local.NormalizedText = "好的"
+            || Local.NormalizedText = "好"
+            || Local.NormalizedText = "嗯"
+            || Local.NormalizedText = "嗯嗯"
+            || Local.NormalizedText = "yes"
+            || Local.NormalizedText = "yep"
+            || Local.NormalizedText = "yeah"
+            || Local.NormalizedText = "y"
+            || Local.NormalizedText = "no"
+            || Local.NormalizedText = "nope"
+          id: cond_ack
+          actions:
+            - kind: SendActivity
+              id: send_ack
+              activity: "👍 Got it. Let me know when you're ready to continue."

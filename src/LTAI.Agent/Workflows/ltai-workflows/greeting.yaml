@@ -1,44 +1,22 @@
 #
-# Greeting fast-path workflow.
-#
-# Bypasses the 5-15s LLM handoff round-trip for short small-talk messages
-# (greetings / thanks / farewells / capability questions / "are you there?" pings).
-# Canned responses are returned via SendActivity, then the workflow ends.
-#
-# Edit this file to add/remove greeting patterns or change canned replies —
-# no recompile required. Each condition is a PowerFx expression evaluated
-# against Trim(Lower(System.LastMessage.Text)).
-#
-# Order matters: first matching condition wins. PowerFx `||` is short-circuit OR.
-#
-# ── Conventions ──
-# - `Local.NormalizedText` is the lowercased + trimmed input
-# - `StartsWith` covers all "leading-word" patterns (most greetings)
-# - `Length` is for the trailing "garbage fallback"
-# - Per-language patterns (en/zh/es/fr/...) are kept in the same condition
-#   group (PowerFx `||` works across unicode just fine)
+# Greeting fast-path workflow — greetings only.
 #
 kind: Workflow
 trigger:
 
   kind: OnConversationStart
-  id: workflow_greeting_fast_path
+  id: workflow_greeting
   actions:
 
-    # Normalize input once: lowercase + trimmed copy
     - kind: SetVariable
       id: set_normalized
       variable: Local.NormalizedText
       value: =Lower(Trim(System.LastMessage.Text))
 
-    # ── Canned responses ─────────────────────────────────────────────
-    # Order matters: first matching condition wins. PowerFx is short-circuit OR.
-
+    # ── English greetings ──
     - kind: ConditionGroup
       id: is_greeting
       conditions:
-
-        # ── English greetings ──
         - condition: >-
             StartsWith(Local.NormalizedText, "hi")
             || StartsWith(Local.NormalizedText, "hello")
@@ -76,7 +54,7 @@ trigger:
               id: send_greeting_zh
               activity: "你好 👋 我是 LTAI 助手，有什么可以帮你的？"
 
-        # ── Multi-language greetings (one line each: hola, bonjour, ciao, ...) ──
+        # ── Multi-language greetings ──
         - condition: >-
             StartsWith(Local.NormalizedText, "hola")
             || StartsWith(Local.NormalizedText, "bonjour")
@@ -92,143 +70,3 @@ trigger:
             - kind: SendActivity
               id: send_greeting_i18n
               activity: "你好 👋 (Hello!) I'm LTAI — what can I help you with today?"
-
-        # ── English thanks ──
-        - condition: >-
-            StartsWith(Local.NormalizedText, "thanks")
-            || StartsWith(Local.NormalizedText, "thank you")
-            || StartsWith(Local.NormalizedText, "thank")
-            || StartsWith(Local.NormalizedText, "thx")
-            || StartsWith(Local.NormalizedText, "ty")
-            || StartsWith(Local.NormalizedText, "cheers")
-            || StartsWith(Local.NormalizedText, "appreciate")
-          id: cond_thanks_en
-          actions:
-            - kind: SendActivity
-              id: send_thanks_en
-              activity: "You're welcome 😊 Anything else I can help with?"
-
-        # ── Chinese thanks ──
-        - condition: >-
-            StartsWith(Local.NormalizedText, "谢谢")
-            || StartsWith(Local.NormalizedText, "感谢")
-            || StartsWith(Local.NormalizedText, "多谢")
-            || StartsWith(Local.NormalizedText, "辛苦")
-          id: cond_thanks_zh
-          actions:
-            - kind: SendActivity
-              id: send_thanks_zh
-              activity: "不客气 😊 还有什么需要帮忙的吗？"
-
-        # ── English farewells ──
-        - condition: >-
-            StartsWith(Local.NormalizedText, "bye")
-            || StartsWith(Local.NormalizedText, "goodbye")
-            || StartsWith(Local.NormalizedText, "see you")
-            || StartsWith(Local.NormalizedText, "see ya")
-            || StartsWith(Local.NormalizedText, "later")
-            || StartsWith(Local.NormalizedText, "ttyl")
-            || StartsWith(Local.NormalizedText, "gotta go")
-            || StartsWith(Local.NormalizedText, "cya")
-            || StartsWith(Local.NormalizedText, "night")
-            || StartsWith(Local.NormalizedText, "good night")
-          id: cond_farewell_en
-          actions:
-            - kind: SendActivity
-              id: send_farewell_en
-              activity: "See you 👋 Come back anytime!"
-
-        # ── Chinese farewells ──
-        - condition: >-
-            StartsWith(Local.NormalizedText, "再见")
-            || StartsWith(Local.NormalizedText, "拜拜")
-            || StartsWith(Local.NormalizedText, "明天见")
-            || StartsWith(Local.NormalizedText, "回头聊")
-          id: cond_farewell_zh
-          actions:
-            - kind: SendActivity
-              id: send_farewell_zh
-              activity: "再见 👋 随时欢迎回来！"
-
-        # ── Probing: capability / "who are you" questions ──
-        - condition: >-
-            StartsWith(Local.NormalizedText, "what can you do")
-            || StartsWith(Local.NormalizedText, "what do you do")
-            || StartsWith(Local.NormalizedText, "what are you")
-            || StartsWith(Local.NormalizedText, "who are you")
-            || StartsWith(Local.NormalizedText, "are you")
-            || StartsWith(Local.NormalizedText, "help me")
-            || StartsWith(Local.NormalizedText, "你会做什么")
-            || StartsWith(Local.NormalizedText, "你能做什么")
-            || StartsWith(Local.NormalizedText, "你会写代码吗")
-            || StartsWith(Local.NormalizedText, "你会什么")
-            || StartsWith(Local.NormalizedText, "你有什么功能")
-            || StartsWith(Local.NormalizedText, "你能干嘛")
-            || StartsWith(Local.NormalizedText, "你是谁")
-          id: cond_probing
-          actions:
-            - kind: SendActivity
-              id: send_probing
-              activity: "我是 LTAI 助手 — I can help with code, search, data analysis, file management, and more. What would you like to do?"
-
-        # ── Test / presence ping ──
-        - condition: >-
-            StartsWith(Local.NormalizedText, "test")
-            || StartsWith(Local.NormalizedText, "testing")
-            || StartsWith(Local.NormalizedText, "ping")
-            || StartsWith(Local.NormalizedText, "在吗")
-            || StartsWith(Local.NormalizedText, "在不在")
-          id: cond_test
-          actions:
-            - kind: SendActivity
-              id: send_test
-              activity: "I'm here ✅ Ready to start. What would you like to do?"
-
-        # ── Affirmation / acknowledgement (very short replies) ──
-        - condition: >-
-            Local.NormalizedText = "ok"
-            || Local.NormalizedText = "okay"
-            || Local.NormalizedText = "k"
-            || Local.NormalizedText = "kk"
-            || Local.NormalizedText = "好的"
-            || Local.NormalizedText = "好"
-            || Local.NormalizedText = "嗯"
-            || Local.NormalizedText = "嗯嗯"
-            || Local.NormalizedText = "yes"
-            || Local.NormalizedText = "yep"
-            || Local.NormalizedText = "yeah"
-            || Local.NormalizedText = "y"
-            || Local.NormalizedText = "no"
-            || Local.NormalizedText = "nope"
-            || Local.NormalizedText = "no"
-            || Local.NormalizedText = "n"
-          id: cond_ack
-          actions:
-            - kind: SendActivity
-              id: send_ack
-              activity: "👍 Got it. Let me know when you're ready to continue."
-
-      # ── Garbage / very-short fallback (only fires if NOTHING above matched) ──
-      # Triggered by inputs like "a", "asdf", ".", single non-word chars, etc.
-      # If input is NOT garbage, emit no SendActivity — YAMLWorkflowHost returns null
-      # and the caller falls through to the LLM handoff.
-      elseActions:
-        - kind: ConditionGroup
-          id: is_garbage
-          conditions:
-            - condition: >-
-                Length(Local.NormalizedText) < 3
-                || StartsWith(Local.NormalizedText, "asdf")
-                || StartsWith(Local.NormalizedText, "qwerty")
-                || StartsWith(Local.NormalizedText, "test123")
-                || StartsWith(Local.NormalizedText, "啊啊")
-                || StartsWith(Local.NormalizedText, "啊啊啊啊")
-              id: cond_garbage_short
-              actions:
-                - kind: SendActivity
-                  id: send_garbage
-                  activity: "我没太明白你的意思 🤔 (I didn't quite catch that.) Could you rephrase or type 'help' to see what I can do?"
-
-          # No elseActions here: non-garbage inputs that don't match any greeting
-          # should fall through to the LLM handoff workflow. The YAMLWorkflowHost
-          # observes the absence of a MessageActivityEvent and returns null.

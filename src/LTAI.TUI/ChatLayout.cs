@@ -2,8 +2,10 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Threading.Channels;
 using LTAI.Agent;
 using LTAI.Core.Configuration;
+using LTAI.Agent.Tools;
 using Spectre.Console;
 using Spectre.Console.Rendering;
 
@@ -14,7 +16,18 @@ public sealed class ChatLayout
     private readonly ChatAgent _chat;
     private readonly List<(string role, string content)> _history = new();
     private readonly Layout _layout;
-    private readonly Queue<ConsoleKeyInfo> _pendingKeys = new();
+    private readonly QuestionService _questionService;
+    private volatile QuestionPost? _pendingQuestion;
+
+    private readonly System.Threading.Channels.Channel<string> _messageQueue =
+        System.Threading.Channels.Channel.CreateBounded<string>(new BoundedChannelOptions(32)
+        {
+            FullMode = BoundedChannelFullMode.DropOldest,
+        });
+    private bool _processing;
+    private CancellationTokenSource? _responseCts;
+    private volatile char _quickNav;
+    private LiveDisplayContext? _liveCtx;
     public TuiView? LastRequestedView { get; private set; }
     private int _toolCallCount;
     private int _subagentProgress;
@@ -25,12 +38,12 @@ public sealed class ChatLayout
     private int _cachedHistoryCount = 0;
     private int _lastStreamRenderLen = 0;
 
-    private void ThrottledRefresh(LiveDisplayContext ctx)
+    private void ThrottledRefresh()
     {
         var now = DateTime.UtcNow;
-        if ((now - _lastRefresh).TotalMilliseconds >= RefreshIntervalMs)
+        if ((now - _lastRefresh).TotalMilliseconds >= RefreshIntervalMs && _liveCtx != null)
         {
-            ctx.Refresh();
+            _liveCtx.Refresh();
             _lastRefresh = now;
         }
     }
@@ -60,9 +73,12 @@ public sealed class ChatLayout
         "[yellow]▁▁▂▃▄▅▆▇█▇▆▅▄▃▂[/]",
     ];
 
-    public ChatLayout(ChatAgent chat)
+    public ChatLayout(ChatAgent chat, QuestionService? questionService = null)
     {
         _chat = chat;
+        _questionService = questionService ?? new QuestionService(
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<QuestionService>.Instance);
+        _questionService.QuestionPosted += post => _pendingQuestion = post;
 
         _layout = new Layout()
             .SplitRows(
@@ -120,124 +136,122 @@ public sealed class ChatLayout
             .Cropping(VerticalOverflowCropping.Top)
             .StartAsync(async ctx =>
             {
+                _liveCtx = ctx;
                 var inputBuf = new StringBuilder();
-                var showWatermark = true; // 首次显示水印，之后不再出现
+                var showWatermark = true;
+                _processing = false;
 
-                while (true)
+                // P17.5: background task that reads keys independently from
+                // message processing. User can type the next message while the
+                // LLM is still responding to the previous one.
+                var cts = new CancellationTokenSource();
+
+                var inputTask = Task.Run(async () =>
                 {
-                    // 刷新：消息 + footer（含 "> " 输入框）
-                    lock (_layout) { UpdateMessages(""); UpdateFooter(inputBuf.ToString(), "", showWatermark); ctx.Refresh(); }
-                    showWatermark = false; // 只显示一次水印
-
-                    // 读按键（优先消化缓冲键）
-                    ConsoleKeyInfo key;
-                    lock (_pendingKeys)
+                    while (!cts.Token.IsCancellationRequested)
                     {
-                        if (_pendingKeys.Count > 0) { key = _pendingKeys.Dequeue(); }
-                        else { key = Console.ReadKey(true); }
-                    }
+                        var key = Console.ReadKey(true);
 
-                    // ── 视图切换：仅在输入为空时生效（避免误触） ──
-                    if (inputBuf.Length == 0 && (key.KeyChar == '1' || key.KeyChar == '3' || key.KeyChar == '4' || key.KeyChar == '5'))
-                    {
-                        LastRequestedView = key.KeyChar switch
+                        // ── 视图切换（仅空输入时） ──
+                        if (inputBuf.Length == 0 && "1345".Contains(key.KeyChar))
                         {
-                            '1' => TuiView.Dashboard, '3' => TuiView.LLMConfig,
-                            '4' => TuiView.TextPad, '5' => TuiView.Skills, _ => TuiView.Chat
-                        };
-                        return;
-                    }
-                    if (key.Key == ConsoleKey.Escape || key.KeyChar == 'q' || key.KeyChar == 'Q')
-                    { LastRequestedView = null; return; }
-
-                    // Ctrl+V → 粘贴
-                    if (key.Key == ConsoleKey.V && (key.Modifiers & ConsoleModifiers.Control) != 0)
-                    {
-                        try { inputBuf.Append(TextCopy.ClipboardService.GetText() ?? ""); }
-                        catch { lock (_layout) { UpdateFooter(inputBuf.ToString(), "[red]粘贴失败: 剪贴板不可用[/]"); ctx.Refresh(); } }
-                        continue;
-                    }
-
-                    if (key.Key == ConsoleKey.Enter)
-                    {
-                        // Shift+Enter → 换行
-                        if ((key.Modifiers & ConsoleModifiers.Shift) != 0)
+                            lock (_layout) { _quickNav = key.KeyChar; }
+                            continue;
+                        }
+                        if (key.Key == ConsoleKey.Escape || key.KeyChar == 'q')
                         {
-                            inputBuf.Append('\n');
+                            // Cancel current response if processing, or quit
+                            if (_processing) { _responseCts?.Cancel(); continue; }
+                            cts.Cancel(); return;
+                        }
+
+                        // Ctrl+V → 粘贴
+                        if (key.Key == ConsoleKey.V && (key.Modifiers & ConsoleModifiers.Control) != 0)
+                        {
+                            try { lock (inputBuf) inputBuf.Append(TextCopy.ClipboardService.GetText() ?? ""); }
+                            catch { }
                             continue;
                         }
 
-                        // Enter（无修饰键）→ 提交
-                        var input = inputBuf.ToString().Trim();
-                        inputBuf.Clear();
-
-                        if (string.IsNullOrEmpty(input))
+                        if (key.Key == ConsoleKey.Enter)
                         {
-                            // 空输入 → 无操作，不退出
-                            lock (_layout) { UpdateMessages(""); UpdateFooter("", ""); ctx.Refresh(); }
+                            if ((key.Modifiers & ConsoleModifiers.Shift) != 0)
+                            { lock (inputBuf) inputBuf.Append('\n'); continue; }
+
+                            string input;
+                            lock (inputBuf) { input = inputBuf.ToString().Trim(); inputBuf.Clear(); }
+                            if (string.IsNullOrEmpty(input)) continue;
+
+                            // Slash commands bypass queue and run instantly.
+                            if (input.StartsWith('/'))
+                            {
+                                var handled = await HandleSlashCommandAsync(input).ConfigureAwait(false);
+                                if (!handled) { cts.Cancel(); return; }
+                                continue;
+                            }
+
+                            lock (_history) _history.Add(("user", input));
+                            TrimHistory();
+                            await _messageQueue.Writer.WriteAsync(input, cts.Token).ConfigureAwait(false);
                             continue;
                         }
 
-                        if (input.StartsWith('/'))
+                        if (key.Key == ConsoleKey.Backspace)
+                        { lock (inputBuf) { if (inputBuf.Length > 0) inputBuf.Length--; } continue; }
+
+                        if (!char.IsControl(key.KeyChar))
                         {
-                            if (await HandleSlashCommandAsync(input).ConfigureAwait(false))
+                            lock (inputBuf) { inputBuf.Append(key.KeyChar); }
+                            // Show command picker on first '/'
+                            if (inputBuf.Length == 1 && inputBuf[0] == '/')
                             {
-                                // D61: /snippet use may set a pending fill — load it into the input buffer
-                                var fill = SlashCommands.PendingSnippetFill;
-                                if (!string.IsNullOrEmpty(fill))
+                                var cmd = CommandPickerModal.Show(_layout, ctx);
+                                if (cmd != null)
                                 {
-                                    SlashCommands.PendingSnippetFill = null;
-                                    inputBuf.Clear();
-                                    inputBuf.Append(fill);
+                                    var handled = await HandleSlashCommandAsync(cmd).ConfigureAwait(false);
+                                    if (!handled) { cts.Cancel(); return; }
                                 }
-                                continue;
                             }
-                            LastRequestedView = null; return;
                         }
+                    }
+                }, cts.Token);
 
-                        _history.Add(("user", input));
-                        TrimHistory();
-                        lock (_layout) { UpdateMessages(""); UpdateFooter("", ""); ctx.Refresh(); }
+                // Main rendering + processing loop: runs at ~30fps, processes
+                // queued messages one at a time while keeping the UI responsive.
+                while (!cts.Token.IsCancellationRequested)
+                {
+                    // Refresh UI
+                    string buf;
+                    lock (inputBuf) buf = inputBuf.ToString();
+                    lock (_layout) { UpdateMessages(""); UpdateFooter(buf, "", showWatermark); ctx.Refresh(); }
+                    showWatermark = false;
 
-                        ConfirmationModal.AuthorizePaths(_layout, ctx, input);
-                        await StreamResponseAsync(ctx, input).ConfigureAwait(false);
+                    // Check quick-navigation from input thread
+                    lock (_layout)
+                    {
+                        if (_quickNav != default)
+                        {
+                            LastRequestedView = _quickNav switch
+                            {
+                                '1' => TuiView.Dashboard, '3' => TuiView.LLMConfig,
+                                '4' => TuiView.TextPad, '5' => TuiView.Skills, _ => TuiView.Chat
+                            };
+                            cts.Cancel(); return;
+                        }
+                    }
+
+                    // Process the next queued message (if not already busy)
+                    if (!_processing && _messageQueue.Reader.TryRead(out var msg))
+                    {
+                        _processing = true;
+                        _responseCts = new CancellationTokenSource();
+                        await StreamResponseAsync(msg).ConfigureAwait(false);
+                        _processing = false;
                         continue;
                     }
 
-                    if (key.Key == ConsoleKey.Backspace && inputBuf.Length > 0)
-                    {
-                        inputBuf.Length--;
-                        continue;
-                    }
-
-                    if (!char.IsControl(key.KeyChar))
-                    {
-                        inputBuf.Append(key.KeyChar);
-                        // 首字符为 / → 弹出命令选择器模态窗口
-                        if (inputBuf.Length == 1 && inputBuf[0] == '/')
-                        {
-                            inputBuf.Clear();
-
-                            // 在 Messages 面板中打开命令选择器
-                            var cmd = CommandPickerModal.Show(_layout, ctx);
-                            // 取消 → 继续（下一次循环刷新会恢复 Messages）
-                            if (cmd == null) continue;
-
-                            if (await HandleSlashCommandAsync(cmd).ConfigureAwait(false))
-                            {
-                                // D61: /snippet use may set a pending fill — load it into the input buffer
-                                var fill = SlashCommands.PendingSnippetFill;
-                                if (!string.IsNullOrEmpty(fill))
-                                {
-                                    SlashCommands.PendingSnippetFill = null;
-                                    inputBuf.Clear();
-                                    inputBuf.Append(fill);
-                                }
-                                continue;
-                            }
-                            LastRequestedView = null; return;
-                        }
-                    }
+                    // Yield to avoid 100% CPU spin when queue is empty
+                    await Task.Delay(16, cts.Token).ConfigureAwait(false);
                 }
             });
         return LastRequestedView;
@@ -466,7 +480,7 @@ public sealed class ChatLayout
 
     // ── 流式响应 ──
 
-    private async Task StreamResponseAsync(LiveDisplayContext ctx, string input)
+    private async Task StreamResponseAsync(string input)
     {
         var content = new StringBuilder();
         using var cts = new CancellationTokenSource();
@@ -478,7 +492,7 @@ public sealed class ChatLayout
         _toolCallCount = 0;
         var toolTimer = Stopwatch.StartNew();
         UpdateFooter("", $"[grey]{PulseFrames[0]} 思考中...[/]");
-        ctx.Refresh();
+        _liveCtx?.Refresh();
 
         // 后台脉冲动画（每 250ms 更新一次，即使无 token）
         using var spinCts = CancellationTokenSource.CreateLinkedTokenSource(cts.Token);
@@ -501,7 +515,7 @@ public sealed class ChatLayout
                     lock (_layout)
                     {
                         UpdateFooter("", $"[grey]{line}[/]");
-                        ctx.Refresh();
+                        _liveCtx?.Refresh();
                     }
                 }
             }
@@ -513,13 +527,6 @@ public sealed class ChatLayout
         {
             await foreach (var update in _chat.ChatStreamingAsync(input).WithCancellation(cts.Token).ConfigureAwait(false))
             {
-                // 内联检查 ESC（缓冲非 ESC 按键）
-                if (Console.KeyAvailable)
-                {
-                    var k = Console.ReadKey(true);
-                    if (k.Key == ConsoleKey.Escape) { cts.Cancel(); break; }
-                    lock (_pendingKeys) { _pendingKeys.Enqueue(k); }
-                }
                 if (cts.Token.IsCancellationRequested) break;
 
                 var token = update.Text ?? "";
@@ -531,6 +538,16 @@ public sealed class ChatLayout
                         {
                             if (c is Microsoft.Extensions.AI.FunctionCallContent fc)
                             {
+                                // P17.5: inline question form for ask_questions tool
+                                if (string.Equals(fc.Name, "AskQuestions", StringComparison.Ordinal))
+                                {
+                                    var qp = _pendingQuestion;
+                                    if (qp != null)
+                                    {
+                                        _pendingQuestion = null;
+                                        await ShowQuestionFormAsync(qp, cts.Token).ConfigureAwait(false);
+                                    }
+                                }
                                 _toolCallCount++;
                                 var n = fc.Name ?? "";
                                 var a = fc.Arguments is Dictionary<string, object?> args
@@ -554,7 +571,7 @@ public sealed class ChatLayout
                                 if (TryParseConfirmRequest(resultStr, out var confirmInfo))
                                 {
                                     var choice = ConfirmationModal.ShowInline(
-                                        _layout, ctx,
+                                        _layout, _liveCtx!,
                                         confirmInfo.Title,
                                         confirmInfo.Message,
                                         resultStr,
@@ -588,7 +605,7 @@ public sealed class ChatLayout
                         }
                     }
                     lock (_layout) { UpdateMessages(content.ToString()); UpdateFooter("", $"{PulseFrames[Interlocked.Increment(ref sharedFrameIdx) % PulseFrames.Length]} 处理中...  {statusText}"); }
-                    ThrottledRefresh(ctx);
+                    ThrottledRefresh();
                     continue;
                 }
                 if (TryParseToolResult(token, out var parsed))
@@ -615,14 +632,14 @@ public sealed class ChatLayout
                         statusText = msg;
                     }
                     lock (_layout) { UpdateMessages(content.ToString()); UpdateFooter("", $"{PulseFrames[Interlocked.Increment(ref sharedFrameIdx) % PulseFrames.Length]} 处理中...  {statusText}"); }
-                    ThrottledRefresh(ctx);
+                    ThrottledRefresh();
                     continue;
                 }
                 if (token.StartsWith("HANDOFF TO "))
                 {
                     content.AppendLine($"→ {token}"); statusText = $"→ {token}";
                     lock (_layout) { UpdateMessages(content.ToString()); UpdateFooter("", $"{PulseFrames[Interlocked.Increment(ref sharedFrameIdx) % PulseFrames.Length]} {statusText}"); }
-                    ThrottledRefresh(ctx);
+                    ThrottledRefresh();
                     continue;
                 }
                 if (token.StartsWith("[budget:") || token.StartsWith("[note:"))
@@ -631,7 +648,7 @@ public sealed class ChatLayout
                     var safeToken = token.Replace("[", "\\[").Replace("]", "\\]");
                     content.AppendLine(safeToken); statusText = token;
                     lock (_layout) { UpdateMessages(content.ToString()); UpdateFooter("", $"{PulseFrames[Interlocked.Increment(ref sharedFrameIdx) % PulseFrames.Length]} {statusText}"); }
-                    ThrottledRefresh(ctx);
+                    ThrottledRefresh();
                     continue;
                 }
 
@@ -639,7 +656,7 @@ public sealed class ChatLayout
 
                 // 实时刷新：消息 + 动画
                 lock (_layout) { UpdateMessages(content.ToString()); var pulse = PulseFrames[Interlocked.Increment(ref sharedFrameIdx) % PulseFrames.Length]; UpdateFooter("", $"{pulse} 处理中...  {statusText}"); }
-                ThrottledRefresh(ctx);
+                ThrottledRefresh();
             }
         }
         catch (OperationCanceledException) { }
@@ -804,4 +821,147 @@ public sealed class ChatLayout
 
     private static string FormatElapsed(TimeSpan t) =>
         t.TotalSeconds >= 60 ? $"{(int)t.TotalMinutes}m{t.Seconds}s" : $"{t.TotalSeconds:F1}s";
+
+    // ── P17.5 Inline Question Form ──
+
+    private async Task ShowQuestionFormAsync(QuestionPost post, CancellationToken ct)
+    {
+        var answers = new List<IReadOnlyList<string>>();
+
+        for (int i = 0; i < post.Questions.Count; i++)
+        {
+            var q = post.Questions[i];
+            _pendingQuestion = null;
+            var chosen = await ShowSingleQuestionAsync(q, i, post.Questions.Count, ct);
+            answers.Add(chosen);
+        }
+
+        _questionService.Reply(post.RequestId, answers);
+    }
+
+    private async Task<IReadOnlyList<string>> ShowSingleQuestionAsync(QuestionPrompt q, int idx, int total, CancellationToken ct)
+    {
+        return await Task.Run(() =>
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine();
+            sb.AppendLine($"[yellow]── ❓ 问题 {idx + 1}/{total} ──[/]");
+            sb.AppendLine($"[bold]{q.Header.EscapeMarkup()}[/]");
+            sb.AppendLine($"[grey]{q.Question.EscapeMarkup()}[/]");
+            sb.AppendLine();
+
+            if (q.Options.Count > 0)
+            {
+                for (int j = 0; j < q.Options.Count; j++)
+                {
+                    var opt = q.Options[j];
+                    var key = q.Multiple ? $"[{j + 1}]" : $"{(char)('a' + j)}";
+                    sb.AppendLine($"  [cyan]{key}[/] {opt.Label.EscapeMarkup()}");
+                    if (!string.IsNullOrEmpty(opt.Description))
+                        sb.AppendLine($"     [dim]{opt.Description.EscapeMarkup()}[/]");
+                }
+                sb.AppendLine();
+                sb.AppendLine(q.Multiple
+                    ? "[grey]输入序号（逗号分隔多选, Enter 确认, c=自定义回答）: [/]"
+                    : "[grey]输入字母选择 (a/b/c..., c=自定义, Enter 确认): [/]");
+            }
+            else
+            {
+                sb.AppendLine("[grey]输入回答 (Enter 确认): [/]");
+            }
+
+            lock (_layout)
+            {
+                _layout["Messages"].Update(new Panel(sb.ToString().TrimEnd()).Border(BoxBorder.Rounded).Expand());
+                UpdateFooter("", $"[yellow]❓ 问题 {idx + 1}/{total}[/]");
+                _liveCtx?.Refresh();
+            }
+
+            if (q.Options.Count > 0)
+            {
+                while (true)
+                {
+                    var key = Console.ReadKey(true);
+                    if (key.Key == ConsoleKey.Enter)
+                    {
+                        UpdateFooter("", "[yellow]请选择一个选项[/]");
+                        _liveCtx?.Refresh();
+                        continue;
+                    }
+
+                    if (q.Multiple)
+                    {
+                        if (key.KeyChar == 'c' || key.KeyChar == 'C')
+                            return new string[] { ShowTextInputInline(q, idx, total) };
+
+                        var num = key.KeyChar - '0';
+                        if (num >= 1 && num <= q.Options.Count)
+                        {
+                            var chosen = new List<string> { q.Options[num - 1].Label };
+                            lock (_layout)
+                            {
+                                UpdateMessages($"[yellow]已选: {chosen[0]}. 按 Enter 确认或继续选择...[/]");
+                                _liveCtx?.Refresh();
+                            }
+                            while (true)
+                            {
+                                var k2 = Console.ReadKey(true);
+                                if (k2.Key == ConsoleKey.Enter) break;
+                                if (k2.KeyChar == 'c' || k2.KeyChar == 'C')
+                                {
+                                    chosen.Clear();
+                                    chosen.Add(ShowTextInputInline(q, idx, total));
+                                    break;
+                                }
+                                var n2 = k2.KeyChar - '0';
+                                if (n2 >= 1 && n2 <= q.Options.Count)
+                                    chosen.Add(q.Options[n2 - 1].Label);
+                            }
+                            return chosen.ToArray();
+                        }
+                    }
+                    else
+                    {
+                        var ch = char.ToLowerInvariant(key.KeyChar);
+                        if (ch >= 'a' && ch < 'a' + q.Options.Count)
+                        {
+                            var selection = new string[] { q.Options[ch - 'a'].Label };
+                            lock (_layout)
+                            {
+                                UpdateMessages($"[yellow]已选: {selection[0]}[/]");
+                                _liveCtx?.Refresh();
+                            }
+                            return selection;
+                        }
+                        if (ch == 'c')
+                            return new string[] { ShowTextInputInline(q, idx, total) };
+                    }
+                }
+            }
+
+            return new string[] { ShowTextInputInline(q, idx, total) };
+        }, ct);
+    }
+
+    private string ShowTextInputInline(QuestionPrompt q, int idx, int total)
+    {
+        lock (_layout)
+        {
+            UpdateFooter("", $"[yellow]✏️ 问题 {idx + 1}/{total}: {q.Header.EscapeMarkup()}[/]");
+            _liveCtx?.Refresh();
+        }
+        var input = new StringBuilder();
+        while (true)
+        {
+            var key = Console.ReadKey(true);
+            if (key.Key == ConsoleKey.Enter && input.Length > 0)
+                return input.ToString();
+            if (key.Key == ConsoleKey.Escape)
+                return "(跳过)";
+            if (key.Key == ConsoleKey.Backspace && input.Length > 0)
+                input.Length--;
+            else if (!char.IsControl(key.KeyChar))
+                input.Append(key.KeyChar);
+        }
+    }
 }

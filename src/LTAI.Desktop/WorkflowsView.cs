@@ -135,6 +135,7 @@ public sealed class WorkflowsView : UserControl
 
     private void Unsubscribe()
     {
+        _refreshTimer.Stop();
         if (_notifier != null && _subToken != Guid.Empty)
         {
             _notifier.Unsubscribe(_subToken);

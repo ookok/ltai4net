@@ -218,8 +218,7 @@ public sealed class LocalEmbedder : IDisposable
         lock (_loadLock)
         {
             if (_loadAttempted) return;
-            _loadAttempted = true;
-            if (_modelPath == null || _vocabPath == null) return;
+            if (_modelPath == null || _vocabPath == null) { _loadAttempted = true; return; }
             try
             {
                 var opts = new SessionOptions();
@@ -268,14 +267,20 @@ public sealed class LocalEmbedder : IDisposable
 
                 _vocab = LoadVocab(_vocabPath);
             }
-            catch
+            catch (Exception ex)
             {
                 _session = null;
                 _vocab = null;
                 _activeExecutionProvider = null;
+                _loadError = ex;
             }
+            _loadAttempted = true;  // set AFTER everything (fix race with PreWarmAsync)
         }
     }
+
+    private Exception? _loadError;
+    /// <summary>P14.4: last load failure exception (null if load succeeded or not yet attempted). For diagnostics only.</summary>
+    public Exception? LastLoadError => _loadError;
 
     /// <summary>P13.2: try to attach DirectML EP; returns true on success.</summary>
     private static bool TryAppendDml(SessionOptions opts, int deviceId, out Exception? err)
@@ -768,6 +773,11 @@ public sealed class LocalEmbedder : IDisposable
 
     private static string? FindBaseModelsDirectory()
     {
+        // P17.3: env var override (CI / shared cache / offline).
+        var envDir = Environment.GetEnvironmentVariable("LTAI_EMBEDDING_MODELS_DIR");
+        if (!string.IsNullOrEmpty(envDir) && Directory.Exists(envDir))
+            return Path.GetFullPath(envDir);
+
         string[] candidates =
         [
             Path.Combine(AppContext.BaseDirectory, "models"),

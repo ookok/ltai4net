@@ -74,6 +74,7 @@ public sealed class EmbeddingClient : IDisposable
     // triggered again (state change is durable for process lifetime).
     private int _consecutiveAllProviderFailures;
     private volatile bool _localFallbackActivated;
+    private int _fallbackFlag;
     private const int LocalFallbackFailureThreshold = 3;
     /// <summary>Number of consecutive <c>GenerateBatchAsync</c> calls where all configured remote providers failed.</summary>
     public int ConsecutiveAllProviderFailures => Volatile.Read(ref _consecutiveAllProviderFailures);
@@ -134,7 +135,7 @@ public sealed class EmbeddingClient : IDisposable
             Dimension = _local.Dim;
             _logger.LogDebug("Embedding via local ONNX (batched): {Count} texts", texts.Length);
             var batchResult = await Task.Run(() => _local.GenerateBatch(texts), ct).ConfigureAwait(false);
-            return batchResult.Select(v => v).ToArray();
+            return batchResult is float[][] arr ? arr : batchResult.ToArray();
         }
 
         // Priority 2: Remote API providers (needs valid API key)
@@ -228,14 +229,14 @@ public sealed class EmbeddingClient : IDisposable
         // we transparently bring up the local model so subsequent calls stop
         // paying the latency + cost penalty of repeated remote timeouts.
         var newCount = Interlocked.Increment(ref _consecutiveAllProviderFailures);
-        if (!_localFallbackActivated && newCount >= LocalFallbackFailureThreshold)
+        if (newCount >= LocalFallbackFailureThreshold && Interlocked.CompareExchange(ref _fallbackFlag, 1, 0) == 0)
         {
             _logger.LogWarning(
                 "EmbeddingClient: {N} consecutive all-provider failures (threshold={T}) — activating local ONNX fallback",
                 newCount, LocalFallbackFailureThreshold);
             ActivateLocalFallback();
         }
-        else if (!_localFallbackActivated)
+        else if (newCount < LocalFallbackFailureThreshold)
         {
             _logger.LogDebug(
                 "EmbeddingClient: {N} consecutive all-provider failures (threshold={T})",
@@ -247,7 +248,7 @@ public sealed class EmbeddingClient : IDisposable
     private async Task<EmbeddingResult?> CallEmbeddingApiAsync(
         string endpoint, string model, string apiKey, string[] texts, CancellationToken ct)
     {
-        var http = _httpFactory.CreateClient();
+        using var http = _httpFactory.CreateClient();
         http.Timeout = TimeSpan.FromSeconds(30);
 
         var request = new

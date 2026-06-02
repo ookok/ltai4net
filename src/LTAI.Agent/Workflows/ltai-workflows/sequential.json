@@ -1,0 +1,19 @@
+// P16.1 hot-editable config for predefined Sequential agent pipelines.
+// Edit to add/remove agent steps without recompiling.
+// Changes are hot-reloaded by the P15 FileSystemWatcher within ~1s.
+//
+// type:      "sequential" — see concurrent.json for concurrent presets.
+// version:   Schema version (bump to invalidate cache).
+// agents:    Ordered list of agent names. The first agent receives the user task,
+//            each subsequent agent receives the previous agent's output.
+//            Unknown names are logged and skipped (not failing).
+// defaultTask: Optional default task description for /pipe run <preset> without explicit task.
+{
+  "type": "sequential",
+  "version": 1,
+  "agents": [
+    "LTAI-Code",
+    "LTAI-Writer"
+  ],
+  "defaultTask": "Write a code snippet and then document it"
+}

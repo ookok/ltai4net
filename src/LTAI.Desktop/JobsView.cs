@@ -271,16 +271,25 @@ public sealed class JobsView : UserControl
             Padding = new(6, 2),
             IsEnabled = !j.Completed,
             HorizontalAlignment = HorizontalAlignment.Right,
+            Tag = id, // store id for event handler
         };
-        cancelBtn.Click += (_, _) =>
-        {
-            j.Completed = true;
-            j.Error = "Cancelled";
-            Refresh();
-        };
+        cancelBtn.Click += OnCancelClick;
         Grid.SetColumn(cancelBtn, 5);
         grid.Children.Add(cancelBtn);
 
         return grid;
+    }
+
+    private void OnCancelClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (sender is Button { Tag: string id } && _jobs != null)
+        {
+            if (_jobs.SnapshotJobs().TryGetValue(id, out var entry) && !entry.Completed)
+            {
+                entry.Completed = true;
+                entry.Error = "Cancelled";
+                Refresh();
+            }
+        }
     }
 }

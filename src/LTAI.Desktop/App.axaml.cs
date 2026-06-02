@@ -25,36 +25,40 @@ public class App : Application
     {
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
-            LTAIService? svc = null;
-            try
+            // Run service init on threadpool, then post MainWindow creation back to UI
+            // This avoids blocking the UI thread during DI warmup (which can take 5-10s).
+            Task.Run(async () =>
             {
-                Program.InitializeServicesAsync().GetAwaiter().GetResult();
-                svc = Ltais;
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"Init error: {ex.Message}");
-                // 初始化失败时创建带错误信息的窗口
-                var errWindow = new Window
+                try
                 {
-                    Title = "LTAI — 初始化失败",
-                    Width = 500, Height = 200,
-                    Content = new TextBlock
+                    await Program.InitializeServicesAsync().ConfigureAwait(false);
+                    await Dispatcher.UIThread.InvokeAsync(() =>
                     {
-                        Text = $"服务初始化失败:\n{ex.Message}\n\n请检查网络连接和配置后重试。",
-                        TextWrapping = TextWrapping.Wrap,
-                        Foreground = new SolidColorBrush(Colors.White),
-                        Margin = new(20)
-                    }
-                };
-                desktop.MainWindow = errWindow;
-                errWindow.Show();
-                base.OnFrameworkInitializationCompleted();
-                return;
-            }
-
-            var window = new MainWindow(svc!);
-            desktop.MainWindow = window;
+                        var window = new MainWindow(App.Ltais!);
+                        desktop.MainWindow = window;
+                    });
+                }
+                catch (Exception ex)
+                {
+                    await Dispatcher.UIThread.InvokeAsync(() =>
+                    {
+                        var errWindow = new Window
+                        {
+                            Title = "LTAI — 初始化失败",
+                            Width = 500, Height = 200,
+                            Content = new TextBlock
+                            {
+                                Text = $"服务初始化失败:\n{ex.Message}\n\n请检查网络连接和配置后重试。",
+                                TextWrapping = TextWrapping.Wrap,
+                                Foreground = new SolidColorBrush(Colors.White),
+                                Margin = new(20)
+                            }
+                        };
+                        desktop.MainWindow = errWindow;
+                        errWindow.Show();
+                    });
+                }
+            });
         }
         base.OnFrameworkInitializationCompleted();
     }

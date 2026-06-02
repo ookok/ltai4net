@@ -250,16 +250,25 @@ public sealed class DurableConfig
     public string DatabasePath { get; init; } = ".livingtree/durability.db";
 }
 
+/// <summary>P15: Hot-editable workflow watch directory config.</summary>
+public sealed class WorkflowsConfig
+{
+    /// <summary>
+    /// Directory where user-editable <c>.yaml</c> / <c>.json</c> workflow files are stored.
+    /// Default <c>.livingtree/workflows</c>.
+    /// </summary>
+    public string WatchDirectory { get; init; } = ".livingtree/workflows";
+}
+
 /// <summary>
 /// Root configuration object, loaded from appsettings.json under section "LTAI".
 /// Holds AI, Web, Vector, and Harness sub-configs plus runtime directory resolution.
 /// Validated at startup by <see cref="LTAIOptionsValidator"/>.
-/// <b>Consumers:</b> All projects via DI — Agent/ServiceCollectionExtensions.cs,
-/// MultiProviderChatClient, Desktop/Program.cs, TUI/Program.cs, test files.
 /// </summary>
 public sealed class LTAIOptions
 {
     public const string SectionName = "LTAI";
+    public WorkflowsConfig Workflows { get; init; } = new();
     public AIConfig AI { get; init; } = new();
     public WebConfig Web { get; init; } = new();
     public VectorConfig Vector { get; init; } = new();

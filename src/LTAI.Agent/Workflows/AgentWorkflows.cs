@@ -21,6 +21,12 @@ namespace LTAI.Agent.Workflows;
 ///   <item>Concurrent — <see cref="AgentWorkflowBuilder.CreateConcurrentBuilderWith"/>: fan-out + fan-in aggregator.</item>
 /// </list>
 /// <para>
+/// As of P16.1, Sequential/Concurrent agent lists can be overridden by hot-editable
+/// YAML/JSON configs in <c>ltai-workflows/sequential.json</c> and
+/// <c>concurrent.json</c>, loaded via <see cref="YAMLWorkflowRegistry"/>.
+/// Users can edit these files to change pipeline composition without recompiling.
+/// </para>
+/// <para>
 /// Replaces the legacy <c>WorkflowOrchestrator</c> (text/JSON handoff markers,
 /// circuit breaker, retry+fallback, vector top-K, concurrency throttle). The
 /// greeting fast-path is now driven by the MAF <c>Workflows.Declarative</c>
@@ -149,6 +155,7 @@ public sealed class AgentWorkflows
     /// <summary>
     /// Sequential pipeline: each agent receives the previous agent's output as
     /// the next user message. Uses MAF <see cref="SequentialWorkflowBuilder"/>.
+    /// Agent names can come from a YAML preset (P16.1) or be specified at runtime.
     /// </summary>
     public async Task<string> RunSequentialAsync(
         string[] agentNames,
@@ -156,6 +163,20 @@ public sealed class AgentWorkflows
         string? traceId = null,
         CancellationToken ct = default)
     {
+        // P16.1: try a YAML preset if no runtime names given or if the first
+        // element matches a known preset name in the workflow registry.
+        if (agentNames.Length == 1 && _workflowRegistry != null)
+        {
+            var preset = _workflowRegistry.TryGetPipelineConfig(agentNames[0])
+                         ?? _workflowRegistry.TryGetPipelineConfig("sequential");
+            if (preset?.Type == "sequential" && preset.Agents.Count > 0)
+            {
+                agentNames = preset.Agents.ToArray();
+                _logger.LogInformation("Using sequential preset: {Agents}",
+                    string.Join(", ", agentNames));
+            }
+        }
+
         var agents = ResolveAgents(agentNames);
         if (agents.Length == 0) return "No valid agents specified.";
 
@@ -190,6 +211,7 @@ public sealed class AgentWorkflows
     /// Concurrent fan-out: every agent processes the same task in parallel and
     /// results are combined. Uses MAF <see cref="ConcurrentWorkflowBuilder"/>
     /// with a custom aggregator that formats per-agent results as markdown.
+    /// Agent names can come from a YAML preset (P16.1) or be specified at runtime.
     /// </summary>
     public async Task<string> RunConcurrentAsync(
         string[] agentNames,
@@ -197,6 +219,20 @@ public sealed class AgentWorkflows
         string? traceId = null,
         CancellationToken ct = default)
     {
+        // P16.1: try a YAML preset if no runtime names given or if the first
+        // element matches a known preset name.
+        if (agentNames.Length == 1 && _workflowRegistry != null)
+        {
+            var preset = _workflowRegistry.TryGetPipelineConfig(agentNames[0])
+                         ?? _workflowRegistry.TryGetPipelineConfig("concurrent");
+            if (preset?.Type == "concurrent" && preset.Agents.Count > 0)
+            {
+                agentNames = preset.Agents.ToArray();
+                _logger.LogInformation("Using concurrent preset: {Agents}",
+                    string.Join(", ", agentNames));
+            }
+        }
+
         var agents = ResolveAgents(agentNames);
         if (agents.Length == 0) return "No valid agents specified.";
 

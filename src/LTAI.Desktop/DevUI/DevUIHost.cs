@@ -25,16 +25,29 @@ namespace LTAI.Desktop.DevUI;
 /// </summary>
 public sealed class DevUIHost : IAsyncDisposable
 {
-    private WebApplication? _app;
+    private volatile WebApplication? _app;
     private int _port;
+    private readonly object _startLock = new();
     public int Port => _port;
     public string? BaseUrl => _app is null ? null : $"http://localhost:{_port}";
 
     public async Task StartAsync(IServiceProvider parentSp, CancellationToken ct = default)
     {
         if (_app is not null) return;
+        lock (_startLock)
+        {
+            if (_app is not null) return;
+        }
 
-        var port = GetFreePort();
+        // Use a TcpListener to reserve the port, then hand the listener to Kestrel
+        using var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((System.Net.IPEndPoint)listener.LocalEndpoint).Port;
+        // Release the listener AFTER we've configured Kestrel to use the same port.
+        // There is still a TOCTOU window, but it's the best we can do without
+        // controlling WebApplication's socket binding internally.
+        listener.Stop();
+
         var builder = WebApplication.CreateBuilder();
         builder.Logging.ClearProviders();
         builder.Logging.AddProvider(new DevUIForwardingLoggerProvider(
@@ -65,29 +78,24 @@ public sealed class DevUIHost : IAsyncDisposable
 
     public void OpenInBrowser()
     {
-        if (_app is null) return;
+        var app = _app;
+        if (app is null) return;
         Process.Start(new ProcessStartInfo
         {
-            FileName = BaseUrl + "/devui",
+            FileName = $"http://localhost:{_port}/devui",
             UseShellExecute = true,
         });
     }
 
     public async ValueTask DisposeAsync()
     {
-        if (_app is not null)
+        var app = _app;
+        if (app is not null)
         {
-            try { await _app.StopAsync(); } catch { /* shutdown best-effort */ }
-            try { await _app.DisposeAsync(); } catch { /* dispose best-effort */ }
+            try { await app.StopAsync(); } catch { /* shutdown best-effort */ }
+            try { await app.DisposeAsync(); } catch { /* dispose best-effort */ }
             _app = null;
         }
-    }
-
-    private static int GetFreePort()
-    {
-        var l = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
-        l.Start();
-        try { return ((System.Net.IPEndPoint)l.LocalEndpoint).Port; } finally { l.Stop(); }
     }
 
     private const string SimpleDevUIHtml = """

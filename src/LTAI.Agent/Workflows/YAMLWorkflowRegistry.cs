@@ -23,12 +23,12 @@ namespace LTAI.Agent.Workflows;
 /// P15 central registry for all hot-editable workflow configs. Owns:
 /// <list type="bullet">
 ///   <item>MAF declarative <c>*.yaml</c> workflows (compiled to <see cref="Workflow"/> instances).</item>
-///   <item>LTAI <c>*.json</c> configs (currently: <c>decision-tree</c>).</item>
+///   <item>LTAI <c>*.json</c> configs (decision-tree, sequential, concurrent pipelines).</item>
 /// </list>
 /// <para>
 /// New requests read the current snapshot via <see cref="TryGetWorkflow"/>,
-/// <see cref="TryGetDecisionTreeConfig"/>, etc. Reloads swap the snapshot
-/// atomically; in-flight requests keep their existing reference (D71).
+/// <see cref="TryGetDecisionTreeConfig"/>, <see cref="TryGetPipelineConfig"/>, etc.
+/// Reloads swap the snapshot atomically; in-flight requests keep their existing reference (D71).
 /// </para>
 /// <para>
 /// D68: failed reloads preserve the old snapshot; the
@@ -42,46 +42,44 @@ public sealed class YAMLWorkflowRegistry
     private readonly WorkflowHotReloadNotifier _notifier;
     private readonly IMcpToolHandler? _mcpToolHandler;
     private readonly string _watchDir;
+
+    /// <summary>Publicly exposed watch directory (used by <see cref="YAMLWorkflowWatcher"/> and TUI).</summary>
+    public string WatchDirectory => _watchDir;
+
     private readonly ConcurrentDictionary<string, WorkflowSnapshot> _workflows = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, DecisionTreeSnapshot> _configs = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, PipelineSnapshot> _pipelines = new(StringComparer.OrdinalIgnoreCase);
     private bool _initialized;
 
     public YAMLWorkflowRegistry(
         IOptions<LTAIOptions> options,
-        WorkflowHotReloadNotifier notifier,
         ILogger<YAMLWorkflowRegistry> logger,
+        WorkflowHotReloadNotifier notifier,
         IMcpToolHandler? mcpToolHandler = null)
     {
-        _notifier = notifier;
         _logger = logger;
+        _notifier = notifier;
         _mcpToolHandler = mcpToolHandler;
-        _watchDir = options.Value.ResolveDataPath("workflows");
+        _watchDir = options.Value.Workflows?.WatchDirectory
+            ?? Path.Combine(AppContext.BaseDirectory, "LTAI.Agent.Workflows.ltai-workflows");
     }
 
-    /// <summary>Absolute path of the watched directory.</summary>
-    public string WatchDirectory => _watchDir;
-
     /// <summary>
-    /// Initial scan: load every YAML/JSON in the watch directory. Idempotent.
-    /// Called by DI container at startup; safe to call again to rescan.
+    /// Scan the watch directory and load all YAML/JSON files. Idempotent;
+    /// subsequent calls reload changed files.
     /// </summary>
     public async Task InitializeAsync(CancellationToken ct = default)
     {
-        if (_initialized)
-        {
-            _logger.LogDebug("InitializeAsync: already initialized, skipping");
-            return;
-        }
+        if (_initialized) return;
         _initialized = true;
 
         if (!Directory.Exists(_watchDir))
         {
-            Directory.CreateDirectory(_watchDir);
-            _logger.LogInformation("Created workflow directory: {Dir}", _watchDir);
+            _logger.LogWarning("Workflow watch directory does not exist: {Dir}", _watchDir);
             return;
         }
 
-        foreach (var path in Directory.EnumerateFiles(_watchDir, "*.yaml", SearchOption.TopDirectoryOnly)
+        foreach (var path in Directory.EnumerateFiles(_watchDir, "*.yaml")
                      .Concat(Directory.EnumerateFiles(_watchDir, "*.yml"))
                      .Concat(Directory.EnumerateFiles(_watchDir, "*.json")))
         {
@@ -89,23 +87,17 @@ public sealed class YAMLWorkflowRegistry
         }
 
         _logger.LogInformation(
-            "Workflow registry initialized: {Wf} workflows, {Cfg} configs in {Dir}",
-            _workflows.Count, _configs.Count, _watchDir);
+            "Loaded {Workflows} YAML workflow(s) + {Configs} config(s) from {Dir}",
+            _workflows.Count, _configs.Count + _pipelines.Count, _watchDir);
     }
 
-    /// <summary>
-    /// Reload a single file. Called by the watcher on file change and by
-    /// the TUI/Desktop/Web <c>reload</c> subcommand.
-    /// </summary>
+    /// <summary>Reload a single file (called by the <see cref="YAMLWorkflowWatcher"/> on change).</summary>
     public async Task ReloadFileAsync(string path, CancellationToken ct = default)
     {
-        if (!File.Exists(path))
-        {
-            _logger.LogWarning("Reload skipped: file no longer exists: {Path}", path);
-            return;
-        }
+        if (string.IsNullOrEmpty(path)) return;
         var name = Path.GetFileNameWithoutExtension(path);
         var ext = Path.GetExtension(path).ToLowerInvariant();
+
         try
         {
             if (ext is ".yaml" or ".yml")
@@ -120,10 +112,22 @@ public sealed class YAMLWorkflowRegistry
             else if (ext == ".json")
             {
                 var json = await File.ReadAllTextAsync(path, ct).ConfigureAwait(false);
-                var cfg = DecisionTreeConfig.Parse(json);
-                cfg.SourcePath = path;
-                _configs[name] = new DecisionTreeSnapshot(name, path, DateTime.UtcNow, cfg);
-                _notifier.PublishReloaded(new WorkflowReloadEvent(name, cfg.Type, cfg.Version, DateTime.UtcNow, path));
+
+                // P16.1: peek at the "type" field to decide which config parser.
+                var typePeek = PeekJsonStringField(json, "type") ?? "";
+                if (typePeek is "sequential" or "concurrent")
+                {
+                    var cfg = PipelineConfig.Parse(json);
+                    _pipelines[name] = new PipelineSnapshot(name, path, DateTime.UtcNow, cfg);
+                    _notifier.PublishReloaded(new WorkflowReloadEvent(name, cfg.Type, cfg.Version, DateTime.UtcNow, path));
+                }
+                else
+                {
+                    var cfg = DecisionTreeConfig.Parse(json);
+                    cfg.SourcePath = path;
+                    _configs[name] = new DecisionTreeSnapshot(name, path, DateTime.UtcNow, cfg);
+                    _notifier.PublishReloaded(new WorkflowReloadEvent(name, cfg.Type, cfg.Version, DateTime.UtcNow, path));
+                }
             }
             else
             {
@@ -156,15 +160,25 @@ public sealed class YAMLWorkflowRegistry
         return _configs.TryGetValue(name, out var snap) ? snap.Config : DecisionTreeConfig.Default;
     }
 
+    /// <summary>Get a P16.1 pipeline config by name (e.g. "sequential" or "concurrent"). Returns null if not loaded.</summary>
+    public PipelineConfig? TryGetPipelineConfig(string name)
+    {
+        return _pipelines.TryGetValue(name, out var snap) ? snap.Config : null;
+    }
+
     /// <summary>List all loaded workflows + configs (for TUI <c>/workflow list</c>).</summary>
     public IReadOnlyList<WorkflowInfo> List()
     {
-        var result = new List<WorkflowInfo>(_workflows.Count + _configs.Count);
+        var result = new List<WorkflowInfo>(_workflows.Count + _configs.Count + _pipelines.Count);
         foreach (var (k, v) in _workflows)
         {
             result.Add(new WorkflowInfo(k, v.Type, v.Version, v.FilePath, v.LoadedAtUtc, v.ContentByteCount));
         }
         foreach (var (k, v) in _configs)
+        {
+            result.Add(new WorkflowInfo(k, v.Config.Type, v.Config.Version, v.FilePath, v.LoadedAtUtc, v.Config.ToString().Length));
+        }
+        foreach (var (k, v) in _pipelines)
         {
             result.Add(new WorkflowInfo(k, v.Config.Type, v.Config.Version, v.FilePath, v.LoadedAtUtc, v.Config.ToString().Length));
         }
@@ -234,6 +248,21 @@ public sealed class YAMLWorkflowRegistry
         return null;
     }
 
+    /// <summary>
+    /// Quick string scan for a JSON field without full parse.
+    /// Looks for the first occurrence of <c>"key": "value"</c> pattern.
+    /// Used by <see cref="ReloadFileAsync"/> to decide which config parser to use.
+    /// </summary>
+    private static string? PeekJsonStringField(string json, string key)
+    {
+        var search = $"\"{key}\": \"";
+        var idx = json.IndexOf(search, StringComparison.Ordinal);
+        if (idx < 0) return null;
+        var start = idx + search.Length;
+        var end = json.IndexOf('"', start);
+        return end < 0 ? null : json[start..end];
+    }
+
     // NoOpAgentProvider: greeting.yaml + similar fast-path YAMLs do not call
     // InvokeAzureAgent. The workflow should never reach the agent provider;
     // if it does, throw to surface the YAML authoring bug.
@@ -277,6 +306,13 @@ internal sealed record DecisionTreeSnapshot(
     string FilePath,
     DateTime LoadedAtUtc,
     DecisionTreeConfig Config);
+
+/// <summary>P16.1: Immutable snapshot of a Sequential / Concurrent pipeline config. Swapped atomically on reload.</summary>
+internal sealed record PipelineSnapshot(
+    string Name,
+    string FilePath,
+    DateTime LoadedAtUtc,
+    PipelineConfig Config);
 
 /// <summary>Public summary of a loaded workflow (for TUI <c>/workflow list</c> and DevUI dashboard).</summary>
 /// <param name="Name">File stem (e.g. <c>decision-tree</c>).</param>

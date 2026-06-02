@@ -1,7 +1,6 @@
 // Copyright (c) LTAI. All rights reserved.
 
 using System.Collections.Generic;
-using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Agents.AI;
@@ -15,8 +14,7 @@ namespace LTAI.Agent.Workflows;
 /// <summary>
 /// Loads and executes MAF <c>Workflows.Declarative</c> YAML files for the LTAI
 /// fast-path / chitchat / small-talk use cases. Replaces the legacy
-/// <c>GreetingClassifier</c> C# implementation with a declarative workflow
-/// that can be edited without recompiling.
+/// <c>GreetingClassifier</c> C# implementation (P7.5) with declarative workflows.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -25,104 +23,141 @@ namespace LTAI.Agent.Workflows;
 /// (<c>CopyToOutputDirectory=PreserveNewest</c>).
 /// </para>
 /// <para>
-/// Each workflow is compiled once on first use (thread-safe) and cached
-/// as a <see cref="Workflow"/> instance for the lifetime of the process.
+/// As of P16.5, the monolithic <c>greeting.yaml</c> has been split into five
+/// independent workflows tried in order: greeting → thanks → farewell → probing → test.
+/// Each is compiled once (thread-safe) and cached for the lifetime of the process.
+/// The first producing a <see cref="MessageActivityEvent"/> with non-empty text wins.
+/// Users can edit individual YAML files without recompiling, and the P15 watcher
+/// reloads them automatically.
 /// </para>
 /// </remarks>
 public static class YAMLWorkflowHost
 {
-    private static readonly object _greetingLock = new();
-    private static Workflow? _greetingWorkflow;
-    private static IMcpToolHandler? _mcpToolHandler;
+    // File names (without extension). Tried in order; first match wins.
+    private static readonly string[] s_workflowNames =
+        ["greeting", "thanks", "farewell", "probing", "test"];
+
+    private static readonly object s_lock = new();
+    private static Dictionary<string, Workflow>? s_workflows;
+    private static IMcpToolHandler? s_mcpToolHandler;
 
     /// <summary>
-    /// Run the greeting fast-path YAML workflow. Returns the canned reply if
-    /// the input matches a greeting pattern, otherwise <c>null</c> (caller
-    /// should fall through to the LLM handoff).
+    /// Run the greeting fast-path YAML workflows in priority order.
+    /// Returns the canned reply from the first matching workflow, or <c>null</c>
+    /// (caller should fall through to the LLM handoff).
     /// </summary>
     public static async Task<string?> RunGreetingFastPathAsync(string input, CancellationToken ct = default)
     {
-        var workflow = GetOrBuildGreetingWorkflow();
-        var run = await InProcessExecution.RunStreamingAsync(workflow, input, cancellationToken: ct).ConfigureAwait(false);
-
-        await foreach (var evt in run.WatchStreamAsync(ct).ConfigureAwait(false))
+        var workflows = GetOrBuildAll();
+        foreach (var name in s_workflowNames)
         {
-            if (evt is MessageActivityEvent mae && !string.IsNullOrWhiteSpace(mae.Message))
+            ct.ThrowIfCancellationRequested();
+            if (!workflows.TryGetValue(name, out var workflow))
+                continue;
+
+            var run = await InProcessExecution.RunStreamingAsync(workflow, input, cancellationToken: ct)
+                .ConfigureAwait(false);
+
+            await foreach (var evt in run.WatchStreamAsync(ct).ConfigureAwait(false))
             {
-                return mae.Message;
+                if (evt is MessageActivityEvent mae && !string.IsNullOrWhiteSpace(mae.Message))
+                {
+                    return mae.Message;
+                }
             }
         }
         return null;
     }
 
     /// <summary>
-    /// Diagnostic variant of <see cref="RunGreetingFastPathAsync"/> that returns the
-    /// ordered list of event types observed during execution. Used by the
-    /// <c>ltai greeting-smoke</c> CLI subcommand for debugging the YAML workflow
-    /// without requiring an LLM round-trip.
+    /// Diagnostic variant that returns the ordered list of event type names observed
+    /// across ALL workflows. Used by the <c>ltai greeting-smoke</c> CLI subcommand.
     /// </summary>
     public static async Task<IReadOnlyList<string>> RunGreetingDiagnosticAsync(string input, CancellationToken ct = default)
     {
-        var workflow = GetOrBuildGreetingWorkflow();
-        var run = await InProcessExecution.RunStreamingAsync(workflow, input, cancellationToken: ct).ConfigureAwait(false);
+        var workflows = GetOrBuildAll();
         var events = new List<string>();
-        await foreach (var evt in run.WatchStreamAsync(ct).ConfigureAwait(false))
+        foreach (var name in s_workflowNames)
         {
-            events.Add(evt.GetType().Name);
+            ct.ThrowIfCancellationRequested();
+            if (!workflows.TryGetValue(name, out var workflow))
+                continue;
+
+            var run = await InProcessExecution.RunStreamingAsync(workflow, input, cancellationToken: ct)
+                .ConfigureAwait(false);
+
+            await foreach (var evt in run.WatchStreamAsync(ct).ConfigureAwait(false))
+            {
+                events.Add(evt.GetType().Name);
+                // Stop at first SendActivity across all workflows
+                if (evt is MessageActivityEvent mae && !string.IsNullOrWhiteSpace(mae.Message))
+                {
+                    return events;
+                }
+            }
         }
         return events;
     }
 
-    private static Workflow GetOrBuildGreetingWorkflow()
+    private static Dictionary<string, Workflow> GetOrBuildAll()
     {
-        if (_greetingWorkflow is not null) return _greetingWorkflow;
-        lock (_greetingLock)
+        if (s_workflows is not null) return s_workflows;
+        lock (s_lock)
         {
-            if (_greetingWorkflow is not null) return _greetingWorkflow;
+            if (s_workflows is not null) return s_workflows;
 
-            var yamlPath = Path.Combine(
-                AppContext.BaseDirectory,
-                "LTAI.Agent.Workflows.ltai-workflows",
-                "greeting.yaml");
-            if (!File.Exists(yamlPath))
-            {
-                // Fallback for some build configurations where the subfolder isn't nested.
-                var flat = Path.Combine(AppContext.BaseDirectory, "greeting.yaml");
-                if (File.Exists(flat)) yamlPath = flat;
-                else throw new FileNotFoundException(
-                    $"greeting.yaml not found at '{yamlPath}' or '{flat}'. " +
-                    "Ensure ltai-workflows/*.yaml is copied to the output directory.");
-            }
-
+            var map = new Dictionary<string, Workflow>(s_workflowNames.Length);
             var options = new DeclarativeWorkflowOptions(new NoOpAgentProvider())
             {
-                McpToolHandler = _mcpToolHandler,
+                McpToolHandler = s_mcpToolHandler,
             };
-            _greetingWorkflow = DeclarativeWorkflowBuilder.Build<string>(yamlPath, options);
-            return _greetingWorkflow;
+
+            foreach (var name in s_workflowNames)
+            {
+                var yamlPath = ResolveYamlPath(name);
+                if (yamlPath is null) continue; // missing file, skip silently
+                map[name] = DeclarativeWorkflowBuilder.Build<string>(yamlPath, options);
+            }
+
+            s_workflows = map;
+            return s_workflows;
         }
     }
 
     /// <summary>
+    /// Resolve a YAML file path by name (without extension).
+    /// Checks the embedded resource folder first, then flat base directory.
+    /// Returns <c>null</c> if neither exists.
+    /// </summary>
+    private static string? ResolveYamlPath(string name)
+    {
+        var subdir = Path.Combine(AppContext.BaseDirectory, "LTAI.Agent.Workflows.ltai-workflows", $"{name}.yaml");
+        if (File.Exists(subdir)) return subdir;
+
+        var flat = Path.Combine(AppContext.BaseDirectory, $"{name}.yaml");
+        if (File.Exists(flat)) return flat;
+
+        return null;
+    }
+
+    /// <summary>
     /// P14.7: inject the MCP tool handler used by declarative workflows that
-    /// call <c>InvokeMcpTool</c> actions (e.g. <c>mcp-docs-search.yaml</c>).
-    /// Called once at startup from <see cref="LTAI.Agent.ServiceCollectionExtensions"/>.
+    /// call <c>InvokeMcpTool</c> actions. Called once at startup.
     /// Safe to call with <c>null</c> to disable MCP support for fast-path workflows.
+    /// Invalidates all cached workflows so the next call rebuilds with the new handler.
     /// </summary>
     public static void ConfigureMcpToolHandler(IMcpToolHandler? handler)
     {
-        _mcpToolHandler = handler;
-        // If the greeting workflow was already built, invalidate so the next
-        // call rebuilds with the new handler (preserves fast-path safety).
-        lock (_greetingLock)
+        s_mcpToolHandler = handler;
+        lock (s_lock)
         {
-            _greetingWorkflow = null;
+            s_workflows = null;
         }
     }
 
     /// <summary>
     /// Stub <see cref="ResponseAgentProvider"/> for YAML workflows that do NOT
-    /// call <c>InvokeAzureAgent</c> (e.g. greeting fast-path uses only
+    /// call <c>InvokeAzureAgent</c> (e.g. fast-path workflows use only
     /// <c>SetVariable</c>, <c>ConditionGroup</c>, <c>SendActivity</c>). All
     /// agent-related operations throw because the workflow should never reach
     /// them; if it does, that's a YAML authoring bug worth surfacing loudly.
@@ -131,24 +166,24 @@ public static class YAMLWorkflowHost
     {
         public override Task<string> CreateConversationAsync(CancellationToken cancellationToken = default)
             => throw new NotSupportedException(
-                "greeting.yaml does not declare any InvokeAzureAgent actions; " +
+                "Fast-path workflows do not declare any InvokeAzureAgent actions; " +
                 "ResponseAgentProvider.CreateConversationAsync should not be reached.");
 
         public override Task<ChatMessage> CreateMessageAsync(string conversationId, ChatMessage conversationMessage, CancellationToken cancellationToken = default)
             => throw new NotSupportedException(
-                "greeting.yaml does not declare any InvokeAzureAgent actions.");
+                "Fast-path workflows do not declare any InvokeAzureAgent actions.");
 
         public override Task<ChatMessage> GetMessageAsync(string conversationId, string messageId, CancellationToken cancellationToken = default)
             => throw new NotSupportedException(
-                "greeting.yaml does not declare any InvokeAzureAgent actions.");
+                "Fast-path workflows do not declare any InvokeAzureAgent actions.");
 
         public override IAsyncEnumerable<AgentResponseUpdate> InvokeAgentAsync(
             string agentId, string? agentVersion, string? conversationId,
             IEnumerable<ChatMessage>? messages, IDictionary<string, object?>? inputArguments,
             CancellationToken cancellationToken = default)
             => throw new NotSupportedException(
-                $"greeting.yaml attempted to invoke agent '{agentId}', but the fast-path " +
-                "workflow should only use SetVariable / ConditionGroup / SendActivity. " +
+                $"Fast-path workflow attempted to invoke agent '{agentId}', but " +
+                "these workflows should only use SetVariable / ConditionGroup / SendActivity. " +
                 "Check the YAML for an InvokeAzureAgent action that shouldn't be there.");
 
         public override IAsyncEnumerable<ChatMessage> GetMessagesAsync(
@@ -156,9 +191,6 @@ public static class YAMLWorkflowHost
             string? before = null, bool newestFirst = false,
             CancellationToken cancellationToken = default)
             => throw new NotSupportedException(
-                "greeting.yaml does not declare any InvokeAzureAgent actions.");
-
-        // NoOpAgentProvider inherits ConvertDictionaryToJson from ResponseAgentProvider.
-        // We don't override it because the greeting fast-path never reaches InputArguments.
+                "Fast-path workflows do not declare any InvokeAzureAgent actions.");
     }
 }

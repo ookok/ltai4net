@@ -3,6 +3,7 @@ using System.Reflection;
 using LTAI.Agent;
 using LTAI.AI;
 using LTAI.Core;
+using LTAI.Agent.Workflows;
 using LTAI.Core.Configuration;
 using Spectre.Console;
 
@@ -76,6 +77,7 @@ public static class Program
         SlashCommands.SnippetStore = sp.GetService<LTAI.Agent.Snippets.SnippetStore>();
         SlashCommands.WorkflowRegistry = sp.GetService<LTAI.Agent.Workflows.YAMLWorkflowRegistry>();
         SlashCommands.Jobs = sp.GetService<LTAI.Agent.Tools.BackgroundJobService>();
+        SlashCommands.Pipes = sp.GetService<LTAI.Agent.Workflows.AgentWorkflows>();
         var options = sp.GetRequiredService<IOptions<LTAIOptions>>();
         SlashCommands.ActiveProvider = options.Value.AI.DefaultProvider ?? "DeepSeek";
         SlashCommands.L1Model = options.Value.AI.GetLayerConfig("fast").Model;
@@ -102,6 +104,7 @@ public static class Program
             Directory.GetCurrentDirectory(),
             sp.GetRequiredService<LTAI.Agent.DevUI.LTAIDevUIService>(),
             sp.GetRequiredService<LTAI.TUI.DevUI.DevUISpanCollector>(),
+            sp.GetRequiredService<LTAI.Agent.Tools.QuestionService>(),
             sp.GetService<LTAI.Agent.Workflows.YAMLWorkflowRegistry>(),
             sp.GetService<LTAI.AI.LocalEmbedder>(),
             sp.GetService<LTAI.AI.ToolEmbeddingCache>(),

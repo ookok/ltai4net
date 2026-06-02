@@ -186,12 +186,145 @@ try
             // error to the client so it can show a meaningful toast.
             return Results.Problem($"Reload failed: {ex.Message}", statusCode: 422);
         }
+        }
+    });
+
+    // ── P16.3: SSE event stream for workflow hot-reload notifications ──
+    // Subscribes to WorkflowHotReloadNotifier and pushes real-time
+    // reload/failed events as Server-Sent Events. Use cases:
+    //   - Browser DevUI live toast on reload
+    //   - CI/webhook triggered by workflow changes
+    //   - TUI/Desktop long-polling alternative (though they use OTel spans)
+    app.MapGet("/ltai/v1/workflows/events", async (
+        HttpContext ctx,
+        LTAI.Agent.Workflows.WorkflowHotReloadNotifier notifier,
+        ILoggerFactory loggerFactory) =>
+    {
+        var logger = loggerFactory.CreateLogger("WorkflowSSE");
+        ctx.Response.Headers.ContentType = "text/event-stream";
+        ctx.Response.Headers.CacheControl = "no-cache";
+        ctx.Response.Headers.Connection = "keep-alive";
+        ctx.Response.Headers["X-Accel-Buffering"] = "no"; // nginx proxy support
+
+        // Channel to bridge the push-based IWorkflowSubscriber with async SSE writes.
+        var channel = System.Threading.Channels.Channel.CreateBounded<string>(new BoundedChannelOptions(32)
+        {
+            FullMode = BoundedChannelFullMode.DropOldest,
+        });
+
+        var subscriber = new SseWorkflowSubscriber(channel.Writer);
+        var token = notifier.Subscribe(subscriber);
+
+        // Keepalive timer: every 30s send a comment to keep the connection open
+        // on proxies / load balancers that idle-timeout long-lived connections.
+        using var keepaliveCts = CancellationTokenSource.CreateLinkedTokenSource(ctx.RequestAborted);
+        var keepalive = Task.Run(async () =>
+        {
+            try
+            {
+                while (!keepaliveCts.Token.IsCancellationRequested)
+                {
+                    await Task.Delay(30_000, keepaliveCts.Token).ConfigureAwait(false);
+                    await channel.Writer.WriteAsync(": keepalive\n\n", keepaliveCts.Token).ConfigureAwait(false);
+                }
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception ex) { logger.LogWarning(ex, "SSE keepalive error"); }
+        }, keepaliveCts.Token);
+
+        try
+        {
+            // Stream events until the client disconnects.
+            await foreach (var sse in channel.Reader.ReadAllAsync(ctx.RequestAborted).ConfigureAwait(false))
+            {
+                await ctx.Response.WriteAsync(sse, ctx.RequestAborted).ConfigureAwait(false);
+                await ctx.Response.Body.FlushAsync(ctx.RequestAborted).ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException) { /* client disconnected */ }
+        finally
+        {
+            keepaliveCts.Cancel();
+            notifier.Unsubscribe(token);
+            channel.Writer.TryComplete();
+            // Graceful: wait a moment for keepalive to exit.
+            try { await keepalive.WaitAsync(TimeSpan.FromSeconds(1)); } catch { }
+        }
+    });
+
+    // Helper: IWorkflowSubscriber that writes JSON SSE events to a Channel<string>.
+    sealed class SseWorkflowSubscriber(System.Threading.Channels.ChannelWriter<string> writer) : LTAI.Agent.Workflows.IWorkflowSubscriber
+    {
+        public void OnReloaded(LTAI.Agent.Workflows.WorkflowReloadEvent evt)
+        {
+            var json = System.Text.Json.JsonSerializer.Serialize(new { evt.Name, evt.Type, evt.Version, evt.FilePath, reloadedAtUtc = evt.ReloadedAtUtc });
+            writer.TryWrite($"event: reloaded\ndata: {json}\n\n");
+        }
+
+        public void OnLoadFailed(LTAI.Agent.Workflows.WorkflowLoadFailedEvent evt)
+        {
+            var json = System.Text.Json.JsonSerializer.Serialize(new { evt.Name, evt.Type, evt.FilePath, evt.Reason, failedAtUtc = evt.FailedAtUtc });
+            writer.TryWrite($"event: load_failed\ndata: {json}\n\n");
+        }
+    }
+
+    // ── P16.1: Pipeline REST surface (sequential/concurrent) ──
+    app.MapGet("/ltai/v1/pipelines", (LTAI.Agent.Workflows.YAMLWorkflowRegistry? reg) =>
+    {
+        if (reg == null) return Results.NotFound(new { error = "YAMLWorkflowRegistry not registered" });
+        var all = reg.List();
+        var pipes = all.Where(w => w.Type is "sequential" or "concurrent").ToList();
+        return Results.Ok(new
+        {
+            watchDir = reg.WatchDirectory,
+            pipelines = pipes.Select(p =>
+            {
+                var cfg = reg.TryGetPipelineConfig(p.Name);
+                return new
+                {
+                    name = p.Name,
+                    type = p.Type,
+                    version = p.Version,
+                    agents = cfg?.Agents ?? (IReadOnlyList<string>)[],
+                    defaultTask = cfg?.DefaultTask,
+                    filePath = p.FilePath,
+                    loadedAtUtc = p.LoadedAtUtc,
+                };
+            }),
+        });
+    });
+    app.MapGet("/ltai/v1/pipelines/{name}", (LTAI.Agent.Workflows.YAMLWorkflowRegistry? reg, string name) =>
+    {
+        if (reg == null) return Results.NotFound(new { error = "YAMLWorkflowRegistry not registered" });
+        var cfg = reg.TryGetPipelineConfig(name);
+        if (cfg == null) return Results.NotFound(new { error = $"Pipeline '{name}' not found" });
+        return Results.Ok(new
+        {
+            name,
+            type = cfg.Type,
+            version = cfg.Version,
+            agents = cfg.Agents,
+            defaultTask = cfg.DefaultTask,
+        });
+    });
+    app.MapPost("/ltai/v1/pipelines/{name}/run", async (
+        LTAI.Agent.Workflows.YAMLWorkflowRegistry? reg,
+        LTAI.Agent.Workflows.AgentWorkflows? pipes,
+        string name) =>
+    {
+        if (reg == null || pipes == null)
+            return Results.NotFound(new { error = "AgentWorkflows or YAMLWorkflowRegistry not registered" });
+        var cfg = reg.TryGetPipelineConfig(name);
+        if (cfg == null) return Results.NotFound(new { error = $"Pipeline '{name}' not found" });
+        var result = cfg.Type == "concurrent"
+            ? await pipes.RunConcurrentAsync([name], cfg.DefaultTask ?? "Execute pipeline", ct: default)
+            : await pipes.RunSequentialAsync([name], cfg.DefaultTask ?? "Execute pipeline", ct: default);
+        return Results.Ok(new { pipeline = name, type = cfg.Type, result });
     });
 
     // ── P14.15: Background job REST surface ──
     // Backed by the same BackgroundJobService that the agent tools call.
     // Use cases: TUI/Desktop jobs panel (P14.14) polls these, CI/cron
-    // scripts can read job status, and external tools can cancel misbehaving
     // jobs. Snapshot semantics: jobs auto-evict 60s after completion
     // (BackgroundJobService.StartJob line 50), so callers should treat 404
     // as "completed and gone" rather than an error.

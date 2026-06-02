@@ -1,0 +1,17 @@
+// P16.1 hot-editable config for predefined Concurrent agent pipelines.
+// Edit to add/remove agent steps without recompiling.
+// Each agent receives the same task in parallel; results are aggregated.
+//
+// type:      "concurrent"
+// version:   Schema version.
+// agents:    Set of agent names to fan-out to in parallel.
+{
+  "type": "concurrent",
+  "agents": [
+    "LTAI-Code",
+    "LTAI-Math",
+    "LTAI-Data"
+  ],
+  "defaultTask": "Analyze the task from code, math, and data perspectives"
+}
+}

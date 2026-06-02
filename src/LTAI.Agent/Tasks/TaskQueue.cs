@@ -193,8 +193,12 @@ public sealed class TaskQueue : IAsyncDisposable
         }
     }
 
+    private volatile bool _disposed;
+
     public async ValueTask DisposeAsync()
     {
+        if (_disposed) return;
+        _disposed = true;
         _channel.Writer.TryComplete();
         _cts.Cancel();
         try { await Task.WhenAll(_consumers).ConfigureAwait(false); } catch { /* ignore */ }

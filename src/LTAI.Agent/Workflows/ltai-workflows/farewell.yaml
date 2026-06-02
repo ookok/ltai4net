@@ -1,0 +1,47 @@
+#
+# Farewell fast-path workflow.
+#
+kind: Workflow
+trigger:
+
+  kind: OnConversationStart
+  id: workflow_farewell
+  actions:
+
+    - kind: SetVariable
+      id: set_normalized
+      variable: Local.NormalizedText
+      value: =Lower(Trim(System.LastMessage.Text))
+
+    # ── English farewells ──
+    - kind: ConditionGroup
+      id: is_farewell_en
+      conditions:
+        - condition: >-
+            StartsWith(Local.NormalizedText, "bye")
+            || StartsWith(Local.NormalizedText, "goodbye")
+            || StartsWith(Local.NormalizedText, "see you")
+            || StartsWith(Local.NormalizedText, "see ya")
+            || StartsWith(Local.NormalizedText, "later")
+            || StartsWith(Local.NormalizedText, "ttyl")
+            || StartsWith(Local.NormalizedText, "gotta go")
+            || StartsWith(Local.NormalizedText, "cya")
+            || StartsWith(Local.NormalizedText, "night")
+            || StartsWith(Local.NormalizedText, "good night")
+          id: cond_farewell_en
+          actions:
+            - kind: SendActivity
+              id: send_farewell_en
+              activity: "See you 👋 Come back anytime!"
+
+        # ── Chinese farewells ──
+        - condition: >-
+            StartsWith(Local.NormalizedText, "再见")
+            || StartsWith(Local.NormalizedText, "拜拜")
+            || StartsWith(Local.NormalizedText, "明天见")
+            || StartsWith(Local.NormalizedText, "回头聊")
+          id: cond_farewell_zh
+          actions:
+            - kind: SendActivity
+              id: send_farewell_zh
+              activity: "再见 👋 随时欢迎回来！"

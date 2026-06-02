@@ -131,9 +131,9 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IMcpToolHandler, DefaultMcpToolHandler>();
         services.AddSingleton<WorkflowHotReloadNotifier>();
         services.AddSingleton<YAMLWorkflowRegistry>(sp => new YAMLWorkflowRegistry(
-            sp.GetRequiredService<IOptions<LTAIOptions>>(),
-            sp.GetRequiredService<WorkflowHotReloadNotifier>(),
-            sp.GetRequiredService<ILogger<YAMLWorkflowRegistry>>(),
+            sp.GetRequiredService<IOptions<LTAIOptions>>(), // options
+            sp.GetRequiredService<ILogger<YAMLWorkflowRegistry>>(), // logger
+            sp.GetRequiredService<WorkflowHotReloadNotifier>(), // notifier
             sp.GetService<IMcpToolHandler>()));
         services.AddSingleton<YAMLWorkflowWatcher>(sp => new YAMLWorkflowWatcher(
             sp.GetRequiredService<YAMLWorkflowRegistry>().WatchDirectory,
@@ -186,6 +186,12 @@ public static class ServiceCollectionExtensions
                 opts.ResolveDataPath("snippets.json"),
                 sp.GetRequiredService<ILoggerFactory>().CreateLogger<LTAI.Agent.Snippets.SnippetStore>());
         });
+
+        // P17.5: QuestionService — bridges LLM tool calls and UI for structured
+        // follow-up questions. The tool posts questions, the UI renders them
+        // (Spectre.Console / Avalonia), and answers flow back via Reply/Reject.
+        services.AddSingleton<LTAI.Agent.Tools.QuestionService>();
+        services.AddSingleton<LTAI.Agent.Tools.QuestionTool>();
 
         // P14.8: bridge LocalEmbedder.ModelSwitched → static registry cache
         // invalidation (LTAI.AI's ToolEmbeddingCache handles itself; this
@@ -240,9 +246,9 @@ public static class ServiceCollectionExtensions
         float? Temperature,
         float? TopP)
     {
-        public AIAgent Build(IServiceProvider sp, string name) => BuildAgentImpl(
-            sp, name, Description, CanRead, CanWrite, CanList, CanExec,
-            modelId: ModelId, temperature: Temperature, topP: TopP).GetAwaiter().GetResult();
+        public AIAgent Build(IServiceProvider sp, string name) => Task.Run(() =>
+            BuildAgentImpl(sp, name, Description, CanRead, CanWrite, CanList, CanExec,
+                modelId: ModelId, temperature: Temperature, topP: TopP)).GetAwaiter().GetResult();
     }
 
     private static IEnumerable<AgentDef> GetAgentDefinitions()
@@ -311,7 +317,7 @@ public static class ServiceCollectionExtensions
     private static AIAgent BuildAgent(IServiceProvider sp, string name, string description,
         bool canRead, bool canWrite, bool canList, bool canExec,
         string? modelId = null, float? temperature = null, float? topP = null) {
-        return BuildAgentImpl(sp, name, description, canRead, canWrite, canList, canExec, modelId, temperature, topP).GetAwaiter().GetResult();
+        return Task.Run(() => BuildAgentImpl(sp, name, description, canRead, canWrite, canList, canExec, modelId, temperature, topP)).GetAwaiter().GetResult();
     }
 
     // Original implementation
@@ -594,6 +600,11 @@ public static class ServiceCollectionExtensions
             tools.Add(AIFunctionFactory.Create(tq.GetTask));
             tools.Add(AIFunctionFactory.Create(tq.WaitForTask));
             tools.Add(AIFunctionFactory.Create(tq.CancelTask));
+        }
+        // P17.5: question tool — every agent can ask structured follow-up questions.
+        {
+            var qt = sp.GetRequiredService<LTAI.Agent.Tools.QuestionTool>();
+            tools.Add(AIFunctionFactory.Create(qt.AskQuestions));
         }
         if (canExec)
         {

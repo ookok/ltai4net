@@ -5,10 +5,12 @@ using System.Threading;
 
 namespace LTAI.Agent.Tools;
 
-public sealed class BackgroundJobService
+public sealed class BackgroundJobService : IDisposable
 {
     private readonly ConcurrentDictionary<string, JobEntry> _jobs = new();
     private int _nextJobId;
+    private readonly CancellationTokenSource _cts = new();
+    private bool _disposed;
 
     public event Action<string, JobEntry>? JobCompleted;
 
@@ -20,38 +22,64 @@ public sealed class BackgroundJobService
         var entry = new JobEntry { Command = command, StartedAtUtc = DateTime.UtcNow };
         _jobs[id] = entry;
 
+        _ = RunJobCoreAsync(id, entry, command);
+
+        return $"Job #{id} started.";
+    }
+
+    private async Task RunJobCoreAsync(string id, JobEntry entry, string command)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = Environment.OSVersion.Platform == PlatformID.Win32NT ? "cmd.exe" : "/bin/bash",
+                Arguments = Environment.OSVersion.Platform == PlatformID.Win32NT ? $"/c {command}" : $"-c \"{command}\"",
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            using var process = new Process { StartInfo = psi };
+            process.Start();
+            entry.Output = await process.StandardOutput.ReadToEndAsync().ConfigureAwait(false);
+            entry.Error = await process.StandardError.ReadToEndAsync().ConfigureAwait(false);
+            entry.ExitCode = process.ExitCode;
+        }
+        catch (Exception ex)
+        {
+            entry.Error = ex.Message;
+        }
+        finally
+        {
+            entry.Completed = true;
+            JobCompleted?.Invoke(id, entry);
+            // Schedule cleanup after 60s with cancellation support
+            ScheduleCleanup(id);
+        }
+    }
+
+    private void ScheduleCleanup(string id)
+    {
+        // Schedule a fire-and-forget cleanup task with cancellation support.
+        // The task is tracked by the CTS so Dispose waits for it.
         _ = Task.Run(async () =>
         {
             try
             {
-                var psi = new ProcessStartInfo
-                {
-                    FileName = Environment.OSVersion.Platform == PlatformID.Win32NT ? "cmd.exe" : "/bin/bash",
-                    Arguments = Environment.OSVersion.Platform == PlatformID.Win32NT ? $"/c {command}" : $"-c \"{command}\"",
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true
-                };
-                using var process = new Process { StartInfo = psi };
-                process.Start();
-                entry.Output = await process.StandardOutput.ReadToEndAsync().ConfigureAwait(false);
-                entry.Error = await process.StandardError.ReadToEndAsync().ConfigureAwait(false);
-                entry.ExitCode = process.ExitCode;
+                await Task.Delay(60_000, _cts.Token).ConfigureAwait(false);
+                _jobs.TryRemove(id, out _);
             }
-            catch (Exception ex)
-            {
-                entry.Error = ex.Message;
-            }
-            finally
-            {
-                entry.Completed = true;
-                JobCompleted?.Invoke(id, entry);
-                _ = Task.Delay(60_000).ContinueWith(t => _jobs.TryRemove(id, out _));
-            }
-        });
+            catch (OperationCanceledException) { /* service shutting down */ }
+        }, _cts.Token);
+    }
 
-        return $"Job #{id} started.";
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        _cts.Cancel();
+        _cts.Dispose();
     }
 
     [Description("列出所有后台作业及状态")]
@@ -101,7 +129,7 @@ public sealed class BackgroundJobService
         var sw = Stopwatch.StartNew();
         var timeout = TimeSpan.FromSeconds(Math.Clamp(timeoutSec, 1, 600));
         while (!entry.Completed && sw.Elapsed < timeout)
-            await Task.Delay(500).ConfigureAwait(false);
+            await Task.Delay(500, _cts.Token).ConfigureAwait(false);
 
         if (!entry.Completed)
             return $"Job #{jobId} did not complete within {timeoutSec}s.";

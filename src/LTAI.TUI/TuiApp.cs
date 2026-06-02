@@ -1,6 +1,7 @@
 using Spectre.Console;
 using LTAI.Agent;
 using LTAI.Agent.DevUI;
+using LTAI.Agent.Tools;
 using LTAI.Core.Configuration;
 using Microsoft.Extensions.Options;
 using LTAI.TUI.DevUI;
@@ -23,6 +24,7 @@ public sealed class TuiApp
     private readonly LTAI.AI.ToolEmbeddingCache? _embedCache;
     private readonly LTAI.AI.RemoteEmbeddingCache? _remoteCache;
     private readonly LTAI.AI.EmbeddingClient? _embeddingClient;
+    private readonly QuestionService _questionService;
 
     private TuiView _currentView = TuiView.Chat;
     private bool _running = true;
@@ -34,6 +36,7 @@ public sealed class TuiApp
         string projectRoot,
         LTAIDevUIService devUi,
         DevUISpanCollector spanCollector,
+        QuestionService questionService,
         LTAI.Agent.Workflows.YAMLWorkflowRegistry? workflows = null,
         LTAI.AI.LocalEmbedder? embedder = null,
         LTAI.AI.ToolEmbeddingCache? embedCache = null,
@@ -44,9 +47,10 @@ public sealed class TuiApp
         _llmConfig = llmConfig;
         _config = config;
         _projectRoot = projectRoot;
-        _chatLayout = new ChatLayout(chat);
+        _chatLayout = new ChatLayout(chat, questionService);
         _devUi = devUi;
         _spanCollector = spanCollector;
+        _questionService = questionService;
         _workflows = workflows;
         _embedder = embedder;
         _embedCache = embedCache;

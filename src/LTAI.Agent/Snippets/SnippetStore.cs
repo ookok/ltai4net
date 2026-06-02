@@ -41,7 +41,8 @@ public sealed class SnippetStore
     public async Task<IReadOnlyList<Snippet>> ListAsync(CancellationToken ct = default)
     {
         await EnsureLoadedAsync(ct).ConfigureAwait(false);
-        return _cache.OrderBy(s => s.Key, StringComparer.OrdinalIgnoreCase).ToList();
+        var snapshot = _cache;
+        return snapshot.OrderBy(s => s.Key, StringComparer.OrdinalIgnoreCase).ToList();
     }
 
     /// <summary>Look up by exact key (case-insensitive). Returns null if not found.</summary>
@@ -49,7 +50,8 @@ public sealed class SnippetStore
     {
         if (string.IsNullOrWhiteSpace(key)) return null;
         await EnsureLoadedAsync(ct).ConfigureAwait(false);
-        return _cache.FirstOrDefault(s =>
+        var snapshot = _cache;
+        return snapshot.FirstOrDefault(s =>
             string.Equals(s.Key, key, StringComparison.OrdinalIgnoreCase));
     }
 
@@ -191,9 +193,26 @@ public sealed class SnippetStore
     }
 
     // ── Internal ─────────────────────────────────────────────
+    private readonly SemaphoreSlim _loadGate = new(1, 1);
+    private bool _loaded;
 
-    private Task EnsureLoadedAsync(CancellationToken ct) => EnsureLoadedInternalAsync(ct);
+    // Called from public read paths (ListAsync/GetAsync); uses _loadGate to
+    // prevent double-load races. Must NOT be called from within _gate blocks.
+    private async Task EnsureLoadedAsync(CancellationToken ct)
+    {
+        if (_loaded) return;
+        await _loadGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            if (_loaded) return;
+            await LoadFromDiskAsync(ct).ConfigureAwait(false);
+            _loaded = true;
+        }
+        finally { _loadGate.Release(); }
+    }
 
+    // Called from write paths (SaveAsync/DeleteAsync/etc.) which already hold _gate.
+    // Does not acquire _loadGate because single-writer serialization is sufficient.
     private Task EnsureLoadedInternalAsync(CancellationToken ct)
     {
         if (_cache.Count > 0 || !File.Exists(_filePath)) return Task.CompletedTask;

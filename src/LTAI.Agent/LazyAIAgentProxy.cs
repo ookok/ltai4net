@@ -38,7 +38,8 @@ public sealed class LazyAIAgentProxy : AIAgent
         _agentName = agentName;
         _description = new Lazy<string?>(() =>
             AgentRegistry.LoadAll().FirstOrDefault(d =>
-                string.Equals(d.Name, agentName, StringComparison.OrdinalIgnoreCase))?.Description);
+                string.Equals(d.Name, agentName, StringComparison.OrdinalIgnoreCase))?.Description,
+            LazyThreadSafetyMode.PublicationOnly);
     }
 
     public override string? Name => _agentName;

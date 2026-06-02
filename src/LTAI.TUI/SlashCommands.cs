@@ -33,6 +33,9 @@ public static class SlashCommands
     /// <summary>P15 hot-editable workflow registry (injected from DI at startup).</summary>
     public static LTAI.Agent.Workflows.YAMLWorkflowRegistry? WorkflowRegistry { get; set; }
 
+    /// <summary>P16.1: Pipes (sequential/concurrent pipeline orchestrator, injected from DI).</summary>
+    public static LTAI.Agent.Workflows.AgentWorkflows? Pipes { get; set; }
+
     /// <summary>P14.14: Background job service for /jobs subcommand (list/watch/cancel).</summary>
     public static LTAI.Agent.Tools.BackgroundJobService? Jobs { get; set; }
 
@@ -78,12 +81,15 @@ public static class SlashCommands
             "list|watch <id>|cancel <id>|show <id>"),
         new("cost",    "信息",  "显示本轮预估费用", "费用,花费"),
         new("memory",  "扩展",  "管理记忆文件", "记忆"),
-        new("skill",   "扩展",  "列出/运行技能", "", "技能名"),
         new("snippet", "扩展",  "常用语管理: list|save <key> <text>|use <key>|edit <key>|rename <old> <new>|delete <key>",
             "snip,常用语,常用,短语", "list|save|use|edit|rename|delete"),
         new("workflow","扩展",  "热改编排 (YAML/JSON): list|reload <name>|show <name>|open",
             "wf,编排,工作流", "list|reload|show|open"),
+        new("pipe",    "扩展",  "管道编排: list|run <preset> [task]|stop <id>",
+            "pipeline,顺序,并发", "list|run|stop"),
         new("mode",    "代码",  "编辑模式: review|auto", "", "review|auto"),
+        new("undo",    "代码",  "撤销上次编辑", "撤销"),
+        new("ls",      "文件",  "列出当前目录内容", "dir,列表"),
         new("undo",    "代码",  "撤销上次编辑", "撤销"),
         new("ls",      "文件",  "列出当前目录内容", "dir,列表"),
         new("cd",      "文件",  "切换工作目录", "", "目录路径"),
@@ -282,10 +288,10 @@ public static class SlashCommands
             "retry" => ("Retrying last message...", true),
             "compact" => ("Summarizing older turns...", true),
             "model" => HandleModelCommand(args),
-            "config" => HandleConfigCommand(args),
             "snippet" => HandleSnippetCommand(args),
             "workflow" => HandleWorkflowCommand(args),
             "status" => Status(),
+            "pipe" => HandlePipeCommand(args),
             "monitor" => Monitor(),
             "jobs" => HandleJobsCommand(args),
             "cost" => ("Cost tracking: see model provider dashboard", true),
@@ -1284,6 +1290,111 @@ public static class SlashCommands
     }
 
     // ═══════════════════════════════════════════
+    //  /pipe commands — P16.1: list/run sequential/concurrent pipelines
+    // ═══════════════════════════════════════════
+
+    private static (string, bool) HandlePipeCommand(string args)
+    {
+        var pipes = Pipes;
+        var registry = WorkflowRegistry;
+        if (pipes == null)
+            return ("Pipes (AgentWorkflows) not initialized", true);
+
+        var parts = args.Split(' ', 3, StringSplitOptions.RemoveEmptyEntries);
+        var sub = parts.Length > 0 ? parts[0].ToLowerInvariant() : "";
+        var subArgs1 = parts.Length > 1 ? parts[1].Trim() : "";
+        var subArgs2 = parts.Length > 2 ? parts[2].Trim() : "";
+
+        return sub switch
+        {
+            "" or "list" => PipelinesList(registry),
+            "run" => PipeRun(pipes, registry, subArgs1, subArgs2),
+            "stop" => ("Run cancellation via tools, not /pipe stop", true),
+            _ => ("用法: /pipe list | run <preset> [task] | stop <id>", true),
+        };
+    }
+
+    private static (string, bool) PipelinesList(LTAI.Agent.Workflows.YAMLWorkflowRegistry? registry)
+    {
+        if (registry == null)
+            return ("[yellow]暂无 pipeline 配置[/]  请创建 sequential/concurrent JSON 文件", true);
+
+        var info = registry.List();
+        var pipelinePresets = info.Where(w => w.Type is "sequential" or "concurrent").ToList();
+        if (pipelinePresets.Count == 0)
+            return ("[yellow]暂无 pipeline 配置[/]  创建 sequential.json / concurrent.json 后重试", true);
+
+        var table = new Table().Border(TableBorder.Rounded);
+        table.AddColumn("Preset");
+        table.AddColumn("Type");
+        table.AddColumn("V");
+        table.AddColumn("Agents/Sources");
+        table.AddColumn("Path");
+
+        foreach (var p in pipelinePresets)
+        {
+            var cfg = registry.TryGetPipelineConfig(p.Name);
+            var agents = cfg?.Agents ?? [];
+            var agentsStr = agents.Count > 0
+                ? string.Join(", ", agents.Select(a => $"[cyan]{a}[/]"))
+                : "[grey](empty)[/]";
+            var fileName = System.IO.Path.GetFileName(p.FilePath);
+            table.AddRow(
+                $"[cyan]{p.Name.EscapeMarkup()}[/]",
+                $"[grey]{p.Type.EscapeMarkup()}[/]",
+                p.Version.ToString(),
+                agentsStr,
+                $"[grey]{fileName.EscapeMarkup()}[/]");
+        }
+
+        AnsiConsole.Write(table);
+        return ($"[grey]共 {pipelinePresets.Count} 个 pipeline · /pipe run <name> [task] 执行[/]", true);
+    }
+
+    private static (string, bool) PipeRun(
+        LTAI.Agent.Workflows.AgentWorkflows pipes,
+        LTAI.Agent.Workflows.YAMLWorkflowRegistry? registry,
+        string presetName,
+        string task)
+    {
+        if (string.IsNullOrEmpty(presetName))
+            return ("用法: /pipe run <preset> [task]  — 例如: /pipe run sequential \"写一篇博客\"", true);
+
+        if (registry == null)
+            return ("Workflow registry not available; cannot resolve pipeline preset", true);
+
+        var cfg = registry.TryGetPipelineConfig(presetName);
+        if (cfg == null)
+        {
+            var info = registry.List();
+            var pipeNames = info.Where(w => w.Type is "sequential" or "concurrent").Select(w => w.Name).ToList();
+            var hint = pipeNames.Count > 0
+                ? $"可用: {string.Join(", ", pipeNames)}"
+                : "没有可用 pipeline。创建 sequential.json / concurrent.json 后重试";
+            return ($"未知 pipeline '[red]{presetName}[/]'  {hint}", true);
+        }
+
+        var defaultTask = string.IsNullOrEmpty(task)
+            ? cfg.DefaultTask ?? "请根据预设 agents 列表完成任务"
+            : task;
+
+        if (cfg.Type == "concurrent")
+        {
+            AnsiConsole.MarkupLine($"[yellow]⏳[/] 并发 pipeline [cyan]{presetName}[/] on: [grey]{defaultTask.EscapeMarkup()}[/]");
+            var result = Task.Run(() => pipes.RunConcurrentAsync([presetName], defaultTask, ct: default)).GetAwaiter().GetResult();
+            AnsiConsole.MarkupLine(result);
+            return ($"[green]✅ 并发完成[/] 请查看上方结果", true);
+        }
+        else
+        {
+            AnsiConsole.MarkupLine($"[yellow]⏳[/] 顺序 pipeline [cyan]{presetName}[/] on: [grey]{defaultTask.EscapeMarkup()}[/]");
+            var result = Task.Run(() => pipes.RunSequentialAsync([presetName], defaultTask, ct: default)).GetAwaiter().GetResult();
+            AnsiConsole.MarkupLine(result);
+            return ($"[green]✅ 顺序完成[/] 请查看上方结果", true);
+        }
+    }
+
+    // ═══════════════════════════════════════════
     //  /jobs commands — P14.14: list/watch/cancel/show
     // ═══════════════════════════════════════════
 
@@ -1381,7 +1492,7 @@ public static class SlashCommands
                 return JobsShow(jobs, id);
             }
 
-            Thread.Sleep(500);
+            System.Threading.Thread.Sleep(100);
         }
 
         return ($"[yellow]⏱ 2 分钟超时，job #{id} 仍在运行。退出 watch（job 仍存在）[/]", true);

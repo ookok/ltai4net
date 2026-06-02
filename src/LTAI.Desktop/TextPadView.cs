@@ -580,12 +580,15 @@ public sealed class TextPadView : UserControl
         var now = DateTime.UtcNow;
         if ((now - _lastFileChange).TotalMilliseconds < 1000) return;
         _lastFileChange = now;
-        System.Threading.Thread.Sleep(200);
-        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
-        {
-            if (_currentFile == e.FullPath && File.Exists(e.FullPath))
-                OpenFile(e.FullPath);
-        });
+        // Delay via DispatcherTimer instead of Thread.Sleep to avoid blocking the UI thread
+        var timer = new Avalonia.Threading.DispatcherTimer(TimeSpan.FromMilliseconds(200),
+            Avalonia.Threading.DispatcherPriority.Background, (s, _) =>
+            {
+                ((Avalonia.Threading.DispatcherTimer?)s)?.Stop();
+                if (_currentFile == e.FullPath && File.Exists(e.FullPath))
+                    OpenFile(e.FullPath);
+            });
+        timer.Start();
     }
 
     private void RunSyntaxCheck()

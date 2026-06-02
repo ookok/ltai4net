@@ -17,6 +17,7 @@ public sealed class ChatView : UserControl
 {
     // 共享 HttpClient — 复用连接池，避免 socket 耗尽
     private static readonly HttpClient _sharedHttp = new() { Timeout = TimeSpan.FromSeconds(10) };
+    private static bool _httpDisposed;
 
     private readonly LTAIService _svc;
     private readonly TextBox _input;
@@ -118,6 +119,8 @@ public sealed class ChatView : UserControl
         // still function when launched in degraded mode without LTAI.Agent DI.
         _snippetStore = App.Services?.GetService(typeof(LTAI.Agent.Snippets.SnippetStore))
             as LTAI.Agent.Snippets.SnippetStore;
+        // P17.5: subscribe to LLM questions
+        SetupQuestionHandler();
         Background = LtaiTheme.Sbb(LtaiTheme.Bg);
 
         var root = new DockPanel { Margin = new(16) };
@@ -251,6 +254,12 @@ public sealed class ChatView : UserControl
             LtaiTheme.ThemeChanged -= OnThemeChanged;
             LTAI.Agent.Tools.SubagentTools.OnSubagentMessage -= OnSubagentMessage;
             LTAI.Agent.Tools.SubagentTools.OnSubagentComplete -= OnSubagentComplete;
+            if (_questionHandler != null)
+            {
+                var qs = App.Services?.GetService(typeof(LTAI.Agent.Tools.QuestionService))
+                    as LTAI.Agent.Tools.QuestionService;
+                if (qs != null) qs.QuestionPosted -= _questionHandler;
+            }
         };
         LTAI.Agent.Tools.SubagentTools.OnSubagentMessage += OnSubagentMessage;
         LTAI.Agent.Tools.SubagentTools.OnSubagentComplete += OnSubagentComplete;
@@ -815,6 +824,8 @@ public sealed class ChatView : UserControl
             Background = LtaiTheme.Sbb(LtaiTheme.BgPanel),
             Foreground = LtaiTheme.Sbb(LtaiTheme.TextDim)
         };
+        var cts = new CancellationTokenSource();
+        btn.DetachedFromVisualTree += (_, _) => cts.Cancel();
         btn.Click += async (_, _) =>
         {
             var topLevel = TopLevel.GetTopLevel(btn);
@@ -822,7 +833,8 @@ public sealed class ChatView : UserControl
                 await topLevel.Clipboard.SetTextAsync(content);
             btn.Content = "Done";
             btn.Foreground = LtaiTheme.Sbb(LtaiTheme.AccentSystem);
-            await Task.Delay(1500);
+            try { await Task.Delay(1500, cts.Token); }
+            catch (OperationCanceledException) { return; }
             btn.Content = "Copy";
             btn.Foreground = LtaiTheme.Sbb(LtaiTheme.TextDim);
         };
@@ -1259,7 +1271,7 @@ public sealed class ChatView : UserControl
             var firstToken = args.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? "";
             if (!string.IsNullOrEmpty(firstToken))
             {
-                var existing = TryGetSnippetAsync(firstToken).GetAwaiter().GetResult();
+                var existing = _snippetStore.GetAsync(firstToken).GetAwaiter().GetResult();
                 if (existing != null)
                     cmd = new LTAI.Agent.Snippets.SnippetCommand(
                         LTAI.Agent.Snippets.SnippetAction.Use, firstToken, "", "", null);
@@ -1296,31 +1308,35 @@ public sealed class ChatView : UserControl
 
     private async void ShowSnippetList()
     {
-        if (_snippetStore == null) return;
-        var list = await _snippetStore.ListAsync().ConfigureAwait(false);
-        if (list.Count == 0)
+        try
         {
-            AddSystemBubble("📝 暂无常用语\n用法: /snippet save <key> <text>");
-            return;
+            if (_snippetStore == null) return;
+            var list = await _snippetStore.ListAsync().ConfigureAwait(false);
+            if (list.Count == 0)
+            {
+                AddSystemBubble("📝 暂无常用语\n用法: /snippet save <key> <text>");
+                return;
+            }
+            var sb = new StringBuilder();
+            sb.AppendLine($"📝 常用语 ({list.Count} 条):");
+            foreach (var s in list)
+            {
+                var lastUsed = s.LastUsedAt?.ToLocalTime().ToString("MM-dd HH:mm") ?? "从未";
+                var desc = string.IsNullOrEmpty(s.Description) ? "" : $"  — {s.Description}";
+                var preview = s.Content.Length > 30 ? s.Content[..30] + "..." : s.Content;
+                sb.AppendLine($"  /{s.Key,-16}  {preview,-34}  使用:{s.UseCount,3}  {lastUsed}{desc}");
+            }
+            sb.AppendLine("\n用法: /snippet use <key>");
+            AddSystemBubble(sb.ToString().TrimEnd());
         }
-        var sb = new StringBuilder();
-        sb.AppendLine($"📝 常用语 ({list.Count} 条):");
-        foreach (var s in list)
-        {
-            var lastUsed = s.LastUsedAt?.ToLocalTime().ToString("MM-dd HH:mm") ?? "从未";
-            var desc = string.IsNullOrEmpty(s.Description) ? "" : $"  — {s.Description}";
-            var preview = s.Content.Length > 30 ? s.Content[..30] + "..." : s.Content;
-            sb.AppendLine($"  /{s.Key,-16}  {preview,-34}  使用:{s.UseCount,3}  {lastUsed}{desc}");
-        }
-        sb.AppendLine("\n用法: /snippet use <key>");
-        AddSystemBubble(sb.ToString().TrimEnd());
+        catch (Exception ex) { AddSystemBubble($"❌ 错误: {ex.Message}"); }
     }
 
     private async void TrySaveSnippet(string key, string content)
     {
-        if (_snippetStore == null) return;
         try
         {
+            if (_snippetStore == null) return;
             await _snippetStore.SaveAsync(new LTAI.Agent.Snippets.Snippet
             {
                 Key = key,
@@ -1328,7 +1344,7 @@ public sealed class ChatView : UserControl
             }).ConfigureAwait(false);
             AddSystemBubble($"✅ 已保存常用语 /{key}（{content.Length} 字符）");
         }
-        catch (ArgumentException ex)
+        catch (Exception ex)
         {
             AddSystemBubble($"❌ {ex.Message}");
         }
@@ -1336,39 +1352,47 @@ public sealed class ChatView : UserControl
 
     private async void TryUseSnippet(string key)
     {
-        if (_snippetStore == null) return;
-        var snippet = await _snippetStore.GetAsync(key).ConfigureAwait(false);
-        if (snippet == null)
+        try
         {
-            AddSystemBubble($"❌ 找不到常用语 '/{key}'");
-            return;
+            if (_snippetStore == null) return;
+            var snippet = await _snippetStore.GetAsync(key).ConfigureAwait(false);
+            if (snippet == null)
+            {
+                AddSystemBubble($"❌ 找不到常用语 '/{key}'");
+                return;
+            }
+            await _snippetStore.TouchAsync(key).ConfigureAwait(false);
+            // D61: fill the input box (not auto-send)
+            _input.Text = snippet.Content;
+            _input.CaretIndex = snippet.Content.Length;
+            AddSystemBubble($"✅ 已调出常用语 /{key}（{snippet.Content.Length} 字符）— 已填入输入框");
         }
-        await _snippetStore.TouchAsync(key).ConfigureAwait(false);
-        // D61: fill the input box (not auto-send)
-        _input.Text = snippet.Content;
-        _input.CaretIndex = snippet.Content.Length;
-        AddSystemBubble($"✅ 已调出常用语 /{key}（{snippet.Content.Length} 字符）— 已填入输入框");
+        catch (Exception ex) { AddSystemBubble($"❌ 错误: {ex.Message}"); }
     }
 
     private async void TryDeleteSnippet(string key)
     {
-        if (_snippetStore == null) return;
-        var existing = await _snippetStore.GetAsync(key).ConfigureAwait(false);
-        if (existing == null)
+        try
         {
-            AddSystemBubble($"❌ 找不到常用语 '/{key}'");
-            return;
+            if (_snippetStore == null) return;
+            var existing = await _snippetStore.GetAsync(key).ConfigureAwait(false);
+            if (existing == null)
+            {
+                AddSystemBubble($"❌ 找不到常用语 '/{key}'");
+                return;
+            }
+            var usedHint = existing.UseCount > 0 ? $"（已使用 {existing.UseCount} 次）" : "";
+            var ok = await _snippetStore.DeleteAsync(key).ConfigureAwait(false);
+            AddSystemBubble(ok ? $"✅ 已删除常用语 /{key} {usedHint}" : $"❌ 删除失败");
         }
-        var usedHint = existing.UseCount > 0 ? $"（已使用 {existing.UseCount} 次）" : "";
-        var ok = await _snippetStore.DeleteAsync(key).ConfigureAwait(false);
-        AddSystemBubble(ok ? $"✅ 已删除常用语 /{key} {usedHint}" : $"❌ 删除失败");
+        catch (Exception ex) { AddSystemBubble($"❌ 错误: {ex.Message}"); }
     }
 
     private async void TryRenameSnippet(string oldKey, string newKey)
     {
-        if (_snippetStore == null) return;
         try
         {
+            if (_snippetStore == null) return;
             var ok = await _snippetStore.RenameAsync(oldKey, newKey).ConfigureAwait(false);
             AddSystemBubble(ok
                 ? $"✅ 已重命名 /{oldKey} → /{newKey}"
@@ -1533,5 +1557,31 @@ public sealed class ChatView : UserControl
             _sessionManager.SaveMetadata(subName, new { ElapsedMs = elapsed, Label = label });
             AddSystemBubble($"✅ {label} 完成 — 在左侧会话列表中点击查看详情");
         });
+    }
+
+    private Action<LTAI.Agent.Tools.QuestionPost>? _questionHandler;
+
+    // ── P17.5 Question Tool Integration ──
+
+    private void SetupQuestionHandler()
+    {
+        var qs = App.Services?.GetService(typeof(LTAI.Agent.Tools.QuestionService))
+            as LTAI.Agent.Tools.QuestionService;
+        if (qs == null) return;
+
+        _questionHandler = post =>
+        {
+            _ = Dispatcher.UIThread.InvokeAsync(async () =>
+            {
+                var owner = this.VisualRoot as Window;
+                if (owner == null) return;
+                var answers = await LTAI.Desktop.Dialogs.QuestionDialog.ShowAsync(owner, post);
+                if (answers.Count > 0)
+                    qs.Reply(post.RequestId, answers);
+                else
+                    qs.Reject(post.RequestId);
+            });
+        };
+        qs.QuestionPosted += _questionHandler;
     }
 }

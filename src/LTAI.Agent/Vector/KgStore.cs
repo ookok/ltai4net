@@ -48,6 +48,7 @@ public sealed partial class KgStore : IDisposable
     //  Prepared statement cache
     // ═══════════════════════════════════════════
 
+    private const int MaxCmdCacheSize = 128;
     private readonly ConcurrentDictionary<string, SqliteCommand> _writeCmdCache = new();
     private readonly ConcurrentDictionary<string, SqliteCommand> _readCmdCache = new();
 
@@ -110,6 +111,12 @@ public sealed partial class KgStore : IDisposable
 
     private SqliteCommand GetPreparedWrite(string sql)
     {
+        // Bound the cache: if over limit, clear all (simple but effective for small cache)
+        if (_writeCmdCache.Count >= MaxCmdCacheSize)
+        {
+            foreach (var c in _writeCmdCache.Values) c.Dispose();
+            _writeCmdCache.Clear();
+        }
         return _writeCmdCache.GetOrAdd(sql, key =>
         {
             var cmd = _writer.CreateCommand();
@@ -122,6 +129,12 @@ public sealed partial class KgStore : IDisposable
     private SqliteCommand GetPreparedRead(string key, string sql)
     {
         ThrowIfDisposed();
+        // Bound the cache
+        if (_readCmdCache.Count >= MaxCmdCacheSize)
+        {
+            foreach (var c in _readCmdCache.Values) c.Dispose();
+            _readCmdCache.Clear();
+        }
         if (_readCmdCache.TryGetValue(key, out var cmd))
         {
             cmd.Parameters.Clear();

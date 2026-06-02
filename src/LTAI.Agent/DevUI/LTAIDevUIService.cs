@@ -103,7 +103,8 @@ public sealed class LTAIDevUIService
     {
         var agent = ResolveAgent(name)
             ?? throw new InvalidOperationException($"Agent '{name}' is not registered.");
-        AgentSession session = agent.CreateSessionAsync(cancellationToken).AsTask().GetAwaiter().GetResult();
+        var session = agent.CreateSessionAsync(cancellationToken).AsTask()
+            .GetAwaiter().GetResult();
         var chatMessage = new ChatMessage(ChatRole.User, message);
         return agent.RunStreamingAsync(chatMessage, session, cancellationToken: cancellationToken);
     }

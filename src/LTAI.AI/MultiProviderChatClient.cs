@@ -51,7 +51,7 @@ public sealed class MultiProviderChatClient : IChatClient
     private static readonly TimeSpan CooldownDuration = TimeSpan.FromSeconds(30);
 
     // Response cache (LRU, 5min TTL) — shared across ALL instances (static)
-    private static readonly MemoryCache _responseCache = new(new MemoryCacheOptions
+    private static MemoryCache _responseCache = new(new MemoryCacheOptions
     {
         SizeLimit = 256,
         ExpirationScanFrequency = TimeSpan.FromMinutes(1)
@@ -80,8 +80,15 @@ public sealed class MultiProviderChatClient : IChatClient
             foreach (var (k, v) in options.AI.DegradationChain)
                 _degradation.TryAdd(k, v);
         }
-        if (options.AI.ResponseCacheSize > 0)
+        if (options.AI.ResponseCacheSize > 0 && options.AI.ResponseCacheSize != 256)
+        {
             _responseCacheSizeLimit = options.AI.ResponseCacheSize;
+            _responseCache = new MemoryCache(new MemoryCacheOptions
+            {
+                SizeLimit = options.AI.ResponseCacheSize,
+                ExpirationScanFrequency = TimeSpan.FromMinutes(1)
+            });
+        }
     }
 
     /// <summary>

@@ -71,6 +71,8 @@ public static class ChatMessageRenderer
             Background = LtaiTheme.Sbb(LtaiTheme.BgPanel),
             Foreground = LtaiTheme.Sbb(LtaiTheme.TextDim)
         };
+        var cts = new CancellationTokenSource();
+        btn.DetachedFromVisualTree += (_, _) => cts.Cancel();
         btn.Click += async (_, _) =>
         {
             var clipboard = TopLevel.GetTopLevel(btn)?.Clipboard;
@@ -78,7 +80,8 @@ public static class ChatMessageRenderer
                 await clipboard.SetTextAsync(content);
             btn.Content = "Done";
             btn.Foreground = LtaiTheme.Sbb(LtaiTheme.AccentSystem);
-            await Task.Delay(1500);
+            try { await Task.Delay(1500, cts.Token); }
+            catch (OperationCanceledException) { return; }
             btn.Content = "Copy";
             btn.Foreground = LtaiTheme.Sbb(LtaiTheme.TextDim);
         };
