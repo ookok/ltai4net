@@ -663,6 +663,9 @@ Connect SessionManager → ChatView and add SessionStatsPanel to MainWindow side
 | **P14.9** | API 失败 N 次 → 自动 fallback ONNX 加载（P13.5） | 鲁棒 | 🟢 P2 | 2-3d | P12 ✅ |
 | **P14.10** | Multi-embedding 融合（MiniLM + BGE 并行推理，concat / 加权；跨语言效果↑） | 质量 | 🔵 P3 | 2-3w | P14.8 |
 | **P14.11** | ONNX 缓存预热 background service（首次启动时后台下载所有可能用到的模型） | UX | 🔵 P3 | 2-3d | 无 |
+| **P14.12** | `TaskQueueTool` 暴露给 5 agents（BGJS/TaskQueue 二选一并暴露工具；修复死代码） | Long-running 完善 | 🔴 P0 | 1d | P5.4 ✅ |
+| **P14.13** | TUI `/jobs` + Desktop sidebar 实时展示（订阅 `BackgroundJobService.TaskCompleted`） | Long-running 完善 | 🔴 P0 | 2-3d | P14.12 |
+| **P14.14** | LTAI.Web `GET /api/jobs` 端点（list / get / cancel） | Long-running 完善 | 🔴 P0 | 0.5d | P14.12 |
 
 ## 主题分组
 
@@ -713,13 +716,64 @@ Connect SessionManager → ChatView and add SessionStatsPanel to MainWindow side
   - 推理时 MiniLM 跑 1 次 + BGE 跑 1 次 → concat 768d / weighted 384d+384d
   - 跨语言场景质量↑（中文走 BGE-zh，英文走 MiniLM）
 
+### 主题 6：Long-running task 完善（P14.12 + P14.13 + P14.14）
+
+#### 现状评估（2026-06-02 盘点）
+
+**4 个相关组件**：
+
+| 组件 | 文件 | 行数 | 状态 | 持久化 | 真实消费者 |
+|---|---|---|---|---|---|
+| `BackgroundJobService` | `Tools/BackgroundJobService.cs` | 142 | ✅ 活跃 | ❌ 60s 清 | ✅ 5 agents |
+| `TaskQueue` (P5.4) | `Tasks/TaskQueue.cs` | 203 | ⚠️ 死代码 | ❌ InMemory | ❌ **零** |
+| `DurableAgentHost` (P8) | `Durability/*` | 179 | ⚠️ 已接未测 | ❌ InMemory (P8.1 TODO) | ❌ 透明 |
+| `BackgroundAgents` (P10) | `ServiceCollectionExtensions.cs:838-859` | 22 (instructions) | ✅ 活跃 | ✅ MAF 托管 | ✅ Harness 内置工具 |
+
+**完成度：~45-50%**（按"功能可用"维度算）
+- 基础设施 80%（3 套机制都写出来了）
+- 真实使用 30%（仅 BGJS 实际接 5 agents；TaskQueue 死代码；DTFx 透明未测）
+- 持久化 5%（全进程内；P8.1 SQLite 未做）
+- 可观测性 15%（ILogger 在, 三端展示无）
+- API 暴露 0%（Web 无 `/jobs` 端点）
+- 测试覆盖 0%（用户跳过）
+
+**关键问题**：
+1. `TaskQueue` 死代码：DI 注入了但零消费者，未暴露为工具
+2. BGJS 实现粗糙：`_ = Task.Run(...)` fire-and-forget + 60s 清 + 无并发限制
+3. DTFx 整个未 smoke test：`InProcessTestHost 0.2.3-preview.1` 是 preview + 标"for testing"
+4. 三端（TUI/Desktop/Web）均无任务进度展示 / API 端点
+
+**P14.12 + P14.13 + P14.14 目标**：
+- 解决 #1（TaskQueue 暴露工具）
+- 解决 #4（三端展示 + API 端点）
+- 暂不解决 #2 #3（推 P15+）
+
+#### P14.12 TaskQueueTool 暴露给 5 agents（1d）
+- **方案 A（推荐）**：把 TaskQueue 包装成 `TaskQueueTool`（5 个方法：Enqueue/List/Wait/Get/Cancel），加到 5 agents 工具链
+- **方案 B（更彻底）**：BGJS 内部改用 TaskQueue 共享并发/重试逻辑；外部仍暴露 BGJS 工具
+- **评估**：先方案 A 验证 TaskQueue 可用，再考虑方案 B 合并
+
+#### P14.13 TUI `/jobs` + Desktop sidebar 实时展示（2-3d）
+- TUI：`/jobs` 子命令（list / watch / cancel）
+- Desktop：sidebar 加 JobsPanel（订阅 `BackgroundJobService.JobCompleted` event）
+- 刷新策略：1s 轮询（事件触发即时刷新）
+
+#### P14.14 LTAI.Web `GET /api/jobs` 端点（0.5d）
+- `GET /api/jobs` → list all
+- `GET /api/jobs/{id}` → get detail
+- `POST /api/jobs/{id}/cancel` → cancel
+- 用 `BackgroundJobService` 单例（不直接走 TaskQueue，避免重复状态）
+
 ## 推荐执行顺序
 
 ```
-P0 (3 个) ──→ P1 (3 个) ──→ P2 (3 个) ──→ P3 (2 个)
+P0 (6 个) ──→ P1 (3 个) ──→ P2 (3 个) ──→ P3 (2 个)
 P14.2         P14.4         P14.7         P14.10
 P14.3         P14.5         P14.8         P14.11
 P14.1         P14.6         P14.9
+P14.12
+P14.13
+P14.14
 ```
 
 | 阶段 | 总工时 | 关键产出 |
@@ -739,7 +793,7 @@ P14.1         P14.6         P14.9
 - **D57 P14 顺序：P0 → P1 → P2 → P3**：每阶段独立可演示；不跨阶段阻塞
 
 ## Verification (每阶段)
-- P0 完成后：DevUI 能看到 EP/quant；TUI `/model info` 完整；MiniLM 仍 23MB，BGE 还需 2-3d 生成
+- P0 完成后：DevUI 能看到 EP/quant；TUI `/model info` 完整；MiniLM 仍 23MB，BGE 还需 2-3d 生成；TaskQueueTool 暴露给 5 agents；TUI/Desktop/Web 三端能看到 jobs
 - P1 完成后：BDN 报告 INT8 < FP32 < FP32+GPU latency；远程 cache 命中率 > 80%
 - P2 完成后：运行时换模型不丢消息；API 失败自动 ONNX fallback；per-model quant 生效
 - P3 完成后：双模型融合 vs 单模型在 LTAI 真实工作负载（代码搜索 + 决策树路由）准确率对照
