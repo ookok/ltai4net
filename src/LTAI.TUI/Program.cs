@@ -75,6 +75,7 @@ public static class Program
         SlashCommands.HttpFactory = sp.GetService<IHttpClientFactory>();
         SlashCommands.SnippetStore = sp.GetService<LTAI.Agent.Snippets.SnippetStore>();
         SlashCommands.WorkflowRegistry = sp.GetService<LTAI.Agent.Workflows.YAMLWorkflowRegistry>();
+        SlashCommands.Jobs = sp.GetService<LTAI.Agent.Tools.BackgroundJobService>();
         var options = sp.GetRequiredService<IOptions<LTAIOptions>>();
         SlashCommands.ActiveProvider = options.Value.AI.DefaultProvider ?? "DeepSeek";
         SlashCommands.L1Model = options.Value.AI.GetLayerConfig("fast").Model;

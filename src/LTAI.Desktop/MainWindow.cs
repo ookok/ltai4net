@@ -55,6 +55,7 @@ public partial class MainWindow : Window
             new("技能",    "4", new SkillsView()),
             new("配置",    "5", new ConfigView()),
             new("工作流",  "6", new WorkflowsView(svc)),
+            new("作业",    "7", new JobsView(svc)),
         };
 
         _buttonStack = new StackPanel { Spacing = 2, Margin = new(4) };
@@ -73,7 +74,7 @@ public partial class MainWindow : Window
                 BorderThickness = new(0),
                 CornerRadius = new(4)
             };
-            var icons = new[] { "📊", "💬", "📝", "⚡", "⚙️", "🔁" };
+            var icons = new[] { "📊", "💬", "📝", "⚡", "⚙️", "🔁", "🛠" };
             var icon = i < icons.Length ? icons[i] : "📄";
             var btnGrid = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,Auto,*") };
             btnGrid.Children.Add(new TextBlock { Text = icon, Width = 22, Foreground = LtaiTheme.Sbb(LtaiTheme.TextSecondary) });
@@ -369,7 +370,7 @@ public partial class MainWindow : Window
             {
                 if (i < _buttonStack.Children.Count && _buttonStack.Children[i] is Button btn)
                 {
-                    var icons = new[] { "📊", "💬", "📝", "⚡", "⚙️", "🔁" };
+                    var icons = new[] { "📊", "💬", "📝", "⚡", "⚙️", "🔁", "🛠" };
                     var icon = i < icons.Length ? icons[i] : "📄";
                     btn.Content = $" {icon}";
                     btn.HorizontalContentAlignment = HorizontalAlignment.Center;
@@ -385,7 +386,7 @@ public partial class MainWindow : Window
             {
                 if (i < _buttonStack.Children.Count && _buttonStack.Children[i] is Button btn)
                 {
-                    var icons = new[] { "📊", "💬", "📝", "⚡", "⚙️" };
+                    var icons = new[] { "📊", "💬", "📝", "⚡", "⚙️", "🔁", "🛠" };
                     var icon = i < icons.Length ? icons[i] : "📄";
                     var btnGrid = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,Auto,*") };
                     btnGrid.Children.Add(new TextBlock { Text = icon, Width = 22, Foreground = LtaiTheme.Sbb(LtaiTheme.TextSecondary) });

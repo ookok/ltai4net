@@ -33,6 +33,9 @@ public static class SlashCommands
     /// <summary>P15 hot-editable workflow registry (injected from DI at startup).</summary>
     public static LTAI.Agent.Workflows.YAMLWorkflowRegistry? WorkflowRegistry { get; set; }
 
+    /// <summary>P14.14: Background job service for /jobs subcommand (list/watch/cancel).</summary>
+    public static LTAI.Agent.Tools.BackgroundJobService? Jobs { get; set; }
+
     /// <summary>Current L1 (fast) model name.</summary>
     public static string? L1Model { get; set; }
     /// <summary>Current L2 (pro) model name.</summary>
@@ -71,6 +74,8 @@ public static class SlashCommands
         new("model",   "设置",  "管理 ONNX 向量模型: list|download|delete|switch", "", "list|download <id>|delete <id>|switch <id>"),
         new("status",  "信息",  "显示当前配置和统计", "状态,统计"),
         new("monitor", "信息",  "实时仪表盘 — Provider 状态/延迟/成本", "监控,仪表盘"),
+        new("jobs",    "信息",  "后台作业: list|watch <id>|cancel <id>|show <id>", "job,任务",
+            "list|watch <id>|cancel <id>|show <id>"),
         new("cost",    "信息",  "显示本轮预估费用", "费用,花费"),
         new("memory",  "扩展",  "管理记忆文件", "记忆"),
         new("skill",   "扩展",  "列出/运行技能", "", "技能名"),
@@ -282,6 +287,7 @@ public static class SlashCommands
             "workflow" => HandleWorkflowCommand(args),
             "status" => Status(),
             "monitor" => Monitor(),
+            "jobs" => HandleJobsCommand(args),
             "cost" => ("Cost tracking: see model provider dashboard", true),
             "memory" => ("Memory: use `remember` / `forget` tools", true),
             "skill" => !string.IsNullOrEmpty(args) ? ($"Running skill '{args}'...", true) : ("Skills: use `run_skill` tool", true),
@@ -1031,6 +1037,169 @@ public static class SlashCommands
         sb.AppendLine("[bold]模型[/]");
         sb.AppendLine($"当前: {LTAI.Core.Configuration.UsageTracker.ActiveModel}");
         sb.AppendLine($"余额: {LTAI.Core.Configuration.UsageTracker.BalanceDisplay}");
+
+        return (sb.ToString(), true);
+    }
+
+    // ═══════════════════════════════════════════
+    //  /jobs commands — P14.14: list/watch/cancel/show
+    // ═══════════════════════════════════════════
+
+    private static (string, bool) HandleJobsCommand(string args)
+    {
+        var jobs = Jobs;
+        if (jobs == null)
+            return ("Background job service not initialized (BGJS missing in DI)", true);
+
+        var parts = args.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
+        var sub = parts.Length > 0 ? parts[0].ToLowerInvariant() : "";
+        var subArgs = parts.Length > 1 ? parts[1].Trim() : "";
+
+        return sub switch
+        {
+            "" or "list" => JobsList(jobs),
+            "watch" => JobsWatch(jobs, subArgs),
+            "cancel" => JobsCancel(jobs, subArgs),
+            "show" => JobsShow(jobs, subArgs),
+            _ => ("用法: /jobs list | watch <id> | cancel <id> | show <id>", true),
+        };
+    }
+
+    private static (string, bool) JobsList(LTAI.Agent.Tools.BackgroundJobService jobs)
+    {
+        var snap = jobs.SnapshotJobs();
+        if (snap.Count == 0)
+            return ("[yellow]暂无后台作业[/]  用法: 让 agent 跑 `start_job` 创建", true);
+
+        var table = new Table().Border(TableBorder.Rounded);
+        table.AddColumn("ID");
+        table.AddColumn("状态");
+        table.AddColumn("Exit");
+        table.AddColumn("已运行");
+        table.AddColumn("命令");
+
+        foreach (var (id, j) in snap.OrderBy(kv => int.TryParse(kv.Key, out var n) ? n : 0))
+        {
+            string statusIcon, statusColor;
+            if (!j.Completed) { statusIcon = "⏳"; statusColor = "yellow"; }
+            else if (j.ExitCode == 0) { statusIcon = "✅"; statusColor = "green"; }
+            else if (j.Error == "Cancelled") { statusIcon = "🚫"; statusColor = "grey"; }
+            else { statusIcon = "❌"; statusColor = "red"; }
+
+            var elapsed = DateTime.UtcNow - j.StartedAtUtc;
+            var elapsedStr = elapsed.TotalSeconds < 60
+                ? $"{(int)elapsed.TotalSeconds}s"
+                : $"{elapsed.Minutes}m{elapsed.Seconds}s";
+
+            var cmd = j.Command ?? "";
+            if (cmd.Length > 60) cmd = cmd[..57] + "...";
+
+            table.AddRow(
+                $"[cyan]{id.EscapeMarkup()}[/]",
+                $"[{statusColor}]{statusIcon} {(j.Completed ? (j.ExitCode == 0 ? "完成" : j.Error == "Cancelled" ? "取消" : "失败") : "运行中")}[/]",
+                j.Completed ? (j.ExitCode?.ToString() ?? "?") : "[grey]-[/]",
+                elapsedStr,
+                $"[grey]{cmd.EscapeMarkup()}[/]");
+        }
+
+        AnsiConsole.Write(table);
+        return ($"[grey]共 {snap.Count} 个作业 (60s 后自动清理)[/]", true);
+    }
+
+    private static (string, bool) JobsWatch(LTAI.Agent.Tools.BackgroundJobService jobs, string id)
+    {
+        if (string.IsNullOrWhiteSpace(id))
+            return ("用法: /jobs watch <id>  例如: /jobs watch 3", true);
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var timeout = TimeSpan.FromMinutes(2);
+        LTAI.Agent.Tools.JobEntry? lastEntry = null;
+
+        AnsiConsole.MarkupLine($"[grey]Watching job #{id}... (Ctrl+C 退出, 最多 2 分钟)[/]");
+        while (sw.Elapsed < timeout)
+        {
+            var entry = jobs.GetJobEntry(id);
+            if (entry == null)
+                return ($"[yellow]⚠ Job #{id} 已被清理（60s 过期或不存在）[/]", true);
+
+            if (entry != lastEntry)
+            {
+                var status = !entry.Completed ? "[yellow]⏳ 运行中[/]"
+                    : entry.ExitCode == 0 ? "[green]✅ 完成[/]"
+                    : entry.Error == "Cancelled" ? "[grey]🚫 取消[/]"
+                    : "[red]❌ 失败[/]";
+                var elapsed = DateTime.UtcNow - entry.StartedAtUtc;
+                AnsiConsole.MarkupLine($"  [{DateTime.Now:HH:mm:ss}] {status}  ({elapsed.TotalSeconds:F0}s)");
+                lastEntry = entry;
+            }
+
+            if (entry.Completed)
+            {
+                AnsiConsole.WriteLine();
+                return JobsShow(jobs, id);
+            }
+
+            Thread.Sleep(500);
+        }
+
+        return ($"[yellow]⏱ 2 分钟超时，job #{id} 仍在运行。退出 watch（job 仍存在）[/]", true);
+    }
+
+    private static (string, bool) JobsCancel(LTAI.Agent.Tools.BackgroundJobService jobs, string id)
+    {
+        if (string.IsNullOrWhiteSpace(id))
+            return ("用法: /jobs cancel <id>", true);
+
+        var entry = jobs.GetJobEntry(id);
+        if (entry == null)
+            return ($"[yellow]⚠ Job #{id} 不存在（可能已完成并被清理）[/]", true);
+
+        if (entry.Completed)
+            return ($"[grey]Job #{id} 已完成 (exit={entry.ExitCode}), 无需取消[/]", true);
+
+        entry.Completed = true;
+        entry.Error = "Cancelled";
+        return ($"[green]✅ 已标记取消[/] Job #{id} (BGJS 不杀进程, residual 退出后自然消失)", true);
+    }
+
+    private static (string, bool) JobsShow(LTAI.Agent.Tools.BackgroundJobService jobs, string id)
+    {
+        if (string.IsNullOrWhiteSpace(id))
+            return ("用法: /jobs show <id>", true);
+
+        var entry = jobs.GetJobEntry(id);
+        if (entry == null)
+            return ($"[yellow]⚠ Job #{id} 不存在（可能已完成并被清理）[/]", true);
+
+        var elapsed = DateTime.UtcNow - entry.StartedAtUtc;
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine($"[bold]Job #{id}[/]");
+        sb.AppendLine($"  状态: {(entry.Completed ? (entry.ExitCode == 0 ? "[green]✅ 完成[/]" : entry.Error == "Cancelled" ? "[grey]🚫 取消[/]" : "[red]❌ 失败[/]") : "[yellow]⏳ 运行中[/]")}");
+        sb.AppendLine($"  命令: [grey]{(entry.Command ?? "").EscapeMarkup()}[/]");
+        sb.AppendLine($"  启动: {entry.StartedAtUtc:yyyy-MM-dd HH:mm:ss} UTC");
+        sb.AppendLine($"  已运行: {elapsed.TotalSeconds:F0}s");
+        if (entry.Completed) sb.AppendLine($"  Exit: {entry.ExitCode?.ToString() ?? "?"}");
+        sb.AppendLine($"  stdout: {entry.Output?.Length ?? 0} bytes");
+        sb.AppendLine($"  stderr: {entry.Error?.Length ?? 0} bytes");
+
+        if (entry.Completed && !string.IsNullOrEmpty(entry.Output))
+        {
+            var preview = entry.Output.Length > 500
+                ? entry.Output[..500] + $"\n... ({entry.Output.Length - 500} more bytes)"
+                : entry.Output;
+            sb.AppendLine();
+            sb.AppendLine("  [grey]── stdout (前 500 字符) ──[/]");
+            sb.AppendLine("  " + preview.Replace("\n", "\n  ").EscapeMarkup());
+        }
+        if (entry.Completed && !string.IsNullOrEmpty(entry.Error) && entry.Error != "Cancelled")
+        {
+            var preview = entry.Error.Length > 500
+                ? entry.Error[..500] + $"\n... ({entry.Error.Length - 500} more bytes)"
+                : entry.Error;
+            sb.AppendLine();
+            sb.AppendLine("  [red]── stderr (前 500 字符) ──[/]");
+            sb.AppendLine("  " + preview.Replace("\n", "\n  ").EscapeMarkup());
+        }
 
         return (sb.ToString(), true);
     }
