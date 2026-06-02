@@ -125,6 +125,69 @@ try
         return card is null ? Results.NotFound() : Results.Ok(card);
     });
 
+    // ── P15.9: Workflow hot-reload REST surface ──
+    // Companion to TUI /workflow and Desktop WorkflowsView. Backs the
+    // browser DevUI page that lists/inspects/reloads hot-editable
+    // .livingtree/workflows/*.yaml|*.json files. See D72/D73.
+    app.MapGet("/ltai/v1/workflows", (LTAI.Agent.Workflows.YAMLWorkflowRegistry? reg) =>
+    {
+        if (reg == null) return Results.NotFound(new { error = "YAMLWorkflowRegistry not registered" });
+        return Results.Ok(new
+        {
+            watchDir = reg.WatchDirectory,
+            workflows = reg.List(),
+        });
+    });
+    app.MapGet("/ltai/v1/workflows/{name}", async (LTAI.Agent.Workflows.YAMLWorkflowRegistry? reg, string name) =>
+    {
+        if (reg == null) return Results.NotFound(new { error = "YAMLWorkflowRegistry not registered" });
+        var match = reg.List().FirstOrDefault(w =>
+            string.Equals(w.Name, name, StringComparison.OrdinalIgnoreCase));
+        if (match == default) return Results.NotFound(new { error = $"Workflow '{name}' not found" });
+        try
+        {
+            var content = await System.IO.File.ReadAllTextAsync(match.FilePath);
+            return Results.Ok(new
+            {
+                name = match.Name,
+                type = match.Type,
+                version = match.Version,
+                filePath = match.FilePath,
+                loadedAtUtc = match.LoadedAtUtc,
+                sizeBytes = match.SizeBytes,
+                content,
+            });
+        }
+        catch (Exception ex)
+        {
+            return Results.Problem($"Read failed: {ex.Message}");
+        }
+    });
+    app.MapPost("/ltai/v1/workflows/reload", async (LTAI.Agent.Workflows.YAMLWorkflowRegistry? reg) =>
+    {
+        if (reg == null) return Results.NotFound(new { error = "YAMLWorkflowRegistry not registered" });
+        await reg.ReloadAllAsync();
+        return Results.Ok(new { reloaded = reg.List().Count, reloadedAtUtc = DateTime.UtcNow });
+    });
+    app.MapPost("/ltai/v1/workflows/{name}/reload", async (LTAI.Agent.Workflows.YAMLWorkflowRegistry? reg, string name) =>
+    {
+        if (reg == null) return Results.NotFound(new { error = "YAMLWorkflowRegistry not registered" });
+        var match = reg.List().FirstOrDefault(w =>
+            string.Equals(w.Name, name, StringComparison.OrdinalIgnoreCase));
+        if (match == default) return Results.NotFound(new { error = $"Workflow '{name}' not found" });
+        try
+        {
+            await reg.ReloadFileAsync(match.FilePath);
+            return Results.Ok(new { reloaded = name, reloadedAtUtc = DateTime.UtcNow });
+        }
+        catch (Exception ex)
+        {
+            // D68: failed reload keeps the old snapshot alive; surface the
+            // error to the client so it can show a meaningful toast.
+            return Results.Problem($"Reload failed: {ex.Message}", statusCode: 422);
+        }
+    });
+
     // ── P7.1: Map DevUI endpoint (Development-only) ──
     if (app.Environment.IsDevelopment())
     {

@@ -74,6 +74,7 @@ public static class Program
         SlashCommands.Router = sp.GetService<MultiProviderChatClient>();
         SlashCommands.HttpFactory = sp.GetService<IHttpClientFactory>();
         SlashCommands.SnippetStore = sp.GetService<LTAI.Agent.Snippets.SnippetStore>();
+        SlashCommands.WorkflowRegistry = sp.GetService<LTAI.Agent.Workflows.YAMLWorkflowRegistry>();
         var options = sp.GetRequiredService<IOptions<LTAIOptions>>();
         SlashCommands.ActiveProvider = options.Value.AI.DefaultProvider ?? "DeepSeek";
         SlashCommands.L1Model = options.Value.AI.GetLayerConfig("fast").Model;
@@ -99,7 +100,8 @@ public static class Program
             options,
             Directory.GetCurrentDirectory(),
             sp.GetRequiredService<LTAI.Agent.DevUI.LTAIDevUIService>(),
-            sp.GetRequiredService<LTAI.TUI.DevUI.DevUISpanCollector>());
+            sp.GetRequiredService<LTAI.TUI.DevUI.DevUISpanCollector>(),
+            sp.GetService<LTAI.Agent.Workflows.YAMLWorkflowRegistry>());
         try { Console.Clear(); } catch { /* non-interactive terminal */ }
         await app.RunAsync().ConfigureAwait(false);
     }

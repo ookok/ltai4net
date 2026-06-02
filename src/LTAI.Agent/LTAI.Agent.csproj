@@ -50,6 +50,11 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <Link>ltai-workflows\%(RecursiveDir)%(Filename)%(Extension)</Link>
     </None>
+    <!-- P15: LTAI hot-editable workflow configs (JSON, parsed by System.Text.Json) -->
+    <None Include="Workflows\ltai-workflows\**\*.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>ltai-workflows\%(RecursiveDir)%(Filename)%(Extension)</Link>
+    </None>
   </ItemGroup>
 
 </Project>

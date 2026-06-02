@@ -30,6 +30,9 @@ public static class SlashCommands
     /// </summary>
     public static string? PendingSnippetFill { get; set; }
 
+    /// <summary>P15 hot-editable workflow registry (injected from DI at startup).</summary>
+    public static LTAI.Agent.Workflows.YAMLWorkflowRegistry? WorkflowRegistry { get; set; }
+
     /// <summary>Current L1 (fast) model name.</summary>
     public static string? L1Model { get; set; }
     /// <summary>Current L2 (pro) model name.</summary>
@@ -73,6 +76,8 @@ public static class SlashCommands
         new("skill",   "扩展",  "列出/运行技能", "", "技能名"),
         new("snippet", "扩展",  "常用语管理: list|save <key> <text>|use <key>|edit <key>|rename <old> <new>|delete <key>",
             "snip,常用语,常用,短语", "list|save|use|edit|rename|delete"),
+        new("workflow","扩展",  "热改编排 (YAML/JSON): list|reload <name>|show <name>|open",
+            "wf,编排,工作流", "list|reload|show|open"),
         new("mode",    "代码",  "编辑模式: review|auto", "", "review|auto"),
         new("undo",    "代码",  "撤销上次编辑", "撤销"),
         new("ls",      "文件",  "列出当前目录内容", "dir,列表"),
@@ -274,6 +279,7 @@ public static class SlashCommands
             "model" => HandleModelCommand(args),
             "config" => HandleConfigCommand(args),
             "snippet" => HandleSnippetCommand(args),
+            "workflow" => HandleWorkflowCommand(args),
             "status" => Status(),
             "monitor" => Monitor(),
             "cost" => ("Cost tracking: see model provider dashboard", true),
@@ -525,6 +531,166 @@ public static class SlashCommands
         catch (ArgumentException ex)
         {
             return ($"[red]❌ {ex.Message}[/]", true);
+        }
+    }
+
+    // ═══════════════════════════════════════════
+    //  /workflow commands — hot-editable YAML/JSON workflows (P15)
+    // ═══════════════════════════════════════════
+
+    private static (string, bool) HandleWorkflowCommand(string args)
+    {
+        var registry = WorkflowRegistry;
+        if (registry == null)
+            return ("Workflow registry not initialized (YAMLWorkflowRegistry missing in DI)", true);
+
+        var parts = args.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
+        var sub = parts.Length > 0 ? parts[0].ToLowerInvariant() : "";
+        var subArgs = parts.Length > 1 ? parts[1].Trim() : "";
+
+        return sub switch
+        {
+            "" or "list" => WorkflowList(registry),
+            "reload" => WorkflowReload(registry, subArgs),
+            "show" => WorkflowShow(registry, subArgs),
+            "open" => WorkflowOpen(registry, subArgs),
+            _ => ("用法: /workflow list | reload [name|*] | show <name> | open [name]", true),
+        };
+    }
+
+    private static (string, bool) WorkflowList(LTAI.Agent.Workflows.YAMLWorkflowRegistry registry)
+    {
+        var list = registry.List();
+        if (list.Count == 0)
+            return ($"[yellow]暂无 workflow[/]  目录: {registry.WatchDirectory}\n" +
+                    "把 *.yaml / *.json 丢进该目录即可热加载", true);
+
+        var table = new Table().Border(TableBorder.Rounded);
+        table.AddColumn("Name");
+        table.AddColumn("Type");
+        table.AddColumn("V");
+        table.AddColumn("Size");
+        table.AddColumn("Loaded");
+        table.AddColumn("Path");
+
+        foreach (var w in list)
+        {
+            var size = w.SizeBytes switch
+            {
+                < 1024 => $"{w.SizeBytes} B",
+                < 1024 * 1024 => $"{w.SizeBytes / 1024.0:F1} KB",
+                _ => $"{w.SizeBytes / (1024.0 * 1024):F1} MB"
+            };
+            var loaded = w.LoadedAtUtc.ToLocalTime().ToString("HH:mm:ss");
+            var fileName = System.IO.Path.GetFileName(w.FilePath);
+            table.AddRow(
+                $"[cyan]{w.Name.EscapeMarkup()}[/]",
+                $"[grey]{w.Type.EscapeMarkup()}[/]",
+                w.Version.ToString(),
+                size,
+                loaded,
+                $"[grey]{fileName.EscapeMarkup()}[/]");
+        }
+
+        AnsiConsole.Write(table);
+        return ($"[grey]共 {list.Count} 个 workflow · 目录: {registry.WatchDirectory}[/]", true);
+    }
+
+    private static (string, bool) WorkflowReload(LTAI.Agent.Workflows.YAMLWorkflowRegistry registry, string name)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(name) || name == "*")
+            {
+                var all = registry.List();
+                registry.ReloadAllAsync().GetAwaiter().GetResult();
+                return ($"[green]✅ 已触发重载[/]  {all.Count} 个 workflow", true);
+            }
+
+            // Find the file by name (registry keys are file stems).
+            var dir = registry.WatchDirectory;
+            var exts = new[] { ".yaml", ".yml", ".json" };
+            string? matchPath = null;
+            foreach (var ext in exts)
+            {
+                var p = System.IO.Path.Combine(dir, name + ext);
+                if (System.IO.File.Exists(p)) { matchPath = p; break; }
+            }
+            if (matchPath == null)
+                return ($"[red]❌ 找不到 workflow '{name}'[/]  目录: {dir}", true);
+
+            registry.ReloadFileAsync(matchPath).GetAwaiter().GetResult();
+            return ($"[green]✅ 已重载[/] [cyan]/{name}[/]", true);
+        }
+        catch (Exception ex)
+        {
+            return ($"[red]❌ 重载失败:[/] {ex.Message}", true);
+        }
+    }
+
+    private static (string, bool) WorkflowShow(LTAI.Agent.Workflows.YAMLWorkflowRegistry registry, string name)
+    {
+        if (string.IsNullOrEmpty(name))
+            return ("用法: /workflow show <name>", true);
+
+        var dir = registry.WatchDirectory;
+        var exts = new[] { ".yaml", ".yml", ".json" };
+        string? matchPath = null;
+        foreach (var ext in exts)
+        {
+            var p = System.IO.Path.Combine(dir, name + ext);
+            if (System.IO.File.Exists(p)) { matchPath = p; break; }
+        }
+        if (matchPath == null)
+            return ($"[red]❌ 找不到 workflow '{name}'[/]  目录: {dir}", true);
+
+        try
+        {
+            var content = System.IO.File.ReadAllText(matchPath);
+            // Show first 60 lines, escape markup
+            var lines = content.Split('\n');
+            var preview = string.Join("\n", lines.Take(60));
+            var truncated = lines.Length > 60 ? $"\n[grey]... ({lines.Length - 60} more lines)[/]" : "";
+            AnsiConsole.Write(new Panel(new Markup(preview.EscapeMarkup()))
+                .Header($"[green] {name} ({lines.Length} lines) [/]")
+                .Border(BoxBorder.Rounded)
+                .Expand());
+            return ($"[grey]{matchPath}[/]{truncated}", true);
+        }
+        catch (Exception ex)
+        {
+            return ($"[red]❌ 读取失败:[/] {ex.Message}", true);
+        }
+    }
+
+    private static (string, bool) WorkflowOpen(LTAI.Agent.Workflows.YAMLWorkflowRegistry registry, string name)
+    {
+        if (string.IsNullOrEmpty(name))
+            return ("用法: /workflow open <name>  (用系统默认程序打开文件)", true);
+
+        var dir = registry.WatchDirectory;
+        var exts = new[] { ".yaml", ".yml", ".json" };
+        string? matchPath = null;
+        foreach (var ext in exts)
+        {
+            var p = System.IO.Path.Combine(dir, name + ext);
+            if (System.IO.File.Exists(p)) { matchPath = p; break; }
+        }
+        if (matchPath == null)
+            return ($"[red]❌ 找不到 workflow '{name}'[/]  目录: {dir}", true);
+
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = matchPath,
+                UseShellExecute = true,  // open with default OS app
+            });
+            return ($"[green]✅ 已用系统默认程序打开[/] [cyan]{matchPath}[/]", true);
+        }
+        catch (Exception ex)
+        {
+            return ($"[red]❌ 打开失败:[/] {ex.Message}", true);
         }
     }
 

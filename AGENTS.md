@@ -132,12 +132,11 @@ P2.x ─┘（与 P1.1 可并行）
 - **P7.3（评估）Workflows.Declarative**：当前 `AgentWorkflows.cs`（180 行）是 C# 实现；MAF YAML workflow 可以声明式定义 agent 编排
   - **风险**：YAML DSL 学习曲线，且 LTAI 有 GreetingClassifier 等自研逻辑
   - **决策**：暂不做，等业务有需求再评估
-- **P7.4（跳过/推迟）**：
-  - **Foundry / Foundry.Hosting / AzureAI.Persistent / CopilotStudio** — Azure 订阅依赖
-  - **Hosting.AzureFunctions / DurableTask** — D8 已推迟
-  - **CosmosNoSql / Purview** — 企业合规
-  - **GitHub.Copilot** — GitHub 专用
-  - **Aspire DevUI hosting** — Aspire 是 dev-only 编排层，DevUI 本身已够用
+- **P7.4（已完成清理 — 2026-06-02）**：9 项跳过/推迟任务全部审查完毕，仅 1 项本地可行（DurableTask → P8 ✅ 已落地）
+  - **删除**（Azure 订阅依赖，8 项）：Foundry / Foundry.Hosting / AzureAI.Persistent / CopilotStudio / Hosting.AzureFunctions / CosmosNoSql / Purview / GitHub.Copilot
+  - **删除**（Aspire dev-only 编排层，价值 0）：Aspire DevUI hosting
+  - **移出 P7.4 跳过表**：DurableTask → P8 ✅（DTFx 1.24.2 + InProcessTestHost 0.2.3-preview.1 已落地）
+  - **新增到 P14 P1**：`Microsoft.Agents.AI.Workflows.Declarative.Mcp` — 纯本地，无 Azure 依赖，扩展 YAML 工作流接 MCP 工具
 - **P7.5 Workflows.Declarative**（部分工作流，已完成）：`Microsoft.Agents.AI.Workflows.Declarative` ProjectReference 添加到 LTAI.Agent.csproj；写 `ltai/workflows/greeting.yaml` 替换 `GreetingClassifier.cs`（75 行删除）；新增 `YAMLWorkflowHost.cs` 包装；5 类问候（greeting/thanks/farewell/probing/test），每个用 `ConditionGroup` + `StartsWith` PowerFx 表达式
   - **范围**：仅 greeting 快速通道（80% LTAI 流量入口）；保留 Sequential/Concurrent 的 C# 实现
   - **关键 bug 修复**：`AgentResponseUpdate` 在 `Microsoft.Agents.AI` 命名空间（不在 `Microsoft.Extensions.AI`）；`protected static new` 在 `sealed` 类中非法 → 删除
@@ -636,17 +635,14 @@ Connect SessionManager → ChatView and add SessionStatsPanel to MainWindow side
 - [ ] 手动验证：在有 NVIDIA GPU 的开发机上 `AppendExecutionProvider_CUDA` 成功 → `_activeExecutionProvider = "CUDA"`
 - [ ] 手动验证：`hf-mirror.com` 量化模型可下载（23MB INT8）
 
-## Next Steps (P14+)
-- **P14.1**：BGE 量化（用 `onnxruntime.quantize` Python 工具预生成 INT8，ship 到 `hf-mirror.com`，**需要 HF 账号 — 已修订：复用 Xenova 预量化版，无账号**）
-- **P14.2**：嵌入模型热切换（不重启进程就能换 MiniLM ↔ BGE ↔ INT8）
-- **P14.3**：Multi-embedding 融合（同时使用 MiniLM + BGE，concat 平均 / 加权）提升跨语言效果
-- **P14.4**：ONNX 缓存预热 background service（首次启动时后台下载所有可能用到的模型）
+## Next Steps (P15+)
+- **P15.0-P15.11** 可热改编排（YAML/JSON workflow）— 已落地（2026-06-02）。详见下方 P15 章节
 
-# 2026-06-02 P14 任务重整（5 主题 / 10 项）
+# 2026-06-02 P14 任务重整（5 主题 / 10 项 → 7 主题 / 15 项，2026-06-02 加 P14.7）
 
 ## Goal
 - P11+P12+P13 系列完成后，**P14+ 列表已 4 项太散**（无主题 / 优先级 / 依赖关系）
-- 重新组织成 **5 主题 / 10 项**，按 P0-P3 优先级排序，明确依赖链
+- 重新组织成 **5 主题 / 10 项**（2026-06-02 增 P14.7 `Workflows.Declarative.Mcp` → **7 主题 / 15 项**），按 P0-P3 优先级排序，明确依赖链
 
 ## P14 任务表
 
@@ -658,14 +654,15 @@ Connect SessionManager → ChatView and add SessionStatsPanel to MainWindow side
 | **P14.4** | INT8 vs FP32 性能 benchmark（P11.2 BDN 框架 + GPU vs CPU 对照） | 可观测性 | 🟡 P1 | 1d | 无 |
 | **P14.5** | DecisionTreeRouter 远程 API 结果 cache 到 `ToolEmbeddingCache`（P13.3） | 缓存 | 🟡 P1 | 2-3d | P12 ✅ |
 | **P14.6** | `ToolEmbeddingCache.CachedEntryCount` 暴露到 DevUI dashboard（P13.4） | 可观测性 | 🟡 P1 | 0.5d | P14.5 |
-| **P14.7** | 热模型切换（不重启进程换 MiniLM ↔ BGE，session 持久化） | UX | 🟢 P2 | 1w | 无 |
-| **P14.8** | Per-model 量化配置（MiniLM=int8, BGE=fp32, BGE-large=fp32 混搭） | 灵活 | 🟢 P2 | 3-5d | P13 ✅ |
-| **P14.9** | API 失败 N 次 → 自动 fallback ONNX 加载（P13.5） | 鲁棒 | 🟢 P2 | 2-3d | P12 ✅ |
-| **P14.10** | Multi-embedding 融合（MiniLM + BGE 并行推理，concat / 加权；跨语言效果↑） | 质量 | 🔵 P3 | 2-3w | P14.8 |
-| **P14.11** | ONNX 缓存预热 background service（首次启动时后台下载所有可能用到的模型） | UX | 🔵 P3 | 2-3d | 无 |
-| **P14.12** | `TaskQueueTool` 暴露给 5 agents（BGJS/TaskQueue 二选一并暴露工具；修复死代码） | Long-running 完善 | 🔴 P0 | 1d | P5.4 ✅ |
-| **P14.13** | TUI `/jobs` + Desktop sidebar 实时展示（订阅 `BackgroundJobService.TaskCompleted`） | Long-running 完善 | 🔴 P0 | 2-3d | P14.12 |
-| **P14.14** | LTAI.Web `GET /api/jobs` 端点（list / get / cancel） | Long-running 完善 | 🔴 P0 | 0.5d | P14.12 |
+| **P14.7** | `Workflows.Declarative.Mcp`（P7.4 新增 — 纯本地，无 Azure 依赖）— YAML workflow 接 MCP 工具 | 工作流扩展 | 🟡 P1 | 1-2d | 无 |
+| **P14.8** | 热模型切换（不重启进程换 MiniLM ↔ BGE，session 持久化） | UX | 🟢 P2 | 1w | 无 |
+| **P14.9** | Per-model 量化配置（MiniLM=int8, BGE=fp32, BGE-large=fp32 混搭） | 灵活 | 🟢 P2 | 3-5d | P13 ✅ |
+| **P14.10** | API 失败 N 次 → 自动 fallback ONNX 加载（P13.5） | 鲁棒 | 🟢 P2 | 2-3d | P12 ✅ |
+| **P14.11** | Multi-embedding 融合（MiniLM + BGE 并行推理，concat / 加权；跨语言效果↑） | 质量 | 🔵 P3 | 2-3w | P14.9 |
+| **P14.12** | ONNX 缓存预热 background service（首次启动时后台下载所有可能用到的模型） | UX | 🔵 P3 | 2-3d | 无 |
+| **P14.13** | `TaskQueueTool` 暴露给 5 agents（BGJS/TaskQueue 二选一并暴露工具；修复死代码） | Long-running 完善 | 🔴 P0 | 1d | P5.4 ✅ |
+| **P14.14** | TUI `/jobs` + Desktop sidebar 实时展示（订阅 `BackgroundJobService.TaskCompleted`） | Long-running 完善 | 🔴 P0 | 2-3d | P14.13 |
+| **P14.15** | LTAI.Web `GET /api/jobs` 端点（list / get / cancel） | Long-running 完善 | 🔴 P0 | 0.5d | P14.13 |
 
 ## 主题分组
 
@@ -688,20 +685,20 @@ Connect SessionManager → ChatView and add SessionStatsPanel to MainWindow side
 - **P14.4**：BDN 跑 INT8 vs FP32 latency/throughput（cache miss 差异 1-3ms vs 5-10ms；GPU EP 对照）
 - **P14.6**：`ToolEmbeddingCache.CachedEntryCount` 暴露到 dashboard，"cache hit" 颜色（绿=全命中 / 黄=部分命中 / 红=全 miss）
 
-### 主题 3：UX 改进（P14.3 + P14.7 + P14.11）
+### 主题 3：UX 改进（P14.3 + P14.8 + P14.12）
 - **P14.3**：TUI `/model` 菜单三子命令
   - `/model cleanup [name]` → `CleanupStaleVariant`
   - `/model info` → 列所有 model 的 EP/quant/size/loaded
   - `/model quant fp32|int8|auto` → 切换全局 quant
-- **P14.7**：运行时换模型（`_currentModelName` swap + `_session` dispose + reload；session 持久化推迟到 P15+）
-- **P14.11**：`IHostedService.PreWarmEmbeddingModels` 后台下载所有 3 个模型
+- **P14.8**：运行时换模型（`_currentModelName` swap + `_session` dispose + reload；session 持久化推迟到 P15+）
+- **P14.12**：`IHostedService.PreWarmEmbeddingModels` 后台下载所有 3 个模型
 
-### 主题 4：缓存与降级（P14.5 + P14.9）
+### 主题 4：缓存与降级（P14.5 + P14.10）
 - **P14.5**：`DecisionTreeRouter.SelectTopKWithScoresAsync` 也走 `ToolEmbeddingCache`；远程 API embedding 计算后 cache（key = `embed:remote:DeepSeek:<SHA-256(text)>`）
-- **P14.9**：`EmbeddingClient` 维护失败计数器（window=10 calls），≥3 次连续失败 → 触发 `LocalEmbedder.PreWarmAsync()` 强制加载 ONNX 兜底
+- **P14.10**：`EmbeddingClient` 维护失败计数器（window=10 calls），≥3 次连续失败 → 触发 `LocalEmbedder.PreWarmAsync()` 强制加载 ONNX 兜底
 
-### 主题 5：灵活与质量（P14.8 + P14.10）
-- **P14.8**：config schema 改 `Dictionary<string, string>` per-model
+### 主题 5：灵活与质量（P14.9 + P14.11）
+- **P14.9**：config schema 改 `Dictionary<string, string>` per-model
   ```json
   "Embedding": {
     "Models": {
@@ -711,12 +708,12 @@ Connect SessionManager → ChatView and add SessionStatsPanel to MainWindow side
   }
   ```
   优先级：per-model > 全局
-- **P14.10**：双模型融合
+- **P14.11**：双模型融合
   - 路由时 MiniLM + BGE 各自 top-K → RRF 融合（参考 P7.7 决策树）
   - 推理时 MiniLM 跑 1 次 + BGE 跑 1 次 → concat 768d / weighted 384d+384d
   - 跨语言场景质量↑（中文走 BGE-zh，英文走 MiniLM）
 
-### 主题 6：Long-running task 完善（P14.12 + P14.13 + P14.14）
+### 主题 6：Long-running task 完善（P14.13 + P14.14 + P14.15）
 
 #### 现状评估（2026-06-02 盘点）
 
@@ -743,22 +740,22 @@ Connect SessionManager → ChatView and add SessionStatsPanel to MainWindow side
 3. DTFx 整个未 smoke test：`InProcessTestHost 0.2.3-preview.1` 是 preview + 标"for testing"
 4. 三端（TUI/Desktop/Web）均无任务进度展示 / API 端点
 
-**P14.12 + P14.13 + P14.14 目标**：
+**P14.13 + P14.14 + P14.15 目标**：
 - 解决 #1（TaskQueue 暴露工具）
 - 解决 #4（三端展示 + API 端点）
 - 暂不解决 #2 #3（推 P15+）
 
-#### P14.12 TaskQueueTool 暴露给 5 agents（1d）
+#### P14.13 TaskQueueTool 暴露给 5 agents（1d）
 - **方案 A（推荐）**：把 TaskQueue 包装成 `TaskQueueTool`（5 个方法：Enqueue/List/Wait/Get/Cancel），加到 5 agents 工具链
 - **方案 B（更彻底）**：BGJS 内部改用 TaskQueue 共享并发/重试逻辑；外部仍暴露 BGJS 工具
 - **评估**：先方案 A 验证 TaskQueue 可用，再考虑方案 B 合并
 
-#### P14.13 TUI `/jobs` + Desktop sidebar 实时展示（2-3d）
+#### P14.14 TUI `/jobs` + Desktop sidebar 实时展示（2-3d）
 - TUI：`/jobs` 子命令（list / watch / cancel）
 - Desktop：sidebar 加 JobsPanel（订阅 `BackgroundJobService.JobCompleted` event）
 - 刷新策略：1s 轮询（事件触发即时刷新）
 
-#### P14.14 LTAI.Web `GET /api/jobs` 端点（0.5d）
+#### P14.15 LTAI.Web `GET /api/jobs` 端点（0.5d）
 - `GET /api/jobs` → list all
 - `GET /api/jobs/{id}` → get detail
 - `POST /api/jobs/{id}/cancel` → cancel
@@ -767,13 +764,13 @@ Connect SessionManager → ChatView and add SessionStatsPanel to MainWindow side
 ## 推荐执行顺序
 
 ```
-P0 (6 个) ──→ P1 (3 个) ──→ P2 (3 个) ──→ P3 (2 个)
-P14.2         P14.4         P14.7         P14.10
-P14.3         P14.5         P14.8         P14.11
-P14.1         P14.6         P14.9
-P14.12
-P14.13
+P0 (6 个) ──→ P1 (4 个) ──→ P2 (3 个) ──→ P3 (2 个)
+P14.2         P14.4         P14.8         P14.11
+P14.3         P14.5         P14.9         P14.12
+P14.1         P14.6         P14.10
+P14.13        P14.7
 P14.14
+P14.15
 ```
 
 | 阶段 | 总工时 | 关键产出 |
@@ -788,8 +785,8 @@ P14.14
 - **D52 P14.2 + P14.6 用 P9 DevUI**：不要新建 dashboard，复用 P9 框架（5 行 vs 200 行）
 - **D53 P14.3 TUI 优先于 CLI**：用户主交互在 TUI；`ltai mcp-server` 等 CLI 命令维持现状
 - **D54 P14.5 cache 远程 API 是双刃**：省 API 费但增加 stale risk（remote provider 升级时）；用 24h TTL 兜底
-- **D55 P14.7 热切换复杂**：session 中嵌入向量维度不变则可热切；变了必须新 session；推迟边界 case 到 P15+
-- **D56 P14.10 Multi-embedding 资源 2x**：内存 +200MB，推理 +100% 时间，**仅 P3**（实验性）
+- **D55 P14.8 热切换复杂**：session 中嵌入向量维度不变则可热切；变了必须新 session；推迟边界 case 到 P15+
+- **D56 P14.11 Multi-embedding 资源 2x**：内存 +200MB，推理 +100% 时间，**仅 P3**（实验性）
 - **D57 P14 顺序：P0 → P1 → P2 → P3**：每阶段独立可演示；不跨阶段阻塞
 
 ## Verification (每阶段)
@@ -797,6 +794,119 @@ P14.14
 - P1 完成后：BDN 报告 INT8 < FP32 < FP32+GPU latency；远程 cache 命中率 > 80%
 - P2 完成后：运行时换模型不丢消息；API 失败自动 ONNX fallback；per-model quant 生效
 - P3 完成后：双模型融合 vs 单模型在 LTAI 真实工作负载（代码搜索 + 决策树路由）准确率对照
+
+# 2026-06-02 P15 可热改编排（YAML/JSON workflow 热重载）
+
+## Goal
+- 用户拍板"需要可热改编排" → 把 P7.3 评估升级为落地
+- 把 `AgentWorkflows.cs` 180 行 C#（Sequential + Concurrent + DecisionTreeRouter 阈值）全部挪到 `.livingtree/workflows/*.yaml|*.json`
+- 编辑器保存 → FileSystemWatcher 触发 → registry 原子换 snapshot → 在途请求保留旧 + 新请求走新（D71）
+- 重载失败保留旧 snapshot + notifier 通知 + error 可见（D68）
+
+## 5 个关键决策 (D67-D71)
+- **D67** YAML 存 `.livingtree/workflows/*.yaml` (用户层)
+- **D68** 重载失败保留旧 + 日志 + notifier 通知 + 错误条
+- **D69** 保留 `AgentWorkflows.cs` C# 兜底 (YAML 缺失 / 解析失败时 fallback)
+- **D70** DecisionTreeRouter 全 YAML 化（TopK + 阈值 + 候选 agent 白名单 + 模糊 fallback kind）
+- **D71** 旧请求用旧 snapshot, 新请求用新 snapshot（in-flight 不中断）
+
+## P15.0 DecisionTreeConfig 强类型 + 模板 ✅
+- `src/LTAI.Agent/Workflows/DecisionTreeConfig.cs` (~120 行)
+  - 字段: Type/Version/TopK/ConfidenceMarginThreshold/MinTopScoreThreshold/AmbiguousFallback/Candidates
+  - `AmbiguousFallbackKind` 枚举: All / TopK / None
+  - 静态 `Default` (P7.7 默认值兜底) + `Parse(json)` / `LoadFromFile(path)`
+  - JSON options: case-insensitive / AllowTrailingCommas / ReadCommentHandling.Skip
+- `src/LTAI.Agent/Workflows/ltai-workflows/decision-tree.template.json` — 顶部 `//` 注释 + JSON 体
+
+## P15.1 YAMLWorkflowRegistry + Watcher + Notifier ✅
+- `WorkflowHotReloadNotifier.cs` (~110 行) — fan-out 给订阅者（fire-and-forget）
+  - `IWorkflowSubscriber` 接口 (OnReloaded / OnLoadFailed)
+  - `WorkflowReloadEvent` / `WorkflowLoadFailedEvent` record structs
+  - `ConcurrentDictionary<Guid, IWorkflowSubscriber>` 订阅管理
+- `YAMLWorkflowWatcher.cs` (~120 行) — FileSystemWatcher + 250ms 防抖
+  - 监听 `*.yaml` / `*.yml` / `*.json`
+  - IO 重试 3 次（50/100/200ms 指数退避）处理编辑器文件锁
+- `YAMLWorkflowRegistry.cs` (~280 行) — 核心
+  - `ConcurrentDictionary` 存 `WorkflowSnapshot` / `DecisionTreeSnapshot`
+  - `InitializeAsync` 启动扫所有 yaml/yml/json
+  - `ReloadFileAsync(path, ct)` 失败抛异常, D68 保留旧 snapshot
+  - `TryGetWorkflow(name)` / `GetDecisionTreeConfig(name)` / `List()` / `ReloadAllAsync()`
+  - `BuildWorkflow` 调 `DeclarativeWorkflowBuilder.Build<string>(path, options)`
+  - `ProbeWorkflowType` / `ProbeWorkflowVersion` 用 `ExtractYamlScalar` 字符串扫描（无 YAML 解析器依赖）
+  - 嵌套 `NoOpAgentProvider : ResponseAgentProvider`
+- `WorkflowWatcherHostedService.cs` (~50 行) — `IHostedService` 包装
+
+## P15.2 DecisionTreeRouter 改 ✅
+- 新构造参数 `YAMLWorkflowRegistry? registry` (P15 注入)
+- `ResolveEffectiveConfig()`: 优先 registry JSON, 兜底 `DecisionTreeRouterOptions`
+- 候选白名单: `Candidates.Count > 0` 时 Stage 0 之前 filter
+- Stage 3 拆 3 分支: `AmbiguousFallback` (All) / `AmbiguousFallbackTopK` / `NoConfidentMatch` (None)
+- 仍保留 `DecisionTreeRouterOptions` C# 兜底类
+
+## P15.3 AgentWorkflows 改 ✅
+- 构造加 `YAMLWorkflowRegistry? workflowRegistry` 参数
+- `RunHandoffAsync` greeting 改走 `TryRunGreetingAsync`
+- `TryRunGreetingAsync(task, ct)`: 先 registry, fallback 到 `YAMLWorkflowHost.RunGreetingFastPathAsync` (D69 C# 兜底)
+
+## P15.4 DI 注册 + 项目文件 ✅
+- `ServiceCollectionExtensions.cs` Step 3 加 `YAMLWorkflowRegistry` / `WorkflowHotReloadNotifier` / `YAMLWorkflowWatcher` 单例 + `WorkflowWatcherHostedService` HostedService
+- `LTAI.Agent.csproj`: 加 `<None Include="Workflows\ltai-workflows\**\*.json">` + `CopyToOutputDirectory=PreserveNewest`
+
+## P15.5 OTel ActivitySource emit ✅
+- `WorkflowHotReloadNotifier` 内部加 `ActivitySource("LTAI.Workflows")`
+- `PublishReloaded` / `PublishLoadFailed` 各包一层 Activity（`ActivityKind.Internal`）
+- tag: `workflow.name` / `type` / `version` / `path` / `reason`
+- 失败时 `SetStatus(ActivityStatusCode.Error, reason)`
+- **自动被 P9.1 DevUISpanCollector 捕获**（`name.StartsWith("LTAI")` 已覆盖）
+- **自动被 P7.2 OTel console/OTLP exporter emit**（`AddSource("LTAI.*")` 已配置）
+- 0 新依赖、0 新 endpoint
+
+## P15.6 DevUI Dashboard "Workflows" 行 ✅
+- `DevUIDashboardView.Render` 加可选 `YAMLWorkflowRegistry? workflows` 参数
+- header: `[aqua]N[/] workflows` 计数 + footer: 紧凑的 name + version + type 列表
+- `TuiApp.cs` + `TuiApp.ctor` 注入 registry, 透传到 `DevUIDashboardView.Render`
+- 0 新建 panel, 5-10 行改动
+
+## P15.7 TUI `/workflow` 子命令 ✅
+- `SlashCommands.cs` 加 `WorkflowRegistry` 静态属性 + `SlashSpec("workflow", "扩展", ...)` + 5 个 helper
+- 子命令族: `list` / `reload [name|*]` / `show <name>` / `open <name>` (用系统默认程序打开)
+- `Program.cs` 注入 `WorkflowRegistry` 到静态
+- 用户体验: 编辑 yaml → `:w` → `/workflow show decision-tree` 看新内容
+
+## P15.8 Desktop WorkflowsView 精简 ✅
+- 新建 `src/LTAI.Desktop/WorkflowsView.cs` (~190 行)
+- 极简: Reload All 按钮 + Open in DevUI 按钮 + 错误条（订阅 notifier）
+- 不重复 workflow 列表 / 源码预览（这些去浏览器 DevUI 看，per D73）
+- `MainWindow.cs` 加 6th view (Ctrl+6) + 图标 `🔁`
+- 状态用 2s 轮询 + event 触发即时刷新
+
+## P15.9 LTAI.Web `/api/workflows` 端点 ✅
+- `GET /ltai/v1/workflows` — list all + watchDir
+- `GET /ltai/v1/workflows/{name}` — single + raw content
+- `POST /ltai/v1/workflows/reload` — reload all
+- `POST /ltai/v1/workflows/{name}/reload` — reload one (失败返 422 + reason)
+- 自动化 / CI / 脚本入口
+
+## Key Decisions (P15 期间新增 D72-D73)
+- **D72 Desktop WorkflowsView 精简**: 只放 reload 按钮 + error 条; 列表/源码预览全去浏览器 DevUI (P9.2 启动 in-process Kestrel) — 避免双套 UI
+- **D73 观测面融合 P9.1**: reload events 通过 OTel ActivitySource emit → P9 DevUISpanCollector 自动捕获 → 出现在 spans 表格里, 0 重复
+- **D74 ReloadAllAsync 在 WorkflowsView 用 `Lazy<DevUIHost>`**: 跟 P9.2 一致, 复用 P9.2 已启动的 host (不每次 Reload All 都重启 Kestrel)
+
+## Verification (P15 完成)
+- [x] 构建通过: 5 项目 (LTAI.Agent / LTAI.TUI / LTAI.Desktop / LTAI.Web / LTAI.Cli) 0 errors
+- [x] LTAI.Agent 0 warnings (P15 触改文件)
+- [x] LTAI.TUI / LTAI.Desktop / LTAI.Web / LTAI.Cli 0 errors (各自 pre-existing warnings 维持)
+- [ ] 真实 LLM 调用 smoke test: 用户改 `decision-tree.json` 阈值 → DecisionTreeRouter 下次请求用新阈值（用户已说"测试太耗时间"，可后续手动验证）
+- [ ] TUI `/workflow list` 列出 1 个 workflow (decision-tree.template.json 复制到 .livingtree/workflows/decision-tree.json)
+- [ ] Desktop 切到 Ctrl+6, 点 "Reload All", 错误条更新
+- [ ] Web `curl http://localhost:5100/ltai/v1/workflows` 返回 `{watchDir, workflows: [...]}`
+
+## Next Steps (P16+)
+- **P16.1**: 用户编辑 Sequential/Concurrent 的 agent 列表 / 步骤顺序 → 全 YAML 化 Sequential/Concurrent（保留 P7.5 C# 实现兜底, 可切换）
+- **P16.2**: 改 YAML 触发单元测试（CI 跑 LTAI.Benchmarks 验路由延迟/Recall 变化）
+- **P16.3**: Web `/api/workflows/events` SSE 流（订阅 `WorkflowHotReloadNotifier` 推 reload/failed 事件给浏览器 DevUI live view）
+- **P16.4**: YAML 编辑器集成（VSCode extension / LSP 校验 DecisionTreeConfig 字段）
+- **P16.5**: 把 GreetingClassifier YAML 拆成多个文件（greeting / thanks / farewell / probing 各自独立, 便于单条修改）
 
 # 2026-06-02 P13.6 单文件原则（避免模型碎片化）
 

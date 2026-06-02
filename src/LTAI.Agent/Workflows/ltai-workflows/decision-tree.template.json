@@ -1,0 +1,21 @@
+// P15 hot-editable config for DecisionTreeRouter.
+// Edit values freely; the running process picks up changes within ~1s
+// (FileSystemWatcher) without requiring a restart.
+//
+// topK:        Stage 1: number of agents to fetch from embedding top-K (1-10).
+// margin:      Stage 2: min (top-1 - top-2) cosine margin to consider confident.
+// minScore:    Stage 2: min absolute top-1 score to consider confident.
+// fallback:    Stage 3: 'all' = every specialist (slowest, highest recall).
+//                       'topK' = only the top-K (faster).
+//                       'none' = return 'no confident match', no specialist.
+// candidates:  Optional whitelist. Empty = all specialists. Non-empty = only
+//              these named agents (others filtered out before top-K).
+{
+  "type": "decision-tree",
+  "version": 1,
+  "topK": 3,
+  "confidenceMarginThreshold": 0.15,
+  "minTopScoreThreshold": 0.30,
+  "ambiguousFallback": "all",
+  "candidates": []
+}

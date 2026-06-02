@@ -101,18 +101,38 @@ public static class ServiceCollectionExtensions
         // Step 3: Workflow orchestrator (with P7.7 decision-tree routing)
         // P12.1: pass ToolEmbeddingCache so the 10-agent description embeddings
         // are batched + persisted; cold-start 0 ONNX calls after first run.
+        // P15: pass YAMLWorkflowRegistry so thresholds/candidates are hot-editable.
         services.AddSingleton<DecisionTreeRouter>(sp => new DecisionTreeRouter(
             sp.GetService<EmbeddingClient>(),
             sp.GetRequiredService<ILogger<DecisionTreeRouter>>(),
-            sp.GetService<ToolEmbeddingCache>()));
+            sp.GetService<ToolEmbeddingCache>(),
+            options: null,
+            registry: sp.GetService<YAMLWorkflowRegistry>()));
         services.AddSingleton<AgentWorkflows>(sp =>
         {
             var all = sp.GetKeyedServices<AIAgent>(KeyedService.AnyKey)
                 .ToDictionary(a => a.Name!, StringComparer.OrdinalIgnoreCase);
             return new AgentWorkflows(all.Values, all["router"],
                 sp.GetRequiredService<ILogger<AgentWorkflows>>(),
-                sp.GetRequiredService<DecisionTreeRouter>());
+                sp.GetRequiredService<DecisionTreeRouter>(),
+                workflowRegistry: sp.GetService<YAMLWorkflowRegistry>());
         });
+
+        // Step 3c: P15 hot-editable workflow registry + watcher + notifier.
+        // The registry scans `.livingtree/workflows/*.yaml|*.json` at startup
+        // and listens for file changes via FileSystemWatcher (debounced 250ms).
+        // The watcher is registered as a hosted service so it starts/stops
+        // with the host.
+        services.AddSingleton<WorkflowHotReloadNotifier>();
+        services.AddSingleton<YAMLWorkflowRegistry>(sp => new YAMLWorkflowRegistry(
+            sp.GetRequiredService<IOptions<LTAIOptions>>(),
+            sp.GetRequiredService<WorkflowHotReloadNotifier>(),
+            sp.GetRequiredService<ILogger<YAMLWorkflowRegistry>>()));
+        services.AddSingleton<YAMLWorkflowWatcher>(sp => new YAMLWorkflowWatcher(
+            sp.GetRequiredService<YAMLWorkflowRegistry>().WatchDirectory,
+            sp.GetRequiredService<YAMLWorkflowRegistry>(),
+            sp.GetRequiredService<ILogger<YAMLWorkflowWatcher>>()));
+        services.AddHostedService<WorkflowWatcherHostedService>();
 
         // Step 3a: DevUI shared service (P9.0)
         // Used by LTAI.Web (DevUI REST surface), LTAI.TUI (/dashboard),

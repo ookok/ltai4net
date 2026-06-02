@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using LTAI.AI;
 using Microsoft.Agents.AI;
 using Microsoft.Agents.AI.Workflows;
+using Microsoft.Agents.AI.Workflows.Declarative;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 
@@ -33,18 +34,21 @@ public sealed class AgentWorkflows
     private readonly Dictionary<string, AIAgent> _specialists;
     private readonly AIAgent _router;
     private readonly DecisionTreeRouter _router2;
+    private readonly YAMLWorkflowRegistry? _workflowRegistry;
 
     public AgentWorkflows(
         IEnumerable<AIAgent> allAgents,
         AIAgent router,
         ILogger<AgentWorkflows> logger,
-        DecisionTreeRouter? router2 = null)
+        DecisionTreeRouter? router2 = null,
+        YAMLWorkflowRegistry? workflowRegistry = null)
     {
         _logger = logger;
         _router = router;
         _router2 = router2 ?? new DecisionTreeRouter(
             embedder: null,
             logger: Microsoft.Extensions.Logging.Abstractions.NullLogger<DecisionTreeRouter>.Instance);
+        _workflowRegistry = workflowRegistry;
         _specialists = allAgents
             .Where(a => !string.Equals(a.Name, router.Name, StringComparison.OrdinalIgnoreCase))
             .ToDictionary(a => a.Name!, StringComparer.OrdinalIgnoreCase);
@@ -62,7 +66,10 @@ public sealed class AgentWorkflows
         CancellationToken ct = default)
     {
         // ── Greeting fast-path (YAML workflow, editable without recompile) ──
-        var canned = await YAMLWorkflowHost.RunGreetingFastPathAsync(task, ct).ConfigureAwait(false);
+        // D69: try the registry first (P15 hot-editable); fall back to the
+        // static YAMLWorkflowHost when the registry has no greeting loaded
+        // (preserves the C# fallback path that has shipped since P7.5).
+        var canned = await TryRunGreetingAsync(task, ct).ConfigureAwait(false);
         if (canned != null)
         {
             _logger.LogInformation("Greeting fast path (YAML): \"{Task}\" -> \"{Reply}\"", task, canned);
@@ -258,5 +265,35 @@ public sealed class AgentWorkflows
             sb.AppendLine(m.Text);
             sb.AppendLine();
         }
+    }
+
+    /// <summary>
+    /// P15: try the registry-backed greeting workflow first. If the
+    /// registry is null or has no <c>greeting</c> workflow loaded, fall back
+    /// to the static <see cref="YAMLWorkflowHost"/> (D69: preserve C# path).
+    /// </summary>
+    private async Task<string?> TryRunGreetingAsync(string task, CancellationToken ct)
+    {
+        // P15 hot path: registry snapshot.
+        if (_workflowRegistry != null)
+        {
+            var workflow = _workflowRegistry.TryGetWorkflow("greeting");
+            if (workflow != null)
+            {
+                await using var run = await InProcessExecution
+                    .RunStreamingAsync(workflow, task, cancellationToken: ct)
+                    .ConfigureAwait(false);
+                await foreach (var evt in run.WatchStreamAsync(ct).ConfigureAwait(false))
+                {
+                    if (evt is MessageActivityEvent mae && !string.IsNullOrWhiteSpace(mae.Message))
+                    {
+                        return mae.Message;
+                    }
+                }
+                return null;
+            }
+        }
+        // C# fallback (D69).
+        return await YAMLWorkflowHost.RunGreetingFastPathAsync(task, ct).ConfigureAwait(false);
     }
 }

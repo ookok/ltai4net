@@ -11,31 +11,26 @@ using Microsoft.Extensions.Logging;
 namespace LTAI.Agent.Workflows;
 
 /// <summary>
-/// P7.7 decision-tree router — replaces the flat top-K selection with a 3-stage
-/// confidence cascade that gives the MAF <c>HandoffWorkflowBuilder</c> either a
-/// tight top-K candidate set (when embedding is confident) or all specialists
-/// (when embedding is ambiguous).
+/// P7.7 + P15 decision-tree router. Replaces the flat top-K selection with a
+/// 3-stage confidence cascade that gives the MAF <c>HandoffWorkflowBuilder</c>
+/// either a tight top-K candidate set (when embedding is confident) or all
+/// specialists (when embedding is ambiguous).
 /// </summary>
 /// <remarks>
-/// <para><b>Stages:</b></para>
+/// <para><b>Stages (P7.7, unchanged):</b></para>
 /// <list type="number">
 /// <item><description><b>Embedding top-K</b>: cosine similarity ranks all agents, take K (default 3).</description></item>
-/// <item><description><b>Confidence margin</b>: <c>margin = score[0] - score[1]</c>. A high margin means
-///   rank-1 is meaningfully better than rank-2 — the embedding has converged on one agent.</description></item>
-/// <item><description><b>Branch:</b>
-///   <list type="bullet">
-///     <item><description><b>confident</b> (margin ≥ <see cref="Options.ConfidenceMarginThreshold"/>, default 0.15):
-///       narrow to top-K → fast routing, low LLM cost.</description></item>
-///     <item><description><b>ambiguous</b> (margin &lt; threshold OR top-1 score &lt;
-///       <see cref="Options.MinTopScoreThreshold"/>, default 0.30): expand to all specialists →
-///       slower but higher recall.</description></item>
-///   </list>
-///   </description></item>
+/// <item><description><b>Confidence margin</b>: <c>margin = score[0] - score[1]</c>.</description></item>
+/// <item><description><b>Branch:</b> confident (margin ≥ threshold AND top-1 score ≥ threshold) → top-K; ambiguous → fallback per <see cref="AmbiguousFallbackKind"/>.</description></item>
 /// </list>
 /// <para>
-/// The decision is logged via <see cref="ILogger"/> so the OTel exporter (P7.2) can surface
-/// routing hit-rate in the dashboard. Thresholds are tunable via
-/// <see cref="DecisionTreeRouterOptions"/>.
+/// <b>P15 hot-editable thresholds:</b> thresholds and candidate whitelist are
+/// loaded from <c>.livingtree/workflows/decision-tree.json</c> via
+/// <see cref="YAMLWorkflowRegistry"/>. The router queries the registry on
+/// every call so changes apply within ~1s (FileSystemWatcher). The
+/// <see cref="DecisionTreeRouterOptions"/> constructor parameter remains the
+/// hardcoded fallback used when the JSON file is absent or fails to parse
+/// (D68 / D69: preserve previous behavior).
 /// </para>
 /// </remarks>
 public sealed class DecisionTreeRouter
@@ -43,31 +38,67 @@ public sealed class DecisionTreeRouter
     private readonly EmbeddingClient? _embedder;
     private readonly ToolEmbeddingCache? _cache;
     private readonly ILogger<DecisionTreeRouter> _logger;
-    private readonly DecisionTreeRouterOptions _options;
+    private readonly DecisionTreeRouterOptions _fallbackOptions;
+    private readonly YAMLWorkflowRegistry? _registry;
 
     public DecisionTreeRouter(
         EmbeddingClient? embedder,
         ILogger<DecisionTreeRouter> logger,
         ToolEmbeddingCache? cache = null,
-        DecisionTreeRouterOptions? options = null)
+        DecisionTreeRouterOptions? options = null,
+        YAMLWorkflowRegistry? registry = null)
     {
         _embedder = embedder;
         _logger = logger;
         _cache = cache;
-        _options = options ?? new DecisionTreeRouterOptions();
+        _fallbackOptions = options ?? new DecisionTreeRouterOptions();
+        _registry = registry;
+    }
+
+    /// <summary>
+    /// Resolve the current effective config. Order:
+    /// 1. JSON file via <see cref="YAMLWorkflowRegistry"/> (P15 hot path).
+    /// 2. Constructor-supplied <see cref="DecisionTreeRouterOptions"/> (P7.7 hardcoded fallback).
+    /// </summary>
+    private (int TopK, float Margin, float MinScore, AmbiguousFallbackKind Fallback, IReadOnlyList<string> Whitelist) ResolveEffectiveConfig()
+    {
+        if (_registry != null)
+        {
+            var cfg = _registry.GetDecisionTreeConfig("decision-tree");
+            if (cfg.SourcePath != null)
+            {
+                return (cfg.TopK, cfg.ConfidenceMarginThreshold, cfg.MinTopScoreThreshold, cfg.FallbackKind, cfg.Candidates);
+            }
+        }
+        return (_fallbackOptions.TopK, _fallbackOptions.ConfidenceMarginThreshold, _fallbackOptions.MinTopScoreThreshold,
+                AmbiguousFallbackKind.All, Array.Empty<string>());
     }
 
     /// <summary>
     /// Run the decision tree. Returns the chosen candidate names plus the
-    /// diagnostics describing the branch taken — both for the caller's use
-    /// and for telemetry.
+    /// diagnostics describing the branch taken.
     /// </summary>
     public async Task<DecisionTreeResult> RouteAsync(
         string task,
         IReadOnlyCollection<string> allSpecialistNames,
         CancellationToken ct = default)
     {
+        var (topKLimit, marginThreshold, minScoreThreshold, fallbackKind, whitelist) = ResolveEffectiveConfig();
+
         var allNames = allSpecialistNames.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+
+        // P15: apply candidate whitelist before any embedding work.
+        if (whitelist.Count > 0)
+        {
+            var wl = new HashSet<string>(whitelist, StringComparer.OrdinalIgnoreCase);
+            allNames = allNames.Where(n => wl.Contains(n)).ToArray();
+            if (allNames.Length == 0)
+            {
+                _logger.LogWarning("Router: candidate whitelist filtered out all specialists ({N} requested, 0 matched)",
+                    whitelist.Count);
+                return new DecisionTreeResult(Array.Empty<string>(), BranchKind.NoCandidates, 0f, 0f, []);
+            }
+        }
 
         // Stage 0: no embedder → use all (legacy behavior)
         if (_embedder is null)
@@ -77,9 +108,8 @@ public sealed class DecisionTreeRouter
         }
 
         // Stage 1: top-K by cosine similarity
-        // P12.1: pass cache to skip batched re-embedding of agent descriptions
         var topK = await AgentRegistry
-            .SelectTopKWithScoresAsync(task, _embedder, _cache, k: _options.TopK, ct)
+            .SelectTopKWithScoresAsync(task, _embedder, _cache, k: topKLimit, ct)
             .ConfigureAwait(false);
 
         if (topK.Count == 0)
@@ -93,8 +123,7 @@ public sealed class DecisionTreeRouter
         var margin = topK.Count >= 2 ? topScore - topK[1].Score : float.MaxValue;
 
         // Stage 3: branch
-        var confident = margin >= _options.ConfidenceMarginThreshold
-                        && topScore >= _options.MinTopScoreThreshold;
+        var confident = margin >= marginThreshold && topScore >= minScoreThreshold;
 
         if (confident)
         {
@@ -103,48 +132,51 @@ public sealed class DecisionTreeRouter
                 .Where(n => allNames.Contains(n, StringComparer.OrdinalIgnoreCase))
                 .ToArray();
 
-            // Defensive: if filtering dropped everything (e.g. names changed), fall back to all
             if (chosen.Length == 0) chosen = allNames;
 
             _logger.LogInformation(
-                "Router: CONFIDENT (margin={Margin:F3} ≥ {Threshold:F3}, top={Top:F3}) → top-{K} of {Total}",
-                margin, _options.ConfidenceMarginThreshold, topScore, chosen.Length, allNames.Length);
+                "Router: CONFIDENT (margin={Margin:F3} ≥ {Threshold:F3}, top={Top:F3}) → top-{K} of {Total} (fallback={Fb})",
+                margin, marginThreshold, topScore, chosen.Length, allNames.Length, fallbackKind);
             return new DecisionTreeResult(chosen, BranchKind.ConfidentTopK, topScore, margin, topK);
         }
         else
         {
-            var reason = margin < _options.ConfidenceMarginThreshold
-                ? $"margin={margin:F3} < {_options.ConfidenceMarginThreshold:F3}"
-                : $"top={topScore:F3} < {_options.MinTopScoreThreshold:F3}";
+            // P15: ambiguous branch honors ambiguousFallback strategy.
+            var (chosen2, branch) = fallbackKind switch
+            {
+                AmbiguousFallbackKind.None => (
+                    Array.Empty<string>(),
+                    BranchKind.NoConfidentMatch),
+                AmbiguousFallbackKind.TopK => (
+                    topK.Select(t => t.Name)
+                        .Where(n => allNames.Contains(n, StringComparer.OrdinalIgnoreCase))
+                        .ToArray(),
+                    BranchKind.AmbiguousFallbackTopK),
+                _ => (allNames, BranchKind.AmbiguousFallback),
+            };
+
+            var reason = margin < marginThreshold
+                ? $"margin={margin:F3} < {marginThreshold:F3}"
+                : $"top={topScore:F3} < {minScoreThreshold:F3}";
 
             _logger.LogInformation(
-                "Router: AMBIGUOUS ({Reason}) → falling back to all {N} specialists",
-                reason, allNames.Length);
-            return new DecisionTreeResult(allNames, BranchKind.AmbiguousFallback, topScore, margin, topK);
+                "Router: AMBIGUOUS ({Reason}) → {Branch} ({N} agents, fallback={Fb})",
+                reason, branch, chosen2.Length, fallbackKind);
+            return new DecisionTreeResult(chosen2, branch, topScore, margin, topK);
         }
     }
 }
 
 /// <summary>
-/// Tunable thresholds for <see cref="DecisionTreeRouter"/>. Defaults are
-/// chosen for an 18-agent pool with English+Chinese capability descriptions.
+/// Hardcoded fallback thresholds for <see cref="DecisionTreeRouter"/>. Used
+/// only when <c>decision-tree.json</c> is absent or fails to parse (D68).
+/// P7.7 defaults: 3 / 0.15 / 0.30. Overridden at runtime by the JSON file
+/// loaded via <see cref="YAMLWorkflowRegistry"/>.
 /// </summary>
 public sealed class DecisionTreeRouterOptions
 {
-    /// <summary>Number of candidates to take from the embedding top-K (Stage 1).</summary>
     public int TopK { get; init; } = 3;
-
-    /// <summary>
-    /// Minimum margin (top-1 score − top-2 score) to consider the embedding
-    /// confident. Below this, fall back to all specialists. Default 0.15.
-    /// </summary>
     public float ConfidenceMarginThreshold { get; init; } = 0.15f;
-
-    /// <summary>
-    /// Minimum absolute top-1 score to consider the embedding confident.
-    /// Below this even with a high margin, the embedding has found nothing
-    /// relevant — fall back. Default 0.30.
-    /// </summary>
     public float MinTopScoreThreshold { get; init; } = 0.30f;
 }
 
@@ -157,16 +189,17 @@ public enum BranchKind
     EmbeddingFailed,
     /// <summary>Margin was high; routed to top-K candidates.</summary>
     ConfidentTopK,
-    /// <summary>Margin was low; fell back to all specialists.</summary>
+    /// <summary>Margin was low; fell back to all specialists (default P7.7 behavior).</summary>
     AmbiguousFallback,
+    /// <summary>P15: margin low + ambiguousFallback=topK; fell back to top-K.</summary>
+    AmbiguousFallbackTopK,
+    /// <summary>P15: margin low + ambiguousFallback=none; return no candidates.</summary>
+    NoConfidentMatch,
+    /// <summary>P15: candidate whitelist filtered out everything.</summary>
+    NoCandidates,
 }
 
 /// <summary>Result of <see cref="DecisionTreeRouter.RouteAsync"/>.</summary>
-/// <param name="Candidates">Final list of agent names to pass to the handoff workflow.</param>
-/// <param name="Branch">Which branch was taken (telemetry).</param>
-/// <param name="TopScore">Cosine similarity of the top-1 agent (0 if no embedder).</param>
-/// <param name="Margin">Top-1 minus top-2 score (<see cref="float.MaxValue"/> if &lt; 2 agents).</param>
-/// <param name="TopK">Raw top-K from the embedder, with scores. Empty if embedder unavailable.</param>
 public readonly record struct DecisionTreeResult(
     IReadOnlyList<string> Candidates,
     BranchKind Branch,

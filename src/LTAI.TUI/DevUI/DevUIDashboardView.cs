@@ -1,6 +1,7 @@
 // Copyright (c) LTAI. All rights reserved.
 
 using LTAI.Agent.DevUI;
+using LTAI.Agent.Workflows;
 using LTAI.Core.Configuration;
 using Spectre.Console;
 using LTAI.AI;
@@ -14,10 +15,15 @@ namespace LTAI.TUI.DevUI;
 /// </summary>
 public static class DevUIDashboardView
 {
-    public static void Render(LTAIDevUIService devUi, DevUISpanCollector spans, UsageTracker? usage)
+    public static void Render(
+        LTAIDevUIService devUi,
+        DevUISpanCollector spans,
+        UsageTracker? usage,
+        YAMLWorkflowRegistry? workflows = null)
     {
         var cards = devUi.ListAgentCards();
         var recent = spans.Snapshot().TakeLast(15).Reverse().ToList();
+        var workflowList = workflows?.List() ?? (IReadOnlyList<WorkflowInfo>)[];
 
         var layout = new Layout("root")
             .SplitRows(
@@ -33,7 +39,8 @@ public static class DevUIDashboardView
                     $"[bold]LTAI DevUI Dashboard[/]  [grey]·[/]  " +
                     $"[aqua]{cards.Count}[/] agents  [grey]·[/]  " +
                     $"[aqua]{spans.Count}[/] spans  [grey]·[/]  " +
-                    $"[aqua]{recent.Count(s => s.IsLive)}[/] live"))
+                    $"[aqua]{recent.Count(s => s.IsLive)}[/] live  [grey]·[/]  " +
+                    $"[aqua]{workflowList.Count}[/] workflows"))
             {
                 Border = BoxBorder.Heavy,
                 Header = new PanelHeader("[green] P9 Live Inspector [/]"),
@@ -42,7 +49,7 @@ public static class DevUIDashboardView
 
         layout["agents"].Update(BuildAgentTable(cards));
         layout["spans"].Update(BuildSpanTable(recent));
-        layout["footer"].Update(BuildUsagePanel(usage));
+        layout["footer"].Update(BuildUsagePanel(usage, workflowList));
 
         AnsiConsole.Write(layout);
     }
@@ -119,9 +126,9 @@ public static class DevUIDashboardView
         return new Panel(table) { Expand = true };
     }
 
-    private static Panel BuildUsagePanel(UsageTracker? usage)
+    private static Panel BuildUsagePanel(UsageTracker? usage, IReadOnlyList<WorkflowInfo> workflows)
     {
-        if (usage is null)
+        if (usage is null && workflows.Count == 0)
         {
             return new Panel(new Markup("[grey](usage tracker not available)[/]"))
             {
@@ -135,15 +142,26 @@ public static class DevUIDashboardView
             .AddColumn()
             .AddColumn(new GridColumn().RightAligned())
             .AddColumn();
-        grid.AddRow(
-            "[bold]In[/]", $"{UsageTracker.PromptTokens:N0}",
-            "[bold]Out[/]", $"{UsageTracker.CompletionTokens:N0}");
-        grid.AddRow(
-            "[bold]Total[/]", $"{UsageTracker.TotalTokens:N0}",
-            "[bold]Requests[/]", $"{UsageTracker.Requests:N0}");
-        grid.AddRow(
-            "[bold]Cost[/]", UsageTracker.CostDisplay,
-            "[bold]Uptime[/]", UsageTracker.Uptime.ToString(@"hh\:mm\:ss"));
+        if (usage is not null)
+        {
+            grid.AddRow(
+                "[bold]In[/]", $"{UsageTracker.PromptTokens:N0}",
+                "[bold]Out[/]", $"{UsageTracker.CompletionTokens:N0}");
+            grid.AddRow(
+                "[bold]Total[/]", $"{UsageTracker.TotalTokens:N0}",
+                "[bold]Requests[/]", $"{UsageTracker.Requests:N0}");
+            grid.AddRow(
+                "[bold]Cost[/]", UsageTracker.CostDisplay,
+                "[bold]Uptime[/]", UsageTracker.Uptime.ToString(@"hh\:mm\:ss"));
+        }
+        // P15.6: workflow hot-reload health shown in the dashboard footer.
+        // "Edit .livingtree/workflows/*.yaml — reload is automatic."
+        if (workflows.Count > 0)
+        {
+            var summary = string.Join("  [grey]·[/]  ", workflows.Select(w =>
+                $"[cyan]{Markup.Escape(w.Name)}[/] [grey]v{w.Version} {w.Type}[/]"));
+            grid.AddRow("[bold]WF[/]", summary.EscapeMarkup(), "", "");
+        }
         return new Panel(grid)
         {
             Border = BoxBorder.Rounded,
