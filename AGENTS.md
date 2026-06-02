@@ -738,7 +738,7 @@ Connect SessionManager → ChatView and add SessionStatsPanel to MainWindow side
 | **P14.10** | API 失败 N 次 → 自动 fallback ONNX 加载（P13.5） | 鲁棒 | 🟢 P2 | 2-3d | P12 ✅ |
 | **P14.11** | Multi-embedding 融合（MiniLM + BGE 并行推理，concat / 加权；跨语言效果↑） | 质量 | 🔵 P3 | 2-3w | P14.9 |
 | **P14.12** | ONNX 缓存预热 background service（首次启动时后台下载所有可能用到的模型） | UX | 🔵 P3 | 2-3d | 无 |
-| **P14.13** | `TaskQueueTool` 暴露给 5 agents（BGJS/TaskQueue 二选一并暴露工具；修复死代码） | Long-running 完善 | 🔴 P0 | 1d | P5.4 ✅ |
+| **P14.13** ✅ | `TaskQueueTool` 暴露给 5 agents（BGJS/TaskQueue 二选一并暴露工具；修复死代码） | Long-running 完善 | 🔴 P0 | 1d | P5.4 ✅ |
 | **P14.14** | TUI `/jobs` + Desktop sidebar 实时展示（订阅 `BackgroundJobService.TaskCompleted`） | Long-running 完善 | 🔴 P0 | 2-3d | P14.13 |
 | **P14.15** | LTAI.Web `GET /api/jobs` 端点（list / get / cancel） | Long-running 完善 | 🔴 P0 | 0.5d | P14.13 |
 
@@ -827,10 +827,20 @@ Connect SessionManager → ChatView and add SessionStatsPanel to MainWindow side
 - 解决 #4（三端展示 + API 端点）
 - 暂不解决 #2 #3（推 P15+）
 
-#### P14.13 TaskQueueTool 暴露给 5 agents（1d）
+#### P14.13 TaskQueueTool 暴露给 5 agents（1d）✅ 完成 (commit `76e00f3`)
 - **方案 A（推荐）**：把 TaskQueue 包装成 `TaskQueueTool`（5 个方法：Enqueue/List/Wait/Get/Cancel），加到 5 agents 工具链
 - **方案 B（更彻底）**：BGJS 内部改用 TaskQueue 共享并发/重试逻辑；外部仍暴露 BGJS 工具
 - **评估**：先方案 A 验证 TaskQueue 可用，再考虑方案 B 合并
+- **✅ 落地** (`src/LTAI.Agent/Tools/TaskQueueTool.cs`, 198 行):
+  - 5 AITool: EnqueueTask / ListTasks / GetTask / WaitForTask / CancelTask
+  - 默认 handlers: `echo` (返回 payload verbatim) + `sleep` (1-30s)
+  - `RegisterHandler(name, func)` 公开扩展点 (future: agent_delegate / bg_index / etc.)
+  - `ResolveId` 8 字符 prefix-match 抗复制粘贴截断
+  - `LTAI.Agent.Tasks.TaskStatus` 显式 fully-qualified (避免与 `System.Threading.Tasks.TaskStatus` 冲突)
+- **DI 集成** (`ServiceCollectionExtensions.cs`):
+  - Step 3a: TaskQueueTool singleton (TaskQueue + ILoggerFactory)
+  - BuildAgentImpl: 5 agents (LTAI-Chat/Pro/System/Code/Writer) 暴露 5 方法
+- **收益**: TaskQueue 死代码 → 5 agents 可调用的工具；与 BGJS 互补 (BGJS=shell/exec, TaskQueue=注册式异步)
 
 #### P14.14 TUI `/jobs` + Desktop sidebar 实时展示（2-3d）
 - TUI：`/jobs` 子命令（list / watch / cancel）
@@ -850,14 +860,14 @@ P0 (5 个) ──→ P1 (4 个) ──→ P2 (3 个) ──→ P3 (2 个)
 P14.2 ✅      P14.4         P14.8         P14.11
 P14.3         P14.5         P14.9         P14.12
 P14.1 ✅      P14.6         P14.10
-P14.13        P14.7
+P14.13 ✅     P14.7
 P14.14
 P14.15
 ```
 
 | 阶段 | 总工时 | 关键产出 |
 |---|---|---|
-| **P0** (1/5 done) | ~4 天 | 可观测性 + 量化补完 + UX 增强（最高 ROI） |
+| **P0** (3/5 done) | ~4 天 | 可观测性 + 量化补完 + UX 增强（最高 ROI） |
 | **P1** | ~4 天 | 缓存完善 + 性能数字（量化投资回报可视化） |
 | **P2** | ~3 周 | 高级 UX + 鲁棒性（生产就绪） |
 | **P3** | ~1 个月 | R&D 类（实验性，可推迟） |
