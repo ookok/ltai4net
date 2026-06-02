@@ -188,6 +188,61 @@ try
         }
     });
 
+    // ── P14.15: Background job REST surface ──
+    // Backed by the same BackgroundJobService that the agent tools call.
+    // Use cases: TUI/Desktop jobs panel (P14.14) polls these, CI/cron
+    // scripts can read job status, and external tools can cancel misbehaving
+    // jobs. Snapshot semantics: jobs auto-evict 60s after completion
+    // (BackgroundJobService.StartJob line 50), so callers should treat 404
+    // as "completed and gone" rather than an error.
+    app.MapGet("/ltai/v1/jobs", (LTAI.Agent.Tools.BackgroundJobService jobs) =>
+    {
+        var list = jobs.SnapshotJobs()
+            .OrderBy(kv => int.TryParse(kv.Key, out var n) ? n : 0)
+            .Select(kv =>
+            {
+                var j = kv.Value;
+                return new
+                {
+                    id = kv.Key,
+                    status = j.Completed ? (j.ExitCode == 0 ? "completed" :
+                                            j.Error == "Cancelled" ? "cancelled" :
+                                            "failed") : "running",
+                    exitCode = j.ExitCode,
+                    command = j.Command,
+                    startedAtUtc = j.StartedAtUtc,
+                    completed = j.Completed,
+                    stdoutBytes = j.Output?.Length ?? 0,
+                    stderrBytes = j.Error?.Length ?? 0,
+                };
+            });
+        return Results.Ok(new { count = list.Count(), jobs = list });
+    });
+    app.MapGet("/ltai/v1/jobs/{id}", (LTAI.Agent.Tools.BackgroundJobService jobs, string id) =>
+    {
+        var j = jobs.GetJobEntry(id);
+        if (j is null) return Results.NotFound(new { error = $"Job '{id}' not found (or already evicted)" });
+        return Results.Ok(new
+        {
+            id,
+            command = j.Command,
+            startedAtUtc = j.StartedAtUtc,
+            completed = j.Completed,
+            exitCode = j.ExitCode,
+            stdout = j.Output ?? "",
+            stderr = j.Error ?? "",
+        });
+    });
+    app.MapPost("/ltai/v1/jobs/{id}/cancel", (LTAI.Agent.Tools.BackgroundJobService jobs, string id) =>
+    {
+        var j = jobs.GetJobEntry(id);
+        if (j is null) return Results.NotFound(new { error = $"Job '{id}' not found (or already evicted)" });
+        if (j.Completed) return Results.Conflict(new { error = $"Job '{id}' already completed" });
+        j.Completed = true;
+        j.Error = "Cancelled";
+        return Results.Ok(new { id, cancelled = true, cancelledAtUtc = DateTime.UtcNow });
+    });
+
     // ── P7.1: Map DevUI endpoint (Development-only) ──
     if (app.Environment.IsDevelopment())
     {

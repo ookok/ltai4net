@@ -17,7 +17,7 @@ public sealed class BackgroundJobService
         [Description("Shell 命令")] string command)
     {
         var id = Interlocked.Increment(ref _nextJobId).ToString();
-        var entry = new JobEntry();
+        var entry = new JobEntry { Command = command, StartedAtUtc = DateTime.UtcNow };
         _jobs[id] = entry;
 
         _ = Task.Run(async () =>
@@ -131,6 +131,17 @@ public sealed class BackgroundJobService
                 _jobs.TryRemove(kv.Key, out _);
         }
     }
+
+    /// <summary>
+    /// P14.15: Web API surface. Snapshot of every live job keyed by ID, in
+    /// stable order. Caller is expected to serialize — fields are all
+    /// JSON-friendly primitives.
+    /// </summary>
+    public IReadOnlyDictionary<string, JobEntry> SnapshotJobs() => _jobs;
+
+    /// <summary>P14.15: lookup a single job by ID. Returns null if missing.</summary>
+    public JobEntry? GetJobEntry(string jobId) =>
+        _jobs.TryGetValue(jobId, out var entry) ? entry : null;
 }
 
 public sealed class JobEntry
@@ -139,4 +150,6 @@ public sealed class JobEntry
     public int? ExitCode;
     public string? Output;
     public string? Error;
+    public DateTime StartedAtUtc = DateTime.UtcNow;
+    public string? Command;
 }
