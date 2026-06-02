@@ -19,7 +19,8 @@ public static class DevUIDashboardView
         LTAIDevUIService devUi,
         DevUISpanCollector spans,
         UsageTracker? usage,
-        YAMLWorkflowRegistry? workflows = null)
+        YAMLWorkflowRegistry? workflows = null,
+        LocalEmbedder? embedder = null)
     {
         var cards = devUi.ListAgentCards();
         var recent = spans.Snapshot().TakeLast(15).Reverse().ToList();
@@ -27,31 +28,79 @@ public static class DevUIDashboardView
 
         var layout = new Layout("root")
             .SplitRows(
-                new Layout("header").Size(3),
+                new Layout("header").Size(5),
                 new Layout("body").SplitColumns(
                     new Layout("agents").Ratio(2),
                     new Layout("spans").Ratio(3)),
                 new Layout("footer").Size(5));
 
-        layout["header"].Update(
-            new Panel(
-                new Markup(
-                    $"[bold]LTAI DevUI Dashboard[/]  [grey]·[/]  " +
-                    $"[aqua]{cards.Count}[/] agents  [grey]·[/]  " +
-                    $"[aqua]{spans.Count}[/] spans  [grey]·[/]  " +
-                    $"[aqua]{recent.Count(s => s.IsLive)}[/] live  [grey]·[/]  " +
-                    $"[aqua]{workflowList.Count}[/] workflows"))
-            {
-                Border = BoxBorder.Heavy,
-                Header = new PanelHeader("[green] P9 Live Inspector [/]"),
-                Expand = true,
-            });
+        layout["header"].Update(BuildHeaderPanel(cards.Count, spans.Count, recent, workflowList, embedder));
 
         layout["agents"].Update(BuildAgentTable(cards));
         layout["spans"].Update(BuildSpanTable(recent));
         layout["footer"].Update(BuildUsagePanel(usage, workflowList));
 
         AnsiConsole.Write(layout);
+    }
+
+    private static Panel BuildHeaderPanel(
+        int agentCount,
+        int spanCount,
+        IReadOnlyList<DevUISpan> recent,
+        IReadOnlyList<WorkflowInfo> workflows,
+        LocalEmbedder? embedder)
+    {
+        var topLine =
+            $"[bold]LTAI DevUI Dashboard[/]  [grey]·[/]  " +
+            $"[aqua]{agentCount}[/] agents  [grey]·[/]  " +
+            $"[aqua]{spanCount}[/] spans  [grey]·[/]  " +
+            $"[aqua]{recent.Count(s => s.IsLive)}[/] live  [grey]·[/]  " +
+            $"[aqua]{workflows.Count}[/] workflows";
+        var embedLine = BuildEmbedStatusLine(embedder);
+        return new Panel(new Markup($"{topLine}\n{embedLine}"))
+        {
+            Border = BoxBorder.Heavy,
+            Header = new PanelHeader("[green] P9 Live Inspector [/]"),
+            Expand = true,
+        };
+    }
+
+    /// <summary>
+    /// P14.2: surface <see cref="LocalEmbedder.ActiveExecutionProvider"/> and
+    /// <see cref="LocalEmbedder.UsingQuantizedModel"/> in the dashboard so users
+    /// can verify GPU/CPU + INT8/FP32 from a glance. Color rules:
+    /// EP = DML/CUDA = green (GPU), CPU = grey; Quant = INT8 = green, FP32 = yellow.
+    /// </summary>
+    private static string BuildEmbedStatusLine(LocalEmbedder? embedder)
+    {
+        if (embedder is null)
+            return "[grey][[/][bold]Embed[/][grey]][/]  [dim](not registered — remote API only)[/]";
+
+        var ep = embedder.ActiveExecutionProvider;
+        var quant = embedder.UsingQuantizedModel;
+        var models = LocalEmbedder.ListAvailableModels();
+        var currentModel = models.FirstOrDefault(m =>
+            m.Downloaded && m.Id == embedder.CurrentModelName)
+            ?? models.FirstOrDefault(m => m.Downloaded);
+
+        var epStr = ep is null
+            ? "[grey](not loaded yet)[/]"
+            : (ep.Equals("CPU", StringComparison.OrdinalIgnoreCase)
+                ? $"[grey]{Markup.Escape(ep)}[/]"
+                : $"[green]{Markup.Escape(ep)}[/]");
+        var quantStr = quant
+            ? "[green]INT8[/]"
+            : "[yellow]FP32[/]";
+        var modelStr = currentModel is null
+            ? "[red](no model on disk)[/]"
+            : $"[cyan]{Markup.Escape(currentModel.Id)}[/] [grey]{currentModel.Dimension}d[/]";
+
+        var disabled = LocalEmbedder.DefaultDisabled
+            ? "  [yellow](disabled — remote API)[/]"
+            : "";
+
+        return $"[grey][[/][bold]Embed[/][grey]][/]  model={modelStr}  [grey]·[/]  " +
+               $"EP={epStr}  [grey]·[/]  quant={quantStr}{disabled}";
     }
 
     private static Panel BuildAgentTable(IReadOnlyList<LTAIAgentCard> cards)
