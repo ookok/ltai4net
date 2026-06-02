@@ -740,7 +740,7 @@ Connect SessionManager → ChatView and add SessionStatsPanel to MainWindow side
 | **P14.12** | ONNX 缓存预热 background service（首次启动时后台下载所有可能用到的模型） | UX | 🔵 P3 | 2-3d | 无 |
 | **P14.13** ✅ | `TaskQueueTool` 暴露给 5 agents（BGJS/TaskQueue 二选一并暴露工具；修复死代码） | Long-running 完善 | 🔴 P0 | 1d | P5.4 ✅ |
 | **P14.14** | TUI `/jobs` + Desktop sidebar 实时展示（订阅 `BackgroundJobService.TaskCompleted`） | Long-running 完善 | 🔴 P0 | 2-3d | P14.13 |
-| **P14.15** | LTAI.Web `GET /api/jobs` 端点（list / get / cancel） | Long-running 完善 | 🔴 P0 | 0.5d | P14.13 |
+| **P14.15** ✅ | LTAI.Web `GET /api/jobs` 端点（list / get / cancel） | Long-running 完善 | 🔴 P0 | 0.5d | P14.13 ✅ |
 
 ## 主题分组
 
@@ -851,11 +851,19 @@ Connect SessionManager → ChatView and add SessionStatsPanel to MainWindow side
 - Desktop：sidebar 加 JobsPanel（订阅 `BackgroundJobService.JobCompleted` event）
 - 刷新策略：1s 轮询（事件触发即时刷新）
 
-#### P14.15 LTAI.Web `GET /api/jobs` 端点（0.5d）
+#### P14.15 LTAI.Web `GET /api/jobs` 端点（0.5d）✅ 完成 (commit `5a80d2e`)
 - `GET /api/jobs` → list all
 - `GET /api/jobs/{id}` → get detail
 - `POST /api/jobs/{id}/cancel` → cancel
 - 用 `BackgroundJobService` 单例（不直接走 TaskQueue，避免重复状态）
+- **✅ 落地**: 3 个端点放 `/ltai/v1/jobs` (避开 `/api/` 命名冲突)
+  - `GET /ltai/v1/jobs` → `{ count, jobs: [{id, status, exitCode, command, startedAtUtc, completed, stdoutBytes, stderrBytes}] }`
+  - `GET /ltai/v1/jobs/{id}` → 完整 detail
+  - `POST /ltai/v1/jobs/{id}/cancel` → 200/404/409
+  - status 推导: `completed` (ExitCode==0) / `cancelled` (Error=="Cancelled") / `failed` / `running`
+- **副作用**: `JobEntry` 新增 `Command` + `StartedAtUtc` 字段；`SnapshotJobs()` + `GetJobEntry(id)` 新 API
+- **语义**: BGJS 60s 自动驱逐 → 客户端把 404 当作 "completed and gone"
+- **关联**: P14.14 (TUI `/jobs` + Desktop sidebar) 准备数据源
 
 ## 推荐执行顺序
 
@@ -866,12 +874,12 @@ P14.3         P14.5         P14.9         P14.12
 P14.1 ✅      P14.6         P14.10
 P14.13 ✅     P14.7
 P14.14
-P14.15
+P14.15 ✅
 ```
 
 | 阶段 | 总工时 | 关键产出 |
 |---|---|---|
-| **P0** (4/5 done) | ~4 天 | 可观测性 + 量化补完 + UX 增强（最高 ROI） |
+| **P0** (5/5 done) | ~4 天 | 可观测性 + 量化补完 + UX 增强（最高 ROI） |
 | **P1** | ~4 天 | 缓存完善 + 性能数字（量化投资回报可视化） |
 | **P2** | ~3 周 | 高级 UX + 鲁棒性（生产就绪） |
 | **P3** | ~1 个月 | R&D 类（实验性，可推迟） |
