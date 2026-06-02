@@ -642,6 +642,99 @@ Connect SessionManager → ChatView and add SessionStatsPanel to MainWindow side
 - **P14.3**：Multi-embedding 融合（同时使用 MiniLM + BGE，concat 平均 / 加权）提升跨语言效果
 - **P14.4**：ONNX 缓存预热 background service（首次启动时后台下载所有可能用到的模型）
 
+# 2026-06-02 P14 任务重整（5 主题 / 10 项）
+
+## Goal
+- P11+P12+P13 系列完成后，**P14+ 列表已 4 项太散**（无主题 / 优先级 / 依赖关系）
+- 重新组织成 **5 主题 / 10 项**，按 P0-P3 优先级排序，明确依赖链
+
+## P14 任务表
+
+| # | 任务 | 主题 | 优先级 | 预计 | 依赖 |
+|---|---|---|---|---|---|
+| **P14.1** | BGE INT8 量化（Python `onnxruntime.quantize_static` + 校准数据 → ship 到 `hf-mirror.com`） | 量化补完 | 🔴 P0 | 2-3d | 无 |
+| **P14.2** | P9.1 DevUI 显示 active EP + quant 状态（P13.2 telemetry 已埋点，未 surface） | 可观测性 | 🔴 P0 | 0.5d | P13.2 ✅ |
+| **P14.3** | TUI `/model` 菜单扩展（`cleanup`/`info`/`quant` 三子命令） | UX | 🔴 P0 | 1d | P13.6 ✅ |
+| **P14.4** | INT8 vs FP32 性能 benchmark（P11.2 BDN 框架 + GPU vs CPU 对照） | 可观测性 | 🟡 P1 | 1d | 无 |
+| **P14.5** | DecisionTreeRouter 远程 API 结果 cache 到 `ToolEmbeddingCache`（P13.3） | 缓存 | 🟡 P1 | 2-3d | P12 ✅ |
+| **P14.6** | `ToolEmbeddingCache.CachedEntryCount` 暴露到 DevUI dashboard（P13.4） | 可观测性 | 🟡 P1 | 0.5d | P14.5 |
+| **P14.7** | 热模型切换（不重启进程换 MiniLM ↔ BGE，session 持久化） | UX | 🟢 P2 | 1w | 无 |
+| **P14.8** | Per-model 量化配置（MiniLM=int8, BGE=fp32, BGE-large=fp32 混搭） | 灵活 | 🟢 P2 | 3-5d | P13 ✅ |
+| **P14.9** | API 失败 N 次 → 自动 fallback ONNX 加载（P13.5） | 鲁棒 | 🟢 P2 | 2-3d | P12 ✅ |
+| **P14.10** | Multi-embedding 融合（MiniLM + BGE 并行推理，concat / 加权；跨语言效果↑） | 质量 | 🔵 P3 | 2-3w | P14.8 |
+| **P14.11** | ONNX 缓存预热 background service（首次启动时后台下载所有可能用到的模型） | UX | 🔵 P3 | 2-3d | 无 |
+
+## 主题分组
+
+### 主题 1：量化补完（P14.1）
+- **目标**：BGE-zh/en 也支持 INT8，消除 P13.6 "95MB FP32" 死角
+- **方法**：Python `onnxruntime.quantize_static()` + 1000 条中英文校准数据 → ship 到 `hf-mirror.com/BAAI/.../model.int8.onnx`
+- **收益**：BGE 95MB × 2 = -140MB 磁盘 + 2-3× 推理加速
+
+### 主题 2：可观测性（P14.2 + P14.4 + P14.6）
+- **P14.2**：DevUI dashboard 新增列 `ActiveEP` (DML/CUDA/CPU) + `Quant` (FP32/INT8) — `LocalEmbedder.ActiveExecutionProvider` + `UsingQuantizedModel` 已埋点
+- **P14.4**：BDN 跑 INT8 vs FP32 latency/throughput（cache miss 差异 1-3ms vs 5-10ms；GPU EP 对照）
+- **P14.6**：`ToolEmbeddingCache.CachedEntryCount` 暴露到 dashboard，"cache hit" 颜色（绿=全命中 / 黄=部分命中 / 红=全 miss）
+
+### 主题 3：UX 改进（P14.3 + P14.7 + P14.11）
+- **P14.3**：TUI `/model` 菜单三子命令
+  - `/model cleanup [name]` → `CleanupStaleVariant`
+  - `/model info` → 列所有 model 的 EP/quant/size/loaded
+  - `/model quant fp32|int8|auto` → 切换全局 quant
+- **P14.7**：运行时换模型（`_currentModelName` swap + `_session` dispose + reload；session 持久化推迟到 P15+）
+- **P14.11**：`IHostedService.PreWarmEmbeddingModels` 后台下载所有 3 个模型
+
+### 主题 4：缓存与降级（P14.5 + P14.9）
+- **P14.5**：`DecisionTreeRouter.SelectTopKWithScoresAsync` 也走 `ToolEmbeddingCache`；远程 API embedding 计算后 cache（key = `embed:remote:DeepSeek:<SHA-256(text)>`）
+- **P14.9**：`EmbeddingClient` 维护失败计数器（window=10 calls），≥3 次连续失败 → 触发 `LocalEmbedder.PreWarmAsync()` 强制加载 ONNX 兜底
+
+### 主题 5：灵活与质量（P14.8 + P14.10）
+- **P14.8**：config schema 改 `Dictionary<string, string>` per-model
+  ```json
+  "Embedding": {
+    "Models": {
+      "minilm-l6-v2": "int8",
+      "bge-small-zh": "fp32"
+    }
+  }
+  ```
+  优先级：per-model > 全局
+- **P14.10**：双模型融合
+  - 路由时 MiniLM + BGE 各自 top-K → RRF 融合（参考 P7.7 决策树）
+  - 推理时 MiniLM 跑 1 次 + BGE 跑 1 次 → concat 768d / weighted 384d+384d
+  - 跨语言场景质量↑（中文走 BGE-zh，英文走 MiniLM）
+
+## 推荐执行顺序
+
+```
+P0 (3 个) ──→ P1 (3 个) ──→ P2 (3 个) ──→ P3 (2 个)
+P14.2         P14.4         P14.7         P14.10
+P14.3         P14.5         P14.8         P14.11
+P14.1         P14.6         P14.9
+```
+
+| 阶段 | 总工时 | 关键产出 |
+|---|---|---|
+| **P0** | ~4 天 | 可观测性 + 量化补完 + UX 增强（最高 ROI） |
+| **P1** | ~4 天 | 缓存完善 + 性能数字（量化投资回报可视化） |
+| **P2** | ~3 周 | 高级 UX + 鲁棒性（生产就绪） |
+| **P3** | ~1 个月 | R&D 类（实验性，可推迟） |
+
+## Key Decisions (P14 排期)
+- **D51 P14.1 优先级 P0**：BGE 量化是 P13.6 单文件原则的延伸，消除 FP32 死角
+- **D52 P14.2 + P14.6 用 P9 DevUI**：不要新建 dashboard，复用 P9 框架（5 行 vs 200 行）
+- **D53 P14.3 TUI 优先于 CLI**：用户主交互在 TUI；`ltai mcp-server` 等 CLI 命令维持现状
+- **D54 P14.5 cache 远程 API 是双刃**：省 API 费但增加 stale risk（remote provider 升级时）；用 24h TTL 兜底
+- **D55 P14.7 热切换复杂**：session 中嵌入向量维度不变则可热切；变了必须新 session；推迟边界 case 到 P15+
+- **D56 P14.10 Multi-embedding 资源 2x**：内存 +200MB，推理 +100% 时间，**仅 P3**（实验性）
+- **D57 P14 顺序：P0 → P1 → P2 → P3**：每阶段独立可演示；不跨阶段阻塞
+
+## Verification (每阶段)
+- P0 完成后：DevUI 能看到 EP/quant；TUI `/model info` 完整；MiniLM 仍 23MB，BGE 还需 2-3d 生成
+- P1 完成后：BDN 报告 INT8 < FP32 < FP32+GPU latency；远程 cache 命中率 > 80%
+- P2 完成后：运行时换模型不丢消息；API 失败自动 ONNX fallback；per-model quant 生效
+- P3 完成后：双模型融合 vs 单模型在 LTAI 真实工作负载（代码搜索 + 决策树路由）准确率对照
+
 # 2026-06-02 P13.6 单文件原则（避免模型碎片化）
 
 ## Goal
