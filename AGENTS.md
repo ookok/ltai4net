@@ -739,7 +739,7 @@ Connect SessionManager → ChatView and add SessionStatsPanel to MainWindow side
 | **P14.11** | Multi-embedding 融合（MiniLM + BGE 并行推理，concat / 加权；跨语言效果↑） | 质量 | 🔵 P3 | 2-3w | P14.9 |
 | **P14.12** | ONNX 缓存预热 background service（首次启动时后台下载所有可能用到的模型） | UX | 🔵 P3 | 2-3d | 无 |
 | **P14.13** ✅ | `TaskQueueTool` 暴露给 5 agents（BGJS/TaskQueue 二选一并暴露工具；修复死代码） | Long-running 完善 | 🔴 P0 | 1d | P5.4 ✅ |
-| **P14.14** | TUI `/jobs` + Desktop sidebar 实时展示（订阅 `BackgroundJobService.TaskCompleted`） | Long-running 完善 | 🔴 P0 | 2-3d | P14.13 |
+| **P14.14** ✅ | TUI `/jobs` + Desktop JobsView 实时展示（订阅 `BackgroundJobService.JobCompleted`） | Long-running 完善 | 🔴 P0 | 1d | P14.13 ✅ |
 | **P14.15** ✅ | LTAI.Web `GET /api/jobs` 端点（list / get / cancel） | Long-running 完善 | 🔴 P0 | 0.5d | P14.13 ✅ |
 
 ## 主题分组
@@ -846,10 +846,25 @@ Connect SessionManager → ChatView and add SessionStatsPanel to MainWindow side
   - BuildAgentImpl: 5 agents (LTAI-Chat/Pro/System/Code/Writer) 暴露 5 方法
 - **收益**: TaskQueue 死代码 → 5 agents 可调用的工具；与 BGJS 互补 (BGJS=shell/exec, TaskQueue=注册式异步)
 
-#### P14.14 TUI `/jobs` + Desktop sidebar 实时展示（2-3d）
-- TUI：`/jobs` 子命令（list / watch / cancel）
-- Desktop：sidebar 加 JobsPanel（订阅 `BackgroundJobService.JobCompleted` event）
-- 刷新策略：1s 轮询（事件触发即时刷新）
+#### P14.14 TUI `/jobs` + Desktop JobsView 实时展示（1d）✅ 完成 (commit `0ad1a3c`)
+- **TUI**:
+  - `/jobs list|watch <id>|cancel <id>|show <id>` — 信息组子命令族
+  - `JobsList`: Spectre.Console table 7 列 (ID/状态/Exit/已运行/命令)
+  - `JobsWatch`: 0.5s 轮询 + 2min timeout, 状态变化才打印 (去噪)
+  - `JobsCancel`: 标 `Completed=true + Error="Cancelled"` (无进程 kill — 同 Web cancel 语义)
+  - `JobsShow`: 完整 detail + stdout/stderr 前 500 字符预览
+  - `SlashCommands.Jobs` 静态属性 + TUI Program.cs 注入
+- **Desktop**:
+  - 新建 `src/LTAI.Desktop/JobsView.cs` (~280 行)
+  - MainWindow 7th view (Ctrl+7) + 图标 `🛠` (与 Config `⚙️` 区分)
+  - Header row (Grid 7 列) + 2s DispatcherTimer 刷新 elapsed
+  - 订阅 `BackgroundJobService.JobCompleted` 事件 → UI thread post 即时刷新
+  - 每行 [Cancel] 按钮 (completed 时 disabled)
+  - 解析 BGJS via `App.Services` in `AttachedToVisualTree`
+  - `DetachedFromVisualTree` unsubscribe
+- **D60 复用 P14.15 status logic**: 4 个 status 同 (completed.ExitCode==0 → 'completed', Error=="Cancelled" → 'cancelled', Completed && ExitCode!=0 → 'failed', else 'running')
+- **D61 60s BGJS 自动驱逐**: Desktop 端不主动调用 CleanupOldJobs, 依赖 BGJS 内置 60s 驱逐; JobsView 每 2s 重建 rows
+- **构建**: TUI 0/14 (pre-existing), Desktop 0/24 (pre-existing), Web 0/0, Agent 0/0
 
 #### P14.15 LTAI.Web `GET /api/jobs` 端点（0.5d）✅ 完成 (commit `5a80d2e`)
 - `GET /api/jobs` → list all
