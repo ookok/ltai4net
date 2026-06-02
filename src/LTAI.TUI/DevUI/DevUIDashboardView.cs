@@ -21,7 +21,8 @@ public static class DevUIDashboardView
         UsageTracker? usage,
         YAMLWorkflowRegistry? workflows = null,
         LocalEmbedder? embedder = null,
-        ToolEmbeddingCache? cache = null)
+        ToolEmbeddingCache? cache = null,
+        RemoteEmbeddingCache? remoteCache = null)
     {
         var cards = devUi.ListAgentCards();
         var recent = spans.Snapshot().TakeLast(15).Reverse().ToList();
@@ -29,13 +30,13 @@ public static class DevUIDashboardView
 
         var layout = new Layout("root")
             .SplitRows(
-                new Layout("header").Size(6),
+                new Layout("header").Size(7),
                 new Layout("body").SplitColumns(
                     new Layout("agents").Ratio(2),
                     new Layout("spans").Ratio(3)),
                 new Layout("footer").Size(5));
 
-        layout["header"].Update(BuildHeaderPanel(cards.Count, spans.Count, recent, workflowList, embedder, cache));
+        layout["header"].Update(BuildHeaderPanel(cards.Count, spans.Count, recent, workflowList, embedder, cache, remoteCache));
 
         layout["agents"].Update(BuildAgentTable(cards));
         layout["spans"].Update(BuildSpanTable(recent));
@@ -50,7 +51,8 @@ public static class DevUIDashboardView
         IReadOnlyList<DevUISpan> recent,
         IReadOnlyList<WorkflowInfo> workflows,
         LocalEmbedder? embedder,
-        ToolEmbeddingCache? cache)
+        ToolEmbeddingCache? cache,
+        RemoteEmbeddingCache? remoteCache)
     {
         var topLine =
             $"[bold]LTAI DevUI Dashboard[/]  [grey]·[/]  " +
@@ -60,7 +62,8 @@ public static class DevUIDashboardView
             $"[aqua]{workflows.Count}[/] workflows";
         var embedLine = BuildEmbedStatusLine(embedder);
         var cacheLine = BuildCacheStatusLine(cache);
-        return new Panel(new Markup($"{topLine}\n{embedLine}\n{cacheLine}"))
+        var remoteLine = BuildRemoteCacheStatusLine(remoteCache);
+        return new Panel(new Markup($"{topLine}\n{embedLine}\n{cacheLine}\n{remoteLine}"))
         {
             Border = BoxBorder.Heavy,
             Header = new PanelHeader("[green] P9 Live Inspector [/]"),
@@ -91,6 +94,32 @@ public static class DevUIDashboardView
                $"[green]{hits}[/] hits  [grey]·[/]  " +
                $"[yellow]{misses}[/] misses  [grey]·[/]  " +
                $"hit rate [{rateColor}]{ratePct}%[/]";
+    }
+
+    /// <summary>
+    /// P14.5: surface <see cref="RemoteEmbeddingCache"/> stats for the
+    /// remote API embedding path. Distinct from the persistent
+    /// <see cref="ToolEmbeddingCache"/> — this cache holds transient
+    /// per-request task text embeddings with a 24h TTL.
+    /// </summary>
+    private static string BuildRemoteCacheStatusLine(RemoteEmbeddingCache? remoteCache)
+    {
+        if (remoteCache is null)
+            return "[grey][[/][bold]RemoteCache[/][grey]][/]  [dim](not registered)[/]";
+
+        var entries = remoteCache.CachedEntryCount;
+        var hits = remoteCache.CacheHits;
+        var misses = remoteCache.CacheMisses;
+        var evictions = remoteCache.Evictions;
+        var rate = remoteCache.HitRate;
+        var ratePct = (rate * 100).ToString("F0");
+        var rateColor = rate >= 0.80 ? "green" : rate >= 0.50 ? "yellow" : "red";
+        return $"[grey][[/][bold]RemoteCache[/][grey]][/]  " +
+               $"[aqua]{entries}[/] entries  [grey]·[/]  " +
+               $"[green]{hits}[/] hits  [grey]·[/]  " +
+               $"[yellow]{misses}[/] misses  [grey]·[/]  " +
+               $"hit rate [{rateColor}]{ratePct}%[/]  [grey]·[/]  " +
+               $"[grey]{evictions}[/] evicted";
     }
 
     /// <summary>

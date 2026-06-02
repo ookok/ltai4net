@@ -28,13 +28,19 @@ public sealed class EmbeddingClient : IDisposable
     private readonly ILogger<EmbeddingClient> _logger;
     private readonly (string name, string endpoint, string model, int dim, string apiKey)[] _availableProviders;
     private readonly LocalEmbedder? _local;
+    private readonly RemoteEmbeddingCache? _remoteCache;
 
     public int Dimension { get; private set; } = 384;
 
-    public EmbeddingClient(IHttpClientFactory httpFactory, LocalEmbedder? local = null, ILogger<EmbeddingClient>? logger = null)
+    public EmbeddingClient(
+        IHttpClientFactory httpFactory,
+        LocalEmbedder? local = null,
+        ILogger<EmbeddingClient>? logger = null,
+        RemoteEmbeddingCache? remoteCache = null)
     {
         _httpFactory = httpFactory;
         _logger = logger ?? NullLogger<EmbeddingClient>.Instance;
+        _remoteCache = remoteCache;
 
         _availableProviders = DefaultProviders
             .Select(p => (p.name, p.endpoint, p.model, p.dim, apiKey: LTAI.Core.Configuration.SecretManager.Get(p.envVar) ?? ""))
@@ -47,8 +53,8 @@ public sealed class EmbeddingClient : IDisposable
         else if (_availableProviders.Length > 0)
             Dimension = _availableProviders[0].dim;
 
-        _logger.LogInformation("EmbeddingClient: {Count} API providers, local BGE={Local}, dim={Dim}",
-            _availableProviders.Length, _local?.Available == true, Dimension);
+        _logger.LogInformation("EmbeddingClient: {Count} API providers, local BGE={Local}, dim={Dim}, remoteCache={Cache}",
+            _availableProviders.Length, _local?.Available == true, Dimension, _remoteCache != null ? "on" : "off");
     }
 
     /// <summary>Generate embedding for a single text.</summary>
@@ -61,6 +67,8 @@ public sealed class EmbeddingClient : IDisposable
     /// <summary>Generate embeddings for multiple texts (batched).</summary>
     public async Task<float[][]> GenerateBatchAsync(string[] texts, CancellationToken ct = default)
     {
+        if (texts.Length == 0) return Array.Empty<float[]>();
+
         // Priority 1: Local ONNX (fast, local, zero API dependency)
         // P11.1a: single batched session.Run instead of N parallel calls. 5-10x
         // throughput for batches > 4; ~1.5x for batches of 2-3 due to tensor
@@ -75,17 +83,65 @@ public sealed class EmbeddingClient : IDisposable
         }
 
         // Priority 2: Remote API providers (needs valid API key)
+        // P14.5: per-provider cache lookup — same text across requests hits
+        // cache and skips the API call. Local ONNX path above does not cache
+        // (fast, deterministic, free).
+        if (_availableProviders.Length == 0)
+        {
+            // Priority 3 fallback: BM25 heuristic
+            _logger.LogWarning("No embedding models available, using BM25 fallback");
+            return texts.Select(FastEmb).ToArray();
+        }
+
+        var result = new float[texts.Length][];
+        var missing = new List<int>();
+
+        if (_remoteCache != null)
+        {
+            // P14.5: lookup all texts in cache first
+            for (int i = 0; i < texts.Length; i++)
+            {
+                if (_remoteCache.TryGet(_availableProviders[0].name, _availableProviders[0].model, texts[i], out var vec))
+                {
+                    result[i] = vec!;
+                }
+                else
+                {
+                    missing.Add(i);
+                }
+            }
+        }
+        else
+        {
+            for (int i = 0; i < texts.Length; i++) missing.Add(i);
+        }
+
+        if (missing.Count == 0)
+        {
+            _logger.LogDebug("Embedding: all {N} texts served from RemoteEmbeddingCache", texts.Length);
+            return result;
+        }
+
+        var missingTexts = new string[missing.Count];
+        for (int i = 0; i < missing.Count; i++) missingTexts[i] = texts[missing[i]];
+
         foreach (var (name, endpoint, model, dim, apiKey) in _availableProviders)
         {
             try
             {
-                var result = await CallEmbeddingApiAsync(endpoint, model, apiKey, texts, ct).ConfigureAwait(false);
-                if (result != null)
+                var apiResult = await CallEmbeddingApiAsync(endpoint, model, apiKey, missingTexts, ct).ConfigureAwait(false);
+                if (apiResult != null)
                 {
-                    Dimension = result.Dimension;
-                    _logger.LogDebug("Embedding via {Provider}: {Count} texts, dim={Dim}",
-                        name, texts.Length, result.Dimension);
-                    return result.Embeddings;
+                    Dimension = apiResult.Dimension;
+                    _logger.LogDebug("Embedding via {Provider}: {Total} texts ({Miss} from API, {Hit} from cache), dim={Dim}",
+                        name, texts.Length, missing.Count, texts.Length - missing.Count, apiResult.Dimension);
+                    for (int j = 0; j < missing.Count; j++)
+                    {
+                        var vec = apiResult.Embeddings[j];
+                        result[missing[j]] = vec;
+                        _remoteCache?.Store(name, model, missingTexts[j], vec);
+                    }
+                    return result;
                 }
             }
             catch (Exception ex)
@@ -94,9 +150,13 @@ public sealed class EmbeddingClient : IDisposable
             }
         }
 
-        // Priority 3: BM25 fallback (word-level sparse, zero deps)
-        _logger.LogWarning("No embedding models available, using BM25 fallback");
-        return texts.Select(FastEmb).ToArray();
+        // Priority 3 fallback: BM25 for all missing texts
+        _logger.LogWarning("No embedding API succeeded, using BM25 fallback for {N} missing texts", missing.Count);
+        for (int j = 0; j < missing.Count; j++)
+        {
+            result[missing[j]] = FastEmb(missingTexts[j]);
+        }
+        return result;
     }
 
     private async Task<EmbeddingResult?> CallEmbeddingApiAsync(

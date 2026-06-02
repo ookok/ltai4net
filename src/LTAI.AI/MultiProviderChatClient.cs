@@ -567,7 +567,17 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<EmbeddingClient>(sp =>
             new EmbeddingClient(sp.GetRequiredService<IHttpClientFactory>(),
                 sp.GetService<LocalEmbedder>(),
-                sp.GetService<ILogger<EmbeddingClient>>()));
+                sp.GetService<ILogger<EmbeddingClient>>(),
+                sp.GetService<RemoteEmbeddingCache>()));
+
+        // P14.5: in-memory TTL cache for remote embedding API results.
+        // Separate from ToolEmbeddingCache (which persists tool/agent
+        // descriptions). Default 24h TTL bounds stale risk when remote
+        // providers upgrade their models.
+        services.AddSingleton<RemoteEmbeddingCache>(sp =>
+            new RemoteEmbeddingCache(
+                ttl: TimeSpan.FromHours(24),
+                logger: sp.GetService<ILogger<RemoteEmbeddingCache>>() ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<RemoteEmbeddingCache>.Instance));
 
         // P12: persistent embedding cache — 1 batched ONNX call per change-set,
         // JSON file under %LOCALAPPDATA%/LTAI/tool_embeddings.json, survives restarts.

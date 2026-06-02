@@ -104,7 +104,8 @@ public static class Program
             sp.GetRequiredService<LTAI.TUI.DevUI.DevUISpanCollector>(),
             sp.GetService<LTAI.Agent.Workflows.YAMLWorkflowRegistry>(),
             sp.GetService<LTAI.AI.LocalEmbedder>(),
-            sp.GetService<LTAI.AI.ToolEmbeddingCache>());
+            sp.GetService<LTAI.AI.ToolEmbeddingCache>(),
+            sp.GetService<LTAI.AI.RemoteEmbeddingCache>());
         try { Console.Clear(); } catch { /* non-interactive terminal */ }
         await app.RunAsync().ConfigureAwait(false);
     }
