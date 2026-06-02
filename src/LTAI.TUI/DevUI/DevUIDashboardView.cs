@@ -22,7 +22,8 @@ public static class DevUIDashboardView
         YAMLWorkflowRegistry? workflows = null,
         LocalEmbedder? embedder = null,
         ToolEmbeddingCache? cache = null,
-        RemoteEmbeddingCache? remoteCache = null)
+        RemoteEmbeddingCache? remoteCache = null,
+        EmbeddingClient? embeddingClient = null)
     {
         var cards = devUi.ListAgentCards();
         var recent = spans.Snapshot().TakeLast(15).Reverse().ToList();
@@ -30,13 +31,13 @@ public static class DevUIDashboardView
 
         var layout = new Layout("root")
             .SplitRows(
-                new Layout("header").Size(7),
+                new Layout("header").Size(8),
                 new Layout("body").SplitColumns(
                     new Layout("agents").Ratio(2),
                     new Layout("spans").Ratio(3)),
                 new Layout("footer").Size(5));
 
-        layout["header"].Update(BuildHeaderPanel(cards.Count, spans.Count, recent, workflowList, embedder, cache, remoteCache));
+        layout["header"].Update(BuildHeaderPanel(cards.Count, spans.Count, recent, workflowList, embedder, cache, remoteCache, embeddingClient));
 
         layout["agents"].Update(BuildAgentTable(cards));
         layout["spans"].Update(BuildSpanTable(recent));
@@ -52,7 +53,8 @@ public static class DevUIDashboardView
         IReadOnlyList<WorkflowInfo> workflows,
         LocalEmbedder? embedder,
         ToolEmbeddingCache? cache,
-        RemoteEmbeddingCache? remoteCache)
+        RemoteEmbeddingCache? remoteCache,
+        EmbeddingClient? embeddingClient)
     {
         var topLine =
             $"[bold]LTAI DevUI Dashboard[/]  [grey]·[/]  " +
@@ -63,12 +65,44 @@ public static class DevUIDashboardView
         var embedLine = BuildEmbedStatusLine(embedder);
         var cacheLine = BuildCacheStatusLine(cache);
         var remoteLine = BuildRemoteCacheStatusLine(remoteCache);
-        return new Panel(new Markup($"{topLine}\n{embedLine}\n{cacheLine}\n{remoteLine}"))
+        var fallbackLine = BuildEmbeddingClientLine(embeddingClient);
+        return new Panel(new Markup($"{topLine}\n{embedLine}\n{cacheLine}\n{remoteLine}\n{fallbackLine}"))
         {
             Border = BoxBorder.Heavy,
             Header = new PanelHeader("[green] P9 Live Inspector [/]"),
             Expand = true,
         };
+    }
+
+    /// <summary>
+    /// P14.10: surface <see cref="EmbeddingClient.ConsecutiveAllProviderFailures"/>
+    /// + <see cref="EmbeddingClient.LocalFallbackActivated"/> so users can
+    /// see when the safety net has kicked in. Only rendered when relevant
+    /// (failures &gt; 0 or fallback already active) to avoid noise in the
+    /// happy path.
+    /// </summary>
+    private static string BuildEmbeddingClientLine(EmbeddingClient? ec)
+    {
+        if (ec is null)
+            return "[grey][[/][bold]EmbedClient[/][grey]][/]  [dim](not registered)[/]";
+
+        var fails = ec.ConsecutiveAllProviderFailures;
+        var activated = ec.LocalFallbackActivated;
+        if (fails == 0 && !activated)
+            return $"[grey][[/][bold]EmbedClient[/][grey]][/]  [green]all providers healthy[/]";
+
+        var failsStr = $"[yellow]{fails}[/] consecutive failures";
+        if (activated && ec.LocalFallbackActivatedAtUtc is DateTime at)
+        {
+            var ago = DateTime.UtcNow - at;
+            var agoStr = ago.TotalMinutes < 1 ? "just now"
+                : ago.TotalHours < 1 ? $"{(int)ago.TotalMinutes}m ago"
+                : $"{(int)ago.TotalHours}h ago";
+            return $"[grey][[/][bold]EmbedClient[/][grey]][/]  {failsStr}  [grey]·[/]  " +
+                   $"[red]local fallback ON[/] (activated {agoStr})";
+        }
+        return $"[grey][[/][bold]EmbedClient[/][grey]][/]  {failsStr}  [grey]·[/]  " +
+               $"[dim](threshold 3 → local fallback)[/]";
     }
 
     /// <summary>

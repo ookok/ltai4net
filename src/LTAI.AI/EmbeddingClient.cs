@@ -65,6 +65,53 @@ public sealed class EmbeddingClient : IDisposable
             _availableProviders.Length, _local?.Available == true, Dimension, _remoteCache != null ? "on" : "off");
     }
 
+    // P14.10: consecutive all-provider-failure counter + threshold-based
+    // automatic ONNX fallback. When the user has a remote API key but the API
+    // is unreachable (network blip / key revoked / quota exhausted), we don't
+    // want to silently fall back to BM25 (which is much worse than local
+    // ONNX). Instead, after 3 consecutive "all providers failed" events,
+    // revive the local ONNX embedder. One-shot — once activated, never
+    // triggered again (state change is durable for process lifetime).
+    private int _consecutiveAllProviderFailures;
+    private volatile bool _localFallbackActivated;
+    private const int LocalFallbackFailureThreshold = 3;
+    /// <summary>Number of consecutive <c>GenerateBatchAsync</c> calls where all configured remote providers failed.</summary>
+    public int ConsecutiveAllProviderFailures => Volatile.Read(ref _consecutiveAllProviderFailures);
+    /// <summary>True after <see cref="ActivateLocalFallback"/> has fired once this process.</summary>
+    public bool LocalFallbackActivated => _localFallbackActivated;
+    /// <summary>When did the fallback activate (UTC)? Null if it never has.</summary>
+    public DateTime? LocalFallbackActivatedAtUtc { get; private set; }
+
+    /// <summary>
+    /// P14.10: revive the local ONNX embedder when the remote API has been
+    /// failing for <see cref="LocalFallbackFailureThreshold"/> consecutive
+    /// calls. Idempotent: subsequent calls are no-ops (the activation is a
+    /// one-time per-process state change).
+    /// </summary>
+    /// <remarks>
+    /// Reasoning: BM25 is much weaker than local ONNX (no semantic similarity,
+    /// just term frequency). If the API is unreliable, the local model is a
+    /// strictly better fallback — even with a 5-10 s load on first use.
+    /// </remarks>
+    public void ActivateLocalFallback()
+    {
+        if (_localFallbackActivated) return;
+        if (_local == null)
+        {
+            _logger.LogWarning("ActivateLocalFallback: no LocalEmbedder available (wasn't registered in DI?)");
+            return;
+        }
+        _localFallbackActivated = true;
+        LocalFallbackActivatedAtUtc = DateTime.UtcNow;
+        // Flip the global flag so future LocalEmbedder instances also load.
+        LocalEmbedder.DefaultDisabled = false;
+        _local.Activate();
+        _logger.LogWarning(
+            "EmbeddingClient: remote API failed {N} times in a row → activating local ONNX fallback. {Local}",
+            ConsecutiveAllProviderFailures,
+            _local.Available ? "ONNX ready" : "ONNX loading in background (next call will wait)");
+    }
+
     /// <summary>Generate embedding for a single text.</summary>
     public async Task<float[]> GenerateAsync(string text, CancellationToken ct = default)
     {
@@ -149,6 +196,15 @@ public sealed class EmbeddingClient : IDisposable
                         result[missing[j]] = vec;
                         _remoteCache?.Store(name, model, missingTexts[j], vec);
                     }
+                    // P14.10: successful provider call — reset the consecutive
+                    // failure counter (the user-facing API is healthy again).
+                    if (Volatile.Read(ref _consecutiveAllProviderFailures) > 0)
+                    {
+                        _logger.LogInformation(
+                            "EmbeddingClient: provider {Provider} recovered, resetting failure counter (was {N})",
+                            name, Volatile.Read(ref _consecutiveAllProviderFailures));
+                        Volatile.Write(ref _consecutiveAllProviderFailures, 0);
+                    }
                     return result;
                 }
             }
@@ -163,6 +219,27 @@ public sealed class EmbeddingClient : IDisposable
         for (int j = 0; j < missing.Count; j++)
         {
             result[missing[j]] = FastEmb(missingTexts[j]);
+        }
+
+        // P14.10: every API provider failed — track consecutive failures and
+        // activate the local ONNX fallback once we cross the threshold. This
+        // is a safety net for users with flaky networks / rate-limited keys
+        // / expired API credentials: after 3 consecutive all-provider failures
+        // we transparently bring up the local model so subsequent calls stop
+        // paying the latency + cost penalty of repeated remote timeouts.
+        var newCount = Interlocked.Increment(ref _consecutiveAllProviderFailures);
+        if (!_localFallbackActivated && newCount >= LocalFallbackFailureThreshold)
+        {
+            _logger.LogWarning(
+                "EmbeddingClient: {N} consecutive all-provider failures (threshold={T}) — activating local ONNX fallback",
+                newCount, LocalFallbackFailureThreshold);
+            ActivateLocalFallback();
+        }
+        else if (!_localFallbackActivated)
+        {
+            _logger.LogDebug(
+                "EmbeddingClient: {N} consecutive all-provider failures (threshold={T})",
+                newCount, LocalFallbackFailureThreshold);
         }
         return result;
     }

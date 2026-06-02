@@ -172,8 +172,22 @@ public sealed class LocalEmbedder : IDisposable
         {
             // P12.3: remote embedding API will be used; don't waste RAM/CPU
             // on a 90 MB model we won't touch. Available returns false.
+            // P14.10: paths are intentionally NOT set up here — call
+            // Activate() at runtime to revive ONNX after API failure.
             return;
         }
+        Activate();
+    }
+
+    /// <summary>
+    /// P14.10: late-bind model paths and pre-warm. Idempotent. Called by the
+    /// ctor (when <see cref="DefaultDisabled"/> is <c>false</c>) and at
+    /// runtime by <c>EmbeddingClient.ActivateLocalFallback()</c> when the
+    /// remote API fails N consecutive times.
+    /// </summary>
+    public void Activate()
+    {
+        if (_loadAttempted) return;
         BaseModelsDirectory ??= FindBaseModelsDirectory();
         var detected = DetectCurrentModelWithQuant();
         _currentModelName = detected.name;
