@@ -737,7 +737,7 @@ Connect SessionManager → ChatView and add SessionStatsPanel to MainWindow side
 | **P14.9** | Per-model 量化配置（MiniLM=int8, BGE=fp32, BGE-large=fp32 混搭） | 灵活 | 🟢 P2 | 3-5d | P13 ✅ |
 | **P14.10** ✅ | API 失败 N 次 → 自动 fallback ONNX 加载（P13.5） | 鲁棒 | 🟢 P2 | 2-3d | P12 ✅ |
 | **P14.11** | Multi-embedding 融合（MiniLM + BGE 并行推理，concat / 加权；跨语言效果↑） | 质量 | 🔵 P3 | 2-3w | P14.9 |
-| **P14.12** | ONNX 缓存预热 background service（首次启动时后台下载所有可能用到的模型） | UX | 🔵 P3 | 2-3d | 无 |
+| **P14.12** ✅ | ONNX 缓存预热 background service（首次启动时后台下载所有可能用到的模型） | UX | 🔵 P3 | 2-3d | 无 |
 | **P14.13** ✅ | `TaskQueueTool` 暴露给 5 agents（BGJS/TaskQueue 二选一并暴露工具；修复死代码） | Long-running 完善 | 🔴 P0 | 1d | P5.4 ✅ |
 | **P14.14** ✅ | TUI `/jobs` + Desktop JobsView 实时展示（订阅 `BackgroundJobService.JobCompleted`） | Long-running 完善 | 🔴 P0 | 1d | P14.13 ✅ |
 | **P14.15** ✅ | LTAI.Web `GET /api/jobs` 端点（list / get / cancel） | Long-running 完善 | 🔴 P0 | 0.5d | P14.13 ✅ |
@@ -789,7 +789,12 @@ Connect SessionManager → ChatView and add SessionStatsPanel to MainWindow side
   - `ToolRegistry.SearchTopKAsync` 检测 `Embedding.Length == 0` 触发 1 次 batched 重新 embed（懒）
   - TUI `/model switch <name>` 现成命令无须改，event 自动跑
   - **回归接受**：与 P14.3 `/model quant` 行为对齐 — 都是"自动 hot-reload + 缓存失效"
-- **P14.12**：`IHostedService.PreWarmEmbeddingModels` 后台下载所有 3 个模型
+- **P14.12** ✅ 完成 (commit `a2717ff`)：`IHostedService.PreWarmEmbeddingModels` 后台下载所有 3 个模型
+  - 3 个 no-op 条件：`DefaultDisabled=true` (远程 API) / `PreWarmAllModels=false` (默认) / `BaseModelsDirectory=null`
+  - 启动时 `Task.Run` 分离下载，不阻塞 host startup
+  - 遍历 `KnownModels.Keys`，已下载的跳过；log per-model progress + summary
+  - appsettings.json 加 `LTAI:Embedding:PreWarmAllModels=true` 即可开启
+  - 用户主动选择；不偷偷吃 ~213 MB 网络流量
 
 ### 主题 4：缓存与降级（P14.5 + P14.10）
 - **P14.5** ✅ 完成 (commit `f0790b4`)：用 **`RemoteEmbeddingCache`** (in-process TTL 24h) 替代 `ToolEmbeddingCache`（原因：ToolEmbeddingCache 是持久化 JSON、键为本地 (Key, Description) 业务元组；远程 API 文本 token 不属于"工具/agent 描述"业务域） — 8 个 remote 调用方自动受益
@@ -978,7 +983,7 @@ Connect SessionManager → ChatView and add SessionStatsPanel to MainWindow side
 ```
 P0 (5 个) ──→ P1 (4 个) ──→ P2 (3 个) ──→ P3 (2 个)
 P14.2 ✅      P14.4         P14.8 ✅       P14.11
-P14.3 ✅      P14.5 ✅       P14.9 ✅       P14.12
+P14.3 ✅      P14.5 ✅       P14.9 ✅       P14.12 ✅
 P14.1 ✅      P14.6 ✅       P14.10 ✅
 P14.13 ✅     P14.7 ✅
 P14.14 ✅
