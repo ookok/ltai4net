@@ -364,7 +364,11 @@ public static class SlashCommands
             return ($"模型 '{name}' 未下载。请先运行 /model download {name}。模型目录: {baseDir}", true);
         }
 
-        return ($"已切换到 ONNX 模型: [green]{name}[/]（{LTAI.AI.LocalEmbedder.KnownModels[name].DisplayName}）", true);
+        // P14.8: SwitchModel fires ModelSwitched which clears ToolEmbeddingCache,
+        // AgentRegistry, ToolRegistry in-process. TUI has no direct access to
+        // cache entry counts, but log a hint that downstream caches were reset.
+        return ($"已切换到 ONNX 模型: [green]{name}[/]（{LTAI.AI.LocalEmbedder.KnownModels[name].DisplayName}）\n" +
+                "已自动清空 tool/agent embedding 缓存，下次路由会重新计算向量。", true);
     }
 
     private static (string, bool) HandleModelDownload(LTAI.AI.LocalEmbedder embedder, string name)

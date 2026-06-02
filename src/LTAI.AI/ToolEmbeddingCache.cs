@@ -37,6 +37,14 @@ public sealed class ToolEmbeddingCache
             "LTAI");
         Directory.CreateDirectory(dataDir);
         _filePath = Path.Combine(dataDir, "tool_embeddings.json");
+
+        // P14.8: invalidate this cache when the local embedder switches
+        // models (vectors are model-specific even when dim matches).
+        var local = _embedder.Local;
+        if (local != null)
+        {
+            local.ModelSwitched += _ => Invalidate();
+        }
     }
 
     public string FilePath => _filePath;
@@ -47,6 +55,30 @@ public sealed class ToolEmbeddingCache
     public double HitRate => CacheLookups == 0 ? 0d : (double)CacheHits / CacheLookups;
     private long _hits;
     private long _misses;
+
+    /// <summary>
+    /// P14.8: clear in-memory store + delete persisted JSON. Use after
+    /// switching the active embedding model — cached vectors are
+    /// model-specific even when the dimension is the same (different
+    /// models produce different semantic vectors for the same text).
+    /// Idempotent.
+    /// </summary>
+    public void Invalidate()
+    {
+        var cleared = _store.Count;
+        _store.Clear();
+        _initialized = true; // skip reload on next call (caller re-embeds)
+        try
+        {
+            if (File.Exists(_filePath)) File.Delete(_filePath);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "ToolEmbeddingCache: failed to delete {Path}", _filePath);
+        }
+        if (cleared > 0)
+            _logger.LogInformation("ToolEmbeddingCache: invalidated {N} entries (model switched)", cleared);
+    }
 
     public async Task<IReadOnlyDictionary<string, float[]>> GetOrComputeAllAsync(
         IReadOnlyList<(string Key, string Description)> items,

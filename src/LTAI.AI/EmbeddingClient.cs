@@ -32,6 +32,14 @@ public sealed class EmbeddingClient : IDisposable
 
     public int Dimension { get; private set; } = 384;
 
+    /// <summary>
+    /// P14.8: the local ONNX embedder, if available. Exposed so that
+    /// downstream caches (e.g. <see cref="ToolEmbeddingCache"/>) can
+    /// subscribe to <see cref="LocalEmbedder.ModelSwitched"/> and
+    /// invalidate model-specific cached vectors.
+    /// </summary>
+    public LocalEmbedder? Local => _local;
+
     public EmbeddingClient(
         IHttpClientFactory httpFactory,
         LocalEmbedder? local = null,

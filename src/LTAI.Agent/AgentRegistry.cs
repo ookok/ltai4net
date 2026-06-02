@@ -64,6 +64,22 @@ public static class AgentRegistry
     public static void InvalidateCache() => _cached = null;
 
     /// <summary>
+    /// P14.8: reset <see cref="AgentFileDef.Embedding"/> to <c>null</c> for
+    /// every loaded agent so the next <see cref="EnsureEmbeddingsAsync"/>
+    /// call re-embeds with the active model. Does not touch the def list
+    /// itself — only the cached vectors.
+    /// </summary>
+    public static void ClearEmbeddings()
+    {
+        if (_cached == null) return;
+        for (int i = 0; i < _cached.Count; i++)
+        {
+            if (_cached[i].Embedding != null)
+                _cached[i] = _cached[i] with { Embedding = null };
+        }
+    }
+
+    /// <summary>
     /// Compute embeddings for all agents (lazy, cached per def).
     /// Call this once at startup or when agents change.
     /// </summary>

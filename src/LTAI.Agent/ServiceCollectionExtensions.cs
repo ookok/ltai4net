@@ -187,6 +187,12 @@ public static class ServiceCollectionExtensions
                 sp.GetRequiredService<ILoggerFactory>().CreateLogger<LTAI.Agent.Snippets.SnippetStore>());
         });
 
+        // P14.8: bridge LocalEmbedder.ModelSwitched → static registry cache
+        // invalidation (LTAI.AI's ToolEmbeddingCache handles itself; this
+        // handles AgentRegistry + ToolRegistry which live in LTAI.Agent).
+        services.AddSingleton<LocalEmbedderModelSwitchNotifier>(sp =>
+            new LocalEmbedderModelSwitchNotifier(sp.GetService<LTAI.AI.LocalEmbedder>()));
+
         // Step 3c-bis: Skill Evolution Engine (L1-L3)
         services.AddSingleton<SkillEvolutionEngine>(sp =>
         {

@@ -330,6 +330,29 @@ public static class ToolRegistry
     {
         if (!_initialized || _tools.Count == 0) return new List<ToolDef>();
 
+        // P14.8: lazy re-embed tools whose embedding is empty (model switched).
+        // Single batched call via EmbeddingClient; skips if all tools have vectors.
+        if (_tools.Any(t => t.Embedding.Length == 0))
+        {
+            try
+            {
+                var texts = _tools.Select(t => $"{t.Domain} | {t.Name}: {t.Description}").ToArray();
+                var vectors = await embedder.GenerateBatchAsync(texts, ct).ConfigureAwait(false);
+                lock (_lock)
+                {
+                    for (int i = 0; i < _tools.Count && i < vectors.Length; i++)
+                    {
+                        if (_tools[i].Embedding.Length == 0)
+                            _tools[i] = _tools[i] with { Embedding = vectors[i] };
+                    }
+                }
+            }
+            catch
+            {
+                // fall through — cosine below will treat empty embeddings as 0
+            }
+        }
+
         // ── 路 1: BM25 关键词检索 ──
         var bm25Results = SearchBM25(query);
 
@@ -399,6 +422,25 @@ public static class ToolRegistry
             _totalDocs = 0;
             _avgDocLen = 0;
             _initialized = false;
+        }
+    }
+
+    /// <summary>
+    /// P14.8: mark all stored tool embeddings as stale (sentinel
+    /// <see cref="Array.Empty{T}"/>). Next <see cref="SearchTopKAsync"/> call
+    /// re-embeds every tool on the fly (single batched ONNX call) so
+    /// semantic vectors track the active model.
+    /// </summary>
+    public static void ClearEmbeddings()
+    {
+        lock (_lock)
+        {
+            for (int i = 0; i < _tools.Count; i++)
+            {
+                var t = _tools[i];
+                if (t.Embedding.Length > 0)
+                    _tools[i] = t with { Embedding = Array.Empty<float>() };
+            }
         }
     }
 

@@ -52,6 +52,16 @@ public sealed class LocalEmbedder : IDisposable
     /// <summary>P13.1: true if the loaded model is the INT8/UINT8 quantized variant.</summary>
     public bool UsingQuantizedModel => _usingQuantizedModel;
 
+    /// <summary>
+    /// P14.8: Fired by <see cref="SwitchModel"/> after the new model is
+    /// successfully loaded (synchronously, while still inside the load lock).
+    /// Argument is the new model name. Subscribers should invalidate any
+    /// caches that store embedding vectors (those are model-specific even
+    /// when the dimension happens to be the same — different models produce
+    /// different semantic vectors for the same text).
+    /// </summary>
+    public event Action<string>? ModelSwitched;
+
     /// <summary>Known ONNX models with download URLs.</summary>
     /// <remarks>
     /// P14.1: <see cref="ModelInfo.QuantizedModelUrl"/> now points to the
@@ -838,6 +848,12 @@ public sealed class LocalEmbedder : IDisposable
     }
 
     /// <summary>Switch the active embedding model. Returns true on success.</summary>
+    /// <remarks>
+    /// P14.8: on success, fires <see cref="ModelSwitched"/> synchronously
+    /// inside the load lock. Subscribers should treat the model as
+    /// "switched but caches stale" — they'll typically clear their own
+    /// vector caches in response.
+    /// </remarks>
     public bool SwitchModel(string name)
     {
         var baseDir = BaseModelsDirectory;
@@ -847,6 +863,7 @@ public sealed class LocalEmbedder : IDisposable
         var (modelFile, vocabFile, usingQuant) = ResolveModelFiles(modelDir, name);
         if (modelFile == null || vocabFile == null) return false;
 
+        Action<string>? toNotify = null;
         lock (_loadLock)
         {
             _session?.Dispose();
@@ -859,7 +876,11 @@ public sealed class LocalEmbedder : IDisposable
             _usingQuantizedModel = usingQuant;
 
             EnsureLoaded();
+            if (_session != null) toNotify = ModelSwitched;
         }
+        // Fire outside the lock to avoid potential re-entrancy / deadlock
+        // if a subscriber tries to call back into LocalEmbedder.
+        toNotify?.Invoke(name);
         return _session != null;
     }
 
