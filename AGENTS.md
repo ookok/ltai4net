@@ -733,7 +733,7 @@ Connect SessionManager → ChatView and add SessionStatsPanel to MainWindow side
 | **P14.5** ✅ | DecisionTreeRouter 远程 API 结果 cache 到 `RemoteEmbeddingCache`（P13.3 替代方案 — in-process TTL 24h） | 缓存 | 🟡 P1 | 2-3d | P12 ✅ |
 | **P14.6** ✅ | `ToolEmbeddingCache.CachedEntryCount` 暴露到 DevUI dashboard（P13.4） | 可观测性 | 🟡 P1 | 0.5d | P14.5 |
 | **P14.7** ✅ | `Workflows.Declarative.Mcp`（P7.4 新增 — 纯本地，无 Azure 依赖）— YAML workflow 接 MCP 工具 | 工作流扩展 | 🟡 P1 | 1-2d | 无 |
-| **P14.8** | 热模型切换（不重启进程换 MiniLM ↔ BGE，session 持久化） | UX | 🟢 P2 | 1w | 无 |
+| **P14.8** ✅ | 热模型切换（不重启进程换 MiniLM ↔ BGE；自动失效 tool/agent 缓存并懒重 embed） | UX | 🟢 P2 | 1w | 无 |
 | **P14.9** | Per-model 量化配置（MiniLM=int8, BGE=fp32, BGE-large=fp32 混搭） | 灵活 | 🟢 P2 | 3-5d | P13 ✅ |
 | **P14.10** | API 失败 N 次 → 自动 fallback ONNX 加载（P13.5） | 鲁棒 | 🟢 P2 | 2-3d | P12 ✅ |
 | **P14.11** | Multi-embedding 融合（MiniLM + BGE 并行推理，concat / 加权；跨语言效果↑） | 质量 | 🔵 P3 | 2-3w | P14.9 |
@@ -782,6 +782,13 @@ Connect SessionManager → ChatView and add SessionStatsPanel to MainWindow side
   - `/model info` → 列所有 model 的 EP/quant/size/loaded
   - `/model quant fp32|int8|auto` → 切换全局 quant
 - **P14.8**：运行时换模型（`_currentModelName` swap + `_session` dispose + reload；session 持久化推迟到 P15+）
+  - **✅ 完成** (commit `a9ebc1d`)：4 处缓存全部 event-driven 失效
+  - `LocalEmbedder.ModelSwitched` event 在 `SwitchModel` 成功 load 后 fire (锁外，参数 = 新模型名)
+  - `EmbeddingClient.Local` 公开属性 → `ToolEmbeddingCache` ctor 订阅 → 调 `Invalidate()` (清 `_store` + 删 JSON)
+  - `LocalEmbedderModelSwitchNotifier` (LTAI.Agent) 订阅 → 调 `AgentRegistry.ClearEmbeddings()` + `ToolRegistry.ClearEmbeddings()`
+  - `ToolRegistry.SearchTopKAsync` 检测 `Embedding.Length == 0` 触发 1 次 batched 重新 embed（懒）
+  - TUI `/model switch <name>` 现成命令无须改，event 自动跑
+  - **回归接受**：与 P14.3 `/model quant` 行为对齐 — 都是"自动 hot-reload + 缓存失效"
 - **P14.12**：`IHostedService.PreWarmEmbeddingModels` 后台下载所有 3 个模型
 
 ### 主题 4：缓存与降级（P14.5 + P14.10）
@@ -961,7 +968,7 @@ Connect SessionManager → ChatView and add SessionStatsPanel to MainWindow side
 
 ```
 P0 (5 个) ──→ P1 (4 个) ──→ P2 (3 个) ──→ P3 (2 个)
-P14.2 ✅      P14.4         P14.8         P14.11
+P14.2 ✅      P14.4         P14.8 ✅       P14.11
 P14.3 ✅      P14.5 ✅       P14.9         P14.12
 P14.1 ✅      P14.6 ✅       P14.10
 P14.13 ✅     P14.7 ✅
