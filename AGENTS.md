@@ -728,7 +728,7 @@ Connect SessionManager → ChatView and add SessionStatsPanel to MainWindow side
 |---|---|---|---|---|---|
 | **P14.1** ✅ | BGE INT8 量化（复用 **Xenova 预量化版** — `Xenova/bge-small-{zh,en}-v1.5/onnx/model_int8.onnx`） | 量化补完 | 🔴 P0 | 0.5d | 无 |
 | **P14.2** ✅ | P9.1 DevUI 显示 active EP + quant 状态（P13.2 telemetry 已埋点，未 surface） | 可观测性 | 🔴 P0 | 0.5d | P13.2 ✅ |
-| **P14.3** | TUI `/model` 菜单扩展（`cleanup`/`info`/`quant` 三子命令） | UX | 🔴 P0 | 1d | P13.6 ✅ |
+| **P14.3** ✅ | TUI `/model` 菜单扩展（`cleanup`/`info`/`quant` 三子命令） | UX | 🔴 P0 | 1d | P13.6 ✅ |
 | **P14.4** | INT8 vs FP32 性能 benchmark（P11.2 BDN 框架 + GPU vs CPU 对照） | 可观测性 | 🟡 P1 | 1d | 无 |
 | **P14.5** | DecisionTreeRouter 远程 API 结果 cache 到 `ToolEmbeddingCache`（P13.3） | 缓存 | 🟡 P1 | 2-3d | P12 ✅ |
 | **P14.6** | `ToolEmbeddingCache.CachedEntryCount` 暴露到 DevUI dashboard（P13.4） | 可观测性 | 🟡 P1 | 0.5d | P14.5 |
@@ -880,15 +880,44 @@ Connect SessionManager → ChatView and add SessionStatsPanel to MainWindow side
 - **语义**: BGJS 60s 自动驱逐 → 客户端把 404 当作 "completed and gone"
 - **关联**: P14.14 (TUI `/jobs` + Desktop sidebar) 准备数据源
 
+#### P14.3 TUI `/model` cleanup / info / quant ✅ (commit `4249b10`)
+- **SlashSpec 更新** (`src/LTAI.TUI/SlashCommands.cs:74`): 描述补 `cleanup|info|quant` 三个子命令
+- **HandleModelCommand 扩展** (`SlashCommands.cs:320-330`): switch 加 3 个分支
+- **`HandleModelCleanup(embedder, arg)`** (`SlashCommands.cs:412-484`):
+  - 无参：清理所有已下载 model 的 stale 变种（按 `Options.Quantization` 决定保留谁）
+  - 带 name：清理指定 model（known-model 验证 + 跳过不存在的目录）
+  - `targetQuant` 决策树：fp32→false / int8→true / auto→当前 model 看 `embedder.UsingQuantizedModel`，其它默认 INT8（P14.1 偏好）
+  - 输出：每行 `✓/–` 状态 + 释放字节数 + 保留变种；总计 header 展示总释放
+  - 跳过 0 字节 / 失败下载的损坏 FP32（`Length > 1024` 守护）
+- **`HandleModelInfo(embedder)`** (`SlashCommands.cs:489-548`):
+  - Header：全局 `Options` (Quantization/Gpu/DeviceId) + 状态行（DefaultDisabled → Available → 未加载）
+  - Per-model：marker (●/空) + id + display + 描述 + FP32 ●○ + size / INT8 ●○ + size / Vocab ● + size
+  - INT8 不可用时显示 `(无上游量化版)`；model 目录不存在显示 `(未下载)`
+  - EP/quant/Dim 颜色：EP=GPU=green/CPU=grey ; quant=INT8=green/FP32=yellow
+- **`HandleModelQuant(embedder, arg)`** (`SlashCommands.cs:553-601`):
+  - 接受 `fp32|int8|auto`；空参 → 显示当前偏好
+  - 写 `LocalEmbedder.Options.Quantization = val`（**进程内**生效，无需重启）
+  - **自动 hot-reload**: 若 `CurrentModelName != null && !DefaultDisabled` → `embedder.SwitchModel(CurrentModelName)` 重新创建 session
+  - SwitchModel 失败 → 提示 `/model info` 看磁盘 + `/model download` 重下
+  - DefaultDisabled / 无活动 model → 提示"下次启动生效"
+- **`FormatBytes(long)`** helper (`SlashCommands.cs:603-608`): B/KB/MB 自适应
+- **Files touched**: `src/LTAI.TUI/SlashCommands.cs` (1 file, +226 / -2)
+- **Build**: TUI 0 errors / 14 warnings (pre-existing only) ; Solution 0 errors / 38 pre-existing
+- **决策**:
+  - **D62** `/model cleanup` 不自动调用：用户主动触发；cleanup all 仍尊重 `Options.Quantization` 偏好而非猜测
+  - **D63** `/model quant` 自动 hot-reload（不要求重启或手动 switch）；失败给出明确恢复路径
+  - **D64** `cleanup` 把损坏下载（<1KB）视同不存在，避免删错文件
+  - **D65** info 命令只读，不触发任何 ONNX 加载（避免 `/model info` 启动 5-10s ONNX）
+
 ## 推荐执行顺序
 
 ```
 P0 (5 个) ──→ P1 (4 个) ──→ P2 (3 个) ──→ P3 (2 个)
 P14.2 ✅      P14.4         P14.8         P14.11
-P14.3         P14.5         P14.9         P14.12
+P14.3 ✅      P14.5         P14.9         P14.12
 P14.1 ✅      P14.6         P14.10
 P14.13 ✅     P14.7
-P14.14
+P14.14 ✅
 P14.15 ✅
 ```
 
