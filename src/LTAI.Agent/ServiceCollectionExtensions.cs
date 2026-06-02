@@ -161,6 +161,14 @@ public static class ServiceCollectionExtensions
         // and exposes EnqueueAsync / List / WaitAsync for deferred work.
         services.AddSingleton<LTAI.Agent.Tasks.TaskQueue>();
 
+        // P14.13: TaskQueueTool — LLM-callable wrapper that exposes the queue
+        // as 5 AITool methods (Enqueue/List/Get/Wait/Cancel). Owns a name->handler
+        // registry so Enqueue dispatch works across the JSON tool boundary.
+        services.AddSingleton<LTAI.Agent.Tools.TaskQueueTool>(sp =>
+            new LTAI.Agent.Tools.TaskQueueTool(
+                sp.GetRequiredService<LTAI.Agent.Tasks.TaskQueue>(),
+                sp.GetService<ILoggerFactory>()?.CreateLogger<LTAI.Agent.Tools.TaskQueueTool>()));
+
         // Step 3c-snippets: User-defined common-phrase store. Shared between
         // LTAI.TUI and LTAI.Desktop via .livingtree/snippets.json. Supports
         // /snippet save|use|delete|rename|edit|list — see SnippetCommandParser.
@@ -562,6 +570,17 @@ public static class ServiceCollectionExtensions
             tools.Add(AIFunctionFactory.Create(bgJobs.GetJobOutput));
             tools.Add(AIFunctionFactory.Create(bgJobs.WaitForJob));
             tools.Add(AIFunctionFactory.Create(bgJobs.StopJob));
+        }
+        // P14.13: TaskQueueTool — async named-task dispatch (echo / sleep / custom).
+        // Same 5 agents as BackgroundJobService (those that already manage long-running work).
+        if (name is "LTAI-Chat" or "LTAI-Chat-Pro" or "LTAI-System" or "LTAI-Code" or "LTAI-Writer")
+        {
+            var tq = sp.GetRequiredService<LTAI.Agent.Tools.TaskQueueTool>();
+            tools.Add(AIFunctionFactory.Create(tq.EnqueueTask));
+            tools.Add(AIFunctionFactory.Create(tq.ListTasks));
+            tools.Add(AIFunctionFactory.Create(tq.GetTask));
+            tools.Add(AIFunctionFactory.Create(tq.WaitForTask));
+            tools.Add(AIFunctionFactory.Create(tq.CancelTask));
         }
         if (canExec)
         {
