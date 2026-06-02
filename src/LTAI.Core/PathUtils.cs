@@ -131,7 +131,11 @@ public static class PathUtils
     /// </summary>
     public static class PathPermissionStore
     {
-        private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> _grants = new();
+        // Bounded session permission cache — grants are ephemeral (per user session).
+        // Max 512 entries; beyond that, evict oldest by clearing.
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> _grants = new(4, 512);
+        private const int GrantMax = 512;
+        private static int _grantCount;
 
         /// <summary>授予对指定路径的跨沙箱访问权限。</summary>
         public static void Grant(string path)
@@ -139,6 +143,7 @@ public static class PathUtils
             try
             {
                 var fp = Path.GetFullPath(path.Trim().Trim('"', '\''));
+                if (Interlocked.Increment(ref _grantCount) > GrantMax) { _grants.Clear(); Interlocked.Exchange(ref _grantCount, 0); }
                 _grants[fp] = true;
             }
             catch { }

@@ -925,13 +925,11 @@ public sealed class UsageTracker : IUsageTracker
             {
                 using var req = new HttpRequestMessage(HttpMethod.Get, "https://api.deepseek.com/user/balance");
                 req.Headers.Authorization = new("Bearer", apiKey);
-                using var resp = await _balanceHttp.SendAsync(req);
+                using var resp = await _balanceHttp.SendAsync(req).ConfigureAwait(false);
                 resp.EnsureSuccessStatusCode();
-                var body = await resp.Content.ReadAsStringAsync();
+                var body = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
                 using var json = JsonDocument.Parse(body);
                 var root = json.RootElement;
-                // DeepSeek balance API 实际格式：
-                // {"is_available":true,"balance_infos":[{"currency":"CNY","total_balance":"110.00",...}]}
                 if (root.TryGetProperty("balance_infos", out var infos) && infos.GetArrayLength() > 0)
                 {
                     var info = infos[0];
@@ -943,7 +941,6 @@ public sealed class UsageTracker : IUsageTracker
                 }
                 else
                 {
-                    // Fallback: 旧格式
                     var bal = root.TryGetProperty("balance", out var b) ? b.GetDouble() : 0;
                     SetBalance(bal, "¥", "DeepSeek");
                 }
@@ -952,9 +949,9 @@ public sealed class UsageTracker : IUsageTracker
             {
                 using var req = new HttpRequestMessage(HttpMethod.Get, "https://api.siliconflow.cn/v1/user/balance");
                 req.Headers.Authorization = new("Bearer", apiKey);
-                using var resp = await _balanceHttp.SendAsync(req);
+                using var resp = await _balanceHttp.SendAsync(req).ConfigureAwait(false);
                 resp.EnsureSuccessStatusCode();
-                var body = await resp.Content.ReadAsStringAsync();
+                var body = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
                 using var json = JsonDocument.Parse(body);
                 var bal = json.RootElement.GetProperty("balance").GetDouble();
                 SetBalance(bal, "¥", "SiliconFlow");
@@ -963,9 +960,9 @@ public sealed class UsageTracker : IUsageTracker
             {
                 using var req = new HttpRequestMessage(HttpMethod.Get, "https://openrouter.ai/api/v1/auth/key");
                 req.Headers.Authorization = new("Bearer", apiKey);
-                using var resp = await _balanceHttp.SendAsync(req);
+                using var resp = await _balanceHttp.SendAsync(req).ConfigureAwait(false);
                 resp.EnsureSuccessStatusCode();
-                var body = await resp.Content.ReadAsStringAsync();
+                var body = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
                 using var json = JsonDocument.Parse(body);
                 var credits = json.RootElement.GetProperty("data").GetProperty("credits").GetDouble();
                 SetBalance(credits, "$", "OpenRouter");
@@ -974,9 +971,9 @@ public sealed class UsageTracker : IUsageTracker
             {
                 using var req = new HttpRequestMessage(HttpMethod.Get, "https://open.bigmodel.cn/api/llm/balance");
                 req.Headers.Authorization = new("Bearer", apiKey);
-                using var resp = await _balanceHttp.SendAsync(req);
+                using var resp = await _balanceHttp.SendAsync(req).ConfigureAwait(false);
                 resp.EnsureSuccessStatusCode();
-                var body = await resp.Content.ReadAsStringAsync();
+                var body = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
                 using var json = JsonDocument.Parse(body);
                 var bal = json.RootElement.GetProperty("data").GetProperty("total_balance").GetDouble();
                 SetBalance(bal, "¥", "Zhipu(GLM)");
@@ -987,9 +984,9 @@ public sealed class UsageTracker : IUsageTracker
                 using var req = new HttpRequestMessage(HttpMethod.Get,
                     "https://dashscope.aliyuncs.com/api/v1/services/llm/balance");
                 req.Headers.Authorization = new("Bearer", apiKey);
-                using var resp = await _balanceHttp.SendAsync(req);
+                using var resp = await _balanceHttp.SendAsync(req).ConfigureAwait(false);
                 resp.EnsureSuccessStatusCode();
-                var body = await resp.Content.ReadAsStringAsync();
+                var body = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
                 using var json = JsonDocument.Parse(body);
                 var bal = json.RootElement.GetProperty("available_balance").GetDouble();
                 SetBalance(bal, "¥", "Aliyun(Qwen)");
@@ -998,9 +995,9 @@ public sealed class UsageTracker : IUsageTracker
             {
                 using var req = new HttpRequestMessage(HttpMethod.Get, "https://api.moonshot.cn/v1/balance");
                 req.Headers.Authorization = new("Bearer", apiKey);
-                using var resp = await _balanceHttp.SendAsync(req);
+                using var resp = await _balanceHttp.SendAsync(req).ConfigureAwait(false);
                 resp.EnsureSuccessStatusCode();
-                var body = await resp.Content.ReadAsStringAsync();
+                var body = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
                 using var json = JsonDocument.Parse(body);
                 var bal = json.RootElement.GetProperty("available_balance").GetDouble();
                 SetBalance(bal, "¥", "Moonshot(Kimi)");

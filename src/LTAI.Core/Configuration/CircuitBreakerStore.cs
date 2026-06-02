@@ -72,7 +72,8 @@ public sealed class CircuitBreakerStore : IDisposable
         if (await reader.ReadAsync().ConfigureAwait(false))
         {
             var failures = reader.GetInt32(0);
-            DateTime? cooldown = reader.IsDBNull(1) ? null : DateTime.Parse(reader.GetString(1));
+            DateTime? cooldown = reader.IsDBNull(1) ? null : DateTime.Parse(reader.GetString(1),
+                System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.RoundtripKind);
             return (failures, cooldown);
         }
         return (0, null);
@@ -88,7 +89,8 @@ public sealed class CircuitBreakerStore : IDisposable
         {
             var provider = reader.GetString(0);
             var failures = reader.GetInt32(1);
-            DateTime? cooldown = reader.IsDBNull(2) ? null : DateTime.Parse(reader.GetString(2));
+            DateTime? cooldown = reader.IsDBNull(2) ? null : DateTime.Parse(reader.GetString(2),
+                System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.RoundtripKind);
             result[provider] = (failures, cooldown);
         }
         return result;

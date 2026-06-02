@@ -7,7 +7,10 @@ namespace LTAI.Agent.Tools;
 
 public static class PlanTools
 {
-    private static readonly AsyncLocal<PlanState?> _currentPlan = new();
+    // A4: was static AsyncLocal (cross-user leak across async Continuations).
+    // Now using explicit static field for single-user TUI/Desktop — multi-user
+    // scenarios should store per-agent PlanState in the AgentSession.
+    private static PlanState? _currentPlan;
 
     private sealed record PlanStep(
         string Id, string Title, string Action,
@@ -45,7 +48,7 @@ public static class PlanTools
 
         if (steps.Length == 0) return "Plan must have at least one step";
 
-        _currentPlan.Value = new PlanState(summary, plan, steps, 0, "proposed", DateTime.UtcNow);
+        _currentPlan = new PlanState(summary, plan, steps, 0, "proposed", DateTime.UtcNow);
 
         var sb = new StringBuilder();
         sb.AppendLine($"## Plan: {summary}\n");
@@ -70,7 +73,7 @@ public static class PlanTools
         [Description("One-sentence result summary")] string result,
         [Description("Optional notes")] string? notes = null)
     {
-        var plan = _currentPlan.Value;
+        var plan = _currentPlan;
         if (plan == null) return "No active plan";
         if (plan.Status != "executing") return "Plan is not currently executing";
 
@@ -80,12 +83,12 @@ public static class PlanTools
         var nextIdx = Array.IndexOf(plan.Steps, step) + 1;
         if (nextIdx >= plan.Steps.Length)
         {
-            _currentPlan.Value = plan with { Status = "completed", CurrentStep = plan.Steps.Length };
-            return $"✅ Plan complete: **{_currentPlan.Value!.Summary}**\n\nFinal step '{step.Title}': {result}";
+            _currentPlan = plan with { Status = "completed", CurrentStep = plan.Steps.Length };
+            return $"✅ Plan complete: **{_currentPlan!.Summary}**\n\nFinal step '{step.Title}': {result}";
         }
 
-        _currentPlan.Value = plan with { CurrentStep = nextIdx };
-        var next = _currentPlan.Value!.Steps[nextIdx];
+        _currentPlan = plan with { CurrentStep = nextIdx };
+        var next = _currentPlan!.Steps[nextIdx];
         return $"✅ Step '{step.Title}' complete: {result}\n\n➡️ Next: **{next.Title}** — {next.Action}";
     }
 
@@ -96,19 +99,19 @@ public static class PlanTools
     {
         var newSteps = JsonSerializer.Deserialize<PlanStep[]>(newStepsJson,
             new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? [];
-        var plan = _currentPlan.Value;
+        var plan = _currentPlan;
         if (plan == null) return "No active plan";
         if (plan.Status != "executing") return "Plan is not currently executing";
 
         var doneSteps = plan.Steps.Take(plan.CurrentStep).ToArray();
-        _currentPlan.Value = plan with { Steps = doneSteps.Concat(newSteps).ToArray() };
+        _currentPlan = plan with { Steps = doneSteps.Concat(newSteps).ToArray() };
         return $"🔄 Plan revised: {reason}\n{string.Join("\n", newSteps.Select((s, i) => $"  {i + 1}. {s.Title}"))}";
     }
 
     [Description("Show current plan status")]
     public static string PlanStatus()
     {
-        var plan = _currentPlan.Value;
+        var plan = _currentPlan;
         if (plan == null) return "No active plan.";
 
         var sb = new StringBuilder();
@@ -125,20 +128,20 @@ public static class PlanTools
 
     public static string ApprovePlan()
     {
-        var plan = _currentPlan.Value;
+        var plan = _currentPlan;
         if (plan == null) return "No plan to approve";
         if (plan.Status != "proposed") return "Plan already " + plan.Status;
-        _currentPlan.Value = plan with { Status = "approved" };
+        _currentPlan = plan with { Status = "approved" };
         return $"✅ Plan approved! Starting execution...";
     }
 
     public static string StartExecution()
     {
-        var plan = _currentPlan.Value;
+        var plan = _currentPlan;
         if (plan == null) return "No plan";
         if (plan.Status != "approved") return "Plan must be approved first";
-        _currentPlan.Value = plan with { Status = "executing" };
-        var first = _currentPlan.Value!.Steps[0];
-        return $"🚀 Starting plan: **{_currentPlan.Value!.Summary}**\n\nStep 1: **{first.Title}** — {first.Action}";
+        _currentPlan = plan with { Status = "executing" };
+        var first = _currentPlan!.Steps[0];
+        return $"🚀 Starting plan: **{_currentPlan!.Summary}**\n\nStep 1: **{first.Title}** — {first.Action}";
     }
 }

@@ -231,7 +231,8 @@ public static class SlashCommands
         if (int.TryParse(input, out var num) && num >= 1 && num <= flatList.Count)
         {
             var cmdName = flatList[num - 1];
-            var spec = Commands.First(c => c.Cmd == cmdName);
+            var spec = Commands.FirstOrDefault(c => c.Cmd == cmdName)
+                ?? throw new InvalidOperationException($"Command '{cmdName}' not found in command list");
 
             if (!string.IsNullOrEmpty(spec.ArgsHint))
             {

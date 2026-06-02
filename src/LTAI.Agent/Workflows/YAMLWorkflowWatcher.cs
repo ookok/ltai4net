@@ -89,14 +89,12 @@ public sealed class YAMLWorkflowWatcher : IDisposable
         if (!IsWatchedFile(path)) return;
         // Coalesce multiple events for the same file into a single reload
         // (editors often emit Created+Changed+Changed in quick succession).
-        _debounceTimers.AddOrUpdate(
-            path,
-            _ => new Timer(_ => _ = ReloadAsync(path), null, DebounceDelay, Timeout.InfiniteTimeSpan),
-            (_, existing) =>
-            {
-                existing.Change(DebounceDelay, Timeout.InfiniteTimeSpan);
-                return existing;
-            });
+        // A1: TryRemove + fresh TryAdd avoids ObjectDisposedException from
+        // calling Change() on a Timer that has already fired and disposed itself.
+        _debounceTimers.TryRemove(path, out var old);
+        old?.Dispose();
+        _debounceTimers.TryAdd(
+            path, new Timer(_ => _ = ReloadAsync(path), null, DebounceDelay, Timeout.InfiniteTimeSpan));
     }
 
     private static bool IsWatchedFile(string path)

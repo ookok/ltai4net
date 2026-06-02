@@ -37,7 +37,7 @@ public sealed partial class KgStore : IDisposable
     private readonly SqliteConnection _writer;
     private readonly SqliteConnection _reader;
     private readonly SemaphoreSlim _writeLock = new(1, 1);
-    private readonly AsyncLocal<bool> _ownsWriteLock = new();
+    [ThreadStatic] private static bool _ownsWriteLock;
     private readonly string _dbPath;
     private bool _disposed;
     public string DbPath => _dbPath;
@@ -111,41 +111,41 @@ public sealed partial class KgStore : IDisposable
 
     private SqliteCommand GetPreparedWrite(string sql)
     {
-        // Bound the cache: if over limit, clear all (simple but effective for small cache)
+        // A2: Use Lazy pattern to avoid GetOrAdd factory running multiple times under contention.
+        // The factory creates a SqliteCommand; if it runs N times, N-1 commands leak.
+        // Instead we accept the bounded leak of MaxCmdCacheSize × 2 and use the concurrent dictionary.
+        if (_writeCmdCache.TryGetValue(sql, out var existing)) return existing;
         if (_writeCmdCache.Count >= MaxCmdCacheSize)
         {
             foreach (var c in _writeCmdCache.Values) c.Dispose();
             _writeCmdCache.Clear();
         }
-        return _writeCmdCache.GetOrAdd(sql, key =>
-        {
-            var cmd = _writer.CreateCommand();
-            cmd.CommandText = key;
-            cmd.Prepare();
-            return cmd;
-        });
+        var cmd = _writer.CreateCommand();
+        cmd.CommandText = sql;
+        cmd.Prepare();
+        _writeCmdCache.TryAdd(sql, cmd);
+        return _writeCmdCache.TryGetValue(sql, out var final) ? final : cmd;
     }
 
     private SqliteCommand GetPreparedRead(string key, string sql)
     {
         ThrowIfDisposed();
-        // Bound the cache
-        if (_readCmdCache.Count >= MaxCmdCacheSize)
-        {
-            foreach (var c in _readCmdCache.Values) c.Dispose();
-            _readCmdCache.Clear();
-        }
+        // A2: avoid race-to-set pattern — check, create, TryAdd
         if (_readCmdCache.TryGetValue(key, out var cmd))
         {
             cmd.Parameters.Clear();
             return cmd;
         }
-
+        if (_readCmdCache.Count >= MaxCmdCacheSize)
+        {
+            foreach (var c in _readCmdCache.Values) c.Dispose();
+            _readCmdCache.Clear();
+        }
         cmd = _reader.CreateCommand();
         cmd.CommandText = sql;
         cmd.Prepare();
-        _readCmdCache[key] = cmd;
-        return cmd;
+        _readCmdCache.TryAdd(key, cmd);
+        return _readCmdCache.TryGetValue(key, out var final) ? final : cmd;
     }
 
     /// <summary>Execute a write command with exclusive async lock (reentrant-safe).</summary>
@@ -154,10 +154,10 @@ public sealed partial class KgStore : IDisposable
     {
         ThrowIfDisposed();
         bool acquired = false;
-        if (!_ownsWriteLock.Value)
+        if (!_ownsWriteLock)
         {
             await _writeLock.WaitAsync().ConfigureAwait(false);
-            _ownsWriteLock.Value = true;
+            _ownsWriteLock = true;
             acquired = true;
         }
         try
@@ -167,17 +167,17 @@ public sealed partial class KgStore : IDisposable
             bindParams?.Invoke(cmd);
             return await action(cmd).ConfigureAwait(false);
         }
-        finally { if (acquired) { _ownsWriteLock.Value = false; _writeLock.Release(); Interlocked.Increment(ref _cacheStamp); } }
+        finally { if (acquired) { _ownsWriteLock = false; _writeLock.Release(); Interlocked.Increment(ref _cacheStamp); } }
     }
 
     private async Task WriteLockVoidAsync(string sql, Action<SqliteCommand>? bindParams = null)
     {
         ThrowIfDisposed();
         bool acquired = false;
-        if (!_ownsWriteLock.Value)
+        if (!_ownsWriteLock)
         {
             await _writeLock.WaitAsync().ConfigureAwait(false);
-            _ownsWriteLock.Value = true;
+            _ownsWriteLock = true;
             acquired = true;
         }
         try
@@ -187,7 +187,7 @@ public sealed partial class KgStore : IDisposable
             bindParams?.Invoke(cmd);
             await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
         }
-        finally { if (acquired) { _ownsWriteLock.Value = false; _writeLock.Release(); Interlocked.Increment(ref _cacheStamp); } }
+        finally { if (acquired) { _ownsWriteLock = false; _writeLock.Release(); Interlocked.Increment(ref _cacheStamp); } }
     }
 
     // ═══════════════════════════════════════════
@@ -422,10 +422,10 @@ public sealed partial class KgStore : IDisposable
     {
         ThrowIfDisposed();
         bool acquired = false;
-        if (!_ownsWriteLock.Value)
+        if (!_ownsWriteLock)
         {
             await _writeLock.WaitAsync().ConfigureAwait(false);
-            _ownsWriteLock.Value = true;
+            _ownsWriteLock = true;
             acquired = true;
         }
         try
@@ -453,7 +453,7 @@ public sealed partial class KgStore : IDisposable
             tx.Commit();
             _resultCache.Compact(0.5);
         }
-        finally { if (acquired) { _ownsWriteLock.Value = false; _writeLock.Release(); } }
+        finally { if (acquired) { _ownsWriteLock = false; _writeLock.Release(); } }
     }
 
     /// <summary>
@@ -465,10 +465,10 @@ public sealed partial class KgStore : IDisposable
     {
         ThrowIfDisposed();
         bool acquired = false;
-        if (!_ownsWriteLock.Value)
+        if (!_ownsWriteLock)
         {
             await _writeLock.WaitAsync().ConfigureAwait(false);
-            _ownsWriteLock.Value = true;
+            _ownsWriteLock = true;
             acquired = true;
         }
         try
@@ -478,7 +478,7 @@ public sealed partial class KgStore : IDisposable
             tx.Commit();
             Interlocked.Increment(ref _cacheStamp);
         }
-        finally { if (acquired) { _ownsWriteLock.Value = false; _writeLock.Release(); } }
+        finally { if (acquired) { _ownsWriteLock = false; _writeLock.Release(); } }
     }
 
     private const string SQL_GET_DOCS = "SELECT * FROM Docs WHERE node_id = @nid ORDER BY id;";
@@ -775,10 +775,10 @@ public sealed partial class KgStore : IDisposable
     {
         ThrowIfDisposed();
         bool acquired = false;
-        if (!_ownsWriteLock.Value)
+        if (!_ownsWriteLock)
         {
             await _writeLock.WaitAsync().ConfigureAwait(false);
-            _ownsWriteLock.Value = true;
+            _ownsWriteLock = true;
             acquired = true;
         }
         try
@@ -792,7 +792,7 @@ public sealed partial class KgStore : IDisposable
             await OptimizeFtsAsync().ConfigureAwait(false);
             _resultCache.Compact(0.5);
         }
-        finally { if (acquired) { _ownsWriteLock.Value = false; _writeLock.Release(); } }
+        finally { if (acquired) { _ownsWriteLock = false; _writeLock.Release(); } }
     }
 
     // ═══════════════════════════════════════════

@@ -41,7 +41,10 @@ public sealed class WasmtimeSandbox : AIContextProvider
     private readonly ILogger<WasmtimeSandbox>? _logger;
     private readonly Engine? _wasmEngine;
     private readonly bool _wasmAvailable;
-    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, Wasmtime.Module> _moduleCache = new();
+    // Bounded WASM module cache (max 32 modules — each can be several MB)
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, Wasmtime.Module> _moduleCache = new(4, 32);
+    private const int ModuleCacheMax = 32;
+    private static int _moduleCount;
 
     private const int ShellTimeoutSec = 30;
     private const int WasmTimeoutSec = 60;
@@ -209,10 +212,16 @@ public sealed class WasmtimeSandbox : AIContextProvider
         {
             var wasmBytes = await File.ReadAllBytesAsync(fp, ct).ConfigureAwait(false);
 
-            // Compile module from bytes (with cache)
+            // Compile module from bytes (with bounded cache)
             var name = Path.GetFileName(fp);
             if (!_moduleCache.TryGetValue(name, out var module))
             {
+                if (Interlocked.Increment(ref _moduleCount) > ModuleCacheMax)
+                {
+                    foreach (var m in _moduleCache.Values) m.Dispose();
+                    _moduleCache.Clear();
+                    Interlocked.Exchange(ref _moduleCount, 0);
+                }
                 module = Module.FromBytes(_wasmEngine, name, wasmBytes.AsSpan());
                 _moduleCache.TryAdd(name, module);
             }

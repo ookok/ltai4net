@@ -170,15 +170,22 @@ public sealed class SearchTools
             or ".gif" or ".bmp" or ".ico" or ".pdf" or ".zip" or ".gz" or ".tar"
             or ".obj" or ".lib" or ".pdb" or ".meta.json";
 
-    private static readonly ConcurrentDictionary<string, Regex> _globCache = new(StringComparer.OrdinalIgnoreCase);
+    // Bounded glob→regex cache (LRU, max 256 entries)
+    private static readonly ConcurrentDictionary<string, Regex> _globCache = new(4, 256, StringComparer.OrdinalIgnoreCase);
+    private const int GlobCacheMax2 = 256;
+    private static int _globCount2;
 
     private static bool FileMatchesGlob(string name, string glob)
     {
-        var regex = _globCache.GetOrAdd(glob, g =>
+        if (!_globCache.TryGetValue(glob, out var regex))
         {
-            var pattern = "^" + Regex.Escape(g).Replace(@"\*", ".*").Replace(@"\?", ".") + "$";
-            return new Regex(pattern, RegexOptions.Compiled | RegexOptions.IgnoreCase);
-        });
+            if (Interlocked.Increment(ref _globCount2) > GlobCacheMax2) { _globCache.Clear(); Interlocked.Exchange(ref _globCount2, 0); }
+            var pattern = "^" + Regex.Escape(glob).Replace(@"\*", ".*").Replace(@"\?", ".") + "$";
+            regex = new Regex(pattern, RegexOptions.Compiled | RegexOptions.IgnoreCase, TimeSpan.FromSeconds(1));
+            _globCache.TryAdd(glob, regex);
+            if (!_globCache.TryGetValue(glob, out var r)) return regex.IsMatch(name);
+            regex = r;
+        }
         return regex.IsMatch(name);
     }
 

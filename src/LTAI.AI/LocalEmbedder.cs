@@ -442,7 +442,9 @@ public sealed class LocalEmbedder : IDisposable
         };
 
         using var results = session.Run(inputs);
-        var output = results.First().AsTensor<float>();
+        if (results.Count == 0)
+            throw new InvalidOperationException("ONNX inference returned zero output tensors");
+        var output = results[0].AsTensor<float>();
         // output dimensions: [N, actualMaxLen, hiddenDim]
         int hiddenDim = output.Dimensions[2];
 

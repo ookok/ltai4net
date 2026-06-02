@@ -61,8 +61,8 @@ public sealed class BackgroundJobService : IDisposable
 
     private void ScheduleCleanup(string id)
     {
-        // Schedule a fire-and-forget cleanup task with cancellation support.
-        // The task is tracked by the CTS so Dispose waits for it.
+        // F3: catch-all exception handler — unobserved exception from Task.Run
+        // in .NET Core 3.0+ crashes the finalizer thread.
         _ = Task.Run(async () =>
         {
             try
@@ -71,6 +71,10 @@ public sealed class BackgroundJobService : IDisposable
                 _jobs.TryRemove(id, out _);
             }
             catch (OperationCanceledException) { /* service shutting down */ }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"BGJS cleanup error: {ex.Message}");
+            }
         }, _cts.Token);
     }
 

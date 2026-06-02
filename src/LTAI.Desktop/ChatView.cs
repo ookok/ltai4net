@@ -515,6 +515,8 @@ public sealed class ChatView : UserControl
         Border? taskBanner = null;
         var firstTokenReceived = false;
 
+        // A5: dispose previous CTS before reassignment to avoid timer leak
+        if (_cts is { IsCancellationRequested: false }) { _cts.Cancel(); _cts.Dispose(); }
         _cts = new CancellationTokenSource();
         var responseBuf = new StringBuilder();
         var thinkBuf = new StringBuilder();

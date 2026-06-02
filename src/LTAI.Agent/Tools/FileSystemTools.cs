@@ -290,15 +290,19 @@ public sealed class FileSystemTools
         _ => $"{bytes / 1048576.0:F1} MB"
     };
 
-    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, Regex> _globCache = new(StringComparer.OrdinalIgnoreCase);
+    // Bounded glob→regex cache (LRU, max 256 entries — prevents ReDoS memory leak)
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, Regex> _globCache = new(4, 256, StringComparer.OrdinalIgnoreCase);
+    private const int GlobCacheMax = 256;
+    private static int _globCount;
 
     private static Regex GlobToRegex(string glob)
     {
-        return _globCache.GetOrAdd(glob, g =>
-        {
-            var p = Regex.Escape(g).Replace(@"\*\*", ".*").Replace(@"\*", "[^/]*").Replace(@"\?", ".").Replace(@"{", "(?:").Replace(@",", "|").Replace(@"}", ")");
-            return new Regex($"^{p}$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
-        });
+        if (_globCache.TryGetValue(glob, out var cached)) return cached;
+        if (Interlocked.Increment(ref _globCount) > GlobCacheMax) { _globCache.Clear(); Interlocked.Exchange(ref _globCount, 0); }
+        var p = Regex.Escape(glob).Replace(@"\*\*", ".*").Replace(@"\*", "[^/]*").Replace(@"\?", ".").Replace(@"{", "(?:").Replace(@",", "|").Replace(@"}", ")");
+        var regex = new Regex($"^{p}$", RegexOptions.IgnoreCase | RegexOptions.Compiled, TimeSpan.FromSeconds(1));
+        _globCache.TryAdd(glob, regex);
+        return _globCache.TryGetValue(glob, out var r) ? r : regex;
     }
 
     private async Task BuildTreeAsync(string dir, string prefix, int depth, int maxDepth, bool includeDeps, StringBuilder sb)
