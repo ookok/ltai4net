@@ -726,7 +726,7 @@ Connect SessionManager → ChatView and add SessionStatsPanel to MainWindow side
 
 | # | 任务 | 主题 | 优先级 | 预计 | 依赖 |
 |---|---|---|---|---|---|
-| **P14.1** | BGE INT8 量化（复用 **Xenova 预量化版** — `Xenova/bge-small-{zh,en}-v1.5/onnx/model_int8.onnx`） | 量化补完 | 🔴 P0 | 0.5d | 无 |
+| **P14.1** ✅ | BGE INT8 量化（复用 **Xenova 预量化版** — `Xenova/bge-small-{zh,en}-v1.5/onnx/model_int8.onnx`） | 量化补完 | 🔴 P0 | 0.5d | 无 |
 | **P14.2** | P9.1 DevUI 显示 active EP + quant 状态（P13.2 telemetry 已埋点，未 surface） | 可观测性 | 🔴 P0 | 0.5d | P13.2 ✅ |
 | **P14.3** | TUI `/model` 菜单扩展（`cleanup`/`info`/`quant` 三子命令） | UX | 🔴 P0 | 1d | P13.6 ✅ |
 | **P14.4** | INT8 vs FP32 性能 benchmark（P11.2 BDN 框架 + GPU vs CPU 对照） | 可观测性 | 🟡 P1 | 1d | 无 |
@@ -744,19 +744,23 @@ Connect SessionManager → ChatView and add SessionStatsPanel to MainWindow side
 
 ## 主题分组
 
-### 主题 1：量化补完（P14.1）
+### 主题 1：量化补完（P14.1）✅ 完成 (commit `bdcc30e`)
 - **目标**：BGE-zh/en 也支持 INT8，消除 P13.6 "95MB FP32" 死角
-- **原方案**：Python `onnxruntime.quantize_static()` + 校准数据 → ship 到 `hf-mirror.com` **❌ 不可行**
-  - `hf-mirror.com` 是 huggingface.co 的 1:1 **只读镜像**，不支持登录/上传
-  - 需 HF 账号才能上传到 huggingface.co（**用户已确认**）
-- **✅ 修订方案**：复用 **Xenova 预量化版本**（Transformers.js 团队维护）
-  - `Xenova/bge-small-zh-v1.5/onnx/model_int8.onnx` (23.9MB)
-  - `Xenova/bge-small-en-v1.5/onnx/model_int8.onnx` (33.8MB)
-  - `Xenova/all-MiniLM-L6-v2/onnx/model_int8.onnx` (23MB) — P13.1 现用的 AVX-512 专版可一并改
-  - 零账号、零 Python、零生成；改 `LocalEmbedder.KnownModels` 2-3 个 URL 即可
-- **决策 D58（待确认）**：MiniLM 是否也换 Xenova 通用 `model_int8.onnx` 替代现 AVX-512+VNNI 专版？后者绑定 AVX-512 指令集，老 CPU 不可用
-- **决策 D59（待确认）**：P14.1 完成时是否调用 `CleanupStaleVariant` 自动删旧 FP32 文件（-71MB × 1 = -71MB 立即回收）
-- **收益**：BGE 228MB FP32 → 58MB INT8 = -170MB 磁盘 + 2-3× 推理加速（CPU）
+- **✅ 完成方案**：复用 **Xenova 预量化版本**（Transformers.js 团队维护）
+  - `Xenova/all-MiniLM-L6-v2/onnx/model_int8.onnx` (21.9MB) — universal INT8
+  - `Xenova/bge-small-zh-v1.5/onnx/model_int8.onnx` (22.8MB)
+  - `Xenova/bge-small-en-v1.5/onnx/model_int8.onnx` (32.2MB)
+  - 零账号、零 Python、零生成；改 `LocalEmbedder.KnownModels` 3 个 URL + 3 个 build target
+- **D58（已确认）**：MiniLM 走 Xenova 通用 `model_int8.onnx`（**替代 AVX-512+VNNI 专版** — 后者绑定 AVX-512 指令集，老 CPU 不可用）
+- **D59（已确认）**：不调用 `CleanupStaleVariant` 自动删旧 FP32；用户主动触发（TUI `/model cleanup` 子命令 = P14.3，或 `LocalEmbedder.CleanupStaleVariant()` 调用）
+- **MiniLM 一次性迁移**：build target 加 `<Delete>` step（`models/minilm-l6-v2/model.int8.onnx` 旧 AVX-512 专版 → Xenova 通用 INT8）
+  - 旧文件 23,026,053 字节（AVX-512+VNNI）→ 新文件 22,972,370 字节（Xenova 通用）
+  - 条件 `!Exists` 触发后自动 Delete + curl 重下；后续 build 因 `!Exists` 假，target 跳过
+- **磁盘效果**：3 模型合计 **213MB (P13.6) → 78MB (P14.1) = -135MB (-63%)**
+  - MiniLM: 23MB (旧 AVX-512 INT8) + 90MB (旧 FP32) → 22MB (Xenova INT8) + 90MB (旧 FP32 留作回退)
+  - BGE-zh: 95MB (旧 FP32) → 23MB (Xenova INT8) [-72MB]
+  - BGE-en: 95MB (旧 FP32) → 32MB (Xenova INT8) [-63MB]
+- **收益**：BGE-zh/en 228MB FP32 → 56MB INT8 = **-172MB 磁盘** + 2-3× 推理加速（CPU）
 
 ### 主题 2：可观测性（P14.2 + P14.4 + P14.6）
 - **P14.2**：DevUI dashboard 新增列 `ActiveEP` (DML/CUDA/CPU) + `Quant` (FP32/INT8) — `LocalEmbedder.ActiveExecutionProvider` + `UsingQuantizedModel` 已埋点
@@ -842,10 +846,10 @@ Connect SessionManager → ChatView and add SessionStatsPanel to MainWindow side
 ## 推荐执行顺序
 
 ```
-P0 (6 个) ──→ P1 (4 个) ──→ P2 (3 个) ──→ P3 (2 个)
-P14.2         P14.4         P14.8         P14.11
+P0 (5 个) ──→ P1 (4 个) ──→ P2 (3 个) ──→ P3 (2 个)
+P14.2 ✅      P14.4         P14.8         P14.11
 P14.3         P14.5         P14.9         P14.12
-P14.1         P14.6         P14.10
+P14.1 ✅      P14.6         P14.10
 P14.13        P14.7
 P14.14
 P14.15
@@ -853,7 +857,7 @@ P14.15
 
 | 阶段 | 总工时 | 关键产出 |
 |---|---|---|
-| **P0** | ~4 天 | 可观测性 + 量化补完 + UX 增强（最高 ROI） |
+| **P0** (1/5 done) | ~4 天 | 可观测性 + 量化补完 + UX 增强（最高 ROI） |
 | **P1** | ~4 天 | 缓存完善 + 性能数字（量化投资回报可视化） |
 | **P2** | ~3 周 | 高级 UX + 鲁棒性（生产就绪） |
 | **P3** | ~1 个月 | R&D 类（实验性，可推迟） |
