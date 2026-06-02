@@ -731,7 +731,7 @@ Connect SessionManager → ChatView and add SessionStatsPanel to MainWindow side
 | **P14.3** ✅ | TUI `/model` 菜单扩展（`cleanup`/`info`/`quant` 三子命令） | UX | 🔴 P0 | 1d | P13.6 ✅ |
 | **P14.4** | INT8 vs FP32 性能 benchmark（P11.2 BDN 框架 + GPU vs CPU 对照） | 可观测性 | 🟡 P1 | 1d | 无 |
 | **P14.5** | DecisionTreeRouter 远程 API 结果 cache 到 `ToolEmbeddingCache`（P13.3） | 缓存 | 🟡 P1 | 2-3d | P12 ✅ |
-| **P14.6** | `ToolEmbeddingCache.CachedEntryCount` 暴露到 DevUI dashboard（P13.4） | 可观测性 | 🟡 P1 | 0.5d | P14.5 |
+| **P14.6** ✅ | `ToolEmbeddingCache.CachedEntryCount` 暴露到 DevUI dashboard（P13.4） | 可观测性 | 🟡 P1 | 0.5d | P14.5 |
 | **P14.7** | `Workflows.Declarative.Mcp`（P7.4 新增 — 纯本地，无 Azure 依赖）— YAML workflow 接 MCP 工具 | 工作流扩展 | 🟡 P1 | 1-2d | 无 |
 | **P14.8** | 热模型切换（不重启进程换 MiniLM ↔ BGE，session 持久化） | UX | 🟢 P2 | 1w | 无 |
 | **P14.9** | Per-model 量化配置（MiniLM=int8, BGE=fp32, BGE-large=fp32 混搭） | 灵活 | 🟢 P2 | 3-5d | P13 ✅ |
@@ -769,7 +769,12 @@ Connect SessionManager → ChatView and add SessionStatsPanel to MainWindow side
   - 边界处理：(disabled — remote API) / (not loaded yet) / (no model on disk)
   - telemetry 来源：`LocalEmbedder.ActiveExecutionProvider` / `UsingQuantizedModel` / `CurrentModelName` / `DefaultDisabled` / `ListAvailableModels()`
 - **P14.4**：BDN 跑 INT8 vs FP32 latency/throughput（cache miss 差异 1-3ms vs 5-10ms；GPU EP 对照）
-- **P14.6**：`ToolEmbeddingCache.CachedEntryCount` 暴露到 dashboard，"cache hit" 颜色（绿=全命中 / 黄=部分命中 / 红=全 miss）
+- **P14.6** ✅ 完成 (commit `8c013e8`)：`ToolEmbeddingCache` 加 hit/miss 计数器；dashboard header 新增第 3 行（5→6 行）
+  - `CacheHits` / `CacheMisses` / `CacheLookups` / `HitRate` 四个新只读属性（`Interlocked` 线程安全）
+  - `BuildCacheStatusLine` 渲染 `N entries · M hits · M misses · hit rate X%`
+  - 颜色：hit rate ≥ 80% green / ≥ 50% yellow / < 50% red
+  - `BuildCacheStatusLine(null)` fallback 到 `(not registered)`
+  - TuiApp + TUI Program.cs 透传 DI 注入
 
 ### 主题 3：UX 改进（P14.3 + P14.8 + P14.12）
 - **P14.3**：TUI `/model` 菜单三子命令
@@ -909,13 +914,31 @@ Connect SessionManager → ChatView and add SessionStatsPanel to MainWindow side
   - **D64** `cleanup` 把损坏下载（<1KB）视同不存在，避免删错文件
   - **D65** info 命令只读，不触发任何 ONNX 加载（避免 `/model info` 启动 5-10s ONNX）
 
+#### P14.6 ToolEmbeddingCache hit rate 在 DevUI dashboard 表面化（0.5d）✅ 完成 (commit `8c013e8`)
+- **ToolEmbeddingCache** (`src/LTAI.AI/ToolEmbeddingCache.cs`):
+  - 4 个新只读属性：`CacheHits` / `CacheMisses` / `CacheLookups` / `HitRate`（`Interlocked.Read/Increment` 线程安全）
+  - 在 `GetOrComputeAllAsync` 的两个分支分别 `_hits++` (cache 命中) / `_misses++` (新条目)
+- **DevUIDashboardView** (`src/LTAI.TUI/DevUI/DevUIDashboardView.cs`):
+  - 新增 `BuildCacheStatusLine(ToolEmbeddingCache?)` helper — header 第 3 行渲染 `N entries · M hits · M misses · hit rate X%`
+  - 颜色规则：hit rate ≥ 80% green / ≥ 50% yellow / < 50% red
+  - `cache == null` → `(not registered)` 占位符
+  - Header `Size(5) → Size(6)` 多容纳 1 行
+- **TuiApp + TUI Program.cs** 透传 DI：`TuiApp` ctor 加 `ToolEmbeddingCache? embedCache = null` 参数 + `ShowDashboard()` 透传到 `Render(... cache)`；TUI Program.cs 用 `sp.GetService<LTAI.AI.ToolEmbeddingCache>()` 注入
+- **Files touched**:
+  - `src/LTAI.AI/ToolEmbeddingCache.cs`（+10 / -0：4 prop + 2 Interlocked.Increment）
+  - `src/LTAI.TUI/DevUI/DevUIDashboardView.cs`（+25 / -3：签名 + BuildCacheStatusLine + Header Size 调整）
+  - `src/LTAI.TUI/TuiApp.cs`（+6 / -0：_embedCache 字段 + ctor param + ShowDashboard 透传）
+  - `src/LTAI.TUI/Program.cs`（+1 / -0：sp.GetService<ToolEmbeddingCache>()）
+- **Build**: LTAI.AI 0/0, LTAI.TUI 0/14 (pre-existing), Solution 0 errors
+- **收益**: 1 个头部数字即告诉用户 cache 是不是真的省了 ONNX 调用；命中率下降 = 工具描述频繁变 = 需要排查
+
 ## 推荐执行顺序
 
 ```
 P0 (5 个) ──→ P1 (4 个) ──→ P2 (3 个) ──→ P3 (2 个)
 P14.2 ✅      P14.4         P14.8         P14.11
 P14.3 ✅      P14.5         P14.9         P14.12
-P14.1 ✅      P14.6         P14.10
+P14.1 ✅      P14.6 ✅       P14.10
 P14.13 ✅     P14.7
 P14.14 ✅
 P14.15 ✅
@@ -923,8 +946,8 @@ P14.15 ✅
 
 | 阶段 | 总工时 | 关键产出 |
 |---|---|---|
-| **P0** (5/5 done) | ~4 天 | 可观测性 + 量化补完 + UX 增强（最高 ROI） |
-| **P1** | ~4 天 | 缓存完善 + 性能数字（量化投资回报可视化） |
+| **P0** (6/6 done) | ~4 天 | 可观测性 + 量化补完 + UX 增强（最高 ROI） |
+| **P1** | ~4 天 | 缓存完善 + 性能数字（量化投资回报可视化） | 1/4 done (P14.6) |
 | **P2** | ~3 周 | 高级 UX + 鲁棒性（生产就绪） |
 | **P3** | ~1 个月 | R&D 类（实验性，可推迟） |
 
