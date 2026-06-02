@@ -106,6 +106,44 @@ public sealed class EmbeddingConfig
 
     /// <summary>GPU device ID (multi-GPU systems). Default 0.</summary>
     public int DeviceId { get; init; } = 0;
+
+    /// <summary>
+    /// P14.9: per-model quantization overrides. Keyed by model id
+    /// (e.g. <c>minilm-l6-v2</c>, <c>bge-small-zh</c>); value is one of
+    /// <c>int8</c> / <c>fp32</c> / <c>auto</c> (same vocabulary as
+    /// <see cref="Quantization"/>). When a model is missing from this
+    /// dictionary, <see cref="Quantization"/> is used as the fallback.
+    /// <b>Priority: per-model &gt; global.</b>
+    /// <example>
+    /// appsettings.json:
+    /// <code>
+    /// "Embedding": {
+    ///   "Quantization": "auto",
+    ///   "Models": {
+    ///     "minilm-l6-v2": "int8",
+    ///     "bge-small-zh":  "fp32"
+    ///   }
+    /// }
+    /// </code>
+    /// </example>
+    /// </summary>
+    public IDictionary<string, string> Models { get; init; } = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// P14.9: resolve the effective quantization preference for a given
+    /// model id. Looks up <see cref="Models"/> first, then falls back to
+    /// <see cref="Quantization"/>. Returns <c>"auto"</c> if neither is set.
+    /// </summary>
+    public string GetQuantizationFor(string modelId)
+    {
+        if (!string.IsNullOrEmpty(modelId) &&
+            Models.TryGetValue(modelId, out var m) &&
+            !string.IsNullOrWhiteSpace(m))
+        {
+            return m.Trim().ToLowerInvariant();
+        }
+        return string.IsNullOrWhiteSpace(Quantization) ? "auto" : Quantization.Trim().ToLowerInvariant();
+    }
 }
 
 /// <summary>

@@ -548,6 +548,8 @@ public static class ServiceCollectionExtensions
 
         // P13.1 + P13.2: factory that reads LTAI:Embedding config at resolution
         // time and binds LocalEmbedder.Options before the ctor runs.
+        // P14.9: also forward EmbeddingConfig.Models so ResolveModelFiles /
+        // DownloadModelAsync can honor per-model quantization overrides.
         services.AddSingleton<LocalEmbedder>(sp =>
         {
             var embedOpts = sp.GetService<IOptions<LTAIOptions>>()?.Value.Embedding;
@@ -558,6 +560,7 @@ public static class ServiceCollectionExtensions
                     Gpu = embedOpts.Gpu,
                     Quantization = embedOpts.Quantization,
                     DeviceId = embedOpts.DeviceId,
+                    Models = new Dictionary<string, string>(embedOpts.Models, StringComparer.OrdinalIgnoreCase),
                 };
             }
             return new LocalEmbedder();

@@ -789,12 +789,15 @@ public sealed class LocalEmbedder : IDisposable
     }
 
     /// <summary>
-    /// P13.1: pick the on-disk model file based on <see cref="EmbeddingOptions.Quantization"/>.
-    /// Returns (modelPath, vocabPath, usingQuantized) — any may be null if not present.
+    /// P13.1: pick the on-disk model file based on the effective
+    /// quantization preference (P14.9: per-model override &gt; global
+    /// <see cref="EmbeddingOptions.Quantization"/>). Returns
+    /// (modelPath, vocabPath, usingQuantized) — any may be null if not present.
     /// </summary>
     private static (string? modelPath, string? vocabPath, bool usingQuant) ResolveModelFiles(string subDir, string modelName)
     {
-        var quantPref = (Options.Quantization ?? "auto").ToLowerInvariant();
+        // P14.9: prefer per-model override over global Quantization
+        var quantPref = Options.GetQuantizationFor(modelName);
         var vocabFile = Path.Combine(subDir, "vocab.txt");
         var fp32File = Path.Combine(subDir, "model.onnx");
         var quantFile = KnownModels.TryGetValue(modelName, out var info) && info.QuantizedFileName != null
@@ -922,8 +925,9 @@ public sealed class LocalEmbedder : IDisposable
         Directory.CreateDirectory(modelDir);
         var vocabFile = Path.Combine(modelDir, "vocab.txt");
 
-        // P13.6: single-file principle — pick one variant based on Options.Quantization
-        var quantPref = (Options.Quantization ?? "auto").ToLowerInvariant();
+        // P13.6: single-file principle — pick one variant based on the
+        // effective quant preference (P14.9: per-model > global).
+        var quantPref = Options.GetQuantizationFor(name);
         var wantQuant = (quantPref == "auto" || quantPref == "int8")
                         && info.QuantizedModelUrl != null
                         && info.QuantizedFileName != null;

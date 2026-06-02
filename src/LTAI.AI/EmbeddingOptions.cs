@@ -39,4 +39,31 @@ public sealed class EmbeddingOptions
     /// appropriate for the chosen EP (default true; recommended).
     /// </summary>
     public bool EnableGraphOptimization { get; set; } = true;
+
+    /// <summary>
+    /// P14.9: per-model quantization overrides (mirrors
+    /// <c>LTAI.Core.Configuration.EmbeddingConfig.Models</c>). Keyed by
+    /// model id (e.g. <c>minilm-l6-v2</c>); value is <c>int8</c> / <c>fp32</c>
+    /// / <c>auto</c>. <b>Priority: per-model &gt; <see cref="Quantization"/>.</b>
+    /// Populated by <c>MultiProviderChatClient.AddLTAIAI</c> from
+    /// <c>LTAIOptions.Embedding.Models</c> at DI resolution time so the
+    /// static <see cref="LocalEmbedder.Options"/> mirrors config.
+    /// </summary>
+    public IDictionary<string, string> Models { get; set; }
+        = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// P14.9: effective quantization preference for a model id — per-model
+    /// override first, then global <see cref="Quantization"/>, then <c>auto</c>.
+    /// </summary>
+    public string GetQuantizationFor(string modelId)
+    {
+        if (!string.IsNullOrEmpty(modelId)
+            && Models.TryGetValue(modelId, out var m)
+            && !string.IsNullOrWhiteSpace(m))
+        {
+            return m.Trim().ToLowerInvariant();
+        }
+        return string.IsNullOrWhiteSpace(Quantization) ? "auto" : Quantization.Trim().ToLowerInvariant();
+    }
 }

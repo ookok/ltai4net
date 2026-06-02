@@ -509,6 +509,13 @@ public static class SlashCommands
         lines.Add($"  偏好 quant: [cyan]{LTAI.AI.LocalEmbedder.Options.Quantization}[/]  " +
                   $"GPU: [cyan]{LTAI.AI.LocalEmbedder.Options.Gpu}[/]  " +
                   $"DeviceId: [cyan]{LTAI.AI.LocalEmbedder.Options.DeviceId}[/]");
+        // P14.9: per-model overrides
+        if (LTAI.AI.LocalEmbedder.Options.Models is { Count: > 0 } perModel)
+        {
+            var entries = string.Join(", ",
+                perModel.Select(kv => $"[cyan]{kv.Key}[/]=[yellow]{kv.Value}[/]"));
+            lines.Add($"  per-model: {entries}");
+        }
         if (LTAI.AI.LocalEmbedder.DefaultDisabled)
             lines.Add("  状态: [grey]已禁用（远程 API 接管）[/]");
         else if (embedder.Available)
@@ -563,6 +570,13 @@ public static class SlashCommands
                     lines.Add($"    Vocab: [green]●[/] {FormatBytes(new FileInfo(vocab).Length)}");
                 else
                     lines.Add("    Vocab: [red]○[/] —");
+
+                // P14.9: effective quant preference for this model
+                var effQuant = LTAI.AI.LocalEmbedder.Options.GetQuantizationFor(m.Id);
+                var hasOverride = LTAI.AI.LocalEmbedder.Options.Models.ContainsKey(m.Id);
+                var effColor = effQuant == "int8" || effQuant == "auto" ? "green" : "yellow";
+                var suffix = hasOverride ? " (override)" : "";
+                lines.Add($"    Eff. quant: [{effColor}]{effQuant}[/]{suffix}");
             }
             else
                 lines.Add("    [yellow](未下载)[/]");
