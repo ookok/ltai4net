@@ -9,6 +9,8 @@ using Microsoft.Agents.AI;
 using Microsoft.Agents.AI.Compaction;
 using Microsoft.Agents.AI.Hosting;
 using Microsoft.Agents.AI.Tools.Shell;
+using Microsoft.Agents.AI.Workflows.Declarative;
+using Microsoft.Agents.AI.Workflows.Declarative.Mcp;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -123,11 +125,16 @@ public static class ServiceCollectionExtensions
         // and listens for file changes via FileSystemWatcher (debounced 250ms).
         // The watcher is registered as a hosted service so it starts/stops
         // with the host.
+        // P14.7: DefaultMcpToolHandler is a singleton that owns the McpClient
+        // cache and (per-server) HttpClient cache. Sharing it across workflows
+        // avoids duplicating connections to the same MCP server.
+        services.AddSingleton<IMcpToolHandler, DefaultMcpToolHandler>();
         services.AddSingleton<WorkflowHotReloadNotifier>();
         services.AddSingleton<YAMLWorkflowRegistry>(sp => new YAMLWorkflowRegistry(
             sp.GetRequiredService<IOptions<LTAIOptions>>(),
             sp.GetRequiredService<WorkflowHotReloadNotifier>(),
-            sp.GetRequiredService<ILogger<YAMLWorkflowRegistry>>()));
+            sp.GetRequiredService<ILogger<YAMLWorkflowRegistry>>(),
+            sp.GetService<IMcpToolHandler>()));
         services.AddSingleton<YAMLWorkflowWatcher>(sp => new YAMLWorkflowWatcher(
             sp.GetRequiredService<YAMLWorkflowRegistry>().WatchDirectory,
             sp.GetRequiredService<YAMLWorkflowRegistry>(),

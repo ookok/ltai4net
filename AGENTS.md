@@ -730,9 +730,9 @@ Connect SessionManager → ChatView and add SessionStatsPanel to MainWindow side
 | **P14.2** ✅ | P9.1 DevUI 显示 active EP + quant 状态（P13.2 telemetry 已埋点，未 surface） | 可观测性 | 🔴 P0 | 0.5d | P13.2 ✅ |
 | **P14.3** ✅ | TUI `/model` 菜单扩展（`cleanup`/`info`/`quant` 三子命令） | UX | 🔴 P0 | 1d | P13.6 ✅ |
 | **P14.4** | INT8 vs FP32 性能 benchmark（P11.2 BDN 框架 + GPU vs CPU 对照） | 可观测性 | 🟡 P1 | 1d | 无 |
-| **P14.5** | DecisionTreeRouter 远程 API 结果 cache 到 `ToolEmbeddingCache`（P13.3） | 缓存 | 🟡 P1 | 2-3d | P12 ✅ |
+| **P14.5** ✅ | DecisionTreeRouter 远程 API 结果 cache 到 `RemoteEmbeddingCache`（P13.3 替代方案 — in-process TTL 24h） | 缓存 | 🟡 P1 | 2-3d | P12 ✅ |
 | **P14.6** ✅ | `ToolEmbeddingCache.CachedEntryCount` 暴露到 DevUI dashboard（P13.4） | 可观测性 | 🟡 P1 | 0.5d | P14.5 |
-| **P14.7** | `Workflows.Declarative.Mcp`（P7.4 新增 — 纯本地，无 Azure 依赖）— YAML workflow 接 MCP 工具 | 工作流扩展 | 🟡 P1 | 1-2d | 无 |
+| **P14.7** ✅ | `Workflows.Declarative.Mcp`（P7.4 新增 — 纯本地，无 Azure 依赖）— YAML workflow 接 MCP 工具 | 工作流扩展 | 🟡 P1 | 1-2d | 无 |
 | **P14.8** | 热模型切换（不重启进程换 MiniLM ↔ BGE，session 持久化） | UX | 🟢 P2 | 1w | 无 |
 | **P14.9** | Per-model 量化配置（MiniLM=int8, BGE=fp32, BGE-large=fp32 混搭） | 灵活 | 🟢 P2 | 3-5d | P13 ✅ |
 | **P14.10** | API 失败 N 次 → 自动 fallback ONNX 加载（P13.5） | 鲁棒 | 🟢 P2 | 2-3d | P12 ✅ |
@@ -785,7 +785,7 @@ Connect SessionManager → ChatView and add SessionStatsPanel to MainWindow side
 - **P14.12**：`IHostedService.PreWarmEmbeddingModels` 后台下载所有 3 个模型
 
 ### 主题 4：缓存与降级（P14.5 + P14.10）
-- **P14.5**：`DecisionTreeRouter.SelectTopKWithScoresAsync` 也走 `ToolEmbeddingCache`；远程 API embedding 计算后 cache（key = `embed:remote:DeepSeek:<SHA-256(text)>`）
+- **P14.5** ✅ 完成 (commit `f0790b4`)：用 **`RemoteEmbeddingCache`** (in-process TTL 24h) 替代 `ToolEmbeddingCache`（原因：ToolEmbeddingCache 是持久化 JSON、键为本地 (Key, Description) 业务元组；远程 API 文本 token 不属于"工具/agent 描述"业务域） — 8 个 remote 调用方自动受益
 - **P14.10**：`EmbeddingClient` 维护失败计数器（window=10 calls），≥3 次连续失败 → 触发 `LocalEmbedder.PreWarmAsync()` 强制加载 ONNX 兜底
 
 ### 主题 5：灵活与质量（P14.9 + P14.11）
@@ -932,14 +932,39 @@ Connect SessionManager → ChatView and add SessionStatsPanel to MainWindow side
 - **Build**: LTAI.AI 0/0, LTAI.TUI 0/14 (pre-existing), Solution 0 errors
 - **收益**: 1 个头部数字即告诉用户 cache 是不是真的省了 ONNX 调用；命中率下降 = 工具描述频繁变 = 需要排查
 
+#### P14.7 `Workflows.Declarative.Mcp` 集成（1d）✅
+- **样本**：`src/LTAI.Agent/Workflows/ltai-workflows/mcp-docs-search.yaml` — 调用 `microsoft_docs_search` on `https://learn.microsoft.com/api/mcp`（流式 HTTP 传输，零认证），用 PowerFx `=` 表达式把搜索结果拼到 `SendActivity` activity 文本里
+- **新 ProjectReference**：`extern/agent-framework/dotnet/src/Microsoft.Agents.AI.Workflows.Declarative.Mcp/Microsoft.Agents.AI.Workflows.Declarative.Mcp.csproj`（MAF `DefaultMcpToolHandler` — 用 `HttpTransportMode.AutoDetect` 自动协商流式 HTTP）
+- **DI 注册**（`ServiceCollectionExtensions.cs` Step 3c）：
+  - `services.AddSingleton<IMcpToolHandler, DefaultMcpToolHandler>()` — 单例持有 McpClient 缓存 + per-server HttpClient 缓存
+  - `YAMLWorkflowRegistry` ctor 加 `IMcpToolHandler?` 参数（默认 `null` 兼容），`BuildWorkflow` 设 `options.McpToolHandler = _mcpToolHandler`
+  - `WorkflowWatcherHostedService.StartAsync` 调 `YAMLWorkflowHost.ConfigureMcpToolHandler(_mcpToolHandler)` — 静态 helper 也拿到 handler
+- **Key decisions**：
+  - **D85** MCP 走流式 HTTP（per user note）— MAF `HttpTransportMode.AutoDetect` 透明处理，无需手工指定
+  - **D86** `DefaultMcpToolHandler` 进程内单例：同 serverUrl 共享 McpClient + HttpClient，跨多个 workflow 复用
+  - **D87** `InvokeMcpTool` 的 `output.result: Local.SearchResults` + `SendActivity activity: =...` 串联 — PowerFx 表达式由 `Engine.Format` 评估
+  - **D88** YAMLWorkflowHost 是静态 helper，greeting.yaml 永不调 MCP，但 `ConfigureMcpToolHandler` 保证未来加 InvokeMcpTool 也能 work（YAML 重新保存 → P15 watcher 热重载）
+  - **D89** sample `requireApproval: false` — 公开只读 server，无需人审
+- **Files touched**：
+  - `src/LTAI.Agent/LTAI.Agent.csproj`（+1 ProjectReference）
+  - `src/LTAI.Agent/Workflows/ltai-workflows/mcp-docs-search.yaml`（新建）
+  - `src/LTAI.Agent/Workflows/YAMLWorkflowRegistry.cs`（+6 行：ctor 参数 + 字段 + BuildWorkflow 透传）
+  - `src/LTAI.Agent/Workflows/YAMLWorkflowHost.cs`（+18 行：静态字段 + ConfigureMcpToolHandler）
+  - `src/LTAI.Agent/Workflows/WorkflowWatcherHostedService.cs`（+7 行：ctor 参数 + StartAsync wiring）
+  - `src/LTAI.Agent/ServiceCollectionExtensions.cs`（+2 using + 1 AddSingleton + ctor 参数）
+- **Build**: LTAI.Agent 0/13 (pre-existing), Solution 0 errors / 25 (pre-existing)
+- **P15 集成**: P14.7 借 P15 之力 — 编辑 `mcp-docs-search.yaml` → `:w` → P15 watcher 250ms debounce → 自动 reload → 下次请求用新逻辑
+- **限**：`InvokeMcpTool` 需要 MAF 1.25.0-preview.1+；MAF 在 `Build` 时 `McpToolHandler` 必须非 null 才不抛 `DeclarativeModelException`
+- **D90 LTAI.LLM 模型不调 MCP**: LTAI LLM agent 不直接调 MCP（避免反复跳出去），MCP 是 YAML workflow 编排层的能力 — 用法: `ltai agents show LTAI-Chat` → system prompt 不提 MCP；TUI/Desktop 用户专门写 YAML 才用
+
 ## 推荐执行顺序
 
 ```
 P0 (5 个) ──→ P1 (4 个) ──→ P2 (3 个) ──→ P3 (2 个)
 P14.2 ✅      P14.4         P14.8         P14.11
-P14.3 ✅      P14.5         P14.9         P14.12
+P14.3 ✅      P14.5 ✅       P14.9         P14.12
 P14.1 ✅      P14.6 ✅       P14.10
-P14.13 ✅     P14.7
+P14.13 ✅     P14.7 ✅
 P14.14 ✅
 P14.15 ✅
 ```

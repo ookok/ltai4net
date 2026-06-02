@@ -40,6 +40,7 @@ public sealed class YAMLWorkflowRegistry
 {
     private readonly ILogger<YAMLWorkflowRegistry> _logger;
     private readonly WorkflowHotReloadNotifier _notifier;
+    private readonly IMcpToolHandler? _mcpToolHandler;
     private readonly string _watchDir;
     private readonly ConcurrentDictionary<string, WorkflowSnapshot> _workflows = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, DecisionTreeSnapshot> _configs = new(StringComparer.OrdinalIgnoreCase);
@@ -48,10 +49,12 @@ public sealed class YAMLWorkflowRegistry
     public YAMLWorkflowRegistry(
         IOptions<LTAIOptions> options,
         WorkflowHotReloadNotifier notifier,
-        ILogger<YAMLWorkflowRegistry> logger)
+        ILogger<YAMLWorkflowRegistry> logger,
+        IMcpToolHandler? mcpToolHandler = null)
     {
         _notifier = notifier;
         _logger = logger;
+        _mcpToolHandler = mcpToolHandler;
         _watchDir = options.Value.ResolveDataPath("workflows");
     }
 
@@ -180,13 +183,16 @@ public sealed class YAMLWorkflowRegistry
         }
     }
 
-    private static Workflow BuildWorkflow(string path, string content)
+    private Workflow BuildWorkflow(string path, string content)
     {
         // MAF DeclarativeWorkflowBuilder builds the workflow from a file path
         // or reader; we already read the content, so write to a temp file to
         // reuse the existing builder API. The temp file is cleaned up
         // immediately after Build returns.
-        var options = new DeclarativeWorkflowOptions(new NoOpAgentProvider());
+        var options = new DeclarativeWorkflowOptions(new NoOpAgentProvider())
+        {
+            McpToolHandler = _mcpToolHandler,
+        };
         return DeclarativeWorkflowBuilder.Build<string>(path, options);
     }
 

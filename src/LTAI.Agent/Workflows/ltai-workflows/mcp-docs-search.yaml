@@ -1,0 +1,62 @@
+#
+# Microsoft Learn Docs MCP search workflow (P14.7 sample).
+#
+# Demonstrates MAF `Workflows.Declarative.Mcp` integration: a YAML workflow
+# that calls the public Microsoft Learn Docs MCP server (streamable HTTP
+# transport, no auth required) via the `microsoft_docs_search` tool and
+# returns the result via SendActivity.
+#
+# The DefaultMcpToolHandler (registered in DI as a singleton, with its own
+# HttpClient cache) handles the transport. MAF's `HttpTransportMode.AutoDetect`
+# negotiates streamable HTTP automatically (no SSE fallback needed).
+#
+# Edit this file to:
+#   - change the search tool (the server also exposes `microsoft_docs_fetch`
+#     for retrieving a specific doc by URL)
+#   - add a second InvokeMcpTool step (e.g. fetch the top doc in full)
+#   - change the canned prefix/wrapping text
+#   - add a `ConditionGroup` to gate the call (e.g. only fire when input
+#     contains "docs" or "microsoft learn")
+#
+# No recompile required — P15 hot-reload picks up the change on save.
+#
+# ── YAML conventions ──
+# - `System.LastMessage.Text` is the user's input string
+# - `Local.*` is workflow-scoped variables
+# - PowerFx `=` prefix means the value is an expression, not a literal
+#
+kind: Workflow
+trigger:
+
+  kind: OnConversationStart
+  id: workflow_mcp_docs_search
+  actions:
+
+    # Capture the user's question into a local variable.
+    - kind: SetVariable
+      id: capture_query
+      variable: Local.Query
+      value: =System.LastMessage.Text
+
+    # Call microsoft_docs_search on the public Microsoft Learn Docs MCP server.
+    # `serverLabel` is a human-readable identifier (used for caching + logging).
+    # `requireApproval: false` skips the human-approval pause — the public docs
+    # server is read-only and safe.
+    # The result is captured into `Local.SearchResults` for downstream use.
+    - kind: InvokeMcpTool
+      id: search_docs
+      serverUrl: https://learn.microsoft.com/api/mcp
+      serverLabel: MicrosoftLearnDocs
+      toolName: microsoft_docs_search
+      requireApproval: false
+      arguments:
+        query: =Local.Query
+      output:
+        result: Local.SearchResults
+
+    # Surface the search result via SendActivity. The `activity` field is
+    # PowerFx-evaluated by MAF (note the `=` prefix), so the variable's
+    # current value is what gets emitted as the message text.
+    - kind: SendActivity
+      id: send_result
+      activity: ="📚 Microsoft Learn results for """ & Local.Query & """:" & Local.SearchResults

@@ -2,6 +2,7 @@
 
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Agents.AI.Workflows.Declarative;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
@@ -17,20 +18,28 @@ public sealed class WorkflowWatcherHostedService : IHostedService
 {
     private readonly YAMLWorkflowRegistry _registry;
     private readonly YAMLWorkflowWatcher _watcher;
+    private readonly IMcpToolHandler? _mcpToolHandler;
     private readonly ILogger<WorkflowWatcherHostedService> _logger;
 
     public WorkflowWatcherHostedService(
         YAMLWorkflowRegistry registry,
         YAMLWorkflowWatcher watcher,
-        ILogger<WorkflowWatcherHostedService> logger)
+        ILogger<WorkflowWatcherHostedService> logger,
+        IMcpToolHandler? mcpToolHandler = null)
     {
         _registry = registry;
         _watcher = watcher;
+        _mcpToolHandler = mcpToolHandler;
         _logger = logger;
     }
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
+        // P14.7: propagate the MCP handler to the static YAMLWorkflowHost
+        // so its compiled greeting fast-path workflow can also resolve
+        // InvokeMcpTool actions (no-op for greeting.yaml which never uses MCP).
+        YAMLWorkflowHost.ConfigureMcpToolHandler(_mcpToolHandler);
+
         // Eagerly load every existing workflow file at startup so the
         // first user request doesn't pay the YAML compile cost.
         await _registry.InitializeAsync(cancellationToken).ConfigureAwait(false);

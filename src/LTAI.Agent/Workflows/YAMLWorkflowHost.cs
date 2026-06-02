@@ -33,6 +33,7 @@ public static class YAMLWorkflowHost
 {
     private static readonly object _greetingLock = new();
     private static Workflow? _greetingWorkflow;
+    private static IMcpToolHandler? _mcpToolHandler;
 
     /// <summary>
     /// Run the greeting fast-path YAML workflow. Returns the canned reply if
@@ -93,9 +94,29 @@ public static class YAMLWorkflowHost
                     "Ensure ltai-workflows/*.yaml is copied to the output directory.");
             }
 
-            var options = new DeclarativeWorkflowOptions(new NoOpAgentProvider());
+            var options = new DeclarativeWorkflowOptions(new NoOpAgentProvider())
+            {
+                McpToolHandler = _mcpToolHandler,
+            };
             _greetingWorkflow = DeclarativeWorkflowBuilder.Build<string>(yamlPath, options);
             return _greetingWorkflow;
+        }
+    }
+
+    /// <summary>
+    /// P14.7: inject the MCP tool handler used by declarative workflows that
+    /// call <c>InvokeMcpTool</c> actions (e.g. <c>mcp-docs-search.yaml</c>).
+    /// Called once at startup from <see cref="LTAI.Agent.ServiceCollectionExtensions"/>.
+    /// Safe to call with <c>null</c> to disable MCP support for fast-path workflows.
+    /// </summary>
+    public static void ConfigureMcpToolHandler(IMcpToolHandler? handler)
+    {
+        _mcpToolHandler = handler;
+        // If the greeting workflow was already built, invalidate so the next
+        // call rebuilds with the new handler (preserves fast-path safety).
+        lock (_greetingLock)
+        {
+            _greetingWorkflow = null;
         }
     }
 
