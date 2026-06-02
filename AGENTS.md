@@ -1041,3 +1041,90 @@ P14.15
 | 3 模型合计 | **303MB** | **213MB** (-30%) |
 | 碎片化 | 2 文件/模型 | **1 文件/模型** |
 
+# 2026-06-02 P16 子模块可读性增强 (sparse-checkout + DTFx submodule)
+
+## Goal
+- P0：把 `extern/agent-framework` 改 sparse-checkout（251 MB → 27 MB，删 Python 整仓 + 30 个未用 dotnet subdirs + .dll/.pdb/.cache 构建产物），能"在源码里设断点"理解 MAF
+- P1：把 `Microsoft.DurableTask.*` 1.24.2 源码加成 submodule (`extern/durabletask-dotnet`)，填补 P8.1 反射背后的"黑盒"
+- P2：私有 `ltai-models` 仓库（23 MB INT8 + vocab + checksums）推迟到 P14.1 之前
+
+## Plan
+
+### P0 MAF sparse-checkout ✅
+- `git -C extern/agent-framework config core.sparseCheckoutCone false`（cone 模式不支持 `!` 排除）
+- `extern/agent-framework/.git/info/sparse-checkout` 写 non-cone 模式 pattern：
+  ```
+  /*
+  !/dotnet/tests/
+  !/dotnet/samples/
+  !/dotnet/.github/
+  !/dotnet/.vscode/
+  !**/bin/
+  !**/obj/
+  !**/*.dll
+  !**/*.pdb
+  !**/*.cache
+  !**/*.cache.json
+  !**/*.nupkg
+  !**/*.nupkg.gz
+  !**/*.nuspec
+  ```
+- `git read-tree -mu HEAD` 重算 working tree
+- **效果**：
+  - extern/agent-framework: 251.3 MB → **27.2 MB** (-89%)
+  - 35 个 MAF dotnet src 项目保留（含 LTAI 用的 17 个 + 18 个 transitive dep）
+  - .dll/.pdb/.cache 全删（构建时按需重生成）
+  - `dotnet build LTAI.sln` 0 errors / 0 新 warnings
+
+### P1 DTFx submodule (`extern/durabletask-dotnet`) ✅
+- `git submodule add -b main https://github.com/microsoft/durabletask-dotnet.git extern/durabletask-dotnet`
+- pin 到 `v1.24.2` tag (commit `0cd13b8171f01e7548d548696dc6e4aaa5130694`) — 与 LTAI 用的 `Microsoft.DurableTask.* 1.24.2` NuGet 对齐
+- 包含的关键源码：
+  - `src/InProcessTestHost/Sidecar/InMemoryOrchestrationService.cs` ← P8.1 反射的 `instanceStore.store` 字段就是这里
+  - `src/InProcessTestHost/Sidecar/Grpc/` ← gRPC sidecar
+  - `src/InProcessTestHost/Sidecar/Dispatcher/` ← orchestrator/activity 派发
+  - `src/InProcessTestHost/DurableTaskTestExtensions.cs` ← `AddInMemoryDurableTask` 扩展
+  - `src/Abstractions/`, `src/Client/`, `src/Worker/` ← 公共契约
+- **不**加 `<ProjectReference>` —— DTFx 仍走 NuGet（`Microsoft.DurableTask.* 1.24.2`），submodule 纯作为源码阅读/调试
+- shallow clone: 3.5 MB
+
+### 复现脚本 ✅
+- `scripts/dev-setup-submodules.ps1` (Windows PowerShell)
+- `scripts/dev-setup-submodules.sh` (Linux/macOS bash)
+- 作用：
+  1. `git submodule update --init --recursive` 拉子模块
+  2. 应用 MAF sparse-checkout 模式
+  3. 报告磁盘占用
+- 团队新成员 clone 后跑一次即达最优状态
+
+### Key Decisions
+- **D80 sparse-checkout 走 non-cone 模式**：git 2.54 cone 模式不支持 `!/path/` 排除，要列全 include + 排除 bin/obj/dll/pdb/cache 必须用 globs
+- **D81 extern/agent-framework 不进 .gitattributes 永久模式**：sparse-checkout 是 client-local；脚本化才能团队复现
+- **D82 durabletask-dotnet pin v1.24.2 而非 main**：与 LTAI 用的 NuGet 版本严格一致；升级时需先升 NuGet 再 `git -C extern/durabletask-dotnet checkout v1.25.0` 跟随
+- **D83 不加 ProjectReference 到 DTFx 源码**：避免与 NuGet 双重加载导致类型不一致；submodule 仅供 IDE 跳读 + 调试断点
+- **D84 P2 ltai-models 推迟到 P14.1**：P14.1 反正要生成 BGE INT8，那时新建私有仓 + 一起加 submodule 最自然
+
+### Files touched
+**新建**
+- `scripts/dev-setup-submodules.ps1`（~50 行）
+- `scripts/dev-setup-submodules.sh`（~50 行）
+
+**改**
+- `.gitmodules`（+3 行：durabletask-dotnet 条目）
+- `extern/agent-framework/.git/info/sparse-checkout`（client-local, 不入库；脚本化复现）
+- `AGENTS.md`（本节 P16）
+
+### Verification
+- [x] 编译通过：7 项目（LTAI.AI / LTAI.Agent / LTAI.TUI / LTAI.Desktop / LTAI.Web / LTAI.Cli / LTAI.Core）0 errors
+- [x] 0 新 warnings（pre-existing 38 个维持）
+- [x] extern/agent-framework 占用 27.2 MB（vs 旧 251.3 MB，**节省 89%**）
+- [x] extern/durabletask-dotnet 占用 3.5 MB, pin v1.24.2
+- [x] `git submodule status` 两行，agent-framework@main + durabletask-dotnet@v1.24.2
+- [ ] 手动验证：克隆新 clone + 跑 `dev-setup-submodules.ps1` 一键到位（用户可后续手动跑）
+
+## Next Steps (P17+)
+- **P17.1**：更新 `LTAI.Agent/Durability/SQLiteOrchestrationService.cs` 顶部注释，把反射字段的 "source path" 链接到 `extern/durabletask-dotnet/src/InProcessTestHost/Sidecar/InMemoryOrchestrationService.cs`（维护性收益）
+- **P17.2**：写 `docs/architecture/dependency-graph.md`，列出 LTAI 项目 → MAF ProjectReference 完整图 + DTFx NuGet 版本表
+- **P17.3**：把 P14.1 完成的 BGE INT8 走 `ltai4net/ltai-models` 私有 submodule（按 P2 计划）
+- **P17.4**：MAF submodule 拉新版本时 review 哪些 LTAI 用的 API 有 breaking change（P15 `Workflows.Declarative.Mcp` 是 1.25.0-preview.1 才有的，提前评估升级价值）
+

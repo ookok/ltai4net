@@ -2,3 +2,7 @@
 	path = extern/agent-framework
 	url = https://github.com/microsoft/agent-framework
 	branch = main
+[submodule "extern/durabletask-dotnet"]
+	path = extern/durabletask-dotnet
+	url = https://github.com/microsoft/durabletask-dotnet.git
+	branch = main
