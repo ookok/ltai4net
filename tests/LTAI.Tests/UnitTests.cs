@@ -604,7 +604,7 @@ public class MultiProviderChatClientIntegrationTests
     public async Task GetResponseAsync_WithProvider_Succeeds()
     {
         var router = new LTAI.AI.MultiProviderChatClient(new LTAIOptions());
-        router.Register("deepseek", new EchoChatClient("hello back"));
+        router.Register("l1", new EchoChatClient("hello back"));
         var resp = await router.GetResponseAsync([new ChatMessage(ChatRole.User, "say hi")]);
         var text = resp.Messages?.LastOrDefault()?.Text ?? "";
         Assert.Contains("hello back", text);
@@ -618,14 +618,14 @@ public class MultiProviderChatClientIntegrationTests
             AI = new AIConfig
             {
                 DefaultProvider = "primary",
-                DegradationChain = new() { ["primary"] = "secondary" },
+                DegradationChain = new() { ["l1"] = "secondary" },
                 GlobalTokenBudget = 1_000_000,
                 PerUserTokenBudget = 200_000,
             }
         };
         var router = new LTAI.AI.MultiProviderChatClient(opts);
         router.Register("secondary", new EchoChatClient("fallback ok"));
-        // primary not registered → auto-fallthrough to secondary
+        // l1 not registered → fallback to secondary via degradation chain
         var resp = await router.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")]);
         var text = resp.Messages?.LastOrDefault()?.Text ?? "";
         Assert.Contains("fallback ok", text);

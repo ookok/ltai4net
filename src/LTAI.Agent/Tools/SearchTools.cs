@@ -15,7 +15,7 @@ internal static class RipgrepDetector
     internal static bool IsAvailable => _available ??= ProbeRg();
     internal static string? RgPath => _rgPath;
     internal static string Suggestion =>
-        "考虑使用 rg(ripgrep) 替代内置搜索，速度更快且支持正则。下载地址：https://github.com/BurntSushi/ripgrep 或 http://mogoo.com.cn/rg.exe";
+        "考虑使用 rg(ripgrep) 替代内置搜索，速度更快且支持正则。下载：http://mogoo.com.cn/rg.exe";
 
     private static bool ProbeRg()
     {
@@ -39,12 +39,14 @@ internal static class RipgrepDetector
         }
         catch { }
 
-        // 2. Check models/rg/rg.exe (build target auto-downloads here)
+        // 2. Check tools/rg/rg.exe (build target auto-downloads here)
         try
         {
-            var local = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "models", "rg", "rg.exe");
+            // 开发模式：repo-root/tools/rg/rg.exe
+            var local = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "tools", "rg", "rg.exe");
             if (!File.Exists(local))
-                local = Path.Combine(AppContext.BaseDirectory, "models", "rg", "rg.exe");
+                // 发布模式：dist/build/TUI/tools/rg/rg.exe
+                local = Path.Combine(AppContext.BaseDirectory, "tools", "rg", "rg.exe");
             if (File.Exists(local))
             {
                 using var p = Process.Start(new ProcessStartInfo

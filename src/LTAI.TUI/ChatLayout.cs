@@ -49,6 +49,7 @@ public sealed class ChatLayout
     private readonly StringBuilder _cachedMessages = new();
     private int _cachedHistoryCount = 0;
     private int _lastStreamRenderLen = 0;
+    private DateTime _lastCmdTime = DateTime.MinValue;
 
     private void ThrottledRefresh()
     {
@@ -137,7 +138,9 @@ public sealed class ChatLayout
                 System.Diagnostics.Debug.WriteLine($"WarmUp failed: {t.Exception?.InnerException?.Message}");
         }, TaskContinuationOptions.OnlyOnFaulted);
 
-        await AnsiConsole.Live(_layout)
+        try
+        {
+            await AnsiConsole.Live(_layout)
             .AutoClear(false)
             .Overflow(VerticalOverflow.Ellipsis)
             .Cropping(VerticalOverflowCropping.Top)
@@ -175,6 +178,35 @@ public sealed class ChatLayout
                     while (!cts.Token.IsCancellationRequested)
                     {
                         var key = Console.ReadKey(true);
+
+                        // ── 级联菜单激活时 ──
+                        if (LTAI.TUI.SlashCommands.InCascadeMenu)
+                        {
+                            if (key.Key == ConsoleKey.Q && (key.Modifiers & ConsoleModifiers.Control) != 0)
+                            {
+                                LTAI.TUI.SlashCommands.CloseCascadeMenu();
+                                _history.RemoveAll(x => x.role == "cmd");
+                                if (_history.Count > 0) _history.Add(("cmd", "[dim]───[/]"));
+                                string ib; lock (inputBuf) ib = inputBuf.ToString();
+                                lock (_layout) { _cachedMessages.Clear(); _cachedHistoryCount = 0; UpdateMessages(""); UpdateFooter(ib, ""); _liveCtx?.Refresh(); }
+                                continue;
+                            }
+                            var stillIn = LTAI.TUI.SlashCommands.HandleCascadeKey(key);
+                            if (!stillIn)
+                            {
+                                var p = LTAI.TUI.SlashCommands.PendingInput;
+                                if (p != null) { LTAI.TUI.SlashCommands.PendingInput = null; lock (inputBuf) { inputBuf.Clear(); inputBuf.Append(p); } }
+                                _history.RemoveAll(x => x.role == "cmd");
+                                if (_history.Count > 0) _history.Add(("cmd", "[dim]───[/]"));
+                                string ib; lock (inputBuf) ib = inputBuf.ToString();
+                                lock (_layout) { _cachedMessages.Clear(); _cachedHistoryCount = 0; UpdateMessages(""); UpdateFooter(ib, ""); _liveCtx?.Refresh(); }
+                                continue;
+                            }
+                            // Update menu display
+                            lock (_history) { if (_history.Count > 0 && _history[^1].role == "cmd") _history[^1] = ("cmd", LTAI.TUI.SlashCommands.BuildCascadeText()); }
+                            lock (_layout) { _cachedMessages.Clear(); _cachedHistoryCount = _history.Count - 1; UpdateMessages(""); _liveCtx?.Refresh(); }
+                            continue;
+                        }
 
                         // ── 选择器激活时，路由所有按键到选择器 ──
                         if (_pickerActive)
@@ -324,6 +356,13 @@ public sealed class ChatLayout
                             {
                                 var handled = await HandleSlashCommandAsync(input).ConfigureAwait(false);
                                 if (!handled) { cts.Cancel(); return; }
+
+                                var pending = LTAI.TUI.SlashCommands.PendingInput;
+                                if (pending != null)
+                                {
+                                    LTAI.TUI.SlashCommands.PendingInput = null;
+                                    lock (inputBuf) { inputBuf.Clear(); inputBuf.Append(pending); }
+                                }
                                 continue;
                             }
 
@@ -383,6 +422,17 @@ public sealed class ChatLayout
                     }
                     else
                     {
+                        // 非级联菜单: 有 cmd 消息且超过 2s 或用户已开始对话 → 清理
+                        if (!LTAI.TUI.SlashCommands.InCascadeMenu && _history.Any(x => x.role == "cmd"))
+                        {
+                            var hasUserMsg = _history.Any(x => x.role == "user");
+                            var expired = (DateTime.UtcNow - _lastCmdTime).TotalSeconds > 30;
+                            if (hasUserMsg || expired)
+                            {
+                                _history.RemoveAll(x => x.role == "cmd");
+                                _cachedMessages.Clear(); _cachedHistoryCount = 0;
+                            }
+                        }
                         lock (_layout) { UpdateMessages(""); UpdateFooter(buf, "", showWatermark); ctx.Refresh(); }
                     }
                     showWatermark = false;
@@ -414,9 +464,12 @@ public sealed class ChatLayout
                     }
 
                     // Yield to avoid 100% CPU spin when queue is empty
-                    await Task.Delay(16, cts.Token).ConfigureAwait(false);
+                    try { await Task.Delay(16, cts.Token).ConfigureAwait(false); }
+                    catch (OperationCanceledException) { break; }
                 }
             });
+        }
+        catch (OperationCanceledException) { }
         return LastRequestedView;
     }
 
@@ -741,7 +794,7 @@ public sealed class ChatLayout
         string statusText = "";
 
         // 初始等待提示
-        content.AppendLine("[dim]━━━ 思考中 ━━━[/]");
+        content.AppendLine("━━━ 思考中 ━━━");
         _toolCallCount = 0;
         var toolTimer = Stopwatch.StartNew();
         UpdateFooter("", $"[deepskyblue1]{PulseFrames[0]} 思考中...[/]");
@@ -946,6 +999,7 @@ public sealed class ChatLayout
 
         var cmdStatus = "";
         var running = true;
+        _lastCmdTime = DateTime.UtcNow;
         if (SlashCommands.TryExecute(input, ref running, ref cmdStatus))
         {
             if (!string.IsNullOrEmpty(cmdStatus))

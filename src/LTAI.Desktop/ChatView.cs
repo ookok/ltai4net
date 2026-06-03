@@ -433,6 +433,15 @@ public sealed class ChatView : UserControl
         // Handle slash commands
         if (query.StartsWith('/'))
         {
+            var parts = query.Trim().Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
+            var cmdName = parts[0][1..].ToLowerInvariant();
+            var args = parts.Length > 1 ? parts[1] : "";
+            // 顶级命令无参数 → 级联选择器
+            if (string.IsNullOrWhiteSpace(args) && CmdHasLevel1(cmdName))
+            {
+                ShowCmdPicker(cmdName);
+                return;
+            }
             _input.Text = "";
             TryHandleSlashCommand(query);
             return;
@@ -1114,8 +1123,8 @@ public sealed class ChatView : UserControl
 
     private static readonly string[] KnownCommands = [
         "help", "new", "exit", "status", "pwd", "plan", "approve",
-        "ls", "cd", "config", "model", "cost", "retry", "compact",
-        "memory", "skill", "mode", "undo", "monitor", "snippet"
+        "ls", "cd", "config", "model", "models", "cost", "snippet",
+        "workflow", "pipe", "jobs", "lang", "mode", "undo"
     ];
 
     private bool TryHandleSlashCommand(string input)
@@ -1213,77 +1222,46 @@ public sealed class ChatView : UserControl
 
             case "models":
             case "在线模型":
-            {
-                var lines = new List<string>();
-                // L0
-                var embedder = App.Services?.GetService(typeof(LTAI.AI.LocalEmbedder)) as LTAI.AI.LocalEmbedder;
-                if (embedder?.Available == true)
-                    lines.Add($"L0 嵌入: {embedder.CurrentModelName} ({embedder.Dim}d)");
-                else
-                    lines.Add("L0 嵌入: 未加载");
-                // L1/L2 from layers.json
-                var layersPath = Path.Combine(AppContext.BaseDirectory, ".livingtree", "layers.json");
-                if (File.Exists(layersPath))
-                {
-                    try
-                    {
-                        using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(layersPath));
-                        string? rp(System.Text.Json.JsonElement e) => e.TryGetProperty("Provider", out var x) ? x.GetString() : null;
-                        string? rm(System.Text.Json.JsonElement e) => e.TryGetProperty("Model", out var x) ? x.GetString() : null;
-                        if (doc.RootElement.TryGetProperty("l1", out var l1))
-                            lines.Add($"L1 标准: {rp(l1)} / {rm(l1)}");
-                        else lines.Add("L1 标准: 未配置 (输入 /model l1)");
-                        if (doc.RootElement.TryGetProperty("l2", out var l2))
-                            lines.Add($"L2 深度: {rp(l2)} / {rm(l2)}");
-                        else lines.Add("L2 深度: 未配置 (输入 /model l2)");
-                    }
-                    catch { lines.Add("配置解析失败"); }
-                }
-                else lines.Add("L1/L2: 未配置 (输入 /model l1)");
-                AddSystemBubble(string.Join("\n", lines));
+                ShowModels();
                 return true;
-            }
             case "model":
-            {
-                var embedder2 = App.Services?.GetService(typeof(LTAI.AI.LocalEmbedder)) as LTAI.AI.LocalEmbedder;
-                var parts2 = args.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
-                var sub = parts2.Length > 0 ? parts2[0].ToLowerInvariant() : "";
-                if (sub is "l1" or "l2")
-                {
-                    AddSystemBubble($"请使用 TUI 终端或 Desktop 配置面板设置 {sub.ToUpperInvariant()}\n" +
-                                    "快捷键: Ctrl+3 → LLM 配置面板 或 在终端运行 /model " + sub);
-                    return true;
-                }
-                // Show current status
-                var slines = new List<string>();
-                if (embedder2?.Available == true)
-                    slines.Add($"L0 嵌入: {embedder2.CurrentModelName}");
-                else
-                    slines.Add("L0 嵌入: 未加载");
-                var spath = Path.Combine(AppContext.BaseDirectory, ".livingtree", "layers.json");
-                if (File.Exists(spath))
-                {
-                    try
-                    {
-                        using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(spath));
-                        string? rp(System.Text.Json.JsonElement e) => e.TryGetProperty("Provider", out var x) ? x.GetString() : null;
-                        string? rm(System.Text.Json.JsonElement e) => e.TryGetProperty("Model", out var x) ? x.GetString() : null;
-                        if (doc.RootElement.TryGetProperty("l1", out var l1))
-                            slines.Add($"L1: {rp(l1)} / {rm(l1)}");
-                        if (doc.RootElement.TryGetProperty("l2", out var l2))
-                            slines.Add($"L2: {rp(l2)} / {rm(l2)}");
-                    }
-                    catch { }
-                }
-                slines.Add("配置: Ctrl+3 或终端 /model l1|l2");
-                AddSystemBubble(string.Join("\n", slines));
+                ShowModel(args);
                 return true;
-            }
             case "snippet":
-            case "snip":
-            case "常用语":
-            case "常用":
+            case "snip": case "常用语": case "常用":
+                if (string.IsNullOrWhiteSpace(args)) { ShowCmdPicker(cmdName); return true; }
                 HandleSnippetCommand(args);
+                return true;
+            case "config":
+            case "设置":
+                if (string.IsNullOrWhiteSpace(args)) { AddSystemBubble("用法: /config apikey|export|import"); return true; }
+                HandleConfigDesktop(args);
+                return true;
+            case "cost":
+            case "费用":
+                AddSystemBubble($"Token 用量: {LTAI.Core.Configuration.UsageTracker.TotalTokens:N0} | 请求: {LTAI.Core.Configuration.UsageTracker.Requests} | 缓存命中率: {LTAI.Core.Configuration.UsageTracker.CacheHitRate:F1}%");
+                return true;
+            case "lang":
+            case "语言":
+                if (string.IsNullOrWhiteSpace(args)) { ShowCmdPicker(cmdName); return true; }
+                AddSystemBubble(args switch { "zh-CN" or "zh" => "已切换为简体中文", "en-US" or "en" => "Switched to English", _ => "用法: /lang zh-CN|en-US" });
+                return true;
+            case "mode":
+            case "编辑模式":
+                if (string.IsNullOrWhiteSpace(args)) { ShowCmdPicker(cmdName); return true; }
+                AddSystemBubble(args switch { "review" => "编辑模式: 审查", "auto" => "编辑模式: 自动", _ => "用法: /mode review|auto" });
+                return true;
+            case "undo":
+            case "撤销":
+                AddSystemBubble("撤销: 使用编辑工具 (Ctrl+Z)");
+                return true;
+            case "retry":
+            case "重试":
+                AddSystemBubble("重试: 请重新发送上一条消息");
+                return true;
+            case "compact":
+            case "压缩":
+                AddSystemBubble("压缩: 对话历史将被汇总压缩");
                 return true;
 
             default:
@@ -1303,6 +1281,105 @@ public sealed class ChatView : UserControl
                     : $"⚠️ 未知命令 '/{cmdName}'。输入 /help 查看可用命令。";
                 AddSystemBubble(msg);
                 return true;
+        }
+    }
+
+    private static bool CmdHasLevel1(string cmd) => cmd switch
+    {
+        "model" or "snippet" or "workflow" or "pipe" or "jobs" or "lang" or "mode" => true,
+        _ => false
+    };
+    private static string[] CmdLevel1Items(string cmd) => cmd switch
+    {
+        "model" => new[] { "l0  嵌入模型", "l1  对话模型", "l2  推理模型" },
+        "snippet" => new[] { "list  列出全部", "save  保存常用语", "use   使用常用语", "delete 删除常用语", "rename 重命名", "edit   编辑" },
+        "workflow" => new[] { "list   列出", "reload 重载", "show   查看", "open   打开" },
+        "pipe" => new[] { "list  列出预设", "run   运行", "stop  停止" },
+        "jobs" => new[] { "list   列出", "watch  监视", "cancel 取消", "show   详情" },
+        "lang" => new[] { "zh-CN  简体中文", "en-US  English" },
+        "mode" => new[] { "review 审查模式", "auto   自动模式" },
+        _ => Array.Empty<string>()
+    };
+
+    private void ShowModels()
+    {
+        var lines = new List<string>();
+        var embedder = App.Services?.GetService(typeof(LTAI.AI.LocalEmbedder)) as LTAI.AI.LocalEmbedder;
+        if (embedder?.Available == true)
+            lines.Add($"L0 嵌入: {embedder.CurrentModelName} ({embedder.Dim}d)");
+        else
+            lines.Add("L0 嵌入: 未加载");
+        var layersPath = Path.Combine(AppContext.BaseDirectory, ".livingtree", "layers.json");
+        if (File.Exists(layersPath))
+        {
+            try
+            {
+                using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(layersPath));
+                string? rp(System.Text.Json.JsonElement e) => e.TryGetProperty("Provider", out var x) ? x.GetString() : null;
+                string? rm(System.Text.Json.JsonElement e) => e.TryGetProperty("Model", out var x) ? x.GetString() : null;
+                if (doc.RootElement.TryGetProperty("l1", out var l1)) lines.Add($"L1 标准: {rp(l1)} / {rm(l1)}");
+                else lines.Add("L1: 未配置 (/model l1)");
+                if (doc.RootElement.TryGetProperty("l2", out var l2)) lines.Add($"L2 深度: {rp(l2)} / {rm(l2)}");
+                else lines.Add("L2: 未配置 (/model l2)");
+            }
+            catch { }
+        }
+        else lines.Add("L1/L2: 未配置");
+        AddSystemBubble(string.Join("\n", lines));
+    }
+
+    private void ShowModel(string args)
+    {
+        var embedder = App.Services?.GetService(typeof(LTAI.AI.LocalEmbedder)) as LTAI.AI.LocalEmbedder;
+        if (string.IsNullOrWhiteSpace(args))
+        {
+            ShowModels();
+            return;
+        }
+        var parts = args.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
+        var sub = parts[0].ToLowerInvariant();
+        if (sub is "l1" or "l2")
+        {
+            if (parts.Length == 1)
+            {
+                var sb = new StringBuilder();
+                sb.AppendLine($"配置 {sub.ToUpperInvariant()}: /model {sub} <provider>");
+                sb.AppendLine("可用 Provider:");
+                foreach (var k in new[] { "DeepSeek", "SiliconFlow", "Aliyun(Qwen)", "Zhipu(GLM)", "OpenAI", "Anthropic", "Ollama", "LMStudio", "vLLM" })
+                    sb.AppendLine($"  · {k}");
+                AddSystemBubble(sb.ToString());
+                return;
+            }
+            AddSystemBubble($"{sub.ToUpperInvariant()}: {parts[1]}\n输入 /model {sub} {parts[1]} <模型名> 完成配置");
+            return;
+        }
+        var lines = new List<string>();
+        if (embedder?.Available == true) lines.Add($"L0: {embedder.CurrentModelName} ({embedder.Dim}d)");
+        AddSystemBubble(string.Join("\n", lines));
+    }
+
+    private void HandleConfigDesktop(string args) =>
+        AddSystemBubble(args switch
+        {
+            "" => "用法: /config apikey|export|import",
+            string s when s.StartsWith("apikey") => "设置 API Key: 请在 TUI 终端运行 /config apikey",
+            string s when s.StartsWith("export") => "导出: 请使用 TUI 终端运行 /config export",
+            string s when s.StartsWith("import") => "导入: 请使用 TUI 终端运行 /config import",
+            _ => "用法: /config apikey|export|import"
+        });
+
+    private async void ShowCmdPicker(string cmd)
+    {
+        var items = CmdLevel1Items(cmd);
+        if (items.Length == 0) return;
+        var owner = this.VisualRoot as Window;
+        if (owner == null) return;
+        var dialog = new Dialogs.CommandPickerDialog($"/{cmd}", items);
+        await dialog.ShowDialog(owner);
+        if (dialog.Selected != null)
+        {
+            _input.Text = $"/{cmd} {dialog.Selected}";
+            _input.CaretIndex = _input.Text.Length;
         }
     }
 

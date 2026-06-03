@@ -69,12 +69,25 @@ public static class DevUIDashboardView
         var remoteLine = BuildRemoteCacheStatusLine(remoteCache);
         var fallbackLine = BuildEmbeddingClientLine(embeddingClient);
         var modelsLine = BuildModelMetadataLine(provider);
-        return new Panel(new Markup($"{topLine}\n{embedLine}\n{cacheLine}\n{remoteLine}\n{fallbackLine}\n{modelsLine}"))
+        var lines = $"{topLine}\n{embedLine}\n{cacheLine}\n{remoteLine}\n{fallbackLine}\n{modelsLine}";
+        try
         {
-            Border = BoxBorder.Heavy,
-            Header = new PanelHeader("[green] P9 Live Inspector [/]"),
-            Expand = true,
-        };
+            return new Panel(new Markup(lines))
+            {
+                Border = BoxBorder.Heavy,
+                Header = new PanelHeader("[green] P9 Live Inspector [/]"),
+                Expand = true,
+            };
+        }
+        catch
+        {
+            return new Panel(new Markup(Markup.Escape(lines)))
+            {
+                Border = BoxBorder.Heavy,
+                Header = new PanelHeader("[green] P9 Live Inspector [/]"),
+                Expand = true,
+            };
+        }
     }
 
     /// <summary>
@@ -87,12 +100,12 @@ public static class DevUIDashboardView
     private static string BuildEmbeddingClientLine(EmbeddingClient? ec)
     {
         if (ec is null)
-            return "[grey][[/][bold]EmbedClient[/][grey]][/]  [dim](not registered)[/]";
+            return "[grey][[/][bold]EmbedClient[/][grey]]][/]  [dim](not registered)[/]";
 
         var fails = ec.ConsecutiveAllProviderFailures;
         var activated = ec.LocalFallbackActivated;
         if (fails == 0 && !activated)
-            return $"[grey][[/][bold]EmbedClient[/][grey]][/]  [green]all providers healthy[/]";
+            return $"[grey][[/][bold]EmbedClient[/][grey]]][/]  [green]all providers healthy[/]";
 
         var failsStr = $"[yellow]{fails}[/] consecutive failures";
         if (activated && ec.LocalFallbackActivatedAtUtc is DateTime at)
@@ -101,26 +114,26 @@ public static class DevUIDashboardView
             var agoStr = ago.TotalMinutes < 1 ? "just now"
                 : ago.TotalHours < 1 ? $"{(int)ago.TotalMinutes}m ago"
                 : $"{(int)ago.TotalHours}h ago";
-            return $"[grey][[/][bold]EmbedClient[/][grey]][/]  {failsStr}  [grey]·[/]  " +
+            return $"[grey][[/][bold]EmbedClient[/][grey]]][/]  {failsStr}  [grey]·[/]  " +
                    $"[red]local fallback ON[/] (activated {agoStr})";
         }
-        return $"[grey][[/][bold]EmbedClient[/][grey]][/]  {failsStr}  [grey]·[/]  " +
+        return $"[grey][[/][bold]EmbedClient[/][grey]]][/]  {failsStr}  [grey]·[/]  " +
                $"[dim](threshold 3 → local fallback)[/]";
     }
 
     private static string BuildModelMetadataLine(ModelMetadataProvider? mp)
     {
         if (mp is null)
-            return "[grey][[/][bold]Models[/][grey]][/]  [dim](not registered)[/]";
+            return "[grey][[/][bold]Models[/][grey]]][/]  [dim](not registered)[/]";
 
         var all = mp.AllModels;
         if (all.Count == 0)
-            return "[grey][[/][bold]Models[/][grey]][/]  [yellow]refreshing...[/]";
+            return "[grey][[/][bold]Models[/][grey]]][/]  [yellow]refreshing...[/]";
 
         var providers = all.Select(m => m.Provider).Distinct().Count();
         var ctxCount = all.Count(m => m.ContextWindow != null);
         var suppTools = all.Count(m => m.SupportsTools);
-        return $"[grey][[/][bold]Models[/][grey]][/]  " +
+        return $"[grey][[/][bold]Models[/][grey]]][/]  " +
                $"[aqua]{all.Count}[/] models  [grey]·[/]  " +
                $"[aqua]{providers}[/] providers  [grey]·[/]  " +
                $"[green]{suppTools}[/] tool-call  [grey]·[/]  " +
@@ -137,7 +150,7 @@ public static class DevUIDashboardView
     private static string BuildCacheStatusLine(ToolEmbeddingCache? cache)
     {
         if (cache is null)
-            return "[grey][[/][bold]EmbedCache[/][grey]][/]  [dim](not registered)[/]";
+            return "[grey][[/][bold]EmbedCache[/][grey]]][/]  [dim](not registered)[/]";
 
         var entries = cache.CachedEntryCount;
         var hits = cache.CacheHits;
@@ -145,7 +158,7 @@ public static class DevUIDashboardView
         var rate = cache.HitRate;
         var ratePct = (rate * 100).ToString("F0");
         var rateColor = rate >= 0.80 ? "green" : rate >= 0.50 ? "yellow" : "red";
-        return $"[grey][[/][bold]EmbedCache[/][grey]][/]  " +
+        return $"[grey][[/][bold]EmbedCache[/][grey]]][/]  " +
                $"[aqua]{entries}[/] entries  [grey]·[/]  " +
                $"[green]{hits}[/] hits  [grey]·[/]  " +
                $"[yellow]{misses}[/] misses  [grey]·[/]  " +
@@ -161,7 +174,7 @@ public static class DevUIDashboardView
     private static string BuildRemoteCacheStatusLine(RemoteEmbeddingCache? remoteCache)
     {
         if (remoteCache is null)
-            return "[grey][[/][bold]RemoteCache[/][grey]][/]  [dim](not registered)[/]";
+            return "[grey][[/][bold]RemoteCache[/][grey]]][/]  [dim](not registered)[/]";
 
         var entries = remoteCache.CachedEntryCount;
         var hits = remoteCache.CacheHits;
@@ -170,7 +183,7 @@ public static class DevUIDashboardView
         var rate = remoteCache.HitRate;
         var ratePct = (rate * 100).ToString("F0");
         var rateColor = rate >= 0.80 ? "green" : rate >= 0.50 ? "yellow" : "red";
-        return $"[grey][[/][bold]RemoteCache[/][grey]][/]  " +
+        return $"[grey][[/][bold]RemoteCache[/][grey]]][/]  " +
                $"[aqua]{entries}[/] entries  [grey]·[/]  " +
                $"[green]{hits}[/] hits  [grey]·[/]  " +
                $"[yellow]{misses}[/] misses  [grey]·[/]  " +
@@ -187,7 +200,7 @@ public static class DevUIDashboardView
     private static string BuildEmbedStatusLine(LocalEmbedder? embedder)
     {
         if (embedder is null)
-            return "[grey][[/][bold]Embed[/][grey]][/]  [dim](not registered — remote API only)[/]";
+            return "[grey][[/][bold]Embed[/][grey]]][/]  [dim](not registered — remote API only)[/]";
 
         var ep = embedder.ActiveExecutionProvider;
         var quant = embedder.UsingQuantizedModel;
@@ -212,7 +225,7 @@ public static class DevUIDashboardView
             ? "  [yellow](disabled — remote API)[/]"
             : "";
 
-        return $"[grey][[/][bold]Embed[/][grey]][/]  model={modelStr}  [grey]·[/]  " +
+        return $"[grey][[/][bold]Embed[/][grey]]][/]  model={modelStr}  [grey]·[/]  " +
                $"EP={epStr}  [grey]·[/]  quant={quantStr}{disabled}";
     }
 

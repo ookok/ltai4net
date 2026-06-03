@@ -24,10 +24,11 @@
     <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
   </PropertyGroup>
 
-  <!-- Copy runtime data (agents, models, skills) to exe build/publish output -->
+  <!-- Copy runtime data (agents, models, skills, tools) to exe build/publish output -->
   <ItemGroup Condition="'$(IsExeProject)' == 'true'">
     <Content Include="$(MSBuildThisFileDirectory)agents\**\*" CopyToOutputDirectory="PreserveNewest" Link="agents\%(RecursiveDir)%(FileName)%(Extension)" />
     <Content Include="$(MSBuildThisFileDirectory)models\**\*" CopyToOutputDirectory="PreserveNewest" Link="models\%(RecursiveDir)%(FileName)%(Extension)" Condition="Exists('$(MSBuildThisFileDirectory)models')" />
     <Content Include="$(MSBuildThisFileDirectory)skills\**\*" CopyToOutputDirectory="PreserveNewest" Link="skills\%(RecursiveDir)%(FileName)%(Extension)" />
+    <Content Include="$(MSBuildThisFileDirectory)tools\rg\rg.exe" CopyToOutputDirectory="PreserveNewest" Link="tools\rg\rg.exe" Condition="Exists('$(MSBuildThisFileDirectory)tools\rg\rg.exe')" />
   </ItemGroup>
 </Project>

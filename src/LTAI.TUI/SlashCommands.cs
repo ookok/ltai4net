@@ -1,5 +1,6 @@
 using System.Net.Http;
 using System.Net.Http.Headers;
+using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Spectre.Console;
@@ -51,6 +52,92 @@ public static class SlashCommands
     /// <summary>Current active provider name.</summary>
     public static string? ActiveProvider { get; set; }
 
+    /// <summary>When set by cascade menu, ChatLayout fills this into input buffer.</summary>
+    public static string? PendingInput { get; set; }
+
+    // ═══ 级联菜单 ═══
+    public static string[] CascadeStack = Array.Empty<string>();
+    public static string[] CascadeItems = Array.Empty<string>();
+    public static int CascadeSel;
+    public static string CascadeCmd = "";
+    public static bool InCascadeMenu => CascadeItems.Length > 0;
+
+    public static void OpenCascadeMenu(string cmd, string? args = null)
+    {
+        CascadeCmd = cmd;
+        CascadeStack = args != null ? new[] { args } : Array.Empty<string>();
+        FillCascade();
+    }
+
+    public static bool HandleCascadeKey(ConsoleKeyInfo key)
+    {
+        if (key.Key == ConsoleKey.UpArrow && CascadeSel > 0) { CascadeSel--; return true; }
+        if (key.Key == ConsoleKey.DownArrow && CascadeSel < CascadeItems.Length - 1) { CascadeSel++; return true; }
+        if (key.Key == ConsoleKey.Enter) return CascadeEnter();
+        if (key.Key == ConsoleKey.Escape) return CascadeEsc();
+        return true;
+    }
+
+    static bool CascadeEnter()
+    {
+        var idx = CascadeSel;
+        if (CascadeStack.Length > 0 && idx == 0) { CascadeStack = CascadeStack[..^1]; FillCascade(); return true; }
+        var ri = CascadeStack.Length > 0 ? idx - 1 : idx;
+        if (ri < 0 || ri >= CascadeItems.Length) return true;
+        var picked = CascadeItems[ri].Split(' ')[0].TrimEnd('…');
+        var next = CascadeStack.Length > 0 ? CascadeStack.Append(picked).ToArray() : new[] { picked };
+        if (CascadeRoutes.Resolve(CascadeCmd, next) != null)
+        {
+            CascadeStack = CascadeStack.Append(picked).ToArray();
+            FillCascade();
+            return true;
+        }
+        var cmd = $"/{CascadeCmd} " + string.Join(" ", CascadeStack.Append(picked));
+        PendingInput = cmd;
+        CloseCascadeMenu();
+        return false;
+    }
+
+    static bool CascadeEsc()
+    {
+        if (CascadeStack.Length > 0) { CascadeStack = CascadeStack[..^1]; FillCascade(); return true; }
+        CloseCascadeMenu();
+        return false;
+    }
+
+    public static void CloseCascadeMenu()
+    {
+        CascadeStack = Array.Empty<string>();
+        CascadeItems = Array.Empty<string>();
+        CascadeSel = 0;
+        CascadeCmd = "";
+    }
+
+    public static string BuildCascadeText()
+    {
+        var path = CascadeStack.Length > 0 ? $"/{CascadeCmd} {string.Join(" ", CascadeStack)}" : $"/{CascadeCmd}";
+        var sb = new StringBuilder();
+        sb.AppendLine($"[bold yellow]{path}[/]");
+        for (int i = 0; i < CascadeItems.Length; i++)
+        {
+            var parts = CascadeItems[i].Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
+            var s = parts[0];
+            var desc = parts.Length > 1 ? "  " + parts[1] : "";
+            var arrow = i == CascadeSel ? "[yellow]▸[/]" : " ";
+            sb.AppendLine($"  {arrow} [cyan]{s,-12}[/]{desc}");
+        }
+        sb.Append("[dim]↑↓=选择  Enter=确认  Esc=返回  Ctrl+Q=退出[/]");
+        return sb.ToString();
+    }
+
+    static void FillCascade()
+    {
+        var node = CascadeRoutes.Resolve(CascadeCmd, CascadeStack);
+        var choices = node?.Items ?? Array.Empty<string>();
+        CascadeItems = CascadeStack.Length > 0 ? new[] { "← 返回" }.Concat(choices).ToArray() : choices;
+        CascadeSel = CascadeStack.Length > 0 ? 1 : 0;
+    }
+
     /// <summary>共享 HttpClient（避免每次 new 导致 socket 泄漏）</summary>
     private static readonly HttpClient _sharedHttp = new() { Timeout = TimeSpan.FromSeconds(30) };
 
@@ -78,29 +165,23 @@ public static class SlashCommands
         new("new",     "聊天",  "新建会话（清空历史）", "reset,clear,新,新建"),
         new("retry",   "聊天",  "重发上一条消息", "重试,重发"),
         new("compact", "聊天",  "压缩汇总历史消息", "压缩,汇总"),
-        new("config",  "设置",  "配置 LLM: provider|apikey|model|status", "", "provider|apikey|model|l1|l2"),
-        new("model",   "设置",  "模型管理: l0(嵌入) list|download|switch|delete|info|cleanup|quant  |  l1|l2(在线选择provider→模型)", "", "l0|l1|l2"),
-        new("models",  "信息",  "列出所有 Provider 的可用在线模型及元数据", "在线模型,provider列表"),
+        new("model",   "模型",  "模型管理: l0/l1/l2 级联选择", "", "l0|l1|l2"),
+        new("models",  "信息",  "当前模型配置 + 在线模型列表", "在线模型,provider列表"),
         new("status",  "信息",  "显示当前配置和统计", "状态,统计"),
-        new("monitor", "信息",  "实时仪表盘 — Provider 状态/延迟/成本", "监控,仪表盘"),
-        new("jobs",    "信息",  "后台作业: list|watch <id>|cancel <id>|show <id>", "job,任务",
-            "list|watch <id>|cancel <id>|show <id>"),
-        new("cost",    "信息",  "显示本轮预估费用", "费用,花费"),
-        new("memory",  "扩展",  "管理记忆文件", "记忆"),
-        new("snippet", "扩展",  "常用语管理: list|save <key> <text>|use <key>|edit <key>|rename <old> <new>|delete <key>",
-            "snip,常用语,常用,短语", "list|save|use|edit|rename|delete"),
-        new("workflow","扩展",  "热改编排 (YAML/JSON): list|reload <name>|show <name>|open",
-            "wf,编排,工作流", "list|reload|show|open"),
-        new("pipe",    "扩展",  "管道编排: list|run <preset> [task]|stop <id>",
-            "pipeline,顺序,并发", "list|run|stop"),
-        new("mode",    "代码",  "编辑模式: review|auto", "", "review|auto"),
-        new("undo",    "代码",  "撤销上次编辑", "撤销"),
+        new("jobs",    "信息",  "后台作业: list|watch|cancel|show", "job,任务"),
+        new("cost",    "信息",  "显示本轮预估 Token 费用", "费用,花费"),
+        new("config",  "设置",  "设置: apikey|export|import", "apikey,导出,导入"),
+        new("snippet", "扩展",  "常用语管理: list|save|use|delete|rename|edit", "snip,常用语,常用,短语"),
+        new("workflow","扩展",  "编排工作流: list|reload|show|open", "wf,编排,工作流"),
+        new("pipe",    "扩展",  "管道: list|run|stop", "pipeline,顺序,并发"),
+        new("mode",    "编辑",  "编辑模式: review|auto", "", "review|auto"),
+        new("undo",    "编辑",  "撤销上次编辑", "撤销"),
         new("ls",      "文件",  "列出当前目录内容", "dir,列表"),
         new("cd",      "文件",  "切换工作目录", "", "目录路径"),
         new("pwd",     "文件",  "显示当前目录", "目录"),
         new("approve", "计划",  "批准当前计划并开始执行", "yes,confirm,批准,确认"),
         new("plan",    "计划",  "查看当前计划状态", "计划状态"),
-        new("lang",    "设置",  "切换界面语言: zh-CN|en-US", "语言,language", "zh-CN|en-US"),
+        new("lang",    "设置",  "切换语言: zh-CN|en-US", "语言,language"),
         new("exit",    "高级",  "退出应用", "quit,q,退出"),
     };
 
@@ -286,6 +367,15 @@ public static class SlashCommands
 
     private static bool Execute(SlashSpec spec, string args, ref bool running, ref string? statusMessage)
     {
+        // Commands with sub-options → open cascade menu
+        bool hasRoute = CascadeRoutes.Resolve(spec.Cmd, Array.Empty<string>()) != null;
+        if (string.IsNullOrWhiteSpace(args) && hasRoute)
+        {
+            OpenCascadeMenu(spec.Cmd);
+            statusMessage = BuildCascadeText();
+            return true;
+        }
+
         var (h, s) = spec.Cmd switch
         {
             "help" => Help(),
@@ -293,16 +383,15 @@ public static class SlashCommands
             "new" => ("Session cleared. Starting fresh.", true),
             "retry" => ("Retrying last message...", true),
             "compact" => ("Summarizing older turns...", true),
+            "config" => HandleConfigCommand(args),
             "model" => HandleModelCommand(args),
             "models" => HandleModelsCommand(),
             "snippet" => HandleSnippetCommand(args),
             "workflow" => HandleWorkflowCommand(args),
             "status" => Status(),
             "pipe" => HandlePipeCommand(args),
-            "monitor" => Monitor(),
             "jobs" => HandleJobsCommand(args),
             "cost" => ("Cost tracking: see model provider dashboard", true),
-            "memory" => ("Memory: use `remember` / `forget` tools", true),
             "lang" => HandleLangCommand(args),
             "skill" => !string.IsNullOrEmpty(args) ? ($"Running skill '{args}'...", true) : ("Skills: use `run_skill` tool", true),
             "mode" => args switch { "review" => ("Edit mode: review", true), "auto" => ("Edit mode: auto", true), _ => ("Usage: /mode review|auto", true) },
@@ -455,7 +544,29 @@ public static class SlashCommands
             return ("ONNX embedder not available", true);
 
         if (subCmd is "l1" or "l2")
-            return HandleLayerSelect(subCmd);
+        {
+            var layerArgs = subArgs.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
+            if (layerArgs.Length == 0)
+                return HandleLayerSelect(subCmd);
+            if (layerArgs.Length == 1)
+                return HandleLayerSelectComplete(subCmd, layerArgs[0]);
+            // Save + register
+            var p = layerArgs[0]; var m = layerArgs[1];
+            SaveLayerSelection(subCmd, p, m);
+            if (subCmd == "l1") L1Model = m; else L2Model = m;
+            if (Router != null && KnownProviders.TryGetValue(p, out var info))
+            {
+                var key = SecretManager.Get(info.EnvVar) ?? "";
+                Router.Register(subCmd, OpenAIChatClientFactory.Create(info.Endpoint ?? "", m, key));
+            }
+            return ($"[green]✓ {subCmd.ToUpperInvariant()}={p}/{m}[/]", true);
+        }
+
+        if (subCmd == "l0" && subArgs.StartsWith("api", StringComparison.OrdinalIgnoreCase))
+        {
+            var apiArgs = subArgs.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
+            return apiArgs.Length == 1 ? ShowL0ApiProviders() : ShowL0ApiModels(apiArgs[1]);
+        }
 
         // L0 / legacy embedder commands
         if (subCmd == "l0")
@@ -565,6 +676,93 @@ public static class SlashCommands
         return ($"已配置 [green]{layer.ToUpperInvariant()}[/] = [cyan]{chosen}[/] / [yellow]{model}[/]", true);
     }
     private static List<string>? _availableLayerModels;
+
+    // ═══════════════════════════════════════════
+    //  /model l0 api
+    // ═══════════════════════════════════════════
+
+    private static (string, bool) ShowL0ApiProviders()
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("[bold yellow]/model l0 api[/]");
+        sb.AppendLine("[grey]可用 Provider:[/]");
+        foreach (var (name, info) in KnownProviders)
+        {
+            if (string.IsNullOrEmpty(info.Endpoint)) continue;
+            var hasKey = !string.IsNullOrEmpty(info.EnvVar) && SecretManager.Has(info.EnvVar);
+            sb.AppendLine($"  · [cyan]{name}[/] {(hasKey ? "[green]Key✓[/]" : "[yellow]需设置 Key[/]")}");
+        }
+        sb.AppendLine($"[dim]输入 /model l0 api <provider> 继续[/]");
+        return (sb.ToString(), true);
+    }
+
+    private static (string, bool) ShowL0ApiModels(string provider)
+    {
+        if (!KnownProviders.TryGetValue(provider, out var info))
+            return ($"未知 provider: {provider}", true);
+
+        var sb = new StringBuilder();
+        sb.AppendLine($"[bold yellow]L0 Embedding: {provider}[/]");
+
+        string? key = !string.IsNullOrEmpty(info.EnvVar) ? SecretManager.Get(info.EnvVar) : null;
+        if (!string.IsNullOrEmpty(info.EnvVar) && string.IsNullOrEmpty(key))
+        {
+            sb.AppendLine($"[red]未设置 {info.EnvVar}，请先 /config apikey {provider}[/]");
+            return (sb.ToString(), true);
+        }
+        sb.AppendLine(key != null ? "[green]✓ Key 已设置[/]" : "[green]✓ 无需 Key[/]");
+
+        sb.Append("[grey]获取 embedding 模型...[/]");
+        List<string> models;
+        try
+        {
+            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+            var req = new HttpRequestMessage(HttpMethod.Get, $"{info.Endpoint.TrimEnd('/')}/models");
+            if (key != null) req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", key);
+            var resp = http.Send(req);
+            if (!resp.IsSuccessStatusCode) return ($"获取失败 ({(int)resp.StatusCode})", true);
+            using var json = JsonDocument.Parse(resp.Content.ReadAsStream());
+            var allModels = json.RootElement.GetProperty("data")
+                .EnumerateArray().Select(m => m.GetProperty("id").GetString() ?? "")
+                .Where(id => !string.IsNullOrEmpty(id)).OrderBy(id => id).ToList();
+            models = allModels.Where(id => id.Contains("embed", StringComparison.OrdinalIgnoreCase)).ToList();
+            if (models.Count == 0) models = allModels.Take(20).ToList();
+        }
+        catch (Exception ex) { return ($"获取失败: {ex.Message.EscapeMarkup()}", true); }
+
+        sb.AppendLine($"[grey]{models.Count} 个模型:[/]");
+        foreach (var m in models) sb.AppendLine($"  · [cyan]{m}[/]");
+        sb.AppendLine($"[dim]输入 /model l0 api {provider} <模型名> 完成设置[/]");
+        return (sb.ToString(), true);
+    }
+
+    private static (string, bool) HandleLayerSelectComplete(string layer, string provider)
+    {
+        if (!KnownProviders.TryGetValue(provider, out var info))
+            return ($"未知 provider: {provider}", true);
+        var sb = new StringBuilder();
+        sb.AppendLine($"[bold]{layer.ToUpperInvariant()} Provider: {provider}[/]");
+        string? key = !string.IsNullOrEmpty(info.EnvVar) ? SecretManager.Get(info.EnvVar) : null;
+        if (!string.IsNullOrEmpty(info.EnvVar) && string.IsNullOrEmpty(key))
+            return ($"未设置 {info.EnvVar}，/config apikey {provider}", true);
+        try
+        {
+            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+            var req = new HttpRequestMessage(HttpMethod.Get, $"{info.Endpoint!.TrimEnd('/')}/models");
+            if (key != null) req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", key);
+            var resp = http.Send(req);
+            if (!resp.IsSuccessStatusCode) return ($"获取模型失败 ({(int)resp.StatusCode})", true);
+            using var json = JsonDocument.Parse(resp.Content.ReadAsStream());
+            var models = json.RootElement.GetProperty("data")
+                .EnumerateArray().Select(m => m.GetProperty("id").GetString() ?? "")
+                .Where(id => !string.IsNullOrEmpty(id)).OrderBy(id => id).Take(30).ToList();
+            sb.AppendLine($"模型 ({models.Count}):");
+            foreach (var m in models) sb.AppendLine($"  · [cyan]{m}[/]");
+            sb.AppendLine($"[dim]/model {layer} {provider} <模型名>[/]");
+        }
+        catch (Exception ex) { sb.AppendLine($"[red]{ex.Message.EscapeMarkup()}[/]"); }
+        return (sb.ToString(), true);
+    }
 
     private static (string, bool) HandleModelList(LTAI.AI.LocalEmbedder embedder)
     {

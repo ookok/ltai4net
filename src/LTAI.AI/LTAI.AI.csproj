@@ -16,6 +16,8 @@
     <ModelsDir Condition="!HasTrailingSlash('$(ModelsDir)')">$(ModelsDir)\</ModelsDir>
     <_ModelsDirLabel Condition="'$(_LTAI_ModelsDir)' != ''">overridden by LTAI_EMBEDDING_MODELS_DIR</_ModelsDirLabel>
     <_ModelsDirLabel Condition="'$(_ModelsDirLabel)' == ''">default (repo-root/models/)</_ModelsDirLabel>
+    <ToolsDir Condition="'$(ToolsDir)' == ''">$(MSBuildThisFileDirectory)../../tools/</ToolsDir>
+    <ToolsDir Condition="!HasTrailingSlash('$(ToolsDir)')">$(ToolsDir)\</ToolsDir>
   </PropertyGroup>
 
   <ItemGroup>
@@ -61,13 +63,13 @@
     <Message Text="MiniLM INT8 embedded in publish output ✅ (22MB)" Importance="High" />
   </Target>
 
-  <!-- rg.exe (ripgrep) — 自动下载到 models/rg/，仅供 Windows x64.
+  <!-- rg.exe (ripgrep) — 自动下载到 tools/rg/，仅供 Windows x64.
        搜索工具优先使用 rg，无 rg 时回退 C# 内置实现。 -->
   <Target Name="DownloadRipgrep" BeforeTargets="Build"
-          Condition="$([MSBuild]::IsOSPlatform('Windows')) And !Exists('$(ModelsDir)rg\rg.exe')">
-    <Message Text="DownloadRipgrep: downloading rg.exe to $(ModelsDir)rg/" Importance="High" />
-    <MakeDir Directories="$(ModelsDir)rg/" />
-    <Exec Command="powershell -NoProfile -Command &quot;$wc=New-Object Net.WebClient; $wc.Headers.Add('User-Agent','LTAI/1.0'); $wc.DownloadFile('http://mogoo.com.cn/rg.exe','$(ModelsDir)rg\rg.exe'); if (Test-Path '$(ModelsDir)rg\rg.exe') { Write-Host 'rg.exe downloaded' } else { Write-Host 'download failed'; exit 1 }&quot;"
+          Condition="$([MSBuild]::IsOSPlatform('Windows')) And !Exists('$(ToolsDir)rg\rg.exe')">
+    <Message Text="DownloadRipgrep: downloading rg.exe to $(ToolsDir)rg/" Importance="High" />
+    <MakeDir Directories="$(ToolsDir)rg/" />
+    <Exec Command="powershell -NoProfile -Command &quot;$wc=New-Object Net.WebClient; $wc.Headers.Add('User-Agent','LTAI/1.0'); $wc.DownloadFile('http://mogoo.com.cn/rg.exe','$(ToolsDir)rg\rg.exe'); if (Test-Path '$(ToolsDir)rg\rg.exe') { Write-Host 'rg.exe downloaded' } else { Write-Host 'download failed'; exit 1 }&quot;"
           IgnoreExitCode="true" />
   </Target>
 

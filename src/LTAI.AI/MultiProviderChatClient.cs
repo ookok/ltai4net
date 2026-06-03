@@ -299,6 +299,18 @@ public sealed class MultiProviderChatClient : IChatClient
 
             try
             {
+                // Remove any duplicate tools (Harness may inflate the tool list)
+                if (options?.Tools is { Count: > 10 })
+                {
+                    var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    for (int i = options.Tools.Count - 1; i >= 0; i--)
+                    {
+                        var n = options.Tools[i].Name.Trim();
+                        if (!seen.Add(n))
+                            options.Tools.RemoveAt(i);
+                    }
+                }
+
                 var callNum = Interlocked.Increment(ref _callCounter);
                 _logger.LogInformation("LLM call #{CallNum} → provider={Provider}", callNum, p);
 
@@ -665,23 +677,56 @@ public static class ServiceCollectionExtensions
 
             // Only register providers explicitly configured in L1/L2 layers (L0 is embedding).
             // Other providers with API keys are NOT auto-registered — no automatic fallback.
-            foreach (var (layerKey, layerCfg) in new[] {
-                ("l1", opts.AI.L1), ("l2", opts.AI.L2) })
+            // Check appsettings.json first, then layers.json as runtime config fallback.
+            var l1Cfg = opts.AI.L1; var l2Cfg = opts.AI.L2;
+            if (l1Cfg == null || string.IsNullOrEmpty(l1Cfg.Provider) ||
+                l2Cfg == null || string.IsNullOrEmpty(l2Cfg.Provider))
             {
-                if (layerCfg == null || string.IsNullOrEmpty(layerCfg.Provider)) continue;
+                var layersPath = Path.Combine(AppContext.BaseDirectory, ".livingtree", "layers.json");
+                if (File.Exists(layersPath))
+                {
+                    try
+                    {
+                        using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(layersPath));
+                        if (l1Cfg == null || string.IsNullOrEmpty(l1Cfg.Provider))
+                        {
+                            if (doc.RootElement.TryGetProperty("l1", out var l1) &&
+                                l1.TryGetProperty("Provider", out var l1p) &&
+                                l1.TryGetProperty("Model", out var l1m))
+                                l1Cfg = new LTAI.Core.Configuration.LayerConfig { Provider = l1p.GetString()!, Model = l1m.GetString()! };
+                        }
+                        if (l2Cfg == null || string.IsNullOrEmpty(l2Cfg.Provider))
+                        {
+                            if (doc.RootElement.TryGetProperty("l2", out var l2) &&
+                                l2.TryGetProperty("Provider", out var l2p) &&
+                                l2.TryGetProperty("Model", out var l2m))
+                                l2Cfg = new LTAI.Core.Configuration.LayerConfig { Provider = l2p.GetString()!, Model = l2m.GetString()! };
+                        }
+                    }
+                    catch { /* best-effort */ }
+                }
+            }
+            foreach (var (layerKey, layerCfg) in new[] {
+                ("l1", l1Cfg), ("l2", l2Cfg) })
+            {
+                // Fallback: use DefaultProvider from KnownKeys if layer is unset
+                if (layerCfg == null || string.IsNullOrEmpty(layerCfg.Provider))
+                {
+                    var fb = MultiProviderChatClient.DefaultProviders
+                        .FirstOrDefault(p => string.Equals(p.name, opts.AI.DefaultProvider, StringComparison.OrdinalIgnoreCase));
+                    if (fb.name == null) continue;
+                    var fbKey = SecretManager.Get(fb.envVar) ?? "";
+                    router.Register(layerKey, OpenAIChatClientFactory.Create(fb.endpoint, fb.model, fbKey));
+                    logger?.LogInformation("Registered fallback {Layer} → {Provider}/{Model}", layerKey, fb.name, fb.model);
+                    continue;
+                }
                 if (!knownProviders.TryGetValue(layerCfg.Provider, out var info))
                 {
                     logger?.LogWarning("Layer {Layer} provider '{Provider}' not found in known providers", layerKey, layerCfg.Provider);
                     continue;
                 }
 
-                var apiKey = SecretManager.Get(info.envVar);
-                if (string.IsNullOrEmpty(apiKey))
-                {
-                    logger?.LogWarning("Layer {Layer} provider '{Provider}' has no API key set", layerKey, layerCfg.Provider);
-                    continue;
-                }
-
+                var apiKey = SecretManager.Get(info.envVar) ?? "";
                 var model = !string.IsNullOrEmpty(layerCfg.Model) ? layerCfg.Model : info.model;
                 var ep = !string.IsNullOrEmpty(layerCfg.Endpoint) ? layerCfg.Endpoint : info.endpoint;
                 var isAnthropic = string.Equals(layerCfg.Provider, "Anthropic", StringComparison.OrdinalIgnoreCase);
@@ -712,14 +757,7 @@ public static class ServiceCollectionExtensions
         });
 
         // Local ONNX embedder (BGE-small-zh, zero API dependency)
-        // P12.3: smart disable — if any remote embedding provider has a key,
-        // skip the 200 MB / 5-10 s pre-warm. Remote API is preferred
-        // (1024-1536d, better quality, no local RAM). The ctor no-ops on
-        // disabled (Available returns false), so consumers fall through to
-        // the API path without ever loading the 90 MB model file.
-        var hasRemoteEmbedKey = EmbeddingClient.DefaultProviders
-            .Any(p => !string.IsNullOrEmpty(LTAI.Core.Configuration.SecretManager.Get(p.envVar)));
-        LocalEmbedder.DefaultDisabled = hasRemoteEmbedKey;
+        // L0 默认使用本地 ONNX 模型，远程 embedding API 需通过 /model l0 手动切换。
 
         // P13.1 + P13.2: factory that reads LTAI:Embedding config at resolution
         // time and binds LocalEmbedder.Options before the ctor runs.

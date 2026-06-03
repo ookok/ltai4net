@@ -174,22 +174,12 @@ public static class Program
             ZipFile.ExtractToDirectory(zipPath, toolsDir, overwriteFiles: true);
             File.Delete(zipPath);
 
-            var wtExe = Path.Combine(toolsDir, "wt.exe");
-            if (File.Exists(wtExe))
-            {
-                AnsiConsole.MarkupLine("[green]└─ Windows Terminal 已安装到 tools/wt/[/]");
-                return true;
-            }
-
-            // wt.exe 可能在子目录中（便携版 ZIP 自带目录）
-            var found = Directory.EnumerateFiles(toolsDir, "wt.exe", SearchOption.AllDirectories)
+            // 便携版 ZIP 自带版本子目录（如 terminal-1.24.11321.0/），查找 wt.exe 所在目录
+            var wtExe = Directory.EnumerateFiles(toolsDir, "wt.exe", SearchOption.AllDirectories)
                 .FirstOrDefault();
-            if (found != null)
+            if (wtExe != null)
             {
-                var dest = Path.Combine(toolsDir, "wt.exe");
-                if (!File.Exists(dest))
-                    File.Copy(found, dest);
-                AnsiConsole.MarkupLine("[green]└─ Windows Terminal 已安装到 tools/wt/[/]");
+                AnsiConsole.MarkupLine($"[green]└─ Windows Terminal 已安装 ({wtExe.EscapeMarkup()})[/]");
                 return true;
             }
 
@@ -227,9 +217,14 @@ public static class Program
     /// <summary>查找 wt.exe，优先本地 tools/wt/ 再查系统路径。</summary>
     private static string? EnsureWindowsTerminal()
     {
-        // 本地 tools/wt/ 路径
-        var localPath = Path.Combine(AppContext.BaseDirectory, "tools", "wt", "wt.exe");
-        if (File.Exists(localPath)) return localPath;
+        // 本地 tools/wt/ — 递归搜索所有子目录
+        var wtDir = Path.Combine(AppContext.BaseDirectory, "tools", "wt");
+        if (Directory.Exists(wtDir))
+        {
+            var found = Directory.EnumerateFiles(wtDir, "wt.exe", SearchOption.AllDirectories)
+                .FirstOrDefault();
+            if (found != null) return found;
+        }
         // winget 安装路径
         var storePath = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
