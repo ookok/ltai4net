@@ -44,6 +44,7 @@ public sealed class MultiProviderChatClient : IChatClient
     private string _defaultProvider;
 
     // 自适应成本路由：成功率 + 延迟 + 成本感知
+    private string? _lastError;
     private readonly ConcurrentDictionary<string, ProviderStats> _providerStats = new(StringComparer.OrdinalIgnoreCase);
     // Circuit breaker state per provider (thread-safe via ConcurrentDictionary)
     // P0: optionally backed by SQLite (CircuitBreakerStore) so cooldown survives process restart
@@ -220,6 +221,7 @@ public sealed class MultiProviderChatClient : IChatClient
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException)
                     {
+                        _lastError = ex.Message;
                         _logger.LogWarning(ex, "Streaming from '{P}' failed, degrading", p);
                         lastFailedProvider = p;
                         break;
@@ -237,7 +239,7 @@ public sealed class MultiProviderChatClient : IChatClient
         }
         yield return new ChatResponseUpdate(ChatRole.Assistant,
             anyAttempted
-                ? $"All providers failed for '{provider}'"
+                ? $"All providers failed for '{provider}'. Last error: {_lastError ?? "(unknown)"}"
                 : $"No providers available for '{provider}'");
     }
 
@@ -250,12 +252,32 @@ public sealed class MultiProviderChatClient : IChatClient
         {
             _logger.LogDebug("Cache HIT for provider '{P}', key={Key}", provider, cacheKey);
             LTAI.Core.Configuration.UsageTracker.RecordCacheHit();
-            // Still track approximate tokens from cached response
-            var text = cached!.Messages?.LastOrDefault()?.Text ?? "";
-            var promptT = text.Length / 4;
-            var completionT = text.Length / 8;
-            LTAI.Core.Configuration.UsageTracker.Record(promptT, completionT, provider);
-            LTAI.Core.Configuration.UsageTracker.RecordCacheTokens(promptT, 0); // 全部 prompt 命中缓存
+            // Replay the cached response's actual usage data
+            if (cached!.Usage is { } cachedUsage)
+            {
+                var promptTotal = (int)(cachedUsage.InputTokenCount ?? 0);
+                var completion = (int)(cachedUsage.OutputTokenCount ?? 0);
+                int cacheHit = 0, cacheMiss = promptTotal;
+                if (cachedUsage.AdditionalCounts is { } counts)
+                {
+                    cacheHit = (int?)(counts.GetValueOrDefault("prompt_cache_hit_tokens") ??
+                                     counts.GetValueOrDefault("Cached")) ?? 0;
+                    var apiMiss = counts.GetValueOrDefault("prompt_cache_miss_tokens");
+                    if (apiMiss.HasValue) cacheMiss = (int)apiMiss.Value;
+                }
+                if (cacheHit > 0 && cacheMiss == promptTotal) cacheMiss = promptTotal - cacheHit;
+                LTAI.Core.Configuration.UsageTracker.RecordWithCache(
+                    promptTotal, completion, cacheHit, cacheMiss, provider);
+            }
+            else
+            {
+                // Fallback: estimate from text length
+                var text = cached!.Messages?.LastOrDefault()?.Text ?? "";
+                var promptT = text.Length / 4;
+                var completionT = text.Length / 8;
+                LTAI.Core.Configuration.UsageTracker.Record(promptT, completionT, provider);
+                LTAI.Core.Configuration.UsageTracker.RecordCacheTokens(promptT, 0);
+            }
             return cached;
         }
 
@@ -285,12 +307,27 @@ public sealed class MultiProviderChatClient : IChatClient
                 // Track token usage from MAF-compliant IChatClient.Usage metadata
                 if (result.Usage is { } usage)
                 {
+                    var promptTotal = (int)(usage.InputTokenCount ?? 0);
+                    var completion = (int)(usage.OutputTokenCount ?? 0);
+
+                    // DeepSeek 返回 prompt_cache_hit_tokens / prompt_cache_miss_tokens
+                    int cacheHit = 0, cacheMiss = 0;
+                    if (usage.AdditionalCounts is { } counts)
+                    {
+                        cacheHit = (int?)(counts.GetValueOrDefault("prompt_cache_hit_tokens") ??
+                                         counts.GetValueOrDefault("Cached")) ?? 0;
+                        var apiMiss = counts.GetValueOrDefault("prompt_cache_miss_tokens");
+                        if (apiMiss.HasValue) cacheMiss = (int)apiMiss.Value;
+                    }
+
+                    // 从 API 返回推导：若 cache_miss 未显式返回，从总量减去 cache_hit
+                    if (cacheMiss == 0 && cacheHit > 0)
+                        cacheMiss = promptTotal - cacheHit;
+                    else if (cacheMiss == 0)
+                        cacheMiss = promptTotal;
+
                     LTAI.Core.Configuration.UsageTracker.RecordWithCache(
-                        (int)(usage.InputTokenCount ?? 0),
-                        (int)(usage.OutputTokenCount ?? 0),
-                        (int)(usage.AdditionalCounts?.FirstOrDefault(c => c.Key.StartsWith("Cached")).Value ?? 0),
-                        0,
-                        p);
+                        promptTotal, completion, cacheHit, cacheMiss, p);
                 }
 
                 // Store in cache (miss path)
@@ -316,6 +353,7 @@ public sealed class MultiProviderChatClient : IChatClient
                 (int)System.Net.HttpStatusCode.PaymentRequired)
             {
                 // Auth / payment failure — ban permanently (never retry this session)
+                _lastError = $"HTTP {(int)ex.Status} {ex.Message}";
                 _logger.LogWarning("Provider '{P}' permanently banned: {Status}", p, ex.Status);
                 _providerCooldowns[p] = DateTime.MaxValue;
                 RecordFailure(p);
@@ -324,6 +362,7 @@ public sealed class MultiProviderChatClient : IChatClient
             catch (ClientResultException ex) when (ex.Status == (int)System.Net.HttpStatusCode.TooManyRequests)
             {
                 // Rate limited — honor Retry-After header when present
+                _lastError = "Rate limited (HTTP 429)";
                 var cooldown = TimeSpan.FromSeconds(30);
                 _providerCooldowns[p] = DateTime.UtcNow + cooldown;
                 _logger.LogWarning("Provider '{P}' rate limited, cooldown {Cooldown}s", p, cooldown.TotalSeconds);
@@ -332,25 +371,28 @@ public sealed class MultiProviderChatClient : IChatClient
             }
             catch (TimeoutException)
             {
+                _lastError = "Timeout after 15s";
                 _logger.LogWarning("Provider '{P}' timed out after 15s, degrading", p);
                 RecordFailure(p);
                 continue;
             }
             catch (OperationCanceledException) when (!ct.IsCancellationRequested)
             {
-                // Timeout from our CTS (not user cancellation)
+                _lastError = "Timeout after 15s";
                 _logger.LogWarning("Provider '{P}' timed out, degrading", p);
                 RecordFailure(p);
                 continue;
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
+                _lastError = ex.Message;
                 _logger.LogWarning(ex, "Provider '{P}' failed, degrading to fallback", p);
                 RecordFailure(p);
                 continue;
             }
         }
-        return new ChatResponse(new ChatMessage(ChatRole.Assistant, $"All providers failed for '{provider}'"));
+        return new ChatResponse(new ChatMessage(ChatRole.Assistant,
+            $"All providers failed for '{provider}'. Last error: {_lastError ?? "(unknown)"}"));
     }
 
     private void RecordFailure(string provider)
@@ -602,6 +644,9 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<MultiProviderChatClient>(sp =>
         {
             var opts = sp.GetRequiredService<IOptions<LTAIOptions>>().Value;
+            // 用 appsettings.json LTAI:Providers 覆盖硬编码的 KnownKeys.All
+            if (opts.Providers.Length > 0)
+                LTAI.Core.Configuration.KnownKeys.ApplyConfig(opts.Providers);
             var logger = sp.GetService<ILogger<MultiProviderChatClient>>();
             var httpFactory = sp.GetRequiredService<IHttpClientFactory>();
             var modelMetadata = sp.GetService<ModelMetadataProvider>();

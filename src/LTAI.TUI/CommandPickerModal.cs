@@ -1,5 +1,5 @@
-// 命令选择器 — 在 Live Display 的 Messages 面板中渲染
-// 使用 Layout 的 Messages 区域展示命令列表，所有交互在 Live 内部完成。
+// 命令选择器渲染 — 纯静态 UI 构建，无交互逻辑
+// 交互由 ChatLayout 的输入任务线程处理（避免 LiveDisplay 排他锁干扰 Console.ReadKey）
 
 using System.Text;
 using Spectre.Console;
@@ -7,119 +7,24 @@ using Spectre.Console.Rendering;
 
 namespace LTAI.TUI;
 
-/// <summary>
-/// 命令选择器 — 在 Live Display 内的 Messages 面板渲染交互式命令列表。
-/// </summary>
 public static class CommandPickerModal
 {
-    /// <summary>
-    /// 在 Layout 的 Messages 面板内显示命令选择器。
-    /// </summary>
-    /// <param name="layout">当前 ChatLayout 的 Layout 实例。</param>
-    /// <param name="ctx">Live 显示上下文，用于刷新。</param>
-    /// <returns>选中命令字符串（如 "/model"），取消返回 null。</returns>
-    public static string? Show(Layout layout, LiveDisplayContext ctx)
-    {
-        var filter = new StringBuilder();
-        var items = SlashCommands.GetSuggestionItems("/");
-        var selectedIdx = items.Count > 0 ? 0 : -1;
-
-        // 初始渲染
-        layout["Messages"].Update(BuildPicker(filter, items, selectedIdx));
-        ctx.Refresh();
-
-        while (true)
-        {
-            var key = Console.ReadKey(true);
-
-            switch (key.Key)
-            {
-                case ConsoleKey.Escape:
-                    return null;
-
-                case ConsoleKey.UpArrow:
-                    if (items.Count > 0)
-                        selectedIdx = (selectedIdx - 1 + items.Count) % items.Count;
-                    break;
-
-                case ConsoleKey.DownArrow:
-                    if (items.Count > 0)
-                        selectedIdx = (selectedIdx + 1) % items.Count;
-                    break;
-
-                case ConsoleKey.Tab:
-                {
-                    var completions = items
-                        .Select(s => s.Completion)
-                        .Distinct(StringComparer.OrdinalIgnoreCase)
-                        .ToList();
-
-                    if (completions.Count == 1)
-                    {
-                        return completions[0] + " ";
-                    }
-
-                    if (completions.Count > 1)
-                    {
-                        var lcp = LongestCommonPrefix(completions);
-                        if (lcp.Length > ("/" + filter).Length)
-                        {
-                            filter.Clear();
-                            filter.Append(lcp.Length > 1 ? lcp[1..] : "");
-                        }
-                    }
-                    break;
-                }
-
-                case ConsoleKey.Enter:
-                {
-                    if (selectedIdx >= 0 && selectedIdx < items.Count)
-                        return items[selectedIdx].Completion;
-
-                    var raw = "/" + filter.ToString().Trim();
-                    return string.IsNullOrWhiteSpace(raw) || raw == "/" ? null : raw;
-                }
-
-                case ConsoleKey.Backspace:
-                    if (filter.Length > 0)
-                        filter.Length--;
-                    break;
-
-                default:
-                    if (!char.IsControl(key.KeyChar))
-                        filter.Append(key.KeyChar);
-                    break;
-            }
-
-            // 重新计算建议
-            var prefix = "/" + filter;
-            items = prefix.Length > 1
-                ? SlashCommands.GetSuggestionItems(prefix)
-                : SlashCommands.GetSuggestionItems("/");
-            if (selectedIdx >= items.Count) selectedIdx = items.Count - 1;
-            if (selectedIdx < 0 && items.Count > 0) selectedIdx = 0;
-
-            // 刷新 Messages 面板
-            layout["Messages"].Update(BuildPicker(filter, items, selectedIdx));
-            ctx.Refresh();
-        }
-    }
-
-    private static Panel BuildPicker(
-        StringBuilder filter,
+    /// <summary>构建选择器面板。</summary>
+    public static Panel BuildPicker(
+        string filter,
         List<SlashCommands.SuggestionItem> items,
         int selectedIdx)
     {
         var rows = new List<IRenderable>();
 
         // ── 过滤输入行 ──
-        var inputDisplay = string.IsNullOrEmpty(filter.ToString())
+        var inputDisplay = string.IsNullOrEmpty(filter)
             ? "[yellow]/[/][dim] 输入过滤关键字...[/]"
             : $"[yellow]/{filter}[/]";
         rows.Add(new Markup(inputDisplay));
 
         // ── 帮助提示 ──
-        rows.Add(new Markup("[dim]↑↓ 选择  Tab 补全  Enter 执行  Esc 取消[/]"));
+        rows.Add(new Markup("[dim]↑↓/jk 选择  Tab 补全  Enter 执行  Esc 取消[/]"));
         rows.Add(new Text(""));
 
         // ── 命令列表 ──
@@ -170,7 +75,7 @@ public static class CommandPickerModal
         };
     }
 
-    private static string LongestCommonPrefix(List<string> strings)
+    internal static string LongestCommonPrefix(List<string> strings)
     {
         if (strings.Count == 0) return "";
         if (strings.Count == 1) return strings[0];

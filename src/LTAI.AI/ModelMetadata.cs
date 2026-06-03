@@ -24,6 +24,7 @@ public sealed record ModelMetadata(
     ModelCapability Capabilities,
     decimal? PriceInPerM,
     decimal? PriceOutPerM,
+    decimal? PriceInCachePerM,
     DateTime FetchedAt)
 {
     [JsonIgnore]

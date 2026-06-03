@@ -276,6 +276,7 @@ public sealed class LTAIOptions
     public McpConfig Mcp { get; init; } = new();
     public DurableConfig Durable { get; init; } = new();
     public EmbeddingConfig Embedding { get; init; } = new();
+    public ProviderConfig[] Providers { get; init; } = []; // overwrites KnownKeys.All when non-empty
     public string DataDirectory { get; init; } = ".livingtree";
     public string ToolsDirectory { get; init; } = "tools";
     public string[] SkillsUrls { get; init; } = Array.Empty<string>();
@@ -321,6 +322,18 @@ public sealed class LTAIOptions
     private static readonly string? EnvMemoryDir = Environment.GetEnvironmentVariable("LTAI_MEMORY_DIR");
 }
 
+/// <summary>JSON-serializable provider definition, mirrors <see cref="KnownKeys.KeyInfo"/>.</summary>
+public sealed record ProviderConfig(
+    string EnvVar,
+    string Service,
+    string Description = "",
+    string? Url = null,
+    string? Endpoint = null,
+    string? Model = null,
+    decimal PriceInPerM = 0,
+    decimal PriceOutPerM = 0,
+    decimal PriceInCachePerM = 0);
+
 /// <summary>
 /// Registry of all environment variables the system uses, with descriptions and pricing.
 /// Serves as the single source of truth for:
@@ -353,9 +366,14 @@ public static class KnownKeys
 
     /// <summary>
     /// All known keys. Source of truth for UI panels and cost calculation.
+    /// Can be overridden by setting <c>LTAI:Providers</c> in appsettings.json.
+    /// Call <see cref="ApplyConfig"/> at startup if config providers are present.
     /// <b>Consumers:</b> ConfigView, MainWindow, LLMConfigPanel, UsageTracker.
     /// </summary>
-    public static readonly KeyInfo[] All =
+    public static KeyInfo[] All = DefaultHardcoded;
+
+    /// <summary>Hardcoded defaults — used when <c>LTAI:Providers</c> config is empty.</summary>
+    private static readonly KeyInfo[] DefaultHardcoded =
     [
         // ── LLM Providers (官方 ¥/1M tokens 价格，来源各官网定价页) ──
         new("DEEPSEEK_API_KEY",     "DeepSeek",       "输入¥1/输出¥2/缓存¥0.02 per 1M", "https://platform.deepseek.com/api_keys", "https://api.deepseek.com/v1", "deepseek-v4-flash", 1.0m, 2.0m, 0.02m),
@@ -424,6 +442,30 @@ public static class KnownKeys
                       : k.EnvVar.Contains("TRANSLATE") ? "Translation"
                       : k.EnvVar.Contains("UNSPLASH") ? "Image"
                       : "Other");
+
+    /// <summary>
+    /// Override <see cref="All"/> with entries from <c>LTAI:Providers</c> config.
+    /// Call once at startup from DI registration when config is available.
+    /// Entries with the same <c>EnvVar</c> replace hardcoded defaults; new entries append.
+    /// </summary>
+    public static void ApplyConfig(ProviderConfig[] providers)
+    {
+        if (providers == null || providers.Length == 0) return;
+        var merged = new List<KeyInfo>(DefaultHardcoded);
+        var seen = new HashSet<string>(merged.Select(k => k.EnvVar), StringComparer.OrdinalIgnoreCase);
+        // Update existing or append new entries
+        foreach (var p in providers)
+        {
+            var ki = new KeyInfo(p.EnvVar, p.Service, p.Description, p.Url, p.Endpoint, p.Model,
+                p.PriceInPerM, p.PriceOutPerM, p.PriceInCachePerM);
+            var idx = merged.FindIndex(k => k.EnvVar.Equals(p.EnvVar, StringComparison.OrdinalIgnoreCase));
+            if (idx >= 0)
+                merged[idx] = ki;
+            else
+                merged.Add(ki);
+        }
+        All = merged.ToArray();
+    }
 }
 
 /// <summary>
@@ -506,6 +548,15 @@ public interface IUsageTracker
 /// </summary>
 public sealed class UsageTracker : IUsageTracker
 {
+    /// <summary>Per-model pricing overrides (¥/1M tokens) for cost calculation. Keyed by model ID.</summary>
+    internal static readonly Dictionary<string, (decimal PriceIn, decimal PriceOut, decimal PriceInCache)> PerModelPricing = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["deepseek-v4-flash"] = (1.0m, 2.0m, 0.02m),
+        ["deepseek-v4-pro"] = (3.0m, 6.0m, 0.025m),
+        ["deepseek-reasoner"] = (1.0m, 2.0m, 0.02m),
+        ["deepseek-v3"] = (1.0m, 2.0m, 0.02m),
+    };
+
     /// <summary>Global default instance. All static methods forward here.</summary>
     public static readonly UsageTracker Default = new();
 
@@ -604,6 +655,12 @@ public sealed class UsageTracker : IUsageTracker
     private static KnownKeys.KeyInfo? LookupModel(string model)
     {
         if (string.IsNullOrEmpty(model)) return null;
+        // Check per-model pricing override first
+        if (PerModelPricing.TryGetValue(model, out var pm))
+        {
+            return new KnownKeys.KeyInfo(
+                "", "PerModel", "", null, null, model, pm.PriceIn, pm.PriceOut, pm.PriceInCache);
+        }
         var cached = Volatile.Read(ref _lastLookupModel);
         if (string.Equals(cached, model, StringComparison.OrdinalIgnoreCase))
             return _lastLookupKey;
@@ -620,26 +677,7 @@ public sealed class UsageTracker : IUsageTracker
 
     /// <summary>Core Record logic — called by both static forwarder and interface impl.</summary>
     private static void RecordInternal(int prompt, int completion, string model)
-    {
-        Interlocked.Add(ref _promptTokens, prompt);
-        Interlocked.Add(ref _completionTokens, completion);
-        Interlocked.Increment(ref _requests);
-        if (!string.IsNullOrEmpty(model)) Interlocked.Exchange(ref _activeModel, model);
-
-        var key = LookupModel(model);
-        double cost;
-        if (key != null && (key.PriceInPerM > 0 || key.PriceOutPerM > 0))
-        {
-            cost = (prompt / 1_000_000.0) * (double)key.PriceInPerM
-                 + (completion / 1_000_000.0) * (double)key.PriceOutPerM;
-        }
-        else
-        {
-            cost = (prompt / 1_000_000.0) * 1.0
-                 + (completion / 1_000_000.0) * 4.0;
-        }
-        lock (_costLock) { _totalCost += cost; }
-    }
+        => RecordInternal(prompt, completion, 0, prompt, model);
 
     /// <summary>Record with cache token breakdown — 三档计价 (cacheHit / cacheMiss / output).</summary>
     private static void RecordInternal(int prompt, int completion, int cacheHit, int cacheMiss, string model)

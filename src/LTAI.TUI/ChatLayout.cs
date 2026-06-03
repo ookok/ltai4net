@@ -27,7 +27,12 @@ public sealed class ChatLayout
     private bool _processing;
     private CancellationTokenSource? _responseCts;
     private volatile char _quickNav;
-    private TaskCompletionSource<string?>? _pickerTcs;
+    // 选择器状态（由输入任务管理，主线程只读）
+    private volatile bool _pickerActive;
+    private readonly object _pickerLock = new();
+    private string _pickerFilter = "";
+    private List<SlashCommands.SuggestionItem> _pickerItems = new();
+    private int _pickerSelectedIdx;
     private LiveDisplayContext? _liveCtx;
     public TuiView? LastRequestedView { get; private set; }
     private int _toolCallCount;
@@ -153,7 +158,120 @@ public sealed class ChatLayout
                     {
                         var key = Console.ReadKey(true);
 
-                        // ── 视图切换（仅空输入时） ──
+                        // ── 选择器激活时，路由所有按键到选择器 ──
+                        if (_pickerActive)
+                        {
+                            string? pickerResult = null;
+                            bool pickerDone = false;
+
+                            if (key.Key == ConsoleKey.UpArrow)
+                            {
+                                lock (_pickerLock)
+                                {
+                                    if (_pickerItems.Count > 0)
+                                        _pickerSelectedIdx = (_pickerSelectedIdx - 1 + _pickerItems.Count) % _pickerItems.Count;
+                                }
+                            }
+                            else if (key.Key == ConsoleKey.DownArrow)
+                            {
+                                lock (_pickerLock)
+                                {
+                                    if (_pickerItems.Count > 0)
+                                        _pickerSelectedIdx = (_pickerSelectedIdx + 1) % _pickerItems.Count;
+                                }
+                            }
+                            else if (key.Key == ConsoleKey.Enter)
+                            {
+                                lock (_pickerLock)
+                                {
+                                    if (_pickerSelectedIdx >= 0 && _pickerSelectedIdx < _pickerItems.Count)
+                                        pickerResult = _pickerItems[_pickerSelectedIdx].Completion;
+                                }
+                                pickerDone = true;
+                            }
+                            else if (key.Key == ConsoleKey.Escape || key.KeyChar == 'q')
+                            {
+                                pickerDone = true;
+                            }
+                            else if (key.Key == ConsoleKey.Backspace)
+                            {
+                                lock (_pickerLock)
+                                {
+                                    if (_pickerFilter.Length > 0)
+                                        _pickerFilter = _pickerFilter[..^1];
+                                    UpdatePickerItems();
+                                }
+                            }
+                            else if (key.Key == ConsoleKey.Tab)
+                            {
+                                lock (_pickerLock)
+                                {
+                                    var completions = _pickerItems
+                                        .Select(s => s.Completion)
+                                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                                        .ToList();
+                                    if (completions.Count == 1)
+                                    {
+                                        pickerResult = completions[0] + " ";
+                                        pickerDone = true;
+                                    }
+                                    else if (completions.Count > 1)
+                                    {
+                                        var lcp = LongestCommonPrefix(completions);
+                                        if (lcp.Length > ("/" + _pickerFilter).Length)
+                                            _pickerFilter = lcp.Length > 1 ? lcp[1..] : "";
+                                        UpdatePickerItems();
+                                    }
+                                }
+                            }
+                            else if (key.Key == ConsoleKey.J && _pickerFilter.Length == 0)
+                            {
+                                lock (_pickerLock)
+                                {
+                                    if (_pickerItems.Count > 0)
+                                        _pickerSelectedIdx = (_pickerSelectedIdx + 1) % _pickerItems.Count;
+                                }
+                            }
+                            else if (key.Key == ConsoleKey.K && _pickerFilter.Length == 0)
+                            {
+                                lock (_pickerLock)
+                                {
+                                    if (_pickerItems.Count > 0)
+                                        _pickerSelectedIdx = (_pickerSelectedIdx - 1 + _pickerItems.Count) % _pickerItems.Count;
+                                }
+                            }
+                            else if (!char.IsControl(key.KeyChar))
+                            {
+                                lock (_pickerLock)
+                                {
+                                    _pickerFilter += key.KeyChar;
+                                    UpdatePickerItems();
+                                }
+                            }
+
+                            if (pickerDone)
+                            {
+                                lock (_pickerLock)
+                                {
+                                    _pickerActive = false;
+                                    _pickerFilter = "";
+                                    _pickerItems = new();
+                                    _pickerSelectedIdx = -1;
+                                }
+                                lock (_layout) RestoreMessagesPanel();
+                                lock (inputBuf) inputBuf.Clear();
+                                if (pickerResult != null)
+                                {
+                                    var handled = await HandleSlashCommandAsync(pickerResult).ConfigureAwait(false);
+                                    if (!handled) { cts.Cancel(); return; }
+                                }
+                            }
+                            continue;
+                        }
+
+                        // ── 普通模式（不变） ──
+
+                        // 视图切换（仅空输入时）
                         if (inputBuf.Length == 0 && "1345".Contains(key.KeyChar))
                         {
                             lock (_layout) { _quickNav = key.KeyChar; }
@@ -206,13 +324,12 @@ public sealed class ChatLayout
                             lock (inputBuf) { inputBuf.Append(key.KeyChar); triggerPicker = inputBuf.Length == 1 && inputBuf[0] == '/'; }
                             if (triggerPicker)
                             {
-                                var tcs = new TaskCompletionSource<string?>();
-                                _pickerTcs = tcs;
-                                var cmd = await tcs.Task.ConfigureAwait(false);
-                                if (cmd != null)
+                                lock (_pickerLock)
                                 {
-                                    var handled = await HandleSlashCommandAsync(cmd).ConfigureAwait(false);
-                                    if (!handled) { cts.Cancel(); return; }
+                                    _pickerActive = true;
+                                    _pickerFilter = "";
+                                    _pickerItems = SlashCommands.GetSuggestionItems("/");
+                                    _pickerSelectedIdx = _pickerItems.Count > 0 ? 0 : -1;
                                 }
                             }
                         }
@@ -223,10 +340,33 @@ public sealed class ChatLayout
                 // queued messages one at a time while keeping the UI responsive.
                 while (!cts.Token.IsCancellationRequested)
                 {
-                    // Refresh UI
+                    // Refresh UI — picker 模式直接渲染选择器，跳过 UpdateMessages 避免闪烁
                     string buf;
                     lock (inputBuf) buf = inputBuf.ToString();
-                    lock (_layout) { UpdateMessages(""); UpdateFooter(buf, "", showWatermark); ctx.Refresh(); }
+                    if (_pickerActive)
+                    {
+                        string filter;
+                        List<SlashCommands.SuggestionItem> items;
+                        int selIdx;
+                        lock (_pickerLock)
+                        {
+                            filter = _pickerFilter;
+                            items = _pickerItems;
+                            selIdx = _pickerSelectedIdx;
+                        }
+                        lock (_layout)
+                        {
+                            _layout["Messages"].Update(CommandPickerModal.BuildPicker(filter, items, selIdx));
+                            // 选择器模式下，底部输入框显示过滤文本而非原始 inputBuf
+                            var footerBuf = string.IsNullOrEmpty(filter) ? "/" : "/" + filter;
+                            UpdateFooter(footerBuf, "", showWatermark);
+                            ctx.Refresh();
+                        }
+                    }
+                    else
+                    {
+                        lock (_layout) { UpdateMessages(""); UpdateFooter(buf, "", showWatermark); ctx.Refresh(); }
+                    }
                     showWatermark = false;
 
                     // Check quick-navigation from input thread
@@ -243,15 +383,7 @@ public sealed class ChatLayout
                         }
                     }
 
-                    // Run command picker on main thread when triggered by input task
-                    if (_pickerTcs != null)
-                    {
-                        var tcs = _pickerTcs;
-                        _pickerTcs = null;
-                        var cmd = CommandPickerModal.Show(_layout, ctx);
-                        tcs.TrySetResult(cmd);
-                        continue;
-                    }
+                    // （Picker 渲染已移至上方与 UpdateMessages 合并，避免闪烁）
 
                     // Process the next queued message (if not already busy)
                     if (!_processing && _messageQueue.Reader.TryRead(out var msg))
@@ -296,6 +428,8 @@ public sealed class ChatLayout
             var (role, content) = _history[i];
             if (role == "user")
                 sb.AppendLine($"[bold cyan]┃[/] [cyan]你:[/] {content.EscapeMarkup()}");
+            else if (role == "cmd")
+                sb.AppendLine(content);
             else
                 sb.AppendLine($"[bold green]┃[/] {MdToPanelContent(content)}");
         }
@@ -330,21 +464,87 @@ public sealed class ChatLayout
         var result = sb.ToString().TrimEnd();
         if (_history.Count == 0 && string.IsNullOrEmpty(streamingContent) && _cachedHistoryCount == 0)
         {
-            // 首次空状态保留欢迎屏
+            // 首次空状态保留欢迎屏（如果被命令选择器覆盖则恢复）
+            RestoreMessagesPanel();
             return;
         }
         if (!string.IsNullOrEmpty(streamingContent) && _history.Count > 0 && _history[^1].role == "user")
             result = $"[bold green]┃[/] {result}";
 
-        // 防御性转义：AI 返回的文本中可能包含 [中文] 等未转义括号，
+        // 防御性转义：AI 返回的文本中可能包含 [次]、[步骤1] 等未被转义的括号，
         // Spectre.Console 会尝试将其作为 markup tag 解析导致崩溃。
-        // 只转义非 ASCII 内容（中/日/韩等），不影响 [bold][/] 等合法标签。
-        result = Regex.Replace(result, @"(?<!\[)\[([^\x00-\x7F]+?)\](?!\])", "[[$1]]");
+        // 仅放行已知的 Spectre 标记标签，其余全部转义。
+        result = Regex.Replace(result, @"(?<!\[)\[([^\[\]]+?)\](?!\])", m =>
+        {
+            var inner = m.Groups[1].Value.Trim();
+            if (inner == "/") return m.Value;
+            if (inner.Length > 0 && inner.Split(' ', StringSplitOptions.RemoveEmptyEntries)
+                    .All(part => _knownMarkupTokens.Contains(part)))
+                return m.Value;
+            return "[[" + inner + "]]";
+        });
 
         _layout["Messages"].Update(
             new Panel(result)
                 .Border(BoxBorder.None)
                 .Expand());
+    }
+
+    private void RestoreMessagesPanel()
+    {
+        if (_history.Count > 0)
+        {
+            UpdateMessages("");
+            return;
+        }
+        _layout["Messages"].Update(
+            new Panel(
+                "[bold yellow]💬 欢迎使用 LTAI[/]\n\n" +
+                "[grey]可用命令:[/]\n" +
+                "  [cyan]/new[/]     — 新建会话\n" +
+                "  [cyan]/help[/]    — 显示帮助\n" +
+                "  [cyan]/exit[/]    — 退出\n" +
+                "  [cyan]/model[/]   — 管理模型\n" +
+                "  [cyan]/config[/]  — 配置 LLM\n\n" +
+                "[grey]快捷键:[/]\n" +
+                "  [cyan]1-5[/]       — 切换视图\n" +
+                "  [cyan]↑↓[/]       — 历史消息\n" +
+                "  [cyan]/[/]         — 打开命令选择器\n\n" +
+                "[dim]直接输入消息开始对话，或输入 [yellow]/[/] 浏览全部命令[/]")
+                .Border(BoxBorder.Rounded)
+                .Header(new PanelHeader("[bold yellow]💬 LTAI[/]"))
+                .Expand());
+    }
+
+    // ── 选择器辅助 ──
+
+    /// <summary>根据当前 <c>_pickerFilter</c> 重新计算 <c>_pickerItems</c>。</summary>
+    /// <remarks>调用方必须持有 <c>_pickerLock</c>。</remarks>
+    private void UpdatePickerItems()
+    {
+        var prefix = "/" + _pickerFilter;
+        _pickerItems = prefix.Length > 1
+            ? SlashCommands.GetSuggestionItems(prefix)
+            : SlashCommands.GetSuggestionItems("/");
+        if (_pickerSelectedIdx >= _pickerItems.Count) _pickerSelectedIdx = _pickerItems.Count - 1;
+        if (_pickerSelectedIdx < 0 && _pickerItems.Count > 0) _pickerSelectedIdx = 0;
+    }
+
+    private static string LongestCommonPrefix(List<string> strings)
+    {
+        if (strings.Count == 0) return "";
+        if (strings.Count == 1) return strings[0];
+
+        var first = strings[0];
+        for (int i = 0; i < first.Length; i++)
+        {
+            for (int j = 1; j < strings.Count; j++)
+            {
+                if (i >= strings[j].Length || strings[j][i] != first[i])
+                    return first[..i];
+            }
+        }
+        return first;
     }
 
     // ── Footer ──
@@ -476,6 +676,13 @@ public sealed class ChatLayout
     private static readonly Regex InlineMdRx = new(
         @"\*\*(.+?)\*\*|__(.+?)__|\*(.+?)\*|_(.+?)_|``(.+?)``|`(.+?)`|\[\[(.+?)\]\]\((.+?)\)|~~(.+?)~~",
         RegexOptions.Compiled);
+
+    private static readonly HashSet<string> _knownMarkupTokens = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "bold", "italic", "grey", "cyan", "green", "yellow", "white", "black",
+        "red", "blue", "aqua", "purple", "orange", "dim", "invert", "underline",
+        "strikethrough", "/", "link"
+    };
 
     private static string InlineMdToSpectre(string text)
     {
@@ -714,7 +921,7 @@ public sealed class ChatLayout
         if (SlashCommands.TryExecute(input, ref running, ref cmdStatus))
         {
             if (!string.IsNullOrEmpty(cmdStatus))
-                _history.Add(("assistant", cmdStatus));
+                _history.Add(("cmd", cmdStatus));
             return running;
         }
         return true;

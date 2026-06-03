@@ -3,6 +3,7 @@ using System.Net.Http.Headers;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Spectre.Console;
+using LTAI.AI;
 
 namespace LTAI.TUI;
 
@@ -338,9 +339,16 @@ public static class SlashCommands
             foreach (var m in sample)
             {
                 var ctx = m.ContextWindow != null ? FormatNum(m.ContextWindow.Value) : "";
-                var caps = m.Capabilities != 0 ? $" [dim]{m.Capabilities}[/]" : "";
-                var price = m.PriceInPerM > 0 ? $" [yellow]¥{m.PriceInPerM:F2} in[/]" : "";
-                lines.Add($"    · [white]{m.Id}[/] {ctx}{caps}{price}");
+                var caps = m.Capabilities != 0
+                    ? $" [dim]{AbbrevCaps(m.Capabilities)}[/]"
+                    : "";
+                var priceIn = m.PriceInPerM > 0 ? $" [yellow]¥{m.PriceInPerM:F2} 输入[/]" : "";
+                var priceOut = m.PriceOutPerM > 0 ? $" [yellow]¥{m.PriceOutPerM:F2} 输出[/]" : "";
+                var priceCache = m.PriceInCachePerM > 0 ? $" [yellow]¥{m.PriceInCachePerM:F2} 缓存[/]" : "";
+                var priceLine = (priceIn + priceOut + priceCache).TrimStart() != ""
+                    ? $"\n      {priceIn}{priceOut}{priceCache}"
+                    : "";
+                lines.Add($"    · [white]{m.Id}[/] {ctx}{caps}{priceLine}");
             }
             var remaining = group.Count() - sample.Count();
             if (remaining > 0)
@@ -348,6 +356,7 @@ public static class SlashCommands
         }
 
         lines.Add($"\n[grey]总计 {all.Count} 个模型，来自 {all.Select(m => m.Provider).Distinct().Count()} 个 Provider[/]");
+        lines.Add("[dim]能力缩写: Chat=聊天, Str=流式, Tool=工具, Func=函数, Struct=结构化输出, Vis=视觉, Emb=嵌入, Img=图像[/]");
         return (string.Join("\n", lines), true);
     }
 
@@ -355,6 +364,21 @@ public static class SlashCommands
         n >= 1_000_000 ? $"[grey]{n / 1_000_000}M ctx[/]" :
         n >= 1_000    ? $"[grey]{n / 1_000}K ctx[/]" :
         $"[grey]{n}[/]";
+
+    private static string AbbrevCaps(ModelCapability caps)
+    {
+        if (caps == 0) return "";
+        var parts = new List<string>();
+        if (caps.HasFlag(ModelCapability.Chat)) parts.Add("Chat");
+        if (caps.HasFlag(ModelCapability.Streaming)) parts.Add("Str");
+        if (caps.HasFlag(ModelCapability.ToolCall)) parts.Add("Tool");
+        if (caps.HasFlag(ModelCapability.FunctionCall)) parts.Add("Func");
+        if (caps.HasFlag(ModelCapability.StructuredOutput)) parts.Add("Struct");
+        if (caps.HasFlag(ModelCapability.Vision)) parts.Add("Vis");
+        if (caps.HasFlag(ModelCapability.Embedding)) parts.Add("Emb");
+        if (caps.HasFlag(ModelCapability.ImageGeneration)) parts.Add("Img");
+        return string.Join(", ", parts);
+    }
 
     /// <summary>Handle /model list|download|delete|switch subcommands.</summary>
     private static (string, bool) HandleModelCommand(string args)

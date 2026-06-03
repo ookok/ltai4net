@@ -68,6 +68,7 @@ public partial class MainWindow : Window
                 Menu = menu,
                 IsVisible = true,
             };
+            _trayIcon.Clicked += (_, _) => { Show(); Activate(); WindowState = WindowState.Normal; };
         }
         catch { }
     }

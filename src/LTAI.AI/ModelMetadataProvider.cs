@@ -68,11 +68,24 @@ public sealed class ModelMetadataProvider : IDisposable
 
         if (KnownCapabilities.All.TryGetValue(modelId, out var known))
         {
-            var pricing = KnownKeys.All.FirstOrDefault(k =>
-                k.Service.Equals(provider, StringComparison.OrdinalIgnoreCase));
+            decimal? priceIn, priceOut, priceInCache;
+            if (KnownCapabilities.PerModelPricing.TryGetValue(modelId, out var pmPrice))
+            {
+                priceIn = pmPrice.PriceIn;
+                priceOut = pmPrice.PriceOut;
+                priceInCache = pmPrice.PriceInCache;
+            }
+            else
+            {
+                var pricing = KnownKeys.All.FirstOrDefault(k =>
+                    k.Service.Equals(provider, StringComparison.OrdinalIgnoreCase));
+                priceIn = pricing?.PriceInPerM;
+                priceOut = pricing?.PriceOutPerM;
+                priceInCache = pricing?.PriceInCachePerM;
+            }
             var meta = new ModelMetadata(
                 modelId, provider, known.ContextWindow, known.MaxOutput, known.Caps,
-                pricing?.PriceInPerM, pricing?.PriceOutPerM, DateTime.MinValue);
+                priceIn, priceOut, priceInCache, DateTime.MinValue);
             _models[modelId] = meta;
             return meta;
         }
@@ -231,12 +244,25 @@ public sealed class ModelMetadataProvider : IDisposable
                 if (KnownCapabilities.All.TryGetValue(id, out var known))
                     caps = known.Item3;
 
-                var pricing = KnownKeys.All.FirstOrDefault(k =>
-                    k.Service.Equals(provider.name, StringComparison.OrdinalIgnoreCase));
+                decimal? priceIn, priceOut, priceInCache;
+                if (KnownCapabilities.PerModelPricing.TryGetValue(id, out var pmPrice))
+                {
+                    priceIn = pmPrice.PriceIn;
+                    priceOut = pmPrice.PriceOut;
+                    priceInCache = pmPrice.PriceInCache;
+                }
+                else
+                {
+                    var pricing = KnownKeys.All.FirstOrDefault(k =>
+                        k.Service.Equals(provider.name, StringComparison.OrdinalIgnoreCase));
+                    priceIn = pricing?.PriceInPerM;
+                    priceOut = pricing?.PriceOutPerM;
+                    priceInCache = pricing?.PriceInCachePerM;
+                }
 
                 metadataList.Add(new ModelMetadata(
                     id, provider.name, ctx ?? known.Item1, maxOut ?? known.Item2, caps,
-                    pricing?.PriceInPerM, pricing?.PriceOutPerM, DateTime.UtcNow));
+                    priceIn, priceOut, priceInCache, DateTime.UtcNow));
             }
 
             var pm = new ProviderModels(provider.name, provider.endpoint, provider.envVar, modelIds, DateTime.UtcNow);
@@ -251,9 +277,6 @@ public sealed class ModelMetadataProvider : IDisposable
     private ModelFetchResult BuildFallbackResult(
         (string envVar, string endpoint, string model, string name) provider)
     {
-        var pricing = KnownKeys.All.FirstOrDefault(k =>
-            k.Service.Equals(provider.name, StringComparison.OrdinalIgnoreCase));
-
         int? ctx = null;
         int? maxOut = null;
         var caps = ModelCapability.Chat | ModelCapability.Streaming;
@@ -264,9 +287,25 @@ public sealed class ModelMetadataProvider : IDisposable
             caps = kc.Item3;
         }
 
+        decimal? priceIn, priceOut, priceInCache;
+        if (KnownCapabilities.PerModelPricing.TryGetValue(provider.model, out var pmPrice))
+        {
+            priceIn = pmPrice.PriceIn;
+            priceOut = pmPrice.PriceOut;
+            priceInCache = pmPrice.PriceInCache;
+        }
+        else
+        {
+            var pricing = KnownKeys.All.FirstOrDefault(k =>
+                k.Service.Equals(provider.name, StringComparison.OrdinalIgnoreCase));
+            priceIn = pricing?.PriceInPerM;
+            priceOut = pricing?.PriceOutPerM;
+            priceInCache = pricing?.PriceInCachePerM;
+        }
+
         var meta = new ModelMetadata(
             provider.model, provider.name, ctx, maxOut, caps,
-            pricing?.PriceInPerM, pricing?.PriceOutPerM, DateTime.MinValue);
+            priceIn, priceOut, priceInCache, DateTime.MinValue);
 
         var pm = new ProviderModels(provider.name, provider.endpoint, provider.envVar, [provider.model], DateTime.MinValue);
         return new ModelFetchResult(pm, [meta]);

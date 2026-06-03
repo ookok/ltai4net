@@ -115,4 +115,13 @@ internal static class KnownCapabilities
         // ── ERNIE ──
         ["ernie-4.0"] = (131_072, 4096, ModelCapability.Chat | ModelCapability.Streaming | ModelCapability.ToolCall | ModelCapability.FunctionCall),
     };
+
+    /// <summary>Per-model pricing overrides (¥/1M tokens). Falls back to provider-level KeyInfo pricing.</summary>
+    public static readonly Dictionary<string, (decimal PriceIn, decimal PriceOut, decimal PriceInCache)> PerModelPricing = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["deepseek-v4-flash"] = (1.0m, 2.0m, 0.02m),
+        ["deepseek-v4-pro"] = (3.0m, 6.0m, 0.025m),
+        ["deepseek-reasoner"] = (1.0m, 2.0m, 0.02m),
+        ["deepseek-v3"] = (1.0m, 2.0m, 0.02m),
+    };
 }
