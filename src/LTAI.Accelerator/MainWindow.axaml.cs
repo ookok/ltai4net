@@ -83,14 +83,15 @@ public partial class MainWindow : Window
             _proxy = new ProxyService(ProxyPort);
             await _proxy.StartAsync();
 
-            bool useSystemProxy = true;
+            // Always set system proxy with bypass list for Chinese domains
+            SystemProxy.Enable($"http://127.0.0.1:{ProxyPort}");
+
+            // Try WARP as upstream for international traffic
             if (_proxy.WarpConnectTask != null)
             {
                 SetStatus("正在连接 Cloudflare WARP...", "#ffa000");
                 var warpOk = await _proxy.WarpConnectTask;
-                if (warpOk)
-                    useSystemProxy = false;
-                else
+                if (!warpOk)
                 {
                     _ = Task.Run(async () =>
                     {
@@ -101,15 +102,12 @@ public partial class MainWindow : Window
                 }
             }
 
-            if (useSystemProxy)
-                SystemProxy.Enable($"http://127.0.0.1:{ProxyPort}");
-
             if (_proxy.Warp.Connected)
             {
                 WarpInfo.Text = "已连接 ✓ — 全局隧道";
                 WarpInfo.Foreground = new SolidColorBrush(Color.Parse("#4caf50"));
                 BtnInstallWarp.IsVisible = false;
-                SetStatus("Cloudflare WARP 全局隧道", "#4caf50");
+                SetStatus("WARP 全局加速 (国内直连)", "#4caf50");
                 SetStatusDot("#4caf50");
             }
             else if (_proxy.Warp.Available)
@@ -117,7 +115,7 @@ public partial class MainWindow : Window
                 WarpInfo.Text = "连接失败，仅 DoH 模式";
                 WarpInfo.Foreground = new SolidColorBrush(Color.Parse("#ff9800"));
                 BtnInstallWarp.IsVisible = false;
-                SetStatus("系统代理 :11818", "#4caf50");
+                SetStatus("系统代理 :11818 (国内直连)", "#4caf50");
                 SetStatusDot("#4caf50");
             }
             else
@@ -125,7 +123,7 @@ public partial class MainWindow : Window
                 WarpInfo.Text = "未安装 — 点击下载 http://mogoo.com.cn/";
                 WarpInfo.Foreground = new SolidColorBrush(Color.Parse("#888"));
                 BtnInstallWarp.IsVisible = true;
-                SetStatus("系统代理 :11818", "#4caf50");
+                SetStatus("系统代理 :11818 (国内直连)", "#4caf50");
                 SetStatusDot("#4caf50");
             }
 

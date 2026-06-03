@@ -30,7 +30,7 @@ public static class SystemProxy
         {
             dwAccessType = INTERNET_OPEN_TYPE_PROXY,
             lpszProxy = proxyAddress,
-            lpszProxyBypass = "10.*;172.16.*;172.17.*;172.18.*;172.19.*;172.20.*;172.21.*;172.22.*;172.23.*;172.24.*;172.25.*;172.26.*;172.27.*;172.28.*;172.29.*;172.30.*;172.31.*;192.168.*;127.0.0.1;localhost"
+            lpszProxyBypass = "10.*;172.16.*;172.17.*;172.18.*;172.19.*;172.20.*;172.21.*;172.22.*;172.23.*;172.24.*;172.25.*;172.26.*;172.27.*;172.28.*;172.29.*;172.30.*;172.31.*;192.168.*;127.0.0.1;localhost;<local>;*.cn;*.aliyun.com;*.alicdn.com;*.alibaba.com;*.taobao.com;*.baidu.com;*.bdstatic.com;*.tencent.com;*.qq.com;*.qcloud.com;*.weixin.com;*.gtimg.cn;*.126.net;*.163.com;*.sina.com;*.sinajs.cn;*.meituan.com;*.xiaomi.com;*.huawei.com;*.csdn.net;*.zhihu.com;*.bilibili.com;*.bytedance.com;*.douyin.com;*.jd.com;*.360.cn;*.sohu.com;*.amap.com;*.dashscope.com;*.dashscope.aliyuncs.com;*.siliconflow.cn;*.moonshot.cn;*.zhipu.com;*.bigmodel.cn;*.baichuan-ai.com;*.lingyiwanwu.com;*.stepfun.com;*.minimax.chat;*.hunyuan.cloud.tencent.com;*.xf-yun.com;*.ark.cn-beijing.volces.com;*.aip.baidubce.com;*.open.bigmodel.cn;*.api.moonshot.cn;*.api.siliconflow.cn;*.deepseek.com"
         };
 
         var size = Marshal.SizeOf(info);
