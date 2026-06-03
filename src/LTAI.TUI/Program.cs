@@ -19,8 +19,8 @@ public static class Program
 {
     public static async Task Main(string[] args)
     {
-        // ── 终端选择：wt.exe → Alacritty → 当前终端 ──
-        if (args.Length == 0 || (args[0] != "--in-alacritty" && args[0] != "--in-wt"))
+        // ── 终端选择：仅 Windows 下 wt.exe → Alacritty → 当前终端 ──
+        if (OperatingSystem.IsWindows() && (args.Length == 0 || (args[0] != "--in-alacritty" && args[0] != "--in-wt")))
         {
             var wt = EnsureWindowsTerminal();
             if (wt != null)
