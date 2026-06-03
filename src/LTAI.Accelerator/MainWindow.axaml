@@ -21,6 +21,10 @@
       <TextBlock Name="WarpInfo" Text="Cloudflare Warp: 未检测到" FontSize="11"
                  Foreground="#888" HorizontalAlignment="Center"
                  Cursor="Hand" PointerPressed="OnWarpClick"/>
+      <Button Name="BtnInstallWarp" Content="安装 Cloudflare WARP" FontSize="10"
+              Height="22" Margin="0,2,0,0" Padding="8,0"
+              HorizontalAlignment="Center" Click="OnInstallWarpClick"
+              Background="#1a73e8" Foreground="White" BorderThickness="0"/>
     </StackPanel>
 
     <StackPanel Grid.Row="3" VerticalAlignment="Center" HorizontalAlignment="Center" Spacing="12">

@@ -29,11 +29,20 @@ public partial class MainWindow : Window
             SystemProxy.Enable($"http://127.0.0.1:{ProxyPort}");
 
             if (_proxy.Warp.Connected)
+            {
                 WarpInfo.Text = "Cloudflare Warp: 已连接 ✓ — 全局隧道";
+                BtnInstallWarp.IsVisible = false;
+            }
             else if (_proxy.Warp.Available)
+            {
                 WarpInfo.Text = "Cloudflare Warp: 连接失败，仅 DoH 模式";
+                BtnInstallWarp.IsVisible = false;
+            }
             else
+            {
                 WarpInfo.Text = "Cloudflare Warp: 未安装 — 点击下载 https://downloads.cloudflareclient.com/";
+                BtnInstallWarp.IsVisible = true;
+            }
 
             BtnStop.IsEnabled = true;
             SetStatus("运行中 — 系统代理已开启", "#2e7d32");
@@ -90,6 +99,38 @@ public partial class MainWindow : Window
             };
             Process.Start(psi);
         }
+    }
+
+    private void OnInstallWarpClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        var tmpScript = Path.Combine(Path.GetTempPath(), "ltai-install-warp.ps1");
+        var psLines = new[]
+        {
+            "$url = 'https://downloads.cloudflareclient.com/v1/download/windows/ga'",
+            "$msi = \"$env:TEMP\\Cloudflare_WARP.msi\"",
+            "Write-Host 'Downloading Cloudflare WARP...' -ForegroundColor Cyan",
+            "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12",
+            "$wc = New-Object Net.WebClient",
+            "$wc.Headers.Add('User-Agent', 'LTAI-Accelerator/1.0')",
+            "$wc.DownloadFile($url, $msi)",
+            "Write-Host 'Installing (msiexec /quiet)...' -ForegroundColor Cyan",
+            "$p = Start-Process msiexec.exe -ArgumentList \"/i `\"$msi`\" /quiet /norestart\" -Wait -PassThru",
+            "if ($p.ExitCode -eq 0) { Write-Host 'WARP installed! Restart LTAI Accelerator.' -ForegroundColor Green }",
+            "else { Write-Host \"msiexec failed (exit=$($p.ExitCode))\" -ForegroundColor Red }",
+            "Remove-Item $msi -Force -ErrorAction SilentlyContinue",
+            "Start-Sleep -Seconds 5",
+        };
+        File.WriteAllText(tmpScript, string.Join("\r\n", psLines));
+
+        var psi = new ProcessStartInfo
+        {
+            FileName = "powershell.exe",
+            Arguments = $"-NoProfile -ExecutionPolicy Bypass -File \"{tmpScript}\"",
+            Verb = "runas",
+            UseShellExecute = true,
+        };
+        Process.Start(psi);
+        SetStatus("Installing Cloudflare WARP... see PowerShell window", "#ffa000");
     }
 
     protected override void OnClosing(WindowClosingEventArgs e)

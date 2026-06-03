@@ -1,9 +1,42 @@
 using System.Collections.Concurrent;
 using System.ComponentModel;
+using System.Diagnostics;
+using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using LTAI.AI;
 
 namespace LTAI.Agent.Tools;
+
+internal static class RipgrepDetector
+{
+    private static bool? _available;
+    internal static bool IsAvailable => _available ??= ProbeRg();
+    internal static string Suggestion =>
+        "考虑使用 rg(ripgrep) 替代内置搜索，速度更快且支持正则。下载地址：https://github.com/BurntSushi/ripgrep";
+
+    private static bool ProbeRg()
+    {
+        try
+        {
+            using var p = Process.Start(new ProcessStartInfo
+            {
+                FileName = "rg",
+                Arguments = "--version",
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            });
+            if (p == null) return false;
+            var ok = p.WaitForExit(2000) && p.ExitCode == 0;
+            return ok;
+        }
+        catch { return false; }
+    }
+}
+
+/// <summary>
 
 /// <summary>
 /// Content search tools: grep-style search with context lines.
@@ -40,16 +73,95 @@ public sealed class SearchTools
         if (root == null) return "Error: Path escape";
 
         context = Math.Clamp(context, 0, 20);
+
+        if (RipgrepDetector.IsAvailable)
+            return await SearchWithRgAsync(pattern, root, glob, context, caseSensitive);
+
+        return SearchWithManaged(pattern, root, glob, context, caseSensitive);
+    }
+
+    private async Task<string> SearchWithRgAsync(string pattern, string root, string glob, int context, bool caseSensitive)
+    {
+        var args = new List<string> { "--json", "-n", "--no-ignore" };
+        if (!caseSensitive) args.Add("-i");
+        if (context > 0) { args.Add("-C"); args.Add(context.ToString()); }
+        args.Add("--glob");
+        args.Add(glob);
+        foreach (var d in SkipDirs) { args.Add("-g"); args.Add($"!{d}/**"); }
+        args.Add(pattern);
+        args.Add(root);
+
+        var psi = new ProcessStartInfo
+        {
+            FileName = "rg",
+            Arguments = string.Join(" ", args.Select(a => a.Contains(' ') ? $"\"{a}\"" : a)),
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+
+        using var proc = new Process { StartInfo = psi };
+        proc.Start();
+
+        var output = await proc.StandardOutput.ReadToEndAsync();
+        var error = await proc.StandardError.ReadToEndAsync();
+
+        if (!proc.WaitForExit(15000))
+        {
+            proc.Kill();
+            return $"rg search timed out for '{pattern}'";
+        }
+        if (proc.ExitCode > 1) // rg exit code 1 = no matches, >1 = error
+            return $"rg error (exit {proc.ExitCode}): {error.Trim()}";
+
+        var sb = new StringBuilder();
+        string? lastPath = null;
+        int totalMatches = 0;
+        var files = new HashSet<string>();
+
+        foreach (var line in output.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (line.Length == 0) continue;
+            try
+            {
+                using var doc = JsonDocument.Parse(line);
+                var type = doc.RootElement.GetProperty("type").GetString();
+                if (type == "match")
+                {
+                    var data = doc.RootElement.GetProperty("data");
+                    var path = data.GetProperty("path").GetProperty("text").GetString()!;
+                    var lineNum = data.GetProperty("line_number").GetInt32();
+                    var text = data.GetProperty("lines").GetProperty("text").GetString()?.Trim() ?? "";
+
+                    if (path != lastPath)
+                    {
+                        sb.AppendLine($"\n=== {path} ===");
+                        lastPath = path;
+                        files.Add(path);
+                    }
+                    sb.AppendLine($"  {lineNum}:{text}");
+                    totalMatches++;
+                }
+            }
+            catch { continue; }
+        }
+
+        if (totalMatches == 0)
+            return $"No matches found for '{pattern}'";
+        return $"Found {totalMatches} matches in {files.Count} files:{sb}";
+    }
+
+    private string SearchWithManaged(string pattern, string root, string glob, int context, bool caseSensitive)
+    {
         var comparison = caseSensitive ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
 
-        // Phase 1: collect eligible files (fast sequential walk)
+        // Phase 1: collect eligible files
         var files = new List<string>();
         try
         {
-            var rootSpan = root.AsSpan();
             foreach (var f in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
             {
-                // 检查跳过目录（不分配 Split 数组）
                 var relPath = Path.GetRelativePath(root, f).Replace('\\', '/');
                 var relSpan = relPath.AsSpan();
                 var skip = false;
@@ -62,21 +174,16 @@ public sealed class SearchTools
                     relSpan = relSpan[(slashIdx + 1)..];
                 }
                 if (skip) continue;
-
                 if (IsBinaryExtension(Path.GetExtension(f))) continue;
-                try
-                {
-                    if (new FileInfo(f).Length > 1_000_000) continue;
-                }
-                catch { continue; }
+                try { if (new FileInfo(f).Length > 1_000_000) continue; } catch { continue; }
                 if (glob != "*" && !FileMatchesGlob(Path.GetFileName(f), glob)) continue;
                 files.Add(f);
             }
         }
-        catch { /* directory enumeration error — no matching files */ }
+        catch { }
 
         if (files.Count == 0)
-            return $"No matches found for '{pattern}'";
+            return $"No matches found for '{pattern}'\n提示：{RipgrepDetector.Suggestion}";
 
         // Phase 2: parallel grep
         var matches = new ConcurrentBag<(string path, int line, string text)>();
@@ -92,21 +199,18 @@ public sealed class SearchTools
                 {
                     lineNum++;
                     if (line.Contains(pattern, comparison))
-                    {
                         matches.Add((relPath, lineNum, line.Trim()));
-                    }
                 }
             }
-            catch { /* file read error — skip */ }
+            catch { }
         });
 
         if (matches.IsEmpty)
-            return $"No matches found for '{pattern}'";
+            return $"No matches found for '{pattern}'\n提示：{RipgrepDetector.Suggestion}";
 
-        // Sort by path then line for stable output
         var sorted = matches.OrderBy(m => m.path).ThenBy(m => m.line).ToList();
         var fileCount = sorted.Select(m => m.path).Distinct().Count();
-        var sb = new System.Text.StringBuilder();
+        var sb = new StringBuilder();
         string? lastPath = null;
         int totalMatches = 0;
 
@@ -121,7 +225,7 @@ public sealed class SearchTools
             totalMatches++;
         }
 
-        return $"Found {totalMatches} matches in {fileCount} files:\n{sb}";
+        return $"Found {totalMatches} matches in {fileCount} files:{sb}\n\n提示：{RipgrepDetector.Suggestion}";
     }
 
     [Description("按文件名搜索文件。支持子串匹配，自动排除 git/node_modules 等目录。\n"
