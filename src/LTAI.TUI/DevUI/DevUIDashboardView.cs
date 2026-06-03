@@ -23,7 +23,8 @@ public static class DevUIDashboardView
         LocalEmbedder? embedder = null,
         ToolEmbeddingCache? cache = null,
         RemoteEmbeddingCache? remoteCache = null,
-        EmbeddingClient? embeddingClient = null)
+        EmbeddingClient? embeddingClient = null,
+        ModelMetadataProvider? provider = null)
     {
         var cards = devUi.ListAgentCards();
         var recent = spans.Snapshot().TakeLast(15).Reverse().ToList();
@@ -35,9 +36,9 @@ public static class DevUIDashboardView
                 new Layout("body").SplitColumns(
                     new Layout("agents").Ratio(2),
                     new Layout("spans").Ratio(3)),
-                new Layout("footer").Size(5));
+                new Layout("footer").Size(7));
 
-        layout["header"].Update(BuildHeaderPanel(cards.Count, spans.Count, recent, workflowList, embedder, cache, remoteCache, embeddingClient));
+        layout["header"].Update(BuildHeaderPanel(cards.Count, spans.Count, recent, workflowList, embedder, cache, remoteCache, embeddingClient, provider));
 
         layout["agents"].Update(BuildAgentTable(cards));
         layout["spans"].Update(BuildSpanTable(recent));
@@ -54,7 +55,8 @@ public static class DevUIDashboardView
         LocalEmbedder? embedder,
         ToolEmbeddingCache? cache,
         RemoteEmbeddingCache? remoteCache,
-        EmbeddingClient? embeddingClient)
+        EmbeddingClient? embeddingClient,
+        ModelMetadataProvider? provider = null)
     {
         var topLine =
             $"[bold]LTAI DevUI Dashboard[/]  [grey]·[/]  " +
@@ -66,7 +68,8 @@ public static class DevUIDashboardView
         var cacheLine = BuildCacheStatusLine(cache);
         var remoteLine = BuildRemoteCacheStatusLine(remoteCache);
         var fallbackLine = BuildEmbeddingClientLine(embeddingClient);
-        return new Panel(new Markup($"{topLine}\n{embedLine}\n{cacheLine}\n{remoteLine}\n{fallbackLine}"))
+        var modelsLine = BuildModelMetadataLine(provider);
+        return new Panel(new Markup($"{topLine}\n{embedLine}\n{cacheLine}\n{remoteLine}\n{fallbackLine}\n{modelsLine}"))
         {
             Border = BoxBorder.Heavy,
             Header = new PanelHeader("[green] P9 Live Inspector [/]"),
@@ -103,6 +106,25 @@ public static class DevUIDashboardView
         }
         return $"[grey][[/][bold]EmbedClient[/][grey]][/]  {failsStr}  [grey]·[/]  " +
                $"[dim](threshold 3 → local fallback)[/]";
+    }
+
+    private static string BuildModelMetadataLine(ModelMetadataProvider? mp)
+    {
+        if (mp is null)
+            return "[grey][[/][bold]Models[/][grey]][/]  [dim](not registered)[/]";
+
+        var all = mp.AllModels;
+        if (all.Count == 0)
+            return "[grey][[/][bold]Models[/][grey]][/]  [yellow]refreshing...[/]";
+
+        var providers = all.Select(m => m.Provider).Distinct().Count();
+        var ctxCount = all.Count(m => m.ContextWindow != null);
+        var suppTools = all.Count(m => m.SupportsTools);
+        return $"[grey][[/][bold]Models[/][grey]][/]  " +
+               $"[aqua]{all.Count}[/] models  [grey]·[/]  " +
+               $"[aqua]{providers}[/] providers  [grey]·[/]  " +
+               $"[green]{suppTools}[/] tool-call  [grey]·[/]  " +
+               $"[dim]{ctxCount}[/] ctx known";
     }
 
     /// <summary>

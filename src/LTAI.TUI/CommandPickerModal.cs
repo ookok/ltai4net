@@ -135,17 +135,18 @@ public static class CommandPickerModal
 
             foreach (var group in grouped)
             {
-                rows.Add(new Markup($"[bold]{group.Key}[/]"));
+                rows.Add(new Markup($"[bold]{group.Key.EscapeMarkup()}[/]"));
 
                 foreach (var item in group)
                 {
                     var isSelected = item == items[selectedIdx];
+                    var display = item.DisplayText.EscapeMarkup();
                     var prefix = isSelected ? "  [black on cyan] " : "  ";
                     var suffix = isSelected ? " [/]" : "";
-                    var line = $"{prefix}{item.DisplayText}{suffix}";
+                    var line = $"{prefix}{display}{suffix}";
 
                     if (item.IsAlias && !isSelected)
-                        line = $"  [italic]{item.DisplayText}[/]";
+                        line = $"  [italic]{display}[/]";
 
                     rows.Add(new Markup(line));
                 }

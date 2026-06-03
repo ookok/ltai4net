@@ -36,6 +36,9 @@ public static class SlashCommands
     /// <summary>P16.1: Pipes (sequential/concurrent pipeline orchestrator, injected from DI).</summary>
     public static LTAI.Agent.Workflows.AgentWorkflows? Pipes { get; set; }
 
+    /// <summary>Model metadata provider (injected from DI).</summary>
+    public static LTAI.AI.ModelMetadataProvider? ModelsProvider { get; set; }
+
     /// <summary>P14.14: Background job service for /jobs subcommand (list/watch/cancel).</summary>
     public static LTAI.Agent.Tools.BackgroundJobService? Jobs { get; set; }
 
@@ -75,6 +78,7 @@ public static class SlashCommands
         new("compact", "聊天",  "压缩汇总历史消息", "压缩,汇总"),
         new("config",  "设置",  "配置 LLM: provider|apikey|model|status", "", "provider|apikey|model|l1|l2"),
         new("model",   "设置",  "管理 ONNX 向量模型: list|download|delete|switch|cleanup|info|quant", "", "list|download <id>|delete <id>|switch <id>|cleanup [name]|info|quant <fp32|int8|auto>"),
+        new("models",  "信息",  "列出所有 Provider 的可用在线模型及元数据", "在线模型,provider列表"),
         new("status",  "信息",  "显示当前配置和统计", "状态,统计"),
         new("monitor", "信息",  "实时仪表盘 — Provider 状态/延迟/成本", "监控,仪表盘"),
         new("jobs",    "信息",  "后台作业: list|watch <id>|cancel <id>|show <id>", "job,任务",
@@ -141,8 +145,8 @@ public static class SlashCommands
                     .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
                 foreach (var alias in aliases)
                 {
-                    allItems.Add(new SuggestionItem(
-                        $"[/]{alias}  [dim]{spec.Group} → /{spec.Cmd}[/]",
+            allItems.Add(new SuggestionItem(
+                    $"{alias}  [dim]{spec.Group} → /{spec.Cmd}[/]",
                         $"/{spec.Cmd}",
                         spec.Group,
                         IsAlias: true));
@@ -182,7 +186,7 @@ public static class SlashCommands
             foreach (var alias in aliases)
             {
                 items.Add(new SuggestionItem(
-                    $"[/]{alias}  [dim]{spec.Group} → /{spec.Cmd}[/]",
+                    $"{alias}  [dim]{spec.Group} → /{spec.Cmd}[/]",
                     $"/{spec.Cmd}",
                     spec.Group,
                     IsAlias: true));
@@ -288,6 +292,7 @@ public static class SlashCommands
             "retry" => ("Retrying last message...", true),
             "compact" => ("Summarizing older turns...", true),
             "model" => HandleModelCommand(args),
+            "models" => HandleModelsCommand(),
             "snippet" => HandleSnippetCommand(args),
             "workflow" => HandleWorkflowCommand(args),
             "status" => Status(),
@@ -312,6 +317,44 @@ public static class SlashCommands
         if (spec.Cmd == "exit") running = s;
         return true;
     }
+
+    /// <summary>List online models from all providers via ModelMetadataProvider.</summary>
+    private static (string, bool) HandleModelsCommand()
+    {
+        var mp = ModelsProvider;
+        if (mp == null)
+            return ("ModelMetadataProvider 未注册 — 在线模型信息不可用", true);
+
+        var all = mp.AllModels;
+        if (all.Count == 0)
+            return ("尚未获取到模型列表（后台刷新进行中，请稍后重试）", true);
+
+        var lines = new List<string> { "[bold yellow]在线模型元数据[/]\n" };
+        foreach (var group in all.GroupBy(m => m.Provider).OrderBy(g => g.Key))
+        {
+            lines.Add($"  [cyan]{group.Key}[/][green] ({group.Count()})[/]");
+
+            var sample = group.OrderByDescending(m => m.ContextWindow ?? 0).Take(5);
+            foreach (var m in sample)
+            {
+                var ctx = m.ContextWindow != null ? FormatNum(m.ContextWindow.Value) : "";
+                var caps = m.Capabilities != 0 ? $" [dim]{m.Capabilities}[/]" : "";
+                var price = m.PriceInPerM > 0 ? $" [yellow]¥{m.PriceInPerM:F2} in[/]" : "";
+                lines.Add($"    · [white]{m.Id}[/] {ctx}{caps}{price}");
+            }
+            var remaining = group.Count() - sample.Count();
+            if (remaining > 0)
+                lines.Add($"    [dim]...还有 {remaining} 个模型[/]");
+        }
+
+        lines.Add($"\n[grey]总计 {all.Count} 个模型，来自 {all.Select(m => m.Provider).Distinct().Count()} 个 Provider[/]");
+        return (string.Join("\n", lines), true);
+    }
+
+    private static string FormatNum(int n) =>
+        n >= 1_000_000 ? $"[grey]{n / 1_000_000}M ctx[/]" :
+        n >= 1_000    ? $"[grey]{n / 1_000}K ctx[/]" :
+        $"[grey]{n}[/]";
 
     /// <summary>Handle /model list|download|delete|switch subcommands.</summary>
     private static (string, bool) HandleModelCommand(string args)

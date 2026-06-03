@@ -27,6 +27,7 @@ public sealed class ChatLayout
     private bool _processing;
     private CancellationTokenSource? _responseCts;
     private volatile char _quickNav;
+    private TaskCompletionSource<string?>? _pickerTcs;
     private LiveDisplayContext? _liveCtx;
     public TuiView? LastRequestedView { get; private set; }
     private int _toolCallCount;
@@ -201,11 +202,13 @@ public sealed class ChatLayout
 
                         if (!char.IsControl(key.KeyChar))
                         {
-                            lock (inputBuf) { inputBuf.Append(key.KeyChar); }
-                            // Show command picker on first '/'
-                            if (inputBuf.Length == 1 && inputBuf[0] == '/')
+                            bool triggerPicker;
+                            lock (inputBuf) { inputBuf.Append(key.KeyChar); triggerPicker = inputBuf.Length == 1 && inputBuf[0] == '/'; }
+                            if (triggerPicker)
                             {
-                                var cmd = CommandPickerModal.Show(_layout, ctx);
+                                var tcs = new TaskCompletionSource<string?>();
+                                _pickerTcs = tcs;
+                                var cmd = await tcs.Task.ConfigureAwait(false);
                                 if (cmd != null)
                                 {
                                     var handled = await HandleSlashCommandAsync(cmd).ConfigureAwait(false);
@@ -238,6 +241,16 @@ public sealed class ChatLayout
                             };
                             cts.Cancel(); return;
                         }
+                    }
+
+                    // Run command picker on main thread when triggered by input task
+                    if (_pickerTcs != null)
+                    {
+                        var tcs = _pickerTcs;
+                        _pickerTcs = null;
+                        var cmd = CommandPickerModal.Show(_layout, ctx);
+                        tcs.TrySetResult(cmd);
+                        continue;
                     }
 
                     // Process the next queued message (if not already busy)
@@ -322,6 +335,11 @@ public sealed class ChatLayout
         }
         if (!string.IsNullOrEmpty(streamingContent) && _history.Count > 0 && _history[^1].role == "user")
             result = $"[bold green]┃[/] {result}";
+
+        // 防御性转义：AI 返回的文本中可能包含 [中文] 等未转义括号，
+        // Spectre.Console 会尝试将其作为 markup tag 解析导致崩溃。
+        // 只转义非 ASCII 内容（中/日/韩等），不影响 [bold][/] 等合法标签。
+        result = Regex.Replace(result, @"(?<!\[)\[([^\x00-\x7F]+?)\](?!\])", "[[$1]]");
 
         _layout["Messages"].Update(
             new Panel(result)

@@ -23,4 +23,11 @@
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
   </PropertyGroup>
+
+  <!-- Copy runtime data (agents, models, skills) to exe build/publish output -->
+  <ItemGroup Condition="'$(IsExeProject)' == 'true'">
+    <Content Include="$(MSBuildThisFileDirectory)agents\**\*" CopyToOutputDirectory="PreserveNewest" Link="agents\%(RecursiveDir)%(FileName)%(Extension)" />
+    <Content Include="$(MSBuildThisFileDirectory)models\**\*" CopyToOutputDirectory="PreserveNewest" Link="models\%(RecursiveDir)%(FileName)%(Extension)" Condition="Exists('$(MSBuildThisFileDirectory)models')" />
+    <Content Include="$(MSBuildThisFileDirectory)skills\**\*" CopyToOutputDirectory="PreserveNewest" Link="skills\%(RecursiveDir)%(FileName)%(Extension)" />
+  </ItemGroup>
 </Project>

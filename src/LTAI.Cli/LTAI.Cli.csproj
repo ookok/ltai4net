@@ -11,7 +11,7 @@
     <Nullable>enable</Nullable>
     <RootNamespace>LTAI.CLI</RootNamespace>
     <IsExeProject>true</IsExeProject>
-    <OutputPath>$(MSBuildThisFileDirectory)..\..\dist\Cli\</OutputPath>
+    <OutputPath>$(MSBuildThisFileDirectory)..\..\dist\build\Cli\</OutputPath>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
   </PropertyGroup>

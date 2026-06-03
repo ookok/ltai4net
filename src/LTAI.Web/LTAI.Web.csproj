@@ -6,7 +6,7 @@
     <Nullable>enable</Nullable>
     <RootNamespace>LTAI.Web</RootNamespace>
     <IsExeProject>true</IsExeProject>
-    <OutputPath>bin/Debug/net10.0/</OutputPath>
+    <OutputPath>$(MSBuildThisFileDirectory)..\..\dist\build\Web\</OutputPath>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
   </PropertyGroup>

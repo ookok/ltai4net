@@ -403,12 +403,14 @@ public static class ToolRegistry
     //  辅助方法
     // ═══════════════════════════════════════════
 
-    /// <summary>获取所有已注册的工具。</summary>
-    public static IReadOnlyList<ToolDef> AllTools => _tools;
+    /// <summary>获取所有已注册的工具（快照，线程安全）。</summary>
+    public static IReadOnlyList<ToolDef> AllTools { get { lock (_lock) return _tools.ToArray(); } }
 
-    /// <summary>按 domain 获取工具列表。</summary>
+    /// <summary>按 domain 获取工具列表（线程安全）。</summary>
     public static IReadOnlyList<ToolDef> GetToolsByDomain(string domain)
-        => _tools.Where(t => string.Equals(t.Domain, domain, StringComparison.OrdinalIgnoreCase)).ToList();
+    {
+        lock (_lock) return _tools.Where(t => string.Equals(t.Domain, domain, StringComparison.OrdinalIgnoreCase)).ToList();
+    }
 
     /// <summary>清空注册表（用于测试或重新加载）。</summary>
     public static void Clear()

@@ -24,6 +24,7 @@ public sealed class TuiApp
     private readonly LTAI.AI.ToolEmbeddingCache? _embedCache;
     private readonly LTAI.AI.RemoteEmbeddingCache? _remoteCache;
     private readonly LTAI.AI.EmbeddingClient? _embeddingClient;
+    private readonly LTAI.AI.ModelMetadataProvider? _modelsProvider;
     private readonly QuestionService _questionService;
 
     private TuiView _currentView = TuiView.Chat;
@@ -41,7 +42,8 @@ public sealed class TuiApp
         LTAI.AI.LocalEmbedder? embedder = null,
         LTAI.AI.ToolEmbeddingCache? embedCache = null,
         LTAI.AI.RemoteEmbeddingCache? remoteCache = null,
-        LTAI.AI.EmbeddingClient? embeddingClient = null)
+        LTAI.AI.EmbeddingClient? embeddingClient = null,
+        LTAI.AI.ModelMetadataProvider? modelsProvider = null)
     {
         _chat = chat;
         _llmConfig = llmConfig;
@@ -56,6 +58,7 @@ public sealed class TuiApp
         _embedCache = embedCache;
         _remoteCache = remoteCache;
         _embeddingClient = embeddingClient;
+        _modelsProvider = modelsProvider;
     }
 
     public async Task RunAsync()
@@ -174,7 +177,7 @@ public sealed class TuiApp
 
     private void ShowDashboard()
     {
-        DevUIDashboardView.Render(_devUi, _spanCollector, UsageTracker.Default, _workflows, _embedder, _embedCache, _remoteCache, _embeddingClient);
+        DevUIDashboardView.Render(_devUi, _spanCollector, UsageTracker.Default, _workflows, _embedder, _embedCache, _remoteCache, _embeddingClient, _modelsProvider);
     }
 
 }

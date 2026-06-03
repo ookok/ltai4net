@@ -2,7 +2,7 @@
 
   <PropertyGroup>
     <IsExeProject>true</IsExeProject>
-    <OutputPath>$(MSBuildThisFileDirectory)..\..\dist\TUI\</OutputPath>
+    <OutputPath>$(MSBuildThisFileDirectory)..\..\dist\build\TUI\</OutputPath>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
     <OutputType>Exe</OutputType>
@@ -24,23 +24,9 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\LTAI.Core\LTAI.Core.csproj" />
-    <ProjectReference Include="..\LTAI.AI\LTAI.AI.csproj" />
-
-
     <ProjectReference Include="..\LTAI.Agent\LTAI.Agent.csproj" />
-  </ItemGroup>
-
-
-  <!-- 应用图标 -->
-  <ItemGroup>
-    <Content Include="Assets/ltai-tui.svg" CopyToOutputDirectory="PreserveNewest" />
-  </ItemGroup>
-
-  <!-- Alacritty 终端嵌入为资源 -->
-  <ItemGroup>
-    <EmbeddedResource Include="Assets\Alacritty\alacritty.exe" />
-    <EmbeddedResource Include="Assets\Alacritty\alacritty.yml" />
+    <ProjectReference Include="..\LTAI.AI\LTAI.AI.csproj" />
+    <ProjectReference Include="..\LTAI.Core\LTAI.Core.csproj" />
   </ItemGroup>
 
 </Project>

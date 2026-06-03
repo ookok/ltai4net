@@ -1,0 +1,41 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="LTAI.Accelerator.MainWindow"
+        Title="LTAI 加速器"
+        Width="400" Height="280"
+        WindowStartupLocation="CenterScreen"
+        CanResize="False">
+  <Grid RowDefinitions="Auto,Auto,Auto,*,Auto" Margin="20">
+    <TextBlock Text="LTAI 加速器" FontSize="20" FontWeight="Bold"
+               HorizontalAlignment="Center" Grid.Row="0" Margin="0,0,0,6"/>
+
+    <Border Name="StatusBorder" Grid.Row="1" CornerRadius="8" Padding="12,8"
+            BorderBrush="#666" BorderThickness="1">
+      <TextBlock Name="StatusText" Text="已停止" HorizontalAlignment="Center"
+                 FontSize="14" Foreground="#666"/>
+    </Border>
+
+    <StackPanel Grid.Row="2" Spacing="4" Margin="0,8,0,0">
+      <TextBlock Name="DohInfo" Text="DNS: 1.1.1.1 (DoH)" FontSize="11"
+                 Foreground="#888" HorizontalAlignment="Center"/>
+      <TextBlock Name="WarpInfo" Text="Cloudflare Warp: 未检测到" FontSize="11"
+                 Foreground="#888" HorizontalAlignment="Center"
+                 Cursor="Hand" PointerPressed="OnWarpClick"/>
+    </StackPanel>
+
+    <StackPanel Grid.Row="3" VerticalAlignment="Center" HorizontalAlignment="Center" Spacing="12">
+      <Button Name="BtnStart" Content="开始加速" Width="200" Height="44"
+              FontSize="16" Click="OnStartClick"
+              Background="#1a73e8" Foreground="White" BorderThickness="0"/>
+      <Button Name="BtnStop" Content="停止加速" Width="200" Height="44"
+              FontSize="16" Click="OnStopClick"
+              Background="#e8453c" Foreground="White"
+              BorderThickness="0" IsEnabled="False"/>
+    </StackPanel>
+
+    <TextBlock Name="ProxyInfo" Grid.Row="4"
+               Text="http://127.0.0.1:11818"
+               HorizontalAlignment="Center"
+               FontSize="11" Foreground="#666" Margin="0,8,0,0"/>
+  </Grid>
+</Window>

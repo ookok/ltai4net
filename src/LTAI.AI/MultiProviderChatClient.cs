@@ -40,6 +40,7 @@ public sealed class MultiProviderChatClient : IChatClient
     private readonly ConcurrentDictionary<string, IChatClient> _clients = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, string> _degradation = new(StringComparer.OrdinalIgnoreCase);
     private readonly ILogger<MultiProviderChatClient> _logger;
+    private readonly ModelMetadataProvider? _modelMetadata;
     private string _defaultProvider;
 
     // 自适应成本路由：成功率 + 延迟 + 成本感知
@@ -75,11 +76,13 @@ public sealed class MultiProviderChatClient : IChatClient
     /// </summary>
     public MultiProviderChatClient(LTAIOptions options,
         ILogger<MultiProviderChatClient>? logger = null,
-        LTAI.Core.Configuration.CircuitBreakerStore? breakerStore = null)
+        LTAI.Core.Configuration.CircuitBreakerStore? breakerStore = null,
+        ModelMetadataProvider? modelMetadata = null)
     {
         _defaultProvider = options.AI.DefaultProvider;
         _logger = logger ?? NullLogger<MultiProviderChatClient>.Instance;
         _breakerStore = breakerStore;
+        _modelMetadata = modelMetadata;
         if (options.AI.DegradationChain != null)
         {
             foreach (var (k, v) in options.AI.DegradationChain)
@@ -120,6 +123,42 @@ public sealed class MultiProviderChatClient : IChatClient
     /// </summary>
     public void Register(string name, IChatClient client) => _clients.TryAdd(name, client);
 
+    /// <summary>
+    /// Resolve provider name from options.ModelId.
+    /// Supports capability: prefix (e.g. "capability:tool-call") — uses ModelMetadataProvider
+    /// to find the best registered provider with that capability.
+    /// Falls back to options.ModelId as-is for backward compat.
+    /// </summary>
+    private string ResolveProvider(ChatOptions? options)
+    {
+        var raw = options?.ModelId ?? _defaultProvider;
+        if (raw == null) return _defaultProvider;
+
+        const string capabilityPrefix = "capability:";
+        if (!raw.StartsWith(capabilityPrefix, StringComparison.OrdinalIgnoreCase))
+            return raw;
+
+        var capName = raw[capabilityPrefix.Length..];
+        var cap = capName.ToLowerInvariant() switch
+        {
+            "chat" => ModelCapability.Chat,
+            "streaming" or "stream" => ModelCapability.Streaming,
+            "tool-call" or "toolcall" or "tools" or "function-call" => ModelCapability.ToolCall,
+            "structured-output" or "structured" or "json" => ModelCapability.StructuredOutput,
+            "vision" => ModelCapability.Vision,
+            _ => ModelCapability.Chat | ModelCapability.Streaming,
+        };
+
+        if (_modelMetadata?.RecommendModel(cap, _defaultProvider) is { } recommended)
+        {
+            // Only use if we actually have this provider registered
+            if (_clients.ContainsKey(recommended.Provider))
+                return recommended.Provider;
+        }
+
+        return _defaultProvider;
+    }
+
     /// <summary>Identity metadata for OpenTelemetry instrumentation.</summary>
     public ChatClientMetadata? Metadata => new("MultiProvider", new Uri("https://github.com/ltai-org/ltai4net"));
 
@@ -136,7 +175,7 @@ public sealed class MultiProviderChatClient : IChatClient
     public async Task<ChatResponse> GetResponseAsync(
         IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken ct = default)
     {
-        var provider = options?.ModelId ?? _defaultProvider;
+        var provider = ResolveProvider(options);
         return await TryCallWithDegradation(provider, messages, options, ct).ConfigureAwait(false);
     }
 
@@ -150,7 +189,7 @@ public sealed class MultiProviderChatClient : IChatClient
         IEnumerable<ChatMessage> messages, ChatOptions? options = null,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
-        var provider = options?.ModelId ?? _defaultProvider;
+        var provider = ResolveProvider(options);
         bool anyAttempted = false;
         string? lastFailedProvider = null;
         foreach (var p in RankedProviders(provider))
@@ -363,6 +402,8 @@ public sealed class MultiProviderChatClient : IChatClient
     /// 沿配置的降级链依次返回可用的 provider，不串到无关 provider。
     /// 降级链如：deepseek → deepseek-pro → (无配置则结束)。
     /// 不在降级链中的 provider 不进入选择列表。
+    /// 当降级链耗尽时，如果注入 ModelMetadataProvider，用 RecommendModel
+    /// 寻找支持 Chat|Streaming 的已注册 provider 作为宽泛回退。
     /// </summary>
     private IEnumerable<string> RankedProviders(string preferred)
     {
@@ -385,6 +426,33 @@ public sealed class MultiProviderChatClient : IChatClient
             }
 
             current = _degradation.TryGetValue(current, out var next2) ? next2 : null;
+        }
+
+        // 硬编码降级链耗尽 → 利用 ModelMetadataProvider 宽泛回退
+        if (_modelMetadata != null)
+        {
+            foreach (var p in FallbackProviders(preferred, seen))
+                yield return p;
+        }
+    }
+
+    /// <summary>宽泛回退：用 RecommendModel 找支持 Chat|Streaming 的已注册 provider。</summary>
+    private IEnumerable<string> FallbackProviders(string preferred, HashSet<string> seen)
+    {
+        var recommended = _modelMetadata!.RecommendModel(
+            ModelCapability.Chat | ModelCapability.Streaming, preferred);
+        if (recommended != null && seen.Add(recommended.Value.Provider) &&
+            _clients.ContainsKey(recommended.Value.Provider))
+        {
+            _logger.LogInformation("Fallback: recommending provider '{P}' model '{M}'",
+                recommended.Value.Provider, recommended.Value.Model);
+            // Also yield the full degradation chain of the recommended provider
+            var chain = recommended.Value.Provider;
+            while (chain != null && seen.Add(chain))
+            {
+                if (_clients.ContainsKey(chain)) yield return chain;
+                chain = _degradation.TryGetValue(chain, out var next) ? next : null;
+            }
         }
     }
 
@@ -509,15 +577,37 @@ public static class ServiceCollectionExtensions
                 AutomaticDecompression = System.Net.DecompressionMethods.GZip | System.Net.DecompressionMethods.Deflate,
             });
 
-        // Step 1: Register the raw MultiProviderChatClient (not as IChatClient — we'll wrap it)
+        // Step 1: ModelMetadataProvider — queries all configured providers' /v1/models API,
+        // collects context window, capabilities, and pricing. Used for adaptive model selection,
+        // TUI /models command, and DevUI dashboard. Background refresh every 15 min.
+        // Must be registered before MultiProviderChatClient so the router can use it.
+        services.AddSingleton<ModelMetadataProvider>(sp =>
+        {
+            var provider = new ModelMetadataProvider(
+                sp.GetRequiredService<IHttpClientFactory>(),
+                sp.GetRequiredService<ILogger<ModelMetadataProvider>>());
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await provider.RefreshAllAsync();
+                    provider.StartBackgroundRefresh();
+                }
+                catch { /* best-effort at startup */ }
+            });
+            return provider;
+        });
+
+        // Step 2: Register the raw MultiProviderChatClient (not as IChatClient — we'll wrap it)
         services.AddSingleton<MultiProviderChatClient>(sp =>
         {
             var opts = sp.GetRequiredService<IOptions<LTAIOptions>>().Value;
             var logger = sp.GetService<ILogger<MultiProviderChatClient>>();
             var httpFactory = sp.GetRequiredService<IHttpClientFactory>();
+            var modelMetadata = sp.GetService<ModelMetadataProvider>();
             var breakerPath = opts.ResolveDataPath("circuit_breaker.db");
             var breakerStore = new LTAI.Core.Configuration.CircuitBreakerStore(breakerPath);
-            var router = new MultiProviderChatClient(opts, logger, breakerStore);
+            var router = new MultiProviderChatClient(opts, logger, breakerStore, modelMetadata);
 
             foreach (var provider in MultiProviderChatClient.DefaultProviders)
             {
@@ -641,6 +731,7 @@ public static class ServiceCollectionExtensions
             sp.GetRequiredService<IOptions<LTAIOptions>>(),
             sp.GetService<ILogger<PreWarmEmbeddingModelsHostedService>>() ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<PreWarmEmbeddingModelsHostedService>.Instance,
             sp.GetService<IHttpClientFactory>()));
+
         return services;
     }
 }

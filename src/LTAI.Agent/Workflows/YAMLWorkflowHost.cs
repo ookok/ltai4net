@@ -102,23 +102,22 @@ public static class YAMLWorkflowHost
     private static Dictionary<string, Workflow> GetOrBuildAll()
     {
         if (s_workflows is not null) return s_workflows;
+        var options = new DeclarativeWorkflowOptions(new NoOpAgentProvider())
+        {
+            McpToolHandler = s_mcpToolHandler,
+        };
+
+        var map = new Dictionary<string, Workflow>(s_workflowNames.Length);
+        foreach (var name in s_workflowNames)
+        {
+            var yamlPath = ResolveYamlPath(name);
+            if (yamlPath is null) continue;
+            map[name] = DeclarativeWorkflowBuilder.Build<string>(yamlPath, options);
+        }
+
         lock (s_lock)
         {
             if (s_workflows is not null) return s_workflows;
-
-            var map = new Dictionary<string, Workflow>(s_workflowNames.Length);
-            var options = new DeclarativeWorkflowOptions(new NoOpAgentProvider())
-            {
-                McpToolHandler = s_mcpToolHandler,
-            };
-
-            foreach (var name in s_workflowNames)
-            {
-                var yamlPath = ResolveYamlPath(name);
-                if (yamlPath is null) continue; // missing file, skip silently
-                map[name] = DeclarativeWorkflowBuilder.Build<string>(yamlPath, options);
-            }
-
             s_workflows = map;
             return s_workflows;
         }

@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Reflection;
 using LTAI.Agent;
 using LTAI.AI;
 using LTAI.Core;
@@ -19,8 +18,8 @@ public static class Program
 {
     public static async Task Main(string[] args)
     {
-        // ── 终端选择：仅 Windows 下 wt.exe → Alacritty → 当前终端 ──
-        if (OperatingSystem.IsWindows() && (args.Length == 0 || (args[0] != "--in-alacritty" && args[0] != "--in-wt")))
+        // ── 终端选择：仅 Windows 下 wt.exe → 当前终端 ──
+        if (OperatingSystem.IsWindows() && (args.Length == 0 || args[0] != "--in-wt"))
         {
             var wt = EnsureWindowsTerminal();
             if (wt != null)
@@ -28,12 +27,7 @@ public static class Program
                 RelaunchInWindowsTerminal(wt);
                 return;
             }
-            var alacritty = EnsureAlacritty();
-            if (alacritty != null)
-            {
-                RelaunchInAlacritty(alacritty);
-                return;
-            }
+            PrintWindowsTerminalReminder();
         }
 
         Console.OutputEncoding = System.Text.Encoding.UTF8;
@@ -90,6 +84,7 @@ public static class Program
         SlashCommands.WorkflowRegistry = sp.GetService<LTAI.Agent.Workflows.YAMLWorkflowRegistry>();
         SlashCommands.Jobs = sp.GetService<LTAI.Agent.Tools.BackgroundJobService>();
         SlashCommands.Pipes = sp.GetService<LTAI.Agent.Workflows.AgentWorkflows>();
+        SlashCommands.ModelsProvider = sp.GetService<LTAI.AI.ModelMetadataProvider>();
         var options = sp.GetRequiredService<IOptions<LTAIOptions>>();
         SlashCommands.ActiveProvider = options.Value.AI.DefaultProvider ?? "DeepSeek";
         SlashCommands.L1Model = options.Value.AI.GetLayerConfig("fast").Model;
@@ -99,6 +94,9 @@ public static class Program
 
         // 后台预热：加载 ONNX 模型 + 预热 HTTP 连接
         // 不阻塞 splash 显示
+        // 检测 coreutils（Windows 下 grep/wc/sort 等 Unix 命令）
+        CoreUtilsDetector.PrintReminder();
+
         var warmupTask = Task.Run(() => chatAgent.WarmUpAsync());
 
         var router = sp.GetRequiredService<MultiProviderChatClient>();
@@ -121,9 +119,28 @@ public static class Program
             sp.GetService<LTAI.AI.LocalEmbedder>(),
             sp.GetService<LTAI.AI.ToolEmbeddingCache>(),
             sp.GetService<LTAI.AI.RemoteEmbeddingCache>(),
-            sp.GetService<LTAI.AI.EmbeddingClient>());
+            sp.GetService<LTAI.AI.EmbeddingClient>(),
+            sp.GetService<LTAI.AI.ModelMetadataProvider>());
         try { Console.Clear(); } catch { /* non-interactive terminal */ }
         await app.RunAsync().ConfigureAwait(false);
+    }
+
+    /// <summary>Windows Terminal 未安装时打印提醒。</summary>
+    private static void PrintWindowsTerminalReminder()
+    {
+        Console.WriteLine();
+        Console.WriteLine("╔════════════════════════════════════════════════════════════╗");
+        Console.WriteLine("║ Windows Terminal 未安装。推荐使用它获得最佳 LTAI 体验。     ║");
+        Console.WriteLine("╠════════════════════════════════════════════════════════════╣");
+        Console.WriteLine("║ 安装命令:                                                ║");
+        Console.WriteLine("║   winget install Microsoft.WindowsTerminal                ║");
+        Console.WriteLine("║                                                          ║");
+        Console.WriteLine("║ 手动下载:                                                ║");
+        Console.WriteLine("║   https://apps.microsoft.com/detail/9N0DX20HK701         ║");
+        Console.WriteLine("║                                                          ║");
+        Console.WriteLine("║ 安装后重启 LTAI 即可自动使用 Windows Terminal。            ║");
+        Console.WriteLine("╚════════════════════════════════════════════════════════════╝");
+        Console.WriteLine();
     }
 
     /// <summary>查找 wt.exe（Windows Terminal），优先 %LOCALAPPDATA% 下的商店安装路径。</summary>
@@ -179,75 +196,4 @@ public static class Program
         }
     }
 
-    /// <summary>将嵌入的 Alacritty 解压到 %LOCALAPPDATA%/LTAI/ 并返回路径。</summary>
-    private static string? EnsureAlacritty()
-    {
-        var baseDir = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "LTAI", "Alacritty");
-
-        Directory.CreateDirectory(baseDir);
-
-        var exePath = Path.Combine(baseDir, "alacritty.exe");
-        var ymlPath = Path.Combine(baseDir, "alacritty.yml");
-        var asm = Assembly.GetExecutingAssembly();
-
-        try
-        {
-            // 只解压一次（二次启动直接复用）
-            if (!File.Exists(exePath) || new FileInfo(exePath).Length == 0)
-            {
-                using var stream = asm.GetManifestResourceStream("LTAI.TUI.Assets.Alacritty.alacritty.exe");
-                if (stream == null) return null;
-                using var fs = new FileStream(exePath, FileMode.Create, FileAccess.Write);
-                stream.CopyTo(fs);
-            }
-
-            if (!File.Exists(ymlPath))
-            {
-                using var stream = asm.GetManifestResourceStream("LTAI.TUI.Assets.Alacritty.alacritty.yml");
-                if (stream == null) return null;
-                using var fs = new FileStream(ymlPath, FileMode.Create, FileAccess.Write);
-                stream.CopyTo(fs);
-            }
-
-            return exePath;
-        }
-        catch (Exception ex)
-        {
-            AnsiConsole.MarkupLine($"[red]解压 Alacritty 失败:[/] {ex.Message.EscapeMarkup()}");
-            return null;
-        }
-    }
-
-    /// <summary>在 Alacritty 终端中重启动当前进程。</summary>
-    private static void RelaunchInAlacritty(string alacrittyExe)
-    {
-        try
-        {
-            var ymlPath = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "LTAI", "Alacritty", "alacritty.yml");
-
-            var psi = new ProcessStartInfo
-            {
-                FileName = alacrittyExe,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-            };
-            psi.ArgumentList.Add("--config-file");
-            psi.ArgumentList.Add(ymlPath);
-            psi.ArgumentList.Add("-e");
-            psi.ArgumentList.Add(Environment.ProcessPath!);
-            psi.ArgumentList.Add("--in-alacritty");
-            foreach (var arg in Environment.GetCommandLineArgs().Skip(1))
-                psi.ArgumentList.Add(arg);
-
-            Process.Start(psi);
-        }
-        catch (Exception ex)
-        {
-            AnsiConsole.MarkupLine($"[red]启动 Alacritty 失败:[/] {ex.Message.EscapeMarkup()}");
-        }
-    }
 }

@@ -4,6 +4,9 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <OutputPath>$(MSBuildThisFileDirectory)..\..\dist\build\Desktop\</OutputPath>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
     <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
     <ApplicationDisplayVersion>1.0.0</ApplicationDisplayVersion>
     <ApplicationIcon>Assets\ltai-icon.ico</ApplicationIcon>
