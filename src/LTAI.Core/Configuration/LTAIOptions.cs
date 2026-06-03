@@ -69,10 +69,14 @@ public sealed class AIConfig
     /// <summary>Response cache size limit per provider. 0 disables cache.</summary>
     public int ResponseCacheSize { get; init; } = 256;
 
+    /// <summary>L0/L1/L2 independent layer configs. Each can point to any provider with any model.
+    /// Unset layers fall back to <see cref="DefaultProvider"/> with its default model from KnownKeys.</summary>
+    public LayerConfig? L0 { get; init; }
+    public LayerConfig? L1 { get; init; }
+    public LayerConfig? L2 { get; init; }
+
     /// <summary>
-    /// Resolve ProviderConfig by layer name ("fast"/"deep"/"pro"/"embedding"/custom).
-    /// Falls back to a default ProviderConfig with model name only if layer not found.
-    /// <b>Callers:</b> MultiProviderChatClient (builds IChatClient per layer), LLMConfigPanel.
+    /// Resolve ProviderConfig by layer name (legacy compat — callers should migrate to GetEffectiveLayer).
     /// </summary>
     public ProviderConfig GetLayerConfig(string layer) => layer.ToLowerInvariant() switch
     {
@@ -81,6 +85,23 @@ public sealed class AIConfig
         "embedding" => Providers.GetValueOrDefault("embedding") ?? new ProviderConfig { Model = "text-embedding-3-small" },
         _ => Providers.GetValueOrDefault(layer) ?? new ProviderConfig { Model = Model }
     };
+
+    /// <summary>Resolve a layer's provider name from config, falling back to DefaultProvider.</summary>
+    public string ResolveLayerProvider(string layer) => layer.ToLowerInvariant() switch
+    {
+        "fast" or "l0" => !string.IsNullOrEmpty(L0?.Provider) ? L0.Provider : DefaultProvider,
+        "l1" => !string.IsNullOrEmpty(L1?.Provider) ? L1.Provider : DefaultProvider,
+        "deep" or "l2" or "pro" => !string.IsNullOrEmpty(L2?.Provider) ? L2.Provider : DefaultProvider,
+        _ => DefaultProvider
+    };
+}
+
+/// <summary>Independent layer model config — provider name + optional model/endpoint override.</summary>
+public sealed class LayerConfig
+{
+    public string Provider { get; init; } = "";
+    public string? Model { get; init; }
+    public string? Endpoint { get; init; }
 }
 
 /// <summary>
@@ -276,7 +297,7 @@ public sealed class LTAIOptions
     public McpConfig Mcp { get; init; } = new();
     public DurableConfig Durable { get; init; } = new();
     public EmbeddingConfig Embedding { get; init; } = new();
-    public ProviderConfig[] Providers { get; init; } = []; // overwrites KnownKeys.All when non-empty
+    public ProviderDefinition[] Providers { get; init; } = []; // overwrites KnownKeys.All when non-empty
     public string DataDirectory { get; init; } = ".livingtree";
     public string ToolsDirectory { get; init; } = "tools";
     public string[] SkillsUrls { get; init; } = Array.Empty<string>();
@@ -323,7 +344,7 @@ public sealed class LTAIOptions
 }
 
 /// <summary>JSON-serializable provider definition, mirrors <see cref="KnownKeys.KeyInfo"/>.</summary>
-public sealed record ProviderConfig(
+public sealed record ProviderDefinition(
     string EnvVar,
     string Service,
     string Description = "",
@@ -363,14 +384,6 @@ public static class KnownKeys
         string? Url = null, string? Endpoint = null, string? Model = null,
         decimal PriceInPerM = 0, decimal PriceOutPerM = 0,
         decimal PriceInCachePerM = 0);
-
-    /// <summary>
-    /// All known keys. Source of truth for UI panels and cost calculation.
-    /// Can be overridden by setting <c>LTAI:Providers</c> in appsettings.json.
-    /// Call <see cref="ApplyConfig"/> at startup if config providers are present.
-    /// <b>Consumers:</b> ConfigView, MainWindow, LLMConfigPanel, UsageTracker.
-    /// </summary>
-    public static KeyInfo[] All = DefaultHardcoded;
 
     /// <summary>Hardcoded defaults — used when <c>LTAI:Providers</c> config is empty.</summary>
     private static readonly KeyInfo[] DefaultHardcoded =
@@ -420,6 +433,14 @@ public static class KnownKeys
     ];
 
     /// <summary>
+    /// All known keys. Source of truth for UI panels and cost calculation.
+    /// Can be overridden by setting <c>LTAI:Providers</c> in appsettings.json.
+    /// Call <see cref="ApplyConfig"/> at startup if config providers are present.
+    /// <b>Consumers:</b> ConfigView, MainWindow, LLMConfigPanel, UsageTracker.
+    /// </summary>
+    public static KeyInfo[] All = DefaultHardcoded;
+
+    /// <summary>
     /// Generate default provider configurations in tuple format.
     /// Filters to providers that have both an endpoint and a model defined.
     /// <b>Callers:</b> MultiProviderChatClient (initialize default providers).
@@ -448,7 +469,7 @@ public static class KnownKeys
     /// Call once at startup from DI registration when config is available.
     /// Entries with the same <c>EnvVar</c> replace hardcoded defaults; new entries append.
     /// </summary>
-    public static void ApplyConfig(ProviderConfig[] providers)
+    public static void ApplyConfig(ProviderDefinition[] providers)
     {
         if (providers == null || providers.Length == 0) return;
         var merged = new List<KeyInfo>(DefaultHardcoded);

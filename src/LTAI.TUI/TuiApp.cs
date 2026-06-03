@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Spectre.Console;
 using LTAI.Agent;
 using LTAI.Agent.DevUI;
@@ -67,8 +68,28 @@ public sealed class TuiApp
 
         // 首次运行向导：无 API Key 时自动弹出
         if (!_llmConfig.HasAnyConfiguredProvider())
-        {
             _llmConfig.ShowSetupWizard();
+
+        // 检查 L1/L2 是否已配置，未配置时在对话区提示
+        var layersPath = Path.Combine(AppContext.BaseDirectory, ".livingtree", "layers.json");
+        var hasL1 = false; var hasL2 = false;
+        if (File.Exists(layersPath))
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(File.ReadAllText(layersPath));
+                hasL1 = doc.RootElement.TryGetProperty("l1", out _);
+                hasL2 = doc.RootElement.TryGetProperty("l2", out _);
+            }
+            catch { }
+        }
+        if (!hasL1 || !hasL2)
+        {
+            var missing = new List<string>();
+            if (!hasL1) missing.Add("L1");
+            if (!hasL2) missing.Add("L2");
+            ChatLayout.SetStartupMessage(
+                $"{string.Join("+", missing)} 未配置，请在对话区输入 [bold]/model {(!hasL2 ? "l2" : "l1")}[/] 选择 provider 和模型");
         }
 
         // 异步获取余额 + 模型信息（不阻塞）

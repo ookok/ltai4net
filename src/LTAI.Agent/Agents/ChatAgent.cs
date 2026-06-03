@@ -45,6 +45,7 @@ public sealed class ChatAgent
         Activity.Current?.Id ?? Guid.NewGuid().ToString("n");
     private readonly AIAgent _agent;       // L1 flash agent (fast, cheap)
     private readonly AIAgent _proAgent;    // L2 pro agent (deep reasoning)
+    private readonly bool _sameModel;      // L1 == L2 model → skip L2 upgrade
     private readonly AgentWorkflows? _workflows;  // multi-agent router
     private readonly BudgetTracker? _budgetTracker;
     private AgentSession? _session;        // MAF conversation session
@@ -58,12 +59,15 @@ public sealed class ChatAgent
     /// <param name="budgetTracker">Optional token budget tracker for per-user spending limits.</param>
     /// <param name="localEmbedder">Optional ONNX embedder for preloading (warmup).</param>
     /// <param name="httpFactory">Optional HTTP factory for connection warmup.</param>
+    /// <param name="sameModel">True when L1 and L2 use the same model — skip L2 upgrade.</param>
     public ChatAgent(AIAgent agent, AIAgent? proAgent = null, AgentWorkflows? workflows = null,
         BudgetTracker? budgetTracker = null,
-        LocalEmbedder? localEmbedder = null, IHttpClientFactory? httpFactory = null)
+        LocalEmbedder? localEmbedder = null, IHttpClientFactory? httpFactory = null,
+        bool sameModel = false)
     {
         _agent = agent;
         _proAgent = proAgent ?? agent;
+        _sameModel = sameModel;
         _workflows = workflows;
         _budgetTracker = budgetTracker;
         _localEmbedder = localEmbedder;
@@ -143,6 +147,9 @@ public sealed class ChatAgent
 
         // Simple query fast path: single L1 call, skip NEEDS_PRO, enforce, and reflection
         if (isSimple) return text;
+
+        // Same model → skip upgrade
+        if (_sameModel) return text;
 
         // L2: detect upgrade marker or refusal patterns → re-run with pro model
         var needsPro = text.Contains("<<<NEEDS_PRO:");

@@ -218,12 +218,33 @@ public static class ServiceCollectionExtensions
                 .ToDictionary(a => a.Name!, StringComparer.OrdinalIgnoreCase);
             var wf = sp.GetRequiredService<AgentWorkflows>();
             var chat = all["LTAI-Chat"];
-            // Pro agent for complex task auto-upgrade (uses "deepseek-pro" provider)
+            // Pro agent for complex task auto-upgrade (uses l2 layer)
             var proAgent = all.TryGetValue("LTAI-Chat-Pro", out var p) ? p : chat;
             var budget = sp.GetService<LTAI.AI.BudgetTracker>();
+
+            // Check if L1 and L2 have the same model — skip upgrade
+            bool sameModel = false;
+            try
+            {
+                var layersPath = Path.Combine(AppContext.BaseDirectory, ".livingtree", "layers.json");
+                if (File.Exists(layersPath))
+                {
+                    using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(layersPath));
+                    string? l1p = null, l1m = null, l2p = null, l2m = null;
+                    if (doc.RootElement.TryGetProperty("l1", out var l1))
+                    { l1p = l1.GetProperty("Provider").GetString(); l1m = l1.GetProperty("Model").GetString(); }
+                    if (doc.RootElement.TryGetProperty("l2", out var l2))
+                    { l2p = l2.GetProperty("Provider").GetString(); l2m = l2.GetProperty("Model").GetString(); }
+                    sameModel = string.Equals(l1p, l2p, StringComparison.OrdinalIgnoreCase)
+                             && string.Equals(l1m, l2m, StringComparison.OrdinalIgnoreCase);
+                }
+            }
+            catch { }
+
             return new ChatAgent(chat, proAgent, wf, budget,
                 localEmbedder: sp.GetService<LTAI.AI.LocalEmbedder>(),
-                httpFactory: sp.GetService<IHttpClientFactory>());
+                httpFactory: sp.GetService<IHttpClientFactory>(),
+                sameModel: sameModel);
         });
 
         return services;
@@ -292,7 +313,7 @@ public static class ServiceCollectionExtensions
         // 任务类型 → temperature/topP 参考：AI编程 0.3/0.95 | 工具调用 0.3/0.95 | 通用问答 0.8/0.95 | 数学推理 1.0/0.95
         yield return new("LTAI-Router",   "任务调度器(无工具)",      false, false, false, false, null, 0.3f, 0.95f);
         yield return new("LTAI-Chat",     "通用对话助手",          true,  true,  true,  true,  null, 0.3f, 0.95f);
-        yield return new("LTAI-Chat-Pro", "深度推理助手(Pro)",      true,  true,  true,  true,  "deepseek-pro", 0.3f, 0.95f);
+        yield return new("LTAI-Chat-Pro", "深度推理助手(Pro)",      true,  true,  true,  true,  "l2", 0.3f, 0.95f);
         yield return new("LTAI-Code",     "代码分析助手",          true,  true,  true,  false, null, 0.3f, 0.95f);
         yield return new("LTAI-Math",     "数学计算助手",          false, false, false, true,  null, 1.0f, 0.95f);
         yield return new("LTAI-Data",     "数据处理助手",          true,  true,  true,  true,  null, 0.3f, 0.95f);
@@ -479,8 +500,6 @@ public static class ServiceCollectionExtensions
             tools.Add(AIFunctionFactory.Create(memory.ListMemories));
         }
 
-
-
         // Plan approval workflow tools
         if (name.StartsWith("LTAI-Chat") || name is "LTAI-Code" or "LTAI-Writer" or "LTAI-Frontend")
         {
@@ -539,8 +558,6 @@ public static class ServiceCollectionExtensions
 
             tools.Add(AIFunctionFactory.Create(git.GitMerge));
             tools.Add(AIFunctionFactory.Create(git.GitRemote));
-
-
             tools.Add(AIFunctionFactory.Create(git.GitTag));
             tools.Add(AIFunctionFactory.Create(git.GitStash));
             tools.Add(AIFunctionFactory.Create(git.GitStashList));
@@ -596,7 +613,6 @@ public static class ServiceCollectionExtensions
             tools.Add(AIFunctionFactory.Create(SystemTools.Whois));
             tools.Add(AIFunctionFactory.Create(SystemTools.SetEnv));
             tools.Add(AIFunctionFactory.Create(SystemTools.GetCurrentDirectory));
-            tools.Add(AIFunctionFactory.Create(SystemTools.ListDirectory));
         }
         if (name is "LTAI-Chat" or "LTAI-System" or "LTAI-Code" or "LTAI-Writer" or "LTAI-Frontend")
         {
@@ -811,6 +827,17 @@ public static class ServiceCollectionExtensions
             var mcpTools = await mcpFactory.GetToolsAsync(opts.Mcp).ConfigureAwait(false);
             foreach (var mcpTool in mcpTools)
                 tools.Add(mcpTool);
+        }
+
+        // 去重：同名工具保留第一个，记录警告
+        var seenNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        for (int i = tools.Count - 1; i >= 0; i--)
+        {
+            if (!seenNames.Add(tools[i].Name))
+            {
+                log?.LogWarning("工具名重复已被移除: {Name}", tools[i].Name);
+                tools.RemoveAt(i);
+            }
         }
 
         AIAgent agent = llm.AsHarnessAgent(

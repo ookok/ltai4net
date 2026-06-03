@@ -3,7 +3,7 @@ name: LTAI-Chat-Pro
 description: 深度推理助手(Pro)
 temperature: 0.3
 topP: 0.95
-modelId: deepseek-pro
+modelId: l2
 permissions: ["read", "write", "list", "exec"]
 inheritTools: chat
 ---

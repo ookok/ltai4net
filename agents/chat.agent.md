@@ -3,7 +3,7 @@ name: LTAI-Chat
 description: 通用对话助手
 temperature: 0.3
 topP: 0.95
-modelId: deepseek
+modelId: l1
 permissions: ["read", "write", "list", "exec"]
 tools: [filesystem, shell, search, symbols, eia, web, media, office, memory, git, plan, diagram, choice, subagent, task, job, system, network, container, download, workflow]
 ---

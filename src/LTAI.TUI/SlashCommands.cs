@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using Spectre.Console;
 using LTAI.AI;
+using LTAI.Core.Configuration;
 
 namespace LTAI.TUI;
 
@@ -78,7 +79,7 @@ public static class SlashCommands
         new("retry",   "聊天",  "重发上一条消息", "重试,重发"),
         new("compact", "聊天",  "压缩汇总历史消息", "压缩,汇总"),
         new("config",  "设置",  "配置 LLM: provider|apikey|model|status", "", "provider|apikey|model|l1|l2"),
-        new("model",   "设置",  "管理 ONNX 向量模型: list|download|delete|switch|cleanup|info|quant", "", "list|download <id>|delete <id>|switch <id>|cleanup [name]|info|quant <fp32|int8|auto>"),
+        new("model",   "设置",  "模型管理: l0(嵌入) list|download|switch|delete|info|cleanup|quant  |  l1|l2(在线选择provider→模型)", "", "l0|l1|l2"),
         new("models",  "信息",  "列出所有 Provider 的可用在线模型及元数据", "在线模型,provider列表"),
         new("status",  "信息",  "显示当前配置和统计", "状态,统计"),
         new("monitor", "信息",  "实时仪表盘 — Provider 状态/延迟/成本", "监控,仪表盘"),
@@ -319,18 +320,49 @@ public static class SlashCommands
         return true;
     }
 
-    /// <summary>List online models from all providers via ModelMetadataProvider.</summary>
+    /// <summary>List L0/L1/L2 current model info + online models.</summary>
     private static (string, bool) HandleModelsCommand()
     {
+        var lines = new List<string> { "[bold yellow]当前模型配置[/]\n" };
+
+        // L0: embedding model
+        var embedder = Embedder;
+        if (embedder != null && embedder.Available)
+            lines.Add($"  [cyan]L0 嵌入[/]  {embedder.CurrentModelName}  [dim]({embedder.Dim}d)[/]");
+        else if (embedder != null)
+            lines.Add("  [cyan]L0 嵌入[/]  [yellow]未加载 (运行 /model l0 download)[/]");
+        else
+            lines.Add("  [cyan]L0 嵌入[/]  [grey]不可用[/]");
+
+        // L1/L2: read from layers.json
+        (string? p, string? m) l1 = (null, null), l2 = (null, null);
+        try
+        {
+            var path = Path.Combine(AppContext.BaseDirectory, ".livingtree", "layers.json");
+            if (File.Exists(path))
+            {
+                using var doc = JsonDocument.Parse(File.ReadAllText(path));
+                string? rp(JsonElement e) => e.TryGetProperty("Provider", out var x) ? x.GetString() : null;
+                string? rm(JsonElement e) => e.TryGetProperty("Model", out var x) ? x.GetString() : null;
+                if (doc.RootElement.TryGetProperty("l1", out var l1e)) l1 = (rp(l1e), rm(l1e));
+                if (doc.RootElement.TryGetProperty("l2", out var l2e)) l2 = (rp(l2e), rm(l2e));
+            }
+        }
+        catch { }
+        lines.Add(l1.p != null
+            ? $"  [cyan]L1 标准[/]  {l1.p} / [white]{l1.m}[/]"
+            : "  [cyan]L1 标准[/]  [yellow]未配置 (/model l1)[/]");
+        lines.Add(l2.p != null
+            ? $"  [cyan]L2 深度[/]  {l2.p} / [white]{l2.m}[/]"
+            : "  [cyan]L2 深度[/]  [yellow]未配置 (/model l2)[/]");
+
+        // Online models
         var mp = ModelsProvider;
-        if (mp == null)
-            return ("ModelMetadataProvider 未注册 — 在线模型信息不可用", true);
-
+        if (mp == null) { lines.Add("\n[grey]ModelMetadataProvider 未注册[/]"); return (string.Join("\n", lines), true); }
         var all = mp.AllModels;
-        if (all.Count == 0)
-            return ("尚未获取到模型列表（后台刷新进行中，请稍后重试）", true);
+        if (all.Count == 0) { lines.Add("\n[grey]在线模型信息尚未获取（后台刷新进行中）[/]"); return (string.Join("\n", lines), true); }
 
-        var lines = new List<string> { "[bold yellow]在线模型元数据[/]\n" };
+        lines.Add($"\n[bold yellow]在线模型元数据[/]\n");
         foreach (var group in all.GroupBy(m => m.Provider).OrderBy(g => g.Key))
         {
             lines.Add($"  [cyan]{group.Key}[/][green] ({group.Count()})[/]");
@@ -380,7 +412,38 @@ public static class SlashCommands
         return string.Join(", ", parts);
     }
 
-    /// <summary>Handle /model list|download|delete|switch subcommands.</summary>
+    /// <summary>Persist L1/L2 selection to .livingtree/layers.json.</summary>
+    private static void SaveLayerSelection(string layer, string provider, string model)
+    {
+        try
+        {
+            var dir = Path.Combine(AppContext.BaseDirectory, ".livingtree");
+            Directory.CreateDirectory(dir);
+            var path = Path.Combine(dir, "layers.json");
+            var data = File.Exists(path) ? JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(File.ReadAllText(path)) ?? new() : new();
+            data[layer] = JsonSerializer.SerializeToElement(new { Provider = provider, Model = model });
+            File.WriteAllText(path, JsonSerializer.Serialize(data, new JsonSerializerOptions { WriteIndented = true }));
+        }
+        catch { /* best-effort */ }
+    }
+    /// <summary>Read persisted layer selection; null if not set.</summary>
+    private static (string? provider, string? model)? ReadLayerSelection(string layer)
+    {
+        try
+        {
+            var path = Path.Combine(AppContext.BaseDirectory, ".livingtree", "layers.json");
+            if (!File.Exists(path)) return null;
+            using var doc = JsonDocument.Parse(File.ReadAllText(path));
+            if (!doc.RootElement.TryGetProperty(layer, out var el)) return null;
+            var p = el.GetProperty("Provider").GetString();
+            var m = el.GetProperty("Model").GetString();
+            if (!string.IsNullOrEmpty(p) && !string.IsNullOrEmpty(m)) return (p, m);
+            return null;
+        }
+        catch { return null; }
+    }
+
+    /// <summary>Handle /model l0|l1|l2|list|download|switch|delete...</summary>
     private static (string, bool) HandleModelCommand(string args)
     {
         var parts = args.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
@@ -388,21 +451,120 @@ public static class SlashCommands
         var subArgs = parts.Length > 1 ? parts[1] : "";
 
         var embedder = Embedder;
-        if (embedder == null)
+        if (embedder == null && subCmd is not "l1" and not "l2" and not "ls")
             return ("ONNX embedder not available", true);
 
-        return subCmd switch
+        if (subCmd is "l1" or "l2")
+            return HandleLayerSelect(subCmd);
+
+        // L0 / legacy embedder commands
+        if (subCmd == "l0")
+            subCmd = subArgs.Split(' ', 2)[0].ToLowerInvariant();
+        subArgs = subArgs.Trim();
+
+        return (subCmd, embedder) switch
         {
-            "list" => HandleModelList(embedder),
-            "switch" => HandleModelSwitch(embedder, subArgs),
-            "download" => HandleModelDownload(embedder, subArgs),
-            "delete" => HandleModelDelete(embedder, subArgs),
-            "cleanup" => HandleModelCleanup(embedder, subArgs),
-            "info" => HandleModelInfo(embedder),
-            "quant" => HandleModelQuant(embedder, subArgs),
-            _ => ("用法: /model list|download <id>|delete <id>|switch <id>|cleanup [name]|info|quant <fp32|int8|auto>", true),
+            ("" or "list", not null) => HandleModelList(embedder),
+            ("switch", not null) => HandleModelSwitch(embedder, subArgs),
+            ("download", not null) => HandleModelDownload(embedder, subArgs),
+            ("delete" or "remove", not null) => HandleModelDelete(embedder, subArgs),
+            ("cleanup", not null) => HandleModelCleanup(embedder, subArgs),
+            ("info", not null) => HandleModelInfo(embedder),
+            ("quant", not null) => HandleModelQuant(embedder, subArgs),
+            _ => ("用法: /model [l0 [list|download|switch|delete|info|cleanup|quant]] | l1 | l2", true),
         };
     }
+
+    /// <summary>Interactive L1/L2 provider + model selection wizard.</summary>
+    private static (string, bool) HandleLayerSelect(string layer)
+    {
+        var providers = KnownProviders
+            .Where(kv => !string.IsNullOrEmpty(kv.Value.EnvVar))
+            .Select(kv => kv.Key)
+            .ToList();
+        if (providers.Count == 0)
+            return ("没有可用 provider。请先设置 API Key。", true);
+
+        // Step 1: pick provider
+        var picker = new SelectionPrompt<string>()
+            .Title($"[yellow]选择 {layer.ToUpperInvariant()} provider:[/]")
+            .PageSize(15)
+            .AddChoices(providers);
+        var chosen = AnsiConsole.Prompt(picker);
+        if (!KnownProviders.TryGetValue(chosen, out var info)) return ("", true);
+
+        // Step 2: check / set API key.
+        // Local providers (Ollama/LMStudio/vLLM) have no EnvVar → no key needed.
+        string? existingKey = null;
+        if (!string.IsNullOrEmpty(info.EnvVar))
+        {
+            existingKey = SecretManager.Get(info.EnvVar);
+            if (string.IsNullOrEmpty(existingKey) && layer == "l2")
+            {
+                var l1Sel = ReadLayerSelection("l1");
+                if (l1Sel is { provider: not null } && string.Equals(l1Sel.Value.provider, chosen, StringComparison.OrdinalIgnoreCase))
+                    existingKey = SecretManager.Get(info.EnvVar);
+            }
+            if (string.IsNullOrEmpty(existingKey))
+            {
+                var key = AnsiConsole.Prompt(new TextPrompt<string>($"[yellow]输入 {chosen} API Key ({info.EnvVar}):[/]").Secret());
+                if (string.IsNullOrWhiteSpace(key)) return ("已取消", true);
+                existingKey = key;
+                SecretManager.Set(info.EnvVar, key, persistent: true);
+            }
+        }
+
+        // Step 3: fetch models from API
+        var authHeader = existingKey != null ? new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", existingKey) : null;
+        AnsiConsole.Status().Start("获取模型列表...", ctx =>
+        {
+            try
+            {
+                var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+                var req = new HttpRequestMessage(HttpMethod.Get, $"{info.Endpoint.TrimEnd('/')}/models");
+                if (authHeader != null) req.Headers.Authorization = authHeader;
+                var resp = http.Send(req);
+                if (!resp.IsSuccessStatusCode) { _availableLayerModels = null; return; }
+                using var json = JsonDocument.Parse(resp.Content.ReadAsStream());
+                _availableLayerModels = json.RootElement.GetProperty("data")
+                    .EnumerateArray().Select(m => m.GetProperty("id").GetString() ?? "")
+                    .Where(id => !string.IsNullOrEmpty(id)).OrderBy(id => id).ToList();
+            }
+            catch { _availableLayerModels = null; }
+        });
+        if (_availableLayerModels is not { Count: > 0 })
+            return ("获取模型列表失败，请检查 API Key 和网络连接", true);
+
+        // Step 4: pick model
+        var modelPicker = new SelectionPrompt<string>()
+            .Title($"[yellow]为 {layer.ToUpperInvariant()} 选择模型 ({chosen}):[/]")
+            .PageSize(15)
+            .AddChoices(_availableLayerModels);
+        var model = AnsiConsole.Prompt(modelPicker);
+        _availableLayerModels = null;
+
+        // Step 5: persist selection
+        SaveLayerSelection(layer, chosen, model);
+        if (layer == "l1") L1Model = model; else L2Model = model;
+
+        // Step 6: apply to runtime router
+        if (Router != null)
+        {
+            try
+            {
+                var client = OpenAIChatClientFactory.Create(info.Endpoint, model, existingKey);
+                Router.Register(layer, client);
+                AnsiConsole.MarkupLine($"[green]✓ 已注册 {layer}: {chosen}/{model}[/]");
+            }
+            catch (Exception ex)
+            {
+                AnsiConsole.MarkupLine($"[red]注册失败: {ex.Message.EscapeMarkup()}[/]");
+            }
+        }
+
+        return ($"已配置 [green]{layer.ToUpperInvariant()}[/] = [cyan]{chosen}[/] / [yellow]{model}[/]", true);
+    }
+    private static List<string>? _availableLayerModels;
 
     private static (string, bool) HandleModelList(LTAI.AI.LocalEmbedder embedder)
     {

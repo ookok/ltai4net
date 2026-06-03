@@ -20,7 +20,7 @@ if ($existing)
     exit 0
 }
 
-# ── 下载 URL ───────────────────────────────────────────────────
+# ── 下载 URL（保持与 MainWindow.axaml.cs WarpMirrorUrl 常量同步）──
 $urls = @(
     "https://downloads.cloudflareclient.com/v1/download/windows/ga",
     "http://mogoo.com.cn/Cloudflare_WARP_2026.4.1390.0.msi"

@@ -42,6 +42,7 @@ public sealed class MultiProviderChatClient : IChatClient
     private readonly ILogger<MultiProviderChatClient> _logger;
     private readonly ModelMetadataProvider? _modelMetadata;
     private string _defaultProvider;
+    private readonly string _routingFallback = "l1"; // fallback routing key when no ModelId is set
 
     // 自适应成本路由：成功率 + 延迟 + 成本感知
     private string? _lastError;
@@ -132,8 +133,8 @@ public sealed class MultiProviderChatClient : IChatClient
     /// </summary>
     private string ResolveProvider(ChatOptions? options)
     {
-        var raw = options?.ModelId ?? _defaultProvider;
-        if (raw == null) return _defaultProvider;
+        var raw = options?.ModelId ?? _routingFallback;
+        if (raw == null) return _routingFallback;
 
         const string capabilityPrefix = "capability:";
         if (!raw.StartsWith(capabilityPrefix, StringComparison.OrdinalIgnoreCase))
@@ -157,7 +158,7 @@ public sealed class MultiProviderChatClient : IChatClient
                 return recommended.Provider;
         }
 
-        return _defaultProvider;
+        return _routingFallback;
     }
 
     /// <summary>Identity metadata for OpenTelemetry instrumentation.</summary>
@@ -177,6 +178,9 @@ public sealed class MultiProviderChatClient : IChatClient
         IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken ct = default)
     {
         var provider = ResolveProvider(options);
+        // ModelId was consumed for provider routing; clear it to prevent
+        // the underlying IChatClient (OpenAI SDK) from using it as the API model name.
+        if (options != null) options.ModelId = null;
         return await TryCallWithDegradation(provider, messages, options, ct).ConfigureAwait(false);
     }
 
@@ -191,6 +195,7 @@ public sealed class MultiProviderChatClient : IChatClient
         [EnumeratorCancellation] CancellationToken ct = default)
     {
         var provider = ResolveProvider(options);
+        if (options != null) options.ModelId = null;
         bool anyAttempted = false;
         string? lastFailedProvider = null;
         foreach (var p in RankedProviders(provider))
@@ -260,10 +265,10 @@ public sealed class MultiProviderChatClient : IChatClient
                 int cacheHit = 0, cacheMiss = promptTotal;
                 if (cachedUsage.AdditionalCounts is { } counts)
                 {
-                    cacheHit = (int?)(counts.GetValueOrDefault("prompt_cache_hit_tokens") ??
-                                     counts.GetValueOrDefault("Cached")) ?? 0;
-                    var apiMiss = counts.GetValueOrDefault("prompt_cache_miss_tokens");
-                    if (apiMiss.HasValue) cacheMiss = (int)apiMiss.Value;
+                    cacheHit = counts.TryGetValue("prompt_cache_hit_tokens", out var hit) ? (int)hit
+                             : counts.TryGetValue("Cached", out var cachedHit) ? (int)cachedHit : 0;
+                    if (counts.TryGetValue("prompt_cache_miss_tokens", out var apiMiss))
+                        cacheMiss = (int)apiMiss;
                 }
                 if (cacheHit > 0 && cacheMiss == promptTotal) cacheMiss = promptTotal - cacheHit;
                 LTAI.Core.Configuration.UsageTracker.RecordWithCache(
@@ -314,10 +319,10 @@ public sealed class MultiProviderChatClient : IChatClient
                     int cacheHit = 0, cacheMiss = 0;
                     if (usage.AdditionalCounts is { } counts)
                     {
-                        cacheHit = (int?)(counts.GetValueOrDefault("prompt_cache_hit_tokens") ??
-                                         counts.GetValueOrDefault("Cached")) ?? 0;
-                        var apiMiss = counts.GetValueOrDefault("prompt_cache_miss_tokens");
-                        if (apiMiss.HasValue) cacheMiss = (int)apiMiss.Value;
+                        cacheHit = counts.TryGetValue("prompt_cache_hit_tokens", out var hit) ? (int)hit
+                                 : counts.TryGetValue("Cached", out var cachedHit) ? (int)cachedHit : 0;
+                        if (counts.TryGetValue("prompt_cache_miss_tokens", out var apiMiss))
+                            cacheMiss = (int)apiMiss;
                     }
 
                     // 从 API 返回推导：若 cache_miss 未显式返回，从总量减去 cache_hit
@@ -654,47 +659,37 @@ public static class ServiceCollectionExtensions
             var breakerStore = new LTAI.Core.Configuration.CircuitBreakerStore(breakerPath);
             var router = new MultiProviderChatClient(opts, logger, breakerStore, modelMetadata);
 
-            foreach (var provider in MultiProviderChatClient.DefaultProviders)
+            // Build provider metadata lookup from KnownKeys (name → endpoint, model, envVar)
+            var knownProviders = MultiProviderChatClient.DefaultProviders
+                .ToDictionary(p => p.name, p => (p.endpoint, p.model, p.envVar), StringComparer.OrdinalIgnoreCase);
+
+            // Only register providers explicitly configured in L1/L2 layers (L0 is embedding).
+            // Other providers with API keys are NOT auto-registered — no automatic fallback.
+            foreach (var (layerKey, layerCfg) in new[] {
+                ("l1", opts.AI.L1), ("l2", opts.AI.L2) })
             {
-                var apiKey = LTAI.Core.Configuration.SecretManager.Get(provider.envVar);
-                if (string.IsNullOrEmpty(apiKey)) continue;
-                try
+                if (layerCfg == null || string.IsNullOrEmpty(layerCfg.Provider)) continue;
+                if (!knownProviders.TryGetValue(layerCfg.Provider, out var info))
                 {
-                    var isDefault = string.Equals(provider.name, opts.AI.DefaultProvider, StringComparison.OrdinalIgnoreCase);
-
-                    // Anthropic uses its own SDK (different protocol); everything else is OpenAI-compatible.
-                    var isAnthropic = string.Equals(provider.name, "Anthropic", StringComparison.OrdinalIgnoreCase);
-
-                    if (isDefault)
-                    {
-                        // L1 (flash): from config deepseek-fast, fallback deepseek-v4-flash
-                        var l1 = opts.AI.GetLayerConfig("fast");
-                        var l1Ep = !string.IsNullOrEmpty(l1.Endpoint) ? l1.Endpoint : provider.endpoint;
-                        var l1Client = isAnthropic
-                            ? AnthropicChatClientFactory.Create(l1.Model, apiKey)
-                            : OpenAIChatClientFactory.Create(l1Ep, l1.Model, apiKey);
-                        router.Register("deepseek", l1Client);
-
-                        // L2 (pro): from config deepseek, fallback deepseek-v4-pro
-                        var l2 = opts.AI.GetLayerConfig("pro");
-                        var l2Ep = !string.IsNullOrEmpty(l2.Endpoint) ? l2.Endpoint : provider.endpoint;
-                        var l2Client = isAnthropic
-                            ? AnthropicChatClientFactory.Create(l2.Model, apiKey)
-                            : OpenAIChatClientFactory.Create(l2Ep, l2.Model, apiKey);
-                        router.Register("deepseek-pro", l2Client);
-                    }
-                    else
-                    {
-                        var client = isAnthropic
-                            ? AnthropicChatClientFactory.Create(provider.model, apiKey)
-                            : OpenAIChatClientFactory.Create(provider.endpoint, provider.model, apiKey);
-                        router.Register(provider.name, client);
-                    }
+                    logger?.LogWarning("Layer {Layer} provider '{Provider}' not found in known providers", layerKey, layerCfg.Provider);
+                    continue;
                 }
-                catch (Exception ex)
+
+                var apiKey = SecretManager.Get(info.envVar);
+                if (string.IsNullOrEmpty(apiKey))
                 {
-                    logger?.LogWarning(ex, "Failed to register provider");
+                    logger?.LogWarning("Layer {Layer} provider '{Provider}' has no API key set", layerKey, layerCfg.Provider);
+                    continue;
                 }
+
+                var model = !string.IsNullOrEmpty(layerCfg.Model) ? layerCfg.Model : info.model;
+                var ep = !string.IsNullOrEmpty(layerCfg.Endpoint) ? layerCfg.Endpoint : info.endpoint;
+                var isAnthropic = string.Equals(layerCfg.Provider, "Anthropic", StringComparison.OrdinalIgnoreCase);
+                var client = isAnthropic
+                    ? AnthropicChatClientFactory.Create(model, apiKey)
+                    : OpenAIChatClientFactory.Create(ep, model, apiKey);
+                router.Register(layerKey, client);
+                logger?.LogInformation("Registered layer {Layer} → provider={Provider} model={Model}", layerKey, layerCfg.Provider, model);
             }
             return router;
         });

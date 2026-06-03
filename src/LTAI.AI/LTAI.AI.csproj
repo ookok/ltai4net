@@ -67,7 +67,7 @@
           Condition="$([MSBuild]::IsOSPlatform('Windows')) And !Exists('$(ModelsDir)rg\rg.exe')">
     <Message Text="DownloadRipgrep: downloading rg.exe to $(ModelsDir)rg/" Importance="High" />
     <MakeDir Directories="$(ModelsDir)rg/" />
-    <Exec Command="powershell -NoProfile -Command &quot;$wc=New-Object Net.WebClient; $wc.Headers.Add('User-Agent','LTAI/1.0'); try { $wc.DownloadFile('http://mogoo.com.cn/rg.exe','$(ModelsDir)rg\rg.exe'); Write-Host 'rg.exe downloaded' } catch { Write-Host ('download failed: '+$$_.Exception.Message); exit 1 }&quot;"
+    <Exec Command="powershell -NoProfile -Command &quot;$wc=New-Object Net.WebClient; $wc.Headers.Add('User-Agent','LTAI/1.0'); $wc.DownloadFile('http://mogoo.com.cn/rg.exe','$(ModelsDir)rg\rg.exe'); if (Test-Path '$(ModelsDir)rg\rg.exe') { Write-Host 'rg.exe downloaded' } else { Write-Host 'download failed'; exit 1 }&quot;"
           IgnoreExitCode="true" />
   </Target>
 

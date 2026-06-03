@@ -7,6 +7,11 @@ namespace LTAI.Accelerator;
 
 public partial class MainWindow : Window
 {
+    /// <summary>Cloudflare WARP 官方下载地址（首选）</summary>
+    private const string WarpOfficialUrl = "https://downloads.cloudflareclient.com/v1/download/windows/ga";
+    /// <summary>国内镜像（同步更新时需同时修改 scripts/install-warp.ps1）</summary>
+    private const string WarpMirrorUrl = "http://mogoo.com.cn/Cloudflare_WARP_2026.4.1390.0.msi";
+
     private ProxyService? _proxy;
     private const int ProxyPort = 11818;
     private TrayIcon? _trayIcon;
@@ -121,7 +126,7 @@ public partial class MainWindow : Window
             }
             else
             {
-                WarpInfo.Text = "未安装 — 点击下载 http://mogoo.com.cn/";
+                WarpInfo.Text = "未安装 — 点击按钮下载安装";
                 WarpInfo.Foreground = new SolidColorBrush(Color.Parse("#888"));
                 BtnInstallWarp.IsVisible = true;
                 SetStatus("系统代理 :11818 (国内直连)", "#4caf50");
@@ -195,7 +200,7 @@ public partial class MainWindow : Window
     {
         var psi = new ProcessStartInfo
         {
-            FileName = "https://downloads.cloudflareclient.com/v1/download/windows/ga",
+            FileName = WarpOfficialUrl,
             UseShellExecute = true
         };
         Process.Start(psi);
@@ -209,8 +214,8 @@ public partial class MainWindow : Window
         var psLines = new[]
         {
             "$urls = @(",
-            "  'https://downloads.cloudflareclient.com/v1/download/windows/ga',",
-            "  'http://mogoo.com.cn/Cloudflare_WARP_2026.4.1390.0.msi'",
+            $"  '{WarpOfficialUrl}',",
+            $"  '{WarpMirrorUrl}'",
             ")",
             "$msi = \"$env:TEMP\\Cloudflare_WARP.msi\"",
             "$ok = $false",

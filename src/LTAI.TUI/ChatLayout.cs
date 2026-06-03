@@ -27,6 +27,12 @@ public sealed class ChatLayout
     private bool _processing;
     private CancellationTokenSource? _responseCts;
     private volatile char _quickNav;
+    private static string? _startupMessage;
+
+    /// <summary>Set a persistent message shown in the initial empty state (before any conversation).</summary>
+    public static void SetStartupMessage(string message) => _startupMessage = message;
+    private static string? ConsumeStartupMessage() { var m = _startupMessage; _startupMessage = null; return m; }
+
     // 选择器状态（由输入任务管理，主线程只读）
     private volatile bool _pickerActive;
     private readonly object _pickerLock = new();
@@ -62,21 +68,16 @@ public sealed class ChatLayout
         _cachedHistoryCount = 0;
     }
     private static readonly string[] PulseFrames = [
-        "[yellow]▁▂▃▄▅▆▇█▇▆▅▄▃▂▁[/]",
-        "[yellow]▂▃▄▅▆▇█▇▆▅▄▃▂▁▁[/]",
-        "[yellow]▃▄▅▆▇█▇▆▅▄▃▂▁▁▂[/]",
-        "[yellow]▄▅▆▇█▇▆▅▄▃▂▁▁▂▃[/]",
-        "[yellow]▅▆▇█▇▆▅▄▃▂▁▁▂▃▄[/]",
-        "[yellow]▆▇█▇▆▅▄▃▂▁▁▂▃▄▅[/]",
-        "[yellow]▇█▇▆▅▄▃▂▁▁▂▃▄▅▆[/]",
-        "[yellow]█▇▆▅▄▃▂▁▁▂▃▄▅▆▇[/]",
-        "[yellow]▇▆▅▄▃▂▁▁▂▃▄▅▆▇█[/]",
-        "[yellow]▆▅▄▃▂▁▁▂▃▄▅▆▇█▇[/]",
-        "[yellow]▅▄▃▂▁▁▂▃▄▅▆▇█▇▆[/]",
-        "[yellow]▄▃▂▁▁▂▃▄▅▆▇█▇▆▅[/]",
-        "[yellow]▃▂▁▁▂▃▄▅▆▇█▇▆▅▄[/]",
-        "[yellow]▂▁▁▂▃▄▅▆▇█▇▆▅▄▃[/]",
-        "[yellow]▁▁▂▃▄▅▆▇█▇▆▅▄▃▂[/]",
+        "[deepskyblue1]⠋[/]",
+        "[deepskyblue1]⠙[/]",
+        "[deepskyblue1]⠹[/]",
+        "[deepskyblue1]⠸[/]",
+        "[deepskyblue1]⠼[/]",
+        "[deepskyblue1]⠴[/]",
+        "[deepskyblue1]⠦[/]",
+        "[deepskyblue1]⠧[/]",
+        "[deepskyblue1]⠇[/]",
+        "[deepskyblue1]⠏[/]",
     ];
 
     public ChatLayout(ChatAgent chat, QuestionService? questionService = null)
@@ -151,6 +152,23 @@ public sealed class ChatLayout
                 // message processing. User can type the next message while the
                 // LLM is still responding to the previous one.
                 var cts = new CancellationTokenSource();
+
+                // 光标闪烁定时器（400ms 间隔，独立于阻塞的 ReadKey）
+                var blinkCts = CancellationTokenSource.CreateLinkedTokenSource(cts.Token);
+                var blinkTask = Task.Run(async () =>
+                {
+                    while (!blinkCts.Token.IsCancellationRequested)
+                    {
+                        await Task.Delay(400, blinkCts.Token).ConfigureAwait(false);
+                        string buf;
+                        lock (inputBuf) buf = inputBuf.ToString();
+                        lock (_layout)
+                        {
+                            UpdateFooter(buf, "", buf.Length == 0 && showWatermark);
+                            _liveCtx?.Refresh();
+                        }
+                    }
+                }, blinkCts.Token);
 
                 var inputTask = Task.Run(async () =>
                 {
@@ -577,7 +595,15 @@ public sealed class ChatLayout
         }
         else
         {
-            renders.Add(new Markup("[grey]等待首次请求...  输入消息开始对话[/]"));
+            var msg = _startupMessage;
+            if (msg != null)
+            {
+                renders.Add(new Markup($"[yellow]⚠️ {msg.EscapeMarkup()}[/]"));
+                renders.Add(new Markup("[grey]等待首次请求...  输入消息开始对话[/]"));
+                _startupMessage = null; // show once
+            }
+            else
+                renders.Add(new Markup("[grey]等待首次请求...  输入消息开始对话[/]"));
         }
 
         // 状态行
@@ -586,9 +612,11 @@ public sealed class ChatLayout
 
         // 输入行：首次空时显示水印+光标，之后始终只显示光标
         var showWatermark = string.IsNullOrEmpty(inputText) && isFirstEmpty;
+        var cursorBlink = Environment.TickCount % 1000 < 530;
+        var cursor = cursorBlink ? "[bold deepskyblue1]▌[/]" : " ";
         var inputDisplay = showWatermark
-            ? $"[bold green]▎[/] [dim]│[/][grey] 输入消息  Enter=发送  S+Enter=换行  Ctrl+V=粘贴  /[/]"
-            : $"[bold green]▎[/] {inputText}[bold yellow]│[/]";
+            ? $"{cursor} [dim]│[/][grey] 输入消息  Enter=发送  S+Enter=换行  Ctrl+V=粘贴  /[/]"
+            : $"{cursor} {inputText}[bold deepskyblue1]│[/]";
         renders.Add(new Markup(inputDisplay));
 
         _layout["Footer"].Update(
@@ -716,7 +744,7 @@ public sealed class ChatLayout
         content.AppendLine("[dim]━━━ 思考中 ━━━[/]");
         _toolCallCount = 0;
         var toolTimer = Stopwatch.StartNew();
-        UpdateFooter("", $"[grey]{PulseFrames[0]} 思考中...[/]");
+        UpdateFooter("", $"[deepskyblue1]{PulseFrames[0]} 思考中...[/]");
         _liveCtx?.Refresh();
 
         // 后台脉冲动画（每 250ms 更新一次，即使无 token）
@@ -739,7 +767,7 @@ public sealed class ChatLayout
                         line += $"  {statusText}";
                     lock (_layout)
                     {
-                        UpdateFooter("", $"[grey]{line}[/]");
+                        UpdateFooter("", $"[deepskyblue1]{line}[/]");
                         _liveCtx?.Refresh();
                     }
                 }
@@ -829,7 +857,7 @@ public sealed class ChatLayout
                             }
                         }
                     }
-                    lock (_layout) { UpdateMessages(content.ToString()); UpdateFooter("", $"{PulseFrames[Interlocked.Increment(ref sharedFrameIdx) % PulseFrames.Length]} 处理中...  {statusText}"); }
+                    lock (_layout) { UpdateMessages(content.ToString()); UpdateFooter("", $"{PulseFrames[sharedFrameIdx % PulseFrames.Length]} 处理中...  {statusText}"); }
                     ThrottledRefresh();
                     continue;
                 }
@@ -856,14 +884,14 @@ public sealed class ChatLayout
                         content.AppendLine(msg);
                         statusText = msg;
                     }
-                    lock (_layout) { UpdateMessages(content.ToString()); UpdateFooter("", $"{PulseFrames[Interlocked.Increment(ref sharedFrameIdx) % PulseFrames.Length]} 处理中...  {statusText}"); }
+                    lock (_layout) { UpdateMessages(content.ToString()); UpdateFooter("", $"{PulseFrames[sharedFrameIdx % PulseFrames.Length]} 处理中...  {statusText}"); }
                     ThrottledRefresh();
                     continue;
                 }
                 if (token.StartsWith("HANDOFF TO "))
                 {
                     content.AppendLine($"→ {token}"); statusText = $"→ {token}";
-                    lock (_layout) { UpdateMessages(content.ToString()); UpdateFooter("", $"{PulseFrames[Interlocked.Increment(ref sharedFrameIdx) % PulseFrames.Length]} {statusText}"); }
+                    lock (_layout) { UpdateMessages(content.ToString()); UpdateFooter("", $"{PulseFrames[sharedFrameIdx % PulseFrames.Length]} {statusText}"); }
                     ThrottledRefresh();
                     continue;
                 }
@@ -872,7 +900,7 @@ public sealed class ChatLayout
                     // Escape 方括号避免重渲时 Spectre MarkupException
                     var safeToken = token.Replace("[", "\\[").Replace("]", "\\]");
                     content.AppendLine(safeToken); statusText = token;
-                    lock (_layout) { UpdateMessages(content.ToString()); UpdateFooter("", $"{PulseFrames[Interlocked.Increment(ref sharedFrameIdx) % PulseFrames.Length]} {statusText}"); }
+                    lock (_layout) { UpdateMessages(content.ToString()); UpdateFooter("", $"{PulseFrames[sharedFrameIdx % PulseFrames.Length]} {statusText}"); }
                     ThrottledRefresh();
                     continue;
                 }
@@ -880,7 +908,7 @@ public sealed class ChatLayout
                 content.Append(token);
 
                 // 实时刷新：消息 + 动画
-                lock (_layout) { UpdateMessages(content.ToString()); var pulse = PulseFrames[Interlocked.Increment(ref sharedFrameIdx) % PulseFrames.Length]; UpdateFooter("", $"{pulse} 处理中...  {statusText}"); }
+                lock (_layout) { UpdateMessages(content.ToString()); UpdateFooter("", $"{PulseFrames[sharedFrameIdx % PulseFrames.Length]} 处理中...  {statusText}"); }
                 ThrottledRefresh();
             }
         }

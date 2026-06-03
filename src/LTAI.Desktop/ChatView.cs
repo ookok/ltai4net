@@ -1211,6 +1211,74 @@ public sealed class ChatView : UserControl
                 }
                 return true;
 
+            case "models":
+            case "在线模型":
+            {
+                var lines = new List<string>();
+                // L0
+                var embedder = App.Services?.GetService(typeof(LTAI.AI.LocalEmbedder)) as LTAI.AI.LocalEmbedder;
+                if (embedder?.Available == true)
+                    lines.Add($"L0 嵌入: {embedder.CurrentModelName} ({embedder.Dim}d)");
+                else
+                    lines.Add("L0 嵌入: 未加载");
+                // L1/L2 from layers.json
+                var layersPath = Path.Combine(AppContext.BaseDirectory, ".livingtree", "layers.json");
+                if (File.Exists(layersPath))
+                {
+                    try
+                    {
+                        using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(layersPath));
+                        string? rp(System.Text.Json.JsonElement e) => e.TryGetProperty("Provider", out var x) ? x.GetString() : null;
+                        string? rm(System.Text.Json.JsonElement e) => e.TryGetProperty("Model", out var x) ? x.GetString() : null;
+                        if (doc.RootElement.TryGetProperty("l1", out var l1))
+                            lines.Add($"L1 标准: {rp(l1)} / {rm(l1)}");
+                        else lines.Add("L1 标准: 未配置 (输入 /model l1)");
+                        if (doc.RootElement.TryGetProperty("l2", out var l2))
+                            lines.Add($"L2 深度: {rp(l2)} / {rm(l2)}");
+                        else lines.Add("L2 深度: 未配置 (输入 /model l2)");
+                    }
+                    catch { lines.Add("配置解析失败"); }
+                }
+                else lines.Add("L1/L2: 未配置 (输入 /model l1)");
+                AddSystemBubble(string.Join("\n", lines));
+                return true;
+            }
+            case "model":
+            {
+                var embedder2 = App.Services?.GetService(typeof(LTAI.AI.LocalEmbedder)) as LTAI.AI.LocalEmbedder;
+                var parts2 = args.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
+                var sub = parts2.Length > 0 ? parts2[0].ToLowerInvariant() : "";
+                if (sub is "l1" or "l2")
+                {
+                    AddSystemBubble($"请使用 TUI 终端或 Desktop 配置面板设置 {sub.ToUpperInvariant()}\n" +
+                                    "快捷键: Ctrl+3 → LLM 配置面板 或 在终端运行 /model " + sub);
+                    return true;
+                }
+                // Show current status
+                var slines = new List<string>();
+                if (embedder2?.Available == true)
+                    slines.Add($"L0 嵌入: {embedder2.CurrentModelName}");
+                else
+                    slines.Add("L0 嵌入: 未加载");
+                var spath = Path.Combine(AppContext.BaseDirectory, ".livingtree", "layers.json");
+                if (File.Exists(spath))
+                {
+                    try
+                    {
+                        using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(spath));
+                        string? rp(System.Text.Json.JsonElement e) => e.TryGetProperty("Provider", out var x) ? x.GetString() : null;
+                        string? rm(System.Text.Json.JsonElement e) => e.TryGetProperty("Model", out var x) ? x.GetString() : null;
+                        if (doc.RootElement.TryGetProperty("l1", out var l1))
+                            slines.Add($"L1: {rp(l1)} / {rm(l1)}");
+                        if (doc.RootElement.TryGetProperty("l2", out var l2))
+                            slines.Add($"L2: {rp(l2)} / {rm(l2)}");
+                    }
+                    catch { }
+                }
+                slines.Add("配置: Ctrl+3 或终端 /model l1|l2");
+                AddSystemBubble(string.Join("\n", slines));
+                return true;
+            }
             case "snippet":
             case "snip":
             case "常用语":
@@ -1247,12 +1315,14 @@ public sealed class ChatView : UserControl
         sb.AppendLine("/new, /clear  — 新建会话");
         sb.AppendLine("/exit, /quit  — 退出应用");
         sb.AppendLine("/status       — 显示统计信息");
+        sb.AppendLine("/models       — 显示 L0/L1/L2 当前模型");
+        sb.AppendLine("/model l1|l2  — 配置 L1/L2 (或 Ctrl+3 面板)");
         sb.AppendLine("/pwd          — 显示当前目录");
         sb.AppendLine("/ls           — 列出当前目录");
         sb.AppendLine("/cd <路径>    — 切换工作目录");
         sb.AppendLine("/plan         — 查看计划状态");
         sb.AppendLine("/approve      — 批准当前计划");
-        sb.AppendLine("/snippet      — 常用语: list|save <key> <text>|use <key>|delete <key>|rename|edit");
+        sb.AppendLine("/snippet      — 常用语: list|save|use|delete|rename|edit");
         AddSystemBubble(sb.ToString().TrimEnd());
     }
 

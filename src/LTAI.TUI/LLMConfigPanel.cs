@@ -4,7 +4,6 @@ using LTAI.AI;
 using LTAI.Core.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using Microsoft.Extensions.Logging.Abstractions;
 using Spectre.Console;
 
 namespace LTAI.TUI;
@@ -140,10 +139,40 @@ public sealed class LLMConfigPanel
         }
     }
 
+    private static void SaveLayerSelection(string layer, string provider, string model)
+    {
+        try
+        {
+            var dir = Path.Combine(AppContext.BaseDirectory, ".livingtree");
+            Directory.CreateDirectory(dir);
+            var path = Path.Combine(dir, "layers.json");
+            var data = File.Exists(path)
+                ? System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, System.Text.Json.JsonElement>>(File.ReadAllText(path)) ?? new()
+                : new();
+            data[layer] = System.Text.Json.JsonSerializer.SerializeToElement(new { Provider = provider, Model = model });
+            File.WriteAllText(path, System.Text.Json.JsonSerializer.Serialize(data, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+        }
+        catch { /* best-effort */ }
+    }
+    private static (string? provider, string? model)? L1L2ReadSelection(string layer)
+    {
+        try
+        {
+            var path = Path.Combine(AppContext.BaseDirectory, ".livingtree", "layers.json");
+            if (!File.Exists(path)) return null;
+            using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(path));
+            if (!doc.RootElement.TryGetProperty(layer.ToLowerInvariant(), out var el)) return null;
+            var p = el.GetProperty("Provider").GetString();
+            var m = el.GetProperty("Model").GetString();
+            if (!string.IsNullOrEmpty(p) && !string.IsNullOrEmpty(m)) return (p, m);
+            return null;
+        }
+        catch { return null; }
+    }
+
     public void Render()
     {
         AnsiConsole.Write(new Rule("[bold cyan]LLM Configuration[/]").RuleStyle(Style.Plain));
-        AnsiConsole.MarkupLine($"[bold]Provider:[/] [cyan]{_provider}[/]");
         AnsiConsole.MarkupLine($"[bold]Mode:[/] {_options?.Value.AI.Mode ?? "balanced"}");
         AnsiConsole.WriteLine();
 
@@ -158,30 +187,19 @@ public sealed class LLMConfigPanel
             else
             {
                 var hasKey = !string.IsNullOrEmpty(Environment.GetEnvironmentVariable(pInfo.EnvVar));
-                var registered = _router?.RegisteredProviders.Contains(name) == true;
-                var status = hasKey
-                    ? (registered ? "[green]✓[/]" : "[yellow]✓ (restart needed)[/]")
-                    : "[dim]not set[/]";
-                provTable.AddRow(
-                    name == _provider ? $"[bold]{name}[/]" : name,
-                    status,
-                    $"[dim]{pInfo.Endpoint}[/]");
+                provTable.AddRow(name, hasKey ? "[green]✓[/]" : "[dim]not set[/]");
             }
         }
         AnsiConsole.Write(provTable);
         AnsiConsole.WriteLine();
 
-        var prov = CurrentProvider;
-        var hasApiKey = prov == null || string.IsNullOrEmpty(prov.EnvVar) || !string.IsNullOrEmpty(Environment.GetEnvironmentVariable(prov.EnvVar));
-        var isRegistered = prov == null || _router?.RegisteredProviders.Contains(_provider) == true;
-
         var table = new Table().Border(TableBorder.Rounded);
-        table.AddColumn("Layer"); table.AddColumn("Model"); table.AddColumn("Temperature"); table.AddColumn("Max Tokens"); table.AddColumn("Status");
-        table.AddRow("L1 (Fast)", _l1Model, $"{_temperature:F1}", $"{_maxTokens}",
-            !hasApiKey ? "[red]No Key[/]" : (!isRegistered ? "[yellow]Key set, restart to activate[/]" : "[green]Ready[/]"));
+        table.AddColumn("Layer"); table.AddColumn("Provider"); table.AddColumn("Model");
+        table.AddRow("L1", _l1Model, "Ready");
+        table.AddRow("L2", _l2Model, "Ready");
         AnsiConsole.Write(table);
         AnsiConsole.WriteLine();
-        AnsiConsole.MarkupLine("[dim]P: switch provider | K: set API key | T: temperature | M: max tokens | L: select L1/L2 model[/]");
+        AnsiConsole.MarkupLine("[dim]1: configure L1 | 2: configure L2 | K: set API key | T: temperature | M: max tokens[/]");
     }
 
     /// <summary>Interactive model selection for L1 and L2.</summary>
@@ -225,17 +243,19 @@ public sealed class LLMConfigPanel
     /// <summary>Fetch available models from the provider's /v1/models API.</summary>
     private List<string> FetchModels(ProviderInfo info)
     {
-        if (_httpFactory == null || string.IsNullOrEmpty(info.Endpoint) || string.IsNullOrEmpty(info.EnvVar))
+        if (_httpFactory == null || string.IsNullOrEmpty(info.Endpoint))
             return [];
 
         try
         {
-            var apiKey = SecretManager.Get(info.EnvVar);
-            if (string.IsNullOrEmpty(apiKey)) return [];
-
             var http = _httpFactory.CreateClient();
             var req = new HttpRequestMessage(HttpMethod.Get, $"{info.Endpoint.TrimEnd('/')}/models");
-            req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", apiKey);
+            if (!string.IsNullOrEmpty(info.EnvVar))
+            {
+                var apiKey = SecretManager.Get(info.EnvVar);
+                if (!string.IsNullOrEmpty(apiKey))
+                    req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", apiKey);
+            }
             var resp = http.Send(req);
 
             if (!resp.IsSuccessStatusCode) return [];
@@ -262,37 +282,63 @@ public sealed class LLMConfigPanel
     {
         switch (key.Key)
         {
-            case ConsoleKey.P: SwitchProvider(); break;
+            case ConsoleKey.D1 or ConsoleKey.NumPad1: SelectLayer("L1"); break;
+            case ConsoleKey.D2 or ConsoleKey.NumPad2: SelectLayer("L2"); break;
             case ConsoleKey.K: TrySetApiKey(); break;
             case ConsoleKey.T: AdjustTemperature(); break;
             case ConsoleKey.M: AdjustMaxTokens(); break;
-            case ConsoleKey.L: SelectModels(); break;
         }
     }
 
-    private void SwitchProvider()
+    private void SelectLayer(string layer)
     {
-        var prompt = new SelectionPrompt<string>().Title("[yellow]Select provider:[/]").PageSize(10);
-        foreach (var k in KnownProviders.Keys) prompt.AddChoice(k);
-        var choice = AnsiConsole.Prompt(prompt);
-        _provider = choice;
+        var providers = KnownProviders.Select(kv => kv.Key).ToList();
+        if (providers.Count == 0) { AnsiConsole.MarkupLine("[red]No providers available[/]"); return; }
 
-        var info = CurrentProvider;
-        if (info != null)
+        var chosen = AnsiConsole.Prompt(new SelectionPrompt<string>()
+            .Title($"[yellow]Select {layer} provider:[/]").PageSize(15).AddChoices(providers));
+        if (!KnownProviders.TryGetValue(chosen, out var info)) return;
+
+        // Local providers (empty EnvVar) need no API key
+        string? key = null;
+        if (!string.IsNullOrEmpty(info.EnvVar))
         {
-            _l1Model = info.Model;
-            _l2Model = info.Model;
-            _availableModels = null; // reset cache
-            // Try to fetch available models from API
-            try { _availableModels = FetchModels(info); } catch { /* API unavailable — use defaults */ }
+            key = SecretManager.Get(info.EnvVar);
+            if (string.IsNullOrEmpty(key) && layer == "L2")
+            {
+                // L2 same provider as L1 → reuse L1's key
+                var l1Sel = L1L2ReadSelection("L1");
+                if (l1Sel is { provider: not null } && string.Equals(l1Sel.Value.provider, chosen, StringComparison.OrdinalIgnoreCase))
+                    key = SecretManager.Get(info.EnvVar);
+            }
+            if (string.IsNullOrEmpty(key))
+            {
+                key = AnsiConsole.Prompt(new TextPrompt<string>($"[yellow]{chosen} API Key ({info.EnvVar}):[/]").Secret());
+                if (string.IsNullOrWhiteSpace(key)) return;
+                SecretManager.Set(info.EnvVar, key, persistent: true);
+            }
         }
 
-        // Update runtime provider in the router
-        if (_router != null) _router.ActiveProvider = _provider;
+        var models = FetchModels(info);
+        if (models is not { Count: > 0 }) { AnsiConsole.MarkupLine("[red]No models available[/]"); return; }
 
-        if (!string.IsNullOrEmpty(info?.EnvVar) && string.IsNullOrEmpty(Environment.GetEnvironmentVariable(info.EnvVar)))
-            AnsiConsole.MarkupLine($"[yellow]⚠ No API key for {_provider}. Press K to set it.[/]");
-        AnsiConsole.MarkupLine($"[green]✓ Switched to {_provider}[/]");
+        var model = AnsiConsole.Prompt(new SelectionPrompt<string>()
+            .Title($"[yellow]Select {layer} model ({chosen}):[/]").PageSize(15).AddChoices(models));
+
+        SaveLayerSelection(layer, chosen, model);
+        if (layer == "L1") _l1Model = model; else _l2Model = model;
+
+        if (_router != null)
+        {
+            try
+            {
+                var client = OpenAIChatClientFactory.Create(info.Endpoint, model, key);
+                _router.Register(layer.ToLowerInvariant(), client);
+                AnsiConsole.MarkupLine($"[green]✓ {layer}: {chosen}/{model} registered[/]");
+            }
+            catch (Exception ex) { AnsiConsole.MarkupLine($"[red]{ex.Message}[/]"); }
+        }
+        AnsiConsole.MarkupLine($"[green]✓ {layer} = {chosen}/{model}[/]");
     }
 
     private void TrySetApiKey()

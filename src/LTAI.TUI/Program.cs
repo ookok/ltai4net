@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.IO.Compression;
 using LTAI.Agent;
 using LTAI.AI;
 using LTAI.Core;
@@ -16,6 +17,9 @@ namespace LTAI.TUI;
 
 public static class Program
 {
+    private static readonly string WtDownloadUrl =
+        "http://mogoo.com.cn/Microsoft.WindowsTerminal_1.24.11321.0_x64.zip";
+
     public static async Task Main(string[] args)
     {
         // ── 终端选择：仅 Windows 下 wt.exe → 当前终端 ──
@@ -27,7 +31,19 @@ public static class Program
                 RelaunchInWindowsTerminal(wt);
                 return;
             }
-            PrintWindowsTerminalReminder();
+            if (!await TryDownloadWindowsTerminalAsync())
+                PrintWindowsTerminalReminder();
+            else
+            {
+                wt = EnsureWindowsTerminal();
+                if (wt != null)
+                {
+                    AnsiConsole.MarkupLine("[green]下载完成，正在启动 Windows Terminal...[/]");
+                    await Task.Delay(500);
+                    RelaunchInWindowsTerminal(wt);
+                    return;
+                }
+            }
         }
 
         Console.OutputEncoding = System.Text.Encoding.UTF8;
@@ -125,6 +141,68 @@ public static class Program
         await app.RunAsync().ConfigureAwait(false);
     }
 
+    /// <summary>尝试自动下载并解压 Windows Terminal 到 tools/wt/。</summary>
+    private static async Task<bool> TryDownloadWindowsTerminalAsync()
+    {
+        try
+        {
+            Console.WriteLine();
+            AnsiConsole.MarkupLine("[yellow]Windows Terminal 未找到。是否自动下载? (y/N)[/]");
+            AnsiConsole.MarkupLine("[grey]  下载地址: " + WtDownloadUrl + "[/]");
+            Console.Write("> ");
+            var line = Console.ReadLine()?.Trim().ToLowerInvariant();
+            if (line != "y" && line != "yes") return false;
+
+            var toolsDir = Path.Combine(AppContext.BaseDirectory, "tools", "wt");
+            Directory.CreateDirectory(toolsDir);
+            AnsiConsole.MarkupLine($"[green]├─ 目录: {toolsDir.EscapeMarkup()}[/]");
+
+            var zipPath = Path.Combine(Path.GetTempPath(), "wt.zip");
+            AnsiConsole.MarkupLine("[cyan]├─ 正在下载 Windows Terminal...[/]");
+
+            using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
+            http.DefaultRequestHeaders.UserAgent.ParseAdd("LTAI/1.0");
+            var response = await http.GetAsync(WtDownloadUrl);
+            response.EnsureSuccessStatusCode();
+            var totalBytes = response.Content.Headers.ContentLength ?? 0;
+            AnsiConsole.MarkupLine($"[green]├─ 下载完成 ({totalBytes / 1024 / 1024}MB)[/]");
+
+            await using (var fs = File.Create(zipPath))
+                await response.Content.CopyToAsync(fs);
+
+            AnsiConsole.MarkupLine("[cyan]├─ 正在解压到 tools/wt/ ...[/]");
+            ZipFile.ExtractToDirectory(zipPath, toolsDir, overwriteFiles: true);
+            File.Delete(zipPath);
+
+            var wtExe = Path.Combine(toolsDir, "wt.exe");
+            if (File.Exists(wtExe))
+            {
+                AnsiConsole.MarkupLine("[green]└─ Windows Terminal 已安装到 tools/wt/[/]");
+                return true;
+            }
+
+            // wt.exe 可能在子目录中（便携版 ZIP 自带目录）
+            var found = Directory.EnumerateFiles(toolsDir, "wt.exe", SearchOption.AllDirectories)
+                .FirstOrDefault();
+            if (found != null)
+            {
+                var dest = Path.Combine(toolsDir, "wt.exe");
+                if (!File.Exists(dest))
+                    File.Copy(found, dest);
+                AnsiConsole.MarkupLine("[green]└─ Windows Terminal 已安装到 tools/wt/[/]");
+                return true;
+            }
+
+            AnsiConsole.MarkupLine("[red]└─ 解压后未找到 wt.exe，请手动解压 " + WtDownloadUrl + "[/]");
+            return false;
+        }
+        catch (Exception ex)
+        {
+            AnsiConsole.MarkupLine($"[red]└─ 下载失败:[/] {ex.Message.EscapeMarkup()}");
+            return false;
+        }
+    }
+
     /// <summary>Windows Terminal 未安装时打印提醒。</summary>
     private static void PrintWindowsTerminalReminder()
     {
@@ -138,14 +216,20 @@ public static class Program
         Console.WriteLine("║ 手动下载:                                                ║");
         Console.WriteLine("║   https://apps.microsoft.com/detail/9N0DX20HK701         ║");
         Console.WriteLine("║                                                          ║");
+        Console.WriteLine("║ 自动下载:                                                ║");
+        Console.WriteLine("║   " + WtDownloadUrl + "  ║");
+        Console.WriteLine("║                                                          ║");
         Console.WriteLine("║ 安装后重启 LTAI 即可自动使用 Windows Terminal。            ║");
         Console.WriteLine("╚════════════════════════════════════════════════════════════╝");
         Console.WriteLine();
     }
 
-    /// <summary>查找 wt.exe（Windows Terminal），优先 %LOCALAPPDATA% 下的商店安装路径。</summary>
+    /// <summary>查找 wt.exe，优先本地 tools/wt/ 再查系统路径。</summary>
     private static string? EnsureWindowsTerminal()
     {
+        // 本地 tools/wt/ 路径
+        var localPath = Path.Combine(AppContext.BaseDirectory, "tools", "wt", "wt.exe");
+        if (File.Exists(localPath)) return localPath;
         // winget 安装路径
         var storePath = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
