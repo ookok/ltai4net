@@ -26,18 +26,6 @@ public static class ServiceCollectionExtensions
     public static IServiceCollection AddLTAIAgent(this IServiceCollection services)
         => AddLTAIAgent(services, out _);
 
-    static ServiceCollectionExtensions()
-    {
-        // Defensive: MAF AIJsonUtilities.DefaultOptions does NOT include
-        // NumberHandling.AllowReadingFromString by default. Chinese LLMs sometimes
-        // emit string values for numeric / boolean parameters (e.g. "5" instead of 5,
-        // "true" instead of true). Mutating the singleton is global but acceptable
-        // in a single-process LTAI host. Replaces the deleted ToolCallRepairer
-        // type-coercion path (P3 cleanup) for the most common case.
-        AIJsonUtilities.DefaultOptions.NumberHandling =
-            System.Text.Json.Serialization.JsonNumberHandling.AllowReadingFromString;
-    }
-
     /// <summary>
     /// Variant that also returns the list of registered agent names so callers (e.g. LTAI.Web)
     /// can wire up protocol endpoints (A2A / AGUI / OpenAI) without having to resolve every
@@ -125,7 +113,7 @@ public static class ServiceCollectionExtensions
         {
             var all = sp.GetKeyedServices<AIAgent>(KeyedService.AnyKey)
                 .ToDictionary(a => a.Name!, StringComparer.OrdinalIgnoreCase);
-            return new AgentWorkflows(all.Values, all["router"],
+            return new AgentWorkflows(all.Values, all["LTAI-Router"],
                 sp.GetRequiredService<ILogger<AgentWorkflows>>(),
                 sp.GetRequiredService<DecisionTreeRouter>(),
                 workflowRegistry: sp.GetService<YAMLWorkflowRegistry>());
@@ -229,9 +217,9 @@ public static class ServiceCollectionExtensions
             var all = sp.GetKeyedServices<AIAgent>(KeyedService.AnyKey)
                 .ToDictionary(a => a.Name!, StringComparer.OrdinalIgnoreCase);
             var wf = sp.GetRequiredService<AgentWorkflows>();
-            var chat = all["chat"];
+            var chat = all["LTAI-Chat"];
             // Pro agent for complex task auto-upgrade (uses "deepseek-pro" provider)
-            var proAgent = all.TryGetValue("chat-pro", out var p) ? p : chat;
+            var proAgent = all.TryGetValue("LTAI-Chat-Pro", out var p) ? p : chat;
             var budget = sp.GetService<LTAI.AI.BudgetTracker>();
             return new ChatAgent(chat, proAgent, wf, budget,
                 localEmbedder: sp.GetService<LTAI.AI.LocalEmbedder>(),
@@ -295,6 +283,8 @@ public static class ServiceCollectionExtensions
                     Temperature: (float?)def.Temperature,
                     TopP: (float?)def.TopP);
             }
+            // Internal router agent (not from files) — used by AgentWorkflows for handoff routing
+            yield return new("LTAI-Router", "任务调度器(无工具)", false, false, false, false, null, 0.3f, 0.95f);
             yield break;
         }
 

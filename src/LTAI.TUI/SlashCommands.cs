@@ -90,8 +90,6 @@ public static class SlashCommands
         new("mode",    "代码",  "编辑模式: review|auto", "", "review|auto"),
         new("undo",    "代码",  "撤销上次编辑", "撤销"),
         new("ls",      "文件",  "列出当前目录内容", "dir,列表"),
-        new("undo",    "代码",  "撤销上次编辑", "撤销"),
-        new("ls",      "文件",  "列出当前目录内容", "dir,列表"),
         new("cd",      "文件",  "切换工作目录", "", "目录路径"),
         new("pwd",     "文件",  "显示当前目录", "目录"),
         new("approve", "计划",  "批准当前计划并开始执行", "yes,confirm,批准,确认"),

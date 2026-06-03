@@ -10,6 +10,7 @@ using Microsoft.Agents.AI.Hosting;
 using Microsoft.Agents.AI.Hosting.AGUI.AspNetCore;
 using Microsoft.Data.Sqlite;
 using OpenTelemetry.Trace;
+using System.Threading.Channels;
 using Serilog;
 
 Log.Logger = new LoggerConfiguration()
@@ -186,7 +187,6 @@ try
             // error to the client so it can show a meaningful toast.
             return Results.Problem($"Reload failed: {ex.Message}", statusCode: 422);
         }
-        }
     });
 
     // ── P16.3: SSE event stream for workflow hot-reload notifications ──
@@ -251,22 +251,6 @@ try
             try { await keepalive.WaitAsync(TimeSpan.FromSeconds(1)); } catch { }
         }
     });
-
-    // Helper: IWorkflowSubscriber that writes JSON SSE events to a Channel<string>.
-    sealed class SseWorkflowSubscriber(System.Threading.Channels.ChannelWriter<string> writer) : LTAI.Agent.Workflows.IWorkflowSubscriber
-    {
-        public void OnReloaded(LTAI.Agent.Workflows.WorkflowReloadEvent evt)
-        {
-            var json = System.Text.Json.JsonSerializer.Serialize(new { evt.Name, evt.Type, evt.Version, evt.FilePath, reloadedAtUtc = evt.ReloadedAtUtc });
-            writer.TryWrite($"event: reloaded\ndata: {json}\n\n");
-        }
-
-        public void OnLoadFailed(LTAI.Agent.Workflows.WorkflowLoadFailedEvent evt)
-        {
-            var json = System.Text.Json.JsonSerializer.Serialize(new { evt.Name, evt.Type, evt.FilePath, evt.Reason, failedAtUtc = evt.FailedAtUtc });
-            writer.TryWrite($"event: load_failed\ndata: {json}\n\n");
-        }
-    }
 
     // ── P16.1: Pipeline REST surface (sequential/concurrent) ──
     app.MapGet("/ltai/v1/pipelines", (LTAI.Agent.Workflows.YAMLWorkflowRegistry? reg) =>
@@ -472,4 +456,20 @@ catch (Exception ex)
 finally
 {
     Log.CloseAndFlush();
+}
+
+// Helper: IWorkflowSubscriber that writes JSON SSE events to a Channel<string>.
+sealed class SseWorkflowSubscriber(System.Threading.Channels.ChannelWriter<string> writer) : LTAI.Agent.Workflows.IWorkflowSubscriber
+{
+    public void OnReloaded(LTAI.Agent.Workflows.WorkflowReloadEvent evt)
+    {
+        var json = System.Text.Json.JsonSerializer.Serialize(new { evt.Name, evt.Type, evt.Version, evt.FilePath, reloadedAtUtc = evt.ReloadedAtUtc });
+        writer.TryWrite($"event: reloaded\ndata: {json}\n\n");
+    }
+
+    public void OnLoadFailed(LTAI.Agent.Workflows.WorkflowLoadFailedEvent evt)
+    {
+        var json = System.Text.Json.JsonSerializer.Serialize(new { evt.Name, evt.Type, evt.FilePath, evt.Reason, failedAtUtc = evt.FailedAtUtc });
+        writer.TryWrite($"event: load_failed\ndata: {json}\n\n");
+    }
 }

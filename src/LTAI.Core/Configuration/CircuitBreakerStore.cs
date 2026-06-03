@@ -38,6 +38,8 @@ public sealed class CircuitBreakerStore : IDisposable
 
     public CircuitBreakerStore(string dbPath)
     {
+        var dir = Path.GetDirectoryName(dbPath);
+        if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
         _conn = new SqliteConnection($"Data Source={dbPath}");
         _conn.Open();
         using var cmd = _conn.CreateCommand();

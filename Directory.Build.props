@@ -10,6 +10,9 @@
     <TieredCompilationQuickJit>true</TieredCompilationQuickJit>
     <InvariantGlobalization>false</InvariantGlobalization>
     <Deterministic>true</Deterministic>
+
+    <!-- 跳过 extern 项目重编译（~64s → ~7s）。extern 更新后用 -p:BuildProjectReferences=true 全量构建一次即可。 -->
+    <BuildProjectReferences>false</BuildProjectReferences>
     <ContinuousIntegrationBuild Condition="'$(CI)' == 'true'">true</ContinuousIntegrationBuild>
     <ModuleSkipLocalsInit>true</ModuleSkipLocalsInit>
   </PropertyGroup>
