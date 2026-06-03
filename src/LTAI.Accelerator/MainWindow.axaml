@@ -57,14 +57,25 @@
     <!-- Action buttons -->
     <StackPanel Grid.Row="3" Margin="0,24,0,20" Spacing="10"
                 HorizontalAlignment="Center">
-      <Button Name="BtnStart" Content="▶ 开始加速" Width="220" Height="46"
+      <Button Name="BtnStart" Width="220" Height="46"
               FontSize="16" Click="OnStartClick"
               Background="#1a73e8" Foreground="White" BorderThickness="0"
-              CornerRadius="23"/>
-      <Button Name="BtnStop" Content="■ 停止加速" Width="220" Height="46"
+              CornerRadius="23" HorizontalContentAlignment="Center" VerticalContentAlignment="Center">
+        <StackPanel Orientation="Horizontal" Spacing="6" HorizontalAlignment="Center" VerticalAlignment="Center">
+          <TextBlock Text="▶" FontSize="14" VerticalAlignment="Center"/>
+          <TextBlock Text="开始加速" FontSize="16" VerticalAlignment="Center"/>
+        </StackPanel>
+      </Button>
+      <Button Name="BtnStop" Width="220" Height="46"
               FontSize="16" Click="OnStopClick"
               Background="#c62828" Foreground="White"
-              BorderThickness="0" CornerRadius="23" IsEnabled="False"/>
+              BorderThickness="0" CornerRadius="23" IsEnabled="False"
+              HorizontalContentAlignment="Center" VerticalContentAlignment="Center">
+        <StackPanel Orientation="Horizontal" Spacing="6" HorizontalAlignment="Center" VerticalAlignment="Center">
+          <TextBlock Text="■" FontSize="14" VerticalAlignment="Center"/>
+          <TextBlock Text="停止加速" FontSize="16" VerticalAlignment="Center"/>
+        </StackPanel>
+      </Button>
     </StackPanel>
   </Grid>
 </Window>
