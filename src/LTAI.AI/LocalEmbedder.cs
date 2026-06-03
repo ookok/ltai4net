@@ -88,7 +88,8 @@ public sealed class LocalEmbedder : IDisposable
             VocabUrl: "https://hf-mirror.com/Xenova/all-MiniLM-L6-v2/resolve/main/vocab.txt",
             QuantizedModelUrl: "https://hf-mirror.com/Xenova/all-MiniLM-L6-v2/resolve/main/onnx/model_int8.onnx",
             QuantizedFileName: "model.int8.onnx",
-            Dimension: 384
+            Dimension: 384,
+            FallbackBaseUrl: "http://mogoo.com.cn/minilm-l6-v2"
         ),
         ["bge-small-zh"] = new(
             DisplayName: "BAAI/bge-small-zh-v1.5",
@@ -97,7 +98,8 @@ public sealed class LocalEmbedder : IDisposable
             VocabUrl: "https://hf-mirror.com/Xenova/bge-small-zh-v1.5/resolve/main/vocab.txt",
             QuantizedModelUrl: "https://hf-mirror.com/Xenova/bge-small-zh-v1.5/resolve/main/onnx/model_int8.onnx",
             QuantizedFileName: "model.int8.onnx",
-            Dimension: 384
+            Dimension: 384,
+            FallbackBaseUrl: "http://mogoo.com.cn/bge-small-zh"
         ),
         ["bge-small-en"] = new(
             DisplayName: "BAAI/bge-small-en-v1.5",
@@ -106,7 +108,8 @@ public sealed class LocalEmbedder : IDisposable
             VocabUrl: "https://hf-mirror.com/Xenova/bge-small-en-v1.5/resolve/main/vocab.txt",
             QuantizedModelUrl: "https://hf-mirror.com/Xenova/bge-small-en-v1.5/resolve/main/onnx/model_int8.onnx",
             QuantizedFileName: "model.int8.onnx",
-            Dimension: 384
+            Dimension: 384,
+            FallbackBaseUrl: "http://mogoo.com.cn/bge-small-en"
         ),
     };
 
@@ -1000,23 +1003,27 @@ public sealed class LocalEmbedder : IDisposable
         var http = httpClient ?? new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
         var disposeHttp = httpClient == null;
 
+        // Try primary URLs; if all fail, try fallback
+        var triedFallback = false;
         try
         {
-            // Download vocab (always, regardless of quantization)
-            using (var resp = await http.GetAsync(info.VocabUrl).ConfigureAwait(false))
+            try
             {
-                resp.EnsureSuccessStatusCode();
-                using var fs = new FileStream(vocabFile, FileMode.Create, FileAccess.Write, FileShare.None);
-                await resp.Content.CopyToAsync(fs).ConfigureAwait(false);
+                await DownloadVocabAsync(http, info.VocabUrl, vocabFile).ConfigureAwait(false);
+                var modelUrl = wantQuant ? info.QuantizedModelUrl! : info.ModelUrl;
+                await DownloadModelFileAsync(http, modelUrl, activeFile!).ConfigureAwait(false);
             }
-
-            // Download exactly one model variant
-            var modelUrl = wantQuant ? info.QuantizedModelUrl! : info.ModelUrl;
-            using (var resp = await http.GetAsync(modelUrl).ConfigureAwait(false))
+            catch when (!triedFallback && info.FallbackBaseUrl != null)
             {
-                resp.EnsureSuccessStatusCode();
-                using var fs = new FileStream(activeFile!, FileMode.Create, FileAccess.Write, FileShare.None);
-                await resp.Content.CopyToAsync(fs).ConfigureAwait(false);
+                triedFallback = true;
+                // Clean up partial primary download
+                if (File.Exists(vocabFile)) try { File.Delete(vocabFile); } catch { }
+                if (activeFile != null && File.Exists(activeFile)) try { File.Delete(activeFile); } catch { }
+
+                var fb = info.FallbackBaseUrl.TrimEnd('/');
+                var modelFile = wantQuant ? info.QuantizedFileName ?? "model_int8.onnx" : "model.onnx";
+                await DownloadVocabAsync(http, $"{fb}/vocab.txt", vocabFile).ConfigureAwait(false);
+                await DownloadModelFileAsync(http, $"{fb}/{modelFile}", activeFile!).ConfigureAwait(false);
             }
 
             return true;
@@ -1031,6 +1038,22 @@ public sealed class LocalEmbedder : IDisposable
         {
             if (disposeHttp) http.Dispose();
         }
+    }
+
+    private static async Task DownloadVocabAsync(HttpClient http, string url, string destPath)
+    {
+        using var resp = await http.GetAsync(url).ConfigureAwait(false);
+        resp.EnsureSuccessStatusCode();
+        using var fs = new FileStream(destPath, FileMode.Create, FileAccess.Write, FileShare.None);
+        await resp.Content.CopyToAsync(fs).ConfigureAwait(false);
+    }
+
+    private static async Task DownloadModelFileAsync(HttpClient http, string url, string destPath)
+    {
+        using var resp = await http.GetAsync(url).ConfigureAwait(false);
+        resp.EnsureSuccessStatusCode();
+        using var fs = new FileStream(destPath, FileMode.Create, FileAccess.Write, FileShare.None);
+        await resp.Content.CopyToAsync(fs).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -1089,6 +1112,8 @@ public sealed class LocalEmbedder : IDisposable
     ///   quantized model as (e.g. <c>model.int8.onnx</c>). Null when no
     ///   quantized URL is available.</param>
     /// <param name="Dimension">Embedding dimension (e.g. 384).</param>
+    /// <param name="FallbackBaseUrl">Alternative download base (e.g. http://mogoo.com.cn/minilm-l6-v2)
+    ///   tried when primary <c>ModelUrl</c>/<c>QuantizedModelUrl</c> fails.</param>
     public sealed record ModelInfo(
         string DisplayName,
         string Description,
@@ -1096,7 +1121,8 @@ public sealed class LocalEmbedder : IDisposable
         string VocabUrl,
         string? QuantizedModelUrl,
         string? QuantizedFileName,
-        int Dimension);
+        int Dimension,
+        string? FallbackBaseUrl = null);
 
     /// <summary>Information about an available (or downloadable) model.</summary>
     public sealed record AvailableModelInfo(string Id, string DisplayName, string Description, int Dimension, bool Downloaded, bool QuantizedDownloaded);

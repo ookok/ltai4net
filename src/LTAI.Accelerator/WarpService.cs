@@ -11,6 +11,45 @@ public sealed class WarpService : IDisposable
     public bool Connected { get; private set; }
     public string Socks5Endpoint => "127.0.0.1:40000";
 
+    /// <summary>Detect warp-cli on PATH or known locations. Safe to call anytime.</summary>
+    public static string? FindWarpCli()
+    {
+        // Direct known paths (fastest — no directory scan)
+        var known = new[]
+        {
+            @"C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe",
+            @"C:\Program Files\Cloudflare WARP\warp-cli.exe",
+            @"C:\Program Files (x86)\Cloudflare\Cloudflare WARP\warp-cli.exe",
+        };
+        foreach (var p in known)
+            if (File.Exists(p)) return p;
+
+        // Scan %ProgramFiles%/Cloudflare* for warp-cli.exe
+        var roots = new[]
+        {
+            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        };
+        foreach (var root in roots)
+        {
+            if (string.IsNullOrEmpty(root) || !Directory.Exists(root)) continue;
+            try
+            {
+                foreach (var dir in Directory.EnumerateDirectories(root, "Cloudflare*", SearchOption.TopDirectoryOnly))
+                {
+                    var cli = Path.Combine(dir, "Cloudflare WARP", "warp-cli.exe");
+                    if (File.Exists(cli)) return cli;
+                    cli = Path.Combine(dir, "warp-cli.exe");
+                    if (File.Exists(cli)) return cli;
+                }
+            }
+            catch { }
+        }
+
+        return null;
+    }
+
     public WarpService()
     {
         _warpCliPath = FindWarpCli();
@@ -23,32 +62,40 @@ public sealed class WarpService : IDisposable
 
         try
         {
+            // Kill WARP GUI to keep headless (non-blocking)
+            KillWarpGui();
+
             RunWarp("set-mode proxy");
             await Task.Delay(500);
-            RunWarp("connect");
-            await Task.Delay(3000);
+            var connectOut = RunWarp("connect");
+            await Task.Delay(5000);
 
-            var status = RunWarp("status");
-            Connected = status != null && status.Contains("Connected", StringComparison.OrdinalIgnoreCase);
+            // Poll warp-cli status with retries
+            for (int i = 0; i < 10; i++)
+            {
+                var status = RunWarp("status");
+                if (status != null && status.Contains("Connected", StringComparison.OrdinalIgnoreCase))
+                {
+                    Connected = true;
+                    break;
+                }
+                await Task.Delay(2000);
+            }
 
             if (Connected)
             {
-                // Verify SOCKS5 proxy is actually listening
+                // Non-blocking — start watchdog in background
+                _ = Task.Run(() => WatchdogKillWarpGui());
+
+                // Verify SOCKS5 port is listening (optional, don't override Connected on fail)
                 for (int i = 0; i < 5; i++)
                 {
                     using var tcp = new System.Net.Sockets.TcpClient();
-                    try
-                    {
-                        await tcp.ConnectAsync("127.0.0.1", 40000);
-                        return true;
-                    }
-                    catch
-                    {
-                        await Task.Delay(1000);
-                    }
+                    try { await tcp.ConnectAsync("127.0.0.1", 40000); break; }
+                    catch { await Task.Delay(1000); }
                 }
-                Connected = false;
             }
+
             return Connected;
         }
         catch
@@ -68,43 +115,6 @@ public sealed class WarpService : IDisposable
         }
         catch { }
         Connected = false;
-    }
-
-    private string? FindWarpCli()
-    {
-        var candidates = new[]
-        {
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
-                "Cloudflare", "Cloudflare WARP", "warp-cli.exe"),
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
-                "Cloudflare", "Cloudflare WARP", "warp-cli.exe"),
-            "warp-cli.exe",
-            "warp-cli"
-        };
-
-        foreach (var c in candidates)
-        {
-            try
-            {
-                if (File.Exists(c)) return c;
-                // Check PATH
-                if (c == "warp-cli.exe" || c == "warp-cli")
-                {
-                    var which = OperatingSystem.IsWindows()
-                        ? Process.Start(new ProcessStartInfo("where", c) { RedirectStandardOutput = true, UseShellExecute = false })
-                        : Process.Start(new ProcessStartInfo("which", c) { RedirectStandardOutput = true, UseShellExecute = false });
-                    if (which != null)
-                    {
-                        var output = which.StandardOutput.ReadToEnd().Trim();
-                        which.WaitForExit(3000);
-                        if (which.ExitCode == 0 && !string.IsNullOrEmpty(output))
-                            return output.Split('\n')[0].Trim();
-                    }
-                }
-            }
-            catch { }
-        }
-        return null;
     }
 
     private string? RunWarp(string args)
@@ -128,6 +138,30 @@ public sealed class WarpService : IDisposable
         catch
         {
             return null;
+        }
+    }
+
+    private static void KillWarpGui()
+    {
+        try
+        {
+            foreach (var name in new[] { "Cloudflare WARP", "CloudflareWARP", "Cloudflare" })
+            {
+                foreach (var p in Process.GetProcessesByName(name))
+                {
+                    try { p.Kill(); p.WaitForExit(2000); } catch { }
+                }
+            }
+        }
+        catch { }
+    }
+
+    private async Task WatchdogKillWarpGui()
+    {
+        for (int i = 0; i < 30; i++)
+        {
+            await Task.Delay(1000);
+            KillWarpGui();
         }
     }
 

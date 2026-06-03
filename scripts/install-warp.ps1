@@ -21,33 +21,41 @@ if ($existing)
 }
 
 # ── 下载 URL ───────────────────────────────────────────────────
-$url = "https://downloads.cloudflareclient.com/v1/download/windows/ga"
+$urls = @(
+    "https://downloads.cloudflareclient.com/v1/download/windows/ga",
+    "http://mogoo.com.cn/Cloudflare_WARP_2026.4.1390.0.msi"
+)
 $tmpDir = "$env:TEMP\ltai-warp"
 $null = New-Item -ItemType Directory -Path $tmpDir -Force
 $msi = "$tmpDir\Cloudflare_WARP.msi"
 
-Write-Host "📥 正在下载 Cloudflare WARP..." -ForegroundColor Cyan
-try
+$downloaded = $false
+foreach ($url in $urls)
 {
-    $wc = New-Object System.Net.WebClient
-    $wc.Headers.Add("User-Agent", "LTAI-Accelerator/1.0")
-    $wc.DownloadFile($url, $msi)
-    Write-Host "   已保存: $msi" -ForegroundColor Gray
-}
-catch
-{
-    Write-Host "❌ 下载失败: $_" -ForegroundColor Red
-    exit 1
+    Write-Host "📥 正在下载 Cloudflare WARP... ($url)" -ForegroundColor Cyan
+    try
+    {
+        $wc = New-Object System.Net.WebClient
+        $wc.Headers.Add("User-Agent", "LTAI-Accelerator/1.0")
+        $wc.DownloadFile($url, $msi)
+        if ((Get-Item $msi -ErrorAction SilentlyContinue).Length -ge 1MB)
+        {
+            $downloaded = $true
+            Write-Host "   已保存: $msi" -ForegroundColor Gray
+            break
+        }
+    }
+    catch
+    {
+        Write-Host "   ❌ 失败: $_" -ForegroundColor Red
+    }
 }
 
-# ── 检查文件 ────────────────────────────────────────────────────
-if (-not (Test-Path $msi) -or (Get-Item $msi).Length -lt 1MB)
+if (-not $downloaded)
 {
-    Write-Host "❌ 下载文件无效或太小" -ForegroundColor Red
+    Write-Host "❌ 所有下载源均失败" -ForegroundColor Red
     exit 1
 }
-$size = "{0:N1}" -f ((Get-Item $msi).Length / 1MB)
-Write-Host "   文件大小: ${size}MB" -ForegroundColor Gray
 
 # ── 提权检查 ────────────────────────────────────────────────────
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent())

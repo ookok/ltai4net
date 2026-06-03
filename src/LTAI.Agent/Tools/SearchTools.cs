@@ -11,12 +11,15 @@ namespace LTAI.Agent.Tools;
 internal static class RipgrepDetector
 {
     private static bool? _available;
+    private static string? _rgPath;
     internal static bool IsAvailable => _available ??= ProbeRg();
+    internal static string? RgPath => _rgPath;
     internal static string Suggestion =>
-        "考虑使用 rg(ripgrep) 替代内置搜索，速度更快且支持正则。下载地址：https://github.com/BurntSushi/ripgrep";
+        "考虑使用 rg(ripgrep) 替代内置搜索，速度更快且支持正则。下载地址：https://github.com/BurntSushi/ripgrep 或 http://mogoo.com.cn/rg.exe";
 
     private static bool ProbeRg()
     {
+        // 1. Check PATH first (fastest, user-installed)
         try
         {
             using var p = Process.Start(new ProcessStartInfo
@@ -28,11 +31,41 @@ internal static class RipgrepDetector
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
             });
-            if (p == null) return false;
-            var ok = p.WaitForExit(2000) && p.ExitCode == 0;
-            return ok;
+            if (p != null && p.WaitForExit(2000) && p.ExitCode == 0)
+            {
+                _rgPath = "rg";
+                return true;
+            }
         }
-        catch { return false; }
+        catch { }
+
+        // 2. Check models/rg/rg.exe (build target auto-downloads here)
+        try
+        {
+            var local = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "models", "rg", "rg.exe");
+            if (!File.Exists(local))
+                local = Path.Combine(AppContext.BaseDirectory, "models", "rg", "rg.exe");
+            if (File.Exists(local))
+            {
+                using var p = Process.Start(new ProcessStartInfo
+                {
+                    FileName = local,
+                    Arguments = "--version",
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                });
+                if (p != null && p.WaitForExit(2000) && p.ExitCode == 0)
+                {
+                    _rgPath = local;
+                    return true;
+                }
+            }
+        }
+        catch { }
+
+        return false;
     }
 }
 
@@ -93,7 +126,7 @@ public sealed class SearchTools
 
         var psi = new ProcessStartInfo
         {
-            FileName = "rg",
+            FileName = RipgrepDetector.RgPath ?? "rg",
             Arguments = string.Join(" ", args.Select(a => a.Contains(' ') ? $"\"{a}\"" : a)),
             UseShellExecute = false,
             CreateNoWindow = true,

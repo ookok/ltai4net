@@ -17,6 +17,8 @@ public sealed class ProxyService : IDisposable
     public bool IsRunning => _running;
     public DnsOverHttps Dns => _dns;
     public WarpService Warp => _warp;
+    /// <summary>Non-null when warp is available; await for connection result.</summary>
+    public Task<bool>? WarpConnectTask { get; private set; }
 
     public ProxyService(int port)
     {
@@ -35,7 +37,10 @@ public sealed class ProxyService : IDisposable
 
         // Try Warp in background (don't block proxy startup)
         if (_warp.Available)
-            _ = _warp.ConnectAsync();
+        {
+            WarpConnectTask = _warp.ConnectAsync();
+            _ = WarpConnectTask;
+        }
 
         _ = AcceptLoopAsync(_cts.Token);
     }
