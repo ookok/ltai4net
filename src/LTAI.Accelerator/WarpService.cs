@@ -62,16 +62,15 @@ public sealed class WarpService : IDisposable
 
         try
         {
-            // Kill WARP GUI to keep headless (non-blocking)
             KillWarpGui();
 
             RunWarp("set-mode proxy");
             await Task.Delay(500);
-            var connectOut = RunWarp("connect");
+            RunWarp("connect");
             await Task.Delay(5000);
 
-            // Poll warp-cli status with retries
-            for (int i = 0; i < 10; i++)
+            // Poll status for "Connected" (up to 30s)
+            for (int i = 0; i < 15; i++)
             {
                 var status = RunWarp("status");
                 if (status != null && status.Contains("Connected", StringComparison.OrdinalIgnoreCase))
@@ -82,12 +81,26 @@ public sealed class WarpService : IDisposable
                 await Task.Delay(2000);
             }
 
+            // Fallback: if status never said Connected but SOCKS5 :40000 is reachable, trust it
+            if (!Connected)
+            {
+                for (int i = 0; i < 5; i++)
+                {
+                    using var tcp = new System.Net.Sockets.TcpClient();
+                    try
+                    {
+                        await tcp.ConnectAsync("127.0.0.1", 40000);
+                        Connected = true;
+                        break;
+                    }
+                    catch { await Task.Delay(1000); }
+                }
+            }
+
             if (Connected)
             {
-                // Non-blocking — start watchdog in background
                 _ = Task.Run(() => WatchdogKillWarpGui());
-
-                // Verify SOCKS5 port is listening (optional, don't override Connected on fail)
+                // Warm up SOCKS5 connection
                 for (int i = 0; i < 5; i++)
                 {
                     using var tcp = new System.Net.Sockets.TcpClient();

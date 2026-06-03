@@ -9,17 +9,67 @@ public partial class MainWindow : Window
 {
     private ProxyService? _proxy;
     private const int ProxyPort = 11818;
+    private TrayIcon? _trayIcon;
 
     public MainWindow()
     {
         InitializeComponent();
-        DohInfo.Text = "DNS: 1.1.1.1 (DoH) ✓ 防污染";
-        // Detect warp-cli at startup so UI shows status immediately
+        SetupTrayIcon();
+
         if (WarpService.FindWarpCli() != null)
         {
-            WarpInfo.Text = "Cloudflare Warp: 已就绪 ✓";
-            WarpInfo.Foreground = new SolidColorBrush(Color.Parse("#2e7d32"));
+            WarpInfo.Text = "已就绪 ✓";
+            WarpInfo.Foreground = new SolidColorBrush(Color.Parse("#4caf50"));
+            BtnInstallWarp.IsVisible = false;
         }
+        else
+        {
+            WarpInfo.Text = "未安装 — 点击下载";
+            WarpInfo.Foreground = new SolidColorBrush(Color.Parse("#888"));
+            BtnInstallWarp.IsVisible = true;
+        }
+
+        SetStatusDot("#666");
+    }
+
+    private void SetupTrayIcon()
+    {
+        try
+        {
+            var icon = new WindowIcon(
+                Avalonia.Platform.AssetLoader.Open(new Uri("avares://LTAI.Accelerator/Assets/ltai-icon.ico")));
+
+            var menu = new NativeMenu();
+            var showItem = new NativeMenuItem("显示窗口");
+            showItem.Click += (_, _) => { Show(); Activate(); WindowState = WindowState.Normal; };
+            menu.Add(showItem);
+
+            menu.Add(new NativeMenuItemSeparator());
+
+            var exitItem = new NativeMenuItem("退出");
+            exitItem.Click += async (_, _) =>
+            {
+                _trayIcon?.Dispose();
+                if (_proxy != null)
+                {
+                    SystemProxy.Disable();
+                    await _proxy.StopAsync();
+                    _proxy.Dispose();
+                    _proxy = null;
+                }
+                Environment.Exit(0);
+            };
+            menu.Add(exitItem);
+
+            _trayIcon = new TrayIcon
+            {
+                Icon = icon,
+                ToolTipText = "LTAI 加速器",
+                Menu = menu,
+                IsVisible = true,
+            };
+        }
+        catch { }
     }
 
     private async void OnStartClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
@@ -28,23 +78,20 @@ public partial class MainWindow : Window
         {
             BtnStart.IsEnabled = false;
             SetStatus("正在启动...", "#ffa000");
+            SetStatusDot("#ffa000");
 
             _proxy = new ProxyService(ProxyPort);
             await _proxy.StartAsync();
 
-            // Try WARP first
             bool useSystemProxy = true;
             if (_proxy.WarpConnectTask != null)
             {
                 SetStatus("正在连接 Cloudflare WARP...", "#ffa000");
                 var warpOk = await _proxy.WarpConnectTask;
                 if (warpOk)
-                {
-                    useSystemProxy = false; // WARP handles routing, no HTTP system proxy needed
-                }
+                    useSystemProxy = false;
                 else
                 {
-                    // Retry once after 5s
                     _ = Task.Run(async () =>
                     {
                         await Task.Delay(5000);
@@ -59,29 +106,35 @@ public partial class MainWindow : Window
 
             if (_proxy.Warp.Connected)
             {
-                WarpInfo.Text = "Cloudflare Warp: 已连接 ✓ — 全局隧道";
+                WarpInfo.Text = "已连接 ✓ — 全局隧道";
+                WarpInfo.Foreground = new SolidColorBrush(Color.Parse("#4caf50"));
                 BtnInstallWarp.IsVisible = false;
+                SetStatus("Cloudflare WARP 全局隧道", "#4caf50");
+                SetStatusDot("#4caf50");
             }
             else if (_proxy.Warp.Available)
             {
-                WarpInfo.Text = "Cloudflare Warp: 连接失败，仅 DoH 模式";
+                WarpInfo.Text = "连接失败，仅 DoH 模式";
+                WarpInfo.Foreground = new SolidColorBrush(Color.Parse("#ff9800"));
                 BtnInstallWarp.IsVisible = false;
+                SetStatus("系统代理 :11818", "#4caf50");
+                SetStatusDot("#4caf50");
             }
             else
             {
-                WarpInfo.Text = "Cloudflare Warp: 未安装 — 点击下载 https://downloads.cloudflareclient.com/";
+                WarpInfo.Text = "未安装 — 点击下载 http://mogoo.com.cn/";
+                WarpInfo.Foreground = new SolidColorBrush(Color.Parse("#888"));
                 BtnInstallWarp.IsVisible = true;
+                SetStatus("系统代理 :11818", "#4caf50");
+                SetStatusDot("#4caf50");
             }
 
             BtnStop.IsEnabled = true;
-            if (_proxy.Warp.Connected)
-                SetStatus("运行中 — Cloudflare WARP 全局隧道", "#2e7d32");
-            else
-                SetStatus("运行中 — 系统代理 :11818", "#2e7d32");
         }
         catch (Exception ex)
         {
             SetStatus($"启动失败: {ex.Message}", "#c62828");
+            SetStatusDot("#c62828");
             BtnStart.IsEnabled = true;
         }
     }
@@ -92,6 +145,7 @@ public partial class MainWindow : Window
         {
             BtnStop.IsEnabled = false;
             SetStatus("正在停止...", "#ffa000");
+            SetStatusDot("#ffa000");
 
             if (_proxy != null)
             {
@@ -102,50 +156,53 @@ public partial class MainWindow : Window
 
             SystemProxy.Disable();
 
-            // Update warp status
             if (WarpService.FindWarpCli() != null)
             {
-                WarpInfo.Text = "Cloudflare Warp: 已断开 — 点击启动重新连接";
+                WarpInfo.Text = "已断开 — 点击即可重新连接";
                 WarpInfo.Foreground = new SolidColorBrush(Color.Parse("#888"));
+                BtnInstallWarp.IsVisible = false;
             }
             else
             {
-                WarpInfo.Text = "Cloudflare Warp: 未安装 — 点击下载 https://downloads.cloudflareclient.com/";
+                WarpInfo.Text = "未安装 — 点击下载";
                 WarpInfo.Foreground = new SolidColorBrush(Color.Parse("#888"));
+                BtnInstallWarp.IsVisible = true;
             }
-            BtnInstallWarp.IsVisible = WarpService.FindWarpCli() == null;
 
             BtnStart.IsEnabled = true;
             SetStatus("已停止", "#666");
+            SetStatusDot("#666");
         }
         catch (Exception ex)
         {
             SetStatus($"停止出错: {ex.Message}", "#c62828");
+            SetStatusDot("#c62828");
             BtnStop.IsEnabled = true;
         }
     }
 
     private void SetStatus(string text, string color)
     {
-        var brush = new SolidColorBrush(Color.Parse(color));
         StatusText.Text = text;
-        StatusText.Foreground = brush;
-        StatusBorder.BorderBrush = brush;
+        StatusText.Foreground = new SolidColorBrush(Color.Parse(color));
+    }
+
+    private void SetStatusDot(string color)
+    {
+        StatusDot.Fill = new SolidColorBrush(Color.Parse(color));
     }
 
     private void OnWarpClick(object? sender, PointerPressedEventArgs e)
     {
-        if (sender is TextBlock tb &&
-            tb.Text?.Contains("未安装") == true)
+        var psi = new ProcessStartInfo
         {
-            var psi = new ProcessStartInfo
-            {
-                FileName = "https://downloads.cloudflareclient.com/v1/download/windows/ga",
-                UseShellExecute = true
-            };
-            Process.Start(psi);
-        }
+            FileName = "https://downloads.cloudflareclient.com/v1/download/windows/ga",
+            UseShellExecute = true
+        };
+        Process.Start(psi);
     }
+
+    private void OnProxyClick(object? sender, PointerPressedEventArgs e) { }
 
     private void OnInstallWarpClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
@@ -186,17 +243,30 @@ public partial class MainWindow : Window
             UseShellExecute = true,
         };
         Process.Start(psi);
-        SetStatus("Installing Cloudflare WARP... see PowerShell window", "#ffa000");
+        SetStatus("正在安装 Cloudflare WARP... 请查看弹出的 PowerShell 窗口", "#ffa000");
+        SetStatusDot("#ffa000");
     }
 
+    // Minimize to tray instead of closing
     protected override void OnClosing(WindowClosingEventArgs e)
     {
-        if (_proxy != null)
+        if (_trayIcon != null)
         {
-            SystemProxy.Disable();
-            _proxy.Dispose();
-            _proxy = null;
+            e.Cancel = true;
+            Hide();
+            return;
         }
+        // No tray icon → exit normally
+        Cleanup();
         base.OnClosing(e);
+    }
+
+    private void Cleanup()
+    {
+        SystemProxy.Disable();
+        _proxy?.Dispose();
+        _proxy = null;
+        _trayIcon?.Dispose();
+        _trayIcon = null;
     }
 }
