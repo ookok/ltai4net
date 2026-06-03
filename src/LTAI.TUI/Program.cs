@@ -19,14 +19,20 @@ public static class Program
 {
     public static async Task Main(string[] args)
     {
-        // ── Alacritty 自嵌入：首次运行解压，以后复用 ──
-        if (args.Length == 0 || args[0] != "--in-alacritty")
+        // ── 终端选择：wt.exe → Alacritty → 当前终端 ──
+        if (args.Length == 0 || (args[0] != "--in-alacritty" && args[0] != "--in-wt"))
         {
+            var wt = EnsureWindowsTerminal();
+            if (wt != null)
+            {
+                RelaunchInWindowsTerminal(wt);
+                return;
+            }
             var alacritty = EnsureAlacritty();
             if (alacritty != null)
             {
                 RelaunchInAlacritty(alacritty);
-                return; // 旧进程退出
+                return;
             }
         }
 
@@ -118,6 +124,59 @@ public static class Program
             sp.GetService<LTAI.AI.EmbeddingClient>());
         try { Console.Clear(); } catch { /* non-interactive terminal */ }
         await app.RunAsync().ConfigureAwait(false);
+    }
+
+    /// <summary>查找 wt.exe（Windows Terminal），优先 %LOCALAPPDATA% 下的商店安装路径。</summary>
+    private static string? EnsureWindowsTerminal()
+    {
+        // winget 安装路径
+        var storePath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "Microsoft", "WindowsApps", "wt.exe");
+        if (File.Exists(storePath)) return storePath;
+        // 通过 PATH 查找
+        try
+        {
+            using var proc = Process.Start(new ProcessStartInfo("where", "wt.exe")
+            {
+                UseShellExecute = false, CreateNoWindow = true,
+                RedirectStandardOutput = true
+            });
+            if (proc != null)
+            {
+                var line = proc.StandardOutput.ReadLine();
+                proc.WaitForExit(1000);
+                if (proc.ExitCode == 0 && !string.IsNullOrEmpty(line))
+                    return line.Trim();
+            }
+        }
+        catch { }
+        return null;
+    }
+
+    /// <summary>在 Windows Terminal 新标签页中重启当前进程。</summary>
+    private static void RelaunchInWindowsTerminal(string wtPath)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = wtPath,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            };
+            psi.ArgumentList.Add("-d");
+            psi.ArgumentList.Add(Directory.GetCurrentDirectory());
+            psi.ArgumentList.Add(Environment.ProcessPath!);
+            psi.ArgumentList.Add("--in-wt");
+            foreach (var arg in Environment.GetCommandLineArgs().Skip(1))
+                psi.ArgumentList.Add(arg);
+            Process.Start(psi);
+        }
+        catch (Exception ex)
+        {
+            AnsiConsole.MarkupLine($"[red]启动 Windows Terminal 失败:[/] {ex.Message.EscapeMarkup()}");
+        }
     }
 
     /// <summary>将嵌入的 Alacritty 解压到 %LOCALAPPDATA%/LTAI/ 并返回路径。</summary>
