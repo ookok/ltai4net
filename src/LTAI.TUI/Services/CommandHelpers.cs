@@ -2,9 +2,9 @@ using LTAI.AI;
 
 namespace LTAI.TUI.Services;
 
-internal static class CommandHelpers
+public static class CommandHelpers
 {
-    internal static readonly HttpClient SharedHttp = new() { Timeout = TimeSpan.FromSeconds(30) };
+    public static readonly HttpClient SharedHttp = new() { Timeout = TimeSpan.FromSeconds(30) };
 
     public static string FormatBytes(long bytes)
     {

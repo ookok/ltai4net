@@ -1,5 +1,5 @@
 using LTAI.Core.Configuration;
-using LTAI.TUI.Commands;
+using LTAI.Core.Commands;
 using LTAI.TUI.Services;
 using Microsoft.Extensions.Options;
 using Spectre.Console.Testing;

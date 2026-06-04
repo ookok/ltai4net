@@ -1,4 +1,4 @@
-using LTAI.TUI.Commands;
+using LTAI.Core.Commands;
 using Spectre.Console;
 using Spectre.Console.Testing;
 using Xunit;

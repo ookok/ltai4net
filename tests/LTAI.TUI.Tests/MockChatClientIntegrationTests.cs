@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
-using LTAI.TUI.Commands;
+
+using LTAI.Core.Commands;
 using Microsoft.Extensions.AI;
 using Moq;
 
