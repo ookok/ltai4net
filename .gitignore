@@ -56,3 +56,4 @@ test.txt
 
 ## Logs
 logs/
+tests/secrets_export.json

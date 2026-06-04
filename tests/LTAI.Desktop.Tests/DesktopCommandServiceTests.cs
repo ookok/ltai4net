@@ -1,0 +1,256 @@
+using LTAI.Desktop.Services;
+
+namespace LTAI.Desktop.Tests;
+
+public sealed class DesktopCommandServiceTests
+{
+    private readonly DesktopCommandService _svc = new();
+
+    [Fact]
+    public void EmptyInput_ReturnsNull()
+    {
+        var r = _svc.Execute("");
+        Assert.Null(r.StatusMessage);
+        Assert.False(r.RequestExit);
+        Assert.False(r.ClearMessages);
+    }
+
+    [Fact]
+    public void WhitespaceInput_ReturnsNull()
+    {
+        var r = _svc.Execute("   ");
+        Assert.Null(r.StatusMessage);
+    }
+
+    [Fact]
+    public void NonSlashInput_ReturnsNull()
+    {
+        var r = _svc.Execute("hello");
+        Assert.Null(r.StatusMessage);
+    }
+
+    [Fact]
+    public void UnknownCommand_ShowsWarning()
+    {
+        var r = _svc.Execute("/xyzzy");
+        Assert.NotNull(r.StatusMessage);
+        Assert.Contains("未知命令", r.StatusMessage);
+    }
+
+    [Fact]
+    public void UnknownCommand_WithSuggestion()
+    {
+        var r = _svc.Execute("/hel");
+        Assert.NotNull(r.StatusMessage);
+        Assert.Contains("未知命令", r.StatusMessage);
+        Assert.Contains("/help", r.StatusMessage);
+    }
+
+    [Fact]
+    public void Exit_SetsRequestExit()
+    {
+        var r = _svc.Execute("/exit");
+        Assert.True(r.RequestExit);
+        Assert.NotNull(r.StatusMessage);
+    }
+
+    [Fact]
+    public void New_ClearsMessages()
+    {
+        var r = _svc.Execute("/new");
+        Assert.True(r.ClearMessages);
+        Assert.NotNull(r.StatusMessage);
+    }
+
+    [Fact]
+    public void Help_ReturnsCommandList()
+    {
+        var r = _svc.Execute("/help");
+        Assert.NotNull(r.StatusMessage);
+        Assert.Contains("/model", r.StatusMessage);
+        Assert.Contains("/new", r.StatusMessage);
+        Assert.Contains("/exit", r.StatusMessage);
+    }
+
+    [Fact]
+    public void Status_ReturnsStatusString()
+    {
+        var r = _svc.Execute("/status");
+        Assert.NotNull(r.StatusMessage);
+    }
+
+    [Fact]
+    public void Cost_ReturnsCostSummary()
+    {
+        var r = _svc.Execute("/cost");
+        Assert.NotNull(r.StatusMessage);
+    }
+
+    [Fact]
+    public void Model_NoArgs_ShowsUsage()
+    {
+        var r = _svc.Execute("/model");
+        Assert.NotNull(r.StatusMessage);
+        Assert.Contains("用法", r.StatusMessage);
+    }
+
+    [Fact]
+    public void Model_WithArgs_Echoes()
+    {
+        var r = _svc.Execute("/model deepseek");
+        Assert.NotNull(r.StatusMessage);
+        Assert.Contains("deepseek", r.StatusMessage);
+    }
+
+    [Fact]
+    public void Models_ReturnsList()
+    {
+        var r = _svc.Execute("/models");
+        Assert.NotNull(r.StatusMessage);
+        Assert.Contains("DeepSeek", r.StatusMessage);
+    }
+
+    [Fact]
+    public void Config_ReturnsMessage()
+    {
+        var r = _svc.Execute("/config");
+        Assert.NotNull(r.StatusMessage);
+        Assert.Contains("配置", r.StatusMessage);
+    }
+
+    [Fact]
+    public void Mode_NoArgs_ShowsUsage()
+    {
+        var r = _svc.Execute("/mode");
+        Assert.NotNull(r.StatusMessage);
+        Assert.Contains("用法", r.StatusMessage);
+    }
+
+    [Fact]
+    public void Mode_WithArgs_Echoes()
+    {
+        var r = _svc.Execute("/mode review");
+        Assert.NotNull(r.StatusMessage);
+        Assert.Contains("review", r.StatusMessage);
+    }
+
+    [Fact]
+    public void Lang_NoArgs_ShowsUsage()
+    {
+        var r = _svc.Execute("/lang");
+        Assert.NotNull(r.StatusMessage);
+        Assert.Contains("用法", r.StatusMessage);
+    }
+
+    [Fact]
+    public void Lang_WithArgs_Echoes()
+    {
+        var r = _svc.Execute("/lang en");
+        Assert.NotNull(r.StatusMessage);
+        Assert.Contains("en", r.StatusMessage);
+    }
+
+    [Fact]
+    public void Undo_ReturnsNotSupported()
+    {
+        var r = _svc.Execute("/undo");
+        Assert.NotNull(r.StatusMessage);
+        Assert.Contains("暂不支持", r.StatusMessage);
+    }
+
+    [Fact]
+    public void Retry_ReturnsNotSupported()
+    {
+        var r = _svc.Execute("/retry");
+        Assert.NotNull(r.StatusMessage);
+        Assert.Contains("暂不支持", r.StatusMessage);
+    }
+
+    [Fact]
+    public void Compact_ReturnsNotSupported()
+    {
+        var r = _svc.Execute("/compact");
+        Assert.NotNull(r.StatusMessage);
+        Assert.Contains("暂不支持", r.StatusMessage);
+    }
+
+    [Fact]
+    public void Pwd_ReturnsDirectory()
+    {
+        var r = _svc.Execute("/pwd");
+        Assert.NotNull(r.StatusMessage);
+        Assert.Contains("当前目录", r.StatusMessage);
+    }
+
+    [Fact]
+    public void Plan_ReturnsNotSupported()
+    {
+        var r = _svc.Execute("/plan");
+        Assert.NotNull(r.StatusMessage);
+        Assert.Contains("暂不支持", r.StatusMessage);
+    }
+
+    [Fact]
+    public void Approve_ReturnsNotSupported()
+    {
+        var r = _svc.Execute("/approve");
+        Assert.NotNull(r.StatusMessage);
+        Assert.Contains("暂不支持", r.StatusMessage);
+    }
+
+    [Fact]
+    public void Ls_ReturnsInfo()
+    {
+        var r = _svc.Execute("/ls src");
+        Assert.NotNull(r.StatusMessage);
+        Assert.Contains("暂不支持", r.StatusMessage);
+    }
+
+    [Fact]
+    public void Cd_ReturnsInfo()
+    {
+        var r = _svc.Execute("/cd ..");
+        Assert.NotNull(r.StatusMessage);
+        Assert.Contains("暂不支持", r.StatusMessage);
+    }
+
+    [Fact]
+    public void Jobs_ReturnsInfo()
+    {
+        var r = _svc.Execute("/jobs");
+        Assert.NotNull(r.StatusMessage);
+        Assert.Contains("作业面板", r.StatusMessage);
+    }
+
+    [Fact]
+    public void Workflow_ReturnsInfo()
+    {
+        var r = _svc.Execute("/workflow");
+        Assert.NotNull(r.StatusMessage);
+        Assert.Contains("工作流面板", r.StatusMessage);
+    }
+
+    [Fact]
+    public void Pipe_ReturnsNotSupported()
+    {
+        var r = _svc.Execute("/pipe");
+        Assert.NotNull(r.StatusMessage);
+        Assert.Contains("暂不支持", r.StatusMessage);
+    }
+
+    [Fact]
+    public void Skill_ReturnsInfo()
+    {
+        var r = _svc.Execute("/skill");
+        Assert.NotNull(r.StatusMessage);
+        Assert.Contains("技能面板", r.StatusMessage);
+    }
+
+    [Fact]
+    public void Snippet_ReturnsNotSupported()
+    {
+        var r = _svc.Execute("/snippet");
+        Assert.NotNull(r.StatusMessage);
+        Assert.Contains("暂不支持", r.StatusMessage);
+    }
+}

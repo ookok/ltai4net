@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net.Http;
 using System.Text;
 using System.Text.Json;
@@ -8,7 +9,7 @@ using LTAI.Agent.Tools;
 using LTAI.Core.I18n;
 using LTAI.Agent.Workflows;
 using LTAI.Core.Configuration;
-using LTAI.TUI.Commands;
+using LTAI.Core.Commands;
 using LTAI.TUI.Services;
 using Spectre.Console;
 
@@ -169,6 +170,7 @@ public static class SlashCommands
         new("approve", "计划",  "批准当前计划并开始执行", "yes,confirm,批准,确认"),
         new("plan",    "计划",  "查看当前计划状态", "计划状态"),
         new("lang",    "设置",  "切换语言: zh-CN|en-US", "语言,language"),
+        new("git",     "文件",  "Git: status|diff|log|add|commit|pull|push", "g"),
         new("exit",    "高级",  "退出应用", "quit,q,退出"),
     };
 
@@ -362,6 +364,10 @@ public static class SlashCommands
                 statusMessage = Status();
                 return true;
 
+            case GitCommand gc:
+                statusMessage = RunGit(gc.Args);
+                return true;
+
             case UnknownCommand uc:
                 statusMessage = uc.Suggestion != null
                     ? $"Unknown command '/{uc.CmdName}'. Did you mean '/{uc.Suggestion}'?"
@@ -405,21 +411,141 @@ public static class SlashCommands
     //  Simple handlers kept in SlashCommands
     // ═══════════════════════════════════════════
 
+    static string RunGit(string args)
+    {
+        if (string.IsNullOrWhiteSpace(args) || args == "help")
+        {
+            return "[bold]Git 命令[/]\n"
+                + "  /git status    — 查看工作区状态（含结构化文件变更列表）\n"
+                + "  /git diff      — 查看未暂存的变更差异\n"
+                + "  /git diff --cached — 查看已暂存的变更\n"
+                + "  /git log       — 查看提交历史\n"
+                + "  /git add <file> — 暂存文件\n"
+                + "  /git commit -m \"msg\" — 提交\n"
+                + "  /git pull      — 拉取\n"
+                + "  /git push      — 推送\n"
+                + "  /git <任意 git 参数> — 直接透传";
+        }
+
+        try
+        {
+            var parts = args.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
+            var psi = new ProcessStartInfo("git", args)
+            {
+                WorkingDirectory = Directory.GetCurrentDirectory(),
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            };
+            using var p = new Process { StartInfo = psi };
+            p.Start();
+            var output = p.StandardOutput.ReadToEnd();
+            var error = p.StandardError.ReadToEnd();
+            p.WaitForExit(120_000);
+
+            var sb = new StringBuilder();
+            var isOk = p.ExitCode == 0;
+
+            if (args == "status" || (args.StartsWith("status ") && !args.Contains("porcelain")))
+            {
+                foreach (var line in output.Split('\n'))
+                {
+                    if (line.Contains("nothing to commit"))
+                        sb.AppendLine($"[green]{line.EscapeMarkup()}[/]");
+                    else if (line.StartsWith("On branch ") || line.StartsWith("HEAD "))
+                        sb.AppendLine($"[blue]{line.EscapeMarkup()}[/]");
+                    else if (line.TrimStart().StartsWith("modified:"))
+                        sb.AppendLine($"[yellow]{line.EscapeMarkup()}[/]");
+                    else if (line.TrimStart().StartsWith("new file:"))
+                        sb.AppendLine($"[green]{line.EscapeMarkup()}[/]");
+                    else if (line.TrimStart().StartsWith("deleted:"))
+                        sb.AppendLine($"[red]{line.EscapeMarkup()}[/]");
+                    else if (line.TrimStart().StartsWith("renamed:"))
+                        sb.AppendLine($"[yellow]{line.EscapeMarkup()}[/]");
+                    else if (string.IsNullOrWhiteSpace(line))
+                        sb.AppendLine();
+                    else
+                        sb.AppendLine($"[white]{line.EscapeMarkup()}[/]");
+                }
+            }
+            else if (args == "diff")
+            {
+                var inHunk = false;
+                foreach (var line in output.Split('\n'))
+                {
+                    if (line.StartsWith("diff --git"))
+                    {
+                        if (inHunk) sb.AppendLine();
+                        sb.AppendLine($"[bold cyan]{line.EscapeMarkup()}[/]");
+                        inHunk = false;
+                    }
+                    else if (line.StartsWith("--- ") || line.StartsWith("+++ ") || line.StartsWith("index "))
+                        sb.AppendLine($"[bold]{line.EscapeMarkup()}[/]");
+                    else if (line.StartsWith("@@"))
+                        sb.AppendLine($"[blue]{line.EscapeMarkup()}[/]");
+                    else if (line.StartsWith("+") && !line.StartsWith("+++"))
+                        sb.AppendLine($"[green]{line.EscapeMarkup()}[/]");
+                    else if (line.StartsWith("-") && !line.StartsWith("---"))
+                        sb.AppendLine($"[red]{line.EscapeMarkup()}[/]");
+                    else
+                        sb.AppendLine($"[grey]{line.EscapeMarkup()}[/]");
+                    inHunk = true;
+                }
+            }
+            else
+            {
+                foreach (var line in output.Split('\n'))
+                {
+                    if (line.Contains("error:") || line.Contains("fatal:"))
+                        sb.AppendLine($"[red]{line.EscapeMarkup()}[/]");
+                    else
+                        sb.AppendLine($"[white]{line.EscapeMarkup()}[/]");
+                }
+            }
+
+            if (!string.IsNullOrEmpty(error))
+                sb.AppendLine($"[red]{error.EscapeMarkup()}[/]");
+
+            var header = isOk ? "[green]✅ git[/]" : "[red]❌ git[/]";
+            var panel = new Panel(sb.ToString().TrimEnd())
+                .Header(header)
+                .Border(BoxBorder.Rounded)
+                .Expand();
+            AnsiConsole.Write(panel);
+            return "";
+        }
+        catch (Exception ex)
+        {
+            return $"[red]git 错误: {ex.Message}[/]";
+        }
+    }
+
     static string Help()
     {
         var groups = Commands.GroupBy(c => c.Group);
-        var lines = new List<string> { "[bold yellow]LTAI 命令列表[/]\n" };
-        foreach (var g in groups)
+        var lines = new List<string>
+        {
+            "[bold yellow]┌─────────────────────────────────────┐[/]",
+            "[bold yellow]│         LTAI 命令列表                │[/]",
+            "[bold yellow]└─────────────────────────────────────┘[/]",
+            ""
+        };
+        foreach (var g in groups.OrderBy(x => x.Key))
         {
             lines.Add($"[bold]{g.Key}[/]");
+            lines.Add("[grey]──[/]");
             foreach (var c in g.OrderBy(x => x.Cmd))
             {
                 var freq = UsageCount.GetValueOrDefault(c.Cmd) > 0
-                    ? $" [grey](已用 {UsageCount[c.Cmd]} 次)[/]" : "";
-                lines.Add($"  [cyan]/{c.Cmd}[/]{(c.Info ? "" : $" [grey]{c.ArgsHint}[/]")} — {c.Summary}{freq}");
+                    ? $" [grey]({UsageCount[c.Cmd]}x)[/]" : "";
+                var hint = string.IsNullOrEmpty(c.ArgsHint) ? "" : $" [dim]{c.ArgsHint}[/]";
+                var summary = c.Summary;
+                lines.Add($"  [cyan]/{c.Cmd,-10}[/]{hint,-18} {summary}{freq}");
             }
             lines.Add("");
         }
+        lines.Add("[dim]提示: 输入 [yellow]/[/] 打开交互式命令选择器   |   ↑↓ 历史导航[/]");
         return string.Join("\n", lines);
     }
 

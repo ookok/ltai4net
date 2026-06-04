@@ -10,6 +10,10 @@ namespace LTAI.Desktop;
 public static class ChatMessageRenderer
 {
     private static readonly HttpClient _sharedHttp = new() { Timeout = TimeSpan.FromSeconds(10) };
+    private static readonly Regex CitationRegex = new(@"\[@([^\]]+)\]\(line:(\d+)\)|@([^\s:,\)]+):(\d+)\b");
+
+    /// <summary>当用户点击文件引用时触发，参数 (filePath, lineNumber)。</summary>
+    public static Action<string, int>? OnNavigateToFile;
 
     public static void RenderResponse(StackPanel panel, string raw)
     {
@@ -38,6 +42,34 @@ public static class ChatMessageRenderer
             var imgPath = m.Groups[1].Success ? m.Groups[1].Value : m.Groups[2].Value;
             if (!string.IsNullOrWhiteSpace(imgPath))
                 _ = RenderInlineImage(panel, imgPath);
+        }
+
+        var citationMatches = CitationRegex.Matches(raw);
+        if (citationMatches.Count > 0)
+        {
+            var rootDir = LTAI.Core.Configuration.SecretManager.Get("LTAI_PROJECT_ROOT") ?? Directory.GetCurrentDirectory();
+            foreach (Match m in citationMatches)
+            {
+                var filePart = m.Groups[1].Success ? m.Groups[1].Value : m.Groups[3].Value;
+                var lineStr = m.Groups[2].Success ? m.Groups[2].Value : (m.Groups[4].Success ? m.Groups[4].Value : null);
+                var line = lineStr != null && int.TryParse(lineStr, out var l) ? l : 0;
+
+                // Resolve file path
+                string? resolvedPath = null;
+                if (File.Exists(filePart))
+                    resolvedPath = filePart;
+                else if (File.Exists(Path.Combine(rootDir, filePart)))
+                    resolvedPath = Path.Combine(rootDir, filePart);
+                else
+                {
+                    // Search by filename in root dir
+                    var found = Directory.EnumerateFiles(rootDir, Path.GetFileName(filePart), SearchOption.AllDirectories).FirstOrDefault();
+                    if (found != null) resolvedPath = found;
+                }
+
+                var chip = MakeCitationChip(filePart, line, resolvedPath);
+                panel.Children.Add(chip);
+            }
         }
     }
 
@@ -104,7 +136,7 @@ public static class ChatMessageRenderer
             Background = LtaiTheme.Sbb(LtaiTheme.CodeBg),
             BorderBrush = LtaiTheme.Sbb(LtaiTheme.CodeBorder),
             BorderThickness = new(1),
-            CornerRadius = new(4),
+            CornerRadius = LtaiTheme.Radius.Md,
             Padding = new(8),
             Margin = new(0, 4),
         };
@@ -128,12 +160,12 @@ public static class ChatMessageRenderer
             }
             else if (line.StartsWith("+") && !line.StartsWith("+++"))
             {
-                color = Color.Parse("#4CAF50");
+                color = LtaiTheme.DiffGreen;
                 prefix = "+";
             }
             else if (line.StartsWith("-") && !line.StartsWith("---"))
             {
-                color = Color.Parse("#F44336");
+                color = LtaiTheme.DiffRed;
                 prefix = "-";
             }
             else
@@ -144,7 +176,7 @@ public static class ChatMessageRenderer
             var tb = new TextBlock
             {
                 Text = prefix + " " + line,
-                FontFamily = new("Consolas"),
+                FontFamily = LtaiTheme.CodeFont,
                 FontSize = 12,
                 Foreground = LtaiTheme.Sbb(color),
             };
@@ -160,6 +192,36 @@ public static class ChatMessageRenderer
         if (lines.Length <= maxLines) return content;
         var preview = string.Join("\n", lines.Take(maxLines));
         return $"{preview}\n\n... ({lines.Length - maxLines} more lines) — use read_file with range to see more";
+    }
+
+    public static Border MakeCitationChip(string displayName, int line, string? resolvedPath)
+    {
+        var text = line > 0 ? $"📄 {displayName}:{line}" : $"📄 {displayName}";
+        var tb = new TextBlock
+        {
+            Text = text,
+            FontFamily = LtaiTheme.CodeFont,
+            FontSize = 11,
+            Foreground = LtaiTheme.Sbb(LtaiTheme.AccentInfo),
+        };
+        var chip = new Border
+        {
+            Background = LtaiTheme.Sbb(LtaiTheme.BgPanel),
+            BorderBrush = LtaiTheme.Sbb(LtaiTheme.AccentInfo),
+            BorderThickness = new(1),
+            CornerRadius = LtaiTheme.Radius.Sm,
+            Padding = new(6, 2),
+            Margin = new(0, 2, 4, 2),
+            Child = tb,
+            Cursor = resolvedPath != null ? new Avalonia.Input.Cursor(Avalonia.Input.StandardCursorType.Hand) : null,
+        };
+        if (resolvedPath != null)
+        {
+            chip.PointerEntered += (_, _) => chip.Background = LtaiTheme.Sbb(LtaiTheme.SurfaceOverlay);
+            chip.PointerExited += (_, _) => chip.Background = LtaiTheme.Sbb(LtaiTheme.BgPanel);
+            chip.PointerPressed += (_, _) => OnNavigateToFile?.Invoke(resolvedPath, line);
+        }
+        return chip;
     }
 
     public static List<(string Content, bool IsCode)> SplitCodeBlocks(string text)
@@ -239,7 +301,7 @@ public static class ChatMessageRenderer
                 {
                     BorderBrush = LtaiTheme.Sbb(LtaiTheme.Border),
                     BorderThickness = new(1),
-                    CornerRadius = new(4),
+                    CornerRadius = LtaiTheme.Radius.Md,
                     Margin = new(0, 4),
                     Child = image
                 };
@@ -261,7 +323,7 @@ public static class ChatMessageRenderer
             Background = LtaiTheme.Sbb(LtaiTheme.CodeBg),
             BorderBrush = LtaiTheme.Sbb(LtaiTheme.CodeBorder),
             BorderThickness = new(1),
-            CornerRadius = new(4),
+            CornerRadius = LtaiTheme.Radius.Md,
             Padding = new(8, 8, 8, 8)
         };
         var codeStack = new StackPanel();
@@ -278,13 +340,13 @@ public static class ChatMessageRenderer
             {
                 Text = (li + 1).ToString().PadLeft(linePad),
                 Foreground = LtaiTheme.Sbb(LtaiTheme.TextDim),
-                FontFamily = new("Consolas"),
+                FontFamily = LtaiTheme.CodeFont,
                 FontSize = 11,
                 Width = 30,
                 TextAlignment = TextAlignment.Right,
                 Margin = new(0, 0, 8, 0),
             });
-            var tb = new TextBlock { FontFamily = new("Consolas"), FontSize = 12, TextWrapping = TextWrapping.Wrap };
+            var tb = new TextBlock { FontFamily = LtaiTheme.CodeFont, FontSize = 12, TextWrapping = TextWrapping.Wrap };
             var tokens = MarkdownRenderer.TokenizeLine(codeLines[li], keywords);
             if (tokens.Count > 0)
                 foreach (var (text, color) in tokens)
@@ -301,7 +363,7 @@ public static class ChatMessageRenderer
             {
                 Text = $"[... truncated: {codeLines.Length - maxLines} more lines]",
                 Foreground = LtaiTheme.Sbb(LtaiTheme.TextDim),
-                FontFamily = new("Consolas"),
+                FontFamily = LtaiTheme.CodeFont,
                 FontSize = 11,
                 FontStyle = FontStyle.Italic,
                 Margin = new(linePad * 8 + 8, 2, 0, 0)
@@ -312,6 +374,9 @@ public static class ChatMessageRenderer
         codeRow.Children.Add(codeBorder);
 
         var copyBtn = CopyButton(code);
+        copyBtn.Opacity = 0;
+        codeBorder.PointerEntered += (_, _) => copyBtn.Opacity = 1;
+        codeBorder.PointerExited += (_, _) => copyBtn.Opacity = 0;
         DockPanel.SetDock(copyBtn, Dock.Right);
         copyBtn.HorizontalAlignment = HorizontalAlignment.Right;
         copyBtn.VerticalAlignment = VerticalAlignment.Top;

@@ -1261,9 +1261,148 @@ P14.15 ✅
 - [x] `git submodule status` 两行，agent-framework@main + durabletask-dotnet@v1.24.2
 - [ ] 手动验证：克隆新 clone + 跑 `dev-setup-submodules.ps1` 一键到位（用户可后续手动跑）
 
-## Next Steps (P17+)
-- **P17.1**：更新 `LTAI.Agent/Durability/SQLiteOrchestrationService.cs` 顶部注释，把反射字段的 "source path" 链接到 `extern/durabletask-dotnet/src/InProcessTestHost/Sidecar/InMemoryOrchestrationService.cs`（维护性收益）
-- **P17.2**：写 `docs/architecture/dependency-graph.md`，列出 LTAI 项目 → MAF ProjectReference 完整图 + DTFx NuGet 版本表
-- **P17.3**：把 P14.1 完成的 BGE INT8 走 `ltai4net/ltai-models` 私有 submodule（按 P2 计划）
-- **P17.4**：MAF submodule 拉新版本时 review 哪些 LTAI 用的 API 有 breaking change（P15 `Workflows.Declarative.Mcp` 是 1.25.0-preview.1 才有的，提前评估升级价值）
+---
+# 2026-06-04 Desktop/TUI 代码共享 + UX 美化 + Git 增强
+
+## Goal
+- 消除 Desktop→TUI 项目依赖（Step 1: 命令系统）
+- 提取公共 SessionManager 到 Core（Step 2）
+- Desktop UX 美化（5 项基础 + Theme Token System + 12 项路线图）
+- Desktop/TUI Git Terminal 美化
+- Desktop 新特性：文件树多选 + 拖拽 + 分屏
+- TUI `/git` 命令 + git diff 集成
+
+## Key Decisions
+- **D90** 命令系统（Command.cs/ICommandParser.cs/CommandParser.cs）移到 LTAI.Core/Commands/，Desktop 和 TUI 共用
+- **D91** SessionManager（AES-256 加密 JSON 持久化）移到 LTAI.Core/Session/，TUI 集成自动保存 + /sessions 命令
+- **D92** Desktop 使用 `DesktopCommandService` 通过 Core.Commands 解析命令，消除 160 行内联斜杠命令
+- **D93** Theme Token 系统 `LtaiTheme.cs` 集中管理所有颜色/圆角/字体，11 文件 30+ 硬编码消除
+- **D94** Desktop 12 项 UX 路线图全部完成（色彩+圆角+字体/Git 指示条/虚拟化/Thinking 折叠/Config 弹窗/状态栏分层/会话分组/快捷键提示/Command Palette/Focus Mode）
+- **D95** Drag-drop 因 Avalonia 12 移除了 DataObject/DragDrop.DoDragDrop API 而改为右键"复制路径"替代
+
+## Files touched（实际）
+### Step 1 - 命令系统提取
+- `src/LTAI.Core/Commands/Command.cs`（新建，44 行，23 命令 record 类型）
+- `src/LTAI.Core/Commands/ICommandParser.cs`（新建，14 行）
+- `src/LTAI.Core/Commands/CommandParser.cs`（新建，145 行，Levenshtein fuzzy match）
+- `src/LTAI.Core/LTAI.Core.csproj`（+Microsoft.Extensions.AI 包引用）
+- 9 个 TUI 文件更新 using：`SlashCommands.cs`、`CommandRouter.cs`、`CommandPickerModal.cs`、`TuiApp.cs`、`Services/*CommandService.cs` 等
+- 3 个 TUI 文件删除：`Commands/Command.cs`、`Commands/ICommandParser.cs`、`Commands/CommandParser.cs`
+- `src/LTAI.Desktop/LTAI.Desktop.csproj`（删除 TUI ProjectReference）
+- `src/LTAI.Desktop/Services/DesktopCommandService.cs`（82 行，更新 using + GitCommand 处理）
+- `src/LTAI.Desktop/ChatView.cs`（消除 160 行内联 TryHandleSlashCommand）
+
+### Step 2 - SessionManager 提取
+- `src/LTAI.Core/Session/SessionInfo.cs`（Record 类型）
+- `src/LTAI.Core/Session/SessionManager.cs`（~270 行，AES-256 加密 JSON 到 .livingtree/sessions/）
+- `src/LTAI.Desktop/SessionManager.cs`（删除，被 Core 替代）
+- `src/LTAI.Desktop/DesktopSession.cs`（删除，死代码）
+- `src/LTAI.Desktop/ChatView.cs`、`MainWindow.cs`、`SessionStatsPanel.cs`（using 更新）
+- `src/LTAI.TUI/ChatLayout.cs`（集成 SessionManager：自动保存 + /new 保存 + /sessions 命令）
+
+### Desktop UX 美化 - 5 项基础
+- `ChatView.cs`：气泡圆角 + 尖角（用户 #1e40af 右下尖角，AI #1e293b 左下尖角）、拖入高亮、空状态建议卡片
+- `MainWindow.cs`：侧边栏 3px accent 激活指示条
+- `ChatMessageRenderer.cs`：代码块 copy 按钮 hover 显隐
+
+### Step 2 - Theme Token 系统
+- `LtaiTheme.cs`：+10 语义 Token（SurfaceOverlay/TextMuted/TextOnAccent/Bubble 系列/Selection/Diff 等），Dark/Light 双值
+- `Sbb(Color, byte)` 带 alpha cache overload
+- 11 文件 30+ 硬编码 hex 替换：ChatView/TextPadView/MainWindow/JobsView/SessionStatsPanel/DashboardView/ChatMessageRenderer/TerminalView/ToolResultJsonRenderer/ConfigView/UiButton
+
+### Desktop 12 项 UX 路线图
+- **P1**: Slate-900 色板 + Radius 静态类（Sm=6/Md=8/Lg=12/Xl=16）+ CodeFont 回退链（JetBrains Mono→Fira Code→Consolas）
+- **P2**: 文件树 Git 3px 左边条指示器（蓝/绿/红/黄）
+- **P3**: PruneOutputStack() 消息列表虚拟化 (>80 移除最旧)
+- **P4**: Thinking 折叠面板（"▶ Thinking" 点击展开）
+- **P5**: ConfigDialog 弹窗替代 ConfigView 侧边栏
+- **P6**: 状态栏左右分层（左: 连接指示器 + 应用名 / 右: CPU/MEM）+ hover ToolTip 详情
+- **P7**: 会话时间分组（今天/昨天/本周/本月/更早）
+- **P8**: 侧边栏按钮 ToolTip 快捷键提示
+- **P9**: CommandPaletteDialog (Ctrl+Shift+P)
+- **P10**: Focus Mode (Ctrl+.) 折叠侧边栏
+
+### Desktop Git Terminal 美化
+- 修复 6 个 NPE bug（_buildPanel/_gitCommitBtn/_gitPullBtn/_gitPushBtn/_gitBlameBtn/_gitBranchLabel 未初始化 null）
+- 添加 4 个 git 工具栏按钮 Click 处理
+- 创建 _gitOutputPanel Border（终端 #0d1117 + 圆角）替代 _buildOutput
+- 语义着色（branch=blue/success=green/error=red/modified=yellow）
+- 结构化 git status 渲染（📝➕🗑🔀❓ 图标）
+- Loading spinner + _buildOutput/_gitOutputPanel 互斥显示
+
+### TUI TextPadView Git 美化
+- RefreshGitStatus() 缓存提取 + _gitBranch 检测
+- 🌿 分支名 header
+- DirHasGitChanges() 目录级 git 状态点
+- GitStatusDot() 7 状态码（M/A/D/R/?/C/U）
+- RunCmd() git 语义行着色（blue/green/red/yellow/grey 圆角 Panel）
+- git 状态点集成 ShowDirTree()
+
+### Desktop 新特性（本次新增）
+- `TextPadView.cs`：文件树多选（SelectionMode.Multiple + 批量删除对话框）
+- `TextPadView.cs`：右键"复制路径"（powershell Set-Clipboard 跨平台方案）
+- `TextPadView.cs`：分屏编辑（ToggleSplitView + _splitEditor + GridSplitter）
+- 拖拽因 Avalonia 12 API 移除改为右键复制路径
+
+### TUI 新特性（本次新增）
+- `LTAI.Core/Commands/Command.cs`：新增 GitCommand record
+- `LTAI.Core/Commands/CommandParser.cs`：新增 "git"/"g" 别名
+- `LTAI.TUI/SlashCommands.cs`：新增 `/git` 命令（status/diff/log/add/commit/pull/push）+ RunGit() 语义着色渲染
+- `LTAI.TUI/TextPadView.cs`：文件查看模式下 D=git diff/L=git log 快捷键
+- `LTAI.TUI/TextPadView.cs`：文件浏览模式下 "Git 状态"/"Git 日志" 操作项
+- `LTAI.Desktop/Services/DesktopCommandService.cs`：新增 HandleGit() 透传
+
+## Verification
+- [x] `dotnet build src/LTAI.Core` 0 errors
+- [x] `dotnet build src/LTAI.Desktop` 0 errors (20 pre-existing warnings)
+- [x] `dotnet build src/LTAI.TUI` 0 errors (4 pre-existing warnings)
+- [x] `dotnet build src/LTAI.Web` 0 errors
+- [x] `dotnet build src/LTAI.Cli` 0 errors
+
+# 2026-06-04 系统级体验 + 细节打磨（Smart Context Injection + Citation + Global Capsule）
+
+## Goal
+- Smart Context Injection：TextPadView 根据选中内容类型构造差异化 Prompt（代码/文本/文件/目录）
+- Citation Rendering：AI 回复中 `@filename:L` 引用解析成可点击芯片，点击跳转 TextPadView 对应行
+- Global Capsule 状态栏：视图无关的常驻状态指示（模型/Tokens/Git 分支）
+
+## Key Decisions
+- **D96 Smart Context 用事件参数预格式化**：TextPadView.AskAiWithContext 构造完整 Prompt 字符串（含代码/文件内容预览），MainWindow 直接透传不二次包装
+- **D97 Citation 支持 3 种格式**：`[@File.cs](line:45)`（完整）、`@File.cs:45`（紧凑）、`@File.cs`（文件名搜索）
+- **D98 Global Capsule 放在底部状态栏中部**：左=连接指示器，中=胶囊，右=CPU/MEM；2s 定时器刷新
+- **D99 文件搜索按文件名递归**：`@UserService.cs` 在 project root 下 `EnumerateFiles("UserService.cs", AllDirectories)` 搜索
+
+## Files touched
+### Smart Context Injection
+- `src/LTAI.Desktop/TextPadView.cs`：
+  - 新增 `_selectedText` 字段（line 64）
+  - `_editor.TextArea.SelectionChanged` 事件追踪选中内容（line 121-127）
+  - `AskAiWithContext` 重写：检测选中代码/文本/文件内容/目录结构，自动构造智能 Prompt
+- `src/LTAI.Desktop/MainWindow.cs`：`CreateTextPadView` 订阅简化，直接透传 prompt（line 273-278）
+
+### Citation Rendering
+- `src/LTAI.Desktop/ChatMessageRenderer.cs`：
+  - 新增 `CitationRegex` 正则（match `[@f](line:N)` 和 `@f:N`）
+  - 新增 `OnNavigateToFile` 静态回调（Action<string, int>）
+  - `RenderResponse` 末尾扫描 citations → 渲染 `MakeCitationChip` 芯片
+  - `MakeCitationChip`：圆角 Border + 文件图标 + 文件名 → PointerPressed → 触发 `OnNavigateToFile`
+- `src/LTAI.Desktop/TextPadView.cs`：新增 `OpenFileAndScrollTo(path, line)` 公开方法
+- `src/LTAI.Desktop/MainWindow.cs`：`CreateTextPadView` 中订阅 `ChatMessageRenderer.OnNavigateToFile`，切换到代码视图 + 跳转行
+
+### Global Capsule
+- `src/LTAI.Desktop/ChatView.cs`：新增 `Tokens` / `Turns` 公开属性
+- `src/LTAI.Desktop/TextPadView.cs`：新增 `GitBranch` 公开属性
+- `src/LTAI.Desktop/ViewModels/MainWindowViewModel.cs`：新增 `CapsuleText` ObservableProperty
+- `src/LTAI.Desktop/MainWindow.cs`：
+  - 新增 `_capsuleText` TextBlock（line 28, 233-241）
+  - 状态栏 DockPanel 结构：_statusLeft + _capsuleText + _statusRight（Dock.Right）
+  - 2s 定时器读取 ChatView.Tokens + TextPadView.GitBranch + Router.ActiveProvider → 更新 CapsuleText
+
+## Verification
+- [x] `dotnet build src/LTAI.Core` 0 errors
+- [x] `dotnet build src/LTAI.Desktop` 0 errors (20 pre-existing warnings)
+- [x] `dotnet build src/LTAI.TUI` 0 errors (4 pre-existing warnings)
+- [x] `dotnet build src/LTAI.Web` 0 errors
+- [x] `dotnet build src/LTAI.Cli` 0 errors
+- [x] `dotnet build LTAI.sln` 0 errors
 

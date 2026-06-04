@@ -194,7 +194,7 @@ public sealed class JobsView : UserControl
         var idCell = new TextBlock
         {
             Text = id,
-            FontFamily = new("Consolas"),
+            FontFamily = LtaiTheme.CodeFont,
             FontSize = 12,
             Foreground = LtaiTheme.Sbb(LtaiTheme.TextPrimary),
             VerticalAlignment = VerticalAlignment.Center,
@@ -203,16 +203,17 @@ public sealed class JobsView : UserControl
         grid.Children.Add(idCell);
 
         // Status (icon + label)
-        string statusIcon, statusLabel, statusColor;
-        if (!j.Completed) { statusIcon = "⏳"; statusLabel = "运行中"; statusColor = "#f0b429"; }
-        else if (j.ExitCode == 0) { statusIcon = "✅"; statusLabel = "完成"; statusColor = "#3fb950"; }
-        else if (j.Error == "Cancelled") { statusIcon = "🚫"; statusLabel = "取消"; statusColor = "#8b949e"; }
-        else { statusIcon = "❌"; statusLabel = "失败"; statusColor = "#f85149"; }
+        string statusIcon, statusLabel;
+        Color statusColor;
+        if (!j.Completed) { statusIcon = "⏳"; statusLabel = "运行中"; statusColor = LtaiTheme.AccentWarning; }
+        else if (j.ExitCode == 0) { statusIcon = "✅"; statusLabel = "完成"; statusColor = LtaiTheme.AccentSystem; }
+        else if (j.Error == "Cancelled") { statusIcon = "🚫"; statusLabel = "取消"; statusColor = LtaiTheme.TextSecondary; }
+        else { statusIcon = "❌"; statusLabel = "失败"; statusColor = LtaiTheme.AccentDanger; }
         var statusCell = new TextBlock
         {
             Text = $"{statusIcon} {statusLabel}",
             FontSize = 11,
-            Foreground = LtaiTheme.Sbb(Color.Parse(statusColor)),
+            Foreground = LtaiTheme.Sbb(statusColor),
             VerticalAlignment = VerticalAlignment.Center,
         };
         Grid.SetColumn(statusCell, 1);
@@ -222,7 +223,7 @@ public sealed class JobsView : UserControl
         var exitCell = new TextBlock
         {
             Text = j.Completed ? (j.ExitCode?.ToString() ?? "?") : "—",
-            FontFamily = new("Consolas"),
+            FontFamily = LtaiTheme.CodeFont,
             FontSize = 11,
             Foreground = LtaiTheme.Sbb(j.Completed && j.ExitCode == 0
                 ? LtaiTheme.TextSecondary
@@ -240,7 +241,7 @@ public sealed class JobsView : UserControl
         var elapsedCell = new TextBlock
         {
             Text = elapsedStr,
-            FontFamily = new("Consolas"),
+            FontFamily = LtaiTheme.CodeFont,
             FontSize = 11,
             Foreground = LtaiTheme.Sbb(LtaiTheme.TextSecondary),
             VerticalAlignment = VerticalAlignment.Center,
@@ -256,7 +257,7 @@ public sealed class JobsView : UserControl
             Text = cmd,
             FontSize = 10,
             Foreground = LtaiTheme.Sbb(LtaiTheme.TextDim),
-            FontFamily = new("Consolas"),
+            FontFamily = LtaiTheme.CodeFont,
             TextTrimming = TextTrimming.CharacterEllipsis,
             VerticalAlignment = VerticalAlignment.Center,
         };

@@ -1,30 +1,22 @@
-using System.Diagnostics;
 using Avalonia.Controls;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
 using LTAI.Desktop.DevUI;
+using LTAI.Desktop.ViewModels;
 
 namespace LTAI.Desktop;
 
 public sealed class DashboardView : UserControl
 {
-    private readonly LTAIService _svc;
-    private readonly TextBlock _sysText;
-    private readonly TextBlock _healthText;
-    private readonly TextBlock _sessionText;
-    private readonly ProgressBar _contextBar;
-    private readonly TextBlock _contextLabel;
-    private readonly ProgressBar _cacheBar;
-    private readonly TextBlock _cacheLabel;
+    private readonly DashboardViewModel _vm;
     private readonly DispatcherTimer _timer;
     private readonly TextBlock _devUiStatusText;
     private readonly Lazy<DevUIHost> _devUiHostLazy = new(() => new DevUIHost());
-    private static readonly Process _cachedProcess = Process.GetCurrentProcess();
 
     public DashboardView(LTAIService svc)
     {
-        _svc = svc;
+        _vm = new DashboardViewModel(svc);
         Background = LtaiTheme.Sbb(LtaiTheme.Bg);
 
         var root = new StackPanel { Spacing = 12, Margin = new(16) };
@@ -36,65 +28,85 @@ public sealed class DashboardView : UserControl
             Foreground = LtaiTheme.Sbb(LtaiTheme.TextPrimary)
         });
 
-        (_sysText, _) = AddPanel(root, "系统");
-        (_healthText, _) = AddPanel(root, "运行时");
-        (_sessionText, var sessionBorder) = AddPanel(root, "会话");
+        var (sysText, _) = AddPanel(root, "系统");
+        var (healthText, _) = AddPanel(root, "运行时");
+        var (sessionText, sessionBorder) = AddPanel(root, "会话");
 
-        // 上下文容量进度条 — 替换 Border 的 Child 为 StackPanel 以容纳文本+进度条
-        _contextLabel = new TextBlock
+        var contextLabel = new TextBlock
         {
             Foreground = LtaiTheme.Sbb(LtaiTheme.TextSecondary),
             FontSize = 11,
         };
-        _contextBar = new ProgressBar
+        var contextBar = new ProgressBar
         {
             Minimum = 0,
             Maximum = 100,
             Height = 12,
             Foreground = LtaiTheme.Sbb(LtaiTheme.AccentDNA),
-            Background = LtaiTheme.Sbb(Color.Parse("#1a2332")),
+            Background = LtaiTheme.Sbb(LtaiTheme.SurfaceOverlay),
             Margin = new(0, 2, 0, 0),
         };
+        var cacheLabel = new TextBlock
+        {
+            Foreground = LtaiTheme.Sbb(LtaiTheme.TextSecondary),
+            FontSize = 11,
+        };
+        var cacheBar = new ProgressBar
+        {
+            Minimum = 0,
+            Maximum = 100,
+            Height = 12,
+            Foreground = LtaiTheme.Sbb(LtaiTheme.AccentDNA),
+            Background = LtaiTheme.Sbb(LtaiTheme.SurfaceOverlay),
+            Margin = new(0, 2, 0, 0),
+        };
+
         var sessionContent = new StackPanel { Spacing = 2 };
-        sessionContent.Children.Add(_sessionText);
-        sessionContent.Children.Add(_contextLabel);
-        sessionContent.Children.Add(_contextBar);
-        // 缓存命中率进度条
-        _cacheLabel = new TextBlock
-        {
-            Foreground = LtaiTheme.Sbb(LtaiTheme.TextSecondary),
-            FontSize = 11,
-        };
-        _cacheBar = new ProgressBar
-        {
-            Minimum = 0,
-            Maximum = 100,
-            Height = 12,
-            Foreground = LtaiTheme.Sbb(LtaiTheme.AccentDNA),
-            Background = LtaiTheme.Sbb(Color.Parse("#1a2332")),
-            Margin = new(0, 2, 0, 0),
-        };
-        sessionContent.Children.Add(_cacheLabel);
-        sessionContent.Children.Add(_cacheBar);
+        sessionContent.Children.Add(sessionText);
+        sessionContent.Children.Add(contextLabel);
+        sessionContent.Children.Add(contextBar);
+        sessionContent.Children.Add(cacheLabel);
+        sessionContent.Children.Add(cacheBar);
+        sessionBorder.Child = sessionContent;
 
-        Content = root;
-        _timer = new DispatcherTimer(TimeSpan.FromSeconds(2), DispatcherPriority.Background, (_, _) => Refresh());
-        _timer.Start();
-        DetachedFromVisualTree += (_, _) => _timer.Stop();
-        AttachedToVisualTree += (_, _) =>
+        _vm.PropertyChanged += (_, e) =>
         {
-            Refresh();
-            if (!_timer.IsEnabled) _timer.Start();
+            switch (e.PropertyName)
+            {
+                case nameof(_vm.SysInfo):
+                    sysText.Text = _vm.SysInfo;
+                    break;
+                case nameof(_vm.HealthInfo):
+                    healthText.Text = _vm.HealthInfo;
+                    break;
+                case nameof(_vm.SessionInfo):
+                    sessionText.Text = _vm.SessionInfo;
+                    break;
+                case nameof(_vm.ContextRatio):
+                    contextBar.Value = _vm.ContextRatio;
+                    break;
+                case nameof(_vm.ContextLabel):
+                    contextLabel.Text = _vm.ContextLabel;
+                    break;
+                case nameof(_vm.CacheHitRate):
+                    cacheBar.Value = _vm.CacheHitRate;
+                    break;
+                case nameof(_vm.CacheLabel):
+                    cacheLabel.Text = _vm.CacheLabel;
+                    break;
+                case nameof(_vm.DevUiStatus):
+                    _devUiStatusText.Text = _vm.DevUiStatus;
+                    break;
+                case nameof(_vm.DevUiStatusVisible):
+                    _devUiStatusText.IsVisible = _vm.DevUiStatusVisible;
+                    break;
+            }
         };
-        Refresh();
 
-        // P9.2: DevUI launch button. Starts in-process Kestrel + opens system
-        // browser pointed at /devui (avoids WebView2 dep). The DevUI host
-        // itself is owned by MainWindow so it can outlive view switches.
         var devUiBtn = new Button
         {
             Content = "Open DevUI in Browser",
-            HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Left,
+            HorizontalAlignment = HorizontalAlignment.Left,
             Margin = new(0, 8, 0, 0),
         };
         devUiBtn.Click += async (_, _) =>
@@ -105,17 +117,13 @@ public sealed class DashboardView : UserControl
                 var sp = App.Services
                     ?? throw new InvalidOperationException("App.Services not initialized");
                 if (host.BaseUrl is null)
-                {
                     await host.StartAsync(sp);
-                }
                 host.OpenInBrowser();
-                _devUiStatusText.Text = $"[DevUI] running at {host.BaseUrl}/devui (browser-launched)";
-                _devUiStatusText.IsVisible = true;
+                _vm.SetDevUiStatus($"[DevUI] running at {host.BaseUrl}/devui (browser-launched)", true);
             }
             catch (Exception ex)
             {
-                _devUiStatusText.Text = $"[DevUI] failed: {ex.Message}";
-                _devUiStatusText.IsVisible = true;
+                _vm.SetDevUiStatus($"[DevUI] failed: {ex.Message}", true);
             }
         };
         _devUiStatusText = new TextBlock
@@ -126,29 +134,19 @@ public sealed class DashboardView : UserControl
         };
         root.Children.Add(devUiBtn);
         root.Children.Add(_devUiStatusText);
+
+        Content = root;
+        _timer = new DispatcherTimer(TimeSpan.FromSeconds(2), DispatcherPriority.Background, (_, _) => _vm.Refresh());
+        _timer.Start();
+        DetachedFromVisualTree += (_, _) => _timer.Stop();
+        AttachedToVisualTree += (_, _) =>
+        {
+            _vm.Refresh();
+            if (!_timer.IsEnabled) _timer.Start();
+        };
+        _vm.Refresh();
     }
 
-    private void Refresh()
-    {
-        _cachedProcess.Refresh();
-        _sysText.Text = $"模式: {_svc.Mode}\nDNA: {_svc.DNAStatus}\n安全: {_svc.SafetyPosture}\nPID: {_cachedProcess.Id}\n运行: {(_cachedProcess.StartTime != default ? DateTime.Now - _cachedProcess.StartTime : TimeSpan.Zero):hh\\:mm\\:ss}";
-        _healthText.Text = $"GC 内存: {GC.GetTotalMemory(false) / 1024 / 1024} MB\n线程: {ThreadPool.ThreadCount}\n.NET: {Environment.Version}";
-        _sessionText.Text = $"模型: {LTAI.Core.Configuration.UsageTracker.ActiveModel}\n"
-                          + $"Token: {LTAI.Core.Configuration.UsageTracker.PromptTokens:N0}+{LTAI.Core.Configuration.UsageTracker.CompletionTokens:N0}={LTAI.Core.Configuration.UsageTracker.TotalTokens:N0}\n"
-                          + $"请求: {LTAI.Core.Configuration.UsageTracker.Requests}\n"
-                          + $"费用: {LTAI.Core.Configuration.UsageTracker.CostDisplay}\n"
-                          + $"运行: {LTAI.Core.Configuration.UsageTracker.Uptime:hh':'mm':'ss}\n"
-                          + $"余额: {LTAI.Core.Configuration.UsageTracker.BalanceDisplay}";
-        _contextBar.Value = LTAI.Core.Configuration.UsageTracker.ContextRatio(_svc.Options.AI.MaxTokens) * 100;
-        _contextLabel.Text = $"上下文容量: {LTAI.Core.Configuration.UsageTracker.ContextText(_svc.Options.AI.MaxTokens)}";
-
-        var totalCalls = LTAI.Core.Configuration.UsageTracker.CacheHits + LTAI.Core.Configuration.UsageTracker.CacheMisses;
-        var hitRate = totalCalls > 0 ? LTAI.Core.Configuration.UsageTracker.CacheHitRate : 0;
-        _cacheBar.Value = hitRate;
-        _cacheLabel.Text = $"缓存命中: {hitRate:F1}% ({LTAI.Core.Configuration.UsageTracker.CacheHits}/{totalCalls})";
-    }
-
-    /// <summary>Add a panel to the dashboard. Returns (contentTextBlock, border) for further customization.</summary>
     private static (TextBlock, Border) AddPanel(StackPanel parent, string title)
     {
         var tb = new TextBlock { Text = title, FontWeight = FontWeight.Bold, Foreground = LtaiTheme.Sbb(LtaiTheme.TextPrimary) };

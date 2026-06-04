@@ -17,7 +17,7 @@ public sealed class ToolCallEmojiRenderer : IToolResultRenderer
         {
             Text = $"🔧 {toolName}",
             Foreground = LtaiTheme.Sbb(LtaiTheme.AccentInfo),
-            FontFamily = new FontFamily("Consolas"),
+            FontFamily = LtaiTheme.CodeFont,
             FontSize = 11
         });
 

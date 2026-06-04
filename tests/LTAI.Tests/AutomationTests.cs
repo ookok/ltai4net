@@ -13,6 +13,7 @@ using Xunit.Abstractions;
 
 namespace LTAI.Tests;
 
+[Trait("Category", "Automation")]
 public class AutomationTests
 {
     private readonly ITestOutputHelper _output;

@@ -1,6 +1,6 @@
 using System.Text;
 using LTAI.Agent.Tools;
-using LTAI.TUI.Commands;
+using LTAI.Core.Commands;
 using Spectre.Console;
 
 namespace LTAI.TUI.Services;

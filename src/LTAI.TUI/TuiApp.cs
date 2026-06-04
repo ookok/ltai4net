@@ -39,6 +39,7 @@ public sealed class TuiApp
         LTAIDevUIService devUi,
         DevUISpanCollector spanCollector,
         QuestionService questionService,
+        Rendering.ChatRenderer renderer,
         LTAI.Agent.Workflows.YAMLWorkflowRegistry? workflows = null,
         LTAI.AI.LocalEmbedder? embedder = null,
         LTAI.AI.ToolEmbeddingCache? embedCache = null,
@@ -50,7 +51,7 @@ public sealed class TuiApp
         _llmConfig = llmConfig;
         _config = config;
         _projectRoot = projectRoot;
-        _chatLayout = new ChatLayout(chat, questionService);
+        _chatLayout = new ChatLayout(chat, renderer, questionService, new LTAI.Core.Session.SessionManager());
         _devUi = devUi;
         _spanCollector = spanCollector;
         _questionService = questionService;

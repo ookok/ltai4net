@@ -6,10 +6,7 @@ using LTAI.Core.Configuration;
 
 namespace LTAI.Desktop;
 
-/// <summary>
-/// 配置面板：Provider/Key 管理 + L1/L2 模型选择
-/// </summary>
-public sealed class ConfigView : UserControl
+public sealed class ConfigDialog : Window
 {
     private static readonly System.Net.Http.HttpClient _sharedHttp = new() { Timeout = TimeSpan.FromSeconds(10) };
     private readonly TextBlock _content;
@@ -17,9 +14,14 @@ public sealed class ConfigView : UserControl
     private readonly ComboBox _l2ModelBox;
     private readonly TextBlock _statusBar;
 
-    public ConfigView()
+    public ConfigDialog()
     {
+        Title = "配置管理";
+        Width = 480;
+        Height = 400;
+        WindowStartupLocation = WindowStartupLocation.CenterOwner;
         Background = LtaiTheme.Sbb(LtaiTheme.Bg);
+
         var root = new StackPanel { Spacing = 8, Margin = new(16) };
 
         root.Children.Add(new TextBlock
@@ -30,7 +32,6 @@ public sealed class ConfigView : UserControl
         { Foreground = LtaiTheme.Sbb(LtaiTheme.TextSecondary), TextWrapping = TextWrapping.Wrap };
         root.Children.Add(_content);
 
-        // L1/L2 模型选择
         root.Children.Add(new TextBlock
         { Text = "L1 (Flash) 模型:", FontWeight = FontWeight.Bold,
           Foreground = LtaiTheme.Sbb(LtaiTheme.TextPrimary), Margin = new(0, 8, 0, 0) });
@@ -45,13 +46,22 @@ public sealed class ConfigView : UserControl
 
         var fetchBtn = new Button
         { Content = "🔄 获取可用模型", Background = LtaiTheme.Sbb(LtaiTheme.AccentDNA),
-          Foreground = LtaiTheme.Sbb("#ffffff"), Margin = new(0, 4, 0, 0) };
+          Foreground = LtaiTheme.Sbb(LtaiTheme.TextOnAccent), Margin = new(0, 4, 0, 0) };
         fetchBtn.Click += async (_, _) => await FetchModels();
         root.Children.Add(fetchBtn);
 
         _statusBar = new TextBlock
         { Foreground = LtaiTheme.Sbb(LtaiTheme.TextSecondary), FontSize = 11 };
         root.Children.Add(_statusBar);
+
+        var closeBtn = new Button
+        { Content = "关闭", Width = 80, HorizontalAlignment = HorizontalAlignment.Right,
+          Background = LtaiTheme.Sbb(LtaiTheme.BgPanel),
+          Foreground = LtaiTheme.Sbb(LtaiTheme.TextPrimary),
+          BorderBrush = LtaiTheme.Sbb(LtaiTheme.Border),
+          Margin = new(0, 4, 0, 0) };
+        closeBtn.Click += (_, _) => Close();
+        root.Children.Add(closeBtn);
 
         Content = root;
         RefreshKeys();
@@ -77,15 +87,11 @@ public sealed class ConfigView : UserControl
             var defaultProvider = "DEEPSEEK_API_KEY";
             var apiKey = SecretManager.Get(defaultProvider);
             if (string.IsNullOrEmpty(apiKey))
-            {
-                // Try other known provider keys
                 apiKey = KnownKeys.All.Select(k => SecretManager.Get(k.EnvVar))
                     .FirstOrDefault(k => !string.IsNullOrEmpty(k));
-            }
             if (string.IsNullOrEmpty(apiKey))
             { _statusBar.Text = "⚠️ 未配置 API Key"; return; }
 
-            // Find the default provider endpoint
             var keyInfo = KnownKeys.All.FirstOrDefault(k => SecretManager.Has(k.EnvVar));
             var endpoint = keyInfo?.Endpoint ?? "https://api.deepseek.com/v1";
 

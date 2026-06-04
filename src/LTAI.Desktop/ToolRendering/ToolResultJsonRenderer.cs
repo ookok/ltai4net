@@ -18,15 +18,15 @@ public sealed class ToolResultJsonRenderer : IToolResultRenderer
             var success = root.TryGetProperty("success", out var s) && s.GetBoolean();
             var output = root.TryGetProperty("output", out var o) ? o.GetString() ?? "" : "";
 
-            var color = success ? "#a371f7" : "#e74c3c";
+            var accent = success ? LtaiTheme.AccentInfo : LtaiTheme.AccentDanger;
             var label = success ? "✅" : "❌";
             var preview = output.Length > 80 ? output[..80] + "..." : output;
 
             return new TextBlock
             {
                 Text = $"{label} {preview}",
-                Foreground = LtaiTheme.Sbb(color),
-                FontFamily = new FontFamily("Consolas"),
+                Foreground = LtaiTheme.Sbb(accent),
+                FontFamily = LtaiTheme.CodeFont,
                 FontSize = 11,
                 TextWrapping = TextWrapping.Wrap
             };

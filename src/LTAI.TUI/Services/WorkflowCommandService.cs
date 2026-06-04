@@ -1,5 +1,5 @@
 using LTAI.Agent.Workflows;
-using LTAI.TUI.Commands;
+using LTAI.Core.Commands;
 using Spectre.Console;
 
 namespace LTAI.TUI.Services;

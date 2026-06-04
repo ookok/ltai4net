@@ -118,7 +118,7 @@ public sealed class ProviderVerificationTests
         // MiMo uses non-standard hostname; DNS may fail from CN
         var (ok, detail) = await Check(async http =>
         {
-            var req = new HttpRequestMessage(HttpMethod.Get, "https://api.mimo.mi.com/v1/models");
+            var req = new HttpRequestMessage(HttpMethod.Get, "https://api.xiaomimimo.com/v1/models");
             req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
             return await http.SendAsync(req);
         });

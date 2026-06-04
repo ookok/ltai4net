@@ -1,4 +1,4 @@
-using LTAI.TUI.Commands;
+using LTAI.Core.Commands;
 
 namespace LTAI.TUI.Services;
 

@@ -152,6 +152,7 @@ public static class Program
             sp.GetRequiredService<LTAI.Agent.DevUI.LTAIDevUIService>(),
             sp.GetRequiredService<LTAI.TUI.DevUI.DevUISpanCollector>(),
             sp.GetRequiredService<LTAI.Agent.Tools.QuestionService>(),
+            new Rendering.ChatRenderer(AnsiConsole.Console),
             sp.GetService<LTAI.Agent.Workflows.YAMLWorkflowRegistry>(),
             sp.GetService<LTAI.AI.LocalEmbedder>(),
             sp.GetService<LTAI.AI.ToolEmbeddingCache>(),

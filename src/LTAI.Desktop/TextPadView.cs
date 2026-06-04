@@ -1,3 +1,4 @@
+using Avalonia;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
@@ -29,6 +30,8 @@ public sealed class TextPadView : UserControl
     private readonly Button _toggleBtn;
     private readonly ListBox _symbolList;
     private readonly TextBox _buildOutput;
+    private readonly Border _gitOutputPanel;
+    private readonly TextBlock _gitOutputText;
     private readonly StackPanel _buildPanel;
     private readonly Button _buildBtn;
     private readonly Button _publishBtn;
@@ -57,17 +60,22 @@ public sealed class TextPadView : UserControl
 
     private FileSystemWatcher? _watcher;
     private string? _gitBranch;
+    public string? GitBranch => _gitBranch;
     private Dictionary<string, string> _gitFileStatus = new();
-    private readonly Button _gitCommitBtn;
-    private readonly Button _gitPullBtn;
-    private readonly Button _gitPushBtn;
-    private readonly Button _gitBlameBtn;
-    private readonly TextBlock _gitBranchLabel;
+    private string? _selectedText;
+    private Button _gitCommitBtn = null!;
+    private Button _gitPullBtn = null!;
+    private Button _gitPushBtn = null!;
+    private Button _gitBlameBtn = null!;
+    private TextBlock _gitBranchLabel = null!;
     private readonly ListBox _problemList;
     private readonly Terminal.TerminalView _terminalView;
     private readonly Button _terminalBtn;
     private FileSystemWatcher? _fileWatcher;
     private Dictionary<string, string>? _blameData;
+    private TextEditor? _splitEditor;
+    private bool _showSplit;
+    private readonly Grid _editorGrid;
     private sealed record SymbolItem(string Icon, string Name, int Line);
 
     public TextPadView(string? rootDir = null)
@@ -79,14 +87,24 @@ public sealed class TextPadView : UserControl
             MinWidth = 250, MaxWidth = 400,
             Background = LtaiTheme.Sbb(LtaiTheme.Bg),
             Foreground = LtaiTheme.Sbb(LtaiTheme.TextPrimary),
+            SelectionMode = SelectionMode.Multiple,
         };
         _tree.SelectionChanged += OnTreeSelectionChanged;
+        _tree.ContextMenu = MakeTreeContextMenu();
+        _tree.DoubleTapped += (_, _) =>
+        {
+            if (_tree.SelectedItem is TreeViewItem item && item.Tag is string path)
+            {
+                if (Directory.Exists(path)) { item.IsExpanded = !item.IsExpanded; }
+                else if (File.Exists(path)) OpenFile(path);
+            }
+        };
         BuildTree(_tree.Items, _rootDir);
 
         _editor = new TextEditor
         {
             IsReadOnly = true, ShowLineNumbers = true,
-            FontFamily = new FontFamily("Consolas"), FontSize = 13,
+            FontFamily = LtaiTheme.CodeFont, FontSize = 13,
             Background = LtaiTheme.Sbb(LtaiTheme.Bg),
             Foreground = LtaiTheme.Sbb(LtaiTheme.TextPrimary),
             LineNumbersForeground = LtaiTheme.Sbb(LtaiTheme.TextDim),
@@ -95,14 +113,22 @@ public sealed class TextPadView : UserControl
         try { _editor.SyntaxHighlighting = HighlightingManager.Instance.GetDefinition("C#"); } catch { }
 
         // 当前行高亮
-        _editor.TextArea.TextView.CurrentLineBackground = LtaiTheme.Sbb(Color.Parse("#1a2332"));
-        _editor.TextArea.TextView.CurrentLineBorder = new Pen(LtaiTheme.Sbb(Color.Parse("#2d3a4a")), 1);
-        // 选中文本背景
-        _editor.TextArea.SelectionBrush = LtaiTheme.Sbb(Color.Parse("#264f78"));
+        _editor.TextArea.TextView.CurrentLineBackground = LtaiTheme.Sbb(LtaiTheme.SurfaceOverlay);
+        _editor.TextArea.TextView.CurrentLineBorder = new Pen(LtaiTheme.Sbb(LtaiTheme.CurrentLineBorder), 1);
+        _editor.TextArea.SelectionBrush = LtaiTheme.Sbb(LtaiTheme.SelectionBg);
         _editor.TextArea.SelectionCornerRadius = 2;
-        // 括号匹配（AvaloniaEdit 默认已启用）
-        _editor.TextArea.SelectionBrush = LtaiTheme.Sbb(Color.Parse("#264f78"));
+        _editor.TextArea.SelectionBrush = LtaiTheme.Sbb(LtaiTheme.SelectionBg);
         _editor.TextArea.SelectionCornerRadius = 2;
+
+        // 选中内容追踪（Smart Context Injection）
+        _editor.TextArea.SelectionChanged += (_, _) =>
+        {
+            _selectedText = _editor.SelectedText;
+            if (!string.IsNullOrEmpty(_selectedText))
+                _statusBar.Text = $"选中 {_selectedText.Length} 字符 · {_currentFile ?? ""}";
+            else if (_currentFile != null)
+                _statusBar.Text = $"{_currentFile}  |  {FormatSize(new FileInfo(_currentFile).Length)}";
+        };
 
         // URL 超链接检测（Ctrl+点击跳转）
         _editor.Options = new TextEditorOptions
@@ -139,7 +165,7 @@ public sealed class TextPadView : UserControl
         {
             Content = "🔓 编辑", FontSize = 11,
             Background = LtaiTheme.Sbb(LtaiTheme.AccentDNA),
-            Foreground = LtaiTheme.Sbb("#ffffff"), Margin = new(0, 0, 4, 0),
+            Foreground = LtaiTheme.Sbb(LtaiTheme.TextOnAccent), Margin = new(0, 0, 4, 0),
         };
         _toggleBtn.Click += (_, _) => ToggleEdit();
 
@@ -147,7 +173,7 @@ public sealed class TextPadView : UserControl
         {
             Content = "🔍 语法检查", FontSize = 11,
             Background = LtaiTheme.Sbb(LtaiTheme.AccentInfo),
-            Foreground = LtaiTheme.Sbb("#ffffff"),
+            Foreground = LtaiTheme.Sbb(LtaiTheme.TextOnAccent),
         };
         checkBtn.Click += (_, _) => RunSyntaxCheck();
 
@@ -155,7 +181,7 @@ public sealed class TextPadView : UserControl
         {
             Content = "💾 保存", FontSize = 11,
             Background = LtaiTheme.Sbb(LtaiTheme.AccentSystem),
-            Foreground = LtaiTheme.Sbb("#ffffff"),
+            Foreground = LtaiTheme.Sbb(LtaiTheme.TextOnAccent),
         };
         saveBtn.Click += (_, _) => SaveFile();
 
@@ -184,7 +210,7 @@ public sealed class TextPadView : UserControl
         _buildOutput = new TextBox
         {
             IsReadOnly = true,
-            FontFamily = new FontFamily("Consolas"),
+            FontFamily = LtaiTheme.CodeFont,
             FontSize = 11,
             Background = LtaiTheme.Sbb(LtaiTheme.Bg),
             Foreground = LtaiTheme.Sbb(LtaiTheme.TextPrimary),
@@ -192,18 +218,40 @@ public sealed class TextPadView : UserControl
             TextWrapping = TextWrapping.Wrap,
             IsVisible = false,
         };
-        _buildBtn = new Button { Content = "🛠 Build", FontSize = 10, Height = 20, Background = LtaiTheme.Sbb(LtaiTheme.AccentDNA), Foreground = LtaiTheme.Sbb("#ffffff"), IsVisible = false };
+
+        // ── Git Terminal Panel ──
+        _gitOutputPanel = new Border
+        {
+            Background = LtaiTheme.Sbb(Color.Parse("#0d1117")),
+            BorderBrush = LtaiTheme.Sbb(LtaiTheme.Border),
+            BorderThickness = new(1),
+            CornerRadius = new CornerRadius(6),
+            Padding = new(10),
+            Margin = new(0, 4, 0, 0),
+            IsVisible = false,
+            MaxHeight = 300,
+        };
+        _gitOutputText = new TextBlock
+        {
+            FontFamily = LtaiTheme.CodeFont,
+            FontSize = 12,
+            TextWrapping = TextWrapping.Wrap,
+            Foreground = LtaiTheme.Sbb(Color.Parse("#c9d1d9")),
+        };
+        _gitOutputPanel.Child = _gitOutputText;
+
+        _buildBtn = new Button { Content = "🛠 Build", FontSize = 10, Height = 20, Background = LtaiTheme.Sbb(LtaiTheme.AccentDNA), Foreground = LtaiTheme.Sbb(LtaiTheme.TextOnAccent), IsVisible = false };
         _buildBtn.Click += (_, _) => RunProjectCmd("build");
-        _testBtn = new Button { Content = "🧪 Test", FontSize = 10, Height = 20, Background = LtaiTheme.Sbb(LtaiTheme.AccentInfo), Foreground = LtaiTheme.Sbb("#ffffff"), IsVisible = false };
+        _testBtn = new Button { Content = "🧪 Test", FontSize = 10, Height = 20, Background = LtaiTheme.Sbb(LtaiTheme.AccentInfo), Foreground = LtaiTheme.Sbb(LtaiTheme.TextOnAccent), IsVisible = false };
         _testBtn.Click += (_, _) => RunProjectCmd("test");
-        _publishBtn = new Button { Content = "🚀 Deploy", FontSize = 10, Height = 20, Background = LtaiTheme.Sbb(LtaiTheme.AccentSystem), Foreground = LtaiTheme.Sbb("#ffffff"), IsVisible = false };
+        _publishBtn = new Button { Content = "🚀 Deploy", FontSize = 10, Height = 20, Background = LtaiTheme.Sbb(LtaiTheme.AccentSystem), Foreground = LtaiTheme.Sbb(LtaiTheme.TextOnAccent), IsVisible = false };
         _publishBtn.Click += (_, _) => RunProjectCmd("publish");
-        _runBtn = new Button { Content = "▶ Run", FontSize = 10, Height = 20, Background = LtaiTheme.Sbb(LtaiTheme.AccentInfo), Foreground = LtaiTheme.Sbb("#ffffff"), IsVisible = false };
+        _runBtn = new Button { Content = "▶ Run", FontSize = 10, Height = 20, Background = LtaiTheme.Sbb(LtaiTheme.AccentInfo), Foreground = LtaiTheme.Sbb(LtaiTheme.TextOnAccent), IsVisible = false };
         _runBtn.Click += (_, _) => RunProjectCmd("run");
 
-        var formatBtn = new Button { Content = "✨ Format", FontSize = 10, Height = 20, Background = LtaiTheme.Sbb(LtaiTheme.AccentWarning), Foreground = LtaiTheme.Sbb("#ffffff") };
+        var formatBtn = new Button { Content = "✨ Format", FontSize = 10, Height = 20, Background = LtaiTheme.Sbb(LtaiTheme.AccentWarning), Foreground = LtaiTheme.Sbb(LtaiTheme.TextOnAccent) };
         formatBtn.Click += (_, _) => RunFormat();
-        var askAiBtn = new Button { Content = "🤖 问 AI", FontSize = 10, Height = 20, Background = LtaiTheme.Sbb(LtaiTheme.AccentDNA), Foreground = LtaiTheme.Sbb("#ffffff") };
+        var askAiBtn = new Button { Content = "🤖 问 AI", FontSize = 10, Height = 20, Background = LtaiTheme.Sbb(LtaiTheme.AccentDNA), Foreground = LtaiTheme.Sbb(LtaiTheme.TextOnAccent) };
         askAiBtn.Click += (_, _) => AskAiWithContext(_currentFile ?? _rootDir);
 
         var wrapBtn = new Button { Content = "⤫ 换行", FontSize = 10, Height = 20, Background = LtaiTheme.Sbb(LtaiTheme.BgPanel), Foreground = LtaiTheme.Sbb(LtaiTheme.TextDim) };
@@ -211,10 +259,28 @@ public sealed class TextPadView : UserControl
         var gotoBtn = new Button { Content = "↕ 跳转", FontSize = 10, Height = 20, Background = LtaiTheme.Sbb(LtaiTheme.BgPanel), Foreground = LtaiTheme.Sbb(LtaiTheme.TextDim) };
         gotoBtn.Click += (_, _) => ShowGoToLineDialog();
 
+        // ── 分屏按钮 ──
+        var splitBtn = new Button { Content = "📐 分屏", FontSize = 10, Height = 20, Background = LtaiTheme.Sbb(LtaiTheme.BgPanel), Foreground = LtaiTheme.Sbb(LtaiTheme.TextDim) };
+        splitBtn.Click += (_, _) => ToggleSplitView();
+
+        // ── Git 按钮 ──
+        _gitBranchLabel = new TextBlock { FontSize = 11, Foreground = LtaiTheme.Sbb(LtaiTheme.AccentInfo), IsVisible = false, VerticalAlignment = VerticalAlignment.Center };
+        _gitCommitBtn = new Button { Content = "💾 Commit", FontSize = 10, Height = 20, Background = LtaiTheme.Sbb(LtaiTheme.AccentSystem), Foreground = LtaiTheme.Sbb(LtaiTheme.TextOnAccent), IsVisible = false };
+        _gitCommitBtn.Click += (_, _) => ShowGitCommitDialog();
+        _gitPullBtn = new Button { Content = "⬇ Pull", FontSize = 10, Height = 20, Background = LtaiTheme.Sbb(LtaiTheme.AccentInfo), Foreground = LtaiTheme.Sbb(LtaiTheme.TextOnAccent), IsVisible = false };
+        _gitPullBtn.Click += (_, _) => RunGitCmd("pull");
+        _gitPushBtn = new Button { Content = "⬆ Push", FontSize = 10, Height = 20, Background = LtaiTheme.Sbb(LtaiTheme.AccentDNA), Foreground = LtaiTheme.Sbb(LtaiTheme.TextOnAccent), IsVisible = false };
+        _gitPushBtn.Click += (_, _) => RunGitCmd("push");
+        _gitBlameBtn = new Button { Content = "👤 Blame", FontSize = 10, Height = 20, Background = LtaiTheme.Sbb(LtaiTheme.AccentWarning), Foreground = LtaiTheme.Sbb(LtaiTheme.TextOnAccent), IsVisible = false };
+        _gitBlameBtn.Click += (_, _) => ToggleBlame();
+
+        // ── 构建/Shell 输出容器 ──
+        _buildPanel = new StackPanel { Spacing = 4, Margin = new(0, 4, 0, 0) };
+
         var toolbar = new StackPanel
         {
             Orientation = Orientation.Horizontal, Margin = new(4), Spacing = 4,
-            Children = { _toggleBtn, checkBtn, saveBtn, formatBtn, askAiBtn, wrapBtn, gotoBtn, _terminalBtn, _gitBranchLabel, _gitCommitBtn, _gitPullBtn, _gitPushBtn, _gitBlameBtn },
+            Children = { _toggleBtn, checkBtn, saveBtn, formatBtn, askAiBtn, wrapBtn, gotoBtn, splitBtn, _terminalBtn, _gitBranchLabel, _gitCommitBtn, _gitPullBtn, _gitPushBtn, _gitBlameBtn },
         };
 
         // ── 终端面板 ──
@@ -227,7 +293,14 @@ public sealed class TextPadView : UserControl
             else _terminalView.Stop();
         };
 
-        _editorPanel = new StackPanel { Children = { toolbar, _editor, _statusBar, _buildPanel, _terminalView } };
+        _editorGrid = new Grid();
+        _editorGrid.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Star));
+        _editorGrid.RowDefinitions.Add(new RowDefinition(GridLength.Star));
+        Grid.SetColumn(_editor, 0);
+        Grid.SetRow(_editor, 0);
+        _editorGrid.Children.Add(_editor);
+
+        _editorPanel = new StackPanel { Children = { toolbar, _editorGrid, _statusBar, _buildPanel, _terminalView } };
 
         var split = new Grid();
         split.ColumnDefinitions.Add(new ColumnDefinition(new GridLength(280)));
@@ -251,6 +324,8 @@ public sealed class TextPadView : UserControl
                 OpenFile(Path.Combine(_rootDir, file));
         };
         _buildPanel.Children.Add(_problemList);
+        _buildPanel.Children.Add(_buildOutput);
+        _buildPanel.Children.Add(_gitOutputPanel);
 
         // ── 项目搜索框（树上方） ──
         var searchBox = new TextBox
@@ -330,7 +405,7 @@ public sealed class TextPadView : UserControl
         _toggleBtn.Content = _isReadOnly ? "🔓 编辑" : "🔒 只读";
         _editor.Background = _isReadOnly
             ? LtaiTheme.Sbb(LtaiTheme.Bg)
-            : LtaiTheme.Sbb(Color.Parse("#1a2332"));
+            : LtaiTheme.Sbb(LtaiTheme.SurfaceOverlay);
     }
 
     private void BuildTree(ItemCollection items, string dir)
@@ -346,6 +421,7 @@ public sealed class TextPadView : UserControl
                     Tag = d,
                     ContextMenu = MakeDirContextMenu(d),
                 };
+                AddDragSupport(node);
                 var capturedNode = node;
                 var capturedDir = d;
                 capturedNode.Expanded += (_, _) => { if (capturedNode.Items.Count == 0) BuildTree(capturedNode.Items, capturedDir); };
@@ -355,6 +431,7 @@ public sealed class TextPadView : UserControl
             {
                 var icon = f.EndsWith(".md") ? "📝" : f.EndsWith(".cs") ? "📄" : f.EndsWith(".py") ? "🐍" : "📄";
                 var node = new TreeViewItem { Header = $"{icon} {Path.GetFileName(f)}", Foreground = LtaiTheme.Sbb(LtaiTheme.TextPrimary), Tag = f, ContextMenu = MakeFileContextMenu(f) };
+                AddDragSupport(node);
                 items.Add(node);
             }
         }
@@ -364,10 +441,94 @@ public sealed class TextPadView : UserControl
         }
     }
 
+    private static void AddDragSupport(TreeViewItem node)
+    {
+        // 拖拽功能因 Avalonia 12 移除了 DataObject/DragDrop.DoDragDrop API 而暂不可用
+        // 替代方案：右键 → "复制路径" 在 MakeFileContextMenu / MakeDirContextMenu 中
+    }
+
+    private ContextMenu MakeTreeContextMenu()
+    {
+        var menu = new ContextMenu();
+        var multiDelete = new MenuItem { Header = "🗑️ 批量删除选中", IsEnabled = false };
+        int? lastMultiCount = null;
+        _tree.SelectionChanged += (_, _) =>
+        {
+            var count = _tree.SelectedItems.Count;
+            var label = count > 1 ? $"🗑️ 批量删除 ({count} 项)" : "🗑️ 批量删除选中";
+            multiDelete.Header = label;
+            multiDelete.IsEnabled = count > 1;
+            if (count > 1 && count != lastMultiCount)
+            {
+                lastMultiCount = count;
+                _statusBar.Text = $"✅ 已选中 {count} 项";
+            }
+        };
+        multiDelete.Click += async (_, _) =>
+        {
+            var top = TopLevel.GetTopLevel(this) as Window;
+            if (top == null) return;
+            var count = _tree.SelectedItems.Count;
+            var dlg = new Window
+            {
+                Title = $"批量删除 {count} 项",
+                Width = 400, Height = 150,
+                WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            };
+            var yesBtn = new Button { Content = "删除", Width = 80 };
+            var noBtn = new Button { Content = "取消", Width = 80 };
+            dlg.Content = new StackPanel
+            {
+                Margin = new(15), Spacing = 8,
+                Children =
+                {
+                    new TextBlock { Text = $"确认删除 {count} 个选中的文件/目录？", TextWrapping = TextWrapping.Wrap },
+                    new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, HorizontalAlignment = HorizontalAlignment.Right, Children = { yesBtn, noBtn } },
+                }
+            };
+            var confirmed = false;
+            yesBtn.Click += (_, _) => { confirmed = true; dlg.Close(); };
+            noBtn.Click += (_, _) => dlg.Close();
+            await dlg.ShowDialog(top);
+            if (!confirmed) return;
+            int deleted = 0, failed = 0;
+            foreach (var sel in _tree.SelectedItems.OfType<TreeViewItem>().ToList())
+            {
+                if (sel.Tag is string fp)
+                {
+                    try
+                    {
+                        if (Directory.Exists(fp)) Directory.Delete(fp, true);
+                        else if (File.Exists(fp)) File.Delete(fp);
+                        deleted++;
+                    }
+                    catch { failed++; }
+                }
+            }
+            _statusBar.Text = failed > 0 ? $"✅ 已删除 {deleted} 项，{failed} 项失败" : $"✅ 已删除 {deleted} 项";
+            RefreshTree();
+        };
+        menu.Items.Add(multiDelete);
+        return menu;
+    }
+
     private ContextMenu MakeFileContextMenu(string path)
     {
         var menu = new ContextMenu();
         menu.Items.Add(WithClick(new MenuItem { Header = "🤖 问 AI" }, (_, _) => AskAiWithContext(path)));
+        menu.Items.Add(WithClick(new MenuItem { Header = "📋 复制路径" }, (_, _) =>
+        {
+            try
+            {
+                using var p = new Process();
+                p.StartInfo = new ProcessStartInfo("powershell", $"-command \"Set-Clipboard -Value '{path.Replace("'", "''")}'\"")
+                {
+                    CreateNoWindow = true, UseShellExecute = false,
+                };
+                p.Start();
+            }
+            catch { }
+        }));
 
         var rename = new MenuItem { Header = "✏️ 重命名" };
         rename.Click += async (_, _) =>
@@ -413,24 +574,19 @@ public sealed class TextPadView : UserControl
     {
         var menu = new ContextMenu();
         menu.Items.Add(WithClick(new MenuItem { Header = "🤖 问 AI (文件夹)" }, (_, _) => AskAiWithContext(path)));
-
-        var rename = new MenuItem { Header = "✏️ 重命名目录" };
-        rename.Click += async (_, _) =>
+        menu.Items.Add(WithClick(new MenuItem { Header = "📋 复制路径" }, (_, _) =>
         {
-            var top = TopLevel.GetTopLevel(this) as Window;
-            if (top == null) return;
-            var input = new TextBox { Text = Path.GetFileName(path) };
-            var ok = new Button { Content = "确定" };
-            var dlg = new Window { Title = "重命名目录", Width = 350, Height = 120, WindowStartupLocation = WindowStartupLocation.CenterOwner,
-                Content = new StackPanel { Margin = new(15), Spacing = 8, Children = { input, ok } } };
-            string? result = null;
-            ok.Click += (_, _) => { result = input.Text?.Trim(); dlg.Close(); };
-            await dlg.ShowDialog(top);
-            if (string.IsNullOrEmpty(result)) return;
-            try { Directory.Move(path, Path.Combine(Path.GetDirectoryName(path)!, result)); RefreshTree(); }
-            catch (Exception ex) { _statusBar.Text = $"❌ 重命名失败: {ex.Message}"; }
-        };
-        menu.Items.Add(rename);
+            try
+            {
+                using var p = new Process();
+                p.StartInfo = new ProcessStartInfo("powershell", $"-command \"Set-Clipboard -Value '{path.Replace("'", "''")}'\"")
+                {
+                    CreateNoWindow = true, UseShellExecute = false,
+                };
+                p.Start();
+            }
+            catch { }
+        }));
 
         // 新建文件
         var newFile = new MenuItem { Header = "📄 新建文件" };
@@ -483,9 +639,68 @@ public sealed class TextPadView : UserControl
         return menu;
     }
 
-    private void AskAiWithContext(string context)
+    private void AskAiWithContext(string path)
     {
-        AskAiRequested?.Invoke(context);
+        var hasSelection = !string.IsNullOrWhiteSpace(_selectedText);
+        var isDir = Directory.Exists(path);
+        var isCode = !isDir && CodeExts.Contains(Path.GetExtension(path));
+
+        string prompt;
+        if (hasSelection && isCode)
+        {
+            prompt = $"解释以下代码（来自 {Path.GetFileName(path)}），重点关注内存管理、性能问题和潜在 Bug：\n\n```\n{_selectedText}\n```";
+        }
+        else if (hasSelection)
+        {
+            prompt = $"分析以下文本（来自 {Path.GetFileName(path)}）：\n\n{_selectedText}";
+        }
+        else if (!isDir)
+        {
+            try
+            {
+                var fi = new FileInfo(path);
+                if (fi.Exists && fi.Length < 50000)
+                {
+                    var content = File.ReadAllText(path);
+                    var lang = (Path.GetExtension(path)?.ToLowerInvariant()) switch
+                    {
+                        ".cs" => "C#", ".py" => "Python", ".js" => "JavaScript",
+                        ".ts" => "TypeScript", ".go" => "Go", ".rs" => "Rust",
+                        ".java" => "Java", ".md" => "Markdown", ".json" => "JSON",
+                        ".xml" => "XML", ".yaml" or ".yml" => "YAML",
+                        _ => "代码",
+                    };
+                    var truncated = content.Length > 4000 ? content[..4000] + "\n// ...（截断）" : content;
+                    prompt = $"分析以下 {lang} 文件（{Path.GetFileName(path)}），列出其作用、结构、潜在 Bug 和改进建议：\n\n```\n{truncated}\n```";
+                }
+                else
+                {
+                    prompt = $"分析文件 {Path.GetFileName(path)} 的作用（大小：{FormatSize(fi.Length)}），给出审查建议和改进方向。";
+                }
+            }
+            catch
+            {
+                prompt = $"分析文件 {Path.GetFileName(path)} 的作用和代码质量，给出详细建议。";
+            }
+        }
+        else
+        {
+            try
+            {
+                var files = Directory.GetFiles(path, "*", SearchOption.AllDirectories)
+                    .Select(f => Path.GetRelativePath(path, f)).Take(100);
+                var dirs = Directory.GetDirectories(path, "*", SearchOption.AllDirectories)
+                    .Select(d => Path.GetRelativePath(path, d) + "/").Take(30);
+                var structure = string.Join("\n", dirs.Concat(files).OrderBy(x => x));
+                prompt = $"分析以下目录结构（{Path.GetFileName(path)}），给出架构建议、代码组织改进和潜在问题：\n\n{structure}";
+            }
+            catch
+            {
+                prompt = $"分析目录 {Path.GetFileName(path)} 的结构、主要模块和架构建议。";
+            }
+        }
+
+        AskAiRequested?.Invoke(prompt);
     }
 
     private static MenuItem WithClick(MenuItem item, EventHandler<EventArgs> handler)
@@ -505,7 +720,60 @@ public sealed class TextPadView : UserControl
 
     private void OnTreeSelectionChanged(object? s, SelectionChangedEventArgs e)
     {
-        if (_tree.SelectedItem is TreeViewItem item && item.Tag is string path) OpenFile(path);
+        if (_tree.SelectedItems.Count == 1 && _tree.SelectedItem is TreeViewItem item && item.Tag is string path && File.Exists(path))
+            OpenFile(path);
+    }
+
+    private void ToggleSplitView()
+    {
+        _showSplit = !_showSplit;
+        if (_showSplit)
+        {
+            if (_splitEditor == null)
+            {
+                _splitEditor = new TextEditor
+                {
+                    IsReadOnly = true, ShowLineNumbers = true,
+                    FontFamily = LtaiTheme.CodeFont, FontSize = 13,
+                    Background = LtaiTheme.Sbb(LtaiTheme.Bg),
+                    Foreground = LtaiTheme.Sbb(LtaiTheme.TextPrimary),
+                    LineNumbersForeground = LtaiTheme.Sbb(LtaiTheme.TextDim),
+                    WordWrap = false,
+                };
+                try { _splitEditor.SyntaxHighlighting = HighlightingManager.Instance.GetDefinition("C#"); } catch { }
+                _splitEditor.TextArea.TextView.CurrentLineBackground = LtaiTheme.Sbb(LtaiTheme.SurfaceOverlay);
+                _splitEditor.TextArea.TextView.CurrentLineBorder = new Pen(LtaiTheme.Sbb(LtaiTheme.CurrentLineBorder), 1);
+                _splitEditor.TextArea.SelectionBrush = LtaiTheme.Sbb(LtaiTheme.SelectionBg);
+                _splitEditor.TextArea.SelectionCornerRadius = 2;
+                _splitEditor.PointerWheelChanged += (_, e) =>
+                {
+                    if (e.KeyModifiers == KeyModifiers.Control)
+                    {
+                        var delta = e.Delta.Y > 0 ? 1 : -1;
+                        _splitEditor.FontSize = Math.Clamp(_splitEditor.FontSize + delta, 8, 36);
+                        e.Handled = true;
+                    }
+                };
+            }
+            _editorGrid.ColumnDefinitions.Add(new ColumnDefinition(new GridLength(4)));
+            _editorGrid.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Star));
+            var splitter = new GridSplitter
+            {
+                Width = 4,
+                Background = LtaiTheme.Sbb(LtaiTheme.Border),
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+            };
+            Grid.SetColumn(splitter, 1);
+            _editorGrid.Children.Add(splitter);
+            Grid.SetColumn(_splitEditor, 2);
+            _editorGrid.Children.Add(_splitEditor);
+            if (_currentFile != null) { try { _splitEditor.Load(_currentFile); } catch { } }
+        }
+        else
+        {
+            _editorGrid.Children.RemoveRange(1, _editorGrid.Children.Count - 1);
+            _editorGrid.ColumnDefinitions.RemoveRange(1, _editorGrid.ColumnDefinitions.Count - 1);
+        }
     }
 
     private void OpenFile(string path)
@@ -554,6 +822,18 @@ public sealed class TextPadView : UserControl
             StartFileWatcher(path);
         }
         catch { _statusBar.Text = $"无法打开: {path}"; }
+    }
+
+    public void OpenFileAndScrollTo(string path, int line)
+    {
+        OpenFile(path);
+        if (line > 0 && line <= _editor.Document.LineCount)
+        {
+            _editor.TextArea.Caret.Line = line;
+            _editor.TextArea.Caret.Column = 1;
+            _editor.TextArea.Caret.BringCaretToView();
+            _editor.Focus();
+        }
     }
 
     private void StartFileWatcher(string path)
@@ -797,12 +1077,16 @@ public sealed class TextPadView : UserControl
         catch { return null; }
     }
 
-    private void RunGitCmd(string args)
+    private async void RunGitCmd(string args)
     {
         if (_gitBranch == null) { _statusBar.Text = "⚠️ 不在 Git 仓库中"; return; }
         try
         {
-            _statusBar.Text = $"🔄 git {args}...";
+            _buildOutput.IsVisible = false;
+            _gitOutputPanel.IsVisible = true;
+            ShowGitLoading($"git {args}");
+            await Task.Delay(50);
+
             var psi = new ProcessStartInfo("git", args)
             {
                 WorkingDirectory = _rootDir,
@@ -813,16 +1097,120 @@ public sealed class TextPadView : UserControl
             };
             using var process = new Process { StartInfo = psi };
             process.Start();
-            var output = process.StandardOutput.ReadToEnd().Trim();
-            var error = process.StandardError.ReadToEnd().Trim();
-            process.WaitForExit(60_000);
+            var output = await process.StandardOutput.ReadToEndAsync();
+            var error = await process.StandardError.ReadToEndAsync();
+            await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(60));
+
+            if (!string.IsNullOrEmpty(output))
+                RenderGitOutput(output, isError: false, args);
+            else if (!string.IsNullOrEmpty(error))
+                RenderGitOutput(error, isError: true, args);
+            else
+                RenderGitOutput("✅ 执行成功（无输出）", isError: false, args);
+
             _statusBar.Text = process.ExitCode == 0
                 ? $"✅ git {args}: 成功"
-                : $"❌ git {args}: {error}";
-            if (!string.IsNullOrEmpty(output)) _buildOutput.Text = output;
-            UpdateGitInfo(); // 刷新状态
+                : $"❌ git {args}: {error[..Math.Min(error.Length, 80)]}";
+            UpdateGitInfo();
         }
         catch (Exception ex) { _statusBar.Text = $"❌ git {args}: {ex.Message}"; }
+    }
+
+    private void ShowGitLoading(string label)
+    {
+        _gitOutputPanel.IsVisible = true;
+        _gitOutputText.Inlines?.Clear();
+        _gitOutputText.Inlines.Add(new Avalonia.Controls.Documents.Run($"⏳ {label}...")
+        {
+            Foreground = LtaiTheme.Sbb(LtaiTheme.AccentDNA),
+            FontWeight = FontWeight.Bold,
+        });
+    }
+
+    private void RenderGitOutput(string output, bool isError, string? command = null)
+    {
+        _gitOutputPanel.IsVisible = true;
+        _gitOutputText.Inlines?.Clear();
+
+        if (string.IsNullOrWhiteSpace(output))
+        {
+            _gitOutputText.Text = isError ? "❌ 命令执行失败" : "✅ 执行成功（无输出）";
+            return;
+        }
+
+        // git status --porcelain → 结构化
+        if (output.Length < 2000 && output.Split('\n').Take(5).All(l => string.IsNullOrEmpty(l) || (l.Length >= 3 && l[2] == ' ')))
+            { RenderGitStatusStructured(output); return; }
+
+        var lines = output.Split('\n');
+        foreach (var line in lines)
+        {
+            var run = new Avalonia.Controls.Documents.Run(line + "\n");
+
+            if (isError || line.Contains("error:") || line.Contains("fatal:") || line.StartsWith("fatal:"))
+                run.Foreground = LtaiTheme.Sbb(LtaiTheme.AccentDanger);
+            else if (line.StartsWith("On branch ") || line.StartsWith("HEAD detached at "))
+                run.Foreground = LtaiTheme.Sbb(LtaiTheme.AccentDNA);
+            else if (line.Contains("nothing to commit") || line.Contains("up-to-date") || line.StartsWith("Already up"))
+                run.Foreground = LtaiTheme.Sbb(LtaiTheme.AccentSystem);
+            else if (line.Contains("Your branch is ahead"))
+                run.Foreground = LtaiTheme.Sbb(LtaiTheme.AccentInfo);
+            else if (line.Contains("(use \"git") || line.Contains("(use \"git add") || line.Contains("no changes added"))
+                run.Foreground = LtaiTheme.Sbb(Color.Parse("#8b949e"));
+            else if (line.TrimStart().StartsWith("modified:") || line.TrimStart().StartsWith("modified:"))
+                run.Foreground = LtaiTheme.Sbb(Color.Parse("#d29922"));
+            else if (line.TrimStart().StartsWith("new file:"))
+                run.Foreground = LtaiTheme.Sbb(LtaiTheme.AccentSystem);
+            else if (line.TrimStart().StartsWith("deleted:"))
+                run.Foreground = LtaiTheme.Sbb(LtaiTheme.AccentDanger);
+            else if (line.TrimStart().StartsWith("renamed:"))
+                run.Foreground = LtaiTheme.Sbb(Color.Parse("#d29922"));
+            else if (line.StartsWith("\t"))
+                run.Foreground = LtaiTheme.Sbb(LtaiTheme.TextPrimary);
+            else if (line.StartsWith("  ") && line.Length > 2)
+                run.Foreground = LtaiTheme.Sbb(Color.Parse("#8b949e"));
+            else
+                run.Foreground = LtaiTheme.Sbb(Color.Parse("#8b949e"));
+
+            _gitOutputText.Inlines.Add(run);
+        }
+    }
+
+    private void RenderGitStatusStructured(string status)
+    {
+        var lines = status.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        var rowCount = lines.Length;
+        _gitOutputText.Inlines?.Clear();
+        _gitOutputText.Inlines.Add(new Avalonia.Controls.Documents.Run($"📊 {rowCount} 个文件变更\n")
+        {
+            Foreground = LtaiTheme.Sbb(LtaiTheme.AccentInfo),
+            FontWeight = FontWeight.Bold,
+        });
+
+        foreach (var line in lines)
+        {
+            if (line.Length < 4) continue;
+            var code = line[..2].Trim();
+            var file = line[3..].Trim();
+            if (file.StartsWith('"') && file.EndsWith('"')) file = file[1..^1];
+
+            var (icon, color) = code switch
+            {
+                "M" or "MM" => ("📝", Color.Parse("#d29922")),
+                "A" or "A " => ("➕", Color.Parse("#28a745")),
+                "D" or "D " => ("🗑", Color.Parse("#f85149")),
+                "R" or "R " => ("🔀", Color.Parse("#d29922")),
+                "?" or "??" => ("❓", Color.Parse("#8b949e")),
+                _ => ("📄", Color.Parse("#8b949e")),
+            };
+
+            _gitOutputText.Inlines.Add(new Avalonia.Controls.Documents.Run($"{icon} {file}\n")
+            {
+                Foreground = LtaiTheme.Sbb(color),
+                FontFamily = LtaiTheme.CodeFont,
+                FontSize = 12,
+            });
+        }
     }
 
     private void ShowGitCommitDialog()
@@ -913,25 +1301,26 @@ public sealed class TextPadView : UserControl
     {
         foreach (var item in items.OfType<TreeViewItem>())
         {
+            item.Foreground = LtaiTheme.Sbb(LtaiTheme.TextPrimary);
             if (item.Tag is string path)
             {
                 var relPath = Path.GetRelativePath(_rootDir, path).Replace('\\', '/');
                 if (_gitFileStatus.TryGetValue(relPath, out var status))
                 {
-                    var fg = status switch
+                    var borderColor = status switch
                     {
-                        "M" or "M " => LtaiTheme.AccentDNA,       // 修改 → 蓝色
-                        "A" or "A " => LtaiTheme.AccentSystem,     // 新增 → 绿色
-                        "D" or "D " => LtaiTheme.AccentDanger,     // 删除 → 红色
-                        "R" or "R " => LtaiTheme.AccentWarning,    // 重命名 → 黄色
-                        "?" or "? " => LtaiTheme.AccentWarning,    // 未跟踪 → 黄色
-                        _ => LtaiTheme.TextPrimary
+                        "M" or "M " => LtaiTheme.AccentDNA,       // 修改 → 蓝色左边条
+                        "A" or "A " => LtaiTheme.AccentSystem,     // 新增 → 绿色左边条
+                        "D" or "D " => LtaiTheme.AccentDanger,     // 删除 → 红色左边条
+                        "R" or "R " or "?" or "? " => LtaiTheme.AccentWarning, // 重命名/未跟踪 → 黄色
+                        _ => (Color?)null
                     };
-                    item.Foreground = LtaiTheme.Sbb(fg);
+                    item.BorderThickness = borderColor.HasValue ? new Thickness(3, 0, 0, 0) : new Thickness(0);
+                    item.BorderBrush = borderColor.HasValue ? LtaiTheme.Sbb(borderColor.Value) : null;
                 }
-                else if (item.Tag is string tag && !tag.StartsWith(_rootDir))
+                else
                 {
-                    item.Foreground = LtaiTheme.Sbb(LtaiTheme.TextPrimary);
+                    item.BorderThickness = new Thickness(0);
                 }
             }
             if (item.Items.Count > 0)

@@ -71,7 +71,7 @@ public static class MarkdownRenderer
                     .Select(c => c.Trim()).ToList();
                 for (int ci = 0; ci < cells.Count; ci++)
                 {
-                    if (ci > 0) inlines.Add(Run(" \u2502 ", color: LtaiTheme.TextDim, font: "Consolas"));
+                    if (ci > 0) inlines.Add(Run(" \u2502 ", color: LtaiTheme.TextDim, font: LtaiTheme.CodeFont));
                     RenderSpan(cells[ci], inlines);
                 }
                 continue;
@@ -98,7 +98,7 @@ public static class MarkdownRenderer
             else if (m.Groups[4].Success)  // _italic_
                 inlines.Add(Run(m.Groups[4].Value, italic: true));
             else if (m.Groups[5].Success)  // `code`
-                inlines.Add(Run(m.Groups[5].Value, color: LtaiTheme.AccentInfo, font: "Consolas"));
+                inlines.Add(Run(m.Groups[5].Value, color: LtaiTheme.AccentInfo, font: LtaiTheme.CodeFont));
             else if (m.Groups[6].Success)  // [link](url)
             {
                 inlines.Add(Run(m.Groups[6].Value, color: LtaiTheme.AccentInfo));
@@ -114,14 +114,14 @@ public static class MarkdownRenderer
     }
 
     private static Run Run(string text, Color? color = null, FontWeight? weight = null,
-        double? size = null, bool italic = false, string? font = null) => new()
+        double? size = null, bool italic = false, FontFamily? font = null) => new()
     {
         Text = text,
         Foreground = LtaiTheme.Sbb(color ?? LtaiTheme.TextPrimary),
         FontWeight = weight ?? FontWeight.Normal,
         FontSize = size ?? 13,
         FontStyle = italic ? FontStyle.Italic : FontStyle.Normal,
-        FontFamily = font != null ? new(font) : new("Consolas"),
+        FontFamily = font ?? LtaiTheme.CodeFont,
     };
 
     // ─── Public helpers for ChatView code block syntax highlighting ───

@@ -505,17 +505,6 @@ public static class ServiceCollectionExtensions
             tools.Add(AIFunctionFactory.Create(doc.BuildDocumentAsync));
         }
 
-        // Memory tools (persistent memory across sessions)
-        var memDir = opts.ResolveDataPath("memories");
-        var memory = new MemoryTools(ws, memDir);
-        if (name.StartsWith("LTAI-Chat") || name is "LTAI-System" or "LTAI-Writer")
-        {
-            tools.Add(AIFunctionFactory.Create(memory.Remember));
-            tools.Add(AIFunctionFactory.Create(memory.Forget));
-            tools.Add(AIFunctionFactory.Create(memory.RecallMemory));
-            tools.Add(AIFunctionFactory.Create(memory.ListMemories));
-        }
-
         // Plan approval workflow tools
         if (name.StartsWith("LTAI-Chat") || name is "LTAI-Code" or "LTAI-Writer" or "LTAI-Frontend")
         {
@@ -841,13 +830,29 @@ public static class ServiceCollectionExtensions
             tools.Add(AIFunctionFactory.Create(planSearch.SearchFiles));
         }
 
-        // Cross-session long-term memory: Mem0 (remote, if MEM0_API_KEY set) or local SQLite+embedding.
-        // Placed after tool-filtering providers (Tool RAG, Skill ranking) and before the final
-        // instruction providers so memories augment the conversation context.
-        var memoryProvider = LTAI.Agent.Memory.MemoryProviderSelector.Select(
-            sp.GetRequiredService<LTAI.AI.EmbeddingClient>(),
-            opts.DataDirectory,
-            loggerFactory);
+        // Cross-session long-term memory: 7-layer memory palace (PalaceStore + AIContextProviders).
+        // Hierarchical Wing→Room→Drawer architecture. Each layer has a fixed token budget
+        // (L0+L1 ≈ 900t always loaded).
+        var embedder = sp.GetRequiredService<LTAI.AI.EmbeddingClient>();
+        var palaceDb = Path.Combine(opts.DataDirectory, "palace.db");
+        var palaceStore = new LTAI.Agent.Memory.PalaceStore(embedder, palaceDb,
+            loggerFactory.CreateLogger<LTAI.Agent.Memory.PalaceStore>());
+
+        // L0: Identity (~100t, always loaded). Reads from config or identity.txt.
+        var identityPath = Path.Combine(AppContext.BaseDirectory, "identity.txt");
+        var identityText = File.Exists(identityPath) ? File.ReadAllText(identityPath).Trim() : "";
+        if (string.IsNullOrWhiteSpace(identityText))
+            identityText = opts.AI.DefaultProvider ?? "";
+
+        // Memory tools (persistent memory across sessions via PalaceStore)
+        var palaceMemory = new MemoryTools(palaceStore, defaultWing: ws != null ? Path.GetFileName(ws.TrimEnd('/', '\\')) : "project");
+        if (name.StartsWith("LTAI-Chat") || name is "LTAI-System" or "LTAI-Writer")
+        {
+            tools.Add(AIFunctionFactory.Create(palaceMemory.Remember));
+            tools.Add(AIFunctionFactory.Create(palaceMemory.Forget));
+            tools.Add(AIFunctionFactory.Create(palaceMemory.RecallMemory));
+            tools.Add(AIFunctionFactory.Create(palaceMemory.ListMemories));
+        }
 
         // MCP (Model Context Protocol) client tools: connect to external MCP servers
         // configured in appsettings.json under "LTAI:Mcp:Servers". Lazy + cached — the
@@ -897,7 +902,7 @@ public static class ServiceCollectionExtensions
                     ModelId = modelId,
                 },
                 ChatHistoryProvider = new InMemoryChatHistoryProvider(),
-                // Cross-session long-term memory: Mem0 (remote, if MEM0_API_KEY set) or local SQLite+embedding.
+                // 7-layer memory palace: L0 identity → L1 essential → L3 on-demand → L4 deep → L6 diary.
                 // Placed after tool-filtering providers (Tool RAG, Skill ranking) and before the final
                 // instruction providers so memories augment the conversation context.
                 // Tool RAG: 动态工具召回（放第一个）→ L1 Skill Evolution Ranking
@@ -910,7 +915,13 @@ public static class ServiceCollectionExtensions
                        new LTAI.Agent.Tools.SkillRankingProvider(
                            sp.GetRequiredService<LTAI.Agent.Tools.SkillEvolutionEngine>(),
                            sp.GetRequiredService<ILoggerFactory>().CreateLogger<LTAI.Agent.Tools.SkillRankingProvider>()),
-                       safety, compaction, kbGraph, codeGraph, wasmtimeSandbox, memoryProvider,
+                       safety,
+                       new LTAI.Agent.Memory.L0IdentityProvider(identityText),
+                       new LTAI.Agent.Memory.L1EssentialProvider(palaceStore, name, loggerFactory.CreateLogger<LTAI.Agent.Memory.L1EssentialProvider>()),
+                       compaction, kbGraph, codeGraph, wasmtimeSandbox,
+                       new LTAI.Agent.Memory.L3OnDemandProvider(palaceStore, loggerFactory.CreateLogger<LTAI.Agent.Memory.L3OnDemandProvider>()),
+                       new LTAI.Agent.Memory.L4DeepSearchProvider(palaceStore, embedder, loggerFactory.CreateLogger<LTAI.Agent.Memory.L4DeepSearchProvider>()),
+                       new LTAI.Agent.Memory.L6AgentDiaryProvider(palaceStore, name, loggerFactory.CreateLogger<LTAI.Agent.Memory.L6AgentDiaryProvider>()),
                        new LTAI.Agent.Tools.InstructionProvider(modelId), new LTAI.Agent.Tools.EnvironmentProvider(), skillsProvider]
                     : [new LTAI.Agent.Tools.ToolRetrievalProvider(
                             sp.GetRequiredService<LTAI.AI.EmbeddingClient>(),
@@ -918,11 +929,16 @@ public static class ServiceCollectionExtensions
                        new LTAI.Agent.Tools.SkillRankingProvider(
                            sp.GetRequiredService<LTAI.Agent.Tools.SkillEvolutionEngine>(),
                            sp.GetRequiredService<ILoggerFactory>().CreateLogger<LTAI.Agent.Tools.SkillRankingProvider>()),
-                       compaction, kbGraph, codeGraph, wasmtimeSandbox, memoryProvider,
+                       new LTAI.Agent.Memory.L0IdentityProvider(identityText),
+                       new LTAI.Agent.Memory.L1EssentialProvider(palaceStore, name, loggerFactory.CreateLogger<LTAI.Agent.Memory.L1EssentialProvider>()),
+                       compaction, kbGraph, codeGraph, wasmtimeSandbox,
+                       new LTAI.Agent.Memory.L3OnDemandProvider(palaceStore, loggerFactory.CreateLogger<LTAI.Agent.Memory.L3OnDemandProvider>()),
+                       new LTAI.Agent.Memory.L4DeepSearchProvider(palaceStore, embedder, loggerFactory.CreateLogger<LTAI.Agent.Memory.L4DeepSearchProvider>()),
+                       new LTAI.Agent.Memory.L6AgentDiaryProvider(palaceStore, name, loggerFactory.CreateLogger<LTAI.Agent.Memory.L6AgentDiaryProvider>()),
                        new LTAI.Agent.Tools.InstructionProvider(modelId), new LTAI.Agent.Tools.EnvironmentProvider(), skillsProvider],
 
                 // ── Disable MAF defaults LTAI doesn't need ────────────────────
-                // LTAI uses its own Mem0/EmbeddedMemoryProvider (memoryProvider above).
+                // LTAI uses its own 7-layer memory palace (PalaceStore + AIContextProviders).
                 DisableFileMemory = true,
                 // LTAI uses its own tools (WasmtimeSandbox + SafeShellTool), not the file-access provider.
                 DisableFileAccess = true,

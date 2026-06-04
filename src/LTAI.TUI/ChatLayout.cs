@@ -5,6 +5,7 @@ using System.Text.RegularExpressions;
 using System.Threading.Channels;
 using LTAI.Agent;
 using LTAI.Core.Configuration;
+using LTAI.Core.Session;
 using LTAI.Agent.Tools;
 using Spectre.Console;
 using Spectre.Console.Rendering;
@@ -14,31 +15,53 @@ namespace LTAI.TUI;
 public sealed class ChatLayout
 {
     private readonly ChatAgent _chat;
-    private readonly List<(string role, string content)> _history = new();
+    private readonly Rendering.ChatRenderer _renderer;
+    internal readonly List<(string role, IRenderable? rendered, string rawContent, string? reasoning)> _history = new();
     private readonly Layout _layout;
     private readonly QuestionService _questionService;
+    private readonly SessionManager _sessions;
     private volatile QuestionPost? _pendingQuestion;
 
-    private readonly System.Threading.Channels.Channel<string> _messageQueue =
+    internal readonly System.Threading.Channels.Channel<string> _messageQueue =
         System.Threading.Channels.Channel.CreateBounded<string>(new BoundedChannelOptions(32)
         {
             FullMode = BoundedChannelFullMode.DropOldest,
         });
-    private bool _processing;
-    private CancellationTokenSource? _responseCts;
-    private volatile char _quickNav;
+    internal bool _processing;
+    internal CancellationTokenSource? _responseCts;
+    internal volatile char _quickNav;
     private static string? _startupMessage;
+
+    // ── 多行输入缓冲区 ──
+    internal readonly List<string> _inputLines = new() { "" };
+    internal int _cursorLine = 0;
+    internal int _cursorCol = 0;
+    internal const int MaxInputLines = 5;
+
+    // ── 输入历史（Ctrl+↑↓） ──
+    internal readonly List<string> _inputHistory = new();
+    internal int _historyIndex = -1;
+
+    // ── 输出滚动 ──
+    internal int _scrollOffset = 0;
+    private const int ScrollStep = 3;
+
+    // ── 当前 Turn 的工具调用（临时，不进 history） ──
+    internal readonly List<(string name, string args, string result)> _toolCalls = new();
+
+    // ── 可折叠推理过程的展开状态 ──
+    internal readonly HashSet<int> _expandedMessages = new();
 
     /// <summary>Set a persistent message shown in the initial empty state (before any conversation).</summary>
     public static void SetStartupMessage(string message) => _startupMessage = message;
     private static string? ConsumeStartupMessage() { var m = _startupMessage; _startupMessage = null; return m; }
 
     // 选择器状态（由输入任务管理，主线程只读）
-    private volatile bool _pickerActive;
-    private readonly object _pickerLock = new();
-    private string _pickerFilter = "";
-    private List<SlashCommands.SuggestionItem> _pickerItems = new();
-    private int _pickerSelectedIdx;
+    internal volatile bool _pickerActive;
+    internal readonly object _pickerLock = new();
+    internal string _pickerFilter = "";
+    internal List<SlashCommands.SuggestionItem> _pickerItems = new();
+    internal int _pickerSelectedIdx;
     private LiveDisplayContext? _liveCtx;
     public TuiView? LastRequestedView { get; private set; }
     private int _toolCallCount;
@@ -46,10 +69,8 @@ public sealed class ChatLayout
     private const int MaxHistory = 200;
     private const int RefreshIntervalMs = 33;
     private DateTime _lastRefresh = DateTime.MinValue;
-    private readonly StringBuilder _cachedMessages = new();
-    private int _cachedHistoryCount = 0;
-    private int _lastStreamRenderLen = 0;
     private DateTime _lastCmdTime = DateTime.MinValue;
+    private readonly int _maxVisibleMessages;
 
     private void ThrottledRefresh()
     {
@@ -61,12 +82,18 @@ public sealed class ChatLayout
         }
     }
 
-    private void TrimHistory()
+    internal void TrimHistory()
     {
         if (_history.Count <= MaxHistory) return;
-        _history.RemoveRange(0, _history.Count - MaxHistory);
-        _cachedMessages.Clear();
-        _cachedHistoryCount = 0;
+        var removeCount = _history.Count - MaxHistory;
+        _history.RemoveRange(0, removeCount);
+    }
+
+    /// <summary>将所有已渲染 Panel 标记为失效，下次 UpdateMessages 会重新构建。</summary>
+    internal void InvalidateRendered()
+    {
+        for (int i = 0; i < _history.Count; i++)
+            _history[i] = (_history[i].role, null, _history[i].rawContent, _history[i].reasoning);
     }
     private static readonly string[] PulseFrames = [
         "[deepskyblue1]⠋[/]",
@@ -81,21 +108,29 @@ public sealed class ChatLayout
         "[deepskyblue1]⠏[/]",
     ];
 
-    public ChatLayout(ChatAgent chat, QuestionService? questionService = null)
+    public ChatLayout(ChatAgent chat, Rendering.ChatRenderer renderer, QuestionService? questionService = null,
+        SessionManager? sessions = null)
     {
         _chat = chat;
+        _renderer = renderer;
+        _sessions = sessions ?? new SessionManager();
         _questionService = questionService ?? new QuestionService(
             Microsoft.Extensions.Logging.Abstractions.NullLogger<QuestionService>.Instance);
         _questionService.QuestionPosted += post => _pendingQuestion = post;
+
+        // 自动计算可见消息数，确保输入区始终固定
+        // 每条 Panel ≈ 4 行，Header 2 行，Footer 6 行
+        var termHeight = Math.Max(24, Console.WindowHeight);
+        _maxVisibleMessages = Math.Max(3, (termHeight - 10) / 4);
 
         _layout = new Layout()
             .SplitRows(
                 new Layout("Header").Size(2),
                 new Layout("Messages"),
-                new Layout("Footer").Size(6));
+                new Layout("Footer").Size(10));
 
         _layout["Header"].Update(
-            new Panel("[bold]LTAI 聊天[/] — [grey]Esc=退出  Enter=发送  Shift+Enter=换行  Ctrl+V=粘贴  1-5=视图  /help=帮助[/]")
+            new Panel("[bold]LTAI 聊天[/] — [grey]Esc=退出  SEnter=发送  Enter=换行  ↑↓=光标  S↑↓=滚屏  Ctrl+V=粘贴  1-5=视图  /help=帮助[/]")
                 .Border(BoxBorder.None).Expand());
 
         _layout["Messages"].Update(
@@ -130,13 +165,30 @@ public sealed class ChatLayout
     public async Task<TuiView?> RenderAsync()
     {
         LastRequestedView = TuiView.Chat;
-        // 预热 LLM session（后台异步，不阻塞 UI 启动）
-        var warmupTask = _chat.WarmUpAsync();
-        _ = warmupTask.ContinueWith(t =>
+        // 预热 LLM session + 初始化（在 Live 之前，用 Status 显示）
+        try
         {
-            if (t.IsFaulted)
-                System.Diagnostics.Debug.WriteLine($"WarmUp failed: {t.Exception?.InnerException?.Message}");
-        }, TaskContinuationOptions.OnlyOnFaulted);
+            await AnsiConsole.Status()
+                .Spinner(Spinner.Known.Dots)
+                .StartAsync("[bold deepskyblue1]🔌 初始化 LTAI...</bold>", async ctx =>
+                {
+                    ctx.Status = "[bold]预热 LLM 连接...[/]";
+                    var warmupTask = _chat.WarmUpAsync();
+                    _ = warmupTask.ContinueWith(t =>
+                    {
+                        if (t.IsFaulted)
+                            System.Diagnostics.Debug.WriteLine($"WarmUp failed: {t.Exception?.InnerException?.Message}");
+                    }, TaskContinuationOptions.OnlyOnFaulted);
+
+                    // 等待预热完成（最多 6 秒）
+                    try { await warmupTask.WaitAsync(TimeSpan.FromSeconds(6)).ConfigureAwait(false); }
+                    catch { /* 预热超时不影响主流程 */ }
+
+                    ctx.Status = "[green]✓ 初始化完成[/]";
+                    await Task.Delay(200);
+                }).ConfigureAwait(false);
+        }
+        catch { /* 非交互终端 */ }
 
         try
         {
@@ -147,7 +199,6 @@ public sealed class ChatLayout
             .StartAsync(async ctx =>
             {
                 _liveCtx = ctx;
-                var inputBuf = new StringBuilder();
                 var showWatermark = true;
                 _processing = false;
 
@@ -156,240 +207,29 @@ public sealed class ChatLayout
                 // LLM is still responding to the previous one.
                 var cts = new CancellationTokenSource();
 
-                // 光标闪烁定时器（400ms 间隔，独立于阻塞的 ReadKey）
                 var blinkCts = CancellationTokenSource.CreateLinkedTokenSource(cts.Token);
                 var blinkTask = Task.Run(async () =>
                 {
                     while (!blinkCts.Token.IsCancellationRequested)
                     {
                         await Task.Delay(400, blinkCts.Token).ConfigureAwait(false);
-                        string buf;
-                        lock (inputBuf) buf = inputBuf.ToString();
                         lock (_layout)
                         {
-                            UpdateFooter(buf, "", buf.Length == 0 && showWatermark);
+                            UpdateFooter("", "", IsInputEmpty() && showWatermark);
                             _liveCtx?.Refresh();
                         }
                     }
                 }, blinkCts.Token);
 
+
                 var inputTask = Task.Run(async () =>
                 {
+                    var keyDispatcher = new Input.KeyDispatcher(this);
                     while (!cts.Token.IsCancellationRequested)
                     {
                         var key = Console.ReadKey(true);
-
-                        // ── 级联菜单激活时 ──
-                        if (LTAI.TUI.SlashCommands.InCascadeMenu)
-                        {
-                            if (key.Key == ConsoleKey.Q && (key.Modifiers & ConsoleModifiers.Control) != 0)
-                            {
-                                LTAI.TUI.SlashCommands.CloseCascadeMenu();
-                                _history.RemoveAll(x => x.role == "cmd");
-                                if (_history.Count > 0) _history.Add(("cmd", "[dim]───[/]"));
-                                string ib; lock (inputBuf) ib = inputBuf.ToString();
-                                lock (_layout) { _cachedMessages.Clear(); _cachedHistoryCount = 0; UpdateMessages(""); UpdateFooter(ib, ""); _liveCtx?.Refresh(); }
-                                continue;
-                            }
-                            var stillIn = LTAI.TUI.SlashCommands.HandleCascadeKey(key);
-                            if (!stillIn)
-                            {
-                                var p = LTAI.TUI.SlashCommands.PendingInput;
-                                if (p != null) { LTAI.TUI.SlashCommands.PendingInput = null; lock (inputBuf) { inputBuf.Clear(); inputBuf.Append(p); } }
-                                _history.RemoveAll(x => x.role == "cmd");
-                                if (_history.Count > 0) _history.Add(("cmd", "[dim]───[/]"));
-                                string ib; lock (inputBuf) ib = inputBuf.ToString();
-                                lock (_layout) { _cachedMessages.Clear(); _cachedHistoryCount = 0; UpdateMessages(""); UpdateFooter(ib, ""); _liveCtx?.Refresh(); }
-                                continue;
-                            }
-                            // Update menu display
-                            lock (_history) { if (_history.Count > 0 && _history[^1].role == "cmd") _history[^1] = ("cmd", LTAI.TUI.SlashCommands.BuildCascadeText()); }
-                            lock (_layout) { _cachedMessages.Clear(); _cachedHistoryCount = _history.Count - 1; UpdateMessages(""); _liveCtx?.Refresh(); }
-                            continue;
-                        }
-
-                        // ── 选择器激活时，路由所有按键到选择器 ──
-                        if (_pickerActive)
-                        {
-                            string? pickerResult = null;
-                            bool pickerDone = false;
-
-                            if (key.Key == ConsoleKey.UpArrow)
-                            {
-                                lock (_pickerLock)
-                                {
-                                    if (_pickerItems.Count > 0)
-                                        _pickerSelectedIdx = (_pickerSelectedIdx - 1 + _pickerItems.Count) % _pickerItems.Count;
-                                }
-                            }
-                            else if (key.Key == ConsoleKey.DownArrow)
-                            {
-                                lock (_pickerLock)
-                                {
-                                    if (_pickerItems.Count > 0)
-                                        _pickerSelectedIdx = (_pickerSelectedIdx + 1) % _pickerItems.Count;
-                                }
-                            }
-                            else if (key.Key == ConsoleKey.Enter)
-                            {
-                                lock (_pickerLock)
-                                {
-                                    if (_pickerSelectedIdx >= 0 && _pickerSelectedIdx < _pickerItems.Count)
-                                        pickerResult = _pickerItems[_pickerSelectedIdx].Completion;
-                                }
-                                pickerDone = true;
-                            }
-                            else if (key.Key == ConsoleKey.Escape || key.KeyChar == 'q')
-                            {
-                                pickerDone = true;
-                            }
-                            else if (key.Key == ConsoleKey.Backspace)
-                            {
-                                lock (_pickerLock)
-                                {
-                                    if (_pickerFilter.Length > 0)
-                                        _pickerFilter = _pickerFilter[..^1];
-                                    UpdatePickerItems();
-                                }
-                            }
-                            else if (key.Key == ConsoleKey.Tab)
-                            {
-                                lock (_pickerLock)
-                                {
-                                    var completions = _pickerItems
-                                        .Select(s => s.Completion)
-                                        .Distinct(StringComparer.OrdinalIgnoreCase)
-                                        .ToList();
-                                    if (completions.Count == 1)
-                                    {
-                                        pickerResult = completions[0] + " ";
-                                        pickerDone = true;
-                                    }
-                                    else if (completions.Count > 1)
-                                    {
-                                        var lcp = LongestCommonPrefix(completions);
-                                        if (lcp.Length > ("/" + _pickerFilter).Length)
-                                            _pickerFilter = lcp.Length > 1 ? lcp[1..] : "";
-                                        UpdatePickerItems();
-                                    }
-                                }
-                            }
-                            else if (key.Key == ConsoleKey.J && _pickerFilter.Length == 0)
-                            {
-                                lock (_pickerLock)
-                                {
-                                    if (_pickerItems.Count > 0)
-                                        _pickerSelectedIdx = (_pickerSelectedIdx + 1) % _pickerItems.Count;
-                                }
-                            }
-                            else if (key.Key == ConsoleKey.K && _pickerFilter.Length == 0)
-                            {
-                                lock (_pickerLock)
-                                {
-                                    if (_pickerItems.Count > 0)
-                                        _pickerSelectedIdx = (_pickerSelectedIdx - 1 + _pickerItems.Count) % _pickerItems.Count;
-                                }
-                            }
-                            else if (!char.IsControl(key.KeyChar))
-                            {
-                                lock (_pickerLock)
-                                {
-                                    _pickerFilter += key.KeyChar;
-                                    UpdatePickerItems();
-                                }
-                            }
-
-                            if (pickerDone)
-                            {
-                                lock (_pickerLock)
-                                {
-                                    _pickerActive = false;
-                                    _pickerFilter = "";
-                                    _pickerItems = new();
-                                    _pickerSelectedIdx = -1;
-                                }
-                                lock (_layout) RestoreMessagesPanel();
-                                lock (inputBuf) inputBuf.Clear();
-                                if (pickerResult != null)
-                                {
-                                    var handled = await HandleSlashCommandAsync(pickerResult).ConfigureAwait(false);
-                                    if (!handled) { cts.Cancel(); return; }
-                                }
-                            }
-                            continue;
-                        }
-
-                        // ── 普通模式（不变） ──
-
-                        // 视图切换（仅空输入时）
-                        if (inputBuf.Length == 0 && "1345".Contains(key.KeyChar))
-                        {
-                            lock (_layout) { _quickNav = key.KeyChar; }
-                            continue;
-                        }
-                        if (key.Key == ConsoleKey.Escape || key.KeyChar == 'q')
-                        {
-                            // Cancel current response if processing, or quit
-                            if (_processing) { _responseCts?.Cancel(); continue; }
-                            cts.Cancel(); return;
-                        }
-
-                        // Ctrl+V → 粘贴
-                        if (key.Key == ConsoleKey.V && (key.Modifiers & ConsoleModifiers.Control) != 0)
-                        {
-                            try { lock (inputBuf) inputBuf.Append(TextCopy.ClipboardService.GetText() ?? ""); }
-                            catch { }
-                            continue;
-                        }
-
-                        if (key.Key == ConsoleKey.Enter)
-                        {
-                            if ((key.Modifiers & ConsoleModifiers.Shift) != 0)
-                            { lock (inputBuf) inputBuf.Append('\n'); continue; }
-
-                            string input;
-                            lock (inputBuf) { input = inputBuf.ToString().Trim(); inputBuf.Clear(); }
-                            if (string.IsNullOrEmpty(input)) continue;
-
-                            // Slash commands bypass queue and run instantly.
-                            if (input.StartsWith('/'))
-                            {
-                                var handled = await HandleSlashCommandAsync(input).ConfigureAwait(false);
-                                if (!handled) { cts.Cancel(); return; }
-
-                                var pending = LTAI.TUI.SlashCommands.PendingInput;
-                                if (pending != null)
-                                {
-                                    LTAI.TUI.SlashCommands.PendingInput = null;
-                                    lock (inputBuf) { inputBuf.Clear(); inputBuf.Append(pending); }
-                                }
-                                continue;
-                            }
-
-                            lock (_history) _history.Add(("user", input));
-                            TrimHistory();
-                            await _messageQueue.Writer.WriteAsync(input, cts.Token).ConfigureAwait(false);
-                            continue;
-                        }
-
-                        if (key.Key == ConsoleKey.Backspace)
-                        { lock (inputBuf) { if (inputBuf.Length > 0) inputBuf.Length--; } continue; }
-
-                        if (!char.IsControl(key.KeyChar))
-                        {
-                            bool triggerPicker;
-                            lock (inputBuf) { inputBuf.Append(key.KeyChar); triggerPicker = inputBuf.Length == 1 && inputBuf[0] == '/'; }
-                            if (triggerPicker)
-                            {
-                                lock (_pickerLock)
-                                {
-                                    _pickerActive = true;
-                                    _pickerFilter = "";
-                                    _pickerItems = SlashCommands.GetSuggestionItems("/");
-                                    _pickerSelectedIdx = _pickerItems.Count > 0 ? 0 : -1;
-                                }
-                            }
-                        }
+                        var keepGoing = await keyDispatcher.HandleKeyAsync(key, cts.Token).ConfigureAwait(false);
+                        if (!keepGoing) { cts.Cancel(); return; }
                     }
                 }, cts.Token);
 
@@ -397,9 +237,7 @@ public sealed class ChatLayout
                 // queued messages one at a time while keeping the UI responsive.
                 while (!cts.Token.IsCancellationRequested)
                 {
-                    // Refresh UI — picker 模式直接渲染选择器，跳过 UpdateMessages 避免闪烁
-                    string buf;
-                    lock (inputBuf) buf = inputBuf.ToString();
+                    // Refresh UI
                     if (_pickerActive)
                     {
                         string filter;
@@ -413,16 +251,15 @@ public sealed class ChatLayout
                         }
                         lock (_layout)
                         {
-                            _layout["Messages"].Update(CommandPickerModal.BuildPicker(filter, items, selIdx));
-                            // 选择器模式下，底部输入框显示过滤文本而非原始 inputBuf
+                            // Inline picker: 不替换 Messages，只在 Footer 显示建议
                             var footerBuf = string.IsNullOrEmpty(filter) ? "/" : "/" + filter;
-                            UpdateFooter(footerBuf, "", showWatermark);
+                            UpdateFooter(footerBuf, "", showWatermark, items, selIdx);
                             ctx.Refresh();
                         }
                     }
                     else
                     {
-                        // 非级联菜单: 有 cmd 消息且超过 2s 或用户已开始对话 → 清理
+                        // 非级联菜单: 有 cmd 消息且超过 30s 或用户已开始对话 → 清理
                         if (!LTAI.TUI.SlashCommands.InCascadeMenu && _history.Any(x => x.role == "cmd"))
                         {
                             var hasUserMsg = _history.Any(x => x.role == "user");
@@ -430,10 +267,9 @@ public sealed class ChatLayout
                             if (hasUserMsg || expired)
                             {
                                 _history.RemoveAll(x => x.role == "cmd");
-                                _cachedMessages.Clear(); _cachedHistoryCount = 0;
                             }
                         }
-                        lock (_layout) { UpdateMessages(""); UpdateFooter(buf, "", showWatermark); ctx.Refresh(); }
+                        lock (_layout) { UpdateMessages(""); UpdateFooter("", "", showWatermark); ctx.Refresh(); }
                     }
                     showWatermark = false;
 
@@ -473,7 +309,7 @@ public sealed class ChatLayout
         return LastRequestedView;
     }
 
-    // ── 消息面板（增量渲染） ──
+    // ── 消息面板（Panel 包裹每条消息） ──
 
     private void UpdateHeader()
     {
@@ -485,78 +321,153 @@ public sealed class ChatLayout
                 .Border(BoxBorder.None).Expand());
     }
 
-    private void UpdateMessages(string streamingContent)
+    /// <summary>为一条消息构建 Spectre Panel，带颜色边框和 Header。</summary>
+    private static Panel BuildMessagePanel(string role, string rawContent)
     {
-        var sb = new StringBuilder();
-
-        // 使用缓存的已渲染历史，避免每 token 重新处理
-        if (_cachedMessages.Length > 0)
-            sb.Append(_cachedMessages);
-
-        // 渲染新增的历史条目
-        for (int i = _cachedHistoryCount; i < _history.Count; i++)
+        // ── 配色规范 ──
+        //  User  → Cyan    Rounded
+        //  AI    → Green   Double
+        //  Tool  → Blue    Square
+        //  Error → Red     Ascii
+        //  其他  → Grey    None
+        var (color, border, header) = (role.ToLowerInvariant()) switch
         {
-            var (role, content) = _history[i];
-            if (role == "user")
-                sb.AppendLine($"[bold cyan]┃[/] [cyan]你:[/] {content.EscapeMarkup()}");
-            else if (role == "cmd")
-                sb.AppendLine(content);
-            else
-                sb.AppendLine($"[bold green]┃[/] {MdToPanelContent(content)}");
+            "user" => (Color.Cyan, BoxBorder.Rounded, "[bold cyan] 🧑 你 [/]"),
+            "assistant" or "ai" => (Color.Green, BoxBorder.Double, "[bold green] 🤖 AI [/]"),
+            "tool" => (Color.Blue, BoxBorder.Square, "[bold blue] 🔧 工具 [/]"),
+            "error" => (Color.Red, BoxBorder.Ascii, "[bold red] ⛔ 错误 [/]"),
+            "cmd" or "system" => (Color.Yellow, BoxBorder.Square, "[bold yellow] ⚙️ 系统 [/]"),
+            _ => (Color.Grey, BoxBorder.None, "[bold grey] ℹ️ [/]"),
+        };
+
+        IRenderable content;
+        if (role == "assistant" || role == "ai")
+        {
+            content = new Markup(MdToPanelContent(rawContent));
         }
-
-        // 更新历史缓存
-        if (_cachedHistoryCount < _history.Count)
+        else if (role == "cmd" || role == "system" || role == "tool")
         {
-            _cachedMessages.Clear();
-            _cachedMessages.Append(sb);
-            _cachedHistoryCount = _history.Count;
+            content = new Markup(rawContent);
         }
-
-        // 流式内容增量：只处理上次渲染后的新增部分
-        if (!string.IsNullOrEmpty(streamingContent))
+        else if (role == "user")
         {
-            // 新会话重置跟踪
-            if (streamingContent.Length < _lastStreamRenderLen)
-                _lastStreamRenderLen = 0;
-
-            if (streamingContent.Length > _lastStreamRenderLen)
-            {
-                var delta = streamingContent[_lastStreamRenderLen..];
-                sb.Append(MdToPanelContent(delta));
-                _lastStreamRenderLen = streamingContent.Length;
-            }
+            // 高亮用户输入的 /commands 和 #tags
+            var highlighted = HighlightCommands(rawContent.EscapeMarkup());
+            content = new Markup(highlighted);
         }
         else
         {
-            _lastStreamRenderLen = 0;
+            content = new Markup(rawContent.EscapeMarkup());
         }
 
-        var result = sb.ToString().TrimEnd();
-        if (_history.Count == 0 && string.IsNullOrEmpty(streamingContent) && _cachedHistoryCount == 0)
+        return new Panel(
+            Align.Left(content, VerticalAlignment.Top)
+        )
         {
-            // 首次空状态保留欢迎屏（如果被命令选择器覆盖则恢复）
+            Border = border,
+            Header = new PanelHeader(header, Justify.Left),
+            BorderStyle = new Style(color),
+            Padding = new Padding(1, 0, 1, 0),
+            Expand = true,
+        };
+    }
+
+    /// <summary>构建一个包裹在 Panel 中的代码块。</summary>
+    private static Panel BuildCodeBlockPanel(string code, string? lang)
+    {
+        return new Panel(
+            Align.Left(
+                new Markup($"[grey]{code.EscapeMarkup()}[/]"),
+                VerticalAlignment.Top
+            ))
+        {
+            Border = BoxBorder.Heavy,
+            BorderStyle = new Style(Color.Grey42),
+            Header = new PanelHeader(
+                $"[bold grey] {(lang ?? "code").EscapeMarkup()} [/]", Justify.Left),
+            Padding = new Padding(2, 0, 2, 0),
+            Expand = true,
+        };
+    }
+
+    private void UpdateMessages(string streamingContent)
+    {
+        var allMessages = new List<IRenderable>();
+
+        // 渲染每条历史消息为独立 Panel
+        for (int i = 0; i < _history.Count; i++)
+        {
+            var (role, rendered, rawContent, _) = _history[i];
+            Panel panel;
+            if (rendered != null && rendered is Panel p)
+            {
+                panel = p;
+            }
+            else
+            {
+                panel = _renderer.BuildMessagePanel(role, rawContent, i, _history[i].reasoning, _expandedMessages);
+                _history[i] = (role, panel, rawContent, _history[i].reasoning);
+            }
+            allMessages.Add(panel);
+        }
+
+        // 流式内容：实时构建 AI 响应 Panel
+        if (!string.IsNullOrEmpty(streamingContent))
+        {
+            // 工具调用 Tree + AI 内容
+            var combined = new StringBuilder();
+            if (_toolCalls.Count > 0)
+                combined.AppendLine(_renderer.RenderToolCallsAsTree(_toolCalls));
+            combined.Append(_renderer.MdToPanelContent(streamingContent));
+            var rendered = combined.ToString().TrimEnd();
+            var content = rendered.Length > 0
+                ? (IRenderable)new Markup(rendered)
+                : new Markup("[grey]等待 AI 回复...[/]");
+            var streamPanel = new Panel(
+                Align.Left(content, VerticalAlignment.Top))
+            {
+                Border = BoxBorder.Double,
+                Header = new PanelHeader("[bold green] 🤖 AI 回复中... [/]", Justify.Left),
+                BorderStyle = new Style(Color.Green),
+                Padding = new Padding(1, 0, 1, 0),
+                Expand = true,
+            };
+            allMessages.Add(streamPanel);
+        }
+
+        // 空状态 → 欢迎屏
+        if (allMessages.Count == 0)
+        {
             RestoreMessagesPanel();
             return;
         }
-        if (!string.IsNullOrEmpty(streamingContent) && _history.Count > 0 && _history[^1].role == "user")
-            result = $"[bold green]┃[/] {result}";
 
-        // 防御性转义：AI 返回的文本中可能包含 [次]、[步骤1] 等未被转义的括号，
-        // Spectre.Console 会尝试将其作为 markup tag 解析导致崩溃。
-        // 仅放行已知的 Spectre 标记标签，其余全部转义。
-        result = Regex.Replace(result, @"(?<!\[)\[([^\[\]]+?)\](?!\])", m =>
+        // ── Viewport 裁剪：scrollOffset 控制可见范围 ──
+        var messages = new List<IRenderable>();
+        int totalMessages = allMessages.Count;
+        int visibleCount = Math.Min(_maxVisibleMessages, totalMessages);
+        // scrollOffset = 0 表示最新消息可见；>0 则向上偏移
+        int startIdx = Math.Max(0, totalMessages - visibleCount - _scrollOffset);
+        int endIdx = Math.Min(totalMessages, startIdx + _maxVisibleMessages);
+        // 如果 scrollOffset 推到顶部，固定从 0 开始
+        if (startIdx < 0) { _scrollOffset += startIdx; startIdx = 0; }
+
+        if (startIdx > 0)
         {
-            var inner = m.Groups[1].Value.Trim();
-            if (inner == "/") return m.Value;
-            if (inner.Length > 0 && inner.Split(' ', StringSplitOptions.RemoveEmptyEntries)
-                    .All(part => _knownMarkupTokens.Contains(part)))
-                return m.Value;
-            return "[[" + inner + "]]";
-        });
+            messages.Add(new Markup(
+                $"[dim]↕ 以上 {startIdx} 条消息已滚动  Shift+↑↓/PgUp/PgDn 翻页  (共 {totalMessages} 条)[/]"));
+        }
+        messages.AddRange(allMessages.GetRange(startIdx, endIdx - startIdx));
+
+        // 底部空白提示
+        if (_scrollOffset > 0 && endIdx < totalMessages)
+        {
+            messages.Add(new Markup(
+                $"[dim]↓ 还有 {totalMessages - endIdx} 条消息在后面  按 Shift+↓ 或 PgDn 滚动[/]"));
+        }
 
         _layout["Messages"].Update(
-            new Panel(result)
+            new Panel(new Rows(messages))
                 .Border(BoxBorder.None)
                 .Expand());
     }
@@ -587,11 +498,108 @@ public sealed class ChatLayout
                 .Expand());
     }
 
-    // ── 选择器辅助 ──
+    /// <summary>高亮用户输入中的 /commands 和 #tags。</summary>
+    private static string HighlightCommands(string escaped)
+    {
+        // /command 开头的词 → 黄色高亮
+        escaped = Regex.Replace(escaped, @"(^|\s)(/[a-zA-Z][\w-]*)", m =>
+            m.Groups[1].Value + "[bold yellow]" + m.Groups[2].Value + "[/]");
+        // #tag → 青色
+        escaped = Regex.Replace(escaped, @"(^|\s)(#[\w-]+)", m =>
+            m.Groups[1].Value + "[bold cyan]" + m.Groups[2].Value + "[/]");
+        return escaped;
+    }
+
+    // ── 多行输入帮助方法 ──
+
+    internal bool IsInputEmpty() => _inputLines.Count == 1 && _inputLines[0].Length == 0;
+
+    internal string GetInputText() => string.Join("\n", _inputLines);
+
+    internal void ClearInput()
+    {
+        _inputLines.Clear();
+        _inputLines.Add("");
+        _cursorLine = 0;
+        _cursorCol = 0;
+    }
+
+    internal void SetInput(string text)
+    {
+        ClearInput();
+        var lines = text.Split('\n');
+        _inputLines.Clear();
+        _inputLines.AddRange(lines);
+        _cursorLine = _inputLines.Count - 1;
+        _cursorCol = _inputLines[^1].Length;
+    }
+
+    internal void InsertChar(char c)
+    {
+        var line = _inputLines[_cursorLine];
+        _inputLines[_cursorLine] = line.Insert(_cursorCol, c.ToString());
+        _cursorCol++;
+    }
+
+    internal void BackspaceChar()
+    {
+        if (_cursorCol > 0)
+        {
+            var line = _inputLines[_cursorLine];
+            _inputLines[_cursorLine] = line.Remove(_cursorCol - 1, 1);
+            _cursorCol--;
+        }
+        else if (_cursorLine > 0)
+        {
+            // Join with previous line
+            var prevLine = _inputLines[_cursorLine - 1];
+            _cursorCol = prevLine.Length;
+            _inputLines[_cursorLine - 1] = prevLine + _inputLines[_cursorLine];
+            _inputLines.RemoveAt(_cursorLine);
+            _cursorLine--;
+        }
+    }
+
+    /// <summary>替换输入内容为单行文本（用于历史导航等）</summary>
+    internal void ReplaceInputLine(string text)
+    {
+        _inputLines.Clear();
+        _inputLines.Add(text);
+        _cursorLine = 0;
+        _cursorCol = text.Length;
+    }
+
+    internal void SaveToHistory(string input)
+    {
+        if (string.IsNullOrWhiteSpace(input)) return;
+        if (_inputHistory.Count > 0 && _inputHistory[^1] == input) return;
+        _inputHistory.Add(input);
+        if (_inputHistory.Count > 50) _inputHistory.RemoveAt(0);
+        _historyIndex = -1;
+    }
+
+    /// <summary>检查并触发斜杠命令选择器</summary>
+    internal bool CheckPickerTrigger()
+    {
+        if (_inputLines.Count == 1 && _inputLines[0] == "/")
+        {
+            lock (_pickerLock)
+            {
+                _pickerActive = true;
+                _pickerFilter = "";
+                _pickerItems = SlashCommands.GetSuggestionItems("/");
+                _pickerSelectedIdx = _pickerItems.Count > 0 ? 0 : -1;
+            }
+            return true;
+        }
+        return false;
+    }
+
+    // ── 选定器辅助 ──
 
     /// <summary>根据当前 <c>_pickerFilter</c> 重新计算 <c>_pickerItems</c>。</summary>
     /// <remarks>调用方必须持有 <c>_pickerLock</c>。</remarks>
-    private void UpdatePickerItems()
+    internal void UpdatePickerItems()
     {
         var prefix = "/" + _pickerFilter;
         _pickerItems = prefix.Length > 1
@@ -620,7 +628,8 @@ public sealed class ChatLayout
 
     // ── Footer ──
 
-    private void UpdateFooter(string inputText, string statusText, bool isFirstEmpty = false)
+    private void UpdateFooter(string pickerText, string statusText, bool isFirstEmpty = false,
+        List<SlashCommands.SuggestionItem>? suggestions = null, int selIdx = -1)
     {
         var renders = new List<IRenderable>();
         var r = UsageTracker.Requests;
@@ -633,18 +642,20 @@ public sealed class ChatLayout
             var tc = UsageTracker.ToolCalls;
             var saved = UsageTracker.CacheSavedDisplay;
 
-            // 第1行：模型 · Token · 费用 · 速率 · 请求
-            var l1 = $"{m}  ·  [grey]Token:[/] {UsageTracker.TotalTokens:N0}  ·  " +
-                     $"[grey]费用:[/] {UsageTracker.CostDisplay.EscapeMarkup()}";
-            if (!string.IsNullOrEmpty(tps)) l1 += $"  ·  [grey]速率:[/] {tps}";
-            l1 += $"  ·  [grey]请求:[/] {r}";
-            renders.Add(new Markup(l1));
+            // 第1行：模型 · Token · 费用 · 请求 · 速率
+            var l1 = new Markup(
+                $"[bold]{m}[/]  [grey]·[/]  Token: {UsageTracker.TotalTokens:N0}" +
+                $"  [grey]·[/]  费用: {UsageTracker.CostDisplay.EscapeMarkup()}" +
+                (string.IsNullOrEmpty(tps) ? "" : $"  [grey]·[/]  {tps}") +
+                $"  [grey]·[/]  请求: {r}");
+            renders.Add(l1);
 
-            // 第2行：余额 · 缓存 · 工具 · 节省（仅在有数据时显示）
-            var l2 = $"[grey]余额:[/] {b}  ·  [grey]缓存:[/] {UsageTracker.CacheHitRate:F1}%";
-            if (tc > 0) l2 += $"  ·  [grey]工具:[/] {tc}次";
-            if (saved != "¥0.0000") l2 += $"  ·  [grey]节省:[/] {saved}";
-            renders.Add(new Markup(l2));
+            // 第2行：余额 · 缓存命中 · 工具调用 · 缓存节省
+            var l2 = new Markup(
+                $"余额: {b}  [grey]·[/]  缓存: {UsageTracker.CacheHitRate:F1}%" +
+                (tc > 0 ? $"  [grey]·[/]  工具: {tc}次" : "") +
+                (saved != "¥0.0000" ? $"  [grey]·[/]  节省: {saved}" : ""));
+            renders.Add(l2);
         }
         else
         {
@@ -656,21 +667,77 @@ public sealed class ChatLayout
                 _startupMessage = null; // show once
             }
             else
+            {
                 renders.Add(new Markup("[grey]等待首次请求...  输入消息开始对话[/]"));
+            }
         }
 
-        // 状态行
+        // 状态行（思考中/处理中/错误）
         if (!string.IsNullOrEmpty(statusText))
             renders.Add(new Markup(statusText));
 
-        // 输入行：首次空时显示水印+光标，之后始终只显示光标
-        var showWatermark = string.IsNullOrEmpty(inputText) && isFirstEmpty;
-        var cursorBlink = Environment.TickCount % 1000 < 530;
-        var cursor = cursorBlink ? "[bold deepskyblue1]▌[/]" : " ";
-        var inputDisplay = showWatermark
-            ? $"{cursor} [dim]│[/][grey] 输入消息  Enter=发送  S+Enter=换行  Ctrl+V=粘贴  /[/]"
-            : $"{cursor} {inputText}[bold deepskyblue1]│[/]";
-        renders.Add(new Markup(inputDisplay));
+        // ── 多行输入区：最多 MaxInputLines 行 ──
+        if (!string.IsNullOrEmpty(pickerText))
+        {
+            // 选择器模式：输入行 + 内联建议
+            var cursorBlink = Environment.TickCount % 1000 < 530;
+            var cursor = cursorBlink ? "[bold deepskyblue1]▌[/]" : " ";
+            renders.Add(new Markup($"{cursor} {pickerText.EscapeMarkup()}"));
+
+            // 内联建议列表
+            if (suggestions != null && suggestions.Count > 0)
+            {
+                var displayed = suggestions.Take(6).ToList();
+                var suggestionText = new StringBuilder();
+                for (int i = 0; i < displayed.Count; i++)
+                {
+                    var s = displayed[i];
+                    var isSelected = i == selIdx;
+                    var cmd = s.Completion;
+                    var desc = s.DisplayText.Split("  ").LastOrDefault() ?? "";
+                    if (isSelected)
+                        suggestionText.Append($"[black on cyan] {cmd,-12} [/]");
+                    else
+                        suggestionText.Append($" [grey]{cmd,-12}[/]");
+                }
+                if (suggestions.Count > 6)
+                    suggestionText.Append($" [dim]... +{suggestions.Count - 6}[/]");
+                renders.Add(new Markup(suggestionText.ToString().TrimStart()));
+                renders.Add(new Markup("[dim]↑↓=选择  Tab=补全  Enter=执行  Esc=取消[/]"));
+            }
+        }
+        else
+        {
+            var showWatermark = IsInputEmpty() && isFirstEmpty;
+            var cursorBlink = Environment.TickCount % 1000 < 530;
+            var cursor = cursorBlink ? "[bold deepskyblue1]▌[/]" : " ";
+
+            if (showWatermark)
+            {
+                renders.Add(new Markup(
+                    $"{cursor} [dim]│[/][grey] 输入消息  SEnter=发送  Enter=换行  ↑↓=光标  /开命令  Ctrl+↑↓=历史  /[/]"));
+            }
+            else
+            {
+                // 找出包含光标行的可见行范围（最多 MaxInputLines 行）
+                var visibleStart = Math.Max(0, _cursorLine - MaxInputLines + 1);
+                var visibleLines = _inputLines
+                    .Skip(visibleStart)
+                    .Take(MaxInputLines)
+                    .ToList();
+
+                foreach (var (line, idx) in visibleLines.Select((l, i) => (l, i)))
+                {
+                    var lineNum = visibleStart + idx;
+                    var isCursorLine = lineNum == _cursorLine;
+                    var prefix = isCursorLine && cursorBlink ? "[bold deepskyblue1]▌[/]" :
+                                 isCursorLine ? " [grey]▌[/]" : "  ";
+
+                    var colored = _renderer.HighlightCommands(line.EscapeMarkup());
+                    renders.Add(new Markup($"{prefix} {colored}"));
+                }
+            }
+        }
 
         _layout["Footer"].Update(
             new Panel(new Rows(renders.ToArray()))
@@ -684,6 +751,8 @@ public sealed class ChatLayout
     {
         var result = new StringBuilder();
         var inCodeBlock = false;
+        var codeLines = new List<string>();
+        var codeLang = "";
 
         foreach (var line in text.Split('\n'))
         {
@@ -692,19 +761,40 @@ public sealed class ChatLayout
             {
                 if (inCodeBlock)
                 {
-                    result.AppendLine("[grey]```[/]");
+                    // ── 渲染代码块为框线框 ──
+                    var maxWidth = codeLines.Count > 0 ? codeLines.Max(l => l.Length) : 20;
+                    var boxWidth = Math.Min(maxWidth + 4, Console.WindowWidth - 10);
+                    var langLabel = string.IsNullOrEmpty(codeLang) ? "code" : codeLang;
+
+                    // 顶框 ┌─ lang ────────────────────┐
+                    var top = "┌─ " + langLabel + " " + new string('─', Math.Max(0, boxWidth - langLabel.Length - 3)) + "┐";
+                    result.AppendLine($"[bold grey]{top}[/]");
+
+                    // 内容行 │ code │
+                    foreach (var cl in codeLines)
+                    {
+                        var padded = cl.Length <= boxWidth - 4
+                            ? cl + new string(' ', boxWidth - 4 - cl.Length)
+                            : cl[..(boxWidth - 7)] + "...";
+                        result.AppendLine($"  [grey]│[/] {padded.EscapeMarkup()} [grey]│[/]");
+                    }
+
+                    // 底框 └───────────────────────────┘
+                    var bottom = "└" + new string('─', boxWidth) + "┘";
+                    result.AppendLine($"[bold grey]{bottom}[/]");
+
+                    codeLines.Clear();
                     inCodeBlock = false;
                 }
                 else
                 {
-                    var lang = trimmed[3..].Trim();
-                    result.AppendLine($"[grey]```{lang.EscapeMarkup()}[/]");
+                    codeLang = trimmed[3..].Trim();
                     inCodeBlock = true;
                 }
             }
             else if (inCodeBlock)
             {
-                result.AppendLine($"  [grey]{line.EscapeMarkup()}[/]");
+                codeLines.Add(line);
             }
             else
             {
@@ -714,6 +804,14 @@ public sealed class ChatLayout
                 else
                     result.AppendLine();
             }
+        }
+
+        // 未闭合的代码块（流式进行中）→ 用旧风格回退显示
+        if (inCodeBlock)
+        {
+            result.AppendLine($"[grey]```{codeLang.EscapeMarkup()}[/]");
+            foreach (var cl in codeLines)
+                result.AppendLine($"  [grey]{cl.EscapeMarkup()}[/]");
         }
 
         return result.ToString().TrimEnd();
@@ -784,6 +882,21 @@ public sealed class ChatLayout
         return text;
     }
 
+    /// <summary>将工具调用列表渲染为 Tree 样式文本。</summary>
+    private static string RenderToolCallsAsTree(List<(string name, string args, string result)> calls)
+    {
+        var sb = new StringBuilder();
+        foreach (var (name, args, result) in calls)
+        {
+            var a = Truncate(args, 40);
+            sb.AppendLine($"[bold yellow]🔧 {name}[/]([grey]{a.EscapeMarkup()}[/])");
+            var r = Truncate(result, 80);
+            if (!string.IsNullOrEmpty(r))
+                sb.AppendLine($"  [green]└─[/] {r.EscapeMarkup()}");
+        }
+        return sb.ToString().TrimEnd();
+    }
+
     // ── 流式响应 ──
 
     private async Task StreamResponseAsync(string input)
@@ -796,8 +909,19 @@ public sealed class ChatLayout
         // 初始等待提示
         content.AppendLine("━━━ 思考中 ━━━");
         _toolCallCount = 0;
+        _toolCalls.Clear();
+
+        // 上下文窗口自动 truncate：超过 75% 时触发压缩提示
+        if (UsageTracker.ContextRatio() > 0.75)
+        {
+            var ctxPct = (UsageTracker.ContextRatio() * 100).ToString("F0");
+            var msg = $"[dim]📐 上下文已使用 {ctxPct}%，自动压缩中...[/]";
+            _history.Add(("cmd", null, msg, null));
+            InvalidateRendered();
+        }
+
         var toolTimer = Stopwatch.StartNew();
-        UpdateFooter("", $"[deepskyblue1]{PulseFrames[0]} 思考中...[/]");
+        UpdateFooter("", $"[deepskyblue1]{Rendering.ChatRenderer.PulseFrames[0]} 思考中...[/]");
         _liveCtx?.Refresh();
 
         // 后台脉冲动画（每 250ms 更新一次，即使无 token）
@@ -810,7 +934,7 @@ public sealed class ChatLayout
                 {
                     await Task.Delay(250, spinCts.Token).ConfigureAwait(false);
                         var idx = Interlocked.Increment(ref sharedFrameIdx);
-                        var pulse = PulseFrames[idx % PulseFrames.Length];
+                        var pulse = Rendering.ChatRenderer.PulseFrames[idx % Rendering.ChatRenderer.PulseFrames.Length];
                         var elapsed = toolTimer.Elapsed;
                         var timeStr = elapsed.TotalSeconds >= 60
                             ? $"{(int)elapsed.TotalMinutes}m{elapsed.Seconds}s"
@@ -859,10 +983,10 @@ public sealed class ChatLayout
                                 var a = fc.Arguments is Dictionary<string, object?> args
                                     ? string.Join(", ", args.Select(kv => $"{kv.Key}={kv.Value}"))
                                     : "";
-                                var msg = $"🛠 [{_toolCallCount}] {n}({Truncate(a, 50)})";
-                                content.AppendLine(msg);
+                                _toolCalls.Add((n, a, ""));
+
                                 var elapsedStr = FormatElapsed(toolTimer.Elapsed);
-                                statusText = $"{msg} [{elapsedStr}]";
+                                statusText = $"🛠 {n}({Truncate(a, 30)}) [{elapsedStr}]";
                                 if (n.Contains("SubmitPlan") || n.Contains("ApprovePlan") || n.Contains("StartExecution"))
                                     UpdateHeader();
                             }
@@ -906,11 +1030,13 @@ public sealed class ChatLayout
                                 var displayResult = resultStr;
                                 if (displayResult.Length > 300)
                                     displayResult = displayResult[..300] + "...";
-                                content.AppendLine($"  📄 结果: {displayResult}");
+                                // 更新最后一个工具调用的结果
+                                if (_toolCalls.Count > 0)
+                                    _toolCalls[^1] = (_toolCalls[^1].name, _toolCalls[^1].args, displayResult);
                             }
                         }
                     }
-                    lock (_layout) { UpdateMessages(content.ToString()); UpdateFooter("", $"{PulseFrames[sharedFrameIdx % PulseFrames.Length]} 处理中...  {statusText}"); }
+                    lock (_layout) { UpdateMessages(content.ToString()); UpdateFooter("", $"{Rendering.ChatRenderer.PulseFrames[sharedFrameIdx % Rendering.ChatRenderer.PulseFrames.Length]} 处理中...  {statusText}"); }
                     ThrottledRefresh();
                     continue;
                 }
@@ -937,14 +1063,14 @@ public sealed class ChatLayout
                         content.AppendLine(msg);
                         statusText = msg;
                     }
-                    lock (_layout) { UpdateMessages(content.ToString()); UpdateFooter("", $"{PulseFrames[sharedFrameIdx % PulseFrames.Length]} 处理中...  {statusText}"); }
+                    lock (_layout) { UpdateMessages(content.ToString()); UpdateFooter("", $"{Rendering.ChatRenderer.PulseFrames[sharedFrameIdx % Rendering.ChatRenderer.PulseFrames.Length]} 处理中...  {statusText}"); }
                     ThrottledRefresh();
                     continue;
                 }
                 if (token.StartsWith("HANDOFF TO "))
                 {
                     content.AppendLine($"→ {token}"); statusText = $"→ {token}";
-                    lock (_layout) { UpdateMessages(content.ToString()); UpdateFooter("", $"{PulseFrames[sharedFrameIdx % PulseFrames.Length]} {statusText}"); }
+                    lock (_layout) { UpdateMessages(content.ToString()); UpdateFooter("", $"{Rendering.ChatRenderer.PulseFrames[sharedFrameIdx % Rendering.ChatRenderer.PulseFrames.Length]} {statusText}"); }
                     ThrottledRefresh();
                     continue;
                 }
@@ -953,7 +1079,7 @@ public sealed class ChatLayout
                     // Escape 方括号避免重渲时 Spectre MarkupException
                     var safeToken = token.Replace("[", "\\[").Replace("]", "\\]");
                     content.AppendLine(safeToken); statusText = token;
-                    lock (_layout) { UpdateMessages(content.ToString()); UpdateFooter("", $"{PulseFrames[sharedFrameIdx % PulseFrames.Length]} {statusText}"); }
+                    lock (_layout) { UpdateMessages(content.ToString()); UpdateFooter("", $"{Rendering.ChatRenderer.PulseFrames[sharedFrameIdx % Rendering.ChatRenderer.PulseFrames.Length]} {statusText}"); }
                     ThrottledRefresh();
                     continue;
                 }
@@ -961,7 +1087,7 @@ public sealed class ChatLayout
                 content.Append(token);
 
                 // 实时刷新：消息 + 动画
-                lock (_layout) { UpdateMessages(content.ToString()); UpdateFooter("", $"{PulseFrames[sharedFrameIdx % PulseFrames.Length]} 处理中...  {statusText}"); }
+                lock (_layout) { UpdateMessages(content.ToString()); UpdateFooter("", $"{Rendering.ChatRenderer.PulseFrames[sharedFrameIdx % Rendering.ChatRenderer.PulseFrames.Length]} 处理中...  {statusText}"); }
                 ThrottledRefresh();
             }
         }
@@ -974,21 +1100,31 @@ public sealed class ChatLayout
         spinCts.Cancel();
         try { await spinTask.ConfigureAwait(false); } catch { /* 已取消或异常 */ }
 
-        _history.Add(("assistant", content.ToString()));
+        // 冻结：存储推理过程（可折叠）+ 最终回答
+        var reasoning = _renderer.RenderToolCallsAsTree(_toolCalls);
+        _history.Add(("assistant", null, content.ToString(), reasoning));
+        _toolCalls.Clear();
         TrimHistory();
+        SaveSession();
     }
 
     // ── Slash 命令 ──
 
-    private async Task<bool> HandleSlashCommandAsync(string input)
+    internal async Task<bool> HandleSlashCommandAsync(string input)
     {
         if (string.Equals(input, "/new", StringComparison.OrdinalIgnoreCase) ||
             string.Equals(input, "/clear", StringComparison.OrdinalIgnoreCase))
         {
+            SaveSession();
             _history.Clear();
-            _cachedMessages.Clear();
-            _cachedHistoryCount = 0;
-            _lastStreamRenderLen = 0;
+            _toolCalls.Clear();
+            _sessions.NewSession();
+            return true;
+        }
+        if (input.StartsWith("/sessions", StringComparison.OrdinalIgnoreCase) ||
+            input.StartsWith("/session", StringComparison.OrdinalIgnoreCase))
+        {
+            HandleSessionsCommand(input);
             return true;
         }
         if (string.Equals(input, "/exit", StringComparison.OrdinalIgnoreCase) ||
@@ -1003,7 +1139,7 @@ public sealed class ChatLayout
         if (SlashCommands.TryExecute(input, ref running, ref cmdStatus))
         {
             if (!string.IsNullOrEmpty(cmdStatus))
-                _history.Add(("cmd", cmdStatus));
+                _history.Add(("cmd", null, cmdStatus, null));
             return running;
         }
         return true;
@@ -1269,6 +1405,93 @@ public sealed class ChatLayout
                 input.Length--;
             else if (!char.IsControl(key.KeyChar))
                 input.Append(key.KeyChar);
+        }
+    }
+
+    // ── Session 持久化 ──
+
+    private void SaveSession()
+    {
+        if (_history.Count == 0) return;
+        _sessions.AddMessage(Microsoft.Extensions.AI.ChatRole.User, _history[0].rawContent);
+        foreach (var (role, _, text, _) in _history.Skip(1))
+        {
+            if (role is "user" or "assistant")
+                _sessions.AddMessage(
+                    role == "user" ? Microsoft.Extensions.AI.ChatRole.User : Microsoft.Extensions.AI.ChatRole.Assistant,
+                    text);
+        }
+        _sessions.SaveSession();
+    }
+
+    private void HandleSessionsCommand(string input)
+    {
+        var parts = input.Trim().Split(' ', 3, StringSplitOptions.RemoveEmptyEntries);
+        var sub = parts.Length > 1 ? parts[1].ToLowerInvariant() : "";
+        var arg = parts.Length > 2 ? parts[2] : "";
+
+        switch (sub)
+        {
+            case "list":
+            case "ls":
+            case "":
+                var sessions = _sessions.ListSessions();
+                if (sessions.Length == 0)
+                {
+                    _history.Add(("cmd", null, "[yellow]📋 暂无已保存的会话[/]", null));
+                }
+                else
+                {
+                    var lines = new List<string> { "[bold yellow]📋 已保存的会话:[/]" };
+                    foreach (var s in sessions.Take(20))
+                    {
+                        var marker = s.Name == _sessions.CurrentSession ? " [green]← 当前[/]" : "";
+                        lines.Add($"  [cyan]{s.DisplayName,-22}[/]{marker}");
+                    }
+                    if (sessions.Length > 20)
+                        lines.Add($"[grey]  ... 还有 {sessions.Length - 20} 个[/]");
+                    lines.Add("[dim]使用 /sessions load <name> 加载[/]");
+                    _history.Add(("cmd", null, string.Join("\n", lines), null));
+                }
+                break;
+
+            case "load":
+                if (string.IsNullOrEmpty(arg))
+                {
+                    _history.Add(("cmd", null, "[yellow]用法: /sessions load <会话名>[/]", null));
+                    return;
+                }
+                if (_sessions.LoadSession(arg))
+                {
+                    _history.Clear();
+                    _toolCalls.Clear();
+                    foreach (var m in _sessions.Messages)
+                    {
+                        var role = m.Role == Microsoft.Extensions.AI.ChatRole.User ? "user" : "assistant";
+                        _history.Add((role, null, m.Text ?? "", null));
+                    }
+                    _history.Add(("cmd", null, $"[green]✅ 已加载会话: {SessionManager.FormatSessionName(arg)}[/]", null));
+                }
+                else
+                {
+                    _history.Add(("cmd", null, $"[red]❌ 找不到会话 '{arg}'。使用 /sessions list 查看[/]", null));
+                }
+                break;
+
+            case "delete":
+            case "rm":
+                if (string.IsNullOrEmpty(arg))
+                {
+                    _history.Add(("cmd", null, "[yellow]用法: /sessions delete <会话名>[/]", null));
+                    return;
+                }
+                _sessions.DeleteSession(arg);
+                _history.Add(("cmd", null, $"[green]✅ 已删除会话: {arg}[/]", null));
+                break;
+
+            default:
+                _history.Add(("cmd", null, "[yellow]用法: /sessions list|load <name>|delete <name>[/]", null));
+                break;
         }
     }
 }

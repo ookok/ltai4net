@@ -2,15 +2,10 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 
-namespace LTAI.TUI.Commands;
+namespace LTAI.Core.Commands;
 
-/// <summary>
-/// Parses user input into typed <see cref="Command"/> records.
-/// No UI, no static state, 100% testable in isolation.
-/// </summary>
 public sealed class CommandParser : ICommandParser
 {
-    // Maps command name + aliases → canonical command name
     private readonly Dictionary<string, string> _nameIndex;
 
     public CommandParser()
@@ -24,7 +19,6 @@ public sealed class CommandParser : ICommandParser
         }
     }
 
-    /// <summary>Known commands and their aliases. Single source of truth for parsing.</summary>
     private static readonly (string cmd, string[] aliases)[] KnownCommands =
     [
         ("help",     ["?", "帮助"]),
@@ -49,6 +43,7 @@ public sealed class CommandParser : ICommandParser
         ("plan",     ["计划状态"]),
         ("lang",     ["语言", "language"]),
         ("skill",    []),
+        ("git",      ["g"]),
         ("exit",     ["quit", "q", "退出"]),
     ];
 
@@ -121,13 +116,14 @@ public sealed class CommandParser : ICommandParser
         "cd" => new CdCommand(args),
         "lang" => new LangCommand(args),
         "skill" => new SkillCommand(args),
+        "git" => new GitCommand(args),
         _ => new UnknownCommand(canonical),
     };
 
     private static bool HasArgs(string cmd) => cmd switch
     {
         "model" or "jobs" or "config" or "snippet" or "workflow" or "pipe" or
-        "mode" or "ls" or "cd" or "lang" or "skill" => true,
+        "mode" or "ls" or "cd" or "lang" or "skill" or "git" => true,
         _ => false,
     };
 

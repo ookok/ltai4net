@@ -3,7 +3,7 @@ using System.Text;
 using System.Text.Json;
 using LTAI.AI;
 using LTAI.Core.Configuration;
-using LTAI.TUI.Commands;
+using LTAI.Core.Commands;
 using Microsoft.Extensions.Options;
 using Spectre.Console;
 

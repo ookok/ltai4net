@@ -40,7 +40,7 @@ public sealed class SubagentResultRenderer : IToolResultRenderer
                 Text = $"🔧 子任务 #{spawnCount} ({type})",
                 Foreground = LtaiTheme.Sbb(LtaiTheme.AccentInfo),
                 FontSize = 11,
-                FontFamily = new("Consolas")
+                FontFamily = LtaiTheme.CodeFont
             };
             dock.Children.Add(icon);
 
@@ -60,7 +60,7 @@ public sealed class SubagentResultRenderer : IToolResultRenderer
                 Text = preview,
                 Foreground = LtaiTheme.Sbb(LtaiTheme.TextSecondary),
                 FontSize = 10,
-                FontFamily = new("Consolas"),
+                FontFamily = LtaiTheme.CodeFont,
                 TextWrapping = TextWrapping.Wrap,
                 Margin = new(12, 0, 0, 0)
             };

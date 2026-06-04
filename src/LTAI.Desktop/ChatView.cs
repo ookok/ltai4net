@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Linq;
 using System.Text;
+using Avalonia;
 using Avalonia.Controls;
 using Microsoft.Extensions.AI;
 using Avalonia.Input;
@@ -10,6 +11,8 @@ using Avalonia.Media;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using System.Reflection;
+using LTAI.Core.Commands;
+using LTAI.Core.Session;
 
 namespace LTAI.Desktop;
 
@@ -23,22 +26,27 @@ public sealed class ChatView : UserControl
     private readonly TextBox _input;
     private readonly StackPanel _outputStack;
     private readonly ScrollViewer _scroller;
+    private const int MaxVisibleMessages = 80;
     private readonly StackPanel _footerStats;
     private readonly Button _actionBtn;
     private readonly List<string> _history = [];
     private int _historyIdx = -1;
     private CancellationTokenSource? _cts;
     private int _turns, _tokens;
+    public int Tokens => _tokens;
+    public int Turns => _turns;
     private bool _isSending;
     private readonly SessionManager _sessionManager;
     private readonly LTAI.Desktop.ToolRendering.ToolResultRendererRegistry _toolRenderers;
     private readonly LTAI.Agent.Snippets.SnippetStore? _snippetStore;
     private TextBlock? _currentResponseText;
+    private readonly ViewModels.ChatViewModel? _vm;
 
     private readonly Dictionary<int, string> _subSessions = new();
     private readonly Dictionary<int, Stopwatch> _subStartTimes = new();
 
     public SessionManager SessionManager => _sessionManager;
+    public ViewModels.ChatViewModel? ViewModel => _vm;
 
     public async Task LoadSessionAsync(string name)
     {
@@ -56,8 +64,8 @@ public sealed class ChatView : UserControl
                 Content = "🔙 返回父会话",
                 FontSize = 11, Height = 22,
                 Background = LtaiTheme.Sbb(LtaiTheme.AccentInfo),
-                Foreground = LtaiTheme.Sbb("#ffffff"),
-                BorderThickness = new(0), CornerRadius = new(4),
+                Foreground = LtaiTheme.Sbb(LtaiTheme.TextOnAccent),
+                BorderThickness = new(0), CornerRadius = LtaiTheme.Radius.Sm,
                 Margin = new(0, 4),
                 Cursor = new Cursor(StandardCursorType.Hand)
             };
@@ -66,7 +74,7 @@ public sealed class ChatView : UserControl
             {
                 Background = LtaiTheme.Sbb(LtaiTheme.BgPanel),
                 BorderBrush = LtaiTheme.Sbb(LtaiTheme.AccentInfo),
-                BorderThickness = new(1), CornerRadius = new(6),
+                BorderThickness = new(1), CornerRadius = LtaiTheme.Radius.Md,
                 Padding = new(8), Margin = new(0, 0, 0, 6),
                 Child = new StackPanel
                 {
@@ -106,21 +114,34 @@ public sealed class ChatView : UserControl
     /// <summary>从外部设置输入文本并自动发送（用于"问 AI"功能）。</summary>
     public async Task SendContentAsync(string text)
     {
+        if (_vm != null)
+        {
+            _vm.Input = text;
+            await _vm.SendCommand.ExecuteAsync(null);
+            return;
+        }
         _input.Text = text;
         await SendAsync();
     }
 
-    public ChatView(LTAIService svc, SessionManager? sessionManager = null)
+    private readonly Services.DesktopCommandService _cmdService = new();
+
+    public ChatView(LTAIService svc, SessionManager? sessionManager = null,
+        ViewModels.ChatViewModel? viewModel = null)
     {
         _svc = svc;
         _sessionManager = sessionManager ?? new SessionManager();
         _toolRenderers = LTAI.Desktop.ToolRendering.DefaultRenderers.Create();
-        // Resolve SnippetStore from DI (if available). null-safe — Desktop must
-        // still function when launched in degraded mode without LTAI.Agent DI.
         _snippetStore = App.Services?.GetService(typeof(LTAI.Agent.Snippets.SnippetStore))
             as LTAI.Agent.Snippets.SnippetStore;
-        // P17.5: subscribe to LLM questions
         SetupQuestionHandler();
+
+        // D4: ViewModel-driven command wiring — if a ViewModel is provided,
+        // route send/cancel through it and render output from its Messages collection.
+        _vm = viewModel;
+        if (_vm != null)
+            WireViewModel();
+
         Background = LtaiTheme.Sbb(LtaiTheme.Bg);
 
         var root = new DockPanel { Margin = new(16) };
@@ -174,28 +195,41 @@ public sealed class ChatView : UserControl
 
         _input = new TextBox
         {
+            Name = "InputBox",
             PlaceholderText = "输入消息... Enter=发送, Shift+Enter=换行, Ctrl+Enter=发送, ↑↓=历史  |  拖入文件/文件夹",
             Foreground = LtaiTheme.Sbb(LtaiTheme.TextPrimary),
             Background = LtaiTheme.Sbb(LtaiTheme.BgInput),
             BorderBrush = LtaiTheme.Sbb(LtaiTheme.Border),
             BorderThickness = new(1),
-            FontFamily = new("Consolas"),
+            FontFamily = LtaiTheme.CodeFont,
             MinHeight = 72,
             AcceptsReturn = false,
             TextWrapping = TextWrapping.Wrap
         };
+        Avalonia.Automation.AutomationProperties.SetAutomationId(_input, "ChatInput");
         _input.KeyDown += OnInputKey;
 
         _actionBtn = new Button
         {
+            Name = "SendButton",
             Content = "Send",
             Width = 60,
             Background = LtaiTheme.Sbb(LtaiTheme.AccentDNA),
-            Foreground = LtaiTheme.Sbb("#ffffff"),
+            Foreground = LtaiTheme.Sbb(LtaiTheme.TextOnAccent),
             FontWeight = FontWeight.Bold
         };
         _actionBtn.Click += (_, _) =>
         {
+            if (_vm != null)
+            {
+                if (_vm.IsSending) _vm.CancelCommand.Execute(null);
+                else
+                {
+                    _vm.Input = _input.Text ?? "";
+                    _ = _vm.SendCommand.ExecuteAsync(null);
+                }
+                return;
+            }
             if (_isSending) Cancel();
             else _ = SendAsync();
         };
@@ -213,7 +247,7 @@ public sealed class ChatView : UserControl
         DockPanel.SetDock(footerBorder, Dock.Bottom);
         root.Children.Add(footerBorder);
 
-        // ── Messages area ──
+        // ── Messages area (virtualized via prune) ──
         _outputStack = new StackPanel { Spacing = 8 };
         _scroller = new ScrollViewer { Content = _outputStack };
         root.Children.Add(_scroller);
@@ -233,6 +267,7 @@ public sealed class ChatView : UserControl
         else
         {
             _sessionManager.NewSession();
+            AddSuggestionCards();
         }
 
         SetupDragDrop();
@@ -269,9 +304,50 @@ public sealed class ChatView : UserControl
 
     public void Cancel()
     {
+        if (_vm != null) { _vm.CancelCommand.Execute(null); return; }
         _cts?.Cancel();
         _cts?.Dispose();
         _cts = null;
+    }
+
+    private void WireViewModel()
+    {
+        if (_vm == null) return;
+
+        // Render new messages from ViewModel
+        _vm.Messages.CollectionChanged += (_, e) =>
+        {
+            if (e.NewItems == null) return;
+            foreach (ViewModels.ChatMessage msg in e.NewItems)
+            {
+                if (msg.Role == "user")
+                    AddBubble("[You]", msg.Text, LtaiTheme.ChatUser, LtaiTheme.Border);
+                else if (msg.Role == "assistant")
+                    AddBubble("[LTAI]", msg.Text, LtaiTheme.AccentSystem, LtaiTheme.Border);
+                else
+                    AddBubble("ℹ️", msg.Text, LtaiTheme.AccentInfo, LtaiTheme.Border);
+            }
+            _scroller.ScrollToEnd();
+        };
+
+        // Clear textbox when ViewModel clears Input after send
+        _vm.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(ViewModels.ChatViewModel.Input))
+                Dispatcher.UIThread.Post(() => _input.Text = _vm.Input);
+            if (e.PropertyName == nameof(ViewModels.ChatViewModel.IsSending))
+                _actionBtn.Content = _vm.IsSending ? "Cancel" : "Send";
+        };
+
+        // Close window on exit
+        _vm.ExitRequested += () =>
+        {
+            Dispatcher.UIThread.Post(() =>
+            {
+                var tl = TopLevel.GetTopLevel(this);
+                if (tl is Window w) w.Close();
+            });
+        };
     }
 
     private void OnInputKey(object? s, KeyEventArgs e)
@@ -289,6 +365,14 @@ public sealed class ChatView : UserControl
         // Enter (plain or Ctrl) → send
         if (e.Key == Key.Enter && e.KeyModifiers is KeyModifiers.None or KeyModifiers.Control)
         {
+            if (_vm != null)
+            {
+                if (_vm.IsSending) return;
+                e.Handled = true;
+                _vm.Input = _input.Text ?? "";
+                _ = _vm.SendCommand.ExecuteAsync(null);
+                return;
+            }
             if (_isSending) return;
             e.Handled = true;
             _ = SendAsync().ContinueWith(t =>
@@ -319,6 +403,18 @@ public sealed class ChatView : UserControl
     {
         DragDrop.SetAllowDrop(_input, true);
 
+        _input.AddHandler(DragDrop.DragEnterEvent, (_, e) =>
+        {
+            _input.BorderBrush = LtaiTheme.Sbb(LtaiTheme.AccentDNA);
+            _input.BorderThickness = new Thickness(2);
+        });
+
+        _input.AddHandler(DragDrop.DragLeaveEvent, (_, e) =>
+        {
+            _input.BorderBrush = LtaiTheme.Sbb(LtaiTheme.Border);
+            _input.BorderThickness = new Thickness(1);
+        });
+
         _input.AddHandler(DragDrop.DragOverEvent, (_, e) =>
         {
             e.DragEffects = DragDropEffects.Copy;
@@ -330,6 +426,8 @@ public sealed class ChatView : UserControl
         {
             try
             {
+                _input.BorderBrush = LtaiTheme.Sbb(LtaiTheme.Border);
+                _input.BorderThickness = new Thickness(1);
                 // Avalonia 12.0: DragEventArgs doesn't expose Data directly.
                 // Use DataObject.TryGetDataFromDropEvent or reflection fallback.
                 var data = await GetDragDropDataAsync(e);
@@ -443,7 +541,7 @@ public sealed class ChatView : UserControl
                 return;
             }
             _input.Text = "";
-            TryHandleSlashCommand(query);
+            HandleSlashCommand(query);
             return;
         }
 
@@ -482,7 +580,7 @@ public sealed class ChatView : UserControl
             Background = LtaiTheme.Sbb(LtaiTheme.ThinkBg),
             BorderBrush = LtaiTheme.Sbb(LtaiTheme.Border),
             BorderThickness = new(1),
-            CornerRadius = new(4),
+            CornerRadius = LtaiTheme.Radius.Md,
             Padding = new(6),
             Margin = new(0, 2),
             IsVisible = false
@@ -490,17 +588,29 @@ public sealed class ChatView : UserControl
         var thinkText = new SelectableTextBlock
         {
             Foreground = LtaiTheme.Sbb(LtaiTheme.TextDim),
-            FontFamily = new("Consolas"),
+            FontFamily = LtaiTheme.CodeFont,
             FontSize = 11,
-            TextWrapping = TextWrapping.Wrap
+            TextWrapping = TextWrapping.Wrap,
+            IsVisible = false
+        };
+        var thinkToggle = new TextBlock
+        {
+            Text = "▶  Thinking",
+            Foreground = LtaiTheme.Sbb(LtaiTheme.TextDim),
+            FontSize = 10,
+            FontStyle = FontStyle.Italic,
+            Cursor = new Avalonia.Input.Cursor(Avalonia.Input.StandardCursorType.Hand)
+        };
+        var _expanded = false;
+        thinkToggle.PointerPressed += (_, _) =>
+        {
+            _expanded = !_expanded;
+            thinkToggle.Text = _expanded ? "▼  Thinking" : "▶  Thinking";
+            thinkText.IsVisible = _expanded;
         };
         var thinkInner = new StackPanel
         {
-            Children =
-            {
-                new TextBlock { Text = "Thinking", Foreground = LtaiTheme.Sbb(LtaiTheme.TextDim), FontSize = 10, FontStyle = FontStyle.Italic },
-                thinkText
-            }
+            Children = { thinkToggle, thinkText }
         };
         thinkPanel.Child = thinkInner;
         aiContent.Children.Add(thinkPanel);
@@ -587,7 +697,7 @@ public sealed class ChatView : UserControl
                         taskBanner = new Border
                         {
                             Background = LtaiTheme.Sbb(LtaiTheme.BgPanel),
-                            CornerRadius = new(4),
+                            CornerRadius = LtaiTheme.Radius.Md,
                             Padding = new(6, 3),
                             Margin = new(0, 0, 0, 4),
                             Child = new TextBlock
@@ -644,7 +754,7 @@ public sealed class ChatView : UserControl
                         {
                             Content = "✅ Approve Plan",
                             Background = LtaiTheme.Sbb(LtaiTheme.AccentDNA),
-                            Foreground = LtaiTheme.Sbb("#ffffff"),
+                            Foreground = LtaiTheme.Sbb(LtaiTheme.TextOnAccent),
                             FontWeight = FontWeight.Bold,
                             Margin = new(0, 4, 0, 0),
                             HorizontalAlignment = HorizontalAlignment.Left
@@ -725,7 +835,7 @@ public sealed class ChatView : UserControl
                     Background = LtaiTheme.Sbb(LtaiTheme.CodeBg),
                     BorderBrush = LtaiTheme.Sbb(LtaiTheme.CodeBorder),
                     BorderThickness = new(1),
-                    CornerRadius = new(4),
+                    CornerRadius = LtaiTheme.Radius.Md,
                     Padding = new(8, 8, 8, 8)
                 };
                 // Syntax-highlighted code block
@@ -743,13 +853,13 @@ public sealed class ChatView : UserControl
                     {
                         Text = (li + 1).ToString().PadLeft(linePad),
                         Foreground = LtaiTheme.Sbb(LtaiTheme.TextDim),
-                        FontFamily = new("Consolas"),
+                        FontFamily = LtaiTheme.CodeFont,
                         FontSize = 11,
                         Width = 30,
                         TextAlignment = Avalonia.Media.TextAlignment.Right,
                         Margin = new(0, 0, 8, 0),
                     });
-                    var tb = new TextBlock { FontFamily = new("Consolas"), FontSize = 12, TextWrapping = TextWrapping.Wrap };
+                    var tb = new TextBlock { FontFamily = LtaiTheme.CodeFont, FontSize = 12, TextWrapping = TextWrapping.Wrap };
                     var tokens = MarkdownRenderer.TokenizeLine(codeLines[li], keywords);
                     if (tokens.Count > 0)
                         foreach (var (text, color) in tokens)
@@ -765,7 +875,7 @@ public sealed class ChatView : UserControl
                     {
                         Text = $"[... truncated: {codeLines.Length - maxLines} more lines]",
                         Foreground = LtaiTheme.Sbb(LtaiTheme.TextDim),
-                        FontFamily = new("Consolas"),
+                        FontFamily = LtaiTheme.CodeFont,
                         FontSize = 11,
                         FontStyle = FontStyle.Italic,
                         Margin = new(linePad * 8 + 8, 2, 0, 0)
@@ -811,7 +921,7 @@ public sealed class ChatView : UserControl
         {
             _currentResponseText = new TextBlock
             {
-                Foreground = LtaiTheme.Sbb(LtaiTheme.TextPrimary),
+                Foreground = LtaiTheme.Sbb(LtaiTheme.TextOnBubble),
                 FontSize = 13,
                 TextWrapping = TextWrapping.Wrap,
                 Text = text
@@ -872,12 +982,12 @@ public sealed class ChatView : UserControl
     {
         var border = new Border
         {
-            Background = LtaiTheme.Sbb(LtaiTheme.CodeBg),
-            BorderBrush = LtaiTheme.Sbb(LtaiTheme.CodeBorder),
-            BorderThickness = new(1),
-            CornerRadius = new(4),
-            Padding = new(8),
-            Margin = new(0, 4),
+        Background = LtaiTheme.Sbb(LtaiTheme.CodeBg),
+        BorderBrush = LtaiTheme.Sbb(LtaiTheme.CodeBorder),
+        BorderThickness = new(1),
+        CornerRadius = LtaiTheme.Radius.Md,
+        Padding = new(8),
+        Margin = new(0, 4),
         };
         var stack = new StackPanel();
         var lines = diff.Split('\n');
@@ -899,12 +1009,12 @@ public sealed class ChatView : UserControl
             }
             else if (line.StartsWith("+") && !line.StartsWith("+++"))
             {
-                color = Color.Parse("#4CAF50"); // green
+                color = LtaiTheme.DiffGreen;
                 prefix = "+";
             }
             else if (line.StartsWith("-") && !line.StartsWith("---"))
             {
-                color = Color.Parse("#F44336"); // red
+                color = LtaiTheme.DiffRed;
                 prefix = "-";
             }
             else
@@ -915,7 +1025,7 @@ public sealed class ChatView : UserControl
             var tb = new TextBlock
             {
                 Text = prefix + " " + line,
-                FontFamily = new("Consolas"),
+                FontFamily = LtaiTheme.CodeFont,
                 FontSize = 12,
                 Foreground = LtaiTheme.Sbb(color),
             };
@@ -1012,7 +1122,7 @@ public sealed class ChatView : UserControl
                 {
                     BorderBrush = LtaiTheme.Sbb(LtaiTheme.Border),
                     BorderThickness = new(1),
-                    CornerRadius = new(4),
+                    CornerRadius = LtaiTheme.Radius.Md,
                     Margin = new(0, 4),
                     Child = image
                 };
@@ -1052,12 +1162,13 @@ public sealed class ChatView : UserControl
 
     private void AddBubble(string label, string text, Color accent, Color border)
     {
+        var isUser = label == "[You]";
         var b = new Border
         {
-            Background = LtaiTheme.Sbb(LtaiTheme.BgPanel),
-            BorderBrush = LtaiTheme.Sbb(border),
+            Background = LtaiTheme.Sbb(isUser ? LtaiTheme.BubbleUserBg : LtaiTheme.BubbleAIBg),
+            BorderBrush = LtaiTheme.Sbb(isUser ? LtaiTheme.BubbleUserBorder : LtaiTheme.BubbleAIBorder),
             BorderThickness = new(1),
-            CornerRadius = new(6),
+            CornerRadius = new CornerRadius(12, 12, isUser ? 4 : 12, isUser ? 12 : 4),
             Padding = new(10),
             Margin = new(0, 4)
         };
@@ -1068,8 +1179,8 @@ public sealed class ChatView : UserControl
         var stb = new SelectableTextBlock
         {
             Text = text,
-            Foreground = LtaiTheme.Sbb(LtaiTheme.TextPrimary),
-            FontFamily = new("Consolas"),
+            Foreground = LtaiTheme.Sbb(LtaiTheme.TextOnBubble),
+            FontFamily = LtaiTheme.CodeFont,
             FontSize = 13,
             TextWrapping = TextWrapping.Wrap
         };
@@ -1082,16 +1193,17 @@ public sealed class ChatView : UserControl
 
         b.Child = s;
         _outputStack.Children.Add(b);
+        PruneOutputStack();
     }
 
     private StackPanel AddAIBubbleHeader()
     {
         var b = new Border
         {
-            Background = LtaiTheme.Sbb(LtaiTheme.BgPanel),
-            BorderBrush = LtaiTheme.Sbb(LtaiTheme.AccentSystem),
+            Background = LtaiTheme.Sbb(LtaiTheme.BubbleAIBg),
+            BorderBrush = LtaiTheme.Sbb(LtaiTheme.BubbleAIBorder),
             BorderThickness = new(1),
-            CornerRadius = new(6),
+            CornerRadius = new CornerRadius(12, 12, 12, 4),
             Padding = new(10),
             Margin = new(0, 4)
         };
@@ -1105,6 +1217,7 @@ public sealed class ChatView : UserControl
 
         b.Child = s;
         _outputStack.Children.Add(b);
+        PruneOutputStack();
         return s;
     }
     private StackPanel? _aiBubbleStack;
@@ -1119,169 +1232,99 @@ public sealed class ChatView : UserControl
         _aiBubbleStack.Children.Add(copyRow);
     }
 
+    private void AddSuggestionCards()
+    {
+        var prompts = new[]
+        {
+            ("💡", "解释这段 C# 代码", "分析当前项目中的代码逻辑"),
+            ("🔧", "帮我重构", "重构选中的方法或类"),
+            ("📋", "写 Git 提交规范", "根据变更生成规范的提交信息"),
+        };
+        foreach (var (icon, title, desc) in prompts)
+        {
+            var card = new Border
+            {
+            Background = LtaiTheme.Sbb(LtaiTheme.BubbleAIBg),
+            BorderBrush = LtaiTheme.Sbb(LtaiTheme.BubbleAIBorder),
+            BorderThickness = new(1),
+            CornerRadius = LtaiTheme.Radius.Md,
+            Padding = new(12, 10),
+            Margin = new(0, 4),
+            Cursor = new Cursor(StandardCursorType.Hand),
+        };
+        var stack = new StackPanel { Spacing = 2 };
+        stack.Children.Add(new TextBlock
+        {
+            Text = $"{icon}  {title}",
+            Foreground = LtaiTheme.Sbb(LtaiTheme.TextOnBubble),
+            FontWeight = FontWeight.Bold,
+            FontSize = 13,
+        });
+        stack.Children.Add(new TextBlock
+        {
+            Text = desc,
+            Foreground = LtaiTheme.Sbb(LtaiTheme.TextMuted),
+                FontSize = 11,
+            });
+            card.Child = stack;
+            card.PointerPressed += (_, _) =>
+            {
+                _input.Text = title;
+                _input.CaretIndex = title.Length;
+                _ = SendAsync();
+            };
+            _outputStack.Children.Add(card);
+            PruneOutputStack();
+        }
+    }
+
     // ── 命令处理 ──
 
-    private static readonly string[] KnownCommands = [
-        "help", "new", "exit", "status", "pwd", "plan", "approve",
-        "ls", "cd", "config", "model", "models", "cost", "snippet",
-        "workflow", "pipe", "jobs", "lang", "mode", "undo"
-    ];
-
-    private bool TryHandleSlashCommand(string input)
+    private void HandleSlashCommand(string input)
     {
-        var parts = input.Trim().Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
-        var cmdName = parts[0][1..].ToLowerInvariant();
-        if (string.IsNullOrEmpty(cmdName)) cmdName = "help";
-        var args = parts.Length > 1 ? parts[1] : "";
+        var cmd = _cmdService.Parser.Parse(input);
+        if (cmd is EmptyCommand or ChatMessageCommand)
+            return;
 
-        switch (cmdName)
+        // Commands with custom rendering — dispatch to view-specific methods
+        switch (cmd)
         {
-            case "help":
-            case "?":
-            case "帮助":
+            case HelpCommand:
                 ShowHelp();
-                return true;
-
-            case "new":
-            case "reset":
-            case "clear":
-            case "新":
-            case "新建":
-                if (_sessionManager.MessageCount > 0)
-                    _sessionManager.SaveSession();
-                _outputStack.Children.Clear();
-                _sessionManager.NewSession();
-                _turns = 0;
-                _tokens = 0;
-                RefreshStats();
-                AddSystemBubble("✅ 会话已重置");
-                return true;
-
-            case "exit":
-            case "quit":
-            case "q":
-            case "退出":
-                (TopLevel.GetTopLevel(this) as Window)?.Close();
-                return true;
-
-            case "status":
-            case "状态":
-            case "统计":
+                return;
+            case StatusCommand:
                 ShowStatus();
-                return true;
-
-            case "pwd":
-            case "目录":
-                AddSystemBubble($"📁 {Directory.GetCurrentDirectory()}");
-                return true;
-
-            case "plan":
-            case "计划状态":
-                AddSystemBubble(LTAI.Agent.Tools.PlanTools.PlanStatus());
-                return true;
-
-            case "approve":
-            case "yes":
-            case "confirm":
-            case "批准":
-            case "确认":
-                AddSystemBubble(LTAI.Agent.Tools.PlanTools.ApprovePlan()
-                    + "\n" + LTAI.Agent.Tools.PlanTools.StartExecution());
-                return true;
-
-            case "ls":
-            case "dir":
-            case "列表":
-                var dir = Directory.GetCurrentDirectory();
-                var entries = Directory.GetFileSystemEntries(dir)
-                    .Take(30)
-                    .Select(e =>
-                    {
-                        var name = Path.GetFileName(e);
-                        return Directory.Exists(e) ? $"📁 {name}" : $"📄 {name}";
-                    });
-                AddSystemBubble($"📂 {dir}\n" + string.Join("\n", entries));
-                return true;
-
-            case "cd":
-                if (string.IsNullOrWhiteSpace(args))
-                {
-                    AddSystemBubble("用法: /cd <目录路径>");
-                    return true;
-                }
-                try
-                {
-                    Directory.SetCurrentDirectory(args);
-                    AddSystemBubble($"📂 {Directory.GetCurrentDirectory()}");
-                }
-                catch (Exception ex)
-                {
-                    AddSystemBubble($"❌ {ex.Message}");
-                }
-                return true;
-
-            case "models":
-            case "在线模型":
+                return;
+            case ModelsCommand:
                 ShowModels();
-                return true;
-            case "model":
-                ShowModel(args);
-                return true;
-            case "snippet":
-            case "snip": case "常用语": case "常用":
-                if (string.IsNullOrWhiteSpace(args)) { ShowCmdPicker(cmdName); return true; }
-                HandleSnippetCommand(args);
-                return true;
-            case "config":
-            case "设置":
-                if (string.IsNullOrWhiteSpace(args)) { AddSystemBubble("用法: /config apikey|export|import"); return true; }
-                HandleConfigDesktop(args);
-                return true;
-            case "cost":
-            case "费用":
-                AddSystemBubble($"Token 用量: {LTAI.Core.Configuration.UsageTracker.TotalTokens:N0} | 请求: {LTAI.Core.Configuration.UsageTracker.Requests} | 缓存命中率: {LTAI.Core.Configuration.UsageTracker.CacheHitRate:F1}%");
-                return true;
-            case "lang":
-            case "语言":
-                if (string.IsNullOrWhiteSpace(args)) { ShowCmdPicker(cmdName); return true; }
-                AddSystemBubble(args switch { "zh-CN" or "zh" => "已切换为简体中文", "en-US" or "en" => "Switched to English", _ => "用法: /lang zh-CN|en-US" });
-                return true;
-            case "mode":
-            case "编辑模式":
-                if (string.IsNullOrWhiteSpace(args)) { ShowCmdPicker(cmdName); return true; }
-                AddSystemBubble(args switch { "review" => "编辑模式: 审查", "auto" => "编辑模式: 自动", _ => "用法: /mode review|auto" });
-                return true;
-            case "undo":
-            case "撤销":
-                AddSystemBubble("撤销: 使用编辑工具 (Ctrl+Z)");
-                return true;
-            case "retry":
-            case "重试":
-                AddSystemBubble("重试: 请重新发送上一条消息");
-                return true;
-            case "compact":
-            case "压缩":
-                AddSystemBubble("压缩: 对话历史将被汇总压缩");
-                return true;
-
-            default:
-                string? bestName = null;
-                var bestDist = int.MaxValue;
-                for (int i = 0; i < KnownCommands.Length; i++)
-                {
-                    var d = Levenshtein(cmdName, KnownCommands[i]);
-                    if (d <= 3 && d < bestDist)
-                    {
-                        bestDist = d;
-                        bestName = KnownCommands[i];
-                    }
-                }
-                var msg = bestName != null
-                    ? $"⚠️ 未知命令 '/{cmdName}'。您是不是想输入 '/{bestName}'？"
-                    : $"⚠️ 未知命令 '/{cmdName}'。输入 /help 查看可用命令。";
-                AddSystemBubble(msg);
-                return true;
+                return;
+            case ModelCommand m:
+                ShowModel(m.Args);
+                return;
+            case SnippetCommand s:
+                if (string.IsNullOrWhiteSpace(s.Args)) { ShowCmdPicker("snippet"); return; }
+                HandleSnippetCommand(s.Args);
+                return;
+            case ConfigCommand c:
+                if (string.IsNullOrWhiteSpace(c.Args)) { AddSystemBubble("用法: /config apikey|export|import"); return; }
+                HandleConfigDesktop(c.Args);
+                return;
+            case NewSessionCommand:
+                _ = ResetSessionAsync();
+                return;
+            case ExitCommand:
+                (TopLevel.GetTopLevel(this) as Window)?.Close();
+                return;
         }
+
+        // All other commands — route through DesktopCommandService
+        var result = _cmdService.Execute(input);
+        if (result.RequestExit)
+            (TopLevel.GetTopLevel(this) as Window)?.Close();
+        else if (result.ClearMessages)
+            _ = ResetSessionAsync();
+        else if (result.StatusMessage != null)
+            AddSystemBubble(result.StatusMessage);
     }
 
     private static bool CmdHasLevel1(string cmd) => cmd switch
@@ -1570,7 +1613,7 @@ public sealed class ChatView : UserControl
             Background = LtaiTheme.Sbb(LtaiTheme.BgPanel),
             BorderBrush = LtaiTheme.Sbb(LtaiTheme.AccentSystem),
             BorderThickness = new(1),
-            CornerRadius = new(6),
+            CornerRadius = LtaiTheme.Radius.Md,
             Padding = new(10),
             Margin = new(0, 4)
         };
@@ -1578,27 +1621,23 @@ public sealed class ChatView : UserControl
         {
             Text = text,
             Foreground = LtaiTheme.Sbb(LtaiTheme.TextPrimary),
-            FontFamily = new("Consolas"),
+            FontFamily = LtaiTheme.CodeFont,
             FontSize = 13,
             TextWrapping = TextWrapping.Wrap
         };
         b.Child = stb;
         _outputStack.Children.Add(b);
+        PruneOutputStack();
         _scroller.ScrollToEnd();
     }
 
-    private static int Levenshtein(string a, string b)
+    private void PruneOutputStack()
     {
-        var m = a.Length; var n = b.Length;
-        var d = new int[m + 1, n + 1];
-        for (int i = 0; i <= m; i++) d[i, 0] = i;
-        for (int j = 0; j <= n; j++) d[0, j] = j;
-        for (int j = 1; j <= n; j++)
-            for (int i = 1; i <= m; i++)
-                d[i, j] = a[i - 1] == b[j - 1]
-                    ? d[i - 1, j - 1]
-                    : Math.Min(Math.Min(d[i - 1, j] + 1, d[i, j - 1] + 1), d[i - 1, j - 1] + 1);
-        return d[m, n];
+        if (_outputStack.Children.Count > MaxVisibleMessages)
+        {
+            int remove = _outputStack.Children.Count - MaxVisibleMessages;
+            _outputStack.Children.RemoveRange(0, remove);
+        }
     }
 
     private void RefreshStats()
@@ -1611,7 +1650,7 @@ public sealed class ChatView : UserControl
             Text = text,
             Foreground = dim,
             FontSize = 11,
-            FontFamily = new("Consolas"),
+            FontFamily = LtaiTheme.CodeFont,
             TextWrapping = TextWrapping.NoWrap
         };
 

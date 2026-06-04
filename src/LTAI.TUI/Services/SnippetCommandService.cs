@@ -1,5 +1,5 @@
 using LTAI.Agent.Snippets;
-using LTAI.TUI.Commands;
+using LTAI.Core.Commands;
 using Spectre.Console;
 
 namespace LTAI.TUI.Services;
@@ -15,7 +15,7 @@ public sealed class SnippetCommandService : ICommandService
 
     public CommandResult Execute(Command command) => command switch
     {
-        Commands.SnippetCommand sc => HandleSnippetCommand(sc.Args),
+        LTAI.Core.Commands.SnippetCommand sc => HandleSnippetCommand(sc.Args),
         _ => new SuccessResult("ok"),
     };
 

@@ -390,29 +390,12 @@ public static class KnownKeys
     [
         // ── LLM Providers (官方 ¥/1M tokens 价格，来源各官网定价页) ──
         new("DEEPSEEK_API_KEY",     "DeepSeek",       "输入¥1/输出¥2/缓存¥0.02 per 1M", "https://platform.deepseek.com/api_keys", "https://api.deepseek.com/v1", "deepseek-v4-flash", 1.0m, 2.0m, 0.02m),
-        new("SILICONFLOW_API_KEY",  "SiliconFlow",    "¥1/¥2 per 1M",       "https://cloud.siliconflow.cn/", "https://api.siliconflow.cn/v1", "deepseek-ai/DeepSeek-V2.5", 1.0m, 2.0m),
-        new("DASHSCOPE_API_KEY",    "Aliyun(Qwen)",   "¥0.8/¥2 per 1M",     "https://dashscope.console.aliyun.com/", "https://dashscope.aliyuncs.com/compatible-mode/v1", "qwen-plus", 0.8m, 2.0m),
-        new("ZHIPU_API_KEY",        "Zhipu(GLM)",     "¥1/¥2 per 1M",       "https://open.bigmodel.cn/", "https://open.bigmodel.cn/api/paas/v4", "glm-4-plus", 1.0m, 2.0m),
-        new("DOUBAO_API_KEY",       "Doubao",         "¥0.8/¥2 per 1M",     "https://console.volcengine.com/ark/", "https://ark.cn-beijing.volces.com/api/v3", "ep-XXXXXX", 0.8m, 2.0m),
-        new("HUNYUAN_API_KEY",      "Hunyuan",        "¥1/¥2 per 1M",       "https://console.cloud.tencent.com/hunyuan", "https://api.hunyuan.cloud.tencent.com/v1", "hunyuan-pro", 1.0m, 2.0m),
-        new("BAIDU_API_KEY",        "Baidu(ERNIE)",   "¥1.2/¥2.4 per 1M",  "https://console.bce.baidu.com/ai/", "https://aip.baidubce.com/rpc/2.0/ai_custom", "ernie-4.0", 1.2m, 2.4m),
-        new("SPARK_API_KEY",        "iFlytek(Spark)", "¥0.5/¥1 per 1M",     "https://www.xfyun.cn/service/spark", "https://spark-api.xf-yun.com/v3.5/chat", "spark-3.5", 0.5m, 1.0m),
-        new("MOONSHOT_API_KEY",     "Moonshot(Kimi)", "¥1/¥2 per 1M",       "https://platform.moonshot.cn/", "https://api.moonshot.cn/v1", "moonshot-v1-8k", 1.0m, 2.0m),
-        new("BAICHUAN_API_KEY",     "Baichuan",       "¥0.5/¥1 per 1M",     "https://platform.baichuan-ai.com/", "https://api.baichuan-ai.com/v1", "Baichuan4", 0.5m, 1.0m),
-        new("YI_API_KEY",           "Yi(01.AI)",      "¥1/¥2 per 1M",       "https://platform.lingyiwanwu.com/", "https://api.lingyiwanwu.com/v1", "yi-large", 1.0m, 2.0m),
-        new("STEP_API_KEY",         "StepFun",        "¥1/¥2 per 1M",       "https://platform.stepfun.com/", "https://api.stepfun.com/v1", "step-2-16k", 1.0m, 2.0m),
-        new("MINIMAX_API_KEY",      "Minimax",        "¥0.8/¥1.6 per 1M",   "https://platform.minimax.chat/", "https://api.minimax.chat/v1", "MiniMax-Text-01", 0.8m, 1.6m),
-        new("OPENAI_API_KEY",       "OpenAI",         "≈¥10/¥30 per 1M",    "https://platform.openai.com/api-keys", "https://api.openai.com/v1", "gpt-4o", 10.0m, 30.0m),
-        new("ANTHROPIC_API_KEY",    "Anthropic",      "≈¥22/¥108 per 1M",  "https://console.anthropic.com/",         "https://api.anthropic.com",            "claude-sonnet-4-5", 22.0m, 108.0m),
-        new("GROQ_API_KEY",         "Groq",           "免费",               "https://console.groq.com/keys", "https://api.groq.com/openai/v1", "llama-3.3-70b-versatile"),
-        new("OPENROUTER_API_KEY",   "OpenRouter",     "按源模型定价",        "https://openrouter.ai/keys", "https://openrouter.ai/api/v1", "deepseek/deepseek-v4-flash"),
-        new("TOGETHER_API_KEY",     "Together AI",    "按源模型定价",        "https://api.together.xyz/", "https://api.together.xyz/v1", "mistralai/Mixtral-8x22B-Instruct-v0.1"),
-        new("MISTRAL_API_KEY",      "Mistral",        "≈¥8/¥24 per 1M",    "https://console.mistral.ai/", "https://api.mistral.ai/v1", "mistral-large-latest", 8.0m, 24.0m),
-        new("PERPLEXITY_API_KEY",   "Perplexity",     "¥2/¥8 per 1M",       "https://docs.perplexity.ai/", "https://api.perplexity.ai", "sonar-pro", 2.0m, 8.0m),
-        new("XAI_API_KEY",          "X.AI(Grok)",     "¥3/¥5 per 1M",       "https://console.x.ai/", "https://api.x.ai/v1", "grok-2-1212", 3.0m, 5.0m),
-        new("COHERE_API_KEY",       "Cohere",         "≈¥5/¥15 per 1M",    "https://dashboard.cohere.com/", "https://api.cohere.ai/v1", "command-r-plus", 5.0m, 15.0m),
-        new("FIREWORKS_API_KEY",    "Fireworks AI",   "¥0.9/¥0.9 per 1M",   "https://fireworks.ai/", "https://api.fireworks.ai/inference/v1", "accounts/fireworks/models/llama-v3p3-70b-instruct", 0.9m, 0.9m),
-        new("MIMO_API_KEY",         "小米 MiMo",     "输入¥1/输出¥2 per 1M", "https://dev.mi.com/", "https://api.mimo.mi.com/v1", "deepseek-v4", 1.0m, 2.0m),
+        new("SILICONFLOW_API_KEY",  "SiliconFlow",    "¥1/¥2 per 1M",       "https://cloud.siliconflow.cn/", "https://api.siliconflow.cn/v1", "deepseek-ai/DeepSeek-V4-Pro", 1.0m, 2.0m),
+        new("DASHSCOPE_API_KEY",    "Aliyun(Qwen)",   "¥0.8/¥2 per 1M",     "https://dashscope.console.aliyun.com/", "https://dashscope.aliyuncs.com/compatible-mode/v1", "qwen3.7-plus-2026-05-26", 0.8m, 2.0m),
+        new("ZHIPU_API_KEY",        "Zhipu(GLM)",     "¥1/¥2 per 1M",       "https://open.bigmodel.cn/", "https://open.bigmodel.cn/api/paas/v4", "glm-4.5", 1.0m, 2.0m),
+        new("STEP_API_KEY",         "StepFun",        "¥1/¥2 per 1M",       "https://platform.stepfun.com/", "https://api.stepfun.com/v1", "step-1-32k", 1.0m, 2.0m),
+        new("OPENROUTER_API_KEY",   "OpenRouter",     "按源模型定价",        "https://openrouter.ai/keys", "https://openrouter.ai/api/v1", "qwen/qwen3.7-plus"),
+        new("MIMO_API_KEY",         "小米 MiMo",     "输入¥1/输出¥2 per 1M", "https://dev.mi.com/", "https://api.xiaomimimo.com/v1", "mimo-v2-flash", 1.0m, 2.0m),
         // ── Web Search ──
         new("BRAVE_API_KEY",        "Brave Search",   "网页搜索（默认）",  "https://brave.com/search/api/"),
         new("SERPER_API_KEY",       "Serper(Google)", "Google 搜索（备用）", "https://serper.dev/"),
@@ -486,6 +469,58 @@ public static class KnownKeys
                 merged.Add(ki);
         }
         All = merged.ToArray();
+    }
+
+    /// <summary>
+    /// Update the default model for a specific provider (by Service name or EnvVar).
+    /// This mutates <see cref="All"/> in memory. Does NOT persist to disk.
+    /// Returns true if the provider was found and updated.
+    /// </summary>
+    public static bool UpdateProviderModel(string serviceOrEnvVar, string newModel)
+    {
+        for (int i = 0; i < All.Length; i++)
+        {
+            if (All[i].Service.Equals(serviceOrEnvVar, StringComparison.OrdinalIgnoreCase) ||
+                All[i].EnvVar.Equals(serviceOrEnvVar, StringComparison.OrdinalIgnoreCase))
+            {
+                All[i] = All[i] with { Model = newModel };
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Save current provider models to an appsettings.json file.
+    /// Writes a <c>LTAI:Providers</c> section with current endpoint + model for
+    /// each provider that has both defined. File is created or overwritten atomically.
+    /// Returns the file path written to.
+    /// </summary>
+    public static string SaveProviderModels(string configPath)
+    {
+        var providers = All
+            .Where(k => k.Endpoint != null && k.Model != null)
+            .Select(k => new ProviderDefinition(
+                k.EnvVar,
+                k.Service,
+                k.Description ?? "",
+                k.Url,
+                k.Endpoint!,
+                k.Model!,
+                k.PriceInPerM,
+                k.PriceOutPerM,
+                k.PriceInCachePerM
+            ))
+            .ToArray();
+
+        var wrapper = new { LTAI = new { Providers = providers } };
+        var json = System.Text.Json.JsonSerializer.Serialize(wrapper,
+            new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+        var dir = Path.GetDirectoryName(configPath);
+        if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+            Directory.CreateDirectory(dir);
+        File.WriteAllText(configPath, json);
+        return configPath;
     }
 }
 

@@ -1,4 +1,4 @@
-using LTAI.TUI.Commands;
+using LTAI.Core.Commands;
 
 namespace LTAI.TUI.Services;
 
@@ -36,7 +36,7 @@ public sealed class CommandRouter
         ModelCommand or ModelsCommand => _modelService.Execute(cmd),
         JobsCommand => _jobsService.Execute(cmd),
         ConfigCommand => _configService.Execute(cmd),
-        Commands.SnippetCommand => _snippetService.Execute(cmd),
+        SnippetCommand => _snippetService.Execute(cmd),
         WorkflowCommand => _workflowService.Execute(cmd),
         PipeCommand => _pipeService.Execute(cmd),
         _ => new SuccessResult("ok"),

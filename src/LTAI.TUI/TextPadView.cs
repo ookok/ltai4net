@@ -28,16 +28,73 @@ public static class TextPadView
         ".jsx", ".tsx", ".css", ".html", ".sh", ".bash",
     };
 
+    private static string? _gitBranch;
+    private static readonly Dictionary<string, string> _gitStatusCache = new();
+
+    private static void RefreshGitStatus()
+    {
+        _gitStatusCache.Clear();
+        _gitBranch = null;
+        try
+        {
+            var branchPsi = new ProcessStartInfo("git", "rev-parse --abbrev-ref HEAD")
+            {
+                WorkingDirectory = _currentDir,
+                RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true
+            };
+            using var bp = new Process { StartInfo = branchPsi };
+            bp.Start();
+            _gitBranch = bp.StandardOutput.ReadToEnd().Trim();
+            bp.WaitForExit(2000);
+            if (string.IsNullOrEmpty(_gitBranch) || _gitBranch == "HEAD") { _gitBranch = null; return; }
+
+            var psi = new ProcessStartInfo("git", "status --porcelain --untracked-files=normal")
+            {
+                WorkingDirectory = _currentDir,
+                RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true
+            };
+            using var p = new Process { StartInfo = psi };
+            p.Start();
+            foreach (var line in p.StandardOutput.ReadToEnd().Split('\n', StringSplitOptions.RemoveEmptyEntries))
+                if (line.Length >= 4) _gitStatusCache[line[3..].Trim()] = line[..2].Trim();
+            p.WaitForExit(3000);
+        }
+        catch { _gitBranch = null; }
+    }
+
+    private static string GitStatusDot(string? status)
+    {
+        return status switch
+        {
+            "M" or "M " or "MM" => "[blue]●[/] ",
+            "A" or "A " => "[green]●[/] ",
+            "D" or "D " => "[red]●[/] ",
+            "R" or "R " => "[yellow]●[/] ",
+            "?" or "??" => "[grey]●[/] ",
+            "C" or "C " => "[purple]●[/] ",
+            "U" or "UU" => "[maroon]●[/] ",
+            _ => null
+        };
+    }
+
+    private static bool DirHasGitChanges(string dirPath)
+    {
+        var relDir = Path.GetRelativePath(_currentDir, dirPath).Replace('\\', '/');
+        return _gitStatusCache.Keys.Any(k => k == relDir || k.StartsWith(relDir + "/"));
+    }
+
     public static void Render(string rootDir)
     {
         _currentDir = rootDir;
         _currentFile = null;
         _editMode = false;
+        RefreshGitStatus();
         var running = true;
         while (running)
         {
             Console.Clear();
-            AnsiConsole.MarkupLine($"[bold]文件浏览器[/] — [grey]{_currentDir}[/]");
+            var branchTag = _gitBranch != null ? $" [blue]🌿 {_gitBranch}[/]" : "";
+            AnsiConsole.MarkupLine($"[bold]文件浏览器[/] — [grey]{_currentDir}[/]{branchTag}");
             if (_currentFile != null && File.Exists(_currentFile))
             {
                 RenderFileView();
@@ -56,6 +113,8 @@ public static class TextPadView
                     case ConsoleKey.Home: _scrollOffset = 0; break;
                     case ConsoleKey.End: _scrollOffset = Math.Max(0, _totalLines - _pageLines); break;
                     case ConsoleKey.G: GoToLine(); break;
+                    case ConsoleKey.D when _gitBranch != null: RunCmd($"git diff \"{_currentFile}\""); break;
+                    case ConsoleKey.L when _gitBranch != null: RunCmd($"git log --oneline -10"); break;
                     case ConsoleKey.F when key.Modifiers == ConsoleModifiers.Control: SearchInFile(); break;
                 }
             }
@@ -70,7 +129,7 @@ public static class TextPadView
                         new SelectionPrompt<string>().Title("[yellow]选择:[/]").PageSize(22).AddChoices(files));
                     if (string.IsNullOrEmpty(choice)) { if (!ShowActions()) continue; else continue; }
                     var fp = Path.GetFullPath(Path.Combine(_currentDir, choice));
-                    if (Directory.Exists(fp)) { _currentDir = fp; continue; }
+                    if (Directory.Exists(fp)) { _currentDir = fp; RefreshGitStatus(); continue; }
                     if (File.Exists(fp)) { _currentFile = fp; continue; }
                     // 处理功能项
                     if (choice.Contains("新建文件")) { NewFile(); continue; }
@@ -94,6 +153,11 @@ public static class TextPadView
         }
         actions.Add("[green]📄 新建文件[/]");
         actions.Add("[green]📁 新建文件夹[/]");
+        if (_gitBranch != null)
+        {
+            actions.Add("[blue]📊 Git 状态[/]");
+            actions.Add("[blue]📜 Git 日志[/]");
+        }
         actions.Add("[grey]⬆ 上级目录[/]");
         actions.Add("[red]✕ 退出[/]");
         var act = AnsiConsole.Prompt(new SelectionPrompt<string>().Title("[yellow]操作:[/]").PageSize(10).AddChoices(actions));
@@ -102,10 +166,12 @@ public static class TextPadView
         if (act.Contains("Run")) { RunCmd("dotnet run"); return true; }
         if (act.Contains("新建文件")) { NewFile(); return true; }
         if (act.Contains("新建文件夹")) { NewDir(); return true; }
+        if (act.Contains("Git 状态")) { RunCmd("git status"); return true; }
+        if (act.Contains("Git 日志")) { RunCmd("git log --oneline -10"); return true; }
         if (act.Contains("上级目录"))
         {
             var parent = Directory.GetParent(_currentDir);
-            if (parent != null) _currentDir = parent.FullName;
+            if (parent != null) { _currentDir = parent.FullName; RefreshGitStatus(); }
             return true;
         }
         return false; // exit
@@ -116,26 +182,13 @@ public static class TextPadView
         var items = new List<string>();
         try
         {
-            // Git 状态检测
-            var gitStatus = new Dictionary<string, string>();
-            try
-            {
-                var psi = new ProcessStartInfo("git", "status --porcelain --untracked-files=normal")
-                {
-                    WorkingDirectory = _currentDir,
-                    RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true
-                };
-                using var p = new Process { StartInfo = psi };
-                p.Start();
-                foreach (var line in p.StandardOutput.ReadToEnd().Split('\n', StringSplitOptions.RemoveEmptyEntries))
-                    if (line.Length >= 4) gitStatus[line[3..].Trim()] = line[..2].Trim();
-                p.WaitForExit(3000);
-            }
-            catch { }
-
             var dirs = Directory.GetDirectories(_currentDir).OrderBy(Path.GetFileName);
             foreach (var d in dirs)
-                items.Add($"[cyan]📁 {Path.GetFileName(d)}/[/]");
+            {
+                var dirName = Path.GetFileName(d);
+                var dirMark = DirHasGitChanges(d) ? "[blue]●[/] " : "";
+                items.Add($"{dirMark}[cyan]📁 {dirName}/[/]");
+            }
 
             var files = Directory.GetFiles(_currentDir)
                 .Where(f => TextExts.Contains(Path.GetExtension(f)))
@@ -145,8 +198,11 @@ public static class TextPadView
                 var rel = Path.GetFileName(f);
                 var icon = Icon(f);
                 var statusMark = "";
-                if (gitStatus.TryGetValue(rel, out var st))
-                    statusMark = st switch { "M" => "[blue]●[/] ", "A" => "[green]●[/] ", "D" => "[red]●[/] ", "?" => "[yellow]●[/] ", _ => "" };
+                if (_gitStatusCache.TryGetValue(rel, out var st))
+                {
+                    var dot = GitStatusDot(st);
+                    if (dot != null) statusMark = dot;
+                }
                 items.Add($"{statusMark}{icon} {rel}");
             }
         }
@@ -171,7 +227,49 @@ public static class TextPadView
             var output = p.StandardOutput.ReadToEnd();
             var error = p.StandardError.ReadToEnd();
             p.WaitForExit(120_000);
-            AnsiConsole.Write(new Panel($"{output}\n{error}".TrimEnd()).Header(p.ExitCode == 0 ? "[green]✅ 成功[/]" : "[red]❌ 失败[/]").Expand());
+            var isOk = p.ExitCode == 0;
+            var isGit = cmd.StartsWith("git ");
+
+            if (isGit)
+            {
+                var content = new StringBuilder();
+                if (!string.IsNullOrEmpty(output))
+                {
+                    foreach (var line in output.Split('\n'))
+                    {
+                        if (line.Contains("error:") || line.Contains("fatal:"))
+                            content.AppendLine($"[red]{line.EscapeMarkup()}[/]");
+                        else if (line.StartsWith("On branch ") || line.StartsWith("HEAD "))
+                            content.AppendLine($"[blue]{line.EscapeMarkup()}[/]");
+                        else if (line.Contains("nothing to commit") || line.Contains("up-to-date"))
+                            content.AppendLine($"[green]{line.EscapeMarkup()}[/]");
+                        else if (line.TrimStart().StartsWith("modified:"))
+                            content.AppendLine($"[yellow]{line.EscapeMarkup()}[/]");
+                        else if (line.TrimStart().StartsWith("new file:"))
+                            content.AppendLine($"[green]{line.EscapeMarkup()}[/]");
+                        else if (line.TrimStart().StartsWith("deleted:"))
+                            content.AppendLine($"[red]{line.EscapeMarkup()}[/]");
+                        else if (string.IsNullOrWhiteSpace(line) || line.StartsWith(' '))
+                            content.AppendLine($"[grey]{line.EscapeMarkup()}[/]");
+                        else
+                            content.AppendLine($"[white]{line.EscapeMarkup()}[/]");
+                    }
+                }
+                if (!string.IsNullOrEmpty(error))
+                    content.AppendLine($"[red]{error.EscapeMarkup()}[/]");
+                AnsiConsole.Write(new Panel(content.ToString().TrimEnd())
+                    .Header(isOk ? "[green]✅ git[/]" : "[red]❌ git[/]")
+                    .Border(BoxBorder.Rounded)
+                    .Expand());
+            }
+            else
+            {
+                var text = $"{output}\n{error}".TrimEnd();
+                AnsiConsole.Write(new Panel(text.Length > 0 ? text.EscapeMarkup() : "(无输出)")
+                    .Header(isOk ? "[green]✅ 成功[/]" : "[red]❌ 失败[/]")
+                    .Border(BoxBorder.Rounded)
+                    .Expand());
+            }
         }
         catch (Exception ex) { AnsiConsole.MarkupLine($"[red]错误: {ex.Message}[/]"); }
         Console.ReadKey(true);
@@ -239,17 +337,33 @@ public static class TextPadView
     {
         try
         {
-            var tree = new Tree($"[bold cyan]{Path.GetFileName(_currentDir) ?? _currentDir}/[/]");
+            var branchTag = _gitBranch != null ? $" [blue]🌿 {_gitBranch}[/]" : "";
+            var tree = new Tree($"[bold cyan]{Path.GetFileName(_currentDir) ?? _currentDir}/{branchTag}[/]");
             foreach (var d in Directory.GetDirectories(_currentDir).OrderBy(Path.GetFileName).Take(15))
             {
-                var n = tree.AddNode($"[cyan]{Path.GetFileName(d)}/[/]");
+                var dirName = Path.GetFileName(d);
+                var dirMark = DirHasGitChanges(d) ? "[blue]● [/]" : "";
+                var n = tree.AddNode($"{dirMark}[cyan]{dirName}/[/]");
                 foreach (var f in Directory.GetFiles(d).Where(f => TextExts.Contains(Path.GetExtension(f))).OrderBy(Path.GetFileName).Take(10))
-                    n.AddNode($"{Icon(f)} {Path.GetFileName(f)}");
+                {
+                    var rel = Path.GetFileName(f);
+                    var dot = "";
+                    if (_gitStatusCache.TryGetValue(rel, out var st)) { var d2 = GitStatusDot(st); if (d2 != null) dot = d2; }
+                    n.AddNode($"{dot}{Icon(f)} {rel}");
+                }
                 foreach (var sub in Directory.GetDirectories(d).OrderBy(Path.GetFileName).Take(5))
-                    n.AddNode($"[cyan]{Path.GetFileName(sub)}/…[/]");
+                {
+                    var subMark = DirHasGitChanges(sub) ? "[blue]● [/]" : "";
+                    n.AddNode($"{subMark}[cyan]{Path.GetFileName(sub)}/…[/]");
+                }
             }
             foreach (var f in Directory.GetFiles(_currentDir).Where(f => TextExts.Contains(Path.GetExtension(f))).OrderBy(Path.GetFileName).Take(20))
-                tree.AddNode($"{Icon(f)} {Path.GetFileName(f)}");
+            {
+                var rel = Path.GetFileName(f);
+                var dot = "";
+                if (_gitStatusCache.TryGetValue(rel, out var st)) { var d2 = GitStatusDot(st); if (d2 != null) dot = d2; }
+                tree.AddNode($"{dot}{Icon(f)} {rel}");
+            }
             AnsiConsole.Write(tree);
             AnsiConsole.MarkupLine("[dim]↵ 选择  Del 删除  F2 重命名  Esc 上级  Q 退出[/]");
         }
@@ -300,7 +414,7 @@ public static class TextPadView
             else
                 sb.AppendLine($"[green]文件末 — {lines.Count} 行 ({fi.Length / 1024}KB)  {encoding}[/]");
 
-            sb.AppendLine($"[dim]↑↓滚动 PgUp/PgDn翻页 Home/End首尾 Tab编辑 G跳转 Ctrl+F搜索 Del删除 F2重命名 Esc返回[/]");
+            sb.AppendLine($"[dim]↑↓滚动 PgUp/PgDn翻页 Home/End首尾 Tab编辑 G跳转 D-diff L-log Ctrl+F搜索 Del删除 F2重命名 Esc返回[/]");
             AnsiConsole.Write(new Panel(sb.ToString().TrimEnd())
                 .Header($"[bold]{Path.GetFileName(_currentFile)}[/] — {mode}")
                 .BorderColor(_editMode ? Color.Yellow : Color.Green).Expand());

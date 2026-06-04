@@ -21,19 +21,19 @@ public sealed class TerminalView : UserControl
     {
         _output = new TextBlock
         {
-            FontFamily = new FontFamily("Consolas"),
+            FontFamily = LtaiTheme.CodeFont,
             FontSize = 12,
             Foreground = LtaiTheme.Sbb(LtaiTheme.TextPrimary),
-            Background = LtaiTheme.Sbb(Color.Parse("#0d1117")),
+            Background = LtaiTheme.Sbb(LtaiTheme.Bg),
             TextWrapping = TextWrapping.Wrap,
             MaxHeight = 200,
         };
 
         _input = new TextBox
         {
-            FontFamily = new FontFamily("Consolas"),
+            FontFamily = LtaiTheme.CodeFont,
             FontSize = 12,
-            Background = LtaiTheme.Sbb(Color.Parse("#161b22")),
+            Background = LtaiTheme.Sbb(LtaiTheme.BgPanel),
             Foreground = LtaiTheme.Sbb(LtaiTheme.TextPrimary),
             Height = 22,
         };
@@ -62,7 +62,7 @@ public sealed class TerminalView : UserControl
 
         _root = new StackPanel
         {
-            Background = LtaiTheme.Sbb(Color.Parse("#0d1117")),
+            Background = LtaiTheme.Sbb(LtaiTheme.Bg),
             Children = { header, new ScrollViewer { Content = _output, MaxHeight = 200 }, _input }
         };
         Content = _root;

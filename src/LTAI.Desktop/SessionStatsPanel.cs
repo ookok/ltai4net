@@ -1,13 +1,13 @@
+using System.Globalization;
 using System.Linq;
 using Avalonia.Controls;
-using Avalonia.Controls.Templates;
 using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
 
-namespace LTAI.Desktop;
+using LTAI.Core.Session;
 
-public sealed record SessionTreeItem(SessionInfo Info, int Depth);
+namespace LTAI.Desktop;
 
 /// <summary>
 /// 会话 + 统计合并面板。可折叠，不挤占聊天窗口。
@@ -15,11 +15,10 @@ public sealed record SessionTreeItem(SessionInfo Info, int Depth);
 public sealed class SessionStatsPanel : UserControl
 {
     private readonly StackPanel _root;
-    private readonly ListBox _sessionList;
+    private readonly StackPanel _sessionPanel;
     private readonly TextBlock _statsText;
     private readonly SessionManager _sessions;
     private bool _expanded;
-    private bool _suppressSelection;
 
     /// <summary>展开/折叠切换事件。</summary>
     public event Action<string?>? SessionSelected;
@@ -42,6 +41,7 @@ public sealed class SessionStatsPanel : UserControl
             FontSize = 12,
             Height = 24,
         };
+        ToolTip.SetTip(toggleBtn, "会话列表与统计");
         toggleBtn.Click += (_, _) => { _expanded = !_expanded; UpdateVisibility(); };
         _root.Children.Add(toggleBtn);
 
@@ -60,66 +60,17 @@ public sealed class SessionStatsPanel : UserControl
         var newBtn = new Button
         { Content = "  ➕  新建", FontSize = 11, Width = 60, Height = 24,
           Background = LtaiTheme.Sbb(LtaiTheme.AccentDNA),
-          Foreground = LtaiTheme.Sbb("#ffffff"), CornerRadius = new(4) };
+          Foreground = LtaiTheme.Sbb(LtaiTheme.TextOnAccent), CornerRadius = LtaiTheme.Radius.Sm };
         newBtn.Click += (_, _) => NewSessionClicked?.Invoke();
         sessionHeader.Children.Add(newBtn);
         content.Children.Add(sessionHeader);
 
-        _sessionList = new ListBox
+        var sessionScroller = new ScrollViewer
         {
-            MinHeight = 80, MaxHeight = 200,
-            Background = LtaiTheme.Sbb(LtaiTheme.Bg),
-            Foreground = LtaiTheme.Sbb(LtaiTheme.TextPrimary),
-            FontSize = 11,
+            MaxHeight = 200,
+            Content = _sessionPanel = new StackPanel { Spacing = 1 }
         };
-        _sessionList.SelectionChanged += (_, _) =>
-        {
-            if (_suppressSelection) return;
-            if (_sessionList.SelectedItem is SessionTreeItem item)
-                SessionSelected?.Invoke(item.Info.Name);
-        };
-        _sessionList.ItemTemplate = new FuncDataTemplate<SessionTreeItem>((item, _) =>
-        {
-            var dock = new DockPanel { Margin = new(2 + item.Depth * 12, 1) };
-
-            var delBtn = new Button
-            {
-                Content = "✕",
-                FontSize = 10,
-                Width = 22, Height = 20,
-                Background = LtaiTheme.Sbb(Colors.Transparent),
-                BorderThickness = new(0),
-                Padding = new(0),
-            };
-            delBtn.PointerEntered += (_, _) => delBtn.Background = LtaiTheme.Sbb(Color.Parse("#f8514940"));
-            delBtn.PointerExited += (_, _) => delBtn.Background = LtaiTheme.Sbb(Colors.Transparent);
-            delBtn.Click += async (_, _) =>
-            {
-                try
-                {
-                    if (await ConfirmDeleteAsync(item.Info.Name))
-                    {
-                        _sessions.DeleteSession(item.Info.Name);
-                        Refresh();
-                    }
-                }
-                catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"Delete session: {ex.Message}"); }
-            };
-            DockPanel.SetDock(delBtn, Dock.Right);
-            dock.Children.Add(delBtn);
-
-            var icon = item.Depth == 0 ? "💬" : "🔧";
-            dock.Children.Add(new TextBlock
-            {
-                Text = $"{icon} {item.Info.DisplayName}",
-                VerticalAlignment = VerticalAlignment.Center,
-                Foreground = LtaiTheme.Sbb(item.Depth == 0 ? LtaiTheme.TextPrimary : LtaiTheme.TextSecondary),
-                FontSize = item.Depth == 0 ? 11 : 10
-            });
-
-            return dock;
-        });
-        content.Children.Add(_sessionList);
+        content.Children.Add(sessionScroller);
 
         // ── 统计信息 ──
         content.Children.Add(new TextBlock
@@ -139,48 +90,132 @@ public sealed class SessionStatsPanel : UserControl
         Refresh();
     }
 
+    private static string GetGroupKey(string sessionName)
+    {
+        // sessionName format: "session-YYYYMMdd-HHmmss" or "sub-..."
+        var datePart = sessionName;
+        var dashIdx = sessionName.LastIndexOf('-');
+        if (dashIdx > 0 && sessionName.Length - dashIdx >= 9)
+            datePart = sessionName.Substring(dashIdx + 1);
+        if (datePart.Length >= 8 && int.TryParse(datePart.AsSpan(0, 8), NumberStyles.None, CultureInfo.InvariantCulture, out _))
+        {
+            var y = int.Parse(datePart.AsSpan(0, 4));
+            var m = int.Parse(datePart.AsSpan(4, 2));
+            var d = int.Parse(datePart.AsSpan(6, 2));
+            var dt = new DateTime(y, m, d);
+            var today = DateTime.Today;
+            if (dt == today) return "今天";
+            if (dt == today.AddDays(-1)) return "昨天";
+            if (dt > today.AddDays(-(int)today.DayOfWeek - 6)) return "本周";
+            if (dt.Year == today.Year && dt.Month == today.Month) return "本月";
+            return "更早";
+        }
+        return "其他";
+    }
+
+    private static readonly string[] _groupOrder = { "今天", "昨天", "本周", "本月", "更早", "其他" };
+
     public void Refresh()
     {
+        _sessionPanel.Children.Clear();
         var sessions = _sessions.ListSessions();
-        var flatList = new List<SessionTreeItem>();
-        foreach (var s in sessions)
+        var grouped = sessions
+            .Where(s => s.ParentId == null)
+            .GroupBy(s => GetGroupKey(s.Name))
+            .ToDictionary(g => g.Key, g => g.OrderByDescending(s => s.Name).ToList());
+
+        foreach (var gk in _groupOrder)
         {
-            if (s.ParentId != null) continue;
-            flatList.Add(new SessionTreeItem(s, 0));
-            var children = sessions.Where(c => c.ParentId == s.Name).OrderBy(c => c.Name);
-            foreach (var c in children)
+            if (!grouped.TryGetValue(gk, out var group)) continue;
+            _sessionPanel.Children.Add(new TextBlock
             {
-                // 读取子会话元数据中的耗时
-                var label = c.DisplayName;
-                try
+                Text = $"── {gk} ({group.Count}) ──",
+                Foreground = LtaiTheme.Sbb(LtaiTheme.TextDim),
+                FontSize = 10,
+                FontFamily = LtaiTheme.CodeFont,
+                Margin = new(4, 2, 0, 0)
+            });
+            foreach (var s in group)
+            {
+                var row = new DockPanel { Margin = new(4, 0, 0, 0) };
+                var delBtn = new Button
                 {
-                    var metaPath = Path.Combine(
-                        Path.GetDirectoryName(Directory.GetFiles(Path.Combine(Directory.GetCurrentDirectory(), ".livingtree", "sessions"), $"{c.Name}.meta.json").FirstOrDefault() ?? ""),
-                        $"{c.Name}.meta.json");
-                    if (File.Exists(metaPath))
+                    Content = "✕", FontSize = 10, Width = 20, Height = 18,
+                    Background = LtaiTheme.Sbb(Colors.Transparent),
+                    BorderThickness = new(0), Padding = new(0),
+                    Tag = s.Name
+                };
+                delBtn.PointerEntered += (_, _) => delBtn.Background = LtaiTheme.Sbb(LtaiTheme.AccentDanger, 64);
+                delBtn.PointerExited += (_, _) => delBtn.Background = LtaiTheme.Sbb(Colors.Transparent);
+                delBtn.Click += async (_, _) =>
+                {
+                    try
                     {
-                        var meta = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(File.ReadAllText(metaPath));
-                        if (meta.TryGetProperty("ElapsedMs", out var el) && el.GetInt64() > 0)
+                        var name = (string)((Button)delBtn).Tag!;
+                        if (await ConfirmDeleteAsync(name))
+                        { _sessions.DeleteSession(name); Refresh(); }
+                    }
+                    catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"Delete: {ex.Message}"); }
+                };
+                DockPanel.SetDock(delBtn, Dock.Right);
+                row.Children.Add(delBtn);
+                var label = new TextBlock
+                {
+                    Text = $"💬 {s.DisplayName}",
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Foreground = LtaiTheme.Sbb(LtaiTheme.TextPrimary),
+                    FontSize = 11,
+                    Cursor = new Avalonia.Input.Cursor(Avalonia.Input.StandardCursorType.Hand)
+                };
+                label.PointerPressed += async (_, _) =>
+                {
+                    SessionSelected?.Invoke(s.Name);
+                    await Task.CompletedTask;
+                };
+                row.Children.Add(label);
+                _sessionPanel.Children.Add(row);
+
+                // children
+                var children = sessions.Where(c => c.ParentId == s.Name).OrderBy(c => c.Name).ToList();
+                foreach (var c in children)
+                {
+                    var childLabel = c.DisplayName;
+                    try
+                    {
+                        var metaDir = Path.Combine(Directory.GetCurrentDirectory(), ".livingtree", "sessions");
+                        var metaFile = Directory.GetFiles(metaDir, $"{c.Name}.meta.json").FirstOrDefault();
+                        if (metaFile != null)
                         {
-                            var ms = el.GetInt64();
-                            var timeStr = $"{ms / 1000}.{(ms % 1000) / 100}s";
-                            label = $"[{timeStr}] {c.DisplayName}";
+                            var meta = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(File.ReadAllText(metaFile));
+                            if (meta.TryGetProperty("ElapsedMs", out var el) && el.GetInt64() > 0)
+                            {
+                                var ms = el.GetInt64();
+                                childLabel = $"[{ms / 1000}.{(ms % 1000) / 100}s] {c.DisplayName}";
+                            }
                         }
                     }
+                    catch { }
+                    var childRow = new TextBlock
+                    {
+                        Text = $"  🔧 {childLabel}",
+                        FontSize = 10,
+                        Foreground = LtaiTheme.Sbb(LtaiTheme.TextSecondary),
+                        Margin = new(4, 0, 0, 0)
+                    };
+                    _sessionPanel.Children.Add(childRow);
                 }
-                catch { }
-                flatList.Add(new SessionTreeItem(new SessionInfo(c.Name, label, c.ParentId), 1));
             }
         }
-        _suppressSelection = true;
-        _sessionList.ItemsSource = flatList;
-        if (!string.IsNullOrEmpty(_sessions.CurrentSession))
+        if (_sessionPanel.Children.Count == 0)
         {
-            var current = flatList.FirstOrDefault(f => f.Info.Name == _sessions.CurrentSession);
-            if (current != null)
-                _sessionList.SelectedItem = current;
+            _sessionPanel.Children.Add(new TextBlock
+            {
+                Text = "  暂无会话",
+                Foreground = LtaiTheme.Sbb(LtaiTheme.TextDim),
+                FontSize = 10,
+                Margin = new(4, 0)
+            });
         }
-        _suppressSelection = false;
 
         _statsText.Text = $"模型: {LTAI.Core.Configuration.UsageTracker.ActiveModel}\n"
                         + $"Token: {LTAI.Core.Configuration.UsageTracker.PromptTokens:N0}+{LTAI.Core.Configuration.UsageTracker.CompletionTokens:N0}={LTAI.Core.Configuration.UsageTracker.TotalTokens:N0}\n"

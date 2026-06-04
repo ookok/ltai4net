@@ -1,18 +1,9 @@
-using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.AI;
 
-namespace LTAI.Desktop;
-
-/// <summary>
-/// 会话管理：创建/切换/删除对话，持久化到 .livingtree/sessions/
-/// </summary>
-public sealed record SessionInfo(string Name, string DisplayName, string? ParentId = null);
+namespace LTAI.Core.Session;
 
 public sealed class SessionManager
 {
@@ -27,6 +18,13 @@ public sealed class SessionManager
     public SessionManager()
     {
         _sessionsDir = Path.Combine(Directory.GetCurrentDirectory(), ".livingtree", "sessions");
+        Directory.CreateDirectory(_sessionsDir);
+        _sessionCounter = Directory.GetFiles(_sessionsDir, "*.json").Length;
+    }
+
+    public SessionManager(string sessionsDir)
+    {
+        _sessionsDir = sessionsDir;
         Directory.CreateDirectory(_sessionsDir);
         _sessionCounter = Directory.GetFiles(_sessionsDir, "*.json").Length;
     }
@@ -94,7 +92,7 @@ public sealed class SessionManager
         File.WriteAllText(path, JsonSerializer.Serialize(meta));
     }
 
-    internal static string FormatSessionName(string raw)
+    public static string FormatSessionName(string raw)
     {
         if (raw.StartsWith("session-") && raw.Length >= 22)
         {
@@ -197,6 +195,8 @@ public sealed class SessionManager
     {
         var path = Path.Combine(_sessionsDir, $"{name}.json");
         if (File.Exists(path)) File.Delete(path);
+        var metaPath = Path.Combine(_sessionsDir, $"{name}.meta.json");
+        if (File.Exists(metaPath)) File.Delete(metaPath);
     }
 
     private void PruneOldSessions()
@@ -212,7 +212,6 @@ public sealed class SessionManager
 
     private static byte[] ComputeEncryptionKey()
     {
-        // 使用持久化密钥文件（不依赖 MachineName，重命名后不丢失数据）
         var keyFile = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "LTAI", "encryption.key");

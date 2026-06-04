@@ -1,6 +1,5 @@
-namespace LTAI.TUI.Commands;
+namespace LTAI.Core.Commands;
 
-/// <summary>Base record for all parsed slash commands. Zero UI dependency.</summary>
 public abstract record Command;
 
 // ── Simple commands (no args) ──
@@ -31,6 +30,7 @@ public sealed record LsCommand(string Args) : Command;
 public sealed record CdCommand(string Args) : Command;
 public sealed record LangCommand(string Args) : Command;
 public sealed record SkillCommand(string Args) : Command;
+public sealed record GitCommand(string Args) : Command;
 
 // ── Non-command / unknown ──
 
