@@ -25,7 +25,7 @@ public sealed class TextPadView : UserControl
     public event Action<string>? AskAiRequested;
     private readonly TreeView _tree;
     private readonly TextEditor _editor;
-    private readonly TextBlock _statusBar;
+    private readonly TextBlock _statusBar = null!;
     private readonly StackPanel _editorPanel;
     private readonly Button _toggleBtn;
     private readonly ListBox _symbolList;
@@ -280,7 +280,7 @@ public sealed class TextPadView : UserControl
         var toolbar = new StackPanel
         {
             Orientation = Orientation.Horizontal, Margin = new(4), Spacing = 4,
-            Children = { _toggleBtn, checkBtn, saveBtn, formatBtn, askAiBtn, wrapBtn, gotoBtn, splitBtn, _terminalBtn, _gitBranchLabel, _gitCommitBtn, _gitPullBtn, _gitPushBtn, _gitBlameBtn },
+            Children = { _toggleBtn, checkBtn!, saveBtn!, formatBtn!, askAiBtn!, wrapBtn!, gotoBtn!, splitBtn!, _terminalBtn!, _gitBranchLabel, _gitCommitBtn, _gitPullBtn, _gitPushBtn, _gitBlameBtn },
         };
 
         // ── 终端面板 ──
@@ -330,7 +330,7 @@ public sealed class TextPadView : UserControl
         // ── 项目搜索框（树上方） ──
         var searchBox = new TextBox
         {
-            Watermark = "🔍 搜索文件名 (Ctrl+P)...",
+            PlaceholderText = "🔍 搜索文件名 (Ctrl+P)...",
             FontSize = 11, Height = 22,
         };
         var searchResults = new ListBox
@@ -618,7 +618,7 @@ public sealed class TextPadView : UserControl
 
         // 项目感知操作
         var files = Directory.GetFiles(path);
-        var allFiles = new HashSet<string>(files.Select(Path.GetFileName), StringComparer.OrdinalIgnoreCase);
+        var allFiles = new HashSet<string>(files.Select(f => Path.GetFileName(f) ?? ""), StringComparer.OrdinalIgnoreCase);
         if (allFiles.Any(f => f?.EndsWith(".csproj") == true || f?.EndsWith(".sln") == true))
         {
             menu.Items.Add(WithClick(new MenuItem { Header = "🛠 Build" }, (_, _) => RunShell("dotnet build")));
@@ -1120,7 +1120,7 @@ public sealed class TextPadView : UserControl
     {
         _gitOutputPanel.IsVisible = true;
         _gitOutputText.Inlines?.Clear();
-        _gitOutputText.Inlines.Add(new Avalonia.Controls.Documents.Run($"⏳ {label}...")
+        _gitOutputText.Inlines!.Add(new Avalonia.Controls.Documents.Run($"⏳ {label}...")
         {
             Foreground = LtaiTheme.Sbb(LtaiTheme.AccentDNA),
             FontWeight = FontWeight.Bold,
@@ -1172,7 +1172,7 @@ public sealed class TextPadView : UserControl
             else
                 run.Foreground = LtaiTheme.Sbb(Color.Parse("#8b949e"));
 
-            _gitOutputText.Inlines.Add(run);
+            _gitOutputText.Inlines!.Add(run);
         }
     }
 
@@ -1181,7 +1181,7 @@ public sealed class TextPadView : UserControl
         var lines = status.Split('\n', StringSplitOptions.RemoveEmptyEntries);
         var rowCount = lines.Length;
         _gitOutputText.Inlines?.Clear();
-        _gitOutputText.Inlines.Add(new Avalonia.Controls.Documents.Run($"📊 {rowCount} 个文件变更\n")
+        _gitOutputText.Inlines!.Add(new Avalonia.Controls.Documents.Run($"📊 {rowCount} 个文件变更\n")
         {
             Foreground = LtaiTheme.Sbb(LtaiTheme.AccentInfo),
             FontWeight = FontWeight.Bold,
@@ -1204,7 +1204,7 @@ public sealed class TextPadView : UserControl
                 _ => ("📄", Color.Parse("#8b949e")),
             };
 
-            _gitOutputText.Inlines.Add(new Avalonia.Controls.Documents.Run($"{icon} {file}\n")
+            _gitOutputText.Inlines!.Add(new Avalonia.Controls.Documents.Run($"{icon} {file}\n")
             {
                 Foreground = LtaiTheme.Sbb(color),
                 FontFamily = LtaiTheme.CodeFont,
@@ -1219,7 +1219,7 @@ public sealed class TextPadView : UserControl
         var topLevel = TopLevel.GetTopLevel(this);
         if (topLevel is not Window owner) return;
 
-        var msgBox = new TextBox { AcceptsReturn = true, MinHeight = 60, MinWidth = 300, MaxWidth = 500, Watermark = "Commit message..." };
+        var msgBox = new TextBox { AcceptsReturn = true, MinHeight = 60, MinWidth = 300, MaxWidth = 500, PlaceholderText = "Commit message..." };
         var stageAll = new CheckBox { Content = "暂存所有变更 (git add -A)", IsChecked = true };
         var yesBtn = new Button { Content = "提交", Width = 80 };
         var noBtn = new Button { Content = "取消", Width = 80 };
@@ -1264,7 +1264,7 @@ public sealed class TextPadView : UserControl
             if (output == null) { _statusBar.Text = "❌ Blame 不可用"; return; }
 
             _blameData = new Dictionary<string, string>();
-            string? currentCommit = null, currentAuthor = null;
+            string? currentAuthor = null;
             int currentLine = 0;
             foreach (var line in output.Split('\n'))
             {
@@ -1342,28 +1342,27 @@ public sealed class TextPadView : UserControl
 
     private void DetectProject()
     {
-        var files = new HashSet<string>(Directory.GetFiles(_rootDir).Select(Path.GetFileName), StringComparer.OrdinalIgnoreCase);
-        var allFiles = new HashSet<string>(Directory.GetFiles(_rootDir, "*.*", SearchOption.TopDirectoryOnly).Select(Path.GetFileName), StringComparer.OrdinalIgnoreCase);
+        var files = new HashSet<string>(Directory.GetFiles(_rootDir).Select(f => Path.GetFileName(f) ?? ""), StringComparer.OrdinalIgnoreCase);
+        var allFiles = new HashSet<string>(Directory.GetFiles(_rootDir, "*.*", SearchOption.TopDirectoryOnly).Select(f => Path.GetFileName(f) ?? ""), StringComparer.OrdinalIgnoreCase);
 
         string type, buildCmd = "", testCmd = "", runCmd = "", deployCmd = "";
-        string label;
 
         if (allFiles.Any(f => f.EndsWith(".sln", StringComparison.OrdinalIgnoreCase)) || allFiles.Any(f => f.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase)))
-        { type = "C# .NET"; label = "🟣"; buildCmd = "dotnet build"; testCmd = "dotnet test"; runCmd = "dotnet run"; deployCmd = "dotnet publish -c Release"; }
+        { type = "C# .NET"; buildCmd = "dotnet build"; testCmd = "dotnet test"; runCmd = "dotnet run"; deployCmd = "dotnet publish -c Release"; }
         else if (files.Contains("Cargo.toml"))
-        { type = "Rust"; label = "🦀"; buildCmd = "cargo build"; testCmd = "cargo test"; runCmd = "cargo run"; }
+        { type = "Rust"; buildCmd = "cargo build"; testCmd = "cargo test"; runCmd = "cargo run"; }
         else if (files.Contains("go.mod"))
-        { type = "Go"; label = "🔵"; buildCmd = "go build ./..."; testCmd = "go test ./..."; runCmd = "go run ."; }
+        { type = "Go"; buildCmd = "go build ./..."; testCmd = "go test ./..."; runCmd = "go run ."; }
         else if (files.Contains("package.json"))
-        { type = "Node.js"; label = "🟢"; buildCmd = "npm run build"; testCmd = "npm test"; runCmd = "npm start"; deployCmd = "npm publish"; }
+        { type = "Node.js"; buildCmd = "npm run build"; testCmd = "npm test"; runCmd = "npm start"; deployCmd = "npm publish"; }
         else if (files.Contains("pyproject.toml") || files.Contains("setup.py") || files.Contains("requirements.txt"))
-        { type = "Python"; label = "🐍"; testCmd = "python -m pytest"; runCmd = "python main.py"; buildCmd = files.Contains("pyproject.toml") ? "python -m build" : ""; }
+        { type = "Python"; testCmd = "python -m pytest"; runCmd = "python main.py"; buildCmd = files.Contains("pyproject.toml") ? "python -m build" : ""; }
         else if (files.Contains("pom.xml"))
-        { type = "Java (Maven)"; label = "🟤"; buildCmd = "mvn compile"; testCmd = "mvn test"; runCmd = "mvn exec:java"; deployCmd = "mvn deploy"; }
+        { type = "Java (Maven)"; buildCmd = "mvn compile"; testCmd = "mvn test"; runCmd = "mvn exec:java"; deployCmd = "mvn deploy"; }
         else if (files.Contains("build.gradle") || files.Contains("build.gradle.kts"))
-        { type = "Java (Gradle)"; label = "🟤"; buildCmd = "gradle build"; testCmd = "gradle test"; runCmd = "gradle run"; }
+        { type = "Java (Gradle)"; buildCmd = "gradle build"; testCmd = "gradle test"; runCmd = "gradle run"; }
         else
-        { type = "unknown"; label = "⚪"; }
+        { type = "unknown"; }
 
         _projectType = type;
         var visible = type != "unknown";
@@ -1497,7 +1496,7 @@ public sealed class TextPadView : UserControl
         if (_currentFile == null) return;
         var top = TopLevel.GetTopLevel(this) as Window;
         if (top == null) return;
-        var input = new TextBox { Watermark = $"行号 (1-{_editor.Document.LineCount})" };
+        var input = new TextBox { PlaceholderText = $"行号 (1-{_editor.Document.LineCount})" };
         var ok = new Button { Content = "跳转" };
         var dlg = new Window { Title = "跳转到行", Width = 300, Height = 120, WindowStartupLocation = WindowStartupLocation.CenterOwner,
             Content = new StackPanel { Margin = new(15), Spacing = 8, Children = { input, ok } } };

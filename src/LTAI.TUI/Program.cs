@@ -102,6 +102,8 @@ public static class Program
         SlashCommands.WorkflowRegistry = sp.GetService<LTAI.Agent.Workflows.YAMLWorkflowRegistry>();
         SlashCommands.Jobs = sp.GetService<LTAI.Agent.Tools.BackgroundJobService>();
         SlashCommands.Pipes = sp.GetService<LTAI.Agent.Workflows.AgentWorkflows>();
+        SlashCommands.CgGraph = sp.GetService<LTAI.Agent.Vector.CgGraph>();
+        SlashCommands.KbGraph = sp.GetService<LTAI.Agent.Vector.KbGraph>();
         SlashCommands.ModelsProvider = sp.GetService<LTAI.AI.ModelMetadataProvider>();
         var options = sp.GetRequiredService<IOptions<LTAIOptions>>();
         SlashCommands.ActiveProvider = options.Value.AI.DefaultProvider ?? "DeepSeek";

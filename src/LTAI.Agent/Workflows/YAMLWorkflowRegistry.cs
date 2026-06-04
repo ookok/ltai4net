@@ -177,11 +177,11 @@ public sealed class YAMLWorkflowRegistry
         }
         foreach (var (k, v) in _configs)
         {
-            result.Add(new WorkflowInfo(k, v.Config.Type, v.Config.Version, v.FilePath, v.LoadedAtUtc, v.Config.ToString().Length));
+            result.Add(new WorkflowInfo(k, v.Config.Type, v.Config.Version, v.FilePath, v.LoadedAtUtc, v.Config?.ToString()?.Length ?? 0));
         }
         foreach (var (k, v) in _pipelines)
         {
-            result.Add(new WorkflowInfo(k, v.Config.Type, v.Config.Version, v.FilePath, v.LoadedAtUtc, v.Config.ToString().Length));
+            result.Add(new WorkflowInfo(k, v.Config.Type, v.Config.Version, v.FilePath, v.LoadedAtUtc, v.Config?.ToString()?.Length ?? 0));
         }
         return result.OrderBy(w => w.Name, StringComparer.OrdinalIgnoreCase).ToList();
     }

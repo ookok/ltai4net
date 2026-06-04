@@ -18,23 +18,23 @@ public partial class MainWindow : Window
     private ChatView? _chatView;
     private TextPadView? _textPadView;
     private readonly Border _sidebar;
-    private readonly ContentControl _contentArea;
+    private readonly ContentControl _contentArea = null!;
     private readonly Button _collapseBtn;
     private readonly Button _gearBtn;
     private bool _focusMode;
     private readonly StackPanel _buttonStack;
     private double _expandedWidth = 180;
     private readonly Grid _grid;
-    private readonly GridSplitter _splitter;
-    private readonly TextBlock _statusLeft;
-    private readonly TextBlock _capsuleText;
-    private readonly TextBlock _statusRight;
+    private readonly GridSplitter _splitter = null!;
+    private readonly TextBlock _statusLeft = null!;
+    private readonly TextBlock _capsuleText = null!;
+    private readonly TextBlock _statusRight = null!;
     private readonly DispatcherTimer _statusTimer;
     private readonly SessionStatsPanel _statsPanel;
     private readonly MainWindowViewModel _vm;
 
     private sealed record ViewEntry(string Name, string Shortcut, Control View);
-    private readonly List<ViewEntry> _views;
+    private readonly List<ViewEntry> _views = [];
 
     public MainWindow(LTAIService svc)
     {
@@ -54,33 +54,35 @@ public partial class MainWindow : Window
         var chatView = new ChatView(svc, sessionManager, chatVm);
         _chatView = chatView;
 
-        _views = new List<ViewEntry>
-        {
-            new("仪表盘", "1", new DashboardView(svc)),
+        _views.AddRange([
+            new("DevUI", "1", new DevUIView()),
             new("聊天",    "2", chatView),
             new("代码",    "3", CreateTextPadView(svc)),
             new("技能",    "4", new SkillsView()),
             new("工作流",  "5", new WorkflowsView(svc)),
             new("作业",    "6", new JobsView(svc)),
-        };
+        ]);
 
         _vm = new MainWindowViewModel(_views.Count);
+        var vm = _vm;
         _vm.PropertyChanged += (_, e) =>
         {
             switch (e.PropertyName)
             {
                 case nameof(_vm.ActiveIndex):
-                    _contentArea.Content = _views[_vm.ActiveIndex].View;
+                    var idx = _vm.ActiveIndex;
+                    if (idx >= 0 && idx < _views.Count)
+                        _contentArea.Content = _views[idx].View;
                     UpdateSidebarButtons();
                     break;
                 case nameof(_vm.StatusRight):
-                    _statusRight.Text = _vm.StatusRight;
+                    _statusRight!.Text = _vm.StatusRight;
                     break;
                 case nameof(_vm.StatusLeft):
-                    _statusLeft.Text = _vm.StatusLeft;
+                    _statusLeft!.Text = _vm.StatusLeft;
                     break;
                 case nameof(_vm.CapsuleText):
-                    _capsuleText.Text = _vm.CapsuleText;
+                    _capsuleText!.Text = _vm.CapsuleText;
                     break;
                 case nameof(_vm.SidebarCollapsed):
                     ApplyCollapseState();
@@ -104,7 +106,7 @@ public partial class MainWindow : Window
                 BorderThickness = new(0),
                 CornerRadius = LtaiTheme.Radius.Sm
             };
-            var icons = new[] { "📊", "💬", "📝", "⚡", "🔁", "🛠" };
+            var icons = new[] { "🔬", "💬", "📝", "⚡", "🔁", "🛠" };
             var icon = i < icons.Length ? icons[i] : "📄";
             var btnGrid = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,Auto,*") };
             btnGrid.Children.Add(new TextBlock { Text = icon, Width = 22, Foreground = LtaiTheme.Sbb(LtaiTheme.TextSecondary) });
@@ -461,7 +463,7 @@ public partial class MainWindow : Window
             {
                 if (i < _buttonStack.Children.Count && _buttonStack.Children[i] is Button btn)
                 {
-                    var icons = new[] { "📊", "💬", "📝", "⚡", "🔁", "🛠" };
+                    var icons = new[] { "🔬", "💬", "📝", "⚡", "🔁", "🛠" };
                     var icon = i < icons.Length ? icons[i] : "📄";
                     btn.Content = $" {icon}";
                     btn.HorizontalContentAlignment = HorizontalAlignment.Center;
@@ -480,7 +482,7 @@ public partial class MainWindow : Window
             {
                 if (i < _buttonStack.Children.Count && _buttonStack.Children[i] is Button btn)
                 {
-                    var icons = new[] { "📊", "💬", "📝", "⚡", "🔁", "🛠" };
+                    var icons = new[] { "🔬", "💬", "📝", "⚡", "🔁", "🛠" };
                     var icon = i < icons.Length ? icons[i] : "📄";
                     var btnGrid = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,Auto,*") };
                     btnGrid.Children.Add(new TextBlock { Text = icon, Width = 22, Foreground = LtaiTheme.Sbb(LtaiTheme.TextSecondary) });
@@ -499,6 +501,8 @@ public partial class MainWindow : Window
         }
     }
 
+    public void SwitchToView(int index) => _vm.TryActivate(index);
+
     private void ToggleFocusMode()
     {
         _focusMode = !_focusMode;
@@ -511,7 +515,7 @@ public partial class MainWindow : Window
     {
         var items = new List<CommandPaletteItem>
         {
-            new("切换到仪表盘", "Ctrl+1", "📊", () => _vm.TryActivate(0)),
+            new("切换到 DevUI", "Ctrl+1", "🔬", () => _vm.TryActivate(0)),
             new("切换到聊天",   "Ctrl+2", "💬", () => _vm.TryActivate(1)),
             new("切换到代码",   "Ctrl+3", "📝", () => _vm.TryActivate(2)),
             new("切换到技能",   "Ctrl+4", "⚡", () => _vm.TryActivate(3)),

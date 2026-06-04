@@ -9,6 +9,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using LTAI.AI;
 using LTAI.Agent.Tools;
+using LTAI.Agent.Utils;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
@@ -66,29 +67,20 @@ public sealed class CgGraph : AIContextProvider
 
         _parser ??= new TreeSitterParser(_logger);
 
-        var files = Directory.EnumerateFiles(dir, "*.*", new EnumerationOptions
-        {
-            RecurseSubdirectories = true,
-            AttributesToSkip = FileAttributes.System | FileAttributes.Hidden | FileAttributes.ReparsePoint,
-        })
-            .Where(f => SourceExts.Contains(Path.GetExtension(f)))
-            .Where(f =>
+        var files = DirectoryWalker.WalkToArray(
+            dir,
+            allowedExtensions: SourceExts,
+            skipDirNames: new(StringComparer.OrdinalIgnoreCase)
             {
-                var rel = f.AsSpan(dir.Length);
-                return !rel.Contains("\\obj\\", StringComparison.OrdinalIgnoreCase)
-                    && !rel.Contains("\\bin\\", StringComparison.OrdinalIgnoreCase)
-                    && !rel.Contains("\\dist\\", StringComparison.OrdinalIgnoreCase)
-                    && !rel.Contains("\\node_modules\\", StringComparison.OrdinalIgnoreCase)
-                    && !rel.Contains("\\.git\\", StringComparison.OrdinalIgnoreCase)
-                    && !rel.Contains("\\packages\\", StringComparison.OrdinalIgnoreCase);
-            })
-            .ToList();
+                "obj", "bin", "dist", "node_modules", ".git", "packages"
+            });
 
         // Parallel file indexing: read + parse across CPU cores, write serialized.
         int sc = 0, na = 0;
 
+        var maxDop = Math.Max(1, Environment.ProcessorCount / 2);
         await Parallel.ForEachAsync(files,
-            new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount },
+            new ParallelOptions { MaxDegreeOfParallelism = maxDop },
             async (file, ct) =>
         {
             var lw = File.GetLastWriteTimeUtc(file);
@@ -198,13 +190,10 @@ public sealed class CgGraph : AIContextProvider
         await InferCrossFileCallsAsync().ConfigureAwait(false);
 
         // Post-index: detect deleted files and prune orphaned nodes
-        await PruneDeletedFilesAsync(files).ConfigureAwait(false);
+        await PruneDeletedFilesAsync([.. files]).ConfigureAwait(false);
 
         // Persist current file list for next build's diff
         await _store.SetMeta("cg:files", string.Join("\n", files)).ConfigureAwait(false);
-
-        // Rebuild IVF centroids for fast vector search
-        await _store.RebuildCentroidsAsync().ConfigureAwait(false);
 
         // Maintenance
         if (sc > 0 || _indexedFiles.Count % 10 == 0)
@@ -399,7 +388,9 @@ public sealed class CgGraph : AIContextProvider
                 nameIndex[m.Name].Add(m.Id);
             }
 
-            // Batch all CALLS edges in a single transaction
+            const int MaxCalleesPerCaller = 20;
+            const int MaxDocScanChars = 1000;
+
             await _store.ExecuteInTransactionAsync(async () =>
             {
                 int added = 0;
@@ -408,8 +399,11 @@ public sealed class CgGraph : AIContextProvider
                     var docs = await _store.GetDocs(caller.Id).ConfigureAwait(false);
                     var docText = string.Join("\n", docs.Select(d => d.Text));
                     if (string.IsNullOrWhiteSpace(docText)) continue;
+                    if (docText.Length > MaxDocScanChars)
+                        docText = docText[..MaxDocScanChars];
 
                     var seen = new HashSet<long> { caller.Id };
+                    int calleeCount = 0;
                     foreach (var (calleeName, calleeIds) in nameIndex)
                     {
                         if (calleeName == caller.Name) continue;
@@ -420,7 +414,10 @@ public sealed class CgGraph : AIContextProvider
                             if (!seen.Add(calleeId)) continue;
                             await _store.AddEdge(caller.Id, calleeId, "CALLS", weight: 0.6).ConfigureAwait(false);
                             added++;
+                            calleeCount++;
+                            if (calleeCount >= MaxCalleesPerCaller) break;
                         }
+                        if (calleeCount >= MaxCalleesPerCaller) break;
                     }
                 }
                 _logger.LogInformation("CgGraph: added {N} cross-file CALLS edges", added);

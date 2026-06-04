@@ -20,7 +20,6 @@ public sealed class ChatView : UserControl
 {
     // 共享 HttpClient — 复用连接池，避免 socket 耗尽
     private static readonly HttpClient _sharedHttp = new() { Timeout = TimeSpan.FromSeconds(10) };
-    private static bool _httpDisposed;
 
     private readonly LTAIService _svc;
     private readonly TextBox _input;
@@ -1312,6 +1311,17 @@ public sealed class ChatView : UserControl
             case NewSessionCommand:
                 _ = ResetSessionAsync();
                 return;
+            case GraphCommand { Args: "" or null }:
+            case GraphCommand { Args: "init" }:
+                AddSystemBubble("🔨 Building code graph + document index...");
+                _ = GraphInitAsync();
+                return;
+            case GraphCommand { Args: not null } g when g.Args.StartsWith("search"):
+                var q = g.Args.Length > 7 ? g.Args[7..].Trim() : "";
+                if (string.IsNullOrWhiteSpace(q)) { AddSystemBubble("Usage: /graph search <query>"); return; }
+                AddSystemBubble($"🔍 Searching graph for: {q}");
+                _ = GraphSearchAsync(q);
+                return;
             case ExitCommand:
                 (TopLevel.GetTopLevel(this) as Window)?.Close();
                 return;
@@ -1629,6 +1639,65 @@ public sealed class ChatView : UserControl
         _outputStack.Children.Add(b);
         PruneOutputStack();
         _scroller.ScrollToEnd();
+    }
+
+    private async Task GraphInitAsync()
+    {
+        try
+        {
+            var cg = App.Services?.GetService(typeof(LTAI.Agent.Vector.CgGraph)) as LTAI.Agent.Vector.CgGraph;
+            var kb = App.Services?.GetService(typeof(LTAI.Agent.Vector.KbGraph)) as LTAI.Agent.Vector.KbGraph;
+            var msgs = new List<string>();
+            if (cg != null)
+            {
+                var codeResult = await cg.BuildAsync().ConfigureAwait(false);
+                msgs.Add(codeResult.Replace("\n", " | "));
+            }
+            if (kb != null)
+            {
+                var docResult = await kb.BuildDocumentIndexAsync(Directory.GetCurrentDirectory()).ConfigureAwait(false);
+                msgs.Add(docResult);
+            }
+            var msg = msgs.Count > 0 ? string.Join("\n", msgs) : "❌ Graph services not available";
+            Dispatcher.UIThread.Post(() => AddSystemBubble($"✅ {msg}"));
+        }
+        catch (Exception ex)
+        {
+            Dispatcher.UIThread.Post(() => AddSystemBubble($"❌ Graph init failed: {ex.Message}"));
+        }
+    }
+
+    private async Task GraphSearchAsync(string query)
+    {
+        try
+        {
+            var cg = App.Services?.GetService(typeof(LTAI.Agent.Vector.CgGraph)) as LTAI.Agent.Vector.CgGraph;
+            var kb = App.Services?.GetService(typeof(LTAI.Agent.Vector.KbGraph)) as LTAI.Agent.Vector.KbGraph;
+            var parts = new List<string>();
+
+            if (cg != null)
+            {
+                var codeResult = await cg.QueryAsync(query, topK: 3).ConfigureAwait(false);
+                if (!codeResult.StartsWith("No relevant") && !codeResult.StartsWith("Code graph not built"))
+                    parts.Add(codeResult);
+            }
+            if (kb != null)
+            {
+                try
+                {
+                    var kbResults = await kb.QueryAsync(query, topK: 5).ConfigureAwait(false);
+                    if (kbResults.Count > 0)
+                        parts.Add("## Relevant Knowledge:\n" + string.Join("\n", kbResults.Select(r => "- " + r)));
+                }
+                catch { }
+            }
+            var result = parts.Count > 0 ? string.Join("\n\n", parts) : "No results found.";
+            Dispatcher.UIThread.Post(() => AddSystemBubble(result));
+        }
+        catch (Exception ex)
+        {
+            Dispatcher.UIThread.Post(() => AddSystemBubble($"❌ Search failed: {ex.Message}"));
+        }
     }
 
     private void PruneOutputStack()

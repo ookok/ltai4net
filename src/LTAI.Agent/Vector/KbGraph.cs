@@ -11,6 +11,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using LTAI.AI;
 using LTAI.Agent.Tools;
+using LTAI.Agent.Utils;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
@@ -27,6 +28,7 @@ public sealed class KbGraph : AIContextProvider
     private readonly KgStore _store;
     private readonly IChatClient? _rewriter;
     private readonly Reranker? _reranker;
+    private readonly EmbeddingClient? _embedder;
     private readonly ILogger<KbGraph> _logger;
 
     /// <summary>RRF fusion constant (default 60, inspired by sqlite-graphrag's configurable --rrf-k).</summary>
@@ -40,12 +42,14 @@ public sealed class KbGraph : AIContextProvider
     /// <param name="reranker">Optional two-stage reranker (embeddings + LLM rescore).</param>
     /// <param name="logger">Logger.</param>
     public KbGraph(KgStore store, IChatClient? rewriter = null,
-        Reranker? reranker = null, ILogger<KbGraph>? logger = null)
+        Reranker? reranker = null, EmbeddingClient? embedder = null,
+        ILogger<KbGraph>? logger = null)
         : base(null, null, null)
     {
         _store = store ?? throw new ArgumentNullException(nameof(store));
         _rewriter = rewriter;
         _reranker = reranker;
+        _embedder = embedder;
         _logger = logger ?? NullLogger<KbGraph>.Instance;
     }
 
@@ -298,6 +302,14 @@ public sealed class KbGraph : AIContextProvider
         // Replace docs with new content
         await _store.ReplaceDocsAsync(nodeId, [(content, lang, source)]).ConfigureAwait(false);
 
+        // Store vector embedding for hybrid search (FTS5 + vector RRF)
+        if (_embedder != null)
+        {
+            var embText = $"{title} {source} {content[..Math.Min(content.Length, 200)]}";
+            var emb = await _embedder.GenerateAsync(embText).ConfigureAwait(false);
+            await _store.InsertVectorAsync(nodeId, emb).ConfigureAwait(false);
+        }
+
         // If re-ingesting: save version history + remove old concept edges
         if (existing != null)
         {
@@ -356,6 +368,14 @@ public sealed class KbGraph : AIContextProvider
             props: props).ConfigureAwait(false);
 
         await _store.ReplaceDocsAsync(nodeId, [(content, "zh", "")]).ConfigureAwait(false);
+
+        // Store vector embedding for hybrid search
+        if (_embedder != null)
+        {
+            var embText = $"{content[..Math.Min(content.Length, 200)]} {category}";
+            var emb = await _embedder.GenerateAsync(embText).ConfigureAwait(false);
+            await _store.InsertVectorAsync(nodeId, emb).ConfigureAwait(false);
+        }
 
         if (sourceId != null)
         {
@@ -451,11 +471,15 @@ public sealed class KbGraph : AIContextProvider
         if (!Directory.Exists(directoryPath))
             return $"Directory not found: {directoryPath}";
 
-        var files = Directory.EnumerateFiles(directoryPath, "*.*", SearchOption.AllDirectories)
-            .Where(f => OfficeExts.Contains(Path.GetExtension(f)))
-            .ToList();
+        var files = DirectoryWalker.WalkToArray(
+            directoryPath,
+            allowedExtensions: OfficeExts,
+            skipDirNames: new(StringComparer.OrdinalIgnoreCase)
+            {
+                "obj", "bin", "dist", "node_modules", ".git", "packages"
+            });
 
-        if (files.Count == 0)
+        if (files.Length == 0)
             return "No Office files found in " + directoryPath;
 
         int ok = 0, fail = 0;
@@ -467,6 +491,69 @@ public sealed class KbGraph : AIContextProvider
         }
 
         return $"Indexed {ok} / {ok + fail} Office documents";
+    }
+
+    /// <summary>
+    /// Scan a directory for all document files (.md, .txt, and Office formats),
+    /// ingest each into the knowledge graph. Auto-distinguishes text vs Office
+    /// files. Used by /graph init and GraphInitService.
+    /// </summary>
+    public async Task<string> BuildDocumentIndexAsync(string directoryPath)
+    {
+        if (!Directory.Exists(directoryPath))
+            return $"Directory not found: {directoryPath}";
+
+        var allExts = new HashSet<string>(OfficeExts, StringComparer.OrdinalIgnoreCase) { ".md", ".txt", ".json" };
+        var skipDirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "obj", "bin", "dist", "node_modules", ".git", "packages"
+        };
+        var files = DirectoryWalker.WalkToArray(
+            directoryPath,
+            allowedExtensions: allExts,
+            skipDirNames: skipDirs);
+
+        if (files.Length == 0)
+            return "No document files found in " + directoryPath;
+
+        int ok = 0, fail = 0, officeOk = 0, officeFail = 0, textOk = 0, textFail = 0;
+        foreach (var file in files)
+        {
+            var ext = Path.GetExtension(file);
+            if (OfficeExts.Contains(ext))
+            {
+                var result = await IngestOfficeFile(file).ConfigureAwait(false);
+                if (result.StartsWith("Error")) officeFail++;
+                else officeOk++;
+            }
+            else
+            {
+                try
+                {
+                    var content = await File.ReadAllTextAsync(file).ConfigureAwait(false);
+                    if (string.IsNullOrWhiteSpace(content)) { textFail++; continue; }
+                    var rel = Path.GetRelativePath(directoryPath, file).Replace('\\', '/');
+                    var title = Path.GetFileNameWithoutExtension(file);
+                    await IngestDocument(
+                        id: rel,
+                        title: title,
+                        content: content,
+                        source: rel).ConfigureAwait(false);
+                    textOk++;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "KbGraph: failed to ingest text file {File}", file);
+                    textFail++;
+                }
+            }
+        }
+        ok = textOk + officeOk;
+        fail = textFail + officeFail;
+
+        _logger.LogInformation("KbGraph: document index done — {Ok} ok, {Fail} fail ({Txt} text, {Off} office)",
+            ok, fail, textOk, officeOk);
+        return $"Indexed: {ok} documents ({textOk} text, {officeOk} Office), {fail} failed";
     }
 
     // ═══════════════════════════════════════════

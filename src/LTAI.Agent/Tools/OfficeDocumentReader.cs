@@ -61,7 +61,7 @@ public static class OfficeDocumentReader
             var totalRows = 0;
             foreach (var sheet in sheets)
             {
-                var sp = sheet.Id?.Value != null ? (WorksheetPart)wb.GetPartById(sheet.Id) : null;
+                var sp = sheet.Id?.Value is not null ? (WorksheetPart)wb.GetPartById(sheet.Id.Value) : null;
                 if (sp != null)
                     totalRows += sp.Worksheet.Descendants<SS.Row>().Count();
             }
@@ -149,8 +149,8 @@ public static class OfficeDocumentReader
             var sheet = sheets[si];
             progress?.Report($"正在读取 Excel... 第 {si + 1}/{sheets.Count} 个工作表");
 
-            var sp = sheet.Id?.Value != null
-                ? (WorksheetPart)wb.GetPartById(sheet.Id)
+            var sp = sheet.Id?.Value is not null
+                ? (WorksheetPart)wb.GetPartById(sheet.Id.Value)
                 : null;
             if (sp == null) continue;
 
@@ -218,9 +218,9 @@ public static class OfficeDocumentReader
     private static string GetVal(SS.Cell? c, SS.SharedStringTable? sst)
     {
         if (c?.CellValue == null) return "";
-        if (c.DataType == SS.CellValues.SharedString && sst != null
+        if (c.DataType != null && c.DataType == SS.CellValues.SharedString && sst != null
             && int.TryParse(c.CellValue.Text, out int i) && i < sst.Count())
             return sst.ElementAt(i).InnerText;
-        return c.CellValue.Text;
+        return c.CellValue.Text ?? "";
     }
 }

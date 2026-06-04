@@ -27,7 +27,7 @@ public sealed class CommandPaletteDialog : Window
 
         _searchBox = new TextBox
         {
-            Watermark = "输入命令名称...",
+            PlaceholderText = "输入命令名称...",
             Margin = new(8, 8, 8, 0),
             Height = 28,
             FontSize = 13,

@@ -31,6 +31,7 @@ public sealed record CdCommand(string Args) : Command;
 public sealed record LangCommand(string Args) : Command;
 public sealed record SkillCommand(string Args) : Command;
 public sealed record GitCommand(string Args) : Command;
+public sealed record GraphCommand(string Args) : Command;
 
 // ── Non-command / unknown ──
 

@@ -1,12 +1,9 @@
-// Copyright (c) LTAI. All rights reserved.
-
 using System;
 using Avalonia.Controls;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
 using LTAI.Agent.Workflows;
-using LTAI.Desktop.DevUI;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace LTAI.Desktop;
@@ -31,9 +28,7 @@ public sealed class WorkflowsView : UserControl
     private readonly TextBlock _errorText;
     private readonly TextBlock _lastReloadText;
     private readonly Button _reloadAllBtn;
-    private readonly Button _openDevUiBtn;
-    private readonly TextBlock _devUiStatusText;
-    private readonly Lazy<DevUIHost> _devUiHostLazy = new(() => new DevUIHost());
+    private readonly Button _goDevUiBtn;
     private YAMLWorkflowRegistry? _registry;
     private WorkflowHotReloadNotifier? _notifier;
     private Guid _subToken;
@@ -70,30 +65,21 @@ public sealed class WorkflowsView : UserControl
         _reloadAllBtn.Click += async (_, _) => await ReloadAllAsync();
         root.Children.Add(_reloadAllBtn);
 
-        _openDevUiBtn = new Button
+        _goDevUiBtn = new Button
         {
-            Content = "🌐 Open in DevUI Browser",
+            Content = "🔬 Open DevUI View",
             HorizontalAlignment = HorizontalAlignment.Left,
-            Width = 200,
+            Width = 160,
             Margin = new(0, 4, 0, 0),
         };
-        _openDevUiBtn.Click += async (_, _) => await OpenDevUiAsync();
-        root.Children.Add(_openDevUiBtn);
-
-        _devUiStatusText = new TextBlock
-        {
-            Foreground = LtaiTheme.Sbb(LtaiTheme.TextSecondary),
-            FontSize = 11,
-            TextWrapping = TextWrapping.Wrap,
-            IsVisible = false,
-        };
-        root.Children.Add(_devUiStatusText);
+        _goDevUiBtn.Click += (_, _) => NavigateToDevUI();
+        root.Children.Add(_goDevUiBtn);
 
         // Footer hint
         root.Children.Add(new TextBlock
         {
             Text = "提示：编辑 .livingtree/workflows/*.yaml 后保存即可热加载。\n" +
-                   "完整列表 / 源码预览请使用 [Open in DevUI Browser]。",
+                   "完整列表 / 源码预览请使用 DevUI 视图 (Ctrl+1)。",
             Foreground = LtaiTheme.Sbb(LtaiTheme.TextDim),
             FontSize = 11,
             TextWrapping = TextWrapping.Wrap,
@@ -157,25 +143,15 @@ public sealed class WorkflowsView : UserControl
         }
     }
 
-    private async Task OpenDevUiAsync()
+    private static void NavigateToDevUI()
     {
-        var host = _devUiHostLazy.Value;
-        try
+        // Find the MainWindow and switch to DevUI view (index 0)
+        if (Avalonia.Application.Current?.ApplicationLifetime is Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime desktop)
         {
-            var sp = App.Services
-                ?? throw new InvalidOperationException("App.Services not initialized");
-            if (host.BaseUrl is null)
+            if (desktop.MainWindow is MainWindow mw)
             {
-                await host.StartAsync(sp);
+                Dispatcher.UIThread.Post(() => mw.SwitchToView(0));
             }
-            host.OpenInBrowser();
-            _devUiStatusText.Text = $"[DevUI] running at {host.BaseUrl}/devui (browser-launched)";
-            _devUiStatusText.IsVisible = true;
-        }
-        catch (Exception ex)
-        {
-            _devUiStatusText.Text = $"[DevUI] failed: {ex.Message}";
-            _devUiStatusText.IsVisible = true;
         }
     }
 

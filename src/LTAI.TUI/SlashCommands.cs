@@ -39,6 +39,9 @@ public static class SlashCommands
     public static string? L2Model { get; set; }
     public static string? ActiveProvider { get; set; }
     public static string? PendingInput { get; set; }
+    public static string? PendingBuildResult { get; set; }
+    public static LTAI.Agent.Vector.CgGraph? CgGraph { get; set; }
+    public static LTAI.Agent.Vector.KbGraph? KbGraph { get; set; }
 
     // ═══ Cascade menu ═══
     public static string[] CascadeStack = [];
@@ -171,6 +174,7 @@ public static class SlashCommands
         new("plan",    "计划",  "查看当前计划状态", "计划状态"),
         new("lang",    "设置",  "切换语言: zh-CN|en-US", "语言,language"),
         new("git",     "文件",  "Git: status|diff|log|add|commit|pull|push", "g"),
+        new("build",   "扩展",  "全量重建代码索引", "b,构建"),
         new("exit",    "高级",  "退出应用", "quit,q,退出"),
     };
 
@@ -366,6 +370,44 @@ public static class SlashCommands
 
             case GitCommand gc:
                 statusMessage = RunGit(gc.Args);
+                return true;
+
+            case GraphCommand { Args: "" or null }:
+            case GraphCommand { Args: "init" }:
+                if (CgGraph == null) { statusMessage = "CodeGraph not available"; return true; }
+                statusMessage = "Building code graph + document index...";
+                _ = Task.Run(async () =>
+                {
+                    var codeResult = await CgGraph.BuildAsync().ConfigureAwait(false);
+                    var docResult = "";
+                    if (KbGraph != null)
+                        docResult = await KbGraph.BuildDocumentIndexAsync(Directory.GetCurrentDirectory()).ConfigureAwait(false);
+                    PendingBuildResult = $"Code: {codeResult.Replace("\n", " | ")}\nDocs: {docResult}";
+                });
+                return true;
+            case GraphCommand { Args: not null } g when g.Args.StartsWith("search"):
+                if (CgGraph == null) { statusMessage = "CodeGraph not available"; return true; }
+                var query = g.Args.Length > 7 ? g.Args[7..].Trim() : "";
+                if (string.IsNullOrWhiteSpace(query)) { statusMessage = "Usage: /graph search <query>"; return true; }
+                statusMessage = "Searching graph...";
+                _ = Task.Run(async () =>
+                {
+                    var sb = new System.Text.StringBuilder();
+                    var codeResult = await CgGraph.QueryAsync(query, topK: 3).ConfigureAwait(false);
+                    if (!codeResult.StartsWith("No relevant") && !codeResult.StartsWith("Code graph not built"))
+                        sb.AppendLine(codeResult);
+                    if (KbGraph != null)
+                    {
+                        try
+                        {
+                            var kbResults = await KbGraph.QueryAsync(query, topK: 5).ConfigureAwait(false);
+                            if (kbResults.Count > 0)
+                                sb.AppendLine("## Relevant Knowledge:\n" + string.Join("\n", kbResults.Select(r => "- " + r)));
+                        }
+                        catch { }
+                    }
+                    PendingBuildResult = sb.Length > 0 ? sb.ToString().Replace("\n", " | ") : "No results found.";
+                });
                 return true;
 
             case UnknownCommand uc:

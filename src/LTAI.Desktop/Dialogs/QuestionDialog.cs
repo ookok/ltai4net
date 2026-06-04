@@ -128,7 +128,7 @@ public sealed class QuestionDialog : Window
 
             _customBox = new TextBox
             {
-                Watermark = "自定义回答…",
+                PlaceholderText = "自定义回答…",
                 Height = 32,
             };
             Children.Add(_customBox);

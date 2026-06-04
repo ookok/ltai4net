@@ -31,7 +31,7 @@ public sealed class L4DeepSearchProvider : AIContextProvider
     {
         try
         {
-            var query = string.Join('\n', context.AIContext.Messages
+            var query = string.Join('\n', (context.AIContext.Messages ?? [])
                 .Where(m => !string.IsNullOrWhiteSpace(m.Text))
                 .Select(m => m.Text));
             if (string.IsNullOrWhiteSpace(query)) return new AIContext();
@@ -70,7 +70,7 @@ public sealed class L4DeepSearchProvider : AIContextProvider
 
     private static string? InferWing(InvokingContext ctx)
     {
-        var text = string.Join(' ', ctx.AIContext.Messages
+        var text = string.Join(' ', (ctx.AIContext.Messages ?? [])
             .Where(m => !string.IsNullOrWhiteSpace(m.Text))
             .Select(m => m.Text));
         if (string.IsNullOrWhiteSpace(text)) return null;

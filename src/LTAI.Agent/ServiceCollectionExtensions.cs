@@ -64,10 +64,16 @@ public static class ServiceCollectionExtensions
         services.AddLTAIDurableAgents();
 
         // Step 2: SQLite Knowledge Graph store
+        // Two independent stores: KbGraph (kg.db) and CgGraph (cg.db) — no write lock contention
         services.AddSingleton<KgStore>(sp =>
         {
             var opts = sp.GetRequiredService<IOptions<LTAIOptions>>().Value;
             return new KgStore(opts.ResolveDataPath("kg.db"));
+        });
+        services.AddKeyedSingleton<KgStore>("cg", (sp, _) =>
+        {
+            var opts = sp.GetRequiredService<IOptions<LTAIOptions>>().Value;
+            return new KgStore(opts.ResolveDataPath("cg.db"));
         });
 
         // Step 2b: Reranker (two-stage embedding + LLM rescore)
@@ -87,12 +93,13 @@ public static class ServiceCollectionExtensions
             var store = sp.GetRequiredService<KgStore>();
             var llm = sp.GetService<IChatClient>();
             var reranker = sp.GetService<Reranker>();
+            var embedder = sp.GetService<LTAI.AI.EmbeddingClient>();
             var logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger<KbGraph>();
-            return new KbGraph(store, llm, reranker, logger);
+            return new KbGraph(store, llm, reranker, embedder, logger);
         });
         services.AddSingleton<CgGraph>(sp =>
         {
-            var store = sp.GetRequiredService<KgStore>();
+            var store = sp.GetRequiredKeyedService<KgStore>("cg");
             var llm = sp.GetService<IChatClient>();
             var embedder = sp.GetService<LTAI.AI.EmbeddingClient>();
             var logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger<CgGraph>();
@@ -139,6 +146,7 @@ public static class ServiceCollectionExtensions
             sp.GetRequiredService<YAMLWorkflowRegistry>(),
             sp.GetRequiredService<ILogger<YAMLWorkflowWatcher>>()));
         services.AddHostedService<WorkflowWatcherHostedService>();
+        services.AddHostedService<GraphInitService>();
 
         // Step 3a: DevUI shared service (P9.0)
         // Used by LTAI.Web (DevUI REST surface), LTAI.TUI (/dashboard),
@@ -166,6 +174,22 @@ public static class ServiceCollectionExtensions
         // Lightweight substitute for MAF DurableTask; persists state in memory
         // and exposes EnqueueAsync / List / WaitAsync for deferred work.
         services.AddSingleton<LTAI.Agent.Tasks.TaskQueue>();
+
+        // Step 3d: Knowledge indexing pipeline (semantic chunking + unified ingest)
+        services.AddSingleton<LTAI.Agent.Indexing.DocumentIndexer>();
+        services.AddSingleton<LTAI.Agent.Indexing.KnowledgeExtractor>(sp =>
+        {
+            var kg = sp.GetRequiredService<KgStore>();
+            var llm = sp.GetRequiredService<IChatClient>();
+            var logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger<LTAI.Agent.Indexing.KnowledgeExtractor>();
+            return new LTAI.Agent.Indexing.KnowledgeExtractor(kg, llm, logger);
+        });
+        services.AddSingleton<LTAI.Agent.Indexing.KnowledgeQualityScorer>();
+        services.AddSingleton<LTAI.Agent.Indexing.ProvenanceTracker>();
+        services.AddSingleton<LTAI.Agent.Indexing.ProvenanceProvider>();
+
+        // Step 3e: Knowledge assetization tool (WikiCommit, WikiSearch, etc.)
+        services.AddSingleton<LTAI.Agent.Tools.KnowledgeAssetTool>();
 
         // P14.13: TaskQueueTool — LLM-callable wrapper that exposes the queue
         // as 5 AITool methods (Enqueue/List/Get/Wait/Cancel). Owns a name->handler
@@ -644,6 +668,14 @@ public static class ServiceCollectionExtensions
             var qt = sp.GetRequiredService<LTAI.Agent.Tools.QuestionTool>();
             tools.Add(AIFunctionFactory.Create(qt.AskQuestions));
         }
+        // Knowledge asset tools — all agents can commit/search knowledge
+        {
+            var kat = sp.GetRequiredService<LTAI.Agent.Tools.KnowledgeAssetTool>();
+            tools.Add(AIFunctionFactory.Create(kat.WikiCommit));
+            tools.Add(AIFunctionFactory.Create(kat.WikiSearch));
+            tools.Add(AIFunctionFactory.Create(kat.WikiList));
+            tools.Add(AIFunctionFactory.Create(kat.WikiExtract));
+        }
         if (canExec)
         {
             var sys = new SystemTools();
@@ -922,19 +954,21 @@ public static class ServiceCollectionExtensions
                        new LTAI.Agent.Memory.L3OnDemandProvider(palaceStore, loggerFactory.CreateLogger<LTAI.Agent.Memory.L3OnDemandProvider>()),
                        new LTAI.Agent.Memory.L4DeepSearchProvider(palaceStore, embedder, loggerFactory.CreateLogger<LTAI.Agent.Memory.L4DeepSearchProvider>()),
                        new LTAI.Agent.Memory.L6AgentDiaryProvider(palaceStore, name, loggerFactory.CreateLogger<LTAI.Agent.Memory.L6AgentDiaryProvider>()),
-                       new LTAI.Agent.Tools.InstructionProvider(modelId), new LTAI.Agent.Tools.EnvironmentProvider(), skillsProvider]
-                    : [new LTAI.Agent.Tools.ToolRetrievalProvider(
-                            sp.GetRequiredService<LTAI.AI.EmbeddingClient>(),
-                            cache: sp.GetService<LTAI.AI.ToolEmbeddingCache>()),
-                       new LTAI.Agent.Tools.SkillRankingProvider(
-                           sp.GetRequiredService<LTAI.Agent.Tools.SkillEvolutionEngine>(),
-                           sp.GetRequiredService<ILoggerFactory>().CreateLogger<LTAI.Agent.Tools.SkillRankingProvider>()),
-                       new LTAI.Agent.Memory.L0IdentityProvider(identityText),
-                       new LTAI.Agent.Memory.L1EssentialProvider(palaceStore, name, loggerFactory.CreateLogger<LTAI.Agent.Memory.L1EssentialProvider>()),
-                       compaction, kbGraph, codeGraph, wasmtimeSandbox,
-                       new LTAI.Agent.Memory.L3OnDemandProvider(palaceStore, loggerFactory.CreateLogger<LTAI.Agent.Memory.L3OnDemandProvider>()),
-                       new LTAI.Agent.Memory.L4DeepSearchProvider(palaceStore, embedder, loggerFactory.CreateLogger<LTAI.Agent.Memory.L4DeepSearchProvider>()),
-                       new LTAI.Agent.Memory.L6AgentDiaryProvider(palaceStore, name, loggerFactory.CreateLogger<LTAI.Agent.Memory.L6AgentDiaryProvider>()),
+                        sp.GetService<LTAI.Agent.Indexing.ProvenanceProvider>()!,
+                        new LTAI.Agent.Tools.InstructionProvider(modelId), new LTAI.Agent.Tools.EnvironmentProvider(), skillsProvider]
+                      : [new LTAI.Agent.Tools.ToolRetrievalProvider(
+                             sp.GetRequiredService<LTAI.AI.EmbeddingClient>(),
+                             cache: sp.GetService<LTAI.AI.ToolEmbeddingCache>()),
+                        new LTAI.Agent.Tools.SkillRankingProvider(
+                            sp.GetRequiredService<LTAI.Agent.Tools.SkillEvolutionEngine>(),
+                            sp.GetRequiredService<ILoggerFactory>().CreateLogger<LTAI.Agent.Tools.SkillRankingProvider>()),
+                        new LTAI.Agent.Memory.L0IdentityProvider(identityText),
+                        new LTAI.Agent.Memory.L1EssentialProvider(palaceStore, name, loggerFactory.CreateLogger<LTAI.Agent.Memory.L1EssentialProvider>()),
+                        compaction, kbGraph, codeGraph, wasmtimeSandbox,
+                        new LTAI.Agent.Memory.L3OnDemandProvider(palaceStore, loggerFactory.CreateLogger<LTAI.Agent.Memory.L3OnDemandProvider>()),
+                        new LTAI.Agent.Memory.L4DeepSearchProvider(palaceStore, embedder, loggerFactory.CreateLogger<LTAI.Agent.Memory.L4DeepSearchProvider>()),
+                        new LTAI.Agent.Memory.L6AgentDiaryProvider(palaceStore, name, loggerFactory.CreateLogger<LTAI.Agent.Memory.L6AgentDiaryProvider>()),
+                        sp.GetService<LTAI.Agent.Indexing.ProvenanceProvider>()!,
                        new LTAI.Agent.Tools.InstructionProvider(modelId), new LTAI.Agent.Tools.EnvironmentProvider(), skillsProvider],
 
                 // ── Disable MAF defaults LTAI doesn't need ────────────────────
@@ -996,7 +1030,7 @@ public static class ServiceCollectionExtensions
         // LTAI's outer-most logging wrapper — captures the final agent response and the
         // pre-decorator inner-agent state. HarnessAgent's own OpenTelemetryAgent / ToolApprovalAgent
         // sit just inside this, so the log entry is recorded after both have transformed the run.
-        agent = new LoggingAgent(agent, log);
+        agent = new LoggingAgent(agent, log!);
         return agent;
     }
 

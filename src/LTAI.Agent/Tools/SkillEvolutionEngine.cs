@@ -284,12 +284,12 @@ public sealed class SkillEvolutionEngine
                              ?? a.GetProperty("action").GetString()
                              ?? "keep";
                     var skillName = a.TryGetProperty("tool", out var t)
-                        ? t.GetString()
-                        : a.GetProperty("skill").GetString();
+                        ? t.GetString() ?? ""
+                        : a.GetProperty("skill").GetString() ?? "";
                     var markdown = a.TryGetProperty("markdown", out var md) ? md.GetString() : null;
                     var mergedMd = a.TryGetProperty("merged_markdown", out var mm) ? mm.GetString() : null;
                     var mergeInto = a.TryGetProperty("merge_into", out var mi) ? mi.GetString() : null;
-                    var reason = a.TryGetProperty("reason", out var r) ? r.GetString() : "";
+                    var reason = a.TryGetProperty("reason", out var r) ? r.GetString() ?? "" : "";
 
                     switch (type)
                     {
@@ -301,11 +301,11 @@ public sealed class SkillEvolutionEngine
                             break;
                         case "update_skill":
                         case "update" when markdown != null:
-                            await WriteSkillFileAsync(skillName ?? "unknown", "", markdown, ct).ConfigureAwait(false);
+                            await WriteSkillFileAsync(skillName, "", markdown!, ct).ConfigureAwait(false);
                             break;
                         case "create_skill":
                         case "create" when markdown != null:
-                            await WriteSkillFileAsync(skillName ?? "unknown", "", markdown, ct).ConfigureAwait(false);
+                            await WriteSkillFileAsync(skillName, "", markdown!, ct).ConfigureAwait(false);
                             break;
                     }
                 }
@@ -444,7 +444,7 @@ public sealed class SkillEvolutionEngine
     //  Helpers
     // ═══════════════════════════════════════════
 
-    private static string ExtractJson(string text)
+    private static string? ExtractJson(string text)
     {
         var start = text.IndexOf('{');
         var end = text.LastIndexOf('}');

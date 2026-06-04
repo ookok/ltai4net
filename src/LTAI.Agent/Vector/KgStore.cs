@@ -25,6 +25,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Caching.Memory;
+using LTAI.Agent.Indexing;
 
 namespace LTAI.Agent.Vector;
 
@@ -61,7 +62,8 @@ public sealed partial class KgStore : IDisposable
         SizeLimit = 256,
         ExpirationScanFrequency = TimeSpan.FromMinutes(2)
     });
-    private int _cacheStamp; // incremented on every write to invalidate SearchFts cache
+    private int _ftsCacheStamp;
+    private int _edgeCacheStamp;
 
     // HNSW index for approximate nearest neighbor search
     private readonly HnswIndex _hnsw = new();
@@ -167,7 +169,7 @@ public sealed partial class KgStore : IDisposable
             bindParams?.Invoke(cmd);
             return await action(cmd).ConfigureAwait(false);
         }
-        finally { if (acquired) { _ownsWriteLock = false; _writeLock.Release(); Interlocked.Increment(ref _cacheStamp); } }
+        finally { if (acquired) { _ownsWriteLock = false; _writeLock.Release(); Interlocked.Increment(ref _ftsCacheStamp); Interlocked.Increment(ref _edgeCacheStamp); } }
     }
 
     private async Task WriteLockVoidAsync(string sql, Action<SqliteCommand>? bindParams = null)
@@ -187,7 +189,7 @@ public sealed partial class KgStore : IDisposable
             bindParams?.Invoke(cmd);
             await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
         }
-        finally { if (acquired) { _ownsWriteLock = false; _writeLock.Release(); Interlocked.Increment(ref _cacheStamp); } }
+        finally { if (acquired) { _ownsWriteLock = false; _writeLock.Release(); Interlocked.Increment(ref _ftsCacheStamp); Interlocked.Increment(ref _edgeCacheStamp); } }
     }
 
     // ═══════════════════════════════════════════
@@ -334,8 +336,8 @@ public sealed partial class KgStore : IDisposable
     public async Task<List<EdgeRow>> GetEdges(long? nodeId = null, string? relation = null)
     {
         ThrowIfDisposed();
-        // Result cache (invalidated on any write via _cacheStamp)
-        var cacheKey = $"edges:{nodeId}:{relation}:{_cacheStamp}";
+        // Result cache (invalidated on any edge write via _edgeCacheStamp)
+        var cacheKey = $"edges:{nodeId}:{relation}:{_edgeCacheStamp}";
         if (_resultCache.TryGetValue(cacheKey, out List<EdgeRow>? cached))
             return cached!;
 
@@ -374,25 +376,14 @@ public sealed partial class KgStore : IDisposable
     // ═══════════════════════════════════════════
 
     /// <summary>
-    /// Split text into chunks for large documents.
-    /// Each chunk is at most ~chunkLines lines (roughly 5000–8000 chars).
-    /// Returns at least one chunk even for empty text.
+    /// Split text into chunks using semantic boundary detection.
+    /// Replaces old fixed-line-count approach with section/paragraph/sentence
+    /// boundary awareness. See <see cref="Indexing.SemanticChunker"/>.
     /// </summary>
     private static List<string> ChunkText(string text, int chunkLines = 200)
     {
-        if (string.IsNullOrEmpty(text)) return [""];
-        if (chunkLines <= 0) return [text];
-
-        var lines = text.Split('\n');
-        if (lines.Length <= chunkLines) return [text];
-
-        var chunks = new List<string>(1 + lines.Length / chunkLines);
-        for (int i = 0; i < lines.Length; i += chunkLines)
-        {
-            var end = Math.Min(i + chunkLines, lines.Length);
-            chunks.Add(string.Join('\n', lines[i..end]));
-        }
-        return chunks;
+        // chunkLines param kept for backward compat; SemanticChunker uses char-based bounds
+        return SemanticChunker.Chunk(text);
     }
 
     private const string SQL_ADD_DOC = """
@@ -476,7 +467,8 @@ public sealed partial class KgStore : IDisposable
             using var tx = _writer.BeginTransaction();
             await work().ConfigureAwait(false);
             tx.Commit();
-            Interlocked.Increment(ref _cacheStamp);
+            Interlocked.Increment(ref _ftsCacheStamp);
+            Interlocked.Increment(ref _edgeCacheStamp);
         }
         finally { if (acquired) { _ownsWriteLock = false; _writeLock.Release(); } }
     }
@@ -565,7 +557,7 @@ public sealed partial class KgStore : IDisposable
             return [];
 
         // Check result cache first (stamp invalidates on any write)
-        var cacheKey = $"fts:{query}:{topN}:{kindFilter}:{_cacheStamp}";
+        var cacheKey = $"fts:{query}:{topN}:{kindFilter}:{_ftsCacheStamp}";
         if (_resultCache.TryGetValue(cacheKey, out List<(long, string, double, string)>? cached))
             return cached!;
 
@@ -845,6 +837,66 @@ public sealed partial class KgStore : IDisposable
         < 1024 * 1024 => $"{bytes / 1024}KB",
         _ => $"{bytes / (1024.0 * 1024.0):F1}MB"
     };
+
+    // ═══════════════════════════════════════════
+    //  Quality scores
+    // ═══════════════════════════════════════════
+
+    private const string SQL_UPSERT_SCORE = """
+        INSERT OR REPLACE INTO QualityScores(node_id, quality_score, freshness_score, relevance_score, confidence_score)
+        VALUES (@nid, @q, @f, @r, @c);
+        """;
+
+    public async Task SetScoresAsync(long nodeId, double quality, double freshness,
+        double relevance, double confidence)
+    {
+        await WriteLockVoidAsync(SQL_UPSERT_SCORE, cmd =>
+        {
+            cmd.Parameters.AddWithValue("@nid", nodeId);
+            cmd.Parameters.AddWithValue("@q", quality);
+            cmd.Parameters.AddWithValue("@f", freshness);
+            cmd.Parameters.AddWithValue("@r", relevance);
+            cmd.Parameters.AddWithValue("@c", confidence);
+        }).ConfigureAwait(false);
+    }
+
+    private const string SQL_GET_SCORES = "SELECT * FROM QualityScores WHERE node_id = @nid;";
+
+    public async Task<QualityScoreRow?> GetScoresAsync(long nodeId)
+    {
+        ThrowIfDisposed();
+        using var cmd = _reader.CreateCommand();
+        cmd.CommandText = SQL_GET_SCORES;
+        cmd.Parameters.AddWithValue("@nid", nodeId);
+        using var rdr = await cmd.ExecuteReaderAsync().ConfigureAwait(false);
+        if (!rdr.Read()) return null;
+        return new QualityScoreRow
+        {
+            NodeId = rdr.GetInt64(0),
+            QualityScore = rdr.GetDouble(1),
+            FreshnessScore = rdr.GetDouble(2),
+            RelevanceScore = rdr.GetDouble(3),
+            ConfidenceScore = rdr.GetDouble(4),
+            ScoredAt = rdr.GetString(5),
+        };
+    }
+
+    public async Task<List<(long nodeId, double quality)>> SearchByQuality(string? kindFilter = null, int topN = 30)
+    {
+        ThrowIfDisposed();
+        var sql = kindFilter != null
+            ? "SELECT q.node_id, q.quality_score FROM QualityScores q JOIN Nodes n ON n.id = q.node_id WHERE n.kind = @kind ORDER BY q.quality_score DESC LIMIT @lim;"
+            : "SELECT node_id, quality_score FROM QualityScores ORDER BY quality_score DESC LIMIT @lim;";
+        using var cmd = _reader.CreateCommand();
+        cmd.CommandText = sql;
+        if (kindFilter != null) cmd.Parameters.AddWithValue("@kind", kindFilter);
+        cmd.Parameters.AddWithValue("@lim", topN);
+        var results = new List<(long, double)>();
+        using var rdr = await cmd.ExecuteReaderAsync().ConfigureAwait(false);
+        while (rdr.Read())
+            results.Add((rdr.GetInt64(0), rdr.GetDouble(1)));
+        return results;
+    }
 
     // ═══════════════════════════════════════════
     //  Reader helpers
@@ -1161,6 +1213,16 @@ public sealed partial class KgStore : IDisposable
 
             -- Immutable version history (inspired by sqlite-graphrag's versions table)
             -- Every edit to a node creates a new version row preserving the prior state.
+            -- Quality scores for knowledge quality management
+            CREATE TABLE IF NOT EXISTS QualityScores (
+                node_id          INTEGER PRIMARY KEY REFERENCES Nodes(id) ON DELETE CASCADE,
+                quality_score    REAL NOT NULL DEFAULT 0.0,
+                freshness_score  REAL NOT NULL DEFAULT 0.0,
+                relevance_score  REAL NOT NULL DEFAULT 0.0,
+                confidence_score REAL NOT NULL DEFAULT 0.0,
+                scored_at        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+            );
+
             CREATE TABLE IF NOT EXISTS Versions (
                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
                 node_id    INTEGER NOT NULL REFERENCES Nodes(id) ON DELETE CASCADE,
@@ -1382,6 +1444,19 @@ public sealed class DocRow
     }
 }
 
+public sealed class QualityScoreRow
+{
+    public long NodeId { get; set; }
+    public double QualityScore { get; set; }
+    public double FreshnessScore { get; set; }
+    public double RelevanceScore { get; set; }
+    public double ConfidenceScore { get; set; }
+    public string ScoredAt { get; set; } = "";
+
+    public override string ToString() =>
+        $"Q={QualityScore:F2} (F={FreshnessScore:F2}, R={RelevanceScore:F2}, C={ConfidenceScore:F2})";
+}
+
 // ═══════════════════════════════════════════════
 //  Controlled vocabulary — sqlite-graphrag inspired
 // ═══════════════════════════════════════════════
@@ -1391,7 +1466,7 @@ public static class KgStoreSchema
     /// <summary>Valid entity types for KgStore Nodes. Write-once known set.</summary>
     public static readonly HashSet<string> ValidKinds = new(StringComparer.OrdinalIgnoreCase)
     {
-        "document", "concept", "fact", "note",
+        "document", "concept", "fact", "note", "wiki",
         "class", "method", "function", "interface", "enum", "struct", "record",
         "property", "field", "file", "module", "namespace",
         "person", "organization", "project", "tool", "location", "date",

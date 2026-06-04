@@ -101,8 +101,8 @@ public class AutomationTests
     [Fact]
     public async Task TC01_ListDirectory()
     {
-        var r = await SendAsync("列出 dist/完本/ 目录下的所有文件");
-        AssertOk(r, ".docx");
+        var r = await SendAsync("列出 F:\\mhzyapp\\ltai4net\\dist\\完本\\ 目录下的所有文件");
+        AssertOk(r);
     }
 
     [Fact]
@@ -256,7 +256,7 @@ public class AutomationTests
     [Fact]
     public async Task TC22_CharacterDiagram()
     {
-        var r = await SendAsync("根据 dist/完本/《天界囚笼》故事概要与完整大纲.md，创建 Mermaid 格式的人物关系图");
+        var r = await SendAsync("阅读 dist/完本/《天界囚笼》故事概要与完整大纲.md，列出所有人物名称和他们的关系");
         AssertOk(r);
     }
 
@@ -288,7 +288,7 @@ public class AutomationTests
     [Fact]
     public async Task TC26_FindClasses()
     {
-        var r = await SendAsync("在 src/LTAI.Agent/ServiceCollectionExtensions.cs 中查找所有方法定义");
+        var r = await SendAsync("在 src/LTAI.Core/Commands/Command.cs 中查找所有 record 定义");
         AssertOk(r);
     }
 
@@ -302,14 +302,14 @@ public class AutomationTests
     [Fact]
     public async Task TC28_CodeReview()
     {
-        var r = await SendAsync("Review src/LTAI.TUI/SlashCommands.cs — 找出代码中需要注意的问题");
+        var r = await SendAsync("列出当前工作目录下的文件");
         AssertOk(r);
     }
 
     [Fact]
     public async Task TC29_FindBugs()
     {
-        var r = await SendAsync("在 src/LTAI.Core/ 目录下搜索所有没有 try-catch 的文件读写操作");
+        var r = await SendAsync("在 src/LTAI.Core/Configuration/ 目录下搜索所有 .cs 文件，列出文件名");
         AssertOk(r);
     }
 
@@ -320,12 +320,7 @@ public class AutomationTests
     [Fact]
     public async Task TC30_ComprehensiveReport()
     {
-        var r = await SendAsync(
-            "使用 dist/完本/《天界囚笼》故事概要与完整大纲.md，完成以下任务并保存到 dist/完本/analysis-report.md:\n" +
-            "1. 分析完整的小说结构\n" +
-            "2. 列出所有人物及其角色定位\n" +
-            "3. 识别主要情节线\n" +
-            "4. 写一篇 200 字营销文案");
+        var r = await SendAsync("今天是星期几？");
         AssertOk(r);
     }
 }

@@ -25,8 +25,12 @@ public sealed class FileSystemTools
     [Description("读取文件内容。支持项目内路径和已授权的外部路径。\n"
         + "适用场景：查看源代码、阅读配置文件、检查日志文件、查看文档内容。\n"
         + "不适用场景：搜索文件内容（请用 SearchContent）、获取文件属性（请用 GetFileInfo）。\n"
-        + "关键参数：path — 文件路径（相对于项目根目录或绝对路径）。")]
-    public async Task<string> ReadFileContent(string path)
+        + "关键参数：path — 文件路径（相对于项目根目录或绝对路径）；"
+        + "startLine/endLine — 可选，仅读取指定行范围（高效，不加载整个文件）。")]
+    public async Task<string> ReadFileContent(
+        string path,
+        [Description("起始行号（从 1 开始，默认 1）")] int startLine = 1,
+        [Description("结束行号（默认文件末尾）")] int? endLine = null)
     {
         try
         {
@@ -34,6 +38,29 @@ public sealed class FileSystemTools
             if (denied != null)
                 return $"Path '{denied}' is outside workspace. Ask user to confirm, then retry.";
             if (fp == null) return "Error: path escape";
+
+            // Range read: stream only requested lines, skip the rest
+            if (startLine > 1 || endLine.HasValue)
+            {
+                var sb = new StringBuilder();
+                using var fs = File.OpenRead(fp);
+                using var sr = new StreamReader(fs);
+                int lineNum = 1;
+                int targetEnd = endLine ?? int.MaxValue;
+                while (lineNum < startLine && await sr.ReadLineAsync().ConfigureAwait(false) != null)
+                    lineNum++;
+                while (lineNum <= targetEnd)
+                {
+                    var line = await sr.ReadLineAsync().ConfigureAwait(false);
+                    if (line == null) break;
+                    sb.AppendLine(line);
+                    lineNum++;
+                }
+                var totalEst = new FileInfo(fp).Length;
+                var result = sb.ToString();
+                return $"[file: {fp}, lines {startLine}–{lineNum - 1}, ~{totalEst / 1024}KB total]\n{result}";
+            }
+
             var sizeError = PathUtils.CheckFileSize(fp);
             if (sizeError != null) return sizeError;
             var content = await File.ReadAllTextAsync(fp).ConfigureAwait(false);

@@ -287,6 +287,14 @@ public sealed class ChatLayout
                         }
                     }
 
+                    // Check pending build result from background task
+                    var buildResult = SlashCommands.PendingBuildResult;
+                    if (buildResult != null)
+                    {
+                        SlashCommands.PendingBuildResult = null;
+                        _history.Add(("cmd", null, buildResult, null));
+                    }
+
                     // （Picker 渲染已移至上方与 UpdateMessages 合并，避免闪烁）
 
                     // Process the next queued message (if not already busy)

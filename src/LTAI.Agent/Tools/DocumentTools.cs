@@ -198,7 +198,7 @@ public sealed class DocumentTools
 
             for (int r = startRow; r <= endRow; r++)
             {
-                var srcRow = srcRows.FirstOrDefault(row => row.RowIndex == (uint)r);
+                var srcRow = srcRows.FirstOrDefault(row => row.RowIndex != null && row.RowIndex == (uint)r);
                 if (srcRow == null) continue;
 
                 var tgtRow = new Row { RowIndex = (uint)(tgtRowNum + (r - startRow)) };
@@ -525,7 +525,7 @@ public sealed class DocumentTools
                     {
                         foreach (var run in textBody.Descendants<D.Run>())
                         {
-                            var rp = (D.RunProperties)run.RunProperties;
+                            var rp = run.RunProperties as D.RunProperties;
                             if (rp != null)
                             {
                                 sb.AppendLine($"  Font: size={rp.FontSize}, bold={rp.Bold}, italic={rp.Italic}");

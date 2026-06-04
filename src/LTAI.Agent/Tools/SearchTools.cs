@@ -1,10 +1,12 @@
 using System.Collections.Concurrent;
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using LTAI.AI;
+using LTAI.Agent.Utils;
 
 namespace LTAI.Agent.Tools;
 
@@ -191,27 +193,23 @@ public sealed class SearchTools
     {
         var comparison = caseSensitive ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
 
-        // Phase 1: collect eligible files
+        // Phase 1: collect eligible files via efficient walker
         var files = new List<string>();
         try
         {
-            foreach (var f in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
+            var skipDirs = SkipDirs; // ".git", "node_modules", "bin", "obj" etc.
+            foreach (var f in DirectoryWalker.Walk(root, skipDirNames: skipDirs))
             {
-                var relPath = Path.GetRelativePath(root, f).Replace('\\', '/');
-                var relSpan = relPath.AsSpan();
-                var skip = false;
-                while (relSpan.Length > 0)
-                {
-                    var slashIdx = relSpan.IndexOf('/');
-                    var seg = slashIdx >= 0 ? relSpan[..slashIdx] : relSpan;
-                    if (seg.Length > 0 && SkipDirs.Contains(seg.ToString())) { skip = true; break; }
-                    if (slashIdx < 0) break;
-                    relSpan = relSpan[(slashIdx + 1)..];
-                }
-                if (skip) continue;
                 if (IsBinaryExtension(Path.GetExtension(f))) continue;
-                try { if (new FileInfo(f).Length > 1_000_000) continue; } catch { continue; }
                 if (glob != "*" && !FileMatchesGlob(Path.GetFileName(f), glob)) continue;
+                // Quick size check without materializing full FileInfo if possible
+                try
+                {
+                    var info = new FileInfo(f);
+                    if (info.Length > 1_000_000) continue;
+                    if (info.Length == 0) continue;
+                }
+                catch { continue; }
                 files.Add(f);
             }
         }
@@ -279,16 +277,14 @@ public sealed class SearchTools
         var results = new ConcurrentBag<string>();
         try
         {
-            var files = Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories).ToList();
+            var skipDirs = includeDeps ? null : SkipDirs;
+            var files = DirectoryWalker.WalkToArray(root, skipDirNames: skipDirs);
 
             Parallel.ForEach(files, new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount }, file =>
             {
                 try
                 {
                     var relPath = Path.GetRelativePath(root, file).Replace('\\', '/');
-                    var parts = relPath.Split('/');
-                    if (!includeDeps && parts.Take(parts.Length - 1).Any(p => SkipDirs.Contains(p)))
-                        return;
                     if (Path.GetFileName(file).Contains(pattern, StringComparison.OrdinalIgnoreCase))
                     {
                         results.Add(relPath);

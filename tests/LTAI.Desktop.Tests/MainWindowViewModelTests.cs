@@ -47,12 +47,12 @@ public sealed class MainWindowViewModelTests
     }
 
     [Fact]
-    public void RefreshStatus_SetsStatusText()
+    public void RefreshStatus_SetsStatusRight()
     {
         var vm = new MainWindowViewModel();
         vm.RefreshStatus();
-        Assert.StartsWith("CPU:", vm.StatusText);
-        Assert.Contains("MEM:", vm.StatusText);
+        Assert.StartsWith("CPU:", vm.StatusRight);
+        Assert.Contains("MEM:", vm.StatusRight);
     }
 
     [Fact]
@@ -80,7 +80,7 @@ public sealed class MainWindowViewModelTests
     }
 
     [Fact]
-    public void PropertyChanged_Fires_OnStatusTextChange()
+    public void PropertyChanged_Fires_OnStatusRightChange()
     {
         var vm = new MainWindowViewModel();
         var changed = new List<string?>();
@@ -88,7 +88,7 @@ public sealed class MainWindowViewModelTests
 
         vm.RefreshStatus();
 
-        Assert.Contains(nameof(vm.StatusText), changed);
+        Assert.Contains(nameof(vm.StatusRight), changed);
     }
 
     [Fact]
