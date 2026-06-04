@@ -913,6 +913,25 @@ public sealed partial class KgStore : IDisposable
         return results;
     }
 
+    private static List<VersionRow> ReadVersionRows(SqliteDataReader rdr)
+    {
+        var results = new List<VersionRow>();
+        while (rdr.Read())
+        {
+            results.Add(new VersionRow
+            {
+                Id = rdr.GetInt64(0),
+                NodeId = rdr.GetInt64(1),
+                Kind = rdr.GetString(2),
+                Name = rdr.GetString(3),
+                Snapshot = rdr.GetString(4),
+                Reason = rdr.IsDBNull(5) ? null : rdr.GetString(5),
+                CreatedAt = rdr.GetString(6),
+            });
+        }
+        return results;
+    }
+
     private static List<(long nodeId, string text, double rank, string kind)> ReadFtsResults(SqliteDataReader rdr)
     {
         var results = new List<(long, string, double, string)>();
@@ -1139,8 +1158,101 @@ public sealed partial class KgStore : IDisposable
                 vec       BLOB NOT NULL,
                 updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
             );
+
+            -- Immutable version history (inspired by sqlite-graphrag's versions table)
+            -- Every edit to a node creates a new version row preserving the prior state.
+            CREATE TABLE IF NOT EXISTS Versions (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                node_id    INTEGER NOT NULL REFERENCES Nodes(id) ON DELETE CASCADE,
+                kind       TEXT NOT NULL DEFAULT '',
+                name       TEXT NOT NULL DEFAULT '',
+                snapshot   TEXT NOT NULL,
+                reason     TEXT,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_versions_node ON Versions(node_id);
             """;
         cmd.ExecuteNonQuery();
+    }
+
+    // ═══════════════════════════════════════════
+    //  Controlled vocabulary + version history
+    // ═══════════════════════════════════════════
+
+    private const string SQL_SAVE_VERSION = """
+        INSERT INTO Versions(node_id, kind, name, snapshot, reason)
+        VALUES (@nid, @kind, @name, @snap, @reason);
+        """;
+
+    /// <summary>Save an immutable version snapshot before mutating a node.</summary>
+    public async Task SaveVersionAsync(long nodeId, string kind, string name,
+        Dictionary<string, object?> snapshot, string? reason = null)
+    {
+        var json = JsonSerializer.Serialize(snapshot, KgStoreInternals.JsonOpts);
+        await WriteLockVoidAsync(SQL_SAVE_VERSION, cmd =>
+        {
+            cmd.Parameters.AddWithValue("@nid", nodeId);
+            cmd.Parameters.AddWithValue("@kind", kind);
+            cmd.Parameters.AddWithValue("@name", name);
+            cmd.Parameters.AddWithValue("@snap", json);
+            cmd.Parameters.AddWithValue("@reason", (object?)reason ?? DBNull.Value);
+        }).ConfigureAwait(false);
+    }
+
+    private const string SQL_GET_VERSIONS =
+        "SELECT * FROM Versions WHERE node_id = @nid ORDER BY id DESC;";
+
+    /// <summary>Get version history for a node (newest first).</summary>
+    public async Task<List<VersionRow>> GetVersionsAsync(long nodeId)
+    {
+        var cmd = GetPreparedRead(SQL_GET_VERSIONS, SQL_GET_VERSIONS);
+        cmd.Parameters.Clear();
+        cmd.Parameters.AddWithValue("@nid", nodeId);
+        return ReadVersionRows(await cmd.ExecuteReaderAsync().ConfigureAwait(false));
+    }
+
+    /// <summary>
+    /// Update a node's name/kind/signature/source with optional version history snapshot.
+    /// Creates a version row BEFORE the mutation if snapshot is provided.
+    /// </summary>
+    public async Task EditNodeAsync(long nodeId, string? name = null,
+        string? kind = null, string? signature = null,
+        string? source = null, string? reason = null)
+    {
+        var existing = await GetNode(nodeId).ConfigureAwait(false);
+        if (existing == null) return;
+
+        // Save pre-mutation snapshot if reason given
+        if (reason != null)
+        {
+            var snap = new Dictionary<string, object?>
+            {
+                ["name"] = existing.Name,
+                ["kind"] = existing.Kind,
+                ["signature"] = existing.Signature,
+                ["source"] = existing.Source,
+                ["props"] = existing.Props,
+            };
+            await SaveVersionAsync(nodeId, existing.Kind, existing.Name, snap, reason)
+                .ConfigureAwait(false);
+        }
+
+        var parts = new List<string> { "updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')" };
+        if (name != null) parts.Add("name = @name");
+        if (kind != null) parts.Add("kind = @kind");
+        if (signature != null) parts.Add("signature = @sig");
+        if (source != null) parts.Add("source = @src");
+        if (parts.Count == 1) return;
+
+        var sql = $"UPDATE Nodes SET {string.Join(", ", parts)} WHERE id = @nid;";
+        await WriteLockVoidAsync(sql, cmd =>
+        {
+            if (name != null) cmd.Parameters.AddWithValue("@name", name);
+            if (kind != null) cmd.Parameters.AddWithValue("@kind", kind);
+            if (signature != null) cmd.Parameters.AddWithValue("@sig", signature);
+            if (source != null) cmd.Parameters.AddWithValue("@src", source);
+            cmd.Parameters.AddWithValue("@nid", nodeId);
+        }).ConfigureAwait(false);
     }
 
     // ═══════════════════════════════════════════
@@ -1242,6 +1354,19 @@ public sealed class EdgeRow
     public override string ToString() => $"{Src} --[{Relation}]--> {Dst}";
 }
 
+public sealed class VersionRow
+{
+    public long Id { get; set; }
+    public long NodeId { get; set; }
+    public string Kind { get; set; } = "";
+    public string Name { get; set; } = "";
+    public string Snapshot { get; set; } = "";
+    public string? Reason { get; set; }
+    public string CreatedAt { get; set; } = "";
+
+    public override string ToString() => $"v{Id}: {Reason ?? "edit"} @ {CreatedAt}";
+}
+
 public sealed class DocRow
 {
     public long Id { get; set; }
@@ -1254,5 +1379,43 @@ public sealed class DocRow
     {
         var snippet = Text.Length > 60 ? Text[..60] + "..." : Text;
         return $"Doc({Id}) for Node({NodeId}): {snippet}";
+    }
+}
+
+// ═══════════════════════════════════════════════
+//  Controlled vocabulary — sqlite-graphrag inspired
+// ═══════════════════════════════════════════════
+
+public static class KgStoreSchema
+{
+    /// <summary>Valid entity types for KgStore Nodes. Write-once known set.</summary>
+    public static readonly HashSet<string> ValidKinds = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "document", "concept", "fact", "note",
+        "class", "method", "function", "interface", "enum", "struct", "record",
+        "property", "field", "file", "module", "namespace",
+        "person", "organization", "project", "tool", "location", "date",
+        "incident", "decision", "event", "milestone",
+    };
+
+    /// <summary>Valid edge relation labels. Custom values accepted with warning.</summary>
+    public static readonly HashSet<string> ValidRelations = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "contains", "has_fact", "references", "calls", "implements",
+        "extends", "depends_on", "related_to", "uses", "mentions",
+        "causes", "fixes", "contradicts", "supports", "follows",
+        "replaces", "tracked_in", "part_of", "created_by",
+    };
+
+    public static bool IsValidKind(string kind) => string.IsNullOrEmpty(kind) || ValidKinds.Contains(kind);
+    public static bool IsValidRelation(string rel) => string.IsNullOrEmpty(rel) || ValidRelations.Contains(rel);
+
+    public static string? ValidateNode(string kind, string? relation = null)
+    {
+        if (!string.IsNullOrEmpty(kind) && !ValidKinds.Contains(kind))
+            return $"Invalid entity kind '{kind}'. Valid: {string.Join(", ", ValidKinds.Order())}";
+        if (!string.IsNullOrEmpty(relation) && !ValidRelations.Contains(relation))
+            return $"Invalid relation '{relation}'. Valid: {string.Join(", ", ValidRelations.Order())}";
+        return null;
     }
 }

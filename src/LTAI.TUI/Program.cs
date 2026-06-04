@@ -3,8 +3,10 @@ using System.IO.Compression;
 using LTAI.Agent;
 using LTAI.AI;
 using LTAI.Core;
+using LTAI.Agent.Tools;
 using LTAI.Agent.Workflows;
 using LTAI.Core.Configuration;
+using LTAI.TUI.Services;
 using Spectre.Console;
 
 using Microsoft.Extensions.Configuration;
@@ -94,7 +96,7 @@ public static class Program
 
         // Wire up shared state for slash commands
         SlashCommands.Embedder = sp.GetService<LocalEmbedder>();
-        SlashCommands.Router = sp.GetService<MultiProviderChatClient>();
+        SlashCommands.RouterClient = sp.GetService<MultiProviderChatClient>();
         SlashCommands.HttpFactory = sp.GetService<IHttpClientFactory>();
         SlashCommands.SnippetStore = sp.GetService<LTAI.Agent.Snippets.SnippetStore>();
         SlashCommands.WorkflowRegistry = sp.GetService<LTAI.Agent.Workflows.YAMLWorkflowRegistry>();
@@ -105,6 +107,25 @@ public static class Program
         SlashCommands.ActiveProvider = options.Value.AI.DefaultProvider ?? "DeepSeek";
         SlashCommands.L1Model = options.Value.AI.GetLayerConfig("fast").Model;
         SlashCommands.L2Model = options.Value.AI.GetLayerConfig("deep").Model;
+
+        // Register all 6 command services
+        var modelSvc = new ModelCommandService(
+            sp.GetService<MultiProviderChatClient>(),
+            sp.GetService<LocalEmbedder>(),
+            sp.GetService<ModelMetadataProvider>(),
+            options);
+        var jobsSvc = new JobsCommandService(sp.GetService<BackgroundJobService>());
+        var configSvc = new ConfigCommandService(
+            sp.GetService<MultiProviderChatClient>(),
+            options);
+        var snippetSvc = new SnippetCommandService(sp.GetService<LTAI.Agent.Snippets.SnippetStore>());
+        var workflowSvc = new WorkflowCommandService(sp.GetService<YAMLWorkflowRegistry>());
+        var pipeSvc = new PipeCommandService(
+            sp.GetService<AgentWorkflows>(),
+            sp.GetService<YAMLWorkflowRegistry>());
+
+        // Create thin CommandRouter dispatcher
+        SlashCommands.Router = new CommandRouter(modelSvc, jobsSvc, configSvc, snippetSvc, workflowSvc, pipeSvc);
 
         var chatAgent = sp.GetRequiredService<ChatAgent>();
 

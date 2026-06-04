@@ -4,6 +4,8 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -26,6 +28,9 @@ public sealed class KbGraph : AIContextProvider
     private readonly IChatClient? _rewriter;
     private readonly Reranker? _reranker;
     private readonly ILogger<KbGraph> _logger;
+
+    /// <summary>RRF fusion constant (default 60, inspired by sqlite-graphrag's configurable --rrf-k).</summary>
+    public int RrfK { get; set; } = 60;
 
     /// <summary>
     /// Initializes a new instance.
@@ -51,13 +56,10 @@ public sealed class KbGraph : AIContextProvider
     public async Task<List<string>> QueryAsync(string query, int topK = 10,
         bool expandGraph = true, CancellationToken ct = default)
     {
-        // Stage 1: Query expansion — skip LLM rewriter for simple queries and dev mode
-        // (FastEmb intent classification already filtered casual chat earlier)
-        // Skip LLM-based query expansion for very simple queries
+        // Stage 1: Query expansion — skip LLM rewriter for simple queries
         string expanded;
         if (query.Length <= 8 || query.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length <= 2)
         {
-            // Use original query directly for simple queries
             expanded = query;
         }
         else
@@ -72,8 +74,7 @@ public sealed class KbGraph : AIContextProvider
         // Stage 2: FTS5 BM25 recall (weighted by node kind)
         var ftsHits = await _store.SearchFts(expanded, topN: topK * 3).ConfigureAwait(false);
 
-        // Stage 2b: Optional hybrid search (FTS5 + sqlite-vec RRF)
-        // Uses LocalEmbedder (BGE ONNX) for vector embeddings, no API key required.
+        // Stage 2b: Optional hybrid search (FTS5 + vector RRF)
         if (_reranker != null && ftsHits.Count > 0)
         {
             try
@@ -84,9 +85,8 @@ public sealed class KbGraph : AIContextProvider
                     var queryEmb = localEmb.Generate(query);
                     var vecHits = await _store.SearchVector(queryEmb, topN: topK * 3).ConfigureAwait(false);
 
-                    // RRF fusion: combine FTS5 BM25 + vector cosine distance ranks
                     var rrf = new Dictionary<long, double>();
-                    int k = 60;
+                    int k = RrfK;
                     int rank = 0;
                     foreach (var h in ftsHits)
                         rrf[h.nodeId] = 1.0 / (k + rank++);
@@ -98,9 +98,6 @@ public sealed class KbGraph : AIContextProvider
                                       .Take(topK * 2)
                                       .Select(x => x.Key)
                                       .ToList();
-                    // 重建 ftsHits 为 fusedIds 的并集：
-                    // - BM25+vector 都命中的 → 保留 BM25 元数据
-                    // - 仅 vector 命中的 → 创建占位条目（后续走 node lookup）
                     var ftsMap = ftsHits.ToDictionary(h => h.nodeId);
                     ftsHits = fusedIds
                         .Select(id => ftsMap.TryGetValue(id, out var hit) ? hit : (id, "", 0.0, ""))
@@ -128,33 +125,99 @@ public sealed class KbGraph : AIContextProvider
             resultIds = new HashSet<long>(ftsHits.Select(h => h.nodeId));
         }
 
-        // Stage 4: Format output
-        var seen = new HashSet<long>();
-        var output = new List<string>();
+        // Stage 4: Rich mixed context output (ms graphrag LocalSearchMixedContext inspired)
+        return await BuildMixedContextAsync(resultIds, topK, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Build a structured mixed context with Entities + Relationships + Text Units sections.
+    /// Inspired by ms graphrag's LocalSearchMixedContext — gives the LLM clearer,
+    /// more structured knowledge graph context than flat bullet points.
+    /// </summary>
+    private async Task<List<string>> BuildMixedContextAsync(HashSet<long> resultIds,
+        int topK, CancellationToken ct)
+    {
+        var entities = new List<(NodeRow node, string? snippet)>();
+        var relationships = new List<(string src, string dst, string rel, double weight)>();
+        var textUnits = new List<(string source, string text)>();
+
         foreach (var nodeId in resultIds.Take(topK))
         {
-            if (!seen.Add(nodeId)) continue;
             var node = await _store.GetNode(nodeId).ConfigureAwait(false);
             if (node == null) continue;
 
-            output.Add(FormatNode(node));
-
-            // Show related docs
-            foreach (var doc in (await _store.GetDocs(nodeId).ConfigureAwait(false)).Take(2))
+            // Text units (document snippets)
+            var docs = await _store.GetDocs(nodeId).ConfigureAwait(false);
+            string? snippet = null;
+            if (docs.Count > 0)
             {
-                var snippet = doc.Text.Length > 200 ? doc.Text[..200] + "…" : doc.Text;
-                output.Add($"  └─ {snippet}");
+                snippet = docs[0].Text.Length > 200 ? docs[0].Text[..200] + "…" : docs[0].Text;
+                textUnits.Add((node.Name, snippet));
             }
+            entities.Add((node, snippet));
 
-            // Show neighbor edges
-            foreach (var edge in (await _store.GetEdges(nodeId).ConfigureAwait(false)).Take(3))
+            // Relationships (edges to neighbors)
+            foreach (var edge in (await _store.GetEdges(nodeId).ConfigureAwait(false)).Take(5))
             {
                 var neighborId = edge.Src == nodeId ? edge.Dst : edge.Src;
                 var neighbor = await _store.GetNode(neighborId).ConfigureAwait(false);
-                if (neighbor != null)
-                    output.Add($"  ══ {edge.Relation} ══ [{neighbor.Kind}] {neighbor.Name}");
+                if (neighbor == null) continue;
+                relationships.Add((
+                    edge.Src == nodeId ? node.Name : neighbor.Name,
+                    edge.Dst == nodeId ? node.Name : neighbor.Name,
+                    edge.Relation, edge.Weight
+                ));
             }
         }
+
+        // Deduplicate relationships (case-insensitive)
+        var seenRel = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        relationships = relationships
+            .Where(r => seenRel.Add($"{r.src}|{r.dst}|{r.rel}"))
+            .ToList();
+
+        var output = new List<string>();
+        output.Add("## Relevant Knowledge");
+
+        // Entities section
+        output.Add($"### Entities ({entities.Count})");
+        foreach (var (node, snippet) in entities)
+        {
+            var icon = node.Kind switch
+            {
+                "document" => "📄", "concept" => "🏷️", "fact" => "💡",
+                "class" => "🔷", "method" => "🔧", "function" => "⚙️",
+                "interface" => "🔲", "enum" => "🔢", "struct" => "🏗️",
+                "file" => "📁", _ => "▪️"
+            };
+            output.Add($"- {icon} **[{node.Kind}] {node.Name}**" +
+                (string.IsNullOrEmpty(node.Namespace) ? "" : $" ({node.Namespace})"));
+            if (!string.IsNullOrEmpty(node.Source))
+                output.Add($"  Source: {node.Source}");
+        }
+
+        // Relationships section
+        if (relationships.Count > 0)
+        {
+            output.Add($"### Relationships ({relationships.Count})");
+            foreach (var (src, dst, rel, w) in relationships.Take(20))
+                output.Add($"- **{src}** ══ *{rel}* ══ **{dst}** (w={w:F1})");
+        }
+
+        // Text Units section
+        if (textUnits.Count > 0)
+        {
+            output.Add($"### Text Units ({textUnits.Count})");
+            foreach (var (source, text) in textUnits.Take(8))
+            {
+                var cleaned = text.Replace("\n", " ").Replace("\r", "");
+                if (cleaned.Length > 150) cleaned = cleaned[..150] + "…";
+                output.Add($"- **[{source}]:** {cleaned}");
+            }
+        }
+
+        _logger.LogInformation("KbGraph: mixed context: {E} entities, {R} rels, {T} text units",
+            entities.Count, relationships.Count, textUnits.Count);
         return output;
     }
 
@@ -210,15 +273,45 @@ public sealed class KbGraph : AIContextProvider
     public async Task<string> IngestDocument(string id, string title, string content,
         string source = "", string lang = "zh")
     {
+        // Compute content hash for incremental detection
+        var contentHash = Convert.ToHexStringLower(
+            System.Security.Cryptography.SHA256.HashData(
+                System.Text.Encoding.UTF8.GetBytes(content)));
+        var extId = $"doc:{id}";
+
+        // Check if already ingested with same content — skip if unchanged
+        var existing = await _store.GetNodeByExtId(extId).ConfigureAwait(false);
+        if (existing?.Signature == contentHash)
+        {
+            _logger.LogInformation("KbGraph: skipped unchanged '{Id}'", id);
+            return $"Skipped (unchanged): '{title}'";
+        }
+
         var nodeId = await _store.UpsertNode(
-            extId: $"doc:{id}",
+            extId: extId,
             kind: "document",
             name: title,
             ns: source,
-            signature: $"len:{content.Length}",
+            signature: contentHash,
             source: source).ConfigureAwait(false);
 
-        await _store.AddDoc(nodeId, content, lang, source).ConfigureAwait(false);
+        // Replace docs with new content
+        await _store.ReplaceDocsAsync(nodeId, [(content, lang, source)]).ConfigureAwait(false);
+
+        // If re-ingesting: save version history + remove old concept edges
+        if (existing != null)
+        {
+            var snap = new Dictionary<string, object?>
+            {
+                ["name"] = existing.Name,
+                ["kind"] = existing.Kind,
+                ["signature"] = existing.Signature,
+                ["source"] = existing.Source,
+            };
+            await _store.SaveVersionAsync(nodeId, existing.Kind, existing.Name, snap, reason: "re-ingest")
+                .ConfigureAwait(false);
+            await _store.DeleteEdges(nodeId, relation: "contains").ConfigureAwait(false);
+        }
 
         var concepts = ExtractConcepts(title, content);
         foreach (var concept in concepts.Take(15))
@@ -230,34 +323,48 @@ public sealed class KbGraph : AIContextProvider
             await _store.AddEdge(nodeId, cid, "contains").ConfigureAwait(false);
         }
 
-        _logger.LogInformation("KbGraph: ingested '{Id}' ({T}) with {C} concepts",
-            id, title, concepts.Count);
-        return $"Ingested '{title}' with {concepts.Count} concepts";
+        var action = existing != null ? "re-ingested" : "ingested";
+        _logger.LogInformation("KbGraph: {Action} '{Id}' ({T}) with {C} concepts",
+            action, id, title, concepts.Count);
+        return $"{(existing != null ? "Re-ingested" : "Ingested")} '{title}' with {concepts.Count} concepts";
     }
 
     public async Task<string> IngestFact(string id, string content,
         string category = "general", string? sourceId = null)
     {
+        var extId = $"fact:{id}";
+        var contentHash = Convert.ToHexStringLower(
+            System.Security.Cryptography.SHA256.HashData(
+                System.Text.Encoding.UTF8.GetBytes(content)));
+
+        // Check if already ingested with same content
+        var existing = await _store.GetNodeByExtId(extId).ConfigureAwait(false);
+        if (existing?.Signature == contentHash)
+            return $"Skipped (unchanged): fact '{id}'";
+
         var props = new Dictionary<string, object?>
         {
             ["content"] = content,
             ["category"] = category
         };
         var nodeId = await _store.UpsertNode(
-            extId: $"fact:{id}",
+            extId: extId,
             kind: "fact",
             name: content.Length > 100 ? content[..100] + "…" : content,
             ns: category,
+            signature: contentHash,
             props: props).ConfigureAwait(false);
 
-        await _store.AddDoc(nodeId, content, "zh", source: "").ConfigureAwait(false);
+        await _store.ReplaceDocsAsync(nodeId, [(content, "zh", "")]).ConfigureAwait(false);
 
         if (sourceId != null)
         {
             var src = await _store.GetNodeByExtId(sourceId).ConfigureAwait(false);
             if (src != null) await _store.AddEdge(src.Id, nodeId, "has_fact").ConfigureAwait(false);
         }
-        return $"Ingested fact '{id}'";
+
+        var action = existing != null ? "Re-ingested" : "Ingested";
+        return $"{action} fact '{id}'";
     }
 
     // ═══════════════════════════════════════════
@@ -307,28 +414,33 @@ public sealed class KbGraph : AIContextProvider
         // Chunk by logical sections (double-newline separation from extractors)
         var chunks = content.Split(["\n\n"], StringSplitOptions.RemoveEmptyEntries);
 
-        int ingested = 0;
+        int ingested = 0, skipped = 0, reingested = 0;
         foreach (var chunk in chunks)
         {
             var trimmed = chunk.Trim();
             if (trimmed.Length < 20) continue;
 
-            // Use section heading as title (first line or chunk prefix)
             var title = trimmed.Split('\n')[0];
             if (title.Length > 100) title = title[..100] + "…";
             var sourceLabel = $"{fileName}:{title}";
+            // Stable chunk ID based on source + title for incremental detection
+            var chunkId = $"office:{fileName}:{title}";
 
-            await IngestDocument(
-                id: $"office:{fileName}:{ingested}:{Guid.NewGuid().ToString("N")[..8]}",
+            var result = await IngestDocument(
+                id: chunkId,
                 title: title,
                 content: trimmed,
                 source: sourceLabel,
                 lang: "zh").ConfigureAwait(false);
-            ingested++;
+
+            if (result.StartsWith("Skipped")) skipped++;
+            else if (result.StartsWith("Re-ingested")) reingested++;
+            else ingested++;
         }
 
-        _logger.LogInformation("KbGraph: ingested '{F}' → {N} chunks", fileName, ingested);
-        return $"Ingested '{fileName}' → {ingested} sections";
+        _logger.LogInformation("KbGraph: '{F}' → {N} new, {R} re-ingested, {S} skipped",
+            fileName, ingested, reingested, skipped);
+        return $"'{fileName}': {ingested} new, {reingested} re-ingested, {skipped} skipped";
     }
 
     /// <summary>

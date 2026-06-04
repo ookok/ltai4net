@@ -192,6 +192,22 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<LTAI.Agent.Tools.QuestionService>();
         services.AddSingleton<LTAI.Agent.Tools.QuestionTool>();
 
+        // P? ClusterSummarizer — LLM-powered clustering + summarization for
+        // knowledge retrieval results. The LLM organizes many result items into
+        // topical groups with a short summary per group.
+        services.AddSingleton<LTAI.Agent.Tools.ClusterSummarizer>(sp =>
+            new LTAI.Agent.Tools.ClusterSummarizer(
+                sp.GetRequiredService<IChatClient>(),
+                sp.GetService<ILoggerFactory>()?.CreateLogger<LTAI.Agent.Tools.ClusterSummarizer>()));
+
+        // DeepenSearchTool — DRIFT-inspired iterative deepen KG search.
+        // Searches multiple rounds, identifies gaps via LLM, generates follow-ups.
+        services.AddSingleton<LTAI.Agent.Tools.DeepenSearchTool>(sp =>
+            new LTAI.Agent.Tools.DeepenSearchTool(
+                sp.GetRequiredService<KbGraph>(),
+                sp.GetRequiredService<IChatClient>(),
+                sp.GetService<ILoggerFactory>()?.CreateLogger<LTAI.Agent.Tools.DeepenSearchTool>()));
+
         // P14.8: bridge LocalEmbedder.ModelSwitched → static registry cache
         // invalidation (LTAI.AI's ToolEmbeddingCache handles itself; this
         // handles AgentRegistry + ToolRegistry which live in LTAI.Agent).
@@ -660,6 +676,23 @@ public static class ServiceCollectionExtensions
             tools.Add(AIFunctionFactory.Create(wfTools.WorkflowHandoff));
             tools.Add(AIFunctionFactory.Create(wfTools.WorkflowSequential));
             tools.Add(AIFunctionFactory.Create(wfTools.WorkflowConcurrent));
+        }
+
+        // ClusterSummarizer — LLM-powered retrieval result clustering.
+        // Available to knowledge-heavy agents for organizing search results
+        // by theme into a structured summary.
+        if (name is "LTAI-Chat" or "LTAI-Chat-Pro" or "LTAI-System" or "LTAI-Writer" or "LTAI-Data")
+        {
+            var cs = sp.GetRequiredService<LTAI.Agent.Tools.ClusterSummarizer>();
+            tools.Add(AIFunctionFactory.Create(cs.SummarizeAsync));
+        }
+
+        // DeepenSearchTool — DRIFT-inspired iterative deepen KG search.
+        // Available to research-heavy agents for multi-hop knowledge discovery.
+        if (name is "LTAI-Chat" or "LTAI-Chat-Pro" or "LTAI-System" or "LTAI-Writer" or "LTAI-Data")
+        {
+            var dst = sp.GetRequiredService<LTAI.Agent.Tools.DeepenSearchTool>();
+            tools.Add(AIFunctionFactory.Create(dst.DeepenSearchAsync));
         }
 
         // ====== NEW TOOLS (added May 2026) ======
