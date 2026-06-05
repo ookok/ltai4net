@@ -237,11 +237,42 @@ public sealed class ChatRenderer
             var combined = new StringBuilder();
             if (toolCalls.Count > 0)
                 combined.AppendLine(RenderToolCallsAsTree(toolCalls));
-            // Code fence awareness: 延迟渲染直到围栏闭合
-            var streamText = MarkdownUtils.HasUnclosedFence(streamingContent)
-                ? streamingContent + "[grey]... (代码块生成中)[/]"
-                : streamingContent;
-            combined.Append(MdToPanelContent(streamText));
+            // Code fence awareness: 拆分为完整部分 + 流式尾部
+            var raw = streamingContent;
+            if (MarkdownUtils.HasUnclosedFence(raw))
+            {
+                // 找到最后一个未闭合的 ```，之前的部分是完整的
+                var lastFence = raw.LastIndexOf("```", StringComparison.Ordinal);
+                if (lastFence > 0)
+                {
+                    var completePart = raw[..lastFence]; // fence start line + before
+                    var fenceLineEnd = raw.IndexOf('\n', lastFence);
+                    var codeLang = fenceLineEnd > lastFence
+                        ? raw[(lastFence + 3)..fenceLineEnd].Trim()
+                        : "";
+                    var incompleteCode = fenceLineEnd > 0 ? raw[(fenceLineEnd + 1)..] : "";
+
+                    // 完整部分用 Markdig 渲染
+                    combined.Append(MdToPanelContent(completePart));
+                    // 流式代码尾部用简单灰色显示
+                    if (!string.IsNullOrEmpty(incompleteCode))
+                    {
+                        combined.AppendLine($"\n[bold grey]┌─ {codeLang.EscapeMarkup()} ─(生成中)─┐[/]");
+                        var boxWidth = Math.Min(Console.WindowWidth - 10, 80);
+                        foreach (var cl in incompleteCode.Split('\n'))
+                            combined.AppendLine($"  [grey]│[/] {cl.EscapeMarkup()} [grey]│[/]");
+                        combined.AppendLine($"[bold grey]└{new string('─', boxWidth)}┘[/]");
+                    }
+                }
+                else
+                {
+                    combined.Append(MdToPanelContent(raw));
+                }
+            }
+            else
+            {
+                combined.Append(MdToPanelContent(raw));
+            }
             var rendered = combined.ToString().TrimEnd();
             var content = rendered.Length > 0
                 ? (IRenderable)new Markup(rendered)
