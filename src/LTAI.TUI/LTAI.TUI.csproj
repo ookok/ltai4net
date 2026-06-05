@@ -30,8 +30,8 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Reference Include="Microsoft.Agents.AI.Abstractions" HintPath="..\..\dist\lib\maf\Microsoft.Agents.AI.Abstractions.dll" Condition="Exists('..\..\dist\lib\maf\Microsoft.Agents.AI.Abstractions.dll')" />
     <ProjectReference Include="..\LTAI.Agent\LTAI.Agent.csproj" />
-    <ProjectReference Include="..\LTAI.AI\LTAI.AI.csproj" />
     <ProjectReference Include="..\LTAI.Core\LTAI.Core.csproj" />
   </ItemGroup>
 

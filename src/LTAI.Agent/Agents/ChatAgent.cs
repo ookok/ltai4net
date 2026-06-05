@@ -51,11 +51,12 @@ public sealed class ChatAgent
     private readonly BudgetTracker? _budgetTracker;
     private readonly LocalEmbedder? _localEmbedder;
     private readonly IHttpClientFactory? _httpFactory;
+    private readonly IChatClient? _steerJudge;
 
     public ChatAgent(AIAgent agent, AIAgent? proAgent = null, AgentWorkflows? workflows = null,
         BudgetTracker? budgetTracker = null,
         LocalEmbedder? localEmbedder = null, IHttpClientFactory? httpFactory = null,
-        bool sameModel = false)
+        bool sameModel = false, IChatClient? steerJudge = null)
     {
         _agent = agent;
         _proAgent = proAgent ?? agent;
@@ -64,6 +65,7 @@ public sealed class ChatAgent
         _budgetTracker = budgetTracker;
         _localEmbedder = localEmbedder;
         _httpFactory = httpFactory;
+        _steerJudge = steerJudge;
     }
 
     private static int EstimateComplexity(string message)
@@ -139,11 +141,24 @@ public sealed class ChatAgent
 
         try
         {
-            var judgeSession = await _agent.CreateSessionAsync(ct).ConfigureAwait(false);
-            var judgeResult = await _agent.RunAsync(
-                [new ChatMessage(ChatRole.User, judgePrompt)], judgeSession,
-                cancellationToken: ct).ConfigureAwait(false);
-            var judgeText = judgeResult.Messages?.LastOrDefault()?.Text ?? "";
+            // P6 Steer: use lightweight IChatClient directly when available (much cheaper
+            // than spinning up a full AIAgent session). Falls back to _agent session.
+            string judgeText;
+            if (_steerJudge != null)
+            {
+                var judgeResponse = await _steerJudge.GetResponseAsync(
+                    [new ChatMessage(ChatRole.User, judgePrompt)],
+                    cancellationToken: ct).ConfigureAwait(false);
+                judgeText = judgeResponse.Messages?.LastOrDefault()?.Text ?? "";
+            }
+            else
+            {
+                var judgeSession = await _agent.CreateSessionAsync(ct).ConfigureAwait(false);
+                var judgeResult = await _agent.RunAsync(
+                    [new ChatMessage(ChatRole.User, judgePrompt)], judgeSession,
+                    cancellationToken: ct).ConfigureAwait(false);
+                judgeText = judgeResult.Messages?.LastOrDefault()?.Text ?? "";
+            }
 
             using var doc = JsonDocument.Parse(judgeText);
             var adequate = doc.RootElement.GetProperty("adequate").GetBoolean();

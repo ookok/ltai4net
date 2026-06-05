@@ -44,6 +44,15 @@ public sealed class TextPadView : UserControl
 
     private const long MaxEditorSize = 50 * 1024 * 1024;
 
+    // ── Debugging integration ──
+    internal LTAI.Desktop.Debugging.DapSession DebugSession { get; }
+    private LTAI.Desktop.Debugging.BreakpointManager _bpManager = null!;
+    private LTAI.Desktop.Debugging.BreakpointMargin _bpMargin = null!;
+    private LTAI.Desktop.Debugging.DebugToolbar _debugToolbar = null!;
+    private LTAI.Desktop.Debugging.CallStackView _callStackView = null!;
+    private LTAI.Desktop.Debugging.VariablesView _variablesView = null!;
+
+
     private static readonly HashSet<string> CodeExts = new(StringComparer.OrdinalIgnoreCase)
     {
         ".cs", ".py", ".js", ".ts", ".go", ".rs", ".java",
@@ -150,6 +159,34 @@ public sealed class TextPadView : UserControl
         }
         catch { /* folding not critical */ }
 
+        // ── Debugging: DapSession + BreakpointManager ──
+        DebugSession = new LTAI.Desktop.Debugging.DapSession();
+        _bpManager = new LTAI.Desktop.Debugging.BreakpointManager(_rootDir);
+
+        // ── BreakpointMargin — 左侧断点边栏 ──
+        _bpMargin = new LTAI.Desktop.Debugging.BreakpointMargin(_bpManager, () => _currentFile);
+        _editor.TextArea.LeftMargins.Insert(0, _bpMargin);
+
+        // Paused-line highlighter (yellow background for current paused line)
+        var hl = new CurrentLineHighlighter();
+        _editor.TextArea.TextView.LineTransformers.Add(hl);
+
+        DebugSession.Stopped += (line, file) =>
+        {
+            if (file != null && file != _currentFile)
+                OpenFile(file);
+            _bpMargin.SetPausedLine(line);
+            hl.SetPausedLine(line);
+        };
+        DebugSession.StateChanged += state =>
+        {
+            if (state is LTAI.Desktop.Debugging.DebugState.Running or LTAI.Desktop.Debugging.DebugState.Terminated)
+            {
+                _bpMargin.ClearPausedLine();
+                hl.ClearPausedLine();
+            }
+        };
+
         // Ctrl+滚轮缩放
         _editor.PointerWheelChanged += (_, e) =>
         {
@@ -249,6 +286,9 @@ public sealed class TextPadView : UserControl
         _runBtn = new Button { Content = "▶ Run", FontSize = 10, Height = 20, Background = LtaiTheme.Sbb(LtaiTheme.AccentInfo), Foreground = LtaiTheme.Sbb(LtaiTheme.TextOnAccent), IsVisible = false };
         _runBtn.Click += (_, _) => RunProjectCmd("run");
 
+        var debugBtn = new Button { Content = "🐛 Debug", FontSize = 10, Height = 20, Background = LtaiTheme.Sbb(LtaiTheme.AccentWarning), Foreground = LtaiTheme.Sbb(LtaiTheme.TextOnAccent), IsVisible = false };
+        debugBtn.Click += (_, _) => this.StartDebugAsync();
+
         var formatBtn = new Button { Content = "✨ Format", FontSize = 10, Height = 20, Background = LtaiTheme.Sbb(LtaiTheme.AccentWarning), Foreground = LtaiTheme.Sbb(LtaiTheme.TextOnAccent) };
         formatBtn.Click += (_, _) => RunFormat();
         var askAiBtn = new Button { Content = "🤖 问 AI", FontSize = 10, Height = 20, Background = LtaiTheme.Sbb(LtaiTheme.AccentDNA), Foreground = LtaiTheme.Sbb(LtaiTheme.TextOnAccent) };
@@ -277,10 +317,13 @@ public sealed class TextPadView : UserControl
         // ── 构建/Shell 输出容器 ──
         _buildPanel = new StackPanel { Spacing = 4, Margin = new(0, 4, 0, 0) };
 
+        // ── Debug toolbar (only visible during debug session) ──
+        _debugToolbar = new LTAI.Desktop.Debugging.DebugToolbar(DebugSession);
+
         var toolbar = new StackPanel
         {
             Orientation = Orientation.Horizontal, Margin = new(4), Spacing = 4,
-            Children = { _toggleBtn, checkBtn!, saveBtn!, formatBtn!, askAiBtn!, wrapBtn!, gotoBtn!, splitBtn!, _terminalBtn!, _gitBranchLabel, _gitCommitBtn, _gitPullBtn, _gitPushBtn, _gitBlameBtn },
+            Children = { _toggleBtn, checkBtn!, saveBtn!, formatBtn!, askAiBtn!, wrapBtn!, gotoBtn!, splitBtn!, debugBtn!, _runBtn, _terminalBtn!, _gitBranchLabel, _gitCommitBtn, _gitPullBtn, _gitPushBtn, _gitBlameBtn },
         };
 
         // ── 终端面板 ──
@@ -300,7 +343,35 @@ public sealed class TextPadView : UserControl
         Grid.SetRow(_editor, 0);
         _editorGrid.Children.Add(_editor);
 
-        _editorPanel = new StackPanel { Children = { toolbar, _editorGrid, _statusBar, _buildPanel, _terminalView } };
+        // ── Debug bottom panel (CallStack + Variables) ──
+        _callStackView = new LTAI.Desktop.Debugging.CallStackView(DebugSession);
+        _variablesView = new LTAI.Desktop.Debugging.VariablesView(DebugSession);
+        var debugBottomTab = new TabControl
+        {
+            IsVisible = false,
+            MinHeight = 120, MaxHeight = 250,
+            Background = LtaiTheme.Sbb(LtaiTheme.BgPanel),
+        };
+        var callStackTab = new TabItem { Header = "📋 调用栈", Content = _callStackView };
+        var variablesTab = new TabItem { Header = "🔍 变量", Content = _variablesView.CreateWithWatch() };
+        debugBottomTab.Items.Add(callStackTab);
+        debugBottomTab.Items.Add(variablesTab);
+
+        // Show debug panels when session is active
+        DebugSession.StateChanged += state =>
+        {
+            debugBottomTab.IsVisible = state is LTAI.Desktop.Debugging.DebugState.Paused
+                or LTAI.Desktop.Debugging.DebugState.Running
+                or LTAI.Desktop.Debugging.DebugState.Launching;
+            _bpMargin.IsVisible = state >= LTAI.Desktop.Debugging.DebugState.Launching;
+        };
+
+        var editorAndDebug = new DockPanel();
+        DockPanel.SetDock(debugBottomTab, Dock.Bottom);
+        editorAndDebug.Children.Add(_editorGrid);
+        editorAndDebug.Children.Add(debugBottomTab);
+
+        _editorPanel = new StackPanel { Children = { _debugToolbar, toolbar, editorAndDebug, _statusBar, _buildPanel, _terminalView } };
 
         var split = new Grid();
         split.ColumnDefinitions.Add(new ColumnDefinition(new GridLength(280)));
@@ -395,6 +466,22 @@ public sealed class TextPadView : UserControl
                 if (_symbolList.IsVisible) RefreshSymbols();
                 e.Handled = true;
             }
+
+            // Debugging keyboard shortcuts
+            if (e.Key == Key.F5 && e.KeyModifiers == KeyModifiers.None)
+            {
+                if (DebugSession.State == LTAI.Desktop.Debugging.DebugState.Idle)
+                    _ = this.StartDebugAsync();
+                else
+                    _ = DebugSession.ContinueAsync();
+                e.Handled = true;
+            }
+            if (e.Key == Key.F10 && e.KeyModifiers == KeyModifiers.None && DebugSession.State == LTAI.Desktop.Debugging.DebugState.Paused)
+            { _ = DebugSession.StepOverAsync(); e.Handled = true; }
+            if (e.Key == Key.F11 && e.KeyModifiers == KeyModifiers.None && DebugSession.State == LTAI.Desktop.Debugging.DebugState.Paused)
+            { _ = DebugSession.StepIntoAsync(); e.Handled = true; }
+            if (e.Key == Key.F5 && e.KeyModifiers == KeyModifiers.Shift && DebugSession.State >= LTAI.Desktop.Debugging.DebugState.Running)
+            { _ = DebugSession.TerminateAsync(); e.Handled = true; }
         };
     }
 
@@ -1642,6 +1729,77 @@ public sealed class TextPadView : UserControl
 
     private static bool IsUtf8ThreeByte(byte b1, byte b2, byte b3) =>
         (b1 >= 0xE0 && b1 <= 0xEF) && b2 >= 0x80 && b2 <= 0xBF && b3 >= 0x80 && b3 <= 0xBF;
+
+    private async Task StartDebugAsync()
+    {
+        if (this.DebugSession.State != LTAI.Desktop.Debugging.DebugState.Idle) return;
+
+        var csprojFiles = Directory.GetFiles(this._rootDir, "*.csproj", SearchOption.AllDirectories);
+        var selectedProject = csprojFiles.FirstOrDefault();
+        if (selectedProject == null)
+        {
+            this._statusBar.Text = "未找到 .csproj 文件，无法启动调试器";
+            return;
+        }
+
+        var projectDir = Path.GetDirectoryName(selectedProject)!;
+        var projectName = Path.GetFileNameWithoutExtension(selectedProject);
+        var outputDir = Path.Combine(projectDir, "bin", "Debug", "net10.0");
+        var programPath = Path.Combine(outputDir, $"{projectName}.dll");
+
+        this._statusBar.Text = $"Building {projectName}...";
+        try
+        {
+            var psi = new ProcessStartInfo("dotnet", $"build -c Debug \"{selectedProject}\"")
+            {
+                WorkingDirectory = projectDir,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true,
+            };
+            var build = Process.Start(psi)!;
+            var buildOut = await build.StandardOutput.ReadToEndAsync();
+            await build.WaitForExitAsync();
+
+            if (build.ExitCode != 0)
+            {
+                this._buildOutput.Text = $"Build failed:\n{buildOut}\n{build.StandardError.ReadToEnd()}";
+                this._buildOutput.IsVisible = true;
+                this._statusBar.Text = "Build failed";
+                return;
+            }
+        }
+        catch (Exception ex)
+        {
+            this._statusBar.Text = $"Build error: {ex.Message}";
+            return;
+        }
+
+        var allBps = this._bpManager.All;
+        foreach (var bp in allBps)
+        {
+            var absPath = Path.IsPathRooted(bp.File) ? bp.File : Path.Combine(this._rootDir, bp.File);
+            if (File.Exists(absPath))
+            {
+                await this.DebugSession.SetBreakpointsAsync(absPath, [bp.Line]);
+            }
+        }
+
+        await this.DebugSession.LaunchAsync("dotnet",
+            ["debug", "--debug-adapter", programPath],
+            projectDir,
+            new System.Text.Json.Nodes.JsonObject
+            {
+                ["type"] = "coreclr",
+                ["name"] = $".NET Launch ({projectName})",
+                ["program"] = programPath,
+                ["cwd"] = projectDir,
+                ["stopAtEntry"] = false,
+            });
+
+        _statusBar.Text = $"Debugging {projectName}";
+    }
 }
 
 /// <summary>多语言代码折叠策略 — 支持大括号/region/HTML 标签/缩进语言。</summary>
@@ -1763,5 +1921,27 @@ public sealed class MultiLangFoldingStrategy
                     break;
                 }
         }
+    }
+}
+
+/// <summary>
+/// DocumentColorizingTransformer for highlighting the current paused line.
+/// </summary>
+file sealed class CurrentLineHighlighter : AvaloniaEdit.Rendering.DocumentColorizingTransformer
+{
+    private int _pausedLine = -1;
+
+    public void SetPausedLine(int line) { _pausedLine = line; }
+    public void ClearPausedLine() { _pausedLine = -1; }
+
+    protected override void ColorizeLine(DocumentLine line)
+    {
+        if (line.LineNumber != _pausedLine) return;
+        ChangeLinePart(line.Offset, line.EndOffset, el =>
+        {
+            el.TextRunProperties.SetBackgroundBrush(
+                new Avalonia.Media.SolidColorBrush(
+                    Avalonia.Media.Color.Parse("#3d3d1a")));
+        });
     }
 }

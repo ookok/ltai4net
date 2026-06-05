@@ -19,11 +19,12 @@
   <ItemGroup>
     <PackageReference Include="Spectre.Console" Version="0.55.2" />
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.8" />
+    <PackageReference Include="ModelContextProtocol" Version="1.1.0" />
   </ItemGroup>
 
   <ItemGroup>
+    <Reference Include="Microsoft.Agents.AI.Abstractions" HintPath="..\..\dist\lib\maf\Microsoft.Agents.AI.Abstractions.dll" Condition="Exists('..\..\dist\lib\maf\Microsoft.Agents.AI.Abstractions.dll')" />
     <ProjectReference Include="..\LTAI.Core\LTAI.Core.csproj" />
-    <ProjectReference Include="..\LTAI.AI\LTAI.AI.csproj" />
     <ProjectReference Include="..\LTAI.Agent\LTAI.Agent.csproj" />
   </ItemGroup>
 

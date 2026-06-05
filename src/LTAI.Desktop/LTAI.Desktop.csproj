@@ -31,9 +31,11 @@
     <PackageReference Include="Avalonia.Fonts.Inter" Version="12.0.4" />
     <PackageReference Include="Avalonia.Diagnostics" Version="11.3.17" Condition="'$(Configuration)' == 'Debug'" />
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.0" />
+    <PackageReference Include="StreamJsonRpc" Version="2.17.42" />
   </ItemGroup>
 
   <ItemGroup>
+    <Reference Include="Microsoft.Agents.AI.Abstractions" HintPath="..\..\dist\lib\maf\Microsoft.Agents.AI.Abstractions.dll" Condition="Exists('..\..\dist\lib\maf\Microsoft.Agents.AI.Abstractions.dll')" />
     <ProjectReference Include="..\LTAI.Core\LTAI.Core.csproj" />
     <ProjectReference Include="..\LTAI.Agent\LTAI.Agent.csproj" />
     <ProjectReference Include="..\LTAI.AI\LTAI.AI.csproj" />

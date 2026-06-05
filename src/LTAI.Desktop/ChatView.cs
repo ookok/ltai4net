@@ -1361,25 +1361,22 @@ public sealed class ChatView : UserControl
         var lines = new List<string>();
         var embedder = App.Services?.GetService(typeof(LTAI.AI.LocalEmbedder)) as LTAI.AI.LocalEmbedder;
         if (embedder?.Available == true)
-            lines.Add($"L0 嵌入: {embedder.CurrentModelName} ({embedder.Dim}d)");
+            lines.Add($"L0 嵌入 (optional): {embedder.CurrentModelName} ({embedder.Dim}d)");
         else
-            lines.Add("L0 嵌入: 未加载");
-        var layersPath = Path.Combine(AppContext.BaseDirectory, ".livingtree", "layers.json");
-        if (File.Exists(layersPath))
-        {
-            try
-            {
-                using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(layersPath));
-                string? rp(System.Text.Json.JsonElement e) => e.TryGetProperty("Provider", out var x) ? x.GetString() : null;
-                string? rm(System.Text.Json.JsonElement e) => e.TryGetProperty("Model", out var x) ? x.GetString() : null;
-                if (doc.RootElement.TryGetProperty("l1", out var l1)) lines.Add($"L1 标准: {rp(l1)} / {rm(l1)}");
-                else lines.Add("L1: 未配置 (/model l1)");
-                if (doc.RootElement.TryGetProperty("l2", out var l2)) lines.Add($"L2 深度: {rp(l2)} / {rm(l2)}");
-                else lines.Add("L2: 未配置 (/model l2)");
-            }
-            catch { }
-        }
-        else lines.Add("L1/L2: 未配置");
+            lines.Add("L0 嵌入 (optional): 未加载");
+        // Reads from appsettings.json via options (single config file)
+        var opts = (App.Services?.GetService(typeof(Microsoft.Extensions.Options.IOptions<LTAI.Core.Configuration.LTAIOptions>))
+            as Microsoft.Extensions.Options.IOptions<LTAI.Core.Configuration.LTAIOptions>)?.Value;
+        var l1Cfg = opts?.AI.L1;
+        var l2Cfg = opts?.AI.L2;
+        if (l1Cfg != null && !string.IsNullOrEmpty(l1Cfg.Provider))
+            lines.Add($"L1 标准 (required): {l1Cfg.Provider} / {l1Cfg.Model}");
+        else
+            lines.Add("L1: 未配置 (/model l1)");
+        if (l2Cfg != null && !string.IsNullOrEmpty(l2Cfg.Provider))
+            lines.Add($"L2 深度 (optional): {l2Cfg.Provider} / {l2Cfg.Model}");
+        else
+            lines.Add("L2 (optional): 未配置，由 L1 替代");
         AddSystemBubble(string.Join("\n", lines));
     }
 

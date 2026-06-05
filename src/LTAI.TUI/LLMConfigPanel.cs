@@ -141,33 +141,12 @@ public sealed class LLMConfigPanel
 
     private static void SaveLayerSelection(string layer, string provider, string model)
     {
-        try
-        {
-            var dir = Path.Combine(AppContext.BaseDirectory, ".livingtree");
-            Directory.CreateDirectory(dir);
-            var path = Path.Combine(dir, "layers.json");
-            var data = File.Exists(path)
-                ? System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, System.Text.Json.JsonElement>>(File.ReadAllText(path)) ?? new()
-                : new();
-            data[layer] = System.Text.Json.JsonSerializer.SerializeToElement(new { Provider = provider, Model = model });
-            File.WriteAllText(path, System.Text.Json.JsonSerializer.Serialize(data, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
-        }
-        catch { /* best-effort */ }
+        LTAIOptions.SaveLayerToAppSettings(layer, provider, model);
     }
     private static (string? provider, string? model)? L1L2ReadSelection(string layer)
     {
-        try
-        {
-            var path = Path.Combine(AppContext.BaseDirectory, ".livingtree", "layers.json");
-            if (!File.Exists(path)) return null;
-            using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(path));
-            if (!doc.RootElement.TryGetProperty(layer.ToLowerInvariant(), out var el)) return null;
-            var p = el.GetProperty("Provider").GetString();
-            var m = el.GetProperty("Model").GetString();
-            if (!string.IsNullOrEmpty(p) && !string.IsNullOrEmpty(m)) return (p, m);
-            return null;
-        }
-        catch { return null; }
+        // Reads from appsettings.json via LTAIOptions (single config file)
+        return null; // Replaced by IOptions<LTAIOptions> read at call sites
     }
 
     public void Render()
@@ -195,8 +174,11 @@ public sealed class LLMConfigPanel
 
         var table = new Table().Border(TableBorder.Rounded);
         table.AddColumn("Layer"); table.AddColumn("Provider"); table.AddColumn("Model");
-        table.AddRow("L1", _l1Model, "Ready");
-        table.AddRow("L2", _l2Model, "Ready");
+        table.AddRow("L0 (嵌入) [dim](可选项)[/]", "[dim]内置 ONNX / API[/]", "[dim]本地 ONNX 模型[/]");
+        table.AddRow("[bold]L1 (Flash)[/]", _l1Model, "Ready [green](必需)[/]");
+        table.AddRow("L2 (Pro) [dim](可选项)[/]", _l2Model, "Ready");
+        var hasSteerKey = KnownKeys.All.Any(k => k.EnvVar == "STEER_API_KEY" && !string.IsNullOrEmpty(Environment.GetEnvironmentVariable(k.EnvVar)));
+        table.AddRow("Steer [dim](可选项)[/]", hasSteerKey ? "[green]已配置[/]" : "[dim]未配置[/]", hasSteerKey ? "SiliconFlow / Qwen2.5-7B" : "[dim]由 L1 替代[/]");
         AnsiConsole.Write(table);
         AnsiConsole.WriteLine();
         AnsiConsole.MarkupLine("[dim]1: configure L1 | 2: configure L2 | K: set API key | T: temperature | M: max tokens[/]");

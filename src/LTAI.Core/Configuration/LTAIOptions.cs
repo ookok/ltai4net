@@ -179,6 +179,45 @@ public sealed class EmbeddingConfig
 }
 
 /// <summary>
+/// Steer model configuration — a lightweight, free/low-cost model used for
+/// meta-decision tasks: response quality judging, safety pre-checks,
+/// ambiguous routing, and summary verification. Not used for user-facing
+/// conversation. Currently supports OpenAI-compatible endpoints
+/// (SiliconFlow, Zhipu, etc.).
+/// </summary>
+/// <remarks>
+/// Recommended providers:
+/// <list type="bullet">
+///   <item><b>SiliconFlow</b> (default): Qwen2.5-7B-Instruct, free API key at
+///        <c>https://cloud.siliconflow.cn</c>, endpoint <c>https://api.siliconflow.cn/v1</c>.</item>
+///   <item><b>Zhipu</b>: GLM-4-9B-Chat or GLM-Flash, endpoint
+///        <c>https://open.bigmodel.cn/api/paas/v4</c>.</item>
+/// </list>
+/// When disabled, the system degrades gracefully to the current judgment path
+/// (reusing the main agent for judging, DeepSeek for safety, etc.).
+/// </remarks>
+public sealed class SteerConfig
+{
+    /// <summary>Enable the steer model. Default <c>false</c> (opt-in).</summary>
+    public bool Enabled { get; init; } = false;
+
+    /// <summary>OpenAI-compatible endpoint URL.</summary>
+    public string Endpoint { get; init; } = "https://api.siliconflow.cn/v1";
+
+    /// <summary>Model name for steer tasks.</summary>
+    public string Model { get; init; } = "Qwen/Qwen2.5-7B-Instruct";
+
+    /// <summary>Environment variable holding the API key.</summary>
+    public string ApiKeyEnv { get; init; } = "STEER_API_KEY";
+
+    /// <summary>LLM temperature for decision tasks (lower = more deterministic).</summary>
+    public double Temperature { get; init; } = 0.2;
+
+    /// <summary>Max output tokens per steer call.</summary>
+    public int MaxTokens { get; init; } = 512;
+}
+
+/// <summary>
 /// HTTP/SSE endpoint configuration for the ASP.NET Core host.
 /// Loaded from appsettings.json under "LTAI:Web".
 /// <b>Consumers:</b> TuiApp, Program files (bind port).
@@ -309,6 +348,7 @@ public sealed class LTAIOptions
     public McpConfig Mcp { get; init; } = new();
     public DurableConfig Durable { get; init; } = new();
     public EmbeddingConfig Embedding { get; init; } = new();
+    public SteerConfig Steer { get; init; } = new();
     public ProviderDefinition[] Providers { get; init; } = []; // overwrites KnownKeys.All when non-empty
     public string DataDirectory { get; init; } = ".livingtree";
     public string ToolsDirectory { get; init; } = "tools";
@@ -353,6 +393,45 @@ public sealed class LTAIOptions
     private static readonly string? EnvToolsDir = Environment.GetEnvironmentVariable("LTAI_TOOLS_DIR");
     private static readonly string? EnvPromptsDir = Environment.GetEnvironmentVariable("LTAI_PROMPTS_DIR");
     private static readonly string? EnvMemoryDir = Environment.GetEnvironmentVariable("LTAI_MEMORY_DIR");
+
+    /// <summary>
+    /// Persist layer selection (L0/L1/L2) to appsettings.json at runtime.
+    /// Creates the file if it doesn't exist. Uses AppContext.BaseDirectory
+    /// which matches the AddJsonFile base path in TUI/Desktop/Web.
+    /// </summary>
+    public static void SaveLayerToAppSettings(string layer, string provider, string model)
+    {
+        try
+        {
+            var baseDir = AppContext.BaseDirectory;
+            var path = Path.Combine(baseDir, "appsettings.json");
+
+            System.Text.Json.Nodes.JsonNode json;
+            if (File.Exists(path))
+                json = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(path))!;
+            else
+                json = new System.Text.Json.Nodes.JsonObject();
+
+            var ltai = json["LTAI"] as System.Text.Json.Nodes.JsonObject
+                       ?? new System.Text.Json.Nodes.JsonObject();
+            json["LTAI"] = ltai;
+            var ai = ltai["AI"] as System.Text.Json.Nodes.JsonObject
+                     ?? new System.Text.Json.Nodes.JsonObject();
+            ltai["AI"] = ai;
+
+            ai[layer] = new System.Text.Json.Nodes.JsonObject
+            {
+                ["Provider"] = provider,
+                ["Model"] = model
+            };
+
+            File.WriteAllText(path, json.ToJsonString(new System.Text.Json.JsonSerializerOptions
+            {
+                WriteIndented = true
+            }));
+        }
+        catch { /* best-effort */ }
+    }
 }
 
 /// <summary>JSON-serializable provider definition, mirrors <see cref="KnownKeys.KeyInfo"/>.</summary>
@@ -425,6 +504,8 @@ public static class KnownKeys
         new("UNSPLASH_KEY",         "Unsplash",       "图片搜索 API",      "https://unsplash.com/developers"),
         // ── Memory ──
         new("MEM0_API_KEY",         "Mem0",           "跨会话长期记忆",    "https://app.mem0.ai/", "https://api.mem0.ai"),
+        // ── Steer Model (可选项，用于判断/安全/路由等辅助决策) ──
+        new("STEER_API_KEY",        "Steer Model",   "辅助决策模型（可选项）", null, "https://api.siliconflow.cn/v1", "Qwen/Qwen2.5-7B-Instruct"),
     ];
 
     /// <summary>

@@ -54,26 +54,13 @@ public sealed class ModelCommandService : ICommandService
         else
             lines.Add("  [cyan]L0 嵌入[/]  [grey]不可用[/]");
 
-        (string? p, string? m) l1 = (null, null), l2 = (null, null);
-        try
-        {
-            var path = Path.Combine(AppContext.BaseDirectory, ".livingtree", "layers.json");
-            if (File.Exists(path))
-            {
-                using var doc = JsonDocument.Parse(File.ReadAllText(path));
-                string? Rp(JsonElement e) => e.TryGetProperty("Provider", out var x) ? x.GetString() : null;
-                string? Rm(JsonElement e) => e.TryGetProperty("Model", out var x) ? x.GetString() : null;
-                if (doc.RootElement.TryGetProperty("l1", out var l1e)) l1 = (Rp(l1e), Rm(l1e));
-                if (doc.RootElement.TryGetProperty("l2", out var l2e)) l2 = (Rp(l2e), Rm(l2e));
-            }
-        }
-        catch { }
-        lines.Add(l1.p != null
-            ? $"  [cyan]L1 标准[/]  {l1.p} / [white]{l1.m}[/]"
-            : "  [cyan]L1 标准[/]  [yellow]未配置 (/model l1)[/]");
-        lines.Add(l2.p != null
-            ? $"  [cyan]L2 深度[/]  {l2.p} / [white]{l2.m}[/]"
-            : "  [cyan]L2 深度[/]  [yellow]未配置 (/model l2)[/]");
+        // Reads from options (appsettings.json — single config file)
+        lines.Add(_l1Model != null
+            ? $"  [cyan]L1 标准 (必需)[/]  {_defaultProvider} / [white]{_l1Model}[/]"
+            : "  [cyan]L1 标准 (必需)[/]  [yellow]未配置 (/model l1)[/]");
+        lines.Add(_l2Model != null
+            ? $"  [cyan]L2 深度 (可选项)[/]  {_defaultProvider} / [white]{_l2Model}[/]"
+            : "  [cyan]L2 深度 (可选项)[/]  [yellow]未配置 (/model l2)[/]");
 
         var mp = _modelsProvider;
         if (mp == null) { lines.Add("\n[grey]ModelMetadataProvider 未注册[/]"); return new SuccessResult(string.Join("\n", lines)); }
@@ -325,32 +312,12 @@ public sealed class ModelCommandService : ICommandService
 
     private static void SaveLayerSelection(string layer, string provider, string model)
     {
-        try
-        {
-            var dir = Path.Combine(AppContext.BaseDirectory, ".livingtree");
-            Directory.CreateDirectory(dir);
-            var path = Path.Combine(dir, "layers.json");
-            var data = File.Exists(path) ? JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(File.ReadAllText(path)) ?? new() : new();
-            data[layer] = JsonSerializer.SerializeToElement(new { Provider = provider, Model = model });
-            File.WriteAllText(path, JsonSerializer.Serialize(data, new JsonSerializerOptions { WriteIndented = true }));
-        }
-        catch { }
+        LTAIOptions.SaveLayerToAppSettings(layer, provider, model);
     }
 
     private static (string? provider, string? model)? ReadLayerSelection(string layer)
     {
-        try
-        {
-            var path = Path.Combine(AppContext.BaseDirectory, ".livingtree", "layers.json");
-            if (!File.Exists(path)) return null;
-            using var doc = JsonDocument.Parse(File.ReadAllText(path));
-            if (!doc.RootElement.TryGetProperty(layer, out var el)) return null;
-            var p = el.GetProperty("Provider").GetString();
-            var m = el.GetProperty("Model").GetString();
-            if (!string.IsNullOrEmpty(p) && !string.IsNullOrEmpty(m)) return (p, m);
-            return null;
-        }
-        catch { return null; }
+        return null; // Replaced by IOptions<LTAIOptions> read at call sites
     }
 
     private static CommandResult HandleModelList(LocalEmbedder embedder)

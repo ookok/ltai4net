@@ -118,7 +118,8 @@ public static class ServiceCollectionExtensions
             sp.GetRequiredService<ILogger<DecisionTreeRouter>>(),
             sp.GetService<ToolEmbeddingCache>(),
             options: null,
-            registry: sp.GetService<YAMLWorkflowRegistry>()));
+            registry: sp.GetService<YAMLWorkflowRegistry>(),
+            steer: sp.GetKeyedService<IChatClient>("steer")));
         services.AddSingleton<AgentWorkflows>(sp =>
         {
             var all = sp.GetKeyedServices<AIAgent>(KeyedService.AnyKey)
@@ -166,6 +167,35 @@ public static class ServiceCollectionExtensions
                 perUserMax: opts.AI.PerUserTokenBudget);
         });
 
+        // Step 3b-steer: lightweight meta-decision model (free/low-cost).
+        // Used for: response quality judging, safety pre-checks, ambiguous routing,
+        // and summary verification. Saves 15-25% token cost vs main LLM.
+        // Registered as a keyed IChatClient ("steer") to avoid conflicting with the
+        // main LLM IChatClient registration. Consumers resolve via
+        // sp.GetKeyedService<IChatClient>("steer").
+        // When disabled or missing key, no service is registered (null-safe).
+        services.AddKeyedSingleton<IChatClient>("steer", (sp, _) =>
+        {
+            var opts = sp.GetRequiredService<IOptions<LTAIOptions>>().Value;
+            var steer = opts.Steer;
+            if (!steer.Enabled)
+            {
+                var log = sp.GetService<ILoggerFactory>()?.CreateLogger("LTAI.Steer");
+                log?.LogDebug("Steer model disabled via config");
+                return null!;
+            }
+
+            var steerKey = LTAI.Core.Configuration.SecretManager.Get(steer.ApiKeyEnv);
+            if (string.IsNullOrEmpty(steerKey))
+            {
+                var log = sp.GetService<ILoggerFactory>()?.CreateLogger("LTAI.Steer");
+                log?.LogWarning("Steer model enabled but {EnvVar} is not set — disabling", steer.ApiKeyEnv);
+                return null!;
+            }
+
+            return OpenAIChatClientFactory.Create(steer.Endpoint, steer.Model, steerKey);
+        });
+
         // Step 3c: Background job service
         services.AddSingleton<BackgroundJobService>();
 
@@ -209,6 +239,19 @@ public static class ServiceCollectionExtensions
         // Headroom: RetrieveContentTool — LLM-callable tool to retrieve original
         // content from the compression store by ID.
         services.AddSingleton<RetrieveContentTool>();
+
+        // Code chunk index: AST-aware semantic code search (cocoindex-inspired).
+        // Shares the same KgStore instance for vector storage.
+        services.AddSingleton<LTAI.Agent.Indexing.CodeChunkIndex>(sp =>
+        {
+            var store = sp.GetRequiredService<KgStore>();
+            var parser = new LTAI.Agent.Tools.TreeSitterParser(
+                sp.GetService<ILogger<LTAI.Agent.Tools.TreeSitterParser>>());
+            return new LTAI.Agent.Indexing.CodeChunkIndex(store, parser,
+                sp.GetService<LTAI.AI.EmbeddingClient>(),
+                sp.GetService<ILogger<LTAI.Agent.Indexing.CodeChunkIndex>>(),
+                Directory.GetCurrentDirectory());
+        });
 
         // Headroom: FailureMiner — offline analysis of failure records to
         // auto-generate AGENTS.md rules.
@@ -277,29 +320,18 @@ public static class ServiceCollectionExtensions
             var proAgent = all.TryGetValue("LTAI-Chat-Pro", out var p) ? p : chat;
             var budget = sp.GetService<LTAI.AI.BudgetTracker>();
 
-            // Check if L1 and L2 have the same model — skip upgrade
-            bool sameModel = false;
-            try
-            {
-                var layersPath = Path.Combine(AppContext.BaseDirectory, ".livingtree", "layers.json");
-                if (File.Exists(layersPath))
-                {
-                    using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(layersPath));
-                    string? l1p = null, l1m = null, l2p = null, l2m = null;
-                    if (doc.RootElement.TryGetProperty("l1", out var l1))
-                    { l1p = l1.GetProperty("Provider").GetString(); l1m = l1.GetProperty("Model").GetString(); }
-                    if (doc.RootElement.TryGetProperty("l2", out var l2))
-                    { l2p = l2.GetProperty("Provider").GetString(); l2m = l2.GetProperty("Model").GetString(); }
-                    sameModel = string.Equals(l1p, l2p, StringComparison.OrdinalIgnoreCase)
-                             && string.Equals(l1m, l2m, StringComparison.OrdinalIgnoreCase);
-                }
-            }
-            catch { }
+            // Check if L1 and L2 use the same provider+model — skip upgrade (from appsettings.json)
+            var l1Cfg = sp.GetRequiredService<IOptions<LTAIOptions>>().Value.AI.L1;
+            var l2Cfg = sp.GetRequiredService<IOptions<LTAIOptions>>().Value.AI.L2;
+            bool sameModel = l1Cfg != null && l2Cfg != null
+                && string.Equals(l1Cfg.Provider, l2Cfg.Provider, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(l1Cfg.Model, l2Cfg.Model, StringComparison.OrdinalIgnoreCase);
 
             return new ChatAgent(chat, proAgent, wf, budget,
                 localEmbedder: sp.GetService<LTAI.AI.LocalEmbedder>(),
                 httpFactory: sp.GetService<IHttpClientFactory>(),
-                sameModel: sameModel);
+                sameModel: sameModel,
+                steerJudge: sp.GetKeyedService<IChatClient>("steer"));
         });
 
         return services;
@@ -800,8 +832,19 @@ public static class ServiceCollectionExtensions
         SafetyCoordinator? safety = null;
         if (!opts.AI.SkipSafetyChecks)
         {
-            var safetyKey = LTAI.Core.Configuration.SecretManager.Get(opts.AI.ApiKeyEnv ?? "DEEPSEEK_API_KEY") ?? "";
-            var safetyClient = OpenAIChatClientFactory.Create("https://api.deepseek.com/v1", "deepseek-v4-flash", safetyKey);
+            // P6 Steer: use lightweight model for safety when available (cheaper, faster).
+            // Falls back to DeepSeek V4 Flash when steer is disabled or unavailable.
+            var steerLlm = sp.GetKeyedService<IChatClient>("steer");
+            IChatClient safetyClient;
+            if (steerLlm != null)
+            {
+                safetyClient = steerLlm;
+            }
+            else
+            {
+                var safetyKey = LTAI.Core.Configuration.SecretManager.Get(opts.AI.ApiKeyEnv ?? "DEEPSEEK_API_KEY") ?? "";
+                safetyClient = OpenAIChatClientFactory.Create("https://api.deepseek.com/v1", "deepseek-v4-flash", safetyKey);
+            }
             safety = new SafetyCoordinator(safetyClient, loggerFactory.CreateLogger<SafetyCoordinator>());
         }
 
@@ -813,12 +856,16 @@ public static class ServiceCollectionExtensions
         // The variable is kept as null so AIContextProviders can be updated in one place.
 
         LTAI.Core.Configuration.UsageTracker.SetContextWindowSize(opts.AI.MaxTokens);
+        // P6 Steer: use lightweight model as verifier when available (saves ~LLM call per compaction).
+        // The summarizer is still the main LLM (needs full context window); the verifier
+        // only does a hallucination check (short output), which the steer model handles well.
+        var steerLlmVerify = sp.GetKeyedService<IChatClient>("steer");
         var compaction = new CompactionProvider(
             new PipelineCompactionStrategy(
                 new ContextWindowCompactionStrategy(64000, opts.AI.MaxTokens),
                 new VerifiedSummarizationStrategy(
                     summarizer: llm,
-                    verifier: llm,
+                    verifier: steerLlmVerify ?? llm,
                     trigger: CompactionTriggers.TokensExceed(64000),
                     minimumPreservedGroups: 2)
             ), loggerFactory: loggerFactory);
@@ -826,6 +873,7 @@ public static class ServiceCollectionExtensions
         // KB & Code graphs for context augmentation (SQLite FTS5 + CTE)
         var kbGraph = sp.GetRequiredService<KbGraph>();
         var codeGraph = sp.GetRequiredService<CgGraph>();
+        var codeChunkIndex = sp.GetRequiredService<LTAI.Agent.Indexing.CodeChunkIndex>();
 
         // Wasmtime sandbox: WASM-based code execution with WASI capability restrictions.
         // Recommended over Hyperlight (v0.4, pre-1.0) for general-purpose sandboxing.
@@ -927,6 +975,11 @@ public static class ServiceCollectionExtensions
                 tools.Add(mcpTool);
         }
 
+        // Semantic code search tool (cocoindex-inspired AST chunk index).
+        // Available for all canRead agents (not in Plan Mode — no AST index in read-only mode).
+        if (canRead && !isPlanMode)
+            tools.Add(AIFunctionFactory.Create(codeChunkIndex.SemanticCodeSearch));
+
         // 去重：同名工具保留第一个，记录警告
         var seenNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         for (int i = tools.Count - 1; i >= 0; i--)
@@ -987,34 +1040,34 @@ public static class ServiceCollectionExtensions
                         new LTAI.Agent.Context.CCRProvider(
                             sp.GetRequiredService<LTAI.Agent.Context.CompressionStore>(),
                             sp.GetRequiredService<ILoggerFactory>().CreateLogger<LTAI.Agent.Context.CCRProvider>()),
-                        kbGraph, codeGraph, wasmtimeSandbox,
-                       new LTAI.Agent.Memory.L3OnDemandProvider(palaceStore, loggerFactory.CreateLogger<LTAI.Agent.Memory.L3OnDemandProvider>()),
-                       new LTAI.Agent.Memory.L4DeepSearchProvider(palaceStore, embedder, loggerFactory.CreateLogger<LTAI.Agent.Memory.L4DeepSearchProvider>()),
-                       new LTAI.Agent.Memory.L6AgentDiaryProvider(palaceStore, name, loggerFactory.CreateLogger<LTAI.Agent.Memory.L6AgentDiaryProvider>()),
-                        sp.GetService<LTAI.Agent.Indexing.ProvenanceProvider>()!,
-                         new LTAI.Agent.Tools.InstructionProvider(modelId), new LTAI.Agent.Tools.EnvironmentProvider(), skillsProvider,
-                        new LTAI.Agent.Context.CacheAlignerProvider(
-                            sp.GetRequiredService<ILoggerFactory>().CreateLogger<LTAI.Agent.Context.CacheAlignerProvider>())]
-                      : [new LTAI.Agent.Tools.ToolRetrievalProvider(
-                             sp.GetRequiredService<LTAI.AI.EmbeddingClient>(),
-                             cache: sp.GetService<LTAI.AI.ToolEmbeddingCache>()),
-                        new LTAI.Agent.Tools.SkillRankingProvider(
-                            sp.GetRequiredService<LTAI.Agent.Tools.SkillEvolutionEngine>(),
-                            sp.GetRequiredService<ILoggerFactory>().CreateLogger<LTAI.Agent.Tools.SkillRankingProvider>()),
-                        new LTAI.Agent.Memory.L0IdentityProvider(identityText),
-                        new LTAI.Agent.Memory.L1EssentialProvider(palaceStore, name, loggerFactory.CreateLogger<LTAI.Agent.Memory.L1EssentialProvider>()),
-                        compaction,
-                        new LTAI.Agent.Context.CCRProvider(
-                            sp.GetRequiredService<LTAI.Agent.Context.CompressionStore>(),
-                            sp.GetRequiredService<ILoggerFactory>().CreateLogger<LTAI.Agent.Context.CCRProvider>()),
-                        kbGraph, codeGraph, wasmtimeSandbox,
+                         kbGraph, codeGraph, codeChunkIndex, wasmtimeSandbox,
                         new LTAI.Agent.Memory.L3OnDemandProvider(palaceStore, loggerFactory.CreateLogger<LTAI.Agent.Memory.L3OnDemandProvider>()),
                         new LTAI.Agent.Memory.L4DeepSearchProvider(palaceStore, embedder, loggerFactory.CreateLogger<LTAI.Agent.Memory.L4DeepSearchProvider>()),
                         new LTAI.Agent.Memory.L6AgentDiaryProvider(palaceStore, name, loggerFactory.CreateLogger<LTAI.Agent.Memory.L6AgentDiaryProvider>()),
-                        sp.GetService<LTAI.Agent.Indexing.ProvenanceProvider>()!,
-                        new LTAI.Agent.Tools.InstructionProvider(modelId), new LTAI.Agent.Tools.EnvironmentProvider(), skillsProvider,
+                         sp.GetService<LTAI.Agent.Indexing.ProvenanceProvider>()!,
+                          new LTAI.Agent.Tools.InstructionProvider(modelId), new LTAI.Agent.Tools.EnvironmentProvider(), skillsProvider,
                          new LTAI.Agent.Context.CacheAlignerProvider(
-                             sp.GetRequiredService<ILoggerFactory>().CreateLogger<LTAI.Agent.Context.CacheAlignerProvider>())],
+                             sp.GetRequiredService<ILoggerFactory>().CreateLogger<LTAI.Agent.Context.CacheAlignerProvider>())]
+                       : [new LTAI.Agent.Tools.ToolRetrievalProvider(
+                              sp.GetRequiredService<LTAI.AI.EmbeddingClient>(),
+                              cache: sp.GetService<LTAI.AI.ToolEmbeddingCache>()),
+                         new LTAI.Agent.Tools.SkillRankingProvider(
+                             sp.GetRequiredService<LTAI.Agent.Tools.SkillEvolutionEngine>(),
+                             sp.GetRequiredService<ILoggerFactory>().CreateLogger<LTAI.Agent.Tools.SkillRankingProvider>()),
+                         new LTAI.Agent.Memory.L0IdentityProvider(identityText),
+                         new LTAI.Agent.Memory.L1EssentialProvider(palaceStore, name, loggerFactory.CreateLogger<LTAI.Agent.Memory.L1EssentialProvider>()),
+                         compaction,
+                         new LTAI.Agent.Context.CCRProvider(
+                             sp.GetRequiredService<LTAI.Agent.Context.CompressionStore>(),
+                             sp.GetRequiredService<ILoggerFactory>().CreateLogger<LTAI.Agent.Context.CCRProvider>()),
+                         kbGraph, codeGraph, codeChunkIndex, wasmtimeSandbox,
+                         new LTAI.Agent.Memory.L3OnDemandProvider(palaceStore, loggerFactory.CreateLogger<LTAI.Agent.Memory.L3OnDemandProvider>()),
+                         new LTAI.Agent.Memory.L4DeepSearchProvider(palaceStore, embedder, loggerFactory.CreateLogger<LTAI.Agent.Memory.L4DeepSearchProvider>()),
+                         new LTAI.Agent.Memory.L6AgentDiaryProvider(palaceStore, name, loggerFactory.CreateLogger<LTAI.Agent.Memory.L6AgentDiaryProvider>()),
+                         sp.GetService<LTAI.Agent.Indexing.ProvenanceProvider>()!,
+                         new LTAI.Agent.Tools.InstructionProvider(modelId), new LTAI.Agent.Tools.EnvironmentProvider(), skillsProvider,
+                          new LTAI.Agent.Context.CacheAlignerProvider(
+                              sp.GetRequiredService<ILoggerFactory>().CreateLogger<LTAI.Agent.Context.CacheAlignerProvider>())],
 
                  // ── Disable MAF defaults LTAI doesn't need ────────────────────
                 // LTAI uses its own 7-layer memory palace (PalaceStore + AIContextProviders).
@@ -1096,6 +1149,10 @@ public static class ServiceCollectionExtensions
                 + "- If the model is insufficient for complex tasks (cross-file refactoring, concurrency safety analysis, etc.),\n"
                 + "  output `<<<NEEDS_PRO: <reason>>>` to request upgrade to a stronger model.\n"
                 + "\n"
+                + "## Code Understanding\n"
+                + "- When asked about how code works, call SemanticCodeSearch first to find relevant code snippets.\n"
+                + "- Only use ReadFileContent for the full file context when snippets are insufficient.\n"
+                + "\n"
                 + "## Output Format\n"
                 + "- Place reasoning inside <thinking>...</thinking> tags.\n"
                 + "- Keep the final answer outside these tags, clean and direct.\n"
@@ -1118,6 +1175,10 @@ public static class ServiceCollectionExtensions
             + "- 任务完成后，给出清晰的总结：做了什么、发现了什么。\n"
             + "- 如果模型不足以完成复杂任务（跨文件重构、并发安全分析等），\n"
             + "  在回复中输出 `<<<NEEDS_PRO: <原因>>>` 标记，系统将自动切换到更强的模型。\n"
+            + "\n"
+            + "## 代码理解\n"
+            + "- 当需要理解代码逻辑时，先调用 SemanticCodeSearch 获取相关代码片段。\n"
+            + "- 只有片段信息不够时再使用 ReadFileContent 读取完整文件。\n"
             + "\n"
             + "## 输出格式\n"
             + "- 推理过程用 <thinking>...</thinking> 包裹。\n"

@@ -80,19 +80,10 @@ public sealed class TuiApp
         if (!_llmConfig.HasAnyConfiguredProvider())
             _llmConfig.ShowSetupWizard();
 
-        // 检查 L1/L2 是否已配置，未配置时在对话区提示
-        var layersPath = Path.Combine(AppContext.BaseDirectory, ".livingtree", "layers.json");
-        var hasL1 = false; var hasL2 = false;
-        if (File.Exists(layersPath))
-        {
-            try
-            {
-                using var doc = JsonDocument.Parse(File.ReadAllText(layersPath));
-                hasL1 = doc.RootElement.TryGetProperty("l1", out _);
-                hasL2 = doc.RootElement.TryGetProperty("l2", out _);
-            }
-            catch { }
-        }
+        // 检查 L1/L2 是否已配置（读取 appsettings.json — 单一配置文件）
+        var aiCfg = _config?.Value.AI;
+        var hasL1 = aiCfg?.L1 != null && !string.IsNullOrEmpty(aiCfg.L1.Provider);
+        var hasL2 = aiCfg?.L2 != null && !string.IsNullOrEmpty(aiCfg.L2.Provider);
         if (!hasL1 || !hasL2)
         {
             var missing = new List<string>();

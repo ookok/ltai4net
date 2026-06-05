@@ -39,7 +39,7 @@ public sealed class ConfigDialog : Window
         root.Children.Add(_l1ModelBox);
 
         root.Children.Add(new TextBlock
-        { Text = "L2 (Pro) 模型:", FontWeight = FontWeight.Bold,
+        { Text = "L2 (Pro) 模型 (可选项，未配置时由 L1 替代):", FontWeight = FontWeight.Bold,
           Foreground = LtaiTheme.Sbb(LtaiTheme.TextPrimary), Margin = new(0, 4, 0, 0) });
         _l2ModelBox = new ComboBox { MinWidth = 300, Foreground = LtaiTheme.Sbb(LtaiTheme.TextPrimary) };
         root.Children.Add(_l2ModelBox);

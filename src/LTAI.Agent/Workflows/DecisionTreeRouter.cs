@@ -7,6 +7,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using LTAI.AI;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 
 namespace LTAI.Agent.Workflows;
@@ -43,19 +44,22 @@ public sealed class DecisionTreeRouter
     private readonly ILogger<DecisionTreeRouter> _logger;
     private readonly DecisionTreeRouterOptions _fallbackOptions;
     private readonly YAMLWorkflowRegistry? _registry;
+    private readonly IChatClient? _steer;
 
     public DecisionTreeRouter(
         EmbeddingClient? embedder,
         ILogger<DecisionTreeRouter> logger,
         ToolEmbeddingCache? cache = null,
         DecisionTreeRouterOptions? options = null,
-        YAMLWorkflowRegistry? registry = null)
+        YAMLWorkflowRegistry? registry = null,
+        IChatClient? steer = null)
     {
         _embedder = embedder;
         _logger = logger;
         _cache = cache;
         _fallbackOptions = options ?? new DecisionTreeRouterOptions();
         _registry = registry;
+        _steer = steer;
     }
 
     /// <summary>
@@ -170,6 +174,9 @@ public sealed class DecisionTreeRouter
         else
         {
             // P15: ambiguous branch honors ambiguousFallback strategy.
+            // P6 Steer: when a steer LLM is available, use it to re-rank the top-K
+            // candidates instead of falling back to ALL specialists. This saves
+            // LLM context for the handoff workflow (fewer candidates = less routing overhead).
             var (chosen2, branch) = fallbackKind switch
             {
                 AmbiguousFallbackKind.None => (
@@ -180,6 +187,9 @@ public sealed class DecisionTreeRouter
                         .Where(n => allNames.Contains(n, StringComparer.OrdinalIgnoreCase))
                         .ToArray(),
                     BranchKind.AmbiguousFallbackTopK),
+                _ when _steer != null => (
+                    await SteerRerankAsync(task, topK, allNames, ct).ConfigureAwait(false),
+                    BranchKind.AmbiguousFallback),
                 _ => (allNames, BranchKind.AmbiguousFallback),
             };
 
@@ -188,8 +198,8 @@ public sealed class DecisionTreeRouter
                 : $"top={topScore:F3} < {minScoreThreshold:F3}";
 
             _logger.LogInformation(
-                "Router: AMBIGUOUS ({Reason}) → {Branch} ({N} agents, fallback={Fb})",
-                reason, branch, chosen2.Length, fallbackKind);
+                "Router: AMBIGUOUS ({Reason}) → {Branch} ({N} agents, fallback={Fb}, steer={HasSteer})",
+                reason, branch, chosen2.Length, fallbackKind, _steer != null);
             activity?.SetTag("router.branch", branch.ToString());
             activity?.SetTag("router.top_score", topScore);
             activity?.SetTag("router.margin", margin);
@@ -197,6 +207,63 @@ public sealed class DecisionTreeRouter
             activity?.SetTag("router.chosen_count", chosen2.Length);
             return new DecisionTreeResult(chosen2, branch, topScore, margin, topK);
         }
+    }
+
+    /// <summary>
+    /// P6 Steer: Use the lightweight steer LLM to pick the best specialist from
+    /// the top-K embedding candidates when the embedding margin is ambiguous.
+    /// Returns at most top-2 agents chosen by the steer model.
+    /// </summary>
+    private async Task<string[]> SteerRerankAsync(
+        string task,
+        IReadOnlyList<(string Name, float Score)> topK,
+        string[] allNames,
+        CancellationToken ct)
+    {
+        var candidates = topK
+            .Select(t => t.Name)
+            .Where(n => allNames.Contains(n, StringComparer.OrdinalIgnoreCase))
+            .Take(5)
+            .ToArray();
+
+        if (candidates.Length <= 1) return candidates;
+
+        var candidateList = string.Join("\n", candidates.Select((n, i) => $"{i + 1}. {n}"));
+        var prompt = $"""
+            你是一个任务路由专家。根据用户任务，从以下候选 agent 中选择最合适的 1-2 个。
+            只返回 JSON 数组，如 ["AgentName"] 或 ["Agent1", "Agent2"]。
+
+            用户任务：{task}
+
+            候选 agent：
+            {candidateList}
+
+            JSON：
+            """;
+
+        try
+        {
+            var response = await _steer!.GetResponseAsync(
+                [new ChatMessage(ChatRole.User, prompt)],
+                cancellationToken: ct).ConfigureAwait(false);
+            var text = response.Messages?.LastOrDefault()?.Text ?? "";
+
+            // Parse JSON array
+            if (text.Contains('[') && text.Contains(']'))
+            {
+                var json = text[text.IndexOf('[')..(text.IndexOf(']') + 1)];
+                var names = System.Text.Json.JsonSerializer.Deserialize<string[]>(json);
+                if (names is { Length: > 0 })
+                    return names.Where(n => candidates.Contains(n, StringComparer.OrdinalIgnoreCase)).ToArray();
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Steer re-rank failed, falling back to top-K");
+        }
+
+        // Fallback: return top-2 from embedding
+        return candidates.Take(2).ToArray();
     }
 }
 

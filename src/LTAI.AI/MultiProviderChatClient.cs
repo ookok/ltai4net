@@ -681,35 +681,8 @@ public static class ServiceCollectionExtensions
 
             // Only register providers explicitly configured in L1/L2 layers (L0 is embedding).
             // Other providers with API keys are NOT auto-registered — no automatic fallback.
-            // Check appsettings.json first, then layers.json as runtime config fallback.
+            // Reads from appsettings.json via LTAIOptions.AI.L1/L2 (single config file).
             var l1Cfg = opts.AI.L1; var l2Cfg = opts.AI.L2;
-            if (l1Cfg == null || string.IsNullOrEmpty(l1Cfg.Provider) ||
-                l2Cfg == null || string.IsNullOrEmpty(l2Cfg.Provider))
-            {
-                var layersPath = Path.Combine(AppContext.BaseDirectory, ".livingtree", "layers.json");
-                if (File.Exists(layersPath))
-                {
-                    try
-                    {
-                        using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(layersPath));
-                        if (l1Cfg == null || string.IsNullOrEmpty(l1Cfg.Provider))
-                        {
-                            if (doc.RootElement.TryGetProperty("l1", out var l1) &&
-                                l1.TryGetProperty("Provider", out var l1p) &&
-                                l1.TryGetProperty("Model", out var l1m))
-                                l1Cfg = new LTAI.Core.Configuration.LayerConfig { Provider = l1p.GetString()!, Model = l1m.GetString()! };
-                        }
-                        if (l2Cfg == null || string.IsNullOrEmpty(l2Cfg.Provider))
-                        {
-                            if (doc.RootElement.TryGetProperty("l2", out var l2) &&
-                                l2.TryGetProperty("Provider", out var l2p) &&
-                                l2.TryGetProperty("Model", out var l2m))
-                                l2Cfg = new LTAI.Core.Configuration.LayerConfig { Provider = l2p.GetString()!, Model = l2m.GetString()! };
-                        }
-                    }
-                    catch { /* best-effort */ }
-                }
-            }
             foreach (var (layerKey, layerCfg) in new[] {
                 ("l1", l1Cfg), ("l2", l2Cfg) })
             {

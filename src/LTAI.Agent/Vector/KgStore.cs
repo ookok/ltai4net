@@ -306,6 +306,20 @@ public sealed partial class KgStore : IDisposable
         return count;
     }
 
+    private const string SQL_DELETE_KIND_SOURCE = "DELETE FROM Nodes WHERE kind = @kind AND source = @src;";
+
+    public async Task<int> DeleteNodesByKindAndSource(string kind, string source)
+    {
+        var count = await WriteLockAsync(cmd => cmd.ExecuteNonQueryAsync(), SQL_DELETE_KIND_SOURCE,
+            cmd => { cmd.Parameters.AddWithValue("@kind", kind); cmd.Parameters.AddWithValue("@src", source); }).ConfigureAwait(false);
+        if (count > 0)
+        {
+            await IncrementalVacuumAsync(100).ConfigureAwait(false);
+            await RebuildCentroidsAsync().ConfigureAwait(false);
+        }
+        return count;
+    }
+
     private async Task IncrementalVacuumAsync(int pages)
     {
         if (_disposed) return;
@@ -1546,7 +1560,7 @@ public static class KgStoreSchema
     /// <summary>Valid entity types for KgStore Nodes. Write-once known set.</summary>
     public static readonly HashSet<string> ValidKinds = new(StringComparer.OrdinalIgnoreCase)
     {
-        "document", "concept", "fact", "note", "wiki",
+        "document", "concept", "fact", "note", "wiki", "chunk",
         "class", "method", "function", "interface", "enum", "struct", "record",
         "property", "field", "file", "module", "namespace",
         "person", "organization", "project", "tool", "location", "date",
