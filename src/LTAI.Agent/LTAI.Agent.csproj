@@ -5,7 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <RootNamespace>LTAI.Agent</RootNamespace>
-    <NoWarn>$(NoWarn);CS8601;CS8618;CS8604;SYSLIB0053</NoWarn>
+    <NoWarn>$(NoWarn)</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>

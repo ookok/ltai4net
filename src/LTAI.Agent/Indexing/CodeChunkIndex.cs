@@ -17,7 +17,7 @@ public sealed class CodeChunkIndex : AIContextProvider
     private readonly KgStore _store;
     private readonly TreeSitterParser? _parser;
     private readonly EmbeddingClient? _embedder;
-    private readonly ILogger<CodeChunkIndex> _logger;
+    private readonly ILogger<CodeChunkIndex>? _logger;
     private readonly string _ws;
     private readonly ConcurrentDictionary<string, DateTime> _indexedFiles = new(StringComparer.OrdinalIgnoreCase);
     private bool _built;

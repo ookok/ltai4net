@@ -97,7 +97,7 @@ public sealed class DecisionTreeRouter
         var (topKLimit, marginThreshold, minScoreThreshold, minAcceptable, fallbackKind, whitelist) = ResolveEffectiveConfig();
         var cfg = _registry?.GetDecisionTreeConfig("decision-tree") ?? DecisionTreeConfig.Default;
 
-        var allNames = allSpecialistNames.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var allNames = (allSpecialistNames ?? []).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
 
         // P15: apply candidate whitelist before any embedding work.
         if (whitelist.Count > 0)
@@ -124,7 +124,7 @@ public sealed class DecisionTreeRouter
 
         // Stage 1: top-K by cosine similarity
         var topK = await AgentRegistry
-            .SelectTopKWithScoresAsync(task, _embedder, _cache, k: topKLimit, ct)
+            .SelectTopKWithScoresAsync(task ?? "", _embedder, _cache, k: topKLimit, ct)
             .ConfigureAwait(false);
 
         if (topK.Count == 0)
@@ -188,7 +188,7 @@ public sealed class DecisionTreeRouter
                         .ToArray(),
                     BranchKind.AmbiguousFallbackTopK),
                 _ when _steer != null => (
-                    await SteerRerankAsync(task, topK, allNames, ct).ConfigureAwait(false),
+                    await SteerRerankAsync(task!, topK, allNames, ct).ConfigureAwait(false),
                     BranchKind.AmbiguousFallback),
                 _ => (allNames, BranchKind.AmbiguousFallback),
             };

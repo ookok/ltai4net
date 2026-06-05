@@ -62,7 +62,7 @@ public static class CryptoTools
             var ciphertext = new byte[data.Length];
             var tag = new byte[16];
 
-                    using var aes = new AesGcm(key);
+                    using var aes = new AesGcm(key, 16);
             aes.Encrypt(nonce, data, ciphertext, tag);
 
             Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
@@ -102,7 +102,7 @@ public static class CryptoTools
             var key = DeriveKey(password, salt, 32);
             var plaintext = new byte[ciphertext.Length];
 
-                    using var aes = new AesGcm(key);
+                    using var aes = new AesGcm(key, 16);
             aes.Decrypt(nonce, ciphertext, tag, plaintext);
 
             Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);

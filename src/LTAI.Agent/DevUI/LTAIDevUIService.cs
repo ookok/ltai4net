@@ -2,6 +2,7 @@
 
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
+using System.Runtime.CompilerServices;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -125,18 +126,18 @@ public sealed class LTAIDevUIService
         return BuildCard(def);
     }
 
-    public IAsyncEnumerable<AgentResponseUpdate> RunStreamingAsync(
+    public async IAsyncEnumerable<AgentResponseUpdate> RunStreamingAsync(
         string name,
         string message,
         string? sessionId,
-        CancellationToken cancellationToken = default)
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         var agent = ResolveAgent(name)
             ?? throw new InvalidOperationException($"Agent '{name}' is not registered.");
-        var session = agent.CreateSessionAsync(cancellationToken).AsTask()
-            .GetAwaiter().GetResult();
+        var session = await agent.CreateSessionAsync(cancellationToken).ConfigureAwait(false);
         var chatMessage = new ChatMessage(ChatRole.User, message);
-        return agent.RunStreamingAsync(chatMessage, session, cancellationToken: cancellationToken);
+        await foreach (var update in agent.RunStreamingAsync(chatMessage, session, cancellationToken: cancellationToken).ConfigureAwait(false))
+            yield return update;
     }
 
     // P9.0: TUI/Desktop DevUI starts a fresh session per call. Cross-call

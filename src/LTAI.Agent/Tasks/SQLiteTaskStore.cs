@@ -43,7 +43,7 @@ public sealed class SQLiteTaskStore : ITaskStore, IAsyncDisposable
         await _gate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            EnsureSchema();
+            await EnsureSchemaAsync().ConfigureAwait(false);
             await using var conn = new SqliteConnection(_connectionString);
             await conn.OpenAsync(ct).ConfigureAwait(false);
             await using var cmd = conn.CreateCommand();
@@ -72,7 +72,7 @@ public sealed class SQLiteTaskStore : ITaskStore, IAsyncDisposable
 
     public async Task<IReadOnlyList<TaskItem>> LoadPendingAsync(CancellationToken ct = default)
     {
-        EnsureSchema();
+        await EnsureSchemaAsync().ConfigureAwait(false);
         await using var conn = new SqliteConnection(_connectionString);
         await conn.OpenAsync(ct).ConfigureAwait(false);
         await using var cmd = conn.CreateCommand();
@@ -86,7 +86,7 @@ public sealed class SQLiteTaskStore : ITaskStore, IAsyncDisposable
 
     public async Task<IReadOnlyList<TaskItem>> LoadAllAsync(CancellationToken ct = default)
     {
-        EnsureSchema();
+        await EnsureSchemaAsync().ConfigureAwait(false);
         await using var conn = new SqliteConnection(_connectionString);
         await conn.OpenAsync(ct).ConfigureAwait(false);
         await using var cmd = conn.CreateCommand();
@@ -103,7 +103,7 @@ public sealed class SQLiteTaskStore : ITaskStore, IAsyncDisposable
         await _gate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            EnsureSchema();
+            await EnsureSchemaAsync().ConfigureAwait(false);
             await using var conn = new SqliteConnection(_connectionString);
             await conn.OpenAsync(ct).ConfigureAwait(false);
             await using var cmd = conn.CreateCommand();
@@ -118,15 +118,21 @@ public sealed class SQLiteTaskStore : ITaskStore, IAsyncDisposable
         finally { _gate.Release(); }
     }
 
-    private void EnsureSchema()
+    private async Task EnsureSchemaAsync()
     {
         if (_schemaReady) return;
-        using var conn = new SqliteConnection(_connectionString);
-        conn.Open();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = "PRAGMA journal_mode = WAL; " + Schema;
-        cmd.ExecuteNonQuery();
-        _schemaReady = true;
+        await _gate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            if (_schemaReady) return;
+            await using var conn = new SqliteConnection(_connectionString);
+            await conn.OpenAsync().ConfigureAwait(false);
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = "PRAGMA journal_mode = WAL; " + Schema;
+            await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+            _schemaReady = true;
+        }
+        finally { _gate.Release(); }
     }
 
     private static TaskItem ReadItem(SqliteDataReader r) => new()

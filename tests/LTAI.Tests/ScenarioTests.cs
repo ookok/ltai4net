@@ -99,8 +99,9 @@ public class SecretManagerScenarioTests
         var key = "LTAI_DEEPSEEK_TEST_" + Guid.NewGuid().ToString("N")[..8];
         SecretManager.Set(key, "sk-" + Guid.NewGuid().ToString("N"), persistent: false);
         var val = SecretManager.Get(key);
+        Assert.NotNull(val);
         Assert.StartsWith("sk-", val);
-        Assert.Equal(35, val.Length); // "sk-" + 32 hex
+        Assert.Equal(35, val!.Length); // "sk-" + 32 hex
         SecretManager.Invalidate(key);
     }
 
@@ -470,7 +471,7 @@ public class BackgroundJobScenarioTests
     public async Task StartJob_SyncCommand_ReturnsJobId()
     {
         var svc = new BackgroundJobService();
-        var result = await svc.StartJob("echo test-output");
+        var result = await svc.StartJob("echo test-output", confirm: true);
         Assert.Contains("Job #", result);
     }
 
@@ -478,7 +479,7 @@ public class BackgroundJobScenarioTests
     public async Task WaitForJob_SimpleEcho_ReturnsOutput()
     {
         var svc = new BackgroundJobService();
-        var jobResult = await svc.StartJob("echo hello-job-world");
+        var jobResult = await svc.StartJob("echo hello-job-world", confirm: true);
         var id = jobResult.Split(' ')[1].TrimStart('#').TrimEnd('.');
         var output = await svc.WaitForJob(id, timeoutSec: 10);
         Assert.Contains("hello-job-world", output);
