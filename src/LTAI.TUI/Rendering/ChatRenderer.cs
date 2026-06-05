@@ -437,133 +437,26 @@ public sealed class ChatRenderer
 
     public string MdToPanelContent(string text)
     {
-        var result = new StringBuilder();
-        var inCodeBlock = false;
-        var codeLines = new List<string>();
-        var codeLang = "";
+        if (string.IsNullOrWhiteSpace(text)) return "";
 
-        foreach (var line in text.Split('\n'))
+        try
         {
-            var trimmed = line.TrimStart();
-            if (trimmed.StartsWith("```"))
-            {
-                if (inCodeBlock)
-                {
-                    // Rendered code box with Unicode line-drawing
-                    var maxWidth = codeLines.Count > 0 ? codeLines.Max(l => l.Length) : 20;
-                    var boxWidth = Math.Min(maxWidth + 4, Console.WindowWidth - 10);
-                    var langLabel = string.IsNullOrEmpty(codeLang) ? "code" : codeLang;
-
-                    var top = "┌─ " + langLabel + " " + new string('─', Math.Max(0, boxWidth - langLabel.Length - 3)) + "┐";
-                    result.AppendLine($"[bold grey]{top}[/]");
-
-                    foreach (var cl in codeLines)
-                    {
-                        var padded = cl.Length <= boxWidth - 4
-                            ? cl + new string(' ', boxWidth - 4 - cl.Length)
-                            : cl[..(boxWidth - 7)] + "...";
-                        result.AppendLine($"  [grey]│[/] {padded.EscapeMarkup()} [grey]│[/]");
-                    }
-
-                    var bottom = "└" + new string('─', boxWidth) + "┘";
-                    result.AppendLine($"[bold grey]{bottom}[/]");
-
-                    codeLines.Clear();
-                    inCodeBlock = false;
-                }
-                else
-                {
-                    codeLang = trimmed[3..].Trim();
-                    inCodeBlock = true;
-                }
-            }
-            else if (inCodeBlock)
-            {
-                codeLines.Add(line);
-            }
-            else
-            {
-                var rendered = MdLineToSpectre(line);
-                if (!string.IsNullOrEmpty(rendered))
-                    result.AppendLine(rendered);
-                else
-                    result.AppendLine();
-            }
+            var doc = Markdig.Markdown.Parse(text);
+            var spectreRenderer = new SpectreMarkdigRenderer();
+            spectreRenderer.Render(doc);
+            var result = spectreRenderer.ToString().TrimEnd();
+            return result.Length > 0 ? result : "";
         }
-
-        // Unclosed code block during streaming → fallback style
-        if (inCodeBlock)
+        catch
         {
-            result.AppendLine($"[grey]```{codeLang.EscapeMarkup()}[/]");
-            foreach (var cl in codeLines)
-                result.AppendLine($"  [grey]{cl.EscapeMarkup()}[/]");
+            // Fallback: basic escaping
+            return text.EscapeMarkup();
         }
-
-        return result.ToString().TrimEnd();
     }
 
-    private string MdLineToSpectre(string line)
-    {
-        var trimmed = line.TrimEnd();
-        if (string.IsNullOrWhiteSpace(trimmed)) return "";
-
-        string prefix = "";
-        string suffix = "";
-        string body = trimmed;
-
-        if (trimmed.StartsWith("# "))
-        { prefix = "[bold yellow]"; suffix = "[/]"; body = trimmed[2..]; }
-        else if (trimmed.StartsWith("## "))
-        { prefix = "[bold]"; suffix = "[/]"; body = trimmed[3..]; }
-        else if (trimmed.StartsWith("### "))
-        { prefix = "[bold cyan]"; suffix = "[/]"; body = trimmed[4..]; }
-        else if (trimmed.StartsWith("- ") || trimmed.StartsWith("* "))
-        { prefix = "  [green]•[/] "; body = trimmed[2..]; }
-        else if (trimmed.StartsWith("1. ") || trimmed.StartsWith("2. ") || trimmed.StartsWith("3. "))
-        { prefix = $"  [grey]{trimmed[..3]}[/]"; body = trimmed[3..]; }
-        else if (trimmed.StartsWith("> "))
-        { prefix = "  [grey]│[/] [italic]"; suffix = "[/]"; body = trimmed[2..]; }
-        else if (trimmed.StartsWith("|") && trimmed.EndsWith("|"))
-        {
-            if (Regex.IsMatch(trimmed, @"^\|[\s\-:]+\|$")) return "";
-            var cells = trimmed.Split('|', StringSplitOptions.RemoveEmptyEntries)
-                .Select(c => c.Trim())
-                .Select(c => InlineMdToSpectre(c));
-            return "[grey]│[/] " + string.Join(" [grey]│[/] ", cells) + " [grey]│[/]";
-        }
-
-        var spectre = InlineMdToSpectre(body);
-        return prefix + spectre + suffix;
-    }
-
-    private static readonly Regex InlineMdRx = new(
-        @"\*\*(.+?)\*\*|__(.+?)__|\*(.+?)\*|_(.+?)_|``(.+?)``|`(.+?)`|\[\[(.+?)\]\]\((.+?)\)|~~(.+?)~~",
-        RegexOptions.Compiled);
-
-    private static readonly HashSet<string> KnownMarkupTokens = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "bold", "italic", "grey", "cyan", "green", "yellow", "white", "black",
-        "red", "blue", "aqua", "purple", "orange", "dim", "invert", "underline",
-        "strikethrough", "/", "link"
-    };
-
-    private string InlineMdToSpectre(string text)
-    {
-        text = text.Replace("[", "[[").Replace("]", "]]");
-        text = InlineMdRx.Replace(text, m =>
-        {
-            if (m.Groups[1].Success) return $"[bold]{m.Groups[1].Value}[/]";
-            if (m.Groups[2].Success) return $"[bold]{m.Groups[2].Value}[/]";
-            if (m.Groups[3].Success) return $"[italic]{m.Groups[3].Value}[/]";
-            if (m.Groups[4].Success) return $"[italic]{m.Groups[4].Value}[/]";
-            if (m.Groups[5].Success) return $"[grey]{m.Groups[5].Value}[/]";
-            if (m.Groups[6].Success) return $"[grey]{m.Groups[6].Value}[/]";
-            if (m.Groups[7].Success) return $"[link={m.Groups[8].Value}]{m.Groups[7].Value}[/]";
-            if (m.Groups[9].Success) return $"[strikethrough]{m.Groups[9].Value}[/]";
-            return m.Value;
-        });
-        return text;
-    }
+    // ── Temporary references kept for ChatLayout backward compat ──
+    private string MdLineToSpectre(string line) => MdToPanelContent(line);
+    private string InlineMdToSpectre(string text) => text;
 
     // ═══════════════════════════════════════════════
     //  Tool call tree

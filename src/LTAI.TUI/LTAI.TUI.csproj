@@ -21,6 +21,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="Markdig" Version="1.2.0" />
     <PackageReference Include="PrettyPrompt" Version="4.1.1" />
     <PackageReference Include="Spectre.Console" Version="0.55.2" />
     <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="10.0.8" />
