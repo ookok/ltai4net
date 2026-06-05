@@ -8,7 +8,6 @@ namespace LTAI.Agent.Memory;
 [ToolDomain("memory")]
 public sealed class L3OnDemandProvider : AIContextProvider
 {
-    private const int MaxTokens = 500;
     private const int MaxDrawers = 10;
     private readonly PalaceStore _store;
     private readonly ILogger<L3OnDemandProvider>? _logger;
@@ -28,13 +27,13 @@ public sealed class L3OnDemandProvider : AIContextProvider
     {
         try
         {
-            var wing = InferWing(context);
+            var wing = WingClassifier.ClassifyFromMessages(context.AIContext?.Messages);
             if (wing == null) return new AIContext();
 
             var drawers = _store.SearchByWing(wing, MaxDrawers);
             if (drawers.Count == 0) return new AIContext();
 
-            var lines = new List<string> { $"## L3 — On-Demand ({wing})" };
+            var lines = new List<string> { $"## L3 — On-Demand ({wing})\n<memory>" };
             var totalLen = lines[0].Length;
 
             foreach (var d in drawers)
@@ -43,16 +42,17 @@ public sealed class L3OnDemandProvider : AIContextProvider
                 if (snippet.Length > 250) snippet = snippet[..247] + "...";
                 var entry = $"  [{d.Room}] {snippet}";
 
-                if (totalLen + entry.Length > MaxTokens * 4) break;
+                if (totalLen + entry.Length > MemoryBudget.L3MaxTokens * 4) break;
                 lines.Add(entry);
                 totalLen += entry.Length;
             }
+            lines.Add("</memory>");
 
             _logger?.LogDebug("L3OnDemand: {Count} drawers for wing={Wing}, ~{Tokens}t",
                 drawers.Count, wing, totalLen / 4);
             return new AIContext
             {
-                Messages = [new ChatMessage(ChatRole.User, string.Join("\n", lines))],
+                Messages = [new ChatMessage(ChatRole.System, string.Join("\n", lines))],
             };
         }
         catch (Exception ex)
@@ -60,21 +60,5 @@ public sealed class L3OnDemandProvider : AIContextProvider
             _logger?.LogWarning(ex, "L3OnDemand: retrieval failed");
             return new AIContext();
         }
-    }
-
-    private static string? InferWing(InvokingContext ctx)
-    {
-        var text = string.Join(' ', (ctx.AIContext.Messages ?? [])
-            .Where(m => !string.IsNullOrWhiteSpace(m.Text))
-            .Select(m => m.Text));
-        if (string.IsNullOrWhiteSpace(text)) return null;
-
-        var knownWings = new[] { "project", "code", "user", "system", "architecture", "config" };
-        foreach (var w in knownWings)
-        {
-            if (text.Contains(w, StringComparison.OrdinalIgnoreCase))
-                return w;
-        }
-        return null;
     }
 }

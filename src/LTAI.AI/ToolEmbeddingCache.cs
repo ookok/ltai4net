@@ -65,19 +65,24 @@ public sealed class ToolEmbeddingCache
     /// </summary>
     public void Invalidate()
     {
-        var cleared = _store.Count;
-        _store.Clear();
-        _initialized = true; // skip reload on next call (caller re-embeds)
+        _initLock.Wait();
         try
         {
-            if (File.Exists(_filePath)) File.Delete(_filePath);
+            var cleared = _store.Count;
+            _store.Clear();
+            _initialized = false; // force full reload on next GetOrComputeAllAsync
+            try
+            {
+                if (File.Exists(_filePath)) File.Delete(_filePath);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "ToolEmbeddingCache: failed to delete {Path}", _filePath);
+            }
+            if (cleared > 0)
+                _logger.LogInformation("ToolEmbeddingCache: invalidated {N} entries (model switched)", cleared);
         }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "ToolEmbeddingCache: failed to delete {Path}", _filePath);
-        }
-        if (cleared > 0)
-            _logger.LogInformation("ToolEmbeddingCache: invalidated {N} entries (model switched)", cleared);
+        finally { _initLock.Release(); }
     }
 
     public async Task<IReadOnlyDictionary<string, float[]>> GetOrComputeAllAsync(
@@ -124,6 +129,12 @@ public sealed class ToolEmbeddingCache
                 result[key] = vec;
                 _store[key] = new CacheEntry { Fingerprint = hash, Description = desc, Vector = vec };
             }
+            // Evict keys that are no longer in items
+            var activeKeys = new HashSet<string>(items.Select(i => i.Key), StringComparer.OrdinalIgnoreCase);
+            var stale = _store.Keys.Where(k => !activeKeys.Contains(k)).ToArray();
+            foreach (var k in stale) _store.TryRemove(k, out _);
+            if (stale.Length > 0)
+                _logger.LogInformation("ToolEmbeddingCache: evicted {N} stale entries", stale.Length);
             await PersistAsync(ct).ConfigureAwait(false);
         }
         else

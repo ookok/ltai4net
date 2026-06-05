@@ -19,7 +19,7 @@ public sealed class LlmClient : ILlmClient
 
     public async IAsyncEnumerable<string> ChatStreamingAsync(string message, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
     {
-        await foreach (var update in _agent.ChatStreamingAsync(message, ct))
+        await foreach (var update in _agent.ChatStreamingAsync(message, ct: ct))
         {
             if (update.Text is { Length: > 0 } text)
                 yield return text;

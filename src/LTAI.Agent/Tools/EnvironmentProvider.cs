@@ -11,6 +11,14 @@ public sealed class EnvironmentProvider : AIContextProvider
     protected override ValueTask<AIContext> ProvideAIContextAsync(
         InvokingContext context, CancellationToken ct = default)
     {
+        // Skip environment injection for trivial/short queries to save ~150t per invocation.
+        var lastUserMsg = context.AIContext?.Messages?.LastOrDefault(m => m.Role == ChatRole.User);
+        if (lastUserMsg?.Text != null && lastUserMsg.Text.Length < 10
+            && !lastUserMsg.Text.Any(c => c is '(' or ')' or '.' or '/' or '\\' or '_'))
+        {
+            return ValueTask.FromResult(context.AIContext ?? new AIContext());
+        }
+
         var now = DateTime.Now;
         var weekday = now.DayOfWeek switch
         {

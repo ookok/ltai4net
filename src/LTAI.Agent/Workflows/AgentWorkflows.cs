@@ -308,8 +308,27 @@ public sealed class AgentWorkflows
     /// registry is null or has no <c>greeting</c> workflow loaded, fall back
     /// to the static <see cref="YAMLWorkflowHost"/> (D69: preserve C# path).
     /// </summary>
+    /// <remarks>
+    /// P14.9 review: if the greeting fast-path produces a canned reply but
+    /// the user's message is substantially longer than a typical greeting
+    /// (<paramref name="task"/>.Length &gt; 50), we treat it as a mixed
+    /// greeting+query message (e.g. "早上好 帮我查天气") and fall through to
+    /// the LLM handoff so the user's substantive request isn't lost.
+    /// </remarks>
     private async Task<string?> TryRunGreetingAsync(string task, CancellationToken ct)
     {
+        // P14.9 review: pre-check for mixed greeting+query.
+        // If the message is long enough to contain a substantive request,
+        // skip the canned greeting path entirely and let the LLM handle it.
+        var isLongMessage = task.Trim().Length > 50;
+
+        if (isLongMessage)
+        {
+            _logger.LogDebug("Greeting fast-path skipped: message length {Len} > 50 (likely mixed greeting+query)",
+                task.Trim().Length);
+            return null;
+        }
+
         // P15 hot path: registry snapshot.
         if (_workflowRegistry != null)
         {

@@ -88,8 +88,18 @@ public sealed class DecisionTreeConfig
     /// </summary>
     public static DecisionTreeConfig Parse(string json)
     {
-        if (string.IsNullOrWhiteSpace(json)) return Default;
-        return JsonSerializer.Deserialize<DecisionTreeConfig>(json, _jsonOptions) ?? Default;
+        if (string.IsNullOrWhiteSpace(json))
+            throw new InvalidOperationException("decision-tree.json is empty");
+        var cfg = JsonSerializer.Deserialize<DecisionTreeConfig>(json, _jsonOptions)
+                  ?? throw new InvalidOperationException("decision-tree.json deserialization returned null");
+        // P14.9 review: validate key fields to catch silent misconfiguration
+        if (cfg.TopK < 1 || cfg.TopK > 20)
+            throw new InvalidOperationException($"topK={cfg.TopK} is out of range [1, 20]");
+        if (cfg.ConfidenceMarginThreshold is < 0f or > 1f)
+            throw new InvalidOperationException($"confidenceMarginThreshold={cfg.ConfidenceMarginThreshold} is out of range [0, 1]");
+        if (cfg.MinTopScoreThreshold is < 0f or > 1f)
+            throw new InvalidOperationException($"minTopScoreThreshold={cfg.MinTopScoreThreshold} is out of range [0, 1]");
+        return cfg;
     }
 
     /// <summary>

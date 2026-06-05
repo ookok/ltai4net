@@ -21,6 +21,7 @@ namespace LTAI.AI;
 /// </summary>
 public sealed class LocalEmbedder : IDisposable
 {
+    ~LocalEmbedder() => Dispose(disposing: false);
     private const int MaxLength = 512;
     private const int DefaultDimension = 384;
     private static readonly System.Text.RegularExpressions.Regex WhitespaceRegex = new(@"\s+", System.Text.RegularExpressions.RegexOptions.Compiled);
@@ -720,7 +721,7 @@ public sealed class LocalEmbedder : IDisposable
         int seqLen = embedding.Dimensions[1];      // 512
         int hiddenDim = embedding.Dimensions[2];   // e.g. 768 (BGE) or 384 (MiniLM)
 
-        // Runtime dimension check: warn if model output differs from expected default
+        // Runtime dimension check: track actual model output dim for telemetry
         if (hiddenDim != DefaultDimension)
         {
             System.Diagnostics.Debug.WriteLine(
@@ -1131,9 +1132,15 @@ public sealed class LocalEmbedder : IDisposable
 
     public void Dispose()
     {
+        Dispose(disposing: true);
+        GC.SuppressFinalize(this);
+    }
+
+    private void Dispose(bool disposing)
+    {
         if (!_disposed)
         {
-            lock (_loadLock) { _session?.Dispose(); }
+            lock (_loadLock) { _session?.Dispose(); _session = null; }
             _disposed = true;
         }
     }

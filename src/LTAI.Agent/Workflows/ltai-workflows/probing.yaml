@@ -37,11 +37,22 @@ trigger:
               id: send_probing
               activity: "我是 LTAI 助手 — I can help with code, search, data analysis, file management, and more. What would you like to do?"
 
+        # ── Negation / rejection ──
+        - condition: >-
+            Local.NormalizedText = "no"
+            || Local.NormalizedText = "nope"
+            || Local.NormalizedText = "nah"
+            || Local.NormalizedText = "不是"
+          id: cond_negation
+          actions:
+            - kind: SendActivity
+              id: send_negation
+              activity: "明白了，你的意思是不需要这个。有什么其他我可以帮你的吗？"
+
         # ── Affirmation / acknowledgement ──
         - condition: >-
             Local.NormalizedText = "ok"
             || Local.NormalizedText = "okay"
-            || Local.NormalizedText = "k"
             || Local.NormalizedText = "kk"
             || Local.NormalizedText = "好的"
             || Local.NormalizedText = "好"
@@ -50,9 +61,6 @@ trigger:
             || Local.NormalizedText = "yes"
             || Local.NormalizedText = "yep"
             || Local.NormalizedText = "yeah"
-            || Local.NormalizedText = "y"
-            || Local.NormalizedText = "no"
-            || Local.NormalizedText = "nope"
           id: cond_ack
           actions:
             - kind: SendActivity

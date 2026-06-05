@@ -174,7 +174,7 @@ public static class SlashCommands
         new("plan",    "计划",  "查看当前计划状态", "计划状态"),
         new("lang",    "设置",  "切换语言: zh-CN|en-US", "语言,language"),
         new("git",     "文件",  "Git: status|diff|log|add|commit|pull|push", "g"),
-        new("build",   "扩展",  "全量重建代码索引", "b,构建"),
+        new("graph",   "扩展",  "代码/文档索引: init|search <query>", "g,图"),
         new("exit",    "高级",  "退出应用", "quit,q,退出"),
     };
 

@@ -31,7 +31,7 @@ trigger:
               id: send_test
               activity: "I'm here ✅ Ready to start. What would you like to do?"
 
-      # ── Garbage / very-short fallback ──
+      # ── Garbage / very-short / unrecognizable fallback ──
       elseActions:
         - kind: ConditionGroup
           id: is_garbage
@@ -39,10 +39,22 @@ trigger:
             - condition: >-
                 Length(Local.NormalizedText) < 3
                 || StartsWith(Local.NormalizedText, "asdf")
+                || StartsWith(Local.NormalizedText, "asdfghjkl")
                 || StartsWith(Local.NormalizedText, "qwerty")
-                || StartsWith(Local.NormalizedText, "test123")
-                || StartsWith(Local.NormalizedText, "啊啊")
-                || StartsWith(Local.NormalizedText, "啊啊啊啊")
+                || StartsWith(Local.NormalizedText, "qwertyuiop")
+                || StartsWith(Local.NormalizedText, "zxcvbnm")
+                || StartsWith(Local.NormalizedText, "aaaaa")
+                || StartsWith(Local.NormalizedText, "bbbbb")
+                || StartsWith(Local.NormalizedText, "hhhhh")
+                || StartsWith(Local.NormalizedText, "jjjjj")
+                || StartsWith(Local.NormalizedText, "kkkkk")
+                || StartsWith(Local.NormalizedText, "fffff")
+                || StartsWith(Local.NormalizedText, "ddddd")
+                || StartsWith(Local.NormalizedText, "sssss")
+                || StartsWith(Local.NormalizedText, "ttttt")
+                || StartsWith(Local.NormalizedText, "啊啊啊")
+                || StartsWith(Local.NormalizedText, "呜呜呜")
+                || StartsWith(Local.NormalizedText, "哈哈哈")
               id: cond_garbage_short
               actions:
                 - kind: SendActivity

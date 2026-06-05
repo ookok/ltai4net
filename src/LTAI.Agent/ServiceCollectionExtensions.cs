@@ -2,6 +2,7 @@ using System.Text.Json;
 using LTAI.AI;
 using LTAI.AI.Compaction;
 using LTAI.Core.Safety;
+using LTAI.Agent.Services;
 using LTAI.Agent.Tools;
 using LTAI.Agent.Vector;
 using LTAI.Agent.Workflows;
@@ -304,7 +305,8 @@ public static class ServiceCollectionExtensions
         bool CanExec,
         string? ModelId,
         float? Temperature,
-        float? TopP)
+        float? TopP,
+        string? Prompt = null)
     {
         public AIAgent? Build(IServiceProvider sp, string name)
         {
@@ -312,7 +314,8 @@ public static class ServiceCollectionExtensions
             {
                 return Task.Run(() =>
                     BuildAgentImpl(sp, name, Description, CanRead, CanWrite, CanList, CanExec,
-                        modelId: ModelId, temperature: Temperature, topP: TopP)).GetAwaiter().GetResult();
+                        modelId: ModelId, temperature: Temperature, topP: TopP,
+                        agentPrompt: Prompt)).GetAwaiter().GetResult();
             }
             catch (Exception ex)
             {
@@ -342,10 +345,11 @@ public static class ServiceCollectionExtensions
                     CanExec: def.Permissions.Contains("exec"),
                     ModelId: def.ModelId,
                     Temperature: (float?)def.Temperature,
-                    TopP: (float?)def.TopP);
+                    TopP: (float?)def.TopP,
+                    Prompt: def.Prompt);
             }
             // Internal router agent (not from files) — used by AgentWorkflows for handoff routing
-            yield return new("LTAI-Router", "任务调度器(无工具)", false, false, false, false, null, 0.3f, 0.95f);
+            yield return new("LTAI-Router", "任务调度器(无工具)", false, false, false, false, null, 0.3f, 0.95f, Prompt: null);
             yield break;
         }
 
@@ -398,7 +402,7 @@ public static class ServiceCollectionExtensions
     // Original implementation
     private static async Task<AIAgent> BuildAgentImpl(IServiceProvider sp, string name, string description,
         bool canRead, bool canWrite, bool canList, bool canExec,
-        string? modelId = null, float? temperature = null, float? topP = null)
+        string? modelId = null, float? temperature = null, float? topP = null, string? agentPrompt = null)
     {
         var ws = Directory.GetCurrentDirectory();
         var opts = sp.GetRequiredService<IOptions<LTAIOptions>>().Value;
@@ -911,7 +915,7 @@ public static class ServiceCollectionExtensions
         }
 
         AIAgent agent = llm.AsHarnessAgent(
-            maxContextWindowTokens: 64000,
+            maxContextWindowTokens: 0, // 0 = disabled: LTAI's own CompactionProvider at position [5] handles compaction
             maxOutputTokens: opts.AI.MaxTokens,
             options: new HarnessAgentOptions
             {
@@ -921,7 +925,7 @@ public static class ServiceCollectionExtensions
                 // Uses LTAI.Core.I18n.Locale for culture-aware string selection.
                 HarnessInstructions = isPlanMode
                     ? null  // plan mode keeps the default
-                    : BuildSystemPrompt(),
+                    : AppendAgentPrompt(BuildSystemPrompt(), agentPrompt),
                 Description = isPlanMode
                     ? BuildPlanModePrompt()
                     : BuildAgentDescription(name, description),
@@ -1049,7 +1053,19 @@ public static class ServiceCollectionExtensions
                 + "- If a tool call fails, **adjust your strategy** instead of retrying the same call.\n"
                 + "- After completing a task, give a clear summary: what was done and what was found.\n"
                 + "- If the model is insufficient for complex tasks (cross-file refactoring, concurrency safety analysis, etc.),\n"
-                + "  output `<<<NEEDS_PRO: <reason>>>` to request upgrade to a stronger model.\n";
+                + "  output `<<<NEEDS_PRO: <reason>>>` to request upgrade to a stronger model.\n"
+                + "\n"
+                + "## Output Format\n"
+                + "- Place reasoning inside <thinking>...</thinking> tags.\n"
+                + "- Keep the final answer outside these tags, clean and direct.\n"
+                + "- Structure: <thinking>analysis</thinking> → tool calls → <thinking>reflection</thinking> → final answer.\n"
+                + "\n"
+                + "## Example\n"
+                + "- User: \"How many files are in src/?\"\n"
+                + "- <thinking>User wants a file count. I'll use Glob or DirectoryTree to list files, then count.</thinking>\n"
+                + "- [calls Glob(\"**/*\", \"src/\")]\n"
+                + "- <thinking>The tool returned 42 files. I'll report this to the user.</thinking>\n"
+                + "- There are 42 files in the src/ directory.\n";
         }
         return LTAI.Core.I18n.Locale.Get("SystemPromptIntro") + "\n\n"
             + "## 一般准则\n"
@@ -1060,7 +1076,25 @@ public static class ServiceCollectionExtensions
             + "- 如果工具调用失败或返回异常，**调整策略**而不是重试同一个调用。\n"
             + "- 任务完成后，给出清晰的总结：做了什么、发现了什么。\n"
             + "- 如果模型不足以完成复杂任务（跨文件重构、并发安全分析等），\n"
-            + "  在回复中输出 `<<<NEEDS_PRO: <原因>>>` 标记，系统将自动切换到更强的模型。\n";
+            + "  在回复中输出 `<<<NEEDS_PRO: <原因>>>` 标记，系统将自动切换到更强的模型。\n"
+            + "\n"
+            + "## 输出格式\n"
+            + "- 推理过程用 <thinking>...</thinking> 包裹。\n"
+            + "- 最终答案保持干净、直接，放在 thinking 标签外。\n"
+            + "- 整体结构：<thinking>分析</thinking> → 工具调用 → <thinking>反思</thinking> → 最终回答。\n"
+            + "\n"
+            + "## 示例\n"
+            + "- 用户：\"src/ 目录下有多少文件？\"\n"
+            + "- <thinking>用户想知道文件数。我用 Glob 或 DirectoryTree 列出文件再计数。</thinking>\n"
+            + "- [调用 Glob(\"**/*\", \"src/\")]\n"
+            + "- <thinking>工具返回了 42 个文件。我报告给用户。</thinking>\n"
+            + "- src/ 目录下共有 42 个文件。\n";
+    }
+
+    private static string AppendAgentPrompt(string basePrompt, string? agentPrompt)
+    {
+        if (string.IsNullOrWhiteSpace(agentPrompt)) return basePrompt;
+        return basePrompt + "\n\n## Agent 指令\n" + agentPrompt.Trim();
     }
 
     private static string BuildPlanModePrompt()
@@ -1111,10 +1145,7 @@ public static class ServiceCollectionExtensions
         var dateHint = isEn
             ? "About dates: when users ask \"what day is it\" or \"what time is it\", call GetCurrentDateTime directly — do not guess."
             : "关于日期：当用户询问\"今天星期几\"\"现在几点\"等时间日期问题时，请直接调用 GetCurrentDateTime 工具获取实时时间，不要自行估算。";
-        var toolHint = isEn
-            ? "Tool call notes:\n1. Parameters must be correct JSON types (no quotes around numbers, true/false for booleans)\n2. Do not wrap tool calls in Markdown code blocks\n3. Do not call the same tool repeatedly (if it errors, check parameters first)\n\nUpgrade contract: if the current model cannot complete a complex task (cross-file refactoring, concurrency safety analysis, etc.),\noutput <<<NEEDS_PRO: <reason>>> to request automatic upgrade to a stronger model.\nExample: <<<NEEDS_PRO: Need to analyze circular dependency across 6 modules>>>"
-            : "工具调用注意：\n1. 参数必须是正确的JSON类型（数字不要加引号，布尔值用true/false）\n2. 不要用Markdown代码块包围工具调用\n3. 不要重复调用同一个工具（如果出错，先检查参数再重试）\n\n升级合约：如果当前模型无法完成复杂任务（如跨文件重构、并发安全性分析），\n在回复中输出 <<<NEEDS_PRO: <原因>>> 标记，系统将自动切换到更强的模型重试。\n示例：<<<NEEDS_PRO: 需要分析6个模块的循环依赖问题>>>";
-        return $"{roleLine}\n{dateHint}\n{toolHint}\n";
+        return $"{roleLine}\n{dateHint}\n";
     }
 }
 

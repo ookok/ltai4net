@@ -117,7 +117,7 @@ public sealed class EmbeddingClient : IDisposable
     public async Task<float[]> GenerateAsync(string text, CancellationToken ct = default)
     {
         var results = await GenerateBatchAsync([text], ct).ConfigureAwait(false);
-        return results.Length > 0 ? results[0] : FastEmb(text);
+        return results.Length > 0 ? results[0] : FastEmb(text, Dimension);
     }
 
     /// <summary>Generate embeddings for multiple texts (batched).</summary>
@@ -145,8 +145,8 @@ public sealed class EmbeddingClient : IDisposable
         if (_availableProviders.Length == 0)
         {
             // Priority 3 fallback: BM25 heuristic
-            _logger.LogWarning("No embedding models available, using BM25 fallback");
-            return texts.Select(FastEmb).ToArray();
+            _logger.LogWarning("No embedding models available, using BM25 fallback (dim={Dim})", Dimension);
+            return texts.Select(t => FastEmb(t, Dimension)).ToArray();
         }
 
         var result = new float[texts.Length][];
@@ -216,10 +216,10 @@ public sealed class EmbeddingClient : IDisposable
         }
 
         // Priority 3 fallback: BM25 for all missing texts
-        _logger.LogWarning("No embedding API succeeded, using BM25 fallback for {N} missing texts", missing.Count);
+        _logger.LogWarning("No embedding API succeeded, using BM25 fallback for {N} missing texts (dim={Dim})", missing.Count, Dimension);
         for (int j = 0; j < missing.Count; j++)
         {
-            result[missing[j]] = FastEmb(missingTexts[j]);
+            result[missing[j]] = FastEmb(missingTexts[j], Dimension);
         }
 
         // P14.10: every API provider failed — track consecutive failures and

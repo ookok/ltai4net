@@ -8,7 +8,6 @@ namespace LTAI.Agent.Memory;
 [ToolDomain("memory")]
 public sealed class L6AgentDiaryProvider : AIContextProvider
 {
-    private const int MaxTokens = 200;
     private const int MaxEntries = 5;
     private readonly PalaceStore _store;
     private readonly string _agentId;
@@ -34,7 +33,7 @@ public sealed class L6AgentDiaryProvider : AIContextProvider
             var diary = _store.GetAgentDiary(_agentId, MaxEntries);
             if (diary.Count == 0) return ValueTask.FromResult(new AIContext());
 
-            var lines = new List<string> { $"## L6 — Agent Diary ({_agentId})" };
+            var lines = new List<string> { $"## L6 — Agent Diary ({_agentId})\n<memory>" };
             var totalLen = lines[0].Length;
 
             foreach (var d in diary)
@@ -43,15 +42,16 @@ public sealed class L6AgentDiaryProvider : AIContextProvider
                 if (snippet.Length > 150) snippet = snippet[..147] + "...";
                 var entry = $"  [{d.Wing}/{d.Room}] {snippet}";
 
-                if (totalLen + entry.Length > MaxTokens * 4) break;
+                if (totalLen + entry.Length > MemoryBudget.L6MaxTokens * 4) break;
                 lines.Add(entry);
                 totalLen += entry.Length;
             }
+            lines.Add("</memory>");
 
             _logger?.LogDebug("L6AgentDiary: {Count} entries, ~{Tokens}t", diary.Count, totalLen / 4);
             return ValueTask.FromResult(new AIContext
             {
-                Messages = [new ChatMessage(ChatRole.User, string.Join("\n", lines))],
+                Messages = [new ChatMessage(ChatRole.System, string.Join("\n", lines))],
             });
         }
         catch (Exception ex)
@@ -69,7 +69,11 @@ public sealed class L6AgentDiaryProvider : AIContextProvider
             var text = string.Join(' ', context.ResponseMessages?.Select(m => m.Text) ?? []);
             if (string.IsNullOrWhiteSpace(text)) return;
 
-            var summary = text.Length > 500 ? text[..497] + "..." : text;
+            // Truncate long responses: store only first 200 chars as diary entry.
+            // Full response is preserved in conversation history; the diary captures
+            // the "gist" for future recall without filling the essential-story pool with
+            // long code blocks.
+            var summary = text.Length > 200 ? text[..197] + "..." : text;
             await _store.StoreAsync("diary", _agentId, summary,
                 role: "assistant", importance: 0.3, agentId: _agentId).ConfigureAwait(false);
             _logger?.LogDebug("L6AgentDiary: stored diary entry for {Agent}", _agentId);

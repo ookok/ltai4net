@@ -8,7 +8,6 @@ namespace LTAI.Agent.Memory;
 [ToolDomain("memory")]
 public sealed class L1EssentialProvider : AIContextProvider
 {
-    private const int MaxTokens = 800;
     private const int MaxDrawers = 15;
     private readonly PalaceStore _store;
     private readonly string _agentId;
@@ -34,7 +33,7 @@ public sealed class L1EssentialProvider : AIContextProvider
             var moments = _store.GetEssentialMoments(MaxDrawers, _agentId);
             if (moments.Count == 0) return ValueTask.FromResult(new AIContext());
 
-            var lines = new List<string> { "## L1 — Essential Story" };
+            var lines = new List<string> { "## L1 — Essential Story\n<memory>" };
             var totalLen = lines[0].Length;
 
             foreach (var d in moments)
@@ -43,15 +42,16 @@ public sealed class L1EssentialProvider : AIContextProvider
                 if (snippet.Length > 200) snippet = snippet[..197] + "...";
                 var entry = $"  [{d.Wing}/{d.Room}] {snippet} (imp:{d.Importance:F1})";
 
-                if (totalLen + entry.Length > MaxTokens * 4) break;
+                if (totalLen + entry.Length > MemoryBudget.L1MaxTokens * 4) break;
                 lines.Add(entry);
                 totalLen += entry.Length;
             }
+            lines.Add("</memory>");
 
             _logger?.LogDebug("L1Essential: {Count} moments, ~{Tokens}t", moments.Count, totalLen / 4);
             return ValueTask.FromResult(new AIContext
             {
-                Messages = [new ChatMessage(ChatRole.User, string.Join("\n", lines))],
+                Messages = [new ChatMessage(ChatRole.System, string.Join("\n", lines))],
             });
         }
         catch (Exception ex)

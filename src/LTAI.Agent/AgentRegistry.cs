@@ -23,7 +23,7 @@ public sealed record AgentFileDef
 
     /// <summary>Text used for embedding — combines description + tools.</summary>
     public string CapabilityText =>
-        $"{Description} | tools: {string.Join(", ", Tools)} | {Prompt.Truncate(200)}";
+        $"{Description} | tools: {string.Join(", ", Tools)} | {Prompt.Truncate(500)}";
 }
 
 public static class AgentRegistry
@@ -72,11 +72,12 @@ public static class AgentRegistry
     /// </summary>
     public static void ClearEmbeddings()
     {
-        if (_cached == null) return;
-        for (int i = 0; i < _cached.Count; i++)
+        InvalidateCache();
+        var agents = LoadAll();
+        for (int i = 0; i < agents.Count; i++)
         {
-            if (_cached[i].Embedding != null)
-                _cached[i] = _cached[i] with { Embedding = null };
+            if (agents[i].Embedding != null)
+                agents[i] = agents[i] with { Embedding = null };
         }
     }
 
@@ -273,13 +274,7 @@ public static class AgentRegistry
     }
 
     private static float CosineSimilarity(float[] a, float[] b)
-    {
-        int len = Math.Min(a.Length, b.Length);
-        float dot = 0, na = 0, nb = 0;
-        for (int i = 0; i < len; i++)
-        { dot += a[i] * b[i]; na += a[i] * a[i]; nb += b[i] * b[i]; }
-        return na > 0 && nb > 0 ? dot / (MathF.Sqrt(na) * MathF.Sqrt(nb)) : 0;
-    }
+        => LTAI.AI.VectorMath.CosineSimilarity(a.AsSpan(), b.AsSpan());
 
     private static string[]? ParseJsonArray(string raw)
     {

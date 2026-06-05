@@ -168,7 +168,7 @@ public static class ToolRegistry
                 embeddings = list
                     .Select(t => vectors.TryGetValue(t.Name ?? "unknown", out var v) && v != null
                         ? v
-                        : EmbeddingClient.FastEmb(BuildEmbeddingText(t)))
+                        : EmbeddingClient.FastEmb(BuildEmbeddingText(t), 384))
                     .ToArray();
             }
             catch
@@ -186,7 +186,7 @@ public static class ToolRegistry
         var defs = new List<ToolDef>();
         for (int i = 0; i < list.Count; i++)
         {
-            var emb = i < embeddings.Length ? embeddings[i] : EmbeddingClient.FastEmb(texts[i]);
+            var emb = i < embeddings.Length ? embeddings[i] : EmbeddingClient.FastEmb(texts[i], 384);
             var domain = GetToolDomain(list[i]);
             defs.Add(new ToolDef(list[i].Name ?? "unknown", list[i].Description ?? "", emb, domain));
         }
@@ -364,7 +364,7 @@ public static class ToolRegistry
         }
         catch
         {
-            qEmb = EmbeddingClient.FastEmb(query);
+            qEmb = EmbeddingClient.FastEmb(query, embedder?.Dimension ?? 384);
         }
 
         var vecResults = _tools
@@ -460,46 +460,10 @@ public static class ToolRegistry
         }
         catch
         {
-            return texts.Select(t => EmbeddingClient.FastEmb(t)).ToArray();
+            return texts.Select(t => EmbeddingClient.FastEmb(t, embedder?.Dimension ?? 384)).ToArray();
         }
     }
 
     private static float CosineSimilarity(ReadOnlySpan<float> a, ReadOnlySpan<float> b)
-    {
-        float dot = 0, normA = 0, normB = 0;
-        int i = 0;
-
-        if (System.Numerics.Vector.IsHardwareAccelerated && a.Length >= System.Numerics.Vector<float>.Count)
-        {
-            int vecLen = System.Numerics.Vector<float>.Count;
-            var aVecs = System.Runtime.InteropServices.MemoryMarshal.Cast<float, System.Numerics.Vector<float>>(a);
-            var bVecs = System.Runtime.InteropServices.MemoryMarshal.Cast<float, System.Numerics.Vector<float>>(b);
-            var vdot = System.Numerics.Vector<float>.Zero;
-            var vna = System.Numerics.Vector<float>.Zero;
-            var vnb = System.Numerics.Vector<float>.Zero;
-            for (int j = 0; j < aVecs.Length; j++)
-            {
-                vdot += aVecs[j] * bVecs[j];
-                vna += aVecs[j] * aVecs[j];
-                vnb += bVecs[j] * bVecs[j];
-            }
-            for (int k = 0; k < vecLen; k++)
-            {
-                dot += vdot[k];
-                normA += vna[k];
-                normB += vnb[k];
-            }
-            i += aVecs.Length * vecLen;
-        }
-
-        for (; i < a.Length; i++)
-        {
-            dot += a[i] * b[i];
-            normA += a[i] * a[i];
-            normB += b[i] * b[i];
-        }
-
-        var denom = MathF.Sqrt(normA) * MathF.Sqrt(normB);
-        return denom == 0 ? 0 : dot / denom;
-    }
+        => VectorMath.CosineSimilarity(a, b);
 }

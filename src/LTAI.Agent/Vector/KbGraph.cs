@@ -78,6 +78,22 @@ public sealed class KbGraph : AIContextProvider
         // Stage 2: FTS5 BM25 recall (weighted by node kind)
         var ftsHits = await _store.SearchFts(expanded, topN: topK * 3).ConfigureAwait(false);
 
+        // Stage 2a: Quality score boost — blend BM25 rank with quality/freshness
+        // scores from KnowledgeQualityScorer. Quality scores deemphasize stale or
+        // low-value documents without eliminating them entirely.
+        if (ftsHits.Count > 0)
+        {
+            try
+            {
+                var scored = await BoostByQualityAsync(ftsHits).ConfigureAwait(false);
+                ftsHits = scored;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "KbGraph: quality boost failed, using raw FTS5");
+            }
+        }
+
         // Stage 2b: Optional hybrid search (FTS5 + vector RRF)
         if (_reranker != null && ftsHits.Count > 0)
         {
@@ -134,6 +150,33 @@ public sealed class KbGraph : AIContextProvider
     }
 
     /// <summary>
+    /// Re-rank FTS5 hits by blending BM25 rank with quality scores.
+    /// Normalized blend: 0.7 × BM25 rank + 0.3 × quality_score (0-1).
+    /// Hits without quality scores use the median quality (0.5).
+    /// </summary>
+    private async Task<List<(long nodeId, string text, double rank, string kind)>> BoostByQualityAsync(
+        List<(long nodeId, string text, double rank, string kind)> hits)
+    {
+        var qualityMap = new Dictionary<long, double>();
+        foreach (var (nid, _, _, _) in hits)
+        {
+            var scores = await _store.GetScoresAsync(nid).ConfigureAwait(false);
+            qualityMap[nid] = scores?.QualityScore ?? 0.5;
+        }
+
+        var maxRank = hits.Count > 0 ? hits.Max(h => h.rank) : 1.0;
+        if (maxRank <= 0) maxRank = 1.0;
+
+        return hits
+            .Select(h => (
+                h.nodeId, h.text,
+                rank: h.rank / maxRank * 0.7 + qualityMap.GetValueOrDefault(h.nodeId, 0.5) * 0.3,
+                h.kind))
+            .OrderByDescending(h => h.rank)
+            .ToList();
+    }
+
+    /// <summary>
     /// Build a structured mixed context with Entities + Relationships + Text Units sections.
     /// Inspired by ms graphrag's LocalSearchMixedContext — gives the LLM clearer,
     /// more structured knowledge graph context than flat bullet points.
@@ -155,7 +198,7 @@ public sealed class KbGraph : AIContextProvider
             string? snippet = null;
             if (docs.Count > 0)
             {
-                snippet = docs[0].Text.Length > 200 ? docs[0].Text[..200] + "…" : docs[0].Text;
+                snippet = docs[0].Text.Length > 500 ? docs[0].Text[..500] + "…" : docs[0].Text;
                 textUnits.Add((node.Name, snippet));
             }
             entities.Add((node, snippet));
@@ -215,7 +258,7 @@ public sealed class KbGraph : AIContextProvider
             foreach (var (source, text) in textUnits.Take(8))
             {
                 var cleaned = text.Replace("\n", " ").Replace("\r", "");
-                if (cleaned.Length > 150) cleaned = cleaned[..150] + "…";
+                if (cleaned.Length > 500) cleaned = cleaned[..500] + "…";
                 output.Add($"- **[{source}]:** {cleaned}");
             }
         }
@@ -305,7 +348,7 @@ public sealed class KbGraph : AIContextProvider
         // Store vector embedding for hybrid search (FTS5 + vector RRF)
         if (_embedder != null)
         {
-            var embText = $"{title} {source} {content[..Math.Min(content.Length, 200)]}";
+            var embText = $"{title} {source} {content[..Math.Min(content.Length, 500)]}";
             var emb = await _embedder.GenerateAsync(embText).ConfigureAwait(false);
             await _store.InsertVectorAsync(nodeId, emb).ConfigureAwait(false);
         }
@@ -372,7 +415,7 @@ public sealed class KbGraph : AIContextProvider
         // Store vector embedding for hybrid search
         if (_embedder != null)
         {
-            var embText = $"{content[..Math.Min(content.Length, 200)]} {category}";
+            var embText = $"{content[..Math.Min(content.Length, 500)]} {category}";
             var emb = await _embedder.GenerateAsync(embText).ConfigureAwait(false);
             await _store.InsertVectorAsync(nodeId, emb).ConfigureAwait(false);
         }
@@ -610,7 +653,11 @@ public sealed class KbGraph : AIContextProvider
             var result = resp.Text?.Trim() ?? "";
             return string.IsNullOrWhiteSpace(result) ? query : result;
         }
-        catch { return query; }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "KbGraph: LLM query expansion failed, using raw query \"{Q}\"", query);
+            return query;
+        }
     }
 
     /// <summary>
@@ -753,13 +800,7 @@ public sealed class KbGraph : AIContextProvider
     }
 
     private static float CosineSimilarity(float[] a, float[] b)
-    {
-        int len = Math.Min(a.Length, b.Length);
-        float dot = 0, na = 0, nb = 0;
-        for (int i = 0; i < len; i++)
-        { dot += a[i] * b[i]; na += a[i] * a[i]; nb += b[i] * b[i]; }
-        return na > 0 && nb > 0 ? dot / (MathF.Sqrt(na) * MathF.Sqrt(nb)) : 0;
-    }
+        => LTAI.AI.VectorMath.CosineSimilarity(a.AsSpan(), b.AsSpan());
 
     /// <summary>代码模式启发式检测 — 含 C#/代码关键字则强制走 KG。</summary>
     private static bool ContainsCodePattern(string text)

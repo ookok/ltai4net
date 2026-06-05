@@ -111,17 +111,22 @@ public sealed class ToolRetrievalProvider : AIContextProvider
             }
         }
 
-        // 如果检索结果太少（不足 3 个），回退到 PinnedTools
+        // 如果检索结果太少（不足 3 个），回退策略：保留兜底工具 + 按原顺序填充到 DefaultTopK
+        // 不降级到 PinnedTools-only（否则领域 agent 如 LTAI-Math 会清空 shell/container 工具）
         if (selectedTools.Count < 3)
         {
             selectedTools.Clear();
+            var pinned = new List<AITool>();
+            var rest = new List<AITool>();
             foreach (var tool in candidates)
             {
                 var name = tool.Name ?? "";
                 if (ExcludedTools.Contains(name)) continue;
-                if (PinnedTools.Contains(name) || selectedTools.Count < DefaultTopK)
-                    selectedTools.Add(tool);
+                if (PinnedTools.Contains(name)) pinned.Add(tool);
+                else rest.Add(tool);
             }
+            selectedTools.AddRange(pinned);
+            selectedTools.AddRange(rest.Take(Math.Max(0, DefaultTopK - pinned.Count)));
         }
 
         return new AIContext

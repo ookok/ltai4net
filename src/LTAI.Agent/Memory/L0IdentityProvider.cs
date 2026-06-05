@@ -7,7 +7,6 @@ namespace LTAI.Agent.Memory;
 [ToolDomain("memory")]
 public sealed class L0IdentityProvider : AIContextProvider
 {
-    private const int MaxTokens = 100;
     private readonly string _identityText;
 
     public L0IdentityProvider(string identityText)
@@ -23,14 +22,15 @@ public sealed class L0IdentityProvider : AIContextProvider
         if (string.IsNullOrWhiteSpace(_identityText))
             return ValueTask.FromResult(new AIContext());
 
-        var prompt = "## L0 — Identity\n" + _identityText;
+        var prompt = "## L0 — Identity\n<memory>\n" + _identityText + "\n</memory>";
 
-        if (prompt.Length / 4 > MaxTokens)
-            prompt = prompt[..(MaxTokens * 4)] + "...";
+        var maxChars = MemoryBudget.L0MaxTokens * 4;
+        if (prompt.Length > maxChars)
+            prompt = prompt[..maxChars] + "...";
 
         return ValueTask.FromResult(new AIContext
         {
-            Messages = [new ChatMessage(ChatRole.User, prompt)],
+            Messages = [new ChatMessage(ChatRole.System, prompt)],
         });
     }
 }

@@ -49,7 +49,8 @@ public sealed class ChatView : UserControl
 
     public async Task LoadSessionAsync(string name)
     {
-        if (!await _sessionManager.LoadSessionAsync(name)) return;
+        var handle = await _sessionManager.LoadSessionAsync(name);
+        if (handle == null) return;
         _outputStack.Children.Clear();
 
         // 子会话显示返回父会话按钮
@@ -88,19 +89,19 @@ public sealed class ChatView : UserControl
             });
         }
 
-        foreach (var msg in _sessionManager.Messages)
+        foreach (var msg in handle.Messages)
         {
             var label = msg.Role == ChatRole.User ? "[You]" : "[LTAI]";
             var color = msg.Role == ChatRole.User ? LtaiTheme.ChatUser : LtaiTheme.AccentSystem;
             AddBubble(label, msg.Text ?? "", color, LtaiTheme.Border);
         }
-        _turns = _sessionManager.Messages.Count / 2;
+        _turns = handle.Messages.Count / 2;
         RefreshStats();
     }
 
     public async Task ResetSessionAsync()
     {
-        if (_sessionManager.MessageCount > 0)
+        if (_sessionManager.CurrentHandle != null)
             await _sessionManager.SaveSessionAsync().ConfigureAwait(false);
         _sessionManager.NewSession();
         _outputStack.Children.Clear();
@@ -253,15 +254,16 @@ public sealed class ChatView : UserControl
 
         // Auto-load most recent session or start fresh
         var existing = _sessionManager.ListSessions();
-        if (existing.Length > 0 && _sessionManager.LoadSession(existing[0].Name))
+        var handle = existing.Length > 0 ? _sessionManager.LoadSession(existing[0].Name) : null;
+        if (handle != null)
         {
-            foreach (var msg in _sessionManager.Messages)
+            foreach (var msg in handle.Messages)
             {
                 var label = msg.Role == ChatRole.User ? "[You]" : "[LTAI]";
                 var color = msg.Role == ChatRole.User ? LtaiTheme.ChatUser : LtaiTheme.AccentSystem;
                 AddBubble(label, msg.Text ?? "", color, LtaiTheme.Border);
             }
-            _turns = _sessionManager.Messages.Count / 2;
+            _turns = handle.Messages.Count / 2;
         }
         else
         {
@@ -645,7 +647,8 @@ public sealed class ChatView : UserControl
 
         try
         {
-            await foreach (var update in _svc.Chat.ChatStreamingAsync(query, ct: _cts.Token))
+            var sessionHandle = _sessionManager.CurrentHandle;
+            await foreach (var update in _svc.Chat.ChatStreamingAsync(query, sessionHandle, ct: _cts.Token))
             {
                 var token = update.Text ?? "";
                 _tokens++;
@@ -780,8 +783,7 @@ public sealed class ChatView : UserControl
             }
 
             // Save session after each completed turn
-            _sessionManager.AddMessage(ChatRole.User, query);
-            _sessionManager.AddMessage(ChatRole.Assistant, responseBuf.ToString());
+            // (handle was auto-updated by ChatAgent with full MAF session state)
             await _sessionManager.SaveSessionAsync().ConfigureAwait(false);
 
             RefreshStats();
@@ -1787,17 +1789,30 @@ public sealed class ChatView : UserControl
         {
             if (!_subSessions.TryGetValue(spawnId, out var subName))
             {
-                subName = _sessionManager.CreateChildSession(_sessionManager.CurrentSession, $"子任务 #{spawnId}");
+                subName = _sessionManager.CreateChildSession(
+                    _sessionManager.CurrentSession ?? "", $"子任务 #{spawnId}");
                 _subSessions[spawnId] = subName;
                 _subStartTimes[spawnId] = Stopwatch.StartNew();
             }
-            _sessionManager.LoadSession(subName);
-            if (role == "user" || role == "User")
-                _sessionManager.AddMessage(ChatRole.User, content);
-            else
-                _sessionManager.AddMessage(ChatRole.Assistant, content);
-            _sessionManager.SaveSession(subName);
-            _sessionManager.LoadSession(_sessionManager.CurrentSession);
+            // For sub-agent messages, we can't use the MAF session directly since
+            // the sub-agent runs in a separate process. Store as simplified handle.
+            var subHandle = _sessionManager.LoadSession(subName);
+            var currentSession = _sessionManager.CurrentSession;
+            if (subHandle == null || currentSession == null)
+            {
+                if (currentSession != null)
+                    _sessionManager.LoadSession(currentSession);
+                return;
+            }
+            var msgs = new List<ChatMessage>(subHandle.Messages)
+            {
+                new(role == "user" || role == "User" ? ChatRole.User : ChatRole.Assistant, content)
+            };
+            var json = System.Text.Json.JsonSerializer.Serialize(
+                msgs.Select(m => new { Role = m.Role == ChatRole.User ? "user" : "assistant", Content = m.Text ?? "" }));
+            subHandle.UpdateFromJson(json);
+            _sessionManager.SaveSession(subHandle);
+            _sessionManager.LoadSession(currentSession);
         });
     }
 

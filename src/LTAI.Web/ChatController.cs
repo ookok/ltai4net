@@ -42,7 +42,7 @@ public class ChatController : ControllerBase
         try
         {
             var reply = await _agent.ChatAsync(
-                request.Message, request.UserId ?? RequestTraceId(), cts.Token).ConfigureAwait(false);
+                request.Message, userId: request.UserId ?? RequestTraceId(), ct: cts.Token).ConfigureAwait(false);
             return Ok(new ChatResponse(reply));
         }
         catch (OperationCanceledException) when (!HttpContext.RequestAborted.IsCancellationRequested)
@@ -81,7 +81,7 @@ public class ChatController : ControllerBase
 
         try
         {
-            await foreach (var update in _agent.ChatStreamingAsync(message, timeoutCts.Token)
+            await foreach (var update in _agent.ChatStreamingAsync(message, ct: timeoutCts.Token)
                 .ConfigureAwait(false))
             {
                 if (update.Text == null) continue;

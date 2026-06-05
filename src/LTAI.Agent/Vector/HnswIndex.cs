@@ -211,43 +211,7 @@ public sealed class HnswIndex : IDisposable
     }
 
     internal static float Dist(ReadOnlySpan<float> a, ReadOnlySpan<float> b)
-    {
-        float dot = 0, normA = 0, normB = 0;
-        int i = 0;
-
-        if (System.Numerics.Vector.IsHardwareAccelerated && a.Length >= System.Numerics.Vector<float>.Count)
-        {
-            int vecLen = System.Numerics.Vector<float>.Count;
-            var aVecs = System.Runtime.InteropServices.MemoryMarshal.Cast<float, System.Numerics.Vector<float>>(a);
-            var bVecs = System.Runtime.InteropServices.MemoryMarshal.Cast<float, System.Numerics.Vector<float>>(b);
-            var vdot = System.Numerics.Vector<float>.Zero;
-            var vna = System.Numerics.Vector<float>.Zero;
-            var vnb = System.Numerics.Vector<float>.Zero;
-            for (int j = 0; j < aVecs.Length; j++)
-            {
-                vdot += aVecs[j] * bVecs[j];
-                vna += aVecs[j] * aVecs[j];
-                vnb += bVecs[j] * bVecs[j];
-            }
-            for (int k = 0; k < vecLen; k++)
-            {
-                dot += vdot[k];
-                normA += vna[k];
-                normB += vnb[k];
-            }
-            i += aVecs.Length * vecLen;
-        }
-
-        for (; i < a.Length; i++)
-        {
-            dot += a[i] * b[i];
-            normA += a[i] * a[i];
-            normB += b[i] * b[i];
-        }
-
-        var denom = MathF.Sqrt(normA) * MathF.Sqrt(normB);
-        return denom == 0 ? 1 : 1 - dot / denom;
-    }
+        => LTAI.AI.VectorMath.CosineDistance(a, b);
 
     /// <summary>Rebuild index from an enumerable of vectors (clears existing).</summary>
     public void Rebuild(IEnumerable<float[]> vectors)

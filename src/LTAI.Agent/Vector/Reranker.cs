@@ -51,14 +51,22 @@ public sealed class Reranker
     {
         if (candidates.Count == 0) return [];
 
-        // Phase 1: Embedding similarity scoring (parallel)
+        // Phase 1: Embedding similarity scoring (batched)
         var queryEmb = await _embedder.GenerateAsync(query, ct).ConfigureAwait(false);
-        var embTasks = candidates.Select(n =>
+        var texts = candidates.Select(n =>
+            $"{n.Kind} {n.Name} {n.Namespace} {n.Signature}").ToArray();
+        var embeddingsArray = await _embedder.GenerateBatchAsync(texts, ct).ConfigureAwait(false);
+        var embeddings = embeddingsArray as float[][] ?? embeddingsArray.ToArray();
+
+        // Validate dimension consistency — cross-provider switching (ONNX 384d ↔ API 1024d)
+        // silently produces meaningless cosine scores. Log and fall back to uniform ranking.
+        if (embeddings.Any(e => e.Length != queryEmb.Length))
         {
-            var text = $"{n.Kind} {n.Name} {n.Namespace} {n.Signature}";
-            return _embedder.GenerateAsync(text, ct);
-        }).ToList();
-        var embeddings = await Task.WhenAll(embTasks).ConfigureAwait(false);
+            _logger.LogWarning("Reranker: embedding dimension mismatch (query={QD}, candidates vary). " +
+                "Possible model switch without cache invalidation. Falling back to uniform ranking.",
+                queryEmb.Length);
+            return candidates.Select((n, i) => new RankedResult(n, 0.5f, 0.5f, i + 1)).Take(topK).ToList();
+        }
 
         var scored = candidates
             .Select((n, i) => (node: n, score: CosineSim(queryEmb, embeddings[i])))
@@ -159,13 +167,7 @@ public sealed class Reranker
     }
 
     private static float CosineSim(float[] a, float[] b)
-    {
-        if (a.Length != b.Length || a.Length == 0) return 0;
-        float dot = 0, na = 0, nb = 0;
-        for (int i = 0; i < a.Length; i++)
-        { dot += a[i] * b[i]; na += a[i] * a[i]; nb += b[i] * b[i]; }
-        return na > 0 && nb > 0 ? dot / (MathF.Sqrt(na) * MathF.Sqrt(nb)) : 0;
-    }
+        => LTAI.AI.VectorMath.CosineSimilarity(a.AsSpan(), b.AsSpan());
 }
 
 /// <summary>

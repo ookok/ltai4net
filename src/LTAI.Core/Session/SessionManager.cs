@@ -8,34 +8,35 @@ namespace LTAI.Core.Session;
 public sealed class SessionManager
 {
     private readonly string _sessionsDir;
-    private readonly List<ChatMessage> _messages = new();
+    private ISessionHandle? _currentHandle;
     private const int MaxSessions = 500;
     private static readonly byte[] EncryptionKey = ComputeEncryptionKey();
-
-    private string _currentSession = "";
-    private int _sessionCounter;
 
     public SessionManager()
     {
         _sessionsDir = Path.Combine(Directory.GetCurrentDirectory(), ".livingtree", "sessions");
         Directory.CreateDirectory(_sessionsDir);
-        _sessionCounter = Directory.GetFiles(_sessionsDir, "*.json").Length;
     }
 
     public SessionManager(string sessionsDir)
     {
         _sessionsDir = sessionsDir;
         Directory.CreateDirectory(_sessionsDir);
-        _sessionCounter = Directory.GetFiles(_sessionsDir, "*.json").Length;
     }
 
-    public string CurrentSession => _currentSession;
-    public List<ChatMessage> Messages => _messages;
-    public int MessageCount => _messages.Count;
+    public ISessionHandle? CurrentHandle => _currentHandle;
 
-    public void AddMessage(ChatRole role, string content)
+    public string? CurrentSession => _currentHandle?.Name;
+
+    public IReadOnlyList<ChatMessage> Messages => _currentHandle?.Messages ?? [];
+
+    public int MessageCount => _currentHandle?.Messages.Count ?? 0;
+
+    public ISessionHandle NewSession()
     {
-        _messages.Add(new ChatMessage(role, content));
+        var name = $"session-{DateTime.UtcNow:yyyyMMdd-HHmmss}-{Guid.NewGuid().ToString("n")[..4]}";
+        _currentHandle = new JsonSessionHandle(name, null);
+        return _currentHandle;
     }
 
     public SessionInfo[] ListSessions()
@@ -56,37 +57,103 @@ public sealed class SessionManager
         return ListSessions().Where(s => s.ParentId == parentId).ToArray();
     }
 
+    public ISessionHandle? LoadSession(string name)
+    {
+        var path = Path.Combine(_sessionsDir, $"{name}.json");
+        if (!File.Exists(path)) return null;
+        try
+        {
+            var text = File.ReadAllText(path);
+            string json;
+            try { json = Decrypt(text); }
+            catch { json = text; }
+
+            var doc = JsonDocument.Parse(json);
+            _currentHandle = new JsonSessionHandle(name, doc.RootElement.Clone());
+            return _currentHandle;
+        }
+        catch { return null; }
+    }
+
+    public async Task<ISessionHandle?> LoadSessionAsync(string name)
+    {
+        var path = Path.Combine(_sessionsDir, $"{name}.json");
+        if (!File.Exists(path)) return null;
+        try
+        {
+            var text = await File.ReadAllTextAsync(path).ConfigureAwait(false);
+            string json;
+            try { json = Decrypt(text); }
+            catch { json = text; }
+
+            var doc = JsonDocument.Parse(json);
+            _currentHandle = new JsonSessionHandle(name, doc.RootElement.Clone());
+            return _currentHandle;
+        }
+        catch { return null; }
+    }
+
     public string CreateChildSession(string parentId, string label)
     {
-        _sessionCounter++;
-        var name = $"sub-{parentId}-{_sessionCounter}";
+        var counter = Directory.GetFiles(_sessionsDir, $"{parentId}*.json").Length + 1;
+        var name = $"sub-{parentId}-{counter}";
+        _currentHandle = new JsonSessionHandle(name, null);
         SaveMetadata(name, new SessionMeta { ParentId = parentId, Label = label });
-        _messages.Clear();
-        _currentSession = name;
         return name;
     }
 
-    private sealed record SessionMeta
+    public void SaveSession()
     {
-        public string? ParentId { get; init; }
-        public string? Label { get; init; }
-        public long ElapsedMs { get; init; }
+        if (_currentHandle != null)
+            SaveSession(_currentHandle);
     }
 
-    private SessionMeta ReadMetadata(string name)
+    public void SaveSession(ISessionHandle handle)
     {
-        var path = Path.Combine(_sessionsDir, $"{name}.meta.json");
-        try { return JsonSerializer.Deserialize<SessionMeta>(File.ReadAllText(path)) ?? new SessionMeta(); }
-        catch { return new SessionMeta(); }
+        var path = Path.Combine(_sessionsDir, $"{handle.Name}.json");
+        var json = handle.SerializeToJson();
+        File.WriteAllText(path, Encrypt(json));
+        _currentHandle = handle;
+        PruneOldSessions();
+    }
+
+    public async Task SaveSessionAsync()
+    {
+        if (_currentHandle != null)
+            await SaveSessionAsync(_currentHandle).ConfigureAwait(false);
+    }
+
+    public async Task SaveSessionAsync(ISessionHandle handle)
+    {
+        var path = Path.Combine(_sessionsDir, $"{handle.Name}.json");
+        var json = handle.SerializeToJson();
+        await File.WriteAllTextAsync(path, Encrypt(json)).ConfigureAwait(false);
+        _currentHandle = handle;
+        PruneOldSessions();
+    }
+
+    public void SaveSession(string name)
+    {
+        if (_currentHandle == null) return;
+        if (_currentHandle.Name == name)
+        {
+            SaveSession(_currentHandle);
+            return;
+        }
+        // Save current state under a different name — wrap as new handle
+        var copyHandle = new JsonSessionHandle(name, JsonDocument.Parse(_currentHandle.SerializeToJson()).RootElement);
+        SaveSession(copyHandle);
+    }
+
+    public void DeleteSession(string name)
+    {
+        var path = Path.Combine(_sessionsDir, $"{name}.json");
+        if (File.Exists(path)) File.Delete(path);
+        var metaPath = Path.Combine(_sessionsDir, $"{name}.meta.json");
+        if (File.Exists(metaPath)) File.Delete(metaPath);
     }
 
     public void SaveMetadata(string name, object meta)
-    {
-        var path = Path.Combine(_sessionsDir, $"{name}.meta.json");
-        File.WriteAllText(path, JsonSerializer.Serialize(meta));
-    }
-
-    private void SaveMetadata(string name, SessionMeta meta)
     {
         var path = Path.Combine(_sessionsDir, $"{name}.meta.json");
         File.WriteAllText(path, JsonSerializer.Serialize(meta));
@@ -102,101 +169,18 @@ public sealed class SessionManager
         return raw;
     }
 
-    public void SaveSession()
+    private sealed record SessionMeta
     {
-        if (!string.IsNullOrEmpty(_currentSession))
-            SaveSession(_currentSession);
+        public string? ParentId { get; init; }
+        public string? Label { get; init; }
+        public long ElapsedMs { get; init; }
     }
 
-    public void SaveSession(string name)
+    private SessionMeta ReadMetadata(string name)
     {
-        var path = Path.Combine(_sessionsDir, $"{name}.json");
-        var data = _messages.Select(m => new ChatMessageJson
-        {
-            Role = m.Role == ChatRole.User ? "user" : "assistant",
-            Content = m.Text ?? ""
-        }).ToList();
-        var json = JsonSerializer.Serialize(data);
-        File.WriteAllText(path, Encrypt(json));
-        _currentSession = name;
-        PruneOldSessions();
-    }
-
-    public bool LoadSession(string name)
-    {
-        var path = Path.Combine(_sessionsDir, $"{name}.json");
-        if (!File.Exists(path)) return false;
-        try
-        {
-            var text = File.ReadAllText(path);
-            List<ChatMessageJson>? data;
-            try { data = JsonSerializer.Deserialize<List<ChatMessageJson>>(text); }
-            catch { data = JsonSerializer.Deserialize<List<ChatMessageJson>>(Decrypt(text)); }
-            if (data == null) return false;
-            _messages.Clear();
-            foreach (var m in data)
-                _messages.Add(new ChatMessage(m.Role == "user" ? ChatRole.User : ChatRole.Assistant, m.Content));
-            _currentSession = name;
-            return true;
-        }
-        catch { return false; }
-    }
-
-    public async Task<bool> LoadSessionAsync(string name)
-    {
-        var path = Path.Combine(_sessionsDir, $"{name}.json");
-        if (!File.Exists(path)) return false;
-        try
-        {
-            var text = await File.ReadAllTextAsync(path).ConfigureAwait(false);
-            List<ChatMessageJson>? data;
-            try { data = JsonSerializer.Deserialize<List<ChatMessageJson>>(text); }
-            catch { data = JsonSerializer.Deserialize<List<ChatMessageJson>>(Decrypt(text)); }
-            if (data == null) return false;
-            _messages.Clear();
-            foreach (var m in data)
-                _messages.Add(new ChatMessage(m.Role == "user" ? ChatRole.User : ChatRole.Assistant, m.Content));
-            _currentSession = name;
-            return true;
-        }
-        catch { return false; }
-    }
-
-    public async Task SaveSessionAsync()
-    {
-        if (!string.IsNullOrEmpty(_currentSession))
-            await SaveSessionAsync(_currentSession).ConfigureAwait(false);
-    }
-
-    public async Task SaveSessionAsync(string name)
-    {
-        var path = Path.Combine(_sessionsDir, $"{name}.json");
-        var data = _messages.Select(m => new ChatMessageJson
-        {
-            Role = m.Role == ChatRole.User ? "user" : "assistant",
-            Content = m.Text ?? ""
-        }).ToList();
-        var json = JsonSerializer.Serialize(data);
-        await File.WriteAllTextAsync(path, Encrypt(json)).ConfigureAwait(false);
-        _currentSession = name;
-        PruneOldSessions();
-    }
-
-    public string NewSession()
-    {
-        _sessionCounter++;
-        var name = $"session-{DateTime.UtcNow:yyyyMMdd-HHmmss}";
-        _messages.Clear();
-        _currentSession = name;
-        return name;
-    }
-
-    public void DeleteSession(string name)
-    {
-        var path = Path.Combine(_sessionsDir, $"{name}.json");
-        if (File.Exists(path)) File.Delete(path);
-        var metaPath = Path.Combine(_sessionsDir, $"{name}.meta.json");
-        if (File.Exists(metaPath)) File.Delete(metaPath);
+        var path = Path.Combine(_sessionsDir, $"{name}.meta.json");
+        try { return JsonSerializer.Deserialize<SessionMeta>(File.ReadAllText(path)) ?? new SessionMeta(); }
+        catch { return new SessionMeta(); }
     }
 
     private void PruneOldSessions()
@@ -250,11 +234,5 @@ public sealed class SessionManager
         Buffer.BlockCopy(fullBytes, iv.Length, cipherBytes, 0, cipherBytes.Length);
         var plainBytes = decryptor.TransformFinalBlock(cipherBytes, 0, cipherBytes.Length);
         return Encoding.UTF8.GetString(plainBytes);
-    }
-
-    private sealed record ChatMessageJson
-    {
-        public string Role { get; set; } = "";
-        public string Content { get; set; } = "";
     }
 }

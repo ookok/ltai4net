@@ -963,7 +963,8 @@ public sealed class ChatLayout
 
         try
         {
-            await foreach (var update in _chat.ChatStreamingAsync(input).WithCancellation(cts.Token).ConfigureAwait(false))
+            var sessionHandle = _sessions.CurrentHandle;
+            await foreach (var update in _chat.ChatStreamingAsync(input, sessionHandle).WithCancellation(cts.Token).ConfigureAwait(false))
             {
                 if (cts.Token.IsCancellationRequested) break;
 
@@ -1420,15 +1421,7 @@ public sealed class ChatLayout
 
     private void SaveSession()
     {
-        if (_history.Count == 0) return;
-        _sessions.AddMessage(Microsoft.Extensions.AI.ChatRole.User, _history[0].rawContent);
-        foreach (var (role, _, text, _) in _history.Skip(1))
-        {
-            if (role is "user" or "assistant")
-                _sessions.AddMessage(
-                    role == "user" ? Microsoft.Extensions.AI.ChatRole.User : Microsoft.Extensions.AI.ChatRole.Assistant,
-                    text);
-        }
+        if (_sessions.CurrentHandle == null) return;
         _sessions.SaveSession();
     }
 
@@ -1469,11 +1462,12 @@ public sealed class ChatLayout
                     _history.Add(("cmd", null, "[yellow]用法: /sessions load <会话名>[/]", null));
                     return;
                 }
-                if (_sessions.LoadSession(arg))
+                var handle = _sessions.LoadSession(arg);
+                if (handle != null)
                 {
                     _history.Clear();
                     _toolCalls.Clear();
-                    foreach (var m in _sessions.Messages)
+                    foreach (var m in handle.Messages)
                     {
                         var role = m.Role == Microsoft.Extensions.AI.ChatRole.User ? "user" : "assistant";
                         _history.Add((role, null, m.Text ?? "", null));

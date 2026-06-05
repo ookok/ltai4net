@@ -88,6 +88,7 @@ public static class TextPadView
         _currentDir = rootDir;
         _currentFile = null;
         _editMode = false;
+        _editorCaretLine = -1;
         RefreshGitStatus();
         var running = true;
         while (running)
@@ -97,6 +98,7 @@ public static class TextPadView
             AnsiConsole.MarkupLine($"[bold]文件浏览器[/] — [grey]{_currentDir}[/]{branchTag}");
             if (_currentFile != null && File.Exists(_currentFile))
             {
+                if (_editorCaretLine < 0) _editorCaretLine = _pageLines / 2 + 1;
                 RenderFileView();
                 var key = Console.ReadKey(true);
                 switch (key.Key)
@@ -106,12 +108,12 @@ public static class TextPadView
                     case ConsoleKey.S when _editMode: EditFile(); break;
                     case ConsoleKey.Delete: DeleteFile(); break;
                     case ConsoleKey.F2: RenameFile(); break;
-                    case ConsoleKey.UpArrow: if (_scrollOffset > 0) _scrollOffset--; break;
-                    case ConsoleKey.DownArrow: if (_scrollOffset < _totalLines - 1) _scrollOffset++; break;
-                    case ConsoleKey.PageUp: _scrollOffset = Math.Max(0, _scrollOffset - _pageLines); break;
-                    case ConsoleKey.PageDown: _scrollOffset = Math.Min(_totalLines - 1, _scrollOffset + _pageLines); break;
-                    case ConsoleKey.Home: _scrollOffset = 0; break;
-                    case ConsoleKey.End: _scrollOffset = Math.Max(0, _totalLines - _pageLines); break;
+                    case ConsoleKey.UpArrow: if (_scrollOffset > 0) { _scrollOffset--; _editorCaretLine = Math.Max(1, _editorCaretLine - 1); } break;
+                    case ConsoleKey.DownArrow: if (_scrollOffset < _totalLines - 1) { _scrollOffset++; _editorCaretLine = Math.Min(_totalLines, _editorCaretLine + 1); } break;
+                    case ConsoleKey.PageUp: _scrollOffset = Math.Max(0, _scrollOffset - _pageLines); _editorCaretLine = _scrollOffset + _pageLines / 2 + 1; break;
+                    case ConsoleKey.PageDown: _scrollOffset = Math.Min(_totalLines - 1, _scrollOffset + _pageLines); _editorCaretLine = _scrollOffset + _pageLines / 2 + 1; break;
+                    case ConsoleKey.Home: _scrollOffset = 0; _editorCaretLine = 1; break;
+                    case ConsoleKey.End: _scrollOffset = Math.Max(0, _totalLines - _pageLines); _editorCaretLine = _totalLines; break;
                     case ConsoleKey.G: GoToLine(); break;
                     case ConsoleKey.D when _gitBranch != null: RunCmd($"git diff \"{_currentFile}\""); break;
                     case ConsoleKey.L when _gitBranch != null: RunCmd($"git log --oneline -10"); break;
@@ -310,6 +312,7 @@ public static class TextPadView
         if (_currentFile == null) return;
         var line = AnsiConsole.Ask<int>($"[yellow]跳转到行 (1-{_totalLines}):[/]");
         _scrollOffset = Math.Clamp(line - 5, 0, _totalLines - 1);
+        _editorCaretLine = line;
     }
 
     private static void SearchInFile()
@@ -325,6 +328,7 @@ public static class TextPadView
                 if (lines[i].Contains(keyword, StringComparison.OrdinalIgnoreCase))
                 {
                     _scrollOffset = Math.Max(0, i - 2);
+                    _editorCaretLine = i + 1;
                     AnsiConsole.MarkupLine($"[green]找到:[/] 第 {i + 1} 行 — {lines[i].Trim().EscapeMarkup()}");
                 }
             }
@@ -401,7 +405,7 @@ public static class TextPadView
             for (int i = 0; i < lines.Count; i++)
             {
                 var lineNum = _scrollOffset + i + 1;
-                var marker = lineNum == _editorCaretLine ? "[yellow]▎[/]" : " ";
+                var marker = _editorCaretLine >= 0 && lineNum == _editorCaretLine ? "[yellow]▎[/]" : " ";
                 sb.AppendLine($"[grey]{lineNum.ToString().PadLeft(pad)}[/]{marker}{lines[i]}");
             }
 

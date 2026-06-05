@@ -106,9 +106,11 @@ public sealed class RemoteEmbeddingCache
     {
         var now = DateTime.UtcNow;
         var evicted = 0;
-        // Batch-evict: take up to 64 entries at a time to bound allocation
-        const int batchSize = 64;
-        var keys = _store.Take(batchSize).Where(kv => kv.Value.ExpiresUtc <= now)
+        // Full sweep: snapshot all keys and evict expired entries.
+        // For typical cache sizes (<10K entries) this completes in <1ms
+        // and avoids the unbounded-growth problem of the old approach
+        // (which only scanned the first 64 entries).
+        var keys = _store.Where(kv => kv.Value.ExpiresUtc <= now)
             .Select(kv => kv.Key).ToArray();
         foreach (var k in keys)
         {

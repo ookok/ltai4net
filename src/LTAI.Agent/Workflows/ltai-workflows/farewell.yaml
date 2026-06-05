@@ -18,15 +18,19 @@ trigger:
       id: is_farewell_en
       conditions:
         - condition: >-
-            StartsWith(Local.NormalizedText, "bye")
+            Local.NormalizedText = "bye"
+            || StartsWith(Local.NormalizedText, "bye ")
+            || StartsWith(Local.NormalizedText, "bye-")
             || StartsWith(Local.NormalizedText, "goodbye")
             || StartsWith(Local.NormalizedText, "see you")
             || StartsWith(Local.NormalizedText, "see ya")
-            || StartsWith(Local.NormalizedText, "later")
+            || Local.NormalizedText = "later"
+            || StartsWith(Local.NormalizedText, "later ")
             || StartsWith(Local.NormalizedText, "ttyl")
             || StartsWith(Local.NormalizedText, "gotta go")
-            || StartsWith(Local.NormalizedText, "cya")
-            || StartsWith(Local.NormalizedText, "night")
+            || Local.NormalizedText = "cya"
+            || Local.NormalizedText = "night"
+            || StartsWith(Local.NormalizedText, "night ")
             || StartsWith(Local.NormalizedText, "good night")
           id: cond_farewell_en
           actions:

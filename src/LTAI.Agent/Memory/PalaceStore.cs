@@ -126,16 +126,19 @@ public sealed class PalaceStore
         using var conn = new SqliteConnection(_connectionString);
         await conn.OpenAsync(ct).ConfigureAwait(false);
         using var cmd = conn.CreateCommand();
+        // Scan ALL entries with embeddings — not just the most recent N.
+        // Relevancy via full cosine scan instead of recency proxy.
+        // For typical palace sizes (100-10000), this adds 2-50ms per query.
+        // TODO: replace with HNSW index when palace exceeds 50000 entries.
         if (wing != null)
         {
-            cmd.CommandText = "SELECT * FROM palace WHERE wing = $wing AND embedding IS NOT NULL ORDER BY created_at DESC LIMIT $limit";
+            cmd.CommandText = "SELECT * FROM palace WHERE wing = $wing AND embedding IS NOT NULL";
             cmd.Parameters.AddWithValue("$wing", wing);
         }
         else
         {
-            cmd.CommandText = "SELECT * FROM palace WHERE embedding IS NOT NULL ORDER BY created_at DESC LIMIT $limit";
+            cmd.CommandText = "SELECT * FROM palace WHERE embedding IS NOT NULL";
         }
-        cmd.Parameters.AddWithValue("$limit", topK * 10);
 
         var results = new List<(Drawer d, double sim)>();
         await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
@@ -310,17 +313,6 @@ public sealed class PalaceStore
         return v;
     }
 
-    private static double CosineSimilarity(float[] a, float[] b)
-    {
-        if (a.Length != b.Length) return 0;
-        double dot = 0, na = 0, nb = 0;
-        for (int i = 0; i < a.Length; i++)
-        {
-            dot += a[i] * b[i];
-            na += a[i] * a[i];
-            nb += b[i] * b[i];
-        }
-        var denom = Math.Sqrt(na) * Math.Sqrt(nb);
-        return denom == 0 ? 0 : dot / denom;
-    }
+    private static float CosineSimilarity(float[] a, float[] b)
+        => LTAI.AI.VectorMath.CosineSimilarity(a.AsSpan(), b.AsSpan());
 }

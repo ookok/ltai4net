@@ -18,22 +18,28 @@ trigger:
       id: is_greeting
       conditions:
         - condition: >-
-            StartsWith(Local.NormalizedText, "hi")
+            Local.NormalizedText = "hi"
+            || StartsWith(Local.NormalizedText, "hi ")
             || StartsWith(Local.NormalizedText, "hello")
-            || StartsWith(Local.NormalizedText, "hey")
+            || StartsWith(Local.NormalizedText, "hey ")
+            || Local.NormalizedText = "hey"
             || StartsWith(Local.NormalizedText, "hiya")
-            || StartsWith(Local.NormalizedText, "yo")
-            || StartsWith(Local.NormalizedText, "howdy")
+            || Local.NormalizedText = "yo"
+            || Local.NormalizedText = "howdy"
             || StartsWith(Local.NormalizedText, "greetings")
             || StartsWith(Local.NormalizedText, "good morning")
             || StartsWith(Local.NormalizedText, "good afternoon")
             || StartsWith(Local.NormalizedText, "good evening")
-            || StartsWith(Local.NormalizedText, "morning")
-            || StartsWith(Local.NormalizedText, "afternoon")
-            || StartsWith(Local.NormalizedText, "evening")
+            || Local.NormalizedText = "morning"
+            || StartsWith(Local.NormalizedText, "morning ")
+            || Local.NormalizedText = "afternoon"
+            || StartsWith(Local.NormalizedText, "afternoon ")
+            || Local.NormalizedText = "evening"
+            || StartsWith(Local.NormalizedText, "evening ")
             || StartsWith(Local.NormalizedText, "what's up")
             || StartsWith(Local.NormalizedText, "whats up")
-            || StartsWith(Local.NormalizedText, "sup")
+            || Local.NormalizedText = "sup"
+            || StartsWith(Local.NormalizedText, "sup ")
           id: cond_greeting_en
           actions:
             - kind: SendActivity

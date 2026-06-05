@@ -67,6 +67,8 @@ public sealed partial class KgStore : IDisposable
 
     // HNSW index for approximate nearest neighbor search
     private readonly HnswIndex _hnsw = new();
+    private readonly List<long> _hnswNodeIds = [];
+    private readonly ReaderWriterLockSlim _hnswLock = new();
     private int _vectorCount;
 
     // ═══════════════════════════════════════════
@@ -281,7 +283,11 @@ public sealed partial class KgStore : IDisposable
     {
         var deleted = await WriteLockAsync(async cmd => await cmd.ExecuteNonQueryAsync().ConfigureAwait(false) > 0, SQL_DELETE_NODE,
             cmd => cmd.Parameters.AddWithValue("@id", id)).ConfigureAwait(false);
-        if (deleted) await IncrementalVacuumAsync(50).ConfigureAwait(false);
+        if (deleted)
+        {
+            await IncrementalVacuumAsync(50).ConfigureAwait(false);
+            await RebuildCentroidsAsync().ConfigureAwait(false);
+        }
         return deleted;
     }
 
@@ -291,7 +297,11 @@ public sealed partial class KgStore : IDisposable
     {
         var count = await WriteLockAsync(cmd => cmd.ExecuteNonQueryAsync(), SQL_DELETE_SOURCE,
             cmd => cmd.Parameters.AddWithValue("@src", source)).ConfigureAwait(false);
-        if (count > 0) await IncrementalVacuumAsync(200).ConfigureAwait(false);
+        if (count > 0)
+        {
+            await IncrementalVacuumAsync(200).ConfigureAwait(false);
+            await RebuildCentroidsAsync().ConfigureAwait(false);
+        }
         return count;
     }
 
@@ -744,6 +754,7 @@ public sealed partial class KgStore : IDisposable
         {
             await WriteLockVoidAsync("DELETE FROM Nodes WHERE updated_at < @cutoff;",
                 cmd => cmd.Parameters.AddWithValue("@cutoff", cutoffStr)).ConfigureAwait(false);
+            await RebuildCentroidsAsync().ConfigureAwait(false);
         }
         return count;
     }
@@ -1018,16 +1029,23 @@ public sealed partial class KgStore : IDisposable
         {
             cmd.Parameters.AddWithValue("@nid", nodeId);
             cmd.Parameters.AddWithValue("@vec", blob);
-            cmd.Parameters.AddWithValue("@cid", -1); // HNSW doesn't use centroids
         }).ConfigureAwait(false);
 
-        _hnsw.Insert(embedding);
+        _hnswLock.EnterWriteLock();
+        try
+        {
+            _hnsw.Insert(embedding);
+            _hnswNodeIds.Add(nodeId);
+        }
+        finally { _hnswLock.ExitWriteLock(); }
         Interlocked.Increment(ref _vectorCount);
     }
 
     /// <summary>
     /// Vector similarity search by cosine distance.
     /// Uses HNSW for approximate nearest neighbor search.
+    /// A <see cref="_hnswNodeIds"/> list maps HNSW position → node_id to avoid
+    /// the O(n) VecNodes rowid lookup (which was broken — rowid ≠ HNSW position).
     /// </summary>
     public async Task<List<(long nodeId, float distance)>> SearchVector(float[] query, int topN = 30, string? kindFilter = null)
     {
@@ -1035,89 +1053,75 @@ public sealed partial class KgStore : IDisposable
         if (query.Length != 384)
             throw new ArgumentException($"MiniLM requires 384-dim vectors, got {query.Length}");
 
-        // HNSW approximate search
-        var hnswResults = _hnsw.Search(query, topN * 2);
+        // HNSW approximate search (read lock)
+        List<(int idx, float dist)> hnswResults;
+        _hnswLock.EnterReadLock();
+        try
+        {
+            if (_hnswNodeIds.Count == 0) return [];
+            hnswResults = _hnsw.Search(query, topN * 2);
+        }
+        finally { _hnswLock.ExitReadLock(); }
+
         if (hnswResults.Count == 0) return [];
 
-        // Resolve node IDs from HNSW index positions (in-order mapping not available,
-        // so fall back to SQL lookup for the top candidates)
+        // Map HNSW positions → node_ids via maintained list (O(1) per hit)
         var candidates = new List<(long nodeId, float distance)>();
-        var sql = kindFilter != null
-            ? "SELECT node_id FROM VecNodes WHERE rowid = @rid AND node_id IN (SELECT id FROM Nodes WHERE kind = @kind);"
-            : "SELECT node_id FROM VecNodes WHERE rowid = @rid;";
-
-        using (var cmd = _reader.CreateCommand())
+        _hnswLock.EnterReadLock();
+        try
         {
-            cmd.CommandText = sql;
-            var ridParam = cmd.Parameters.Add("@rid", Microsoft.Data.Sqlite.SqliteType.Integer);
-            SqliteParameter? kindParam = null;
-            if (kindFilter != null)
-                kindParam = cmd.Parameters.AddWithValue("@kind", kindFilter);
-
             foreach (var (idx, dist) in hnswResults)
             {
-                ridParam.Value = idx + 1; // SQLite rowid is 1-based
-                if (kindParam != null) kindParam.Value = kindFilter;
-                using var rdr = await cmd.ExecuteReaderAsync().ConfigureAwait(false);
-                if (rdr.Read())
-                    candidates.Add((rdr.GetInt64(0), dist));
+                if (idx < 0 || idx >= _hnswNodeIds.Count) continue;
+                candidates.Add((_hnswNodeIds[idx], dist));
                 if (candidates.Count >= topN) break;
             }
         }
+        finally { _hnswLock.ExitReadLock(); }
 
-        return candidates;
+        if (candidates.Count == 0) return [];
+
+        // Apply kind filter via SQL if needed
+        if (kindFilter != null)
+        {
+            var idList = candidates.Select(c => c.nodeId).Distinct().ToList();
+            if (idList.Count == 0) return [];
+
+            var sb = new System.Text.StringBuilder("SELECT id FROM Nodes WHERE id IN (");
+            sb.Append(string.Join(",", idList.Select((_, i) => $"@id{i}")));
+            sb.Append(") AND kind = @kind;");
+
+            using var cmd = _reader.CreateCommand();
+            cmd.CommandText = sb.ToString();
+            for (int i = 0; i < idList.Count; i++)
+                cmd.Parameters.AddWithValue($"@id{i}", idList[i]);
+            cmd.Parameters.AddWithValue("@kind", kindFilter);
+
+            var validIds = new HashSet<long>();
+            using var rdr = await cmd.ExecuteReaderAsync().ConfigureAwait(false);
+            while (rdr.Read()) validIds.Add(rdr.GetInt64(0));
+
+            return candidates.Where(c => validIds.Contains(c.nodeId)).Take(topN).ToList();
+        }
+
+        return candidates.Take(topN).ToList();
     }
 
-    /// <summary>Delete the vector embedding for a node.</summary>
+    /// <summary>Delete the vector embedding for a node. Rebuilds HNSW index from remaining vectors.</summary>
     public async Task DeleteVectorAsync(long nodeId)
     {
         await WriteLockVoidAsync(SQL_DELETE_VEC, cmd =>
         {
             cmd.Parameters.AddWithValue("@nid", nodeId);
         }).ConfigureAwait(false);
+        await RebuildCentroidsAsync().ConfigureAwait(false);
     }
 
     private static float CosineSimilarity(ReadOnlySpan<float> a, ReadOnlySpan<float> b)
-    {
-        float dot = 0, normA = 0, normB = 0;
-        int i = 0;
-
-        if (System.Numerics.Vector.IsHardwareAccelerated && a.Length >= System.Numerics.Vector<float>.Count)
-        {
-            int vecLen = System.Numerics.Vector<float>.Count;
-            var aVecs = System.Runtime.InteropServices.MemoryMarshal.Cast<float, System.Numerics.Vector<float>>(a);
-            var bVecs = System.Runtime.InteropServices.MemoryMarshal.Cast<float, System.Numerics.Vector<float>>(b);
-            var vdot = System.Numerics.Vector<float>.Zero;
-            var vna = System.Numerics.Vector<float>.Zero;
-            var vnb = System.Numerics.Vector<float>.Zero;
-            for (int j = 0; j < aVecs.Length; j++)
-            {
-                vdot += aVecs[j] * bVecs[j];
-                vna += aVecs[j] * aVecs[j];
-                vnb += bVecs[j] * bVecs[j];
-            }
-            for (int k = 0; k < vecLen; k++)
-            {
-                dot += vdot[k];
-                normA += vna[k];
-                normB += vnb[k];
-            }
-            i += aVecs.Length * vecLen;
-        }
-
-        for (; i < a.Length; i++)
-        {
-            dot += a[i] * b[i];
-            normA += a[i] * a[i];
-            normB += b[i] * b[i];
-        }
-
-        var denom = MathF.Sqrt(normA) * MathF.Sqrt(normB);
-        return denom == 0 ? 0 : dot / denom;
-    }
+        => LTAI.AI.VectorMath.CosineSimilarity(a, b);
 
     private const string SQL_INSERT_VEC =
-        "INSERT OR REPLACE INTO VecNodes(node_id, vec, centroid_id) VALUES (@nid, @vec, @cid);";
+        "INSERT OR REPLACE INTO VecNodes(node_id, vec) VALUES (@nid, @vec);";
 
     private const string SQL_DELETE_VEC =
         "DELETE FROM VecNodes WHERE node_id = @nid;";
@@ -1321,24 +1325,33 @@ public sealed partial class KgStore : IDisposable
     //  HNSW index rebuild from persisted vectors
     // ═══════════════════════════════════════════
 
-    /// <summary>Rebuild the HNSW index from all vectors in VecNodes.</summary>
+    /// <summary>Rebuild the HNSW index + nodeId mapping from all vectors in VecNodes.</summary>
     public async Task RebuildCentroidsAsync()
     {
         ThrowIfDisposed();
+        var nodeIds = new List<long>();
         var vectors = new List<float[]>();
         using (var rdr = _reader.CreateCommand())
         {
-            rdr.CommandText = "SELECT vec FROM VecNodes;";
+            rdr.CommandText = "SELECT node_id, vec FROM VecNodes;";
             using var reader = await rdr.ExecuteReaderAsync().ConfigureAwait(false);
             while (reader.Read())
             {
+                nodeIds.Add(reader.GetInt64(0));
                 var blob = (byte[])reader["vec"];
                 var vec = new float[384];
                 Buffer.BlockCopy(blob, 0, vec, 0, blob.Length);
                 vectors.Add(vec);
             }
         }
-        _hnsw.Rebuild(vectors);
+        _hnswLock.EnterWriteLock();
+        try
+        {
+            _hnsw.Rebuild(vectors);
+            _hnswNodeIds.Clear();
+            _hnswNodeIds.AddRange(nodeIds);
+        }
+        finally { _hnswLock.ExitWriteLock(); }
     }
 
     // ═══════════════════════════════════════════
@@ -1358,6 +1371,7 @@ public sealed partial class KgStore : IDisposable
         _readCmdCache.Clear();
         _resultCache.Dispose();
         _hnsw.Dispose();
+        _hnswLock.Dispose();
 
         _writer.Dispose();
         _reader.Dispose();
