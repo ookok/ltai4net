@@ -7,7 +7,45 @@ public sealed class InstructionProvider : AIContextProvider
 {
     private static string? _cachedAgentsMd;
     private static readonly object _agentsMdLock = new();
+    private static FileSystemWatcher? _agentsMdWatcher;
+    private static string? _watchedPath;
     private readonly string? _modelId;
+
+    /// <summary>Invalidate the AGENTS.md cache so next call reloads from disk (thread-safe).</summary>
+    public static void InvalidateCache()
+    {
+        lock (_agentsMdLock)
+        {
+            _cachedAgentsMd = null;
+        }
+    }
+
+    /// <summary>Initialize FileSystemWatcher to auto-invalidate on file changes.</summary>
+    public static void StartWatching()
+    {
+        var candidates = new[]
+        {
+            Path.Combine(AppContext.BaseDirectory, "AGENTS.md"),
+            Path.Combine(Directory.GetCurrentDirectory(), "AGENTS.md"),
+        };
+        foreach (var path in candidates)
+        {
+            if (!File.Exists(path)) continue;
+            var dir = Path.GetDirectoryName(path);
+            if (dir == null) return;
+            _watchedPath = path;
+            _agentsMdWatcher = new FileSystemWatcher(dir, "AGENTS.md")
+            {
+                EnableRaisingEvents = true,
+                NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName
+            };
+            _agentsMdWatcher.Changed += (_, _) => InvalidateCache();
+            _agentsMdWatcher.Created += (_, _) => InvalidateCache();
+            _agentsMdWatcher.Deleted += (_, _) => InvalidateCache();
+            _agentsMdWatcher.Renamed += (_, _) => InvalidateCache();
+            return;
+        }
+    }
 
     public InstructionProvider(string? modelId = null) : base(null, null, null)
     {

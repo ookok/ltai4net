@@ -1,6 +1,9 @@
 // Copyright (c) LTAI. All rights reserved.
 
+using LTAI.Agent.Context;
 using LTAI.Agent.DevUI;
+using LTAI.Agent.Tasks;
+using LTAI.Agent.Tools;
 using LTAI.Agent.Workflows;
 using LTAI.Core.Configuration;
 using Spectre.Console;
@@ -24,7 +27,10 @@ public static class DevUIDashboardView
         ToolEmbeddingCache? cache = null,
         RemoteEmbeddingCache? remoteCache = null,
         EmbeddingClient? embeddingClient = null,
-        ModelMetadataProvider? provider = null)
+        ModelMetadataProvider? provider = null,
+        CacheAlignerProvider? aligner = null,
+        TaskQueue? taskQueue = null,
+        BackgroundJobService? bgjs = null)
     {
         var cards = devUi.ListAgentCards();
         var recent = spans.Snapshot().TakeLast(15).Reverse().ToList();
@@ -32,13 +38,13 @@ public static class DevUIDashboardView
 
         var layout = new Layout("root")
             .SplitRows(
-                new Layout("header").Size(8),
+                new Layout("header").Size(10),
                 new Layout("body").SplitColumns(
                     new Layout("agents").Ratio(2),
                     new Layout("spans").Ratio(3)),
                 new Layout("footer").Size(7));
 
-        layout["header"].Update(BuildHeaderPanel(cards.Count, spans.Count, recent, workflowList, embedder, cache, remoteCache, embeddingClient, provider));
+        layout["header"].Update(BuildHeaderPanel(cards.Count, spans.Count, recent, workflowList, embedder, cache, remoteCache, embeddingClient, provider, aligner, taskQueue, bgjs));
 
         layout["agents"].Update(BuildAgentTable(cards));
         layout["spans"].Update(BuildSpanTable(recent));
@@ -56,7 +62,10 @@ public static class DevUIDashboardView
         ToolEmbeddingCache? cache,
         RemoteEmbeddingCache? remoteCache,
         EmbeddingClient? embeddingClient,
-        ModelMetadataProvider? provider = null)
+        ModelMetadataProvider? provider = null,
+        CacheAlignerProvider? aligner = null,
+        TaskQueue? taskQueue = null,
+        BackgroundJobService? bgjs = null)
     {
         var topLine =
             $"[bold]LTAI DevUI Dashboard[/]  [grey]·[/]  " +
@@ -69,7 +78,9 @@ public static class DevUIDashboardView
         var remoteLine = BuildRemoteCacheStatusLine(remoteCache);
         var fallbackLine = BuildEmbeddingClientLine(embeddingClient);
         var modelsLine = BuildModelMetadataLine(provider);
-        var lines = $"{topLine}\n{embedLine}\n{cacheLine}\n{remoteLine}\n{fallbackLine}\n{modelsLine}";
+        var alignerLine = BuildAlignerStatusLine(aligner);
+        var queueLine = BuildQueueStatusLine(taskQueue, bgjs);
+        var lines = $"{topLine}\n{embedLine}\n{cacheLine}\n{remoteLine}\n{fallbackLine}\n{modelsLine}\n{alignerLine}\n{queueLine}";
         try
         {
             return new Panel(new Markup(lines))
@@ -364,6 +375,57 @@ public static class DevUIDashboardView
         < 60_000 => $"{d.TotalSeconds:F2} s",
         _ => $"{d.TotalMinutes:F1} m",
     };
+
+    /// <summary>
+    /// CacheAlignerProvider stability metrics: normalizations total, hit rate,
+    /// consecutive stable runs. A high stable count means instructions haven't
+    /// changed across invocations → KV cache prefix remains stable.
+    /// </summary>
+    private static string BuildAlignerStatusLine(CacheAlignerProvider? aligner)
+    {
+        if (aligner is null)
+            return "[grey][[/][bold]Aligner[/][grey]]][/]  [dim](not registered)[/]";
+
+        var norm = aligner.Normalizations;
+        var hits = aligner.CacheHits;
+        var stable = aligner.StableCount;
+        var rate = aligner.HitRate;
+        var ratePct = (rate * 100).ToString("F0");
+        var rateColor = rate >= 0.80 ? "green" : rate >= 0.50 ? "yellow" : "red";
+        return $"[grey][[/][bold]Aligner[/][grey]]][/]  " +
+               $"[aqua]{norm}[/] normalizations  [grey]·[/]  " +
+               $"[green]{hits}[/] hits  [grey]·[/]  " +
+               $"hit rate [{rateColor}]{ratePct}%[/]  [grey]·[/]  " +
+               $"[cyan]{stable}[/] stable runs";
+    }
+
+    /// <summary>
+    /// TaskQueue + BackgroundJobService queue depth and throughput metrics.
+    /// </summary>
+    private static string BuildQueueStatusLine(TaskQueue? tq, BackgroundJobService? bgjs)
+    {
+        var parts = new System.Collections.Generic.List<string>();
+
+        if (tq is not null)
+        {
+            parts.Add($"TQ [aqua]{tq.QueueDepth}[/] depth " +
+                      $"[grey]·[/] [green]{tq.CompletedCount}[/] done " +
+                      $"[yellow]{tq.FailedCount}[/] fail");
+        }
+
+        if (bgjs is not null)
+        {
+            var m = bgjs.GetMetrics();
+            parts.Add($"BG [aqua]{m.RunningCount}[/] run " +
+                      $"[grey]·[/] [green]{m.CompletedCount}[/] done " +
+                      $"[grey]·[/] [aqua]{m.TotalJobs}[/] total");
+        }
+
+        if (parts.Count == 0)
+            return "[grey][[/][bold]Queues[/][grey]]][/]  [dim](not registered)[/]";
+
+        return $"[grey][[/][bold]Queues[/][grey]]][/]  {string.Join("  [grey]|[/]  ", parts)}";
+    }
 
     private static string Truncate(string s, int max)
     {

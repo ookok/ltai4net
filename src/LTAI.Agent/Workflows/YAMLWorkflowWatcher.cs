@@ -5,6 +5,7 @@ using System.Collections.Concurrent;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
+using LTAI.Core.Storage;
 using Microsoft.Extensions.Logging;
 
 namespace LTAI.Agent.Workflows;
@@ -118,6 +119,10 @@ public sealed class YAMLWorkflowWatcher : IDisposable
                     if (File.Exists(path))
                     {
                         await _registry.ReloadFileAsync(path).ConfigureAwait(false);
+
+                        // P6: auto-commit the changed file to LocalVersionRepo
+                        TryCommitToRepo(path);
+
                         return;
                     }
                 }
@@ -132,6 +137,22 @@ public sealed class YAMLWorkflowWatcher : IDisposable
         catch (Exception ex)
         {
             _logger.LogError(ex, "Unexpected error reloading {Path}", path);
+        }
+    }
+
+    private static void TryCommitToRepo(string path)
+    {
+        try
+        {
+            var baseDir = LocalVersionRepo.BaseDirectory;
+            if (!path.StartsWith(baseDir, StringComparison.OrdinalIgnoreCase))
+                return;
+            var rel = Path.GetRelativePath(baseDir, path);
+            LocalVersionRepo.Commit(rel, $"♻ Hot-reload: {Path.GetFileName(path)}");
+        }
+        catch
+        {
+            // best-effort: commit failure should not break the reload flow
         }
     }
 

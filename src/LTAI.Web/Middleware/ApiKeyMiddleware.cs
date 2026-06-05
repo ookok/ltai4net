@@ -39,7 +39,21 @@ public sealed class ApiKeyMiddleware
             return;
         }
 
-        // Extract key from header
+        // Try HMAC-SHA256 signature verification first
+        // Signature format: HMAC-SHA256 hex-encoded HMAC of the request path
+        var signature = context.Request.Headers["X-Signature"].FirstOrDefault();
+        if (!string.IsNullOrEmpty(signature))
+        {
+            var path = context.Request.Path.ToString();
+            var expectedHmac = ComputeHmac(_configuredKey, path);
+            if (ConstantTimeEquals(expectedHmac, signature))
+            {
+                await _next(context).ConfigureAwait(false);
+                return;
+            }
+        }
+
+        // Fall back to API key header verification
         var provided = context.Request.Headers["X-API-Key"].FirstOrDefault()
                     ?? ExtractBearer(context);
 
@@ -53,6 +67,16 @@ public sealed class ApiKeyMiddleware
         }
 
         await _next(context).ConfigureAwait(false);
+    }
+
+    /// <summary>Compute HMAC-SHA256 hex string for a given key and message.</summary>
+    private static string ComputeHmac(string key, string message)
+    {
+        var keyBytes = Encoding.UTF8.GetBytes(key);
+        var msgBytes = Encoding.UTF8.GetBytes(message);
+        using var hmac = new HMACSHA256(keyBytes);
+        var hash = hmac.ComputeHash(msgBytes);
+        return Convert.ToHexString(hash).ToLowerInvariant();
     }
 
     private static string? ExtractBearer(HttpContext context)

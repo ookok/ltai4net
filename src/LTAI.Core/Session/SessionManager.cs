@@ -1,7 +1,9 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using LTAI.Core.Configuration;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Options;
 
 namespace LTAI.Core.Session;
 
@@ -9,20 +11,11 @@ public sealed class SessionManager
 {
     private readonly string _sessionsDir;
     private ISessionHandle? _currentHandle;
-    private const int MaxSessions = 500;
-    private static readonly byte[] EncryptionKey = ComputeEncryptionKey();
-
-    public SessionManager()
-    {
-        _sessionsDir = Path.Combine(Directory.GetCurrentDirectory(), ".livingtree", "sessions");
-        Directory.CreateDirectory(_sessionsDir);
-    }
-
-    public SessionManager(string sessionsDir)
-    {
-        _sessionsDir = sessionsDir;
-        Directory.CreateDirectory(_sessionsDir);
-    }
+    private readonly int _maxSessions;
+    private readonly int _keyRotationMonths;
+    private static byte[]? _encryptionKey;
+    private static DateTime? _keyCreatedAt;
+    private static readonly object _keyLock = new();
 
     public ISessionHandle? CurrentHandle => _currentHandle;
 
@@ -31,6 +24,29 @@ public sealed class SessionManager
     public IReadOnlyList<ChatMessage> Messages => _currentHandle?.Messages ?? [];
 
     public int MessageCount => _currentHandle?.Messages.Count ?? 0;
+
+    public SessionManager() : this(Options.Create(new LTAIOptions())) { }
+
+    public SessionManager(IOptions<LTAIOptions> options)
+    {
+        var cfg = options.Value.Session;
+        _sessionsDir = Path.IsPathRooted(cfg.Path)
+            ? cfg.Path
+            : Path.Combine(Directory.GetCurrentDirectory(), cfg.Path);
+        _maxSessions = Math.Max(10, cfg.MaxSessions);
+        _keyRotationMonths = Math.Max(0, cfg.KeyRotationMonths);
+        EnsureKey();
+        Directory.CreateDirectory(_sessionsDir);
+    }
+
+    public SessionManager(string sessionsDir, int maxSessions = 500, int keyRotationMonths = 6)
+    {
+        _sessionsDir = sessionsDir;
+        _maxSessions = Math.Max(10, maxSessions);
+        _keyRotationMonths = Math.Max(0, keyRotationMonths);
+        EnsureKey();
+        Directory.CreateDirectory(_sessionsDir);
+    }
 
     public ISessionHandle NewSession()
     {
@@ -64,9 +80,16 @@ public sealed class SessionManager
         try
         {
             var text = File.ReadAllText(path);
+            // F12: Do NOT silently fall back to treating ciphertext as plaintext.
+            // If decryption fails, the file is either corrupted or encrypted with a
+            // different key — loading it as plaintext is a security downgrade.
             string json;
             try { json = Decrypt(text); }
-            catch { json = text; }
+            catch
+            {
+                System.Diagnostics.Debug.WriteLine($"[SessionManager] Failed to decrypt session '{name}'");
+                return null;
+            }
 
             var doc = JsonDocument.Parse(json);
             _currentHandle = new JsonSessionHandle(name, doc.RootElement.Clone());
@@ -84,7 +107,11 @@ public sealed class SessionManager
             var text = await File.ReadAllTextAsync(path).ConfigureAwait(false);
             string json;
             try { json = Decrypt(text); }
-            catch { json = text; }
+            catch
+            {
+                System.Diagnostics.Debug.WriteLine($"[SessionManager] Failed to decrypt session '{name}'");
+                return null;
+            }
 
             var doc = JsonDocument.Parse(json);
             _currentHandle = new JsonSessionHandle(name, doc.RootElement.Clone());
@@ -186,31 +213,94 @@ public sealed class SessionManager
     private void PruneOldSessions()
     {
         var allSessions = ListSessions();
-        if (allSessions.Length > MaxSessions)
+        if (allSessions.Length > _maxSessions)
         {
-            var toDelete = allSessions.OrderBy(s => s.Name).Take(allSessions.Length - MaxSessions).ToArray();
+            var toDelete = allSessions.OrderBy(s => s.Name).Take(allSessions.Length - _maxSessions).ToArray();
             foreach (var s in toDelete)
                 DeleteSession(s.Name);
         }
     }
 
-    private static byte[] ComputeEncryptionKey()
+    private void EnsureKey()
     {
-        var keyFile = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "LTAI", "encryption.key");
-        if (File.Exists(keyFile))
-            return File.ReadAllBytes(keyFile);
-        var key = RandomNumberGenerator.GetBytes(32);
-        Directory.CreateDirectory(Path.GetDirectoryName(keyFile)!);
-        File.WriteAllBytes(keyFile, key);
-        return key;
+        if (_encryptionKey != null) return;
+        lock (_keyLock)
+        {
+            if (_encryptionKey != null) return;
+            var keyDir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "LTAI");
+            var keyFile = Path.Combine(keyDir, "encryption.key");
+            var metaFile = Path.Combine(keyDir, "encryption.meta");
+
+            if (File.Exists(keyFile))
+            {
+                _encryptionKey = File.ReadAllBytes(keyFile);
+                _keyCreatedAt = File.Exists(metaFile)
+                    ? DateTime.Parse(File.ReadAllText(metaFile))
+                    : DateTime.UtcNow;
+
+                // 检查是否需要轮换
+                if (_keyRotationMonths > 0 &&
+                    (DateTime.UtcNow - _keyCreatedAt.Value).TotalDays >= _keyRotationMonths * 30)
+                {
+                    RotateKey(keyDir, keyFile, metaFile);
+                }
+            }
+            else
+            {
+                _encryptionKey = RandomNumberGenerator.GetBytes(32);
+                _keyCreatedAt = DateTime.UtcNow;
+                Directory.CreateDirectory(keyDir);
+                File.WriteAllBytes(keyFile, _encryptionKey);
+                File.WriteAllText(metaFile, _keyCreatedAt.Value.ToString("O"));
+            }
+        }
+    }
+
+    private void RotateKey(string keyDir, string keyFile, string metaFile)
+    {
+        var oldKey = _encryptionKey;
+        var newKey = RandomNumberGenerator.GetBytes(32);
+        var failedFiles = new List<string>();
+
+        // 用新密钥重新加密所有现有会话。
+        // F12: 任何文件失败 → 中止旋转，保留旧密钥。
+        var sessionFiles = Directory.GetFiles(_sessionsDir, "*.json");
+        foreach (var sf in sessionFiles)
+        {
+            try
+            {
+                var ciphertext = File.ReadAllText(sf);
+                var plaintext = Decrypt(ciphertext, oldKey!);
+                _encryptionKey = newKey;
+                File.WriteAllText(sf, Encrypt(plaintext));
+                _encryptionKey = oldKey; // restore for next iteration
+            }
+            catch (Exception ex)
+            {
+                failedFiles.Add($"{sf}: {ex.Message}");
+            }
+        }
+
+        if (failedFiles.Count > 0)
+        {
+            _encryptionKey = oldKey;
+            var errors = string.Join("; ", failedFiles);
+            throw new InvalidOperationException(
+                $"Key rotation ABORTED: {failedFiles.Count} file(s) failed to re-encrypt: {errors}");
+        }
+
+        _encryptionKey = newKey;
+        _keyCreatedAt = DateTime.UtcNow;
+        File.WriteAllBytes(keyFile, newKey);
+        File.WriteAllText(metaFile, _keyCreatedAt.Value.ToString("O"));
     }
 
     private static string Encrypt(string plaintext)
     {
         using var aes = Aes.Create();
-        aes.Key = EncryptionKey;
+        aes.Key = _encryptionKey ?? throw new InvalidOperationException("Encryption key not initialized");
         aes.GenerateIV();
         using var encryptor = aes.CreateEncryptor();
         var plainBytes = Encoding.UTF8.GetBytes(plaintext);
@@ -221,11 +311,11 @@ public sealed class SessionManager
         return Convert.ToBase64String(result);
     }
 
-    private static string Decrypt(string ciphertext)
+    private static string Decrypt(string ciphertext, byte[]? keyOverride = null)
     {
         var fullBytes = Convert.FromBase64String(ciphertext);
         using var aes = Aes.Create();
-        aes.Key = EncryptionKey;
+        aes.Key = keyOverride ?? _encryptionKey ?? throw new InvalidOperationException("Encryption key not initialized");
         var iv = new byte[aes.IV.Length];
         Buffer.BlockCopy(fullBytes, 0, iv, 0, iv.Length);
         aes.IV = iv;

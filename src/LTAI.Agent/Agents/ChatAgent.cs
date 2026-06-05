@@ -1,8 +1,12 @@
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using LTAI.AI;
+using LTAI.Agent.Learning;
+using LTAI.Agent.Tools;
 using LTAI.Agent.Workflows;
+using LTAI.Core.Safety;
 using LTAI.Core.Session;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
@@ -21,6 +25,21 @@ public sealed class ChatAgent
         "yes", "no", "ok", "okay", "好的", "嗯", "哦",
         "who are you", "你是谁",
         "?", "？", "！", "!", "",
+    };
+
+    private static readonly HashSet<string> _toolRequiredKeywords = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "file", "directory", "folder", "script",
+        "文件", "目录", "文件夹", "脚本",
+        "run", "执行", "运行",
+        "list", "search", "grep", "read", "write", "create",
+        "列出", "搜索", "查找", "读取", "写入", "创建",
+        "compile", "build", "编译",
+        "git", "commit", "push", "pull",
+        "network", "port", "docker", "container",
+        "进程", "process", "system", "系统",
+        "shell", "cmd", "powershell",
+        "杀", "启动", "停止", "kill", "start", "stop",
     };
 
     internal static string GetOrCreateTraceId() =>
@@ -47,6 +66,96 @@ public sealed class ChatAgent
         _httpFactory = httpFactory;
     }
 
+    private static int EstimateComplexity(string message)
+    {
+        var score = 0;
+
+        // 长度因子
+        score += message.Length > 200 ? 2 : message.Length > 50 ? 1 : 0;
+
+        // 高认知词：优化/分析/架构/设计/重构等
+        var highCogWords = Regex.Matches(message,
+            @"\b(优化|分析|架构|设计|重构|review|trace|debug|profile|" +
+            "refactor|design pattern|architecture|performance|security|" +
+            "并发|线程安全|性能|安全|架构|模式|设计|优化|重构)\b",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        score += Math.Min(highCogWords.Count, 3);
+
+        // 因果/对比推理
+        var causalWords = Regex.Matches(message,
+            @"\b(because|why|compare|vs|差异|区别|什么原因|" +
+            "为什么|对比|原因|影响|关系)\b",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        score += Math.Min(causalWords.Count, 2);
+
+        // 代码块引用
+        if (message.Contains("```")) score += 2;
+
+        // 多行输入（代码片段、日志等）
+        if (message.Count(c => c == '\n') > 5) score += 2;
+
+        return score;
+    }
+
+    private static bool LikelyRequiresTool(string message)
+    {
+        return _toolRequiredKeywords.Any(k =>
+            message.Contains(k, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool HasToolResults(AgentResponse r)
+    {
+        if (r.Messages == null) return false;
+        return r.Messages.Any(m =>
+            m.Contents?.OfType<FunctionResultContent>().Any() == true);
+    }
+
+    private async Task<(bool IsAdequate, string Reason)> JudgeResponseQualityAsync(
+        string originalMessage, string response, CancellationToken ct)
+    {
+        var safeOriginal = JsonSerializer.Serialize(originalMessage);
+        var safeResponse = JsonSerializer.Serialize(response);
+        var jsonFormat = """{"adequate": true/false, "reason": "简短原因（中文）"}""";
+        var judgePrompt = $"""
+            你是一个回答质量审核员。判断以下AI回答是否合格。
+
+            用户问题（JSON字符串）：{safeOriginal}
+
+            AI回答（JSON字符串）：{safeResponse}
+
+            用JSON格式返回：{jsonFormat}
+
+            合格条件（全部满足则adequate=true）：
+            1. 回答了用户的核心问题
+            2. 没有拒绝回答或说"无法"
+            3. 内容具体（有数据/事实/步骤，不是空话）
+            4. 不编造数据（如果问题需要实时/本地信息，应该调用工具）
+
+            不合格举例：
+            - "我无法访问您的本地文件"而没有尝试调用文件工具
+            - 编造了具体数据而没有工具调用支撑
+            - 回答过于空泛（"这是一个复杂的问题"等）
+            """;
+
+        try
+        {
+            var judgeSession = await _agent.CreateSessionAsync(ct).ConfigureAwait(false);
+            var judgeResult = await _agent.RunAsync(
+                [new ChatMessage(ChatRole.User, judgePrompt)], judgeSession,
+                cancellationToken: ct).ConfigureAwait(false);
+            var judgeText = judgeResult.Messages?.LastOrDefault()?.Text ?? "";
+
+            using var doc = JsonDocument.Parse(judgeText);
+            var adequate = doc.RootElement.GetProperty("adequate").GetBoolean();
+            var reason = doc.RootElement.GetProperty("reason").GetString() ?? "";
+            return (adequate, reason);
+        }
+        catch
+        {
+            return (true, "judge failed, assume adequate");
+        }
+    }
+
     public async Task WarmUpAsync(CancellationToken ct = default)
     {
         if (_localEmbedder?.Available == false)
@@ -65,6 +174,15 @@ public sealed class ChatAgent
             }
         }
         catch { }
+    }
+
+    /// <summary>F14: Check safety block flag and replace output if unsafe.</summary>
+    private static string ApplyBlockedOutput(string text)
+    {
+        var reason = SafetyCoordinator.ConsumeBlock();
+        if (reason != null)
+            return $"[Content blocked by safety filter. Reason: {reason}]";
+        return text;
     }
 
     public async Task<string> ChatAsync(string message, ISessionHandle? sessionHandle = null,
@@ -90,17 +208,34 @@ public sealed class ChatAgent
         var isSimple = trimmed.Length <= 10 || _simpleQueries.Contains(trimmed);
         var messages = new[] { new ChatMessage(ChatRole.User, message) };
 
-        var r = await _agent.RunAsync(messages, session, cancellationToken: ct).ConfigureAwait(false);
-        var text = r.Messages?.LastOrDefault()?.Text ?? "";
+        // F1+F13: Scope PlanState and BackgroundJobService to this session
+        PlanTools.SessionId = sessionHandle?.Name ?? traceId;
+        BackgroundJobService.CurrentSessionId = sessionHandle?.Name ?? traceId;
 
-        if (isSimple)
+        // P1: Check for embedding model switch notification
+        var switchMsg = LocalEmbedderModelSwitchNotifier.ConsumeSwitchMessage();
+        if (switchMsg != null)
         {
-            if (sessionHandle != null)
-                await SaveSessionToHandleAsync(session, sessionHandle, ct).ConfigureAwait(false);
-            return text;
+            System.Diagnostics.Debug.WriteLine($"[ChatAgent] {switchMsg}");
         }
 
-        if (_sameModel)
+        // Pro 快速通道：复杂度 >= 4 直接走 Pro，不经过 L1
+        if (!isSimple && EstimateComplexity(message) >= 4)
+        {
+            var proSession = sessionHandle != null
+                ? await CreateAgentSessionFromHandleAsync(sessionHandle, ct).ConfigureAwait(false)
+                : await _proAgent.CreateSessionAsync(ct).ConfigureAwait(false);
+            var proR = await _proAgent.RunAsync(messages, proSession, cancellationToken: ct).ConfigureAwait(false);
+            var proText = ApplyBlockedOutput(proR.Messages?.LastOrDefault()?.Text ?? "");
+            if (sessionHandle != null)
+                await SaveSessionToHandleAsync(proSession, sessionHandle, ct).ConfigureAwait(false);
+            return proText;
+        }
+
+        var r = await _agent.RunAsync(messages, session, cancellationToken: ct).ConfigureAwait(false);
+        var text = ApplyBlockedOutput(r.Messages?.LastOrDefault()?.Text ?? "");
+
+        if (isSimple)
         {
             if (sessionHandle != null)
                 await SaveSessionToHandleAsync(session, sessionHandle, ct).ConfigureAwait(false);
@@ -118,6 +253,22 @@ public sealed class ChatAgent
             if (failPatterns.Any(p => lower.Contains(p)))
             {
                 System.Diagnostics.Debug.WriteLine("[ChatAgent] L1→L2 auto-upgrade triggered by refusal pattern");
+                FailureRecorder.Record(message, text, "refusal pattern detected", "L1");
+                needsPro = true;
+            }
+        }
+
+        // Scheme 2: Tool traceability — 查询需要工具但 L1 没调用
+        if (!needsPro && !isSimple && LikelyRequiresTool(message) && !HasToolResults(r))
+            needsPro = true;
+
+        // Scheme 1: LLM-as-Judge — 语义级质量评估
+        if (!needsPro && !isSimple && text.Length > 50)
+        {
+            var (adequate, reason) = await JudgeResponseQualityAsync(message, text, ct).ConfigureAwait(false);
+            if (!adequate)
+            {
+                FailureRecorder.Record(message, text, reason ?? "judge deemed inadequate", "L1");
                 needsPro = true;
             }
         }
@@ -136,14 +287,15 @@ public sealed class ChatAgent
             }
 
             r = await _proAgent.RunAsync(messages, session, cancellationToken: ct).ConfigureAwait(false);
-            text = r.Messages?.LastOrDefault()?.Text ?? "";
+            text = ApplyBlockedOutput(r.Messages?.LastOrDefault()?.Text ?? "");
             text = $"[Auto-upgraded to Pro: {reason}]\n\n{text}";
         }
 
         text = await EnforceAndReflectAsync(text, message, session, ct).ConfigureAwait(false);
         if (sessionHandle != null)
             await SaveSessionToHandleAsync(session, sessionHandle, ct).ConfigureAwait(false);
-        return text;
+        var pendingSwitch = LocalEmbedderModelSwitchNotifier.ConsumeSwitchMessage();
+        return pendingSwitch != null ? $"{pendingSwitch}\n\n{text}" : text;
     }
 
     public async IAsyncEnumerable<AgentResponseUpdate> ChatStreamingAsync(
@@ -153,6 +305,13 @@ public sealed class ChatAgent
         var session = sessionHandle != null
             ? await CreateAgentSessionFromHandleAsync(sessionHandle, ct).ConfigureAwait(false)
             : await _agent.CreateSessionAsync(ct).ConfigureAwait(false);
+
+        // F1+F13: Scope PlanState and BackgroundJobService to this session
+        PlanTools.SessionId = sessionHandle?.Name;
+        BackgroundJobService.CurrentSessionId = sessionHandle?.Name;
+
+        var toolResultCount = 0;
+        var lastSaveAt = DateTime.UtcNow;
 
         await foreach (var update in _agent.RunStreamingAsync(
             [new ChatMessage(ChatRole.User, message)], session, cancellationToken: ct).ConfigureAwait(false))
@@ -174,6 +333,16 @@ public sealed class ChatAgent
                             var preview = frc.Result?.ToString() ?? "(null)";
                             if (preview.Length > 200) preview = preview[..200] + "...";
                             yield return new AgentResponseUpdate(ChatRole.Assistant, $"  ✅ 返回: {preview}\n");
+
+                            // 增量保存：每 3 个工具结果或 30s 间隔做一次 checkpoint
+                            toolResultCount++;
+                            if (sessionHandle != null &&
+                                (toolResultCount % 3 == 0 ||
+                                 (DateTime.UtcNow - lastSaveAt).TotalSeconds >= 30))
+                            {
+                                await SaveSessionToHandleAsync(session, sessionHandle, ct).ConfigureAwait(false);
+                                lastSaveAt = DateTime.UtcNow;
+                            }
                             break;
                     }
                 }
@@ -181,6 +350,15 @@ public sealed class ChatAgent
 
             yield return update;
         }
+
+        // F14: Check safety block flag after streaming completes
+        var blockedReason = SafetyCoordinator.ConsumeBlock();
+        if (blockedReason != null)
+        {
+            yield return new AgentResponseUpdate(ChatRole.Assistant,
+                $"\n\n[Content blocked by safety filter. Reason: {blockedReason}]");
+        }
+
         LTAI.Core.Configuration.UsageTracker.SetActiveTool("");
 
         if (sessionHandle != null)
@@ -202,10 +380,20 @@ public sealed class ChatAgent
         return _workflows.RunSequentialAsync(agentNames, task, traceId: GetOrCreateTraceId(), ct: ct);
     }
 
+    private static readonly AsyncLocal<int> _correctionDepth = new();
+
     private async Task<string> EnforceAndReflectAsync(string text, string originalMessage,
         AgentSession session, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(text)) return text;
+
+        // P2: Prevent recursive correction loops — max 2 rounds
+        _correctionDepth.Value++;
+        if (_correctionDepth.Value > 2)
+        {
+            _correctionDepth.Value = 0;
+            return text;
+        }
         var lower = text.ToLowerInvariant();
 
         var cantPatterns = new[] { "无法获取", "无法确定", "无法提供", "没有权限", "无法访问",
@@ -220,13 +408,14 @@ public sealed class ChatAgent
             && !text.Contains("{{") && !text.Contains("TODO"))
             return text;
 
+        var safeOriginal = JsonSerializer.Serialize(originalMessage);
         var stage1Prompt = $"""
             你的回答存在以下问题，请修正：
             - 如果问题需要工具，调用工具获取真实数据
             - 不要拒绝、猜测或编造
             - 确保回答完整（不含占位符）
 
-            用户原始问题：{originalMessage}
+            用户原始问题（JSON字符串）：{safeOriginal}
 
             你的回复：{text}
             请修正后重新回答。
@@ -242,7 +431,7 @@ public sealed class ChatAgent
             if (!string.IsNullOrWhiteSpace(refined1) && refined1.Length > 10)
                 return $"[校正]\n\n{refined1}";
 
-            var stage2Prompt = $"你必须使用工具来回答用户问题。不要拒绝、不要猜测。\n\n用户问题是: {originalMessage}";
+            var stage2Prompt = $"你必须使用工具来回答用户问题。不要拒绝、不要猜测。\n\n用户问题是（JSON字符串）: {safeOriginal}";
             var result2 = await _proAgent.RunAsync(
                 [new ChatMessage(ChatRole.User, stage2Prompt)], session,
                 cancellationToken: ct).ConfigureAwait(false);

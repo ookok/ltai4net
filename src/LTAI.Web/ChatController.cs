@@ -34,6 +34,8 @@ public class ChatController : ControllerBase
     {
         if (string.IsNullOrWhiteSpace(request.Message))
             return BadRequest(new { error = "message is required", type = "validation_error" });
+        if (request.Message.Length > 50000)
+            return BadRequest(new { error = "message exceeds 50000 character limit", type = "validation_error" });
 
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(
             HttpContext.RequestAborted);
@@ -68,6 +70,13 @@ public class ChatController : ControllerBase
             Response.StatusCode = 400;
             await Response.WriteAsync(
                 "{\"error\":\"message is required\",\"type\":\"validation_error\"}", ct).ConfigureAwait(false);
+            return;
+        }
+        if (message.Length > 50000)
+        {
+            Response.StatusCode = 400;
+            await Response.WriteAsync(
+                "{\"error\":\"message exceeds 50000 character limit\",\"type\":\"validation_error\"}", ct).ConfigureAwait(false);
             return;
         }
 

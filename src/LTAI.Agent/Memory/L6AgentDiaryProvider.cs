@@ -1,4 +1,5 @@
 using LTAI.AI;
+using LTAI.Core.Safety;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
@@ -69,13 +70,21 @@ public sealed class L6AgentDiaryProvider : AIContextProvider
             var text = string.Join(' ', context.ResponseMessages?.Select(m => m.Text) ?? []);
             if (string.IsNullOrWhiteSpace(text)) return;
 
+            // F4: Skip diary entry if content is unsafe (secrets, PII, etc.)
+            if (!SafetyRules.IsSafeByRules(text))
+            {
+                _logger?.LogDebug("L6AgentDiary: skipped unsafe content");
+                return;
+            }
+
             // Truncate long responses: store only first 200 chars as diary entry.
             // Full response is preserved in conversation history; the diary captures
             // the "gist" for future recall without filling the essential-story pool with
             // long code blocks.
             var summary = text.Length > 200 ? text[..197] + "..." : text;
             await _store.StoreAsync("diary", _agentId, summary,
-                role: "assistant", importance: 0.3, agentId: _agentId).ConfigureAwait(false);
+                role: "assistant", importance: 0.3, agentId: _agentId,
+                ttlMs: PalaceStore.DefaultTtlMs).ConfigureAwait(false);
             _logger?.LogDebug("L6AgentDiary: stored diary entry for {Agent}", _agentId);
         }
         catch (Exception ex)

@@ -29,6 +29,8 @@ public sealed class SafeChatClient : IChatClient
     // SemaphoreSlim(1,1) with Wait(0) for non-blocking re-entrancy check.
     // Replaces AsyncLocal<bool> — not subject to ExecutionContext flow issues.
     private readonly SemaphoreSlim _safeLock = new(1, 1);
+    private readonly int _ringBufferCheckIntervalMs;
+    private readonly int _ringBufferMaxChars;
 
     private static readonly string SafetySystemPrompt = """
         You are a content safety guardrail. Analyze the text below and respond with ONLY one of:
@@ -45,11 +47,15 @@ public sealed class SafeChatClient : IChatClient
         """;
 
     public SafeChatClient(IChatClient inner, IChatClient safetyLlm,
-        ILogger<SafeChatClient>? logger = null)
+        ILogger<SafeChatClient>? logger = null,
+        int ringBufferCheckIntervalMs = 200,
+        int ringBufferMaxChars = 200)
     {
         _inner = inner;
         _safetyLlm = safetyLlm;
         _logger = logger ?? NullLogger<SafeChatClient>.Instance;
+        _ringBufferCheckIntervalMs = Math.Max(50, ringBufferCheckIntervalMs);
+        _ringBufferMaxChars = Math.Max(50, ringBufferMaxChars);
     }
 
     /// <summary>
@@ -89,8 +95,8 @@ public sealed class SafeChatClient : IChatClient
         var buffer = new System.Text.StringBuilder();
         var pendingChunks = new List<ChatResponseUpdate>();
         var lastCheck = DateTime.UtcNow;
-        const int checkIntervalMs = 200;
-        const int maxBufferBeforeCheck = 200;
+        var checkIntervalMs = _ringBufferCheckIntervalMs;
+        var maxBufferBeforeCheck = _ringBufferMaxChars;
         bool safetyHalt = false;
         bool yieldedAny = false;
 

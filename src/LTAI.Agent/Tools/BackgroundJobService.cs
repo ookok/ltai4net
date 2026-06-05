@@ -5,22 +5,64 @@ using System.Threading;
 
 namespace LTAI.Agent.Tools;
 
+/// <summary>
+/// Metrics snapshot for <see cref="BackgroundJobService"/>. Thread-safe
+/// read-only view surfaced in the DevUI dashboard.
+/// </summary>
+public sealed record BackgroundJobMetrics(
+    long StartedCount,
+    long CompletedCount,
+    int RunningCount,
+    int TotalJobs);
+
 public sealed class BackgroundJobService : IDisposable
 {
     private readonly ConcurrentDictionary<string, JobEntry> _jobs = new();
+    private readonly ConcurrentDictionary<string, Process> _runningProcesses = new();
+    // F13: Per-session job tracking. Maps session ID → set of job IDs.
+    private readonly ConcurrentDictionary<string, HashSet<string>> _sessionJobs = new(StringComparer.Ordinal);
+    private static readonly AsyncLocal<string?> _currentSessionId = new();
     private int _nextJobId;
     private readonly CancellationTokenSource _cts = new();
     private bool _disposed;
+    private readonly int _expirationSeconds;
+    private long _startedCount;
+    private long _completedCount;
+
+    /// <summary>Set by ChatAgent before tool calls to scope jobs to a session.</summary>
+    public static string? CurrentSessionId { get => _currentSessionId.Value; set => _currentSessionId.Value = value; }
+
+    private string EffectiveSession => CurrentSessionId ?? "default";
+
+    /// <summary>Default 60s cleanup for completed jobs. Override via constructor.</summary>
+    public BackgroundJobService(int expirationSeconds = 60)
+    {
+        _expirationSeconds = Math.Max(10, expirationSeconds);
+    }
 
     public event Action<string, JobEntry>? JobCompleted;
 
-    [Description("启动后台 shell 命令并返回作业 ID。用 ListJobs/GetJobOutput 监控进度。")]
+    public BackgroundJobMetrics GetMetrics() => new(
+        Interlocked.Read(ref _startedCount),
+        Interlocked.Read(ref _completedCount),
+        _runningProcesses.Count,
+        _jobs.Count);
+
+    [Description("启动后台 shell 命令并返回作业 ID。用 ListJobs/GetJobOutput 监控进度。注意：后台命令不受沙箱限制，请确认后再使用。")]
     public async Task<string> StartJob(
-        [Description("Shell 命令")] string command)
+        [Description("Shell 命令")] string command,
+        [Description("确认执行。此命令不受沙箱限制，有安全风险。")] bool confirm = false)
     {
+        if (!confirm)
+            return "⛔ 后台作业已取消：StartJob 不受沙箱限制，需设置 confirm=true 确认后执行。";
+
         var id = Interlocked.Increment(ref _nextJobId).ToString();
         var entry = new JobEntry { Command = command, StartedAtUtc = DateTime.UtcNow };
         _jobs[id] = entry;
+        // F13: Track job per session
+        var sess = EffectiveSession;
+        _sessionJobs.AddOrUpdate(sess, _ => [id], (_, set) => { lock (set) set.Add(id); return set; });
+        Interlocked.Increment(ref _startedCount);
 
         _ = RunJobCoreAsync(id, entry, command);
 
@@ -40,10 +82,12 @@ public sealed class BackgroundJobService : IDisposable
                 UseShellExecute = false,
                 CreateNoWindow = true
             };
-            using var process = new Process { StartInfo = psi };
+            var process = new Process { StartInfo = psi };
             process.Start();
+            _runningProcesses[id] = process;
             entry.Output = await process.StandardOutput.ReadToEndAsync().ConfigureAwait(false);
             entry.Error = await process.StandardError.ReadToEndAsync().ConfigureAwait(false);
+            process.WaitForExit();
             entry.ExitCode = process.ExitCode;
         }
         catch (Exception ex)
@@ -53,8 +97,11 @@ public sealed class BackgroundJobService : IDisposable
         finally
         {
             entry.Completed = true;
+            entry.CompletedEvent.Set();
+            Interlocked.Increment(ref _completedCount);
+            _runningProcesses.TryRemove(id, out var p);
+            p?.Dispose();
             JobCompleted?.Invoke(id, entry);
-            // Schedule cleanup after 60s with cancellation support
             ScheduleCleanup(id);
         }
     }
@@ -67,7 +114,7 @@ public sealed class BackgroundJobService : IDisposable
         {
             try
             {
-                await Task.Delay(60_000, _cts.Token).ConfigureAwait(false);
+                await Task.Delay(_expirationSeconds * 1000, _cts.Token).ConfigureAwait(false);
                 _jobs.TryRemove(id, out _);
             }
             catch (OperationCanceledException) { /* service shutting down */ }
@@ -84,30 +131,43 @@ public sealed class BackgroundJobService : IDisposable
         _disposed = true;
         _cts.Cancel();
         _cts.Dispose();
+
+        foreach (var kv in _runningProcesses)
+        {
+            try { kv.Value.Kill(entireProcessTree: true); } catch { }
+            kv.Value.Dispose();
+        }
+        _runningProcesses.Clear();
     }
 
     [Description("列出所有后台作业及状态")]
     public string ListJobs()
     {
-        if (_jobs.IsEmpty) return "No background jobs.";
+        // F13: Only list jobs from the current session. Snapshot under lock.
+        var scope = EffectiveSession;
+        if (!_sessionJobs.TryGetValue(scope, out var ids)) return "No background jobs in this session.";
+        string[] snapshot;
+        lock (ids) { snapshot = [.. ids]; }
+        if (snapshot.Length == 0) return "No background jobs in this session.";
         var sb = new System.Text.StringBuilder();
         sb.AppendLine("## Background Jobs\n");
         sb.AppendLine("| ID | Status | Exit Code |");
         sb.AppendLine("|----|--------|-----------|");
-        foreach (var kv in _jobs.OrderBy(kv => kv.Key))
+        foreach (var id in snapshot.OrderBy(id => id))
         {
-            var j = kv.Value;
+            if (!_jobs.TryGetValue(id, out var j)) continue;
             var status = j.Completed ? "✅ Done" : "⏳ Running";
             var code = j.Completed ? j.ExitCode?.ToString() ?? "?" : "-";
-            sb.AppendLine($"| {kv.Key} | {status} | {code} |");
+            sb.AppendLine($"| {id} | {status} | {code} |");
         }
         return sb.ToString();
     }
 
-    [Description("获取已完成后台作业的输出")]
     public string GetJobOutput(
         [Description("作业 ID")] string jobId)
     {
+        // F13: Verify session ownership
+        if (!IsOwnedBySession(jobId)) return $"Job #{jobId} not found.";
         if (!_jobs.TryGetValue(jobId, out var entry))
             return $"Job #{jobId} not found.";
         if (!entry.Completed)
@@ -123,34 +183,50 @@ public sealed class BackgroundJobService : IDisposable
     }
 
     [Description("等待后台作业完成并返回输出")]
+    /// <summary>F13: Check if a job belongs to the current session (or default session). Thread-safe via lock on the HashSet.</summary>
+    private bool IsOwnedBySession(string jobId)
+    {
+        var scope = EffectiveSession;
+        if (!_sessionJobs.TryGetValue(scope, out var ids)) return false;
+        lock (ids) { return ids.Contains(jobId); }
+    }
+
     public async Task<string> WaitForJob(
         [Description("作业 ID")] string jobId,
         [Description("超时秒数")] int timeoutSec = 300)
     {
+        if (!IsOwnedBySession(jobId)) return $"Job #{jobId} not found.";
         if (!_jobs.TryGetValue(jobId, out var entry))
             return $"Job #{jobId} not found.";
 
-        var sw = Stopwatch.StartNew();
         var timeout = TimeSpan.FromSeconds(Math.Clamp(timeoutSec, 1, 600));
-        while (!entry.Completed && sw.Elapsed < timeout)
-            await Task.Delay(500, _cts.Token).ConfigureAwait(false);
+        try { entry.CompletedEvent.Wait(timeout, _cts.Token); }
+        catch (OperationCanceledException) { }
 
         if (!entry.Completed)
             return $"Job #{jobId} did not complete within {timeoutSec}s.";
         return GetJobOutput(jobId);
     }
 
-    [Description("停止运行中的后台作业")]
+    [Description("停止运行中的后台作业（杀死进程）")]
     public string StopJob(
         [Description("作业 ID")] string jobId)
     {
+        if (!IsOwnedBySession(jobId)) return $"Job #{jobId} not found.";
         if (!_jobs.TryGetValue(jobId, out var entry))
             return $"Job #{jobId} not found.";
         if (entry.Completed)
             return $"Job #{jobId} already completed.";
+
+        if (_runningProcesses.TryRemove(jobId, out var proc))
+        {
+            try { proc.Kill(entireProcessTree: true); } catch { /* process already gone */ }
+            proc.Dispose();
+        }
+
         entry.Completed = true;
         entry.Error = "Cancelled";
-        return $"Job #{jobId} stopped.";
+        return $"Job #{jobId} killed.";
     }
 
     [Description("清除超过 1 小时的已完成作业")]
@@ -178,10 +254,11 @@ public sealed class BackgroundJobService : IDisposable
 
 public sealed class JobEntry
 {
-    public bool Completed;
+    public volatile bool Completed;
     public int? ExitCode;
     public string? Output;
     public string? Error;
     public DateTime StartedAtUtc = DateTime.UtcNow;
     public string? Command;
+    public readonly ManualResetEventSlim CompletedEvent = new(false);
 }

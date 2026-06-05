@@ -9,6 +9,7 @@ namespace LTAI.Agent.Memory;
 public sealed class L1EssentialProvider : AIContextProvider
 {
     private const int MaxDrawers = 15;
+    private const float MinImportance = 0.1f; // F9: confidence floor — skip very low importance entries
     private readonly PalaceStore _store;
     private readonly string _agentId;
     private readonly ILogger<L1EssentialProvider>? _logger;
@@ -38,6 +39,9 @@ public sealed class L1EssentialProvider : AIContextProvider
 
             foreach (var d in moments)
             {
+                // F9: confidence floor — skip very low importance entries
+                if (d.Importance < MinImportance) continue;
+
                 var snippet = d.Content.Replace('\n', ' ').Trim();
                 if (snippet.Length > 200) snippet = snippet[..197] + "...";
                 var entry = $"  [{d.Wing}/{d.Room}] {snippet} (imp:{d.Importance:F1})";

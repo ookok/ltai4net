@@ -148,11 +148,14 @@ public sealed class GitTools
     [Description("切换到已有分支，或用 createNew=true 创建并切换到新分支。\n"
         + "适用场景：切换到其他分支继续工作、创建功能分支或修复分支。\n"
         + "不适用场景：分支列表（请用 GitBranch）、删除分支（请用 GitBranchDelete）。\n"
-        + "关键参数：target — 分支名；createNew — 是否创建新分支。")]
+        + "关键参数：target — 分支名；createNew — 是否创建新分支。注意：切换分支会修改工作区文件。")]
     [ToolExample("切换到 main 分支")]
     [ToolExample("创建一个新分支")]
-    public string GitCheckout(string target, bool createNew = false)
+    public string GitCheckout(string target, bool createNew = false,
+        [Description("确认执行。切换分支会修改工作区文件。")] bool confirm = false)
     {
+        if (!confirm)
+            return "⛔ 操作已取消：切换/创建分支会修改工作区文件，需设置 confirm=true 确认后执行。";
         using var repo = Open();
         if (createNew) { var b = repo.CreateBranch(target, repo.Head.Tip); Commands.Checkout(repo, b); return $"✅ Created '{target}'"; }
         var branch = repo.Branches[target];
@@ -163,10 +166,13 @@ public sealed class GitTools
     [Description("删除本地分支。已合并的分支可以直接删除，未合并的需要 force=true。\n"
         + "适用场景：清理已合并的功能分支、删除废弃分支。\n"
         + "不适用场景：切换分支（请用 GitCheckout）、批量清理（请用 GitCleanupBranches）。\n"
-        + "关键参数：name — 分支名；force — 是否强制删除(未合并时)。")]
+        + "关键参数：name — 分支名；force — 是否强制删除(未合并时)。注意：删除分支可能导致提交丢失。")]
     [ToolExample("删除这个分支")]
-    public string GitBranchDelete(string name, bool force = false)
+    public string GitBranchDelete(string name, bool force = false,
+        [Description("确认删除分支。此操作不可撤销。")] bool confirm = false)
     {
+        if (!confirm)
+            return "⛔ 操作已取消：删除分支可能导致提交丢失，需设置 confirm=true 确认后执行。";
         using var repo = Open();
         try
         {
@@ -178,10 +184,13 @@ public sealed class GitTools
 
     [Description("自动清理所有已合并的本地分支。\n"
         + "适用场景：在合并 PR 后批量清理过期的功能分支、保持分支列表整洁。\n"
-        + "不适用场景：删除单个分支（请用 GitBranchDelete）。")]
+        + "不适用场景：删除单个分支（请用 GitBranchDelete）。注意：此操作会批量删除多个分支。")]
     [ToolExample("清理已合并的分支")]
-    public string GitCleanupBranches()
+    public string GitCleanupBranches(
+        [Description("确认批量删除已合并分支。此操作不可撤销。")] bool confirm = false)
     {
+        if (!confirm)
+            return "⛔ 操作已取消：批量删除分支不可撤销，需设置 confirm=true 确认后执行。";
         using var repo = Open();
         var current = repo.Head.FriendlyName;
         var merged = repo.Branches.Where(b => !b.IsCurrentRepositoryHead && !b.IsRemote
@@ -220,10 +229,13 @@ public sealed class GitTools
     [Description("创建 Git 提交(commit)。将暂存区的内容保存为一个新提交。\n"
         + "适用场景：在完成一个功能后提交代码、保存工作进度。\n"
         + "不适用场景：暂存文件（请用 GitAdd）、提交并推送（请用 GitCommitAndPush）。\n"
-        + "关键参数：message — 提交消息；author/email — 可选的自定义作者。")]
+        + "关键参数：message — 提交消息；author/email — 可选的自定义作者。注意：提交会创建不可变的历史记录。")]
     [ToolExample("提交代码")]
-    public string GitCommit(string message, string? author = null, string? email = null)
+    public string GitCommit(string message, string? author = null, string? email = null,
+        [Description("确认创建提交。提交会写入不可变历史。")] bool confirm = false)
     {
+        if (!confirm)
+            return "⛔ 操作已取消：提交会写入不可变历史，需设置 confirm=true 确认后执行。";
         using var repo = Open();
         var sig = author != null ? new Signature(author, email ?? "user@local", DateTimeOffset.Now) : Sig();
         var c = repo.Commit(message, sig, sig);
@@ -233,21 +245,31 @@ public sealed class GitTools
     [Description("创建提交并立即推送到远程仓库。GitCommit + GitPush 的快捷操作。\n"
         + "适用场景：快速完成提交并推送、一次完成本地和远程的变更保存。\n"
         + "不适用场景：只想本地提交（请用 GitCommit）、只推送已有提交（请用 GitPush）。\n"
-        + "关键参数：message — 提交消息；remote — 远程仓库名。")]
+        + "关键参数：message — 提交消息；remote — 远程仓库名。注意：此操作会修改远程仓库。")]
     [ToolExample("提交并推送代码")]
-    public string GitCommitAndPush(string message, string remote = "origin")
+    public string GitCommitAndPush(string message, string remote = "origin",
+        [Description("确认提交并推送到远程。此操作会修改远程仓库。")] bool confirm = false)
     {
-        var commitResult = GitCommit(message);
-        var pushResult = GitPush(remote);
-        return $"{commitResult}\n{pushResult}";
+        if (!confirm)
+            return "⛔ 操作已取消：提交并推送会修改远程仓库，需设置 confirm=true 确认后执行。";
+        using var repo = Open();
+        var sig = Sig();
+        var c = repo.Commit(message, sig, sig);
+        var rmt = repo.Network.Remotes[remote];
+        if (rmt == null) return $"Remote '{remote}' not found";
+        repo.Network.Push(rmt, $"+refs/heads/{repo.Head.FriendlyName}", new PushOptions());
+        return $"✅ {c.Sha[..8]}: {c.MessageShort.Trim()}\n✅ Pushed to '{remote}'";
     }
 
     [Description("撤销上一次提交（软重置，保留工作区的更改）。相当于 git reset --soft HEAD~1。\n"
         + "适用场景：提交后发现忘了包含某个文件、提交消息写错需要重做、合并后想重新编辑。\n"
-        + "不适用场景：彻底丢弃更改（请用 GitReset hard=true）。")]
+        + "不适用场景：彻底丢弃更改（请用 GitReset hard=true）。注意：此操作修改提交历史。")]
     [ToolExample("撤销刚刚的提交")]
-    public string GitUndoLast()
+    public string GitUndoLast(
+        [Description("确认撤销上一次提交。此操作修改提交历史。")] bool confirm = false)
     {
+        if (!confirm)
+            return "⛔ 操作已取消：撤销提交会修改历史，需设置 confirm=true 确认后执行。";
         using var repo = Open();
         if (repo.Head.Tip == null) return "No commits to undo";
         var msg = repo.Head.Tip.MessageShort;
@@ -258,10 +280,13 @@ public sealed class GitTools
     [Description("重置 HEAD 到指定提交。hard=true 会丢弃所有工作区更改。\n"
         + "适用场景：放弃所有本地更改回到某个提交、撤销一系列提交、清理工作区。\n"
         + "不适用场景：只撤销最近一次提交（请用 GitUndoLast）。\n"
-        + "关键参数：target — 目标提交；hard — 是否丢弃工作区更改。")]
+        + "关键参数：target — 目标提交；hard — 是否丢弃工作区更改。注意：hard=true 会永久丢弃未提交的更改！")]
     [ToolExample("重置到上一个提交")]
-    public string GitReset(string? target = null, bool hard = false)
+    public string GitReset(string? target = null, bool hard = false,
+        [Description("确认重置。hard=true 会永久丢弃未提交的更改。")] bool confirm = false)
     {
+        if (!confirm)
+            return "⛔ 操作已取消：重置可能丢失数据，需设置 confirm=true 确认后执行。";
         using var repo = Open();
         var c = target != null ? repo.Lookup<Commit>(target) : repo.Head.Tip?.Parents.FirstOrDefault();
         if (c == null) return "Target not found";
@@ -296,10 +321,13 @@ public sealed class GitTools
     [Description("将本地提交推送到远程仓库。\n"
         + "适用场景：将本地代码共享到远程仓库、提交 PR 前推送分支。\n"
         + "不适用场景：拉取远程更新（请用 GitPull/GitFetch）、提交并推送（请用 GitCommitAndPush）。\n"
-        + "关键参数：remote — 远程仓库名；branch — 分支名(默认当前分支)。")]
+        + "关键参数：remote — 远程仓库名；branch — 分支名(默认当前分支)。注意：推送会修改远程仓库。")]
     [ToolExample("推送代码到远程")]
-    public string GitPush(string remote = "origin", string? branch = null)
+    public string GitPush(string remote = "origin", string? branch = null,
+        [Description("确认推送到远程。此操作会修改远程仓库。")] bool confirm = false)
     {
+        if (!confirm)
+            return "⛔ 操作已取消：推送会修改远程仓库，需设置 confirm=true 确认后执行。";
         using var repo = Open();
         try
         {
@@ -314,12 +342,14 @@ public sealed class GitTools
     [Description("从远程仓库拉取并合并到当前分支(pull = fetch + merge)。\n"
         + "适用场景：同步远程最新代码到本地、更新当前分支到最新。\n"
         + "不适用场景：只拉取不合并（请用 GitFetch）、推送本地更改（请用 GitPush）。\n"
-        + "关键参数：remote — 远程仓库名；branch — 分支名。")]
+        + "关键参数：remote — 远程仓库名；branch — 分支名。注意：拉取可能产生合并冲突。")]
     [ToolExample("拉取最新的代码")]
-    public string GitPull(string remote = "origin", string? branch = null)
+    public string GitPull(string remote = "origin", string? branch = null,
+        [Description("确认拉取并合并远程更改。可能产生冲突。")] bool confirm = false)
     {
+        if (!confirm)
+            return "⛔ 操作已取消：拉取并合并远程更改可能产生冲突，需设置 confirm=true 确认后执行。";
         var fetchResult = GitFetch(remote);
-        if (!fetchResult.StartsWith("✅")) return fetchResult;
         using var repo = Open();
         var tracked = branch != null ? repo.Branches[$"{remote}/{branch}"] : repo.Head.TrackedBranch;
         if (tracked == null) return "No upstream branch";
@@ -337,10 +367,13 @@ public sealed class GitTools
     [Description("变基(rebase)当前分支到目标分支，使提交历史更线性整洁。\n"
         + "适用场景：在合并前将功能分支变基到 main、保持提交历史整洁。\n"
         + "不适用场景：普通合并（请用 GitMerge）、同步远程分支（请用 GitPull）。\n"
-        + "关键参数：target — 目标分支名。")]
+        + "关键参数：target — 目标分支名。注意：变基会重写提交历史，不可逆。")]
     [ToolExample("变基到 main 分支")]
-    public string GitRebase(string? target = null)
+    public string GitRebase(string? target = null,
+        [Description("确认变基。此操作会重写提交历史，不可逆。")] bool confirm = false)
     {
+        if (!confirm)
+            return "⛔ 操作已取消：变基会重写提交历史，需设置 confirm=true 确认后执行。";
         using var repo = Open();
         Branch? upstream = target != null ? repo.Branches[target] : repo.Head.TrackedBranch;
         if (upstream == null) return "No upstream branch to rebase onto";
@@ -362,10 +395,13 @@ public sealed class GitTools
     [Description("同步 fork 仓库：从上游仓库 fetch 并 merge 到当前分支。\n"
         + "适用场景：保持 fork 仓库与上游同步、更新 fork 到最新版本。\n"
         + "不适用场景：普通拉取（请用 GitPull）、合并其他分支（请用 GitMerge）。\n"
-        + "关键参数：upstream — 上游远程名；branch — 要同步的分支。")]
+        + "关键参数：upstream — 上游远程名；branch — 要同步的分支。注意：同步会合并上游更改到当前分支。")]
     [ToolExample("同步 fork 与上游仓库")]
-    public string GitSyncFork(string upstream = "upstream", string branch = "master")
+    public string GitSyncFork(string upstream = "upstream", string branch = "master",
+        [Description("确认同步 fork。此操作会合并上游更改到当前分支。")] bool confirm = false)
     {
+        if (!confirm)
+            return "⛔ 操作已取消：同步 fork 会合并更改到当前分支，需设置 confirm=true 确认后执行。";
         var fetchResult = GitFetch(upstream);
         if (!fetchResult.StartsWith("✅")) return fetchResult;
         using var repo = Open();
@@ -385,10 +421,13 @@ public sealed class GitTools
     [Description("合并指定分支到当前分支。\n"
         + "适用场景：将功能分支合并到 main、合并同事的更改到当前分支。\n"
         + "不适用场景：变基（请用 GitRebase）、同步远程（请用 GitPull）。\n"
-        + "关键参数：branch — 要合并的分支名。")]
+        + "关键参数：branch — 要合并的分支名。注意：合并可能产生冲突。")]
     [ToolExample("合并 feature 分支")]
-    public string GitMerge(string branch)
+    public string GitMerge(string branch,
+        [Description("确认合并分支。可能产生冲突。")] bool confirm = false)
     {
+        if (!confirm)
+            return "⛔ 操作已取消：合并分支可能产生冲突，需设置 confirm=true 确认后执行。";
         using var repo = Open();
         var b = repo.Branches[branch];
         if (b == null) return $"Branch '{branch}' not found";
@@ -406,13 +445,16 @@ public sealed class GitTools
     [Description("列出或创建 Git 标签。无参数时列出所有标签；传入 name 和 message 创建新标签。\n"
         + "适用场景：查看发布的版本标签、创建新版本的标签。\n"
         + "不适用场景：创建分支（请用 GitCheckout createNew=true）。\n"
-        + "关键参数：name — 标签名；message — 标签附注消息。")]
+        + "关键参数：name — 标签名；message — 标签附注消息。注意：创建标签会添加引用。")]
     [ToolExample("创建 v1.0 标签")]
-    public string GitTag(string? name = null, string? message = null)
+    public string GitTag(string? name = null, string? message = null,
+        [Description("确认创建标签。无参列出时不需确认。")] bool confirm = false)
     {
         using var repo = Open();
         if (name == null)
             return "## Tags\n" + string.Join("\n", repo.Tags.Select(t => $"- {t.FriendlyName} → {t.Target.Sha[..8]}"));
+        if (!confirm)
+            return "⛔ 操作已取消：创建标签会添加引用，需设置 confirm=true 确认后执行。";
         var target = repo.Head.Tip;
         if (!string.IsNullOrEmpty(message))
             repo.Tags.Add(name, target, Sig(), message);
@@ -426,10 +468,13 @@ public sealed class GitTools
     [Description("暂存当前工作区的更改(stash)，清空工作区以便切换分支或拉取代码。\n"
         + "适用场景：需要切换分支但不想提交当前更改、暂存半成品代码。\n"
         + "不适用场景：恢复暂存（请用 GitStashPop）、查看暂存列表（请用 GitStashList）。\n"
-        + "关键参数：message — 暂存描述信息。")]
+        + "关键参数：message — 暂存描述信息。注意：暂存会清空工作区更改。")]
     [ToolExample("暂存当前更改")]
-    public string GitStash(string? message = null)
+    public string GitStash(string? message = null,
+        [Description("确认暂存更改。此操作会清空工作区。")] bool confirm = false)
     {
+        if (!confirm)
+            return "⛔ 操作已取消：暂存会清空工作区更改，需设置 confirm=true 确认后执行。";
         using var repo = Open();
         repo.Stashes.Add(Sig(), message ?? "WIP");
         return "📦 Stashed";
@@ -438,10 +483,13 @@ public sealed class GitTools
     [Description("恢复之前暂存的更改(stash pop)并删除暂存记录。\n"
         + "适用场景：在切换分支回来后续续工作、恢复之前暂存的半成品。\n"
         + "不适用场景：暂存新更改（请用 GitStash）、查看暂存列表（请用 GitStashList）。\n"
-        + "关键参数：index — 要恢复的暂存索引(0=最近一次)。")]
+        + "关键参数：index — 要恢复的暂存索引(0=最近一次)。注意：pop 后暂存记录被删除。")]
     [ToolExample("恢复之前的暂存")]
-    public string GitStashPop(int index = 0)
+    public string GitStashPop(int index = 0,
+        [Description("确认恢复暂存。pop 后暂存记录被删除。")] bool confirm = false)
     {
+        if (!confirm)
+            return "⛔ 操作已取消：恢复暂存会修改工作区且不可撤销，需设置 confirm=true 确认后执行。";
         using var repo = Open();
         if (repo.Stashes.Count() <= index) return "Not found";
         repo.Stashes.Pop(index);

@@ -299,16 +299,20 @@ public sealed class MultiProviderChatClient : IChatClient
 
             try
             {
-                // Remove any duplicate tools (Harness may inflate the tool list)
+                // Remove any duplicate tools (Harness may inflate the tool list).
+                // Clone the list before mutating to avoid corrupting shared ChatOptions.
                 if (options?.Tools is { Count: > 10 })
                 {
                     var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    var deduped = new List<AITool>(options.Tools.Count);
                     for (int i = options.Tools.Count - 1; i >= 0; i--)
                     {
                         var n = options.Tools[i].Name.Trim();
-                        if (!seen.Add(n))
-                            options.Tools.RemoveAt(i);
+                        if (seen.Add(n))
+                            deduped.Add(options.Tools[i]);
                     }
+                    deduped.Reverse();
+                    options.Tools = new List<AITool>(deduped);
                 }
 
                 var callNum = Interlocked.Increment(ref _callCounter);

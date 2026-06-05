@@ -178,11 +178,14 @@ public sealed class ToolEmbeddingCache
 
     private async Task PersistAsync(CancellationToken ct)
     {
+        // F6: Only persist key + fingerprint + vector.
+        // Description text is NOT persisted to disk — it may contain
+        // sensitive information (URLs, internal paths, etc.).
+        // On next load, cache hit is verified by fingerprint alone.
         var entries = _store.Select(kv => new CacheEntry
         {
             Key = kv.Key,
             Fingerprint = kv.Value.Fingerprint,
-            Description = kv.Value.Description,
             Vector = kv.Value.Vector,
         }).ToList();
         var tmp = _filePath + ".tmp";
@@ -210,6 +213,7 @@ public sealed class ToolEmbeddingCache
     {
         public string Key { get; set; } = "";
         public string Fingerprint { get; set; } = "";
+        [System.Text.Json.Serialization.JsonIgnore]
         public string Description { get; set; } = "";
         public float[] Vector { get; set; } = [];
     }

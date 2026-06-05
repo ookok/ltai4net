@@ -36,6 +36,7 @@ public sealed class DatabaseTools
         [Description("连接字符串")] string connectionString,
         [Description("SQL 语句")] string sql,
         [Description("可选参数 (JSON 格式 {\"key\":\"value\"})")] string? parametersJson = null,
+        [Description("写操作确认标记（INSERT/UPDATE/DELETE 需用户确认）")] bool confirm = false,
         CancellationToken ct = default)
     {
         try
@@ -47,6 +48,15 @@ public sealed class DatabaseTools
                        || trimmed.StartsWith("DROP", StringComparison.OrdinalIgnoreCase)
                        || trimmed.StartsWith("ALTER", StringComparison.OrdinalIgnoreCase)
                        || trimmed.StartsWith("CREATE", StringComparison.OrdinalIgnoreCase);
+
+            if (isWrite && !confirm)
+                return "[SQL] 写操作（INSERT/UPDATE/DELETE 等）需要设置 confirm=true。请先获得用户确认。";
+
+            if (!isWrite && !trimmed.StartsWith("SELECT", StringComparison.OrdinalIgnoreCase)
+                && !trimmed.StartsWith("WITH", StringComparison.OrdinalIgnoreCase)
+                && !trimmed.StartsWith("PRAGMA", StringComparison.OrdinalIgnoreCase)
+                && !trimmed.StartsWith("EXPLAIN", StringComparison.OrdinalIgnoreCase))
+                return "[SQL] 只支持 SELECT / WITH / PRAGMA / EXPLAIN 查询语句。写操作请设置 confirm=true。";
 
             await using var conn = CreateConnection(provider, connectionString);
             await conn.OpenAsync(ct).ConfigureAwait(false);

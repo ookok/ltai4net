@@ -85,10 +85,28 @@ public sealed class SafetyCoordinator : AIContextProvider
     }
 
     /// <summary>
-    /// MAF pipeline hook: audits generated output AFTER delivery (audit-only, no blocking).
-    /// ⚠ Response has already been delivered to the user by this point.
-    /// For true output blocking, wrap the IChatClient with <see cref="SafeChatClient"/>.
-    /// Called by MAF kernel after agent invocation completes.
+    /// F14: Blocking-safe token. Set by <see cref="StoreAIContextAsync"/> when the
+    /// output is flagged unsafe. Cleared by ChatAgent (via <see cref="ConsumeBlock"/>)
+    /// before each new request so stale flags don't block unrelated responses.
+    /// Thread-safe via Interlocked.
+    /// </summary>
+    private static int _outputBlocked;
+    private static string? _outputBlockedReason;
+
+    /// <summary>Get and clear the output-blocked flag. Returns reason or null.</summary>
+    public static string? ConsumeBlock()
+    {
+        var reason = Interlocked.Exchange(ref _outputBlocked, 0) == 1
+            ? Interlocked.Exchange(ref _outputBlockedReason, null)
+            : null;
+        return reason;
+    }
+
+    /// <summary>
+    /// MAF pipeline hook: checks generated output and sets a blocking flag
+    /// that ChatAgent consumes after RunAsync/RunStreamingAsync completes.
+    /// True blocking is handled by <see cref="SafeChatClient"/> at the IChatClient
+    /// layer — this is defense-in-depth for the AIContextProvider layer.
     /// </summary>
     protected override async ValueTask StoreAIContextAsync(InvokedContext context, CancellationToken ct = default)
     {
@@ -99,6 +117,8 @@ public sealed class SafetyCoordinator : AIContextProvider
         if (!allowed)
         {
             _logger?.LogWarning("Safety blocked output: {Reason}", reason);
+            Interlocked.Exchange(ref _outputBlocked, 1);
+            Interlocked.Exchange(ref _outputBlockedReason, reason);
         }
     }
 

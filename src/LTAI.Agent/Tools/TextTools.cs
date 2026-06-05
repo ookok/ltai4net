@@ -35,7 +35,7 @@ public sealed class TextTools
         if (first != last) return $"Error: SEARCH text appears {CountOccurrences(content, search)} times. Use MultiEdit with force:true for ambiguous matches.";
 
         var newContent = content[..first] + replace + content[(first + search.Length)..];
-        await File.WriteAllTextAsync(fp, newContent).ConfigureAwait(false);
+        await AtomicWriteAsync(fp, newContent).ConfigureAwait(false);
         return $"Edited {Path.GetFileName(fp)}: replaced \"{search[..Math.Min(search.Length, 50)]}\"";
     }
 
@@ -85,7 +85,7 @@ public sealed class TextTools
         {
             foreach (var (fp, _, updated) in prepared)
             {
-                await File.WriteAllTextAsync(fp, updated).ConfigureAwait(false);
+                await AtomicWriteAsync(fp, updated).ConfigureAwait(false);
                 applied.Add(fp);
             }
             return $"Applied {edits.Length} edit(s) across {prepared.Select(p => p.path).Distinct().Count()} file(s): "
@@ -93,8 +93,9 @@ public sealed class TextTools
         }
         catch (Exception ex)
         {
+            // Rollback: atomic write with original content
             foreach (var (fp, original, _) in prepared)
-                if (applied.Contains(fp)) await File.WriteAllTextAsync(fp, original).ConfigureAwait(false);
+                if (applied.Contains(fp)) await AtomicWriteAsync(fp, original).ConfigureAwait(false);
             return $"Error during write: {ex.Message}. Rolled back {applied.Count} file(s).";
         }
     }
@@ -190,6 +191,22 @@ public sealed class TextTools
         int c = 0, i = 0;
         while ((i = text.IndexOf(pattern, i, StringComparison.Ordinal)) != -1) { c++; i += pattern.Length; }
         return c;
+    }
+
+    /// <summary>Atomic file write: write to .tmp.{guid} then File.Move (atomic on NTFS).</summary>
+    private static async Task AtomicWriteAsync(string path, string content)
+    {
+        var tmp = path + ".tmp." + Guid.NewGuid().ToString("N")[..8];
+        try
+        {
+            await File.WriteAllTextAsync(tmp, content).ConfigureAwait(false);
+            File.Move(tmp, path, overwrite: true);
+        }
+        catch
+        {
+            try { File.Delete(tmp); } catch { }
+            throw;
+        }
     }
 
     private sealed record EditSpec(string Path, string Search, string Replace);

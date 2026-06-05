@@ -9,6 +9,7 @@ namespace LTAI.Agent.Memory;
 public sealed class L4DeepSearchProvider : AIContextProvider
 {
     private const int MaxDrawers = 5;
+    private const float MinSimilarity = 0.25f; // F9: confidence floor — skip low-similarity results
     private readonly PalaceStore _store;
     private readonly EmbeddingClient _embedder;
     private readonly ILogger<L4DeepSearchProvider>? _logger;
@@ -43,6 +44,9 @@ public sealed class L4DeepSearchProvider : AIContextProvider
 
             await foreach (var (drawer, score) in _store.SemanticSearchAsync(queryVec, MaxDrawers, wing, ct).ConfigureAwait(false))
             {
+                // F9: confidence floor — skip low-similarity results
+                if (score < MinSimilarity) continue;
+
                 var snippet = drawer.Content.Replace('\n', ' ').Trim();
                 if (snippet.Length > 300) snippet = snippet[..297] + "...";
                 var entry = $"  [{drawer.Wing}/{drawer.Room}] (sim:{score:F2}) {snippet}";

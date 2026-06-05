@@ -125,6 +125,7 @@ public sealed class SearchTools
         args.Add("--glob");
         args.Add(glob);
         foreach (var d in SkipDirs) { args.Add("-g"); args.Add($"!{d}/**"); }
+        args.Add("--"); // terminator: prevent --flag in pattern from being interpreted as options
         args.Add(pattern);
         args.Add(root);
 

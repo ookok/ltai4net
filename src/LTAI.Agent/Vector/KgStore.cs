@@ -26,6 +26,7 @@ using System.Threading.Tasks;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Caching.Memory;
 using LTAI.Agent.Indexing;
+using LTAI.Core.Storage;
 
 namespace LTAI.Agent.Vector;
 
@@ -38,7 +39,7 @@ public sealed partial class KgStore : IDisposable
     private readonly SqliteConnection _writer;
     private readonly SqliteConnection _reader;
     private readonly SemaphoreSlim _writeLock = new(1, 1);
-    [ThreadStatic] private static bool _ownsWriteLock;
+    private static readonly AsyncLocal<bool> _ownsWriteLock = new();
     private readonly string _dbPath;
     private bool _disposed;
     public string DbPath => _dbPath;
@@ -158,10 +159,10 @@ public sealed partial class KgStore : IDisposable
     {
         ThrowIfDisposed();
         bool acquired = false;
-        if (!_ownsWriteLock)
+        if (!_ownsWriteLock.Value)
         {
             await _writeLock.WaitAsync().ConfigureAwait(false);
-            _ownsWriteLock = true;
+            _ownsWriteLock.Value = true;
             acquired = true;
         }
         try
@@ -171,17 +172,17 @@ public sealed partial class KgStore : IDisposable
             bindParams?.Invoke(cmd);
             return await action(cmd).ConfigureAwait(false);
         }
-        finally { if (acquired) { _ownsWriteLock = false; _writeLock.Release(); Interlocked.Increment(ref _ftsCacheStamp); Interlocked.Increment(ref _edgeCacheStamp); } }
+        finally { if (acquired) { _ownsWriteLock.Value = false; _writeLock.Release(); Interlocked.Increment(ref _ftsCacheStamp); Interlocked.Increment(ref _edgeCacheStamp); } }
     }
 
     private async Task WriteLockVoidAsync(string sql, Action<SqliteCommand>? bindParams = null)
     {
         ThrowIfDisposed();
         bool acquired = false;
-        if (!_ownsWriteLock)
+        if (!_ownsWriteLock.Value)
         {
             await _writeLock.WaitAsync().ConfigureAwait(false);
-            _ownsWriteLock = true;
+            _ownsWriteLock.Value = true;
             acquired = true;
         }
         try
@@ -191,7 +192,7 @@ public sealed partial class KgStore : IDisposable
             bindParams?.Invoke(cmd);
             await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
         }
-        finally { if (acquired) { _ownsWriteLock = false; _writeLock.Release(); Interlocked.Increment(ref _ftsCacheStamp); Interlocked.Increment(ref _edgeCacheStamp); } }
+        finally { if (acquired) { _ownsWriteLock.Value = false; _writeLock.Release(); Interlocked.Increment(ref _ftsCacheStamp); Interlocked.Increment(ref _edgeCacheStamp); } }
     }
 
     // ═══════════════════════════════════════════
@@ -423,10 +424,10 @@ public sealed partial class KgStore : IDisposable
     {
         ThrowIfDisposed();
         bool acquired = false;
-        if (!_ownsWriteLock)
+        if (!_ownsWriteLock.Value)
         {
             await _writeLock.WaitAsync().ConfigureAwait(false);
-            _ownsWriteLock = true;
+            _ownsWriteLock.Value = true;
             acquired = true;
         }
         try
@@ -454,7 +455,7 @@ public sealed partial class KgStore : IDisposable
             tx.Commit();
             _resultCache.Compact(0.5);
         }
-        finally { if (acquired) { _ownsWriteLock = false; _writeLock.Release(); } }
+        finally { if (acquired) { _ownsWriteLock.Value = false; _writeLock.Release(); } }
     }
 
     /// <summary>
@@ -466,10 +467,10 @@ public sealed partial class KgStore : IDisposable
     {
         ThrowIfDisposed();
         bool acquired = false;
-        if (!_ownsWriteLock)
+        if (!_ownsWriteLock.Value)
         {
             await _writeLock.WaitAsync().ConfigureAwait(false);
-            _ownsWriteLock = true;
+            _ownsWriteLock.Value = true;
             acquired = true;
         }
         try
@@ -480,7 +481,7 @@ public sealed partial class KgStore : IDisposable
             Interlocked.Increment(ref _ftsCacheStamp);
             Interlocked.Increment(ref _edgeCacheStamp);
         }
-        finally { if (acquired) { _ownsWriteLock = false; _writeLock.Release(); } }
+        finally { if (acquired) { _ownsWriteLock.Value = false; _writeLock.Release(); } }
     }
 
     private const string SQL_GET_DOCS = "SELECT * FROM Docs WHERE node_id = @nid ORDER BY id;";
@@ -778,10 +779,10 @@ public sealed partial class KgStore : IDisposable
     {
         ThrowIfDisposed();
         bool acquired = false;
-        if (!_ownsWriteLock)
+        if (!_ownsWriteLock.Value)
         {
             await _writeLock.WaitAsync().ConfigureAwait(false);
-            _ownsWriteLock = true;
+            _ownsWriteLock.Value = true;
             acquired = true;
         }
         try
@@ -795,7 +796,7 @@ public sealed partial class KgStore : IDisposable
             await OptimizeFtsAsync().ConfigureAwait(false);
             _resultCache.Compact(0.5);
         }
-        finally { if (acquired) { _ownsWriteLock = false; _writeLock.Release(); } }
+        finally { if (acquired) { _ownsWriteLock.Value = false; _writeLock.Release(); } }
     }
 
     // ═══════════════════════════════════════════
@@ -1319,6 +1320,71 @@ public sealed partial class KgStore : IDisposable
             if (source != null) cmd.Parameters.AddWithValue("@src", source);
             cmd.Parameters.AddWithValue("@nid", nodeId);
         }).ConfigureAwait(false);
+    }
+
+    // ═══════════════════════════════════════════
+    //  LocalVersionRepo — export / import
+    // ═══════════════════════════════════════════
+
+    private const string SQL_GET_ALL_NODES = "SELECT * FROM Nodes ORDER BY id;";
+
+    /// <summary>Return every node in the graph.</summary>
+    public async Task<List<NodeRow>> GetAllNodes()
+    {
+        using var cmd = _reader.CreateCommand();
+        cmd.CommandText = SQL_GET_ALL_NODES;
+        return ReadNodeRows(await cmd.ExecuteReaderAsync().ConfigureAwait(false));
+    }
+
+    private const string SQL_GET_ALL_DOCS = "SELECT * FROM Docs ORDER BY id;";
+
+    /// <summary>Return every doc row (all nodes).</summary>
+    public async Task<List<DocRow>> GetAllDocs()
+    {
+        using var cmd = _reader.CreateCommand();
+        cmd.CommandText = SQL_GET_ALL_DOCS;
+        return ReadDocRows(await cmd.ExecuteReaderAsync().ConfigureAwait(false));
+    }
+
+    /// <summary>
+    /// Export all nodes + edges + docs as JSON files into
+    /// <c>.livingtree/kg/&lt;label&gt;/</c> and commit via LocalVersionRepo.
+    /// Returns the commit SHA.
+    /// </summary>
+    public async Task<string> ExportAllToRepoAsync(string label)
+    {
+        var prefix = Path.Combine("kg", label);
+
+        var nodes = await GetAllNodes().ConfigureAwait(false);
+        var edges = await GetEdges(null).ConfigureAwait(false);
+        var docs = await GetAllDocs().ConfigureAwait(false);
+
+        // Build a flat JSON for each data type
+        var nodesJson = JsonSerializer.Serialize(
+            nodes.Select(n => new
+            {
+                n.Id, n.ExtId, n.Kind, n.Name, n.Namespace,
+                n.Signature, n.Source, n.Props, n.CreatedAt, n.UpdatedAt
+            }), KgStoreInternals.JsonOpts);
+
+        var edgesJson = JsonSerializer.Serialize(
+            edges.Select(e => new
+            {
+                e.Id, e.Src, e.Dst, e.Relation, e.Weight, e.Props
+            }), KgStoreInternals.JsonOpts);
+
+        var docsJson = JsonSerializer.Serialize(
+            docs.Select(d => new
+            {
+                d.Id, d.NodeId, d.Text, d.Lang, d.Source
+            }), KgStoreInternals.JsonOpts);
+
+        LocalVersionRepo.AtomicCommit(
+            $"{prefix}/nodes.json", nodesJson, $"📦 KG export: {label} — {nodes.Count} nodes");
+        LocalVersionRepo.AtomicCommit(
+            $"{prefix}/edges.json", edgesJson, $"📦 KG export: {label} — {edges.Count} edges");
+        return LocalVersionRepo.AtomicCommit(
+            $"{prefix}/docs.json", docsJson, $"📦 KG export: {label} — {docs.Count} docs");
     }
 
     // ═══════════════════════════════════════════

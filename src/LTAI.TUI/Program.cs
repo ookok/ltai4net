@@ -160,7 +160,10 @@ public static class Program
             sp.GetService<LTAI.AI.ToolEmbeddingCache>(),
             sp.GetService<LTAI.AI.RemoteEmbeddingCache>(),
             sp.GetService<LTAI.AI.EmbeddingClient>(),
-            sp.GetService<LTAI.AI.ModelMetadataProvider>());
+            sp.GetService<LTAI.AI.ModelMetadataProvider>(),
+            sp.GetService<LTAI.Agent.Context.CacheAlignerProvider>(),
+            sp.GetService<LTAI.Agent.Tasks.TaskQueue>(),
+            sp.GetService<LTAI.Agent.Tools.BackgroundJobService>());
         try { Console.Clear(); } catch { /* non-interactive terminal */ }
         await app.RunAsync().ConfigureAwait(false);
     }

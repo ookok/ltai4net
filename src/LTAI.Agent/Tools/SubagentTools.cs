@@ -166,7 +166,12 @@ public sealed class SubagentTools
                 Name = $"subagent-{capturedSpawn}",
                 Description = systemPrompt,
                 ChatOptions = chatOptions,
-                ChatHistoryProvider = new InMemoryChatHistoryProvider(),
+                // F2: cap at 200 messages
+                ChatHistoryProvider = new InMemoryChatHistoryProvider(new InMemoryChatHistoryProviderOptions
+                {
+                    ChatReducer = new MaxMessageCountReducer(200),
+                    ReducerTriggerEvent = InMemoryChatHistoryProviderOptions.ChatReducerTriggerEvent.AfterMessageAdded,
+                }),
             }, null, _sp);
 
             var session = await agent.CreateSessionAsync(ct).ConfigureAwait(false);

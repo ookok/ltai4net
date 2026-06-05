@@ -2,6 +2,8 @@ using System.Text.Json;
 using LTAI.AI;
 using LTAI.AI.Compaction;
 using LTAI.Core.Safety;
+using LTAI.Agent.Context;
+using LTAI.Agent.Learning;
 using LTAI.Agent.Services;
 using LTAI.Agent.Tools;
 using LTAI.Agent.Vector;
@@ -199,6 +201,18 @@ public static class ServiceCollectionExtensions
             new LTAI.Agent.Tools.TaskQueueTool(
                 sp.GetRequiredService<LTAI.Agent.Tasks.TaskQueue>(),
                 sp.GetService<ILoggerFactory>()?.CreateLogger<LTAI.Agent.Tools.TaskQueueTool>()));
+
+        // Headroom: CompressionStore — SQLite-backed reversible compression store
+        // for CCR (Consistent Compression with Retrieval).
+        services.AddSingleton<CompressionStore>();
+
+        // Headroom: RetrieveContentTool — LLM-callable tool to retrieve original
+        // content from the compression store by ID.
+        services.AddSingleton<RetrieveContentTool>();
+
+        // Headroom: FailureMiner — offline analysis of failure records to
+        // auto-generate AGENTS.md rules.
+        services.AddSingleton<FailureMiner>();
 
         // Step 3c-snippets: User-defined common-phrase store. Shared between
         // LTAI.TUI and LTAI.Desktop via .livingtree/snippets.json. Supports
@@ -409,6 +423,10 @@ public static class ServiceCollectionExtensions
         var loggerFactory = sp.GetRequiredService<ILoggerFactory>();
         var llm = sp.GetRequiredService<IChatClient>();
         var log = loggerFactory.CreateLogger("Agent." + name);
+
+        // P0.1: Wrap with progress guard to detect repeated tool calls
+        var guardedLlm = new LTAI.Agent.Clients.ThinkingTagValidator(
+            new LTAI.Agent.Clients.ProgressGuardChatClient(llm));
 
         var tools = new List<AITool>();
         var fs = new FileSystemTools(ws);
@@ -772,6 +790,12 @@ public static class ServiceCollectionExtensions
             tools.Add(AIFunctionFactory.Create(MarkdownTools.RenderMarkdown));
         }
 
+        // CCR retrieval tool — every agent needs access to decompress CCR markers
+        {
+            var rc = sp.GetRequiredService<LTAI.Agent.Tools.RetrieveContentTool>();
+            tools.Add(AIFunctionFactory.Create(rc.RetrieveContent));
+        }
+
         // Safety guardrail (optional — skip for local dev to reduce latency)
         SafetyCoordinator? safety = null;
         if (!opts.AI.SkipSafetyChecks)
@@ -914,7 +938,7 @@ public static class ServiceCollectionExtensions
             }
         }
 
-        AIAgent agent = llm.AsHarnessAgent(
+        AIAgent agent = guardedLlm.AsHarnessAgent(
             maxContextWindowTokens: 0, // 0 = disabled: LTAI's own CompactionProvider at position [5] handles compaction
             maxOutputTokens: opts.AI.MaxTokens,
             options: new HarnessAgentOptions
@@ -937,7 +961,12 @@ public static class ServiceCollectionExtensions
                     Tools = tools,
                     ModelId = modelId,
                 },
-                ChatHistoryProvider = new InMemoryChatHistoryProvider(),
+                // F2: cap at 200 messages to prevent unbounded memory growth
+                ChatHistoryProvider = new InMemoryChatHistoryProvider(new InMemoryChatHistoryProviderOptions
+                {
+                    ChatReducer = new MaxMessageCountReducer(200),
+                    ReducerTriggerEvent = InMemoryChatHistoryProviderOptions.ChatReducerTriggerEvent.AfterMessageAdded,
+                }),
                 // 7-layer memory palace: L0 identity → L1 essential → L3 on-demand → L4 deep → L6 diary.
                 // Placed after tool-filtering providers (Tool RAG, Skill ranking) and before the final
                 // instruction providers so memories augment the conversation context.
@@ -954,12 +983,18 @@ public static class ServiceCollectionExtensions
                        safety,
                        new LTAI.Agent.Memory.L0IdentityProvider(identityText),
                        new LTAI.Agent.Memory.L1EssentialProvider(palaceStore, name, loggerFactory.CreateLogger<LTAI.Agent.Memory.L1EssentialProvider>()),
-                       compaction, kbGraph, codeGraph, wasmtimeSandbox,
+                       compaction,
+                        new LTAI.Agent.Context.CCRProvider(
+                            sp.GetRequiredService<LTAI.Agent.Context.CompressionStore>(),
+                            sp.GetRequiredService<ILoggerFactory>().CreateLogger<LTAI.Agent.Context.CCRProvider>()),
+                        kbGraph, codeGraph, wasmtimeSandbox,
                        new LTAI.Agent.Memory.L3OnDemandProvider(palaceStore, loggerFactory.CreateLogger<LTAI.Agent.Memory.L3OnDemandProvider>()),
                        new LTAI.Agent.Memory.L4DeepSearchProvider(palaceStore, embedder, loggerFactory.CreateLogger<LTAI.Agent.Memory.L4DeepSearchProvider>()),
                        new LTAI.Agent.Memory.L6AgentDiaryProvider(palaceStore, name, loggerFactory.CreateLogger<LTAI.Agent.Memory.L6AgentDiaryProvider>()),
                         sp.GetService<LTAI.Agent.Indexing.ProvenanceProvider>()!,
-                        new LTAI.Agent.Tools.InstructionProvider(modelId), new LTAI.Agent.Tools.EnvironmentProvider(), skillsProvider]
+                         new LTAI.Agent.Tools.InstructionProvider(modelId), new LTAI.Agent.Tools.EnvironmentProvider(), skillsProvider,
+                        new LTAI.Agent.Context.CacheAlignerProvider(
+                            sp.GetRequiredService<ILoggerFactory>().CreateLogger<LTAI.Agent.Context.CacheAlignerProvider>())]
                       : [new LTAI.Agent.Tools.ToolRetrievalProvider(
                              sp.GetRequiredService<LTAI.AI.EmbeddingClient>(),
                              cache: sp.GetService<LTAI.AI.ToolEmbeddingCache>()),
@@ -968,14 +1003,20 @@ public static class ServiceCollectionExtensions
                             sp.GetRequiredService<ILoggerFactory>().CreateLogger<LTAI.Agent.Tools.SkillRankingProvider>()),
                         new LTAI.Agent.Memory.L0IdentityProvider(identityText),
                         new LTAI.Agent.Memory.L1EssentialProvider(palaceStore, name, loggerFactory.CreateLogger<LTAI.Agent.Memory.L1EssentialProvider>()),
-                        compaction, kbGraph, codeGraph, wasmtimeSandbox,
+                        compaction,
+                        new LTAI.Agent.Context.CCRProvider(
+                            sp.GetRequiredService<LTAI.Agent.Context.CompressionStore>(),
+                            sp.GetRequiredService<ILoggerFactory>().CreateLogger<LTAI.Agent.Context.CCRProvider>()),
+                        kbGraph, codeGraph, wasmtimeSandbox,
                         new LTAI.Agent.Memory.L3OnDemandProvider(palaceStore, loggerFactory.CreateLogger<LTAI.Agent.Memory.L3OnDemandProvider>()),
                         new LTAI.Agent.Memory.L4DeepSearchProvider(palaceStore, embedder, loggerFactory.CreateLogger<LTAI.Agent.Memory.L4DeepSearchProvider>()),
                         new LTAI.Agent.Memory.L6AgentDiaryProvider(palaceStore, name, loggerFactory.CreateLogger<LTAI.Agent.Memory.L6AgentDiaryProvider>()),
                         sp.GetService<LTAI.Agent.Indexing.ProvenanceProvider>()!,
-                       new LTAI.Agent.Tools.InstructionProvider(modelId), new LTAI.Agent.Tools.EnvironmentProvider(), skillsProvider],
+                        new LTAI.Agent.Tools.InstructionProvider(modelId), new LTAI.Agent.Tools.EnvironmentProvider(), skillsProvider,
+                         new LTAI.Agent.Context.CacheAlignerProvider(
+                             sp.GetRequiredService<ILoggerFactory>().CreateLogger<LTAI.Agent.Context.CacheAlignerProvider>())],
 
-                // ── Disable MAF defaults LTAI doesn't need ────────────────────
+                 // ── Disable MAF defaults LTAI doesn't need ────────────────────
                 // LTAI uses its own 7-layer memory palace (PalaceStore + AIContextProviders).
                 DisableFileMemory = true,
                 // LTAI uses its own tools (WasmtimeSandbox + SafeShellTool), not the file-access provider.
@@ -1189,5 +1230,28 @@ file sealed class FallbackAgent : AIAgent
 file sealed class MinimalAgentSession : AgentSession
 {
     public MinimalAgentSession() : base(new AgentSessionStateBag()) { }
+}
+
+// F2: caps InMemoryChatHistoryProvider message count to prevent unbounded growth
+internal sealed class MaxMessageCountReducer : IChatReducer
+{
+    private readonly int _maxCount;
+    public MaxMessageCountReducer(int maxCount) => _maxCount = Math.Max(10, maxCount);
+
+    public Task<IEnumerable<ChatMessage>> ReduceAsync(
+        IEnumerable<ChatMessage> messages, CancellationToken cancellationToken = default)
+    {
+        var list = messages.ToList();
+        if (list.Count <= _maxCount)
+            return Task.FromResult<IEnumerable<ChatMessage>>(list);
+
+        // Keep the system prompt (first message) and the most recent messages
+        var system = list.FirstOrDefault(m => m.Role == ChatRole.System);
+        var recent = list.TakeLast(_maxCount - (system != null ? 1 : 0)).ToList();
+        if (system != null)
+            recent.Insert(0, system);
+
+        return Task.FromResult<IEnumerable<ChatMessage>>(recent);
+    }
 }
 #pragma warning restore MAAI001

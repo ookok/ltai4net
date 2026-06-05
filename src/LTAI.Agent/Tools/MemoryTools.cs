@@ -1,6 +1,7 @@
 ﻿using System.ComponentModel;
 using LTAI.AI;
 using LTAI.Agent.Memory;
+using LTAI.Core.Safety;
 
 namespace LTAI.Agent.Tools;
 
@@ -38,6 +39,10 @@ public sealed class MemoryTools
             _ => 0.5,
         };
 
+        // F4: Check content safety before writing to long-term memory
+        if (!SafetyRules.IsSafeByRules(content))
+            return "⛔ Memory was not saved: content contains sensitive information (API keys, secrets, PII).";
+
         var wing = scope.ToLowerInvariant() switch
         {
             "global" => "global",
@@ -47,7 +52,8 @@ public sealed class MemoryTools
         var drawerId = await _store.StoreAsync(wing, name, content,
             role: "tool",
             importance: importance,
-            agentId: "memory_tool").ConfigureAwait(false);
+            agentId: "memory_tool",
+            ttlMs: PalaceStore.DefaultTtlMs).ConfigureAwait(false);
 
         return $"✅ Remembered '{name}' ({priority} priority, {scope} scope) — drawer {drawerId[..8]}";
     }

@@ -28,4 +28,24 @@ public static class SafetyRules
         if (XssRx.IsMatch(text)) return false;
         return true;
     }
+
+    public static string RedactPII(string text)
+    {
+        if (string.IsNullOrEmpty(text)) return text;
+        text = ApiKeyRx.Replace(text, "***REDACTED_API_KEY***");
+        text = CreditCardRx.Replace(text, "***REDACTED_CC***");
+        text = PhoneRx.Replace(text, "***REDACTED_PHONE***");
+        text = SqlInjectRx.Replace(text, "***REDACTED_SQL***");
+        text = XssRx.Replace(text, "***REDACTED_XSS***");
+        var span = text.AsSpan();
+        if (span.IndexOfAny(PemMarkers) >= 0)
+        {
+            text = PemRx.Replace(text, "***REDACTED_KEY***");
+        }
+        return text;
+    }
+
+    private static readonly Regex PemRx = new(
+        @"-----BEGIN[ A-Z]*KEY-----.*?-----END[ A-Z]*KEY-----",
+        RegexOptions.Singleline | RegexOptions.IgnoreCase);
 }

@@ -271,6 +271,17 @@ public sealed class DurableConfig
     public string DatabasePath { get; init; } = ".livingtree/durability.db";
 }
 
+/// <summary>Session persistence configuration (P2).</summary>
+public sealed class SessionConfig
+{
+    /// <summary>Directory for session JSON files. Default <c>.livingtree/sessions</c>.</summary>
+    public string Path { get; init; } = ".livingtree/sessions";
+    /// <summary>Max session files before pruning oldest. Default 500.</summary>
+    public int MaxSessions { get; init; } = 500;
+    /// <summary>Months before AES encryption key rotation. 0 = never rotate. Default 6.</summary>
+    public int KeyRotationMonths { get; init; } = 6;
+}
+
 /// <summary>P15: Hot-editable workflow watch directory config.</summary>
 public sealed class WorkflowsConfig
 {
@@ -290,6 +301,7 @@ public sealed class LTAIOptions
 {
     public const string SectionName = "LTAI";
     public WorkflowsConfig Workflows { get; init; } = new();
+    public SessionConfig Session { get; init; } = new();
     public AIConfig AI { get; init; } = new();
     public WebConfig Web { get; init; } = new();
     public VectorConfig Vector { get; init; } = new();

@@ -111,13 +111,24 @@ public sealed class FileSystemTools
     [Description("写入/创建文件。用于创建新文件或覆盖已有文件内容。\n"
         + "适用场景：创建新的源代码文件、写入配置文件、生成文档、输出处理结果。\n"
         + "不适用场景：修改文件中的部分内容（请用 EditFile）、追加到已有文件。\n"
-        + "关键参数：path — 文件路径；content — 文件内容。")]
+        + "关键参数：path — 文件路径；content — 文件内容。注意：使用原子写入（tmp + File.Move），防止中途崩溃导致文件损坏。")]
     public async Task<string> WriteFile(string path, string content)
     {
         var fp = PathUtils.SafeResolvePath(_ws, path);
         if (fp == null) return "Error: path escape";
         Directory.CreateDirectory(Path.GetDirectoryName(fp)!);
-        await File.WriteAllTextAsync(fp, content).ConfigureAwait(false);
+        // Atomic write: write to .tmp then rename (atomic on NTFS same-volume)
+        var tmp = fp + ".tmp." + Guid.NewGuid().ToString("N")[..8];
+        try
+        {
+            await File.WriteAllTextAsync(tmp, content).ConfigureAwait(false);
+            File.Move(tmp, fp, overwrite: true);
+        }
+        catch
+        {
+            try { if (File.Exists(tmp)) File.Delete(tmp); } catch { }
+            throw;
+        }
         return $"Written {content.Length} bytes to {Path.GetFileName(fp)}";
     }
 
@@ -223,12 +234,12 @@ public sealed class FileSystemTools
         if (File.Exists(fp))
         {
             var fi = new FileInfo(fp);
-            return $"**{fi.Name}** -- file\n- Size: {FormatSize(fi.Length)}\n- Modified: {fi.LastWriteTime:yyyy-MM-dd HH:mm:ss}\n- Created: {fi.CreationTime:yyyy-MM-dd HH:mm:ss}\n- Extension: {fi.Extension}";
+            return $"**{fi.Name}** -- file\n- Size: {FormatSize(fi.Length)}\n- Modified: {fi.LastWriteTimeUtc:yyyy-MM-dd HH:mm:ss} UTC\n- Created: {fi.CreationTimeUtc:yyyy-MM-dd HH:mm:ss} UTC\n- Extension: {fi.Extension}";
         }
         if (Directory.Exists(fp))
         {
             var diName = new DirectoryInfo(fp).Name;
-            return $"**{diName}** -- directory\n- Items: {Directory.GetFileSystemEntries(fp).Length}\n- Modified: {Directory.GetLastWriteTime(fp):yyyy-MM-dd HH:mm:ss}\n- Created: {Directory.GetCreationTime(fp):yyyy-MM-dd HH:mm:ss}";
+            return $"**{diName}** -- directory\n- Items: {Directory.GetFileSystemEntries(fp).Length}\n- Modified: {Directory.GetLastWriteTimeUtc(fp):yyyy-MM-dd HH:mm:ss} UTC\n- Created: {Directory.GetCreationTimeUtc(fp):yyyy-MM-dd HH:mm:ss} UTC";
         }
         return "Path not found";
     }

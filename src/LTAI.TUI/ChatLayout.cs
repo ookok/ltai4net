@@ -1462,6 +1462,7 @@ public sealed class ChatLayout
                     _history.Add(("cmd", null, "[yellow]用法: /sessions load <会话名>[/]", null));
                     return;
                 }
+                SaveSession(); // 先保存当前会话
                 var handle = _sessions.LoadSession(arg);
                 if (handle != null)
                 {

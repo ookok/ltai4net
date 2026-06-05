@@ -111,13 +111,31 @@ public sealed class AgentWorkflows
         }
 
         // ── Build MAF Handoff workflow ──
+        const int maxHandoffs = 10;
+        var handoffCount = 0;
         var builder = AgentWorkflowBuilder.CreateHandoffBuilderWith(_router);
         foreach (var specialist in candidates)
         {
             builder.WithHandoff(_router, specialist);
         }
-        // Terminate after the first non-handoff response (one-shot delegation).
-        builder.WithTerminationCondition(messages => new ValueTask<bool>(true));
+        // P2.3: Terminate after first non-handoff response (one-shot delegation),
+        // OR after maxHandoffs handoffs (prevent infinite handoff chains).
+        builder.WithTerminationCondition(messages =>
+        {
+            if (messages == null) return new ValueTask<bool>(false);
+            var lastMsg = messages.LastOrDefault();
+            if (lastMsg != null && lastMsg.Contents?.OfType<FunctionCallContent>()
+                    .Any(fc => fc.Name?.StartsWith("handoff_to_", StringComparison.Ordinal) == true) == true)
+            {
+                handoffCount++;
+                if (handoffCount >= maxHandoffs)
+                {
+                    return new ValueTask<bool>(true);
+                }
+                return new ValueTask<bool>(false);
+            }
+            return new ValueTask<bool>(true);
+        });
         builder.EmitAgentResponseEvents();
 
         var workflow = builder.Build();

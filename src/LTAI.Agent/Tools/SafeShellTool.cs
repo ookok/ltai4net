@@ -75,10 +75,28 @@ public sealed class SafeShellTool
             "rm -rf /", "rm -rf ~", "rm -rf --no-preserve-root",
             ":(){ :|:& };:", "eval ", "exec ",
             "> /dev/", "dd if=", "wget -O - | sh", "curl .* | sh",
-            "bash -c", "python -c '", "perl -e '",
         };
         if (dangerousPatterns.Any(p => cmdLower.Contains(p)))
             return "❌ 命令包含危险操作，已阻止";
+
+        // 2b. 按可执行文件名检测代码执行（覆盖 bash/python/perl/pwsh 等所有变体）
+        var codeExecNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "bash", "sh", "zsh", "dash", "ksh", "fish",
+            "python", "python2", "python3", "py",
+            "perl", "perl5",
+            "ruby", "rake",
+            "php",
+            "lua", "luajit",
+            "tclsh", "wish",
+            "powershell", "pwsh", "powershell.exe", "pwsh.exe",
+        };
+        var codeExecArgs = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "-c", "-command", "-e", "-i",
+        };
+        if (parts.Length >= 2 && codeExecNames.Contains(parts[0]) && codeExecArgs.Contains(parts[1]))
+            return "❌ 命令包含代码执行操作 (-c/-e/-command)，已阻止";
 
         // 白名单检查
         if (_allowList != null)

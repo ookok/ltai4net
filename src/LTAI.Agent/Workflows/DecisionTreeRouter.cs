@@ -2,6 +2,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -35,6 +36,8 @@ namespace LTAI.Agent.Workflows;
 /// </remarks>
 public sealed class DecisionTreeRouter
 {
+    private static readonly ActivitySource Activity = new("LTAI.Router");
+
     private readonly EmbeddingClient? _embedder;
     private readonly ToolEmbeddingCache? _cache;
     private readonly ILogger<DecisionTreeRouter> _logger;
@@ -60,18 +63,18 @@ public sealed class DecisionTreeRouter
     /// 1. JSON file via <see cref="YAMLWorkflowRegistry"/> (P15 hot path).
     /// 2. Constructor-supplied <see cref="DecisionTreeRouterOptions"/> (P7.7 hardcoded fallback).
     /// </summary>
-    private (int TopK, float Margin, float MinScore, AmbiguousFallbackKind Fallback, IReadOnlyList<string> Whitelist) ResolveEffectiveConfig()
+    private (int TopK, float Margin, float MinScore, float MinAcceptable, AmbiguousFallbackKind Fallback, IReadOnlyList<string> Whitelist) ResolveEffectiveConfig()
     {
         if (_registry != null)
         {
             var cfg = _registry.GetDecisionTreeConfig("decision-tree");
             if (cfg.SourcePath != null)
             {
-                return (cfg.TopK, cfg.ConfidenceMarginThreshold, cfg.MinTopScoreThreshold, cfg.FallbackKind, cfg.Candidates);
+                return (cfg.TopK, cfg.ConfidenceMarginThreshold, cfg.MinTopScoreThreshold, cfg.MinAcceptableScore, cfg.FallbackKind, cfg.Candidates);
             }
         }
         return (_fallbackOptions.TopK, _fallbackOptions.ConfidenceMarginThreshold, _fallbackOptions.MinTopScoreThreshold,
-                AmbiguousFallbackKind.All, Array.Empty<string>());
+                0.05f, AmbiguousFallbackKind.All, Array.Empty<string>());
     }
 
     /// <summary>
@@ -83,7 +86,12 @@ public sealed class DecisionTreeRouter
         IReadOnlyCollection<string> allSpecialistNames,
         CancellationToken ct = default)
     {
-        var (topKLimit, marginThreshold, minScoreThreshold, fallbackKind, whitelist) = ResolveEffectiveConfig();
+        using var activity = Activity.StartActivity("router.route", ActivityKind.Internal);
+        activity?.SetTag("router.task_length", task?.Length ?? 0);
+        activity?.SetTag("router.specialist_count", allSpecialistNames?.Count ?? 0);
+
+        var (topKLimit, marginThreshold, minScoreThreshold, minAcceptable, fallbackKind, whitelist) = ResolveEffectiveConfig();
+        var cfg = _registry?.GetDecisionTreeConfig("decision-tree") ?? DecisionTreeConfig.Default;
 
         var allNames = allSpecialistNames.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
 
@@ -96,6 +104,8 @@ public sealed class DecisionTreeRouter
             {
                 _logger.LogWarning("Router: candidate whitelist filtered out all specialists ({N} requested, 0 matched)",
                     whitelist.Count);
+                activity?.SetTag("router.branch", "NoCandidates");
+                activity?.SetTag("router.whitelist_count", whitelist.Count);
                 return new DecisionTreeResult(Array.Empty<string>(), BranchKind.NoCandidates, 0f, 0f, []);
             }
         }
@@ -104,6 +114,7 @@ public sealed class DecisionTreeRouter
         if (_embedder is null)
         {
             _logger.LogDebug("Router: no embedder, using all {N} specialists", allNames.Length);
+            activity?.SetTag("router.branch", "NoEmbedder");
             return new DecisionTreeResult(allNames, BranchKind.NoEmbedder, 0f, 0f, []);
         }
 
@@ -115,7 +126,20 @@ public sealed class DecisionTreeRouter
         if (topK.Count == 0)
         {
             _logger.LogWarning("Router: top-K returned empty, using all {N} specialists", allNames.Length);
+            activity?.SetTag("router.branch", "EmbeddingFailed");
             return new DecisionTreeResult(allNames, BranchKind.EmbeddingFailed, 0f, 0f, []);
+        }
+
+        // P2: MinAcceptableScore — if even the highest score is too low, decline to route
+        if (topK[0].Score < minAcceptable)
+        {
+            _logger.LogInformation(
+                "Router: NO_CONFIDENT_MATCH (top={Top:F3} < minAcceptable={Min:F3}) — returning empty",
+                topK[0].Score, minAcceptable);
+            activity?.SetTag("router.branch", "NoConfidentMatch");
+            activity?.SetTag("router.top_score", topK[0].Score);
+            activity?.SetTag("router.min_acceptable", minAcceptable);
+            return new DecisionTreeResult(Array.Empty<string>(), BranchKind.NoConfidentMatch, topK[0].Score, 0f, topK);
         }
 
         // Stage 2: confidence margin
@@ -137,6 +161,10 @@ public sealed class DecisionTreeRouter
             _logger.LogInformation(
                 "Router: CONFIDENT (margin={Margin:F3} ≥ {Threshold:F3}, top={Top:F3}) → top-{K} of {Total} (fallback={Fb})",
                 margin, marginThreshold, topScore, chosen.Length, allNames.Length, fallbackKind);
+            activity?.SetTag("router.branch", "ConfidentTopK");
+            activity?.SetTag("router.top_score", topScore);
+            activity?.SetTag("router.margin", margin);
+            activity?.SetTag("router.chosen_count", chosen.Length);
             return new DecisionTreeResult(chosen, BranchKind.ConfidentTopK, topScore, margin, topK);
         }
         else
@@ -162,6 +190,11 @@ public sealed class DecisionTreeRouter
             _logger.LogInformation(
                 "Router: AMBIGUOUS ({Reason}) → {Branch} ({N} agents, fallback={Fb})",
                 reason, branch, chosen2.Length, fallbackKind);
+            activity?.SetTag("router.branch", branch.ToString());
+            activity?.SetTag("router.top_score", topScore);
+            activity?.SetTag("router.margin", margin);
+            activity?.SetTag("router.ambiguous_reason", reason);
+            activity?.SetTag("router.chosen_count", chosen2.Length);
             return new DecisionTreeResult(chosen2, branch, topScore, margin, topK);
         }
     }

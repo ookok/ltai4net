@@ -25,6 +25,7 @@
 
 using System.Collections.Concurrent;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Channels;
 using Microsoft.Extensions.Logging;
 
@@ -89,6 +90,18 @@ public sealed class TaskQueue : IAsyncDisposable
     private readonly int _maxConcurrency;
     private readonly ILogger<TaskQueue>? _logger;
 
+    private long _enqueuedCount;
+    private long _completedCount;
+    private long _failedCount;
+    private long _cancelledCount;
+
+    public long EnqueuedCount => Interlocked.Read(ref _enqueuedCount);
+    public long CompletedCount => Interlocked.Read(ref _completedCount);
+    public long FailedCount => Interlocked.Read(ref _failedCount);
+    public long CancelledCount => Interlocked.Read(ref _cancelledCount);
+    public int QueueDepth => _items.Count;
+    public int ConsumerCount => _consumers.Length;
+
     public event Action<TaskItem>? TaskCompleted;
 
     public TaskQueue(ITaskStore? store = null, int maxConcurrency = 4,
@@ -130,6 +143,7 @@ public sealed class TaskQueue : IAsyncDisposable
             Work = work,
         };
         _items[item.Id] = item;
+        Interlocked.Increment(ref _enqueuedCount);
         await _store.SaveAsync(item, ct).ConfigureAwait(false);
         await _channel.Writer.WriteAsync(item, ct).ConfigureAwait(false);
         _logger?.LogInformation("TaskQueue: enqueued {Id} '{Name}'", item.Id, item.Name);
@@ -161,6 +175,8 @@ public sealed class TaskQueue : IAsyncDisposable
         catch (OperationCanceledException) { /* shutdown */ }
     }
 
+    private static readonly TimeSpan DefaultTaskTimeout = TimeSpan.FromMinutes(10);
+
     private async Task RunOneAsync(TaskItem item, CancellationToken ct)
     {
         item.Status = TaskStatus.Running;
@@ -170,19 +186,32 @@ public sealed class TaskQueue : IAsyncDisposable
         _logger?.LogInformation("TaskQueue: starting {Id} '{Name}' (attempt {Attempt})",
             item.Id, item.Name, item.Attempt);
 
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeoutCts.CancelAfter(DefaultTaskTimeout);
+        var linkedCt = timeoutCts.Token;
+
         try
         {
             item.Result = item.Work != null
-                ? await item.Work(ct).ConfigureAwait(false)
+                ? await item.Work(linkedCt).ConfigureAwait(false)
                 : "(no work delegate)";
             item.Status = TaskStatus.Completed;
+            Interlocked.Increment(ref _completedCount);
             _logger?.LogInformation("TaskQueue: completed {Id} '{Name}'", item.Id, item.Name);
         }
-        catch (OperationCanceledException) { item.Status = TaskStatus.Cancelled; item.Error = "cancelled"; }
+        catch (OperationCanceledException)
+        {
+            var isTimeout = timeoutCts.IsCancellationRequested && !ct.IsCancellationRequested;
+            item.Status = isTimeout ? TaskStatus.Failed : TaskStatus.Cancelled;
+            item.Error = isTimeout ? "timeout (10 minutes)" : "cancelled";
+            if (isTimeout) Interlocked.Increment(ref _failedCount);
+            else Interlocked.Increment(ref _cancelledCount);
+        }
         catch (Exception ex)
         {
             item.Status = TaskStatus.Failed;
             item.Error = ex.Message;
+            Interlocked.Increment(ref _failedCount);
             _logger?.LogWarning(ex, "TaskQueue: failed {Id} '{Name}'", item.Id, item.Name);
         }
         finally

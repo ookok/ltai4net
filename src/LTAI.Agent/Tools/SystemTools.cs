@@ -399,11 +399,15 @@ public sealed class SystemTools
         _ => $"{bytes / 1073741824.0:F2} GB"
     };
 
-    [Description("Run a command inside a Docker container. Requires Docker installed and running.")]
+    [Description("Run a command inside a Docker container. Requires Docker installed and running. 注意：Docker 容器可能绕过本地沙箱限制，请确认后再使用。")]
     public async Task<string> RunInContainer(
         [Description("Docker image name (e.g. 'ubuntu:latest', 'python:3.11')")] string image,
-        [Description("Command to run inside the container")] string command)
+        [Description("Command to run inside the container")] string command,
+        [Description("确认执行。Docker 容器可能绕过本地沙箱限制。")] bool confirm = false)
     {
+        if (!confirm)
+            return "⛔ 容器执行已取消：Docker 容器可能绕过沙箱限制，需设置 confirm=true 确认后执行。";
+
         try
         {
             var psi = new ProcessStartInfo
@@ -437,11 +441,15 @@ public sealed class SystemTools
         }
     }
 
-    [Description("Run a command with full network access (bypass localhost-only restriction). 用于需要访问外部网络的命令。")]
+    [Description("Run a command with full network access (bypass localhost-only restriction). 用于需要访问外部网络的命令。注意：此命令不受沙箱限制，请确认后再使用。")]
     public async Task<string> RunWithNetwork(
         [Description("Command to run")] string command,
-        [Description("Timeout in seconds")] int timeoutSec = 60)
+        [Description("Timeout in seconds")] int timeoutSec = 60,
+        [Description("确认执行。此命令不受沙箱限制，有安全风险。")] bool confirm = false)
     {
+        if (!confirm)
+            return "⛔ 执行已取消：RunWithNetwork 不受沙箱限制，需设置 confirm=true 确认后执行。";
+
         try
         {
             var psi = new ProcessStartInfo

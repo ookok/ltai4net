@@ -288,6 +288,11 @@ public sealed class SQLiteOrchestrationService : InMemoryOrchestrationService
             }
 
             await tx.CommitAsync(ct).ConfigureAwait(false);
+
+            // WAL checkpoint to bound journal growth
+            await using var walCmd = conn.CreateCommand();
+            walCmd.CommandText = "PRAGMA wal_checkpoint(TRUNCATE);";
+            await walCmd.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
         }
         finally
         {

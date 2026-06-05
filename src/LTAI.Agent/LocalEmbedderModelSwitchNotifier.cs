@@ -1,5 +1,3 @@
-// Copyright (c) LTAI. All rights reserved.
-
 using LTAI.AI;
 
 namespace LTAI.Agent;
@@ -14,13 +12,26 @@ namespace LTAI.Agent;
 /// </summary>
 public sealed class LocalEmbedderModelSwitchNotifier
 {
+    /// <summary>P1: Tracks the last model switch for ChatAgent to surface as notification.</summary>
+    public static string? LastSwitchMessage { get; private set; }
+
     public LocalEmbedderModelSwitchNotifier(LocalEmbedder? local)
     {
         if (local == null) return;
-        local.ModelSwitched += _ =>
+        local.ModelSwitched += modelName =>
         {
             AgentRegistry.ClearEmbeddings();
             ToolRegistry.ClearEmbeddings();
+            LastSwitchMessage = $"🔄 Embedding model switched to '{modelName}'. " +
+                "Routing behavior may differ from previous model.";
         };
+    }
+
+    /// <summary>Consume and clear the switch notification.</summary>
+    public static string? ConsumeSwitchMessage()
+    {
+        var msg = LastSwitchMessage;
+        LastSwitchMessage = null;
+        return msg;
     }
 }

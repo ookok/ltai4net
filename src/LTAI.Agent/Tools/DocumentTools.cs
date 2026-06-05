@@ -80,6 +80,22 @@ public sealed class DocumentTools
         + "适用场景：导出数据到 Excel、创建新的电子表格、写入分析结果。\n"
         + "cellsJson 格式：[[\"A1\",\"值\"],[\"B1\",\"=SUM(A1:A10)\"]]。\n"
         + "关键参数：path — 输出文件路径；cellsJson — 单元格数据数组；create — 是否创建新文件。")]
+    /// <summary>Atomic write helper: write to .tmp then swap, preventing corruption on crash.</summary>
+    private static string AtomicSwap(string targetPath, Func<string, string> writeToTemp)
+    {
+        var tmpPath = targetPath + ".tmp." + Guid.NewGuid().ToString("N")[..8];
+        try
+        {
+            var result = writeToTemp(tmpPath);
+            if (result.StartsWith("Error:")) { TryDelete(tmpPath); return result; }
+            File.Move(tmpPath, targetPath, overwrite: true);
+            return result;
+        }
+        catch (Exception ex) { TryDelete(tmpPath); return $"Error: {ex.Message}"; }
+    }
+
+    private static void TryDelete(string path) { try { File.Delete(path); } catch { } }
+
     public string ExcelWrite(string path, string cellsJson, bool create = false)
     {
         var fp = SafePath(path);
@@ -87,62 +103,78 @@ public sealed class DocumentTools
         try
         {
             var cells = JsonSerializer.Deserialize<List<List<string>>>(cellsJson) ?? [];
-            SpreadsheetDocument doc;
-            if (create || !File.Exists(fp))
+
+            return AtomicSwap(fp, tmpPath =>
             {
-                Directory.CreateDirectory(Path.GetDirectoryName(fp)!);
-                doc = SpreadsheetDocument.Create(fp, SpreadsheetDocumentType.Workbook);
-            }
-            else
-                doc = SpreadsheetDocument.Open(fp, true);
-
-            using (doc)
-            {
-                var wbPart = doc.WorkbookPart ?? doc.AddWorkbookPart();
-                wbPart.Workbook = new Workbook();
-                var sp = wbPart.AddNewPart<WorksheetPart>();
-                sp.Worksheet = new Worksheet(new SheetData());
-
-                var sheets = wbPart.Workbook.AppendChild(new Sheets());
-                sheets.AppendChild(new Sheet { Id = wbPart.GetIdOfPart(sp), SheetId = 1, Name = "Sheet1" });
-
-                var sstPart = wbPart.GetPartsOfType<SharedStringTablePart>().FirstOrDefault()
-                    ?? wbPart.AddNewPart<SharedStringTablePart>();
-                sstPart.SharedStringTable ??= new SharedStringTable();
-
-                var sheetData = sp.Worksheet.GetFirstChild<SheetData>()!;
-                var rowDict = new Dictionary<uint, Row>();
-
-                foreach (var cell in cells)
+                if (create || !File.Exists(tmpPath))
                 {
-                    if (cell.Count < 2) continue;
-                    var addr = cell[0];
-                    var val = cell[1];
-                    var colStr = new string(addr.TakeWhile(char.IsLetter).ToArray());
-                    var rowNum = uint.Parse(new string(addr.SkipWhile(char.IsLetter).ToArray()));
-
-                    if (!rowDict.TryGetValue(rowNum, out var row))
-                    {
-                        row = new Row { RowIndex = rowNum };
-                        rowDict[rowNum] = row;
-                        sheetData.AppendChild(row);
-                    }
-
-                    var c = new Cell { CellReference = addr, DataType = CellValues.String };
-                    if (val.StartsWith('='))
-                        c.CellValue = new CellValue(val);
-                    else
-                    {
-                        var idx = AddSharedString(sstPart.SharedStringTable, val);
-                        c.CellValue = new CellValue(idx.ToString());
-                        c.DataType = CellValues.SharedString;
-                    }
-                    row.AppendChild(c);
+                    Directory.CreateDirectory(Path.GetDirectoryName(tmpPath)!);
+                    using var doc = SpreadsheetDocument.Create(tmpPath, SpreadsheetDocumentType.Workbook);
+                    WriteExcelContent(doc, cells);
                 }
-            }
-            return $"Excel saved: {fp} ({cells.Count} cells)";
+                else
+                {
+                    // For edit-in-place: copy original to tmp, edit there, swap
+                    var origDir = Path.GetDirectoryName(fp)!;
+                    var bakPath = Path.Combine(origDir, ".bak." + Guid.NewGuid().ToString("N")[..8]);
+                    try
+                    {
+                        File.Copy(fp, bakPath, overwrite: true);
+                        using var doc = SpreadsheetDocument.Open(bakPath, true);
+                        WriteExcelContent(doc, cells);
+                        File.Move(bakPath, tmpPath);
+                    }
+                    catch { TryDelete(bakPath); throw; }
+                }
+                return $"Excel saved: {fp} ({cells.Count} cells)";
+            });
         }
         catch (Exception ex) { return $"Excel write error: {ex.Message}"; }
+    }
+
+    private static void WriteExcelContent(SpreadsheetDocument doc, List<List<string>> cells)
+    {
+        var wbPart = doc.WorkbookPart ?? doc.AddWorkbookPart();
+        wbPart.Workbook = new Workbook();
+        var sp = wbPart.AddNewPart<WorksheetPart>();
+        sp.Worksheet = new Worksheet(new SheetData());
+
+        var sheets = wbPart.Workbook.AppendChild(new Sheets());
+        sheets.AppendChild(new Sheet { Id = wbPart.GetIdOfPart(sp), SheetId = 1, Name = "Sheet1" });
+
+        var sstPart = wbPart.GetPartsOfType<SharedStringTablePart>().FirstOrDefault()
+            ?? wbPart.AddNewPart<SharedStringTablePart>();
+        sstPart.SharedStringTable ??= new SharedStringTable();
+
+        var sheetData = sp.Worksheet.GetFirstChild<SheetData>()!;
+        var rowDict = new Dictionary<uint, Row>();
+
+        foreach (var cell in cells)
+        {
+            if (cell.Count < 2) continue;
+            var addr = cell[0];
+            var val = cell[1];
+            var colStr = new string(addr.TakeWhile(char.IsLetter).ToArray());
+            var rowNum = uint.Parse(new string(addr.SkipWhile(char.IsLetter).ToArray()));
+
+            if (!rowDict.TryGetValue(rowNum, out var row))
+            {
+                row = new Row { RowIndex = rowNum };
+                rowDict[rowNum] = row;
+                sheetData.AppendChild(row);
+            }
+
+            var c = new Cell { CellReference = addr, DataType = CellValues.String };
+            if (val.StartsWith('='))
+                c.CellValue = new CellValue(val);
+            else
+            {
+                var idx = AddSharedString(sstPart.SharedStringTable, val);
+                c.CellValue = new CellValue(idx.ToString());
+                c.DataType = CellValues.SharedString;
+            }
+            row.AppendChild(c);
+        }
     }
 
     [Description("跨 Excel 文件复制单元格区域，保留样式（字体、填充、边框、对齐、数字格式）。\n"
@@ -315,42 +347,58 @@ public sealed class DocumentTools
     {
         var fp = SafePath(path);
         if (fp == null) return "Error: path escape";
-        try
+
+        return AtomicSwap(fp, tmpPath =>
         {
-            WordprocessingDocument doc;
-            if (create || !File.Exists(fp))
+            try
             {
-                Directory.CreateDirectory(Path.GetDirectoryName(fp)!);
-                doc = WordprocessingDocument.Create(fp, WordprocessingDocumentType.Document);
-            }
-            else doc = WordprocessingDocument.Open(fp, true);
-
-            using (doc)
-            {
-                var mainPart = doc.MainDocumentPart ?? doc.AddMainDocumentPart();
-                mainPart.Document = new Document();
-                var body = mainPart.Document.AppendChild(new Body());
-
-                if (format == "markdown")
+                if (create || !File.Exists(tmpPath))
                 {
-                    foreach (var line in content.Split('\n'))
-                    {
-                        var t = line.Trim();
-                        if (t.StartsWith("# ")) body.AppendChild(new Paragraph(new DocumentFormat.OpenXml.Wordprocessing.Run(new DocumentFormat.OpenXml.Wordprocessing.Text(t[2..]) { Space = SpaceProcessingModeValues.Preserve })));
-                        else body.AppendChild(new Paragraph(new DocumentFormat.OpenXml.Wordprocessing.Run(new DocumentFormat.OpenXml.Wordprocessing.Text(line))));
-                    }
+                    Directory.CreateDirectory(Path.GetDirectoryName(fp)!);
+                    using var doc = WordprocessingDocument.Create(tmpPath, WordprocessingDocumentType.Document);
+                    WriteWordContent(doc, content, format);
                 }
                 else
                 {
-                    foreach (var line in content.Split('\n'))
-                        body.AppendChild(new Paragraph(new DocumentFormat.OpenXml.Wordprocessing.Run(new DocumentFormat.OpenXml.Wordprocessing.Text(line))));
+                    var origDir = Path.GetDirectoryName(fp)!;
+                    var bakPath = Path.Combine(origDir, ".bak." + Guid.NewGuid().ToString("N")[..8]);
+                    try
+                    {
+                        File.Copy(fp, bakPath, overwrite: true);
+                        using var doc = WordprocessingDocument.Open(bakPath, true);
+                        WriteWordContent(doc, content, format);
+                        File.Move(bakPath, tmpPath);
+                    }
+                    catch { TryDelete(bakPath); throw; }
                 }
-
-                EnsureStylesPart(mainPart);
             }
+            catch (Exception ex) { return $"Word write error: {ex.Message}"; }
             return $"Word saved: {fp}";
+        });
+    }
+
+    private static void WriteWordContent(WordprocessingDocument doc, string content, string format)
+    {
+        var mainPart = doc.MainDocumentPart ?? doc.AddMainDocumentPart();
+        mainPart.Document = new Document();
+        var body = mainPart.Document.AppendChild(new Body());
+
+        if (format == "markdown")
+        {
+            foreach (var line in content.Split('\n'))
+            {
+                var t = line.Trim();
+                if (t.StartsWith("# ")) body.AppendChild(new Paragraph(new DocumentFormat.OpenXml.Wordprocessing.Run(new DocumentFormat.OpenXml.Wordprocessing.Text(t[2..]) { Space = SpaceProcessingModeValues.Preserve })));
+                else body.AppendChild(new Paragraph(new DocumentFormat.OpenXml.Wordprocessing.Run(new DocumentFormat.OpenXml.Wordprocessing.Text(line))));
+            }
         }
-        catch (Exception ex) { return $"Word write error: {ex.Message}"; }
+        else
+        {
+            foreach (var line in content.Split('\n'))
+                body.AppendChild(new Paragraph(new DocumentFormat.OpenXml.Wordprocessing.Run(new DocumentFormat.OpenXml.Wordprocessing.Text(line))));
+        }
+
+        EnsureStylesPart(mainPart);
     }
 
     [Description("将源 Word 文档的样式（StyleDefinitionsPart + Theme）克隆到目标文档。\n"
@@ -459,48 +507,64 @@ public sealed class DocumentTools
     {
         var fp = SafePath(path);
         if (fp == null) return "Error: path escape";
-        try
+
+        return AtomicSwap(fp, tmpPath =>
         {
-            PresentationDocument doc;
-            if (create || !File.Exists(fp))
+            try
             {
-                Directory.CreateDirectory(Path.GetDirectoryName(fp)!);
-                doc = PresentationDocument.Create(fp, PresentationDocumentType.Presentation);
-            }
-            else doc = PresentationDocument.Open(fp, true);
-
-            using (doc)
-            {
-                var presPart = doc.PresentationPart ?? doc.AddPresentationPart();
-                presPart.Presentation = new P.Presentation();
-                var slideIdList = presPart.Presentation.AppendChild(new P.SlideIdList());
-
-                var slideMasterPart = presPart.AddNewPart<SlideMasterPart>();
-                slideMasterPart.SlideMaster = new P.SlideMaster(new P.CommonSlideData(new P.ShapeTree()));
-                var slideLayoutPart = slideMasterPart.AddNewPart<SlideLayoutPart>();
-                slideLayoutPart.SlideLayout = new P.SlideLayout(new P.CommonSlideData(new P.ShapeTree()));
-                var layoutId = slideMasterPart.GetIdOfPart(slideLayoutPart);
-                slideMasterPart.SlideMaster.AppendChild(new P.SlideLayoutIdList(new P.SlideLayoutId { Id = 1, RelationshipId = layoutId }));
-
-                var lines = content.Split('\n');
-                var slideContent = new List<string>();
-                uint slideId = 256;
-
-                foreach (var line in lines)
+                if (create || !File.Exists(tmpPath))
                 {
-                    if (line.TrimStart().StartsWith("#") && slideContent.Count > 0)
-                    {
-                        AddSlide(presPart, slideMasterPart, ref slideId, slideContent, slideIdList);
-                        slideContent = new List<string>();
-                    }
-                    slideContent.Add(line);
+                    Directory.CreateDirectory(Path.GetDirectoryName(fp)!);
+                    using var doc = PresentationDocument.Create(tmpPath, PresentationDocumentType.Presentation);
+                    WritePptContent(doc, content);
                 }
-                if (slideContent.Count > 0)
-                    AddSlide(presPart, slideMasterPart, ref slideId, slideContent, slideIdList);
+                else
+                {
+                    var origDir = Path.GetDirectoryName(fp)!;
+                    var bakPath = Path.Combine(origDir, ".bak." + Guid.NewGuid().ToString("N")[..8]);
+                    try
+                    {
+                        File.Copy(fp, bakPath, overwrite: true);
+                        using var doc = PresentationDocument.Open(bakPath, true);
+                        WritePptContent(doc, content);
+                        File.Move(bakPath, tmpPath);
+                    }
+                    catch { TryDelete(bakPath); throw; }
+                }
             }
+            catch (Exception ex) { return $"PPT write error: {ex.Message}"; }
             return $"PPT saved: {fp}";
+        });
+    }
+
+    private static void WritePptContent(PresentationDocument doc, string content)
+    {
+        var presPart = doc.PresentationPart ?? doc.AddPresentationPart();
+        presPart.Presentation = new P.Presentation();
+        var slideIdList = presPart.Presentation.AppendChild(new P.SlideIdList());
+
+        var slideMasterPart = presPart.AddNewPart<SlideMasterPart>();
+        slideMasterPart.SlideMaster = new P.SlideMaster(new P.CommonSlideData(new P.ShapeTree()));
+        var slideLayoutPart = slideMasterPart.AddNewPart<SlideLayoutPart>();
+        slideLayoutPart.SlideLayout = new P.SlideLayout(new P.CommonSlideData(new P.ShapeTree()));
+        var layoutId = slideMasterPart.GetIdOfPart(slideLayoutPart);
+        slideMasterPart.SlideMaster.AppendChild(new P.SlideLayoutIdList(new P.SlideLayoutId { Id = 1, RelationshipId = layoutId }));
+
+        var lines = content.Split('\n');
+        var slideContent = new List<string>();
+        uint slideId = 256;
+
+        foreach (var line in lines)
+        {
+            if (line.TrimStart().StartsWith("#") && slideContent.Count > 0)
+            {
+                AddSlide(presPart, slideMasterPart, ref slideId, slideContent, slideIdList);
+                slideContent = new List<string>();
+            }
+            slideContent.Add(line);
         }
-        catch (Exception ex) { return $"PPT write error: {ex.Message}"; }
+        if (slideContent.Count > 0)
+            AddSlide(presPart, slideMasterPart, ref slideId, slideContent, slideIdList);
     }
 
     [Description("读取 PowerPoint 文件的形状和文本样式信息：填充色、字体、字号、颜色。\n"

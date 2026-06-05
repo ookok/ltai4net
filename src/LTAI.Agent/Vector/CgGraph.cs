@@ -1,6 +1,7 @@
 ﻿// Copyright (c) LTAI. All rights reserved.
 
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -28,7 +29,7 @@ public sealed class CgGraph : AIContextProvider
     private readonly ILogger<CgGraph> _logger;
     private readonly string _ws;
     private bool _built;
-    private readonly Dictionary<string, DateTime> _indexedFiles = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, DateTime> _indexedFiles = new(StringComparer.OrdinalIgnoreCase);
     private TreeSitterParser? _parser;
 
     private static readonly HashSet<string> SourceExts = new(StringComparer.OrdinalIgnoreCase)
@@ -457,7 +458,7 @@ public sealed class CgGraph : AIContextProvider
                 var rel = Path.GetRelativePath(_ws, missing).Replace('\\', '/');
                 _logger.LogInformation("CgGraph: pruning deleted file \"{Rel}\"", rel);
                 await _store.DeleteSource(rel).ConfigureAwait(false);
-                _indexedFiles.Remove(missing);
+                _indexedFiles.TryRemove(missing, out _);
             }
         }
         catch (Exception ex)

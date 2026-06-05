@@ -58,6 +58,9 @@ public sealed class DecisionTreeConfig
     [JsonPropertyName("ambiguousFallback")]
     public string AmbiguousFallback { get; set; } = "all";
 
+    [JsonPropertyName("minAcceptableScore")]
+    public float MinAcceptableScore { get; set; } = 0.05f;
+
     [JsonPropertyName("candidates")]
     public List<string> Candidates { get; set; } = new();
 
@@ -99,6 +102,8 @@ public sealed class DecisionTreeConfig
             throw new InvalidOperationException($"confidenceMarginThreshold={cfg.ConfidenceMarginThreshold} is out of range [0, 1]");
         if (cfg.MinTopScoreThreshold is < 0f or > 1f)
             throw new InvalidOperationException($"minTopScoreThreshold={cfg.MinTopScoreThreshold} is out of range [0, 1]");
+        if (cfg.MinAcceptableScore is < 0f or > 1f)
+            throw new InvalidOperationException($"minAcceptableScore={cfg.MinAcceptableScore} is out of range [0, 1]");
         return cfg;
     }
 
