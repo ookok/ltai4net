@@ -157,6 +157,14 @@ public static class MarkdownRenderer
 
     // ─── Public helpers for ChatView code block syntax highlighting ───
 
+    private static LTAI.Core.Rendering.TextMateHighlighter? _textMateHighlighter;
+
+    private static LTAI.Core.Rendering.TextMateHighlighter GetHighlighter()
+    {
+        _textMateHighlighter ??= new LTAI.Core.Rendering.TextMateHighlighter();
+        return _textMateHighlighter;
+    }
+
     public static string[] GetKeywords(string? lang)
     {
         if (string.IsNullOrEmpty(lang)) return [];
@@ -177,6 +185,27 @@ public static class MarkdownRenderer
 
     public static List<(string text, Color color)> TokenizeLine(string line, string[] keywords)
     {
+        // Try TextMateSharp first for accurate highlighting
+        var lang = keywords.Length > 0 ? "csharp" : ""; // approximate from context
+        if (!string.IsNullOrEmpty(lang))
+        {
+            try
+            {
+                var hl = GetHighlighter();
+                var tmTokens = hl.TokenizeLine(lang, line);
+                if (tmTokens.Count > 0 && !(tmTokens.Count == 1 && tmTokens[0].fgColor == "#d4d4d4"))
+                {
+                    return tmTokens.Select(t =>
+                    {
+                        var c = Color.Parse(t.fgColor);
+                        return (t.text, c);
+                    }).ToList();
+                }
+            }
+            catch { /* fall through to regex */ }
+        }
+
+        // Fallback: keyword regex
         var tokens = new List<(string, Color)>();
         var kws = keywords.Length > 0 ? new HashSet<string>(keywords, StringComparer.Ordinal) : null;
 
@@ -192,7 +221,7 @@ public static class MarkdownRenderer
                 tokens.Add((kw, kws?.Contains(kw) == true ? LtaiTheme.AccentDNA : LtaiTheme.TextPrimary));
             }
             else if (m.Value.Length == 1 && (m.Value[0] == '/' || m.Value[0] == '#'))
-                tokens.Add((m.Value, LtaiTheme.TextDim));  // comment start matched as single char due to line end
+                tokens.Add((m.Value, LtaiTheme.TextDim));
             else
                 tokens.Add((m.Value, LtaiTheme.TextPrimary));
         }

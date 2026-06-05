@@ -54,14 +54,34 @@ public sealed class ConfigDialog : Window
         { Foreground = LtaiTheme.Sbb(LtaiTheme.TextSecondary), FontSize = 11 };
         root.Children.Add(_statusBar);
 
+        var btnRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Margin = new(0, 4, 0, 0) };
+
+        var clearAllBtn = new Button
+        { Content = "🗑 清除所有 Key", Background = LtaiTheme.Sbb(LtaiTheme.AccentWarning),
+          Foreground = LtaiTheme.Sbb(LtaiTheme.TextOnAccent) };
+        clearAllBtn.Click += (_, _) =>
+        {
+            var known = KnownKeys.All.Select(k => k.EnvVar).Distinct()
+                .Where(e => !string.IsNullOrEmpty(e) && SecretManager.Has(e)).ToList();
+            if (known.Count == 0) { _statusBar.Text = "当前没有任何已设置的 Key"; return; }
+            foreach (var envVar in known)
+            {
+                SecretManager.Set(envVar, null, persistent: true);
+                SecretManager.Invalidate(envVar);
+            }
+            RefreshKeys();
+            _statusBar.Text = $"✅ 已清除 {known.Count} 个 Key";
+        };
+        btnRow.Children.Add(clearAllBtn);
+
         var closeBtn = new Button
-        { Content = "关闭", Width = 80, HorizontalAlignment = HorizontalAlignment.Right,
+        { Content = "关闭", Width = 80,
           Background = LtaiTheme.Sbb(LtaiTheme.BgPanel),
           Foreground = LtaiTheme.Sbb(LtaiTheme.TextPrimary),
-          BorderBrush = LtaiTheme.Sbb(LtaiTheme.Border),
-          Margin = new(0, 4, 0, 0) };
+          BorderBrush = LtaiTheme.Sbb(LtaiTheme.Border) };
         closeBtn.Click += (_, _) => Close();
-        root.Children.Add(closeBtn);
+        btnRow.Children.Add(closeBtn);
+        root.Children.Add(btnRow);
 
         Content = root;
         RefreshKeys();

@@ -314,7 +314,7 @@ public sealed class LLMConfigPanel
         {
             try
             {
-                var client = OpenAIChatClientFactory.Create(info.Endpoint, model, key);
+                var client = OpenAIChatClientFactory.Create(info.Endpoint, model, key!);
                 _router.Register(layer.ToLowerInvariant(), client);
                 AnsiConsole.MarkupLine($"[green]✓ {layer}: {chosen}/{model} registered[/]");
             }

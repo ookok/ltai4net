@@ -48,7 +48,9 @@ public sealed class ConfigCommandService : ICommandService
             "model" => ConfigSelectModel(subArgs),
             "export" => ConfigExport(subArgs),
             "import" => ConfigImport(subArgs),
-            _ => new SuccessResult("用法: /config status|provider|apikey|l1|l2|export [file]|import [file]"),
+            "clear" => ConfigClear(subArgs),
+            "clear-all" => ConfigClearAll(),
+            _ => new SuccessResult("用法: /config status|provider|apikey|l1|l2|clear [name]|clear-all|export [file]|import [file]"),
         };
     }
 
@@ -246,5 +248,50 @@ public sealed class ConfigCommandService : ICommandService
 
         return new SuccessResult($"✅ 已导入 {imported}/{config.Count} 个环境变量\n" +
                                 "[yellow]部分 Provider 已自动注册，使用 /config status 查看状态[/]");
+    }
+
+    private CommandResult ConfigClear(string providerArg)
+    {
+        if (string.IsNullOrWhiteSpace(providerArg))
+            return new SuccessResult("用法: /config clear <provider名称>  清除指定 Provider 的 API Key");
+
+        if (!SlashCommands.KnownProviders.TryGetValue(providerArg, out var info))
+            return new SuccessResult($"未知 Provider '{providerArg}'。可用: {string.Join(", ", SlashCommands.KnownProviders.Keys)}");
+
+        if (string.IsNullOrEmpty(info.EnvVar))
+            return new SuccessResult($"{providerArg} 为本地 Provider，无 API Key 可清除");
+
+        if (!AnsiConsole.Confirm($"[yellow]确认清除 {providerArg} 的 API Key ({info.EnvVar})?[/]", false))
+            return new SuccessResult("已取消");
+
+        SecretManager.Set(info.EnvVar, null, persistent: true);
+        SecretManager.Invalidate(info.EnvVar);
+        return new SuccessResult($"✅ 已清除 [cyan]{providerArg}[/] 的 API Key ({info.EnvVar})");
+    }
+
+    private CommandResult ConfigClearAll()
+    {
+        var known = KnownKeys.All.Select(k => k.EnvVar).Distinct().ToList();
+        var setKeys = known.Where(e => !string.IsNullOrEmpty(e) && SecretManager.Has(e)).ToList();
+
+        if (setKeys.Count == 0)
+            return new SuccessResult("当前没有任何已设置的 API Key");
+
+        AnsiConsole.MarkupLine($"[yellow]将清除以下 {setKeys.Count} 个 API Key:[/]");
+        foreach (var envVar in setKeys)
+            AnsiConsole.MarkupLine($"  - [red]{envVar}[/]");
+
+        if (!AnsiConsole.Confirm("[red]确认清除全部? (此操作不可撤销)[/]", false))
+            return new SuccessResult("已取消");
+
+        var cleared = 0;
+        foreach (var envVar in setKeys)
+        {
+            SecretManager.Set(envVar, null, persistent: true);
+            SecretManager.Invalidate(envVar);
+            cleared++;
+        }
+
+        return new SuccessResult($"✅ 已清除 {cleared} 个 API Key。重启后所有 Provider 将恢复未配置状态。");
     }
 }

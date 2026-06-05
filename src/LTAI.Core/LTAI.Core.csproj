@@ -9,8 +9,10 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.AI" Version="10.6.0" />
+    <PackageReference Include="TextMateSharp" Version="2.0.4" />
+    <PackageReference Include="TextMateSharp.Grammars" Version="2.0.4" />
     <Reference Include="Microsoft.Agents.AI.Abstractions" HintPath="..\..\dist\lib\maf\Microsoft.Agents.AI.Abstractions.dll" Condition="Exists('..\..\dist\lib\maf\Microsoft.Agents.AI.Abstractions.dll')" />
-    <Reference Include="Microsoft.Agents.AI"                HintPath="..\..\dist\lib\maf\Microsoft.Agents.AI.dll"                Condition="Exists('..\..\dist\lib\maf\Microsoft.Agents.AI.dll')" />
+    <Reference Include="Microsoft.Agents.AI" HintPath="..\..\dist\lib\maf\Microsoft.Agents.AI.dll" Condition="Exists('..\..\dist\lib\maf\Microsoft.Agents.AI.dll')" />
     <ProjectReference Include="..\..\extern\agent-framework\dotnet\src\Microsoft.Agents.AI\Microsoft.Agents.AI.csproj" Condition="!Exists('..\..\dist\lib\maf\Microsoft.Agents.AI.dll')" />
     <PackageReference Include="OpenTelemetry.Extensions.Hosting" Version="1.15.3" />
     <PackageReference Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.15.2" />

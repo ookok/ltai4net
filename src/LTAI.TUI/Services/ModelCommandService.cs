@@ -214,6 +214,7 @@ public sealed class ModelCommandService : ICommandService
         {
             try
             {
+                if (existingKey == null) return new SuccessResult("错误: API Key 为空"); // 编译器 guard
                 var client = OpenAIChatClientFactory.Create(info.Endpoint, model, existingKey);
                 _router.Register(layer, client);
                 AnsiConsole.MarkupLine($"[green]✓ 已注册 {layer}: {chosen}/{model}[/]");

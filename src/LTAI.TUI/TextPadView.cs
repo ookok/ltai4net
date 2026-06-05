@@ -67,7 +67,7 @@ public static class TextPadView
         catch { _gitBranch = null; }
     }
 
-    private static string GitStatusDot(string? status)
+    private static string? GitStatusDot(string? status)
     {
         return status switch
         {
