@@ -273,7 +273,8 @@ public partial class MainWindow : Window
             var model = App.Router?.ActiveProvider ?? "--";
             var tokens = _chatView?.Tokens ?? 0;
             var branch = _textPadView?.GitBranch;
-            _vm.CapsuleText = $"🤖 {model} | 🔥 {tokens:N0} t | 🌿 {branch ?? "--"}";
+            var errorDot = _textPadView?.HasPendingError == true ? " 🔴" : "";
+            _vm.CapsuleText = $"🤖 {model} | 🔥 {tokens:N0} t | 🌿 {branch ?? "--"}{errorDot}";
         });
         _statusTimer.Start();
 
@@ -289,7 +290,9 @@ public partial class MainWindow : Window
 
     private TextPadView CreateTextPadView(LTAIService svc)
     {
-        var tp = new TextPadView(svc.Options.ResolveDataPath("../.."));
+        var bridge = App.Services?.GetService(typeof(LTAI.Desktop.Debugging.DebugBridge))
+            as LTAI.Desktop.Debugging.DebugBridge;
+        var tp = new TextPadView(svc.Options.ResolveDataPath("../.."), bridge);
         tp.AskAiRequested += prompt =>
         {
             _vm.ActiveIndex = 1;

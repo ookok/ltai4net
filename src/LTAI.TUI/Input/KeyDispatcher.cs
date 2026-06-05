@@ -100,6 +100,22 @@ public sealed class KeyDispatcher
             return true;
         }
 
+        // Alt+Shift+/ → Command Palette (context-aware quick prompt)
+        if (key.Key == ConsoleKey.Oem2 && Mods(key, ConsoleModifiers.Alt | ConsoleModifiers.Shift))
+        {
+            AnsiConsole.Markup("[bold yellow]> [/]");
+            var paletteInput = Console.ReadLine() ?? "";
+            if (!string.IsNullOrWhiteSpace(paletteInput))
+            {
+                var context = "";
+                var currentFile = LTAI.TUI.TextPadView.CurrentFileForContext;
+                if (currentFile != null)
+                    context = $"[当前文件: {currentFile}]\n";
+                _owner.EnqueueUserMessage($"{context}[命令面板] {paletteInput}");
+            }
+            return true;
+        }
+
         // Ctrl+V → paste
         if (key.Key == ConsoleKey.V && Mods(key, ConsoleModifiers.Control))
         {

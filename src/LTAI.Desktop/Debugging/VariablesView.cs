@@ -2,6 +2,7 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Media;
 using Avalonia.Layout;
+using LTAI.Core.Debugging;
 
 namespace LTAI.Desktop.Debugging;
 
@@ -22,7 +23,7 @@ public sealed class VariablesView : TreeView
 
         _watchBox = new TextBox
         {
-            Watermark = "输入表达式求值 (Enter)",
+            PlaceholderText = "输入表达式求值 (Enter)",
             Background = LtaiTheme.Sbb(LtaiTheme.Bg),
             Foreground = LtaiTheme.Sbb(LtaiTheme.TextPrimary),
             FontSize = 12,
@@ -50,11 +51,11 @@ public sealed class VariablesView : TreeView
     public void Refresh()
     {
         Items.Clear();
-        if (_session.State != DebugState.Paused || _session.CurrentScope.Length == 0)
+        if (_session.State != LTAI.Core.Debugging.DebugState.Paused || _session.CurrentScope.Length == 0)
         {
             Items.Add(new TreeViewItem
             {
-                Header = _session.State == DebugState.Running ? "▶ Running..." : "⏹ Idle",
+                Header = _session.State == LTAI.Core.Debugging.DebugState.Running ? "▶ Running..." : "⏹ Idle",
                 Foreground = LtaiTheme.Sbb(LtaiTheme.TextDim),
                 IsHitTestVisible = false,
             });
@@ -65,7 +66,7 @@ public sealed class VariablesView : TreeView
             Items.Add(BuildVariableItem(v));
     }
 
-    private TreeViewItem BuildVariableItem(DapVariable v)
+    private TreeViewItem BuildVariableItem(DebugVariable v)
     {
         var header = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
 

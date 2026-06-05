@@ -128,6 +128,12 @@ public sealed class TuiApp
                     Console.Clear();
                     ShowHeader();
                     TextPadView.Render(_projectRoot);
+                    // P1: TextPadView 设置了 PendingChatRequest → 发送到聊天
+                    if (TextPadView.PendingChatRequest != null)
+                    {
+                        _chatLayout.EnqueueUserMessage(TextPadView.PendingChatRequest);
+                        TextPadView.PendingChatRequest = null;
+                    }
                     break;
                 case TuiView.LLMConfig:
                     _llmConfig.ShowSetupWizard();

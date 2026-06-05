@@ -648,7 +648,7 @@ public sealed class ChatView : UserControl
         try
         {
             var sessionHandle = _sessionManager.CurrentHandle;
-            await foreach (var update in _svc.Chat.ChatStreamingAsync(query, sessionHandle, ct: _cts.Token))
+            await foreach (var update in _svc.Chat.ChatStreamingAsync(query, sessionHandle, _cts.Token))
             {
                 var token = update.Text ?? "";
                 _tokens++;

@@ -27,6 +27,9 @@ public sealed class ChatLayout
         {
             FullMode = BoundedChannelFullMode.DropOldest,
         });
+
+    /// <summary>Send a message as if the user typed it (used by TextPadView AI fix, etc.).</summary>
+    public void EnqueueUserMessage(string message) => _messageQueue.Writer.TryWrite(message);
     internal bool _processing;
     internal CancellationTokenSource? _responseCts;
     internal volatile char _quickNav;
@@ -324,8 +327,16 @@ public sealed class ChatLayout
         var planStatus = LTAI.Agent.Tools.PlanTools.PlanStatus();
         var hasPlan = planStatus.Contains("Current Step") || planStatus.Contains("executing");
         var planTag = hasPlan ? "  [bold yellow]📋 计划执行中[/]" : "";
+
+        // Agent status info
+        var model = LTAI.Core.Configuration.UsageTracker.ActiveModel?.EscapeMarkup() ?? "--";
+        var toolCount = LTAI.Core.Configuration.UsageTracker.ToolCalls;
+        var errorIndicator = LTAI.TUI.TextPadView.PendingChatRequest != null
+            ? "  [bold red]🔴 错误待修复[/]"
+            : "";
+
         _layout["Header"].Update(
-            new Panel($"[bold]LTAI 聊天[/]{planTag} — [grey]Esc=退出  Enter=发送  S+Enter=换行  1-5=视图  /help=帮助[/]")
+            new Panel($"[bold]LTAI 聊天[/]{planTag}{errorIndicator} — [grey]{model}  |  🛠 {toolCount} 次工具调用  |  Esc=退出  Enter=发送  1-5=视图  /help=帮助[/]")
                 .Border(BoxBorder.None).Expand());
     }
 

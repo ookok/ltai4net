@@ -150,7 +150,7 @@ public static class ServiceCollectionExtensions
             sp.GetRequiredService<YAMLWorkflowRegistry>(),
             sp.GetRequiredService<ILogger<YAMLWorkflowWatcher>>()));
         services.AddHostedService<WorkflowWatcherHostedService>();
-        services.AddHostedService<GraphInitService>();
+        services.AddHostedService<LTAI.Agent.Services.GraphInitService>();
 
         // Step 3a: DevUI shared service (P9.0)
         // Used by LTAI.Web (DevUI REST surface), LTAI.TUI (/dashboard),
@@ -881,15 +881,20 @@ public static class ServiceCollectionExtensions
         var wasmtimeSandbox = new WasmtimeSandbox(ws, loggerFactory.CreateLogger<WasmtimeSandbox>());
 
             // Skills provider: loads SKILL.md from skills/ (框架自动去重合并)
+        // P3 APM: also loads from .agents/skills/ (APM-managed skills)
+        var apmSkillsDir = Path.Combine(ws, ".agents", "skills");
         var skillsDir = new[] {
             Path.Combine(AppContext.BaseDirectory, "skills"),
             Path.Combine(Directory.GetCurrentDirectory(), "skills"),
             Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "skills"),
         }.FirstOrDefault(Directory.Exists) ?? Path.Combine(Directory.GetCurrentDirectory(), "skills");
         Directory.CreateDirectory(skillsDir);
+        var skillDirs = new List<string> { skillsDir };
+        if (Directory.Exists(apmSkillsDir))
+            skillDirs.Add(apmSkillsDir);
 
         var skillsBuilder = new Microsoft.Agents.AI.AgentSkillsProviderBuilder()
-            .UseFileSkills([skillsDir]);
+            .UseFileSkills([.. skillDirs]);
 
         if (opts.SkillsUrls is { Length: > 0 })
             skillsBuilder = skillsBuilder.UseSource(
@@ -979,6 +984,40 @@ public static class ServiceCollectionExtensions
         // Available for all canRead agents (not in Plan Mode — no AST index in read-only mode).
         if (canRead && !isPlanMode)
             tools.Add(AIFunctionFactory.Create(codeChunkIndex.SemanticCodeSearch));
+
+        // P3: APM / MCP Registry 包管理工具 — 所有 agent 可用（需安装 apm CLI）
+        {
+            var pkg = new LTAI.Agent.Tools.PackageManagerTools();
+            tools.Add(AIFunctionFactory.Create(pkg.PkgSearch));
+            tools.Add(AIFunctionFactory.Create(pkg.PkgInstall));
+            tools.Add(AIFunctionFactory.Create(pkg.PkgList));
+        }
+
+        // AI 调试工具集: 断点/变量/栈/步进 — 仅桌面端有 IDebugBridge 时生效
+        // 可用 agent: LTAI-Chat, LTAI-Code, LTAI-System (调试相关 agent)
+        if (name is "LTAI-Chat" or "LTAI-Chat-Pro" or "LTAI-Code" or "LTAI-System")
+        {
+            var debugBridge = sp.GetService<LTAI.Core.Debugging.IDebugBridge>();
+            if (debugBridge != null)
+            {
+                var debug = new LTAI.Agent.Tools.DebugTools(debugBridge);
+                tools.Add(AIFunctionFactory.Create(debug.DebugStatus));
+                tools.Add(AIFunctionFactory.Create(debug.SetBreakpoint));
+                tools.Add(AIFunctionFactory.Create(debug.RemoveBreakpoint));
+                tools.Add(AIFunctionFactory.Create(debug.ListBreakpoints));
+                tools.Add(AIFunctionFactory.Create(debug.DebugContinue));
+                tools.Add(AIFunctionFactory.Create(debug.DebugStepOver));
+                tools.Add(AIFunctionFactory.Create(debug.DebugStepInto));
+                tools.Add(AIFunctionFactory.Create(debug.DebugStepOut));
+                tools.Add(AIFunctionFactory.Create(debug.DebugStop));
+                tools.Add(AIFunctionFactory.Create(debug.DebugGetStack));
+                tools.Add(AIFunctionFactory.Create(debug.DebugGetVariables));
+                tools.Add(AIFunctionFactory.Create(debug.DebugEvaluate));
+                tools.Add(AIFunctionFactory.Create(debug.DebugGetThreads));
+                tools.Add(AIFunctionFactory.Create(debug.DebugSwitchThread));
+                tools.Add(AIFunctionFactory.Create(debug.DebugAnalyzeFailure));
+            }
+        }
 
         // 去重：同名工具保留第一个，记录警告
         var seenNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -1110,16 +1149,29 @@ public static class ServiceCollectionExtensions
                 BackgroundAgentsProviderOptions = new BackgroundAgentsProviderOptions
                 {
                     Instructions = """
-                    ## BackgroundAgents (LTAI)
-                    你可以将任务**异步委派**给以下 sibling agents。每个 agent 在自己 session 中并发执行。
-                    - 调用 `BackgroundAgents_StartTask` 启动后台任务（不阻塞，可连续启动多个）
-                    - 调用 `BackgroundAgents_WaitForFirstCompletion` 等待任意一个完成
-                    - 调用 `BackgroundAgents_GetTaskResults` 取出已完成的文本结果
-                    - 调用 `BackgroundAgents_GetAllTasks` 列出所有任务（id/状态/描述/agent 名）
-                    - 调用 `BackgroundAgents_ContinueTask` 向已完成任务的 session 追加输入
-                    - 调用 `BackgroundAgents_ClearCompletedTask` 释放已完成的 session 节省内存
-                    - 重要：回复用户前**必须**等所有 outstanding tasks 完成
-                    - 重要：取完结果后用 ClearCompletedTask 清理，除非还要 ContinueTask
+                    ## BackgroundAgents — 异步委派
+                    你可以将任务**异步委派**给以下 sibling agents。每个 agent 在自己 session 中独立并发执行。
+
+                    ### 典型用法
+                    1. `BackgroundAgents_StartTask(agentName, goal)` → 启动1个或多个后台任务（不阻塞）
+                    2. `BackgroundAgents_WaitForFirstCompletion()` → 等待任意一个完成后取结果
+                    3. `BackgroundAgents_GetTaskResults(id)` → 取出已完成的结果
+                    4. 回复用户前**必须**等待所有 outstanding tasks 完成
+                    5. 取完结果后调用 `BackgroundAgents_ClearCompletedTask(id)` 释放内存
+
+                    ### 适用场景
+                    - **并发搜索**：同时让 LTAI-Code 分析代码 + LTAI-Data 查数据 + LTAI-Writer 写文档
+                    - **分步委派**：LTAI-Math 算数值 → 结果传给 LTAI-Code 实现 → 再传给 LTAI-Writer 写说明
+                    - **异步后台**：长耗时操作（编译、测试、数据迁移）交给专用 agent，不阻塞主对话
+
+                    ### 工具列表
+                    - `BackgroundAgents_StartTask` — 启动后台任务（返回 taskId，不阻塞）
+                    - `BackgroundAgents_WaitForFirstCompletion` — 等待任意一个任务完成
+                    - `BackgroundAgents_GetTaskResults` — 取出已完成任务的文本结果
+                    - `BackgroundAgents_GetAllTasks` — 列出所有任务（id/状态/描述/agent 名）
+                    - `BackgroundAgents_ContinueTask` — 向已完成任务的 session 追加输入
+                    - `BackgroundAgents_ClearCompletedTask` — 释放已完成任务的 session
+
                     {background_agents}
                     """,
                 },
@@ -1139,51 +1191,110 @@ public static class ServiceCollectionExtensions
         if (!LTAI.Core.I18n.Locale.IsChinese)
         {
             return LTAI.Core.I18n.Locale.Get("SystemPromptIntro") + "\n\n"
-                + "## General Guidelines\n"
+                + "# Tone & Style\n"
+                + "- Be concise and direct. Answer in 1-3 sentences when possible. Minimize output tokens.\n"
+                + "- Do NOT add preamble/postamble like \"Here is the answer...\" or \"Based on the analysis...\".\n"
+                + "- Do NOT add code explanation summaries unless asked. After working on a file, just stop.\n"
+                + "- Use code references with `filepath:line_number` format (e.g., `src/services/process.ts:712`).\n"
+                + "- Never use emojis unless the user explicitly requests them.\n"
+                + "- Use GitHub-flavored markdown. Output renders in a command-line interface.\n"
+                + "\n"
+                + "# Task Execution\n"
                 + "- Think before acting. Break complex tasks into clear steps.\n"
                 + "- Use available tools to gather information, execute actions, and verify results.\n"
-                + "- Explain your reasoning so the user can follow your thought process.\n"
+                + "- Explain your reasoning inside <thinking>...  tags so the user can follow.\n"
+                + "- Structure: <thinking>analysis</thinking> → tool calls → <thinking>reflection</thinking> → final answer.\n"
                 + "- Before calling more than 4 tools in a row, explain what you are doing.\n"
                 + "- If a tool call fails, **adjust your strategy** instead of retrying the same call.\n"
-                + "- After completing a task, give a clear summary: what was done and what was found.\n"
+                + "- After completing a task, give a clear summary: what was done, what was found.\n"
                 + "- If the model is insufficient for complex tasks (cross-file refactoring, concurrency safety analysis, etc.),\n"
                 + "  output `<<<NEEDS_PRO: <reason>>>` to request upgrade to a stronger model.\n"
                 + "\n"
-                + "## Code Understanding\n"
+                + "# Proactiveness\n"
+                + "- You are allowed to be proactive, but only when the user asks you to do something.\n"
+                + "- Strive to balance: (1) doing the right thing when asked, including follow-up actions vs (2) not surprising the user.\n"
+                + "- Do not add extra explanation or summary unless the user requests it.\n"
+                + "\n"
+                + "# Following Conventions\n"
+                + "- When making changes, first understand the file's code conventions. Mimic code style, use existing libraries.\n"
+                + "- NEVER assume a given library is available. Check neighboring files or package.json/cargo.toml first.\n"
+                + "- When creating a new component, look at existing ones first for patterns, naming, typing.\n"
+                + "- When editing, read the code's surrounding context (especially imports) to understand framework choice.\n"
+                + "- Always follow security best practices. Never introduce code that exposes or logs secrets and keys.\n"
+                + "- Never commit secrets or keys to the repository.\n"
+                + "\n"
+                + "# Code References\n"
+                + "- When referencing specific functions or pieces of code, use `filepath:line_number` format\n"
+                + "  so the user can easily navigate to the source code location.\n"
+                + "\n"
+                + "# Code Understanding\n"
                 + "- When asked about how code works, call SemanticCodeSearch first to find relevant code snippets.\n"
                 + "- Only use ReadFileContent for the full file context when snippets are insufficient.\n"
+                + "- Before editing a file, read it first to understand its structure and conventions.\n"
                 + "\n"
-                + "## Output Format\n"
-                + "- Place reasoning inside <thinking>...</thinking> tags.\n"
-                + "- Keep the final answer outside these tags, clean and direct.\n"
-                + "- Structure: <thinking>analysis</thinking> → tool calls → <thinking>reflection</thinking> → final answer.\n"
+                + "# Tool Usage Policy\n"
+                + "- Before making edits, read the file first with the Read tool (or equivalent).\n"
+                + "- Use Glob and Grep to find files before reading them.\n"
+                + "- Verify results after tool calls to ensure correctness.\n"
+                + "- Call multiple independent tools in parallel for efficiency.\n"
+                + "- Prefer editing existing files. NEVER write new files unless explicitly required.\n"
+                + "- For multi-step tasks, use TodoWrite to track progress.\n"
                 + "\n"
                 + "## Example\n"
                 + "- User: \"How many files are in src/?\"\n"
                 + "- <thinking>User wants a file count. I'll use Glob or DirectoryTree to list files, then count.</thinking>\n"
                 + "- [calls Glob(\"**/*\", \"src/\")]\n"
                 + "- <thinking>The tool returned 42 files. I'll report this to the user.</thinking>\n"
-                + "- There are 42 files in the src/ directory.\n";
+                + "- 42 files in src/.\n";
         }
         return LTAI.Core.I18n.Locale.Get("SystemPromptIntro") + "\n\n"
-            + "## 一般准则\n"
+            + "# 语气与风格\n"
+            + "- 简洁直接。能用 1-3 句回答就不要写段落。最小化输出 token。\n"
+            + "- 不要加前导/结尾语，如\"以下是答案...\"或\"基于以上分析...\"。\n"
+            + "- 除非用户要求，不要对代码做额外解释。修改完文件直接结束。\n"
+            + "- 代码引用使用 `filepath:行号` 格式（如 `src/services/process.ts:712`）。\n"
+            + "- 除非用户明确要求，不要使用 emoji。\n"
+            + "- 使用 GitHub-flavored markdown。输出将在命令行界面展示。\n"
+            + "\n"
+            + "# 任务执行\n"
             + "- 先思考再行动。复杂任务拆成清晰的步骤。\n"
             + "- 用可用工具收集信息、执行操作并验证结果。\n"
-            + "- 解释你的推理过程，让用户能跟随你的思路。\n"
+            + "- 推理过程用 <thinking>...</thinking> 包裹，让用户能跟随你的思路。\n"
+            + "- 整体结构：<thinking>分析</thinking> → 工具调用 → <thinking>反思</thinking> → 最终回答。\n"
             + "- 连续调用 4 次以上工具前必须先向用户说明你正在做什么。\n"
             + "- 如果工具调用失败或返回异常，**调整策略**而不是重试同一个调用。\n"
             + "- 任务完成后，给出清晰的总结：做了什么、发现了什么。\n"
             + "- 如果模型不足以完成复杂任务（跨文件重构、并发安全分析等），\n"
             + "  在回复中输出 `<<<NEEDS_PRO: <原因>>>` 标记，系统将自动切换到更强的模型。\n"
             + "\n"
-            + "## 代码理解\n"
-            + "- 当需要理解代码逻辑时，先调用 SemanticCodeSearch 获取相关代码片段。\n"
-            + "- 只有片段信息不够时再使用 ReadFileContent 读取完整文件。\n"
+            + "# 主动性\n"
+            + "- 用户要求做事时可以主动，但不要做用户没要求的事。\n"
+            + "- 平衡两点：(1) 被问到时要做好，包括后续操作；(2) 不要让用户意外。\n"
+            + "- 除非用户要求，不要添加额外解释或总结。\n"
             + "\n"
-            + "## 输出格式\n"
-            + "- 推理过程用 <thinking>...</thinking> 包裹。\n"
-            + "- 最终答案保持干净、直接，放在 thinking 标签外。\n"
-            + "- 整体结构：<thinking>分析</thinking> → 工具调用 → <thinking>反思</thinking> → 最终回答。\n"
+            + "# 遵循约定\n"
+            + "- 修改代码前先理解文件的代码风格。模仿代码风格，使用现有库和工具。\n"
+            + "- 绝不要假设某个库可用。先检查相邻文件或 package.json/cargo.toml。\n"
+            + "- 创建新组件时先看现有的，了解模式、命名、类型约定。\n"
+            + "- 编辑代码时读取上下文（尤其是 import）了解框架选择。\n"
+            + "- 始终遵循安全最佳实践。不要引入暴露或记录密钥的代码。\n"
+            + "- 永远不要将密钥提交到仓库。\n"
+            + "\n"
+            + "# 代码引用\n"
+            + "- 引用函数或代码段时，使用 `filepath:行号` 格式方便用户导航。\n"
+            + "\n"
+            + "# 代码理解\n"
+            + "- 需要理解代码逻辑时，先调用 SemanticCodeSearch 获取相关片段。\n"
+            + "- 只有片段不够时再用 ReadFileContent 读取完整文件。\n"
+            + "- 编辑文件前先读取，理解其结构和约定。\n"
+            + "\n"
+            + "# 工具使用策略\n"
+            + "- 编辑前先用 Read 工具读取文件。\n"
+            + "- 用 Glob 和 Grep 找到文件再读取。\n"
+            + "- 工具调用后验证结果确保正确。\n"
+            + "- 独立工具调用可以并行执行以提高效率。\n"
+            + "- 优先编辑现有文件。除非明确要求，不要新建文件。\n"
+            + "- 多步骤任务用 TodoWrite 追踪进度。\n"
             + "\n"
             + "## 示例\n"
             + "- 用户：\"src/ 目录下有多少文件？\"\n"
@@ -1205,35 +1316,41 @@ public static class ServiceCollectionExtensions
         {
             return """
             <system-reminder>
-            # Plan Mode — Read-Only Mode
+            # Plan Mode — Read-Only Planning
 
             You are in Plan Mode. No file modifications, shell execution, or system changes are allowed.
-            You may only use read-only tools to observe, analyze, and plan.
 
-            ## Responsibilities
-            Read code, search for information, construct plans. After completing the plan, call PlanExit to submit it and exit Plan Mode.
+            ## Workflow (5 phases)
+            1. **Initial Understanding** — Read relevant files to understand the codebase and the user's request.
+            2. **Design** — Search for existing patterns, similar implementations, and edge cases.
+            3. **Review** — Consider trade-offs, risks, alternatives. Use parallel exploration when needed.
+            4. **Final Plan** — Construct a clear, step-by-step plan with file paths and key decisions.
+            5. **Exit** — Call PlanExit to submit the plan and exit Plan Mode.
 
             ## Constraints
             - ABSOLUTELY FORBIDDEN: writing files, editing files, running commands, git operations
-            - ALLOWED: reading files, searching, glob, directory listing
-            - After completing the plan, call PlanExit
+            - ALLOWED: reading files, searching, glob, directory listing, web fetch
+            - After completing the plan, MUST call PlanExit
             </system-reminder>
             """;
         }
         return """
         <system-reminder>
-        # Plan Mode — 只读模式
+        # Plan Mode — 只读规划
 
         你处于 Plan mode。严禁任何文件修改、shell 执行或系统变更。
-        你只能使用只读工具观察、分析和规划。
 
-        ## 职责
-        阅读代码、搜索信息、构造计划。完成后调用 PlanExit 工具提交计划并退出 Plan mode。
+        ## 工作流（5 阶段）
+        1. **理解需求** — 读取相关文件，理解代码库和用户请求。
+        2. **设计方案** — 搜索现有模式、相似实现和边界情况。
+        3. **审查权衡** — 考虑取舍、风险、替代方案。必要时并行探索。
+        4. **最终计划** — 构建清晰的步骤计划，包含文件路径和关键决策。
+        5. **退出** — 调用 PlanExit 提交计划并退出 Plan Mode。
 
         ## 约束
         - 绝对禁止：写文件、编辑文件、运行命令、git 操作
-        - 允许：读文件、搜索、glob、目录列表
-        - 完成计划后调用 PlanExit
+        - 允许：读文件、搜索、glob、目录列表、web fetch
+        - 完成计划后必须调用 PlanExit
         </system-reminder>
         """;
     }

@@ -1,19 +1,15 @@
 using System.Text.Json.Nodes;
+using LTAI.Core.Debugging;
 
 namespace LTAI.Desktop.Debugging;
 
-public enum DebugState { Idle, Launching, Running, Paused, Terminating, Terminated }
-
-public sealed record DapStackFrame(int Id, string Name, string? File, int Line, int Column);
-public sealed record DapVariable(string Name, string Value, string Type, int VariablesReference);
-
-public sealed class DapSession
+public sealed class DapSession : IDebugSession
 {
     private DapClient? _client;
     private DebugState _state = DebugState.Idle;
     private int _currentThreadId;
-    public DapStackFrame[] CurrentStack { get; private set; } = [];
-    public DapVariable[] CurrentScope { get; private set; } = [];
+    public DebugStackFrame[] CurrentStack { get; private set; } = [];
+    public DebugVariable[] CurrentScope { get; private set; } = [];
     public DebugState State => _state;
     public int CurrentLine { get; private set; }
     public string? CurrentFile { get; private set; }
@@ -130,7 +126,7 @@ public sealed class DapSession
         {
             var fo = f!.AsObject();
             var src = fo["source"] as JsonObject;
-            return new DapStackFrame(
+            return new DebugStackFrame(
                 (int)fo["id"]!.GetValue<long>(),
                 fo["name"]!.GetValue<string>(),
                 src?["path"]?.GetValue<string>(),
@@ -169,7 +165,7 @@ public sealed class DapSession
         CurrentScope = resp["body"]?["variables"]?.AsArray()?.Select(v =>
         {
             var vo = v!.AsObject();
-            return new DapVariable(
+            return new DebugVariable(
                 vo["name"]!.GetValue<string>(),
                 vo["value"]?.GetValue<string>() ?? "",
                 vo["type"]?.GetValue<string>() ?? "",
@@ -177,14 +173,37 @@ public sealed class DapSession
         }).ToArray() ?? [];
     }
 
-    public async Task<DapVariable[]> ExpandVariableAsync(int varsRef)
+    public async Task<DebugThreadInfo[]> GetThreadsAsync()
+    {
+        if (_client == null) return [];
+        var resp = await _client.CallAsync("threads");
+        var list = resp["body"]?["threads"]?.AsArray();
+        if (list == null) return [];
+        return list.Select(t =>
+        {
+            var to = t!.AsObject();
+            return new DebugThreadInfo(
+                (int)to["id"]!.GetValue<long>(),
+                to["name"]?.GetValue<string>(),
+                to["id"]!.GetValue<long>() == _currentThreadId);
+        }).ToArray();
+    }
+
+    public async Task SwitchThreadAsync(int threadId)
+    {
+        if (_client == null) return;
+        _currentThreadId = threadId;
+        await RefreshStackAsync();
+    }
+
+    public async Task<DebugVariable[]> ExpandVariableAsync(int varsRef)
     {
         if (_client == null) return [];
         var resp = await _client.CallAsync("variables", new JsonObject { ["variablesReference"] = varsRef });
         return resp["body"]?["variables"]?.AsArray()?.Select(v =>
         {
             var vo = v!.AsObject();
-            return new DapVariable(
+            return new DebugVariable(
                 vo["name"]!.GetValue<string>(),
                 vo["value"]?.GetValue<string>() ?? "",
                 vo["type"]?.GetValue<string>() ?? "",
@@ -238,7 +257,7 @@ public sealed class DapSession
                 if (output != null)
                     OutputReceived?.Invoke(output);
                 var category = body?["category"]?.GetValue<string>();
-                if (category == "stdout" || category == "stderr")
+                if ((category == "stdout" || category == "stderr") && output != null)
                     OutputReceived?.Invoke(output);
                 break;
 

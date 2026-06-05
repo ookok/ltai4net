@@ -31,6 +31,11 @@ public static class TextPadView
     private static string? _gitBranch;
     private static readonly Dictionary<string, string> _gitStatusCache = new();
 
+    // P1: Pending chat request — set by TextPadView, consumed by TuiApp
+    public static string? PendingChatRequest;
+    // P3: Current file being viewed (for Command Palette context)
+    public static string? CurrentFileForContext => _currentFile;
+
     private static void RefreshGitStatus()
     {
         _gitStatusCache.Clear();
@@ -117,6 +122,9 @@ public static class TextPadView
                     case ConsoleKey.G: GoToLine(); break;
                     case ConsoleKey.D when _gitBranch != null: RunCmd($"git diff \"{_currentFile}\""); break;
                     case ConsoleKey.L when _gitBranch != null: RunCmd($"git log --oneline -10"); break;
+                    case ConsoleKey.A:
+                        PendingChatRequest = $"请分析以下文件：\n文件: {_currentFile}\n```\n{File.ReadAllText(_currentFile)}\n```\n\n请分析代码逻辑、发现潜在问题并给出改进建议。";
+                        return; // 退出 TextPadView，TuiApp 会处理 PendingChatRequest
                     case ConsoleKey.F when key.Modifiers == ConsoleModifiers.Control: SearchInFile(); break;
                 }
             }
@@ -271,6 +279,18 @@ public static class TextPadView
                     .Header(isOk ? "[green]✅ 成功[/]" : "[red]❌ 失败[/]")
                     .Border(BoxBorder.Rounded)
                     .Expand());
+            }
+            // P1: 命令失败 → 可以按 A 发送给 AI 修复
+            if (!isOk)
+            {
+                AnsiConsole.MarkupLine("\n[yellow]按 A 键将错误发送给 AI 分析修复，其他键返回...[/]");
+                var k = Console.ReadKey(true);
+                if (k.Key == ConsoleKey.A)
+                {
+                    var cmdDisplay = cmd.Length > 80 ? cmd[..77] + "..." : cmd;
+                    PendingChatRequest = $"命令执行出错，请分析以下错误并修复：\n```\n{cmdDisplay}\n```\n错误信息：\n```\n{output}\n{error}\n```".Trim();
+                    return;
+                }
             }
         }
         catch (Exception ex) { AnsiConsole.MarkupLine($"[red]错误: {ex.Message}[/]"); }

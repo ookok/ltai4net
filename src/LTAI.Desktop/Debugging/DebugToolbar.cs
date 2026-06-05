@@ -1,6 +1,7 @@
 using Avalonia.Controls;
 using Avalonia.Media;
 using Avalonia.Layout;
+using LTAI.Core.Debugging;
 
 namespace LTAI.Desktop.Debugging;
 

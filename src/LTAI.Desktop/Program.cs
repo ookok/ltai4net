@@ -73,6 +73,8 @@ public static class Program
         services.AddLTAIAI();
         services.AddLTAIAgent();
 
+        // Debug bridge — singleton shared across TextPadView and AI debug tools
+        services.AddSingleton<LTAI.Desktop.Debugging.DebugBridge>();
 
         return services;
     }

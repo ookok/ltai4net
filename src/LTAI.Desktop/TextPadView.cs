@@ -13,6 +13,7 @@ using AvaloniaEdit.Document;
 using AvaloniaEdit.Folding;
 using AvaloniaEdit.Highlighting;
 using AvaloniaEdit.Search;
+using LTAI.Core.Debugging;
 
 namespace LTAI.Desktop;
 
@@ -85,9 +86,16 @@ public sealed class TextPadView : UserControl
     private TextEditor? _splitEditor;
     private bool _showSplit;
     private readonly Grid _editorGrid;
+
+    // ── Error detection (P1: 命令失败自动拉起 AI) ──
+    private string? _lastError;
+    private string? _lastErrorCommand;
+    private Button _errorFixBtn = null!;
+    public bool HasPendingError => _errorFixBtn?.IsVisible == true;
     private sealed record SymbolItem(string Icon, string Name, int Line);
 
-    public TextPadView(string? rootDir = null)
+    public TextPadView(string? rootDir = null,
+        LTAI.Desktop.Debugging.DebugBridge? debugBridge = null)
     {
         _rootDir = rootDir ?? Directory.GetCurrentDirectory();
 
@@ -162,6 +170,7 @@ public sealed class TextPadView : UserControl
         // ── Debugging: DapSession + BreakpointManager ──
         DebugSession = new LTAI.Desktop.Debugging.DapSession();
         _bpManager = new LTAI.Desktop.Debugging.BreakpointManager(_rootDir);
+        debugBridge?.SetSession(DebugSession, _bpManager);
 
         // ── BreakpointMargin — 左侧断点边栏 ──
         _bpMargin = new LTAI.Desktop.Debugging.BreakpointMargin(_bpManager, () => _currentFile);
@@ -180,7 +189,7 @@ public sealed class TextPadView : UserControl
         };
         DebugSession.StateChanged += state =>
         {
-            if (state is LTAI.Desktop.Debugging.DebugState.Running or LTAI.Desktop.Debugging.DebugState.Terminated)
+            if (state is DebugState.Running or DebugState.Terminated)
             {
                 _bpMargin.ClearPausedLine();
                 hl.ClearPausedLine();
@@ -287,12 +296,21 @@ public sealed class TextPadView : UserControl
         _runBtn.Click += (_, _) => RunProjectCmd("run");
 
         var debugBtn = new Button { Content = "🐛 Debug", FontSize = 10, Height = 20, Background = LtaiTheme.Sbb(LtaiTheme.AccentWarning), Foreground = LtaiTheme.Sbb(LtaiTheme.TextOnAccent), IsVisible = false };
-        debugBtn.Click += (_, _) => this.StartDebugAsync();
+        debugBtn.Click += (_, _) => _ = this.StartDebugAsync();
 
         var formatBtn = new Button { Content = "✨ Format", FontSize = 10, Height = 20, Background = LtaiTheme.Sbb(LtaiTheme.AccentWarning), Foreground = LtaiTheme.Sbb(LtaiTheme.TextOnAccent) };
         formatBtn.Click += (_, _) => RunFormat();
         var askAiBtn = new Button { Content = "🤖 问 AI", FontSize = 10, Height = 20, Background = LtaiTheme.Sbb(LtaiTheme.AccentDNA), Foreground = LtaiTheme.Sbb(LtaiTheme.TextOnAccent) };
         askAiBtn.Click += (_, _) => AskAiWithContext(_currentFile ?? _rootDir);
+        _errorFixBtn = new Button { Content = "⚡ AI Fix", FontSize = 10, Height = 20, Background = LtaiTheme.Sbb(LtaiTheme.AccentWarning), Foreground = LtaiTheme.Sbb(LtaiTheme.TextOnAccent), IsVisible = false };
+        _errorFixBtn.Click += (_, _) =>
+        {
+            var msg = $"命令执行出错，请分析以下错误并修复：\n```\n{_lastErrorCommand}\n```\n错误信息：\n```\n{_lastError}\n```";
+            _lastError = null;
+            _lastErrorCommand = null;
+            _errorFixBtn.IsVisible = false;
+            AskAiRequested?.Invoke(msg);
+        };
 
         var wrapBtn = new Button { Content = "⤫ 换行", FontSize = 10, Height = 20, Background = LtaiTheme.Sbb(LtaiTheme.BgPanel), Foreground = LtaiTheme.Sbb(LtaiTheme.TextDim) };
         wrapBtn.Click += (_, _) => { _editor.WordWrap = !_editor.WordWrap; wrapBtn.Content = _editor.WordWrap ? "⤫ 已换行" : "⤫ 换行"; };
@@ -323,7 +341,7 @@ public sealed class TextPadView : UserControl
         var toolbar = new StackPanel
         {
             Orientation = Orientation.Horizontal, Margin = new(4), Spacing = 4,
-            Children = { _toggleBtn, checkBtn!, saveBtn!, formatBtn!, askAiBtn!, wrapBtn!, gotoBtn!, splitBtn!, debugBtn!, _runBtn, _terminalBtn!, _gitBranchLabel, _gitCommitBtn, _gitPullBtn, _gitPushBtn, _gitBlameBtn },
+            Children = { _toggleBtn, checkBtn!, saveBtn!, formatBtn!, askAiBtn!, _errorFixBtn, wrapBtn!, gotoBtn!, splitBtn!, debugBtn!, _runBtn, _terminalBtn!, _gitBranchLabel, _gitCommitBtn, _gitPullBtn, _gitPushBtn, _gitBlameBtn },
         };
 
         // ── 终端面板 ──
@@ -360,10 +378,10 @@ public sealed class TextPadView : UserControl
         // Show debug panels when session is active
         DebugSession.StateChanged += state =>
         {
-            debugBottomTab.IsVisible = state is LTAI.Desktop.Debugging.DebugState.Paused
-                or LTAI.Desktop.Debugging.DebugState.Running
-                or LTAI.Desktop.Debugging.DebugState.Launching;
-            _bpMargin.IsVisible = state >= LTAI.Desktop.Debugging.DebugState.Launching;
+            debugBottomTab.IsVisible = state is DebugState.Paused
+                or DebugState.Running
+                or DebugState.Launching;
+            _bpMargin.IsVisible = state >= DebugState.Launching;
         };
 
         var editorAndDebug = new DockPanel();
@@ -470,18 +488,25 @@ public sealed class TextPadView : UserControl
             // Debugging keyboard shortcuts
             if (e.Key == Key.F5 && e.KeyModifiers == KeyModifiers.None)
             {
-                if (DebugSession.State == LTAI.Desktop.Debugging.DebugState.Idle)
+                if (DebugSession.State == DebugState.Idle)
                     _ = this.StartDebugAsync();
                 else
                     _ = DebugSession.ContinueAsync();
                 e.Handled = true;
             }
-            if (e.Key == Key.F10 && e.KeyModifiers == KeyModifiers.None && DebugSession.State == LTAI.Desktop.Debugging.DebugState.Paused)
+            if (e.Key == Key.F10 && e.KeyModifiers == KeyModifiers.None && DebugSession.State == DebugState.Paused)
             { _ = DebugSession.StepOverAsync(); e.Handled = true; }
-            if (e.Key == Key.F11 && e.KeyModifiers == KeyModifiers.None && DebugSession.State == LTAI.Desktop.Debugging.DebugState.Paused)
+            if (e.Key == Key.F11 && e.KeyModifiers == KeyModifiers.None && DebugSession.State == DebugState.Paused)
             { _ = DebugSession.StepIntoAsync(); e.Handled = true; }
-            if (e.Key == Key.F5 && e.KeyModifiers == KeyModifiers.Shift && DebugSession.State >= LTAI.Desktop.Debugging.DebugState.Running)
+            if (e.Key == Key.F5 && e.KeyModifiers == KeyModifiers.Shift && DebugSession.State >= DebugState.Running)
             { _ = DebugSession.TerminateAsync(); e.Handled = true; }
+            // P1: Ctrl+Alt+. → 拉起 AI 修复
+            if (e.Key == Key.OemPeriod && e.KeyModifiers == (KeyModifiers.Control | KeyModifiers.Alt) && _errorFixBtn.IsVisible)
+            {
+                AskAiRequested?.Invoke($"命令执行出错，请分析以下错误并修复：\n```\n{_lastErrorCommand}\n```\n错误信息：\n```\n{_lastError}\n```");
+                _lastError = null; _lastErrorCommand = null; _errorFixBtn.IsVisible = false;
+                e.Handled = true;
+            }
         };
     }
 
@@ -1198,6 +1223,12 @@ public sealed class TextPadView : UserControl
             _statusBar.Text = process.ExitCode == 0
                 ? $"✅ git {args}: 成功"
                 : $"❌ git {args}: {error[..Math.Min(error.Length, 80)]}";
+            if (process.ExitCode != 0)
+            {
+                _lastErrorCommand = $"git {args}";
+                _lastError = $"[stderr]\n{error}\n[stdout]\n{output}";
+                _errorFixBtn.IsVisible = true;
+            }
             UpdateGitInfo();
         }
         catch (Exception ex) { _statusBar.Text = $"❌ git {args}: {ex.Message}"; }
@@ -1522,9 +1553,13 @@ public sealed class TextPadView : UserControl
             _buildOutput.Text = $"{result} (exit={process.ExitCode})\n{command}\n\n{output}\n{error}".Trim();
             _statusBar.Text = $"{command}: {result}";
 
-            // 解析构建错误 → 问题列表
+            // P1: 捕获错误，显示 AI Fix 按钮
             if (process.ExitCode != 0)
             {
+                _lastErrorCommand = command;
+                _lastError = $"[stderr]\n{error}\n[stdout]\n{output}";
+                _errorFixBtn.IsVisible = true;
+
                 var problems = new List<(string file, int line, string msg)>();
                 var errorRx = new Regex(@"^\s*([^(\]]+?)\((\d+)(?:,\d+)?\)\s*:\s*(error|warning)\s+(\w+\d+)\s*:\s*(.+)", RegexOptions.Multiline);
                 foreach (Match m in errorRx.Matches(output + "\n" + error))
@@ -1732,7 +1767,7 @@ public sealed class TextPadView : UserControl
 
     private async Task StartDebugAsync()
     {
-        if (this.DebugSession.State != LTAI.Desktop.Debugging.DebugState.Idle) return;
+        if (this.DebugSession.State != DebugState.Idle) return;
 
         var csprojFiles = Directory.GetFiles(this._rootDir, "*.csproj", SearchOption.AllDirectories);
         var selectedProject = csprojFiles.FirstOrDefault();

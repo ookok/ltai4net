@@ -45,13 +45,12 @@
     <ProjectReference Include="..\LTAI.Core\LTAI.Core.csproj" />
   </ItemGroup>
 
-  <!-- P14.1: MiniLM only, Xenova 通用 INT8 (22MB) — 不再走 AVX-512+VNNI 专版 (老 CPU 不可用).
-       旧 AVX-512 专版 (23026053 字节) 必须先删才能触发 Xenova 重下.
-       模型目录由 $(ModelsDir) 控制（默认 repo-root/models/，可被
-       LTAI_EMBEDDING_MODELS_DIR 环境变量覆盖）。 -->
-  <Target Name="DownloadEmbeddingModelMiniLM" BeforeTargets="Build">
-    <Exec Command="powershell -NoProfile -Command &quot;$f='$(ModelsDir)minilm-l6-v2/model.int8.onnx'; if (Test-Path $f) { $len=(Get-Item $f).Length; if ($len -eq 23026053) { Write-Host ('[P14.1 migration] removing old AVX-512 INT8 ({0} bytes)' -f $len); Remove-Item $f -Force } else { Write-Host ('[skip] MiniLM INT8 already present ({0} bytes)' -f $len); exit 1 } }&quot;" IgnoreExitCode="true" />
-    <Message Text="DownloadEmbeddingModelMiniLM: ModelsDir=$(ModelsDir) ($(_ModelsDirLabel))" Importance="High" />
+  <!-- P14.1: MiniLM only, Xenova 通用 INT8 (22MB) — 仅首次构建时下载。
+       模型目录由 $(ModelsDir) 控制（默认 repo-root/models/）。
+       文件存在时完全跳过 —— 不再每次构建都检查。 -->
+  <Target Name="DownloadEmbeddingModelMiniLM" BeforeTargets="Build"
+          Condition="!Exists('$(ModelsDir)minilm-l6-v2/model.int8.onnx')">
+    <Message Text="DownloadEmbeddingModelMiniLM: downloading Xenova INT8 to $(ModelsDir)minilm-l6-v2/" Importance="High" />
     <MakeDir Directories="$(ModelsDir)minilm-l6-v2/" />
     <Exec Command="curl -sL --connect-timeout 10 --max-time 300 &quot;https://hf-mirror.com/Xenova/all-MiniLM-L6-v2/resolve/main/onnx/model_int8.onnx&quot; -o &quot;$(ModelsDir)minilm-l6-v2/model.int8.onnx&quot;" IgnoreExitCode="true" />
     <Exec Command="curl -sL --connect-timeout 10 --max-time 60 &quot;https://hf-mirror.com/Xenova/all-MiniLM-L6-v2/resolve/main/vocab.txt&quot; -o &quot;$(ModelsDir)minilm-l6-v2/vocab.txt&quot;" IgnoreExitCode="true" />

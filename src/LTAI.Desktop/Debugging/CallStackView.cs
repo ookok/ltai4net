@@ -2,6 +2,7 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Media;
 using Avalonia.Layout;
+using LTAI.Core.Debugging;
 
 namespace LTAI.Desktop.Debugging;
 
@@ -23,11 +24,11 @@ public sealed class CallStackView : TreeView
     public void Refresh()
     {
         Items.Clear();
-        if (_session.State != DebugState.Paused || _session.CurrentStack.Length == 0)
+        if (_session.State != LTAI.Core.Debugging.DebugState.Paused || _session.CurrentStack.Length == 0)
         {
             Items.Add(new TreeViewItem
             {
-                Header = _session.State == DebugState.Running ? "▶ Running..." : "⏹ Idle",
+                Header = _session.State == LTAI.Core.Debugging.DebugState.Running ? "▶ Running..." : "⏹ Idle",
                 Foreground = LtaiTheme.Sbb(LtaiTheme.TextDim),
                 IsHitTestVisible = false,
             });
