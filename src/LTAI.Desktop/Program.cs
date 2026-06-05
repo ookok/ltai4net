@@ -42,6 +42,7 @@ public static class Program
         App.Options = options;
         App.Services = provider;
         App.Ltais = new LTAIService(chatAgent, options);
+        LTAI.Desktop.ViewModels.DevUIViewModel.SetServiceProvider(provider);
         App.Router = await Task.Run(() => provider.GetService<MultiProviderChatClient>());
         App.HttpFactory = await Task.Run(() => provider.GetService<IHttpClientFactory>());
 

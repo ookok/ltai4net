@@ -54,13 +54,18 @@ public partial class MainWindow : Window
         var chatView = new ChatView(svc, sessionManager, chatVm);
         _chatView = chatView;
 
+        // ViewModels
+        var textPadVm = new ViewModels.TextPadViewModel(svc.Options.ResolveDataPath("../.."));
+        var jobsVm = new ViewModels.JobsViewModel(svc);
+        var workflowsVm = new ViewModels.WorkflowsViewModel(svc);
+
         _views.AddRange([
             new("DevUI", "1", new DevUIView()),
             new("聊天",    "2", chatView),
-            new("代码",    "3", CreateTextPadView(svc)),
+            new("代码",    "3", CreateTextPadView(svc, textPadVm)),
             new("技能",    "4", new SkillsView()),
-            new("工作流",  "5", new WorkflowsView(svc)),
-            new("作业",    "6", new JobsView(svc)),
+            new("工作流",  "5", new WorkflowsView(workflowsVm)),
+            new("作业",    "6", new JobsView(jobsVm)),
         ]);
 
         _vm = new MainWindowViewModel(_views.Count);
@@ -288,11 +293,11 @@ public partial class MainWindow : Window
         DetachedFromVisualTree += (_, _) => LtaiTheme.ThemeChanged -= OnThemeChanged;
     }
 
-    private TextPadView CreateTextPadView(LTAIService svc)
+    private TextPadView CreateTextPadView(LTAIService svc, ViewModels.TextPadViewModel vm)
     {
         var bridge = App.Services?.GetService(typeof(LTAI.Desktop.Debugging.DebugBridge))
             as LTAI.Desktop.Debugging.DebugBridge;
-        var tp = new TextPadView(svc.Options.ResolveDataPath("../.."), bridge);
+        var tp = new TextPadView(vm, bridge);
         tp.AskAiRequested += prompt =>
         {
             _vm.ActiveIndex = 1;
@@ -516,7 +521,7 @@ public partial class MainWindow : Window
 
     private void ShowCommandPalette()
     {
-        var items = new List<CommandPaletteItem>
+        var items = new List<LTAI.Desktop.ViewModels.CommandPaletteViewModel.CommandPaletteItem>
         {
             new("切换到 DevUI", "Ctrl+1", "🔬", () => _vm.TryActivate(0)),
             new("切换到聊天",   "Ctrl+2", "💬", () => _vm.TryActivate(1)),

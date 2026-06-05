@@ -87,6 +87,9 @@ public sealed class TextPadView : UserControl
     private bool _showSplit;
     private readonly Grid _editorGrid;
 
+    // ── MVVM ──
+    private readonly ViewModels.TextPadViewModel? _vm;
+
     // ── Error detection (P1: 命令失败自动拉起 AI) ──
     private string? _lastError;
     private string? _lastErrorCommand;
@@ -94,10 +97,12 @@ public sealed class TextPadView : UserControl
     public bool HasPendingError => _errorFixBtn?.IsVisible == true;
     private sealed record SymbolItem(string Icon, string Name, int Line);
 
-    public TextPadView(string? rootDir = null,
+    public TextPadView(ViewModels.TextPadViewModel? vm = null,
         LTAI.Desktop.Debugging.DebugBridge? debugBridge = null)
     {
-        _rootDir = rootDir ?? Directory.GetCurrentDirectory();
+        _vm = vm;
+        if (vm != null) DataContext = vm;
+        _rootDir = vm?.RootDir ?? Directory.GetCurrentDirectory();
 
         _tree = new TreeView
         {

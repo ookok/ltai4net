@@ -16,7 +16,7 @@
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <PublishReadyToRun>true</PublishReadyToRun>
     <GenerateRuntimeConfigurationFiles>true</GenerateRuntimeConfigurationFiles>
-    <NoWarn>$(NoWarn);VSTHRD100;VSTHRD101;VSTHRD103;VSTHRD110;VSTHRD200;VSTHRD002;VSTHRD003;NU1902</NoWarn>
+    <NoWarn>$(NoWarn);VSTHRD100;VSTHRD101;VSTHRD103;VSTHRD110;VSTHRD200;VSTHRD002;VSTHRD003;NU1902;CS8602</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
