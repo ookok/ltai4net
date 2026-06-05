@@ -1,3 +1,6 @@
+using System.Collections.Concurrent;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.RegularExpressions;
 using Avalonia.Controls;
 using Avalonia.Input;
@@ -11,6 +14,41 @@ public static class ChatMessageRenderer
 {
     private static readonly HttpClient _sharedHttp = new() { Timeout = TimeSpan.FromSeconds(10) };
     private static readonly Regex CitationRegex = new(@"\[@([^\]]+)\]\(line:(\d+)\)|@([^\s:,\)]+):(\d+)\b");
+    private static readonly Regex FenceStartRx = new(@"^```(\w*)$", RegexOptions.Multiline);
+    private static readonly Regex FenceEndRx = new(@"^```$", RegexOptions.Multiline);
+    private static bool _fenceWarningShown;
+
+    // LRU cache for rendered responses (keyed by SHA-256 of content)
+    private const int MaxCacheEntries = 64;
+    private static readonly ConcurrentDictionary<string, List<Avalonia.Controls.Control>> _renderCache = new();
+    private static readonly ConcurrentQueue<string> _cacheOrder = new();
+
+    private static string ContentHash(string text)
+    {
+        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(text));
+        return Convert.ToHexString(bytes).ToLowerInvariant();
+    }
+
+    private static void CacheAdd(string key, List<Avalonia.Controls.Control> children)
+    {
+        _renderCache[key] = children;
+        _cacheOrder.Enqueue(key);
+        while (_cacheOrder.Count > MaxCacheEntries && _cacheOrder.TryDequeue(out var old))
+            _renderCache.TryRemove(old, out _);
+    }
+
+    /// <summary>Check if markdown has an unclosed code fence (for streaming awareness).</summary>
+    public static bool HasUnclosedFence(string text)
+    {
+        var has = LTAI.Core.Rendering.MarkdownUtils.HasUnclosedFence(text);
+        if (has && !_fenceWarningShown)
+        {
+            _fenceWarningShown = true;
+            System.Diagnostics.Debug.WriteLine("ChatMessageRenderer: delaying render — unclosed code fence");
+        }
+        if (!has) _fenceWarningShown = false;
+        return has;
+    }
 
     /// <summary>当用户点击文件引用时触发，参数 (filePath, lineNumber)。</summary>
     public static Action<string, int>? OnNavigateToFile;
@@ -19,6 +57,15 @@ public static class ChatMessageRenderer
     {
         panel.Children.Clear();
         var cleaned = CleanResponse(raw);
+
+        // Check cache
+        var hash = ContentHash(raw);
+        if (_renderCache.TryGetValue(hash, out var cached))
+        {
+            foreach (var c in cached)
+                panel.Children.Add(c);
+            return;
+        }
 
         if (IsDiffContent(cleaned))
         {
@@ -54,7 +101,6 @@ public static class ChatMessageRenderer
                 var lineStr = m.Groups[2].Success ? m.Groups[2].Value : (m.Groups[4].Success ? m.Groups[4].Value : null);
                 var line = lineStr != null && int.TryParse(lineStr, out var l) ? l : 0;
 
-                // Resolve file path
                 string? resolvedPath = null;
                 if (File.Exists(filePart))
                     resolvedPath = filePart;
@@ -62,7 +108,6 @@ public static class ChatMessageRenderer
                     resolvedPath = Path.Combine(rootDir, filePart);
                 else
                 {
-                    // Search by filename in root dir
                     var found = Directory.EnumerateFiles(rootDir, Path.GetFileName(filePart), SearchOption.AllDirectories).FirstOrDefault();
                     if (found != null) resolvedPath = found;
                 }
@@ -71,6 +116,10 @@ public static class ChatMessageRenderer
                 panel.Children.Add(chip);
             }
         }
+
+        // Cache the rendered children (snapshot)
+        var snapshot = panel.Children.ToList();
+        CacheAdd(hash, snapshot);
     }
 
     public static void UpdateResponseText(StackPanel panel, ref TextBlock? currentText, string text)

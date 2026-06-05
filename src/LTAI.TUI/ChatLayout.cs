@@ -227,13 +227,31 @@ public sealed class ChatLayout
 
                 var inputTask = Task.Run(async () =>
                 {
+                    Input.MouseTracker.Enable();
                     var keyDispatcher = new Input.KeyDispatcher(this);
                     while (!cts.Token.IsCancellationRequested)
                     {
-                        var key = Console.ReadKey(true);
-                        var keepGoing = await keyDispatcher.HandleKeyAsync(key, cts.Token).ConfigureAwait(false);
-                        if (!keepGoing) { cts.Cancel(); return; }
+                        var evt = Input.MouseTracker.ReadNext(cts.Token);
+                        if (evt.KeyInfo.HasValue)
+                        {
+                            var keepGoing = await keyDispatcher.HandleKeyAsync(evt.KeyInfo.Value, cts.Token).ConfigureAwait(false);
+                            if (!keepGoing) { cts.Cancel(); return; }
+                        }
+                        else if (evt.ScrollDelta != 0)
+                        {
+                            // Shift+↑/↓ gesture for history scroll
+                            var oldOffset = _scrollOffset;
+                            _scrollOffset = Math.Clamp(_scrollOffset - evt.ScrollDelta, 0, Math.Max(0, _history.Count - 1));
+                            if (_scrollOffset != oldOffset)
+                                ThrottledRefresh();
+                        }
+                        else if (evt.ClickPosition.HasValue)
+                        {
+                            // Click-to-scroll: just refresh to acknowledge
+                            ThrottledRefresh();
+                        }
                     }
+                    Input.MouseTracker.Disable();
                 }, cts.Token);
 
                 // Main rendering + processing loop: runs at ~30fps, processes

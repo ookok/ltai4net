@@ -105,7 +105,18 @@ public static class TextPadView
             {
                 if (_editorCaretLine < 0) _editorCaretLine = _pageLines / 2 + 1;
                 RenderFileView();
-                var key = Console.ReadKey(true);
+                var evt = LTAI.TUI.Input.MouseTracker.ReadNext();
+                if (evt.ScrollDelta != 0)
+                {
+                    _scrollOffset = Math.Clamp(_scrollOffset - evt.ScrollDelta, 0, Math.Max(0, _totalLines - _pageLines));
+                    _editorCaretLine = _scrollOffset + _pageLines / 2 + 1;
+                }
+                else if (evt.ClickPosition.HasValue)
+                {
+                    // Click any key to return to keyboard navigation
+                }
+                if (evt.KeyInfo == null) continue;
+                var key = evt.KeyInfo.Value;
                 switch (key.Key)
                 {
                     case ConsoleKey.Escape: _currentFile = null; _scrollOffset = 0; break;

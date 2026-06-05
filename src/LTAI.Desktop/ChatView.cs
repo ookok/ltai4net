@@ -717,7 +717,8 @@ public sealed class ChatView : UserControl
                     {
                         lastUiUpdate = DateTime.UtcNow;
                         var text = responseBuf.ToString();
-                        if (text != lastRenderedText)
+                        // Code fence awareness: 代码围栏未闭合时不渲染（防止 shiki 报错）
+                        if (text != lastRenderedText && !ChatMessageRenderer.HasUnclosedFence(text))
                         {
                             lastRenderedText = text;
                             UpdateResponseText(responsePanel, text);

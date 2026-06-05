@@ -1,6 +1,9 @@
+using System.Collections.Concurrent;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 using LTAI.Core.Configuration;
+using LTAI.Core.Rendering;
 using Spectre.Console;
 using Spectre.Console.Rendering;
 
@@ -97,13 +100,98 @@ public sealed class ChatRenderer
         };
     }
 
-    /// <summary>Build a code block panel with language label and heavy border.</summary>
+    // LRU cache for rendered panels
+    private const int MaxPanelCache = 128;
+    private static readonly ConcurrentDictionary<string, Panel> _panelCache = new();
+    private static readonly ConcurrentQueue<string> _panelCacheOrder = new();
+
+    private static string PanelCacheKey(string code, string? lang)
+    {
+        var key = $"{lang ?? ""}|{code}";
+        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(key));
+        return Convert.ToHexString(bytes);
+    }
+
+    private static void PanelCacheAdd(string key, Panel panel)
+    {
+        _panelCache[key] = panel;
+        _panelCacheOrder.Enqueue(key);
+        while (_panelCacheOrder.Count > MaxPanelCache && _panelCacheOrder.TryDequeue(out var old))
+            _panelCache.TryRemove(old, out _);
+    }
+
+    private static string HighlightLine(string line, HashSet<string>? keywords)
+    {
+        if (line.Length == 0) return "";
+        // simple syntax highlighting for TUI
+        var kw = keywords;
+        var result = new StringBuilder();
+        int i = 0;
+        while (i < line.Length)
+        {
+            if (line[i] == '"')
+            {
+                var end = line.IndexOf('"', i + 1);
+                if (end < 0) end = line.Length - 1;
+                result.Append($"[green]{line[i..(end + 1)].EscapeMarkup()}[/]");
+                i = end + 1;
+                continue;
+            }
+            if (i < line.Length - 1 && ((line[i] == '/' && line[i + 1] == '/') || line[i] == '#'))
+            {
+                result.Append($"[grey]{line[i..].EscapeMarkup()}[/]");
+                break;
+            }
+            if (char.IsLetter(line[i]) || line[i] == '_')
+            {
+                var end = i;
+                while (end < line.Length && (char.IsLetterOrDigit(line[end]) || line[end] == '_')) end++;
+                var word = line[i..end];
+                if (kw != null && kw.Contains(word))
+                    result.Append($"[yellow]{word.EscapeMarkup()}[/]");
+                else
+                    result.Append(word.EscapeMarkup());
+                i = end;
+                continue;
+            }
+            if (char.IsDigit(line[i]) || (line[i] == '-' && i + 1 < line.Length && char.IsDigit(line[i + 1])))
+            {
+                var end = i;
+                while (end < line.Length && (char.IsDigit(line[end]) || line[end] == '.' || line[end] == 'f' || line[end] == 'L' || line[end] == 'd' || line[end] == 'x')) end++;
+                result.Append($"[cyan]{line[i..end].EscapeMarkup()}[/]");
+                i = end;
+                continue;
+            }
+            result.Append(line[i].ToString().EscapeMarkup());
+            i++;
+        }
+        return result.ToString();
+    }
+
+    /// <summary>Build a code block panel with language label, heavy border, and syntax highlighting.</summary>
     public Panel BuildCodeBlockPanel(string code, string? lang)
     {
-        return new Panel(
-            Align.Left(
-                new Markup($"[grey]{code.EscapeMarkup()}[/]"),
-                VerticalAlignment.Top))
+        var cacheKey = PanelCacheKey(code, lang);
+        if (_panelCache.TryGetValue(cacheKey, out var cached))
+            return cached;
+
+        var keywords = MarkdownUtils.GetKeywords(lang);
+        var lines = code.Split('\n');
+        var maxLines = 60;
+        var content = new StringBuilder();
+        var linePad = lines.Length.ToString().Length;
+
+        for (int i = 0; i < lines.Length && i < maxLines; i++)
+        {
+            var lineNum = (i + 1).ToString().PadLeft(linePad);
+            content.AppendLine($"[grey]{lineNum.EscapeMarkup()}[/]  {HighlightLine(lines[i], keywords)}");
+        }
+
+        if (lines.Length > maxLines)
+            content.AppendLine($"[grey italic]... 已截断 {lines.Length - maxLines} 行[/]");
+
+        var panel = new Panel(
+            Align.Left(new Markup(content.ToString().TrimEnd()), VerticalAlignment.Top))
         {
             Border = BoxBorder.Heavy,
             BorderStyle = new Style(Color.Grey42),
@@ -112,6 +200,8 @@ public sealed class ChatRenderer
             Padding = new Padding(2, 0, 2, 0),
             Expand = true,
         };
+        PanelCacheAdd(cacheKey, panel);
+        return panel;
     }
 
     // ═══════════════════════════════════════════════
@@ -147,7 +237,11 @@ public sealed class ChatRenderer
             var combined = new StringBuilder();
             if (toolCalls.Count > 0)
                 combined.AppendLine(RenderToolCallsAsTree(toolCalls));
-            combined.Append(MdToPanelContent(streamingContent));
+            // Code fence awareness: 延迟渲染直到围栏闭合
+            var streamText = MarkdownUtils.HasUnclosedFence(streamingContent)
+                ? streamingContent + "[grey]... (代码块生成中)[/]"
+                : streamingContent;
+            combined.Append(MdToPanelContent(streamText));
             var rendered = combined.ToString().TrimEnd();
             var content = rendered.Length > 0
                 ? (IRenderable)new Markup(rendered)

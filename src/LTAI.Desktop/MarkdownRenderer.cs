@@ -11,7 +11,7 @@ namespace LTAI.Desktop;
 /// </summary>
 public static class MarkdownRenderer
 {
-    // Syntax highlighting: keyword patterns per language
+    // Syntax highlighting: keyword patterns per language (expanded)
     private static readonly Dictionary<string, string[]> KeywordSets = new(StringComparer.OrdinalIgnoreCase)
     {
         ["csharp"] = new[] { "class", "struct", "interface", "enum", "record", "namespace", "using",
@@ -20,15 +20,46 @@ public static class MarkdownRenderer
             "do", "switch", "case", "break", "continue", "try", "catch", "finally", "throw",
             "var", "void", "int", "string", "bool", "double", "float", "long", "char", "object",
             "true", "false", "null", "this", "base", "in", "out", "ref", "is", "as", "typeof",
-            "get", "set", "value", "where", "select", "from" },
+            "get", "set", "value", "where", "select", "from", "partial", "sealed", "required",
+            "init", "global", "file", "checked", "unchecked", "unsafe", "fixed", "stackalloc",
+            "params", "yield", "lock", "volatile", "event", "delegate", "implicit", "explicit",
+            "operator", "sizeof", "nameof", "notnull", "unmanaged", "query", "group", "join",
+            "let", "orderby", "descending", "ascending" },
         ["python"] = new[] { "class", "def", "return", "if", "elif", "else", "for", "while",
             "try", "except", "finally", "import", "from", "as", "with", "yield", "lambda",
             "True", "False", "None", "self", "and", "or", "not", "in", "is", "async", "await",
-            "raise", "pass", "break", "continue", "global", "nonlocal" },
+            "raise", "pass", "break", "continue", "global", "nonlocal", "match", "case",
+            "type", "assert", "del", "print", "range", "len", "super", "property",
+            "classmethod", "staticmethod", "dataclass", "enum", "list", "dict", "set", "tuple",
+            "str", "int", "float", "bool", "any", "Optional", "Union", "Final", "override" },
         ["javascript"] = new[] { "function", "class", "const", "let", "var", "return", "if", "else",
             "for", "while", "do", "switch", "case", "break", "continue", "try", "catch", "finally",
             "throw", "new", "this", "async", "await", "import", "export", "default", "from",
-            "true", "false", "null", "undefined" },
+            "true", "false", "null", "undefined", "typeof", "instanceof", "void", "delete",
+            "yield", "super", "extends", "static", "get", "set", "of", "in", "with", "debugger" },
+        ["typescript"] = new[] { "interface", "type", "enum", "namespace", "module", "declare",
+            "abstract", "readonly", "public", "private", "protected", "static", "implements",
+            "extends", "as", "is", "keyof", "typeof", "infer", "satisfies", "const", "let",
+            "var", "function", "class", "return", "if", "else", "for", "while", "async", "await",
+            "import", "export", "default", "from", "true", "false", "null", "undefined",
+            "never", "unknown", "any", "void", "string", "number", "boolean", "symbol", "bigint" },
+        ["go"] = new[] { "func", "type", "struct", "interface", "map", "chan", "go", "defer",
+            "select", "range", "return", "if", "else", "for", "switch", "case", "break", "continue",
+            "var", "const", "package", "import", "true", "false", "nil", "make", "new",
+            "append", "len", "cap", "close", "delete", "panic", "recover", "error", "string",
+            "int", "int64", "float64", "bool", "byte", "rune", "uintptr", "any", "comparable" },
+        ["rust"] = new[] { "fn", "let", "mut", "const", "static", "pub", "use", "mod", "struct",
+            "enum", "trait", "impl", "type", "ref", "match", "if", "else", "for", "while", "loop",
+            "return", "break", "continue", "true", "false", "None", "Some", "Ok", "Err",
+            "async", "await", "move", "unsafe", "extern", "dyn", "where", "as", "in",
+            "self", "Self", "super", "crate", "let", "mut", "ref", "impl", "dyn" },
+        ["java"] = new[] { "class", "interface", "enum", "record", "extends", "implements",
+            "public", "private", "protected", "static", "final", "abstract", "synchronized",
+            "volatile", "transient", "native", "strictfp", "return", "if", "else", "for",
+            "while", "do", "switch", "case", "break", "continue", "try", "catch", "finally",
+            "throw", "throws", "new", "this", "super", "import", "package", "true", "false",
+            "null", "void", "int", "long", "double", "float", "boolean", "char", "byte",
+            "short", "String", "var", "sealed", "permits", "instanceof", "var", "yield" },
     };
 
     private static readonly Regex OrderedListRx = new(@"^(\d+)\.\s");

@@ -75,7 +75,10 @@ public sealed class TuiApp
     public async Task RunAsync()
     {
         SkillsPanelView.Initialize(_projectRoot);
-
+        // 启用鼠标 + Kitty 键盘支持（整个 TUI 生命周期）
+        LTAI.TUI.Input.MouseTracker.Enable();
+        try
+        {
         // 首次运行向导：无 API Key 时自动弹出
         if (!_llmConfig.HasAnyConfiguredProvider())
             _llmConfig.ShowSetupWizard();
@@ -144,6 +147,11 @@ public sealed class TuiApp
                     SkillsPanelView.Render();
                     break;
             }
+        }
+        }
+        finally
+        {
+            LTAI.TUI.Input.MouseTracker.Disable();
         }
     }
 
