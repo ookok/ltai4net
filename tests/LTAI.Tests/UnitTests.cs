@@ -633,7 +633,7 @@ public class MultiProviderChatClientIntegrationTests
 }
 
 /// <summary>EchoChatClient returns a fixed response for any input.</summary>
-file sealed class EchoChatClient : IChatClient
+public sealed class EchoChatClient : IChatClient
 {
     private readonly string _response;
     public EchoChatClient(string response) => _response = response;
