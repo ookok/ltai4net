@@ -1,0 +1,65 @@
+# Auto-detect text files, normalize line endings
+* text=auto eol=lf
+
+# .NET / MSBuild files — use CRLF for backwards compat with .NET Framework tooling on Windows
+*.cs           text eol=crlf
+*.csproj       text eol=crlf
+*.props        text eol=crlf
+*.targets      text eol=crlf
+*.sln          text eol=crlf
+*.config       text eol=crlf
+*.xml          text eol=crlf
+AssemblyInfo*  text eol=crlf
+GlobalUsings*  text eol=crlf
+
+# PowerShell scripts — CRLF (Windows native)
+*.ps1          text eol=crlf
+*.psm1         text eol=crlf
+*.psd1         text eol=crlf
+
+# Shell scripts — LF
+*.sh           text eol=lf
+*.bash         text eol=lf
+
+# Configs / data — LF
+*.json         text eol=lf
+*.yml          text eol=lf
+*.yaml         text eol=lf
+*.toml         text eol=lf
+*.md           text eol=lf
+
+# Agent definition front-matter — LF
+agents/*.md    text eol=lf
+skills/**/*.md text eol=lf
+docs/**/*.md   text eol=lf
+
+# Binary / native files
+*.dll          binary
+*.exe          binary
+*.pdb          binary
+*.so           binary
+*.dylib        binary
+*.a            binary
+*.lib          binary
+*.o            binary
+*.obj          binary
+*.bin          binary
+*.onnx         binary
+*.pt           binary
+*.safetensors  binary
+*.onnx.data    binary
+
+# Images
+*.png          binary
+*.jpg          binary
+*.jpeg         binary
+*.gif          binary
+*.ico          binary
+*.svg          text
+
+# Archives
+*.zip          binary
+*.tar          binary
+*.gz           binary
+*.7z           binary
+*.rar          binary

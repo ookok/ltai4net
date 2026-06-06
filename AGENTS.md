@@ -61,7 +61,9 @@ dotnet run --project tests/LTAI.Benchmarks -- smoke    # 快速 smoke test
 ./scripts/dev-setup-submodules.ps1
 ```
 
-这会把 `extern/agent-framework` 从 251MB 缩到 ~27MB（排除 Python/tests/bin/obj/.dll/.pdb/.cache）。`extern/durabletask-dotnet` pin 在 v1.24.2（仅源码参考，不走 ProjectReference）。
+这会把 `extern/agent-framework` 从 251MB 缩到 ~27MB（排除 Python/tests/bin/obj/.dll/.pdb/.cache）。`extern/durabletask-dotnet` 当前 HEAD = `b7216672` (v1.16.2-141, 仅源码参考，不走 ProjectReference)。
+
+> **P0:** 两个 submodule 都跟随 main 分支 — 强烈建议在 `extern/agent-framework` 和 `extern/durabletask-dotnet` 内执行 `git checkout <commit-sha>` 锁版本,避免 `git submodule update` 拉到不兼容 commit。MAF DLL 已预编译到 `dist/lib/maf/`,可通过 `scripts/build-maf.ps1` 重建。
 
 ## ONNX 嵌入模型
 

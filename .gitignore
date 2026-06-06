@@ -51,8 +51,10 @@ fix_*.py
 run_fix*.py
 *_b64.txt
 tmp_*
+tmp_doc*
 null
 test.txt
+check_lines.py
 
 ## Logs
 logs/
