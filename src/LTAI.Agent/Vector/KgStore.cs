@@ -41,7 +41,7 @@ public sealed partial class KgStore : IDisposable
     private readonly SemaphoreSlim _writeLock = new(1, 1);
     private static readonly AsyncLocal<bool> _ownsWriteLock = new();
     private readonly string _dbPath;
-    private bool _disposed;
+    private volatile bool _disposed;
     public string DbPath => _dbPath;
 
     private void ThrowIfDisposed() => ObjectDisposedException.ThrowIf(_disposed, this);
@@ -132,25 +132,12 @@ public sealed partial class KgStore : IDisposable
         return _writeCmdCache.TryGetValue(sql, out var final) ? final : cmd;
     }
 
-    private SqliteCommand GetPreparedRead(string key, string sql)
+    private SqliteCommand CreateReadCommand(string sql)
     {
         ThrowIfDisposed();
-        // A2: avoid race-to-set pattern — check, create, TryAdd
-        if (_readCmdCache.TryGetValue(key, out var cmd))
-        {
-            cmd.Parameters.Clear();
-            return cmd;
-        }
-        if (_readCmdCache.Count >= MaxCmdCacheSize)
-        {
-            foreach (var c in _readCmdCache.Values) c.Dispose();
-            _readCmdCache.Clear();
-        }
-        cmd = _reader.CreateCommand();
+        var cmd = _reader.CreateCommand();
         cmd.CommandText = sql;
-        cmd.Prepare();
-        _readCmdCache.TryAdd(key, cmd);
-        return _readCmdCache.TryGetValue(key, out var final) ? final : cmd;
+        return cmd;
     }
 
     /// <summary>Execute a write command with exclusive async lock (reentrant-safe).</summary>
@@ -232,8 +219,7 @@ public sealed partial class KgStore : IDisposable
 
     public async Task<NodeRow?> GetNode(long id)
     {
-        var cmd = GetPreparedRead(SQL_GET_NODE, SQL_GET_NODE);
-        cmd.Parameters.Clear();
+        using var cmd = CreateReadCommand(SQL_GET_NODE);
         cmd.Parameters.AddWithValue("@id", id);
         return ReadNodeRow(await cmd.ExecuteReaderAsync().ConfigureAwait(false));
     }
@@ -242,8 +228,7 @@ public sealed partial class KgStore : IDisposable
 
     public async Task<NodeRow?> GetNodeByExtId(string extId)
     {
-        var cmd = GetPreparedRead(SQL_GET_NODE_BY_EXT, SQL_GET_NODE_BY_EXT);
-        cmd.Parameters.Clear();
+        using var cmd = CreateReadCommand(SQL_GET_NODE_BY_EXT);
         cmd.Parameters.AddWithValue("@ext_id", extId);
         return ReadNodeRow(await cmd.ExecuteReaderAsync().ConfigureAwait(false));
     }
@@ -252,8 +237,7 @@ public sealed partial class KgStore : IDisposable
 
     public async Task<List<NodeRow>> GetNodesByKind(string kind)
     {
-        var cmd = GetPreparedRead(SQL_GET_NODES_BY_KIND, SQL_GET_NODES_BY_KIND);
-        cmd.Parameters.Clear();
+        using var cmd = CreateReadCommand(SQL_GET_NODES_BY_KIND);
         cmd.Parameters.AddWithValue("@kind", kind);
         return ReadNodeRows(await cmd.ExecuteReaderAsync().ConfigureAwait(false));
     }
@@ -262,8 +246,7 @@ public sealed partial class KgStore : IDisposable
 
     public async Task<List<NodeRow>> GetNodesBySource(string source)
     {
-        var cmd = GetPreparedRead(SQL_GET_NODES_BY_SOURCE, SQL_GET_NODES_BY_SOURCE);
-        cmd.Parameters.Clear();
+        using var cmd = CreateReadCommand(SQL_GET_NODES_BY_SOURCE);
         cmd.Parameters.AddWithValue("@src", source);
         return ReadNodeRows(await cmd.ExecuteReaderAsync().ConfigureAwait(false));
     }
@@ -330,8 +313,7 @@ public sealed partial class KgStore : IDisposable
 
     public async Task<long> NodeCount()
     {
-        var cmd = GetPreparedRead(SQL_NODE_COUNT, SQL_NODE_COUNT);
-        cmd.Parameters.Clear();
+        using var cmd = CreateReadCommand(SQL_NODE_COUNT);
         return (long)(await cmd.ExecuteScalarAsync().ConfigureAwait(false))!;
     }
 
@@ -502,8 +484,7 @@ public sealed partial class KgStore : IDisposable
 
     public async Task<List<DocRow>> GetDocs(long nodeId)
     {
-        var cmd = GetPreparedRead(SQL_GET_DOCS, SQL_GET_DOCS);
-        cmd.Parameters.Clear();
+        using var cmd = CreateReadCommand(SQL_GET_DOCS);
         cmd.Parameters.AddWithValue("@nid", nodeId);
         return ReadDocRows(await cmd.ExecuteReaderAsync().ConfigureAwait(false));
     }
@@ -586,8 +567,7 @@ public sealed partial class KgStore : IDisposable
         if (_resultCache.TryGetValue(cacheKey, out List<(long, string, double, string)>? cached))
             return cached!;
 
-        var cmd = GetPreparedRead(SQL_SEARCH_FTS, SQL_SEARCH_FTS);
-        cmd.Parameters.Clear();
+        using var cmd = CreateReadCommand(SQL_SEARCH_FTS);
         cmd.Parameters.AddWithValue("@query", query);
         cmd.Parameters.AddWithValue("@kind", (object?)kindFilter ?? DBNull.Value);
         cmd.Parameters.AddWithValue("@limit", topN);
@@ -833,16 +813,14 @@ public sealed partial class KgStore : IDisposable
     private async Task<long> CountEdges()
     {
         const string sql = "SELECT COUNT(*) FROM Edges;";
-        var cmd = GetPreparedRead(sql, sql);
-        cmd.Parameters.Clear();
+        using var cmd = CreateReadCommand(sql);
         return (long)(await cmd.ExecuteScalarAsync().ConfigureAwait(false))!;
     }
 
     private async Task<long> CountDocs()
     {
         const string sql = "SELECT COUNT(*) FROM Docs;";
-        var cmd = GetPreparedRead(sql, sql);
-        cmd.Parameters.Clear();
+        using var cmd = CreateReadCommand(sql);
         return (long)(await cmd.ExecuteScalarAsync().ConfigureAwait(false))!;
     }
 
@@ -1286,8 +1264,7 @@ public sealed partial class KgStore : IDisposable
     /// <summary>Get version history for a node (newest first).</summary>
     public async Task<List<VersionRow>> GetVersionsAsync(long nodeId)
     {
-        var cmd = GetPreparedRead(SQL_GET_VERSIONS, SQL_GET_VERSIONS);
-        cmd.Parameters.Clear();
+        using var cmd = CreateReadCommand(SQL_GET_VERSIONS);
         cmd.Parameters.AddWithValue("@nid", nodeId);
         return ReadVersionRows(await cmd.ExecuteReaderAsync().ConfigureAwait(false));
     }

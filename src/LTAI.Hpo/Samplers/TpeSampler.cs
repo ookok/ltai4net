@@ -29,7 +29,7 @@ public sealed class TpeSampler : ISampler
 
     public float SampleFloat(Trial trial, string name, float low, float high, bool log)
     {
-        var completed = trial.Store?.LoadTrialsAsync(trial.StudyName).Result
+        var completed = trial.Store?.LoadTrialsAsync(trial.StudyName).GetAwaiter().GetResult()
             .Where(t => t.State is TrialState.Completed or TrialState.Pruned).ToList();
 
         if (completed == null || completed.Count < 3)
@@ -105,7 +105,7 @@ public sealed class TpeSampler : ISampler
 
     public T SampleCategorical<T>(Trial trial, string name, T[] choices) where T : notnull
     {
-        var completed = trial.Store?.LoadTrialsAsync(trial.StudyName).Result
+        var completed = trial.Store?.LoadTrialsAsync(trial.StudyName).GetAwaiter().GetResult()
             .Where(t => t.State is TrialState.Completed or TrialState.Pruned).ToList();
 
         if (completed == null || completed.Count < 3)
@@ -116,7 +116,7 @@ public sealed class TpeSampler : ISampler
 
         var dir = trial.Direction;
         var scored = completed
-            .Where(r => r.Params.TryGetValue(name, out _) && r.Value.HasValue)
+            .Where(r => r.Params.TryGetValue(name, out var pv) && r.Value.HasValue && pv is T)
             .Select(r => (Choice: (T)r.Params[name], Score: r.Value!.Value))
             .ToList();
 
@@ -200,9 +200,9 @@ public sealed class TpeSampler : ISampler
     {
         if (samples.Count < 2) return 1.0;
         var mean = samples.Average();
-        var variance = samples.Sum(s => (s - mean) * (s - mean)) / (samples.Count - 1);
+        var n = samples.Count - 1;
+        var variance = samples.Sum(s => (s - mean) * (s - mean)) / Math.Max(1, n);
         var std = Math.Sqrt(variance);
-        // Silverman's rule of thumb
         return std * Math.Pow(4.0 / (3.0 * samples.Count), 0.2);
     }
 

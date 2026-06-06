@@ -1,6 +1,7 @@
 ﻿using System.ComponentModel;
 using System.Net.Http;
 using LTAI.AI;
+using LTAI.Core;
 
 namespace LTAI.Agent.Tools;
 
@@ -49,17 +50,15 @@ public static class FileDownloadTool
         }
 
         var ws = Directory.GetCurrentDirectory();
-        var fp = Path.GetFullPath(Path.Combine(ws, savePath));
-
-        if (!fp.StartsWith(Path.GetFullPath(ws), StringComparison.OrdinalIgnoreCase))
-            return "Error: 路径逃逸";
+        var fp = PathUtils.SafeResolvePath(ws, savePath);
+        if (fp == null) return "Error: 路径逃逸";
 
         try
         {
             var dir = Path.GetDirectoryName(fp);
             if (dir != null) Directory.CreateDirectory(dir);
 
-            using var resp = await _sharedHttp.Value.GetAsync(url, HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
+            using var resp = await _sharedHttp.Value.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, CancellationToken.None).ConfigureAwait(false);
             resp.EnsureSuccessStatusCode();
 
             var totalBytes = resp.Content.Headers.ContentLength ?? -1;

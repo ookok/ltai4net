@@ -264,7 +264,8 @@ public static class SlashCommands
         if (int.TryParse(input, out var num) && num >= 1 && num <= flatList.Count)
         {
             var cmdName = flatList[num - 1];
-            var spec = Commands.FirstOrDefault(c => c.Cmd == cmdName)!;
+            var spec = Commands.FirstOrDefault(c => c.Cmd == cmdName);
+            if (spec == null) return null;
             if (!string.IsNullOrEmpty(spec.ArgsHint))
             {
                 AnsiConsole.Markup($"[grey]/{spec.Cmd} {spec.ArgsHint}:[/] ");
@@ -378,11 +379,18 @@ public static class SlashCommands
                 statusMessage = "Building code graph + document index...";
                 _ = Task.Run(async () =>
                 {
-                    var codeResult = await CgGraph.BuildAsync().ConfigureAwait(false);
-                    var docResult = "";
-                    if (KbGraph != null)
-                        docResult = await KbGraph.BuildDocumentIndexAsync(Directory.GetCurrentDirectory()).ConfigureAwait(false);
-                    PendingBuildResult = $"Code: {codeResult.Replace("\n", " | ")}\nDocs: {docResult}";
+                    try
+                    {
+                        var codeResult = await CgGraph.BuildAsync().ConfigureAwait(false);
+                        var docResult = "";
+                        if (KbGraph != null)
+                            docResult = await KbGraph.BuildDocumentIndexAsync(Directory.GetCurrentDirectory()).ConfigureAwait(false);
+                        PendingBuildResult = $"Code: {codeResult.Replace("\n", " | ")}\nDocs: {docResult}";
+                    }
+                    catch (Exception ex)
+                    {
+                        PendingBuildResult = $"Error: {ex.Message}";
+                    }
                 });
                 return true;
             case GraphCommand { Args: not null } g when g.Args.StartsWith("search"):
@@ -392,21 +400,28 @@ public static class SlashCommands
                 statusMessage = "Searching graph...";
                 _ = Task.Run(async () =>
                 {
-                    var sb = new System.Text.StringBuilder();
-                    var codeResult = await CgGraph.QueryAsync(query, topK: 3).ConfigureAwait(false);
-                    if (!codeResult.StartsWith("No relevant") && !codeResult.StartsWith("Code graph not built"))
-                        sb.AppendLine(codeResult);
-                    if (KbGraph != null)
+                    try
                     {
-                        try
+                        var sb = new System.Text.StringBuilder();
+                        var codeResult = await CgGraph.QueryAsync(query, topK: 3).ConfigureAwait(false);
+                        if (!codeResult.StartsWith("No relevant") && !codeResult.StartsWith("Code graph not built"))
+                            sb.AppendLine(codeResult);
+                        if (KbGraph != null)
                         {
-                            var kbResults = await KbGraph.QueryAsync(query, topK: 5).ConfigureAwait(false);
-                            if (kbResults.Count > 0)
-                                sb.AppendLine("## Relevant Knowledge:\n" + string.Join("\n", kbResults.Select(r => "- " + r)));
+                            try
+                            {
+                                var kbResults = await KbGraph.QueryAsync(query, topK: 5).ConfigureAwait(false);
+                                if (kbResults.Count > 0)
+                                    sb.AppendLine("## Relevant Knowledge:\n" + string.Join("\n", kbResults.Select(r => "- " + r)));
+                            }
+                            catch { }
                         }
-                        catch { }
+                        PendingBuildResult = sb.Length > 0 ? sb.ToString().Replace("\n", " | ") : "No results found.";
                     }
-                    PendingBuildResult = sb.Length > 0 ? sb.ToString().Replace("\n", " | ") : "No results found.";
+                    catch (Exception ex)
+                    {
+                        PendingBuildResult = $"Error: {ex.Message}";
+                    }
                 });
                 return true;
 

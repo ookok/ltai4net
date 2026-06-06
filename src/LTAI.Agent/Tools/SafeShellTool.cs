@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Text;
 using LTAI.AI;
+using LTAI.Core;
 using Microsoft.Agents.AI.Tools.Shell;
 using Microsoft.Extensions.AI;
 
@@ -54,6 +55,7 @@ public sealed class SafeShellTool
 
         // ⚠️ 安全：禁止危险命令（token 级白名单 + 模式匹配双重防护）
         var cmdLower = command.ToLowerInvariant();
+
         var parts = command.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         var executable = parts.Length > 0 ? parts[0].Trim() : "";
         var executableName = Path.GetFileName(executable.AsSpan()).ToString();
@@ -65,6 +67,9 @@ public sealed class SafeShellTool
             "dd", "shutdown", "reboot", "init", "halt", "poweroff",
             "passwd", "useradd", "usermod", "groupadd", "fuser", "kill",
             "mount", "umount", "iptables", "ufw", "systemctl",
+            "cmd", "cmd.exe", "certutil", "bitsadmin", "mshta", "cscript", "wmic",
+            "reg", "schtasks", "diskpart", "bcdedit", "regsvr32", "rundll32",
+            "attrib", "cacls", "takeown", "icacls",
         };
         if (blockedExes.Contains(executableName))
             return "❌ 命令包含危险操作，已阻止";
@@ -75,6 +80,7 @@ public sealed class SafeShellTool
             "rm -rf /", "rm -rf ~", "rm -rf --no-preserve-root",
             ":(){ :|:& };:", "eval ", "exec ",
             "> /dev/", "dd if=", "wget -O - | sh", "curl .* | sh",
+            "wget .* -O ", "certutil .* -urlcache", "bitsadmin .* /transfer",
         };
         if (dangerousPatterns.Any(p => cmdLower.Contains(p)))
             return "❌ 命令包含危险操作，已阻止";
@@ -98,6 +104,24 @@ public sealed class SafeShellTool
         if (parts.Length >= 2 && codeExecNames.Contains(parts[0]) && codeExecArgs.Contains(parts[1]))
             return "❌ 命令包含代码执行操作 (-c/-e/-command)，已阻止";
 
+        // Block command separator chars that bypass first-token checks
+        foreach (var sep in new[] { " & ", " && ", " || ", " | ", "; " })
+        {
+            if (cmdLower.Contains(sep))
+            {
+                var partsChk = command.Split(new[] { "&&", "||", "|", "&", ";" }, StringSplitOptions.TrimEntries);
+                foreach (var part in partsChk)
+                {
+                    var partExec = part.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                    if (partExec.Length == 0) continue;
+                    var pn = Path.GetFileName(partExec[0].AsSpan()).ToString();
+                    if (blockedExes.Contains(pn) || codeExecNames.Contains(pn))
+                        return $"❌ 命令包含危险操作（{pn}），已阻止";
+                }
+                break;
+            }
+        }
+
         // 白名单检查
         if (_allowList != null)
         {
@@ -108,8 +132,8 @@ public sealed class SafeShellTool
         }
 
         // 路径安全
-        var fullCwd = Path.GetFullPath(Path.Combine(_ws, cwd));
-        if (!fullCwd.StartsWith(Path.GetFullPath(_ws), StringComparison.OrdinalIgnoreCase))
+        var fullCwd = PathUtils.SafeResolvePath(_ws, cwd);
+        if (fullCwd == null)
             return "Error: 工作目录逃逸";
 
         if (!Directory.Exists(fullCwd))
@@ -119,21 +143,29 @@ public sealed class SafeShellTool
         timeoutSec = Math.Clamp(timeoutSec, 5, 600);
 
         var sb = new StringBuilder();
-        using var process = new Process
+        var isWindows = OperatingSystem.IsWindows();
+        var psi = new ProcessStartInfo
         {
-            StartInfo = new ProcessStartInfo
-            {
-                FileName = OperatingSystem.IsWindows() ? "cmd.exe" : "/bin/bash",
-                Arguments = OperatingSystem.IsWindows() ? $"/c \"{command}\"" : $"-c \"{command}\"",
-                WorkingDirectory = fullCwd,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                StandardOutputEncoding = Encoding.UTF8,
-                StandardErrorEncoding = Encoding.UTF8,
-            }
+            FileName = isWindows ? "cmd.exe" : "/bin/bash",
+            Arguments = isWindows ? $"/c \"{command}\"" : $"-c \"{command}\"",
+            WorkingDirectory = fullCwd,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            StandardOutputEncoding = Encoding.UTF8,
+            StandardErrorEncoding = Encoding.UTF8,
         };
+        // Restrict PATH to prevent LOLBin abuse and env-based injection
+        psi.EnvironmentVariables["PATH"] = isWindows
+            ? @"C:\Windows\system32;C:\Windows"
+            : "/usr/bin:/bin";
+        psi.EnvironmentVariables.Remove("LD_PRELOAD");
+        psi.EnvironmentVariables.Remove("LD_LIBRARY_PATH");
+        psi.EnvironmentVariables.Remove("DYLD_INSERT_LIBRARIES");
+        psi.EnvironmentVariables.Remove("COR_ENABLE_PROFILING");
+        psi.EnvironmentVariables.Remove("COR_PROFILER");
+        using var process = new Process { StartInfo = psi };
 
         var output = new StringBuilder();
         var error = new StringBuilder();

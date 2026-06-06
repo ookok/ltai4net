@@ -41,6 +41,14 @@ public sealed class DatabaseTools
     {
         try
         {
+            // Host restriction: require confirm for non-localhost databases
+            if (!provider.Equals("sqlite", StringComparison.OrdinalIgnoreCase))
+            {
+                var host = ExtractHost(connectionString);
+                if (!string.IsNullOrEmpty(host) && !IsLocalhost(host) && !confirm)
+                    return $"[SQL] 连接到远程数据库 '{host}' 需要用户确认。请设置 confirm=true。";
+            }
+
             var trimmed = sql.TrimStart();
             var isWrite = trimmed.StartsWith("INSERT", StringComparison.OrdinalIgnoreCase)
                        || trimmed.StartsWith("UPDATE", StringComparison.OrdinalIgnoreCase)
@@ -127,5 +135,29 @@ public sealed class DatabaseTools
             "sqlserver" or "mssql" => new SqlConnection(connectionString),
             _ => new SqliteConnection(connectionString),
         };
+    }
+
+    private static string? ExtractHost(string connStr)
+    {
+        // Simple extraction for common connection string patterns
+        foreach (var keyword in new[] { "Host=", "Server=", "Data Source=", "DataSource=" })
+        {
+            var idx = connStr.IndexOf(keyword, StringComparison.OrdinalIgnoreCase);
+            if (idx < 0) continue;
+            var start = idx + keyword.Length;
+            var end = connStr.IndexOfAny([';', ' ', ','], start);
+            var val = end > start ? connStr[start..end] : connStr[start..];
+            return val.Trim('\'', '"');
+        }
+        return null;
+    }
+
+    private static bool IsLocalhost(string host)
+    {
+        return string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(host, "127.0.0.1")
+            || string.Equals(host, "::1")
+            || string.Equals(host, ".")
+            || string.Equals(host, "(local)");
     }
 }

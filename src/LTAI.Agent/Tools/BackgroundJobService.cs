@@ -76,7 +76,7 @@ public sealed class BackgroundJobService : IDisposable
             var psi = new ProcessStartInfo
             {
                 FileName = Environment.OSVersion.Platform == PlatformID.Win32NT ? "cmd.exe" : "/bin/bash",
-                Arguments = Environment.OSVersion.Platform == PlatformID.Win32NT ? $"/c {command}" : $"-c \"{command}\"",
+                Arguments = Environment.OSVersion.Platform == PlatformID.Win32NT ? $"/c \"{command}\"" : $"-c '{command}'",
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,
@@ -245,7 +245,7 @@ public sealed class BackgroundJobService : IDisposable
     /// stable order. Caller is expected to serialize — fields are all
     /// JSON-friendly primitives.
     /// </summary>
-    public IReadOnlyDictionary<string, JobEntry> SnapshotJobs() => _jobs;
+    public IReadOnlyDictionary<string, JobEntry> SnapshotJobs() => new Dictionary<string, JobEntry>(_jobs);
 
     /// <summary>P14.15: lookup a single job by ID. Returns null if missing.</summary>
     public JobEntry? GetJobEntry(string jobId) =>

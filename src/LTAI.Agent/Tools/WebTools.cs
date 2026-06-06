@@ -72,6 +72,15 @@ public sealed class WebTools
         if (IsPrivateHost(uri.Host))
             return "Error: Cannot fetch private/internal URLs";
 
+        // DNS rebinding protection: resolve to IP and verify
+        try
+        {
+            var addresses = await System.Net.Dns.GetHostAddressesAsync(uri.Host).ConfigureAwait(false);
+            if (addresses.Any(addr => IsPrivateIP(addr)))
+                return "Error: Target resolved to internal IP, blocked";
+        }
+        catch { return "Error: DNS resolution failed"; }
+
         try
         {
             var http = _httpFactory.CreateClient();
@@ -155,6 +164,15 @@ public sealed class WebTools
 
         if (IsPrivateHost(uri.Host))
             return "Error: Cannot request private/internal URLs";
+
+        // DNS rebinding protection
+        try
+        {
+            var addresses = await System.Net.Dns.GetHostAddressesAsync(uri.Host).ConfigureAwait(false);
+            if (addresses.Any(addr => IsPrivateIP(addr)))
+                return "Error: Target resolved to internal IP, blocked";
+        }
+        catch { return "Error: DNS resolution failed"; }
 
         try
         {
@@ -512,5 +530,34 @@ public sealed class WebTools
     private static string StripHtmlTags(string html)
     {
         return HtmlTagRx.Replace(html, "");
+    }
+
+    private static bool IsPrivateIP(System.Net.IPAddress ip)
+    {
+        byte[] b = ip.GetAddressBytes();
+        if (b.Length == 4)
+        {
+            if (b[0] == 10) return true;
+            if (b[0] == 172 && b[1] >= 16 && b[1] <= 31) return true;
+            if (b[0] == 192 && b[1] == 168) return true;
+            if (b[0] == 127) return true;
+            if (b[0] == 169 && b[1] == 254) return true;
+            if (b[0] == 0) return true;
+        }
+        else if (b.Length == 16)
+        {
+            if (b[10] == 0xff && b[11] == 0xff)
+            {
+                if (b[12] == 10) return true;
+                if (b[12] == 172 && b[13] >= 16 && b[13] <= 31) return true;
+                if (b[12] == 192 && b[13] == 168) return true;
+                if (b[12] == 127) return true;
+                if (b[12] == 169 && b[13] == 254) return true;
+                if (b[12] == 0) return true;
+            }
+            if ((b[0] & 0xfe) == 0xfc) return true;
+            if (b[0] == 0xfe && (b[1] & 0xc0) == 0x80) return true;
+        }
+        return false;
     }
 }

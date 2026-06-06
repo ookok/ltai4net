@@ -36,7 +36,7 @@ public sealed class GridSampler : ISampler
     public T SampleCategorical<T>(Trial trial, string name, T[] choices) where T : notnull
     {
         if (_grid.TryGetValue(name, out var values) && values.Length > 0)
-            return (T)values[_index % values.Length];
+            return values[_index % values.Length] is T t ? t : choices[0];
         return choices[0];
     }
 

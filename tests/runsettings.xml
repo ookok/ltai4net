@@ -7,25 +7,22 @@
         <Configuration>
           <Format>cobertura,json</Format>
           <Exclude>
-            <!-- 跳过测试项目自身 -->
-            [LTAI.Tests]*</Exclude>
+            <Assembly>[LTAI.Tests]*</Assembly>
+          </Exclude>
           <ExcludeByAttribute>
             <!-- 跳过 CompilerGenerated / DebuggerDisplay 等 -->
             System.CodeDom.Compiler.GeneratedCodeAttribute
           </ExcludeByAttribute>
           <IncludeByAssembly>
-            <!-- 只度量我们自己项目的覆盖率 -->
+            <!-- 只度量现有项目的覆盖率 -->
             <Include>LTAI.Core</Include>
             <Include>LTAI.Agent</Include>
             <Include>LTAI.AI</Include>
-            <Include>LTAI.DNA</Include>
-            <Include>LTAI.Knowledge</Include>
-            <Include>LTAI.Models</Include>
-            <Include>LTAI.Tools</Include>
-            <Include>LTAI.Planning</Include>
-            <Include>LTAI.Infra</Include>
-            <Include>LTAI.Economy</Include>
-            <Include>LTAI.MCP</Include>
+            <Include>LTAI.Cli</Include>
+            <Include>LTAI.TUI</Include>
+            <Include>LTAI.Desktop</Include>
+            <Include>LTAI.Web</Include>
+            <Include>LTAI.Hpo</Include>
           </IncludeByAssembly>
         </Configuration>
       </DataCollector>

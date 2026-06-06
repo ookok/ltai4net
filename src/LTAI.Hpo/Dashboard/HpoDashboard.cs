@@ -25,11 +25,11 @@ public sealed class HpoDashboard
     public IReadOnlyDictionary<string, Study> Studies => _studies;
 
     /// <summary>Get the latest trial records for a study.</summary>
-    public IReadOnlyList<TrialRecord> GetRecentTrials(string studyName, int count = 50)
+    public async Task<IReadOnlyList<TrialRecord>> GetRecentTrialsAsync(string studyName, int count = 50)
     {
         if (!_studies.TryGetValue(studyName, out var study)) return Array.Empty<TrialRecord>();
         if (study.Store == null) return new List<TrialRecord>();
-        var all = study.Store.LoadTrialsAsync(studyName).Result;
+        var all = await study.Store.LoadTrialsAsync(studyName).ConfigureAwait(false);
         return all.OrderByDescending(t => t.CreatedAt).Take(count).ToList();
     }
 

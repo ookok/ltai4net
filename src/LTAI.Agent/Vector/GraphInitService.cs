@@ -79,16 +79,23 @@ public sealed class GraphInitService : IHostedService, IDisposable
         _watcher = new FileSystemWatcher(ws)
         {
             IncludeSubdirectories = true,
+            InternalBufferSize = 65536,
             NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName,
         };
+        // Only watch source files; exclude build artifacts by default
         _watcher.Filters.Clear();
-        foreach (var ext in new[] { "*.cs", "*.py", "*.js", "*.jsx", "*.ts", "*.tsx", "*.go", "*.rs", "*.java", "*.sh", "*.bash" })
+        foreach (var ext in new[] { "*.cs", "*.js", "*.ts", "*.tsx", "*.rs", "*.go", "*.java", "*.sh", "*.bash" })
             _watcher.Filters.Add(ext);
 
         _watcher.Changed += OnFileChanged;
         _watcher.Created += OnFileChanged;
         _watcher.Deleted += OnFileDeleted;
         _watcher.Renamed += OnFileRenamed;
+        _watcher.Error += (_, e) =>
+        {
+            _logger.LogError(e.GetException(), "Graph file watcher error");
+            try { _watcher.EnableRaisingEvents = false; _watcher.EnableRaisingEvents = true; } catch { }
+        };
         _watcher.EnableRaisingEvents = true;
         _logger.LogInformation("Graph: file watcher started on {Dir}", ws);
     }
@@ -114,13 +121,14 @@ public sealed class GraphInitService : IHostedService, IDisposable
     private static bool ShouldSkip(string path)
     {
         if (string.IsNullOrEmpty(path)) return true;
+        var sep = Path.DirectorySeparatorChar;
         var p = path.AsSpan();
-        return p.Contains("\\obj\\", StringComparison.OrdinalIgnoreCase)
-            || p.Contains("\\bin\\", StringComparison.OrdinalIgnoreCase)
-            || p.Contains("\\dist\\", StringComparison.OrdinalIgnoreCase)
-            || p.Contains("\\node_modules\\", StringComparison.OrdinalIgnoreCase)
-            || p.Contains("\\.git\\", StringComparison.OrdinalIgnoreCase)
-            || p.Contains("\\packages\\", StringComparison.OrdinalIgnoreCase);
+        return p.Contains($"{sep}obj{sep}", StringComparison.OrdinalIgnoreCase)
+            || p.Contains($"{sep}bin{sep}", StringComparison.OrdinalIgnoreCase)
+            || p.Contains($"{sep}dist{sep}", StringComparison.OrdinalIgnoreCase)
+            || p.Contains($"{sep}node_modules{sep}", StringComparison.OrdinalIgnoreCase)
+            || p.Contains($"{sep}.git{sep}", StringComparison.OrdinalIgnoreCase)
+            || p.Contains($"{sep}packages{sep}", StringComparison.OrdinalIgnoreCase);
     }
 
     private void ScheduleRebuild(string path)

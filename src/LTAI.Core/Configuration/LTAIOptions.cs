@@ -514,32 +514,42 @@ public static class KnownKeys
     /// Can be overridden by setting <c>LTAI:Providers</c> in appsettings.json.
     /// Call <see cref="ApplyConfig"/> at startup if config providers are present.
     /// <b>Consumers:</b> ConfigView, MainWindow, LLMConfigPanel, UsageTracker.
+    /// Thread safety: reads are lock-free via volatile; writes use atomic swap.
     /// </summary>
-    public static KeyInfo[] All = DefaultHardcoded;
+    public static volatile KeyInfo[] All = DefaultHardcoded;
 
     /// <summary>
     /// Generate default provider configurations in tuple format.
     /// Filters to providers that have both an endpoint and a model defined.
     /// <b>Callers:</b> MultiProviderChatClient (initialize default providers).
     /// </summary>
-    public static (string envVar, string endpoint, string model, string name)[] GetDefaultProviders() =>
-        All.Where(k => k.Endpoint != null && k.Model != null)
+    public static (string envVar, string endpoint, string model, string name)[] GetDefaultProviders()
+    {
+        var snapshot = All;
+        return snapshot.Where(k => k.Endpoint != null && k.Model != null)
            .Select(k => (k.EnvVar, k.Endpoint!, k.Model!, k.Service))
            .ToArray();
+    }
 
     /// <summary>
     /// Get all keys grouped by service category for UI display.
     /// Categories: "LLM Providers", "Map / GIS", "Web Search", "Weather", "Translation", "Image", "Other".
     /// <b>Consumers:</b> ConfigView (category tabs).
     /// </summary>
-    public static ILookup<string, KeyInfo> ByCategory =>
-        All.ToLookup(k => k.Service.Contains("API") ? "LLM Providers"
-                      : k.EnvVar.Contains("MAP") || k.EnvVar.Contains("TIANDITU") ? "Map / GIS"
-                      : k.EnvVar.Contains("BRAVE") || k.EnvVar.Contains("SERPER") ? "Web Search"
-                      : k.EnvVar.Contains("WEATHER") ? "Weather"
-                      : k.EnvVar.Contains("TRANSLATE") ? "Translation"
-                      : k.EnvVar.Contains("UNSPLASH") ? "Image"
-                      : "Other");
+    public static ILookup<string, KeyInfo> ByCategory
+    {
+        get
+        {
+            var snapshot = All;
+            return snapshot.ToLookup(k => k.Service.Contains("API") ? "LLM Providers"
+                          : k.EnvVar.Contains("MAP") || k.EnvVar.Contains("TIANDITU") ? "Map / GIS"
+                          : k.EnvVar.Contains("BRAVE") || k.EnvVar.Contains("SERPER") ? "Web Search"
+                          : k.EnvVar.Contains("WEATHER") ? "Weather"
+                          : k.EnvVar.Contains("TRANSLATE") ? "Translation"
+                          : k.EnvVar.Contains("UNSPLASH") ? "Image"
+                          : "Other");
+        }
+    }
 
     /// <summary>
     /// Override <see cref="All"/> with entries from <c>LTAI:Providers</c> config.
@@ -572,12 +582,15 @@ public static class KnownKeys
     /// </summary>
     public static bool UpdateProviderModel(string serviceOrEnvVar, string newModel)
     {
-        for (int i = 0; i < All.Length; i++)
+        var snapshot = All;
+        for (int i = 0; i < snapshot.Length; i++)
         {
-            if (All[i].Service.Equals(serviceOrEnvVar, StringComparison.OrdinalIgnoreCase) ||
-                All[i].EnvVar.Equals(serviceOrEnvVar, StringComparison.OrdinalIgnoreCase))
+            if (snapshot[i].Service.Equals(serviceOrEnvVar, StringComparison.OrdinalIgnoreCase) ||
+                snapshot[i].EnvVar.Equals(serviceOrEnvVar, StringComparison.OrdinalIgnoreCase))
             {
-                All[i] = All[i] with { Model = newModel };
+                var copy = (KeyInfo[])snapshot.Clone();
+                copy[i] = copy[i] with { Model = newModel };
+                All = copy;
                 return true;
             }
         }

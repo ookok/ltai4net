@@ -12,6 +12,7 @@ namespace LTAI.Agent.Tools;
 public static class TaskTools
 {
     private static readonly List<TodoItem> _todos = new();
+    private static readonly object _todoLock = new();
     private static int _nextId = 1;
 
     public sealed record TodoItem(
@@ -35,25 +36,28 @@ public static class TaskTools
             var items = JsonSerializer.Deserialize<List<TodoInput>>(todosJson,
                 new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
 
-            if (items == null || items.Count == 0)
+            lock (_todoLock)
             {
-                _todos.Clear();
-                return "Todo list cleared.";
-            }
-
-            _todos.Clear();
-            _nextId = 1;
-
-            foreach (var item in items)
-            {
-                var status = item.Status?.ToLowerInvariant() switch
+                if (items == null || items.Count == 0)
                 {
-                    "completed" => "completed",
-                    "in_progress" => "in_progress",
-                    _ => "pending"
-                };
-                _todos.Add(new TodoItem(_nextId++, item.Content, status,
-                    item.ActiveForm ?? item.Content, DateTime.UtcNow));
+                    _todos.Clear();
+                    return "Todo list cleared.";
+                }
+
+                _todos.Clear();
+                _nextId = 1;
+
+                foreach (var item in items)
+                {
+                    var status = item.Status?.ToLowerInvariant() switch
+                    {
+                        "completed" => "completed",
+                        "in_progress" => "in_progress",
+                        _ => "pending"
+                    };
+                    _todos.Add(new TodoItem(_nextId++, item.Content, status,
+                        item.ActiveForm ?? item.Content, DateTime.UtcNow));
+                }
             }
 
             return FormatTodos();
@@ -71,12 +75,15 @@ public static class TaskTools
     public static string TodoComplete(
         [Description("Todo item ID")] int id)
     {
-        var item = _todos.FirstOrDefault(t => t.Id == id);
-        if (item == null) return $"Todo #{id} not found";
+        lock (_todoLock)
+        {
+            var item = _todos.FirstOrDefault(t => t.Id == id);
+            if (item == null) return $"Todo #{id} not found";
 
-        _todos.Remove(item);
-        _todos.Add(item with { Status = "completed" });
-        return $"✓ {item.Content}";
+            _todos.Remove(item);
+            _todos.Add(item with { Status = "completed" });
+            return $"✓ {item.Content}";
+        }
     }
 
     [Description("查看当前待办事项列表。\n"
@@ -84,8 +91,11 @@ public static class TaskTools
     [ToolExample("看看还有哪些事要做")]
     public static string TodoList()
     {
-        if (_todos.Count == 0) return "No todos.";
-        return FormatTodos();
+        lock (_todoLock)
+        {
+            if (_todos.Count == 0) return "No todos.";
+            return FormatTodos();
+        }
     }
 
     private static string FormatTodos()

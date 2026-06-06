@@ -33,7 +33,12 @@ public sealed class RateLimitMiddleware
             return;
         }
 
-        var ip = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+        // Respect X-Forwarded-For when behind reverse proxy
+        var ip = context.Request.Headers["X-Forwarded-For"].FirstOrDefault()
+                  ?? context.Connection.RemoteIpAddress?.ToString()
+                  ?? "unknown";
+        // Take the first IP in chain (original client)
+        if (ip.Contains(',')) ip = ip.Split(',')[0].Trim();
         var now = DateTime.UtcNow;
 
         // Periodic cleanup of stale entries

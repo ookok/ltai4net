@@ -102,6 +102,7 @@ public sealed class ChartTools
         canvas.DrawLine(margin, h - margin, w - margin, h - margin, axisPaint);
         canvas.DrawLine(margin, margin, margin, h - margin, axisPaint);
 
+        if (data.Count < 2) return;
         var points = new SKPoint[data.Count];
         for (int i = 0; i < data.Count; i++)
         {

@@ -421,16 +421,11 @@ partial class Program
         try
         {
             using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
-            var pingTask = http.GetAsync("https://api.deepseek.com/v1/models");
-            if (pingTask.Wait(TimeSpan.FromSeconds(3)))
-            {
-                using var resp = pingTask.Result;
-                AnsiConsole.MarkupLine(resp.IsSuccessStatusCode
-                    ? $"[green]  ✅ 网络[/] — DeepSeek API 可达 ({resp.StatusCode})"
-                    : $"[yellow]  ⚠️  网络[/] — DeepSeek 返回 {(int)resp.StatusCode}");
-            }
-            else
-                AnsiConsole.MarkupLine("[yellow]  ⚠️  网络[/] — DeepSeek API 超时 (3s)");
+            using var resp = http.GetAsync("https://api.deepseek.com/v1/models")
+                .GetAwaiter().GetResult();
+            AnsiConsole.MarkupLine(resp.IsSuccessStatusCode
+                ? $"[green]  ✅ 网络[/] — DeepSeek API 可达 ({resp.StatusCode})"
+                : $"[yellow]  ⚠️  网络[/] — DeepSeek 返回 {(int)resp.StatusCode}");
         }
         catch (Exception ex)
         {

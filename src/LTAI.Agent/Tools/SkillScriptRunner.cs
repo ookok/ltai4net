@@ -45,21 +45,26 @@ public static class SkillScriptRunner
     private static async Task<string> RunProcess(string exe, string args, string fullPath, CancellationToken ct)
     {
         var sb = new StringBuilder();
-        using var process = new Process
+        var psi = new ProcessStartInfo
         {
-            StartInfo = new ProcessStartInfo
-            {
-                FileName = exe,
-                Arguments = args,
-                WorkingDirectory = Path.GetDirectoryName(fullPath) ?? ".",
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                StandardOutputEncoding = Encoding.UTF8,
-                StandardErrorEncoding = Encoding.UTF8,
-            }
+            FileName = exe,
+            Arguments = args,
+            WorkingDirectory = Path.GetDirectoryName(fullPath) ?? ".",
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            StandardOutputEncoding = Encoding.UTF8,
+            StandardErrorEncoding = Encoding.UTF8,
         };
+        // Restrict PATH to prevent environment-based injection
+        psi.EnvironmentVariables["PATH"] = OperatingSystem.IsWindows()
+            ? @"C:\Windows\system32;C:\Windows"
+            : "/usr/bin:/bin";
+        psi.EnvironmentVariables.Remove("LD_PRELOAD");
+        psi.EnvironmentVariables.Remove("LD_LIBRARY_PATH");
+        psi.EnvironmentVariables.Remove("DYLD_INSERT_LIBRARIES");
+        using var process = new Process { StartInfo = psi };
 
         try
         {

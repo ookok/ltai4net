@@ -62,6 +62,7 @@ public sealed class YAMLWorkflowWatcher : IDisposable
         _fsWatcher = new FileSystemWatcher(_watchDir)
         {
             IncludeSubdirectories = false,
+            InternalBufferSize = 65536,
             NotifyFilter = NotifyFilters.FileName
                          | NotifyFilters.LastWrite
                          | NotifyFilters.Size
@@ -83,6 +84,16 @@ public sealed class YAMLWorkflowWatcher : IDisposable
     private void OnError(object sender, ErrorEventArgs e)
     {
         _logger.LogError(e.GetException(), "FileSystemWatcher error in {Dir}", _watchDir);
+        // Restart watcher after buffer overflow
+        try
+        {
+            _fsWatcher.EnableRaisingEvents = false;
+            _fsWatcher.EnableRaisingEvents = true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to restart FileSystemWatcher in {Dir}", _watchDir);
+        }
     }
 
     private void DebounceReload(string path)

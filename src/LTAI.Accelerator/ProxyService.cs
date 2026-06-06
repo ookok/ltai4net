@@ -124,11 +124,11 @@ public sealed class ProxyService : IDisposable
             var t2 = RelayAsync(remoteStream, clientStream, ct);
             await Task.WhenAny(t1, t2);
         }
-        catch (Exception ex)
+        catch (Exception)
         {
             try
             {
-                var error = $"HTTP/1.1 502 Bad Gateway\r\n\r\n{ex.Message}";
+                var error = "HTTP/1.1 502 Bad Gateway\r\n\r\nProxy error";
                 await clientStream.WriteAsync(System.Text.Encoding.ASCII.GetBytes(error).AsMemory(), ct);
             }
             catch { }
@@ -154,19 +154,49 @@ public sealed class ProxyService : IDisposable
             var t2 = RelayAsync(remoteStream, clientStream, ct);
             await Task.WhenAny(t1, t2);
         }
-        catch (Exception ex)
+        catch (Exception)
         {
             try
             {
-                var error = $"HTTP/1.1 502 Bad Gateway\r\n\r\n{ex.Message}";
+                var error = "HTTP/1.1 502 Bad Gateway\r\n\r\nProxy error";
                 await clientStream.WriteAsync(System.Text.Encoding.ASCII.GetBytes(error).AsMemory(), ct);
             }
             catch { }
         }
     }
 
+    private static bool IsPrivateIP(System.Net.IPAddress ip)
+    {
+        if (System.Net.IPAddress.IsLoopback(ip)) return true;
+        byte[] b = ip.GetAddressBytes();
+        if (b.Length == 4)
+        {
+            if (b[0] == 10) return true;
+            if (b[0] == 172 && b[1] >= 16 && b[1] <= 31) return true;
+            if (b[0] == 192 && b[1] == 168) return true;
+            if (b[0] == 169 && b[1] == 254) return true;
+            if (b[0] == 0) return true;
+        }
+        else if (b.Length == 16)
+        {
+            if (b[10] == 0xff && b[11] == 0xff)
+            {
+                if (b[12] == 10 || b[12] == 127) return true;
+                if (b[12] == 169 && b[13] == 254) return true;
+                if (b[12] == 0) return true;
+            }
+            if ((b[0] & 0xfe) == 0xfc) return true;
+            if (b[0] == 0xfe && (b[1] & 0xc0) == 0x80) return true;
+        }
+        return false;
+    }
+
     private async Task<TcpClient> ConnectToTargetAsync(string host, int port, CancellationToken ct)
     {
+        // Block raw IP connections to private/internal addresses
+        if (System.Net.IPAddress.TryParse(host, out var rawIp) && IsPrivateIP(rawIp))
+            throw new InvalidOperationException("Connection to private/internal IP blocked");
+
         // Warp SOCKS5 upstream takes priority
         if (_warp.Connected)
             return await Socks5ConnectAsync("127.0.0.1", 40000, host, port, ct);
@@ -175,6 +205,9 @@ public sealed class ProxyService : IDisposable
         var addresses = await _dns.ResolveAsync(host, ct);
         if (addresses.Length > 0)
         {
+            // SSRF protection: reject private IPs from DNS resolution
+            if (addresses.Any(IsPrivateIP))
+                throw new InvalidOperationException("Target resolves to private/internal IP");
             var remote = new TcpClient();
             await remote.ConnectAsync(addresses[0], port, ct);
             return remote;
@@ -182,7 +215,9 @@ public sealed class ProxyService : IDisposable
 
         // Fallback: system DNS
         var sysAddresses = await System.Net.Dns.GetHostAddressesAsync(host, ct);
-        if (sysAddresses.Length == 0) throw new Exception($"Cannot resolve: {host}");
+        if (sysAddresses.Length == 0) throw new Exception("Cannot resolve host");
+        if (sysAddresses.Any(IsPrivateIP))
+            throw new InvalidOperationException("Target resolves to private/internal IP");
         var sysRemote = new TcpClient();
         await sysRemote.ConnectAsync(sysAddresses[0], port, ct);
         return sysRemote;

@@ -100,28 +100,35 @@ public sealed class DecisionTreeRouter
         var (topKLimit, marginThreshold, minScoreThreshold, minAcceptable, fallbackKind, whitelist) = ResolveEffectiveConfig();
         var cfg = _registry?.GetDecisionTreeConfig("decision-tree") ?? DecisionTreeConfig.Default;
 
-        var allNames = (allSpecialistNames ?? []).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        // Pre-allocate and reuse the names list to avoid repeated .ToArray() calls
+        var allNamesList = (allSpecialistNames ?? [])
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var allNamesArray = allNamesList.ToArray();
+        var allNamesSet = new HashSet<string>(allNamesList, StringComparer.OrdinalIgnoreCase);
 
         // P15: apply candidate whitelist before any embedding work.
         if (whitelist.Count > 0)
         {
             var wl = new HashSet<string>(whitelist, StringComparer.OrdinalIgnoreCase);
-            allNames = allNames.Where(n => wl.Contains(n)).ToArray();
-            if (allNames.Length == 0)
+            allNamesList = allNamesList.Where(n => wl.Contains(n)).ToList();
+            allNamesArray = allNamesList.ToArray();
+            allNamesSet = new HashSet<string>(allNamesList, StringComparer.OrdinalIgnoreCase);
+            if (allNamesList.Count == 0)
             {
                 _logger.LogWarning("Router: candidate whitelist filtered out all specialists ({N} requested, 0 matched)",
                     whitelist.Count);
                 activity?.SetTag("router.branch", "NoCandidates");
                 activity?.SetTag("router.whitelist_count", whitelist.Count);
-                return new DecisionTreeResult(Array.Empty<string>(), BranchKind.NoCandidates, 0f, 0f, [], GetCurrentTier());
+                return new DecisionTreeResult([], BranchKind.NoCandidates, 0f, 0f, [], GetCurrentTier());
             }
         }
 
         // Stage 0: no embedder → use top-K (not all — P0.2 embedding fallback chain)
         if (_embedder is null)
         {
-            var fallback = allNames.Take(topKLimit).ToArray();
-            _logger.LogDebug("Router: no embedder, using top-{K}/{N} specialists", fallback.Length, allNames.Length);
+            var fallback = allNamesList.Take(topKLimit).ToList();
+            _logger.LogDebug("Router: no embedder, using top-{K}/{N} specialists", fallback.Count, allNamesList.Count);
             activity?.SetTag("router.branch", "NoEmbedder");
             return new DecisionTreeResult(fallback, BranchKind.NoEmbedder, 0f, 0f, [], GetCurrentTier());
         }
@@ -133,8 +140,8 @@ public sealed class DecisionTreeRouter
 
         if (topK.Count == 0)
         {
-            var fallback = allNames.Take(topKLimit).ToArray();
-            _logger.LogWarning("Router: top-K returned empty, using top-{K}/{N} specialists", fallback.Length, allNames.Length);
+            var fallback = allNamesList.Take(topKLimit).ToList();
+            _logger.LogWarning("Router: top-K returned empty, using top-{K}/{N} specialists", fallback.Count, allNamesList.Count);
             activity?.SetTag("router.branch", "EmbeddingFailed");
             return new DecisionTreeResult(fallback, BranchKind.EmbeddingFailed, 0f, 0f, [], GetCurrentTier());
         }
@@ -148,7 +155,7 @@ public sealed class DecisionTreeRouter
             activity?.SetTag("router.branch", "NoConfidentMatch");
             activity?.SetTag("router.top_score", topK[0].Score);
             activity?.SetTag("router.min_acceptable", minAcceptable);
-            return new DecisionTreeResult(Array.Empty<string>(), BranchKind.NoConfidentMatch, topK[0].Score, 0f, topK, GetCurrentTier());
+            return new DecisionTreeResult([], BranchKind.NoConfidentMatch, topK[0].Score, 0f, topK, GetCurrentTier());
         }
 
         // Stage 2: confidence margin
@@ -160,20 +167,22 @@ public sealed class DecisionTreeRouter
 
         if (confident)
         {
-            var chosen = topK
-                .Select(t => t.Name)
-                .Where(n => allNames.Contains(n, StringComparer.OrdinalIgnoreCase))
-                .ToArray();
+            var chosen = new List<string>(topKLimit);
+            foreach (var t in topK)
+            {
+                if (allNamesSet.Contains(t.Name))
+                    chosen.Add(t.Name);
+            }
 
-            if (chosen.Length == 0) chosen = allNames;
+            if (chosen.Count == 0) chosen = new List<string>(allNamesList);
 
             _logger.LogInformation(
                 "Router: CONFIDENT (margin={Margin:F3} ≥ {Threshold:F3}, top={Top:F3}) → top-{K} of {Total} (fallback={Fb})",
-                margin, marginThreshold, topScore, chosen.Length, allNames.Length, fallbackKind);
+                margin, marginThreshold, topScore, chosen.Count, allNamesList.Count, fallbackKind);
             activity?.SetTag("router.branch", "ConfidentTopK");
             activity?.SetTag("router.top_score", topScore);
             activity?.SetTag("router.margin", margin);
-            activity?.SetTag("router.chosen_count", chosen.Length);
+            activity?.SetTag("router.chosen_count", chosen.Count);
             return new DecisionTreeResult(chosen, BranchKind.ConfidentTopK, topScore, margin, topK);
         }
         else
@@ -182,21 +191,37 @@ public sealed class DecisionTreeRouter
             // P6 Steer: when a steer LLM is available, use it to re-rank the top-K
             // candidates instead of falling back to ALL specialists. This saves
             // LLM context for the handoff workflow (fewer candidates = less routing overhead).
-            var (chosen2, branch) = fallbackKind switch
+            IReadOnlyList<string> chosen2;
+            BranchKind branch;
+            switch (fallbackKind)
             {
-                AmbiguousFallbackKind.None => (
-                    Array.Empty<string>(),
-                    BranchKind.NoConfidentMatch),
-                AmbiguousFallbackKind.TopK => (
-                    topK.Select(t => t.Name)
-                        .Where(n => allNames.Contains(n, StringComparer.OrdinalIgnoreCase))
-                        .ToArray(),
-                    BranchKind.AmbiguousFallbackTopK),
-                _ when _steer != null => (
-                    await SteerRerankAsync(task!, topK, allNames, ct).ConfigureAwait(false),
-                    BranchKind.AmbiguousFallback),
-                _ => (allNames, BranchKind.AmbiguousFallback),
-            };
+                case AmbiguousFallbackKind.None:
+                    chosen2 = [];
+                    branch = BranchKind.NoConfidentMatch;
+                    break;
+                case AmbiguousFallbackKind.TopK:
+                    var list = new List<string>(topK.Count);
+                    foreach (var t in topK)
+                    {
+                        if (allNamesSet.Contains(t.Name))
+                            list.Add(t.Name);
+                    }
+                    chosen2 = list;
+                    branch = BranchKind.AmbiguousFallbackTopK;
+                    break;
+                default:
+                    if (_steer != null)
+                    {
+                        chosen2 = await SteerRerankAsync(task!, topK, allNamesArray, ct).ConfigureAwait(false);
+                        branch = BranchKind.AmbiguousFallback;
+                    }
+                    else
+                    {
+                        chosen2 = allNamesList;
+                        branch = BranchKind.AmbiguousFallback;
+                    }
+                    break;
+            }
 
             var reason = margin < marginThreshold
                 ? $"margin={margin:F3} < {marginThreshold:F3}"
@@ -204,12 +229,12 @@ public sealed class DecisionTreeRouter
 
             _logger.LogInformation(
                 "Router: AMBIGUOUS ({Reason}) → {Branch} ({N} agents, fallback={Fb}, steer={HasSteer})",
-                reason, branch, chosen2.Length, fallbackKind, _steer != null);
+                reason, branch, chosen2.Count, fallbackKind, _steer != null);
             activity?.SetTag("router.branch", branch.ToString());
             activity?.SetTag("router.top_score", topScore);
             activity?.SetTag("router.margin", margin);
             activity?.SetTag("router.ambiguous_reason", reason);
-            activity?.SetTag("router.chosen_count", chosen2.Length);
+            activity?.SetTag("router.chosen_count", chosen2.Count);
             return new DecisionTreeResult(chosen2, branch, topScore, margin, topK);
         }
     }

@@ -62,7 +62,7 @@ public sealed class Trial
     public T SuggestCategorical<T>(string name, T[] choices) where T : notnull
     {
         if (_params.TryGetValue(name, out var existing))
-            return (T)existing;
+            return existing is T t ? t : throw new InvalidOperationException($"Parameter '{name}' type mismatch");
         var val = Sampler.SampleCategorical(this, name, choices);
         _params[name] = val!;
         return val;

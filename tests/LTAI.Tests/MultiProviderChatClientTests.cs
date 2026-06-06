@@ -23,12 +23,50 @@ public sealed class MultiProviderChatClientTests
     };
 
     [Fact]
-    public async Task GetResponseAsync_NoProviders_ReturnsFailure()
+    public async Task DegradationChain_PrimaryFails_FallsBack()
+    {
+        var router = new MultiProviderChatClient(DefaultOpts);
+        router.Register("l2", new EchoChatClient("fallback-ok"));
+        var resp = await router.GetResponseAsync([new ChatMessage(ChatRole.User, "unique-fallback-primary")]);
+        var text = resp.Messages?.LastOrDefault()?.Text ?? "";
+        Assert.Contains("fallback-ok", text);
+    }
+
+    [Fact]
+    public async Task DegradationChain_MultiLevel_FallsBack()
+    {
+        var router = new MultiProviderChatClient(DefaultOpts);
+        router.Register("fallback", new EchoChatClient("last-resort"));
+        var resp = await router.GetResponseAsync([new ChatMessage(ChatRole.User, "unique-fallback-multi")]);
+        var text = resp.Messages?.LastOrDefault()?.Text ?? "";
+        Assert.Contains("last-resort", text);
+    }
+
+    [Fact]
+    public async Task DegradationChain_NoRegistered_ReturnsError()
+    {
+        var opts = new LTAIOptions
+        {
+            AI = new AIConfig
+            {
+                DefaultProvider = "missing",
+                GlobalTokenBudget = 1_000_000,
+                PerUserTokenBudget = 200_000,
+            }
+        };
+        var router = new MultiProviderChatClient(opts);
+        var resp = await router.GetResponseAsync([new ChatMessage(ChatRole.User, "unique-no-providers")]);
+        var text = resp.Messages?.LastOrDefault()?.Text ?? "";
+        Assert.Contains("All providers failed", text, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task GetResponseAsync_NoProviders_ReturnsError()
     {
         var router = new MultiProviderChatClient(new LTAIOptions());
-        var resp = await router.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")]);
+        var resp = await router.GetResponseAsync([new ChatMessage(ChatRole.User, "unique-no-registered")]);
         var text = resp.Messages?.LastOrDefault()?.Text ?? "";
-        Assert.Contains("failed", text, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("All providers failed", text, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -36,7 +74,7 @@ public sealed class MultiProviderChatClientTests
     {
         var router = new MultiProviderChatClient(DefaultOpts);
         router.Register("l1", new EchoChatClient("hello world"));
-        var resp = await router.GetResponseAsync([new ChatMessage(ChatRole.User, "say hi")]);
+        var resp = await router.GetResponseAsync([new ChatMessage(ChatRole.User, "unique-single-provider")]);
         var text = resp.Messages?.LastOrDefault()?.Text ?? "";
         Assert.Equal("hello world", text);
     }
@@ -48,47 +86,9 @@ public sealed class MultiProviderChatClientTests
         router.Register("l1", new EchoChatClient("from-l1"));
         router.Register("l2", new EchoChatClient("from-l2"));
         var resp = await router.GetResponseAsync(
-            [new ChatMessage(ChatRole.User, "hi")],
+            [new ChatMessage(ChatRole.User, "unique-pick-by-model")],
             new ChatOptions { ModelId = "l2" });
         Assert.Contains("from-l2", resp.Messages?.LastOrDefault()?.Text ?? "");
-    }
-
-    [Fact]
-    public async Task DegradationChain_PrimaryFails_FallsBack()
-    {
-        var router = new MultiProviderChatClient(DefaultOpts);
-        router.Register("l2", new EchoChatClient("fallback-ok"));
-        var resp = await router.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")]);
-        var text = resp.Messages?.LastOrDefault()?.Text ?? "";
-        Assert.Contains("fallback-ok", text);
-    }
-
-    [Fact]
-    public async Task DegradationChain_MultiLevel_FallsBack()
-    {
-        var router = new MultiProviderChatClient(DefaultOpts);
-        router.Register("fallback", new EchoChatClient("last-resort"));
-        var resp = await router.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")]);
-        var text = resp.Messages?.LastOrDefault()?.Text ?? "";
-        Assert.Contains("last-resort", text);
-    }
-
-    [Fact]
-    public async Task DegradationChain_AllFail_ReturnsError()
-    {
-        var opts = new LTAIOptions
-        {
-            AI = new AIConfig
-            {
-                DefaultProvider = "l1",
-                GlobalTokenBudget = 1_000_000,
-                PerUserTokenBudget = 200_000,
-            }
-        };
-        var router = new MultiProviderChatClient(opts);
-        var resp = await router.GetResponseAsync([new ChatMessage(ChatRole.User, "hi")]);
-        var text = resp.Messages?.LastOrDefault()?.Text ?? "";
-        Assert.Contains("No providers", text, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -99,9 +99,9 @@ public sealed class MultiProviderChatClientTests
         router.Register("l2", new EchoChatClient("after-cooldown"));
 
         for (int i = 0; i < 3; i++)
-            await router.GetResponseAsync([new ChatMessage(ChatRole.User, "x")]);
+            await router.GetResponseAsync([new ChatMessage(ChatRole.User, "unique-cb-" + i)]);
 
-        var resp = await router.GetResponseAsync([new ChatMessage(ChatRole.User, "y")]);
+        var resp = await router.GetResponseAsync([new ChatMessage(ChatRole.User, "unique-cb-after")]);
         var text = resp.Messages?.LastOrDefault()?.Text ?? "";
         Assert.Contains("after-cooldown", text);
     }
@@ -114,9 +114,9 @@ public sealed class MultiProviderChatClientTests
         router.Register("l2", new EchoChatClient("skipped-cooldown"));
 
         for (int i = 0; i < 3; i++)
-            await router.GetResponseAsync([new ChatMessage(ChatRole.User, "x")]);
+            await router.GetResponseAsync([new ChatMessage(ChatRole.User, "unique-sk-" + i)]);
 
-        var resp = await router.GetResponseAsync([new ChatMessage(ChatRole.User, "y")]);
+        var resp = await router.GetResponseAsync([new ChatMessage(ChatRole.User, "unique-sk-after")]);
         var text = resp.Messages?.LastOrDefault()?.Text ?? "";
         Assert.Contains("skipped-cooldown", text);
     }
@@ -125,15 +125,13 @@ public sealed class MultiProviderChatClientTests
     public async Task ResponseCache_HitReturnsCachedValue()
     {
         var router = new MultiProviderChatClient(DefaultOpts);
-        var messages = new[] { new ChatMessage(ChatRole.User, "cache test") };
-        var opts = new ChatOptions { Temperature = 0.7f };
         var provider = new CountingChatClient();
         router.Register("l1", provider);
 
-        var resp1 = await router.GetResponseAsync(messages, opts);
+        var resp1 = await router.GetResponseAsync([new ChatMessage(ChatRole.User, "unique-cache-test")]);
         Assert.Contains("count-1", resp1.Messages?.LastOrDefault()?.Text ?? "");
 
-        var resp2 = await router.GetResponseAsync(messages, opts);
+        var resp2 = await router.GetResponseAsync([new ChatMessage(ChatRole.User, "unique-cache-test")]);
         Assert.Contains("count-1", resp2.Messages?.LastOrDefault()?.Text ?? "");
 
         Assert.Equal(1, provider.CallCount);
@@ -146,8 +144,8 @@ public sealed class MultiProviderChatClientTests
         var provider = new CountingChatClient();
         router.Register("l1", provider);
 
-        await router.GetResponseAsync([new ChatMessage(ChatRole.User, "msg1")]);
-        await router.GetResponseAsync([new ChatMessage(ChatRole.User, "msg2")]);
+        await router.GetResponseAsync([new ChatMessage(ChatRole.User, "unique-cache-1")]);
+        await router.GetResponseAsync([new ChatMessage(ChatRole.User, "unique-cache-2")]);
 
         Assert.Equal(2, provider.CallCount);
     }
@@ -192,13 +190,13 @@ public sealed class MultiProviderChatClientTests
         var router = new MultiProviderChatClient(new LTAIOptions());
         var results = new List<ChatResponseUpdate>();
         await foreach (var update in router.GetStreamingResponseAsync(
-            [new ChatMessage(ChatRole.User, "hi")]))
+            [new ChatMessage(ChatRole.User, "unique-stream-no-prov")]))
         {
             results.Add(update);
         }
         Assert.NotEmpty(results);
         var text = string.Concat(results.Select(r => r.Text ?? ""));
-        Assert.Contains("No providers", text, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("No providers available", text, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -208,7 +206,7 @@ public sealed class MultiProviderChatClientTests
         router.Register("l1", new EchoChatClient("stream response"));
         var results = new List<ChatResponseUpdate>();
         await foreach (var update in router.GetStreamingResponseAsync(
-            [new ChatMessage(ChatRole.User, "hi")]))
+            [new ChatMessage(ChatRole.User, "unique-stream-ok")]))
         {
             results.Add(update);
         }
@@ -226,7 +224,7 @@ public sealed class MultiProviderChatClientTests
 
         var results = new List<ChatResponseUpdate>();
         await foreach (var update in router.GetStreamingResponseAsync(
-            [new ChatMessage(ChatRole.User, "hi")]))
+            [new ChatMessage(ChatRole.User, "unique-stream-fail")]))
         {
             results.Add(update);
         }
@@ -248,6 +246,7 @@ file sealed class FaultyChatClient : IChatClient
     {
         await Task.Yield();
         throw _exception;
+        yield break;
     }
 }
 

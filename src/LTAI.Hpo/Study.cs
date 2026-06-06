@@ -75,7 +75,7 @@ public sealed class Study
     {
         if (Store != null) await Store.InitializeAsync();
 
-        var history = Store?.LoadTrialsAsync(Name).Result;
+        var history = Store != null ? await Store.LoadTrialsAsync(Name).ConfigureAwait(false) : null;
         if (history != null)
         {
             _completedCache.AddRange(history.Where(t => t.State is TrialState.Completed or TrialState.Pruned));

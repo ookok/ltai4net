@@ -153,7 +153,7 @@ public static class ChatMessageRenderer
             Foreground = LtaiTheme.Sbb(LtaiTheme.TextDim)
         };
         var cts = new CancellationTokenSource();
-        btn.DetachedFromVisualTree += (_, _) => cts.Cancel();
+        btn.DetachedFromVisualTree += (_, _) => { cts.Cancel(); cts.Dispose(); };
         btn.Click += async (_, _) =>
         {
             var clipboard = TopLevel.GetTopLevel(btn)?.Clipboard;

@@ -171,11 +171,15 @@ public sealed class WarpService : IDisposable
 
     private async Task WatchdogKillWarpGui()
     {
-        for (int i = 0; i < 30; i++)
+        try
         {
-            await Task.Delay(1000);
-            KillWarpGui();
+            for (int i = 0; i < 30; i++)
+            {
+                await Task.Delay(1000).ConfigureAwait(false);
+                KillWarpGui();
+            }
         }
+        catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"WatchdogKillWarpGui: {ex.Message}"); }
     }
 
     public void Dispose()

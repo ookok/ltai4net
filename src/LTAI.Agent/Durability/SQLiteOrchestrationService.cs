@@ -210,6 +210,10 @@ public sealed class SQLiteOrchestrationService : InMemoryOrchestrationService
     public new Task ForceTerminateTaskOrchestrationAsync(string instanceId, string reason) =>
         SnapshotAfter(() => base.ForceTerminateTaskOrchestrationAsync(instanceId, reason));
 
+    public new Task PurgeOrchestrationHistoryAsync(DateTime thresholdDateTimeUtc,
+        OrchestrationStateTimeRangeFilterType timeRangeFilterType) =>
+        Task.CompletedTask;
+
     async Task SnapshotAfter(Func<Task> op)
     {
         await op().ConfigureAwait(false);

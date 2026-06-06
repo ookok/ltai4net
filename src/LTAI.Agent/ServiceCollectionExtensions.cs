@@ -129,7 +129,9 @@ public static class ServiceCollectionExtensions
         {
             var all = sp.GetKeyedServices<AIAgent>(KeyedService.AnyKey)
                 .ToDictionary(a => a.Name!, StringComparer.OrdinalIgnoreCase);
-            return new AgentWorkflows(all.Values, all["LTAI-Router"],
+            var routerAgent = all.TryGetValue("LTAI-Router", out var ra) ? ra
+                : throw new InvalidOperationException("LTAI-Router agent not registered");
+            return new AgentWorkflows(all.Values, routerAgent,
                 sp.GetRequiredService<ILogger<AgentWorkflows>>(),
                 sp.GetRequiredService<DecisionTreeRouter>(),
                 workflowRegistry: sp.GetService<YAMLWorkflowRegistry>(),
@@ -1081,50 +1083,11 @@ public static class ServiceCollectionExtensions
                 // Placed after tool-filtering providers (Tool RAG, Skill ranking) and before the final
                 // instruction providers so memories augment the conversation context.
                 // Tool RAG: 动态工具召回（放第一个）→ L1 Skill Evolution Ranking
-                // P12.2: inject ToolEmbeddingCache so 80+ tool description embeddings are
+                 // P12.2: inject ToolEmbeddingCache so 80+ tool description embeddings are
                 // batched + persisted. Cold start 0 ONNX calls after first run.
-                AIContextProviders = safety != null
-                    ? [new LTAI.Agent.Tools.ToolRetrievalProvider(
-                            sp.GetRequiredService<LTAI.AI.EmbeddingClient>(),
-                            cache: sp.GetService<LTAI.AI.ToolEmbeddingCache>()),
-                       new LTAI.Agent.Tools.SkillRankingProvider(
-                           sp.GetRequiredService<LTAI.Agent.Tools.SkillEvolutionEngine>(),
-                           sp.GetRequiredService<ILoggerFactory>().CreateLogger<LTAI.Agent.Tools.SkillRankingProvider>()),
-                       safety,
-                       new LTAI.Agent.Memory.L0IdentityProvider(identityText),
-                       new LTAI.Agent.Memory.L1EssentialProvider(palaceStore, name, loggerFactory.CreateLogger<LTAI.Agent.Memory.L1EssentialProvider>()),
-                       compaction,
-                        new LTAI.Agent.Context.CCRProvider(
-                            sp.GetRequiredService<LTAI.Agent.Context.CompressionStore>(),
-                            sp.GetRequiredService<ILoggerFactory>().CreateLogger<LTAI.Agent.Context.CCRProvider>()),
-                         kbGraph, codeGraph, codeChunkIndex, wasmtimeSandbox,
-                        new LTAI.Agent.Memory.L3OnDemandProvider(palaceStore, loggerFactory.CreateLogger<LTAI.Agent.Memory.L3OnDemandProvider>()),
-                        new LTAI.Agent.Memory.L4DeepSearchProvider(palaceStore, embedder, loggerFactory.CreateLogger<LTAI.Agent.Memory.L4DeepSearchProvider>()),
-                        new LTAI.Agent.Memory.L6AgentDiaryProvider(palaceStore, name, loggerFactory.CreateLogger<LTAI.Agent.Memory.L6AgentDiaryProvider>()),
-                         sp.GetService<LTAI.Agent.Indexing.ProvenanceProvider>()!,
-                          new LTAI.Agent.Tools.InstructionProvider(modelId), new LTAI.Agent.Tools.EnvironmentProvider(), skillsProvider,
-                         new LTAI.Agent.Context.CacheAlignerProvider(
-                             sp.GetRequiredService<ILoggerFactory>().CreateLogger<LTAI.Agent.Context.CacheAlignerProvider>())]
-                       : [new LTAI.Agent.Tools.ToolRetrievalProvider(
-                              sp.GetRequiredService<LTAI.AI.EmbeddingClient>(),
-                              cache: sp.GetService<LTAI.AI.ToolEmbeddingCache>()),
-                         new LTAI.Agent.Tools.SkillRankingProvider(
-                             sp.GetRequiredService<LTAI.Agent.Tools.SkillEvolutionEngine>(),
-                             sp.GetRequiredService<ILoggerFactory>().CreateLogger<LTAI.Agent.Tools.SkillRankingProvider>()),
-                         new LTAI.Agent.Memory.L0IdentityProvider(identityText),
-                         new LTAI.Agent.Memory.L1EssentialProvider(palaceStore, name, loggerFactory.CreateLogger<LTAI.Agent.Memory.L1EssentialProvider>()),
-                         compaction,
-                         new LTAI.Agent.Context.CCRProvider(
-                             sp.GetRequiredService<LTAI.Agent.Context.CompressionStore>(),
-                             sp.GetRequiredService<ILoggerFactory>().CreateLogger<LTAI.Agent.Context.CCRProvider>()),
-                         kbGraph, codeGraph, codeChunkIndex, wasmtimeSandbox,
-                         new LTAI.Agent.Memory.L3OnDemandProvider(palaceStore, loggerFactory.CreateLogger<LTAI.Agent.Memory.L3OnDemandProvider>()),
-                         new LTAI.Agent.Memory.L4DeepSearchProvider(palaceStore, embedder, loggerFactory.CreateLogger<LTAI.Agent.Memory.L4DeepSearchProvider>()),
-                         new LTAI.Agent.Memory.L6AgentDiaryProvider(palaceStore, name, loggerFactory.CreateLogger<LTAI.Agent.Memory.L6AgentDiaryProvider>()),
-                         sp.GetService<LTAI.Agent.Indexing.ProvenanceProvider>()!,
-                         new LTAI.Agent.Tools.InstructionProvider(modelId), new LTAI.Agent.Tools.EnvironmentProvider(), skillsProvider,
-                          new LTAI.Agent.Context.CacheAlignerProvider(
-                              sp.GetRequiredService<ILoggerFactory>().CreateLogger<LTAI.Agent.Context.CacheAlignerProvider>())],
+                AIContextProviders = BuildContextProviders(sp, loggerFactory, name, identityText,
+                    compaction, kbGraph, codeGraph, codeChunkIndex, wasmtimeSandbox,
+                    embedder, palaceStore, identityText, modelId, skillsProvider, safety),
 
                  // ── Disable MAF defaults LTAI doesn't need ────────────────────
                 // LTAI uses its own 7-layer memory palace (PalaceStore + AIContextProviders).
@@ -1383,6 +1346,49 @@ public static class ServiceCollectionExtensions
             ? "About dates: when users ask \"what day is it\" or \"what time is it\", call GetCurrentDateTime directly — do not guess."
             : "关于日期：当用户询问\"今天星期几\"\"现在几点\"等时间日期问题时，请直接调用 GetCurrentDateTime 工具获取实时时间，不要自行估算。";
         return $"{roleLine}\n{dateHint}\n";
+    }
+
+    private static AIContextProvider[] BuildContextProviders(IServiceProvider sp,
+        ILoggerFactory loggerFactory, string name, string identityText,
+        CompactionProvider compaction, KbGraph kbGraph, CgGraph codeGraph,
+        LTAI.Agent.Indexing.CodeChunkIndex codeChunkIndex, WasmtimeSandbox wasmtimeSandbox,
+        LTAI.AI.EmbeddingClient embedder, LTAI.Agent.Memory.PalaceStore palaceStore,
+        string identityText2, string? modelId,
+        Microsoft.Agents.AI.AgentSkillsProvider skillsProvider,
+        LTAI.Core.Safety.SafetyCoordinator? safety)
+    {
+        var providers = new List<AIContextProvider>(16)
+        {
+            new LTAI.Agent.Tools.ToolRetrievalProvider(
+                sp.GetRequiredService<LTAI.AI.EmbeddingClient>(),
+                cache: sp.GetService<LTAI.AI.ToolEmbeddingCache>()),
+            new LTAI.Agent.Tools.SkillRankingProvider(
+                sp.GetRequiredService<LTAI.Agent.Tools.SkillEvolutionEngine>(),
+                loggerFactory.CreateLogger<LTAI.Agent.Tools.SkillRankingProvider>()),
+            new LTAI.Agent.Memory.L0IdentityProvider(identityText),
+            new LTAI.Agent.Memory.L1EssentialProvider(palaceStore, name,
+                loggerFactory.CreateLogger<LTAI.Agent.Memory.L1EssentialProvider>()),
+            compaction,
+            new LTAI.Agent.Context.CCRProvider(
+                sp.GetRequiredService<LTAI.Agent.Context.CompressionStore>(),
+                loggerFactory.CreateLogger<LTAI.Agent.Context.CCRProvider>()),
+            kbGraph, codeGraph, codeChunkIndex, wasmtimeSandbox,
+            new LTAI.Agent.Memory.L3OnDemandProvider(palaceStore,
+                loggerFactory.CreateLogger<LTAI.Agent.Memory.L3OnDemandProvider>()),
+            new LTAI.Agent.Memory.L4DeepSearchProvider(palaceStore, embedder,
+                loggerFactory.CreateLogger<LTAI.Agent.Memory.L4DeepSearchProvider>()),
+            new LTAI.Agent.Memory.L6AgentDiaryProvider(palaceStore, name,
+                loggerFactory.CreateLogger<LTAI.Agent.Memory.L6AgentDiaryProvider>()),
+            sp.GetService<LTAI.Agent.Indexing.ProvenanceProvider>()!,
+            new LTAI.Agent.Tools.InstructionProvider(modelId),
+            new LTAI.Agent.Tools.EnvironmentProvider(), skillsProvider,
+            new LTAI.Agent.Context.CacheAlignerProvider(
+                loggerFactory.CreateLogger<LTAI.Agent.Context.CacheAlignerProvider>()),
+        };
+        // Safety coordinator at position 2 only when enabled
+        if (safety != null)
+            providers.Insert(2, safety);
+        return providers.ToArray();
     }
 }
 

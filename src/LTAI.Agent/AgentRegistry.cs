@@ -30,40 +30,44 @@ public sealed record AgentFileDef
 public static class AgentRegistry
 {
     private static List<AgentFileDef>? _cached;
+    private static readonly object _cacheLock = new();
 
     public static List<AgentFileDef> LoadAll()
     {
         if (_cached != null) return _cached;
-
-        var result = new List<AgentFileDef>();
-        var searchDirs = new[]
+        lock (_cacheLock)
         {
-            Path.Combine(AppContext.BaseDirectory, "agents"),
-            Path.Combine(Directory.GetCurrentDirectory(), "agents"),
-            Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "agents"),  // repo root
-        };
-
-        foreach (var dir in searchDirs)
-        {
-            if (!Directory.Exists(dir)) continue;
-            foreach (var file in Directory.GetFiles(dir, "*.agent.md"))
+            if (_cached != null) return _cached;
+            var result = new List<AgentFileDef>();
+            var searchDirs = new[]
             {
-                try
+                Path.Combine(AppContext.BaseDirectory, "agents"),
+                Path.Combine(Directory.GetCurrentDirectory(), "agents"),
+                Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "agents"),  // repo root
+            };
+
+            foreach (var dir in searchDirs)
+            {
+                if (!Directory.Exists(dir)) continue;
+                foreach (var file in Directory.GetFiles(dir, "*.agent.md"))
                 {
-                    var def = ParseFile(file);
-                    if (def != null && !string.IsNullOrEmpty(def.Name))
-                        result.Add(def);
+                    try
+                    {
+                        var def = ParseFile(file);
+                        if (def != null && !string.IsNullOrEmpty(def.Name))
+                            result.Add(def);
+                    }
+                    catch { }
                 }
-                catch { }
+                break;
             }
-            break;
+            _cached = result;
+            return result;
         }
-        _cached = result;
-        return result;
     }
 
     /// <summary>Invalidate cache (e.g., when agents/*.agent.md files change).</summary>
-    public static void InvalidateCache() => _cached = null;
+    public static void InvalidateCache() { lock (_cacheLock) _cached = null; }
 
     /// <summary>
     /// P14.8: reset <see cref="AgentFileDef.Embedding"/> to <c>null</c> for
@@ -73,12 +77,15 @@ public static class AgentRegistry
     /// </summary>
     public static void ClearEmbeddings()
     {
-        InvalidateCache();
-        var agents = LoadAll();
-        for (int i = 0; i < agents.Count; i++)
+        lock (_cacheLock)
         {
-            if (agents[i].Embedding != null)
-                agents[i] = agents[i] with { Embedding = null };
+            _cached = null;
+            var agents = LoadAll();
+            for (int i = 0; i < agents.Count; i++)
+            {
+                if (agents[i].Embedding != null)
+                    agents[i] = agents[i] with { Embedding = null };
+            }
         }
     }
 

@@ -35,6 +35,7 @@ public static class ToolRegistry
     private static readonly List<ToolDef> _tools = new();
     private static volatile bool _initialized;
     private static readonly object _lock = new();
+    private static volatile IReadOnlyList<ToolDef> _snapshot = Array.Empty<ToolDef>();
 
     // ═══════════════════════════════════════════
     //  BM25 倒排索引
@@ -117,7 +118,7 @@ public static class ToolRegistry
                     .GetCustomAttribute<ToolDomainAttribute>(false)?.Domain ?? "";
             }
         }
-        catch { }
+        catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"GetToolDomain failed: {ex.Message}"); }
         return "";
     }
 
@@ -198,6 +199,7 @@ public static class ToolRegistry
             BuildBm25Index(texts);
             _tools.AddRange(defs);
             _initialized = true;
+            _snapshot = _tools.ToArray();
         }
     }
 
@@ -345,6 +347,7 @@ public static class ToolRegistry
                         if (_tools[i].Embedding.Length == 0)
                             _tools[i] = _tools[i] with { Embedding = vectors[i] };
                     }
+                    _snapshot = _tools.ToArray();
                 }
             }
             catch
@@ -404,12 +407,12 @@ public static class ToolRegistry
     // ═══════════════════════════════════════════
 
     /// <summary>获取所有已注册的工具（快照，线程安全）。</summary>
-    public static IReadOnlyList<ToolDef> AllTools { get { lock (_lock) return _tools.ToArray(); } }
+    public static IReadOnlyList<ToolDef> AllTools => _snapshot;
 
     /// <summary>按 domain 获取工具列表（线程安全）。</summary>
     public static IReadOnlyList<ToolDef> GetToolsByDomain(string domain)
     {
-        lock (_lock) return _tools.Where(t => string.Equals(t.Domain, domain, StringComparison.OrdinalIgnoreCase)).ToList();
+        return _snapshot.Where(t => string.Equals(t.Domain, domain, StringComparison.OrdinalIgnoreCase)).ToList();
     }
 
     /// <summary>清空注册表（用于测试或重新加载）。</summary>
@@ -424,6 +427,7 @@ public static class ToolRegistry
             _totalDocs = 0;
             _avgDocLen = 0;
             _initialized = false;
+            _snapshot = [];
         }
     }
 
@@ -443,6 +447,7 @@ public static class ToolRegistry
                 if (t.Embedding.Length > 0)
                     _tools[i] = t with { Embedding = Array.Empty<float>() };
             }
+            _snapshot = _tools.ToArray();
         }
     }
 

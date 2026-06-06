@@ -88,7 +88,7 @@ public sealed partial class DevUIViewModel : ViewModelBase
     [RelayCommand]
     private void CancelChat()
     {
-        _chatCts?.Cancel();
+        if (_chatCts != null) { _chatCts.Cancel(); _chatCts.Dispose(); _chatCts = null; }
         IsSending = false;
     }
 

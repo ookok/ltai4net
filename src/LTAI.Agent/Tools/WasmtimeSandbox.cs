@@ -101,15 +101,20 @@ public sealed class WasmtimeSandbox : AIContextProvider
     // ═══════════════════════════════════════════
 
     [Description("在沙箱中以受限权限执行命令。不能用来读取文件——读取文件请用 ReadFileContent。\n"
-        + "适用场景：在隔离沙箱中运行脚本、测试不受信任的代码、限制网络和文件访问的执行。\n"
+        + "适用场景：在隔离沙箱中运行脚本、测试不受信任的代码、运行短时工具命令。\n"
         + "不适用场景：读取文件（请用 ReadFileContent）、正常开发命令（请用 RunCommand 更快）。\n"
         + "关键参数：command — shell 命令；workDir — 沙箱内工作目录。")]
     [ToolExample("在沙箱中安全地运行这个脚本")]
     public async Task<string> ExecuteSandboxedCommandAsync(
         [Description("Shell command to run")] string command,
         [Description("Working directory (relative to sandbox)")] string workDir = ".",
+        [Description("用户确认标记，必须为 true 才执行")] bool confirm = false,
         CancellationToken ct = default)
     {
+        if (!confirm)
+            return $"⚠️ 需要确认才在沙箱中执行命令。\n命令: `{command}`\n目录: {workDir}\n"
+                 + "请用户确认后重新调用，设置 confirm=true。";
+
         // 拦截尝试用命令行读取文件的行为，重定向到 ReadFileContent
         var readCmdPatterns = new[] { "Get-Content", "gc ", "cat ", "type ", "more ", ".ReadAllText", "ReadFile" };
         if (readCmdPatterns.Any(p => command.Contains(p, StringComparison.OrdinalIgnoreCase)) &&
@@ -190,8 +195,12 @@ public sealed class WasmtimeSandbox : AIContextProvider
     [ToolExample("运行这个 wasm 模块")]
     public async Task<string> ExecuteWasmAsync(
         [Description("Path to .wasm file")] string wasmPath,
+        [Description("用户确认标记，必须为 true 才执行")] bool confirm = false,
         CancellationToken ct = default)
     {
+        if (!confirm)
+            return "⚠️ 需要确认才执行 WASM 模块。请用户确认后重新调用，设置 confirm=true。";
+
         if (!_wasmAvailable || _wasmEngine == null)
             return ToolResult.Error("Wasmtime engine not available");
 
@@ -240,20 +249,31 @@ public sealed class WasmtimeSandbox : AIContextProvider
 
             var instance = linker.Instantiate(store, module);
 
+            // Enforce execution timeout via Task wrapping
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeoutCts.CancelAfter(TimeSpan.FromSeconds(WasmTimeoutSec));
             var start = instance.GetFunction("_start");
-            start?.Invoke();
+            if (start != null)
+            {
+                var wasmTask = Task.Run(() => start.Invoke(), timeoutCts.Token);
+                var timeoutTask = Task.Delay(Timeout.Infinite, timeoutCts.Token);
+                var completed = await Task.WhenAny(wasmTask, timeoutTask).ConfigureAwait(false);
+                if (completed != wasmTask)
+                    return ToolResult.Error($"WASM execution timed out after {WasmTimeoutSec}s");
+                await wasmTask.ConfigureAwait(false);
+            }
 
             sw.Stop();
-
-            // Capture WASI output from store
-            // Wasmtime writes to stdout/stderr pipes configured in WasiConfiguration
-            // For pipe-based capture, store output files or use StdoutCallback
 
             var result = $"[WASM] Module '{name}' executed in {sw.ElapsedMilliseconds}ms";
 
             _logger?.LogDebug("WASM exec: {Name} → ({Elapsed}ms)", name, sw.ElapsedMilliseconds);
 
             return ToolResult.Success(result);
+        }
+        catch (OperationCanceledException)
+        {
+            return ToolResult.Error($"WASM execution timed out after {WasmTimeoutSec}s");
         }
         catch (WasmtimeException ex)
         {

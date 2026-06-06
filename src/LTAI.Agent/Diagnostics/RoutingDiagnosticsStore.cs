@@ -73,9 +73,13 @@ public sealed class RoutingDiagnosticsStore : IDisposable
 
     public void Dispose()
     {
-        _gate.WaitAsync(CancellationToken.None).GetAwaiter().GetResult();
-        try { _writer?.Dispose(); } catch { }
-        _writer = null;
+        // Don't block if another thread holds the gate — just skip the write flush
+        if (_gate.Wait(0))
+        {
+            try { _writer?.Dispose(); } catch { }
+            _writer = null;
+            _gate.Release();
+        }
         _gate.Dispose();
     }
 }

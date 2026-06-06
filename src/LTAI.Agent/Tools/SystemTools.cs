@@ -410,15 +410,16 @@ public sealed class SystemTools
 
         try
         {
-            var psi = new ProcessStartInfo
+            var psi = new ProcessStartInfo("docker", "run")
             {
-                FileName = "docker",
-                Arguments = $"run --rm {image} {command}",
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,
                 CreateNoWindow = true
             };
+            psi.ArgumentList.Add("--rm");
+            psi.ArgumentList.Add(image);
+            psi.ArgumentList.Add(command);
             using var process = new Process { StartInfo = psi };
             process.Start();
             var output = await process.StandardOutput.ReadToEndAsync().ConfigureAwait(false);
@@ -455,7 +456,7 @@ public sealed class SystemTools
             var psi = new ProcessStartInfo
             {
                 FileName = Environment.OSVersion.Platform == PlatformID.Win32NT ? "cmd.exe" : "/bin/bash",
-                Arguments = Environment.OSVersion.Platform == PlatformID.Win32NT ? $"/c {command}" : $"-c \"{command}\"",
+                Arguments = Environment.OSVersion.Platform == PlatformID.Win32NT ? $"/c \"{command}\"" : $"-c '{command}'",
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,

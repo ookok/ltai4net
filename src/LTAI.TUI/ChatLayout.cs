@@ -12,11 +12,12 @@ using Spectre.Console.Rendering;
 
 namespace LTAI.TUI;
 
-public sealed class ChatLayout
+public sealed class ChatLayout : IDisposable
 {
     private readonly ChatAgent _chat;
     private readonly Rendering.ChatRenderer _renderer;
     internal readonly List<(string role, IRenderable? rendered, string rawContent, string? reasoning)> _history = new();
+    internal readonly object _historyLock = new();
     private readonly Layout _layout;
     private readonly QuestionService _questionService;
     private readonly SessionManager _sessions;
@@ -30,8 +31,9 @@ public sealed class ChatLayout
 
     /// <summary>Send a message as if the user typed it (used by TextPadView AI fix, etc.).</summary>
     public void EnqueueUserMessage(string message) => _messageQueue.Writer.TryWrite(message);
-    internal bool _processing;
+    internal volatile bool _processing;
     internal CancellationTokenSource? _responseCts;
+    private CancellationTokenSource? _renderCts;
     internal volatile char _quickNav;
     private static string? _startupMessage;
 
@@ -74,6 +76,8 @@ public sealed class ChatLayout
     private DateTime _lastRefresh = DateTime.MinValue;
     private DateTime _lastCmdTime = DateTime.MinValue;
     private readonly int _maxVisibleMessages;
+    private readonly Action<int> _onSubagentComplete;
+    private readonly Action<int, string, string> _onSubagentMessage;
 
     private void ThrottledRefresh()
     {
@@ -158,11 +162,22 @@ public sealed class ChatLayout
             new Panel("[grey]等待首次请求...  输入消息开始对话[/]")
                 .Border(BoxBorder.None).Expand());
 
-        LTAI.Agent.Tools.SubagentTools.OnSubagentComplete += (id) => _subagentProgress = -1;
-        LTAI.Agent.Tools.SubagentTools.OnSubagentMessage += (id, role, content) =>
+        _onSubagentComplete = (id) => _subagentProgress = -1;
+        _onSubagentMessage = (id, role, content) =>
         {
             Interlocked.Increment(ref _subagentProgress);
         };
+        LTAI.Agent.Tools.SubagentTools.OnSubagentComplete += _onSubagentComplete;
+        LTAI.Agent.Tools.SubagentTools.OnSubagentMessage += _onSubagentMessage;
+    }
+
+    public void Dispose()
+    {
+        LTAI.Agent.Tools.SubagentTools.OnSubagentComplete -= _onSubagentComplete;
+        LTAI.Agent.Tools.SubagentTools.OnSubagentMessage -= _onSubagentMessage;
+        _responseCts?.Cancel();
+        _responseCts?.Dispose();
+        if (_renderCts != null) { _renderCts.Cancel(); _renderCts.Dispose(); _renderCts = null; }
     }
 
     public async Task<TuiView?> RenderAsync()
@@ -208,7 +223,9 @@ public sealed class ChatLayout
                 // P17.5: background task that reads keys independently from
                 // message processing. User can type the next message while the
                 // LLM is still responding to the previous one.
-                var cts = new CancellationTokenSource();
+                _renderCts?.Dispose();
+                _renderCts = new CancellationTokenSource();
+                var cts = _renderCts;
 
                 var blinkCts = CancellationTokenSource.CreateLinkedTokenSource(cts.Token);
                 var blinkTask = Task.Run(async () =>
@@ -216,11 +233,8 @@ public sealed class ChatLayout
                     while (!blinkCts.Token.IsCancellationRequested)
                     {
                         await Task.Delay(400, blinkCts.Token).ConfigureAwait(false);
-                        lock (_layout)
-                        {
-                            UpdateFooter("", "", IsInputEmpty() && showWatermark);
-                            _liveCtx?.Refresh();
-                        }
+                        UpdateFooter("", "", IsInputEmpty() && showWatermark);
+                        try { _liveCtx?.Refresh(); } catch (ObjectDisposedException) { break; }
                     }
                 }, blinkCts.Token);
 
@@ -1143,7 +1157,7 @@ public sealed class ChatLayout
         _history.Add(("assistant", null, content.ToString(), reasoning));
         _toolCalls.Clear();
         TrimHistory();
-        SaveSession();
+        await SaveSessionAsync().ConfigureAwait(false);
     }
 
     // ── Slash 命令 ──
@@ -1153,8 +1167,8 @@ public sealed class ChatLayout
         if (string.Equals(input, "/new", StringComparison.OrdinalIgnoreCase) ||
             string.Equals(input, "/clear", StringComparison.OrdinalIgnoreCase))
         {
-            SaveSession();
-            _history.Clear();
+            await SaveSessionAsync().ConfigureAwait(false);
+            lock (_historyLock) _history.Clear();
             _toolCalls.Clear();
             _sessions.NewSession();
             return true;
@@ -1162,7 +1176,7 @@ public sealed class ChatLayout
         if (input.StartsWith("/sessions", StringComparison.OrdinalIgnoreCase) ||
             input.StartsWith("/session", StringComparison.OrdinalIgnoreCase))
         {
-            HandleSessionsCommand(input);
+            await HandleSessionsCommandAsync(input).ConfigureAwait(false);
             return true;
         }
         if (string.Equals(input, "/exit", StringComparison.OrdinalIgnoreCase) ||
@@ -1177,7 +1191,7 @@ public sealed class ChatLayout
         if (SlashCommands.TryExecute(input, ref running, ref cmdStatus))
         {
             if (!string.IsNullOrEmpty(cmdStatus))
-                _history.Add(("cmd", null, cmdStatus, null));
+                lock (_historyLock) _history.Add(("cmd", null, cmdStatus, null));
             return running;
         }
         return true;
@@ -1448,13 +1462,13 @@ public sealed class ChatLayout
 
     // ── Session 持久化 ──
 
-    private void SaveSession()
+    private async Task SaveSessionAsync()
     {
         if (_sessions.CurrentHandle == null) return;
-        _sessions.SaveSession();
+        await _sessions.SaveSessionAsync().ConfigureAwait(false);
     }
 
-    private void HandleSessionsCommand(string input)
+    private async Task HandleSessionsCommandAsync(string input)
     {
         var parts = input.Trim().Split(' ', 3, StringSplitOptions.RemoveEmptyEntries);
         var sub = parts.Length > 1 ? parts[1].ToLowerInvariant() : "";
@@ -1491,7 +1505,7 @@ public sealed class ChatLayout
                     _history.Add(("cmd", null, "[yellow]用法: /sessions load <会话名>[/]", null));
                     return;
                 }
-                SaveSession(); // 先保存当前会话
+                await SaveSessionAsync().ConfigureAwait(false); // 先保存当前会话
                 var handle = _sessions.LoadSession(arg);
                 if (handle != null)
                 {

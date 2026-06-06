@@ -105,10 +105,20 @@ try
 
     // ── Middleware pipeline (order matters) ──
     app.UseMiddleware<ExceptionMiddleware>();    // 1. Catch all exceptions
-    app.UseSerilogRequestLogging();              // 2. Log every request
-    app.UseCors();                               // 3. CORS (before auth — OPTIONS preflight needs no auth)
-    app.UseMiddleware<ApiKeyMiddleware>();       // 4. Auth
-    app.UseMiddleware<RateLimitMiddleware>();    // 5. Rate limit
+    // 2. Security headers (before everything except exception handler)
+    app.Use(async (ctx, next) =>
+    {
+        ctx.Response.Headers["X-Content-Type-Options"] = "nosniff";
+        ctx.Response.Headers["X-Frame-Options"] = "DENY";
+        ctx.Response.Headers["Content-Security-Policy"] = "default-src 'self'";
+        ctx.Response.Headers["Referrer-Policy"] = "strict-origin-when-cross-origin";
+        ctx.Response.Headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()";
+        await next(ctx).ConfigureAwait(false);
+    });
+    app.UseSerilogRequestLogging();              // 3. Log every request
+    app.UseCors();                               // 4. CORS (before auth — OPTIONS preflight needs no auth)
+    app.UseMiddleware<ApiKeyMiddleware>();       // 5. Auth
+    app.UseMiddleware<RateLimitMiddleware>();    // 6. Rate limit
 
     app.MapOpenApi();
 
@@ -136,8 +146,7 @@ try
         if (reg == null) return Results.NotFound(new { error = "YAMLWorkflowRegistry not registered" });
         return Results.Ok(new
         {
-            watchDir = reg.WatchDirectory,
-            workflows = reg.List(),
+            workflows = reg.List().Select(w => new { w.Name, w.Type, w.Version, w.LoadedAtUtc, w.SizeBytes }),
         });
     });
     app.MapGet("/ltai/v1/workflows/{name}", async (LTAI.Agent.Workflows.YAMLWorkflowRegistry? reg, string name) =>
@@ -154,15 +163,14 @@ try
                 name = match.Name,
                 type = match.Type,
                 version = match.Version,
-                filePath = match.FilePath,
                 loadedAtUtc = match.LoadedAtUtc,
                 sizeBytes = match.SizeBytes,
                 content,
             });
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            return Results.Problem($"Read failed: {ex.Message}");
+            return Results.Problem("Read failed");
         }
     });
     app.MapPost("/ltai/v1/workflows/reload", async (LTAI.Agent.Workflows.YAMLWorkflowRegistry? reg) =>
@@ -377,9 +385,9 @@ try
             await conn.OpenAsync().ConfigureAwait(false);
             return Results.Json(new { status = "ready", timestamp = DateTime.UtcNow });
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            return Results.Json(new { status = "not_ready", error = ex.Message }, statusCode: 503);
+            return Results.Json(new { status = "not_ready", error = "Database unavailable" }, statusCode: 503);
         }
     });
 
@@ -396,9 +404,9 @@ try
             await conn.OpenAsync().ConfigureAwait(false);
             checks.Add(new { name = "kgstore", status = "healthy" });
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            checks.Add(new { name = "kgstore", status = "unhealthy", error = ex.Message });
+            checks.Add(new { name = "kgstore", status = "unhealthy", error = "Database unavailable" });
         }
 
         // Check LLM providers
@@ -408,9 +416,9 @@ try
             var providers = router.RegisteredProviders.ToList();
             checks.Add(new { name = "llm_providers", status = "healthy", count = providers.Count, providers });
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            checks.Add(new { name = "llm_providers", status = "unhealthy", error = ex.Message });
+            checks.Add(new { name = "llm_providers", status = "unhealthy", error = "LLM providers unavailable" });
         }
 
         var allHealthy = checks.All(c => c.GetType().GetProperty("status")?.GetValue(c)?.ToString() == "healthy");

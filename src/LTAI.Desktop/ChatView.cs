@@ -32,8 +32,8 @@ public sealed class ChatView : UserControl
     private int _historyIdx = -1;
     private CancellationTokenSource? _cts;
     private int _turns, _tokens;
-    public int Tokens => _tokens;
-    public int Turns => _turns;
+    public int Tokens => Volatile.Read(ref _tokens);
+    public int Turns => Volatile.Read(ref _turns);
     private bool _isSending;
     private readonly SessionManager _sessionManager;
     private readonly LTAI.Desktop.ToolRendering.ToolResultRendererRegistry _toolRenderers;
@@ -43,6 +43,9 @@ public sealed class ChatView : UserControl
 
     private readonly Dictionary<int, string> _subSessions = new();
     private readonly Dictionary<int, Stopwatch> _subStartTimes = new();
+    private System.Collections.Specialized.NotifyCollectionChangedEventHandler? _vmCollectionChanged;
+    private System.ComponentModel.PropertyChangedEventHandler? _vmPropertyChanged;
+    private Action? _vmExitRequested;
 
     public SessionManager SessionManager => _sessionManager;
     public ViewModels.ChatViewModel? ViewModel => _vm;
@@ -271,6 +274,8 @@ public sealed class ChatView : UserControl
             AddSuggestionCards();
         }
 
+        _turns = 0;
+        _tokens = 0;
         SetupDragDrop();
         Content = root;
 
@@ -285,7 +290,8 @@ public sealed class ChatView : UserControl
         }
 
         LtaiTheme.ThemeChanged += OnThemeChanged;
-        DetachedFromVisualTree += (_, _) =>
+        EventHandler<Avalonia.VisualTreeAttachmentEventArgs>? detachedHandler = null;
+        detachedHandler = (_, _) =>
         {
             LtaiTheme.ThemeChanged -= OnThemeChanged;
             LTAI.Agent.Tools.SubagentTools.OnSubagentMessage -= OnSubagentMessage;
@@ -296,7 +302,20 @@ public sealed class ChatView : UserControl
                     as LTAI.Agent.Tools.QuestionService;
                 if (qs != null) qs.QuestionPosted -= _questionHandler;
             }
+            if (_vm != null)
+            {
+                if (_vmCollectionChanged != null)
+                    _vm.Messages.CollectionChanged -= _vmCollectionChanged;
+                if (_vmPropertyChanged != null)
+                    _vm.PropertyChanged -= _vmPropertyChanged;
+                if (_vmExitRequested != null)
+                    _vm.ExitRequested -= _vmExitRequested;
+            }
+            // Dispose CTS on detach
+            if (_cts != null) { _cts.Cancel(); _cts.Dispose(); _cts = null; }
+            DetachedFromVisualTree -= detachedHandler;
         };
+        DetachedFromVisualTree += detachedHandler;
         LTAI.Agent.Tools.SubagentTools.OnSubagentMessage += OnSubagentMessage;
         LTAI.Agent.Tools.SubagentTools.OnSubagentComplete += OnSubagentComplete;
 
@@ -316,7 +335,7 @@ public sealed class ChatView : UserControl
         if (_vm == null) return;
 
         // Render new messages from ViewModel
-        _vm.Messages.CollectionChanged += (_, e) =>
+        _vmCollectionChanged = (_, e) =>
         {
             if (e.NewItems == null) return;
             foreach (ViewModels.ChatMessage msg in e.NewItems)
@@ -330,18 +349,20 @@ public sealed class ChatView : UserControl
             }
             _scroller.ScrollToEnd();
         };
+        _vm.Messages.CollectionChanged += _vmCollectionChanged;
 
         // Clear textbox when ViewModel clears Input after send
-        _vm.PropertyChanged += (_, e) =>
+        _vmPropertyChanged = (_, e) =>
         {
             if (e.PropertyName == nameof(ViewModels.ChatViewModel.Input))
                 Dispatcher.UIThread.Post(() => _input.Text = _vm.Input);
             if (e.PropertyName == nameof(ViewModels.ChatViewModel.IsSending))
                 _actionBtn.Content = _vm.IsSending ? "Cancel" : "Send";
         };
+        _vm.PropertyChanged += _vmPropertyChanged;
 
         // Close window on exit
-        _vm.ExitRequested += () =>
+        _vmExitRequested = () =>
         {
             Dispatcher.UIThread.Post(() =>
             {
@@ -349,6 +370,7 @@ public sealed class ChatView : UserControl
                 if (tl is Window w) w.Close();
             });
         };
+        _vm.ExitRequested += _vmExitRequested;
     }
 
     private void OnInputKey(object? s, KeyEventArgs e)
@@ -542,7 +564,7 @@ public sealed class ChatView : UserControl
                 return;
             }
             _input.Text = "";
-            HandleSlashCommand(query);
+            await HandleSlashCommandAsync(query).ConfigureAwait(false);
             return;
         }
 
@@ -550,7 +572,7 @@ public sealed class ChatView : UserControl
         if (_history.Count > 100) _history.RemoveRange(0, _history.Count - 100);
         _historyIdx = -1;
         _input.Text = "";
-        _turns++;
+        Interlocked.Increment(ref _turns);
         SetSending(true);
 
         AddBubble("[You]", query, LtaiTheme.ChatUser, LtaiTheme.Border);
@@ -651,7 +673,7 @@ public sealed class ChatView : UserControl
             await foreach (var update in _svc.Chat.ChatStreamingAsync(query, sessionHandle, _cts.Token))
             {
                 var token = update.Text ?? "";
-                _tokens++;
+                Interlocked.Increment(ref _tokens);
 
                 // Check tool result renderer registry first
                 var rendered = _toolRenderers.Render(token);
@@ -712,8 +734,8 @@ public sealed class ChatView : UserControl
                         Dispatcher.UIThread.Post(() => aiContent.Children.Insert(0, taskBanner));
                     }
                     responseBuf.Append(token);
-                    _tokens++;
-                    if (_tokens % 8 == 0 && (DateTime.UtcNow - lastUiUpdate).TotalMilliseconds >= uiThrottleMs)
+                    var tok = Interlocked.Increment(ref _tokens);
+                    if (tok % 8 == 0 && (DateTime.UtcNow - lastUiUpdate).TotalMilliseconds >= uiThrottleMs)
                     {
                         lastUiUpdate = DateTime.UtcNow;
                         var text = responseBuf.ToString();
@@ -727,7 +749,7 @@ public sealed class ChatView : UserControl
                 }
 
                 _scroller.ScrollToEnd();
-                if (_tokens % 20 == 0)
+                if (Volatile.Read(ref _tokens) % 20 == 0)
                     await Task.Yield();
             }
 
@@ -787,7 +809,8 @@ public sealed class ChatView : UserControl
             // (handle was auto-updated by ChatAgent with full MAF session state)
             await _sessionManager.SaveSessionAsync().ConfigureAwait(false);
 
-            RefreshStats();
+            // Must dispatch to UI thread after ConfigureAwait(false)
+            Dispatcher.UIThread.Post(() => RefreshStats());
         }
         catch (OperationCanceledException)
         {
@@ -807,7 +830,7 @@ public sealed class ChatView : UserControl
         {
             _cts?.Dispose();
             if (dotTimer.IsEnabled) dotTimer.Stop();
-            SetSending(false);
+            Dispatcher.UIThread.Post(() => SetSending(false));
         }
     }
 
@@ -948,7 +971,7 @@ public sealed class ChatView : UserControl
             Foreground = LtaiTheme.Sbb(LtaiTheme.TextDim)
         };
         var cts = new CancellationTokenSource();
-        btn.DetachedFromVisualTree += (_, _) => cts.Cancel();
+        btn.DetachedFromVisualTree += (_, _) => { cts.Cancel(); cts.Dispose(); };
         btn.Click += async (_, _) =>
         {
             var topLevel = TopLevel.GetTopLevel(btn);
@@ -1282,7 +1305,7 @@ public sealed class ChatView : UserControl
 
     // ── 命令处理 ──
 
-    private void HandleSlashCommand(string input)
+    private async Task HandleSlashCommandAsync(string input)
     {
         var cmd = _cmdService.Parser.Parse(input);
         if (cmd is EmptyCommand or ChatMessageCommand)
@@ -1305,7 +1328,7 @@ public sealed class ChatView : UserControl
                 return;
             case SnippetCommand s:
                 if (string.IsNullOrWhiteSpace(s.Args)) { ShowCmdPicker("snippet"); return; }
-                HandleSnippetCommand(s.Args);
+                await HandleSnippetCommandAsync(s.Args).ConfigureAwait(false);
                 return;
             case ConfigCommand c:
                 if (string.IsNullOrWhiteSpace(c.Args)) { AddSystemBubble("用法: /config apikey|export|import"); return; }
@@ -1423,17 +1446,21 @@ public sealed class ChatView : UserControl
 
     private async void ShowCmdPicker(string cmd)
     {
-        var items = CmdLevel1Items(cmd);
-        if (items.Length == 0) return;
-        var owner = this.VisualRoot as Window;
-        if (owner == null) return;
-        var dialog = new Dialogs.CommandPickerDialog($"/{cmd}", items);
-        await dialog.ShowDialog(owner);
-        if (dialog.Selected != null)
+        try
         {
-            _input.Text = $"/{cmd} {dialog.Selected}";
-            _input.CaretIndex = _input.Text.Length;
+            var items = CmdLevel1Items(cmd);
+            if (items.Length == 0) return;
+            var owner = this.VisualRoot as Window;
+            if (owner == null) return;
+            var dialog = new Dialogs.CommandPickerDialog($"/{cmd}", items);
+            await dialog.ShowDialog(owner);
+            if (dialog.Selected != null)
+            {
+                _input.Text = $"/{cmd} {dialog.Selected}";
+                _input.CaretIndex = _input.Text.Length;
+            }
         }
+        catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"ShowCmdPicker: {ex.Message}"); }
     }
 
     private void ShowHelp()
@@ -1458,7 +1485,7 @@ public sealed class ChatView : UserControl
 
     // ── /snippet — 常用语管理 ──
 
-    private void HandleSnippetCommand(string args)
+    private async Task HandleSnippetCommandAsync(string args)
     {
         if (_snippetStore == null)
         {
@@ -1473,7 +1500,7 @@ public sealed class ChatView : UserControl
             var firstToken = args.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? "";
             if (!string.IsNullOrEmpty(firstToken))
             {
-                var existing = _snippetStore.GetAsync(firstToken).GetAwaiter().GetResult();
+                var existing = await _snippetStore.GetAsync(firstToken).ConfigureAwait(false);
                 if (existing != null)
                     cmd = new LTAI.Agent.Snippets.SnippetCommand(
                         LTAI.Agent.Snippets.SnippetAction.Use, firstToken, "", "", null);
@@ -1609,8 +1636,8 @@ public sealed class ChatView : UserControl
     private void ShowStatus()
     {
         var sb = new StringBuilder();
-        sb.AppendLine($"回合: {_turns}");
-        sb.AppendLine($"Token: {_tokens:N0}");
+        sb.AppendLine($"回合: {Volatile.Read(ref _turns)}");
+        sb.AppendLine($"Token: {Volatile.Read(ref _tokens):N0}");
         sb.AppendLine($"模型: {_svc.Mode}");
         sb.AppendLine($"目录: {Directory.GetCurrentDirectory()}");
         AddSystemBubble(sb.ToString().TrimEnd());

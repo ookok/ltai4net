@@ -52,6 +52,7 @@ public sealed class MultiProviderChatClient : IChatClient
     private readonly ConcurrentDictionary<string, int> _providerFailures = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, DateTime> _providerCooldowns = new(StringComparer.OrdinalIgnoreCase);
     private readonly LTAI.Core.Configuration.CircuitBreakerStore? _breakerStore;
+    private readonly Lazy<Task> _breakerLoadTask;
     private const int MaxFailuresBeforeCooldown = 3;
     private static readonly TimeSpan CooldownDuration = TimeSpan.FromSeconds(30);
 
@@ -100,12 +101,14 @@ public sealed class MultiProviderChatClient : IChatClient
             });
         }
 
-        // Restore circuit breaker state from SQLite (cross-restart persistence)
-        if (_breakerStore != null)
+        // Restore circuit breaker state from SQLite (cross-restart persistence).
+        // Loaded lazily to avoid sync-over-async in constructor.
+        _breakerLoadTask = new Lazy<Task>(async () =>
         {
+            if (_breakerStore == null) return;
             try
             {
-                var all = _breakerStore.LoadAllAsync().GetAwaiter().GetResult();
+                var all = await _breakerStore.LoadAllAsync().ConfigureAwait(false);
                 var now = DateTime.UtcNow;
                 foreach (var (provider, (failures, cooldownUntil)) in all)
                 {
@@ -116,7 +119,9 @@ public sealed class MultiProviderChatClient : IChatClient
                 }
             }
             catch { /* best-effort; in-memory fallback is still functional */ }
-        }
+        });
+        // Trigger lazy load in background — data arrives before first LLM call
+        try { _ = _breakerLoadTask.Value; } catch { /* best-effort */ }
     }
 
     /// <summary>
@@ -649,15 +654,23 @@ public static class ServiceCollectionExtensions
             var provider = new ModelMetadataProvider(
                 sp.GetRequiredService<IHttpClientFactory>(),
                 sp.GetRequiredService<ILogger<ModelMetadataProvider>>());
-            _ = Task.Run(async () =>
+            Task.Run(async () =>
             {
                 try
                 {
-                    await provider.RefreshAllAsync();
+                    await provider.RefreshAllAsync().ConfigureAwait(false);
                     provider.StartBackgroundRefresh();
                 }
-                catch { /* best-effort at startup */ }
-            });
+                catch (Exception ex)
+                {
+                    var log = sp.GetService<Microsoft.Extensions.Logging.ILogger<ModelMetadataProvider>>();
+                    log?.LogWarning(ex, "Model metadata refresh failed at startup");
+                }
+            }).ContinueWith(t =>
+            {
+                if (t.IsFaulted)
+                    System.Diagnostics.Debug.WriteLine($"ModelMetadata startup refresh failed: {t.Exception?.InnerException?.Message}");
+            }, TaskContinuationOptions.OnlyOnFaulted);
             return provider;
         });
 

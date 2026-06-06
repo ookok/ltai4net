@@ -16,6 +16,8 @@ public sealed class CompressionStore : IDisposable
 {
     private readonly SqliteConnection _conn;
     private long _totalEntries;
+    private long _storeCount;
+    private static readonly TimeSpan MaxEntryAge = TimeSpan.FromDays(30);
 
     public CompressionStore(string? dbPath = null)
     {
@@ -26,7 +28,8 @@ public sealed class CompressionStore : IDisposable
         Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
 
         _conn = new SqliteConnection($"Data Source={dbPath}");
-        _conn.Open();
+        try { _conn.Open(); }
+        catch { _conn.Dispose(); throw; }
 
         using var cmd = _conn.CreateCommand();
         cmd.CommandText = """
@@ -69,7 +72,12 @@ public sealed class CompressionStore : IDisposable
         cmd.Parameters.AddWithValue("$at", DateTime.UtcNow.ToString("O"));
 
         if (cmd.ExecuteNonQuery() > 0)
+        {
             Interlocked.Increment(ref _totalEntries);
+            // Periodic cleanup every 100 stores to prevent unbounded growth
+            if (Interlocked.Increment(ref _storeCount) % 100 == 0)
+                Cleanup(MaxEntryAge);
+        }
 
         return id;
     }
@@ -110,7 +118,7 @@ public sealed class CompressionStore : IDisposable
         return deleted;
     }
 
-    public long TotalEntries => _totalEntries;
+    public long TotalEntries => Interlocked.Read(ref _totalEntries);
 
     public void Dispose() => _conn.Dispose();
 
