@@ -37,9 +37,9 @@
     <ProjectReference Include="..\..\extern\agent-framework\dotnet\src\Microsoft.Agents.AI.Mcp\Microsoft.Agents.AI.Mcp.csproj" Condition="!Exists('..\..\dist\lib\maf\Microsoft.Agents.AI.Mcp.dll')" />
     <ProjectReference Include="..\..\extern\agent-framework\dotnet\src\Microsoft.Agents.AI.DurableTask\Microsoft.Agents.AI.DurableTask.csproj" Condition="!Exists('..\..\dist\lib\maf\Microsoft.Agents.AI.DurableTask.dll')" />
     <PackageReference Include="Microsoft.DurableTask.InProcessTestHost" Version="0.2.3-preview.1" />
-    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.13.0" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="5.3.0" />
     <PackageReference Include="ModelContextProtocol" Version="1.1.0" />
-    <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Scripting" Version="4.13.0" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Scripting" Version="5.3.0" />
     <PackageReference Include="Microsoft.Extensions.AI" Version="10.6.0" />
     <PackageReference Include="System.ClientModel" Version="1.12.0" />
 
