@@ -347,6 +347,7 @@ public sealed class LTAIOptions
     public HarnessProfile Harness { get; set; } = new();
     public McpConfig Mcp { get; init; } = new();
     public DurableConfig Durable { get; init; } = new();
+    public AutoTuneConfig AutoTune { get; init; } = new();
     public EmbeddingConfig Embedding { get; init; } = new();
     public SteerConfig Steer { get; init; } = new();
     public ProviderDefinition[] Providers { get; init; } = []; // overwrites KnownKeys.All when non-empty

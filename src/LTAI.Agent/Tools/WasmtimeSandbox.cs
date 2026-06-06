@@ -83,12 +83,7 @@ public sealed class WasmtimeSandbox : AIContextProvider
 
         var tools = existing.Tools?.ToList() ?? new List<AITool>();
 
-        // sandbox_exec — restricted shell execution
-        var sandboxExecAttr = new System.ComponentModel.DescriptionAttribute(
-            "Execute a shell command in the sandbox (read-only workspace, no network, 30s timeout)");
-        tools.Add(AIFunctionFactory.Create(ExecuteSandboxedCommandAsync));
-
-        if (_wasmAvailable)
+        // sandbox_exec only WASM (shell handled by SafeShellTool)if (_wasmAvailable)
         {
             tools.Add(AIFunctionFactory.Create(ExecuteWasmAsync));
         }

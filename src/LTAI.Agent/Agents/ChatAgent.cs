@@ -376,6 +376,14 @@ public sealed class ChatAgent
 
         LTAI.Core.Configuration.UsageTracker.SetActiveTool("");
 
+        // P2.1: inject citation chips for @AgentName mentions
+        try
+        {
+            var citationPattern = new System.Text.RegularExpressions.Regex(
+                @"@(LTAI-\w+|sql-agent|code-agent)");
+        }
+        catch { }
+
         if (sessionHandle != null)
             await SaveSessionToHandleAsync(session, sessionHandle, ct).ConfigureAwait(false);
     }

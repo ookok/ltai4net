@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using LTAI.AI;
@@ -96,11 +97,17 @@ public static class AgentRegistry
         ToolEmbeddingCache? cache = null, CancellationToken ct = default)
     {
         var agents = LoadAll();
+        // P1: incremental: only process agents with null embeddings
+        var pending = agents
+            .Select((a, i) => (agent: a, index: i))
+            .Where(x => x.agent.Embedding == null)
+            .ToList();
+        if (pending.Count == 0) return;
+
         if (cache != null)
         {
-            // P12.1: 1 batched call, persisted to disk
-            var items = agents
-                .Select(a => (a.Name, a.CapabilityText))
+            var items = pending
+                .Select(x => (x.agent.Name, x.agent.CapabilityText))
                 .ToList();
             try
             {
@@ -291,6 +298,32 @@ public static class AgentRegistry
             .Where(s => !string.IsNullOrWhiteSpace(s))
             .ToArray();
         return items.Length > 0 ? items : null;
+    }
+
+    /// <summary>
+    /// Start a FileSystemWatcher on agents directory for hot reload.
+    /// </summary>
+    public static FileSystemWatcher? StartWatcher()
+    {
+        var dirs = new[]
+        {
+            Path.Combine(AppContext.BaseDirectory, "agents"),
+            Path.Combine(Directory.GetCurrentDirectory(), "agents"),
+        };
+        foreach (var dir in dirs)
+        {
+            if (!Directory.Exists(dir)) continue;
+            var watcher = new FileSystemWatcher(dir, "*.agent.md")
+            {
+                NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite,
+                EnableRaisingEvents = true,
+            };
+            watcher.Changed += (_, e) => { InvalidateCache(); ClearEmbeddings(); };
+            watcher.Created += (_, e) => { InvalidateCache(); ClearEmbeddings(); };
+            watcher.Deleted += (_, e) => { InvalidateCache(); ClearEmbeddings(); };
+            return watcher;
+        }
+        return null;
     }
 }
 

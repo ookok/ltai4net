@@ -8,8 +8,10 @@ namespace LTAI.Agent.Workflows;
 
 /// <summary>
 /// P16.1: hot-editable config block for Sequential / Concurrent pipeline presets.
-/// Defined in <c>ltai-workflows/sequential.json</c> and
-/// <c>concurrent.json</c>, hot-reloaded by the P15 watcher.
+/// Supports both flat &lt;c&gt;agents&lt;/c&gt; array and nested &lt;c&gt;steps&lt;/c&gt; with typed
+/// pipeline steps (handoff / sequential / concurrent).
+/// Defined in &lt;c&gt;ltai-workflows/sequential.json&lt;/c&gt; and
+/// &lt;c&gt;concurrent.json&lt;/c&gt;, hot-reloaded by the P15 watcher.
 /// </summary>
 public sealed record PipelineConfig
 {
@@ -26,15 +28,17 @@ public sealed record PipelineConfig
     /// <summary>Schema version (bump to invalidate cache).</summary>
     public int Version { get; init; }
 
-    /// <summary>Ordered agent names. For concurrent, order is cosmetic.</summary>
-    public required IReadOnlyList<string> Agents { get; init; }
-
-    /// <summary>Optional default task description used when caller provides no explicit task.</summary>
-    public string? DefaultTask { get; init; }
+    /// <summary>Flat agent names (backward-compatible).</summary>
+    public IReadOnlyList<string> Agents { get; init; } = [];
 
     /// <summary>
-    /// Parse from a JSON string (supports <c>//</c> comments).
+    /// Typed pipeline steps (P1.3). When non-empty, Agents is ignored.
     /// </summary>
+    public IReadOnlyList<PipelineStep> Steps { get; init; } = [];
+
+    /// <summary>Optional default task description.</summary>
+    public string? DefaultTask { get; init; }
+
     public static PipelineConfig Parse(string json)
     {
         var doc = JsonDocument.Parse(json, new JsonDocumentOptions
@@ -46,12 +50,22 @@ public sealed record PipelineConfig
         var root = doc.RootElement;
         var type = root.GetProperty("type").GetString() ?? "";
         var version = root.TryGetProperty("version", out var v) ? v.GetInt32() : 0;
+
         var agents = new List<string>();
-        foreach (var a in root.GetProperty("agents").EnumerateArray())
+        if (root.TryGetProperty("agents", out var agentsEl))
         {
-            var name = a.GetString();
-            if (!string.IsNullOrWhiteSpace(name))
-                agents.Add(name);
+            foreach (var a in agentsEl.EnumerateArray())
+            {
+                var name = a.GetString();
+                if (!string.IsNullOrWhiteSpace(name))
+                    agents.Add(name);
+            }
+        }
+
+        var steps = new List<PipelineStep>();
+        if (root.TryGetProperty("steps", out var stepsEl))
+        {
+            steps.AddRange(ParseSteps(stepsEl));
         }
 
         return new PipelineConfig
@@ -59,13 +73,41 @@ public sealed record PipelineConfig
             Type = type,
             Version = version,
             Agents = agents,
+            Steps = steps,
         };
     }
 
-    /// <summary>
-    /// Try to load a <see cref="PipelineConfig"/> from file path.
-    /// Returns <c>null</c> if the file doesn't exist or fails to parse.
-    /// </summary>
+    private static IEnumerable<PipelineStep> ParseSteps(JsonElement el)
+    {
+        foreach (var s in el.EnumerateArray())
+        {
+            var stepType = s.GetProperty("type").GetString() ?? "handoff";
+            var name = s.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "";
+            var stepAgents = new List<string>();
+            if (s.TryGetProperty("agents", out var a))
+            {
+                foreach (var agent in a.EnumerateArray())
+                {
+                    var an = agent.GetString();
+                    if (!string.IsNullOrWhiteSpace(an))
+                        stepAgents.Add(an);
+                }
+            }
+            var subSteps = new List<PipelineStep>();
+            if (s.TryGetProperty("steps", out var sub))
+            {
+                subSteps.AddRange(ParseSteps(sub));
+            }
+            yield return new PipelineStep
+            {
+                Type = stepType,
+                Name = name,
+                Agents = stepAgents,
+                Steps = subSteps,
+            };
+        }
+    }
+
     public static PipelineConfig? LoadFromFile(string path)
     {
         try
@@ -79,4 +121,15 @@ public sealed record PipelineConfig
             return null;
         }
     }
+}
+
+/// <summary>
+/// A single step in a pipeline config. Supports nesting for composite workflows.
+/// </summary>
+public sealed record PipelineStep
+{
+    public required string Type { get; init; }
+    public string Name { get; init; } = "";
+    public IReadOnlyList<string> Agents { get; init; } = [];
+    public IReadOnlyList<PipelineStep> Steps { get; init; } = [];
 }

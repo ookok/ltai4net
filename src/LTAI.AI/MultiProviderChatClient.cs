@@ -716,7 +716,7 @@ public static class ServiceCollectionExtensions
             return router;
         });
 
-        // Step 2: Wrap with SafeChatClient for output safety interception (optional)
+        // Step 2b: Wrap with SafeChatClient for output safety interception (optional)
         services.AddSingleton<IChatClient>(sp =>
         {
             var router = sp.GetRequiredService<MultiProviderChatClient>();
@@ -730,7 +730,9 @@ public static class ServiceCollectionExtensions
             IChatClient safetyClient = OpenAIChatClientFactory.Create(
                 "https://api.deepseek.com/v1", "deepseek-v4-flash", safetyKey);
 
-            return new LTAI.Core.Safety.SafeChatClient(router, safetyClient, logger);
+            var wrapped = new LTAI.Core.Safety.SafeChatClient(router, safetyClient, logger);
+            // P1: wrap with MetricsChatClient for OTel metrics
+            return new MetricsChatClient(wrapped, sp.GetService<ILogger<MetricsChatClient>>());
         });
 
         // Local ONNX embedder (BGE-small-zh, zero API dependency)
@@ -757,6 +759,10 @@ public static class ServiceCollectionExtensions
         });
 
         // Embedding client (API → local BGE → FastEmb fallback)
+        // P14.4: auto-detect best execution provider (DML > CUDA > CPU) at startup
+        services.AddHostedService<EpProbeService>();
+        services.AddSingleton<EpProbeService>();
+
         services.AddSingleton<EmbeddingClient>(sp =>
             new EmbeddingClient(sp.GetRequiredService<IHttpClientFactory>(),
                 sp.GetService<LocalEmbedder>(),

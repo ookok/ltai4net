@@ -20,6 +20,13 @@ internal static class WingClassifier
         ["config"] = ["config configuration setting option parameter environment variable ini yaml toml"],
     };
 
+    /// <summary>
+    /// Optional LLM-powered wing classifier fallback. Set in DI startup.
+    /// Called when FastEmb cosine similarity is below threshold.
+    /// Signature: (text) -> wingName or null.
+    /// </summary>
+    public static Func<string, string?>? LlmClassifier { get; set; }
+
     private static readonly Lazy<Dictionary<string, float[]>> _wingEmbeddings = new(() =>
     {
         const int dim = 384;
@@ -54,7 +61,8 @@ internal static class WingClassifier
             }
         }
 
-        return bestScore >= threshold ? bestWing : null;
+        if (bestScore >= threshold) return bestWing;
+        return LlmClassifier?.Invoke(text);
     }
 
     internal static string? ClassifyFromMessages(IEnumerable<Microsoft.Extensions.AI.ChatMessage>? messages)

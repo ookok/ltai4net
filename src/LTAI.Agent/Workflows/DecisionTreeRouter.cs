@@ -45,6 +45,7 @@ public sealed class DecisionTreeRouter
     private readonly DecisionTreeRouterOptions _fallbackOptions;
     private readonly YAMLWorkflowRegistry? _registry;
     private readonly IChatClient? _steer;
+    private readonly RetryChainEmbedder? _retryChain;
 
     public DecisionTreeRouter(
         EmbeddingClient? embedder,
@@ -52,7 +53,8 @@ public sealed class DecisionTreeRouter
         ToolEmbeddingCache? cache = null,
         DecisionTreeRouterOptions? options = null,
         YAMLWorkflowRegistry? registry = null,
-        IChatClient? steer = null)
+        IChatClient? steer = null,
+        RetryChainEmbedder? retryChain = null)
     {
         _embedder = embedder;
         _logger = logger;
@@ -60,6 +62,7 @@ public sealed class DecisionTreeRouter
         _fallbackOptions = options ?? new DecisionTreeRouterOptions();
         _registry = registry;
         _steer = steer;
+        _retryChain = retryChain;
     }
 
     /// <summary>
@@ -110,16 +113,17 @@ public sealed class DecisionTreeRouter
                     whitelist.Count);
                 activity?.SetTag("router.branch", "NoCandidates");
                 activity?.SetTag("router.whitelist_count", whitelist.Count);
-                return new DecisionTreeResult(Array.Empty<string>(), BranchKind.NoCandidates, 0f, 0f, []);
+                return new DecisionTreeResult(Array.Empty<string>(), BranchKind.NoCandidates, 0f, 0f, [], GetCurrentTier());
             }
         }
 
-        // Stage 0: no embedder → use all (legacy behavior)
+        // Stage 0: no embedder → use top-K (not all — P0.2 embedding fallback chain)
         if (_embedder is null)
         {
-            _logger.LogDebug("Router: no embedder, using all {N} specialists", allNames.Length);
+            var fallback = allNames.Take(topKLimit).ToArray();
+            _logger.LogDebug("Router: no embedder, using top-{K}/{N} specialists", fallback.Length, allNames.Length);
             activity?.SetTag("router.branch", "NoEmbedder");
-            return new DecisionTreeResult(allNames, BranchKind.NoEmbedder, 0f, 0f, []);
+            return new DecisionTreeResult(fallback, BranchKind.NoEmbedder, 0f, 0f, [], GetCurrentTier());
         }
 
         // Stage 1: top-K by cosine similarity
@@ -129,9 +133,10 @@ public sealed class DecisionTreeRouter
 
         if (topK.Count == 0)
         {
-            _logger.LogWarning("Router: top-K returned empty, using all {N} specialists", allNames.Length);
+            var fallback = allNames.Take(topKLimit).ToArray();
+            _logger.LogWarning("Router: top-K returned empty, using top-{K}/{N} specialists", fallback.Length, allNames.Length);
             activity?.SetTag("router.branch", "EmbeddingFailed");
-            return new DecisionTreeResult(allNames, BranchKind.EmbeddingFailed, 0f, 0f, []);
+            return new DecisionTreeResult(fallback, BranchKind.EmbeddingFailed, 0f, 0f, [], GetCurrentTier());
         }
 
         // P2: MinAcceptableScore — if even the highest score is too low, decline to route
@@ -143,7 +148,7 @@ public sealed class DecisionTreeRouter
             activity?.SetTag("router.branch", "NoConfidentMatch");
             activity?.SetTag("router.top_score", topK[0].Score);
             activity?.SetTag("router.min_acceptable", minAcceptable);
-            return new DecisionTreeResult(Array.Empty<string>(), BranchKind.NoConfidentMatch, topK[0].Score, 0f, topK);
+            return new DecisionTreeResult(Array.Empty<string>(), BranchKind.NoConfidentMatch, topK[0].Score, 0f, topK, GetCurrentTier());
         }
 
         // Stage 2: confidence margin
@@ -214,7 +219,16 @@ public sealed class DecisionTreeRouter
     /// the top-K embedding candidates when the embedding margin is ambiguous.
     /// Returns at most top-2 agents chosen by the steer model.
     /// </summary>
-    private async Task<string[]> SteerRerankAsync(
+    private EmbeddingTier GetCurrentTier()
+    {
+        if (_retryChain != null) return _retryChain.LastTier;
+        if (_embedder?.Local?.Available == true) return AI.EmbeddingTier.Onnx;
+        if (_embedder?.LocalFallbackActivated == true) return AI.EmbeddingTier.LocalFallback;
+        if ((_embedder?.ConsecutiveAllProviderFailures ?? 0) > 1) return AI.EmbeddingTier.Bm25;
+        return AI.EmbeddingTier.RemoteApi;
+    }
+
+        private async Task<string[]> SteerRerankAsync(
         string task,
         IReadOnlyList<(string Name, float Score)> topK,
         string[] allNames,
@@ -243,18 +257,31 @@ public sealed class DecisionTreeRouter
 
         try
         {
+            var chatOpts = new ChatOptions();
+            // AdditionalProperties is pre-initialized by ChatOptions
+            chatOpts.AdditionalProperties["response_format"] = new Dictionary<string, object>
+            {
+                ["type"] = "json_object"
+            };
+
             var response = await _steer!.GetResponseAsync(
-                [new ChatMessage(ChatRole.User, prompt)],
+                [new ChatMessage(ChatRole.User, prompt)], chatOpts,
                 cancellationToken: ct).ConfigureAwait(false);
             var text = response.Messages?.LastOrDefault()?.Text ?? "";
 
-            // Parse JSON array
+            // Parse JSON: handle markdown code fences, trailing text, leading text
             if (text.Contains('[') && text.Contains(']'))
             {
-                var json = text[text.IndexOf('[')..(text.IndexOf(']') + 1)];
-                var names = System.Text.Json.JsonSerializer.Deserialize<string[]>(json);
-                if (names is { Length: > 0 })
-                    return names.Where(n => candidates.Contains(n, StringComparer.OrdinalIgnoreCase)).ToArray();
+                var cleaned = text.Replace("```json", "").Replace("```", "").Trim();
+                var start = cleaned.IndexOf('[');
+                var end = cleaned.LastIndexOf(']');
+                if (start >= 0 && end > start)
+                {
+                    var json = cleaned[start..(end + 1)];
+                    var names = System.Text.Json.JsonSerializer.Deserialize<string[]>(json);
+                    if (names is { Length: > 0 })
+                        return names.Where(n => candidates.Contains(n, StringComparer.OrdinalIgnoreCase)).ToArray();
+                }
             }
         }
         catch (Exception ex)
@@ -305,4 +332,5 @@ public readonly record struct DecisionTreeResult(
     BranchKind Branch,
     float TopScore,
     float Margin,
-    IReadOnlyList<(string Name, float Score)> TopK);
+    IReadOnlyList<(string Name, float Score)> TopK,
+    EmbeddingTier EmbeddingTier = AI.EmbeddingTier.Onnx);

@@ -31,7 +31,7 @@ public sealed class L6AgentDiaryProvider : AIContextProvider
     {
         try
         {
-            var diary = _store.GetAgentDiary(_agentId, MaxEntries);
+            var diary = _store.SearchByRoom("diary", _agentId, MaxEntries);
             if (diary.Count == 0) return ValueTask.FromResult(new AIContext());
 
             var lines = new List<string> { $"## L6 — Agent Diary ({_agentId})\n<memory>" };

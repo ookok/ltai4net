@@ -83,6 +83,7 @@ try
     {
         if (builder.Environment.IsDevelopment())
         {
+            tracing.SetSampler(new OpenTelemetry.Trace.AlwaysOnSampler());
             tracing.AddConsoleExporter();
         }
         var otlpEndpoint = builder.Configuration["LTAI:Telemetry:OtlpEndpoint"];

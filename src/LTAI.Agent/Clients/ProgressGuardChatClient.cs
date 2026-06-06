@@ -45,6 +45,8 @@ public sealed class ProgressGuardChatClient : IChatClient
     {
         var consecutive = 0;
         string? lastTool = null;
+        var totalCalls = 0;
+        var recentTools = new List<string>(8);
 
         var functionCalls = messages
             .SelectMany(m => m.Contents?.OfType<FunctionCallContent>() ?? [])
@@ -52,6 +54,11 @@ public sealed class ProgressGuardChatClient : IChatClient
 
         foreach (var fc in functionCalls)
         {
+            totalCalls++;
+            recentTools.Add(fc.Name ?? "");
+            if (recentTools.Count > 8) recentTools.RemoveAt(0);
+
+            // Same tool consecutively >= 3 times?
             if (string.Equals(fc.Name, lastTool, StringComparison.OrdinalIgnoreCase))
             {
                 consecutive++;
@@ -66,6 +73,25 @@ public sealed class ProgressGuardChatClient : IChatClient
             {
                 consecutive = 0;
                 lastTool = fc.Name;
+            }
+
+            // Alternating pattern (A > B > A > B)?
+            if (recentTools.Count == 8 && recentTools[0] == recentTools[2] && recentTools[2] == recentTools[4] && recentTools[4] == recentTools[6]
+                && recentTools[1] == recentTools[3] && recentTools[3] == recentTools[5] && recentTools[5] == recentTools[7]
+                && recentTools[0] != recentTools[1])
+            {
+                return new ChatMessage(ChatRole.System,
+                    $"[System: You are alternating between '{recentTools[0]}' and '{recentTools[1]}' " +
+                    $"with no progress. Try a different approach.]");
+            }
+
+            // Cumulative threshold: same tool with different args called 10+ times total
+            var toolCount = recentTools.Count(n => string.Equals(n, fc.Name, StringComparison.OrdinalIgnoreCase));
+            if (toolCount >= 10)
+            {
+                return new ChatMessage(ChatRole.System,
+                    $"[System: You have called '{fc.Name}' {toolCount} times in the last 8 calls. " +
+                    $"Try a different approach.]");
             }
         }
 

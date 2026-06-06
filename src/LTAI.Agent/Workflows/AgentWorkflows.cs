@@ -5,6 +5,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using LTAI.AI;
+using LTAI.Agent.Diagnostics;
 using Microsoft.Agents.AI;
 using Microsoft.Agents.AI.Workflows;
 using Microsoft.Agents.AI.Workflows.Declarative;
@@ -42,12 +43,15 @@ public sealed class AgentWorkflows
     private readonly DecisionTreeRouter _router2;
     private readonly YAMLWorkflowRegistry? _workflowRegistry;
 
+    private readonly RoutingDiagnosticsStore? _diagnosticsStore;
+
     public AgentWorkflows(
         IEnumerable<AIAgent> allAgents,
         AIAgent router,
         ILogger<AgentWorkflows> logger,
         DecisionTreeRouter? router2 = null,
-        YAMLWorkflowRegistry? workflowRegistry = null)
+        YAMLWorkflowRegistry? workflowRegistry = null,
+        RoutingDiagnosticsStore? diagnosticsStore = null)
     {
         _logger = logger;
         _router = router;
@@ -319,6 +323,19 @@ public sealed class AgentWorkflows
             sb.AppendLine(m.Text);
             sb.AppendLine();
         }
+    }
+
+    private const int WorkflowTimeoutSeconds = 120;
+
+    private static async Task<StreamingRun> RunWorkflowWithTimeoutAsync(
+        Func<ValueTask<StreamingRun>> factory,
+        string kind, string? traceId, CancellationToken ct)
+    {
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeoutCts.CancelAfter(TimeSpan.FromSeconds(WorkflowTimeoutSeconds));
+        try { return await factory().ConfigureAwait(false); }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        { throw new TimeoutException($"{kind} workflow timed out after {WorkflowTimeoutSeconds}s [trace={traceId}]."); }
     }
 
     /// <summary>

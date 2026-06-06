@@ -3,11 +3,13 @@ using LTAI.AI;
 using LTAI.AI.Compaction;
 using LTAI.Core.Safety;
 using LTAI.Agent.Context;
+using LTAI.Agent.Diagnostics;
 using LTAI.Agent.Learning;
 using LTAI.Agent.Services;
 using LTAI.Agent.Tools;
 using LTAI.Agent.Vector;
 using LTAI.Agent.Workflows;
+using LTAI.Agent.Memory;
 using LTAI.Core.Configuration;
 using Microsoft.Agents.AI;
 using Microsoft.Agents.AI.Compaction;
@@ -113,21 +115,25 @@ public static class ServiceCollectionExtensions
         // P12.1: pass ToolEmbeddingCache so the 10-agent description embeddings
         // are batched + persisted; cold-start 0 ONNX calls after first run.
         // P15: pass YAMLWorkflowRegistry so thresholds/candidates are hot-editable.
+        services.AddSingleton<RetryChainEmbedder>();
         services.AddSingleton<DecisionTreeRouter>(sp => new DecisionTreeRouter(
             sp.GetService<EmbeddingClient>(),
             sp.GetRequiredService<ILogger<DecisionTreeRouter>>(),
             sp.GetService<ToolEmbeddingCache>(),
             options: null,
             registry: sp.GetService<YAMLWorkflowRegistry>(),
-            steer: sp.GetKeyedService<IChatClient>("steer")));
+            steer: sp.GetKeyedService<IChatClient>("steer"),
+            retryChain: sp.GetService<RetryChainEmbedder>()));
         services.AddSingleton<AgentWorkflows>(sp =>
+
         {
             var all = sp.GetKeyedServices<AIAgent>(KeyedService.AnyKey)
                 .ToDictionary(a => a.Name!, StringComparer.OrdinalIgnoreCase);
             return new AgentWorkflows(all.Values, all["LTAI-Router"],
                 sp.GetRequiredService<ILogger<AgentWorkflows>>(),
                 sp.GetRequiredService<DecisionTreeRouter>(),
-                workflowRegistry: sp.GetService<YAMLWorkflowRegistry>());
+                workflowRegistry: sp.GetService<YAMLWorkflowRegistry>(),
+                diagnosticsStore: sp.GetService<RoutingDiagnosticsStore>());
         });
 
         // Step 3c: P15 hot-editable workflow registry + watcher + notifier.
@@ -149,6 +155,8 @@ public static class ServiceCollectionExtensions
             sp.GetRequiredService<YAMLWorkflowRegistry>().WatchDirectory,
             sp.GetRequiredService<YAMLWorkflowRegistry>(),
             sp.GetRequiredService<ILogger<YAMLWorkflowWatcher>>()));
+        // P14.4: HPO auto-tuning background service
+        services.AddHostedService<AutoTunerService>();
         services.AddHostedService<WorkflowWatcherHostedService>();
         services.AddHostedService<LTAI.Agent.Services.GraphInitService>();
 
@@ -948,6 +956,8 @@ public static class ServiceCollectionExtensions
         // (L0+L1 ≈ 900t always loaded).
         var embedder = sp.GetRequiredService<LTAI.AI.EmbeddingClient>();
         var palaceDb = Path.Combine(opts.DataDirectory, "palace.db");
+        WingClassifier.LlmClassifier = (text) => null;
+
         var palaceStore = new LTAI.Agent.Memory.PalaceStore(embedder, palaceDb,
             loggerFactory.CreateLogger<LTAI.Agent.Memory.PalaceStore>());
 
@@ -959,7 +969,7 @@ public static class ServiceCollectionExtensions
 
         // Memory tools (persistent memory across sessions via PalaceStore)
         var palaceMemory = new MemoryTools(palaceStore, defaultWing: ws != null ? Path.GetFileName(ws.TrimEnd('/', '\\')) : "project");
-        if (name.StartsWith("LTAI-Chat") || name is "LTAI-System" or "LTAI-Writer")
+        if (canWrite)
         {
             tools.Add(AIFunctionFactory.Create(palaceMemory.Remember));
             tools.Add(AIFunctionFactory.Create(palaceMemory.Forget));
@@ -977,7 +987,15 @@ public static class ServiceCollectionExtensions
             var mcpFactory = sp.GetRequiredService<LTAI.Agent.Mcp.McpClientFactory>();
             var mcpTools = await mcpFactory.GetToolsAsync(opts.Mcp).ConfigureAwait(false);
             foreach (var mcpTool in mcpTools)
+            {
+                if (!canRead) continue;
+                var mn = mcpTool.Name.ToLowerInvariant();
+                if (mn.Contains("write") || mn.Contains("create") || mn.Contains("delete") || mn.Contains("upload"))
+                { if (!canWrite) continue; }
+                if (mn.Contains("shell") || mn.Contains("command") || mn.Contains("exec") || mn.Contains("process"))
+                { if (!canExec) continue; }
                 tools.Add(mcpTool);
+            }
         }
 
         // Semantic code search tool (cocoindex-inspired AST chunk index).
