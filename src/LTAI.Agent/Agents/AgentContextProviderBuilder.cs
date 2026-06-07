@@ -1,4 +1,5 @@
 using LTAI.Agent.Context;
+using LTAI.Agent.LanguageServer;
 using LTAI.Agent.Memory;
 using LTAI.Agent.Tools;
 using LTAI.Agent.Vector;
@@ -72,6 +73,7 @@ internal static class AgentContextProviderBuilder
             new EnvironmentProvider(), skillsProvider,
             new CacheAlignerProvider(
                 loggerFactory.CreateLogger<CacheAlignerProvider>()),
+            new LspDiagnosticsProvider(AgentBuilder.GetLspManager()),
         };
         // Safety coordinator at position 2 only when enabled
         if (safety != null)

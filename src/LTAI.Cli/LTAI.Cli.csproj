@@ -14,6 +14,17 @@
     <OutputPath>$(MSBuildThisFileDirectory)..\..\dist\build\Cli\</OutputPath>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
+
+    <!-- NativeAOT (LTS) -->
+    <PublishAot>true</PublishAot>
+    <OptimizationPreference>Size</OptimizationPreference>
+    <IlcInstructionSet>native</IlcInstructionSet>
+    <IlcGenerateStackTraceData>false</IlcGenerateStackTraceData>
+    <IlcDisableUnhandledExceptionExperience>true</IlcDisableUnhandledExceptionExperience>
+    <!-- Allow reflection-based features with runtime warnings instead of hard errors -->
+    <IlcTreatLinkingErrorsAsWarnings>true</IlcTreatLinkingErrorsAsWarnings>
+    <!-- Known-safe AOT warnings: JSON in CLI uses rd.xml-preserved types -->
+    <NoWarn>$(NoWarn);IL2026;IL3050;IL2046;IL2091;IL2104</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
@@ -28,6 +39,11 @@
     <ProjectReference Include="..\LTAI.Agent\LTAI.Agent.csproj" />
   </ItemGroup>
 
+
+  <!-- NativeAOT linker descriptor -->
+  <ItemGroup>
+    <RdXmlFile Include="..\..\aot\rd.xml" />
+  </ItemGroup>
 
   <!-- 应用图标 (SVG source; convert to .ico for Windows .exe: https://convertio.co/svg-ico/) -->
   <ItemGroup>

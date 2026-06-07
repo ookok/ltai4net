@@ -124,7 +124,15 @@ public sealed class DecisionTreeRouter
             }
         }
 
-        // Stage 0: no embedder → use top-K (not all — P0.2 embedding fallback chain)
+        // Stage 0: empty candidates → short-circuit before any embedding work
+        if (allNamesList.Count == 0)
+        {
+            _logger.LogDebug("Router: no candidates (empty specialist list)");
+            activity?.SetTag("router.branch", "NoCandidates");
+            return new DecisionTreeResult([], BranchKind.NoCandidates, 0f, 0f, [], GetCurrentTier());
+        }
+
+        // Stage 0b: no embedder → use top-K (not all — P0.2 embedding fallback chain)
         if (_embedder is null)
         {
             var fallback = allNamesList.Take(topKLimit).ToList();

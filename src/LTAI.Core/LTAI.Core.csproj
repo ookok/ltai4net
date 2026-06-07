@@ -4,7 +4,12 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <RootNamespace>LTAI.Core</RootNamespace>
+    <OutputPath>$(MSBuildThisFileDirectory)..\..\dist\lib\</OutputPath>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
+    <!-- NativeAOT compatibility -->
+    <IsAotCompatible>true</IsAotCompatible>
+    <NoWarn>$(NoWarn);IL2026;IL3050;IL2046;IL2091;IL2104</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>

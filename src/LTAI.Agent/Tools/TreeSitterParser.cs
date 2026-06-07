@@ -39,6 +39,9 @@ public sealed class TreeSitterParser : IDisposable
         [".go"] = "go", [".rs"] = "rust", [".java"] = "java",
         [".sh"] = "bash", [".bash"] = "bash",
         [".json"] = "json", [".html"] = "html", [".css"] = "css",
+        // Experimental / emerging languages (no native TreeSitter grammars yet)
+        [".mbt"] = "moonbit", [".mojo"] = "mojo", ["🔥"] = "mojo",
+        [".cj"] = "cangjie",
     };
 
     // AST node types that declare symbols per language

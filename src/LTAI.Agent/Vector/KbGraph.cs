@@ -11,6 +11,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using LTAI.AI;
 using LTAI.Agent.Tools;
+using LTAI.Agent.Formats;
 using LTAI.Agent.Utils;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
@@ -58,7 +59,8 @@ public sealed class KbGraph : AIContextProvider
     // ═══════════════════════════════════════════
 
     public async Task<List<string>> QueryAsync(string query, int topK = 10,
-        bool expandGraph = true, CancellationToken ct = default)
+        bool expandGraph = true, CancellationToken ct = default,
+        ResultFormat format = ResultFormat.Markdown)
     {
         // Stage 1: Query expansion — skip LLM rewriter for simple queries
         string expanded;
@@ -146,7 +148,7 @@ public sealed class KbGraph : AIContextProvider
         }
 
         // Stage 4: Rich mixed context output (ms graphrag LocalSearchMixedContext inspired)
-        return await BuildMixedContextAsync(resultIds, topK, ct).ConfigureAwait(false);
+        return await BuildMixedContextAsync(resultIds, topK, ct, format).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -180,9 +182,10 @@ public sealed class KbGraph : AIContextProvider
     /// Build a structured mixed context with Entities + Relationships + Text Units sections.
     /// Inspired by ms graphrag's LocalSearchMixedContext — gives the LLM clearer,
     /// more structured knowledge graph context than flat bullet points.
+    /// Supports both Markdown (default) and TOON (compact, ~50% token reduction) output.
     /// </summary>
     private async Task<List<string>> BuildMixedContextAsync(HashSet<long> resultIds,
-        int topK, CancellationToken ct)
+        int topK, CancellationToken ct, ResultFormat format = ResultFormat.Markdown)
     {
         var entities = new List<(NodeRow node, string? snippet)>();
         var relationships = new List<(string src, string dst, string rel, double weight)>();
@@ -224,6 +227,72 @@ public sealed class KbGraph : AIContextProvider
             .ToList();
 
         var output = new List<string>();
+
+        if (format == ResultFormat.Toon)
+        {
+            BuildToonContext(output, entities, relationships, textUnits);
+        }
+        else
+        {
+            BuildMarkdownContext(output, entities, relationships, textUnits);
+        }
+
+        _logger.LogInformation("KbGraph: mixed context ({Fmt}): {E} entities, {R} rels, {T} text units",
+            format, entities.Count, relationships.Count, textUnits.Count);
+        return output;
+    }
+
+    private static void BuildToonContext(List<string> output,
+        List<(NodeRow node, string? snippet)> entities,
+        List<(string src, string dst, string rel, double weight)> relationships,
+        List<(string source, string text)> textUnits)
+    {
+        var tw = new ToonWriter();
+        tw.Comment($"knowledge-graph context: {entities.Count} entities, {relationships.Count} rels, {textUnits.Count} text units");
+
+        // Entities table: kind, name, namespace, source
+        if (entities.Count > 0)
+        {
+            var cols = new[] { "kind", "name", "ns", "src" };
+            var rows = entities.Select(e => (IReadOnlyList<string>)new[] {
+                e.node.Kind, e.node.Name,
+                e.node.Namespace ?? "",
+                e.node.Source ?? ""
+            }).ToList();
+            tw.Table("entities", cols, rows);
+        }
+
+        // Relationships table: src, rel, dst, weight
+        if (relationships.Count > 0)
+        {
+            var cols = new[] { "src", "rel", "dst", "w" };
+            var rows = relationships.Select(r => (IReadOnlyList<string>)new[] {
+                r.src, r.rel, r.dst, r.weight.ToString("F1")
+            }).ToList();
+            tw.Table("rels", cols, rows);
+        }
+
+        // Text units as key-value snippets (too long for tabular)
+        if (textUnits.Count > 0)
+        {
+            tw.BeginObject("text_units");
+            foreach (var (src, txt) in textUnits.Take(8))
+            {
+                var cleaned = txt.Replace("\n", " ").Replace("\r", "");
+                if (cleaned.Length > 500) cleaned = cleaned[..500] + "…";
+                tw.KeyValue(src, cleaned);
+            }
+            tw.EndObject();
+        }
+
+        output.Add(tw.ToString());
+    }
+
+    private static void BuildMarkdownContext(List<string> output,
+        List<(NodeRow node, string? snippet)> entities,
+        List<(string src, string dst, string rel, double weight)> relationships,
+        List<(string source, string text)> textUnits)
+    {
         output.Add("## Relevant Knowledge");
 
         // Entities section
@@ -262,10 +331,6 @@ public sealed class KbGraph : AIContextProvider
                 output.Add($"- **[{source}]:** {cleaned}");
             }
         }
-
-        _logger.LogInformation("KbGraph: mixed context: {E} entities, {R} rels, {T} text units",
-            entities.Count, relationships.Count, textUnits.Count);
-        return output;
     }
 
     // ═══════════════════════════════════════════
@@ -291,10 +356,10 @@ public sealed class KbGraph : AIContextProvider
 
         try
         {
-            var results = await QueryAsync(userMsg.Text, topK: 5, ct: ct).ConfigureAwait(false);
+            var results = await QueryAsync(userMsg.Text, topK: 5, ct: ct, format: ResultFormat.Toon).ConfigureAwait(false);
             if (results.Count == 0) return context.AIContext!;
 
-            var block = "## Relevant Knowledge:\n" + string.Join("\n", results.Select(r => "- " + r));
+            var block = string.Join("\n", results) + "\n";
             _logger.LogInformation("KbGraph: injected {N} items", results.Count);
 
             return new AIContext

@@ -316,6 +316,24 @@ public static class ServiceCollectionExtensions
                 sp.GetRequiredService<IChatClient>(),
                 sp.GetService<ILoggerFactory>()?.CreateLogger<LTAI.Agent.Tools.DeepenSearchTool>()));
 
+        // SeedER — Structural Entity Discovery & Exploratory Retrieval.
+        // Replaces flat similarity matching with structured path exploration
+        // and multi-hop reasoning across the knowledge graph.
+        services.AddSingleton<LTAI.Agent.SeedER.PathExplorer>(sp =>
+            new LTAI.Agent.SeedER.PathExplorer(
+                sp.GetRequiredService<KgStore>()));
+        services.AddSingleton<LTAI.Agent.SeedER.SeedER>(sp =>
+            new LTAI.Agent.SeedER.SeedER(
+                sp.GetRequiredService<KgStore>(),
+                sp.GetRequiredService<LTAI.Agent.SeedER.PathExplorer>(),
+                sp.GetService<IChatClient>(),
+                sp.GetService<ILoggerFactory>()?.CreateLogger<LTAI.Agent.SeedER.SeedER>()));
+        services.AddSingleton<LTAI.Agent.Tools.SeedERTool>(sp =>
+            new LTAI.Agent.Tools.SeedERTool(
+                sp.GetRequiredService<LTAI.Agent.SeedER.SeedER>(),
+                sp.GetRequiredService<IChatClient>(),
+                sp.GetService<ILoggerFactory>()?.CreateLogger<LTAI.Agent.Tools.SeedERTool>()));
+
         // P14.8: bridge LocalEmbedder.ModelSwitched → static registry cache
         // invalidation (LTAI.AI's ToolEmbeddingCache handles itself; this
         // handles AgentRegistry + ToolRegistry which live in LTAI.Agent).

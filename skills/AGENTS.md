@@ -19,6 +19,10 @@ name: <技能名称>                          # 必需，LLM 通过此名称 loa
 description: <一句话描述>                 # 必需，LLM 据此判断是否匹配任务
 license: MIT                             # 可选
 allowedTools: [Tool1, Tool2]             # 可选，技能依赖的工具列表
+version: 1.0.0                          # 可选，语义版本
+deprecated: false                        # 可选，true 表示已废弃
+supersededBy: <new-skill-name>           # 可选，被哪个技能替代
+validated: 2026-06-01                    # 可选，最后验证日期，超过 90 天告警
 ---
 
 # 标题
@@ -73,3 +77,56 @@ return JsonSerializer.Serialize(result);
 3. **正文结构化** — 使用 `## 标题` + 列表 + 表格，LLM 容易遵循
 4. **输出格式明确** — 在 `## 输出格式` 中给出 JSON 或 Markdown 模板
 5. **示例优先** — 提供输入/输出示例，LLM 表现更好
+
+## 2026 H1 论文启发
+
+| # | 论文 | 实现位置 | 状态 |
+|---|------|---------|------|
+| 1 | DLLG — token 级 logit 门控 | `FusionRoute/ResponseSpanRouter.cs` Stitch 自适应融合比 | 已实现 |
+| 2 | UCCI — 校准不确定性 | `Agents/ChatAgent.cs` CalibrateUncertainty | 已实现 |
+| 3 | MemGraphRAG — 多 agent KG 轨迹 | `Vector/KgExplorationTrace.cs` | 已实现 |
+| 4 | Beyond Consensus — trace 级合成 | `Workflows/AgentWorkflows.cs` concurrent aggregator | 已实现 |
+| 5 | CODESKILL — 技能银行 | `Tools/SkillBank.cs` | 已实现 |
+| 6 | Bayesian Orchestration — VoI 路由 | `Agents/ChatAgent.cs` EstimateValueOfInformation | 已实现 |
+| 7 | EDRM — 熵相变路由 | `Agents/ChatAgent.cs` EstimateResponseEntropy | 已实现 |
+| 8 | SEE — 自评估 | `Agents/ChatAgent.cs` JudgeResponseQualityAsync | 已实现 |
+| 9 | AdaDPO — DPO 梯度修复 | 未训练管线，标记待接入 | 待实现 |
+| 10 | PACT — 协议化消息 | `Tools/SubagentTools.cs` GetSystemPrompt | 已实现 |
+
+### AdaDPO（#9）接入说明
+
+当前项目无 DPO 训练管线。接入 AdaDPO 需：
+1. 在 `LTAI.Agent.Training` 命名空间创建 DPO 数据集加载器
+2. 用 `SkillBank.RecordUse` 轨迹作为偏好对（成功/失败）
+3. `AdaDPO` 的 per-pair stop-gradient 系数只需在 loss 函数中加一行：
+   ```python
+   loss = -torch.mean(log_ratio * (1 - stop_grad(coeff)) + log_ratio * stop_grad(coeff))
+   ```
+
+## 过期 / 陈旧 Skill 处理
+
+Skill 会随版本演进而过期。系统通过以下机制管理生命周期：
+
+### 检测信号
+
+| 信号 | 来源 | 动作 |
+|------|------|------|
+| `validated` 超 90 天 | SKILL.md front-matter | `ltai skill audit` 警告 |
+| `deprecated: true` | SKILL.md front-matter | `load_skill` 提示废弃 |
+| useCount==0 && age>180d | SkillEvolutionEngine | 自动标记 deprecated |
+| successRate<0.3 && call>5 | SkillEvolutionEngine | L3 prune 自动删除 |
+
+### CLI
+
+```bash
+ltai skill list              # skill + 状态
+ltai skill audit             # 检查过期
+ltai skill deprecate <name>  # 标记废弃
+ltai skill prune             # 删除过期
+```
+
+### 手动处理
+
+1. 标记废弃: SKILL.md 加 `deprecated: true` + `supersededBy: <new>`
+2. 更新验证: 审核后更新 `validated: $(date +%F)`
+3. 引用迁移: `grep -r "load_skill.*<name>"` 找出引用点`

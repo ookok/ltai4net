@@ -3,6 +3,7 @@ using LTAI.Agent.Context;
 using LTAI.Agent.Memory;
 using LTAI.Agent.Services;
 using LTAI.Agent.Tools;
+using LTAI.Agent.Tools.Review;
 using LTAI.Agent.Vector;
 using LTAI.Agent.Workflows;
 using LTAI.AI;
@@ -47,6 +48,10 @@ namespace LTAI.Agent;
 /// </summary>
 internal static class AgentBuilder
 {
+    // Shared LSP manager across all agents (process-wide)
+    private static readonly LanguageServer.LspLanguageManager s_lsp = new();
+    internal static LanguageServer.LspLanguageManager GetLspManager() => s_lsp;
+
     public static AIAgent BuildAgent(IServiceProvider sp, string name, string description,
         bool canRead, bool canWrite, bool canList, bool canExec,
         string? modelId = null, float? temperature = null, float? topP = null)
@@ -265,6 +270,56 @@ internal static class AgentBuilder
             tools.Add(AIFunctionFactory.Create(git.GitUndoLast));
             tools.Add(AIFunctionFactory.Create(git.GitCleanupBranches));
             tools.Add(AIFunctionFactory.Create(git.GitBranchDelete));
+        }
+
+        // ═══ Open Code Review-inspired review tooling ═══
+        // Deterministic engineering: grouping, rules, position repair, reflection
+        if (name is "LTAI-Chat" or "LTAI-Review" or "LTAI-Code" or "LTAI-Writer")
+        {
+            var review = new ReviewTools(ws);
+            tools.Add(AIFunctionFactory.Create(review.LoadReviewRules));
+            tools.Add(AIFunctionFactory.Create(review.GroupChanges));
+            tools.Add(AIFunctionFactory.Create(review.MatchReviewRules));
+            tools.Add(AIFunctionFactory.Create(review.RepairReviewPositions));
+            tools.Add(AIFunctionFactory.Create(review.ReflectReviewQuality));
+            tools.Add(AIFunctionFactory.Create(review.BuildReviewContext));
+        }
+
+        // #5 CODESKILL: skill bank for coding agents
+        if (name is "LTAI-Code" or "LTAI-Frontend" or "LTAI-Chat")
+        {
+            var skillBank = new Tools.SkillBank();
+            tools.Add(AIFunctionFactory.Create(
+                (string query, string? lang) =>
+                {
+                    var results = skillBank.Search(query, lang, 5);
+                    return results.Count > 0
+                        ? string.Join("\n---\n", results.Select(s => $"{s.Name} [{s.Category}] ({s.UseCount} uses, {s.SuccessRate:P0} success)\n{s.Pattern}"))
+                        : "(no matching skills found)";
+                },
+                "SkillBankSearch", "Search reusable code skills from past trajectories"));
+            tools.Add(AIFunctionFactory.Create(
+                (string name, string pattern, string lang, string cat, string pre, string post) =>
+                {
+                    skillBank.Register(name, pattern, lang, cat, pre, post);
+                    return $"Registered skill '{name}' ({skillBank.Count} total)";
+                },
+                "SkillBankRegister", "Register a new code skill from a coding trajectory"));
+        }
+
+        // LSP diagnostics for MoonBit/Mojo/Cangjie — real-time without build
+        if (name.StartsWith("LTAI-Chat") || name is "LTAI-Code" or "LTAI-Frontend")
+        {
+            tools.Add(AIFunctionFactory.Create(async (string filePath, string content) =>
+            {
+                await s_lsp.OpenFileAsync(filePath, content);
+                return $"LSP opened: {filePath}";
+            }, "LspOpenFile", "Open a file in its language server for real-time diagnostics"));
+            tools.Add(AIFunctionFactory.Create(() =>
+            {
+                var diags = s_lsp.FormatDiagnostics();
+                return string.IsNullOrEmpty(diags) ? "(no LSP diagnostics)" : diags;
+            }, "LspGetDiagnostics", "Get current LSP diagnostics for open files"));
         }
 
         // Task management tools (todo list)

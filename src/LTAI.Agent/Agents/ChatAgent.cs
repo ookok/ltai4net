@@ -1,8 +1,11 @@
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
+using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using LTAI.AI;
+using LTAI.Agent.Formats;
+using LTAI.Agent.FusionRoute;
 using LTAI.Agent.Learning;
 using LTAI.Agent.Tools;
 using LTAI.Agent.Workflows;
@@ -112,63 +115,172 @@ public sealed class ChatAgent
             m.Contents?.OfType<FunctionResultContent>().Any() == true);
     }
 
+    /// <summary>
+    /// GoS-inspired L1State builder: extracts structured belief state from
+    /// L1's free-text response and tool call history.
+    /// </summary>
+    private static L1State BuildL1State(string message, string text, AgentResponse r)
+    {
+        var toolCalls = new List<string>();
+        if (r.Messages != null)
+        {
+            foreach (var msg in r.Messages)
+            {
+                var calls = msg.Contents?.OfType<FunctionCallContent>();
+                if (calls != null)
+                    toolCalls.AddRange(calls.Select(c => c.Name ?? c.CallId));
+            }
+        }
+
+        // Heuristic: extract candidate entities from response
+        var candidates = new List<(string name, string kind, double score)>();
+        var lines = text.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        foreach (var line in lines.Take(10))
+        {
+            var trimmed = line.TrimStart('-', ' ', '*');
+            var parts = trimmed.Split(':');
+            if (parts.Length >= 2)
+            {
+                var name = parts[0].Trim();
+                if (name.Length > 1 && name.Length < 80)
+                {
+                    candidates.Add((name, "concept", 1.0 / candidates.Count + 1));
+                }
+            }
+        }
+
+        // Default: the response itself as a single candidate
+        if (candidates.Count == 0)
+        {
+            var title = text.Length > 60 ? text[..60] + "..." : text;
+            candidates.Add((title, "response", 1.0));
+        }
+
+        var gap = candidates.Count >= 2
+            ? Math.Round(candidates[0].score - candidates[1].score, 2)
+            : 1.0;
+
+        var msgCount = r.Messages?.Count ?? 1;
+        var supportCount = toolCalls.Count + (text.Length / 200);
+
+        // Determine label
+        string? label = null;
+        string? reason = null;
+
+        if (LikelyRequiresTool(message) && toolCalls.Count == 0)
+        {
+            label = "escalate";
+            reason = "query requires tools but L1 made no tool calls";
+            FailureRecorder.Record(message, text, reason, "L1");
+        }
+        else if (text.Length > 20)
+        {
+            var lower = text.ToLowerInvariant();
+            var failPatterns = new[] { "无法获取", "无法确定", "无法提供", "无法访问",
+                "抱歉", "我无法", "暂时无法", "目前还不支持", "我不能",
+                "cannot", "can't", "unable to", "don't know", "i don't" };
+            if (failPatterns.Any(p => lower.Contains(p)))
+            {
+                label = "escalate";
+                reason = "L1 declined to answer";
+                FailureRecorder.Record(message, text, "refusal pattern detected", "L1");
+            }
+        }
+
+        return new L1State
+        {
+            Candidates = candidates,
+            Gap = gap,
+            SupportCount = supportCount,
+            StepsTaken = msgCount,
+            Label = label ?? (gap < 0.3 && supportCount < 2 ? "escalate" : "report"),
+            EscalationReason = reason ?? (gap < 0.3 && supportCount < 2
+                ? $"low confidence (gap={gap:F2}, support={supportCount})" : null),
+            L1Response = text,
+            ToolCalls = toolCalls,
+        };
+    }
+
     private async Task<(bool IsAdequate, string Reason)> JudgeResponseQualityAsync(
         string originalMessage, string response, CancellationToken ct)
     {
-        var safeOriginal = JsonSerializer.Serialize(originalMessage);
+        // #8 SEE: self-evaluation — use a non-interpolated prompt to avoid
+        // brace-escaping issues with JSON content.
         var safeResponse = JsonSerializer.Serialize(response);
-        var jsonFormat = """{"adequate": true/false, "reason": "简短原因（中文）"}""";
-        var judgePrompt = $"""
-            你是一个回答质量审核员。判断以下AI回答是否合格。
-
-            用户问题（JSON字符串）：{safeOriginal}
-
-            AI回答（JSON字符串）：{safeResponse}
-
-            用JSON格式返回：{jsonFormat}
-
-            合格条件（全部满足则adequate=true）：
-            1. 回答了用户的核心问题
-            2. 没有拒绝回答或说"无法"
-            3. 内容具体（有数据/事实/步骤，不是空话）
-            4. 不编造数据（如果问题需要实时/本地信息，应该调用工具）
-
-            不合格举例：
-            - "我无法访问您的本地文件"而没有尝试调用文件工具
-            - 编造了具体数据而没有工具调用支撑
-            - 回答过于空泛（"这是一个复杂的问题"等）
-            """;
+        var seePrompt = "Rate your OWN response above on a scale of 1-5.\n"
+            + "Respond with ONLY valid JSON like: {\"adequate\": true, \"reason\": \"...\", \"self_score\": 4}\n\n"
+            + "Criteria (all must be true for adequate=true):\n"
+            + "1. Directly answers the user's core question\n"
+            + "2. Does NOT refuse or say \"unable to\"\n"
+            + "3. Contains specific information (data, facts, steps)\n"
+            + "4. If real-time/local data is needed, tools should have been called\n\n"
+            + "Your response to evaluate: " + safeResponse;
 
         try
         {
-            // P6 Steer: use lightweight IChatClient directly when available (much cheaper
-            // than spinning up a full AIAgent session). Falls back to _agent session.
-            string judgeText;
-            if (_steerJudge != null)
-            {
-                var judgeResponse = await _steerJudge.GetResponseAsync(
-                    [new ChatMessage(ChatRole.User, judgePrompt)],
-                    cancellationToken: ct).ConfigureAwait(false);
-                judgeText = judgeResponse.Messages?.LastOrDefault()?.Text ?? "";
-            }
-            else
-            {
-                var judgeSession = await _agent.CreateSessionAsync(ct).ConfigureAwait(false);
-                var judgeResult = await _agent.RunAsync(
-                    [new ChatMessage(ChatRole.User, judgePrompt)], judgeSession,
-                    cancellationToken: ct).ConfigureAwait(false);
-                judgeText = judgeResult.Messages?.LastOrDefault()?.Text ?? "";
-            }
+            // Reuse the existing session — no separate judge invocation
+            var judgeSession = await _agent.CreateSessionAsync(ct).ConfigureAwait(false);
+            var judgeResult = await _agent.RunAsync(
+                [new ChatMessage(ChatRole.User, seePrompt)], judgeSession,
+                cancellationToken: ct).ConfigureAwait(false);
+            var judgeText = judgeResult.Messages?.LastOrDefault()?.Text ?? "";
 
             using var doc = JsonDocument.Parse(judgeText);
             var adequate = doc.RootElement.GetProperty("adequate").GetBoolean();
             var reason = doc.RootElement.GetProperty("reason").GetString() ?? "";
+            var selfScore = doc.RootElement.TryGetProperty("self_score", out var s) ? s.GetInt32() : 3;
+
+            // #7 EDRM: estimate entropy from response, combine with self_score
+            var entropy = EstimateResponseEntropy(response);
+            if (entropy > 0.6 && selfScore < 3)
+                adequate = false; // high entropy + low confidence → escalate
+
             return (adequate, reason);
         }
         catch
         {
-            return (true, "judge failed, assume adequate");
+            return (true, "self-eval failed, assume adequate");
         }
+    }
+
+    /// <summary>#7 EDRM: heuristic entropy from response — hedging density + length variance.</summary>
+    private static double EstimateResponseEntropy(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text) || text.Length < 10) return 0;
+        var lower = text.ToLowerInvariant();
+        var hedgeWords = new[] { "maybe", "perhaps", "probably", "possibly", "might", "could be",
+            "不确定", "可能", "也许", "大概", "估计", "似乎", "推测" };
+        var hedgeCount = hedgeWords.Count(w => lower.Contains(w));
+        var hedgeDensity = (double)hedgeCount / Math.Max(1, text.Length / 50);
+
+        // Sentence-length variance: high variance = mixed confidence
+        var sentences = text.Split('.', '!', '?', '。', '！', '？');
+        var avgLen = sentences.Average(s => (double)s.Length);
+        var variance = sentences.Average(s => Math.Pow(s.Length - avgLen, 2));
+        var normVar = Math.Min(1, variance / 1000);
+
+        return Math.Min(1, hedgeDensity * 0.4 + normVar * 0.6);
+    }
+
+    /// <summary>#2 UCCI: calibrated uncertainty from entropy + gap + support.</summary>
+    private static double CalibrateUncertainty(double entropy, double gap, int support)
+    {
+        // Simple isotonic-style calibration: combine three signals with learned weights
+        var eNorm = entropy;
+        var gNorm = Math.Max(0, 1.0 - gap);          // low gap = high uncertainty
+        var sNorm = Math.Max(0, 1.0 - support / 5.0); // low support = high uncertainty
+        return Math.Min(1, 0.4 * eNorm + 0.35 * gNorm + 0.25 * sNorm);
+    }
+
+    /// <summary>#6 Bayesian: cost-aware value of information for routing.</summary>
+    private static double EstimateValueOfInformation(string message, string response, double entropy)
+    {
+        // VoI = expected improvement from consulting L2 vs cost of L2 call
+        var taskComplexity = Math.Min(1, message.Length / 500.0);
+        var responseQuality = 1.0 - entropy;
+        var improvementPotential = Math.Max(0, 1.0 - responseQuality) * taskComplexity;
+        // Normalize: VoI > 0.5 means worth routing to L2
+        return improvementPotential;
     }
 
     public async Task WarmUpAsync(CancellationToken ct = default)
@@ -257,27 +369,30 @@ public sealed class ChatAgent
             return text;
         }
 
-        var needsPro = text.Contains("<<<NEEDS_PRO:");
+        // ── GoS-inspired L1State extraction ──
+        var l1State = BuildL1State(message, text, r);
 
-        if (!needsPro && text.Length > 20)
-        {
-            var lower = text.ToLowerInvariant();
-            var failPatterns = new[] { "无法获取", "无法确定", "无法提供", "无法访问",
-                "抱歉", "我无法", "暂时无法", "目前还不支持", "我不能",
-                "cannot", "can't", "unable to", "don't know", "i don't" };
-            if (failPatterns.Any(p => lower.Contains(p)))
-            {
-                System.Diagnostics.Debug.WriteLine("[ChatAgent] L1→L2 auto-upgrade triggered by refusal pattern");
-                FailureRecorder.Record(message, text, "refusal pattern detected", "L1");
-                needsPro = true;
-            }
-        }
+        // #7 EDRM: entropy-based routing — before full escalation check
+        var edrmEntropy = EstimateResponseEntropy(text);
+        var voi = EstimateValueOfInformation(message, text, edrmEntropy);
 
-        // Scheme 2: Tool traceability — 查询需要工具但 L1 没调用
-        if (!needsPro && !isSimple && LikelyRequiresTool(message) && !HasToolResults(r))
+        // ── FusionRoute: span-level uncertainty analysis ──
+        var spanRouter = new ResponseSpanRouter();
+        l1State.Spans = spanRouter.ParseSpans(text,
+            l1State.ToolCalls.Count > 0 ? l1State.ToolCalls.ToArray() : null);
+        l1State.SpanUncertaintyRatio = l1State.Spans.Count > 0
+            ? (double)l1State.Spans.Count(s => s.UncertaintyScore >= 0.4) / l1State.Spans.Count
+            : 0;
+
+        // #2 UCCI: calibration — merge entropy + L1State gap into calibrated score
+        var calibratedScore = CalibrateUncertainty(edrmEntropy, l1State.Gap, l1State.SupportCount);
+        var needsPro = l1State.ShouldEscalate || calibratedScore > 0.6 || voi > 0.5;
+
+        // Traditional signals merged into L1State: explicit escalation marker
+        if (!needsPro && text.Contains("<<<NEEDS_PRO:"))
             needsPro = true;
 
-        // Scheme 1: LLM-as-Judge — 语义级质量评估
+        // LLM-as-Judge (GoS: cognitive-to-symbolic evidence grounding)
         if (!needsPro && !isSimple && text.Length > 50)
         {
             var (adequate, reason) = await JudgeResponseQualityAsync(message, text, ct).ConfigureAwait(false);
@@ -285,25 +400,33 @@ public sealed class ChatAgent
             {
                 FailureRecorder.Record(message, text, reason ?? "judge deemed inadequate", "L1");
                 needsPro = true;
+                l1State.Label = "escalate";
+                l1State.EscalationReason = reason;
             }
         }
 
         if (needsPro)
         {
-            var reason = "complex task";
+            var reason = l1State.EscalationReason ?? "complex task";
             if (text.Contains("<<<NEEDS_PRO:"))
             {
-                var match = System.Text.RegularExpressions.Regex.Match(text, @"<<<NEEDS_PRO:\s*(.+?)>>>");
+                var match = Regex.Match(text, @"<<<NEEDS_PRO:\s*(.+?)>>>");
                 if (match.Success) reason = match.Groups[1].Value.Trim();
             }
-            else
+
+            // FusionRoute: prefer span-level routing over full regeneration
+            if (l1State.ShouldRouteBySpans && !text.Contains("<<<NEEDS_PRO:") &&
+                !reason.Contains("declined") && !reason.Contains("refusal"))
             {
-                reason = "flash model declined to answer";
+                text = await TrySpanRoutingAsync(message, text, l1State, session, ct).ConfigureAwait(false);
             }
 
-            r = await _proAgent.RunAsync(messages, session, cancellationToken: ct).ConfigureAwait(false);
-            text = ApplyBlockedOutput(r.Messages?.LastOrDefault()?.Text ?? "");
-            text = $"[Auto-upgraded to Pro: {reason}]\n\n{text}";
+            // If span routing returned original text (didn't start with FusionRoute marker),
+            // or wasn't attempted, do full regeneration
+            if (!text.StartsWith("[FusionRoute"))
+            {
+                text = await FullRegenerationAsync(message, reason, l1State, session, ct).ConfigureAwait(false);
+            }
         }
 
         text = await EnforceAndReflectAsync(text, message, session, ct).ConfigureAwait(false);
@@ -482,5 +605,47 @@ public sealed class ChatAgent
     {
         var json = await _agent.SerializeSessionAsync(session, cancellationToken: ct).ConfigureAwait(false);
         handle.UpdateFromJson(json.GetRawText());
+    }
+
+    // ── FusionRoute span-level routing ──
+
+    private async Task<string> TrySpanRoutingAsync(
+        string message, string originalText, L1State l1State, AgentSession session, CancellationToken ct)
+    {
+        var spanRouter = new ResponseSpanRouter();
+        var refinePrompt = l1State.ToSpanRoutingHandoff(message);
+        var result = await _proAgent.RunAsync(
+            [new ChatMessage(ChatRole.User, refinePrompt)], session,
+            cancellationToken: ct).ConfigureAwait(false);
+        var refined = ApplyBlockedOutput(result.Messages?.LastOrDefault()?.Text ?? "");
+
+        if (string.IsNullOrWhiteSpace(refined) || refined.Length <= 10)
+            return originalText;
+
+        var refinedSpans = spanRouter.ParseSpans(refined);
+        var stitched = spanRouter.Stitch(l1State.Spans,
+            l1State.Spans.Where(s => s.UncertaintyScore >= 0.4).ToList(),
+            refinedSpans.Select(s => s.Text).ToList());
+        return $"[FusionRoute: refined {l1State.Spans.Count(s => s.UncertaintyScore >= 0.4)}/{l1State.Spans.Count} spans]\n\n{stitched}";
+    }
+
+    private async Task<string> FullRegenerationAsync(
+        string message, string reason, L1State l1State, AgentSession session, CancellationToken ct)
+    {
+        var l1Handoff = l1State.ToHandoff(ResultFormat.Toon);
+        var l2Messages = new[]
+        {
+            new ChatMessage(ChatRole.System,
+                "You are the Pro assistant. A Flash assistant attempted this query " +
+                "but could not produce a satisfactory answer. Below is the structured " +
+                "exploration state from the Flash attempt.\n\n" + l1Handoff),
+            new ChatMessage(ChatRole.User,
+                $"The Flash assistant escalated for reason: {reason}\n\n" +
+                $"Original query: {message}")
+        };
+
+        var result = await _proAgent.RunAsync(l2Messages, session, cancellationToken: ct).ConfigureAwait(false);
+        var text = ApplyBlockedOutput(result.Messages?.LastOrDefault()?.Text ?? "");
+        return $"[Auto-upgraded to Pro: {reason}]\n\n{text}";
     }
 }

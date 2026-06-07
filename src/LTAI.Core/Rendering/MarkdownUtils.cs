@@ -33,6 +33,9 @@ public static class MarkdownUtils
             "go" or "golang" => "go",
             "rs" or "rust" => "rust",
             "java" => "java",
+            "moonbit" or "mbt" => "moonbit",
+            "mojo" or "🔥" => "mojo",
+            "cangjie" or "cj" => "cangjie",
             _ => lang ?? "",
         };
     }

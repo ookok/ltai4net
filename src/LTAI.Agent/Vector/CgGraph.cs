@@ -36,6 +36,7 @@ public sealed class CgGraph : AIContextProvider
     {
         ".cs", ".py", ".js", ".jsx", ".ts", ".tsx", ".go", ".rs", ".java",
         ".sh", ".bash", ".json", ".html", ".css",
+        ".mbt", ".mojo", "🔥", ".cj",
     };
 
     /// <summary>

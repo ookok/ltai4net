@@ -36,7 +36,10 @@ public static class SkillScriptRunner
             case ".ps1": exe = "powershell"; scriptArgs = $"-File \"{fullPath}\" {args}"; break;
             case ".csx": exe = "dotnet";  scriptArgs = $"script \"{fullPath}\" {args}"; break;
             case ".cs":  exe = "dotnet";  scriptArgs = $"run --project \"{fullPath}\" -- {args}"; break;
-            default: return $"不支持: {ext}。支持的: .py .js .sh .ps1 .csx .cs";
+            case ".mbt": exe = "moon";    scriptArgs = $"run \"{fullPath}\" {args}"; break;
+            case ".mojo": exe = "mojo";   scriptArgs = $"run \"{fullPath}\" {args}"; break;
+            case ".cj":  exe = "cjc";     scriptArgs = $"run \"{fullPath}\" {args}"; break;
+            default: return $"不支持: {ext}。支持的: .py .js .sh .ps1 .csx .cs .mbt .mojo .cj";
         }
 
         return await RunProcess(exe, scriptArgs, fullPath, cancellationToken).ConfigureAwait(false);

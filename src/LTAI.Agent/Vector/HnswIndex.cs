@@ -25,10 +25,11 @@ public sealed class HnswIndex : IDisposable
     public int Count { get { _rwLock.EnterReadLock(); try { return _nodes.Count; } finally { _rwLock.ExitReadLock(); } } }
 
     /// <summary>Insert a vector and return its index position.</summary>
-    public int Insert(float[] vector)
+    public int Insert(ReadOnlySpan<float> vector)
     {
         var level = RandomLevel();
-        var node = new HnswNode(vector, new List<int>[level + 1]);
+        var copy = vector.ToArray();
+        var node = new HnswNode(copy, new List<int>[level + 1]);
         for (int l = 0; l <= level; l++) node.Links[l] = [];
 
         _rwLock.EnterWriteLock();
@@ -49,7 +50,7 @@ public sealed class HnswIndex : IDisposable
             // Phase 1: traverse from top to level+1, find nearest entry
             for (int l = _maxLevel; l > level; l--)
             {
-                (currEntry, dist) = SearchLayer(query: vector, entry: currEntry, ef: 1, layer: l);
+                (currEntry, dist) = SearchLayer(vector, currEntry, ef: 1, layer: l);
             }
 
             // Phase 2: insert at each level from min(level, maxLevel) down to 0
@@ -58,7 +59,7 @@ public sealed class HnswIndex : IDisposable
             {
                 var ef = l == level ? EfConstruction : 1;
                 var eps = new List<int> { currEntry };
-                candidates = SearchLayerBatched(query: vector, eps: eps, ef: ef, layer: l);
+                candidates = SearchLayerBatched(vector, eps, ef, l);
 
                 var neighbors = SelectNeighbors(candidates, l == 0 ? Mmax0 : Mmax);
                 node.Links[l].AddRange(neighbors);
@@ -85,7 +86,7 @@ public sealed class HnswIndex : IDisposable
     }
 
     /// <summary>Search top-K nearest neighbors by cosine distance.</summary>
-    public List<(int index, float distance)> Search(float[] query, int topK)
+    public List<(int index, float distance)> Search(ReadOnlySpan<float> query, int topK)
     {
         _rwLock.EnterReadLock();
         try
@@ -106,7 +107,7 @@ public sealed class HnswIndex : IDisposable
         finally { _rwLock.ExitReadLock(); }
     }
 
-    private (int nearest, float minDist) SearchLayer(float[] query, int entry, int ef, int layer)
+    private (int nearest, float minDist) SearchLayer(ReadOnlySpan<float> query, int entry, int ef, int layer)
     {
         var visited = new HashSet<int> { entry };
         var candidates = new SortedSet<(float dist, int idx)> { (Dist(query, _nodes[entry].Vector), entry) };
@@ -140,7 +141,7 @@ public sealed class HnswIndex : IDisposable
         return (results.Min.idx, results.Min.dist);
     }
 
-    private List<(int idx, float dist)> SearchLayerBatched(float[] query, List<int> eps, int ef, int layer)
+    private List<(int idx, float dist)> SearchLayerBatched(ReadOnlySpan<float> query, List<int> eps, int ef, int layer)
     {
         var visited = new HashSet<int>(eps);
         var candidates = new SortedSet<(float dist, int idx)>();
@@ -214,7 +215,7 @@ public sealed class HnswIndex : IDisposable
         => LTAI.AI.VectorMath.CosineDistance(a, b);
 
     /// <summary>Rebuild index from an enumerable of vectors (clears existing).</summary>
-    public void Rebuild(IEnumerable<float[]> vectors)
+    public void Rebuild(IEnumerable<ReadOnlyMemory<float>> vectors)
     {
         _rwLock.EnterWriteLock();
         try
@@ -222,7 +223,7 @@ public sealed class HnswIndex : IDisposable
             _nodes.Clear();
             _entryPoint = -1;
             _maxLevel = 0;
-            foreach (var v in vectors) Insert(v);
+            foreach (var v in vectors) Insert(v.Span);
         }
         finally { _rwLock.ExitWriteLock(); }
     }

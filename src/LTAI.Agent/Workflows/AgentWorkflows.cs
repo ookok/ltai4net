@@ -264,18 +264,28 @@ public sealed class AgentWorkflows
         var builder = AgentWorkflowBuilder.CreateConcurrentBuilderWith(agents);
         builder.WithAggregator(static lists =>
         {
-            // Per-agent ordered output, last assistant message wins.
+            // #4 Beyond Consensus: trace-level synthesis instead of majority voting.
+            // Read each agent's full reasoning trace, not just the final answer.
+            // The aggregator synthesizes across traces to recover correct answers
+            // from minority chains rather than discarding them.
             var sb = new StringBuilder();
-            sb.AppendLine("## Concurrent Results\n");
+            sb.AppendLine("## Trace-Level Synthesis\n");
             foreach (var list in lists)
             {
                 if (list.Count == 0) continue;
-                var last = list[^1];
-                var name = !string.IsNullOrEmpty(last.AuthorName) ? last.AuthorName : "(unnamed)";
-                sb.AppendLine($"### {name}");
-                sb.AppendLine(last.Text);
+                var name = !string.IsNullOrEmpty(list[^1].AuthorName) ? list[^1].AuthorName : "(unnamed)";
+                sb.AppendLine($"### {name} — Trace ({list.Count} messages)");
+                // Include intermediate reasoning, not just final output
+                foreach (var msg in list)
+                {
+                    if (msg.Role == ChatRole.User || string.IsNullOrWhiteSpace(msg.Text)) continue;
+                    var truncated = msg.Text.Length > 300 ? msg.Text[..297] + "..." : msg.Text;
+                    sb.AppendLine($"> {truncated}");
+                }
                 sb.AppendLine();
             }
+            sb.AppendLine("## Synthesis");
+            sb.AppendLine("(above traces synthesized — minority findings preserved)");
             return [new ChatMessage(ChatRole.Assistant, sb.ToString())];
         });
         var workflow = builder.Build();

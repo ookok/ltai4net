@@ -9,6 +9,15 @@
     <OutputPath>$(MSBuildThisFileDirectory)..\..\dist\build\Web\</OutputPath>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
+
+    <!-- NativeAOT (LTS) -->
+    <PublishAot>true</PublishAot>
+    <OptimizationPreference>Size</OptimizationPreference>
+    <IlcInstructionSet>native</IlcInstructionSet>
+    <IlcGenerateStackTraceData>false</IlcGenerateStackTraceData>
+    <IlcDisableUnhandledExceptionExperience>true</IlcDisableUnhandledExceptionExperience>
+    <IlcTreatLinkingErrorsAsWarnings>true</IlcTreatLinkingErrorsAsWarnings>
+    <NoWarn>$(NoWarn);IL2026;IL3050;IL2046;IL2091;IL2104</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
@@ -31,6 +40,11 @@
     <ProjectReference Include="..\..\extern\agent-framework\dotnet\src\Microsoft.Agents.AI.Hosting.OpenAI\Microsoft.Agents.AI.Hosting.OpenAI.csproj"          Condition="!Exists('..\..\dist\lib\maf\Microsoft.Agents.AI.Hosting.OpenAI.dll')" />
     <!-- P7.1: MAF DevUI — Sdk.Web with frontend assets, always use ProjectReference -->
     <ProjectReference Include="..\..\extern\agent-framework\dotnet\src\Microsoft.Agents.AI.DevUI\Microsoft.Agents.AI.DevUI.csproj" />
+  </ItemGroup>
+
+  <!-- NativeAOT linker descriptor -->
+  <ItemGroup>
+    <RdXmlFile Include="..\..\aot\rd.xml" />
   </ItemGroup>
 
 </Project>

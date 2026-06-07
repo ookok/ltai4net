@@ -22,7 +22,8 @@ public sealed class CodeAnalysisTools
         { ".cs" };
     private static readonly HashSet<string> TsExts = new(StringComparer.OrdinalIgnoreCase)
         { ".py", ".js", ".jsx", ".ts", ".tsx", ".go", ".rs", ".java",
-          ".sh", ".bash", ".json", ".html", ".css" };
+          ".sh", ".bash", ".json", ".html", ".css",
+          ".mbt", ".mojo", "🔥", ".cj" };
 
     public CodeAnalysisTools(string ws) => _ws = ws;
 

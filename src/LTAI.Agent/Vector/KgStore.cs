@@ -1404,7 +1404,7 @@ public sealed partial class KgStore : IDisposable
         _hnswLock.EnterWriteLock();
         try
         {
-            _hnsw.Rebuild(vectors);
+            _hnsw.Rebuild(vectors.Select(v => (ReadOnlyMemory<float>)v));
             _hnswNodeIds.Clear();
             _hnswNodeIds.AddRange(nodeIds);
         }
@@ -1551,6 +1551,8 @@ public static class KgStoreSchema
         "extends", "depends_on", "related_to", "uses", "mentions",
         "causes", "fixes", "contradicts", "supports", "follows",
         "replaces", "tracked_in", "part_of", "created_by",
+        "refines",    // generalization → specialization hierarchy
+        "refutes",    // evidence refutes a hypothesis
     };
 
     public static bool IsValidKind(string kind) => string.IsNullOrEmpty(kind) || ValidKinds.Contains(kind);

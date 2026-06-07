@@ -282,10 +282,22 @@ public sealed class SubagentTools
 
     private static string GetSystemPrompt(string type) => type switch
     {
-        "explore" => $"{SubagentBaseSystem}\n\nYou are an exploration subagent. Use read_file, search_content, directory_tree. Return a distilled answer with file:line citations.",
-        "research" => $"{SubagentBaseSystem}\n\nYou are a research subagent. Use web_search for external references, read_file/search_content for local verification. Synthesize findings.",
-        "review" => $"{SubagentBaseSystem}\n\nYou are a code review subagent. Check correctness, security, missing tests. Return severity-tagged findings with file:line.",
-        "security_review" => $"{SubagentBaseSystem}\n\nYou are a security review subagent. Check injection, auth, secrets, deserialization, path traversal. Return severity-tagged list with CWE references.",
+        "explore" => $"{SubagentBaseSystem}\n\n#10 PACT: Use protocolized message format.\n"
+            + "Output format: action=<explore|report> | state=<finding|done> | summary=<text>\n"
+            + "You are an exploration subagent. Use read_file, search_content, directory_tree.",
+        "research" => $"{SubagentBaseSystem}\n\n#10 PACT: Use protocolized message format.\n"
+            + "Output format: action=<research|synthesize> | state=<partial|final> | summary=<text>\n"
+            + "You are a research subagent. Use web_search for external references, read_file/search_content for local verification.",
+        "review" => $"{SubagentBaseSystem}\n\n#10 PACT: Use protocolized message format.\n"
+            + "Output: action=<review> | state=<finding|summary> | file=<path> | line=<num> | severity=<P0|P1|P2> | detail=<text>\n"
+            + "You are a code review subagent following the Open Code Review deterministic-first approach.\n"
+            + "1. FIRST call BuildReviewContext() to get file groups and rule matches.\n"
+            + "2. Use GroupChanges() to understand file relationships.\n"
+            + "3. Review EACH GROUP as a unit.\n"
+            + "4. AFTER analysis, call ReflectReviewQuality() to check coverage.",
+        "security_review" => $"{SubagentBaseSystem}\n\n#10 PACT: Use protocolized message format.\n"
+            + "Output: action=<audit> | state=<finding|summary> | cwe=<id> | severity=<P0|P1|P2> | detail=<text>\n"
+            + "You are a security review subagent. Check injection, auth, secrets, deserialization, path traversal.",
         _ => SubagentBaseSystem
     };
 

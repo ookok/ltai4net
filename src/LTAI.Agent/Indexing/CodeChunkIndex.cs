@@ -27,6 +27,7 @@ public sealed class CodeChunkIndex : AIContextProvider
     {
         ".cs", ".py", ".js", ".jsx", ".ts", ".tsx", ".go", ".rs", ".java",
         ".sh", ".bash", ".json", ".html", ".css",
+        ".mbt", ".mojo", "🔥", ".cj",
     };
 
     private static readonly Dictionary<string, HashSet<string>> ChunkDeclTypes = new()
@@ -56,6 +57,8 @@ public sealed class CodeChunkIndex : AIContextProvider
         [".go"] = "go", [".rs"] = "rust", [".java"] = "java",
         [".sh"] = "bash", [".bash"] = "bash",
         [".json"] = "json", [".html"] = "html", [".css"] = "css",
+        [".mbt"] = "moonbit", [".mojo"] = "mojo", ["🔥"] = "mojo",
+        [".cj"] = "cangjie",
     };
 
     public CodeChunkIndex(KgStore store, TreeSitterParser? parser = null,

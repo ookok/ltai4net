@@ -129,6 +129,9 @@ public sealed class TextMateHighlighter
             "fs" or "fsharp" => "fsharp",
             "vb" or "vbnet" => "vbnet",
             "dockerfile" or "docker" => "dockerfile",
+            "moonbit" or "mbt" => "moonbit",
+            "mojo" or "🔥" => "mojo",
+            "cangjie" or "cj" => "cangjie",
             _ => "",
         };
     }

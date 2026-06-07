@@ -6,6 +6,8 @@
     <Nullable>enable</Nullable>
     <RootNamespace>LTAI.Agent</RootNamespace>
     <NoWarn>$(NoWarn)</NoWarn>
+    <IsAotCompatible>true</IsAotCompatible>
+    <NoWarn>$(NoWarn);IL2026;IL3050;IL2046;IL2091;IL2104</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>

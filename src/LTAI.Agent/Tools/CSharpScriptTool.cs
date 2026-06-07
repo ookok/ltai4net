@@ -1,5 +1,6 @@
 ﻿using System.ComponentModel;
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Text;
 using System.Text.Json;
 using Microsoft.CodeAnalysis.CSharp.Scripting;
@@ -7,7 +8,12 @@ using Microsoft.CodeAnalysis.Scripting;
 
 namespace LTAI.Agent.Tools;
 
+/// <summary>
+/// C# 脚本执行引擎 — 利用 Roslyn Scripting 在进程中直接运行 C# 代码。
+/// 仅限非 AOT 环境；NativeAOT 下 Roslyn 运行时编译不可用。
+/// </summary>
 [Description("C# 脚本执行引擎 — 利用 Roslyn Scripting 在进程中直接运行 C# 代码")]
+[RequiresDynamicCode("CSharpScriptTool 使用 Roslyn Scripting 运行时编译，NativeAOT 下不可用")]
 public sealed class CSharpScriptTool
 {
     private static readonly string[] DefaultImports =
