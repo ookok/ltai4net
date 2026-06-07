@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text;
 using LTAI.Core.Configuration;
 using LTAI.Core.Commands;
+using LTAI.Core.Specs;
 using LTAI.Agent.Tools;
 
 namespace LTAI.Desktop.Services;
@@ -9,6 +10,7 @@ namespace LTAI.Desktop.Services;
 public sealed class DesktopCommandService
 {
     private readonly CommandParser _parser = new();
+    private readonly SpecService _specs = new(Path.Combine(AppContext.BaseDirectory, ".livingtree", "specs"));
 
     public CommandParser Parser => _parser;
 
@@ -48,6 +50,7 @@ public sealed class DesktopCommandService
             WorkflowCommand { Args: var a } => new($"🔁 工作流 {(string.IsNullOrEmpty(a) ? "列表" : a)} — 请查看工作流面板 (Ctrl+6)"),
             PipeCommand { Args: var a } => new($"🔀 管道 {(string.IsNullOrEmpty(a) ? "列表" : a)} — 桌面端暂不支持"),
             SkillCommand { Args: var a } => new($"⚡ 技能 {(string.IsNullOrEmpty(a) ? "列表" : a)} — 请查看技能面板 (Ctrl+4)"),
+            SpecCommand { Args: var a } => new(HandleSpec(a)),
             _ => new(null),
         };
     }
@@ -120,5 +123,63 @@ public sealed class DesktopCommandService
             return $"📂 {newDir}";
         }
         catch (Exception ex) { return $"❌ 切换失败: {ex.Message}"; }
+    }
+
+    private string HandleSpec(string args)
+    {
+        var parts = args.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
+        var sub = parts.Length > 0 ? parts[0].ToLowerInvariant() : "";
+        var subArgs = parts.Length > 1 ? parts[1] : "";
+
+        return sub switch
+        {
+            "" or "list" => HandleSpecList(),
+            "new" or "create" => HandleSpecNew(subArgs),
+            "show" or "read" => HandleSpecShow(subArgs),
+            "delete" or "rm" => HandleSpecDelete(subArgs),
+            "plan" => HandleSpecSub("plan", subArgs),
+            "tasks" => HandleSpecSub("tasks", subArgs),
+            _ => "用法: /spec list|new|show|delete|plan|tasks",
+        };
+    }
+
+    private string HandleSpecList()
+    {
+        var list = _specs.List();
+        if (list.Count == 0) return "暂无 spec。使用 /spec new <name> 创建";
+        return string.Join("\n", list.Select(m => $"📄 {m.Name} [{m.Status}] — {m.Description}"));
+    }
+
+    private string HandleSpecNew(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return "用法: /spec new <name>";
+        if (_specs.Get(name) != null) return $"spec '{name}' 已存在";
+        _specs.WriteSpec(name, $"# {name}\n\n## 概述\n\n## 功能需求\n\n## 验收标准\n");
+        return $"✅ spec '{name}' 已创建。使用 /spec show {name} 查看";
+    }
+
+    private string HandleSpecShow(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return "用法: /spec show <name>";
+        var content = _specs.ReadSpec(name);
+        if (content == null) return $"spec '{name}' 未找到";
+        return content;
+    }
+
+    private string HandleSpecDelete(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return "用法: /spec delete <name>";
+        return _specs.Delete(name) ? $"🗑️ spec '{name}' 已删除" : $"spec '{name}' 未找到";
+    }
+
+    private string HandleSpecSub(string sub, string name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            var all = _specs.List().Where(m => m.Status >= LTAI.Core.Specs.SpecStatus.Planned).ToList();
+            return all.Count == 0 ? $"尚无含 {sub} 的 spec" : string.Join("\n", all.Select(m => $"📄 {m.Name}"));
+        }
+        var content = sub == "plan" ? _specs.ReadPlan(name) : _specs.ReadTasks(name);
+        return content ?? $"'{name}' 尚无 {sub}";
     }
 }

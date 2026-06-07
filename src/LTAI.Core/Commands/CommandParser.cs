@@ -19,7 +19,8 @@ public sealed class CommandParser : ICommandParser
         }
     }
 
-    private static readonly (string cmd, string[] aliases)[] KnownCommands =
+    // Public so TUI's SlashCommands can reference it (avoids duplicate alias definitions)
+    public static readonly (string cmd, string[] aliases)[] KnownCommands =
     [
         ("help",     ["?", "帮助"]),
         ("new",      ["reset", "clear", "新", "新建", "重置"]),
@@ -45,6 +46,10 @@ public sealed class CommandParser : ICommandParser
         ("skill",    []),
         ("git",      ["g"]),
         ("graph",    ["g", "图"]),
+        ("agents",   ["agent", "a"]),
+        ("tools",    ["tool", "t"]),
+        ("mcp",      []),
+        ("spec",     ["specification"]),
         ("exit",     ["quit", "q", "退出"]),
     ];
 
@@ -119,13 +124,18 @@ public sealed class CommandParser : ICommandParser
         "skill" => new SkillCommand(args),
         "git" => new GitCommand(args),
         "graph" => new GraphCommand(args),
+        "agents" => new AgentsCommand(args),
+        "tools" => new ToolsCommand(args),
+        "mcp" => new McpCommand(args),
+        "spec" => new SpecCommand(args),
         _ => new UnknownCommand(canonical),
     };
 
     private static bool HasArgs(string cmd) => cmd switch
     {
         "model" or "jobs" or "config" or "snippet" or "workflow" or "pipe" or
-        "mode" or "ls" or "cd" or "lang" or "skill" or "git" or "graph" => true,
+        "mode" or "ls" or "cd" or "lang" or "skill" or "git" or "graph" or
+        "agents" or "tools" or "mcp" or "spec" => true,
         _ => false,
     };
 

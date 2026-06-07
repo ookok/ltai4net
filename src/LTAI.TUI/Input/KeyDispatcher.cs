@@ -108,7 +108,7 @@ public sealed class KeyDispatcher
             if (!string.IsNullOrWhiteSpace(paletteInput))
             {
                 var context = "";
-                var currentFile = LTAI.TUI.TextPadView.CurrentFileForContext;
+                var currentFile = _owner.CurrentFileForContext;
                 if (currentFile != null)
                     context = $"[当前文件: {currentFile}]\n";
                 _owner.EnqueueUserMessage($"{context}[命令面板] {paletteInput}");
@@ -361,7 +361,7 @@ public sealed class KeyDispatcher
                 }
                 else if (completions.Count > 1)
                 {
-                    var lcp = LongestCommonPrefix(completions);
+                    var lcp = ProviderHelpers.LongestCommonPrefix(completions);
                     if (lcp.Length > ("/" + _owner._pickerFilter).Length)
                         _owner._pickerFilter = lcp.Length > 1 ? lcp[1..] : "";
                     _owner.UpdatePickerItems();
@@ -444,15 +444,4 @@ public sealed class KeyDispatcher
     private static bool Mods(ConsoleKeyInfo key, ConsoleModifiers mod) =>
         (key.Modifiers & mod) != 0;
 
-    private static string LongestCommonPrefix(List<string> strings)
-    {
-        if (strings.Count == 0) return "";
-        if (strings.Count == 1) return strings[0];
-        var first = strings[0];
-        for (int i = 0; i < first.Length; i++)
-            for (int j = 1; j < strings.Count; j++)
-                if (i >= strings[j].Length || strings[j][i] != first[i])
-                    return first[..i];
-        return first;
-    }
 }

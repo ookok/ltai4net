@@ -115,7 +115,7 @@ public sealed class ModelCommandService : ICommandService
                 return HandleLayerSelectComplete(subCmd, layerArgs[0]);
             var p = layerArgs[0]; var m = layerArgs[1];
             SaveLayerSelection(subCmd, p, m);
-            if (_router != null && SlashCommands.KnownProviders.TryGetValue(p, out var info))
+            if (_router != null && ProviderHelpers.KnownProviders.TryGetValue(p, out var info))
             {
                 var key = SecretManager.Get(info.EnvVar) ?? "";
                 _router.Register(subCmd, OpenAIChatClientFactory.Create(info.Endpoint ?? "", m, key));
@@ -148,7 +148,7 @@ public sealed class ModelCommandService : ICommandService
 
     private CommandResult HandleLayerSelect(string layer)
     {
-        var providers = SlashCommands.KnownProviders
+        var providers = ProviderHelpers.KnownProviders
             .Where(kv => !string.IsNullOrEmpty(kv.Value.EnvVar))
             .Select(kv => kv.Key)
             .ToList();
@@ -160,7 +160,7 @@ public sealed class ModelCommandService : ICommandService
             .PageSize(15)
             .AddChoices(providers);
         var chosen = AnsiConsole.Prompt(picker);
-        if (!SlashCommands.KnownProviders.TryGetValue(chosen, out var info)) return new SuccessResult("");
+        if (!ProviderHelpers.KnownProviders.TryGetValue(chosen, out var info)) return new SuccessResult("");
 
         string? existingKey = null;
         if (!string.IsNullOrEmpty(info.EnvVar))
@@ -230,7 +230,7 @@ public sealed class ModelCommandService : ICommandService
 
     private CommandResult HandleLayerSelectComplete(string layer, string provider)
     {
-        if (!SlashCommands.KnownProviders.TryGetValue(provider, out var info))
+        if (!ProviderHelpers.KnownProviders.TryGetValue(provider, out var info))
             return new SuccessResult($"未知 provider: {provider}");
         var sb = new StringBuilder();
         sb.AppendLine($"[bold]{layer.ToUpperInvariant()} Provider: {provider}[/]");
@@ -261,7 +261,7 @@ public sealed class ModelCommandService : ICommandService
         var sb = new StringBuilder();
         sb.AppendLine("[bold yellow]/model l0 api[/]");
         sb.AppendLine("[grey]可用 Provider:[/]");
-        foreach (var (name, info) in SlashCommands.KnownProviders)
+        foreach (var (name, info) in ProviderHelpers.KnownProviders)
         {
             if (string.IsNullOrEmpty(info.Endpoint)) continue;
             var hasKey = !string.IsNullOrEmpty(info.EnvVar) && SecretManager.Has(info.EnvVar);
@@ -273,7 +273,7 @@ public sealed class ModelCommandService : ICommandService
 
     private CommandResult ShowL0ApiModels(string provider)
     {
-        if (!SlashCommands.KnownProviders.TryGetValue(provider, out var info))
+        if (!ProviderHelpers.KnownProviders.TryGetValue(provider, out var info))
             return new SuccessResult($"未知 provider: {provider}");
 
         var sb = new StringBuilder();

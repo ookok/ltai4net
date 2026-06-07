@@ -68,7 +68,7 @@ public sealed class ConfigCommandService : ICommandService
         sb.AppendLine();
 
         sb.AppendLine("[bold]可用 Provider:[/]");
-        foreach (var (name, info) in SlashCommands.KnownProviders)
+        foreach (var (name, info) in ProviderHelpers.KnownProviders)
         {
             var keyStatus = string.IsNullOrEmpty(info.EnvVar)
                 ? "[dim]Local[/]"
@@ -87,12 +87,12 @@ public sealed class ConfigCommandService : ICommandService
             .Title("[yellow]选择 LLM Provider:[/]")
             .PageSize(15)
             .MoreChoicesText("[grey](滚动查看更多)[/]")
-            .AddChoices(SlashCommands.KnownProviders.Keys.OrderBy(k => k));
+            .AddChoices(ProviderHelpers.KnownProviders.Keys.OrderBy(k => k));
         var choice = AnsiConsole.Prompt(prompt);
 
         if (_router != null) _router.ActiveProvider = choice;
 
-        if (SlashCommands.KnownProviders.TryGetValue(choice, out var info) && !string.IsNullOrEmpty(info.EnvVar))
+        if (ProviderHelpers.KnownProviders.TryGetValue(choice, out var info) && !string.IsNullOrEmpty(info.EnvVar))
         {
             var key = SecretManager.Get(info.EnvVar);
             if (!string.IsNullOrEmpty(key) && _router != null && !_router.RegisteredProviders.Contains(choice))
@@ -102,7 +102,7 @@ public sealed class ConfigCommandService : ICommandService
             }
         }
 
-        if (SlashCommands.KnownProviders.TryGetValue(choice, out var pInfo) && !string.IsNullOrEmpty(pInfo.EnvVar) && !SecretManager.Has(pInfo.EnvVar))
+        if (ProviderHelpers.KnownProviders.TryGetValue(choice, out var pInfo) && !string.IsNullOrEmpty(pInfo.EnvVar) && !SecretManager.Has(pInfo.EnvVar))
             return new SuccessResult($"已切换到 [cyan]{choice}[/]。使用 /config apikey 设置 API Key");
 
         return new SuccessResult($"已切换到 [cyan]{choice}[/]");
@@ -111,11 +111,11 @@ public sealed class ConfigCommandService : ICommandService
     private CommandResult ConfigSetApiKey(string providerArg)
     {
         var providerName = !string.IsNullOrEmpty(providerArg) ? providerArg : _defaultProvider;
-        if (string.IsNullOrEmpty(providerName) || !SlashCommands.KnownProviders.TryGetValue(providerName, out var info))
+        if (string.IsNullOrEmpty(providerName) || !ProviderHelpers.KnownProviders.TryGetValue(providerName, out var info))
         {
             if (string.IsNullOrEmpty(providerArg))
                 return new SuccessResult("用法: /config apikey <provider名称>  或先通过 /config provider 选择");
-            return new SuccessResult($"未知 Provider '{providerArg}'。可用: {string.Join(", ", SlashCommands.KnownProviders.Keys)}");
+            return new SuccessResult($"未知 Provider '{providerArg}'。可用: {string.Join(", ", ProviderHelpers.KnownProviders.Keys)}");
         }
 
         if (string.IsNullOrEmpty(info.EnvVar))
@@ -135,7 +135,7 @@ public sealed class ConfigCommandService : ICommandService
 
     private CommandResult ConfigSelectModel(string layer)
     {
-        var info = SlashCommands.KnownProviders.TryGetValue(_defaultProvider, out var p) ? p : null;
+        var info = ProviderHelpers.KnownProviders.TryGetValue(_defaultProvider, out var p) ? p : null;
         if (info == null) return new SuccessResult("请先通过 /config provider 选择 Provider");
 
         if (!string.IsNullOrEmpty(info.EnvVar) && !SecretManager.Has(info.EnvVar))
@@ -233,12 +233,12 @@ public sealed class ConfigCommandService : ICommandService
             if (!string.IsNullOrEmpty(envVar) && !string.IsNullOrEmpty(value))
             {
                 SecretManager.Set(envVar, value);
-                var providerName = SlashCommands.KnownProviders
+                var providerName = ProviderHelpers.KnownProviders
                     .Where(kv => string.Equals(kv.Value.EnvVar, envVar, StringComparison.OrdinalIgnoreCase))
                     .Select(kv => kv.Key).FirstOrDefault();
                 if (providerName != null && _router != null)
                 {
-                    var info = SlashCommands.KnownProviders[providerName];
+                    var info = ProviderHelpers.KnownProviders[providerName];
                     var client = OpenAIChatClientFactory.Create(info.Endpoint, info.Model, value);
                     _router.Register(providerName, client);
                 }
@@ -255,8 +255,8 @@ public sealed class ConfigCommandService : ICommandService
         if (string.IsNullOrWhiteSpace(providerArg))
             return new SuccessResult("用法: /config clear <provider名称>  清除指定 Provider 的 API Key");
 
-        if (!SlashCommands.KnownProviders.TryGetValue(providerArg, out var info))
-            return new SuccessResult($"未知 Provider '{providerArg}'。可用: {string.Join(", ", SlashCommands.KnownProviders.Keys)}");
+        if (!ProviderHelpers.KnownProviders.TryGetValue(providerArg, out var info))
+            return new SuccessResult($"未知 Provider '{providerArg}'。可用: {string.Join(", ", ProviderHelpers.KnownProviders.Keys)}");
 
         if (string.IsNullOrEmpty(info.EnvVar))
             return new SuccessResult($"{providerArg} 为本地 Provider，无 API Key 可清除");

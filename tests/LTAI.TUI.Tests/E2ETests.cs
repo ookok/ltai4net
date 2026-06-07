@@ -31,7 +31,10 @@ public class E2ETests
             var snippetSvc = new SnippetCommandService(null);
             var workflowSvc = new WorkflowCommandService(null);
             var pipeSvc = new PipeCommandService(null, null);
-            SlashCommands.Router = new CommandRouter(modelSvc, jobsSvc, configSvc, snippetSvc, workflowSvc, pipeSvc);
+            SlashCommands.Router = new CommandRouter(modelSvc, jobsSvc, configSvc, snippetSvc, workflowSvc, pipeSvc,
+                null!, null!, null!, null!, null!,
+                new InfoCommandService(),
+                null!, null!);
         }
     }
     // ── Agent command chain (input → parse → execute → status) ──

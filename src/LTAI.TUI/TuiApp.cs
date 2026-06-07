@@ -18,17 +18,9 @@ public sealed class TuiApp
     private readonly IOptions<LTAIOptions> _config;
     private readonly string _projectRoot;
     private readonly ChatLayout _chatLayout;
-    private readonly LTAIDevUIService _devUi;
-    private readonly DevUISpanCollector _spanCollector;
-    private readonly LTAI.Agent.Workflows.YAMLWorkflowRegistry? _workflows;
-    private readonly LTAI.AI.LocalEmbedder? _embedder;
-    private readonly LTAI.AI.ToolEmbeddingCache? _embedCache;
-    private readonly LTAI.AI.RemoteEmbeddingCache? _remoteCache;
-    private readonly LTAI.AI.EmbeddingClient? _embeddingClient;
-    private readonly LTAI.AI.ModelMetadataProvider? _modelsProvider;
-    private readonly LTAI.Agent.Context.CacheAlignerProvider? _aligner;
-    private readonly LTAI.Agent.Tasks.TaskQueue? _taskQueue;
-    private readonly BackgroundJobService? _bgjs;
+    private readonly TextPadView _textPadView;
+    private readonly SkillsPanelView _skillsPanelView;
+    private readonly DevUI.DashboardContext _dashCtx;
     private readonly QuestionService _questionService;
 
     private TuiView _currentView = TuiView.Chat;
@@ -39,42 +31,24 @@ public sealed class TuiApp
         LLMConfigPanel llmConfig,
         IOptions<LTAIOptions> config,
         string projectRoot,
-        LTAIDevUIService devUi,
-        DevUISpanCollector spanCollector,
+        DevUI.DashboardContext dashCtx,
         QuestionService questionService,
         Rendering.ChatRenderer renderer,
-        LTAI.Agent.Workflows.YAMLWorkflowRegistry? workflows = null,
-        LTAI.AI.LocalEmbedder? embedder = null,
-        LTAI.AI.ToolEmbeddingCache? embedCache = null,
-        LTAI.AI.RemoteEmbeddingCache? remoteCache = null,
-        LTAI.AI.EmbeddingClient? embeddingClient = null,
-        LTAI.AI.ModelMetadataProvider? modelsProvider = null,
-        LTAI.Agent.Context.CacheAlignerProvider? aligner = null,
-        LTAI.Agent.Tasks.TaskQueue? taskQueue = null,
-        BackgroundJobService? bgjs = null)
+        LTAI.Agent.Memory.PalaceStore? palaceStore = null)
     {
         _chat = chat;
         _llmConfig = llmConfig;
         _config = config;
         _projectRoot = projectRoot;
-        _chatLayout = new ChatLayout(chat, renderer, questionService, new LTAI.Core.Session.SessionManager());
-        _devUi = devUi;
-        _spanCollector = spanCollector;
+        _dashCtx = dashCtx;
+        _textPadView = new TextPadView(projectRoot);
+        _skillsPanelView = new SkillsPanelView(projectRoot);
+        _chatLayout = new ChatLayout(chat, renderer, questionService, new LTAI.Core.Session.SessionManager(), _textPadView, palaceStore);
         _questionService = questionService;
-        _workflows = workflows;
-        _embedder = embedder;
-        _embedCache = embedCache;
-        _remoteCache = remoteCache;
-        _embeddingClient = embeddingClient;
-        _modelsProvider = modelsProvider;
-        _aligner = aligner;
-        _taskQueue = taskQueue;
-        _bgjs = bgjs;
     }
 
     public async Task RunAsync()
     {
-        SkillsPanelView.Initialize(_projectRoot);
         // 启用鼠标 + Kitty 键盘支持（整个 TUI 生命周期）
         LTAI.TUI.Input.MouseTracker.Enable();
         try
@@ -120,31 +94,33 @@ public sealed class TuiApp
             switch (target)
             {
                 case TuiView.Dashboard:
-                    Console.Clear();
+                    AnsiConsole.Clear();
                     ShowHeader();
                     ShowDashboard();
                     AnsiConsole.Write(new Rule("[grey]—[/]") { Style = Style.Parse("grey") });
-                    AnsiConsole.MarkupLine("[dim]按任意键返回聊天...[/]");
-                    Console.ReadKey(true);
+                    AnsiConsole.Prompt(new SelectionPrompt<string>()
+                        .Title("[dim]按 Enter 返回聊天[/]")
+                        .PageSize(3)
+                        .AddChoices("返回聊天"));
                     break;
                 case TuiView.TextPad:
-                    Console.Clear();
+                    AnsiConsole.Clear();
                     ShowHeader();
-                    TextPadView.Render(_projectRoot);
-                    // P1: TextPadView 设置了 PendingChatRequest → 发送到聊天
-                    if (TextPadView.PendingChatRequest != null)
+                    _textPadView.Render();
+                    // TextPadView 设置了 PendingChatRequest → 发送到聊天
+                    if (_textPadView.PendingChatRequest != null)
                     {
-                        _chatLayout.EnqueueUserMessage(TextPadView.PendingChatRequest);
-                        TextPadView.PendingChatRequest = null;
+                        _chatLayout.EnqueueUserMessage(_textPadView.PendingChatRequest);
+                        _textPadView.PendingChatRequest = null;
                     }
                     break;
                 case TuiView.LLMConfig:
                     _llmConfig.ShowSetupWizard();
                     break;
                 case TuiView.Skills:
-                    Console.Clear();
+                    AnsiConsole.Clear();
                     ShowHeader();
-                    SkillsPanelView.Render();
+                    _skillsPanelView.Render();
                     break;
             }
         }
@@ -213,8 +189,11 @@ public sealed class TuiApp
 
     private void ShowDashboard()
     {
-        DevUIDashboardView.Render(_devUi, _spanCollector, UsageTracker.Default, _workflows, _embedder, _embedCache, _remoteCache, _embeddingClient, _modelsProvider, _aligner, _taskQueue, _bgjs);
+        DevUIDashboardView.Render(
+            _dashCtx.DevUi, _dashCtx.SpanCollector, UsageTracker.Default,
+            _dashCtx.Workflows, _dashCtx.Embedder, _dashCtx.EmbedCache,
+            _dashCtx.RemoteCache, _dashCtx.EmbeddingClient, _dashCtx.ModelsProvider,
+            _dashCtx.Aligner, _dashCtx.TaskQueue, _dashCtx.Bgjs);
     }
-
 }
 

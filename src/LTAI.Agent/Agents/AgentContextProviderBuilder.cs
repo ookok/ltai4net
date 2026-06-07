@@ -3,11 +3,14 @@ using LTAI.Agent.LanguageServer;
 using LTAI.Agent.Memory;
 using LTAI.Agent.Tools;
 using LTAI.Agent.Vector;
+using LTAI.Core.Configuration;
 using LTAI.Core.Safety;
+using LTAI.Core.Specs;
 using Microsoft.Agents.AI;
 using Microsoft.Agents.AI.Compaction;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 #pragma warning disable MAAI001
 
@@ -46,7 +49,10 @@ internal static class AgentContextProviderBuilder
         Microsoft.Agents.AI.AgentSkillsProvider skillsProvider,
         SafetyCoordinator? safety)
     {
-        var providers = new List<AIContextProvider>(16)
+        var opts = sp.GetRequiredService<IOptions<LTAIOptions>>().Value;
+        var specSvc = new SpecService(opts.ResolveDataPath("specs"));
+
+        var providers = new List<AIContextProvider>(17)
         {
             new ToolRetrievalProvider(
                 sp.GetRequiredService<LTAI.AI.EmbeddingClient>(),
@@ -57,6 +63,8 @@ internal static class AgentContextProviderBuilder
             new L0IdentityProvider(identityText),
             new L1EssentialProvider(palaceStore, name,
                 loggerFactory.CreateLogger<L1EssentialProvider>()),
+            new SpecContextProvider(specSvc,
+                loggerFactory.CreateLogger<SpecContextProvider>()),
             compaction,
             new CCRProvider(
                 sp.GetRequiredService<CompressionStore>(),

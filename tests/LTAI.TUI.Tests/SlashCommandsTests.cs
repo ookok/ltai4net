@@ -27,8 +27,10 @@ public sealed class SlashCommandsTests
             new ConfigCommandService(null, Options),
             new SnippetCommandService(null),
             new WorkflowCommandService(null),
-            new PipeCommandService(null, null)
+            new PipeCommandService(null, null),
+            null!, null!, null!, null!, null!, null!, null!, null!
         );
+        SlashCommands.Router ??= _router;
     }
 
     [Fact]
@@ -113,6 +115,6 @@ public sealed class SlashCommandsTests
     [Fact]
     public void KnownProviders_ContainsApiKeys()
     {
-        Assert.NotEmpty(SlashCommands.KnownProviders);
+        Assert.NotEmpty(ProviderHelpers.KnownProviders);
     }
 }

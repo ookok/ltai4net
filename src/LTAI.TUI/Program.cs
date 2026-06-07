@@ -94,23 +94,9 @@ public static class Program
             return sp;
         });
 
-        // Wire up shared state for slash commands
-        SlashCommands.Embedder = sp.GetService<LocalEmbedder>();
-        SlashCommands.RouterClient = sp.GetService<MultiProviderChatClient>();
-        SlashCommands.HttpFactory = sp.GetService<IHttpClientFactory>();
-        SlashCommands.SnippetStore = sp.GetService<LTAI.Agent.Snippets.SnippetStore>();
-        SlashCommands.WorkflowRegistry = sp.GetService<LTAI.Agent.Workflows.YAMLWorkflowRegistry>();
-        SlashCommands.Jobs = sp.GetService<LTAI.Agent.Tools.BackgroundJobService>();
-        SlashCommands.Pipes = sp.GetService<LTAI.Agent.Workflows.AgentWorkflows>();
-        SlashCommands.CgGraph = sp.GetService<LTAI.Agent.Vector.CgGraph>();
-        SlashCommands.KbGraph = sp.GetService<LTAI.Agent.Vector.KbGraph>();
-        SlashCommands.ModelsProvider = sp.GetService<LTAI.AI.ModelMetadataProvider>();
         var options = sp.GetRequiredService<IOptions<LTAIOptions>>();
-        SlashCommands.ActiveProvider = options.Value.AI.DefaultProvider ?? "DeepSeek";
-        SlashCommands.L1Model = options.Value.AI.GetLayerConfig("fast").Model;
-        SlashCommands.L2Model = options.Value.AI.GetLayerConfig("deep").Model;
 
-        // Register all 6 command services
+        // Register all command services
         var modelSvc = new ModelCommandService(
             sp.GetService<MultiProviderChatClient>(),
             sp.GetService<LocalEmbedder>(),
@@ -125,9 +111,23 @@ public static class Program
         var pipeSvc = new PipeCommandService(
             sp.GetService<AgentWorkflows>(),
             sp.GetService<YAMLWorkflowRegistry>());
+        var agentsSvc = new AgentsCommandService(sp.GetRequiredService<LTAI.Agent.DevUI.LTAIDevUIService>());
+        var toolsSvc = new ToolsCommandService();
+        var mcpSvc = new McpCommandService(
+            sp.GetService<LTAI.Agent.Mcp.McpClientFactory>(),
+            options);
+        var gitSvc = new GitCommandService();
+        var fileSvc = new FileCommandService();
+        var infoSvc = new InfoCommandService();
+        var graphSvc = new GraphCommandService(
+            sp.GetService<LTAI.Agent.Vector.CgGraph>(),
+            sp.GetService<LTAI.Agent.Vector.KbGraph>());
+        var specSvc = new SpecCommandService(new LTAI.Core.Specs.SpecService(
+            options.Value.ResolveDataPath("specs")));
 
         // Create thin CommandRouter dispatcher
-        SlashCommands.Router = new CommandRouter(modelSvc, jobsSvc, configSvc, snippetSvc, workflowSvc, pipeSvc);
+        SlashCommands.Router = new CommandRouter(modelSvc, jobsSvc, configSvc, snippetSvc, workflowSvc, pipeSvc,
+            agentsSvc, toolsSvc, mcpSvc, gitSvc, fileSvc, infoSvc, graphSvc, specSvc);
 
         var chatAgent = sp.GetRequiredService<ChatAgent>();
 
@@ -146,15 +146,9 @@ public static class Program
         try { await warmupTask.WaitAsync(TimeSpan.FromSeconds(6)).ConfigureAwait(false); }
         catch { /* 预热超时不影响主流程 */ }
 
-        var app = new TuiApp(
-            chatAgent,
-            llmConfig,
-            options,
-            Directory.GetCurrentDirectory(),
+        var dashCtx = new LTAI.TUI.DevUI.DashboardContext(
             sp.GetRequiredService<LTAI.Agent.DevUI.LTAIDevUIService>(),
             sp.GetRequiredService<LTAI.TUI.DevUI.DevUISpanCollector>(),
-            sp.GetRequiredService<LTAI.Agent.Tools.QuestionService>(),
-            new Rendering.ChatRenderer(AnsiConsole.Console),
             sp.GetService<LTAI.Agent.Workflows.YAMLWorkflowRegistry>(),
             sp.GetService<LTAI.AI.LocalEmbedder>(),
             sp.GetService<LTAI.AI.ToolEmbeddingCache>(),
@@ -164,6 +158,15 @@ public static class Program
             sp.GetService<LTAI.Agent.Context.CacheAlignerProvider>(),
             sp.GetService<LTAI.Agent.Tasks.TaskQueue>(),
             sp.GetService<LTAI.Agent.Tools.BackgroundJobService>());
+        var app = new TuiApp(
+            chatAgent,
+            llmConfig,
+            options,
+            Directory.GetCurrentDirectory(),
+            dashCtx,
+            sp.GetRequiredService<LTAI.Agent.Tools.QuestionService>(),
+            new Rendering.ChatRenderer(AnsiConsole.Console),
+            sp.GetService<LTAI.Agent.Memory.PalaceStore>());
         try { Console.Clear(); } catch { /* non-interactive terminal */ }
         await app.RunAsync().ConfigureAwait(false);
     }

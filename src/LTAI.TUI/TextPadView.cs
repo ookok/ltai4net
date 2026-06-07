@@ -1,19 +1,20 @@
 using System.Diagnostics;
-using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
 using Spectre.Console;
 
 namespace LTAI.TUI;
 
-public static class TextPadView
+public sealed class TextPadView
 {
-    private static string _currentDir = "";
-    private static string? _currentFile;
-    private static bool _editMode;
-    private static int _scrollOffset;
-    private static int _totalLines;
-    private static int _pageLines;
+    private readonly string _projectRoot;
+    private string _currentDir;
+    private string? _currentFile;
+    private bool _editMode;
+    private int _scrollOffset;
+    private int _totalLines;
+    private int _pageLines;
+    private int _editorCaretLine = -1;
 
     private static readonly HashSet<string> TextExts = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -28,15 +29,19 @@ public static class TextPadView
         ".jsx", ".tsx", ".css", ".html", ".sh", ".bash",
     };
 
-    private static string? _gitBranch;
-    private static readonly Dictionary<string, string> _gitStatusCache = new();
+    private string? _gitBranch;
+    private readonly Dictionary<string, string> _gitStatusCache = new();
 
-    // P1: Pending chat request — set by TextPadView, consumed by TuiApp
-    public static string? PendingChatRequest;
-    // P3: Current file being viewed (for Command Palette context)
-    public static string? CurrentFileForContext => _currentFile;
+    public string? PendingChatRequest { get; set; }
+    public string? CurrentFileForContext => _currentFile;
 
-    private static void RefreshGitStatus()
+    public TextPadView(string projectRoot)
+    {
+        _projectRoot = projectRoot;
+        _currentDir = projectRoot;
+    }
+
+    private void RefreshGitStatus()
     {
         _gitStatusCache.Clear();
         _gitBranch = null;
@@ -82,15 +87,14 @@ public static class TextPadView
         };
     }
 
-    private static bool DirHasGitChanges(string dirPath)
+    private bool DirHasGitChanges(string dirPath)
     {
         var relDir = Path.GetRelativePath(_currentDir, dirPath).Replace('\\', '/');
         return _gitStatusCache.Keys.Any(k => k == relDir || k.StartsWith(relDir + "/"));
     }
 
-    public static void Render(string rootDir)
+    public void Render()
     {
-        _currentDir = rootDir;
         _currentFile = null;
         _editMode = false;
         _editorCaretLine = -1;
@@ -98,7 +102,7 @@ public static class TextPadView
         var running = true;
         while (running)
         {
-            Console.Clear();
+            AnsiConsole.Clear();
             var branchTag = _gitBranch != null ? $" [blue]🌿 {_gitBranch}[/]" : "";
             AnsiConsole.MarkupLine($"[bold]文件浏览器[/] — [grey]{_currentDir}[/]{branchTag}");
             if (_currentFile != null && File.Exists(_currentFile))
@@ -110,10 +114,6 @@ public static class TextPadView
                 {
                     _scrollOffset = Math.Clamp(_scrollOffset - evt.ScrollDelta, 0, Math.Max(0, _totalLines - _pageLines));
                     _editorCaretLine = _scrollOffset + _pageLines / 2 + 1;
-                }
-                else if (evt.ClickPosition.HasValue)
-                {
-                    // Click any key to return to keyboard navigation
                 }
                 if (evt.KeyInfo == null) continue;
                 var key = evt.KeyInfo.Value;
@@ -135,7 +135,7 @@ public static class TextPadView
                     case ConsoleKey.L when _gitBranch != null: RunCmd($"git log --oneline -10"); break;
                     case ConsoleKey.A:
                         PendingChatRequest = $"请分析以下文件：\n文件: {_currentFile}\n```\n{File.ReadAllText(_currentFile)}\n```\n\n请分析代码逻辑、发现潜在问题并给出改进建议。";
-                        return; // 退出 TextPadView，TuiApp 会处理 PendingChatRequest
+                        return;
                     case ConsoleKey.F when key.Modifiers == ConsoleModifiers.Control: SearchInFile(); break;
                 }
             }
@@ -152,7 +152,6 @@ public static class TextPadView
                     var fp = Path.GetFullPath(Path.Combine(_currentDir, choice));
                     if (Directory.Exists(fp)) { _currentDir = fp; RefreshGitStatus(); continue; }
                     if (File.Exists(fp)) { _currentFile = fp; continue; }
-                    // 处理功能项
                     if (choice.Contains("新建文件")) { NewFile(); continue; }
                     if (choice.Contains("新建文件夹")) { NewDir(); continue; }
                 }
@@ -161,10 +160,9 @@ public static class TextPadView
         }
     }
 
-    private static bool ShowActions()
+    private bool ShowActions()
     {
         var actions = new List<string>();
-        // 项目感知操作
         var hasProject = Directory.GetFiles(_currentDir, "*.csproj").Any() || Directory.GetFiles(_currentDir, "*.sln").Any();
         if (hasProject)
         {
@@ -195,10 +193,10 @@ public static class TextPadView
             if (parent != null) { _currentDir = parent.FullName; RefreshGitStatus(); }
             return true;
         }
-        return false; // exit
+        return false;
     }
 
-    private static List<string> GetListing()
+    private List<string> GetListing()
     {
         var items = new List<string>();
         try
@@ -231,7 +229,7 @@ public static class TextPadView
         return items;
     }
 
-    private static void RunCmd(string cmd)
+    private void RunCmd(string cmd)
     {
         AnsiConsole.MarkupLine($"[grey]执行: {cmd}[/]");
         try
@@ -291,12 +289,10 @@ public static class TextPadView
                     .Border(BoxBorder.Rounded)
                     .Expand());
             }
-            // P1: 命令失败 → 可以按 A 发送给 AI 修复
             if (!isOk)
             {
-                AnsiConsole.MarkupLine("\n[yellow]按 A 键将错误发送给 AI 分析修复，其他键返回...[/]");
-                var k = Console.ReadKey(true);
-                if (k.Key == ConsoleKey.A)
+                var sendToAi = AnsiConsole.Confirm("[yellow]将错误发送给 AI 分析修复?[/]", false);
+                if (sendToAi)
                 {
                     var cmdDisplay = cmd.Length > 80 ? cmd[..77] + "..." : cmd;
                     PendingChatRequest = $"命令执行出错，请分析以下错误并修复：\n```\n{cmdDisplay}\n```\n错误信息：\n```\n{output}\n{error}\n```".Trim();
@@ -305,31 +301,32 @@ public static class TextPadView
             }
         }
         catch (Exception ex) { AnsiConsole.MarkupLine($"[red]错误: {ex.Message}[/]"); }
-        Console.ReadKey(true);
+        AnsiConsole.Prompt(new SelectionPrompt<string>()
+            .Title("[dim]按 Enter 继续[/]").PageSize(3).AddChoices("继续"));
     }
 
-    private static void NewFile()
+    private void NewFile()
     {
         var name = AnsiConsole.Ask<string>("[yellow]文件名:[/]");
         if (string.IsNullOrWhiteSpace(name)) return;
         try { File.WriteAllText(Path.Combine(_currentDir, name), ""); } catch (Exception ex) { AnsiConsole.MarkupLine($"[red]错误: {ex.Message}[/]"); }
     }
 
-    private static void NewDir()
+    private void NewDir()
     {
         var name = AnsiConsole.Ask<string>("[yellow]文件夹名:[/]");
         if (string.IsNullOrWhiteSpace(name)) return;
         try { Directory.CreateDirectory(Path.Combine(_currentDir, name)); } catch (Exception ex) { AnsiConsole.MarkupLine($"[red]错误: {ex.Message}[/]"); }
     }
 
-    private static void DeleteFile()
+    private void DeleteFile()
     {
         if (_currentFile == null) return;
         if (!AnsiConsole.Confirm($"[red]确认删除 {Path.GetFileName(_currentFile)}?[/]", false)) return;
         try { File.Delete(_currentFile); _currentFile = null; } catch (Exception ex) { AnsiConsole.MarkupLine($"[red]错误: {ex.Message}[/]"); }
     }
 
-    private static void RenameFile()
+    private void RenameFile()
     {
         if (_currentFile == null) return;
         var newName = AnsiConsole.Ask<string>($"[yellow]新文件名 ({Path.GetFileName(_currentFile)}):[/]");
@@ -338,7 +335,7 @@ public static class TextPadView
         catch (Exception ex) { AnsiConsole.MarkupLine($"[red]错误: {ex.Message}[/]"); }
     }
 
-    private static void GoToLine()
+    private void GoToLine()
     {
         if (_currentFile == null) return;
         var line = AnsiConsole.Ask<int>($"[yellow]跳转到行 (1-{_totalLines}):[/]");
@@ -346,7 +343,7 @@ public static class TextPadView
         _editorCaretLine = line;
     }
 
-    private static void SearchInFile()
+    private void SearchInFile()
     {
         if (_currentFile == null) return;
         var keyword = AnsiConsole.Ask<string>("[yellow]搜索:[/]");
@@ -363,12 +360,13 @@ public static class TextPadView
                     AnsiConsole.MarkupLine($"[green]找到:[/] 第 {i + 1} 行 — {lines[i].Trim().EscapeMarkup()}");
                 }
             }
-            Console.ReadKey(true);
+            AnsiConsole.Prompt(new SelectionPrompt<string>()
+                .Title("[dim]按 Enter 继续[/]").PageSize(3).AddChoices("继续"));
         }
         catch { }
     }
 
-    private static void ShowDirTree()
+    private void ShowDirTree()
     {
         try
         {
@@ -405,7 +403,7 @@ public static class TextPadView
         catch { AnsiConsole.MarkupLine("[red]无法读取目录[/]"); }
     }
 
-    private static void RenderFileView()
+    private void RenderFileView()
     {
         try
         {
@@ -440,7 +438,6 @@ public static class TextPadView
                 sb.AppendLine($"[grey]{lineNum.ToString().PadLeft(pad)}[/]{marker}{lines[i]}");
             }
 
-            // 编码 + 文件信息
             var encoding = DetectEncoding(_currentFile!);
             var mode = _editMode ? "[yellow]编辑中[/]" : "[green]只读[/]";
             var pct = _totalLines > 0 ? _scrollOffset * 100 / Math.Max(_totalLines - _pageLines, 1) : 0;
@@ -457,7 +454,6 @@ public static class TextPadView
         catch { AnsiConsole.MarkupLine("[red]无法读取文件[/]"); }
     }
 
-    private static int _editorCaretLine;
     private static string DetectEncoding(string path)
     {
         try
@@ -489,7 +485,7 @@ public static class TextPadView
         catch { return 0; }
     }
 
-    private static void EditFile()
+    private void EditFile()
     {
         var lines = new List<string>();
         if (_currentFile != null && File.Exists(_currentFile))
@@ -505,15 +501,16 @@ public static class TextPadView
         var newLines = new List<string>();
         while (true)
         {
-            var line = Console.ReadLine() ?? "";
-            if (line == "/cancel") return;
-            if (line == "") break;
-            newLines.Add(line);
+            var l = Console.ReadLine() ?? "";
+            if (l == "/cancel") return;
+            if (l == "") break;
+            newLines.Add(l);
         }
         if (newLines.Count == 0) { AnsiConsole.MarkupLine("[grey]未作修改[/]"); return; }
         try { File.WriteAllLines(_currentFile!, newLines); AnsiConsole.MarkupLine("[green]已保存[/]"); }
         catch (Exception ex) { AnsiConsole.MarkupLine($"[red]保存失败: {ex.Message}[/]"); }
-        Console.ReadKey(true);
+        AnsiConsole.Prompt(new SelectionPrompt<string>()
+            .Title("[dim]按 Enter 继续[/]").PageSize(3).AddChoices("继续"));
     }
 
     private static string Icon(string file) => Path.GetExtension(file).ToLowerInvariant() switch

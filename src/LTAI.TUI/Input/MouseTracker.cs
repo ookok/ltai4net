@@ -137,25 +137,4 @@ public static class MouseTracker
         return null;
     }
 
-    /// <summary>Try to parse a Kitty keyboard protocol sequence into a ConsoleKeyInfo.
-    /// Format: ESC [ code ; modifiers u</summary>
-    public static ConsoleKeyInfo? ParseKittySequence(string seq)
-    {
-        // TODO: full kitty protocol decode if needed
-        return null;
-    }
-
-    /// <summary>Apply scroll with inertia to a scroll offset.</summary>
-    public static int ApplyScrollInertia(int current, int delta, int max, out float velocity)
-    {
-        velocity = delta * 0.5f;
-        return Math.Clamp(current - delta, 0, Math.Max(0, max - 1));
-    }
-
-    /// <summary>Decay velocity by friction and produce the final scroll delta for this frame.</summary>
-    public static float DecayVelocity(float velocity, float friction = 0.85f)
-    {
-        if (Math.Abs(velocity) < 0.5f) return 0;
-        return velocity * friction;
-    }
 }

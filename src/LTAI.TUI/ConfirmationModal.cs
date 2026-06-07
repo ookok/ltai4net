@@ -132,31 +132,32 @@ public static class ConfirmationModal
             ctx.Refresh();
         }
 
-        // 等待键盘输入
-        while (true)
-        {
-            var key = Console.ReadKey(true);
+        // 使用 SelectionPrompt 替代裸 Console.ReadKey
+        var confirmPrompt = new SelectionPrompt<string>()
+            .Title("[grey]选择操作:[/]")
+            .PageSize(6)
+            .HighlightStyle(new Style(Color.Black, Color.Cyan))
+            .AddChoices(
+                "[Y]  允许一次",
+                "[A]  总是允许",
+                "[N]  拒绝",
+                "[D]  查看详情");
+        var confirmChoice = AnsiConsole.Prompt(confirmPrompt);
 
-            switch (key.Key)
-            {
-                case ConsoleKey.Y:
-                    return ConfirmChoice.Yes;
-                case ConsoleKey.A:
-                    return ConfirmChoice.Always;
-                case ConsoleKey.N:
-                    return ConfirmChoice.No;
-                case ConsoleKey.D:
-                    ShowDetails(details, title);
-                    // 详情关闭后重新渲染模态窗口
-                    if (useAnsiConsole) { AnsiConsole.Write(panel); }
-                    else if (layout != null && ctx != null) { layout["Messages"].Update(panel); ctx.Refresh(); }
-                    break;
-                case ConsoleKey.Escape:
-                    return ConfirmChoice.No;
-                case ConsoleKey.Enter:
-                    return ConfirmChoice.Yes;
-            }
+        if (confirmChoice.StartsWith("[Y]"))
+            return ConfirmChoice.Yes;
+        if (confirmChoice.StartsWith("[A]"))
+            return ConfirmChoice.Always;
+        if (confirmChoice.StartsWith("[D]"))
+        {
+            ShowDetails(details, title);
+            // 详情关闭后重新渲染模态窗口
+            if (useAnsiConsole) { AnsiConsole.Write(panel); }
+            else if (layout != null && ctx != null) { layout["Messages"].Update(panel); ctx.Refresh(); }
+            // After details, ask again
+            return ShowInline(layout, ctx, title, message, details, extraInfo, useAnsiConsole);
         }
+        return ConfirmChoice.No;
     }
 
     /// <summary>
@@ -169,7 +170,6 @@ public static class ConfirmationModal
 
         if (lines.Length <= pageSize + 2)
         {
-            // 内容少，直接显示
             var detailPanel = new Panel(
                 new Markup(details.Length > 2000
                     ? details[..2000].EscapeMarkup() + "\n[grey]...(内容过长，仅显示前 2000 字符)[/]"
@@ -181,12 +181,11 @@ public static class ConfirmationModal
                 Expand = true,
             };
             AnsiConsole.Write(detailPanel);
-            AnsiConsole.MarkupLine("[grey]按任意键返回...[/]");
-            Console.ReadKey(true);
+            AnsiConsole.Prompt(new SelectionPrompt<string>()
+                .Title("[dim]按 Enter 返回[/]").PageSize(3).AddChoices("返回"));
             return;
         }
 
-        // 内容多，分页显示
         int totalPages = (lines.Length + pageSize - 1) / pageSize;
         int currentPage = 0;
 
@@ -202,7 +201,7 @@ public static class ConfirmationModal
                 new Rows(
                     new Markup(pageText.EscapeMarkup()),
                     new Text(""),
-                    new Markup($"[grey]第 {currentPage + 1}/{totalPages} 页  —  按 ← → 翻页，ESC 返回[/]")
+                    new Markup($"[grey]第 {currentPage + 1}/{totalPages} 页[/]")
                 ))
             {
                 Header = new PanelHeader($"[bold blue]📄 {context.EscapeMarkup()} — 详情[/]"),
@@ -212,74 +211,17 @@ public static class ConfirmationModal
             };
             AnsiConsole.Write(pagePanel);
 
-            // 翻页按键
-            while (true)
-            {
-                var key = Console.ReadKey(true);
-                if (key.Key == ConsoleKey.RightArrow || key.Key == ConsoleKey.Spacebar)
-                {
-                    if (currentPage < totalPages - 1)
-                    {
-                        currentPage++;
-                        break;
-                    }
-                }
-                else if (key.Key == ConsoleKey.LeftArrow)
-                {
-                    if (currentPage > 0)
-                    {
-                        currentPage--;
-                        break;
-                    }
-                }
-                else if (key.Key == ConsoleKey.Escape || key.Key == ConsoleKey.Enter)
-                {
-                    return;
-                }
-            }
-        }
-    }
+            var navChoices = new List<string> { "返回" };
+            if (currentPage > 0) navChoices.Add("上一页");
+            if (currentPage < totalPages - 1) navChoices.Add("下一页");
+            var nav = AnsiConsole.Prompt(new SelectionPrompt<string>()
+                .Title($"[dim]第 {currentPage + 1}/{totalPages} 页[/]")
+                .PageSize(5)
+                .AddChoices(navChoices));
 
-    /// <summary>
-    /// 在消息发送前扫描路径并弹出确认窗口。
-    /// 替代 ChatLayout.PreAuthorizePaths 的裸 Console I/O。
-    /// </summary>
-    internal static void AuthorizePaths(Layout layout, LiveDisplayContext ctx, string input)
-    {
-        if (string.IsNullOrWhiteSpace(input)) return;
-
-        var ws = Directory.GetCurrentDirectory();
-        var pathMatches = System.Text.RegularExpressions.Regex.Matches(input,
-            @"[A-Za-z]:\\[^\s""'<>|]+|/[^\s""'<>|]+|~/[^\s""'<>|]+",
-            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-
-        foreach (System.Text.RegularExpressions.Match match in pathMatches)
-        {
-            var rawPath = match.Value;
-            string fullPath;
-            try { fullPath = Path.GetFullPath(rawPath); }
-            catch { continue; }
-
-            if (LTAI.Core.PathUtils.SafeResolvePath(ws, rawPath) != null) continue;
-            if (LTAI.Core.PathUtils.PathPermissionStore.IsGranted(fullPath)) continue;
-            if (!File.Exists(fullPath) && !Directory.Exists(fullPath)) continue;
-
-            var choice = ShowInline(
-                layout, ctx,
-                "路径访问确认",
-                $"检测到工作区外的路径",
-                fullPath,
-                $"路径: [underline]{fullPath}[/]");
-
-            switch (choice)
-            {
-                case ConfirmChoice.Yes:
-                case ConfirmChoice.Always:
-                    LTAI.Core.PathUtils.PathPermissionStore.Grant(fullPath);
-                    break;
-                case ConfirmChoice.No:
-                    break;
-            }
+            if (nav == "返回") return;
+            if (nav == "上一页") currentPage--;
+            if (nav == "下一页") currentPage++;
         }
     }
 

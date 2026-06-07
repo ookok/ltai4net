@@ -10,19 +10,7 @@ namespace LTAI.TUI;
 
 public sealed class LLMConfigPanel
 {
-    public record ProviderInfo(string EnvVar, string Endpoint, string Model);
-    private static readonly Dictionary<string, ProviderInfo> KnownProviders = BuildKnownProviders();
-    private static Dictionary<string, ProviderInfo> BuildKnownProviders()
-    {
-        var d = LTAI.Core.Configuration.KnownKeys.All
-            .Where(k => k.Endpoint != null && k.Model != null)
-            .ToDictionary(k => k.Service, k => new ProviderInfo(k.EnvVar, k.Endpoint!, k.Model!));
-        // Local providers (no API key needed)
-        d["Ollama"]   = new("", "http://localhost:11434/v1", "llama3.2");
-        d["LMStudio"] = new("", "http://localhost:1234/v1",  "local-model");
-        d["vLLM"]     = new("", "http://localhost:8000/v1",  "meta-llama/Llama-3.2-3B-Instruct");
-        return d;
-    }
+    private static Dictionary<string, ProviderHelpers.ProviderInfo> KnownProviders => ProviderHelpers.KnownProviders;
 
     private readonly IOptions<LTAIOptions>? _options;
     private readonly MultiProviderChatClient? _router;
@@ -35,7 +23,7 @@ public sealed class LLMConfigPanel
     private int _maxTokens = 4096;
 
     public string Provider => _provider;
-    public ProviderInfo? CurrentProvider => KnownProviders.GetValueOrDefault(_provider);
+    public ProviderHelpers.ProviderInfo? CurrentProvider => KnownProviders.GetValueOrDefault(_provider);
     public string L1Model => _l1Model;
     public string L2Model => _l2Model;
     public float Temperature => _temperature;
@@ -117,8 +105,8 @@ public sealed class LLMConfigPanel
             }
         }
 
-        AnsiConsole.MarkupLine("\n[grey]Press any key to continue...[/]");
-        System.Console.ReadKey(true);
+        AnsiConsole.Prompt(new SelectionPrompt<string>()
+            .Title("[dim]按 Enter 继续[/]").PageSize(3).AddChoices("继续"));
     }
 
     /// <summary>Register a new provider with the runtime router so it's immediately usable.</summary>
@@ -223,7 +211,7 @@ public sealed class LLMConfigPanel
     }
 
     /// <summary>Fetch available models from the provider's /v1/models API.</summary>
-    private List<string> FetchModels(ProviderInfo info)
+    private List<string> FetchModels(ProviderHelpers.ProviderInfo info)
     {
         if (_httpFactory == null || string.IsNullOrEmpty(info.Endpoint))
             return [];

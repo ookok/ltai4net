@@ -3,6 +3,7 @@ using LTAI.AI.Compaction;
 using LTAI.Agent.Context;
 using LTAI.Agent.Diagnostics;
 using LTAI.Agent.Learning;
+using LTAI.Agent.Memory;
 using LTAI.Agent.Services;
 using LTAI.Agent.Tools;
 using LTAI.Agent.Vector;
@@ -377,6 +378,16 @@ public static class ServiceCollectionExtensions
                 sameModel: sameModel,
                 steerJudge: sp.GetKeyedService<IChatClient>("steer"));
         });
+
+        // Step 7: PalaceStore (structured long-term memory) + consolidation service
+        services.AddSingleton<PalaceStore>(sp =>
+        {
+            var embedder = sp.GetRequiredService<LTAI.AI.EmbeddingClient>();
+            var opts = sp.GetRequiredService<IOptions<LTAIOptions>>().Value;
+            var logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger<PalaceStore>();
+            return new PalaceStore(embedder, opts.ResolveDataPath("palace.db"), logger);
+        });
+        services.AddHostedService<MemoryConsolidationService>();
 
         return services;
     }

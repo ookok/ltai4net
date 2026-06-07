@@ -75,6 +75,18 @@ public sealed class PalaceStore
         EnsureSchema();
         var drawerId = Guid.NewGuid().ToString("n");
         var vec = await _embedder.GenerateAsync(content, CancellationToken.None).ConfigureAwait(false);
+
+        // Semantic dedup: skip if near-duplicate exists
+        var threshold = 0.92;
+        var similar = new List<(Drawer d, double sim)>();
+        await foreach (var hit in SemanticSearchAsync(vec, topK: 1, wing: wing).ConfigureAwait(false))
+            similar.Add(hit);
+        if (similar.Count > 0 && similar[0].sim >= threshold)
+        {
+            _logger?.LogDebug("PalaceStore: skip storing '{Room}' — near-duplicate (score={Score:F3})", room, similar[0].sim);
+            return similar[0].d.DrawerId;
+        }
+
         var metaJson = metadata != null ? JsonSerializer.Serialize(metadata, JsonOpts) : null;
         var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         var expiresAt = ttlMs.HasValue ? now + ttlMs.Value : (long?)null;
@@ -104,6 +116,87 @@ public sealed class PalaceStore
         tx.Commit();
         _logger?.LogDebug("PalaceStore: stored drawer {Id} in {Wing}/{Room}", drawerId, wing, room);
         return drawerId;
+    }
+
+    /// <summary>Update importance + refresh TTL for an existing drawer.</summary>
+    public bool TouchDrawer(string wing, string room, string drawerId, double importance)
+    {
+        EnsureSchema();
+        var now = NowMs();
+        using var conn = new SqliteConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "UPDATE palace SET importance = MAX(importance, $imp), expires_at = $exp WHERE wing = $wing AND room = $room AND drawer_id = $id";
+        cmd.Parameters.AddWithValue("$imp", importance);
+        cmd.Parameters.AddWithValue("$exp", now + DefaultTtlMs);
+        cmd.Parameters.AddWithValue("$wing", wing);
+        cmd.Parameters.AddWithValue("$room", room);
+        cmd.Parameters.AddWithValue("$id", drawerId);
+        return cmd.ExecuteNonQuery() > 0;
+    }
+
+    /// <summary>Bulk decay importance for all entries (×factor). Returns count updated.</summary>
+    public int DecayAll(double factor = 0.95, double minImportance = 0.05)
+    {
+        EnsureSchema();
+        using var conn = new SqliteConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "UPDATE palace SET importance = MAX($min, importance * $factor) WHERE importance > $min";
+        cmd.Parameters.AddWithValue("$factor", factor);
+        cmd.Parameters.AddWithValue("$min", minImportance);
+        return cmd.ExecuteNonQuery();
+    }
+
+    /// <summary>Merge all drawers in the same wing+room into one (concatenate content, keep max importance).</summary>
+    public int ConsolidateRoom(string wing, string room)
+    {
+        EnsureSchema();
+        using var conn = new SqliteConnection(_connectionString);
+        conn.Open();
+        // Find all non-expired drawers in this room
+        using var list = conn.CreateCommand();
+        list.CommandText = "SELECT drawer_id, content, importance FROM palace WHERE wing = $wing AND room = $room AND expires_at > $now ORDER BY importance DESC";
+        list.Parameters.AddWithValue("$wing", wing);
+        list.Parameters.AddWithValue("$room", room);
+        var now = NowMs();
+        list.Parameters.AddWithValue("$now", now);
+
+        var drawers = new List<(string id, string content, double imp)>();
+        using var reader = list.ExecuteReader();
+        while (reader.Read())
+            drawers.Add((reader.GetString(0), reader.GetString(1), reader.GetDouble(2)));
+
+        if (drawers.Count <= 1) return 0;
+
+        // Keep the highest-importance one, merge content
+        var best = drawers[0];
+        var merged = string.Join("\n---\n", drawers.Select(d => d.content));
+        var mergedImp = drawers.Max(d => d.imp);
+
+        using var tx = conn.BeginTransaction();
+
+        // Delete all except the best
+        using var del = conn.CreateCommand();
+        del.Transaction = tx;
+        del.CommandText = "DELETE FROM palace WHERE wing = $wing AND room = $room AND drawer_id != $keep";
+        del.Parameters.AddWithValue("$wing", wing);
+        del.Parameters.AddWithValue("$room", room);
+        del.Parameters.AddWithValue("$keep", best.id);
+        del.ExecuteNonQuery();
+
+        // Update the kept one
+        using var upd = conn.CreateCommand();
+        upd.Transaction = tx;
+        upd.CommandText = "UPDATE palace SET content = $content, importance = $imp WHERE drawer_id = $id";
+        upd.Parameters.AddWithValue("$content", merged);
+        upd.Parameters.AddWithValue("$imp", mergedImp);
+        upd.Parameters.AddWithValue("$id", best.id);
+        upd.ExecuteNonQuery();
+
+        tx.Commit();
+        _logger?.LogInformation("PalaceStore: consolidated {Room}: {Count} → 1 (imp={Imp:F2})", room, drawers.Count, mergedImp);
+        return drawers.Count - 1;
     }
 
     public IReadOnlyList<Drawer> SearchByWing(string wing, int topK = 10)

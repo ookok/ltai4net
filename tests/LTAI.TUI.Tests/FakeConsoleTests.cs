@@ -1,4 +1,7 @@
 using LTAI.Core.Commands;
+using LTAI.Core.Configuration;
+using LTAI.TUI.Services;
+using Microsoft.Extensions.Options;
 using Spectre.Console;
 using Spectre.Console.Testing;
 using Xunit;
@@ -11,6 +14,25 @@ namespace LTAI.TUI.Tests;
 /// </summary>
 public class FakeConsoleTests
 {
+    private static readonly IOptions<LTAIOptions> Options = Microsoft.Extensions.Options.Options.Create(new LTAIOptions());
+
+    public FakeConsoleTests()
+    {
+        if (SlashCommands.Router == null)
+        {
+            SlashCommands.Router = new CommandRouter(
+                new ModelCommandService(null, null, null, Options),
+                new JobsCommandService(null),
+                new ConfigCommandService(null, Options),
+                new SnippetCommandService(null),
+                new WorkflowCommandService(null),
+                new PipeCommandService(null, null),
+                null!, null!, null!, null!, null!,
+                new InfoCommandService(),
+                null!, null!);
+        }
+    }
+
     /// <summary>
     /// A slash command flows through CommandParser → ExecuteParsed → statusMessage output.
     /// This test verifies the entire chain by injecting a TestConsole.

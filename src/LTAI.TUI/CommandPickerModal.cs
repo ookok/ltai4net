@@ -75,20 +75,4 @@ public static class CommandPickerModal
         };
     }
 
-    internal static string LongestCommonPrefix(List<string> strings)
-    {
-        if (strings.Count == 0) return "";
-        if (strings.Count == 1) return strings[0];
-
-        var first = strings[0];
-        for (int i = 0; i < first.Length; i++)
-        {
-            for (int j = 1; j < strings.Count; j++)
-            {
-                if (i >= strings[j].Length || strings[j][i] != first[i])
-                    return first[..i];
-            }
-        }
-        return first;
-    }
 }
