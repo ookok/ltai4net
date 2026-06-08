@@ -3,6 +3,10 @@ using LTAI.Agent;
 using LTAI.AI;
 using LTAI.Core;
 using LTAI.Core.Configuration;
+using LTAI.Core.Session;
+using LTAI.Desktop.Debugging;
+using LTAI.Desktop.Services;
+using LTAI.Desktop.ViewModels;
 
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -75,7 +79,18 @@ public static class Program
         services.AddLTAIAgent();
 
         // Debug bridge — singleton shared across TextPadView and AI debug tools
-        services.AddSingleton<LTAI.Desktop.Debugging.DebugBridge>();
+        services.AddSingleton<DebugBridge>();
+
+        // Notification service — global event bus
+        services.AddSingleton<NotificationService>();
+
+        // Desktop services — command routing, LLM client, session management
+        services.AddSingleton<DesktopCommandService>();
+        services.AddSingleton<ILlmClient, LlmClient>();
+        services.AddSingleton<SessionManager>();
+
+        // ViewModels
+        services.AddTransient<DevUIViewModel>();
 
         return services;
     }

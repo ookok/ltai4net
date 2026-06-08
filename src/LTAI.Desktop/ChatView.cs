@@ -837,107 +837,7 @@ public sealed class ChatView : UserControl
     private void RenderResponse(StackPanel panel, string raw)
     {
         panel.Children.Clear();
-
-        var cleaned = CleanResponse(raw);
-
-        // Detect diff blocks: ---/+++/@@ pattern
-        if (IsDiffContent(cleaned))
-        {
-            RenderDiffBlock(panel, cleaned);
-            return;
-        }
-
-        var parts = SplitCodeBlocks(cleaned);
-
-        foreach (var part in parts)
-        {
-            if (part.IsCode)
-            {
-                var codeRow = new DockPanel { Margin = new(0, 2) };
-
-                var codeBorder = new Border
-                {
-                    Background = LtaiTheme.Sbb(LtaiTheme.CodeBg),
-                    BorderBrush = LtaiTheme.Sbb(LtaiTheme.CodeBorder),
-                    BorderThickness = new(1),
-                    CornerRadius = LtaiTheme.Radius.Md,
-                    Padding = new(8, 8, 8, 8)
-                };
-                // Syntax-highlighted code block
-                // Line-by-line rendering with gutter line numbers
-                var codeStack = new StackPanel();
-                var lang = "csharp";
-                var keywords = MarkdownRenderer.GetKeywords(lang);
-                var codeLines = part.Content.Split('\n');
-                var linePad = codeLines.Length.ToString().Length;
-                var maxLines = 50;
-                for (int li = 0; li < codeLines.Length && li < maxLines; li++)
-                {
-                    var lineRow = new DockPanel { Margin = new(0, 0, 0, 0) };
-                    lineRow.Children.Add(new TextBlock
-                    {
-                        Text = (li + 1).ToString().PadLeft(linePad),
-                        Foreground = LtaiTheme.Sbb(LtaiTheme.TextDim),
-                        FontFamily = LtaiTheme.CodeFont,
-                        FontSize = 11,
-                        Width = 30,
-                        TextAlignment = Avalonia.Media.TextAlignment.Right,
-                        Margin = new(0, 0, 8, 0),
-                    });
-                    var tb = new TextBlock { FontFamily = LtaiTheme.CodeFont, FontSize = 12, TextWrapping = TextWrapping.Wrap };
-                    var tokens = MarkdownRenderer.TokenizeLine(codeLines[li], keywords);
-                    if (tokens.Count > 0)
-                        foreach (var (text, color) in tokens)
-                            tb.Inlines!.Add(new Avalonia.Controls.Documents.Run { Text = text, Foreground = LtaiTheme.Sbb(color) });
-                    else
-                        tb.Text = " ";
-                    lineRow.Children.Add(tb);
-                    codeStack.Children.Add(lineRow);
-                }
-                if (codeLines.Length > maxLines)
-                {
-                    codeStack.Children.Add(new TextBlock
-                    {
-                        Text = $"[... truncated: {codeLines.Length - maxLines} more lines]",
-                        Foreground = LtaiTheme.Sbb(LtaiTheme.TextDim),
-                        FontFamily = LtaiTheme.CodeFont,
-                        FontSize = 11,
-                        FontStyle = FontStyle.Italic,
-                        Margin = new(linePad * 8 + 8, 2, 0, 0)
-                    });
-                }
-                codeBorder.Child = codeStack;
-                codeRow.Children.Add(codeBorder);
-
-                var copyBtn = CopyButton(part.Content);
-                DockPanel.SetDock(copyBtn, Dock.Right);
-                copyBtn.HorizontalAlignment = HorizontalAlignment.Right;
-                copyBtn.VerticalAlignment = VerticalAlignment.Top;
-                copyBtn.Margin = new(4, 0, 0, 0);
-                codeRow.Children.Add(copyBtn);
-
-                panel.Children.Add(codeRow);
-            }
-            else
-            {
-                var stb = new SelectableTextBlock
-                {
-                    Foreground = LtaiTheme.Sbb(LtaiTheme.TextPrimary),
-                    FontSize = 13,
-                    TextWrapping = TextWrapping.Wrap
-                };
-                MarkdownRenderer.Render(part.Content, stb.Inlines!);
-                panel.Children.Add(stb);
-            }
-        }
-
-        var imageMatches = System.Text.RegularExpressions.Regex.Matches(raw, @"!\[.*?\]\(([^)]+)\)|@""([^""]+)""");
-        foreach (System.Text.RegularExpressions.Match m in imageMatches)
-        {
-            var imgPath = m.Groups[1].Success ? m.Groups[1].Value : m.Groups[2].Value;
-            if (!string.IsNullOrWhiteSpace(imgPath))
-                _ = RenderInlineImage(panel, imgPath);
-        }
+        ChatMessageRenderer.RenderResponse(panel, raw);
     }
 
     private void UpdateResponseText(StackPanel panel, string text)
@@ -1070,40 +970,7 @@ public sealed class ChatView : UserControl
         return $"{preview}\n\n... ({lines.Length - maxLines} more lines) — use read_file with range to see more";
     }
 
-    private static List<(string Content, bool IsCode)> SplitCodeBlocks(string text)
-    {
-        var parts = new List<(string, bool)>();
-        var fence = "```";
-        var i = 0;
-
-        while (true)
-        {
-            var start = text.IndexOf(fence, i, StringComparison.Ordinal);
-            if (start < 0)
-            {
-                var tail = text[i..].TrimEnd();
-                if (tail.Length > 0) parts.Add((tail, false));
-                break;
-            }
-
-            if (start > i)
-            {
-                var pre = text[i..start].TrimEnd();
-                if (pre.Length > 0) parts.Add((pre, false));
-            }
-
-            var langEnd = text.IndexOf('\n', start + 3);
-            var contentStart = langEnd >= 0 ? langEnd + 1 : start + 3;
-            var end = text.IndexOf(fence, contentStart, StringComparison.Ordinal);
-            if (end < 0) end = text.Length;
-
-            var code = text[contentStart..end].TrimEnd();
-            if (code.Length > 0) parts.Add((code, true));
-            i = end + 3;
-        }
-
-        return parts;
-    }
+    private static List<(string Content, bool IsCode)> SplitCodeBlocks(string text) => ChatMessageRenderer.SplitCodeBlocks(text);
 
     private async Task RenderInlineImage(StackPanel panel, string path)
     {
@@ -1434,15 +1301,55 @@ public sealed class ChatView : UserControl
         AddSystemBubble(string.Join("\n", lines));
     }
 
-    private void HandleConfigDesktop(string args) =>
-        AddSystemBubble(args switch
+    private void HandleConfigDesktop(string args)
+    {
+        var s = args.Trim();
+        if (s.StartsWith("export"))
+            DoConfigExport();
+        else if (s.StartsWith("import"))
+            DoConfigImport();
+        else
+            AddSystemBubble("用法: /config apikey|export|import");
+    }
+
+    private void DoConfigExport()
+    {
+        try
         {
-            "" => "用法: /config apikey|export|import",
-            string s when s.StartsWith("apikey") => "设置 API Key: 请在 TUI 终端运行 /config apikey",
-            string s when s.StartsWith("export") => "导出: 请使用 TUI 终端运行 /config export",
-            string s when s.StartsWith("import") => "导入: 请使用 TUI 终端运行 /config import",
-            _ => "用法: /config apikey|export|import"
-        });
+            var dir = Path.Combine(Environment.CurrentDirectory, ".livingtree");
+            if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
+            var path = Path.Combine(dir, $"config-export-{DateTime.Now:yyyyMMdd-HHmmss}.json");
+            var src = Path.Combine(AppContext.BaseDirectory, "appsettings.json");
+            if (!File.Exists(src)) src = Path.Combine(Environment.CurrentDirectory, "appsettings.json");
+            if (File.Exists(src))
+            {
+                File.Copy(src, path, overwrite: true);
+                AddSystemBubble($"[green]✅ 配置已导出 → {path}[/]");
+            }
+            else AddSystemBubble("[red]找不到 appsettings.json[/]");
+        }
+        catch (Exception ex) { AddSystemBubble($"[red]导出失败: {ex.Message}[/]"); }
+    }
+
+    private void DoConfigImport()
+    {
+        try
+        {
+            var dir = Path.Combine(Environment.CurrentDirectory, ".livingtree");
+            var files = Directory.GetFiles(dir, "config-export-*.json");
+            if (files.Length == 0)
+            {
+                AddSystemBubble("[yellow]未找到配置文件 (.livingtree/config-export-*.json)[/]");
+                return;
+            }
+            Array.Sort(files);
+            var latest = files[^1];
+            var dest = Path.Combine(Environment.CurrentDirectory, "appsettings.json");
+            File.Copy(latest, dest, overwrite: true);
+            AddSystemBubble($"[green]✅ 已导入: {Path.GetFileName(latest)}[/]");
+        }
+        catch (Exception ex) { AddSystemBubble($"[red]导入失败: {ex.Message}[/]"); }
+    }
 
     private async void ShowCmdPicker(string cmd)
     {
@@ -1489,15 +1396,17 @@ public sealed class ChatView : UserControl
         sb.AppendLine("/retry        — 重发上一条消息");
         sb.AppendLine("/compact      — 压缩汇总历史消息");
         sb.AppendLine("/skill        — 运行技能");
+        sb.AppendLine("/sessions     — list|load|delete|export <name> [md|json|html]|import <path>");
         sb.AppendLine("── 桌面端专用 ──");
         sb.AppendLine("/jobs         — 打开作业面板 (Ctrl+7)");
         sb.AppendLine("/workflow     — 打开工作流面板 (Ctrl+6)");
-        sb.AppendLine("── 暂不支持 ──");
-        sb.AppendLine("/pipe         — 请使用 TUI");
-        sb.AppendLine("/graph        — 请使用 TUI");
-        sb.AppendLine("/agents       — 请使用 TUI");
-        sb.AppendLine("/tools        — 请使用 TUI");
-        sb.AppendLine("/mcp          — 请使用 TUI");
+        sb.AppendLine("/memory       — 记忆浏览器");
+        sb.AppendLine("/graph        — 知识图谱浏览器");
+        sb.AppendLine("── 命令别名 ──");
+        sb.AppendLine("/pipe         — 管道执行");
+        sb.AppendLine("/tools        — 工具列表");
+        sb.AppendLine("/config export— 导出配置");
+        sb.AppendLine("/config import— 导入配置");
         AddSystemBubble(sb.ToString().TrimEnd());
     }
 

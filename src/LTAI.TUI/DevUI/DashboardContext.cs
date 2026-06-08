@@ -1,5 +1,6 @@
 using LTAI.Agent.Context;
 using LTAI.Agent.DevUI;
+using LTAI.Agent.Memory;
 using LTAI.Agent.Tasks;
 using LTAI.Agent.Tools;
 using LTAI.Agent.Workflows;
@@ -18,4 +19,8 @@ public sealed record DashboardContext(
     ModelMetadataProvider? ModelsProvider,
     CacheAlignerProvider? Aligner,
     TaskQueue? TaskQueue,
-    BackgroundJobService? Bgjs);
+    BackgroundJobService? Bgjs,
+    PalaceStore? Palace = null)
+{
+    public WorkflowHealthTracker? WorkflowHealth { get; init; }
+}

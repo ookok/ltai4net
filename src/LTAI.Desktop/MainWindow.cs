@@ -66,6 +66,9 @@ public partial class MainWindow : Window
             new("技能",    "4", new SkillsView()),
             new("工作流",  "5", new WorkflowsView(workflowsVm)),
             new("作业",    "6", new JobsView(jobsVm)),
+            new("记忆",    "7", new MemoryView(App.Services?.GetService(typeof(LTAI.Agent.Memory.PalaceStore)) as LTAI.Agent.Memory.PalaceStore)),
+            new("图谱",    "8", new GraphBrowserView(App.Services?.GetService(typeof(LTAI.Agent.Vector.KbGraph)) as LTAI.Agent.Vector.KbGraph,
+                App.Services?.GetService(typeof(LTAI.Agent.Vector.KgStore)) as LTAI.Agent.Vector.KgStore)),
         ]);
 
         _vm = new MainWindowViewModel(_views.Count);

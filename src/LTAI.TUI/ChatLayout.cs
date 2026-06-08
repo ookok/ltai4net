@@ -5,6 +5,8 @@ using LTAI.Agent;
 using LTAI.Core.Configuration;
 using LTAI.Core.Session;
 using LTAI.Agent.Tools;
+using LTAI.TUI.Rendering;
+using LTAI.TUI.Services;
 using Spectre.Console;
 using Spectre.Console.Rendering;
 
@@ -16,6 +18,8 @@ public sealed class ChatLayout : IDisposable
     private readonly Rendering.ChatRenderer _renderer;
     internal readonly List<(string role, IRenderable? rendered, string rawContent, string? reasoning)> _history = new();
     internal readonly object _historyLock = new();
+    internal readonly Stack<List<(string role, IRenderable? rendered, string rawContent, string? reasoning)>> _undoStack = new();
+    internal const int MaxUndoStack = 20;
     private readonly Layout _layout;
     private readonly QuestionService _questionService;
     private readonly SessionManager _sessions;
@@ -31,6 +35,15 @@ public sealed class ChatLayout : IDisposable
 
     /// <summary>Send a message as if the user typed it (used by TextPadView AI fix, etc.).</summary>
     public void EnqueueUserMessage(string message) => _messageQueue.Writer.TryWrite(message);
+
+    /// <summary>Enqueue a restored message from a previous session (not user-initiated).</summary>
+    public void EnqueueRestoredMessage(string role, string content)
+    {
+        lock (_historyLock)
+        {
+            _history.Add((role, null, content, null));
+        }
+    }
     internal volatile bool _processing;
     internal CancellationTokenSource? _responseCts;
     private CancellationTokenSource? _renderCts;
@@ -72,6 +85,10 @@ public sealed class ChatLayout : IDisposable
     public TuiView? LastRequestedView { get; private set; }
     public string? CurrentFileForContext => _textPadView.CurrentFileForContext;
     private int _subagentProgress;
+    internal string? _statusMessage;
+    internal string? _pendingChatRequest;
+    public static string? EditMode { get; set; }
+    public static Func<bool>? TryUndoCallback { get; set; }
     private const int MaxHistory = 200;
     private const int RefreshIntervalMs = 33;
     private DateTime _lastRefresh = DateTime.MinValue;
@@ -87,6 +104,30 @@ public sealed class ChatLayout : IDisposable
         {
             _liveCtx.Refresh();
             _lastRefresh = now;
+        }
+    }
+
+    internal void SnapshotForUndo()
+    {
+        lock (_historyLock)
+        {
+            var snapshot = _history.Select(h => (h.role, h.rendered, h.rawContent, h.reasoning)).ToList();
+            _undoStack.Push(snapshot);
+            while (_undoStack.Count > MaxUndoStack) { var _ = _undoStack.Pop(); }
+        }
+    }
+
+    internal bool TryUndo()
+    {
+        lock (_historyLock)
+        {
+            if (_undoStack.Count == 0) return false;
+            var prev = _undoStack.Pop();
+            _history.Clear();
+            _history.AddRange(prev);
+            _toolCalls.Clear();
+            InvalidateRendered();
+            return true;
         }
     }
 
@@ -111,6 +152,8 @@ public sealed class ChatLayout : IDisposable
         _chat = chat;
         _renderer = renderer;
         _sessions = sessions ?? new SessionManager();
+        TryUndoCallback = TryUndo;
+        LoadInputHistory();
         _textPadView = textPadView ?? new TextPadView(Directory.GetCurrentDirectory());
         _questionService = questionService ?? new QuestionService(
             Microsoft.Extensions.Logging.Abstractions.NullLogger<QuestionService>.Instance);
@@ -118,7 +161,7 @@ public sealed class ChatLayout : IDisposable
 
         // 自动计算可见消息数，确保输入区始终固定
         // 每条 Panel ≈ 4 行，Header 2 行，Footer 6 行
-        var termHeight = Math.Max(24, Console.WindowHeight);
+        var termHeight = Math.Max(24, SafeWindowHeight);
         _maxVisibleMessages = Math.Max(3, (termHeight - 10) / 4);
 
         _layout = new Layout()
@@ -164,6 +207,17 @@ public sealed class ChatLayout : IDisposable
             ? new LTAI.Agent.Memory.MemoryExtractor(palaceStore, null)
             : null;
         _sessionHandler = new SessionsCommandHandler(_sessions);
+
+        NotificationService.OnNotification += entry =>
+        {
+            var color = entry.Level switch
+            {
+                NotificationLevel.Error => "red",
+                NotificationLevel.Warning => "yellow",
+                _ => "green"
+            };
+            _statusMessage = $"[{color}]{Markup.Escape(entry.Message)}[/]";
+        };
     }
 
     public void Dispose()
@@ -264,7 +318,29 @@ public sealed class ChatLayout : IDisposable
                         }
                         else if (evt.ClickPosition.HasValue)
                         {
-                            // Click-to-scroll: just refresh to acknowledge
+                            var (row, col) = evt.ClickPosition.Value;
+                            var termHeight = SafeWindowHeight;
+                            var msgAreaEnd = termHeight - 6;
+
+                            // Click in the rightmost 5 columns = copy latest code block
+                            var termWidth = 120;
+                            try { termWidth = Console.WindowWidth; } catch { }
+                            if (col >= termWidth - 5 && row < msgAreaEnd)
+                            {
+                                CodeBlockBuffer.TryCopyLatestToClipboard();
+                            }
+                            else if (row < msgAreaEnd / 3 && _scrollOffset < _history.Count)
+                            {
+                                _scrollOffset = Math.Min(_scrollOffset + 5, Math.Max(0, _history.Count - 1));
+                            }
+                            else if (row > msgAreaEnd * 2 / 3 && _scrollOffset > 0)
+                            {
+                                _scrollOffset = Math.Max(0, _scrollOffset - 5);
+                            }
+                            else
+                            {
+                                _scrollOffset = 0;
+                            }
                             ThrottledRefresh();
                         }
                     }
@@ -319,7 +395,10 @@ public sealed class ChatLayout : IDisposable
                             LastRequestedView = _quickNav switch
                             {
                                 '1' => TuiView.Dashboard, '3' => TuiView.LLMConfig,
-                                '4' => TuiView.TextPad, '5' => TuiView.Skills, _ => TuiView.Chat
+                                '4' => TuiView.TextPad, '5' => TuiView.Skills,
+                                '6' => TuiView.Sessions, '7' => TuiView.Jobs,
+                                '8' => TuiView.MemoryBrowser, '9' => TuiView.Workflows,
+                                '0' => TuiView.GraphBrowser, _ => TuiView.Chat
                             };
                             cts.Cancel(); return;
                         }
@@ -490,6 +569,8 @@ public sealed class ChatLayout : IDisposable
     {
         var startupMsg = _startupMessage;
         if (startupMsg != null) _startupMessage = null;
+        var sm = _statusMessage;
+        if (sm != null) { _statusMessage = null; statusText = sm; }
         var panel = _renderer.BuildFooter(
             pickerText, statusText, isFirstEmpty,
             _inputLines, _cursorLine, _cursorCol, MaxInputLines,
@@ -536,6 +617,7 @@ public sealed class ChatLayout : IDisposable
             string.Equals(input, "/clear", StringComparison.OrdinalIgnoreCase))
         {
             await SaveSessionAsync().ConfigureAwait(false);
+            SnapshotForUndo();
             lock (_historyLock) _history.Clear();
             _toolCalls.Clear();
             _sessions.NewSession();
@@ -547,6 +629,89 @@ public sealed class ChatLayout : IDisposable
             await HandleSessionsCommandAsync(input).ConfigureAwait(false);
             return true;
         }
+        if (input.StartsWith("/theme", StringComparison.OrdinalIgnoreCase))
+        {
+            ThemeService.Toggle();
+            var mode = ThemeService.IsLight ? "浅色" : "深色";
+            lock (_historyLock) _history.Add(("cmd", null, $"[green]已切换为 {mode} 主题[/]", null));
+            return true;
+        }
+
+        if (string.Equals(input, "/undo", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(input, "/撤销", StringComparison.OrdinalIgnoreCase))
+        {
+            if (TryUndo())
+                lock (_historyLock) _history.Add(("cmd", null, "[green]已撤销上一步操作[/]", null));
+            else
+                lock (_historyLock) _history.Add(("cmd", null, "[yellow]没有可撤销的操作[/]", null));
+            return true;
+        }
+
+        if (string.Equals(input, "/keys", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(input, "/shortcuts", StringComparison.OrdinalIgnoreCase))
+        {
+            _pendingChatRequest = "/keys";
+            _statusMessage = "打开快捷键一览...";
+            return true;
+        }
+
+        if (string.Equals(input, "/prompt", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(input, "/agent-prompt", StringComparison.OrdinalIgnoreCase))
+        {
+            _pendingChatRequest = "/prompt";
+            _statusMessage = "打开 Prompt 编辑器...";
+            return true;
+        }
+
+        if (string.Equals(input, "/retry", StringComparison.OrdinalIgnoreCase))
+        {
+            // Resend the last user message
+            string? lastUserMsg = null;
+            lock (_historyLock)
+            {
+                for (int i = _history.Count - 1; i >= 0; i--)
+                {
+                    if (_history[i].role == "user")
+                    {
+                        lastUserMsg = _history[i].rawContent;
+                        break;
+                    }
+                }
+            }
+            if (lastUserMsg != null)
+            {
+                _ = Task.Run(async () =>
+                {
+                    lock (_historyLock) _history.Add(("cmd", null, "[yellow]重试上一轮消息...[/]", null));
+                    _pendingChatRequest = lastUserMsg;
+                });
+                return true;
+            }
+            lock (_historyLock) _history.Add(("cmd", null, "[yellow]没有可以重试的消息[/]", null));
+            return true;
+        }
+
+        if (string.Equals(input, "/compact", StringComparison.OrdinalIgnoreCase))
+        {
+            // Compress older turns: keep only the last 4 messages (2 turns)
+            lock (_historyLock)
+            {
+                SnapshotForUndo();
+                if (_history.Count > 4)
+                {
+                    var keep = _history.GetRange(_history.Count - 4, 4);
+                    _history.Clear();
+                    _history.AddRange(keep);
+                    _history.Add(("cmd", null, "[green]已压缩历史，保留最近 2 轮对话[/]", null));
+                }
+                else
+                {
+                    _history.Add(("cmd", null, "[yellow]消息数不足，无需压缩[/]", null));
+                }
+            }
+            return true;
+        }
+
         if (string.Equals(input, "/exit", StringComparison.OrdinalIgnoreCase) ||
             string.Equals(input, "/quit", StringComparison.OrdinalIgnoreCase))
         {
@@ -577,6 +742,11 @@ public sealed class ChatLayout : IDisposable
     private static string Truncate(string text, int max) =>
         text.Length <= max ? text : text[..max] + "...";
 
+    private static int SafeWindowHeight
+    {
+        get { try { return Console.WindowHeight; } catch { return 24; } }
+    }
+
     private static string FormatElapsed(TimeSpan t) =>
         t.TotalSeconds >= 60 ? $"{(int)t.TotalMinutes}m{t.Seconds}s" : $"{t.TotalSeconds:F1}s";
 
@@ -586,12 +756,49 @@ public sealed class ChatLayout : IDisposable
     {
         if (_sessions.CurrentHandle == null) return;
         await _sessions.SaveSessionAsync().ConfigureAwait(false);
+        SaveInputHistory();
+    }
+
+    private string InputHistoryPath =>
+        Path.Combine(Environment.CurrentDirectory, ".livingtree", "input_history.json");
+
+    private void LoadInputHistory()
+    {
+        try
+        {
+            var path = InputHistoryPath;
+            if (!File.Exists(path)) return;
+            var json = File.ReadAllText(path);
+            var items = System.Text.Json.JsonSerializer.Deserialize<List<string>>(json);
+            if (items != null)
+            {
+                _inputHistory.Clear();
+                _inputHistory.AddRange(items);
+                if (_inputHistory.Count > 50)
+                    _inputHistory.RemoveRange(0, _inputHistory.Count - 50);
+            }
+        }
+        catch { /* best-effort */ }
+    }
+
+    private void SaveInputHistory()
+    {
+        try
+        {
+            var dir = Path.GetDirectoryName(InputHistoryPath);
+            if (dir != null && !Directory.Exists(dir))
+                Directory.CreateDirectory(dir);
+            var json = System.Text.Json.JsonSerializer.Serialize(_inputHistory.TakeLast(50).ToList());
+            File.WriteAllText(InputHistoryPath, json);
+        }
+        catch { /* best-effort */ }
     }
 
     private async Task HandleSessionsCommandAsync(string input)
     {
         var result = await _sessionHandler.ExecuteAsync(input, SaveSessionAsync).ConfigureAwait(false);
 
+        if (result.LoadedMessages != null) SnapshotForUndo();
         foreach (var msg in result.HistoryMessages)
             _history.Add(("cmd", null, msg, null));
 

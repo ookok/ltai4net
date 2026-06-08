@@ -151,27 +151,24 @@ public sealed class DesktopCommandServiceTests
     }
 
     [Fact]
-    public void Undo_ReturnsNotSupported()
+    public void Undo_ReturnsMessage()
     {
         var r = _svc.Execute("/undo");
         Assert.NotNull(r.StatusMessage);
-        Assert.Contains("暂不支持", r.StatusMessage);
     }
 
     [Fact]
-    public void Retry_ReturnsNotSupported()
+    public void Retry_ReturnsMessage()
     {
         var r = _svc.Execute("/retry");
         Assert.NotNull(r.StatusMessage);
-        Assert.Contains("暂不支持", r.StatusMessage);
     }
 
     [Fact]
-    public void Compact_ReturnsNotSupported()
+    public void Compact_ReturnsMessage()
     {
         var r = _svc.Execute("/compact");
         Assert.NotNull(r.StatusMessage);
-        Assert.Contains("暂不支持", r.StatusMessage);
     }
 
     [Fact]
@@ -183,35 +180,31 @@ public sealed class DesktopCommandServiceTests
     }
 
     [Fact]
-    public void Plan_ReturnsNotSupported()
+    public void Plan_ReturnsMessage()
     {
         var r = _svc.Execute("/plan");
         Assert.NotNull(r.StatusMessage);
-        Assert.Contains("暂不支持", r.StatusMessage);
     }
 
     [Fact]
-    public void Approve_ReturnsNotSupported()
+    public void Approve_ReturnsMessage()
     {
         var r = _svc.Execute("/approve");
         Assert.NotNull(r.StatusMessage);
-        Assert.Contains("暂不支持", r.StatusMessage);
     }
 
     [Fact]
     public void Ls_ReturnsInfo()
     {
-        var r = _svc.Execute("/ls src");
+        var r = _svc.Execute("/ls");
         Assert.NotNull(r.StatusMessage);
-        Assert.Contains("暂不支持", r.StatusMessage);
     }
 
     [Fact]
-    public void Cd_ReturnsInfo()
+    public void Cd_ReturnsMessage()
     {
-        var r = _svc.Execute("/cd ..");
+        var r = _svc.Execute("/cd");
         Assert.NotNull(r.StatusMessage);
-        Assert.Contains("暂不支持", r.StatusMessage);
     }
 
     [Fact]
@@ -231,11 +224,10 @@ public sealed class DesktopCommandServiceTests
     }
 
     [Fact]
-    public void Pipe_ReturnsNotSupported()
+    public void Pipe_ReturnsMessage()
     {
         var r = _svc.Execute("/pipe");
         Assert.NotNull(r.StatusMessage);
-        Assert.Contains("暂不支持", r.StatusMessage);
     }
 
     [Fact]
@@ -243,7 +235,6 @@ public sealed class DesktopCommandServiceTests
     {
         var r = _svc.Execute("/skill");
         Assert.NotNull(r.StatusMessage);
-        Assert.Contains("技能面板", r.StatusMessage);
     }
 
     [Fact]

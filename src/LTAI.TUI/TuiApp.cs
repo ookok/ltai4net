@@ -2,14 +2,20 @@ using System.Text.Json;
 using Spectre.Console;
 using LTAI.Agent;
 using LTAI.Agent.DevUI;
+using LTAI.Agent.Memory;
+using LTAI.Agent.Tasks;
 using LTAI.Agent.Tools;
+using LTAI.Agent.Vector;
+using LTAI.Agent.Workflows;
 using LTAI.Core.Configuration;
+using LTAI.Core.Session;
 using Microsoft.Extensions.Options;
 using LTAI.TUI.DevUI;
+using LTAI.TUI.Services;
 
 namespace LTAI.TUI;
 
-public enum TuiView { Dashboard, Chat, LLMConfig, TextPad, Skills }
+public enum TuiView { Dashboard, Chat, LLMConfig, TextPad, Skills, Sessions, Jobs, MemoryBrowser, Workflows, GraphBrowser }
 
 public sealed class TuiApp
 {
@@ -22,6 +28,12 @@ public sealed class TuiApp
     private readonly SkillsPanelView _skillsPanelView;
     private readonly DevUI.DashboardContext _dashCtx;
     private readonly QuestionService _questionService;
+    private readonly SessionsPanelView _sessionsView;
+    private readonly JobsPanelView _jobsView;
+    private readonly MemoryBrowserView _memoryView;
+    private readonly WorkflowVisualizerView _workflowView;
+    private readonly GraphBrowserView _graphView;
+    private readonly SessionManager _sessionMgr;
 
     private TuiView _currentView = TuiView.Chat;
     private bool _running = true;
@@ -34,17 +46,27 @@ public sealed class TuiApp
         DevUI.DashboardContext dashCtx,
         QuestionService questionService,
         Rendering.ChatRenderer renderer,
-        LTAI.Agent.Memory.PalaceStore? palaceStore = null)
+        PalaceStore? palaceStore = null,
+        TaskQueue? taskQueue = null,
+        YAMLWorkflowRegistry? workflowRegistry = null,
+        KbGraph? kbGraph = null,
+        KgStore? kgStore = null)
     {
         _chat = chat;
         _llmConfig = llmConfig;
         _config = config;
         _projectRoot = projectRoot;
         _dashCtx = dashCtx;
+        _sessionMgr = new SessionManager();
         _textPadView = new TextPadView(projectRoot);
         _skillsPanelView = new SkillsPanelView(projectRoot);
-        _chatLayout = new ChatLayout(chat, renderer, questionService, new LTAI.Core.Session.SessionManager(), _textPadView, palaceStore);
+        _chatLayout = new ChatLayout(chat, renderer, questionService, _sessionMgr, _textPadView, palaceStore);
         _questionService = questionService;
+        _sessionsView = new SessionsPanelView(_sessionMgr);
+        _jobsView = new JobsPanelView(taskQueue);
+        _memoryView = new MemoryBrowserView(palaceStore);
+        _workflowView = new WorkflowVisualizerView(workflowRegistry);
+        _graphView = new GraphBrowserView(kbGraph, kgStore);
     }
 
     public async Task RunAsync()
@@ -53,9 +75,18 @@ public sealed class TuiApp
         LTAI.TUI.Input.MouseTracker.Enable();
         try
         {
+        // 配置验证
+        ValidateConfig();
+
+        // 订阅工作流热重载事件
+        SubscribeWorkflowEvents();
+
         // 首次运行向导：无 API Key 时自动弹出
         if (!_llmConfig.HasAnyConfiguredProvider())
             _llmConfig.ShowSetupWizard();
+
+        // 自动恢复上次会话
+        TryRestoreLastSession();
 
         // 检查 L1/L2 是否已配置（读取 appsettings.json — 单一配置文件）
         var aiCfg = _config?.Value.AI;
@@ -122,6 +153,31 @@ public sealed class TuiApp
                     ShowHeader();
                     _skillsPanelView.Render();
                     break;
+                case TuiView.Sessions:
+                    AnsiConsole.Clear();
+                    ShowHeader();
+                    _sessionsView.Render();
+                    break;
+                case TuiView.Jobs:
+                    AnsiConsole.Clear();
+                    ShowHeader();
+                    _jobsView.Render();
+                    break;
+                case TuiView.MemoryBrowser:
+                    AnsiConsole.Clear();
+                    ShowHeader();
+                    _memoryView.Render();
+                    break;
+                case TuiView.Workflows:
+                    AnsiConsole.Clear();
+                    ShowHeader();
+                    _workflowView.Render();
+                    break;
+                case TuiView.GraphBrowser:
+                    AnsiConsole.Clear();
+                    ShowHeader();
+                    _graphView.Render();
+                    break;
             }
         }
         }
@@ -134,8 +190,19 @@ public sealed class TuiApp
     private void ShowHeader()
     {
         AnsiConsole.WriteLine();
-        AnsiConsole.MarkupLine($"[bold]视图:[/] {_currentView}");
-        AnsiConsole.MarkupLine("[grey]1: 仪表盘  2: 聊天  3: 配置  4: 文件  5: 技能  Q: 退出[/]");
+        AnsiConsole.MarkupLine($"[bold]{LTAI.Core.I18n.Locale.Get("View")}:[/] {_currentView}");
+        AnsiConsole.MarkupLine($"[grey]" +
+            $"1: {LTAI.Core.I18n.Locale.Get("Dashboard")}  " +
+            $"2: {LTAI.Core.I18n.Locale.Get("Chat")}  " +
+            $"3: {LTAI.Core.I18n.Locale.Get("Config")}  " +
+            $"4: {LTAI.Core.I18n.Locale.Get("FileBrowser")}  " +
+            $"5: {LTAI.Core.I18n.Locale.Get("Skill")}  " +
+            $"6: {LTAI.Core.I18n.Locale.Get("SessionMgr")}  " +
+            $"7: {LTAI.Core.I18n.Locale.Get("JobMgr")}  " +
+            $"8: {LTAI.Core.I18n.Locale.Get("MemBrowser")}  " +
+            $"9: {LTAI.Core.I18n.Locale.Get("WorkflowVis")}  " +
+            $"0: {LTAI.Core.I18n.Locale.Get("GraphBrowse")}  " +
+            $"Q: {LTAI.Core.I18n.Locale.Get("Exit")}[/]");
     }
 
     private async Task FetchBalanceAsync()
@@ -187,13 +254,94 @@ public sealed class TuiApp
             await UsageTracker.RefreshModelInfoAsync(endpoint, apiKey).ConfigureAwait(false);
     }
 
+    private void TryRestoreLastSession()
+    {
+        try
+        {
+            var sessions = _sessionMgr.ListSessions();
+            if (sessions.Length == 0) return;
+            var last = sessions[^1]; // most recent
+            var handle = _sessionMgr.LoadSession(last.Name);
+            if (handle == null) return;
+            var messages = handle.Messages;
+            if (messages.Count == 0) return;
+            foreach (var m in messages)
+            {
+                var role = m.Role == Microsoft.Extensions.AI.ChatRole.User ? "user" : "assistant";
+                _chatLayout.EnqueueRestoredMessage(role, m.Text ?? "");
+            }
+            ChatLayout.SetStartupMessage($"[dim]已自动恢复会话: {last.DisplayName}[/]");
+        }
+        catch
+        {
+            // Best-effort restore
+        }
+    }
+
+    private void ValidateConfig()
+    {
+        try
+        {
+            var configPath = Path.Combine(AppContext.BaseDirectory, "appsettings.json");
+            if (!File.Exists(configPath))
+                configPath = Path.Combine(Environment.CurrentDirectory, "appsettings.json");
+            if (!File.Exists(configPath))
+                NotificationService.Publish("⚠️ appsettings.json not found — using defaults");
+            else
+            {
+                var content = File.ReadAllText(configPath);
+                if (string.IsNullOrWhiteSpace(content))
+                    NotificationService.Publish("⚠️ appsettings.json is empty");
+            }
+        }
+        catch (Exception ex)
+        {
+            NotificationService.Publish($"⚠️ Config error: {ex.Message}");
+        }
+
+        // Check persistence directory
+        var livingDir = Path.Combine(Environment.CurrentDirectory, ".livingtree");
+        if (!Directory.Exists(livingDir))
+        {
+            try { Directory.CreateDirectory(livingDir); }
+            catch { NotificationService.Publish("⚠️ Cannot create .livingtree/ directory"); }
+        }
+    }
+
+    private void SubscribeWorkflowEvents()
+    {
+        try
+        {
+            if (_dashCtx?.Workflows is YAMLWorkflowRegistry registry)
+            {
+                var notifierField = typeof(YAMLWorkflowRegistry)
+                    .GetField("_notifier", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                if (notifierField?.GetValue(registry) is WorkflowHotReloadNotifier notifier)
+                {
+                    notifier.Subscribe(new WorkflowEventRelay());
+                }
+            }
+        }
+        catch { }
+    }
+
+    private sealed class WorkflowEventRelay : IWorkflowSubscriber
+    {
+        public void OnReloaded(WorkflowReloadEvent evt) =>
+            NotificationService.Publish($"🔄 Workflow reloaded: {evt.Name} ({evt.Type})");
+
+        public void OnLoadFailed(WorkflowLoadFailedEvent evt) =>
+            NotificationService.Publish($"❌ Workflow load failed: {evt.Name} — {evt.Reason}");
+    }
+
     private void ShowDashboard()
     {
         DevUIDashboardView.Render(
             _dashCtx.DevUi, _dashCtx.SpanCollector, UsageTracker.Default,
             _dashCtx.Workflows, _dashCtx.Embedder, _dashCtx.EmbedCache,
             _dashCtx.RemoteCache, _dashCtx.EmbeddingClient, _dashCtx.ModelsProvider,
-            _dashCtx.Aligner, _dashCtx.TaskQueue, _dashCtx.Bgjs);
+            _dashCtx.Aligner, _dashCtx.TaskQueue, _dashCtx.Bgjs,
+            _dashCtx.WorkflowHealth, _dashCtx.Palace);
     }
 }
 

@@ -73,7 +73,7 @@ public sealed partial class DevUIViewModel : ViewModelBase
         _chatCts = new CancellationTokenSource();
         try
         {
-            await foreach (var update in _devUi.RunStreamingAsync(SelectedAgentName, text, null, _chatCts.Token))
+            await foreach (var update in _devUi.RunStreamingAsync(SelectedAgentName, text, null, null, _chatCts.Token))
             {
                 if (update.Text != null)
                     ChatLogText += update.Text;

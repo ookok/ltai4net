@@ -3,6 +3,8 @@
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using System.Runtime.CompilerServices;
+using System.Text;
+using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -130,21 +132,41 @@ public sealed class LTAIDevUIService
         string name,
         string message,
         string? sessionId,
+        Action<string>? onSessionUpdated = null,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         var agent = ResolveAgent(name)
             ?? throw new InvalidOperationException($"Agent '{name}' is not registered.");
-        var session = await agent.CreateSessionAsync(cancellationToken).ConfigureAwait(false);
+
+        AgentSession session;
+        if (!string.IsNullOrEmpty(sessionId))
+        {
+            session = await DeserializeSessionAsync(agent, sessionId, cancellationToken).ConfigureAwait(false);
+        }
+        else
+        {
+            session = await agent.CreateSessionAsync(cancellationToken).ConfigureAwait(false);
+        }
+
         var chatMessage = new ChatMessage(ChatRole.User, message);
         await foreach (var update in agent.RunStreamingAsync(chatMessage, session, cancellationToken: cancellationToken).ConfigureAwait(false))
             yield return update;
+
+        if (onSessionUpdated != null)
+        {
+            var json = await agent.SerializeSessionAsync(session, cancellationToken: cancellationToken).ConfigureAwait(false);
+            var base64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(json.GetRawText()));
+            onSessionUpdated(base64);
+        }
     }
 
-    // P9.0: TUI/Desktop DevUI starts a fresh session per call. Cross-call
-    // conversation state would require ChatClientAgent.DeserializeSessionAsync
-    // (AgentSessionStateBag-level, not exposed on base AgentSession). The
-    // sessionId parameter is accepted for API compatibility but currently
-    // ignored — see P10+ for cross-call session persistence.
+    private static async Task<AgentSession> DeserializeSessionAsync(AIAgent agent, string sessionId, CancellationToken ct)
+    {
+        var jsonBytes = Convert.FromBase64String(sessionId);
+        var json = Encoding.UTF8.GetString(jsonBytes);
+        var element = JsonDocument.Parse(json).RootElement;
+        return await agent.DeserializeSessionAsync(element, cancellationToken: ct).ConfigureAwait(false);
+    }
 
     private AIAgent? ResolveAgent(string name)
     {
@@ -206,16 +228,4 @@ public sealed class LTAIDevUIService
         };
     }
 
-    private static AgentSession FromSessionId(string sessionId)
-    {
-        throw new NotSupportedException(
-            "AgentSession deserialization is agent-type specific; " +
-            "use ChatClientAgent.DeserializeSessionAsync(JsonSerializer.SerializeToElement(sessionId)) for known agents. " +
-            "For TUI/Desktop single-session use, pass sessionId=null to start a fresh session.");
-    }
-
-    // Placeholder for future per-agent session-store integration (P10+).
-    // The throw above documents the limitation: TUI/Desktop DevUI starts a
-    // fresh session per call. Cross-call conversation state would require
-    // routing through ChatClientAgent.DeserializeSessionAsync(JsonElement).
 }

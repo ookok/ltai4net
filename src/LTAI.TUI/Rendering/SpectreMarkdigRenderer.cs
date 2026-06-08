@@ -21,6 +21,15 @@ public sealed class SpectreMarkdigRenderer
             RenderBlock(block);
     }
 
+    public string RenderToString(string markdown)
+    {
+        _sb.Clear();
+        var pipeline = new MarkdownPipelineBuilder().UseAdvancedExtensions().Build();
+        var doc = Markdig.Markdown.Parse(markdown, pipeline);
+        Render(doc);
+        return _sb.ToString();
+    }
+
     private void RenderBlock(Block block)
     {
         switch (block)
@@ -54,8 +63,69 @@ public sealed class SpectreMarkdigRenderer
     private void RenderParagraph(ParagraphBlock p)
     {
         Newline();
-        RenderInlines(p.Inline);
-        _sb.AppendLine();
+        // Check if paragraph contains diff-like content
+        var text = GetLiteralTextFromInline(p.Inline);
+        if (IsDiffContent(text))
+        {
+            RenderDiffContent(text);
+        }
+        else
+        {
+            RenderInlines(p.Inline);
+            _sb.AppendLine();
+        }
+    }
+
+    private static string GetLiteralTextFromInline(ContainerInline? inlines)
+    {
+        if (inlines == null) return "";
+        var sb = new StringBuilder();
+        var inline = inlines.FirstChild;
+        while (inline != null)
+        {
+            if (inline is LiteralInline lit)
+                sb.Append(lit.Content.ToString());
+            else if (inline is LineBreakInline)
+                sb.Append('\n');
+            else if (inline is CodeInline code)
+                sb.Append(code.Content);
+            inline = inline.NextSibling;
+        }
+        return sb.ToString();
+    }
+
+    private static bool IsDiffContent(string text)
+    {
+        if (string.IsNullOrEmpty(text)) return false;
+        var lines = text.Split('\n');
+        var diffLines = lines.Count(l =>
+        {
+            var t = l.TrimStart();
+            return t.StartsWith('+') || t.StartsWith('-') || t.StartsWith("@@");
+        });
+        return diffLines >= 3 && diffLines >= lines.Length * 0.5;
+    }
+
+    private void RenderDiffContent(string text)
+    {
+        var lines = text.Split('\n');
+        var boxWidth = Math.Min(SafeWindowWidth - 14, 76);
+        _sb.AppendLine("[bold grey]┌─ diff ───────────────────────┐[/]");
+        foreach (var line in lines)
+        {
+            var padded = line.Length <= boxWidth - 4
+                ? line + new string(' ', boxWidth - 4 - line.Length)
+                : line[..(boxWidth - 7)] + "...";
+            if (line.StartsWith('+'))
+                _sb.AppendLine($"  [green]│[/] [green]{EscapeMarkup(padded)}[/] [green]│[/]");
+            else if (line.StartsWith('-'))
+                _sb.AppendLine($"  [red]│[/] [red]{EscapeMarkup(padded)}[/] [red]│[/]");
+            else if (line.StartsWith("@@"))
+                _sb.AppendLine($"  [cyan]│[/] [cyan]{EscapeMarkup(padded)}[/] [cyan]│[/]");
+            else
+                _sb.AppendLine($"  [grey]│[/] {EscapeMarkup(padded)} [grey]│[/]");
+        }
+        _sb.AppendLine($"[bold grey]└{new string('─', boxWidth)}┘[/]");
     }
 
     private void RenderFencedCode(FencedCodeBlock f)
@@ -63,18 +133,38 @@ public sealed class SpectreMarkdigRenderer
         Newline();
         var lang = f.Info ?? "";
         var code = string.Join("\n", f.Lines.Lines.Select(l => l.Slice.ToString()));
-        var boxWidth = Math.Min(Console.WindowWidth - 10, 80);
+        var boxWidth = Math.Min(SafeWindowWidth - 14, 76);
 
-        var header = string.IsNullOrEmpty(lang) ? "┌──────┐" : $"┌─ {lang} {new string('─', Math.Max(0, boxWidth - lang.Length - 3))}┐";
+        var header = string.IsNullOrEmpty(lang)
+            ? $"┌──────┐ ┬╯[dim]📋[/]"
+            : $"┌─ {lang} {new string('─', Math.Max(0, boxWidth - lang.Length - 7))}┐ ┬╯[dim]📋[/]";
         _sb.AppendLine($"[bold grey]{header}[/]");
 
+        CodeBlockBuffer.Register(code, lang);
+
         var lines = code.Split('\n');
+        var isDiff = string.Equals(lang, "diff", StringComparison.OrdinalIgnoreCase);
         foreach (var line in lines)
         {
             var padded = line.Length <= boxWidth - 4
                 ? line + new string(' ', boxWidth - 4 - line.Length)
                 : line[..(boxWidth - 7)] + "...";
-            _sb.AppendLine($"  [grey]│[/] {EscapeMarkup(padded)} [grey]│[/]");
+            if (isDiff && line.Length > 0)
+            {
+                var diffChar = line[0];
+                if (diffChar == '+')
+                    _sb.AppendLine($"  [green]│[/] [green]{EscapeMarkup(padded)}[/] [green]│[/]");
+                else if (diffChar == '-')
+                    _sb.AppendLine($"  [red]│[/] [red]{EscapeMarkup(padded)}[/] [red]│[/]");
+                else if (line.StartsWith("@@"))
+                    _sb.AppendLine($"  [cyan]│[/] [cyan]{EscapeMarkup(padded)}[/] [cyan]│[/]");
+                else
+                    _sb.AppendLine($"  [grey]│[/] {EscapeMarkup(padded)} [grey]│[/]");
+            }
+            else
+            {
+                _sb.AppendLine($"  [grey]│[/] {EscapeMarkup(padded)} [grey]│[/]");
+            }
         }
         _sb.AppendLine($"[bold grey]└{new string('─', boxWidth)}┘[/]");
     }
@@ -95,7 +185,32 @@ public sealed class SpectreMarkdigRenderer
         {
             if (l[i] is ListItemBlock item)
             {
+                // Check for task list in first paragraph inline text
+                var isTaskItem = false;
+                var taskDone = false;
+                if (!isOrdered && item.Count > 0 && item[0] is ParagraphBlock para && para.Inline != null)
+                {
+                    var firstLit = para.Inline.FirstChild;
+                    var text = firstLit is LiteralInline lit ? lit.Content.ToString() : "";
+                    if (text.StartsWith("[ ]"))
+                    {
+                        isTaskItem = true;
+                        taskDone = false;
+                    }
+                    else if (text.StartsWith("[x]") || text.StartsWith("[X]"))
+                    {
+                        isTaskItem = true;
+                        taskDone = true;
+                    }
+                }
+
                 var prefix = isOrdered ? $"  [grey]{index}.[/] " : "  [green]•[/] ";
+                if (isTaskItem)
+                {
+                    prefix = taskDone
+                        ? "  [green]☑️[/] "
+                        : "  ⬜ ";
+                }
                 _sb.Append(prefix);
                 RenderChildren(item);
                 _sb.AppendLine();
@@ -115,6 +230,10 @@ public sealed class SpectreMarkdigRenderer
     private void RenderTable(Markdig.Extensions.Tables.Table t)
     {
         Newline();
+        var alignments = t.ColumnDefinitions?.Select(cd => cd.Alignment ?? TableColumnAlign.Left).ToList();
+        var colWidths = new List<int>();
+        var rows = new List<List<string>>();
+
         foreach (var rowObj in t)
         {
             if (rowObj is TableRow row)
@@ -125,10 +244,53 @@ public sealed class SpectreMarkdigRenderer
                     if (cellObj is TableCell cell)
                         cells.Add(RenderTableCellContent(cell));
                 }
-                if (cells.Count > 0)
-                    _sb.AppendLine("[grey]│[/] " + string.Join(" [grey]│[/] ", cells) + " [grey]│[/]");
+                rows.Add(cells);
+                for (int i = 0; i < cells.Count; i++)
+                {
+                    var stripped = StripMarkup(cells[i]);
+                    if (i >= colWidths.Count) colWidths.Add(stripped.Length);
+                    else colWidths[i] = Math.Max(colWidths[i], stripped.Length);
+                }
             }
         }
+
+        foreach (var cells in rows)
+        {
+            var formatted = new List<string>();
+            for (int i = 0; i < cells.Count; i++)
+            {
+                var w = i < colWidths.Count ? colWidths[i] : 0;
+                var align = alignments != null && i < alignments.Count ? alignments[i] : TableColumnAlign.Left;
+                var cell = cells[i];
+                if (align == TableColumnAlign.Right)
+                    cell = new string(' ', Math.Max(0, w - StripMarkup(cell).Length)) + cell;
+                else if (align == TableColumnAlign.Center)
+                {
+                    var padding = Math.Max(0, w - StripMarkup(cell).Length);
+                    cell = new string(' ', padding / 2) + cell + new string(' ', padding - padding / 2);
+                }
+                formatted.Add(cell);
+            }
+            if (formatted.Count > 0)
+                _sb.AppendLine("[grey]│[/] " + string.Join(" [grey]│[/] ", formatted) + " [grey]│[/]");
+        }
+    }
+
+    private static string StripMarkup(string text)
+    {
+        var result = new StringBuilder();
+        int i = 0;
+        while (i < text.Length)
+        {
+            if (text[i] == '[')
+            {
+                var end = text.IndexOf(']', i);
+                if (end > i) { i = end + 1; continue; }
+            }
+            result.Append(text[i]);
+            i++;
+        }
+        return result.ToString();
     }
 
     private string RenderTableCellContent(TableCell cell)
@@ -184,22 +346,45 @@ public sealed class SpectreMarkdigRenderer
                 buf.Append($"[grey]{EscapeMarkup(code.Content)}[/]");
                 break;
             case EmphasisInline emp:
-                var tag = emp.DelimiterCount >= 2 ? "bold" : "italic";
-                buf.Append($"[{tag}]");
-                var child = emp.FirstChild;
-                while (child != null)
+                if (emp.DelimiterChar == '~' && emp.DelimiterCount >= 2)
                 {
-                    RenderInlineTo(buf, child);
-                    child = child.NextSibling;
+                    // Strikethrough
+                    buf.Append("[grey]~~");
+                    var sc = emp.FirstChild;
+                    while (sc != null) { RenderInlineTo(buf, sc); sc = sc.NextSibling; }
+                    buf.Append("~~[/]");
                 }
-                buf.Append("[/]");
+                else
+                {
+                    var tag = emp.DelimiterCount >= 2 ? "bold" : "italic";
+                    buf.Append($"[{tag}]");
+                    var child = emp.FirstChild;
+                    while (child != null)
+                    {
+                        RenderInlineTo(buf, child);
+                        child = child.NextSibling;
+                    }
+                    buf.Append("[/]");
+                }
                 break;
             case LinkInline link:
                 var url = link.Url ?? "";
                 if (link.IsImage)
                 {
                     var alt = GetLiteralText(link);
-                    buf.Append($"[grey][[图片: {EscapeMarkup(alt)} ({EscapeMarkup(url)})]][/]");
+                    var term = Environment.GetEnvironmentVariable("TERM_PROGRAM") ?? "";
+                    var kittySupported = term.Contains("kitty", StringComparison.OrdinalIgnoreCase)
+                        || Environment.GetEnvironmentVariable("KITTY_WINDOW_ID") != null;
+                    var iterm2Supported = term.Contains("iTerm", StringComparison.OrdinalIgnoreCase);
+                    if (kittySupported || iterm2Supported)
+                    {
+                        var proto = kittySupported ? "Kitty" : "iTerm2";
+                        buf.Append($"[dim][{proto} 图片: {EscapeMarkup(alt)} ({EscapeMarkup(url)})[/]");
+                    }
+                    else
+                    {
+                        buf.Append($"[grey][🖼 {EscapeMarkup(alt)}][/]");
+                    }
                 }
                 else
                 {
@@ -232,6 +417,11 @@ public sealed class SpectreMarkdigRenderer
             }
         }
         return "";
+    }
+
+    private static int SafeWindowWidth
+    {
+        get { try { return Console.WindowWidth; } catch { return 80; } }
     }
 
     private void Newline()

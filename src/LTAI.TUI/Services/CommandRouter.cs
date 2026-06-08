@@ -18,6 +18,7 @@ public sealed class CommandRouter
     private readonly InfoCommandService _infoService;
     private readonly GraphCommandService _graphService;
     private readonly SpecCommandService _specService;
+    private readonly ThemeCommandService _themeService;
 
     public CommandRouter(
         ModelCommandService modelService,
@@ -33,7 +34,8 @@ public sealed class CommandRouter
         FileCommandService fileService,
         InfoCommandService infoService,
         GraphCommandService graphService,
-        SpecCommandService specService)
+        SpecCommandService specService,
+        ThemeCommandService? themeService = null)
     {
         _modelService = modelService;
         _jobsService = jobsService;
@@ -49,6 +51,7 @@ public sealed class CommandRouter
         _infoService = infoService;
         _graphService = graphService;
         _specService = specService;
+        _themeService = themeService ?? new ThemeCommandService();
     }
 
     public CommandResult Execute(Command cmd) => cmd switch
@@ -67,6 +70,7 @@ public sealed class CommandRouter
         HelpCommand or StatusCommand => _infoService.Execute(cmd),
         GraphCommand => _graphService.Execute(cmd),
         SpecCommand => _specService.Execute(cmd),
+        ThemeCommand => _themeService.Execute(cmd),
         _ => new SuccessResult("ok"),
     };
 }

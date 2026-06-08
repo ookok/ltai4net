@@ -32,6 +32,11 @@ public enum ConfirmChoice
 /// </summary>
 public static class ConfirmationModal
 {
+    private static int SafeWindowWidth
+    {
+        get { try { return Console.WindowWidth; } catch { return 80; } }
+    }
+
     /// <summary>
     /// 显示确认模态窗口并等待用户键盘选择。
     /// 选项:
@@ -70,7 +75,7 @@ public static class ConfirmationModal
     {
         // 构建模态面板内容
         var rows = new List<IRenderable>();
-        var termWidth = Math.Min(Console.WindowWidth, 120);
+        var termWidth = Math.Min(SafeWindowWidth, 120);
 
         // 消息区
         var msgText = TruncateForWidth(message, termWidth - 8);

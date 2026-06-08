@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
+using LTAI.Core.I18n;
 using LTAI.Core.Rendering;
 using Spectre.Console;
 using Spectre.Console.Rendering;
@@ -26,11 +27,11 @@ public sealed class MessagePanelRenderer
     {
         var (color, border, header) = (role.ToLowerInvariant()) switch
         {
-            "user" => (Color.Cyan, BoxBorder.Rounded, "[bold cyan] 🧑 你 [/]"),
-            "assistant" or "ai" => (Color.Green, BoxBorder.Double, "[bold green] 🤖 AI [/]"),
-            "tool" => (Color.Blue, BoxBorder.Square, "[bold blue] 🔧 工具 [/]"),
-            "error" => (Color.Red, BoxBorder.Ascii, "[bold red] ⛔ 错误 [/]"),
-            "cmd" or "system" => (Color.Yellow, BoxBorder.Square, "[bold yellow] ⚙️ 系统 [/]"),
+            "user" => (Color.Cyan, BoxBorder.Rounded, $"[bold cyan] 🧑 {Locale.Get("You")} [/]"),
+            "assistant" or "ai" => (Color.Green, BoxBorder.Double, $"[bold green] 🤖 {Locale.Get("AI")} [/]"),
+            "tool" => (Color.Blue, BoxBorder.Square, $"[bold blue] 🔧 {Locale.Get("Tool")} [/]"),
+            "error" => (Color.Red, BoxBorder.Ascii, $"[bold red] ⛔ {Locale.Get("Error")} [/]"),
+            "cmd" or "system" => (Color.Yellow, BoxBorder.Square, $"[bold yellow] ⚙️ {Locale.Get("System")} [/]"),
             _ => (Color.Grey, BoxBorder.None, "[bold grey] ℹ️ [/]"),
         };
 
@@ -53,7 +54,9 @@ public sealed class MessagePanelRenderer
 
         if (isAssistant)
             combined.Append(ChatRenderer.MdToPanelContent(rawContent));
-        else if (role is "cmd" or "system" or "tool")
+        else if (role is "tool")
+            combined.Append(RenderToolResult(rawContent));
+        else if (role is "cmd" or "system")
             combined.Append(rawContent);
         else
             combined.Append(rawContent.EscapeMarkup());
@@ -142,7 +145,7 @@ public sealed class MessagePanelRenderer
                     if (!string.IsNullOrEmpty(incompleteCode))
                     {
                         combined.AppendLine($"\n[bold grey]┌─ {codeLang.EscapeMarkup()} ─(生成中)─┐[/]");
-                        var boxWidth = Math.Min(Console.WindowWidth - 10, 80);
+                        var boxWidth = Math.Min(SafeWindowWidth - 10, 80);
                         foreach (var cl in incompleteCode.Split('\n'))
                             combined.AppendLine($"  [grey]│[/] {cl.EscapeMarkup()} [grey]│[/]");
                         combined.AppendLine($"[bold grey]└{new string('─', boxWidth)}┘[/]");
@@ -212,6 +215,348 @@ public sealed class MessagePanelRenderer
             .Expand();
     }
 
+    private static string RenderToolResult(string raw)
+    {
+        raw = raw.Trim();
+
+        // Check for error patterns
+        if (raw.StartsWith("Error:", StringComparison.OrdinalIgnoreCase) ||
+            raw.StartsWith("❌") || raw.StartsWith("[Error]"))
+            return $"[red]⛔ {raw.EscapeMarkup()}[/]";
+
+        // Success indicator
+        if (raw.StartsWith("Success:", StringComparison.OrdinalIgnoreCase) ||
+            raw.StartsWith("✅"))
+            return $"[green]✅ {raw.EscapeMarkup()}[/]";
+
+        // Try to parse as JSON for structured rendering
+        if (raw.StartsWith('{') || raw.StartsWith('['))
+        {
+            try
+            {
+                using var doc = System.Text.Json.JsonDocument.Parse(raw);
+                var sb = new StringBuilder();
+
+                // Detect tabular data (array of objects with same keys)
+                if (doc.RootElement.ValueKind == System.Text.Json.JsonValueKind.Array &&
+                    doc.RootElement.GetArrayLength() > 0)
+                {
+                    if (TryRenderAsTable(sb, doc.RootElement))
+                        return sb.ToString();
+                }
+
+                // Detect single object with rows/columns (SQL result)
+                if (doc.RootElement.ValueKind == System.Text.Json.JsonValueKind.Object)
+                {
+                    if (TryRenderTableFromObject(sb, doc.RootElement))
+                        return sb.ToString();
+                    if (TryRenderChartSparkline(sb, doc.RootElement))
+                        return sb.ToString();
+                }
+
+                RenderToolJson(sb, doc.RootElement, 0);
+                return sb.ToString();
+            }
+            catch { /* fall through to plain text */ }
+        }
+
+        // Detect table-like text (pipe-delimited or tab-delimited)
+        if (TryRenderTextTable(raw))
+            return RenderTextTable(raw);
+
+        // Default: plain text with dim styling
+        return $"[dim]{raw.EscapeMarkup()}[/]";
+    }
+
+    private static bool TryRenderAsTable(StringBuilder sb, System.Text.Json.JsonElement arr)
+    {
+        var items = arr.EnumerateArray().Take(50).ToList();
+        if (items.Count == 0) return false;
+
+        // Check if all items are objects
+        if (items.Any(i => i.ValueKind != System.Text.Json.JsonValueKind.Object))
+            return false;
+
+        // Get common keys
+        var keys = new HashSet<string>();
+        foreach (var item in items)
+            foreach (var p in item.EnumerateObject())
+                keys.Add(p.Name);
+        if (keys.Count == 0 || keys.Count > 12) return false; // too many columns
+
+        var orderedKeys = keys.ToList();
+        var colWidths = orderedKeys.Select(k => Math.Max(k.Length, items.Max(i =>
+        {
+            if (i.TryGetProperty(k, out var v) && v.ValueKind == System.Text.Json.JsonValueKind.String)
+                return Math.Min(v.GetString()?.Length ?? 0, 30);
+            return 0;
+        }))).ToList();
+        colWidths = colWidths.Select(w => Math.Clamp(w + 2, 4, 32)).ToList();
+
+        // Draw header
+        sb.AppendLine("[bold]┌" + string.Join("┬", colWidths.Select(w => new string('─', w))) + "┐[/]");
+        sb.Append("[bold]│[/]");
+        for (int k = 0; k < orderedKeys.Count; k++)
+        {
+            var label = orderedKeys[k].EscapeMarkup();
+            var pad = colWidths[k] - label.Length;
+            sb.Append($" [bold cyan]{label}{new string(' ', pad)}[/][bold]│[/]");
+        }
+        sb.AppendLine();
+        sb.AppendLine("[bold]├" + string.Join("┼", colWidths.Select(w => new string('─', w))) + "┤[/]");
+
+        foreach (var item in items)
+        {
+            sb.Append("[bold]│[/]");
+            for (int k = 0; k < orderedKeys.Count; k++)
+            {
+                var val = "";
+                if (item.TryGetProperty(orderedKeys[k], out var v))
+                {
+                    val = v.ValueKind switch
+                    {
+                        System.Text.Json.JsonValueKind.String => v.GetString() ?? "",
+                        System.Text.Json.JsonValueKind.Number => v.GetRawText(),
+                        System.Text.Json.JsonValueKind.True => "true",
+                        System.Text.Json.JsonValueKind.False => "false",
+                        _ => v.GetRawText(),
+                    };
+                    if (val.Length > 30) val = val[..27] + "...";
+                }
+                var escaped = val.EscapeMarkup();
+                var pad = colWidths[k] - escaped.Length;
+                sb.Append($" {escaped}{new string(' ', pad)}[bold]│[/]");
+            }
+            sb.AppendLine();
+        }
+        sb.AppendLine("[bold]└" + string.Join("┴", colWidths.Select(w => new string('─', w))) + "┘[/]");
+        sb.AppendLine($"[grey]共 {arr.GetArrayLength()} 行[/]");
+        return true;
+    }
+
+    private static bool TryRenderTableFromObject(StringBuilder sb, System.Text.Json.JsonElement obj)
+    {
+        // Detect { rows: [...], columns: [...] } pattern
+        if (!obj.TryGetProperty("rows", out var rows) || rows.ValueKind != System.Text.Json.JsonValueKind.Array)
+            return false;
+        var rowItems = rows.EnumerateArray().Take(50).ToList();
+        if (rowItems.Count == 0) return false;
+
+        // Get columns
+        string[]? colNames = null;
+        if (obj.TryGetProperty("columns", out var cols) && cols.ValueKind == System.Text.Json.JsonValueKind.Array)
+            colNames = cols.EnumerateArray().Select(c => c.GetString() ?? "").ToArray();
+
+        // Try to determine column names from first row
+        if (colNames == null && rowItems[0].ValueKind == System.Text.Json.JsonValueKind.Object)
+            colNames = rowItems[0].EnumerateObject().Select(p => p.Name).ToArray();
+
+        if (colNames == null || colNames.Length == 0) return false;
+
+        // Same rendering logic as TryRenderAsTable
+        var keys = colNames.ToList();
+        var colWidths = keys.Select(k => Math.Max(k.Length, rowItems.Max(i =>
+        {
+            if (i.ValueKind == System.Text.Json.JsonValueKind.Object && i.TryGetProperty(k, out var v))
+            {
+                if (v.ValueKind == System.Text.Json.JsonValueKind.String)
+                    return Math.Min(v.GetString()?.Length ?? 0, 30);
+                return v.GetRawText().Length;
+            }
+            return 0;
+        }))).ToList();
+        colWidths = colWidths.Select(w => Math.Clamp(w + 2, 4, 32)).ToList();
+
+        sb.AppendLine("[bold]┌" + string.Join("┬", colWidths.Select(w => new string('─', w))) + "┐[/]");
+        sb.Append("[bold]│[/]");
+        for (int k = 0; k < keys.Count; k++)
+        {
+            var label = keys[k].EscapeMarkup();
+            var pad = colWidths[k] - label.Length;
+            sb.Append($" [bold cyan]{label}{new string(' ', pad)}[/][bold]│[/]");
+        }
+        sb.AppendLine();
+        sb.AppendLine("[bold]├" + string.Join("┼", colWidths.Select(w => new string('─', w))) + "┤[/]");
+
+        foreach (var item in rowItems)
+        {
+            sb.Append("[bold]│[/]");
+            for (int k = 0; k < keys.Count; k++)
+            {
+                var val = "";
+                if (item.ValueKind == System.Text.Json.JsonValueKind.Object && item.TryGetProperty(keys[k], out var v))
+                {
+                    val = v.ValueKind switch
+                    {
+                        System.Text.Json.JsonValueKind.String => v.GetString() ?? "",
+                        System.Text.Json.JsonValueKind.Number => v.GetRawText(),
+                        System.Text.Json.JsonValueKind.True => "true",
+                        System.Text.Json.JsonValueKind.False => "false",
+                        _ => v.GetRawText(),
+                    };
+                    if (val.Length > 30) val = val[..27] + "...";
+                }
+                var escaped = val.EscapeMarkup();
+                var pad = colWidths[k] - escaped.Length;
+                sb.Append($" {escaped}{new string(' ', pad)}[bold]│[/]");
+            }
+            sb.AppendLine();
+        }
+        sb.AppendLine("[bold]└" + string.Join("┴", colWidths.Select(w => new string('─', w))) + "┘[/]");
+        sb.AppendLine($"[grey]共 {rows.GetArrayLength()} 行[/]");
+        return true;
+    }
+
+    private static bool TryRenderChartSparkline(StringBuilder sb, System.Text.Json.JsonElement obj)
+    {
+        // Detect { data: [...], type: "chart" } pattern
+        if (!obj.TryGetProperty("type", out var typeProp) || typeProp.GetString() is not ("chart" or "bar" or "line"))
+        {
+            // Also detect { values: [...] } or { series: [...] }
+            if (!obj.TryGetProperty("values", out _) && !obj.TryGetProperty("series", out _) && !obj.TryGetProperty("data", out _))
+                return false;
+        }
+
+        // Extract numeric values
+        var nums = new List<double>();
+        foreach (var propName in new[] { "values", "data", "series", "scores", "counts" })
+        {
+            if (!obj.TryGetProperty(propName, out var arr) || arr.ValueKind != System.Text.Json.JsonValueKind.Array)
+                continue;
+            foreach (var el in arr.EnumerateArray())
+            {
+                if (el.ValueKind == System.Text.Json.JsonValueKind.Number)
+                    nums.Add(el.GetDouble());
+                else if (el.ValueKind == System.Text.Json.JsonValueKind.Object &&
+                         el.TryGetProperty("value", out var v) && v.ValueKind == System.Text.Json.JsonValueKind.Number)
+                    nums.Add(v.GetDouble());
+            }
+            if (nums.Count > 0) break;
+        }
+
+        if (nums.Count < 2) return false;
+
+        // Render sparkline
+        var min = nums.Min();
+        var max = nums.Max();
+        var range = Math.Max(max - min, 0.001);
+        var bars = "▁▂▃▄▅▆▇█";
+        var lineLen = Math.Min(nums.Count, 60);
+        sb.AppendLine("[bold]📊 数据可视化[/]");
+        sb.Append("  [green]");
+        for (int i = 0; i < lineLen; i++)
+        {
+            var idx = (int)((nums[i] - min) / range * 7);
+            sb.Append(bars[Math.Clamp(idx, 0, 7)]);
+        }
+        sb.AppendLine("[/]");
+        if (nums.Count > lineLen)
+            sb.AppendLine($"  [grey]... 还有 {nums.Count - lineLen} 个值[/]");
+        sb.AppendLine($"  [dim]  min={min:F2}  max={max:F2}  avg={nums.Average():F2}[/]");
+
+        // Add chart title if available
+        if (obj.TryGetProperty("title", out var title))
+            sb.AppendLine($"  [dim]{title.GetString()?.EscapeMarkup()}[/]");
+
+        return true;
+    }
+
+    private static bool TryRenderTextTable(string raw)
+    {
+        var lines = raw.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        if (lines.Length < 3) return false;
+        var pipeCounts = lines.Take(3).Select(l => l.Count(c => c == '|')).ToList();
+        return pipeCounts[0] >= 2 && pipeCounts[1] >= 2 && pipeCounts[2] >= 2;
+    }
+
+    private static string RenderTextTable(string raw)
+    {
+        var sb = new StringBuilder();
+        var lines = raw.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        var headerLine = lines.FirstOrDefault(l => !l.Contains("---") && l.Contains('|'));
+        if (headerLine == null) return $"[dim]{raw.EscapeMarkup()}[/]";
+
+        // Simple pipe rendering
+        sb.AppendLine("[bold]┌──────────────┐[/]");
+        foreach (var line in lines)
+        {
+            if (line.Contains("---")) continue;
+            var cells = line.Split('|', StringSplitOptions.RemoveEmptyEntries);
+            sb.Append("[bold]│[/] ");
+            foreach (var cell in cells)
+                sb.Append($"{cell.Trim().EscapeMarkup()} ");
+            sb.AppendLine("[bold]│[/]");
+        }
+        sb.AppendLine("[bold]└──────────────┘[/]");
+        return sb.ToString();
+    }
+
+    private static void RenderToolJson(StringBuilder sb, System.Text.Json.JsonElement el, int depth)
+    {
+        var indent = new string(' ', depth * 2);
+        switch (el.ValueKind)
+        {
+            case System.Text.Json.JsonValueKind.Object:
+                sb.AppendLine($"{indent}[grey]{{[/]");
+                var first = true;
+                foreach (var prop in el.EnumerateObject())
+                {
+                    if (!first) sb.AppendLine(",");
+                    first = false;
+                    sb.Append($"{indent}  [cyan]{prop.Name.EscapeMarkup()}[/]: ");
+                    RenderToolJsonValue(sb, prop.Value, depth + 1);
+                }
+                sb.AppendLine();
+                sb.Append($"{indent}[grey]}}[/]");
+                break;
+            case System.Text.Json.JsonValueKind.Array:
+                sb.AppendLine($"{indent}[grey][[/]");
+                var idx = 0;
+                foreach (var item in el.EnumerateArray())
+                {
+                    if (idx > 0) sb.AppendLine(",");
+                    sb.Append($"{indent}  ");
+                    RenderToolJsonValue(sb, item, depth + 1);
+                    idx++;
+                }
+                sb.AppendLine();
+                sb.Append($"{indent}[grey]][/]");
+                break;
+            default:
+                RenderToolJsonValue(sb, el, depth);
+                break;
+        }
+    }
+
+    private static void RenderToolJsonValue(StringBuilder sb, System.Text.Json.JsonElement el, int depth)
+    {
+        switch (el.ValueKind)
+        {
+            case System.Text.Json.JsonValueKind.String:
+                var str = el.GetString() ?? "";
+                if (str.Length > 200) str = str[..197] + "...";
+                sb.Append($"[green]\"{str.EscapeMarkup()}\"[/]");
+                break;
+            case System.Text.Json.JsonValueKind.Number:
+                sb.Append($"[yellow]{el.GetRawText()}[/]");
+                break;
+            case System.Text.Json.JsonValueKind.True:
+            case System.Text.Json.JsonValueKind.False:
+                sb.Append($"[magenta]{el.GetRawText()}[/]");
+                break;
+            case System.Text.Json.JsonValueKind.Null:
+                sb.Append("[grey]null[/]");
+                break;
+            case System.Text.Json.JsonValueKind.Object:
+            case System.Text.Json.JsonValueKind.Array:
+                RenderToolJson(sb, el, depth);
+                break;
+            default:
+                sb.Append(el.GetRawText().EscapeMarkup());
+                break;
+        }
+    }
+
     private static string PanelCacheKey(string code, string? lang)
     {
         var key = $"{lang ?? ""}|{code}";
@@ -225,6 +570,16 @@ public sealed class MessagePanelRenderer
         _panelCacheOrder.Enqueue(key);
         while (_panelCacheOrder.Count > MaxPanelCache && _panelCacheOrder.TryDequeue(out var old))
             _panelCache.TryRemove(old, out _);
+    }
+
+    private static int SafeWindowWidth
+    {
+        get { try { return Console.WindowWidth; } catch { return 80; } }
+    }
+
+    private static int SafeWindowHeight
+    {
+        get { try { return Console.WindowHeight; } catch { return 24; } }
     }
 
     private static string HighlightLine(string line, HashSet<string>? keywords)

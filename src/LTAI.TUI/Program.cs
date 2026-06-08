@@ -146,6 +146,9 @@ public static class Program
         try { await warmupTask.WaitAsync(TimeSpan.FromSeconds(6)).ConfigureAwait(false); }
         catch { /* 预热超时不影响主流程 */ }
 
+        var wfHealth = sp.GetService<LTAI.Agent.Workflows.WorkflowHotReloadNotifier>() is { } notifier
+            ? new LTAI.TUI.DevUI.WorkflowHealthTracker(notifier)
+            : null;
         var dashCtx = new LTAI.TUI.DevUI.DashboardContext(
             sp.GetRequiredService<LTAI.Agent.DevUI.LTAIDevUIService>(),
             sp.GetRequiredService<LTAI.TUI.DevUI.DevUISpanCollector>(),
@@ -157,7 +160,11 @@ public static class Program
             sp.GetService<LTAI.AI.ModelMetadataProvider>(),
             sp.GetService<LTAI.Agent.Context.CacheAlignerProvider>(),
             sp.GetService<LTAI.Agent.Tasks.TaskQueue>(),
-            sp.GetService<LTAI.Agent.Tools.BackgroundJobService>());
+            sp.GetService<LTAI.Agent.Tools.BackgroundJobService>(),
+            sp.GetService<LTAI.Agent.Memory.PalaceStore>())
+        {
+            WorkflowHealth = wfHealth
+        };
         var app = new TuiApp(
             chatAgent,
             llmConfig,

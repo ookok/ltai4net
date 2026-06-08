@@ -36,6 +36,11 @@ public sealed record AgentsCommand(string Args) : Command;
 public sealed record ToolsCommand(string Args) : Command;
 public sealed record McpCommand(string Args) : Command;
 public sealed record SpecCommand(string Args) : Command;
+public sealed record ThemeCommand(string Args) : Command;
+public sealed record PromptCommand(string Args) : Command;
+public sealed record KeysCommand(string Args) : Command;
+public sealed record FileCommand(string Args) : Command;
+public sealed record OrchestrationCommand(string Args) : Command;
 
 // ── Non-command / unknown ──
 

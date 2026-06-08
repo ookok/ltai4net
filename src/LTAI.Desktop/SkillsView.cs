@@ -1,6 +1,7 @@
 using Avalonia.Controls;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Threading;
 using LTAI.Desktop.ViewModels;
 
 namespace LTAI.Desktop;
@@ -41,6 +42,51 @@ public sealed class SkillsView : UserControl
         _listPanel.Children.Clear();
         foreach (var skill in _vm.Skills)
         {
+            var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+
+            var runBtn = new Button
+            {
+                Content = "▶ 运行",
+                FontSize = 10,
+                Background = LtaiTheme.Sbb(LtaiTheme.AccentDNA),
+                Foreground = LtaiTheme.Sbb(LtaiTheme.TextOnAccent),
+                BorderThickness = new(0),
+            };
+            runBtn.Click += async (_, _) =>
+            {
+                _statusText.Text = $"⚡ 正在运行: {skill.Name}...";
+                try
+                {
+                    var scriptPath = skill.Path;
+                    var psi = new System.Diagnostics.ProcessStartInfo("pwsh", $"-NoProfile -File \"{scriptPath}\"")
+                    {
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true,
+                        UseShellExecute = false,
+                        CreateNoWindow = true,
+                    };
+                    using var p = new System.Diagnostics.Process { StartInfo = psi };
+                    p.Start();
+                    var output = await p.StandardOutput.ReadToEndAsync();
+                    var error = await p.StandardError.ReadToEndAsync();
+                    await p.WaitForExitAsync();
+                    _statusText.Text = $"✅ {skill.Name}: 完成 (exit={p.ExitCode})";
+                }
+                catch (Exception ex) { _statusText.Text = $"❌ {skill.Name}: {ex.Message}"; }
+            };
+
+            row.Children.Add(runBtn);
+
+            var textBlock = new TextBlock
+            {
+                Text = $"[{skill.Name}] {skill.Description}",
+                FontSize = 11,
+                Foreground = LtaiTheme.Sbb(LtaiTheme.TextPrimary),
+                TextWrapping = TextWrapping.Wrap,
+                VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+            };
+            row.Children.Add(textBlock);
+
             var card = new Border
             {
                 Background = LtaiTheme.Sbb(LtaiTheme.BgPanel),
@@ -49,13 +95,7 @@ public sealed class SkillsView : UserControl
                 CornerRadius = LtaiTheme.Radius.Sm,
                 Padding = new(8, 4),
                 Margin = new(0, 1),
-                Child = new TextBlock
-                {
-                    Text = $"[{skill.Name}] {skill.Description}",
-                    FontSize = 12,
-                    Foreground = LtaiTheme.Sbb(LtaiTheme.TextPrimary),
-                    TextWrapping = TextWrapping.Wrap,
-                }
+                Child = row,
             };
             _listPanel.Children.Add(card);
         }

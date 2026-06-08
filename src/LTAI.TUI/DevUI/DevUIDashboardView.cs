@@ -2,6 +2,7 @@
 
 using LTAI.Agent.Context;
 using LTAI.Agent.DevUI;
+using LTAI.Agent.Memory;
 using LTAI.Agent.Tasks;
 using LTAI.Agent.Tools;
 using LTAI.Agent.Workflows;
@@ -30,7 +31,9 @@ public static class DevUIDashboardView
         ModelMetadataProvider? provider = null,
         CacheAlignerProvider? aligner = null,
         TaskQueue? taskQueue = null,
-        BackgroundJobService? bgjs = null)
+        BackgroundJobService? bgjs = null,
+        WorkflowHealthTracker? wfHealth = null,
+        PalaceStore? palace = null)
     {
         var cards = devUi.ListAgentCards();
         var recent = spans.Snapshot().TakeLast(15).Reverse().ToList();
@@ -48,9 +51,33 @@ public static class DevUIDashboardView
 
         layout["agents"].Update(BuildAgentTable(cards));
         layout["spans"].Update(BuildSpanTable(recent));
-        layout["footer"].Update(BuildUsagePanel(usage, workflowList));
+        layout["footer"].Update(BuildUsagePanel(usage, workflowList, wfHealth, palace));
 
         AnsiConsole.Write(layout);
+    }
+
+    public static void RenderWithAutoRefresh(
+        LTAIDevUIService devUi,
+        DevUISpanCollector spanCollector,
+        UsageTracker usage,
+        YAMLWorkflowRegistry? workflows = null,
+        LocalEmbedder? embedder = null,
+        ToolEmbeddingCache? cache = null,
+        RemoteEmbeddingCache? remoteCache = null,
+        EmbeddingClient? embeddingClient = null,
+        ModelMetadataProvider? provider = null,
+        CacheAlignerProvider? aligner = null,
+        TaskQueue? taskQueue = null,
+        BackgroundJobService? bgjs = null,
+        WorkflowHealthTracker? wfHealth = null,
+        PalaceStore? palace = null)
+    {
+        for (int i = 0; i < 120; i++)
+        {
+            AnsiConsole.Clear();
+            Render(devUi, spanCollector, usage, workflows, embedder, cache, remoteCache, embeddingClient, provider, aligner, taskQueue, bgjs, wfHealth, palace);
+            Thread.Sleep(5000);
+        }
     }
 
     private static Panel BuildHeaderPanel(
@@ -309,10 +336,27 @@ public static class DevUIDashboardView
                     Markup.Escape(s.TraceId.Length >= 8 ? s.TraceId[..8] : s.TraceId));
             }
         }
+
+        // Latency metrics footer
+        var completed = recent.Where(s => !s.IsLive && s.Duration > TimeSpan.Zero).ToList();
+        if (completed.Count >= 3)
+        {
+            var msDurations = completed.Select(s => s.Duration.TotalMilliseconds).OrderBy(x => x).ToList();
+            var p50 = msDurations[(int)(msDurations.Count * 0.50)];
+            var p95 = msDurations[(int)(msDurations.Count * 0.95)];
+            var p99 = msDurations[(int)(msDurations.Count * 0.99)];
+            var latencyLine = $"[grey]Latency: P50={p50:F0}ms  P95={p95:F0}ms  P99={p99:F0}ms  ({completed.Count} samples)[/]";
+            return new Panel(new Rows(new Panel(table) { Expand = true }, new Markup(latencyLine)))
+            {
+                Expand = true,
+                Border = BoxBorder.None,
+            };
+        }
+
         return new Panel(table) { Expand = true };
     }
 
-    private static Panel BuildUsagePanel(UsageTracker? usage, IReadOnlyList<WorkflowInfo> workflows)
+    private static Panel BuildUsagePanel(UsageTracker? usage, IReadOnlyList<WorkflowInfo> workflows, WorkflowHealthTracker? wfHealth = null, PalaceStore? palace = null)
     {
         if (usage is null && workflows.Count == 0)
         {
@@ -340,13 +384,39 @@ public static class DevUIDashboardView
                 "[bold]Cost[/]", UsageTracker.CostDisplay,
                 "[bold]Uptime[/]", UsageTracker.Uptime.ToString(@"hh\:mm\:ss"));
         }
-        // P15.6: workflow hot-reload health shown in the dashboard footer.
-        // "Edit .livingtree/workflows/*.yaml — reload is automatic."
+        if (palace != null)
+        {
+            var wings = palace.ListWings();
+            var totalCount = palace.Count();
+            var wingCount = wings.Count;
+            var rooms = wingCount > 0 ? wings.Sum(w => palace.ListRooms(w)?.Count ?? 0) : 0;
+            grid.AddRow("[bold]Mem[/]", $"[aqua]{totalCount,4}[/] drawers  [grey]·[/]  [aqua]{wingCount}[/] wings  [grey]·[/]  [aqua]{rooms}[/] rooms", "", "");
+        }
+
+        // Performance metrics
+        var process = System.Diagnostics.Process.GetCurrentProcess();
+        var memMB = process.PrivateMemorySize64 / (1024.0 * 1024.0);
+        var cpuTime = process.TotalProcessorTime;
+        var gc0 = GC.CollectionCount(0);
+        var gc1 = GC.CollectionCount(1);
+        var gc2 = GC.CollectionCount(2);
+        grid.AddRow(
+            "[bold]Mem[/]", $"[aqua]{memMB:F1} MB[/]",
+            "[bold]CPU[/]", $"{cpuTime.TotalSeconds:F1}s");
+        grid.AddRow(
+            "[bold]GC[/]", $"Gen0={gc0}  Gen1={gc1}  Gen2={gc2}",
+            "[bold]Threads[/]", $"{process.Threads.Count}");
+
         if (workflows.Count > 0)
         {
             var summary = string.Join("  [grey]·[/]  ", workflows.Select(w =>
                 $"[cyan]{Markup.Escape(w.Name)}[/] [grey]v{w.Version} {w.Type}[/]"));
             grid.AddRow("[bold]WF[/]", summary.EscapeMarkup(), "", "");
+            if (wfHealth != null)
+            {
+                var healthLine = BuildWorkflowHealthLine(wfHealth);
+                grid.AddRow("[bold]Health[/]", healthLine, "", "");
+            }
         }
         return new Panel(grid)
         {
@@ -354,6 +424,47 @@ public static class DevUIDashboardView
             Header = new PanelHeader("[green] Token Usage (this session) [/]"),
             Expand = true,
         };
+    }
+
+    private static string BuildWorkflowHealthLine(WorkflowHealthTracker health)
+    {
+        var success = health.SuccessCount;
+        var failure = health.FailureCount;
+        var total = success + failure;
+        var successStr = $"[green]{success} ok[/]";
+        var failureStr = failure > 0 ? $"[red]{failure} fail[/]" : "[dim]0 fail[/]";
+
+        var lastReload = health.LastReloaded;
+        var lastFail = health.LastFailure;
+        var agoStr = "";
+
+        if (lastReload.name != "")
+        {
+            var ago = DateTime.UtcNow - lastReload.utc;
+            agoStr = ago.TotalSeconds < 60
+                ? $"{(int)ago.TotalSeconds}s ago"
+                : ago.TotalMinutes < 60
+                    ? $"{(int)ago.TotalMinutes}m ago"
+                    : $"{(int)ago.TotalHours}h ago";
+        }
+
+        var failInfo = "";
+        if (lastFail.name != "")
+        {
+            var failAgo = DateTime.UtcNow - lastFail.utc;
+            var failAgoStr = failAgo.TotalSeconds < 60
+                ? $"{(int)failAgo.TotalSeconds}s ago"
+                : failAgo.TotalMinutes < 60
+                    ? $"{(int)failAgo.TotalMinutes}m ago"
+                    : $"{(int)failAgo.TotalHours}h ago";
+            failInfo = $"  [red]✖ {Markup.Escape(lastFail.name)}: {Markup.Escape(lastFail.reason)} ({failAgoStr})[/]";
+        }
+
+        var reloadInfo = lastReload.name != ""
+            ? $"  [grey]·[/]  last: [cyan]{Markup.Escape(lastReload.name)}[/] ({agoStr})"
+            : "";
+
+        return $"{successStr}  [grey]·[/]  {failureStr}{reloadInfo}{failInfo}";
     }
 
     private static string ColorizePerm(string perm)

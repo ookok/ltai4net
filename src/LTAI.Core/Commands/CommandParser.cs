@@ -50,6 +50,12 @@ public sealed class CommandParser : ICommandParser
         ("tools",    ["tool", "t"]),
         ("mcp",      []),
         ("spec",     ["specification"]),
+        ("theme",    []),
+        ("prompt",   ["agent-prompt", "prompt编辑器"]),
+        ("keys",     ["快捷键", "shortcuts", "keybindings"]),
+        ("file",     ["f", "文件"]),
+        ("orchestration", ["orch", "编配"]),
+        ("theme",    ["主题", "切换主题"]),
         ("exit",     ["quit", "q", "退出"]),
     ];
 
@@ -128,6 +134,11 @@ public sealed class CommandParser : ICommandParser
         "tools" => new ToolsCommand(args),
         "mcp" => new McpCommand(args),
         "spec" => new SpecCommand(args),
+        "theme" => new ThemeCommand(args),
+        "prompt" => new PromptCommand(args),
+        "keys" => new KeysCommand(args),
+        "file" => new FileCommand(args),
+        "orchestration" => new OrchestrationCommand(args),
         _ => new UnknownCommand(canonical),
     };
 
@@ -135,7 +146,8 @@ public sealed class CommandParser : ICommandParser
     {
         "model" or "jobs" or "config" or "snippet" or "workflow" or "pipe" or
         "mode" or "ls" or "cd" or "lang" or "skill" or "git" or "graph" or
-        "agents" or "tools" or "mcp" or "spec" => true,
+        "agents" or "tools" or "mcp" or "spec" or "theme" or
+        "prompt" or "keys" or "file" or "orchestration" => true,
         _ => false,
     };
 

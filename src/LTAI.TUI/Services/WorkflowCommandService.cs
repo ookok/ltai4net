@@ -1,3 +1,4 @@
+using System.Text;
 using LTAI.Agent.Workflows;
 using LTAI.Core.Commands;
 using Spectre.Console;
@@ -35,7 +36,10 @@ public sealed class WorkflowCommandService : ICommandService
             "reload" => WorkflowReload(registry, subArgs),
             "show" => WorkflowShow(registry, subArgs),
             "open" => WorkflowOpen(registry, subArgs),
-            _ => new SuccessResult("用法: /workflow list | reload [name|*] | show <name> | open [name]"),
+            "create" or "new" => WorkflowCreate(registry, subArgs),
+            "edit" => WorkflowEdit(registry, subArgs),
+            "delete" or "rm" => WorkflowDelete(registry, subArgs),
+            _ => new SuccessResult("用法: /workflow list | reload [name|*] | show <name> | open [name] | create <name> [type] | edit <name> | delete <name>"),
         };
     }
 
@@ -171,5 +175,151 @@ public sealed class WorkflowCommandService : ICommandService
         {
             return new SuccessResult($"[red]❌ 打开失败:[/] {ex.Message}");
         }
+    }
+
+    private static CommandResult WorkflowCreate(YAMLWorkflowRegistry registry, string args)
+    {
+        var parts = args.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
+        var name = parts.Length > 0 ? parts[0] : "";
+        var type = parts.Length > 1 ? parts[1].ToLowerInvariant() : "sequential";
+
+        if (string.IsNullOrEmpty(name))
+            return new SuccessResult("[yellow]用法: /workflow create <name> [sequential|concurrent|decision-tree][/]");
+
+        var dir = registry.WatchDirectory;
+        if (!Directory.Exists(dir))
+            Directory.CreateDirectory(dir);
+
+        var path = System.IO.Path.Combine(dir, name + ".yaml");
+        if (System.IO.File.Exists(path))
+            return new SuccessResult($"[red]文件已存在: {path}[/]");
+
+        var template = type switch
+        {
+            "decision-tree" => GenerateDecisionTreeTemplate(name),
+            "concurrent" => GenerateConcurrentTemplate(name),
+            _ => GenerateSequentialTemplate(name),
+        };
+
+        try
+        {
+            System.IO.File.WriteAllText(path, template);
+            return new SuccessResult($"[green]✅ 已创建 {type} workflow: {path}[/]\n[dim]编辑后保存即可热加载[/]");
+        }
+        catch (Exception ex)
+        {
+            return new SuccessResult($"[red]❌ 创建失败:[/] {ex.Message}");
+        }
+    }
+
+    private static CommandResult WorkflowEdit(YAMLWorkflowRegistry registry, string name)
+    {
+        if (string.IsNullOrEmpty(name))
+            return new SuccessResult("[yellow]用法: /workflow edit <name>[/]");
+
+        var dir = registry.WatchDirectory;
+        var exts = new[] { ".yaml", ".yml", ".json" };
+        string? matchPath = null;
+        foreach (var ext in exts)
+        {
+            var p = System.IO.Path.Combine(dir, name + ext);
+            if (System.IO.File.Exists(p)) { matchPath = p; break; }
+        }
+        if (matchPath == null)
+            return new SuccessResult($"[red]❌ 找不到 workflow '{name}'[/]  目录: {dir}");
+
+        AnsiConsole.Clear();
+        AnsiConsole.Write(new Rule($"[bold]编辑 {name}[/]"));
+
+        var content = System.IO.File.ReadAllText(matchPath);
+        var lines = content.Split('\n');
+        AnsiConsole.MarkupLine($"[grey]当前内容 ({lines.Length} 行):[/]\n");
+        for (int i = 0; i < lines.Length; i++)
+            AnsiConsole.MarkupLine($"[grey]{i + 1,3}:[/] {lines[i].EscapeMarkup()}");
+
+        AnsiConsole.MarkupLine("\n[dim]输入新内容 (空行结束, .abort 取消):[/]");
+        var newLines = new List<string>();
+        while (true)
+        {
+            var line = Console.ReadLine();
+            if (string.IsNullOrEmpty(line)) break;
+            if (line == ".abort") return new SuccessResult("[yellow]已取消编辑[/]");
+            newLines.Add(line);
+        }
+
+        if (newLines.Count > 0)
+        {
+            System.IO.File.WriteAllText(matchPath, string.Join("\n", newLines) + "\n");
+            return new SuccessResult($"[green]✅ 已更新 {name} ({newLines.Count} 行)[/]");
+        }
+        return new SuccessResult("[yellow]内容未更改[/]");
+    }
+
+    private static CommandResult WorkflowDelete(YAMLWorkflowRegistry registry, string name)
+    {
+        if (string.IsNullOrEmpty(name))
+            return new SuccessResult("[yellow]用法: /workflow delete <name>[/]");
+
+        var dir = registry.WatchDirectory;
+        var exts = new[] { ".yaml", ".yml", ".json" };
+        string? matchPath = null;
+        foreach (var ext in exts)
+        {
+            var p = System.IO.Path.Combine(dir, name + ext);
+            if (System.IO.File.Exists(p)) { matchPath = p; break; }
+        }
+        if (matchPath == null)
+            return new SuccessResult($"[red]❌ 找不到 workflow '{name}'[/]  目录: {dir}");
+
+        try
+        {
+            System.IO.File.Delete(matchPath);
+            return new SuccessResult($"[green]✅ 已删除 workflow: {matchPath}[/]");
+        }
+        catch (Exception ex)
+        {
+            return new SuccessResult($"[red]❌ 删除失败:[/] {ex.Message}");
+        }
+    }
+
+    private static string GenerateSequentialTemplate(string name)
+    {
+        return
+            "kind: Workflow\n" +
+           $"name: {name}\n" +
+            "type: sequential\n" +
+            "steps:\n" +
+            "  - handoff:\n" +
+            "      agent: LTAI-Chat\n" +
+            "      input: \"{{{input}}}\"\n";
+    }
+
+    private static string GenerateConcurrentTemplate(string name)
+    {
+        return
+            "kind: Workflow\n" +
+           $"name: {name}\n" +
+            "type: concurrent\n" +
+            "steps:\n" +
+            "  - handoff:\n" +
+            "      agent: LTAI-Chat\n" +
+            "      input: \"{{{input}}}\"\n" +
+            "  - handoff:\n" +
+            "      agent: LTAI-Code\n" +
+            "      input: \"{{{input}}}\"\n";
+    }
+
+    private static string GenerateDecisionTreeTemplate(string name)
+    {
+        return
+            "kind: decision-tree\n" +
+           $"name: {name}\n" +
+            "version: 1\n" +
+            "topK: 3\n" +
+            "confidenceMarginThreshold: 0.15\n" +
+            "minTopScoreThreshold: 0.3\n" +
+            "ambiguousFallback: LTAI-Chat\n" +
+            "minAcceptableScore: 0.1\n" +
+            "candidates: [LTAI-Chat, LTAI-Code, LTAI-Data]\n";
     }
 }

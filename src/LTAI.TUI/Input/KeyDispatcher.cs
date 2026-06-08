@@ -56,7 +56,7 @@ public sealed class KeyDispatcher
     private async Task<bool> HandleNormalAsync(ConsoleKeyInfo key, CancellationToken ct)
     {
         // View switch (empty input only)
-        if (_owner.IsInputEmpty() && "1345".Contains(key.KeyChar))
+        if (_owner.IsInputEmpty() && "013456789".Contains(key.KeyChar))
         {
             _owner._quickNav = key.KeyChar;
             return true;
@@ -67,6 +67,26 @@ public sealed class KeyDispatcher
         {
             if (_owner._processing) { _owner._responseCts?.Cancel(); return true; }
             return false;
+        }
+
+        // Ctrl+Shift+C → copy latest code block to clipboard
+        if (key.Key == ConsoleKey.C && Mods(key, ConsoleModifiers.Control | ConsoleModifiers.Shift))
+        {
+            var block = Rendering.CodeBlockBuffer.PeekLatest();
+            if (block != null)
+            {
+                try
+                {
+                    TextCopy.ClipboardService.SetText(block.Value.code);
+                    _owner._statusMessage = $"[green]已复制 {block.Value.lang ?? "code"} 块 ({block.Value.code.Split('\n').Length} 行)[/]";
+                }
+                catch { _owner._statusMessage = "[red]复制失败[/]"; }
+            }
+            else
+            {
+                _owner._statusMessage = "[yellow]没有可复制的代码块[/]";
+            }
+            return true;
         }
 
         // Ctrl+E → 切换最新 AI 消息的推理过程展开/折叠
@@ -116,13 +136,64 @@ public sealed class KeyDispatcher
             return true;
         }
 
-        // Ctrl+V → paste
+        // Ctrl+F → inline search in current input
+        if (key.Key == ConsoleKey.F && Mods(key, ConsoleModifiers.Control))
+        {
+            try
+            {
+                AnsiConsole.Markup("[bold yellow]🔍 搜索: [/]");
+                var searchTerm = Console.ReadLine() ?? "";
+                if (string.IsNullOrWhiteSpace(searchTerm)) return true;
+
+                var fullText = string.Join("\n", _owner._inputLines);
+                var idx = fullText.IndexOf(searchTerm, StringComparison.OrdinalIgnoreCase);
+                if (idx < 0)
+                {
+                    _owner._statusMessage = $"[yellow]未找到 '{searchTerm.EscapeMarkup()}'[/]";
+                    return true;
+                }
+
+                // Find line and column
+                var lineIdx = 0;
+                var charCount = 0;
+                for (int i = 0; i < _owner._inputLines.Count; i++)
+                {
+                    if (charCount + _owner._inputLines[i].Length + 1 > idx)
+                    {
+                        _owner._cursorLine = i;
+                        _owner._cursorCol = idx - charCount;
+                        break;
+                    }
+                    charCount += _owner._inputLines[i].Length + 1;
+                    lineIdx++;
+                }
+                _owner._statusMessage = $"[green]找到 '{searchTerm.EscapeMarkup()}' (行 {_owner._cursorLine + 1}, 列 {_owner._cursorCol + 1})[/]";
+            }
+            catch { }
+            return true;
+        }
+
+        // Ctrl+V → paste (with preview if > 3 lines)
         if (key.Key == ConsoleKey.V && Mods(key, ConsoleModifiers.Control))
         {
             try
             {
                 var clip = TextCopy.ClipboardService.GetText() ?? "";
                 var clipLines = clip.Split('\n');
+                if (clipLines.Length > 3)
+                {
+                    AnsiConsole.Clear();
+                    AnsiConsole.Write(new Rule("[bold yellow]📋 粘贴预览[/]"));
+                    var preview = string.Join("\n", clipLines.Take(5));
+                    if (clipLines.Length > 5) preview += $"\n[grey]... 还有 {clipLines.Length - 5} 行[/]";
+                    AnsiConsole.Write(new Panel(new Markup(preview.EscapeMarkup()))
+                        .Border(BoxBorder.Rounded)
+                        .Header($"[bold] {clip.Length} 字符, {clipLines.Length} 行 [/]")
+                        .Expand());
+                    AnsiConsole.Markup("\n[yellow]确认粘贴? (Enter=粘贴, Esc=取消): [/]");
+                    var confirm = Console.ReadKey(true);
+                    if (confirm.Key == ConsoleKey.Escape) return true;
+                }
                 foreach (var cl in clipLines)
                     _owner._inputLines.Insert(_owner._cursorLine++, cl);
                 _owner._cursorLine--;

@@ -3,6 +3,7 @@ using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Threading;
 using LTAI.Desktop.ViewModels;
+using LTAI.Agent.Workflows;
 
 namespace LTAI.Desktop;
 
@@ -14,9 +15,12 @@ public sealed class WorkflowsView : UserControl
     private readonly TextBlock _lastReloadText;
     private readonly DispatcherTimer _refreshTimer;
 
-    public WorkflowsView(WorkflowsViewModel vm)
+    private readonly YAMLWorkflowRegistry? _registry;
+
+    public WorkflowsView(WorkflowsViewModel vm, YAMLWorkflowRegistry? registry = null)
     {
         _vm = vm;
+        _registry = registry;
         DataContext = vm;
         Background = LtaiTheme.Sbb(LtaiTheme.Bg);
 
@@ -40,6 +44,12 @@ public sealed class WorkflowsView : UserControl
           Foreground = LtaiTheme.Sbb(LtaiTheme.TextOnAccent) };
         reloadBtn.Click += async (_, _) => await _vm.ReloadAllCommand.ExecuteAsync(null);
         btnRow.Children.Add(reloadBtn);
+
+        var createBtn = new Button
+        { Content = "➕ 新建", Background = LtaiTheme.Sbb(LtaiTheme.AccentDNA),
+          Foreground = LtaiTheme.Sbb(LtaiTheme.TextOnAccent) };
+        createBtn.Click += (_, _) => PromptCreateWorkflow();
+        btnRow.Children.Add(createBtn);
 
         var goDevUiBtn = new Button
         { Content = "🔗 打开 DevUI", Background = LtaiTheme.Sbb(LtaiTheme.BgPanel),
@@ -82,6 +92,35 @@ public sealed class WorkflowsView : UserControl
             };
             _listPanel.Children.Add(card);
         }
+    }
+
+    private void PromptCreateWorkflow()
+    {
+        var dialog = new TextBox { PlaceholderText = "输入 workflow 名称..." };
+        var win = new Window
+        {
+            Title = "新建 Workflow",
+            Content = dialog,
+            Width = 400, Height = 120,
+            Background = LtaiTheme.Sbb(LtaiTheme.Bg),
+        };
+        dialog.KeyDown += async (_, e) =>
+        {
+            if (e.Key == Avalonia.Input.Key.Enter && !string.IsNullOrWhiteSpace(dialog.Text))
+            {
+                win.Close();
+                var dir = _registry?.WatchDirectory ?? Path.Combine(Environment.CurrentDirectory, ".livingtree", "workflows");
+                if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
+                var path = Path.Combine(dir, dialog.Text + ".yaml");
+                if (File.Exists(path)) { _statusText.Text = $"❌ {dialog.Text} 已存在"; return; }
+                var template = $"kind: Workflow\nname: {dialog.Text}\ntype: sequential\nsteps:\n  - handoff:\n      agent: LTAI-Chat\n      input: \"{{{{input}}}}\"\n";
+                await File.WriteAllTextAsync(path, template);
+                _statusText.Text = $"✅ 已创建 {dialog.Text}";
+                RefreshList();
+            }
+        };
+        if (VisualRoot is Window owner) win.ShowDialog(owner);
+        else win.Show();
     }
 
     private static void NavigateToDevUI()

@@ -1,15 +1,22 @@
 using LTAI.Core.I18n;
+using LTAI.Agent.Prompts;
 
 namespace LTAI.Agent;
 
 /// <summary>
 /// Bilingual system prompt + plan-mode + agent description builder.
 /// All strings route through <see cref="Locale"/> so the agent speaks the user's OS language.
+/// Prompts loaded from agents/*.prompt.md override built-in strings when present.
 /// </summary>
 internal static class AgentPromptBuilder
 {
     public static string BuildSystemPrompt()
     {
+        var lang = Locale.IsChinese ? "zh" : "en";
+        var filePrompt = PromptLoader.Load($"system-{lang}");
+        if (!string.IsNullOrEmpty(filePrompt))
+            return filePrompt;
+
         if (!Locale.IsChinese)
         {
             return Locale.Get("SystemPromptIntro") + "\n\n"
@@ -134,6 +141,11 @@ internal static class AgentPromptBuilder
 
     public static string BuildPlanModePrompt()
     {
+        var lang = Locale.IsChinese ? "zh" : "en";
+        var filePrompt = PromptLoader.Load($"plan-mode-{lang}");
+        if (!string.IsNullOrEmpty(filePrompt))
+            return filePrompt;
+
         if (!Locale.IsChinese)
         {
             return """

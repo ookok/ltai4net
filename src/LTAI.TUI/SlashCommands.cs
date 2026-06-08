@@ -3,7 +3,6 @@ using LTAI.Agent.Tools;
 using LTAI.Core.Commands;
 using LTAI.Core.I18n;
 using LTAI.Core.Configuration;
-using LTAI.Core.Commands;
 using LTAI.TUI.Services;
 using Spectre.Console;
 
@@ -161,6 +160,8 @@ public static class SlashCommands
         new("tools",   "信息",  "工具列表: list|domain <name>"),
         new("mcp",     "扩展",  "MCP 管理: list|status|tools"),
         new("spec",    "开发",  "Spec 管理: list|new|show|edit|delete|status|plan|tasks"),
+        new("prompt",  "扩展",  "Agent Prompt 编辑器: list|show|edit"),
+        new("keys",    "信息",  "显示键盘快捷键一览"),
         new("exit",    "高级",  "退出应用"),
     };
 
@@ -319,11 +320,27 @@ public static class SlashCommands
                 return true;
 
             case CostCommand:
-                statusMessage = "Cost tracking: see model provider dashboard";
+                var cost = UsageTracker.EstimatedCost;
+                var model = UsageTracker.ActiveModel;
+                var prompt = UsageTracker.PromptTokens;
+                var completion = UsageTracker.CompletionTokens;
+                var total = UsageTracker.TotalTokens;
+                var requests = UsageTracker.Requests;
+                var rate = UsageTracker.CacheHitRate;
+                var saved = UsageTracker.CacheSavedDisplay;
+                statusMessage = $"[bold yellow]📊 使用统计[/]\n" +
+                    $"  [cyan]模型:[/] {model}\n" +
+                    $"  [cyan]请求:[/] {requests:N0}\n" +
+                    $"  [cyan]Token:[/] {prompt:N0} + {completion:N0} = [bold]{total:N0}[/]\n" +
+                    $"  [cyan]费用:[/] [bold]¥{cost:F4}[/]\n" +
+                    $"  [cyan]缓存命中:[/] {rate:F1}% ({saved})\n" +
+                    $"  [cyan]运行时间:[/] {UsageTracker.Uptime:hh\\:mm\\:ss}";
                 return true;
 
             case UndoCommand:
-                statusMessage = "Undo: use the code tools";
+                statusMessage = ChatLayout.TryUndoCallback != null && ChatLayout.TryUndoCallback()
+                    ? "[green]已撤销上一步操作[/]"
+                    : "[yellow]没有可撤销的操作[/]";
                 return true;
 
             case ApproveCommand:
@@ -335,18 +352,24 @@ public static class SlashCommands
                 return true;
 
             case ModeCommand mc:
-                statusMessage = mc.Args switch { "review" => "Edit mode: review", "auto" => "Edit mode: auto", _ => "Usage: /mode review|auto" };
+                var mode = mc.Args.ToLowerInvariant() switch { "review" => "review", "auto" => "auto", _ => "" };
+                if (mode == "") { statusMessage = "Usage: /mode review|auto"; return true; }
+                ChatLayout.EditMode = mode;
+                statusMessage = $"Edit mode: {mode} (style: {(mode == "review" ? "批注修改" : "直接编辑")})";
                 return true;
 
             case LangCommand lc:
                 var lang = lc.Args.Trim().ToLowerInvariant();
-                if (lang is "zh-cn" or "zh" or "cn") { Locale.SetLang("zh-CN"); statusMessage = "已切换界面语言: 中文"; }
-                else if (lang is "en-us" or "en" or "us") { Locale.SetLang("en-US"); statusMessage = "Language switched: English"; }
+                if (lang is "zh-cn" or "zh" or "cn") { Locale.SetLang("zh-CN"); ThemeService.Language = "zh-CN"; ThemeService.Save(); statusMessage = "已切换界面语言: 中文"; }
+                else if (lang is "en-us" or "en" or "us") { Locale.SetLang("en-US"); ThemeService.Language = "en-US"; ThemeService.Save(); statusMessage = "Language switched: English"; }
                 else statusMessage = $"Usage: /lang zh-CN|en-US (current: {Locale.CurrentLang})";
                 return true;
 
             case SkillCommand sc:
-                statusMessage = !string.IsNullOrEmpty(sc.Args) ? $"Running skill '{sc.Args}'..." : "Skills: use `run_skill` tool";
+                if (string.IsNullOrEmpty(sc.Args))
+                    statusMessage = "[yellow]用法: /skill <技能名> — 列出可用技能: /skills[/]";
+                else
+                    statusMessage = $"[yellow]⏳ 运行技能 '{sc.Args}'...[/]\n[grey]技能在后台运行中，结果将出现在对话中[/]";
                 return true;
 
             case UnknownCommand uc:

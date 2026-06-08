@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Text.Json;
 using Avalonia;
 using Avalonia.Media;
 
@@ -14,10 +15,46 @@ public static class LtaiTheme
 
     private static readonly ConcurrentDictionary<(Color Color, byte Alpha), SolidColorBrush> _brushCache = new();
 
+    private static string PrefsPath =>
+        Path.Combine(Environment.CurrentDirectory, ".livingtree", "preferences.json");
+
+    static LtaiTheme()
+    {
+        Load();
+    }
+
+    public static void Load()
+    {
+        try
+        {
+            var path = PrefsPath;
+            if (!File.Exists(path)) return;
+            var json = File.ReadAllText(path);
+            var doc = JsonDocument.Parse(json);
+            if (doc.RootElement.TryGetProperty("theme", out var t) &&
+                string.Equals(t.GetString(), "light", StringComparison.OrdinalIgnoreCase))
+                Current = AppTheme.Light;
+        }
+        catch { }
+    }
+
+    public static void Save()
+    {
+        try
+        {
+            var dir = Path.GetDirectoryName(PrefsPath);
+            if (dir != null && !Directory.Exists(dir)) Directory.CreateDirectory(dir);
+            var prefs = new { theme = Current == AppTheme.Light ? "light" : "dark" };
+            File.WriteAllText(PrefsPath, JsonSerializer.Serialize(prefs));
+        }
+        catch { }
+    }
+
     public static void Toggle()
     {
         Current = Current == AppTheme.Dark ? AppTheme.Light : AppTheme.Dark;
         _brushCache.Clear();
+        Save();
         ThemeChanged?.Invoke();
     }
 

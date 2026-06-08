@@ -108,19 +108,30 @@ public sealed class PipeCommandService : ICommandService
             ? cfg.DefaultTask ?? "请根据预设 agents 列表完成任务"
             : task;
 
-        if (cfg.Type == "concurrent")
+        var pipeType = cfg.Type == "concurrent" ? "并发" : "顺序";
+        AnsiConsole.MarkupLine($"[yellow]⏳[/] {pipeType} pipeline [cyan]{presetName}[/] on: [grey]{defaultTask.EscapeMarkup()}[/]");
+        AnsiConsole.MarkupLine("[grey]任务已提交到后台执行，结果将出现在对话中[/]");
+
+        // Fire-and-forget: queue the pipeline execution
+        var cts = new CancellationTokenSource();
+        _ = Task.Run(async () =>
         {
-            AnsiConsole.MarkupLine($"[yellow]⏳[/] 并发 pipeline [cyan]{presetName}[/] on: [grey]{defaultTask.EscapeMarkup()}[/]");
-            var result = Task.Run(() => pipes.RunConcurrentAsync([presetName], defaultTask, ct: default)).GetAwaiter().GetResult();
-            AnsiConsole.MarkupLine(result);
-            return new SuccessResult($"[green]✅ 并发完成[/] 请查看上方结果");
-        }
-        else
-        {
-            AnsiConsole.MarkupLine($"[yellow]⏳[/] 顺序 pipeline [cyan]{presetName}[/] on: [grey]{defaultTask.EscapeMarkup()}[/]");
-            var result = Task.Run(() => pipes.RunSequentialAsync([presetName], defaultTask, ct: default)).GetAwaiter().GetResult();
-            AnsiConsole.MarkupLine(result);
-            return new SuccessResult($"[green]✅ 顺序完成[/] 请查看上方结果");
-        }
+            try
+            {
+                string result;
+                if (cfg.Type == "concurrent")
+                    result = await pipes.RunConcurrentAsync([presetName], defaultTask, ct: cts.Token);
+                else
+                    result = await pipes.RunSequentialAsync([presetName], defaultTask, ct: cts.Token);
+                AnsiConsole.MarkupLine($"[green]✅ {pipeType} pipeline完成:[/] {result.EscapeMarkup()}");
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception ex)
+            {
+                AnsiConsole.MarkupLine($"[red]❌ Pipeline 失败:[/] {ex.Message.EscapeMarkup()}");
+            }
+        }, cts.Token);
+
+        return new SuccessResult($"[green]✅ {pipeType} pipeline已提交[/]  [dim]/pipe run {presetName.EscapeMarkup()} {defaultTask.EscapeMarkup()}[/]");
     }
 }

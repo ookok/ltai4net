@@ -16,6 +16,15 @@ public sealed class TextPadView
     private int _pageLines;
     private int _editorCaretLine = -1;
 
+    private static int SafeWindowHeight
+    {
+        get { try { return Console.WindowHeight; } catch { return 24; } }
+    }
+    private static int SafeWindowWidth
+    {
+        get { try { return Console.WindowWidth; } catch { return 80; } }
+    }
+
     private static readonly HashSet<string> TextExts = new(StringComparer.OrdinalIgnoreCase)
     {
         ".cs", ".py", ".js", ".ts", ".go", ".rs", ".java", ".sh", ".bash",
@@ -130,6 +139,7 @@ public sealed class TextPadView
                     case ConsoleKey.PageDown: _scrollOffset = Math.Min(_totalLines - 1, _scrollOffset + _pageLines); _editorCaretLine = _scrollOffset + _pageLines / 2 + 1; break;
                     case ConsoleKey.Home: _scrollOffset = 0; _editorCaretLine = 1; break;
                     case ConsoleKey.End: _scrollOffset = Math.Max(0, _totalLines - _pageLines); _editorCaretLine = _totalLines; break;
+                    case ConsoleKey.F11: FullScreenEdit(); break;
                     case ConsoleKey.G: GoToLine(); break;
                     case ConsoleKey.D when _gitBranch != null: RunCmd($"git diff \"{_currentFile}\""); break;
                     case ConsoleKey.L when _gitBranch != null: RunCmd($"git log --oneline -10"); break;
@@ -343,6 +353,63 @@ public sealed class TextPadView
         _editorCaretLine = line;
     }
 
+    private void FullScreenEdit()
+    {
+        if (_currentFile == null || !File.Exists(_currentFile)) return;
+
+        var lines = File.ReadAllLines(_currentFile);
+        var editedLines = new List<string>(lines);
+        var editRow = Math.Clamp(_scrollOffset, 0, Math.Max(0, lines.Length - 1));
+        var helpText = "F11=退出全屏  ↑↓=导航  S=保存  Esc=放弃  .abort=取消";
+
+        while (true)
+        {
+            AnsiConsole.Clear();
+            var h = SafeWindowHeight;
+            var w = SafeWindowWidth;
+
+            AnsiConsole.MarkupLine($"[bold]📝 全屏编辑 — {Path.GetFileName(_currentFile).EscapeMarkup()}[/]");
+            AnsiConsole.MarkupLine($"[dim]{helpText}[/]");
+            AnsiConsole.MarkupLine(new string('─', w));
+
+            var maxRows = h - 5;
+            var startRow = Math.Max(0, editRow - maxRows / 2);
+            var endRow = Math.Min(lines.Length, startRow + maxRows);
+
+            for (int i = startRow; i < endRow; i++)
+            {
+                var lineNum = (i + 1).ToString().PadLeft(4);
+                var marker = i == editRow ? " [green]→[/]" : "   ";
+                var content = i < editedLines.Count ? editedLines[i] : lines[i];
+                if (i == editRow)
+                    AnsiConsole.MarkupLine($"[cyan]{lineNum}[/]{marker} [invert]{content.EscapeMarkup()}[/]");
+                else
+                    AnsiConsole.MarkupLine($"[grey]{lineNum}[/]   {content.EscapeMarkup()}");
+            }
+
+            AnsiConsole.MarkupLine(new string('─', w));
+            AnsiConsole.Markup($"[green]{editRow + 1}[/]/{lines.Length} [dim]>[/] ");
+
+            var input = Console.ReadLine() ?? "";
+            if (input == ".abort") break;
+            if (input.StartsWith("."))
+            {
+                var cmd = input.ToLowerInvariant();
+                if (cmd is ".save" or ".s")
+                {
+                    File.WriteAllLines(_currentFile, editedLines);
+                    AnsiConsole.MarkupLine("[green]✅ 已保存[/]");
+                    Console.ReadKey(true);
+                }
+            }
+            else if (!string.IsNullOrEmpty(input))
+            {
+                if (editRow < editedLines.Count)
+                    editedLines[editRow] = input;
+            }
+        }
+    }
+
     private void SearchInFile()
     {
         if (_currentFile == null) return;
@@ -411,7 +478,7 @@ public sealed class TextPadView
             var isCode = CodeExts.Contains(ext);
             var fi = new FileInfo(_currentFile!);
             var sb = new StringBuilder();
-            var termHeight = Math.Max(Console.WindowHeight - 6, 10);
+            var termHeight = Math.Max(SafeWindowHeight - 6, 10);
             _pageLines = termHeight - 1;
 
             var lines = new List<string>();

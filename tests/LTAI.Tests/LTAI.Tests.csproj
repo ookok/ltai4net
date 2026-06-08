@@ -46,6 +46,8 @@
     <ProjectReference Include="..\..\src\LTAI.AI\LTAI.AI.csproj" />
     <ProjectReference Include="..\..\src\LTAI.Agent\LTAI.Agent.csproj" />
     <ProjectReference Include="..\..\src\LTAI.Cli\LTAI.Cli.csproj" />
+    <ProjectReference Include="..\..\src\LTAI.TUI\LTAI.TUI.csproj" />
+    <PackageReference Include="Spectre.Console.Testing" Version="0.55.2" />
   </ItemGroup>
 
 </Project>

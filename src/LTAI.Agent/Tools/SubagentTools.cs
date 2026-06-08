@@ -5,6 +5,7 @@ using System.Text.Json;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using LTAI.AI;
+using LTAI.Agent.Prompts;
 
 namespace LTAI.Agent.Tools;
 
@@ -48,7 +49,13 @@ public sealed class SubagentTools
         "RunInContainer", "RunWithNetwork",
     ];
 
-    private static readonly string SubagentBaseSystem = """
+    private static string SubagentBaseSystem
+    {
+        get
+        {
+            var filePrompt = PromptLoader.Load("subagent-base");
+            if (!string.IsNullOrEmpty(filePrompt)) return filePrompt;
+            return """
         You are an LTAI subagent. The parent agent spawned you for one focused subtask.
 
         Rules:
@@ -57,6 +64,8 @@ public sealed class SubagentTools
         - No follow-up offers, no "let me know if you need more."
         - Do NOT call spawn_subagent (you are already a subagent — that would create a recursive loop).
         """;
+        }
+    }
 
     private static readonly HashSet<string> ReadOnlyTypes = ["explore", "review", "security_review"];
 
