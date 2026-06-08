@@ -233,10 +233,30 @@ public static class ServiceCollectionExtensions
         // Step 3c-queue: in-process task queue (Channel<T>-based producer/consumer).
         // Lightweight substitute for MAF DurableTask; persists state in memory
         // and exposes EnqueueAsync / List / WaitAsync for deferred work.
-        services.AddSingleton<LTAI.Agent.Tasks.TaskQueue>();
+        // Step 3c-queue: in-process task queue - shares kg.db via SQLiteTaskStore.CreateShared
+        services.AddSingleton<LTAI.Agent.Tasks.TaskQueue>(sp =>
+        {
+            var opts = sp.GetRequiredService<IOptions<LTAIOptions>>().Value;
+            return new LTAI.Agent.Tasks.TaskQueue(
+                LTAI.Agent.Tasks.SQLiteTaskStore.CreateShared(opts.ResolveDataPath("kg.db")));
+        });
 
         // Step 3d: Knowledge indexing pipeline (semantic chunking + unified ingest)
         services.AddSingleton<LTAI.Agent.Indexing.DocumentIndexer>();
+        services.AddSingleton<LTAI.Agent.Indexing.IndexQueueWorker>(sp =>
+        {
+            var indexer = sp.GetRequiredService<LTAI.Agent.Indexing.DocumentIndexer>();
+            var queue = sp.GetRequiredService<LTAI.Agent.Tasks.TaskQueue>();
+            var logger = sp.GetService<ILoggerFactory>()?.CreateLogger<LTAI.Agent.Indexing.IndexQueueWorker>();
+            return new LTAI.Agent.Indexing.IndexQueueWorker(indexer, queue, logger!);
+        });
+        services.AddSingleton<LTAI.Agent.Indexing.RetryQueueWorker>(sp =>
+        {
+            var client = sp.GetRequiredService<LTAI.AI.MultiProviderChatClient>();
+            var queue = sp.GetRequiredService<LTAI.Agent.Tasks.TaskQueue>();
+            var logger = sp.GetService<ILoggerFactory>()?.CreateLogger<LTAI.Agent.Indexing.RetryQueueWorker>();
+            return new LTAI.Agent.Indexing.RetryQueueWorker(client, queue, logger!);
+        });
         services.AddSingleton<LTAI.Agent.Indexing.KnowledgeExtractor>(sp =>
         {
             var kg = sp.GetRequiredService<KgStore>();
@@ -261,7 +281,12 @@ public static class ServiceCollectionExtensions
 
         // Headroom: CompressionStore — SQLite-backed reversible compression store
         // for CCR (Consistent Compression with Retrieval).
-        services.AddSingleton<CompressionStore>();
+        // CompressionStore — now shares kg.db via CreateShared
+        services.AddSingleton<CompressionStore>(sp =>
+        {
+            var opts = sp.GetRequiredService<IOptions<LTAIOptions>>().Value;
+            return CompressionStore.CreateShared(opts.ResolveDataPath("kg.db"));
+        });
 
         // Headroom: RetrieveContentTool — LLM-callable tool to retrieve original
         // content from the compression store by ID.
@@ -385,7 +410,7 @@ public static class ServiceCollectionExtensions
             var embedder = sp.GetRequiredService<LTAI.AI.EmbeddingClient>();
             var opts = sp.GetRequiredService<IOptions<LTAIOptions>>().Value;
             var logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger<PalaceStore>();
-            return new PalaceStore(embedder, opts.ResolveDataPath("palace.db"), logger);
+            return PalaceStore.CreateShared(embedder, opts.ResolveDataPath("kg.db"), logger);
         });
         services.AddHostedService<MemoryConsolidationService>();
 

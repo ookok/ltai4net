@@ -68,7 +68,7 @@ public sealed class FileSystemTools
             var ext = fi.Extension.ToLowerInvariant();
             var summary = DescribeDoc(content, ext);
             if (content.Length > 10000)
-                return $"[file: {fp}, {fi.Length / 1024}KB, {content.Length} chars — {summary}]\n{content[..10000]}";
+                return $"[file: {fp}, {fi.Length / 1024}KB, {content.Length} chars — {summary}]\n{content[..10000]}\n... [truncated at 10000 chars]";
             return $"[file: {fp}, {fi.Length / 1024}KB, {content.Length} chars — {summary}]\n{content}";
         }
         catch (Exception ex)

@@ -136,7 +136,8 @@ public sealed class MultiProviderChatClient : IChatClient
     /// to find the best registered provider with that capability.
     /// Falls back to options.ModelId as-is for backward compat.
     /// </summary>
-    private string ResolveProvider(ChatOptions? options)
+    /// <summary>Resolve provider from options, falling back to <c>AI.DefaultProvider</c>.</summary>
+    public string ResolveProvider(ChatOptions? options)
     {
         var raw = options?.ModelId ?? _routingFallback;
         if (raw == null) return _routingFallback;
@@ -251,6 +252,28 @@ public sealed class MultiProviderChatClient : IChatClient
             anyAttempted
                 ? $"All providers failed for '{provider}'. Last error: {_lastError ?? "(unknown)"}"
                 : $"No providers available for '{provider}'");
+    }
+
+    /// <summary>Try a specific provider directly (no degradation). Returns null on failure.</summary>
+    public async Task<ChatResponse?> TryProviderAsync(
+        string provider, List<ChatMessage> messages, ChatOptions? options, CancellationToken ct)
+    {
+        if (!_clients.TryGetValue(provider, out var client)) return null;
+
+        if (_providerCooldowns.TryGetValue(provider, out var cooldownUntil) && cooldownUntil > DateTime.UtcNow)
+            return null;
+
+        try
+        {
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeoutCts.CancelAfter(TimeSpan.FromSeconds(15));
+            return await client.GetResponseAsync(messages, options, timeoutCts.Token)
+                .ConfigureAwait(false);
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private async Task<ChatResponse> TryCallWithDegradation(
@@ -473,7 +496,8 @@ public sealed class MultiProviderChatClient : IChatClient
     /// 当降级链耗尽时，如果注入 ModelMetadataProvider，用 RecommendModel
     /// 寻找支持 Chat|Streaming 的已注册 provider 作为宽泛回退。
     /// </summary>
-    private IEnumerable<string> RankedProviders(string preferred)
+    /// <summary>Ranked provider list with circuit-breaker filtering.</summary>
+    public IEnumerable<string> RankedProviders(string preferred)
     {
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var current = preferred;
@@ -735,10 +759,35 @@ public static class ServiceCollectionExtensions
                 return router; // Bypass safety in dev mode
 
             var logger = sp.GetService<ILogger<LTAI.Core.Safety.SafeChatClient>>();
-            var safetyModel = opts.AI.Model;
+
+            // 优雅降级：safety 模型未配置时不抛异常，跳过 safety wrapper
+            // 优先级: opts.AI.Model -> L1.Model -> KnownKeys 默认模型
+            var safetyModel = !string.IsNullOrEmpty(opts.AI.Model)
+                ? opts.AI.Model
+                : opts.AI.L1?.Model;
+
             if (string.IsNullOrEmpty(safetyModel))
-                throw new InvalidOperationException("SafeChatClient requires a model configured in LTAI:AI:Model");
+            {
+                // 尝试从 KnownKeys 默认 provider 取模型名作为 fallback
+                var defaultProvider = MultiProviderChatClient.DefaultProviders
+                    .FirstOrDefault(p => string.Equals(p.name, opts.AI.DefaultProvider, StringComparison.OrdinalIgnoreCase));
+                if (defaultProvider.name != null)
+                    safetyModel = defaultProvider.model;
+            }
+
+            if (string.IsNullOrEmpty(safetyModel))
+            {
+                logger?.LogWarning("SafeChatClient: no model configured, skipping safety wrapper");
+                return router;
+            }
+
             var safetyKey = opts.AI.ApiKeyEnv != null ? LTAI.Core.Configuration.SecretManager.Get(opts.AI.ApiKeyEnv) ?? "" : "";
+            if (string.IsNullOrEmpty(safetyKey))
+            {
+                logger?.LogWarning("SafeChatClient: no API key configured, skipping safety wrapper");
+                return router;
+            }
+
             IChatClient safetyClient = OpenAIChatClientFactory.Create(
                 "https://api.deepseek.com/v1", safetyModel, safetyKey);
 
@@ -747,7 +796,7 @@ public static class ServiceCollectionExtensions
             return new MetricsChatClient(wrapped, sp.GetService<ILogger<MetricsChatClient>>());
         });
 
-        // Local ONNX embedder (BGE-small-zh, zero API dependency)
+        // Local ONNX embedder (BGE-small-zh, zero API dependency)        // Local ONNX embedder (BGE-small-zh, zero API dependency)
         // L0 默认使用本地 ONNX 模型，远程 embedding API 需通过 /model l0 手动切换。
 
         // P13.1 + P13.2: factory that reads LTAI:Embedding config at resolution

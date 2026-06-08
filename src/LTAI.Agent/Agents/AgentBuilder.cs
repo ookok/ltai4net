@@ -116,20 +116,52 @@ internal static partial class AgentBuilder
             // P6 Steer: use lightweight model for safety when available (cheaper, faster).
             // Falls back to DeepSeek V4 Flash when steer is disabled or unavailable.
             var steerLlm = sp.GetKeyedService<IChatClient>("steer");
-            IChatClient safetyClient;
+            IChatClient? safetyClient = null;
             if (steerLlm != null)
             {
                 safetyClient = steerLlm;
+                safety = new SafetyCoordinator(safetyClient, loggerFactory.CreateLogger<SafetyCoordinator>());
             }
             else
             {
-                var safetyModel = opts.AI.Model;
+                // 优雅降级：safety 模型未配置时不抛异常，跳过 safety
+                // 优先级: opts.AI.Model → L1.Model → KnownKeys 默认
+                var safetyModel = !string.IsNullOrEmpty(opts.AI.Model)
+                    ? opts.AI.Model
+                    : opts.AI.L1?.Model;
+
                 if (string.IsNullOrEmpty(safetyModel))
-                    throw new InvalidOperationException("Safety agent requires a model configured in LTAI:AI:Model");
-                var safetyKey = opts.AI.ApiKeyEnv != null ? LTAI.Core.Configuration.SecretManager.Get(opts.AI.ApiKeyEnv) ?? "" : "";
-                safetyClient = OpenAIChatClientFactory.Create("https://api.deepseek.com/v1", safetyModel, safetyKey);
+                {
+                    var dp = MultiProviderChatClient.DefaultProviders
+                        .FirstOrDefault(p => string.Equals(p.name, opts.AI.DefaultProvider, StringComparison.OrdinalIgnoreCase));
+                    if (dp.name != null) safetyModel = dp.model;
+                }
+
+                if (string.IsNullOrEmpty(safetyModel))
+                {
+                    log?.LogWarning("Safety agent: no model, skipping for agent '{Name}'", name);
+                }
+                else
+                {
+                    var safetyKey = opts.AI.ApiKeyEnv != null ? SecretManager.Get(opts.AI.ApiKeyEnv) ?? "" : "";
+                    if (string.IsNullOrEmpty(safetyKey))
+                    {
+                        log?.LogWarning("Safety agent: no API key ({Env}), skipping for agent '{Name}'", opts.AI.ApiKeyEnv ?? "?", name);
+                    }
+                    else
+                    {
+                        safetyClient = OpenAIChatClientFactory.Create("https://api.deepseek.com/v1", safetyModel, safetyKey);
+                    }
+                }
             }
-            safety = new SafetyCoordinator(safetyClient, loggerFactory.CreateLogger<SafetyCoordinator>());
+            if (safetyClient != null)
+            {
+                safety = new SafetyCoordinator(safetyClient, loggerFactory.CreateLogger<SafetyCoordinator>());
+            }
+            else
+            {
+                log?.LogWarning("Safety agent: client not available, skipping safety for agent '{Name}'", name);
+            }
         }
 
         // LTAI does NOT use MAF's ShellEnvironmentProvider:
@@ -297,7 +329,7 @@ internal static partial class AgentBuilder
         }
 
         AIAgent agent = guardedLlm.AsHarnessAgent(
-            maxContextWindowTokens: 0, // 0 = disabled: LTAI's own CompactionProvider at position [5] handles compaction
+            maxContextWindowTokens: opts.AI.ContextWindowSize, // LTAI's own CompactionProvider at position [5] handles compaction; this MAF-level value just needs to be >0
             maxOutputTokens: opts.AI.MaxTokens,
             options: new HarnessAgentOptions
             {

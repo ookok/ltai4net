@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using Spectre.Console;
 using LTAI.Agent;
 using LTAI.Agent.DevUI;
@@ -207,7 +207,7 @@ public sealed class TuiApp
 
     private async Task FetchBalanceAsync()
     {
-        var provider = _config.Value.AI.DefaultProvider;
+        var provider = _config.Value.AI.DefaultProvider ?? "";
         var apiKey = provider switch
         {
             { } p when p.Contains("deepseek", StringComparison.OrdinalIgnoreCase)
@@ -234,6 +234,7 @@ public sealed class TuiApp
         // Find the default provider's endpoint from KnownKeys
         var options = _config.Value;
         var providerName = options.AI.DefaultProvider;
+        if (string.IsNullOrEmpty(providerName)) return;
         var keyInfo = KnownKeys.All.FirstOrDefault(k =>
             k.EnvVar != null && k.Endpoint != null &&
             k.Service.Contains(providerName, StringComparison.OrdinalIgnoreCase));

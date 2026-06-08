@@ -360,6 +360,14 @@ public sealed class AgentWorkflows
     /// greeting+query message (e.g. "早上好 帮我查天气") and fall through to
     /// the LLM handoff so the user's substantive request isn't lost.
     /// </remarks>
+    /// <summary>Get the names of all registered specialist agents (excludes router).</summary>
+    public IReadOnlyList<string> GetSpecialistNames()
+        => _specialists.Keys.ToArray();
+
+    /// <summary>Run the greeting fast-path (YAML or C# fallback).</summary>
+    public async Task<string?> RunGreetingFastPathAsync(string task, CancellationToken ct)
+        => await TryRunGreetingAsync(task, ct).ConfigureAwait(false);
+
     private async Task<string?> TryRunGreetingAsync(string task, CancellationToken ct)
     {
         // P14.9 review: pre-check for mixed greeting+query.

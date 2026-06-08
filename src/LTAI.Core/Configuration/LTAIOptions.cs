@@ -237,6 +237,27 @@ public sealed class VectorConfig
 {
     public string Provider { get; init; } = "local";
     public int EmbeddingDim { get; init; } = 384;
+
+    /// <summary>
+    /// Active IVectorStore backend. Default "hnsw" (in-memory HNSW with
+    /// TurboQuant 4-bit). Future: "pgvector", "qdrant", "memory".
+    /// Phase 1a: VectorStoreFactory uses this to select the implementation.
+    /// </summary>
+    public string Store { get; init; } = "hnsw";
+
+    /// <summary>
+    /// Dimensionality reduction setting. "none" (default) = use full 384-dim.
+    /// "pca-128" / "pca-64" reduces to 128 or 64 dimensions via PCA.
+    /// Phase 1b: used by embedding pipeline before IVectorStore insert/search.
+    /// </summary>
+    public string Reduction { get; init; } = "none";
+
+    /// <summary>
+    /// Product Quantization codec setting. "none" (default) = no PQ.
+    /// "turboquant-4bit" / "pq-M8" / "pq-M16" for PQ with 8 or 16 sub-quantizers.
+    /// Phase 1c: used transparently inside IVectorStore.
+    /// </summary>
+    public string Quantizer { get; init; } = "turboquant-4bit";
 }
 
 /// <summary>

@@ -343,13 +343,7 @@ public sealed partial class TextPadView : UserControl
         // ── Debug toolbar (only visible during debug session) ──
         _debugToolbar = new LTAI.Desktop.Debugging.DebugToolbar(DebugSession);
 
-        var toolbar = new StackPanel
-        {
-            Orientation = Orientation.Horizontal, Margin = new(4), Spacing = 4,
-            Children = { _toggleBtn, checkBtn!, saveBtn!, formatBtn!, askAiBtn!, _errorFixBtn, wrapBtn!, gotoBtn!, splitBtn!, debugBtn!, _runBtn, _terminalBtn!, _gitBranchLabel, _gitCommitBtn, _gitPullBtn, _gitPushBtn, _gitBlameBtn },
-        };
-
-        // ── 终端面板 ──
+        // ── 终端面板 (必须在 toolbar 之前创建，因为 toolbar 引用 _terminalBtn) ──
         _terminalView = new Terminal.TerminalView { WorkingDirectory = _rootDir, IsVisible = false };
         _terminalBtn = new Button { Content = "📟 终端", FontSize = 10, Height = 20, Background = LtaiTheme.Sbb(LtaiTheme.BgPanel), Foreground = LtaiTheme.Sbb(LtaiTheme.TextDim) };
         _terminalBtn.Click += (_, _) =>
@@ -357,6 +351,12 @@ public sealed partial class TextPadView : UserControl
             _terminalView.IsVisible = !_terminalView.IsVisible;
             if (_terminalView.IsVisible) _terminalView.Start();
             else _terminalView.Stop();
+        };
+
+        var toolbar = new StackPanel
+        {
+            Orientation = Orientation.Horizontal, Margin = new(4), Spacing = 4,
+            Children = { _toggleBtn, checkBtn!, saveBtn!, formatBtn!, askAiBtn!, _errorFixBtn, wrapBtn!, gotoBtn!, splitBtn!, debugBtn!, _runBtn, _terminalBtn, _gitBranchLabel, _gitCommitBtn, _gitPullBtn, _gitPushBtn, _gitBlameBtn },
         };
 
         _editorGrid = new Grid();

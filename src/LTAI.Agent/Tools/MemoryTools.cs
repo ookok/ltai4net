@@ -1,4 +1,4 @@
-﻿using System.ComponentModel;
+using System.ComponentModel;
 using LTAI.AI;
 using LTAI.Agent.Memory;
 using LTAI.Core.Safety;
@@ -131,7 +131,7 @@ public sealed class MemoryTools
         foreach (var wing in wings)
         {
             sb.AppendLine($"### Wing: {wing}");
-            var drawers = _store.SearchByWing(wing, topK: 50);
+            var drawers = _store.SearchByWing(wing, maxCount: 50);
             foreach (var d in drawers)
             {
                 var preview = d.Content.Length > 80 ? d.Content[..80] + "..." : d.Content;

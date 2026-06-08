@@ -1,5 +1,14 @@
+// Copyright (c) LTAI. All rights reserved.
+// ═══════════════════════════════════════════════════════════════
+//  DocumentIndexer — file system → KgStore ingestion
+//
+//  UPDATED: Integrates ContentFilter at every ingestion point.
+//  - IndexDirectoryAsync: path + content screening
+//  - IndexFileAsync: content screening
+//  - Removed ".log" from allowed extensions
+// ═══════════════════════════════════════════════════════════════
+
 using System.Collections.Concurrent;
-using System.Threading.Tasks;
 using LTAI.Agent.Vector;
 using Microsoft.Extensions.Logging;
 
@@ -11,10 +20,50 @@ public sealed class DocumentIndexer
     private readonly KnowledgeExtractor _extractor;
     private readonly ILogger<DocumentIndexer> _logger;
 
-    private static readonly HashSet<string> TextExts = new(StringComparer.OrdinalIgnoreCase)
+    /// <summary>
+    /// Allowed text extensions for knowledge graph indexing.
+    /// Explicitly excludes .log and other noise-prone extensions.
+    /// Uses ContentFilter.GetIndexerExtensions() for the canonical list.
+    /// </summary>
+    private static readonly HashSet<string> TextExts = ContentFilter.GetIndexerExtensions();
+
+    /// <summary>
+    /// Default skip dir names, exposed for use by IndexQueueWorker.
+    /// </summary>
+    public static readonly HashSet<string> DefaultSkipDirNames = new(StringComparer.OrdinalIgnoreCase)
     {
-        ".md", ".txt", ".json", ".yaml", ".yml", ".xml", ".html", ".htm",
-        ".csv", ".ini", ".cfg", ".conf", ".env", ".log"
+        "bin", "obj", "dist", "build", "out", "target", "cmake-build-debug",
+        "cmake-build-release", ".next", ".nuxt", ".output",
+        "node_modules", "packages", "vendor", ".venv", "venv", "__pycache__",
+        "bower_components", "jspm_packages",
+        ".git", ".svn", ".hg",
+        ".vs", ".vscode", ".idea", ".eclipse",
+        "logs", "log", "tmp", "temp", "coverage", ".nyc_output",
+        ".livingtree", ".sandbox",
+        "aot",
+    };
+
+    /// <summary>
+    /// User-configured skip dirs (defaults from ContentFilter + any extras).
+    /// </summary>
+    internal static readonly HashSet<string> SkipDirNames = new(DefaultSkipDirNames, StringComparer.OrdinalIgnoreCase)
+    {
+        // Build / cache
+        "bin", "obj", "dist", "build", "out", "target", "cmake-build-debug",
+        "cmake-build-release", ".next", ".nuxt", ".output",
+        // Dependencies
+        "node_modules", "packages", "vendor", ".venv", "venv", "__pycache__",
+        "bower_components", "jspm_packages",
+        // Version control
+        ".git", ".svn", ".hg",
+        // IDE
+        ".vs", ".vscode", ".idea", ".eclipse",
+        // Logs & output — CRITICAL: prevents log file pollution
+        "logs", "log", "tmp", "temp", "coverage", ".nyc_output",
+        // LLM / temp
+        ".livingtree", ".sandbox",
+        // AOT compilation artifacts
+        "aot",
     };
 
     public DocumentIndexer(KgStore kg, KnowledgeExtractor extractor, ILogger<DocumentIndexer> logger)
@@ -34,12 +83,9 @@ public sealed class DocumentIndexer
         var files = Utils.DirectoryWalker.WalkToArray(
             dir,
             allowedExtensions: TextExts,
-            skipDirNames: new(StringComparer.OrdinalIgnoreCase)
-            {
-                "obj", "bin", "dist", "node_modules", ".git", "packages"
-            });
+            skipDirNames: SkipDirNames);
 
-        int ok = 0, fail = 0;
+        int ok = 0, fail = 0, skipped = 0;
         var errors = new ConcurrentBag<string>();
 
         await Parallel.ForEachAsync(files, new ParallelOptions
@@ -50,10 +96,29 @@ public sealed class DocumentIndexer
         {
             try
             {
+                // Layer 1: Path screen
+                var rel = Path.GetRelativePath(dir, file).Replace('\\', '/');
+                var pathVerdict = ContentFilter.ScreenPath(rel);
+                if (pathVerdict != FilterVerdict.Allowed)
+                {
+                    Interlocked.Increment(ref skipped);
+                    _logger.LogTrace("IndexDirectory: skipped '{Path}' ({Verdict})", rel, pathVerdict);
+                    return;
+                }
+
                 var content = await File.ReadAllTextAsync(file, ct).ConfigureAwait(false);
+
+                // Layer 2: Content screen
+                var contentVerdict = ContentFilter.ScreenContent(content, rel);
+                if (contentVerdict != FilterVerdict.Allowed)
+                {
+                    Interlocked.Increment(ref skipped);
+                    _logger.LogTrace("IndexDirectory: skipped '{Path}' ({Verdict})", rel, contentVerdict);
+                    return;
+                }
+
                 if (string.IsNullOrWhiteSpace(content)) return;
 
-                var rel = Path.GetRelativePath(dir, file).Replace('\\', '/');
                 var title = Path.GetFileNameWithoutExtension(file);
                 var chunks = SemanticChunker.Chunk(content);
 
@@ -75,6 +140,10 @@ public sealed class DocumentIndexer
             }
         }).ConfigureAwait(false);
 
+        if (skipped > 0)
+            _logger.LogInformation("IndexDirectory: {Ok} indexed, {Fail} failed, {Skipped} filtered by ContentFilter",
+                ok, fail, skipped);
+
         return new IndexResult(ok, fail,
             string.Join("\n", errors.Take(5)));
     }
@@ -86,11 +155,28 @@ public sealed class DocumentIndexer
     {
         try
         {
+            // Layer 1: Path screen
+            var rel = source ?? Path.GetFileName(filePath);
+            var pathVerdict = ContentFilter.ScreenPath(rel);
+            if (pathVerdict != FilterVerdict.Allowed)
+            {
+                _logger.LogInformation("IndexFile: skipped '{Path}' ({Verdict})", rel, pathVerdict);
+                return new IndexResult(0, 0, $"Skipped: {pathVerdict}");
+            }
+
             var content = await File.ReadAllTextAsync(filePath, ct).ConfigureAwait(false);
+
+            // Layer 2: Content screen
+            var contentVerdict = ContentFilter.ScreenContent(content, rel);
+            if (contentVerdict != FilterVerdict.Allowed)
+            {
+                _logger.LogInformation("IndexFile: skipped '{Path}' ({Verdict})", rel, contentVerdict);
+                return new IndexResult(0, 0, $"Skipped: {contentVerdict}");
+            }
+
             if (string.IsNullOrWhiteSpace(content))
                 return new IndexResult(0, 1, "Empty file");
 
-            var rel = source ?? Path.GetFileName(filePath);
             var title = Path.GetFileNameWithoutExtension(filePath);
             var chunks = SemanticChunker.Chunk(content);
 

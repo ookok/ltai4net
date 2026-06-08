@@ -80,7 +80,8 @@ public partial class MainWindow : Window
                 case nameof(_vm.ActiveIndex):
                     var idx = _vm.ActiveIndex;
                     if (idx >= 0 && idx < _views.Count)
-                        _contentArea.Content = _views[idx].View;
+                        try { _contentArea.Content = _views[idx].View; }
+                    catch (Exception ex) { _statusLeft!.Text = $"View #{idx}: {ex.Message}"; }
                     UpdateSidebarButtons();
                     break;
                 case nameof(_vm.StatusRight):
@@ -287,7 +288,8 @@ public partial class MainWindow : Window
         _statusTimer.Start();
 
         // First-run setup: if no API keys configured, prompt user
-        Dispatcher.UIThread.InvokeAsync(async () => await ShowSetupIfNeededAsync());
+        // 延迟触发设置检查——确保主窗口先完全渲染，再弹出设置对话框
+        Dispatcher.UIThread.Post(async () => await ShowSetupIfNeededAsync());
 
         _vm.ActiveIndex = 1;
 

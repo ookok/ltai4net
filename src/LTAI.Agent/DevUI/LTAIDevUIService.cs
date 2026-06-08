@@ -1,12 +1,13 @@
 // Copyright (c) LTAI. All rights reserved.
 
+using LTAI.Agent.Suggestions;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
 
 namespace LTAI.Agent.DevUI;
 
@@ -59,6 +60,9 @@ public sealed record LTAIAgentCapabilities
 /// enumerate agents, render their <see cref="LTAIAgentCard"/>, and run them
 /// with streaming updates. Resolves keyed <see cref="AIAgent"/> instances
 /// registered by <see cref="AddLTAIAgent"/> (P4 Hosting migration).
+///
+/// Also aggregates code suggestions from <see cref="ProactiveSuggestService"/>
+/// for the DevUI Suggestions panel.
 /// </summary>
 public sealed class LTAIDevUIService
 {
@@ -68,11 +72,34 @@ public sealed class LTAIDevUIService
     private IReadOnlyList<LTAIAgentCard>? _cardCache;
     private int _cardCacheGeneration;
 
-    public LTAIDevUIService(IServiceProvider sp, ILogger<LTAIDevUIService> logger)
+    /// <summary>Optional suggestion service for the DevUI suggestions panel.</summary>
+    public ProactiveSuggestService? SuggestService { get; }
+
+    /// <summary>Fired when suggestions are updated (for UI refresh).</summary>
+    public event Action? OnSuggestionsUpdated;
+
+    public LTAIDevUIService(
+        IServiceProvider sp,
+        ILogger<LTAIDevUIService> logger,
+        ProactiveSuggestService? suggestService = null)
     {
         _sp = sp;
         _logger = logger;
+        SuggestService = suggestService;
+
+        if (SuggestService != null)
+        {
+            SuggestService.OnSuggestionsUpdated += _ =>
+            {
+                _logger.LogDebug("LTAIDevUIService: suggestions updated, firing UI notification");
+                OnSuggestionsUpdated?.Invoke();
+            };
+        }
     }
+
+    // ═══════════════════════════════════════════
+    //  Agent cards
+    // ═══════════════════════════════════════════
 
     public IReadOnlyList<LTAIAgentCard> ListAgentCards()
     {
@@ -111,7 +138,6 @@ public sealed class LTAIDevUIService
 
     public LTAIAgentCard? GetAgentCard(string name)
     {
-        // Check cache first
         var cache = _cardCache;
         if (cache != null)
         {
@@ -121,12 +147,13 @@ public sealed class LTAIDevUIService
         }
         var def = AgentRegistry.LoadAll().FirstOrDefault(d =>
             string.Equals(d.Name, name, StringComparison.OrdinalIgnoreCase));
-        if (def is null || !AgentExists(def.Name))
-        {
-            return null;
-        }
+        if (def is null || !AgentExists(def.Name)) return null;
         return BuildCard(def);
     }
+
+    // ═══════════════════════════════════════════
+    //  Streaming
+    // ═══════════════════════════════════════════
 
     public async IAsyncEnumerable<AgentResponseUpdate> RunStreamingAsync(
         string name,
@@ -160,6 +187,56 @@ public sealed class LTAIDevUIService
         }
     }
 
+    // ═══════════════════════════════════════════
+    //  Suggestions (DevUI panel data)
+    // ═══════════════════════════════════════════
+
+    /// <summary>
+    /// Get all current suggestions for the DevUI panel.
+    /// </summary>
+    public IReadOnlyList<CodeIssue> GetSuggestions(string? category = null)
+    {
+        if (SuggestService == null) return [];
+        return SuggestService.GetSuggestions(category);
+    }
+
+    /// <summary>
+    /// Get aggregated suggestion stats for the DevUI panel header.
+    /// </summary>
+    public SuggestionStats GetSuggestionStats()
+    {
+        if (SuggestService?.LastResults == null)
+            return new SuggestionStats(0, 0, 0, new Dictionary<string, int>());
+
+        var all = SuggestService.LastResults;
+        return new SuggestionStats(
+            all.Count,
+            all.Count(i => i.Severity == IssueSeverity.Critical),
+            all.Count(i => i.Severity == IssueSeverity.Warning),
+            all.GroupBy(i => i.Category)
+               .ToDictionary(g => g.Key, g => g.Count())!);
+    }
+
+    /// <summary>
+    /// Force a suggestion scan now.
+    /// </summary>
+    public async Task ScanSuggestionsNowAsync(CancellationToken ct = default)
+    {
+        if (SuggestService != null)
+            await SuggestService.ScanNowAsync(ct).ConfigureAwait(false);
+    }
+
+    /// <summary>Get names of registered detectors.</summary>
+    public IReadOnlyList<string> GetDetectorNames()
+        => SuggestService?.DetectorNames ?? [];
+
+    /// <summary>Mark user active to suppress background scans.</summary>
+    public void MarkUserActive() => SuggestService?.MarkActive();
+
+    // ═══════════════════════════════════════════
+    //  Private helpers
+    // ═══════════════════════════════════════════
+
     private static async Task<AgentSession> DeserializeSessionAsync(AIAgent agent, string sessionId, CancellationToken ct)
     {
         var jsonBytes = Convert.FromBase64String(sessionId);
@@ -170,27 +247,14 @@ public sealed class LTAIDevUIService
 
     private AIAgent? ResolveAgent(string name)
     {
-        try
-        {
-            return _sp.GetKeyedService<AIAgent>(name);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Failed to resolve agent {Name}", name);
-            return null;
-        }
+        try { return _sp.GetKeyedService<AIAgent>(name); }
+        catch (Exception ex) { _logger.LogWarning(ex, "Failed to resolve agent {Name}", name); return null; }
     }
 
     private bool AgentExists(string name)
     {
-        try
-        {
-            return _sp.GetKeyedService<AIAgent>(name) is not null;
-        }
-        catch
-        {
-            return false;
-        }
+        try { return _sp.GetKeyedService<AIAgent>(name) is not null; }
+        catch { return false; }
     }
 
     private static LTAIAgentCard BuildCard(AgentFileDef def)
@@ -227,5 +291,13 @@ public sealed class LTAIDevUIService
             Permissions = def.Permissions,
         };
     }
-
 }
+
+/// <summary>
+/// DevUI-friendly stats about code suggestions.
+/// </summary>
+public sealed record SuggestionStats(
+    int Total,
+    int Critical,
+    int Warnings,
+    IReadOnlyDictionary<string, int> ByCategory);

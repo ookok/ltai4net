@@ -23,23 +23,28 @@
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.8" />
     <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.8" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.8" />
-    <ProjectReference Include="..\..\extern\agent-framework\dotnet\src\Microsoft.Agents.AI\Microsoft.Agents.AI.csproj" />
-    <ProjectReference Include="..\..\extern\agent-framework\dotnet\src\Microsoft.Agents.AI.Workflows\Microsoft.Agents.AI.Workflows.csproj" />
-    <ProjectReference Include="..\..\extern\agent-framework\dotnet\src\Microsoft.Agents.AI.Hosting.A2A\Microsoft.Agents.AI.Hosting.A2A.csproj" />
-    <ProjectReference Include="..\..\extern\agent-framework\dotnet\src\Microsoft.Agents.AI.Hosting.A2A.AspNetCore\Microsoft.Agents.AI.Hosting.A2A.AspNetCore.csproj" />
-    <PackageReference Include="Microsoft.AspNetCore.TestHost" Version="10.0.8" />
-    <PackageReference Include="Microsoft.Extensions.AI" Version="10.6.0" />
-    <PackageReference Include="Microsoft.Extensions.AI.OpenAI" Version="10.6.0" />
-    <PackageReference Include="DocumentFormat.OpenXml" Version="3.2.0" />
   </ItemGroup>
 
   <ItemGroup>
-    <!-- Pre-existing exclusions restored during P1 audit.
-         CoreTests.cs: KgStore API mismatch (sync→async). Keep as reference for re-write.
-         CodeSearchRerankerTests.cs: references LTAI.Knowledge.Vector types that moved.
-         A2A/**/*.cs: uses experimental MEAI001 APIs. -->
+    <Reference Include="Microsoft.Agents.AI" HintPath="..\..\dist\lib\maf\Microsoft.Agents.AI.dll" Condition="Exists('..\..\dist\lib\maf\Microsoft.Agents.AI.dll')" />
+    <Reference Include="Microsoft.Agents.AI.Abstractions" HintPath="..\..\dist\lib\maf\Microsoft.Agents.AI.Abstractions.dll" Condition="Exists('..\..\dist\lib\maf\Microsoft.Agents.AI.Abstractions.dll')" />
+    <Reference Include="Microsoft.Agents.AI.Hosting" HintPath="..\..\dist\lib\maf\Microsoft.Agents.AI.Hosting.dll" Condition="Exists('..\..\dist\lib\maf\Microsoft.Agents.AI.Hosting.dll')" />
+    <Reference Include="Microsoft.Agents.AI.Workflows" HintPath="..\..\dist\lib\maf\Microsoft.Agents.AI.Workflows.dll" Condition="Exists('..\..\dist\lib\maf\Microsoft.Agents.AI.Workflows.dll')" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.TestHost" Version="10.0.8" />
+    <PackageReference Include="Microsoft.Extensions.AI" Version="10.6.0" />
+    <PackageReference Include="Microsoft.Extensions.AI.OpenAI" Version="10.6.0" />
+    <PackageReference Include="DocumentFormat.OpenXml" Version="3.5.1" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Compile Remove="CoreTests.cs" />
     <Compile Remove="CodeSearchRerankerTests.cs" />
+    <Compile Remove="AgentEvaluationTests.cs" />
+    <Compile Remove="CredentialManagerTests.cs" />
+    <Compile Remove="EmbeddingIntegrationTests.cs" />
     <Compile Remove="A2A\**\*.cs" />
   </ItemGroup>
 

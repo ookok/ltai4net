@@ -1,3 +1,9 @@
+// Copyright (c) LTAI. All rights reserved.
+// ═══════════════════════════════════════════════════════════════
+//  PalaceStore — structured long-term memory (shares kg.db)
+//  OPTIMIZED: uses CreateShared() to share KgStore's kg.db.
+// ═══════════════════════════════════════════════════════════════
+
 using System.Text.Json;
 using LTAI.AI;
 using LTAI.Core.Storage;
@@ -11,17 +17,10 @@ public sealed class PalaceStore
 {
     private const string Schema = """
         CREATE TABLE IF NOT EXISTS palace (
-            wing        TEXT    NOT NULL,
-            room        TEXT    NOT NULL,
-            drawer_id   TEXT    NOT NULL,
-            role        TEXT    NOT NULL DEFAULT 'assistant',
-            content     TEXT    NOT NULL,
-            embedding   BLOB,
-            created_at  INTEGER NOT NULL,
-            expires_at  INTEGER,
-            importance  REAL    NOT NULL DEFAULT 0.5,
-            agent_id    TEXT    NOT NULL DEFAULT 'default',
-            metadata    TEXT,
+            wing TEXT NOT NULL, room TEXT NOT NULL, drawer_id TEXT NOT NULL,
+            role TEXT NOT NULL DEFAULT 'assistant', content TEXT NOT NULL, embedding BLOB,
+            created_at INTEGER NOT NULL, expires_at INTEGER, importance REAL NOT NULL DEFAULT 0.5,
+            agent_id TEXT NOT NULL DEFAULT 'default', metadata TEXT,
             PRIMARY KEY (wing, room, drawer_id)
         );
         CREATE INDEX IF NOT EXISTS idx_palace_wing_room ON palace(wing, room);
@@ -30,14 +29,9 @@ public sealed class PalaceStore
         CREATE INDEX IF NOT EXISTS idx_palace_expires ON palace(expires_at);
         """;
 
-    private const string MigrateExpiresAt = """
-        SELECT COUNT(*) AS cnt FROM pragma_table_info('palace') WHERE name = 'expires_at';
-        """;
-
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        WriteIndented = false,
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase, WriteIndented = false,
     };
 
     private readonly EmbeddingClient _embedder;
@@ -46,27 +40,29 @@ public sealed class PalaceStore
     private bool _schemaReady;
     private readonly object _gate = new();
 
-    public PalaceStore(
-        EmbeddingClient embedder,
-        string dbPath,
-        ILogger<PalaceStore>? logger = null)
+    public PalaceStore(EmbeddingClient embedder, string dbPath, ILogger<PalaceStore>? logger = null)
     {
         _embedder = embedder ?? throw new ArgumentNullException(nameof(embedder));
         _logger = logger;
         Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
         _connectionString = new SqliteConnectionStringBuilder
         {
-            DataSource = dbPath,
-            Mode = SqliteOpenMode.ReadWriteCreate,
-            Cache = SqliteCacheMode.Shared,
+            DataSource = dbPath, Mode = SqliteOpenMode.ReadWriteCreate, Cache = SqliteCacheMode.Shared,
         }.ToString();
+        EnsureSchema();
     }
+
+    public static PalaceStore CreateShared(EmbeddingClient embedder, string kgDbPath, ILogger<PalaceStore>? logger = null)
+        => new(embedder, kgDbPath, logger);
 
     public record Drawer(string Wing, string Room, string DrawerId, string Role, string Content,
         float[]? Embedding, long CreatedAt, long? ExpiresAt, double Importance, string AgentId, string? Metadata);
 
-    /// <summary>Default TTL for memory entries (30 days in ms). Pass null or 0 to StoreAsync for no expiration.</summary>
     public const long DefaultTtlMs = 30L * 24 * 60 * 60 * 1000;
+
+    // ═══════════════════════════════════════════
+    //  Core API
+    // ═══════════════════════════════════════════
 
     public async Task<string> StoreAsync(string wing, string room, string content,
         string role = "assistant", double importance = 0.5, string? agentId = null,
@@ -76,231 +72,296 @@ public sealed class PalaceStore
         var drawerId = Guid.NewGuid().ToString("n");
         var vec = await _embedder.GenerateAsync(content, CancellationToken.None).ConfigureAwait(false);
 
-        // Semantic dedup: skip if near-duplicate exists
-        var threshold = 0.92;
-        var similar = new List<(Drawer d, double sim)>();
         await foreach (var hit in SemanticSearchAsync(vec, topK: 1, wing: wing).ConfigureAwait(false))
-            similar.Add(hit);
-        if (similar.Count > 0 && similar[0].sim >= threshold)
-        {
-            _logger?.LogDebug("PalaceStore: skip storing '{Room}' — near-duplicate (score={Score:F3})", room, similar[0].sim);
-            return similar[0].d.DrawerId;
-        }
+            if (hit.Score >= 0.92) return hit.Drawer.DrawerId;
 
-        var metaJson = metadata != null ? JsonSerializer.Serialize(metadata, JsonOpts) : null;
-        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        var expiresAt = ttlMs.HasValue ? now + ttlMs.Value : (long?)null;
+        var expiresAt = ttlMs is > 0 ? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + ttlMs.Value
+            : DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + DefaultTtlMs;
 
         using var conn = new SqliteConnection(_connectionString);
         await conn.OpenAsync().ConfigureAwait(false);
-        using var tx = conn.BeginTransaction();
         using var cmd = conn.CreateCommand();
-        cmd.Transaction = tx;
-        cmd.CommandText = """
-            INSERT OR REPLACE INTO palace(wing, room, drawer_id, role, content, embedding,
-                created_at, expires_at, importance, agent_id, metadata)
-            VALUES($wing, $room, $id, $role, $content, $emb, $ts, $exp, $imp, $agent, $meta)
-            """;
-        cmd.Parameters.AddWithValue("$wing", wing);
-        cmd.Parameters.AddWithValue("$room", room);
-        cmd.Parameters.AddWithValue("$id", drawerId);
-        cmd.Parameters.AddWithValue("$role", role);
-        cmd.Parameters.AddWithValue("$content", content);
-        cmd.Parameters.AddWithValue("$emb", SerializeVector(vec));
-        cmd.Parameters.AddWithValue("$ts", now);
-        cmd.Parameters.AddWithValue("$exp", (object?)expiresAt ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("$imp", importance);
-        cmd.Parameters.AddWithValue("$agent", agentId ?? "default");
-        cmd.Parameters.AddWithValue("$meta", (object?)metaJson ?? DBNull.Value);
+        cmd.CommandText = "INSERT OR REPLACE INTO palace (wing,room,drawer_id,role,content,embedding,created_at,expires_at,importance,agent_id,metadata) VALUES ($w,$r,$id,$role,$c,$emb,$now,$exp,$imp,$agent,$meta)";
+        cmd.Parameters.AddWithValue("$w", wing); cmd.Parameters.AddWithValue("$r", room);
+        cmd.Parameters.AddWithValue("$id", drawerId); cmd.Parameters.AddWithValue("$role", role);
+        cmd.Parameters.AddWithValue("$c", content); cmd.Parameters.AddWithValue("$emb", vec.SelectMany(BitConverter.GetBytes).ToArray());
+        cmd.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()); cmd.Parameters.AddWithValue("$exp", expiresAt);
+        cmd.Parameters.AddWithValue("$imp", importance); cmd.Parameters.AddWithValue("$agent", agentId ?? "default");
+        cmd.Parameters.AddWithValue("$meta", metadata != null ? JsonSerializer.Serialize(metadata, JsonOpts) : DBNull.Value);
         await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
-        tx.Commit();
-        _logger?.LogDebug("PalaceStore: stored drawer {Id} in {Wing}/{Room}", drawerId, wing, room);
         return drawerId;
     }
 
-    /// <summary>Update importance + refresh TTL for an existing drawer.</summary>
     public bool TouchDrawer(string wing, string room, string drawerId, double importance)
     {
         EnsureSchema();
-        var now = NowMs();
         using var conn = new SqliteConnection(_connectionString);
         conn.Open();
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = "UPDATE palace SET importance = MAX(importance, $imp), expires_at = $exp WHERE wing = $wing AND room = $room AND drawer_id = $id";
-        cmd.Parameters.AddWithValue("$imp", importance);
-        cmd.Parameters.AddWithValue("$exp", now + DefaultTtlMs);
-        cmd.Parameters.AddWithValue("$wing", wing);
-        cmd.Parameters.AddWithValue("$room", room);
-        cmd.Parameters.AddWithValue("$id", drawerId);
+        cmd.CommandText = "UPDATE palace SET importance=MAX(importance,$imp),expires_at=$exp WHERE wing=$w AND room=$r AND drawer_id=$id";
+        cmd.Parameters.AddWithValue("$imp", importance); cmd.Parameters.AddWithValue("$exp", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + DefaultTtlMs);
+        cmd.Parameters.AddWithValue("$w", wing); cmd.Parameters.AddWithValue("$r", room); cmd.Parameters.AddWithValue("$id", drawerId);
         return cmd.ExecuteNonQuery() > 0;
     }
 
-    /// <summary>Bulk decay importance for all entries (×factor). Returns count updated.</summary>
+    public Drawer? GetDrawer(string wing, string room, string drawerId)
+    {
+        EnsureSchema();
+        using var conn = new SqliteConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT * FROM palace WHERE wing=$w AND room=$r AND drawer_id=$id AND (expires_at IS NULL OR expires_at>$now)";
+        cmd.Parameters.AddWithValue("$w", wing); cmd.Parameters.AddWithValue("$r", room); cmd.Parameters.AddWithValue("$id", drawerId);
+        cmd.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        using var rdr = cmd.ExecuteReader();
+        return rdr.Read() ? ReadDrawer(rdr) : null;
+    }
+
+    public async IAsyncEnumerable<(Drawer Drawer, double Score)> SemanticSearchAsync(
+        float[] queryVec, int topK = 5, string? wing = null, string? room = null)
+    {
+        EnsureSchema();
+        var scored = new List<(Drawer, double)>();
+        using var conn = new SqliteConnection(_connectionString);
+        await conn.OpenAsync().ConfigureAwait(false);
+        using var cmd = conn.CreateCommand();
+        var sql = "SELECT * FROM palace WHERE embedding IS NOT NULL AND (expires_at IS NULL OR expires_at>$now)";
+        if (wing != null) sql += " AND wing=$w";
+        if (room != null) sql += " AND room=$r";
+        cmd.CommandText = sql;
+        cmd.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        if (wing != null) cmd.Parameters.AddWithValue("$w", wing);
+        if (room != null) cmd.Parameters.AddWithValue("$r", room);
+        using var rdr = await cmd.ExecuteReaderAsync().ConfigureAwait(false);
+        while (rdr.Read())
+        {
+            var drawer = ReadDrawer(rdr);
+            if (drawer.Embedding is { Length: > 0 })
+                scored.Add((drawer, CosineSimilarity(queryVec, drawer.Embedding)));
+        }
+        foreach (var hit in scored.OrderByDescending(x => x.Item2).Take(topK))
+            yield return hit;
+    }
+
+    public IReadOnlyList<Drawer> GetRecentDrawers(string wing, string room, int limit = 10)
+    {
+        EnsureSchema();
+        using var conn = new SqliteConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT * FROM palace WHERE wing=$w AND room=$r AND (expires_at IS NULL OR expires_at>$now) ORDER BY created_at DESC LIMIT $limit";
+        cmd.Parameters.AddWithValue("$w", wing); cmd.Parameters.AddWithValue("$r", room);
+        cmd.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()); cmd.Parameters.AddWithValue("$limit", limit);
+        using var rdr = cmd.ExecuteReader();
+        var results = new List<Drawer>();
+        while (rdr.Read()) results.Add(ReadDrawer(rdr));
+        return results;
+    }
+
+    public IReadOnlyList<Drawer> GetImportantDrawers(string wing, double threshold = 0.8, int limit = 20)
+    {
+        EnsureSchema();
+        using var conn = new SqliteConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT * FROM palace WHERE wing=$w AND importance>=$th AND (expires_at IS NULL OR expires_at>$now) ORDER BY importance DESC LIMIT $limit";
+        cmd.Parameters.AddWithValue("$w", wing); cmd.Parameters.AddWithValue("$th", threshold);
+        cmd.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()); cmd.Parameters.AddWithValue("$limit", limit);
+        using var rdr = cmd.ExecuteReader();
+        var results = new List<Drawer>();
+        while (rdr.Read()) results.Add(ReadDrawer(rdr));
+        return results;
+    }
+
+    public int PurgeExpired()
+    {
+        EnsureSchema();
+        using var conn = new SqliteConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "DELETE FROM palace WHERE expires_at IS NOT NULL AND expires_at<$now";
+        cmd.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        var count = cmd.ExecuteNonQuery();
+        if (count > 0) _logger?.LogInformation("Purged {Count} expired entries", count);
+        return count;
+    }
+
+    public long Count()
+    {
+        EnsureSchema();
+        using var conn = new SqliteConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM palace WHERE expires_at IS NULL OR expires_at>$now";
+        cmd.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        return (long)cmd.ExecuteScalar()!;
+    }
+
+    public async Task<float[]> GenerateEmbeddingAsync(string text)
+        => await _embedder.GenerateAsync(text, CancellationToken.None).ConfigureAwait(false);
+
+    // ═══════════════════════════════════════════
+    //  Extended API (consumed by MemoryConsolidationService, L1-6 providers, MemoryTools)
+    // ═══════════════════════════════════════════
+
+    public int CleanupExpired() => PurgeExpired();
+
     public int DecayAll(double factor = 0.95, double minImportance = 0.05)
     {
         EnsureSchema();
         using var conn = new SqliteConnection(_connectionString);
         conn.Open();
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = "UPDATE palace SET importance = MAX($min, importance * $factor) WHERE importance > $min";
-        cmd.Parameters.AddWithValue("$factor", factor);
-        cmd.Parameters.AddWithValue("$min", minImportance);
+        cmd.CommandText = "UPDATE palace SET importance=MAX(importance*$f,$m) WHERE importance>$m";
+        cmd.Parameters.AddWithValue("$f", factor); cmd.Parameters.AddWithValue("$m", minImportance);
         return cmd.ExecuteNonQuery();
     }
 
-    /// <summary>Merge all drawers in the same wing+room into one (concatenate content, keep max importance).</summary>
+    public IReadOnlyList<string> ListWings()
+    {
+        EnsureSchema();
+        using var conn = new SqliteConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT DISTINCT wing FROM palace WHERE (expires_at IS NULL OR expires_at>$now) ORDER BY wing";
+        cmd.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        using var rdr = cmd.ExecuteReader();
+        var list = new List<string>();
+        while (rdr.Read()) list.Add(rdr.GetString(0));
+        return list;
+    }
+
+    public IReadOnlyList<(string Wing, string Room)> ListRooms(string? wing = null)
+    {
+        EnsureSchema();
+        using var conn = new SqliteConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        if (wing != null) { cmd.CommandText = "SELECT DISTINCT wing,room FROM palace WHERE wing=$w AND (expires_at IS NULL OR expires_at>$now) ORDER BY room"; cmd.Parameters.AddWithValue("$w", wing); }
+        else cmd.CommandText = "SELECT DISTINCT wing,room FROM palace WHERE (expires_at IS NULL OR expires_at>$now) ORDER BY wing,room";
+        cmd.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        using var rdr = cmd.ExecuteReader();
+        var list = new List<(string, string)>();
+        while (rdr.Read()) list.Add((rdr.GetString(0), rdr.GetString(1)));
+        return list;
+    }
+
+    public int ConsolidateRoom(string wing, (string Wing, string Room) room) => ConsolidateRoom(wing, room.Room);
+
     public int ConsolidateRoom(string wing, string room)
     {
         EnsureSchema();
         using var conn = new SqliteConnection(_connectionString);
         conn.Open();
-        // Find all non-expired drawers in this room
-        using var list = conn.CreateCommand();
-        list.CommandText = "SELECT drawer_id, content, importance FROM palace WHERE wing = $wing AND room = $room AND expires_at > $now ORDER BY importance DESC";
-        list.Parameters.AddWithValue("$wing", wing);
-        list.Parameters.AddWithValue("$room", room);
-        var now = NowMs();
-        list.Parameters.AddWithValue("$now", now);
-
-        var drawers = new List<(string id, string content, double imp)>();
-        using var reader = list.ExecuteReader();
-        while (reader.Read())
-            drawers.Add((reader.GetString(0), reader.GetString(1), reader.GetDouble(2)));
-
-        if (drawers.Count <= 1) return 0;
-
-        // Keep the highest-importance one, merge content
-        var best = drawers[0];
-        var merged = string.Join("\n---\n", drawers.Select(d => d.content));
-        var mergedImp = drawers.Max(d => d.imp);
-
-        using var tx = conn.BeginTransaction();
-
-        // Delete all except the best
-        using var del = conn.CreateCommand();
-        del.Transaction = tx;
-        del.CommandText = "DELETE FROM palace WHERE wing = $wing AND room = $room AND drawer_id != $keep";
-        del.Parameters.AddWithValue("$wing", wing);
-        del.Parameters.AddWithValue("$room", room);
-        del.Parameters.AddWithValue("$keep", best.id);
-        del.ExecuteNonQuery();
-
-        // Update the kept one
-        using var upd = conn.CreateCommand();
-        upd.Transaction = tx;
-        upd.CommandText = "UPDATE palace SET content = $content, importance = $imp WHERE drawer_id = $id";
-        upd.Parameters.AddWithValue("$content", merged);
-        upd.Parameters.AddWithValue("$imp", mergedImp);
-        upd.Parameters.AddWithValue("$id", best.id);
-        upd.ExecuteNonQuery();
-
-        tx.Commit();
-        _logger?.LogInformation("PalaceStore: consolidated {Room}: {Count} → 1 (imp={Imp:F2})", room, drawers.Count, mergedImp);
-        return drawers.Count - 1;
+        using var findCmd = conn.CreateCommand();
+        findCmd.CommandText = "SELECT drawer_id FROM palace WHERE wing=$w AND room=$r AND (expires_at IS NULL OR expires_at>$now) ORDER BY importance DESC LIMIT 1";
+        findCmd.Parameters.AddWithValue("$w", wing); findCmd.Parameters.AddWithValue("$r", room);
+        findCmd.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        var best = findCmd.ExecuteScalar() as string;
+        if (best == null) return 0;
+        using var delCmd = conn.CreateCommand();
+        delCmd.CommandText = "DELETE FROM palace WHERE wing=$w AND room=$r AND drawer_id!=$best AND (expires_at IS NULL OR expires_at>$now)";
+        delCmd.Parameters.AddWithValue("$w", wing); delCmd.Parameters.AddWithValue("$r", room); delCmd.Parameters.AddWithValue("$best", best);
+        delCmd.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        var deleted = delCmd.ExecuteNonQuery();
+        if (deleted > 0) _logger?.LogDebug("Consolidated {Count} in {W}/{R}", deleted, wing, room);
+        return deleted;
     }
 
-    public IReadOnlyList<Drawer> SearchByWing(string wing, int topK = 10)
+    public IReadOnlyList<Drawer> GetEssentialMoments(int maxCount = 10, string? agentId = null)
     {
         EnsureSchema();
-        var now = NowMs();
         using var conn = new SqliteConnection(_connectionString);
         conn.Open();
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT * FROM palace WHERE wing = $wing AND " + LiveFilter + "ORDER BY importance DESC, created_at DESC LIMIT $k";
-        cmd.Parameters.AddWithValue("$wing", wing);
-        cmd.Parameters.AddWithValue("$now", now);
-        cmd.Parameters.AddWithValue("$k", topK);
-        return ReadDrawers(cmd);
+        var sql = "SELECT * FROM palace WHERE importance>=0.3 AND (expires_at IS NULL OR expires_at>$now)";
+        if (agentId != null) sql += " AND agent_id=$agent";
+        sql += " ORDER BY importance DESC,created_at DESC LIMIT $limit";
+        cmd.CommandText = sql; cmd.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        cmd.Parameters.AddWithValue("$limit", maxCount);
+        if (agentId != null) cmd.Parameters.AddWithValue("$agent", agentId);
+        using var rdr = cmd.ExecuteReader();
+        var list = new List<Drawer>();
+        while (rdr.Read()) list.Add(ReadDrawer(rdr));
+        return list;
     }
 
-    public IReadOnlyList<Drawer> SearchByRoom(string wing, string room, int topK = 10)
+    public IReadOnlyList<Drawer> SearchByWing(string wing, int maxCount = 10)
     {
         EnsureSchema();
-        var now = NowMs();
         using var conn = new SqliteConnection(_connectionString);
         conn.Open();
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT * FROM palace WHERE wing = $wing AND room = $room AND " + LiveFilter + "ORDER BY importance DESC, created_at DESC LIMIT $k";
-        cmd.Parameters.AddWithValue("$wing", wing);
-        cmd.Parameters.AddWithValue("$room", room);
-        cmd.Parameters.AddWithValue("$now", now);
-        cmd.Parameters.AddWithValue("$k", topK);
-        return ReadDrawers(cmd);
+        cmd.CommandText = "SELECT * FROM palace WHERE wing=$w AND (expires_at IS NULL OR expires_at>$now) ORDER BY importance DESC,created_at DESC LIMIT $limit";
+        cmd.Parameters.AddWithValue("$w", wing); cmd.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()); cmd.Parameters.AddWithValue("$limit", maxCount);
+        using var rdr = cmd.ExecuteReader();
+        var list = new List<Drawer>();
+        while (rdr.Read()) list.Add(ReadDrawer(rdr));
+        return list;
     }
 
-    public async IAsyncEnumerable<(Drawer Drawer, double Score)> SemanticSearchAsync(
-        float[] queryVec, int topK = 5, string? wing = null,
-        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+    public IReadOnlyList<Drawer> SearchByRoom(string room, string? agentId = null, int maxCount = 10)
     {
         EnsureSchema();
-        var now = NowMs();
-        using var conn = new SqliteConnection(_connectionString);
-        await conn.OpenAsync(ct).ConfigureAwait(false);
-        using var cmd = conn.CreateCommand();
-        // Scan ALL entries with embeddings — not just the most recent N.
-        // Relevancy via full cosine scan instead of recency proxy.
-        // For typical palace sizes (100-10000), this adds 2-50ms per query.
-        // TODO: replace with HNSW index when palace exceeds 50000 entries.
-        if (wing != null)
-        {
-            cmd.CommandText = "SELECT * FROM palace WHERE wing = $wing AND embedding IS NOT NULL AND " + LiveFilter;
-            cmd.Parameters.AddWithValue("$wing", wing);
-        }
-        else
-        {
-            cmd.CommandText = "SELECT * FROM palace WHERE embedding IS NOT NULL AND " + LiveFilter;
-        }
-        cmd.Parameters.AddWithValue("$now", now);
-
-        var results = new List<(Drawer d, double sim)>();
-        await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
-        while (await reader.ReadAsync(ct).ConfigureAwait(false))
-        {
-            var d = ReadDrawer(reader);
-            if (d.Embedding is null) continue;
-            var sim = CosineSimilarity(queryVec, d.Embedding);
-            results.Add((d, sim));
-        }
-
-        foreach (var hit in results.OrderByDescending(r => r.sim).Take(topK))
-            yield return hit;
-    }
-
-    public IReadOnlyList<Drawer> GetEssentialMoments(int topK = 15, string? agentId = null)
-    {
-        EnsureSchema();
-        var now = NowMs();
         using var conn = new SqliteConnection(_connectionString);
         conn.Open();
         using var cmd = conn.CreateCommand();
-        cmd.Parameters.AddWithValue("$now", now);
-        cmd.Parameters.AddWithValue("$k", topK);
-        if (agentId != null)
-        {
-            cmd.CommandText = "SELECT * FROM palace WHERE agent_id = $agent AND " + LiveFilter + "ORDER BY importance DESC, created_at DESC LIMIT $k";
-            cmd.Parameters.AddWithValue("$agent", agentId);
-        }
-        else
-        {
-            cmd.CommandText = "SELECT * FROM palace WHERE " + LiveFilter + "ORDER BY importance DESC, created_at DESC LIMIT $k";
-        }
-        return ReadDrawers(cmd);
+        var sql = "SELECT * FROM palace WHERE room=$r AND (expires_at IS NULL OR expires_at>$now)";
+        if (agentId != null) sql += " AND agent_id=$agent";
+        sql += " ORDER BY created_at DESC LIMIT $limit";
+        cmd.CommandText = sql; cmd.Parameters.AddWithValue("$r", room); cmd.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        cmd.Parameters.AddWithValue("$limit", maxCount);
+        if (agentId != null) cmd.Parameters.AddWithValue("$agent", agentId);
+        using var rdr = cmd.ExecuteReader();
+        var list = new List<Drawer>();
+        while (rdr.Read()) list.Add(ReadDrawer(rdr));
+        return list;
     }
 
-    public IReadOnlyList<Drawer> GetAgentDiary(string agentId, int topK = 10)
+    public IReadOnlyList<Drawer> SearchByRoomExact(string wing, string? agentId = null)
     {
-        return GetEssentialMoments(topK, agentId);
+        EnsureSchema();
+        using var conn = new SqliteConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        var sql = "SELECT * FROM palace WHERE wing=$w AND (expires_at IS NULL OR expires_at>$now)";
+        if (agentId != null) sql += " AND agent_id=$agent";
+        sql += " ORDER BY created_at DESC";
+        cmd.CommandText = sql; cmd.Parameters.AddWithValue("$w", wing); cmd.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        if (agentId != null) cmd.Parameters.AddWithValue("$agent", agentId);
+        using var rdr = cmd.ExecuteReader();
+        var list = new List<Drawer>();
+        while (rdr.Read()) list.Add(ReadDrawer(rdr));
+        return list;
     }
 
+    /// <summary>Get all non-expired drawers (for MemoryBrowser UI).</summary>
+    public IReadOnlyList<Drawer> GetAllDrawers()
+    {
+        EnsureSchema();
+        using var conn = new SqliteConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT * FROM palace WHERE (expires_at IS NULL OR expires_at>$now) ORDER BY created_at DESC LIMIT 200";
+        cmd.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        using var rdr = cmd.ExecuteReader();
+        var list = new List<Drawer>();
+        while (rdr.Read()) list.Add(ReadDrawer(rdr));
+        return list;
+    }
+
+    /// <summary>Delete a single drawer by its ID (wing+room+drawerId overload for MemoryBrowser).</summary>
     public bool DeleteDrawer(string wing, string room, string drawerId)
+        => DeleteDrawer(drawerId);
+
+    /// <summary>Delete a single drawer by its ID.</summary>
+    public bool DeleteDrawer(string drawerId)
     {
         EnsureSchema();
         using var conn = new SqliteConnection(_connectionString);
         conn.Open();
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = "DELETE FROM palace WHERE wing = $wing AND room = $room AND drawer_id = $id";
-        cmd.Parameters.AddWithValue("$wing", wing);
-        cmd.Parameters.AddWithValue("$room", room);
+        cmd.CommandText = "DELETE FROM palace WHERE drawer_id=$id";
         cmd.Parameters.AddWithValue("$id", drawerId);
         return cmd.ExecuteNonQuery() > 0;
     }
@@ -311,192 +372,34 @@ public sealed class PalaceStore
         using var conn = new SqliteConnection(_connectionString);
         conn.Open();
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = "DELETE FROM palace WHERE wing = $wing AND room = $room";
-        cmd.Parameters.AddWithValue("$wing", wing);
-        cmd.Parameters.AddWithValue("$room", room);
+        cmd.CommandText = "DELETE FROM palace WHERE wing=$w AND room=$r";
+        cmd.Parameters.AddWithValue("$w", wing); cmd.Parameters.AddWithValue("$r", room);
         return cmd.ExecuteNonQuery();
     }
 
-    public IReadOnlyList<Drawer> SearchByRoomExact(string room, int topK = 20)
-    {
-        EnsureSchema();
-        var now = NowMs();
-        using var conn = new SqliteConnection(_connectionString);
-        conn.Open();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT * FROM palace WHERE room = $room AND " + LiveFilter + "ORDER BY importance DESC, created_at DESC LIMIT $k";
-        cmd.Parameters.AddWithValue("$room", room);
-        cmd.Parameters.AddWithValue("$now", now);
-        cmd.Parameters.AddWithValue("$k", topK);
-        return ReadDrawers(cmd);
-    }
-
-    public IReadOnlyList<string> ListRooms(string? wing = null)
-    {
-        EnsureSchema();
-        var now = NowMs();
-        using var conn = new SqliteConnection(_connectionString);
-        conn.Open();
-        using var cmd = conn.CreateCommand();
-        cmd.Parameters.AddWithValue("$now", now);
-        if (wing != null)
-        {
-            cmd.CommandText = "SELECT DISTINCT room FROM palace WHERE wing = $wing AND " + LiveFilter + "ORDER BY room";
-            cmd.Parameters.AddWithValue("$wing", wing);
-        }
-        else
-        {
-            cmd.CommandText = "SELECT DISTINCT room FROM palace WHERE " + LiveFilter + "ORDER BY room";
-        }
-        var rooms = new List<string>();
-        using var reader = cmd.ExecuteReader();
-        while (reader.Read()) rooms.Add(reader.GetString(0));
-        return rooms;
-    }
-
-    public async Task<float[]> GenerateEmbeddingAsync(string text)
-    {
-        return await _embedder.GenerateAsync(text, CancellationToken.None).ConfigureAwait(false);
-    }
-
-    public int Count()
-    {
-        EnsureSchema();
-        var now = NowMs();
-        using var conn = new SqliteConnection(_connectionString);
-        conn.Open();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT COUNT(*) FROM palace WHERE " + LiveFilter;
-        cmd.Parameters.AddWithValue("$now", now);
-        return Convert.ToInt32(cmd.ExecuteScalar());
-    }
-
-    public IReadOnlyList<string> ListWings()
-    {
-        EnsureSchema();
-        var now = NowMs();
-        using var conn = new SqliteConnection(_connectionString);
-        conn.Open();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT DISTINCT wing FROM palace WHERE " + LiveFilter + "ORDER BY wing";
-        cmd.Parameters.AddWithValue("$now", now);
-        var wings = new List<string>();
-        using var reader = cmd.ExecuteReader();
-        while (reader.Read()) wings.Add(reader.GetString(0));
-        return wings;
-    }
-
-    /// <summary>Return all non-expired drawers.</summary>
-    public IReadOnlyList<Drawer> GetAllDrawers()
-    {
-        EnsureSchema();
-        var now = NowMs();
-        using var conn = new SqliteConnection(_connectionString);
-        conn.Open();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT * FROM palace WHERE " + LiveFilter + " ORDER BY wing, room, created_at DESC";
-        cmd.Parameters.AddWithValue("$now", now);
-        return ReadDrawers(cmd);
-    }
-
-    /// <summary>
-    /// Snapshot all non-expired memory entries to <c>.livingtree/memories/&lt;sessionId&gt;.json</c>
-    /// via LocalVersionRepo. Returns the commit SHA.
-    /// </summary>
-    public string SnapshotToRepo(string sessionId)
-    {
-        var drawers = GetAllDrawers();
-        var json = JsonSerializer.Serialize(
-            drawers.Select(d => new
-            {
-                d.Wing, d.Room, d.DrawerId, d.Role, d.Content,
-                d.CreatedAt, d.ExpiresAt, d.Importance, d.AgentId, d.Metadata
-            }), JsonOpts);
-        return LocalVersionRepo.AtomicCommit(
-            $"memories/{sessionId}.json", json,
-            $"💾 Palace snapshot: {sessionId} — {drawers.Count} entries");
-    }
-
-    /// <summary>Remove all expired entries. Returns count of deleted rows.</summary>
-    public int CleanupExpired()
-    {
-        EnsureSchema();
-        var now = NowMs();
-        using var conn = new SqliteConnection(_connectionString);
-        conn.Open();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = "DELETE FROM palace WHERE expires_at IS NOT NULL AND expires_at <= $now";
-        cmd.Parameters.AddWithValue("$now", now);
-        var count = cmd.ExecuteNonQuery();
-        if (count > 0)
-            _logger?.LogInformation("PalaceStore: cleaned up {Count} expired entries", count);
-        return count;
-    }
-
-    private const string LiveFilter = " (expires_at IS NULL OR expires_at > $now) ";
+    // ═══════════════════════════════════════════
+    //  Private
+    // ═══════════════════════════════════════════
 
     private void EnsureSchema()
     {
         if (_schemaReady) return;
-        lock (_gate)
-        {
-            if (_schemaReady) return;
-            using var conn = new SqliteConnection(_connectionString);
-            conn.Open();
-            using var cmd = conn.CreateCommand();
-            cmd.CommandText = Schema;
-            cmd.ExecuteNonQuery();
-            // F5: Add expires_at column if missing (migration from older version)
-            using var checkCmd = conn.CreateCommand();
-            checkCmd.CommandText = MigrateExpiresAt;
-            var count = (long)(checkCmd.ExecuteScalar() ?? 0);
-            if (count == 0)
-            {
-                using var alterCmd = conn.CreateCommand();
-                alterCmd.CommandText = "ALTER TABLE palace ADD COLUMN expires_at INTEGER;";
-                alterCmd.ExecuteNonQuery();
-            }
-            _schemaReady = true;
-        }
+        lock (_gate) { if (_schemaReady) return; using var conn = new SqliteConnection(_connectionString); conn.Open(); using var cmd = conn.CreateCommand(); cmd.CommandText = Schema; cmd.ExecuteNonQuery(); _schemaReady = true; }
     }
 
-    private long NowMs() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+    private static double CosineSimilarity(float[] a, float[] b) => VectorMath.CosineSimilarity(a.AsSpan(), b.AsSpan());
 
-    private static List<Drawer> ReadDrawers(SqliteCommand cmd)
+    private static Drawer ReadDrawer(SqliteDataReader r) => new(r.GetString(0), r.GetString(1), r.GetString(2),
+        r.IsDBNull(3) ? "assistant" : r.GetString(3), r.GetString(4),
+        r.IsDBNull(5) ? null : DeserializeEmb(r, 5), r.GetInt64(6),
+        r.IsDBNull(7) ? null : r.GetInt64(7), r.IsDBNull(8) ? 0.5 : r.GetDouble(8),
+        r.IsDBNull(9) ? "default" : r.GetString(9), r.IsDBNull(10) ? null : r.GetString(10));
+
+    private static float[]? DeserializeEmb(SqliteDataReader r, int c)
     {
-        var list = new List<Drawer>();
-        using var reader = cmd.ExecuteReader();
-        while (reader.Read()) list.Add(ReadDrawer(reader));
-        return list;
+        if (r.IsDBNull(c)) return null;
+        var bytes = (byte[])r[c]; var floats = new float[bytes.Length / 4];
+        Buffer.BlockCopy(bytes, 0, floats, 0, bytes.Length);
+        return floats;
     }
-
-    private static Drawer ReadDrawer(SqliteDataReader r) => new(
-        Wing: r.GetString(0),
-        Room: r.GetString(1),
-        DrawerId: r.GetString(2),
-        Role: r.GetString(3),
-        Content: r.GetString(4),
-        Embedding: r.IsDBNull(5) ? null : DeserializeVector((byte[])r.GetValue(5)),
-        CreatedAt: r.GetInt64(6),
-        ExpiresAt: r.IsDBNull(7) ? null : r.GetInt64(7),
-        Importance: r.GetDouble(8),
-        AgentId: r.GetString(9),
-        Metadata: r.IsDBNull(10) ? null : r.GetString(10));
-
-    private static byte[] SerializeVector(float[] v)
-    {
-        var bytes = new byte[v.Length * sizeof(float)];
-        Buffer.BlockCopy(v, 0, bytes, 0, bytes.Length);
-        return bytes;
-    }
-
-    private static float[] DeserializeVector(byte[] bytes)
-    {
-        var v = new float[bytes.Length / sizeof(float)];
-        Buffer.BlockCopy(bytes, 0, v, 0, bytes.Length);
-        return v;
-    }
-
-    private static float CosineSimilarity(float[] a, float[] b)
-        => LTAI.AI.VectorMath.CosineSimilarity(a.AsSpan(), b.AsSpan());
 }

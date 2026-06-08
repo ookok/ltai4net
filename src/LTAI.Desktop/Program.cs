@@ -24,37 +24,30 @@ public static class Program
     public static AppBuilder BuildAvaloniaApp()
         => AppBuilder.Configure<App>().UsePlatformDetect().LogToTrace();
 
-    /// <summary>
-    /// Initialize LTAI services in background. Called from App.OnFrameworkInitializationCompleted
-    /// after the main window is shown, so the UI doesn't freeze during DI warmup.
-    /// </summary>
     public static async Task InitializeServicesAsync()
     {
         var services = BuildServiceCollection();
-        var provider = await Task.Run(() => services.BuildServiceProvider());
 
-        // Resolve eagerly (triggers DI chain including 9 agents, KgStore, Wasmtime, etc.)
-        var chatAgent = await Task.Run(() => provider.GetRequiredService<ChatAgent>());
+        // ⏱ 全局超时：DI 容器 + WarmUp 共 18 秒内必须完成
+        // 防止 ONNX 模型加载、EP 探测、或网络请求卡死初始化
+        using var initCts = new CancellationTokenSource(TimeSpan.FromSeconds(18));
+        var ct = initCts.Token;
 
-        // 预热 ONNX 模型 + HTTP 连接（不阻塞 UI，最慢 6 秒超时）
+        var provider = await Task.Run(() => services.BuildServiceProvider(), ct);
+        var chatAgent = await Task.Run(() => provider.GetRequiredService<ChatAgent>(), ct);
         _ = chatAgent.WarmUpAsync().WaitAsync(TimeSpan.FromSeconds(6));
-
-        var options = await Task.Run(() => provider.GetRequiredService<IOptions<LTAIOptions>>());
-
-        // Set on App for UI access
+        var options = await Task.Run(() => provider.GetRequiredService<IOptions<LTAIOptions>>(), ct);
         App.ChatAgent = chatAgent;
         App.Options = options;
         App.Ltais = new LTAIService(chatAgent, options, provider);
-        App.Router = await Task.Run(() => provider.GetService<MultiProviderChatClient>());
-        App.HttpFactory = await Task.Run(() => provider.GetService<IHttpClientFactory>());
-
-        // Balance fetch (non-blocking)
+        App.Router = await Task.Run(() => provider.GetService<MultiProviderChatClient>(), ct);
+        App.HttpFactory = await Task.Run(() => provider.GetService<IHttpClientFactory>(), ct);
         _ = Task.Run(async () =>
         {
             try
             {
                 await LTAI.Core.Configuration.UsageTracker.FetchBalanceAsync(
-                    options.Value.AI.DefaultProvider,
+                    options.Value.AI.DefaultProvider ?? "",
                     LTAI.Core.Configuration.SecretManager.Get("SILICONFLOW_API_KEY")
                     ?? LTAI.Core.Configuration.SecretManager.Get("OPENROUTER_API_KEY"));
             }
@@ -67,29 +60,20 @@ public static class Program
         var services = new ServiceCollection();
         var config = new ConfigurationBuilder()
             .SetBasePath(AppContext.BaseDirectory)
-            .AddJsonFile("appsettings.json", optional: true)
+            .AddJsonFile("appsettings.json", optional: true, reloadOnChange: true)
             .Build();
-
+        services.AddSingleton<IConfigurationRoot>(config);
         services.Configure<LTAIOptions>(config.GetSection(LTAIOptions.SectionName));
         services.AddLogging(b => b.SetMinimumLevel(LogLevel.Information).AddConsole());
         services.AddLTAICore();
         services.AddLTAIAI();
         services.AddLTAIAgent();
-
-        // Debug bridge — singleton shared across TextPadView and AI debug tools
         services.AddSingleton<DebugBridge>();
-
-        // Notification service — global event bus
         services.AddSingleton<NotificationService>();
-
-        // Desktop services — command routing, LLM client, session management
         services.AddSingleton<DesktopCommandService>();
         services.AddSingleton<ILlmClient, LlmClient>();
         services.AddSingleton<SessionManager>();
-
-        // ViewModels
         services.AddTransient<DevUIViewModel>();
-
         return services;
     }
 }
@@ -102,16 +86,13 @@ public sealed class LTAIService
 
     public LTAIService(ChatAgent chat, IOptions<LTAIOptions> options, IServiceProvider services)
     {
-        Chat = chat;
-        Options = options.Value;
-        Services = services;
+        Chat = chat; Options = options.Value; Services = services;
     }
 
-    public string Mode => Options.AI.DefaultProvider;
+    public string Mode => Options.AI.DefaultProvider ?? "";
     public string DNAStatus => "simplified (MS Agent Framework 1.8.0)";
     public string SafetyPosture => "safe";
 
-    // Real tracking data
     private long _tokensUsed;
     private long _totalMs;
     private int _requests;
@@ -124,8 +105,7 @@ public sealed class LTAIService
 
     public LTAIService(ChatAgent chat, IOptions<LTAIOptions> options)
     {
-        Chat = chat;
-        Options = options.Value;
+        Chat = chat; Options = options.Value; Services = null!;
     }
 
     public async Task<string> ChatAsync(string message, CancellationToken ct = default)
@@ -135,7 +115,6 @@ public sealed class LTAIService
         var response = await Chat.ChatAsync(message, userId: null, ct: ct);
         sw.Stop();
         Interlocked.Add(ref _totalMs, sw.ElapsedMilliseconds);
-        // Estimate tokens: roughly characters / 4
         Interlocked.Add(ref _tokensUsed, (response?.Length ?? 0) / 4);
         return response ?? "";
     }

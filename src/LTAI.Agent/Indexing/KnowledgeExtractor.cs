@@ -1,3 +1,11 @@
+// Copyright (c) LTAI. All rights reserved.
+// ═══════════════════════════════════════════════════════════════
+//  KnowledgeExtractor — document/fact → KgStore extraction
+//
+//  UPDATED: Integrates ContentFilter.ScreenExtraction() to reject
+//  low-quality LLM-extracted facts (noise, errors, generic concepts).
+// ═══════════════════════════════════════════════════════════════
+
 using System.Text.Json;
 using LTAI.Agent.Vector;
 using Microsoft.Extensions.AI;
@@ -36,6 +44,11 @@ public sealed class KnowledgeExtractor
 
             JSON 输出格式：
             [{"concept": "...", "summary": "..."}]
+
+            要求：
+            - concept 必须是有具体意义的实体名称（至少2个字符）
+            - summary 必须有至少10个字符的有用信息
+            - 忽略：日志行、异常堆栈、纯数字、无意义短语
             """;
 
         try
@@ -45,9 +58,19 @@ public sealed class KnowledgeExtractor
             var facts = JsonSerializer.Deserialize<List<ExtractedFact>>(json, JsonOpts);
             if (facts == null || facts.Count == 0) return "No facts extracted";
 
-            int ok = 0;
+            int ok = 0, skipped = 0;
             foreach (var fact in facts)
             {
+                // Layer 3: Quality screen on extracted concept + summary
+                var qualityVerdict = ContentFilter.ScreenExtraction(fact.Concept, fact.Summary);
+                if (qualityVerdict != FilterVerdict.Allowed)
+                {
+                    _logger.LogTrace("KnowledgeExtractor: skipped fact '{Concept}' ({Verdict})",
+                        fact.Concept, qualityVerdict);
+                    skipped++;
+                    continue;
+                }
+
                 var extId = $"fact:{nodeId}:{fact.Concept.GetHashCode():x}";
                 var factId = await _kg.UpsertNode(
                     extId, "fact", fact.Concept,
@@ -59,8 +82,12 @@ public sealed class KnowledgeExtractor
                 ok++;
             }
 
-            _logger.LogInformation("Extracted {N} facts from node {Id}", ok, nodeId);
-            return $"Extracted {ok} facts";
+            if (skipped > 0)
+                _logger.LogInformation("Extracted {N} facts from node {Id} ({Skipped} filtered)", ok, nodeId, skipped);
+            else
+                _logger.LogInformation("Extracted {N} facts from node {Id}", ok, nodeId);
+
+            return $"Extracted {ok} facts{(skipped > 0 ? $" ({skipped} filtered)" : "")}";
         }
         catch (Exception ex)
         {

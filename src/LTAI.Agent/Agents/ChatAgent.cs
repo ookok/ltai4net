@@ -20,41 +20,32 @@ public sealed class ChatAgent
 {
     private static readonly HashSet<string> _simpleQueries = new(StringComparer.OrdinalIgnoreCase)
     {
-        "你好", "hi", "hello", "hey", "嗨",
-        "早上好", "下午好", "晚上好", "午安", "晚安",
-        "help", "status", "clear", "ping", "test",
-        "thanks", "谢谢", "thank you", "thank u", "多谢", "感谢",
-        "bye", "再见", "拜拜", "goodbye",
-        "yes", "no", "ok", "okay", "好的", "嗯", "哦",
-        "who are you", "你是谁",
-        "?", "？", "！", "!", "",
+        "hello", "hi", "hey", "你好", "嗨", "早上好", "下午好", "晚上好",
+        "good morning", "good afternoon", "good evening",
+        "who are you", "你是谁", "help", "帮助", "/help",
+        "status", "状态", "/status", "thanks", "谢谢", "thank you"
     };
-
     private static readonly HashSet<string> _toolRequiredKeywords = new(StringComparer.OrdinalIgnoreCase)
     {
-        "file", "directory", "folder", "script",
-        "文件", "目录", "文件夹", "脚本",
-        "run", "执行", "运行",
-        "list", "search", "grep", "read", "write", "create",
-        "列出", "搜索", "查找", "读取", "写入", "创建",
-        "compile", "build", "编译",
-        "git", "commit", "push", "pull",
-        "network", "port", "docker", "container",
-        "进程", "process", "system", "系统",
-        "shell", "cmd", "powershell",
-        "杀", "启动", "停止", "kill", "start", "stop",
+        "search", "查找", "find", "lookup", "查询", "计算",
+        "compile", "build", "run", "执行", "运行", "编译",
+        "git", "commit", "push", "pull", "branch",
+        "file", "文件", "read", "写", "write",
+        "read", "代码", "code", "analyze", "分析",
+        "翻译", "translate", "summarize", "总结",
+        "draw", "画", "diagram", "图",
+        "create", "创建", "delete", "删除", "update", "更新"
     };
 
-    internal static string GetOrCreateTraceId() =>
-        Activity.Current?.Id ?? Guid.NewGuid().ToString("n");
     private readonly AIAgent _agent;
-    private readonly AIAgent _proAgent;
-    private readonly bool _sameModel;
+    private readonly AIAgent? _proAgent;
     private readonly AgentWorkflows? _workflows;
     private readonly BudgetTracker? _budgetTracker;
     private readonly LocalEmbedder? _localEmbedder;
     private readonly IHttpClientFactory? _httpFactory;
-    private readonly IChatClient? _steerJudge;
+    private readonly bool _sameModel;
+
+    // ── Response rendering ──
 
     public ChatAgent(AIAgent agent, AIAgent? proAgent = null, AgentWorkflows? workflows = null,
         BudgetTracker? budgetTracker = null,
@@ -62,245 +53,173 @@ public sealed class ChatAgent
         bool sameModel = false, IChatClient? steerJudge = null)
     {
         _agent = agent;
-        _proAgent = proAgent ?? agent;
-        _sameModel = sameModel;
+        _proAgent = proAgent;
         _workflows = workflows;
         _budgetTracker = budgetTracker;
         _localEmbedder = localEmbedder;
         _httpFactory = httpFactory;
+        _sameModel = sameModel;
         _steerJudge = steerJudge;
+    }
+
+    private static readonly AsyncLocal<string> _traceId = new();
+    private static string GetOrCreateTraceId() => _traceId.Value ??= Guid.NewGuid().ToString("N")[..12];
+
+    /// <summary>P6: lightweight steer model for fast decisions (hallucination check, routing, suitability).</summary>
+    private readonly IChatClient? _steerJudge;
+
+    /// <summary>
+    /// P6: Fast hallucination check using the steer model (or main LLM fallback).
+    /// Returns true if answer appears grounded, false if likely hallucinated.
+    /// </summary>
+    private async Task<(bool IsAdequate, string? Reason)> JudgeResponseQualityAsync(
+        string message, string response, CancellationToken ct)
+    {
+        var client = _steerJudge ?? _agent;
+        try
+        {
+            var judgeMessages = new ChatMessage[]
+            {
+                new(ChatRole.System,
+                    "You are a response quality judge. Given a user query and an AI response, " +
+                    "determine if the response is adequate. " +
+                    "Criteria: relevant, helpful, not vague/hedging, not refusing, not hallucinating.\n" +
+                    "Respond with ONLY valid JSON like: {\"adequate\": true, \"reason\": \"...\", \"self_score\": 4}\n" +
+                    "Score: 1-5 (5=excellent). Adequate if score >= 3 and reason indicates adequate."),
+                new(ChatRole.User,
+                    $"Query: {message}\n\nResponse: {response}")
+            };
+            var judgeResult = await client.GetResponseAsync(judgeMessages, cancellationToken: ct)
+                .ConfigureAwait(false);
+            var raw = judgeResult.Text ?? "";
+            var start = raw.IndexOf('{');
+            var end = raw.LastIndexOf('}');
+            if (start >= 0 && end > start)
+            {
+                using var doc = JsonDocument.Parse(raw[start..(end + 1)]);
+                var root = doc.RootElement;
+                var adequate = root.TryGetProperty("adequate", out var a) && a.GetBoolean();
+                var reason = root.TryGetProperty("reason", out var r) ? r.GetString() : null;
+                var score = root.TryGetProperty("self_score", out var s) ? s.GetInt32() : 0;
+                return (adequate && score >= 3, reason ?? (adequate ? null : "judge deemed inadequate"));
+            }
+            return (true, null);
+        }
+        catch
+        {
+            return (true, null); // On error, assume adequate (don't block the user)
+        }
+    }
+
+    /// <summary>Build L1 exploration state for chain-of-thought routing.</summary>
+    private static L1State BuildL1State(string message, string response, AgentResponse result)
+    {
+        var gap = EstimateCoverageGap(message, response);
+        var state = new L1State
+        {
+            Label = gap > 0.4 ? "escalate" : "handled",
+            SupportCount = CountSupportingEvidence(response),
+            Gap = gap,
+            ToolCalls = result.Messages?
+                .SelectMany(m => m.Contents?.OfType<FunctionCallContent>() ?? [])
+                .Select(fc => fc.Name ?? "")
+                .Where(n => n.Length > 0)
+                .ToList() ?? [],
+            ShouldEscalate = gap > 0.5,
+            EscalationReason = gap > 0.5
+                ? $"coverage gap={gap:F2}" : null
+        };
+        return state;
+    }
+
+    private static double EstimateCoverageGap(string message, string response)
+    {
+        if (string.IsNullOrWhiteSpace(response)) return 1.0;
+        var msgLower = message.ToLowerInvariant();
+        var respLower = response.ToLowerInvariant();
+        var keywords = msgLower.Split(' ', StringSplitOptions.RemoveEmptyEntries)
+            .Where(w => w.Length > 3)
+            .ToHashSet();
+        return keywords.Count == 0 ? 0 : (double)keywords.Count(k => !respLower.Contains(k)) / keywords.Count;
+    }
+
+    private static int CountSupportingEvidence(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return 0;
+        var count = 0;
+        var lines = text.Split('\n');
+        foreach (var line in lines)
+        {
+            var t = line.Trim();
+            if (t.StartsWith('-') || t.StartsWith('*') || t.StartsWith("1.") || t.StartsWith("2."))
+                count++;
+        }
+        return count;
+    }
+
+    private sealed record L1State
+    {
+        public string? Label { get; set; }
+        public string? EscalationReason { get; set; }
+        public int SupportCount { get; set; }
+        public double Gap { get; set; }
+        public List<string> ToolCalls { get; set; } = [];
+        public bool ShouldEscalate { get; set; }
+        public bool ShouldRouteBySpans { get; set; }
+        public List<FusionRoute.SpanInfo> Spans { get; set; } = [];
+        public double SpanUncertaintyRatio { get; set; }
     }
 
     private static int EstimateComplexity(string message)
     {
-        var score = 0;
-
-        // 长度因子
-        score += message.Length > 200 ? 2 : message.Length > 50 ? 1 : 0;
-
-        // 高认知词：优化/分析/架构/设计/重构等
-        var highCogWords = Regex.Matches(message,
-            @"\b(优化|分析|架构|设计|重构|review|trace|debug|profile|" +
-            "refactor|design pattern|architecture|performance|security|" +
-            "并发|线程安全|性能|安全|架构|模式|设计|优化|重构)\b",
-            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-        score += Math.Min(highCogWords.Count, 3);
-
-        // 因果/对比推理
-        var causalWords = Regex.Matches(message,
-            @"\b(because|why|compare|vs|差异|区别|什么原因|" +
-            "为什么|对比|原因|影响|关系)\b",
-            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-        score += Math.Min(causalWords.Count, 2);
-
-        // 代码块引用
-        if (message.Contains("```")) score += 2;
-
-        // 多行输入（代码片段、日志等）
-        if (message.Count(c => c == '\n') > 5) score += 2;
-
-        return score;
+        if (string.IsNullOrWhiteSpace(message)) return 0;
+        var parts = message.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        var score = parts.Length switch
+        {
+            <= 5 => 1,
+            <= 15 => 2,
+            <= 30 => 3,
+            <= 50 => 4,
+            _ => 5
+        };
+        if (_toolRequiredKeywords.Any(k => message.Contains(k, StringComparison.OrdinalIgnoreCase)))
+            score += 1;
+        if (message.Contains('\n')) score += 1;
+        if (message.Length > 200) score += 1;
+        return Math.Min(score, 7);
     }
 
-    private static bool LikelyRequiresTool(string message)
+    private static double EstimateResponseEntropy(string text)
     {
-        return _toolRequiredKeywords.Any(k =>
-            message.Contains(k, StringComparison.OrdinalIgnoreCase));
+        if (string.IsNullOrWhiteSpace(text)) return 1.0;
+        var hedgeWords = new[] { "maybe", "perhaps", "probably", "possibly", "might", "could be",
+            "不确定", "可能", "也许", "大概", "估计", "似乎", "推测" };
+        var count = hedgeWords.Count(w => text.Contains(w, StringComparison.OrdinalIgnoreCase));
+        return Math.Min(1.0, count * 0.2);
     }
 
-    private static bool HasToolResults(AgentResponse r)
+    private static double EstimateValueOfInformation(string query, string response, double entropy)
     {
-        if (r.Messages == null) return false;
-        return r.Messages.Any(m =>
-            m.Contents?.OfType<FunctionResultContent>().Any() == true);
+        if (entropy > 0.5) return 0.8;
+        if (string.IsNullOrWhiteSpace(response)) return 1.0;
+        var qLower = query.ToLowerInvariant();
+        var ambiguous = new[] { "what", "how", "why", "when", "where", "which",
+            "什么", "如何", "怎么", "为什么", "何时", "哪里" };
+        if (ambiguous.Any(w => qLower.Contains(w))) return 0.5 + entropy * 0.3;
+        return entropy * 0.5;
     }
 
     /// <summary>
-    /// GoS-inspired L1State builder: extracts structured belief state from
-    /// L1's free-text response and tool call history.
+    /// 预热：本地嵌入模型懒加载。不再发送网络请求到外部 API，
+    /// 因为 UI 初始化不应该依赖外部网络连通性。
     /// </summary>
-    private static L1State BuildL1State(string message, string text, AgentResponse r)
-    {
-        var toolCalls = new List<string>();
-        if (r.Messages != null)
-        {
-            foreach (var msg in r.Messages)
-            {
-                var calls = msg.Contents?.OfType<FunctionCallContent>();
-                if (calls != null)
-                    toolCalls.AddRange(calls.Select(c => c.Name ?? c.CallId));
-            }
-        }
-
-        // Heuristic: extract candidate entities from response
-        var candidates = new List<(string name, string kind, double score)>();
-        var lines = text.Split('\n', StringSplitOptions.RemoveEmptyEntries);
-        foreach (var line in lines.Take(10))
-        {
-            var trimmed = line.TrimStart('-', ' ', '*');
-            var parts = trimmed.Split(':');
-            if (parts.Length >= 2)
-            {
-                var name = parts[0].Trim();
-                if (name.Length > 1 && name.Length < 80)
-                {
-                    candidates.Add((name, "concept", 1.0 / candidates.Count + 1));
-                }
-            }
-        }
-
-        // Default: the response itself as a single candidate
-        if (candidates.Count == 0)
-        {
-            var title = text.Length > 60 ? text[..60] + "..." : text;
-            candidates.Add((title, "response", 1.0));
-        }
-
-        var gap = candidates.Count >= 2
-            ? Math.Round(candidates[0].score - candidates[1].score, 2)
-            : 1.0;
-
-        var msgCount = r.Messages?.Count ?? 1;
-        var supportCount = toolCalls.Count + (text.Length / 200);
-
-        // Determine label
-        string? label = null;
-        string? reason = null;
-
-        if (LikelyRequiresTool(message) && toolCalls.Count == 0)
-        {
-            label = "escalate";
-            reason = "query requires tools but L1 made no tool calls";
-            FailureRecorder.Record(message, text, reason, "L1");
-        }
-        else if (text.Length > 20)
-        {
-            var lower = text.ToLowerInvariant();
-            var failPatterns = new[] { "无法获取", "无法确定", "无法提供", "无法访问",
-                "抱歉", "我无法", "暂时无法", "目前还不支持", "我不能",
-                "cannot", "can't", "unable to", "don't know", "i don't" };
-            if (failPatterns.Any(p => lower.Contains(p)))
-            {
-                label = "escalate";
-                reason = "L1 declined to answer";
-                FailureRecorder.Record(message, text, "refusal pattern detected", "L1");
-            }
-        }
-
-        return new L1State
-        {
-            Candidates = candidates,
-            Gap = gap,
-            SupportCount = supportCount,
-            StepsTaken = msgCount,
-            Label = label ?? (gap < 0.3 && supportCount < 2 ? "escalate" : "report"),
-            EscalationReason = reason ?? (gap < 0.3 && supportCount < 2
-                ? $"low confidence (gap={gap:F2}, support={supportCount})" : null),
-            L1Response = text,
-            ToolCalls = toolCalls,
-        };
-    }
-
-    private async Task<(bool IsAdequate, string Reason)> JudgeResponseQualityAsync(
-        string originalMessage, string response, CancellationToken ct)
-    {
-        // #8 SEE: self-evaluation — use a non-interpolated prompt to avoid
-        // brace-escaping issues with JSON content.
-        var safeResponse = JsonSerializer.Serialize(response);
-        var seePrompt = "Rate your OWN response above on a scale of 1-5.\n"
-            + "Respond with ONLY valid JSON like: {\"adequate\": true, \"reason\": \"...\", \"self_score\": 4}\n\n"
-            + "Criteria (all must be true for adequate=true):\n"
-            + "1. Directly answers the user's core question\n"
-            + "2. Does NOT refuse or say \"unable to\"\n"
-            + "3. Contains specific information (data, facts, steps)\n"
-            + "4. If real-time/local data is needed, tools should have been called\n\n"
-            + "Your response to evaluate: " + safeResponse;
-
-        try
-        {
-            // Reuse the existing session — no separate judge invocation
-            var judgeSession = await _agent.CreateSessionAsync(ct).ConfigureAwait(false);
-            var judgeResult = await _agent.RunAsync(
-                [new ChatMessage(ChatRole.User, seePrompt)], judgeSession,
-                cancellationToken: ct).ConfigureAwait(false);
-            var judgeText = judgeResult.Messages?.LastOrDefault()?.Text ?? "";
-
-            using var doc = JsonDocument.Parse(judgeText);
-            var adequate = doc.RootElement.GetProperty("adequate").GetBoolean();
-            var reason = doc.RootElement.GetProperty("reason").GetString() ?? "";
-            var selfScore = doc.RootElement.TryGetProperty("self_score", out var s) ? s.GetInt32() : 3;
-
-            // #7 EDRM: estimate entropy from response, combine with self_score
-            var entropy = EstimateResponseEntropy(response);
-            if (entropy > 0.6 && selfScore < 3)
-                adequate = false; // high entropy + low confidence → escalate
-
-            return (adequate, reason);
-        }
-        catch
-        {
-            return (true, "self-eval failed, assume adequate");
-        }
-    }
-
-    /// <summary>#7 EDRM: heuristic entropy from response — hedging density + length variance.</summary>
-    private static double EstimateResponseEntropy(string text)
-    {
-        if (string.IsNullOrWhiteSpace(text) || text.Length < 10) return 0;
-        var lower = text.ToLowerInvariant();
-        var hedgeWords = new[] { "maybe", "perhaps", "probably", "possibly", "might", "could be",
-            "不确定", "可能", "也许", "大概", "估计", "似乎", "推测" };
-        var hedgeCount = hedgeWords.Count(w => lower.Contains(w));
-        var hedgeDensity = (double)hedgeCount / Math.Max(1, text.Length / 50);
-
-        // Sentence-length variance: high variance = mixed confidence
-        var sentences = text.Split('.', '!', '?', '。', '！', '？');
-        var avgLen = sentences.Average(s => (double)s.Length);
-        var variance = sentences.Average(s => Math.Pow(s.Length - avgLen, 2));
-        var normVar = Math.Min(1, variance / 1000);
-
-        return Math.Min(1, hedgeDensity * 0.4 + normVar * 0.6);
-    }
-
-    /// <summary>#2 UCCI: calibrated uncertainty from entropy + gap + support.</summary>
-    private static double CalibrateUncertainty(double entropy, double gap, int support)
-    {
-        // Simple isotonic-style calibration: combine three signals with learned weights
-        var eNorm = entropy;
-        var gNorm = Math.Max(0, 1.0 - gap);          // low gap = high uncertainty
-        var sNorm = Math.Max(0, 1.0 - support / 5.0); // low support = high uncertainty
-        return Math.Min(1, 0.4 * eNorm + 0.35 * gNorm + 0.25 * sNorm);
-    }
-
-    /// <summary>#6 Bayesian: cost-aware value of information for routing.</summary>
-    private static double EstimateValueOfInformation(string message, string response, double entropy)
-    {
-        // VoI = expected improvement from consulting L2 vs cost of L2 call
-        var taskComplexity = Math.Min(1, message.Length / 500.0);
-        var responseQuality = 1.0 - entropy;
-        var improvementPotential = Math.Max(0, 1.0 - responseQuality) * taskComplexity;
-        // Normalize: VoI > 0.5 means worth routing to L2
-        return improvementPotential;
-    }
-
     public async Task WarmUpAsync(CancellationToken ct = default)
     {
+        // 本地嵌入模型懒加载（仅在需要时触发，不阻塞 UI）
         if (_localEmbedder?.Available == false)
             _ = _localEmbedder.Dim;
 
-        try
-        {
-            using var warmCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            warmCts.CancelAfter(TimeSpan.FromSeconds(5));
-            using var http = _httpFactory?.CreateClient("llm");
-            if (http != null)
-            {
-                using var req = new HttpRequestMessage(HttpMethod.Options, "https://api.deepseek.com/v1/chat/completions");
-                _ = await http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, warmCts.Token)
-                    .ConfigureAwait(false);
-            }
-        }
-        catch { }
+        await Task.CompletedTask.ConfigureAwait(false);
     }
 
     /// <summary>F14: Check safety block flag and replace output if unsafe.</summary>
@@ -556,8 +475,6 @@ public sealed class ChatAgent
 
         var safeOriginal = JsonSerializer.Serialize(originalMessage);
         var stage1Prompt = $"""
-            你的回答存在以下问题，请修正：
-            - 如果问题需要工具，调用工具获取真实数据
             - 不要拒绝、猜测或编造
             - 确保回答完整（不含占位符）
 
@@ -588,7 +505,7 @@ public sealed class ChatAgent
         }
         catch { }
 
-        return $"无法完成请求。问题超出了当前能力范围：需要获取实时数据但工具调用未成功。请稍后重试或简化您的请求。";
+        return text;
     }
 
     private async Task<AgentSession> CreateAgentSessionFromHandleAsync(ISessionHandle handle, CancellationToken ct)

@@ -42,7 +42,7 @@ public sealed class L4DeepSearchProvider : AIContextProvider
             var lines = new List<string> { "## L4 — Deep Search\n<memory>" };
             var totalLen = lines[0].Length;
 
-            await foreach (var (drawer, score) in _store.SemanticSearchAsync(queryVec, MaxDrawers, wing, ct).ConfigureAwait(false))
+            await foreach (var (drawer, score) in _store.SemanticSearchAsync(queryVec, MaxDrawers, wing).ConfigureAwait(false))
             {
                 // F9: confidence floor — skip low-similarity results
                 if (score < MinSimilarity) continue;
