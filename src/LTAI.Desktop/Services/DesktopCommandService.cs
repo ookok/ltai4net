@@ -69,7 +69,7 @@ public sealed class DesktopCommandService
     {
         if (string.IsNullOrWhiteSpace(args) || args == "list")
         {
-            var mcp = App.Services?.GetService(typeof(LTAI.Agent.Mcp.McpClientFactory));
+            var mcp = App.Ltais?.Services.GetService(typeof(LTAI.Agent.Mcp.McpClientFactory));
             return mcp != null ? "✅ MCP 客户端已就绪" : "⚠️ MCP 未配置。请在 appsettings.json 的 LTAI:Mcp:Servers 中配置";
         }
         return "用法: /mcp list|status";

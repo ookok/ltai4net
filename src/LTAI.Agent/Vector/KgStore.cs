@@ -27,6 +27,7 @@ using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Caching.Memory;
 using LTAI.Agent.Indexing;
 using LTAI.Core.Storage;
+using TurboQuant.Core.Packing;
 
 namespace LTAI.Agent.Vector;
 
@@ -1004,19 +1005,19 @@ public sealed partial class KgStore : IDisposable
     }
 
     // ═══════════════════════════════════════════
-    //  Vector Search (in-memory cosine similarity)
-    //  384-dim multilingual MiniLM embedding stored as BLOB (1536 bytes).
+    //  Vector Search (TurboQuant 4-bit compressed, in-memory HNSW)
+    //  384-dim multilingual MiniLM embedding stored as BLOB (192 bytes).
     //  Linear scan is fast enough for ≤100K nodes.
     // ═══════════════════════════════════════════
 
-    /// <summary>Insert or update a vector embedding for a node.</summary>
+    /// <summary>Insert or update a vector embedding for a node (TurboQuant 4-bit compressed).</summary>
     public async Task InsertVectorAsync(long nodeId, float[] embedding)
     {
-        if (embedding.Length != 384)
-            throw new ArgumentException($"MiniLM requires 384-dim vectors, got {embedding.Length}");
+        if (embedding.Length != VectorQuantizer.Dim)
+            throw new ArgumentException($"Embedder requires {VectorQuantizer.Dim}-dim vectors, got {embedding.Length}");
 
-        var blob = new byte[embedding.Length * 4];
-        Buffer.BlockCopy(embedding, 0, blob, 0, blob.Length);
+        var packed = VectorQuantizer.Quantize(embedding);
+        var blob = packed.ToBytes();
 
         await WriteLockVoidAsync(SQL_INSERT_VEC, cmd =>
         {
@@ -1027,7 +1028,7 @@ public sealed partial class KgStore : IDisposable
         _hnswLock.EnterWriteLock();
         try
         {
-            _hnsw.Insert(embedding);
+            _hnsw.InsertPacked(packed);
             _hnswNodeIds.Add(nodeId);
         }
         finally { _hnswLock.ExitWriteLock(); }
@@ -1035,16 +1036,16 @@ public sealed partial class KgStore : IDisposable
     }
 
     /// <summary>
-    /// Vector similarity search by cosine distance.
-    /// Uses HNSW for approximate nearest neighbor search.
+    /// Vector similarity search by cosine distance (TurboQuant 4-bit compressed).
+    /// Uses HNSW for approximate nearest neighbor search with packed vectors.
     /// A <see cref="_hnswNodeIds"/> list maps HNSW position → node_id to avoid
     /// the O(n) VecNodes rowid lookup (which was broken — rowid ≠ HNSW position).
     /// </summary>
     public async Task<List<(long nodeId, float distance)>> SearchVector(float[] query, int topN = 30, string? kindFilter = null)
     {
         ThrowIfDisposed();
-        if (query.Length != 384)
-            throw new ArgumentException($"MiniLM requires 384-dim vectors, got {query.Length}");
+        if (query.Length != VectorQuantizer.Dim)
+            throw new ArgumentException($"Embedder requires {VectorQuantizer.Dim}-dim vectors, got {query.Length}");
 
         // HNSW approximate search (read lock)
         List<(int idx, float dist)> hnswResults;
@@ -1201,7 +1202,7 @@ public sealed partial class KgStore : IDisposable
                 FROM Nodes n WHERE n.id = new.node_id;
             END;
 
-            -- Vector embeddings (BLOB: 384 float32 = 1536 bytes, MiniLM multilingual)
+            -- Vector embeddings (BLOB: TurboQuant 4-bit compressed, 384d = 192 bytes, MiniLM multilingual)
             CREATE TABLE IF NOT EXISTS VecNodes (
                 node_id   INTEGER PRIMARY KEY REFERENCES Nodes(id) ON DELETE CASCADE,
                 vec       BLOB NOT NULL,
@@ -1382,31 +1383,41 @@ public sealed partial class KgStore : IDisposable
     //  HNSW index rebuild from persisted vectors
     // ═══════════════════════════════════════════
 
-    /// <summary>Rebuild the HNSW index + nodeId mapping from all vectors in VecNodes.</summary>
+    /// <summary>Rebuild the HNSW index + nodeId mapping from all TurboQuant-compressed vectors in VecNodes.</summary>
     public async Task RebuildCentroidsAsync()
     {
         ThrowIfDisposed();
-        var nodeIds = new List<long>();
-        var vectors = new List<float[]>();
+        _hnswLock.EnterWriteLock();
+        try
+        {
+            _hnswNodeIds.Clear();
+            _hnsw.Rebuild([]); // clear HNSW
+        }
+        finally { _hnswLock.ExitWriteLock(); }
+
+        var batch = new List<(long nodeId, PackedVector packed)>();
         using (var rdr = _reader.CreateCommand())
         {
             rdr.CommandText = "SELECT node_id, vec FROM VecNodes;";
             using var reader = await rdr.ExecuteReaderAsync().ConfigureAwait(false);
             while (reader.Read())
             {
-                nodeIds.Add(reader.GetInt64(0));
+                var nid = reader.GetInt64(0);
                 var blob = (byte[])reader["vec"];
-                var vec = new float[384];
-                Buffer.BlockCopy(blob, 0, vec, 0, blob.Length);
-                vectors.Add(vec);
+                var packed = PackedVector.FromBytes(blob);
+                batch.Add((nid, packed));
             }
         }
+
         _hnswLock.EnterWriteLock();
         try
         {
-            _hnsw.Rebuild(vectors.Select(v => (ReadOnlyMemory<float>)v));
-            _hnswNodeIds.Clear();
-            _hnswNodeIds.AddRange(nodeIds);
+            _hnswNodeIds.Capacity = batch.Count;
+            foreach (var (nid, packed) in batch)
+            {
+                _hnsw.InsertPacked(packed);
+                _hnswNodeIds.Add(nid);
+            }
         }
         finally { _hnswLock.ExitWriteLock(); }
     }

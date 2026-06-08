@@ -116,6 +116,6 @@ public sealed class MemoryView : UserControl
             if (VisualRoot is Window owner)
                 await dialog.ShowDialog(owner);
         }
-        catch (Exception) { }
+        catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"[MemoryView] {ex.Message}"); }
     }
 }

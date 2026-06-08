@@ -20,7 +20,7 @@ public sealed partial class ChatView : UserControl
 {
     private readonly LTAIService _svc;
     private readonly TextBox _input;
-    private readonly StackPanel _outputStack;
+    private readonly ListBox _outputStack;
     private readonly ScrollViewer _scroller;
     private const int MaxVisibleMessages = 80;
     private readonly StackPanel _footerStats;
@@ -51,7 +51,7 @@ public sealed partial class ChatView : UserControl
     {
         var handle = await _sessionManager.LoadSessionAsync(name);
         if (handle == null) return;
-        _outputStack.Children.Clear();
+        _outputStack.Items.Clear();
 
         // 子会话显示返回父会话按钮
         var sessions = _sessionManager.ListSessions();
@@ -70,7 +70,7 @@ public sealed partial class ChatView : UserControl
                 Cursor = new Cursor(StandardCursorType.Hand)
             };
             backBtn.Click += async (_, _) => await LoadSessionAsync(parentName);
-            _outputStack.Children.Add(new Border
+            _outputStack.Items.Add(new Border
             {
                 Background = LtaiTheme.Sbb(LtaiTheme.BgPanel),
                 BorderBrush = LtaiTheme.Sbb(LtaiTheme.AccentInfo),
@@ -104,7 +104,7 @@ public sealed partial class ChatView : UserControl
         if (_sessionManager.CurrentHandle != null)
             await _sessionManager.SaveSessionAsync().ConfigureAwait(false);
         _sessionManager.NewSession();
-        _outputStack.Children.Clear();
+        _outputStack.Items.Clear();
         _turns = 0;
         _tokens = 0;
         RefreshStats();
@@ -132,8 +132,7 @@ public sealed partial class ChatView : UserControl
         _svc = svc;
         _sessionManager = sessionManager ?? new SessionManager();
         _toolRenderers = LTAI.Desktop.ToolRendering.DefaultRenderers.Create();
-        _snippetStore = App.Services?.GetService(typeof(LTAI.Agent.Snippets.SnippetStore))
-            as LTAI.Agent.Snippets.SnippetStore;
+        _snippetStore = svc.Services.GetService(typeof(LTAI.Agent.Snippets.SnippetStore)) as LTAI.Agent.Snippets.SnippetStore;
         SetupQuestionHandler();
 
         // D4: ViewModel-driven command wiring — if a ViewModel is provided,
@@ -247,8 +246,13 @@ public sealed partial class ChatView : UserControl
         DockPanel.SetDock(footerBorder, Dock.Bottom);
         root.Children.Add(footerBorder);
 
-        // ── Messages area (virtualized via prune) ──
-        _outputStack = new StackPanel { Spacing = 8 };
+        _outputStack = new ListBox
+        {
+            Background = null!,
+            BorderThickness = new(0),
+        };
+        _outputStack.Items.Clear();
+        _outputStack.SelectionMode = SelectionMode.Single;
         _scroller = new ScrollViewer { Content = _outputStack };
         root.Children.Add(_scroller);
 
@@ -295,8 +299,7 @@ public sealed partial class ChatView : UserControl
             LTAI.Agent.Tools.SubagentTools.OnSubagentComplete -= OnSubagentComplete;
             if (_questionHandler != null)
             {
-                var qs = App.Services?.GetService(typeof(LTAI.Agent.Tools.QuestionService))
-                    as LTAI.Agent.Tools.QuestionService;
+                var qs = _svc.Services.GetService(typeof(LTAI.Agent.Tools.QuestionService)) as LTAI.Agent.Tools.QuestionService;
                 if (qs != null) qs.QuestionPosted -= _questionHandler;
             }
             if (_vm != null)
@@ -863,7 +866,7 @@ public sealed partial class ChatView : UserControl
             TextWrapping = TextWrapping.Wrap
         };
         b.Child = stb;
-        _outputStack.Children.Add(b);
+        _outputStack.Items.Add(b);
         PruneOutputStack();
         _scroller.ScrollToEnd();
     }
@@ -872,8 +875,8 @@ public sealed partial class ChatView : UserControl
     {
         try
         {
-            var cg = App.Services?.GetService(typeof(LTAI.Agent.Vector.CgGraph)) as LTAI.Agent.Vector.CgGraph;
-            var kb = App.Services?.GetService(typeof(LTAI.Agent.Vector.KbGraph)) as LTAI.Agent.Vector.KbGraph;
+            var cg = _svc.Services.GetService(typeof(LTAI.Agent.Vector.CgGraph)) as LTAI.Agent.Vector.CgGraph;
+            var kb = _svc.Services.GetService(typeof(LTAI.Agent.Vector.KbGraph)) as LTAI.Agent.Vector.KbGraph;
             var msgs = new List<string>();
             if (cg != null)
             {
@@ -898,8 +901,8 @@ public sealed partial class ChatView : UserControl
     {
         try
         {
-            var cg = App.Services?.GetService(typeof(LTAI.Agent.Vector.CgGraph)) as LTAI.Agent.Vector.CgGraph;
-            var kb = App.Services?.GetService(typeof(LTAI.Agent.Vector.KbGraph)) as LTAI.Agent.Vector.KbGraph;
+            var cg = _svc.Services.GetService(typeof(LTAI.Agent.Vector.CgGraph)) as LTAI.Agent.Vector.CgGraph;
+            var kb = _svc.Services.GetService(typeof(LTAI.Agent.Vector.KbGraph)) as LTAI.Agent.Vector.KbGraph;
             var parts = new List<string>();
 
             if (cg != null)
@@ -927,14 +930,7 @@ public sealed partial class ChatView : UserControl
         }
     }
 
-    private void PruneOutputStack()
-    {
-        if (_outputStack.Children.Count > MaxVisibleMessages)
-        {
-            int remove = _outputStack.Children.Count - MaxVisibleMessages;
-            _outputStack.Children.RemoveRange(0, remove);
-        }
-    }
+    private void PruneOutputStack() { }
 
     private void RefreshStats()
     {
@@ -1062,8 +1058,7 @@ public sealed partial class ChatView : UserControl
 
     private void SetupQuestionHandler()
     {
-        var qs = App.Services?.GetService(typeof(LTAI.Agent.Tools.QuestionService))
-            as LTAI.Agent.Tools.QuestionService;
+        var qs = _svc.Services.GetService(typeof(LTAI.Agent.Tools.QuestionService)) as LTAI.Agent.Tools.QuestionService;
         if (qs == null) return;
 
         _questionHandler = post =>

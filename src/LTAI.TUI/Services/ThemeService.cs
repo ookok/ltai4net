@@ -34,7 +34,6 @@ public static class ThemeService
         }
         catch { /* ignore corrupt prefs */ }
 
-        // Env var overrides persisted value
         var env = Environment.GetEnvironmentVariable("LTAI_THEME");
         if (!string.IsNullOrEmpty(env))
             IsLight = string.Equals(env, "light", StringComparison.OrdinalIgnoreCase);
@@ -70,15 +69,53 @@ public static class ThemeService
             AnsiConsole.Background = Color.Default;
     }
 
-    public static Color Primary => IsLight ? Color.Blue : Color.Cyan;
-    public static Color Accent => IsLight ? Color.Teal : Color.Green;
-    public static Color Warning => Color.Yellow;
-    public static Color Error => Color.Red;
-    public static Color Muted => IsLight ? Color.Silver : Color.Grey;
-    public static Color Border => IsLight ? Color.Grey : Color.Grey42;
+    // ═══════════════════════════════════════════
+    //  Semantic Color Palette — Dark / Light
+    // ═══════════════════════════════════════════
 
-    public static Style PrimaryStyle => new(Primary);
-    public static Style AccentStyle => new(Accent);
-    public static Style MutedStyle => new(Muted);
-    public static Style BorderStyle => new(Border);
+    public static Color UserColor => IsLight ? Color.Blue : Color.Cyan;
+    public static Color AssistantColor => IsLight ? Color.Green : Color.Green;
+    public static Color ToolColor => IsLight ? Color.Navy : Color.Blue;
+    public static Color ErrorColor => Color.Red;
+    public static Color WarningColor => IsLight ? Color.Orange3 : Color.Yellow;
+    public static Color SystemColor => IsLight ? Color.Orange3 : Color.Yellow;
+    public static Color MutedColor => IsLight ? Color.Silver : Color.Grey;
+    public static Color BorderColor => IsLight ? Color.Grey : Color.Grey42;
+    public static Color AccentColor => IsLight ? Color.Teal : Color.Green;
+    public static Color PrimaryColor => IsLight ? Color.Blue : Color.Cyan;
+    public static Color CodeColor => IsLight ? Color.Grey : Color.Green;
+    public static Color SurfaceColor => IsLight ? Color.Default : Color.Default;
+    public static Color CodeBackgroundColor => IsLight ? Color.Default : Color.Default;
+
+    // ═══════════════════════════════════════════
+    //  Markup tag strings (for Spectre.Console markup interpolation)
+    // ═══════════════════════════════════════════
+
+    public static string UserTag => IsLight ? "blue" : "cyan";
+    public static string AssistantTag => IsLight ? "green" : "green";
+    public static string ToolTag => IsLight ? "navy" : "blue";
+    public static string ErrorTag => "red";
+    public static string WarningTag => IsLight ? "orange3" : "yellow";
+    public static string SystemTag => IsLight ? "orange3" : "yellow";
+    public static string MutedTag => IsLight ? "silver" : "grey";
+    public static string BorderTag => IsLight ? "grey" : "grey42";
+    public static string AccentTag => IsLight ? "teal" : "green";
+    public static string PrimaryTag => IsLight ? "blue" : "cyan";
+    public static string CodeTag => IsLight ? "grey" : "green";
+
+    // ═══════════════════════════════════════════
+    //  Legacy compatibility properties
+    // ═══════════════════════════════════════════
+
+    public static Color Primary => PrimaryColor;
+    public static Color Accent => AccentColor;
+    public static Color Warning => WarningColor;
+    public static Color Error => ErrorColor;
+    public static Color Muted => MutedColor;
+    public static Color Border => BorderColor;
+
+    public static Style PrimaryStyle => new(PrimaryColor);
+    public static Style AccentStyle => new(AccentColor);
+    public static Style MutedStyle => new(MutedColor);
+    public static Style BorderStyle => new(BorderColor);
 }

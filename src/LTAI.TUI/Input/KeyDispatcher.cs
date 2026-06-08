@@ -17,228 +17,82 @@ public enum InputState
     Cascade,
 }
 
-/// <summary>
-/// State-machine key dispatcher for the ChatLayout input loop.
-/// Routes every keystroke to the correct handler based on current state.
-/// </summary>
 public sealed class KeyDispatcher
 {
     private readonly ChatLayout _owner;
     public InputState State { get; private set; } = InputState.Normal;
 
+    private delegate Task<bool> KeyHandler(ConsoleKeyInfo key, CancellationToken ct);
+
+    private readonly Dictionary<(ConsoleKey, ConsoleModifiers), KeyHandler> _modTable = new();
+    private readonly Dictionary<ConsoleKey, KeyHandler> _keyTable = new();
+
     public KeyDispatcher(ChatLayout owner)
     {
         _owner = owner;
+        BuildHandlerTable();
     }
 
-    /// <summary>
-    /// Process one keystroke. Returns true to continue the input loop,
-    /// false to exit (quit).
-    /// </summary>
+    private void BuildHandlerTable()
+    {
+        _modTable[(ConsoleKey.Escape, 0)] = HandleEscape;
+        _modTable[(ConsoleKey.P, ConsoleModifiers.Control)] = (_, _) => { _owner._viewPickerActive = true; return Task.FromResult(true); };
+        _modTable[(ConsoleKey.C, ConsoleModifiers.Control | ConsoleModifiers.Shift)] = HandleCopyCodeBlock;
+        _modTable[(ConsoleKey.E, ConsoleModifiers.Control)] = HandleToggleReasoning;
+        _modTable[(ConsoleKey.L, ConsoleModifiers.Control)] = (_, _) => { _owner._history.Clear(); _owner._toolCalls.Clear(); _owner._scrollOffset = 0; _owner.InvalidateRendered(); return Task.FromResult(true); };
+        _modTable[(ConsoleKey.F, ConsoleModifiers.Control)] = HandleInlineSearch;
+        _modTable[(ConsoleKey.V, ConsoleModifiers.Control)] = HandlePaste;
+        _modTable[(ConsoleKey.UpArrow, ConsoleModifiers.Control)] = HandleHistoryUp;
+        _modTable[(ConsoleKey.DownArrow, ConsoleModifiers.Control)] = HandleHistoryDown;
+        _modTable[(ConsoleKey.Oem2, ConsoleModifiers.Alt | ConsoleModifiers.Shift)] = HandleCommandPalette;
+
+        _keyTable[ConsoleKey.Enter] = HandleEnter;
+        _keyTable[ConsoleKey.Backspace] = HandleBackspace;
+        _keyTable[ConsoleKey.Delete] = HandleDelete;
+        _keyTable[ConsoleKey.Home] = (_, _) => { _owner._cursorCol = 0; return Task.FromResult(true); };
+        _keyTable[ConsoleKey.End] = (_, _) => { _owner._cursorCol = _owner._inputLines[_owner._cursorLine].Length; return Task.FromResult(true); };
+        _keyTable[ConsoleKey.UpArrow] = HandleArrowUp;
+        _keyTable[ConsoleKey.DownArrow] = HandleArrowDown;
+        _keyTable[ConsoleKey.LeftArrow] = (_, _) => { if (_owner._cursorCol > 0) _owner._cursorCol--; return Task.FromResult(true); };
+        _keyTable[ConsoleKey.RightArrow] = (_, _) => { if (_owner._cursorCol < _owner._inputLines[_owner._cursorLine].Length) _owner._cursorCol++; return Task.FromResult(true); };
+        _keyTable[ConsoleKey.PageUp] = HandlePageUp;
+        _keyTable[ConsoleKey.PageDown] = HandlePageDown;
+    }
+
     public async Task<bool> HandleKeyAsync(ConsoleKeyInfo key, CancellationToken ct)
     {
-        // Cascade menu has highest priority
         if (SlashCommands.InCascadeMenu)
             return HandleCascade(key, ct);
+        if (_owner._viewPickerActive)
+            return HandleViewPicker(key, ct);
 
-        // Picker state
+        // Pending confirmation modal
+        if (ChatLayout.PendingConfirmTcs is { Task.IsCompleted: false } tcs)
+        {
+            if (ConfirmationModal.HandleConfirmKey(key, out var choice))
+                tcs.TrySetResult(choice);
+            return true;
+        }
+
         if (State == InputState.Picker)
             return await HandlePickerAsync(key, ct);
 
-        // Normal / default state
-        return await HandleNormalAsync(key, ct);
-    }
-
-    // ═══════════════════════════════════════════════
-    //  Normal state
-    // ═══════════════════════════════════════════════
-
-    private async Task<bool> HandleNormalAsync(ConsoleKeyInfo key, CancellationToken ct)
-    {
-        // View switch (empty input only)
+        // 视图切换快捷键（空输入时）
         if (_owner.IsInputEmpty() && "013456789".Contains(key.KeyChar))
         {
             _owner._quickNav = key.KeyChar;
             return true;
         }
 
-        // Esc → cancel AI or quit
-        if (key.Key == ConsoleKey.Escape || key.KeyChar == 'q')
-        {
-            if (_owner._processing) { _owner._responseCts?.Cancel(); return true; }
-            return false;
-        }
+        // Modifier-key combos
+        if (key.Modifiers != 0 && _modTable.TryGetValue((key.Key, key.Modifiers), out var modHandler))
+            return await modHandler(key, ct);
 
-        // Ctrl+Shift+C → copy latest code block to clipboard
-        if (key.Key == ConsoleKey.C && Mods(key, ConsoleModifiers.Control | ConsoleModifiers.Shift))
-        {
-            var block = Rendering.CodeBlockBuffer.PeekLatest();
-            if (block != null)
-            {
-                try
-                {
-                    TextCopy.ClipboardService.SetText(block.Value.code);
-                    _owner._statusMessage = $"[green]已复制 {block.Value.lang ?? "code"} 块 ({block.Value.code.Split('\n').Length} 行)[/]";
-                }
-                catch { _owner._statusMessage = "[red]复制失败[/]"; }
-            }
-            else
-            {
-                _owner._statusMessage = "[yellow]没有可复制的代码块[/]";
-            }
-            return true;
-        }
+        // Plain key (no modifier)
+        if (key.Modifiers == 0 && _keyTable.TryGetValue(key.Key, out var keyHandler))
+            return await keyHandler(key, ct);
 
-        // Ctrl+E → 切换最新 AI 消息的推理过程展开/折叠
-        if (key.Key == ConsoleKey.E && Mods(key, ConsoleModifiers.Control))
-        {
-            for (int i = _owner._history.Count - 1; i >= 0; i--)
-            {
-                if (_owner._history[i].role is "assistant" or "ai")
-                {
-                    if (!string.IsNullOrEmpty(_owner._history[i].reasoning))
-                    {
-                        if (_owner._expandedMessages.Contains(i))
-                            _owner._expandedMessages.Remove(i);
-                        else
-                            _owner._expandedMessages.Add(i);
-                        _owner.InvalidateRendered();
-                    }
-                    break;
-                }
-            }
-            return true;
-        }
-
-        // Ctrl+L → clear
-        if (key.Key == ConsoleKey.L && Mods(key, ConsoleModifiers.Control))
-        {
-            _owner._history.Clear();
-            _owner._toolCalls.Clear();
-            _owner._scrollOffset = 0;
-            _owner.InvalidateRendered();
-            return true;
-        }
-
-        // Alt+Shift+/ → Command Palette (context-aware quick prompt)
-        if (key.Key == ConsoleKey.Oem2 && Mods(key, ConsoleModifiers.Alt | ConsoleModifiers.Shift))
-        {
-            AnsiConsole.Markup("[bold yellow]> [/]");
-            var paletteInput = Console.ReadLine() ?? "";
-            if (!string.IsNullOrWhiteSpace(paletteInput))
-            {
-                var context = "";
-                var currentFile = _owner.CurrentFileForContext;
-                if (currentFile != null)
-                    context = $"[当前文件: {currentFile}]\n";
-                _owner.EnqueueUserMessage($"{context}[命令面板] {paletteInput}");
-            }
-            return true;
-        }
-
-        // Ctrl+F → inline search in current input
-        if (key.Key == ConsoleKey.F && Mods(key, ConsoleModifiers.Control))
-        {
-            try
-            {
-                AnsiConsole.Markup("[bold yellow]🔍 搜索: [/]");
-                var searchTerm = Console.ReadLine() ?? "";
-                if (string.IsNullOrWhiteSpace(searchTerm)) return true;
-
-                var fullText = string.Join("\n", _owner._inputLines);
-                var idx = fullText.IndexOf(searchTerm, StringComparison.OrdinalIgnoreCase);
-                if (idx < 0)
-                {
-                    _owner._statusMessage = $"[yellow]未找到 '{searchTerm.EscapeMarkup()}'[/]";
-                    return true;
-                }
-
-                // Find line and column
-                var lineIdx = 0;
-                var charCount = 0;
-                for (int i = 0; i < _owner._inputLines.Count; i++)
-                {
-                    if (charCount + _owner._inputLines[i].Length + 1 > idx)
-                    {
-                        _owner._cursorLine = i;
-                        _owner._cursorCol = idx - charCount;
-                        break;
-                    }
-                    charCount += _owner._inputLines[i].Length + 1;
-                    lineIdx++;
-                }
-                _owner._statusMessage = $"[green]找到 '{searchTerm.EscapeMarkup()}' (行 {_owner._cursorLine + 1}, 列 {_owner._cursorCol + 1})[/]";
-            }
-            catch { }
-            return true;
-        }
-
-        // Ctrl+V → paste (with preview if > 3 lines)
-        if (key.Key == ConsoleKey.V && Mods(key, ConsoleModifiers.Control))
-        {
-            try
-            {
-                var clip = TextCopy.ClipboardService.GetText() ?? "";
-                var clipLines = clip.Split('\n');
-                if (clipLines.Length > 3)
-                {
-                    AnsiConsole.Clear();
-                    AnsiConsole.Write(new Rule("[bold yellow]📋 粘贴预览[/]"));
-                    var preview = string.Join("\n", clipLines.Take(5));
-                    if (clipLines.Length > 5) preview += $"\n[grey]... 还有 {clipLines.Length - 5} 行[/]";
-                    AnsiConsole.Write(new Panel(new Markup(preview.EscapeMarkup()))
-                        .Border(BoxBorder.Rounded)
-                        .Header($"[bold] {clip.Length} 字符, {clipLines.Length} 行 [/]")
-                        .Expand());
-                    AnsiConsole.Markup("\n[yellow]确认粘贴? (Enter=粘贴, Esc=取消): [/]");
-                    var confirm = Console.ReadKey(true);
-                    if (confirm.Key == ConsoleKey.Escape) return true;
-                }
-                foreach (var cl in clipLines)
-                    _owner._inputLines.Insert(_owner._cursorLine++, cl);
-                _owner._cursorLine--;
-                _owner._cursorCol = _owner._inputLines[_owner._cursorLine].Length;
-                while (_owner._inputLines.Count > ChatLayout.MaxInputLines)
-                    _owner._inputLines.RemoveAt(0);
-            }
-            catch { }
-            return true;
-        }
-
-        // Ctrl+↑ → history up
-        if (key.Key == ConsoleKey.UpArrow && Mods(key, ConsoleModifiers.Control))
-        {
-            if (_owner._inputHistory.Count > 0)
-            {
-                if (_owner._historyIndex < 0)
-                    _owner._historyIndex = _owner._inputHistory.Count - 1;
-                else if (_owner._historyIndex > 0)
-                    _owner._historyIndex--;
-                _owner.ReplaceInputLine(_owner._inputHistory[_owner._historyIndex]);
-            }
-            return true;
-        }
-
-        // Ctrl+↓ → history down
-        if (key.Key == ConsoleKey.DownArrow && Mods(key, ConsoleModifiers.Control))
-        {
-            if (_owner._historyIndex >= 0)
-            {
-                _owner._historyIndex++;
-                if (_owner._historyIndex >= _owner._inputHistory.Count)
-                {
-                    _owner._historyIndex = -1;
-                    _owner.ClearInput();
-                }
-                else
-                {
-                    _owner.ReplaceInputLine(_owner._inputHistory[_owner._historyIndex]);
-                }
-            }
-            return true;
-        }
-
-        // Shift+↑↓ → scroll output
+        // Shift+↑↓ → scroll
         if (Mods(key, ConsoleModifiers.Shift))
         {
             if (key.Key == ConsoleKey.UpArrow && _owner._scrollOffset < _owner._history.Count - 1)
@@ -248,73 +102,225 @@ public sealed class KeyDispatcher
             return true;
         }
 
-        // PgUp/PgDn → fast scroll
-        if (key.Key == ConsoleKey.PageUp && _owner._scrollOffset < _owner._history.Count - 1)
+        // Inline search term capture
+        if (_owner._pendingSearchTerm != null)
         {
-            _owner._scrollOffset = Math.Min(_owner._scrollOffset + 3, Math.Max(0, _owner._history.Count - 1));
-            return true;
-        }
-        if (key.Key == ConsoleKey.PageDown)
-        {
-            _owner._scrollOffset = Math.Max(0, _owner._scrollOffset - 3);
-            return true;
-        }
-
-        // ↑↓ → cursor move in input
-        if (key.Key == ConsoleKey.UpArrow)
-        {
-            if (_owner._cursorLine > 0)
+            if (key.Key == ConsoleKey.Escape)
             {
-                _owner._cursorLine--;
-                _owner._cursorCol = Math.Min(_owner._cursorCol, _owner._inputLines[_owner._cursorLine].Length);
+                _owner._pendingSearchTerm = null;
+                _owner._statusMessage = null;
+            }
+            else if (key.Key == ConsoleKey.Enter)
+            {
+                var searchTerm = _owner._pendingSearchTerm;
+                _owner._pendingSearchTerm = null;
+                if (!string.IsNullOrWhiteSpace(searchTerm))
+                    PerformSearch(searchTerm);
+            }
+            else if (key.Key == ConsoleKey.Backspace)
+            {
+                if (_owner._pendingSearchTerm.Length > 0)
+                    _owner._pendingSearchTerm = _owner._pendingSearchTerm[..^1];
+                _owner._statusMessage = $"[yellow]🔍 搜索: {_owner._pendingSearchTerm}|[/]";
+            }
+            else if (!char.IsControl(key.KeyChar))
+            {
+                _owner._pendingSearchTerm += key.KeyChar;
+                _owner._statusMessage = $"[yellow]🔍 搜索: {_owner._pendingSearchTerm}|[/]";
             }
             return true;
         }
-        if (key.Key == ConsoleKey.DownArrow)
-        {
-            if (_owner._cursorLine < _owner._inputLines.Count - 1)
-            {
-                _owner._cursorLine++;
-                _owner._cursorCol = Math.Min(_owner._cursorCol, _owner._inputLines[_owner._cursorLine].Length);
-            }
-            return true;
-        }
 
-        // ← → horizontal
-        if (key.Key == ConsoleKey.LeftArrow)
+        // Regular character input
+        if (!char.IsControl(key.KeyChar))
         {
-            if (_owner._cursorCol > 0) _owner._cursorCol--;
-            return true;
-        }
-        if (key.Key == ConsoleKey.RightArrow)
-        {
-            if (_owner._cursorCol < _owner._inputLines[_owner._cursorLine].Length) _owner._cursorCol++;
-            return true;
-        }
-
-        // Home / End
-        if (key.Key == ConsoleKey.Home) { _owner._cursorCol = 0; return true; }
-        if (key.Key == ConsoleKey.End) { _owner._cursorCol = _owner._inputLines[_owner._cursorLine].Length; return true; }
-
-        // Enter → newline (max MaxInputLines)
-        if (key.Key == ConsoleKey.Enter && !Mods(key, ConsoleModifiers.Shift))
-        {
-            var line = _owner._inputLines[_owner._cursorLine];
-            var remainder = line[_owner._cursorCol..];
-            _owner._inputLines[_owner._cursorLine] = line[.._owner._cursorCol];
-            _owner._inputLines.Insert(_owner._cursorLine + 1, remainder);
-            _owner._cursorLine++;
-            _owner._cursorCol = 0;
+            _owner.InsertChar(key.KeyChar);
             if (_owner._inputLines.Count > ChatLayout.MaxInputLines)
             {
                 _owner._inputLines.RemoveRange(0, _owner._inputLines.Count - ChatLayout.MaxInputLines);
                 _owner._cursorLine = _owner._inputLines.Count - 1;
             }
-            return true;
+            _owner.CheckPickerTrigger();
         }
 
+        return true;
+    }
+
+    // ═══════════════════════════════════════════════
+    //  Handler implementations
+    // ═══════════════════════════════════════════════
+
+    private Task<bool> HandleEscape(ConsoleKeyInfo key, CancellationToken ct)
+    {
+        if (_owner._processing) { _owner._responseCts?.Cancel(); return Task.FromResult(true); }
+        return Task.FromResult(false);
+    }
+
+    private Task<bool> HandleCopyCodeBlock(ConsoleKeyInfo key, CancellationToken ct)
+    {
+        var block = Rendering.CodeBlockBuffer.PeekLatest();
+        if (block != null)
+        {
+            try
+            {
+                TextCopy.ClipboardService.SetText(block.Value.code);
+                _owner._statusMessage = $"[green]已复制 {block.Value.lang ?? "code"} 块 ({block.Value.code.Split('\n').Length} 行)[/]";
+            }
+            catch { _owner._statusMessage = "[red]复制失败[/]"; }
+        }
+        else
+        {
+            _owner._statusMessage = "[yellow]没有可复制的代码块[/]";
+        }
+        return Task.FromResult(true);
+    }
+
+    private Task<bool> HandleToggleReasoning(ConsoleKeyInfo key, CancellationToken ct)
+    {
+        for (int i = _owner._history.Count - 1; i >= 0; i--)
+        {
+            if (_owner._history[i].role is "assistant" or "ai")
+            {
+                if (!string.IsNullOrEmpty(_owner._history[i].reasoning))
+                {
+                    if (_owner._expandedMessages.Contains(i))
+                        _owner._expandedMessages.Remove(i);
+                    else
+                        _owner._expandedMessages.Add(i);
+                    _owner.InvalidateRendered();
+                }
+                break;
+            }
+        }
+        return Task.FromResult(true);
+    }
+
+    private Task<bool> HandleCommandPalette(ConsoleKeyInfo key, CancellationToken ct)
+    {
+        // Set a flag and show prompt in status bar; next keystrokes capture input
+        _owner._pendingChatRequest = "command-palette";
+        _owner._statusMessage = "[yellow]⚡ 快速命令: |[/]";
+        return Task.FromResult(true);
+    }
+
+    private Task<bool> HandleInlineSearch(ConsoleKeyInfo key, CancellationToken ct)
+    {
+        // Show search prompt in status bar; next keystrokes capture search term
+        _owner._pendingSearchTerm = "";
+        _owner._statusMessage = "[yellow]🔍 搜索: |[/]";
+        return Task.FromResult(true);
+    }
+
+    private Task<bool> HandlePaste(ConsoleKeyInfo key, CancellationToken ct)
+    {
+        try
+        {
+            var clip = TextCopy.ClipboardService.GetText() ?? "";
+            var clipLines = clip.Split('\n');
+            foreach (var cl in clipLines)
+                _owner._inputLines.Insert(_owner._cursorLine++, cl);
+            _owner._cursorLine--;
+            _owner._cursorCol = _owner._inputLines[_owner._cursorLine].Length;
+            while (_owner._inputLines.Count > ChatLayout.MaxInputLines)
+                _owner._inputLines.RemoveAt(0);
+            _owner._statusMessage = $"[green]已粘贴 {clip.Length} 字符 ({clipLines.Length} 行)[/]";
+        }
+        catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"[KeyDispatcher] paste: {ex.Message}"); }
+        return Task.FromResult(true);
+    }
+
+    private Task<bool> HandleHistoryUp(ConsoleKeyInfo key, CancellationToken ct)
+    {
+        if (_owner._inputHistory.Count > 0)
+        {
+            if (_owner._historyIndex < 0)
+                _owner._historyIndex = _owner._inputHistory.Count - 1;
+            else if (_owner._historyIndex > 0)
+                _owner._historyIndex--;
+            _owner.ReplaceInputLine(_owner._inputHistory[_owner._historyIndex]);
+        }
+        return Task.FromResult(true);
+    }
+
+    private Task<bool> HandleHistoryDown(ConsoleKeyInfo key, CancellationToken ct)
+    {
+        if (_owner._historyIndex >= 0)
+        {
+            _owner._historyIndex++;
+            if (_owner._historyIndex >= _owner._inputHistory.Count)
+            {
+                _owner._historyIndex = -1;
+                _owner.ClearInput();
+            }
+            else
+            {
+                _owner.ReplaceInputLine(_owner._inputHistory[_owner._historyIndex]);
+            }
+        }
+        return Task.FromResult(true);
+    }
+
+    private void PerformSearch(string searchTerm)
+    {
+        var fullText = string.Join("\n", _owner._inputLines);
+        var idx = fullText.IndexOf(searchTerm, StringComparison.OrdinalIgnoreCase);
+        if (idx < 0)
+        {
+            _owner._statusMessage = $"[yellow]未找到 '{searchTerm.EscapeMarkup()}'[/]";
+            return;
+        }
+
+        var lineStart = 0;
+        for (int i = 0; i < _owner._inputLines.Count; i++)
+        {
+            if (lineStart + _owner._inputLines[i].Length >= idx)
+            {
+                _owner._cursorLine = i;
+                _owner._cursorCol = idx - lineStart;
+                _owner._statusMessage = $"[green]找到 '{searchTerm.EscapeMarkup()}' (行 {i + 1}, 列 {_owner._cursorCol + 1})[/]";
+                return;
+            }
+            lineStart += _owner._inputLines[i].Length + 1;
+        }
+    }
+
+    private Task<bool> HandleArrowUp(ConsoleKeyInfo key, CancellationToken ct)
+    {
+        if (_owner._cursorLine > 0)
+        {
+            _owner._cursorLine--;
+            _owner._cursorCol = Math.Min(_owner._cursorCol, _owner._inputLines[_owner._cursorLine].Length);
+        }
+        return Task.FromResult(true);
+    }
+
+    private Task<bool> HandleArrowDown(ConsoleKeyInfo key, CancellationToken ct)
+    {
+        if (_owner._cursorLine < _owner._inputLines.Count - 1)
+        {
+            _owner._cursorLine++;
+            _owner._cursorCol = Math.Min(_owner._cursorCol, _owner._inputLines[_owner._cursorLine].Length);
+        }
+        return Task.FromResult(true);
+    }
+
+    private Task<bool> HandlePageUp(ConsoleKeyInfo key, CancellationToken ct)
+    {
+        if (_owner._scrollOffset < _owner._history.Count - 1)
+            _owner._scrollOffset = Math.Min(_owner._scrollOffset + 3, Math.Max(0, _owner._history.Count - 1));
+        return Task.FromResult(true);
+    }
+
+    private Task<bool> HandlePageDown(ConsoleKeyInfo key, CancellationToken ct)
+    {
+        _owner._scrollOffset = Math.Max(0, _owner._scrollOffset - 3);
+        return Task.FromResult(true);
+    }
+
+    private async Task<bool> HandleEnter(ConsoleKeyInfo key, CancellationToken ct)
+    {
         // Shift+Enter → send
-        if (key.Key == ConsoleKey.Enter && Mods(key, ConsoleModifiers.Shift))
+        if (Mods(key, ConsoleModifiers.Shift))
         {
             var input = _owner.GetInputText().Trim();
             _owner.ClearInput();
@@ -343,43 +349,41 @@ public sealed class KeyDispatcher
             return true;
         }
 
-        // Backspace
-        if (key.Key == ConsoleKey.Backspace)
+        // Plain Enter → newline
+        var line = _owner._inputLines[_owner._cursorLine];
+        var remainder = line[_owner._cursorCol..];
+        _owner._inputLines[_owner._cursorLine] = line[.._owner._cursorCol];
+        _owner._inputLines.Insert(_owner._cursorLine + 1, remainder);
+        _owner._cursorLine++;
+        _owner._cursorCol = 0;
+        if (_owner._inputLines.Count > ChatLayout.MaxInputLines)
         {
-            _owner.BackspaceChar();
-            if (_owner._pickerActive && _owner._inputLines.Count == 1 && _owner._inputLines[0].Length <= 1)
-                _owner._pickerActive = false;
-            return true;
+            _owner._inputLines.RemoveRange(0, _owner._inputLines.Count - ChatLayout.MaxInputLines);
+            _owner._cursorLine = _owner._inputLines.Count - 1;
         }
-
-        // Delete
-        if (key.Key == ConsoleKey.Delete)
-        {
-            var line = _owner._inputLines[_owner._cursorLine];
-            if (_owner._cursorCol < line.Length)
-                _owner._inputLines[_owner._cursorLine] = line.Remove(_owner._cursorCol, 1);
-            else if (_owner._cursorLine < _owner._inputLines.Count - 1)
-            {
-                var nextLine = _owner._inputLines[_owner._cursorLine + 1];
-                _owner._inputLines[_owner._cursorLine] = line + nextLine;
-                _owner._inputLines.RemoveAt(_owner._cursorLine + 1);
-            }
-            return true;
-        }
-
-        // Typing
-        if (!char.IsControl(key.KeyChar))
-        {
-            _owner.InsertChar(key.KeyChar);
-            if (_owner._inputLines.Count > ChatLayout.MaxInputLines)
-            {
-                _owner._inputLines.RemoveRange(0, _owner._inputLines.Count - ChatLayout.MaxInputLines);
-                _owner._cursorLine = _owner._inputLines.Count - 1;
-            }
-            _owner.CheckPickerTrigger();
-        }
-
         return true;
+    }
+
+    private Task<bool> HandleBackspace(ConsoleKeyInfo key, CancellationToken ct)
+    {
+        _owner.BackspaceChar();
+        if (_owner._pickerActive && _owner._inputLines.Count == 1 && _owner._inputLines[0].Length <= 1)
+            _owner._pickerActive = false;
+        return Task.FromResult(true);
+    }
+
+    private Task<bool> HandleDelete(ConsoleKeyInfo key, CancellationToken ct)
+    {
+        var line = _owner._inputLines[_owner._cursorLine];
+        if (_owner._cursorCol < line.Length)
+            _owner._inputLines[_owner._cursorLine] = line.Remove(_owner._cursorCol, 1);
+        else if (_owner._cursorLine < _owner._inputLines.Count - 1)
+        {
+            var nextLine = _owner._inputLines[_owner._cursorLine + 1];
+            _owner._inputLines[_owner._cursorLine] = line + nextLine;
+            _owner._inputLines.RemoveAt(_owner._cursorLine + 1);
+        }
+        return Task.FromResult(true);
     }
 
     // ═══════════════════════════════════════════════
@@ -505,6 +509,49 @@ public sealed class KeyDispatcher
                 _owner._history[^1] = ("cmd", null, SlashCommands.BuildCascadeText(), null);
         }
         _owner.InvalidateRendered();
+        return true;
+    }
+
+    // ═══════════════════════════════════════════════
+    //  View switcher
+    // ═══════════════════════════════════════════════
+
+    private bool HandleViewPicker(ConsoleKeyInfo key, CancellationToken ct)
+    {
+        if (key.Key == ConsoleKey.Escape)
+        {
+            _owner._viewPickerActive = false;
+            return true;
+        }
+
+        if (key.Key == ConsoleKey.UpArrow)
+        {
+            _owner._viewPickerSelected = Math.Max(0, _owner._viewPickerSelected - 1);
+            return true;
+        }
+
+        if (key.Key == ConsoleKey.DownArrow)
+        {
+            _owner._viewPickerSelected = Math.Min(ChatLayout.ViewOptions.Length - 1, _owner._viewPickerSelected + 1);
+            return true;
+        }
+
+        if (key.Key == ConsoleKey.Enter)
+        {
+            var idx = Math.Clamp(_owner._viewPickerSelected, 0, ChatLayout.ViewOptions.Length - 1);
+            _owner._quickNav = ChatLayout.ViewOptions[idx].key[0];
+            _owner._viewPickerActive = false;
+            return true;
+        }
+
+        // Number keys jump directly
+        if ("0123456789".Contains(key.KeyChar))
+        {
+            _owner._quickNav = key.KeyChar;
+            _owner._viewPickerActive = false;
+            return true;
+        }
+
         return true;
     }
 

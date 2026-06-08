@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using LTAI.Core.I18n;
 using LTAI.Core.Rendering;
+using LTAI.TUI.Services;
 using Spectre.Console;
 using Spectre.Console.Rendering;
 
@@ -22,17 +23,21 @@ public sealed class MessagePanelRenderer
     private static readonly ConcurrentDictionary<string, Panel> _panelCache = new();
     private static readonly ConcurrentQueue<string> _panelCacheOrder = new();
 
-    public Panel BuildMessagePanel(string role, string rawContent, int historyIndex = -1,
+    // Render cache for MdToPanelContent results
+    private static readonly ConcurrentDictionary<int, string> _renderCache = new();
+    private const int MaxRenderCache = 256;
+
+    public IRenderable BuildMessagePanel(string role, string rawContent, int historyIndex = -1,
         string? reasoning = null, HashSet<int>? expandedMessages = null)
     {
-        var (color, border, header) = (role.ToLowerInvariant()) switch
+        var tag = (role.ToLowerInvariant()) switch
         {
-            "user" => (Color.Cyan, BoxBorder.Rounded, $"[bold cyan] 🧑 {Locale.Get("You")} [/]"),
-            "assistant" or "ai" => (Color.Green, BoxBorder.Double, $"[bold green] 🤖 {Locale.Get("AI")} [/]"),
-            "tool" => (Color.Blue, BoxBorder.Square, $"[bold blue] 🔧 {Locale.Get("Tool")} [/]"),
-            "error" => (Color.Red, BoxBorder.Ascii, $"[bold red] ⛔ {Locale.Get("Error")} [/]"),
-            "cmd" or "system" => (Color.Yellow, BoxBorder.Square, $"[bold yellow] ⚙️ {Locale.Get("System")} [/]"),
-            _ => (Color.Grey, BoxBorder.None, "[bold grey] ℹ️ [/]"),
+            "user" => ThemeService.UserTag,
+            "assistant" or "ai" => ThemeService.AssistantTag,
+            "tool" => ThemeService.ToolTag,
+            "error" => ThemeService.ErrorTag,
+            "cmd" or "system" => ThemeService.SystemTag,
+            _ => ThemeService.MutedTag,
         };
 
         bool isAssistant = role.ToLowerInvariant() is "assistant" or "ai";
@@ -43,13 +48,13 @@ public sealed class MessagePanelRenderer
         if (hasReasoning)
         {
             combined.AppendLine(isExpanded
-                ? "[dim][[−]] 推理过程[/]"
-                : $"[dim][[+]] 推理过程 ([green]{reasoning!.Split('\n').Length}[/] 行)[/]");
+                ? $"[{ThemeService.MutedTag}][[−]] 推理过程[/]"
+                : $"[{ThemeService.MutedTag}][[+]] 推理过程 ([{ThemeService.AssistantTag}]{reasoning!.Split('\n').Length}[/] 行)[/]");
         }
         if (isExpanded && hasReasoning)
         {
             combined.AppendLine(reasoning);
-            combined.AppendLine("[grey]───[/]");
+            combined.AppendLine($"[{ThemeService.MutedTag}]───[/]");
         }
 
         if (isAssistant)
@@ -61,16 +66,16 @@ public sealed class MessagePanelRenderer
         else
             combined.Append(rawContent.EscapeMarkup());
 
-        var content = (IRenderable)new Markup(combined.ToString().TrimEnd());
+        var bar = $"[{tag}]▎[/] ";
+        var text = combined.ToString().TrimEnd();
+        var lines = text.Split('\n');
+        var sb = new StringBuilder();
+        foreach (var line in lines)
+            sb.AppendLine($"{bar}{line}");
+        if (lines.Length == 0)
+            sb.Append($"{bar}");
 
-        return new Panel(Align.Left(content, VerticalAlignment.Top))
-        {
-            Border = border,
-            Header = new PanelHeader(header, Justify.Left),
-            BorderStyle = new Style(color),
-            Padding = new Padding(1, 0, 1, 0),
-            Expand = true,
-        };
+        return new Markup(sb.ToString().TrimEnd());
     }
 
     public Panel BuildCodeBlockPanel(string code, string? lang)
@@ -87,18 +92,16 @@ public sealed class MessagePanelRenderer
         for (int i = 0; i < lines.Length && i < maxLines; i++)
         {
             var lineNum = (i + 1).ToString().PadLeft(linePad);
-            content.AppendLine($"[grey]{lineNum.EscapeMarkup()}[/]  {HighlightLine(lines[i], keywords)}");
+            content.AppendLine($"[{ThemeService.MutedTag}]{lineNum.EscapeMarkup()}[/]  {HighlightLine(lines[i], keywords)}");
         }
 
         if (lines.Length > maxLines)
-            content.AppendLine($"[grey italic]... 已截断 {lines.Length - maxLines} 行[/]");
+            content.AppendLine($"[{ThemeService.MutedTag} italic]... 已截断 {lines.Length - maxLines} 行[/]");
 
         var panel = new Panel(Align.Left(new Markup(content.ToString().TrimEnd()), VerticalAlignment.Top))
         {
-            Border = BoxBorder.Heavy,
-            BorderStyle = new Style(Color.Grey42),
-            Header = new PanelHeader($"[bold grey] {(lang ?? "code").EscapeMarkup()} [/]", Justify.Left),
-            Padding = new Padding(2, 0, 2, 0),
+            Border = BoxBorder.None,
+            Padding = new Padding(0, 0, 0, 0),
             Expand = true,
         };
         PanelCacheAdd(cacheKey, panel);
@@ -118,12 +121,13 @@ public sealed class MessagePanelRenderer
         for (int i = 0; i < history.Count; i++)
         {
             var (role, rendered, rawContent, reasoning) = history[i];
-            Panel panel;
-            if (rendered != null && rendered is Panel p)
-                panel = p;
+            IRenderable msg;
+            if (rendered != null)
+                msg = rendered;
             else
-                panel = BuildMessagePanel(role, rawContent, i, reasoning, expandedMessages);
-            allMessages.Add(panel);
+                msg = BuildMessagePanel(role, rawContent, i, reasoning, expandedMessages);
+            if (i > 0) allMessages.Add(new Markup(""));
+            allMessages.Add(msg);
         }
 
         if (!string.IsNullOrEmpty(streamingContent))
@@ -144,11 +148,11 @@ public sealed class MessagePanelRenderer
                     combined.Append(ChatRenderer.MdToPanelContent(completePart));
                     if (!string.IsNullOrEmpty(incompleteCode))
                     {
-                        combined.AppendLine($"\n[bold grey]┌─ {codeLang.EscapeMarkup()} ─(生成中)─┐[/]");
+                        combined.AppendLine($"\n[bold {ThemeService.MutedTag}]┌─ {codeLang.EscapeMarkup()} ─(生成中)─┐[/]");
                         var boxWidth = Math.Min(SafeWindowWidth - 10, 80);
                         foreach (var cl in incompleteCode.Split('\n'))
-                            combined.AppendLine($"  [grey]│[/] {cl.EscapeMarkup()} [grey]│[/]");
-                        combined.AppendLine($"[bold grey]└{new string('─', boxWidth)}┘[/]");
+                            combined.AppendLine($"  [{ThemeService.MutedTag}]│[/] {cl.EscapeMarkup()} [{ThemeService.MutedTag}]│[/]");
+                        combined.AppendLine($"[bold {ThemeService.MutedTag}]└{new string('─', boxWidth)}┘[/]");
                     }
                 }
                 else
@@ -163,17 +167,10 @@ public sealed class MessagePanelRenderer
 
             var rendered = combined.ToString().TrimEnd();
             var content = rendered.Length > 0
-                ? (IRenderable)new Markup(rendered)
-                : new Markup("[grey]等待 AI 回复...[/]");
-
-            allMessages.Add(new Panel(Align.Left(content, VerticalAlignment.Top))
-            {
-                Border = BoxBorder.Double,
-                Header = new PanelHeader("[bold green] 🤖 AI 回复中... [/]", Justify.Left),
-                BorderStyle = new Style(Color.Green),
-                Padding = new Padding(1, 0, 1, 0),
-                Expand = true,
-            });
+                ? new Markup(rendered)
+                : new Markup($"[grey]等待 AI 回复...[/]");
+            if (allMessages.Count > 0) allMessages.Add(new Markup(""));
+            allMessages.Add(content);
         }
 
         if (allMessages.Count == 0)
@@ -187,10 +184,11 @@ public sealed class MessagePanelRenderer
         if (startIdx < 0) startIdx = 0;
 
         if (startIdx > 0)
-            messages.Add(new Markup($"[dim]↕ 以上 {startIdx} 条消息已滚动  Shift+↑↓/PgUp/PgDn 翻页  (共 {totalMessages} 条)[/]"));
-        messages.AddRange(allMessages.GetRange(startIdx, endIdx - startIdx));
+            messages.Add(new Markup($"[{ThemeService.MutedTag}]↕ 以上 {startIdx} 条消息已滚动  Shift+↑↓/PgUp/PgDn 翻页  (共 {totalMessages} 条)[/]"));
+        for (int i = startIdx; i < endIdx; i++)
+            messages.Add(allMessages[i]);
         if (scrollOffset > 0 && endIdx < totalMessages)
-            messages.Add(new Markup($"[dim]↓ 还有 {totalMessages - endIdx} 条消息在后面  按 Shift+↓ 或 PgDn 滚动[/]"));
+            messages.Add(new Markup($"[{ThemeService.MutedTag}]↓ 还有 {totalMessages - endIdx} 条消息在后面  按 Shift+↓ 或 PgDn 滚动[/]"));
 
         return new Panel(new Rows(messages)).Border(BoxBorder.None).Expand();
     }
@@ -198,20 +196,20 @@ public sealed class MessagePanelRenderer
     public Panel BuildWelcomePanel()
     {
         return new Panel(
-            "[bold yellow]💬 欢迎使用 LTAI[/]\n\n" +
-            "[grey]可用命令:[/]\n" +
-            "  [cyan]/new[/]     — 新建会话\n" +
-            "  [cyan]/help[/]    — 显示帮助\n" +
-            "  [cyan]/exit[/]    — 退出\n" +
-            "  [cyan]/model[/]   — 管理模型\n" +
-            "  [cyan]/config[/]  — 配置 LLM\n\n" +
-            "[grey]快捷键:[/]\n" +
-            "  [cyan]1-5[/]       — 切换视图\n" +
-            "  [cyan]↑↓[/]       — 历史消息\n" +
-            "  [cyan]/[/]         — 打开命令选择器\n\n" +
-            "[dim]直接输入消息开始对话，或输入 [yellow]/[/] 浏览全部命令[/]")
+            $"[bold {ThemeService.WarningTag}]💬 欢迎使用 LTAI[/]\n\n" +
+            $"[{ThemeService.MutedTag}]可用命令:[/]\n" +
+            $"  [{ThemeService.PrimaryTag}]/new[/]     — 新建会话\n" +
+            $"  [{ThemeService.PrimaryTag}]/help[/]    — 显示帮助\n" +
+            $"  [{ThemeService.PrimaryTag}]/exit[/]    — 退出\n" +
+            $"  [{ThemeService.PrimaryTag}]/model[/]   — 管理模型\n" +
+            $"  [{ThemeService.PrimaryTag}]/config[/]  — 配置 LLM\n\n" +
+            $"[{ThemeService.MutedTag}]快捷键:[/]\n" +
+            $"  [{ThemeService.PrimaryTag}]1-5[/]       — 切换视图\n" +
+            $"  [{ThemeService.PrimaryTag}]↑↓[/]       — 历史消息\n" +
+            $"  [{ThemeService.PrimaryTag}]/[/]         — 打开命令选择器\n\n" +
+            $"[{ThemeService.MutedTag}]直接输入消息开始对话，或输入 [{ThemeService.WarningTag}]/[/] 浏览全部命令[/]")
             .Border(BoxBorder.Rounded)
-            .Header(new PanelHeader("[bold yellow]💬 LTAI[/]"))
+            .Header(new PanelHeader($"[bold {ThemeService.WarningTag}]💬 LTAI[/]"))
             .Expand();
     }
 
@@ -222,12 +220,11 @@ public sealed class MessagePanelRenderer
         // Check for error patterns
         if (raw.StartsWith("Error:", StringComparison.OrdinalIgnoreCase) ||
             raw.StartsWith("❌") || raw.StartsWith("[Error]"))
-            return $"[red]⛔ {raw.EscapeMarkup()}[/]";
+            return $"[{ThemeService.ErrorTag}]⛔ {raw.EscapeMarkup()}[/]";
 
-        // Success indicator
         if (raw.StartsWith("Success:", StringComparison.OrdinalIgnoreCase) ||
             raw.StartsWith("✅"))
-            return $"[green]✅ {raw.EscapeMarkup()}[/]";
+            return $"[{ThemeService.AccentTag}]✅ {raw.EscapeMarkup()}[/]";
 
         // Try to parse as JSON for structured rendering
         if (raw.StartsWith('{') || raw.StartsWith('['))
@@ -293,21 +290,22 @@ public sealed class MessagePanelRenderer
         }))).ToList();
         colWidths = colWidths.Select(w => Math.Clamp(w + 2, 4, 32)).ToList();
 
-        // Draw header
-        sb.AppendLine("[bold]┌" + string.Join("┬", colWidths.Select(w => new string('─', w))) + "┐[/]");
-        sb.Append("[bold]│[/]");
+        var tblTag = ThemeService.BorderTag;
+        var hdrTag = ThemeService.PrimaryTag;
+        sb.AppendLine($"[bold {tblTag}]┌" + string.Join("┬", colWidths.Select(w => new string('─', w))) + "┐[/]");
+        sb.Append($"[bold {tblTag}]│[/]");
         for (int k = 0; k < orderedKeys.Count; k++)
         {
             var label = orderedKeys[k].EscapeMarkup();
             var pad = colWidths[k] - label.Length;
-            sb.Append($" [bold cyan]{label}{new string(' ', pad)}[/][bold]│[/]");
+            sb.Append($" [bold {hdrTag}]{label}{new string(' ', pad)}[/][bold {tblTag}]│[/]");
         }
         sb.AppendLine();
-        sb.AppendLine("[bold]├" + string.Join("┼", colWidths.Select(w => new string('─', w))) + "┤[/]");
+        sb.AppendLine($"[bold {tblTag}]├" + string.Join("┼", colWidths.Select(w => new string('─', w))) + "┤[/]");
 
         foreach (var item in items)
         {
-            sb.Append("[bold]│[/]");
+            sb.Append($"[bold {tblTag}]│[/]");
             for (int k = 0; k < orderedKeys.Count; k++)
             {
                 var val = "";
@@ -325,12 +323,12 @@ public sealed class MessagePanelRenderer
                 }
                 var escaped = val.EscapeMarkup();
                 var pad = colWidths[k] - escaped.Length;
-                sb.Append($" {escaped}{new string(' ', pad)}[bold]│[/]");
+                sb.Append($" {escaped}{new string(' ', pad)}[bold {tblTag}]│[/]");
             }
             sb.AppendLine();
         }
-        sb.AppendLine("[bold]└" + string.Join("┴", colWidths.Select(w => new string('─', w))) + "┘[/]");
-        sb.AppendLine($"[grey]共 {arr.GetArrayLength()} 行[/]");
+        sb.AppendLine($"[bold {tblTag}]└" + string.Join("┴", colWidths.Select(w => new string('─', w))) + "┘[/]");
+        sb.AppendLine($"[{ThemeService.MutedTag}]共 {arr.GetArrayLength()} 行[/]");
         return true;
     }
 
@@ -367,20 +365,22 @@ public sealed class MessagePanelRenderer
         }))).ToList();
         colWidths = colWidths.Select(w => Math.Clamp(w + 2, 4, 32)).ToList();
 
-        sb.AppendLine("[bold]┌" + string.Join("┬", colWidths.Select(w => new string('─', w))) + "┐[/]");
-        sb.Append("[bold]│[/]");
+        var tblTag2 = ThemeService.BorderTag;
+        var hdrTag2 = ThemeService.PrimaryTag;
+        sb.AppendLine($"[bold {tblTag2}]┌" + string.Join("┬", colWidths.Select(w => new string('─', w))) + "┐[/]");
+        sb.Append($"[bold {tblTag2}]│[/]");
         for (int k = 0; k < keys.Count; k++)
         {
             var label = keys[k].EscapeMarkup();
             var pad = colWidths[k] - label.Length;
-            sb.Append($" [bold cyan]{label}{new string(' ', pad)}[/][bold]│[/]");
+            sb.Append($" [bold {hdrTag2}]{label}{new string(' ', pad)}[/][bold {tblTag2}]│[/]");
         }
         sb.AppendLine();
-        sb.AppendLine("[bold]├" + string.Join("┼", colWidths.Select(w => new string('─', w))) + "┤[/]");
+        sb.AppendLine($"[bold {tblTag2}]├" + string.Join("┼", colWidths.Select(w => new string('─', w))) + "┤[/]");
 
         foreach (var item in rowItems)
         {
-            sb.Append("[bold]│[/]");
+            sb.Append($"[bold {tblTag2}]│[/]");
             for (int k = 0; k < keys.Count; k++)
             {
                 var val = "";
@@ -398,12 +398,12 @@ public sealed class MessagePanelRenderer
                 }
                 var escaped = val.EscapeMarkup();
                 var pad = colWidths[k] - escaped.Length;
-                sb.Append($" {escaped}{new string(' ', pad)}[bold]│[/]");
+                sb.Append($" {escaped}{new string(' ', pad)}[bold {tblTag2}]│[/]");
             }
             sb.AppendLine();
         }
-        sb.AppendLine("[bold]└" + string.Join("┴", colWidths.Select(w => new string('─', w))) + "┘[/]");
-        sb.AppendLine($"[grey]共 {rows.GetArrayLength()} 行[/]");
+        sb.AppendLine($"[bold {tblTag2}]└" + string.Join("┴", colWidths.Select(w => new string('─', w))) + "┘[/]");
+        sb.AppendLine($"[{ThemeService.MutedTag}]共 {rows.GetArrayLength()} 行[/]");
         return true;
     }
 
@@ -535,17 +535,17 @@ public sealed class MessagePanelRenderer
             case System.Text.Json.JsonValueKind.String:
                 var str = el.GetString() ?? "";
                 if (str.Length > 200) str = str[..197] + "...";
-                sb.Append($"[green]\"{str.EscapeMarkup()}\"[/]");
+                sb.Append($"[{ThemeService.AssistantTag}]\"{str.EscapeMarkup()}\"[/]");
                 break;
             case System.Text.Json.JsonValueKind.Number:
-                sb.Append($"[yellow]{el.GetRawText()}[/]");
+                sb.Append($"[{ThemeService.WarningTag}]{el.GetRawText()}[/]");
                 break;
             case System.Text.Json.JsonValueKind.True:
             case System.Text.Json.JsonValueKind.False:
-                sb.Append($"[magenta]{el.GetRawText()}[/]");
+                sb.Append($"[{ThemeService.ToolTag}]{el.GetRawText()}[/]");
                 break;
             case System.Text.Json.JsonValueKind.Null:
-                sb.Append("[grey]null[/]");
+                sb.Append($"[{ThemeService.MutedTag}]null[/]");
                 break;
             case System.Text.Json.JsonValueKind.Object:
             case System.Text.Json.JsonValueKind.Array:
@@ -608,8 +608,8 @@ public sealed class MessagePanelRenderer
                 var end = i;
                 while (end < line.Length && (char.IsLetterOrDigit(line[end]) || line[end] == '_')) end++;
                 var word = line[i..end];
-                if (kw != null && kw.Contains(word))
-                    result.Append($"[yellow]{word.EscapeMarkup()}[/]");
+            if (kw != null && kw.Contains(word))
+                result.Append($"[{ThemeService.WarningTag}]{word.EscapeMarkup()}[/]");
                 else
                     result.Append(word.EscapeMarkup());
                 i = end;

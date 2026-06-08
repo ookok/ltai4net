@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 using Avalonia.Controls;
@@ -18,18 +17,14 @@ public static class ChatMessageRenderer
     private static readonly Regex FenceEndRx = new(@"^```$", RegexOptions.Multiline);
     private static bool _fenceWarningShown;
 
-    // LRU cache for rendered responses (keyed by SHA-256 of content)
+    // LRU cache for rendered responses (keyed by hash of content)
     private const int MaxCacheEntries = 64;
-    private static readonly ConcurrentDictionary<string, List<Avalonia.Controls.Control>> _renderCache = new();
-    private static readonly ConcurrentQueue<string> _cacheOrder = new();
+    private static readonly ConcurrentDictionary<int, List<Avalonia.Controls.Control>> _renderCache = new();
+    private static readonly ConcurrentQueue<int> _cacheOrder = new();
 
-    private static string ContentHash(string text)
-    {
-        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(text));
-        return Convert.ToHexString(bytes).ToLowerInvariant();
-    }
+    private static int ContentHash(string text) => text.GetHashCode();
 
-    private static void CacheAdd(string key, List<Avalonia.Controls.Control> children)
+    private static void CacheAdd(int key, List<Avalonia.Controls.Control> children)
     {
         _renderCache[key] = children;
         _cacheOrder.Enqueue(key);
@@ -357,7 +352,7 @@ public static class ChatMessageRenderer
                 panel.Children.Add(border);
             }
         }
-        catch (Exception) { }
+        catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"[ChatMessageRenderer] RenderInlineImage: {ex.Message}"); }
     }
 
     private static void RenderCodeBlock(StackPanel panel, string code)

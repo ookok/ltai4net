@@ -12,7 +12,9 @@ using Spectre.Console.Rendering;
 
 namespace LTAI.TUI;
 
-public sealed class ChatLayout : IDisposable
+using static ThemeService;
+
+public sealed partial class ChatLayout : IDisposable, IStreamerHost
 {
     private readonly ChatAgent _chat;
     private readonly Rendering.ChatRenderer _renderer;
@@ -21,6 +23,8 @@ public sealed class ChatLayout : IDisposable
     internal readonly Stack<List<(string role, IRenderable? rendered, string rawContent, string? reasoning)>> _undoStack = new();
     internal const int MaxUndoStack = 20;
     private readonly Layout _layout;
+    private readonly Layout _messagesLayout;
+    private readonly Layout _footerLayout;
     private readonly QuestionService _questionService;
     private readonly SessionManager _sessions;
     private readonly TextPadView _textPadView;
@@ -77,16 +81,28 @@ public sealed class ChatLayout : IDisposable
 
     // 选择器状态（由输入任务管理，主线程只读）
     internal volatile bool _pickerActive;
+    internal volatile bool _viewPickerActive;
+    internal int _viewPickerSelected;
     internal readonly object _pickerLock = new();
     internal string _pickerFilter = "";
     internal List<SlashCommands.SuggestionItem> _pickerItems = new();
     internal int _pickerSelectedIdx;
     private LiveDisplayContext? _liveCtx;
     public TuiView? LastRequestedView { get; private set; }
+    public static string CurrentViewName { get; set; } = "聊天";
     public string? CurrentFileForContext => _textPadView.CurrentFileForContext;
     private int _subagentProgress;
     internal string? _statusMessage;
     internal string? _pendingChatRequest;
+    internal string? _pendingSearchTerm;
+    internal int _renderVersion;
+    internal int _historyVersion;
+    
+    internal static TaskCompletionSource<ConfirmChoice>? PendingConfirmTcs;
+    internal static string? PendingConfirmDetails;
+    internal static string? PendingConfirmTitle;
+    internal static string? PendingConfirmMessage;
+    internal static string? PendingConfirmExtra;
     public static string? EditMode { get; set; }
     public static Func<bool>? TryUndoCallback { get; set; }
     private const int MaxHistory = 200;
@@ -97,6 +113,7 @@ public sealed class ChatLayout : IDisposable
     private readonly Action<int> _onSubagentComplete;
     private readonly Action<int, string, string> _onSubagentMessage;
 
+    void IStreamerHost.ThrottledRefresh() => ThrottledRefresh();
     private void ThrottledRefresh()
     {
         var now = DateTime.UtcNow;
@@ -131,6 +148,7 @@ public sealed class ChatLayout : IDisposable
         }
     }
 
+    void IStreamerHost.TrimHistory() => TrimHistory();
     internal void TrimHistory()
     {
         if (_history.Count <= MaxHistory) return;
@@ -138,11 +156,10 @@ public sealed class ChatLayout : IDisposable
         _history.RemoveRange(0, removeCount);
     }
 
-    /// <summary>将所有已渲染 Panel 标记为失效，下次 UpdateMessages 会重新构建。</summary>
+    void IStreamerHost.InvalidateRendered() => InvalidateRendered();
     internal void InvalidateRendered()
     {
-        for (int i = 0; i < _history.Count; i++)
-            _history[i] = (_history[i].role, null, _history[i].rawContent, _history[i].reasoning);
+        Interlocked.Increment(ref _renderVersion);
     }
 
     public ChatLayout(ChatAgent chat, Rendering.ChatRenderer renderer, QuestionService? questionService = null,
@@ -160,40 +177,37 @@ public sealed class ChatLayout : IDisposable
         _questionService.QuestionPosted += post => _pendingQuestion = post;
 
         // 自动计算可见消息数，确保输入区始终固定
-        // 每条 Panel ≈ 4 行，Header 2 行，Footer 6 行
+        // 每条消息 ≈ 4 行，Footer 4 行（输入区3+状态条1）
         var termHeight = Math.Max(24, SafeWindowHeight);
-        _maxVisibleMessages = Math.Max(3, (termHeight - 10) / 4);
+        _maxVisibleMessages = Math.Max(3, (termHeight - 6) / 4);
 
         _layout = new Layout()
             .SplitRows(
-                new Layout("Header").Size(2),
                 new Layout("Messages"),
-                new Layout("Footer").Size(10));
+                new Layout("Footer").Size(4));
+        _messagesLayout = _layout["Messages"];
+        _footerLayout = _layout["Footer"];
 
-        _layout["Header"].Update(
-            new Panel("[bold]LTAI 聊天[/] — [grey]Esc=退出  SEnter=发送  Enter=换行  ↑↓=光标  S↑↓=滚屏  Ctrl+V=粘贴  1-5=视图  /help=帮助[/]")
-                .Border(BoxBorder.None).Expand());
-
-        _layout["Messages"].Update(
+        _messagesLayout.Update(
             new Panel(
-                "[bold yellow]💬 欢迎使用 LTAI[/]\n\n" +
-                "[grey]可用命令:[/]\n" +
-                "  [cyan]/new[/]     — 新建会话\n" +
-                "  [cyan]/help[/]    — 显示帮助\n" +
-                "  [cyan]/exit[/]    — 退出\n" +
-                "  [cyan]/model[/]   — 管理模型\n" +
-                "  [cyan]/config[/]  — 配置 LLM\n\n" +
-                "[grey]快捷键:[/]\n" +
-                "  [cyan]1-5[/]       — 切换视图\n" +
-                "  [cyan]↑↓[/]       — 历史消息\n" +
-                "  [cyan]/[/]         — 打开命令选择器\n\n" +
-                "[dim]直接输入消息开始对话，或输入 [yellow]/[/] 浏览全部命令[/]")
+                $"[bold {WarningTag}]💬 欢迎使用 LTAI[/]\n\n" +
+                $"[{MutedTag}]可用命令:[/]\n" +
+                $"  [{PrimaryTag}]/new[/]     — 新建会话\n" +
+                $"  [{PrimaryTag}]/help[/]    — 显示帮助\n" +
+                $"  [{PrimaryTag}]/exit[/]    — 退出\n" +
+                $"  [{PrimaryTag}]/model[/]   — 管理模型\n" +
+                $"  [{PrimaryTag}]/config[/]  — 配置 LLM\n\n" +
+                $"[{MutedTag}]快捷键:[/]\n" +
+                $"  [{PrimaryTag}]1-5[/]       — 切换视图\n" +
+                $"  [{PrimaryTag}]↑↓[/]       — 历史消息\n" +
+                $"  [{PrimaryTag}]/[/]         — 打开命令选择器\n\n" +
+                $"[{MutedTag}]直接输入消息开始对话，或输入 [{WarningTag}]/[/] 浏览全部命令[/]")
                 .Border(BoxBorder.Rounded)
-                .Header(new PanelHeader("[bold yellow]💬 LTAI[/]"))
+                .Header(new PanelHeader($"[bold {WarningTag}]💬 LTAI[/]"))
                 .Expand());
 
-        _layout["Footer"].Update(
-            new Panel("[grey]等待首次请求...  输入消息开始对话[/]")
+        _footerLayout.Update(
+            new Panel($"[{MutedTag}]等待首次请求...  输入消息开始对话[/]")
                 .Border(BoxBorder.None).Expand());
 
         _onSubagentComplete = (id) => _subagentProgress = -1;
@@ -212,9 +226,9 @@ public sealed class ChatLayout : IDisposable
         {
             var color = entry.Level switch
             {
-                NotificationLevel.Error => "red",
-                NotificationLevel.Warning => "yellow",
-                _ => "green"
+                NotificationLevel.Error => ThemeService.ErrorTag,
+                NotificationLevel.Warning => ThemeService.WarningTag,
+                _ => ThemeService.AccentTag
             };
             _statusMessage = $"[{color}]{Markup.Escape(entry.Message)}[/]";
         };
@@ -249,13 +263,13 @@ public sealed class ChatLayout : IDisposable
                     // WarmUp failure is handled by the following WaitAsync timeout + catch
 
                     try { await warmupTask.WaitAsync(TimeSpan.FromSeconds(6)).ConfigureAwait(false); }
-                    catch { }
+                    catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"[ChatLayout] WarmUp timeout: {ex.Message}"); }
 
                     ctx.Status = "[green]✓ 初始化完成[/]";
                     await Task.Delay(200);
                 }).ConfigureAwait(false);
         }
-        catch { }
+        catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"[ChatLayout] SetupAsync failed: {ex.Message}"); }
     }
 
     private async Task<TuiView?> RunMainLoopAsync()
@@ -279,18 +293,6 @@ public sealed class ChatLayout : IDisposable
                 _renderCts?.Dispose();
                 _renderCts = new CancellationTokenSource();
                 var cts = _renderCts;
-
-                var blinkCts = CancellationTokenSource.CreateLinkedTokenSource(cts.Token);
-                var blinkTask = Task.Run(async () =>
-                {
-                    while (!blinkCts.Token.IsCancellationRequested)
-                    {
-                        await Task.Delay(400, blinkCts.Token).ConfigureAwait(false);
-                        UpdateFooter("", "", IsInputEmpty() && showWatermark);
-                        try { _liveCtx?.Refresh(); } catch (ObjectDisposedException) { break; }
-                    }
-                }, blinkCts.Token);
-
 
                 var inputTask = Task.Run(async () =>
                 {
@@ -316,11 +318,11 @@ public sealed class ChatLayout : IDisposable
                         {
                             var (row, col) = evt.ClickPosition.Value;
                             var termHeight = SafeWindowHeight;
-                            var msgAreaEnd = termHeight - 6;
+                            var msgAreaEnd = termHeight - 4;
 
                             // Click in the rightmost 5 columns = copy latest code block
                             var termWidth = 120;
-                            try { termWidth = Console.WindowWidth; } catch { }
+                            try { termWidth = Console.WindowWidth; } catch { System.Diagnostics.Debug.WriteLine("[ChatLayout] WindowWidth query failed"); }
                             if (col >= termWidth - 5 && row < msgAreaEnd)
                             {
                                 CodeBlockBuffer.TryCopyLatestToClipboard();
@@ -348,7 +350,16 @@ public sealed class ChatLayout : IDisposable
                 while (!cts.Token.IsCancellationRequested)
                 {
                     // Refresh UI
-                    if (_pickerActive)
+                    if (_viewPickerActive)
+                    {
+                        lock (_layout)
+                        {
+                            _messagesLayout.Update(BuildViewSwitcherOverlay());
+                            UpdateFooter("", "", showWatermark);
+                            ctx.Refresh();
+                        }
+                    }
+                    else if (_pickerActive)
                     {
                         string filter;
                         List<SlashCommands.SuggestionItem> items;
@@ -361,9 +372,9 @@ public sealed class ChatLayout : IDisposable
                         }
                         lock (_layout)
                         {
-                            // Inline picker: 不替换 Messages，只在 Footer 显示建议
-                            var footerBuf = string.IsNullOrEmpty(filter) ? "/" : "/" + filter;
-                            UpdateFooter(footerBuf, "", showWatermark, items, selIdx);
+                            // 命令面板 overlay: 在 Messages 区中央显示浮动列表
+                            _messagesLayout.Update(BuildPickerOverlay(filter, items, selIdx));
+                            UpdateFooter("", "", showWatermark);
                             ctx.Refresh();
                         }
                     }
@@ -388,7 +399,7 @@ public sealed class ChatLayout : IDisposable
                     {
                         if (_quickNav != default)
                         {
-                            LastRequestedView = _quickNav switch
+                            var nextView = _quickNav switch
                             {
                                 '1' => TuiView.Dashboard, '3' => TuiView.LLMConfig,
                                 '4' => TuiView.TextPad, '5' => TuiView.Skills,
@@ -396,6 +407,8 @@ public sealed class ChatLayout : IDisposable
                                 '8' => TuiView.MemoryBrowser, '9' => TuiView.Workflows,
                                 '0' => TuiView.GraphBrowser, _ => TuiView.Chat
                             };
+                            CurrentViewName = GetViewName(nextView);
+                            LastRequestedView = nextView;
                             cts.Cancel(); return;
                         }
                     }
@@ -431,135 +444,121 @@ public sealed class ChatLayout : IDisposable
         return result;
     }
 
-    // ── 消息面板（Panel 包裹每条消息） ──
+    // ── 消息面板 ──
 
-    private void UpdateHeader()
-    {
-        var planStatus = LTAI.Agent.Tools.PlanTools.PlanStatus();
-        var hasPlan = planStatus.Contains("Current Step") || planStatus.Contains("executing");
-        var planTag = hasPlan ? "  [bold yellow]📋 计划执行中[/]" : "";
-
-        var model = LTAI.Core.Configuration.UsageTracker.ActiveModel?.EscapeMarkup() ?? "--";
-        var toolCount = LTAI.Core.Configuration.UsageTracker.ToolCalls;
-        var errorIndicator = _textPadView.PendingChatRequest != null
-            ? "  [bold red]🔴 错误待修复[/]"
-            : "";
-
-        _layout["Header"].Update(
-            new Panel($"[bold]LTAI 聊天[/]{planTag}{errorIndicator} — [grey]{model}  |  🛠 {toolCount} 次工具调用  |  Esc=退出  Enter=发送  1-5=视图  /help=帮助[/]")
-                .Border(BoxBorder.None).Expand());
-    }
-
+    void IStreamerHost.UpdateMessages(string s) => UpdateMessages(s);
     private void UpdateMessages(string streamingContent)
     {
-        // Delegate all panel rendering to ChatRenderer
+        var rv = Volatile.Read(ref _renderVersion);
+        var hv = Volatile.Read(ref _historyVersion);
+        if (rv > hv)
+        {
+            // Clear all rendered entries so next BuildMessagesPanel rebuilds them
+            Interlocked.Exchange(ref _historyVersion, rv);
+            for (int i = 0; i < _history.Count; i++)
+                _history[i] = (_history[i].role, null, _history[i].rawContent, _history[i].reasoning);
+        }
         var panel = _renderer.BuildMessagesPanel(
             _history, streamingContent, _toolCalls,
             _scrollOffset, _maxVisibleMessages, _expandedMessages);
-        _layout["Messages"].Update(panel);
+        _messagesLayout.Update(panel);
     }
 
-    // ── 多行输入帮助方法 ──
+    // ── 命令面板 Overlay ──
 
-    internal bool IsInputEmpty() => _inputLines.Count == 1 && _inputLines[0].Length == 0;
-
-    internal string GetInputText() => string.Join("\n", _inputLines);
-
-    internal void ClearInput()
+    private static Panel BuildPickerOverlay(string filter, List<SlashCommands.SuggestionItem> items, int selIdx)
     {
-        _inputLines.Clear();
-        _inputLines.Add("");
-        _cursorLine = 0;
-        _cursorCol = 0;
-    }
-
-    internal void SetInput(string text)
-    {
-        ClearInput();
-        var lines = text.Split('\n');
-        _inputLines.Clear();
-        _inputLines.AddRange(lines);
-        _cursorLine = _inputLines.Count - 1;
-        _cursorCol = _inputLines[^1].Length;
-    }
-
-    internal void InsertChar(char c)
-    {
-        var line = _inputLines[_cursorLine];
-        _inputLines[_cursorLine] = line.Insert(_cursorCol, c.ToString());
-        _cursorCol++;
-    }
-
-    internal void BackspaceChar()
-    {
-        if (_cursorCol > 0)
+        var sb = new StringBuilder();
+        sb.AppendLine($"[bold {ThemeService.PrimaryTag}]/[/][bold]{filter.EscapeMarkup()}[/]");
+        var displayed = items.Take(10).ToList();
+        foreach (var (item, i) in displayed.Select((it, idx) => (it, idx)))
         {
-            var line = _inputLines[_cursorLine];
-            _inputLines[_cursorLine] = line.Remove(_cursorCol - 1, 1);
-            _cursorCol--;
+            var cmd = item.Completion;
+            var display = item.DisplayText;
+            if (i == selIdx)
+                sb.AppendLine($"[black on {ThemeService.PrimaryTag}]  {display,-30}[/]");
+            else
+                sb.AppendLine($"  [{ThemeService.MutedTag}]{display,-30}[/]");
         }
-        else if (_cursorLine > 0)
+        if (items.Count > 10)
+            sb.AppendLine($"[{ThemeService.MutedTag}]... 还有 {items.Count - 10} 项[/]");
+        sb.AppendLine($"[{ThemeService.MutedTag}]↑↓=选择  Tab=补全  Enter=执行  Esc=取消[/]");
+
+        return new Panel(
+            Align.Center(new Markup(sb.ToString().TrimEnd()), VerticalAlignment.Middle))
         {
-            // Join with previous line
-            var prevLine = _inputLines[_cursorLine - 1];
-            _cursorCol = prevLine.Length;
-            _inputLines[_cursorLine - 1] = prevLine + _inputLines[_cursorLine];
-            _inputLines.RemoveAt(_cursorLine);
-            _cursorLine--;
-        }
+            Border = BoxBorder.Rounded,
+            BorderStyle = new Style(ThemeService.BorderColor),
+            Padding = new Padding(2, 1, 2, 1),
+            Expand = true,
+        };
     }
 
-    /// <summary>替换输入内容为单行文本（用于历史导航等）</summary>
-    internal void ReplaceInputLine(string text)
-    {
-        _inputLines.Clear();
-        _inputLines.Add(text);
-        _cursorLine = 0;
-        _cursorCol = text.Length;
-    }
+    // ═══════════════════════════════════════════
+    //  View names & switcher
+    // ═══════════════════════════════════════════
 
-    internal void SaveToHistory(string input)
-    {
-        if (string.IsNullOrWhiteSpace(input)) return;
-        if (_inputHistory.Count > 0 && _inputHistory[^1] == input) return;
-        _inputHistory.Add(input);
-        if (_inputHistory.Count > 50) _inputHistory.RemoveAt(0);
-        _historyIndex = -1;
-    }
+    internal static readonly (string key, string name, TuiView view)[] ViewOptions =
+    [
+        ("1", "聊天", TuiView.Chat),
+        ("2", "仪表盘", TuiView.Dashboard),
+        ("3", "LLM 配置", TuiView.LLMConfig),
+        ("4", "文本编辑器", TuiView.TextPad),
+        ("5", "技能", TuiView.Skills),
+        ("6", "会话", TuiView.Sessions),
+        ("7", "任务", TuiView.Jobs),
+        ("8", "记忆浏览", TuiView.MemoryBrowser),
+        ("9", "工作流", TuiView.Workflows),
+        ("0", "图谱", TuiView.GraphBrowser),
+    ];
 
-    /// <summary>检查并触发斜杠命令选择器</summary>
-    internal bool CheckPickerTrigger()
+    public static string GetViewName(TuiView view) => view switch
     {
-        if (_inputLines.Count == 1 && _inputLines[0] == "/")
+        TuiView.Chat => "聊天",
+        TuiView.Dashboard => "仪表盘",
+        TuiView.LLMConfig => "LLM 配置",
+        TuiView.TextPad => "文本编辑器",
+        TuiView.Skills => "技能",
+        TuiView.Sessions => "会话",
+        TuiView.Jobs => "任务",
+        TuiView.MemoryBrowser => "记忆浏览",
+        TuiView.Workflows => "工作流",
+        TuiView.GraphBrowser => "图谱",
+        _ => "聊天",
+    };
+
+    private Panel BuildViewSwitcherOverlay()
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine($"[bold {ThemeService.PrimaryTag}]视图切换[/]  (Ctrl+P)");
+        foreach (var (key, name, _) in ViewOptions)
         {
-            lock (_pickerLock)
-            {
-                _pickerActive = true;
-                _pickerFilter = "";
-                _pickerItems = SlashCommands.GetSuggestionItems("/");
-                _pickerSelectedIdx = _pickerItems.Count > 0 ? 0 : -1;
-            }
-            return true;
+            var selected = _viewPickerSelected == Array.IndexOf(ViewOptions, (key, name, TuiView.Chat));
+            if (key == _viewPickerSelected.ToString())
+                selected = true;
+            if (selected)
+                sb.AppendLine($"[black on {ThemeService.PrimaryTag}]  [{key}] {name,-16}[/]");
+            else
+                sb.AppendLine($"  [{ThemeService.MutedTag}] [{key}] {name,-16}[/]");
         }
-        return false;
-    }
+        sb.AppendLine($"[{ThemeService.MutedTag}]↑↓=选择  Enter=切换  Esc=取消[/]");
 
-    // ── 选定器辅助 ──
+        var selectedIdx = Math.Clamp(_viewPickerSelected, 0, ViewOptions.Length - 1);
+        _viewPickerSelected = selectedIdx;
 
-    /// <summary>根据当前 <c>_pickerFilter</c> 重新计算 <c>_pickerItems</c>。</summary>
-    /// <remarks>调用方必须持有 <c>_pickerLock</c>。</remarks>
-    internal void UpdatePickerItems()
-    {
-        var prefix = "/" + _pickerFilter;
-        _pickerItems = prefix.Length > 1
-            ? SlashCommands.GetSuggestionItems(prefix)
-            : SlashCommands.GetSuggestionItems("/");
-        if (_pickerSelectedIdx >= _pickerItems.Count) _pickerSelectedIdx = _pickerItems.Count - 1;
-        if (_pickerSelectedIdx < 0 && _pickerItems.Count > 0) _pickerSelectedIdx = 0;
+        return new Panel(
+            Align.Center(new Markup(sb.ToString().TrimEnd()), VerticalAlignment.Middle))
+        {
+            Border = BoxBorder.Rounded,
+            BorderStyle = new Style(ThemeService.BorderColor),
+            Padding = new Padding(2, 1, 2, 1),
+            Expand = true,
+        };
     }
 
     // ── Footer ──
 
+    void IStreamerHost.UpdateFooter(string p, string s) => UpdateFooter(p, s);
     private void UpdateFooter(string pickerText, string statusText, bool isFirstEmpty = false,
         List<SlashCommands.SuggestionItem>? suggestions = null, int selIdx = -1)
     {
@@ -571,7 +570,7 @@ public sealed class ChatLayout : IDisposable
             pickerText, statusText, isFirstEmpty,
             _inputLines, _cursorLine, _cursorCol, MaxInputLines,
             suggestions, selIdx, startupMsg);
-        _layout["Footer"].Update(panel);
+        _footerLayout.Update(panel);
     }
 
     // ── 流式响应 ──
@@ -583,156 +582,25 @@ public sealed class ChatLayout : IDisposable
 
         var streamer = new ResponseStreamer(
             _chat, _renderer, _sessions, _layout, _liveCtx!, _questionService,
-            _history, _toolCalls,
-            updateHeader: UpdateHeader,
-            updateFooter: (p, s) => UpdateFooter(p, s),
-            updateMessages: s => UpdateMessages(s),
-            throttledRefresh: ThrottledRefresh,
-            invalidateRendered: InvalidateRendered,
-            trimHistory: TrimHistory,
-            saveSessionAsync: SaveSessionAsync,
-            tryParseToolResult: ParseToolResult,
-            tryParseConfirmRequest: ParseConfirmRequest,
-            getPendingQuestion: () =>
-            {
-                var qp = _pendingQuestion;
-                _pendingQuestion = null;
-                return qp;
-            },
-            extractMemory: _memoryExtractor != null
-                ? (userInput) => _memoryExtractor.ExtractFromTurnAsync(userInput, ct: CancellationToken.None)
-                : null);
+            _history, _toolCalls, this);
         await streamer.StreamAsync(input, cts).ConfigureAwait(false);
     }
 
-    // ── Slash 命令 ──
+    // ── IStreamerHost ──
 
-    internal async Task<bool> HandleSlashCommandAsync(string input)
-    {
-        if (string.Equals(input, "/new", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(input, "/clear", StringComparison.OrdinalIgnoreCase))
-        {
-            await SaveSessionAsync().ConfigureAwait(false);
-            SnapshotForUndo();
-            lock (_historyLock) _history.Clear();
-            _toolCalls.Clear();
-            _sessions.NewSession();
-            return true;
-        }
-        if (input.StartsWith("/sessions", StringComparison.OrdinalIgnoreCase) ||
-            input.StartsWith("/session", StringComparison.OrdinalIgnoreCase))
-        {
-            await HandleSessionsCommandAsync(input).ConfigureAwait(false);
-            return true;
-        }
-        if (input.StartsWith("/theme", StringComparison.OrdinalIgnoreCase))
-        {
-            ThemeService.Toggle();
-            var mode = ThemeService.IsLight ? "浅色" : "深色";
-            lock (_historyLock) _history.Add(("cmd", null, $"[green]已切换为 {mode} 主题[/]", null));
-            return true;
-        }
-
-        if (string.Equals(input, "/undo", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(input, "/撤销", StringComparison.OrdinalIgnoreCase))
-        {
-            if (TryUndo())
-                lock (_historyLock) _history.Add(("cmd", null, "[green]已撤销上一步操作[/]", null));
-            else
-                lock (_historyLock) _history.Add(("cmd", null, "[yellow]没有可撤销的操作[/]", null));
-            return true;
-        }
-
-        if (string.Equals(input, "/keys", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(input, "/shortcuts", StringComparison.OrdinalIgnoreCase))
-        {
-            _pendingChatRequest = "/keys";
-            _statusMessage = "打开快捷键一览...";
-            return true;
-        }
-
-        if (string.Equals(input, "/prompt", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(input, "/agent-prompt", StringComparison.OrdinalIgnoreCase))
-        {
-            _pendingChatRequest = "/prompt";
-            _statusMessage = "打开 Prompt 编辑器...";
-            return true;
-        }
-
-        if (string.Equals(input, "/retry", StringComparison.OrdinalIgnoreCase))
-        {
-            // Resend the last user message
-            string? lastUserMsg = null;
-            lock (_historyLock)
-            {
-                for (int i = _history.Count - 1; i >= 0; i--)
-                {
-                    if (_history[i].role == "user")
-                    {
-                        lastUserMsg = _history[i].rawContent;
-                        break;
-                    }
-                }
-            }
-            if (lastUserMsg != null)
-            {
-                _ = Task.Run(async () =>
-                {
-                    lock (_historyLock) _history.Add(("cmd", null, "[yellow]重试上一轮消息...[/]", null));
-                    _pendingChatRequest = lastUserMsg;
-                });
-                return true;
-            }
-            lock (_historyLock) _history.Add(("cmd", null, "[yellow]没有可以重试的消息[/]", null));
-            return true;
-        }
-
-        if (string.Equals(input, "/compact", StringComparison.OrdinalIgnoreCase))
-        {
-            // Compress older turns: keep only the last 4 messages (2 turns)
-            lock (_historyLock)
-            {
-                SnapshotForUndo();
-                if (_history.Count > 4)
-                {
-                    var keep = _history.GetRange(_history.Count - 4, 4);
-                    _history.Clear();
-                    _history.AddRange(keep);
-                    _history.Add(("cmd", null, "[green]已压缩历史，保留最近 2 轮对话[/]", null));
-                }
-                else
-                {
-                    _history.Add(("cmd", null, "[yellow]消息数不足，无需压缩[/]", null));
-                }
-            }
-            return true;
-        }
-
-        if (string.Equals(input, "/exit", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(input, "/quit", StringComparison.OrdinalIgnoreCase))
-        {
-            return false;
-        }
-
-        _lastCmdTime = DateTime.UtcNow;
-        var (handled, cmdStatus) = await SlashCommands.TryExecuteAsync(input).ConfigureAwait(false);
-        if (handled)
-        {
-            if (!string.IsNullOrEmpty(cmdStatus))
-                lock (_historyLock) _history.Add(("cmd", null, cmdStatus, null));
-            return true;
-        }
-        return true;
-    }
-
-    // ── 工具方法 ──
-
-    // Wrapper for ResponseStreamer delegate
-    private static (bool found, bool success, string output, string error) ParseToolResult(string text)
+    Task IStreamerHost.SaveSessionAsync() => SaveSessionAsync();
+    (bool found, bool success, string output, string error) IStreamerHost.TryParseToolResult(string text)
         => ToolResultParser.Parse(text);
-
-    private static (string title, string message, string extraInfo)? ParseConfirmRequest(string text)
+    (string title, string message, string extraInfo)? IStreamerHost.TryParseConfirmRequest(string text)
         => ConfirmRequestParser.Parse(text);
+    QuestionPost? IStreamerHost.GetPendingQuestion()
+    {
+        var qp = _pendingQuestion;
+        _pendingQuestion = null;
+        return qp;
+    }
+    Task? IStreamerHost.ExtractMemory(string userInput)
+        => _memoryExtractor?.ExtractFromTurnAsync(userInput, ct: CancellationToken.None);
 
     private static string Truncate(string text, int max) =>
         text.Length <= max ? text : text[..max] + "...";
@@ -744,65 +612,4 @@ public sealed class ChatLayout : IDisposable
 
     private static string FormatElapsed(TimeSpan t) =>
         t.TotalSeconds >= 60 ? $"{(int)t.TotalMinutes}m{t.Seconds}s" : $"{t.TotalSeconds:F1}s";
-
-    // ── Session 持久化 ──
-
-    private async Task SaveSessionAsync()
-    {
-        if (_sessions.CurrentHandle == null) return;
-        await _sessions.SaveSessionAsync().ConfigureAwait(false);
-        SaveInputHistory();
-    }
-
-    private string InputHistoryPath =>
-        Path.Combine(Environment.CurrentDirectory, ".livingtree", "input_history.json");
-
-    private void LoadInputHistory()
-    {
-        try
-        {
-            var path = InputHistoryPath;
-            if (!File.Exists(path)) return;
-            var json = File.ReadAllText(path);
-            var items = System.Text.Json.JsonSerializer.Deserialize<List<string>>(json);
-            if (items != null)
-            {
-                _inputHistory.Clear();
-                _inputHistory.AddRange(items);
-                if (_inputHistory.Count > 50)
-                    _inputHistory.RemoveRange(0, _inputHistory.Count - 50);
-            }
-        }
-        catch { /* best-effort */ }
-    }
-
-    private void SaveInputHistory()
-    {
-        try
-        {
-            var dir = Path.GetDirectoryName(InputHistoryPath);
-            if (dir != null && !Directory.Exists(dir))
-                Directory.CreateDirectory(dir);
-            var json = System.Text.Json.JsonSerializer.Serialize(_inputHistory.TakeLast(50).ToList());
-            File.WriteAllText(InputHistoryPath, json);
-        }
-        catch { /* best-effort */ }
-    }
-
-    private async Task HandleSessionsCommandAsync(string input)
-    {
-        var result = await _sessionHandler.ExecuteAsync(input, SaveSessionAsync).ConfigureAwait(false);
-
-        if (result.LoadedMessages != null) SnapshotForUndo();
-        foreach (var msg in result.HistoryMessages)
-            _history.Add(("cmd", null, msg, null));
-
-        if (result.LoadedMessages != null)
-        {
-            _history.Clear();
-            _toolCalls.Clear();
-            foreach (var (role, content) in result.LoadedMessages)
-                _history.Add((role, null, content, null));
-        }
-    }
 }

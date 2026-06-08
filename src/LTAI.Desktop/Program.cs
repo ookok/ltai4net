@@ -44,9 +44,7 @@ public static class Program
         // Set on App for UI access
         App.ChatAgent = chatAgent;
         App.Options = options;
-        App.Services = provider;
-        App.Ltais = new LTAIService(chatAgent, options);
-        LTAI.Desktop.ViewModels.DevUIViewModel.SetServiceProvider(provider);
+        App.Ltais = new LTAIService(chatAgent, options, provider);
         App.Router = await Task.Run(() => provider.GetService<MultiProviderChatClient>());
         App.HttpFactory = await Task.Run(() => provider.GetService<IHttpClientFactory>());
 
@@ -60,7 +58,7 @@ public static class Program
                     LTAI.Core.Configuration.SecretManager.Get("SILICONFLOW_API_KEY")
                     ?? LTAI.Core.Configuration.SecretManager.Get("OPENROUTER_API_KEY"));
             }
-            catch (Exception) { }
+            catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"[Program] Balance fetch: {ex.Message}"); }
         });
     }
 
@@ -100,6 +98,14 @@ public sealed class LTAIService
 {
     public ChatAgent Chat { get; }
     public LTAIOptions Options { get; }
+    public IServiceProvider Services { get; }
+
+    public LTAIService(ChatAgent chat, IOptions<LTAIOptions> options, IServiceProvider services)
+    {
+        Chat = chat;
+        Options = options.Value;
+        Services = services;
+    }
 
     public string Mode => Options.AI.DefaultProvider;
     public string DNAStatus => "simplified (MS Agent Framework 1.8.0)";

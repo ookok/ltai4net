@@ -1,6 +1,8 @@
+using System.Collections.Concurrent;
 using System.Text;
 using System.Text.RegularExpressions;
 using LTAI.Core.Rendering;
+using LTAI.TUI.Services;
 using Spectre.Console;
 using Spectre.Console.Rendering;
 
@@ -30,7 +32,7 @@ public sealed class ChatRenderer
         catch { }
     }
 
-    public Panel BuildMessagePanel(string role, string rawContent, int historyIndex = -1,
+    public IRenderable BuildMessagePanel(string role, string rawContent, int historyIndex = -1,
         string? reasoning = null, HashSet<int>? expandedMessages = null)
         => _messageRenderer.BuildMessagePanel(role, rawContent, historyIndex, reasoning, expandedMessages);
 
@@ -58,20 +60,27 @@ public sealed class ChatRenderer
     // Instance forwarding for static methods (used by ResponseStreamer via _renderer)
     public string RenderToolCallsAsTree(List<(string name, string args, string result)> calls) => RenderToolCallsAsTreeStatic(calls);
 
-    // ── Static methods (shared across renderers) ──
+    // ── Render cache ──
+    private static readonly ConcurrentDictionary<int, string> _renderCache = new();
+    private const int MaxRenderCacheEntries = 256;
+
+    public static void ClearRenderCache() { _renderCache.Clear(); }
 
     public static string MdToPanelContent(string text)
     {
         if (string.IsNullOrWhiteSpace(text)) return "";
+        var hash = text.GetHashCode();
+        if (_renderCache.TryGetValue(hash, out var cached))
+            return cached;
         try
         {
-            var doc = Markdig.Markdown.Parse(text);
-            var spectreRenderer = new SpectreMarkdigRenderer();
-            spectreRenderer.Render(doc);
-            var result = spectreRenderer.ToString().TrimEnd();
-            return result.Length > 0 ? result : "";
+            var result = new SpectreMarkdigRenderer().RenderToString(text);
+            if (result.Length == 0) return "";
+            if (_renderCache.Count < MaxRenderCacheEntries)
+                _renderCache[hash] = result;
+            return result;
         }
-        catch { return text.EscapeMarkup(); }
+        catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"[ChatRenderer] MdToPanelContent failed: {ex.Message}"); return text.EscapeMarkup(); }
     }
 
     public static string RenderToolCallsAsTreeStatic(List<(string name, string args, string result)> calls)
@@ -80,10 +89,10 @@ public sealed class ChatRenderer
         foreach (var (name, args, result) in calls)
         {
             var a = Truncate(args, 40);
-            sb.AppendLine($"[bold yellow]🔧 {name}[/]([grey]{a.EscapeMarkup()}[/])");
+            sb.AppendLine($"[bold {ThemeService.WarningTag}]🔧 {name}[/]([{ThemeService.MutedTag}]{a.EscapeMarkup()}[/])");
             var r = Truncate(result, 80);
             if (!string.IsNullOrEmpty(r))
-                sb.AppendLine($"  [green]└─[/] {r.EscapeMarkup()}");
+                sb.AppendLine($"  [{ThemeService.AccentTag}]└─[/] {r.EscapeMarkup()}");
         }
         return sb.ToString().TrimEnd();
     }
@@ -91,18 +100,27 @@ public sealed class ChatRenderer
     public static string HighlightCommands(string escaped)
     {
         escaped = Regex.Replace(escaped, @"(^|\s)(/[a-zA-Z][\w-]*)",
-            m => m.Groups[1].Value + "[bold yellow]" + m.Groups[2].Value + "[/]");
+            m => m.Groups[1].Value + $"[bold {ThemeService.WarningTag}]" + m.Groups[2].Value + "[/]");
         escaped = Regex.Replace(escaped, @"(^|\s)(#[\w-]+)",
-            m => m.Groups[1].Value + "[bold cyan]" + m.Groups[2].Value + "[/]");
+            m => m.Groups[1].Value + $"[bold {ThemeService.PrimaryTag}]" + m.Groups[2].Value + "[/]");
         return escaped;
     }
 
-    public static readonly string[] PulseFrames =
+    public static string[] PulseFrames => _pulseFrames[(ThemeService.IsLight ? 0 : 1)];
+    private static readonly string[][] _pulseFrames =
     [
-        "[deepskyblue1]⠋[/]", "[deepskyblue1]⠙[/]", "[deepskyblue1]⠹[/]",
-        "[deepskyblue1]⠸[/]", "[deepskyblue1]⠼[/]", "[deepskyblue1]⠴[/]",
-        "[deepskyblue1]⠦[/]", "[deepskyblue1]⠧[/]", "[deepskyblue1]⠇[/]",
-        "[deepskyblue1]⠏[/]",
+        [ // light theme
+            "[blue]⠋[/]", "[blue]⠙[/]", "[blue]⠹[/]",
+            "[blue]⠸[/]", "[blue]⠼[/]", "[blue]⠴[/]",
+            "[blue]⠦[/]", "[blue]⠧[/]", "[blue]⠇[/]",
+            "[blue]⠏[/]",
+        ],
+        [ // dark theme
+            "[deepskyblue1]⠋[/]", "[deepskyblue1]⠙[/]", "[deepskyblue1]⠹[/]",
+            "[deepskyblue1]⠸[/]", "[deepskyblue1]⠼[/]", "[deepskyblue1]⠴[/]",
+            "[deepskyblue1]⠦[/]", "[deepskyblue1]⠧[/]", "[deepskyblue1]⠇[/]",
+            "[deepskyblue1]⠏[/]",
+        ],
     ];
 
 #pragma warning disable IDE0051 // used by MessagePanelRenderer via ChatRenderer.MdToPanelContent

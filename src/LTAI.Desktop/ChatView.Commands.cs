@@ -86,12 +86,12 @@ public sealed partial class ChatView : UserControl
     private void ShowModels()
     {
         var lines = new List<string>();
-        var embedder = App.Services?.GetService(typeof(LTAI.AI.LocalEmbedder)) as LTAI.AI.LocalEmbedder;
+        var embedder = _svc.Services.GetService(typeof(LTAI.AI.LocalEmbedder)) as LTAI.AI.LocalEmbedder;
         if (embedder?.Available == true)
             lines.Add($"L0 嵌入 (optional): {embedder.CurrentModelName} ({embedder.Dim}d)");
         else
             lines.Add("L0 嵌入 (optional): 未加载");
-        var opts = (App.Services?.GetService(typeof(Microsoft.Extensions.Options.IOptions<LTAI.Core.Configuration.LTAIOptions>))
+        var opts = (_svc.Services.GetService(typeof(Microsoft.Extensions.Options.IOptions<LTAI.Core.Configuration.LTAIOptions>))
             as Microsoft.Extensions.Options.IOptions<LTAI.Core.Configuration.LTAIOptions>)?.Value;
         var l1Cfg = opts?.AI.L1;
         var l2Cfg = opts?.AI.L2;
@@ -108,7 +108,7 @@ public sealed partial class ChatView : UserControl
 
     private void ShowModel(string args)
     {
-        var embedder = App.Services?.GetService(typeof(LTAI.AI.LocalEmbedder)) as LTAI.AI.LocalEmbedder;
+        var embedder = _svc.Services.GetService(typeof(LTAI.AI.LocalEmbedder)) as LTAI.AI.LocalEmbedder;
         if (string.IsNullOrWhiteSpace(args))
         {
             ShowModels();
@@ -202,7 +202,7 @@ public sealed partial class ChatView : UserControl
                 _input.CaretIndex = _input.Text.Length;
             }
         }
-        catch (Exception) { }
+        catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"[ChatView] Build context failed: {ex.Message}"); }
     }
 
     private void ShowHelp()

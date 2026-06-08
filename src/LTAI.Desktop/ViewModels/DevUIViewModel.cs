@@ -39,11 +39,10 @@ public sealed partial class DevUIViewModel : ViewModelBase
 
     public DevUIViewModel()
     {
-        var sp = _serviceProvider;
-        if (sp == null) return;
-        _devUi = sp.GetService(typeof(LTAIDevUIService)) as LTAIDevUIService;
-        _embedder = sp.GetService(typeof(LTAI.AI.EmbeddingClient)) as LTAI.AI.EmbeddingClient;
-        _embedCache = sp.GetService(typeof(LTAI.AI.ToolEmbeddingCache)) as LTAI.AI.ToolEmbeddingCache;
+        var sp = App.Ltais?.Services;
+        _devUi = sp?.GetService(typeof(LTAIDevUIService)) as LTAIDevUIService;
+        _embedder = sp?.GetService(typeof(LTAI.AI.EmbeddingClient)) as LTAI.AI.EmbeddingClient;
+        _embedCache = sp?.GetService(typeof(LTAI.AI.ToolEmbeddingCache)) as LTAI.AI.ToolEmbeddingCache;
 
         var cards = _devUi?.ListAgentCards() ?? [];
         foreach (var c in cards) Cards.Add(c);
@@ -92,6 +91,4 @@ public sealed partial class DevUIViewModel : ViewModelBase
         IsSending = false;
     }
 
-    private static System.IServiceProvider? _serviceProvider;
-    public static void SetServiceProvider(System.IServiceProvider sp) => _serviceProvider = sp;
 }

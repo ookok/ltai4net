@@ -14,7 +14,6 @@ public class App : Application
     public static Microsoft.Extensions.Options.IOptions<LTAI.Core.Configuration.LTAIOptions>? Options { get; set; }
     public static LTAI.AI.MultiProviderChatClient? Router { get; set; }
     public static System.Net.Http.IHttpClientFactory? HttpFactory { get; set; }
-    public static System.IServiceProvider? Services { get; set; }
 
     public override void Initialize()
     {
@@ -23,10 +22,11 @@ public class App : Application
 
     public override void OnFrameworkInitializationCompleted()
     {
+        // Merge LtaiTheme resources so views can use FindResource("LtaiBg") etc.
+        Resources.MergedDictionaries.Add(LtaiTheme.GetResources());
+
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
-            // Run service init on threadpool, then post MainWindow creation back to UI
-            // This avoids blocking the UI thread during DI warmup (which can take 5-10s).
             Task.Run(async () =>
             {
                 try
