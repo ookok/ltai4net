@@ -246,11 +246,7 @@ public sealed class ChatLayout : IDisposable
                 {
                     ctx.Status = "[bold]预热 LLM 连接...[/]";
                     var warmupTask = _chat.WarmUpAsync();
-                    _ = warmupTask.ContinueWith(t =>
-                    {
-                        if (t.IsFaulted)
-                            System.Diagnostics.Debug.WriteLine($"WarmUp failed: {t.Exception?.InnerException?.Message}");
-                    }, TaskContinuationOptions.OnlyOnFaulted);
+                    // WarmUp failure is handled by the following WaitAsync timeout + catch
 
                     try { await warmupTask.WaitAsync(TimeSpan.FromSeconds(6)).ConfigureAwait(false); }
                     catch { }
@@ -718,14 +714,13 @@ public sealed class ChatLayout : IDisposable
             return false;
         }
 
-        var cmdStatus = "";
-        var running = true;
         _lastCmdTime = DateTime.UtcNow;
-        if (SlashCommands.TryExecute(input, ref running, ref cmdStatus))
+        var (handled, cmdStatus) = await SlashCommands.TryExecuteAsync(input).ConfigureAwait(false);
+        if (handled)
         {
             if (!string.IsNullOrEmpty(cmdStatus))
                 lock (_historyLock) _history.Add(("cmd", null, cmdStatus, null));
-            return running;
+            return true;
         }
         return true;
     }

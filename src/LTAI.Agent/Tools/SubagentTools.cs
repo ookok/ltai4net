@@ -148,8 +148,7 @@ public sealed class SubagentTools
                     "Use direct tools instead of spawning more subagents.");
         }
 
-        if (!string.IsNullOrEmpty(traceId))
-            System.Diagnostics.Debug.WriteLine($"[Subagent {_spawnCount}] type={type} trace={traceId}");
+        // traceId is recorded via the orchestration span
 
         var systemPrompt = systemOverride ?? GetSystemPrompt(type ?? "generic");
         var isReadOnly = ReadOnlyTypes.Contains(type ?? "");

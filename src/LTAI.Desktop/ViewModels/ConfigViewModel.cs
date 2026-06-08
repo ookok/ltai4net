@@ -7,8 +7,6 @@ namespace LTAI.Desktop.ViewModels;
 
 public sealed partial class ConfigViewModel : ViewModelBase
 {
-    private static readonly System.Net.Http.HttpClient _sharedHttp = new() { Timeout = TimeSpan.FromSeconds(10) };
-
     public ObservableCollection<KeyStatus> Keys { get; } = new();
 
     [ObservableProperty]
@@ -58,8 +56,10 @@ public sealed partial class ConfigViewModel : ViewModelBase
             var keyInfo = KnownKeys.All.FirstOrDefault(k => SecretManager.Has(k.EnvVar));
             var endpoint = keyInfo?.Endpoint ?? "https://api.deepseek.com/v1";
 
-            _sharedHttp.DefaultRequestHeaders.Authorization = new("Bearer", key);
-            using var resp = await _sharedHttp.GetAsync($"{endpoint.TrimEnd('/')}/models");
+            var http = App.HttpFactory?.CreateClient() ?? new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+            var req = new HttpRequestMessage(HttpMethod.Get, $"{endpoint.TrimEnd('/')}/models");
+            req.Headers.Authorization = new("Bearer", key);
+            using var resp = await http.SendAsync(req);
             if (!resp.IsSuccessStatusCode)
             { StatusBarText = $"⚠️ API 返回 {(int)resp.StatusCode}"; return; }
 

@@ -85,11 +85,7 @@ public sealed class SessionManager
             // different key — loading it as plaintext is a security downgrade.
             string json;
             try { json = Decrypt(text); }
-            catch
-            {
-                System.Diagnostics.Debug.WriteLine($"[SessionManager] Failed to decrypt session '{name}'");
-                return null;
-            }
+            catch { return null; }
 
             var doc = JsonDocument.Parse(json);
             _currentHandle = new JsonSessionHandle(name, doc.RootElement.Clone());
@@ -107,11 +103,7 @@ public sealed class SessionManager
             var text = await File.ReadAllTextAsync(path).ConfigureAwait(false);
             string json;
             try { json = Decrypt(text); }
-            catch
-            {
-                System.Diagnostics.Debug.WriteLine($"[SessionManager] Failed to decrypt session '{name}'");
-                return null;
-            }
+            catch { return null; }
 
             var doc = JsonDocument.Parse(json);
             _currentHandle = new JsonSessionHandle(name, doc.RootElement.Clone());

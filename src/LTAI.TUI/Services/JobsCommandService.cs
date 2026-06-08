@@ -14,10 +14,10 @@ public sealed class JobsCommandService : ICommandService
         _jobs = jobs;
     }
 
-    public CommandResult Execute(Command command) => command switch
+    public Task<CommandResult> ExecuteAsync(Command command) => command switch
     {
-        JobsCommand jc => HandleJobsCommand(jc.Args),
-        _ => new SuccessResult("ok"),
+        JobsCommand jc => Task.FromResult(HandleJobsCommand(jc.Args)),
+        _ => Task.FromResult<CommandResult>(new SuccessResult("ok")),
     };
 
     private CommandResult HandleJobsCommand(string args)

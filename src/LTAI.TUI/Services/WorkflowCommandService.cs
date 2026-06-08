@@ -14,13 +14,13 @@ public sealed class WorkflowCommandService : ICommandService
         _workflowRegistry = workflowRegistry;
     }
 
-    public CommandResult Execute(Command command) => command switch
+    public Task<CommandResult> ExecuteAsync(Command command) => command switch
     {
-        WorkflowCommand wc => HandleWorkflowCommand(wc.Args),
-        _ => new SuccessResult("ok"),
+        WorkflowCommand wc => HandleWorkflowCommandAsync(wc.Args),
+        _ => Task.FromResult<CommandResult>(new SuccessResult("ok")),
     };
 
-    private CommandResult HandleWorkflowCommand(string args)
+    private async Task<CommandResult> HandleWorkflowCommandAsync(string args)
     {
         var registry = _workflowRegistry;
         if (registry == null)
@@ -33,7 +33,7 @@ public sealed class WorkflowCommandService : ICommandService
         return sub switch
         {
             "" or "list" => WorkflowList(registry),
-            "reload" => WorkflowReload(registry, subArgs),
+            "reload" => await WorkflowReloadAsync(registry, subArgs).ConfigureAwait(false),
             "show" => WorkflowShow(registry, subArgs),
             "open" => WorkflowOpen(registry, subArgs),
             "create" or "new" => WorkflowCreate(registry, subArgs),
@@ -81,14 +81,14 @@ public sealed class WorkflowCommandService : ICommandService
         return new SuccessResult($"[grey]共 {list.Count} 个 workflow · 目录: {registry.WatchDirectory}[/]");
     }
 
-    private static CommandResult WorkflowReload(YAMLWorkflowRegistry registry, string name)
+    private static async Task<CommandResult> WorkflowReloadAsync(YAMLWorkflowRegistry registry, string name)
     {
         try
         {
             if (string.IsNullOrEmpty(name) || name == "*")
             {
                 var all = registry.List();
-                registry.ReloadAllAsync().GetAwaiter().GetResult();
+                await registry.ReloadAllAsync().ConfigureAwait(false);
                 return new SuccessResult($"[green]✅ 已触发重载[/]  {all.Count} 个 workflow");
             }
 
@@ -103,7 +103,7 @@ public sealed class WorkflowCommandService : ICommandService
             if (matchPath == null)
                 return new SuccessResult($"[red]❌ 找不到 workflow '{name}'[/]  目录: {dir}");
 
-            registry.ReloadFileAsync(matchPath).GetAwaiter().GetResult();
+            await registry.ReloadFileAsync(matchPath).ConfigureAwait(false);
             return new SuccessResult($"[green]✅ 已重载[/] [cyan]/{name}[/]");
         }
         catch (Exception ex)

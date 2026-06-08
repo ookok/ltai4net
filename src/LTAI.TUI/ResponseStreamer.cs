@@ -113,7 +113,7 @@ public sealed class ResponseStreamer
                 if (string.IsNullOrEmpty(token))
                 {
                     if (update.Contents?.Count > 0)
-                        ProcessContents(update.Contents, content, ref toolCallCount, cts);
+                        await ProcessContentsAsync(update.Contents, content, toolCallCount, cts).ConfigureAwait(false);
                     continue;
                 }
 
@@ -184,11 +184,11 @@ public sealed class ResponseStreamer
                 }
             }
             catch (OperationCanceledException) { }
-            catch (Exception ex) { Debug.WriteLine($"spinTask: {ex.Message}"); }
+            catch (Exception) { }
         }, spinCts.Token);
     }
 
-    private void ProcessContents(IList<AIContent> contents, StringBuilder content, ref int toolCallCount, CancellationTokenSource cts)
+    private async Task ProcessContentsAsync(IList<AIContent> contents, StringBuilder content, int toolCallCount, CancellationTokenSource cts)
     {
         foreach (var c in contents)
         {
@@ -200,7 +200,7 @@ public sealed class ResponseStreamer
                     if (qp != null)
                     {
                         var qf = new QuestionFormView(_layout, _liveCtx, _questionService, _updateFooter);
-                        qf.ShowAsync(qp, cts.Token).GetAwaiter().GetResult();
+                        await qf.ShowAsync(qp, cts.Token).ConfigureAwait(false);
                     }
                 }
                 toolCallCount++;

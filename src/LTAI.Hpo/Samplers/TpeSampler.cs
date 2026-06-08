@@ -29,7 +29,8 @@ public sealed class TpeSampler : ISampler
 
     public float SampleFloat(Trial trial, string name, float low, float high, bool log)
     {
-        var completed = trial.Store?.LoadTrialsAsync(trial.StudyName).GetAwaiter().GetResult()
+        var store = trial.Store;
+        var completed = store == null ? null : Task.Run(() => store.LoadTrialsAsync(trial.StudyName)).GetAwaiter().GetResult()
             .Where(t => t.State is TrialState.Completed or TrialState.Pruned).ToList();
 
         if (completed == null || completed.Count < 3)
@@ -105,7 +106,8 @@ public sealed class TpeSampler : ISampler
 
     public T SampleCategorical<T>(Trial trial, string name, T[] choices) where T : notnull
     {
-        var completed = trial.Store?.LoadTrialsAsync(trial.StudyName).GetAwaiter().GetResult()
+        var store = trial.Store;
+        var completed = store == null ? null : Task.Run(() => store.LoadTrialsAsync(trial.StudyName)).GetAwaiter().GetResult()
             .Where(t => t.State is TrialState.Completed or TrialState.Pruned).ToList();
 
         if (completed == null || completed.Count < 3)

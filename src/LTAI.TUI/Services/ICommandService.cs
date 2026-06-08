@@ -8,5 +8,5 @@ namespace LTAI.TUI.Services;
 /// </summary>
 public interface ICommandService
 {
-    CommandResult Execute(Command command);
+    Task<CommandResult> ExecuteAsync(Command command);
 }

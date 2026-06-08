@@ -17,10 +17,10 @@ public sealed class PipeCommandService : ICommandService
         _workflowRegistry = workflowRegistry;
     }
 
-    public CommandResult Execute(Command command) => command switch
+    public Task<CommandResult> ExecuteAsync(Command command) => command switch
     {
-        PipeCommand pc => HandlePipeCommand(pc.Args),
-        _ => new SuccessResult("ok"),
+        PipeCommand pc => Task.FromResult(HandlePipeCommand(pc.Args)),
+        _ => Task.FromResult<CommandResult>(new SuccessResult("ok")),
     };
 
     private CommandResult HandlePipeCommand(string args)

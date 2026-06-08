@@ -3,7 +3,6 @@ using Avalonia.Controls;
 using Avalonia.Interactivity;
 using Avalonia.Media;
 using LTAI.Core.Session;
-using Microsoft.Extensions.AI;
 
 namespace LTAI.Desktop.Tests;
 
@@ -108,7 +107,6 @@ public sealed class SessionStatsPanelUITests
 
         mgr.NewSession();
         var name = mgr.CurrentSession;
-        mgr.AddMessage(ChatRole.User, "hello");
         mgr.SaveSession(name);
 
         panel.Refresh();
@@ -162,11 +160,9 @@ public sealed class SessionStatsPanelUITests
     {
         var mgr = CreateSessionManager();
         mgr.NewSession();
-        mgr.AddMessage(ChatRole.User, "a");
         mgr.SaveSession();
 
         mgr.NewSession();
-        mgr.AddMessage(ChatRole.User, "b");
         mgr.SaveSession();
 
         var panel = new SessionStatsPanel(mgr);

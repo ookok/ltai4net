@@ -14,10 +14,10 @@ public sealed class SpecCommandService : ICommandService
         _specs = specs;
     }
 
-    public CommandResult Execute(Command command) => command switch
+    public Task<CommandResult> ExecuteAsync(Command command) => command switch
     {
-        SpecCommand sc => HandleSpec(sc.Args),
-        _ => new SuccessResult("ok"),
+        SpecCommand sc => Task.FromResult(HandleSpec(sc.Args)),
+        _ => Task.FromResult<CommandResult>(new SuccessResult("ok")),
     };
 
     private CommandResult HandleSpec(string args)

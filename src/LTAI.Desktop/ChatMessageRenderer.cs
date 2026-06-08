@@ -44,7 +44,7 @@ public static class ChatMessageRenderer
         if (has && !_fenceWarningShown)
         {
             _fenceWarningShown = true;
-            System.Diagnostics.Debug.WriteLine("ChatMessageRenderer: delaying render — unclosed code fence");
+
         }
         if (!has) _fenceWarningShown = false;
         return has;
@@ -357,10 +357,7 @@ public static class ChatMessageRenderer
                 panel.Children.Add(border);
             }
         }
-        catch (Exception ex)
-        {
-            System.Diagnostics.Debug.WriteLine($"ChatMessageRenderer: Failed to render inline image: {ex.Message}");
-        }
+        catch (Exception) { }
     }
 
     private static void RenderCodeBlock(StackPanel panel, string code)

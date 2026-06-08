@@ -60,7 +60,7 @@ public static class Program
                     LTAI.Core.Configuration.SecretManager.Get("SILICONFLOW_API_KEY")
                     ?? LTAI.Core.Configuration.SecretManager.Get("OPENROUTER_API_KEY"));
             }
-            catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"Balance fetch failed: {ex.Message}"); }
+            catch (Exception) { }
         });
     }
 

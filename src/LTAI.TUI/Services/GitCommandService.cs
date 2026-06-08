@@ -7,10 +7,10 @@ namespace LTAI.TUI.Services;
 
 public sealed class GitCommandService : ICommandService
 {
-    public CommandResult Execute(Command command) => command switch
+    public Task<CommandResult> ExecuteAsync(Command command) => command switch
     {
-        GitCommand gc => HandleGit(gc.Args),
-        _ => new SuccessResult("ok"),
+        GitCommand gc => Task.FromResult(HandleGit(gc.Args)),
+        _ => Task.FromResult<CommandResult>(new SuccessResult("ok")),
     };
 
     private static CommandResult HandleGit(string args)

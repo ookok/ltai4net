@@ -51,12 +51,12 @@ public sealed class CSharpScriptTool
 
         try
         {
-            Debug.WriteLine($"[C#Script #{id}] 执行中...");
-
             object? result = await CSharpScript.EvaluateAsync<object>(code, DefaultOptions, cancellationToken: ct)
                 .WaitAsync(TimeSpan.FromSeconds(60), ct).ConfigureAwait(false);
 
             sw.Stop();
+
+            var elapsed = sw.ElapsedMilliseconds;
 
             var output = result switch
             {
@@ -64,9 +64,6 @@ public sealed class CSharpScriptTool
                 string s => s,
                 _ => JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true })
             };
-
-            var elapsed = sw.ElapsedMilliseconds;
-            Debug.WriteLine($"[C#Script #{id}] 完成 ({elapsed}ms)");
 
             return JsonSerializer.Serialize(new
             {

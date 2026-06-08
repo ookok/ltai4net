@@ -343,7 +343,7 @@ public sealed class ChatAgent
         var switchMsg = LocalEmbedderModelSwitchNotifier.ConsumeSwitchMessage();
         if (switchMsg != null)
         {
-            System.Diagnostics.Debug.WriteLine($"[ChatAgent] {switchMsg}");
+            // Embedder model switch notification consumed — no Debug.WriteLine needed
         }
 
         // Pro 快速通道：复杂度 >= 4 直接走 Pro，不经过 L1

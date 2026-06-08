@@ -36,6 +36,8 @@ namespace LTAI.Agent.Tools;
 [ToolDomain("sandbox")]
 public sealed class WasmtimeSandbox : AIContextProvider
 {
+    /// <summary>Fallback PATH for sandboxed process execution. Set from config at startup.</summary>
+    public static string SystemPathFallback { get; set; } = @"C:\Windows\system32;C:\Windows";
     private readonly string _workspace;
     private readonly string _sandboxDir;
     private readonly ILogger<WasmtimeSandbox>? _logger;
@@ -148,7 +150,7 @@ public sealed class WasmtimeSandbox : AIContextProvider
 
             // Minimal PATH — no network utilities
             psi.EnvironmentVariables["PATH"] = isWindows
-                ? @"C:\Windows\system32;C:\Windows"
+                ? SystemPathFallback
                 : "/usr/bin:/bin";
 
             using var process = new Process { StartInfo = psi };

@@ -4,10 +4,10 @@ namespace LTAI.TUI.Services;
 
 public sealed class ThemeCommandService : ICommandService
 {
-    public CommandResult Execute(Command command) => command switch
+    public Task<CommandResult> ExecuteAsync(Command command) => command switch
     {
-        ThemeCommand => HandleTheme(),
-        _ => new SuccessResult("ok"),
+        ThemeCommand => Task.FromResult(HandleTheme()),
+        _ => Task.FromResult<CommandResult>(new SuccessResult("ok")),
     };
 
     private static CommandResult HandleTheme()

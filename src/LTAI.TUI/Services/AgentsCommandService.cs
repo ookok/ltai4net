@@ -14,10 +14,10 @@ public sealed class AgentsCommandService : ICommandService
         _devUi = devUi;
     }
 
-    public CommandResult Execute(Command command) => command switch
+    public Task<CommandResult> ExecuteAsync(Command command) => command switch
     {
-        AgentsCommand ac => HandleAgentsCommand(ac.Args),
-        _ => new SuccessResult("ok"),
+        AgentsCommand ac => Task.FromResult(HandleAgentsCommand(ac.Args)),
+        _ => Task.FromResult<CommandResult>(new SuccessResult("ok")),
     };
 
     private CommandResult HandleAgentsCommand(string args)

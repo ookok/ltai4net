@@ -26,10 +26,10 @@ public sealed class ConfigCommandService : ICommandService
         _l2Model = options.Value.AI.GetLayerConfig("deep").Model;
     }
 
-    public CommandResult Execute(Command command) => command switch
+    public Task<CommandResult> ExecuteAsync(Command command) => command switch
     {
-        ConfigCommand cc => HandleConfigCommand(cc.Args),
-        _ => new SuccessResult("ok"),
+        ConfigCommand cc => Task.FromResult(HandleConfigCommand(cc.Args)),
+        _ => Task.FromResult<CommandResult>(new SuccessResult("ok")),
     };
 
     private CommandResult HandleConfigCommand(string args)
@@ -154,8 +154,7 @@ public sealed class ConfigCommandService : ICommandService
 
         if (models.Count == 0)
         {
-            models = [info.Model, "gpt-4o", "gpt-4o-mini", "claude-3-opus", "claude-3-sonnet",
-                "deepseek-v4-flash", "deepseek-reasoner", "qwen-plus", "qwen-turbo"];
+            models = [info.Model];
             AnsiConsole.MarkupLine("[yellow]无法从 API 获取模型列表，使用常用模型作为参考[/]");
         }
 

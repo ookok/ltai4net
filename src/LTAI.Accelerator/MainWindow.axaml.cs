@@ -2,6 +2,7 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Media;
 using System.Diagnostics;
+using Microsoft.Extensions.Configuration;
 
 namespace LTAI.Accelerator;
 
@@ -9,8 +10,8 @@ public partial class MainWindow : Window
 {
     /// <summary>Cloudflare WARP 官方下载地址（首选）</summary>
     private const string WarpOfficialUrl = "https://downloads.cloudflareclient.com/v1/download/windows/ga";
-    /// <summary>国内镜像（同步更新时需同时修改 scripts/install-warp.ps1）</summary>
-    private const string WarpMirrorUrl = "http://mogoo.com.cn/Cloudflare_WARP_2026.4.1390.0.msi";
+    /// <summary>国内镜像，从 appsettings.json LTAI:Mirrors:WarpMsiUrl 读取</summary>
+    private readonly string WarpMirrorUrl;
 
     private ProxyService? _proxy;
     private const int ProxyPort = 11818;
@@ -18,6 +19,12 @@ public partial class MainWindow : Window
 
     public MainWindow()
     {
+        var cfg = new ConfigurationBuilder()
+            .SetBasePath(AppContext.BaseDirectory)
+            .AddJsonFile("appsettings.json", optional: true)
+            .Build();
+        WarpMirrorUrl = cfg.GetSection("LTAI:Mirrors:WarpMsiUrl").Value
+            ?? "http://mogoo.com.cn/Cloudflare_WARP_2026.4.1390.0.msi";
         InitializeComponent();
         SetupTrayIcon();
 

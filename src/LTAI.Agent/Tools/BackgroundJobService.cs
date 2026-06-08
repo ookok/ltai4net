@@ -118,10 +118,7 @@ public sealed class BackgroundJobService : IDisposable
                 _jobs.TryRemove(id, out _);
             }
             catch (OperationCanceledException) { /* service shutting down */ }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"BGJS cleanup error: {ex.Message}");
-            }
+            catch (Exception) { }
         }, _cts.Token);
     }
 

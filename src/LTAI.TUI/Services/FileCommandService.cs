@@ -5,12 +5,12 @@ namespace LTAI.TUI.Services;
 
 public sealed class FileCommandService : ICommandService
 {
-    public CommandResult Execute(Command command) => command switch
+    public Task<CommandResult> ExecuteAsync(Command command) => command switch
     {
-        LsCommand lc => HandleListDir(lc.Args),
-        CdCommand cd => HandleChangeDir(cd.Args),
-        PwdCommand => HandlePwd(),
-        _ => new SuccessResult("ok"),
+        LsCommand lc => Task.FromResult(HandleListDir(lc.Args)),
+        CdCommand cd => Task.FromResult(HandleChangeDir(cd.Args)),
+        PwdCommand => Task.FromResult(HandlePwd()),
+        _ => Task.FromResult<CommandResult>(new SuccessResult("ok")),
     };
 
     private static CommandResult HandlePwd()

@@ -22,9 +22,7 @@ namespace LTAI.AI;
 public sealed class LocalEmbedder : IDisposable
 {
     ~LocalEmbedder() => Dispose(disposing: false);
-    private const int MaxLength = 512;
     private const int DefaultDimension = 384;
-    private static readonly System.Text.RegularExpressions.Regex WhitespaceRegex = new(@"\s+", System.Text.RegularExpressions.RegexOptions.Compiled);
 
     private InferenceSession? _session;
     private Dictionary<string, int>? _vocab;
@@ -89,8 +87,7 @@ public sealed class LocalEmbedder : IDisposable
             VocabUrl: "https://hf-mirror.com/Xenova/all-MiniLM-L6-v2/resolve/main/vocab.txt",
             QuantizedModelUrl: "https://hf-mirror.com/Xenova/all-MiniLM-L6-v2/resolve/main/onnx/model_int8.onnx",
             QuantizedFileName: "model.int8.onnx",
-            Dimension: 384,
-            FallbackBaseUrl: "http://mogoo.com.cn/minilm-l6-v2"
+            Dimension: 384
         ),
         ["bge-small-zh"] = new(
             DisplayName: "BAAI/bge-small-zh-v1.5",
@@ -99,8 +96,7 @@ public sealed class LocalEmbedder : IDisposable
             VocabUrl: "https://hf-mirror.com/Xenova/bge-small-zh-v1.5/resolve/main/vocab.txt",
             QuantizedModelUrl: "https://hf-mirror.com/Xenova/bge-small-zh-v1.5/resolve/main/onnx/model_int8.onnx",
             QuantizedFileName: "model.int8.onnx",
-            Dimension: 384,
-            FallbackBaseUrl: "http://mogoo.com.cn/bge-small-zh"
+            Dimension: 384
         ),
         ["bge-small-en"] = new(
             DisplayName: "BAAI/bge-small-en-v1.5",
@@ -109,8 +105,7 @@ public sealed class LocalEmbedder : IDisposable
             VocabUrl: "https://hf-mirror.com/Xenova/bge-small-en-v1.5/resolve/main/vocab.txt",
             QuantizedModelUrl: "https://hf-mirror.com/Xenova/bge-small-en-v1.5/resolve/main/onnx/model_int8.onnx",
             QuantizedFileName: "model.int8.onnx",
-            Dimension: 384,
-            FallbackBaseUrl: "http://mogoo.com.cn/bge-small-en"
+            Dimension: 384
         ),
     };
 
@@ -151,11 +146,9 @@ public sealed class LocalEmbedder : IDisposable
     /// <summary>Base directory containing model subdirectories.</summary>
     public static string? BaseModelsDirectory { get; private set; }
 
-    // Special tokens for BERT
-    private const int ClsTokenId = 101;
-    private const int SepTokenId = 102;
-    private const int PadTokenId = 0;
-    private const int UnkTokenId = 100;
+    /// <summary>Base URL for model fallback downloads. Set from config at startup.</summary>
+    public static string ModelBaseUrl { get; set; } = "http://mogoo.com.cn/";
+
 
     /// <summary>
     /// Initialize embedder. Auto-detects the models directory and current model.
@@ -334,31 +327,31 @@ public sealed class LocalEmbedder : IDisposable
             throw new InvalidOperationException(
                 "LocalEmbedder not available. Use /model download to download an embedding model.");
 
-        var normalized = NormalizeText(text);
-        var words = SplitWords(normalized);
+        var normalized = BertTokenizer.NormalizeText(text);
+        var words = BertTokenizer.SplitWords(normalized);
 
         // Collect all raw pieces without [CLS]/[SEP], no truncation
         var allPieces = new List<string>();
         foreach (var word in words)
-            allPieces.AddRange(WordPiece(word, vocab));
+            allPieces.AddRange(BertTokenizer.WordPiece(word, vocab));
 
         int totalWithSpecials = allPieces.Count + 2; // + [CLS] + [SEP]
-        if (totalWithSpecials <= MaxLength)
+        if (totalWithSpecials <= BertTokenizer.MaxLength)
         {
             // Short text: single pass, existing fast path
-            var tokens = BuildTokens(allPieces, 0, allPieces.Count, vocab);
-            return L2Normalize(EmbedTokens(session, tokens));
+            var tokens = BertTokenizer.BuildTokens(allPieces, 0, allPieces.Count, vocab);
+            return EmbeddingPool.L2Normalize(EmbedTokens(session, tokens));
         }
 
         // Long text: sliding window with 50% overlap
-        const int window = MaxLength - 2; // room for [CLS] and [SEP]
+        const int window = BertTokenizer.MaxLength - 2; // room for [CLS] and [SEP]
         const int stride = 256;
         var chunkEmbs = new List<float[]>();
 
         for (int start = 0; start < allPieces.Count; start += stride)
         {
             int end = Math.Min(start + window, allPieces.Count);
-            var tokens = BuildTokens(allPieces, start, end, vocab);
+            var tokens = BertTokenizer.BuildTokens(allPieces, start, end, vocab);
             var pooled = EmbedTokens(session, tokens);
             chunkEmbs.Add(pooled);
         }
@@ -371,7 +364,7 @@ public sealed class LocalEmbedder : IDisposable
         for (int i = 0; i < DefaultDimension; i++)
             result[i] /= chunkEmbs.Count;
 
-        return L2Normalize(result);
+        return EmbeddingPool.L2Normalize(result);
     }
 
     /// <summary>
@@ -405,10 +398,10 @@ public sealed class LocalEmbedder : IDisposable
         for (int i = 0; i < texts.Count; i++)
         {
             var t = texts[i];
-            var toks = TokenizeToIds(t, vocab);
+            var toks = BertTokenizer.TokenizeToIds(t, vocab);
             // Find true length (first pad) so we can size the batch tensor tightly
             int trueLen = toks.Length;
-            while (trueLen > 0 && toks[trueLen - 1].InputId == PadTokenId) trueLen--;
+            while (trueLen > 0 && toks[trueLen - 1].InputId == BertTokenizer.PadTokenId) trueLen--;
             if (trueLen > actualMaxLen) actualMaxLen = trueLen;
             perTextTokens.Add(toks);
         }
@@ -431,7 +424,7 @@ public sealed class LocalEmbedder : IDisposable
                 }
                 else
                 {
-                    inputIds[i, j] = PadTokenId;
+                    inputIds[i, j] = BertTokenizer.PadTokenId;
                     attentionMask[i, j] = 0;
                 }
                 tokenTypeIds[i, j] = 0;
@@ -476,60 +469,12 @@ public sealed class LocalEmbedder : IDisposable
                         pooledBuf[k] /= validTokens;
                 }
                 // L2Normalize in-place, then copy result to owned array
-                var emb = L2NormalizeInPlace(pooledBuf, hiddenDim);
+                var emb = EmbeddingPool.L2NormalizeInPlace(pooledBuf, hiddenDim);
                 embeddings[i] = emb;
             }
         }
         finally { pool.Return(pooledBuf); }
         return embeddings;
-    }
-
-    /// <summary>Tokenize text to a fixed-length Token[] (padded to MaxLength).</summary>
-    private Token[] TokenizeToIds(string text, Dictionary<string, int> vocab)
-    {
-        var normalized = NormalizeText(text);
-        var words = SplitWords(normalized);
-        var pieces = new List<string>(MaxLength) { "[CLS]" };
-        foreach (var word in words)
-        {
-            pieces.AddRange(WordPiece(word, vocab));
-            if (pieces.Count >= MaxLength - 1) break;
-        }
-        pieces.Add("[SEP]");
-        if (pieces.Count > MaxLength)
-        {
-            pieces = pieces.Take(MaxLength - 1).ToList();
-            pieces.Add("[SEP]");
-        }
-        var tokens = new Token[MaxLength];
-        for (int i = 0; i < pieces.Count; i++)
-        {
-            tokens[i] = new Token(vocab.GetValueOrDefault(pieces[i], UnkTokenId), 1);
-        }
-        for (int i = pieces.Count; i < MaxLength; i++)
-        {
-            tokens[i] = new Token(PadTokenId, 0);
-        }
-        return tokens;
-    }
-
-    /// <summary>Build padded token list for a range of raw pieces.</summary>
-    private List<Token> BuildTokens(List<string> allPieces, int start, int end, Dictionary<string, int> vocab)
-    {
-        var tokens = new List<Token>(MaxLength);
-        // [CLS]
-        tokens.Add(new Token(vocab.GetValueOrDefault("[CLS]", ClsTokenId), 1));
-        for (int i = start; i < end; i++)
-        {
-            var id = vocab.GetValueOrDefault(allPieces[i], UnkTokenId);
-            tokens.Add(new Token(id, 1));
-        }
-        // [SEP]
-        tokens.Add(new Token(vocab.GetValueOrDefault("[SEP]", SepTokenId), 1));
-        // Pad
-        while (tokens.Count < MaxLength)
-            tokens.Add(new Token(PadTokenId, 0));
-        return tokens;
     }
 
     /// <summary>Run ONNX inference and return mean-pooled embedding.</summary>
@@ -555,234 +500,7 @@ public sealed class LocalEmbedder : IDisposable
 
         using var results = session.Run(inputs);
         var embedding = results.First().AsTensor<float>();
-        return MeanPool(embedding, attentionMask);
-    }
-
-    // ═══════════════════════════════════════════
-    //  BERT WordPiece Tokenizer
-    // ═══════════════════════════════════════════
-
-    private List<Token> Tokenize(string text, Dictionary<string, int> vocab)
-    {
-        // Normalize: lowercase for CJK mixed text, collapse whitespace
-        var normalized = NormalizeText(text);
-        var words = SplitWords(normalized);
-        var pieces = new List<string>();
-
-        pieces.Add("[CLS]");
-
-        foreach (var word in words)
-        {
-            var wordPieces = WordPiece(word, vocab);
-            pieces.AddRange(wordPieces);
-
-            if (pieces.Count >= MaxLength - 1) break;
-        }
-
-        pieces.Add("[SEP]");
-
-        // Truncate if needed
-        if (pieces.Count > MaxLength)
-        {
-            pieces = pieces.Take(MaxLength - 1).ToList();
-            pieces.Add("[SEP]");
-        }
-
-        // Create tokens with attention mask
-        var tokens = new List<Token>();
-        foreach (var piece in pieces)
-        {
-            var id = vocab.GetValueOrDefault(piece, UnkTokenId);
-            tokens.Add(new Token(id, 1));
-        }
-
-        // Pad to MaxLength
-        while (tokens.Count < MaxLength)
-            tokens.Add(new Token(PadTokenId, 0));
-
-        return tokens;
-    }
-
-    private static string NormalizeText(string text)
-    {
-        // For BGE: keep original casing (BGE preserves case for code/English terms)
-        // Replace common whitespace variants
-        text = text.Replace('\r', ' ')
-                   .Replace('\n', ' ')
-                   .Replace('\t', ' ');
-        // Collapse multiple spaces
-        text = WhitespaceRegex.Replace(text, " ");
-        return text.Trim();
-    }
-
-    private static List<string> SplitWords(string text)
-    {
-        var words = new List<string>();
-        var current = new System.Text.StringBuilder();
-
-        foreach (char c in text)
-        {
-            if (c == ' ')
-            {
-                if (current.Length > 0)
-                {
-                    words.Add(current.ToString());
-                    current.Clear();
-                }
-                continue;
-            }
-
-            // CJK characters are treated as individual words
-            if (IsCjk(c))
-            {
-                if (current.Length > 0)
-                {
-                    words.Add(current.ToString());
-                    current.Clear();
-                }
-                words.Add(c.ToString());
-            }
-            else
-            {
-                // Punctuation splits words
-                if (char.IsPunctuation(c) && current.Length > 0)
-                {
-                    words.Add(current.ToString());
-                    current.Clear();
-                }
-                current.Append(c);
-            }
-        }
-
-        if (current.Length > 0)
-            words.Add(current.ToString());
-
-        return words;
-    }
-
-    private List<string> WordPiece(string word, Dictionary<string, int> vocab)
-    {
-        if (vocab.ContainsKey(word))
-            return [word];
-
-        var pieces = new List<string>();
-        var chars = word.ToCharArray();
-        int start = 0;
-
-        while (start < chars.Length)
-        {
-            int end = chars.Length;
-            string? found = null;
-
-            while (end > start)
-            {
-                var sub = start == 0
-                    ? new string(chars[start..end])
-                    : "##" + new string(chars[start..end]);
-
-                if (vocab.ContainsKey(sub))
-                {
-                    found = sub;
-                    break;
-                }
-                end--;
-            }
-
-            if (found != null)
-            {
-                pieces.Add(found);
-                start += found.StartsWith("##") ? found.Length - 2 : found.Length;
-            }
-            else
-            {
-                // Unknown character — use [UNK]
-                pieces.Add("[UNK]");
-                start++;
-            }
-        }
-
-        return pieces;
-    }
-
-    private static bool IsCjk(char c) =>
-        (c >= 0x4E00 && c <= 0x9FFF) ||  // CJK Unified Ideographs
-        (c >= 0x3400 && c <= 0x4DBF) ||  // CJK Extension A
-        (c >= 0x2E80 && c <= 0x2EFF) ||  // CJK Radicals
-        (c >= 0x3000 && c <= 0x303F) ||  // CJK Symbols
-        (c >= 0xFF00 && c <= 0xFFEF);     // Fullwidth
-
-    // ═══════════════════════════════════════════
-    //  Pooling & Normalization
-    // ═══════════════════════════════════════════
-
-    private static float[] MeanPool(Tensor<float> embedding, Tensor<long> attentionMask)
-    {
-        int batchSize = embedding.Dimensions[0];   // 1
-        int seqLen = embedding.Dimensions[1];      // 512
-        int hiddenDim = embedding.Dimensions[2];   // e.g. 768 (BGE) or 384 (MiniLM)
-
-        // Runtime dimension check: track actual model output dim for telemetry
-        if (hiddenDim != DefaultDimension)
-        {
-            System.Diagnostics.Debug.WriteLine(
-                $"[LocalEmbedder] WARNING: model outputs {hiddenDim}-dim but target is {DefaultDimension}; " +
-                $"{(hiddenDim > DefaultDimension ? "truncating" : "padding")} to {DefaultDimension}.");
-        }
-
-        var result = new float[DefaultDimension];
-
-        // Mean pool: average over sequence length for non-padding tokens
-        float[] sum = new float[hiddenDim];
-        int count = 0;
-
-        for (int j = 0; j < seqLen; j++)
-        {
-            if (attentionMask[0, j] == 0) continue;
-            count++;
-            for (int k = 0; k < hiddenDim; k++)
-                sum[k] += embedding[0, j, k];
-        }
-
-        if (count > 0)
-        {
-            for (int k = 0; k < hiddenDim; k++)
-                sum[k] /= count;
-        }
-
-        // Take first N dimensions (target fixed size)
-        Array.Copy(sum, result, Math.Min(hiddenDim, DefaultDimension));
-        return result;
-    }
-
-    private static float[] L2Normalize(float[] vec)
-    {
-        float norm = 0;
-        foreach (var v in vec) norm += v * v;
-        norm = MathF.Sqrt(norm);
-        if (norm < 1e-12f) return vec;
-        for (int i = 0; i < vec.Length; i++)
-            vec[i] /= norm;
-        return vec;
-    }
-
-    /// <summary>L2 normalize the first <c>len</c> elements of <c>buf</c>
-    /// and return a new owned array. Used by <see cref="GenerateBatch"/>
-    /// with rented <see cref="ArrayPool{T}"/> buffers.</summary>
-    private static float[] L2NormalizeInPlace(float[] buf, int len)
-    {
-        float norm = 0;
-        for (int i = 0; i < len; i++) norm += buf[i] * buf[i];
-        norm = MathF.Sqrt(norm);
-        if (norm < 1e-12f)
-        {
-            var fallback = new float[len];
-            fallback.AsSpan().Clear();
-            return fallback;
-        }
-        for (int i = 0; i < len; i++) buf[i] /= norm;
-        var result = new float[len];
-        Array.Copy(buf, result, len);
-        return result;
+        return EmbeddingPool.MeanPool(embedding, attentionMask, DefaultDimension);
     }
 
     // ═══════════════════════════════════════════
@@ -1014,14 +732,14 @@ public sealed class LocalEmbedder : IDisposable
                 var modelUrl = wantQuant ? info.QuantizedModelUrl! : info.ModelUrl;
                 await DownloadModelFileAsync(http, modelUrl, activeFile!).ConfigureAwait(false);
             }
-            catch when (!triedFallback && info.FallbackBaseUrl != null)
+            catch when (!triedFallback)
             {
                 triedFallback = true;
                 // Clean up partial primary download
                 if (File.Exists(vocabFile)) try { File.Delete(vocabFile); } catch { }
                 if (activeFile != null && File.Exists(activeFile)) try { File.Delete(activeFile); } catch { }
 
-                var fb = info.FallbackBaseUrl.TrimEnd('/');
+                var fb = ModelBaseUrl.TrimEnd('/') + "/" + name;
                 var modelFile = wantQuant ? info.QuantizedFileName ?? "model_int8.onnx" : "model.onnx";
                 await DownloadVocabAsync(http, $"{fb}/vocab.txt", vocabFile).ConfigureAwait(false);
                 await DownloadModelFileAsync(http, $"{fb}/{modelFile}", activeFile!).ConfigureAwait(false);
@@ -1113,8 +831,6 @@ public sealed class LocalEmbedder : IDisposable
     ///   quantized model as (e.g. <c>model.int8.onnx</c>). Null when no
     ///   quantized URL is available.</param>
     /// <param name="Dimension">Embedding dimension (e.g. 384).</param>
-    /// <param name="FallbackBaseUrl">Alternative download base (e.g. http://mogoo.com.cn/minilm-l6-v2)
-    ///   tried when primary <c>ModelUrl</c>/<c>QuantizedModelUrl</c> fails.</param>
     public sealed record ModelInfo(
         string DisplayName,
         string Description,
@@ -1122,13 +838,10 @@ public sealed class LocalEmbedder : IDisposable
         string VocabUrl,
         string? QuantizedModelUrl,
         string? QuantizedFileName,
-        int Dimension,
-        string? FallbackBaseUrl = null);
+        int Dimension);
 
     /// <summary>Information about an available (or downloadable) model.</summary>
     public sealed record AvailableModelInfo(string Id, string DisplayName, string Description, int Dimension, bool Downloaded, bool QuantizedDownloaded);
-
-    private readonly record struct Token(long InputId, long AttentionMask);
 
     public void Dispose()
     {

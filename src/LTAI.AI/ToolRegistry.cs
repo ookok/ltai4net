@@ -118,7 +118,7 @@ public static class ToolRegistry
                     .GetCustomAttribute<ToolDomainAttribute>(false)?.Domain ?? "";
             }
         }
-        catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"GetToolDomain failed: {ex.Message}"); }
+        catch (Exception) { }
         return "";
     }
 

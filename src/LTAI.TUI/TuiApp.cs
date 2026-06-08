@@ -105,12 +105,12 @@ public sealed class TuiApp
         _ = Task.Run(async () =>
         {
             try { await FetchBalanceAsync().ConfigureAwait(false); }
-            catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"FetchBalanceAsync: {ex.Message}"); }
+            catch (Exception) { }
         });
         _ = Task.Run(async () =>
         {
             try { await FetchModelInfoAsync().ConfigureAwait(false); }
-            catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"FetchModelInfoAsync: {ex.Message}"); }
+            catch (Exception) { }
         });
 
         // 主循环：多视图导航

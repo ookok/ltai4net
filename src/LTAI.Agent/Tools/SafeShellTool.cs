@@ -19,6 +19,8 @@ namespace LTAI.Agent.Tools;
 [ToolDomain("shell")]
 public sealed class SafeShellTool
 {
+    /// <summary>Fallback PATH for sandboxed process execution. Set from config at startup.</summary>
+    public static string SystemPathFallback { get; set; } = @"C:\Windows\system32;C:\Windows";
     private readonly string _ws;
     private readonly HashSet<string>? _allowList;
     private readonly IHttpClientFactory? _httpFactory;
@@ -158,7 +160,7 @@ public sealed class SafeShellTool
         };
         // Restrict PATH to prevent LOLBin abuse and env-based injection
         psi.EnvironmentVariables["PATH"] = isWindows
-            ? @"C:\Windows\system32;C:\Windows"
+            ? SystemPathFallback
             : "/usr/bin:/bin";
         psi.EnvironmentVariables.Remove("LD_PRELOAD");
         psi.EnvironmentVariables.Remove("LD_LIBRARY_PATH");

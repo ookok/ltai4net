@@ -14,6 +14,7 @@ public sealed class ModelCommandService : ICommandService
     private readonly MultiProviderChatClient? _router;
     private readonly LocalEmbedder? _embedder;
     private readonly ModelMetadataProvider? _modelsProvider;
+    private readonly IHttpClientFactory _httpFactory;
     private readonly string _defaultProvider;
     private readonly string _l1Model;
     private readonly string _l2Model;
@@ -23,22 +24,27 @@ public sealed class ModelCommandService : ICommandService
         MultiProviderChatClient? router,
         LocalEmbedder? embedder,
         ModelMetadataProvider? modelsProvider,
+        IHttpClientFactory httpFactory,
         IOptions<LTAIOptions> options)
     {
         _router = router;
         _embedder = embedder;
         _modelsProvider = modelsProvider;
+        _httpFactory = httpFactory;
         _defaultProvider = options.Value.AI.DefaultProvider ?? "DeepSeek";
         _l1Model = options.Value.AI.GetLayerConfig("fast").Model;
         _l2Model = options.Value.AI.GetLayerConfig("deep").Model;
     }
 
-    public CommandResult Execute(Command command) => command switch
+    public async Task<CommandResult> ExecuteAsync(Command command)
     {
-        ModelCommand mc => HandleModelCommand(mc.Args),
-        ModelsCommand => HandleModelsCommand(),
-        _ => new SuccessResult("ok"),
-    };
+        return command switch
+        {
+            ModelCommand mc => await HandleModelCommandAsync(mc.Args).ConfigureAwait(false),
+            ModelsCommand => HandleModelsCommand(),
+            _ => new SuccessResult("ok"),
+        };
+    }
 
     // ── /models ──
 
@@ -96,7 +102,7 @@ public sealed class ModelCommandService : ICommandService
 
     // ── /model ──
 
-    private CommandResult HandleModelCommand(string args)
+    private async Task<CommandResult> HandleModelCommandAsync(string args)
     {
         var parts = args.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
         var subCmd = parts.Length > 0 ? parts[0].ToLowerInvariant() : "";
@@ -133,17 +139,20 @@ public sealed class ModelCommandService : ICommandService
             subCmd = subArgs.Split(' ', 2)[0].ToLowerInvariant();
         subArgs = subArgs.Trim();
 
-        return (subCmd, embedder) switch
+        CommandResult result = (subCmd, embedder) switch
         {
             ("" or "list", not null) => HandleModelList(embedder),
             ("switch", not null) => HandleModelSwitch(embedder, subArgs),
-            ("download", not null) => HandleModelDownload(embedder, subArgs),
+            ("download", not null) => null!,
             ("delete" or "remove", not null) => HandleModelDelete(embedder, subArgs),
             ("cleanup", not null) => HandleModelCleanup(embedder, subArgs),
             ("info", not null) => HandleModelInfo(embedder),
             ("quant", not null) => HandleModelQuant(embedder, subArgs),
             _ => new SuccessResult("用法: /model [l0 [list|download|switch|delete|info|cleanup|quant]] | l1 | l2"),
         };
+        if (subCmd == "download" && embedder != null)
+            result = await HandleModelDownloadAsync(embedder, subArgs).ConfigureAwait(false);
+        return result;
     }
 
     private CommandResult HandleLayerSelect(string layer)
@@ -186,7 +195,8 @@ public sealed class ModelCommandService : ICommandService
         {
             try
             {
-                var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+                using var http = _httpFactory.CreateClient();
+                http.Timeout = TimeSpan.FromSeconds(15);
                 var req = new HttpRequestMessage(HttpMethod.Get, $"{info.Endpoint.TrimEnd('/')}/models");
                 if (authHeader != null) req.Headers.Authorization = authHeader;
                 var resp = http.Send(req);
@@ -239,7 +249,8 @@ public sealed class ModelCommandService : ICommandService
             return new SuccessResult($"未设置 {info.EnvVar}，/config apikey {provider}");
         try
         {
-            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+            using var http = _httpFactory.CreateClient();
+            http.Timeout = TimeSpan.FromSeconds(15);
             var req = new HttpRequestMessage(HttpMethod.Get, $"{info.Endpoint!.TrimEnd('/')}/models");
             if (key != null) req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", key);
             var resp = http.Send(req);
@@ -291,7 +302,8 @@ public sealed class ModelCommandService : ICommandService
         List<string> models;
         try
         {
-            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+            using var http = _httpFactory.CreateClient();
+            http.Timeout = TimeSpan.FromSeconds(15);
             var req = new HttpRequestMessage(HttpMethod.Get, $"{info.Endpoint.TrimEnd('/')}/models");
             if (key != null) req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", key);
             var resp = http.Send(req);
@@ -359,7 +371,7 @@ public sealed class ModelCommandService : ICommandService
             "已自动清空 tool/agent embedding 缓存，下次路由会重新计算向量。");
     }
 
-    private static CommandResult HandleModelDownload(LocalEmbedder embedder, string name)
+    private async Task<CommandResult> HandleModelDownloadAsync(LocalEmbedder embedder, string name)
     {
         if (string.IsNullOrWhiteSpace(name))
         {
@@ -373,8 +385,9 @@ public sealed class ModelCommandService : ICommandService
             return new SuccessResult($"未知模型 '{name}'。可用: {string.Join(", ", LocalEmbedder.KnownModels.Keys)}");
 
         var info = LocalEmbedder.KnownModels[name];
-        using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
-        var success = Task.Run(() => embedder.DownloadModelAsync(name, http)).GetAwaiter().GetResult();
+        using var http = _httpFactory.CreateClient();
+        http.Timeout = TimeSpan.FromMinutes(10);
+        var success = await embedder.DownloadModelAsync(name, http).ConfigureAwait(false);
         return success
             ? new SuccessResult($"✅ 模型 [green]{name}[/]（{info.DisplayName}）下载完成")
             : new SuccessResult($"❌ 模型 '{name}' 下载失败。请检查网络连接后重试");

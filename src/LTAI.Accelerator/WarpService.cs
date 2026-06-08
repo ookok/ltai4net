@@ -179,7 +179,7 @@ public sealed class WarpService : IDisposable
                 KillWarpGui();
             }
         }
-        catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"WatchdogKillWarpGui: {ex.Message}"); }
+        catch (Exception) { }
     }
 
     public void Dispose()

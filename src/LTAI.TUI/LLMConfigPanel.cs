@@ -40,8 +40,8 @@ public sealed class LLMConfigPanel
         _httpFactory = httpFactory;
         _logger = logger;
         _provider = DetectActiveProvider();
-        _l1Model = options?.Value.AI.GetLayerConfig("fast").Model ?? "deepseek-v4-flash";
-        _l2Model = options?.Value.AI.GetLayerConfig("deep").Model ?? "deepseek-v4-pro";
+        _l1Model = options?.Value.AI.GetLayerConfig("fast").Model ?? "";
+        _l2Model = options?.Value.AI.GetLayerConfig("deep").Model ?? "";
     }
 
     private static string DetectActiveProvider()

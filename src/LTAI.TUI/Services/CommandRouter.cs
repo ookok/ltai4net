@@ -54,23 +54,23 @@ public sealed class CommandRouter
         _themeService = themeService ?? new ThemeCommandService();
     }
 
-    public CommandResult Execute(Command cmd) => cmd switch
+    public Task<CommandResult> ExecuteAsync(Command cmd) => cmd switch
     {
-        ModelCommand or ModelsCommand => _modelService.Execute(cmd),
-        JobsCommand => _jobsService.Execute(cmd),
-        ConfigCommand => _configService.Execute(cmd),
-        SnippetCommand => _snippetService.Execute(cmd),
-        WorkflowCommand => _workflowService.Execute(cmd),
-        PipeCommand => _pipeService.Execute(cmd),
-        AgentsCommand => _agentsService.Execute(cmd),
-        ToolsCommand => _toolsService.Execute(cmd),
-        McpCommand => _mcpService.Execute(cmd),
-        GitCommand => _gitService.Execute(cmd),
-        LsCommand or CdCommand or PwdCommand => _fileService.Execute(cmd),
-        HelpCommand or StatusCommand => _infoService.Execute(cmd),
-        GraphCommand => _graphService.Execute(cmd),
-        SpecCommand => _specService.Execute(cmd),
-        ThemeCommand => _themeService.Execute(cmd),
-        _ => new SuccessResult("ok"),
+        ModelCommand or ModelsCommand => _modelService.ExecuteAsync(cmd),
+        JobsCommand => _jobsService.ExecuteAsync(cmd),
+        ConfigCommand => _configService.ExecuteAsync(cmd),
+        SnippetCommand => _snippetService.ExecuteAsync(cmd),
+        WorkflowCommand => _workflowService.ExecuteAsync(cmd),
+        PipeCommand => _pipeService.ExecuteAsync(cmd),
+        AgentsCommand => _agentsService.ExecuteAsync(cmd),
+        ToolsCommand => _toolsService.ExecuteAsync(cmd),
+        McpCommand => _mcpService.ExecuteAsync(cmd),
+        GitCommand => _gitService.ExecuteAsync(cmd),
+        LsCommand or CdCommand or PwdCommand => _fileService.ExecuteAsync(cmd),
+        HelpCommand or StatusCommand => _infoService.ExecuteAsync(cmd),
+        GraphCommand => _graphService.ExecuteAsync(cmd),
+        SpecCommand => _specService.ExecuteAsync(cmd),
+        ThemeCommand => _themeService.ExecuteAsync(cmd),
+        _ => Task.FromResult<CommandResult>(new SuccessResult("ok")),
     };
 }

@@ -331,9 +331,9 @@ public sealed class TextPadView : UserControl
         _gitCommitBtn = new Button { Content = "💾 Commit", FontSize = 10, Height = 20, Background = LtaiTheme.Sbb(LtaiTheme.AccentSystem), Foreground = LtaiTheme.Sbb(LtaiTheme.TextOnAccent), IsVisible = false };
         _gitCommitBtn.Click += (_, _) => ShowGitCommitDialog();
         _gitPullBtn = new Button { Content = "⬇ Pull", FontSize = 10, Height = 20, Background = LtaiTheme.Sbb(LtaiTheme.AccentInfo), Foreground = LtaiTheme.Sbb(LtaiTheme.TextOnAccent), IsVisible = false };
-        _gitPullBtn.Click += (_, _) => RunGitCmd("pull");
+        _gitPullBtn.Click += async (_, _) => await RunGitCmdAsync("pull");
         _gitPushBtn = new Button { Content = "⬆ Push", FontSize = 10, Height = 20, Background = LtaiTheme.Sbb(LtaiTheme.AccentDNA), Foreground = LtaiTheme.Sbb(LtaiTheme.TextOnAccent), IsVisible = false };
-        _gitPushBtn.Click += (_, _) => RunGitCmd("push");
+        _gitPushBtn.Click += async (_, _) => await RunGitCmdAsync("push");
         _gitBlameBtn = new Button { Content = "👤 Blame", FontSize = 10, Height = 20, Background = LtaiTheme.Sbb(LtaiTheme.AccentWarning), Foreground = LtaiTheme.Sbb(LtaiTheme.TextOnAccent), IsVisible = false };
         _gitBlameBtn.Click += (_, _) => ToggleBlame();
 
@@ -750,7 +750,7 @@ public sealed class TextPadView : UserControl
         // Git 操作
         if (Directory.Exists(Path.Combine(path, ".git")) || FindGitDir(path) != null)
         {
-            menu.Items.Add(WithClick(new MenuItem { Header = "🌿 git status" }, (_, _) => RunGitCmd("status")));
+            menu.Items.Add(WithClick(new MenuItem { Header = "🌿 git status" }, async (_, _) => await RunGitCmdAsync("status")));
             menu.Items.Add(WithClick(new MenuItem { Header = "💾 git commit..." }, (_, _) => ShowGitCommitDialog()));
         }
         return menu;
@@ -1036,14 +1036,9 @@ public sealed class TextPadView : UserControl
             _watcher.Deleted += OnFileChanged;
             _watcher.Renamed += OnFileRenamed;
             _watcher.Changed += OnFileChanged;
-            _watcher.Error += (_, e) => System.Diagnostics.Debug.WriteLine($"FileWatcher error: {e.GetException().Message}");
             _watcher.EnableRaisingEvents = true;
-            System.Diagnostics.Debug.WriteLine($"FileWatcher started: {dir}");
         }
-        catch (Exception ex)
-        {
-            System.Diagnostics.Debug.WriteLine($"FileWatcher start failed: {ex.Message}");
-        }
+        catch (Exception) { }
     }
 
     private void StopWatching()
@@ -1194,7 +1189,7 @@ public sealed class TextPadView : UserControl
         catch { return null; }
     }
 
-    private async void RunGitCmd(string args)
+    private async Task RunGitCmdAsync(string args)
     {
         if (_gitBranch == null) { _statusBar.Text = "⚠️ 不在 Git 仓库中"; return; }
         try

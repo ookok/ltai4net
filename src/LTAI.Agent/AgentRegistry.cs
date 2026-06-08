@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using LTAI.AI;
@@ -57,7 +58,7 @@ public static class AgentRegistry
                         if (def != null && !string.IsNullOrEmpty(def.Name))
                             result.Add(def);
                     }
-                    catch { }
+                    catch (Exception) { }
                 }
                 break;
             }

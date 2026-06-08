@@ -14,6 +14,8 @@ public sealed class SessionStatsPanel : UserControl
     private readonly TextBlock _statsText;
     private readonly StackPanel _root;
 
+    public bool IsExpanded => _vm.IsExpanded;
+
     public event Action<string?>? SessionSelected;
     public event Action? NewSessionClicked;
 

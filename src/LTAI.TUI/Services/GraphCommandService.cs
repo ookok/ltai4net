@@ -14,10 +14,10 @@ public sealed class GraphCommandService : ICommandService
         _kbGraph = kbGraph;
     }
 
-    public CommandResult Execute(Command command) => command switch
+    public Task<CommandResult> ExecuteAsync(Command command) => command switch
     {
-        GraphCommand gc => HandleGraph(gc.Args),
-        _ => new SuccessResult("ok"),
+        GraphCommand gc => Task.FromResult(HandleGraph(gc.Args)),
+        _ => Task.FromResult<CommandResult>(new SuccessResult("ok")),
     };
 
     private CommandResult HandleGraph(string args)

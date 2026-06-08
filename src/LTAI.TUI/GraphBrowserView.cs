@@ -35,7 +35,7 @@ public sealed class GraphBrowserView
         }
 
         if (_store != null)
-            RenderStatsSummary();
+            _ = RenderStatsSummaryAsync();
 
         bool running = true;
         while (running)
@@ -97,12 +97,12 @@ public sealed class GraphBrowserView
         }
     }
 
-    private void RenderStatsSummary()
+    private async Task RenderStatsSummaryAsync()
     {
         if (_store == null) return;
         try
         {
-            var stats = _store.Stats().GetAwaiter().GetResult();
+            var stats = await _store.Stats().ConfigureAwait(false);
             var panel = new Panel(new Markup($"[green]{Markup.Escape(stats)}[/]"))
             {
                 Border = BoxBorder.Rounded,

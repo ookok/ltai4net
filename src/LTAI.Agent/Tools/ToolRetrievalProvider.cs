@@ -83,11 +83,7 @@ public sealed class ToolRetrievalProvider : AIContextProvider
         {
             await ToolRegistry.InitializeAsync(candidates.ToList(), _embedder, _cache, ct).ConfigureAwait(false);
             _initialized = true;
-#if DEBUG
-            System.Diagnostics.Debug.WriteLine("[ToolRAG] Registered tools:");
-            foreach (var t in candidates)
-                System.Diagnostics.Debug.WriteLine($"  {t.Name}  ({t.Description})");
-#endif
+// Tool registration logging removed — use LTAI debug tracing if needed
         }
 
         // 取用户最后一条消息作为查询

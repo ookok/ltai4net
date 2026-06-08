@@ -666,11 +666,7 @@ public static class ServiceCollectionExtensions
                     var log = sp.GetService<Microsoft.Extensions.Logging.ILogger<ModelMetadataProvider>>();
                     log?.LogWarning(ex, "Model metadata refresh failed at startup");
                 }
-            }).ContinueWith(t =>
-            {
-                if (t.IsFaulted)
-                    System.Diagnostics.Debug.WriteLine($"ModelMetadata startup refresh failed: {t.Exception?.InnerException?.Message}");
-            }, TaskContinuationOptions.OnlyOnFaulted);
+            });
             return provider;
         });
 
@@ -739,9 +735,12 @@ public static class ServiceCollectionExtensions
                 return router; // Bypass safety in dev mode
 
             var logger = sp.GetService<ILogger<LTAI.Core.Safety.SafeChatClient>>();
-            var safetyKey = LTAI.Core.Configuration.SecretManager.Get(opts.AI.ApiKeyEnv ?? "DEEPSEEK_API_KEY") ?? "";
+            var safetyModel = opts.AI.Model;
+            if (string.IsNullOrEmpty(safetyModel))
+                throw new InvalidOperationException("SafeChatClient requires a model configured in LTAI:AI:Model");
+            var safetyKey = opts.AI.ApiKeyEnv != null ? LTAI.Core.Configuration.SecretManager.Get(opts.AI.ApiKeyEnv) ?? "" : "";
             IChatClient safetyClient = OpenAIChatClientFactory.Create(
-                "https://api.deepseek.com/v1", "deepseek-v4-flash", safetyKey);
+                "https://api.deepseek.com/v1", safetyModel, safetyKey);
 
             var wrapped = new LTAI.Core.Safety.SafeChatClient(router, safetyClient, logger);
             // P1: wrap with MetricsChatClient for OTel metrics

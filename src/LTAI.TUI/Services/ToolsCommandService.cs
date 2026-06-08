@@ -10,10 +10,10 @@ namespace LTAI.TUI.Services;
 
 public sealed class ToolsCommandService : ICommandService
 {
-    public CommandResult Execute(Command command) => command switch
+    public Task<CommandResult> ExecuteAsync(Command command) => command switch
     {
-        ToolsCommand tc => HandleToolsCommand(tc.Args),
-        _ => new SuccessResult("ok"),
+        ToolsCommand tc => Task.FromResult(HandleToolsCommand(tc.Args)),
+        _ => Task.FromResult<CommandResult>(new SuccessResult("ok")),
     };
 
     private CommandResult HandleToolsCommand(string args)

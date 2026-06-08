@@ -18,10 +18,10 @@ public sealed class EmbeddingClient : IDisposable
     /// <summary>Embedding providers. Endpoint/model from KnownKeys (source of truth).</summary>
     public static readonly (string envVar, string endpoint, string model, string name, int dim)[] DefaultProviders =
     {
-        ("DEEPSEEK_API_KEY",     "https://api.deepseek.com/v1",              "deepseek-embedding",          "DeepSeek", 1024),
-        ("OPENAI_API_KEY",       "https://api.openai.com/v1",                "text-embedding-3-small",      "OpenAI", 1536),
-        ("SILICONFLOW_API_KEY",  "https://api.siliconflow.cn/v1",           "BAAI/bge-large-zh-v1.5",     "SiliconFlow", 1024),
-        ("DASHSCOPE_API_KEY",    "https://dashscope.aliyuncs.com/compatible-mode/v1", "text-embedding-v2", "Aliyun", 1536),
+        ("DEEPSEEK_API_KEY",     "https://api.deepseek.com/v1",              "",          "DeepSeek", 1024),
+        ("OPENAI_API_KEY",       "https://api.openai.com/v1",                "",          "OpenAI", 1536),
+        ("SILICONFLOW_API_KEY",  "https://api.siliconflow.cn/v1",           "",          "SiliconFlow", 1024),
+        ("DASHSCOPE_API_KEY",    "https://dashscope.aliyuncs.com/compatible-mode/v1", "", "Aliyun", 1536),
     };
 
     private readonly IHttpClientFactory _httpFactory;

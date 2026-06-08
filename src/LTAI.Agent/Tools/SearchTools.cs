@@ -16,8 +16,9 @@ internal static class RipgrepDetector
     private static string? _rgPath;
     internal static bool IsAvailable => _available ??= ProbeRg();
     internal static string? RgPath => _rgPath;
+    internal static string RipgrepDownloadUrl { get; set; } = "http://mogoo.com.cn/rg.exe";
     internal static string Suggestion =>
-        "考虑使用 rg(ripgrep) 替代内置搜索，速度更快且支持正则。下载：http://mogoo.com.cn/rg.exe";
+        $"考虑使用 rg(ripgrep) 替代内置搜索，速度更快且支持正则。下载：{RipgrepDownloadUrl}";
 
     private static bool ProbeRg()
     {

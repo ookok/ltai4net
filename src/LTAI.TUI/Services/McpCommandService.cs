@@ -19,25 +19,25 @@ public sealed class McpCommandService : ICommandService
         _options = options;
     }
 
-    public CommandResult Execute(Command command) => command switch
+    public Task<CommandResult> ExecuteAsync(Command command) => command switch
     {
-        McpCommand mc => HandleMcpCommand(mc.Args),
-        _ => new SuccessResult("ok"),
+        McpCommand mc => HandleMcpCommandAsync(mc.Args),
+        _ => Task.FromResult<CommandResult>(new SuccessResult("ok")),
     };
 
-    private CommandResult HandleMcpCommand(string args)
+    private async Task<CommandResult> HandleMcpCommandAsync(string args)
     {
         var parts = args.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
         var sub = parts.Length > 0 ? parts[0].ToLowerInvariant() : "";
         var arg = parts.Length > 1 ? parts[1] : "";
 
-        return (sub, arg) switch
+        return (sub) switch
         {
-            ("" or "list" or "status", _) => ListMcpServers(),
-            ("tools", _) => ListMcpTools(),
-            ("add", _) => AddMcpServer(arg),
-            ("remove" or "rm" or "delete", _) => RemoveMcpServer(arg),
-            ("edit", _) => EditMcpServer(arg),
+            "" or "list" or "status" => ListMcpServers(),
+            "tools" => await ListMcpTools().ConfigureAwait(false),
+            "add" => AddMcpServer(arg),
+            "remove" or "rm" or "delete" => RemoveMcpServer(arg),
+            "edit" => EditMcpServer(arg),
             _ => new SuccessResult("用法: /mcp list|status|tools|add <name> <command> [args...]|remove <name>|edit <name> <command> [args...]"),
         };
     }
@@ -70,7 +70,7 @@ public sealed class McpCommandService : ICommandService
         return new SuccessResult(sb.ToString());
     }
 
-    private CommandResult ListMcpTools()
+    private async Task<CommandResult> ListMcpTools()
     {
         var config = _options?.Value.Mcp;
         if (config == null || config.Servers.Length == 0)
@@ -81,8 +81,7 @@ public sealed class McpCommandService : ICommandService
 
         try
         {
-            var tools = _mcpFactory?.GetToolsAsync(config, CancellationToken.None)
-                .GetAwaiter().GetResult();
+            var tools = await _mcpFactory!.GetToolsAsync(config, CancellationToken.None).ConfigureAwait(false);
             if (tools == null || tools.Count == 0)
             {
                 sb.AppendLine("[yellow]暂无可用 MCP 工具，请确认 MCP 服务器已连接[/]");

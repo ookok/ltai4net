@@ -11,6 +11,8 @@ namespace LTAI.Agent.Tools;
 /// </summary>
 public static class SkillScriptRunner
 {
+    /// <summary>Fallback PATH for sandboxed process execution. Set from config at startup.</summary>
+    public static string SystemPathFallback { get; set; } = @"C:\Windows\system32;C:\Windows";
     /// <summary>供 AgentSkillsProviderBuilder.UseFileScriptRunner 使用的委托。</summary>
     public static async Task<object?> RunAsync(
         object skill,
@@ -62,7 +64,7 @@ public static class SkillScriptRunner
         };
         // Restrict PATH to prevent environment-based injection
         psi.EnvironmentVariables["PATH"] = OperatingSystem.IsWindows()
-            ? @"C:\Windows\system32;C:\Windows"
+            ? SystemPathFallback
             : "/usr/bin:/bin";
         psi.EnvironmentVariables.Remove("LD_PRELOAD");
         psi.EnvironmentVariables.Remove("LD_LIBRARY_PATH");

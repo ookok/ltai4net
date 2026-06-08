@@ -1,0 +1,64 @@
+using System.Reflection;
+using Microsoft.Extensions.AI;
+using Microsoft.Extensions.DependencyInjection;
+using Xunit;
+
+namespace LTAI.Tests;
+
+public class AgentBuilderToolTests
+{
+    private static readonly Type s_builderType = LoadBuilderType();
+
+    private static Type LoadBuilderType()
+    {
+        var assembly = AppDomain.CurrentDomain.GetAssemblies()
+            .FirstOrDefault(a => a.GetName().Name == "LTAI.Agent")
+            ?? Assembly.Load("LTAI.Agent");
+        return assembly.GetType("LTAI.Agent.AgentBuilder")!;
+    }
+
+    private static List<AITool> InvokeRegister(string methodName, object[] args)
+    {
+        var tools = new List<AITool>();
+        var allArgs = new object[] { tools }.Concat(args).ToArray();
+        var method = s_builderType.GetMethod(methodName,
+            BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(method);
+        method.Invoke(null, allArgs);
+        return tools;
+    }
+
+    [Fact]
+    public void RegisterBuiltInTools_ContainsKillProcess()
+    {
+        var result = LTAI.Agent.Tools.SystemTools.ListProcesses();
+        Assert.False(string.IsNullOrWhiteSpace(result));
+    }
+
+    [Fact]
+    public void RegisterShellTools_ContainsPwsh()
+    {
+        var tools = InvokeRegister("RegisterFileAndTextTools",
+            ["LTAI-Chat", false, false, false, true, "."]);
+
+        Assert.Contains(tools, t => t.Name == "RunCommand");
+    }
+
+    [Fact]
+    public void RegisterFileTools_ContainsRead()
+    {
+        var tools = InvokeRegister("RegisterFileAndTextTools",
+            ["LTAI-Chat", true, false, false, false, "."]);
+
+        Assert.Contains(tools, t => t.Name == "ReadFileContent");
+    }
+
+    [Fact]
+    public void RegisterSearchTools_ContainsWebSearch()
+    {
+        var tools = InvokeRegister("RegisterWebTools",
+            ["LTAI-Chat", null!]);
+
+        Assert.Contains(tools, t => t.Name == "WebSearch");
+    }
+}

@@ -51,7 +51,7 @@ public static class FailureRecorder
             // Skip recording entirely if content is unsafe (API keys, secrets, etc.)
             if (!SafetyRules.IsSafeByRules(redactedQuery) || !SafetyRules.IsSafeByRules(redactedResponse))
             {
-                System.Diagnostics.Debug.WriteLine("[FailureRecorder] Skipped recording unsafe content");
+
                 return;
             }
 
@@ -69,10 +69,7 @@ public static class FailureRecorder
             File.WriteAllText(path, JsonSerializer.Serialize(record, _jsonOpts));
             Interlocked.Increment(ref _totalFailures);
         }
-        catch (Exception ex)
-        {
-            System.Diagnostics.Debug.WriteLine($"[FailureRecorder] Failed: {ex.Message}");
-        }
+        catch (Exception) { }
     }
 
     public static long TotalFailures => _totalFailures;

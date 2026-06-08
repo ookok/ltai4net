@@ -19,11 +19,18 @@ namespace LTAI.TUI;
 
 public static class Program
 {
-    private static readonly string WtDownloadUrl =
-        "http://mogoo.com.cn/Microsoft.WindowsTerminal_1.24.11321.0_x64.zip";
+    private static string s_wtDownloadUrl = "http://mogoo.com.cn/Microsoft.WindowsTerminal_1.24.11321.0_x64.zip";
 
     public static async Task Main(string[] args)
     {
+        // Build config early so static fields can read from it
+        var earlyConfig = new ConfigurationBuilder()
+            .SetBasePath(AppContext.BaseDirectory)
+            .AddJsonFile("appsettings.json", optional: true)
+            .Build();
+        s_wtDownloadUrl = earlyConfig.GetSection("LTAI:Mirrors:WindowsTerminalUrl").Value
+            ?? "http://mogoo.com.cn/Microsoft.WindowsTerminal_1.24.11321.0_x64.zip";
+
         // ── 终端选择：仅 Windows 下 wt.exe → 当前终端 ──
         if (OperatingSystem.IsWindows() && (args.Length == 0 || args[0] != "--in-wt"))
         {
@@ -54,7 +61,7 @@ public static class Program
 
         // Detect OS language for i18n (B1+B2)
         var detectedLang = LTAI.Core.I18n.Locale.CurrentLang;
-        System.Diagnostics.Debug.WriteLine($"Locale detected: {detectedLang}");
+        // Locale detected (logged via ILogger in DI phase)
 
         // Show splash immediately — no waiting for DI
         AnsiConsole.Write(new FigletText("LTAI").Color(Color.Green));
@@ -101,6 +108,7 @@ public static class Program
             sp.GetService<MultiProviderChatClient>(),
             sp.GetService<LocalEmbedder>(),
             sp.GetService<ModelMetadataProvider>(),
+            sp.GetRequiredService<IHttpClientFactory>(),
             options);
         var jobsSvc = new JobsCommandService(sp.GetService<BackgroundJobService>());
         var configSvc = new ConfigCommandService(
@@ -183,9 +191,9 @@ public static class Program
     {
         try
         {
-            Console.WriteLine();
+            AnsiConsole.WriteLine();
             AnsiConsole.MarkupLine("[yellow]Windows Terminal 未找到。是否自动下载? (y/N)[/]");
-            AnsiConsole.MarkupLine("[grey]  下载地址: " + WtDownloadUrl + "[/]");
+            AnsiConsole.MarkupLine("[grey]  下载地址: " + s_wtDownloadUrl + "[/]");
             Console.Write("> ");
             var line = Console.ReadLine()?.Trim().ToLowerInvariant();
             if (line != "y" && line != "yes") return false;
@@ -199,7 +207,7 @@ public static class Program
 
             using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
             http.DefaultRequestHeaders.UserAgent.ParseAdd("LTAI/1.0");
-            var response = await http.GetAsync(WtDownloadUrl);
+            var response = await http.GetAsync(s_wtDownloadUrl);
             response.EnsureSuccessStatusCode();
             var totalBytes = response.Content.Headers.ContentLength ?? 0;
             AnsiConsole.MarkupLine($"[green]├─ 下载完成 ({totalBytes / 1024 / 1024}MB)[/]");
@@ -220,7 +228,7 @@ public static class Program
                 return true;
             }
 
-            AnsiConsole.MarkupLine("[red]└─ 解压后未找到 wt.exe，请手动解压 " + WtDownloadUrl + "[/]");
+            AnsiConsole.MarkupLine("[red]└─ 解压后未找到 wt.exe，请手动解压 " + s_wtDownloadUrl + "[/]");
             return false;
         }
         catch (Exception ex)
@@ -233,22 +241,22 @@ public static class Program
     /// <summary>Windows Terminal 未安装时打印提醒。</summary>
     private static void PrintWindowsTerminalReminder()
     {
-        Console.WriteLine();
-        Console.WriteLine("╔════════════════════════════════════════════════════════════╗");
-        Console.WriteLine("║ Windows Terminal 未安装。推荐使用它获得最佳 LTAI 体验。     ║");
-        Console.WriteLine("╠════════════════════════════════════════════════════════════╣");
-        Console.WriteLine("║ 安装命令:                                                ║");
-        Console.WriteLine("║   winget install Microsoft.WindowsTerminal                ║");
-        Console.WriteLine("║                                                          ║");
-        Console.WriteLine("║ 手动下载:                                                ║");
-        Console.WriteLine("║   https://apps.microsoft.com/detail/9N0DX20HK701         ║");
-        Console.WriteLine("║                                                          ║");
-        Console.WriteLine("║ 自动下载:                                                ║");
-        Console.WriteLine("║   " + WtDownloadUrl + "  ║");
-        Console.WriteLine("║                                                          ║");
-        Console.WriteLine("║ 安装后重启 LTAI 即可自动使用 Windows Terminal。            ║");
-        Console.WriteLine("╚════════════════════════════════════════════════════════════╝");
-        Console.WriteLine();
+        AnsiConsole.WriteLine();
+        AnsiConsole.WriteLine("╔════════════════════════════════════════════════════════════╗");
+        AnsiConsole.WriteLine("║ Windows Terminal 未安装。推荐使用它获得最佳 LTAI 体验。     ║");
+        AnsiConsole.WriteLine("╠════════════════════════════════════════════════════════════╣");
+        AnsiConsole.WriteLine("║ 安装命令:                                                ║");
+        AnsiConsole.WriteLine("║   winget install Microsoft.WindowsTerminal                ║");
+        AnsiConsole.WriteLine("║                                                          ║");
+        AnsiConsole.WriteLine("║ 手动下载:                                                ║");
+        AnsiConsole.WriteLine("║   https://apps.microsoft.com/detail/9N0DX20HK701         ║");
+        AnsiConsole.WriteLine("║                                                          ║");
+        AnsiConsole.WriteLine("║ 自动下载:                                                ║");
+        AnsiConsole.WriteLine("║   " + s_wtDownloadUrl + "  ║");
+        AnsiConsole.WriteLine("║                                                          ║");
+        AnsiConsole.WriteLine("║ 安装后重启 LTAI 即可自动使用 Windows Terminal。            ║");
+        AnsiConsole.WriteLine("╚════════════════════════════════════════════════════════════╝");
+        AnsiConsole.WriteLine();
     }
 
     /// <summary>查找 wt.exe，优先本地 tools/wt/ 再查系统路径。</summary>

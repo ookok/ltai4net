@@ -412,12 +412,12 @@ public partial class MainWindow : Window
                 {
                     var endpoints = new Dictionary<string, (string ep, string model)>
                     {
-                        ["DeepSeek"] = ("https://api.deepseek.com/v1", "deepseek-v4-flash"),
-                        ["OpenAI"] = ("https://api.openai.com/v1", "gpt-4o"),
-                        ["SiliconFlow"] = ("https://api.siliconflow.cn/v1", "deepseek-ai/DeepSeek-V2.5"),
-                        ["Aliyun (Qwen)"] = ("https://dashscope.aliyuncs.com/compatible-mode/v1", "qwen-plus"),
-                        ["Zhipu (GLM)"] = ("https://open.bigmodel.cn/api/paas/v4", "glm-4-plus"),
-                        ["Groq"] = ("https://api.groq.com/openai/v1", "llama-3.3-70b-versatile"),
+                        ["DeepSeek"] = ("https://api.deepseek.com/v1", ""),
+                        ["OpenAI"] = ("https://api.openai.com/v1", ""),
+                        ["SiliconFlow"] = ("https://api.siliconflow.cn/v1", ""),
+                        ["Aliyun (Qwen)"] = ("https://dashscope.aliyuncs.com/compatible-mode/v1", ""),
+                        ["Zhipu (GLM)"] = ("https://open.bigmodel.cn/api/paas/v4", ""),
+                        ["Groq"] = ("https://api.groq.com/openai/v1", ""),
                     };
                     if (endpoints.TryGetValue(providerName, out var ep))
                     {

@@ -7,11 +7,11 @@ namespace LTAI.TUI.Services;
 
 public sealed class InfoCommandService : ICommandService
 {
-    public CommandResult Execute(Command command) => command switch
+    public Task<CommandResult> ExecuteAsync(Command command) => command switch
     {
-        HelpCommand => HandleHelp(),
-        StatusCommand => HandleStatus(),
-        _ => new SuccessResult("ok"),
+        HelpCommand => Task.FromResult(HandleHelp()),
+        StatusCommand => Task.FromResult(HandleStatus()),
+        _ => Task.FromResult<CommandResult>(new SuccessResult("ok")),
     };
 
     private static CommandResult HandleHelp()

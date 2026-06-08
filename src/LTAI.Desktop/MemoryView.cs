@@ -33,7 +33,7 @@ public sealed class MemoryView : UserControl
 
         var statsBtn = new Button { Content = "📊 统计", Background = LtaiTheme.Sbb(LtaiTheme.BgPanel),
             Foreground = LtaiTheme.Sbb(LtaiTheme.TextPrimary) };
-        statsBtn.Click += (_, _) => ShowStats();
+        statsBtn.Click += async (_, _) => await ShowStatsAsync();
         searchRow.Children.Add(statsBtn);
         root.Children.Add(searchRow);
 
@@ -92,7 +92,7 @@ public sealed class MemoryView : UserControl
         catch (Exception ex) { _statusText.Text = $"错误: {ex.Message}"; }
     }
 
-    private async void ShowStats()
+    private async Task ShowStatsAsync()
     {
         if (_store == null) return;
         try
@@ -116,6 +116,6 @@ public sealed class MemoryView : UserControl
             if (VisualRoot is Window owner)
                 await dialog.ShowDialog(owner);
         }
-        catch { }
+        catch (Exception) { }
     }
 }

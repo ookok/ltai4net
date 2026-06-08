@@ -278,12 +278,12 @@ public static class SlashCommands
         return null;
     }
 
-    /// <summary>Try to parse and execute a slash command. Returns true if handled.</summary>
-    public static bool TryExecute(string input, ref bool running, ref string? statusMessage)
+    /// <summary>Try to parse and execute a slash command. Returns (handled, statusMessage).</summary>
+    public static async Task<(bool Handled, string? StatusMessage)> TryExecuteAsync(string input)
     {
         var parsed = Parser.Parse(input);
         if (parsed is ChatMessageCommand or EmptyCommand)
-            return false;
+            return (false, null);
 
         var cmdName = parsed switch
         {
@@ -293,31 +293,26 @@ public static class SlashCommands
         UsageCount.TryGetValue(cmdName, out var count);
         UsageCount[cmdName] = count + 1;
 
-        return ExecuteParsed(parsed, ref running, ref statusMessage);
+        return await ExecuteParsedAsync(parsed).ConfigureAwait(false);
     }
 
-    private static bool ExecuteParsed(Command cmd, ref bool running, ref string? statusMessage)
+    private static async Task<(bool Handled, string? StatusMessage)> ExecuteParsedAsync(Command cmd)
     {
         var router = _router;
 
         switch (cmd)
         {
             case ExitCommand:
-                running = false;
-                statusMessage = "";
-                return true;
+                return (true, null);
 
             case NewSessionCommand:
-                statusMessage = "Session cleared. Starting fresh.";
-                return true;
+                return (true, "Session cleared. Starting fresh.");
 
             case RetryCommand:
-                statusMessage = "Retrying last message...";
-                return true;
+                return (true, "Retrying last message...");
 
             case CompactCommand:
-                statusMessage = "Summarizing older turns...";
-                return true;
+                return (true, "Summarizing older turns...");
 
             case CostCommand:
                 var cost = UsageTracker.EstimatedCost;
@@ -328,85 +323,75 @@ public static class SlashCommands
                 var requests = UsageTracker.Requests;
                 var rate = UsageTracker.CacheHitRate;
                 var saved = UsageTracker.CacheSavedDisplay;
-                statusMessage = $"[bold yellow]📊 使用统计[/]\n" +
+                return (true, $"[bold yellow]📊 使用统计[/]\n" +
                     $"  [cyan]模型:[/] {model}\n" +
                     $"  [cyan]请求:[/] {requests:N0}\n" +
                     $"  [cyan]Token:[/] {prompt:N0} + {completion:N0} = [bold]{total:N0}[/]\n" +
                     $"  [cyan]费用:[/] [bold]¥{cost:F4}[/]\n" +
                     $"  [cyan]缓存命中:[/] {rate:F1}% ({saved})\n" +
-                    $"  [cyan]运行时间:[/] {UsageTracker.Uptime:hh\\:mm\\:ss}";
-                return true;
+                    $"  [cyan]运行时间:[/] {UsageTracker.Uptime:hh\\:mm\\:ss}");
 
             case UndoCommand:
-                statusMessage = ChatLayout.TryUndoCallback != null && ChatLayout.TryUndoCallback()
+                var undoMsg = ChatLayout.TryUndoCallback != null && ChatLayout.TryUndoCallback()
                     ? "[green]已撤销上一步操作[/]"
                     : "[yellow]没有可撤销的操作[/]";
-                return true;
+                return (true, undoMsg);
 
             case ApproveCommand:
-                statusMessage = PlanTools.ApprovePlan() + "\n" + PlanTools.StartExecution();
-                return true;
+                return (true, PlanTools.ApprovePlan() + "\n" + PlanTools.StartExecution());
 
             case PlanCommand:
-                statusMessage = PlanTools.PlanStatus();
-                return true;
+                return (true, PlanTools.PlanStatus());
 
             case ModeCommand mc:
                 var mode = mc.Args.ToLowerInvariant() switch { "review" => "review", "auto" => "auto", _ => "" };
-                if (mode == "") { statusMessage = "Usage: /mode review|auto"; return true; }
+                if (mode == "") return (true, "Usage: /mode review|auto");
                 ChatLayout.EditMode = mode;
-                statusMessage = $"Edit mode: {mode} (style: {(mode == "review" ? "批注修改" : "直接编辑")})";
-                return true;
+                return (true, $"Edit mode: {mode} (style: {(mode == "review" ? "批注修改" : "直接编辑")})");
 
             case LangCommand lc:
                 var lang = lc.Args.Trim().ToLowerInvariant();
-                if (lang is "zh-cn" or "zh" or "cn") { Locale.SetLang("zh-CN"); ThemeService.Language = "zh-CN"; ThemeService.Save(); statusMessage = "已切换界面语言: 中文"; }
-                else if (lang is "en-us" or "en" or "us") { Locale.SetLang("en-US"); ThemeService.Language = "en-US"; ThemeService.Save(); statusMessage = "Language switched: English"; }
-                else statusMessage = $"Usage: /lang zh-CN|en-US (current: {Locale.CurrentLang})";
-                return true;
+                if (lang is "zh-cn" or "zh" or "cn") { Locale.SetLang("zh-CN"); ThemeService.Language = "zh-CN"; ThemeService.Save(); return (true, "已切换界面语言: 中文"); }
+                else if (lang is "en-us" or "en" or "us") { Locale.SetLang("en-US"); ThemeService.Language = "en-US"; ThemeService.Save(); return (true, "Language switched: English"); }
+                else return (true, $"Usage: /lang zh-CN|en-US (current: {Locale.CurrentLang})");
 
             case SkillCommand sc:
                 if (string.IsNullOrEmpty(sc.Args))
-                    statusMessage = "[yellow]用法: /skill <技能名> — 列出可用技能: /skills[/]";
+                    return (true, "[yellow]用法: /skill <技能名> — 列出可用技能: /skills[/]");
                 else
-                    statusMessage = $"[yellow]⏳ 运行技能 '{sc.Args}'...[/]\n[grey]技能在后台运行中，结果将出现在对话中[/]";
-                return true;
+                    return (true, $"[yellow]⏳ 运行技能 '{sc.Args}'...[/]\n[grey]技能在后台运行中，结果将出现在对话中[/]");
 
             case UnknownCommand uc:
-                statusMessage = uc.Suggestion != null
+                var msg = uc.Suggestion != null
                     ? $"Unknown command '/{uc.CmdName}'. Did you mean '/{uc.Suggestion}'?"
                     : $"Unknown command '/{uc.CmdName}'. Type /help for available commands.";
-                return true;
+                return (true, msg);
 
             // ── Model command: cascade if empty args ──
             case ModelCommand mc when string.IsNullOrWhiteSpace(mc.Args) && CascadeRoutes.Resolve("model", []) != null:
                 OpenCascadeMenu("model");
-                statusMessage = BuildCascadeText();
-                return true;
+                return (true, BuildCascadeText());
 
             // ── Commands delegated to router ──
             default:
-                if (router == null) return false;
-                var result = router.Execute(cmd);
+                if (router == null) return (false, null);
+                var result = await router.ExecuteAsync(cmd).ConfigureAwait(false);
                 switch (result)
                 {
                     case SuccessResult(var markup, var snippetFill):
                         if (snippetFill != null) PendingSnippetFill = snippetFill;
-                        statusMessage = markup;
-                        return true;
+                        return (true, markup);
 
                     case CascadeResult(var rc, var ra):
                         OpenCascadeMenu(rc, ra);
-                        statusMessage = BuildCascadeText();
-                        return true;
+                        return (true, BuildCascadeText());
 
                     case RedirectResult(var input):
                         PendingInput = input;
-                        statusMessage = "";
-                        return true;
+                        return (true, "");
 
                     default:
-                        return false;
+                        return (false, null);
                 }
         }
     }
