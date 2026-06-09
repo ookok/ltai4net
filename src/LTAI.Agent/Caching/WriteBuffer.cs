@@ -98,8 +98,26 @@ public sealed class WriteBuffer : IDisposable
         if (_disposed) return;
         _disposed = true;
         try { _timer.Dispose(); } catch { }
-        FlushAllAsync().GetAwaiter().GetResult();
+        FlushAllSync();
         _dirty.Clear();
+    }
+
+    private void FlushAllSync()
+    {
+        foreach (var kv in _dirty)
+        {
+            try
+            {
+                var dir = Path.GetDirectoryName(kv.Value.Path);
+                if (dir != null) Directory.CreateDirectory(dir);
+                File.WriteAllText(kv.Value.Path, kv.Value.Content, _opts.Encoding);
+                _mmap?.Invalidate(kv.Value.Path);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "WriteBuffer: sync flush failed for {Path}", kv.Value.Path);
+            }
+        }
     }
 
     private void FlushDue()

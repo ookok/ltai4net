@@ -65,12 +65,13 @@ public sealed class ToolEmbeddingCache
     /// </summary>
     public void Invalidate()
     {
-        _initLock.Wait();
+        // Non-blocking: skip if lock held (another thread is already invalidating)
+        if (!_initLock.Wait(0)) return;
         try
         {
             var cleared = _store.Count;
             _store.Clear();
-            _initialized = false; // force full reload on next GetOrComputeAllAsync
+            _initialized = false;
             try
             {
                 if (File.Exists(_filePath)) File.Delete(_filePath);

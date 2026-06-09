@@ -7,6 +7,12 @@ allowedTools: [ReadFileContent, SearchContent, FindInCode, Glob, DirectoryTree]
 
 # Security Audit 安全审计
 
+## 概要
+- 六维安全审计：注入风险、认证鉴权、密钥泄漏、配置安全、XSS/CSRF、供应链
+- 工具配合：SearchContent 搜索模式、FindInCode 定位关键 API、Glob 圈定审计范围
+- 输出：问题摘要 + 文件位置 + 修复建议
+- 范围：所有 .cs .js .ts .py 文件及相关配置
+
 对代码库进行安全审计，按以下维度逐一检查：
 
 ## 1. 注入风险

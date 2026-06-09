@@ -227,11 +227,11 @@ public sealed class CSharpDiagProvider : IDisposable
     /// <summary>
     /// 清除所有文档和诊断。
     /// </summary>
-    public void Reset()
+    public async Task ResetAsync()
     {
         if (_disposed) return;
 
-        _compileLock.Wait();
+        await _compileLock.WaitAsync().ConfigureAwait(false);
         try
         {
             _documents.Clear();

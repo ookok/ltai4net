@@ -566,7 +566,7 @@ public sealed class LocalEmbedder : IDisposable
         var fp32File = wantQuant ? null : Path.Combine(modelDir, "model.onnx");
         var activeFile = (string?)quantFile ?? fp32File;
 
-        var http = httpClient ?? new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
+        var http = httpClient ?? new HttpClient(new SocketsHttpHandler { PooledConnectionLifetime = TimeSpan.FromMinutes(5) }) { Timeout = TimeSpan.FromMinutes(10) };
         var disposeHttp = httpClient == null;
         var triedFallback = false;
 

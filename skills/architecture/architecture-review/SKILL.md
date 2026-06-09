@@ -7,6 +7,12 @@ allowedTools: [ReadFileContent, SearchContent, Glob, DirectoryTree]
 
 # Architecture Review 架构审查
 
+## 概要
+- 六维评估：模块划分、依赖方向、扩展性、技术债务、数据流、辅助工具
+- 关键检查：循环依赖、`[Obsolete]`/TODO 搜索、依赖倒置原则
+- 工具配合：SearchContent 搜索标记、FindInCode 查找符号、DirectoryTree 看结构
+- 输出：层级结构图 + 发现(✅/⚠️/❌) + P0/P1 建议优先级
+
 对项目或模块进行架构评估，按以下维度分析：
 
 ## 1. 模块划分

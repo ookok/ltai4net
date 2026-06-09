@@ -28,11 +28,10 @@ namespace LTAI.Agent.Tools;
 public sealed class ToolRetrievalProvider : AIContextProvider
 {
     // 兜底工具：无论用户说什么，这些工具始终可用
+    // 精简至 4 个核心工具，其余依赖 ToolRAG 语义召回
     private static readonly HashSet<string> PinnedTools = new(StringComparer.OrdinalIgnoreCase)
     {
-        "ReadFileContent", "ListTools", "ListFiles", "WebFetch", "WebSearch",
-        "RunCommand", "ListDirectory", "DirectoryTree", "Glob",
-        "GetCurrentDateTime",
+        "ReadFileContent", "RunCommand", "ListFiles", "GetCurrentDateTime",
     };
     // 始终排除的元工具（不暴露给普通对话）
     private static readonly HashSet<string> ExcludedTools = new(StringComparer.OrdinalIgnoreCase)

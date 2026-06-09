@@ -26,12 +26,24 @@ public sealed class GraphInitService : IHostedService, IDisposable
         _logger = logger;
     }
 
-    public async Task StartAsync(CancellationToken ct)
+    public Task StartAsync(CancellationToken ct)
     {
-        _logger.LogInformation("Graph: initial build starting in 10s...");
-        await Task.Delay(TimeSpan.FromSeconds(10), ct).ConfigureAwait(false);
-        await BuildAllAsync(ct).ConfigureAwait(false);
-        StartWatcher();
+        _logger.LogInformation("Graph: scheduling initial build in 10s...");
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(TimeSpan.FromSeconds(10), ct).ConfigureAwait(false);
+                await BuildAllAsync(ct).ConfigureAwait(false);
+                StartWatcher();
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Graph: background init failed");
+            }
+        }, ct);
+        return Task.CompletedTask;
     }
 
     public Task StopAsync(CancellationToken ct)

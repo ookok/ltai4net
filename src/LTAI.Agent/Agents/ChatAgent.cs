@@ -1,8 +1,5 @@
-using System.Diagnostics;
 using System.Runtime.CompilerServices;
-using System.Text;
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using LTAI.AI;
 using LTAI.Agent.Formats;
 using LTAI.Agent.FusionRoute;
@@ -18,39 +15,19 @@ namespace LTAI.Agent;
 
 public sealed class ChatAgent
 {
-    private static readonly HashSet<string> _simpleQueries = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "hello", "hi", "hey", "你好", "嗨", "早上好", "下午好", "晚上好",
-        "good morning", "good afternoon", "good evening",
-        "who are you", "你是谁", "help", "帮助", "/help",
-        "status", "状态", "/status", "thanks", "谢谢", "thank you"
-    };
-    private static readonly HashSet<string> _toolRequiredKeywords = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "search", "查找", "find", "lookup", "查询", "计算",
-        "compile", "build", "run", "执行", "运行", "编译",
-        "git", "commit", "push", "pull", "branch",
-        "file", "文件", "read", "写", "write",
-        "read", "代码", "code", "analyze", "分析",
-        "翻译", "translate", "summarize", "总结",
-        "draw", "画", "diagram", "图",
-        "create", "创建", "delete", "删除", "update", "更新"
-    };
-
     private readonly AIAgent _agent;
     private readonly AIAgent? _proAgent;
     private readonly AgentWorkflows? _workflows;
     private readonly BudgetTracker? _budgetTracker;
     private readonly LocalEmbedder? _localEmbedder;
-    private readonly IHttpClientFactory? _httpFactory;
-    private readonly bool _sameModel;
-
-    // ── Response rendering ──
+    private readonly IEscalationDecider _escalationDecider;
+    private readonly IChatClient? _steerJudge;
 
     public ChatAgent(AIAgent agent, AIAgent? proAgent = null, AgentWorkflows? workflows = null,
         BudgetTracker? budgetTracker = null,
         LocalEmbedder? localEmbedder = null, IHttpClientFactory? httpFactory = null,
-        bool sameModel = false, IChatClient? steerJudge = null)
+        bool sameModel = false, IChatClient? steerJudge = null,
+        IEscalationDecider? escalationDecider = null)
     {
         _agent = agent;
         _proAgent = proAgent;
@@ -60,157 +37,22 @@ public sealed class ChatAgent
         _httpFactory = httpFactory;
         _sameModel = sameModel;
         _steerJudge = steerJudge;
+        _escalationDecider = escalationDecider ?? new DefaultEscalationDecider();
     }
 
     private static readonly AsyncLocal<string> _traceId = new();
     private static string GetOrCreateTraceId() => _traceId.Value ??= Guid.NewGuid().ToString("N")[..12];
 
-    /// <summary>P6: lightweight steer model for fast decisions (hallucination check, routing, suitability).</summary>
-    private readonly IChatClient? _steerJudge;
+    private readonly IHttpClientFactory? _httpFactory;
+    private readonly bool _sameModel;
 
-    /// <summary>
-    /// P6: Fast hallucination check using the steer model (or main LLM fallback).
-    /// Returns true if answer appears grounded, false if likely hallucinated.
-    /// </summary>
-    private async Task<(bool IsAdequate, string? Reason)> JudgeResponseQualityAsync(
-        string message, string response, CancellationToken ct)
-    {
-        if (_steerJudge == null)
-            return (true, "no steer model configured — assuming adequate");
-        var client = _steerJudge;
-        try
-        {
-            var judgeMessages = new ChatMessage[]
-            {
-                new(ChatRole.System,
-                    "You are a response quality judge. Given a user query and an AI response, " +
-                    "determine if the response is adequate. " +
-                    "Criteria: relevant, helpful, not vague/hedging, not refusing, not hallucinating.\n" +
-                    "Respond with ONLY valid JSON like: {\"adequate\": true, \"reason\": \"...\", \"self_score\": 4}\n" +
-                    "Score: 1-5 (5=excellent). Adequate if score >= 3 and reason indicates adequate."),
-                new(ChatRole.User,
-                    $"Query: {message}\n\nResponse: {response}")
-            };
-            var judgeResult = await client.GetResponseAsync(judgeMessages, cancellationToken: ct)
-                .ConfigureAwait(false);
-            var raw = judgeResult.Text ?? "";
-            var start = raw.IndexOf('{');
-            var end = raw.LastIndexOf('}');
-            if (start >= 0 && end > start)
-            {
-                using var doc = JsonDocument.Parse(raw[start..(end + 1)]);
-                var root = doc.RootElement;
-                var adequate = root.TryGetProperty("adequate", out var a) && a.GetBoolean();
-                var reason = root.TryGetProperty("reason", out var r) ? r.GetString() : null;
-                var score = root.TryGetProperty("self_score", out var s) ? s.GetInt32() : 0;
-                return (adequate && score >= 3, reason ?? (adequate ? null : "judge deemed inadequate"));
-            }
-            return (true, null);
-        }
-        catch
-        {
-            return (true, null); // On error, assume adequate (don't block the user)
-        }
-    }
-
-    /// <summary>Build L1 exploration state for chain-of-thought routing.</summary>
-    private static L1State BuildL1State(string message, string response, AgentResponse result)
-    {
-        var gap = EstimateCoverageGap(message, response);
-        var state = new L1State
-        {
-            Label = gap > 0.4 ? "escalate" : "handled",
-            SupportCount = CountSupportingEvidence(response),
-            Gap = gap,
-            ToolCalls = result.Messages?
-                .SelectMany(m => m.Contents?.OfType<FunctionCallContent>() ?? [])
-                .Select(fc => fc.Name ?? "")
-                .Where(n => n.Length > 0)
-                .ToList() ?? [],
-            EscalationReason = gap > 0.5
-                ? $"coverage gap={gap:F2}" : null
-        };
-        return state;
-    }
-
-    private static double EstimateCoverageGap(string message, string response)
-    {
-        if (string.IsNullOrWhiteSpace(response)) return 1.0;
-        var msgLower = message.ToLowerInvariant();
-        var respLower = response.ToLowerInvariant();
-        var keywords = msgLower.Split(' ', StringSplitOptions.RemoveEmptyEntries)
-            .Where(w => w.Length > 3)
-            .ToHashSet();
-        return keywords.Count == 0 ? 0 : (double)keywords.Count(k => !respLower.Contains(k)) / keywords.Count;
-    }
-
-    private static int CountSupportingEvidence(string text)
-    {
-        if (string.IsNullOrWhiteSpace(text)) return 0;
-        var count = 0;
-        var lines = text.Split('\n');
-        foreach (var line in lines)
-        {
-            var t = line.Trim();
-            if (t.StartsWith('-') || t.StartsWith('*') || t.StartsWith("1.") || t.StartsWith("2."))
-                count++;
-        }
-        return count;
-    }
-
-    private static int EstimateComplexity(string message)
-    {
-        if (string.IsNullOrWhiteSpace(message)) return 0;
-        var parts = message.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        var score = parts.Length switch
-        {
-            <= 5 => 1,
-            <= 15 => 2,
-            <= 30 => 3,
-            <= 50 => 4,
-            _ => 5
-        };
-        if (_toolRequiredKeywords.Any(k => message.Contains(k, StringComparison.OrdinalIgnoreCase)))
-            score += 1;
-        if (message.Contains('\n')) score += 1;
-        if (message.Length > 200) score += 1;
-        return Math.Min(score, 7);
-    }
-
-    private static double EstimateResponseEntropy(string text)
-    {
-        if (string.IsNullOrWhiteSpace(text)) return 1.0;
-        var hedgeWords = new[] { "maybe", "perhaps", "probably", "possibly", "might", "could be",
-            "不确定", "可能", "也许", "大概", "估计", "似乎", "推测" };
-        var count = hedgeWords.Count(w => text.Contains(w, StringComparison.OrdinalIgnoreCase));
-        return Math.Min(1.0, count * 0.2);
-    }
-
-    private static double EstimateValueOfInformation(string query, string response, double entropy)
-    {
-        if (entropy > 0.5) return 0.8;
-        if (string.IsNullOrWhiteSpace(response)) return 1.0;
-        var qLower = query.ToLowerInvariant();
-        var ambiguous = new[] { "what", "how", "why", "when", "where", "which",
-            "什么", "如何", "怎么", "为什么", "何时", "哪里" };
-        if (ambiguous.Any(w => qLower.Contains(w))) return 0.5 + entropy * 0.3;
-        return entropy * 0.5;
-    }
-
-    /// <summary>
-    /// 预热：本地嵌入模型懒加载。不再发送网络请求到外部 API，
-    /// 因为 UI 初始化不应该依赖外部网络连通性。
-    /// </summary>
     public async Task WarmUpAsync(CancellationToken ct = default)
     {
-        // 本地嵌入模型懒加载（仅在需要时触发，不阻塞 UI）
         if (_localEmbedder?.Available == false)
             _ = _localEmbedder.Dim;
-
         await Task.CompletedTask.ConfigureAwait(false);
     }
 
-    /// <summary>F14: Check safety block flag and replace output if unsafe.</summary>
     private static string ApplyBlockedOutput(string text)
     {
         var reason = SafetyCoordinator.ConsumeBlock();
@@ -239,22 +81,15 @@ public sealed class ChatAgent
             ? await CreateAgentSessionFromHandleAsync(sessionHandle, ct).ConfigureAwait(false)
             : await _agent.CreateSessionAsync(ct).ConfigureAwait(false);
         var trimmed = message.Trim();
-        var isSimple = trimmed.Length <= 10 || _simpleQueries.Contains(trimmed);
+        var isSimple = _escalationDecider.IsSimpleQuery(message);
+        var complexity = _escalationDecider.EstimateComplexity(message);
         var messages = new[] { new ChatMessage(ChatRole.User, message) };
 
-        // F1+F13: Scope PlanState and BackgroundJobService to this session
         PlanTools.SessionId = sessionHandle?.Name ?? traceId;
         BackgroundJobService.CurrentSessionId = sessionHandle?.Name ?? traceId;
 
-        // P1: Check for embedding model switch notification
-        var switchMsg = LocalEmbedderModelSwitchNotifier.ConsumeSwitchMessage();
-        if (switchMsg != null)
-        {
-            // Embedder model switch notification consumed — no Debug.WriteLine needed
-        }
-
         // Pro 快速通道：复杂度 >= 4 直接走 Pro，不经过 L1
-        if (!isSimple && EstimateComplexity(message) >= 4)
+        if (!isSimple && complexity >= 4 && _proAgent != null)
         {
             var proSession = sessionHandle != null
                 ? await CreateAgentSessionFromHandleAsync(sessionHandle, ct).ConfigureAwait(false)
@@ -276,10 +111,10 @@ public sealed class ChatAgent
             return text;
         }
 
-        // ── GoS-inspired L1State extraction ──
+        // ── L1State extraction ──
         var l1State = BuildL1State(message, text, r);
 
-        // #7 EDRM: entropy-based routing — before full escalation check
+        // ── Entropy & Value of Information ──
         var edrmEntropy = EstimateResponseEntropy(text);
         var voi = EstimateValueOfInformation(message, text, edrmEntropy);
 
@@ -291,46 +126,34 @@ public sealed class ChatAgent
             ? (double)l1State.Spans.Count(s => s.UncertaintyScore >= 0.4) / l1State.Spans.Count
             : 0;
 
-        // #2 UCCI: calibration — merge entropy + L1State gap into calibrated score
-        var calibratedScore = edrmEntropy * 0.4 + l1State.Gap * 0.4 - l1State.SupportCount * 0.05;
-        calibratedScore = Math.Clamp(calibratedScore, 0.0, 1.0);
-        var needsPro = l1State.ShouldEscalate || calibratedScore > 0.6 || voi > 0.5;
-
-        // Traditional signals merged into L1State: explicit escalation marker
-        if (!needsPro && text.Contains("<<<NEEDS_PRO:"))
-            needsPro = true;
-
-        // LLM-as-Judge (GoS: cognitive-to-symbolic evidence grounding)
-        if (!needsPro && !isSimple && text.Length > 50)
+        // ── LLM-as-Judge ──
+        var judgeInadequate = false;
+        string? judgeReason = null;
+        if (text.Length > 50)
         {
-            var (adequate, reason) = await JudgeResponseQualityAsync(message, text, ct).ConfigureAwait(false);
+            var (adequate, jReason) = await JudgeResponseQualityAsync(message, text, ct).ConfigureAwait(false);
             if (!adequate)
             {
-                FailureRecorder.Record(message, text, reason ?? "judge deemed inadequate", "L1");
-                needsPro = true;
-                l1State.Label = "escalate";
-                l1State.EscalationReason = reason;
+                FailureRecorder.Record(message, text, jReason ?? "judge deemed inadequate", "L1");
+                judgeInadequate = true;
+                judgeReason = jReason;
             }
         }
 
-        if (needsPro)
-        {
-            var reason = l1State.EscalationReason ?? "complex task";
-            if (text.Contains("<<<NEEDS_PRO:"))
-            {
-                var match = Regex.Match(text, @"<<<NEEDS_PRO:\s*(.+?)>>>");
-                if (match.Success) reason = match.Groups[1].Value.Trim();
-            }
+        // ── Escalation decision (via IEscalationDecider) ──
+        var (needsPro, reason, _) = _escalationDecider.Evaluate(
+            message, text, l1State, edrmEntropy, voi, judgeInadequate, judgeReason);
 
+        if (needsPro && _proAgent != null)
+        {
             // FusionRoute: prefer span-level routing over full regeneration
-            if (l1State.ShouldRouteBySpans && !text.Contains("<<<NEEDS_PRO:") &&
+            var hasExplicitSignal = EscalationSignal.FromString(text) != null;
+            if (l1State.ShouldRouteBySpans && !hasExplicitSignal &&
                 !reason.Contains("declined") && !reason.Contains("refusal"))
             {
                 text = await TrySpanRoutingAsync(message, text, l1State, session, ct).ConfigureAwait(false);
             }
 
-            // If span routing returned original text (didn't start with FusionRoute marker),
-            // or wasn't attempted, do full regeneration
             if (!text.StartsWith("[FusionRoute"))
             {
                 text = await FullRegenerationAsync(message, reason, l1State, session, ct).ConfigureAwait(false);
@@ -352,7 +175,6 @@ public sealed class ChatAgent
             ? await CreateAgentSessionFromHandleAsync(sessionHandle, ct).ConfigureAwait(false)
             : await _agent.CreateSessionAsync(ct).ConfigureAwait(false);
 
-        // F1+F13: Scope PlanState and BackgroundJobService to this session
         PlanTools.SessionId = sessionHandle?.Name;
         BackgroundJobService.CurrentSessionId = sessionHandle?.Name;
 
@@ -380,7 +202,6 @@ public sealed class ChatAgent
                             if (preview.Length > 200) preview = preview[..200] + "...";
                             yield return new AgentResponseUpdate(ChatRole.Assistant, $"  ✅ 返回: {preview}\n");
 
-                            // 增量保存：每 3 个工具结果或 30s 间隔做一次 checkpoint
                             toolResultCount++;
                             if (sessionHandle != null &&
                                 (toolResultCount % 3 == 0 ||
@@ -393,11 +214,9 @@ public sealed class ChatAgent
                     }
                 }
             }
-
             yield return update;
         }
 
-        // F14: Check safety block flag after streaming completes
         var blockedReason = SafetyCoordinator.ConsumeBlock();
         if (blockedReason != null)
         {
@@ -406,14 +225,6 @@ public sealed class ChatAgent
         }
 
         LTAI.Core.Configuration.UsageTracker.SetActiveTool("");
-
-        // P2.1: inject citation chips for @AgentName mentions
-        try
-        {
-            var citationPattern = new System.Text.RegularExpressions.Regex(
-                @"@(LTAI-\w+|sql-agent|code-agent)");
-        }
-        catch { }
 
         if (sessionHandle != null)
             await SaveSessionToHandleAsync(session, sessionHandle, ct).ConfigureAwait(false);
@@ -434,31 +245,122 @@ public sealed class ChatAgent
         return _workflows.RunSequentialAsync(agentNames, task, traceId: GetOrCreateTraceId(), ct: ct);
     }
 
+    // ── Quality Judge (LLM-as-Judge) ──
+
+    private async Task<(bool IsAdequate, string? Reason)> JudgeResponseQualityAsync(
+        string message, string response, CancellationToken ct)
+    {
+        if (_steerJudge == null)
+            return (true, "no steer model configured — assuming adequate");
+        try
+        {
+            var judgeMessages = new ChatMessage[]
+            {
+                new(ChatRole.System,
+                    "You are a response quality judge. Given a user query and an AI response, " +
+                    "determine if the response is adequate. " +
+                    "Criteria: relevant, helpful, not vague/hedging, not refusing, not hallucinating.\n" +
+                    "Respond with ONLY valid JSON like: {\"adequate\": true, \"reason\": \"...\", \"self_score\": 4}\n" +
+                    "Score: 1-5 (5=excellent). Adequate if score >= 3 and reason indicates adequate."),
+                new(ChatRole.User, $"Query: {message}\n\nResponse: {response}")
+            };
+            var judgeResult = await _steerJudge.GetResponseAsync(judgeMessages, cancellationToken: ct)
+                .ConfigureAwait(false);
+            var raw = judgeResult.Text ?? "";
+            var start = raw.IndexOf('{');
+            var end = raw.LastIndexOf('}');
+            if (start >= 0 && end > start)
+            {
+                using var doc = JsonDocument.Parse(raw[start..(end + 1)]);
+                var root = doc.RootElement;
+                var adequate = root.TryGetProperty("adequate", out var a) && a.GetBoolean();
+                var reason = root.TryGetProperty("reason", out var r) ? r.GetString() : null;
+                var score = root.TryGetProperty("self_score", out var s) ? s.GetInt32() : 0;
+                return (adequate && score >= 3, reason ?? (adequate ? null : "judge deemed inadequate"));
+            }
+            return (true, null);
+        }
+        catch
+        {
+            return (true, null);
+        }
+    }
+
+    // ── L1State / Entropy / Coverage ──
+
+    private static L1State BuildL1State(string message, string response, AgentResponse result)
+    {
+        var gap = EstimateCoverageGap(message, response);
+        return new L1State
+        {
+            Label = gap > 0.4 ? "escalate" : "handled",
+            SupportCount = CountSupportingEvidence(response),
+            Gap = gap,
+            ToolCalls = result.Messages?
+                .SelectMany(m => m.Contents?.OfType<FunctionCallContent>() ?? [])
+                .Select(fc => fc.Name ?? "")
+                .Where(n => n.Length > 0)
+                .ToList() ?? [],
+            EscalationReason = gap > 0.5 ? $"coverage gap={gap:F2}" : null
+        };
+    }
+
+    private static double EstimateCoverageGap(string message, string response)
+    {
+        if (string.IsNullOrWhiteSpace(response)) return 1.0;
+        var msgLower = message.ToLowerInvariant();
+        var respLower = response.ToLowerInvariant();
+        var keywords = msgLower.Split(' ', StringSplitOptions.RemoveEmptyEntries)
+            .Where(w => w.Length > 3).ToHashSet();
+        return keywords.Count == 0 ? 0 : (double)keywords.Count(k => !respLower.Contains(k)) / keywords.Count;
+    }
+
+    private static int CountSupportingEvidence(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return 0;
+        var count = 0;
+        foreach (var line in text.Split('\n'))
+        {
+            var t = line.Trim();
+            if (t.StartsWith('-') || t.StartsWith('*') || t.StartsWith("1.") || t.StartsWith("2."))
+                count++;
+        }
+        return count;
+    }
+
+    private static double EstimateResponseEntropy(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return 1.0;
+        var hedgeWords = new[] { "maybe", "perhaps", "probably", "possibly", "might", "could be",
+            "不确定", "可能", "也许", "大概", "估计", "似乎", "推测" };
+        var count = hedgeWords.Count(w => text.Contains(w, StringComparison.OrdinalIgnoreCase));
+        return Math.Min(1.0, count * 0.2);
+    }
+
+    private static double EstimateValueOfInformation(string query, string response, double entropy)
+    {
+        if (entropy > 0.5) return 0.8;
+        if (string.IsNullOrWhiteSpace(response)) return 1.0;
+        var qLower = query.ToLowerInvariant();
+        var ambiguous = new[] { "what", "how", "why", "when", "where", "which",
+            "什么", "如何", "怎么", "为什么", "何时", "哪里" };
+        if (ambiguous.Any(w => qLower.Contains(w))) return 0.5 + entropy * 0.3;
+        return entropy * 0.5;
+    }
+
+    // ── Correction loop ──
+
     private static readonly AsyncLocal<int> _correctionDepth = new();
 
     private async Task<string> EnforceAndReflectAsync(string text, string originalMessage,
         AgentSession session, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(text)) return text;
-
-        // P2: Prevent recursive correction loops — max 2 rounds
         _correctionDepth.Value++;
-        if (_correctionDepth.Value > 2)
-        {
-            _correctionDepth.Value = 0;
-            return text;
-        }
-        var lower = text.ToLowerInvariant();
+        if (_correctionDepth.Value > 2) { _correctionDepth.Value = 0; return text; }
 
-        var cantPatterns = new[] { "无法获取", "无法确定", "无法提供", "没有权限", "无法访问",
-            "无法直接", "无法知道", "不知道当前", "不知道今天",
-            "我不知道", "我不确定", "没有内置", "没有实时",
-            "抱歉", "我无法", "暂时无法", "目前还不支持", "请稍后再试",
-            "我不能", "我不可以", "对不起", "不支持", "暂不支持",
-            "cannot", "can't", "unable to", "don't have", "don't know",
-            "no access", "not have access", "not able to", "i don't" };
-
-        if (!cantPatterns.Any(p => lower.Contains(p)) && text.Length >= 15
+        if (_proAgent == null) return text;
+        if (!_escalationDecider.ContainsRefusalPatterns(text) && text.Length >= 15
             && !text.Contains("{{") && !text.Contains("TODO"))
             return text;
 
@@ -472,14 +374,12 @@ public sealed class ChatAgent
             你的回复：{text}
             请修正后重新回答。
             """;
-
         try
         {
             var result1 = await _proAgent.RunAsync(
                 [new ChatMessage(ChatRole.User, stage1Prompt)], session,
                 cancellationToken: ct).ConfigureAwait(false);
             var refined1 = result1.Messages?.LastOrDefault()?.Text ?? "";
-
             if (!string.IsNullOrWhiteSpace(refined1) && refined1.Length > 10)
                 return $"[校正]\n\n{refined1}";
 
@@ -488,21 +388,20 @@ public sealed class ChatAgent
                 [new ChatMessage(ChatRole.User, stage2Prompt)], session,
                 cancellationToken: ct).ConfigureAwait(false);
             var refined2 = result2.Messages?.LastOrDefault()?.Text ?? "";
-
             if (!string.IsNullOrWhiteSpace(refined2) && refined2.Length > 10)
                 return $"[工具]\n\n{refined2}";
         }
         catch { }
-
         return text;
     }
+
+    // ── Session helpers ──
 
     private async Task<AgentSession> CreateAgentSessionFromHandleAsync(ISessionHandle handle, CancellationToken ct)
     {
         var json = handle.SerializeToJson();
         if (string.IsNullOrEmpty(json))
             return await _agent.CreateSessionAsync(ct).ConfigureAwait(false);
-
         var element = JsonDocument.Parse(json).RootElement;
         return await _agent.DeserializeSessionAsync(element, cancellationToken: ct).ConfigureAwait(false);
     }
@@ -513,18 +412,18 @@ public sealed class ChatAgent
         handle.UpdateFromJson(json.GetRawText());
     }
 
-    // ── FusionRoute span-level routing ──
+    // ── FusionRoute & Full Regeneration ──
 
     private async Task<string> TrySpanRoutingAsync(
         string message, string originalText, L1State l1State, AgentSession session, CancellationToken ct)
     {
+        if (_proAgent == null) return originalText;
         var spanRouter = new ResponseSpanRouter();
         var refinePrompt = l1State.ToSpanRoutingHandoff(message);
         var result = await _proAgent.RunAsync(
             [new ChatMessage(ChatRole.User, refinePrompt)], session,
             cancellationToken: ct).ConfigureAwait(false);
         var refined = ApplyBlockedOutput(result.Messages?.LastOrDefault()?.Text ?? "");
-
         if (string.IsNullOrWhiteSpace(refined) || refined.Length <= 10)
             return originalText;
 
@@ -538,6 +437,7 @@ public sealed class ChatAgent
     private async Task<string> FullRegenerationAsync(
         string message, string reason, L1State l1State, AgentSession session, CancellationToken ct)
     {
+        if (_proAgent == null) return message;
         var l1Handoff = l1State.ToHandoff(ResultFormat.Toon);
         var l2Messages = new[]
         {
@@ -549,7 +449,6 @@ public sealed class ChatAgent
                 $"The Flash assistant escalated for reason: {reason}\n\n" +
                 $"Original query: {message}")
         };
-
         var result = await _proAgent.RunAsync(l2Messages, session, cancellationToken: ct).ConfigureAwait(false);
         var text = ApplyBlockedOutput(result.Messages?.LastOrDefault()?.Text ?? "");
         return $"[Auto-upgraded to Pro: {reason}]\n\n{text}";

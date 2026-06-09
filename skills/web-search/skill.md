@@ -6,6 +6,13 @@ allowedTools: ["WebSearch", "WebFetch"]
 
 # Web Search Skill
 
+## 概要
+- 多引擎搜索：17 个搜索引擎（百度/Google/Bing/DuckDuckGo 等），自动选择 CN/Global
+- 参数：query(必填), region(cn/global/all), timeFilter, site, topK
+- 特殊功能：WolframAlpha 知识查询（数学/换算/股价），自动检测
+- 输出：返回格式化搜索结果列表，含标题、摘要、链接
+- 配合 WebFetch 读取具体文章
+
 Enhanced web search with 15+ search engines across CN and global regions.
 
 ## Basic Usage

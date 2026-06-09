@@ -13,7 +13,7 @@ namespace LTAI.Agent.Tools;
 [ToolDomain("system")]
 public sealed class SystemTools
 {
-    private static readonly Lazy<HttpClient> _sharedHttp = new(() => new HttpClient { Timeout = TimeSpan.FromSeconds(30) });
+    private static readonly Lazy<HttpClient> _sharedHttp = new(() => new HttpClient(new SocketsHttpHandler { PooledConnectionLifetime = TimeSpan.FromMinutes(5) }) { Timeout = TimeSpan.FromSeconds(30) });
 
     [ToolExample("今天星期几")]
     [ToolExample("现在几点")]
@@ -277,6 +277,29 @@ public sealed class SystemTools
         }
     }
 
+    [Description("Unified network diagnostic tool. Supports ping, dns, port, http, and whois checks.\n"
+        + "适用场景：网络连通性检查、域名解析、端口探测、HTTP 健康检查、域名注册信息查询。\n"
+        + "关键参数：type — 检查类型(ping/dns/port/http/whois)；host/url/domain — 目标；timeoutMs — 超时毫秒。")]
+    [ToolExample("检查 example.com 是否可达")]
+    [ToolExample("解析 google.com 的 IP 地址")]
+    [ToolExample("检查 80 端口是否开放")]
+    public static async Task<string> NetworkDiag(
+        [Description("检查类型：ping/dns/port/http/whois")] string type,
+        [Description("目标主机或 URL")] string target,
+        [Description("TCP 端口号（仅 port 类型）")] int port = 80,
+        [Description("超时毫秒（默认 3000）")] int timeoutMs = 3000)
+    {
+        return type.ToLowerInvariant() switch
+        {
+            "ping" => await Ping(target, timeoutMs).ConfigureAwait(false),
+            "dns" => await DnsLookup(target).ConfigureAwait(false),
+            "port" => await CheckPort(target, port, timeoutMs).ConfigureAwait(false),
+            "http" => await HttpCheck(target, Math.Max(1, timeoutMs / 1000)).ConfigureAwait(false),
+            "whois" => await Whois(target).ConfigureAwait(false),
+            _ => $"Unknown diagnostic type '{type}'. Supported: ping, dns, port, http, whois"
+        };
+    }
+
     [Description("Show network interfaces and IP addresses")]
     public static string NetworkInterfaces()
     {
@@ -305,47 +328,92 @@ public sealed class SystemTools
         return Directory.GetCurrentDirectory();
     }
 
-    [Description("List files and subdirectories in a given path")]
+    [Description("List directory contents. Supports list/detail/tree modes.\n"
+        + "适用场景：浏览目录内容、查看文件大小详情、递归查看项目结构。\n"
+        + "关键参数：path — 目录路径；mode — list/简洁列名, detail/显示详情(默认), tree/递归树；maxDepth — 树模式最大深度 1-5。")]
     public static string ListDirectory(
-        [Description("Directory path (default: current working directory)")] string path = ".")
+        [Description("Directory path (default: current working directory)")] string path = ".",
+        [Description("Mode: list/detail/tree")] string mode = "detail",
+        [Description("Tree max depth (1-5, default 3)")] int maxDepth = 3)
     {
         try
         {
             var fp = Path.GetFullPath(Path.Combine(Directory.GetCurrentDirectory(), path));
             if (!Directory.Exists(fp)) return $"Directory not found: {fp}";
 
-            var sb = new StringBuilder();
-            sb.AppendLine($"## 📂 {fp}\n");
-            sb.AppendLine("| Name | Type | Size |");
-            sb.AppendLine("|------|------|------|");
-
-            foreach (var d in Directory.GetDirectories(fp).OrderBy(Path.GetFileName))
+            if (mode == "tree")
             {
-                var name = Path.GetFileName(d);
-                var subDirs = Directory.GetDirectories(d).Length;
-                var files = Directory.GetFiles(d).Length;
-                sb.AppendLine($"| 📁 {name} | Directory | {subDirs} dirs, {files} files |");
+                maxDepth = Math.Clamp(maxDepth, 1, 5);
+                var sb = new StringBuilder();
+                AppendTree(fp, "", 0, maxDepth, sb);
+                return sb.ToString();
             }
 
+            var entries = Directory.GetFileSystemEntries(fp).OrderBy(Path.GetFileName).ToList();
+            if (mode == "list")
+                return string.Join("\n", entries.Select(Path.GetFileName));
+
+            // detail mode
+            var sb2 = new StringBuilder();
+            sb2.AppendLine($"## {fp}\n");
+            sb2.AppendLine("| Name | Type | Size |");
+            sb2.AppendLine("|------|------|------|");
+            foreach (var d in Directory.GetDirectories(fp).OrderBy(Path.GetFileName))
+            {
+                var subDirs = Directory.GetDirectories(d).Length;
+                var files = Directory.GetFiles(d).Length;
+                sb2.AppendLine($"| {Path.GetFileName(d)}/ | Directory | {subDirs} dirs, {files} files |");
+            }
             foreach (var f in Directory.GetFiles(fp).OrderBy(Path.GetFileName))
             {
                 var fi = new FileInfo(f);
-                var size = fi.Length switch
-                {
-                    < 1024 => $"{fi.Length} B",
-                    < 1048576 => $"{fi.Length / 1024.0:F1} KB",
-                    _ => $"{fi.Length / 1048576.0:F1} MB"
-                };
-                sb.AppendLine($"| 📄 {fi.Name} | File | {size} |");
+                var size = fi.Length switch { < 1024 => $"{fi.Length} B", < 1048576 => $"{fi.Length / 1024.0:F1} KB", _ => $"{fi.Length / 1048576.0:F1} MB" };
+                sb2.AppendLine($"| {fi.Name} | File | {size} |");
             }
-
-            return sb.ToString();
+            return sb2.ToString();
         }
         catch (Exception ex)
         {
             return $"Error listing directory: {ex.Message}";
         }
     }
+
+    private static void AppendTree(string dir, string prefix, int depth, int maxDepth, StringBuilder sb)
+    {
+        if (depth > maxDepth) return;
+        string[] entries;
+        try { entries = Directory.GetFileSystemEntries(dir); }
+        catch (UnauthorizedAccessException) { sb.AppendLine($"{prefix}[access denied]"); return; }
+
+        var visible = entries.Where(e => ShouldShowInTree(Path.GetFileName(e))).ToList();
+        if (visible.Count > 100)
+        {
+            sb.AppendLine($"{prefix}[{visible.Count} entries — too many, use detail mode]");
+            return;
+        }
+        for (int i = 0; i < visible.Count; i++)
+        {
+            var entry = visible[i];
+            var name = Path.GetFileName(entry);
+            var isLast = i == visible.Count - 1;
+            var connector = isLast ? "\u2514\u2500\u2500 " : "\u251C\u2500\u2500 ";
+            var childPrefix = isLast ? "    " : "\u2502   ";
+            if (Directory.Exists(entry))
+            {
+                sb.AppendLine($"{prefix}{connector}{name}/");
+                AppendTree(entry, prefix + childPrefix, depth + 1, maxDepth, sb);
+            }
+            else sb.AppendLine($"{prefix}{connector}{name}");
+        }
+    }
+
+    private static bool ShouldShowInTree(string name) =>
+        !string.Equals(name, ".git", StringComparison.OrdinalIgnoreCase)
+        && !string.Equals(name, "node_modules", StringComparison.OrdinalIgnoreCase)
+        && !string.Equals(name, "bin", StringComparison.OrdinalIgnoreCase)
+        && !string.Equals(name, "obj", StringComparison.OrdinalIgnoreCase)
+        && !string.Equals(name, "dist", StringComparison.OrdinalIgnoreCase)
+        && !string.Equals(name, ".vs", StringComparison.OrdinalIgnoreCase);
 
     [Description("WHOIS lookup for domain registration info")]
     public static async Task<string> Whois(

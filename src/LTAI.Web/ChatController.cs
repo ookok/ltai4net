@@ -1,13 +1,11 @@
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using LTAI.Agent;
+using LTAI.Web.Rendering;
 using Microsoft.AspNetCore.Mvc;
 
 namespace LTAI.Web;
 
-/// <summary>
-/// Chat API for LTAI. Supports non-streaming and SSE streaming modes.
-/// </summary>
 [ApiController]
 [Route("api/[controller]")]
 public class ChatController : ControllerBase
@@ -24,11 +22,6 @@ public class ChatController : ControllerBase
         _logger = logger;
     }
 
-    /// <summary>
-    /// POST /api/chat — Non-streaming chat with 60s timeout.
-    /// Body: {"message": "hello", "userId": "optional"}
-    /// Headers: X-API-Key (optional, if configured)
-    /// </summary>
     [HttpPost]
     public async Task<IActionResult> Post([FromBody] ChatRequest request)
     {
@@ -58,9 +51,6 @@ public class ChatController : ControllerBase
         }
     }
 
-    /// <summary>
-    /// GET /api/chat/stream?message=hello — SSE streaming with 300s timeout.
-    /// </summary>
     [HttpGet("stream")]
     public async Task Stream([FromQuery] string message, [FromQuery] string? userId = null,
         CancellationToken ct = default)
@@ -86,7 +76,9 @@ public class ChatController : ControllerBase
         Response.Headers["Content-Type"] = "text/event-stream";
         Response.Headers["Cache-Control"] = "no-cache";
         Response.Headers["Connection"] = "keep-alive";
-        Response.Headers["X-Accel-Buffering"] = "no";  // Disable nginx buffering
+        Response.Headers["X-Accel-Buffering"] = "no";
+
+        var renderer = new WebChatRenderer(Response);
 
         try
         {
@@ -94,36 +86,24 @@ public class ChatController : ControllerBase
                 .ConfigureAwait(false))
             {
                 if (update.Text == null) continue;
-                var payload = JsonSerializer.Serialize(new { text = update.Text });
-                await Response.WriteAsync($"data: {payload}\n\n", ct).ConfigureAwait(false);
-                await Response.Body.FlushAsync(ct).ConfigureAwait(false);
+                renderer.OnTextDelta(update.Text);
             }
-            await Response.WriteAsync("data: [DONE]\n\n", ct).ConfigureAwait(false);
-            await Response.Body.FlushAsync(ct).ConfigureAwait(false);
+            await renderer.WriteDoneAsync().ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (!HttpContext.RequestAborted.IsCancellationRequested)
         {
-            var err = JsonSerializer.Serialize(new { error = "Stream timed out", type = "timeout" });
-            await Response.WriteAsync($"data: {err}\n\n", ct).ConfigureAwait(false);
+            await renderer.WriteErrorAsync("Stream timed out").ConfigureAwait(false);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Stream chat failed");
-            var err = JsonSerializer.Serialize(new { error = "Internal error", type = "internal_error" });
-            await Response.WriteAsync($"data: {err}\n\n", ct).ConfigureAwait(false);
+            await renderer.WriteErrorAsync("Internal error").ConfigureAwait(false);
         }
     }
 
-    /// <summary>
-    /// Use trace identifier as fallback userId for request-level isolation.
-    /// </summary>
     private string RequestTraceId() =>
         HttpContext.TraceIdentifier;
 }
-
-// ═══════════════════════════════════════════
-//  DTOs
-// ═══════════════════════════════════════════
 
 public sealed record ChatRequest(string Message, string? UserId = null);
 public sealed record ChatResponse(string Reply);

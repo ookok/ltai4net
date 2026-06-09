@@ -65,4 +65,15 @@ public interface IUsageTracker
     void SetActiveTool(string toolName);
     /// <summary>Currently executing tool name, empty if none.</summary>
     string CurrentTool { get; }
+
+    /// <summary>
+    /// Lightweight turn outcome marker — zero IO, in-memory only.
+    /// When a turn fails or produces low-quality output, call this with reason.
+    /// These markers serve as MOSS-style batch input for future self-evolution.
+    /// </summary>
+    void RecordTurnOutcome(bool success, string? reason = null);
+    /// <summary>Cumulative count of failed turns.</summary>
+    long FailedTurns { get; }
+    /// <summary>Reason from the most recently recorded failure.</summary>
+    string? LastFailureReason { get; }
 }

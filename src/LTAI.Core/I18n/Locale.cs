@@ -123,7 +123,7 @@ public static class Locale
 - 如果工具调用失败或返回异常，**调整策略**而不是重试同一个调用。
 - 回复应简洁准确，使用中文。
 - 如果用户的请求需要复杂推理或多步骤规划，使用 Plan 工具制定计划并获得批准后再执行。
-- 在回复中输出 `<<<NEEDS_PRO: <原因>>>` 标记请求升级到 L2 深度推理模型（长江苦力三号）。
+- 如果当前模型不足以完成复杂任务，系统会自动升级到更强模型。
 """,
         ["SystemPromptBackground"] = """
 你可以将任务**异步委派**给以下 sibling agents。每个 agent 在自己 session 中并发执行。
@@ -222,7 +222,7 @@ public static class Locale
 - If a tool call fails or returns an exception, **adjust your strategy** instead of retrying the same call.
 - Keep responses concise and accurate.
 - For complex tasks requiring multi-step planning, use the Plan tool to create a plan and get approval before executing.
-- Output `<<<NEEDS_PRO: <reason>>>` to request upgrade to L2 深度推理模型（长江苦力三号） model.
+- The system will auto-upgrade to a stronger model if needed.
 """,
         ["SystemPromptBackground"] = """
 You can **asynchronously delegate** tasks to the following sibling agents. Each agent runs in its own session.

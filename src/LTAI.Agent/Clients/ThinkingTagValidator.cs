@@ -34,17 +34,39 @@ public sealed partial class ThinkingTagValidator : IChatClient
     {
         var messages = chatMessages as List<ChatMessage> ?? chatMessages.ToList();
         var buffer = new System.Text.StringBuilder();
-        await foreach (var update in _inner.GetStreamingResponseAsync(messages, options, cancellationToken).ConfigureAwait(false))
+        string? lastFailedProvider = null;
+        var innerStream = _inner.GetStreamingResponseAsync(messages, options, cancellationToken);
+        await using (var enumerator = innerStream.GetAsyncEnumerator(cancellationToken))
         {
-            if (update.Contents?.OfType<TextContent>().FirstOrDefault() is { } text)
-                buffer.Append(text.Text);
-            yield return update;
+            while (true)
+            {
+                ChatResponseUpdate update;
+                try
+                {
+                    if (!await enumerator.MoveNextAsync().ConfigureAwait(false))
+                        break;
+                    update = enumerator.Current;
+                }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex)
+                {
+                    lastFailedProvider = "inner";
+                    System.Diagnostics.Debug.WriteLine($"[ThinkingTagValidator] streaming failed: {ex.Message}");
+                    break;
+                }
+                if (update.Contents?.OfType<TextContent>().FirstOrDefault() is { } text)
+                    buffer.Append(text.Text);
+                yield return update;
+            }
         }
-        var fullText = buffer.ToString();
-        if (!string.IsNullOrEmpty(fullText) && fullText.Length > 100 && !ThinkingTagPattern().IsMatch(fullText))
+        if (lastFailedProvider == null)
         {
-            messages.Add(new ChatMessage(ChatRole.System,
-                "[System reminder: Please enclose your reasoning in <thinking>...</thinking> tags in future responses.]"));
+            var fullText = buffer.ToString();
+            if (!string.IsNullOrEmpty(fullText) && fullText.Length > 100 && !ThinkingTagPattern().IsMatch(fullText))
+            {
+                messages.Add(new ChatMessage(ChatRole.System,
+                    "[System reminder: Please enclose your reasoning in <thinking>...</thinking> tags in future responses.]"));
+            }
         }
     }
 

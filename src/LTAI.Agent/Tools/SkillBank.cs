@@ -66,7 +66,15 @@ public sealed class SkillBank
         Save();
     }
 
-    /// <summary>Find skills matching a query.</summary>
+    /// <summary>L1 preview: return only name+desc+tags (minimal tokens).</summary>
+    public List<(string Name, string Description, string[] Tags)> SearchPreview(
+        string query, string? language = null, int topK = 5)
+    {
+        var full = Search(query, language, topK);
+        return full.Select(s => (s.Name, s.Precondition.Length > 80 ? s.Precondition[..77] + "..." : s.Precondition, s.Tags)).ToList();
+    }
+
+    /// <summary>L2+L3 full detail: find skills matching a query.</summary>
     public List<CodeSkill> Search(string query, string? language = null, int topK = 5)
     {
         var lower = query.ToLowerInvariant();

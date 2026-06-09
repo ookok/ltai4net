@@ -2,10 +2,9 @@ using System.Diagnostics;
 using System.Text;
 using LTAI.Agent;
 using LTAI.Core.Configuration;
+using LTAI.Core.Rendering;
 using LTAI.Core.Session;
 using LTAI.Agent.Tools;
-using Spectre.Console;
-using Spectre.Console.Rendering;
 using Microsoft.Extensions.AI;
 
 namespace LTAI.TUI;
@@ -28,66 +27,69 @@ public interface IStreamerHost
 public sealed class ResponseStreamer
 {
     private readonly ChatAgent _chat;
-    private readonly Rendering.ChatRenderer _renderer;
+    private readonly IChatRenderer _renderer;
     private readonly SessionManager _sessions;
-    private readonly Layout _layout;
     private readonly QuestionService _questionService;
-    private readonly List<(string role, IRenderable? rendered, string rawContent, string? reasoning)> _history;
+    private readonly List<(string role, Spectre.Console.Rendering.IRenderable? rendered, string rawContent, string? reasoning)> _history;
     private readonly List<(string name, string args, string result)> _toolCalls;
-    private readonly IStreamerHost _host;
+    private readonly Func<QuestionPost, CancellationToken, Task>? _onAskQuestions;
 
+    private volatile QuestionPost? _pendingQuestion;
     private int _sharedFrameIdx;
     private string _statusText = "";
     private readonly Stopwatch _toolTimer = new();
 
     public ResponseStreamer(
         ChatAgent chat,
-        Rendering.ChatRenderer renderer,
+        IChatRenderer renderer,
         SessionManager sessions,
-        Layout layout,
         QuestionService questionService,
-        List<(string role, IRenderable? rendered, string rawContent, string? reasoning)> history,
+        List<(string role, Spectre.Console.Rendering.IRenderable? rendered, string rawContent, string? reasoning)> history,
         List<(string name, string args, string result)> toolCalls,
-        IStreamerHost host)
+        Func<QuestionPost, CancellationToken, Task>? onAskQuestions = null)
     {
         _chat = chat;
         _renderer = renderer;
         _sessions = sessions;
-        _layout = layout;
         _questionService = questionService;
         _history = history;
         _toolCalls = toolCalls;
-        _host = host;
+        _onAskQuestions = onAskQuestions;
     }
 
     public async Task StreamAsync(string input, CancellationTokenSource cts)
     {
         var content = new StringBuilder();
-        int toolCallCount = 0;
         _sharedFrameIdx = 0;
         _statusText = "";
+        _pendingQuestion = null;
 
         content.AppendLine("━━━ 思考中 ━━━");
         _toolCalls.Clear();
+
+        void OnQuestionPosted(QuestionPost post) => _pendingQuestion = post;
+        _questionService.QuestionPosted += OnQuestionPosted;
+        try
+        {
 
         var ctxRatio = UsageTracker.ContextRatio();
         if (ctxRatio > 0.85)
         {
             var ctxPct = (ctxRatio * 100).ToString("F0");
             _history.Add(("cmd", null, $"[dim]📐 上下文已使用 {ctxPct}%，自动压缩中...[/]", null));
-            _host.InvalidateRendered();
-            _host.AutoCompact();
+            _renderer.InvalidateRender();
+            _renderer.AutoCompact();
         }
         else if (ctxRatio > 0.75)
         {
             var ctxPct = (ctxRatio * 100).ToString("F0");
             _history.Add(("cmd", null, $"[dim]📐 上下文已使用 {ctxPct}%[/]", null));
-            _host.InvalidateRendered();
+            _renderer.InvalidateRender();
         }
 
         _toolTimer.Restart();
-        _host.UpdateFooter("", $"{Rendering.ChatRenderer.PulseFrames[0]} 思考中...");
-        _host.InvalidateRendered();
+        _renderer.UpdateProgress("", "思考中...", null);
+        _renderer.InvalidateRender();
 
         using var spinCts = CancellationTokenSource.CreateLinkedTokenSource(cts.Token);
         var spinTask = RunSpinAnimation(spinCts);
@@ -103,7 +105,7 @@ public sealed class ResponseStreamer
                 if (string.IsNullOrEmpty(token))
                 {
                     if (update.Contents?.Count > 0)
-                        await ProcessContentsAsync(update.Contents, content, toolCallCount, cts).ConfigureAwait(false);
+                        await ProcessContentsAsync(update.Contents, content, cts).ConfigureAwait(false);
                     continue;
                 }
 
@@ -118,8 +120,7 @@ public sealed class ResponseStreamer
                 }
                 if (token.StartsWith("[budget:") || token.StartsWith("[note:"))
                 {
-                    var safeToken = token.Replace("[", "\\[").Replace("]", "\\]");
-                    content.AppendLine(safeToken); _statusText = token;
+                    content.AppendLine(token); _statusText = token;
                     RefreshAfterUpdate(content);
                     continue;
                 }
@@ -131,24 +132,25 @@ public sealed class ResponseStreamer
         catch (OperationCanceledException) { }
         catch (Exception ex)
         {
-            content.AppendLine($"\n[red]⚠ 流式响应错误: {ex.Message.EscapeMarkup()}[/]");
+            content.AppendLine($"\n⚠ 流式响应错误: {ex.Message}");
         }
 
         spinCts.Cancel();
         try { await spinTask.ConfigureAwait(false); } catch (OperationCanceledException) { }
 
-        var reasoning = _renderer.RenderToolCallsAsTree(_toolCalls);
-        _history.Add(("assistant", null, content.ToString(), reasoning));
+        _history.Add(("assistant", null, content.ToString(), null));
         _toolCalls.Clear();
-        _host.TrimHistory();
-        await _host.SaveSessionAsync().ConfigureAwait(false);
+        _renderer.TrimHistory();
+        await _renderer.SaveSessionAsync().ConfigureAwait(false);
 
-        if (_host.ExtractMemory(input) is Task memTask)
-            _ = memTask.ConfigureAwait(false);
+        _ = _renderer.ExtractMemoryAsync(input);
+    }
+        finally { _questionService.QuestionPosted -= OnQuestionPosted; }
     }
 
     private Task RunSpinAnimation(CancellationTokenSource spinCts)
     {
+        var pulseFrames = new[] { "◐", "◓", "◑", "◒" };
         return Task.Run(async () =>
         {
             try
@@ -157,7 +159,7 @@ public sealed class ResponseStreamer
                 {
                     await Task.Delay(250, spinCts.Token).ConfigureAwait(false);
                     var idx = Interlocked.Increment(ref _sharedFrameIdx);
-                    var pulse = Rendering.ChatRenderer.PulseFrames[idx % Rendering.ChatRenderer.PulseFrames.Length];
+                    var pulse = pulseFrames[idx % pulseFrames.Length];
                     var elapsed = _toolTimer.Elapsed;
                     var timeStr = elapsed.TotalSeconds >= 60
                         ? $"{(int)elapsed.TotalMinutes}m{elapsed.Seconds}s"
@@ -165,16 +167,16 @@ public sealed class ResponseStreamer
                     var line = $"{pulse} 思考中... [{timeStr}]";
                     if (!string.IsNullOrEmpty(_statusText))
                         line += $"  {_statusText}";
-                    _host.UpdateFooter("", line);
-                    _host.InvalidateRendered();
+                    _renderer.UpdateProgress(pulse, line, timeStr);
+                    _renderer.InvalidateRender();
                 }
             }
             catch (OperationCanceledException) { }
-            catch (Exception) { }
+            catch { }
         }, spinCts.Token);
     }
 
-    private async Task ProcessContentsAsync(IList<AIContent> contents, StringBuilder content, int toolCallCount, CancellationTokenSource cts)
+    private async Task ProcessContentsAsync(IList<AIContent> contents, StringBuilder content, CancellationTokenSource cts)
     {
         foreach (var c in contents)
         {
@@ -182,43 +184,40 @@ public sealed class ResponseStreamer
             {
                 if (string.Equals(fc.Name, "AskQuestions", StringComparison.Ordinal))
                 {
-                    var qp = _host.GetPendingQuestion();
-                    if (qp != null)
-                    {
-                        var qf = new QuestionFormView((ChatLayout)_host, _questionService);
-                        await qf.ShowAsync(qp, cts.Token).ConfigureAwait(false);
-                    }
+                    var qp = Interlocked.Exchange(ref _pendingQuestion, null);
+                    if (qp != null && _onAskQuestions != null)
+                        await _onAskQuestions(qp, cts.Token).ConfigureAwait(false);
                 }
-                toolCallCount++;
                 var n = fc.Name ?? "";
                 var a = fc.Arguments is Dictionary<string, object?> args
                     ? string.Join(", ", args.Select(kv => $"{kv.Key}={kv.Value}"))
                     : "";
                 _toolCalls.Add((n, a, ""));
-
                 var elapsedStr = FormatElapsed(_toolTimer.Elapsed);
                 _statusText = $"🛠 {n}({Truncate(a, 30)}) [{elapsedStr}]";
+                _renderer.OnToolCall(n, a);
             }
             if (c is FunctionResultContent frc)
             {
                 var resultStr = frc.Result?.ToString() ?? "";
-                var confirmInfo = _host.TryParseConfirmRequest(resultStr);
+                var confirmInfo = _renderer.TryParseConfirmRequest(resultStr);
                 if (confirmInfo != null)
                 {
-                    var (title, message, extraInfo) = confirmInfo.Value;
-                    var choice = await ConfirmationModal.ShowInlineAsync(_layout, () => _host.InvalidateRendered(), title, message, resultStr, extraInfo).ConfigureAwait(false);
+                    var choice = await _renderer.ShowConfirmAsync(
+                        confirmInfo.Value.Title, confirmInfo.Value.Message,
+                        resultStr, confirmInfo.Value.ExtraInfo).ConfigureAwait(false);
                     switch (choice)
                     {
                         case ConfirmChoice.Always:
-                            content.AppendLine($"  ✅ [bold]已确认（本次会话始终允许）[/]");
+                            content.AppendLine("  ✅ 已确认（本次会话始终允许）");
                             _statusText = "✅ 已授权 (Always)";
                             break;
                         case ConfirmChoice.Yes:
-                            content.AppendLine($"  ✅ [bold]已确认[/]");
+                            content.AppendLine("  ✅ 已确认");
                             _statusText = "✅ 已确认";
                             break;
                         case ConfirmChoice.No:
-                            content.AppendLine($"  ⛔ [bold red]已拒绝[/]");
+                            content.AppendLine("  ⛔ 已拒绝");
                             _statusText = "⛔ 已拒绝";
                             break;
                     }
@@ -229,6 +228,9 @@ public sealed class ResponseStreamer
                     displayResult = displayResult[..300] + "...";
                 if (_toolCalls.Count > 0)
                     _toolCalls[^1] = (_toolCalls[^1].name, _toolCalls[^1].args, displayResult);
+                _renderer.OnToolResult(
+                    _toolCalls.Count > 0 ? _toolCalls[^1].name : "",
+                    resultStr, success: true);
             }
         }
         RefreshAfterUpdate(content);
@@ -236,25 +238,26 @@ public sealed class ResponseStreamer
 
     private bool TryParseToolResultToken(string token, StringBuilder content)
     {
-        var parsed = _host.TryParseToolResult(token);
-        if (!parsed.found) return false;
+        var parsed = _renderer.TryParseToolResult(token);
+        if (!parsed.Found) return false;
 
-        var subMatch = System.Text.RegularExpressions.Regex.Match(token, @"\""type\"":\s*\""(\w+)\"".*\""spawnCount\"":\s*(\d+).*\""elapsedMs\"":\s*(\d+)");
+        var subMatch = System.Text.RegularExpressions.Regex.Match(token,
+            @"\""type\"":\s*\""(\w+)\"".*\""spawnCount\"":\s*(\d+).*\""elapsedMs\"":\s*(\d+)");
         if (subMatch.Success)
         {
             var st = subMatch.Groups[1].Value;
             var sc = subMatch.Groups[2].Value;
             var ms = int.Parse(subMatch.Groups[3].Value);
             var timeStr = ms >= 1000 ? $"{ms / 1000}.{(ms % 1000) / 100}s" : $"{ms}ms";
-            var preview = Truncate(parsed.output.Replace("\n", " "), 50);
-            content.AppendLine($"🔧 [bold]子任务 #{sc} ({st})[/] [grey]{timeStr}[/] — {preview.EscapeMarkup()}");
+            var preview = Truncate(parsed.Output.Replace("\n", " "), 50);
+            content.AppendLine($"🔧 子任务 #{sc} ({st}) [{timeStr}] — {preview}");
             _statusText = $"子任务 #{sc} 完成 ({timeStr})";
         }
         else
         {
-            var msg = parsed.success
-                ? $"✅ {Truncate(parsed.output, 60)}"
-                : $"❌ {parsed.error.EscapeMarkup()}";
+            var msg = parsed.Success
+                ? $"✅ {Truncate(parsed.Output, 60)}"
+                : $"❌ {parsed.Error}";
             content.AppendLine(msg);
             _statusText = msg;
         }
@@ -264,12 +267,9 @@ public sealed class ResponseStreamer
 
     private void RefreshAfterUpdate(StringBuilder content)
     {
-        lock (_layout)
-        {
-            _host.UpdateMessages(content.ToString());
-            _host.UpdateFooter("", $"{Rendering.ChatRenderer.PulseFrames[_sharedFrameIdx % Rendering.ChatRenderer.PulseFrames.Length]} 处理中...  {_statusText}");
-        }
-        _host.ThrottledRefresh();
+        _renderer.OnTextDelta(content.ToString());
+        _renderer.UpdateProgress("", $"思考中...  {_statusText}", null);
+        _renderer.RequestRender();
     }
 
     private static string Truncate(string text, int max) =>

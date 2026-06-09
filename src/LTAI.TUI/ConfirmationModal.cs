@@ -1,15 +1,8 @@
+using LTAI.Core.Rendering;
 using Spectre.Console;
 using Spectre.Console.Rendering;
 
 namespace LTAI.TUI;
-
-public enum ConfirmChoice
-{
-    Yes,
-    Always,
-    No,
-    Details,
-}
 
 public static class ConfirmationModal
 {

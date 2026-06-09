@@ -2,7 +2,9 @@ using System.Diagnostics;
 using System.Text;
 using System.Threading.Channels;
 using LTAI.Agent;
+using LTAI.Agent.Streaming;
 using LTAI.Core.Configuration;
+using LTAI.Core.Rendering;
 using LTAI.Core.Session;
 using LTAI.Agent.Tools;
 using LTAI.TUI.Rendering;
@@ -14,7 +16,7 @@ namespace LTAI.TUI;
 
 using static ThemeService;
 
-public sealed partial class ChatLayout : IDisposable, IStreamerHost
+public sealed partial class ChatLayout : IDisposable, IStreamerHost, IChatRenderer
 {
     private readonly ChatAgent _chat;
     private readonly Rendering.ChatRenderer _renderer;
@@ -121,17 +123,24 @@ public sealed partial class ChatLayout : IDisposable, IStreamerHost
     internal volatile bool _questionActive;
     internal TaskCompletionSource<IReadOnlyList<string>>? _questionTcs;
     internal QuestionPrompt? _currentQuestionPrompt;
+    internal string _statusText = "";
     internal int _currentQuestionIdx;
     internal int _currentQuestionTotal;
     internal string _questionInput = "";
     internal List<string> _questionMultiSelection = [];
 
-    internal static TaskCompletionSource<ConfirmChoice>? PendingConfirmTcs;
+    private static readonly object ConfirmLock = new();
+    internal static TaskCompletionSource<ConfirmChoice>? PendingConfirmTcs
+    {
+        get { lock (ConfirmLock) return _pendingConfirmTcs; }
+        set { lock (ConfirmLock) _pendingConfirmTcs = value; }
+    }
     internal static string? PendingConfirmDetails;
     internal static string? PendingConfirmTitle;
     internal static string? PendingConfirmMessage;
     internal static string? PendingConfirmExtra;
     internal static volatile int ConfirmSelection;
+    private static TaskCompletionSource<ConfirmChoice>? _pendingConfirmTcs;
     public static string? EditMode { get; set; }
     public static Func<bool>? TryUndoCallback { get; set; }
     private const int MaxHistory = 200;
@@ -188,7 +197,11 @@ public sealed partial class ChatLayout : IDisposable, IStreamerHost
             _history.AddRange(keep);
             _history.Add(("cmd", null, "[green]已自动压缩历史，保留最近 2 轮对话[/]", null));
         }
-        _ = SaveSessionAsync();
+        _ = Task.Run(async () =>
+        {
+            try { await SaveSessionAsync().ConfigureAwait(false); }
+            catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"[ChatLayout] AutoCompact session save failed: {ex}"); }
+        });
         InvalidateRendered();
     }
 
@@ -596,6 +609,7 @@ public sealed partial class ChatLayout : IDisposable, IStreamerHost
                                 if (t.IsFaulted)
                                 {
                                     var ex = t.Exception?.InnerException;
+                                    System.Diagnostics.Debug.WriteLine($"[ChatLayout] StreamResponse failed: {ex}");
                                     _statusMessage = $"[red]流式错误: {ex?.Message.EscapeMarkup() ?? "未知"}[/]";
                                 }
                                 _processing = false;
@@ -977,10 +991,89 @@ public sealed partial class ChatLayout : IDisposable, IStreamerHost
         using var cts = new CancellationTokenSource();
         _responseCts = cts;
 
-        var streamer = new ResponseStreamer(
-            _chat, _renderer, _sessions, _layout, _questionService,
-            _history, _toolCalls, this);
+        var streamer = new ChatStreamer(
+            _chat, this, _sessions, _questionService)
+        {
+            OnAskQuestions = async (post, ct) =>
+            {
+                var qf = new QuestionFormView(this, _questionService);
+                await qf.ShowAsync(post, ct).ConfigureAwait(false);
+            }
+        };
         await streamer.StreamAsync(input, cts).ConfigureAwait(false);
+    }
+
+    // ── IChatRenderer ──
+
+    void IChatRenderer.OnStreamStart() { }
+    void IChatRenderer.OnTextDelta(string delta) => UpdateMessages(delta);
+    void IChatRenderer.OnToolCall(string name, string? arguments) { }
+    void IChatRenderer.OnToolResult(string name, string result, bool success) { }
+    void IChatRenderer.OnStreamEnd() { }
+
+    void IChatRenderer.RenderMessage(string role, string content,
+        IReadOnlyList<ToolCallRecord>? toolCalls, string? reasoning)
+    {
+        lock (_historyLock) { _history.Add((role, null, content, reasoning)); }
+        InvalidateRendered();
+    }
+
+    void IChatRenderer.UpdateStatus(string text) => UpdateFooter("", text);
+
+    void IChatRenderer.UpdateProgress(string frame, string text, string? elapsed) =>
+        UpdateFooter("", string.IsNullOrEmpty(frame) ? text : $"{frame} {text}");
+
+    ToolResultInfo IChatRenderer.TryParseToolResult(string text)
+    {
+        var r = ToolResultParser.Parse(text);
+        return new ToolResultInfo(r.found, r.success, r.output, r.error);
+    }
+
+    ConfirmRequest? IChatRenderer.TryParseConfirmRequest(string text)
+    {
+        var r = ConfirmRequestParser.Parse(text);
+        return r is var (t, m, e) ? new ConfirmRequest(t, m, e) : null;
+    }
+
+    async Task<string?> IChatRenderer.PromptUserAsync(string prompt, bool isSecret)
+    {
+        var tcs = new TaskCompletionSource<string?>();
+        _textInputPrompt = prompt;
+        _textInputIsSecret = isSecret;
+        _textInputBuffer = "";
+        _textInputTcs = tcs;
+        _textInputActive = true;
+        InvalidateRendered();
+        try { return await tcs.Task.ConfigureAwait(false); }
+        finally { _textInputActive = false; _textInputTcs = null; InvalidateRendered(); }
+    }
+
+    async Task<ConfirmChoice> IChatRenderer.ShowConfirmAsync(
+        string title, string message, string result, string extraInfo)
+    {
+        var layout = _layout;
+        return await ConfirmationModal.ShowInlineAsync(layout,
+            () => InvalidateRendered(), title, message, result, extraInfo).ConfigureAwait(false);
+    }
+
+    void IChatRenderer.TrimHistory() { TrimHistory(); }
+    void IChatRenderer.AutoCompact() { AutoCompact(); }
+    Task IChatRenderer.SaveSessionAsync() => SaveSessionAsync();
+
+    async Task IChatRenderer.ExtractMemoryAsync(string userInput)
+    {
+        if (_memoryExtractor != null)
+            await _memoryExtractor.ExtractFromTurnAsync(userInput, ct: CancellationToken.None)
+                .ConfigureAwait(false);
+    }
+
+    void IChatRenderer.RequestRender() => InvalidateRendered();
+    void IChatRenderer.InvalidateRender() => InvalidateRendered();
+
+    string IChatRenderer.CurrentStatus
+    {
+        get => _statusText;
+        set => _statusText = value;
     }
 
     // ── IStreamerHost ──

@@ -1127,10 +1127,19 @@ public sealed partial class KgStore : IDisposable
     //  Schema initialization
     // ═══════════════════════════════════════════
 
+    private const int SchemaVersion = 1;
+
     private void InitSchema()
     {
         // 构造函数中执行，无并发风险，直接使用 writer 连接
         using var cmd = _writer.CreateCommand();
+
+        // Check current schema version
+        cmd.CommandText = "PRAGMA user_version;";
+        var currentVersion = (long)(cmd.ExecuteScalar() ?? 0);
+        if (currentVersion >= SchemaVersion)
+            return; // Schema is up to date
+
         cmd.CommandText = """
             CREATE TABLE IF NOT EXISTS Meta (
                 key   TEXT PRIMARY KEY,
@@ -1232,6 +1241,8 @@ public sealed partial class KgStore : IDisposable
             );
             CREATE INDEX IF NOT EXISTS idx_versions_node ON Versions(node_id);
             """;
+
+        cmd.CommandText += $"PRAGMA user_version = {SchemaVersion};";
         cmd.ExecuteNonQuery();
     }
 

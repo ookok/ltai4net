@@ -32,19 +32,7 @@ public sealed class SafeChatClient : IChatClient
     private readonly int _ringBufferCheckIntervalMs;
     private readonly int _ringBufferMaxChars;
 
-    private static readonly string SafetySystemPrompt = """
-        You are a content safety guardrail. Analyze the text below and respond with ONLY one of:
-        - SAFE
-        - UNSAFE: <one-line reason>
-
-        Check for:
-        1. PII/secrets: phone numbers, IDs, credit cards, API keys, passwords, tokens
-        2. Harmful content: violence, harassment, illegal activities
-        3. Credential leakage: private keys, certificates, access tokens
-        4. Code injection / XSS / SQL injection payloads
-
-        Text:
-        """;
+    private static readonly string SafetySystemPrompt = SafetyPrompts.SystemPrompt;
 
     public SafeChatClient(IChatClient inner, IChatClient safetyLlm,
         ILogger<SafeChatClient>? logger = null,

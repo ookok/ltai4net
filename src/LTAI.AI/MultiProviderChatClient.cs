@@ -64,6 +64,7 @@ public sealed class MultiProviderChatClient : IChatClient
     });
     private static readonly TimeSpan CacheTtl = TimeSpan.FromMinutes(5);
     private static int _responseCacheSizeLimit = 256;
+    private readonly int _perProviderTimeoutSec = 15;
 
     // LLM call counter — increments on every actual HTTP request
     private static long _callCounter;
@@ -120,8 +121,9 @@ public sealed class MultiProviderChatClient : IChatClient
             }
             catch { /* best-effort; in-memory fallback is still functional */ }
         });
-        // Trigger lazy load in background — data arrives before first LLM call
-        try { _ = _breakerLoadTask.Value; } catch { /* best-effort */ }
+        // Fire-and-forget: breaker state loads in background; first LLM call
+        // waits for completion via _breakerLoadTask if needed.
+        _ = _breakerLoadTask;
     }
 
     /// <summary>
@@ -247,8 +249,11 @@ public sealed class MultiProviderChatClient : IChatClient
                     $"\n\n_[Stream from '{lastFailedProvider}' failed midway, falling back to '{p}']_\n\n");
             }
 
-            var innerStream = client.GetStreamingResponseAsync(messages, options, ct);
-            await using (var enumerator = innerStream.GetAsyncEnumerator(ct))
+            using var streamingTimeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            streamingTimeoutCts.CancelAfter(TimeSpan.FromSeconds(_perProviderTimeoutSec));
+            var timeoutToken = streamingTimeoutCts.Token;
+            var innerStream = client.GetStreamingResponseAsync(messages, options, timeoutToken);
+            await using (var enumerator = innerStream.GetAsyncEnumerator(timeoutToken))
             {
                 while (true)
                 {
@@ -257,7 +262,14 @@ public sealed class MultiProviderChatClient : IChatClient
                         if (!await enumerator.MoveNextAsync().ConfigureAwait(false))
                             break;
                     }
-                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                    {
+                        _lastError = $"Streaming timeout ({_perProviderTimeoutSec}s)";
+                        _logger.LogWarning("Streaming from '{P}' timed out after {S}s, degrading", p, _perProviderTimeoutSec);
+                        lastFailedProvider = p;
+                        break;
+                    }
+                    catch (Exception ex)
                     {
                         _lastError = ex.Message;
                         _logger.LogWarning(ex, "Streaming from '{P}' failed, degrading", p);
@@ -270,8 +282,7 @@ public sealed class MultiProviderChatClient : IChatClient
             }
             if (success)
             {
-                // 兜底：流式成功时记录一次请求（精准 token 由底层 IChatClient 通过 Usage 字段返回）
-                LTAI.Core.Configuration.UsageTracker.Record(10, 10);
+                _logger.LogDebug("Streaming succeeded from '{P}'", p);
                 yield break;
             }
         }
@@ -500,28 +511,18 @@ public sealed class MultiProviderChatClient : IChatClient
     }
 
     /// <summary>
-    /// Build a deterministic cache key from provider, messages, and options.
-    /// Uses HashCode.Combine (built-in, zero allocations, deterministic within process).
-    /// Includes: provider name, temperature, max output tokens, and full message text.
-    /// In-memory cache only — no cross-process persistence needed.
-    /// Uses SHA-256 for deterministic, collision-free keys.
+    /// Build a cache key from provider, messages, and options.
+    /// Uses HashCode (built-in, zero extra allocations) for in-memory 256-entry LRU.
     /// </summary>
     private static string BuildCacheKey(string provider, IEnumerable<ChatMessage> messages, ChatOptions? options)
     {
-        var sb = new System.Text.StringBuilder();
-        sb.Append(provider.ToUpperInvariant()).Append('|');
-        sb.Append(options?.Temperature ?? 0).Append('|');
-        sb.Append(options?.MaxOutputTokens ?? 0).Append('|');
+        var hc = new HashCode();
+        hc.Add(provider, StringComparer.OrdinalIgnoreCase);
+        hc.Add(options?.Temperature);
+        hc.Add(options?.MaxOutputTokens);
         foreach (var m in messages)
-        {
-            sb.Append(m.Role.ToString()).Append(':');
-            sb.Append(m.Text ?? "").Append('|');
-        }
-        var input = sb.ToString();
-        var hash = System.Security.Cryptography.SHA256.HashData(
-            System.Text.Encoding.UTF8.GetBytes(input));
-        // First 8 bytes (64 bits) — more than enough for 256-entry LRU
-        return Convert.ToHexString(hash, 0, 8).ToLowerInvariant();
+            hc.Add(m.Text ?? "");
+        return hc.ToHashCode().ToString("x8");
     }
 
     /// <summary>

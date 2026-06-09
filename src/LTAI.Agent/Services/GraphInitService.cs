@@ -20,29 +20,34 @@ public sealed class GraphInitService : IHostedService
         _logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<GraphInitService>.Instance;
     }
 
-    public async Task StartAsync(CancellationToken cancellationToken)
+    public Task StartAsync(CancellationToken cancellationToken)
     {
-        _logger.LogInformation("GraphInitService: starting background initialization");
+        _logger.LogInformation("GraphInitService: scheduling background initialization");
 
-        try
+        _ = Task.Run(async () =>
         {
-            if (_cgGraph != null)
+            try
             {
-                _logger.LogInformation("GraphInitService: building code graph...");
-                var codeResult = await _cgGraph.BuildAsync().ConfigureAwait(false);
-                _logger.LogInformation("GraphInitService: code graph done — {Result}",
-                    codeResult.Replace("\n", " | "));
-            }
+                if (_cgGraph != null)
+                {
+                    _logger.LogInformation("GraphInitService: building code graph...");
+                    var codeResult = await _cgGraph.BuildAsync().ConfigureAwait(false);
+                    _logger.LogInformation("GraphInitService: code graph done — {Result}",
+                        codeResult.Replace("\n", " | "));
+                }
 
-            var docDir = Directory.GetCurrentDirectory();
-            _logger.LogInformation("GraphInitService: building document index from {Dir}...", docDir);
-            var docResult = await _kbGraph.BuildDocumentIndexAsync(docDir).ConfigureAwait(false);
-            _logger.LogInformation("GraphInitService: document index done — {Result}", docResult);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "GraphInitService: initialization failed (will retry on next /graph init)");
-        }
+                var docDir = Directory.GetCurrentDirectory();
+                _logger.LogInformation("GraphInitService: building document index from {Dir}...", docDir);
+                var docResult = await _kbGraph.BuildDocumentIndexAsync(docDir).ConfigureAwait(false);
+                _logger.LogInformation("GraphInitService: document index done — {Result}", docResult);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "GraphInitService: initialization failed (will retry on next /graph init)");
+            }
+        }, cancellationToken);
+
+        return Task.CompletedTask;
     }
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;

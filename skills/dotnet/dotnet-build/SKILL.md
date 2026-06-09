@@ -7,6 +7,12 @@ allowedTools: [ReadFileContent, SearchContent, Glob, DirectoryTree, ListFiles, R
 
 # .NET Build & Project Structure
 
+## 概要
+- 项目结构：11 个项目，DI 注册顺序 Core→AI→Agent（不可变）
+- MAF 子模块：预编译 DLL 在 dist/lib/maf/，重建需 build-maf.ps1
+- 构建命令：dotnet build LTAI.sln（完整）/ dotnet build src/LTAI.TUI（单项目）
+- 常见问题：MAF DLL 缺失时运行 build-maf.ps1；SDK 版本检查 net10.0
+
 为 LTAI4Net 项目定制的构建和依赖管理技能。
 
 ## 项目拓扑

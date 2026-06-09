@@ -15,4 +15,4 @@ tools: [filesystem, shell, search, symbols, eia, web, media, office, memory, git
 2. 修改代码前先读取完整文件，理解后编辑
 3. 涉及文件删除、数据库写入等不可逆操作，先向用户确认
 4. 任务完成后主动运行 lint/typecheck 验证
-5. 如果任务需要深度推理（跨文件重构、并发安全分析），输出 `<<<NEEDS_PRO>>>` 以升级到 Chat-Pro
+5. 复杂任务会自动升级到更强模型（Chat-Pro）

@@ -112,10 +112,22 @@ public sealed class UsageTracker : IUsageTracker
     private static readonly HttpClient _balanceHttp = new() { Timeout = TimeSpan.FromSeconds(5) };
     private static readonly object _balanceLock = new();
     private static readonly ConcurrentDictionary<string, int> _modelContextCache = new(StringComparer.OrdinalIgnoreCase);
+    private static long _failedTurns;
+    private static string? _lastFailureReason;
 
     // ══ IUsageTracker explicit implementation (accessible when cast to interface) ══
     void IUsageTracker.Record(int prompt, int completion, string model) => RecordInternal(prompt, completion, model);
     void IUsageTracker.RecordWithCache(int prompt, int completion, int cacheHit, int cacheMiss, string model) => RecordInternal(prompt, completion, cacheHit, cacheMiss, model);
+    void IUsageTracker.RecordTurnOutcome(bool success, string? reason)
+    {
+        if (!success)
+        {
+            Interlocked.Increment(ref _failedTurns);
+            if (reason != null) Volatile.Write(ref _lastFailureReason, reason);
+        }
+    }
+    long IUsageTracker.FailedTurns => Volatile.Read(ref _failedTurns);
+    string? IUsageTracker.LastFailureReason => Volatile.Read(ref _lastFailureReason);
 
     // Last-matched model cache to avoid repeated linear scans of KnownKeys.All
     private static string? _lastLookupModel;
@@ -267,6 +279,20 @@ public sealed class UsageTracker : IUsageTracker
     }
     public static void RecordToolCall() => Interlocked.Increment(ref _toolCalls);
     public static long ToolCalls => Interlocked.Read(ref _toolCalls);
+
+    /// <summary>Lightweight failure marker — in-memory, zero IO.</summary>
+    public static void RecordTurnOutcome(bool success, string? reason = null)
+    {
+        if (!success)
+        {
+            Interlocked.Increment(ref _failedTurns);
+            if (reason != null) Volatile.Write(ref _lastFailureReason, reason);
+        }
+    }
+    /// <summary>Cumulative count of failed turns.</summary>
+    public static long FailedTurns => Volatile.Read(ref _failedTurns);
+    /// <summary>Reason from the most recently recorded failure (best-effort, not a queue).</summary>
+    public static string? LastFailureReason => Volatile.Read(ref _lastFailureReason);
     public static void SetActiveTool(string toolName) => Interlocked.Exchange(ref _currentTool, toolName);
     public static string CurrentTool => _currentTool ?? "";
     private static readonly AsyncLocal<Stopwatch?> _toolStopwatch = new();

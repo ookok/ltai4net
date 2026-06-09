@@ -12,11 +12,12 @@ using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using System.Reflection;
 using LTAI.Core.Commands;
+using LTAI.Core.Rendering;
 using LTAI.Core.Session;
 
 namespace LTAI.Desktop;
 
-public sealed partial class ChatView : UserControl
+public sealed partial class ChatView : UserControl, IChatRenderer
 {
     private readonly LTAIService _svc;
     private readonly TextBox _input;
@@ -222,12 +223,20 @@ public sealed partial class ChatView : UserControl
                 else
                 {
                     _vm.Input = _input.Text ?? "";
-                    _ = _vm.SendCommand.ExecuteAsync(null);
+                    _ = _vm.SendCommand.ExecuteAsync(null).ContinueWith(t =>
+                    {
+                        if (t.IsFaulted)
+                            System.Diagnostics.Debug.WriteLine($"[ChatView] SendCommand failed: {t.Exception?.InnerException?.Message}");
+                    });
                 }
                 return;
             }
             if (_isSending) Cancel();
-            else _ = SendAsync();
+            else _ = SendAsync().ContinueWith(t =>
+            {
+                if (t.IsFaulted)
+                    System.Diagnostics.Debug.WriteLine($"[ChatView] SendAsync failed: {t.Exception?.InnerException?.Message}");
+            });
         };
 
         var inputRow = new DockPanel { Margin = new(0, 4, 0, 0) };
@@ -380,12 +389,20 @@ public sealed partial class ChatView : UserControl
                 if (_vm.IsSending) return;
                 e.Handled = true;
                 _vm.Input = _input.Text ?? "";
-                _ = _vm.SendCommand.ExecuteAsync(null);
+                _ = _vm.SendCommand.ExecuteAsync(null).ContinueWith(t =>
+                {
+                    if (t.IsFaulted)
+                        System.Diagnostics.Debug.WriteLine($"[ChatView] SendCommand failed: {t.Exception?.InnerException?.Message}");
+                });
                 return;
             }
             if (_isSending) return;
             e.Handled = true;
-            _ = SendAsync();
+            _ = SendAsync().ContinueWith(t =>
+            {
+                if (t.IsFaulted)
+                    System.Diagnostics.Debug.WriteLine($"[ChatView] SendAsync failed: {t.Exception?.InnerException?.Message}");
+            });
         }
         else if (e.Key == Key.Up && e.KeyModifiers == KeyModifiers.None && _history.Count > 0)
         {
@@ -1062,5 +1079,104 @@ public sealed partial class ChatView : UserControl
             });
         };
         qs.QuestionPosted += _questionHandler;
+    }
+
+    // ── IChatRenderer ──
+
+    void IChatRenderer.OnStreamStart() { }
+    void IChatRenderer.OnTextDelta(string delta) { }
+    void IChatRenderer.OnToolCall(string name, string? arguments) { }
+    void IChatRenderer.OnToolResult(string name, string result, bool success) { }
+    void IChatRenderer.OnStreamEnd() { }
+
+    void IChatRenderer.RenderMessage(string role, string content,
+        IReadOnlyList<ToolCallRecord>? toolCalls, string? reasoning)
+    {
+        var label = role == "user" ? "[You]" : "[LTAI]";
+        var accent = role == "user" ? LtaiTheme.ChatUser : LtaiTheme.ChatAI;
+        var border = LtaiTheme.Border;
+        Dispatcher.UIThread.Post(() => AddBubble(label, content, accent, border));
+    }
+
+    void IChatRenderer.UpdateStatus(string text) { }
+
+    void IChatRenderer.UpdateProgress(string frame, string text, string? elapsed) { }
+
+    ToolResultInfo IChatRenderer.TryParseToolResult(string text)
+    {
+        var rendered = _toolRenderers.Render(text, null);
+        if (rendered != null)
+            return new ToolResultInfo(true, true, text, "");
+        return new ToolResultInfo(false, false, "", "");
+    }
+
+    ConfirmRequest? IChatRenderer.TryParseConfirmRequest(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return null;
+        if (text.Contains("⚠️") && text.Contains("确认"))
+        {
+            var firstLine = text.Split('\n')[0].Trim();
+            return new ConfirmRequest("安全确认", firstLine.Replace("⚠️", "").Trim(), "详情见完整内容");
+        }
+        return null;
+    }
+
+    async Task<string?> IChatRenderer.PromptUserAsync(string prompt, bool isSecret)
+    {
+        var tcs = new TaskCompletionSource<string?>();
+        await Dispatcher.UIThread.InvokeAsync(async () =>
+        {
+            var owner = this.VisualRoot as Window;
+            if (owner == null) { tcs.TrySetResult(null); return; }
+            var answer = await LTAI.Desktop.Dialogs.QuestionDialog.ShowAsync(owner,
+                new LTAI.Agent.Tools.QuestionPost(Guid.NewGuid(),
+                    new[] { new LTAI.Agent.Tools.QuestionPrompt(prompt, prompt, Array.Empty<LTAI.Agent.Tools.QuestionOption>(), false) }));
+            tcs.TrySetResult(answer.Count > 0 ? string.Join(", ", answer[0]) : null);
+        }).ConfigureAwait(false);
+        return await tcs.Task.ConfigureAwait(false);
+    }
+
+    async Task<ConfirmChoice> IChatRenderer.ShowConfirmAsync(
+        string title, string message, string result, string extraInfo)
+    {
+        var tcs = new TaskCompletionSource<ConfirmChoice>();
+        await Dispatcher.UIThread.InvokeAsync(async () =>
+        {
+            var owner = this.VisualRoot as Window;
+            if (owner == null) { tcs.TrySetResult(ConfirmChoice.No); return; }
+            var dialog = new LTAI.Desktop.Dialogs.ConfirmDialog(title, message);
+            var resultChoice = await dialog.ShowDialog<ConfirmChoice?>(owner);
+            tcs.TrySetResult(resultChoice ?? ConfirmChoice.No);
+        }).ConfigureAwait(false);
+        return await tcs.Task.ConfigureAwait(false);
+    }
+
+    void IChatRenderer.TrimHistory() { }
+    void IChatRenderer.AutoCompact() { }
+    Task IChatRenderer.SaveSessionAsync() => _sessionManager.SaveSessionAsync();
+
+    async Task IChatRenderer.ExtractMemoryAsync(string userInput)
+    {
+        var extractor = _svc.Services.GetService(typeof(LTAI.Agent.Memory.MemoryExtractor))
+            as LTAI.Agent.Memory.MemoryExtractor;
+        if (extractor != null)
+            await extractor.ExtractFromTurnAsync(userInput, ct: CancellationToken.None)
+                .ConfigureAwait(false);
+    }
+
+    void IChatRenderer.RequestRender()
+    {
+        Dispatcher.UIThread.Post(() => _scroller.ScrollToEnd());
+    }
+    void IChatRenderer.InvalidateRender()
+    {
+        Dispatcher.UIThread.Post(() => _scroller.ScrollToEnd());
+    }
+
+    private string _rendererStatus = "";
+    string IChatRenderer.CurrentStatus
+    {
+        get => _rendererStatus;
+        set => _rendererStatus = value;
     }
 }

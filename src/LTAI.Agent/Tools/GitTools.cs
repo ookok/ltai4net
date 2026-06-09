@@ -14,9 +14,24 @@ namespace LTAI.Agent.Tools;
 public sealed class GitTools
 {
     private readonly string _ws;
+    private static readonly TimeSpan GitTimeout = TimeSpan.FromSeconds(60);
     public GitTools(string ws) => _ws = ws;
     private Signature Sig() => new("LTAI", "ltai@local", DateTimeOffset.Now);
     private Repository Open() => new(Repository.Discover(_ws));
+
+    private static string RunWithTimeout(Func<string> action, string errorLabel)
+    {
+        using var cts = new CancellationTokenSource(GitTimeout);
+        try
+        {
+            var task = Task.Run(action, cts.Token);
+            return task.Wait(GitTimeout) ? task.Result : $"⏱ {errorLabel} timed out ({GitTimeout.TotalSeconds}s)";
+        }
+        catch (AggregateException ae) when (ae.InnerException != null)
+        {
+            return $"{errorLabel}: {ae.InnerException.Message}";
+        }
+    }
 
     // ═══ Status & Log ═══
 
@@ -252,13 +267,16 @@ public sealed class GitTools
     {
         if (!confirm)
             return "⛔ 操作已取消：提交并推送会修改远程仓库，需设置 confirm=true 确认后执行。";
-        using var repo = Open();
-        var sig = Sig();
-        var c = repo.Commit(message, sig, sig);
-        var rmt = repo.Network.Remotes[remote];
-        if (rmt == null) return $"Remote '{remote}' not found";
-        repo.Network.Push(rmt, $"+refs/heads/{repo.Head.FriendlyName}", new PushOptions());
-        return $"✅ {c.Sha[..8]}: {c.MessageShort.Trim()}\n✅ Pushed to '{remote}'";
+        return RunWithTimeout(() =>
+        {
+            using var repo = Open();
+            var sig = Sig();
+            var c = repo.Commit(message, sig, sig);
+            var rmt = repo.Network.Remotes[remote];
+            if (rmt == null) return $"Remote '{remote}' not found";
+            repo.Network.Push(rmt, $"+refs/heads/{repo.Head.FriendlyName}", new PushOptions());
+            return $"✅ {c.Sha[..8]}: {c.MessageShort.Trim()}\n✅ Pushed to '{remote}'";
+        }, "CommitAndPush");
     }
 
     [Description("撤销上一次提交（软重置，保留工作区的更改）。相当于 git reset --soft HEAD~1。\n"
@@ -311,12 +329,12 @@ public sealed class GitTools
         + "不适用场景：拉取并合并（请用 GitPull）、推送本地更改（请用 GitPush）。\n"
         + "关键参数：remote — 远程仓库名。")]
     [ToolExample("拉取远程最新代码")]
-    public string GitFetch(string remote = "origin")
+    public string GitFetch(string remote = "origin") => RunWithTimeout(() =>
     {
         using var repo = Open();
-        try { Commands.Fetch(repo, remote, [], new FetchOptions(), ""); return $"✅ Fetched '{remote}'"; }
-        catch (Exception ex) { return $"Fetch error: {ex.Message}"; }
-    }
+        Commands.Fetch(repo, remote, [], new FetchOptions(), "");
+        return $"✅ Fetched '{remote}'";
+    }, "Fetch");
 
     [Description("将本地提交推送到远程仓库。\n"
         + "适用场景：将本地代码共享到远程仓库、提交 PR 前推送分支。\n"
@@ -328,15 +346,14 @@ public sealed class GitTools
     {
         if (!confirm)
             return "⛔ 操作已取消：推送会修改远程仓库，需设置 confirm=true 确认后执行。";
-        using var repo = Open();
-        try
+        return RunWithTimeout(() =>
         {
+            using var repo = Open();
             var rmt = repo.Network.Remotes[remote];
             if (rmt == null) return $"Remote '{remote}' not found";
             repo.Network.Push(rmt, $"+refs/heads/{branch ?? repo.Head.FriendlyName}", new PushOptions());
             return $"✅ Pushed to '{remote}'";
-        }
-        catch (Exception ex) { return $"Push error: {ex.Message}"; }
+        }, "Push");
     }
 
     [Description("从远程仓库拉取并合并到当前分支(pull = fetch + merge)。\n"
@@ -349,19 +366,22 @@ public sealed class GitTools
     {
         if (!confirm)
             return "⛔ 操作已取消：拉取并合并远程更改可能产生冲突，需设置 confirm=true 确认后执行。";
-        var fetchResult = GitFetch(remote);
-        using var repo = Open();
-        var tracked = branch != null ? repo.Branches[$"{remote}/{branch}"] : repo.Head.TrackedBranch;
-        if (tracked == null) return "No upstream branch";
-        var result = repo.Merge(tracked, Sig());
-        return result.Status switch
+        return RunWithTimeout(() =>
         {
-            MergeStatus.UpToDate => "✅ Already up to date",
-            MergeStatus.FastForward => $"✅ Pulled (fast-forward)",
-            MergeStatus.NonFastForward => $"✅ Pulled (merge: {result.Commit?.Sha[..8]})",
-            MergeStatus.Conflicts => "❌ Conflicts",
-            var s => $"Pull: {s}"
-        };
+            var fetchResult = GitFetch(remote);
+            using var repo = Open();
+            var tracked = branch != null ? repo.Branches[$"{remote}/{branch}"] : repo.Head.TrackedBranch;
+            if (tracked == null) return "No upstream branch";
+            var result = repo.Merge(tracked, Sig());
+            return result.Status switch
+            {
+                MergeStatus.UpToDate => "✅ Already up to date",
+                MergeStatus.FastForward => $"✅ Pulled (fast-forward)",
+                MergeStatus.NonFastForward => $"✅ Pulled (merge: {result.Commit?.Sha[..8]})",
+                MergeStatus.Conflicts => "❌ Conflicts",
+                var s => $"Pull: {s}"
+            };
+        }, "Pull");
     }
 
     [Description("变基(rebase)当前分支到目标分支，使提交历史更线性整洁。\n"
@@ -402,18 +422,21 @@ public sealed class GitTools
     {
         if (!confirm)
             return "⛔ 操作已取消：同步 fork 会合并更改到当前分支，需设置 confirm=true 确认后执行。";
-        var fetchResult = GitFetch(upstream);
-        if (!fetchResult.StartsWith("✅")) return fetchResult;
-        using var repo = Open();
-        var upstreamBranch = repo.Branches[$"{upstream}/{branch}"];
-        if (upstreamBranch == null) return $"Branch '{upstream}/{branch}' not found";
-        var result = repo.Merge(upstreamBranch, Sig());
-        return result.Status switch
+        return RunWithTimeout(() =>
         {
-            MergeStatus.UpToDate => "✅ Up to date with upstream",
-            MergeStatus.FastForward => $"✅ Synced (fast-forward)",
-            _ => $"Sync result: {result.Status}"
-        };
+            var fetchResult = GitFetch(upstream);
+            if (!fetchResult.StartsWith("✅")) return fetchResult;
+            using var repo = Open();
+            var upstreamBranch = repo.Branches[$"{upstream}/{branch}"];
+            if (upstreamBranch == null) return $"Branch '{upstream}/{branch}' not found";
+            var result = repo.Merge(upstreamBranch, Sig());
+            return result.Status switch
+            {
+                MergeStatus.UpToDate => "✅ Up to date with upstream",
+                MergeStatus.FastForward => $"✅ Synced (fast-forward)",
+                _ => $"Sync result: {result.Status}"
+            };
+        }, "SyncFork");
     }
 
     // ═══ Merge ═══

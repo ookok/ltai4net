@@ -23,6 +23,18 @@ public static class Program
 
     public static async Task Main(string[] args)
     {
+        AppDomain.CurrentDomain.UnhandledException += (_, e) =>
+        {
+            try { File.WriteAllText(Path.Combine(AppContext.BaseDirectory, "crash.log"), e.ExceptionObject.ToString()); }
+            catch { }
+        };
+        TaskScheduler.UnobservedTaskException += (_, e) =>
+        {
+            try { File.AppendAllText(Path.Combine(AppContext.BaseDirectory, "crash.log"), $"\n[Task]{e.Exception}"); }
+            catch { }
+            e.SetObserved();
+        };
+
         // Build config early so static fields can read from it
         var earlyConfig = new ConfigurationBuilder()
             .SetBasePath(AppContext.BaseDirectory)

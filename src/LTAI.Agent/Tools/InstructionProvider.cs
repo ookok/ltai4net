@@ -158,7 +158,7 @@ public sealed class InstructionProvider : AIContextProvider
         var relevant = new List<string>();
         var inPlanning = false;
         var linesKept = 0;
-        const int MaxLines = 50;
+        const int MaxLines = 30;
 
         foreach (var line in lines)
         {

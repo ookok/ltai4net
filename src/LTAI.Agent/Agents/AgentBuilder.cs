@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text.Json;
 using LTAI.Agent.Context;
 using LTAI.Agent.Memory;
@@ -60,14 +61,16 @@ internal static partial class AgentBuilder
     private static readonly Caching.MmapFileProvider s_mmapProvider = new(s_mmapCache);
     private static readonly Caching.WriteBuffer s_writeBuf = new(mmap: s_mmapCache);
 
+    private static readonly ConcurrentDictionary<string, Task<IReadOnlyList<AITool>>> s_mcpToolsCache = new(StringComparer.OrdinalIgnoreCase);
+
     public static AIAgent BuildAgent(IServiceProvider sp, string name, string description,
         bool canRead, bool canWrite, bool canList, bool canExec,
         string? modelId = null, float? temperature = null, float? topP = null)
     {
-        return Task.Run(() => BuildAgentImpl(sp, name, description, canRead, canWrite, canList, canExec, modelId, temperature, topP)).GetAwaiter().GetResult();
+        return BuildAgentImpl(sp, name, description, canRead, canWrite, canList, canExec, modelId, temperature, topP);
     }
 
-    public static async Task<AIAgent> BuildAgentImpl(IServiceProvider sp, string name, string description,
+    public static AIAgent BuildAgentImpl(IServiceProvider sp, string name, string description,
         bool canRead, bool canWrite, bool canList, bool canExec,
         string? modelId = null, float? temperature = null, float? topP = null, string? agentPrompt = null)
     {
@@ -237,16 +240,22 @@ internal static partial class AgentBuilder
                 o.ScriptApproval = true;
                  o.SkillsInstructionPrompt =
                     """
-                    你拥有领域专精技能（skills），每个技能包含专门的指令、参考文档和资产。
+                    你拥有领域专精技能（skills），每个技能采用三层渐进式披露（Three-Layer Progressive Disclosure）：
 
                     <available_skills>
                     {skills}
                     </available_skills>
 
+                    ### 三层加载策略
+                    - **L1（上表中可见）**: name + description → 判断技能是否相关，零成本
+                    - **L2**: 加载后 `## 概要` 节 → 了解核心步骤和关键参数（load_skill 后自动加载）
+                    - **L3**: 完整技能正文 → 包含示例、边界情况、输出格式（继续阅读即可）
+
                     当任务匹配某个技能的领域时：
-                    1. 用 `load_skill` 加载技能指令（示例：load_skill("code-review")）
-                    2. 遵循技能提供的指引
-                    3. 如果技能声明了 allowedTools，请优先使用这些工具
+                    1. 先用 description 判断相关度（L1）
+                    2. 用 `load_skill` 加载技能（示例：load_skill("code-review")），阅读 `## 概要` 节（L2）
+                    3. 如需深入了解，继续阅读后续章节（L3）
+                    4. 如果技能声明了 allowedTools，请优先使用这些工具
                     {resource_instructions}
                     {script_instructions}
                     只加载所需技能，不要全部加载。
@@ -291,24 +300,24 @@ internal static partial class AgentBuilder
 
         RegisterMemoryTools(tools, canWrite, palaceStore, ws);
 
-        // MCP (Model Context Protocol) client tools: connect to external MCP servers
-        // configured in appsettings.json under "LTAI:Mcp:Servers". Lazy + cached — the
-        // factory's first call spawns child stdio processes, subsequent calls reuse the
-        // tool list. Plan mode keeps its read-only set; MCP tools (e.g. filesystem) are
-        // disabled there to maintain strict read-only guarantees.
+        // MCP (Model Context Protocol) client tools: lazy-loaded on first invocation.
+        // Defers spawning MCP child processes from DI resolution to actual tool use.
         if (!isPlanMode)
         {
             var mcpFactory = sp.GetRequiredService<LTAI.Agent.Mcp.McpClientFactory>();
-            var mcpTools = await mcpFactory.GetToolsAsync(opts.Mcp).ConfigureAwait(false);
-            foreach (var mcpTool in mcpTools)
+            var mcpTask = s_mcpToolsCache.GetOrAdd(name, _ => mcpFactory.GetToolsAsync(opts.Mcp));
+            if (mcpTask.IsCompletedSuccessfully)
             {
-                if (!canRead) continue;
-                var mn = mcpTool.Name.ToLowerInvariant();
-                if (mn.Contains("write") || mn.Contains("create") || mn.Contains("delete") || mn.Contains("upload"))
-                { if (!canWrite) continue; }
-                if (mn.Contains("shell") || mn.Contains("command") || mn.Contains("exec") || mn.Contains("process"))
-                { if (!canExec) continue; }
-                tools.Add(mcpTool);
+                foreach (var mcpTool in mcpTask.Result)
+                {
+                    if (!canRead) continue;
+                    var mn = mcpTool.Name.ToLowerInvariant();
+                    if (mn.Contains("write") || mn.Contains("create") || mn.Contains("delete") || mn.Contains("upload"))
+                    { if (!canWrite) continue; }
+                    if (mn.Contains("shell") || mn.Contains("command") || mn.Contains("exec") || mn.Contains("process"))
+                    { if (!canExec) continue; }
+                    tools.Add(mcpTool);
+                }
             }
         }
 

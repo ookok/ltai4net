@@ -7,6 +7,13 @@ allowedTools: [BuildReviewContext, GroupChanges, MatchReviewRules, RepairReviewP
 
 # Code Review 代码审查
 
+## 概要
+- 三阶段流程：确定性预处理(规则匹配) → Agent 审查(5维度) → 后处理(位置修复+质量反思)
+- 确定性阶段：BuildReviewContext→GroupChanges→MatchReviewRules（40+ 规则，零遗漏）
+- Agent 审查维度：正确性、安全性、性能、可维护性、测试覆盖
+- 输出格式：P0/P1/P2 分级，含文件行号引用
+- 配合工具：SearchContent、FindInCode、Glob、DirectoryTree
+
 采用 **Open Code Review 确定性工程 → Agent** 分层架构。
 
 ## 阶段 1：确定性预处理

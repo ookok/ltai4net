@@ -63,10 +63,16 @@ public sealed class ProxyService : IDisposable
             try
             {
                 var client = await _listener!.AcceptTcpClientAsync(ct);
-                _ = HandleClientAsync(client, ct);
+                var captured = client;
+                _ = Task.Run(async () =>
+                {
+                    try { await HandleClientAsync(captured, ct).ConfigureAwait(false); }
+                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    { System.Diagnostics.Debug.WriteLine($"[ProxyService] Client handler failed: {ex.Message}"); }
+                });
             }
             catch when (ct.IsCancellationRequested) { break; }
-            catch { }
+            catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"[ProxyService] Accept loop error: {ex.Message}"); }
         }
     }
 
@@ -101,7 +107,7 @@ public sealed class ProxyService : IDisposable
             }
         }
         catch when (ct.IsCancellationRequested) { }
-        catch { }
+        catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"[ProxyService] HandleClient error: {ex.Message}"); }
     }
 
     private async Task HandleConnectAsync(NetworkStream clientStream, byte[] buffer, int bytesRead, string target, CancellationToken ct)
@@ -124,8 +130,9 @@ public sealed class ProxyService : IDisposable
             var t2 = RelayAsync(remoteStream, clientStream, ct);
             await Task.WhenAny(t1, t2);
         }
-        catch (Exception)
+        catch (Exception ex)
         {
+            System.Diagnostics.Debug.WriteLine($"[ProxyService] Connect failed for '{target}': {ex.Message}");
             try
             {
                 var error = "HTTP/1.1 502 Bad Gateway\r\n\r\nProxy error";
@@ -154,8 +161,9 @@ public sealed class ProxyService : IDisposable
             var t2 = RelayAsync(remoteStream, clientStream, ct);
             await Task.WhenAny(t1, t2);
         }
-        catch (Exception)
+        catch (Exception ex)
         {
+            System.Diagnostics.Debug.WriteLine($"[ProxyService] HTTP proxy failed for '{target}': {ex.Message}");
             try
             {
                 var error = "HTTP/1.1 502 Bad Gateway\r\n\r\nProxy error";

@@ -224,7 +224,7 @@ public sealed class SearchTools
         var matches = new ConcurrentBag<(string path, int line, string text)>();
         int cpuCount = Environment.ProcessorCount;
 
-        Parallel.ForEach(files, new ParallelOptions { MaxDegreeOfParallelism = cpuCount }, file =>
+        Parallel.ForEach(files, new ParallelOptions { MaxDegreeOfParallelism = Math.Min(cpuCount, 4) }, file =>
         {
             try
             {

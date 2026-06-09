@@ -137,7 +137,7 @@ public class CSharpDiagProviderTests : IDisposable
         await _provider.UpdateDocumentAsync("test.cs", code);
         Assert.True(_provider.HasErrors);
 
-        _provider.Reset();
+        await _provider.ResetAsync();
         Assert.False(_provider.HasErrors);
     }
 

@@ -13,7 +13,7 @@ namespace LTAI.Agent.Tools;
 public static class FileDownloadTool
 {
     // 共享 HttpClient — 复用连接池，避免 socket 耗尽
-    private static readonly Lazy<HttpClient> _sharedHttp = new(() => new HttpClient { Timeout = TimeSpan.FromMinutes(10) });
+    private static readonly Lazy<HttpClient> _sharedHttp = new(() => new HttpClient(new SocketsHttpHandler { PooledConnectionLifetime = TimeSpan.FromMinutes(5) }) { Timeout = TimeSpan.FromMinutes(10) });
 
     [Description("从 URL 下载文件到本地工作目录。支持大文件下载，自动显示进度。含 SSRF 防护。\n"
         + "适用场景：下载网络上的文件、获取图片/压缩包/安装包、下载数据文件。\n"

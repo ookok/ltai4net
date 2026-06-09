@@ -29,7 +29,9 @@ public sealed class HnswIndex : IDisposable
         var node = new HnswNode(packed, new List<int>[level + 1]);
         for (int l = 0; l <= level; l++) node.Links[l] = [];
 
-        _rwLock.EnterWriteLock();
+        // Phase 1 (upgradeable read): allocate index + read-only search.
+        // Other readers continue; only one upgradeable thread at a time.
+        _rwLock.EnterUpgradeableReadLock();
         try
         {
             int idx = _nodes.Count;
@@ -37,47 +39,52 @@ public sealed class HnswIndex : IDisposable
 
             if (_entryPoint < 0)
             {
-                _entryPoint = idx;
-                _maxLevel = level;
+                _rwLock.EnterWriteLock();
+                try { _entryPoint = idx; _maxLevel = level; }
+                finally { _rwLock.ExitWriteLock(); }
                 return idx;
             }
 
             int currEntry = _entryPoint;
-            float dist;
             for (int l = _maxLevel; l > level; l--)
-            {
-                (currEntry, dist) = SearchLayer(packed, currEntry, ef: 1, layer: l);
-            }
+                (currEntry, _) = SearchLayer(packed, currEntry, ef: 1, layer: l);
 
             var candidates = new List<(int idx, float dist)>();
             for (int l = Math.Min(level, _maxLevel); l >= 0; l--)
             {
                 var ef = l == level ? EfConstruction : 1;
-                var eps = new List<int> { currEntry };
-                candidates = SearchLayerBatched(packed, eps, ef, l);
-
+                candidates = SearchLayerBatched(packed, [currEntry], ef, l);
                 var neighbors = SelectNeighbors(candidates, l == 0 ? Mmax0 : Mmax);
                 node.Links[l].AddRange(neighbors);
+            }
 
-                foreach (var (nid, _) in neighbors.Select(n => (n, 0f)))
+            // Phase 2 (write): modify graph structure — brief, only when needed
+            _rwLock.EnterWriteLock();
+            try
+            {
+                for (int l = Math.Min(level, _maxLevel); l >= 0; l--)
                 {
-                    var neighborNode = _nodes[nid];
-                    var linkList = neighborNode.Links[l];
-                    linkList.Add(idx);
-                    if (linkList.Count > (l == 0 ? Mmax0 : Mmax))
-                        ShrinkConnections(nid, l);
+                    foreach (var nid in node.Links[l])
+                    {
+                        var neighborNode = _nodes[nid];
+                        var linkList = neighborNode.Links[l];
+                        linkList.Add(idx);
+                        if (linkList.Count > (l == 0 ? Mmax0 : Mmax))
+                            ShrinkConnections(nid, l);
+                    }
+                }
+
+                if (level > _maxLevel)
+                {
+                    _maxLevel = level;
+                    _entryPoint = idx;
                 }
             }
-
-            if (level > _maxLevel)
-            {
-                _maxLevel = level;
-                _entryPoint = idx;
-            }
+            finally { _rwLock.ExitWriteLock(); }
 
             return idx;
         }
-        finally { _rwLock.ExitWriteLock(); }
+        finally { _rwLock.ExitUpgradeableReadLock(); }
     }
 
     public List<(int index, float distance)> Search(ReadOnlySpan<float> query, int topK)

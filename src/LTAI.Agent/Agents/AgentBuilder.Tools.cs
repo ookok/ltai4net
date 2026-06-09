@@ -19,9 +19,8 @@ partial class AgentBuilder
         var fs = new FileSystemTools(ws, mmap, writeBuf, trust);
         var text = new TextTools(ws);
         if (canRead) tools.Add(AIFunctionFactory.Create((string path) => fs.ReadFileContent(path), "ReadFileContent", "Read a file"));
-        if (canRead) tools.Add(AIFunctionFactory.Create(fs.ListTools));
         if (canWrite) tools.Add(AIFunctionFactory.Create(fs.WriteFile));
-        if (canList) { tools.Add(AIFunctionFactory.Create(fs.ListFiles)); tools.Add(AIFunctionFactory.Create(fs.Glob)); tools.Add(AIFunctionFactory.Create(fs.DirectoryTree)); }
+        if (canList) { tools.Add(AIFunctionFactory.Create(fs.Glob)); }
         if (canRead && canWrite)
         {
             tools.Add(AIFunctionFactory.Create(fs.CopyFile));
@@ -231,14 +230,11 @@ partial class AgentBuilder
         {
             tools.Add(AIFunctionFactory.Create(SystemTools.GetCurrentDateTime));
             tools.Add(AIFunctionFactory.Create(SystemTools.SystemInfo));
+            tools.Add(AIFunctionFactory.Create(SystemTools.ListDirectory));
             tools.Add(AIFunctionFactory.Create(SystemTools.ListProcesses));
             tools.Add(AIFunctionFactory.Create(SystemTools.GetEnv));
             tools.Add(AIFunctionFactory.Create(SystemTools.NetworkInterfaces));
-            tools.Add(AIFunctionFactory.Create(SystemTools.Ping));
-            tools.Add(AIFunctionFactory.Create(SystemTools.DnsLookup));
-            tools.Add(AIFunctionFactory.Create(SystemTools.CheckPort));
-            tools.Add(AIFunctionFactory.Create(SystemTools.HttpCheck));
-            tools.Add(AIFunctionFactory.Create(SystemTools.Whois));
+            tools.Add(AIFunctionFactory.Create(SystemTools.NetworkDiag));
             tools.Add(AIFunctionFactory.Create(SystemTools.SetEnv));
             tools.Add(AIFunctionFactory.Create(SystemTools.GetCurrentDirectory));
         }

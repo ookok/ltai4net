@@ -27,6 +27,18 @@ public static class Program
 
     public static async Task InitializeServicesAsync()
     {
+        AppDomain.CurrentDomain.UnhandledException += (_, e) =>
+        {
+            try { File.WriteAllText(Path.Combine(AppContext.BaseDirectory, "crash.log"), e.ExceptionObject.ToString()); }
+            catch { }
+        };
+        TaskScheduler.UnobservedTaskException += (_, e) =>
+        {
+            try { File.AppendAllText(Path.Combine(AppContext.BaseDirectory, "crash.log"), $"\n[Task]{e.Exception}"); }
+            catch { }
+            e.SetObserved();
+        };
+
         var logPath = Path.Combine(AppContext.BaseDirectory, "desktop-startup.log");
         void Log(string msg) => File.AppendAllText(logPath, $"[{DateTime.UtcNow:O}] {msg}\n");
 

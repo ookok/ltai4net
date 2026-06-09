@@ -73,7 +73,7 @@ public sealed class PreWarmEmbeddingModelsHostedService : IHostedService
 
             _logger.LogInformation("PreWarmEmbeddingModels: starting background download...");
 
-            var http = _httpFactory?.CreateClient() ?? new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
+            var http = _httpFactory?.CreateClient() ?? new HttpClient(new SocketsHttpHandler { PooledConnectionLifetime = TimeSpan.FromMinutes(5) }) { Timeout = TimeSpan.FromMinutes(5) };
             var disposeHttp = _httpFactory == null;
 
             try

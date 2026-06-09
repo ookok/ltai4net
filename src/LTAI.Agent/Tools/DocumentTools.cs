@@ -54,7 +54,7 @@ public sealed class DocumentTools
             if (data == null) return $"Sheet '{sheet}' not found";
 
             var wsp = (WorksheetPart)wbPart.GetPartById(data.Id!);
-            var rows = wsp.Worksheet.Descendants<Row>().ToList();
+            var rows = wsp.Worksheet.Descendants<Row>().Take(10000).ToList();
             var shared = wbPart.SharedStringTablePart?.SharedStringTable;
 
             var table = new List<List<string?>>();
