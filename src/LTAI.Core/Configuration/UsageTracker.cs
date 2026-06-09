@@ -229,7 +229,7 @@ public sealed class UsageTracker : IUsageTracker
     public static TimeSpan Uptime => _timer.Elapsed;
     public static decimal EstimatedCost { get { lock (_costLock) { return (decimal)_totalCost; } } }
     public static string CostDisplay => $"¥{EstimatedCost:F4}";
-    public static string ActiveModel => !string.IsNullOrEmpty(_activeModel) ? _activeModel : "deepseek-v4-flash";
+    public static string ActiveModel => _activeModel;
     public static void SetActiveModel(string model) => Interlocked.Exchange(ref _activeModel, model);
     public static void RecordCacheHit() => Interlocked.Increment(ref _cacheHits);
     public static void RecordCacheMiss() => Interlocked.Increment(ref _cacheMisses);
@@ -392,7 +392,7 @@ public sealed class UsageTracker : IUsageTracker
         {
             lock (_balanceLock)
             {
-                return string.IsNullOrEmpty(_balanceSource) ? "N/A"
+                return string.IsNullOrEmpty(_balanceSource) ? ""
                     : $"{_balanceCurrency}{_balance:F2} ({_balanceSource})";
             }
         }

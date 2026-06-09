@@ -240,7 +240,6 @@ public sealed class CodeChunkIndex : AIContextProvider
                 ? context.AIContext.Instructions + "\n\n## 相关代码片段\n" + result
                 : "## 相关代码片段\n" + result,
             Messages = context.AIContext.Messages,
-            Tools = context.AIContext.Tools,
         };
     }
 

@@ -13,6 +13,7 @@ public sealed class SessionManager
     private ISessionHandle? _currentHandle;
     private readonly int _maxSessions;
     private readonly int _keyRotationMonths;
+    private readonly ISessionSerializer _serializer;
     private static byte[]? _encryptionKey;
     private static DateTime? _keyCreatedAt;
     private static readonly object _keyLock = new();
@@ -25,9 +26,13 @@ public sealed class SessionManager
 
     public int MessageCount => _currentHandle?.Messages.Count ?? 0;
 
+    public string FileExtension => _serializer.FileExtension;
+
     public SessionManager() : this(Options.Create(new LTAIOptions())) { }
 
-    public SessionManager(IOptions<LTAIOptions> options)
+    public SessionManager(IOptions<LTAIOptions> options) : this(options, new JsonSessionSerializer()) { }
+
+    public SessionManager(IOptions<LTAIOptions> options, ISessionSerializer serializer)
     {
         var cfg = options.Value.Session;
         _sessionsDir = Path.IsPathRooted(cfg.Path)
@@ -35,15 +40,23 @@ public sealed class SessionManager
             : Path.Combine(Directory.GetCurrentDirectory(), cfg.Path);
         _maxSessions = Math.Max(10, cfg.MaxSessions);
         _keyRotationMonths = Math.Max(0, cfg.KeyRotationMonths);
+        _serializer = serializer;
         EnsureKey();
         Directory.CreateDirectory(_sessionsDir);
     }
 
+    public SessionManager(ISessionSerializer serializer)
+        : this(new LTAIOptions().Session.Path, serializer) { }
+
     public SessionManager(string sessionsDir, int maxSessions = 500, int keyRotationMonths = 6)
+        : this(sessionsDir, new JsonSessionSerializer(), maxSessions, keyRotationMonths) { }
+
+    public SessionManager(string sessionsDir, ISessionSerializer serializer, int maxSessions = 500, int keyRotationMonths = 6)
     {
         _sessionsDir = sessionsDir;
         _maxSessions = Math.Max(10, maxSessions);
         _keyRotationMonths = Math.Max(0, keyRotationMonths);
+        _serializer = serializer;
         EnsureKey();
         Directory.CreateDirectory(_sessionsDir);
     }
@@ -57,9 +70,10 @@ public sealed class SessionManager
 
     public SessionInfo[] ListSessions()
     {
-        return Directory.GetFiles(_sessionsDir, "*.json")
-            .Select(f => Path.GetFileNameWithoutExtension(f))
+        return Directory.GetFiles(_sessionsDir, SessionSearchPattern)
+            .Select(f => Path.GetFileNameWithoutExtension(f) ?? f)
             .OrderByDescending(f => f)
+            .Distinct()
             .Select(f =>
             {
                 var meta = ReadMetadata(f);
@@ -75,7 +89,7 @@ public sealed class SessionManager
 
     public ISessionHandle? LoadSession(string name)
     {
-        var path = Path.Combine(_sessionsDir, $"{name}.json");
+        var path = SessionPath(name);
         if (!File.Exists(path)) return null;
         try
         {
@@ -83,12 +97,12 @@ public sealed class SessionManager
             // F12: Do NOT silently fall back to treating ciphertext as plaintext.
             // If decryption fails, the file is either corrupted or encrypted with a
             // different key — loading it as plaintext is a security downgrade.
-            string json;
-            try { json = Decrypt(text); }
+            string data;
+            try { data = Decrypt(text); }
             catch { return null; }
 
-            var doc = JsonDocument.Parse(json);
-            _currentHandle = new JsonSessionHandle(name, doc.RootElement.Clone());
+            var el = _serializer.Deserialize(data);
+            _currentHandle = new JsonSessionHandle(name, el);
             return _currentHandle;
         }
         catch { return null; }
@@ -96,17 +110,17 @@ public sealed class SessionManager
 
     public async Task<ISessionHandle?> LoadSessionAsync(string name)
     {
-        var path = Path.Combine(_sessionsDir, $"{name}.json");
+        var path = SessionPath(name);
         if (!File.Exists(path)) return null;
         try
         {
             var text = await File.ReadAllTextAsync(path).ConfigureAwait(false);
-            string json;
-            try { json = Decrypt(text); }
+            string data;
+            try { data = Decrypt(text); }
             catch { return null; }
 
-            var doc = JsonDocument.Parse(json);
-            _currentHandle = new JsonSessionHandle(name, doc.RootElement.Clone());
+            var el = _serializer.Deserialize(data);
+            _currentHandle = new JsonSessionHandle(name, el);
             return _currentHandle;
         }
         catch { return null; }
@@ -129,9 +143,10 @@ public sealed class SessionManager
 
     public void SaveSession(ISessionHandle handle)
     {
-        var path = Path.Combine(_sessionsDir, $"{handle.Name}.json");
+        var path = SessionPath(handle.Name);
         var json = handle.SerializeToJson();
-        File.WriteAllText(path, Encrypt(json));
+        var serialized = _serializer.Serialize(JsonDocument.Parse(json).RootElement);
+        File.WriteAllText(path, Encrypt(serialized));
         _currentHandle = handle;
         PruneOldSessions();
     }
@@ -144,9 +159,10 @@ public sealed class SessionManager
 
     public async Task SaveSessionAsync(ISessionHandle handle)
     {
-        var path = Path.Combine(_sessionsDir, $"{handle.Name}.json");
+        var path = SessionPath(handle.Name);
         var json = handle.SerializeToJson();
-        await File.WriteAllTextAsync(path, Encrypt(json)).ConfigureAwait(false);
+        var serialized = _serializer.Serialize(JsonDocument.Parse(json).RootElement);
+        await File.WriteAllTextAsync(path, Encrypt(serialized)).ConfigureAwait(false);
         _currentHandle = handle;
         PruneOldSessions();
     }
@@ -194,6 +210,14 @@ public sealed class SessionManager
         public string? Label { get; init; }
         public long ElapsedMs { get; init; }
     }
+
+    private string SessionPath(string name) =>
+        Path.Combine(_sessionsDir, $"{name}{_serializer.FileExtension}");
+
+    private string MetaPath(string name) =>
+        Path.Combine(_sessionsDir, $"{name}.meta.json");
+
+    private string SessionSearchPattern => $"*{_serializer.FileExtension}";
 
     private SessionMeta ReadMetadata(string name)
     {
@@ -316,5 +340,20 @@ public sealed class SessionManager
         Buffer.BlockCopy(fullBytes, iv.Length, cipherBytes, 0, cipherBytes.Length);
         var plainBytes = decryptor.TransformFinalBlock(cipherBytes, 0, cipherBytes.Length);
         return Encoding.UTF8.GetString(plainBytes);
+    }
+}
+
+public sealed class JsonSessionSerializer : ISessionSerializer
+{
+    public string FileExtension => ".json";
+
+    public string Serialize(JsonElement state)
+    {
+        return state.GetRawText();
+    }
+
+    public JsonElement Deserialize(string data)
+    {
+        return JsonDocument.Parse(data).RootElement.Clone();
     }
 }

@@ -2,6 +2,7 @@
 using System.Text;
 using System.Text.RegularExpressions;
 using LTAI.AI;
+using LTAI.Agent.Caching;
 using LTAI.Core;
 
 namespace LTAI.Agent.Tools;
@@ -18,7 +19,18 @@ public sealed class FileSystemTools
     private const int MaxChildren = 50;
 
     private readonly string _ws;
-    public FileSystemTools(string ws) => _ws = ws;
+    private readonly MmapFileProvider? _mmap;
+    private readonly WriteBuffer? _writeBuf;
+    private readonly ToolTrustService? _trust;
+
+    public FileSystemTools(string ws, MmapFileProvider? mmap = null, WriteBuffer? writeBuf = null,
+        ToolTrustService? trust = null)
+    {
+        _ws = ws;
+        _mmap = mmap;
+        _writeBuf = writeBuf;
+        _trust = trust;
+    }
 
     // ========== READ / WRITE / LIST ==========
 
@@ -63,7 +75,9 @@ public sealed class FileSystemTools
 
             var sizeError = PathUtils.CheckFileSize(fp);
             if (sizeError != null) return sizeError;
-            var content = await File.ReadAllTextAsync(fp).ConfigureAwait(false);
+            var content = _mmap != null
+                ? await _mmap.ReadAllTextAsync(fp).ConfigureAwait(false)
+                : await File.ReadAllTextAsync(fp).ConfigureAwait(false);
             var fi = new FileInfo(fp);
             var ext = fi.Extension.ToLowerInvariant();
             var summary = DescribeDoc(content, ext);
@@ -116,8 +130,15 @@ public sealed class FileSystemTools
     {
         var fp = PathUtils.SafeResolvePath(_ws, path);
         if (fp == null) return "Error: path escape";
+
+        if (_writeBuf != null)
+        {
+            await _writeBuf.WriteAsync(fp, content).ConfigureAwait(false);
+            return $"Written {content.Length} bytes to {Path.GetFileName(fp)}";
+        }
+
+        // Fallback: atomic write to disk
         Directory.CreateDirectory(Path.GetDirectoryName(fp)!);
-        // Atomic write: write to .tmp then rename (atomic on NTFS same-volume)
         var tmp = fp + ".tmp." + Guid.NewGuid().ToString("N")[..8];
         try
         {
@@ -308,6 +329,8 @@ public sealed class FileSystemTools
 
     private string? Resolve(string path, bool confirm, out string? denied)
     {
+        if (!confirm && _trust != null && !_trust.RequiresConfirm("FileSystemTools.FileOp"))
+            confirm = true;
         var (fp, d) = PathUtils.TryResolveWithPermission(_ws, path, confirm);
         denied = d;
         return fp;

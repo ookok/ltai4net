@@ -72,8 +72,7 @@ public sealed class CCRProvider : AIContextProvider
         return new AIContext
         {
             Instructions = context.AIContext.Instructions,
-            Messages = newMessages.AsReadOnly(),
-            Tools = context.AIContext.Tools
+            Messages = newMessages.AsReadOnly()
         };
     }
 }

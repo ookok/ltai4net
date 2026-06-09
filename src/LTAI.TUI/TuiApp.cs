@@ -9,6 +9,7 @@ using LTAI.Agent.Vector;
 using LTAI.Agent.Workflows;
 using LTAI.Core.Configuration;
 using LTAI.Core.Session;
+using LTAI.Mm;
 using Microsoft.Extensions.Options;
 using LTAI.TUI.DevUI;
 using LTAI.TUI.Services;
@@ -57,7 +58,7 @@ public sealed class TuiApp
         _config = config;
         _projectRoot = projectRoot;
         _dashCtx = dashCtx;
-        _sessionMgr = new SessionManager();
+        _sessionMgr = new SessionManager(new LTAIOptions().Session.Path, new MmSessionSerializer());
         _textPadView = new TextPadView(projectRoot);
         _skillsPanelView = new SkillsPanelView(projectRoot);
         _chatLayout = new ChatLayout(chat, renderer, questionService, _sessionMgr, _textPadView, palaceStore);

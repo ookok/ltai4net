@@ -7,6 +7,7 @@ using LTAI.Core.Session;
 using LTAI.Desktop.Debugging;
 using LTAI.Desktop.Services;
 using LTAI.Desktop.ViewModels;
+using LTAI.Mm;
 
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -26,6 +27,10 @@ public static class Program
 
     public static async Task InitializeServicesAsync()
     {
+        var logPath = Path.Combine(AppContext.BaseDirectory, "desktop-startup.log");
+        void Log(string msg) => File.AppendAllText(logPath, $"[{DateTime.UtcNow:O}] {msg}\n");
+
+        Log("InitializeServicesAsync started");
         var services = BuildServiceCollection();
 
         // ⏱ 全局超时：DI 容器 + WarmUp 共 18 秒内必须完成
@@ -33,15 +38,26 @@ public static class Program
         using var initCts = new CancellationTokenSource(TimeSpan.FromSeconds(18));
         var ct = initCts.Token;
 
+        Log("Building ServiceProvider...");
         var provider = await Task.Run(() => services.BuildServiceProvider(), ct);
-        var chatAgent = await Task.Run(() => provider.GetRequiredService<ChatAgent>(), ct);
-        _ = chatAgent.WarmUpAsync().WaitAsync(TimeSpan.FromSeconds(6));
-        var options = await Task.Run(() => provider.GetRequiredService<IOptions<LTAIOptions>>(), ct);
+        Log("ServiceProvider built");
+
+        var options = provider.GetRequiredService<IOptions<LTAIOptions>>();
+        Log("LTAIOptions resolved, validating...");
+        ConfigMmValidator.ThrowIfInvalid(options.Value);
+        Log("Config validation passed");
+
+        var chatAgent = provider.GetRequiredService<ChatAgent>();
+        Log("ChatAgent resolved, warming up...");
+        await chatAgent.WarmUpAsync().WaitAsync(TimeSpan.FromSeconds(6)).ConfigureAwait(false);
+        Log("WarmUp complete");
+
         App.ChatAgent = chatAgent;
         App.Options = options;
         App.Ltais = new LTAIService(chatAgent, options, provider);
-        App.Router = await Task.Run(() => provider.GetService<MultiProviderChatClient>(), ct);
-        App.HttpFactory = await Task.Run(() => provider.GetService<IHttpClientFactory>(), ct);
+        App.Router = provider.GetService<MultiProviderChatClient>();
+        App.HttpFactory = provider.GetService<IHttpClientFactory>();
+        Log("Static properties set");
         _ = Task.Run(async () =>
         {
             try
@@ -72,7 +88,10 @@ public static class Program
         services.AddSingleton<NotificationService>();
         services.AddSingleton<DesktopCommandService>();
         services.AddSingleton<ILlmClient, LlmClient>();
-        services.AddSingleton<SessionManager>();
+        services.AddSingleton<ISessionSerializer>(_ => new MmSessionSerializer());
+        services.AddSingleton<SessionManager>(sp =>
+            ActivatorUtilities.CreateInstance<SessionManager>(sp,
+                sp.GetRequiredService<ISessionSerializer>()));
         services.AddTransient<DevUIViewModel>();
         return services;
     }

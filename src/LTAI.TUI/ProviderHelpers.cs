@@ -11,8 +11,8 @@ public static class ProviderHelpers
     private static Dictionary<string, ProviderInfo> BuildKnownProviders()
     {
         var d = KnownKeys.All
-            .Where(k => k.Endpoint != null && k.Model != null)
-            .ToDictionary(k => k.Service, k => new ProviderInfo(k.EnvVar, k.Endpoint!, k.Model!));
+            .Where(k => k.Endpoint != null)
+            .ToDictionary(k => k.Service, k => new ProviderInfo(k.EnvVar, k.Endpoint!, k.Model ?? ""));
         d["Ollama"]   = new("", "http://localhost:11434/v1", "");
         d["LMStudio"] = new("", "http://localhost:1234/v1",  "");
         d["vLLM"]     = new("", "http://localhost:8000/v1",  "");

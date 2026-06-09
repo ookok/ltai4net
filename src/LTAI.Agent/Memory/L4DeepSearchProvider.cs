@@ -39,7 +39,7 @@ public sealed class L4DeepSearchProvider : AIContextProvider
             var queryVec = await _embedder.GenerateAsync(query, ct).ConfigureAwait(false);
             var wing = WingClassifier.ClassifyFromMessages(context.AIContext?.Messages);
 
-            var lines = new List<string> { "## L4 — Deep Search\n<memory>" };
+            var lines = new List<string> { "## L4 并行辅助模型（长江苦力四号）\n<memory>" };
             var totalLen = lines[0].Length;
 
             await foreach (var (drawer, score) in _store.SemanticSearchAsync(queryVec, MaxDrawers, wing).ConfigureAwait(false))

@@ -17,6 +17,7 @@ public interface IStreamerHost
     void ThrottledRefresh();
     void InvalidateRendered();
     void TrimHistory();
+    void AutoCompact();
     Task SaveSessionAsync();
     (bool found, bool success, string output, string error) TryParseToolResult(string text);
     (string title, string message, string extraInfo)? TryParseConfirmRequest(string text);
@@ -30,7 +31,6 @@ public sealed class ResponseStreamer
     private readonly Rendering.ChatRenderer _renderer;
     private readonly SessionManager _sessions;
     private readonly Layout _layout;
-    private readonly LiveDisplayContext _liveCtx;
     private readonly QuestionService _questionService;
     private readonly List<(string role, IRenderable? rendered, string rawContent, string? reasoning)> _history;
     private readonly List<(string name, string args, string result)> _toolCalls;
@@ -45,7 +45,6 @@ public sealed class ResponseStreamer
         Rendering.ChatRenderer renderer,
         SessionManager sessions,
         Layout layout,
-        LiveDisplayContext liveCtx,
         QuestionService questionService,
         List<(string role, IRenderable? rendered, string rawContent, string? reasoning)> history,
         List<(string name, string args, string result)> toolCalls,
@@ -55,7 +54,6 @@ public sealed class ResponseStreamer
         _renderer = renderer;
         _sessions = sessions;
         _layout = layout;
-        _liveCtx = liveCtx;
         _questionService = questionService;
         _history = history;
         _toolCalls = toolCalls;
@@ -72,16 +70,24 @@ public sealed class ResponseStreamer
         content.AppendLine("━━━ 思考中 ━━━");
         _toolCalls.Clear();
 
-        if (UsageTracker.ContextRatio() > 0.75)
+        var ctxRatio = UsageTracker.ContextRatio();
+        if (ctxRatio > 0.85)
         {
-            var ctxPct = (UsageTracker.ContextRatio() * 100).ToString("F0");
+            var ctxPct = (ctxRatio * 100).ToString("F0");
             _history.Add(("cmd", null, $"[dim]📐 上下文已使用 {ctxPct}%，自动压缩中...[/]", null));
+            _host.InvalidateRendered();
+            _host.AutoCompact();
+        }
+        else if (ctxRatio > 0.75)
+        {
+            var ctxPct = (ctxRatio * 100).ToString("F0");
+            _history.Add(("cmd", null, $"[dim]📐 上下文已使用 {ctxPct}%[/]", null));
             _host.InvalidateRendered();
         }
 
         _toolTimer.Restart();
-        _host.UpdateFooter("", $"[deepskyblue1]{Rendering.ChatRenderer.PulseFrames[0]} 思考中...[/]");
-        _liveCtx.Refresh();
+        _host.UpdateFooter("", $"{Rendering.ChatRenderer.PulseFrames[0]} 思考中...");
+        _host.InvalidateRendered();
 
         using var spinCts = CancellationTokenSource.CreateLinkedTokenSource(cts.Token);
         var spinTask = RunSpinAnimation(spinCts);
@@ -159,11 +165,8 @@ public sealed class ResponseStreamer
                     var line = $"{pulse} 思考中... [{timeStr}]";
                     if (!string.IsNullOrEmpty(_statusText))
                         line += $"  {_statusText}";
-                    lock (_layout)
-                    {
-                        _host.UpdateFooter("", $"[deepskyblue1]{line}[/]");
-                        _liveCtx.Refresh();
-                    }
+                    _host.UpdateFooter("", line);
+                    _host.InvalidateRendered();
                 }
             }
             catch (OperationCanceledException) { }
@@ -182,7 +185,7 @@ public sealed class ResponseStreamer
                     var qp = _host.GetPendingQuestion();
                     if (qp != null)
                     {
-                        var qf = new QuestionFormView(_layout, _liveCtx, _questionService, (p, s) => _host.UpdateFooter(p, s));
+                        var qf = new QuestionFormView((ChatLayout)_host, _questionService);
                         await qf.ShowAsync(qp, cts.Token).ConfigureAwait(false);
                     }
                 }
@@ -203,7 +206,7 @@ public sealed class ResponseStreamer
                 if (confirmInfo != null)
                 {
                     var (title, message, extraInfo) = confirmInfo.Value;
-                    var choice = await ConfirmationModal.ShowInlineAsync(_layout, _liveCtx, title, message, resultStr, extraInfo).ConfigureAwait(false);
+                    var choice = await ConfirmationModal.ShowInlineAsync(_layout, () => _host.InvalidateRendered(), title, message, resultStr, extraInfo).ConfigureAwait(false);
                     switch (choice)
                     {
                         case ConfirmChoice.Always:

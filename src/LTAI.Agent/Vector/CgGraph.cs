@@ -298,7 +298,6 @@ public sealed class CgGraph : AIContextProvider
                     ? ctx.AIContext.Instructions + "\n\n" + result
                     : result,
                 Messages = ctx.AIContext?.Messages,
-                Tools = ctx.AIContext?.Tools,
             };
         }
         catch (Exception ex)

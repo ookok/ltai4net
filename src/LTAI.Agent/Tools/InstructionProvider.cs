@@ -77,7 +77,6 @@ public sealed class InstructionProvider : AIContextProvider
         {
             Instructions = instructions,
             Messages = msgs,
-            Tools = context.AIContext?.Tools,
         });
     }
 

@@ -36,8 +36,13 @@ public partial class MainWindow : Window
     private sealed record ViewEntry(string Name, string Shortcut, Control View);
     private readonly List<ViewEntry> _views = [];
 
+    private static void Log(string msg) =>
+        File.AppendAllText("desktop-startup.log",
+            $"[{DateTime.UtcNow:O}] MainWindow: {msg}\n");
+
     public MainWindow(LTAIService svc)
     {
+        Log("constructor start");
         Title = "LTAI — AI 助手";
         Width = 1280;
         Height = 800;
@@ -47,18 +52,25 @@ public partial class MainWindow : Window
         if (File.Exists(iconPath))
             Icon = new WindowIcon(iconPath);
 
+        Log("creating SessionManager...");
         var sessionManager = new SessionManager();
+        Log("creating LlmClient/ChatViewModel/ChatView...");
         var llmClient = new Services.LlmClient(svc.Chat);
         var cmdService = new Services.DesktopCommandService();
         var chatVm = new ViewModels.ChatViewModel(llmClient, cmdService);
+        Log("new ChatView...");
         var chatView = new ChatView(svc, sessionManager, chatVm);
         _chatView = chatView;
+        Log("ChatView done");
 
         // ViewModels
+        Log("creating sub viewmodels...");
         var textPadVm = new ViewModels.TextPadViewModel(svc.Options.ResolveDataPath("../.."));
         var jobsVm = new ViewModels.JobsViewModel(svc);
         var workflowsVm = new ViewModels.WorkflowsViewModel(svc);
+        Log("sub viewmodels done");
 
+        Log("creating sub views...");
         _views.AddRange([
             new("DevUI", "1", new DevUIView()),
             new("聊天",    "2", chatView),
@@ -70,6 +82,7 @@ public partial class MainWindow : Window
             new("图谱",    "8", new GraphBrowserView(svc.Services.GetService(typeof(LTAI.Agent.Vector.KbGraph)) as LTAI.Agent.Vector.KbGraph,
                 svc.Services.GetService(typeof(LTAI.Agent.Vector.KgStore)) as LTAI.Agent.Vector.KgStore)),
         ]);
+        Log("sub views done");
 
         _vm = new MainWindowViewModel(_views.Count);
         var vm = _vm;
@@ -296,6 +309,8 @@ public partial class MainWindow : Window
         KeyDown += OnKeyDown;
         LtaiTheme.ThemeChanged += OnThemeChanged;
         DetachedFromVisualTree += (_, _) => LtaiTheme.ThemeChanged -= OnThemeChanged;
+
+        Log("constructor done");
     }
 
     private TextPadView CreateTextPadView(LTAIService svc, ViewModels.TextPadViewModel vm)

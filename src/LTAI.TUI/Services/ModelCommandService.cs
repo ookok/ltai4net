@@ -20,6 +20,12 @@ public sealed class ModelCommandService : ICommandService
     private readonly string _l2Model;
     private List<string>? _availableLayerModels;
 
+    public static List<string>? PendingModelList { get; set; }
+    public static string? PendingModelLayer { get; set; }
+    public static string? PendingModelProvider { get; set; }
+    public static string? PendingApiKeyEnvVar { get; set; }
+    public static string? PendingApiKeyProvider { get; set; }
+
     public ModelCommandService(
         MultiProviderChatClient? router,
         LocalEmbedder? embedder,
@@ -54,19 +60,19 @@ public sealed class ModelCommandService : ICommandService
 
         var embedder = _embedder;
         if (embedder != null && embedder.Available)
-            lines.Add($"  [cyan]L0 嵌入[/]  {embedder.CurrentModelName}  [dim]({embedder.Dim}d)[/]");
+            lines.Add($"  [cyan]L0 向量模型（长江苦力一号）[/]  {embedder.CurrentModelName}  [dim]({embedder.Dim}d)[/]");
         else if (embedder != null)
-            lines.Add("  [cyan]L0 嵌入[/]  [yellow]未加载 (运行 /model l0 download)[/]");
+            lines.Add("  [cyan]L0 向量模型（长江苦力一号）[/]  [yellow]未加载 (运行 /model l0 download)[/]");
         else
-            lines.Add("  [cyan]L0 嵌入[/]  [grey]不可用[/]");
+            lines.Add("  [cyan]L0 向量模型（长江苦力一号）[/]  [grey]不可用[/]");
 
         // Reads from options (appsettings.json — single config file)
         lines.Add(_l1Model != null
-            ? $"  [cyan]L1 标准 (必需)[/]  {_defaultProvider} / [white]{_l1Model}[/]"
-            : "  [cyan]L1 标准 (必需)[/]  [yellow]未配置 (/model l1)[/]");
+            ? $"  [cyan]L1 快速反应模型（长江苦力二号）(必需)[/]  {_defaultProvider} / [white]{_l1Model}[/]"
+            : "  [cyan]L1 快速反应模型（长江苦力二号）(必需)[/]  [yellow]未配置 (/model l1)[/]");
         lines.Add(_l2Model != null
-            ? $"  [cyan]L2 深度 (可选项)[/]  {_defaultProvider} / [white]{_l2Model}[/]"
-            : "  [cyan]L2 深度 (可选项)[/]  [yellow]未配置 (/model l2)[/]");
+            ? $"  [cyan]L2 深度推理模型（长江苦力三号）(可选项)[/]  {_defaultProvider} / [white]{_l2Model}[/]"
+            : "  [cyan]L2 深度推理模型（长江苦力三号）(可选项)[/]  [yellow]未配置 (/model l2)[/]");
 
         var mp = _modelsProvider;
         if (mp == null) { lines.Add("\n[grey]ModelMetadataProvider 未注册[/]"); return new SuccessResult(string.Join("\n", lines)); }
@@ -121,10 +127,16 @@ public sealed class ModelCommandService : ICommandService
                 return HandleLayerSelectComplete(subCmd, layerArgs[0]);
             var p = layerArgs[0]; var m = layerArgs[1];
             SaveLayerSelection(subCmd, p, m);
-            if (_router != null && ProviderHelpers.KnownProviders.TryGetValue(p, out var info))
+            if (_router != null)
             {
-                var key = SecretManager.Get(info.EnvVar) ?? "";
-                _router.Register(subCmd, OpenAIChatClientFactory.Create(info.Endpoint ?? "", m, key));
+                var pkv = ProviderHelpers.KnownProviders
+                    .FirstOrDefault(kv => string.Equals(kv.Key, p, StringComparison.OrdinalIgnoreCase));
+                if (pkv.Key != null)
+                {
+                    var info = pkv.Value;
+                    var key = SecretManager.Get(info.EnvVar) ?? "";
+                    _router.Register(subCmd, OpenAIChatClientFactory.Create(info.Endpoint ?? "", m, key));
+                }
             }
             return new SuccessResult($"[green]✓ {subCmd.ToUpperInvariant()}={p}/{m}[/]");
         }
@@ -240,13 +252,20 @@ public sealed class ModelCommandService : ICommandService
 
     private CommandResult HandleLayerSelectComplete(string layer, string provider)
     {
-        if (!ProviderHelpers.KnownProviders.TryGetValue(provider, out var info))
-            return new SuccessResult($"未知 provider: {provider}");
-        var sb = new StringBuilder();
-        sb.AppendLine($"[bold]{layer.ToUpperInvariant()} Provider: {provider}[/]");
+        var kv = ProviderHelpers.KnownProviders
+            .FirstOrDefault(kv => string.Equals(kv.Key, provider, StringComparison.OrdinalIgnoreCase));
+        if (kv.Key == null)
+            return new SuccessResult($"未知 provider: {provider}，可用: {string.Join(", ", ProviderHelpers.KnownProviders.Keys)}");
+        var info = kv.Value;
         string? key = !string.IsNullOrEmpty(info.EnvVar) ? SecretManager.Get(info.EnvVar) : null;
         if (!string.IsNullOrEmpty(info.EnvVar) && string.IsNullOrEmpty(key))
-            return new SuccessResult($"未设置 {info.EnvVar}，/config apikey {provider}");
+        {
+            PendingApiKeyEnvVar = info.EnvVar;
+            PendingApiKeyProvider = kv.Key;
+            PendingModelLayer = layer;
+            PendingModelProvider = kv.Key;
+            return new SuccessResult("");
+        }
         try
         {
             using var http = _httpFactory.CreateClient();
@@ -259,12 +278,12 @@ public sealed class ModelCommandService : ICommandService
             var models = json.RootElement.GetProperty("data")
                 .EnumerateArray().Select(m => m.GetProperty("id").GetString() ?? "")
                 .Where(id => !string.IsNullOrEmpty(id)).OrderBy(id => id).Take(30).ToList();
-            sb.AppendLine($"模型 ({models.Count}):");
-            foreach (var m in models) sb.AppendLine($"  · [cyan]{m}[/]");
-            sb.AppendLine($"[dim]/model {layer} {provider} <模型名>[/]");
+            PendingModelList = models;
+            PendingModelLayer = layer;
+            PendingModelProvider = provider;
+            return new SuccessResult(""); // overlay will replace text
         }
-        catch (Exception ex) { sb.AppendLine($"[red]{ex.Message.EscapeMarkup()}[/]"); }
-        return new SuccessResult(sb.ToString());
+        catch (Exception ex) { return new SuccessResult($"[red]{ex.Message.EscapeMarkup()}[/]"); }
     }
 
     private CommandResult ShowL0ApiProviders()

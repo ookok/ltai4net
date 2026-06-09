@@ -51,14 +51,17 @@ public sealed class WasmtimeSandbox : AIContextProvider
     private const int ShellTimeoutSec = 30;
     private const int WasmTimeoutSec = 60;
     private const int MaxOutputBytes = 100 * 1024;
+    private readonly ToolTrustService? _trust;
 
-    public WasmtimeSandbox(string workspace, ILogger<WasmtimeSandbox>? logger = null)
+    public WasmtimeSandbox(string workspace, ILogger<WasmtimeSandbox>? logger = null,
+        ToolTrustService? trust = null)
         : base(null, null, null)
     {
         _workspace = workspace;
         _sandboxDir = Path.Combine(workspace, ".sandbox");
         Directory.CreateDirectory(_sandboxDir);
         _logger = logger;
+        _trust = trust;
 
         try
         {
@@ -92,11 +95,63 @@ public sealed class WasmtimeSandbox : AIContextProvider
 
         return ValueTask.FromResult(new AIContext
         {
-            Instructions = existing.Instructions,
-            Messages = existing.Messages,
             Tools = tools,
         });
     }
+
+    // Override InvokingCoreAsync to REPLACE tools instead of concatenating.
+    // MAF base class merges via a.Concat(b), which doubles the tool list.
+#pragma warning disable MAAI001 // Experimental
+    protected override async ValueTask<AIContext> InvokingCoreAsync(
+        InvokingContext context, CancellationToken cancellationToken = default)
+    {
+        var inputContext = context.AIContext;
+
+        var filteredContext = new InvokingContext(
+            context.Agent,
+            context.Session,
+            new AIContext
+            {
+                Instructions = inputContext.Instructions,
+                Messages = inputContext.Messages,
+                Tools = inputContext.Tools
+            });
+
+        var provided = await ProvideAIContextAsync(filteredContext, cancellationToken).ConfigureAwait(false);
+
+        var mergedInstructions = (inputContext.Instructions, provided.Instructions) switch
+        {
+            (null, null) => null,
+            (string a, null) => a,
+            (null, string b) => b,
+            (string a, string b) => a + "\n" + b
+        };
+
+        var providedMessages = provided.Messages is not null
+            ? provided.Messages.Select(m => m.WithAgentRequestMessageSource(
+                AgentRequestMessageSourceType.AIContextProvider, GetType().FullName!))
+            : null;
+
+        var mergedMessages = (inputContext.Messages, providedMessages) switch
+        {
+            (null, null) => null,
+            (var a, null) => a,
+            (null, var b) => b,
+            (var a, var b) => a.Concat(b)
+        };
+
+        // REPLACE tools: WasmtimeSandbox adds sandbox tools to the current set,
+        // it should not double the list via base-class concatenation.
+        var mergedTools = provided.Tools ?? inputContext.Tools;
+
+        return new AIContext
+        {
+            Instructions = mergedInstructions,
+            Messages = mergedMessages,
+            Tools = mergedTools
+        };
+    }
+#pragma warning restore MAAI001
 
     // ═══════════════════════════════════════════
     //  Sandboxed shell command
@@ -113,7 +168,7 @@ public sealed class WasmtimeSandbox : AIContextProvider
         [Description("用户确认标记，必须为 true 才执行")] bool confirm = false,
         CancellationToken ct = default)
     {
-        if (!confirm)
+        if (!confirm && (_trust == null || _trust.RequiresConfirm("WasmtimeSandbox.ExecuteSandboxedCommand")))
             return $"⚠️ 需要确认才在沙箱中执行命令。\n命令: `{command}`\n目录: {workDir}\n"
                  + "请用户确认后重新调用，设置 confirm=true。";
 
@@ -200,7 +255,7 @@ public sealed class WasmtimeSandbox : AIContextProvider
         [Description("用户确认标记，必须为 true 才执行")] bool confirm = false,
         CancellationToken ct = default)
     {
-        if (!confirm)
+        if (!confirm && (_trust == null || _trust.RequiresConfirm("WasmtimeSandbox.ExecuteWasm")))
             return "⚠️ 需要确认才执行 WASM 模块。请用户确认后重新调用，设置 confirm=true。";
 
         if (!_wasmAvailable || _wasmEngine == null)

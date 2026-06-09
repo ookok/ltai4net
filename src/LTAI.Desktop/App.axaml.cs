@@ -1,3 +1,4 @@
+using System.IO;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
@@ -32,19 +33,29 @@ public class App : Application
 
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
+            var loadingPanel = new StackPanel { Spacing = 10, Margin = new(30) };
+            loadingPanel.Children.Add(new TextBlock
+            {
+                Text = "LTAI 正在初始化...",
+                FontSize = 18, FontWeight = FontWeight.Bold,
+                Foreground = new SolidColorBrush(Colors.White),
+            });
+            var loadingHint = new TextBlock
+            {
+                Text = "首次启动可能需要加载 ONNX 模型。",
+                TextWrapping = TextWrapping.Wrap,
+                Foreground = new SolidColorBrush(Color.Parse("#aaaaaa")),
+            };
+            loadingPanel.Children.Add(loadingHint);
+
             var loadingWindow = new Window
             {
                 Title = "LTAI",
                 Width = 540, Height = 260,
                 WindowStartupLocation = WindowStartupLocation.CenterScreen,
                 CanResize = false,
-                Content = new TextBlock
-                {
-                    Text = "LTAI 正在初始化...\n\n首次启动可能需要加载 ONNX 模型。",
-                    TextWrapping = TextWrapping.Wrap,
-                    Foreground = new SolidColorBrush(Colors.White),
-                    Margin = new(30),
-                },
+                Content = loadingPanel,
+                Background = new SolidColorBrush(Color.Parse("#1e1e1e")),
             };
             desktop.MainWindow = loadingWindow;
 
@@ -54,13 +65,21 @@ public class App : Application
                 try { await Program.InitializeServicesAsync().ConfigureAwait(false); }
                 catch (Exception ex) { initError = ex; }
 
-                await Dispatcher.UIThread.InvokeAsync(() =>
+                try
                 {
-                    if (initError != null)
-                        ShowErrorWindow(desktop, loadingWindow, initError);
-                    else
-                        OpenMainWindow(desktop, loadingWindow);
-                });
+                    await Dispatcher.UIThread.InvokeAsync(() =>
+                    {
+                        if (initError != null)
+                            ShowErrorWindow(desktop, loadingWindow, initError);
+                        else
+                            OpenMainWindow(desktop, loadingWindow);
+                    });
+                }
+                catch (Exception ex)
+                {
+                    File.AppendAllText("desktop-startup.log",
+                        $"[{DateTime.UtcNow:O}] InvokeAsync failed: {ex}\n");
+                }
             });
         }
         base.OnFrameworkInitializationCompleted();
@@ -70,19 +89,36 @@ public class App : Application
     {
         try
         {
+            File.AppendAllText("desktop-startup.log",
+                $"[{DateTime.UtcNow:O}] OpenMainWindow: creating MainWindow...\n");
             var mainWindow = new MainWindow(App.Ltais!);
+            File.AppendAllText("desktop-startup.log",
+                $"[{DateTime.UtcNow:O}] OpenMainWindow: MainWindow created, calling Show...\n");
+            mainWindow.Show();
+            File.AppendAllText("desktop-startup.log",
+                $"[{DateTime.UtcNow:O}] OpenMainWindow: setting desktop.MainWindow...\n");
             desktop.MainWindow = mainWindow;
+            File.AppendAllText("desktop-startup.log",
+                $"[{DateTime.UtcNow:O}] OpenMainWindow: closing loading window...\n");
             loadingWindow.Close();
+            File.AppendAllText("desktop-startup.log",
+                $"[{DateTime.UtcNow:O}] OpenMainWindow: done\n");
         }
         catch (Exception ex)
         {
-            loadingWindow.Content = new TextBlock
+            var msg = $"UI 初始化失败:\n{ex.GetType().Name}: {ex.Message}\n\n{ex.StackTrace ?? ""}\n\n请重启应用。";
+            File.AppendAllText("desktop-startup.log",
+                $"[{DateTime.UtcNow:O}] OpenMainWindow failed: {ex}\n");
+            loadingWindow.Content = new StackPanel { Spacing = 10, Margin = new(20), Children =
             {
-                Text = $"UI 初始化失败:\n{ex.GetType().Name}: {ex.Message}\n\n{ex.StackTrace ?? ""}\n\n请重启应用。",
-                TextWrapping = TextWrapping.Wrap,
-                Foreground = new SolidColorBrush(Colors.White),
-                Margin = new(20),
-            };
+                new TextBlock { Text = "UI 初始化失败", FontSize = 18, FontWeight = FontWeight.Bold,
+                    Foreground = new SolidColorBrush(Colors.White) },
+                new TextBox { Text = msg, IsReadOnly = true, TextWrapping = TextWrapping.Wrap,
+                    MinHeight = 120, Foreground = new SolidColorBrush(Colors.White),
+                    Background = new SolidColorBrush(Color.Parse("#2c2c2e")) },
+            }};
+            loadingWindow.Height = 400;
+            loadingWindow.Width = 600;
         }
     }
 

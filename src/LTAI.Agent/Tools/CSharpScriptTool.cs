@@ -35,6 +35,9 @@ public sealed class CSharpScriptTool
                         typeof(DiagnosticListener).Assembly);
 
     private int _execCount;
+    private readonly ToolTrustService? _trust;
+
+    public CSharpScriptTool(ToolTrustService? trust = null) => _trust = trust;
 
     [Description("在进程中直接执行 C# 代码并返回结果。支持全部 .NET API。代码中可使用 return 返回值。注意：此工具在进程内执行代码，有安全风险，请确认后再使用。")]
     public async Task<string> RunCSharp(
@@ -42,7 +45,7 @@ public sealed class CSharpScriptTool
         [Description("确认执行。此工具在进程内执行任意 C# 代码，有安全风险。")] bool confirm = false,
         CancellationToken ct = default)
     {
-        if (!confirm)
+        if (!confirm && (_trust == null || _trust.RequiresConfirm("CSharpScriptTool.RunCSharp")))
             return "⛔ C# 脚本执行已取消：此工具在进程内执行任意代码，需设置 confirm=true 确认风险后执行。";
 
         _execCount++;

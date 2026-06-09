@@ -127,8 +127,15 @@ public sealed class MultiProviderChatClient : IChatClient
     /// <summary>
     /// Register a named IChatClient instance.
     /// <b>Callers:</b> AddLTAIAI() ServiceCollectionExtensions (once per provider with valid API key).
+    /// Also clears any existing cooldown/circuit-breaker state so the newly registered client
+    /// is immediately usable instead of being blocked by a stale entry.
     /// </summary>
-    public void Register(string name, IChatClient client) => _clients.TryAdd(name, client);
+    public void Register(string name, IChatClient client)
+    {
+        _clients[name] = client; // override: TUI can replace DI-registered stale clients
+        _providerCooldowns.TryRemove(name, out _);
+        _providerFailures.TryRemove(name, out _);
+    }
 
     /// <summary>
     /// Resolve provider name from options.ModelId.
@@ -212,6 +219,26 @@ public sealed class MultiProviderChatClient : IChatClient
 
             anyAttempted = true;
             var success = false;
+
+            // Dedup tools (same as non-streaming path — streaming path bypasses TryCallWithDegradation)
+            if (options?.Tools is { Count: > 10 })
+            {
+                var before = options.Tools.Count;
+                var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var deduped = new List<AITool>(options.Tools.Count);
+                int duplicates = 0;
+                for (int i = options.Tools.Count - 1; i >= 0; i--)
+                {
+                    var n = options.Tools[i].Name.Trim();
+                    if (seen.Add(n))
+                        deduped.Add(options.Tools[i]);
+                    else
+                        duplicates++;
+                }
+                deduped.Reverse();
+                options.Tools = new List<AITool>(deduped);
+                _logger.LogDebug("Streaming dedup: {Before} → {After} tools ({Dups} duplicates)", before, deduped.Count, duplicates);
+            }
 
             // Notify user of fallback switch-over
             if (lastFailedProvider != null)
@@ -331,20 +358,28 @@ public sealed class MultiProviderChatClient : IChatClient
                 // Clone the list before mutating to avoid corrupting shared ChatOptions.
                 if (options?.Tools is { Count: > 10 })
                 {
+                    var before = options.Tools.Count;
                     var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                     var deduped = new List<AITool>(options.Tools.Count);
+                    int duplicates = 0;
                     for (int i = options.Tools.Count - 1; i >= 0; i--)
                     {
                         var n = options.Tools[i].Name.Trim();
                         if (seen.Add(n))
                             deduped.Add(options.Tools[i]);
+                        else
+                            duplicates++;
                     }
                     deduped.Reverse();
                     options.Tools = new List<AITool>(deduped);
+                    _logger.LogDebug("Non-streaming dedup: {Before} → {After} tools ({Dups} duplicates)", before, deduped.Count, duplicates);
                 }
 
                 var callNum = Interlocked.Increment(ref _callCounter);
-                _logger.LogInformation("LLM call #{CallNum} → provider={Provider}", callNum, p);
+                var toolCount = options?.Tools?.Count ?? 0;
+                var msgCount = messages?.Count() ?? 0;
+                var textLen = messages?.Sum(m => m.Text?.Length ?? 0) ?? 0;
+                _logger.LogInformation("LLM call #{CallNum} → provider={Provider}, {ToolCount} tools, {MsgCount} msgs, ~{TextLen} chars text", callNum, p, toolCount, msgCount, textLen);
 
                 // Add 15s per-provider timeout
                 using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);

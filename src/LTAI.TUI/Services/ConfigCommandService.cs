@@ -63,8 +63,8 @@ public sealed class ConfigCommandService : ICommandService
         var sb = new StringBuilder();
         sb.AppendLine("[bold yellow]LLM 配置状态[/]\n");
         sb.AppendLine($"[bold]当前 Provider:[/] [cyan]{prov}[/]");
-        sb.AppendLine($"[bold]L1 模型 (Fast):[/] {l1} [green](必需)[/]");
-        sb.AppendLine($"[bold]L2 模型 (Pro):[/]  {l2} [dim](可选项)[/]");
+        sb.AppendLine($"[bold]L1 快速反应模型（长江苦力二号）:[/] {l1} [green](必需)[/]");
+        sb.AppendLine($"[bold]L2 深度推理模型（长江苦力三号）:[/]  {l2} [dim](可选项)[/]");
         sb.AppendLine();
 
         sb.AppendLine("[bold]可用 Provider:[/]");

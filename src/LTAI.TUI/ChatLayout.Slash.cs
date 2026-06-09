@@ -114,8 +114,44 @@ partial class ChatLayout
         var (handled, cmdStatus) = await SlashCommands.TryExecuteAsync(input).ConfigureAwait(false);
         if (handled)
         {
-            if (!string.IsNullOrEmpty(cmdStatus))
+            if (SlashCommands.InCascadeMenu)
+            {
+                _cascadeActive = true;
+                InvalidateRendered();
+            }
+            else if (ModelCommandService.PendingApiKeyEnvVar != null)
+            {
+                _modelPickerApiKeyEnvVar = ModelCommandService.PendingApiKeyEnvVar;
+                _modelPickerApiKeyProvider = ModelCommandService.PendingApiKeyProvider ?? "";
+                _modelPickerInputBuffer = "";
+                _modelPickerLayer = ModelCommandService.PendingModelLayer ?? "";
+                _modelPickerProvider = ModelCommandService.PendingModelProvider ?? "";
+                _modelPickerItems = [];
+                _modelPickerSelectedIdx = 0;
+                _modelPickerActive = true;
+                ModelCommandService.PendingApiKeyEnvVar = null;
+                ModelCommandService.PendingApiKeyProvider = null;
+                ModelCommandService.PendingModelLayer = null;
+                ModelCommandService.PendingModelProvider = null;
+                InvalidateRendered();
+            }
+            else if (ModelCommandService.PendingModelList != null)
+            {
+                _modelPickerItems = ModelCommandService.PendingModelList;
+                _modelPickerLayer = ModelCommandService.PendingModelLayer ?? "";
+                _modelPickerProvider = ModelCommandService.PendingModelProvider ?? "";
+                _modelPickerSelectedIdx = 0;
+                _modelPickerActive = true;
+                ModelCommandService.PendingModelList = null;
+                ModelCommandService.PendingModelLayer = null;
+                ModelCommandService.PendingModelProvider = null;
+                InvalidateRendered();
+            }
+            else if (!string.IsNullOrEmpty(cmdStatus))
+            {
                 lock (_historyLock) _history.Add(("cmd", null, cmdStatus, null));
+                InvalidateRendered();
+            }
             return true;
         }
         return true;

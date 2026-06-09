@@ -22,6 +22,9 @@ public static class SlashCommands
     public static string? PendingSnippetFill { get; set; }
     public static string? PendingInput { get; set; }
     public static string? PendingBuildResult { get; set; }
+    public static string? PendingTextPrompt { get; set; }
+    public static bool PendingTextIsSecret { get; set; }
+    public static string? PendingTextPrefix { get; set; }
 
     // ═══ Cascade menu ═══
     public static string[] CascadeStack = [];
@@ -50,9 +53,8 @@ public static class SlashCommands
     {
         var idx = CascadeSel;
         if (CascadeStack.Length > 0 && idx == 0) { CascadeStack = CascadeStack[..^1]; FillCascade(); return true; }
-        var ri = CascadeStack.Length > 0 ? idx - 1 : idx;
-        if (ri < 0 || ri >= CascadeItems.Length) return true;
-        var picked = CascadeItems[ri].Split(' ')[0].TrimEnd('…');
+        if (idx < 0 || idx >= CascadeItems.Length) return true;
+        var picked = CascadeItems[idx].Split(' ')[0].TrimEnd('…');
         var next = CascadeStack.Length > 0 ? CascadeStack.Append(picked).ToArray() : new[] { picked };
         if (CascadeRoutes.Resolve(CascadeCmd, next) != null)
         {
@@ -65,15 +67,11 @@ public static class SlashCommands
         var promptMsg = CascadeRoutes.GetLeafPrompt(CascadeCmd, next);
         if (promptMsg != null)
         {
-            var isSecret = promptMsg.Contains("API Key");
-            string input;
-            if (isSecret)
-                input = AnsiConsole.Prompt(new TextPrompt<string>(promptMsg).Secret());
-            else
-                input = AnsiConsole.Ask<string>(promptMsg);
-            if (string.IsNullOrWhiteSpace(input)) { CloseCascadeMenu(); return false; }
-            var cmd = $"/{CascadeCmd} " + string.Join(" ", next) + " " + input;
-            PendingInput = cmd;
+            // Instead of AnsiConsole.Prompt/Ask (conflicts with LiveDisplayContext),
+            // activate an inline overlay for text input.
+            PendingTextPrompt = promptMsg;
+            PendingTextIsSecret = promptMsg.Contains("API Key");
+            PendingTextPrefix = $"/{CascadeCmd} " + string.Join(" ", next);
             CloseCascadeMenu();
             return false;
         }
@@ -120,8 +118,16 @@ public static class SlashCommands
     {
         var node = CascadeRoutes.Resolve(CascadeCmd, CascadeStack);
         var choices = node?.Items ?? [];
-        CascadeItems = CascadeStack.Length > 0 ? new[] { "← 返回" }.Concat(choices).ToArray() : choices;
-        CascadeSel = CascadeStack.Length > 0 ? 1 : 0;
+        if (CascadeStack.Length > 0)
+        {
+            CascadeItems = new[] { "← 返回" }.Concat(choices).ToArray();
+            CascadeSel = choices.Length > 0 ? 1 : 0;
+        }
+        else
+        {
+            CascadeItems = choices;
+            CascadeSel = 0;
+        }
     }
 
     public static ICommandParser Parser { get; set; } = new CommandParser();
@@ -207,11 +213,12 @@ public static class SlashCommands
             var allItems = new List<SuggestionItem>();
             foreach (var spec in Commands)
             {
+                var aliases = GetAliases(spec.Cmd);
+                var aliasText = aliases.Length > 0
+                    ? $", {string.Join(", ", aliases)}"
+                    : "";
                 allItems.Add(new SuggestionItem(
-                    $"/{spec.Cmd}  [dim]{spec.Group}[/]", $"/{spec.Cmd}", spec.Group, false));
-                foreach (var alias in GetAliases(spec.Cmd))
-                    allItems.Add(new SuggestionItem(
-                        $"{alias}  [dim]{spec.Group} → /{spec.Cmd}[/]", $"/{spec.Cmd}", spec.Group, true));
+                    $"/{spec.Cmd}{aliasText}  [dim]{spec.Group}[/]", $"/{spec.Cmd}", spec.Group, false));
             }
             return allItems;
         }
@@ -226,14 +233,17 @@ public static class SlashCommands
         foreach (var spec in Commands)
         {
             if (!matchedCmds.Contains(spec.Cmd)) continue;
+            var matchingAliases = GetAliases(spec.Cmd)
+                .Where(a => a.StartsWith(sp, StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+            var aliasText = matchingAliases.Length > 0
+                ? $", {string.Join(", ", matchingAliases)}"
+                : "";
             items.Add(new SuggestionItem(
-                $"/{spec.Cmd}  [dim]{spec.Group}[/]", $"/{spec.Cmd}", spec.Group, false));
-            foreach (var alias in GetAliases(spec.Cmd).Where(a => a.StartsWith(sp, StringComparison.OrdinalIgnoreCase)))
-                items.Add(new SuggestionItem(
-                    $"{alias}  [dim]{spec.Group} → /{spec.Cmd}[/]", $"/{spec.Cmd}", spec.Group, true));
+                $"/{spec.Cmd}{aliasText}  [dim]{spec.Group}[/]", $"/{spec.Cmd}", spec.Group, false));
         }
 
-        return items.OrderBy(i => i.Group).ThenBy(i => i.IsAlias ? 1 : 0).ThenBy(i => i.Completion).ToList();
+        return items.OrderBy(i => i.Group).ThenBy(i => i.Completion).ToList();
     }
 
     public static string? ShowPicker()

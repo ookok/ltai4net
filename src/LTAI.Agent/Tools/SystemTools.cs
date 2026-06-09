@@ -6,13 +6,20 @@ using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
+using LTAI.AI;
 
 namespace LTAI.Agent.Tools;
 
+[ToolDomain("system")]
 public sealed class SystemTools
 {
     private static readonly Lazy<HttpClient> _sharedHttp = new(() => new HttpClient { Timeout = TimeSpan.FromSeconds(30) });
 
+    [ToolExample("今天星期几")]
+    [ToolExample("现在几点")]
+    [ToolExample("今天的日期")]
+    [ToolExample("what day is it")]
+    [ToolExample("what time is it")]
     [Description("REQUIRED: Get the ACTUAL current date and time from the system clock. ALWAYS call this tool when the user asks what day it is, what time it is, today's date, or the current weekday. Do NOT guess or estimate the date.")]
     public static string GetCurrentDateTime()
     {

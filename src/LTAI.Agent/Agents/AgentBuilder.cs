@@ -52,6 +52,14 @@ internal static partial class AgentBuilder
     private static readonly LanguageServer.LspLanguageManager s_lsp = new();
     internal static LanguageServer.LspLanguageManager GetLspManager() => s_lsp;
 
+    // Shared caches across all agents (process-wide)
+    private static readonly Caching.MmapCache s_mmapCache = new(new Caching.MmapCacheOptions
+    {
+        WatchDirectories = [Directory.GetCurrentDirectory()]
+    });
+    private static readonly Caching.MmapFileProvider s_mmapProvider = new(s_mmapCache);
+    private static readonly Caching.WriteBuffer s_writeBuf = new(mmap: s_mmapCache);
+
     public static AIAgent BuildAgent(IServiceProvider sp, string name, string description,
         bool canRead, bool canWrite, bool canList, bool canExec,
         string? modelId = null, float? temperature = null, float? topP = null)
@@ -75,8 +83,10 @@ internal static partial class AgentBuilder
 
         var tools = new List<AITool>();
         var httpFactory = sp.GetRequiredService<IHttpClientFactory>();
+        var trust = sp.GetService<ToolTrustService>();
 
-        RegisterFileAndTextTools(tools, name, canRead, canWrite, canList, canExec, ws);
+        RegisterFileAndTextTools(tools, name, canRead, canWrite, canList, canExec, ws,
+            canRead ? s_mmapProvider : null, canWrite ? s_writeBuf : null, trust);
         RegisterSearchAndCodeAnalysisTools(tools, name, canRead, ws);
         RegisterWebTools(tools, name, httpFactory);
         RegisterMultimediaTools(tools, canRead, canExec, ws);
@@ -252,7 +262,7 @@ internal static partial class AgentBuilder
             tools.Add(AIFunctionFactory.Create(LTAI.Agent.Tools.PlanTools.PlanExit));
             if (canRead)
             {
-                var planFs = new FileSystemTools(ws);
+                var planFs = new FileSystemTools(ws, s_mmapProvider, s_writeBuf);
                 tools.Add(AIFunctionFactory.Create((string path) => planFs.ReadFileContent(path), "ReadFileContent", "Read a file"));
                 tools.Add(AIFunctionFactory.Create(planFs.Glob));
                 tools.Add(AIFunctionFactory.Create(planFs.ListFiles));

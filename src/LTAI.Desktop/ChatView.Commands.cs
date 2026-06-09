@@ -88,19 +88,19 @@ public sealed partial class ChatView : UserControl
         var lines = new List<string>();
         var embedder = _svc.Services.GetService(typeof(LTAI.AI.LocalEmbedder)) as LTAI.AI.LocalEmbedder;
         if (embedder?.Available == true)
-            lines.Add($"L0 嵌入 (optional): {embedder.CurrentModelName} ({embedder.Dim}d)");
+            lines.Add($"L0 向量模型（长江苦力一号）(optional): {embedder.CurrentModelName} ({embedder.Dim}d)");
         else
-            lines.Add("L0 嵌入 (optional): 未加载");
+            lines.Add("L0 向量模型（长江苦力一号）(optional): 未加载");
         var opts = (_svc.Services.GetService(typeof(Microsoft.Extensions.Options.IOptions<LTAI.Core.Configuration.LTAIOptions>))
             as Microsoft.Extensions.Options.IOptions<LTAI.Core.Configuration.LTAIOptions>)?.Value;
         var l1Cfg = opts?.AI.L1;
         var l2Cfg = opts?.AI.L2;
         if (l1Cfg != null && !string.IsNullOrEmpty(l1Cfg.Provider))
-            lines.Add($"L1 标准 (required): {l1Cfg.Provider} / {l1Cfg.Model}");
+            lines.Add($"L1 快速反应模型（长江苦力二号）(required): {l1Cfg.Provider} / {l1Cfg.Model}");
         else
             lines.Add("L1: 未配置 (/model l1)");
         if (l2Cfg != null && !string.IsNullOrEmpty(l2Cfg.Provider))
-            lines.Add($"L2 深度 (optional): {l2Cfg.Provider} / {l2Cfg.Model}");
+            lines.Add($"L2 深度推理模型（长江苦力三号）(optional): {l2Cfg.Provider} / {l2Cfg.Model}");
         else
             lines.Add("L2 (optional): 未配置，由 L1 替代");
         AddSystemBubble(string.Join("\n", lines));

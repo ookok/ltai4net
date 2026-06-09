@@ -396,6 +396,7 @@ public sealed class LTAIOptions
     public SteerConfig Steer { get; init; } = new();
     public MirrorConfig Mirrors { get; init; } = new();
     public SecurityConfig Security { get; init; } = new();
+    public ToolTrustConfig ToolTrust { get; init; } = new();
     public ProviderDefinition[] Providers { get; init; } = []; // overwrites KnownKeys.All when non-empty
     public string DataDirectory { get; init; } = ".livingtree";
     public string ToolsDirectory { get; init; } = "tools";

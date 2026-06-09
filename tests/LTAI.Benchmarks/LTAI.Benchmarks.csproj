@@ -16,7 +16,7 @@
     <ProjectReference Include="..\..\src\LTAI.Core\LTAI.Core.csproj" />
     <ProjectReference Include="..\..\src\LTAI.AI\LTAI.AI.csproj" />
 
-    <!-- LTAI.Knowledge 项目已移除 -->
+    <ProjectReference Include="..\..\src\LTAI.Mm\LTAI.Mm.csproj" />
   </ItemGroup>
 
 </Project>

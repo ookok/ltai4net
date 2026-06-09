@@ -75,7 +75,9 @@ public sealed class ChatAgent
     private async Task<(bool IsAdequate, string? Reason)> JudgeResponseQualityAsync(
         string message, string response, CancellationToken ct)
     {
-        var client = _steerJudge ?? _agent;
+        if (_steerJudge == null)
+            return (true, "no steer model configured — assuming adequate");
+        var client = _steerJudge;
         try
         {
             var judgeMessages = new ChatMessage[]
@@ -125,7 +127,6 @@ public sealed class ChatAgent
                 .Select(fc => fc.Name ?? "")
                 .Where(n => n.Length > 0)
                 .ToList() ?? [],
-            ShouldEscalate = gap > 0.5,
             EscalationReason = gap > 0.5
                 ? $"coverage gap={gap:F2}" : null
         };
@@ -155,19 +156,6 @@ public sealed class ChatAgent
                 count++;
         }
         return count;
-    }
-
-    private sealed record L1State
-    {
-        public string? Label { get; set; }
-        public string? EscalationReason { get; set; }
-        public int SupportCount { get; set; }
-        public double Gap { get; set; }
-        public List<string> ToolCalls { get; set; } = [];
-        public bool ShouldEscalate { get; set; }
-        public bool ShouldRouteBySpans { get; set; }
-        public List<FusionRoute.SpanInfo> Spans { get; set; } = [];
-        public double SpanUncertaintyRatio { get; set; }
     }
 
     private static int EstimateComplexity(string message)
@@ -304,7 +292,8 @@ public sealed class ChatAgent
             : 0;
 
         // #2 UCCI: calibration — merge entropy + L1State gap into calibrated score
-        var calibratedScore = CalibrateUncertainty(edrmEntropy, l1State.Gap, l1State.SupportCount);
+        var calibratedScore = edrmEntropy * 0.4 + l1State.Gap * 0.4 - l1State.SupportCount * 0.05;
+        calibratedScore = Math.Clamp(calibratedScore, 0.0, 1.0);
         var needsPro = l1State.ShouldEscalate || calibratedScore > 0.6 || voi > 0.5;
 
         // Traditional signals merged into L1State: explicit escalation marker

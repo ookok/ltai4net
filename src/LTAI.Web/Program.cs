@@ -434,18 +434,27 @@ try
 
     app.MapControllers();
 
-    // ── P6: MAF Protocol Endpoint Mapping ──
+    // ── P6: MAF Protocol Endpoint Mapping (per-agent, isolated) ──
+    // Each agent is mapped independently so that a single agent DI failure
+    // does not prevent the rest of the web app from starting.
     foreach (var name in agentNames)
     {
-        var agent = app.Services.GetRequiredKeyedService<AIAgent>(name);
-        app.MapOpenAIResponses(agent, $"/v1/agents/{name}/responses")
-            .WithTags("OpenAI", name);
-        app.MapOpenAIChatCompletions(agent, $"/v1/agents/{name}/chat/completions")
-            .WithTags("OpenAI", name);
-        app.MapAGUI(name, $"/agui/{name}")
-            .WithTags("AGUI", name);
-        app.MapA2AHttpJson(name, $"/a2a/{name}")
-            .WithTags("A2A", name);
+        try
+        {
+            var agent = app.Services.GetRequiredKeyedService<AIAgent>(name);
+            app.MapOpenAIResponses(agent, $"/v1/agents/{name}/responses")
+                .WithTags("OpenAI", name);
+            app.MapOpenAIChatCompletions(agent, $"/v1/agents/{name}/chat/completions")
+                .WithTags("OpenAI", name);
+            app.MapAGUI(name, $"/agui/{name}")
+                .WithTags("AGUI", name);
+            app.MapA2AHttpJson(name, $"/a2a/{name}")
+                .WithTags("A2A", name);
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "Failed to map protocol endpoints for agent {AgentName}; skipping", name);
+        }
     }
 
     // OpenAI Conversations API (global, no agent-specific)

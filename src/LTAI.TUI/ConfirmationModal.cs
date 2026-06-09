@@ -24,11 +24,13 @@ public static class ConfirmationModal
     }
 
     public static async Task<ConfirmChoice> ShowInlineAsync(
-        Layout layout, LiveDisplayContext ctx,
+        Layout layout, Action refresh,
         string title, string message,
         string details = "", string? extraInfo = null)
     {
-        RenderModal(layout, ctx, title, message, details, extraInfo, useAnsiConsole: false);
+        ChatLayout.ConfirmSelection = 0;
+        RenderModal(layout, title, message, details, extraInfo);
+        refresh();
         var tcs = new TaskCompletionSource<ConfirmChoice>();
         ChatLayout.PendingConfirmTcs = tcs;
         ChatLayout.PendingConfirmDetails = details;
@@ -43,8 +45,10 @@ public static class ConfirmationModal
         finally { ChatLayout.PendingConfirmTcs = null; }
     }
 
-    internal static bool HandleConfirmKey(ConsoleKeyInfo key, out ConfirmChoice choice)
+    internal static bool HandleConfirmKey(ConsoleKeyInfo key, out ConfirmChoice choice, out bool selectionChanged)
     {
+        selectionChanged = false;
+        // Direct letter keys
         choice = key.KeyChar switch
         {
             'y' or 'Y' => ConfirmChoice.Yes,
@@ -52,25 +56,60 @@ public static class ConfirmationModal
             'n' or 'N' => ConfirmChoice.No,
             'd' or 'D' => ConfirmChoice.Details,
             _ when key.Key == ConsoleKey.Escape => ConfirmChoice.No,
+            _ when key.Key == ConsoleKey.Enter => CurrentSelectionToChoice(),
             _ => (ConfirmChoice)(-1),
         };
-        return (int)choice >= 0;
+        if ((int)choice >= 0) return true;
+
+        // Arrow key navigation
+        if (key.Key == ConsoleKey.LeftArrow)
+        {
+            ChatLayout.ConfirmSelection = Math.Max(0, ChatLayout.ConfirmSelection - 1);
+            selectionChanged = true;
+        }
+        else if (key.Key == ConsoleKey.RightArrow)
+        {
+            ChatLayout.ConfirmSelection = Math.Min(3, ChatLayout.ConfirmSelection + 1);
+            selectionChanged = true;
+        }
+        return false;
     }
 
-    internal static void ReRender(Layout? layout, LiveDisplayContext? ctx)
+    private static ConfirmChoice CurrentSelectionToChoice()
     {
-        if (layout != null && ctx != null)
-            RenderModal(layout, ctx, ChatLayout.PendingConfirmTitle ?? "",
+        return ChatLayout.ConfirmSelection switch
+        {
+            0 => ConfirmChoice.Yes,
+            1 => ConfirmChoice.Always,
+            2 => ConfirmChoice.No,
+            3 => ConfirmChoice.Details,
+            _ => ConfirmChoice.No,
+        };
+    }
+
+    internal static void ReRender(Layout layout)
+    {
+        if (layout != null)
+        {
+            RenderModal(layout, ChatLayout.PendingConfirmTitle ?? "",
                 ChatLayout.PendingConfirmMessage ?? "",
                 ChatLayout.PendingConfirmDetails ?? "",
-                ChatLayout.PendingConfirmExtra, useAnsiConsole: false);
+                ChatLayout.PendingConfirmExtra);
+        }
     }
 
-    private static void RenderModal(
-        Layout? layout, LiveDisplayContext? ctx,
+    internal static void RenderModal(
+        Layout layout,
         string title, string message,
-        string details, string? extraInfo,
-        bool useAnsiConsole)
+        string details, string? extraInfo)
+    {
+        var panel = BuildModalPanel(title, message, details, extraInfo);
+        layout["Messages"].Update(panel);
+    }
+
+    private static Panel BuildModalPanel(
+        string title, string message,
+        string details, string? extraInfo)
     {
         var rows = new List<IRenderable>();
         var termWidth = Math.Min(SafeWindowWidth, 120);
@@ -89,6 +128,16 @@ public static class ConfirmationModal
         rows.Add(new Rule("[grey]请选择[/]") { Style = Style.Parse("grey") });
         rows.Add(new Text(""));
 
+        // Build option rows with selection highlighting
+        var sel = ChatLayout.ConfirmSelection;
+        var options = new[]
+        {
+            (key: 'Y', text: "允许一次", color: "yellow"),
+            (key: 'A', text: "总是允许", color: "green"),
+            (key: 'N', text: "拒绝", color: "red"),
+            (key: 'D', text: "查看详情", color: "blue"),
+        };
+
         var keysTable = new Table()
             .Border(TableBorder.None)
             .HideHeaders()
@@ -98,41 +147,37 @@ public static class ConfirmationModal
             .AddColumn(new TableColumn("").PadLeft(0))
             .AddColumn(new TableColumn("").PadRight(0))
             .AddColumn(new TableColumn("").PadLeft(0))
-            .Width(termWidth - 6);
+            .AddColumn(new TableColumn("").PadRight(0));
 
-        keysTable.AddRow(
-            new Markup("[bold yellow]Y[/] 允许一次"),
-            new Text("  "),
-            new Markup("[bold green]A[/] 总是允许"),
-            new Text("  "),
-            new Markup("[bold red]N[/] 拒绝"),
-            new Text("  "),
-            new Markup("[bold blue]D[/] 查看详情")
-        );
+        var cells = new List<IRenderable>();
+        for (int i = 0; i < options.Length; i++)
+        {
+            var (k, t, c) = options[i];
+            if (i == sel)
+                cells.Add(new Markup($"[bold black on {c}] {k} {t} [/]"));
+            else
+                cells.Add(new Markup($"[bold {c}]{k}[/] {t}"));
+            if (i < options.Length - 1)
+                cells.Add(new Text("  "));
+        }
+        keysTable.AddRow(cells.ToArray());
         rows.Add(keysTable);
 
-        var panel = new Panel(new Rows(rows.ToArray()))
+        // Hint text
+        rows.Add(new Text(""));
+        rows.Add(new Markup($"[grey]← → 选择  Enter 确认  Y/A/N/D 快捷键[/]"));
+
+        return new Panel(new Rows(rows.ToArray()))
         {
             Header = new PanelHeader($"[bold yellow]⚠️  {title.EscapeMarkup()}[/]"),
             Border = BoxBorder.Rounded,
             Padding = new Padding(3, 2, 3, 2),
-            Expand = true,
         };
-
-        if (useAnsiConsole)
-        {
-            AnsiConsole.Write(panel);
-        }
-        else if (layout != null && ctx != null)
-        {
-            layout["Messages"].Update(panel);
-            ctx.Refresh();
-        }
     }
 
     private static ConfirmChoice ShowSync(string title, string message, string details, string? extraInfo)
     {
-        RenderModal(null, null, title, message, details, extraInfo, useAnsiConsole: true);
+        AnsiConsole.Write(BuildModalPanel(title, message, details, extraInfo));
 
         var confirmPrompt = new SelectionPrompt<string>()
             .Title("[grey]选择操作:[/]")

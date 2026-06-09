@@ -30,7 +30,6 @@ public sealed class ProvenanceProvider : AIContextProvider
         {
             Instructions = context.AIContext?.Instructions,
             Messages = msgs,
-            Tools = context.AIContext?.Tools,
         });
     }
 }

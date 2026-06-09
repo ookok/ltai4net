@@ -39,8 +39,8 @@ partial class Program
 
         var llmTable = new Table().Border(TableBorder.Rounded).Title("[bold]LLM Providers (config)[/]");
         llmTable.AddColumn("Slot"); llmTable.AddColumn("Model");
-        foreach (var kvp in new[] { ("L1 (Flash)", "config"),
-            ("L2 (Pro)", "config") })
+        foreach (var kvp in new[] { ("L1 快速反应模型（长江苦力二号）", "config"),
+            ("L2 深度推理模型（长江苦力三号）", "config") })
             llmTable.AddRow(kvp.Item1.EscapeMarkup(), kvp.Item2.EscapeMarkup());
         AnsiConsole.Write(llmTable);
         return 0;

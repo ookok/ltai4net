@@ -8,6 +8,7 @@
     <NoWarn>$(NoWarn)</NoWarn>
     <IsAotCompatible>true</IsAotCompatible>
     <NoWarn>$(NoWarn);IL2026;IL3050;IL2046;IL2091;IL2104</NoWarn>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
   <ItemGroup>
@@ -64,6 +65,7 @@
     <ProjectReference Include="..\LTAI.Core\LTAI.Core.csproj" />
     <ProjectReference Include="..\LTAI.AI\LTAI.AI.csproj" />
     <ProjectReference Include="..\LTAI.Hpo\LTAI.Hpo.csproj" />
+    <ProjectReference Include="..\LTAI.Mm\LTAI.Mm.csproj" />
   </ItemGroup>
 
   <ItemGroup>

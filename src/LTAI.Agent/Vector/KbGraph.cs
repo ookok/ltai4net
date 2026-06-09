@@ -368,7 +368,6 @@ public sealed class KbGraph : AIContextProvider
                     ? context.AIContext.Instructions + "\n\n" + block
                     : block,
                 Messages = context.AIContext?.Messages,
-                Tools = context.AIContext?.Tools,
             };
         }
         catch (Exception ex)

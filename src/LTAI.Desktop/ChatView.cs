@@ -20,7 +20,7 @@ public sealed partial class ChatView : UserControl
 {
     private readonly LTAIService _svc;
     private readonly TextBox _input;
-    private readonly ListBox _outputStack;
+    private readonly StackPanel _outputStack;
     private readonly ScrollViewer _scroller;
     private const int MaxVisibleMessages = 80;
     private readonly StackPanel _footerStats;
@@ -51,7 +51,7 @@ public sealed partial class ChatView : UserControl
     {
         var handle = await _sessionManager.LoadSessionAsync(name);
         if (handle == null) return;
-        _outputStack.Items.Clear();
+        _outputStack.Children.Clear();
 
         // 子会话显示返回父会话按钮
         var sessions = _sessionManager.ListSessions();
@@ -70,7 +70,7 @@ public sealed partial class ChatView : UserControl
                 Cursor = new Cursor(StandardCursorType.Hand)
             };
             backBtn.Click += async (_, _) => await LoadSessionAsync(parentName);
-            _outputStack.Items.Add(new Border
+            _outputStack.Children.Add(new Border
             {
                 Background = LtaiTheme.Sbb(LtaiTheme.BgPanel),
                 BorderBrush = LtaiTheme.Sbb(LtaiTheme.AccentInfo),
@@ -104,7 +104,7 @@ public sealed partial class ChatView : UserControl
         if (_sessionManager.CurrentHandle != null)
             await _sessionManager.SaveSessionAsync().ConfigureAwait(false);
         _sessionManager.NewSession();
-        _outputStack.Items.Clear();
+        _outputStack.Children.Clear();
         _turns = 0;
         _tokens = 0;
         RefreshStats();
@@ -143,25 +143,22 @@ public sealed partial class ChatView : UserControl
 
         Background = LtaiTheme.Sbb(LtaiTheme.Bg);
 
-        var root = new DockPanel { Margin = new(16) };
+        // ── Root: Grid 3 rows (header auto / messages * / footer auto) ──
+        var root = new Grid { RowDefinitions = new RowDefinitions("Auto,*,Auto"), Margin = new(8) };
 
-        var modelHeader = new TextBlock
-        {
-            Text = "LTAI Chat",
-            Foreground = LtaiTheme.Sbb(LtaiTheme.AccentInfo),
-            FontSize = 14,
-            FontWeight = FontWeight.Bold
-        };
-        DockPanel.SetDock(modelHeader, Dock.Top);
-        root.Children.Add(modelHeader);
+        // ── Messages area ──
+        _outputStack = new StackPanel { Spacing = 4 };
+        _scroller = new ScrollViewer { Content = _outputStack };
+        Grid.SetRow(_scroller, 1);
+        root.Children.Add(_scroller);
 
-        // ── Footer (multi-line stats + input bar) ──
+        // ── Footer (stats + tools + input) ──
         _footerStats = new StackPanel { Spacing = 1 };
         var footerBorder = new Border
         {
             Background = LtaiTheme.Sbb(LtaiTheme.BgPanel),
             BorderBrush = LtaiTheme.Sbb(LtaiTheme.Border),
-            BorderThickness = new(1, 0, 0, 0),
+            BorderThickness = new(0, 1, 0, 0),
             Padding = new(0, 6, 0, 0),
         };
         var footerStack = new StackPanel();
@@ -243,18 +240,8 @@ public sealed partial class ChatView : UserControl
         footerStack.Children.Add(toolbox);
         footerStack.Children.Add(inputRow);
         footerBorder.Child = footerStack;
-        DockPanel.SetDock(footerBorder, Dock.Bottom);
+        Grid.SetRow(footerBorder, 2);
         root.Children.Add(footerBorder);
-
-        _outputStack = new ListBox
-        {
-            Background = null!,
-            BorderThickness = new(0),
-        };
-        _outputStack.Items.Clear();
-        _outputStack.SelectionMode = SelectionMode.Single;
-        _scroller = new ScrollViewer { Content = _outputStack };
-        root.Children.Add(_scroller);
 
         // Auto-load most recent session or start fresh
         var existing = _sessionManager.ListSessions();
@@ -866,7 +853,7 @@ public sealed partial class ChatView : UserControl
             TextWrapping = TextWrapping.Wrap
         };
         b.Child = stb;
-        _outputStack.Items.Add(b);
+        _outputStack.Children.Add(b);
         PruneOutputStack();
         _scroller.ScrollToEnd();
     }

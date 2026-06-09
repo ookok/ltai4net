@@ -87,6 +87,7 @@ public sealed partial class ChatLayout : IDisposable, IStreamerHost
     internal string _pickerFilter = "";
     internal List<SlashCommands.SuggestionItem> _pickerItems = new();
     internal int _pickerSelectedIdx;
+    internal int _pickerScrollOffset;
     private LiveDisplayContext? _liveCtx;
     public TuiView? LastRequestedView { get; private set; }
     public static string CurrentViewName { get; set; } = "聊天";
@@ -95,14 +96,42 @@ public sealed partial class ChatLayout : IDisposable, IStreamerHost
     internal string? _statusMessage;
     internal string? _pendingChatRequest;
     internal string? _pendingSearchTerm;
-    internal int _renderVersion;
+    internal int _cacheVersion;
     internal int _historyVersion;
-    
+    internal volatile bool _needsRefresh;
+    internal volatile bool _cascadeActive;
+    internal volatile bool _modelPickerActive;
+    internal List<string> _modelPickerItems = [];
+    internal int _modelPickerSelectedIdx;
+    internal string _modelPickerLayer = "";
+    internal string _modelPickerProvider = "";
+    internal string _modelPickerInputBuffer = "";
+    internal string _modelPickerApiKeyEnvVar = "";
+    internal string _modelPickerApiKeyProvider = "";
+
+    // ── 文本输入覆盖层（替代 AnsiConsole.Prompt） ──
+    internal volatile bool _textInputActive;
+    internal string _textInputPrompt = "";
+    internal string _textInputBuffer = "";
+    internal bool _textInputIsSecret;
+    internal string _textInputPrefix = "";
+    internal TaskCompletionSource<string?>? _textInputTcs;
+
+    // ── Question overlay (replaces QuestionFormView AnsiConsole.Prompt) ──
+    internal volatile bool _questionActive;
+    internal TaskCompletionSource<IReadOnlyList<string>>? _questionTcs;
+    internal QuestionPrompt? _currentQuestionPrompt;
+    internal int _currentQuestionIdx;
+    internal int _currentQuestionTotal;
+    internal string _questionInput = "";
+    internal List<string> _questionMultiSelection = [];
+
     internal static TaskCompletionSource<ConfirmChoice>? PendingConfirmTcs;
     internal static string? PendingConfirmDetails;
     internal static string? PendingConfirmTitle;
     internal static string? PendingConfirmMessage;
     internal static string? PendingConfirmExtra;
+    internal static volatile int ConfirmSelection;
     public static string? EditMode { get; set; }
     public static Func<bool>? TryUndoCallback { get; set; }
     private const int MaxHistory = 200;
@@ -113,16 +142,7 @@ public sealed partial class ChatLayout : IDisposable, IStreamerHost
     private readonly Action<int> _onSubagentComplete;
     private readonly Action<int, string, string> _onSubagentMessage;
 
-    void IStreamerHost.ThrottledRefresh() => ThrottledRefresh();
-    private void ThrottledRefresh()
-    {
-        var now = DateTime.UtcNow;
-        if ((now - _lastRefresh).TotalMilliseconds >= RefreshIntervalMs && _liveCtx != null)
-        {
-            _liveCtx.Refresh();
-            _lastRefresh = now;
-        }
-    }
+    void IStreamerHost.ThrottledRefresh() => InvalidateRendered();
 
     internal void SnapshotForUndo()
     {
@@ -156,10 +176,27 @@ public sealed partial class ChatLayout : IDisposable, IStreamerHost
         _history.RemoveRange(0, removeCount);
     }
 
+    void IStreamerHost.AutoCompact() => AutoCompact();
+    internal void AutoCompact()
+    {
+        lock (_historyLock)
+        {
+            if (_history.Count <= 4) return;
+            SnapshotForUndo();
+            var keep = _history.GetRange(_history.Count - 4, 4);
+            _history.Clear();
+            _history.AddRange(keep);
+            _history.Add(("cmd", null, "[green]已自动压缩历史，保留最近 2 轮对话[/]", null));
+        }
+        _ = SaveSessionAsync();
+        InvalidateRendered();
+    }
+
     void IStreamerHost.InvalidateRendered() => InvalidateRendered();
     internal void InvalidateRendered()
     {
-        Interlocked.Increment(ref _renderVersion);
+        _needsRefresh = true;
+        Interlocked.Increment(ref _cacheVersion);
     }
 
     public ChatLayout(ChatAgent chat, Rendering.ChatRenderer renderer, QuestionService? questionService = null,
@@ -184,7 +221,7 @@ public sealed partial class ChatLayout : IDisposable, IStreamerHost
         _layout = new Layout()
             .SplitRows(
                 new Layout("Messages"),
-                new Layout("Footer").Size(4));
+                new Layout("Footer").Size(6));
         _messagesLayout = _layout["Messages"];
         _footerLayout = _layout["Footer"];
 
@@ -217,6 +254,21 @@ public sealed partial class ChatLayout : IDisposable, IStreamerHost
         };
         LTAI.Agent.Tools.SubagentTools.OnSubagentComplete += _onSubagentComplete;
         LTAI.Agent.Tools.SubagentTools.OnSubagentMessage += _onSubagentMessage;
+
+        // Register UserInputService handler — routes tool-requested input to overlay
+        UserInputService.PromptAsync = async (prompt, isSecret) =>
+        {
+            var tcs = new TaskCompletionSource<string?>();
+            _textInputPrompt = prompt;
+            _textInputIsSecret = isSecret;
+            _textInputBuffer = "";
+            _textInputTcs = tcs;
+            _textInputActive = true;
+            InvalidateRendered();
+            try { return await tcs.Task.ConfigureAwait(false); }
+            finally { _textInputActive = false; _textInputTcs = null; InvalidateRendered(); }
+        };
+
         _memoryExtractor = palaceStore != null
             ? new LTAI.Agent.Memory.MemoryExtractor(palaceStore, null)
             : null;
@@ -298,143 +350,264 @@ public sealed partial class ChatLayout : IDisposable, IStreamerHost
                 {
                     Input.MouseTracker.Enable();
                     var keyDispatcher = new Input.KeyDispatcher(this);
-                    while (!cts.Token.IsCancellationRequested)
+                    try
                     {
-                        var evt = Input.MouseTracker.ReadNext(cts.Token);
-                        if (evt.KeyInfo.HasValue)
+                        while (!cts.Token.IsCancellationRequested)
                         {
-                            var keepGoing = await keyDispatcher.HandleKeyAsync(evt.KeyInfo.Value, cts.Token).ConfigureAwait(false);
-                            if (!keepGoing) { cts.Cancel(); return; }
-                        }
-                        else if (evt.ScrollDelta != 0)
-                        {
-                            // Shift+↑/↓ gesture for history scroll
-                            var oldOffset = _scrollOffset;
-                            _scrollOffset = Math.Clamp(_scrollOffset - evt.ScrollDelta, 0, Math.Max(0, _history.Count - 1));
-                            if (_scrollOffset != oldOffset)
-                                ThrottledRefresh();
-                        }
-                        else if (evt.ClickPosition.HasValue)
-                        {
-                            var (row, col) = evt.ClickPosition.Value;
-                            var termHeight = SafeWindowHeight;
-                            var msgAreaEnd = termHeight - 4;
+                            Input.MouseTracker.InputEvent evt;
+                            try
+                            {
+                                evt = Input.MouseTracker.ReadNext(cts.Token);
+                            }
+                            catch (Exception ex)
+                            {
+                                System.Diagnostics.Debug.WriteLine($"[ChatLayout] ReadNext FAILED: {ex}");
+                                _statusMessage = $"[red]输入错误: {ex.Message.EscapeMarkup()}[/]";
+                                InvalidateRendered();
+                                await Task.Delay(1000, cts.Token).ConfigureAwait(false);
+                                continue;
+                            }
 
-                            // Click in the rightmost 5 columns = copy latest code block
-                            var termWidth = 120;
-                            try { termWidth = Console.WindowWidth; } catch { System.Diagnostics.Debug.WriteLine("[ChatLayout] WindowWidth query failed"); }
-                            if (col >= termWidth - 5 && row < msgAreaEnd)
+                            if (evt.KeyInfo.HasValue)
                             {
-                                CodeBlockBuffer.TryCopyLatestToClipboard();
+                                try
+                                {
+                                    var keepGoing = await keyDispatcher.HandleKeyAsync(evt.KeyInfo.Value, cts.Token).ConfigureAwait(false);
+                                    if (!keepGoing) { cts.Cancel(); return; }
+                                }
+                                catch (Exception ex)
+                                {
+                                    System.Diagnostics.Debug.WriteLine($"[ChatLayout] HandleKeyAsync FAILED: {ex}");
+                                    _statusMessage = $"[red]按键处理错误: {ex.Message.EscapeMarkup()}[/]";
+                                    InvalidateRendered();
+                                }
                             }
-                            else if (row < msgAreaEnd / 3 && _scrollOffset < _history.Count)
+                            else if (evt.ScrollDelta != 0)
                             {
-                                _scrollOffset = Math.Min(_scrollOffset + 5, Math.Max(0, _history.Count - 1));
+                                var oldOffset = _scrollOffset;
+                                _scrollOffset = Math.Clamp(_scrollOffset - evt.ScrollDelta, 0, Math.Max(0, _history.Count - 1));
+                                if (_scrollOffset != oldOffset)
+                                    InvalidateRendered();
                             }
-                            else if (row > msgAreaEnd * 2 / 3 && _scrollOffset > 0)
+                            else if (evt.ClickPosition.HasValue)
                             {
-                                _scrollOffset = Math.Max(0, _scrollOffset - 5);
+                                var (row, col) = evt.ClickPosition.Value;
+                                var termHeight = SafeWindowHeight;
+                                var msgAreaEnd = termHeight - 4;
+
+                                // Click in the rightmost 5 columns = copy latest code block
+                                var termWidth = 120;
+                                try { termWidth = Console.WindowWidth; } catch { System.Diagnostics.Debug.WriteLine("[ChatLayout] WindowWidth query failed"); }
+                                if (col >= termWidth - 5 && row < msgAreaEnd)
+                                {
+                                    CodeBlockBuffer.TryCopyLatestToClipboard();
+                                }
+                                else if (row < msgAreaEnd / 3 && _scrollOffset < _history.Count)
+                                {
+                                    _scrollOffset = Math.Min(_scrollOffset + 5, Math.Max(0, _history.Count - 1));
+                                }
+                                else if (row > msgAreaEnd * 2 / 3 && _scrollOffset > 0)
+                                {
+                                    _scrollOffset = Math.Max(0, _scrollOffset - 5);
+                                }
+                                else
+                                {
+                                    _scrollOffset = 0;
+                                }
+                                InvalidateRendered();
                             }
-                            else
-                            {
-                                _scrollOffset = 0;
-                            }
-                            ThrottledRefresh();
                         }
+                    }
+                    catch (OperationCanceledException) { }
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[ChatLayout] Input task CRASHED: {ex}");
+                        _statusMessage = $"[red]输入线程崩溃: {ex.Message.EscapeMarkup()}[/]";
+                        InvalidateRendered();
                     }
                     Input.MouseTracker.Disable();
                 }, cts.Token);
 
-                // Main rendering + processing loop: runs at ~30fps, processes
-                // queued messages one at a time while keeping the UI responsive.
+                // Force initial render — main loop's doRefresh is false on first
+                // iteration (nothing dirty yet), so the welcome screen never appears
+                // without this explicit refresh.
+                lock (_layout) { UpdateMessages(""); UpdateFooter("", "", true); ctx.Refresh(); }
+
+                // Main rendering + processing loop: only refreshes on actual
+                // changes. Cursor blink is handled independently by FooterRenderer
+                // via Environment.TickCount — no periodic refresh timer needed.
+                // This avoids flickering with IME input on Windows Terminal.
                 while (!cts.Token.IsCancellationRequested)
                 {
-                    // Refresh UI
-                    if (_viewPickerActive)
+                    var doRefresh = _needsRefresh || _processing
+                        || _viewPickerActive || _pickerActive || _cascadeActive
+                        || _modelPickerActive || _textInputActive || _questionActive;
+
+                    if (doRefresh)
                     {
-                        lock (_layout)
+                        _needsRefresh = false;
+
+                        if (_viewPickerActive)
                         {
-                            _messagesLayout.Update(BuildViewSwitcherOverlay());
-                            UpdateFooter("", "", showWatermark);
-                            ctx.Refresh();
-                        }
-                    }
-                    else if (_pickerActive)
-                    {
-                        string filter;
-                        List<SlashCommands.SuggestionItem> items;
-                        int selIdx;
-                        lock (_pickerLock)
-                        {
-                            filter = _pickerFilter;
-                            items = _pickerItems;
-                            selIdx = _pickerSelectedIdx;
-                        }
-                        lock (_layout)
-                        {
-                            // 命令面板 overlay: 在 Messages 区中央显示浮动列表
-                            _messagesLayout.Update(BuildPickerOverlay(filter, items, selIdx));
-                            UpdateFooter("", "", showWatermark);
-                            ctx.Refresh();
-                        }
-                    }
-                    else
-                    {
-                        // 非级联菜单: 有 cmd 消息且超过 30s 或用户已开始对话 → 清理
-                        if (!LTAI.TUI.SlashCommands.InCascadeMenu && _history.Any(x => x.role == "cmd"))
-                        {
-                            var hasUserMsg = _history.Any(x => x.role == "user");
-                            var expired = (DateTime.UtcNow - _lastCmdTime).TotalSeconds > 30;
-                            if (hasUserMsg || expired)
+                            lock (_layout)
                             {
-                                _history.RemoveAll(x => x.role == "cmd");
+                                _messagesLayout.Update(BuildViewSwitcherOverlay());
+                                UpdateFooter("", "", showWatermark);
+                                ctx.Refresh();
                             }
                         }
-                        lock (_layout) { UpdateMessages(""); UpdateFooter("", "", showWatermark); ctx.Refresh(); }
+                        else if (_pickerActive)
+                        {
+                            string filter;
+                            List<SlashCommands.SuggestionItem> items;
+                            int selIdx, scrollOffset;
+                            lock (_pickerLock)
+                            {
+                                filter = _pickerFilter;
+                                items = _pickerItems;
+                                selIdx = _pickerSelectedIdx;
+                                scrollOffset = _pickerScrollOffset;
+                            }
+                            lock (_layout)
+                            {
+                                _messagesLayout.Update(BuildPickerOverlay(filter, items, selIdx, scrollOffset));
+                                UpdateFooter("", "", showWatermark);
+                                ctx.Refresh();
+                            }
+                        }
+                        else if (_cascadeActive)
+                        {
+                            lock (_layout)
+                            {
+                                _messagesLayout.Update(BuildCascadeOverlay());
+                                UpdateFooter("", "", showWatermark);
+                                ctx.Refresh();
+                            }
+                        }
+                        else if (_modelPickerActive)
+                        {
+                            lock (_layout)
+                            {
+                                _messagesLayout.Update(BuildModelPickerOverlay());
+                                UpdateFooter("", "", showWatermark);
+                                ctx.Refresh();
+                            }
+                        }
+                        else if (_textInputActive)
+                        {
+                            lock (_layout)
+                            {
+                                _messagesLayout.Update(BuildTextInputOverlay());
+                                UpdateFooter("", "", showWatermark);
+                                ctx.Refresh();
+                            }
+                        }
+                        else if (_questionActive)
+                        {
+                            lock (_layout)
+                            {
+                                _messagesLayout.Update(BuildQuestionOverlay());
+                                UpdateFooter("", "", showWatermark);
+                                ctx.Refresh();
+                            }
+                        }
+                        else if (_processing)
+                        {
+                            // During streaming, the streaming thread updates _messagesLayout
+                            // via UpdateMessages(content) and the spin animation updates footer via
+                            // UpdateFooter — both signal via InvalidateRendered(). Main loop
+                            // also updates footer with current input state for cursor visibility.
+                            UpdateMessages("");
+                            UpdateFooter("", "");
+                            ctx.Refresh();
+                        }
+                        else
+                        {
+                            if (_history.Any(x => x.role == "cmd"))
+                            {
+                                var hasUserMsg = _history.Any(x => x.role == "user");
+                                var expired = (DateTime.UtcNow - _lastCmdTime).TotalSeconds > 30;
+                                if (hasUserMsg || expired)
+                                    _history.RemoveAll(x => x.role == "cmd");
+                            }
+                            lock (_layout) { UpdateMessages(""); UpdateFooter("", "", showWatermark); ctx.Refresh(); }
+                        }
+                        showWatermark = false;
                     }
-                    showWatermark = false;
 
                     // Check quick-navigation from input thread
-                    lock (_layout)
+                    if (_quickNav != default)
                     {
-                        if (_quickNav != default)
+                        var nextView = _quickNav switch
                         {
-                            var nextView = _quickNav switch
-                            {
-                                '1' => TuiView.Dashboard, '3' => TuiView.LLMConfig,
-                                '4' => TuiView.TextPad, '5' => TuiView.Skills,
-                                '6' => TuiView.Sessions, '7' => TuiView.Jobs,
-                                '8' => TuiView.MemoryBrowser, '9' => TuiView.Workflows,
-                                '0' => TuiView.GraphBrowser, _ => TuiView.Chat
-                            };
-                            CurrentViewName = GetViewName(nextView);
-                            LastRequestedView = nextView;
-                            cts.Cancel(); return;
-                        }
+                            '1' => TuiView.Dashboard, '3' => TuiView.LLMConfig,
+                            '4' => TuiView.TextPad, '5' => TuiView.Skills,
+                            '6' => TuiView.Sessions, '7' => TuiView.Jobs,
+                            '8' => TuiView.MemoryBrowser, '9' => TuiView.Workflows,
+                            '0' => TuiView.GraphBrowser, _ => TuiView.Chat
+                        };
+                        CurrentViewName = GetViewName(nextView);
+                        LastRequestedView = nextView;
+                        cts.Cancel(); return;
                     }
 
                     // Check pending build result from background task
+                    // (includes cascade/command result text that needs rendering)
                     var buildResult = SlashCommands.PendingBuildResult;
                     if (buildResult != null)
                     {
                         SlashCommands.PendingBuildResult = null;
                         _history.Add(("cmd", null, buildResult, null));
+                        InvalidateRendered();
                     }
-
-                    // （Picker 渲染已移至上方与 UpdateMessages 合并，避免闪烁）
 
                     // Process the next queued message (if not already busy)
                     if (!_processing && _messageQueue.Reader.TryRead(out var msg))
                     {
-                        _processing = true;
-                        _responseCts = new CancellationTokenSource();
-                        await StreamResponseAsync(msg).ConfigureAwait(false);
-                        _processing = false;
+                        if (msg.StartsWith("/!") && msg.Length > 2)
+                        {
+                            // Slash command queued from input task — handle on main thread
+                            var cmd = msg[2..];
+                            try
+                            {
+                                var handled = await HandleSlashCommandAsync(cmd).ConfigureAwait(false);
+                                if (!handled) { cts.Cancel(); return; }
+                                var pending = SlashCommands.PendingInput;
+                                if (pending != null)
+                                {
+                                    SlashCommands.PendingInput = null;
+                                    SetInput(pending);
+                                }
+                                InvalidateRendered();
+                            }
+                            catch (Exception ex)
+                            {
+                                System.Diagnostics.Debug.WriteLine($"[ChatLayout] Slash command error: {ex}");
+                                _statusMessage = $"[red]命令错误: {ex.Message.EscapeMarkup()}[/]";
+                                InvalidateRendered();
+                            }
+                        }
+                        else
+                        {
+                            _processing = true;
+                            _responseCts = new CancellationTokenSource();
+                            _ = StreamResponseAsync(msg).ContinueWith(t =>
+                            {
+                                if (t.IsFaulted)
+                                {
+                                    var ex = t.Exception?.InnerException;
+                                    _statusMessage = $"[red]流式错误: {ex?.Message.EscapeMarkup() ?? "未知"}[/]";
+                                }
+                                _processing = false;
+                                InvalidateRendered();
+                            }, TaskScheduler.Default);
+                            continue;
+                        }
                         continue;
                     }
 
                     // Yield to avoid 100% CPU spin when queue is empty
-                    try { await Task.Delay(16, cts.Token).ConfigureAwait(false); }
+                    try { await Task.Delay(doRefresh ? 16 : 50, cts.Token).ConfigureAwait(false); }
                     catch (OperationCanceledException) { break; }
                 }
             });
@@ -449,12 +622,12 @@ public sealed partial class ChatLayout : IDisposable, IStreamerHost
     void IStreamerHost.UpdateMessages(string s) => UpdateMessages(s);
     private void UpdateMessages(string streamingContent)
     {
-        var rv = Volatile.Read(ref _renderVersion);
+        var cv = Volatile.Read(ref _cacheVersion);
         var hv = Volatile.Read(ref _historyVersion);
-        if (rv > hv)
+        if (cv > hv)
         {
             // Clear all rendered entries so next BuildMessagesPanel rebuilds them
-            Interlocked.Exchange(ref _historyVersion, rv);
+            Interlocked.Exchange(ref _historyVersion, cv);
             for (int i = 0; i < _history.Count; i++)
                 _history[i] = (_history[i].role, null, _history[i].rawContent, _history[i].reasoning);
         }
@@ -466,32 +639,248 @@ public sealed partial class ChatLayout : IDisposable, IStreamerHost
 
     // ── 命令面板 Overlay ──
 
-    private static Panel BuildPickerOverlay(string filter, List<SlashCommands.SuggestionItem> items, int selIdx)
+    internal int CalculatePickerWindowSize()
+    {
+        const int maxLines = 12;
+        var used = 2; // filter line + hint line
+        var itemsRendered = 0;
+
+        if (_pickerScrollOffset > 0) used++;
+
+        var windowItems = _pickerItems.Skip(_pickerScrollOffset).ToList();
+        var grouped = windowItems.GroupBy(i => i.Group).OrderBy(g => g.Key).ToList();
+
+        foreach (var group in grouped)
+        {
+            if (used >= maxLines) break;
+            used++;
+            foreach (var _ in group)
+            {
+                if (used >= maxLines) break;
+                used++;
+                itemsRendered++;
+            }
+        }
+
+        return Math.Max(itemsRendered, 1);
+    }
+
+    private static IRenderable BuildPickerOverlay(string filter, List<SlashCommands.SuggestionItem> items, int selIdx, int scrollOffset)
     {
         var sb = new StringBuilder();
         sb.AppendLine($"[bold {ThemeService.PrimaryTag}]/[/][bold]{filter.EscapeMarkup()}[/]");
-        var displayed = items.Take(10).ToList();
-        foreach (var (item, i) in displayed.Select((it, idx) => (it, idx)))
-        {
-            var cmd = item.Completion;
-            var display = item.DisplayText;
-            if (i == selIdx)
-                sb.AppendLine($"[black on {ThemeService.PrimaryTag}]  {display,-30}[/]");
-            else
-                sb.AppendLine($"  [{ThemeService.MutedTag}]{display,-30}[/]");
-        }
-        if (items.Count > 10)
-            sb.AppendLine($"[{ThemeService.MutedTag}]... 还有 {items.Count - 10} 项[/]");
-        sb.AppendLine($"[{ThemeService.MutedTag}]↑↓=选择  Tab=补全  Enter=执行  Esc=取消[/]");
+        sb.AppendLine($"[{ThemeService.MutedTag}]↑↓ 选择  Tab 补全  Enter 执行  Esc 取消[/]");
 
-        return new Panel(
-            Align.Center(new Markup(sb.ToString().TrimEnd()), VerticalAlignment.Middle))
+        var windowItems = items.Skip(scrollOffset).ToList();
+        var grouped = windowItems
+            .GroupBy(i => i.Group)
+            .OrderBy(g => g.Key)
+            .ToList();
+
+        const int maxLines = 12;
+        var rendered = 0;
+        var flatIdx = scrollOffset;
+
+        if (scrollOffset > 0)
+        {
+            sb.AppendLine($"  [{ThemeService.MutedTag}]↑ {scrollOffset} 项...[/]");
+            rendered++;
+        }
+
+        foreach (var group in grouped)
+        {
+            if (rendered >= maxLines) break;
+
+            sb.AppendLine($"  [bold]{group.Key.EscapeMarkup()}[/]");
+            rendered++;
+
+            foreach (var item in group)
+            {
+                if (rendered >= maxLines) break;
+
+                var display = item.DisplayText;
+                if (flatIdx == selIdx)
+                    sb.AppendLine($"[black on {ThemeService.PrimaryTag}]    {display}[/]");
+                else
+                    sb.AppendLine($"    [{ThemeService.MutedTag}]{display}[/]");
+
+                flatIdx++;
+                rendered++;
+            }
+        }
+
+        var remaining = items.Count - flatIdx;
+        if (remaining > 0)
+            sb.AppendLine($"[{ThemeService.MutedTag}]↓ {remaining} 项...[/]");
+
+        var panel = new Panel(
+            Align.Left(new Markup(sb.ToString().TrimEnd()), VerticalAlignment.Middle))
         {
             Border = BoxBorder.Rounded,
             BorderStyle = new Style(ThemeService.BorderColor),
             Padding = new Padding(2, 1, 2, 1),
-            Expand = true,
         };
+        return Align.Center(panel, VerticalAlignment.Middle);
+    }
+
+    // ── 级联菜单 Overlay ──
+
+    private static IRenderable BuildCascadeOverlay()
+    {
+        var path = SlashCommands.CascadeStack.Length > 0
+            ? $"/{SlashCommands.CascadeCmd} {string.Join(" ", SlashCommands.CascadeStack)}"
+            : $"/{SlashCommands.CascadeCmd}";
+        var sb = new StringBuilder();
+        sb.AppendLine($"[bold yellow]{path}[/]");
+        for (int i = 0; i < SlashCommands.CascadeItems.Length; i++)
+        {
+            var parts = SlashCommands.CascadeItems[i].Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
+            var s = parts[0];
+            var desc = parts.Length > 1 ? parts[1] : "";
+            var display = $"{s}  {desc}".TrimEnd();
+            if (i == SlashCommands.CascadeSel)
+                sb.AppendLine($"[black on yellow]  {display,-40}[/]");
+            else
+                sb.AppendLine($"  [{ThemeService.MutedTag}]{display,-40}[/]");
+        }
+        sb.Append($"[{ThemeService.MutedTag}]↑↓=选择  Enter=确认  Esc=返回  Ctrl+Q=退出[/]");
+
+        var panel = new Panel(
+            Align.Left(new Markup(sb.ToString().TrimEnd()), VerticalAlignment.Middle))
+        {
+            Border = BoxBorder.Rounded,
+            BorderStyle = new Style(ThemeService.BorderColor),
+            Padding = new Padding(4, 2, 4, 2),
+        };
+        return Align.Center(panel, VerticalAlignment.Middle);
+    }
+
+    // ── 模型选择器 Overlay ──
+
+    private IRenderable BuildModelPickerOverlay()
+    {
+        var sb = new StringBuilder();
+
+        if (_modelPickerItems.Count == 0 && !string.IsNullOrEmpty(_modelPickerApiKeyEnvVar))
+        {
+            var masked = new string('•', _modelPickerInputBuffer.Length);
+            sb.AppendLine($"[bold yellow]{_modelPickerLayer.ToUpperInvariant()} — {_modelPickerProvider}[/]");
+            sb.AppendLine();
+            sb.AppendLine($"  [dim]设置 {_modelPickerApiKeyEnvVar}:[/]");
+            sb.AppendLine($"  [yellow]{masked}[/]");
+            sb.AppendLine();
+            sb.AppendLine($"  [{ThemeService.MutedTag}]输入 API Key  Enter=确认  Esc=取消[/]");
+        }
+        else
+        {
+            sb.AppendLine($"[bold yellow]{_modelPickerLayer.ToUpperInvariant()} — {_modelPickerProvider}[/]");
+            sb.AppendLine($"[{ThemeService.MutedTag}]↑↓ 选择  Enter 确认  Esc 取消[/]");
+
+            for (int i = 0; i < _modelPickerItems.Count; i++)
+            {
+                var name = _modelPickerItems[i];
+                if (i == _modelPickerSelectedIdx)
+                    sb.AppendLine($"[black on yellow]  {name,-20}[/]");
+                else
+                    sb.AppendLine($"  [{ThemeService.MutedTag}]{name,-20}[/]");
+            }
+        }
+
+        var panel = new Panel(
+            Align.Left(new Markup(sb.ToString().TrimEnd()), VerticalAlignment.Middle))
+        {
+            Border = BoxBorder.Rounded,
+            BorderStyle = new Style(ThemeService.BorderColor),
+            Padding = new Padding(4, 2, 4, 2),
+        };
+        return Align.Center(panel, VerticalAlignment.Middle);
+    }
+
+    // ═══════════════════════════════════════════
+    //  Text input overlay (replaces AnsiConsole.Prompt)
+    // ═══════════════════════════════════════════
+
+    private IRenderable BuildTextInputOverlay()
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine($"[bold yellow]{_textInputPrompt}[/]");
+        var masked = _textInputIsSecret
+            ? new string('•', _textInputBuffer.Length)
+            : _textInputBuffer;
+        var cursor = (DateTime.UtcNow.Millisecond % 1000) < 500 ? '▌' : ' ';
+        sb.AppendLine($"  [cyan]{masked}{cursor}[/]");
+        sb.AppendLine($"[{ThemeService.MutedTag}]Enter=确认  Esc=取消[/]");
+
+        var panel = new Panel(
+            Align.Left(new Markup(sb.ToString().TrimEnd()), VerticalAlignment.Middle))
+        {
+            Border = BoxBorder.Rounded,
+            BorderStyle = new Style(ThemeService.BorderColor),
+            Padding = new Padding(4, 2, 4, 2),
+        };
+        return Align.Center(panel, VerticalAlignment.Middle);
+    }
+
+    // ═══════════════════════════════════════════
+    //  Question overlay (replaces QuestionFormView AnsiConsole.Prompt)
+    // ═══════════════════════════════════════════
+
+    private IRenderable BuildQuestionOverlay()
+    {
+        var q = _currentQuestionPrompt;
+        if (q == null) return new Markup("");
+
+        var sb = new StringBuilder();
+        sb.AppendLine($"[bold yellow]❓ 问题 {_currentQuestionIdx + 1}/{_currentQuestionTotal}[/]");
+        sb.AppendLine($"[bold]{q.Header.EscapeMarkup()}[/]");
+        sb.AppendLine($"[grey]{q.Question.EscapeMarkup()}[/]");
+        sb.AppendLine();
+
+        if (q.Options.Count > 0)
+        {
+            for (int j = 0; j < q.Options.Count; j++)
+            {
+                var opt = q.Options[j];
+                var key = q.Multiple ? $"[{j + 1}]" : $"{(char)('a' + j)}";
+                var selected = q.Multiple && _questionMultiSelection.Contains(opt.Label);
+                var marker = selected ? "[green]✓[/]" : " ";
+                sb.AppendLine($"  {marker} [cyan]{key}[/] {opt.Label.EscapeMarkup()}");
+                if (!string.IsNullOrEmpty(opt.Description))
+                    sb.AppendLine($"     [dim]{opt.Description.EscapeMarkup()}[/]");
+            }
+            sb.AppendLine();
+
+            if (q.Multiple)
+            {
+                var selText = _questionMultiSelection.Count > 0
+                    ? string.Join(", ", _questionMultiSelection)
+                    : "(无)";
+                sb.AppendLine($"[dim]已选: {selText}[/]");
+                sb.AppendLine($"[grey]输入序号切换 (1,2,3...), Enter 确认, c=自定义回答[/]");
+            }
+            else
+            {
+                var cursor = (DateTime.UtcNow.Millisecond % 1000) < 500 ? '▌' : ' ';
+                sb.AppendLine($"[grey]按字母选择 ({string.Join("/", q.Options.Select((_, i) => $"{(char)('a' + i)}"))}){cursor}[/]");
+                sb.AppendLine($"[grey]c=自定义回答  Enter=确认[/]");
+            }
+        }
+        else
+        {
+            var masked = new string('•', _questionInput.Length);
+            var cursor = (DateTime.UtcNow.Millisecond % 1000) < 500 ? '▌' : ' ';
+            sb.AppendLine($"  [cyan]{masked}{cursor}[/]");
+            sb.AppendLine($"[grey]输入回答 (Enter 确认)[/]");
+        }
+
+        var panel = new Panel(
+            Align.Left(new Markup(sb.ToString().TrimEnd()), VerticalAlignment.Middle))
+        {
+            Border = BoxBorder.Rounded,
+            BorderStyle = new Style(ThemeService.BorderColor),
+            Padding = new Padding(4, 2, 4, 2),
+        };
+        return Align.Center(panel, VerticalAlignment.Middle);
     }
 
     // ═══════════════════════════════════════════
@@ -527,7 +916,7 @@ public sealed partial class ChatLayout : IDisposable, IStreamerHost
         _ => "聊天",
     };
 
-    private Panel BuildViewSwitcherOverlay()
+    private IRenderable BuildViewSwitcherOverlay()
     {
         var sb = new StringBuilder();
         sb.AppendLine($"[bold {ThemeService.PrimaryTag}]视图切换[/]  (Ctrl+P)");
@@ -546,14 +935,14 @@ public sealed partial class ChatLayout : IDisposable, IStreamerHost
         var selectedIdx = Math.Clamp(_viewPickerSelected, 0, ViewOptions.Length - 1);
         _viewPickerSelected = selectedIdx;
 
-        return new Panel(
-            Align.Center(new Markup(sb.ToString().TrimEnd()), VerticalAlignment.Middle))
+        var panel = new Panel(
+            Align.Left(new Markup(sb.ToString().TrimEnd()), VerticalAlignment.Middle))
         {
             Border = BoxBorder.Rounded,
             BorderStyle = new Style(ThemeService.BorderColor),
             Padding = new Padding(2, 1, 2, 1),
-            Expand = true,
         };
+        return Align.Center(panel, VerticalAlignment.Middle);
     }
 
     // ── Footer ──
@@ -573,6 +962,14 @@ public sealed partial class ChatLayout : IDisposable, IStreamerHost
         _footerLayout.Update(panel);
     }
 
+    internal void ReRenderConfirmation()
+    {
+        ConfirmationModal.RenderModal(_layout,
+            PendingConfirmTitle ?? "", PendingConfirmMessage ?? "",
+            PendingConfirmDetails ?? "", PendingConfirmExtra);
+        InvalidateRendered();
+    }
+
     // ── 流式响应 ──
 
     private async Task StreamResponseAsync(string input)
@@ -581,7 +978,7 @@ public sealed partial class ChatLayout : IDisposable, IStreamerHost
         _responseCts = cts;
 
         var streamer = new ResponseStreamer(
-            _chat, _renderer, _sessions, _layout, _liveCtx!, _questionService,
+            _chat, _renderer, _sessions, _layout, _questionService,
             _history, _toolCalls, this);
         await streamer.StreamAsync(input, cts).ConfigureAwait(false);
     }

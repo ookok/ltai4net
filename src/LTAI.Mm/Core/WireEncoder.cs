@@ -1,0 +1,242 @@
+namespace LTAI.Mm.Core;
+
+public sealed class WireEncoder
+{
+    private readonly GrowableByteBuf _buf = new();
+
+    public void Reset() => _buf.Reset();
+    public byte[] ToByteArray() => _buf.ToArray();
+    public int Length => _buf.Length;
+
+    public int EncodeSimple(int value)
+    {
+        int start = _buf.Length;
+        _buf.Write(Prefix.SIMPLE | value);
+        return _buf.Length - start;
+    }
+
+    public int EncodeBool(bool value)
+    {
+        return EncodeSimple(value ? SimpleValue.TRUE : SimpleValue.FALSE);
+    }
+
+    public int EncodeNull()
+    {
+        return EncodeSimple(SimpleValue.NULL);
+    }
+
+    public int EncodeInt64(long value)
+    {
+        int start = _buf.Length;
+        if (value >= 0)
+        {
+            if (value <= WireConstants.MAX_1)
+            {
+                _buf.Write(Prefix.POSITIVE_INT | WireConstants.INT_LEN_1, (byte)value);
+            }
+            else if (value <= WireConstants.MAX_2)
+                _buf.Write(Prefix.POSITIVE_INT | WireConstants.INT_LEN_2, (byte)(value >> 8), (byte)value);
+            else if (value <= WireConstants.MAX_3)
+                _buf.Write(Prefix.POSITIVE_INT | WireConstants.INT_LEN_3, (byte)(value >> 16), (byte)(value >> 8), (byte)value);
+            else if (value <= WireConstants.MAX_4)
+                _buf.Write(Prefix.POSITIVE_INT | WireConstants.INT_LEN_4, (byte)(value >> 24), (byte)(value >> 16), (byte)(value >> 8), (byte)value);
+            else if (value <= WireConstants.MAX_5)
+                _buf.Write(Prefix.POSITIVE_INT | WireConstants.INT_LEN_5, (byte)(value >> 32), (byte)(value >> 24), (byte)(value >> 16), (byte)(value >> 8), (byte)value);
+            else if (value <= WireConstants.MAX_6)
+                _buf.Write(Prefix.POSITIVE_INT | WireConstants.INT_LEN_6, (byte)(value >> 40), (byte)(value >> 32), (byte)(value >> 24), (byte)(value >> 16), (byte)(value >> 8), (byte)value);
+            else if (value <= WireConstants.MAX_7)
+                _buf.Write(Prefix.POSITIVE_INT | WireConstants.INT_LEN_7, (byte)(value >> 48), (byte)(value >> 40), (byte)(value >> 32), (byte)(value >> 24), (byte)(value >> 16), (byte)(value >> 8), (byte)value);
+            else
+                _buf.Write(Prefix.POSITIVE_INT | WireConstants.INT_LEN_8, (byte)(value >> 56), (byte)(value >> 48), (byte)(value >> 40), (byte)(value >> 32), (byte)(value >> 24), (byte)(value >> 16), (byte)(value >> 8), (byte)value);
+        }
+        else
+        {
+            ulong uv = value == long.MinValue ? 9223372036854775808UL : (ulong)(-value);
+            if (uv <= WireConstants.MAX_1)
+                _buf.Write(Prefix.NEGATIVE_INT | WireConstants.INT_LEN_1, (byte)uv);
+            else if (uv <= WireConstants.MAX_2)
+                _buf.Write(Prefix.NEGATIVE_INT | WireConstants.INT_LEN_1, (byte)uv);
+            else if (uv <= WireConstants.MAX_2)
+                _buf.Write(Prefix.NEGATIVE_INT | WireConstants.INT_LEN_2, (byte)(uv >> 8), (byte)uv);
+            else if (uv <= WireConstants.MAX_3)
+                _buf.Write(Prefix.NEGATIVE_INT | WireConstants.INT_LEN_3, (byte)(uv >> 16), (byte)(uv >> 8), (byte)uv);
+            else if (uv <= WireConstants.MAX_4)
+                _buf.Write(Prefix.NEGATIVE_INT | WireConstants.INT_LEN_4, (byte)(uv >> 24), (byte)(uv >> 16), (byte)(uv >> 8), (byte)uv);
+            else if (uv <= WireConstants.MAX_5)
+                _buf.Write(Prefix.NEGATIVE_INT | WireConstants.INT_LEN_5, (byte)(uv >> 32), (byte)(uv >> 24), (byte)(uv >> 16), (byte)(uv >> 8), (byte)uv);
+            else if (uv <= WireConstants.MAX_6)
+                _buf.Write(Prefix.NEGATIVE_INT | WireConstants.INT_LEN_6, (byte)(uv >> 40), (byte)(uv >> 32), (byte)(uv >> 24), (byte)(uv >> 16), (byte)(uv >> 8), (byte)uv);
+            else if (uv <= WireConstants.MAX_7)
+                _buf.Write(Prefix.NEGATIVE_INT | WireConstants.INT_LEN_7, (byte)(uv >> 48), (byte)(uv >> 40), (byte)(uv >> 32), (byte)(uv >> 24), (byte)(uv >> 16), (byte)(uv >> 8), (byte)uv);
+            else
+                _buf.Write(Prefix.NEGATIVE_INT | WireConstants.INT_LEN_8, (byte)(uv >> 56), (byte)(uv >> 48), (byte)(uv >> 40), (byte)(uv >> 32), (byte)(uv >> 24), (byte)(uv >> 16), (byte)(uv >> 8), (byte)uv);
+        }
+        return _buf.Length - start;
+    }
+
+    public int EncodeUInt64(ulong value)
+    {
+        int start = _buf.Length;
+        _buf.Write(Prefix.POSITIVE_INT | WireConstants.INT_LEN_8,
+            (byte)(value >> 56), (byte)(value >> 48), (byte)(value >> 40), (byte)(value >> 32),
+            (byte)(value >> 24), (byte)(value >> 16), (byte)(value >> 8), (byte)value);
+        return _buf.Length - start;
+    }
+
+    public int EncodeInt8(sbyte value) => EncodeInt64(value);
+    public int EncodeInt16(short value) => EncodeInt64(value);
+    public int EncodeInt32(int value) => EncodeInt64(value);
+    public int EncodeUInt8(byte value) => EncodeInt64(value);
+    public int EncodeUInt16(ushort value) => EncodeInt64(value);
+    public int EncodeUInt32(uint value) => EncodeInt64(value);
+
+    public int EncodeFloat(float value) => EncodeFloatString(value.ToString("G"));
+    public int EncodeDouble(double value) => EncodeFloatString(value.ToString("G"));
+
+    public int EncodeDateTime(DateTime value) =>
+        EncodeInt64(new DateTimeOffset(value).ToUnixTimeSeconds());
+
+    public int EncodeFloatString(string s)
+    {
+        var (negative, exponent, mantissa) = FloatCodec.ParseDecimalString(s);
+        int start = _buf.Length;
+        int sign = Prefix.FLOAT;
+        if (negative) sign |= WireConstants.FLOAT_NEG_MASK;
+
+        if (mantissa <= WireConstants.MAX_1)
+            _buf.Write(sign | WireConstants.FLOAT_LEN_1, (byte)exponent, (byte)mantissa);
+        else if (mantissa <= WireConstants.MAX_2)
+            _buf.Write(sign | WireConstants.FLOAT_LEN_2, (byte)exponent, (byte)(mantissa >> 8), (byte)mantissa);
+        else if (mantissa <= WireConstants.MAX_3)
+            _buf.Write(sign | WireConstants.FLOAT_LEN_3, (byte)exponent, (byte)(mantissa >> 16), (byte)(mantissa >> 8), (byte)mantissa);
+        else if (mantissa <= WireConstants.MAX_4)
+            _buf.Write(sign | WireConstants.FLOAT_LEN_4, (byte)exponent, (byte)(mantissa >> 24), (byte)(mantissa >> 16), (byte)(mantissa >> 8), (byte)mantissa);
+        else if (mantissa <= WireConstants.MAX_5)
+            _buf.Write(sign | WireConstants.FLOAT_LEN_5, (byte)exponent, (byte)(mantissa >> 32), (byte)(mantissa >> 24), (byte)(mantissa >> 16), (byte)(mantissa >> 8), (byte)mantissa);
+        else if (mantissa <= WireConstants.MAX_6)
+            _buf.Write(sign | WireConstants.FLOAT_LEN_6, (byte)exponent, (byte)(mantissa >> 40), (byte)(mantissa >> 32), (byte)(mantissa >> 24), (byte)(mantissa >> 16), (byte)(mantissa >> 8), (byte)mantissa);
+        else if (mantissa <= WireConstants.MAX_7)
+            _buf.Write(sign | WireConstants.FLOAT_LEN_7, (byte)exponent, (byte)(mantissa >> 48), (byte)(mantissa >> 40), (byte)(mantissa >> 32), (byte)(mantissa >> 24), (byte)(mantissa >> 16), (byte)(mantissa >> 8), (byte)mantissa);
+        else
+            _buf.Write(sign | WireConstants.FLOAT_LEN_8, (byte)exponent, (byte)(mantissa >> 56), (byte)(mantissa >> 48), (byte)(mantissa >> 40), (byte)(mantissa >> 32), (byte)(mantissa >> 24), (byte)(mantissa >> 16), (byte)(mantissa >> 8), (byte)mantissa);
+        return _buf.Length - start;
+    }
+
+    public int EncodeString(string s)
+    {
+        byte[] utf = System.Text.Encoding.UTF8.GetBytes(s);
+        int length = utf.Length;
+        if (length > WireConstants.MAX_STRING_LEN)
+            throw new InvalidOperationException($"String too long: {length} bytes");
+        int start = _buf.Length;
+
+        if (length > 0 && length < 16)
+            _buf.WriteWithBytes(Prefix.STRING | length, utf);
+        else if (length < WireConstants.MAX_1)
+            _buf.WriteWithBytes(Prefix.STRING | WireConstants.STRING_LEN_1, (byte)length, utf);
+        else
+            _buf.WriteWithBytes(Prefix.STRING | WireConstants.STRING_LEN_2, (byte)(length >> 8), (byte)length, utf);
+        return _buf.Length - start;
+    }
+
+    public int EncodeBytes(byte[] bytes)
+    {
+        int length = bytes.Length;
+        if (length > WireConstants.MAX_BYTES_LEN)
+            throw new InvalidOperationException($"Bytes too long: {length}");
+        int start = _buf.Length;
+
+        if (length > 0 && length < 16)
+            _buf.WriteWithBytes(Prefix.BYTES | length, bytes);
+        else if (length < WireConstants.MAX_1)
+            _buf.WriteWithBytes(Prefix.BYTES | WireConstants.BYTES_LEN_1, (byte)length, bytes);
+        else
+            _buf.WriteWithBytes(Prefix.BYTES | WireConstants.BYTES_LEN_2, (byte)(length >> 8), (byte)length, bytes);
+        return _buf.Length - start;
+    }
+
+    public int EncodeArrayPayload(byte[] payload)
+    {
+        int length = payload.Length;
+        if (length > WireConstants.MAX_CONTAINER_PAYLOAD)
+            throw new InvalidOperationException($"Array payload too long: {length}");
+        int start = _buf.Length;
+        int sign = Prefix.CONTAINER | WireConstants.CONTAINER_ARRAY;
+
+        if (length < WireConstants.MAX_1)
+            _buf.WriteWithBytes(sign | WireConstants.CONTAINER_LEN_1, (byte)length, payload);
+        else
+            _buf.WriteWithBytes(sign | WireConstants.CONTAINER_LEN_2, (byte)(length >> 8), (byte)length, payload);
+        return _buf.Length - start;
+    }
+
+    public int EncodeObjectPayload(byte[] payload)
+    {
+        int length = payload.Length;
+        if (length > WireConstants.MAX_CONTAINER_PAYLOAD)
+            throw new InvalidOperationException($"Map payload too long: {length}");
+        int start = _buf.Length;
+        int sign = Prefix.CONTAINER | WireConstants.CONTAINER_MAP;
+
+        if (length < WireConstants.MAX_1)
+            _buf.WriteWithBytes(sign | WireConstants.CONTAINER_LEN_1, (byte)length, payload);
+        else
+            _buf.WriteWithBytes(sign | WireConstants.CONTAINER_LEN_2, (byte)(length >> 8), (byte)length, payload);
+        return _buf.Length - start;
+    }
+
+    internal int EncodeTagInner(byte[] tagBytes)
+    {
+        if (tagBytes.Length == 0) return 0;
+        if (tagBytes.Length > WireConstants.MAX_2)
+            throw new InvalidOperationException("Tag too long");
+
+        int start = _buf.Length;
+        int length = tagBytes.Length;
+        if (length < 254)
+            _buf.WriteWithBytes(length, tagBytes);
+        else if (length < 257)
+            _buf.WriteWithBytes(254, (byte)length, tagBytes);
+        else
+            _buf.WriteWithBytes(255, (byte)(length >> 8), (byte)length, tagBytes);
+        return _buf.Length - start;
+    }
+
+    public int EncodeTaggedPayload(byte[] payload, byte[] rawTagFields)
+    {
+        if (rawTagFields.Length == 0)
+        {
+            _buf.WriteAll(payload);
+            return payload.Length;
+        }
+
+        var tEnc = new WireEncoder();
+        tEnc.EncodeTagInner(rawTagFields);
+        byte[] tagEncoded = tEnc.ToByteArray();
+
+        int totalLength = tagEncoded.Length + payload.Length;
+        if (totalLength > WireConstants.MAX_TAG_PAYLOAD)
+            throw new InvalidOperationException($"Tag+payload too long: {totalLength}");
+
+        int start = _buf.Length;
+        _buf.WriteWithMultipleBytes(Prefix.TAG | WireConstants.TAG_LEN_1, (byte)totalLength, tagEncoded, payload);
+        return _buf.Length - start;
+    }
+
+    public int EncodeBigIntDecimal(string s)
+    {
+        byte[] bits = BigIntWireCodec.EncodeSignedDecimal(s);
+        return EncodeBytes(bits);
+    }
+
+    public static bool TryEncodeSimpleByName(WireEncoder enc, string name)
+    {
+        int? val = SimpleValue.NameToValue(name.ToLowerInvariant());
+        if (val.HasValue)
+        {
+            enc.EncodeSimple(val.Value);
+            return true;
+        }
+        return false;
+    }
+}

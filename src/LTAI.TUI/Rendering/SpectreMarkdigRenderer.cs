@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.RegularExpressions;
 using Markdig;
 using Markdig.Extensions.Tables;
 using Markdig.Renderers;
@@ -24,10 +25,27 @@ public sealed class SpectreMarkdigRenderer
     public string RenderToString(string markdown)
     {
         _sb.Clear();
+        // Convert [image: url] and [image](url) to standard markdown image syntax
+        var processed = PreProcessImageTags(markdown);
         var pipeline = new MarkdownPipelineBuilder().UseAdvancedExtensions().Build();
-        var doc = Markdig.Markdown.Parse(markdown, pipeline);
+        var doc = Markdig.Markdown.Parse(processed, pipeline);
         Render(doc);
         return _sb.ToString();
+    }
+
+    private static string PreProcessImageTags(string text)
+    {
+        // [image: http://...]  →  ![image](http://...)
+        // [image](http://...)  →  ![image](http://...)
+        text = Regex.Replace(text,
+            @"\[image:\s*(https?://[^\]]+)\]",
+            "![image]($1)",
+            RegexOptions.IgnoreCase | RegexOptions.Multiline);
+        text = Regex.Replace(text,
+            @"\[image\]\((https?://[^)]+)\)",
+            "![image]($1)",
+            RegexOptions.IgnoreCase | RegexOptions.Multiline);
+        return text;
     }
 
     private void RenderBlock(Block block)
@@ -372,19 +390,7 @@ public sealed class SpectreMarkdigRenderer
                 if (link.IsImage)
                 {
                     var alt = GetLiteralText(link);
-                    var term = Environment.GetEnvironmentVariable("TERM_PROGRAM") ?? "";
-                    var kittySupported = term.Contains("kitty", StringComparison.OrdinalIgnoreCase)
-                        || Environment.GetEnvironmentVariable("KITTY_WINDOW_ID") != null;
-                    var iterm2Supported = term.Contains("iTerm", StringComparison.OrdinalIgnoreCase);
-                    if (kittySupported || iterm2Supported)
-                    {
-                        var proto = kittySupported ? "Kitty" : "iTerm2";
-                        buf.Append($"[dim][{proto} 图片: {EscapeMarkup(alt)} ({EscapeMarkup(url)})[/]");
-                    }
-                    else
-                    {
-                        buf.Append($"[grey][🖼 {EscapeMarkup(alt)}][/]");
-                    }
+                    buf.Append(ImageRenderer.GetImageMarkup(url, alt));
                 }
                 else
                 {

@@ -69,14 +69,15 @@ public sealed class ChatRenderer
     public static string MdToPanelContent(string text)
     {
         if (string.IsNullOrWhiteSpace(text)) return "";
+        var hasImages = text.Contains("![") || text.Contains("[image:");
         var hash = text.GetHashCode();
-        if (_renderCache.TryGetValue(hash, out var cached))
+        if (!hasImages && _renderCache.TryGetValue(hash, out var cached))
             return cached;
         try
         {
             var result = new SpectreMarkdigRenderer().RenderToString(text);
             if (result.Length == 0) return "";
-            if (_renderCache.Count < MaxRenderCacheEntries)
+            if (!hasImages && _renderCache.Count < MaxRenderCacheEntries)
                 _renderCache[hash] = result;
             return result;
         }

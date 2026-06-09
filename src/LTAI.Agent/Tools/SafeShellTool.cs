@@ -24,15 +24,19 @@ public sealed class SafeShellTool
     private readonly string _ws;
     private readonly HashSet<string>? _allowList;
     private readonly IHttpClientFactory? _httpFactory;
+    private readonly ToolTrustService? _trust;
 
     /// <param name="ws">工作目录，所有命令在此执行。</param>
     /// <param name="allowList">可选白名单，null=允许所有命令。</param>
     /// <param name="httpFactory">可选，用于检测网络。</param>
-    public SafeShellTool(string ws, HashSet<string>? allowList = null, IHttpClientFactory? httpFactory = null)
+    /// <param name="trust">可选，工具信任服务。</param>
+    public SafeShellTool(string ws, HashSet<string>? allowList = null,
+        IHttpClientFactory? httpFactory = null, ToolTrustService? trust = null)
     {
         _ws = ws;
         _allowList = allowList;
         _httpFactory = httpFactory;
+        _trust = trust;
     }
 
     [Description("执行 shell 命令。用于运行编译、构建、测试、文件操作等命令行任务。\n"
@@ -51,7 +55,7 @@ public sealed class SafeShellTool
         [Description("用户确认标记，设为 true 才执行")] bool confirm = false)
     {
         // 用户确认检查
-        if (!confirm)
+        if (!confirm && (_trust == null || _trust.RequiresConfirm("SafeShellTool.RunCommand")))
             return $"⚠️ 需要执行 shell 命令，但尚未确认。\n命令: `{command}`\n目录: {cwd}\n"
                  + "请用户确认后重新调用，设置 confirm=true。";
 

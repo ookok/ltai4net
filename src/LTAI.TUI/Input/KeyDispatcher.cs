@@ -1,4 +1,5 @@
 using LTAI.Agent.Tools;
+using LTAI.Core.Configuration;
 using LTAI.TUI;
 using Spectre.Console;
 using System.Text;
@@ -49,18 +50,24 @@ public sealed class KeyDispatcher
         _keyTable[ConsoleKey.Enter] = HandleEnter;
         _keyTable[ConsoleKey.Backspace] = HandleBackspace;
         _keyTable[ConsoleKey.Delete] = HandleDelete;
-        _keyTable[ConsoleKey.Home] = (_, _) => { _owner._cursorCol = 0; return Task.FromResult(true); };
-        _keyTable[ConsoleKey.End] = (_, _) => { _owner._cursorCol = _owner._inputLines[_owner._cursorLine].Length; return Task.FromResult(true); };
+        _keyTable[ConsoleKey.Home] = (_, _) => { _owner._cursorCol = 0; _owner.InvalidateRendered(); return Task.FromResult(true); };
+        _keyTable[ConsoleKey.End] = (_, _) => { _owner._cursorCol = _owner._inputLines[_owner._cursorLine].Length; _owner.InvalidateRendered(); return Task.FromResult(true); };
         _keyTable[ConsoleKey.UpArrow] = HandleArrowUp;
         _keyTable[ConsoleKey.DownArrow] = HandleArrowDown;
-        _keyTable[ConsoleKey.LeftArrow] = (_, _) => { if (_owner._cursorCol > 0) _owner._cursorCol--; return Task.FromResult(true); };
-        _keyTable[ConsoleKey.RightArrow] = (_, _) => { if (_owner._cursorCol < _owner._inputLines[_owner._cursorLine].Length) _owner._cursorCol++; return Task.FromResult(true); };
+        _keyTable[ConsoleKey.LeftArrow] = (_, _) => { if (_owner._cursorCol > 0) { _owner._cursorCol--; _owner.InvalidateRendered(); } return Task.FromResult(true); };
+        _keyTable[ConsoleKey.RightArrow] = (_, _) => { if (_owner._cursorCol < _owner._inputLines[_owner._cursorLine].Length) { _owner._cursorCol++; _owner.InvalidateRendered(); } return Task.FromResult(true); };
         _keyTable[ConsoleKey.PageUp] = HandlePageUp;
         _keyTable[ConsoleKey.PageDown] = HandlePageDown;
     }
 
     public async Task<bool> HandleKeyAsync(ConsoleKeyInfo key, CancellationToken ct)
     {
+        if (_owner._questionActive)
+            return HandleQuestionKey(key, ct);
+        if (_owner._textInputActive)
+            return HandleTextInputKey(key, ct);
+        if (_owner._modelPickerActive)
+            return HandleModelPickerKey(key, ct);
         if (SlashCommands.InCascadeMenu)
             return HandleCascade(key, ct);
         if (_owner._viewPickerActive)
@@ -69,12 +76,14 @@ public sealed class KeyDispatcher
         // Pending confirmation modal
         if (ChatLayout.PendingConfirmTcs is { Task.IsCompleted: false } tcs)
         {
-            if (ConfirmationModal.HandleConfirmKey(key, out var choice))
+            if (ConfirmationModal.HandleConfirmKey(key, out var choice, out var selChanged))
                 tcs.TrySetResult(choice);
+            if (selChanged)
+                _owner.ReRenderConfirmation();
             return true;
         }
 
-        if (State == InputState.Picker)
+        if (_owner._pickerActive)
             return await HandlePickerAsync(key, ct);
 
         // 视图切换快捷键（空输入时）
@@ -128,6 +137,7 @@ public sealed class KeyDispatcher
                 _owner._pendingSearchTerm += key.KeyChar;
                 _owner._statusMessage = $"[yellow]🔍 搜索: {_owner._pendingSearchTerm}|[/]";
             }
+            _owner.InvalidateRendered();
             return true;
         }
 
@@ -172,6 +182,7 @@ public sealed class KeyDispatcher
         {
             _owner._statusMessage = "[yellow]没有可复制的代码块[/]";
         }
+        _owner.InvalidateRendered();
         return Task.FromResult(true);
     }
 
@@ -197,17 +208,17 @@ public sealed class KeyDispatcher
 
     private Task<bool> HandleCommandPalette(ConsoleKeyInfo key, CancellationToken ct)
     {
-        // Set a flag and show prompt in status bar; next keystrokes capture input
         _owner._pendingChatRequest = "command-palette";
         _owner._statusMessage = "[yellow]⚡ 快速命令: |[/]";
+        _owner.InvalidateRendered();
         return Task.FromResult(true);
     }
 
     private Task<bool> HandleInlineSearch(ConsoleKeyInfo key, CancellationToken ct)
     {
-        // Show search prompt in status bar; next keystrokes capture search term
         _owner._pendingSearchTerm = "";
         _owner._statusMessage = "[yellow]🔍 搜索: |[/]";
+        _owner.InvalidateRendered();
         return Task.FromResult(true);
     }
 
@@ -222,10 +233,14 @@ public sealed class KeyDispatcher
             _owner._cursorLine--;
             _owner._cursorCol = _owner._inputLines[_owner._cursorLine].Length;
             while (_owner._inputLines.Count > ChatLayout.MaxInputLines)
+            {
                 _owner._inputLines.RemoveAt(0);
+                _owner._cursorLine = Math.Max(0, _owner._cursorLine - 1);
+            }
             _owner._statusMessage = $"[green]已粘贴 {clip.Length} 字符 ({clipLines.Length} 行)[/]";
         }
         catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"[KeyDispatcher] paste: {ex.Message}"); }
+        _owner.InvalidateRendered();
         return Task.FromResult(true);
     }
 
@@ -290,6 +305,7 @@ public sealed class KeyDispatcher
         {
             _owner._cursorLine--;
             _owner._cursorCol = Math.Min(_owner._cursorCol, _owner._inputLines[_owner._cursorLine].Length);
+            _owner.InvalidateRendered();
         }
         return Task.FromResult(true);
     }
@@ -300,6 +316,7 @@ public sealed class KeyDispatcher
         {
             _owner._cursorLine++;
             _owner._cursorCol = Math.Min(_owner._cursorCol, _owner._inputLines[_owner._cursorLine].Length);
+            _owner.InvalidateRendered();
         }
         return Task.FromResult(true);
     }
@@ -319,48 +336,43 @@ public sealed class KeyDispatcher
 
     private async Task<bool> HandleEnter(ConsoleKeyInfo key, CancellationToken ct)
     {
-        // Shift+Enter → send
+        // Shift+Enter → newline
         if (Mods(key, ConsoleModifiers.Shift))
         {
-            var input = _owner.GetInputText().Trim();
-            _owner.ClearInput();
-            _owner._scrollOffset = 0;
-            if (string.IsNullOrEmpty(input)) return true;
-
-            _owner.SaveToHistory(input);
-            _owner._historyIndex = -1;
-
-            if (input.StartsWith('/'))
+            var line = _owner._inputLines[_owner._cursorLine];
+            var remainder = line[_owner._cursorCol..];
+            _owner._inputLines[_owner._cursorLine] = line[.._owner._cursorCol];
+            _owner._inputLines.Insert(_owner._cursorLine + 1, remainder);
+            _owner._cursorLine++;
+            _owner._cursorCol = 0;
+            if (_owner._inputLines.Count > ChatLayout.MaxInputLines)
             {
-                var handled = await _owner.HandleSlashCommandAsync(input).ConfigureAwait(false);
-                if (!handled) return false;
-                var pending = SlashCommands.PendingInput;
-                if (pending != null)
-                {
-                    SlashCommands.PendingInput = null;
-                    _owner.SetInput(pending);
-                }
-                return true;
+                _owner._inputLines.RemoveRange(0, _owner._inputLines.Count - ChatLayout.MaxInputLines);
+                _owner._cursorLine = _owner._inputLines.Count - 1;
             }
-
-            lock (_owner._history) _owner._history.Add(("user", null, input, null));
-            _owner.TrimHistory();
-            await _owner._messageQueue.Writer.WriteAsync(input, ct).ConfigureAwait(false);
             return true;
         }
 
-        // Plain Enter → newline
-        var line = _owner._inputLines[_owner._cursorLine];
-        var remainder = line[_owner._cursorCol..];
-        _owner._inputLines[_owner._cursorLine] = line[.._owner._cursorCol];
-        _owner._inputLines.Insert(_owner._cursorLine + 1, remainder);
-        _owner._cursorLine++;
-        _owner._cursorCol = 0;
-        if (_owner._inputLines.Count > ChatLayout.MaxInputLines)
+        // Plain Enter → send
+        var input = _owner.GetInputText().Trim();
+        _owner.ClearInput();
+        _owner._scrollOffset = 0;
+        if (string.IsNullOrEmpty(input)) return true;
+
+        _owner.SaveToHistory(input);
+        _owner._historyIndex = -1;
+
+        if (input.StartsWith('/'))
         {
-            _owner._inputLines.RemoveRange(0, _owner._inputLines.Count - ChatLayout.MaxInputLines);
-            _owner._cursorLine = _owner._inputLines.Count - 1;
+            // Queue to main loop — avoids Spectre.Console concurrent guard
+            // (LiveDisplayContext is on main thread; slash commands may use AnsiConsole)
+            await _owner._messageQueue.Writer.WriteAsync("/!" + input, ct).ConfigureAwait(false);
+            return true;
         }
+
+        lock (_owner._history) _owner._history.Add(("user", null, input, null));
+        _owner.TrimHistory();
+        await _owner._messageQueue.Writer.WriteAsync(input, ct).ConfigureAwait(false);
         return true;
     }
 
@@ -383,6 +395,7 @@ public sealed class KeyDispatcher
             _owner._inputLines[_owner._cursorLine] = line + nextLine;
             _owner._inputLines.RemoveAt(_owner._cursorLine + 1);
         }
+        _owner.InvalidateRendered();
         return Task.FromResult(true);
     }
 
@@ -400,12 +413,34 @@ public sealed class KeyDispatcher
             if (key.Key == ConsoleKey.UpArrow || (key.Key == ConsoleKey.K && _owner._pickerFilter.Length == 0))
             {
                 if (_owner._pickerItems.Count > 0)
-                    _owner._pickerSelectedIdx = (_owner._pickerSelectedIdx - 1 + _owner._pickerItems.Count) % _owner._pickerItems.Count;
+                {
+                    if (_owner._pickerSelectedIdx > 0)
+                        _owner._pickerSelectedIdx--;
+                    else
+                    {
+                        var ws = _owner.CalculatePickerWindowSize();
+                        _owner._pickerSelectedIdx = _owner._pickerItems.Count - 1;
+                        _owner._pickerScrollOffset = Math.Max(0, _owner._pickerItems.Count - ws);
+                    }
+                    if (_owner._pickerSelectedIdx < _owner._pickerScrollOffset)
+                        _owner._pickerScrollOffset = _owner._pickerSelectedIdx;
+                }
             }
             else if (key.Key == ConsoleKey.DownArrow || (key.Key == ConsoleKey.J && _owner._pickerFilter.Length == 0))
             {
                 if (_owner._pickerItems.Count > 0)
-                    _owner._pickerSelectedIdx = (_owner._pickerSelectedIdx + 1) % _owner._pickerItems.Count;
+                {
+                    if (_owner._pickerSelectedIdx < _owner._pickerItems.Count - 1)
+                        _owner._pickerSelectedIdx++;
+                    else
+                    {
+                        _owner._pickerSelectedIdx = 0;
+                        _owner._pickerScrollOffset = 0;
+                    }
+                    var ws = _owner.CalculatePickerWindowSize();
+                    if (_owner._pickerSelectedIdx >= _owner._pickerScrollOffset + ws)
+                        _owner._pickerScrollOffset = _owner._pickerSelectedIdx - ws + 1;
+                }
             }
             else if (key.Key == ConsoleKey.Enter)
             {
@@ -451,6 +486,8 @@ public sealed class KeyDispatcher
 
         if (pickerDone)
         {
+            var filter = _owner._pickerFilter;
+
             lock (_owner._pickerLock)
             {
                 _owner._pickerActive = false;
@@ -458,15 +495,106 @@ public sealed class KeyDispatcher
                 _owner._pickerFilter = "";
                 _owner._pickerItems = new();
                 _owner._pickerSelectedIdx = -1;
+                _owner._pickerScrollOffset = 0;
             }
+
             _owner.ClearInput();
+
             if (pickerResult != null)
             {
-                var handled = await _owner.HandleSlashCommandAsync(pickerResult).ConfigureAwait(false);
-                if (!handled) return false;
+                await _owner._messageQueue.Writer.WriteAsync("/!" + pickerResult, ct).ConfigureAwait(false);
+            }
+            else if (!string.IsNullOrEmpty(filter))
+            {
+                await _owner._messageQueue.Writer.WriteAsync("/!/" + filter, ct).ConfigureAwait(false);
             }
         }
 
+        return true;
+    }
+
+    // ═══════════════════════════════════════════════
+    //  Model picker
+    // ═══════════════════════════════════════════════
+
+    private bool HandleModelPickerKey(ConsoleKeyInfo key, CancellationToken ct)
+    {
+        var isInputMode = _owner._modelPickerItems.Count == 0
+            && !string.IsNullOrEmpty(_owner._modelPickerApiKeyEnvVar);
+
+        if (isInputMode)
+        {
+            if (key.Key == ConsoleKey.Enter)
+            {
+                var keyText = _owner._modelPickerInputBuffer.Trim();
+                if (keyText.Length > 0)
+                {
+                    SecretManager.Set(_owner._modelPickerApiKeyEnvVar, keyText);
+                    _owner._modelPickerActive = false;
+                    _owner._modelPickerApiKeyEnvVar = "";
+                    _owner._modelPickerInputBuffer = "";
+                    var cmd = $"/model {_owner._modelPickerLayer} {_owner._modelPickerProvider}";
+                    _owner._messageQueue.Writer.TryWrite("/!" + cmd);
+                }
+                _owner.InvalidateRendered();
+                return true;
+            }
+            if (key.Key == ConsoleKey.Escape)
+            {
+                _owner._modelPickerActive = false;
+                _owner._modelPickerApiKeyEnvVar = "";
+                _owner._modelPickerInputBuffer = "";
+                _owner.InvalidateRendered();
+                return true;
+            }
+            if (key.Key == ConsoleKey.Backspace && _owner._modelPickerInputBuffer.Length > 0)
+            {
+                _owner._modelPickerInputBuffer = _owner._modelPickerInputBuffer[..^1];
+                _owner.InvalidateRendered();
+                return true;
+            }
+            if (!char.IsControl(key.KeyChar))
+            {
+                _owner._modelPickerInputBuffer += key.KeyChar;
+                _owner.InvalidateRendered();
+                return true;
+            }
+            return true;
+        }
+
+        if (key.Key == ConsoleKey.UpArrow)
+        {
+            if (_owner._modelPickerSelectedIdx > 0)
+                _owner._modelPickerSelectedIdx--;
+            _owner.InvalidateRendered();
+            return true;
+        }
+        if (key.Key == ConsoleKey.DownArrow)
+        {
+            if (_owner._modelPickerSelectedIdx < _owner._modelPickerItems.Count - 1)
+                _owner._modelPickerSelectedIdx++;
+            _owner.InvalidateRendered();
+            return true;
+        }
+        if (key.Key == ConsoleKey.Enter)
+        {
+            var idx = _owner._modelPickerSelectedIdx;
+            if (idx >= 0 && idx < _owner._modelPickerItems.Count)
+            {
+                var model = _owner._modelPickerItems[idx];
+                var cmd = $"/model {_owner._modelPickerLayer} {_owner._modelPickerProvider} {model}";
+                _owner._modelPickerActive = false;
+                _owner._messageQueue.Writer.TryWrite("/!" + cmd);
+                _owner.InvalidateRendered();
+            }
+            return true;
+        }
+        if (key.Key == ConsoleKey.Escape)
+        {
+            _owner._modelPickerActive = false;
+            _owner.InvalidateRendered();
+            return true;
+        }
         return true;
     }
 
@@ -479,9 +607,8 @@ public sealed class KeyDispatcher
         if (key.Key == ConsoleKey.Q && Mods(key, ConsoleModifiers.Control))
         {
             SlashCommands.CloseCascadeMenu();
-            _owner._history.RemoveAll(x => x.role == "cmd");
-            if (_owner._history.Count > 0)
-                _owner._history.Add(("cmd", null, "[dim]───[/]", null));
+            _owner._cascadeActive = false;
+            _owner.InvalidateRendered();
             _owner.InvalidateRendered();
             return true;
         }
@@ -493,23 +620,238 @@ public sealed class KeyDispatcher
             if (p != null)
             {
                 SlashCommands.PendingInput = null;
-                _owner.SetInput(p);
+                _owner._messageQueue.Writer.TryWrite("/!" + p);
             }
-            _owner._history.RemoveAll(x => x.role == "cmd");
-            if (_owner._history.Count > 0)
-                _owner._history.Add(("cmd", null, "[dim]───[/]", null));
+            else if (SlashCommands.PendingTextPrompt != null)
+            {
+                _owner._textInputPrompt = SlashCommands.PendingTextPrompt!;
+                _owner._textInputIsSecret = SlashCommands.PendingTextIsSecret;
+                _owner._textInputPrefix = SlashCommands.PendingTextPrefix ?? "";
+                _owner._textInputBuffer = "";
+                _owner._textInputActive = true;
+                SlashCommands.PendingTextPrompt = null;
+                SlashCommands.PendingTextIsSecret = false;
+                SlashCommands.PendingTextPrefix = null;
+            }
+            _owner._cascadeActive = false;
+            _owner.InvalidateRendered();
             _owner.InvalidateRendered();
             return true;
         }
 
-        // Update cascade display
-        lock (_owner._history)
-        {
-            if (_owner._history.Count > 0 && _owner._history[^1].role == "cmd")
-                _owner._history[^1] = ("cmd", null, SlashCommands.BuildCascadeText(), null);
-        }
+        // Cascade display updated — trigger re-render
+        _owner.InvalidateRendered();
         _owner.InvalidateRendered();
         return true;
+    }
+
+    // ═══════════════════════════════════════════════
+    //  Text input overlay (replaces AnsiConsole.Prompt)
+    // ═══════════════════════════════════════════════
+
+    private bool HandleTextInputKey(ConsoleKeyInfo key, CancellationToken ct)
+    {
+        if (key.Key == ConsoleKey.Enter)
+        {
+            var input = _owner._textInputBuffer.Trim();
+            var tcs = _owner._textInputTcs;
+            if (tcs != null)
+            {
+                // TCS mode (UserInputService.PromptAsync)
+                tcs.TrySetResult(input);
+                _owner._textInputTcs = null;
+            }
+            else
+            {
+                // Cascade mode — queue as slash command
+                if (input.Length > 0)
+                {
+                    var cmd = _owner._textInputPrefix + " " + input;
+                    _owner._messageQueue.Writer.TryWrite("/!" + cmd);
+                }
+            }
+            _owner._textInputActive = false;
+            _owner._textInputBuffer = "";
+            _owner._textInputPrefix = "";
+            _owner._textInputPrompt = "";
+            _owner._textInputTcs = null;
+            _owner.InvalidateRendered();
+            return true;
+        }
+        if (key.Key == ConsoleKey.Escape)
+        {
+            var tcs = _owner._textInputTcs;
+            if (tcs != null)
+                tcs.TrySetResult(null);
+            _owner._textInputActive = false;
+            _owner._textInputBuffer = "";
+            _owner._textInputPrefix = "";
+            _owner._textInputPrompt = "";
+            _owner._textInputTcs = null;
+            _owner.InvalidateRendered();
+            return true;
+        }
+        if (key.Key == ConsoleKey.Backspace && _owner._textInputBuffer.Length > 0)
+        {
+            _owner._textInputBuffer = _owner._textInputBuffer[..^1];
+            _owner.InvalidateRendered();
+            return true;
+        }
+        if (!char.IsControl(key.KeyChar))
+        {
+            _owner._textInputBuffer += key.KeyChar;
+            _owner.InvalidateRendered();
+            return true;
+        }
+        return true;
+    }
+
+    // ═══════════════════════════════════════════════
+    //  Question overlay (replaces AnsiConsole.Prompt)
+    // ═══════════════════════════════════════════════
+
+    private bool HandleQuestionKey(ConsoleKeyInfo key, CancellationToken ct)
+    {
+        var q = _owner._currentQuestionPrompt;
+        if (q == null) { _owner._questionActive = false; _owner.InvalidateRendered(); return true; }
+
+        if (q.Options.Count > 0)
+        {
+            if (q.Multiple)
+                return HandleQuestionMultiChoice(key, q);
+            else
+                return HandleQuestionSingleChoice(key, q);
+        }
+
+        // Free-text question
+        if (key.Key == ConsoleKey.Enter)
+        {
+            CompleteQuestion(new[] { _owner._questionInput.Trim() });
+            return true;
+        }
+        if (key.Key == ConsoleKey.Escape)
+        {
+            CompleteQuestion(new[] { "(跳过)" });
+            return true;
+        }
+        if (key.Key == ConsoleKey.Backspace && _owner._questionInput.Length > 0)
+        {
+            _owner._questionInput = _owner._questionInput[..^1];
+            _owner.InvalidateRendered();
+            return true;
+        }
+        if (!char.IsControl(key.KeyChar))
+        {
+            _owner._questionInput += key.KeyChar;
+            _owner.InvalidateRendered();
+            return true;
+        }
+        return true;
+    }
+
+    private bool HandleQuestionSingleChoice(ConsoleKeyInfo key, QuestionPrompt q)
+    {
+        var letter = (char)('a' + Array.IndexOf(q.Options.ToArray(), q.Options.FirstOrDefault()));
+        var idx = key.KeyChar >= 'a' && key.KeyChar <= 'z'
+            ? key.KeyChar - 'a'
+            : -1;
+
+        if (idx >= 0 && idx < q.Options.Count)
+        {
+            CompleteQuestion(new[] { q.Options[idx].Label });
+            return true;
+        }
+
+        if (key.KeyChar == 'c')
+        {
+            // Switch to custom text input
+            PromptCustomAnswer(q);
+            return true;
+        }
+
+        if (key.Key == ConsoleKey.Enter && _owner._questionInput.Length > 0)
+        {
+            CompleteQuestion(new[] { _owner._questionInput.Trim() });
+            return true;
+        }
+
+        if (key.Key == ConsoleKey.Escape)
+        {
+            CompleteQuestion(new[] { "(跳过)" });
+            return true;
+        }
+
+        return true;
+    }
+
+    private bool HandleQuestionMultiChoice(ConsoleKeyInfo key, QuestionPrompt q)
+    {
+        if (key.Key == ConsoleKey.Enter)
+        {
+            CompleteQuestion(_owner._questionMultiSelection.Count > 0
+                ? _owner._questionMultiSelection.ToArray()
+                : new[] { "(跳过)" });
+            return true;
+        }
+
+        if (key.KeyChar == 'c')
+        {
+            PromptCustomAnswer(q);
+            return true;
+        }
+
+        if (key.KeyChar >= '1' && key.KeyChar <= '9')
+        {
+            var idx = key.KeyChar - '1';
+            if (idx < q.Options.Count)
+            {
+                var label = q.Options[idx].Label;
+                if (_owner._questionMultiSelection.Contains(label))
+                    _owner._questionMultiSelection.Remove(label);
+                else
+                    _owner._questionMultiSelection.Add(label);
+                _owner.InvalidateRendered();
+            }
+            return true;
+        }
+
+        if (key.Key == ConsoleKey.Escape)
+        {
+            CompleteQuestion(new[] { "(跳过)" });
+            return true;
+        }
+
+        return true;
+    }
+
+    private void CompleteQuestion(IReadOnlyList<string> answer)
+    {
+        var tcs = _owner._questionTcs;
+        _owner._questionTcs = null;
+        _owner._questionActive = false;
+        _owner._questionInput = "";
+        _owner._questionMultiSelection.Clear();
+        _owner.InvalidateRendered();
+        tcs?.TrySetResult(answer);
+    }
+
+    private void PromptCustomAnswer(QuestionPrompt q)
+    {
+        // Delegate to text input overlay
+        var tcs = new TaskCompletionSource<string?>();
+        _owner._textInputPrompt = "[yellow]输入自定义回答:[/]";
+        _owner._textInputIsSecret = false;
+        _owner._textInputBuffer = "";
+        _owner._textInputTcs = tcs;
+        _owner._textInputActive = true;
+        _owner.InvalidateRendered();
+
+        // When text input completes, use result as answer
+        _ = tcs.Task.ContinueWith(t =>
+        {
+            var result = t.Result;
+            CompleteQuestion(result != null ? new[] { result } : new[] { "(跳过)" });
+        }, TaskScheduler.Default);
     }
 
     // ═══════════════════════════════════════════════

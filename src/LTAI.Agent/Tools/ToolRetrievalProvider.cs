@@ -11,6 +11,7 @@ using System.Threading.Tasks;
 using LTAI.AI;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
+using Microsoft.Shared.DiagnosticIds;
 
 namespace LTAI.Agent.Tools;
 
@@ -31,6 +32,7 @@ public sealed class ToolRetrievalProvider : AIContextProvider
     {
         "ReadFileContent", "ListTools", "ListFiles", "WebFetch", "WebSearch",
         "RunCommand", "ListDirectory", "DirectoryTree", "Glob",
+        "GetCurrentDateTime",
     };
     // 始终排除的元工具（不暴露给普通对话）
     private static readonly HashSet<string> ExcludedTools = new(StringComparer.OrdinalIgnoreCase)
@@ -57,6 +59,65 @@ public sealed class ToolRetrievalProvider : AIContextProvider
         _domainFilter = domainFilter;
         _cache = cache;
     }
+
+    // ── Override InvokingCoreAsync to REPLACE tools instead of concatenating ──
+    // MAF base class merges via a.Concat(b), which defeats ToolRetrievalProvider's
+    // filtering: every provider that returns non-null Tools doubles the list.
+    // We keep messages/instructions merge the same but substitute tools.
+#pragma warning disable MAAI001 // Experimental
+    protected override async ValueTask<AIContext> InvokingCoreAsync(
+        InvokingContext context, CancellationToken cancellationToken = default)
+    {
+        var inputContext = context.AIContext;
+
+        var filteredContext = new InvokingContext(
+            context.Agent,
+            context.Session,
+            new AIContext
+            {
+                Instructions = inputContext.Instructions,
+                Messages = inputContext.Messages is not null
+                    ? ProvideInputMessageFilter(inputContext.Messages)
+                    : null,
+                Tools = inputContext.Tools
+            });
+
+        var provided = await ProvideAIContextAsync(filteredContext, cancellationToken).ConfigureAwait(false);
+
+        var mergedInstructions = (inputContext.Instructions, provided.Instructions) switch
+        {
+            (null, null) => null,
+            (string a, null) => a,
+            (null, string b) => b,
+            (string a, string b) => a + "\n" + b
+        };
+
+        var providedMessages = provided.Messages is not null
+            ? provided.Messages.Select(m => m.WithAgentRequestMessageSource(
+                AgentRequestMessageSourceType.AIContextProvider, GetType().FullName!))
+            : null;
+
+        var mergedMessages = (inputContext.Messages, providedMessages) switch
+        {
+            (null, null) => null,
+            (var a, null) => a,
+            (null, var b) => b,
+            (var a, var b) => a.Concat(b)
+        };
+
+        // KEY FIX: Replace tools instead of concatenating.
+        // ToolRetrievalProvider selects a relevant subset for the current query.
+        // Downstream providers may add their own tools via the standard merge.
+        var mergedTools = provided.Tools ?? inputContext.Tools;
+
+        return new AIContext
+        {
+            Instructions = mergedInstructions,
+            Messages = mergedMessages,
+            Tools = mergedTools
+        };
+    }
+#pragma warning restore MAAI001
 
     protected override async ValueTask<AIContext> ProvideAIContextAsync(
         InvokingContext context, CancellationToken ct = default)
@@ -127,8 +188,6 @@ public sealed class ToolRetrievalProvider : AIContextProvider
 
         return new AIContext
         {
-            Instructions = existing.Instructions,
-            Messages = existing.Messages,
             Tools = selectedTools,
         };
     }

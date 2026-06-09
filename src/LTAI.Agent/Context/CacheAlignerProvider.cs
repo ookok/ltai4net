@@ -70,7 +70,13 @@ public sealed class CacheAlignerProvider : AIContextProvider
             aiContext.Tools = sorted.AsReadOnly();
         }
 
-        return ValueTask.FromResult(aiContext);
+        // Return without Tools: sorting was done in-place on inputContext.Tools,
+        // so base class merge keeps the already-sorted list without duplicating it.
+        return ValueTask.FromResult(new AIContext
+        {
+            Instructions = aiContext.Instructions,
+            Messages = aiContext.Messages,
+        });
     }
 
     private static string Normalize(string s)

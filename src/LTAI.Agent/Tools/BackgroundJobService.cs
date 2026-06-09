@@ -28,6 +28,7 @@ public sealed class BackgroundJobService : IDisposable
     private readonly int _expirationSeconds;
     private long _startedCount;
     private long _completedCount;
+    private readonly ToolTrustService? _trust;
 
     /// <summary>Set by ChatAgent before tool calls to scope jobs to a session.</summary>
     public static string? CurrentSessionId { get => _currentSessionId.Value; set => _currentSessionId.Value = value; }
@@ -35,9 +36,10 @@ public sealed class BackgroundJobService : IDisposable
     private string EffectiveSession => CurrentSessionId ?? "default";
 
     /// <summary>Default 60s cleanup for completed jobs. Override via constructor.</summary>
-    public BackgroundJobService(int expirationSeconds = 60)
+    public BackgroundJobService(int expirationSeconds = 60, ToolTrustService? trust = null)
     {
         _expirationSeconds = Math.Max(10, expirationSeconds);
+        _trust = trust;
     }
 
     public event Action<string, JobEntry>? JobCompleted;
@@ -53,7 +55,7 @@ public sealed class BackgroundJobService : IDisposable
         [Description("Shell 命令")] string command,
         [Description("确认执行。此命令不受沙箱限制，有安全风险。")] bool confirm = false)
     {
-        if (!confirm)
+        if (!confirm && (_trust == null || _trust.RequiresConfirm("BackgroundJobService.StartJob")))
             return "⛔ 后台作业已取消：StartJob 不受沙箱限制，需设置 confirm=true 确认后执行。";
 
         var id = Interlocked.Increment(ref _nextJobId).ToString();

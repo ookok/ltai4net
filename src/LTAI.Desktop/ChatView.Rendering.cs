@@ -78,7 +78,7 @@ public sealed partial class ChatView : UserControl
         s.Children.Add(stb);
 
         b.Child = s;
-        _outputStack.Items.Add(b);
+        _outputStack.Children.Add(b);
     }
 
     private StackPanel AddAIBubbleHeader()
@@ -98,7 +98,7 @@ public sealed partial class ChatView : UserControl
         s.Children.Add(headerRow);
 
         b.Child = s;
-        _outputStack.Items.Add(b);
+        _outputStack.Children.Add(b);
         return s;
     }
 
@@ -148,7 +148,7 @@ public sealed partial class ChatView : UserControl
                 _input.CaretIndex = title.Length;
                 _ = SendAsync();
             };
-            _outputStack.Items.Add(card);
+            _outputStack.Children.Add(card);
         }
     }
 }

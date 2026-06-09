@@ -14,6 +14,7 @@ partial class ChatLayout
         _inputLines.Add("");
         _cursorLine = 0;
         _cursorCol = 0;
+        InvalidateRendered();
     }
 
     internal void SetInput(string text)
@@ -24,6 +25,7 @@ partial class ChatLayout
         _inputLines.AddRange(lines);
         _cursorLine = _inputLines.Count - 1;
         _cursorCol = _inputLines[^1].Length;
+        InvalidateRendered();
     }
 
     internal void InsertChar(char c)
@@ -31,6 +33,7 @@ partial class ChatLayout
         var line = _inputLines[_cursorLine];
         _inputLines[_cursorLine] = line.Insert(_cursorCol, c.ToString());
         _cursorCol++;
+        InvalidateRendered();
     }
 
     internal void BackspaceChar()
@@ -49,6 +52,7 @@ partial class ChatLayout
             _inputLines.RemoveAt(_cursorLine);
             _cursorLine--;
         }
+        InvalidateRendered();
     }
 
     internal void ReplaceInputLine(string text)
@@ -57,6 +61,7 @@ partial class ChatLayout
         _inputLines.Add(text);
         _cursorLine = 0;
         _cursorCol = text.Length;
+        InvalidateRendered();
     }
 
     internal void SaveToHistory(string input)
@@ -78,6 +83,7 @@ partial class ChatLayout
                 _pickerFilter = "";
                 _pickerItems = SlashCommands.GetSuggestionItems("/");
                 _pickerSelectedIdx = _pickerItems.Count > 0 ? 0 : -1;
+                _pickerScrollOffset = 0;
             }
             return true;
         }
@@ -92,5 +98,6 @@ partial class ChatLayout
             : SlashCommands.GetSuggestionItems("/");
         if (_pickerSelectedIdx >= _pickerItems.Count) _pickerSelectedIdx = _pickerItems.Count - 1;
         if (_pickerSelectedIdx < 0 && _pickerItems.Count > 0) _pickerSelectedIdx = 0;
+        _pickerScrollOffset = 0;
     }
 }

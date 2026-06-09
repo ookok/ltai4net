@@ -70,7 +70,6 @@ public sealed class LLMConfigPanel
         var options = KnownProviders
             .Where(kv => !string.IsNullOrEmpty(kv.Value.EnvVar))
             .Select(kv => kv.Key)
-            .Prepend("[yellow]Enter a custom API key manually[/]")
             .ToList();
 
         var choice = AnsiConsole.Prompt(
@@ -80,20 +79,7 @@ public sealed class LLMConfigPanel
                 .MoreChoicesText("[grey](scroll down for more)[/]")
                 .AddChoices(options));
 
-        if (choice == "[yellow]Enter a custom API key manually[/]")
-        {
-            var envVar = AnsiConsole.Ask<string>("[yellow]Environment variable name:[/]");
-            var key = AnsiConsole.Prompt(new TextPrompt<string>($"[yellow]API Key value:[/]").Secret());
-            if (!string.IsNullOrEmpty(envVar) && !string.IsNullOrEmpty(key))
-            {
-                Environment.SetEnvironmentVariable(envVar, key);
-                var providerName = envVar.Replace("_API_KEY", "").Replace("_KEY", "");
-                RegisterProviderWithRouter(providerName, envVar, key);
-                _provider = providerName;
-                AnsiConsole.MarkupLine($"[green]✅ Set {envVar}[/]");
-            }
-        }
-        else if (KnownProviders.TryGetValue(choice, out var info))
+        if (KnownProviders.TryGetValue(choice, out var info))
         {
             var key = AnsiConsole.Prompt(new TextPrompt<string>($"[yellow]Enter {choice} API Key:[/]").Secret());
             if (!string.IsNullOrEmpty(key))
@@ -117,8 +103,16 @@ public sealed class LLMConfigPanel
         try
         {
             var client = OpenAIChatClientFactory.Create(info.Endpoint, info.Model, apiKey);
+            // Register under the provider name AND the layer keys ("l1", "l2")
+            // so both layer-based routing (from _routingFallback = "l1") and
+            // provider-specific lookups work immediately.
             _router.Register(name, client);
+            _router.Register("l1", client);
+            if (!string.IsNullOrEmpty(_l2Model))
+                _router.Register("l2", client);
             _router.ActiveProvider = name;
+            var model = !string.IsNullOrEmpty(_l1Model) ? _l1Model : info.Model;
+            UsageTracker.SetActiveModel(model);
             AnsiConsole.MarkupLine($"[green]✓ {name} registered and ready[/]");
         }
         catch (Exception ex)
@@ -162,9 +156,9 @@ public sealed class LLMConfigPanel
 
         var table = new Table().Border(TableBorder.Rounded);
         table.AddColumn("Layer"); table.AddColumn("Provider"); table.AddColumn("Model");
-        table.AddRow("L0 (嵌入) [dim](可选项)[/]", "[dim]内置 ONNX / API[/]", "[dim]本地 ONNX 模型[/]");
-        table.AddRow("[bold]L1 (Flash)[/]", _l1Model, "Ready [green](必需)[/]");
-        table.AddRow("L2 (Pro) [dim](可选项)[/]", _l2Model, "Ready");
+        table.AddRow("L0 向量模型（长江苦力一号）[dim](可选项)[/]", "[dim]内置 ONNX / API[/]", "[dim]本地 ONNX 模型[/]");
+        table.AddRow("[bold]L1 快速反应模型（长江苦力二号）[/]", _l1Model, "Ready [green](必需)[/]");
+        table.AddRow("L2 深度推理模型（长江苦力三号）[dim](可选项)[/]", _l2Model, "Ready");
         var hasSteerKey = KnownKeys.All.Any(k => k.EnvVar == "STEER_API_KEY" && !string.IsNullOrEmpty(Environment.GetEnvironmentVariable(k.EnvVar)));
         table.AddRow("Steer [dim](可选项)[/]", hasSteerKey ? "[green]已配置[/]" : "[dim]未配置[/]", hasSteerKey ? "SiliconFlow / Qwen2.5-7B" : "[dim]由 L1 替代[/]");
         AnsiConsole.Write(table);
@@ -296,7 +290,15 @@ public sealed class LLMConfigPanel
             .Title($"[yellow]Select {layer} model ({chosen}):[/]").PageSize(15).AddChoices(models));
 
         SaveLayerSelection(layer, chosen, model);
-        if (layer == "L1") _l1Model = model; else _l2Model = model;
+        if (layer == "L1")
+        {
+            _l1Model = model;
+            UsageTracker.SetActiveModel(model);
+        }
+        else
+        {
+            _l2Model = model;
+        }
 
         if (_router != null)
         {

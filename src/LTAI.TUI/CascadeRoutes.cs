@@ -29,8 +29,8 @@ public static class CascadeRoutes
             ("model", "download" or "delete") when stack.Length == 2 => null, // already has dynamic list
             // ── 三级级联: l0 api <provider> 后输入模型名 ──
             ("model", _) when stack is ["l0", "api", _] => "[yellow]输入嵌入模型名称 (或直接 Enter 查看列表):[/]",
-            // ── l1/l2 + <provider> 后输入模型名 ──
-            ("model", _) when stack is ["l1", _] or ["l2", _] => "[yellow]输入模型名称 (或直接 Enter 查看列表):[/]",
+            // ── l1/l2 + <provider>: cascade closes → HandleLayerSelectComplete fetches model list via API → model picker ──
+            ("model", _) when stack is ["l1", _] or ["l2", _] => null,
             // ── config apikey: 选择 provider 后输入 key ──
             ("config", "apikey") when stack.Length == 1 => null, // next level shows provider list
             ("config", _) when stack is ["apikey", _] => "[yellow]输入 API Key:[/]",
@@ -45,7 +45,7 @@ public static class CascadeRoutes
     static Node? ResolveModel(string[] stack)
     {
         if (stack.Length == 0)
-            return new(new[] { "l0  嵌入模型", "l1  对话模型", "l2  推理模型" },
+            return new(new[] { "l0  向量模型（长江苦力一号）", "l1  快速反应模型（长江苦力二号）", "l2  深度推理模型（长江苦力三号）" },
                 picked => picked == "l0" ? "l0" : picked);
 
         if (stack[0] == "l0")

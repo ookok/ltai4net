@@ -81,9 +81,10 @@ public static class Program
 
         var config = new ConfigurationBuilder()
             .SetBasePath(AppContext.BaseDirectory)
-            .AddJsonFile("appsettings.json", optional: true)
+            .AddJsonFile("appsettings.json", optional: true, reloadOnChange: true)
             .Build();
 
+        services.AddSingleton<IConfigurationRoot>(config);
         services.Configure<LTAIOptions>(config.GetSection(LTAIOptions.SectionName));
         services.AddLTAICore();
         services.AddLTAIAI();
@@ -94,11 +95,19 @@ public static class Program
         // Warm up in background while showing splash
         var sp = await Task.Run(() =>
         {
-            var sp = services.BuildServiceProvider();
-            // Force eager resolve of key singletons in background thread
-            _ = sp.GetRequiredService<ChatAgent>();
-            _ = sp.GetRequiredService<MultiProviderChatClient>();
-            return sp;
+            try
+            {
+                var sp = services.BuildServiceProvider();
+                return sp;
+            }
+            catch (Exception ex)
+            {
+                AnsiConsole.MarkupLine($"[red]服务初始化失败:[/] {ex.Message.EscapeMarkup()}");
+                AnsiConsole.MarkupLine("[grey]请检查配置后重试。按 Enter 退出。[/]");
+                Console.ReadLine();
+                Environment.Exit(1);
+                throw; // unreachable
+            }
         });
 
         var options = sp.GetRequiredService<IOptions<LTAIOptions>>();
@@ -182,7 +191,6 @@ public static class Program
             sp.GetRequiredService<LTAI.Agent.Tools.QuestionService>(),
             new Rendering.ChatRenderer(AnsiConsole.Console),
             sp.GetService<LTAI.Agent.Memory.PalaceStore>());
-        try { Console.Clear(); } catch { /* non-interactive terminal */ }
         await app.RunAsync().ConfigureAwait(false);
     }
 
