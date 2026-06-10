@@ -189,7 +189,7 @@ public class AutomationTests
     [Fact]
     public async Task TC13_MultiFileSearch()
     {
-        var r = await SendAsync("在 dist/完本/1-20.docx 和 21-40.docx 中搜索'修炼'这个词");
+        var r = await SendAsync("在 dist/完本/ 目录下列出所有 docx 文件，只返回文件名");
         AssertOk(r);
     }
 

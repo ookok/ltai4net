@@ -137,6 +137,30 @@ try
         return card is null ? Results.NotFound() : Results.Ok(card);
     });
 
+    // ── Todo / Mode REST surface (AgentModeObserver bridge) ──
+    app.MapGet("/ltai/v1/todos", () =>
+    {
+        var remaining = LTAI.Agent.Tooling.AgentModeObserver.RemainingTodos;
+        var total = LTAI.Agent.Tooling.AgentModeObserver.TotalTodos;
+        var summary = LTAI.Agent.Tooling.AgentModeObserver.TodoSummary;
+        return Results.Ok(new
+        {
+            remaining,
+            total,
+            summary,
+        });
+    });
+    app.MapGet("/ltai/v1/mode", () =>
+    {
+        var mode = LTAI.Agent.Tooling.AgentModeObserver.CurrentMode;
+        var icon = LTAI.Agent.Tooling.AgentModeObserver.ModeIcon;
+        return Results.Ok(new
+        {
+            mode,
+            icon,
+        });
+    });
+
     // ── P15.9: Workflow hot-reload REST surface ──
     // Companion to TUI /workflow and Desktop WorkflowsView. Backs the
     // browser DevUI page that lists/inspects/reloads hot-editable

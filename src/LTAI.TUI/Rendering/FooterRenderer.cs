@@ -62,6 +62,20 @@ public sealed class FooterRenderer
         }
         else
         {
+            // Info bar: L1 model + AgentMode
+            var l1Model = UsageTracker.ActiveModel;
+            var modeName = LTAI.Agent.Tooling.AgentModeObserver.CurrentMode;
+            var modeIcon = LTAI.Agent.Tooling.AgentModeObserver.ModeIcon;
+            var infoParts = new List<string>();
+            if (!string.IsNullOrEmpty(l1Model))
+                infoParts.Add($"⟁ {l1Model.EscapeMarkup()}");
+            if (!string.IsNullOrEmpty(modeName))
+                infoParts.Add($"{modeIcon} {modeName.EscapeMarkup()}");
+            if (infoParts.Count > 0)
+            {
+                renders.Add(new Markup($"  [{ThemeService.MutedTag}]{string.Join("  ", infoParts)}[/]"));
+            }
+
             var showWatermark = (inputLines.Count == 1 && inputLines[0].Length == 0) && isFirstEmpty;
             var cursorBlink = Environment.TickCount % 1000 < 530;
 
@@ -106,7 +120,8 @@ public sealed class FooterRenderer
         renders.Add(new Markup(statusLine));
 
         return new Panel(new Rows(renders.ToArray()))
-            .Border(BoxBorder.None)
+            .Border(BoxBorder.Rounded)
+            .Header("[bold]输入[/]")
             .Expand();
     }
 
@@ -142,12 +157,23 @@ public sealed class FooterRenderer
                     sb.Append($"{sep}[{ThemeService.ErrorTag}]上下文: {ctxText.EscapeMarkup()} ⚠[/]");
             }
 
+            // Mode + todos indicator
+            var modeName = LTAI.Agent.Tooling.AgentModeObserver.CurrentMode;
+            if (!string.IsNullOrEmpty(modeName))
+            {
+                var modeIcon = LTAI.Agent.Tooling.AgentModeObserver.ModeIcon;
+                sb.Append($"{sep}[bold]{modeIcon}[/] [{ThemeService.AccentTag}]{modeName.EscapeMarkup()}[/]");
+            }
+            var rem = LTAI.Agent.Tooling.AgentModeObserver.RemainingTodos;
+            if (rem > 0)
+                sb.Append($"{sep}📋 [bold]{rem}[/]");
+
             sb.Append($"  [{ThemeService.PrimaryTag}]{viewName}[/]");
             return sb.ToString();
         }
 
         return startupMessage != null
             ? $"[{ThemeService.WarningTag}]⚠️ {startupMessage}[/]  [{ThemeService.MutedTag}]{viewName}[/]"
-            : $"[{ThemeService.MutedTag}]等待首次请求...  输入消息开始对话[/]  [{ThemeService.PrimaryTag}]{viewName}[/]";
+            : $"[{ThemeService.MutedTag}]准备就绪[/]  [{ThemeService.PrimaryTag}]{viewName}[/]";
     }
 }

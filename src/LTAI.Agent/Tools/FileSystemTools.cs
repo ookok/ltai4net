@@ -21,15 +21,11 @@ public sealed class FileSystemTools
     private readonly string _ws;
     private readonly MmapFileProvider? _mmap;
     private readonly WriteBuffer? _writeBuf;
-    private readonly ToolTrustService? _trust;
-
-    public FileSystemTools(string ws, MmapFileProvider? mmap = null, WriteBuffer? writeBuf = null,
-        ToolTrustService? trust = null)
+    public FileSystemTools(string ws, MmapFileProvider? mmap = null, WriteBuffer? writeBuf = null)
     {
         _ws = ws;
         _mmap = mmap;
         _writeBuf = writeBuf;
-        _trust = trust;
     }
 
     // ========== READ / WRITE / LIST ==========
@@ -46,7 +42,7 @@ public sealed class FileSystemTools
     {
         try
         {
-            var (fp, denied) = PathUtils.TryResolveWithPermission(_ws, path, confirm: true);
+            var (fp, denied) = PathUtils.TryResolveWithPermission(_ws, path);
             if (denied != null)
                 return $"Path '{denied}' is outside workspace. Ask user to confirm, then retry.";
             if (fp == null) return "Error: path escape";
@@ -173,11 +169,11 @@ public sealed class FileSystemTools
         + "适用场景：复制代码文件到新位置、备份配置文件、复制目录结构。\n"
         + "不适用场景：移动文件（请用 MoveFile）、下载文件（请用 DownloadFile）。\n"
         + "关键参数：source — 源路径；destination — 目标路径。")]
-    public string CopyFile(string source, string destination, bool confirm = false)
+    public string CopyFile(string source, string destination)
     {
-        var src = Resolve(source, confirm, out var denied);
+        var src = Resolve(source, out var denied);
         if (src == null) return $"Source outside workspace: '{denied}'. Set confirm=true after user approval.";
-        var dst = Resolve(destination, confirm, out denied);
+        var dst = Resolve(destination, out denied);
         if (dst == null) return $"Destination outside workspace: '{denied}'. Set confirm=true after user approval.";
         if (!File.Exists(src) && !Directory.Exists(src)) return "Source not found";
         if (File.Exists(dst) || Directory.Exists(dst)) return "Destination already exists";
@@ -195,11 +191,11 @@ public sealed class FileSystemTools
         + "适用场景：重命名代码文件、将文件移到子目录、整理项目目录结构。\n"
         + "不适用场景：复制文件（请用 CopyFile）、跨磁盘移动会导致复制+删除。\n"
         + "关键参数：source — 源路径；destination — 目标路径。")]
-    public string MoveFile(string source, string destination, bool confirm = false)
+    public string MoveFile(string source, string destination)
     {
-        var src = Resolve(source, confirm, out var denied);
+        var src = Resolve(source, out var denied);
         if (src == null) return $"Source outside workspace: '{denied}'. Set confirm=true after user approval.";
-        var dst = Resolve(destination, confirm, out denied);
+        var dst = Resolve(destination, out denied);
         if (dst == null) return $"Destination outside workspace: '{denied}'. Set confirm=true after user approval.";
         if (!File.Exists(src) && !Directory.Exists(src)) return "Source not found";
         if (File.Exists(dst) || Directory.Exists(dst)) return "Destination already exists";
@@ -216,9 +212,9 @@ public sealed class FileSystemTools
     [Description("删除文件。用于清理项目中不再需要的文件。\n"
         + "适用场景：删除临时文件、清理旧的日志文件、删除废弃的代码文件。\n"
         + "关键参数：path — 要删除的文件路径。")]
-    public string DeleteFile(string path, bool confirm = false)
+    public string DeleteFile(string path)
     {
-        var fp = Resolve(path, confirm, out var denied);
+        var fp = Resolve(path, out var denied);
         if (fp == null) return $"Path outside workspace: '{denied}'. Set confirm=true after user approval.";
         if (!File.Exists(fp)) return "File not found";
         try { File.Delete(fp); return $"Deleted {Path.GetFileName(fp)}"; }
@@ -229,9 +225,9 @@ public sealed class FileSystemTools
         + "适用场景：删除 node_modules 目录、清理构建输出目录(obj/bin)、删除整个项目文件夹。\n"
         + "不适用场景：删除单个文件（请用 DeleteFile）。\n"
         + "关键参数：path — 目录路径；recursive — 是否递归删除非空目录。")]
-    public string DeleteDirectory(string path, bool recursive = true, bool confirm = false)
+    public string DeleteDirectory(string path, bool recursive = true)
     {
-        var fp = Resolve(path, confirm, out var denied);
+        var fp = Resolve(path, out var denied);
         if (fp == null) return $"Path outside workspace: '{denied}'. Set confirm=true after user approval.";
         if (!Directory.Exists(fp)) return "Directory not found";
         try
@@ -248,9 +244,9 @@ public sealed class FileSystemTools
         + "适用场景：查看文件大小、确认文件修改时间、检查文件类型和扩展名、统计目录条目数。\n"
         + "不适用场景：读取文件内容（请用 ReadFileContent）、列出目录文件列表（请用 ListFiles）。\n"
         + "关键参数：path — 要查询的文件或目录路径。")]
-    public string GetFileInfo(string path, bool confirm = false)
+    public string GetFileInfo(string path)
     {
-        var fp = Resolve(path, confirm, out var denied);
+        var fp = Resolve(path, out var denied);
         if (fp == null) return $"Path outside workspace: '{denied}'. Set confirm=true after user approval.";
         if (File.Exists(fp))
         {
@@ -314,9 +310,9 @@ public sealed class FileSystemTools
         + "适用场景：浏览项目整体目录结构、了解代码组织方式、查看大型项目的目录层次。\n"
         + "不适用场景：列出单层目录内容（请用 ListFiles）、搜索特定文件（请用 SearchFiles 或 Glob）。\n"
         + "关键参数：path — 根路径；maxDepth — 递归深度(1-5)；includeDeps — 是否包含依赖目录。")]
-    public async Task<string> DirectoryTree(string path = ".", int maxDepth = 2, bool includeDeps = false, bool confirm = false)
+    public async Task<string> DirectoryTree(string path = ".", int maxDepth = 2, bool includeDeps = false)
     {
-        var (root, denied) = PathUtils.TryResolveWithPermission(_ws, path, confirm);
+        var (root, denied) = PathUtils.TryResolveWithPermission(_ws, path);
         if (root == null) return $"Path outside workspace: '{denied}'. Set confirm=true after user approval.";
         if (!Directory.Exists(root)) return "Error: Directory not found";
         maxDepth = Math.Clamp(maxDepth, 1, 5);
@@ -327,11 +323,9 @@ public sealed class FileSystemTools
 
     // ========== PRIVATE HELPERS ==========
 
-    private string? Resolve(string path, bool confirm, out string? denied)
+    private string? Resolve(string path, out string? denied)
     {
-        if (!confirm && _trust != null && !_trust.RequiresConfirm("FileSystemTools.FileOp"))
-            confirm = true;
-        var (fp, d) = PathUtils.TryResolveWithPermission(_ws, path, confirm);
+        var (fp, d) = PathUtils.TryResolveWithPermission(_ws, path);
         denied = d;
         return fp;
     }

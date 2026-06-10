@@ -326,9 +326,6 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<LTAI.Agent.Tools.QuestionService>();
         services.AddSingleton<LTAI.Agent.Tools.QuestionTool>();
 
-        // P18: ToolTrustService — allows configuring tool trust (skip confirm)
-        services.AddSingleton<LTAI.Agent.Tools.ToolTrustService>();
-
         // P? ClusterSummarizer — LLM-powered clustering + summarization for
         // knowledge retrieval results. The LLM organizes many result items into
         // topical groups with a short summary per group.

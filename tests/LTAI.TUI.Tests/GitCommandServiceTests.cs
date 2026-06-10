@@ -9,28 +9,28 @@ public sealed class GitCommandServiceTests
     private readonly GitCommandService _service = new();
 
     [Fact]
-    public void Execute_GitHelp_ReturnsHelpText()
+    public async Task Execute_GitHelp_ReturnsHelpText()
     {
         var cmd = new GitCommand("");
-        var result = _service.Execute(cmd);
+        var result = await _service.ExecuteAsync(cmd);
         var success = Assert.IsType<SuccessResult>(result);
         Assert.Contains("Git 命令", success.Markup);
     }
 
     [Fact]
-    public void Execute_GitHelpExplicit_ReturnsHelpText()
+    public async Task Execute_GitHelpExplicit_ReturnsHelpText()
     {
         var cmd = new GitCommand("help");
-        var result = _service.Execute(cmd);
+        var result = await _service.ExecuteAsync(cmd);
         var success = Assert.IsType<SuccessResult>(result);
         Assert.Contains("Git 命令", success.Markup);
     }
 
     [Fact]
-    public void Execute_NonGitCommand_ReturnsOk()
+    public async Task Execute_NonGitCommand_ReturnsOk()
     {
         var cmd = new LsCommand("");
-        var result = _service.Execute(cmd);
+        var result = await _service.ExecuteAsync(cmd);
         Assert.IsType<SuccessResult>(result);
     }
 }

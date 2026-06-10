@@ -13,10 +13,9 @@ namespace LTAI.Agent;
 partial class AgentBuilder
 {
     static void RegisterFileAndTextTools(List<AITool> tools, string name, bool canRead, bool canWrite, bool canList, bool canExec, string ws,
-        Caching.MmapFileProvider? mmap = null, Caching.WriteBuffer? writeBuf = null,
-        ToolTrustService? trust = null)
+        Caching.MmapFileProvider? mmap = null, Caching.WriteBuffer? writeBuf = null)
     {
-        var fs = new FileSystemTools(ws, mmap, writeBuf, trust);
+        var fs = new FileSystemTools(ws, mmap, writeBuf);
         var text = new TextTools(ws);
         if (canRead) tools.Add(AIFunctionFactory.Create((string path) => fs.ReadFileContent(path), "ReadFileContent", "Read a file"));
         if (canWrite) tools.Add(AIFunctionFactory.Create(fs.WriteFile));
@@ -29,7 +28,7 @@ partial class AgentBuilder
             tools.Add(AIFunctionFactory.Create(fs.DeleteDirectory));
             tools.Add(AIFunctionFactory.Create(fs.GetFileInfo));
         }
-        if (canExec) tools.Add(AIFunctionFactory.Create(new SafeShellTool(ws, trust: trust).RunCommand));
+        if (canExec) tools.Add(AIFunctionFactory.Create(new SafeShellTool(ws).RunCommand));
         if (canRead && canWrite) { tools.Add(AIFunctionFactory.Create(text.EditFile)); tools.Add(AIFunctionFactory.Create(text.MultiEdit)); }
         if (canRead) tools.Add(AIFunctionFactory.Create(TextTools.RegexTest));
         if (name.StartsWith("LTAI-Chat") || name is "LTAI-Code" or "LTAI-Review" or "LTAI-Writer")
@@ -89,8 +88,8 @@ partial class AgentBuilder
 
     static void RegisterPlanAndDiagramTools(List<AITool> tools, string name, IHttpClientFactory httpFactory)
     {
-        if (name.StartsWith("LTAI-Chat") || name is "LTAI-Code" or "LTAI-Writer" or "LTAI-Frontend")
-        { tools.Add(AIFunctionFactory.Create(PlanTools.SubmitPlan)); tools.Add(AIFunctionFactory.Create(PlanTools.MarkStepComplete)); tools.Add(AIFunctionFactory.Create(PlanTools.RevisePlan)); tools.Add(AIFunctionFactory.Create(PlanTools.PlanStatus)); }
+        // Plan/todo tools now come from MAF's TodoProvider + AgentModeProvider (auto-injected by harness).
+        // Only flowchart/diagram tools are registered here.
         if (name.StartsWith("LTAI-Chat") || name is "LTAI-Code" or "LTAI-Data" or "LTAI-Writer" or "LTAI-Frontend")
         {
             var diagram = new FlowchartTools(httpFactory);

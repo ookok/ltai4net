@@ -36,6 +36,44 @@ ltai agents list          # 一览
 ltai agents show <name>   # 详细 prompt + 工具 + 权限
 ```
 
+## Prompt 架构
+
+系统 prompt 分三层拼装：
+
+```
+Layer 0: agents/system-{lang}.prompt.md  ← 公共基础（身份/风格/策略/验证）
+Layer 1: AgentPromptBuilder.cs            ← C# fallback + 语言切换
+Layer 2: agents/*.agent.md (正文)        ← 领域专属工作流
+```
+
+`system-*.prompt.md` v3 包含以下节：
+
+| 节 | 用途 |
+|---|---|
+| `<identity>` | 角色身份声明 |
+| `<tone-style>` | 输出约束（极简、无 preamble、代码引用格式） |
+| `<language>` | 双语切换规则 |
+| `<task-execution>` | 任务执行流程（TodoWrite 追踪） |
+| `<tool-strategy>` | 工具调用优先级（搜索→读取→编辑链） |
+| `<proactiveness>` | 主动性与安全边界 |
+| `<code-conventions>` | 代码风格与安全约定 |
+| `<tool-usage>` | 工具调用格式约束 |
+| `<verification>` | 生成后自动语法检查（3 层：QuickParse + RuleEngine + LSP） |
+| `<context-management>` | 上下文主动压缩策略 |
+
+### 生成时语法检查
+
+`GrammarCheckStep`（`Pipeline/Steps/GrammarCheckStep.cs`）在 agent tool 执行后自动运行：
+
+1. **第 1 层** QuickParse — Roslyn/TreeSitter AST 解析（<200ms）
+2. **第 2 层** RuleEngine — 确定性规则匹配（<300ms）
+3. **第 3 层** LSP — 语义诊断（<500ms）
+
+发现语法错误时：
+- 注入错误消息到 agent 上下文（`文件:行号:列号` 格式）
+- 设置 `GrammarCheckBlocked` 标志，阻断新任务
+- `ChatAgent` 自动重试修复（上限 2 次）
+
 ## 关键命令
 
 ```bash

@@ -104,8 +104,7 @@ public sealed class SearchTools
         [Description("Search pattern (substring or regex)")] string pattern,
         [Description("File glob pattern like '*.cs', '*.md'")] string glob = "*",
         [Description("Lines of context around each match (0-20)")] int context = 0,
-        [Description("Case sensitive search")] bool caseSensitive = false,
-        [Description("跨沙箱确认标记")] bool confirm = false)
+        [Description("Case sensitive search")] bool caseSensitive = false)
     {
         var root = ResolvePath(".");
         if (root == null) return "Error: Path escape";

@@ -49,7 +49,7 @@ public sealed class ChatRendererAdvancedTests
     [Fact]
     public void HighlightCommands_HighlightsSlashAndHash()
     {
-        var result = _renderer.HighlightCommands("/help /model #todo");
+        var result = ChatRenderer.HighlightCommands("/help /model #todo");
         Assert.NotNull(result);
         Assert.Contains("/help", result);
         Assert.Contains("#todo", result);
@@ -58,7 +58,7 @@ public sealed class ChatRendererAdvancedTests
     [Fact]
     public void MdToPanelContent_CodeFence_ReturnsFormatted()
     {
-        var result = _renderer.MdToPanelContent("```csharp\nvar x = 1;\n```");
+        var result = ChatRenderer.MdToPanelContent("```csharp\nvar x = 1;\n```");
         Assert.NotNull(result);
         Assert.NotEmpty(result);
     }
@@ -67,14 +67,14 @@ public sealed class ChatRendererAdvancedTests
     public void MdToPanelContent_Table_DoesNotThrow()
     {
         var md = "| H1 | H2 |\n|----|----|\n| A  | B  |";
-        var result = _renderer.MdToPanelContent(md);
+        var result = ChatRenderer.MdToPanelContent(md);
         Assert.NotNull(result);
     }
 
     [Fact]
     public void MdToPanelContent_UnclosedFence_DoesNotThrow()
     {
-        var result = _renderer.MdToPanelContent("```python\nprint('hello')");
+        var result = ChatRenderer.MdToPanelContent("```python\nprint('hello')");
         Assert.NotNull(result);
     }
 

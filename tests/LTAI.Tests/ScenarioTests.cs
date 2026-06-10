@@ -27,7 +27,7 @@ public class SafeShellScenarioTests
     public async Task RunCommand_InputOutput_MatchesExpected(string command, string expectedContent, bool expectSuccess)
     {
         var tool = new SafeShellTool(Directory.GetCurrentDirectory());
-        var result = await tool.RunCommand(command, confirm: true);
+        var result = await tool.RunCommand(command);
         if (expectSuccess)
             Assert.Contains(expectedContent, result, StringComparison.OrdinalIgnoreCase);
         else
@@ -35,11 +35,11 @@ public class SafeShellScenarioTests
     }
 
     [Fact]
-    public async Task RunCommand_WithoutConfirm_ReturnsWarning()
+    public async Task RunCommand_ExecutesDirectly()
     {
         var tool = new SafeShellTool(Directory.GetCurrentDirectory());
-        var result = await tool.RunCommand("echo hello", confirm: false);
-        Assert.Contains("确认", result);
+        var result = await tool.RunCommand("echo hello");
+        Assert.Contains("hello", result);
     }
 
     [Fact]
@@ -48,7 +48,7 @@ public class SafeShellScenarioTests
         var tool = new SafeShellTool(Directory.GetCurrentDirectory());
         foreach (var cmd in new[] { "echo a", "echo b", "echo c" })
         {
-            var result = await tool.RunCommand(cmd, confirm: true);
+            var result = await tool.RunCommand(cmd);
             Assert.DoesNotContain("危险", result);
         }
     }
@@ -119,6 +119,7 @@ public class SecretManagerScenarioTests
     }
 }
 
+[Collection("Locale")]
 public class LocaleScenarioTests
 {
     [Theory]
@@ -268,6 +269,7 @@ public class WorkflowI18nScenarioTests
     }
 }
 
+[Collection("Locale")]
 public class ToolDescriptionScenarioTests
 {
     [Fact]
@@ -299,12 +301,12 @@ public class ToolDescriptionScenarioTests
 public class LTAIOptionsScenarioTests
 {
     [Fact]
-    public void AIConfig_DefaultProvider_DeepSeek()
+    public void AIConfig_DefaultProvider_Null() // offline mode: all defaults are null
     {
         var config = new AIConfig();
-        Assert.Equal("deepseek", config.DefaultProvider);
-        Assert.Equal("deepseek-v4-flash", config.Model);
-        Assert.Equal("DEEPSEEK_API_KEY", config.ApiKeyEnv);
+        Assert.Null(config.DefaultProvider);
+        Assert.Null(config.Model);
+        Assert.Null(config.ApiKeyEnv);
     }
 
     [Fact]
@@ -318,7 +320,7 @@ public class LTAIOptionsScenarioTests
             }
         };
         Assert.Equal("deepseek-v4-flash", config.GetLayerConfig("l1").Model);
-        Assert.Equal("deepseek-v4-pro", config.GetLayerConfig("l2").Model); // fallback
+        Assert.Null(config.GetLayerConfig("l2").Model); // fallback to null
     }
 
     [Fact]
@@ -471,7 +473,7 @@ public class BackgroundJobScenarioTests
     public async Task StartJob_SyncCommand_ReturnsJobId()
     {
         var svc = new BackgroundJobService();
-        var result = await svc.StartJob("echo test-output", confirm: true);
+        var result = await svc.StartJob("echo test-output");
         Assert.Contains("Job #", result);
     }
 
@@ -479,7 +481,7 @@ public class BackgroundJobScenarioTests
     public async Task WaitForJob_SimpleEcho_ReturnsOutput()
     {
         var svc = new BackgroundJobService();
-        var jobResult = await svc.StartJob("echo hello-job-world", confirm: true);
+        var jobResult = await svc.StartJob("echo hello-job-world");
         var id = jobResult.Split(' ')[1].TrimStart('#').TrimEnd('.');
         var output = await svc.WaitForJob(id, timeoutSec: 10);
         Assert.Contains("hello-job-world", output);

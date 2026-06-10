@@ -25,7 +25,7 @@ public class E2ETests
         if (SlashCommands.Router == null)
         {
             var options = Options.Create(new LTAIOptions());
-            var modelSvc = new ModelCommandService(null, null, null, options);
+            var modelSvc = new ModelCommandService(null, null, null, null, options);
             var jobsSvc = new JobsCommandService(null);
             var configSvc = new ConfigCommandService(null, options);
             var snippetSvc = new SnippetCommandService(null);
@@ -40,13 +40,9 @@ public class E2ETests
     // ── Agent command chain (input → parse → execute → status) ──
 
     [Fact]
-    public void AgentChain_Help_ReturnsHelpText()
+    public async Task AgentChain_Help_ReturnsHelpText()
     {
-        var input = "/help";
-        string? status = null;
-        var running = true;
-
-        var handled = SlashCommands.TryExecute(input, ref running, ref status);
+        var (handled, status) = await SlashCommands.TryExecuteAsync("/help");
 
         Assert.True(handled);
         Assert.NotNull(status);
@@ -54,23 +50,18 @@ public class E2ETests
     }
 
     [Fact]
-    public void AgentChain_Exit_SetsRunningFalse()
+    public async Task AgentChain_Exit_ReturnsNullStatus()
     {
-        string? status = null;
-        var running = true;
+        var (handled, status) = await SlashCommands.TryExecuteAsync("/exit");
 
-        SlashCommands.TryExecute("/exit", ref running, ref status);
-
-        Assert.False(running);
+        Assert.True(handled);
+        Assert.Null(status);
     }
 
     [Fact]
-    public void AgentChain_NormalMessage_NotHandled()
+    public async Task AgentChain_NormalMessage_NotHandled()
     {
-        string? status = null;
-        var running = true;
-
-        var handled = SlashCommands.TryExecute("hello", ref running, ref status);
+        var (handled, _) = await SlashCommands.TryExecuteAsync("hello");
 
         Assert.False(handled);
         // Normal messages are NOT consumed by SlashCommands
@@ -78,68 +69,50 @@ public class E2ETests
     }
 
     [Fact]
-    public void AgentChain_NewSession_ReturnsClearMessage()
+    public async Task AgentChain_NewSession_ReturnsClearMessage()
     {
-        string? status = null;
-        var running = true;
-
-        SlashCommands.TryExecute("/new", ref running, ref status);
+        var (_, status) = await SlashCommands.TryExecuteAsync("/new");
 
         Assert.Contains("cleared", status, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
-    public void AgentChain_ModelInfo_ReturnsModelOutput()
+    public async Task AgentChain_ModelInfo_ReturnsModelOutput()
     {
-        string? status = null;
-        var running = true;
-
-        SlashCommands.TryExecute("/model info", ref running, ref status);
+        var (_, status) = await SlashCommands.TryExecuteAsync("/model info");
 
         // /model info should show model configuration
         Assert.NotNull(status);
     }
 
     [Fact]
-    public void AgentChain_FuzzyCommand_SuggestsFix()
+    public async Task AgentChain_FuzzyCommand_SuggestsFix()
     {
-        string? status = null;
-        var running = true;
-
-        SlashCommands.TryExecute("/sttus", ref running, ref status);
+        var (_, status) = await SlashCommands.TryExecuteAsync("/sttus");
 
         Assert.Contains("status", status, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
-    public void AgentChain_UnknownCommand_ShowsHelpHint()
+    public async Task AgentChain_UnknownCommand_ShowsHelpHint()
     {
-        string? status = null;
-        var running = true;
-
-        SlashCommands.TryExecute("/zzzzz", ref running, ref status);
+        var (_, status) = await SlashCommands.TryExecuteAsync("/zzzzz");
 
         Assert.Contains("help", status, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
-    public void AgentChain_JobsList_ReturnsJobOutput()
+    public async Task AgentChain_JobsList_ReturnsJobOutput()
     {
-        string? status = null;
-        var running = true;
-
-        SlashCommands.TryExecute("/jobs list", ref running, ref status);
+        var (_, status) = await SlashCommands.TryExecuteAsync("/jobs list");
 
         Assert.NotNull(status);
     }
 
     [Fact]
-    public void AgentChain_WorkflowList_Exists()
+    public async Task AgentChain_WorkflowList_Exists()
     {
-        string? status = null;
-        var running = true;
-
-        SlashCommands.TryExecute("/workflow list", ref running, ref status);
+        var (_, status) = await SlashCommands.TryExecuteAsync("/workflow list");
 
         Assert.NotNull(status);
     }

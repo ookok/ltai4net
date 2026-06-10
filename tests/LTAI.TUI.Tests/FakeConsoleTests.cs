@@ -21,7 +21,7 @@ public class FakeConsoleTests
         if (SlashCommands.Router == null)
         {
             SlashCommands.Router = new CommandRouter(
-                new ModelCommandService(null, null, null, Options),
+                new ModelCommandService(null, null, null, null, Options),
                 new JobsCommandService(null),
                 new ConfigCommandService(null, Options),
                 new SnippetCommandService(null),
@@ -38,17 +38,13 @@ public class FakeConsoleTests
     /// This test verifies the entire chain by injecting a TestConsole.
     /// </summary>
     [Fact]
-    public void SlashCommand_Help_ShowsHelpOutput()
+    public async Task SlashCommand_Help_ShowsHelpOutput()
     {
         var parser = new CommandParser();
         var cmd = parser.Parse("/help");
         var sc = Assert.IsType<HelpCommand>(cmd);
 
-        // Simulate what SlashCommands.TryExecute would do:
-        // - Parse input, dispatch command, capture statusMessage
-        string? status = null;
-        var running = true;
-        var handled = SlashCommands.TryExecute("/help", ref running, ref status);
+        var (handled, status) = await SlashCommands.TryExecuteAsync("/help");
 
         Assert.True(handled);
         Assert.NotNull(status);
@@ -56,56 +52,42 @@ public class FakeConsoleTests
     }
 
     [Fact]
-    public void SlashCommand_Exit_SetsRunningFalse()
+    public async Task SlashCommand_Exit_ReturnsNullStatus()
     {
-        string? status = null;
-        var running = true;
+        var (handled, status) = await SlashCommands.TryExecuteAsync("/exit");
 
-        SlashCommands.TryExecute("/exit", ref running, ref status);
-
-        Assert.False(running);
+        Assert.True(handled);
+        Assert.Null(status);
     }
 
     [Fact]
-    public void SlashCommand_Unknown_FuzzySuggests()
+    public async Task SlashCommand_Unknown_FuzzySuggests()
     {
-        string? status = null;
-        var running = true;
-
-        SlashCommands.TryExecute("/sttus", ref running, ref status);
+        var (_, status) = await SlashCommands.TryExecuteAsync("/sttus");
 
         Assert.Contains("status", status, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
-    public void SlashCommand_New_ClearsSession()
+    public async Task SlashCommand_New_ClearsSession()
     {
-        string? status = null;
-        var running = true;
-
-        SlashCommands.TryExecute("/new", ref running, ref status);
+        var (_, status) = await SlashCommands.TryExecuteAsync("/new");
 
         Assert.Contains("cleared", status, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
-    public void NormalMessage_NotACommand_ReturnsFalse()
+    public async Task NormalMessage_NotACommand_ReturnsFalse()
     {
-        string? status = null;
-        var running = true;
-
-        var handled = SlashCommands.TryExecute("hello", ref running, ref status);
+        var (handled, _) = await SlashCommands.TryExecuteAsync("hello");
 
         Assert.False(handled);
     }
 
     [Fact]
-    public void EmptyInput_NotACommand_ReturnsFalse()
+    public async Task EmptyInput_NotACommand_ReturnsFalse()
     {
-        string? status = null;
-        var running = true;
-
-        var handled = SlashCommands.TryExecute("", ref running, ref status);
+        var (handled, _) = await SlashCommands.TryExecuteAsync("");
 
         Assert.False(handled);
     }

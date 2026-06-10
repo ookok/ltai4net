@@ -29,8 +29,9 @@ public static class PathUtils
         {
             var fp = Path.GetFullPath(Path.Combine(ws, path));
 
-            // Check prefix — normalized WS ensures /home/project won't match /home/project-extra
-            if (!fp.StartsWith(normalizedWs, StringComparison.OrdinalIgnoreCase))
+            // Check prefix — normalized WS ensures /home/project won't match /home/project-extra.
+            // Also allow fp == ws (root directory itself, not just children).
+            if (fp != ws && !fp.StartsWith(normalizedWs, StringComparison.OrdinalIgnoreCase))
                 return null;
 
             // Check for symlinks that could escape the sandbox

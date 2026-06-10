@@ -447,18 +447,33 @@ public sealed class GrammarCheckStep : IPipelineStep
 
     /// <summary>
     /// 从工具调用参数中提取文件路径。
+    /// 支持 key=value 和 JSON 两种格式。
     /// </summary>
     private static IEnumerable<string> ExtractPathsFromArgs(string toolName, string args)
     {
-        // 简单解析: 从 args 的 key=value 格式中提取 path/filePath
         var paths = new List<string>();
 
-        // 匹配 path=xxx 或 filePath=xxx (引号可选)
+        // 格式 1: path=xxx 或 filePath=xxx (引号可选)
         var matches = System.Text.RegularExpressions.Regex.Matches(args,
-            @"(?:path|filePath)\s*=\s*[""']?([^""',\s]+)[""']?",
+            @"(?:path|filePath)\s*=\s*[""']?([^""',\s}]+)[""']?",
             System.Text.RegularExpressions.RegexOptions.IgnoreCase);
 
         foreach (System.Text.RegularExpressions.Match match in matches)
+        {
+            if (match.Success)
+            {
+                var path = match.Groups[1].Value;
+                if (!string.IsNullOrEmpty(path))
+                    paths.Add(path);
+            }
+        }
+
+        // 格式 2: JSON 格式 "path":"value" 或 "filePath":"value"
+        var jsonMatches = System.Text.RegularExpressions.Regex.Matches(args,
+            @"""(?:path|filePath)""\s*:\s*""([^""]+)""",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+        foreach (System.Text.RegularExpressions.Match match in jsonMatches)
         {
             if (match.Success)
             {

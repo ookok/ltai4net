@@ -4,6 +4,8 @@ using LTAI.AI;
 using LTAI.Agent.Formats;
 using LTAI.Agent.FusionRoute;
 using LTAI.Agent.Learning;
+using LTAI.Agent.Pipeline;
+using LTAI.Agent.Pipeline.Steps;
 using LTAI.Agent.Tools;
 using LTAI.Agent.Workflows;
 using LTAI.Core.Safety;
@@ -22,12 +24,14 @@ public sealed class ChatAgent
     private readonly LocalEmbedder? _localEmbedder;
     private readonly IEscalationDecider _escalationDecider;
     private readonly IChatClient? _steerJudge;
+    private readonly LTAI.Agent.Tools.QuestionService? _questionService;
 
     public ChatAgent(AIAgent agent, AIAgent? proAgent = null, AgentWorkflows? workflows = null,
         BudgetTracker? budgetTracker = null,
         LocalEmbedder? localEmbedder = null, IHttpClientFactory? httpFactory = null,
         bool sameModel = false, IChatClient? steerJudge = null,
-        IEscalationDecider? escalationDecider = null)
+        IEscalationDecider? escalationDecider = null,
+        LTAI.Agent.Tools.QuestionService? questionService = null)
     {
         _agent = agent;
         _proAgent = proAgent;
@@ -38,6 +42,7 @@ public sealed class ChatAgent
         _sameModel = sameModel;
         _steerJudge = steerJudge;
         _escalationDecider = escalationDecider ?? new DefaultEscalationDecider();
+        _questionService = questionService;
     }
 
     private static readonly AsyncLocal<string> _traceId = new();
@@ -85,7 +90,6 @@ public sealed class ChatAgent
         var complexity = _escalationDecider.EstimateComplexity(message);
         var messages = new[] { new ChatMessage(ChatRole.User, message) };
 
-        PlanTools.SessionId = sessionHandle?.Name ?? traceId;
         BackgroundJobService.CurrentSessionId = sessionHandle?.Name ?? traceId;
 
         // Pro 快速通道：复杂度 >= 4 直接走 Pro，不经过 L1
@@ -103,6 +107,29 @@ public sealed class ChatAgent
 
         var r = await _agent.RunAsync(messages, session, cancellationToken: ct).ConfigureAwait(false);
         var text = ApplyBlockedOutput(r.Messages?.LastOrDefault()?.Text ?? "");
+
+        // ── 上下文监控与压缩 ──
+        // MAF-level CompactionProvider (position [5]) + MaxMessageCountReducer (200 msg cap)
+        // handle conversation compaction. This is an observability signal.
+        var ctxRatio = LTAI.Core.Configuration.UsageTracker.ContextRatio();
+
+        // ── 生成后语法检查 ──
+        if (r.Messages != null)
+        {
+            var (hasErrors, errorMessages) = await PostGenerationGrammarCheckAsync(r.Messages, ct).ConfigureAwait(false);
+            if (hasErrors && errorMessages.Count > 0)
+            {
+                _grammarDepth.Value++;
+                if (_grammarDepth.Value <= 2)
+                {
+                    var retryR = await _agent.RunAsync(errorMessages, session, cancellationToken: ct).ConfigureAwait(false);
+                    var retryText = ApplyBlockedOutput(retryR.Messages?.LastOrDefault()?.Text ?? "");
+                    if (!string.IsNullOrWhiteSpace(retryText))
+                        text = retryText;
+                }
+                _grammarDepth.Value = 0;
+            }
+        }
 
         if (isSimple)
         {
@@ -175,46 +202,157 @@ public sealed class ChatAgent
             ? await CreateAgentSessionFromHandleAsync(sessionHandle, ct).ConfigureAwait(false)
             : await _agent.CreateSessionAsync(ct).ConfigureAwait(false);
 
-        PlanTools.SessionId = sessionHandle?.Name;
         BackgroundJobService.CurrentSessionId = sessionHandle?.Name;
 
         var toolResultCount = 0;
         var lastSaveAt = DateTime.UtcNow;
+        var streamToolCalls = new List<(string Name, string Arguments, string Result)>();
+        var pendingCalls = new Dictionary<string, (string Name, string Arguments)>();
+        var roundMessages = new List<ChatMessage> { new(ChatRole.User, message) };
 
-        await foreach (var update in _agent.RunStreamingAsync(
-            [new ChatMessage(ChatRole.User, message)], session, cancellationToken: ct).ConfigureAwait(false))
+        while (true)
         {
-            if (update.Contents is { Count: > 0 })
-            {
-                foreach (var content in update.Contents)
-                {
-                    switch (content)
-                    {
-                        case FunctionCallContent fc when !string.IsNullOrEmpty(fc.Name):
-                            LTAI.Core.Configuration.UsageTracker.RecordToolCall();
-                            LTAI.Core.Configuration.UsageTracker.SetActiveTool(fc.Name);
-                            LTAI.Core.Configuration.UsageTracker.StartToolTimer();
-                            yield return new AgentResponseUpdate(ChatRole.Assistant, $"⏳ 正在调用 {fc.Name}...\n");
-                            break;
-                        case FunctionResultContent frc:
-                            LTAI.Core.Configuration.UsageTracker.StopToolTimer();
-                            var preview = frc.Result?.ToString() ?? "(null)";
-                            if (preview.Length > 200) preview = preview[..200] + "...";
-                            yield return new AgentResponseUpdate(ChatRole.Assistant, $"  ✅ 返回: {preview}\n");
+            Microsoft.Extensions.AI.AIContent? approvalRequest = null;
 
-                            toolResultCount++;
-                            if (sessionHandle != null &&
-                                (toolResultCount % 3 == 0 ||
-                                 (DateTime.UtcNow - lastSaveAt).TotalSeconds >= 30))
-                            {
-                                await SaveSessionToHandleAsync(session, sessionHandle, ct).ConfigureAwait(false);
-                                lastSaveAt = DateTime.UtcNow;
-                            }
+            await foreach (var update in _agent.RunStreamingAsync(
+                roundMessages, session, cancellationToken: ct).ConfigureAwait(false))
+            {
+                if (update.Contents is { Count: > 0 })
+                {
+                    foreach (var content in update.Contents)
+                    {
+                        // Detect MAF ToolApprovalRequestContent (not in switch since the type
+                        // comes from Microsoft.Extensions.AI.Abstractions as a base AIContent)
+                        if (content is Microsoft.Extensions.AI.ToolApprovalRequestContent)
+                        {
+                            approvalRequest = content;
                             break;
+                        }
+
+                        switch (content)
+                        {
+                            case FunctionCallContent fc when !string.IsNullOrEmpty(fc.Name):
+                                LTAI.Core.Configuration.UsageTracker.RecordToolCall();
+                                LTAI.Core.Configuration.UsageTracker.SetActiveTool(fc.Name);
+                                LTAI.Core.Configuration.UsageTracker.StartToolTimer();
+                                var callId = fc.CallId ?? Guid.NewGuid().ToString();
+                                var args = fc.Arguments != null
+                                    ? JsonSerializer.Serialize(fc.Arguments)
+                                    : "";
+                                pendingCalls[callId] = (fc.Name, args);
+                                yield return new AgentResponseUpdate(ChatRole.Assistant, $"⏳ 正在调用 {fc.Name}...\n");
+                                break;
+                            case FunctionResultContent frc:
+                                LTAI.Core.Configuration.UsageTracker.StopToolTimer();
+                                var preview = frc.Result?.ToString() ?? "(null)";
+                                if (preview.Length > 200) preview = preview[..200] + "...";
+                                yield return new AgentResponseUpdate(ChatRole.Assistant, $"  ✅ 返回: {preview}\n");
+
+                                var fKey = frc.CallId ?? "";
+                                if (pendingCalls.TryGetValue(fKey, out var pending))
+                                {
+                                    if (FileToolNames.Contains(pending.Name))
+                                    {
+                                        streamToolCalls.Add((pending.Name, pending.Arguments, frc.Result?.ToString() ?? ""));
+                                    }
+                                    pendingCalls.Remove(fKey);
+                                }
+
+                                toolResultCount++;
+                                if (sessionHandle != null &&
+                                    (toolResultCount % 3 == 0 ||
+                                     (DateTime.UtcNow - lastSaveAt).TotalSeconds >= 30))
+                                {
+                                    await SaveSessionToHandleAsync(session, sessionHandle, ct).ConfigureAwait(false);
+                                    lastSaveAt = DateTime.UtcNow;
+                                }
+                                break;
+                        }
                     }
                 }
+                yield return update;
+                if (approvalRequest != null) break;
             }
-            yield return update;
+
+            if (approvalRequest != null && _questionService != null)
+            {
+                var tarc = (Microsoft.Extensions.AI.ToolApprovalRequestContent)approvalRequest;
+                var toolName = tarc.ToolCall is Microsoft.Extensions.AI.FunctionCallContent fcc
+                    ? fcc.Name ?? "未知工具" : "未知工具";
+                yield return new AgentResponseUpdate(ChatRole.Assistant, $"\n🔐 代理请求执行 **{toolName}**，需要您的确认...\n");
+
+                var questions = new[]
+                {
+                    new LTAI.Agent.Tools.QuestionPrompt(
+                        $"代理请求调用 **{toolName}**，是否允许？",
+                        "工具审批",
+                        new[]
+                        {
+                            new LTAI.Agent.Tools.QuestionOption("允许", "仅本次允许"),
+                            new LTAI.Agent.Tools.QuestionOption("始终允许此工具", "后续不再询问此工具"),
+                            new LTAI.Agent.Tools.QuestionOption("拒绝", "拒绝本次调用"),
+                        })
+                };
+
+                try
+                {
+                    var answers = await _questionService.AskAsync(questions, ct).ConfigureAwait(false);
+                    if (answers.Count > 0 && answers[0].Count > 0)
+                    {
+                        var choice = answers[0][0];
+                        Microsoft.Extensions.AI.AIContent responseContent = choice switch
+                        {
+                            "始终允许此工具" => tarc.CreateAlwaysApproveToolResponse("user approved"),
+                            "允许" => tarc.CreateResponse(approved: true, reason: "user approved"),
+                            _ => tarc.CreateResponse(approved: false, reason: "user denied"),
+                        };
+                        roundMessages = [new ChatMessage(ChatRole.User, [responseContent])];
+                        continue;
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                    // User cancelled — stop
+                }
+            }
+
+            break;
+        }
+
+        // ── 上下文监控（streaming） ──
+        var streamCtxRatio = LTAI.Core.Configuration.UsageTracker.ContextRatio();
+        if (streamCtxRatio > 0.75)
+        {
+            // MAF-level CompactionProvider + MaxMessageCountReducer handle actual compaction.
+        }
+
+        // ── 生成后语法检查（streaming） ──
+        if (streamToolCalls.Count > 0)
+        {
+            var ctx = new MessageContext("", ct);
+            foreach (var tc in streamToolCalls)
+                ctx.ToolCalls.Add(tc);
+
+            var step = new GrammarCheckStep();
+            ctx = await step.ProcessAsync(ctx).ConfigureAwait(false);
+
+            if (ctx.TryGet<bool>("GrammarCheckBlocked", out var gramBlocked) && gramBlocked)
+            {
+                var errMsgs = ctx.Messages
+                    .Where(m => m.Role == ChatRole.System)
+                    .ToList();
+
+                _grammarDepth.Value++;
+                if (_grammarDepth.Value <= 2 && errMsgs.Count > 0)
+                {
+                    yield return new AgentResponseUpdate(ChatRole.Assistant, "\n\n🔍 检测到语法错误，正在自动修复...\n");
+                    var retryR = await _agent.RunAsync(errMsgs, session, cancellationToken: ct).ConfigureAwait(false);
+                    var retryText = ApplyBlockedOutput(retryR.Messages?.LastOrDefault()?.Text ?? "");
+                    if (!string.IsNullOrWhiteSpace(retryText))
+                        yield return new AgentResponseUpdate(ChatRole.Assistant, retryText);
+                }
+                _grammarDepth.Value = 0;
+            }
         }
 
         var blockedReason = SafetyCoordinator.ConsumeBlock();
@@ -226,8 +364,90 @@ public sealed class ChatAgent
 
         LTAI.Core.Configuration.UsageTracker.SetActiveTool("");
 
+        // Update frontend observer with current mode/todo state
+        RefreshModeObserver(session);
+
         if (sessionHandle != null)
             await SaveSessionToHandleAsync(session, sessionHandle, ct).ConfigureAwait(false);
+    }
+
+    private static void RefreshModeObserver(AgentSession session)
+    {
+        // Read mode/todo state from MAF providers' StateBag entries using
+        // local DTOs with matching JsonPropertyName attributes.
+        var jso = Microsoft.Agents.AI.AgentAbstractionsJsonUtilities.DefaultOptions;
+        try
+        {
+            var modeState = session.StateBag.GetValue<Tooling.ObservableAgentModeState>("AgentModeProvider", jso);
+            if (modeState != null)
+                Tooling.AgentModeObserver.CurrentMode = modeState.CurrentMode ?? "chat";
+        }
+        catch
+        {
+            // Degrade gracefully — MAF provider may not have run yet
+        }
+
+        try
+        {
+            var todoState = session.StateBag.GetValue<Tooling.ObservableTodoState>("TodoProvider", jso);
+            if (todoState?.Items is { Count: > 0 })
+            {
+                Tooling.AgentModeObserver.TotalTodos = todoState.Items.Count;
+                Tooling.AgentModeObserver.RemainingTodos = todoState.Items.Count(t => !t.IsComplete);
+                var sb = new System.Text.StringBuilder();
+                foreach (var t in todoState.Items)
+                {
+                    var icon = t.IsComplete ? "✅" : "⬜";
+                    sb.AppendLine($"{icon} {t.Title}" + (t.Description != null ? $": {t.Description}" : ""));
+                }
+                Tooling.AgentModeObserver.TodoSummary = sb.ToString();
+            }
+            else
+            {
+                Tooling.AgentModeObserver.TotalTodos = 0;
+                Tooling.AgentModeObserver.RemainingTodos = 0;
+                Tooling.AgentModeObserver.TodoSummary = null;
+            }
+        }
+        catch
+        {
+            // Degrade gracefully
+        }
+    }
+
+    private static readonly string[] ModeCycle = ["chat", "plan", "execute"];
+
+    /// <summary>Cycle the agent mode: chat → plan → execute → chat.</summary>
+    public async Task<string> CycleModeAsync(CancellationToken ct = default)
+    {
+        var session = await _agent.CreateSessionAsync(ct).ConfigureAwait(false);
+        var jso = Microsoft.Agents.AI.AgentAbstractionsJsonUtilities.DefaultOptions;
+
+        // Read current mode from state bag
+        var current = "chat";
+        try
+        {
+            var state = session.StateBag.GetValue<Tooling.ObservableAgentModeState>("AgentModeProvider", jso);
+            if (state?.CurrentMode != null)
+                current = state.CurrentMode;
+        }
+        catch { }
+
+        // Find next mode in cycle
+        var idx = Array.IndexOf(ModeCycle, current.ToLowerInvariant());
+        var next = idx >= 0 ? ModeCycle[(idx + 1) % ModeCycle.Length] : ModeCycle[0];
+
+        // Write to state bag
+        session.StateBag.SetValue("AgentModeProvider", new Tooling.ObservableAgentModeState { CurrentMode = next }, jso);
+
+        // Save session
+        try { await _agent.SerializeSessionAsync(session, cancellationToken: ct).ConfigureAwait(false); }
+        catch { }
+
+        // Update observer
+        RefreshModeObserver(session);
+
+        return next;
     }
 
     public Task<AgentResponse> RunWorkflowAsync(string task, CancellationToken ct = default)
@@ -351,6 +571,7 @@ public sealed class ChatAgent
     // ── Correction loop ──
 
     private static readonly AsyncLocal<int> _correctionDepth = new();
+    private static readonly AsyncLocal<int> _grammarDepth = new();
 
     private async Task<string> EnforceAndReflectAsync(string text, string originalMessage,
         AgentSession session, CancellationToken ct)
@@ -452,5 +673,74 @@ public sealed class ChatAgent
         var result = await _proAgent.RunAsync(l2Messages, session, cancellationToken: ct).ConfigureAwait(false);
         var text = ApplyBlockedOutput(result.Messages?.LastOrDefault()?.Text ?? "");
         return $"[Auto-upgraded to Pro: {reason}]\n\n{text}";
+    }
+
+    // ── 生成后语法检查 ──
+
+    private static readonly HashSet<string> FileToolNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "write", "edit", "writefile", "editfile", "create", "createfile",
+        "writetool", "filewritetool", "editfiletool"
+    };
+
+    /// <summary>从消息列表中提取写文件类工具调用。</summary>
+    private static List<(string Name, string Arguments, string Result)> ExtractFileToolCalls(IList<ChatMessage> messages)
+    {
+        var calls = new List<(string Name, string Arguments, string Result)>();
+        var callMap = new Dictionary<string, (string Name, string Arguments)>();
+
+        foreach (var msg in messages)
+        {
+            if (msg.Contents == null) continue;
+
+            foreach (var content in msg.Contents)
+            {
+                if (content is FunctionCallContent fcc && fcc.Name != null)
+                {
+                    var callId = fcc.CallId ?? Guid.NewGuid().ToString();
+                    var args = fcc.Arguments != null
+                        ? JsonSerializer.Serialize(fcc.Arguments)
+                        : "";
+                    callMap[callId] = (fcc.Name, args);
+                }
+                else if (content is FunctionResultContent frc)
+                {
+                    var key = frc.CallId ?? "";
+                    if (callMap.TryGetValue(key, out var callInfo) && FileToolNames.Contains(callInfo.Name))
+                    {
+                        calls.Add((callInfo.Name, callInfo.Arguments, frc.Result?.ToString() ?? ""));
+                        callMap.Remove(key);
+                    }
+                }
+            }
+        }
+
+        return calls;
+    }
+
+    /// <summary>运行生成后语法检查。返回是否有语法错误及应注入的系统消息。</summary>
+    private async Task<(bool HasErrors, List<ChatMessage> ErrorMessages)> PostGenerationGrammarCheckAsync(
+        IList<ChatMessage> messages, CancellationToken ct)
+    {
+        var toolCalls = ExtractFileToolCalls(messages);
+        if (toolCalls.Count == 0)
+            return (false, []);
+
+        var ctx = new MessageContext("", ct);
+        foreach (var (name, args, result) in toolCalls)
+            ctx.ToolCalls.Add((name, args, result));
+
+        var step = new GrammarCheckStep();
+        ctx = await step.ProcessAsync(ctx).ConfigureAwait(false);
+
+        if (ctx.TryGet<bool>("GrammarCheckBlocked", out var blocked) && blocked)
+        {
+            var errorMessages = ctx.Messages
+                .Where(m => m.Role == ChatRole.System)
+                .ToList();
+            return (true, errorMessages);
+        }
+
+        return (false, []);
     }
 }

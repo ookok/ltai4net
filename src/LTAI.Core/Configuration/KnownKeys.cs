@@ -36,7 +36,7 @@ public static class KnownKeys
     private static readonly KeyInfo[] DefaultHardcoded =
     [
         // ── LLM Providers (官方 ¥/1M tokens 价格，来源各官网定价页) ──
-        new("DEEPSEEK_API_KEY",     "DeepSeek",       "输入¥1/输出¥2/缓存¥0.02 per 1M", "https://platform.deepseek.com/api_keys", "https://api.deepseek.com/v1", null, 1.0m, 2.0m, 0.02m),
+        new("DEEPSEEK_API_KEY",     "DeepSeek",       "输入¥1/输出¥2/缓存¥0.02 per 1M", "https://platform.deepseek.com/api_keys", "https://api.deepseek.com/v1", "deepseek-v4-flash", 1.0m, 2.0m, 0.02m),
         new("SILICONFLOW_API_KEY",  "SiliconFlow",    "¥1/¥2 per 1M",       "https://cloud.siliconflow.cn/", "https://api.siliconflow.cn/v1", null, 1.0m, 2.0m),
         new("DASHSCOPE_API_KEY",    "Aliyun(Qwen)",   "¥0.8/¥2 per 1M",     "https://dashscope.console.aliyun.com/", "https://dashscope.aliyuncs.com/compatible-mode/v1", null, 0.8m, 2.0m),
         new("ZHIPU_API_KEY",        "Zhipu(GLM)",     "¥1/¥2 per 1M",       "https://open.bigmodel.cn/", "https://open.bigmodel.cn/api/paas/v4", null, 1.0m, 2.0m),

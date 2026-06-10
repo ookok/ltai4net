@@ -6,8 +6,7 @@ using LTAI.Core;
 namespace LTAI.Agent.Tools;
 
 /// <summary>
-/// 文件下载工具。需要用户确认后才下载。
-/// AI 调用时需传 confirm=true 才会执行。
+/// 文件下载工具。下载前由 MAF ToolApprovalAgent 审批。
 /// </summary>
 [ToolDomain("file")]
 public static class FileDownloadTool
@@ -24,13 +23,8 @@ public static class FileDownloadTool
     [ToolExample("下载最新的安装包")]
     public static async Task<string> DownloadFile(
         [Description("文件下载地址")] string url,
-        [Description("保存路径（相对于工作目录）")] string savePath,
-        [Description("用户确认标记，必须为 true 才执行下载")] bool confirm = false)
+        [Description("保存路径（相对于工作目录）")] string savePath)
     {
-        if (!confirm)
-            return "⚠️ 需要下载文件，但尚未确认。请用户确认后重新调用，设置 confirm=true。\n"
-                 + $"URL: {url}\n保存到: {savePath}";
-
         // ⚠️ SSRF 防护
         if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) ||
             (uri.Scheme != "http" && uri.Scheme != "https") ||

@@ -111,7 +111,7 @@ public sealed class InstructionProvider : AIContextProvider
     private static string BuildRules()
     {
         return "[操作规则]\n"
-            + "1. 当工具返回「尚未获得权限」时，向用户展示路径并询问是否允许，用户同意后重新调用相同工具并设置 confirm=true。\n"
+            + "1. 当工具返回「尚未获得权限」时，向用户展示路径并询问是否允许。MAF ToolApprovalAgent 会拦截工具调用进行审批。\n"
             + "2. 不要尝试其他工具代替未授权的操作。\n"
             + "3. 参数必须是正确的JSON类型（数字不要加引号，布尔值用true/false）。\n"
             + "4. 不要用Markdown代码块包围工具调用。\n"

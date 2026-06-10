@@ -86,10 +86,9 @@ internal static partial class AgentBuilder
 
         var tools = new List<AITool>();
         var httpFactory = sp.GetRequiredService<IHttpClientFactory>();
-        var trust = sp.GetService<ToolTrustService>();
 
         RegisterFileAndTextTools(tools, name, canRead, canWrite, canList, canExec, ws,
-            canRead ? s_mmapProvider : null, canWrite ? s_writeBuf : null, trust);
+            canRead ? s_mmapProvider : null, canWrite ? s_writeBuf : null);
         RegisterSearchAndCodeAnalysisTools(tools, name, canRead, ws);
         RegisterWebTools(tools, name, httpFactory);
         RegisterMultimediaTools(tools, canRead, canExec, ws);
@@ -348,10 +347,10 @@ internal static partial class AgentBuilder
         }
 
         AIAgent agent = guardedLlm.AsHarnessAgent(
-            maxContextWindowTokens: opts.AI.ContextWindowSize, // LTAI's own CompactionProvider at position [5] handles compaction; this MAF-level value just needs to be >0
-            maxOutputTokens: opts.AI.MaxTokens,
             options: new HarnessAgentOptions
             {
+                MaxContextWindowTokens = opts.AI.ContextWindowSize,
+                MaxOutputTokens = opts.AI.MaxTokens,
                 Name = name,
                 // P10.2: Chinese harness instructions replacing the default English
                 // block. Default is Chinese; switches to English when OS language is en-US.
@@ -389,20 +388,31 @@ internal static partial class AgentBuilder
                  // ── Disable MAF defaults LTAI doesn't need ────────────────────
                 // LTAI uses its own 7-layer memory palace (PalaceStore + AIContextProviders).
                 DisableFileMemory = true,
-                // LTAI uses its own tools (WasmtimeSandbox + SafeShellTool), not the file-access provider.
-                DisableFileAccess = true,
+                // MAF FileAccessProvider provides sandboxed file storage (.sandbox/ dir).
+                // LTAI also registers FileSystemTools for direct workspace file operations.
+                FileAccessStore = new FileSystemAgentFileStore(
+                    Path.Combine(ws, ".sandbox", "file-access")),
+                // MAF AgentModeProvider: plan (interactive) / execute (autonomous) / chat (free-form).
+                // LTAI's own edit-mode (review/auto) is separate — controlled via /mode command.
+                AgentModeProviderOptions = new AgentModeProviderOptions
+                {
+                    Modes =
+                    [
+                        new("plan", "交互式规划模式 — 分析需求、分解任务、制定计划，用户确认后执行"),
+                        new("execute", "自主执行模式 — 执行已批准的计划，不向用户提问"),
+                        new("chat", "自由对话模式 — 无约束的日常问答，不需要计划"),
+                    ],
+                    DefaultMode = "chat",
+                },
                 // LTAI doesn't surface web search to its agents.
                 DisableWebSearch = true,
-                // LTAI doesn't surface the TodoProvider/AgentModeProvider workflow.
-                DisableTodoProvider = true,
-                DisableAgentModeProvider = true,
                 // LTAI has its own AgentSkillsProvider (the one passed above), pre-configured
                 // with script approval + custom instructions. Don't double-register MAF's.
                 DisableAgentSkillsProvider = true,
 
-                // Keep ToolApprovalAgent + OpenTelemetryAgent enabled (HarnessAgent adds them
-                // as the outermost decorators by default). Use the per-agent source name so
-                // /health and DevUI can identify spans.
+                // MAF ToolApprovalAgent handles tool-level approval centrally
+                // (replacing per-tool confirm parameters).
+                // Use the per-agent source name so /health and DevUI can identify spans.
                 OpenTelemetrySourceName = $"LTAI.{name}",
 
                 // P10.3: bound function-invocation iterations. Default is 40; bump to 50

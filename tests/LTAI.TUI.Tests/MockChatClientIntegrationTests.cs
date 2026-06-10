@@ -227,14 +227,11 @@ public sealed class MockChatClientIntegrationTests
     // ── Full chain: CommandParser → SlashCommands → Mock ──
 
     [Fact]
-    public void FullChain_ParserThenExecute_DispatchWorks()
+    public async Task FullChain_ParserThenExecute_DispatchWorks()
     {
         var parser = new CommandParser();
-        string? status = null;
-        var running = true;
-
         var cmd = parser.Parse("/help");
-        var handled = SlashCommands.TryExecute("/help", ref running, ref status);
+        var (handled, status) = await SlashCommands.TryExecuteAsync("/help");
 
         Assert.True(handled);
         Assert.NotNull(status);
@@ -242,12 +239,9 @@ public sealed class MockChatClientIntegrationTests
     }
 
     [Fact]
-    public void FullChain_NormalMessage_PassesThroughToLLM()
+    public async Task FullChain_NormalMessage_PassesThroughToLLM()
     {
-        string? status = null;
-        var running = true;
-
-        var handled = SlashCommands.TryExecute("what is AI", ref running, ref status);
+        var (handled, _) = await SlashCommands.TryExecuteAsync("what is AI");
 
         Assert.False(handled);
     }
@@ -304,10 +298,7 @@ public sealed class MockChatClientIntegrationTests
     public async Task FullChain_FuzzyCommand_NotSentToLLM()
     {
         var mock = new Mock<IChatClient>(MockBehavior.Strict);
-        string? status = null;
-        var running = true;
-
-        var handled = SlashCommands.TryExecute("/sttus", ref running, ref status);
+        var (handled, status) = await SlashCommands.TryExecuteAsync("/sttus");
 
         Assert.True(handled);
         Assert.Contains("status", status, StringComparison.OrdinalIgnoreCase);
@@ -323,10 +314,7 @@ public sealed class MockChatClientIntegrationTests
     public async Task FullChain_UnknownCommand_ShowsHelpNotLLM()
     {
         var mock = new Mock<IChatClient>(MockBehavior.Strict);
-        string? status = null;
-        var running = true;
-
-        var handled = SlashCommands.TryExecute("/xyzzy", ref running, ref status);
+        var (handled, status) = await SlashCommands.TryExecuteAsync("/xyzzy");
 
         Assert.True(handled);
         Assert.Contains("help", status, StringComparison.OrdinalIgnoreCase);

@@ -20,7 +20,7 @@ public sealed class DatabaseTools
         + "  postgresql — PostgreSQL\n"
         + "  mysql      — MySQL / MariaDB\n"
         + "  sqlserver  — SQL Server\n\n"
-        + "支持 SELECT / INSERT / UPDATE / DELETE。写操作需用户确认。\n"
+        + "支持 SELECT / INSERT / UPDATE / DELETE。写操作由 MAF ToolApprovalAgent 审批。\n"
         + "参数:\n"
         + "  provider         — 数据库类型: sqlite / postgresql / mysql / sqlserver\n"
         + "  connectionString — 连接字符串\n"
@@ -36,19 +36,10 @@ public sealed class DatabaseTools
         [Description("连接字符串")] string connectionString,
         [Description("SQL 语句")] string sql,
         [Description("可选参数 (JSON 格式 {\"key\":\"value\"})")] string? parametersJson = null,
-        [Description("写操作确认标记（INSERT/UPDATE/DELETE 需用户确认）")] bool confirm = false,
         CancellationToken ct = default)
     {
         try
         {
-            // Host restriction: require confirm for non-localhost databases
-            if (!provider.Equals("sqlite", StringComparison.OrdinalIgnoreCase))
-            {
-                var host = ExtractHost(connectionString);
-                if (!string.IsNullOrEmpty(host) && !IsLocalhost(host) && !confirm)
-                    return $"[SQL] 连接到远程数据库 '{host}' 需要用户确认。请设置 confirm=true。";
-            }
-
             var trimmed = sql.TrimStart();
             var isWrite = trimmed.StartsWith("INSERT", StringComparison.OrdinalIgnoreCase)
                        || trimmed.StartsWith("UPDATE", StringComparison.OrdinalIgnoreCase)
@@ -57,14 +48,11 @@ public sealed class DatabaseTools
                        || trimmed.StartsWith("ALTER", StringComparison.OrdinalIgnoreCase)
                        || trimmed.StartsWith("CREATE", StringComparison.OrdinalIgnoreCase);
 
-            if (isWrite && !confirm)
-                return "[SQL] 写操作（INSERT/UPDATE/DELETE 等）需要设置 confirm=true。请先获得用户确认。";
-
             if (!isWrite && !trimmed.StartsWith("SELECT", StringComparison.OrdinalIgnoreCase)
                 && !trimmed.StartsWith("WITH", StringComparison.OrdinalIgnoreCase)
                 && !trimmed.StartsWith("PRAGMA", StringComparison.OrdinalIgnoreCase)
                 && !trimmed.StartsWith("EXPLAIN", StringComparison.OrdinalIgnoreCase))
-                return "[SQL] 只支持 SELECT / WITH / PRAGMA / EXPLAIN 查询语句。写操作请设置 confirm=true。";
+                return "[SQL] 只支持 SELECT / WITH / PRAGMA / EXPLAIN 查询语句。写操作需要审批。";
 
             await using var conn = CreateConnection(provider, connectionString);
             await conn.OpenAsync(ct).ConfigureAwait(false);

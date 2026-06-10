@@ -75,7 +75,12 @@ public sealed class MessagePanelRenderer
         if (lines.Length == 0)
             sb.Append($"{bar}");
 
-        return new Markup(sb.ToString().TrimEnd());
+        var finalText = sb.ToString().TrimEnd();
+        try { return new Markup(finalText); }
+        catch (InvalidOperationException)
+        {
+            return new Markup(finalText.EscapeMarkup());
+        }
     }
 
     public Panel BuildCodeBlockPanel(string code, string? lang)
@@ -166,9 +171,17 @@ public sealed class MessagePanelRenderer
             }
 
             var rendered = combined.ToString().TrimEnd();
-            var content = rendered.Length > 0
-                ? new Markup(rendered)
-                : new Markup($"[grey]等待 AI 回复...[/]");
+            IRenderable content;
+            if (rendered.Length > 0)
+            {
+                try { content = new Markup(rendered); }
+                catch (InvalidOperationException)
+                {
+                    content = new Markup(rendered.EscapeMarkup());
+                }
+            }
+            else
+                content = new Markup($"[grey]等待 AI 回复...[/]");
             if (allMessages.Count > 0) allMessages.Add(new Markup(""));
             allMessages.Add(content);
         }
@@ -178,17 +191,51 @@ public sealed class MessagePanelRenderer
 
         var messages = new List<IRenderable>();
         int totalMessages = allMessages.Count;
-        int visibleCount = Math.Min(maxVisibleMessages, totalMessages);
-        int startIdx = Math.Max(0, totalMessages - visibleCount - scrollOffset);
-        int endIdx = Math.Min(totalMessages, startIdx + maxVisibleMessages);
-        if (startIdx < 0) startIdx = 0;
+
+        // ── Estimate line count per message for natural top-truncation ──
+        // Each message: header (1) + content (newlines + 1) + separator (1)
+        static int EstimateLines(string raw)
+        {
+            if (string.IsNullOrEmpty(raw)) return 2;
+            var count = 1; // header
+            foreach (var c in raw) if (c == '\n') count++;
+            return count + 1; // +1 separator
+        }
+
+        var lineCounts = totalMessages > 0 ? new int[totalMessages] : [];
+        int totalLines = 0;
+        for (int i = 0; i < totalMessages; i++)
+        {
+            // history index = i (allMessages are built 1:1 from history + streaming)
+            var raw = i < history.Count ? history[i].rawContent : "";
+            var lines = EstimateLines(raw + (streamingContent ?? ""));
+            lineCounts[i] = lines;
+            totalLines += lines;
+        }
+        // Streaming footer line
+        if (!string.IsNullOrEmpty(streamingContent)) totalLines += 2;
+
+        // ── Trim from top until all fit, keeping newest at bottom ──
+        int startIdx = 0;
+        int availableLines = maxVisibleMessages;
+        while (startIdx < totalMessages && totalLines > availableLines)
+        {
+            totalLines -= lineCounts[startIdx];
+            startIdx++;
+        }
+        // Apply user scroll offset (show older messages instead of newest)
+        if (scrollOffset > 0 && startIdx < totalMessages)
+        {
+            int extra = Math.Min(scrollOffset, totalMessages - startIdx - 1);
+            startIdx += extra;
+        }
 
         if (startIdx > 0)
-            messages.Add(new Markup($"[{ThemeService.MutedTag}]↕ 以上 {startIdx} 条消息已滚动  Shift+↑↓/PgUp/PgDn 翻页  (共 {totalMessages} 条)[/]"));
-        for (int i = startIdx; i < endIdx; i++)
+            messages.Add(new Markup($"[{ThemeService.MutedTag}]↕ {startIdx} 条已折叠  PgUp/PgDn 翻页[/]"));
+        for (int i = startIdx; i < totalMessages; i++)
             messages.Add(allMessages[i]);
-        if (scrollOffset > 0 && endIdx < totalMessages)
-            messages.Add(new Markup($"[{ThemeService.MutedTag}]↓ 还有 {totalMessages - endIdx} 条消息在后面  按 Shift+↓ 或 PgDn 滚动[/]"));
+        // Streaming content at bottom (if any)
+        // (already appended to allMessages in the streamingContent section above)
 
         return new Panel(new Rows(messages)).Border(BoxBorder.None).Expand();
     }

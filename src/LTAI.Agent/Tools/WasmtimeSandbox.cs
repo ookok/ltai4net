@@ -51,17 +51,14 @@ public sealed class WasmtimeSandbox : AIContextProvider
     private const int ShellTimeoutSec = 30;
     private const int WasmTimeoutSec = 60;
     private const int MaxOutputBytes = 100 * 1024;
-    private readonly ToolTrustService? _trust;
 
-    public WasmtimeSandbox(string workspace, ILogger<WasmtimeSandbox>? logger = null,
-        ToolTrustService? trust = null)
+    public WasmtimeSandbox(string workspace, ILogger<WasmtimeSandbox>? logger = null)
         : base(null, null, null)
     {
         _workspace = workspace;
         _sandboxDir = Path.Combine(workspace, ".sandbox");
         Directory.CreateDirectory(_sandboxDir);
         _logger = logger;
-        _trust = trust;
 
         try
         {
@@ -165,13 +162,8 @@ public sealed class WasmtimeSandbox : AIContextProvider
     public async Task<string> ExecuteSandboxedCommandAsync(
         [Description("Shell command to run")] string command,
         [Description("Working directory (relative to sandbox)")] string workDir = ".",
-        [Description("用户确认标记，必须为 true 才执行")] bool confirm = false,
         CancellationToken ct = default)
     {
-        if (!confirm && (_trust == null || _trust.RequiresConfirm("WasmtimeSandbox.ExecuteSandboxedCommand")))
-            return $"⚠️ 需要确认才在沙箱中执行命令。\n命令: `{command}`\n目录: {workDir}\n"
-                 + "请用户确认后重新调用，设置 confirm=true。";
-
         // 拦截尝试用命令行读取文件的行为，重定向到 ReadFileContent
         var readCmdPatterns = new[] { "Get-Content", "gc ", "cat ", "type ", "more ", ".ReadAllText", "ReadFile" };
         if (readCmdPatterns.Any(p => command.Contains(p, StringComparison.OrdinalIgnoreCase)) &&
@@ -252,12 +244,8 @@ public sealed class WasmtimeSandbox : AIContextProvider
     [ToolExample("运行这个 wasm 模块")]
     public async Task<string> ExecuteWasmAsync(
         [Description("Path to .wasm file")] string wasmPath,
-        [Description("用户确认标记，必须为 true 才执行")] bool confirm = false,
         CancellationToken ct = default)
     {
-        if (!confirm && (_trust == null || _trust.RequiresConfirm("WasmtimeSandbox.ExecuteWasm")))
-            return "⚠️ 需要确认才执行 WASM 模块。请用户确认后重新调用，设置 confirm=true。";
-
         if (!_wasmAvailable || _wasmEngine == null)
             return ToolResult.Error("Wasmtime engine not available");
 

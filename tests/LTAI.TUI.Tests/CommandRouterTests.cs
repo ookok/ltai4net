@@ -20,7 +20,7 @@ public sealed class CommandRouterTests
         var devUi = new LTAI.Agent.DevUI.LTAIDevUIService(sp, logger);
 
         _router = new CommandRouter(
-            new ModelCommandService(null, null, null, Options),
+            new ModelCommandService(null, null, null, null, Options),
             new JobsCommandService(null),
             new ConfigCommandService(null, Options),
             new SnippetCommandService(null),
@@ -36,23 +36,23 @@ public sealed class CommandRouterTests
             null!);
     }
 
-    [Fact] public void Execute_ModelCommand_DelegatesToModelService() => Assert.NotNull(_router.Execute(new ModelCommand("")));
-    [Fact] public void Execute_ModelsCommand_DelegatesToModelService() => Assert.NotNull(_router.Execute(new ModelsCommand()));
-    [Fact] public void Execute_JobsCommand_DelegatesToJobsService() => Assert.NotNull(_router.Execute(new JobsCommand("list")));
-    [Fact] public void Execute_ConfigCommand_DelegatesToConfigService() => Assert.NotNull(_router.Execute(new ConfigCommand("status")));
-    [Fact] public void Execute_SnippetCommand_DelegatesToSnippetService() => Assert.NotNull(_router.Execute(new SnippetCommand("list")));
-    [Fact] public void Execute_WorkflowCommand_DelegatesToWorkflowService() => Assert.NotNull(_router.Execute(new WorkflowCommand("list")));
-    [Fact] public void Execute_PipeCommand_DelegatesToPipeService() => Assert.NotNull(_router.Execute(new PipeCommand("list")));
-    [Fact] public void Execute_GitCommand_ReturnsSuccess() => Assert.IsType<SuccessResult>(_router.Execute(new GitCommand("status")));
-    [Fact] public void Execute_LsCommand_ReturnsSuccess() => Assert.IsType<SuccessResult>(_router.Execute(new LsCommand("")));
-    [Fact] public void Execute_CdCommand_ReturnsSuccess() => Assert.IsType<SuccessResult>(_router.Execute(new CdCommand("")));
-    [Fact] public void Execute_HelpCommand_ReturnsSuccess() => Assert.IsType<SuccessResult>(_router.Execute(new HelpCommand()));
-    [Fact] public void Execute_StatusCommand_ReturnsSuccess() => Assert.IsType<SuccessResult>(_router.Execute(new StatusCommand()));
-    [Fact] public void Execute_AgentsCommand_ReturnsSuccess() => Assert.IsType<SuccessResult>(_router.Execute(new AgentsCommand("")));
-    [Fact] public void Execute_ToolsCommand_ReturnsSuccess() => Assert.IsType<SuccessResult>(_router.Execute(new ToolsCommand("")));
-    [Fact] public void Execute_McpCommand_ReturnsSuccess() => Assert.IsType<SuccessResult>(_router.Execute(new McpCommand("")));
-    [Fact] public void Execute_GraphCommand_ReturnsSuccess() => Assert.IsType<SuccessResult>(_router.Execute(new GraphCommand("init")));
-    [Fact] public void Execute_ChatMessageCommand_ReturnsSuccess() => Assert.IsType<SuccessResult>(_router.Execute(new ChatMessageCommand("hello")));
-    [Fact] public void Execute_UnknownCommand_ReturnsSuccess() => Assert.IsType<SuccessResult>(_router.Execute(new UnknownCommand("unknown")));
-    [Fact] public void Execute_EmptyCommand_ReturnsSuccess() => Assert.IsType<SuccessResult>(_router.Execute(new EmptyCommand()));
+    [Fact] public async Task Execute_ModelCommand_DelegatesToModelService() => Assert.NotNull(await _router.ExecuteAsync(new ModelCommand("")));
+    [Fact] public async Task Execute_ModelsCommand_DelegatesToModelService() => Assert.NotNull(await _router.ExecuteAsync(new ModelsCommand()));
+    [Fact] public async Task Execute_JobsCommand_DelegatesToJobsService() => Assert.NotNull(await _router.ExecuteAsync(new JobsCommand("list")));
+    [Fact] public async Task Execute_ConfigCommand_DelegatesToConfigService() => Assert.NotNull(await _router.ExecuteAsync(new ConfigCommand("status")));
+    [Fact] public async Task Execute_SnippetCommand_DelegatesToSnippetService() => Assert.NotNull(await _router.ExecuteAsync(new SnippetCommand("list")));
+    [Fact] public async Task Execute_WorkflowCommand_DelegatesToWorkflowService() => Assert.NotNull(await _router.ExecuteAsync(new WorkflowCommand("list")));
+    [Fact] public async Task Execute_PipeCommand_DelegatesToPipeService() => Assert.NotNull(await _router.ExecuteAsync(new PipeCommand("list")));
+    [Fact] public async Task Execute_GitCommand_ReturnsSuccess() => Assert.IsType<SuccessResult>(await _router.ExecuteAsync(new GitCommand("status")));
+    [Fact] public async Task Execute_LsCommand_ReturnsSuccess() => Assert.IsType<SuccessResult>(await _router.ExecuteAsync(new LsCommand("")));
+    [Fact] public async Task Execute_CdCommand_ReturnsSuccess() => Assert.IsType<SuccessResult>(await _router.ExecuteAsync(new CdCommand("")));
+    [Fact] public async Task Execute_HelpCommand_ReturnsSuccess() => Assert.IsType<SuccessResult>(await _router.ExecuteAsync(new HelpCommand()));
+    [Fact] public async Task Execute_StatusCommand_ReturnsSuccess() => Assert.IsType<SuccessResult>(await _router.ExecuteAsync(new StatusCommand()));
+    [Fact] public async Task Execute_AgentsCommand_ReturnsSuccess() => Assert.IsType<SuccessResult>(await _router.ExecuteAsync(new AgentsCommand("")));
+    [Fact] public async Task Execute_ToolsCommand_ReturnsSuccess() => Assert.IsType<SuccessResult>(await _router.ExecuteAsync(new ToolsCommand("")));
+    [Fact] public async Task Execute_McpCommand_ReturnsSuccess() => Assert.IsType<SuccessResult>(await _router.ExecuteAsync(new McpCommand("")));
+    [Fact] public async Task Execute_GraphCommand_ReturnsSuccess() => Assert.IsType<SuccessResult>(await _router.ExecuteAsync(new GraphCommand("init")));
+    [Fact] public async Task Execute_ChatMessageCommand_ReturnsSuccess() => Assert.IsType<SuccessResult>(await _router.ExecuteAsync(new ChatMessageCommand("hello")));
+    [Fact] public async Task Execute_UnknownCommand_ReturnsSuccess() => Assert.IsType<SuccessResult>(await _router.ExecuteAsync(new UnknownCommand("unknown")));
+    [Fact] public async Task Execute_EmptyCommand_ReturnsSuccess() => Assert.IsType<SuccessResult>(await _router.ExecuteAsync(new EmptyCommand()));
 }

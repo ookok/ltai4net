@@ -63,20 +63,17 @@ public sealed class DesktopCommandServiceTests
     }
 
     [Fact]
-    public void Help_ReturnsCommandList()
+    public void Help_HandledByChatView() // StatusMessage=null means ChatView handles it
     {
         var r = _svc.Execute("/help");
-        Assert.NotNull(r.StatusMessage);
-        Assert.Contains("/model", r.StatusMessage);
-        Assert.Contains("/new", r.StatusMessage);
-        Assert.Contains("/exit", r.StatusMessage);
+        Assert.Null(r.StatusMessage);
     }
 
     [Fact]
-    public void Status_ReturnsStatusString()
+    public void Status_HandledByChatView()
     {
         var r = _svc.Execute("/status");
-        Assert.NotNull(r.StatusMessage);
+        Assert.Null(r.StatusMessage);
     }
 
     [Fact]
@@ -87,35 +84,31 @@ public sealed class DesktopCommandServiceTests
     }
 
     [Fact]
-    public void Model_NoArgs_ShowsUsage()
+    public void Model_HandledByChatView()
     {
         var r = _svc.Execute("/model");
-        Assert.NotNull(r.StatusMessage);
-        Assert.Contains("用法", r.StatusMessage);
+        Assert.Null(r.StatusMessage);
     }
 
     [Fact]
-    public void Model_WithArgs_Echoes()
+    public void Model_WithArgs_HandledByChatView()
     {
         var r = _svc.Execute("/model deepseek");
-        Assert.NotNull(r.StatusMessage);
-        Assert.Contains("deepseek", r.StatusMessage);
+        Assert.Null(r.StatusMessage);
     }
 
     [Fact]
-    public void Models_ReturnsList()
+    public void Models_HandledByChatView()
     {
         var r = _svc.Execute("/models");
-        Assert.NotNull(r.StatusMessage);
-        Assert.Contains("DeepSeek", r.StatusMessage);
+        Assert.Null(r.StatusMessage);
     }
 
     [Fact]
-    public void Config_ReturnsMessage()
+    public void Config_HandledByChatView()
     {
         var r = _svc.Execute("/config");
-        Assert.NotNull(r.StatusMessage);
-        Assert.Contains("配置", r.StatusMessage);
+        Assert.Null(r.StatusMessage);
     }
 
     [Fact]
@@ -238,10 +231,9 @@ public sealed class DesktopCommandServiceTests
     }
 
     [Fact]
-    public void Snippet_ReturnsNotSupported()
+    public void Snippet_HandledByChatView()
     {
         var r = _svc.Execute("/snippet");
-        Assert.NotNull(r.StatusMessage);
-        Assert.Contains("暂不支持", r.StatusMessage);
+        Assert.Null(r.StatusMessage);
     }
 }

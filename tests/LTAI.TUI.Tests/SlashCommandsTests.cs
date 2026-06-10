@@ -22,7 +22,7 @@ public sealed class SlashCommandsTests
     public SlashCommandsTests()
     {
         _router = new CommandRouter(
-            new ModelCommandService(null, null, null, Options),
+            new ModelCommandService(null, null, null, null, Options),
             new JobsCommandService(null),
             new ConfigCommandService(null, Options),
             new SnippetCommandService(null),

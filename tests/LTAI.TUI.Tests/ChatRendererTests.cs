@@ -124,16 +124,16 @@ public sealed class ChatRendererTests
     [Fact]
     public void MdToPanelContent_VariousInputs_DoesNotThrow()
     {
-        var result = _renderer.MdToPanelContent("Hello **world**");
+        var result = ChatRenderer.MdToPanelContent("Hello **world**");
         Assert.NotNull(result);
-        result = _renderer.MdToPanelContent("Normal text");
+        result = ChatRenderer.MdToPanelContent("Normal text");
         Assert.NotNull(result);
     }
 
     [Fact]
     public void MdToPanelContent_EmptyString_DoesNotThrow()
     {
-        var result = _renderer.MdToPanelContent("");
+        var result = ChatRenderer.MdToPanelContent("");
         Assert.NotNull(result);
     }
 
@@ -147,7 +147,7 @@ public sealed class ChatRendererTests
     [Fact]
     public void HighlightCommands_DoesNotThrow()
     {
-        var result = _renderer.HighlightCommands("/help /model info #tag");
+        var result = ChatRenderer.HighlightCommands("/help /model info #tag");
         Assert.NotNull(result);
     }
 

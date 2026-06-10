@@ -16,6 +16,7 @@ public sealed record ApproveCommand : Command;
 public sealed record PlanCommand : Command;
 public sealed record UndoCommand : Command;
 public sealed record ModelsCommand : Command;
+public sealed record TodosCommand : Command;
 
 // ── Commands with optional args string ──
 

@@ -19,7 +19,7 @@ public sealed class TextTools
         + "适用场景：修改单个文件中的代码片段、重命名局部变量、修改配置值、修复代码 bug。\n"
         + "不适用场景：跨文件批量编辑（请用 MultiEdit）、创建新文件（请用 WriteFile）、正则替换（请用 RegexTest 确认模式后再手动编辑）。\n"
         + "关键参数：path — 文件路径；search — 要搜索的精确文本；replace — 替换后的文本。")]
-    public async Task<string> EditFile(string path, string search, string replace, bool confirm = false)
+    public async Task<string> EditFile(string path, string search, string replace)
     {
         var fp = SafePath(path);
         if (fp == null) return "Error: path escape";

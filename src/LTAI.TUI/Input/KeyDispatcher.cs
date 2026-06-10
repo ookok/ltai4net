@@ -58,6 +58,7 @@ public sealed class KeyDispatcher
         _keyTable[ConsoleKey.RightArrow] = (_, _) => { if (_owner._cursorCol < _owner._inputLines[_owner._cursorLine].Length) { _owner._cursorCol++; _owner.InvalidateRendered(); } return Task.FromResult(true); };
         _keyTable[ConsoleKey.PageUp] = HandlePageUp;
         _keyTable[ConsoleKey.PageDown] = HandlePageDown;
+        _keyTable[ConsoleKey.Tab] = HandleTab;
     }
 
     public async Task<bool> HandleKeyAsync(ConsoleKeyInfo key, CancellationToken ct)
@@ -162,7 +163,7 @@ public sealed class KeyDispatcher
 
     private Task<bool> HandleEscape(ConsoleKeyInfo key, CancellationToken ct)
     {
-        if (_owner._processing) { _owner._responseCts?.Cancel(); return Task.FromResult(true); }
+        if (_owner._uiState == ChatLayout.TuiUiState.Streaming) { _owner._responseCts?.Cancel(); return Task.FromResult(true); }
         return Task.FromResult(false);
     }
 
@@ -325,13 +326,29 @@ public sealed class KeyDispatcher
     {
         if (_owner._scrollOffset < _owner._history.Count - 1)
             _owner._scrollOffset = Math.Min(_owner._scrollOffset + 3, Math.Max(0, _owner._history.Count - 1));
+        _owner.InvalidateRendered();
         return Task.FromResult(true);
     }
 
     private Task<bool> HandlePageDown(ConsoleKeyInfo key, CancellationToken ct)
     {
         _owner._scrollOffset = Math.Max(0, _owner._scrollOffset - 3);
+        _owner.InvalidateRendered();
         return Task.FromResult(true);
+    }
+
+    private async Task<bool> HandleTab(ConsoleKeyInfo key, CancellationToken ct)
+    {
+        if (_owner.IsInputEmpty())
+        {
+            await _owner.CycleAgentModeAsync().ConfigureAwait(false);
+        }
+        else
+        {
+            for (var i = 0; i < 4; i++)
+                _owner.InsertChar(' ');
+        }
+        return true;
     }
 
     private async Task<bool> HandleEnter(ConsoleKeyInfo key, CancellationToken ct)

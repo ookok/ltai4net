@@ -38,6 +38,9 @@ public sealed partial class ChatView : UserControl, IChatRenderer
     private readonly LTAI.Agent.Snippets.SnippetStore? _snippetStore;
     private TextBlock? _currentResponseText;
     private readonly ViewModels.ChatViewModel? _vm;
+    private readonly Border _modeBar;
+    private readonly TextBlock _modeText;
+    private readonly TextBlock _todoText;
 
     private readonly Dictionary<int, string> _subSessions = new();
     private readonly Dictionary<int, Stopwatch> _subStartTimes = new();
@@ -133,7 +136,7 @@ public sealed partial class ChatView : UserControl, IChatRenderer
         _svc = svc;
         _sessionManager = sessionManager ?? new SessionManager();
         _toolRenderers = LTAI.Desktop.ToolRendering.DefaultRenderers.Create();
-        _snippetStore = svc.Services.GetService(typeof(LTAI.Agent.Snippets.SnippetStore)) as LTAI.Agent.Snippets.SnippetStore;
+        _snippetStore = svc?.Services?.GetService(typeof(LTAI.Agent.Snippets.SnippetStore)) as LTAI.Agent.Snippets.SnippetStore;
         SetupQuestionHandler();
 
         // D4: ViewModel-driven command wiring — if a ViewModel is provided,
@@ -147,7 +150,39 @@ public sealed partial class ChatView : UserControl, IChatRenderer
         // ── Root: Grid 3 rows (header auto / messages * / footer auto) ──
         var root = new Grid { RowDefinitions = new RowDefinitions("Auto,*,Auto"), Margin = new(8) };
 
-        // ── Messages area ──
+        // ── Mode / Todo bar (Row 0) ──
+        _modeText = new TextBlock
+        {
+            FontSize = 12,
+            FontFamily = LtaiTheme.CodeFont,
+            VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center
+        };
+        _todoText = new TextBlock
+        {
+            FontSize = 11,
+            FontFamily = LtaiTheme.CodeFont,
+            VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+            Foreground = LtaiTheme.Sbb(LtaiTheme.TextDim)
+        };
+        var modeStack = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 8,
+            Children = { _modeText, _todoText }
+        };
+        _modeBar = new Border
+        {
+            Background = LtaiTheme.Sbb(LtaiTheme.BgPanel),
+            BorderBrush = LtaiTheme.Sbb(LtaiTheme.Border),
+            BorderThickness = new(0, 0, 0, 1),
+            Padding = new(8, 4),
+            Child = modeStack,
+            IsVisible = false
+        };
+        Grid.SetRow(_modeBar, 0);
+        root.Children.Add(_modeBar);
+
+        // ── Messages area (Row 1) ──
         _outputStack = new StackPanel { Spacing = 4 };
         _scroller = new ScrollViewer { Content = _outputStack };
         Grid.SetRow(_scroller, 1);
@@ -295,7 +330,7 @@ public sealed partial class ChatView : UserControl, IChatRenderer
             LTAI.Agent.Tools.SubagentTools.OnSubagentComplete -= OnSubagentComplete;
             if (_questionHandler != null)
             {
-                var qs = _svc.Services.GetService(typeof(LTAI.Agent.Tools.QuestionService)) as LTAI.Agent.Tools.QuestionService;
+        var qs = _svc?.Services?.GetService(typeof(LTAI.Agent.Tools.QuestionService)) as LTAI.Agent.Tools.QuestionService;
                 if (qs != null) qs.QuestionPosted -= _questionHandler;
             }
             if (_vm != null)
@@ -403,6 +438,12 @@ public sealed partial class ChatView : UserControl, IChatRenderer
                 if (t.IsFaulted)
                     System.Diagnostics.Debug.WriteLine($"[ChatView] SendAsync failed: {t.Exception?.InnerException?.Message}");
             });
+        }
+        // Tab (input empty) → cycle agent mode
+        else if (e.Key == Key.Tab && e.KeyModifiers == KeyModifiers.None && string.IsNullOrEmpty(_input?.Text))
+        {
+            e.Handled = true;
+            _ = CycleModeAsync();
         }
         else if (e.Key == Key.Up && e.KeyModifiers == KeyModifiers.None && _history.Count > 0)
         {
@@ -936,10 +977,50 @@ public sealed partial class ChatView : UserControl, IChatRenderer
 
     private void PruneOutputStack() { }
 
+    private async Task CycleModeAsync()
+    {
+        try
+        {
+            var chatAgent = _svc.Services.GetService(typeof(LTAI.Agent.ChatAgent)) as LTAI.Agent.ChatAgent;
+            if (chatAgent == null) return;
+            var mode = await chatAgent.CycleModeAsync().ConfigureAwait(false);
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                RefreshStats();
+                AddSystemBubble($"🔄 模式切换: {mode}");
+            });
+        }
+        catch (Exception ex)
+        {
+            await Dispatcher.UIThread.InvokeAsync(() =>
+                AddSystemBubble($"❌ 模式切换失败: {ex.Message}"));
+        }
+    }
+
     private void RefreshStats()
     {
         _footerStats.Children.Clear();
         var dim = new SolidColorBrush(LtaiTheme.TextDim);
+
+        // ── Update Mode / Todo bar ──
+        var mode = LTAI.Agent.Tooling.AgentModeObserver.CurrentMode;
+        var remaining = LTAI.Agent.Tooling.AgentModeObserver.RemainingTodos;
+        var total = LTAI.Agent.Tooling.AgentModeObserver.TotalTodos;
+        var icon = LTAI.Agent.Tooling.AgentModeObserver.ModeIcon;
+
+        _modeText.Text = $"{icon} {mode}";
+        _modeBar.IsVisible = true;
+        _modeText.Foreground = mode.ToLowerInvariant() switch
+        {
+            "plan" => LtaiTheme.Sbb(LtaiTheme.AccentWarning),
+            "execute" or "exec" => LtaiTheme.Sbb(LtaiTheme.AccentDanger),
+            _ => LtaiTheme.Sbb(LtaiTheme.TextSecondary),
+        };
+
+        if (total > 0)
+            _todoText.Text = $"待办: {remaining}/{total}";
+        else
+            _todoText.Text = "";
 
         TextBlock Line(string text) => new()
         {
@@ -1062,7 +1143,7 @@ public sealed partial class ChatView : UserControl, IChatRenderer
 
     private void SetupQuestionHandler()
     {
-        var qs = _svc.Services.GetService(typeof(LTAI.Agent.Tools.QuestionService)) as LTAI.Agent.Tools.QuestionService;
+        var qs = _svc?.Services?.GetService(typeof(LTAI.Agent.Tools.QuestionService)) as LTAI.Agent.Tools.QuestionService;
         if (qs == null) return;
 
         _questionHandler = post =>

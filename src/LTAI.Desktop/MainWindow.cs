@@ -296,7 +296,11 @@ public partial class MainWindow : Window
             var tokens = _chatView?.Tokens ?? 0;
             var branch = _textPadView?.GitBranch;
             var errorDot = _textPadView?.HasPendingError == true ? " 🔴" : "";
-            _vm.CapsuleText = $"🤖 {model} | 🔥 {tokens:N0} t | 🌿 {branch ?? "--"}{errorDot}";
+            var modeIcon = LTAI.Agent.Tooling.AgentModeObserver.ModeIcon;
+            var modeName = LTAI.Agent.Tooling.AgentModeObserver.CurrentMode;
+            var todos = LTAI.Agent.Tooling.AgentModeObserver.RemainingTodos;
+            var modeStr = todos > 0 ? $"{modeIcon}{modeName}({todos})" : $"{modeIcon}{modeName}";
+            _vm.CapsuleText = $"{modeStr} | 🤖 {model} | 🔥 {tokens:N0} t | 🌿 {branch ?? "--"}{errorDot}";
         });
         _statusTimer.Start();
 

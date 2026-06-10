@@ -32,6 +32,7 @@ public sealed partial class ChatLayout : IDisposable, IStreamerHost, IChatRender
     private readonly TextPadView _textPadView;
     private readonly SessionsCommandHandler _sessionHandler;
     private volatile QuestionPost? _pendingQuestion;
+    private readonly StringBuilder _streamingBuffer = new();
 
     internal readonly System.Threading.Channels.Channel<string> _messageQueue =
         System.Threading.Channels.Channel.CreateBounded<string>(new BoundedChannelOptions(32)
@@ -50,7 +51,8 @@ public sealed partial class ChatLayout : IDisposable, IStreamerHost, IChatRender
             _history.Add((role, null, content, null));
         }
     }
-    internal volatile bool _processing;
+    internal enum TuiUiState { Idle, Streaming, Picker, ViewPicker, Cascade, ModelPicker, TextInput, Question }
+    internal TuiUiState _uiState = TuiUiState.Idle;
     internal CancellationTokenSource? _responseCts;
     private CancellationTokenSource? _renderCts;
     internal volatile char _quickNav;
@@ -71,6 +73,11 @@ public sealed partial class ChatLayout : IDisposable, IStreamerHost, IChatRender
     internal int _scrollOffset = 0;
     private const int ScrollStep = 3;
 
+    // ── Framebuffer 渲染 ──
+    private FramebufferRenderer? _framebuffer;
+    private volatile string? _progressText;
+
+
     // ── 当前 Turn 的工具调用（临时，不进 history） ──
     internal readonly List<(string name, string args, string result)> _toolCalls = new();
 
@@ -90,7 +97,6 @@ public sealed partial class ChatLayout : IDisposable, IStreamerHost, IChatRender
     internal List<SlashCommands.SuggestionItem> _pickerItems = new();
     internal int _pickerSelectedIdx;
     internal int _pickerScrollOffset;
-    private LiveDisplayContext? _liveCtx;
     public TuiView? LastRequestedView { get; private set; }
     public static string CurrentViewName { get; set; } = "聊天";
     public string? CurrentFileForContext => _textPadView.CurrentFileForContext;
@@ -227,9 +233,7 @@ public sealed partial class ChatLayout : IDisposable, IStreamerHost, IChatRender
         _questionService.QuestionPosted += post => _pendingQuestion = post;
 
         // 自动计算可见消息数，确保输入区始终固定
-        // 每条消息 ≈ 4 行，Footer 4 行（输入区3+状态条1）
-        var termHeight = Math.Max(24, SafeWindowHeight);
-        _maxVisibleMessages = Math.Max(3, (termHeight - 6) / 4);
+        _maxVisibleMessages = 200; // generous line budget; rendering writes to stdout for scrollback
 
         _layout = new Layout()
             .SplitRows(
@@ -340,17 +344,12 @@ public sealed partial class ChatLayout : IDisposable, IStreamerHost, IChatRender
     private async Task<TuiView?> RunMainLoopAsync()
     {
         TuiView? result = TuiView.Chat;
+        _framebuffer = new FramebufferRenderer();
+        _framebuffer.Initialize();
         try
         {
-            await AnsiConsole.Live(_layout)
-            .AutoClear(false)
-            .Overflow(VerticalOverflow.Ellipsis)
-            .Cropping(VerticalOverflowCropping.Top)
-            .StartAsync(async ctx =>
-            {
-                _liveCtx = ctx;
-                var showWatermark = true;
-                _processing = false;
+            var showWatermark = true;
+            _uiState = TuiUiState.Idle;
 
                 // P17.5: background task that reads keys independently from
                 // message processing. User can type the next message while the
@@ -398,7 +397,8 @@ public sealed partial class ChatLayout : IDisposable, IStreamerHost, IChatRender
                             else if (evt.ScrollDelta != 0)
                             {
                                 var oldOffset = _scrollOffset;
-                                _scrollOffset = Math.Clamp(_scrollOffset - evt.ScrollDelta, 0, Math.Max(0, _history.Count - 1));
+                                var step = Math.Sign(evt.ScrollDelta);
+                                _scrollOffset = Math.Clamp(_scrollOffset - step, 0, Math.Max(0, _history.Count - 1));
                                 if (_scrollOffset != oldOffset)
                                     InvalidateRendered();
                             }
@@ -444,7 +444,7 @@ public sealed partial class ChatLayout : IDisposable, IStreamerHost, IChatRender
                 // Force initial render — main loop's doRefresh is false on first
                 // iteration (nothing dirty yet), so the welcome screen never appears
                 // without this explicit refresh.
-                lock (_layout) { UpdateMessages(""); UpdateFooter("", "", true); ctx.Refresh(); }
+                lock (_layout) { UpdateMessages(""); UpdateFooter("", "", true); _framebuffer.RenderAndFlush(_layout); }
 
                 // Main rendering + processing loop: only refreshes on actual
                 // changes. Cursor blink is handled independently by FooterRenderer
@@ -452,7 +452,7 @@ public sealed partial class ChatLayout : IDisposable, IStreamerHost, IChatRender
                 // This avoids flickering with IME input on Windows Terminal.
                 while (!cts.Token.IsCancellationRequested)
                 {
-                    var doRefresh = _needsRefresh || _processing
+                    var doRefresh = _needsRefresh || _uiState != TuiUiState.Idle
                         || _viewPickerActive || _pickerActive || _cascadeActive
                         || _modelPickerActive || _textInputActive || _questionActive;
 
@@ -466,7 +466,7 @@ public sealed partial class ChatLayout : IDisposable, IStreamerHost, IChatRender
                             {
                                 _messagesLayout.Update(BuildViewSwitcherOverlay());
                                 UpdateFooter("", "", showWatermark);
-                                ctx.Refresh();
+                                _framebuffer.RenderAndFlush(_layout);
                             }
                         }
                         else if (_pickerActive)
@@ -485,7 +485,7 @@ public sealed partial class ChatLayout : IDisposable, IStreamerHost, IChatRender
                             {
                                 _messagesLayout.Update(BuildPickerOverlay(filter, items, selIdx, scrollOffset));
                                 UpdateFooter("", "", showWatermark);
-                                ctx.Refresh();
+                                _framebuffer.RenderAndFlush(_layout);
                             }
                         }
                         else if (_cascadeActive)
@@ -494,7 +494,7 @@ public sealed partial class ChatLayout : IDisposable, IStreamerHost, IChatRender
                             {
                                 _messagesLayout.Update(BuildCascadeOverlay());
                                 UpdateFooter("", "", showWatermark);
-                                ctx.Refresh();
+                                _framebuffer.RenderAndFlush(_layout);
                             }
                         }
                         else if (_modelPickerActive)
@@ -503,7 +503,7 @@ public sealed partial class ChatLayout : IDisposable, IStreamerHost, IChatRender
                             {
                                 _messagesLayout.Update(BuildModelPickerOverlay());
                                 UpdateFooter("", "", showWatermark);
-                                ctx.Refresh();
+                                _framebuffer.RenderAndFlush(_layout);
                             }
                         }
                         else if (_textInputActive)
@@ -512,7 +512,7 @@ public sealed partial class ChatLayout : IDisposable, IStreamerHost, IChatRender
                             {
                                 _messagesLayout.Update(BuildTextInputOverlay());
                                 UpdateFooter("", "", showWatermark);
-                                ctx.Refresh();
+                                _framebuffer.RenderAndFlush(_layout);
                             }
                         }
                         else if (_questionActive)
@@ -521,18 +521,28 @@ public sealed partial class ChatLayout : IDisposable, IStreamerHost, IChatRender
                             {
                                 _messagesLayout.Update(BuildQuestionOverlay());
                                 UpdateFooter("", "", showWatermark);
-                                ctx.Refresh();
+                                _framebuffer.RenderAndFlush(_layout);
                             }
                         }
-                        else if (_processing)
+                        else if (_uiState == TuiUiState.Streaming)
                         {
-                            // During streaming, the streaming thread updates _messagesLayout
-                            // via UpdateMessages(content) and the spin animation updates footer via
-                            // UpdateFooter — both signal via InvalidateRendered(). Main loop
-                            // also updates footer with current input state for cursor visibility.
-                            UpdateMessages("");
-                            UpdateFooter("", "");
-                            ctx.Refresh();
+                            if (_needsRefresh || _streamingBuffer.Length > 0 || _progressText != null)
+                            {
+                                _needsRefresh = false;
+                                lock (_layout)
+                                {
+                                    if (_streamingBuffer.Length > 0)
+                                        UpdateMessages(_streamingBuffer.ToString());
+                                    if (_progressText != null)
+                                    {
+                                        var pt = _progressText;
+                                        _progressText = null;
+                                        UpdateFooter("", pt);
+                                    }
+                                    _framebuffer.RenderAndFlush(_layout);
+                                }
+                                try { System.Console.SetCursorPosition(_cursorCol, SafeWindowHeight - 1); } catch { }
+                            }
                         }
                         else
                         {
@@ -543,7 +553,14 @@ public sealed partial class ChatLayout : IDisposable, IStreamerHost, IChatRender
                                 if (hasUserMsg || expired)
                                     _history.RemoveAll(x => x.role == "cmd");
                             }
-                            lock (_layout) { UpdateMessages(""); UpdateFooter("", "", showWatermark); ctx.Refresh(); }
+                            lock (_layout)
+                            {
+                                UpdateMessages("");
+                                UpdateFooter("", "", showWatermark);
+                                _framebuffer.RenderAndFlush(_layout);
+                            }
+                            // Place terminal cursor at the input area (bottom row)
+                            try { System.Console.SetCursorPosition(_cursorCol, SafeWindowHeight - 1); } catch { }
                         }
                         showWatermark = false;
                     }
@@ -561,7 +578,7 @@ public sealed partial class ChatLayout : IDisposable, IStreamerHost, IChatRender
                         };
                         CurrentViewName = GetViewName(nextView);
                         LastRequestedView = nextView;
-                        cts.Cancel(); return;
+                        cts.Cancel(); break;
                     }
 
                     // Check pending build result from background task
@@ -575,7 +592,7 @@ public sealed partial class ChatLayout : IDisposable, IStreamerHost, IChatRender
                     }
 
                     // Process the next queued message (if not already busy)
-                    if (!_processing && _messageQueue.Reader.TryRead(out var msg))
+                    if (_uiState == TuiUiState.Idle && _messageQueue.Reader.TryRead(out var msg))
                     {
                         if (msg.StartsWith("/!") && msg.Length > 2)
                         {
@@ -584,7 +601,7 @@ public sealed partial class ChatLayout : IDisposable, IStreamerHost, IChatRender
                             try
                             {
                                 var handled = await HandleSlashCommandAsync(cmd).ConfigureAwait(false);
-                                if (!handled) { cts.Cancel(); return; }
+                                if (!handled) { cts.Cancel(); break; }
                                 var pending = SlashCommands.PendingInput;
                                 if (pending != null)
                                 {
@@ -602,7 +619,7 @@ public sealed partial class ChatLayout : IDisposable, IStreamerHost, IChatRender
                         }
                         else
                         {
-                            _processing = true;
+                            _uiState = TuiUiState.Streaming;
                             _responseCts = new CancellationTokenSource();
                             _ = StreamResponseAsync(msg).ContinueWith(t =>
                             {
@@ -612,7 +629,7 @@ public sealed partial class ChatLayout : IDisposable, IStreamerHost, IChatRender
                                     System.Diagnostics.Debug.WriteLine($"[ChatLayout] StreamResponse failed: {ex}");
                                     _statusMessage = $"[red]流式错误: {ex?.Message.EscapeMarkup() ?? "未知"}[/]";
                                 }
-                                _processing = false;
+                _uiState = TuiUiState.Idle;
                                 InvalidateRendered();
                             }, TaskScheduler.Default);
                             continue;
@@ -624,9 +641,9 @@ public sealed partial class ChatLayout : IDisposable, IStreamerHost, IChatRender
                     try { await Task.Delay(doRefresh ? 16 : 50, cts.Token).ConfigureAwait(false); }
                     catch (OperationCanceledException) { break; }
                 }
-            });
         }
         catch (OperationCanceledException) { }
+        _framebuffer?.Shutdown();
         result = LastRequestedView;
         return result;
     }
@@ -1005,11 +1022,25 @@ public sealed partial class ChatLayout : IDisposable, IStreamerHost, IChatRender
 
     // ── IChatRenderer ──
 
-    void IChatRenderer.OnStreamStart() { }
-    void IChatRenderer.OnTextDelta(string delta) => UpdateMessages(delta);
+    void IChatRenderer.OnStreamStart() { _streamingBuffer.Clear(); _scrollOffset = 0; }
+    void IChatRenderer.OnTextDelta(string delta)
+    {
+        _streamingBuffer.Append(delta);
+        _needsRefresh = true;
+    }
     void IChatRenderer.OnToolCall(string name, string? arguments) { }
     void IChatRenderer.OnToolResult(string name, string result, bool success) { }
-    void IChatRenderer.OnStreamEnd() { }
+    void IChatRenderer.OnStreamEnd()
+    {
+        var text = _streamingBuffer.ToString();
+        _streamingBuffer.Clear();
+        if (!string.IsNullOrWhiteSpace(text))
+        {
+            lock (_historyLock)
+                _history.Add(("assistant", null, text, null));
+        }
+        InvalidateRendered();
+    }
 
     void IChatRenderer.RenderMessage(string role, string content,
         IReadOnlyList<ToolCallRecord>? toolCalls, string? reasoning)
@@ -1020,8 +1051,11 @@ public sealed partial class ChatLayout : IDisposable, IStreamerHost, IChatRender
 
     void IChatRenderer.UpdateStatus(string text) => UpdateFooter("", text);
 
-    void IChatRenderer.UpdateProgress(string frame, string text, string? elapsed) =>
-        UpdateFooter("", string.IsNullOrEmpty(frame) ? text : $"{frame} {text}");
+    void IChatRenderer.UpdateProgress(string frame, string text, string? elapsed)
+    {
+        _progressText = string.IsNullOrEmpty(frame) ? text : $"{frame} {text}";
+        _needsRefresh = true;
+    }
 
     ToolResultInfo IChatRenderer.TryParseToolResult(string text)
     {
@@ -1091,6 +1125,26 @@ public sealed partial class ChatLayout : IDisposable, IStreamerHost, IChatRender
     }
     Task? IStreamerHost.ExtractMemory(string userInput)
         => _memoryExtractor?.ExtractFromTurnAsync(userInput, ct: CancellationToken.None);
+
+    public async Task CycleAgentModeAsync()
+    {
+        try
+        {
+            var mode = await _chat.CycleModeAsync().ConfigureAwait(false);
+            var icon = LTAI.Agent.Tooling.AgentModeObserver.ModeIcon;
+            var raw = $"(Tab) 模式切换: {icon} {mode}";
+            lock (_historyLock)
+                _history.Add(("system", null, raw, null));
+            InvalidateRendered();
+        }
+        catch (Exception ex)
+        {
+            var raw = $"(Tab) 模式切换失败: {ex.Message}";
+            lock (_historyLock)
+                _history.Add(("system", null, raw, null));
+            InvalidateRendered();
+        }
+    }
 
     private static string Truncate(string text, int max) =>
         text.Length <= max ? text : text[..max] + "...";

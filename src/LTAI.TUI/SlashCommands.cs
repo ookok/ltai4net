@@ -157,6 +157,7 @@ public static class SlashCommands
         new("ls",      "文件",  "列出当前目录内容"),
         new("cd",      "文件",  "切换工作目录", "目录路径"),
         new("pwd",     "文件",  "显示当前目录"),
+        new("todos",   "信息",  "查看待办事项列表"),
         new("approve", "计划",  "批准当前计划并开始执行"),
         new("plan",    "计划",  "查看当前计划状态"),
         new("lang",    "设置",  "切换语言: zh-CN|en-US"),
@@ -352,6 +353,18 @@ public static class SlashCommands
 
             case PlanCommand:
                 return (true, PlanTools.PlanStatus());
+
+            case TodosCommand:
+                var todoSummary = LTAI.Agent.Tooling.AgentModeObserver.TodoSummary;
+                var rem = LTAI.Agent.Tooling.AgentModeObserver.RemainingTodos;
+                var tot = LTAI.Agent.Tooling.AgentModeObserver.TotalTodos;
+                if (tot == 0)
+                    return (true, "[yellow]📋 暂无待办事项[/]");
+                var todoText = !string.IsNullOrEmpty(todoSummary)
+                    ? todoSummary
+                    : $"{rem} 项未完成 / {tot} 项总计";
+                var modeName = LTAI.Agent.Tooling.AgentModeObserver.CurrentMode;
+                return (true, $"[bold]📋 待办清单[/]  |  模式: {LTAI.Agent.Tooling.AgentModeObserver.ModeIcon} {modeName}\n\n{todoText}");
 
             case ModeCommand mc:
                 var mode = mc.Args.ToLowerInvariant() switch { "review" => "review", "auto" => "auto", _ => "" };

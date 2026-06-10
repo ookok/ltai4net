@@ -42,6 +42,7 @@ public sealed class CommandParser : ICommandParser
         ("pwd",      ["目录"]),
         ("approve",  ["yes", "confirm", "批准", "确认"]),
         ("plan",     ["计划状态"]),
+        ("todos",    ["todo", "待办", "任务列表"]),
         ("lang",     ["语言", "language"]),
         ("skill",    []),
         ("git",      ["g"]),
@@ -104,6 +105,7 @@ public sealed class CommandParser : ICommandParser
                 "pwd" => new PwdCommand(),
                 "approve" => new ApproveCommand(),
                 "plan" => new PlanCommand(),
+                "todos" => new TodosCommand(),
                 "undo" => new UndoCommand(),
                 "models" => new ModelsCommand(),
                 _ => args is "" && HasArgs(canonical)

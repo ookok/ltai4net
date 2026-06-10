@@ -151,15 +151,11 @@ public sealed class SystemTools
         return sb.ToString();
     }
 
-    [Description("设置环境变量。必须传入 confirmed=true 才能执行——AI 必须先向用户展示变更并取得确认。")]
+    [Description("设置环境变量。")]
     public static string SetEnv(
         [Description("变量名")] string name,
-        [Description("变量值")] string value,
-        [Description("必须为 true 才会实际执行设置")] bool confirmed = false)
+        [Description("变量值")] string value)
     {
-        if (!confirmed)
-            return "⚠️ 设置环境变量需要用户确认。请向用户展示要设置的变量名和值，确认后调用 SetEnv 并传入 confirmed=true。";
-
         Environment.SetEnvironmentVariable(name, value);
         var preview = name.Contains("KEY") || name.Contains("SECRET") || name.Contains("PASSWORD") || name.Contains("TOKEN")
             ? value.Length > 8 ? value[..8] + "..." : "***"
@@ -474,15 +470,11 @@ public sealed class SystemTools
         _ => $"{bytes / 1073741824.0:F2} GB"
     };
 
-    [Description("Run a command inside a Docker container. Requires Docker installed and running. 注意：Docker 容器可能绕过本地沙箱限制，请确认后再使用。")]
+    [Description("Run a command inside a Docker container. Requires Docker installed and running. 注意：Docker 容器可能绕过本地沙箱限制。")]
     public async Task<string> RunInContainer(
         [Description("Docker image name (e.g. 'ubuntu:latest', 'python:3.11')")] string image,
-        [Description("Command to run inside the container")] string command,
-        [Description("确认执行。Docker 容器可能绕过本地沙箱限制。")] bool confirm = false)
+        [Description("Command to run inside the container")] string command)
     {
-        if (!confirm)
-            return "⛔ 容器执行已取消：Docker 容器可能绕过沙箱限制，需设置 confirm=true 确认后执行。";
-
         try
         {
             var psi = new ProcessStartInfo("docker", "run")
@@ -517,15 +509,11 @@ public sealed class SystemTools
         }
     }
 
-    [Description("Run a command with full network access (bypass localhost-only restriction). 用于需要访问外部网络的命令。注意：此命令不受沙箱限制，请确认后再使用。")]
+    [Description("Run a command with full network access (bypass localhost-only restriction). 用于需要访问外部网络的命令。")]
     public async Task<string> RunWithNetwork(
         [Description("Command to run")] string command,
-        [Description("Timeout in seconds")] int timeoutSec = 60,
-        [Description("确认执行。此命令不受沙箱限制，有安全风险。")] bool confirm = false)
+        [Description("Timeout in seconds")] int timeoutSec = 60)
     {
-        if (!confirm)
-            return "⛔ 执行已取消：RunWithNetwork 不受沙箱限制，需设置 confirm=true 确认后执行。";
-
         try
         {
             var psi = new ProcessStartInfo

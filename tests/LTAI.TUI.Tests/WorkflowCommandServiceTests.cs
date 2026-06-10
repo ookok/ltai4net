@@ -7,11 +7,11 @@ namespace LTAI.TUI.Tests;
 public sealed class WorkflowCommandServiceTests
 {
     [Fact]
-    public void Execute_NullRegistry_DoesNotThrow()
+    public async Task Execute_NullRegistry_DoesNotThrow()
     {
         var service = new WorkflowCommandService(null);
         var cmd = new WorkflowCommand("list");
-        var result = service.Execute(cmd);
+        var result = await service.ExecuteAsync(cmd);
         Assert.NotNull(result);
     }
 
@@ -20,38 +20,38 @@ public sealed class WorkflowCommandServiceTests
     [InlineData("reload")]
     [InlineData("show")]
     [InlineData("open")]
-    public void Execute_WorkflowSubCommands_DoesNotThrow(string args)
+    public async Task Execute_WorkflowSubCommands_DoesNotThrow(string args)
     {
         var service = new WorkflowCommandService(null);
         var cmd = new WorkflowCommand(args);
-        var result = service.Execute(cmd);
+        var result = await service.ExecuteAsync(cmd);
         Assert.NotNull(result);
     }
 
     [Fact]
-    public void Execute_WorkflowUnknownSubcommand_DoesNotThrow()
+    public async Task Execute_WorkflowUnknownSubcommand_DoesNotThrow()
     {
         var service = new WorkflowCommandService(null);
         var cmd = new WorkflowCommand("unknown_sub");
-        var result = service.Execute(cmd);
+        var result = await service.ExecuteAsync(cmd);
         Assert.NotNull(result);
     }
 
     [Fact]
-    public void Execute_WorkflowShowWithName_DoesNotThrow()
+    public async Task Execute_WorkflowShowWithName_DoesNotThrow()
     {
         var service = new WorkflowCommandService(null);
         var cmd = new WorkflowCommand("show myworkflow");
-        var result = service.Execute(cmd);
+        var result = await service.ExecuteAsync(cmd);
         Assert.NotNull(result);
     }
 
     [Fact]
-    public void Execute_WorkflowOpenWithName_DoesNotThrow()
+    public async Task Execute_WorkflowOpenWithName_DoesNotThrow()
     {
         var service = new WorkflowCommandService(null);
         var cmd = new WorkflowCommand("open myworkflow");
-        var result = service.Execute(cmd);
+        var result = await service.ExecuteAsync(cmd);
         Assert.NotNull(result);
     }
 }

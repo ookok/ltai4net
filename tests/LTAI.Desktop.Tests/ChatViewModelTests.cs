@@ -15,10 +15,8 @@ public sealed class ChatViewModelTests
 
         await vm.SendCommand.ExecuteAsync(null);
 
-        Assert.Single(vm.Messages);
-        Assert.Contains("/help", vm.Messages[0].Text);
-        Assert.Contains("/new", vm.Messages[0].Text);
-        Assert.Equal("system", vm.Messages[0].Role);
+        // /help returns null StatusMessage (handled by ChatView rendering)
+        Assert.Empty(vm.Messages);
         mock.Verify(c => c.ChatStreamingAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
@@ -42,14 +40,11 @@ public sealed class ChatViewModelTests
     {
         var mock = new Mock<ILlmClient>();
         var vm = new ChatViewModel(mock.Object);
-        vm.Input = "/help";
-        await vm.SendCommand.ExecuteAsync(null);
-        Assert.NotEmpty(vm.Messages);
-
         vm.Input = "/new";
         await vm.SendCommand.ExecuteAsync(null);
 
-        Assert.Single(vm.Messages);
+        // /new creates a system message
+        Assert.NotEmpty(vm.Messages);
         Assert.Equal("system", vm.Messages[0].Role);
         mock.Verify(c => c.ChatStreamingAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
     }
@@ -149,7 +144,7 @@ public sealed class ChatViewModelTests
         await sendTask;
 
         Assert.False(vm.IsSending);
-        Assert.Contains(vm.Messages, m => m.Role == "system" && m.Text.Contains("已取消"));
+        Assert.Contains(vm.Messages, m => m.Role == "assistant" && (m.Text?.Contains("已取消") ?? false));
     }
 
     /// <summary>Streams forever until cancellation is requested, then ends gracefully.</summary>

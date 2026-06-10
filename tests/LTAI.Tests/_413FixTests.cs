@@ -43,7 +43,7 @@ public sealed class _413FixTests : IDisposable
         if (!string.IsNullOrEmpty(key))
         {
             router.Register("l1", OpenAIChatClientFactory.Create(
-                "https://api.deepseek.com", "deepseek-chat", key));
+                "https://api.deepseek.com", "deepseek-v4-flash", key));
             output.WriteLine("DeepSeek key found, registered as l1");
         }
     }

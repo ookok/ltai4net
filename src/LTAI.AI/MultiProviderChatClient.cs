@@ -64,7 +64,7 @@ public sealed class MultiProviderChatClient : IChatClient
     });
     private static readonly TimeSpan CacheTtl = TimeSpan.FromMinutes(5);
     private static int _responseCacheSizeLimit = 256;
-    private readonly int _perProviderTimeoutSec = 15;
+    private readonly int _perProviderTimeoutSec = 30;
 
     // LLM call counter — increments on every actual HTTP request
     private static long _callCounter;
@@ -304,7 +304,7 @@ public sealed class MultiProviderChatClient : IChatClient
         try
         {
             using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            timeoutCts.CancelAfter(TimeSpan.FromSeconds(15));
+            timeoutCts.CancelAfter(TimeSpan.FromSeconds(_perProviderTimeoutSec));
             return await client.GetResponseAsync(messages, options, timeoutCts.Token)
                 .ConfigureAwait(false);
         }
@@ -394,7 +394,7 @@ public sealed class MultiProviderChatClient : IChatClient
 
                 // Add 15s per-provider timeout
                 using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                timeoutCts.CancelAfter(TimeSpan.FromSeconds(15));
+            timeoutCts.CancelAfter(TimeSpan.FromSeconds(_perProviderTimeoutSec));
 
                 var result = await client.GetResponseAsync(messages, options, timeoutCts.Token)
                     .ConfigureAwait(false);
@@ -466,14 +466,14 @@ public sealed class MultiProviderChatClient : IChatClient
             }
             catch (TimeoutException)
             {
-                _lastError = "Timeout after 15s";
-                _logger.LogWarning("Provider '{P}' timed out after 15s, degrading", p);
+                _lastError = $"Timeout after {_perProviderTimeoutSec}s";
+                _logger.LogWarning("Provider '{P}' timed out after {S}s, degrading", p, _perProviderTimeoutSec);
                 RecordFailure(p);
                 continue;
             }
             catch (OperationCanceledException) when (!ct.IsCancellationRequested)
             {
-                _lastError = "Timeout after 15s";
+                _lastError = $"Timeout after {_perProviderTimeoutSec}s";
                 _logger.LogWarning("Provider '{P}' timed out, degrading", p);
                 RecordFailure(p);
                 continue;

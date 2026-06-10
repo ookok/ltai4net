@@ -74,6 +74,7 @@ public sealed class WorkflowsView : UserControl
     private void RefreshList()
     {
         _listPanel.Children.Clear();
+        if (_vm?.Workflows == null) return;
         foreach (var wf in _vm.Workflows)
         {
             var card = new Border

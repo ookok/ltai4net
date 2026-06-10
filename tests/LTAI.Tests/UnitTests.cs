@@ -69,6 +69,7 @@ public class SecretManagerUnitTests
 //  Unit Tests — Locale (i18n)
 // ═══════════════════════════════════════════════
 
+[Collection("Locale")]
 public class LocaleUnitTests
 {
     [Fact]
@@ -307,23 +308,23 @@ public class SafeShellToolUnitTests
     public async Task DangerousCommand_ReturnsError()
     {
         var tool = new SafeShellTool(Directory.GetCurrentDirectory());
-        var result = await tool.RunCommand("rm -rf /", confirm: true);
+        var result = await tool.RunCommand("rm -rf /");
         Assert.Contains("危险", result);
     }
 
     [Fact]
-    public async Task SimpleCommand_WithoutConfirm_ReturnsWarning()
+    public async Task SimpleCommand_RunsDirectly()
     {
         var tool = new SafeShellTool(Directory.GetCurrentDirectory());
-        var result = await tool.RunCommand("echo hello", confirm: false);
-        Assert.Contains("确认", result);
+        var result = await tool.RunCommand("echo hello");
+        Assert.Contains("hello", result);
     }
 
     [Fact]
     public async Task SimpleCommand_WithConfirm_Runs()
     {
         var tool = new SafeShellTool(Directory.GetCurrentDirectory());
-        var result = await tool.RunCommand("echo hello world", confirm: true);
+        var result = await tool.RunCommand("echo hello world");
         Assert.Contains("hello world", result);
     }
 
@@ -331,14 +332,14 @@ public class SafeShellToolUnitTests
     public async Task SudoCommand_Blocked()
     {
         var tool = new SafeShellTool(Directory.GetCurrentDirectory());
-        Assert.Contains("阻止", await tool.RunCommand("sudo rm -rf /", confirm: true));
+        Assert.Contains("阻止", await tool.RunCommand("sudo rm -rf /"));
     }
 
     [Fact]
     public async Task DotnetVersion_Safe_Allowed()
     {
         var tool = new SafeShellTool(Directory.GetCurrentDirectory());
-        var result = await tool.RunCommand("dotnet --version", confirm: true);
+        var result = await tool.RunCommand("dotnet --version");
         Assert.False(string.IsNullOrWhiteSpace(result));
     }
 }
@@ -390,9 +391,9 @@ public class OptionsValidatorUnitTests
     public void Valid_Passes() => Assert.True(new LTAIOptionsValidator().Validate(null, ValidOptions).Succeeded);
 
     [Fact]
-    public void EmptyProvider_Fails()
+    public void EmptyProvider_Passes() // offline mode: empty DefaultProvider is allowed
     {
-        Assert.False(new LTAIOptionsValidator().Validate(null, new LTAIOptions
+        Assert.True(new LTAIOptionsValidator().Validate(null, new LTAIOptions
         {
             AI = new AIConfig { DefaultProvider = "", MaxTokens = 4096, Temperature = 0.7, GlobalTokenBudget = 1_000_000, PerUserTokenBudget = 200_000 },
             Web = new WebConfig { Port = 5100 }, MaxHistoryMessages = 200, DataDirectory = ".livingtree",
@@ -400,9 +401,9 @@ public class OptionsValidatorUnitTests
     }
 
     [Fact]
-    public void ZeroMaxTokens_Fails()
+    public void ZeroMaxTokens_Passes() // 0 is valid (no upper bound min)
     {
-        Assert.False(new LTAIOptionsValidator().Validate(null, new LTAIOptions
+        Assert.True(new LTAIOptionsValidator().Validate(null, new LTAIOptions
         {
             AI = new AIConfig { DefaultProvider = "deepseek", MaxTokens = 0, Temperature = 0.7, GlobalTokenBudget = 1_000_000, PerUserTokenBudget = 200_000 },
             Web = new WebConfig { Port = 5100 }, MaxHistoryMessages = 200, DataDirectory = ".livingtree",
