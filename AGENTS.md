@@ -7,7 +7,7 @@
 - `src/LTAI.Core/` — 配置、安全、用量追踪（零外部依赖）
 - `src/LTAI.AI/` — LLM 路由器 (`MultiProviderChatClient`)、嵌入 (`LocalEmbedder`)、ToolRegistry
 - `src/LTAI.Agent/` — agent 构建、编排、上下文、DevUI 服务、持久化
-- `src/LTAI.TUI/` — Spectre.Console 终端 UI
+- `src/LTAI.TUI/` — Terminal.Gui 终端 UI (Inline 模式，类 Claude Code/Copilot CLI)
 - `src/LTAI.Desktop/` — Avalonia 桌面 UI
 - `src/LTAI.Web/` — ASP.NET Minimal API (端口 5100)
 - `src/LTAI.Cli/` — CLI 工具 (`ltai`)
@@ -16,6 +16,7 @@
 - `src/LTAI.Agent.Eia/` — EIA 扩展
 - `extern/agent-framework/` — MAF git 子模块 (Microsoft.Agents.AI)
 - `extern/durabletask-dotnet/` — DTFx git 子模块 (源码参考)
+- `extern/Terminal.Gui/` — Terminal.Gui git 子模块 (gui-cs, 预编译 DLL 到 `dist/lib/terminal.gui/`)
 
 ## DI 注册顺序（必须保持）
 
@@ -77,13 +78,14 @@ Layer 2: agents/*.agent.md (正文)        ← 领域专属工作流
 ## 关键命令
 
 ```bash
-dotnet build LTAI.sln                     # 构建所有项目（含 MAF 子模块）
+dotnet build LTAI.sln                     # 构建所有项目（含子模块）
 dotnet build src/LTAI.TUI                # 仅 TUI
 dotnet build src/LTAI.Desktop            # 仅 Desktop
 dotnet build src/LTAI.Web                # 仅 Web
 ./scripts/build-maf.ps1                  # 预编译 MAF 到 dist/lib/maf（加速增量构建）
+./scripts/build-terminalgui.ps1          # 预编译 Terminal.Gui 到 dist/lib/terminal.gui
 ./scripts/dev-setup-submodules.ps1       # 初始化子模块 + sparse-checkout
-cd src/LTAI.TUI && dotnet run            # 启动 TUI
+cd src/LTAI.TUI && dotnet run            # 启动 TUI (Inline 模式，需先 build-terminalgui.ps1)
 cd src/LTAI.Desktop && dotnet run        # 启动 Desktop
 cd src/LTAI.Web && dotnet run            # 启动 Web → http://localhost:5100
 dotnet test tests/LTAI.Tests             # 运行测试（112+ 测试）

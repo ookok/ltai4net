@@ -3,17 +3,17 @@ using System.IO.Compression;
 using LTAI.Agent;
 using LTAI.AI;
 using LTAI.Core;
-using LTAI.Agent.Tools;
-using LTAI.Agent.Workflows;
 using LTAI.Core.Configuration;
-using LTAI.TUI.Services;
-using Spectre.Console;
-
+using LTAI.Core.Session;
+using LTAI.Mm;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Serilog;
+using Spectre.Console;
+using Terminal.Gui.App;
+using Terminal.Gui.Views;
 
 namespace LTAI.TUI;
 
@@ -35,7 +35,6 @@ public static class Program
             e.SetObserved();
         };
 
-        // Build config early so static fields can read from it
         var earlyConfig = new ConfigurationBuilder()
             .SetBasePath(AppContext.BaseDirectory)
             .AddJsonFile("appsettings.json", optional: true)
@@ -43,15 +42,11 @@ public static class Program
         s_wtDownloadUrl = earlyConfig.GetSection("LTAI:Mirrors:WindowsTerminalUrl").Value
             ?? "http://mogoo.com.cn/Microsoft.WindowsTerminal_1.24.11321.0_x64.zip";
 
-        // ── 终端选择：仅 Windows 下 wt.exe → 当前终端 ──
+        // ── Windows Terminal selection ──
         if (OperatingSystem.IsWindows() && (args.Length == 0 || args[0] != "--in-wt"))
         {
             var wt = EnsureWindowsTerminal();
-            if (wt != null)
-            {
-                RelaunchInWindowsTerminal(wt);
-                return;
-            }
+            if (wt != null) { RelaunchInWindowsTerminal(wt); return; }
             if (!await TryDownloadWindowsTerminalAsync())
                 PrintWindowsTerminalReminder();
             else
@@ -59,7 +54,7 @@ public static class Program
                 wt = EnsureWindowsTerminal();
                 if (wt != null)
                 {
-                    AnsiConsole.MarkupLine("[green]下载完成，正在启动 Windows Terminal...[/]");
+                    AnsiConsole.MarkupLine("[green]下载完成，启动 WT...[/]");
                     await Task.Delay(500);
                     RelaunchInWindowsTerminal(wt);
                     return;
@@ -71,19 +66,13 @@ public static class Program
         Console.InputEncoding = System.Text.Encoding.UTF8;
         Console.Title = "LTAI";
 
-        // Detect OS language for i18n (B1+B2)
-        var detectedLang = LTAI.Core.I18n.Locale.CurrentLang;
-        // Locale detected (logged via ILogger in DI phase)
-
-        // Show splash immediately — no waiting for DI
+        // ── Show splash then immediately start TG ──
         AnsiConsole.Write(new FigletText("LTAI").Color(Color.Green));
-        var subtitle = LTAI.Core.I18n.Locale.IsChinese ? "LivingTree AI — 轻量版" : "LivingTree AI — Lightweight Edition";
-        var loading = LTAI.Core.I18n.Locale.Get("Loading");
-        AnsiConsole.MarkupLine($"[grey]{subtitle}[/]");
-        AnsiConsole.MarkupLine($"[yellow]{loading}[/]");
+        AnsiConsole.MarkupLine("[grey]LivingTree AI — 轻量版[/]");
+        Console.WriteLine(); // one blank line before TG starts
 
         Log.Logger = new LoggerConfiguration()
-            .MinimumLevel.Information()
+            .MinimumLevel.Warning()
             .Enrich.WithProperty("Application", "LTAI")
             .WriteTo.File("logs/ltai-agent-.log", rollingInterval: RollingInterval.Day)
             .CreateLogger();
@@ -101,112 +90,41 @@ public static class Program
         services.AddLTAICore();
         services.AddLTAIAI();
         services.AddLTAIAgent();
-        services.AddSingleton<LTAI.TUI.DevUI.DevUISpanCollector>();
-        services.AddHostedService(sp => sp.GetRequiredService<LTAI.TUI.DevUI.DevUISpanCollector>());
 
-        // Warm up in background while showing splash
         var sp = await Task.Run(() =>
         {
-            try
-            {
-                var sp = services.BuildServiceProvider();
-                return sp;
-            }
+            try { return services.BuildServiceProvider(); }
             catch (Exception ex)
             {
-                AnsiConsole.MarkupLine($"[red]服务初始化失败:[/] {ex.Message.EscapeMarkup()}");
-                AnsiConsole.MarkupLine("[grey]请检查配置后重试。按 Enter 退出。[/]");
-                Console.ReadLine();
-                Environment.Exit(1);
-                throw; // unreachable
+                AnsiConsole.MarkupLine($"[red]初始化失败:[/] {ex.Message.EscapeMarkup()}");
+                Console.ReadLine(); Environment.Exit(1); throw;
             }
         });
 
-        var options = sp.GetRequiredService<IOptions<LTAIOptions>>();
-
-        // Register all command services
-        var modelSvc = new ModelCommandService(
-            sp.GetService<MultiProviderChatClient>(),
-            sp.GetService<LocalEmbedder>(),
-            sp.GetService<ModelMetadataProvider>(),
-            sp.GetRequiredService<IHttpClientFactory>(),
-            options);
-        var jobsSvc = new JobsCommandService(sp.GetService<BackgroundJobService>());
-        var configSvc = new ConfigCommandService(
-            sp.GetService<MultiProviderChatClient>(),
-            options);
-        var snippetSvc = new SnippetCommandService(sp.GetService<LTAI.Agent.Snippets.SnippetStore>());
-        var workflowSvc = new WorkflowCommandService(sp.GetService<YAMLWorkflowRegistry>());
-        var pipeSvc = new PipeCommandService(
-            sp.GetService<AgentWorkflows>(),
-            sp.GetService<YAMLWorkflowRegistry>());
-        var agentsSvc = new AgentsCommandService(sp.GetRequiredService<LTAI.Agent.DevUI.LTAIDevUIService>());
-        var toolsSvc = new ToolsCommandService();
-        var mcpSvc = new McpCommandService(
-            sp.GetService<LTAI.Agent.Mcp.McpClientFactory>(),
-            options);
-        var gitSvc = new GitCommandService();
-        var fileSvc = new FileCommandService();
-        var infoSvc = new InfoCommandService();
-        var graphSvc = new GraphCommandService(
-            sp.GetService<LTAI.Agent.Vector.CgGraph>(),
-            sp.GetService<LTAI.Agent.Vector.KbGraph>());
-        var specSvc = new SpecCommandService(new LTAI.Core.Specs.SpecService(
-            options.Value.ResolveDataPath("specs")));
-
-        // Create thin CommandRouter dispatcher
-        SlashCommands.Router = new CommandRouter(modelSvc, jobsSvc, configSvc, snippetSvc, workflowSvc, pipeSvc,
-            agentsSvc, toolsSvc, mcpSvc, gitSvc, fileSvc, infoSvc, graphSvc, specSvc);
-
         var chatAgent = sp.GetRequiredService<ChatAgent>();
 
-        // 后台预热：加载 ONNX 模型 + 预热 HTTP 连接
-        // 不阻塞 splash 显示
-        // 检测 coreutils（Windows 下 grep/wc/sort 等 Unix 命令）
-        CoreUtilsDetector.PrintReminder();
+        // Background warmup
+        _ = Task.Run(() => { try { chatAgent.WarmUpAsync().Wait(TimeSpan.FromSeconds(3)); } catch { } });
 
-        var warmupTask = Task.Run(() => chatAgent.WarmUpAsync());
+        // ── Terminal.Gui FullScreen mode (暂用 FullScreen 验证渲染) ──
+        Application.AppModel = AppModel.FullScreen;
+        var sessionMgr = new SessionManager(new MmSessionSerializer());
 
-        var router = sp.GetRequiredService<MultiProviderChatClient>();
-        var httpFactory = sp.GetRequiredService<IHttpClientFactory>();
-        var llmConfig = new LLMConfigPanel(options, router, httpFactory);
+        using var app = Application.Create();
+        app.Init();
 
-        // 等待预热完成（最多 6 秒）
-        try { await warmupTask.WaitAsync(TimeSpan.FromSeconds(6)).ConfigureAwait(false); }
-        catch { /* 预热超时不影响主流程 */ }
-
-        var wfHealth = sp.GetService<LTAI.Agent.Workflows.WorkflowHotReloadNotifier>() is { } notifier
-            ? new LTAI.TUI.DevUI.WorkflowHealthTracker(notifier)
-            : null;
-        var dashCtx = new LTAI.TUI.DevUI.DashboardContext(
-            sp.GetRequiredService<LTAI.Agent.DevUI.LTAIDevUIService>(),
-            sp.GetRequiredService<LTAI.TUI.DevUI.DevUISpanCollector>(),
-            sp.GetService<LTAI.Agent.Workflows.YAMLWorkflowRegistry>(),
-            sp.GetService<LTAI.AI.LocalEmbedder>(),
-            sp.GetService<LTAI.AI.ToolEmbeddingCache>(),
-            sp.GetService<LTAI.AI.RemoteEmbeddingCache>(),
-            sp.GetService<LTAI.AI.EmbeddingClient>(),
-            sp.GetService<LTAI.AI.ModelMetadataProvider>(),
-            sp.GetService<LTAI.Agent.Context.CacheAlignerProvider>(),
-            sp.GetService<LTAI.Agent.Tasks.TaskQueue>(),
-            sp.GetService<LTAI.Agent.Tools.BackgroundJobService>(),
-            sp.GetService<LTAI.Agent.Memory.PalaceStore>())
-        {
-            WorkflowHealth = wfHealth
-        };
-        var app = new TuiApp(
-            chatAgent,
-            llmConfig,
-            options,
-            Directory.GetCurrentDirectory(),
-            dashCtx,
-            sp.GetRequiredService<LTAI.Agent.Tools.QuestionService>(),
-            new Rendering.ChatRenderer(AnsiConsole.Console),
-            sp.GetService<LTAI.Agent.Memory.PalaceStore>());
-        await app.RunAsync().ConfigureAwait(false);
+        // Build model label for display
+        var cfg = config.GetSection(LTAIOptions.SectionName).Get<LTAIOptions>();
+        var l1 = cfg?.AI?.L1;
+        var l1Label = l1 != null && !string.IsNullOrEmpty(l1.Provider)
+            ? $"L1: {l1.Provider} / {l1.Model ?? "default"}"
+            : "未配置模型 (使用 /model 配置)";
+        using var win = new MainWindow(app, chatAgent, sessionMgr, l1Label);
+        app.Run(win);
     }
 
-    /// <summary>尝试自动下载并解压 Windows Terminal 到 tools/wt/。</summary>
+    // ── Windows Terminal helpers ──
+
     private static async Task<bool> TryDownloadWindowsTerminalAsync()
     {
         try
@@ -217,127 +135,66 @@ public static class Program
             Console.Write("> ");
             var line = Console.ReadLine()?.Trim().ToLowerInvariant();
             if (line != "y" && line != "yes") return false;
-
             var toolsDir = Path.Combine(AppContext.BaseDirectory, "tools", "wt");
             Directory.CreateDirectory(toolsDir);
             AnsiConsole.MarkupLine($"[green]├─ 目录: {toolsDir.EscapeMarkup()}[/]");
-
             var zipPath = Path.Combine(Path.GetTempPath(), "wt.zip");
             AnsiConsole.MarkupLine("[cyan]├─ 正在下载 Windows Terminal...[/]");
-
             using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
             http.DefaultRequestHeaders.UserAgent.ParseAdd("LTAI/1.0");
             var response = await http.GetAsync(s_wtDownloadUrl);
             response.EnsureSuccessStatusCode();
-            var totalBytes = response.Content.Headers.ContentLength ?? 0;
-            AnsiConsole.MarkupLine($"[green]├─ 下载完成 ({totalBytes / 1024 / 1024}MB)[/]");
-
-            await using (var fs = File.Create(zipPath))
-                await response.Content.CopyToAsync(fs);
-
-            AnsiConsole.MarkupLine("[cyan]├─ 正在解压到 tools/wt/ ...[/]");
+            await using (var fs = File.Create(zipPath)) await response.Content.CopyToAsync(fs);
+            AnsiConsole.MarkupLine("[cyan]├─ 解压...[/]");
             ZipFile.ExtractToDirectory(zipPath, toolsDir, overwriteFiles: true);
             File.Delete(zipPath);
-
-            // 便携版 ZIP 自带版本子目录（如 terminal-1.24.11321.0/），查找 wt.exe 所在目录
-            var wtExe = Directory.EnumerateFiles(toolsDir, "wt.exe", SearchOption.AllDirectories)
-                .FirstOrDefault();
-            if (wtExe != null)
-            {
-                AnsiConsole.MarkupLine($"[green]└─ Windows Terminal 已安装 ({wtExe.EscapeMarkup()})[/]");
-                return true;
-            }
-
-            AnsiConsole.MarkupLine("[red]└─ 解压后未找到 wt.exe，请手动解压 " + s_wtDownloadUrl + "[/]");
-            return false;
+            var wtExe = Directory.EnumerateFiles(toolsDir, "wt.exe", SearchOption.AllDirectories).FirstOrDefault();
+            if (wtExe != null) { AnsiConsole.MarkupLine($"[green]└─ 已安装 ({wtExe.EscapeMarkup()})[/]"); return true; }
+            AnsiConsole.MarkupLine("[red]└─ 未找到 wt.exe[/]"); return false;
         }
-        catch (Exception ex)
-        {
-            AnsiConsole.MarkupLine($"[red]└─ 下载失败:[/] {ex.Message.EscapeMarkup()}");
-            return false;
-        }
+        catch (Exception ex) { AnsiConsole.MarkupLine($"[red]└─ 失败:[/] {ex.Message.EscapeMarkup()}"); return false; }
     }
 
-    /// <summary>Windows Terminal 未安装时打印提醒。</summary>
     private static void PrintWindowsTerminalReminder()
     {
         AnsiConsole.WriteLine();
         AnsiConsole.WriteLine("╔════════════════════════════════════════════════════════════╗");
         AnsiConsole.WriteLine("║ Windows Terminal 未安装。推荐使用它获得最佳 LTAI 体验。     ║");
         AnsiConsole.WriteLine("╠════════════════════════════════════════════════════════════╣");
-        AnsiConsole.WriteLine("║ 安装命令:                                                ║");
-        AnsiConsole.WriteLine("║   winget install Microsoft.WindowsTerminal                ║");
-        AnsiConsole.WriteLine("║                                                          ║");
-        AnsiConsole.WriteLine("║ 手动下载:                                                ║");
-        AnsiConsole.WriteLine("║   https://apps.microsoft.com/detail/9N0DX20HK701         ║");
-        AnsiConsole.WriteLine("║                                                          ║");
-        AnsiConsole.WriteLine("║ 自动下载:                                                ║");
-        AnsiConsole.WriteLine("║   " + s_wtDownloadUrl + "  ║");
-        AnsiConsole.WriteLine("║                                                          ║");
-        AnsiConsole.WriteLine("║ 安装后重启 LTAI 即可自动使用 Windows Terminal。            ║");
+        AnsiConsole.WriteLine("║ 安装: winget install Microsoft.WindowsTerminal            ║");
         AnsiConsole.WriteLine("╚════════════════════════════════════════════════════════════╝");
         AnsiConsole.WriteLine();
     }
 
-    /// <summary>查找 wt.exe，优先本地 tools/wt/ 再查系统路径。</summary>
     private static string? EnsureWindowsTerminal()
     {
-        // 本地 tools/wt/ — 递归搜索所有子目录
         var wtDir = Path.Combine(AppContext.BaseDirectory, "tools", "wt");
         if (Directory.Exists(wtDir))
         {
-            var found = Directory.EnumerateFiles(wtDir, "wt.exe", SearchOption.AllDirectories)
-                .FirstOrDefault();
+            var found = Directory.EnumerateFiles(wtDir, "wt.exe", SearchOption.AllDirectories).FirstOrDefault();
             if (found != null) return found;
         }
-        // winget 安装路径
-        var storePath = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "Microsoft", "WindowsApps", "wt.exe");
+        var storePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Microsoft", "WindowsApps", "wt.exe");
         if (File.Exists(storePath)) return storePath;
-        // 通过 PATH 查找
         try
         {
-            using var proc = Process.Start(new ProcessStartInfo("where", "wt.exe")
-            {
-                UseShellExecute = false, CreateNoWindow = true,
-                RedirectStandardOutput = true
-            });
-            if (proc != null)
-            {
-                var line = proc.StandardOutput.ReadLine();
-                proc.WaitForExit(1000);
-                if (proc.ExitCode == 0 && !string.IsNullOrEmpty(line))
-                    return line.Trim();
-            }
+            using var proc = Process.Start(new ProcessStartInfo("where", "wt.exe") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true });
+            if (proc != null) { var line = proc.StandardOutput.ReadLine(); proc.WaitForExit(1000); if (proc.ExitCode == 0 && !string.IsNullOrEmpty(line)) return line.Trim(); }
         }
         catch { }
         return null;
     }
 
-    /// <summary>在 Windows Terminal 新标签页中重启当前进程。</summary>
     private static void RelaunchInWindowsTerminal(string wtPath)
     {
         try
         {
-            var psi = new ProcessStartInfo
-            {
-                FileName = wtPath,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-            };
-            psi.ArgumentList.Add("-d");
-            psi.ArgumentList.Add(Directory.GetCurrentDirectory());
-            psi.ArgumentList.Add(Environment.ProcessPath!);
-            psi.ArgumentList.Add("--in-wt");
-            foreach (var arg in Environment.GetCommandLineArgs().Skip(1))
-                psi.ArgumentList.Add(arg);
+            var psi = new ProcessStartInfo { FileName = wtPath, UseShellExecute = false, CreateNoWindow = true };
+            psi.ArgumentList.Add("-d"); psi.ArgumentList.Add(Directory.GetCurrentDirectory());
+            psi.ArgumentList.Add(Environment.ProcessPath!); psi.ArgumentList.Add("--in-wt");
+            foreach (var arg in Environment.GetCommandLineArgs().Skip(1)) psi.ArgumentList.Add(arg);
             Process.Start(psi);
         }
-        catch (Exception ex)
-        {
-            AnsiConsole.MarkupLine($"[red]启动 Windows Terminal 失败:[/] {ex.Message.EscapeMarkup()}");
-        }
+        catch (Exception ex) { AnsiConsole.MarkupLine($"[red]启动 WT 失败:[/] {ex.Message.EscapeMarkup()}"); }
     }
-
 }

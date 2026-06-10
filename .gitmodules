@@ -6,3 +6,9 @@
 	path = extern/durabletask-dotnet
 	url = https://github.com/microsoft/durabletask-dotnet.git
 	branch = main
+[submodule "extern/Terminal.Gui"]
+	path = extern/Terminal.Gui
+	url = https://github.com/gui-cs/Terminal.Gui
+[submodule "extern/Editor"]
+	path = extern/Editor
+	url = https://github.com/gui-cs/Editor
