@@ -231,7 +231,14 @@ public sealed class SessionManager
         var allSessions = ListSessions();
         if (allSessions.Length > _maxSessions)
         {
-            var toDelete = allSessions.OrderBy(s => s.Name).Take(allSessions.Length - _maxSessions).ToArray();
+            var toDelete = allSessions
+                .OrderBy(s =>
+                {
+                    try { return File.GetLastWriteTimeUtc(SessionPath(s.Name)); }
+                    catch { return DateTime.MinValue; }
+                })
+                .Take(allSessions.Length - _maxSessions)
+                .ToArray();
             foreach (var s in toDelete)
                 DeleteSession(s.Name);
         }
@@ -243,6 +250,20 @@ public sealed class SessionManager
         lock (_keyLock)
         {
             if (_encryptionKey != null) return;
+
+            // Priority 1: environment variable
+            var envKey = Environment.GetEnvironmentVariable("LTAI_ENCRYPTION_KEY");
+            if (!string.IsNullOrEmpty(envKey))
+            {
+                var keyBytes = Convert.FromBase64String(envKey);
+                if (keyBytes.Length == 32)
+                {
+                    _encryptionKey = keyBytes;
+                    _keyCreatedAt = DateTime.UtcNow;
+                    return;
+                }
+            }
+
             var keyDir = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "LTAI");

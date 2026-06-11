@@ -198,7 +198,7 @@ public sealed class WasmtimeSandbox : AIContextProvider
             // Minimal PATH — no network utilities
             psi.EnvironmentVariables["PATH"] = isWindows
                 ? SystemPathFallback
-                : "/usr/bin:/bin";
+                : "/usr/bin:/bin:/usr/local/bin";
 
             using var process = new Process { StartInfo = psi };
             process.Start();

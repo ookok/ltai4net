@@ -6,10 +6,10 @@ using Avalonia.Threading;
 
 namespace LTAI.Desktop.Terminal;
 
-/// <summary>Avalonia 终端控件 — 嵌入可交互的 ConPTY 命令行。</summary>
+/// <summary>Avalonia 终端控件 — 嵌入可交互的伪终端 (ConPTY/Unix PTY)。</summary>
 public sealed class TerminalView : UserControl
 {
-    private readonly VirtualTerminal _terminal = new();
+    private readonly PseudoTerminal _terminal = new();
     private readonly TextBlock _output;
     private readonly TextBox _input;
     private readonly StackPanel _root;
@@ -55,7 +55,7 @@ public sealed class TerminalView : UserControl
 
         var header = new TextBlock
         {
-            Text = "📟 终端 (ConPTY)",
+            Text = OperatingSystem.IsWindows() ? "📟 终端 (ConPTY)" : "📟 终端 (PTY)",
             FontSize = 11,
             Foreground = LtaiTheme.Sbb(LtaiTheme.TextDim),
         };

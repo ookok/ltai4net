@@ -101,7 +101,7 @@ partial class TextPadView
         menu.Items.Add(WithClick(new MenuItem { Header = "🤖 问 AI" }, (_, _) => AskAiWithContext(path)));
         menu.Items.Add(WithClick(new MenuItem { Header = "📋 复制路径" }, (_, _) =>
         {
-            try { using var p = new Process(); p.StartInfo = new ProcessStartInfo("powershell", $"-command \"Set-Clipboard -Value '{path.Replace("'", "''")}'\"") { CreateNoWindow = true, UseShellExecute = false }; p.Start(); }
+            try { CopyToClipboard(path); }
             catch { }
         }));
 
@@ -147,7 +147,7 @@ partial class TextPadView
         menu.Items.Add(WithClick(new MenuItem { Header = "🤖 问 AI (文件夹)" }, (_, _) => AskAiWithContext(path)));
         menu.Items.Add(WithClick(new MenuItem { Header = "📋 复制路径" }, (_, _) =>
         {
-            try { using var p = new Process(); p.StartInfo = new ProcessStartInfo("powershell", $"-command \"Set-Clipboard -Value '{path.Replace("'", "''")}'\"") { CreateNoWindow = true, UseShellExecute = false }; p.Start(); }
+            try { CopyToClipboard(path); }
             catch { }
         }));
 
@@ -453,6 +453,35 @@ partial class TextPadView
                 if (item.Items.Count == 0 && Directory.Exists(tag)) BuildTree(item.Items, tag);
             }
             if (item.Items.Count > 0) RestoreExpanded(item.Items, expanded);
+        }
+    }
+
+    private static void CopyToClipboard(string text)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            using var p = new Process();
+            p.StartInfo = new ProcessStartInfo("powershell", $"-command \"Set-Clipboard -Value '{text.Replace("'", "''")}'\"")
+            { CreateNoWindow = true, UseShellExecute = false };
+            p.Start();
+        }
+        else if (OperatingSystem.IsLinux())
+        {
+            using var p = new Process();
+            p.StartInfo = new ProcessStartInfo("xclip", $"-selection clipboard")
+            { CreateNoWindow = true, UseShellExecute = false, RedirectStandardInput = true };
+            p.Start();
+            p.StandardInput.Write(text);
+            p.StandardInput.Close();
+        }
+        else if (OperatingSystem.IsMacOS())
+        {
+            using var p = new Process();
+            p.StartInfo = new ProcessStartInfo("pbcopy")
+            { CreateNoWindow = true, UseShellExecute = false, RedirectStandardInput = true };
+            p.Start();
+            p.StandardInput.Write(text);
+            p.StandardInput.Close();
         }
     }
 }

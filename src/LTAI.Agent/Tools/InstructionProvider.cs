@@ -1,3 +1,4 @@
+using LTAI.Core.I18n;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 
@@ -110,12 +111,19 @@ public sealed class InstructionProvider : AIContextProvider
 
     private static string BuildRules()
     {
-        return "[操作规则]\n"
+        return Locale.IsChinese
+            ? "[操作规则]\n"
             + "1. 当工具返回「尚未获得权限」时，向用户展示路径并询问是否允许。MAF ToolApprovalAgent 会拦截工具调用进行审批。\n"
             + "2. 不要尝试其他工具代替未授权的操作。\n"
             + "3. 参数必须是正确的JSON类型（数字不要加引号，布尔值用true/false）。\n"
             + "4. 不要用Markdown代码块包围工具调用。\n"
-            + "5. 如果工具调用失败，先检查参数再重试，不要重复调用同一个工具。";
+            + "5. 如果工具调用失败，先检查参数再重试，不要重复调用同一个工具。"
+            : "[Operation Rules]\n"
+            + "1. When a tool returns 'no permission', show the path to the user and ask for approval. MAF ToolApprovalAgent will intercept tool calls for approval.\n"
+            + "2. Do not attempt alternative tools to bypass unauthorized operations.\n"
+            + "3. Parameters must be correct JSON types (numbers without quotes, booleans as true/false).\n"
+            + "4. Do not wrap tool calls in Markdown code blocks.\n"
+            + "5. If a tool call fails, check parameters before retrying — do not call the same tool repeatedly.";
     }
 
     private string? LoadAgentsMd()
@@ -166,7 +174,7 @@ public sealed class InstructionProvider : AIContextProvider
 
             // Keep: 开头的Title, Goal, 审查结论, 关键决策 section
             var trimmed = line.TrimStart();
-            if (trimmed.StartsWith("# 2026-") || trimmed.StartsWith("## Goal")
+            if (IsYearHeading(trimmed) || trimmed.StartsWith("## Goal")
                 || trimmed.StartsWith("## 审查结论") || trimmed.StartsWith("## 关键决策")
                 || trimmed.StartsWith("- **D"))
             {
@@ -208,5 +216,18 @@ public sealed class InstructionProvider : AIContextProvider
         }
 
         return string.Join("\n", relevant);
+    }
+
+    private static bool IsYearHeading(string trimmed)
+    {
+        // Match "# YYYY-" or "# YYYY年" headings (dynamic year, not hardcoded)
+        if (trimmed.Length < 7 || trimmed[0] != '#') return false;
+        var afterHash = trimmed.AsSpan(1).TrimStart();
+        if (afterHash.Length < 5) return false;
+        for (int i = 0; i < 4; i++)
+        {
+            if (!char.IsDigit(afterHash[i])) return false;
+        }
+        return afterHash.Length > 4 && (afterHash[4] == '-' || afterHash[4] == '年');
     }
 }

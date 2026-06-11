@@ -6,6 +6,7 @@ using LTAI.Core.Configuration;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -31,17 +32,11 @@ namespace LTAI.AI;
 /// </summary>
 public sealed class MultiProviderChatClient : IChatClient
 {
-    /// <summary>All known providers: (envVar, endpoint, model, displayName).
-    /// Generated from <see cref="LTAI.Core.Configuration.KnownKeys.GetDefaultProviders"/> — single source of truth
-    /// for all provider configurations across the system.</summary>
-    public static readonly (string envVar, string endpoint, string model, string name)[] DefaultProviders =
-        LTAI.Core.Configuration.KnownKeys.GetDefaultProviders();
-
     private readonly ConcurrentDictionary<string, IChatClient> _clients = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, string> _degradation = new(StringComparer.OrdinalIgnoreCase);
     private readonly ILogger<MultiProviderChatClient> _logger;
     private readonly ModelMetadataProvider? _modelMetadata;
-    private string _defaultProvider;
+    private string _defaultProvider = "";
     private readonly string _routingFallback = "l1"; // fallback routing key when no ModelId is set
 
     // 自适应成本路由：成功率 + 延迟 + 成本感知
@@ -83,7 +78,7 @@ public sealed class MultiProviderChatClient : IChatClient
         LTAI.Core.Configuration.CircuitBreakerStore? breakerStore = null,
         ModelMetadataProvider? modelMetadata = null)
     {
-        _defaultProvider = options.AI.DefaultProvider;
+        _defaultProvider = options.AI.DefaultProvider ?? "";
         _logger = logger ?? NullLogger<MultiProviderChatClient>.Instance;
         _breakerStore = breakerStore;
         _modelMetadata = modelMetadata;
@@ -396,7 +391,7 @@ public sealed class MultiProviderChatClient : IChatClient
                 using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             timeoutCts.CancelAfter(TimeSpan.FromSeconds(_perProviderTimeoutSec));
 
-                var result = await client.GetResponseAsync(messages, options, timeoutCts.Token)
+                var result = await client.GetResponseAsync(messages ?? [], options, timeoutCts.Token)
                     .ConfigureAwait(false);
 
                 // Track token usage from MAF-compliant IChatClient.Usage metadata
@@ -705,7 +700,38 @@ public static class ServiceCollectionExtensions
                 AutomaticDecompression = System.Net.DecompressionMethods.GZip | System.Net.DecompressionMethods.Deflate,
             });
 
-        // Step 1: ModelMetadataProvider — queries all configured providers' /v1/models API,
+        // Step 1: Models.dev client — fetches provider/model metadata with 24h cache.
+        // Used by ProviderRegistry, ModelAutoSelector, and ModelMetadataProvider.
+        services.AddSingleton<ModelsDevClient>();
+
+        // Step 1b: ProviderRegistry — loads bundled models-dev-providers.json immediately,
+        // background-refreshes from models.dev API every 24h.
+        services.AddSingleton<ProviderRegistry>(sp =>
+        {
+            var client = sp.GetRequiredService<ModelsDevClient>();
+            var logger = sp.GetRequiredService<ILogger<ProviderRegistry>>();
+            var registry = new ProviderRegistry(client, logger);
+            registry.Initialize();
+            // Background refresh
+            client.StartBackgroundRefresh();
+            return registry;
+        });
+
+        // Step 1c: ModelTierRequirements + ModelScoringEngine — used by ModelAutoSelector.
+        services.AddSingleton<ModelScoringEngine>();
+
+        // Step 1d: ModelAutoSelector — auto-selects L2/L3 models at startup.
+        services.AddSingleton<ModelAutoSelector>(sp =>
+        {
+            var registry = sp.GetRequiredService<ProviderRegistry>();
+            var scoring = sp.GetRequiredService<ModelScoringEngine>();
+            var opts = sp.GetRequiredService<IOptionsMonitor<LTAIOptions>>();
+            var logger = sp.GetRequiredService<ILogger<ModelAutoSelector>>();
+            return new ModelAutoSelector(registry, scoring, opts, logger);
+        });
+        services.AddHostedService<ModelAutoSelectHostedService>();
+
+        // Step 2: ModelMetadataProvider — queries all configured providers' /v1/models API,
         // collects context window, capabilities, and pricing. Used for adaptive model selection,
         // TUI /models command, and DevUI dashboard. Background refresh every 15 min.
         // Must be registered before MultiProviderChatClient so the router can use it.
@@ -713,6 +739,7 @@ public static class ServiceCollectionExtensions
         {
             var provider = new ModelMetadataProvider(
                 sp.GetRequiredService<IHttpClientFactory>(),
+                sp.GetRequiredService<ProviderRegistry>(),
                 sp.GetRequiredService<ILogger<ModelMetadataProvider>>());
             Task.Run(async () =>
             {
@@ -730,58 +757,78 @@ public static class ServiceCollectionExtensions
             return provider;
         });
 
-        // Step 2: Register the raw MultiProviderChatClient (not as IChatClient — we'll wrap it)
+        // Step 2: Register the MultiProviderChatClient — dynamically discovers providers
+        // from ProviderRegistry (models.dev + built-in fallback) and registers L1/L2/L3 layers.
         services.AddSingleton<MultiProviderChatClient>(sp =>
         {
             var opts = sp.GetRequiredService<IOptions<LTAIOptions>>().Value;
-            // 用 appsettings.json LTAI:Providers 覆盖硬编码的 KnownKeys.All
-            if (opts.Providers.Length > 0)
-                LTAI.Core.Configuration.KnownKeys.ApplyConfig(opts.Providers);
+            var registry = sp.GetRequiredService<ProviderRegistry>();
             var logger = sp.GetService<ILogger<MultiProviderChatClient>>();
-            var httpFactory = sp.GetRequiredService<IHttpClientFactory>();
             var modelMetadata = sp.GetService<ModelMetadataProvider>();
             var breakerPath = opts.ResolveDataPath("circuit_breaker.db");
             var breakerStore = new LTAI.Core.Configuration.CircuitBreakerStore(breakerPath);
             var router = new MultiProviderChatClient(opts, logger, breakerStore, modelMetadata);
 
-            // Build provider metadata lookup from KnownKeys (name → endpoint, model, envVar)
-            var knownProviders = MultiProviderChatClient.DefaultProviders
-                .ToDictionary(p => p.name, p => (p.endpoint, p.model, p.envVar), StringComparer.OrdinalIgnoreCase);
+            // Resolve the primary provider: user-configured L1 provider, or first active provider with a key.
+            var l1Cfg = opts.AI.L1;
+            ProviderInfo? primaryProvider = null;
 
-            // Only register providers explicitly configured in L1/L2 layers (L0 is embedding).
-            // Other providers with API keys are NOT auto-registered — no automatic fallback.
-            // Reads from appsettings.json via LTAIOptions.AI.L1/L2 (single config file).
-            var l1Cfg = opts.AI.L1; var l2Cfg = opts.AI.L2;
-            foreach (var (layerKey, layerCfg) in new[] {
-                ("l1", l1Cfg), ("l2", l2Cfg) })
+            if (l1Cfg != null && !string.IsNullOrEmpty(l1Cfg.Provider))
             {
-                // Fallback: use DefaultProvider from KnownKeys if layer is unset
-                if (layerCfg == null || string.IsNullOrEmpty(layerCfg.Provider))
-                {
-                    var fb = MultiProviderChatClient.DefaultProviders
-                        .FirstOrDefault(p => string.Equals(p.name, opts.AI.DefaultProvider, StringComparison.OrdinalIgnoreCase));
-                    if (fb.name == null) continue;
-                    var fbKey = SecretManager.Get(fb.envVar) ?? "";
-                    router.Register(layerKey, OpenAIChatClientFactory.Create(fb.endpoint, fb.model, fbKey));
-                    logger?.LogInformation("Registered fallback {Layer} → {Provider}/{Model}", layerKey, fb.name, fb.model);
-                    continue;
-                }
-                if (!knownProviders.TryGetValue(layerCfg.Provider, out var info))
-                {
-                    logger?.LogWarning("Layer {Layer} provider '{Provider}' not found in known providers", layerKey, layerCfg.Provider);
-                    continue;
-                }
-
-                var apiKey = SecretManager.Get(info.envVar) ?? "";
-                var model = !string.IsNullOrEmpty(layerCfg.Model) ? layerCfg.Model : info.model;
-                var ep = !string.IsNullOrEmpty(layerCfg.Endpoint) ? layerCfg.Endpoint : info.endpoint;
-                var isAnthropic = string.Equals(layerCfg.Provider, "Anthropic", StringComparison.OrdinalIgnoreCase);
-                var client = isAnthropic
-                    ? AnthropicChatClientFactory.Create(model, apiKey)
-                    : OpenAIChatClientFactory.Create(ep, model, apiKey);
-                router.Register(layerKey, client);
-                logger?.LogInformation("Registered layer {Layer} → provider={Provider} model={Model}", layerKey, layerCfg.Provider, model);
+                primaryProvider = registry.FindByName(l1Cfg.Provider);
             }
+            primaryProvider ??= registry.ActiveProviders.FirstOrDefault();
+
+            if (primaryProvider == null)
+            {
+                logger?.LogWarning("No active LLM provider found (no API keys configured) — router will be empty");
+                return router;
+            }
+
+            var apiKey = SecretManager.Get(primaryProvider.EnvVar) ?? "";
+            var endpoint = !string.IsNullOrEmpty(l1Cfg?.Endpoint) ? l1Cfg.Endpoint : primaryProvider.Endpoint!;
+            var l1Model = !string.IsNullOrEmpty(l1Cfg?.Model) ? l1Cfg.Model : primaryProvider.Models[0].ShortId;
+
+            // Register L1 (from user config or provider default)
+            var l1Client = primaryProvider.ApiFormat == ApiFormat.Anthropic
+                ? AnthropicChatClientFactory.Create(l1Model, apiKey)
+                : OpenAIChatClientFactory.Create(endpoint, l1Model, apiKey);
+            router.Register("l1", l1Client);
+            logger?.LogInformation("L1: {Provider}/{Model} @ {Endpoint}", primaryProvider.Name, l1Model, endpoint);
+
+            // L2: from auto-select (or user config override)
+            var l2Cfg = opts.AI.L2;
+            string? l2Model = !string.IsNullOrEmpty(l2Cfg?.Model) ? l2Cfg.Model : null;
+            if (l2Model == null) l2Model = ModelAutoSelectHostedService.LatestResult?.L2;
+            if (l2Model == null)
+            {
+                var (best, _) = new ModelScoringEngine(sp.GetRequiredService<ILogger<ModelScoringEngine>>())
+                    .SelectBestPair(primaryProvider.Models, ModelTierRequirements.L2);
+                l2Model = best?.ShortId ?? l1Model; // fallback to L1
+            }
+            var l2Client = primaryProvider.ApiFormat == ApiFormat.Anthropic
+                ? AnthropicChatClientFactory.Create(l2Model, apiKey)
+                : OpenAIChatClientFactory.Create(endpoint, l2Model, apiKey);
+            router.Register("l2", l2Client);
+            logger?.LogInformation("L2: {Provider}/{Model}", primaryProvider.Name, l2Model);
+
+            // L3: from auto-select (or user config, or reuse L1)
+            var l3Cfg = opts.AI.L3;
+            string? l3Model = !string.IsNullOrEmpty(l3Cfg?.Model) ? l3Cfg.Model : null;
+            if (l3Model == null) l3Model = ModelAutoSelectHostedService.LatestResult?.L3;
+            if (l3Model == null)
+            {
+                var (best, _) = new ModelScoringEngine(sp.GetRequiredService<ILogger<ModelScoringEngine>>())
+                    .SelectBestPair(primaryProvider.Models, ModelTierRequirements.L3);
+                l3Model = best?.ShortId ?? l1Model;
+            }
+            var l3Client = primaryProvider.ApiFormat == ApiFormat.Anthropic
+                ? AnthropicChatClientFactory.Create(l3Model, apiKey)
+                : OpenAIChatClientFactory.Create(endpoint, l3Model, apiKey);
+            router.Register("l3", l3Client);
+            logger?.LogInformation("L3: {Provider}/{Model}{Reuse}", primaryProvider.Name, l3Model,
+                l3Model == l1Model ? " (reuses L1)" : "");
+
             return router;
         });
 
@@ -796,36 +843,30 @@ public static class ServiceCollectionExtensions
 
             var logger = sp.GetService<ILogger<LTAI.Core.Safety.SafeChatClient>>();
 
-            // 优雅降级：safety 模型未配置时不抛异常，跳过 safety wrapper
-            // 优先级: opts.AI.Model -> L1.Model -> KnownKeys 默认模型
+            // Resolve safety model from ProviderRegistry
+            var registry = sp.GetRequiredService<ProviderRegistry>();
+            var primaryProvider = registry.ActiveProviders.FirstOrDefault();
             var safetyModel = !string.IsNullOrEmpty(opts.AI.Model)
                 ? opts.AI.Model
-                : opts.AI.L1?.Model;
+                : opts.AI.L1?.Model ?? primaryProvider?.Models.FirstOrDefault()?.ShortId;
 
             if (string.IsNullOrEmpty(safetyModel))
             {
-                // 尝试从 KnownKeys 默认 provider 取模型名作为 fallback
-                var defaultProvider = MultiProviderChatClient.DefaultProviders
-                    .FirstOrDefault(p => string.Equals(p.name, opts.AI.DefaultProvider, StringComparison.OrdinalIgnoreCase));
-                if (defaultProvider.name != null)
-                    safetyModel = defaultProvider.model;
-            }
-
-            if (string.IsNullOrEmpty(safetyModel))
-            {
-                logger?.LogWarning("SafeChatClient: no model configured, skipping safety wrapper");
+                logger?.LogWarning("SafeChatClient: no safety model found, skipping safety wrapper");
                 return router;
             }
 
-            var safetyKey = opts.AI.ApiKeyEnv != null ? LTAI.Core.Configuration.SecretManager.Get(opts.AI.ApiKeyEnv) ?? "" : "";
+            var safetyKey = opts.AI.ApiKeyEnv != null
+                ? LTAI.Core.Configuration.SecretManager.Get(opts.AI.ApiKeyEnv) ?? ""
+                : primaryProvider != null ? SecretManager.Get(primaryProvider.EnvVar) ?? "" : "";
             if (string.IsNullOrEmpty(safetyKey))
             {
                 logger?.LogWarning("SafeChatClient: no API key configured, skipping safety wrapper");
                 return router;
             }
 
-            IChatClient safetyClient = OpenAIChatClientFactory.Create(
-                "https://api.deepseek.com/v1", safetyModel, safetyKey);
+            var safetyEndpoint = primaryProvider?.Endpoint ?? "https://api.deepseek.com";
+            IChatClient safetyClient = OpenAIChatClientFactory.Create(safetyEndpoint, safetyModel, safetyKey);
 
             var wrapped = new LTAI.Core.Safety.SafeChatClient(router, safetyClient, logger);
             // P1: wrap with MetricsChatClient for OTel metrics

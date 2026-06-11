@@ -1,18 +1,10 @@
-using System.Collections.Concurrent;
-using System.Text.Json;
 using LTAI.Agent.Context;
-using LTAI.Agent.Memory;
-using LTAI.Agent.Services;
 using LTAI.Agent.Tools;
-using LTAI.Agent.Tools.Review;
 using LTAI.Agent.Vector;
 using LTAI.Agent.Workflows;
 using LTAI.AI;
-using LTAI.AI.Compaction;
 using LTAI.Core.Configuration;
-using LTAI.Core.Safety;
 using Microsoft.Agents.AI;
-using Microsoft.Agents.AI.Compaction;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -26,10 +18,10 @@ namespace LTAI.Agent;
 /// ─────────────────────────────────────────────────────
 ///  TOOL REGISTRATION MATRIX (agent × tool category)
 /// ─────────────────────────────────────────────────────
-///                     Chat  Code  Math  Data  System  LLM  Writer  Frontend
-///  Filesystem R/W       ✅    ✅    —     ✅     —      —     ✅      ✅
-///  Shell/Exec           ✅    —     ✅    ✅     ✅     —     ✅      ✅
-///  Search/Symbols       ✅    ✅    —     —     —      —     ✅      ✅
+///                     Chat  Code  Math  Data  System  LLM  Writer  Frontend  DCI
+///  Filesystem R/W       ✅    ✅    —     ✅     —      —     ✅      ✅       ✅(R)
+///  Shell/Exec           ✅    —     ✅    ✅     ✅     —     ✅      ✅       ✅
+///  Search/Symbols       ✅    ✅    —     —     —      —     ✅      ✅       ✅
 ///  EIA                  ✅    —     —     ✅     ✅     —
 ///  Web                  ✅    —     —     ✅     —      —     ✅      ✅
 ///  Multimedia           ✅    ✅    —     ✅     ✅     —     ✅      ✅
@@ -49,14 +41,6 @@ namespace LTAI.Agent;
 /// </summary>
 internal static partial class AgentBuilder
 {
-    // Load safety prompt from file (agents/safety-{lang}.prompt.md) with fallback
-    private static readonly string SafetyPrompt = LoadSafetyPrompt();
-    private static string LoadSafetyPrompt()
-    {
-        var lang = LTAI.Core.I18n.Locale.IsChinese ? "zh" : "en";
-        var filePrompt = LTAI.Agent.Prompts.PromptLoader.Load($"safety-{lang}");
-        return !string.IsNullOrEmpty(filePrompt) ? filePrompt : LTAI.Core.Safety.SafetyPrompts.DefaultSystemPrompt;
-    }
     // Shared LSP manager across all agents (process-wide)
     private static readonly LanguageServer.LspLanguageManager s_lsp = new();
     internal static LanguageServer.LspLanguageManager GetLspManager() => s_lsp;
@@ -69,13 +53,20 @@ internal static partial class AgentBuilder
     private static readonly Caching.MmapFileProvider s_mmapProvider = new(s_mmapCache);
     private static readonly Caching.WriteBuffer s_writeBuf = new(mmap: s_mmapCache);
 
-    private static readonly ConcurrentDictionary<string, Task<IReadOnlyList<AITool>>> s_mcpToolsCache = new(StringComparer.OrdinalIgnoreCase);
-
     public static AIAgent BuildAgent(IServiceProvider sp, string name, string description,
         bool canRead, bool canWrite, bool canList, bool canExec,
         string? modelId = null, float? temperature = null, float? topP = null)
     {
         return BuildAgentImpl(sp, name, description, canRead, canWrite, canList, canExec, modelId, temperature, topP);
+    }
+
+    private static void ApplyEnvironmentConfig(LTAIOptions opts)
+    {
+        LTAI.Core.Configuration.UsageTracker.SetContextWindowSize(opts.AI.ContextWindowSize);
+        LTAI.Agent.Tools.RipgrepDetector.RipgrepDownloadUrl = opts.Mirrors.RipGrepUrl;
+        LTAI.Agent.Tools.SkillScriptRunner.SystemPathFallback = opts.Security.SystemPathFallback;
+        LTAI.Agent.Tools.SafeShellTool.SystemPathFallback = opts.Security.SystemPathFallback;
+        LTAI.AI.LocalEmbedder.ModelBaseUrl = opts.Mirrors.ModelBaseUrl;
     }
 
     public static AIAgent BuildAgentImpl(IServiceProvider sp, string name, string description,
@@ -102,10 +93,17 @@ internal static partial class AgentBuilder
         var log = loggerFactory.CreateLogger("Agent." + name);
 
         // P0.1: Wrap with progress guard to detect repeated tool calls
-        var guardedLlm = new LTAI.Agent.Clients.ThinkingTagValidator(
+        IChatClient guardedLlm = new LTAI.Agent.Clients.ThinkingTagValidator(
             new LTAI.Agent.Clients.ProgressGuardChatClient(llm));
 
-        var tools = new List<AITool>();
+        // MAF-aligned: ToolFilteringChatClient runs at IChatClient level (after all AIContextProviders).
+        // Replaces ToolRetrievalProvider's AIContextProvider approach which had ordering issues with
+        // HarnessAgent's built-in providers (FileAccessProvider, BackgroundAgentsProvider).
+        var embedder = sp.GetRequiredService<LTAI.AI.EmbeddingClient>();
+        var toolEmbeddingCache = sp.GetService<LTAI.AI.ToolEmbeddingCache>();
+        guardedLlm = new LTAI.Agent.Clients.ToolFilteringChatClient(guardedLlm, embedder, toolEmbeddingCache);
+
+        var tools = new ToolSet();
         var httpFactory = sp.GetRequiredService<IHttpClientFactory>();
 
         RegisterFileAndTextTools(tools, name, canRead, canWrite, canList, canExec, ws,
@@ -143,63 +141,7 @@ internal static partial class AgentBuilder
         }
 
         // Safety guardrail (optional — skip for local dev to reduce latency)
-        SafetyCoordinator? safety = null;
-        if (!opts.AI.SkipSafetyChecks)
-        {
-            // P6 Steer: use lightweight model for safety when available (cheaper, faster).
-            // Falls back to DeepSeek V4 Flash when steer is disabled or unavailable.
-            var steerLlm = sp.GetKeyedService<IChatClient>("steer");
-            IChatClient? safetyClient = null;
-            if (steerLlm != null)
-            {
-                safetyClient = steerLlm;
-                safety = new SafetyCoordinator(safetyClient,
-                    loggerFactory.CreateLogger<SafetyCoordinator>(),
-                    safetyPrompt: SafetyPrompt);
-            }
-            else
-            {
-                // 优雅降级：safety 模型未配置时不抛异常，跳过 safety
-                // 优先级: opts.AI.Model → L1.Model → KnownKeys 默认
-                var safetyModel = !string.IsNullOrEmpty(opts.AI.Model)
-                    ? opts.AI.Model
-                    : opts.AI.L1?.Model;
-
-                if (string.IsNullOrEmpty(safetyModel))
-                {
-                    var dp = MultiProviderChatClient.DefaultProviders
-                        .FirstOrDefault(p => string.Equals(p.name, opts.AI.DefaultProvider, StringComparison.OrdinalIgnoreCase));
-                    if (dp.name != null) safetyModel = dp.model;
-                }
-
-                if (string.IsNullOrEmpty(safetyModel))
-                {
-                    log?.LogWarning("Safety agent: no model, skipping for agent '{Name}'", name);
-                }
-                else
-                {
-                    var safetyKey = opts.AI.ApiKeyEnv != null ? SecretManager.Get(opts.AI.ApiKeyEnv) ?? "" : "";
-                    if (string.IsNullOrEmpty(safetyKey))
-                    {
-                        log?.LogWarning("Safety agent: no API key ({Env}), skipping for agent '{Name}'", opts.AI.ApiKeyEnv ?? "?", name);
-                    }
-                    else
-                    {
-                        safetyClient = OpenAIChatClientFactory.Create("https://api.deepseek.com/v1", safetyModel, safetyKey);
-                    }
-                }
-            }
-            if (safetyClient != null)
-            {
-                safety = new SafetyCoordinator(safetyClient,
-                    loggerFactory.CreateLogger<SafetyCoordinator>(),
-                    safetyPrompt: SafetyPrompt);
-            }
-            else
-            {
-                log?.LogWarning("Safety agent: client not available, skipping safety for agent '{Name}'", name);
-            }
-        }
+        var safety = BuildSafetyCoordinator(sp, opts, log, name);
 
         // LTAI does NOT use MAF's ShellEnvironmentProvider:
         // - It starts a persistent PowerShell process via LocalShellExecutor, which hangs
@@ -208,24 +150,9 @@ internal static partial class AgentBuilder
         //   so MAF's auto shell-context probing is redundant.
         // The variable is kept as null so AIContextProviders can be updated in one place.
 
-        LTAI.Core.Configuration.UsageTracker.SetContextWindowSize(opts.AI.ContextWindowSize);
-        LTAI.Agent.Tools.RipgrepDetector.RipgrepDownloadUrl = opts.Mirrors.RipGrepUrl;
-        LTAI.Agent.Tools.SkillScriptRunner.SystemPathFallback = opts.Security.SystemPathFallback;
-        LTAI.Agent.Tools.SafeShellTool.SystemPathFallback = opts.Security.SystemPathFallback;
-        LTAI.AI.LocalEmbedder.ModelBaseUrl = opts.Mirrors.ModelBaseUrl;
-        // P6 Steer: use lightweight model as verifier when available (saves ~LLM call per compaction).
-        // The summarizer is still the main LLM (needs full context window); the verifier
-        // only does a hallucination check (short output), which the steer model handles well.
+        ApplyEnvironmentConfig(opts);
         var steerLlmVerify = sp.GetKeyedService<IChatClient>("steer");
-        var compaction = new CompactionProvider(
-            new PipelineCompactionStrategy(
-                new ContextWindowCompactionStrategy(opts.AI.ContextWindowSize, opts.AI.MaxTokens),
-                new VerifiedSummarizationStrategy(
-                    summarizer: llm,
-                    verifier: steerLlmVerify ?? llm,
-                    trigger: CompactionTriggers.TokensExceed(opts.AI.ContextWindowSize),
-                    minimumPreservedGroups: 2)
-            ), loggerFactory: loggerFactory);
+        var compaction = BuildCompactionProvider(llm, steerLlmVerify, opts, loggerFactory);
 
         // KB & Code graphs for context augmentation (SQLite FTS5 + CTE)
         var kbGraph = sp.GetRequiredService<KbGraph>();
@@ -233,23 +160,10 @@ internal static partial class AgentBuilder
         var codeChunkIndex = sp.GetRequiredService<LTAI.Agent.Indexing.CodeChunkIndex>();
 
         // Wasmtime sandbox: WASM-based code execution with WASI capability restrictions.
-        // Recommended over Hyperlight (v0.4, pre-1.0) for general-purpose sandboxing.
-        // See sandbox-roadmap MEMORY.md for the full evaluation.
         var wasmtimeSandbox = new WasmtimeSandbox(ws, loggerFactory.CreateLogger<WasmtimeSandbox>());
 
-            // Skills provider: loads SKILL.md from skills/ (框架自动去重合并)
-        // P3 APM: also loads from .agents/skills/ (APM-managed skills)
-        var apmSkillsDir = Path.Combine(ws, ".agents", "skills");
-        var skillsDir = new[] {
-            Path.Combine(AppContext.BaseDirectory, "skills"),
-            Path.Combine(Directory.GetCurrentDirectory(), "skills"),
-            Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "skills"),
-        }.FirstOrDefault(Directory.Exists) ?? Path.Combine(Directory.GetCurrentDirectory(), "skills");
-        Directory.CreateDirectory(skillsDir);
-        var skillDirs = new List<string> { skillsDir };
-        if (Directory.Exists(apmSkillsDir))
-            skillDirs.Add(apmSkillsDir);
-
+        // Skills provider: loads SKILL.md from skills/
+        var skillDirs = ResolveSkillDirectories();
         var skillsBuilder = new Microsoft.Agents.AI.AgentSkillsProviderBuilder()
             .UseFileSkills([.. skillDirs]);
 
@@ -287,7 +201,7 @@ internal static partial class AgentBuilder
         var isPlanMode = name == "LTAI-Plan";
         if (isPlanMode)
         {
-            tools.Clear();
+            tools = new ToolSet();
             tools.Add(AIFunctionFactory.Create(LTAI.Agent.Tools.PlanTools.PlanExit));
             tools.Add(AIFunctionFactory.Create((Func<string, string, string, Task<string>>)(LTAI.Agent.Tools.PlanTools.SubmitPlan)));
             tools.Add(AIFunctionFactory.Create((Func<Task<string>>)(LTAI.Agent.Tools.PlanTools.ApprovePlan)));
@@ -306,43 +220,16 @@ internal static partial class AgentBuilder
         }
 
         // Cross-session long-term memory: 7-layer memory palace (PalaceStore + AIContextProviders).
-        // Hierarchical Wing→Room→Drawer architecture. Each layer has a fixed token budget
-        // (L0+L1 ≈ 900t always loaded).
-        var embedder = sp.GetRequiredService<LTAI.AI.EmbeddingClient>();
-        var palaceDb = Path.Combine(opts.DataDirectory, "palace.db");
-        WingClassifier.LlmClassifier = (text) => null;
+        var palaceStore = BuildPalaceStore(embedder, opts, loggerFactory);
 
-        var palaceStore = new LTAI.Agent.Memory.PalaceStore(embedder, palaceDb,
-            loggerFactory.CreateLogger<LTAI.Agent.Memory.PalaceStore>());
-
-        // L0: Identity (~100t, always loaded). Reads from config or identity.txt.
-        var identityPath = Path.Combine(AppContext.BaseDirectory, "identity.txt");
-        var identityText = File.Exists(identityPath) ? File.ReadAllText(identityPath).Trim() : "";
-        if (string.IsNullOrWhiteSpace(identityText))
-            identityText = opts.AI.DefaultProvider ?? "";
+        // L0: Identity (~100t, always loaded).
+        var identityText = ResolveIdentity(opts);
 
         RegisterMemoryTools(tools, canWrite, palaceStore, ws);
 
         // MCP (Model Context Protocol) client tools: lazy-loaded on first invocation.
-        // Defers spawning MCP child processes from DI resolution to actual tool use.
         if (!isPlanMode)
-        {
-            var mcpFactory = sp.GetRequiredService<LTAI.Agent.Mcp.McpClientFactory>();
-            var mcpTask = s_mcpToolsCache.GetOrAdd(name, _ => mcpFactory.GetToolsAsync(opts.Mcp));
-            if (mcpTask.IsCompletedSuccessfully)
-            {
-                foreach (var mcpTool in mcpTask.Result)
-                {
-                    if (!canRead) continue;
-                    var mn = mcpTool.Name.ToLowerInvariant();
-                    if (mn.Contains("write") || mn.Contains("create") || mn.Contains("delete") || mn.Contains("upload"))
-                    { if (!canWrite) continue; }
-                    if (mn.Contains("shell") || mn.Contains("command") || mn.Contains("exec") || mn.Contains("process"))
-                    { if (!canExec) continue; }
-                    tools.Add(mcpTool);
-                }
-            }
-        }
+            RegisterMcpTools(tools, name, sp, opts, canRead, canWrite, canExec);
 
         // Semantic code search tool (cocoindex-inspired AST chunk index).
         // Available for all canRead agents (not in Plan Mode — no AST index in read-only mode).
@@ -351,16 +238,12 @@ internal static partial class AgentBuilder
 
         RegisterDebugTools(tools, name, sp);
 
-        // 去重：同名工具保留第一个，记录警告
-        var seenNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        for (int i = tools.Count - 1; i >= 0; i--)
-        {
-            if (!seenNames.Add(tools[i].Name))
-            {
-                log?.LogWarning("工具名重复已被移除: {Name}", tools[i].Name);
-                tools.RemoveAt(i);
-            }
-        }
+        // ToolSet guarantees uniqueness at insertion time (case-insensitive name key).
+        // MCP tools (External priority) silently lose to LTAI native tools (Core/Domain priority).
+        var toolList = tools.ToList();
+
+        // P2: Register tools in the central AgentToolStore (MAF-aligned tool discovery).
+        sp.GetService<AgentToolStore>()?.RegisterRange(name, toolList);
 
         AIAgent agent = guardedLlm.AsHarnessAgent(
             options: new HarnessAgentOptions
@@ -382,7 +265,7 @@ internal static partial class AgentBuilder
                     Temperature = temperature ?? (float)opts.AI.Temperature,
                     TopP = topP ?? 0.95f,
                     MaxOutputTokens = opts.AI.MaxTokens,
-                    Tools = tools,
+                    Tools = toolList,
                     ModelId = modelId,
                 },
                 // F2: cap at 200 messages to prevent unbounded memory growth
@@ -486,85 +369,5 @@ internal static partial class AgentBuilder
         // sit just inside this, so the log entry is recorded after both have transformed the run.
         agent = new LoggingAgent(agent, log!);
         return agent;
-    }
-}
-
-/// <summary>
-/// P0: Minimal no-op AIAgent used when the real agent fails to build.
-/// Returns a static error message so the caller can surface the failure gracefully.
-/// </summary>
-internal sealed class FallbackAgent : AIAgent
-{
-    public FallbackAgent(string name, string description)
-    {
-        Name = name;
-        Description = description;
-    }
-
-    public override string? Name { get; }
-    public override string? Description { get; }
-
-    protected override ValueTask<AgentSession> CreateSessionCoreAsync(CancellationToken ct)
-        => new(new MinimalAgentSession());
-
-    protected override ValueTask<JsonElement> SerializeSessionCoreAsync(
-        AgentSession session, JsonSerializerOptions? jsonOptions, CancellationToken ct)
-        => new(JsonSerializer.SerializeToElement(new { fallback = true }));
-
-    protected override ValueTask<AgentSession> DeserializeSessionCoreAsync(
-        JsonElement state, JsonSerializerOptions? jsonOptions, CancellationToken ct)
-        => new(new MinimalAgentSession());
-
-    protected override Task<AgentResponse> RunCoreAsync(
-        IEnumerable<ChatMessage> messages, AgentSession? session, AgentRunOptions? options, CancellationToken ct)
-        => Task.FromResult(new AgentResponse(new ChatMessage(ChatRole.Assistant,
-            $"[Agent '{Name}' unavailable — build failed. Check logs for details.]")));
-
-    protected override IAsyncEnumerable<AgentResponseUpdate> RunCoreStreamingAsync(
-        IEnumerable<ChatMessage> messages, AgentSession? session, AgentRunOptions? options, CancellationToken ct)
-        => AsyncEnumerable.Repeat(new AgentResponseUpdate(ChatRole.Assistant,
-            $"[Agent '{Name}' unavailable — build failed. Check logs for details.]"), 1);
-}
-
-file sealed class MinimalAgentSession : AgentSession
-{
-    public MinimalAgentSession() : base(new AgentSessionStateBag()) { }
-}
-
-// F2: caps InMemoryChatHistoryProvider message count to prevent unbounded growth
-internal sealed class MaxMessageCountReducer : IChatReducer
-{
-    private readonly int _maxCount;
-    public MaxMessageCountReducer(int maxCount) => _maxCount = Math.Max(10, maxCount);
-
-    public Task<IEnumerable<ChatMessage>> ReduceAsync(
-        IEnumerable<ChatMessage> messages, CancellationToken cancellationToken = default)
-    {
-        var list = messages.ToList();
-        if (list.Count <= _maxCount)
-            return Task.FromResult<IEnumerable<ChatMessage>>(list);
-
-        // Keep all system messages (identity, rules, context providers)
-        var systemMessages = list.Where(m => m.Role == ChatRole.System).ToList();
-
-        // Keep messages that contain tool calls or results
-        var toolMessages = list.Where(m => m.Contents?.Any(c =>
-            c is Microsoft.Extensions.AI.FunctionCallContent ||
-            c is Microsoft.Extensions.AI.FunctionResultContent ||
-            c is Microsoft.Extensions.AI.ToolApprovalRequestContent) == true).ToList();
-
-        // Keep the most recent user-assistant exchanges
-        var nonSystemNonTool = list.Where(m => m.Role != ChatRole.System &&
-            !toolMessages.Contains(m)).ToList();
-        var budget = _maxCount - systemMessages.Count - toolMessages.Count;
-        var recent = nonSystemNonTool.TakeLast(Math.Max(0, budget)).ToList();
-
-        // Merge: system messages + tool messages + recent messages
-        var result = new List<ChatMessage>();
-        result.AddRange(systemMessages);
-        result.AddRange(toolMessages);
-        result.AddRange(recent);
-
-        return Task.FromResult<IEnumerable<ChatMessage>>(result);
     }
 }

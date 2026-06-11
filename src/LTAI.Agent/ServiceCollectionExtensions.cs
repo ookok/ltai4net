@@ -57,6 +57,12 @@ public static class ServiceCollectionExtensions
     {
         var names = new List<string>();
 
+        // P2: Central tool registry — MAF-aligned per-agent AITool discovery.
+        // Tools are registered during BuildAgentImpl and can be queried via
+        // AgentToolStore.GetTools(agentName). This mirrors MAF's keyed AITool DI
+        // pattern without requiring IServiceCollection mutations after DI build.
+        services.AddSingleton<AgentToolStore>();
+
         // Step 1: Register each agent via MAF AddAIAgent (keyed services).
         // AgentBuilder.BuildAgentImpl still owns the 80+ tool selection, AIContextProviders,
         // decorators and Plan Mode handling — only the DI shape changes.

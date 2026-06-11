@@ -231,6 +231,31 @@ public sealed class GrammarCheckStep : IPipelineStep
                 warnings.Count);
         }
 
+        // ── 审核跟踪记录 ──
+        try
+        {
+            var auditDir = Path.Combine(AppContext.BaseDirectory, ".livingtree", "audit");
+            Directory.CreateDirectory(auditDir);
+            var auditPath = Path.Combine(auditDir, "grammar-check.jsonl");
+            var auditRecord = new System.Text.StringBuilder();
+            auditRecord.Append(System.Text.Json.JsonSerializer.Serialize(new
+            {
+                Timestamp = DateTime.UtcNow.ToString("O"),
+                ProcessId = Environment.ProcessId,
+                MachineName = Environment.MachineName,
+                FilesChecked = writtenFiles.Select(f => Path.GetRelativePath(_workspacePath, f)).ToList(),
+                ErrorCount = syntaxErrors.Count,
+                WarningCount = warnings.Count,
+                IsBlocked = syntaxErrors.Count > 0,
+                Summary = syntaxErrors.Count > 0
+                    ? $"Blocked: {syntaxErrors.Count} errors in {writtenFiles.Count} files"
+                    : $"Passed: {warnings.Count} warnings in {writtenFiles.Count} files"
+            }));
+            auditRecord.AppendLine();
+            File.AppendAllText(auditPath, auditRecord.ToString());
+        }
+        catch { /* audit failure is non-critical */ }
+
         return context;
     }
 

@@ -1,6 +1,5 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
-using System.Net.Http.Json;
 using System.Text.Json;
 using LTAI.Core.Configuration;
 using Microsoft.Extensions.Logging;
@@ -16,6 +15,7 @@ public sealed class ModelMetadataProvider : IDisposable
     };
 
     private readonly IHttpClientFactory _httpFactory;
+    private readonly ProviderRegistry _registry;
     private readonly ILogger<ModelMetadataProvider> _logger;
     private readonly ConcurrentDictionary<string, ModelMetadata> _models = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, ProviderModels> _providerModels = new(StringComparer.OrdinalIgnoreCase);
@@ -23,9 +23,10 @@ public sealed class ModelMetadataProvider : IDisposable
     private Timer? _refreshTimer;
     private bool _disposed;
 
-    public ModelMetadataProvider(IHttpClientFactory httpFactory, ILogger<ModelMetadataProvider> logger)
+    public ModelMetadataProvider(IHttpClientFactory httpFactory, ProviderRegistry registry, ILogger<ModelMetadataProvider> logger)
     {
         _httpFactory = httpFactory;
+        _registry = registry;
         _logger = logger;
     }
 
@@ -34,14 +35,13 @@ public sealed class ModelMetadataProvider : IDisposable
 
     public event Action? Refreshed;
 
-    /// <summary>Query all configured providers' /v1/models API, merge with hardcoded defaults.</summary>
     public async Task RefreshAllAsync(CancellationToken ct = default)
     {
         using var activity = _activitySource.StartActivity("RefreshModels", ActivityKind.Internal);
 
-        var providers = KnownKeys.GetDefaultProviders();
-        var tasks = providers
-            .Where(p => !string.IsNullOrEmpty(SecretManager.Get(p.envVar)))
+        var llmProviders = _registry.LlmProviders.ToList();
+        var tasks = llmProviders
+            .Where(p => !string.IsNullOrEmpty(SecretManager.Get(p.EnvVar)))
             .Select(p => FetchProviderModelsAsync(p, ct));
 
         var results = await Task.WhenAll(tasks).ConfigureAwait(false);
@@ -66,28 +66,27 @@ public sealed class ModelMetadataProvider : IDisposable
         if (_models.TryGetValue(modelId, out var m))
             return m;
 
-        if (KnownCapabilities.All.TryGetValue(modelId, out var known))
+        // Fallback: use ProviderRegistry (models.dev data)
+        var regModel = _registry.FindModel(modelId);
+        if (regModel != null)
         {
-            decimal? priceIn, priceOut, priceInCache;
-            if (KnownCapabilities.PerModelPricing.TryGetValue(modelId, out var pmPrice))
-            {
-                priceIn = pmPrice.PriceIn;
-                priceOut = pmPrice.PriceOut;
-                priceInCache = pmPrice.PriceInCache;
-            }
-            else
-            {
-                var pricing = KnownKeys.All.FirstOrDefault(k =>
-                    k.Service.Equals(provider, StringComparison.OrdinalIgnoreCase));
-                priceIn = pricing?.PriceInPerM;
-                priceOut = pricing?.PriceOutPerM;
-                priceInCache = pricing?.PriceInCachePerM;
-            }
-            var meta = new ModelMetadata(
-                modelId, provider, known.ContextWindow, known.MaxOutput, known.Caps,
-                priceIn, priceOut, priceInCache, DateTime.MinValue);
+            var meta = regModel.ToLegacy(provider);
             _models[modelId] = meta;
             return meta;
+        }
+
+        // Last resort: provider-level pricing from registry
+        var prov = _registry.FindProvider(provider);
+        if (prov != null)
+        {
+            var fallback = new ModelMetadata(
+                modelId, provider, 64000, 4096,
+                ModelCapability.Chat | ModelCapability.Streaming,
+                prov.Models.FirstOrDefault()?.PriceInPerM,
+                prov.Models.FirstOrDefault()?.PriceOutPerM,
+                null, DateTime.MinValue);
+            _models[modelId] = fallback;
+            return fallback;
         }
 
         return null;
@@ -103,12 +102,12 @@ public sealed class ModelMetadataProvider : IDisposable
     {
         if (_models.TryGetValue(modelId, out var m))
             return m.Capabilities.HasFlag(cap);
-        if (KnownCapabilities.All.TryGetValue(modelId, out var known))
-            return known.Item3.HasFlag(cap);
+        var regModel = _registry.FindModel(modelId);
+        if (regModel != null)
+            return regModel.ToLegacy("").Capabilities.HasFlag(cap);
         return false;
     }
 
-    /// <summary>Best model match for a given capability, preferring the default provider.</summary>
     public (string Provider, string Model)? RecommendModel(
         ModelCapability required, string? preferProvider = null)
     {
@@ -135,18 +134,16 @@ public sealed class ModelMetadataProvider : IDisposable
         if (best != null)
             return (best.Provider, best.Id);
 
-        if (KnownCapabilities.All.FirstOrDefault(kvp => kvp.Value.Item3.HasFlag(required)) is { Key: var id, Value: var cap })
+        // Fallback: search ProviderRegistry
+        foreach (var regModel in _registry.GetAllModels())
         {
-            var provider = KnownKeys.All.FirstOrDefault(k =>
-                k.Model != null && id.StartsWith(k.Model.Split('/')[0], StringComparison.OrdinalIgnoreCase))?.Service ?? "Unknown";
-            if (!string.IsNullOrEmpty(id))
-                return (provider, id);
+            if (regModel.ToLegacy("").Capabilities.HasFlag(required))
+                return (regModel.ProviderId, regModel.ShortId);
         }
 
         return null;
     }
 
-    /// <summary>Start background refresh timer.</summary>
     public void StartBackgroundRefresh()
     {
         _refreshTimer?.Dispose();
@@ -157,10 +154,9 @@ public sealed class ModelMetadataProvider : IDisposable
         }, null, RefreshInterval, RefreshInterval);
     }
 
-    private async Task<ModelFetchResult?> FetchProviderModelsAsync(
-        (string envVar, string endpoint, string model, string name) provider, CancellationToken ct)
+    private async Task<ModelFetchResult?> FetchProviderModelsAsync(ProviderInfo provider, CancellationToken ct)
     {
-        var apiKey = SecretManager.Get(provider.envVar);
+        var apiKey = SecretManager.Get(provider.EnvVar);
         if (string.IsNullOrEmpty(apiKey)) return null;
 
         try
@@ -168,29 +164,18 @@ public sealed class ModelMetadataProvider : IDisposable
             var http = _httpFactory.CreateClient();
             http.Timeout = TimeSpan.FromSeconds(10);
 
-            // Anthropic uses ISO date, different base path
             Uri modelsUri;
-            bool isAnthropic = provider.name.Equals("Anthropic", StringComparison.OrdinalIgnoreCase);
+            bool isAnthropic = provider.ApiFormat == ApiFormat.Anthropic;
             if (isAnthropic)
-                modelsUri = new Uri(new Uri(provider.endpoint.TrimEnd('/')), "/v1/models");
-            else if (provider.name.Equals("Doubao", StringComparison.OrdinalIgnoreCase))
+                modelsUri = new Uri(new Uri(provider.Endpoint!.TrimEnd('/')), "/v1/models");
+            else if (provider.Id.Equals("doubao", StringComparison.OrdinalIgnoreCase) ||
+                     provider.Id.Equals("spark", StringComparison.OrdinalIgnoreCase))
             {
-                // Doubao/Volcengine uses ARK endpoint — /v1/models may not work
-                _logger.LogDebug("Skipping /v1/models for Doubao (ARK endpoint)");
-                return BuildFallbackResult(provider);
-            }
-            else if (provider.name.Equals("Spark", StringComparison.OrdinalIgnoreCase))
-            {
-                _logger.LogDebug("Skipping /v1/models for Spark (WebSocket endpoint)");
-                return BuildFallbackResult(provider);
-            }
-            else if (provider.name.Equals("Baidu(ERNIE)", StringComparison.OrdinalIgnoreCase))
-            {
-                _logger.LogDebug("Skipping /v1/models for Baidu (custom IAM auth)");
+                _logger.LogDebug("Skipping /v1/models for {Provider}", provider.Name);
                 return BuildFallbackResult(provider);
             }
             else
-                modelsUri = new Uri(new Uri(provider.endpoint.TrimEnd('/')), "/models");
+                modelsUri = new Uri(new Uri(provider.Endpoint!.TrimEnd('/')), "/models");
 
             var req = new HttpRequestMessage(HttpMethod.Get, modelsUri);
             req.Headers.Authorization = new("Bearer", apiKey);
@@ -206,13 +191,12 @@ public sealed class ModelMetadataProvider : IDisposable
         }
         catch (Exception ex)
         {
-            _logger.LogDebug(ex, "Failed to fetch models from {Provider}", provider.name);
+            _logger.LogDebug(ex, "Failed to fetch models from {Provider}", provider.Name);
             return BuildFallbackResult(provider);
         }
     }
 
-    private ModelFetchResult ParseModelsResponse(string body,
-        (string envVar, string endpoint, string model, string name) provider)
+    private ModelFetchResult ParseModelsResponse(string body, ProviderInfo provider)
     {
         try
         {
@@ -240,32 +224,17 @@ public sealed class ModelMetadataProvider : IDisposable
                 if (entry.TryGetProperty("max_output", out var outProp))
                     maxOut = outProp.GetInt32();
 
-                var caps = ModelCapability.Chat | ModelCapability.Streaming;
-                if (KnownCapabilities.All.TryGetValue(id, out var known))
-                    caps = known.Item3;
-
-                decimal? priceIn, priceOut, priceInCache;
-                if (KnownCapabilities.PerModelPricing.TryGetValue(id, out var pmPrice))
-                {
-                    priceIn = pmPrice.PriceIn;
-                    priceOut = pmPrice.PriceOut;
-                    priceInCache = pmPrice.PriceInCache;
-                }
-                else
-                {
-                    var pricing = KnownKeys.All.FirstOrDefault(k =>
-                        k.Service.Equals(provider.name, StringComparison.OrdinalIgnoreCase));
-                    priceIn = pricing?.PriceInPerM;
-                    priceOut = pricing?.PriceOutPerM;
-                    priceInCache = pricing?.PriceInCachePerM;
-                }
+                // Merge with ProviderRegistry (models.dev) data for capabilities + pricing
+                var regModel = provider.FindModel(id);
+                var caps = regModel?.ToLegacy(provider.Name).Capabilities
+                    ?? ModelCapability.Chat | ModelCapability.Streaming;
 
                 metadataList.Add(new ModelMetadata(
-                    id, provider.name, ctx ?? known.Item1, maxOut ?? known.Item2, caps,
-                    priceIn, priceOut, priceInCache, DateTime.UtcNow));
+                    id, provider.Name, ctx ?? regModel?.ContextWindow, maxOut ?? regModel?.MaxOutput, caps,
+                    regModel?.PriceInPerM, regModel?.PriceOutPerM, null, DateTime.UtcNow));
             }
 
-            var pm = new ProviderModels(provider.name, provider.endpoint, provider.envVar, modelIds, DateTime.UtcNow);
+            var pm = new ProviderModels(provider.Name, provider.Endpoint ?? "", provider.EnvVar, modelIds, DateTime.UtcNow);
             return new ModelFetchResult(pm, metadataList);
         }
         catch (JsonException)
@@ -274,41 +243,15 @@ public sealed class ModelMetadataProvider : IDisposable
         }
     }
 
-    private ModelFetchResult BuildFallbackResult(
-        (string envVar, string endpoint, string model, string name) provider)
+    private ModelFetchResult BuildFallbackResult(ProviderInfo provider)
     {
-        int? ctx = null;
-        int? maxOut = null;
-        var caps = ModelCapability.Chat | ModelCapability.Streaming;
-        if (KnownCapabilities.All.TryGetValue(provider.model, out var kc))
-        {
-            ctx = kc.Item1;
-            maxOut = kc.Item2;
-            caps = kc.Item3;
-        }
+        var models = new List<ModelMetadata>();
+        foreach (var m in provider.Models)
+            models.Add(m.ToLegacy(provider.Name));
 
-        decimal? priceIn, priceOut, priceInCache;
-        if (KnownCapabilities.PerModelPricing.TryGetValue(provider.model, out var pmPrice))
-        {
-            priceIn = pmPrice.PriceIn;
-            priceOut = pmPrice.PriceOut;
-            priceInCache = pmPrice.PriceInCache;
-        }
-        else
-        {
-            var pricing = KnownKeys.All.FirstOrDefault(k =>
-                k.Service.Equals(provider.name, StringComparison.OrdinalIgnoreCase));
-            priceIn = pricing?.PriceInPerM;
-            priceOut = pricing?.PriceOutPerM;
-            priceInCache = pricing?.PriceInCachePerM;
-        }
-
-        var meta = new ModelMetadata(
-            provider.model, provider.name, ctx, maxOut, caps,
-            priceIn, priceOut, priceInCache, DateTime.MinValue);
-
-        var pm = new ProviderModels(provider.name, provider.endpoint, provider.envVar, [provider.model], DateTime.MinValue);
-        return new ModelFetchResult(pm, [meta]);
+        var pm = new ProviderModels(provider.Name, provider.Endpoint ?? "", provider.EnvVar,
+            provider.Models.Select(m => m.ShortId).ToList(), DateTime.MinValue);
+        return new ModelFetchResult(pm, models);
     }
 
     public void Dispose()

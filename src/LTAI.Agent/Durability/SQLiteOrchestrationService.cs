@@ -1,4 +1,5 @@
 // Copyright (c) LTAI. All rights reserved.
+#pragma warning disable IL2075, IL2080 // NativeAOT IL — DTFx reflection-based serialization
 
 using System.Collections.Concurrent;
 using System.Reflection;

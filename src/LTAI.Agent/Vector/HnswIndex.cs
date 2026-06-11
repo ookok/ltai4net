@@ -1,3 +1,4 @@
+using System.Text.Json;
 using TurboQuant.Core.Packing;
 
 namespace LTAI.Agent.Vector;
@@ -265,6 +266,73 @@ public sealed class HnswIndex : IDisposable
             foreach (var v in vectors) Insert(v.Span);
         }
         finally { _rwLock.ExitWriteLock(); }
+    }
+
+    /// <summary>Snapshot the index to a stream (JSON format).</summary>
+    public void SaveSnapshot(Stream stream)
+    {
+        _rwLock.EnterReadLock();
+        try
+        {
+            var nodes = _nodes.Select(n => new
+            {
+                Data = Convert.ToBase64String(n.Packed.ToBytes()),
+                Links = n.Links.Select(l => l.ToArray()).ToArray()
+            }).ToList();
+            var snapshot = new
+            {
+                EntryPoint = _entryPoint,
+                MaxLevel = _maxLevel,
+                M = _m,
+                Mmax = _mmax,
+                Mmax0 = _mmax0,
+                EfConstruction = _efConstruction,
+                Nodes = nodes
+            };
+            JsonSerializer.Serialize(stream, snapshot);
+        }
+        finally { _rwLock.ExitReadLock(); }
+    }
+
+    /// <summary>Load a snapshot from a stream. Replaces current index contents.</summary>
+    public static HnswIndex LoadSnapshot(Stream stream, HnswOptions? options = null)
+    {
+        using var doc = JsonDocument.Parse(stream);
+        var root = doc.RootElement;
+        var idx = new HnswIndex(options ?? new HnswOptions
+        {
+            M = root.GetProperty("M").GetInt32(),
+            Mmax = root.GetProperty("Mmax").GetInt32(),
+            Mmax0 = root.GetProperty("Mmax0").GetInt32(),
+            EfConstruction = root.GetProperty("EfConstruction").GetInt32()
+        });
+        idx._entryPoint = root.GetProperty("EntryPoint").GetInt32();
+        idx._maxLevel = root.GetProperty("MaxLevel").GetInt32();
+        foreach (var nodeEl in root.GetProperty("Nodes").EnumerateArray())
+        {
+            var data = Convert.FromBase64String(nodeEl.GetProperty("Data").GetString()!);
+            var packed = TurboQuant.Core.Packing.PackedVector.FromBytes(data);
+            var linksArr = nodeEl.GetProperty("Links").EnumerateArray()
+                .Select(l => l.EnumerateArray().Select(e => e.GetInt32()).ToArray())
+                .ToArray();
+            var node = new HnswNode(packed, linksArr.Select(l => new List<int>(l)).ToArray());
+            idx._nodes.Add(node);
+        }
+        return idx;
+    }
+
+    /// <summary>Save snapshot to a file path.</summary>
+    public void SaveSnapshotToFile(string path)
+    {
+        using var fs = File.Create(path);
+        SaveSnapshot(fs);
+    }
+
+    /// <summary>Load snapshot from a file path.</summary>
+    public static HnswIndex LoadSnapshotFromFile(string path, HnswOptions? options = null)
+    {
+        using var fs = File.OpenRead(path);
+        return LoadSnapshot(fs, options);
     }
 
     public void Dispose()

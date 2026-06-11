@@ -34,11 +34,13 @@ public sealed class FileSystemTools
         + "适用场景：查看源代码、阅读配置文件、检查日志文件、查看文档内容。\n"
         + "不适用场景：搜索文件内容（请用 SearchContent）、获取文件属性（请用 GetFileInfo）。\n"
         + "关键参数：path — 文件路径（相对于项目根目录或绝对路径）；"
-        + "startLine/endLine — 可选，仅读取指定行范围（高效，不加载整个文件）。")]
+        + "startLine/endLine — 可选，仅读取指定行范围（高效，不加载整个文件）；"
+        + "maxChars — 可选，最大读取字符数（默认 10000，设为 0 表示不限制）。")]
     public async Task<string> ReadFileContent(
         string path,
         [Description("起始行号（从 1 开始，默认 1）")] int startLine = 1,
-        [Description("结束行号（默认文件末尾）")] int? endLine = null)
+        [Description("结束行号（默认文件末尾）")] int? endLine = null,
+        [Description("最大读取字符数（0=不限，默认 10000）")] int maxChars = 10000)
     {
         try
         {
@@ -46,6 +48,9 @@ public sealed class FileSystemTools
             if (denied != null)
                 return $"Path '{denied}' is outside workspace. Ask user to confirm, then retry.";
             if (fp == null) return "Error: path escape";
+
+            var fi = new FileInfo(fp);
+            var totalSizeKb = fi.Length / 1024;
 
             // Range read: stream only requested lines, skip the rest
             if (startLine > 1 || endLine.HasValue)
@@ -55,6 +60,7 @@ public sealed class FileSystemTools
                 using var sr = new StreamReader(fs);
                 int lineNum = 1;
                 int targetEnd = endLine ?? int.MaxValue;
+                int charCount = 0;
                 while (lineNum < startLine && await sr.ReadLineAsync().ConfigureAwait(false) != null)
                     lineNum++;
                 while (lineNum <= targetEnd)
@@ -62,11 +68,44 @@ public sealed class FileSystemTools
                     var line = await sr.ReadLineAsync().ConfigureAwait(false);
                     if (line == null) break;
                     sb.AppendLine(line);
+                    charCount += line.Length + Environment.NewLine.Length;
+                    if (maxChars > 0 && charCount > maxChars)
+                    {
+                        sb.AppendLine($"... [truncated at {maxChars} chars, file is {totalSizeKb}KB]");
+                        break;
+                    }
                     lineNum++;
                 }
-                var totalEst = new FileInfo(fp).Length;
                 var result = sb.ToString();
-                return $"[file: {fp}, lines {startLine}–{lineNum - 1}, ~{totalEst / 1024}KB total]\n{result}";
+                return $"[file: {fp}, lines {startLine}–{lineNum - 1}, ~{totalSizeKb}KB total]\n{result}";
+            }
+
+            // Progressive read: stream the first portion for large files
+            if (totalSizeKb > 1024) // files larger than 1MB
+            {
+                var sb = new StringBuilder();
+                using var fs = File.OpenRead(fp);
+                using var sr = new StreamReader(fs);
+                int lineNum = 1;
+                int charCount = 0;
+                var readLimit = maxChars > 0 ? Math.Min(maxChars, 100000) : 100000;
+                string? lineContent = null;
+                while (charCount < readLimit)
+                {
+                    lineContent = await sr.ReadLineAsync().ConfigureAwait(false);
+                    if (lineContent == null) break;
+                    sb.AppendLine(lineContent);
+                    charCount += lineContent.Length + Environment.NewLine.Length;
+                    lineNum++;
+                }
+                var hasMore = lineContent != null;
+                var result = sb.ToString();
+                var ext = fi.Extension.ToLowerInvariant();
+                var summary = DescribeDoc(result, ext);
+                var note = hasMore
+                    ? $"\n... [progressive load: showing {charCount}/{fi.Length} chars ({lineNum} lines). Use startLine/endLine to read more.]"
+                    : "";
+                return $"[file: {fp}, {totalSizeKb}KB, ~{lineNum} lines — {summary}]{note}\n{result}";
             }
 
             var sizeError = PathUtils.CheckFileSize(fp);
@@ -74,12 +113,12 @@ public sealed class FileSystemTools
             var content = _mmap != null
                 ? await _mmap.ReadAllTextAsync(fp).ConfigureAwait(false)
                 : await File.ReadAllTextAsync(fp).ConfigureAwait(false);
-            var fi = new FileInfo(fp);
-            var ext = fi.Extension.ToLowerInvariant();
-            var summary = DescribeDoc(content, ext);
-            if (content.Length > 10000)
-                return $"[file: {fp}, {fi.Length / 1024}KB, {content.Length} chars — {summary}]\n{content[..10000]}\n... [truncated at 10000 chars]";
-            return $"[file: {fp}, {fi.Length / 1024}KB, {content.Length} chars — {summary}]\n{content}";
+            var ext2 = fi.Extension.ToLowerInvariant();
+            var summary2 = DescribeDoc(content, ext2);
+            var effectiveMax = maxChars > 0 ? maxChars : int.MaxValue;
+            if (content.Length > effectiveMax)
+                return $"[file: {fp}, {totalSizeKb}KB, {content.Length} chars — {summary2}]\n{content[..effectiveMax]}\n... [truncated at {effectiveMax} chars]";
+            return $"[file: {fp}, {totalSizeKb}KB, {content.Length} chars — {summary2}]\n{content}";
         }
         catch (Exception ex)
         {

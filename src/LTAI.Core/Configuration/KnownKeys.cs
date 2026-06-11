@@ -32,17 +32,20 @@ public static class KnownKeys
         decimal PriceInPerM = 0, decimal PriceOutPerM = 0,
         decimal PriceInCachePerM = 0);
 
-    /// <summary>Hardcoded defaults — used when <c>LTAI:Providers</c> config is empty.</summary>
+    /// <summary>Hardcoded defaults for non-LLM services and LLM provider env var references.
+    /// LLM provider metadata (endpoint, models, pricing, capabilities) is sourced from models.dev via ProviderRegistry.
+    /// These entries are kept for UI display (API key status) and category grouping.</summary>
     private static readonly KeyInfo[] DefaultHardcoded =
     [
-        // ── LLM Providers (官方 ¥/1M tokens 价格，来源各官网定价页) ──
-        new("DEEPSEEK_API_KEY",     "DeepSeek",       "输入¥1/输出¥2/缓存¥0.02 per 1M", "https://platform.deepseek.com/api_keys", "https://api.deepseek.com/v1", "deepseek-v4-flash", 1.0m, 2.0m, 0.02m),
-        new("SILICONFLOW_API_KEY",  "SiliconFlow",    "¥1/¥2 per 1M",       "https://cloud.siliconflow.cn/", "https://api.siliconflow.cn/v1", null, 1.0m, 2.0m),
-        new("DASHSCOPE_API_KEY",    "Aliyun(Qwen)",   "¥0.8/¥2 per 1M",     "https://dashscope.console.aliyun.com/", "https://dashscope.aliyuncs.com/compatible-mode/v1", null, 0.8m, 2.0m),
-        new("ZHIPU_API_KEY",        "Zhipu(GLM)",     "¥1/¥2 per 1M",       "https://open.bigmodel.cn/", "https://open.bigmodel.cn/api/paas/v4", null, 1.0m, 2.0m),
-        new("STEP_API_KEY",         "StepFun",        "¥1/¥2 per 1M",       "https://platform.stepfun.com/", "https://api.stepfun.com/v1", null, 1.0m, 2.0m),
-        new("OPENROUTER_API_KEY",   "OpenRouter",     "按源模型定价",        "https://openrouter.ai/keys", "https://openrouter.ai/api/v1", null),
-        new("MIMO_API_KEY",         "小米 MiMo",     "输入¥1/输出¥2 per 1M", "https://dev.mi.com/", "https://api.xiaomimimo.com/v1", null, 1.0m, 2.0m),
+        // ── LLM Providers (env var + display name only; full metadata → ProviderRegistry) ──
+        new("DEEPSEEK_API_KEY",     "DeepSeek",       "LLM", "https://platform.deepseek.com/api_keys"),
+        new("SILICONFLOW_API_KEY",  "SiliconFlow",    "LLM", "https://cloud.siliconflow.cn/"),
+        new("DASHSCOPE_API_KEY",    "Aliyun(Qwen)",   "LLM", "https://dashscope.console.aliyun.com/"),
+        new("ZHIPU_API_KEY",        "Zhipu(GLM)",     "LLM", "https://open.bigmodel.cn/"),
+        new("STEP_API_KEY",         "StepFun",        "LLM", "https://platform.stepfun.com/"),
+        new("OPENROUTER_API_KEY",   "OpenRouter",     "LLM", "https://openrouter.ai/keys"),
+        new("OPENAI_API_KEY",       "OpenAI",         "LLM", "https://platform.openai.com/api-keys"),
+        new("ANTHROPIC_API_KEY",    "Anthropic",       "LLM", "https://console.anthropic.com/settings/keys"),
         // ── Web Search ──
         new("BRAVE_API_KEY",        "Brave Search",   "网页搜索（默认）",  "https://brave.com/search/api/"),
         new("SERPER_API_KEY",       "Serper(Google)", "Google 搜索（备用）", "https://serper.dev/"),
@@ -60,8 +63,6 @@ public static class KnownKeys
         new("UNSPLASH_KEY",         "Unsplash",       "图片搜索 API",      "https://unsplash.com/developers"),
         // ── Memory ──
         new("MEM0_API_KEY",         "Mem0",           "跨会话长期记忆",    "https://app.mem0.ai/", "https://api.mem0.ai"),
-        // ── Steer Model (可选项，用于判断/安全/路由等辅助决策) ──
-        new("STEER_API_KEY",        "Steer Model",   "辅助决策模型（可选项）", null, "https://api.siliconflow.cn/v1", null),
     ];
 
     /// <summary>
@@ -72,19 +73,6 @@ public static class KnownKeys
     /// Thread safety: reads are lock-free via volatile; writes use atomic swap.
     /// </summary>
     public static volatile KeyInfo[] All = DefaultHardcoded;
-
-    /// <summary>
-    /// Generate default provider configurations in tuple format.
-    /// Filters to providers that have both an endpoint and a model defined.
-    /// <b>Callers:</b> MultiProviderChatClient (initialize default providers).
-    /// </summary>
-    public static (string envVar, string endpoint, string model, string name)[] GetDefaultProviders()
-    {
-        var snapshot = All;
-        return snapshot.Where(k => k.Endpoint != null && k.Model != null)
-           .Select(k => (k.EnvVar, k.Endpoint!, k.Model!, k.Service))
-           .ToArray();
-    }
 
     /// <summary>
     /// Get all keys grouped by service category for UI display.

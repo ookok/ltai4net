@@ -299,8 +299,12 @@ public sealed class CSharpDiagProvider : IDisposable
             try
             {
                 var assembly = System.Reflection.Assembly.Load(name);
+#pragma warning disable IL3000 // Assembly.Location is empty in single-file apps; fallback below
                 var location = assembly.Location;
-                if (!string.IsNullOrEmpty(location) && File.Exists(location))
+#pragma warning restore IL3000
+                if (string.IsNullOrEmpty(location) || !File.Exists(location))
+                    location = Path.Combine(AppContext.BaseDirectory, $"{name}.dll");
+                if (File.Exists(location))
                 {
                     refs.Add(MetadataReference.CreateFromFile(location));
                 }

@@ -193,6 +193,59 @@ public sealed class HnswVectorStore : IVectorStore
     }
 
     /// <inheritdoc />
+    /// <summary>Save the entire store to a snapshot file.</summary>
+    public void SaveSnapshot(string path)
+    {
+        ThrowIfDisposed();
+        _rwLock.EnterReadLock();
+        try
+        {
+            var snapshot = new
+            {
+                NodeIds = _nodeIds.ToArray(),
+                HnswFile = "_hnsw_tmp"
+            };
+            var tmpPath = path + ".tmp";
+            _hnsw.SaveSnapshotToFile(tmpPath);
+            using var fs = File.Create(path);
+            using var writer = new System.IO.BinaryWriter(fs);
+            writer.Write(_nodeIds.Count);
+            foreach (var id in _nodeIds)
+                writer.Write(id);
+            // Append HNSW snapshot data
+            var hnswBytes = File.ReadAllBytes(tmpPath);
+            writer.Write(hnswBytes.Length);
+            writer.Write(hnswBytes);
+            File.Delete(tmpPath);
+        }
+        finally { _rwLock.ExitReadLock(); }
+    }
+
+    /// <summary>Load a store from a snapshot file.</summary>
+    public static HnswVectorStore LoadSnapshot(string path, HnswOptions? options = null)
+    {
+        using var fs = File.OpenRead(path);
+        using var reader = new System.IO.BinaryReader(fs);
+        var count = reader.ReadInt32();
+        var nodeIds = new List<long>(count);
+        for (int i = 0; i < count; i++)
+            nodeIds.Add(reader.ReadInt64());
+        var hnswLen = reader.ReadInt32();
+        var hnswBytes = reader.ReadBytes(hnswLen);
+        var tmpPath = path + ".hnsw.tmp";
+        File.WriteAllBytes(tmpPath, hnswBytes);
+        var hnsw = HnswIndex.LoadSnapshotFromFile(tmpPath, options);
+        File.Delete(tmpPath);
+        return new HnswVectorStore(nodeIds, hnsw);
+    }
+
+    // Internal constructor for snapshot loading
+    private HnswVectorStore(List<long> nodeIds, HnswIndex hnsw)
+    {
+        _nodeIds = nodeIds;
+        _hnsw = hnsw;
+    }
+
     public void Dispose()
     {
         if (_disposed) return;

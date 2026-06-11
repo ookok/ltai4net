@@ -87,8 +87,11 @@ public sealed class YAMLWorkflowWatcher : IDisposable
         // Restart watcher after buffer overflow
         try
         {
-            _fsWatcher.EnableRaisingEvents = false;
-            _fsWatcher.EnableRaisingEvents = true;
+            if (_fsWatcher != null)
+            {
+                _fsWatcher.EnableRaisingEvents = false;
+                _fsWatcher.EnableRaisingEvents = true;
+            }
         }
         catch (Exception ex)
         {

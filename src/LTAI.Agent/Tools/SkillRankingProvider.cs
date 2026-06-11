@@ -8,7 +8,8 @@ namespace LTAI.Agent.Tools;
 
 /// <summary>
 /// L1 Skill Evolution: MAF AIContextProvider that re-ranks tools by success-rate weighting.
-/// Runs after <see cref="ToolRetrievalProvider"/> to apply evolution-derived boosts.
+/// Runs first in the LTAI AIContextProvider chain to apply evolution-derived boosts.
+/// (Tool filtering has moved to <c>ToolFilteringChatClient</c>, an IChatClient middleware.)
 /// </summary>
 public sealed class SkillRankingProvider : AIContextProvider
 {

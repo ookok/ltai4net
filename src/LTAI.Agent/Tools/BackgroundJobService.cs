@@ -29,6 +29,8 @@ public sealed class BackgroundJobService : IDisposable
     private readonly int _maxOutputChars;
     private long _startedCount;
     private long _completedCount;
+    private volatile bool _paused;
+    private readonly ManualResetEventSlim _pauseEvent = new(true);
 
     /// <summary>Set by ChatAgent before tool calls to scope jobs to a session.</summary>
     public static string? CurrentSessionId { get => _currentSessionId.Value; set => _currentSessionId.Value = value; }
@@ -67,8 +69,31 @@ public sealed class BackgroundJobService : IDisposable
         return $"Job #{id} started.";
     }
 
+    [Description("暂停所有后台作业。运行中的作业完成后不会启动新作业。")]
+    public string Pause()
+    {
+        _paused = true;
+        _pauseEvent.Reset();
+        return "Background jobs paused. New jobs will queue until Resume().";
+    }
+
+    [Description("恢复所有后台作业。")]
+    public string Resume()
+    {
+        _paused = false;
+        _pauseEvent.Set();
+        return "Background jobs resumed.";
+    }
+
+    [Description("检查后台作业是否已暂停。")]
+    public bool IsPaused() => _paused;
+
     private async Task RunJobCoreAsync(string id, JobEntry entry, string command)
     {
+        // Wait if paused
+        try { _pauseEvent.Wait(_cts.Token); }
+        catch (OperationCanceledException) { return; }
+
         try
         {
             var psi = new ProcessStartInfo

@@ -25,12 +25,37 @@ public static class Program
     {
         AppDomain.CurrentDomain.UnhandledException += (_, e) =>
         {
-            try { File.WriteAllText(Path.Combine(AppContext.BaseDirectory, "crash.log"), e.ExceptionObject.ToString()); }
+            try
+            {
+                var crash = new
+                {
+                    Timestamp = DateTime.UtcNow.ToString("O"),
+                    Type = "AppDomain.UnhandledException",
+                    Exception = e.ExceptionObject?.ToString(),
+                    IsTerminating = e.IsTerminating,
+                    OS = Environment.OSVersion.ToString(),
+                    ProcessPath = Environment.ProcessPath,
+                    WorkingDirectory = Directory.GetCurrentDirectory()
+                };
+                var json = System.Text.Json.JsonSerializer.Serialize(crash, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+                File.WriteAllText(Path.Combine(AppContext.BaseDirectory, "crash.json"), json);
+            }
             catch { }
         };
         TaskScheduler.UnobservedTaskException += (_, e) =>
         {
-            try { File.AppendAllText(Path.Combine(AppContext.BaseDirectory, "crash.log"), $"\n[Task]{e.Exception}"); }
+            try
+            {
+                var crash = new
+                {
+                    Timestamp = DateTime.UtcNow.ToString("O"),
+                    Type = "TaskScheduler.UnobservedTaskException",
+                    Exception = e.Exception?.ToString(),
+                    Observed = e.Observed
+                };
+                var json = System.Text.Json.JsonSerializer.Serialize(crash, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+                File.WriteAllText(Path.Combine(AppContext.BaseDirectory, "crash-unobserved.json"), json);
+            }
             catch { }
             e.SetObserved();
         };

@@ -1,3 +1,5 @@
+#pragma warning disable IL2067, IL2070, IL2072, IL2062, IL2087 // NativeAOT IL warnings — reflection-based MM codec
+
 using System.Reflection;
 using LTAI.Mm.Core;
 using LTAI.Mm.Ir;

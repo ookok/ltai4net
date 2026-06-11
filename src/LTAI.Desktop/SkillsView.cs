@@ -58,7 +58,10 @@ public sealed class SkillsView : UserControl
                 try
                 {
                     var scriptPath = skill.Path;
-                    var psi = new System.Diagnostics.ProcessStartInfo("pwsh", $"-NoProfile -File \"{scriptPath}\"")
+                    var (shell, args) = OperatingSystem.IsWindows()
+                        ? ("pwsh", $"-NoProfile -File \"{scriptPath}\"")
+                        : ("bash", scriptPath);
+                    var psi = new System.Diagnostics.ProcessStartInfo(shell, args)
                     {
                         RedirectStandardOutput = true,
                         RedirectStandardError = true,

@@ -14,11 +14,41 @@ public static class VectorQuantizer
         .WithBits(Bits)
         .BuildMSE();
 
+    private static long _totalQuantized;
+    private static double _accumulatedError;
+    private static double _maxError;
+
     public static int PackedByteCount => Dim * Bits / 8;
+
+    /// <summary>Average reconstruction error since last reset.</summary>
+    public static double AverageError => _totalQuantized > 0 ? _accumulatedError / _totalQuantized : 0;
+
+    /// <summary>Peak reconstruction error since last reset.</summary>
+    public static double MaxError => _maxError;
+
+    /// <summary>Total vectors quantized since last reset.</summary>
+    public static long TotalQuantized => Interlocked.Read(ref _totalQuantized);
+
+    /// <summary>Reset precision monitoring counters.</summary>
+    public static void ResetMetrics()
+    {
+        Interlocked.Exchange(ref _totalQuantized, 0);
+        _accumulatedError = 0;
+        _maxError = 0;
+    }
+
+    /// <summary>Get a formatted metrics report.</summary>
+    public static string GetMetricsReport()
+    {
+        var avg = AverageError;
+        var max = MaxError;
+        return $"Quantization precision: avg_error={avg:F6}, max_error={max:F6}, vectors={TotalQuantized}, dim={Dim}, bits={Bits}";
+    }
 
     public static byte[] QuantizeToBytes(float[] vector)
     {
         var packed = Instance.Quantize(vector);
+        TrackPrecision(vector, packed);
         return packed.ToBytes();
     }
 
@@ -39,11 +69,33 @@ public static class VectorQuantizer
         => Instance.ApproxSimilarity(a, b);
 
     public static PackedVector Quantize(float[] vector)
-        => Instance.Quantize(vector);
+    {
+        var packed = Instance.Quantize(vector);
+        TrackPrecision(vector, packed);
+        return packed;
+    }
 
     public static float[] Dequantize(PackedVector packed)
         => Instance.Dequantize(packed);
 
     public static float CosineDistance(PackedVector a, PackedVector b)
         => 1f - Instance.ApproxSimilarity(a, b);
+
+    private static void TrackPrecision(float[] original, PackedVector packed)
+    {
+        var reconstructed = Instance.Dequantize(packed);
+        double error = 0;
+        for (int i = 0; i < original.Length; i++)
+        {
+            var diff = original[i] - reconstructed[i];
+            error += diff * diff;
+        }
+        error = Math.Sqrt(error / original.Length);
+        Interlocked.Increment(ref _totalQuantized);
+        lock (Instance) // thread-safe update for accumulator fields
+        {
+            _accumulatedError += error;
+            if (error > _maxError) _maxError = error;
+        }
+    }
 }

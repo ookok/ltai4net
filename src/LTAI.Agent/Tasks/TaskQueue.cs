@@ -33,6 +33,8 @@ namespace LTAI.Agent.Tasks;
 
 public enum TaskStatus { Pending, Running, Completed, Failed, Cancelled }
 
+public enum TaskPriority { Low = 0, Normal = 1, High = 2, Critical = 3 }
+
 public sealed record TaskItem
 {
     public required string Id { get; init; }
@@ -46,14 +48,10 @@ public sealed record TaskItem
     public string? Error { get; set; }
     public int Attempt { get; set; }
     public Func<CancellationToken, Task<string>>? Work { get; set; }
-    /// <summary>Callback for reporting progress from work delegate.</summary>
     public Action<double, string>? ReportProgress { get; set; }
-
-    /// <summary>Progress value 0.0-1.0, or null when unknown.</summary>
     public double? Progress { get; set; }
-
-    /// <summary>Progress message (e.g. "3/10 files processed").</summary>
     public string? ProgressMessage { get; set; }
+    public TaskPriority Priority { get; init; } = TaskPriority.Normal;
 }
 
 public interface ITaskStore
@@ -90,7 +88,7 @@ public sealed class InMemoryTaskStore : ITaskStore
 
 public sealed class TaskQueue : IAsyncDisposable
 {
-    private readonly Channel<TaskItem> _channel;
+    private readonly Channel<TaskItem>[] _channels;
     private readonly ITaskStore _store;
     private readonly ConcurrentDictionary<string, TaskItem> _items = new();
     private readonly CancellationTokenSource _cts = new();
@@ -115,6 +113,8 @@ public sealed class TaskQueue : IAsyncDisposable
     /// <summary>Fired when a task reports progress update.</summary>
     public event Action<TaskItem>? TaskProgress;
 
+    private static readonly TaskPriority[] _priorityLevels = [TaskPriority.Low, TaskPriority.Normal, TaskPriority.High, TaskPriority.Critical];
+
     public TaskQueue(ITaskStore? store = null, int maxConcurrency = 4,
         ILogger<TaskQueue>? logger = null, TimeSpan? taskTimeout = null)
     {
@@ -122,11 +122,15 @@ public sealed class TaskQueue : IAsyncDisposable
         _maxConcurrency = Math.Max(1, maxConcurrency);
         _logger = logger;
         _defaultTaskTimeout = taskTimeout ?? TimeSpan.FromMinutes(10);
-        _channel = Channel.CreateUnbounded<TaskItem>(new UnboundedChannelOptions
+        _channels = new Channel<TaskItem>[4];
+        for (int i = 0; i < 4; i++)
         {
-            SingleReader = false,
-            SingleWriter = false,
-        });
+            _channels[i] = Channel.CreateUnbounded<TaskItem>(new UnboundedChannelOptions
+            {
+                SingleReader = false,
+                SingleWriter = false,
+            });
+        }
         _consumers = new Task[_maxConcurrency];
         for (int i = 0; i < _maxConcurrency; i++)
             _consumers[i] = Task.Run(() => ConsumerLoopAsync(_cts.Token));
@@ -153,7 +157,8 @@ public sealed class TaskQueue : IAsyncDisposable
         string name,
         Func<CancellationToken, Task<string>> work,
         string? description = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        TaskPriority priority = TaskPriority.Normal)
     {
         var item = new TaskItem
         {
@@ -161,8 +166,8 @@ public sealed class TaskQueue : IAsyncDisposable
             Name = name,
             Description = description,
             Work = work,
+            Priority = priority,
         };
-        // Set up progress reporting callback
         item.ReportProgress = (progress, msg) =>
         {
             item.Progress = progress;
@@ -172,8 +177,9 @@ public sealed class TaskQueue : IAsyncDisposable
         _items[item.Id] = item;
         Interlocked.Increment(ref _enqueuedCount);
         await _store.SaveAsync(item, ct).ConfigureAwait(false);
-        await _channel.Writer.WriteAsync(item, ct).ConfigureAwait(false);
-        _logger?.LogInformation("TaskQueue: enqueued {Id} '{Name}'", item.Id, item.Name);
+        var channelIdx = Math.Clamp((int)priority, 0, 3);
+        await _channels[channelIdx].Writer.WriteAsync(item, ct).ConfigureAwait(false);
+        _logger?.LogInformation("TaskQueue: enqueued {Id} '{Name}' (priority={Priority})", item.Id, item.Name, priority);
         return item;
     }
 
@@ -194,8 +200,23 @@ public sealed class TaskQueue : IAsyncDisposable
     {
         try
         {
-            await foreach (var item in _channel.Reader.ReadAllAsync(ct).ConfigureAwait(false))
+            while (!ct.IsCancellationRequested)
             {
+                TaskItem? item = null;
+                // Drain channels in priority order: Critical → High → Normal → Low
+                for (int p = 3; p >= 0; p--)
+                {
+                    if (_channels[p].Reader.TryRead(out item))
+                        break;
+                }
+                if (item == null)
+                {
+                    // All channels empty — wait for any
+                    var tasks = _channels.Select(c => c.Reader.WaitToReadAsync(ct).AsTask()).ToArray();
+                    var idx = await Task.WhenAny(tasks).ConfigureAwait(false);
+                    if (idx.Result) continue;
+                    break;
+                }
                 await RunOneAsync(item, ct).ConfigureAwait(false);
             }
         }
@@ -253,7 +274,8 @@ public sealed class TaskQueue : IAsyncDisposable
     {
         if (_disposed) return;
         _disposed = true;
-        _channel.Writer.TryComplete();
+        foreach (var ch in _channels)
+            ch.Writer.TryComplete();
         _cts.Cancel();
         try { await Task.WhenAll(_consumers).ConfigureAwait(false); } catch { /* ignore */ }
         _cts.Dispose();

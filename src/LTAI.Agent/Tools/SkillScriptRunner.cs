@@ -1,4 +1,5 @@
 ﻿#pragma warning disable MAAI001
+#pragma warning disable IL2075 // NativeAOT IL — reflection-based property access in skill scripts
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
@@ -65,7 +66,7 @@ public static class SkillScriptRunner
         // Restrict PATH to prevent environment-based injection
         psi.EnvironmentVariables["PATH"] = OperatingSystem.IsWindows()
             ? SystemPathFallback
-            : "/usr/bin:/bin";
+            : "/usr/bin:/bin:/usr/local/bin";
         psi.EnvironmentVariables.Remove("LD_PRELOAD");
         psi.EnvironmentVariables.Remove("LD_LIBRARY_PATH");
         psi.EnvironmentVariables.Remove("DYLD_INSERT_LIBRARIES");

@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using LTAI.Core.I18n;
 using LTAI.Agent.Prompts;
 
@@ -7,6 +8,7 @@ namespace LTAI.Agent;
 /// Bilingual system prompt + plan-mode + agent description builder.
 /// All strings route through <see cref="Locale"/> so the agent speaks the user's OS language.
 /// Prompts loaded from agents/*.prompt.md override built-in strings when present.
+/// Supports <see cref="InjectVariables"/> for dynamic template substitution.
 /// </summary>
 internal static class AgentPromptBuilder
 {
@@ -52,5 +54,23 @@ internal static class AgentPromptBuilder
             ? "About dates: when users ask \"what day is it\" or \"what time is it\", call GetCurrentDateTime directly — do not guess."
             : "关于日期：当用户询问\"今天星期几\"\"现在几点\"等时间日期问题时，请直接调用 GetCurrentDateTime 工具获取实时时间，不要自行估算。";
         return $"{roleLine}\n{dateHint}\n";
+    }
+
+    /// <summary>
+    /// Inject key-value variables into a prompt template.
+    /// Supports both {{key}} and {{{key}}} placeholder syntax.
+    /// </summary>
+    public static string InjectVariables(string prompt, Dictionary<string, string> variables)
+    {
+        if (string.IsNullOrEmpty(prompt) || variables == null || variables.Count == 0)
+            return prompt;
+
+        // Replace {{key}} and {{{key}}} placeholders
+        var result = Regex.Replace(prompt, @"\{\{\{?(\w+)\}?\}\}", match =>
+        {
+            var key = match.Groups[1].Value;
+            return variables.TryGetValue(key, out var val) ? val : match.Value;
+        });
+        return result;
     }
 }

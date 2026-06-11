@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
@@ -26,13 +27,53 @@ public sealed class ChatAgent
     private readonly IEscalationDecider _escalationDecider;
     private readonly IChatClient? _steerJudge;
     private readonly LTAI.Agent.Tools.QuestionService? _questionService;
+    private readonly int _judgeConfidenceThreshold;
+
+    private sealed class PerSessionErrorState
+    {
+        public int ErrorCount;
+        public DateTime? CircuitOpenUntil;
+        public const int MaxErrors = 5;
+        public static readonly TimeSpan CircuitDuration = TimeSpan.FromMinutes(5);
+    }
+
+    private static readonly ConcurrentDictionary<string, PerSessionErrorState> _sessionErrorStates = new(StringComparer.Ordinal);
+
+    private static void RecordSessionError(string sessionId)
+    {
+        var state = _sessionErrorStates.GetOrAdd(sessionId, _ => new());
+        Interlocked.Increment(ref state.ErrorCount);
+    }
+
+    private static bool IsSessionCircuitOpen(string sessionId)
+    {
+        if (!_sessionErrorStates.TryGetValue(sessionId, out var state)) return false;
+        if (state.CircuitOpenUntil.HasValue && DateTime.UtcNow < state.CircuitOpenUntil.Value)
+            return true;
+        if (state.ErrorCount >= PerSessionErrorState.MaxErrors)
+        {
+            state.CircuitOpenUntil = DateTime.UtcNow + PerSessionErrorState.CircuitDuration;
+            return true;
+        }
+        return false;
+    }
+
+    private static void ResetSessionErrors(string sessionId)
+    {
+        if (_sessionErrorStates.TryGetValue(sessionId, out var state))
+        {
+            state.ErrorCount = 0;
+            state.CircuitOpenUntil = null;
+        }
+    }
 
     public ChatAgent(AIAgent agent, AIAgent? proAgent = null, AgentWorkflows? workflows = null,
         BudgetTracker? budgetTracker = null,
         LocalEmbedder? localEmbedder = null, IHttpClientFactory? httpFactory = null,
         bool sameModel = false, IChatClient? steerJudge = null,
         IEscalationDecider? escalationDecider = null,
-        LTAI.Agent.Tools.QuestionService? questionService = null)
+        LTAI.Agent.Tools.QuestionService? questionService = null,
+        int judgeConfidenceThreshold = 3)
     {
         _agent = agent;
         _proAgent = proAgent;
@@ -44,6 +85,7 @@ public sealed class ChatAgent
         _steerJudge = steerJudge;
         _escalationDecider = escalationDecider ?? new DefaultEscalationDecider();
         _questionService = questionService;
+        _judgeConfidenceThreshold = Math.Clamp(judgeConfidenceThreshold, 1, 5);
     }
 
     private static readonly AsyncLocal<string> _traceId = new();
@@ -120,6 +162,7 @@ public sealed class ChatAgent
         // MAF-level CompactionProvider (position [5]) + MaxMessageCountReducer (200 msg cap)
         // handle conversation compaction. This is an observability signal.
         var ctxRatio = LTAI.Core.Configuration.UsageTracker.ContextRatio();
+        var sessionId = sessionHandle?.Name ?? traceId;
 
         // ── 生成后语法检查 ──
         if (r.Messages != null)
@@ -135,6 +178,8 @@ public sealed class ChatAgent
                     if (!string.IsNullOrWhiteSpace(retryText))
                         text = retryText;
                 }
+                if (_grammarDepth.Value > 2)
+                    RecordSessionError(sessionId);
                 _grammarDepth.Value = 0;
             }
         }
@@ -161,17 +206,23 @@ public sealed class ChatAgent
             ? (double)l1State.Spans.Count(s => s.UncertaintyScore >= 0.4) / l1State.Spans.Count
             : 0;
 
+        // ── Session circuit breaker ──
+        if (IsSessionCircuitOpen(sessionId))
+        {
+            await FullRegenerationAsync(message, "circuit breaker tripped — too many prior errors", new L1State(), session, ct);
+        }
+
         // ── LLM-as-Judge ──
         var judgeInadequate = false;
         string? judgeReason = null;
         if (text.Length > 50)
         {
-            var (adequate, jReason) = await JudgeResponseQualityAsync(message, text, ct).ConfigureAwait(false);
+            var (adequate, jReason, jScore) = await JudgeResponseQualityAsync(message, text, ct).ConfigureAwait(false);
             if (!adequate)
             {
                 FailureRecorder.Record(message, text, jReason ?? "judge deemed inadequate", "L1");
                 judgeInadequate = true;
-                judgeReason = jReason;
+                judgeReason = $"{jReason} (score={jScore}, threshold={_judgeConfidenceThreshold})";
             }
         }
 
@@ -382,7 +433,7 @@ public sealed class ChatAgent
         // ── L3 Quality Judge (streaming mode) ──
         if (streamTextAccum.Length > 50 && _steerJudge != null)
         {
-            var (adequate, jReason) = await JudgeResponseQualityAsync(message, streamTextAccum.ToString(), ct)
+            var (adequate, jReason, jScore) = await JudgeResponseQualityAsync(message, streamTextAccum.ToString(), ct)
                 .ConfigureAwait(false);
             if (!adequate && _proAgent != null)
             {
@@ -503,11 +554,11 @@ public sealed class ChatAgent
 
     // ── Quality Judge (LLM-as-Judge) ──
 
-    private async Task<(bool IsAdequate, string? Reason)> JudgeResponseQualityAsync(
+    private async Task<(bool IsAdequate, string? Reason, int Score)> JudgeResponseQualityAsync(
         string message, string response, CancellationToken ct)
     {
         if (_steerJudge == null)
-            return (true, "no steer model configured — assuming adequate");
+            return (true, "no steer model configured — assuming adequate", 5);
         try
         {
             var judgeMessages = new ChatMessage[]
@@ -532,13 +583,14 @@ public sealed class ChatAgent
                 var adequate = root.TryGetProperty("adequate", out var a) && a.GetBoolean();
                 var reason = root.TryGetProperty("reason", out var r) ? r.GetString() : null;
                 var score = root.TryGetProperty("self_score", out var s) ? s.GetInt32() : 0;
-                return (adequate && score >= 3, reason ?? (adequate ? null : "judge deemed inadequate"));
+                var isConfident = score >= _judgeConfidenceThreshold;
+                return (adequate && isConfident, reason ?? (adequate ? null : "judge deemed inadequate"), score);
             }
-            return (true, null);
+            return (true, null, 5);
         }
         catch
         {
-            return (true, null);
+            return (true, null, 0);
         }
     }
 

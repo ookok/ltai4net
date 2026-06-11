@@ -21,22 +21,28 @@ namespace LTAI.Agent;
 /// ordered <see cref="AIContextProvider"/> array that <c>HarnessAgentOptions</c> consumes.
 ///
 /// Layer order matters — the harness walks providers in this order on every turn:
-///   [0] ToolRetrievalProvider     — tool RAG (auto-tools by description embedding)
-///   [1] SkillRankingProvider      — Skill Evolution Engine ranking
-///   [2] SafetyCoordinator         — only when <see cref="LTAIOptions.AI.SkipSafetyChecks"/> = false
-///   [3] L0IdentityProvider        — always-loaded identity (~100t)
-///   [4] L1EssentialProvider       — 5 most-recent essential memories
-///   [5] CompactionProvider        — MAF pipeline compaction
-///   [6] CCRProvider               — content compression/retrieval markers
-///   [7] KbGraph / CgGraph / CodeChunkIndex / WasmtimeSandbox — on-demand
-///   [8] L3OnDemandProvider        — task-relevant memory
-///   [9] L4DeepSearchProvider      — semantic deep search
-///  [10] L6AgentDiaryProvider      — diary entries
-///  [11] ProvenanceProvider        — knowledge provenance tracking
-///  [12] InstructionProvider       — per-model instruction hints
-///  [13] EnvironmentProvider       — current cwd / OS / runtime
-///  [14] skillsProvider            — skills directory contents
-///  [15] CacheAlignerProvider      — KV-cache alignment hints
+///   [0] SkillRankingProvider      — Skill Evolution Engine ranking
+///   [1] SafetyCoordinator         — only when <see cref="LTAIOptions.AI.SkipSafetyChecks"/> = false
+///   [2] L0IdentityProvider        — always-loaded identity (~100t)
+///   [3] L1EssentialProvider       — 5 most-recent essential memories
+///   [4] CompactionProvider        — MAF pipeline compaction
+///   [5] CCRProvider               — content compression/retrieval markers
+///   [6] KbGraph / CgGraph / CodeChunkIndex / WasmtimeSandbox — on-demand
+///   [7] L3OnDemandProvider        — task-relevant memory
+///   [8] L4DeepSearchProvider      — semantic deep search
+///   [9] L6AgentDiaryProvider      — diary entries
+///  [10] ProvenanceProvider        — knowledge provenance tracking
+///  [11] InstructionProvider       — per-model instruction hints
+///  [12] EnvironmentProvider       — current cwd / OS / runtime
+///  [13] skillsProvider            — skills directory contents
+///  [14] CacheAlignerProvider      — KV-cache alignment hints
+///  [15] LspDiagnosticsProvider    — LSP diagnostics
+///
+/// Note: ToolRetrievalProvider has been replaced by ToolFilteringChatClient
+/// (a MAF IChatClient middleware) to avoid ordering conflicts with
+/// HarnessAgent's built-in providers (FileAccessProvider, BackgroundAgentsProvider).
+/// Tool filtering now runs at the IChatClient level, after all AIContextProviders
+/// have merged their tools.
 /// </summary>
 internal static class AgentContextProviderBuilder
 {
@@ -54,9 +60,6 @@ internal static class AgentContextProviderBuilder
 
         var providers = new List<AIContextProvider>(17)
         {
-            new ToolRetrievalProvider(
-                sp.GetRequiredService<LTAI.AI.EmbeddingClient>(),
-                cache: sp.GetService<LTAI.AI.ToolEmbeddingCache>()),
             new SkillRankingProvider(
                 sp.GetRequiredService<SkillEvolutionEngine>(),
                 loggerFactory.CreateLogger<SkillRankingProvider>()),
@@ -83,9 +86,9 @@ internal static class AgentContextProviderBuilder
                 loggerFactory.CreateLogger<CacheAlignerProvider>()),
             new LspDiagnosticsProvider(AgentBuilder.GetLspManager()),
         };
-        // Safety coordinator at position 2 only when enabled
+        // Safety coordinator at position 1 (between SkillRankingProvider and L0IdentityProvider)
         if (safety != null)
-            providers.Insert(2, safety);
+            providers.Insert(1, safety);
         return providers.ToArray();
     }
 }

@@ -6,6 +6,7 @@
 //    It remains for reference only. See ExecutionEngine + IExecutionEngine
 //    for the active step execution framework.
 // ═══════════════════════════════════════════════════════════════
+#pragma warning disable IL2072 // NativeAOT IL — deprecated pipeline (Activator.CreateInstance)
 
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;

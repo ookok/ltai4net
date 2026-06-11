@@ -90,6 +90,7 @@ internal static class AgentDefinitionLoader
         yield return new("LTAI-LLM",      "纯对话助手",            false, false, false, false, null, 0.8f, 0.95f);
         yield return new("LTAI-Writer",   "创意写作助手",          true,  true,  true,  true,  null, 0.8f, 0.95f);
         yield return new("LTAI-Frontend", "前端网页开发助手",       true,  true,  true,  true,  null, 0.8f, 0.95f);
+        yield return new("LTAI-DCI",      "直接语料交互助手(DCI)",   true,  false, true,  true,  null, 0.3f, 0.95f);
         yield return new("LTAI-Plan",     "架构规划师(只读)",       true,  false, true,  false, null, 0.5f, 0.95f);
     }
 }

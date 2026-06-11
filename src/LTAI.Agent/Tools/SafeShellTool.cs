@@ -157,7 +157,7 @@ public sealed class SafeShellTool
         // Restrict PATH to prevent LOLBin abuse and env-based injection
         psi.EnvironmentVariables["PATH"] = isWindows
             ? SystemPathFallback
-            : "/usr/bin:/bin";
+            : "/usr/bin:/bin:/usr/local/bin";
         psi.EnvironmentVariables.Remove("LD_PRELOAD");
         psi.EnvironmentVariables.Remove("LD_LIBRARY_PATH");
         psi.EnvironmentVariables.Remove("DYLD_INSERT_LIBRARIES");

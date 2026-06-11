@@ -11,7 +11,7 @@ using D = DocumentFormat.OpenXml.Drawing;
 using P = DocumentFormat.OpenXml.Presentation;
 using LTAI.AI;
 using LTAI.Core;
-using LTAI.Agent.Vector;
+using LTAI.Core.Vector;
 using Microsoft.Extensions.Logging;
 
 namespace LTAI.Agent.Tools;
@@ -24,10 +24,10 @@ public sealed class DocumentTools
     private static readonly Regex PlaceholderPattern = new(@"\{\{[^}]*\}\}", RegexOptions.Compiled);
     private static readonly int[] Pow26 = [1, 26, 676, 17576, 456976, 11881376];
     private readonly string _ws;
-    private readonly KbGraph? _kbGraph;
+    private readonly IKbQueryable? _kbGraph;
     private readonly ILogger<DocumentTools>? _logger;
 
-    public DocumentTools(string ws, KbGraph? kbGraph = null, ILogger<DocumentTools>? logger = null)
+    public DocumentTools(string ws, IKbQueryable? kbGraph = null, ILogger<DocumentTools>? logger = null)
     {
         _ws = ws;
         _kbGraph = kbGraph;

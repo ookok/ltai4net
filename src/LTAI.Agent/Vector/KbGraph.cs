@@ -14,6 +14,7 @@ using LTAI.AI;
 using LTAI.Agent.Tools;
 using LTAI.Agent.Formats;
 using LTAI.Agent.Utils;
+using LTAI.Core.Vector;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
@@ -25,7 +26,7 @@ namespace LTAI.Agent.Vector;
 /// Knowledge Base Graph (SQLite + FTS5).
 /// Pipeline: LLM query rewrite → BM25 recall → CTE BFS expansion → context injection.
 /// </summary>
-public sealed class KbGraph : AIContextProvider
+public sealed class KbGraph : AIContextProvider, LTAI.Core.Vector.IKbQueryable
 {
     private readonly KgStore _store;
     private readonly IChatClient? _rewriter;
@@ -58,6 +59,11 @@ public sealed class KbGraph : AIContextProvider
     // ═══════════════════════════════════════════
     //  Public query
     // ═══════════════════════════════════════════
+
+    async Task<List<string>> LTAI.Core.Vector.IKbQueryable.QueryAsync(string query, int topK, CancellationToken ct)
+    {
+        return await QueryAsync(query, topK, true, ct, ResultFormat.Markdown).ConfigureAwait(false);
+    }
 
     public async Task<List<string>> QueryAsync(string query, int topK = 10,
         bool expandGraph = true, CancellationToken ct = default,
