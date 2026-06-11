@@ -4,13 +4,14 @@
 
 - .NET 10.0 SDK
 - Docker (for container deployment)
-- DeepSeek API key (set as `DEEPSEEK_API_KEY` env var)
+- At least one API key (DeepSeek, OpenAI, etc.)
 
 ## Quick Start
 
 ```bash
-# Set API key (required)
+# Set API key (at least one required)
 set DEEPSEEK_API_KEY=sk-your-key-here
+# L2/L3 models auto-selected; no further config needed
 
 # Run TUI (interactive console)
 cd src/LTAI.TUI && dotnet run
@@ -35,7 +36,9 @@ All config lives in `appsettings.json` under the `LTAI` section.
 
 | Variable | Description |
 |---|---|
-| `DEEPSEEK_API_KEY` | L1 (flash) and L2 (pro) model API key |
+| `DEEPSEEK_API_KEY` | DeepSeek L1 model (auto-selects L2/L3) |
+| `OPENAI_API_KEY` | OpenAI fallback |
+| (Any provider's API key works — only one needed) |
 
 ### Optional env vars
 
@@ -50,13 +53,11 @@ All config lives in `appsettings.json` under the `LTAI` section.
 {
   "LTAI": {
     "AI": {
-      "DefaultProvider": "deepseek",
-      "Model": "deepseek-v4-flash",
-      "MaxTokens": 4096,
-      "Temperature": 0.7,
-      "Providers": {
-        "deepseek-fast": { "Endpoint": "https://api.deepseek.com/v1", "Model": "deepseek-v4-flash" },
-        "deepseek-pro": { "Endpoint": "https://api.deepseek.com/v1", "Model": "deepseek-v4-pro" }
+      "DefaultProvider": "deepseek-fast",
+      "L1": { "Provider": "deepseek-fast", "Model": "deepseek-chat" },
+      "AutoSelect": {
+        "Enabled": true,
+        "RefreshIntervalMin": 30
       }
     }
   }
@@ -80,12 +81,27 @@ Provider failures are tracked in SQLite (`.livingtree/circuit_breaker.db`):
 
 ## Degradation Chain
 
-Configured in `AIConfig.DegradationChain`:
+The router degrades through L1 → L1-alt → L2 → L2-alt → L3:
 ```
-deepseek → deepseek-pro → (end)
+deepseek-chat → (no alt) → deepseek-reasoner → (no alt) → deepseek-chat (reuse L1)
 ```
 
-The router tries providers in order, skipping those in cooldown.
+The chain is auto-configured by ModelAutoSelector based on ProviderRegistry data.
+
+## Model Auto-Selection
+
+At startup, `ModelAutoSelectHostedService` runs and:
+1. Reads `ProviderRegistry` (8 providers × 560+ models from `models/models-dev-providers.json`)
+2. Scores each model: capability(40%) + cost(30%) + speed(20%) + availability(10%)
+3. Assigns L1 (fast), L2 (deep), L3 (judge) tiers
+4. L3 falls back to L1 if no suitable model found
+
+CLI commands:
+```bash
+ltai models show                  # Current selections
+ltai models set l2 gpt-4o-mini   # Override a tier
+ltai models auto l2               # Restore auto-selection
+```
 
 ## Troubleshooting
 
@@ -109,6 +125,14 @@ dotnet build -t:DownloadEmbeddingModelBgeSmallEn
 ```bash
 # Clear all persistent state
 rm -rf .livingtree/
+```
+
+### Provider data not loading
+
+```bash
+# The fallback dataset is at models/models-dev-providers.json (252KB)
+# Delete it to trigger a fresh fetch from https://models.dev/api.json
+rm models/models-dev-providers.json
 ```
 
 ## Monitoring

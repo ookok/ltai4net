@@ -1,22 +1,24 @@
 # LTAI 4 Net — Agent 指南
 
-多 Agent 框架，基于 Microsoft Agent Framework (MAF)。3 种前端 (TUI/Desktop/Web) + CLI，10 个 agent（由 `agents/*.agent.md` 定义），本地 ONNX 嵌入，YAML 热改编排。
+多 Agent 框架，基于 Microsoft Agent Framework (MAF)。3 种前端 (TUI/Desktop/Web) + CLI，19 个 agent（由 `agents/*.agent.md` 定义），本地 ONNX 嵌入，YAML 热改编排。
 
 ## 项目结构
 
 - `src/LTAI.Core/` — 配置、安全、用量追踪（零外部依赖）
-- `src/LTAI.AI/` — LLM 路由器 (`MultiProviderChatClient`)、嵌入 (`LocalEmbedder`)、ToolRegistry
-- `src/LTAI.Agent/` — agent 构建、编排、上下文、DevUI 服务、持久化
+- `src/LTAI.AI/` — LLM 路由器 (`MultiProviderChatClient`)、ProviderRegistry、ModelAutoSelector、嵌入 (`LocalEmbedder`)、ToolRegistry
+- `src/LTAI.Agent/` — agent 构建、编排、上下文、ToolSet、AgentToolStore、DevUI 服务、持久化
+- `src/LTAI.Agent.CodeAnalysis/` — 代码分析（TreeSitter 解析器，语义代码搜索）
+- `src/LTAI.Agent.Database/` — 数据库工具
+- `src/LTAI.Agent.Documents/` — Office 文档工具
 - `src/LTAI.TUI/` — Terminal.Gui 终端 UI (Inline 模式，类 Claude Code/Copilot CLI)
-- `src/LTAI.Desktop/` — Avalonia 桌面 UI
+- `src/LTAI.Desktop/` — Avalonia 桌面 UI（内嵌 PseudoTerminal: ConPTY/forkpty）
 - `src/LTAI.Web/` — ASP.NET Minimal API (端口 5100)
 - `src/LTAI.Cli/` — CLI 工具 (`ltai`)
 - `src/LTAI.Accelerator/` — 独立加速器（非核心 agent 链）
-- `src/LTAI.Hpo/` — HPO 扩展
-- `src/LTAI.Agent.Eia/` — EIA 扩展
 - `extern/agent-framework/` — MAF git 子模块 (Microsoft.Agents.AI)
 - `extern/durabletask-dotnet/` — DTFx git 子模块 (源码参考)
 - `extern/Terminal.Gui/` — Terminal.Gui git 子模块 (gui-cs, 预编译 DLL 到 `dist/lib/terminal.gui/`)
+- `models/` — models-dev-providers.json（8 provider × 560+ 模型元数据缓存）
 
 ## DI 注册顺序（必须保持）
 
@@ -26,11 +28,11 @@ services.AddLTAIAI();       // LLM 路由器、嵌入
 services.AddLTAIAgent();    // 10 agents、编排、工具
 ```
 
-每个 agent 通过 `ServiceCollectionExtensions.GetAgentDefinitions()` 读取 `agents/*.agent.md` 注册为 MAF keyed service。
+每个 agent 通过 `ServiceCollectionExtensions.GetAgentDefinitions()` 读取 `agents/*.agent.md` 注册为 MAF keyed service。ProviderRegistry 和 ModelAutoSelector 在 DI 启动时自动初始化。
 
 ## Agent 定义
 
-Agent 由 `agents/*.agent.md` YAML front-matter 声明。10 个 agents：`LTAI-Chat`、`LTAI-Chat-Pro`、`LTAI-Code`、`LTAI-Data`、`LTAI-Frontend`、`LTAI-LLM`、`LTAI-Math`、`LTAI-System`、`LTAI-Writer`、`sql-agent`。
+Agent 由 `agents/*.agent.md` YAML front-matter 声明。19 个 agents：`LTAI-Chat`、`LTAI-Chat-Pro`、`LTAI-Code`、`LTAI-Data`、`LTAI-Frontend`、`LTAI-LLM`、`LTAI-Math`、`LTAI-System`、`LTAI-Writer`、`sql-agent`、`LTAI-API`、`LTAI-Arch`、`LTAI-DCI`、`LTAI-Plan`、`LTAI-Review`、`LTAI-Debug`、`LTAI-Security`、`LTAI-DevOps`、`LTAI-Office`。
 
 ```bash
 ltai agents list          # 一览
@@ -91,6 +93,9 @@ cd src/LTAI.Web && dotnet run            # 启动 Web → http://localhost:5100
 dotnet test tests/LTAI.Tests             # 运行测试（112+ 测试）
 dotnet run -c Release --project tests/LTAI.Benchmarks  # BenchmarkDotNet
 dotnet run --project tests/LTAI.Benchmarks -- smoke    # 快速 smoke test
+ltai models show                         # 查看自动选拔的 L1/L2/L3 模型
+ltai models set l2 deepseek-chat        # 覆盖 L2 模型
+ltai models auto l2                     # 恢复自动选拔
 ```
 
 ## 子模块 & sparse-checkout
@@ -143,7 +148,7 @@ Web: GET /ltai/v1/workflows
 | `GET /health` | 完整健康检查 |
 | `GET /ready` | K8s readiness probe |
 | `GET /devui` | MAF DevUI（仅 development） |
-| `GET /ltai/v1/entities` | 10 agents LTAIAgentCard |
+| `GET /ltai/v1/entities` | 19 agents LTAIAgentCard |
 | `GET /ltai/v1/jobs` | 后台任务列表（60s 自动驱逐） |
 | `GET /ltai/v1/workflows` | 热改编排配置 |
 | `POST /ltai/v1/workflows/reload` | 重载所有编排 |
@@ -162,7 +167,8 @@ Web: GET /ltai/v1/workflows
 - **`ShellEnvironmentProvider` 已完全移除**（Windows .NET 10 上启动 PowerShell 进程卡 60+ 秒）。
 - **Pre-existing warnings** ~38 个（OfficeDocumentReader/DocumentTools/SkillEvolutionEngine/KbGraph）—— 不新增即可。
 - **持久化目录**：`.livingtree/`（SQLite 知识图谱 + 会话 + 任务队列）。删除可重置所有状态。
-- **配置**：`appsettings.json` `LTAI` 节 + 环境变量（DEEPSEEK_API_KEY 等）。
+- **配置**：`appsettings.json` `LTAI` 节 + 环境变量（DEEPSEEK_API_KEY 等）。仅需配置一个 API Key，L2/L3 自动选拔。
+- **Provider 元数据**：`models/models-dev-providers.json`（252KB，首次启动自动加载，后台 24h 刷新）。
 
 ## 参考文档
 
