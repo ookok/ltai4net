@@ -1,4 +1,4 @@
-﻿// Copyright (c) LTAI. All rights reserved.
+// Copyright (c) LTAI. All rights reserved.
 
 using System;
 using System.Collections.Concurrent;
@@ -312,17 +312,10 @@ public sealed class CgGraph : AIContextProvider
     // ═══════════════════════════════════════════
 
     /// <summary>
-    /// L0 短路判断（复用 KbGraph 逻辑）：简单查询不触发 LLM。
+    /// L0 short-circuit (reuses KbGraph logic): simple queries don't trigger LLM.
+    /// Delegates to shared QueryUtils.
     /// </summary>
-    private static bool IsSimpleQuery(string query)
-    {
-        if (string.IsNullOrWhiteSpace(query) || query.Length > 50) return false;
-        var wordCount = query.Split([' ', '，', '。', '、'], StringSplitOptions.RemoveEmptyEntries).Length;
-        if (wordCount > 4) return false;
-        if (query.Any(c => c is '_' or '.' or '/' or '\\' or '(' or ')' or '[' or ']' or '<' or '>'))
-            return false;
-        return true;
-    }
+    private static bool IsSimpleQuery(string query) => QueryUtils.IsSimpleQuery(query);
 
     private async Task<string> RewriteQueryAsync(string query, CancellationToken ct)
     {

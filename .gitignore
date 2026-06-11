@@ -55,6 +55,7 @@ tmp_doc*
 null
 test.txt
 check_lines.py
+*.bak
 
 ## Logs
 logs/

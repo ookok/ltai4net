@@ -104,8 +104,6 @@ partial class AgentBuilder
     static void RegisterChoiceAndSubagentTools(List<AITool> tools, string name, IServiceProvider sp, IChatClient llm, string ws)
     {
         if (name is "LTAI-Chat" or "LTAI-Writer" or "LTAI-Frontend")
-        { tools.Add(AIFunctionFactory.Create(ChoiceTools.AskChoice)); }
-        if (name is "LTAI-Chat" or "LTAI-Writer" or "LTAI-Frontend")
         {
             var sub = new SubagentTools(sp, llm, ws, tools);
             tools.Add(AIFunctionFactory.Create(sub.Explore));
@@ -114,42 +112,32 @@ partial class AgentBuilder
             tools.Add(AIFunctionFactory.Create(sub.SecurityReview));
             tools.Add(AIFunctionFactory.Create(sub.SpawnSubagent));
         }
-        if (name is "LTAI-Chat" or "LTAI-Writer")
-        {
-            var gen = new AgentGenerator(llm);
-            tools.Add(AIFunctionFactory.Create(gen.GenerateAgent));
-        }
     }
 
     static void RegisterGitTools(List<AITool> tools, string name, string ws)
     {
         if (!(name.StartsWith("LTAI-Chat") || name is "LTAI-Code" or "LTAI-System" or "LTAI-Writer" or "LTAI-Frontend")) return;
         var git = new GitTools(ws);
+        // Core read-only tools
         tools.Add(AIFunctionFactory.Create(git.GitStatus));
         tools.Add(AIFunctionFactory.Create(git.GitLog));
-        tools.Add(AIFunctionFactory.Create(git.GitAdd));
-        tools.Add(AIFunctionFactory.Create(git.GitCommit));
-        tools.Add(AIFunctionFactory.Create(git.GitUnstage));
-        tools.Add(AIFunctionFactory.Create(git.GitCheckout));
-        tools.Add(AIFunctionFactory.Create(git.GitBranch));
-        tools.Add(AIFunctionFactory.Create(git.GitMerge));
-        tools.Add(AIFunctionFactory.Create(git.GitRemote));
-        tools.Add(AIFunctionFactory.Create(git.GitTag));
-        tools.Add(AIFunctionFactory.Create(git.GitStash));
-        tools.Add(AIFunctionFactory.Create(git.GitStashList));
         tools.Add(AIFunctionFactory.Create(git.GitDiff));
         tools.Add(AIFunctionFactory.Create(git.GitBlame));
         tools.Add(AIFunctionFactory.Create(git.GitShow));
-        tools.Add(AIFunctionFactory.Create(git.GitRebase));
-        tools.Add(AIFunctionFactory.Create(git.GitReviewChanges));
-        tools.Add(AIFunctionFactory.Create(git.GitReset));
-        tools.Add(AIFunctionFactory.Create(git.GitPush));
-        tools.Add(AIFunctionFactory.Create(git.GitPull));
-        tools.Add(AIFunctionFactory.Create(git.GitFetch));
+        // Branch management
+        tools.Add(AIFunctionFactory.Create(git.GitBranch));
+        tools.Add(AIFunctionFactory.Create(git.GitCheckout));
+        tools.Add(AIFunctionFactory.Create(git.GitBranchDelete));
+        // Commit workflow
+        tools.Add(AIFunctionFactory.Create(git.GitAdd));
+        tools.Add(AIFunctionFactory.Create(git.GitUnstage));
         tools.Add(AIFunctionFactory.Create(git.GitCommitAndPush));
         tools.Add(AIFunctionFactory.Create(git.GitUndoLast));
-        tools.Add(AIFunctionFactory.Create(git.GitCleanupBranches));
-        tools.Add(AIFunctionFactory.Create(git.GitBranchDelete));
+        tools.Add(AIFunctionFactory.Create(git.GitReset));
+        // Advanced
+        tools.Add(AIFunctionFactory.Create(git.GitStash));
+        tools.Add(AIFunctionFactory.Create(git.GitMerge));
+        tools.Add(AIFunctionFactory.Create(git.GitRemote));
     }
 
     static void RegisterReviewTools(List<AITool> tools, string name, string ws)
@@ -294,8 +282,8 @@ partial class AgentBuilder
         }
         if (canRead && canWrite)
         {
-            var chart = new ChartTools(ws);
-            tools.Add(AIFunctionFactory.Create(chart.ChartCreate));
+            var mm = new MultimediaTools(ws);
+            tools.Add(AIFunctionFactory.Create(mm.ChartCreate));
         }
         if (name is "LTAI-Chat" or "LTAI-Data" or "LTAI-Code")
         {

@@ -32,18 +32,20 @@ public sealed class SafeChatClient : IChatClient
     private readonly int _ringBufferCheckIntervalMs;
     private readonly int _ringBufferMaxChars;
 
-    private static readonly string SafetySystemPrompt = SafetyPrompts.SystemPrompt;
+    private readonly string _safetySystemPrompt;
 
     public SafeChatClient(IChatClient inner, IChatClient safetyLlm,
         ILogger<SafeChatClient>? logger = null,
         int ringBufferCheckIntervalMs = 200,
-        int ringBufferMaxChars = 200)
+        int ringBufferMaxChars = 200,
+        string? safetyPrompt = null)
     {
         _inner = inner;
         _safetyLlm = safetyLlm;
         _logger = logger ?? NullLogger<SafeChatClient>.Instance;
         _ringBufferCheckIntervalMs = Math.Max(50, ringBufferCheckIntervalMs);
         _ringBufferMaxChars = Math.Max(50, ringBufferMaxChars);
+        _safetySystemPrompt = safetyPrompt ?? SafetyPrompts.DefaultSystemPrompt;
     }
 
     /// <summary>
@@ -208,7 +210,7 @@ public sealed class SafeChatClient : IChatClient
         try
         {
             var response = await _safetyLlm.GetResponseAsync([
-                new ChatMessage(ChatRole.System, SafetySystemPrompt),
+                new ChatMessage(ChatRole.System, _safetySystemPrompt),
                 new ChatMessage(ChatRole.User, text)
             ], cancellationToken: ct).ConfigureAwait(false);
 

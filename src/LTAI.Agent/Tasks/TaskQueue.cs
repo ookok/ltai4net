@@ -46,6 +46,14 @@ public sealed record TaskItem
     public string? Error { get; set; }
     public int Attempt { get; set; }
     public Func<CancellationToken, Task<string>>? Work { get; set; }
+    /// <summary>Callback for reporting progress from work delegate.</summary>
+    public Action<double, string>? ReportProgress { get; set; }
+
+    /// <summary>Progress value 0.0-1.0, or null when unknown.</summary>
+    public double? Progress { get; set; }
+
+    /// <summary>Progress message (e.g. "3/10 files processed").</summary>
+    public string? ProgressMessage { get; set; }
 }
 
 public interface ITaskStore
@@ -88,6 +96,7 @@ public sealed class TaskQueue : IAsyncDisposable
     private readonly CancellationTokenSource _cts = new();
     private readonly Task[] _consumers;
     private readonly int _maxConcurrency;
+    private readonly TimeSpan _defaultTaskTimeout;
     private readonly ILogger<TaskQueue>? _logger;
 
     private long _enqueuedCount;
@@ -103,13 +112,16 @@ public sealed class TaskQueue : IAsyncDisposable
     public int ConsumerCount => _consumers.Length;
 
     public event Action<TaskItem>? TaskCompleted;
+    /// <summary>Fired when a task reports progress update.</summary>
+    public event Action<TaskItem>? TaskProgress;
 
     public TaskQueue(ITaskStore? store = null, int maxConcurrency = 4,
-        ILogger<TaskQueue>? logger = null)
+        ILogger<TaskQueue>? logger = null, TimeSpan? taskTimeout = null)
     {
         _store = store ?? new InMemoryTaskStore();
         _maxConcurrency = Math.Max(1, maxConcurrency);
         _logger = logger;
+        _defaultTaskTimeout = taskTimeout ?? TimeSpan.FromMinutes(10);
         _channel = Channel.CreateUnbounded<TaskItem>(new UnboundedChannelOptions
         {
             SingleReader = false,
@@ -123,6 +135,14 @@ public sealed class TaskQueue : IAsyncDisposable
     public IReadOnlyList<TaskItem> List() => _items.Values.OrderByDescending(i => i.EnqueuedAt).ToList();
 
     public TaskItem? Get(string id) => _items.TryGetValue(id, out var item) ? item : null;
+
+    /// <summary>Get current progress for a task, or null if not found.</summary>
+    public (double? Progress, string? Message)? GetProgress(string id)
+    {
+        if (_items.TryGetValue(id, out var item))
+            return (item.Progress, item.ProgressMessage);
+        return null;
+    }
 
     /// <summary>
     /// Enqueue a work item. The returned TaskItem has a unique id; the
@@ -141,6 +161,13 @@ public sealed class TaskQueue : IAsyncDisposable
             Name = name,
             Description = description,
             Work = work,
+        };
+        // Set up progress reporting callback
+        item.ReportProgress = (progress, msg) =>
+        {
+            item.Progress = progress;
+            item.ProgressMessage = msg;
+            TaskProgress?.Invoke(item);
         };
         _items[item.Id] = item;
         Interlocked.Increment(ref _enqueuedCount);
@@ -175,19 +202,17 @@ public sealed class TaskQueue : IAsyncDisposable
         catch (OperationCanceledException) { /* shutdown */ }
     }
 
-    private static readonly TimeSpan DefaultTaskTimeout = TimeSpan.FromMinutes(10);
-
     private async Task RunOneAsync(TaskItem item, CancellationToken ct)
     {
         item.Status = TaskStatus.Running;
         item.StartedAt = DateTimeOffset.UtcNow;
         item.Attempt++;
         await _store.UpdateAsync(item, ct).ConfigureAwait(false);
-        _logger?.LogInformation("TaskQueue: starting {Id} '{Name}' (attempt {Attempt})",
-            item.Id, item.Name, item.Attempt);
+        _logger?.LogInformation("TaskQueue: starting {Id} '{Name}' (attempt {Attempt}, timeout={Timeout})",
+            item.Id, item.Name, item.Attempt, _defaultTaskTimeout);
 
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeoutCts.CancelAfter(DefaultTaskTimeout);
+        timeoutCts.CancelAfter(_defaultTaskTimeout);
         var linkedCt = timeoutCts.Token;
 
         try
@@ -203,7 +228,7 @@ public sealed class TaskQueue : IAsyncDisposable
         {
             var isTimeout = timeoutCts.IsCancellationRequested && !ct.IsCancellationRequested;
             item.Status = isTimeout ? TaskStatus.Failed : TaskStatus.Cancelled;
-            item.Error = isTimeout ? "timeout (10 minutes)" : "cancelled";
+            item.Error = isTimeout ? $"timeout ({_defaultTaskTimeout})" : "cancelled";
             if (isTimeout) Interlocked.Increment(ref _failedCount);
             else Interlocked.Increment(ref _cancelledCount);
         }

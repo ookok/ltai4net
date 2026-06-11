@@ -6,7 +6,6 @@
     <Nullable>enable</Nullable>
     <RootNamespace>LTAI.AI</RootNamespace>
     <IsAotCompatible>true</IsAotCompatible>
-    <NoWarn>$(NoWarn);IL2026;IL3050;IL2046;IL2091;IL2104</NoWarn>
   </PropertyGroup>
   <!-- P17.3: 本地缓存增强 — 支持 LTAI_EMBEDDING_MODELS_DIR 环境变量
        指向预下载的模型目录（CI / 共享缓存 / 离线环境）。

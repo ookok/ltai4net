@@ -30,10 +30,15 @@ namespace LTAI.Agent.Vector;
 /// </summary>
 public sealed class HnswVectorStore : IVectorStore
 {
-    private readonly HnswIndex _hnsw = new();
+    private readonly HnswIndex _hnsw;
     private readonly List<long> _nodeIds = [];
     private readonly ReaderWriterLockSlim _rwLock = new();
     private volatile bool _disposed;
+
+    public HnswVectorStore(HnswOptions? options = null)
+    {
+        _hnsw = new HnswIndex(options);
+    }
 
     /// <inheritdoc />
     public int Count

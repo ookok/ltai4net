@@ -1,6 +1,6 @@
 ---
 name: LTAI-Security
-description: 安全审计助手 — 检测注入/密钥泄露/配置风险
+description: 安全审计助手，检测注入、密钥泄露、配置风险。按 OWASP 维度检查代码安全性，擅长漏洞扫描、渗透测试、安全加固。
 temperature: 0.3
 topP: 0.95
 permissions: ["read", "write", "list"]

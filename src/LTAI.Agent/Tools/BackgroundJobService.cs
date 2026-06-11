@@ -1,4 +1,4 @@
-﻿using System.Collections.Concurrent;
+using System.Collections.Concurrent;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Threading;
@@ -26,6 +26,7 @@ public sealed class BackgroundJobService : IDisposable
     private readonly CancellationTokenSource _cts = new();
     private bool _disposed;
     private readonly int _expirationSeconds;
+    private readonly int _maxOutputChars;
     private long _startedCount;
     private long _completedCount;
 
@@ -34,10 +35,11 @@ public sealed class BackgroundJobService : IDisposable
 
     private string EffectiveSession => CurrentSessionId ?? "default";
 
-    /// <summary>Default 60s cleanup for completed jobs. Override via constructor.</summary>
-    public BackgroundJobService(int expirationSeconds = 60)
+    /// <summary>Default 60s cleanup, 100K max output chars.</summary>
+    public BackgroundJobService(int expirationSeconds = 60, int maxOutputChars = 100_000)
     {
         _expirationSeconds = Math.Max(10, expirationSeconds);
+        _maxOutputChars = Math.Max(1024, maxOutputChars);
     }
 
     public event Action<string, JobEntry>? JobCompleted;
@@ -81,9 +83,13 @@ public sealed class BackgroundJobService : IDisposable
             var process = new Process { StartInfo = psi };
             process.Start();
             _runningProcesses[id] = process;
-            entry.Output = await process.StandardOutput.ReadToEndAsync().ConfigureAwait(false);
-            entry.Error = await process.StandardError.ReadToEndAsync().ConfigureAwait(false);
+            var stdoutTask = process.StandardOutput.ReadToEndAsync();
+            var stderrTask = process.StandardError.ReadToEndAsync();
             process.WaitForExit();
+            var stdout = await stdoutTask.ConfigureAwait(false);
+            var stderr = await stderrTask.ConfigureAwait(false);
+            entry.Output = TruncateOutput(stdout);
+            entry.Error = TruncateOutput(stderr);
             entry.ExitCode = process.ExitCode;
         }
         catch (Exception ex)
@@ -243,6 +249,15 @@ public sealed class BackgroundJobService : IDisposable
     /// <summary>P14.15: lookup a single job by ID. Returns null if missing.</summary>
     public JobEntry? GetJobEntry(string jobId) =>
         _jobs.TryGetValue(jobId, out var entry) ? entry : null;
+
+    /// <summary>Truncate output to prevent OOM on large responses.</summary>
+    private string TruncateOutput(string text)
+    {
+        if (string.IsNullOrEmpty(text) || text.Length <= _maxOutputChars)
+            return text;
+        return text[.._maxOutputChars] +
+            $"\n... [truncated {text.Length - _maxOutputChars} chars, limit={_maxOutputChars}]";
+    }
 }
 
 public sealed class JobEntry

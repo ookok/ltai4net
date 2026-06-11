@@ -37,6 +37,41 @@ public static class ToolRegistry
     private static readonly object _lock = new();
     private static volatile IReadOnlyList<ToolDef> _snapshot = Array.Empty<ToolDef>();
 
+    /// <summary>True if ToolRegistry has been initialized at least once.</summary>
+    public static bool IsInitialized => _initialized;
+
+    // ── Usage statistics ──
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, ToolStats> _stats = new(StringComparer.OrdinalIgnoreCase);
+    public sealed record ToolStats(string Name, long CallCount, long SuccessCount, long TotalLatencyMs, double AvgLatencyMs)
+    {
+        public double SuccessRate => CallCount > 0 ? (double)SuccessCount / CallCount : 1.0;
+    }
+
+    /// <summary>Record a tool call result for metrics.</summary>
+    public static void RecordCall(string toolName, bool success, long latencyMs)
+    {
+        _stats.AddOrUpdate(toolName,
+            _ => new ToolStats(toolName, 1, success ? 1 : 0, latencyMs, latencyMs),
+            (_, old) => old with
+            {
+                CallCount = old.CallCount + 1,
+                SuccessCount = old.SuccessCount + (success ? 1 : 0),
+                TotalLatencyMs = old.TotalLatencyMs + latencyMs,
+                AvgLatencyMs = (old.TotalLatencyMs + latencyMs) / (double)(old.CallCount + 1)
+            });
+    }
+
+    /// <summary>Get all tool invocation statistics.</summary>
+    public static IReadOnlyDictionary<string, ToolStats> GetAllStats() =>
+        new Dictionary<string, ToolStats>(_stats);
+
+    /// <summary>Get stats for a specific tool.</summary>
+    public static ToolStats? GetStats(string toolName) =>
+        _stats.TryGetValue(toolName, out var s) ? s : null;
+
+    /// <summary>Reset all statistics.</summary>
+    public static void ResetStats() => _stats.Clear();
+
     // ═══════════════════════════════════════════
     //  BM25 倒排索引
     // ═══════════════════════════════════════════

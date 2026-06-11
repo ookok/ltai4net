@@ -371,14 +371,10 @@ public sealed class AgentWorkflows
     private async Task<string?> TryRunGreetingAsync(string task, CancellationToken ct)
     {
         // P14.9 review: pre-check for mixed greeting+query.
-        // If the message is long enough to contain a substantive request,
-        // skip the canned greeting path entirely and let the LLM handle it.
-        var isLongMessage = task.Trim().Length > 50;
-
-        if (isLongMessage)
+        // Use intent classification instead of simple length threshold.
+        if (!IsGreetingOnly(task))
         {
-            _logger.LogDebug("Greeting fast-path skipped: message length {Len} > 50 (likely mixed greeting+query)",
-                task.Trim().Length);
+            _logger.LogDebug("Greeting fast-path skipped: message contains substantive request");
             return null;
         }
 
@@ -403,5 +399,38 @@ public sealed class AgentWorkflows
         }
         // C# fallback (D69).
         return await YAMLWorkflowHost.RunGreetingFastPathAsync(task, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// 检测是否为纯问候（不含实质性请求）。
+    /// 改进：使用意图分类替代简单长度阈值。
+    /// </summary>
+    private static bool IsGreetingOnly(string task)
+    {
+        if (string.IsNullOrWhiteSpace(task)) return false;
+        var trimmed = task.Trim();
+
+        // Fast path: exact greeting match
+        var greetings = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "hello", "hi", "hey", "你好", "嗨", "早上好", "下午好", "晚上好",
+            "good morning", "good afternoon", "good evening",
+            "who are you", "你是谁", "help", "帮助", "/help",
+            "status", "状态", "/status", "thanks", "谢谢", "thank you"
+        };
+        if (greetings.Contains(trimmed))
+            return true;
+
+        // Pattern-based: "你好" + tool keyword = mixed query
+        var toolKeywords = new[] { "搜索", "查找", "写", "读", "删除", "创建", "执行", "运行", "计算", "分析", "翻译", "总结" };
+        var hasToolKeyword = toolKeywords.Any(k => trimmed.Contains(k, StringComparison.OrdinalIgnoreCase));
+        if (hasToolKeyword)
+            return false;
+
+        // Length-based: short messages without tool keywords are likely greetings
+        if (trimmed.Length <= 15)
+            return true;
+
+        return false;
     }
 }

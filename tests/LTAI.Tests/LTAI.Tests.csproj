@@ -40,12 +40,12 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Compile Remove="CoreTests.cs" />
-    <Compile Remove="CodeSearchRerankerTests.cs" />
-    <Compile Remove="AgentEvaluationTests.cs" />
-    <Compile Remove="CredentialManagerTests.cs" />
-    <Compile Remove="EmbeddingIntegrationTests.cs" />
     <Compile Remove="A2A\**\*.cs" />
+    <Compile Remove="AgentEvaluationTests.cs" />
+    <Compile Remove="CodeSearchRerankerTests.cs" />
+    <Compile Remove="CoreTests.cs" />
+    <Compile Remove="EmbeddingIntegrationTests.cs" />
+    <Compile Remove="TUIViewsTests.cs" />
   </ItemGroup>
 
   <ItemGroup>

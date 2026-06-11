@@ -296,6 +296,7 @@ public sealed class EmbeddingClient : IDisposable
     /// <summary>
     /// BM25 fallback — word-level sparse retrieval, zero dependencies.
     /// TF × IDF with saturation and length normalization.
+    /// Supports both English (space-split) and Chinese (character-bigram-split).
     /// Outperforms n-gram by ~15-20% on recall.
     /// </summary>
     public static float[] FastEmb(string text, int dimensions = 384)
@@ -307,11 +308,40 @@ public sealed class EmbeddingClient : IDisposable
 
         var lower = text.ToLowerInvariant();
 
-        // Tokenize: split on non-alphanumeric
-        var tokens = lower.Split(new[] { ' ', '\n', '\r', '\t', '.', ',', ';', ':', '(', ')', '[', ']', '{', '}', '"', '\'', '!', '?', '-', '_', '/' },
+        // Tokenize: split on non-alphanumeric for English; handle Chinese by bigram
+        var rawTokens = lower.Split(new[] { ' ', '\n', '\r', '\t', '.', ',', ';', ':', '(', ')', '[', ']', '{', '}', '"', '\'', '!', '?', '-', '_', '/' },
             StringSplitOptions.RemoveEmptyEntries)
             .Where(t => t.Length > 0)
             .ToList();
+
+        // Chinese bigram splitting: detect CJK characters and split into overlapping bigrams
+        var tokens = new List<string>();
+        foreach (var token in rawTokens)
+        {
+            if (ContainsCjk(token))
+            {
+                // CJK text: split into overlapping bigrams
+                for (int i = 0; i < token.Length; i++)
+                {
+                    if (i + 1 <= token.Length)
+                    {
+                        var uni = token.Substring(i, 1);
+                        if (uni.Length >= 1)
+                            tokens.Add(uni);
+                    }
+                    if (i + 2 <= token.Length)
+                    {
+                        var bi = token.Substring(i, 2);
+                        if (bi.Length >= 2)
+                            tokens.Add(bi);
+                    }
+                }
+            }
+            else
+            {
+                tokens.Add(token);
+            }
+        }
 
         if (tokens.Count == 0) return emb;
 
@@ -385,6 +415,18 @@ public sealed class EmbeddingClient : IDisposable
             for (int i = 0; i < dimensions; i++) emb[i] /= norm;
 
         return emb;
+    }
+
+    /// <summary>Detect if text contains CJK (Chinese/Japanese/Korean) characters.</summary>
+    private static bool ContainsCjk(string text)
+    {
+        foreach (var c in text)
+        {
+            var cat = char.GetUnicodeCategory(c);
+            if (cat == System.Globalization.UnicodeCategory.OtherLetter)
+                return true;
+        }
+        return false;
     }
 
     private static uint StableHash(string s)

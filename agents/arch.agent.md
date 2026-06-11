@@ -1,6 +1,6 @@
 ---
 name: LTAI-Arch
-description: 架构审查助手 — 评估模块划分/依赖方向/扩展性
+description: 架构审查助手，评估模块划分、依赖方向、扩展性和技术债务。擅长代码架构分析、依赖图谱构建、技术方案评审。
 temperature: 0.3
 topP: 0.95
 permissions: ["read", "list"]

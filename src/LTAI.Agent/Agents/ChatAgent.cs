@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using System.Text;
 using System.Text.Json;
 using LTAI.AI;
 using LTAI.Agent.Formats;
@@ -95,6 +96,9 @@ public sealed class ChatAgent
         // Pro 快速通道：复杂度 >= 4 直接走 Pro，不经过 L1
         if (!isSimple && complexity >= 4 && _proAgent != null)
         {
+            // Save L1 session first for crash recovery if Pro fails
+            if (sessionHandle != null)
+                await SaveSessionToHandleAsync(session, sessionHandle, ct).ConfigureAwait(false);
             var proSession = sessionHandle != null
                 ? await CreateAgentSessionFromHandleAsync(sessionHandle, ct).ConfigureAwait(false)
                 : await _proAgent.CreateSessionAsync(ct).ConfigureAwait(false);
@@ -107,6 +111,10 @@ public sealed class ChatAgent
 
         var r = await _agent.RunAsync(messages, session, cancellationToken: ct).ConfigureAwait(false);
         var text = ApplyBlockedOutput(r.Messages?.LastOrDefault()?.Text ?? "");
+
+        // Intermediate save: checkpoint halfway through for crash recovery
+        if (sessionHandle != null)
+            await SaveSessionToHandleAsync(session, sessionHandle, ct).ConfigureAwait(false);
 
         // ── 上下文监控与压缩 ──
         // MAF-level CompactionProvider (position [5]) + MaxMessageCountReducer (200 msg cap)
@@ -206,9 +214,12 @@ public sealed class ChatAgent
 
         var toolResultCount = 0;
         var lastSaveAt = DateTime.UtcNow;
+        var lastStreamSaveAt = DateTime.UtcNow;
+        var streamIndex = 0;
         var streamToolCalls = new List<(string Name, string Arguments, string Result)>();
         var pendingCalls = new Dictionary<string, (string Name, string Arguments)>();
         var roundMessages = new List<ChatMessage> { new(ChatRole.User, message) };
+        var streamTextAccum = new StringBuilder();
 
         while (true)
         {
@@ -217,6 +228,17 @@ public sealed class ChatAgent
             await foreach (var update in _agent.RunStreamingAsync(
                 roundMessages, session, cancellationToken: ct).ConfigureAwait(false))
             {
+                // Periodic auto-save during streaming: every 10 seconds or every 3rd update
+                streamIndex++;
+                if (sessionHandle != null &&
+                    (toolResultCount % 3 == 0 ||
+                     (DateTime.UtcNow - lastSaveAt).TotalSeconds >= 30 ||
+                     (DateTime.UtcNow - lastStreamSaveAt).TotalSeconds >= 10))
+                {
+                    await SaveSessionToHandleAsync(session, sessionHandle, ct).ConfigureAwait(false);
+                    lastSaveAt = DateTime.UtcNow;
+                    lastStreamSaveAt = DateTime.UtcNow;
+                }
                 if (update.Contents is { Count: > 0 })
                 {
                     foreach (var content in update.Contents)
@@ -259,18 +281,13 @@ public sealed class ChatAgent
                                 }
 
                                 toolResultCount++;
-                                if (sessionHandle != null &&
-                                    (toolResultCount % 3 == 0 ||
-                                     (DateTime.UtcNow - lastSaveAt).TotalSeconds >= 30))
-                                {
-                                    await SaveSessionToHandleAsync(session, sessionHandle, ct).ConfigureAwait(false);
-                                    lastSaveAt = DateTime.UtcNow;
-                                }
                                 break;
                         }
                     }
                 }
                 yield return update;
+                if (update.Text != null)
+                    streamTextAccum.Append(update.Text);
                 if (approvalRequest != null) break;
             }
 
@@ -360,6 +377,25 @@ public sealed class ChatAgent
         {
             yield return new AgentResponseUpdate(ChatRole.Assistant,
                 $"\n\n[Content blocked by safety filter. Reason: {blockedReason}]");
+        }
+
+        // ── L3 Quality Judge (streaming mode) ──
+        if (streamTextAccum.Length > 50 && _steerJudge != null)
+        {
+            var (adequate, jReason) = await JudgeResponseQualityAsync(message, streamTextAccum.ToString(), ct)
+                .ConfigureAwait(false);
+            if (!adequate && _proAgent != null)
+            {
+                FailureRecorder.Record(message, streamTextAccum.ToString(), jReason ?? "streaming judge deemed inadequate", "L1");
+                yield return new AgentResponseUpdate(ChatRole.Assistant,
+                    $"\n\n⟳ 正在升级到 Pro 模型...\n");
+
+                var l1State = new L1State { Label = "escalate", EscalationReason = jReason };
+                var proResult = await FullRegenerationAsync(message, jReason ?? "judge deemed inadequate", l1State, session, ct)
+                    .ConfigureAwait(false);
+                if (!string.IsNullOrWhiteSpace(proResult))
+                    yield return new AgentResponseUpdate(ChatRole.Assistant, proResult);
+            }
         }
 
         LTAI.Core.Configuration.UsageTracker.SetActiveTool("");
@@ -551,10 +587,23 @@ public sealed class ChatAgent
     private static double EstimateResponseEntropy(string text)
     {
         if (string.IsNullOrWhiteSpace(text)) return 1.0;
-        var hedgeWords = new[] { "maybe", "perhaps", "probably", "possibly", "might", "could be",
-            "不确定", "可能", "也许", "大概", "估计", "似乎", "推测" };
+        var hedgeWords = new[] {
+            // Chinese hedge words
+            "不确定", "可能", "也许", "大概", "估计", "似乎", "推测",
+            "疑似", "貌似", "好像", "或许是", "按理说", "看样子", "猜测",
+            "通常情况下", "一般来说", "理论上", "某种程度上",
+            // English hedge words
+            "maybe", "perhaps", "probably", "possibly", "might", "could be",
+            "sometimes", "usually", "generally", "typically", "often",
+            "likely", "unlikely", "presumably", "arguably", "apparently",
+            "seems", "appears", "suggests", "indicates",
+            // Japanese hedge words
+            "かもしれない", "でしょう", "たぶん", "おそらく",
+            // Korean hedge words
+            "아마도", "아마",
+        };
         var count = hedgeWords.Count(w => text.Contains(w, StringComparison.OrdinalIgnoreCase));
-        return Math.Min(1.0, count * 0.2);
+        return Math.Min(1.0, count * 0.15);
     }
 
     private static double EstimateValueOfInformation(string query, string response, double entropy)
@@ -581,8 +630,13 @@ public sealed class ChatAgent
         if (_correctionDepth.Value > 2) { _correctionDepth.Value = 0; return text; }
 
         if (_proAgent == null) return text;
-        if (!_escalationDecider.ContainsRefusalPatterns(text) && text.Length >= 15
-            && !text.Contains("{{") && !text.Contains("TODO"))
+
+        // Extended trigger: refusal patterns OR placeholder patterns OR high hedge-word density
+        var hasRefusal = _escalationDecider.ContainsRefusalPatterns(text);
+        var hasPlaceholder = text.Contains("{{") || text.Contains("TODO");
+        var hasHedgeWords = ContainsHedgeWords(text);
+
+        if (!hasRefusal && text.Length >= 15 && !hasPlaceholder && !hasHedgeWords)
             return text;
 
         var safeOriginal = JsonSerializer.Serialize(originalMessage);
@@ -614,6 +668,29 @@ public sealed class ChatAgent
         }
         catch { }
         return text;
+    }
+
+    /// <summary>Detect high hedge-word density indicating uncertain response.</summary>
+    private static bool ContainsHedgeWords(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text) || text.Length < 30) return false;
+        var hedgeCount = 0;
+        var lower = text.ToLowerInvariant();
+        var hedgeWords = new[] {
+            "不确定", "可能", "也许", "大概", "估计", "似乎", "推测",
+            "maybe", "perhaps", "probably", "possibly", "might", "could be",
+            "seems", "appears", "suggests", "indicates",
+            "かもしれません", "でしょう", "たぶん",
+            "아마도", "아마",
+        };
+        foreach (var word in hedgeWords)
+        {
+            var idx = lower.IndexOf(word, StringComparison.Ordinal);
+            if (idx >= 0) hedgeCount++;
+        }
+        // Trigger if more than 2 hedge words or hedge density > 5%
+        var wordCount = text.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length;
+        return hedgeCount >= 3 || (wordCount > 0 && (double)hedgeCount / wordCount > 0.05);
     }
 
     // ── Session helpers ──

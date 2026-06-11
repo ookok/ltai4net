@@ -123,6 +123,12 @@ public sealed class SQLiteOrchestrationService : InMemoryOrchestrationService
     readonly SemaphoreSlim _persistGate = new(1, 1);
     bool _hydrated;
 
+    // Batch persistence: debounce writes within a 500ms window
+    private readonly CancellationTokenSource _batchCts = new();
+    private int _pendingPersistCount;
+    private bool _persistScheduled;
+    private static readonly TimeSpan BatchInterval = TimeSpan.FromMilliseconds(500);
+
     public SQLiteOrchestrationService(string databasePath, ILoggerFactory? loggerFactory = null)
         : base(loggerFactory)
     {
@@ -142,7 +148,24 @@ public sealed class SQLiteOrchestrationService : InMemoryOrchestrationService
 
     public new async Task StopAsync(bool isForced)
     {
-        // Best-effort final snapshot for graceful shutdowns.
+        // Cancel any pending batch timer
+        _batchCts.Cancel();
+
+        // Flush pending writes
+        var pending = Interlocked.Exchange(ref _pendingPersistCount, 0);
+        if (pending > 0)
+        {
+            try
+            {
+                await PersistAllAsync(CancellationToken.None).ConfigureAwait(false);
+                _logger.LogTrace("Final flush: {Count} pending writes persisted", pending);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Final flush on StopAsync failed");
+            }
+        }
+
         try
         {
             await PersistAllAsync(CancellationToken.None).ConfigureAwait(false);
@@ -219,14 +242,62 @@ public sealed class SQLiteOrchestrationService : InMemoryOrchestrationService
         await op().ConfigureAwait(false);
         if (_hydrated)
         {
+            ScheduleBatchPersist();
+        }
+    }
+
+    /// <summary>
+    /// Schedule a debounced batch persist. Multiple writes within 500ms
+    /// are coalesced into a single SQLite transaction.
+    /// For critical operations, call <see cref="PersistImmediateAsync"/> instead.
+    /// </summary>
+    void ScheduleBatchPersist()
+    {
+        Interlocked.Increment(ref _pendingPersistCount);
+        if (Interlocked.CompareExchange(ref _persistScheduled, true, false))
+            return; // Already scheduled
+
+        // Fire-and-forget: wait for batch interval, then persist once
+        _ = Task.Run(async () =>
+        {
             try
             {
-                await PersistAllAsync(CancellationToken.None).ConfigureAwait(false);
+                await Task.Delay(BatchInterval, _batchCts.Token).ConfigureAwait(false);
+                Interlocked.Exchange(ref _persistScheduled, false);
+                var count = Interlocked.Exchange(ref _pendingPersistCount, 0);
+                try
+                {
+                    await PersistAllAsync(CancellationToken.None).ConfigureAwait(false);
+                    if (count > 1)
+                        _logger.LogTrace("Batch persist: {Count} writes coalesced", count);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Batch persist failed ({Writes} queued)", count);
+                }
             }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Snapshot persist failed");
-            }
+            catch (OperationCanceledException) { }
+        });
+    }
+
+    /// <summary>
+    /// Immediate persist: flush all pending writes synchronously.
+    /// Use for critical operations that must survive a crash.
+    /// </summary>
+    async Task PersistImmediateAsync(CancellationToken ct = default)
+    {
+        // Clear any pending batch
+        Interlocked.Exchange(ref _persistScheduled, false);
+        var count = Interlocked.Exchange(ref _pendingPersistCount, 0);
+        try
+        {
+            await PersistAllAsync(ct).ConfigureAwait(false);
+            if (count > 0)
+                _logger.LogDebug("Immediate persist: {Count} writes flushed", count);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Immediate persist failed ({Writes} queued)", count);
         }
     }
 

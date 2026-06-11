@@ -1,6 +1,7 @@
-﻿// Copyright (c) LTAI. All rights reserved.
+// Copyright (c) LTAI. All rights reserved.
 
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -672,24 +673,29 @@ public sealed class KbGraph : AIContextProvider
     /// core keywords, synonyms/related terms, and English equivalents (for Chinese queries).
     /// </summary>
     /// <summary>
-    /// L0 短路判断：简单查询直接返回，不触发 LLM rewrite。
-    /// 简单条件：≤4 个词、无特殊符号、无代码标记。
+    /// L0 short-circuit: simple queries don't trigger LLM rewrite.
+    /// Delegates to shared QueryUtils.
     /// </summary>
-    private static bool IsSimpleQuery(string query)
-    {
-        if (string.IsNullOrWhiteSpace(query) || query.Length > 50) return false;
-        var wordCount = query.Split([' ', '，', '。', '、'], StringSplitOptions.RemoveEmptyEntries).Length;
-        if (wordCount > 4) return false;
-        // 包含代码特殊字符 → 走 LLM
-        if (query.Any(c => c is '_' or '.' or '/' or '\\' or '(' or ')' or '[' or ']' or '<' or '>'))
-            return false;
-        return true;
-    }
+    private static bool IsSimpleQuery(string query) => QueryUtils.IsSimpleQuery(query);
+
+    // Query expansion cache (TTL: 5 minutes)
+    private static readonly ConcurrentDictionary<string, (string Expanded, DateTime CachedAt)> _expansionCache = new();
+    private static readonly TimeSpan ExpansionCacheTtl = TimeSpan.FromMinutes(5);
 
     private async Task<string> ExpandQueryAsync(string query, CancellationToken ct)
     {
-        // L0 短路：简单查询不触发 LLM
+        // L0 short-circuit: simple queries don't trigger LLM
         if (_rewriter == null || IsSimpleQuery(query)) return query;
+
+        // Check cache first
+        var cacheKey = query.Trim().ToLowerInvariant();
+        if (_expansionCache.TryGetValue(cacheKey, out var cached) &&
+            (DateTime.UtcNow - cached.CachedAt) < ExpansionCacheTtl)
+        {
+            _logger.LogDebug("KbGraph: query expansion cache hit for \"{Q}\"", query);
+            return cached.Expanded;
+        }
+
         try
         {
             var prompt = $"""
@@ -715,7 +721,26 @@ public sealed class KbGraph : AIContextProvider
             var resp = await _rewriter.GetResponseAsync(
                 [new ChatMessage(ChatRole.User, prompt)], cancellationToken: ct).ConfigureAwait(false);
             var result = resp.Text?.Trim() ?? "";
-            return string.IsNullOrWhiteSpace(result) ? query : result;
+            var expanded = string.IsNullOrWhiteSpace(result) ? query : result;
+
+            // Cache the result
+            _expansionCache[cacheKey] = (expanded, DateTime.UtcNow);
+
+            // Evict old entries periodically
+            if (_expansionCache.Count > 1000)
+            {
+                var now = DateTime.UtcNow;
+                foreach (var key in _expansionCache.Keys.ToList())
+                {
+                    if (_expansionCache.TryGetValue(key, out var entry) &&
+                        (now - entry.CachedAt) > ExpansionCacheTtl)
+                    {
+                        _expansionCache.TryRemove(key, out _);
+                    }
+                }
+            }
+
+            return expanded;
         }
         catch (Exception ex)
         {
@@ -866,37 +891,8 @@ public sealed class KbGraph : AIContextProvider
     private static float CosineSimilarity(float[] a, float[] b)
         => LTAI.AI.VectorMath.CosineSimilarity(a.AsSpan(), b.AsSpan());
 
-    /// <summary>代码模式启发式检测 — 含 C#/代码关键字则强制走 KG。</summary>
-    private static bool ContainsCodePattern(string text)
-    {
-        // C# 语言关键字
-        var codePatterns = new[]
-        {
-            "async", "await", "Task<", "Task.", "IEnumerable", "IQueryable",
-            "namespace ", "class ", "interface ", "struct ", "enum ", "record ",
-            "void ", "int ", "string ", "bool ", "var ", "new ", "null ",
-            "=>", "::", "??", "?.", "??=",
-            ".cs", ".csproj", ".sln",
-            "HttpClient", "HttpResponse", "IActionResult",
-            "ConfigureAwait", "GetAwaiter", "ValueTask",
-            "List<", "Dictionary<", "HashSet<", "Concurrent",
-            "public ", "private ", "protected ", "internal ", "static ",
-            "readonly", "virtual", "override", "abstract", "sealed",
-            "partial", "ref ", "out ", "in ", "params",
-        };
-        if (codePatterns.Any(p => text.Contains(p, StringComparison.OrdinalIgnoreCase)))
-            return true;
-
-        // 包含成对的圆括号且长度 > 10（类函数调用语法）
-        if (text.Length > 10)
-        {
-            int open = 0, close = 0;
-            foreach (var c in text) { if (c == '(') open++; if (c == ')') close++; }
-            if (open >= 2 && close >= 2) return true;
-        }
-
-        return false;
-    }
+    /// <summary>代码模式启发式检测 — 含 C#/代码关键字则强制走 KG。委托给共享 QueryUtils。</summary>
+    private static bool ContainsCodePattern(string text) => QueryUtils.ContainsCodePattern(text);
 
     /// <summary>Intent-based KG gate. Uses FastEmb + cosine similarity.</summary>
     internal static bool IsKnowledgeQuery(string text)

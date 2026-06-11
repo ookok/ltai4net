@@ -104,7 +104,7 @@ public static class Program
         var chatAgent = sp.GetRequiredService<ChatAgent>();
 
         // Background warmup
-        _ = Task.Run(() => { try { chatAgent.WarmUpAsync().Wait(TimeSpan.FromSeconds(3)); } catch { } });
+        _ = Task.Run(async () => { try { await chatAgent.WarmUpAsync().ConfigureAwait(false); } catch { } });
 
         // ── Terminal.Gui FullScreen mode (暂用 FullScreen 验证渲染) ──
         Application.AppModel = AppModel.FullScreen;

@@ -1,20 +1,10 @@
 // Copyright (c) LTAI. All rights reserved.
 // ═══════════════════════════════════════════════════════════════
-//  PipelineBuilder — fluent pipeline composition
+//  PipelineBuilder — fluent pipeline composition (DEPRECATED)
 //
-//  Phase 3a: chain steps together with Use<T>().
-//  Supports conditional branching via When() and step-level logging.
-//
-//  Usage:
-//    var pipeline = new PipelineBuilder()
-//        .Use<RagContextStep>()
-//        .Use<SafetyCheckStep>()
-//        .Use<RouterStep>()
-//        .Use<ToolExecutionStep>()
-//        .Use<CompactionStep>()
-//        .Build();
-//
-//    var result = await pipeline.ProcessAsync(context);
+//  ⚠ This class is NOT used by the current ChatAgent or ExecutionEngine.
+//    It remains for reference only. See ExecutionEngine + IExecutionEngine
+//    for the active step execution framework.
 // ═══════════════════════════════════════════════════════════════
 
 using Microsoft.Extensions.Logging;

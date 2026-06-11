@@ -25,7 +25,7 @@ public sealed class GitTools
         try
         {
             var task = Task.Run(action, cts.Token);
-            return task.Wait(GitTimeout) ? task.Result : $"⏱ {errorLabel} timed out ({GitTimeout.TotalSeconds}s)";
+            return task.Wait(GitTimeout) ? task.Result! : $"⏱ {errorLabel} timed out ({GitTimeout.TotalSeconds}s)";
         }
         catch (AggregateException ae) when (ae.InnerException != null)
         {

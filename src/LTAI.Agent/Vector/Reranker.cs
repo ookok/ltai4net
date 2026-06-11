@@ -1,4 +1,4 @@
-﻿// Copyright (c) LTAI. All rights reserved.
+// Copyright (c) LTAI. All rights reserved.
 
 using System;
 using System.Collections.Generic;
@@ -42,14 +42,19 @@ public sealed class Reranker
 
     /// <summary>
     /// Retrieve + rerank: score candidates by embedding similarity, then LLM rescore.
+    /// Auto-selects weights based on query characteristics.
     /// </summary>
     public async Task<List<RankedResult>> RetrieveAndRerankAsync(
         string query,
         List<NodeRow> candidates,
         int topK = 5,
+        RerankerWeights? weights = null,
         CancellationToken ct = default)
     {
         if (candidates.Count == 0) return [];
+
+        // Auto-select weights if not provided
+        var effectiveWeights = weights ?? RerankerWeights.AutoSelect(query);
 
         // Phase 1: Embedding similarity scoring (batched)
         var queryEmb = await _embedder.GenerateAsync(query, ct).ConfigureAwait(false);
@@ -65,7 +70,7 @@ public sealed class Reranker
             _logger.LogWarning("Reranker: embedding dimension mismatch (query={QD}, candidates vary). " +
                 "Possible model switch without cache invalidation. Falling back to uniform ranking.",
                 queryEmb.Length);
-            return candidates.Select((n, i) => new RankedResult(n, 0.5f, 0.5f, i + 1)).Take(topK).ToList();
+            return candidates.Select((n, i) => new RankedResult(n, 0.5f, 0.5f, i + 1, effectiveWeights)).Take(topK).ToList();
         }
 
         var scored = candidates
@@ -77,7 +82,7 @@ public sealed class Reranker
         if (scored.Count == 0) return [];
 
         // Phase 2: LLM reranking
-        var reranked = await RerankWithLLMAsync(query, scored, ct).ConfigureAwait(false);
+        var reranked = await RerankWithLLMAsync(query, scored, effectiveWeights, ct).ConfigureAwait(false);
 
         return reranked.Take(topK).ToList();
     }
@@ -88,10 +93,13 @@ public sealed class Reranker
     public async Task<List<RankedResult>> RerankWithLLMAsync(
         string query,
         List<(NodeRow node, float embeddingScore)> candidates,
+        RerankerWeights? weights = null,
         CancellationToken ct = default)
     {
+        var effectiveWeights = weights ?? new RerankerWeights();
+
         if (candidates.Count <= 1)
-            return candidates.Select((c, i) => new RankedResult(c.node, c.embeddingScore, c.embeddingScore, i + 1)).ToList();
+            return candidates.Select((c, i) => new RankedResult(c.node, c.embeddingScore, c.embeddingScore, i + 1, effectiveWeights)).ToList();
 
         var sb = new StringBuilder();
         sb.AppendLine("Score each passage 0-10 for relevance to the query. Be strict.");
@@ -141,7 +149,8 @@ public sealed class Reranker
                         candidates[i].node,
                         candidates[i].embeddingScore,
                         llmScore,
-                        i + 1));
+                        i + 1,
+                        effectiveWeights));
                 }
                 return results.OrderByDescending(r => r.BlendedScore).ToList();
             }
@@ -151,7 +160,7 @@ public sealed class Reranker
             _logger.LogWarning(ex, "LLM reranking failed, falling back to embedding scores");
         }
 
-        return candidates.Select((c, i) => new RankedResult(c.node, c.embeddingScore, c.embeddingScore, i + 1)).ToList();
+        return candidates.Select((c, i) => new RankedResult(c.node, c.embeddingScore, c.embeddingScore, i + 1, effectiveWeights)).ToList();
     }
 
     private static string GetNodeText(NodeRow node)
@@ -171,13 +180,62 @@ public sealed class Reranker
 }
 
 /// <summary>
+/// Reranking fusion weights. Configurable per query type.
+/// </summary>
+public sealed class RerankerWeights
+{
+    /// <summary>Embedding score weight (default 0.3).</summary>
+    public float EmbeddingWeight { get; set; } = 0.3f;
+
+    /// <summary>LLM score weight (default 0.7).</summary>
+    public float LLMWeight { get; set; } = 0.7f;
+
+    /// <summary>Get weights optimized for code queries (higher embedding weight).</summary>
+    public static RerankerWeights ForCode => new() { EmbeddingWeight = 0.5f, LLMWeight = 0.5f };
+
+    /// <summary>Get weights optimized for knowledge queries (higher LLM weight).</summary>
+    public static RerankerWeights ForKnowledge => new() { EmbeddingWeight = 0.3f, LLMWeight = 0.7f };
+
+    /// <summary>Get weights optimized for short queries (higher LLM weight).</summary>
+    public static RerankerWeights ForShort => new() { EmbeddingWeight = 0.2f, LLMWeight = 0.8f };
+
+    /// <summary>Get weights optimized for long queries (higher embedding weight).</summary>
+    public static RerankerWeights ForLong => new() { EmbeddingWeight = 0.6f, LLMWeight = 0.4f };
+
+    /// <summary>
+    /// Auto-select weights based on query characteristics.
+    /// </summary>
+    public static RerankerWeights AutoSelect(string query)
+    {
+        if (string.IsNullOrWhiteSpace(query)) return ForKnowledge;
+
+        // Code query detection
+        if (QueryUtils.ContainsCodePattern(query))
+            return ForCode;
+
+        // Short query detection
+        var wordCount = query.Split([' ', '，', '。', '、'], StringSplitOptions.RemoveEmptyEntries).Length;
+        if (wordCount <= 3)
+            return ForShort;
+
+        // Long query detection
+        if (query.Length > 200)
+            return ForLong;
+
+        return ForKnowledge;
+    }
+}
+
+/// <summary>
 /// Result from the two-stage reranking pipeline.
 /// </summary>
 public sealed record RankedResult(
     NodeRow Node,
     float EmbeddingScore,
     float LLMScore,
-    int OriginalRank)
+    int OriginalRank,
+    RerankerWeights? Weights = null)
 {
-    public float BlendedScore => EmbeddingScore * 0.3f + LLMScore * 0.7f;
+    private readonly RerankerWeights _weights = Weights ?? new RerankerWeights();
+    public float BlendedScore => EmbeddingScore * _weights.EmbeddingWeight + LLMScore * _weights.LLMWeight;
 }

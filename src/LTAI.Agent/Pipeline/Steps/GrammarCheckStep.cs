@@ -61,6 +61,13 @@ public sealed class GrammarCheckStep : IPipelineStep
         _workspacePath = workspacePath ?? Directory.GetCurrentDirectory();
         _tsParser = tsParser;
         _ruleEngine = ruleEngine ?? new ReviewRuleEngine();
+        // Ensure built-in rules are loaded (including any from FailureMiner)
+        if (_ruleEngine.Rules.Count == 0)
+        {
+            _ruleEngine.LoadBuiltinRules();
+            // Also load mined rules from FailureMiner if available
+            LoadMinedRules(_ruleEngine);
+        }
         _lspManager = lspManager;
         _options = options ?? new GrammarCheckOptions();
     }
@@ -582,6 +589,43 @@ public sealed class GrammarCheckStep : IPipelineStep
         }
         return "?";
     }
+
+    /// <summary>Load mined rules from FailureMiner (mined-rules.json).</summary>
+    private static void LoadMinedRules(ReviewRuleEngine engine)
+    {
+        try
+        {
+            var minedPath = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                ".livingtree", "learn", "mined-rules.json");
+            if (!File.Exists(minedPath)) return;
+
+            var json = File.ReadAllText(minedPath);
+            var mined = System.Text.Json.JsonSerializer.Deserialize<MinedRulesFile>(json);
+            if (mined?.rules == null || mined.rules.Count == 0) return;
+
+            foreach (var rule in mined.rules)
+            {
+                if (!string.IsNullOrEmpty(rule.Pattern))
+                {
+                    engine.AddRule(new ReviewRule
+                    {
+                        Id = $"MINE-{rule.Title.GetHashCode():x8}",
+                        Name = rule.Title,
+                        Category = "mined",
+                        Severity = "warning",
+                        Description = rule.Description,
+                        Pattern = rule.Pattern,
+                        MessageTemplate = rule.Description
+                    });
+                }
+            }
+        }
+        catch { /* best-effort: mined rules are non-critical */ }
+    }
+
+    private sealed record MinedRulesFile(DateTime MinedAt, int TotalFailures, System.Collections.Generic.List<MinedRuleEntry> rules);
+    private sealed record MinedRuleEntry(string Title, string Description, string Pattern, int Frequency);
 }
 
 // ═══════════════════════════════════════════════════════════════

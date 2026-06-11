@@ -146,7 +146,7 @@ public sealed class SessionManager
         var path = SessionPath(handle.Name);
         var json = handle.SerializeToJson();
         var serialized = _serializer.Serialize(JsonDocument.Parse(json).RootElement);
-        File.WriteAllText(path, Encrypt(serialized));
+        AtomicWrite(path, Encrypt(serialized));
         _currentHandle = handle;
         PruneOldSessions();
     }
@@ -162,7 +162,7 @@ public sealed class SessionManager
         var path = SessionPath(handle.Name);
         var json = handle.SerializeToJson();
         var serialized = _serializer.Serialize(JsonDocument.Parse(json).RootElement);
-        await File.WriteAllTextAsync(path, Encrypt(serialized)).ConfigureAwait(false);
+        await AtomicWriteAsync(path, Encrypt(serialized)).ConfigureAwait(false);
         _currentHandle = handle;
         PruneOldSessions();
     }
@@ -340,6 +340,38 @@ public sealed class SessionManager
         Buffer.BlockCopy(fullBytes, iv.Length, cipherBytes, 0, cipherBytes.Length);
         var plainBytes = decryptor.TransformFinalBlock(cipherBytes, 0, cipherBytes.Length);
         return Encoding.UTF8.GetString(plainBytes);
+    }
+
+    /// <summary>Atomic file write: write to .tmp file → rename to target (NTFS atomic).</summary>
+    private static void AtomicWrite(string path, string content)
+    {
+        var tmpPath = path + ".tmp." + Guid.NewGuid().ToString("N")[..8];
+        try
+        {
+            File.WriteAllText(tmpPath, content);
+            File.Move(tmpPath, path, overwrite: true);
+        }
+        catch
+        {
+            try { File.Delete(tmpPath); } catch { }
+            throw;
+        }
+    }
+
+    /// <summary>Atomic file write: write to .tmp file → rename to target (NTFS atomic).</summary>
+    private static async Task AtomicWriteAsync(string path, string content)
+    {
+        var tmpPath = path + ".tmp." + Guid.NewGuid().ToString("N")[..8];
+        try
+        {
+            await File.WriteAllTextAsync(tmpPath, content).ConfigureAwait(false);
+            File.Move(tmpPath, path, overwrite: true);
+        }
+        catch
+        {
+            try { File.Delete(tmpPath); } catch { }
+            throw;
+        }
     }
 }
 

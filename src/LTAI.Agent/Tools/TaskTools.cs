@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.ComponentModel;
 using System.Text;
 using System.Text.Json;
@@ -7,13 +8,26 @@ namespace LTAI.Agent.Tools;
 
 /// <summary>
 /// In-session task/todo tracker.
+/// Session-isolated: each session has its own todo list.
 /// </summary>
 [ToolDomain("task")]
 public static class TaskTools
 {
-    private static readonly List<TodoItem> _todos = new();
-    private static readonly object _todoLock = new();
-    private static int _nextId = 1;
+    // Session-isolated todo lists: keyed by session ID, not static global
+    private static readonly ConcurrentDictionary<string, SessionTodoList> _sessionTodos = new(StringComparer.Ordinal);
+    private static readonly AsyncLocal<string?> _sessionId = new();
+
+    /// <summary>Set by ChatAgent before tool calls, scoping todos to a session.</summary>
+    public static string? SessionId { get => _sessionId.Value; set => _sessionId.Value = value; }
+
+    private static SessionTodoList CurrentList
+    {
+        get
+        {
+            var sid = SessionId ?? "default";
+            return _sessionTodos.GetOrAdd(sid, _ => new SessionTodoList());
+        }
+    }
 
     public sealed record TodoItem(
         int Id,
@@ -21,6 +35,12 @@ public static class TaskTools
         string Status,
         string ActiveForm,
         DateTime CreatedAt);
+
+    private sealed class SessionTodoList
+    {
+        public readonly List<TodoItem> Items = new();
+        public int NextId = 1;
+    }
 
     [Description("创建或更新待办事项列表。会替换所有现有的待办事项。\n"
         + "适用场景：列出需要完成的任务步骤、跟踪多步骤工作进度。\n"
@@ -36,16 +56,17 @@ public static class TaskTools
             var items = JsonSerializer.Deserialize<List<TodoInput>>(todosJson,
                 new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
 
-            lock (_todoLock)
+            var list = CurrentList;
+            lock (list)
             {
                 if (items == null || items.Count == 0)
                 {
-                    _todos.Clear();
+                    list.Items.Clear();
                     return "Todo list cleared.";
                 }
 
-                _todos.Clear();
-                _nextId = 1;
+                list.Items.Clear();
+                list.NextId = 1;
 
                 foreach (var item in items)
                 {
@@ -55,12 +76,12 @@ public static class TaskTools
                         "in_progress" => "in_progress",
                         _ => "pending"
                     };
-                    _todos.Add(new TodoItem(_nextId++, item.Content, status,
+                    list.Items.Add(new TodoItem(list.NextId++, item.Content, status,
                         item.ActiveForm ?? item.Content, DateTime.UtcNow));
                 }
             }
 
-            return FormatTodos();
+            return FormatTodos(list);
         }
         catch (JsonException ex)
         {
@@ -75,13 +96,14 @@ public static class TaskTools
     public static string TodoComplete(
         [Description("Todo item ID")] int id)
     {
-        lock (_todoLock)
+        var list = CurrentList;
+        lock (list)
         {
-            var item = _todos.FirstOrDefault(t => t.Id == id);
+            var item = list.Items.FirstOrDefault(t => t.Id == id);
             if (item == null) return $"Todo #{id} not found";
 
-            _todos.Remove(item);
-            _todos.Add(item with { Status = "completed" });
+            list.Items.Remove(item);
+            list.Items.Add(item with { Status = "completed" });
             return $"✓ {item.Content}";
         }
     }
@@ -91,21 +113,39 @@ public static class TaskTools
     [ToolExample("看看还有哪些事要做")]
     public static string TodoList()
     {
-        lock (_todoLock)
+        var list = CurrentList;
+        lock (list)
         {
-            if (_todos.Count == 0) return "No todos.";
-            return FormatTodos();
+            if (list.Items.Count == 0) return "No todos.";
+            return FormatTodos(list);
         }
     }
 
-    private static string FormatTodos()
+    /// <summary>Clear todo list for current session (e.g. on new request).</summary>
+    public static void ClearCurrentSession()
+    {
+        var sid = SessionId ?? "default";
+        _sessionTodos.TryRemove(sid, out _);
+    }
+
+    /// <summary>Get remaining todo count for current session (used by AgentModeObserver).</summary>
+    public static (int remaining, int total) GetCounts()
+    {
+        var list = CurrentList;
+        lock (list)
+        {
+            return (list.Items.Count(i => i.Status != "completed"), list.Items.Count);
+        }
+    }
+
+    private static string FormatTodos(SessionTodoList list)
     {
         var sb = new StringBuilder();
         sb.AppendLine("## Todo List\n");
         sb.AppendLine("| # | Status | Task |");
         sb.AppendLine("|---|--------|------|");
 
-        foreach (var t in _todos)
+        foreach (var t in list.Items)
         {
             var icon = t.Status switch
             {

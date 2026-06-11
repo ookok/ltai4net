@@ -3,6 +3,7 @@ using System.ComponentModel;
 using System.Text;
 using System.Text.Json;
 using LTAI.AI;
+using LTAI.Agent.Execution;
 
 namespace LTAI.Agent.Tools;
 
@@ -12,11 +13,18 @@ public static class PlanTools
     // Replaces the old process-wide static field that leaked across conversations.
     // ChatAgent sets SessionKey before any plan tool call.
     private static readonly ConcurrentDictionary<string, PlanState> _plans = new();
+    private static readonly ConcurrentDictionary<string, Execution.ExecutionPlan> _executionPlan = new();
     private static readonly AsyncLocal<string?> _sessionId = new();
     private static readonly TimeSpan PlanTimeout = TimeSpan.FromMinutes(30);
 
     /// <summary>Set by ChatAgent before invoking plan tools, scoping PlanState to a session.</summary>
     public static string? SessionId { get => _sessionId.Value; set => _sessionId.Value = value; }
+
+    /// <summary>
+    /// Optional ExecutionEngine for plan execution. Set during DI initialization.
+    /// When set, SubmitPlan → PlanAsync, ApprovePlan → ExecuteAsync.
+    /// </summary>
+    public static Execution.ExecutionEngine? ExecutionEngine { get; set; }
 
     private static string SessionKey => SessionId ?? "default";
 
@@ -64,7 +72,7 @@ public static class PlanTools
     }
 
     [Description("Submit a multi-step plan for review (user must approve before execution)")]
-    public static string SubmitPlan(
+    public static async Task<string> SubmitPlan(
         [Description("Plan summary (one line)")] string summary,
         [Description("JSON array of steps: [{id, title, action, acceptance?}, ...]")] string stepsJson,
         [Description("Markdown plan body")] string plan)
@@ -89,6 +97,21 @@ public static class PlanTools
         if (steps.Length == 0) return "Plan must have at least one step";
 
         CurrentPlan = new PlanState(summary, plan, steps, 0, "proposed", DateTime.UtcNow);
+
+        // If ExecutionEngine is available, plan the routing
+        if (ExecutionEngine != null)
+        {
+            try
+            {
+                var execPlan = await ExecutionEngine.PlanAsync(summary).ConfigureAwait(false);
+                _executionPlan[SessionKey] = execPlan;
+            }
+            catch (Exception ex)
+            {
+                // Non-fatal: execution plan is best-effort, fall back to manual plan
+                System.Diagnostics.Debug.WriteLine($"PlanTools: ExecutionEngine planning failed: {ex.Message}");
+            }
+        }
 
         var sb = new StringBuilder();
         sb.AppendLine($"## Plan: {summary}\n");
@@ -149,38 +172,73 @@ public static class PlanTools
 
     private static (bool IsMet, string Reason) VerifyAcceptance(string criteria, string result, string? notes)
     {
-        // Simple keyword-based verification: check if critical terms from criteria appear in result/notes
+        // Multi-layer acceptance verification: keywords + negation + semantic coverage
         var combined = $"{result} {notes ?? ""}";
         var lowerCriteria = criteria.ToLowerInvariant();
         var lowerCombined = combined.ToLowerInvariant();
 
-        // Check for negation patterns in criteria
-        if (lowerCriteria.Contains("no error") && !lowerCombined.Contains("no error")
-            && !lowerCombined.Contains("0 errors") && !lowerCombined.Contains("zero errors"))
-            return (false, "Result does not confirm 'no errors' were achieved.");
+        // Layer 1: Check for explicit negation patterns
+        var negationChecks = new (string Pattern, string Hint)[]
+        {
+            ("no error", "Result does not confirm 'no errors'"),
+            ("no failure", "Result does not confirm 'no failures'"),
+            ("no warning", "Result does not confirm 'no warnings'"),
+            ("pass test", "Result does not confirm tests passing"),
+            ("all test", "Result does not confirm all tests"),
+            ("no regression", "Result does not confirm no regression"),
+            ("zero defect", "Result does not confirm zero defects"),
+        };
+        foreach (var (pattern, hint) in negationChecks)
+        {
+            if (lowerCriteria.Contains(pattern))
+            {
+                var positiveIndicators = new[] { "pass", "success", "ok", "done", "complete", "0 error", "0 failure" };
+                var hasAny = positiveIndicators.Any(p => lowerCombined.Contains(p));
+                if (!hasAny)
+                    return (false, $"{hint} were achieved. Expected indicators: none found.");
+            }
+        }
 
-        if (lowerCriteria.Contains("pass") && lowerCriteria.Contains("test")
-            && !lowerCombined.Contains("pass") && !lowerCombined.Contains("success"))
-            return (false, "Result does not mention tests passing.");
-
-        // Check for specific required keywords
-        var requiredWords = criteria.Split([' ', ','], StringSplitOptions.RemoveEmptyEntries)
-            .Where(w => w.Length > 4 && !w.Equals("and", StringComparison.OrdinalIgnoreCase)
-                && !w.Equals("the", StringComparison.OrdinalIgnoreCase)
-                && !w.Equals("that", StringComparison.OrdinalIgnoreCase)
-                && !w.Equals("this", StringComparison.OrdinalIgnoreCase)
-                && !w.Equals("with", StringComparison.OrdinalIgnoreCase)
-                && !w.Equals("must", StringComparison.OrdinalIgnoreCase)
-                && !w.Equals("should", StringComparison.OrdinalIgnoreCase)
-                && !w.Equals("after", StringComparison.OrdinalIgnoreCase))
-            .Select(w => w.Trim('"', '\'', '.', '(', ')'))
-            .Where(w => w.Length > 4)
+        // Layer 2: Check required semantic keywords (key nouns and verbs from criteria)
+        var stopwords = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "and", "the", "that", "this", "with", "must", "should", "after", "for", "but",
+            "not", "are", "was", "were", "been", "have", "has", "had", "will", "would",
+            "could", "can", "may", "all", "each", "every", "both", "few", "more",
+            "most", "other", "some", "such", "than", "too", "very", "just",
+            "的", "了", "在", "是", "有", "和", "就", "不", "都", "要", "会",
+            "一个", "上", "也", "很", "到", "说", "去", "能", "没有", "好",
+        };
+        var requiredWords = criteria.Split([' ', ',', '，', '。'], StringSplitOptions.RemoveEmptyEntries)
+            .Select(w => w.Trim('"', '\'', '.', '(', ')', '”', '“', '【', '】', '：'))
+            .Where(w => w.Length > 4 && !stopwords.Contains(w))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
 
-        var missing = requiredWords.Where(w => !lowerCombined.Contains(w.ToLowerInvariant())).ToList();
-        if (missing.Count > 0 && missing.Count <= requiredWords.Count / 2)
-            // Some keywords missing — warn but don't block; partial match is acceptable
-            return (true, $"Note: criteria mentions '{string.Join(", ", missing)}' but result doesn't explicitly reference it.");
+        if (requiredWords.Count > 0)
+        {
+            var missing = requiredWords.Where(w => !lowerCombined.Contains(w.ToLowerInvariant())).ToList();
+            if (missing.Count > requiredWords.Count / 2)
+            {
+                return (false,
+                    $"Result is missing {missing.Count}/{requiredWords.Count} key terms from criteria: " +
+                    $"'{string.Join(", ", missing.Take(5))}'.");
+            }
+            if (missing.Count > 0)
+            {
+                // Partial match: warn but don't block
+                return (true,
+                    $"Note: criteria mentions '{string.Join(", ", missing)}' but result doesn't explicitly reference it.");
+            }
+        }
+
+        // Layer 3: Length/quality check — result should be reasonably detailed
+        if (result.Length < criteria.Length * 0.3 && criteria.Length > 30)
+        {
+            return (false,
+                $"Result is too brief ({result.Length} chars vs criteria length {criteria.Length}). " +
+                "Include more detail in the result.");
+        }
 
         return (true, "");
     }
@@ -223,7 +281,7 @@ public static class PlanTools
         return sb.ToString();
     }
 
-    public static string ApprovePlan()
+    public static async Task<string> ApprovePlan()
     {
         var plan = CurrentPlan;
         if (plan == null) return "No plan to approve";
@@ -233,7 +291,27 @@ public static class PlanTools
         }
         if (plan.Status != "proposed") return "Plan already " + plan.Status;
         CurrentPlan = plan with { Status = "approved" };
-        return $"✅ Plan approved! Starting execution...";
+
+        // Trigger ExecutionEngine execution if available
+        if (ExecutionEngine != null && _executionPlan.TryGetValue(SessionKey, out var execPlan))
+        {
+            try
+            {
+                var result = await ExecutionEngine.ExecuteAsync(execPlan).ConfigureAwait(false);
+                if (result.Success)
+                {
+                    CurrentPlan = CurrentPlan! with { Status = "completed", CurrentStep = CurrentPlan!.Steps.Length };
+                    return $"✅ Plan approved and executed!\n\n{result.Text}";
+                }
+                return $"✅ Plan approved. Execution note: {result.ErrorMessage ?? "started"}";
+            }
+            catch (Exception ex)
+            {
+                return $"✅ Plan approved. Execution engine unavailable: {ex.Message}";
+            }
+        }
+
+        return $"✅ Plan approved! Use StartExecution to begin.";
     }
 
     public static string StartExecution()
@@ -247,6 +325,27 @@ public static class PlanTools
         if (plan.Status != "approved") return "Plan must be approved first";
         CurrentPlan = plan with { Status = "executing" };
         var first = CurrentPlan!.Steps[0];
+
+        // Notify ExecutionEngine that execution has started
+        if (ExecutionEngine != null && _executionPlan.TryGetValue(SessionKey, out var execPlan))
+        {
+            var startResult = ExecutionEngine.PlanAsync(plan.Summary).Result;
+            if (startResult != null)
+            {
+                _executionPlan[SessionKey] = startResult;
+                _ = FireAndForgetExecute(execPlan);
+            }
+        }
+
         return $"🚀 Starting plan: **{CurrentPlan!.Summary}**\n\nStep 1: **{first.Title}** — {first.Action}";
+    }
+
+    private static async Task FireAndForgetExecute(Execution.ExecutionPlan execPlan)
+    {
+        try
+        {
+            await ExecutionEngine!.ExecuteAsync(execPlan).ConfigureAwait(false);
+        }
+        catch { /* background execution error — plan continues manually */ }
     }
 }

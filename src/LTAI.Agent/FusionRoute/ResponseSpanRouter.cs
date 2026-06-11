@@ -17,14 +17,20 @@ public sealed class ResponseSpanRouter
     // Patterns that indicate low-confidence spans
     private static readonly Regex[] _uncertaintyMarkers =
     [
-        new(@"\b(不确定|可能|也许|大概|估计|似乎|应该是|按理说|推测|猜测|看样子)\b", RegexOptions.Compiled),
-        new(@"\b(建议你|推荐|可以尝试|试试|不妨|不妨试试)\b", RegexOptions.Compiled),
-        new(@"\b(无法获取|无法确定|无法提供|无法访问|没有权限|没有找到)\b", RegexOptions.Compiled),
-        new(@"\b(需要更多|请提供|请确认|需要确认|需要你)\b", RegexOptions.Compiled),
-        new(@"\b(我不确定|我不清楚|我不太|我不太清楚)\b", RegexOptions.Compiled),
-        new(@"\b(could|cannot|can't|unable|unsure|may|might|perhaps|probably|possibly)\b", RegexOptions.Compiled),
-        new(@"\b(I'm not sure|I don't know|I'm not certain|I'm unsure)\b", RegexOptions.Compiled),
-        new(@"\b(please provide|please confirm|you need to|I would recommend)\b", RegexOptions.Compiled),
+        new(@"\b(不确定|可能|也许|大概|估计|似乎|应该是|按理说|推测|猜测|看样子|貌似|好像|像是|或许是)\b", RegexOptions.Compiled),
+        new(@"\b(建议你|推荐|可以尝试|试试|不妨|不妨试试|你可以|你可以考虑)\b", RegexOptions.Compiled),
+        new(@"\b(无法获取|无法确定|无法提供|无法访问|没有权限|没有找到|找不到|没找到)\b", RegexOptions.Compiled),
+        new(@"\b(需要更多|请提供|请确认|需要确认|需要你|请告诉我更多)\b", RegexOptions.Compiled),
+        new(@"\b(我不确定|我不清楚|我不太|我不太清楚|我不太确定|我不太明白|我不是很确定)\b", RegexOptions.Compiled),
+        new(@"\b(could|cannot|can't|unable|unsure|may|might|perhaps|probably|possibly|maybe)\b", RegexOptions.Compiled),
+        new(@"\b(I'm not sure|I don't know|I'm not certain|I'm unsure|I'm not confident|I'm not familiar)\b", RegexOptions.Compiled),
+        new(@"\b(please provide|please confirm|you need to|I would recommend|I'd suggest|it depends)\b", RegexOptions.Compiled),
+        // Japanese uncertainty markers
+        new(@"\b(かもしれない|でしょう|でしょうね|たぶん|おそらく|多分|不明|わかりません|知りません)\b", RegexOptions.Compiled),
+        // Korean uncertainty markers
+        new(@"\b(아마도|모르겠습니다|모를|不确定|모르다|할지도)\b", RegexOptions.Compiled),
+        // Generic template/placeholder markers (cross-language)
+        new(@"(?i)\{\{.*?\}\}|\[TODO\]|<TODO>|___+", RegexOptions.Compiled),
     ];
 
     // Patterns that indicate high-confidence spans

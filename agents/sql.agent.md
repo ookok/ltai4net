@@ -1,6 +1,6 @@
 ---
 name: LTAI-SQL
-description: 数据库查询助手 — 用自然语言生成 SQL 并查询
+description: 数据库查询助手，用自然语言生成 SQL 并查询。支持 MySQL/PostgreSQL/SQLite，擅长复杂查询优化、数据迁移、性能调优。
 temperature: 0.3
 topP: 0.95
 inheritTools: chat

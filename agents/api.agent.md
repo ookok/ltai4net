@@ -1,6 +1,6 @@
 ---
 name: LTAI-API
-description: API 设计助手 — REST/GraphQL/集成设计
+description: API 设计助手，负责 REST/GraphQL 接口设计、契约测试、集成方案。擅长 API 规范设计、接口文档生成、第三方 API 集成。
 temperature: 0.3
 topP: 0.95
 permissions: ["read", "write", "list", "exec"]

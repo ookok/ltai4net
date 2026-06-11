@@ -1,4 +1,4 @@
-﻿// Copyright (c) LTAI. All rights reserved.
+// Copyright (c) LTAI. All rights reserved.
 // ═══════════════════════════════════════════════════════════════
 //  KgStore — SQLite knowledge graph with FTS5 + CTE traversal
 //
@@ -531,35 +531,17 @@ public sealed partial class KgStore : IDisposable
     /// <summary>
     /// Characters that produce FTS5 syntax errors when used literally in MATCH.
     /// Preserves ^ (prefix boost), * (wildcard), " (phrase), + - ~ : for power users.
+    /// Delegates to shared QueryUtils.
     /// </summary>
-    private static readonly System.Text.RegularExpressions.Regex Fts5SpecialChars =
-        new(@"[()@]", System.Text.RegularExpressions.RegexOptions.Compiled);
-
-    /// <summary>
-    /// Sanitize a query for FTS5 MATCH: remove only characters that cause
-    /// unresolvable syntax errors (unbalanced parens, bare @). Preserves
-    /// valid FTS5 operators: ^ * " + - ~ :
-    /// </summary>
-    private static string SanitizeFts5Query(string query)
-    {
-        if (string.IsNullOrWhiteSpace(query)) return query;
-
-        var sanitized = Fts5SpecialChars.Replace(query, " ");
-        sanitized = System.Text.RegularExpressions.Regex.Replace(sanitized, @"\s+", " ").Trim();
-
-        // Cap query length so that 100 KB paste doesn't choke FTS5
-        const int MaxQueryLength = 500;
-        if (sanitized.Length > MaxQueryLength)
-            sanitized = sanitized[..MaxQueryLength];
-
-        return sanitized.Length > 0 ? sanitized : query;
-    }
+    private static string SanitizeFts5Query(string query) => QueryUtils.SanitizeFts5Query(query);
 
     public async Task<List<(long nodeId, string text, double rank, string kind)>> SearchFts(
         string query, int topN = 30, string? kindFilter = null)
     {
         // Sanitize FTS5 query to prevent syntax errors (e.g. "@" in email/username)
         query = SanitizeFts5Query(query);
+        // Expand CJK characters for better Chinese/Japanese/Korean search recall
+        query = QueryUtils.ExpandCjkQuery(query);
         if (string.IsNullOrWhiteSpace(query))
             return [];
 

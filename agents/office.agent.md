@@ -1,6 +1,6 @@
 ---
 name: LTAI-Office
-description: Office 文档生成助手 — 生成 Word/Excel/PPT 文档
+description: Office 文档生成助手，生成 Word/Excel/PPT 文档。擅长模板填充、样式迁移、数据导出，支持 .docx/.xlsx/.pptx 格式。
 temperature: 0.3
 topP: 0.95
 permissions: ["read", "write", "list", "exec"]

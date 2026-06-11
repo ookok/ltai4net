@@ -125,11 +125,58 @@ public static class ContentCompressor
         code = _trailingWs.Replace(code, "\n");
 
         var lines = code.Split('\n');
-        if (lines.Length <= 200) return code.Trim();
+        if (lines.Length <= 400) return code.Trim();
 
-        var head = string.Join("\n", lines.Take(100));
-        var tail = string.Join("\n", lines.TakeLast(50));
-        return $"{head}\n\n... [{lines.Length - 150} lines omitted] ...\n\n{tail}";
+        // Keep semantically important sections: method/function declarations,
+        // class definitions, interfaces, plus brief head/tail context.
+        var importantLines = new HashSet<int>();
+        var sb = new System.Text.StringBuilder();
+
+        // Always keep first 50 lines (imports/namespace/usings)
+        for (int i = 0; i < Math.Min(50, lines.Length); i++)
+            importantLines.Add(i);
+
+        // Always keep last 30 lines (closing braces, tail logic)
+        for (int i = Math.Max(0, lines.Length - 30); i < lines.Length; i++)
+            importantLines.Add(i);
+
+        // Scan for method/class/interface/struct/enum/trait declarations
+        var declPattern = new System.Text.RegularExpressions.Regex(
+            @"^\s*(public|private|protected|internal|static|virtual|override|abstract|sealed|async|unsafe|partial)?\s*" +
+            @"(class|struct|interface|enum|record|trait|impl|fn|def|function|method|constructor|void|int|string|bool|var|Task|Task<|async\s+Task|IEnumerable|IAsyncEnumerable|ValueTask)\s+\w+\s*[\(<{]",
+            System.Text.RegularExpressions.RegexOptions.Multiline | System.Text.RegularExpressions.RegexOptions.Compiled);
+
+        foreach (System.Text.RegularExpressions.Match m in declPattern.Matches(code))
+        {
+            // Find the line number of this match
+            var lineNum = code[..m.Index].Count(c => c == '\n');
+            // Keep the declaration line + next 20 lines
+            for (int i = lineNum; i < Math.Min(lineNum + 20, lines.Length); i++)
+                importantLines.Add(i);
+        }
+
+        // Build compressed output
+        int omitted = 0;
+        for (int i = 0; i < lines.Length; i++)
+        {
+            if (importantLines.Contains(i))
+            {
+                if (omitted > 0)
+                {
+                    sb.AppendLine($"--- [{omitted} lines omitted] ---");
+                    omitted = 0;
+                }
+                sb.AppendLine(lines[i]);
+            }
+            else
+            {
+                omitted++;
+            }
+        }
+        if (omitted > 0)
+            sb.AppendLine($"--- [{omitted} lines omitted] ---");
+
+        return sb.ToString().Trim();
     }
 
     private static string SummarizeCode(string code)

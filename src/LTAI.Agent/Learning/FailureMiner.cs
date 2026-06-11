@@ -101,6 +101,7 @@ public sealed class FailureMiner
         Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
         ".livingtree", "learn");
     private static readonly string _rulesLogPath = Path.Combine(_rulesLogDir, "rules.log");
+    private static readonly string _rulesJsonPath = Path.Combine(_rulesLogDir, "mined-rules.json");
 
     public FailureMiner(ILogger<FailureMiner>? logger = null)
     {
@@ -126,6 +127,18 @@ public sealed class FailureMiner
         {
             if (records.Count < 2) continue;
             rules.Add(GenerateRule(reason, records));
+        }
+
+        // Persist mined rules to JSON for ReviewRuleEngine consumption
+        if (rules.Count > 0)
+        {
+            var json = System.Text.Json.JsonSerializer.Serialize(new
+            {
+                minedAt = DateTime.UtcNow,
+                totalFailures = failures.Count,
+                rules
+            });
+            File.WriteAllText(_rulesJsonPath, json);
         }
 
         return rules;

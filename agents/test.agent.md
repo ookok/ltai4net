@@ -1,6 +1,6 @@
 ---
 name: LTAI-Test
-description: 测试助手 — 编写/运行/分析测试
+description: 测试助手，负责测试编写、覆盖率分析和测试执行。擅长单元测试、集成测试、性能测试，支持 xUnit/NUnit/MSTest。
 temperature: 0.3
 topP: 0.95
 permissions: ["read", "write", "list", "exec"]

@@ -40,7 +40,6 @@ public sealed class ToolRetrievalProvider : AIContextProvider
     };
 
     private const int DefaultTopK = 8;
-    private static bool _initialized;
     private readonly EmbeddingClient _embedder;
     private readonly ToolEmbeddingCache? _cache;
     private readonly string? _domain;
@@ -138,12 +137,10 @@ public sealed class ToolRetrievalProvider : AIContextProvider
                 candidates = existing.Tools;
         }
 
-        // 首次调用：使用 ONNX（优先）初始化 ToolRegistry
-        if (!_initialized)
+        // 首次调用：使用 ONNX（优先）初始化 ToolRegistry（幂等）
+        if (!ToolRegistry.IsInitialized)
         {
             await ToolRegistry.InitializeAsync(candidates.ToList(), _embedder, _cache, ct).ConfigureAwait(false);
-            _initialized = true;
-// Tool registration logging removed — use LTAI debug tracing if needed
         }
 
         // 取用户最后一条消息作为查询

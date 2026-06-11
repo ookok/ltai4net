@@ -18,6 +18,9 @@ namespace LTAI.AI;
 /// unchanged entries; only new/changed descriptions are recomputed (delta batch).
 /// Survives process restarts. JSON chosen over SQLite to keep LTAI.AI free of
 /// the Microsoft.Data.Sqlite dependency (which lives in LTAI.Agent).
+/// 
+/// LRU eviction: when the cache exceeds <see cref="MaxEntries"/>, the oldest
+/// entries are evicted during the next <see cref="GetOrComputeAllAsync"/> call.
 /// </summary>
 public sealed class ToolEmbeddingCache
 {
@@ -27,6 +30,11 @@ public sealed class ToolEmbeddingCache
     private readonly SemaphoreSlim _initLock = new(1, 1);
     private bool _initialized;
     private readonly ConcurrentDictionary<string, CacheEntry> _store = new(StringComparer.Ordinal);
+
+    /// <summary>Maximum cache entries before LRU eviction. Default 200.</summary>
+    public int MaxEntries { get; set; } = 200;
+
+    private long _evictions;
 
     public ToolEmbeddingCache(EmbeddingClient embedder, ILogger<ToolEmbeddingCache> logger, string? dataDir = null)
     {
@@ -53,6 +61,7 @@ public sealed class ToolEmbeddingCache
     public long CacheMisses => Interlocked.Read(ref _misses);
     public long CacheLookups => CacheHits + CacheMisses;
     public double HitRate => CacheLookups == 0 ? 0d : (double)CacheHits / CacheLookups;
+    public long Evictions => Interlocked.Read(ref _evictions);
     private long _hits;
     private long _misses;
 
@@ -107,6 +116,7 @@ public sealed class ToolEmbeddingCache
             if (_store.TryGetValue(key, out var entry) &&
                 string.Equals(entry.Fingerprint, fp.Hash, StringComparison.Ordinal))
             {
+                entry.LastAccessedAt = DateTime.UtcNow;
                 result[key] = entry.Vector;
                 Interlocked.Increment(ref _hits);
             }
@@ -136,6 +146,24 @@ public sealed class ToolEmbeddingCache
             foreach (var k in stale) _store.TryRemove(k, out _);
             if (stale.Length > 0)
                 _logger.LogInformation("ToolEmbeddingCache: evicted {N} stale entries", stale.Length);
+
+            // LRU eviction: if cache exceeds MaxEntries, remove oldest entries
+            if (_store.Count > MaxEntries)
+            {
+                var overflow = _store.Count - MaxEntries;
+                var toEvict = _store.OrderBy(kv => kv.Value.LastAccessedAt)
+                    .Take(overflow)
+                    .Select(kv => kv.Key)
+                    .ToArray();
+                foreach (var k in toEvict)
+                {
+                    if (_store.TryRemove(k, out _))
+                        Interlocked.Increment(ref _evictions);
+                }
+                _logger.LogInformation("ToolEmbeddingCache: LRU evicted {N} entries ({Overflow} over limit {Max})",
+                    toEvict.Length, overflow, MaxEntries);
+            }
+
             await PersistAsync(ct).ConfigureAwait(false);
         }
         else
@@ -217,5 +245,7 @@ public sealed class ToolEmbeddingCache
         [System.Text.Json.Serialization.JsonIgnore]
         public string Description { get; set; } = "";
         public float[] Vector { get; set; } = [];
+        [System.Text.Json.Serialization.JsonIgnore]
+        public DateTime LastAccessedAt { get; set; } = DateTime.UtcNow;
     }
 }

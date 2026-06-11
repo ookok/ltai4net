@@ -1,6 +1,6 @@
 ---
 name: LTAI-Frontend
-description: 前端网页开发助手
+description: 前端网页开发助手，擅长 React/Vue/Angular 等现代前端框架开发。高 temperature 促进 UI/UX 创意产出，支持组件开发、样式设计、性能优化。
 temperature: 0.8
 topP: 0.95
 permissions: ["read", "write", "list", "exec"]

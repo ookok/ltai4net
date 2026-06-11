@@ -1,6 +1,6 @@
 ---
 name: LTAI-Debug
-description: 调试排障助手 — 崩溃分析/日志排查/性能诊断
+description: 调试排障助手，负责崩溃分析、日志排查、性能瓶颈诊断。擅长异常堆栈分析、日志模式识别、系统状态监控。
 temperature: 0.3
 topP: 0.95
 permissions: ["read", "write", "list", "exec"]

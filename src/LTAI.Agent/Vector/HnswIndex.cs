@@ -2,6 +2,35 @@ using TurboQuant.Core.Packing;
 
 namespace LTAI.Agent.Vector;
 
+/// <summary>
+/// Configurable HNSW index parameters.
+/// </summary>
+public sealed record HnswOptions
+{
+    /// <summary>Number of bi-directional links per element (default 16). Higher = more accurate, more memory.</summary>
+    public int M { get; init; } = 16;
+
+    /// <summary>Maximum number of links per element at all levels (default 32).</summary>
+    public int Mmax { get; init; } = 32;
+
+    /// <summary>Maximum number of links per element at level 0 (default 16).</summary>
+    public int Mmax0 { get; init; } = 16;
+
+    /// <summary>Search effort during construction (default 200). Higher = better quality, slower build.</summary>
+    public int EfConstruction { get; init; } = 200;
+
+    internal double ML => 1.0 / Math.Log(M);
+
+    /// <summary>Default options (balanced).</summary>
+    public static HnswOptions Default => new();
+
+    /// <summary>High-accuracy options (slower build, better recall).</summary>
+    public static HnswOptions HighAccuracy => new() { M = 32, Mmax = 64, Mmax0 = 32, EfConstruction = 400 };
+
+    /// <summary>Low-memory options (faster build, lower recall).</summary>
+    public static HnswOptions LowMemory => new() { M = 8, Mmax = 16, Mmax0 = 8, EfConstruction = 100 };
+}
+
 public sealed class HnswIndex : IDisposable
 {
     private sealed record HnswNode(PackedVector Packed, List<int>[] Links);
@@ -10,13 +39,23 @@ public sealed class HnswIndex : IDisposable
     private int _maxLevel;
     private readonly ReaderWriterLockSlim _rwLock = new();
 
-    private const int M = 16;
-    private const int Mmax = 32;
-    private const int Mmax0 = M;
-    private const int EfConstruction = 200;
-    private static readonly double ML = 1.0 / Math.Log(M);
+    private readonly int _m;
+    private readonly int _mmax;
+    private readonly int _mmax0;
+    private readonly int _efConstruction;
+    private readonly double _ml;
 
     private static readonly Random _rng = new();
+
+    public HnswIndex(HnswOptions? options = null)
+    {
+        options ??= HnswOptions.Default;
+        _m = options.M;
+        _mmax = options.Mmax;
+        _mmax0 = options.Mmax0;
+        _efConstruction = options.EfConstruction;
+        _ml = 1.0 / Math.Log(_m);
+    }
 
     public int Count { get { _rwLock.EnterReadLock(); try { return _nodes.Count; } finally { _rwLock.ExitReadLock(); } } }
 
@@ -52,9 +91,9 @@ public sealed class HnswIndex : IDisposable
             var candidates = new List<(int idx, float dist)>();
             for (int l = Math.Min(level, _maxLevel); l >= 0; l--)
             {
-                var ef = l == level ? EfConstruction : 1;
+                var ef = l == level ? _efConstruction : 1;
                 candidates = SearchLayerBatched(packed, [currEntry], ef, l);
-                var neighbors = SelectNeighbors(candidates, l == 0 ? Mmax0 : Mmax);
+                var neighbors = SelectNeighbors(candidates, l == 0 ? _mmax0 : _mmax);
                 node.Links[l].AddRange(neighbors);
             }
 
@@ -69,7 +108,7 @@ public sealed class HnswIndex : IDisposable
                         var neighborNode = _nodes[nid];
                         var linkList = neighborNode.Links[l];
                         linkList.Add(idx);
-                        if (linkList.Count > (l == 0 ? Mmax0 : Mmax))
+                        if (linkList.Count > (l == 0 ? _mmax0 : _mmax))
                             ShrinkConnections(nid, l);
                     }
                 }
@@ -203,16 +242,16 @@ public sealed class HnswIndex : IDisposable
         var packed = node.Packed;
         var scored = links.Select(n => (idx: n, dist: VectorQuantizer.CosineDistance(packed, _nodes[n].Packed)))
                           .OrderBy(x => x.dist)
-                          .Take(layer == 0 ? Mmax0 : Mmax)
+                           .Take(layer == 0 ? _mmax0 : _mmax)
                           .Select(x => x.idx)
                           .ToList();
         links.Clear();
         links.AddRange(scored);
     }
 
-    private static int RandomLevel()
+    private int RandomLevel()
     {
-        return (int)(-Math.Log(_rng.NextDouble()) * ML);
+        return (int)(-Math.Log(_rng.NextDouble()) * _ml);
     }
 
     public void Rebuild(IEnumerable<ReadOnlyMemory<float>> vectors)

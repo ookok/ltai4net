@@ -73,6 +73,10 @@ public sealed class ToolExecutionStep : IPipelineStep
                     {
                         var last = context.ToolCalls[^1];
                         context.ToolCalls[^1] = (last.Name, last.Arguments, resultStr);
+                        // Record tool call metrics
+                        var success = !resultStr.StartsWith("Error", StringComparison.OrdinalIgnoreCase)
+                            && !resultStr.Contains("\"success\": false");
+                        ToolRegistry.RecordCall(last.Name, success, 0);
                     }
                 }
             }

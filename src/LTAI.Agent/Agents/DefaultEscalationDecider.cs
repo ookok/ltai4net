@@ -35,13 +35,68 @@ public sealed partial class DefaultEscalationDecider : IEscalationDecider
         "no access", "not have access", "not able to", "i don't"
     ];
 
+    // Task type keywords for classification
+    private static readonly Dictionary<string, string[]> TaskTypeKeywords = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["code"] = ["代码", "code", "函数", "function", "类", "class", "方法", "method", "实现", "implement", "修复", "fix", "bug", "debug"],
+        ["file"] = ["文件", "file", "读取", "read", "写入", "write", "编辑", "edit", "删除", "delete", "创建", "create"],
+        ["search"] = ["搜索", "search", "查找", "find", "查找", "lookup", "查询", "query"],
+        ["data"] = ["数据", "data", "csv", "json", "excel", "表格", "table", "数据库", "database", "sql"],
+        ["web"] = ["网页", "web", "网站", "website", "url", "链接", "link", "http", "api"],
+        ["image"] = ["图片", "image", "图像", "picture", "照片", "photo", "png", "jpg"],
+        ["git"] = ["git", "commit", "push", "pull", "branch", "merge", "diff", "log"],
+        ["text"] = ["写", "write", "文档", "document", "文章", "article", "翻译", "translate", "总结", "summarize"],
+    };
+
+    // Multi-step patterns
+    private static readonly string[] MultiStepPatterns =
+    [
+        "然后", "接着", "之后", "最后", "首先", "第一步", "第二步",
+        "first", "then", "next", "finally", "step 1", "step 2",
+        "先.*再", "before.*after"
+    ];
+
+    /// <summary>
+    /// 判断是否为简单查询（无需路由/升级）。
+    /// 改进：增加混合查询检测、模式匹配、工具依赖检测。
+    /// </summary>
     public bool IsSimpleQuery(string message)
     {
         if (string.IsNullOrWhiteSpace(message)) return false;
         var trimmed = message.Trim();
-        return trimmed.Length <= 10 || SimpleQueries.Contains(trimmed);
+
+        // Fast path: exact match
+        if (SimpleQueries.Contains(trimmed))
+            return true;
+
+        // Fast path: very short messages without tool keywords
+        if (trimmed.Length <= 6 && !ToolRequiredKeywords.Any(k => trimmed.Contains(k, StringComparison.OrdinalIgnoreCase)))
+            return true;
+
+        // Mixed query detection: "你好，帮我..." is NOT simple
+        if (trimmed.Length > 20)
+        {
+            var hasGreeting = SimpleQueries.Any(q => trimmed.Contains(q, StringComparison.OrdinalIgnoreCase));
+            var hasToolKeyword = ToolRequiredKeywords.Any(k => trimmed.Contains(k, StringComparison.OrdinalIgnoreCase));
+            if (hasGreeting && hasToolKeyword)
+                return false; // Mixed query, needs routing
+        }
+
+        // Pattern-based: questions with specific intent are NOT simple
+        if (trimmed.Contains('?') || trimmed.Contains('？'))
+        {
+            var questionWords = new[] { "怎么", "如何", "为什么", "什么", "哪", "多少", "how", "why", "what", "where", "when" };
+            if (questionWords.Any(w => trimmed.Contains(w, StringComparison.OrdinalIgnoreCase)))
+                return false; // Specific question, needs LLM
+        }
+
+        return false;
     }
 
+    /// <summary>
+    /// 估算任务复杂度（0-7）。
+    /// 改进：增加任务类型分类、多步检测、工具依赖检测。
+    /// </summary>
     public int EstimateComplexity(string message)
     {
         if (string.IsNullOrWhiteSpace(message)) return 0;
@@ -54,11 +109,51 @@ public sealed partial class DefaultEscalationDecider : IEscalationDecider
             <= 50 => 4,
             _ => 5
         };
-        if (ToolRequiredKeywords.Any(k => message.Contains(k, StringComparison.OrdinalIgnoreCase)))
+
+        // Tool dependency detection
+        var toolKeywordCount = ToolRequiredKeywords.Count(k => message.Contains(k, StringComparison.OrdinalIgnoreCase));
+        if (toolKeywordCount >= 2) score += 2;
+        else if (toolKeywordCount == 1) score += 1;
+
+        // Multi-step detection
+        if (MultiStepPatterns.Any(p => Regex.IsMatch(message, p, RegexOptions.IgnoreCase)))
             score += 1;
-        if (message.Contains('\n')) score += 1;
+
+        // Code complexity indicators
+        if (message.Contains("```") || message.Contains("class ") || message.Contains("function "))
+            score += 1;
+
+        // Length-based adjustment
         if (message.Length > 200) score += 1;
-        return Math.Min(score, 7);
+        if (message.Contains('\n')) score += 1;
+
+        return Math.Clamp(score, 0, 7);
+    }
+
+    /// <summary>
+    /// 分类任务类型。
+    /// </summary>
+    public string ClassifyTaskType(string message)
+    {
+        if (string.IsNullOrWhiteSpace(message)) return "general";
+
+        var scores = new Dictionary<string, int>();
+        foreach (var (type, keywords) in TaskTypeKeywords)
+        {
+            scores[type] = keywords.Count(k => message.Contains(k, StringComparison.OrdinalIgnoreCase));
+        }
+
+        var best = scores.OrderByDescending(kv => kv.Value).First();
+        return best.Value > 0 ? best.Key : "general";
+    }
+
+    /// <summary>
+    /// 检测是否为多步任务。
+    /// </summary>
+    public bool IsMultiStep(string message)
+    {
+        if (string.IsNullOrWhiteSpace(message)) return false;
+        return MultiStepPatterns.Any(p => Regex.IsMatch(message, p, RegexOptions.IgnoreCase));
     }
 
     public (bool needsPro, string reason, double confidence) Evaluate(

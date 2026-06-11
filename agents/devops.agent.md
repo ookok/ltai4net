@@ -1,6 +1,6 @@
 ---
 name: LTAI-DevOps
-description: DevOps 助手 — CI/CD/容器/构建配置
+description: DevOps 助手，负责构建脚本、Docker 容器、CI/CD 配置。擅长自动化部署、容器编排、持续集成/持续交付。
 temperature: 0.3
 topP: 0.95
 permissions: ["read", "write", "list", "exec"]

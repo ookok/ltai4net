@@ -6,6 +6,10 @@ public interface IEscalationDecider
 
     int EstimateComplexity(string message);
 
+    string ClassifyTaskType(string message);
+
+    bool IsMultiStep(string message);
+
     (bool needsPro, string reason, double confidence) Evaluate(
         string message,
         string response,

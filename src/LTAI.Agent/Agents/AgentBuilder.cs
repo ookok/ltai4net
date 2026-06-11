@@ -49,6 +49,14 @@ namespace LTAI.Agent;
 /// </summary>
 internal static partial class AgentBuilder
 {
+    // Load safety prompt from file (agents/safety-{lang}.prompt.md) with fallback
+    private static readonly string SafetyPrompt = LoadSafetyPrompt();
+    private static string LoadSafetyPrompt()
+    {
+        var lang = LTAI.Core.I18n.Locale.IsChinese ? "zh" : "en";
+        var filePrompt = LTAI.Agent.Prompts.PromptLoader.Load($"safety-{lang}");
+        return !string.IsNullOrEmpty(filePrompt) ? filePrompt : LTAI.Core.Safety.SafetyPrompts.DefaultSystemPrompt;
+    }
     // Shared LSP manager across all agents (process-wide)
     private static readonly LanguageServer.LspLanguageManager s_lsp = new();
     internal static LanguageServer.LspLanguageManager GetLspManager() => s_lsp;
@@ -77,6 +85,19 @@ internal static partial class AgentBuilder
         var ws = Directory.GetCurrentDirectory();
         var opts = sp.GetRequiredService<IOptions<LTAIOptions>>().Value;
         var loggerFactory = sp.GetRequiredService<ILoggerFactory>();
+
+        // Wire PlanTools to ExecutionEngine for integrated plan execution
+        if (LTAI.Agent.Tools.PlanTools.ExecutionEngine == null)
+        {
+            try
+            {
+                var workflows = sp.GetRequiredService<LTAI.Agent.Workflows.AgentWorkflows>();
+                var router = sp.GetService<LTAI.Agent.Workflows.DecisionTreeRouter>();
+                LTAI.Agent.Tools.PlanTools.ExecutionEngine = new Execution.ExecutionEngine(
+                    workflows, router, loggerFactory.CreateLogger<Execution.ExecutionEngine>());
+            }
+            catch { /* ExecutionEngine not available — PlanTools runs standalone */ }
+        }
         var llm = sp.GetRequiredService<IChatClient>();
         var log = loggerFactory.CreateLogger("Agent." + name);
 
@@ -132,7 +153,9 @@ internal static partial class AgentBuilder
             if (steerLlm != null)
             {
                 safetyClient = steerLlm;
-                safety = new SafetyCoordinator(safetyClient, loggerFactory.CreateLogger<SafetyCoordinator>());
+                safety = new SafetyCoordinator(safetyClient,
+                    loggerFactory.CreateLogger<SafetyCoordinator>(),
+                    safetyPrompt: SafetyPrompt);
             }
             else
             {
@@ -168,7 +191,9 @@ internal static partial class AgentBuilder
             }
             if (safetyClient != null)
             {
-                safety = new SafetyCoordinator(safetyClient, loggerFactory.CreateLogger<SafetyCoordinator>());
+                safety = new SafetyCoordinator(safetyClient,
+                    loggerFactory.CreateLogger<SafetyCoordinator>(),
+                    safetyPrompt: SafetyPrompt);
             }
             else
             {
@@ -228,10 +253,6 @@ internal static partial class AgentBuilder
         var skillsBuilder = new Microsoft.Agents.AI.AgentSkillsProviderBuilder()
             .UseFileSkills([.. skillDirs]);
 
-        if (opts.SkillsUrls is { Length: > 0 })
-            skillsBuilder = skillsBuilder.UseSource(
-                new AgentUrlSkillsSource(opts.SkillsUrls, httpFactory.CreateClient()));
-
         var skillsProvider = skillsBuilder
             .UseFileScriptRunner(LTAI.Agent.Tools.SkillScriptRunner.RunAsync)
             .UseOptions(o =>
@@ -268,6 +289,9 @@ internal static partial class AgentBuilder
         {
             tools.Clear();
             tools.Add(AIFunctionFactory.Create(LTAI.Agent.Tools.PlanTools.PlanExit));
+            tools.Add(AIFunctionFactory.Create((Func<string, string, string, Task<string>>)(LTAI.Agent.Tools.PlanTools.SubmitPlan)));
+            tools.Add(AIFunctionFactory.Create((Func<Task<string>>)(LTAI.Agent.Tools.PlanTools.ApprovePlan)));
+            tools.Add(AIFunctionFactory.Create(LTAI.Agent.Tools.PlanTools.PlanStatus));
             if (canRead)
             {
                 var planFs = new FileSystemTools(ws, s_mmapProvider, s_writeBuf);
@@ -324,14 +348,6 @@ internal static partial class AgentBuilder
         // Available for all canRead agents (not in Plan Mode — no AST index in read-only mode).
         if (canRead && !isPlanMode)
             tools.Add(AIFunctionFactory.Create(codeChunkIndex.SemanticCodeSearch));
-
-        // P3: APM / MCP Registry 包管理工具 — 所有 agent 可用（需安装 apm CLI）
-        {
-            var pkg = new LTAI.Agent.Tools.PackageManagerTools();
-            tools.Add(AIFunctionFactory.Create(pkg.PkgSearch));
-            tools.Add(AIFunctionFactory.Create(pkg.PkgInstall));
-            tools.Add(AIFunctionFactory.Create(pkg.PkgList));
-        }
 
         RegisterDebugTools(tools, name, sp);
 
@@ -528,12 +544,27 @@ internal sealed class MaxMessageCountReducer : IChatReducer
         if (list.Count <= _maxCount)
             return Task.FromResult<IEnumerable<ChatMessage>>(list);
 
-        // Keep the system prompt (first message) and the most recent messages
-        var system = list.FirstOrDefault(m => m.Role == ChatRole.System);
-        var recent = list.TakeLast(_maxCount - (system != null ? 1 : 0)).ToList();
-        if (system != null)
-            recent.Insert(0, system);
+        // Keep all system messages (identity, rules, context providers)
+        var systemMessages = list.Where(m => m.Role == ChatRole.System).ToList();
 
-        return Task.FromResult<IEnumerable<ChatMessage>>(recent);
+        // Keep messages that contain tool calls or results
+        var toolMessages = list.Where(m => m.Contents?.Any(c =>
+            c is Microsoft.Extensions.AI.FunctionCallContent ||
+            c is Microsoft.Extensions.AI.FunctionResultContent ||
+            c is Microsoft.Extensions.AI.ToolApprovalRequestContent) == true).ToList();
+
+        // Keep the most recent user-assistant exchanges
+        var nonSystemNonTool = list.Where(m => m.Role != ChatRole.System &&
+            !toolMessages.Contains(m)).ToList();
+        var budget = _maxCount - systemMessages.Count - toolMessages.Count;
+        var recent = nonSystemNonTool.TakeLast(Math.Max(0, budget)).ToList();
+
+        // Merge: system messages + tool messages + recent messages
+        var result = new List<ChatMessage>();
+        result.AddRange(systemMessages);
+        result.AddRange(toolMessages);
+        result.AddRange(recent);
+
+        return Task.FromResult<IEnumerable<ChatMessage>>(result);
     }
 }

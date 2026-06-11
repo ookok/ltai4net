@@ -1,6 +1,6 @@
 ---
 name: LTAI-LLM
-description: 纯对话助手
+description: 纯对话助手，无任何工具权限。仅使用模型本身的知识进行回答，适合概念解释、创意讨论、知识问答。
 temperature: 0.8
 topP: 0.95
 permissions: []

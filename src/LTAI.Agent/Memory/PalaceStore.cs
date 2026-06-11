@@ -21,12 +21,14 @@ public sealed class PalaceStore
             role TEXT NOT NULL DEFAULT 'assistant', content TEXT NOT NULL, embedding BLOB,
             created_at INTEGER NOT NULL, expires_at INTEGER, importance REAL NOT NULL DEFAULT 0.5,
             agent_id TEXT NOT NULL DEFAULT 'default', metadata TEXT,
+            access_count INTEGER NOT NULL DEFAULT 0, last_accessed_at INTEGER,
             PRIMARY KEY (wing, room, drawer_id)
         );
         CREATE INDEX IF NOT EXISTS idx_palace_wing_room ON palace(wing, room);
         CREATE INDEX IF NOT EXISTS idx_palace_agent ON palace(agent_id);
         CREATE INDEX IF NOT EXISTS idx_palace_created ON palace(created_at DESC);
         CREATE INDEX IF NOT EXISTS idx_palace_expires ON palace(expires_at);
+        CREATE INDEX IF NOT EXISTS idx_palace_access ON palace(access_count DESC);
         """;
 
     private static readonly JsonSerializerOptions JsonOpts = new()
@@ -56,7 +58,8 @@ public sealed class PalaceStore
         => new(embedder, kgDbPath, logger);
 
     public record Drawer(string Wing, string Room, string DrawerId, string Role, string Content,
-        float[]? Embedding, long CreatedAt, long? ExpiresAt, double Importance, string AgentId, string? Metadata);
+        float[]? Embedding, long CreatedAt, long? ExpiresAt, double Importance, string AgentId, string? Metadata,
+        int AccessCount = 0, long? LastAccessedAt = null);
 
     public const long DefaultTtlMs = 30L * 24 * 60 * 60 * 1000;
 
@@ -140,7 +143,11 @@ public sealed class PalaceStore
                 scored.Add((drawer, CosineSimilarity(queryVec, drawer.Embedding)));
         }
         foreach (var hit in scored.OrderByDescending(x => x.Item2).Take(topK))
+        {
+            // Record access for retrieval feedback
+            RecordAccess(hit.Item1.DrawerId);
             yield return hit;
+        }
     }
 
     public IReadOnlyList<Drawer> GetRecentDrawers(string wing, string room, int limit = 10)
@@ -377,6 +384,35 @@ public sealed class PalaceStore
         return cmd.ExecuteNonQuery();
     }
 
+    /// <summary>Record access to a drawer: increment counter and update timestamp.</summary>
+    public void RecordAccess(string drawerId)
+    {
+        EnsureSchema();
+        using var conn = new SqliteConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "UPDATE palace SET access_count=access_count+1, last_accessed_at=$now WHERE drawer_id=$id";
+        cmd.Parameters.AddWithValue("$id", drawerId);
+        cmd.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        cmd.ExecuteNonQuery();
+    }
+
+    /// <summary>Get most frequently accessed memories across all wings.</summary>
+    public IReadOnlyList<Drawer> GetPopularDrawers(int limit = 10)
+    {
+        EnsureSchema();
+        using var conn = new SqliteConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT * FROM palace WHERE access_count>0 AND (expires_at IS NULL OR expires_at>$now) ORDER BY access_count DESC LIMIT $limit";
+        cmd.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        cmd.Parameters.AddWithValue("$limit", limit);
+        using var rdr = cmd.ExecuteReader();
+        var list = new List<Drawer>();
+        while (rdr.Read()) list.Add(ReadDrawer(rdr));
+        return list;
+    }
+
     // ═══════════════════════════════════════════
     //  Private
     // ═══════════════════════════════════════════
@@ -384,16 +420,47 @@ public sealed class PalaceStore
     private void EnsureSchema()
     {
         if (_schemaReady) return;
-        lock (_gate) { if (_schemaReady) return; using var conn = new SqliteConnection(_connectionString); conn.Open(); using var cmd = conn.CreateCommand(); cmd.CommandText = Schema; cmd.ExecuteNonQuery(); _schemaReady = true; }
+        lock (_gate)
+        {
+            if (_schemaReady) return;
+            using var conn = new SqliteConnection(_connectionString);
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = Schema;
+            cmd.ExecuteNonQuery();
+            // Migration: add access tracking columns if missing
+            try
+            {
+                using var migCmd = conn.CreateCommand();
+                migCmd.CommandText = "ALTER TABLE palace ADD COLUMN access_count INTEGER NOT NULL DEFAULT 0";
+                migCmd.ExecuteNonQuery();
+            }
+            catch { /* column already exists */ }
+            try
+            {
+                using var migCmd = conn.CreateCommand();
+                migCmd.CommandText = "ALTER TABLE palace ADD COLUMN last_accessed_at INTEGER";
+                migCmd.ExecuteNonQuery();
+            }
+            catch { /* column already exists */ }
+            _schemaReady = true;
+        }
     }
 
     private static double CosineSimilarity(float[] a, float[] b) => VectorMath.CosineSimilarity(a.AsSpan(), b.AsSpan());
 
-    private static Drawer ReadDrawer(SqliteDataReader r) => new(r.GetString(0), r.GetString(1), r.GetString(2),
-        r.IsDBNull(3) ? "assistant" : r.GetString(3), r.GetString(4),
-        r.IsDBNull(5) ? null : DeserializeEmb(r, 5), r.GetInt64(6),
-        r.IsDBNull(7) ? null : r.GetInt64(7), r.IsDBNull(8) ? 0.5 : r.GetDouble(8),
-        r.IsDBNull(9) ? "default" : r.GetString(9), r.IsDBNull(10) ? null : r.GetString(10));
+    private static Drawer ReadDrawer(SqliteDataReader r)
+    {
+        var baseDrawer = new Drawer(
+            r.GetString(0), r.GetString(1), r.GetString(2),
+            r.IsDBNull(3) ? "assistant" : r.GetString(3), r.GetString(4),
+            r.IsDBNull(5) ? null : DeserializeEmb(r, 5), r.GetInt64(6),
+            r.IsDBNull(7) ? null : r.GetInt64(7), r.IsDBNull(8) ? 0.5 : r.GetDouble(8),
+            r.IsDBNull(9) ? "default" : r.GetString(9), r.IsDBNull(10) ? null : r.GetString(10));
+        // Read access tracking columns (if they exist in query result)
+        try { return baseDrawer with { AccessCount = r.IsDBNull(11) ? 0 : r.GetInt32(11), LastAccessedAt = r.IsDBNull(12) ? null : r.GetInt64(12) }; }
+        catch { return baseDrawer; }
+    }
 
     private static float[]? DeserializeEmb(SqliteDataReader r, int c)
     {

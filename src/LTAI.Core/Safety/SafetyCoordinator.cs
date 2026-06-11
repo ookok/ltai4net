@@ -31,13 +31,17 @@ public sealed class SafetyCoordinator : AIContextProvider
     // ExecutionContext flow issues across ConfigureAwait(false) boundaries.
     private readonly SemaphoreSlim _safeLock = new(1, 1);
 
-    private static readonly string SafetySystemPrompt = SafetyPrompts.SystemPrompt;
+    private readonly string _safetySystemPrompt;
+    private readonly int _maxInputChars;
 
-    public SafetyCoordinator(IChatClient llm, ILogger<SafetyCoordinator>? logger = null)
+    public SafetyCoordinator(IChatClient llm, ILogger<SafetyCoordinator>? logger = null,
+        string? safetyPrompt = null, int maxInputChars = 200_000)
         : base(null, null, null)
     {
         _llm = llm;
         _logger = logger;
+        _safetySystemPrompt = safetyPrompt ?? SafetyPrompts.DefaultSystemPrompt;
+        _maxInputChars = Math.Max(10_000, maxInputChars);
     }
 
     /// <summary>
@@ -124,7 +128,8 @@ public sealed class SafetyCoordinator : AIContextProvider
 
     private async Task<(bool allow, string reason)> CheckAsync(string text, string direction, CancellationToken ct = default)
     {
-        if (text.Length > 100_000) return (false, "Input exceeds 100k chars");
+        if (text.Length > _maxInputChars)
+            return (false, $"Input exceeds {_maxInputChars / 1000}k chars");
 
         // 快速通道：常见安全短文本直接放行（无需 LLM 审核）
         if (text.Length <= 50)
@@ -165,7 +170,7 @@ public sealed class SafetyCoordinator : AIContextProvider
         try
         {
             var response = await _llm.GetResponseAsync([
-                new ChatMessage(ChatRole.System, SafetySystemPrompt),
+                new ChatMessage(ChatRole.System, _safetySystemPrompt),
                 new ChatMessage(ChatRole.User, text)
             ], cancellationToken: ct).ConfigureAwait(false);
 

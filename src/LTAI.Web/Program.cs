@@ -113,6 +113,7 @@ try
         ctx.Response.Headers["Content-Security-Policy"] = "default-src 'self'";
         ctx.Response.Headers["Referrer-Policy"] = "strict-origin-when-cross-origin";
         ctx.Response.Headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()";
+        ctx.Response.Headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains";
         await next(ctx).ConfigureAwait(false);
     });
     app.UseSerilogRequestLogging();              // 3. Log every request

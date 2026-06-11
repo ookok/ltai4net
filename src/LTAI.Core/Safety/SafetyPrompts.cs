@@ -1,8 +1,8 @@
 namespace LTAI.Core.Safety;
 
-internal static class SafetyPrompts
+public static class SafetyPrompts
 {
-    public const string SystemPrompt = """
+    public const string DefaultSystemPrompt = """
         You are a content safety guardrail. Analyze the text below and respond with ONLY one of:
         - SAFE
         - UNSAFE: <one-line reason>

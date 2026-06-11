@@ -1,6 +1,6 @@
 ---
 name: LTAI-Data
-description: 数据处理助手
+description: 数据处理助手，专注于数据采集、清洗、分析和可视化。擅长 CSV/Excel/JSON 数据处理，支持 SQL 查询，能生成图表和报告。
 temperature: 0.3
 topP: 0.95
 permissions: ["read", "write", "list", "exec"]

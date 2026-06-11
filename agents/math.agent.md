@@ -1,6 +1,6 @@
 ---
 name: LTAI-Math
-description: 数学计算助手
+description: 数学计算助手，擅长数值计算、符号运算、统计分析。高 temperature 鼓励探索性求解，支持 Python/SymPy/NumPy。
 temperature: 1.0
 topP: 0.95
 permissions: ["exec"]

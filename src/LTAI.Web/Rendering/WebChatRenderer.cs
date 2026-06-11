@@ -95,7 +95,7 @@ public sealed class WebChatRenderer : IChatRenderer
 
     private void WriteSse(string payload)
     {
-        _response.WriteAsync($"data: {payload}\n\n").GetAwaiter().GetResult();
-        _response.Body.FlushAsync().GetAwaiter().GetResult();
+        _response.WriteAsync($"data: {payload}\n\n").ConfigureAwait(false).GetAwaiter().GetResult();
+        _response.Body.FlushAsync().ConfigureAwait(false).GetAwaiter().GetResult();
     }
 }

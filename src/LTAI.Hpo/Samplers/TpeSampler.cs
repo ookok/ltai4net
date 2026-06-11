@@ -30,7 +30,8 @@ public sealed class TpeSampler : ISampler
     public float SampleFloat(Trial trial, string name, float low, float high, bool log)
     {
         var store = trial.Store;
-        var completed = store == null ? null : Task.Run(() => store.LoadTrialsAsync(trial.StudyName)).GetAwaiter().GetResult()
+        // HPO sampler interface is sync; Task.Run avoids deadlocking on async store.
+        var completed = store == null ? null : Task.Run(async () => await store.LoadTrialsAsync(trial.StudyName).ConfigureAwait(false)).GetAwaiter().GetResult()
             .Where(t => t.State is TrialState.Completed or TrialState.Pruned).ToList();
 
         if (completed == null || completed.Count < 3)
@@ -107,7 +108,8 @@ public sealed class TpeSampler : ISampler
     public T SampleCategorical<T>(Trial trial, string name, T[] choices) where T : notnull
     {
         var store = trial.Store;
-        var completed = store == null ? null : Task.Run(() => store.LoadTrialsAsync(trial.StudyName)).GetAwaiter().GetResult()
+        // HPO sampler interface is sync; Task.Run avoids deadlocking on async store.
+        var completed = store == null ? null : Task.Run(async () => await store.LoadTrialsAsync(trial.StudyName).ConfigureAwait(false)).GetAwaiter().GetResult()
             .Where(t => t.State is TrialState.Completed or TrialState.Pruned).ToList();
 
         if (completed == null || completed.Count < 3)
