@@ -107,11 +107,19 @@ public sealed class ModelConfigDialog : Dialog
 
         // 保存: 关闭对话框
         var saveBtn = new Button { Text = "保存" };
-        saveBtn.Accepted += OnSave;
+        saveBtn.Accepting += (_, e) =>
+        {
+            OnSave(null!, EventArgs.Empty);
+            e.Handled = true;
+        };
         AddButton(saveBtn);
 
         var cancelBtn = new Button { Text = "取消" };
-        cancelBtn.Accepted += (_, _) => _app.RequestStop();
+        cancelBtn.Accepting += (_, e) =>
+        {
+            _app.RequestStop();
+            e.Handled = true;
+        };
         AddButton(cancelBtn);
     }
 
@@ -141,7 +149,11 @@ public sealed class ModelConfigDialog : Dialog
             var path = Path.Combine(AppContext.BaseDirectory, "appsettings.json");
             if (!File.Exists(path)) return ("", "");
             var json = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(path));
-            var l = json?["LTAI"]?["AI"]?[layer];
+            var ai = json?["LTAI"]?["AI"] as System.Text.Json.Nodes.JsonObject;
+            if (ai == null) return ("", "");
+            var key = ((System.Collections.Generic.IDictionary<string, System.Text.Json.Nodes.JsonNode?>)ai)
+                .Keys.FirstOrDefault(k => string.Equals(k, layer, StringComparison.OrdinalIgnoreCase));
+            var l = key != null ? ai[key] : null;
             if (l == null) return ("", "");
             return (l["Provider"]?.GetValue<string>() ?? "", l["Model"]?.GetValue<string>() ?? "");
         }

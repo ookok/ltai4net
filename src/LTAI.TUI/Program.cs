@@ -119,7 +119,7 @@ public static class Program
         var l1Label = l1 != null && !string.IsNullOrEmpty(l1.Provider)
             ? $"L1: {l1.Provider} / {l1.Model ?? "default"}"
             : "未配置模型 (使用 /model 配置)";
-        using var win = new MainWindow(app, chatAgent, sessionMgr, l1Label);
+        using var win = new MainWindow(app, chatAgent, sessionMgr, l1Label, sp);
         app.Run(win);
     }
 

@@ -35,6 +35,7 @@
 
   <ItemGroup>
     <Reference Include="Microsoft.Agents.AI.Abstractions" HintPath="..\..\dist\lib\maf\Microsoft.Agents.AI.Abstractions.dll" Condition="Exists('..\..\dist\lib\maf\Microsoft.Agents.AI.Abstractions.dll')" />
+    <Reference Include="Microsoft.Agents.AI" HintPath="..\..\dist\lib\maf\Microsoft.Agents.AI.dll" Condition="Exists('..\..\dist\lib\maf\Microsoft.Agents.AI.dll')" />
     <Reference Include="Terminal.Gui" HintPath="..\..\dist\lib\terminal.gui\Terminal.Gui.dll" Condition="Exists('..\..\dist\lib\terminal.gui\Terminal.Gui.dll')" />
     <Reference Include="Terminal.Gui.Editor" HintPath="..\..\dist\lib\editor\Terminal.Gui.Editor.dll" Condition="Exists('..\..\dist\lib\editor\Terminal.Gui.Editor.dll')" />
     <ProjectReference Include="..\LTAI.Agent\LTAI.Agent.csproj" />

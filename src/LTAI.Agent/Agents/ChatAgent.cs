@@ -240,13 +240,13 @@ public sealed class ChatAgent
                                     ? JsonSerializer.Serialize(fc.Arguments)
                                     : "";
                                 pendingCalls[callId] = (fc.Name, args);
-                                yield return new AgentResponseUpdate(ChatRole.Assistant, $"⏳ 正在调用 {fc.Name}...\n");
+                                yield return new AgentResponseUpdate(ChatRole.Assistant, $"\n⏳ 正在调用 `{fc.Name}`...\n");
                                 break;
                             case FunctionResultContent frc:
                                 LTAI.Core.Configuration.UsageTracker.StopToolTimer();
                                 var preview = frc.Result?.ToString() ?? "(null)";
                                 if (preview.Length > 200) preview = preview[..200] + "...";
-                                yield return new AgentResponseUpdate(ChatRole.Assistant, $"  ✅ 返回: {preview}\n");
+                                yield return new AgentResponseUpdate(ChatRole.Assistant, $"  ✅ 返回: {preview}\n\n");
 
                                 var fKey = frc.CallId ?? "";
                                 if (pendingCalls.TryGetValue(fKey, out var pending))

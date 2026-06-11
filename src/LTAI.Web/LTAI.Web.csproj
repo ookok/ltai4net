@@ -30,6 +30,7 @@
     <ProjectReference Include="..\LTAI.Agent\LTAI.Agent.csproj" />
     <!-- P6: MAF protocol packages (prebuilt DLL support) -->
     <Reference Include="Microsoft.Agents.AI.Abstractions"             HintPath="..\..\dist\lib\maf\Microsoft.Agents.AI.Abstractions.dll"             Condition="Exists('..\..\dist\lib\maf\Microsoft.Agents.AI.Abstractions.dll')" />
+    <Reference Include="Microsoft.Agents.AI"                          HintPath="..\..\dist\lib\maf\Microsoft.Agents.AI.dll"                          Condition="Exists('..\..\dist\lib\maf\Microsoft.Agents.AI.dll')" />
     <Reference Include="Microsoft.Agents.AI.Hosting.AspNetCore"      HintPath="..\..\dist\lib\maf\Microsoft.Agents.AI.Hosting.AspNetCore.dll"      Condition="Exists('..\..\dist\lib\maf\Microsoft.Agents.AI.Hosting.AspNetCore.dll')" />
     <Reference Include="Microsoft.Agents.AI.Hosting.A2A"              HintPath="..\..\dist\lib\maf\Microsoft.Agents.AI.Hosting.A2A.dll"              Condition="Exists('..\..\dist\lib\maf\Microsoft.Agents.AI.Hosting.A2A.dll')" />
     <Reference Include="Microsoft.Agents.AI.Hosting.A2A.AspNetCore"   HintPath="..\..\dist\lib\maf\Microsoft.Agents.AI.Hosting.A2A.AspNetCore.dll"   Condition="Exists('..\..\dist\lib\maf\Microsoft.Agents.AI.Hosting.A2A.AspNetCore.dll')" />

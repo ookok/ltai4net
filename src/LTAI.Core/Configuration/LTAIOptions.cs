@@ -467,6 +467,10 @@ public sealed class LTAIOptions
                      ?? new System.Text.Json.Nodes.JsonObject();
             ltai["AI"] = ai;
 
+            var existingKey = ((System.Collections.Generic.IDictionary<string, System.Text.Json.Nodes.JsonNode?>)ai)
+                .Keys.FirstOrDefault(k => string.Equals(k, layer, StringComparison.OrdinalIgnoreCase));
+            if (existingKey != null) ai.Remove(existingKey);
+
             ai[layer] = new System.Text.Json.Nodes.JsonObject
             {
                 ["Provider"] = provider,

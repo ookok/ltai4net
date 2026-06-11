@@ -1,4 +1,6 @@
+using System.Diagnostics;
 using LTAI.Agent;
+using LTAI.Agent.Tools;
 using LTAI.Core.Session;
 using Microsoft.Extensions.AI;
 using Terminal.Gui.App;
@@ -10,83 +12,143 @@ using Terminal.Gui.ViewBase;
 using Terminal.Gui.Views;
 using LTAI.TUI.Dialogs;
 
+using TgAttribute = Terminal.Gui.Drawing.Attribute;
+
 namespace LTAI.TUI;
 
 /// <summary>
-/// Main TUI — opencode-inspired layout.
-///
-/// Home (initial): FrameView → Logo → Prompt (actually an Editor input)
-/// Chat (active):  Markdown messages + InputBar + Sidebar
-///
-/// The input bar lives on the home page. When the user submits their first
-/// message, the home page hides and the chat page takes over.
+/// Main TUI — opencode-inspired borderless layout with background color shading.
 /// </summary>
 public sealed class MainWindow : Window
 {
     private readonly IApplication _app;
     private readonly ChatAgent _chat;
     private readonly SessionManager _sessionMgr;
+    private readonly IServiceProvider _sp;
+    private readonly List<string> _modifiedFiles = new();
+    private readonly List<string> _inputHistory = new();
+    private int _historyIndex = -1;
     private CancellationTokenSource? _streamCts;
     private string _streamBuffer = "";
     private bool _chatStarted;
+    private System.Threading.Timer? _statsTimer;
+    private readonly object _uiLock = new();
+    private long _lastUIUpdate;
+    private const int UI_THROTTLE_MS = 50;
 
     private readonly FrameView _homePanel;
     private readonly View _chatPanel;
     private readonly Markdown _markdown;
-    private readonly Editor _inputBar;       // shared: home prompt + chat input
+    private readonly Editor _inputBar;
+    private readonly Editor _chatInputBar;
     private readonly SpinnerView _spinner;
-    private readonly FrameView _sidebar;
+    private readonly Label _toolStatus;
+    private readonly View _sidebar;
     private readonly List<string> _conv = new();
     private readonly Label _sidebarTokens;
     private readonly Label _sidebarStatus;
+    private readonly Label _sidebarModel;
+    private readonly Label _sidebarCost;
+    private readonly Label _sidebarCache;
+    private readonly Label _sidebarTodos;
+    private readonly Label _sidebarFiles;
     private string _modelLabelText;
     private Label? _homeModelLabel;
+    private Label? _chatModelLabel;
+    private Label? _agentModeLabel;
+    private Label? _inputPlaceholder;
+    private string _agentMode = "build";
+    private bool _isStreaming;
+    private Editor ActiveInput => _chatStarted ? _chatInputBar : _inputBar;
 
-    public MainWindow(IApplication app, ChatAgent chat, SessionManager sessionMgr, string l1ModelLabel = "未配置模型")
+    public MainWindow(IApplication app, ChatAgent chat, SessionManager sessionMgr, string l1ModelLabel = "未配置模型", IServiceProvider? sp = null)
     {
         _app = app;
         _chat = chat;
         _sessionMgr = sessionMgr;
+        _sp = sp!;
         Title = "LTAI";
         Width = Dim.Fill();
         Height = Dim.Fill();
         _modelLabelText = l1ModelLabel;
 
+        // Block Terminal.Gui default Ctrl+C exit
+        KeyDown += (_, k) =>
+        {
+            if (k == Key.C && k.IsCtrl && !k.IsAlt && !k.IsShift)
+            {
+                // Copy selected text or do nothing — prevent exit
+                k.Handled = true;
+            }
+        };
+
         // ═══════════════════════════════════
-        //  HOME panel — opencode-style
-        //  FrameView border → Logo → Editor prompt
+        //  HOME panel
         // ═══════════════════════════════════
         _homePanel = new FrameView
         {
             Id = "home", X = 0, Y = 0,
             Width = Dim.Fill(), Height = Dim.Fill(),
-            Title = " LTAI ",
+            Title = "",
         };
 
-        _homePanel.Add(new Label
+        var logoLabel = new Label
         {
-            X = Pos.Center(), Y = 3,
-            Text = "   ██╗     ████████╗ █████╗ ██╗\n" +
-                   "   ██║     ╚══██╔══╝██╔══██╗██║\n" +
-                   "   ██║        ██║   ███████║██║\n" +
-                   "   ██║        ██║   ██╔══██║██║\n" +
-                   "   ███████╗   ██║   ██║  ██║██║\n" +
-                   "   ╚══════╝   ╚═╝   ╚═╝  ╚═╝╚═╝\n\n" +
-                   "     LivingTree AI — 轻量版",
-        });
+            X = Pos.Center(), Y = 2,
+            Text = "  ██╗     ████████╗ █████╗ ██╗\n" +
+                   "  ██║     ╚══██╔══╝██╔══██╗██║\n" +
+                   "  ██║        ██║   ███████║██║\n" +
+                   "  ██║        ██║   ██╔══██║██║\n" +
+                   "  ███████╗   ██║   ██║  ██║██║\n" +
+                   "  ╚══════╝   ╚═╝   ╚═╝  ╚═╝╚═╝",
+        };
+        logoLabel.SetScheme(new Scheme(
+            new TgAttribute(Color.Cyan, Color.Black)));
+        _homePanel.Add(logoLabel);
 
-        // Prompt input bar — Editor multiline, min 5 rows
+        var subtitleLabel = new Label
+        {
+            X = Pos.Center(), Y = 9,
+            Text = "多 Agent 协作系统",
+        };
+        subtitleLabel.SetScheme(new Scheme(
+            new TgAttribute(Color.White, Color.Black)));
+        _homePanel.Add(subtitleLabel);
+
+        var borderTop = new Label
+        {
+            X = Pos.Center(), Y = 12,
+            Text = "┌──────────────────────────────────────────┐",
+        };
+        borderTop.SetScheme(new Scheme(
+            new TgAttribute(Color.BrightBlue, Color.Black)));
+        _homePanel.Add(borderTop);
+
         _inputBar = new Editor
         {
-            X = Pos.Center(), Y = 14,
-            Width = 50, Height = 5,
+            X = Pos.Center(), Y = 13,
+            Width = 42, Height = 3,
             Multiline = true,
         };
         _inputBar.KeyDown += OnInputKey;
         _inputBar.ContentChanged += OnContentChanged;
         _homePanel.Add(_inputBar);
 
-        // Model info label below the input bar
+        var borderBottom = new Label
+        {
+            X = Pos.Center(), Y = 16,
+            Text = "└──────────────────────────────────────────┘",
+        };
+        borderBottom.SetScheme(new Scheme(
+            new TgAttribute(Color.BrightBlue, Color.Black)));
+        _homePanel.Add(borderBottom);
+
+        _homePanel.Add(new Label
+        {
+            X = Pos.Center(), Y = 18,
+            Text = "/model 配置模型  ·  /help 帮助  ·  Ctrl+T TextPad  ·  Ctrl+Q 退出",
+        });
+
         _homeModelLabel = new Label
         {
             X = Pos.Center(), Y = 21,
@@ -94,16 +156,8 @@ public sealed class MainWindow : Window
         };
         _homePanel.Add(_homeModelLabel);
 
-        // Shortcuts hint at the bottom
-        var hintLabel = new Label
-        {
-            X = Pos.Center(), Y = 23,
-            Text = "Ctrl+T 打开 TextPad  ·  Ctrl+Q 退出",
-        };
-        _homePanel.Add(hintLabel);
-
         // ═══════════════════════════════════
-        //  CHAT panel — hidden until first message
+        //  CHAT panel — borderless, color-shaded
         // ═══════════════════════════════════
         _chatPanel = new View
         {
@@ -111,51 +165,155 @@ public sealed class MainWindow : Window
             X = 0, Y = 0, Width = Dim.Fill(), Height = Dim.Fill(),
         };
 
-        // Sidebar
-        _sidebarTokens = new Label { X = 0, Y = 1, Text = "消息: 0" };
-        _sidebarStatus = new Label { X = 0, Y = 2, Text = "状态: 就绪" };
-        _sidebar = new FrameView
+        // Sidebar — darker gray background
+        _sidebarTokens = new Label { X = 1, Y = 1, Text = "消息: 0" };
+        _sidebarStatus = new Label { X = 1, Y = 2, Text = "状态: 就绪" };
+        _sidebarModel = new Label { X = 1, Y = 3, Text = "Token: 0" };
+        _sidebarCost = new Label { X = 1, Y = 4, Text = "费用: ¥0" };
+        _sidebarCache = new Label { X = 1, Y = 5, Text = "缓存: 0%" };
+        _sidebarTodos = new Label { X = 1, Y = 7, Text = "", Width = Dim.Fill() - 1 };
+        _sidebarFiles = new Label { X = 1, Y = 12, Text = "", Width = Dim.Fill() - 1 };
+
+        var cwd = Directory.GetCurrentDirectory();
+        var cwdDisplay = cwd.Length > 22 ? "..." + cwd[^19..] : cwd;
+        var gitBranch = GetGitBranch();
+        var version = System.Reflection.Assembly.GetEntryAssembly()?.GetName().Version;
+        var verStr = version != null ? $"v{version.Major}.{version.Minor}.{version.Build}" : "dev";
+
+        _sidebar = new View
         {
             X = Pos.AnchorEnd(24), Y = 0,
-            Width = 24, Height = Dim.Fill() - 2,
-            Title = "统计",
+            Width = 24, Height = Dim.Fill() - 3,
         };
-        _sidebar.Add(new Label { X = 0, Y = 0, Text = "LTAI" }, _sidebarTokens, _sidebarStatus);
+        _sidebar.SetScheme(new Scheme(
+            new TgAttribute(Color.DarkGray, Color.Black)));
+        _sidebar.Add(
+            new Label { X = 1, Y = 0, Text = "📊 统计" },
+            _sidebarTokens,
+            _sidebarStatus,
+            _sidebarModel,
+            _sidebarCost,
+            _sidebarCache,
+            _sidebarTodos,
+            _sidebarFiles,
+            new Label { X = 1, Y = Pos.AnchorEnd(3), Text = $" {gitBranch}", Width = Dim.Fill() - 1 },
+            new Label { X = 1, Y = Pos.AnchorEnd(2), Text = $" {cwdDisplay}", Width = Dim.Fill() - 1 },
+            new Label { X = 1, Y = Pos.AnchorEnd(1), Text = $" {verStr}", Width = Dim.Fill() - 1 }
+        );
 
-        // Messages
+        // Input area — 4 rows: editor(2) + hints(1) + model+spinner(1)
+        var inputAreaView = new View
+        {
+            X = 0, Y = Pos.AnchorEnd(4),
+            Width = Dim.Fill(), Height = 4,
+            CanFocus = true,
+        };
+        inputAreaView.SetScheme(new Scheme(
+            new TgAttribute(Color.DarkGray, Color.Black)));
+
+        _chatInputBar = new Editor
+        {
+            X = 1, Y = 0,
+            Width = Dim.Fill() - 2, Height = 2,
+            Multiline = true,
+            CanFocus = true,
+        };
+        _chatInputBar.SetScheme(new Scheme(
+            new TgAttribute(Color.White, Color.Black)));
+        _chatInputBar.KeyDown += OnInputKey;
+        _chatInputBar.ContentChanged += OnContentChanged;
+        inputAreaView.Add(_chatInputBar);
+
+        // Placeholder text — disappears on input
+        _inputPlaceholder = new Label { X = 1, Y = 0, Text = "输入消息...", Width = Dim.Fill(), CanFocus = false };
+        _inputPlaceholder.SetScheme(new Scheme(
+            new TgAttribute(Color.DarkGray, Color.Black)));
+        inputAreaView.Add(_inputPlaceholder);
+
+        var inputHint = new Label { X = 1, Y = 2, Text = "Shift+Enter 换行  ·  / 命令  ·  Ctrl+C 复制  ·  Tab 切换模式", Width = Dim.Fill() };
+        inputHint.SetScheme(new Scheme(
+            new TgAttribute(Color.DarkGray, Color.Black)));
+        inputAreaView.Add(inputHint);
+
+        // Bottom row: spinner + model label + mode
+        _spinner = new SpinnerView
+        {
+            Style = new SpinnerStyle.Dots9(),
+            X = 0, Y = 3,
+            Width = 8, Height = 1, Visible = false,
+        };
+        _spinner.SetScheme(new Scheme(
+            new TgAttribute(Color.BrightCyan, Color.Black)));
+        inputAreaView.Add(_spinner);
+
+        _toolStatus = new Label
+        {
+            X = 9, Y = 3,
+            Width = Dim.Fill() - 16, Text = "", Visible = false,
+        };
+        _toolStatus.SetScheme(new Scheme(
+            new TgAttribute(Color.Yellow, Color.Black)));
+        inputAreaView.Add(_toolStatus);
+
+        var chatModelLabel = new Label { X = 9, Y = 3, Text = _modelLabelText, Width = Dim.Fill() - 16 };
+        chatModelLabel.SetScheme(new Scheme(
+            new TgAttribute(Color.DarkGray, Color.Black)));
+        inputAreaView.Add(chatModelLabel);
+        _chatModelLabel = chatModelLabel;
+
+        _agentModeLabel = new Label { X = Pos.AnchorEnd(7), Y = 3, Text = "[build]", Width = 8 };
+        _agentModeLabel.SetScheme(new Scheme(
+            new TgAttribute(Color.BrightCyan, Color.Black)));
+        inputAreaView.Add(_agentModeLabel);
+
+        // Messages — leave 4 rows for input area
         _markdown = new Markdown
         {
             X = 0, Y = 0,
             Width = Dim.Fill() - 24,
-            Height = Dim.Fill() - 2,
+            Height = Dim.Fill() - 4,
             CanFocus = true,
             ShowCopyButtons = true,
             SyntaxHighlighter = new TextMateSyntaxHighlighter(TextMateSharp.Grammars.ThemeName.DarkPlus),
         };
 
-        // Spinner
-        _spinner = new SpinnerView
-        {
-            Style = new SpinnerStyle.Dots(),
-            X = Pos.Center(), Y = Pos.Bottom(_markdown),
-            Width = 4, Visible = false,
-        };
-
-        _chatPanel.Add(_markdown, _sidebar, _spinner);
+        _chatPanel.Add(_markdown, _sidebar, inputAreaView);
 
         Add(_homePanel, _chatPanel);
 
-        // Focus the input bar immediately
         _inputBar.SetFocus();
+
+        // Start background stats timer
+        _statsTimer = new System.Threading.Timer(_ =>
+        {
+            if (_chatStarted)
+                _app.Invoke(() => RefreshStats());
+        }, null, 2000, 2000);
 
         RestoreSession();
     }
 
-    // ── Command picker ──
+    // ═══════════════════════════════════
+    //  Input History
+    // ═══════════════════════════════════
+
+    private void NavigateHistory(int direction)
+    {
+        if (_inputHistory.Count == 0) return;
+        _historyIndex = Math.Clamp(_historyIndex + direction, -1, _inputHistory.Count - 1);
+        ActiveInput.Text = _historyIndex >= 0 ? _inputHistory[_historyIndex] : "";
+        ActiveInput.CaretOffset = ActiveInput.Text.Length;
+    }
+
+    // ═══════════════════════════════════
+    //  Command Picker
+    // ═══════════════════════════════════
+
     private static readonly (string cmd, string desc)[] _commands = new[]
     {
         ("model",    "配置/查看模型"),
         ("new",      "新建会话"),
+        ("sessions", "历史会话"),
         ("clear",    "清空对话"),
         ("retry",    "重试上一条"),
         ("status",   "当前状态"),
@@ -172,11 +330,11 @@ public sealed class MainWindow : Window
         _commandPicker = new Dialog
         {
             Title = "命令选择器",
-            Width = 36, Height = 10,
+            Width = 36, Height = 12,
             X = Pos.Center(), Y = Pos.Center(),
         };
 
-        var items = _commands.Select(c => $"/{c.cmd,-8} {c.desc}").ToList();
+        var items = _commands.Select(c => $"/{c.cmd,-10} {c.desc}").ToList();
         var list = new ListView
         {
             X = 0, Y = 0,
@@ -184,7 +342,6 @@ public sealed class MainWindow : Window
         };
         list.SetSource(new System.Collections.ObjectModel.ObservableCollection<string>(items));
 
-        // OpenSelectedItem → dialog Accept fired via list KeyDown
         list.KeyDown += (s, k) =>
         {
             if (k == Key.Enter)
@@ -193,163 +350,257 @@ public sealed class MainWindow : Window
                 if (idx >= 0 && idx < _commands.Length)
                 {
                     var cmd = _commands[idx].cmd;
-                    _commandPicker.Dispose(); _commandPicker = null;
-                    _inputBar.SetFocus();
+                    DismissCommandPicker();
                     ExecuteCommand(cmd);
                 }
                 else
-                {
-                    _commandPicker.Dispose(); _commandPicker = null;
-                    _inputBar.SetFocus();
-                }
+                    DismissCommandPicker();
                 k.Handled = true;
             }
-            if (k == Key.Esc)
-            {
-                _commandPicker.Dispose(); _commandPicker = null;
-                _inputBar.SetFocus();
-                k.Handled = true;
-            }
+            if (k == Key.Esc) { DismissCommandPicker(); k.Handled = true; }
         };
 
         _commandPicker.Add(list);
         var cancelBtn = new Button { Text = "_取消" };
-        cancelBtn.Accepting += (_, _) => { _commandPicker.Dispose(); _commandPicker = null; _inputBar.SetFocus(); };
+        cancelBtn.Accepting += (_, _) => DismissCommandPicker();
         _commandPicker.AddButton(cancelBtn);
         _commandPicker.Visible = true;
         Add(_commandPicker);
         list.SetFocus();
     }
 
+    private void DismissCommandPicker()
+    {
+        _commandPicker?.Dispose();
+        _commandPicker = null;
+        ActiveInput.SetFocus();
+        _app.LayoutAndDraw(true);
+    }
+
     private void OnContentChanged(object? s, DocumentChangeEventArgs e)
     {
-        if (_inputBar.Text == "/" && _commandPicker == null)
+        // Hide/show placeholder based on input content
+        if (_inputPlaceholder != null)
+            _inputPlaceholder.Visible = ActiveInput.Text.Length == 0;
+
+        if (ActiveInput.Text == "/" && _commandPicker == null)
             ShowCommandPicker();
-        if (_commandPicker != null && _inputBar.Text.Length == 0)
-        { _commandPicker?.Dispose(); _commandPicker = null; }
+        if (_commandPicker != null && ActiveInput.Text.Length == 0)
+            DismissCommandPicker();
     }
+
+    // ═══════════════════════════════════
+    //  Input Key Handler
+    // ═══════════════════════════════════
 
     private void OnInputKey(object? s, Key k)
     {
-        // Esc dismisses command picker
         if (k == Key.Esc && _commandPicker != null)
         {
-            _commandPicker?.Dispose(); _commandPicker = null;
-            _inputBar.SetFocus();
+            DismissCommandPicker();
             k.Handled = true;
             return;
         }
 
-        // Backspace: manual delete (Editor's native Backspace has issues on this build)
+        // Block Ctrl+C exit — use for copy instead
+        if (k == Key.C && k.IsCtrl && !k.IsAlt && !k.IsShift)
+        {
+            CopySelection();
+            k.Handled = true;
+            return;
+        }
+
+        // Input history navigation
+        if (k == Key.CursorUp && k.IsCtrl)
+        {
+            NavigateHistory(1);
+            k.Handled = true;
+            return;
+        }
+        if (k == Key.CursorDown && k.IsCtrl)
+        {
+            NavigateHistory(-1);
+            k.Handled = true;
+            return;
+        }
+
+        // Tab: toggle agent mode (plan ↔ build)
+        if (k == Key.Tab && !k.IsCtrl && !k.IsAlt)
+        {
+            _agentMode = _agentMode == "build" ? "plan" : "build";
+            _agentModeLabel.Text = $"[{_agentMode}]";
+            _agentModeLabel.SetScheme(new Scheme(
+                new TgAttribute(
+                    _agentMode == "plan" ? Color.BrightYellow : Color.BrightCyan,
+                    Color.Black)));
+            k.Handled = true;
+            return;
+        }
+
         if (k == Key.Backspace)
         {
-            var pos = _inputBar.CaretOffset;
-            var txt = _inputBar.Text;
+            var pos = ActiveInput.CaretOffset;
+            var txt = ActiveInput.Text;
             if (pos > 0 && txt.Length > 0)
             {
-                _inputBar.Text = txt.Remove(pos - 1, 1);
-                _inputBar.CaretOffset = Math.Max(0, pos - 1);
+                ActiveInput.Text = txt.Remove(pos - 1, 1);
+                ActiveInput.CaretOffset = Math.Max(0, pos - 1);
             }
             k.Handled = true;
             return;
         }
 
-        // Shift+Enter: insert newline in multiline mode
         if (k == Key.Enter && k.IsShift)
         {
-            var pos = _inputBar.CaretOffset;
-            var txt = _inputBar.Text;
-            _inputBar.Text = txt.Insert(pos, "\n");
-            _inputBar.CaretOffset = pos + 1;
+            var pos = ActiveInput.CaretOffset;
+            var txt = ActiveInput.Text;
+            ActiveInput.Text = txt.Insert(pos, "\n");
+            ActiveInput.CaretOffset = pos + 1;
             k.Handled = true;
             return;
         }
 
-        // Plain Enter: submit
         if (k != Key.Enter) return;
         k.Handled = true;
-        var text = _inputBar.Text.Trim();
+        var text = ActiveInput.Text.Trim();
         if (string.IsNullOrEmpty(text)) return;
 
-        // ── Handle command BEFORE transition (Editor is stable in home panel) ──
         if (text.StartsWith("/"))
         {
             var p = text.TrimStart('/').Split(' ');
-            _inputBar.Text = "";
+            ActiveInput.Text = "";
             ExecuteCommand(p[0].ToLowerInvariant());
             return;
         }
 
-        // ── Transition home→chat (after command handling, only for non-command text) ──
+        // Transition home → chat
         if (!_chatStarted)
         {
             _chatStarted = true;
             _homePanel.Visible = false;
             _chatPanel.Visible = true;
+            _chatPanel.SetNeedsLayout();
 
-            _homePanel.Remove(_inputBar);
-            _inputBar.Y = Pos.Bottom(_markdown);
-            _inputBar.Width = Dim.Fill();
-            _inputBar.X = 0;
-            _inputBar.Height = 3;
-            _chatPanel.Add(_inputBar);
-            var ml = new Label { X = 0, Y = Pos.Bottom(_inputBar), Text = _modelLabelText };
-            _chatPanel.Add(ml);
-            _inputBar.SetFocus();
-        }
-
-        _inputBar.Text = "";
-
-        if (text.StartsWith("/"))
-        {
-            var p = text.TrimStart('/').Split(' ');
-            switch (p[0].ToLowerInvariant())
-            {
-                case "new": _conv.Clear(); _markdown.Text = ""; break;
-                case "model": HandleModelCommand(); break;
-                case "retry":  AddMsg("System", "重发暂未实现"); break;
-                case "clear": _conv.Clear(); _markdown.Text = ""; break;
-                case "status":
-                    AddMsg("System", $"**状态**\n- 消息数: {_conv.Count}\n- 模型: {_modelLabelText}\n- 会话: {_sessionMgr.CurrentHandle?.Name ?? "—"}");
-                    break;
-                case "commands":
-                    AddMsg("System", "**可用命令**\n\n" +
-                        "`/model`  配置/查看模型\n" +
-                        "`/new`    新建会话\n" +
-                        "`/clear`  清空对话\n" +
-                        "`/retry`  重试上一条\n" +
-                        "`/status` 当前状态\n" +
-                        "`/help`   显示帮助\n" +
-                        "`/exit`   退出应用");
-                    break;
-                case "help":
-                    AddMsg("System", "输入 `/commands` 查看全部命令\n快捷键: `Ctrl+Q` 退出");
-                    break;
-                case "exit": _app.RequestStop(); break;
-                default: AddMsg("System", $"未知 `/{p[0]}`"); break;
-            }
+            _chatInputBar.Text = text;
+            _chatInputBar.SetFocus();
+            AddMsg("You", text);
+            _inputHistory.Add(text);
+            _historyIndex = -1;
+            _streamCts = new CancellationTokenSource();
+            _ = StreamAsync(text, _streamCts.Token);
+            _chatInputBar.Text = "";
             return;
         }
 
+        _chatInputBar.Text = "";
         AddMsg("You", text);
+        _inputHistory.Add(text);
+        _historyIndex = -1;
         _streamCts = new CancellationTokenSource();
         _ = StreamAsync(text, _streamCts.Token);
     }
 
+    // ═══════════════════════════════════
+    //  Copy Selection
+    // ═══════════════════════════════════
+
+    private void CopySelection()
+    {
+        try
+        {
+            var lastAI = _conv.LastOrDefault(m => m.StartsWith("**AI:**"));
+            if (lastAI != null)
+            {
+                var text = lastAI.Replace("**AI:** ", "").Trim();
+                _app.Clipboard?.SetClipboardData(text);
+            }
+        }
+        catch { }
+    }
+
+    // ═══════════════════════════════════
+    //  Messages & Markdown
+    // ═══════════════════════════════════
+
     private void AddMsg(string role, string md)
     {
         _conv.Add($"**{role}:** {md}");
-        _markdown.Text = string.Join("\n\n---\n\n", _conv);
+        _markdown.Text = string.Join("\n\n", _conv);
         _sidebarTokens.Text = $"消息: {_conv.Count}";
+        RefreshStats();
     }
+
+    private void UpdateMarkdown()
+    {
+        _markdown.Text = string.Join("\n\n", _conv);
+    }
+
+    // ═══════════════════════════════════
+    //  Stats & Sidebar
+    // ═══════════════════════════════════
+
+    private void RefreshStats()
+    {
+        _sidebarModel.Text = $"Token: {LTAI.Core.Configuration.UsageTracker.TotalTokens:N0}";
+        _sidebarCost.Text = $"费用: {LTAI.Core.Configuration.UsageTracker.CostDisplay}";
+        _sidebarCache.Text = $"缓存: {LTAI.Core.Configuration.UsageTracker.CacheHitRate:F0}%";
+
+        // Refresh todo list
+        var todos = TaskTools.TodoList();
+        if (todos == "No todos.")
+            _sidebarTodos.Text = "";
+        else
+        {
+            var todoLines = todos.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+                .Where(l => l.StartsWith("|") && !l.StartsWith("| #") && !l.StartsWith("|---"))
+                .Select(l =>
+                {
+                    var parts = l.Split('|', StringSplitOptions.RemoveEmptyEntries);
+                    if (parts.Length < 3) return "";
+                    var icon = parts[1].Trim().StartsWith("✅") ? "✓"
+                             : parts[1].Trim().StartsWith("🔄") ? "▸" : "○";
+                    var name = parts[2].Trim();
+                    return $" {icon} {name}";
+                })
+                .Where(s => !string.IsNullOrEmpty(s))
+                .Take(4)
+                .ToList();
+            _sidebarTodos.Text = todoLines.Count > 0
+                ? "待办\n" + string.Join("\n", todoLines)
+                : "";
+        }
+
+        // Refresh modified files
+        if (_modifiedFiles.Count > 0)
+        {
+            var fileLines = _modifiedFiles.TakeLast(4)
+                .Select(f => $" ✎ {Path.GetFileName(f)}")
+                .ToList();
+            _sidebarFiles.Text = "文件\n" + string.Join("\n", fileLines);
+        }
+        else
+            _sidebarFiles.Text = "";
+    }
+
+    // ═══════════════════════════════════
+    //  Streaming
+    // ═══════════════════════════════════
 
     private async Task StreamAsync(string input, CancellationToken ct)
     {
         var handle = _sessionMgr.CurrentHandle;
         _streamBuffer = "";
-        _app.Invoke(() => { _spinner.Visible = true; _spinner.AutoSpin = true; _sidebarStatus.Text = "状态: 思考中..."; });
+        _isStreaming = true;
+        _app.Invoke(() =>
+        {
+            _spinner.Visible = true;
+            _spinner.AutoSpin = true;
+            _sidebarStatus.Text = "状态: 思考中...";
+            RefreshStats();
+        });
         _conv.Add("**AI:** ");
-        _markdown.Text = string.Join("\n\n---\n\n", _conv);
+        UpdateMarkdown();
+        var tokenCount = 0;
         try
         {
             await foreach (var u in _chat.ChatStreamingAsync(input, handle).WithCancellation(ct))
@@ -357,44 +608,210 @@ public sealed class MainWindow : Window
                 if (ct.IsCancellationRequested) break;
                 var t = u.Text ?? ""; if (t.Length == 0) continue;
                 _streamBuffer += t;
-                _app.Invoke(() => { if (_conv.Count > 0) { _conv[^1] = $"**AI:** {_streamBuffer}"; _markdown.Text = string.Join("\n\n---\n\n", _conv); } });
+                tokenCount++;
+
+                // Track modified files
+                if (t.Contains("正在调用") && (t.Contains("Edit") || t.Contains("Write") || t.Contains("Create")))
+                {
+                    var fileMatch = System.Text.RegularExpressions.Regex.Match(_streamBuffer,
+                        @"(?:编辑|写入|创建)\s+`?([^\s`]+\.\w+)`?");
+                    if (fileMatch.Success)
+                    {
+                        var filePath = fileMatch.Groups[1].Value;
+                        if (!_modifiedFiles.Contains(filePath))
+                            _modifiedFiles.Add(filePath);
+                    }
+                }
+
+                var isToolMsg = t.Contains("正在调用") || t.Contains("返回:");
+
+                // Throttled UI update
+                var now = Stopwatch.GetTimestamp();
+                var elapsed = (now - _lastUIUpdate) * 1000.0 / Stopwatch.Frequency;
+                if (elapsed >= UI_THROTTLE_MS || tokenCount % 3 == 0)
+                {
+                    _lastUIUpdate = now;
+                    _app.Invoke(() =>
+                    {
+                        if (isToolMsg)
+                        {
+                            var trimmed = _streamBuffer.TrimEnd();
+                            var lastNewline = trimmed.LastIndexOf('\n');
+                            var statusLine = lastNewline >= 0 ? trimmed[(lastNewline + 1)..] : trimmed;
+                            _toolStatus.Text = statusLine;
+                            _toolStatus.Visible = true;
+                            _spinner.AutoSpin = true;
+                        }
+                        else
+                        {
+                            _toolStatus.Visible = false;
+                        }
+                        if (_conv.Count > 0)
+                        {
+                            // Show blinking cursor during streaming
+                            _conv[^1] = $"**AI:** {_streamBuffer}▊";
+                            _markdown.Text = string.Join("\n\n", _conv);
+                            // Auto-scroll to bottom
+                            var ch = _markdown.GetContentSize().Height;
+                            if (ch > 0)
+                                _markdown.Viewport = _markdown.Viewport with { Y = Math.Max(0, ch - _markdown.Viewport.Height) };
+                        }
+                    });
+                }
             }
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) { _app.Invoke(() => AddMsg("System", $"⚠ {ex.Message}")); }
         finally
         {
-            _app.Invoke(() => { _spinner.Visible = false; _spinner.AutoSpin = false; _sidebarStatus.Text = "状态: 就绪"; });
+            _isStreaming = false;
+            _app.Invoke(() =>
+            {
+                _spinner.Visible = false;
+                _spinner.AutoSpin = false;
+                _toolStatus.Visible = false;
+                // Remove cursor and show final text
+                if (_conv.Count > 0)
+                {
+                    _conv[^1] = $"**AI:** {_streamBuffer}";
+                    _markdown.Text = string.Join("\n\n", _conv);
+                }
+                _sidebarStatus.Text = "状态: 就绪";
+                RefreshStats();
+            });
             if (!ct.IsCancellationRequested) await _sessionMgr.SaveSessionAsync();
         }
     }
+
+    // ═══════════════════════════════════
+    //  Commands
+    // ═══════════════════════════════════
 
     private void ExecuteCommand(string cmd)
     {
         switch (cmd)
         {
-            case "new":   _conv.Clear(); _markdown.Text = ""; return;
-            case "clear": _conv.Clear(); _markdown.Text = ""; return;
-            case "retry": AddMsg("System", "重发暂未实现"); return;
-            case "model": HandleModelCommand(); return;
+            case "new":
+                _conv.Clear();
+                UpdateMarkdown();
+                _sidebarTokens.Text = "消息: 0";
+                return;
+            case "clear":
+                _conv.Clear();
+                UpdateMarkdown();
+                _sidebarTokens.Text = "消息: 0";
+                return;
+            case "sessions":
+                ShowSessionPicker();
+                return;
+            case "retry":
+                AddMsg("System", "重发暂未实现");
+                return;
+            case "model":
+                HandleModelCommand();
+                return;
             case "status":
-                AddMsg("System", $"**状态**\n- 消息数: {_conv.Count}\n- 模型: {_modelLabelText}\n- 会话: {_sessionMgr.CurrentHandle?.Name ?? "—"}");
+                AddMsg("System", $"**状态**\n- 消息数: {_conv.Count}\n- 模型: {_modelLabelText}\n- 会话: {_sessionMgr.CurrentHandle?.Name ?? "—"}\n- 工具调用: {LTAI.Core.Configuration.UsageTracker.ToolCalls}");
                 return;
             case "commands":
-                AddMsg("System", "**可用命令**\n\n`/model` 配置模型 `/new` 新建 `/clear` 清空 `/theme` 切换主题 `/retry` 重试 `/status` 状态 `/help` 帮助 `/exit` 退出");
+                AddMsg("System", "**可用命令**\n\n`/model` 配置模型\n`/new` 新建会话\n`/sessions` 历史会话\n`/clear` 清空对话\n`/theme` 切换主题\n`/retry` 重试\n`/status` 状态\n`/help` 帮助\n`/exit` 退出");
                 return;
             case "theme":
-                var themeNames = Terminal.Gui.Configuration.ThemeManager.GetThemeNames().ToList();
-                var curTheme = Terminal.Gui.Configuration.ThemeManager.Theme;
-                var nextTheme = themeNames.FirstOrDefault(n => n != curTheme) ?? curTheme;
-                Terminal.Gui.Configuration.ThemeManager.Theme = nextTheme;
-                Terminal.Gui.Configuration.ConfigurationManager.Apply();
-                AddMsg("System", $"主题: {curTheme} → {nextTheme}");
+                try
+                {
+                    var themeNames = Terminal.Gui.Configuration.ThemeManager.GetThemeNames().ToList();
+                    var curTheme = Terminal.Gui.Configuration.ThemeManager.Theme;
+                    var nextTheme = themeNames.FirstOrDefault(n => n != curTheme) ?? curTheme;
+                    Terminal.Gui.Configuration.ThemeManager.Theme = nextTheme;
+                    if (!Terminal.Gui.Configuration.ConfigurationManager.IsEnabled)
+                        Terminal.Gui.Configuration.ConfigurationManager.Enable(Terminal.Gui.Configuration.ConfigLocations.None);
+                    Terminal.Gui.Configuration.ConfigurationManager.Apply();
+                    AddMsg("System", $"主题: {curTheme} → {nextTheme}");
+                }
+                catch (Exception ex) { AddMsg("System", $"主题切换失败: {ex.Message}"); }
                 return;
-            case "help":   AddMsg("System", "输入 `/commands` 查看全部命令"); return;
-            case "exit":   _app.RequestStop(); return;
-            default:       AddMsg("System", $"未知 `/{cmd}`"); return;
+            case "help":
+                AddMsg("System", "输入 `/commands` 查看全部命令\n快捷键: `Ctrl+T` TextPad · `Ctrl+Q` 退出\n`Ctrl+↑/↓` 翻阅历史 · `Shift+Enter` 换行");
+                return;
+            case "exit":
+                _app.RequestStop();
+                return;
+            default:
+                AddMsg("System", $"未知 `/{cmd}`");
+                return;
         }
+    }
+
+    private void ShowSessionPicker()
+    {
+        var sessions = _sessionMgr.ListSessions();
+        if (sessions.Length == 0)
+        {
+            AddMsg("System", "暂无历史会话");
+            return;
+        }
+
+        var dlg = new Dialog
+        {
+            Title = "历史会话",
+            Width = 50, Height = Math.Min(sessions.Length + 4, 15),
+            X = Pos.Center(), Y = Pos.Center(),
+        };
+
+        var list = new ListView
+        {
+            X = 0, Y = 0,
+            Width = Dim.Fill(), Height = Dim.Fill(),
+        };
+        var sessionNames = sessions.Reverse().ToArray();
+        list.SetSource(new System.Collections.ObjectModel.ObservableCollection<string>(
+            sessionNames.Select(s => s.Name).ToList()));
+
+        list.KeyDown += (s, k) =>
+        {
+            if (k == Key.Enter)
+            {
+                var idx = list.SelectedItem ?? 0;
+                if (idx >= 0 && idx < sessionNames.Length)
+                {
+                    LoadSession(sessionNames[idx].Name);
+                    dlg.RequestStop();
+                }
+                k.Handled = true;
+            }
+            if (k == Key.Esc) { dlg.RequestStop(); k.Handled = true; }
+        };
+
+        dlg.Add(list);
+        var cancelBtn = new Button { Text = "_取消" };
+        cancelBtn.Accepting += (_, _) => dlg.RequestStop();
+        dlg.AddButton(cancelBtn);
+        dlg.Visible = true;
+        Add(dlg);
+        list.SetFocus();
+    }
+
+    private void LoadSession(string sessionName)
+    {
+        try
+        {
+            var h = _sessionMgr.LoadSession(sessionName);
+            if (h?.Messages is { Count: > 0 } msgs)
+            {
+                _conv.Clear();
+                foreach (var m in msgs)
+                    _conv.Add($"**{(m.Role == ChatRole.User ? "You" : "AI")}:** {m.Text ?? ""}");
+                _chatStarted = true;
+                _homePanel.Visible = false;
+                _chatPanel.Visible = true;
+                _chatPanel.SetNeedsLayout();
+                _chatInputBar.SetFocus();
+                UpdateMarkdown();
+                _sidebarTokens.Text = $"消息: {_conv.Count}";
+                AddMsg("System", $"已加载会话: {sessionName}");
+            }
+        }
+        catch (Exception ex) { AddMsg("System", $"加载会话失败: {ex.Message}"); }
     }
 
     private void HandleModelCommand()
@@ -415,7 +832,12 @@ public sealed class MainWindow : Window
         {
             if (!File.Exists(path)) return;
             var json = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(path));
-            var l1 = json?["LTAI"]?["AI"]?["L1"];
+            var ai = json?["LTAI"]?["AI"] as System.Text.Json.Nodes.JsonObject;
+            var l1Key = ai != null
+                ? ((System.Collections.Generic.IDictionary<string, System.Text.Json.Nodes.JsonNode?>)ai)
+                    .Keys.FirstOrDefault(k => string.Equals(k, "L1", StringComparison.OrdinalIgnoreCase))
+                : null;
+            var l1 = l1Key != null ? ai![l1Key] : null;
             var provider = l1?["Provider"]?.GetValue<string>() ?? "";
             var model = l1?["Model"]?.GetValue<string>() ?? "";
             _modelLabelText = !string.IsNullOrEmpty(provider) ? $"L1: {provider} / {model}" : "未配置模型 (使用 /model 配置)";
@@ -436,18 +858,30 @@ public sealed class MainWindow : Window
                 _chatStarted = true;
                 _homePanel.Visible = false;
                 _chatPanel.Visible = true;
-                _homePanel.Remove(_inputBar);
-                _inputBar.Y = Pos.Bottom(_markdown);
-                _inputBar.Width = Dim.Fill();
-                _inputBar.X = 0;
-                _chatPanel.Add(_inputBar);
-                _inputBar.SetFocus();
+                _chatPanel.SetNeedsLayout();
+                _chatInputBar.SetFocus();
                 foreach (var m in msgs)
                     _conv.Add($"**{(m.Role == ChatRole.User ? "You" : "AI")}:** {m.Text ?? ""}");
-                _markdown.Text = string.Join("\n\n---\n\n", _conv);
+                UpdateMarkdown();
                 _sidebarTokens.Text = $"消息: {_conv.Count}";
             }
         }
         catch { }
+    }
+
+    private static string GetGitBranch()
+    {
+        try
+        {
+            var psi = new ProcessStartInfo("git", "rev-parse --abbrev-ref HEAD")
+            {
+                RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true,
+                WorkingDirectory = Directory.GetCurrentDirectory(),
+            };
+            using var p = Process.Start(psi);
+            var branch = p?.StandardOutput.ReadToEnd().Trim();
+            return string.IsNullOrEmpty(branch) ? "—" : branch;
+        }
+        catch { return "—"; }
     }
 }
