@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using LTAI.AI;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
@@ -10,13 +11,18 @@ public sealed class L3OnDemandProvider : AIContextProvider
 {
     private const int MaxDrawers = 10;
     private readonly PalaceStore _store;
+    private readonly EntropyTracker? _entropy;
     private readonly ILogger<L3OnDemandProvider>? _logger;
+    private readonly ConcurrentDictionary<string, (DateTime Expiry, AIContext Context)> _cache = new();
+    private static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(5);
 
     public L3OnDemandProvider(
         PalaceStore store,
+        EntropyTracker? entropy = null,
         ILogger<L3OnDemandProvider>? logger = null)
     {
         _store = store ?? throw new ArgumentNullException(nameof(store));
+        _entropy = entropy;
         _logger = logger;
     }
 
@@ -27,10 +33,25 @@ public sealed class L3OnDemandProvider : AIContextProvider
     {
         try
         {
+            // Skip on-demand memory when ExpertRouterAgent already injected aggregated context
+            var msgs = context.AIContext?.Messages;
+            if (msgs != null)
+            {
+                foreach (var m in msgs.Reverse())
+                {
+                    if (m.Role == ChatRole.System && m.Text?.StartsWith("## Expert Context") == true)
+                        return new AIContext();
+                }
+            }
+
             var wing = WingClassifier.ClassifyFromMessages(context.AIContext?.Messages);
             if (wing == null) return new AIContext();
 
-            var drawers = _store.SearchByWing(wing, MaxDrawers);
+            if (_cache.TryGetValue(wing, out var cached) && DateTime.UtcNow < cached.Expiry)
+                return cached.Context;
+
+            var maxDrawers = MaxDrawers + (int)((_entropy?.GetUncertaintyBoost(wing) ?? 0) * 10);
+            var drawers = _store.SearchByWing(wing, Math.Max(MaxDrawers, maxDrawers));
             if (drawers.Count == 0) return new AIContext();
 
             var lines = new List<string> { $"## L3 — On-Demand ({wing})\n<memory>" };
@@ -38,8 +59,7 @@ public sealed class L3OnDemandProvider : AIContextProvider
 
             foreach (var d in drawers)
             {
-                var snippet = d.Content.Replace('\n', ' ').Trim();
-                if (snippet.Length > 250) snippet = snippet[..247] + "...";
+                var snippet = MemoryCompressor.SmartTruncate(d.Content, 250);
                 var entry = $"  [{d.Room}] {snippet}";
 
                 if (totalLen + entry.Length > MemoryBudget.L3MaxTokens * 4) break;
@@ -50,10 +70,12 @@ public sealed class L3OnDemandProvider : AIContextProvider
 
             _logger?.LogDebug("L3OnDemand: {Count} drawers for wing={Wing}, ~{Tokens}t",
                 drawers.Count, wing, totalLen / 4);
-            return new AIContext
+            var result = new AIContext
             {
                 Messages = [new ChatMessage(ChatRole.System, string.Join("\n", lines))],
             };
+            _cache[wing] = (DateTime.UtcNow + CacheTtl, result);
+            return result;
         }
         catch (Exception ex)
         {

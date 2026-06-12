@@ -18,6 +18,7 @@ public sealed class DocumentIndexer
 {
     private readonly KgStore _kg;
     private readonly KnowledgeExtractor _extractor;
+    private readonly DocumentPageAnnotator? _annotator;
     private readonly ILogger<DocumentIndexer> _logger;
 
     /// <summary>
@@ -66,10 +67,13 @@ public sealed class DocumentIndexer
         "aot",
     };
 
-    public DocumentIndexer(KgStore kg, KnowledgeExtractor extractor, ILogger<DocumentIndexer> logger)
+    public DocumentIndexer(KgStore kg, KnowledgeExtractor extractor,
+        ILogger<DocumentIndexer> logger,
+        DocumentPageAnnotator? annotator = null)
     {
         _kg = kg;
         _extractor = extractor;
+        _annotator = annotator;
         _logger = logger;
     }
 
@@ -96,41 +100,19 @@ public sealed class DocumentIndexer
         {
             try
             {
-                // Layer 1: Path screen
                 var rel = Path.GetRelativePath(dir, file).Replace('\\', '/');
-                var pathVerdict = ContentFilter.ScreenPath(rel);
-                if (pathVerdict != FilterVerdict.Allowed)
+                var result = await IndexFileAsync(file, rel, ct).ConfigureAwait(false);
+                if (result.Success)
                 {
+                    if (result.Ok > 0) Interlocked.Add(ref ok, result.Ok);
+                }
+                else if (result.Error?.StartsWith("Skipped") == true)
                     Interlocked.Increment(ref skipped);
-                    _logger.LogTrace("IndexDirectory: skipped '{Path}' ({Verdict})", rel, pathVerdict);
-                    return;
-                }
-
-                var content = await File.ReadAllTextAsync(file, ct).ConfigureAwait(false);
-
-                // Layer 2: Content screen
-                var contentVerdict = ContentFilter.ScreenContent(content, rel);
-                if (contentVerdict != FilterVerdict.Allowed)
+                else
                 {
-                    Interlocked.Increment(ref skipped);
-                    _logger.LogTrace("IndexDirectory: skipped '{Path}' ({Verdict})", rel, contentVerdict);
-                    return;
+                    errors.Add($"{file}: {result.Error}");
+                    Interlocked.Increment(ref fail);
                 }
-
-                if (string.IsNullOrWhiteSpace(content)) return;
-
-                var title = Path.GetFileNameWithoutExtension(file);
-                var chunks = SemanticChunker.Chunk(content);
-
-                foreach (var chunk in chunks)
-                {
-                    var extId = $"{rel}#{chunk.GetHashCode():x}";
-                    await _kg.UpsertNode(extId, "document", title,
-                        source: rel, props: new() { ["text"] = chunk }).ConfigureAwait(false);
-                }
-
-                _logger.LogDebug("Indexed {File}: {Chunks} chunks", rel, chunks.Count);
-                Interlocked.Increment(ref ok);
             }
             catch (Exception ex)
             {
@@ -179,14 +161,44 @@ public sealed class DocumentIndexer
 
             var title = Path.GetFileNameWithoutExtension(filePath);
             var chunks = SemanticChunker.Chunk(content);
+            var docId = $"{rel}/gist";
 
+            // SlideAgent-inspired: generate document-level gist (global agent)
+            var gist = _annotator != null
+                ? await _annotator.GenerateGistAsync(title, content, ct).ConfigureAwait(false)
+                : null;
+
+            // Store gist node
+            if (gist != null)
+            {
+                await _kg.UpsertNode(docId, "document_gist", title,
+                    source: rel, props: new() { ["gist"] = gist, ["chunk_count"] = chunks.Count }).ConfigureAwait(false);
+            }
+
+            long? gistNodeId = null;
+            var gistNode = await _kg.GetNodeByExtId(docId).ConfigureAwait(false);
+            if (gistNode != null) gistNodeId = gistNode.Id;
+
+            var chunkIds = new List<long>();
             foreach (var chunk in chunks)
             {
                 var extId = $"{rel}#{chunk.GetHashCode():x}";
-                await _kg.UpsertNode(extId, "document", title,
-                    source: rel, props: new() { ["text"] = chunk }).ConfigureAwait(false);
+                // SlideAgent-inspired: classify chunk semantic role (element agent)
+                var role = _annotator?.ClassifyChunk(chunk) ?? "chunk";
+                var props = new Dictionary<string, object?> { ["text"] = chunk, ["role"] = role };
+                if (gist != null) props["gist"] = gist;
+
+                var nodeId = await _kg.UpsertNode(extId, "document", title,
+                    source: rel, props: props).ConfigureAwait(false);
+                chunkIds.Add(nodeId);
+
+                // Edge: chunk belongs to document gist
+                if (gistNodeId.HasValue)
+                    await _kg.AddEdge(gistNodeId.Value, nodeId, "contains", 0.8).ConfigureAwait(false);
             }
 
+            _logger.LogDebug("Indexed {File}: {Chunks} chunks (gist={HasGist}, roles annotated)",
+                rel, chunks.Count, gist != null);
             return new IndexResult(chunks.Count, 0, null);
         }
         catch (Exception ex)

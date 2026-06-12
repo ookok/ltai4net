@@ -829,6 +829,9 @@ public static class ServiceCollectionExtensions
             logger?.LogInformation("L3: {Provider}/{Model}{Reuse}", primaryProvider.Name, l3Model,
                 l3Model == l1Model ? " (reuses L1)" : "");
 
+            // Expose L3 as a keyed IChatClient so ExpertRouter can use it for lightweight routing decisions
+            services.AddKeyedSingleton<IChatClient>("l3", l3Client);
+
             return router;
         });
 

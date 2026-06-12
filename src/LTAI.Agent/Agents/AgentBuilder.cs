@@ -101,7 +101,9 @@ internal static partial class AgentBuilder
         // HarnessAgent's built-in providers (FileAccessProvider, BackgroundAgentsProvider).
         var embedder = sp.GetRequiredService<LTAI.AI.EmbeddingClient>();
         var toolEmbeddingCache = sp.GetService<LTAI.AI.ToolEmbeddingCache>();
-        guardedLlm = new LTAI.Agent.Clients.ToolFilteringChatClient(guardedLlm, embedder, toolEmbeddingCache);
+        var queryEmbeddingCache = sp.GetService<Experts.QueryEmbeddingCache>();
+        var l3Client = sp.GetKeyedService<IChatClient>("l3");
+        guardedLlm = new LTAI.Agent.Clients.ToolFilteringChatClient(guardedLlm, embedder, toolEmbeddingCache, queryEmbeddingCache, l3Client);
 
         var tools = new ToolSet();
         var httpFactory = sp.GetRequiredService<IHttpClientFactory>();

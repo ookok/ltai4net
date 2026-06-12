@@ -9,18 +9,24 @@ namespace LTAI.Agent.Memory;
 public sealed class L1EssentialProvider : AIContextProvider
 {
     private const int MaxDrawers = 15;
-    private const float MinImportance = 0.1f; // F9: confidence floor — skip very low importance entries
+    private const float MinImportance = 0.1f;
     private readonly PalaceStore _store;
     private readonly string _agentId;
+    private readonly EntropyTracker? _entropy;
     private readonly ILogger<L1EssentialProvider>? _logger;
+    private AIContext? _cached;
+    private DateTime _cacheExpiry = DateTime.MinValue;
+    private static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(30);
 
     public L1EssentialProvider(
         PalaceStore store,
         string agentId = "default",
+        EntropyTracker? entropy = null,
         ILogger<L1EssentialProvider>? logger = null)
     {
         _store = store ?? throw new ArgumentNullException(nameof(store));
         _agentId = agentId;
+        _entropy = entropy;
         _logger = logger;
     }
 
@@ -29,6 +35,9 @@ public sealed class L1EssentialProvider : AIContextProvider
     protected override ValueTask<AIContext> ProvideAIContextAsync(
         InvokingContext context, CancellationToken ct = default)
     {
+        if (_cached != null && DateTime.UtcNow < _cacheExpiry)
+            return ValueTask.FromResult(_cached);
+
         try
         {
             var moments = _store.GetEssentialMoments(MaxDrawers, _agentId);
@@ -39,11 +48,12 @@ public sealed class L1EssentialProvider : AIContextProvider
 
             foreach (var d in moments)
             {
-                // F9: confidence floor — skip very low importance entries
-                if (d.Importance < MinImportance) continue;
+                // Entropy-driven importance floor: uncertain domains pull in lower-importance memories
+                var effectiveMinImportance = (float)(MinImportance - Math.Max(0,
+                    _entropy?.GetUncertaintyBoost(d.Wing) ?? 0) * 0.3);
+                if (d.Importance < effectiveMinImportance) continue;
 
-                var snippet = d.Content.Replace('\n', ' ').Trim();
-                if (snippet.Length > 200) snippet = snippet[..197] + "...";
+                var snippet = MemoryCompressor.SmartTruncate(d.Content, 200);
                 var entry = $"  [{d.Wing}/{d.Room}] {snippet} (imp:{d.Importance:F1})";
 
                 if (totalLen + entry.Length > MemoryBudget.L1MaxTokens * 4) break;
@@ -53,10 +63,13 @@ public sealed class L1EssentialProvider : AIContextProvider
             lines.Add("</memory>");
 
             _logger?.LogDebug("L1Essential: {Count} moments, ~{Tokens}t", moments.Count, totalLen / 4);
-            return ValueTask.FromResult(new AIContext
+            var result = new AIContext
             {
                 Messages = [new ChatMessage(ChatRole.System, string.Join("\n", lines))],
-            });
+            };
+            _cached = result;
+            _cacheExpiry = DateTime.UtcNow + CacheTtl;
+            return ValueTask.FromResult(result);
         }
         catch (Exception ex)
         {

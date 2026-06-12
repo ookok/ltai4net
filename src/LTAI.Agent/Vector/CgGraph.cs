@@ -212,15 +212,42 @@ public sealed class CgGraph : AIContextProvider
     // ═══════════════════════════════════════════
 
     public async Task<string> QueryAsync(string query, int topK = 5, CancellationToken ct = default)
+        => await QueryByNamespaceAsync(query, null, topK, ct).ConfigureAwait(false);
+
+    /// <summary>
+    /// Query code graph scoped to a specific namespace prefix (e.g. "LTAI.Agent").
+    /// When namespace is null, searches all namespaces (same as QueryAsync).
+    /// </summary>
+    public async Task<string> QueryByNamespaceAsync(string query, string? namespacePrefix,
+        int topK = 5, CancellationToken ct = default)
     {
         if (!_built) return "Code graph not built — run /build command first.";
 
         var keywords = await RewriteQueryAsync(query, ct).ConfigureAwait(false);
         if (string.IsNullOrWhiteSpace(keywords)) keywords = query;
 
-        _logger.LogInformation("CgGraph: \"{Q}\" → keywords: \"{K}\"", query, keywords);
+        _logger.LogInformation("CgGraph: \"{Q}\" → keywords: \"{K}\"{Ns}", query, keywords,
+            namespacePrefix != null ? $" (ns: {namespacePrefix})" : "");
 
-        var ftsHits = await _store.SearchFts(keywords, topN: topK * 2).ConfigureAwait(false);
+        var ftsHits = await _store.SearchFts(keywords, topN: topK * 3).ConfigureAwait(false);
+
+        // Namespace filter: when a prefix is specified, only keep hits
+        // whose node namespace matches (prefix match, e.g. "LTAI.Agent" matches "LTAI.Agent.Vector")
+        if (namespacePrefix != null)
+        {
+            var filtered = new List<(long nodeId, string text, double rank, string kind)>();
+            foreach (var hit in ftsHits)
+            {
+                var node = await _store.GetNode(hit.nodeId).ConfigureAwait(false);
+                if (node?.Namespace != null &&
+                    (node.Namespace == namespacePrefix ||
+                     node.Namespace.StartsWith(namespacePrefix + ".", StringComparison.OrdinalIgnoreCase)))
+                {
+                    filtered.Add(hit);
+                }
+            }
+            ftsHits = filtered;
+        }
         if (ftsHits.Count == 0) return "No relevant code found.";
 
         var seen = new HashSet<long>();
@@ -261,6 +288,33 @@ public sealed class CgGraph : AIContextProvider
         return string.Join("\n", lines);
     }
 
+    /// <summary>
+    /// Discover distinct namespaces in the code graph with their node counts.
+    /// Used by Expert layer to create per-namespace code graph experts.
+    /// Only returns namespaces with ≥ 5 nodes (filtering noise).
+    /// </summary>
+    public async Task<IReadOnlyList<(string Namespace, int NodeCount)>> GetNamespacesAsync(
+        CancellationToken ct = default)
+    {
+        if (!_built) return [];
+        try
+        {
+            var allNodes = await _store.GetAllNodes().ConfigureAwait(false);
+            return allNodes
+                .Where(n => !string.IsNullOrEmpty(n.Namespace))
+                .GroupBy(n => n.Namespace!)
+                .Select(g => (g.Key, g.Count()))
+                .Where(x => x.Item2 >= 5)
+                .OrderByDescending(x => x.Item2)
+                .Take(30)
+                .ToList();
+        }
+        catch
+        {
+            return [];
+        }
+    }
+
     // ═══════════════════════════════════════════
     //  AIContextProvider
     // ═══════════════════════════════════════════
@@ -282,6 +336,16 @@ public sealed class CgGraph : AIContextProvider
         // Skip code search for casual chat
         if (!KbGraph.IsKnowledgeQuery(userMsg.Text))
             return ctx.AIContext!;
+
+        // Skip code graph query when ExpertRouterAgent already injected aggregated context
+        foreach (var m in msgs.Reverse())
+        {
+            if (m.Role == ChatRole.System && m.Text?.StartsWith("## Expert Context") == true)
+            {
+                _logger.LogDebug("CgGraph: skipped — ExpertRouterAgent already injected context");
+                return ctx.AIContext!;
+            }
+        }
 
         try
         {

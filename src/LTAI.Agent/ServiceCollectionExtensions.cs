@@ -6,6 +6,9 @@ using LTAI.Agent.Learning;
 using LTAI.Agent.Memory;
 using LTAI.Agent.Services;
 using LTAI.Agent.Tools;
+using LTAI.Agent.Experts;
+using LTAI.Agent.Experts.Adapters;
+using LTAI.Agent.Experts.Routing;
 using LTAI.Agent.Vector;
 using LTAI.Agent.Workflows;
 using LTAI.Core.Configuration;
@@ -134,6 +137,90 @@ public static class ServiceCollectionExtensions
             return new CgGraph(store, llm, embedder, logger, Directory.GetCurrentDirectory());
         });
 
+        // Step 2d: MoE Expert layer — wraps KG, code graph, documents, tools, and skills
+        // as IExpertModule so the ExpertRouter can treat them uniformly for
+        // sparse activation (top-K selection + parallel query + aggregation).
+
+        // P16.1: Request-scoped query→embedding cache eliminates duplicate ONNX calls
+        // within a single turn (ExpertRegistry + ToolFilteringChatClient both embed
+        // the same query text — this cache makes the second call instant).
+        services.AddSingleton<QueryEmbeddingCache>();
+        services.AddSingleton<IExpertModule, KbGraphExpert>(sp =>
+        {
+            var kbGraph = sp.GetRequiredService<KbGraph>();
+            var kgStore = sp.GetRequiredService<KgStore>();
+            return new KbGraphExpert(kbGraph, kgStore);
+        });
+        services.AddSingleton<IExpertModule>(sp =>
+            new ShardedCgGraphExpert(sp.GetRequiredService<CgGraph>()));
+        services.AddSingleton<IExpertModule>(sp =>
+            DocumentExpert.CreateApiDocExpert(sp.GetRequiredService<KbGraph>()));
+        services.AddSingleton<IExpertModule>(sp =>
+            DocumentExpert.CreateRunbookExpert(sp.GetRequiredService<KbGraph>()));
+        services.AddSingleton<IExpertModule>(sp =>
+            DocumentExpert.CreateDesignDocExpert(sp.GetRequiredService<KbGraph>()));
+        services.AddSingleton<IExpertModule, ToolExpert>(sp =>
+            new ToolExpert(sp.GetRequiredService<LTAI.AI.EmbeddingClient>()));
+        services.AddSingleton<IExpertModule, SkillExpert>(sp =>
+        {
+            var skillsDir = new[] {
+                Path.Combine(AppContext.BaseDirectory, "skills"),
+                Path.Combine(Directory.GetCurrentDirectory(), "skills"),
+            }.FirstOrDefault(Directory.Exists) ?? Path.Combine(Directory.GetCurrentDirectory(), "skills");
+            Directory.CreateDirectory(skillsDir);
+            return new SkillExpert(skillsDir);
+        });
+        services.AddSingleton<ExpertRegistry>(sp =>
+        {
+            var experts = sp.GetRequiredService<IEnumerable<IExpertModule>>();
+            var embedder = sp.GetRequiredService<LTAI.AI.EmbeddingClient>();
+            var cache = sp.GetService<ToolEmbeddingCache>();
+            var queryCache = sp.GetService<QueryEmbeddingCache>();
+            var logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger<ExpertRegistry>();
+            return new ExpertRegistry(experts, embedder, cache, queryCache, logger);
+        });
+
+        // Step 2e: MoE routing pipeline (Router → FanOut → Aggregator)
+        services.AddSingleton<ExpertRouter>(sp =>
+        {
+            var registry = sp.GetRequiredService<ExpertRegistry>();
+            var logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger<ExpertRouter>();
+            return new ExpertRouter(registry, logger);
+        });
+        services.AddSingleton<ParallelFanOutExecutor>(sp =>
+        {
+            var logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger<ParallelFanOutExecutor>();
+            return new ParallelFanOutExecutor(logger);
+        });
+        services.AddSingleton<ExpertAggregator>(sp =>
+        {
+            var embedder = sp.GetService<LTAI.AI.EmbeddingClient>();
+            return new ExpertAggregator(embedder);
+        });
+        services.AddSingleton<ExpertFeedbackLogger>(sp =>
+        {
+            var logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger<ExpertFeedbackLogger>();
+            return new ExpertFeedbackLogger(logger);
+        });
+        services.AddSingleton<EntropyTracker>(sp =>
+        {
+            var feedback = sp.GetService<ExpertFeedbackLogger>();
+            var logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger<EntropyTracker>();
+            return new EntropyTracker(feedback, logger);
+        });
+        services.AddSingleton<MemoryCompressor>(sp =>
+        {
+            var l3 = sp.GetKeyedService<IChatClient>("l3");
+            var logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger<MemoryCompressor>();
+            return new MemoryCompressor(l3, logger);
+        });
+        services.AddSingleton<FactExtractor>(sp =>
+        {
+            var l3 = sp.GetKeyedService<IChatClient>("l3");
+            var logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger<FactExtractor>();
+            return new FactExtractor(l3, logger);
+        });
+
         // Step 3: Workflow orchestrator (with P7.7 decision-tree routing)
         // P12.1: pass ToolEmbeddingCache so the 10-agent description embeddings
         // are batched + persisted; cold-start 0 ONNX calls after first run.
@@ -184,6 +271,7 @@ public static class ServiceCollectionExtensions
         services.AddHostedService<AutoTunerService>();
         services.AddHostedService<WorkflowWatcherHostedService>();
         services.AddHostedService<LTAI.Agent.Services.GraphInitService>();
+        services.AddHostedService<LTAI.Agent.Services.WarmupService>();
 
         // Step 3a: DevUI shared service (P9.0)
         // Used by LTAI.Web (DevUI REST surface), LTAI.TUI (/dashboard),
@@ -248,6 +336,12 @@ public static class ServiceCollectionExtensions
         });
 
         // Step 3d: Knowledge indexing pipeline (semantic chunking + unified ingest)
+        services.AddSingleton<LTAI.Agent.Indexing.DocumentPageAnnotator>(sp =>
+        {
+            var l3 = sp.GetKeyedService<IChatClient>("l3");
+            var logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger<LTAI.Agent.Indexing.DocumentPageAnnotator>();
+            return new LTAI.Agent.Indexing.DocumentPageAnnotator(l3, logger);
+        });
         services.AddSingleton<LTAI.Agent.Indexing.DocumentIndexer>();
         services.AddSingleton<LTAI.Agent.Indexing.IndexQueueWorker>(sp =>
         {
@@ -392,6 +486,14 @@ public static class ServiceCollectionExtensions
                 .ToDictionary(a => a.Name!, StringComparer.OrdinalIgnoreCase);
             var wf = sp.GetRequiredService<AgentWorkflows>();
             var chat = all["LTAI-Chat"];
+            // P16: MoE Expert routing layer — wraps LTAI-Chat for knowledge-intensive queries.
+            // Only activates when IsKnowledgeQuery returns true; casual chat passes through.
+            var expertRouter = sp.GetRequiredService<ExpertRouter>();
+            var expertFanOut = sp.GetRequiredService<ParallelFanOutExecutor>();
+            var expertAggregator = sp.GetRequiredService<ExpertAggregator>();
+            var expertRegistry = sp.GetRequiredService<ExpertRegistry>();
+            chat = new ExpertRouterAgent(chat, expertRouter, expertFanOut, expertAggregator, expertRegistry,
+                sp.GetService<ExpertFeedbackLogger>());
             // Pro agent for complex task auto-upgrade (uses l2 layer)
             var proAgent = all.TryGetValue("LTAI-Chat-Pro", out var p) ? p : chat;
             var budget = sp.GetService<LTAI.AI.BudgetTracker>();

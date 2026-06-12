@@ -361,6 +361,17 @@ public sealed class KbGraph : AIContextProvider, LTAI.Core.Vector.IKbQueryable
             return context.AIContext!;
         }
 
+        // Skip KG query when ExpertRouterAgent already injected aggregated KG context
+        // (avoids duplicate FTS5+BFS work costing 15-60ms)
+        foreach (var m in msgs.Reverse())
+        {
+            if (m.Role == ChatRole.System && m.Text?.StartsWith("## Expert Context") == true)
+            {
+                _logger.LogDebug("KbGraph: skipped — ExpertRouterAgent already injected KG context");
+                return context.AIContext!;
+            }
+        }
+
         try
         {
             var results = await QueryAsync(userMsg.Text, topK: 5, ct: ct, format: ResultFormat.Toon).ConfigureAwait(false);

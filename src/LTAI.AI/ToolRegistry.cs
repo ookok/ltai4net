@@ -359,11 +359,18 @@ public static class ToolRegistry
     /// <summary>按用户查询检索 Top-K 个最相关的工具（全领域）。</summary>
     public static async Task<List<ToolDef>> SearchTopKAsync(string query, EmbeddingClient embedder,
         int k = 8, CancellationToken ct = default)
-        => await SearchTopKAsync(query, embedder, null, k, ct).ConfigureAwait(false);
+        => await SearchTopKAsync(query, embedder, null, k, null, ct).ConfigureAwait(false);
 
     /// <summary>按用户查询检索 Top-K 个最相关的工具（支持按 domain 加权）。</summary>
     public static async Task<List<ToolDef>> SearchTopKAsync(string query, EmbeddingClient embedder,
         string? domain, int k = 8, CancellationToken ct = default)
+        => await SearchTopKAsync(query, embedder, domain, k, null, ct).ConfigureAwait(false);
+
+    /// <summary>
+    /// 按用户查询检索 Top-K 个最相关的工具（支持预计算嵌入以避免重复 ONNX 调用）。
+    /// </summary>
+    public static async Task<List<ToolDef>> SearchTopKAsync(string query, EmbeddingClient embedder,
+        string? domain, int k, float[]? queryEmbedding, CancellationToken ct = default)
     {
         if (!_initialized || _tools.Count == 0) return new List<ToolDef>();
 
@@ -396,13 +403,20 @@ public static class ToolRegistry
 
         // ── 路 2: 向量语义检索 ──
         float[] qEmb;
-        try
+        if (queryEmbedding != null && queryEmbedding.Length > 0)
         {
-            qEmb = await embedder.GenerateAsync(query, ct).ConfigureAwait(false);
+            qEmb = queryEmbedding;
         }
-        catch
+        else
         {
-            qEmb = EmbeddingClient.FastEmb(query, embedder?.Dimension ?? 384);
+            try
+            {
+                qEmb = await embedder.GenerateAsync(query, ct).ConfigureAwait(false);
+            }
+            catch
+            {
+                qEmb = EmbeddingClient.FastEmb(query, embedder?.Dimension ?? 384);
+            }
         }
 
         var vecResults = _tools

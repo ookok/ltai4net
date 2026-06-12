@@ -13,6 +13,7 @@ namespace LTAI.Agent.Memory;
 public sealed partial class MemoryExtractor
 {
     private readonly PalaceStore _store;
+    private readonly FactExtractor? _factExtractor;
     private readonly ILogger<MemoryExtractor>? _logger;
 
     // ── Core extraction patterns ──
@@ -113,9 +114,11 @@ public sealed partial class MemoryExtractor
         return Math.Clamp(score, 0.2, 0.95);
     }
 
-    public MemoryExtractor(PalaceStore store, ILogger<MemoryExtractor>? logger = null)
+    public MemoryExtractor(PalaceStore store, FactExtractor? factExtractor = null,
+        ILogger<MemoryExtractor>? logger = null)
     {
-        _store = store ?? throw new ArgumentNullException(nameof(store));
+        _store = store;
+        _factExtractor = factExtractor;
         _logger = logger;
     }
 
@@ -237,13 +240,29 @@ public sealed partial class MemoryExtractor
 
             try
             {
-                await _store.StoreAsync(wing, room, content,
+                // AnchorMem-inspired: extract atomic facts as retrieval anchors.
+                // Facts are appended to content so FTS5 indexes them; original
+                // content remains intact for generation context.
+                var facts = _factExtractor != null
+                    ? await _factExtractor.ExtractFactsAsync(content, CancellationToken.None).ConfigureAwait(false)
+                    : (IReadOnlyList<string>)[];
+
+                var augmentedContent = content;
+                var factMeta = meta != null ? new Dictionary<string, object>(meta) : new Dictionary<string, object>();
+                if (facts.Count > 0)
+                {
+                    augmentedContent = $"{content}\n[facts]: {string.Join("; ", facts)}";
+                    factMeta["facts"] = facts.ToArray();
+                }
+
+                await _store.StoreAsync(wing, room, augmentedContent,
                     role: "user",
                     importance: importance,
                     agentId: "extractor",
-                    metadata: meta,
+                    metadata: factMeta.Count > 0 ? factMeta : null,
                     ttlMs: PalaceStore.DefaultTtlMs).ConfigureAwait(false);
-                _logger?.LogDebug("MemoryExtractor: stored '{Room}' (wing={Wing})", room, wing);
+                _logger?.LogDebug("MemoryExtractor: stored '{Room}' (wing={Wing}){Facts}",
+                    room, wing, facts.Count > 0 ? $" +{facts.Count} facts" : "");
                 stored++;
             }
             catch (Exception ex)

@@ -230,6 +230,13 @@ public sealed class CodeChunkIndex : AIContextProvider
 
         if (!IsCodeQuery(userMsg.Text)) return context.AIContext!;
 
+        // Skip code chunk search when ExpertRouterAgent already injected aggregated context
+        foreach (var m in msgs.Reverse())
+        {
+            if (m.Role == ChatRole.System && m.Text?.StartsWith("## Expert Context") == true)
+                return context.AIContext!;
+        }
+
         var result = await SemanticCodeSearch(userMsg.Text, limit: 3).ConfigureAwait(false);
         if (result.StartsWith("No matching") || result.StartsWith("Search failed"))
             return context.AIContext!;
