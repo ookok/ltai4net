@@ -49,7 +49,9 @@ public sealed class AIConfig
             "embedding" => "embedding",
             _ => layer
         };
-        return Providers.GetValueOrDefault(key) ?? new ProviderConfig { Model = Model ?? "" };
+        var pc = Providers.GetValueOrDefault(key);
+        if (pc != null) return pc;
+        return new ProviderConfig { Model = Model };
     }
 
     public string ResolveLayerProvider(string layer) => layer.ToLowerInvariant() switch

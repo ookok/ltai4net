@@ -48,8 +48,9 @@ public class AutomationTests
 
             var sp = services.BuildServiceProvider();
 
-            // Register L1 from layers.json
+            // Register L1/L2 overrides from layers.json (falls back to ProviderRegistry)
             var layersPath = Path.Combine(AppContext.BaseDirectory, ".livingtree", "layers.json");
+            var registry = sp.GetRequiredService<ProviderRegistry>();
             var router = sp.GetRequiredService<MultiProviderChatClient>();
             if (File.Exists(layersPath))
             {
@@ -60,10 +61,18 @@ public class AutomationTests
                         l.TryGetProperty("Provider", out var lp) &&
                         l.TryGetProperty("Model", out var lm))
                     {
+                        var providerName = lp.GetString()!;
                         var kn = KnownKeys.All.FirstOrDefault(
-                            k => k.Service.Equals(lp.GetString(), StringComparison.OrdinalIgnoreCase));
-                        var k = !string.IsNullOrEmpty(kn?.EnvVar) ? SecretManager.Get(kn.EnvVar) ?? "" : "";
-                        router.Register(layer, OpenAIChatClientFactory.Create(kn?.Endpoint ?? "", lm.GetString()!, k));
+                            k => k.Service.Equals(providerName, StringComparison.OrdinalIgnoreCase));
+                        string? endpoint = kn?.Endpoint;
+                        if (string.IsNullOrEmpty(endpoint))
+                        {
+                            var pi = registry.FindByName(providerName);
+                            endpoint = pi?.Endpoint;
+                        }
+                        if (string.IsNullOrEmpty(endpoint)) continue;
+                        var k = !string.IsNullOrEmpty(kn?.EnvVar) ? SecretManager.Get(kn.EnvVar!) ?? "" : "";
+                        router.Register(layer, OpenAIChatClientFactory.Create(endpoint!, lm.GetString()!, k));
                     }
                 }
             }

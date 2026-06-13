@@ -1,4 +1,5 @@
 using System.Reflection;
+using LTAI.Agent;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
@@ -19,13 +20,13 @@ public class AgentBuilderToolTests
 
     private static List<AITool> InvokeRegister(string methodName, object[] args)
     {
-        var tools = new List<AITool>();
+        var tools = new ToolSet();
         var allArgs = new object[] { tools }.Concat(args).ToArray();
         var method = s_builderType.GetMethod(methodName,
             BindingFlags.NonPublic | BindingFlags.Static);
         Assert.NotNull(method);
         method.Invoke(null, allArgs);
-        return tools;
+        return tools.ToList();
     }
 
     [Fact]

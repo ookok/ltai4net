@@ -67,7 +67,7 @@ public sealed class MultiProviderChatClient : IChatClient
     /// <summary>Names of all currently registered LLM clients.</summary>
     public IEnumerable<string> RegisteredProviders => _clients.Keys;
     /// <summary>Currently active default provider name.</summary>
-    public string ActiveProvider { get => _defaultProvider; set => _defaultProvider = value; }
+    public string? ActiveProvider { get => _defaultProvider == "" ? null : _defaultProvider; set => _defaultProvider = value ?? ""; }
 
     /// <summary>
     /// Initialize the router. Sets default provider from options and loads degradation chain.
