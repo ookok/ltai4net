@@ -1,4 +1,5 @@
 using LTAI.Agent.Vector;
+using LTAI.Agent.Memory;
 using LTAI.AI;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
@@ -25,6 +26,7 @@ public sealed class WarmupService : IHostedService
     private readonly IServiceProvider _sp;
     private readonly KbGraph _kbGraph;
     private readonly EmbeddingClient _embedder;
+    private readonly PalaceStore? _palaceStore;
     private readonly ToolEmbeddingCache? _toolCache;
     private readonly ILogger<WarmupService> _logger;
 
@@ -32,12 +34,14 @@ public sealed class WarmupService : IHostedService
         IServiceProvider sp,
         KbGraph kbGraph,
         EmbeddingClient embedder,
+        PalaceStore? palaceStore = null,
         ToolEmbeddingCache? toolCache = null,
         ILogger<WarmupService>? logger = null)
     {
         _sp = sp;
         _kbGraph = kbGraph;
         _embedder = embedder;
+        _palaceStore = palaceStore;
         _toolCache = toolCache;
         _logger = logger ?? NullLogger<WarmupService>.Instance;
     }
@@ -52,6 +56,7 @@ public sealed class WarmupService : IHostedService
             {
                 await WarmupToolRegistryAsync(cancellationToken).ConfigureAwait(false);
                 await WarmupKbGraphAsync(cancellationToken).ConfigureAwait(false);
+                await WarmupPalaceStoreAsync(cancellationToken).ConfigureAwait(false);
                 _logger.LogInformation("WarmupService: complete");
             }
             catch (Exception ex)
@@ -105,5 +110,15 @@ public sealed class WarmupService : IHostedService
         KbGraph.IsKnowledgeQuery("warmup probe query for centroid computation");
         sw.Stop();
         _logger.LogInformation("WarmupService: KbGraph centroids computed in {Ms}ms", sw.ElapsedMilliseconds);
+    }
+
+    private async Task WarmupPalaceStoreAsync(CancellationToken ct)
+    {
+        if (_palaceStore == null) return;
+        _logger.LogInformation("WarmupService: warming PalaceStore HNSW index...");
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        await _palaceStore.WarmupHnswAsync().ConfigureAwait(false);
+        sw.Stop();
+        _logger.LogInformation("WarmupService: PalaceStore HNSW warmed in {Ms}ms", sw.ElapsedMilliseconds);
     }
 }

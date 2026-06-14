@@ -1,3 +1,8 @@
+---
+name: novel-writer
+description: 辅助小说创作，从设定到成稿。
+---
+
 # Novel Writer 小说撰写
 
 ## 概要

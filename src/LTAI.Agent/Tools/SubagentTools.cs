@@ -6,6 +6,7 @@ using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using LTAI.AI;
 using LTAI.Agent.Prompts;
+using LTAI.Core.Configuration;
 
 namespace LTAI.Agent.Tools;
 
@@ -166,7 +167,7 @@ public sealed class SubagentTools
 
         try
         {
-            var capturedSpawn = _spawnCount;
+            var capturedSpawn = Interlocked.Increment(ref _spawnCount);
             var capturedType = type ?? "generic";
 
             var agent = new ChatClientAgent(_llm, new ChatClientAgentOptions
@@ -246,7 +247,7 @@ public sealed class SubagentTools
             var output = JsonSerializer.Serialize(new
             {
                 success = true,
-                output = Truncate(resultText, 8000),
+                output = ContentTruncator.Truncate(resultText, 8000),
                 spawnCount = capturedSpawn,
                 elapsedMs = elapsed,
                 type = capturedType,
@@ -308,7 +309,4 @@ public sealed class SubagentTools
             + "You are a security review subagent. Check injection, auth, secrets, deserialization, path traversal.",
         _ => SubagentBaseSystem
     };
-
-    private static string Truncate(string text, int max) =>
-        text.Length <= max ? text : text[..max] + $"\n... (truncated, {text.Length - max} more chars)";
 }

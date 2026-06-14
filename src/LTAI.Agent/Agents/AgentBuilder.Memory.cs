@@ -2,10 +2,12 @@
 
 using LTAI.Agent.Memory;
 using LTAI.Agent.Indexing;
+using LTAI.Agent.Prompts;
 using LTAI.Agent.Tools;
 using LTAI.AI;
 using LTAI.AI.Compaction;
 using LTAI.Core.Configuration;
+using LTAI.Core.I18n;
 using LTAI.Core.Safety;
 using Microsoft.Agents.AI;
 using Microsoft.Agents.AI.Compaction;
@@ -19,14 +21,27 @@ partial class AgentBuilder
 {
     internal static CompactionProvider BuildCompactionProvider(IChatClient llm, IChatClient? steerLlm, LTAIOptions opts, ILoggerFactory loggerFactory)
     {
+        // Derive compaction window from model's actual context window size.
+        // Fall back to 32K when model is unknown to avoid compressing too aggressively.
+        var modelWindow = UsageTracker.ResolveContextWindow(opts.AI.Model ?? "", 32768);
+        var compactionWindow = Math.Min(modelWindow, 32768); // don't exceed 32K even for 1M+ models
+        var windowStrategy = new ContextWindowCompactionStrategy(compactionWindow, opts.AI.MaxTokens);
+        var summaryTrigger = CompactionTriggers.TokensExceed(compactionWindow * 6 / 10);
+
+        var lang = Locale.IsChinese ? "zh" : "en";
+        var compactionPrompt = PromptLoader.Load($"compaction-{lang}");
+        if (string.IsNullOrWhiteSpace(compactionPrompt))
+            compactionPrompt = VerifiedSummarizationStrategy.DefaultSummarizationPrompt;
+
         return new CompactionProvider(
             new PipelineCompactionStrategy(
-                new ContextWindowCompactionStrategy(opts.AI.ContextWindowSize, opts.AI.MaxTokens),
+                windowStrategy,
                 new VerifiedSummarizationStrategy(
                     summarizer: llm,
                     verifier: steerLlm ?? llm,
-                    trigger: CompactionTriggers.TokensExceed(opts.AI.ContextWindowSize),
-                    minimumPreservedGroups: 2)
+                    trigger: summaryTrigger,
+                    minimumPreservedGroups: 2,
+                    summarizationPrompt: compactionPrompt)
             ), loggerFactory: loggerFactory);
     }
 

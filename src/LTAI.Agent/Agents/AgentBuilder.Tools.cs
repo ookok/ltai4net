@@ -35,23 +35,27 @@ partial class AgentBuilder
             tools.Add(AIFunctionFactory.Create(TextTools.DiffFiles));
     }
 
-    static void RegisterSearchAndCodeAnalysisTools(ToolSet tools, string name, bool canRead, string ws)
+    static void RegisterSearchAndCodeAnalysisTools(ToolSet tools, string name, bool canRead, string ws, string[]? yamlTools)
     {
         var search = new SearchTools(ws);
         var codeAnalysis = new CodeAnalysisTools(ws);
         if (canRead) { tools.Add(AIFunctionFactory.Create(search.SearchContent)); tools.Add(AIFunctionFactory.Create(search.SearchFiles)); }
-        if (canRead && (name.StartsWith("LTAI-Chat") || name is "LTAI-Code" or "LTAI-Frontend"))
+        if (canRead && (yamlTools != null
+            ? HasYamlTool(yamlTools, "symbols")
+            : name.StartsWith("LTAI-Chat") || name is "LTAI-Code" or "LTAI-Frontend"))
         { tools.Add(AIFunctionFactory.Create(codeAnalysis.GetSymbols)); tools.Add(AIFunctionFactory.Create(codeAnalysis.FindInCode)); }
     }
 
-    static void RegisterWebTools(ToolSet tools, string name, IHttpClientFactory httpFactory)
+    static void RegisterWebTools(ToolSet tools, string name, IHttpClientFactory httpFactory, string[]? yamlTools)
     {
         var web = new WebTools(httpFactory, null);
-        if (name.StartsWith("LTAI-Chat") || name == "LTAI-Data")
+        if (yamlTools != null
+            ? HasYamlTool(yamlTools, "web")
+            : name.StartsWith("LTAI-Chat") || name == "LTAI-Data")
         { tools.Add(AIFunctionFactory.Create(web.WebSearch)); tools.Add(AIFunctionFactory.Create(web.WebFetch)); tools.Add(AIFunctionFactory.Create(web.HttpRequest)); }
     }
 
-    static void RegisterMultimediaTools(ToolSet tools, bool canRead, bool canExec, string ws)
+    static void RegisterMultimediaTools(ToolSet tools, bool canRead, bool canExec, string ws, string[]? yamlTools)
     {
         var media = new MultimediaTools(ws);
         if (canRead)
@@ -59,7 +63,8 @@ partial class AgentBuilder
         if (canExec) tools.Add(AIFunctionFactory.Create(media.Screenshot));
     }
 
-    static void RegisterDocumentTools(ToolSet tools, bool canRead, bool canWrite, string ws, IServiceProvider sp)
+    static void RegisterDocumentTools(ToolSet tools, bool canRead, bool canWrite, string ws, IServiceProvider sp,
+        string[]? yamlTools)
     {
         var doc = new DocumentTools(ws, sp.GetService<KbGraph>(),
             sp.GetService<ILoggerFactory>()?.CreateLogger<DocumentTools>());
@@ -86,11 +91,12 @@ partial class AgentBuilder
         }
     }
 
-    static void RegisterPlanAndDiagramTools(ToolSet tools, string name, IHttpClientFactory httpFactory)
+    static void RegisterPlanAndDiagramTools(ToolSet tools, string name, IHttpClientFactory httpFactory,
+        string[]? yamlTools)
     {
-        // Plan/todo tools now come from MAF's TodoProvider + AgentModeProvider (auto-injected by harness).
-        // Only flowchart/diagram tools are registered here.
-        if (name.StartsWith("LTAI-Chat") || name is "LTAI-Code" or "LTAI-Data" or "LTAI-Writer" or "LTAI-Frontend")
+        if (yamlTools != null
+            ? HasYamlTool(yamlTools, "diagram")
+            : name.StartsWith("LTAI-Chat") || name is "LTAI-Code" or "LTAI-Data" or "LTAI-Writer" or "LTAI-Frontend")
         {
             var diagram = new FlowchartTools(httpFactory);
             tools.Add(AIFunctionFactory.Create(diagram.Flowchart));
@@ -101,9 +107,12 @@ partial class AgentBuilder
         }
     }
 
-    static void RegisterChoiceAndSubagentTools(ToolSet tools, string name, IServiceProvider sp, IChatClient llm, string ws)
+    static void RegisterChoiceAndSubagentTools(ToolSet tools, string name, IServiceProvider sp, IChatClient llm, string ws,
+        string[]? yamlTools)
     {
-        if (name is "LTAI-Chat" or "LTAI-Writer" or "LTAI-Frontend")
+        if (yamlTools != null
+            ? HasYamlTool(yamlTools, "subagent") || HasYamlTool(yamlTools, "choice")
+            : name is "LTAI-Chat" or "LTAI-Writer" or "LTAI-Frontend")
         {
             var sub = new SubagentTools(sp, llm, ws, tools.ToList());
             tools.Add(AIFunctionFactory.Create(sub.Explore));
@@ -114,9 +123,11 @@ partial class AgentBuilder
         }
     }
 
-    static void RegisterGitTools(ToolSet tools, string name, string ws)
+    static void RegisterGitTools(ToolSet tools, string name, string ws, string[]? yamlTools)
     {
-        if (!(name.StartsWith("LTAI-Chat") || name is "LTAI-Code" or "LTAI-System" or "LTAI-Writer" or "LTAI-Frontend")) return;
+        if (!(yamlTools != null
+            ? HasYamlTool(yamlTools, "git")
+            : name.StartsWith("LTAI-Chat") || name is "LTAI-Code" or "LTAI-System" or "LTAI-Writer" or "LTAI-Frontend")) return;
         var git = new GitTools(ws);
         // Core read-only tools
         tools.Add(AIFunctionFactory.Create(git.GitStatus));
@@ -152,9 +163,11 @@ partial class AgentBuilder
         tools.Add(AIFunctionFactory.Create(review.BuildReviewContext));
     }
 
-    static void RegisterSkillBankTools(ToolSet tools, string name)
+    static void RegisterSkillBankTools(ToolSet tools, string name, string[]? yamlTools)
     {
-        if (name is not ("LTAI-Code" or "LTAI-Frontend" or "LTAI-Chat")) return;
+        if (yamlTools != null
+            ? HasYamlTool(yamlTools, "search")
+            : name is not ("LTAI-Code" or "LTAI-Frontend" or "LTAI-Chat")) return;
         var skillBank = new SkillBank();
         tools.Add(AIFunctionFactory.Create(
             (string query, string? lang) =>
@@ -174,9 +187,11 @@ partial class AgentBuilder
             "SkillBankRegister", "Register a new code skill from a coding trajectory"));
     }
 
-    static void RegisterLspTools(ToolSet tools, string name)
+    static void RegisterLspTools(ToolSet tools, string name, string[]? yamlTools)
     {
-        if (!(name.StartsWith("LTAI-Chat") || name is "LTAI-Code" or "LTAI-Frontend")) return;
+        if (yamlTools != null
+            ? HasYamlTool(yamlTools, "symbols")
+            : !(name.StartsWith("LTAI-Chat") || name is "LTAI-Code" or "LTAI-Frontend")) return;
         tools.Add(AIFunctionFactory.Create(async (string filePath, string content) =>
         {
             await s_lsp.OpenFileAsync(filePath, content);
@@ -189,17 +204,21 @@ partial class AgentBuilder
         }, "LspGetDiagnostics", "Get current LSP diagnostics for open files"));
     }
 
-    static void RegisterTaskTools(ToolSet tools, string name)
+    static void RegisterTaskTools(ToolSet tools, string name, string[]? yamlTools)
     {
-        if (!(name.StartsWith("LTAI-Chat") || name is "LTAI-System" or "LTAI-Code" or "LTAI-Writer" or "LTAI-Frontend" or "LTAI-DCI")) return;
+        if (yamlTools != null
+            ? HasYamlTool(yamlTools, "plan") || HasYamlTool(yamlTools, "task")
+            : !(name.StartsWith("LTAI-Chat") || name is "LTAI-System" or "LTAI-Code" or "LTAI-Writer" or "LTAI-Frontend" or "LTAI-DCI")) return;
         tools.Add(AIFunctionFactory.Create(TaskTools.TodoWrite));
         tools.Add(AIFunctionFactory.Create(TaskTools.TodoComplete));
         tools.Add(AIFunctionFactory.Create(TaskTools.TodoList));
     }
 
-    static void RegisterIntegrationTools(ToolSet tools, string name, IHttpClientFactory httpFactory)
+    static void RegisterIntegrationTools(ToolSet tools, string name, IHttpClientFactory httpFactory, string[]? yamlTools)
     {
-        if (name is not ("LTAI-Chat" or "LTAI-Data" or "LTAI-System" or "LTAI-Writer" or "LTAI-Frontend")) return;
+        if (yamlTools != null
+            ? HasYamlTool(yamlTools, "eia")
+            : name is not ("LTAI-Chat" or "LTAI-Data" or "LTAI-System" or "LTAI-Writer" or "LTAI-Frontend")) return;
         var integ = new IntegrationTools(httpFactory);
         tools.Add(AIFunctionFactory.Create(integ.Geocode));
         tools.Add(AIFunctionFactory.Create(integ.ReverseGeocode));
@@ -211,9 +230,12 @@ partial class AgentBuilder
         tools.Add(AIFunctionFactory.Create(integ.ImageSearch));
     }
 
-    static void RegisterSystemAndJobTools(ToolSet tools, string name, bool canExec, bool canRead, bool canWrite, string ws, IServiceProvider sp)
+    static void RegisterSystemAndJobTools(ToolSet tools, string name, bool canExec, bool canRead, bool canWrite, string ws, IServiceProvider sp,
+        string[]? yamlTools)
     {
-        if (name is "LTAI-Chat" or "LTAI-Chat-Pro" or "LTAI-System" or "LTAI-Writer")
+        if (yamlTools != null
+            ? HasYamlTool(yamlTools, "system")
+            : name is "LTAI-Chat" or "LTAI-Chat-Pro" or "LTAI-System" or "LTAI-Writer")
         {
             tools.Add(AIFunctionFactory.Create(SystemTools.GetCurrentDateTime));
             tools.Add(AIFunctionFactory.Create(SystemTools.SystemInfo));
@@ -225,7 +247,9 @@ partial class AgentBuilder
             tools.Add(AIFunctionFactory.Create(SystemTools.SetEnv));
             tools.Add(AIFunctionFactory.Create(SystemTools.GetCurrentDirectory));
         }
-        if (name is "LTAI-Chat" or "LTAI-System" or "LTAI-Code" or "LTAI-Writer" or "LTAI-Frontend")
+        if (yamlTools != null
+            ? HasYamlTool(yamlTools, "job")
+            : name is "LTAI-Chat" or "LTAI-Chat-Pro" or "LTAI-System" or "LTAI-Code" or "LTAI-Writer" or "LTAI-Frontend")
         {
             var bgJobs = sp.GetRequiredService<BackgroundJobService>();
             tools.Add(AIFunctionFactory.Create(bgJobs.StartJob));
@@ -234,7 +258,9 @@ partial class AgentBuilder
             tools.Add(AIFunctionFactory.Create(bgJobs.WaitForJob));
             tools.Add(AIFunctionFactory.Create(bgJobs.StopJob));
         }
-        if (name is "LTAI-Chat" or "LTAI-Chat-Pro" or "LTAI-System" or "LTAI-Code" or "LTAI-Writer")
+        if (yamlTools != null
+            ? HasYamlTool(yamlTools, "task")
+            : name is "LTAI-Chat" or "LTAI-Chat-Pro" or "LTAI-System" or "LTAI-Code" or "LTAI-Writer")
         {
             var tq = sp.GetRequiredService<TaskQueueTool>();
             tools.Add(AIFunctionFactory.Create(tq.EnqueueTask));
@@ -250,13 +276,17 @@ partial class AgentBuilder
             tools.Add(AIFunctionFactory.Create(sys.RunWithNetwork));
             tools.Add(AIFunctionFactory.Create(sys.CheckDockerAsync));
         }
-        if (canRead && canWrite && (name.StartsWith("LTAI-Chat") || name is "LTAI-Code" or "LTAI-Writer" or "LTAI-Frontend"))
+        if (canRead && canWrite && (yamlTools != null
+            ? HasYamlTool(yamlTools, "download")
+            : name.StartsWith("LTAI-Chat") || name is "LTAI-Code" or "LTAI-Writer" or "LTAI-Frontend"))
             tools.Add(AIFunctionFactory.Create(FileDownloadTool.DownloadFile));
     }
 
-    static void RegisterWorkflowTools(ToolSet tools, string name, IServiceProvider sp)
+    static void RegisterWorkflowTools(ToolSet tools, string name, IServiceProvider sp, string[]? yamlTools)
     {
-        if (name is not ("LTAI-Chat" or "LTAI-Writer" or "LTAI-Frontend")) return;
+        if (yamlTools != null
+            ? HasYamlTool(yamlTools, "workflow")
+            : name is not ("LTAI-Chat" or "LTAI-Writer" or "LTAI-Frontend")) return;
         var wfTools = new WorkflowTools(sp);
         tools.Add(AIFunctionFactory.Create(wfTools.WorkflowHandoff));
         tools.Add(AIFunctionFactory.Create(wfTools.WorkflowSequential));
@@ -272,7 +302,8 @@ partial class AgentBuilder
         tools.Add(AIFunctionFactory.Create(dst.DeepenSearchAsync));
     }
 
-    static void RegisterNewDomainTools(ToolSet tools, string name, bool canExec, bool canRead, bool canWrite, string ws, IServiceProvider sp)
+    static void RegisterNewDomainTools(ToolSet tools, string name, bool canExec, bool canRead, bool canWrite, string ws, IServiceProvider sp,
+        string[]? yamlTools)
     {
         if (canExec)
         {
@@ -285,7 +316,9 @@ partial class AgentBuilder
             var mm = new MultimediaTools(ws);
             tools.Add(AIFunctionFactory.Create(mm.ChartCreate));
         }
-        if (name is "LTAI-Chat" or "LTAI-Data" or "LTAI-Code")
+        if (yamlTools != null
+            ? HasYamlTool(yamlTools, "data") || HasYamlTool(yamlTools, "database")
+            : name is "LTAI-Chat" or "LTAI-Data" or "LTAI-Code")
         {
             var db = new DatabaseTools();
             tools.Add(AIFunctionFactory.Create(db.SqlQuery));
@@ -297,15 +330,22 @@ partial class AgentBuilder
             tools.Add(AIFunctionFactory.Create(dt.CsvRead));
             tools.Add(AIFunctionFactory.Create(dt.CsvWrite));
         }
-        if (name.StartsWith("LTAI-Chat") || name is "LTAI-System" or "LTAI-Security" or "LTAI-Writer")
+        if (yamlTools != null
+            ? HasYamlTool(yamlTools, "security")
+            : name.StartsWith("LTAI-Chat") || name is "LTAI-System" or "LTAI-Security" or "LTAI-Writer")
         { tools.Add(AIFunctionFactory.Create(CryptoTools.HashFile)); tools.Add(AIFunctionFactory.Create(CryptoTools.EncryptFile)); tools.Add(AIFunctionFactory.Create(CryptoTools.DecryptFile)); }
         if (canRead) { tools.Add(AIFunctionFactory.Create(CryptoTools.Base64Encode)); tools.Add(AIFunctionFactory.Create(CryptoTools.Base64Decode)); }
         if (canRead) tools.Add(AIFunctionFactory.Create(MarkdownTools.RenderMarkdown));
-        var rc = sp.GetRequiredService<RetrieveContentTool>();
-        tools.Add(AIFunctionFactory.Create(rc.RetrieveContent));
+        if (yamlTools != null
+            ? HasYamlTool(yamlTools, "search")
+            : name.StartsWith("LTAI-Chat") || name is "LTAI-Code" or "LTAI-Data" or "LTAI-Writer")
+        {
+            var rc = sp.GetRequiredService<RetrieveContentTool>();
+            tools.Add(AIFunctionFactory.Create(rc.RetrieveContent));
+        }
     }
 
-    static void RegisterMemoryTools(ToolSet tools, bool canWrite, PalaceStore palaceStore, string ws)
+    static void RegisterMemoryTools(ToolSet tools, bool canWrite, PalaceStore palaceStore, string ws, string[]? yamlTools)
     {
         if (!canWrite) return;
         var palaceMemory = new MemoryTools(palaceStore, defaultWing: ws != null ? Path.GetFileName(ws.TrimEnd('/', '\\')) : "project");

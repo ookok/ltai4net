@@ -1,0 +1,49 @@
+# Git
+.git/
+.gitattributes
+.gitignore
+.gitmodules
+
+# Build output
+dist/
+bin/
+obj/
+
+# External dependencies (hundreds of MB)
+extern/
+
+# Tests
+tests/
+
+# Documentation
+docs/
+*.md
+!README.md
+
+# IDE / OS
+.vs/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Environment / secrets
+.env
+*.secret
+*.pem
+*.key
+appsettings.*.json
+!appsettings.json
+
+# AI assistant artifacts
+.reasonix/
+.opencode/
+.livingtree/
+
+# Scripts (not needed for runtime)
+scripts/
+
+# Temp / scratch
+*.bak
+logs/
+tmp_*

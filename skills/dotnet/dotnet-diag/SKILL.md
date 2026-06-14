@@ -1,3 +1,8 @@
+---
+name: dotnet-diag
+description: LTAI4Net 诊断和性能分析技能。
+---
+
 # .NET Diagnostics & Debugging
 
 ## 概要

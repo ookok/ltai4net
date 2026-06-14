@@ -1,3 +1,8 @@
+---
+name: ppt-maker
+description: 生成可直接用于演示工具的幻灯片内容。
+---
+
 # PPT Maker 演示文稿生成
 
 ## 概要

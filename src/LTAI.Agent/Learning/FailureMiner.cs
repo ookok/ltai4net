@@ -69,7 +69,10 @@ public static class FailureRecorder
             File.WriteAllText(path, JsonSerializer.Serialize(record, _jsonOpts));
             Interlocked.Increment(ref _totalFailures);
         }
-        catch (Exception) { }
+        catch (Exception ex)
+        {
+            try { Console.Error.WriteLine($"[LTAI] FailureMiner persist failed: {ex.Message}"); } catch { }
+        }
     }
 
     public static long TotalFailures => _totalFailures;

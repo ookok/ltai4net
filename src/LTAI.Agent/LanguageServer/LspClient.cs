@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
@@ -19,6 +20,7 @@ public sealed class LspClient : IDisposable
     private Task? _readerTask;
     private readonly CancellationTokenSource _killCts = new();
     private int _msgId;
+    private readonly ConcurrentDictionary<int, TaskCompletionSource<JsonElement?>> _pendingRequests = new();
     private readonly object _sendLock = new();
 
     private readonly List<LspDiagnostic> _diagnostics = [];
@@ -114,8 +116,19 @@ public sealed class LspClient : IDisposable
     public void Dispose()
     {
         try { _killCts.Cancel(); } catch { }
-        try { _ = SendNotificationAsync("shutdown", new { }, CancellationToken.None); } catch { }
-        try { _process?.Kill(); } catch { }
+        try
+        {
+            // Best-effort graceful shutdown with 2s timeout
+            var shutdownTask = SendNotificationAsync("shutdown", new { }, CancellationToken.None);
+            if (!shutdownTask.Wait(TimeSpan.FromSeconds(2)))
+            {
+                // Force kill on timeout
+                try { _process?.Kill(); } catch { }
+            }
+        }
+        catch { try { _process?.Kill(); } catch { } }
+        _stdin?.Dispose();
+        _stdout?.Dispose();
         _process?.Dispose();
         _killCts.Dispose();
     }
@@ -157,7 +170,10 @@ public sealed class LspClient : IDisposable
             }
         }
         catch (OperationCanceledException) { }
-        catch (Exception) { }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[LTAI] LSP read loop terminated: {ex.Message}");
+        }
     }
 
     private void HandleMessage(string json)
@@ -166,6 +182,21 @@ public sealed class LspClient : IDisposable
         {
             using var doc = JsonDocument.Parse(json);
             var root = doc.RootElement;
+
+            // Response to a request: id field present
+            if (root.TryGetProperty("id", out var idProp) && idProp.TryGetInt32(out var responseId))
+            {
+                if (_pendingRequests.TryRemove(responseId, out var tcs))
+                {
+                    if (root.TryGetProperty("result", out var result))
+                        tcs.TrySetResult(result.Clone());
+                    else if (root.TryGetProperty("error", out var error))
+                        tcs.TrySetResult(error.Clone());
+                    else
+                        tcs.TrySetResult(null);
+                }
+                return;
+            }
 
             // Notification: method + params
             if (root.TryGetProperty("method", out var method))
@@ -197,7 +228,26 @@ public sealed class LspClient : IDisposable
             @params = paramsObj,
         });
         await SendRawAsync(payload, ct).ConfigureAwait(false);
-        return null; // For simplicity, responses are fire-and-forget
+        // Request-response: wait for the matching response from ReadLoop
+        var tcs = new TaskCompletionSource<JsonElement?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        lock (_pendingRequests)
+        {
+            _pendingRequests[id] = tcs;
+        }
+        try
+        {
+            using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
+            return await tcs.Task.WaitAsync(linkedCts.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            return null;
+        }
+        finally
+        {
+            lock (_pendingRequests) { _pendingRequests.TryRemove(id, out _); }
+        }
     }
 
     private async Task SendNotificationAsync(string method, object? paramsObj, CancellationToken ct)

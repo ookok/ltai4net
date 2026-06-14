@@ -1,3 +1,8 @@
+---
+name: dependency-audit
+description: 审查项目的 NuGet 依赖健康状况。
+---
+
 # Dependency Audit 依赖审计
 
 ## 概要

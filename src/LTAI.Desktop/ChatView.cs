@@ -699,8 +699,13 @@ public sealed partial class ChatView : UserControl, IChatRenderer
         var firstTokenReceived = false;
 
         // A5: dispose previous CTS before reassignment to avoid timer leak
-        if (_cts is { IsCancellationRequested: false }) { _cts.Cancel(); _cts.Dispose(); }
-        _cts = new CancellationTokenSource();
+        var oldCts = Interlocked.Exchange(ref _cts, null);
+        if (oldCts is { IsCancellationRequested: false })
+        {
+            try { oldCts.Cancel(); } catch (ObjectDisposedException) { }
+            oldCts.Dispose();
+        }
+        Interlocked.CompareExchange(ref _cts, new CancellationTokenSource(), null);
         var responseBuf = new StringBuilder();
         var thinkBuf = new StringBuilder();
         var inThinking = false;

@@ -1,3 +1,8 @@
+---
+name: migration-plan
+description: 制定安全的框架/API/版本迁移方案。
+---
+
 # Migration Plan 代码迁移
 
 ## 概要

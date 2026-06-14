@@ -25,6 +25,8 @@ public static class FileDownloadTool
         [Description("文件下载地址")] string url,
         [Description("保存路径（相对于工作目录）")] string savePath)
     {
+        // Use a linked CTS so download is cancellable
+        using var dlCts = new CancellationTokenSource(TimeSpan.FromMinutes(10));
         // ⚠️ SSRF 防护
         if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) ||
             (uri.Scheme != "http" && uri.Scheme != "https") ||
@@ -52,17 +54,22 @@ public static class FileDownloadTool
             var dir = Path.GetDirectoryName(fp);
             if (dir != null) Directory.CreateDirectory(dir);
 
-            using var resp = await _sharedHttp.Value.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, CancellationToken.None).ConfigureAwait(false);
+            using var resp = await _sharedHttp.Value.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, dlCts.Token).ConfigureAwait(false);
             resp.EnsureSuccessStatusCode();
 
+            // Reject oversized downloads early based on Content-Length header
             var totalBytes = resp.Content.Headers.ContentLength ?? -1;
+            const long maxDownloadBytes = 500L * 1024 * 1024; // 500 MB
+            if (totalBytes > maxDownloadBytes)
+                return $"Error: File too large ({totalBytes / 1024.0 / 1024.0:F1}MB, max {maxDownloadBytes / 1024 / 1024}MB)";
+
             await using var stream = await resp.Content.ReadAsStreamAsync().ConfigureAwait(false);
             await using var fileStream = File.Create(fp);
 
             var buffer = new byte[81920];
             long readBytes = 0;
             int bytesRead;
-            while ((bytesRead = await stream.ReadAsync(buffer).ConfigureAwait(false)) > 0)
+            while ((bytesRead = await stream.ReadAsync(buffer, dlCts.Token).ConfigureAwait(false)) > 0)
             {
                 await fileStream.WriteAsync(buffer.AsMemory(0, bytesRead)).ConfigureAwait(false);
                 readBytes += bytesRead;

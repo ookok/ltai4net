@@ -1,16 +1,32 @@
 using System.Text.RegularExpressions;
+using LTAI.Core.Configuration;
+using LTAI.Agent.Memory;
 
 namespace LTAI.Agent;
 
-public sealed partial class DefaultEscalationDecider : IEscalationDecider
+public class DefaultEscalationDecider : IEscalationDecider
 {
-    private static readonly HashSet<string> SimpleQueries = new(StringComparer.OrdinalIgnoreCase)
+    private readonly double _calibratedScoreThreshold;
+    private readonly double _valueOfInfoThreshold;
+    private readonly double _shouldEscalateGapThreshold;
+    private readonly int _shouldEscalateSupportThreshold;
+    private readonly int _shouldEscalateStepsThreshold;
+
+    public DefaultEscalationDecider(EscalationConfig? config = null)
     {
-        "hello", "hi", "hey", "你好", "嗨", "早上好", "下午好", "晚上好",
-        "good morning", "good afternoon", "good evening",
-        "who are you", "你是谁", "help", "帮助", "/help",
-        "status", "状态", "/status", "thanks", "谢谢", "thank you"
-    };
+        var cfg = config ?? new EscalationConfig();
+        _calibratedScoreThreshold = cfg.CalibratedScoreThreshold;
+        _valueOfInfoThreshold = cfg.ValueOfInfoThreshold;
+        _shouldEscalateGapThreshold = cfg.ShouldEscalateGapThreshold;
+        _shouldEscalateSupportThreshold = cfg.ShouldEscalateSupportThreshold;
+        _shouldEscalateStepsThreshold = cfg.ShouldEscalateStepsThreshold;
+    }
+    private readonly QueryClassifier? _queryClassifier;
+
+    public DefaultEscalationDecider(QueryClassifier? queryClassifier = null)
+    {
+        _queryClassifier = queryClassifier;
+    }
 
     private static readonly HashSet<string> ToolRequiredKeywords = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -65,21 +81,21 @@ public sealed partial class DefaultEscalationDecider : IEscalationDecider
         if (string.IsNullOrWhiteSpace(message)) return false;
         var trimmed = message.Trim();
 
-        // Fast path: exact match
-        if (SimpleQueries.Contains(trimmed))
+        // Fast path: delegate to unified QueryClassifier
+        if (_queryClassifier != null && _queryClassifier.IsGreetingOnly(trimmed))
             return true;
 
         // Fast path: very short messages without tool keywords
         if (trimmed.Length <= 6 && !ToolRequiredKeywords.Any(k => trimmed.Contains(k, StringComparison.OrdinalIgnoreCase)))
             return true;
 
-        // Mixed query detection: "你好，帮我..." is NOT simple
+        // Mixed query detection: greeting-like prefix + tool keyword = NOT simple
         if (trimmed.Length > 20)
         {
-            var hasGreeting = SimpleQueries.Any(q => trimmed.Contains(q, StringComparison.OrdinalIgnoreCase));
+            var hasGreeting = _queryClassifier?.IsGreetingOnly(trimmed[..Math.Min(20, trimmed.Length)]) ?? false;
             var hasToolKeyword = ToolRequiredKeywords.Any(k => trimmed.Contains(k, StringComparison.OrdinalIgnoreCase));
             if (hasGreeting && hasToolKeyword)
-                return false; // Mixed query, needs routing
+                return false;
         }
 
         // Pattern-based: questions with specific intent are NOT simple
@@ -164,7 +180,12 @@ public sealed partial class DefaultEscalationDecider : IEscalationDecider
         var calibratedScore = entropy * 0.4 + l1State.Gap * 0.4 - l1State.SupportCount * 0.05;
         calibratedScore = Math.Clamp(calibratedScore, 0.0, 1.0);
 
-        var needsPro = l1State.ShouldEscalate || calibratedScore > 0.6 || valueOfInfo > 0.5;
+        // Preserve L1State.ShouldEscalate logic but with configurable thresholds
+        var shouldEscalateByState = l1State.Label == "escalate" ||
+            (l1State.Candidates.Count >= 2 && l1State.Gap < _shouldEscalateGapThreshold && l1State.SupportCount < _shouldEscalateSupportThreshold) ||
+            l1State.StepsTaken >= _shouldEscalateStepsThreshold;
+
+        var needsPro = shouldEscalateByState || calibratedScore > _calibratedScoreThreshold || valueOfInfo > _valueOfInfoThreshold;
         var reason = l1State.EscalationReason ?? "complex task";
 
         if (steerJudgeSaysInadequate)

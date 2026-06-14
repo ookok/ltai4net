@@ -1,3 +1,8 @@
+---
+name: arch-diagram
+description: 使用 Flowchart 工具（Mermaid）生成项目架构图并导出为 SVG。
+---
+
 # Architecture Diagram Skill
 
 ## 概要

@@ -1,16 +1,19 @@
 using LTAI.AI;
 using LTAI.AI.Compaction;
+using LTAI.Agent.Caching;
 using LTAI.Agent.Context;
 using LTAI.Agent.Diagnostics;
 using LTAI.Agent.Learning;
 using LTAI.Agent.Memory;
 using LTAI.Agent.Services;
+using LTAI.Agent.Memory;
 using LTAI.Agent.Tools;
 using LTAI.Agent.Experts;
 using LTAI.Agent.Experts.Adapters;
 using LTAI.Agent.Experts.Routing;
 using LTAI.Agent.Vector;
 using LTAI.Agent.Workflows;
+using LTAI.Agent.Orchestration;
 using LTAI.Core.Configuration;
 using Microsoft.Agents.AI;
 using Microsoft.Agents.AI.Hosting;
@@ -245,7 +248,25 @@ public static class ServiceCollectionExtensions
                 sp.GetRequiredService<ILogger<AgentWorkflows>>(),
                 sp.GetRequiredService<DecisionTreeRouter>(),
                 workflowRegistry: sp.GetService<YAMLWorkflowRegistry>(),
-                diagnosticsStore: sp.GetService<RoutingDiagnosticsStore>());
+                diagnosticsStore: sp.GetService<RoutingDiagnosticsStore>(),
+                queryClassifier: sp.GetService<QueryClassifier>(),
+                checkpointDirectory: Path.Combine(
+                    sp.GetRequiredService<IOptions<LTAIOptions>>().Value.DataDirectory,
+                    "workflows", ".checkpoints"));
+        });
+
+        // MoA (Mixture of Agents) — registered as a keyed singleton for optional use
+        // as an alternative L2 backend. Enable via LTAI:AI:L2:MoA=true in appsettings.json.
+        services.AddKeyedSingleton<MoAWorkflow>("moa", (sp, _) =>
+        {
+            var l2Client = sp.GetKeyedService<IChatClient>("l2");
+            var opts = sp.GetRequiredService<IOptions<LTAIOptions>>().Value.AI;
+            var proposerCount = Math.Max(1, opts.MoaProposerCount);
+            var aggregatorCount = Math.Max(1, opts.MoaAggregatorCount);
+            var proposers = Enumerable.Repeat(l2Client, proposerCount).Where(c => c != null).Cast<IChatClient>().ToList();
+            var aggregators = Enumerable.Repeat(l2Client, aggregatorCount).Where(c => c != null).Cast<IChatClient>().ToList();
+            return new MoAWorkflow(proposers, aggregators, sp.GetRequiredService<ILogger<MoAWorkflow>>(),
+                opts.MoaTimeoutSeconds > 0 ? TimeSpan.FromSeconds(opts.MoaTimeoutSeconds) : null);
         });
 
         // Step 3c: P15 hot-editable workflow registry + watcher + notifier.
@@ -509,7 +530,12 @@ public static class ServiceCollectionExtensions
                 localEmbedder: sp.GetService<LTAI.AI.LocalEmbedder>(),
                 httpFactory: sp.GetService<IHttpClientFactory>(),
                 sameModel: sameModel,
-                steerJudge: sp.GetKeyedService<IChatClient>("steer"));
+                steerJudge: sp.GetKeyedService<IChatClient>("steer"),
+                escalationDecider: sp.GetService<IEscalationDecider>(),
+                tsParser: sp.GetService<LTAI.Agent.Tools.TreeSitterParser>(),
+                lspManager: sp.GetService<LTAI.Agent.LanguageServer.LspLanguageManager>(),
+                checkpointStore: sp.GetService<IMemoryCachingStore>(),
+                escalationConfig: sp.GetRequiredService<IOptions<LTAIOptions>>().Value.Escalation);
         });
 
         // Step 7: PalaceStore (structured long-term memory) + consolidation service
@@ -520,8 +546,52 @@ public static class ServiceCollectionExtensions
             var logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger<PalaceStore>();
             return PalaceStore.CreateShared(embedder, opts.ResolveDataPath("kg.db"), logger);
         });
-        services.AddHostedService<MemoryConsolidationService>();
+        services.AddHostedService<MemoryConsolidationService>(sp =>
+        {
+            var store = sp.GetRequiredService<PalaceStore>();
+            var l3 = sp.GetKeyedService<IChatClient>("l3");
+            var logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger<MemoryConsolidationService>();
+            return new MemoryConsolidationService(store, l3, logger);
+        });
+
+        // Step 8: Conversation state checkpoint cache (Memory → File → Null)
+        services.AddSingleton<IMemoryCachingStore>(sp =>
+            new CachingCascade());
 
         return services;
     }
+
+    /// <summary>
+    /// Register the multi-graph memory system (MAGMA-inspired).
+    /// Adds MultiGraphStore, AdaptiveBeamTraverser, IntentRouter,
+    /// SalienceBudgetCompressor, and the slow-path consolidation worker.
+    /// </summary>
+    public static IServiceCollection AddLTAIMemory(this IServiceCollection services,
+        Action<MultiGraphConfig>? configure = null)
+    {
+        var config = new MultiGraphConfig();
+        configure?.Invoke(config);
+
+        services.AddSingleton<MultiGraphStore>(sp =>
+        {
+            var opts = sp.GetRequiredService<IOptions<LTAIOptions>>().Value;
+            var dbPath = opts.ResolveDataPath("kg.db");
+            return new MultiGraphStore(dbPath, config.CausalThreshold, config.SemanticThreshold);
+        });
+
+        services.AddSingleton<AdaptiveBeamTraverser>();
+        services.AddSingleton<IntentRouter>();
+        services.AddSingleton<QueryClassifier>();
+        services.AddSingleton<SalienceBudgetCompressor>();
+
+        return services;
+    }
+}
+
+public sealed class MultiGraphConfig
+{
+    public double CausalThreshold { get; set; } = 0.7;
+    public double SemanticThreshold { get; set; } = 0.6;
+    public TimeSpan ConsolidationInterval { get; set; } = TimeSpan.FromSeconds(30);
+    public int ConsolidationBatchSize { get; set; } = 50;
 }

@@ -19,9 +19,12 @@ dotnet publish "src\LTAI.Web\LTAI.Web.csproj"    -c Release -o "%DIST%\Web"     
 echo [3/4] Copy runtime assets (agents, skills, models)
 for %%D in (CLI TUI Desktop Web) do (
     if exist "%DIST%\%%D" (
-        xcopy /e /i /q "agents"  "%DIST%\%%D\agents"  >nul || exit /b 1
-        xcopy /e /i /q "skills"  "%DIST%\%%D\skills"  >nul || exit /b 1
-        xcopy /e /i /q "models"  "%DIST%\%%D\models"  >nul || exit /b 1
+        xcopy /e /i /q "agents"  "%DIST%\%%D\agents"  >nul
+        if errorlevel 1 exit /b 1
+        xcopy /e /i /q "skills"  "%DIST%\%%D\skills"  >nul
+        if errorlevel 1 exit /b 1
+        xcopy /e /i /q "models"  "%DIST%\%%D\models"  >nul
+        if errorlevel 1 exit /b 1
     )
 )
 

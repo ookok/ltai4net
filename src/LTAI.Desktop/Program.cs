@@ -127,8 +127,14 @@ public static class Program
         services.AddSingleton<ILlmClient, LlmClient>();
         services.AddSingleton<ISessionSerializer>(_ => new MmSessionSerializer());
         services.AddSingleton<SessionManager>(sp =>
-            ActivatorUtilities.CreateInstance<SessionManager>(sp,
-                sp.GetRequiredService<ISessionSerializer>()));
+        {
+            var mgr = ActivatorUtilities.CreateInstance<SessionManager>(sp,
+                sp.GetRequiredService<ISessionSerializer>());
+            var cacheStore = sp.GetService<LTAI.Agent.Caching.IMemoryCachingStore>();
+            if (cacheStore != null)
+                mgr.OnSessionDeleted = id => { _ = cacheStore.InvalidateSessionAsync(id); };
+            return mgr;
+        });
         services.AddTransient<DevUIViewModel>();
         return services;
     }

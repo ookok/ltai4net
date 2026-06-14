@@ -32,7 +32,7 @@ services.AddLTAIAgent();    // 10 agents、编排、工具
 
 ## Agent 定义
 
-Agent 由 `agents/*.agent.md` YAML front-matter 声明。19 个 agents：`LTAI-Chat`、`LTAI-Chat-Pro`、`LTAI-Code`、`LTAI-Data`、`LTAI-Frontend`、`LTAI-LLM`、`LTAI-Math`、`LTAI-System`、`LTAI-Writer`、`sql-agent`、`LTAI-API`、`LTAI-Arch`、`LTAI-DCI`、`LTAI-Plan`、`LTAI-Review`、`LTAI-Debug`、`LTAI-Security`、`LTAI-DevOps`、`LTAI-Office`。
+Agent 由 `agents/*.agent.md` YAML front-matter 声明。19 个 agents：`LTAI-Chat`、`LTAI-Chat-Pro`、`LTAI-Code`、`LTAI-Data`、`LTAI-Frontend`、`LTAI-LLM`、`LTAI-Math`、`LTAI-System`、`LTAI-Writer`、`LTAI-SQL`、`LTAI-API`、`LTAI-Arch`、`LTAI-DCI`、`LTAI-Test`、`LTAI-Review`、`LTAI-Debug`、`LTAI-Security`、`LTAI-DevOps`、`LTAI-Office`。
 
 ```bash
 ltai agents list          # 一览
@@ -170,8 +170,126 @@ Web: GET /ltai/v1/workflows
 - **配置**：`appsettings.json` `LTAI` 节 + 环境变量（DEEPSEEK_API_KEY 等）。仅需配置一个 API Key，L2/L3 自动选拔。
 - **Provider 元数据**：`models/models-dev-providers.json`（252KB，首次启动自动加载，后台 24h 刷新）。
 
+## 端侧推理
+
+`models/edge-providers.json` 配置本地推理工具的 provider 元数据，加载后与远程 provider 合并使用。
+
+### 支持的端侧工具
+
+| Provider ID | 工具 | 说明 |
+|---|---|---|
+| `ollama` | [Ollama](https://ollama.ai) | 本地 LLM 运行时，支持 GGUF 模型 |
+| `vllm` | [vLLM](https://github.com/vllm-project/vllm) | 高性能推理引擎，支持 PagedAttention |
+| `llamacpp` | [llama.cpp](https://github.com/ggerganov/llama.cpp) | C/C++ 推理，支持 CPU/GPU 混合 |
+| `lmstudio` | [LM Studio](https://lmstudio.ai) | 图形化本地模型管理 |
+| `koboldcpp` | [KoboldCPP](https://github.com/LostRuins/koboldcpp) | 面向角色扮演的推理前端 |
+
+### 切换端侧 Provider
+
+在 `appsettings.json` 的 `LTAI:AI` 节设置 `DefaultProvider`：
+
+```json
+{
+  "LTAI": {
+    "AI": {
+      "DefaultProvider": "ollama",
+      "MaxTokens": 8192,
+      "Temperature": 0.7
+    }
+  }
+}
+```
+
+支持的 `DefaultProvider` 值：`ollama`、`vllm`、`llamacpp`、`lmstudio`、`koboldcpp`。
+
+Provider 默认可断连（不配置 endpoint 也不影响启动），通过 `models/edge-providers.json` 中的 `api` 字段配置端侧服务地址。
+
+### Ollama + Qwen3-8B 示例配置
+
+`models/edge-providers.json` 已内置 Qwen3-8B 等模型。启动 Ollama 后拉取模型：
+
+```bash
+ollama pull qwen3:8b
+ollama serve  # 默认 http://localhost:11434
+```
+
+应用自动使用 Ollama provider，无需进一步配置。也可在 `appsettings.json` 显式指定：
+
+```json
+{
+  "LTAI": {
+    "AI": {
+      "DefaultProvider": "ollama",
+      "MaxTokens": 8192,
+      "Temperature": 0.7
+    }
+  }
+}
+```
+
+如需自定义 endpoint，修改 `models/edge-providers.json` 中 `ollama.api` 字段。
+
 ## 参考文档
 
 - `docs/architecture.md` — 六层架构图
 - `docs/ops/runbook.md` — 操作手册
 - `docs/maf-paradigm-evaluation.md` — MAF 范式评估
+
+## 环境变量参考
+
+所有环境变量遵循 `LTAI_<DOMAIN>_<PARAM>` 命名规范，默认值匹配原有硬编码。
+
+### 并发控制
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `LTAI_SHELL_CONCURRENCY` | 8 | SafeShellTool 全局并发上限 |
+| `LTAI_WASM_CONCURRENCY` | 6 | WasmtimeSandbox 全局并发上限 |
+| `LTAI_MOA_CONCURRENCY` | 6 | MoAWorkflow 编排节流 |
+| `LTAI_WORKFLOW_CONCURRENCY` | 6 | AgentWorkflows 编排节流 |
+| `LTAI_JOB_MAX_CONCURRENT` | 10 | BackgroundJobService 最大并发作业数 |
+| `LTAI_SEARCH_MAX_DOP` | min(CPU,4) | SearchTools 并行搜索度 |
+| `LTAI_ISSUE_DETECTOR_MAX_DOP` | 4 | IssueDetectors 并行度 |
+| `LTAI_TASK_QUEUE_MAX` | 100000 | TaskQueue 有界队列容量 (0=无界) |
+
+### 超时控制
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `LTAI_SHELL_TIMEOUT_SEC` | 30 | WasmtimeSandbox shell 命令超时 |
+| `LTAI_WASM_TIMEOUT_SEC` | 60 | WasmtimeSandbox WASM 执行超时 |
+| `LTAI_SCRIPT_TIMEOUT_SEC` | 60 | SkillScriptRunner 脚本超时 |
+| `LTAI_JOB_PROCESS_TIMEOUT_SEC` | 300 | BackgroundJobService 进程超时 |
+| `LTAI_REGEX_TIMEOUT_MS` | 1000 | FileSystemTools/SearchTools 正则超时 |
+| `LTAI_SQLITE_BUSY_MS` | 5000 | KgStore SQLite busy_timeout |
+| `LTAI_RETRY_BACKOFF_SEC` | `1,2,4,8,16` | RetryQueueWorker 退避序列（逗号分隔） |
+
+### 资源限制
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `LTAI_TOOL_MAX_OUTPUT_BYTES` | 102400 | WasmtimeSandbox 输出截断上限 |
+| `LTAI_JOB_MAX_OUTPUT_CHARS` | 100000 | BackgroundJobService 输出截断上限 |
+| `LTAI_JOB_EXPIRATION_SEC` | 60 | BackgroundJobService 作业驱逐时间 |
+| `LTAI_SQLITE_MMAP_MB` | 256 | KgStore SQLite mmap_size (MB) |
+| `LTAI_WASM_MODULE_CACHE_MAX` | 32 | WasmtimeSandbox 模块缓存上限 |
+| `LTAI_HTTP_MAX_CONN` | 6 | LLM HTTP 连接池每服务器最大连接 |
+| `LTAI_HTTP_POOL_LIFETIME_MIN` | 10 | LLM HTTP 连接池生命周期 (分钟) |
+| `LTAI_WATCHER_BUFFER` | 65536 | FileSystemWatcher 内部缓冲区大小 |
+
+### 缓存与间隔
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `LTAI_LLM_CACHE_TTL_MIN` | 5 | MultiProviderChatClient LLM 响应缓存 TTL |
+| `LTAI_COMPRESSION_MAX_AGE_DAYS` | 30 | CompressionStore 条目最大保留天数 |
+| `LTAI_CG_CACHE_SIZE` | 100 | CgGraph 查询缓存条目数 |
+| `LTAI_CG_CACHE_TTL_SEC` | 30 | CgGraph 查询缓存 TTL |
+| `LTAI_MEMORY_CONSOLIDATION_MINUTES` | 30 | MemoryConsolidationService 执行间隔 |
+| `LTAI_RATE_LIMIT_CLEANUP_MIN` | 5 | RateLimitMiddleware 清理间隔 |
+
+### 行为控制
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `LTAI_GREETING_MAX_LENGTH` | 15 | QueryClassifier 问候判定最大字符数 |

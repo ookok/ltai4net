@@ -84,6 +84,21 @@ public sealed class LTAIDurableAgentHost : IHostedService
             listener.Stop();
         }
     }
+
+    /// <summary>Public accessor for DI registration that needs the port before host starts.</summary>
+    internal static int GetEffectivePort(int? configuredPort) =>
+        configuredPort ?? ReserveLoopbackPort();
+
+    internal static string ResolveDatabasePath(string? configuredPath)
+    {
+        if (!string.IsNullOrWhiteSpace(configuredPath))
+        {
+            return Path.IsPathRooted(configuredPath)
+                ? configuredPath
+                : Path.Combine(Directory.GetCurrentDirectory(), configuredPath);
+        }
+        return Path.Combine(Directory.GetCurrentDirectory(), ".livingtree", "durability.db");
+    }
 }
 
 /// <summary>

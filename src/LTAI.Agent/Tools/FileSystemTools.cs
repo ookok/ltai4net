@@ -2,6 +2,7 @@
 using System.Text;
 using System.Text.RegularExpressions;
 using LTAI.AI;
+using LTAI.Core.Configuration;
 using LTAI.Agent.Caching;
 using LTAI.Core;
 
@@ -117,7 +118,7 @@ public sealed class FileSystemTools
             var summary2 = DescribeDoc(content, ext2);
             var effectiveMax = maxChars > 0 ? maxChars : int.MaxValue;
             if (content.Length > effectiveMax)
-                return $"[file: {fp}, {totalSizeKb}KB, {content.Length} chars — {summary2}]\n{content[..effectiveMax]}\n... [truncated at {effectiveMax} chars]";
+                return $"[file: {fp}, {totalSizeKb}KB, {content.Length} chars — {summary2}]\n{ContentTruncator.Truncate(content, effectiveMax)}";
             return $"[file: {fp}, {totalSizeKb}KB, {content.Length} chars — {summary2}]\n{content}";
         }
         catch (Exception ex)
@@ -125,6 +126,9 @@ public sealed class FileSystemTools
             return $"Error reading '{path}': {ex.GetType().Name}: {ex.Message}";
         }
     }
+
+    private static readonly System.Text.RegularExpressions.Regex MdHeadingRx = new(@"^#{1,6}\s", System.Text.RegularExpressions.RegexOptions.Multiline | System.Text.RegularExpressions.RegexOptions.Compiled);
+    private static readonly System.Text.RegularExpressions.Regex HtmlTagRx = new(@"<(\w+)", System.Text.RegularExpressions.RegexOptions.Multiline | System.Text.RegularExpressions.RegexOptions.Compiled);
 
     private static string DescribeDoc(string content, string ext)
     {
@@ -141,20 +145,18 @@ public sealed class FileSystemTools
             }
             catch { return "JSON (解析失败)"; }
         }
+        var lines = content.AsSpan().Count('\n') + 1;
         if (ext is ".md" or ".markdown")
         {
-            var headings = System.Text.RegularExpressions.Regex.Matches(content, @"^#{1,6}\s", System.Text.RegularExpressions.RegexOptions.Multiline).Count;
-            var lines = content.Split('\n').Length;
+            var headings = MdHeadingRx.Matches(content).Count;
             return $"Markdown ({lines} 行, {headings} 个标题)";
         }
         if (ext is ".html" or ".htm")
         {
-            var tagCount = System.Text.RegularExpressions.Regex.Matches(content, @"<(\w+)", System.Text.RegularExpressions.RegexOptions.Multiline).Count;
-            var lines = content.Split('\n').Length;
+            var tagCount = HtmlTagRx.Matches(content).Count;
             return $"HTML ({lines} 行, ~{tagCount} 标签)";
         }
-        var totalLines = content.Split('\n').Length;
-        return $"{totalLines} 行";
+        return $"{lines} 行";
     }
 
     [Description("写入/创建文件。用于创建新文件或覆盖已有文件内容。\n"
@@ -196,7 +198,12 @@ public sealed class FileSystemTools
     {
         var fp = PathUtils.SafeResolvePath(_ws, path);
         if (fp == null) return ["Error: path escape"];
-        return Directory.Exists(fp) ? Directory.GetFileSystemEntries(fp).Select(Path.GetFileName).OfType<string>().ToArray() : [];
+        if (!Directory.Exists(fp)) return [];
+        var entries = Directory.GetFileSystemEntries(fp).Select(Path.GetFileName).OfType<string>().ToArray();
+        const int maxEntries = 5000;
+        if (entries.Length > maxEntries)
+            return entries.Take(maxEntries).Append($"... ({entries.Length - maxEntries} more entries in directory)").ToArray();
+        return entries;
     }
 
     [Description("列出当前可用的所有工具及其用途说明。")]
@@ -386,16 +393,22 @@ public sealed class FileSystemTools
 
     // Bounded glob→regex cache (LRU, max 256 entries — prevents ReDoS memory leak)
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, Regex> _globCache = new(4, 256, StringComparer.OrdinalIgnoreCase);
+    private static readonly System.Collections.Concurrent.ConcurrentQueue<string> _globCacheOrder = new();
     private const int GlobCacheMax = 256;
-    private static int _globCount;
 
     private static Regex GlobToRegex(string glob)
     {
         if (_globCache.TryGetValue(glob, out var cached)) return cached;
-        if (Interlocked.Increment(ref _globCount) > GlobCacheMax) { _globCache.Clear(); Interlocked.Exchange(ref _globCount, 0); }
         var p = Regex.Escape(glob).Replace(@"\*\*", ".*").Replace(@"\*", "[^/]*").Replace(@"\?", ".").Replace(@"{", "(?:").Replace(@",", "|").Replace(@"}", ")");
-        var regex = new Regex($"^{p}$", RegexOptions.IgnoreCase | RegexOptions.Compiled, TimeSpan.FromSeconds(1));
-        _globCache.TryAdd(glob, regex);
+        var regex = new Regex($"^{p}$", RegexOptions.IgnoreCase | RegexOptions.Compiled, TimeSpan.FromMilliseconds(
+            int.TryParse(Environment.GetEnvironmentVariable("LTAI_REGEX_TIMEOUT_MS"), out var rt) ? Math.Max(100, rt) : 1000));
+        if (_globCache.TryAdd(glob, regex))
+        {
+            _globCacheOrder.Enqueue(glob);
+            // Evict oldest entries if over limit (keep ~75% = 192, evict ~25% = 64)
+            while (_globCacheOrder.Count > GlobCacheMax && _globCacheOrder.TryDequeue(out var old))
+                _globCache.TryRemove(old, out _);
+        }
         return _globCache.TryGetValue(glob, out var r) ? r : regex;
     }
 

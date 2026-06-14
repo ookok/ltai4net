@@ -258,8 +258,10 @@ public sealed class CodeAnalysisTools
         return false;
     }
 
+    private static readonly char s_sep = System.IO.Path.DirectorySeparatorChar;
+
     private static bool ShouldSkip(string rel) =>
-        rel.Contains("/obj/") || rel.Contains("/bin/") || rel.Contains("node_modules/")
+        rel.Contains($"{s_sep}obj{s_sep}") || rel.Contains($"{s_sep}bin{s_sep}") || rel.Contains($"node_modules{s_sep}")
         || rel.Contains("/dist/") || rel.Contains("/.git/") || rel.Contains("/.vs/");
 
     private string? ResolvePath(string path) => LTAI.Core.PathUtils.SafeResolvePath(_ws, path);

@@ -45,12 +45,20 @@ public sealed class WasmtimeSandbox : AIContextProvider
     private readonly bool _wasmAvailable;
     // Bounded WASM module cache (max 32 modules — each can be several MB)
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, Wasmtime.Module> _moduleCache = new(4, 32);
-    private const int ModuleCacheMax = 32;
+    private static readonly int _moduleCacheMax = ReadEnvInt("LTAI_WASM_MODULE_CACHE_MAX", 32);
     private static int _moduleCount;
 
-    private const int ShellTimeoutSec = 30;
-    private const int WasmTimeoutSec = 60;
-    private const int MaxOutputBytes = 100 * 1024;
+    private static readonly int _shellTimeoutSec = ReadEnvInt("LTAI_SHELL_TIMEOUT_SEC", 30);
+    private static readonly int _wasmTimeoutSec = ReadEnvInt("LTAI_WASM_TIMEOUT_SEC", 60);
+    private static readonly int _maxOutputBytes = ReadEnvInt("LTAI_TOOL_MAX_OUTPUT_BYTES", 100 * 1024);
+    private static readonly SemaphoreSlim _concurrencyGate = new(
+        ReadEnvInt("LTAI_WASM_CONCURRENCY", 6),
+        ReadEnvInt("LTAI_WASM_CONCURRENCY", 6));
+
+    private static int ReadEnvInt(string key, int fallback)
+    {
+        return int.TryParse(Environment.GetEnvironmentVariable(key), out var v) ? Math.Max(1, v) : fallback;
+    }
 
     public WasmtimeSandbox(string workspace, ILogger<WasmtimeSandbox>? logger = null)
         : base(null, null, null)
@@ -85,7 +93,8 @@ public sealed class WasmtimeSandbox : AIContextProvider
 
         var tools = existing.Tools?.ToList() ?? new List<AITool>();
 
-        // sandbox_exec only WASM (shell handled by SafeShellTool)if (_wasmAvailable)
+        // sandbox_exec only WASM (shell handled by SafeShellTool)
+        if (_wasmAvailable)
         {
             tools.Add(AIFunctionFactory.Create(ExecuteWasmAsync));
         }
@@ -181,7 +190,7 @@ public sealed class WasmtimeSandbox : AIContextProvider
         try
         {
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            cts.CancelAfter(TimeSpan.FromSeconds(ShellTimeoutSec));
+            cts.CancelAfter(TimeSpan.FromSeconds(_shellTimeoutSec));
 
             var isWindows = OperatingSystem.IsWindows();
             var psi = new ProcessStartInfo
@@ -201,10 +210,14 @@ public sealed class WasmtimeSandbox : AIContextProvider
                 : "/usr/bin:/bin:/usr/local/bin";
 
             using var process = new Process { StartInfo = psi };
+
+            await _concurrencyGate.WaitAsync(ct).ConfigureAwait(false);
+            try
+            {
             process.Start();
 
-            var stdoutTask = ReadWithLimitAsync(process.StandardOutput, MaxOutputBytes, cts.Token);
-            var stderrTask = ReadWithLimitAsync(process.StandardError, MaxOutputBytes, cts.Token);
+            var stdoutTask = ReadWithLimitAsync(process.StandardOutput, _maxOutputBytes, cts.Token);
+            var stderrTask = ReadWithLimitAsync(process.StandardError, _maxOutputBytes, cts.Token);
 
             var (stdout, stderr) = (await stdoutTask, await stderrTask.ConfigureAwait(false));
             await process.WaitForExitAsync(cts.Token).ConfigureAwait(false);
@@ -220,12 +233,14 @@ public sealed class WasmtimeSandbox : AIContextProvider
                 process.ExitCode, sw.ElapsedMilliseconds, result.Length);
 
             return process.ExitCode == 0
-                ? ToolResult.Success(result)
-                : ToolResult.Error($"Exit code {process.ExitCode}", new { output = result });
+                ? $"exit=0 ({sw.ElapsedMilliseconds}ms, {result.Length} bytes):\n{result}"
+                : $"exit={process.ExitCode} ({sw.ElapsedMilliseconds}ms):\n{result}";
+            }
+            finally { _concurrencyGate.Release(); }
         }
         catch (OperationCanceledException)
         {
-            return ToolResult.Error($"Command timed out after {ShellTimeoutSec}s");
+            return ToolResult.Error($"Command timed out after {_shellTimeoutSec}s");
         }
         catch (Exception ex)
         {
@@ -265,7 +280,7 @@ public sealed class WasmtimeSandbox : AIContextProvider
             var name = Path.GetFileName(fp);
             if (!_moduleCache.TryGetValue(name, out var module))
             {
-                if (Interlocked.Increment(ref _moduleCount) > ModuleCacheMax)
+                if (Interlocked.Increment(ref _moduleCount) > _moduleCacheMax)
                 {
                     foreach (var m in _moduleCache.Values) m.Dispose();
                     _moduleCache.Clear();
@@ -296,7 +311,7 @@ public sealed class WasmtimeSandbox : AIContextProvider
 
             // Enforce execution timeout via Task wrapping
             using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            timeoutCts.CancelAfter(TimeSpan.FromSeconds(WasmTimeoutSec));
+            timeoutCts.CancelAfter(TimeSpan.FromSeconds(_wasmTimeoutSec));
             var start = instance.GetFunction("_start");
             if (start != null)
             {
@@ -304,7 +319,7 @@ public sealed class WasmtimeSandbox : AIContextProvider
                 var timeoutTask = Task.Delay(Timeout.Infinite, timeoutCts.Token);
                 var completed = await Task.WhenAny(wasmTask, timeoutTask).ConfigureAwait(false);
                 if (completed != wasmTask)
-                    return ToolResult.Error($"WASM execution timed out after {WasmTimeoutSec}s");
+                    return ToolResult.Error($"WASM execution timed out after {_wasmTimeoutSec}s");
                 await wasmTask.ConfigureAwait(false);
             }
 
@@ -318,7 +333,7 @@ public sealed class WasmtimeSandbox : AIContextProvider
         }
         catch (OperationCanceledException)
         {
-            return ToolResult.Error($"WASM execution timed out after {WasmTimeoutSec}s");
+            return ToolResult.Error($"WASM execution timed out after {_wasmTimeoutSec}s");
         }
         catch (WasmtimeException ex)
         {

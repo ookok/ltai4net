@@ -8,7 +8,9 @@
 	branch = main
 [submodule "extern/Terminal.Gui"]
 	path = extern/Terminal.Gui
-	url = https://github.com/gui-cs/Terminal.Gui
+	url = https://github.com/gui-cs/Terminal.Gui.git
+	branch = main
 [submodule "extern/Editor"]
 	path = extern/Editor
-	url = https://github.com/gui-cs/Editor
+	url = https://github.com/gui-cs/Editor.git
+	branch = main

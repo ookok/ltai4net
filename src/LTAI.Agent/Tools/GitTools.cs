@@ -24,12 +24,15 @@ public sealed class GitTools
         using var cts = new CancellationTokenSource(GitTimeout);
         try
         {
-            var task = Task.Run(action, cts.Token);
-            return task.Wait(GitTimeout) ? task.Result! : $"⏱ {errorLabel} timed out ({GitTimeout.TotalSeconds}s)";
+            return Task.Run(action, cts.Token).GetAwaiter().GetResult();
         }
         catch (AggregateException ae) when (ae.InnerException != null)
         {
             return $"{errorLabel}: {ae.InnerException.Message}";
+        }
+        catch (OperationCanceledException)
+        {
+            return $"⏱ {errorLabel} timed out ({GitTimeout.TotalSeconds}s)";
         }
     }
 

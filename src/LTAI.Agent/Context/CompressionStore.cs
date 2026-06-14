@@ -5,8 +5,8 @@
 // ═══════════════════════════════════════════════════════════════
 
 using System.Data;
-using System.Security.Cryptography;
 using System.Text;
+using LTAI.Core.Configuration;
 using Microsoft.Data.Sqlite;
 
 namespace LTAI.Agent.Context;
@@ -20,7 +20,8 @@ public sealed class CompressionStore : IDisposable
     private readonly object _gate = new();
     private long _totalEntries;
     private long _storeCount;
-    private static readonly TimeSpan MaxEntryAge = TimeSpan.FromDays(30);
+    private static readonly TimeSpan MaxEntryAge = TimeSpan.FromDays(
+        int.TryParse(Environment.GetEnvironmentVariable("LTAI_COMPRESSION_MAX_AGE_DAYS"), out var d) ? Math.Max(1, d) : 30);
 
     public CompressionStore(string dbPath)
     {
@@ -97,8 +98,9 @@ public sealed class CompressionStore : IDisposable
         EnsureSchema();
         using var conn = new SqliteConnection(_connectionString);
         conn.Open();
-        using var cmd = conn.CreateCommand();
+        using         var cmd = conn.CreateCommand();
         cmd.CommandText = "SELECT id,original,summary,original_tokens,content_type FROM compression_store WHERE id=$id";
+        cmd.Parameters.AddWithValue("$id", id);
         using var reader = cmd.ExecuteReader();
         if (!reader.Read()) return null;
         return new CompressedEntry(reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetInt32(3), reader.GetString(4));
@@ -120,6 +122,6 @@ public sealed class CompressionStore : IDisposable
     public long TotalEntries => Interlocked.Read(ref _totalEntries);
     public void Dispose() { }
 
-    private static string ComputeHash(string content) => Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(content)));
-    internal static int EstimateTokens(string text) => Math.Max(1, text.Length / 4);
+    private static string ComputeHash(string content) => FastHash.ComputeHex(content);
+    internal static int EstimateTokens(string text) => TokenEstimator.Estimate(text);
 }

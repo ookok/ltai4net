@@ -36,6 +36,7 @@ internal static class EmbeddingPool
         return result;
     }
 
+    /// <summary>L2-normalize a vector. MODIFIES the input array in-place and returns it.</summary>
     public static float[] L2Normalize(float[] vec)
     {
         float norm = 0;
@@ -47,7 +48,11 @@ internal static class EmbeddingPool
         return vec;
     }
 
-    public static float[] L2NormalizeInPlace(float[] buf, int len)
+    /// <summary>
+    /// L2-normalize the first <paramref name="len"/> elements of <paramref name="buf"/> in-place,
+    /// and return a new array containing those normalized elements. The original buffer is mutated.
+    /// </summary>
+    public static float[] L2NormalizeSubarray(float[] buf, int len)
     {
         float norm = 0;
         for (int i = 0; i < len; i++) norm += buf[i] * buf[i];

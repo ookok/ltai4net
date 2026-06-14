@@ -137,8 +137,10 @@ public sealed class DataTransformTools
         var bracketStart = part.IndexOf('[');
         if (bracketStart >= 0)
         {
+            var closeBracket = part.IndexOf(']', bracketStart + 1);
+            if (closeBracket < 0) return (part, null);
             var name = part[..bracketStart];
-            var indexStr = part[(bracketStart + 1)..part.IndexOf(']')];
+            var indexStr = part[(bracketStart + 1)..closeBracket];
             if (int.TryParse(indexStr, out var idx))
                 return (string.IsNullOrEmpty(name) ? null : name, idx);
         }

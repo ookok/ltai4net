@@ -1,3 +1,8 @@
+---
+name: api-design
+description: 审查 API 设计是否符合 RESTful 最佳实践。
+---
+
 # API Design Review
 
 ## 概要

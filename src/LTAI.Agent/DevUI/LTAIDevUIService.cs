@@ -64,13 +64,14 @@ public sealed record LTAIAgentCapabilities
 /// Also aggregates code suggestions from <see cref="ProactiveSuggestService"/>
 /// for the DevUI Suggestions panel.
 /// </summary>
-public sealed class LTAIDevUIService
+public sealed class LTAIDevUIService : IDisposable
 {
     private readonly IServiceProvider _sp;
     private readonly ILogger<LTAIDevUIService> _logger;
     private readonly object _cardCacheLock = new();
     private IReadOnlyList<LTAIAgentCard>? _cardCache;
     private int _cardCacheGeneration;
+    private System.Action<IReadOnlyList<Suggestions.CodeIssue>>? _suggestionsSubscription;
 
     /// <summary>Optional suggestion service for the DevUI suggestions panel.</summary>
     public ProactiveSuggestService? SuggestService { get; }
@@ -89,11 +90,13 @@ public sealed class LTAIDevUIService
 
         if (SuggestService != null)
         {
-            SuggestService.OnSuggestionsUpdated += _ =>
+            System.Action<IReadOnlyList<Suggestions.CodeIssue>> handler = _ =>
             {
                 _logger.LogDebug("LTAIDevUIService: suggestions updated, firing UI notification");
                 OnSuggestionsUpdated?.Invoke();
             };
+            SuggestService.OnSuggestionsUpdated += handler;
+            _suggestionsSubscription = handler;
         }
     }
 
@@ -290,6 +293,15 @@ public sealed class LTAIDevUIService
             Tools = def.Tools,
             Permissions = def.Permissions,
         };
+    }
+
+    public void Dispose()
+    {
+        if (_suggestionsSubscription != null && SuggestService != null)
+        {
+            SuggestService.OnSuggestionsUpdated -= _suggestionsSubscription;
+            _suggestionsSubscription = null;
+        }
     }
 }
 

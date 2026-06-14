@@ -39,8 +39,13 @@ appsettings.*.json
 ## Build output
 dist/
 
-## Models (large binary files)
-models/
+## Models (large binary files — keep JSON configs)
+models/*.onnx
+models/*.bin
+models/*.model
+models/minilm-l6-v2/
+models/bge-small-zh/
+models/bge-small-en/
 
 ## AI assistant artifacts
 .reasonix/
@@ -52,7 +57,6 @@ run_fix*.py
 *_b64.txt
 tmp_*
 tmp_doc*
-null
 test.txt
 check_lines.py
 *.bak

@@ -4,6 +4,7 @@ using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using LTAI.Core.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -35,16 +36,19 @@ public sealed class RemoteEmbeddingCache
     private readonly ILogger<RemoteEmbeddingCache> _logger;
     private readonly TimeSpan _ttl;
     private readonly ConcurrentDictionary<string, CacheEntry> _store = new(StringComparer.Ordinal);
+    private readonly int _maxEntries;
     private long _hits;
     private long _misses;
     private long _evictions;
 
     public RemoteEmbeddingCache(
         TimeSpan? ttl = null,
-        ILogger<RemoteEmbeddingCache>? logger = null)
+        ILogger<RemoteEmbeddingCache>? logger = null,
+        int maxEntries = 10000)
     {
         _ttl = ttl ?? TimeSpan.FromHours(24);
         _logger = logger ?? NullLogger<RemoteEmbeddingCache>.Instance;
+        _maxEntries = maxEntries;
     }
 
     public TimeSpan Ttl => _ttl;
@@ -95,6 +99,21 @@ public sealed class RemoteEmbeddingCache
             Vector = vector,
             ExpiresUtc = DateTime.UtcNow + _ttl,
         };
+        // LRU eviction: remove oldest entries by expiration time if over limit
+        if (_store.Count > _maxEntries)
+        {
+            var now = DateTime.UtcNow;
+            var toEvict = _store
+                .OrderBy(kv => kv.Value.ExpiresUtc)
+                .Take(_store.Count - _maxEntries)
+                .Select(kv => kv.Key)
+                .ToArray();
+            foreach (var k in toEvict)
+            {
+                _store.TryRemove(k, out _);
+                Interlocked.Increment(ref _evictions);
+            }
+        }
     }
 
     /// <summary>
@@ -137,9 +156,7 @@ public sealed class RemoteEmbeddingCache
     {
         // Use first 32 hex chars (128-bit) of SHA-256 — collision risk
         // negligible for typical LLM query lengths (< 1KB).
-        var bytes = Encoding.UTF8.GetBytes(text);
-        var hash = System.Security.Cryptography.SHA256.HashData(bytes);
-        var hex = Convert.ToHexString(hash, 0, 16);
+        var hex = FastHash.ComputeHex(text);
         return $"{provider}:{model}:{hex}";
     }
 

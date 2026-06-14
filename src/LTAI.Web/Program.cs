@@ -1,8 +1,11 @@
 using LTAI.Agent;
+using LTAI.Agent.Caching;
+using LTAI.Agent.Memory;
 using LTAI.Agent.Vector;
 using LTAI.AI;
 using LTAI.Core;
 using LTAI.Core.Configuration;
+using LTAI.Core.Session;
 using LTAI.Web.Middleware;
 using Microsoft.Agents.AI;
 using Microsoft.Agents.AI.DevUI;
@@ -30,6 +33,10 @@ try
     builder.Services.AddLTAICore();
     builder.Services.AddLTAIAI();
     builder.Services.AddLTAIAgent(out var agentNames);
+
+    // Session persistence: SessionManager for cross-restart session resume (A2A/AGUI)
+    builder.Services.AddSingleton<SessionManager>();
+    builder.Services.AddSingleton<ISessionSerializer, JsonSessionSerializer>();
 
     // ── P6: MAF Protocol Endpoints ──
     // OpenAI Responses + ChatCompletions + Conversations (in-memory)
@@ -93,7 +100,29 @@ try
         }
     });
 
-    // ── P6: A2A server registration uses deferred factory (no eager agent resolution) ──
+    // ── P6: A2A server registration with persistent session store ──
+    // Register LTAI's encrypted session store for each agent so A2A/AGUI
+    // conversations survive process restarts. Must register BEFORE AddA2AServer.
+    foreach (var name in agentNames)
+    {
+        builder.Services.AddKeyedSingleton<Microsoft.Agents.AI.Hosting.AgentSessionStore>(name,
+            (sp, key) =>
+            {
+                var sessionMgr = sp.GetRequiredService<SessionManager>();
+                var store = new LTAI.Web.Session.LTAIAgentSessionStore(
+                    sessionMgr,
+                    sp.GetRequiredService<ILogger<LTAI.Web.Session.LTAIAgentSessionStore>>());
+
+                // Wrap with claims-based isolation for multi-user safety
+                var isolationProvider = sp.GetService<Microsoft.Agents.AI.Hosting.SessionIsolationKeyProvider>();
+                if (isolationProvider != null)
+                    store = new Microsoft.Agents.AI.Hosting.IsolationKeyScopedAgentSessionStore(
+                        store, isolationProvider, new() { Strict = true });
+
+                return store;
+            });
+    }
+
     foreach (var name in agentNames)
     {
         builder.Services.AddA2AServer(name);
@@ -219,7 +248,7 @@ try
         {
             // D68: failed reload keeps the old snapshot alive; surface the
             // error to the client so it can show a meaningful toast.
-            return Results.Problem($"Reload failed: {ex.Message}", statusCode: 422);
+            return Results.Problem("Reload failed", statusCode: 422);
         }
     });
 
@@ -335,8 +364,8 @@ try
         var cfg = reg.TryGetPipelineConfig(name);
         if (cfg == null) return Results.NotFound(new { error = $"Pipeline '{name}' not found" });
         var result = cfg.Type == "concurrent"
-            ? await pipes.RunConcurrentAsync([name], cfg.DefaultTask ?? "Execute pipeline", ct: default)
-            : await pipes.RunSequentialAsync([name], cfg.DefaultTask ?? "Execute pipeline", ct: default);
+            ? await pipes.RunConcurrentAsync([name], cfg.DefaultTask ?? "Execute pipeline", ct: ctx.RequestAborted)
+            : await pipes.RunSequentialAsync([name], cfg.DefaultTask ?? "Execute pipeline", ct: ctx.RequestAborted);
         return Results.Ok(new { pipeline = name, type = cfg.Type, result });
     });
 
@@ -406,7 +435,8 @@ try
         try
         {
             var kgStore = sp.GetRequiredService<KgStore>();
-            using var conn = new SqliteConnection($"Data Source={kgStore.DbPath};Mode=ReadOnly;");
+            var csb = new SqliteConnectionStringBuilder { DataSource = kgStore.DbPath, Mode = Microsoft.Data.Sqlite.SqliteOpenMode.ReadOnly };
+            using var conn = new SqliteConnection(csb.ConnectionString);
             await conn.OpenAsync().ConfigureAwait(false);
             return Results.Json(new { status = "ready", timestamp = DateTime.UtcNow });
         }
@@ -425,13 +455,46 @@ try
         try
         {
             var kgStore = sp.GetRequiredService<KgStore>();
-            using var conn = new SqliteConnection($"Data Source={kgStore.DbPath};Mode=ReadOnly;");
+            var csb = new SqliteConnectionStringBuilder { DataSource = kgStore.DbPath, Mode = Microsoft.Data.Sqlite.SqliteOpenMode.ReadOnly };
+            using var conn = new SqliteConnection(csb.ConnectionString);
             await conn.OpenAsync().ConfigureAwait(false);
             checks.Add(new { name = "kgstore", status = "healthy" });
         }
         catch (Exception)
         {
             checks.Add(new { name = "kgstore", status = "unhealthy", error = "Database unavailable" });
+        }
+
+        // Check session persistence
+        try
+        {
+            var sessionMgr = sp.GetService<SessionManager>();
+            if (sessionMgr == null)
+            {
+                checks.Add(new { name = "session_store", status = "degraded", error = "SessionManager not registered" });
+            }
+            else
+            {
+                var baseDir = Path.GetDirectoryName(SessionKeyInfo.KeyPath);
+                var diskFree = string.Empty;
+                try
+                {
+                    var drive = new DriveInfo(Path.GetPathRoot(SessionKeyInfo.KeyPath) ?? Path.GetPathRoot(Directory.GetCurrentDirectory()) ?? "C:\\");
+                    diskFree = $"{drive.AvailableFreeSpace / 1024 / 1024} MB";
+                }
+                catch { }
+                checks.Add(new
+                {
+                    name = "session_store",
+                    status = "healthy",
+                    keyExists = SessionKeyInfo.KeyExists,
+                    diskFree,
+                });
+            }
+        }
+        catch (Exception)
+        {
+            checks.Add(new { name = "session_store", status = "unhealthy", error = "Session persistence unavailable" });
         }
 
         // Check LLM providers
@@ -446,7 +509,11 @@ try
             checks.Add(new { name = "llm_providers", status = "unhealthy", error = "LLM providers unavailable" });
         }
 
-        var allHealthy = checks.All(c => c.GetType().GetProperty("status")?.GetValue(c)?.ToString() == "healthy");
+        var allHealthy = checks.All(c =>
+        {
+            var status = c.GetType().GetProperty("status")?.GetValue(c)?.ToString();
+            return status == "healthy";
+        });
 
         return Results.Json(new
         {
@@ -458,6 +525,47 @@ try
     });
 
     app.MapControllers();
+
+    // ── P19: Full-chain intent classification diagnostic endpoint ──
+    app.MapGet("/ltai/v1/classify", (string q, IServiceProvider sp) =>
+    {
+        if (string.IsNullOrWhiteSpace(q))
+            return Results.BadRequest(new { error = "Missing 'q' query parameter" });
+
+        var result = new Dictionary<string, object>();
+
+        // Layer 1: Safety (rule-based pre-check)
+        var safeByRules = LTAI.Core.Safety.SafetyRules.IsSafeByRules(q);
+        result["safety"] = new { safeByRules };
+
+        // Layer 2: Greeting detection
+        var queryClassifier = sp.GetService<QueryClassifier>();
+        var isGreeting = queryClassifier?.IsGreetingOnly(q) ?? QueryClassifier.IsGreetingOnlyStatic(q);
+        result["greeting"] = new { isGreeting };
+
+        // Layer 3: Knowledge query gate
+        var isKnowledgeQuery = KbGraph.IsKnowledgeQuery(q);
+        result["knowledgeQuery"] = new { isKnowledgeQuery };
+
+        // Layer 4: Query intent classification (with confidence)
+        var (intent, confidence) = queryClassifier?.ClassifyIntentWithScore(q)
+            ?? (QueryIntent.What, 0f);
+        result["intent"] = new { intent = intent.ToString(), confidence };
+
+        // Layer 5: Full classification summary
+        if (queryClassifier != null)
+        {
+            var full = queryClassifier.Classify(q);
+            result["summary"] = new { full.IsGreeting, intent = full.Intent.ToString(), full.Confidence, full.IsSubstantive, full.IsConfident };
+        }
+
+        return Results.Ok(new
+        {
+            query = q,
+            timestamp = DateTime.UtcNow,
+            chain = result
+        });
+    });
 
     // ── P6: MAF Protocol Endpoint Mapping (per-agent, isolated) ──
     // Each agent is mapped independently so that a single agent DI failure

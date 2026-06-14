@@ -1,3 +1,8 @@
+---
+name: paper-format
+description: 辅助学术论文写作与排版。
+---
+
 # Paper Format 论文排版
 
 ## 概要

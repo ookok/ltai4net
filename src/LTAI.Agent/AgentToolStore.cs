@@ -1,5 +1,5 @@
 using System.Collections.Concurrent;
-using Microsoft.Agents.AI;
+using System.Text.Json;
 using Microsoft.Extensions.AI;
 
 namespace LTAI.Agent;
@@ -45,6 +45,19 @@ public sealed class AgentToolStore
     }
 
     /// <summary>
+    /// Registers multiple tools for an agent, clearing any existing tools first.
+    /// </summary>
+    public void RegisterToolsForAgent(string agentName, IEnumerable<AITool> tools)
+    {
+        var list = _store.GetOrAdd(agentName, _ => new List<AITool>());
+        lock (list)
+        {
+            list.Clear();
+            list.AddRange(tools);
+        }
+    }
+
+    /// <summary>
     /// Returns the tool list for the specified agent, or an empty list if none registered.
     /// </summary>
     public IReadOnlyList<AITool> GetTools(string agentName)
@@ -58,6 +71,11 @@ public sealed class AgentToolStore
     }
 
     /// <summary>
+    /// Returns the tool list for the specified agent. Alias for <see cref="GetTools"/>.
+    /// </summary>
+    public IReadOnlyList<AITool> GetAgentTools(string agentName) => GetTools(agentName);
+
+    /// <summary>
     /// Returns all agent names that have registered tools.
     /// </summary>
     public IEnumerable<string> GetAgentNames() => _store.Keys;
@@ -67,4 +85,49 @@ public sealed class AgentToolStore
     /// </summary>
     public int GetToolCount(string agentName)
         => _store.TryGetValue(agentName, out var list) ? list.Count : 0;
+
+    /// <summary>
+    /// Hot-reloads tools for the specified agent from <c>.livingtree/tools/{agentName}/</c>.
+    /// Scans all <c>*.tool.json</c> files in that directory and registers them as <see cref="AITool"/> instances.
+    /// If the directory does not exist or contains no valid tool definitions, the agent's tools are cleared.
+    /// </summary>
+    public void HotReloadAgentTools(string agentName)
+    {
+        var toolsDir = Path.Combine(AppContext.BaseDirectory, ".livingtree", "tools", agentName);
+        var tools = new List<AITool>();
+
+        if (Directory.Exists(toolsDir))
+        {
+            foreach (var file in Directory.GetFiles(toolsDir, "*.tool.json"))
+            {
+                try
+                {
+                    var json = File.ReadAllText(file);
+                    var def = JsonSerializer.Deserialize<ToolFileDefinition>(json);
+                    if (def != null && !string.IsNullOrEmpty(def.Name))
+                    {
+                        var tool = AIFunctionFactory.Create(
+                            () => { try { if (def.ScriptPath != null) File.ReadAllText(def.ScriptPath); } catch { } },
+                            def.Name,
+                            def.Description);
+                        tools.Add(tool);
+                    }
+                }
+                catch
+                {
+                    // skip malformed tool files
+                }
+            }
+        }
+
+        RegisterToolsForAgent(agentName, tools);
+    }
+
+    private sealed class ToolFileDefinition
+    {
+        public string? Name { get; set; }
+        public string? Description { get; set; }
+        public string? ScriptPath { get; set; }
+        public string[]? Parameters { get; set; }
+    }
 }

@@ -7,5 +7,3 @@ Check for:
 3. Harmful content: violence, harassment, illegal activities
 4. Credential leakage: private keys, certificates, access tokens
 5. Code injection / XSS / SQL injection payloads
-
-Text:

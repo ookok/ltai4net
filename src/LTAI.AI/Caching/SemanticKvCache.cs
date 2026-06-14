@@ -28,6 +28,7 @@ public sealed class SemanticKvCache : IDisposable
     private readonly double _similarityThreshold;
     private readonly ConcurrentDictionary<string, CacheRecord> _store = new(StringComparer.Ordinal);
     private readonly ReaderWriterLockSlim _rwLock = new();
+    private readonly int _maxEntries;
     private volatile bool _disposed;
 
     /// <summary>Number of cached entries.</summary>
@@ -55,10 +56,12 @@ public sealed class SemanticKvCache : IDisposable
 
     public SemanticKvCache(
         EmbeddingClient embedder,
-        double similarityThreshold = 0.92)
+        double similarityThreshold = 0.92,
+        int maxEntries = 1000)
     {
         _embedder = embedder ?? throw new ArgumentNullException(nameof(embedder));
         _similarityThreshold = similarityThreshold;
+        _maxEntries = Math.Max(100, maxEntries);
     }
 
     /// <summary>
@@ -121,7 +124,13 @@ public sealed class SemanticKvCache : IDisposable
         _rwLock.EnterWriteLock();
         try
         {
-            _store.TryAdd(query, new CacheRecord(emb, kvData, DateTime.UtcNow));
+            // LRU eviction: evict least-hit entry when at capacity
+            if (_store.Count >= _maxEntries)
+            {
+                var lru = _store.OrderBy(kv => kv.Value.HitCount).ThenBy(kv => kv.Value.CachedAt).FirstOrDefault();
+                if (lru.Key != null) _store.TryRemove(lru.Key, out _);
+            }
+            _store[query] = new CacheRecord(emb, kvData, DateTime.UtcNow);
         }
         finally { _rwLock.ExitWriteLock(); }
     }

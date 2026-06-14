@@ -12,10 +12,23 @@ $CLI_URL = "https://github.com/ltai-org/ltai4net/releases/latest/download/ltai.e
 $CLI_PATH = "$LTAI_DIR\ltai.exe"
 if (!(Test-Path $LTAI_DIR)) { New-Item -ItemType Directory -Path $LTAI_DIR -Force | Out-Null }
 
-Write-Host "[1/3] 下载 CLI..." -ForegroundColor Yellow
-try {
-    Invoke-WebRequest -Uri $CLI_URL -OutFile $CLI_PATH -ErrorAction Stop
-    Write-Host "  ✅ 已下载: $CLI_PATH" -ForegroundColor Green
+    Write-Host "[1/3] 下载 CLI..." -ForegroundColor Yellow
+    try {
+        Invoke-WebRequest -Uri $CLI_URL -OutFile $CLI_PATH -ErrorAction Stop
+        # Verify integrity: download checksum file and validate
+        try {
+            $hashUrl = "$CLI_URL.sha256"
+            $expectedHash = (Invoke-WebRequest -Uri $hashUrl -ErrorAction SilentlyContinue).Content.Trim()
+            if ($expectedHash) {
+                $actualHash = (Get-FileHash -Path $CLI_PATH -Algorithm SHA256).Hash.ToLower()
+                if ($actualHash -eq $expectedHash) {
+                    Write-Host "  ✅ SHA256 verified" -ForegroundColor Green
+                } else {
+                    Write-Host "  ⚠️ SHA256 mismatch! Expected: $expectedHash, Got: $actualHash" -ForegroundColor Red
+                }
+            }
+        } catch { }
+        Write-Host "  ✅ 已下载: $CLI_PATH" -ForegroundColor Green
 } catch {
     Write-Host "  ⚠️ 下载失败，请手动下载到 $CLI_PATH" -ForegroundColor Red
     Write-Host "     下载地址: $CLI_URL" -ForegroundColor Gray

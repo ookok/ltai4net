@@ -134,6 +134,9 @@ public static class Program
         // ── Terminal.Gui FullScreen mode (暂用 FullScreen 验证渲染) ──
         Application.AppModel = AppModel.FullScreen;
         var sessionMgr = new SessionManager(new MmSessionSerializer());
+        var cacheStore = sp.GetService<LTAI.Agent.Caching.IMemoryCachingStore>();
+        if (cacheStore != null)
+            sessionMgr.OnSessionDeleted = id => { _ = cacheStore.InvalidateSessionAsync(id); };
 
         using var app = Application.Create();
         app.Init();

@@ -41,6 +41,7 @@ public sealed class SkillEvolutionEngine
 
     // Track which skills we auto-created for lifecycle management
     private readonly HashSet<string> _autoEvolvedSkills = new(StringComparer.OrdinalIgnoreCase);
+    private readonly object _skillsLock = new();
 
     public SkillEvolutionEngine(IChatClient llm, ILogger<SkillEvolutionEngine> logger, string skillsDir)
     {
@@ -359,7 +360,7 @@ public sealed class SkillEvolutionEngine
             var exists = File.Exists(path);
             await File.WriteAllTextAsync(path, content, ct).ConfigureAwait(false);
 
-            _autoEvolvedSkills.Add(fileName);
+            lock (_skillsLock) { _autoEvolvedSkills.Add(fileName); }
             SaveAutoEvolvedRegistry();
             _logger.LogInformation("[SkillEvo] {Action} skill: {Path}",
                 exists ? "Updated" : "Created", path);
@@ -384,7 +385,7 @@ public sealed class SkillEvolutionEngine
             if (File.Exists(path))
             {
                 File.Move(path, archivePath);
-                _autoEvolvedSkills.Remove(fileName);
+                lock (_skillsLock) { _autoEvolvedSkills.Remove(fileName); }
                 SaveAutoEvolvedRegistry();
                 await File.AppendAllTextAsync(
                     Path.Combine(archiveDir, "deletion_log.txt"),
@@ -424,14 +425,13 @@ public sealed class SkillEvolutionEngine
                 Directory.CreateDirectory(archiveDir);
                 var archivePath = Path.Combine(archiveDir, $"{s.name}.{DateTime.UtcNow:yyyyMMdd}.stale");
                 File.Move(s.path, archivePath);
-                _autoEvolvedSkills.Remove(s.name);
+                lock (_skillsLock) { _autoEvolvedSkills.Remove(s.name); }
                 pruned++;
             }
             else if (stat != null && stat.LastUsed < cutoff && stat.CallCount < 5)
             {
-                // Used very little and not recently
                 File.Delete(s.path);
-                _autoEvolvedSkills.Remove(s.name);
+                lock (_skillsLock) { _autoEvolvedSkills.Remove(s.name); }
                 pruned++;
             }
         }
@@ -485,7 +485,7 @@ public sealed class SkillEvolutionEngine
         foreach (var line in File.ReadLines(path))
         {
             if (!string.IsNullOrWhiteSpace(line))
-                _autoEvolvedSkills.Add(line.Trim());
+                lock (_skillsLock) { _autoEvolvedSkills.Add(line.Trim()); }
         }
     }
 

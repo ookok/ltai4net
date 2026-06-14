@@ -30,7 +30,8 @@ internal static class AgentDefinitionLoader
         string? ModelId,
         float? Temperature,
         float? TopP,
-        string? Prompt = null)
+        string? Prompt = null,
+        string[] Tools = null!)
     {
         public AIAgent? Build(IServiceProvider sp, string name)
         {
@@ -40,7 +41,7 @@ internal static class AgentDefinitionLoader
                 return Task.Run(() =>
                     AgentBuilder.BuildAgentImpl(sp, name, Description, CanRead, CanWrite, CanList, CanExec,
                         modelId: ModelId, temperature: Temperature, topP: TopP,
-                        agentPrompt: Prompt)).GetAwaiter().GetResult();
+                        agentPrompt: Prompt, yamlTools: Tools)).GetAwaiter().GetResult();
             }
             catch (Exception ex)
             {
@@ -64,14 +65,15 @@ internal static class AgentDefinitionLoader
                 yield return new AgentDef(
                     Name: def.Name ?? key,
                     Description: def.Description,
-                    CanRead: def.Permissions.Contains("read"),
-                    CanWrite: def.Permissions.Contains("write"),
-                    CanList: def.Permissions.Contains("list"),
-                    CanExec: def.Permissions.Contains("exec"),
+            CanRead: def.Permissions.Contains("read", StringComparer.OrdinalIgnoreCase),
+            CanWrite: def.Permissions.Contains("write", StringComparer.OrdinalIgnoreCase),
+            CanList: def.Permissions.Contains("list", StringComparer.OrdinalIgnoreCase),
+            CanExec: def.Permissions.Contains("exec", StringComparer.OrdinalIgnoreCase),
                     ModelId: def.ModelId,
-                    Temperature: (float?)def.Temperature,
+                    Temperature: def.Temperature is >= -2 and <= 2 ? (float?)def.Temperature : null,
                     TopP: (float?)def.TopP,
-                    Prompt: def.Prompt);
+                    Prompt: def.Prompt,
+                    Tools: def.Tools);
             }
             // Internal router agent (not from files) — used by AgentWorkflows for handoff routing
             yield return new("LTAI-Router", "任务调度器(无工具)", false, false, false, false, null, 0.3f, 0.95f, Prompt: null);

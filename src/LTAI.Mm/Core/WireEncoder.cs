@@ -55,8 +55,6 @@ public sealed class WireEncoder
             if (uv <= WireConstants.MAX_1)
                 _buf.Write(Prefix.NEGATIVE_INT | WireConstants.INT_LEN_1, (byte)uv);
             else if (uv <= WireConstants.MAX_2)
-                _buf.Write(Prefix.NEGATIVE_INT | WireConstants.INT_LEN_1, (byte)uv);
-            else if (uv <= WireConstants.MAX_2)
                 _buf.Write(Prefix.NEGATIVE_INT | WireConstants.INT_LEN_2, (byte)(uv >> 8), (byte)uv);
             else if (uv <= WireConstants.MAX_3)
                 _buf.Write(Prefix.NEGATIVE_INT | WireConstants.INT_LEN_3, (byte)(uv >> 16), (byte)(uv >> 8), (byte)uv);

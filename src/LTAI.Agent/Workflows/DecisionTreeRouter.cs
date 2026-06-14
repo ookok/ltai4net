@@ -98,7 +98,6 @@ public sealed class DecisionTreeRouter
         activity?.SetTag("router.specialist_count", allSpecialistNames?.Count ?? 0);
 
         var (topKLimit, marginThreshold, minScoreThreshold, minAcceptable, fallbackKind, whitelist) = ResolveEffectiveConfig();
-        var cfg = _registry?.GetDecisionTreeConfig("decision-tree") ?? DecisionTreeConfig.Default;
 
         // Pre-allocate and reuse the names list to avoid repeated .ToArray() calls
         var allNamesList = (allSpecialistNames ?? [])
@@ -135,7 +134,7 @@ public sealed class DecisionTreeRouter
         // Stage 0b: no embedder → use top-K (not all — P0.2 embedding fallback chain)
         if (_embedder is null)
         {
-            var fallback = allNamesList.Take(topKLimit).ToList();
+            var fallback = allNamesList.OrderBy(n => n).Take(topKLimit).ToList();
             _logger.LogDebug("Router: no embedder, using top-{K}/{N} specialists", fallback.Count, allNamesList.Count);
             activity?.SetTag("router.branch", "NoEmbedder");
             return new DecisionTreeResult(fallback, BranchKind.NoEmbedder, 0f, 0f, [], GetCurrentTier());
@@ -148,7 +147,7 @@ public sealed class DecisionTreeRouter
 
         if (topK.Count == 0)
         {
-            var fallback = allNamesList.Take(topKLimit).ToList();
+            var fallback = allNamesList.OrderBy(n => n).Take(topKLimit).ToList();
             _logger.LogWarning("Router: top-K returned empty, using top-{K}/{N} specialists", fallback.Count, allNamesList.Count);
             activity?.SetTag("router.branch", "EmbeddingFailed");
             return new DecisionTreeResult(fallback, BranchKind.EmbeddingFailed, 0f, 0f, [], GetCurrentTier());
@@ -182,7 +181,11 @@ public sealed class DecisionTreeRouter
                     chosen.Add(t.Name);
             }
 
-            if (chosen.Count == 0) chosen = new List<string>(allNamesList);
+            if (chosen.Count == 0)
+            {
+                _logger.LogWarning("Router: embedding returned {K} candidates but none matched agent names — falling back to all {N}", topK.Count, allNamesList.Count);
+                chosen = new List<string>(allNamesList);
+            }
 
             _logger.LogInformation(
                 "Router: CONFIDENT (margin={Margin:F3} ≥ {Threshold:F3}, top={Top:F3}) → top-{K} of {Total} (fallback={Fb})",
@@ -276,7 +279,9 @@ public sealed class DecisionTreeRouter
         if (candidates.Length <= 1) return candidates;
 
         var candidateList = string.Join("\n", candidates.Select((n, i) => $"{i + 1}. {n}"));
-        var prompt = $"""
+        var hasCjk = task.Any(c => c >= 0x4E00 && c <= 0x9FFF);
+        var prompt = hasCjk
+            ? $"""
             你是一个任务路由专家。根据用户任务，从以下候选 agent 中选择最合适的 1-2 个。
             只返回 JSON 数组，如 ["AgentName"] 或 ["Agent1", "Agent2"]。
 
@@ -286,6 +291,17 @@ public sealed class DecisionTreeRouter
             {candidateList}
 
             JSON：
+            """
+            : $"""
+            You are a task routing expert. Given the user task, pick the best 1-2 agents from the candidates below.
+            Return ONLY a JSON array, e.g. ["AgentName"] or ["Agent1", "Agent2"].
+
+            User task: {task}
+
+            Candidate agents:
+            {candidateList}
+
+            JSON:
             """;
 
         try
@@ -338,6 +354,7 @@ public sealed class DecisionTreeRouterOptions
     public int TopK { get; init; } = 3;
     public float ConfidenceMarginThreshold { get; init; } = 0.15f;
     public float MinTopScoreThreshold { get; init; } = 0.30f;
+    public float MinAcceptableScore { get; init; } = 0.05f;
 }
 
 /// <summary>Why the router took the branch it did. Useful for telemetry.</summary>

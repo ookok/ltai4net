@@ -66,9 +66,11 @@ public sealed class EpProbeService : IHostedService
             bool likelyHasGpu = false;
             try
             {
-                // Try to load DirectML DLL — if it's present, DML is available
+                // Try to detect GPU via NVIDIA CUDA or AMD HIP driver DLLs
                 likelyHasGpu = File.Exists(Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.System), "DirectML.dll"));
+                    Environment.GetFolderPath(Environment.SpecialFolder.System), "nvcuda.dll"))
+                    || File.Exists(Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.System), "amdocl64.dll"));
             }
             catch
             {

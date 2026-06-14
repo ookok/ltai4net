@@ -150,6 +150,6 @@ public static partial class QueryUtils
         // Overlapping bigrams
         for (int i = 0; i < segment.Length - 1; i++)
             parts.Add(segment.Substring(i, 2));
-        return " " + string.Join(" ", parts) + " ";
+        return " (" + string.Join(" OR ", parts) + ") ";
     }
 }

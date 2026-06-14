@@ -196,24 +196,12 @@ public sealed class ExpertRouterAgent : DelegatingAIAgent
     /// Heuristic: classify whether the query is knowledge-seeking (vs. greeting/casual chat).
     /// Greetings and very short queries skip Expert routing.
     /// Uses KbGraph's internal centroid-based classifier as the primary signal.
+    /// Delegates greeting detection to the unified <see cref="Memory.QueryClassifier"/>.
     /// </summary>
-    private static bool IsKnowledgeQuery(string text)
+    internal static bool IsKnowledgeQuery(string text)
     {
         if (text.Length < 10) return false;
-
-        // Simple greeting/chat detection: skip expert routing for greetings
-        var lower = text.ToLowerInvariant().Trim();
-        var greetings = new[] { "hello", "hi", "hey", "good morning", "good afternoon",
-            "good evening", "how are you", "what's up", "你好", "您好", "早上好", "晚上好",
-            "谢谢", "thanks", "thank you", "bye", "再见" };
-
-        foreach (var g in greetings)
-        {
-            if (lower == g || lower.StartsWith(g + " ") || lower.EndsWith(" " + g))
-                return false;
-        }
-
-        // Defer to KbGraph's internal classifier
+        if (Memory.QueryClassifier.IsGreetingOnlyStatic(text)) return false;
         return KbGraph.IsKnowledgeQuery(text);
     }
 }

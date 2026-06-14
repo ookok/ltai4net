@@ -19,12 +19,24 @@ public static class ChatMessageRenderer
 
     // LRU cache for rendered responses (keyed by hash of content)
     private const int MaxCacheEntries = 64;
-    private static readonly ConcurrentDictionary<int, List<Avalonia.Controls.Control>> _renderCache = new();
-    private static readonly ConcurrentQueue<int> _cacheOrder = new();
+    private static readonly ConcurrentDictionary<long, List<Avalonia.Controls.Control>> _renderCache = new();
+    private static readonly ConcurrentQueue<long> _cacheOrder = new();
 
-    private static int ContentHash(string text) => text.GetHashCode();
+    private static long ContentHash(string text)
+    {
+        // FNV-1a 64-bit hash to minimize collisions vs string.GetHashCode()
+        const ulong fnvPrime = 1099511628211UL;
+        const ulong fnvOffset = 14695981039346656037UL;
+        ulong hash = fnvOffset;
+        foreach (char c in text)
+        {
+            hash ^= c;
+            hash *= fnvPrime;
+        }
+        return (long)hash;
+    }
 
-    private static void CacheAdd(int key, List<Avalonia.Controls.Control> children)
+    private static void CacheAdd(long key, List<Avalonia.Controls.Control> children)
     {
         _renderCache[key] = children;
         _cacheOrder.Enqueue(key);

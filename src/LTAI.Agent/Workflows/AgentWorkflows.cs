@@ -6,9 +6,12 @@ using System.Threading;
 using System.Threading.Tasks;
 using LTAI.AI;
 using LTAI.Agent.Diagnostics;
+using LTAI.Agent.Memory;
+using LTAI.Agent.Orchestration;
 using Microsoft.Agents.AI;
 using Microsoft.Agents.AI.Workflows;
 using Microsoft.Agents.AI.Workflows.Declarative;
+using Microsoft.Agents.AI.Workflows.InProc;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 
@@ -37,6 +40,11 @@ namespace LTAI.Agent.Workflows;
 /// </summary>
 public sealed class AgentWorkflows
 {
+    private static readonly int _wfConcurrency = int.TryParse(
+        Environment.GetEnvironmentVariable("LTAI_WORKFLOW_CONCURRENCY"), out var c) ? Math.Max(1, c) : 6;
+    private static readonly SemaphoreSlim _throttle = new(_wfConcurrency, _wfConcurrency);
+    private readonly TimeSpan _workflowTimeout;
+
     private readonly ILogger<AgentWorkflows> _logger;
     private readonly Dictionary<string, AIAgent> _specialists;
     private readonly AIAgent _router;
@@ -45,13 +53,19 @@ public sealed class AgentWorkflows
 
     private readonly RoutingDiagnosticsStore? _diagnosticsStore;
 
+    private readonly QueryClassifier? _queryClassifier;
+    private readonly string? _checkpointDir;
+
     public AgentWorkflows(
         IEnumerable<AIAgent> allAgents,
         AIAgent router,
         ILogger<AgentWorkflows> logger,
         DecisionTreeRouter? router2 = null,
         YAMLWorkflowRegistry? workflowRegistry = null,
-        RoutingDiagnosticsStore? diagnosticsStore = null)
+        RoutingDiagnosticsStore? diagnosticsStore = null,
+        QueryClassifier? queryClassifier = null,
+        string? checkpointDirectory = null,
+        TimeSpan? workflowTimeout = null)
     {
         _logger = logger;
         _router = router;
@@ -59,9 +73,26 @@ public sealed class AgentWorkflows
             embedder: null,
             logger: Microsoft.Extensions.Logging.Abstractions.NullLogger<DecisionTreeRouter>.Instance);
         _workflowRegistry = workflowRegistry;
+        _queryClassifier = queryClassifier;
+        _checkpointDir = checkpointDirectory;
+        _workflowTimeout = workflowTimeout ?? TimeSpan.FromSeconds(120);
         _specialists = allAgents
             .Where(a => !string.Equals(a.Name, router.Name, StringComparison.OrdinalIgnoreCase))
             .ToDictionary(a => a.Name!, StringComparer.OrdinalIgnoreCase);
+    }
+
+    /// <summary>Get the appropriate execution environment, with or without file-system checkpointing.</summary>
+    private InProcessExecutionEnvironment GetExecutionEnvironment()
+    {
+        if (_checkpointDir == null)
+            return InProcessExecution.OffThread;
+
+        var dir = new DirectoryInfo(_checkpointDir);
+        if (!dir.Exists) dir.Create();
+        var store = new Microsoft.Agents.AI.Workflows.Checkpointing.FileSystemJsonCheckpointStore(dir);
+        var manager = Microsoft.Agents.AI.Workflows.CheckpointManager.CreateJson(store);
+        _logger.LogInformation("Workflow checkpointing enabled at {Dir}", _checkpointDir);
+        return InProcessExecution.OffThread.WithCheckpointing(manager);
     }
 
     /// <summary>
@@ -143,11 +174,12 @@ public sealed class AgentWorkflows
         builder.EmitAgentResponseEvents();
 
         var workflow = builder.Build();
+        var executionEnv = GetExecutionEnvironment();
         var input = new List<ChatMessage> { new(ChatRole.User, task) };
 
         // ── Execute and collect the final agent response ──
         _logger.LogInformation("Handoff workflow start: {Task} [trace={Trace}]", task, traceId ?? "");
-        await using var run = await InProcessExecution.RunStreamingAsync(workflow, input, cancellationToken: ct)
+        await using var run = await executionEnv.RunStreamingAsync(workflow, input, cancellationToken: ct)
                                                  .ConfigureAwait(false);
 
         AgentResponse? lastResponse = null;
@@ -206,9 +238,10 @@ public sealed class AgentWorkflows
             string.Join(" → ", agents.Select(a => a.Name)), task, traceId ?? "");
 
         var workflow = AgentWorkflowBuilder.CreateSequentialBuilderWith(agents).Build();
+        var executionEnv = GetExecutionEnvironment();
         var input = new List<ChatMessage> { new(ChatRole.User, task) };
 
-        await using var run = await InProcessExecution.RunStreamingAsync(workflow, input, cancellationToken: ct)
+        await using var run = await executionEnv.RunStreamingAsync(workflow, input, cancellationToken: ct)
                                                  .ConfigureAwait(false);
 
         var sb = new StringBuilder();
@@ -230,19 +263,32 @@ public sealed class AgentWorkflows
     }
 
     /// <summary>
-    /// Concurrent fan-out: every agent processes the same task in parallel and
-    /// results are combined. Uses MAF <see cref="ConcurrentWorkflowBuilder"/>
-    /// with a custom aggregator that formats per-agent results as markdown.
-    /// Agent names can come from a YAML preset (P16.1) or be specified at runtime.
+    /// Concurrent fan-out with configurable orchestration mode.
+    /// Supports Standard, NGT (Nominal Group Technique), and Subgroup modes.
     /// </summary>
-    public async Task<string> RunConcurrentAsync(
+    public Task<string> RunConcurrentAsync(
         string[] agentNames,
         string task,
         string? traceId = null,
         CancellationToken ct = default)
+        => RunConcurrentAsync(agentNames, task, ConcurrentMode.Standard, traceId, ct);
+
+    /// <summary>
+    /// Concurrent fan-out with configurable orchestration mode.
+    /// <list type="bullet">
+    ///   <item><see cref="ConcurrentMode.Standard"/>: parallel → trace-level aggregator (existing).</item>
+    ///   <item><see cref="ConcurrentMode.NGT"/>: blind-first → share → discuss → aggregate.</item>
+    ///   <item><see cref="ConcurrentMode.Subgroup"/>: subgroups → within-group consensus → cross-group aggregate.</item>
+    /// </list>
+    /// </summary>
+    public async Task<string> RunConcurrentAsync(
+        string[] agentNames,
+        string task,
+        ConcurrentMode mode,
+        string? traceId = null,
+        CancellationToken ct = default)
     {
-        // P16.1: try a YAML preset if no runtime names given or if the first
-        // element matches a known preset name.
+        // YAML preset resolution (same as Standard)
         if (agentNames.Length == 1 && _workflowRegistry != null)
         {
             var preset = _workflowRegistry.TryGetPipelineConfig(agentNames[0])
@@ -250,24 +296,29 @@ public sealed class AgentWorkflows
             if (preset?.Type == "concurrent" && preset.Agents.Count > 0)
             {
                 agentNames = preset.Agents.ToArray();
-                _logger.LogInformation("Using concurrent preset: {Agents}",
-                    string.Join(", ", agentNames));
             }
         }
 
         var agents = ResolveAgents(agentNames);
         if (agents.Length == 0) return "No valid agents specified.";
 
-        _logger.LogInformation("Concurrent: {Agents} on: {Task} [trace={Trace}]",
+        return mode switch
+        {
+            ConcurrentMode.NGT => await RunNgtAsync(agents, task, traceId, ct).ConfigureAwait(false),
+            ConcurrentMode.Subgroup => await RunSubgroupAsync(agents, task, traceId, ct).ConfigureAwait(false),
+            _ => await RunStandardConcurrentAsync(agents, task, traceId, ct).ConfigureAwait(false),
+        };
+    }
+
+    private async Task<string> RunStandardConcurrentAsync(
+        AIAgent[] agents, string task, string? traceId, CancellationToken ct)
+    {
+        _logger.LogInformation("Concurrent(Standard): {Agents} on: {Task} [trace={Trace}]",
             string.Join(", ", agents.Select(a => a.Name)), task, traceId ?? "");
 
         var builder = AgentWorkflowBuilder.CreateConcurrentBuilderWith(agents);
         builder.WithAggregator(static lists =>
         {
-            // #4 Beyond Consensus: trace-level synthesis instead of majority voting.
-            // Read each agent's full reasoning trace, not just the final answer.
-            // The aggregator synthesizes across traces to recover correct answers
-            // from minority chains rather than discarding them.
             var sb = new StringBuilder();
             sb.AppendLine("## Trace-Level Synthesis\n");
             foreach (var list in lists)
@@ -275,7 +326,6 @@ public sealed class AgentWorkflows
                 if (list.Count == 0) continue;
                 var name = !string.IsNullOrEmpty(list[^1].AuthorName) ? list[^1].AuthorName : "(unnamed)";
                 sb.AppendLine($"### {name} — Trace ({list.Count} messages)");
-                // Include intermediate reasoning, not just final output
                 foreach (var msg in list)
                 {
                     if (msg.Role == ChatRole.User || string.IsNullOrWhiteSpace(msg.Text)) continue;
@@ -288,12 +338,148 @@ public sealed class AgentWorkflows
             sb.AppendLine("(above traces synthesized — minority findings preserved)");
             return [new ChatMessage(ChatRole.Assistant, sb.ToString())];
         });
-        var workflow = builder.Build();
+        return await RunConcurrentWorkflowAsync(builder.Build(), task, traceId, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// NGT (Nominal Group Technique): agents write independently (blind),
+    /// then see each other's outputs, then refine. Preserves diversity.
+    /// </summary>
+    private async Task<string> RunNgtAsync(
+        AIAgent[] agents, string task, string? traceId, CancellationToken ct)
+    {
+        _logger.LogInformation("Concurrent(NGT): {Count} agents on: {Task} [trace={Trace}]",
+            agents.Length, task, traceId ?? "");
+
+        // Phase 1: Blind write — each agent works independently (throttled)
+        var blindResults = await Task.WhenAll(
+            agents.Select(async a =>
+            {
+                await _throttle.WaitAsync(ct).ConfigureAwait(false);
+                try { return await CallAgentBlindAsync(a, task, ct).ConfigureAwait(false); }
+                finally { _throttle.Release(); }
+            })).ConfigureAwait(false);
+
+        // Phase 2: Share — collect blind outputs into a shared context
+        var shareSb = new StringBuilder();
+        shareSb.AppendLine($"## 原始问题\n{task}\n");
+        shareSb.AppendLine("## 各 Agent 的独立分析\n");
+        for (int i = 0; i < blindResults.Length; i++)
+        {
+            shareSb.AppendLine($"### {agents[i].Name}");
+            shareSb.AppendLine(blindResults[i]);
+            shareSb.AppendLine();
+        }
+
+        // Phase 3: Discuss — agents see everyone's output and refine (throttled)
+        var discussResults = await Task.WhenAll(
+            agents.Select(async (a, i) =>
+            {
+                await _throttle.WaitAsync(ct).ConfigureAwait(false);
+                try { return await CallAgentDiscussAsync(a, task, shareSb.ToString(), ct).ConfigureAwait(false); }
+                finally { _throttle.Release(); }
+            })).ConfigureAwait(false);
+
+        // Phase 4: Aggregate — collect final outputs
+        var sb = new StringBuilder();
+        sb.AppendLine("## NGT 综合结果\n");
+        for (int i = 0; i < discussResults.Length; i++)
+        {
+            sb.AppendLine($"### {agents[i].Name} (最终)");
+            sb.AppendLine(discussResults[i]);
+            sb.AppendLine();
+        }
+
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Subgroup mode: partition agents into subgroups, build within-group
+    /// consensus, then aggregate across groups. Maintains constructive conflict.
+    /// </summary>
+    private async Task<string> RunSubgroupAsync(
+        AIAgent[] agents, string task, string? traceId, CancellationToken ct)
+    {
+        _logger.LogInformation("Concurrent(Subgroup): {Count} agents on: {Task} [trace={Trace}]",
+            agents.Length, task, traceId ?? "");
+
+        // Partition into subgroups of ~2-3 agents
+        var groupSize = Math.Max(2, (int)Math.Ceiling(agents.Length / 3.0));
+        var groups = agents.Select((a, i) => (Agent: a, Index: i))
+            .GroupBy(x => x.Index / groupSize)
+            .Select(g => g.Select(x => x.Agent).ToArray())
+            .ToArray();
+
+        _logger.LogInformation("Subgroup: {G} groups of ~{Size}", groups.Length, groupSize);
+
+        // Phase 1: Each group builds internal consensus
+        var groupResults = new string[groups.Length];
+        for (int g = 0; g < groups.Length; g++)
+        {
+            var groupAgents = groups[g];
+            var blindResults = await Task.WhenAll(
+                groupAgents.Select(async a =>
+                {
+                    await _throttle.WaitAsync(ct).ConfigureAwait(false);
+                    try { return await CallAgentBlindAsync(a, task, ct).ConfigureAwait(false); }
+                    finally { _throttle.Release(); }
+                })).ConfigureAwait(false);
+
+            var groupSb = new StringBuilder();
+            groupSb.AppendLine($"## 第 {g + 1} 组讨论\n原始问题: {task}\n");
+            for (int i = 0; i < blindResults.Length; i++)
+            {
+                groupSb.AppendLine($"### {groupAgents[i].Name} 的初始分析");
+                groupSb.AppendLine(blindResults[i]);
+                groupSb.AppendLine();
+            }
+
+            var consensus = await CallAgentBlindAsync(groupAgents[0],
+                $"综合以下小组分析，形成第 {g + 1} 组的统一意见。\n\n{groupSb}", ct).ConfigureAwait(false);
+            groupResults[g] = consensus;
+        }
+
+        // Phase 2: Cross-group aggregation
+        var finalSb = new StringBuilder();
+        finalSb.AppendLine("## 子组汇总\n");
+        for (int g = 0; g < groupResults.Length; g++)
+        {
+            finalSb.AppendLine($"### 第 {g + 1} 组意见");
+            finalSb.AppendLine(groupResults[g]);
+            finalSb.AppendLine();
+        }
+
+        return finalSb.ToString();
+    }
+
+    private static async Task<string> CallAgentBlindAsync(AIAgent agent, string task, CancellationToken ct)
+    {
+        var response = await agent.RunAsync(
+            [new ChatMessage(ChatRole.User, task)], cancellationToken: ct).ConfigureAwait(false);
+        return response.Messages?.LastOrDefault()?.Text ?? "";
+    }
+
+    private static async Task<string> CallAgentDiscussAsync(AIAgent agent, string originalTask,
+        string sharedContext, CancellationToken ct)
+    {
+        var prompt = $@"
+原始问题: {originalTask}
+
+以下是其他分析者的输出，请参考他们的观点后，输出你的最终分析：
+
+{sharedContext}";
+        var response = await agent.RunAsync(
+            [new ChatMessage(ChatRole.User, prompt)], cancellationToken: ct).ConfigureAwait(false);
+        return response.Messages?.LastOrDefault()?.Text ?? "";
+    }
+
+    private async Task<string> RunConcurrentWorkflowAsync(
+        Microsoft.Agents.AI.Workflows.Workflow workflow, string task, string? traceId, CancellationToken ct)
+    {
         var input = new List<ChatMessage> { new(ChatRole.User, task) };
-
-        await using var run = await InProcessExecution.RunStreamingAsync(workflow, input, cancellationToken: ct)
+        var executionEnv = GetExecutionEnvironment();
+        await using var run = await executionEnv.RunStreamingAsync(workflow, input, cancellationToken: ct)
                                                  .ConfigureAwait(false);
-
         var collected = new StringBuilder();
         await foreach (var evt in run.WatchStreamAsync(ct).ConfigureAwait(false))
         {
@@ -308,7 +494,6 @@ public sealed class AgentWorkflows
                     break;
             }
         }
-
         return collected.ToString();
     }
 
@@ -335,17 +520,15 @@ public sealed class AgentWorkflows
         }
     }
 
-    private const int WorkflowTimeoutSeconds = 120;
-
     private static async Task<StreamingRun> RunWorkflowWithTimeoutAsync(
         Func<ValueTask<StreamingRun>> factory,
-        string kind, string? traceId, CancellationToken ct)
+        string kind, string? traceId, CancellationToken ct, TimeSpan timeout)
     {
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeoutCts.CancelAfter(TimeSpan.FromSeconds(WorkflowTimeoutSeconds));
+        timeoutCts.CancelAfter(timeout);
         try { return await factory().ConfigureAwait(false); }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
-        { throw new TimeoutException($"{kind} workflow timed out after {WorkflowTimeoutSeconds}s [trace={traceId}]."); }
+        { throw new TimeoutException($"{kind} workflow timed out after {timeout.TotalSeconds:F0}s [trace={traceId}]."); }
     }
 
     /// <summary>
@@ -378,23 +561,24 @@ public sealed class AgentWorkflows
             return null;
         }
 
-        // P15 hot path: registry snapshot.
+        // P15 hot path: registry snapshot. Check all known greeting-like workflows.
         if (_workflowRegistry != null)
         {
-            var workflow = _workflowRegistry.TryGetWorkflow("greeting");
-            if (workflow != null)
+            foreach (var name in YAMLWorkflowHost.GreetingWorkflowNames)
             {
-                await using var run = await InProcessExecution
-                    .RunStreamingAsync(workflow, task, cancellationToken: ct)
-                    .ConfigureAwait(false);
-                await foreach (var evt in run.WatchStreamAsync(ct).ConfigureAwait(false))
+                var workflow = _workflowRegistry.TryGetWorkflow(name);
+                if (workflow != null)
                 {
-                    if (evt is MessageActivityEvent mae && !string.IsNullOrWhiteSpace(mae.Message))
+                    await using var run = await InProcessExecution
+                        .RunStreamingAsync(workflow, task, cancellationToken: ct)
+                        .ConfigureAwait(false);
+                    await foreach (var evt in run.WatchStreamAsync(ct).ConfigureAwait(false))
                     {
-                        return mae.Message;
+                        if (evt is MessageActivityEvent mae && !string.IsNullOrWhiteSpace(mae.Message))
+                            return mae.Message;
                     }
+                    return null;
                 }
-                return null;
             }
         }
         // C# fallback (D69).
@@ -403,34 +587,16 @@ public sealed class AgentWorkflows
 
     /// <summary>
     /// 检测是否为纯问候（不含实质性请求）。
-    /// 改进：使用意图分类替代简单长度阈值。
+    /// 委托给统一的 <see cref="QueryClassifier"/> 服务。
     /// </summary>
-    private static bool IsGreetingOnly(string task)
+    private bool IsGreetingOnly(string task)
     {
+        if (_queryClassifier != null)
+            return _queryClassifier.IsGreetingOnly(task);
+
         if (string.IsNullOrWhiteSpace(task)) return false;
         var trimmed = task.Trim();
-
-        // Fast path: exact greeting match
-        var greetings = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-        {
-            "hello", "hi", "hey", "你好", "嗨", "早上好", "下午好", "晚上好",
-            "good morning", "good afternoon", "good evening",
-            "who are you", "你是谁", "help", "帮助", "/help",
-            "status", "状态", "/status", "thanks", "谢谢", "thank you"
-        };
-        if (greetings.Contains(trimmed))
-            return true;
-
-        // Pattern-based: "你好" + tool keyword = mixed query
-        var toolKeywords = new[] { "搜索", "查找", "写", "读", "删除", "创建", "执行", "运行", "计算", "分析", "翻译", "总结" };
-        var hasToolKeyword = toolKeywords.Any(k => trimmed.Contains(k, StringComparison.OrdinalIgnoreCase));
-        if (hasToolKeyword)
-            return false;
-
-        // Length-based: short messages without tool keywords are likely greetings
-        if (trimmed.Length <= 15)
-            return true;
-
+        if (trimmed.Length <= 12) return true;
         return false;
     }
 }

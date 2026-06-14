@@ -49,6 +49,9 @@ public sealed record PipelineConfig
 
         var root = doc.RootElement;
         var type = root.GetProperty("type").GetString() ?? "";
+        if (type is not ("sequential" or "concurrent"))
+            throw new ArgumentException($"PipelineConfig: type must be 'sequential' or 'concurrent', got '{type}'");
+
         var version = root.TryGetProperty("version", out var v) ? v.GetInt32() : 0;
 
         var agents = new List<string>();
@@ -61,6 +64,8 @@ public sealed record PipelineConfig
                     agents.Add(name);
             }
         }
+        if (agents.Count == 0)
+            throw new ArgumentException("PipelineConfig: at least one agent is required");
 
         var steps = new List<PipelineStep>();
         if (root.TryGetProperty("steps", out var stepsEl))

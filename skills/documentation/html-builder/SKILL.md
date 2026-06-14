@@ -1,3 +1,8 @@
+---
+name: html-builder
+description: 生成可直接运行的 HTML 页面。
+---
+
 # HTML Builder 网页生成
 
 ## 概要

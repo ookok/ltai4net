@@ -13,6 +13,7 @@ public sealed class ApiKeyMiddleware
 {
     private readonly RequestDelegate _next;
     private readonly string? _configuredKey;
+    private readonly byte[]? _configuredKeyBytes;    // cached for constant-time comparison
 
     public ApiKeyMiddleware(RequestDelegate next, IConfiguration? config = null)
     {
@@ -20,6 +21,9 @@ public sealed class ApiKeyMiddleware
         // Read API_KEY from env or config (but never from query string)
         _configuredKey = Environment.GetEnvironmentVariable("LTAI_API_KEY")
                       ?? config?["LTAI:ApiKey"];
+        _configuredKeyBytes = _configuredKey != null
+            ? Encoding.UTF8.GetBytes(_configuredKey)
+            : null;
     }
 
     public async Task InvokeAsync(HttpContext context)
@@ -32,9 +36,20 @@ public sealed class ApiKeyMiddleware
             return;
         }
 
-        // No key configured → dev mode, allow all
+        // No key configured → require explicit dev-mode opt-in
         if (string.IsNullOrEmpty(_configuredKey))
         {
+            var allowDev = string.Equals(
+                Environment.GetEnvironmentVariable("LTAI_DEV_MODE"), "true", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(config?["LTAI:DevMode"], "true", StringComparison.OrdinalIgnoreCase);
+            if (!allowDev)
+            {
+                context.Response.StatusCode = 401;
+                context.Response.ContentType = "application/json";
+                await context.Response.WriteAsync(
+                    "{\"error\":\"Authentication required\",\"type\":\"auth_required\",\"hint\":\"Set LTAI_API_KEY env var or LTAI_DEV_MODE=true for development\"}").ConfigureAwait(false);
+                return;
+            }
             await _next(context).ConfigureAwait(false);
             return;
         }
@@ -57,7 +72,7 @@ public sealed class ApiKeyMiddleware
         var provided = context.Request.Headers["X-API-Key"].FirstOrDefault()
                     ?? ExtractBearer(context);
 
-        if (string.IsNullOrEmpty(provided) || !ConstantTimeEquals(_configuredKey, provided))
+        if (string.IsNullOrEmpty(provided) || !ConstantTimeEqualsCached(provided))
         {
             context.Response.StatusCode = 401;
             context.Response.ContentType = "application/json";
@@ -92,5 +107,13 @@ public sealed class ApiKeyMiddleware
         if (a.Length != b.Length) return false;
         return CryptographicOperations.FixedTimeEquals(
             Encoding.UTF8.GetBytes(a), Encoding.UTF8.GetBytes(b));
+    }
+
+    private bool ConstantTimeEqualsCached(string provided)
+    {
+        if (_configuredKeyBytes == null) return false;
+        if (provided.Length != _configuredKey.Length) return false;
+        return CryptographicOperations.FixedTimeEquals(
+            Encoding.UTF8.GetBytes(provided), _configuredKeyBytes);
     }
 }

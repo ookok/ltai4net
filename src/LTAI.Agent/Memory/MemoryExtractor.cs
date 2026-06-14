@@ -1,6 +1,7 @@
 using System.Text.RegularExpressions;
 using LTAI.AI;
 using LTAI.Core.Safety;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 
 namespace LTAI.Agent.Memory;
@@ -9,12 +10,24 @@ namespace LTAI.Agent.Memory;
 /// Auto-extracts structured facts/preferences from conversation and persists them
 /// to <see cref="PalaceStore"/>. Runs after each completed AI turn so the agent
 /// doesn't need to explicitly call <c>Remember</c>.
+/// 
+/// Fallback: when 12 regex patterns yield 0 matches, a lightweight L3 LLM call
+/// performs a single-pass classification to catch unstructured facts the regex
+/// patterns miss (e.g., implicit preferences, contextual facts).
 /// </summary>
 public sealed partial class MemoryExtractor
 {
     private readonly PalaceStore _store;
+    private readonly MultiGraphStore? _multiGraph;
     private readonly FactExtractor? _factExtractor;
+    private readonly IChatClient? _l3Fallback;
     private readonly ILogger<MemoryExtractor>? _logger;
+
+    private static readonly string[] TechKeywords =
+    [
+        "api", "key", "token", "config", "password", "url", "version",
+        "package", "dependency", "database", "server", "deploy",
+    ];
 
     // ── Core extraction patterns ──
 
@@ -46,9 +59,9 @@ public sealed partial class MemoryExtractor
         ([^，。.!?；;\n]{2,60})", RegexOptions.IgnoreCase | RegexOptions.IgnorePatternWhitespace | RegexOptions.Compiled)]
     private static partial Regex DislikePattern();
 
-    // Task/issue mention: "遇到(问题/错误/bug/异常) X", "发现 Y"
-    [GeneratedRegex(@"(?:遇到|发现|出现|碰到|find|found|encounter|discover|出现)\s*
-        (?:了\s*)?(?:问题|错误|bug|bug|异常|issue|error)\s*
+        // Task/issue mention: "遇到(问题/错误/bug/异常) X", "发现 Y"
+        [GeneratedRegex(@"(?:遇到|发现|出现|碰到|find|found|encounter|discover|出现)\s*
+        (?:了\s*)?(?:问题|错误|bug|异常|issue|error)\s*
         (?:[:：])?\s*([^，。.!?；;\n]{4,100})", RegexOptions.IgnoreCase | RegexOptions.IgnorePatternWhitespace | RegexOptions.Compiled)]
     private static partial Regex IssuePattern();
 
@@ -106,20 +119,21 @@ public sealed partial class MemoryExtractor
         if (content.Contains('.') && content.Any(char.IsUpper)) score += 0.05;
 
         // Technical keywords suggest higher importance
-        var techKeywords = new[] { "api", "key", "token", "config", "password", "url", "version",
-            "package", "dependency", "database", "server", "deploy" };
-        if (techKeywords.Any(k => content.Contains(k, StringComparison.OrdinalIgnoreCase)))
+        if (TechKeywords.Any(k => content.Contains(k, StringComparison.OrdinalIgnoreCase)))
             score += 0.1;
 
         return Math.Clamp(score, 0.2, 0.95);
     }
 
     public MemoryExtractor(PalaceStore store, FactExtractor? factExtractor = null,
-        ILogger<MemoryExtractor>? logger = null)
+        ILogger<MemoryExtractor>? logger = null, MultiGraphStore? multiGraph = null,
+        IChatClient? l3Fallback = null)
     {
         _store = store;
         _factExtractor = factExtractor;
         _logger = logger;
+        _multiGraph = multiGraph;
+        _l3Fallback = l3Fallback;
     }
 
     /// <summary>Extract facts from the latest user message and store as memories.</summary>
@@ -227,7 +241,12 @@ public sealed partial class MemoryExtractor
                 extracted.Add(("project", "workflow", text, ComputeImportance(text, 0.5)));
         }
 
-        if (extracted.Count == 0) return 0;
+        if (extracted.Count == 0)
+        {
+            var llmExtracted = await LlmFallbackExtractAsync(userMessage, entityId).ConfigureAwait(false);
+            if (llmExtracted > 0) return llmExtracted;
+            return 0;
+        }
 
         var meta = entityId != null
             ? new Dictionary<string, object> { ["entity_id"] = entityId }
@@ -261,6 +280,14 @@ public sealed partial class MemoryExtractor
                     agentId: "extractor",
                     metadata: factMeta.Count > 0 ? factMeta : null,
                     ttlMs: PalaceStore.DefaultTtlMs).ConfigureAwait(false);
+
+                // Fast Path: also write to MultiGraphStore for intent-aware retrieval
+                if (_multiGraph != null)
+                {
+                    var nodeId = $"{wing}:{room}:{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}";
+                    _multiGraph.StoreNode(nodeId, wing, augmentedContent);
+                }
+
                 _logger?.LogDebug("MemoryExtractor: stored '{Room}' (wing={Wing}){Facts}",
                     room, wing, facts.Count > 0 ? $" +{facts.Count} facts" : "");
                 stored++;
@@ -275,5 +302,90 @@ public sealed partial class MemoryExtractor
             _logger?.LogInformation("MemoryExtractor: extracted {Stored}/{Extracted} facts from turn", stored, extracted.Count);
 
         return stored;
+    }
+
+    /// <summary>
+    /// Lightweight LLM fallback: when 12 regex patterns produce 0 matches, use a
+    /// single-pass L3 LLM call to classify the user message for implicit facts.
+    /// Token-constrained (max 50 output tokens) to minimize cost.
+    /// </summary>
+    private async Task<int> LlmFallbackExtractAsync(string userMessage, string? entityId)
+    {
+        if (_l3Fallback == null || userMessage.Length < 10 || userMessage.Length > 2000)
+            return 0;
+
+        try
+        {
+            var prompt = $$"""
+                Classify this user message into one category. Reply with ONLY the category name and a 1-sentence summary, separated by ": ".
+                Categories: preference, goal, requirement, project_fact, issue, dislike, workflow, none.
+                
+                Message: {{userMessage}}
+                """;
+
+            var messages = new List<ChatMessage> { new(ChatRole.User, prompt) };
+            var response = await _l3Fallback.GetResponseAsync(
+                messages,
+                new ChatOptions { Temperature = 0f, MaxOutputTokens = 50 },
+                CancellationToken.None).ConfigureAwait(false);
+
+            var text = response.Text?.Trim();
+            if (string.IsNullOrEmpty(text) || text.StartsWith("none", StringComparison.OrdinalIgnoreCase))
+                return 0;
+
+            var colonIdx = text.IndexOf(':');
+            var category = colonIdx > 0 ? text[..colonIdx].Trim().ToLowerInvariant() : text.ToLowerInvariant();
+            var summary = colonIdx > 0 ? text[(colonIdx + 1)..].Trim() : text;
+            if (summary.Length < 3) return 0;
+
+            var wing = category switch
+            {
+                "preference" or "dislike" => "user",
+                "goal" or "requirement" => "user",
+                _ => "project"
+            };
+            var room = category switch
+            {
+                "preference" => "preference",
+                "dislike" => "dislike",
+                "goal" => "goal",
+                "requirement" => "requirement",
+                "project_fact" => "tech_stack",
+                "issue" => "issue",
+                "workflow" => "workflow",
+                _ => "extracted"
+            };
+
+            if (!SafetyRules.IsSafeByRules(summary)) return 0;
+
+            var facts = _factExtractor != null
+                ? await _factExtractor.ExtractFactsAsync(summary, CancellationToken.None).ConfigureAwait(false)
+                : (IReadOnlyList<string>)[];
+
+            var augmentedContent = summary;
+            var factMeta = entityId != null
+                ? new Dictionary<string, object> { ["entity_id"] = entityId }
+                : new Dictionary<string, object>();
+            if (facts.Count > 0)
+            {
+                augmentedContent = $"{summary}\n[facts]: {string.Join("; ", facts)}";
+                factMeta["facts"] = facts.ToArray();
+            }
+
+            await _store.StoreAsync(wing, room, augmentedContent,
+                role: "user",
+                importance: ComputeImportance(summary, 0.4),
+                agentId: "extractor-llm",
+                metadata: factMeta.Count > 0 ? factMeta : null,
+                ttlMs: PalaceStore.DefaultTtlMs).ConfigureAwait(false);
+
+            _logger?.LogDebug("MemoryExtractor LLM fallback: stored '{Category}' → {Wing}/{Room}", category, wing, room);
+            return 1;
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogDebug(ex, "MemoryExtractor: LLM fallback failed (non-fatal)");
+            return 0;
+        }
     }
 }

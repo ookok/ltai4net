@@ -5,6 +5,8 @@
 ARG TARGETPLATFORM
 
 # ── Stage 1: Restore ──
+# For reproducible production builds, replace the :10.0 tag with a digest pin:
+# FROM .../dotnet/sdk:10.0@sha256:abc123...
 FROM --platform=$TARGETPLATFORM mcr.microsoft.com/dotnet/sdk:10.0 AS restore
 WORKDIR /src
 COPY Directory.Build.props .
@@ -30,7 +32,7 @@ WORKDIR /app
 COPY --from=publish /app .
 
 # Install curl for health checks
-RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/* && \
+RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/* && \
     mkdir -p .livingtree/sessions
 
 # Create non-root user for security
@@ -39,8 +41,8 @@ USER ltai
 
 EXPOSE 5100
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
-  CMD curl -sf http://localhost:5100/ready || exit 1
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+  CMD curl -sf http://localhost:5100/health || exit 1
 
 ENV ASPNETCORE_URLS=http://+:5100
 ENV ASPNETCORE_ENVIRONMENT=Production

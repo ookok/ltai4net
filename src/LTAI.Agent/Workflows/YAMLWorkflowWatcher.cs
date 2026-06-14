@@ -62,7 +62,8 @@ public sealed class YAMLWorkflowWatcher : IDisposable
         _fsWatcher = new FileSystemWatcher(_watchDir)
         {
             IncludeSubdirectories = false,
-            InternalBufferSize = 65536,
+            Filter = "*.yaml",
+            InternalBufferSize = int.TryParse(Environment.GetEnvironmentVariable("LTAI_WATCHER_BUFFER"), out var b) ? Math.Max(8192, b) : 65536,
             NotifyFilter = NotifyFilters.FileName
                          | NotifyFilters.LastWrite
                          | NotifyFilters.Size
@@ -84,14 +85,30 @@ public sealed class YAMLWorkflowWatcher : IDisposable
     private void OnError(object sender, ErrorEventArgs e)
     {
         _logger.LogError(e.GetException(), "FileSystemWatcher error in {Dir}", _watchDir);
-        // Restart watcher after buffer overflow
         try
         {
+            // Recreate watcher with larger buffer + re-scan for missed events
             if (_fsWatcher != null)
             {
                 _fsWatcher.EnableRaisingEvents = false;
-                _fsWatcher.EnableRaisingEvents = true;
+                _fsWatcher.Dispose();
             }
+            _fsWatcher = new FileSystemWatcher(_watchDir, "*.yaml")
+            {
+                IncludeSubdirectories = false,
+                NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName,
+                InternalBufferSize = int.TryParse(Environment.GetEnvironmentVariable("LTAI_WATCHER_BUFFER"), out var b) ? Math.Max(8192, b) : 65536, // 64KB (default is 8KB)
+            };
+            _fsWatcher.Changed += OnChanged;
+            _fsWatcher.Renamed += OnRenamed;
+            _fsWatcher.Error += OnError;
+            _fsWatcher.EnableRaisingEvents = true;
+            // Re-scan directory for files missed during the error window
+            Task.Run(async () =>
+            {
+                try { await _registry.InitializeAsync().ConfigureAwait(false); }
+                catch (Exception ex) { _logger.LogWarning(ex, "FSW re-scan failed"); }
+            });
         }
         catch (Exception ex)
         {

@@ -32,7 +32,7 @@ jobs:
       - name: Run ConfigDiffer (JSON)
         run: |
           dotnet run --project src/LTAI.Cli -- config-diff-json \
-            --base ltai.config.json \
+            --base $(git show ${{ github.event.pull_request.base.sha }}:ltai.config.json 2>/dev/null || echo '{}') \
             --target ltai.config.json \
             --format json >> config-diff-report.json
 

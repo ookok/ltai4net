@@ -61,20 +61,20 @@ public sealed class L4DeepSearchProvider : AIContextProvider
             var queryVec = await _embedder.GenerateAsync(query, ct).ConfigureAwait(false);
             var wing = WingClassifier.ClassifyFromMessages(context.AIContext?.Messages);
 
-            // Entropy-driven + modality-aware threshold: different memory wings
-            // have different natural similarity floors. Uncertainty lowers the bar.
             var effectiveMinSimilarity = _entropy?.GetRoomThreshold(wing)
                 ?? MinSimilarity;
 
-            var lines = new List<string> { "## L4 并行辅助模型（长江苦力四号）\n<memory>" };
+            var lines = new List<string> { "## L4 — Deep Search (Hybrid FTS5+Vector)\n<memory>" };
             var totalLen = lines[0].Length;
 
-            await foreach (var (drawer, score) in _store.SemanticSearchAsync(queryVec, MaxDrawers, wing).ConfigureAwait(false))
+            // Hybrid search: FTS5 BM25 + HNSW vector RRF fusion
+            var hybridResults = await _store.HybridSearchAsync(queryVec, query, MaxDrawers * 2, wing).ConfigureAwait(false);
+            foreach (var (drawer, score) in hybridResults)
             {
-                if (score < effectiveMinSimilarity) continue;
+                if (score < effectiveMinSimilarity * 0.025) continue; // RRF scores are much smaller
 
                 var snippet = MemoryCompressor.SmartTruncate(drawer.Content, 300);
-                var entry = $"  [{drawer.Wing}/{drawer.Room}] (sim:{score:F2}) {snippet}";
+                var entry = $"  [{drawer.Wing}/{drawer.Room}] (rrf:{score:F3}) {snippet}";
 
                 if (totalLen + entry.Length > MemoryBudget.L4MaxTokens * 4) break;
                 lines.Add(entry);

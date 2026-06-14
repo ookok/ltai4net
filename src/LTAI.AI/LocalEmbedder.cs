@@ -32,6 +32,8 @@ public sealed class LocalEmbedder : IDisposable
     private string? _currentModelName;
     private int _actualDimension = DefaultDimension;
     private bool _loadAttempted;
+    private int _loadRetries;
+    private DateTime _lastLoadAttemptAt;
     private bool _disposed;
     private readonly object _loadLock = new();
     private string? _activeExecutionProvider; // P13.2 telemetry
@@ -124,7 +126,7 @@ public sealed class LocalEmbedder : IDisposable
     public static string? BaseModelsDirectory { get; private set; }
 
     /// <summary>Base URL for model fallback downloads.</summary>
-    public static string ModelBaseUrl { get; set; } = "http://mogoo.com.cn/";
+    public static string ModelBaseUrl { get; set; } = "https://mogoo.com.cn/";
 
     /// <summary>Initialize embedder. Auto-detects the models directory and current model.</summary>
     public LocalEmbedder() : this(null) { }
@@ -147,6 +149,8 @@ public sealed class LocalEmbedder : IDisposable
         _modelPath = detected.modelPath;
         _vocabPath = detected.vocabPath;
         _usingQuantizedModel = detected.usingQuant;
+        if (_currentModelName != null)
+            CleanupStaleVariant(_currentModelName, _usingQuantizedModel);
     }
 
     private static (string? name, string? modelPath, string? vocabPath, bool usingQuant) DetectCurrentModelWithQuant()
@@ -169,10 +173,12 @@ public sealed class LocalEmbedder : IDisposable
     /// </summary>
     private void EnsureLoaded()
     {
-        if (_loadAttempted) return;
+        // Allow up to 3 retries with 30s backoff between attempts
+        if (_loadAttempted && (_loadRetries >= 3 || (DateTime.UtcNow - _lastLoadAttemptAt).TotalSeconds < 30)) return;
         lock (_loadLock)
         {
-            if (_loadAttempted) return;
+            if (_loadAttempted && (_loadRetries >= 3 || (DateTime.UtcNow - _lastLoadAttemptAt).TotalSeconds < 30)) return;
+            _lastLoadAttemptAt = DateTime.UtcNow;
             if (_modelPath == null || _vocabPath == null) { _loadAttempted = true; return; }
 
             try
@@ -219,8 +225,9 @@ public sealed class LocalEmbedder : IDisposable
 
                         _session = new InferenceSession(_modelPath, opts);
 
-                        // Detect actual dimension from model metadata
-                        try { _actualDimension = _session.InputMetadata["input_ids"].Dimensions[^1]; }
+                        // Detect actual dimension from model output metadata (hidden_size),
+                        // not input metadata (max_seq_len).
+                        try { _actualDimension = (int)_session.OutputMetadata.First().Value.Dimensions[2]; }
                         catch { _actualDimension = DefaultDimension; }
 
                         _vocab = LoadVocab(_vocabPath);
@@ -255,6 +262,18 @@ public sealed class LocalEmbedder : IDisposable
                 _loadError = ex;
             }
             _loadAttempted = true;
+            // On failure, allow retry up to 3 times with backoff
+            if (_session == null)
+            {
+                _loadRetries++;
+                if (_loadRetries < 3) _loadAttempted = false;
+                if (_loadRetries == 1)
+                    Console.Error.WriteLine($"[LTAI] ONNX model load failed, will retry up to 2 more times after 30s");
+            }
+            else
+            {
+                _loadRetries = 0; // Reset on success
+            }
         }
     }
 
@@ -294,20 +313,34 @@ public sealed class LocalEmbedder : IDisposable
             chunkEmbs.Add(pooled);
         }
 
-        var result = new float[DefaultDimension];
+        var dim = _actualDimension > 0 ? _actualDimension : DefaultDimension;
+        var result = new float[dim];
         foreach (var emb in chunkEmbs)
-            for (int i = 0; i < DefaultDimension; i++)
+            for (int i = 0; i < dim; i++)
                 result[i] += emb[i];
-        for (int i = 0; i < DefaultDimension; i++)
+        for (int i = 0; i < dim; i++)
             result[i] /= chunkEmbs.Count;
         return EmbeddingPool.L2Normalize(result);
     }
 
-    /// <summary>Batched embedding — N texts in 1 session.Run. 5-10x throughput.</summary>
+    /// <summary>Batched embedding — N texts in 1 session.Run. 5-10x throughput. Max 1024 texts.</summary>
     public IReadOnlyList<float[]> GenerateBatch(IReadOnlyList<string> texts)
     {
         if (texts.Count == 0) return Array.Empty<float[]>();
         if (texts.Count == 1) return new[] { Generate(texts[0]) };
+
+        const int maxBatchSize = 1024;
+        if (texts.Count > maxBatchSize)
+        {
+            // Process in chunks to avoid OOM from large ONNX tensors
+            var chunkedResults = new List<float[]>(texts.Count);
+            for (int i = 0; i < texts.Count; i += maxBatchSize)
+            {
+                var chunk = texts.Skip(i).Take(maxBatchSize).ToList();
+                chunkedResults.AddRange(GenerateBatch(chunk));
+            }
+            return chunkedResults;
+        }
 
         var (session, vocab) = GetLoadedModel();
         if (session == null || vocab == null)
@@ -384,7 +417,7 @@ public sealed class LocalEmbedder : IDisposable
                     for (int k = 0; k < hiddenDim; k++)
                         pooledBuf[k] /= validTokens;
                 }
-                var emb = EmbeddingPool.L2NormalizeInPlace(pooledBuf, hiddenDim);
+                var emb = EmbeddingPool.L2NormalizeSubarray(pooledBuf, hiddenDim);
                 embeddings[i] = emb;
             }
         }
@@ -415,7 +448,8 @@ public sealed class LocalEmbedder : IDisposable
 
         using var results = session.Run(inputs);
         var embedding = results.First().AsTensor<float>();
-        return EmbeddingPool.MeanPool(embedding, attentionMask, DefaultDimension);
+        var dim = _actualDimension > 0 ? _actualDimension : DefaultDimension;
+        return EmbeddingPool.MeanPool(embedding, attentionMask, dim);
     }
 
     //  Vocab loader

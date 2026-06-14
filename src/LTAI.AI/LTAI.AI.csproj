@@ -7,9 +7,9 @@
     <RootNamespace>LTAI.AI</RootNamespace>
     <IsAotCompatible>true</IsAotCompatible>
   </PropertyGroup>
-  <!-- P17.3: 本地缓存增强 — 支持 LTAI_EMBEDDING_MODELS_DIR 环境变量
-       指向预下载的模型目录（CI / 共享缓存 / 离线环境）。
-       未设置时回退到 repo-root/models/（与 P13.6 单文件原则一致）。 -->
+  <!-- P17.3: 本地缓存增强 �?支持 LTAI_EMBEDDING_MODELS_DIR 环境变量
+       指向预下载的模型目录（CI / 共享缓存 / 离线环境）�?
+       未设置时回退�?repo-root/models/（与 P13.6 单文件原则一致）�?-->
   <PropertyGroup>
     <_LTAI_ModelsDir>$([System.Environment]::GetEnvironmentVariable('LTAI_EMBEDDING_MODELS_DIR'))</_LTAI_ModelsDir>
     <ModelsDir Condition="'$(_LTAI_ModelsDir)' != ''">$(_LTAI_ModelsDir)</ModelsDir>
@@ -30,7 +30,7 @@
     <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.21.0" />
     <PackageReference Include="Microsoft.ML.OnnxRuntime.DirectML" Version="1.21.0" />
     <!-- P13.2: optional CUDA + TensorRT EPs. If the user has no NVIDIA GPU
-         these DLLs are never loaded — TryAppendCuda catches the
+         these DLLs are never loaded �?TryAppendCuda catches the
          TypeLoadException. -->
     <PackageReference Include="Microsoft.ML.OnnxRuntime.Gpu" Version="1.21.0" />
     <Reference Include="Microsoft.Agents.AI.Abstractions" HintPath="..\..\dist\lib\maf\Microsoft.Agents.AI.Abstractions.dll" Condition="Exists('..\..\dist\lib\maf\Microsoft.Agents.AI.Abstractions.dll')" />
@@ -46,27 +46,27 @@
     <ProjectReference Include="..\LTAI.Core\LTAI.Core.csproj" />
   </ItemGroup>
 
-  <!-- P14.1: MiniLM only, Xenova 通用 INT8 (22MB) — 仅首次构建时下载。
-       模型目录由 $(ModelsDir) 控制（默认 repo-root/models/）。
-       文件存在时完全跳过 —— 不再每次构建都检查。 -->
+  <!-- P14.1: MiniLM only, Xenova 通用 INT8 (22MB) �?仅首次构建时下载�?
+       模型目录�?$(ModelsDir) 控制（默�?repo-root/models/）�?
+       文件存在时完全跳�?—�?不再每次构建都检查�?-->
   <Target Name="DownloadEmbeddingModelMiniLM" BeforeTargets="Build" Condition="!Exists('$(ModelsDir)minilm-l6-v2/model.int8.onnx')">
     <Message Text="DownloadEmbeddingModelMiniLM: downloading Xenova INT8 to $(ModelsDir)minilm-l6-v2/" Importance="High" />
     <MakeDir Directories="$(ModelsDir)minilm-l6-v2/" />
     <Exec Command="curl -sL --connect-timeout 10 --max-time 300 &quot;https://hf-mirror.com/Xenova/all-MiniLM-L6-v2/resolve/main/onnx/model_int8.onnx&quot; -o &quot;$(ModelsDir)minilm-l6-v2/model.int8.onnx&quot;" IgnoreExitCode="true" />
     <Exec Command="curl -sL --connect-timeout 10 --max-time 60 &quot;https://hf-mirror.com/Xenova/all-MiniLM-L6-v2/resolve/main/vocab.txt&quot; -o &quot;$(ModelsDir)minilm-l6-v2/vocab.txt&quot;" IgnoreExitCode="true" />
-    <Message Text="all-MiniLM-L6-v2 Xenova INT8 downloaded ✅ models/minilm-l6-v2/model.int8.onnx (~22MB)" Importance="High" />
+    <Message Text="all-MiniLM-L6-v2 Xenova INT8 downloaded �?models/minilm-l6-v2/model.int8.onnx (~22MB)" Importance="High" />
   </Target>
 
-  <!-- 发布时嵌入模型文件到输出目录 (按现有文件复制, 不强行补下) -->
+  <!-- 发布时嵌入模型文件到输出目录 (按现有文件复�? 不强行补�? -->
   <Target Name="PublishEmbeddingModel" AfterTargets="Publish" Condition="Exists('$(ModelsDir)minilm-l6-v2/model.int8.onnx')">
     <Message Text="PublishEmbeddingModel: ModelsDir=$(ModelsDir) ($(_ModelsDirLabel))" Importance="High" />
     <Copy SourceFiles="$(ModelsDir)minilm-l6-v2/model.int8.onnx" DestinationFolder="$(PublishDir)models/minilm-l6-v2/" SkipUnchangedFiles="true" />
     <Copy SourceFiles="$(ModelsDir)minilm-l6-v2/vocab.txt" DestinationFolder="$(PublishDir)models/minilm-l6-v2/" SkipUnchangedFiles="true" />
-    <Message Text="MiniLM INT8 embedded in publish output ✅ (22MB)" Importance="High" />
+    <Message Text="MiniLM INT8 embedded in publish output �?(22MB)" Importance="High" />
   </Target>
 
-  <!-- rg.exe (ripgrep) — 自动下载到 tools/rg/，仅供 Windows x64.
-       搜索工具优先使用 rg，无 rg 时回退 C# 内置实现。 -->
+  <!-- rg.exe (ripgrep) �?自动下载�?tools/rg/，仅�?Windows x64.
+       搜索工具优先使用 rg，无 rg 时回退 C# 内置实现�?-->
   <Target Name="DownloadRipgrep" BeforeTargets="Build" Condition="$([MSBuild]::IsOSPlatform('Windows')) And !Exists('$(ToolsDir)rg\rg.exe')">
     <Message Text="DownloadRipgrep: downloading rg.exe to $(ToolsDir)rg/" Importance="High" />
     <MakeDir Directories="$(ToolsDir)rg/" />

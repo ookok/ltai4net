@@ -17,6 +17,7 @@
 
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using LTAI.Core.Configuration;
 
 namespace LTAI.Agent.Pipeline.Steps;
 
@@ -189,7 +190,8 @@ public sealed class MemoryCachingStep : IPipelineStep
         long count = 0;
         foreach (var msg in ctx.Messages)
         {
-            count += (msg.Text?.Length ?? 0) / 2; // rough: 2 chars ≈ 1 token
+            if (!string.IsNullOrEmpty(msg.Text))
+                count += TokenEstimator.Estimate(msg.Text);
             if (msg.Contents != null)
                 count += msg.Contents.Count * 10; // rough: 10 tokens per content item
         }

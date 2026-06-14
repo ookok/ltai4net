@@ -70,49 +70,9 @@ public static class SessionBridge
 
     private static JsonElement NodeToJsonElement(INode node)
     {
-        switch (node)
-        {
-            case NodeScalar scalar:
-                if (scalar.Data == null) return JsonDocument.Parse("null").RootElement;
-                return scalar.Kind switch
-                {
-                    MmValueType.Bool => JsonDocument.Parse(scalar.Text.ToLowerInvariant()).RootElement,
-                    MmValueType.Str or MmValueType.Email or MmValueType.Url or MmValueType.Ip or
-                    MmValueType.Uuid or MmValueType.Enums or MmValueType.DateTime or MmValueType.Date or MmValueType.Time =>
-                        JsonDocument.Parse($"\"{EscapeJson(scalar.Text)}\"").RootElement,
-                    _ => JsonDocument.Parse(scalar.Text).RootElement,
-                };
-
-            case MmArray arr:
-                {
-                    var sb = new System.Text.StringBuilder();
-                    sb.Append('[');
-                    for (int i = 0; i < arr.Children.Count; i++)
-                    {
-                        if (i > 0) sb.Append(',');
-                        sb.Append(NodeToJsonString(arr.Children[i]));
-                    }
-                    sb.Append(']');
-                    return JsonDocument.Parse(sb.ToString()).RootElement;
-                }
-
-            case MmMap map:
-                {
-                    var sb = new System.Text.StringBuilder();
-                    sb.Append('{');
-                    for (int i = 0; i < map.Entries.Count; i++)
-                    {
-                        if (i > 0) sb.Append(',');
-                        sb.Append($"\"{EscapeJson(map.Entries[i].Key.Text)}\":");
-                        sb.Append(NodeToJsonString(map.Entries[i].Value));
-                    }
-                    sb.Append('}');
-                    return JsonDocument.Parse(sb.ToString()).RootElement;
-                }
-
-            default:
-                return JsonDocument.Parse("null").RootElement;
-        }
+        var json = NodeToJsonString(node);
+        using var doc = JsonDocument.Parse(json);
+        return doc.RootElement.Clone();
     }
 
     private static string NodeToJsonString(INode node)

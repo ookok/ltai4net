@@ -225,12 +225,7 @@ public sealed class ToolEmbeddingCache
         File.Move(tmp, _filePath, overwrite: true);
     }
 
-    private static string ComputeHash(string text)
-    {
-        var bytes = System.Text.Encoding.UTF8.GetBytes(text);
-        var hash = System.Security.Cryptography.SHA256.HashData(bytes);
-        return Convert.ToHexString(hash);
-    }
+    private static string ComputeHash(string text) => FastHash.ComputeHex(text);
 
     private static readonly JsonSerializerOptions JsonOpts = new()
     {

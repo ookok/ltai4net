@@ -1,3 +1,8 @@
+---
+name: refactor-plan
+description: 对指定代码进行安全重构，按以下流程执行：
+---
+
 # Refactor Plan 重构计划
 
 ## 概要

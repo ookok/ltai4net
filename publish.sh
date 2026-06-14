@@ -6,6 +6,7 @@ echo "===== LTAI - Publish All ====="
 DIST="$(dirname "$0")/dist"
 
 echo "[1/4] Clean dist"
+case "$DIST" in */dist) ;; *) echo "ERROR: unsafe DIST path: $DIST"; exit 1;; esac
 rm -rf "$DIST"
 mkdir -p "$DIST"
 

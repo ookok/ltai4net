@@ -247,5 +247,9 @@ public sealed class SafeChatClient : IChatClient
     object? IChatClient.GetService(Type? serviceType, object? serviceKey) =>
         _inner.GetService(serviceType!, serviceKey);
 
-    void IDisposable.Dispose() => _inner.Dispose();
+    void IDisposable.Dispose()
+    {
+        _inner.Dispose();
+        _safeLock.Dispose();
+    }
 }

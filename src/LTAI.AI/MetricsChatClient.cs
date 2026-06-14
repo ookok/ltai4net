@@ -55,15 +55,31 @@ public sealed class MetricsChatClient : IChatClient
     {
         var sw = Stopwatch.StartNew();
         long tokenEstimate = 0;
-        await foreach (var update in _inner.GetStreamingResponseAsync(messages, options, ct).ConfigureAwait(false))
+        Exception? captured = null;
+        var buffer = new List<ChatResponseUpdate>();
+        try
         {
-            if (!string.IsNullOrWhiteSpace(update.Text))
-                tokenEstimate += update.Text.Length / 4;
-            yield return update;
+            await foreach (var update in _inner.GetStreamingResponseAsync(messages, options, ct).ConfigureAwait(false))
+            {
+                if (!string.IsNullOrWhiteSpace(update.Text))
+                    tokenEstimate += update.Text.Length / 4;
+                buffer.Add(update);
+            }
         }
-        sw.Stop();
-        if (tokenEstimate > 0) TotalTokens.Add(tokenEstimate);
-        LatencyMs.Record(sw.ElapsedMilliseconds);
+        catch (Exception ex)
+        {
+            Errors.Add(1);
+            _logger?.LogWarning(ex, "LLM streaming call failed");
+            captured = ex;
+        }
+        finally
+        {
+            sw.Stop();
+            if (tokenEstimate > 0) TotalTokens.Add(tokenEstimate);
+            LatencyMs.Record(sw.ElapsedMilliseconds);
+        }
+        if (captured != null) throw captured;
+        foreach (var update in buffer) yield return update;
     }
 
     object? IChatClient.GetService(Type serviceType, object? serviceKey) => _inner.GetService(serviceType, serviceKey);

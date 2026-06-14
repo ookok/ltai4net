@@ -55,9 +55,9 @@ internal static partial class AgentBuilder
 
     public static AIAgent BuildAgent(IServiceProvider sp, string name, string description,
         bool canRead, bool canWrite, bool canList, bool canExec,
-        string? modelId = null, float? temperature = null, float? topP = null)
+        string? modelId = null, float? temperature = null, float? topP = null, string[]? yamlTools = null)
     {
-        return BuildAgentImpl(sp, name, description, canRead, canWrite, canList, canExec, modelId, temperature, topP);
+        return BuildAgentImpl(sp, name, description, canRead, canWrite, canList, canExec, modelId, temperature, topP, null, yamlTools);
     }
 
     private static void ApplyEnvironmentConfig(LTAIOptions opts)
@@ -71,7 +71,8 @@ internal static partial class AgentBuilder
 
     public static AIAgent BuildAgentImpl(IServiceProvider sp, string name, string description,
         bool canRead, bool canWrite, bool canList, bool canExec,
-        string? modelId = null, float? temperature = null, float? topP = null, string? agentPrompt = null)
+        string? modelId = null, float? temperature = null, float? topP = null, string? agentPrompt = null,
+        string[]? yamlTools = null)
     {
         var ws = Directory.GetCurrentDirectory();
         var opts = sp.GetRequiredService<IOptions<LTAIOptions>>().Value;
@@ -84,8 +85,10 @@ internal static partial class AgentBuilder
             {
                 var workflows = sp.GetRequiredService<LTAI.Agent.Workflows.AgentWorkflows>();
                 var router = sp.GetService<LTAI.Agent.Workflows.DecisionTreeRouter>();
+                var queryClassifier = sp.GetService<Memory.QueryClassifier>();
                 LTAI.Agent.Tools.PlanTools.ExecutionEngine = new Execution.ExecutionEngine(
-                    workflows, router, loggerFactory.CreateLogger<Execution.ExecutionEngine>());
+                    workflows, router, loggerFactory.CreateLogger<Execution.ExecutionEngine>(),
+                    queryClassifier: queryClassifier);
             }
             catch { /* ExecutionEngine not available — PlanTools runs standalone */ }
         }
@@ -110,22 +113,21 @@ internal static partial class AgentBuilder
 
         RegisterFileAndTextTools(tools, name, canRead, canWrite, canList, canExec, ws,
             canRead ? s_mmapProvider : null, canWrite ? s_writeBuf : null);
-        RegisterSearchAndCodeAnalysisTools(tools, name, canRead, ws);
-        RegisterWebTools(tools, name, httpFactory);
-        RegisterMultimediaTools(tools, canRead, canExec, ws);
-        RegisterDocumentTools(tools, canRead, canWrite, ws, sp);
-        RegisterPlanAndDiagramTools(tools, name, httpFactory);
-        RegisterChoiceAndSubagentTools(tools, name, sp, llm, ws);
-        RegisterGitTools(tools, name, ws);
+        RegisterSearchAndCodeAnalysisTools(tools, name, canRead, ws, yamlTools);
+        RegisterWebTools(tools, name, httpFactory, yamlTools);
+        RegisterMultimediaTools(tools, canRead, canExec, ws, yamlTools);
+        RegisterDocumentTools(tools, canRead, canWrite, ws, sp, yamlTools);
+        RegisterPlanAndDiagramTools(tools, name, httpFactory, yamlTools);
+        RegisterGitTools(tools, name, ws, yamlTools);
         RegisterReviewTools(tools, name, ws);
-        RegisterSkillBankTools(tools, name);
-        RegisterLspTools(tools, name);
-        RegisterTaskTools(tools, name);
-        RegisterIntegrationTools(tools, name, httpFactory);
-        RegisterSystemAndJobTools(tools, name, canExec, canRead, canWrite, ws, sp);
-        RegisterWorkflowTools(tools, name, sp);
+        RegisterSkillBankTools(tools, name, yamlTools);
+        RegisterLspTools(tools, name, yamlTools);
+        RegisterTaskTools(tools, name, yamlTools);
+        RegisterIntegrationTools(tools, name, httpFactory, yamlTools);
+        RegisterSystemAndJobTools(tools, name, canExec, canRead, canWrite, ws, sp, yamlTools);
+        RegisterWorkflowTools(tools, name, sp, yamlTools);
         RegisterClusterAndDeepenTools(tools, name, sp);
-        RegisterNewDomainTools(tools, name, canExec, canRead, canWrite, ws, sp);
+        RegisterNewDomainTools(tools, name, canExec, canRead, canWrite, ws, sp, yamlTools);
 
         // EIA tools — in optional LTAI.Agent.Eia project (modularized)
 
@@ -227,7 +229,7 @@ internal static partial class AgentBuilder
         // L0: Identity (~100t, always loaded).
         var identityText = ResolveIdentity(opts);
 
-        RegisterMemoryTools(tools, canWrite, palaceStore, ws);
+        RegisterMemoryTools(tools, canWrite, palaceStore, ws, yamlTools);
 
         // MCP (Model Context Protocol) client tools: lazy-loaded on first invocation.
         if (!isPlanMode)
@@ -239,6 +241,10 @@ internal static partial class AgentBuilder
             tools.Add(AIFunctionFactory.Create(codeChunkIndex.SemanticCodeSearch));
 
         RegisterDebugTools(tools, name, sp);
+        
+        // SubagentTools — registered last to capture the complete tool list for subagents
+        if (!isPlanMode)
+            RegisterChoiceAndSubagentTools(tools, name, sp, llm, ws, yamlTools);
 
         // ToolSet guarantees uniqueness at insertion time (case-insensitive name key).
         // MCP tools (External priority) silently lose to LTAI native tools (Core/Domain priority).
@@ -258,7 +264,9 @@ internal static partial class AgentBuilder
                 // Uses LTAI.Core.I18n.Locale for culture-aware string selection.
                 HarnessInstructions = isPlanMode
                     ? null  // plan mode keeps the default
-                    : AgentPromptBuilder.AppendAgentPrompt(AgentPromptBuilder.BuildSystemPrompt(), agentPrompt),
+                    : AgentPromptBuilder.AppendAgentPrompt(
+                        AgentPromptBuilder.InjectVariables(AgentPromptBuilder.BuildSystemPrompt(), GetPromptVariables(name, ws)),
+                        agentPrompt),
                 Description = isPlanMode
                     ? AgentPromptBuilder.BuildPlanModePrompt()
                     : AgentPromptBuilder.BuildAgentDescription(name, description),
@@ -372,4 +380,19 @@ internal static partial class AgentBuilder
         agent = new LoggingAgent(agent, log!);
         return agent;
     }
+
+    private static Dictionary<string, string> GetPromptVariables(string name, string ws)
+    {
+        return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["workspace"] = ws,
+            ["agent_name"] = name,
+            ["date"] = DateTime.UtcNow.ToString("yyyy-MM-dd"),
+        };
+    }
+
+    /// <summary>Check if a YAML tool category is present. Returns true for unknown categories (forward compat).</summary>
+    private static bool HasYamlTool(string[]? yamlTools, string category)
+        => yamlTools == null || yamlTools.Length == 0
+            || yamlTools.Contains(category, StringComparer.OrdinalIgnoreCase);
 }

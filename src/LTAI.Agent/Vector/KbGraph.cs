@@ -912,7 +912,7 @@ public sealed class KbGraph : AIContextProvider, LTAI.Core.Vector.IKbQueryable
     private static bool ContainsCodePattern(string text) => QueryUtils.ContainsCodePattern(text);
 
     /// <summary>Intent-based KG gate. Uses FastEmb + cosine similarity.</summary>
-    internal static bool IsKnowledgeQuery(string text)
+    public static bool IsKnowledgeQuery(string text)
     {
         // 代码模式 → 强制走 KG（跳过 centroid 分类）
         if (ContainsCodePattern(text))

@@ -84,7 +84,11 @@ public sealed class LspLanguageManager : IDisposable
         if (!ExtToLsp.TryGetValue(ext, out var lspInfo))
             return new LspClient("", "");
         var c = new LspClient(lspInfo.cmd, lspInfo.args);
-        System.Threading.Tasks.Task.Run(() => c.StartAsync(_rootUri, System.Threading.CancellationToken.None));
+        _ = Task.Run(async () =>
+        {
+            try { await c.StartAsync(_rootUri, CancellationToken.None).ConfigureAwait(false); }
+            catch (Exception ex) { _logger?.LogWarning(ex, "LSP client start failed for ext={Ext}", ext); }
+        });
         return c;
     }
 
@@ -221,16 +225,14 @@ public sealed class LspLanguageManager : IDisposable
 
     private void CleanupIdle()
     {
-        // 清理超过闲置超时的 LSP 客户端（但保留 Roslyn 诊断）
-        var now = DateTime.UtcNow;
-        var staleExts = new List<string>();
-
-        lock (_clients)
+        foreach (var (ext, client) in _clients.ToArray())
         {
-            foreach (var (ext, client) in _clients)
+            if (!client.IsRunning)
             {
-                // LspClient 没有 LastActivity 跟踪，此处只做最小清理
-                // 完整清理在 Dispose 时进行
+                if (_clients.TryRemove(ext, out var deadClient))
+                {
+                    try { deadClient.Dispose(); } catch { }
+                }
             }
         }
     }

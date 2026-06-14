@@ -1,3 +1,8 @@
+---
+name: test-writer
+description: 为指定的 C# 方法或类生成 xUnit 测试。
+---
+
 # Test Writer 测试编写
 
 ## 概要

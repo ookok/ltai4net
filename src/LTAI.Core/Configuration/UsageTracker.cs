@@ -19,7 +19,13 @@ namespace LTAI.Core.Configuration;
 /// </summary>
 public sealed class UsageTracker : IUsageTracker
 {
-    /// <summary>Per-model pricing overrides (¥/1M tokens) for cost calculation. Keyed by model ID.</summary>
+    /// <summary>
+    /// Per-model pricing overrides (¥/1M tokens) for cost calculation.
+    /// Priority: metadataResolver > PerModelPricing > KnownKeys.All.
+    /// The optional <paramref name="s_priceResolver"/> allows ModelMetadataProvider
+    /// to supply per-model pricing from models-dev-providers.json.
+    /// </summary>
+    public static Func<string, (decimal PriceIn, decimal PriceOut, decimal PriceInCache)?>? s_priceResolver;
     internal static readonly Dictionary<string, (decimal PriceIn, decimal PriceOut, decimal PriceInCache)> PerModelPricing = new(StringComparer.OrdinalIgnoreCase)
     {
         ["deepseek-v4-flash"] = (1.0m, 2.0m, 0.02m),
@@ -137,6 +143,11 @@ public sealed class UsageTracker : IUsageTracker
     private static KnownKeys.KeyInfo? LookupModel(string model)
     {
         if (string.IsNullOrEmpty(model)) return null;
+        if (s_priceResolver?.Invoke(model) is { } fromMeta)
+        {
+            return new KnownKeys.KeyInfo(
+                "", "Meta", "", null, null, model, fromMeta.PriceIn, fromMeta.PriceOut, fromMeta.PriceInCache);
+        }
         if (PerModelPricing.TryGetValue(model, out var pm))
         {
             return new KnownKeys.KeyInfo(
@@ -404,7 +415,7 @@ public sealed class UsageTracker : IUsageTracker
     {
         var max = EffectiveContextWindow(ovr);
         if (max <= 0) return 0;
-        return Math.Clamp((double)(PromptTokens % (max + 1)) / max, 0, 1);
+        return Math.Clamp((double)PromptTokens / max, 0, 1);
     }
     private static string CalcContextText(int ovr)
     {
@@ -523,7 +534,6 @@ public sealed class UsageTracker : IUsageTracker
     {
         ["deepseek-v4-flash"] = 1048576,
         ["deepseek-reasoner"] = 1048576,
-        ["deepseek-v4-flash"] = 1048576,
         ["deepseek-v4-pro"] = 1048576,
         ["deepseek-v3"] = 65536,
         ["gpt-4o"] = 131072,
@@ -553,14 +563,70 @@ public sealed class UsageTracker : IUsageTracker
         ["sonar"] = 131072,
         ["grok-2"] = 131072,
         ["llama-v3p3"] = 131072,
+        ["qwen3-max"] = 262144,
+        ["qwen3-8b"] = 131072,
+        ["qwen3-14b"] = 131072,
+        ["qwen3-32b"] = 131072,
+        ["qwen3-235b-a22b"] = 131072,
+        ["qwen3-coder-plus"] = 1048576,
+        ["qwen3-coder-flash"] = 1000000,
+        ["qwen3-coder-30b-a3b-instruct"] = 262144,
+        ["qwen3-coder-480b-a35b-instruct"] = 262144,
+        ["qwq-plus"] = 131072,
+        ["qvq-max"] = 131072,
+        ["qwen3.5-27b"] = 262144,
+        ["qwen3.5-35b-a3b"] = 262144,
+        ["qwen3.5-122b-a10b"] = 262144,
+        ["qwen3.5-397b-a17b"] = 262144,
+        ["qwen3.5-plus"] = 1000000,
+        ["qwen3.6-27b"] = 262144,
+        ["qwen3.6-35b-a3b"] = 262144,
+        ["qwen3.6-plus"] = 1000000,
+        ["qwen3.6-flash"] = 1000000,
+        ["qwen3.6-max-preview"] = 262144,
+        ["qwen3.7-plus"] = 1000000,
+        ["qwen3.7-max"] = 1000000,
     };
+
+    /// <summary>
+    /// Resolve the effective context window for a given model name.
+    /// Priority: caller-provided resolver > known hardcoded > config default.
+    /// </summary>
+    public static int ResolveContextWindow(string modelName, int configDefault = 64000,
+        Func<string, int?>? metadataResolver = null)
+    {
+        if (!string.IsNullOrEmpty(modelName))
+        {
+            if (metadataResolver?.Invoke(modelName) is { } fromMetadata)
+                return fromMetadata;
+            if (KnownContextWindows.TryGetValue(modelName, out var known))
+                return known;
+        }
+        return configDefault;
+    }
+
+    /// <summary>
+    /// Resolve the effective max output tokens for a given model name.
+    /// Priority: caller-provided resolver > config default.
+    /// </summary>
+    public static int ResolveMaxOutput(string modelName, int configDefault = 4096,
+        Func<string, int?>? metadataResolver = null)
+    {
+        if (!string.IsNullOrEmpty(modelName))
+        {
+            if (metadataResolver?.Invoke(modelName) is { } fromMetadata)
+                return fromMetadata;
+        }
+        return configDefault;
+    }
+
     private static string BuildSummary()
     {
         var p = PromptTokens;
         var c = CompletionTokens;
         return $"Tokens: {p:N0}+{c:N0}={TotalTokens:N0} | "
              + $"Requests: {Requests} | "
-             + $"Cost: ¥{EstimatedCost:F4} | "
+              + $"Cost: ${EstimatedCost:F4} | "
              + $"Uptime: {_timer.Elapsed:hh\\:mm\\:ss}";
     }
 }

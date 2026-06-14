@@ -1,4 +1,4 @@
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
@@ -142,10 +142,23 @@ public sealed class SearchTools
         using var proc = new Process { StartInfo = psi };
         proc.Start();
 
-        var output = await proc.StandardOutput.ReadToEndAsync();
-        var error = await proc.StandardError.ReadToEndAsync();
+        // Cap rg output at 200K chars to prevent OOM on massive repos
+        const int maxOutputChars = 200_000;
+        var outputSb = new StringBuilder();
+        var errorSb = new StringBuilder();
+        var outBuf = new char[4096];
+        var errBuf = new char[4096];
+        var outTask = LimitReadAsync(proc.StandardOutput, outputSb, outBuf, maxOutputChars);
+        var errTask = LimitReadAsync(proc.StandardError, errorSb, errBuf, maxOutputChars / 2);
 
-        if (!proc.WaitForExit(15000))
+        using var searchCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        try { await proc.WaitForExitAsync(searchCts.Token).ConfigureAwait(false); }
+        catch (OperationCanceledException) { proc.Kill(); }
+
+        await Task.WhenAll(outTask, errTask).ConfigureAwait(false);
+        var output = outputSb.ToString();
+        var error = errorSb.ToString();
+        if (!proc.HasExited)
         {
             proc.Kill();
             return $"rg search timed out for '{pattern}'";
@@ -223,7 +236,8 @@ public sealed class SearchTools
         var matches = new ConcurrentBag<(string path, int line, string text)>();
         int cpuCount = Environment.ProcessorCount;
 
-        Parallel.ForEach(files, new ParallelOptions { MaxDegreeOfParallelism = Math.Min(cpuCount, 4) }, file =>
+        var maxDop = int.TryParse(Environment.GetEnvironmentVariable("LTAI_SEARCH_MAX_DOP"), out var d) ? Math.Max(1, d) : Math.Min(cpuCount, 4);
+        Parallel.ForEach(files, new ParallelOptions { MaxDegreeOfParallelism = maxDop }, file =>
         {
             try
             {
@@ -306,19 +320,41 @@ public sealed class SearchTools
             or ".gif" or ".bmp" or ".ico" or ".pdf" or ".zip" or ".gz" or ".tar"
             or ".obj" or ".lib" or ".pdb" or ".meta.json";
 
+    private static async Task LimitReadAsync(StreamReader reader, StringBuilder sb, char[] buffer, int maxChars)
+    {
+        var total = 0;
+        try
+        {
+            while (true)
+            {
+                var read = await reader.ReadAsync(buffer, 0, Math.Min(buffer.Length, maxChars - total)).ConfigureAwait(false);
+                if (read == 0) break;
+                sb.Append(buffer, 0, read);
+                total += read;
+                if (total >= maxChars) break;
+            }
+        }
+        catch { /* reader closed */ }
+    }
+
     // Bounded glob→regex cache (LRU, max 256 entries)
     private static readonly ConcurrentDictionary<string, Regex> _globCache = new(4, 256, StringComparer.OrdinalIgnoreCase);
+    private static readonly System.Collections.Concurrent.ConcurrentQueue<string> _globCacheOrder2 = new();
     private const int GlobCacheMax2 = 256;
-    private static int _globCount2;
 
     private static bool FileMatchesGlob(string name, string glob)
     {
         if (!_globCache.TryGetValue(glob, out var regex))
         {
-            if (Interlocked.Increment(ref _globCount2) > GlobCacheMax2) { _globCache.Clear(); Interlocked.Exchange(ref _globCount2, 0); }
             var pattern = "^" + Regex.Escape(glob).Replace(@"\*", ".*").Replace(@"\?", ".") + "$";
-            regex = new Regex(pattern, RegexOptions.Compiled | RegexOptions.IgnoreCase, TimeSpan.FromSeconds(1));
-            _globCache.TryAdd(glob, regex);
+            regex = new Regex(pattern, RegexOptions.Compiled | RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(
+                int.TryParse(Environment.GetEnvironmentVariable("LTAI_REGEX_TIMEOUT_MS"), out var rt) ? Math.Max(100, rt) : 1000));
+            if (_globCache.TryAdd(glob, regex))
+            {
+                _globCacheOrder2.Enqueue(glob);
+                while (_globCacheOrder2.Count > GlobCacheMax2 && _globCacheOrder2.TryDequeue(out var old))
+                    _globCache.TryRemove(old, out _);
+            }
             if (!_globCache.TryGetValue(glob, out var r)) return regex.IsMatch(name);
             regex = r;
         }

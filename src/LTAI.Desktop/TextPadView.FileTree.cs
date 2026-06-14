@@ -460,8 +460,9 @@ partial class TextPadView
     {
         if (OperatingSystem.IsWindows())
         {
+            var encoded = Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes(text));
             using var p = new Process();
-            p.StartInfo = new ProcessStartInfo("powershell", $"-command \"Set-Clipboard -Value '{text.Replace("'", "''")}'\"")
+            p.StartInfo = new ProcessStartInfo("powershell", $"-command \"[System.Windows.Clipboard]::SetText([System.Text.Encoding]::Unicode.GetString([System.Convert]::FromBase64String('{encoded}')))\"")
             { CreateNoWindow = true, UseShellExecute = false };
             p.Start();
         }

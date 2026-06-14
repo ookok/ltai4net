@@ -39,7 +39,6 @@ public sealed class ChatStreamer
 
     public async Task StreamAsync(string input, CancellationTokenSource cts)
     {
-        var content = new StringBuilder();
         _frameIdx = 0;
         _statusText = "";
         _pendingQuestion = null;

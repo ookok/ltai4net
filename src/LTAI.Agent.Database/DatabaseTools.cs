@@ -3,6 +3,7 @@ using System.Data;
 using System.Data.Common;
 using System.Text.Json;
 using LTAI.AI;
+using LTAI.Core.Configuration;
 using Microsoft.Data.SqlClient;
 using Microsoft.Data.Sqlite;
 using MySqlConnector;
@@ -87,9 +88,15 @@ public sealed class DatabaseTools
             }
 
             var results = new List<Dictionary<string, object?>>();
+            const int maxRows = 5000;
             await using var reader = await cmd.ExecuteReaderAsync(ct).ConfigureAwait(false);
             while (await reader.ReadAsync(ct).ConfigureAwait(false))
             {
+                if (results.Count >= maxRows)
+                {
+                    await reader.CloseAsync().ConfigureAwait(false);
+                    break;
+                }
                 var row = new Dictionary<string, object?>();
                 for (int i = 0; i < reader.FieldCount; i++)
                 {
@@ -98,11 +105,13 @@ public sealed class DatabaseTools
                 results.Add(row);
             }
 
+            var truncated = results.Count >= maxRows;
             var json = JsonSerializer.Serialize(results, _indentedJson);
             if (json.Length > 50000)
-                json = json[..50000] + $"\n... [truncated at 50000 chars, {results.Count} rows]";
+                json = ContentTruncator.Truncate(json, 50000);
 
-            return $"[SQL] {results.Count} row(s) returned.\n\n{json}";
+            var note = truncated ? $" (truncated at {maxRows} rows)" : "";
+            return $"[SQL] {results.Count} row(s) returned{note}.\n\n{json}";
         }
         catch (OperationCanceledException)
         {

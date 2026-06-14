@@ -1,3 +1,8 @@
+---
+name: role-expert
+description: 以指定专家身份分析当前问题。加载此技能后 AI 将扮演所选角色。
+---
+
 # Role Expert 领域专家模式
 
 ## 概要

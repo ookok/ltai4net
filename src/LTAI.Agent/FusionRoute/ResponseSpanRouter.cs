@@ -275,12 +275,14 @@ public sealed class ResponseSpanRouter
         if (string.IsNullOrWhiteSpace(text))
             return spans;
 
-        // First, extract code blocks as single spans
-        var codeBlocks = new List<(int start, int end, string content)>();
-        var codeRegex = new Regex(@"```[\s\S]*?```");
+        // Extract code blocks as single spans (dedup via HashSet of content)
+        var emittedBlocks = new HashSet<string>();
+        var codeRegex = new Regex(@"```[\s\S]*?```", RegexOptions.Compiled);
         foreach (Match m in codeRegex.Matches(text))
         {
-            codeBlocks.Add((m.Index, m.Index + m.Length, m.Value));
+            var content = m.Value.Trim();
+            if (emittedBlocks.Add(content))
+                spans.Add(content);
         }
 
         // Split by sentence boundaries, but keep code blocks intact
@@ -289,48 +291,23 @@ public sealed class ResponseSpanRouter
         {
             if (string.IsNullOrWhiteSpace(sentence)) continue;
 
-            // Check if this sentence overlaps with a code block
-            var isInsideCodeBlock = false;
-            foreach (var (start, end, content) in codeBlocks)
-            {
-                // Approximate: if sentence contains code block marker
-                if (sentence.Contains("```"))
-                {
-                    isInsideCodeBlock = true;
-                    break;
-                }
-            }
+            // Skip sentences that are inside code blocks (contain ``` markers)
+            if (sentence.Contains("```"))
+                continue;
 
-            if (isInsideCodeBlock)
+            // Check for list items (they should be kept together)
+            if (sentence.TrimStart().StartsWith("- ") ||
+                sentence.TrimStart().StartsWith("* ") ||
+                (sentence.TrimStart().Length > 0 && char.IsDigit(sentence.TrimStart()[0]) &&
+                 sentence.TrimStart().Contains(". ")))
             {
-                // Emit code blocks as single spans
-                foreach (var (start, end, content) in codeBlocks)
-                {
-                    if (sentence.Contains(content) || content.Contains(sentence.Trim()))
-                    {
-                        // Only add each code block once
-                        if (!spans.Any(s => s.Contains(content)))
-                            spans.Add(content.Trim());
-                    }
-                }
+                spans.Add(sentence.Trim());
             }
             else
             {
-                // Check for list items (they should be kept together)
-                if (sentence.TrimStart().StartsWith("- ") ||
-                    sentence.TrimStart().StartsWith("* ") ||
-                    (sentence.TrimStart().Length > 0 && char.IsDigit(sentence.TrimStart()[0]) &&
-                     sentence.TrimStart().Contains(". ")))
-                {
-                    spans.Add(sentence.Trim());
-                }
-                else
-                {
-                    // Regular sentence
-                    var trimmed = sentence.Trim();
-                    if (trimmed.Length > 0)
-                        spans.Add(trimmed);
-                }
+                var trimmed = sentence.Trim();
+                if (trimmed.Length > 0)
+                    spans.Add(trimmed);
             }
         }
 

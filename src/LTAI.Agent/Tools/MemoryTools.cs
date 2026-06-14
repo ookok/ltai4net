@@ -83,7 +83,7 @@ public sealed class MemoryTools
     public async Task<string> RecallMemory(
         [Description("Memory name")] string name)
     {
-        // Try exact room match first
+        // Tier 1: Exact room match (O(1) index lookup)
         var exact = _store.SearchByRoomExact(name);
         if (exact.Count > 0)
         {
@@ -97,7 +97,24 @@ public sealed class MemoryTools
             return sb.ToString();
         }
 
-        // Semantic search fallback
+        // Tier 2: FTS5 BM25 keyword search (sub-ms, catches content matches)
+        var ftsHits = _store.SearchFts(name, topK: 10);
+        if (ftsHits.Count > 0)
+        {
+            var result = new System.Text.StringBuilder();
+            result.AppendLine($"## Keyword matches for \"{name}\"");
+            foreach (var (drawerId, bm25) in ftsHits.Take(5))
+            {
+                var drawer = _store.GetDrawerById(drawerId);
+                if (drawer == null) continue;
+                result.AppendLine($"\n--- 📄 {drawer.Room} (wing: {drawer.Wing}, bm25: {bm25:F1}) ---");
+                var preview = drawer.Content.Length > 500 ? drawer.Content[..500] + "..." : drawer.Content;
+                result.AppendLine(preview);
+            }
+            return result.ToString();
+        }
+
+        // Tier 3: Semantic HNSW search (deep fallback)
         var vec = await _store.GenerateEmbeddingAsync(name).ConfigureAwait(false);
         var hits = new List<(Memory.PalaceStore.Drawer d, double score)>();
         await foreach (var hit in _store.SemanticSearchAsync(vec, topK: 5).ConfigureAwait(false))
@@ -106,15 +123,15 @@ public sealed class MemoryTools
         if (hits.Count == 0)
             return $"Memory '{name}' not found";
 
-        var result = new System.Text.StringBuilder();
-        result.AppendLine($"## Semantic matches for \"{name}\"");
+        var semResult = new System.Text.StringBuilder();
+        semResult.AppendLine($"## Semantic matches for \"{name}\"");
         foreach (var (d, score) in hits)
         {
-            result.AppendLine($"\n--- 📄 {d.Room} (wing: {d.Wing}, score: {score:F2}) ---");
+            semResult.AppendLine($"\n--- 📄 {d.Room} (wing: {d.Wing}, score: {score:F2}) ---");
             var preview = d.Content.Length > 500 ? d.Content[..500] + "..." : d.Content;
-            result.AppendLine(preview);
+            semResult.AppendLine(preview);
         }
-        return result.ToString();
+        return semResult.ToString();
     }
 
     [Description("列出所有已保存的记忆列表。\n"

@@ -11,6 +11,7 @@
 
 using System.Collections.Concurrent;
 using System.Text.Json;
+using LTAI.Agent.Memory;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -36,14 +37,18 @@ public sealed class RoutingSkillStore : IRoutingSkillStore, IDisposable
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
     };
 
+    private readonly QueryClassifier? _queryClassifier;
+
     public RoutingSkillStore(
         string dataDir,
         ILogger<RoutingSkillStore>? logger = null,
-        int flushInterval = 10)
+        int flushInterval = 10,
+        QueryClassifier? queryClassifier = null)
     {
         _filePath = Path.Combine(dataDir, "routing-skills.json");
         _logger = logger ?? NullLogger<RoutingSkillStore>.Instance;
         _flushInterval = flushInterval;
+        _queryClassifier = queryClassifier;
 
         LoadFromDisk();
     }
@@ -132,10 +137,10 @@ public sealed class RoutingSkillStore : IRoutingSkillStore, IDisposable
             || lower.Contains("shell") || lower.Contains("install") || lower.Contains("命令"))
             return "system";
 
-        // Greeting
-        if (lower.Length <= 20 && (lower is "hi" or "hello" or "hey" 
-            || lower.StartsWith("hi ") || lower.StartsWith("hello ")
-            || lower is "你好" || lower.StartsWith("你好,") || lower.StartsWith("你好 ")))
+        // Greeting — delegate to unified QueryClassifier
+        if ((_queryClassifier?.IsGreetingOnly(query) ?? Memory.QueryClassifier.IsGreetingOnlyStatic(query))
+            || lower.Length <= 20 && (lower is "hi" or "hello" or "hey" or "你好"
+                || lower.StartsWith("hi ") || lower.StartsWith("hello ") || lower.StartsWith("你好 ")))
             return "greeting";
 
         return "general";

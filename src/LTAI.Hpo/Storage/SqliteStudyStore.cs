@@ -75,7 +75,7 @@ public sealed class SqliteStudyStore : IStudyStore
                 IntermediateValues = System.Text.Json.JsonSerializer.Deserialize<List<TrialValue>>(
                     reader.GetString(4)) ?? new(),
                 ErrorMessage = reader.IsDBNull(5) ? null : reader.GetString(5),
-                CreatedAt = DateTime.Parse(reader.GetString(6)),
+                CreatedAt = DateTime.Parse(reader.GetString(6), System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.RoundtripKind),
             });
         }
         return results;

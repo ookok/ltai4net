@@ -1,3 +1,8 @@
+---
+name: competitive-analysis
+description: 生成竞品分析对比图，支持多种可视化形式，导出为 SVG。
+---
+
 # Competitive Analysis Skill
 
 ## 概要

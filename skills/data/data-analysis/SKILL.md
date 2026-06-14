@@ -1,3 +1,8 @@
+---
+name: data-analysis
+description: 对给定的数据集进行结构化分析。
+---
+
 # Data Analysis 数据分析
 
 ## 概要

@@ -37,6 +37,11 @@ public sealed class ModelsDevClient
         ["anthropic"] = ("Anthropic", "https://console.anthropic.com/settings/keys"),
         ["openrouter"] = ("OpenRouter", "https://openrouter.ai/keys"),
         ["stepfun"] = ("StepFun", "https://platform.stepfun.com/console/apikey"),
+        ["ollama"] = ("Ollama", null),
+        ["llamacpp"] = ("llama.cpp", null),
+        ["vllm"] = ("vLLM", null),
+        ["lmstudio"] = ("LM Studio", null),
+        ["koboldcpp"] = ("KoboldCPP", null),
     };
 
     public ModelsDevClient(HttpClient http, IOptions<LTAIOptions> options, ILogger<ModelsDevClient> logger)
@@ -56,7 +61,9 @@ public sealed class ModelsDevClient
         // 1. Primary: bundled snapshot in models/
         if (File.Exists(_primaryPath))
         {
-            var providers = ParseFile(_primaryPath);
+            var providers = ParseFile(_cachePath);
+        if (providers.Length == 0)
+            providers = ParseFile(_primaryPath);
             if (providers.Length > 0)
             {
                 _logger.LogInformation("Loaded {Count} providers from {Path}", providers.Length, _primaryPath);
@@ -64,18 +71,41 @@ public sealed class ModelsDevClient
             }
         }
 
-        // 2. Fallback: API-fetched cache in .livingtree/
+        // 2. Merge with edge inference providers (Ollama, vLLM, llama.cpp, etc.)
+        var primaryProviders = ParseFile(_primaryPath).ToList();
+        var edgePath = Path.Combine(AppContext.BaseDirectory, "models", "edge-providers.json");
+        if (File.Exists(edgePath))
+        {
+            var edgeProviders = ParseFile(edgePath);
+            if (edgeProviders.Length > 0)
+            {
+                _logger.LogInformation("Loaded {Count} edge providers from {Path}", edgeProviders.Length, edgePath);
+                foreach (var ep in edgeProviders)
+                {
+                    var idx = primaryProviders.FindIndex(p => string.Equals(p.Id, ep.Id, StringComparison.OrdinalIgnoreCase));
+                    if (idx >= 0)
+                        primaryProviders[idx] = ep;  // override with edge version
+                    else
+                        primaryProviders.Add(ep);
+                }
+            }
+        }
+
+        if (primaryProviders.Count > 0)
+            return primaryProviders.ToArray();
+
+        // 3. Fallback: API-fetched cache in .livingtree/
         if (File.Exists(_cachePath))
         {
             var providers = ParseFile(_cachePath);
             if (providers.Length > 0)
             {
-                _logger.LogWarning("Primary file missing, loaded {Count} providers from cache {Path}", providers.Length, _cachePath);
+                _logger.LogInformation("Loaded {Count} providers from cache {Path}", providers.Length, _cachePath);
                 return providers;
             }
         }
 
-        _logger.LogError("No provider data available — both {Primary} and {Cache} are missing or empty", _primaryPath, _cachePath);
+        _logger.LogError("No provider data found at {Primary} or {Cache}", _primaryPath, _cachePath);
         return [];
     }
 
@@ -92,11 +122,11 @@ public sealed class ModelsDevClient
             if (providers.Length == 0) return;
 
             var json = SerializeProviders(providers);
-            var dir = Path.GetDirectoryName(_primaryPath);
+            var dir = Path.GetDirectoryName(_cachePath);
             if (dir != null) Directory.CreateDirectory(dir);
-            await File.WriteAllTextAsync(_primaryPath, json, ct).ConfigureAwait(false);
+            await File.WriteAllTextAsync(_cachePath, json, ct).ConfigureAwait(false);
 
-            _logger.LogInformation("Refreshed {Count} providers from models.dev → {Path}", providers.Length, _primaryPath);
+            _logger.LogInformation("Refreshed {Count} providers from models.dev → {Path}", providers.Length, _cachePath);
         }
         catch (Exception ex)
         {
@@ -113,10 +143,13 @@ public sealed class ModelsDevClient
     /// </summary>
     public Timer StartBackgroundRefresh()
     {
-        return new Timer(async _ =>
+        return new Timer(_ =>
         {
-            try { await RefreshFromApiAsync(CancellationToken.None).ConfigureAwait(false); }
-            catch (Exception ex) { _logger.LogDebug(ex, "Background models.dev refresh error"); }
+            _ = Task.Run(async () =>
+            {
+                try { await RefreshFromApiAsync(CancellationToken.None).ConfigureAwait(false); }
+                catch (Exception ex) { _logger.LogDebug(ex, "Background models.dev refresh error"); }
+            });
         }, null, RefreshInterval, RefreshInterval);
     }
 

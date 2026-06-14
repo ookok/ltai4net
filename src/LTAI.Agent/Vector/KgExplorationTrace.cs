@@ -26,7 +26,7 @@ public sealed class KgExplorationTrace
     public KgExplorationTrace(string? storePath = null)
     {
         _storePath = storePath ?? Path.Combine(
-            Directory.GetCurrentDirectory(), ".livingtree", "kg_traces.json");
+            AppContext.BaseDirectory ?? Directory.GetCurrentDirectory(), ".livingtree", "kg_traces.json");
         Load();
     }
 

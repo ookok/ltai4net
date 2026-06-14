@@ -1,3 +1,8 @@
+---
+name: prompt-optimizer
+description: 审查和优化 AI 提示词（Prompt）。
+---
+
 # Prompt Optimizer 提示词优化
 
 ## 概要

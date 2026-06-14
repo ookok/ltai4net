@@ -56,8 +56,9 @@ public sealed class CacheAlignerProvider : AIContextProvider
             {
                 Interlocked.Increment(ref _cacheMisses);
                 Interlocked.Exchange(ref _stableCount, 0);
-                _cachedInstructions = normalized;
-                _lastInstructionsHash = hash;
+                var normalizedStr = normalized;
+                Volatile.Write(ref _cachedInstructions, normalizedStr);
+                Volatile.Write(ref _lastInstructionsHash, hash);
             }
         }
 

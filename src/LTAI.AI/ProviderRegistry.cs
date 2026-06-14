@@ -103,7 +103,7 @@ public async Task RefreshAsync(CancellationToken ct)
     public IEnumerable<ProviderInfo> LlmProviders => _providers.Values.Where(p => p.IsLlmProvider);
 
     public IEnumerable<ProviderInfo> ActiveProviders =>
-        _providers.Values.Where(p => p.IsLlmProvider && !string.IsNullOrEmpty(SecretManager.Get(p.EnvVar)));
+        _providers.Values.Where(p => p.IsLlmProvider && p.EnvVars.Any(e => !string.IsNullOrEmpty(SecretManager.Get(e))));
 
     public ProviderInfo? FindProvider(string id) =>
         _providers.TryGetValue(id, out var p) ? p : null;

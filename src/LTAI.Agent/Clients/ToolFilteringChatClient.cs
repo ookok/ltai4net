@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using LTAI.AI;
 using LTAI.Agent.Experts;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Caching.Memory;
 
 namespace LTAI.Agent.Clients;
 
@@ -23,6 +24,8 @@ public sealed class ToolFilteringChatClient : IChatClient
 
     private const int DefaultTopK = 8;
     private const int RerankCandidateN = 20;
+    private const int MaxProactiveRounds = 3;
+    private const int ToolsPerProactiveRound = 8;
 
     private readonly IChatClient _inner;
     private readonly EmbeddingClient _embedder;
@@ -31,6 +34,13 @@ public sealed class ToolFilteringChatClient : IChatClient
     private readonly IChatClient? _l3Client;
     private string? _lastQuery;
     private int _lastToolCount;
+    private readonly MemoryCache _resultCache = new(new MemoryCacheOptions { SizeLimit = 32 });
+    private static readonly TimeSpan ResultCacheTtl = TimeSpan.FromSeconds(30);
+
+    /// <summary>多轮主动检索统计: (query, rounds, toolsFound) 记录。</summary>
+    public IReadOnlyList<(string Query, int Rounds, int ToolsFound)> ProactiveRetrievalHistory =>
+        _proactiveHistory.AsReadOnly();
+    private readonly List<(string, int, int)> _proactiveHistory = [];
 
     public ToolFilteringChatClient(IChatClient inner, EmbeddingClient embedder,
         ToolEmbeddingCache? cache = null, QueryEmbeddingCache? queryCache = null,
@@ -98,6 +108,17 @@ public sealed class ToolFilteringChatClient : IChatClient
 
         if (!string.IsNullOrWhiteSpace(query))
         {
+            // Result cache: reuse filtered tool list if same query within TTL
+            var cacheKey = $"tf:{query}|{tools.Count}";
+            if (_resultCache.TryGetValue(cacheKey, out ChatOptions? cachedOpts) && cachedOpts != null)
+            {
+                var cachedClone = cachedOpts.Clone();
+                // Re-sync tools in case the underlying tool list changed
+                var cachedNames = new HashSet<string>(cachedOpts.Tools.Select(t => t.Name ?? ""), StringComparer.OrdinalIgnoreCase);
+                cachedClone.Tools = tools.Where(t => cachedNames.Contains(t.Name ?? "") || PinnedTools.Contains(t.Name ?? "")).ToList();
+                return cachedClone;
+            }
+
             var queryEmb = _queryCache?.Get(query);
             // Stage 1: BM25 + ONNX bi-encoder → RRF fusion → top-20 candidates
             var hits = await ToolRegistry.SearchTopKAsync(query, _embedder, null,
@@ -129,8 +150,80 @@ public sealed class ToolFilteringChatClient : IChatClient
 
         var clone = options.Clone();
         clone.Tools = selectedTools;
+        _resultCache.Set($"tf:{query}|{tools.Count}", clone, ResultCacheTtl);
         return clone;
     }
+
+    /// <summary>
+    /// Multi-round proactive tool retrieval (ToolOmni-inspired).
+    /// Iteratively searches, evaluates sufficiency, and refines query
+    /// until tool set is adequate or max rounds reached.
+    /// </summary>
+    public async Task<IReadOnlyList<ToolRegistry.ToolDef>> RetrieveToolsProactively(
+        string userQuery,
+        int maxRounds = MaxProactiveRounds,
+        int toolsPerRound = ToolsPerProactiveRound,
+        CancellationToken ct = default)
+    {
+        var collected = new Dictionary<string, ToolRegistry.ToolDef>(StringComparer.OrdinalIgnoreCase);
+        var searchQuery = userQuery;
+
+        for (int round = 0; round < maxRounds; round++)
+        {
+            var hits = await ToolRegistry.SearchTopKAsync(searchQuery, _embedder, null,
+                toolsPerRound, null, ct).ConfigureAwait(false);
+
+            foreach (var hit in hits)
+                if (hit.Name != null) collected[hit.Name] = hit;
+
+            if (round == maxRounds - 1) break;
+
+            if (_l3Client != null)
+            {
+                var sufficiency = await JudgeToolSufficiency(userQuery, collected.Keys.ToList(), ct)
+                    .ConfigureAwait(false);
+                if (sufficiency.IsEnough) break;
+                searchQuery = sufficiency.SuggestedRefinement ?? searchQuery + " 其他相关工具";
+            }
+        }
+
+        _proactiveHistory.Add((userQuery, collected.Count > 0 ? 1 : 0, collected.Count));
+        return collected.Values.ToList();
+    }
+
+    private async Task<(bool IsEnough, string? SuggestedRefinement)> JudgeToolSufficiency(
+        string query, List<string> toolNames, CancellationToken ct)
+    {
+        if (_l3Client == null) return (true, null);
+
+        var toolList = string.Join("\n", toolNames.Select(n => $"  - {n}"));
+        var prompt = $@"
+用户请求: {query}
+
+已检索到以下工具:
+{toolList}
+
+请判断这些工具是否足够完成用户请求。
+如果不够，请建议还需要什么类型的工具。
+只输出 JSON: {{""enough"": true/false, ""suggestion"": ""如果不够给出建议""}}";
+
+        var response = await _l3Client.GetResponseAsync(
+            [new ChatMessage(ChatRole.User, prompt)],
+            new ChatOptions { Temperature = 0f, MaxOutputTokens = 200 }, ct).ConfigureAwait(false);
+
+        var text = response.Messages?.LastOrDefault()?.Text ?? "";
+        try
+        {
+            var result = System.Text.Json.JsonSerializer.Deserialize<SufficiencyResult>(text,
+                new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            if (result != null) return (!result.Enough, result.Suggestion);
+        }
+        catch { }
+
+        return (true, null);
+    }
+
+    private sealed record SufficiencyResult(bool Enough, string? Suggestion);
 
     /// <summary>
     /// Two-stage re-rank: ONNX MiniLM pseudo-cross-encoder (local, ~100ms) →

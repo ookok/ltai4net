@@ -1,5 +1,7 @@
 using System.ClientModel;
 using System.Collections.Concurrent;
+using System.Diagnostics;
+using System.Diagnostics.Metrics;
 using System.Runtime.CompilerServices;
 using Anthropic;
 using LTAI.Core.Configuration;
@@ -26,9 +28,6 @@ namespace LTAI.AI;
 ///
 /// <b>Consumers:</b> All agents/tools that make LLM calls through IChatClient DI.
 /// Registered in AddLTAIAI() in this file.
-///
-/// ⚠ KNOWN ISSUE: Uses SHA256 for cache key hashing — overkill; XxHash64 would suffice.
-/// ⚠ KNOWN ISSUE: Cache-hit path uses text.Length/4 as estimated token count (fake metric).
 /// </summary>
 public sealed class MultiProviderChatClient : IChatClient
 {
@@ -40,7 +39,7 @@ public sealed class MultiProviderChatClient : IChatClient
     private readonly string _routingFallback = "l1"; // fallback routing key when no ModelId is set
 
     // 自适应成本路由：成功率 + 延迟 + 成本感知
-    private string? _lastError;
+    private volatile string? _lastError;
     private readonly ConcurrentDictionary<string, ProviderStats> _providerStats = new(StringComparer.OrdinalIgnoreCase);
     // Circuit breaker state per provider (thread-safe via ConcurrentDictionary)
     // P0: optionally backed by SQLite (CircuitBreakerStore) so cooldown survives process restart
@@ -48,21 +47,31 @@ public sealed class MultiProviderChatClient : IChatClient
     private readonly ConcurrentDictionary<string, DateTime> _providerCooldowns = new(StringComparer.OrdinalIgnoreCase);
     private readonly LTAI.Core.Configuration.CircuitBreakerStore? _breakerStore;
     private readonly Lazy<Task> _breakerLoadTask;
-    private const int MaxFailuresBeforeCooldown = 3;
-    private static readonly TimeSpan CooldownDuration = TimeSpan.FromSeconds(30);
+    private readonly int _maxFailuresBeforeCooldown;
+    private readonly TimeSpan _cooldownDuration;
+    private readonly int _perProviderTimeoutSec;
 
-    // Response cache (LRU, 5min TTL) — shared across ALL instances (static)
-    private static MemoryCache _responseCache = new(new MemoryCacheOptions
+    // Response cache — instance-level to avoid cross-instance race
+    private readonly MemoryCache _responseCache = new(new MemoryCacheOptions
     {
         SizeLimit = 256,
         ExpirationScanFrequency = TimeSpan.FromMinutes(1)
     });
-    private static readonly TimeSpan CacheTtl = TimeSpan.FromMinutes(5);
-    private static int _responseCacheSizeLimit = 256;
-    private readonly int _perProviderTimeoutSec = 30;
+    private static readonly TimeSpan CacheTtl = TimeSpan.FromMinutes(
+        int.TryParse(Environment.GetEnvironmentVariable("LTAI_LLM_CACHE_TTL_MIN"), out var t) ? Math.Max(1, t) : 5);
+    private int _responseCacheSizeLimit = 256;
 
     // LLM call counter — increments on every actual HTTP request
     private static long _callCounter;
+
+    // ═══════════════════════════════════════════
+    //  OpenTelemetry instruments
+    // ═══════════════════════════════════════════
+    private static readonly Meter LltMeter = new("LTAI.AI.Router");
+    private static readonly Counter<long> LltCalls = LltMeter.CreateCounter<long>("ltai.llm.calls", "calls", "Total LLM API calls");
+    private static readonly Histogram<double> LltDuration = LltMeter.CreateHistogram<double>("ltai.llm.duration", "ms", "LLM call duration");
+    private static readonly Counter<long> LltErrors = LltMeter.CreateCounter<long>("ltai.llm.errors", "errors", "LLM call errors");
+    private static readonly Histogram<long> LltTokenUsage = LltMeter.CreateHistogram<long>("ltai.llm.token_usage", "tokens", "LLM token usage per call");
 
     /// <summary>Names of all currently registered LLM clients.</summary>
     public IEnumerable<string> RegisteredProviders => _clients.Keys;
@@ -74,10 +83,15 @@ public sealed class MultiProviderChatClient : IChatClient
     /// Actual provider clients are registered later via <see cref="Register"/> in AddLTAIAI().
     /// </summary>
     public MultiProviderChatClient(LTAIOptions options,
+        IOptions<LTAIOptions>? optionsMonitor = null,
         ILogger<MultiProviderChatClient>? logger = null,
         LTAI.Core.Configuration.CircuitBreakerStore? breakerStore = null,
         ModelMetadataProvider? modelMetadata = null)
     {
+        var esc = optionsMonitor?.Value.Escalation ?? new();
+        _maxFailuresBeforeCooldown = esc.MaxFailuresBeforeCooldown;
+        _cooldownDuration = TimeSpan.FromSeconds(esc.CooldownDurationSeconds);
+        _perProviderTimeoutSec = esc.PerProviderTimeoutSeconds;
         _defaultProvider = options.AI.DefaultProvider ?? "";
         _logger = logger ?? NullLogger<MultiProviderChatClient>.Instance;
         _breakerStore = breakerStore;
@@ -116,9 +130,8 @@ public sealed class MultiProviderChatClient : IChatClient
             }
             catch { /* best-effort; in-memory fallback is still functional */ }
         });
-        // Fire-and-forget: breaker state loads in background; first LLM call
-        // waits for completion via _breakerLoadTask if needed.
-        _ = _breakerLoadTask;
+        // Trigger lazy initialization immediately so state is ready before first LLM call
+        _ = _breakerLoadTask.Value;
     }
 
     /// <summary>
@@ -133,6 +146,9 @@ public sealed class MultiProviderChatClient : IChatClient
         _providerCooldowns.TryRemove(name, out _);
         _providerFailures.TryRemove(name, out _);
     }
+
+    /// <summary>Return the L3 tier client for keyed DI resolution.</summary>
+    public IChatClient GetL3Client() => _clients.TryGetValue("l3", out var c) ? c : _clients["l1"];
 
     /// <summary>
     /// Resolve provider name from options.ModelId.
@@ -191,7 +207,31 @@ public sealed class MultiProviderChatClient : IChatClient
         // ModelId was consumed for provider routing; clear it to prevent
         // the underlying IChatClient (OpenAI SDK) from using it as the API model name.
         if (options != null) options.ModelId = null;
-        return await TryCallWithDegradation(provider, messages, options, ct).ConfigureAwait(false);
+
+        var sw = Stopwatch.StartNew();
+        ChatResponse response;
+        try
+        {
+            response = await TryCallWithDegradation(provider, messages, options, ct).ConfigureAwait(false);
+            sw.Stop();
+        }
+        catch (Exception)
+        {
+            sw.Stop();
+            LltErrors.Add(1);
+            LltDuration.Record(sw.ElapsedMilliseconds);
+            throw;
+        }
+
+        LltCalls.Add(1);
+        LltDuration.Record(sw.ElapsedMilliseconds);
+        if (response.Usage is { } usage)
+        {
+            var totalTokens = (int)(usage.InputTokenCount ?? 0) + (int)(usage.OutputTokenCount ?? 0);
+            if (totalTokens > 0)
+                LltTokenUsage.Record(totalTokens);
+        }
+        return response;
     }
 
     /// <summary>
@@ -208,6 +248,17 @@ public sealed class MultiProviderChatClient : IChatClient
         if (options != null) options.ModelId = null;
         bool anyAttempted = false;
         string? lastFailedProvider = null;
+        var sw = Stopwatch.StartNew();
+        long estimatedTokens = 0;
+
+        // Pre-flight: estimate total tokens once for streaming
+        var streamEstimatedTotal = 0;
+        foreach (var m in messages)
+        {
+            if (!string.IsNullOrEmpty(m.Text))
+                streamEstimatedTotal += LTAI.Core.Configuration.TokenEstimator.Estimate(m.Text);
+        }
+
         foreach (var p in RankedProviders(provider))
         {
             if (!_clients.TryGetValue(p, out var client)) continue;
@@ -217,7 +268,7 @@ public sealed class MultiProviderChatClient : IChatClient
             anyAttempted = true;
             var success = false;
 
-            // Dedup tools (same as non-streaming path — streaming path bypasses TryCallWithDegradation)
+            // Dedup tools (clone to avoid mutating shared ChatOptions)
             if (options?.Tools is { Count: > 10 })
             {
                 var before = options.Tools.Count;
@@ -233,7 +284,14 @@ public sealed class MultiProviderChatClient : IChatClient
                         duplicates++;
                 }
                 deduped.Reverse();
-                options.Tools = new List<AITool>(deduped);
+                options = new ChatOptions
+                {
+                    Temperature = options.Temperature,
+                    MaxOutputTokens = options.MaxOutputTokens,
+                    Tools = new List<AITool>(deduped),
+                    ModelId = options.ModelId,
+                    StopSequences = options.StopSequences,
+                };
                 _logger.LogDebug("Streaming dedup: {Before} → {After} tools ({Dups} duplicates)", before, deduped.Count, duplicates);
             }
 
@@ -244,12 +302,24 @@ public sealed class MultiProviderChatClient : IChatClient
                     $"\n\n_[Stream from '{lastFailedProvider}' failed midway, falling back to '{p}']_\n\n");
             }
 
+            // Pre-flight: use pre-computed token estimate
+            {
+                var ctxLimit = LTAI.Core.Configuration.UsageTracker.ResolveContextWindow(p);
+                if (ctxLimit > 0 && streamEstimatedTotal > ctxLimit * 0.95)
+                {
+                    _logger.LogWarning("Pre-flight streaming: estimated context {Est}/{Limit} tokens exceeds 95% of model window for provider '{P}'. Skipping.", streamEstimatedTotal, ctxLimit, p);
+                    lastFailedProvider ??= p;
+                    continue;
+                }
+            }
+
             using var streamingTimeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             streamingTimeoutCts.CancelAfter(TimeSpan.FromSeconds(_perProviderTimeoutSec));
             var timeoutToken = streamingTimeoutCts.Token;
             var innerStream = client.GetStreamingResponseAsync(messages, options, timeoutToken);
             await using (var enumerator = innerStream.GetAsyncEnumerator(timeoutToken))
             {
+                success = true; // valid empty stream is success, not failure
                 while (true)
                 {
                     try
@@ -262,6 +332,7 @@ public sealed class MultiProviderChatClient : IChatClient
                         _lastError = $"Streaming timeout ({_perProviderTimeoutSec}s)";
                         _logger.LogWarning("Streaming from '{P}' timed out after {S}s, degrading", p, _perProviderTimeoutSec);
                         lastFailedProvider = p;
+                        RecordFailure(p);
                         break;
                     }
                     catch (Exception ex)
@@ -269,18 +340,29 @@ public sealed class MultiProviderChatClient : IChatClient
                         _lastError = ex.Message;
                         _logger.LogWarning(ex, "Streaming from '{P}' failed, degrading", p);
                         lastFailedProvider = p;
+                        RecordFailure(p);
                         break;
                     }
                     success = true;
+                    if (!string.IsNullOrWhiteSpace(enumerator.Current.Text))
+                        estimatedTokens += enumerator.Current.Text.Length / 4;
                     yield return enumerator.Current;
                 }
             }
             if (success)
             {
+                sw.Stop();
+                LltCalls.Add(1);
+                LltDuration.Record(sw.ElapsedMilliseconds);
+                if (estimatedTokens > 0)
+                    LltTokenUsage.Record(estimatedTokens);
                 _logger.LogDebug("Streaming succeeded from '{P}'", p);
                 yield break;
             }
         }
+        sw.Stop();
+        LltErrors.Add(1);
+        LltDuration.Record(sw.ElapsedMilliseconds);
         yield return new ChatResponseUpdate(ChatRole.Assistant,
             anyAttempted
                 ? $"All providers failed for '{provider}'. Last error: {_lastError ?? "(unknown)"}"
@@ -339,12 +421,23 @@ public sealed class MultiProviderChatClient : IChatClient
             {
                 // Fallback: estimate from text length
                 var text = cached!.Messages?.LastOrDefault()?.Text ?? "";
-                var promptT = text.Length / 4;
-                var completionT = text.Length / 8;
+                var promptT = LTAI.Core.Configuration.TokenEstimator.Estimate(text);
+                var completionT = LTAI.Core.Configuration.TokenEstimator.Estimate(text) / 2;
                 LTAI.Core.Configuration.UsageTracker.Record(promptT, completionT, provider);
                 LTAI.Core.Configuration.UsageTracker.RecordCacheTokens(promptT, 0);
             }
             return cached;
+        }
+
+        // Pre-flight: estimate total tokens once (not per-provider)
+        var estimatedTotal = 0;
+        if (messages != null)
+        {
+            foreach (var m in messages)
+            {
+                if (!string.IsNullOrEmpty(m.Text))
+                    estimatedTotal += LTAI.Core.Configuration.TokenEstimator.Estimate(m.Text);
+            }
         }
 
         foreach (var p in RankedProviders(provider))
@@ -377,7 +470,14 @@ public sealed class MultiProviderChatClient : IChatClient
                             duplicates++;
                     }
                     deduped.Reverse();
-                    options.Tools = new List<AITool>(deduped);
+                    options = new ChatOptions
+                    {
+                        Temperature = options.Temperature,
+                        MaxOutputTokens = options.MaxOutputTokens,
+                        Tools = new List<AITool>(deduped),
+                        ModelId = options.ModelId,
+                        StopSequences = options.StopSequences,
+                    };
                     _logger.LogDebug("Non-streaming dedup: {Before} → {After} tools ({Dups} duplicates)", before, deduped.Count, duplicates);
                 }
 
@@ -386,6 +486,14 @@ public sealed class MultiProviderChatClient : IChatClient
                 var msgCount = messages?.Count() ?? 0;
                 var textLen = messages?.Sum(m => m.Text?.Length ?? 0) ?? 0;
                 _logger.LogInformation("LLM call #{CallNum} → provider={Provider}, {ToolCount} tools, {MsgCount} msgs, ~{TextLen} chars text", callNum, p, toolCount, msgCount, textLen);
+
+                // Check pre-computed estimate against this provider's context limit
+                var ctxLimit = LTAI.Core.Configuration.UsageTracker.ResolveContextWindow(p);
+                if (ctxLimit > 0 && estimatedTotal > ctxLimit * 0.95)
+                {
+                    _logger.LogWarning("Pre-flight: estimated context {Est}/{Limit} tokens exceeds 95% of model window for provider '{P}'. Skipping.", estimatedTotal, ctxLimit, p);
+                    continue;
+                }
 
                 // Add 15s per-provider timeout
                 using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -491,9 +599,9 @@ public sealed class MultiProviderChatClient : IChatClient
         var stats = _providerStats.GetOrAdd(provider, static _ => new ProviderStats());
         Interlocked.Increment(ref stats.FailedCalls);
         DateTime? until = null;
-        if (count >= MaxFailuresBeforeCooldown)
+        if (count >= _maxFailuresBeforeCooldown)
         {
-            until = DateTime.UtcNow + CooldownDuration;
+            until = DateTime.UtcNow + _cooldownDuration;
             _providerCooldowns[provider] = until.Value;
             _logger.LogWarning("Provider '{P}' failed {Count} times — cooling down until {Until}",
                 provider, count, until);
@@ -530,13 +638,14 @@ public sealed class MultiProviderChatClient : IChatClient
     /// <summary>Ranked provider list with circuit-breaker filtering.</summary>
     public IEnumerable<string> RankedProviders(string preferred)
     {
+        var now = DateTime.UtcNow;
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var candidates = new List<(string Id, double Health)>();
         var current = preferred;
 
         while (current != null && seen.Add(current))
         {
-            // 跳过冷却中的 provider
-            if (_providerCooldowns.TryGetValue(current, out var until) && until > DateTime.UtcNow)
+            if (_providerCooldowns.TryGetValue(current, out var until) && until > now)
             {
                 _logger.LogDebug("Provider '{P}' in cooldown, skipping in degradation chain", current);
                 current = _degradation.TryGetValue(current, out var next) ? next : null;
@@ -544,14 +653,16 @@ public sealed class MultiProviderChatClient : IChatClient
             }
 
             if (_clients.ContainsKey(current))
-            {
-                yield return current;
-            }
+                candidates.Add((current, CalcHealthScore(current, now)));
 
             current = _degradation.TryGetValue(current, out var next2) ? next2 : null;
         }
 
-        // 硬编码降级链耗尽 → 利用 ModelMetadataProvider 宽泛回退
+        // Sort by health score descending — healthiest provider first
+        foreach (var c in candidates.OrderByDescending(c => c.Health))
+            yield return c.Id;
+
+        // Hardcoded degradation chain exhausted → wide fallback via ModelMetadataProvider
         if (_modelMetadata != null)
         {
             foreach (var p in FallbackProviders(preferred, seen))
@@ -670,6 +781,56 @@ public static class AnthropicChatClientFactory
 }
 
 /// <summary>
+/// Wraps an <see cref="IChatClient"/> to inject thinking/reasoning parameters
+/// for models that support it (Qwen3+, DeepSeek R1, etc.).
+/// Adds <c>enable_thinking</c> and <c>thought_in_content</c> to
+/// <see cref="ChatOptions.AdditionalProperties"/> when the model is known to
+/// support reasoning, without requiring caller-side changes.
+/// </summary>
+public sealed class ThinkingChatClient : IChatClient
+{
+    private readonly IChatClient _inner;
+    private readonly bool _enableThinking;
+    private readonly bool _thoughtInContent;
+
+    public ThinkingChatClient(IChatClient inner, bool enableThinking, bool thoughtInContent)
+    {
+        _inner = inner;
+        _enableThinking = enableThinking;
+        _thoughtInContent = thoughtInContent;
+    }
+
+    public async Task<ChatResponse> GetResponseAsync(
+        IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken ct = default)
+    {
+        InjectThinkingOptions(options);
+        return await _inner.GetResponseAsync(messages, options, ct).ConfigureAwait(false);
+    }
+
+    public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+        IEnumerable<ChatMessage> messages, ChatOptions? options = null, [EnumeratorCancellation] CancellationToken ct = default)
+    {
+        InjectThinkingOptions(options);
+        await foreach (var update in _inner.GetStreamingResponseAsync(messages, options, ct).ConfigureAwait(false))
+            yield return update;
+    }
+
+    public void Dispose() => _inner.Dispose();
+
+    private void InjectThinkingOptions(ChatOptions? options)
+    {
+        if (options == null || !_enableThinking) return;
+        options.AdditionalProperties ??= [];
+        options.AdditionalProperties["enable_thinking"] = true;
+        if (_thoughtInContent)
+            options.AdditionalProperties["thought_in_content"] = true;
+    }
+
+    object? IChatClient.GetService(Type serviceType, object? serviceKey) =>
+        _inner.GetService(serviceType, serviceKey);
+}
+
+/// <summary>
 /// DI registration for the LTAI.AI layer.
 /// Registers:
 ///   - Named HttpClient "llm" with connection pooling (3 conn/server, 2min lifetime)
@@ -692,8 +853,9 @@ public static class ServiceCollectionExtensions
         services.AddHttpClient("llm")
             .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
             {
-                MaxConnectionsPerServer = 6,
-                PooledConnectionLifetime = TimeSpan.FromMinutes(10),
+                MaxConnectionsPerServer = int.TryParse(Environment.GetEnvironmentVariable("LTAI_HTTP_MAX_CONN"), out var mc) ? Math.Max(2, mc) : 6,
+                PooledConnectionLifetime = TimeSpan.FromMinutes(
+                    int.TryParse(Environment.GetEnvironmentVariable("LTAI_HTTP_POOL_LIFETIME_MIN"), out var pl) ? Math.Max(1, pl) : 10),
                 PooledConnectionIdleTimeout = TimeSpan.FromMinutes(2),
                 EnableMultipleHttp2Connections = true,
                 // 启用自动解压（API 返回可能为 gzip）
@@ -712,6 +874,15 @@ public static class ServiceCollectionExtensions
             var logger = sp.GetRequiredService<ILogger<ProviderRegistry>>();
             var registry = new ProviderRegistry(client, logger);
             registry.Initialize();
+            // Wire up metadata-driven pricing resolver so UsageTracker
+            // can look up per-model pricing from models-dev-providers.json.
+            UsageTracker.s_priceResolver = modelId =>
+            {
+                var model = registry.FindModel(modelId);
+                if (model == null) return null;
+                var rate = 7.2m;
+                return (model.PriceInPerM * rate, model.PriceOutPerM * rate, model.PriceInPerM * rate * 0.1m);
+            };
             // Background refresh
             client.StartBackgroundRefresh();
             return registry;
@@ -767,7 +938,7 @@ public static class ServiceCollectionExtensions
             var modelMetadata = sp.GetService<ModelMetadataProvider>();
             var breakerPath = opts.ResolveDataPath("circuit_breaker.db");
             var breakerStore = new LTAI.Core.Configuration.CircuitBreakerStore(breakerPath);
-            var router = new MultiProviderChatClient(opts, logger, breakerStore, modelMetadata);
+            var router = new MultiProviderChatClient(opts, sp.GetRequiredService<IOptions<LTAIOptions>>(), logger, breakerStore, modelMetadata);
 
             // Resolve the primary provider: user-configured L1 provider, or first active provider with a key.
             var l1Cfg = opts.AI.L1;
@@ -790,11 +961,16 @@ public static class ServiceCollectionExtensions
             var l1Model = !string.IsNullOrEmpty(l1Cfg?.Model) ? l1Cfg.Model : primaryProvider.Models[0].ShortId;
 
             // Register L1 (from user config or provider default)
+            var l1ModelInfo = primaryProvider.Models.FirstOrDefault(m => m.ShortId == l1Model);
+            var l1EnableThink = l1Cfg?.EnableThinking ?? l1ModelInfo?.Reasoning == true;
+            var l1ThoughtInContent = l1Cfg?.ThoughtInContent ?? false;
             var l1Client = primaryProvider.ApiFormat == ApiFormat.Anthropic
                 ? AnthropicChatClientFactory.Create(l1Model, apiKey)
                 : OpenAIChatClientFactory.Create(endpoint, l1Model, apiKey);
+            if (l1EnableThink)
+                l1Client = new ThinkingChatClient(l1Client, true, l1ThoughtInContent);
             router.Register("l1", l1Client);
-            logger?.LogInformation("L1: {Provider}/{Model} @ {Endpoint}", primaryProvider.Name, l1Model, endpoint);
+            logger?.LogInformation("L1: {Provider}/{Model} @ {Endpoint}{Think}", primaryProvider.Name, l1Model, endpoint, l1EnableThink ? " (thinking)" : "");
 
             // L2: from auto-select (or user config override)
             var l2Cfg = opts.AI.L2;
@@ -802,15 +978,21 @@ public static class ServiceCollectionExtensions
             if (l2Model == null) l2Model = ModelAutoSelectHostedService.LatestResult?.L2;
             if (l2Model == null)
             {
-                var (best, _) = new ModelScoringEngine(sp.GetRequiredService<ILogger<ModelScoringEngine>>())
+                var scoring = sp.GetRequiredService<ModelScoringEngine>();
+                var (best, _) = scoring
                     .SelectBestPair(primaryProvider.Models, ModelTierRequirements.L2);
                 l2Model = best?.ShortId ?? l1Model; // fallback to L1
             }
+            var l2ModelInfo = primaryProvider.Models.FirstOrDefault(m => m.ShortId == l2Model);
+            var l2EnableThink = l2Cfg?.EnableThinking ?? l2ModelInfo?.Reasoning == true;
+            var l2ThoughtInContent = l2Cfg?.ThoughtInContent ?? false;
             var l2Client = primaryProvider.ApiFormat == ApiFormat.Anthropic
                 ? AnthropicChatClientFactory.Create(l2Model, apiKey)
                 : OpenAIChatClientFactory.Create(endpoint, l2Model, apiKey);
+            if (l2EnableThink)
+                l2Client = new ThinkingChatClient(l2Client, true, l2ThoughtInContent);
             router.Register("l2", l2Client);
-            logger?.LogInformation("L2: {Provider}/{Model}", primaryProvider.Name, l2Model);
+            logger?.LogInformation("L2: {Provider}/{Model}{Think}", primaryProvider.Name, l2Model, l2EnableThink ? " (thinking)" : "");
 
             // L3: from auto-select (or user config, or reuse L1)
             var l3Cfg = opts.AI.L3;
@@ -818,21 +1000,33 @@ public static class ServiceCollectionExtensions
             if (l3Model == null) l3Model = ModelAutoSelectHostedService.LatestResult?.L3;
             if (l3Model == null)
             {
-                var (best, _) = new ModelScoringEngine(sp.GetRequiredService<ILogger<ModelScoringEngine>>())
+                var scoring = sp.GetRequiredService<ModelScoringEngine>();
+                var (best, _) = scoring
                     .SelectBestPair(primaryProvider.Models, ModelTierRequirements.L3);
                 l3Model = best?.ShortId ?? l1Model;
             }
+            var l3ModelInfo = primaryProvider.Models.FirstOrDefault(m => m.ShortId == l3Model);
+            var l3EnableThink = l3Cfg?.EnableThinking ?? l3ModelInfo?.Reasoning == true;
+            var l3ThoughtInContent = l3Cfg?.ThoughtInContent ?? false;
             var l3Client = primaryProvider.ApiFormat == ApiFormat.Anthropic
                 ? AnthropicChatClientFactory.Create(l3Model, apiKey)
                 : OpenAIChatClientFactory.Create(endpoint, l3Model, apiKey);
+            if (l3EnableThink)
+                l3Client = new ThinkingChatClient(l3Client, true, l3ThoughtInContent);
             router.Register("l3", l3Client);
-            logger?.LogInformation("L3: {Provider}/{Model}{Reuse}", primaryProvider.Name, l3Model,
+            logger?.LogInformation("L3: {Provider}/{Model}{Think}{Reuse}", primaryProvider.Name, l3Model,
+                l3EnableThink ? " (thinking)" : "",
                 l3Model == l1Model ? " (reuses L1)" : "");
 
-            // Expose L3 as a keyed IChatClient so ExpertRouter can use it for lightweight routing decisions
-            services.AddKeyedSingleton<IChatClient>("l3", l3Client);
-
             return router;
+        });
+
+        // Expose L3 as a keyed IChatClient so ExpertRouter can use it for lightweight routing decisions.
+        // Must be registered OUTSIDE the factory lambda so it takes effect in the live container.
+        services.AddKeyedSingleton<IChatClient>("l3", (sp, _) =>
+        {
+            var router = sp.GetRequiredService<MultiProviderChatClient>();
+            return router.GetL3Client();
         });
 
         // Step 2b: Wrap with SafeChatClient for output safety interception (optional)
@@ -868,7 +1062,7 @@ public static class ServiceCollectionExtensions
                 return router;
             }
 
-            var safetyEndpoint = primaryProvider?.Endpoint ?? "https://api.deepseek.com";
+            var safetyEndpoint = primaryProvider?.Endpoint ?? "https://api.deepseek.com/v1";
             IChatClient safetyClient = OpenAIChatClientFactory.Create(safetyEndpoint, safetyModel, safetyKey);
 
             var wrapped = new LTAI.Core.Safety.SafeChatClient(router, safetyClient, logger);
@@ -902,7 +1096,6 @@ public static class ServiceCollectionExtensions
         // Embedding client (API → local BGE → FastEmb fallback)
         // P14.4: auto-detect best execution provider (DML > CUDA > CPU) at startup
         services.AddHostedService<EpProbeService>();
-        services.AddSingleton<EpProbeService>();
 
         services.AddSingleton<EmbeddingClient>(sp =>
             new EmbeddingClient(sp.GetRequiredService<IHttpClientFactory>(),

@@ -71,53 +71,52 @@ namespace LTAI.Agent.Durability;
 public sealed class SQLiteOrchestrationService : InMemoryOrchestrationService
 {
     // Source: src/InProcessTestHost/Sidecar/InMemoryOrchestrationService.cs (private field)
-    static readonly FieldInfo s_instanceStoreField =
-        typeof(InMemoryOrchestrationService).GetField("instanceStore", BindingFlags.NonPublic | BindingFlags.Instance)
-        ?? throw new InvalidOperationException("Could not reflect InMemoryOrchestrationService.instanceStore");
+    static readonly FieldInfo? s_instanceStoreField =
+        typeof(InMemoryOrchestrationService).GetField("instanceStore", BindingFlags.NonPublic | BindingFlags.Instance);
 
-    // Source: nested InMemoryInstanceStore (same file), private field
-    static readonly FieldInfo s_innerStoreField = s_instanceStoreField.FieldType
-        .GetField("store", BindingFlags.NonPublic | BindingFlags.Instance)
-        ?? throw new InvalidOperationException("Could not reflect InMemoryInstanceStore.store");
+    static readonly FieldInfo? s_innerStoreField = s_instanceStoreField?.FieldType
+        .GetField("store", BindingFlags.NonPublic | BindingFlags.Instance);
 
-    // Source: inner type SerializedInstanceState (same file, same nested class)
-    static readonly Type s_serializedInstanceStateType = s_innerStoreField.FieldType.GetGenericArguments()[1];
+    static readonly Type? s_serializedInstanceStateType = s_innerStoreField?.FieldType.GetGenericArguments()?.ElementAtOrDefault(1);
 
-    // Source: SerializedInstanceState public fields (JSON round-trip via System.Text.Json.Nodes)
-    static readonly FieldInfo s_statusRecordField =
-        s_serializedInstanceStateType.GetField("StatusRecordJson", BindingFlags.Public | BindingFlags.Instance)
-        ?? throw new InvalidOperationException("Could not reflect SerializedInstanceState.StatusRecordJson");
+    static readonly FieldInfo? s_statusRecordField =
+        s_serializedInstanceStateType?.GetField("StatusRecordJson", BindingFlags.Public | BindingFlags.Instance);
 
-    static readonly FieldInfo s_historyField =
-        s_serializedInstanceStateType.GetField("HistoryEventsJson", BindingFlags.Public | BindingFlags.Instance)
-        ?? throw new InvalidOperationException("Could not reflect SerializedInstanceState.HistoryEventsJson");
+    static readonly FieldInfo? s_historyField =
+        s_serializedInstanceStateType?.GetField("HistoryEventsJson", BindingFlags.Public | BindingFlags.Instance);
 
-    static readonly FieldInfo s_messagesField =
-        s_serializedInstanceStateType.GetField("MessagesJson", BindingFlags.Public | BindingFlags.Instance)
-        ?? throw new InvalidOperationException("Could not reflect SerializedInstanceState.MessagesJson");
+    static readonly FieldInfo? s_messagesField =
+        s_serializedInstanceStateType?.GetField("MessagesJson", BindingFlags.Public | BindingFlags.Instance);
 
-    static readonly FieldInfo s_executionIdField =
-        s_serializedInstanceStateType.GetField("ExecutionId", BindingFlags.Public | BindingFlags.Instance)
-        ?? throw new InvalidOperationException("Could not reflect SerializedInstanceState.ExecutionId");
+    static readonly FieldInfo? s_executionIdField =
+        s_serializedInstanceStateType?.GetField("ExecutionId", BindingFlags.Public | BindingFlags.Instance);
 
-    static readonly FieldInfo s_isCompletedField =
-        s_serializedInstanceStateType.GetField("IsCompleted", BindingFlags.NonPublic | BindingFlags.Instance)
-        ?? throw new InvalidOperationException("Could not reflect SerializedInstanceState.IsCompleted");
+    static readonly FieldInfo? s_isCompletedField =
+        s_serializedInstanceStateType?.GetField("IsCompleted", BindingFlags.NonPublic | BindingFlags.Instance);
 
-    // Source: nested InMemoryInstanceStore (same file), private field
-    static readonly FieldInfo s_readyToRunQueueField = s_instanceStoreField.FieldType
-        .GetField("readyToRunQueue", BindingFlags.NonPublic | BindingFlags.Instance)
-        ?? throw new InvalidOperationException("Could not reflect InMemoryInstanceStore.readyToRunQueue");
+    static readonly FieldInfo? s_readyToRunQueueField = s_instanceStoreField?.FieldType
+        .GetField("readyToRunQueue", BindingFlags.NonPublic | BindingFlags.Instance);
 
-    // Source: s_readyToRunQueueField.FieldType (ReadyToRunQueue class, same file)
-    static readonly MethodInfo s_scheduleMethod = s_readyToRunQueueField.FieldType
-        .GetMethod("Schedule", BindingFlags.Public | BindingFlags.Instance)
-        ?? throw new InvalidOperationException("Could not reflect ReadyToRunQueue.Schedule");
+    static readonly MethodInfo? s_scheduleMethod = s_readyToRunQueueField?.FieldType
+        .GetMethod("Schedule", BindingFlags.Public | BindingFlags.Instance);
 
-    // Source: SerializedInstanceState constructor (same file)
-    static readonly ConstructorInfo s_serializedInstanceStateCtor = s_serializedInstanceStateType
-        .GetConstructor(new[] { typeof(string), typeof(string) })
-        ?? throw new InvalidOperationException("Could not reflect SerializedInstanceState ctor");
+    static readonly ConstructorInfo? s_serializedInstanceStateCtor = s_serializedInstanceStateType?
+        .GetConstructor(new[] { typeof(string), typeof(string) });
+
+    bool _reflectionOk;
+
+    static SQLiteOrchestrationService()
+    {
+        if (s_instanceStoreField == null || s_innerStoreField == null || s_serializedInstanceStateType == null ||
+            s_statusRecordField == null || s_historyField == null || s_messagesField == null ||
+            s_executionIdField == null || s_isCompletedField == null || s_readyToRunQueueField == null ||
+            s_scheduleMethod == null || s_serializedInstanceStateCtor == null)
+        {
+            // MAF SDK update may have changed internal fields — persistence degrades gracefully
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<SQLiteOrchestrationService>.Instance
+                .LogWarning("DTFx reflection bindings incomplete — orchestration persistence disabled");
+        }
+    }
 
     readonly string _databasePath;
     readonly ILogger<SQLiteOrchestrationService> _logger;
@@ -125,7 +124,7 @@ public sealed class SQLiteOrchestrationService : InMemoryOrchestrationService
     bool _hydrated;
 
     // Batch persistence: debounce writes within a 500ms window
-    private readonly CancellationTokenSource _batchCts = new();
+    private CancellationTokenSource _batchCts = new();
     private int _pendingPersistCount;
     private bool _persistScheduled;
     private static readonly TimeSpan BatchInterval = TimeSpan.FromMilliseconds(500);
@@ -135,6 +134,12 @@ public sealed class SQLiteOrchestrationService : InMemoryOrchestrationService
     {
         _databasePath = databasePath ?? throw new ArgumentNullException(nameof(databasePath));
         _logger = (loggerFactory ?? NullLoggerFactory.Instance).CreateLogger<SQLiteOrchestrationService>();
+        _reflectionOk = s_instanceStoreField != null && s_innerStoreField != null
+            && s_serializedInstanceStateType != null && s_serializedInstanceStateCtor != null
+            && s_statusRecordField != null && s_historyField != null && s_messagesField != null
+            && s_executionIdField != null && s_isCompletedField != null;
+        if (!_reflectionOk)
+            _logger.LogWarning("DTFx reflection bindings incomplete — orchestration persistence disabled");
     }
 
     public string DatabasePath => _databasePath;
@@ -144,15 +149,17 @@ public sealed class SQLiteOrchestrationService : InMemoryOrchestrationService
         EnsureSchemaSync();
         HydrateSync();
         _hydrated = true;
+        // Replace the batch CTS in case this instance was stopped and restarted
+        var oldCts = Interlocked.Exchange(ref _batchCts, new CancellationTokenSource());
+        try { oldCts.Dispose(); } catch { }
         return base.StartAsync();
     }
 
     public new async Task StopAsync(bool isForced)
     {
-        // Cancel any pending batch timer
+        // Cancel any pending batch timer and flush
         _batchCts.Cancel();
 
-        // Flush pending writes
         var pending = Interlocked.Exchange(ref _pendingPersistCount, 0);
         if (pending > 0)
         {
@@ -165,15 +172,6 @@ public sealed class SQLiteOrchestrationService : InMemoryOrchestrationService
             {
                 _logger.LogWarning(ex, "Final flush on StopAsync failed");
             }
-        }
-
-        try
-        {
-            await PersistAllAsync(CancellationToken.None).ConfigureAwait(false);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Final persistence on StopAsync failed");
         }
 
         await base.StopAsync(isForced).ConfigureAwait(false);
@@ -234,9 +232,34 @@ public sealed class SQLiteOrchestrationService : InMemoryOrchestrationService
     public new Task ForceTerminateTaskOrchestrationAsync(string instanceId, string reason) =>
         SnapshotAfter(() => base.ForceTerminateTaskOrchestrationAsync(instanceId, reason));
 
-    public new Task PurgeOrchestrationHistoryAsync(DateTime thresholdDateTimeUtc,
-        OrchestrationStateTimeRangeFilterType timeRangeFilterType) =>
-        Task.CompletedTask;
+    public new async Task PurgeOrchestrationHistoryAsync(DateTime thresholdDateTimeUtc,
+        OrchestrationStateTimeRangeFilterType timeRangeFilterType)
+    {
+        if (!_hydrated || !_reflectionOk) return;
+        if (!File.Exists(_databasePath)) return;
+
+        try
+        {
+            await using var conn = new SqliteConnection($"Data Source={_databasePath}");
+            await conn.OpenAsync().ConfigureAwait(false);
+            await using var cmd = conn.CreateCommand();
+            // Delete completed orchestration instances before the threshold.
+            // Non-completed instances are preserved regardless of age.
+            cmd.CommandText = """
+                DELETE FROM orchestration_state
+                WHERE is_completed = 1
+                  AND updated_at < $threshold;
+                """;
+            cmd.Parameters.AddWithValue("$threshold", thresholdDateTimeUtc.ToString("O"));
+            var deleted = await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+            if (deleted > 0)
+                _logger.LogInformation("Purged {Count} completed orchestration(s) before {Threshold}", deleted, thresholdDateTimeUtc);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to purge orchestration history");
+        }
+    }
 
     async Task SnapshotAfter(Func<Task> op)
     {
@@ -346,6 +369,7 @@ public sealed class SQLiteOrchestrationService : InMemoryOrchestrationService
 
     async Task PersistAllAsync(CancellationToken ct)
     {
+        if (!_reflectionOk) return;
         await _persistGate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
@@ -409,6 +433,7 @@ public sealed class SQLiteOrchestrationService : InMemoryOrchestrationService
 
     void HydrateSync()
     {
+        if (!_reflectionOk) return;
         var rows = ReadAllRows();
         if (rows.Count == 0)
         {

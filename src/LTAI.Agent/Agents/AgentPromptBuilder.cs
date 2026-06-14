@@ -51,8 +51,8 @@ internal static class AgentPromptBuilder
             ? $"You are {name}, {description}."
             : $"你是 {name}，{description}。";
         var dateHint = isEn
-            ? "About dates: when users ask \"what day is it\" or \"what time is it\", call GetCurrentDateTime directly — do not guess."
-            : "关于日期：当用户询问\"今天星期几\"\"现在几点\"等时间日期问题时，请直接调用 GetCurrentDateTime 工具获取实时时间，不要自行估算。";
+            ? "About dates: when users ask \"what day is it\" or \"what time is it\", use available date/time tools to get the current time — do not guess."
+            : "关于日期：当用户询问\"今天星期几\"\"现在几点\"等时间日期问题时，请使用可用的日期时间工具获取实时时间，不要自行估算。";
         return $"{roleLine}\n{dateHint}\n";
     }
 

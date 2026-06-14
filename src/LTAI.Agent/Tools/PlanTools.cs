@@ -16,6 +16,8 @@ public static class PlanTools
     private static readonly ConcurrentDictionary<string, Execution.ExecutionPlan> _executionPlan = new();
     private static readonly AsyncLocal<string?> _sessionId = new();
     private static readonly TimeSpan PlanTimeout = TimeSpan.FromMinutes(30);
+    private static DateTime _lastCleanup = DateTime.UtcNow;
+    private static readonly TimeSpan CleanupInterval = TimeSpan.FromMinutes(10);
 
     /// <summary>Set by ChatAgent before invoking plan tools, scoping PlanState to a session.</summary>
     public static string? SessionId { get => _sessionId.Value; set => _sessionId.Value = value; }
@@ -329,7 +331,7 @@ public static class PlanTools
         // Notify ExecutionEngine that execution has started
         if (ExecutionEngine != null && _executionPlan.TryGetValue(SessionKey, out var execPlan))
         {
-            var startResult = ExecutionEngine.PlanAsync(plan.Summary).Result;
+            var startResult = ExecutionEngine.PlanAsync(plan.Summary).GetAwaiter().GetResult();
             if (startResult != null)
             {
                 _executionPlan[SessionKey] = startResult;
@@ -347,5 +349,22 @@ public static class PlanTools
             await ExecutionEngine!.ExecuteAsync(execPlan).ConfigureAwait(false);
         }
         catch { /* background execution error — plan continues manually */ }
+    }
+
+    /// <summary>Periodically evict stale session plans. Called by ChatAgent.</summary>
+    public static void EvictStaleSessions()
+    {
+        var now = DateTime.UtcNow;
+        if ((now - _lastCleanup) < CleanupInterval) return;
+        _lastCleanup = now;
+        foreach (var key in _plans.Keys.ToArray())
+        {
+            if (_plans.TryGetValue(key, out var plan)
+                && (now - plan.CreatedAt) > TimeSpan.FromHours(2))
+            {
+                _plans.TryRemove(key, out _);
+                _executionPlan.TryRemove(key, out _);
+            }
+        }
     }
 }

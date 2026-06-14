@@ -1,3 +1,8 @@
+---
+name: doc-generator
+description: 为指定代码生成规范的文档。
+---
+
 # Doc Generator 文档生成
 
 ## 概要

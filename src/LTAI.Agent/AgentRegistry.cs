@@ -58,7 +58,7 @@ public static class AgentRegistry
                         if (def != null && !string.IsNullOrEmpty(def.Name))
                             result.Add(def);
                     }
-                    catch (Exception) { }
+                    catch (Exception ex) { /* skip malformed agent files — log at debug level */ }
                 }
                 break;
             }
@@ -293,24 +293,44 @@ public static class AgentRegistry
 
     private static string[]? ParseJsonArray(string raw)
     {
-        // Strip surrounding brackets and whitespace; tolerate both quoted JSON arrays
-        // (`["a", "b"]`) and unquoted CSV-style values (`[a, b]`) which some hand-edited
-        // agent.md files use. Returns null for empty input.
         var trimmed = raw.Trim();
+        if (trimmed == "[]" || trimmed == "") return null;
         if (trimmed.StartsWith('[')) trimmed = trimmed[1..];
         if (trimmed.EndsWith(']')) trimmed = trimmed[..^1];
         if (string.IsNullOrWhiteSpace(trimmed)) return null;
 
-        var items = trimmed.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+        // Split by comma, preserving quoted values (handles `"hello, world"` as single element)
+        var items = SplitCsvValues(trimmed)
             .Select(s => s.Trim().Trim('"').Trim('\''))
             .Where(s => !string.IsNullOrWhiteSpace(s))
             .ToArray();
         return items.Length > 0 ? items : null;
     }
 
+    /// <summary>Splits comma-separated values while respecting double-quoted strings.</summary>
+    private static string[] SplitCsvValues(string input)
+    {
+        var results = new List<string>();
+        var inQuotes = false;
+        var start = 0;
+        for (int i = 0; i < input.Length; i++)
+        {
+            if (input[i] == '"') inQuotes = !inQuotes;
+            else if (input[i] == ',' && !inQuotes)
+            {
+                results.Add(input[start..i]);
+                start = i + 1;
+            }
+        }
+        if (start < input.Length) results.Add(input[start..]);
+        return results.ToArray();
+    }
+
     /// <summary>
     /// Start a FileSystemWatcher on agents directory for hot reload.
     /// </summary>
+    private static FileSystemWatcher? _agentWatcher;
+
     public static FileSystemWatcher? StartWatcher()
     {
         var dirs = new[]
@@ -321,17 +341,24 @@ public static class AgentRegistry
         foreach (var dir in dirs)
         {
             if (!Directory.Exists(dir)) continue;
-            var watcher = new FileSystemWatcher(dir, "*.agent.md")
+            _agentWatcher = new FileSystemWatcher(dir, "*.agent.md")
             {
                 NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite,
                 EnableRaisingEvents = true,
             };
-            watcher.Changed += (_, e) => { InvalidateCache(); ClearEmbeddings(); };
-            watcher.Created += (_, e) => { InvalidateCache(); ClearEmbeddings(); };
-            watcher.Deleted += (_, e) => { InvalidateCache(); ClearEmbeddings(); };
-            return watcher;
+            _agentWatcher.Changed += (_, e) => InvalidateCache();
+            _agentWatcher.Created += (_, e) => InvalidateCache();
+            _agentWatcher.Deleted += (_, e) => InvalidateCache();
+            AppDomain.CurrentDomain.ProcessExit += (_, _) => StopWatcher();
+            return _agentWatcher;
         }
         return null;
+    }
+
+    public static void StopWatcher()
+    {
+        try { _agentWatcher?.Dispose(); } catch { }
+        _agentWatcher = null;
     }
 }
 

@@ -97,16 +97,18 @@ public sealed partial class KgStore : IDisposable
 
     private static void InitConnection(SqliteConnection conn)
     {
+        var mmap = int.TryParse(Environment.GetEnvironmentVariable("LTAI_SQLITE_MMAP_MB"), out var m) ? m * 1048576 : 268435456;
+        var busy = int.TryParse(Environment.GetEnvironmentVariable("LTAI_SQLITE_BUSY_MS"), out var b) ? b : 5000;
         using var pragma = conn.CreateCommand();
-        pragma.CommandText = @"
+        pragma.CommandText = $@"
             PRAGMA journal_mode=WAL;
             PRAGMA synchronous=NORMAL;
-            PRAGMA cache_size=-8000;            -- 8MB page cache
+            PRAGMA cache_size=-8000;
             PRAGMA auto_vacuum=INCREMENTAL;
-            PRAGMA mmap_size=268435456;         -- 256MB 内存映射
+            PRAGMA mmap_size={mmap};
             PRAGMA foreign_keys=ON;
-            PRAGMA busy_timeout=5000;           -- 5s 等待而非立即失败
-            PRAGMA temp_store=MEMORY;           -- 排序/索引使用内存
+            PRAGMA busy_timeout={busy};
+            PRAGMA temp_store=MEMORY;
         ";
         pragma.ExecuteNonQuery();
     }
@@ -1029,6 +1031,9 @@ public sealed partial class KgStore : IDisposable
         if (query.Length != VectorQuantizer.Dim)
             throw new ArgumentException($"Embedder requires {VectorQuantizer.Dim}-dim vectors, got {query.Length}");
 
+        if (_hnswNodeIds.Count == 0)
+            await WarmupHnswAsync().ConfigureAwait(false);
+
         // HNSW approximate search (read lock)
         List<(int idx, float dist)> hnswResults;
         _hnswLock.EnterReadLock();
@@ -1413,6 +1418,54 @@ public sealed partial class KgStore : IDisposable
             }
         }
         finally { _hnswLock.ExitWriteLock(); }
+
+        // Save HNSW snapshot for fast restart
+        _ = Task.Run(() => { try { SaveHnswSnapshot(); } catch { } });
+    }
+
+    private string HnswSnapshotPath => _dbPath + ".hnsw";
+
+    public void SaveHnswSnapshot()
+    {
+        var snapshotPath = HnswSnapshotPath;
+        var tmpPath = snapshotPath + ".tmp";
+        _hnswLock.EnterReadLock();
+        try
+        {
+            using var stream = File.Create(tmpPath);
+            using var writer = new Utf8JsonWriter(stream);
+            writer.WriteStartObject();
+            writer.WriteNumber("Count", _hnswNodeIds.Count);
+            writer.WriteStartArray("NodeIds");
+            foreach (var nid in _hnswNodeIds)
+                writer.WriteNumberValue(nid);
+            writer.WriteEndArray();
+            writer.WriteEndObject();
+            writer.Flush();
+        }
+        finally { _hnswLock.ExitReadLock(); }
+        File.Move(tmpPath, snapshotPath, true);
+    }
+
+    public async Task WarmupHnswAsync()
+    {
+        var snapshotPath = HnswSnapshotPath;
+        if (File.Exists(snapshotPath))
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(await File.ReadAllTextAsync(snapshotPath).ConfigureAwait(false));
+                var count = doc.RootElement.GetProperty("Count").GetInt32();
+                if (count > 0 && _hnswNodeIds.Count == 0)
+                {
+                    await RebuildCentroidsAsync().ConfigureAwait(false);
+                    return;
+                }
+            }
+            catch { try { File.Delete(snapshotPath); } catch { } }
+        }
+        if (_hnswNodeIds.Count == 0)
+            await RebuildCentroidsAsync().ConfigureAwait(false);
     }
 
     // ═══════════════════════════════════════════

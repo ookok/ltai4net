@@ -14,7 +14,8 @@ public sealed class RateLimitMiddleware
     private readonly int _maxRequests;
     private readonly int _windowSec;
     private readonly ConcurrentDictionary<string, WindowState> _windows = new(StringComparer.OrdinalIgnoreCase);
-    private static readonly TimeSpan CleanupInterval = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan CleanupInterval = TimeSpan.FromMinutes(
+        int.TryParse(Environment.GetEnvironmentVariable("LTAI_RATE_LIMIT_CLEANUP_MIN"), out var m) ? Math.Max(1, m) : 5);
     private DateTime _lastCleanup = DateTime.UtcNow;
 
     public RateLimitMiddleware(RequestDelegate next)
@@ -27,7 +28,8 @@ public sealed class RateLimitMiddleware
     public async Task InvokeAsync(HttpContext context)
     {
         // Skip rate limiting for health checks
-        if (context.Request.Path.StartsWithSegments("/health"))
+        if (context.Request.Path.StartsWithSegments("/health") ||
+            context.Request.Path.StartsWithSegments("/ready"))
         {
             await _next(context).ConfigureAwait(false);
             return;

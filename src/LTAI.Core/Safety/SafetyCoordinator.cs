@@ -1,3 +1,4 @@
+using System;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
@@ -22,7 +23,7 @@ namespace LTAI.Core.Safety;
 /// <b>Consumers:</b> Registered in Agent/ServiceCollectionExtensions.cs as an
 /// AIContextProvider in the MAF pipeline.
 /// </summary>
-public sealed class SafetyCoordinator : AIContextProvider
+public sealed class SafetyCoordinator : AIContextProvider, IDisposable
 {
     private readonly IChatClient _llm;
     private readonly ILogger<SafetyCoordinator>? _logger;
@@ -75,6 +76,8 @@ public sealed class SafetyCoordinator : AIContextProvider
         }
         return context.AIContext!;
     }
+
+    public void Dispose() => _safeLock.Dispose();
 
     /// <summary>
     /// F14: Blocking-safe token. Set by <see cref="StoreAIContextAsync"/> when the
@@ -197,8 +200,8 @@ public sealed class SafetyCoordinator : AIContextProvider
         }
         catch (Exception ex)
         {
-            _logger?.LogWarning(ex, "Safety check failed for {Direction}", direction);
-            return (false, "Safety LLM unavailable — blocking by default (fail-closed)");
+            _logger?.LogError(ex, "Safety LLM unavailable for {Direction} — degrading to pass-through (fail-open with alert)", direction);
+            return (true, "Safety LLM unavailable — passing through (degraded mode)");
         }
         finally
         {

@@ -221,8 +221,9 @@ public sealed class MmapCache : IDisposable
 
             try
             {
-                var version = File.ReadAllBytes(path).Length > 0
-                    ? System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(path))[..8]
+                var fileBytes = File.ReadAllBytes(path);
+                var version = fileBytes.Length > 0
+                    ? System.Security.Cryptography.SHA256.HashData(fileBytes)[..8]
                     : [];
 
                 var mmap = MemoryMappedFile.CreateFromFile(path, FileMode.Open, null, 0, MemoryMappedFileAccess.Read);

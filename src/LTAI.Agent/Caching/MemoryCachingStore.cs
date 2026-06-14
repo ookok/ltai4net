@@ -91,7 +91,9 @@ public sealed class MemoryCachingStore : IMemoryCachingStore
         var prefix = $"session:{sessionId}:";
 
         var nearest = _checkpoints
-            .Where(kv => kv.Key.StartsWith(prefix) && kv.Value.TokenCount <= tokenCount)
+            .Where(kv => kv.Key.StartsWith(prefix)
+                         && kv.Value.TokenCount <= tokenCount
+                         && DateTime.UtcNow < kv.Value.ExpiresAt)
             .OrderByDescending(kv => kv.Value.TokenCount)
             .FirstOrDefault();
 
@@ -113,7 +115,8 @@ public sealed class MemoryCachingStore : IMemoryCachingStore
         var results = _checkpoints
             .Where(kv => kv.Key.StartsWith(prefix)
                          && kv.Value.TokenCount >= fromToken
-                         && kv.Value.TokenCount <= toToken)
+                         && kv.Value.TokenCount <= toToken
+                         && DateTime.UtcNow < kv.Value.ExpiresAt)
             .Select(kv => new CheckpointSummary(
                 kv.Key, kv.Value.TokenCount, kv.Value.SavedAt, "Memory"))
             .OrderBy(s => s.TokenCount)

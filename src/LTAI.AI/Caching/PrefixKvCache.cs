@@ -10,7 +10,7 @@
 // ═══════════════════════════════════════════════════════════════
 
 using System.Collections.Concurrent;
-using System.Security.Cryptography;
+using LTAI.Core.Configuration;
 using System.Text;
 
 namespace LTAI.AI.Caching;
@@ -105,8 +105,7 @@ public sealed class PrefixKvCache : IKvCacheStore
         if (!string.IsNullOrEmpty(historySummary))
             sb.Append("|hist:").Append(historySummary.Trim());
 
-        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(sb.ToString()));
-        return Convert.ToHexStringLower(bytes);
+        return FastHash.ComputeHex(sb.ToString());
     }
 
     /// <summary>

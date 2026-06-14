@@ -116,9 +116,9 @@ public sealed partial class EntityLinker
     private async Task<List<LinkedEntity>> MatchTokenAsync(string token, CancellationToken ct)
     {
         var results = new List<LinkedEntity>();
-        var allNodes = await _store.GetAllNodes().ConfigureAwait(false);
+        var matchingNodes = await _store.SearchNodesByName(token).ConfigureAwait(false);
 
-        foreach (var node in allNodes)
+        foreach (var node in matchingNodes)
         {
             if (string.IsNullOrEmpty(node.Name)) continue;
 

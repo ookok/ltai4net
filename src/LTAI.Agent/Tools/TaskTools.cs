@@ -16,6 +16,25 @@ public static class TaskTools
     // Session-isolated todo lists: keyed by session ID, not static global
     private static readonly ConcurrentDictionary<string, SessionTodoList> _sessionTodos = new(StringComparer.Ordinal);
     private static readonly AsyncLocal<string?> _sessionId = new();
+    private static DateTime _lastCleanup = DateTime.UtcNow;
+    private static readonly TimeSpan CleanupInterval = TimeSpan.FromMinutes(15);
+
+    /// <summary>Periodically evict stale session todo lists. Called by ChatAgent.</summary>
+    public static void EvictStaleSessions()
+    {
+        var now = DateTime.UtcNow;
+        if ((now - _lastCleanup) < CleanupInterval) return;
+        _lastCleanup = now;
+        foreach (var key in _sessionTodos.Keys.ToArray())
+        {
+            if (_sessionTodos.TryGetValue(key, out var list)
+                && list.Items.Count == 0
+                && (now - list.LastModified) > TimeSpan.FromHours(1))
+            {
+                _sessionTodos.TryRemove(key, out _);
+            }
+        }
+    }
 
     /// <summary>Set by ChatAgent before tool calls, scoping todos to a session.</summary>
     public static string? SessionId { get => _sessionId.Value; set => _sessionId.Value = value; }
@@ -40,6 +59,7 @@ public static class TaskTools
     {
         public readonly List<TodoItem> Items = new();
         public int NextId = 1;
+        public DateTime LastModified = DateTime.UtcNow;
     }
 
     [Description("创建或更新待办事项列表。会替换所有现有的待办事项。\n"
@@ -59,6 +79,7 @@ public static class TaskTools
             var list = CurrentList;
             lock (list)
             {
+                list.LastModified = DateTime.UtcNow;
                 if (items == null || items.Count == 0)
                 {
                     list.Items.Clear();
@@ -99,6 +120,7 @@ public static class TaskTools
         var list = CurrentList;
         lock (list)
         {
+            list.LastModified = DateTime.UtcNow;
             var item = list.Items.FirstOrDefault(t => t.Id == id);
             if (item == null) return $"Todo #{id} not found";
 

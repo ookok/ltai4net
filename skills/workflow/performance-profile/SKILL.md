@@ -1,3 +1,8 @@
+---
+name: performance-profile
+description: 对代码进行性能诊断，按以下维度逐步排查：
+---
+
 # Performance Profile 性能分析
 
 ## 概要

@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using LTAI.AI;
+using LTAI.Core.Configuration;
 using Markdig;
 
 namespace LTAI.Agent.Tools;
@@ -16,11 +17,11 @@ public static class MarkdownTools
         {
             var pipeline = new MarkdownPipelineBuilder().UseAdvancedExtensions().Build();
             var html = Markdown.ToHtml(markdown, pipeline);
-            var preview = markdown.Length > 5000 ? markdown[..5000] + "\n... [truncated]" : markdown;
+            var preview = markdown.Length > 5000 ? ContentTruncator.Truncate(markdown, 5000) : markdown;
 
             var result = $"--- Markdown Preview ({markdown.Length} chars) ---\n\n{preview}\n\n--- HTML Output ({html.Length} chars) ---\n\n{html}";
             if (result.Length > 50000)
-                result = result[..50000] + "\n... [truncated]";
+                result = ContentTruncator.Truncate(result, 50000);
             return result;
         }
         catch (Exception ex)

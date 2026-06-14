@@ -3,7 +3,7 @@
 //  IPipelineStep — pipeline step interface
 //
 //  Phase 3a: every step in the message processing pipeline
-//  implements this interface. Steps are composed via PipelineBuilder.
+//  implements this interface. Steps are composed via DI or manual instantiation.
 // ═══════════════════════════════════════════════════════════════
 
 namespace LTAI.Agent.Pipeline;

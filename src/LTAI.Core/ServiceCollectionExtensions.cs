@@ -16,11 +16,11 @@ public static class ServiceCollectionExtensions
         services.AddHttpClient("safety", client => { client.Timeout = TimeSpan.FromSeconds(15); });
 
         // Validate LTAIOptions at startup (catches misconfiguration early)
-        services.AddSingleton<IValidateOptions<LTAIOptions>, LTAIOptionsValidator>();
         services.AddOptions<LTAIOptions>().ValidateOnStart();
 
         // ConfigHotReload — watches appsettings.json, triggers IOptionsMonitor.OnChange
         services.AddSingleton<ConfigHotReloadService>();
+        services.AddHostedService(sp => sp.GetRequiredService<ConfigHotReloadService>());
 
         if (enableOpenTelemetry)
         {

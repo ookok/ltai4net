@@ -563,7 +563,7 @@ public sealed partial class TextPadView : UserControl
         _publishBtn.Content = string.IsNullOrEmpty(deployCmd) ? "🚀 Deploy" : $"🚀 {deployCmd}";
     }
 
-    private void RunProjectCmd(string action)
+    private async Task RunProjectCmd(string action)
     {
         var type = _projectType;
         var cmd = action switch
@@ -595,10 +595,10 @@ public sealed partial class TextPadView : UserControl
             _ => null
         };
         if (cmd == null) { _statusBar.Text = $"当前项目类型 ({type}) 不支持 {action} 操作"; return; }
-        RunShell(cmd);
+        await RunShell(cmd);
     }
 
-    private void RunShell(string command)
+    private async Task RunShell(string command)
     {
         try
         {
@@ -615,9 +615,9 @@ public sealed partial class TextPadView : UserControl
             };
             using var process = new Process { StartInfo = psi };
             process.Start();
-            var output = process.StandardOutput.ReadToEnd();
-            var error = process.StandardError.ReadToEnd();
-            process.WaitForExit(120_000);
+            var output = await process.StandardOutput.ReadToEndAsync();
+            var error = await process.StandardError.ReadToEndAsync();
+            await process.WaitForExitAsync(CancellationToken.None);
             var result = process.ExitCode == 0 ? "✅ 成功" : "❌ 失败";
             _buildOutput.Text = $"{result} (exit={process.ExitCode})\n{command}\n\n{output}\n{error}".Trim();
             _statusBar.Text = $"{command}: {result}";

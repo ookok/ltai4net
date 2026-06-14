@@ -42,7 +42,7 @@ public sealed class WorkflowHotReloadNotifier
     /// <summary>Unsubscribe by token. Safe to call multiple times.</summary>
     public void Unsubscribe(Guid token) => _subscribers.TryRemove(token, out _);
 
-    /// <summary>Publish a successful reload. All subscribers are notified.</summary>
+    /// <summary>Publish a successful reload. All subscribers are notified in parallel.</summary>
     public void PublishReloaded(WorkflowReloadEvent evt)
     {
         _logger.LogInformation(
@@ -53,14 +53,20 @@ public sealed class WorkflowHotReloadNotifier
         activity?.SetTag("workflow.type", evt.Type);
         activity?.SetTag("workflow.version", evt.Version);
         activity?.SetTag("workflow.path", evt.FilePath);
+        // Fan out to all subscribers in parallel so a slow subscriber doesn't block others
+        var tasks = new List<Task>(_subscribers.Count);
         foreach (var sub in _subscribers.Values)
         {
-            try { sub.OnReloaded(evt); }
-            catch (Exception ex)
+            tasks.Add(Task.Run(() =>
             {
-                _logger.LogWarning(ex, "Subscriber threw on OnReloaded for {Name}", evt.Name);
-            }
+                try { sub.OnReloaded(evt); }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Subscriber threw on OnReloaded for {Name}", evt.Name);
+                }
+            }));
         }
+        Task.WhenAll(tasks).ContinueWith(_ => { }, TaskScheduler.Default);
     }
 
     /// <summary>Publish a failed reload. The old workflow remains active.</summary>
@@ -75,14 +81,19 @@ public sealed class WorkflowHotReloadNotifier
         activity?.SetTag("workflow.path", evt.FilePath);
         activity?.SetTag("workflow.reason", evt.Reason);
         activity?.SetStatus(ActivityStatusCode.Error, evt.Reason);
+        var tasks = new List<Task>(_subscribers.Count);
         foreach (var sub in _subscribers.Values)
         {
-            try { sub.OnLoadFailed(evt); }
-            catch (Exception ex)
+            tasks.Add(Task.Run(() =>
             {
-                _logger.LogWarning(ex, "Subscriber threw on OnLoadFailed for {Name}", evt.Name);
-            }
+                try { sub.OnLoadFailed(evt); }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Subscriber threw on OnLoadFailed for {Name}", evt.Name);
+                }
+            }));
         }
+        Task.WhenAll(tasks).ContinueWith(_ => { }, TaskScheduler.Default);
     }
 }
 

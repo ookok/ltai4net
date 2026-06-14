@@ -13,6 +13,7 @@ using LTAI.Agent.Tools;
 using LTAI.Agent.Utils;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
 
 namespace LTAI.Agent.Vector;
@@ -31,6 +32,10 @@ public sealed class CgGraph : AIContextProvider
     private bool _built;
     private readonly ConcurrentDictionary<string, DateTime> _indexedFiles = new(StringComparer.OrdinalIgnoreCase);
     private TreeSitterParser? _parser;
+    private readonly MemoryCache _queryCache = new(new MemoryCacheOptions { SizeLimit =
+        int.TryParse(Environment.GetEnvironmentVariable("LTAI_CG_CACHE_SIZE"), out var cs) ? Math.Max(10, cs) : 100 });
+    private static readonly TimeSpan QueryCacheTtl = TimeSpan.FromSeconds(
+        int.TryParse(Environment.GetEnvironmentVariable("LTAI_CG_CACHE_TTL_SEC"), out var t) ? Math.Max(5, t) : 30);
 
     private static readonly HashSet<string> SourceExts = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -187,6 +192,7 @@ public sealed class CgGraph : AIContextProvider
         }).ConfigureAwait(false);
 
         _built = true;
+        _queryCache.Compact(1.0); // invalidate all cached queries after rebuild
 
         // Post-index: cross-file CALLS inference
         await InferCrossFileCallsAsync().ConfigureAwait(false);
@@ -222,6 +228,10 @@ public sealed class CgGraph : AIContextProvider
         int topK = 5, CancellationToken ct = default)
     {
         if (!_built) return "Code graph not built — run /build command first.";
+
+        var cacheKey = $"cg:{query}|{namespacePrefix ?? "*"}";
+        if (_queryCache.TryGetValue(cacheKey, out string? cached) && cached != null)
+            return cached;
 
         var keywords = await RewriteQueryAsync(query, ct).ConfigureAwait(false);
         if (string.IsNullOrWhiteSpace(keywords)) keywords = query;
@@ -285,7 +295,9 @@ public sealed class CgGraph : AIContextProvider
             lines.Add("");
         }
 
-        return string.Join("\n", lines);
+        var result = string.Join("\n", lines);
+        _queryCache.Set(cacheKey, result, QueryCacheTtl);
+        return result;
     }
 
     /// <summary>
@@ -433,13 +445,17 @@ public sealed class CgGraph : AIContextProvider
     {
         try
         {
-            var methods = await _store.GetNodesByKind("method").ConfigureAwait(false);
-            if (methods.Count < 2) return;
+            var nodes = await _store.GetNodesByKind("method").ConfigureAwait(false);
+            nodes.AddRange(await _store.GetNodesByKind("function").ConfigureAwait(false));
+            nodes.AddRange(await _store.GetNodesByKind("class").ConfigureAwait(false));
+            nodes.AddRange(await _store.GetNodesByKind("interface").ConfigureAwait(false));
+            nodes.AddRange(await _store.GetNodesByKind("struct").ConfigureAwait(false));
+            if (nodes.Count < 2) return;
 
-            _logger.LogInformation("CgGraph: inferring cross-file CALLS for {N} methods", methods.Count);
+            _logger.LogInformation("CgGraph: inferring cross-file CALLS for {N} nodes (method/function/class/interface/struct)", nodes.Count);
 
             var nameIndex = new Dictionary<string, List<long>>(StringComparer.OrdinalIgnoreCase);
-            foreach (var m in methods)
+            foreach (var m in nodes)
             {
                 if (!nameIndex.ContainsKey(m.Name))
                     nameIndex[m.Name] = new List<long>();
@@ -452,7 +468,7 @@ public sealed class CgGraph : AIContextProvider
             await _store.ExecuteInTransactionAsync(async () =>
             {
                 int added = 0;
-                foreach (var caller in methods)
+                foreach (var caller in nodes)
                 {
                     var docs = await _store.GetDocs(caller.Id).ConfigureAwait(false);
                     var docText = string.Join("\n", docs.Select(d => d.Text));
@@ -465,7 +481,7 @@ public sealed class CgGraph : AIContextProvider
                     foreach (var (calleeName, calleeIds) in nameIndex)
                     {
                         if (calleeName == caller.Name) continue;
-                        if (!docText.Contains(calleeName) && !docText.Contains(calleeName + "(")) continue;
+                        if (!docText.Contains(calleeName) && !docText.Contains(calleeName + "(") && !docText.Contains(": " + calleeName) && !docText.Contains("new " + calleeName)) continue;
 
                         foreach (var calleeId in calleeIds)
                         {

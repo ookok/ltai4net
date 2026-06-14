@@ -49,7 +49,7 @@ public sealed class YAMLWorkflowRegistry
     private readonly ConcurrentDictionary<string, WorkflowSnapshot> _workflows = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, DecisionTreeSnapshot> _configs = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, PipelineSnapshot> _pipelines = new(StringComparer.OrdinalIgnoreCase);
-    private bool _initialized;
+    private int _initialized;
 
     public YAMLWorkflowRegistry(
         IOptions<LTAIOptions> options,
@@ -70,8 +70,7 @@ public sealed class YAMLWorkflowRegistry
     /// </summary>
     public async Task InitializeAsync(CancellationToken ct = default)
     {
-        if (_initialized) return;
-        _initialized = true;
+        if (Interlocked.Exchange(ref _initialized, 1) != 0) return;
 
         if (!Directory.Exists(_watchDir))
         {
@@ -103,11 +102,11 @@ public sealed class YAMLWorkflowRegistry
             if (ext is ".yaml" or ".yml")
             {
                 var raw = await File.ReadAllTextAsync(path, ct).ConfigureAwait(false);
-                var content = LTAI.Core.I18n.WorkflowI18nResolver.Resolve(raw);
-                var workflow = BuildWorkflow(path, content);
-                var type = ProbeWorkflowType(path, content);
-                var version = ProbeWorkflowVersion(path, content);
-                _workflows[name] = new WorkflowSnapshot(name, type, version, path, DateTime.UtcNow, workflow, content);
+                var resolved = LTAI.Core.I18n.WorkflowI18nResolver.Resolve(raw);
+                var workflow = BuildWorkflow(path, resolved);
+                var type = ProbeWorkflowType(path, resolved);
+                var version = ProbeWorkflowVersion(path, resolved);
+                _workflows[name] = new WorkflowSnapshot(name, type, version, path, DateTime.UtcNow, workflow, resolved);
                 _notifier.PublishReloaded(new WorkflowReloadEvent(name, type, version, DateTime.UtcNow, path));
             }
             else if (ext == ".json")
@@ -137,7 +136,7 @@ public sealed class YAMLWorkflowRegistry
         }
         catch (Exception ex)
         {
-            // D68: failed reload preserves the old snapshot.
+            _logger.LogError(ex, "Failed to reload workflow {Path}", path);
             var type = ext switch
             {
                 ".yaml" or ".yml" => "maf-declarative",
@@ -200,15 +199,22 @@ public sealed class YAMLWorkflowRegistry
 
     private Workflow BuildWorkflow(string path, string content)
     {
-        // MAF DeclarativeWorkflowBuilder builds the workflow from a file path
-        // or reader; we already read the content, so write to a temp file to
-        // reuse the existing builder API. The temp file is cleaned up
-        // immediately after Build returns.
-        var options = new DeclarativeWorkflowOptions(new NoOpAgentProvider())
+        // Write I18n-resolved content to a temp file for DeclarativeWorkflowBuilder.
+        // The temp file is cleaned up immediately after Build returns.
+        var tmpPath = Path.GetTempFileName();
+        try
         {
-            McpToolHandler = _mcpToolHandler,
-        };
-        return DeclarativeWorkflowBuilder.Build<string>(path, options);
+            File.WriteAllText(tmpPath, content);
+            var options = new DeclarativeWorkflowOptions(new NoOpAgentProvider())
+            {
+                McpToolHandler = _mcpToolHandler,
+            };
+            return DeclarativeWorkflowBuilder.Build<string>(tmpPath, options);
+        }
+        finally
+        {
+            try { File.Delete(tmpPath); } catch { }
+        }
     }
 
     /// <summary>

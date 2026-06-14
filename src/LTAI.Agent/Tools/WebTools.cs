@@ -179,7 +179,7 @@ public sealed class WebTools
             default:
                 var links = System.Text.RegularExpressions.Regex.Matches(html,
                     @"<a[^>]+href=""(https?://[^""]+)""[^>]*>(.*?)</a>",
-                    RegexOptions.IgnoreCase);
+                    RegexOptions.IgnoreCase | RegexOptions.Compiled);
                 foreach (Match m in links)
                 {
                     var title = StripHtmlTags(m.Groups[2].Value);
@@ -389,8 +389,7 @@ public sealed class WebTools
                     content = StripHtml(content);
 
                 if (content.Length > maxChars)
-                    content = content[..maxChars] +
-                        $"\n... (truncated, more content available)";
+                    content = ContentTruncator.Truncate(content, maxChars);
 
                 return content;
             }
@@ -449,7 +448,7 @@ public sealed class WebTools
             using var resp = await http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
             var respBody = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
             if (respBody.Length > 50000)
-                respBody = respBody[..50000] + $"\n... (truncated)";
+                respBody = ContentTruncator.Truncate(respBody, 50000);
             return $"HTTP {(int)resp.StatusCode} {resp.ReasonPhrase}\n\n{respBody}";
         }
         catch (Exception ex) { return $"HTTP request failed: {ex.Message}"; }

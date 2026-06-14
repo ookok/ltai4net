@@ -96,7 +96,6 @@ public partial class MainWindow : Window
             _proxy = new ProxyService(ProxyPort);
             await _proxy.StartAsync();
 
-            // Always set system proxy with bypass list for Chinese domains
             SystemProxy.Enable($"http://127.0.0.1:{ProxyPort}");
 
             // Try WARP as upstream for international traffic
@@ -217,6 +216,13 @@ public partial class MainWindow : Window
 
     private void OnInstallWarpClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
+        // Validate mirror URL: HTTPS only
+        if (!string.IsNullOrEmpty(WarpMirrorUrl) && WarpMirrorUrl.StartsWith("http://", StringComparison.OrdinalIgnoreCase))
+        {
+            SetStatus("WARP mirror must use HTTPS (HTTP not allowed for security)", "#ff0000");
+            return;
+        }
+
         var tmpScript = Path.Combine(Path.GetTempPath(), "ltai-install-warp.ps1");
         var psLines = new[]
         {

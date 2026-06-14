@@ -4,6 +4,7 @@ using System.Text.RegularExpressions;
 using System.Text.Json;
 using LTAI.AI;
 using LTAI.Core;
+using LTAI.Core.Configuration;
 
 namespace LTAI.Agent.Tools;
 
@@ -178,7 +179,7 @@ public sealed class TextTools
             foreach (var hunk in diff) sb.AppendLine(hunk);
 
             var result = sb.ToString();
-            return result.Length > 20000 ? result[..20000] + "\n... [truncated at 20000 chars]" : result;
+            return result.Length > 20000 ? ContentTruncator.Truncate(result, 20000) : result;
         }
         catch (Exception ex) { return $"Diff error: {ex.Message}"; }
     }

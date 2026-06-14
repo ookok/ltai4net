@@ -1,3 +1,8 @@
+---
+name: error-handling
+description: 审查代码中的错误处理模式是否符合最佳实践。
+---
+
 # Error Handling 错误处理审查
 
 ## 概要

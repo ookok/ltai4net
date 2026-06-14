@@ -226,7 +226,7 @@ public sealed class MultimediaTools
                     "$b=New-Object System.Drawing.Bitmap $s.Width,$s.Height; " +
                     "$g=[System.Drawing.Graphics]::FromImage($b); " +
                     "$g.CopyFromScreen($s.Left,$s.Top,0,0,$s.Size); " +
-                    $"$b.Save('{outPath.Replace("'", "''")}'); $g.Dispose(); $b.Dispose()";
+                    $"$b.Save('{outPath.Replace("'", "''").Replace("$", "`$").Replace("`", "``")}'); $g.Dispose(); $b.Dispose()";
 
                 var (code, _, _) = await RunProcessAsync("powershell",
                     $"-NoProfile -Command \"{script}\"").ConfigureAwait(false);
@@ -270,8 +270,9 @@ public sealed class MultimediaTools
         proc.Start();
         var stdout = await proc.StandardOutput.ReadToEndAsync().ConfigureAwait(false);
         var stderr = await proc.StandardError.ReadToEndAsync().ConfigureAwait(false);
-        var ok = proc.WaitForExit(timeoutSec * 1000);
-        if (!ok) { proc.Kill(entireProcessTree: true); return (-1, "", "Timed out"); }
+        using var timeoutCts = new CancellationTokenSource(timeoutSec * 1000);
+        try { await proc.WaitForExitAsync(timeoutCts.Token).ConfigureAwait(false); }
+        catch (OperationCanceledException) { proc.Kill(entireProcessTree: true); return (-1, "", "Timed out"); }
         return (proc.ExitCode, stdout, stderr);
     }
 

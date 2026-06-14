@@ -186,7 +186,7 @@ public sealed class SQLiteTaskStore : ITaskStore, IAsyncDisposable
     {
         Id = r.GetString(0), Name = r.GetString(1),
         Description = r.IsDBNull(2) ? null : r.GetString(2),
-        EnqueuedAt = DateTime.Parse(r.GetString(3)),
+        EnqueuedAt = DateTime.Parse(r.GetString(3), System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.RoundtripKind),
         Attempt = r.GetInt32(4),
     };
 

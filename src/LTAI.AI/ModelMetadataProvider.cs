@@ -30,8 +30,8 @@ public sealed class ModelMetadataProvider : IDisposable
         _logger = logger;
     }
 
-    public IReadOnlyCollection<ModelMetadata> AllModels => (IReadOnlyCollection<ModelMetadata>)_models.Values;
-    public IReadOnlyCollection<ProviderModels> AllProviders => (IReadOnlyCollection<ProviderModels>)_providerModels.Values;
+    public IReadOnlyCollection<ModelMetadata> AllModels => _models.Values.ToList().AsReadOnly();
+    public IReadOnlyCollection<ProviderModels> AllProviders => _providerModels.Values.ToList().AsReadOnly();
 
     public event Action? Refreshed;
 

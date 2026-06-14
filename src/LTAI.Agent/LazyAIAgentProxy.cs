@@ -73,4 +73,9 @@ public sealed class LazyAIAgentProxy : AIAgent
 
     protected override IAsyncEnumerable<AgentResponseUpdate> RunCoreStreamingAsync(IEnumerable<ChatMessage> messages, AgentSession? session = null, AgentRunOptions? options = null, CancellationToken cancellationToken = default)
         => Resolve().RunStreamingAsync(messages, session, options, cancellationToken);
+
+    public new void Dispose()
+    {
+        (_resolved as IDisposable)?.Dispose();
+    }
 }

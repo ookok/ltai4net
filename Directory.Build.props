@@ -1,8 +1,8 @@
 <Project>
   <PropertyGroup>
-    <NoWarn>$(NoWarn);MSB3243;NU1510;MAAIW001;IL2026;IL3050;IL2046;IL2091;IL2104</NoWarn>
+    <NoWarn>$(NoWarn);MSB3243;NU1510;MAAIW001</NoWarn>
     <!-- Chinese-only: exclude satellite resources for other locales, save ~10MB per output -->
-    <SatelliteResourceLanguages>zh-Hans;zh-Hant</SatelliteResourceLanguages>
+    <SatelliteResourceLanguages>zh-Hans,zh-Hant</SatelliteResourceLanguages>
 
     <Optimize>true</Optimize>
     <DebugType>embedded</DebugType>
@@ -11,11 +11,14 @@
     <InvariantGlobalization>false</InvariantGlobalization>
     <Deterministic>true</Deterministic>
 
-    <!-- 跳过 extern 项目重编译（~64s → ~7s）。extern 更新后用 -p:BuildProjectReferences=true 全量构建一次即可。 -->
-    <BuildProjectReferences>false</BuildProjectReferences>
+    <!-- Build project references by default. For faster incremental dev builds, use -p:BuildProjectReferences=false -->
     <ContinuousIntegrationBuild Condition="'$(CI)' == 'true'">true</ContinuousIntegrationBuild>
     <ModuleSkipLocalsInit>true</ModuleSkipLocalsInit>
   </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="$(MSBuildThisFileDirectory)src\Shared\Polyfill.cs" Link="Shared\Polyfill.cs" />
+  </ItemGroup>
 
   <!-- All library projects output to dist/lib for shared DLLs -->
   <PropertyGroup Condition="'$(IsExeProject)' != 'true' And '$(IsTestProject)' != 'true'">

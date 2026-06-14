@@ -1,8 +1,10 @@
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using LTAI.Agent;
+using LTAI.Core.Configuration;
 using LTAI.Web.Rendering;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Options;
 
 namespace LTAI.Web;
 
@@ -12,14 +14,18 @@ public class ChatController : ControllerBase
 {
     private readonly ChatAgent _agent;
     private readonly ILogger<ChatController> _logger;
+    private readonly TimeSpan _chatTimeout;
+    private readonly TimeSpan _streamTimeout;
+    private readonly int _maxMessageLength;
 
-    private static readonly TimeSpan ChatTimeout = TimeSpan.FromSeconds(60);
-    private static readonly TimeSpan StreamTimeout = TimeSpan.FromSeconds(300);
-
-    public ChatController(ChatAgent agent, ILogger<ChatController> logger)
+    public ChatController(ChatAgent agent, ILogger<ChatController> logger, IOptions<LTAIOptions>? options = null)
     {
         _agent = agent;
         _logger = logger;
+        var webConfig = options?.Value.Web;
+        _chatTimeout = TimeSpan.FromSeconds(webConfig?.ChatTimeoutSeconds ?? 60);
+        _streamTimeout = TimeSpan.FromSeconds(webConfig?.StreamTimeoutSeconds ?? 300);
+        _maxMessageLength = webConfig?.MaxMessageLength ?? 50000;
     }
 
     [HttpPost]
@@ -27,12 +33,12 @@ public class ChatController : ControllerBase
     {
         if (string.IsNullOrWhiteSpace(request.Message))
             return BadRequest(new { error = "message is required", type = "validation_error" });
-        if (request.Message.Length > 50000)
-            return BadRequest(new { error = "message exceeds 50000 character limit", type = "validation_error" });
+        if (request.Message.Length > _maxMessageLength)
+            return BadRequest(new { error = $"message exceeds {_maxMessageLength} character limit", type = "validation_error" });
 
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(
             HttpContext.RequestAborted);
-        cts.CancelAfter(ChatTimeout);
+        cts.CancelAfter(_chatTimeout);
 
         try
         {
@@ -62,16 +68,16 @@ public class ChatController : ControllerBase
                 "{\"error\":\"message is required\",\"type\":\"validation_error\"}", ct).ConfigureAwait(false);
             return;
         }
-        if (message.Length > 50000)
+        if (message.Length > _maxMessageLength)
         {
             Response.StatusCode = 400;
             await Response.WriteAsync(
-                "{\"error\":\"message exceeds 50000 character limit\",\"type\":\"validation_error\"}", ct).ConfigureAwait(false);
+                $"{{\"error\":\"message exceeds {_maxMessageLength} character limit\",\"type\":\"validation_error\"}}", ct).ConfigureAwait(false);
             return;
         }
 
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(HttpContext.RequestAborted);
-        timeoutCts.CancelAfter(StreamTimeout);
+        timeoutCts.CancelAfter(_streamTimeout);
 
         Response.Headers["Content-Type"] = "text/event-stream";
         Response.Headers["Cache-Control"] = "no-cache";

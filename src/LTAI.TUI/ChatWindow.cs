@@ -486,6 +486,7 @@ public sealed class MainWindow : Window
             AddMsg("You", text);
             _inputHistory.Add(text);
             _historyIndex = -1;
+            if (_streamCts != null) { _streamCts.Cancel(); _streamCts.Dispose(); }
             _streamCts = new CancellationTokenSource();
             _ = StreamAsync(text, _streamCts.Token);
             _chatInputBar.Text = "";
@@ -496,6 +497,7 @@ public sealed class MainWindow : Window
         AddMsg("You", text);
         _inputHistory.Add(text);
         _historyIndex = -1;
+        if (_streamCts != null) { _streamCts.Cancel(); _streamCts.Dispose(); }
         _streamCts = new CancellationTokenSource();
         _ = StreamAsync(text, _streamCts.Token);
     }

@@ -81,6 +81,7 @@ public static class CheckpointingExtensions
             throw new ArgumentException("Checkpoint directory path is required", nameof(directoryPath));
 
         var dir = new DirectoryInfo(directoryPath);
+        if (!dir.Exists) dir.Create();
         var store = new FileSystemJsonCheckpointStore(dir);
         var manager = CheckpointManager.CreateJson(store);
 

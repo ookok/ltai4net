@@ -18,10 +18,12 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using LTAI.Agent.Memory;
 using LTAI.Agent.Workflows;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace LTAI.Agent.Execution;
 
@@ -34,6 +36,7 @@ public sealed class ExecutionEngine : IExecutionEngine
 {
     private readonly AgentWorkflows _agentWorkflows;
     private readonly DecisionTreeRouter? _router;
+    private readonly QueryClassifier? _queryClassifier;
     private readonly ILogger<ExecutionEngine> _logger;
 
     /// <summary>Fired for each completed step during execution.</summary>
@@ -42,11 +45,13 @@ public sealed class ExecutionEngine : IExecutionEngine
     public ExecutionEngine(
         AgentWorkflows agentWorkflows,
         DecisionTreeRouter? router = null,
-        ILogger<ExecutionEngine>? logger = null)
+        ILogger<ExecutionEngine>? logger = null,
+        QueryClassifier? queryClassifier = null)
     {
         _agentWorkflows = agentWorkflows;
         _router = router;
-        _logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<ExecutionEngine>.Instance;
+        _queryClassifier = queryClassifier;
+        _logger = logger ?? NullLogger<ExecutionEngine>.Instance;
     }
 
     /// <inheritdoc />
@@ -327,13 +332,12 @@ public sealed class ExecutionEngine : IExecutionEngine
         };
     }
 
-    private static bool IsGreetingLike(string query)
+    private bool IsGreetingLike(string query)
     {
+        if (_queryClassifier != null)
+            return _queryClassifier.IsGreetingOnly(query);
+
         var trimmed = query.Trim().ToLowerInvariant();
-        return trimmed is "hi" or "hello" or "你好" or "早上好" or "下午好" or "晚上好"
-            or "hey" or "good morning" or "good afternoon" or "good evening"
-            || trimmed.StartsWith("hi ") || trimmed.StartsWith("hello ")
-            || trimmed.StartsWith("你好,") || trimmed.StartsWith("你好 ")
-            || trimmed.Length <= 10;
+        return trimmed.Length <= 10;
     }
 }

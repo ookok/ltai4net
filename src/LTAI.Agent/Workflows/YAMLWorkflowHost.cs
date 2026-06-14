@@ -34,7 +34,7 @@ namespace LTAI.Agent.Workflows;
 public static class YAMLWorkflowHost
 {
     // File names (without extension). Tried in order; first match wins.
-    private static readonly string[] s_workflowNames =
+    public static readonly string[] GreetingWorkflowNames =
         ["greeting", "thanks", "farewell", "probing", "test"];
 
     private static readonly object s_lock = new();
@@ -49,7 +49,7 @@ public static class YAMLWorkflowHost
     public static async Task<string?> RunGreetingFastPathAsync(string input, CancellationToken ct = default)
     {
         var workflows = GetOrBuildAll();
-        foreach (var name in s_workflowNames)
+        foreach (var name in GreetingWorkflowNames)
         {
             ct.ThrowIfCancellationRequested();
             if (!workflows.TryGetValue(name, out var workflow))
@@ -77,7 +77,7 @@ public static class YAMLWorkflowHost
     {
         var workflows = GetOrBuildAll();
         var events = new List<string>();
-        foreach (var name in s_workflowNames)
+        foreach (var name in GreetingWorkflowNames)
         {
             ct.ThrowIfCancellationRequested();
             if (!workflows.TryGetValue(name, out var workflow))
@@ -102,22 +102,20 @@ public static class YAMLWorkflowHost
     private static Dictionary<string, Workflow> GetOrBuildAll()
     {
         if (s_workflows is not null) return s_workflows;
-        var options = new DeclarativeWorkflowOptions(new NoOpAgentProvider())
-        {
-            McpToolHandler = s_mcpToolHandler,
-        };
-
-        var map = new Dictionary<string, Workflow>(s_workflowNames.Length);
-        foreach (var name in s_workflowNames)
-        {
-            var yamlPath = ResolveYamlPath(name);
-            if (yamlPath is null) continue;
-            map[name] = DeclarativeWorkflowBuilder.Build<string>(yamlPath, options);
-        }
-
         lock (s_lock)
         {
             if (s_workflows is not null) return s_workflows;
+            var options = new DeclarativeWorkflowOptions(new NoOpAgentProvider())
+            {
+                McpToolHandler = s_mcpToolHandler,
+            };
+            var map = new Dictionary<string, Workflow>(GreetingWorkflowNames.Length);
+            foreach (var name in GreetingWorkflowNames)
+            {
+                var yamlPath = ResolveYamlPath(name);
+                if (yamlPath is null) continue;
+                map[name] = DeclarativeWorkflowBuilder.Build<string>(yamlPath, options);
+            }
             s_workflows = map;
             return s_workflows;
         }

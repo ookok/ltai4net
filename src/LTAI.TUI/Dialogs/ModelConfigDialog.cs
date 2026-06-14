@@ -179,20 +179,20 @@ public sealed class ModelConfigDialog : Dialog
                 http.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", apiKey);
                 var url = endpoint.TrimEnd('/') switch
                 {
-                    string u when u.Contains("api.deepseek.com") => "https://api.deepseek.com/models",
+                    string u when u.Contains("api.deepseek.com") => "https://api.deepseek.com/v1/models",
                     string u when u.Contains("api.siliconflow.cn") => "https://api.siliconflow.cn/v1/models",
                     string u when u.Contains("openrouter.ai") => "https://openrouter.ai/api/v1/models",
                     _ => $"{endpoint.TrimEnd('/')}/models".Replace("//models", "/models"),
                 };
                 var resp = await http.GetAsync(url);
-                if (!resp.IsSuccessStatusCode) { _app.Invoke(() => _statusLabel.Text = $"HTTP {(int)resp.StatusCode}"); return; }
+                if (!resp.IsSuccessStatusCode) { TryInvoke(() => _statusLabel.Text = $"HTTP {(int)resp.StatusCode}"); return; }
                 var json = await resp.Content.ReadAsStringAsync();
                 var doc = System.Text.Json.JsonDocument.Parse(json);
                 var models = new List<string>();
                 if (doc.RootElement.TryGetProperty("data", out var data) && data.ValueKind == System.Text.Json.JsonValueKind.Array)
                     foreach (var m in data.EnumerateArray())
                         if (m.TryGetProperty("id", out var id)) models.Add(id.GetString() ?? "");
-                _app.Invoke(() =>
+                TryInvoke(() =>
                 {
                     var mi = new ObservableCollection<string>(models);
                     _modelDropdown.Source = new ListWrapper<string>(mi);
@@ -200,8 +200,14 @@ public sealed class ModelConfigDialog : Dialog
                     else _statusLabel.Text = "未找到模型";
                 });
             }
-            catch (Exception ex) { _app.Invoke(() => _statusLabel.Text = $"失败: {ex.Message}"); }
+            catch (Exception ex) { TryInvoke(() => _statusLabel.Text = $"失败: {ex.Message}"); }
         });
+
+        void TryInvoke(Action action)
+        {
+            try { _app.Invoke(action); }
+            catch (ObjectDisposedException) { /* dialog closed, ignore */ }
+        }
     }
 
     private void OnSave(object? s, EventArgs e)

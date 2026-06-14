@@ -34,11 +34,17 @@ public static class MmToolSchemaBuilder
 
         if (tag.Enums != null)
         {
-            var enumItems = tag.Enums.Split('|')
-                .Select(e => JsonDocument.Parse($"\"{EscapeJson(e)}\"").RootElement)
-                .ToArray();
-            var arrDoc = JsonDocument.Parse("[]").RootElement;
-            dict["enum"] = arrDoc;
+            var sb = new System.Text.StringBuilder();
+            sb.Append('[');
+            var items = tag.Enums.Split('|');
+            for (int i = 0; i < items.Length; i++)
+            {
+                if (i > 0) sb.Append(',');
+                sb.Append('"').Append(EscapeJson(items[i])).Append('"');
+            }
+            sb.Append(']');
+            using var arrDoc = System.Text.Json.JsonDocument.Parse(sb.ToString());
+            dict["enum"] = arrDoc.RootElement.Clone();
         }
 
         if (tag.Nullable)

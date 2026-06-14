@@ -1,19 +1,23 @@
 // Copyright (c) LTAI. All rights reserved.
 // ═══════════════════════════════════════════════════════════════
 //  PalaceStore — structured long-term memory (shares kg.db)
-//  OPTIMIZED: uses CreateShared() to share KgStore's kg.db.
+//  TurboQuant 4-bit vectors (192B vs 1536B raw) + FTS5 BM25 + HNSW.
 // ═══════════════════════════════════════════════════════════════
 
+using System.Collections.Concurrent;
+using System.Linq;
 using System.Text.Json;
 using LTAI.AI;
+using LTAI.Agent.Vector;
 using LTAI.Core.Storage;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging;
+using TurboQuant.Core.Packing;
 
 namespace LTAI.Agent.Memory;
 
 [ToolDomain("memory")]
-public sealed class PalaceStore
+public sealed class PalaceStore : IDisposable
 {
     private const string Schema = """
         CREATE TABLE IF NOT EXISTS palace (
@@ -31,6 +35,27 @@ public sealed class PalaceStore
         CREATE INDEX IF NOT EXISTS idx_palace_access ON palace(access_count DESC);
         """;
 
+    private const string FtsSchema = """
+        CREATE VIRTUAL TABLE IF NOT EXISTS palace_fts USING fts5(
+            content, wing, room, drawer_id,
+            tokenize='porter unicode61', content='palace', content_rowid='rowid'
+        );
+        CREATE TRIGGER IF NOT EXISTS palace_fts_insert AFTER INSERT ON palace BEGIN
+            INSERT INTO palace_fts(content, wing, room, drawer_id)
+            VALUES (new.content, new.wing, new.room, new.drawer_id);
+        END;
+        CREATE TRIGGER IF NOT EXISTS palace_fts_delete AFTER DELETE ON palace BEGIN
+            INSERT INTO palace_fts(palace_fts, content, wing, room, drawer_id)
+            VALUES ('delete', old.content, old.wing, old.room, old.drawer_id);
+        END;
+        CREATE TRIGGER IF NOT EXISTS palace_fts_update AFTER UPDATE ON palace BEGIN
+            INSERT INTO palace_fts(palace_fts, content, wing, room, drawer_id)
+            VALUES ('delete', old.content, old.wing, old.room, old.drawer_id);
+            INSERT INTO palace_fts(content, wing, room, drawer_id)
+            VALUES (new.content, new.wing, new.room, new.drawer_id);
+        END;
+        """;
+
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase, WriteIndented = false,
@@ -38,14 +63,28 @@ public sealed class PalaceStore
 
     private readonly EmbeddingClient _embedder;
     private readonly string _connectionString;
+    private readonly string _dbPath;
     private readonly ILogger<PalaceStore>? _logger;
     private bool _schemaReady;
     private readonly object _gate = new();
+
+    // HNSW vector index for sub-linear semantic search
+    private readonly HnswIndex _hnsw = new(HnswOptions.Default);
+    private readonly ConcurrentDictionary<int, string> _hnswMap = new();
+    private readonly ConcurrentDictionary<string, int> _hnswRev = new();
+    private readonly ConcurrentDictionary<string, byte> _removed = new();
+    private int _hnswReady;
+    private string HnswSnapshotPath => _dbPath + ".hnsw";
+
+    // Search result cache: 30s TTL, keyed by query hash + wing + room
+    private readonly ConcurrentDictionary<string, (DateTime Expiry, IReadOnlyList<(Drawer Drawer, double Score)> Results)> _searchCache = new();
+    private static readonly TimeSpan SearchCacheTtl = TimeSpan.FromSeconds(30);
 
     public PalaceStore(EmbeddingClient embedder, string dbPath, ILogger<PalaceStore>? logger = null)
     {
         _embedder = embedder ?? throw new ArgumentNullException(nameof(embedder));
         _logger = logger;
+        _dbPath = dbPath;
         Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
         _connectionString = new SqliteConnectionStringBuilder
         {
@@ -62,6 +101,14 @@ public sealed class PalaceStore
         int AccessCount = 0, long? LastAccessedAt = null);
 
     public const long DefaultTtlMs = 30L * 24 * 60 * 60 * 1000;
+    public const int DefaultMaxEntries = 10000;
+
+    private int _maxEntries = DefaultMaxEntries;
+    public int MaxEntries
+    {
+        get => _maxEntries;
+        set => _maxEntries = Math.Max(100, value);
+    }
 
     // ═══════════════════════════════════════════
     //  Core API
@@ -72,6 +119,7 @@ public sealed class PalaceStore
         Dictionary<string, object>? metadata = null, long? ttlMs = null)
     {
         EnsureSchema();
+        _ = WarmupHnswAsync();
         var drawerId = Guid.NewGuid().ToString("n");
         var vec = await _embedder.GenerateAsync(content, CancellationToken.None).ConfigureAwait(false);
 
@@ -87,12 +135,55 @@ public sealed class PalaceStore
         cmd.CommandText = "INSERT OR REPLACE INTO palace (wing,room,drawer_id,role,content,embedding,created_at,expires_at,importance,agent_id,metadata) VALUES ($w,$r,$id,$role,$c,$emb,$now,$exp,$imp,$agent,$meta)";
         cmd.Parameters.AddWithValue("$w", wing); cmd.Parameters.AddWithValue("$r", room);
         cmd.Parameters.AddWithValue("$id", drawerId); cmd.Parameters.AddWithValue("$role", role);
-        cmd.Parameters.AddWithValue("$c", content); cmd.Parameters.AddWithValue("$emb", vec.SelectMany(BitConverter.GetBytes).ToArray());
+        cmd.Parameters.AddWithValue("$c", content);
+        cmd.Parameters.AddWithValue("$emb", VectorQuantizer.QuantizeToBytes(vec));
         cmd.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()); cmd.Parameters.AddWithValue("$exp", expiresAt);
         cmd.Parameters.AddWithValue("$imp", importance); cmd.Parameters.AddWithValue("$agent", agentId ?? "default");
         cmd.Parameters.AddWithValue("$meta", metadata != null ? JsonSerializer.Serialize(metadata, JsonOpts) : DBNull.Value);
         await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+
+        // Insert into HNSW index
+        if (vec.Length == VectorQuantizer.Dim)
+        {
+            var idx = _hnsw.Insert(vec);
+            _hnswMap[idx] = drawerId;
+            _hnswRev[drawerId] = idx;
+        }
+
+        // Evict oldest entries if exceeding limit (background, fire-and-forget)
+        var currentCount = Count();
+        if (currentCount > _maxEntries * 1.1)
+            _ = Task.Run(async () =>
+            {
+                try { await TrimAsync(_maxEntries).ConfigureAwait(false); }
+                catch (Exception ex) { _logger?.LogWarning(ex, "PalaceStore background TrimAsync failed"); }
+            });
+
         return drawerId;
+    }
+
+    /// <summary>
+    /// Trim to target count by evicting oldest + least-important entries.
+    /// </summary>
+    public async Task TrimAsync(int targetCount)
+    {
+        EnsureSchema();
+        var current = Count();
+        if (current <= targetCount) return;
+
+        var toEvict = (int)(current - targetCount);
+        using var conn = new SqliteConnection(_connectionString);
+        await conn.OpenAsync().ConfigureAwait(false);
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "DELETE FROM palace WHERE drawer_id IN (SELECT drawer_id FROM palace WHERE (expires_at IS NULL OR expires_at>@now) ORDER BY importance ASC, created_at ASC LIMIT @limit)";
+        cmd.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        cmd.Parameters.AddWithValue("$limit", toEvict);
+        var deleted = await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+        if (deleted > 0)
+        {
+            _logger?.LogInformation("PalaceStore: evicted {Count} oldest entries (limit={Max})", deleted, targetCount);
+            _ = Task.Run(async () => await RebuildHnswAsync().ConfigureAwait(false));
+        }
     }
 
     public bool TouchDrawer(string wing, string room, string drawerId, double importance)
@@ -120,31 +211,89 @@ public sealed class PalaceStore
         return rdr.Read() ? ReadDrawer(rdr) : null;
     }
 
+    public Drawer? GetDrawerById(string drawerId)
+    {
+        EnsureSchema();
+        using var conn = new SqliteConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT * FROM palace WHERE drawer_id=$id AND (expires_at IS NULL OR expires_at>$now) LIMIT 1";
+        cmd.Parameters.AddWithValue("$id", drawerId);
+        cmd.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        using var rdr = cmd.ExecuteReader();
+        return rdr.Read() ? ReadDrawer(rdr) : null;
+    }
+
     public async IAsyncEnumerable<(Drawer Drawer, double Score)> SemanticSearchAsync(
         float[] queryVec, int topK = 5, string? wing = null, string? room = null)
     {
         EnsureSchema();
-        var scored = new List<(Drawer, double)>();
-        using var conn = new SqliteConnection(_connectionString);
-        await conn.OpenAsync().ConfigureAwait(false);
-        using var cmd = conn.CreateCommand();
-        var sql = "SELECT * FROM palace WHERE embedding IS NOT NULL AND (expires_at IS NULL OR expires_at>$now)";
-        if (wing != null) sql += " AND wing=$w";
-        if (room != null) sql += " AND room=$r";
-        cmd.CommandText = sql;
-        cmd.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
-        if (wing != null) cmd.Parameters.AddWithValue("$w", wing);
-        if (room != null) cmd.Parameters.AddWithValue("$r", room);
-        using var rdr = await cmd.ExecuteReaderAsync().ConfigureAwait(false);
-        while (rdr.Read())
+        _ = WarmupHnswAsync();
+
+        if (Interlocked.CompareExchange(ref _hnswReady, 0, 0) == 1 && _hnsw.Count > 0)
         {
-            var drawer = ReadDrawer(rdr);
-            if (drawer.Embedding is { Length: > 0 })
-                scored.Add((drawer, CosineSimilarity(queryVec, drawer.Embedding)));
+            var hnswResults = _hnsw.Search(queryVec, topK * 4);
+            using var conn = new SqliteConnection(_connectionString);
+            await conn.OpenAsync().ConfigureAwait(false);
+            var scored = new List<(Drawer, double)>();
+            var seen = new HashSet<string>();
+
+            foreach (var (idx, distance) in hnswResults)
+            {
+                if (scored.Count >= topK * 2) break;
+                if (!_hnswMap.TryGetValue(idx, out var did) || !seen.Add(did)) continue;
+                if (_removed.ContainsKey(did)) continue;
+
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = "SELECT * FROM palace WHERE drawer_id=$id AND (expires_at IS NULL OR expires_at>$now)";
+                cmd.Parameters.AddWithValue("$id", did);
+                cmd.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+                using var rdr = await cmd.ExecuteReaderAsync().ConfigureAwait(false);
+                while (await rdr.ReadAsync().ConfigureAwait(false))
+                {
+                    var drawer = ReadDrawer(rdr);
+                    if ((wing == null || string.Equals(drawer.Wing, wing, StringComparison.OrdinalIgnoreCase))
+                        && (room == null || string.Equals(drawer.Room, room, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        var score = 1.0 - distance;
+                        scored.Add((drawer, score));
+                    }
+                }
+            }
+
+            scored.Sort((a, b) => b.Item2.CompareTo(a.Item2));
+            var taken = 0;
+            foreach (var hit in scored)
+            {
+                if (taken >= topK) break;
+                RecordAccess(hit.Item1.DrawerId);
+                yield return hit;
+                taken++;
+            }
+            if (taken > 0) yield break;
         }
-        foreach (var hit in scored.OrderByDescending(x => x.Item2).Take(topK))
+
+        // Fallback: brute-force scan (HNSW not ready or empty)
+        var fallback = new List<(Drawer, double)>();
+        using var fallbackConn = new SqliteConnection(_connectionString);
+        await fallbackConn.OpenAsync().ConfigureAwait(false);
+        using var fallbackCmd = fallbackConn.CreateCommand();
+        var fbSql = "SELECT * FROM palace WHERE embedding IS NOT NULL AND (expires_at IS NULL OR expires_at>$now)";
+        if (wing != null) fbSql += " AND wing=$w";
+        if (room != null) fbSql += " AND room=$r";
+        fallbackCmd.CommandText = fbSql;
+        fallbackCmd.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        if (wing != null) fallbackCmd.Parameters.AddWithValue("$w", wing);
+        if (room != null) fallbackCmd.Parameters.AddWithValue("$r", room);
+        using var fbRdr = await fallbackCmd.ExecuteReaderAsync().ConfigureAwait(false);
+        while (fbRdr.Read())
         {
-            // Record access for retrieval feedback
+            var drawer = ReadDrawer(fbRdr);
+            if (drawer.Embedding is { Length: > 0 })
+                fallback.Add((drawer, CosineSimilarity(queryVec, drawer.Embedding)));
+        }
+        foreach (var hit in fallback.OrderByDescending(x => x.Item2).Take(topK))
+        {
             RecordAccess(hit.Item1.DrawerId);
             yield return hit;
         }
@@ -370,7 +519,18 @@ public sealed class PalaceStore
         using var cmd = conn.CreateCommand();
         cmd.CommandText = "DELETE FROM palace WHERE drawer_id=$id";
         cmd.Parameters.AddWithValue("$id", drawerId);
-        return cmd.ExecuteNonQuery() > 0;
+        var deleted = cmd.ExecuteNonQuery() > 0;
+        if (deleted)
+        {
+            _removed.TryAdd(drawerId, 1);
+            if (_removed.Count > _hnsw.Count / 4 && _hnsw.Count > 100)
+                _ = Task.Run(async () =>
+                {
+                    try { await RebuildHnswAsync().ConfigureAwait(false); }
+                    catch (Exception ex) { _logger?.LogWarning(ex, "PalaceStore background RebuildHnswAsync failed"); }
+                });
+        }
+        return deleted;
     }
 
     public int DeleteWingRoom(string wing, string room)
@@ -395,6 +555,24 @@ public sealed class PalaceStore
         cmd.Parameters.AddWithValue("$id", drawerId);
         cmd.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
         cmd.ExecuteNonQuery();
+    }
+
+    /// <summary>Batch record access for multiple drawers in a single connection.</summary>
+    public void RecordAccessBatch(IEnumerable<string> drawerIds)
+    {
+        EnsureSchema();
+        using var conn = new SqliteConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "UPDATE palace SET access_count=access_count+1, last_accessed_at=$now WHERE drawer_id=$id";
+        var nowParam = cmd.Parameters.Add("$now", SqliteType.Integer);
+        var idParam = cmd.Parameters.Add("$id", SqliteType.Text);
+        nowParam.Value = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        foreach (var id in drawerIds)
+        {
+            idParam.Value = id;
+            cmd.ExecuteNonQuery();
+        }
     }
 
     /// <summary>Get most frequently accessed memories across all wings.</summary>
@@ -443,6 +621,14 @@ public sealed class PalaceStore
                 migCmd.ExecuteNonQuery();
             }
             catch { /* column already exists */ }
+            // FTS5 full-text index for BM25 keyword search
+            try
+            {
+                using var ftsCmd = conn.CreateCommand();
+                ftsCmd.CommandText = FtsSchema;
+                ftsCmd.ExecuteNonQuery();
+            }
+            catch { /* FTS5 already exists */ }
             _schemaReady = true;
         }
     }
@@ -465,8 +651,284 @@ public sealed class PalaceStore
     private static float[]? DeserializeEmb(SqliteDataReader r, int c)
     {
         if (r.IsDBNull(c)) return null;
-        var bytes = (byte[])r[c]; var floats = new float[bytes.Length / 4];
+        var bytes = (byte[])r[c];
+        // TurbQuant 4-bit packed (192 bytes for 384d) vs legacy raw float[] (1536 bytes)
+        if (bytes.Length == VectorQuantizer.PackedByteCount)
+            return VectorQuantizer.DequantizeFromBytes(bytes);
+        var floats = new float[bytes.Length / 4];
         Buffer.BlockCopy(bytes, 0, floats, 0, bytes.Length);
         return floats;
+    }
+
+    /// <summary>
+    /// FTS5 BM25 keyword search. Returns drawer IDs ordered by BM25 rank.
+    /// </summary>
+    public IReadOnlyList<(string DrawerId, double Bm25Score)> SearchFts(string query, int topK = 10,
+        string? wing = null, string? room = null)
+    {
+        EnsureSchema();
+        var results = new List<(string, double)>();
+        using var conn = new SqliteConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        var where = "";
+        if (wing != null) where += " AND wing=@w";
+        if (room != null) where += " AND room=@r";
+        cmd.CommandText = $"SELECT drawer_id, bm25(palace_fts, 1.0, 0.75) AS rank FROM palace_fts WHERE palace_fts MATCH @q{where} ORDER BY rank LIMIT @k";
+        cmd.Parameters.AddWithValue("@q", EscapeFts5(query));
+        cmd.Parameters.AddWithValue("@k", topK);
+        if (wing != null) cmd.Parameters.AddWithValue("@w", wing);
+        if (room != null) cmd.Parameters.AddWithValue("@r", room);
+        using var rdr = cmd.ExecuteReader();
+        while (rdr.Read())
+        {
+            var id = rdr.GetString(0);
+            var score = rdr.IsDBNull(1) ? 0.0 : rdr.GetDouble(1);
+            results.Add((id, score));
+        }
+        return results;
+    }
+
+    /// <summary>
+    /// Sanitize user input for FTS5 MATCH. Escapes special chars and wraps in quotes.
+    /// FTS5 special: * - ( ) " AND OR NOT NEAR
+    /// </summary>
+    private static string EscapeFts5(string raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return "\"\"";
+        var sanitized = raw
+            .Replace("\"", "\"\"")
+            .Replace("*", "")
+            .Replace(" AND ", " ")
+            .Replace(" OR ", " ")
+            .Replace(" NOT ", " ")
+            .Replace(" NEAR ", " ")
+            .Replace("(", " ")
+            .Replace(")", " ")
+            .Replace("-", " ")
+            .Trim();
+        if (sanitized.Length == 0) return "\"\"";
+        return $"\"{sanitized}\"";
+    }
+
+    /// <summary>
+    /// RRF (Reciprocal Rank Fusion) hybrid search: combines FTS5 BM25 + HNSW semantic.
+    /// </summary>
+    public async Task<IReadOnlyList<(Drawer Drawer, double Score)>> HybridSearchAsync(
+        float[] queryVec, string ftsQuery, int topK = 5, string? wing = null, string? room = null)
+    {
+        // Cache key: hash of vector prefix + fts query + wing + room + topK
+        var cacheKey = $"{Convert.ToHexString(queryVec.Take(16).SelectMany(BitConverter.GetBytes).ToArray())}|{ftsQuery}|{wing}|{room}|{topK}";
+        if (_searchCache.TryGetValue(cacheKey, out var cached) && DateTime.UtcNow < cached.Expiry)
+            return cached.Results;
+
+        const int k = 60;
+        var ftsResults = SearchFts(ftsQuery, k, wing, room);
+        var semResults = new List<(string Id, double Score)>();
+        await foreach (var (drawer, score) in SemanticSearchAsync(queryVec, k, wing, room).ConfigureAwait(false))
+            semResults.Add((drawer.DrawerId, score));
+
+        var rrf = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+        for (int i = 0; i < ftsResults.Count; i++)
+            rrf[ftsResults[i].DrawerId] = 1.0 / (i + 60);
+        for (int i = 0; i < semResults.Count; i++)
+        {
+            var id = semResults[i].Id;
+            rrf[id] = rrf.GetValueOrDefault(id) + 1.0 / (i + 60);
+        }
+
+        var topIds = rrf.OrderByDescending(kv => kv.Value).Take(topK).ToList();
+        if (topIds.Count == 0) return [];
+
+        // Batch load drawers via IN clause (single query instead of per-drawer)
+        var scored = new List<(Drawer, double)>();
+        using var conn = new SqliteConnection(_connectionString);
+        await conn.OpenAsync().ConfigureAwait(false);
+        var placeholders = string.Join(",", topIds.Select((_, i) => $"@p{i}"));
+        using var batchCmd = conn.CreateCommand();
+        batchCmd.CommandText = $"SELECT * FROM palace WHERE drawer_id IN ({placeholders}) AND (expires_at IS NULL OR expires_at>@now)";
+        batchCmd.Parameters.AddWithValue("@now", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        for (int i = 0; i < topIds.Count; i++)
+            batchCmd.Parameters.AddWithValue($"@p{i}", topIds[i].Key);
+
+        var drawersById = new Dictionary<string, Drawer>(StringComparer.OrdinalIgnoreCase);
+        using var batchRdr = await batchCmd.ExecuteReaderAsync().ConfigureAwait(false);
+        while (await batchRdr.ReadAsync().ConfigureAwait(false))
+        {
+            var d = ReadDrawer(batchRdr);
+            if ((wing == null || string.Equals(d.Wing, wing, StringComparison.OrdinalIgnoreCase))
+                && (room == null || string.Equals(d.Room, room, StringComparison.OrdinalIgnoreCase)))
+                drawersById[d.DrawerId] = d;
+        }
+
+        foreach (var (id, score) in topIds)
+        {
+            if (drawersById.TryGetValue(id, out var drawer))
+            {
+                scored.Add((drawer, score));
+            }
+        }
+        RecordAccessBatch(scored.Select(s => s.Item1.DrawerId));
+        _searchCache[cacheKey] = (DateTime.UtcNow + SearchCacheTtl, scored);
+        // Prune expired entries on write (amortized cleanup)
+        if (_searchCache.Count > 128)
+        {
+            var expired = _searchCache.Where(kv => kv.Value.Expiry < DateTime.UtcNow).Select(kv => kv.Key).Take(32).ToList();
+            foreach (var key in expired) _searchCache.TryRemove(key, out _);
+        }
+        return scored;
+    }
+
+    /// <summary>Warm up the HNSW index on first use — tries snapshot, falls back to SQL rebuild.</summary>
+    public Task WarmupHnswAsync()
+    {
+        if (Interlocked.CompareExchange(ref _hnswReady, 0, 0) == 1)
+            return Task.CompletedTask;
+        return WarmupHnswCoreAsync();
+    }
+
+    private async Task WarmupHnswCoreAsync()
+    {
+        // Try loading HNSW snapshot from disk (avoids full SQL scan on restart)
+        var snapshotPath = HnswSnapshotPath;
+        if (File.Exists(snapshotPath))
+        {
+            try
+            {
+                _logger?.LogInformation("PalaceStore: loading HNSW snapshot from {Path}", snapshotPath);
+                _hnsw.Rebuild([]); // clear
+                // Rebuild from snapshot: parse JSON, re-insert nodes, restore maps
+                await RebuildHnswFromSnapshotAsync(snapshotPath).ConfigureAwait(false);
+                Interlocked.Exchange(ref _hnswReady, 1);
+                _logger?.LogInformation("PalaceStore: HNSW snapshot loaded ({Count} nodes)", _hnsw.Count);
+                return;
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogWarning(ex, "PalaceStore: HNSW snapshot load failed, rebuilding from SQL");
+                try { File.Delete(snapshotPath); } catch { }
+            }
+        }
+        await RebuildHnswAsync().ConfigureAwait(false);
+    }
+
+    private async Task RebuildHnswFromSnapshotAsync(string snapshotPath)
+    {
+        var json = await File.ReadAllTextAsync(snapshotPath).ConfigureAwait(false);
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+        _hnswMap.Clear();
+        _hnswRev.Clear();
+        _removed.Clear();
+        _hnsw.Rebuild([]); // clear existing
+
+        var nodes = root.GetProperty("Nodes").EnumerateArray();
+        var vectors = new List<(float[] vec, string id)>();
+        foreach (var nodeEl in nodes)
+        {
+            var id = nodeEl.GetProperty("Id").GetString()!;
+            var data = Convert.FromBase64String(nodeEl.GetProperty("Data").GetString()!);
+            var vec = VectorQuantizer.DequantizeFromBytes(data);
+            vectors.Add((vec, id));
+        }
+        _hnsw.Rebuild(vectors.Select(v => (ReadOnlyMemory<float>)v.vec));
+        for (int i = 0; i < vectors.Count; i++)
+        {
+            _hnswMap[i] = vectors[i].id;
+            _hnswRev[vectors[i].id] = i;
+        }
+    }
+
+    /// <summary>Rebuild the HNSW index from all non-expired palace entries with embeddings.</summary>
+    public async Task RebuildHnswAsync()
+    {
+        EnsureSchema();
+        Interlocked.Exchange(ref _hnswReady, 0);
+        _hnswMap.Clear();
+        _hnswRev.Clear();
+        _removed.Clear();
+
+        var vectors = new List<(float[] vec, string id)>();
+        using var conn = new SqliteConnection(_connectionString);
+        await conn.OpenAsync().ConfigureAwait(false);
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT drawer_id, embedding FROM palace WHERE embedding IS NOT NULL AND (expires_at IS NULL OR expires_at>$now)";
+        cmd.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        using var rdr = await cmd.ExecuteReaderAsync().ConfigureAwait(false);
+        while (await rdr.ReadAsync().ConfigureAwait(false))
+        {
+            var id = rdr.GetString(0);
+            var emb = DeserializeEmb(rdr, 1);
+            if (emb != null && emb.Length == VectorQuantizer.Dim)
+                vectors.Add((emb, id));
+        }
+
+        _logger?.LogInformation("PalaceStore: rebuilding HNSW index with {Count} vectors", vectors.Count);
+        _hnsw.Rebuild(vectors.Select(v => (ReadOnlyMemory<float>)v.vec));
+        _hnswMap.Clear();
+        _hnswRev.Clear();
+        _removed.Clear();
+        for (int i = 0; i < vectors.Count; i++)
+        {
+            _hnswMap[i] = vectors[i].id;
+            _hnswRev[vectors[i].id] = i;
+        }
+        Interlocked.Exchange(ref _hnswReady, 1);
+        _logger?.LogInformation("PalaceStore: HNSW index rebuilt ({Count} nodes)", vectors.Count);
+
+        // Save snapshot for fast restart
+        _ = Task.Run(() =>
+        {
+            try { SaveHnswSnapshot(); }
+            catch (Exception ex) { _logger?.LogWarning(ex, "PalaceStore: HNSW snapshot save failed"); }
+        });
+    }
+
+    private void SaveHnswSnapshot()
+    {
+        var snapshotPath = HnswSnapshotPath;
+        var tmpPath = snapshotPath + ".tmp";
+
+        // Batch-load all embeddings in a single query (avoid O(n) connections)
+        var embBlobs = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
+        using (var conn = new SqliteConnection(_connectionString))
+        {
+            conn.Open();
+            var ids = _hnswMap.Values.ToList();
+            if (ids.Count == 0) return;
+            var placeholders = string.Join(",", ids.Select((_, i) => $"@p{i}"));
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = $"SELECT drawer_id, embedding FROM palace WHERE drawer_id IN ({placeholders})";
+            for (int i = 0; i < ids.Count; i++)
+                cmd.Parameters.AddWithValue($"@p{i}", ids[i]);
+            using var rdr = cmd.ExecuteReader();
+            while (rdr.Read())
+            {
+                var id = rdr.GetString(0);
+                if (!rdr.IsDBNull(1))
+                    embBlobs[id] = (byte[])rdr[1];
+            }
+        }
+
+        using var stream = File.Create(tmpPath);
+        using var writer = new Utf8JsonWriter(stream);
+        writer.WriteStartObject();
+        writer.WriteStartArray("Nodes");
+        foreach (var (_, drawerId) in _hnswMap)
+        {
+            writer.WriteStartObject();
+            writer.WriteString("Id", drawerId);
+            writer.WriteString("Data", embBlobs.TryGetValue(drawerId, out var blob) ? Convert.ToBase64String(blob) : "");
+            writer.WriteEndObject();
+        }
+        writer.WriteEndArray();
+        writer.WriteEndObject();
+        writer.Flush();
+        File.Move(tmpPath, snapshotPath, true);
+    }
+
+    public void Dispose()
+    {
+        _hnsw?.Dispose();
     }
 }

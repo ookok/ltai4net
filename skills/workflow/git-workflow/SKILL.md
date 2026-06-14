@@ -1,3 +1,8 @@
+---
+name: git-workflow
+description: 规范 Git 操作流程。
+---
+
 # Git Workflow
 
 ## 概要

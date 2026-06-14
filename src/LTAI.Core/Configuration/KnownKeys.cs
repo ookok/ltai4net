@@ -130,9 +130,15 @@ public static class KnownKeys
             if (snapshot[i].Service.Equals(serviceOrEnvVar, StringComparison.OrdinalIgnoreCase) ||
                 snapshot[i].EnvVar.Equals(serviceOrEnvVar, StringComparison.OrdinalIgnoreCase))
             {
-                var copy = (KeyInfo[])snapshot.Clone();
-                copy[i] = copy[i] with { Model = newModel };
-                All = copy;
+                var original = Volatile.Read(ref All);
+                while (true)
+                {
+                    var copy = (KeyInfo[])original.Clone();
+                    copy[i] = copy[i] with { Model = newModel };
+                    var replaced = Interlocked.CompareExchange(ref All, copy, original);
+                    if (ReferenceEquals(replaced, original)) break;
+                    original = replaced;
+                }
                 return true;
             }
         }

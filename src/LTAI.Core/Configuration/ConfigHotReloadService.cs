@@ -33,6 +33,7 @@ public sealed class ConfigHotReloadService : BackgroundService
     private readonly IOptionsMonitor<LTAIOptions> _optionsMonitor;
     private readonly ILogger<ConfigHotReloadService> _logger;
     private FileSystemWatcher? _watcher;
+    private IDisposable? _optionsChangeToken;
     private DateTime _lastChange = DateTime.MinValue;
     private static readonly TimeSpan DebounceDelay = TimeSpan.FromMilliseconds(500);
 
@@ -79,7 +80,7 @@ public sealed class ConfigHotReloadService : BackgroundService
         _watcher.Created += OnConfigChanged;
 
         // Subscribe to IOptionsMonitor's built-in change notification
-        _optionsMonitor.OnChange(OnOptionsChanged);
+        _optionsChangeToken = _optionsMonitor.OnChange(OnOptionsChanged);
 
         _logger.LogInformation("ConfigHotReloadService: watching '{ConfigPath}'", configPath);
         return Task.CompletedTask;
@@ -148,6 +149,7 @@ public sealed class ConfigHotReloadService : BackgroundService
 
     public override void Dispose()
     {
+        _optionsChangeToken?.Dispose();
         _watcher?.Dispose();
         base.Dispose();
     }

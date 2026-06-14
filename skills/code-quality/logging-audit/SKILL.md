@@ -1,3 +1,8 @@
+---
+name: logging-audit
+description: 审查项目中的日志实践。
+---
+
 # Logging Audit 日志审计
 
 ## 概要

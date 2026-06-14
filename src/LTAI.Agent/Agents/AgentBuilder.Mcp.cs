@@ -17,7 +17,7 @@ partial class AgentBuilder
         var mcpTask = s_mcpToolsCache.GetOrAdd(name, _ => mcpFactory.GetToolsAsync(opts.Mcp));
         if (!mcpTask.IsCompletedSuccessfully) return;
 
-        foreach (var mcpTool in mcpTask.Result)
+        foreach (var mcpTool in mcpTask.GetAwaiter().GetResult())
         {
             if (!canRead) continue;
             var mn = mcpTool.Name.ToLowerInvariant();

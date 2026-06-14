@@ -52,7 +52,17 @@ partial class Program
         if (string.IsNullOrWhiteSpace(name)) { Error("Usage: ltai provider set <name>"); return 1; }
         try
         {
-            AnsiConsole.MarkupLine($"[green]✅ Provider preference set to '{name.EscapeMarkup()}' (runtime selection)[/]");
+            var envVar = name.ToUpperInvariant() switch
+            {
+                "DEEPSEEK" or "DS" => "DEEPSEEK_API_KEY",
+                "OPENAI" => "OPENAI_API_KEY",
+                "SILICONFLOW" or "SF" => "SILICONFLOW_API_KEY",
+                "ANTHROPIC" => "ANTHROPIC_API_KEY",
+                _ => $"{name.ToUpperInvariant()}_API_KEY"
+            };
+            Environment.SetEnvironmentVariable("LTAI_DEFAULT_PROVIDER", name, EnvironmentVariableTarget.User);
+            AnsiConsole.MarkupLine($"[green]✅ Provider set to '{name.EscapeMarkup()}' (env: {envVar})[/]");
+            AnsiConsole.MarkupLine("[grey]Restart LTAI for the change to take full effect.[/]");
             return 0;
         }
         catch (Exception ex) { Error($"Failed: {ex.Message}"); return 1; }

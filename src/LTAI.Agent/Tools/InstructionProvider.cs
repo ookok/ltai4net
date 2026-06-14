@@ -21,6 +21,17 @@ public sealed class InstructionProvider : AIContextProvider
         }
     }
 
+    /// <summary>Dispose the FileSystemWatcher if started.</summary>
+    public static void StopWatching()
+    {
+        if (_agentsMdWatcher != null)
+        {
+            _agentsMdWatcher.EnableRaisingEvents = false;
+            _agentsMdWatcher.Dispose();
+            _agentsMdWatcher = null;
+        }
+    }
+
     /// <summary>Initialize FileSystemWatcher to auto-invalidate on file changes.</summary>
     public static void StartWatching()
     {
@@ -44,6 +55,7 @@ public sealed class InstructionProvider : AIContextProvider
             _agentsMdWatcher.Created += (_, _) => InvalidateCache();
             _agentsMdWatcher.Deleted += (_, _) => InvalidateCache();
             _agentsMdWatcher.Renamed += (_, _) => InvalidateCache();
+            AppDomain.CurrentDomain.ProcessExit += (_, _) => StopWatching();
             return;
         }
     }

@@ -2,6 +2,7 @@
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Text.Json;
+using LTAI.Core.Configuration;
 using UglyToad.PdfPig;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
@@ -106,7 +107,7 @@ public sealed class DocumentTools
 
             return AtomicSwap(fp, tmpPath =>
             {
-                if (create || !File.Exists(tmpPath))
+                if (create || !File.Exists(fp))
                 {
                     Directory.CreateDirectory(Path.GetDirectoryName(tmpPath)!);
                     using var doc = SpreadsheetDocument.Create(tmpPath, SpreadsheetDocumentType.Workbook);
@@ -335,7 +336,7 @@ public sealed class DocumentTools
             var body = doc.MainDocumentPart?.Document.Body;
             if (body == null) return "Empty document";
             var text = string.Join("\n", body.Descendants<Paragraph>().Select(p => p.InnerText));
-            return text.Length > 50000 ? text[..50000] + $"\n... [truncated at 50000 chars]" : text;
+            return text.Length > 50000 ? ContentTruncator.Truncate(text, 50000) : text;
         }
         catch (Exception ex) { return $"Word read error: {ex.Message}"; }
     }
@@ -668,7 +669,7 @@ public sealed class DocumentTools
             }
             var result = string.Join("\n", lines);
             if (result.Length > 50000)
-                result = result[..50000] + $"\n... [truncated at 50000 chars, {totalPages} total pages]";
+                result = ContentTruncator.Truncate(result, 50000);
             return $"[PDF: {fp}, {totalPages} pages, {result.Length} chars]\n{result}";
         }
         catch (Exception ex) { return $"PDF read error: {ex.Message}"; }
@@ -681,12 +682,55 @@ public sealed class DocumentTools
     [Description("保存文档模板到知识图谱（含样式定义）。\n"
         + "适用场景：保存常用的报告模板以便重复使用、管理文档模板库。\n"
         + "关键参数：name — 模板名称；content — 模板内容（含 {{key}} 占位符）；stylesJson — 可选样式 JSON。")]
-    public async Task<string> SaveTemplateAsync(string name, string content, string? stylesJson = null) { await Task.CompletedTask.ConfigureAwait(false); return "Template saved (stub)"; }
+    public async Task<string> SaveTemplateAsync(string name, string content, string? stylesJson = null)
+    {
+        var dir = Path.Combine(_ws, ".livingtree", "templates");
+        Directory.CreateDirectory(dir);
+        var safeName = SanitizeFileName(name);
+        var path = Path.Combine(dir, safeName + ".json");
+        var template = new TemplateRecord
+        {
+            Name = name,
+            Content = content,
+            StylesJson = stylesJson,
+            SavedAt = DateTime.UtcNow.ToString("O")
+        };
+        await File.WriteAllTextAsync(path, JsonSerializer.Serialize(template, new JsonSerializerOptions { WriteIndented = true })).ConfigureAwait(false);
+        return $"Template '{name}' saved to {safeName}.json";
+    }
 
     [Description("从知识图谱加载已保存的文档模板。\n"
         + "适用场景：重新使用之前保存的模板、查看已有模板内容。\n"
         + "关键参数：name — 模板名称。")]
-    public async Task<string> LoadTemplateAsync(string name) { await Task.CompletedTask.ConfigureAwait(false); return "Template loaded (stub)"; }
+    public async Task<string> LoadTemplateAsync(string name)
+    {
+        var dir = Path.Combine(_ws, ".livingtree", "templates");
+        var safeName = SanitizeFileName(name);
+        var path = Path.Combine(dir, safeName + ".json");
+        if (!File.Exists(path)) return $"Template '{name}' not found";
+        var json = await File.ReadAllTextAsync(path).ConfigureAwait(false);
+        var template = JsonSerializer.Deserialize<TemplateRecord>(json);
+        if (template == null) return "Template corrupted";
+        var sb = new StringBuilder();
+        sb.AppendLine($"## Template: {template.Name}");
+        sb.AppendLine($"Saved: {template.SavedAt}");
+        if (!string.IsNullOrEmpty(template.StylesJson))
+            sb.AppendLine($"Styles: {template.StylesJson}");
+        sb.AppendLine();
+        sb.AppendLine(template.Content);
+        return sb.ToString();
+    }
+
+    private static string SanitizeFileName(string name)
+        => string.Join("_", name.Split(Path.GetInvalidFileNameChars(), StringSplitOptions.RemoveEmptyEntries)).Trim('_');
+
+    private sealed record TemplateRecord
+    {
+        public string Name { get; init; } = "";
+        public string Content { get; init; } = "";
+        public string? StylesJson { get; init; }
+        public string SavedAt { get; init; } = "";
+    }
 
     [Description("渲染文档模板。将 {{key}} 占位符替换为实际数据，处理 {{#section}}...{{/section}} 条件区块。\n"
         + "适用场景：填充模板生成最终内容、数据驱动的文档生成。\n"

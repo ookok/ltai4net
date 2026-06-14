@@ -1,8 +1,10 @@
+using System.Collections;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Text;
 using LTAI.AI;
 using LTAI.Core;
+using LTAI.Core.Configuration;
 using Microsoft.Agents.AI.Tools.Shell;
 using Microsoft.Extensions.AI;
 
@@ -21,6 +23,9 @@ public sealed class SafeShellTool
 {
     /// <summary>Fallback PATH for sandboxed process execution. Set from config at startup.</summary>
     public static string SystemPathFallback { get; set; } = @"C:\Windows\system32;C:\Windows";
+    private static readonly SemaphoreSlim _concurrencyGate = new(
+        int.TryParse(Environment.GetEnvironmentVariable("LTAI_SHELL_CONCURRENCY"), out var c) ? Math.Max(1, c) : 8,
+        int.TryParse(Environment.GetEnvironmentVariable("LTAI_SHELL_CONCURRENCY"), out var m) ? Math.Max(1, m) : 8);
     private readonly string _ws;
     private readonly HashSet<string>? _allowList;
     private readonly IHttpClientFactory? _httpFactory;
@@ -154,7 +159,9 @@ public sealed class SafeShellTool
             StandardOutputEncoding = Encoding.UTF8,
             StandardErrorEncoding = Encoding.UTF8,
         };
-        // Restrict PATH to prevent LOLBin abuse and env-based injection
+        // Inherit full environment, then restrict PATH and remove dangerous vars
+        foreach (DictionaryEntry env in Environment.GetEnvironmentVariables())
+            psi.EnvironmentVariables[env.Key.ToString()!] = env.Value?.ToString() ?? "";
         psi.EnvironmentVariables["PATH"] = isWindows
             ? SystemPathFallback
             : "/usr/bin:/bin:/usr/local/bin";
@@ -170,14 +177,19 @@ public sealed class SafeShellTool
 
         try
         {
+            await _concurrencyGate.WaitAsync().ConfigureAwait(false);
+            try
+            {
             process.Start();
 
-            // 并读 stdout + stderr（直接 async，不 Task.Run）
-            var buf = new char[4096];
-            var stdoutTask = ReadStreamAsync(process.StandardOutput, output, buf);
-            var stderrTask = ReadStreamAsync(process.StandardError, error, buf);
-
             using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSec));
+            var ctk = timeoutCts.Token;
+
+            // 并读 stdout + stderr（直接 async，不 Task.Run）
+            var outBuf = new char[4096];
+            var errBuf = new char[4096];
+            var stdoutTask = ReadStreamAsync(process.StandardOutput, output, outBuf, ctk);
+            var stderrTask = ReadStreamAsync(process.StandardError, error, errBuf, ctk);
             try { await process.WaitForExitAsync(timeoutCts.Token).ConfigureAwait(false); }
             catch (OperationCanceledException) { process.Kill(entireProcessTree: true); }
 
@@ -185,7 +197,7 @@ public sealed class SafeShellTool
             {
                 process.Kill(entireProcessTree: true);
                 return $"⏱️ 命令超时 ({timeoutSec}s)，已终止。\n"
-                     + $"部分输出:\n{Truncate(output.ToString(), 2000)}";
+                     + $"部分输出:\n{ContentTruncator.Truncate(output.ToString(), 2000)}";
             }
 
             await Task.WhenAll(stdoutTask, stderrTask).ConfigureAwait(false);
@@ -204,7 +216,9 @@ public sealed class SafeShellTool
             if (exitCode != 0)
                 return $"❌ 退出码 {exitCode}\n{sb}";
 
-            return Truncate(sb.Length > 0 ? sb.ToString().TrimEnd() : "✅ 命令执行成功（无输出）", 6000);
+            return ContentTruncator.Truncate(sb.Length > 0 ? sb.ToString().TrimEnd() : "✅ 命令执行成功（无输出）", 6000);
+            }
+            finally { _concurrencyGate.Release(); }
         }
         catch (Exception ex)
         {
@@ -212,13 +226,10 @@ public sealed class SafeShellTool
         }
     }
 
-    private static string Truncate(string text, int max) =>
-        text.Length <= max ? text : text[..max] + "...";
-
-    private static async Task ReadStreamAsync(StreamReader reader, StringBuilder sb, char[] buffer)
+    private static async Task ReadStreamAsync(StreamReader reader, StringBuilder sb, char[] buffer, CancellationToken ct = default)
     {
         int len;
-        while ((len = await reader.ReadAsync(buffer).ConfigureAwait(false)) > 0)
+        while ((len = await reader.ReadAsync(buffer, ct).ConfigureAwait(false)) > 0)
             sb.Append(buffer, 0, len);
     }
 }

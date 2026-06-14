@@ -37,7 +37,6 @@ public sealed class AdaptivePlanner
 {
     private readonly IExecutionEngine _inner;
     private readonly ILogger<AdaptivePlanner> _logger;
-    private readonly Random _rng = new();
 
     /// <summary>Maximum retry attempts across all constraint levels.</summary>
     public int MaxRetries { get; set; } = 4;

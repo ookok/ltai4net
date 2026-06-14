@@ -12,18 +12,35 @@ services:
       - "5100:5100"
     environment:
       - ASPNETCORE_ENVIRONMENT=Production
-      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
-      - SILICONFLOW_API_KEY=${SILICONFLOW_API_KEY:-}
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+    env_file:
+      - .env
+    secrets:
+      - deepseek_api_key
+      - siliconflow_api_key
+      - openai_api_key
     volumes:
       - ltai-data:/app/.livingtree
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+        reservations:
+          memory: 512m
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5100/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 15s
+      start_period: 30s
+
+secrets:
+  deepseek_api_key:
+    environment: DEEPSEEK_API_KEY
+  siliconflow_api_key:
+    environment: SILICONFLOW_API_KEY
+  openai_api_key:
+    environment: OPENAI_API_KEY
 
 volumes:
   ltai-data:

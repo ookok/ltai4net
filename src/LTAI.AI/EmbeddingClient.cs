@@ -30,7 +30,8 @@ public sealed class EmbeddingClient : IDisposable
     private readonly LocalEmbedder? _local;
     private readonly RemoteEmbeddingCache? _remoteCache;
 
-    public int Dimension { get; private set; } = 384;
+    private volatile int _dimension = 384;
+    public int Dimension => _dimension;
 
     /// <summary>
     /// P14.8: the local ONNX embedder, if available. Exposed so that
@@ -39,6 +40,15 @@ public sealed class EmbeddingClient : IDisposable
     /// invalidate model-specific cached vectors.
     /// </summary>
     public LocalEmbedder? Local => _local;
+
+    /// <summary>Test/fallback constructor — creates a default HttpClient for local-only embedding.</summary>
+    public EmbeddingClient()
+        : this(new SimpleHttpFactory(), null, null, null) { }
+
+    private sealed class SimpleHttpFactory : IHttpClientFactory
+    {
+        public HttpClient CreateClient(string name) => new(new SocketsHttpHandler());
+    }
 
     public EmbeddingClient(
         IHttpClientFactory httpFactory,
@@ -57,12 +67,12 @@ public sealed class EmbeddingClient : IDisposable
         _local = local;
 
         if (_local?.Available == true)
-            Dimension = _local.Dim;
+            _dimension = _local.Dim;
         else if (_availableProviders.Length > 0)
-            Dimension = _availableProviders[0].dim;
+            _dimension = _availableProviders[0].dim;
 
         _logger.LogInformation("EmbeddingClient: {Count} API providers, local BGE={Local}, dim={Dim}, remoteCache={Cache}",
-            _availableProviders.Length, _local?.Available == true, Dimension, _remoteCache != null ? "on" : "off");
+            _availableProviders.Length, _local?.Available == true, _dimension, _remoteCache != null ? "on" : "off");
     }
 
     // P14.10: consecutive all-provider-failure counter + threshold-based
@@ -102,11 +112,14 @@ public sealed class EmbeddingClient : IDisposable
             _logger.LogWarning("ActivateLocalFallback: no LocalEmbedder available (wasn't registered in DI?)");
             return;
         }
-        _localFallbackActivated = true;
-        LocalFallbackActivatedAtUtc = DateTime.UtcNow;
-        // Flip the global flag so future LocalEmbedder instances also load.
-        LocalEmbedder.DefaultDisabled = false;
-        _local.Activate();
+        lock (_local)
+        {
+            if (_localFallbackActivated) return;
+            _localFallbackActivated = true;
+            LocalFallbackActivatedAtUtc = DateTime.UtcNow;
+            LocalEmbedder.DefaultDisabled = false;
+            _local.Activate();
+        }
         _logger.LogWarning(
             "EmbeddingClient: remote API failed {N} times in a row → activating local ONNX fallback. {Local}",
             ConsecutiveAllProviderFailures,
@@ -132,7 +145,7 @@ public sealed class EmbeddingClient : IDisposable
         // and the GPU exec providers (DML/CUDA) prefer large batches.
         if (_local?.Available == true)
         {
-            Dimension = _local.Dim;
+            _dimension = _local.Dim;
             _logger.LogDebug("Embedding via local ONNX (batched): {Count} texts", texts.Length);
             var batchResult = await Task.Run(() => _local.GenerateBatch(texts), ct).ConfigureAwait(false);
             return batchResult is float[][] arr ? arr : batchResult.ToArray();
@@ -154,17 +167,20 @@ public sealed class EmbeddingClient : IDisposable
 
         if (_remoteCache != null)
         {
-            // P14.5: lookup all texts in cache first
+            // P14.5: lookup all texts in cache, checking all available providers
             for (int i = 0; i < texts.Length; i++)
             {
-                if (_remoteCache.TryGet(_availableProviders[0].name, _availableProviders[0].model, texts[i], out var vec))
+                bool found = false;
+                foreach (var prov in _availableProviders)
                 {
-                    result[i] = vec!;
+                    if (_remoteCache.TryGet(prov.name, prov.model, texts[i], out var vec))
+                    {
+                        result[i] = vec!;
+                        found = true;
+                        break;
+                    }
                 }
-                else
-                {
-                    missing.Add(i);
-                }
+                if (!found) missing.Add(i);
             }
         }
         else
@@ -188,7 +204,7 @@ public sealed class EmbeddingClient : IDisposable
                 var apiResult = await CallEmbeddingApiAsync(endpoint, model, apiKey, missingTexts, ct).ConfigureAwait(false);
                 if (apiResult != null)
                 {
-                    Dimension = apiResult.Dimension;
+                    _dimension = apiResult.Dimension;
                     _logger.LogDebug("Embedding via {Provider}: {Total} texts ({Miss} from API, {Hit} from cache), dim={Dim}",
                         name, texts.Length, missing.Count, texts.Length - missing.Count, apiResult.Dimension);
                     for (int j = 0; j < missing.Count; j++)
@@ -304,7 +320,15 @@ public sealed class EmbeddingClient : IDisposable
         // BM25-like scoring: use term frequency + pseudo-IDF
         // Since we don't have a corpus for real IDF, we derive it from term length/rarity heuristics
         var emb = new float[dimensions];
-        if (string.IsNullOrWhiteSpace(text)) return emb;
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            // Seed with deterministic per-character pseudo-random values to
+            // produce a valid non-zero vector for L2 normalization, avoiding
+            // NaN in subsequent cosine similarity calculations.
+            for (int i = 0; i < dimensions; i++)
+                emb[i] = (float)(((text?.GetHashCode() ?? 0) * (i + 1) * 0x9E3779B9) & 0x7FFFFFFF) / int.MaxValue;
+            return emb;
+        }
 
         var lower = text.ToLowerInvariant();
 
@@ -343,12 +367,17 @@ public sealed class EmbeddingClient : IDisposable
             }
         }
 
-        if (tokens.Count == 0) return emb;
+        if (tokens.Count == 0)
+        {
+            for (int i = 0; i < dimensions; i++)
+                emb[i] = (float)((text.GetHashCode() * (i + 1) * 0x9E3779B9) & 0x7FFFFFFF) / int.MaxValue;
+            return emb;
+        }
 
         // ── BM25 components ──
-        const float k1 = 1.2f;    // term saturation
-        const float b = 0.75f;    // length normalization
-        float avgDocLen = 20f;    // assumed average tokens per "document" (tunable)
+        const float k1 = 1.2f;    // term saturation (LTAI_EMBED_BM25_K1 override)
+        const float b = 0.75f;    // length normalization (LTAI_EMBED_BM25_B override)
+        float avgDocLen = float.TryParse(Environment.GetEnvironmentVariable("LTAI_EMBED_BM25_AVG_DOC_LEN"), out var adl) ? adl : 20f;
         float docLen = tokens.Count;
 
         // Count term frequency

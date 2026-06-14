@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Text;
 using System.Text.Json;
+using LTAI.Core.Configuration;
 using Microsoft.CodeAnalysis.CSharp.Scripting;
 using Microsoft.CodeAnalysis.Scripting;
 
@@ -64,7 +65,7 @@ public sealed class CSharpScriptTool
             return JsonSerializer.Serialize(new
             {
                 success = true,
-                output = Truncate(output, 16000),
+                output = ContentTruncator.Truncate(output, 16000),
                 execCount = _execCount,
                 elapsedMs = elapsed,
             });
@@ -83,7 +84,4 @@ public sealed class CSharpScriptTool
             return ToolResult.FromException(ex, $"C#Script #{id} 运行异常");
         }
     }
-
-    private static string Truncate(string text, int max) =>
-        text.Length <= max ? text : text[..max] + $"\n... (truncated, {text.Length - max} more chars)";
 }

@@ -39,6 +39,10 @@ public sealed class AIConfig
     public LayerConfig? L2 { get; init; }
     public LayerConfig? L3 { get; init; }
     public AutoSelectConfig? AutoSelect { get; init; }
+    public bool MoaEnabled { get; init; } = false;
+    public int MoaProposerCount { get; init; } = 3;
+    public int MoaAggregatorCount { get; init; } = 2;
+    public int MoaTimeoutSeconds { get; init; } = 180;
 
     public ProviderConfig GetLayerConfig(string layer)
     {
@@ -68,6 +72,8 @@ public sealed class LayerConfig
     public string Provider { get; init; } = "";
     public string? Model { get; init; }
     public string? Endpoint { get; init; }
+    public bool? EnableThinking { get; init; }
+    public bool? ThoughtInContent { get; init; }
 }
 
 public sealed class SteerConfig

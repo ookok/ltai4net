@@ -3,6 +3,7 @@
 // 替代全量 80+ 工具注入。
 
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
@@ -103,10 +104,33 @@ public sealed class ToolRetrievalProvider : AIContextProvider
             (var a, var b) => a.Concat(b)
         };
 
-        // KEY FIX: Replace tools instead of concatenating.
-        // ToolRetrievalProvider selects a relevant subset for the current query.
-        // Downstream providers may add their own tools via the standard merge.
-        var mergedTools = provided.Tools ?? inputContext.Tools;
+        // Merge tools with dedup: ToolRetrievalProvider selects a relevant subset,
+        // then downstream providers may add their own tools. Use HashSet by name
+        // to avoid duplicates while preserving order (provided first, then input).
+        IList<AITool>? mergedTools = null;
+        if (provided.Tools != null || inputContext.Tools != null)
+        {
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var merged = new List<AITool>();
+
+            if (provided.Tools != null)
+            {
+                foreach (var t in provided.Tools)
+                {
+                    var name = t.Name ?? "";
+                    if (seen.Add(name)) merged.Add(t);
+                }
+            }
+            if (inputContext.Tools != null)
+            {
+                foreach (var t in inputContext.Tools)
+                {
+                    var name = t.Name ?? "";
+                    if (seen.Add(name)) merged.Add(t);
+                }
+            }
+            mergedTools = merged;
+        }
 
         return new AIContext
         {
@@ -188,15 +212,20 @@ public sealed class ToolRetrievalProvider : AIContextProvider
         };
     }
 
+    private static readonly ConcurrentDictionary<AITool, string> _toolDomainCache = new();
+
     private static string GetToolDomain(AITool tool)
     {
-        try
+        return _toolDomainCache.GetOrAdd(tool, t =>
         {
-            if (tool is AIFunction func && func.UnderlyingMethod != null)
-                return func.UnderlyingMethod.GetCustomAttribute<ToolDomainAttribute>(false)?.Domain ?? "";
-        }
-        catch { }
-        return "";
+            try
+            {
+                if (t is AIFunction func && func.UnderlyingMethod != null)
+                    return func.UnderlyingMethod.GetCustomAttribute<ToolDomainAttribute>(false)?.Domain ?? "";
+            }
+            catch { }
+            return "";
+        });
     }
 
     private static string GetUserQuery(InvokingContext context)

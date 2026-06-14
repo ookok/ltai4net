@@ -32,6 +32,11 @@ public sealed record HnswOptions
     public static HnswOptions LowMemory => new() { M = 8, Mmax = 16, Mmax0 = 8, EfConstruction = 100 };
 }
 
+/// <summary>
+/// Hierarchical Navigable Small World index for approximate nearest neighbor search.
+/// Supports only insert and search operations. Individual node removal is not supported;
+/// use <see cref="Rebuild"/> to clear and rebuild the entire index when nodes are deleted.
+/// </summary>
 public sealed class HnswIndex : IDisposable
 {
     private sealed record HnswNode(PackedVector Packed, List<int>[] Links);
@@ -46,7 +51,7 @@ public sealed class HnswIndex : IDisposable
     private readonly int _efConstruction;
     private readonly double _ml;
 
-    private static readonly Random _rng = new();
+    private static readonly Random _rng = Random.Shared;
 
     public HnswIndex(HnswOptions? options = null)
     {

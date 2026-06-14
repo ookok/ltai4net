@@ -55,7 +55,7 @@ public sealed class SystemTools
         sb.AppendLine($"| Process | {Environment.ProcessId} |");
         sb.AppendLine($"| Uptime | {TimeSpan.FromMilliseconds(Environment.TickCount64):dd\\.hh\\:mm\\:ss} |");
         sb.AppendLine($"| Working Set | {FormatSize(Environment.WorkingSet)} |");
-        sb.AppendLine($"| System Dir | {Environment.SystemDirectory} |");
+        try { sb.AppendLine($"| System Dir | {Environment.SystemDirectory} |"); } catch (PlatformNotSupportedException) { sb.AppendLine("| System Dir | /usr (Linux) |"); }
         sb.AppendLine($"| Current Dir | {Environment.CurrentDirectory} |");
         sb.AppendLine($"| User Temp | {Path.GetTempPath()} |");
         sb.AppendLine($"| CLR Version | {Environment.Version} |");
@@ -477,13 +477,14 @@ public sealed class SystemTools
     {
         try
         {
-            var psi = new ProcessStartInfo("docker", "run")
+            var psi = new ProcessStartInfo("docker")
             {
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,
                 CreateNoWindow = true
             };
+            psi.ArgumentList.Add("run");
             psi.ArgumentList.Add("--rm");
             psi.ArgumentList.Add(image);
             psi.ArgumentList.Add(command);
@@ -491,7 +492,9 @@ public sealed class SystemTools
             process.Start();
             var output = await process.StandardOutput.ReadToEndAsync().ConfigureAwait(false);
             var error = await process.StandardError.ReadToEndAsync().ConfigureAwait(false);
-            process.WaitForExit(TimeSpan.FromMinutes(5));
+            using var dockerCts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
+            try { await process.WaitForExitAsync(dockerCts.Token).ConfigureAwait(false); }
+            catch (OperationCanceledException) { try { process.Kill(); } catch { } }
 
             var sb = new StringBuilder();
             sb.AppendLine($"## Docker Run: {image}\n");
@@ -531,7 +534,9 @@ public sealed class SystemTools
             var timeout = TimeSpan.FromSeconds(Math.Clamp(timeoutSec, 1, 600));
             var outputTask = process.StandardOutput.ReadToEndAsync();
             var errorTask = process.StandardError.ReadToEndAsync();
-            if (!process.WaitForExit((int)timeout.TotalMilliseconds))
+            using var netCts = new CancellationTokenSource(timeout);
+            try { await process.WaitForExitAsync(netCts.Token).ConfigureAwait(false); }
+            catch (OperationCanceledException)
             {
                 process.Kill();
                 return $"Command timed out after {timeoutSec}s";
@@ -573,7 +578,9 @@ public sealed class SystemTools
             process.Start();
             var output = await process.StandardOutput.ReadToEndAsync().ConfigureAwait(false);
             var error = await process.StandardError.ReadToEndAsync().ConfigureAwait(false);
-            process.WaitForExit(TimeSpan.FromSeconds(10));
+            using var dockerCheckCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            try { await process.WaitForExitAsync(dockerCheckCts.Token).ConfigureAwait(false); }
+            catch (OperationCanceledException) { try { process.Kill(); } catch { } }
 
             if (process.ExitCode != 0)
                 return $"❌ Docker is not available: {error}";

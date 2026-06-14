@@ -96,7 +96,7 @@ public sealed class IntegrationTools
     {
         if (!string.IsNullOrEmpty(K("AMAP_KEY")))
             try { return await G($"https://restapi.amap.com/v3/ip?key={K("AMAP_KEY")}&output=JSON{(ip != null ? $"&ip={E(ip)}" : "")}", "province", r => $"🌐 {r}").ConfigureAwait(false) ?? "No location data"; } catch { /* AMAP not configured — fallback */ }
-        try { var j = await H().GetFromJsonAsync<JsonElement>(ip != null ? $"http://ip-api.com/json/{ip}" : "http://ip-api.com/json").ConfigureAwait(false); return $"🌐 {GStr(j,"city")}, {GStr(j,"regionName")}, {GStr(j,"country")}"; } catch (Exception ex) { return $"IP error: {ex.Message}"; }
+        try { var j = await H().GetFromJsonAsync<JsonElement>(ip != null ? $"https://ip-api.com/json/{ip}" : "https://ip-api.com/json").ConfigureAwait(false); return $"🌐 {GStr(j,"city")}, {GStr(j,"regionName")}, {GStr(j,"country")}"; } catch (Exception ex) { return $"IP error: {ex.Message}"; }
     }
 
     // ═══════════════════════════════════════════
@@ -216,7 +216,7 @@ public sealed class IntegrationTools
         return System.Text.RegularExpressions.Regex.Replace(msg,
             @"(key|ak|tk|appid|secret|token)=[^&\s""']+",
             "$1=***REDACTED***",
-            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled);
     }
 
     private async Task<string?> GA(string url, string arrPath, Func<JsonElement, string> fmt)

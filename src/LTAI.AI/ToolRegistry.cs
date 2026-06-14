@@ -4,6 +4,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.Metrics;
 using System.Linq;
 using System.Reflection;
 using System.Threading;
@@ -82,6 +83,8 @@ public static class ToolRegistry
     private static int[] _docLengths = [];
     /// <summary>包含每个 term 的文档数</summary>
     private static Dictionary<string, int> _docFreq = new();
+    private static int _docFreqCount;
+    private static volatile int _bm25Version;
     /// <summary>语料库总文档数</summary>
     private static int _totalDocs;
     /// <summary>平均文档长度</summary>
@@ -274,12 +277,15 @@ public static class ToolRegistry
         }
 
         _avgDocLen = _totalDocs > 0 ? (double)totalTerms / _totalDocs : 1.0;
+        Interlocked.Increment(ref _bm25Version);
     }
 
     /// <summary>BM25 检索：返回 (docId, score) 列表。</summary>
     private static List<(int docId, float score)> SearchBM25(string query)
     {
         if (_totalDocs == 0) return [];
+
+        var versionAtStart = Volatile.Read(ref _bm25Version);
 
         var queryTerms = Tokenize(query)
             .Where(t => !_stopwords.Contains(t) && t.Length > 1 && _invertedIndex.ContainsKey(t))
@@ -326,6 +332,9 @@ public static class ToolRegistry
         {
             pool.Return(scores);
         }
+
+        // If BM25 index was rebuilt during search, results may be invalid — return empty
+        if (Volatile.Read(ref _bm25Version) != versionAtStart) return [];
 
         return top.UnorderedItems.Select(x => (x.Element.docId, (float)x.Element.score)).ToList();
     }
@@ -520,4 +529,66 @@ public static class ToolRegistry
 
     private static float CosineSimilarity(ReadOnlySpan<float> a, ReadOnlySpan<float> b)
         => VectorMath.CosineSimilarity(a, b);
+}
+
+/// <summary>
+/// Retrieval quality metrics for tool search.
+/// Tracks format accuracy, recall, conversion rate, and average rounds.
+/// </summary>
+public sealed class ToolRetrievalMetrics
+{
+    private long _totalSearches;
+    private long _formatCorrect;
+    private long _toolsRetrieved;
+    private long _toolsCalled;
+    private long _totalRounds;
+
+    // ═══════════════════════════════════════════
+    //  OpenTelemetry instruments
+    // ═══════════════════════════════════════════
+    private static readonly Meter ToolMeter = new("LTAI.AI.ToolRetrieval");
+    private static readonly Counter<long> MetricSearches = ToolMeter.CreateCounter<long>("ltai.tool.searches", "searches", "Total tool searches");
+    private static readonly Counter<long> MetricFormatCorrect = ToolMeter.CreateCounter<long>("ltai.tool.format_correct", "calls", "Format-correct tool calls");
+    private static readonly Counter<long> MetricToolsRetrieved = ToolMeter.CreateCounter<long>("ltai.tool.retrieved", "tools", "Tools retrieved");
+    private static readonly Counter<long> MetricToolsCalled = ToolMeter.CreateCounter<long>("ltai.tool.called", "tools", "Tools actually called");
+    private static readonly Counter<long> MetricTotalRounds = ToolMeter.CreateCounter<long>("ltai.tool.rounds", "rounds", "Total retrieval rounds");
+
+    public double FormatAccuracy => _totalSearches > 0 ? (double)_formatCorrect / _totalSearches : 0;
+    public double Recall => _toolsRetrieved > 0 ? 1.0 : 0;
+    public double ConversionRate => _toolsRetrieved > 0 ? (double)_toolsCalled / _toolsRetrieved : 0;
+    public double AvgRounds => _totalSearches > 0 ? (double)_totalRounds / _totalSearches : 0;
+
+    public void RecordSearch(int toolsRetrieved, int rounds)
+    {
+        Interlocked.Increment(ref _totalSearches);
+        Interlocked.Add(ref _toolsRetrieved, toolsRetrieved);
+        Interlocked.Add(ref _totalRounds, rounds);
+        MetricSearches.Add(1);
+        MetricToolsRetrieved.Add(toolsRetrieved);
+        MetricTotalRounds.Add(rounds);
+    }
+
+    public void RecordFormatCorrect()
+    {
+        Interlocked.Increment(ref _formatCorrect);
+        MetricFormatCorrect.Add(1);
+    }
+
+    public void RecordToolCalled()
+    {
+        Interlocked.Increment(ref _toolsCalled);
+        MetricToolsCalled.Add(1);
+    }
+
+    public void Reset()
+    {
+        Interlocked.Exchange(ref _totalSearches, 0);
+        Interlocked.Exchange(ref _formatCorrect, 0);
+        Interlocked.Exchange(ref _toolsRetrieved, 0);
+        Interlocked.Exchange(ref _toolsCalled, 0);
+        Interlocked.Exchange(ref _totalRounds, 0);
+    }
+
+    public override string ToString() =>
+        $"Format={FormatAccuracy:P1} Recall={Recall:P1} Conv={ConversionRate:P1} Rounds={AvgRounds:F1}";
 }

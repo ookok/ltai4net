@@ -55,11 +55,19 @@ partial class AgentBuilder
             var safetyKey = opts.AI.ApiKeyEnv != null ? SecretManager.Get(opts.AI.ApiKeyEnv) ?? "" : "";
             if (string.IsNullOrEmpty(safetyKey))
             {
+                // Fallback: try the active provider's key
+                var registry = sp.GetService<ProviderRegistry>();
+                safetyKey = registry?.ActiveProviders.FirstOrDefault() is { } ap
+                    ? SecretManager.Get(ap.EnvVar) ?? "" : "";
+            }
+            if (string.IsNullOrEmpty(safetyKey))
+            {
                 log?.LogWarning("Safety agent: no API key ({Env}), skipping for agent '{Name}'", opts.AI.ApiKeyEnv ?? "?", name);
                 return null;
             }
 
-            safetyClient = OpenAIChatClientFactory.Create("https://api.deepseek.com/v1", safetyModel, safetyKey);
+            var safetyEndpoint = sp.GetService<ProviderRegistry>()?.ActiveProviders.FirstOrDefault()?.Endpoint ?? "https://api.deepseek.com/v1";
+            safetyClient = OpenAIChatClientFactory.Create(safetyEndpoint, safetyModel, safetyKey);
         }
 
         if (safetyClient != null)

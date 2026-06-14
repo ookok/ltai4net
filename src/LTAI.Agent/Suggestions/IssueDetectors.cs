@@ -17,6 +17,12 @@ using Microsoft.Extensions.Logging;
 
 namespace LTAI.Agent.Suggestions;
 
+internal static class IssueDetectorConcurrency
+{
+    public static readonly int MaxDop = int.TryParse(
+        Environment.GetEnvironmentVariable("LTAI_ISSUE_DETECTOR_MAX_DOP"), out var d) ? Math.Max(1, d) : 4;
+}
+
 // ═══════════════════════════════════════════════════════════════
 //  TodoIssueDetector
 // ═══════════════════════════════════════════════════════════════
@@ -57,7 +63,7 @@ public sealed partial class TodoIssueDetector : ICodeIssueDetector
 
         var parallelOpts = new ParallelOptions
         {
-            MaxDegreeOfParallelism = 4,
+            MaxDegreeOfParallelism = IssueDetectorConcurrency.MaxDop,
             CancellationToken = ct,
         };
 
@@ -144,7 +150,7 @@ public sealed partial class NamingIssueDetector : ICodeIssueDetector
 
         var parallelOpts = new ParallelOptions
         {
-            MaxDegreeOfParallelism = 4,
+            MaxDegreeOfParallelism = IssueDetectorConcurrency.MaxDop,
             CancellationToken = ct,
         };
 

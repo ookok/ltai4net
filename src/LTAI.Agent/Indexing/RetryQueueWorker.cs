@@ -28,14 +28,14 @@ namespace LTAI.Agent.Indexing;
 /// </summary>
 public sealed class RetryQueueWorker
 {
-    private static readonly TimeSpan[] BackoffSequence =
-    [
-        TimeSpan.FromSeconds(1),
-        TimeSpan.FromSeconds(2),
-        TimeSpan.FromSeconds(4),
-        TimeSpan.FromSeconds(8),
-        TimeSpan.FromSeconds(16),
-    ];
+    private static readonly TimeSpan[] BackoffSequence = ParseBackoff(
+        Environment.GetEnvironmentVariable("LTAI_RETRY_BACKOFF_SEC") ?? "1,2,4,8,16");
+
+    private static TimeSpan[] ParseBackoff(string csv)
+    {
+        return csv.Split(',').Select(s => TimeSpan.FromSeconds(
+            int.TryParse(s.Trim(), out var v) ? Math.Max(1, v) : 1)).ToArray();
+    }
 
     private readonly LTAI.AI.MultiProviderChatClient _client;
     private readonly LTAI.Agent.Tasks.TaskQueue _queue;

@@ -3,6 +3,7 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using LTAI.AI;
+using LTAI.Agent.Caching;
 using LTAI.Agent.Formats;
 using LTAI.Agent.FusionRoute;
 using LTAI.Agent.Learning;
@@ -12,8 +13,10 @@ using LTAI.Agent.Tools;
 using LTAI.Agent.Workflows;
 using LTAI.Core.Safety;
 using LTAI.Core.Session;
+using LTAI.Core.Configuration;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Logging;
 
 namespace LTAI.Agent;
 
@@ -28,16 +31,26 @@ public sealed class ChatAgent
     private readonly IChatClient? _steerJudge;
     private readonly LTAI.Agent.Tools.QuestionService? _questionService;
     private readonly int _judgeConfidenceThreshold;
+    private readonly SmartRetryController _retryController = new();
+    private readonly IMemoryCachingStore? _checkpointStore;
+    private readonly ConcurrentDictionary<string, int> _sessionCheckpointCounters = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> _sessionCheckpointLocks = new(StringComparer.Ordinal);
+
+    // Escalation thresholds from config — defaults match prior hardcoded values
+    private readonly int _complexityProFastTrack;
+    private readonly int _grammarRetryMaxDepth;
+    private readonly int _correctionLoopMaxDepth;
+    private static int _sessionMaxErrors = 5;
+    private static TimeSpan _sessionCircuitDuration = TimeSpan.FromMinutes(5);
 
     private sealed class PerSessionErrorState
     {
         public int ErrorCount;
         public DateTime? CircuitOpenUntil;
-        public const int MaxErrors = 5;
-        public static readonly TimeSpan CircuitDuration = TimeSpan.FromMinutes(5);
     }
 
     private static readonly ConcurrentDictionary<string, PerSessionErrorState> _sessionErrorStates = new(StringComparer.Ordinal);
+    private static readonly ILogger _logger = LoggerFactory.Create(b => b.AddConsole()).CreateLogger("ChatAgent");
 
     private static void RecordSessionError(string sessionId)
     {
@@ -50,9 +63,9 @@ public sealed class ChatAgent
         if (!_sessionErrorStates.TryGetValue(sessionId, out var state)) return false;
         if (state.CircuitOpenUntil.HasValue && DateTime.UtcNow < state.CircuitOpenUntil.Value)
             return true;
-        if (state.ErrorCount >= PerSessionErrorState.MaxErrors)
+        if (state.ErrorCount >= _sessionMaxErrors)
         {
-            state.CircuitOpenUntil = DateTime.UtcNow + PerSessionErrorState.CircuitDuration;
+            state.CircuitOpenUntil = DateTime.UtcNow + _sessionCircuitDuration;
             return true;
         }
         return false;
@@ -62,8 +75,15 @@ public sealed class ChatAgent
     {
         if (_sessionErrorStates.TryGetValue(sessionId, out var state))
         {
-            state.ErrorCount = 0;
+            Interlocked.Exchange(ref state.ErrorCount, 0);
             state.CircuitOpenUntil = null;
+        }
+        // Periodic cleanup: remove sessions with zero errors that are past circuit duration
+        var now = DateTime.UtcNow;
+        foreach (var kv in _sessionErrorStates)
+        {
+            if (kv.Value.ErrorCount == 0 && kv.Value.CircuitOpenUntil == null)
+                _sessionErrorStates.TryRemove(kv.Key, out _);
         }
     }
 
@@ -73,8 +93,13 @@ public sealed class ChatAgent
         bool sameModel = false, IChatClient? steerJudge = null,
         IEscalationDecider? escalationDecider = null,
         LTAI.Agent.Tools.QuestionService? questionService = null,
-        int judgeConfidenceThreshold = 3)
+        int judgeConfidenceThreshold = 3,
+        TreeSitterParser? tsParser = null,
+        LTAI.Agent.LanguageServer.LspLanguageManager? lspManager = null,
+        IMemoryCachingStore? checkpointStore = null,
+        EscalationConfig? escalationConfig = null)
     {
+        var cfg = escalationConfig ?? new EscalationConfig();
         _agent = agent;
         _proAgent = proAgent;
         _workflows = workflows;
@@ -83,9 +108,18 @@ public sealed class ChatAgent
         _httpFactory = httpFactory;
         _sameModel = sameModel;
         _steerJudge = steerJudge;
-        _escalationDecider = escalationDecider ?? new DefaultEscalationDecider();
+        _escalationDecider = escalationDecider ?? new DefaultEscalationDecider(cfg);
         _questionService = questionService;
         _judgeConfidenceThreshold = Math.Clamp(judgeConfidenceThreshold, 1, 5);
+        _tsParser = tsParser;
+        _lspManager = lspManager;
+        _checkpointStore = checkpointStore;
+
+        _complexityProFastTrack = cfg.ComplexityProFastTrack;
+        _grammarRetryMaxDepth = cfg.GrammarRetryMaxDepth;
+        _correctionLoopMaxDepth = cfg.CorrectionLoopMaxDepth;
+        _sessionMaxErrors = cfg.SessionMaxErrors;
+        _sessionCircuitDuration = TimeSpan.FromMinutes(cfg.SessionCircuitDurationMinutes);
     }
 
     private static readonly AsyncLocal<string> _traceId = new();
@@ -93,11 +127,16 @@ public sealed class ChatAgent
 
     private readonly IHttpClientFactory? _httpFactory;
     private readonly bool _sameModel;
+    private readonly TreeSitterParser? _tsParser;
+    private readonly LanguageServer.LspLanguageManager? _lspManager;
 
     public async Task WarmUpAsync(CancellationToken ct = default)
     {
+        // Warm local embedder
         if (_localEmbedder?.Available == false)
             _ = _localEmbedder.Dim;
+        // Warm workflows
+        // Warmup handled by WarmupService (IHostedService)
         await Task.CompletedTask.ConfigureAwait(false);
     }
 
@@ -113,9 +152,14 @@ public sealed class ChatAgent
         string? userId = null, CancellationToken ct = default)
     {
         userId ??= "default";
+
+        // Periodic cleanup of stale in-memory session state (TaskTools, PlanTools)
+        Tools.TaskTools.EvictStaleSessions();
+        Tools.PlanTools.EvictStaleSessions();
+
         if (_budgetTracker != null)
         {
-            var estimatedTokens = Math.Max(10, message.Length / 4);
+            var estimatedTokens = Math.Max(10, TokenEstimator.Estimate(message));
             var (allowed, remaining) = _budgetTracker.TryConsume(userId, estimatedTokens);
             if (!allowed)
             {
@@ -128,6 +172,10 @@ public sealed class ChatAgent
         var session = sessionHandle != null
             ? await CreateAgentSessionFromHandleAsync(sessionHandle, ct).ConfigureAwait(false)
             : await _agent.CreateSessionAsync(ct).ConfigureAwait(false);
+
+        // Try restore from checkpoint: if checkpoint has more recent full-state snapshot,
+        // deserialize it into the agent session to recover lost intermediate turns.
+        session = await TryRestoreFromCheckpointAsync(sessionHandle, session, ct).ConfigureAwait(false);
         var trimmed = message.Trim();
         var isSimple = _escalationDecider.IsSimpleQuery(message);
         var complexity = _escalationDecider.EstimateComplexity(message);
@@ -136,9 +184,9 @@ public sealed class ChatAgent
         BackgroundJobService.CurrentSessionId = sessionHandle?.Name ?? traceId;
 
         // Pro 快速通道：复杂度 >= 4 直接走 Pro，不经过 L1
-        if (!isSimple && complexity >= 4 && _proAgent != null)
+        if (!isSimple && complexity >= _complexityProFastTrack && _proAgent != null)
         {
-            // Save L1 session first for crash recovery if Pro fails
+            // Skip L1 entirely but still apply quality gate on Pro output
             if (sessionHandle != null)
                 await SaveSessionToHandleAsync(session, sessionHandle, ct).ConfigureAwait(false);
             var proSession = sessionHandle != null
@@ -146,6 +194,20 @@ public sealed class ChatAgent
                 : await _proAgent.CreateSessionAsync(ct).ConfigureAwait(false);
             var proR = await _proAgent.RunAsync(messages, proSession, cancellationToken: ct).ConfigureAwait(false);
             var proText = ApplyBlockedOutput(proR.Messages?.LastOrDefault()?.Text ?? "");
+
+            // Quality gate for Pro output: grammar check
+            if (proR.Messages != null && proText.Length > 0)
+            {
+                var (hasErrors, errorMessages) = await PostGenerationGrammarCheckAsync(proR.Messages, ct).ConfigureAwait(false);
+                if (hasErrors && errorMessages.Count > 0 && _grammarDepth.Value <= _grammarRetryMaxDepth)
+                {
+                    _grammarDepth.Value++;
+                    var retryR = await _proAgent.RunAsync(errorMessages, proSession, cancellationToken: ct).ConfigureAwait(false);
+                    var retryText = ApplyBlockedOutput(retryR.Messages?.LastOrDefault()?.Text ?? "");
+                    if (!string.IsNullOrWhiteSpace(retryText)) proText = retryText;
+                }
+            }
+
             if (sessionHandle != null)
                 await SaveSessionToHandleAsync(proSession, sessionHandle, ct).ConfigureAwait(false);
             return proText;
@@ -171,18 +233,33 @@ public sealed class ChatAgent
             if (hasErrors && errorMessages.Count > 0)
             {
                 _grammarDepth.Value++;
-                if (_grammarDepth.Value <= 2)
+                var result = ParseGrammarCheckResult(errorMessages);
+                var decision = _retryController.Decide(result, _grammarDepth.Value);
+                if (decision.Action != RetryAction.Continue)
+                {
+                    RecordSessionError(sessionId);
+                    _grammarDepth.Value = 0;
+                }
+                else if (_grammarDepth.Value <= _grammarRetryMaxDepth)
                 {
                     var retryR = await _agent.RunAsync(errorMessages, session, cancellationToken: ct).ConfigureAwait(false);
                     var retryText = ApplyBlockedOutput(retryR.Messages?.LastOrDefault()?.Text ?? "");
                     if (!string.IsNullOrWhiteSpace(retryText))
+                    {
                         text = retryText;
+                        _retryController.RecordSuccess(result.FilePath);
+                    }
                 }
-                if (_grammarDepth.Value > 2)
+                else
+                {
                     RecordSessionError(sessionId);
-                _grammarDepth.Value = 0;
+                    _grammarDepth.Value = 0;
+                }
             }
         }
+
+        // Save conversation state checkpoint
+        SaveCheckpointFireAndForget(sessionId, r.Messages, session, ct);
 
         if (isSimple)
         {
@@ -209,7 +286,8 @@ public sealed class ChatAgent
         // ── Session circuit breaker ──
         if (IsSessionCircuitOpen(sessionId))
         {
-            await FullRegenerationAsync(message, "circuit breaker tripped — too many prior errors", new L1State(), session, ct);
+            await FullRegenerationAsync(message, "circuit breaker tripped — too many prior errors", l1State, session, ct);
+            return text; // return immediately after full regeneration
         }
 
         // ── LLM-as-Judge ──
@@ -232,6 +310,13 @@ public sealed class ChatAgent
 
         if (needsPro && _proAgent != null)
         {
+            // When L1 and L2 are the same model, escalation just re-invokes same model
+            if (_sameModel)
+            {
+                text = $"[Same-model: L1 escalation skipped (L1==L2, reason: {reason})]\n\n{text}";
+            }
+            else
+            {
             // FusionRoute: prefer span-level routing over full regeneration
             var hasExplicitSignal = EscalationSignal.FromString(text) != null;
             if (l1State.ShouldRouteBySpans && !hasExplicitSignal &&
@@ -244,11 +329,13 @@ public sealed class ChatAgent
             {
                 text = await FullRegenerationAsync(message, reason, l1State, session, ct).ConfigureAwait(false);
             }
+            }
         }
 
         text = await EnforceAndReflectAsync(text, message, session, ct).ConfigureAwait(false);
         if (sessionHandle != null)
             await SaveSessionToHandleAsync(session, sessionHandle, ct).ConfigureAwait(false);
+        SaveCheckpointFireAndForget(sessionId, r.Messages, session, ct);
         var pendingSwitch = LocalEmbedderModelSwitchNotifier.ConsumeSwitchMessage();
         return pendingSwitch != null ? $"{pendingSwitch}\n\n{text}" : text;
     }
@@ -257,9 +344,20 @@ public sealed class ChatAgent
         string message, ISessionHandle? sessionHandle = null,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
+        // Budget check — consistent with non-streaming path
+        if (_budgetTracker != null && !_budgetTracker.TryConsume("streaming", 0).allowed)
+        {
+            var remaining = _budgetTracker.TryConsume("streaming", 0).remaining;
+            yield return new AgentResponseUpdate(new ChatResponseUpdate(ChatRole.Assistant, $"[Budget exhausted. {remaining:N0} tokens remaining.]"));
+            yield break;
+        }
+
         var session = sessionHandle != null
             ? await CreateAgentSessionFromHandleAsync(sessionHandle, ct).ConfigureAwait(false)
             : await _agent.CreateSessionAsync(ct).ConfigureAwait(false);
+
+        // Try restore from checkpoint for streaming path too
+        session = await TryRestoreFromCheckpointAsync(sessionHandle, session, ct).ConfigureAwait(false);
 
         BackgroundJobService.CurrentSessionId = sessionHandle?.Name;
 
@@ -271,6 +369,7 @@ public sealed class ChatAgent
         var pendingCalls = new Dictionary<string, (string Name, string Arguments)>();
         var roundMessages = new List<ChatMessage> { new(ChatRole.User, message) };
         var streamTextAccum = new StringBuilder();
+        var streamThinkAccum = new StringBuilder();
 
         while (true)
         {
@@ -287,6 +386,7 @@ public sealed class ChatAgent
                      (DateTime.UtcNow - lastStreamSaveAt).TotalSeconds >= 10))
                 {
                     await SaveSessionToHandleAsync(session, sessionHandle, ct).ConfigureAwait(false);
+                    SaveCheckpointFireAndForget(sessionHandle.Name, roundMessages, session, ct);
                     lastSaveAt = DateTime.UtcNow;
                     lastStreamSaveAt = DateTime.UtcNow;
                 }
@@ -304,6 +404,14 @@ public sealed class ChatAgent
 
                         switch (content)
                         {
+                            case TextReasoningContent trc:
+                                var thinkText = trc.Text;
+                                if (!string.IsNullOrEmpty(thinkText))
+                                {
+                                    streamThinkAccum.Append(thinkText);
+                                    yield return new AgentResponseUpdate(ChatRole.Assistant, $"🧠 {thinkText}\n");
+                                }
+                                break;
                             case FunctionCallContent fc when !string.IsNullOrEmpty(fc.Name):
                                 LTAI.Core.Configuration.UsageTracker.RecordToolCall();
                                 LTAI.Core.Configuration.UsageTracker.SetActiveTool(fc.Name);
@@ -401,7 +509,7 @@ public sealed class ChatAgent
             foreach (var tc in streamToolCalls)
                 ctx.ToolCalls.Add(tc);
 
-            var step = new GrammarCheckStep();
+            var step = new GrammarCheckStep(tsParser: _tsParser, lspManager: _lspManager);
             ctx = await step.ProcessAsync(ctx).ConfigureAwait(false);
 
             if (ctx.TryGet<bool>("GrammarCheckBlocked", out var gramBlocked) && gramBlocked)
@@ -411,15 +519,27 @@ public sealed class ChatAgent
                     .ToList();
 
                 _grammarDepth.Value++;
-                if (_grammarDepth.Value <= 2 && errMsgs.Count > 0)
+                var result = ParseGrammarCheckResult(errMsgs);
+                var decision = _retryController.Decide(result, _grammarDepth.Value);
+                if (decision.Action != RetryAction.Continue)
+                {
+                    _grammarDepth.Value = 0;
+                }
+                else if (_grammarDepth.Value <= _grammarRetryMaxDepth && errMsgs.Count > 0)
                 {
                     yield return new AgentResponseUpdate(ChatRole.Assistant, "\n\n🔍 检测到语法错误，正在自动修复...\n");
                     var retryR = await _agent.RunAsync(errMsgs, session, cancellationToken: ct).ConfigureAwait(false);
                     var retryText = ApplyBlockedOutput(retryR.Messages?.LastOrDefault()?.Text ?? "");
                     if (!string.IsNullOrWhiteSpace(retryText))
+                    {
                         yield return new AgentResponseUpdate(ChatRole.Assistant, retryText);
+                        _retryController.RecordSuccess(result.FilePath);
+                    }
                 }
-                _grammarDepth.Value = 0;
+                else
+                {
+                    _grammarDepth.Value = 0;
+                }
             }
         }
 
@@ -441,8 +561,15 @@ public sealed class ChatAgent
                 yield return new AgentResponseUpdate(ChatRole.Assistant,
                     $"\n\n⟳ 正在升级到 Pro 模型...\n");
 
-                var l1State = new L1State { Label = "escalate", EscalationReason = jReason };
-                var proResult = await FullRegenerationAsync(message, jReason ?? "judge deemed inadequate", l1State, session, ct)
+                var streamL1State = new L1State
+                {
+                    Label = "escalate",
+                    EscalationReason = jReason,
+                    SupportCount = CountSupportingEvidence(streamTextAccum.ToString()),
+                    Gap = EstimateCoverageGap(message, streamTextAccum.ToString()),
+                    ToolCalls = streamToolCalls.Select(tc => tc.Name).ToList()
+                };
+                var proResult = await FullRegenerationAsync(message, jReason ?? "judge deemed inadequate", streamL1State, session, ct)
                     .ConfigureAwait(false);
                 if (!string.IsNullOrWhiteSpace(proResult))
                     yield return new AgentResponseUpdate(ChatRole.Assistant, proResult);
@@ -456,6 +583,8 @@ public sealed class ChatAgent
 
         if (sessionHandle != null)
             await SaveSessionToHandleAsync(session, sessionHandle, ct).ConfigureAwait(false);
+
+        SaveCheckpointFireAndForget(sessionHandle?.Name ?? "streaming", roundMessages, session, ct);
     }
 
     private static void RefreshModeObserver(AgentSession session)
@@ -679,7 +808,7 @@ public sealed class ChatAgent
     {
         if (string.IsNullOrWhiteSpace(text)) return text;
         _correctionDepth.Value++;
-        if (_correctionDepth.Value > 2) { _correctionDepth.Value = 0; return text; }
+        if (_correctionDepth.Value > _correctionLoopMaxDepth) { _correctionDepth.Value = 0; return text; }
 
         if (_proAgent == null) return text;
 
@@ -737,12 +866,140 @@ public sealed class ChatAgent
         };
         foreach (var word in hedgeWords)
         {
-            var idx = lower.IndexOf(word, StringComparison.Ordinal);
-            if (idx >= 0) hedgeCount++;
+            var idx = 0;
+            while ((idx = lower.IndexOf(word, idx, StringComparison.Ordinal)) >= 0)
+            {
+                hedgeCount++;
+                idx += word.Length;
+            }
         }
         // Trigger if more than 2 hedge words or hedge density > 5%
         var wordCount = text.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length;
         return hedgeCount >= 3 || (wordCount > 0 && (double)hedgeCount / wordCount > 0.05);
+    }
+
+    // ── Checkpoint helpers ──
+
+    /// <summary>Attempt to restore session state from nearest full-state checkpoint.
+    /// Returns the restored session if successful, or the original session if not.
+    /// Also syncs restored state back to ISessionHandle for durable persistence.</summary>
+    private async Task<AgentSession> TryRestoreFromCheckpointAsync(ISessionHandle? sessionHandle, AgentSession session, CancellationToken ct)
+    {
+        if (_checkpointStore == null || sessionHandle == null) return session;
+        var sessionId = sessionHandle.Name;
+        try
+        {
+            var cp = await _checkpointStore.FindNearestAsync(sessionId, long.MaxValue, ct).ConfigureAwait(false);
+            if (cp?.data == null) return session;
+
+            var cpData = JsonSerializer.Deserialize<CheckpointData>(Encoding.UTF8.GetString(cp.Value.data));
+            if (cpData?.SessionData == null) return session;
+
+            var currentMsgs = sessionHandle.Messages.Count;
+            if (cpData.MsgCount <= currentMsgs) return session;
+
+            // Validate SessionData is non-empty and parseable before attempting restore
+            if (string.IsNullOrEmpty(cpData.SessionData) || cpData.SessionData.Length < 20) return session;
+            JsonElement restoredElement;
+            try { restoredElement = JsonDocument.Parse(cpData.SessionData).RootElement.Clone(); }
+            catch { return session; }
+
+            _logger.LogInformation("Restoring session {SessionId} from checkpoint at msgCount={MsgCount} (current={Current})",
+                sessionId, cpData.MsgCount, currentMsgs);
+
+            var restored = await _agent.DeserializeSessionAsync(restoredElement, cancellationToken: ct).ConfigureAwait(false);
+
+            // Sync restored state back to ISessionHandle so subsequent saves don't overwrite recovery
+            var restoredJson = await _agent.SerializeSessionAsync(restored, cancellationToken: ct).ConfigureAwait(false);
+            sessionHandle.UpdateFromJson(restoredJson.GetRawText());
+
+            return restored;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Checkpoint restore failed for session {SessionId}", sessionId);
+            return session;
+        }
+    }
+
+    private sealed record CheckpointData
+    {
+        public string Session { get; init; } = "";
+        public long Tokens { get; init; }
+        public int MsgCount { get; init; }
+        public string? SessionData { get; init; }
+    }
+
+    private async Task SaveCheckpointAsync(string sessionId, IList<ChatMessage>? messages, AgentSession? session, CancellationToken ct)
+    {
+        if (_checkpointStore == null || messages == null || messages.Count == 0) return;
+
+        var lockObj = _sessionCheckpointLocks.GetOrAdd(sessionId, _ => new SemaphoreSlim(1, 1));
+        await lockObj.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            long tokenCount = 0;
+            foreach (var msg in messages)
+            {
+                if (!string.IsNullOrEmpty(msg.Text))
+                    tokenCount += TokenEstimator.Estimate(msg.Text);
+            }
+            var key = $"session:{sessionId}:pos:{tokenCount}";
+
+            var sessionCounter = _sessionCheckpointCounters.AddOrUpdate(sessionId, 1, (_, v) => v + 1);
+            string? sessionData = null;
+            if (session != null && sessionCounter % 10 == 0)
+            {
+                try
+                {
+                    var sessionJson = await _agent.SerializeSessionAsync(session, cancellationToken: ct).ConfigureAwait(false);
+                    sessionData = sessionJson.GetRawText();
+                }
+                catch { /* serialize best-effort */ }
+            }
+
+            var data = JsonSerializer.Serialize(new CheckpointData
+            {
+                Session = sessionId,
+                Tokens = tokenCount,
+                MsgCount = messages.Count,
+                SessionData = sessionData
+            });
+            await _checkpointStore.StoreAsync(key, Encoding.UTF8.GetBytes(data), tokenCount, ct).ConfigureAwait(false);
+
+            // Periodic compaction: every 200 checkpoints for a session, reset the store.
+            // The current checkpoint (just saved above) includes full session data, so
+            // we can safely invalidate all older checkpoints and start fresh.
+            if (sessionCounter == 200)
+            {
+                try
+                {
+                    _sessionCheckpointCounters.TryRemove(sessionId, out _);
+                    await _checkpointStore.InvalidateSessionAsync(sessionId, ct).ConfigureAwait(false);
+                    // Re-save the current checkpoint with counter reset to 1
+                    _sessionCheckpointCounters.AddOrUpdate(sessionId, 1, (_, _) => 1);
+                    await _checkpointStore.StoreAsync(key, Encoding.UTF8.GetBytes(data), tokenCount, ct).ConfigureAwait(false);
+                }
+                catch { /* compaction best-effort */ }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "SaveCheckpointAsync failed for session {SessionId}", sessionId);
+        }
+        finally
+        {
+            lockObj.Release();
+        }
+    }
+
+    private void SaveCheckpointFireAndForget(string sessionId, IList<ChatMessage>? messages, AgentSession? session, CancellationToken ct)
+    {
+        _ = Task.Run(async () =>
+        {
+            try { await SaveCheckpointAsync(sessionId, messages, session, ct).ConfigureAwait(false); }
+            catch (Exception ex) { _logger.LogDebug(ex, "Checkpoint fire-and-forget failed for session {SessionId}", sessionId); }
+        });
     }
 
     // ── Session helpers ──
@@ -859,7 +1116,7 @@ public sealed class ChatAgent
         foreach (var (name, args, result) in toolCalls)
             ctx.ToolCalls.Add((name, args, result));
 
-        var step = new GrammarCheckStep();
+        var step = new GrammarCheckStep(tsParser: _tsParser, lspManager: _lspManager);
         ctx = await step.ProcessAsync(ctx).ConfigureAwait(false);
 
         if (ctx.TryGet<bool>("GrammarCheckBlocked", out var blocked) && blocked)
@@ -871,5 +1128,16 @@ public sealed class ChatAgent
         }
 
         return (false, []);
+    }
+
+    private static GrammarCheckResult ParseGrammarCheckResult(List<ChatMessage> errorMessages)
+    {
+        var errorCount = errorMessages.Count;
+        var firstMsg = errorMessages.FirstOrDefault()?.Text ?? "";
+        var parts = firstMsg.Split(':', 3);
+        var filePath = parts.Length > 0 ? parts[0].Trim() : "";
+        var errorType = parts.Length > 2 ? parts[2].Trim() : "syntax";
+        if (errorType.Length > 40) errorType = errorType[..40];
+        return new GrammarCheckResult(errorType, filePath, errorCount, 0, 0);
     }
 }

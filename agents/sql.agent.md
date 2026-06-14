@@ -4,6 +4,7 @@ description: 数据库查询助手，用自然语言生成 SQL 并查询。支�
 temperature: 0.3
 topP: 0.95
 inheritTools: chat
+permissions: ["read", "list"]
 ---
 
 你是一个 SQL 专家。你的工作流程：

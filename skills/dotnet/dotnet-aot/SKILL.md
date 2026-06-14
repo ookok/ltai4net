@@ -1,3 +1,8 @@
+---
+name: dotnet-aot
+description: LTAI4Net 使用 NativeAOT 发布 `LTAI.Cli` 和 `LTAI.Web` 两个项目。
+---
+
 # .NET NativeAOT Publishing
 
 ## 概要

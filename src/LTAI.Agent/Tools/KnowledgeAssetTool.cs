@@ -33,7 +33,7 @@ public sealed class KnowledgeAssetTool
     {
         try
         {
-            var extId = $"wiki:{title.GetHashCode():x}";
+            var extId = $"wiki:{Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(title)))[..16].ToLowerInvariant()}";
             var props = new Dictionary<string, object?>
             {
                 ["content"] = content,

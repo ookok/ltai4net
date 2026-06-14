@@ -43,7 +43,7 @@
 
     <PackageReference Include="Serilog.AspNetCore" Version="10.0.0" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.8" />
-    <!-- LiteDB removed â€” replaced by KgStore (SQLite FTS5 + CTE) -->
+    <!-- LiteDB removed â€?replaced by KgStore (SQLite FTS5 + CTE) -->
     <PackageReference Include="SkiaSharp" Version="3.119.4" />
     <PackageReference Include="Wasmtime" Version="44.0.0" />
     <PackageReference Include="TurboQuant" Version="0.2.0" />

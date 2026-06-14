@@ -84,7 +84,9 @@ public sealed class FlowchartTools
             var svgBytes = await http.GetByteArrayAsync(url).ConfigureAwait(false);
             var svgPath = Path.Combine(Path.GetTempPath(), $"ltai_diagram_{Guid.NewGuid():N}.svg");
             await File.WriteAllBytesAsync(svgPath, svgBytes).ConfigureAwait(false);
-            return $"{mermaid}\n\n📊 SVG saved: `{svgPath}` ({(svgBytes.Length / 1024.0):F1} KB)\n> ⚠️ Temp file not auto-cleaned. Delete after use.";
+            // Auto-clean temp file after 5 minutes
+            _ = Task.Run(async () => { try { await Task.Delay(TimeSpan.FromMinutes(5)).ConfigureAwait(false); File.Delete(svgPath); } catch { } });
+            return $"{mermaid}\n\n📊 SVG saved: `{svgPath}` ({(svgBytes.Length / 1024.0):F1} KB)";
         }
         catch (Exception ex)
         {

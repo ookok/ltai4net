@@ -8,15 +8,38 @@ updates:
       day: "monday"
       time: "09:00"
       timezone: "Asia/Shanghai"
-    open-pull-requests-limit: 10
+    open-pull-requests-limit: 5
     labels:
       - "dependencies"
       - "auto-update"
-    # 只关注 MAF 相关包，避免非 MAF 包升级的噪音
-    allow:
-      - dependency-name: "Microsoft.Agents.AI*"
-    # 给 MAF 浮动范围开绿灯 — CPM 已通过属性管理
     versioning-strategy: increase
     commit-message:
       prefix: "deps"
       include: "scope"
+    groups:
+      microsoft-extensions:
+        patterns:
+          - "Microsoft.Extensions.*"
+      avalonia:
+        patterns:
+          - "Avalonia*"
+      open-telemetry:
+        patterns:
+          - "OpenTelemetry*"
+      xunit:
+        patterns:
+          - "xunit*"
+          - "Microsoft.NET.Test.Sdk"
+          - "coverlet*"
+
+  # GitHub Actions workflow updates
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Asia/Shanghai"
+    labels:
+      - "dependencies"
+      - "ci"

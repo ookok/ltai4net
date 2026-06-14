@@ -5,6 +5,7 @@ using LTAI.Core.Configuration;
 using Microsoft.Agents.AI.DurableTask;
 using Microsoft.DurableTask;
 using Microsoft.DurableTask.Testing;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -47,23 +48,13 @@ public static class DurableAgentServiceCollectionExtensions
         services.AddSingleton<LTAIDurableAgentHost>();
         services.AddHostedService(sp => sp.GetRequiredService<LTAIDurableAgentHost>());
 
-        // Build a temp provider to resolve the host (so we know the port to pin the
-        // gRPC sidecar to). The host we resolve here is the same singleton the
-        // final container will hand out, so AddInMemoryDurableTask and the host
-        // share the port. We don't dispose immediately because the host is a
-        // singleton owned by the main provider; we just need its Port property.
-        // The temp provider is disposed at the end — its only purpose is to read
-        // the eager host instance.
-        LTAIDurableAgentHost host;
-        ServiceProvider tempProvider = services.BuildServiceProvider();
-        try
-        {
-            host = tempProvider.GetRequiredService<LTAIDurableAgentHost>();
-        }
-        finally
-        {
-            (tempProvider as IDisposable)?.Dispose();
-        }
+        // Compute port and dbPath up-front from configuration without resolving the host
+        // (LTAIDurableAgentHost uses static helpers). IConfiguration is safe to resolve
+        // early because it is registered by the host builder before any DI extensions run.
+        using var configProvider = services.BuildServiceProvider();
+        var config = configProvider.GetService<IConfiguration>();
+        int port = LTAIDurableAgentHost.GetEffectivePort(config?.GetValue<int?>("LTAI:Durable:SidecarPort"));
+        string dbPath = LTAIDurableAgentHost.ResolveDatabasePath(config?.GetValue<string>("LTAI:Durable:DatabasePath"));
 
         // Boot the in-process gRPC sidecar + DTFx worker + client (legacy SDK wrapper).
         // We pass the same port so the worker/client config targets our sidecar.
@@ -72,7 +63,7 @@ public static class DurableAgentServiceCollectionExtensions
         // InProcessTestHost's worker is otherwise idle).
         services.AddInMemoryDurableTask(
             registry => { },
-            new InMemoryDurableTaskOptions { Port = host.Port });
+            new InMemoryDurableTaskOptions { Port = port });
 
         // P8.1: swap the in-memory orchestration service for the SQLite-backed one.
         // AddInMemoryDurableTask registered 3 factory descriptors
@@ -83,7 +74,6 @@ public static class DurableAgentServiceCollectionExtensions
         // (Our service is registered as the concrete InMemoryOrchestrationService type
         // so the gRPC sidecar's GetRequiredService<InMemoryOrchestrationService> still
         // resolves to us — the sidecar doesn't care about the interface aliases.)
-        var dbPath = host.DatabasePath;
         for (int i = services.Count - 1; i >= 0; i--)
         {
             var d = services[i];

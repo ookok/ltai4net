@@ -106,3 +106,7 @@ foreach ($entry in $results.GetEnumerator() | Sort-Object Name)
         Write-Host "  $($entry.Key): $($entry.Value)"
     }
 }
+# Clear sensitive data from memory
+$secretsMap.Clear()
+Remove-Variable secretsMap -ErrorAction SilentlyContinue
+Remove-Variable secrets -ErrorAction SilentlyContinue

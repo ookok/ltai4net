@@ -14,7 +14,12 @@ namespace LTAI.Agent.Tools;
 public static class OfficeDocumentReader
 {
     public const long MaxFileSize = 50 * 1024 * 1024;
-    public const int MaxOutputChars = 100_000;
+    private static readonly Lazy<int> _maxOutputChars = new(() =>
+    {
+        var env = Environment.GetEnvironmentVariable("LTAI_OFFICE_MAX_OUTPUT_CHARS");
+        return int.TryParse(env, out var v) && v >= 1000 ? v : 100_000;
+    });
+    public static int MaxOutputChars => _maxOutputChars.Value;
 
     public static string? CheckFile(string path)
     {
@@ -157,10 +162,12 @@ public static class OfficeDocumentReader
             var rows = sp.Worksheet.Descendants<SS.Row>().ToList();
             if (rows.Count == 0) continue;
 
+            const int maxRowsPerSheet = 10000;
+            var rowLimit = Math.Min(rows.Count, maxRowsPerSheet);
             var sst = wb.SharedStringTablePart?.SharedStringTable;
-            sb.AppendLine($"## {sheet.Name} ({rows.Count} 行)");
+            sb.AppendLine($"## {sheet.Name} ({(rows.Count > maxRowsPerSheet ? $"{maxRowsPerSheet}/{rows.Count} rows shown" : $"{rows.Count} rows")})");
 
-            for (int ri = 0; ri < rows.Count; ri++)
+            for (int ri = 0; ri < rowLimit; ri++)
             {
                 ct.ThrowIfCancellationRequested();
                 var vals = rows[ri].Descendants<SS.Cell>()

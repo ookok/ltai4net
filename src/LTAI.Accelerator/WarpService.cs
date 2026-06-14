@@ -158,11 +158,22 @@ public sealed class WarpService : IDisposable
     {
         try
         {
-            foreach (var name in new[] { "Cloudflare WARP", "CloudflareWARP", "Cloudflare" })
+            // Only kill WARP GUI processes started by the current user, not system-wide
+            var currentUser = Environment.UserName;
+            foreach (var name in new[] { "Cloudflare WARP", "CloudflareWARP" })
             {
                 foreach (var p in Process.GetProcessesByName(name))
                 {
-                    try { p.Kill(); p.WaitForExit(2000); } catch { }
+                    try
+                    {
+                        // Only kill if process is from current user session
+                        if (p.SessionId == Process.GetCurrentProcess().SessionId)
+                        {
+                            p.Kill();
+                            p.WaitForExit(2000);
+                        }
+                    }
+                    catch { }
                 }
             }
         }

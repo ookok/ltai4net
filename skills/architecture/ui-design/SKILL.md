@@ -1,3 +1,8 @@
+---
+name: ui-design
+description: 审查 UI 设计稿或实现是否符合设计规范。
+---
+
 # UI Design Review
 
 ## 概要

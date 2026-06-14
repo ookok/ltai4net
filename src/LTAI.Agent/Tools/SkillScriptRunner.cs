@@ -3,6 +3,7 @@
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
+using LTAI.Core.Configuration;
 using Microsoft.Agents.AI;
 
 namespace LTAI.Agent.Tools;
@@ -12,6 +13,8 @@ namespace LTAI.Agent.Tools;
 /// </summary>
 public static class SkillScriptRunner
 {
+    private static readonly int _scriptTimeoutMs = int.TryParse(
+        Environment.GetEnvironmentVariable("LTAI_SCRIPT_TIMEOUT_SEC"), out var s) ? Math.Max(10, s) * 1000 : 60_000;
     /// <summary>Fallback PATH for sandboxed process execution. Set from config at startup.</summary>
     public static string SystemPathFallback { get; set; } = @"C:\Windows\system32;C:\Windows";
     /// <summary>供 AgentSkillsProviderBuilder.UseFileScriptRunner 使用的委托。</summary>
@@ -78,7 +81,7 @@ public static class SkillScriptRunner
             var outTask = process.StandardOutput.ReadToEndAsync();
             var errTask = process.StandardError.ReadToEndAsync();
             using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            timeoutCts.CancelAfter(60_000);
+            timeoutCts.CancelAfter(_scriptTimeoutMs);
             try
             {
                 await process.WaitForExitAsync(timeoutCts.Token).ConfigureAwait(false);
@@ -96,8 +99,8 @@ public static class SkillScriptRunner
             if (!string.IsNullOrEmpty(error)) sb.AppendLine($"\n[stderr]\n{error.TrimEnd()}");
 
             return process.ExitCode == 0
-                ? Truncate(sb.ToString(), 4000)
-                : $"❌ 退出码 {process.ExitCode}\n{Truncate(sb.ToString(), 4000)}";
+                ? ContentTruncator.Truncate(sb.ToString(), 4000)
+                : $"❌ 退出码 {process.ExitCode}\n{ContentTruncator.Truncate(sb.ToString(), 4000)}";
         }
         catch (Exception ex) { return $"❌ 失败: {ex.Message}"; }
     }
@@ -121,8 +124,5 @@ public static class SkillScriptRunner
             items.Add($"\"{item.GetString() ?? item.GetRawText()}\"");
         return string.Join(" ", items);
     }
-
-    private static string Truncate(string text, int max) =>
-        text.Length <= max ? text : text[..max] + $"\n...(截断 {text.Length} 字符)";
 }
 #pragma warning restore MAAI001

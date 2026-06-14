@@ -15,11 +15,10 @@ public sealed record BackgroundJobMetrics(
     int RunningCount,
     int TotalJobs);
 
-public sealed class BackgroundJobService : IDisposable
+public sealed class BackgroundJobService : IDisposable, IAsyncDisposable
 {
     private readonly ConcurrentDictionary<string, JobEntry> _jobs = new();
     private readonly ConcurrentDictionary<string, Process> _runningProcesses = new();
-    // F13: Per-session job tracking. Maps session ID → set of job IDs.
     private readonly ConcurrentDictionary<string, HashSet<string>> _sessionJobs = new(StringComparer.Ordinal);
     private static readonly AsyncLocal<string?> _currentSessionId = new();
     private int _nextJobId;
@@ -27,21 +26,41 @@ public sealed class BackgroundJobService : IDisposable
     private bool _disposed;
     private readonly int _expirationSeconds;
     private readonly int _maxOutputChars;
+    private readonly int _maxConcurrentJobs;
+    private readonly int _processTimeoutSeconds;
     private long _startedCount;
     private long _completedCount;
     private volatile bool _paused;
     private readonly ManualResetEventSlim _pauseEvent = new(true);
+    private readonly SemaphoreSlim _concurrencyGate;
 
     /// <summary>Set by ChatAgent before tool calls to scope jobs to a session.</summary>
     public static string? CurrentSessionId { get => _currentSessionId.Value; set => _currentSessionId.Value = value; }
 
     private string EffectiveSession => CurrentSessionId ?? "default";
 
-    /// <summary>Default 60s cleanup, 100K max output chars.</summary>
-    public BackgroundJobService(int expirationSeconds = 60, int maxOutputChars = 100_000)
+    /// <summary>Default 60s cleanup, 100K max output, 10 concurrent jobs, 5min process timeout.</summary>
+    public BackgroundJobService(
+        int? expirationSeconds = null, int? maxOutputChars = null,
+        int? maxConcurrentJobs = null, int? processTimeoutSeconds = null)
+        : this(
+            expirationSeconds ?? ReadEnvInt("LTAI_JOB_EXPIRATION_SEC", 60),
+            maxOutputChars ?? ReadEnvInt("LTAI_JOB_MAX_OUTPUT_CHARS", 100_000),
+            maxConcurrentJobs ?? ReadEnvInt("LTAI_JOB_MAX_CONCURRENT", 10),
+            processTimeoutSeconds ?? ReadEnvInt("LTAI_JOB_PROCESS_TIMEOUT_SEC", 300))
+    { }
+
+    private static int ReadEnvInt(string key, int fallback) =>
+        int.TryParse(Environment.GetEnvironmentVariable(key), out var v) ? Math.Max(1, v) : fallback;
+
+    private BackgroundJobService(int expirationSeconds, int maxOutputChars,
+        int maxConcurrentJobs, int processTimeoutSeconds)
     {
         _expirationSeconds = Math.Max(10, expirationSeconds);
         _maxOutputChars = Math.Max(1024, maxOutputChars);
+        _maxConcurrentJobs = Math.Max(1, maxConcurrentJobs);
+        _processTimeoutSeconds = Math.Max(10, processTimeoutSeconds);
+        _concurrencyGate = new SemaphoreSlim(_maxConcurrentJobs, _maxConcurrentJobs);
     }
 
     public event Action<string, JobEntry>? JobCompleted;
@@ -56,10 +75,12 @@ public sealed class BackgroundJobService : IDisposable
     public async Task<string> StartJob(
         [Description("Shell 命令")] string command)
     {
+        if (!await _concurrencyGate.WaitAsync(0).ConfigureAwait(false))
+            return $"Job rejected: max concurrent jobs ({_maxConcurrentJobs}) reached. Wait for running jobs to complete.";
+
         var id = Interlocked.Increment(ref _nextJobId).ToString();
         var entry = new JobEntry { Command = command, StartedAtUtc = DateTime.UtcNow };
         _jobs[id] = entry;
-        // F13: Track job per session
         var sess = EffectiveSession;
         _sessionJobs.AddOrUpdate(sess, _ => [id], (_, set) => { lock (set) set.Add(id); return set; });
         Interlocked.Increment(ref _startedCount);
@@ -67,6 +88,11 @@ public sealed class BackgroundJobService : IDisposable
         _ = RunJobCoreAsync(id, entry, command);
 
         return $"Job #{id} started.";
+    }
+
+    private void ReleaseConcurrency(string id)
+    {
+        _concurrencyGate.Release();
     }
 
     [Description("暂停所有后台作业。运行中的作业完成后不会启动新作业。")]
@@ -90,12 +116,12 @@ public sealed class BackgroundJobService : IDisposable
 
     private async Task RunJobCoreAsync(string id, JobEntry entry, string command)
     {
-        // Wait if paused
-        try { _pauseEvent.Wait(_cts.Token); }
-        catch (OperationCanceledException) { return; }
-
         try
         {
+            // Wait if paused
+            try { _pauseEvent.Wait(_cts.Token); }
+            catch (OperationCanceledException) { ReleaseConcurrency(id); return; }
+
             var psi = new ProcessStartInfo
             {
                 FileName = Environment.OSVersion.Platform == PlatformID.Win32NT ? "cmd.exe" : "/bin/bash",
@@ -108,13 +134,42 @@ public sealed class BackgroundJobService : IDisposable
             var process = new Process { StartInfo = psi };
             process.Start();
             _runningProcesses[id] = process;
-            var stdoutTask = process.StandardOutput.ReadToEndAsync();
-            var stderrTask = process.StandardError.ReadToEndAsync();
-            process.WaitForExit();
-            var stdout = await stdoutTask.ConfigureAwait(false);
-            var stderr = await stderrTask.ConfigureAwait(false);
-            entry.Output = TruncateOutput(stdout);
-            entry.Error = TruncateOutput(stderr);
+
+            // Stream output with truncation to avoid OOM on large output
+            var stdoutSb = new System.Text.StringBuilder();
+            var stderrSb = new System.Text.StringBuilder();
+            using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(_processTimeoutSeconds));
+            var stdoutTask = StreamOutputAsync(process.StandardOutput, stdoutSb, timeoutCts.Token);
+            var stderrTask = StreamOutputAsync(process.StandardError, stderrSb, timeoutCts.Token);
+
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token, timeoutCts.Token);
+            try
+            {
+                await process.WaitForExitAsync(linkedCts.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                try { process.Kill(entireProcessTree: true); } catch { }
+                entry.Error = $"Process killed: timeout ({_processTimeoutSeconds}s)";
+                entry.ExitCode = -1;
+                await stdoutTask.ConfigureAwait(false);
+                await stderrTask.ConfigureAwait(false);
+                entry.Output = TruncateOutput(stdoutSb.ToString());
+                if (stderrSb.Length > 0) entry.Error += "\n" + TruncateOutput(stderrSb.ToString());
+                entry.Completed = true;
+                entry.CompletedEvent.Set();
+                Interlocked.Increment(ref _completedCount);
+                _runningProcesses.TryRemove(id, out var p);
+                p?.Dispose();
+                JobCompleted?.Invoke(id, entry);
+                ScheduleCleanup(id);
+                return;
+            }
+
+            await stdoutTask.ConfigureAwait(false);
+            await stderrTask.ConfigureAwait(false);
+            entry.Output = TruncateOutput(stdoutSb.ToString());
+            entry.Error = stderrSb.Length > 0 ? TruncateOutput(stderrSb.ToString()) : null;
             entry.ExitCode = process.ExitCode;
         }
         catch (Exception ex)
@@ -130,7 +185,32 @@ public sealed class BackgroundJobService : IDisposable
             p?.Dispose();
             JobCompleted?.Invoke(id, entry);
             ScheduleCleanup(id);
+            ReleaseConcurrency(id);
         }
+    }
+
+    /// <summary>Stream process output into StringBuilder, truncating at _maxOutputChars.</summary>
+    private async Task StreamOutputAsync(System.IO.StreamReader reader, System.Text.StringBuilder sb, CancellationToken ct = default)
+    {
+        var buf = new char[4096];
+        try
+        {
+            while (true)
+            {
+                var mem = new Memory<char>(buf);
+                var read = await reader.ReadAsync(mem, ct).ConfigureAwait(false);
+                if (read == 0) break;
+                var remaining = _maxOutputChars - sb.Length;
+                if (remaining <= 0) continue; // already at limit, keep draining silently
+                var toAdd = Math.Min(read, remaining);
+                sb.Append(buf, 0, toAdd);
+                if (sb.Length >= _maxOutputChars)
+                {
+                    sb.Append($"\n... [output truncated at {_maxOutputChars} chars]");
+                }
+            }
+        }
+        catch { /* reader closed */ }
     }
 
     private void ScheduleCleanup(string id)
@@ -155,6 +235,7 @@ public sealed class BackgroundJobService : IDisposable
         _disposed = true;
         _cts.Cancel();
         _cts.Dispose();
+        _concurrencyGate.Dispose();
 
         foreach (var kv in _runningProcesses)
         {
@@ -162,6 +243,25 @@ public sealed class BackgroundJobService : IDisposable
             kv.Value.Dispose();
         }
         _runningProcesses.Clear();
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        _cts.Cancel();
+        _cts.Dispose();
+        _concurrencyGate.Dispose();
+
+        foreach (var kv in _runningProcesses)
+        {
+            try { kv.Value.Kill(entireProcessTree: true); } catch { }
+            kv.Value.Dispose();
+        }
+        _runningProcesses.Clear();
+
+        // Wait briefly for cleanup tasks to complete
+        try { await Task.Delay(500).ConfigureAwait(false); } catch { }
     }
 
     [Description("列出所有后台作业及状态")]
@@ -224,7 +324,7 @@ public sealed class BackgroundJobService : IDisposable
             return $"Job #{jobId} not found.";
 
         var timeout = TimeSpan.FromSeconds(Math.Clamp(timeoutSec, 1, 600));
-        try { entry.CompletedEvent.Wait(timeout, _cts.Token); }
+        try { await Task.Run(() => entry.CompletedEvent.Wait(timeout, _cts.Token)).ConfigureAwait(false); }
         catch (OperationCanceledException) { }
 
         if (!entry.Completed)
@@ -250,6 +350,9 @@ public sealed class BackgroundJobService : IDisposable
 
         entry.Completed = true;
         entry.Error = "Cancelled";
+        entry.CompletedEvent.Set();
+        _jobs.TryRemove(jobId, out _); // immediately remove, no cleanup delay
+        ReleaseConcurrency(jobId);
         return $"Job #{jobId} killed.";
     }
 
@@ -294,4 +397,9 @@ public sealed class JobEntry
     public DateTime StartedAtUtc = DateTime.UtcNow;
     public string? Command;
     public readonly ManualResetEventSlim CompletedEvent = new(false);
+
+    public void Dispose()
+    {
+        CompletedEvent.Dispose();
+    }
 }

@@ -81,9 +81,16 @@ public sealed class ReviewRuleEngine
             }
 
             var lineNumber = LineFromIndex(content, match.Index);
-            var message = rule.MessageTemplate != null
-                ? string.Format(rule.MessageTemplate, filePath, match.Value)
-                : $"[{rule.Category}] {rule.Description}";
+            var message = "";
+            if (rule.MessageTemplate != null)
+            {
+                try { message = string.Format(rule.MessageTemplate, filePath, match.Value); }
+                catch (FormatException) { message = $"[{rule.Category}] {rule.Description}"; }
+            }
+            else
+            {
+                message = $"[{rule.Category}] {rule.Description}";
+            }
 
             matches.Add(new ReviewRuleMatch(
                 RuleId: rule.Id,

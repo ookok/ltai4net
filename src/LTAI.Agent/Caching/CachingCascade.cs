@@ -114,17 +114,19 @@ public sealed class CachingCascade : IMemoryCachingStore
             {
                 if (_inner != null) return _inner;
                 if (_initAttempted) return null;
-                _initAttempted = true;
 
                 try
                 {
                     var dataDir = Path.Combine(
                         AppContext.BaseDirectory,
                         ".livingtree");
-                    return new FileCachingStore(dataDir);
+                    _inner = new FileCachingStore(dataDir);
+                    _initAttempted = true;
+                    return _inner;
                 }
                 catch
                 {
+                    _initAttempted = true;
                     return null;
                 }
             }
@@ -158,11 +160,15 @@ public sealed class CachingCascade : IMemoryCachingStore
     public async Task<(string key, byte[] data, long tokenCount)?> FindNearestAsync(
         string sessionId, long tokenCount, CancellationToken ct = default)
     {
-        var result = await _tier1.FindNearestAsync(sessionId, tokenCount, ct).ConfigureAwait(false);
-        if (result != null) return result;
+        var tier1 = await _tier1.FindNearestAsync(sessionId, tokenCount, ct).ConfigureAwait(false);
+        var tier2 = await _tier2.FindNearestAsync(sessionId, tokenCount, ct).ConfigureAwait(false);
 
-        result = await _tier2.FindNearestAsync(sessionId, tokenCount, ct).ConfigureAwait(false);
-        return result;
+        // Return the entry with the highest token count (most recent position).
+        // Don't short-circuit on Tier1 — Tier2 may have a newer entry written by
+        // a different process instance or after Tier1 TTL expired.
+        if (tier1 == null) return tier2;
+        if (tier2 == null) return tier1;
+        return tier1.Value.tokenCount >= tier2.Value.tokenCount ? tier1 : tier2;
     }
 
     public async Task<IReadOnlyList<CheckpointSummary>> FindRangeAsync(

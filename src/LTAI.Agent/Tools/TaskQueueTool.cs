@@ -88,7 +88,7 @@ public sealed class TaskQueueTool
         try
         {
             payload = string.IsNullOrWhiteSpace(payloadJson)
-                ? JsonDocument.Parse("null").RootElement
+                ? default
                 : JsonDocument.Parse(payloadJson).RootElement.Clone();
         }
         catch (JsonException ex)
@@ -177,8 +177,11 @@ public sealed class TaskQueueTool
                           or LTAI.Agent.Tasks.TaskStatus.Failed
                           or LTAI.Agent.Tasks.TaskStatus.Cancelled)
             return $"Task '{taskId}' already {item.Status}.";
-        item.Status = LTAI.Agent.Tasks.TaskStatus.Cancelled;
-        item.Error = "Cancelled by tool";
+        lock (item)
+        {
+            item.Status = LTAI.Agent.Tasks.TaskStatus.Cancelled;
+            item.Error = "Cancelled by tool";
+        }
         return $"Task '{taskId}' cancelled.";
     }
 

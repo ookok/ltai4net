@@ -15,12 +15,8 @@
 //    - 语义警告 (Warning)     → 继续生成但标记供审查
 //    - 规则匹配 (RuleMatch)    → 注入警告到上下文（不打断）
 //
-//  Usage in PipelineBuilder:
-//    new PipelineBuilder()
-//      .Use<GrammarCheckStep>()
-//      .Use<SafetyCheckStep>()
-//      .Use<RouterStep>()
-//      ...
+//  Usage: instantiated directly in ChatAgent or via DI.
+//    var step = new GrammarCheckStep(tsParser, lspManager);
 // ═══════════════════════════════════════════════════════════════
 
 using System.Collections.Concurrent;
@@ -91,6 +87,17 @@ public sealed class GrammarCheckStep : IPipelineStep
             {
                 try
                 {
+                    // Guard against loading arbitrarily large files written by agent
+                    const long maxFileSize = 10 * 1024 * 1024; // 10 MB
+                    var fi = new FileInfo(filePath);
+                    if (fi.Exists && fi.Length > maxFileSize)
+                    {
+                        allErrors.Add(new GrammarError(filePath, 0, 0,
+                            GrammarErrorSeverity.Warning, "grammar_check", "FILE_TOO_LARGE",
+                            $"File too large for grammar check ({fi.Length / 1024 / 1024}MB, max {maxFileSize / 1024 / 1024}MB)",
+                            "GrammarCheckStep"));
+                        continue;
+                    }
                     var content = await File.ReadAllTextAsync(filePath, context.CancellationToken)
                         .ConfigureAwait(false);
                     var errors = QuickParseFile(filePath, content);
@@ -170,7 +177,7 @@ public sealed class GrammarCheckStep : IPipelineStep
             var lspDiags = _lspManager.GetDiagnostics();
             foreach (var (filePath, diag) in lspDiags)
             {
-                if (!writtenFiles.Contains(filePath, PathComparer.Instance))
+                if (!writtenFiles.Contains(filePath, StringComparer.OrdinalIgnoreCase))
                     continue;
 
                 allErrors.Add(new GrammarError(
@@ -461,7 +468,7 @@ public sealed class GrammarCheckStep : IPipelineStep
     /// </summary>
     private HashSet<string> ExtractWrittenFiles(MessageContext context)
     {
-        var files = new HashSet<string>(PathComparer.Instance);
+        var files = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var (name, args, _) in context.ToolCalls)
         {
@@ -488,7 +495,7 @@ public sealed class GrammarCheckStep : IPipelineStep
         // 格式 1: path=xxx 或 filePath=xxx (引号可选)
         var matches = System.Text.RegularExpressions.Regex.Matches(args,
             @"(?:path|filePath)\s*=\s*[""']?([^""',\s}]+)[""']?",
-            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled);
 
         foreach (System.Text.RegularExpressions.Match match in matches)
         {
@@ -503,7 +510,7 @@ public sealed class GrammarCheckStep : IPipelineStep
         // 格式 2: JSON 格式 "path":"value" 或 "filePath":"value"
         var jsonMatches = System.Text.RegularExpressions.Regex.Matches(args,
             @"""(?:path|filePath)""\s*:\s*""([^""]+)""",
-            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled);
 
         foreach (System.Text.RegularExpressions.Match match in jsonMatches)
         {
@@ -702,17 +709,5 @@ public sealed class GrammarCheckOptions
 
     /// <summary>是否启用 LSP 诊断层。默认 true（C# 使用内置 Roslyn 无需进程）。</summary>
     public bool EnableLspDiag { get; set; } = true;
-
-    /// <summary>最大注入消息长度（字符数）。默认 4000。</summary>
-    public int MaxInjectedMessageLength { get; set; } = 4000;
 }
 
-/// <summary>文件路径比较器（忽略大小写）。</summary>
-internal sealed class PathComparer : IEqualityComparer<string>
-{
-    public static readonly PathComparer Instance = new();
-    public bool Equals(string? x, string? y) =>
-        string.Equals(x, y, StringComparison.OrdinalIgnoreCase);
-    public int GetHashCode(string obj) =>
-        obj.GetHashCode(StringComparison.OrdinalIgnoreCase);
-}

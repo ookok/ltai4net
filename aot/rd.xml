@@ -1,34 +1,17 @@
 <Directives>
   <Application>
     <!-- ===== NativeAOT linker roots ===== -->
-    <!-- Preserve all DI-resolved types -->
-    <Assembly Name="Microsoft.Extensions.DependencyInjection" Dynamic="Required All" />
-    <Assembly Name="Microsoft.Extensions.AI" Dynamic="Required All" />
-    <Assembly Name="Microsoft.Extensions.AI.Abstractions" Dynamic="Required All" />
-    <Assembly Name="Microsoft.Extensions.Logging" Dynamic="Required All" />
-    <Assembly Name="Microsoft.Extensions.Options" Dynamic="Required All" />
-    <Assembly Name="Microsoft.Extensions.Configuration" Dynamic="Required All" />
+    <!-- Preserve DI-resolved types needed for MAF agent runtime and JSON serialization -->
 
     <!-- MAF agent framework reflection roots -->
     <Assembly Name="Microsoft.Agents.AI" Dynamic="Required All" />
     <Assembly Name="Microsoft.Agents.AI.Abstractions" Dynamic="Required All" />
-    <Assembly Name="Microsoft.Agents.AI.OpenAI" Dynamic="Required All" />
-    <Assembly Name="Microsoft.Agents.AI.Anthropic" Dynamic="Required All" />
-    <Assembly Name="Microsoft.Agents.AI.Hosting" Dynamic="Required All" />
-
-    <!-- AI providers (runtime model selection via config) -->
-    <Assembly Name="OpenAI" Dynamic="Required All" />
-    <Assembly Name="Anthropic" Dynamic="Required All" />
 
     <!-- ONNX Runtime -->
     <Assembly Name="Microsoft.ML.OnnxRuntime" Dynamic="Required All" />
 
     <!-- SQLite -->
     <Assembly Name="Microsoft.Data.Sqlite" Dynamic="Required All" />
-    <Assembly Name="SQLitePCLRaw" Dynamic="Required All" />
-
-    <!-- Console/TUI -->
-    <Assembly Name="Spectre.Console" Dynamic="Required All" />
 
     <!-- ===== LTAI assemblies — full preservation for DI + tool reflection ===== -->
     <Assembly Name="LTAI.Core" Dynamic="Required All" Serialize="Required All" />
@@ -41,10 +24,6 @@
     <!-- AIFunctionFactory.Create() wraps methods via reflection -->
     <Type Name="LTAI.Agent.Tools.*" Dynamic="Required All" />
     <Type Name="LTAI.Agent.Vector.*" Dynamic="Required All" />
-    <Type Name="LTAI.Agent.SeedER.*" Dynamic="Required All" />
-    <Type Name="LTAI.Agent.Formats.*" Dynamic="Required All" />
-    <Type Name="LTAI.AI.*" Dynamic="Required All" />
-    <Type Name="LTAI.Core.*" Dynamic="Required All" />
 
     <!-- ToolDomain/ToolExample attribute scanning -->
     <Type Name="LTAI.AI.ToolDomainAttribute" Dynamic="Required All" />
@@ -54,36 +33,23 @@
     <Type Name="LTAI.Agent.Vector.NodeRow" Dynamic="Required All" Serialize="Required All" />
     <Type Name="LTAI.Agent.Vector.EdgeRow" Dynamic="Required All" Serialize="Required All" />
     <Type Name="LTAI.Agent.Vector.DocRow" Dynamic="Required All" Serialize="Required All" />
-    <Type Name="LTAI.Agent.Vector.VersionRow" Dynamic="Required All" Serialize="Required All" />
-    <Type Name="LTAI.Agent.Vector.QualityScoreRow" Dynamic="Required All" Serialize="Required All" />
 
     <!-- Chat agent types -->
     <Type Name="LTAI.Agent.Agents.ChatAgent" Dynamic="Required All" />
-    <Type Name="LTAI.Agent.Agents.LazyAIAgentProxy" Dynamic="Required All" />
 
     <!-- DI registrations -->
     <Type Name="LTAI.Agent.ServiceCollectionExtensions" Dynamic="Required All" />
     <Type Name="LTAI.Agent.Agents.AgentBuilder" Dynamic="Required All" />
-    <Type Name="LTAI.Agent.Agents.AgentDefinitionLoader" Dynamic="Required All" />
 
     <!-- Workflow types -->
-    <Type Name="LTAI.Agent.Workflows.*" Dynamic="Required All" />
     <Type Name="LTAI.Agent.Workflows.AgentWorkflows" Dynamic="Required All" />
     <Type Name="LTAI.Agent.Workflows.DecisionTreeRouter" Dynamic="Required All" />
     <Type Name="LTAI.Agent.Workflows.YAMLWorkflowRegistry" Dynamic="Required All" />
 
     <!-- Config types -->
     <Type Name="LTAI.Core.Configuration.LTAIOptions" Dynamic="Required All" Serialize="Required All" />
-    <Type Name="LTAI.Core.Configuration.AutoTuneConfig" Dynamic="Required All" Serialize="Required All" />
 
     <!-- Session/persistence types -->
     <Type Name="LTAI.Core.Session.SessionMeta" Dynamic="Required All" Serialize="Required All" />
-
-    <!-- DurableTask types (internal reflection) -->
-    <Assembly Name="Microsoft.DurableTask" Dynamic="Required All" />
-
-    <!-- External AI model providers (resolved dynamically by config) -->
-    <Assembly Name="DeepSeek" Dynamic="Required All" />
-    <Assembly Name="SiliconFlow" Dynamic="Required All" />
   </Application>
 </Directives>
