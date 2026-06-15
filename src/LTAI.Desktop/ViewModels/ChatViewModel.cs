@@ -58,6 +58,7 @@ public partial class ChatViewModel : ObservableObject
         Messages.Add(new ChatMessage("user", query));
         IsSending = true;
 
+        _cts?.Dispose();
         _cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
 
         var sb = new StringBuilder();
@@ -104,6 +105,7 @@ public partial class ChatViewModel : ObservableObject
     private void Cancel()
     {
         _cts?.Cancel();
-        IsSending = false;
+        _cts?.Dispose();
+        _cts = null;
     }
 }

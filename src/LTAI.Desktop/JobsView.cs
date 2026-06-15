@@ -53,6 +53,7 @@ public sealed class JobsView : UserControl
         RefreshList();
         _refreshTimer = new DispatcherTimer(TimeSpan.FromSeconds(2), DispatcherPriority.Background, (_, _) => RefreshList());
         _refreshTimer.Start();
+        DetachedFromVisualTree += (_, _) => _refreshTimer?.Stop();
     }
 
     private void RefreshList()

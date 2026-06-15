@@ -66,8 +66,12 @@ public sealed class SalienceBudgetCompressor
         if (!string.IsNullOrEmpty(query) && !string.IsNullOrEmpty(content))
         {
             var queryTerms = query.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-            var matchCount = queryTerms.Count(q =>
-                content.Contains(q, StringComparison.OrdinalIgnoreCase));
+            var matchCount = 0;
+            foreach (var term in queryTerms)
+            {
+                if (content.Contains(term, StringComparison.OrdinalIgnoreCase))
+                    matchCount++;
+            }
             if (queryTerms.Length > 0)
                 relevanceBoost = (double)matchCount / queryTerms.Length * 0.3;
         }

@@ -6,6 +6,9 @@ namespace LTAI.TUI.Rendering;
 
 internal sealed class FramebufferRenderer : IDisposable
 {
+    private const int MaxWidth = 300;
+    private const int MaxHeight = 200;
+
     private Cell[,] _prev;
     private Cell[,] _curr;
     private int _width;
@@ -28,10 +31,8 @@ internal sealed class FramebufferRenderer : IDisposable
 
     public FramebufferRenderer()
     {
-        _width = Math.Max(1, SafeWindowWidth);
-        _height = Math.Max(1, SafeWindowHeight);
-        _prev = new Cell[_height, _width];
-        _curr = new Cell[_height, _width];
+        _prev = new Cell[MaxHeight, MaxWidth];
+        _curr = new Cell[MaxHeight, MaxWidth];
     }
 
     private static int SafeWindowWidth
@@ -57,19 +58,15 @@ internal sealed class FramebufferRenderer : IDisposable
         int h = SafeWindowHeight;
         if (w < 1) w = 1;
         if (h < 1) h = 1;
-        if (w != _width || h != _height)
-        {
-            _width = w;
-            _height = h;
-            _prev = new Cell[_height, _width];
-            _curr = new Cell[_height, _width];
-        }
+        if (w > MaxWidth) w = MaxWidth;
+        if (h > MaxHeight) h = MaxHeight;
+        _width = w;
+        _height = h;
 
         Array.Clear(_curr, 0, _curr.Length);
 
         var capabilities = AnsiConsole.Console.Profile.Capabilities;
-        var termSize = new Size(_width, _height);
-        var options = new RenderOptions(capabilities, termSize);
+        var options = new RenderOptions(capabilities, new Size(_width, _height));
         var segments = renderable.Render(options, _width);
 
         WriteSegments(segments);
@@ -82,12 +79,14 @@ internal sealed class FramebufferRenderer : IDisposable
 
     private void WriteSegments(IEnumerable<Segment> segments)
     {
-        var rows = new List<List<Cell>>() { new() };
+        int row = 0, col = 0;
         foreach (var seg in segments)
         {
             if (seg.IsLineBreak)
             {
-                rows.Add([]);
+                row++;
+                col = 0;
+                if (row >= _height) break;
                 continue;
             }
             if (seg.IsControlCode) continue;
@@ -96,28 +95,16 @@ internal sealed class FramebufferRenderer : IDisposable
             var bg = seg.Style.Background;
             foreach (char c in seg.Text)
             {
-                var row = rows[^1];
-                if (row.Count >= _width)
+                if (col >= _width)
                 {
-                    rows.Add([]);
-                    row = rows[^1];
+                    row++;
+                    col = 0;
+                    if (row >= _height) break;
                 }
-                row.Add(new Cell { Char = c, Foreground = fg, Background = bg });
+                _curr[row, col] = new Cell { Char = c, Foreground = fg, Background = bg };
+                col++;
             }
         }
-
-        int count = Math.Min(rows.Count, _height);
-        int srcStart = rows.Count - count;
-
-        for (int r = 0; r < count; r++)
-        {
-            int srcR = srcStart + r;
-            int numCols = Math.Min(rows[srcR].Count, _width);
-            for (int c = 0; c < _width; c++)
-                _curr[r, c] = c < numCols ? rows[srcR][c] : default;
-        }
-        for (int r = count; r < _height; r++)
-            Array.Clear(_curr, r * _width, _width);
     }
 
     private void FlushDiff()
@@ -158,7 +145,11 @@ internal sealed class FramebufferRenderer : IDisposable
             while (j < to && SameStyle(_curr[row, j], cell))
                 j++;
 
-            sb.Append($"\u001b[{row + 1};{i + 1}H");
+            sb.Append("\u001b[");
+            sb.Append(row + 1);
+            sb.Append(';');
+            sb.Append(i + 1);
+            sb.Append('H');
             AppendStyle(sb, cell.Foreground, cell.Background);
             for (int k = i; k < j; k++)
                 sb.Append(_curr[row, k].Char);
@@ -173,9 +164,25 @@ internal sealed class FramebufferRenderer : IDisposable
     private static void AppendStyle(StringBuilder sb, Color? fg, Color? bg)
     {
         if (fg.HasValue)
-            sb.Append($"\u001b[38;2;{fg.Value.R};{fg.Value.G};{fg.Value.B}m");
+        {
+            sb.Append("\u001b[38;2;");
+            sb.Append(fg.Value.R);
+            sb.Append(';');
+            sb.Append(fg.Value.G);
+            sb.Append(';');
+            sb.Append(fg.Value.B);
+            sb.Append('m');
+        }
         if (bg.HasValue)
-            sb.Append($"\u001b[48;2;{bg.Value.R};{bg.Value.G};{bg.Value.B}m");
+        {
+            sb.Append("\u001b[48;2;");
+            sb.Append(bg.Value.R);
+            sb.Append(';');
+            sb.Append(bg.Value.G);
+            sb.Append(';');
+            sb.Append(bg.Value.B);
+            sb.Append('m');
+        }
     }
 
     public void Shutdown()

@@ -58,14 +58,14 @@ public sealed class RagContextStep : IPipelineStep
         {
             _logger.LogDebug("RagContextStep: extracting memory from request");
 
-            // Step 1: Extract facts from current turn (Fast Path)
+            // Step 1: Extract facts from current turn (Fast Path — run regardless of graph availability)
             await _memoryExtractor.ExtractFromTurnAsync(
                 context.Request,
                 entityId: context.TraceId,
                 ct: context.CancellationToken)
                 .ConfigureAwait(false);
 
-            // Step 2: Intent-aware graph retrieval
+            // Step 2: Intent-aware graph retrieval (only if graph infrastructure is available)
             if (_traverser != null && _compressor != null && _multiGraph != null)
             {
                 var intent = _queryClassifier?.ClassifyIntent(context.Request)

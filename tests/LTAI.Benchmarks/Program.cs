@@ -310,3 +310,59 @@ public class LocalEmbedderBenchmarks
         return _embedder.GenerateBatch(_batch128).Count;
     }
 }
+
+/// <summary>
+/// FastEmb (pure-math embedding) benchmark — no ONNX dependency.
+/// Measures LocalEmbedder.FastEmb throughput for CPU-only routing scenarios.
+/// Run with: dotnet run -c Release --project tests/LTAI.Benchmarks -- bdn
+/// </summary>
+[MemoryDiagnoser]
+[MediumRunJob]
+public class FastEmbBenchmarks
+{
+    private LTAI.AI.EmbeddingClient _client = null!;
+    private string[] _batch8 = null!;
+    private string[] _batch32 = null!;
+
+    [GlobalSetup]
+    public void Setup()
+    {
+        var httpFactory = new StubHttpClientFactory();
+        _client = new LTAI.AI.EmbeddingClient(
+            httpFactory, local: null, logger: null, remoteCache: null);
+        _batch8 = Enumerable.Range(0, 8).Select(i => $"search query {i} about code analysis").ToArray();
+        _batch32 = Enumerable.Range(0, 32).Select(i => $"how to implement feature {i} in C#").ToArray();
+    }
+
+    [Benchmark(Baseline = true)]
+    public async Task<float[]> GenerateAsync_Single()
+    {
+        return await _client.GenerateAsync("C# async await parallel programming patterns");
+    }
+
+    [Benchmark]
+    public async Task<float[]> GenerateAsync_LongText()
+    {
+        return await _client.GenerateAsync(string.Join(" ",
+            Enumerable.Repeat("machine learning neural network deep learning transformer attention mechanism", 20)));
+    }
+
+    [Benchmark]
+    public async Task<int> GenerateBatchAsync_8()
+    {
+        var vecs = await _client.GenerateBatchAsync(_batch8);
+        return vecs.Count();
+    }
+
+    [Benchmark]
+    public async Task<int> GenerateBatchAsync_32()
+    {
+        var vecs = await _client.GenerateBatchAsync(_batch32);
+        return vecs.Count();
+    }
+}
+
+file sealed class StubHttpClientFactory : System.Net.Http.IHttpClientFactory
+{
+    public System.Net.Http.HttpClient CreateClient(string name) => new();
+}

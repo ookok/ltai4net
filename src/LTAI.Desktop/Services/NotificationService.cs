@@ -19,7 +19,14 @@ public sealed class NotificationService
         var entry = new DesktopNotification(message, level, DateTime.UtcNow);
         _queue.Enqueue(entry);
         while (_queue.Count > MaxEntries && _queue.TryDequeue(out _)) { }
-        OnNotification?.Invoke(entry);
+        var handler = OnNotification;
+        if (handler != null)
+        {
+            foreach (Action<DesktopNotification> h in handler.GetInvocationList())
+            {
+                try { h(entry); } catch { }
+            }
+        }
     }
 
     public DesktopNotification? Dequeue()

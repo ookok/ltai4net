@@ -28,14 +28,11 @@ public class IndexQueueWorkerTests
     }
 
     [Fact]
-    public async Task IndexDirectory_NonExistent_ReturnsZero()
+    public async Task TaskQueue_Construction_Works()
     {
         await using var queue = new TaskQueue();
-        // Use a mock instead — just verify the API surface
-        var logger = NullLogger<IndexQueueWorker>.Instance;
-        // Can't construct IndexQueueWorker without real DocumentIndexer
-        // This test validates the constructor contract
-        Assert.True(true);
+        Assert.NotNull(queue);
+        Assert.Equal(0, queue.EnqueuedCount);
     }
 }
 

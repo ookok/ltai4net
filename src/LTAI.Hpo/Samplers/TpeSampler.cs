@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 
@@ -20,6 +21,9 @@ public sealed class TpeSampler : ISampler
     private readonly Random _rng;
     private readonly double _gamma;
 
+    private readonly ConcurrentDictionary<string, (List<TrialRecord> Trials, DateTime CachedAt)> _completedCache = new();
+    private static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(5);
+
     public TpeSampler(int? seed = null, double gamma = 0.25)
     {
         _seed = seed ?? Environment.TickCount;
@@ -27,14 +31,39 @@ public sealed class TpeSampler : ISampler
         _gamma = gamma;
     }
 
-    public float SampleFloat(Trial trial, string name, float low, float high, bool log)
+    private List<TrialRecord> GetCompletedTrials(Trial trial)
     {
         var store = trial.Store;
-        // HPO sampler interface is sync; Task.Run avoids deadlocking on async store.
-        var completed = store == null ? null : Task.Run(async () => await store.LoadTrialsAsync(trial.StudyName).ConfigureAwait(false)).GetAwaiter().GetResult()
-            .Where(t => t.State is TrialState.Completed or TrialState.Pruned).ToList();
+        if (store == null) return new List<TrialRecord>();
 
-        if (completed == null || completed.Count < 3)
+        var now = DateTime.UtcNow;
+        if (_completedCache.TryGetValue(trial.StudyName, out var cached) &&
+            (now - cached.CachedAt) < CacheTtl)
+            return cached.Trials;
+
+        List<TrialRecord> completed;
+        try
+        {
+            completed = Task.Run(async () =>
+            {
+                var records = await store.LoadTrialsAsync(trial.StudyName).ConfigureAwait(false);
+                return records.Where(t => t.State is TrialState.Completed or TrialState.Pruned).ToList();
+            }).GetAwaiter().GetResult();
+        }
+        catch
+        {
+            completed = new List<TrialRecord>();
+        }
+
+        _completedCache[trial.StudyName] = (completed, now);
+        return completed;
+    }
+
+    public float SampleFloat(Trial trial, string name, float low, float high, bool log)
+    {
+        var completed = GetCompletedTrials(trial);
+
+        if (completed.Count < 3)
         {
             if (log)
             {
@@ -107,12 +136,9 @@ public sealed class TpeSampler : ISampler
 
     public T SampleCategorical<T>(Trial trial, string name, T[] choices) where T : notnull
     {
-        var store = trial.Store;
-        // HPO sampler interface is sync; Task.Run avoids deadlocking on async store.
-        var completed = store == null ? null : Task.Run(async () => await store.LoadTrialsAsync(trial.StudyName).ConfigureAwait(false)).GetAwaiter().GetResult()
-            .Where(t => t.State is TrialState.Completed or TrialState.Pruned).ToList();
+        var completed = GetCompletedTrials(trial);
 
-        if (completed == null || completed.Count < 3)
+        if (completed.Count < 3)
             return choices[_rng.Next(choices.Length)];
 
         var counts = new Dictionary<T, (int Good, int Bad)>();

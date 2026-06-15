@@ -1,3 +1,4 @@
+using System.Text;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -54,20 +55,84 @@ public sealed class FactExtractor
             var text = response.Text?.Trim();
             if (string.IsNullOrEmpty(text)) return [];
 
-            var facts = new List<string>();
-            foreach (var line in text.Split(['\n', '\r'], StringSplitOptions.RemoveEmptyEntries))
-            {
-                var trimmed = line.Trim().TrimStart('-', '*', ' ', '\t', '0', '1', '2', '3', '.');
-                if (trimmed.Length > 5 && !trimmed.Contains("Extract") && !trimmed.Contains("fact"))
-                    facts.Add(trimmed);
-            }
-
-            return facts;
+            return ParseFactLines(text);
         }
         catch (Exception ex)
         {
             _logger?.LogDebug(ex, "FactExtractor: extraction failed");
             return [];
         }
+    }
+
+    /// <summary>
+    /// Batch version: extract 1-2 facts from each of multiple contents in a single LLM call.
+    /// Reduces LLM calls from O(N) to O(1) for multi-match turns.
+    /// </summary>
+    public async Task<IReadOnlyList<string>> ExtractFactsBatchAsync(
+        IReadOnlyList<string> contents, CancellationToken ct = default)
+    {
+        if (_l3Client == null || contents.Count == 0) return [];
+        if (contents.Count == 1)
+            return await ExtractFactsAsync(contents[0], ct).ConfigureAwait(false);
+
+        try
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("For each text segment below, extract exactly ONE atomic fact.");
+            sb.AppendLine("Each fact must be a standalone sentence. Reply with one fact per line.");
+            sb.AppendLine("Use a blank line between segments. Do not number them.");
+            sb.AppendLine();
+
+            for (int i = 0; i < contents.Count; i++)
+            {
+                if (contents[i].Length < 20) { sb.AppendLine(); continue; }
+                sb.AppendLine($"Segment {i + 1}:");
+                sb.AppendLine(contents[i]);
+                sb.AppendLine();
+            }
+
+            var messages = new List<ChatMessage> { new(ChatRole.User, sb.ToString()) };
+            var response = await _l3Client.GetResponseAsync(
+                messages,
+                new ChatOptions { Temperature = 0f, MaxOutputTokens = Math.Min(300, contents.Count * 80) },
+                ct).ConfigureAwait(false);
+
+            var text = response.Text?.Trim();
+            if (string.IsNullOrEmpty(text)) return [];
+
+            // Split by blank lines as segment boundaries
+            var segments = text.Split(["\n\n", "\r\n\r\n"], StringSplitOptions.RemoveEmptyEntries);
+            if (segments.Length == 0) return ParseFactLines(text).Take(1).ToList();
+
+            var results = new List<string>(contents.Count);
+            for (int i = 0; i < Math.Min(contents.Count, segments.Length); i++)
+            {
+                var lines = ParseFactLines(segments[i]);
+                results.Add(lines.FirstOrDefault() ?? "");
+            }
+
+            // Pad with empty strings for any skipped segments
+            while (results.Count < contents.Count)
+                results.Add("");
+
+            return results;
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogDebug(ex, "FactExtractor: batch extraction failed");
+            return [];
+        }
+    }
+
+    private static List<string> ParseFactLines(string text)
+    {
+        var facts = new List<string>();
+        foreach (var line in text.Split(['\n', '\r'], StringSplitOptions.RemoveEmptyEntries))
+        {
+            var trimmed = line.Trim().TrimStart('-', '*', ' ', '\t', '0', '1', '2', '3', '.');
+            if (trimmed.Length > 5 && !trimmed.Contains("Extract") && !trimmed.Contains("fact"))
+                facts.Add(trimmed);
+        }
+        return facts;
     }
 }

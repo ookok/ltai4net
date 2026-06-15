@@ -223,7 +223,9 @@ public sealed class TreeSitterParser : IDisposable
     public void Dispose()
     {
         foreach (var lang in _languages.Values)
-            lang.Dispose();
-        _parser.Dispose();
+        {
+            try { lang.Dispose(); } catch { }
+        }
+        try { _parser.Dispose(); } catch { }
     }
 }

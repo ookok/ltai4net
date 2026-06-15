@@ -21,12 +21,11 @@ public sealed partial class JobsViewModel : ViewModelBase
 
     public sealed record JobItem(string Id, string Status, string Command, string? ExitCode, bool IsRunning);
 
-    public JobsViewModel(LTAIService? svc = null)
+    public JobsViewModel(LTAIService? svc = null, BackgroundJobService? bgjs = null)
     {
-        if (svc == null) return;
-        try { _bgjs = svc.Chat.GetType().GetField("_bgjs",
+        _bgjs = bgjs ?? svc?.Chat.GetType().GetField("_bgjs",
             System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)?
-            .GetValue(svc.Chat) as BackgroundJobService; } catch { }
+            .GetValue(svc.Chat) as BackgroundJobService;
     }
 
     public void Refresh()

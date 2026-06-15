@@ -56,6 +56,9 @@ public sealed class ProxyService : IDisposable
             await _warp.DisconnectAsync();
     }
 
+    private static readonly SemaphoreSlim s_handlerSemaphore = new(
+        Math.Max(1, int.TryParse(Environment.GetEnvironmentVariable("LTAI_PROXY_MAX_CONN"), out var m) ? m : 100));
+
     private async Task AcceptLoopAsync(CancellationToken ct)
     {
         while (!ct.IsCancellationRequested)
@@ -66,9 +69,15 @@ public sealed class ProxyService : IDisposable
                 var captured = client;
                 _ = Task.Run(async () =>
                 {
-                    try { await HandleClientAsync(captured, ct).ConfigureAwait(false); }
+                    if (!await s_handlerSemaphore.WaitAsync(TimeSpan.FromSeconds(30)))
+                    { captured.Dispose(); return; }
+                    try
+                    {
+                        await HandleClientAsync(captured, ct).ConfigureAwait(false);
+                    }
                     catch (Exception ex) when (ex is not OperationCanceledException)
                     { System.Diagnostics.Debug.WriteLine($"[ProxyService] Client handler failed: {ex.Message}"); }
+                    finally { s_handlerSemaphore.Release(); }
                 });
             }
             catch when (ct.IsCancellationRequested) { break; }

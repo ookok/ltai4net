@@ -110,7 +110,7 @@ public class AutomationTests
     [Fact]
     public async Task TC01_ListDirectory()
     {
-        var r = await SendAsync("列出 F:\\mhzyapp\\ltai4net\\dist\\完本\\ 目录下的所有文件");
+        var r = await SendAsync("列出 dist/完本/ 目录下的所有文件");
         AssertOk(r);
     }
 

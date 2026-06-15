@@ -61,7 +61,7 @@ public sealed partial class KgStore : IDisposable
 
     private readonly MemoryCache _resultCache = new(new MemoryCacheOptions
     {
-        SizeLimit = 256,
+        SizeLimit = 1024,
         ExpirationScanFrequency = TimeSpan.FromMinutes(2)
     });
     private int _ftsCacheStamp;
@@ -1420,7 +1420,7 @@ public sealed partial class KgStore : IDisposable
         finally { _hnswLock.ExitWriteLock(); }
 
         // Save HNSW snapshot for fast restart
-        _ = Task.Run(() => { try { SaveHnswSnapshot(); } catch { } });
+        try { SaveHnswSnapshot(); } catch { }
     }
 
     private string HnswSnapshotPath => _dbPath + ".hnsw";

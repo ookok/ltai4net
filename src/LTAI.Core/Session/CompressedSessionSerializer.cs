@@ -21,10 +21,13 @@ public sealed class CompressedSessionSerializer : ISessionSerializer
     {
         var innerData = _inner.Serialize(state);
         var bytes = Encoding.UTF8.GetBytes(innerData);
-        using var output = new MemoryStream();
+        using var output = new MemoryStream(bytes.Length);
         using (var gzip = new GZipStream(output, _level, leaveOpen: true))
             gzip.Write(bytes);
-        return Convert.ToBase64String(output.ToArray());
+        output.Flush();
+        if (!output.TryGetBuffer(out var buffer))
+            return Convert.ToBase64String(output.ToArray());
+        return Convert.ToBase64String(buffer.Array!, buffer.Offset, buffer.Count);
     }
 
     public JsonElement Deserialize(string data)

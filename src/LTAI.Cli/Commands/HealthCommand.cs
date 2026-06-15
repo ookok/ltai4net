@@ -6,6 +6,8 @@ namespace LTAI.Cli;
 
 partial class Program
 {
+    private static readonly HttpClient s_healthHttp = new() { Timeout = TimeSpan.FromSeconds(3) };
+
     internal static async Task<int> HandleHealth()
     {
         AnsiConsole.MarkupLine("[bold]🔍 LTAI 系统健康检查[/]\n");
@@ -49,7 +51,8 @@ partial class Program
                 AnsiConsole.MarkupLine($"{(freeGb > 1 ? "[green]" : "[yellow]")}  💾 磁盘[/] — {drive.Name} 剩余 {freeGb:F1}GB");
             }
         }
-        catch { }
+        catch (IOException) { AnsiConsole.MarkupLine("[yellow]  ⚠️  磁盘[/] — 无法检查"); }
+        catch (UnauthorizedAccessException) { AnsiConsole.MarkupLine("[yellow]  ⚠️  磁盘[/] — 权限不足"); }
 
         // Runtime
         CliHelpers.UsageTrackerBar();
@@ -57,8 +60,7 @@ partial class Program
         // Network
         try
         {
-            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
-            using var resp = await http.GetAsync("https://api.deepseek.com/v1/models").ConfigureAwait(false);
+            using var resp = await s_healthHttp.GetAsync("https://api.deepseek.com/v1/models").ConfigureAwait(false);
             AnsiConsole.MarkupLine(resp.IsSuccessStatusCode
                 ? $"[green]  ✅ 网络[/] — DeepSeek API OK ({(int)resp.StatusCode})"
                 : $"[yellow]  ⚠️  网络[/] — DeepSeek 返回 {(int)resp.StatusCode}");

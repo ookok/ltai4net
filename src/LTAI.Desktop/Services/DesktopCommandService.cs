@@ -170,9 +170,11 @@ public sealed class DesktopCommandService
             };
             using var p = new Process { StartInfo = psi };
             p.Start();
-            var output = p.StandardOutput.ReadToEnd().Trim();
-            var error = p.StandardError.ReadToEnd().Trim();
+            var stdoutTask = p.StandardOutput.ReadToEndAsync();
+            var stderrTask = p.StandardError.ReadToEndAsync();
             p.WaitForExit(60_000);
+            var output = stdoutTask.Result.Trim();
+            var error = stderrTask.Result.Trim();
             var result = p.ExitCode == 0
                 ? $"✅ git {args}\n\n{output}"
                 : $"❌ git {args}\n\n{error}";

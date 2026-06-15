@@ -23,12 +23,11 @@ public sealed class AdaptiveBeamTraverser
 
     public List<TraversalResult> Traverse(string entryNodeId, QueryIntent intent, int topK = 10)
     {
-        var weights = EdgeWeights[intent];
+        if (!EdgeWeights.TryGetValue(intent, out var weights))
+            weights = EdgeWeights[QueryIntent.What]; // defensive fallback
+
         var visited = new HashSet<string> { entryNodeId };
-        var beam = new List<(string NodeId, double Score)>
-        {
-            (entryNodeId, 1.0)
-        };
+        var beam = new List<(string NodeId, double Score)> { (entryNodeId, 1.0) };
         var results = new List<TraversalResult>();
 
         for (int depth = 0; depth < MaxDepth && beam.Count > 0 && results.Count < topK; depth++)

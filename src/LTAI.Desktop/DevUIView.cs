@@ -137,6 +137,7 @@ public sealed class DevUIView : UserControl
         _refreshTimer = new DispatcherTimer(TimeSpan.FromSeconds(3), DispatcherPriority.Background,
             (_, _) => RefreshSpans());
         _refreshTimer.Start();
+        DetachedFromVisualTree += (_, _) => _refreshTimer?.Stop();
     }
 
     private void ShowDetail(LTAIAgentCard card)

@@ -139,8 +139,6 @@ public sealed partial class TextPadView : UserControl
         _editor.TextArea.TextView.CurrentLineBorder = new Pen(LtaiTheme.Sbb(LtaiTheme.CurrentLineBorder), 1);
         _editor.TextArea.SelectionBrush = LtaiTheme.Sbb(LtaiTheme.SelectionBg);
         _editor.TextArea.SelectionCornerRadius = 2;
-        _editor.TextArea.SelectionBrush = LtaiTheme.Sbb(LtaiTheme.SelectionBg);
-        _editor.TextArea.SelectionCornerRadius = 2;
 
         // 选中内容追踪（Smart Context Injection）
         _editor.TextArea.SelectionChanged += (_, _) =>
@@ -598,6 +596,10 @@ public sealed partial class TextPadView : UserControl
         await RunShell(cmd);
     }
 
+    private static readonly Regex s_errorRx = new(
+        @"^\s*([^(\]]+?)\((\d+)(?:,\d+)?\)\s*:\s*(error|warning)\s+(\w+\d+)\s*:\s*(.+)",
+        RegexOptions.Compiled | RegexOptions.Multiline);
+
     private async Task RunShell(string command)
     {
         try
@@ -615,9 +617,11 @@ public sealed partial class TextPadView : UserControl
             };
             using var process = new Process { StartInfo = psi };
             process.Start();
-            var output = await process.StandardOutput.ReadToEndAsync();
-            var error = await process.StandardError.ReadToEndAsync();
+            var outputTask = process.StandardOutput.ReadToEndAsync();
+            var errorTask = process.StandardError.ReadToEndAsync();
             await process.WaitForExitAsync(CancellationToken.None);
+            var output = await outputTask;
+            var error = await errorTask;
             var result = process.ExitCode == 0 ? "✅ 成功" : "❌ 失败";
             _buildOutput.Text = $"{result} (exit={process.ExitCode})\n{command}\n\n{output}\n{error}".Trim();
             _statusBar.Text = $"{command}: {result}";
@@ -630,8 +634,7 @@ public sealed partial class TextPadView : UserControl
                 _errorFixBtn.IsVisible = true;
 
                 var problems = new List<(string file, int line, string msg)>();
-                var errorRx = new Regex(@"^\s*([^(\]]+?)\((\d+)(?:,\d+)?\)\s*:\s*(error|warning)\s+(\w+\d+)\s*:\s*(.+)", RegexOptions.Multiline);
-                foreach (Match m in errorRx.Matches(output + "\n" + error))
+                foreach (Match m in s_errorRx.Matches(output + "\n" + error))
                 {
                     var file = m.Groups[1].Value.Trim();
                     var line = int.Parse(m.Groups[2].Value);
@@ -648,16 +651,15 @@ public sealed partial class TextPadView : UserControl
         catch (Exception ex) { _buildOutput.Text = $"❌ 错误: {ex.Message}"; }
     }
 
-    private void RunFormat()
+    private async void RunFormat()
     {
         if (_currentFile == null) { _statusBar.Text = "请先打开一个文件"; return; }
         try
         {
             var ext = Path.GetExtension(_currentFile);
-            if (ext == ".cs") RunShell("dotnet format");
+            if (ext == ".cs") { await RunShell("dotnet format"); return; }
             else if (ext is ".js" or ".ts" or ".json" or ".md" or ".yaml" or ".yml")
             {
-                // 尝试用 prettier（如果可用）
                 var psi = new ProcessStartInfo("npx", $"prettier --write \"{_currentFile}\"")
                 {
                     WorkingDirectory = _rootDir,
@@ -668,7 +670,7 @@ public sealed partial class TextPadView : UserControl
                 };
                 using var process = new Process { StartInfo = psi };
                 process.Start();
-                process.WaitForExit(30_000);
+                await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(30));
                 if (process.ExitCode == 0)
                 {
                     using var fs = new FileStream(_currentFile, FileMode.Open, FileAccess.Read, FileShare.Read, 4096, FileOptions.SequentialScan);

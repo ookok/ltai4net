@@ -15,12 +15,13 @@ public static class ChatMessageRenderer
     private static readonly Regex CitationRegex = new(@"\[@([^\]]+)\]\(line:(\d+)\)|@([^\s:,\)]+):(\d+)\b");
     private static readonly Regex FenceStartRx = new(@"^```(\w*)$", RegexOptions.Multiline);
     private static readonly Regex FenceEndRx = new(@"^```$", RegexOptions.Multiline);
-    private static bool _fenceWarningShown;
+    private static volatile bool _fenceWarningShown;
 
     // LRU cache for rendered responses (keyed by hash of content)
     private const int MaxCacheEntries = 64;
-    private static readonly ConcurrentDictionary<long, List<Avalonia.Controls.Control>> _renderCache = new();
+    private static readonly ConcurrentDictionary<long, List<Control>> _renderCache = new();
     private static readonly ConcurrentQueue<long> _cacheOrder = new();
+    private static readonly object _cacheLock = new();
 
     private static long ContentHash(string text)
     {
@@ -36,12 +37,15 @@ public static class ChatMessageRenderer
         return (long)hash;
     }
 
-    private static void CacheAdd(long key, List<Avalonia.Controls.Control> children)
+    private static void CacheAdd(long key, List<Control> children)
     {
-        _renderCache[key] = children;
-        _cacheOrder.Enqueue(key);
-        while (_cacheOrder.Count > MaxCacheEntries && _cacheOrder.TryDequeue(out var old))
-            _renderCache.TryRemove(old, out _);
+        lock (_cacheLock)
+        {
+            _renderCache[key] = children;
+            _cacheOrder.Enqueue(key);
+            while (_cacheOrder.Count > MaxCacheEntries && _cacheOrder.TryDequeue(out var old))
+                _renderCache.TryRemove(old, out _);
+        }
     }
 
     /// <summary>Check if markdown has an unclosed code fence (for streaming awareness).</summary>
@@ -335,6 +339,7 @@ public static class ChatMessageRenderer
                 localPath = Path.Combine(Path.GetTempPath(), $"ltai_img_{Guid.NewGuid():N}{ext}");
                 var bytes = await resp.Content.ReadAsByteArrayAsync();
                 await File.WriteAllBytesAsync(localPath, bytes);
+                _ = Task.Delay(60_000).ContinueWith(_ => { try { File.Delete(localPath); } catch { } });
             }
             else
             {
@@ -382,6 +387,7 @@ public static class ChatMessageRenderer
         var codeStack = new StackPanel();
         const string lang = "csharp";
         var keywords = MarkdownRenderer.GetKeywords(lang);
+        var kws = keywords.Length > 0 ? new HashSet<string>(keywords, StringComparer.Ordinal) : null;
         var codeLines = code.Split('\n');
         var linePad = codeLines.Length.ToString().Length;
         const int maxLines = 50;
@@ -400,7 +406,7 @@ public static class ChatMessageRenderer
                 Margin = new(0, 0, 8, 0),
             });
             var tb = new TextBlock { FontFamily = LtaiTheme.CodeFont, FontSize = 12, TextWrapping = TextWrapping.Wrap };
-            var tokens = MarkdownRenderer.TokenizeLine(codeLines[li], keywords);
+            var tokens = MarkdownRenderer.TokenizeLine(codeLines[li], kws);
             if (tokens.Count > 0)
                 foreach (var (text, color) in tokens)
                     tb.Inlines!.Add(new Avalonia.Controls.Documents.Run { Text = text, Foreground = LtaiTheme.Sbb(color) });

@@ -36,9 +36,11 @@ public partial class MainWindow : Window
     private sealed record ViewEntry(string Name, string Shortcut, Control View);
     private readonly List<ViewEntry> _views = [];
 
-    private static void Log(string msg) =>
-        File.AppendAllText("desktop-startup.log",
-            $"[{DateTime.UtcNow:O}] MainWindow: {msg}\n");
+    private static void Log(string msg)
+    {
+        var m = $"[{DateTime.UtcNow:O}] MainWindow: {msg}\n";
+        _ = Task.Run(() => File.AppendAllText("desktop-startup.log", m));
+    }
 
     public MainWindow(LTAIService svc)
     {
@@ -623,24 +625,5 @@ public partial class MainWindow : Window
             default: handled = false; break;
         }
         if (handled) e.Handled = true;
-    }
-}
-
-/// <summary>Placeholder for views not yet implemented (Code, Config).</summary>
-public sealed class StubView : UserControl
-{
-    private readonly TextBlock _text;
-
-    public StubView(string title, object? svc = null)
-    {
-        _text = new TextBlock
-        {
-            Text = $"# {title}\n\n视图尚未实现。\n\n可用快捷键:\n- Ctrl+1: 仪表盘\n- Ctrl+2: 聊天\n- Ctrl+3: 代码\n- Ctrl+4: 技能\n- Ctrl+5: {title}",
-            Foreground = LtaiTheme.Sbb(LtaiTheme.TextSecondary),
-            FontSize = 14,
-            TextWrapping = TextWrapping.Wrap,
-            Margin = new(20),
-        };
-        Content = new ScrollViewer { Content = _text };
     }
 }

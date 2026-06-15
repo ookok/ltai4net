@@ -68,6 +68,7 @@ public sealed class TerminalView : UserControl
         Content = _root;
 
         _terminal.OutputUpdated += () => Dispatcher.UIThread.Post(RefreshOutput);
+        DetachedFromVisualTree += (_, _) => _terminal.Dispose();
     }
 
     public void Start() => _terminal.Start(workingDir: WorkingDirectory);

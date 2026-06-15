@@ -100,11 +100,16 @@ partial class Program
 
         try
         {
+            var resolved = Path.GetFullPath(filePath);
+            var workspace = Path.GetFullPath(Directory.GetCurrentDirectory());
+            if (!resolved.StartsWith(workspace + Path.DirectorySeparatorChar) &&
+                resolved != workspace)
+            { Error("Export path must be within the workspace directory"); return 1; }
             var json = JsonSerializer.Serialize(export, new JsonSerializerOptions { WriteIndented = true });
-            var dir = Path.GetDirectoryName(filePath);
+            var dir = Path.GetDirectoryName(resolved);
             if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-            File.WriteAllText(filePath, json);
-            AnsiConsole.MarkupLine($"[green]✅ Exported {export.Count} vars to {filePath.EscapeMarkup()}[/]");
+            File.WriteAllText(resolved, json);
+            AnsiConsole.MarkupLine($"[green]✅ Exported {export.Count} vars to {resolved.EscapeMarkup()}[/]");
             AnsiConsole.MarkupLine("[yellow]⚠️  Keep this file secure![/]");
             return 0;
         }
@@ -116,8 +121,17 @@ partial class Program
         if (string.IsNullOrWhiteSpace(filePath)) { Error("Usage: env import <file-path>"); return 1; }
         if (!File.Exists(filePath)) { Error($"File not found: {filePath}"); return 1; }
 
+        var resolved = Path.GetFullPath(filePath);
+        var workspace = Path.GetFullPath(Directory.GetCurrentDirectory());
+        if (!resolved.StartsWith(workspace + Path.DirectorySeparatorChar) &&
+            resolved != workspace)
+        { Error("Import path must be within the workspace directory"); return 1; }
+
+        var fileInfo = new FileInfo(resolved);
+        if (fileInfo.Length > 1_048_576) { Error("Import file exceeds 1MB limit"); return 1; }
+
         Dictionary<string, string>? import;
-        try { import = JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(filePath)); }
+        try { import = JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(resolved)); }
         catch (JsonException ex) { Error($"Invalid JSON: {ex.Message}"); return 1; }
 
         if (import == null || import.Count == 0) { AnsiConsole.MarkupLine("[yellow]No vars found.[/]"); return 1; }

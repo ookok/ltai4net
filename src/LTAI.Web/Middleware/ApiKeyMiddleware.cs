@@ -14,11 +14,12 @@ public sealed class ApiKeyMiddleware
     private readonly RequestDelegate _next;
     private readonly string? _configuredKey;
     private readonly byte[]? _configuredKeyBytes;    // cached for constant-time comparison
+    private readonly IConfiguration? _config;
 
     public ApiKeyMiddleware(RequestDelegate next, IConfiguration? config = null)
     {
         _next = next;
-        // Read API_KEY from env or config (but never from query string)
+        _config = config;
         _configuredKey = Environment.GetEnvironmentVariable("LTAI_API_KEY")
                       ?? config?["LTAI:ApiKey"];
         _configuredKeyBytes = _configuredKey != null
@@ -28,8 +29,9 @@ public sealed class ApiKeyMiddleware
 
     public async Task InvokeAsync(HttpContext context)
     {
-        // Skip auth for health check and swagger
+        // Skip auth for health checks and swagger
         if (context.Request.Path.StartsWithSegments("/health") ||
+            context.Request.Path.StartsWithSegments("/ready") ||
             context.Request.Path.StartsWithSegments("/swagger"))
         {
             await _next(context).ConfigureAwait(false);
@@ -41,7 +43,7 @@ public sealed class ApiKeyMiddleware
         {
             var allowDev = string.Equals(
                 Environment.GetEnvironmentVariable("LTAI_DEV_MODE"), "true", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(config?["LTAI:DevMode"], "true", StringComparison.OrdinalIgnoreCase);
+                || string.Equals(_config?["LTAI:DevMode"], "true", StringComparison.OrdinalIgnoreCase);
             if (!allowDev)
             {
                 context.Response.StatusCode = 401;

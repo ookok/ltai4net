@@ -1,4 +1,7 @@
 using System.Diagnostics;
+using System.Text;
+using System.Text.RegularExpressions;
+using System.Threading;
 using LTAI.Agent;
 using LTAI.Agent.Tools;
 using LTAI.Core.Session;
@@ -32,7 +35,6 @@ public sealed class MainWindow : Window
     private string _streamBuffer = "";
     private bool _chatStarted;
     private System.Threading.Timer? _statsTimer;
-    private readonly object _uiLock = new();
     private long _lastUIUpdate;
     private const int UI_THROTTLE_MS = 50;
 
@@ -60,6 +62,14 @@ public sealed class MainWindow : Window
     private string _agentMode = "build";
     private bool _isStreaming;
     private Editor ActiveInput => _chatStarted ? _chatInputBar : _inputBar;
+
+    private readonly StringBuilder _markdownCache = new(65536);
+    private int _aiMsgCachePos = -1;
+    private string _lastTodosRaw = "";
+    private long _lastActivity;
+    private static readonly Regex s_toolFileRegex = new(
+        @"(?:编辑|写入|创建)\s+`?([^\s`]+\.\w+)`?", 
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     public MainWindow(IApplication app, ChatAgent chat, SessionManager sessionMgr, string l1ModelLabel = "未配置模型", IServiceProvider? sp = null)
     {
@@ -286,7 +296,7 @@ public sealed class MainWindow : Window
         // Start background stats timer
         _statsTimer = new System.Threading.Timer(_ =>
         {
-            if (_chatStarted)
+            if (_chatStarted && (Stopwatch.GetTimestamp() - Volatile.Read(ref _lastActivity)) * 1000L / Stopwatch.Frequency < 30000)
                 _app.Invoke(() => RefreshStats());
         }, null, 2000, 2000);
 
@@ -462,6 +472,7 @@ public sealed class MainWindow : Window
 
         if (k != Key.Enter) return;
         k.Handled = true;
+        _lastActivity = Stopwatch.GetTimestamp();
         var text = ActiveInput.Text.Trim();
         if (string.IsNullOrEmpty(text)) return;
 
@@ -486,18 +497,19 @@ public sealed class MainWindow : Window
             AddMsg("You", text);
             _inputHistory.Add(text);
             _historyIndex = -1;
-            if (_streamCts != null) { _streamCts.Cancel(); _streamCts.Dispose(); }
+            if (_streamCts != null) CancelStream();
             _streamCts = new CancellationTokenSource();
             _ = StreamAsync(text, _streamCts.Token);
             _chatInputBar.Text = "";
             return;
         }
 
+        if (_isStreaming) return;
         _chatInputBar.Text = "";
         AddMsg("You", text);
         _inputHistory.Add(text);
         _historyIndex = -1;
-        if (_streamCts != null) { _streamCts.Cancel(); _streamCts.Dispose(); }
+        if (_streamCts != null) CancelStream();
         _streamCts = new CancellationTokenSource();
         _ = StreamAsync(text, _streamCts.Token);
     }
@@ -527,14 +539,19 @@ public sealed class MainWindow : Window
     private void AddMsg(string role, string md)
     {
         _conv.Add($"**{role}:** {md}");
-        _markdown.Text = string.Join("\n\n", _conv);
+        if (_markdownCache.Length > 0)
+            _markdownCache.Append("\n\n");
+        _markdownCache.Append($"**{role}:** {md}");
+        if (role == "AI")
+            _aiMsgCachePos = -1;
+        _markdown.Text = _markdownCache.ToString();
         _sidebarTokens.Text = $"消息: {_conv.Count}";
         RefreshStats();
     }
 
     private void UpdateMarkdown()
     {
-        _markdown.Text = string.Join("\n\n", _conv);
+        _markdown.Text = _markdownCache.ToString();
     }
 
     // ═══════════════════════════════════
@@ -547,12 +564,13 @@ public sealed class MainWindow : Window
         _sidebarCost.Text = $"费用: {LTAI.Core.Configuration.UsageTracker.CostDisplay}";
         _sidebarCache.Text = $"缓存: {LTAI.Core.Configuration.UsageTracker.CacheHitRate:F0}%";
 
-        // Refresh todo list
+        // Refresh todo list — only re-parse when raw string changed
         var todos = TaskTools.TodoList();
         if (todos == "No todos.")
             _sidebarTodos.Text = "";
-        else
+        else if (todos != _lastTodosRaw)
         {
+            _lastTodosRaw = todos;
             var todoLines = todos.Split('\n', StringSplitOptions.RemoveEmptyEntries)
                 .Where(l => l.StartsWith("|") && !l.StartsWith("| #") && !l.StartsWith("|---"))
                 .Select(l =>
@@ -588,6 +606,16 @@ public sealed class MainWindow : Window
     //  Streaming
     // ═══════════════════════════════════
 
+    private void CancelStream()
+    {
+        if (_streamCts != null)
+        {
+            _streamCts.Cancel();
+            _streamCts.Dispose();
+            _streamCts = null;
+        }
+    }
+
     private async Task StreamAsync(string input, CancellationToken ct)
     {
         var handle = _sessionMgr.CurrentHandle;
@@ -601,6 +629,10 @@ public sealed class MainWindow : Window
             RefreshStats();
         });
         _conv.Add("**AI:** ");
+        if (_markdownCache.Length > 0)
+            _markdownCache.Append("\n\n");
+        _aiMsgCachePos = _markdownCache.Length;
+        _markdownCache.Append("**AI:** ");
         UpdateMarkdown();
         var tokenCount = 0;
         try
@@ -615,8 +647,7 @@ public sealed class MainWindow : Window
                 // Track modified files
                 if (t.Contains("正在调用") && (t.Contains("Edit") || t.Contains("Write") || t.Contains("Create")))
                 {
-                    var fileMatch = System.Text.RegularExpressions.Regex.Match(_streamBuffer,
-                        @"(?:编辑|写入|创建)\s+`?([^\s`]+\.\w+)`?");
+                    var fileMatch = s_toolFileRegex.Match(_streamBuffer);
                     if (fileMatch.Success)
                     {
                         var filePath = fileMatch.Groups[1].Value;
@@ -633,6 +664,7 @@ public sealed class MainWindow : Window
                 if (elapsed >= UI_THROTTLE_MS || tokenCount % 3 == 0)
                 {
                     _lastUIUpdate = now;
+                    _lastActivity = now;
                     _app.Invoke(() =>
                     {
                         if (isToolMsg)
@@ -652,7 +684,12 @@ public sealed class MainWindow : Window
                         {
                             // Show blinking cursor during streaming
                             _conv[^1] = $"**AI:** {_streamBuffer}▊";
-                            _markdown.Text = string.Join("\n\n", _conv);
+                            if (_aiMsgCachePos >= 0)
+                            {
+                                _markdownCache.Length = _aiMsgCachePos;
+                                _markdownCache.Append($"**AI:** {_streamBuffer}▊");
+                            }
+                            _markdown.Text = _markdownCache.ToString();
                             // Auto-scroll to bottom
                             var ch = _markdown.GetContentSize().Height;
                             if (ch > 0)
@@ -663,20 +700,26 @@ public sealed class MainWindow : Window
             }
         }
         catch (OperationCanceledException) { }
-        catch (Exception ex) { _app.Invoke(() => AddMsg("System", $"⚠ {ex.Message}")); }
+        catch (Exception ex) { _aiMsgCachePos = -1; _app.Invoke(() => AddMsg("System", $"⚠ {ex.Message}")); }
         finally
         {
+            var cancelled = ct.IsCancellationRequested;
             _isStreaming = false;
             _app.Invoke(() =>
             {
                 _spinner.Visible = false;
                 _spinner.AutoSpin = false;
                 _toolStatus.Visible = false;
-                // Remove cursor and show final text
-                if (_conv.Count > 0)
+                // Skip destructive mutations if a new stream already started (this one was cancelled)
+                if (_conv.Count > 0 && !cancelled)
                 {
                     _conv[^1] = $"**AI:** {_streamBuffer}";
-                    _markdown.Text = string.Join("\n\n", _conv);
+                    if (_aiMsgCachePos >= 0)
+                    {
+                        _markdownCache.Length = _aiMsgCachePos;
+                        _markdownCache.Append($"**AI:** {_streamBuffer}");
+                    }
+                    _markdown.Text = _markdownCache.ToString();
                 }
                 _sidebarStatus.Text = "状态: 就绪";
                 RefreshStats();
@@ -694,12 +737,18 @@ public sealed class MainWindow : Window
         switch (cmd)
         {
             case "new":
+                CancelStream();
                 _conv.Clear();
+                _markdownCache.Clear();
+                _aiMsgCachePos = -1;
                 UpdateMarkdown();
                 _sidebarTokens.Text = "消息: 0";
                 return;
             case "clear":
+                CancelStream();
                 _conv.Clear();
+                _markdownCache.Clear();
+                _aiMsgCachePos = -1;
                 UpdateMarkdown();
                 _sidebarTokens.Text = "消息: 0";
                 return;
@@ -801,8 +850,15 @@ public sealed class MainWindow : Window
             if (h?.Messages is { Count: > 0 } msgs)
             {
                 _conv.Clear();
+                _markdownCache.Clear();
+                _aiMsgCachePos = -1;
                 foreach (var m in msgs)
-                    _conv.Add($"**{(m.Role == ChatRole.User ? "You" : "AI")}:** {m.Text ?? ""}");
+                {
+                    var line = $"**{(m.Role == ChatRole.User ? "You" : "AI")}:** {m.Text ?? ""}";
+                    _conv.Add(line);
+                    if (_markdownCache.Length > 0) _markdownCache.Append("\n\n");
+                    _markdownCache.Append(line);
+                }
                 _chatStarted = true;
                 _homePanel.Visible = false;
                 _chatPanel.Visible = true;
@@ -833,15 +889,13 @@ public sealed class MainWindow : Window
         try
         {
             if (!File.Exists(path)) return;
-            var json = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(path));
-            var ai = json?["LTAI"]?["AI"] as System.Text.Json.Nodes.JsonObject;
-            var l1Key = ai != null
-                ? ((System.Collections.Generic.IDictionary<string, System.Text.Json.Nodes.JsonNode?>)ai)
-                    .Keys.FirstOrDefault(k => string.Equals(k, "L1", StringComparison.OrdinalIgnoreCase))
-                : null;
-            var l1 = l1Key != null ? ai![l1Key] : null;
-            var provider = l1?["Provider"]?.GetValue<string>() ?? "";
-            var model = l1?["Model"]?.GetValue<string>() ?? "";
+            using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllBytes(path));
+            var root = doc.RootElement;
+            if (!root.TryGetProperty("LTAI", out var ltai)) return;
+            if (!ltai.TryGetProperty("AI", out var ai)) return;
+            if (!ai.TryGetProperty("L1", out var l1)) return;
+            var provider = l1.TryGetProperty("Provider", out var p) ? p.GetString() ?? "" : "";
+            var model = l1.TryGetProperty("Model", out var m) ? m.GetString() ?? "" : "";
             _modelLabelText = !string.IsNullOrEmpty(provider) ? $"L1: {provider} / {model}" : "未配置模型 (使用 /model 配置)";
             if (_homeModelLabel != null) _homeModelLabel.Text = _modelLabelText;
         }
@@ -863,8 +917,12 @@ public sealed class MainWindow : Window
                 _chatPanel.SetNeedsLayout();
                 _chatInputBar.SetFocus();
                 foreach (var m in msgs)
-                    _conv.Add($"**{(m.Role == ChatRole.User ? "You" : "AI")}:** {m.Text ?? ""}");
-                UpdateMarkdown();
+                {
+                    var line = $"**{(m.Role == ChatRole.User ? "You" : "AI")}:** {m.Text ?? ""}";
+                    _conv.Add(line);
+                    if (_markdownCache.Length > 0) _markdownCache.Append("\n\n");
+                    _markdownCache.Append(line);
+                }                UpdateMarkdown();
                 _sidebarTokens.Text = $"消息: {_conv.Count}";
             }
         }
@@ -881,9 +939,24 @@ public sealed class MainWindow : Window
                 WorkingDirectory = Directory.GetCurrentDirectory(),
             };
             using var p = Process.Start(psi);
-            var branch = p?.StandardOutput.ReadToEnd().Trim();
+            if (p == null) return "—";
+            p.WaitForExit(2000);
+            var branch = p.ExitCode == 0 ? p.StandardOutput.ReadToEnd().Trim() : "";
             return string.IsNullOrEmpty(branch) ? "—" : branch;
         }
         catch { return "—"; }
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            _statsTimer?.Dispose();
+            _statsTimer = null;
+            _streamCts?.Cancel();
+            _streamCts?.Dispose();
+            _streamCts = null;
+        }
+        base.Dispose(disposing);
     }
 }

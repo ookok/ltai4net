@@ -44,7 +44,7 @@ public sealed class WasmtimeSandbox : AIContextProvider
     private readonly Engine? _wasmEngine;
     private readonly bool _wasmAvailable;
     // Bounded WASM module cache (max 32 modules — each can be several MB)
-    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, Wasmtime.Module> _moduleCache = new(4, 32);
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, Wasmtime.Module> _moduleCache = new(8, 32);
     private static readonly int _moduleCacheMax = ReadEnvInt("LTAI_WASM_MODULE_CACHE_MAX", 32);
     private static int _moduleCount;
 

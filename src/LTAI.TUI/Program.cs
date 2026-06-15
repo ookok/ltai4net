@@ -20,6 +20,7 @@ namespace LTAI.TUI;
 public static class Program
 {
     private static string s_wtDownloadUrl = "http://mogoo.com.cn/Microsoft.WindowsTerminal_1.24.11321.0_x64.zip";
+    private static readonly HttpClient s_httpClient = new() { Timeout = TimeSpan.FromMinutes(5) };
 
     public static async Task Main(string[] args)
     {
@@ -116,15 +117,13 @@ public static class Program
         services.AddLTAIAI();
         services.AddLTAIAgent();
 
-        var sp = await Task.Run(() =>
+        ServiceProvider sp;
+        try { sp = services.BuildServiceProvider(); }
+        catch (Exception ex)
         {
-            try { return services.BuildServiceProvider(); }
-            catch (Exception ex)
-            {
-                AnsiConsole.MarkupLine($"[red]初始化失败:[/] {ex.Message.EscapeMarkup()}");
-                Console.ReadLine(); Environment.Exit(1); throw;
-            }
-        });
+            AnsiConsole.MarkupLine($"[red]初始化失败:[/] {ex.Message.EscapeMarkup()}");
+            Console.ReadLine(); Environment.Exit(1); throw;
+        }
 
         var chatAgent = sp.GetRequiredService<ChatAgent>();
 
@@ -168,13 +167,12 @@ public static class Program
             AnsiConsole.MarkupLine($"[green]├─ 目录: {toolsDir.EscapeMarkup()}[/]");
             var zipPath = Path.Combine(Path.GetTempPath(), "wt.zip");
             AnsiConsole.MarkupLine("[cyan]├─ 正在下载 Windows Terminal...[/]");
-            using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
-            http.DefaultRequestHeaders.UserAgent.ParseAdd("LTAI/1.0");
-            var response = await http.GetAsync(s_wtDownloadUrl);
+            s_httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("LTAI/1.0");
+            var response = await s_httpClient.GetAsync(s_wtDownloadUrl);
             response.EnsureSuccessStatusCode();
             await using (var fs = File.Create(zipPath)) await response.Content.CopyToAsync(fs);
             AnsiConsole.MarkupLine("[cyan]├─ 解压...[/]");
-            ZipFile.ExtractToDirectory(zipPath, toolsDir, overwriteFiles: true);
+            await Task.Run(() => ZipFile.ExtractToDirectory(zipPath, toolsDir, overwriteFiles: true));
             File.Delete(zipPath);
             var wtExe = Directory.EnumerateFiles(toolsDir, "wt.exe", SearchOption.AllDirectories).FirstOrDefault();
             if (wtExe != null) { AnsiConsole.MarkupLine($"[green]└─ 已安装 ({wtExe.EscapeMarkup()})[/]"); return true; }

@@ -49,7 +49,7 @@ public static class LtaiTheme
     }
 
     private static string PrefsPath =>
-        Path.Combine(Environment.CurrentDirectory, ".livingtree", "preferences.json");
+        Path.Combine(AppContext.BaseDirectory, ".livingtree", "preferences.json");
 
     static LtaiTheme()
     {
@@ -63,7 +63,7 @@ public static class LtaiTheme
             var path = PrefsPath;
             if (!File.Exists(path)) return;
             var json = File.ReadAllText(path);
-            var doc = JsonDocument.Parse(json);
+            using var doc = JsonDocument.Parse(json);
             if (doc.RootElement.TryGetProperty("theme", out var t) &&
                 string.Equals(t.GetString(), "light", StringComparison.OrdinalIgnoreCase))
                 Current = AppTheme.Light;
@@ -88,7 +88,8 @@ public static class LtaiTheme
         Current = Current == AppTheme.Dark ? AppTheme.Light : AppTheme.Dark;
         _brushCache.Clear();
         Save();
-        ThemeChanged?.Invoke();
+        var handler = ThemeChanged;
+        handler?.Invoke();
     }
 
     // ─── Apple-style palette ───

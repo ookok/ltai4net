@@ -119,7 +119,7 @@ internal static partial class AgentBuilder
         RegisterDocumentTools(tools, canRead, canWrite, ws, sp, yamlTools);
         RegisterPlanAndDiagramTools(tools, name, httpFactory, yamlTools);
         RegisterGitTools(tools, name, ws, yamlTools);
-        RegisterReviewTools(tools, name, ws);
+        // RegisterReviewTools moved below — needs palaceStore
         RegisterSkillBankTools(tools, name, yamlTools);
         RegisterLspTools(tools, name, yamlTools);
         RegisterTaskTools(tools, name, yamlTools);
@@ -230,6 +230,7 @@ internal static partial class AgentBuilder
         var identityText = ResolveIdentity(opts);
 
         RegisterMemoryTools(tools, canWrite, palaceStore, ws, yamlTools);
+        RegisterReviewTools(tools, name, ws, palaceStore, sp, guardedLlm);
 
         // MCP (Model Context Protocol) client tools: lazy-loaded on first invocation.
         if (!isPlanMode)
@@ -247,8 +248,11 @@ internal static partial class AgentBuilder
             RegisterChoiceAndSubagentTools(tools, name, sp, llm, ws, yamlTools);
 
         // ToolSet guarantees uniqueness at insertion time (case-insensitive name key).
-        // MCP tools (External priority) silently lose to LTAI native tools (Core/Domain priority).
         var toolList = tools.ToList();
+
+        // ParallelReview — needs full tool list for subagent tool filtering; registered last
+        if (!isPlanMode)
+            RegisterParallelReviewTool(tools, name, ws, palaceStore, sp, guardedLlm, toolList);
 
         // P2: Register tools in the central AgentToolStore (MAF-aligned tool discovery).
         sp.GetService<AgentToolStore>()?.RegisterRange(name, toolList);

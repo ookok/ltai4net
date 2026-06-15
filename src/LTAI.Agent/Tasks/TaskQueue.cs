@@ -232,12 +232,12 @@ public sealed class TaskQueue : IAsyncDisposable
 
     private async Task ConsumerLoopAsync(CancellationToken ct)
     {
+        var waitTasks = new Task<bool>[4];
         try
         {
             while (!ct.IsCancellationRequested)
             {
                 TaskItem? item = null;
-                // Drain channels in priority order: Critical → High → Normal → Low
                 for (int p = 3; p >= 0; p--)
                 {
                     if (_channels[p].Reader.TryRead(out item))
@@ -245,10 +245,10 @@ public sealed class TaskQueue : IAsyncDisposable
                 }
                 if (item == null)
                 {
-                    // All channels empty — wait for any
-                    var tasks = _channels.Select(c => c.Reader.WaitToReadAsync(ct).AsTask()).ToArray();
-                    var idx = await Task.WhenAny(tasks).ConfigureAwait(false);
-                    if (idx.Result) continue;
+                    for (int i = 0; i < 4; i++)
+                        waitTasks[i] = _channels[i].Reader.WaitToReadAsync(ct).AsTask();
+                    var completed = await Task.WhenAny(waitTasks).ConfigureAwait(false);
+                    if (completed.Result) continue;
                     break;
                 }
                 await RunOneAsync(item, ct).ConfigureAwait(false);

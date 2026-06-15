@@ -4,18 +4,19 @@ namespace LTAI.Agent.Memory;
 
 public sealed class CausalGraph
 {
-    private readonly SqliteConnection _db;
+    private readonly Func<SqliteConnection> _factory;
     private readonly double _threshold;
 
-    public CausalGraph(SqliteConnection db, double threshold = 0.7)
+    public CausalGraph(Func<SqliteConnection> factory, double threshold = 0.7)
     {
-        _db = db;
+        _factory = factory;
         _threshold = threshold;
     }
 
     public void InitSchema()
     {
-        using var cmd = _db.CreateCommand();
+        using var conn = _factory();
+        using var cmd = conn.CreateCommand();
         cmd.CommandText = """
             CREATE TABLE IF NOT EXISTS causal_edges (
                 from_id  TEXT NOT NULL,
@@ -32,7 +33,8 @@ public sealed class CausalGraph
     public void AddEdge(string fromId, string toId, double score, string? label = null)
     {
         if (score < _threshold) return;
-        using var cmd = _db.CreateCommand();
+        using var conn = _factory();
+        using var cmd = conn.CreateCommand();
         cmd.CommandText = """
             INSERT OR REPLACE INTO causal_edges (from_id, to_id, score, llm_label)
             VALUES (@from, @to, @score, @label)
@@ -46,7 +48,8 @@ public sealed class CausalGraph
 
     public List<(string NodeId, double Score, string? Label)> GetCauses(string nodeId, int topK = 10)
     {
-        using var cmd = _db.CreateCommand();
+        using var conn = _factory();
+        using var cmd = conn.CreateCommand();
         cmd.CommandText = """
             SELECT from_id, score, llm_label FROM causal_edges
             WHERE to_id = @nodeId AND score >= @threshold
@@ -64,7 +67,8 @@ public sealed class CausalGraph
 
     public List<(string NodeId, double Score, string? Label)> GetEffects(string nodeId, int topK = 10)
     {
-        using var cmd = _db.CreateCommand();
+        using var conn = _factory();
+        using var cmd = conn.CreateCommand();
         cmd.CommandText = """
             SELECT to_id, score, llm_label FROM causal_edges
             WHERE from_id = @nodeId AND score >= @threshold
@@ -82,7 +86,8 @@ public sealed class CausalGraph
 
     public int PendingCount()
     {
-        using var cmd = _db.CreateCommand();
+        using var conn = _factory();
+        using var cmd = conn.CreateCommand();
         cmd.CommandText = "SELECT COUNT(*) FROM consolidation_queue WHERE status = 'pending'";
         return Convert.ToInt32(cmd.ExecuteScalar());
     }

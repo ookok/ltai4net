@@ -65,7 +65,7 @@ public sealed class MemoryTools
     public string Forget(
         [Description("Memory name to delete")] string name)
     {
-        var drawers = _store.SearchByRoomExact(name);
+        var drawers = _store.SearchByWingExact(name);
         if (drawers.Count == 0)
             return $"Memory '{name}' not found";
 
@@ -83,8 +83,8 @@ public sealed class MemoryTools
     public async Task<string> RecallMemory(
         [Description("Memory name")] string name)
     {
-        // Tier 1: Exact room match (O(1) index lookup)
-        var exact = _store.SearchByRoomExact(name);
+        // Tier 1: Exact wing match (O(1) index lookup)
+        var exact = _store.SearchByWingExact(name);
         if (exact.Count > 0)
         {
             var sb = new System.Text.StringBuilder();
@@ -105,7 +105,7 @@ public sealed class MemoryTools
             result.AppendLine($"## Keyword matches for \"{name}\"");
             foreach (var (drawerId, bm25) in ftsHits.Take(5))
             {
-                var drawer = _store.GetDrawerById(drawerId);
+                var drawer = await _store.GetDrawerByIdAsync(drawerId).ConfigureAwait(false);
                 if (drawer == null) continue;
                 result.AppendLine($"\n--- 📄 {drawer.Room} (wing: {drawer.Wing}, bm25: {bm25:F1}) ---");
                 var preview = drawer.Content.Length > 500 ? drawer.Content[..500] + "..." : drawer.Content;

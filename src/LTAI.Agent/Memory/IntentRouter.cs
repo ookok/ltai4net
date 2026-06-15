@@ -34,12 +34,24 @@ public sealed class IntentRouter
                             "what", "define", "definition", "meaning", "describe", "explain"]),
     ];
 
-    private static readonly Lazy<Dictionary<QueryIntent, float[]>> _centroids = new(() =>
+    private static Dictionary<QueryIntent, float[]>? _centroids;
+    private static readonly object _centroidLock = new();
+
+    private static Dictionary<QueryIntent, float[]> GetCentroids()
     {
-        return IntentAnchors.ToDictionary(
-            a => a.Intent,
-            a => EmbeddingClient.FastEmb(string.Join(" ", a.Anchors), EmbeddingDim));
-    }, true);
+        if (_centroids != null) return _centroids;
+        lock (_centroidLock)
+        {
+            if (_centroids != null) return _centroids;
+            var dict = new Dictionary<QueryIntent, float[]>();
+            foreach (var (intent, anchors) in IntentAnchors)
+            {
+                dict[intent] = EmbeddingClient.FastEmb(string.Join(" ", anchors), EmbeddingDim);
+            }
+            _centroids = dict;
+            return dict;
+        }
+    }
 
     private static readonly (string Pattern, QueryIntent Intent)[] KeywordFallback =
     [
@@ -67,7 +79,7 @@ public sealed class IntentRouter
             return (QueryIntent.What, 1.0f);
 
         var queryEmb = EmbeddingClient.FastEmb(query.Trim(), EmbeddingDim);
-        var centroids = _centroids.Value;
+        var centroids = GetCentroids();
 
         QueryIntent bestIntent = QueryIntent.What;
         float bestScore = -1f;

@@ -88,34 +88,38 @@ public sealed class ToolFilteringChatClient : IChatClient
         if (options?.Tools is null || options.Tools.Count == 0)
             return options;
 
-        var tools = options.Tools.ToList();
-
         if (!ToolRegistry.IsInitialized)
         {
-            await ToolRegistry.InitializeAsync(tools, _embedder, _cache, ct).ConfigureAwait(false);
+            await ToolRegistry.InitializeAsync(options.Tools, _embedder, _cache, ct).ConfigureAwait(false);
         }
 
         var query = GetLastUserQuery(messages);
-        List<AITool> selectedTools;
 
         // Skip entire filter pipeline if query and tool count unchanged between turns
-        if (!string.IsNullOrWhiteSpace(query) && query == _lastQuery && tools.Count == _lastToolCount)
+        if (!string.IsNullOrWhiteSpace(query) && query == _lastQuery && options.Tools.Count == _lastToolCount)
         {
             return options;
         }
         _lastQuery = query;
-        _lastToolCount = tools.Count;
+        _lastToolCount = options.Tools.Count;
+
+        var tools = options.Tools.ToList();
+        List<AITool> selectedTools;
 
         if (!string.IsNullOrWhiteSpace(query))
         {
-            // Result cache: reuse filtered tool list if same query within TTL
             var cacheKey = $"tf:{query}|{tools.Count}";
             if (_resultCache.TryGetValue(cacheKey, out ChatOptions? cachedOpts) && cachedOpts != null)
             {
                 var cachedClone = cachedOpts.Clone();
-                // Re-sync tools in case the underlying tool list changed
-                var cachedNames = new HashSet<string>(cachedOpts.Tools.Select(t => t.Name ?? ""), StringComparer.OrdinalIgnoreCase);
-                cachedClone.Tools = tools.Where(t => cachedNames.Contains(t.Name ?? "") || PinnedTools.Contains(t.Name ?? "")).ToList();
+                var cachedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var t in cachedOpts.Tools)
+                    if (t.Name != null) cachedNames.Add(t.Name);
+                var syncedTools = new List<AITool>(tools.Count);
+                foreach (var t in tools)
+                    if (cachedNames.Contains(t.Name ?? "") || PinnedTools.Contains(t.Name ?? ""))
+                        syncedTools.Add(t);
+                cachedClone.Tools = syncedTools;
                 return cachedClone;
             }
 
@@ -130,12 +134,15 @@ public sealed class ToolFilteringChatClient : IChatClient
                 hits = await RerankAsync(query, hits, ct).ConfigureAwait(false);
             }
 
-            var hitNames = new HashSet<string>(
-                hits.Take(DefaultTopK).Select(h => h.Name), StringComparer.OrdinalIgnoreCase);
+            var hitNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            int takeCount = Math.Min(hits.Count, DefaultTopK);
+            for (int i = 0; i < takeCount; i++)
+                hitNames.Add(hits[i].Name);
 
-            selectedTools = tools
-                .Where(t => hitNames.Contains(t.Name ?? "") || PinnedTools.Contains(t.Name ?? ""))
-                .ToList();
+            selectedTools = new List<AITool>(DefaultTopK);
+            foreach (var t in tools)
+                if (hitNames.Contains(t.Name ?? "") || PinnedTools.Contains(t.Name ?? ""))
+                    selectedTools.Add(t);
         }
         else
         {
@@ -144,8 +151,16 @@ public sealed class ToolFilteringChatClient : IChatClient
 
         if (selectedTools.Count < 3)
         {
-            selectedTools = tools.Where(t => PinnedTools.Contains(t.Name ?? "")).ToList();
-            selectedTools.AddRange(tools.Where(t => !PinnedTools.Contains(t.Name ?? "")).Take(Math.Max(0, DefaultTopK - selectedTools.Count)));
+            var fallback = new List<AITool>(DefaultTopK);
+            foreach (var t in tools)
+                if (PinnedTools.Contains(t.Name ?? ""))
+                    fallback.Add(t);
+            foreach (var t in tools)
+            {
+                if (!PinnedTools.Contains(t.Name ?? "") && fallback.Count < DefaultTopK)
+                    fallback.Add(t);
+            }
+            selectedTools = fallback;
         }
 
         var clone = options.Clone();

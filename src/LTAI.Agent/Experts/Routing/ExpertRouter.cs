@@ -34,28 +34,28 @@ public sealed class ExpertRouter
             return new ExpertSelectionResult([], "No experts registered.");
 
         var embeddingTop = await _registry.SelectTopKAsync(query, MaxExpertsPerQuery + 2, ct).ConfigureAwait(false);
-        var topList = embeddingTop.ToList();
 
-        if (topList.Count == 0)
+        if (embeddingTop.Count == 0)
             return new ExpertSelectionResult([], "No embedding match.");
 
-        var top1Score = topList[0].Score;
-        var margin = topList.Count >= 2 ? topList[0].Score - topList[1].Score : 1f;
+        var top1Score = embeddingTop[0].Score;
+        var margin = embeddingTop.Count >= 2 ? embeddingTop[0].Score - embeddingTop[1].Score : 1f;
 
         if (top1Score >= EmbeddingConfidentMinScore && margin >= EmbeddingConfidentMargin)
         {
-            var selections = topList.Take(MaxExpertsPerQuery)
-                .Select(s => new ExpertSelection(s.Expert.ExpertId, s.Score, "Embedding confident"))
-                .ToList();
+            int count = Math.Min(embeddingTop.Count, MaxExpertsPerQuery);
+            var selections = new List<ExpertSelection>(count);
+            for (int i = 0; i < count; i++)
+                selections.Add(new ExpertSelection(embeddingTop[i].Expert.ExpertId, embeddingTop[i].Score, "Embedding confident"));
             return new ExpertSelectionResult(selections, $"Embedding routing (score={top1Score:F2}, margin={margin:F2}).");
         }
 
-        // Ambiguous: return wider top-K with adjusted confidence
         _logger?.LogDebug("ExpertRouter: embedding ambiguous (score={Score:F2}, margin={Margin:F2}), returning wide top-K",
             top1Score, margin);
-        var wideSelections = topList.Take(Math.Min(topList.Count, MaxExpertsPerQuery + 1))
-            .Select(s => new ExpertSelection(s.Expert.ExpertId, s.Score * 0.8f, "Embedding (ambiguous, wide top-K)"))
-            .ToList();
+        int wideCount = Math.Min(embeddingTop.Count, MaxExpertsPerQuery + 1);
+        var wideSelections = new List<ExpertSelection>(wideCount);
+        for (int i = 0; i < wideCount; i++)
+            wideSelections.Add(new ExpertSelection(embeddingTop[i].Expert.ExpertId, embeddingTop[i].Score * 0.8f, "Embedding (ambiguous, wide top-K)"));
         return new ExpertSelectionResult(wideSelections, $"Embedding routing (ambiguous, score={top1Score:F2}).");
     }
 }

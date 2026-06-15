@@ -27,7 +27,6 @@ public sealed class RateLimitMiddleware
 
     public async Task InvokeAsync(HttpContext context)
     {
-        // Skip rate limiting for health checks
         if (context.Request.Path.StartsWithSegments("/health") ||
             context.Request.Path.StartsWithSegments("/ready"))
         {
@@ -35,23 +34,28 @@ public sealed class RateLimitMiddleware
             return;
         }
 
-        // Respect X-Forwarded-For when behind reverse proxy
         var ip = context.Request.Headers["X-Forwarded-For"].FirstOrDefault()
                   ?? context.Connection.RemoteIpAddress?.ToString()
                   ?? "unknown";
-        // Take the first IP in chain (original client)
         if (ip.Contains(',')) ip = ip.Split(',')[0].Trim();
         var now = DateTime.UtcNow;
 
-        // Periodic cleanup of stale entries
+        // Periodic cleanup: remove only stale entries beyond 2x window
         if (now - _lastCleanup > CleanupInterval)
         {
             _lastCleanup = now;
+            var cutoff = now - TimeSpan.FromSeconds(_windowSec * 2);
+            var keysToRemove = new List<string>(Math.Min(_windows.Count, 64));
             foreach (var kv in _windows)
             {
-                if (now - kv.Value.WindowStart > TimeSpan.FromSeconds(_windowSec * 2))
-                    _windows.TryRemove(kv.Key, out _);
+                if (kv.Value.WindowStart < cutoff)
+                {
+                    keysToRemove.Add(kv.Key);
+                    if (keysToRemove.Count >= 64) break;
+                }
             }
+            foreach (var key in keysToRemove)
+                _windows.TryRemove(new KeyValuePair<string, WindowState>(key, _windows[key]));
         }
 
         var window = _windows.AddOrUpdate(ip,

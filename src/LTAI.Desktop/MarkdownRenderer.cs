@@ -183,10 +183,10 @@ public static class MarkdownRenderer
         ",
         RegexOptions.Compiled | RegexOptions.IgnorePatternWhitespace);
 
-    public static List<(string text, Color color)> TokenizeLine(string line, string[] keywords)
+    public static List<(string text, Color color)> TokenizeLine(string line, HashSet<string>? kws)
     {
         // Try TextMateSharp first for accurate highlighting
-        var lang = keywords.Length > 0 ? "csharp" : ""; // approximate from context
+        var lang = kws != null ? "csharp" : ""; // approximate from context
         if (!string.IsNullOrEmpty(lang))
         {
             try
@@ -197,8 +197,8 @@ public static class MarkdownRenderer
                 {
                     return tmTokens.Select(t =>
                     {
-                        var c = Color.Parse(t.fgColor);
-                        return (t.text, c);
+                        try { return (t.text, Color.Parse(t.fgColor)); }
+                        catch { return (t.text, LtaiTheme.TextPrimary); }
                     }).ToList();
                 }
             }
@@ -207,7 +207,6 @@ public static class MarkdownRenderer
 
         // Fallback: keyword regex
         var tokens = new List<(string, Color)>();
-        var kws = keywords.Length > 0 ? new HashSet<string>(keywords, StringComparer.Ordinal) : null;
 
         foreach (Match m in TokenRx.Matches(line))
         {

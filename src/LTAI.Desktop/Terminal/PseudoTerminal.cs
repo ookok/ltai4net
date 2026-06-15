@@ -25,6 +25,7 @@ public sealed class PseudoTerminal : IDisposable
     private Process? _process;
     private Thread? _readerThread;
     private volatile bool _running;
+    private bool _disposed;
     private readonly ConcurrentQueue<string> _outputLines = new();
     private readonly List<string> _screen = new();
     private readonly object _screenLock = new();
@@ -51,6 +52,7 @@ public sealed class PseudoTerminal : IDisposable
 
     public void Stop()
     {
+        if (_disposed) return;
         _running = false;
         try
         {
@@ -201,6 +203,8 @@ public sealed class PseudoTerminal : IDisposable
         WinCreateProcess(null, shell, IntPtr.Zero, IntPtr.Zero, false, flags, IntPtr.Zero, workingDir, ref si, out var pi);
         _process = Process.GetProcessById(pi.dwProcessId);
         CloseHandle(pi.hThread);
+        DeleteProcThreadAttributeList(si.lpAttributeList);
+        Marshal.FreeHGlobal(si.lpAttributeList);
 
         _running = true;
         _readerThread = new Thread(WinReaderLoop) { IsBackground = true, Name = "ConPTY Reader" };
@@ -260,6 +264,8 @@ public sealed class PseudoTerminal : IDisposable
 
     public void Dispose()
     {
+        if (_disposed) return;
+        _disposed = true;
         _running = false;
         if (_isUnix)
         {
@@ -380,6 +386,9 @@ public sealed class PseudoTerminal : IDisposable
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool UpdateProcThreadAttribute(IntPtr lpAttributeList, uint dwFlags, IntPtr attribute, IntPtr lpValue, IntPtr cbSize, IntPtr lpPreviousValue, IntPtr lpReturnSize);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern void DeleteProcThreadAttributeList(IntPtr lpAttributeList);
 
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]

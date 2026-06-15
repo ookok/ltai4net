@@ -65,7 +65,7 @@ public sealed class PromptEditorView : UserControl
         catch { }
     }
 
-    private void LoadSelectedPrompt()
+    private async void LoadSelectedPrompt()
     {
         var name = _agentCombo.SelectedItem as string;
         if (name == null) return;
@@ -74,7 +74,7 @@ public sealed class PromptEditorView : UserControl
         {
             var path = Path.Combine(_agentsDir, name + ".agent.md");
             if (!File.Exists(path)) return;
-            var content = File.ReadAllText(path);
+            var content = await File.ReadAllTextAsync(path);
             _contentText.Text = $"📄 {name}.agent.md ({content.Length} chars)";
             _editBox.Text = content;
             _editPanel.IsVisible = true;
@@ -82,7 +82,7 @@ public sealed class PromptEditorView : UserControl
         catch (Exception ex) { _contentText.Text = $"❌ {ex.Message}"; }
     }
 
-    private void SavePrompt()
+    private async void SavePrompt()
     {
         var name = _agentCombo.SelectedItem as string;
         if (name == null || string.IsNullOrEmpty(_editBox.Text)) return;
@@ -90,7 +90,7 @@ public sealed class PromptEditorView : UserControl
         try
         {
             var path = Path.Combine(_agentsDir, name + ".agent.md");
-            File.WriteAllText(path, _editBox.Text);
+            await File.WriteAllTextAsync(path, _editBox.Text);
             _contentText.Text = $"✅ 已保存 {name}.agent.md";
         }
         catch (Exception ex) { _contentText.Text = $"❌ {ex.Message}"; }

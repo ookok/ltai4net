@@ -26,9 +26,9 @@ public sealed class PalaceStoreTests : IDisposable
     }
 
     [Fact]
-    public void GetDrawerById_StoredDrawer_ReturnsDrawer()
+    public async Task GetDrawerById_StoredDrawer_ReturnsDrawer()
     {
-        var id = _store.StoreAsync("test", "room1", "hello world").GetAwaiter().GetResult();
+        var id = await _store.StoreAsync("test", "room1", "hello world");
         var drawer = _store.GetDrawerById(id);
         Assert.NotNull(drawer);
         Assert.Equal("hello world", drawer!.Content);
@@ -37,24 +37,23 @@ public sealed class PalaceStoreTests : IDisposable
     }
 
     [Fact]
-    public void Count_WithEntries_ReturnsCorrectCount()
+    public async Task Count_WithEntries_ReturnsCorrectCount()
     {
         Assert.Equal(0, _store.Count());
-        _store.StoreAsync("w1", "r1", "a").GetAwaiter().GetResult();
-        _store.StoreAsync("w1", "r2", "b").GetAwaiter().GetResult();
-        _store.StoreAsync("w2", "r1", "c").GetAwaiter().GetResult();
+        await _store.StoreAsync("w1", "r1", "a");
+        await _store.StoreAsync("w1", "r2", "b");
+        await _store.StoreAsync("w2", "r1", "c");
         Assert.Equal(3, _store.Count());
     }
 
     [Fact]
-    public void SearchFts_KeywordMatch_ReturnsResults()
+    public async Task SearchFts_KeywordMatch_ReturnsResults()
     {
-        var id1 = _store.StoreAsync("w1", "r1", "machine learning pipeline design").GetAwaiter().GetResult();
-        var id2 = _store.StoreAsync("w1", "r2", "database schema migration plan").GetAwaiter().GetResult();
-        _store.StoreAsync("w2", "r1", "unrelated content here").GetAwaiter().GetResult();
+        var id1 = await _store.StoreAsync("w1", "r1", "machine learning pipeline design");
+        var id2 = await _store.StoreAsync("w1", "r2", "database schema migration plan");
+        await _store.StoreAsync("w2", "r1", "unrelated content here");
 
-        // Allow FTS5 index to propagate
-        System.Threading.Thread.Sleep(50);
+        await Task.Delay(50);
 
         var hits = _store.SearchFts("pipeline", topK: 5);
         Assert.NotEmpty(hits);
@@ -62,49 +61,49 @@ public sealed class PalaceStoreTests : IDisposable
     }
 
     [Fact]
-    public void SearchFts_NoMatch_ReturnsEmpty()
+    public async Task SearchFts_NoMatch_ReturnsEmpty()
     {
-        _store.StoreAsync("w1", "r1", "hello world").GetAwaiter().GetResult();
-        System.Threading.Thread.Sleep(50);
+        await _store.StoreAsync("w1", "r1", "hello world");
+        await Task.Delay(50);
         var hits = _store.SearchFts("nonexistentxyz", topK: 5);
         Assert.Empty(hits);
     }
 
     [Fact]
-    public void DeleteDrawer_RemovesFromCount()
+    public async Task DeleteDrawer_RemovesFromCount()
     {
-        var id = _store.StoreAsync("w1", "r1", "to delete").GetAwaiter().GetResult();
+        var id = await _store.StoreAsync("w1", "r1", "to delete");
         Assert.Equal(1, _store.Count());
         _store.DeleteDrawer(id);
         Assert.Equal(0, _store.Count());
     }
 
     [Fact]
-    public void ListWings_ReturnsDistinctWings()
+    public async Task ListWings_ReturnsDistinctWings()
     {
-        _store.StoreAsync("wing_a", "r1", "a").GetAwaiter().GetResult();
-        _store.StoreAsync("wing_a", "r2", "b").GetAwaiter().GetResult();
-        _store.StoreAsync("wing_b", "r1", "c").GetAwaiter().GetResult();
+        await _store.StoreAsync("wing_a", "r1", "a");
+        await _store.StoreAsync("wing_a", "r2", "b");
+        await _store.StoreAsync("wing_b", "r1", "c");
         var wings = _store.ListWings();
         Assert.Contains("wing_a", wings);
         Assert.Contains("wing_b", wings);
     }
 
     [Fact]
-    public void GetDrawer_ExactMatch_Works()
+    public async Task GetDrawer_ExactMatch_Works()
     {
-        _store.StoreAsync("wing", "room", "content").GetAwaiter().GetResult();
-        var drawer = _store.GetDrawer("wing", "room", _store.SearchByRoomExact("room")[0].DrawerId);
+        await _store.StoreAsync("wing", "room", "content");
+        var drawer = _store.GetDrawer("wing", "room", _store.SearchByWingExact("wing")[0].DrawerId);
         Assert.NotNull(drawer);
         Assert.Equal("content", drawer!.Content);
     }
 
     [Fact]
-    public void GetRecentDrawers_ReturnsOrderedByCreatedAt()
+    public async Task GetRecentDrawers_ReturnsOrderedByCreatedAt()
     {
-        _store.StoreAsync("w", "r", "first").GetAwaiter().GetResult();
-        System.Threading.Thread.Sleep(10);
-        _store.StoreAsync("w", "r", "second").GetAwaiter().GetResult();
+        await _store.StoreAsync("w", "r", "first");
+        await Task.Delay(10);
+        await _store.StoreAsync("w", "r", "second");
 
         var recent = _store.GetRecentDrawers("w", "r", limit: 2);
         Assert.Equal(2, recent.Count);
@@ -112,10 +111,10 @@ public sealed class PalaceStoreTests : IDisposable
     }
 
     [Fact]
-    public void GetImportantDrawers_FiltersByThreshold()
+    public async Task GetImportantDrawers_FiltersByThreshold()
     {
-        _store.StoreAsync("w", "r_high", "important", importance: 0.9).GetAwaiter().GetResult();
-        _store.StoreAsync("w", "r_low", "unimportant", importance: 0.1).GetAwaiter().GetResult();
+        await _store.StoreAsync("w", "r_high", "important", importance: 0.9);
+        await _store.StoreAsync("w", "r_low", "unimportant", importance: 0.1);
 
         var important = _store.GetImportantDrawers("w", threshold: 0.8);
         Assert.Single(important);
@@ -129,7 +128,7 @@ public sealed class PalaceStoreTests : IDisposable
         await _store.StoreAsync("wing", "room2", "database connection pooling optimization");
         await _store.StoreAsync("wing", "room3", "unrelated meeting notes");
 
-        System.Threading.Thread.Sleep(50);
+        await Task.Delay(50);
         await _store.WarmupHnswAsync();
 
         var vec = await _store.GenerateEmbeddingAsync("async programming");
@@ -144,13 +143,13 @@ public sealed class PalaceStoreTests : IDisposable
     }
 
     [Fact]
-    public void TrimAsync_ReducesCount()
+    public async Task TrimAsync_ReducesCount()
     {
         for (int i = 0; i < 10; i++)
-            _store.StoreAsync("w", $"r{i}", $"content{i}").GetAwaiter().GetResult();
+            await _store.StoreAsync("w", $"r{i}", $"content{i}");
 
         Assert.Equal(10, _store.Count());
-        _store.TrimAsync(5).GetAwaiter().GetResult();
+        await _store.TrimAsync(5);
         Assert.True(_store.Count() <= 5);
     }
 

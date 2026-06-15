@@ -1,4 +1,4 @@
-// LTAI v7.0 Load Test — k6 Script
+// LTAI Load Test — k6 Script
 //
 // Usage:
 //   k6 run loadtest.js --vus 100 --duration 60s
@@ -16,7 +16,7 @@ import { textSummary } from 'https://jslib.k6.io/k6-summary/0.1.0/index.js';
 // CONFIGURATION
 // ═══════════════════════════════════════════════════════
 
-const BASE_URL    = __ENV.LTAI_BASE_URL  || 'http://localhost:8080';
+const BASE_URL    = __ENV.LTAI_BASE_URL  || 'http://localhost:5100';
 const API_KEY     = __ENV.LTAI_API_KEY   || '';
 const BUDGET_MAX  = parseInt(__ENV.LTAI_BUDGET_MAX || '100000'); // token budget ceiling
 
@@ -161,27 +161,23 @@ export function setup() {
     console.log(`Max VUs: 100 | Stages: 30s/20 → 30s/50 → 30s/100 → 60s/100 → 30s/0`);
 
     // Health check
-    const healthUrl = `${BASE_URL}/api/v7/health`;
+    const healthUrl = `${BASE_URL}/health`;
     const healthResp = http.get(healthUrl, { timeout: '10s' });
 
     check(healthResp, {
         'health check returns 200': (r) => r.status === 200,
-        'health check body has version': (r) => {
-            try { return JSON.parse(r.body).version !== undefined; } catch { return false; }
-        },
     });
 
     if (healthResp.status !== 200)
         throw new Error(`Health check failed: ${healthResp.status}. Is LTAI running at ${BASE_URL}?`);
 
-    console.log(`Health: OK (version ${JSON.parse(healthResp.body).version})`);
+    console.log(`Health: OK (${healthResp.body.substring(0, 100)}...)`);
 
-    // Check /api/v7/status for initial budget state
-    const statusUrl = `${BASE_URL}/api/v7/status`;
-    const statusResp = http.get(statusUrl, { timeout: '10s' });
-    if (statusResp.status === 200) {
-        const status = JSON.parse(statusResp.body);
-        console.log(`Status: safety_sessions=${status.safety_gate?.active_sessions || 0}`);
+    // Check /ready for readiness
+    const readyUrl = `${BASE_URL}/ready`;
+    const readyResp = http.get(readyUrl, { timeout: '10s' });
+    if (readyResp.status === 200) {
+        console.log(`Ready: OK`);
     }
 
     return {
@@ -205,12 +201,13 @@ export default function (data) {
     // === Primary endpoint: /api/chat (synchronous) ===
 
     const chatPayload = JSON.stringify({
-        query: data.query,
-        session_id: `loadtest-${__VU}-${__ITER}`,
+        messages: [{ role: "user", content: data.query }],
+        stream: false,
     });
 
     const timestamp = Date.now();
-    const chatResp = http.post(`${BASE_URL}/api/chat`, chatPayload, {
+    const chatUrl = `${BASE_URL}/v1/agents/LTAI-Chat/chat/completions`;
+    const chatResp = http.post(chatUrl, chatPayload, {
         headers,
         timeout: '30s',
         tags: { name: 'chat_sync' },
@@ -222,36 +219,37 @@ export default function (data) {
 
     check(chatResp, {
         'chat: status is 200':          (r) => r.status === 200,
-        'chat: response has text':      (r) => {
-            try { return JSON.parse(r.body).text !== undefined; } catch { return false; }
+        'chat: response has choices':   (r) => {
+            try { return JSON.parse(r.body).choices !== undefined; } catch { return false; }
         },
         'chat: P99 < 5s':               () => latency < 5000,
         'chat: no 5xx error':           (r) => r.status < 500,
     });
 
-    // Track token budget from response
+    // Track token budget from response (OpenAI format)
     try {
         const body = JSON.parse(chatResp.body);
-        if (body.tokens) {
-            tokenCount.add(body.tokens);
-            tokensTotal.add(body.tokens);
-            if (body.tokens > data.budgetMax / 100) { // per-request portion of budget
+        if (body.usage) {
+            const totalTokens = body.usage.total_tokens || 0;
+            tokenCount.add(totalTokens);
+            tokensTotal.add(totalTokens);
+            if (totalTokens > data.budgetMax / 100) {
                 budgetExceeded.add(1);
             }
         }
     } catch {}
 
-    // === Secondary: /api/v7/status (observability) ===
+    // === Secondary: /health (observability) ===
     // Run every 10th iteration to check system health under load
 
     if (__ITER % 10 === 0) {
-        const statusResp = http.get(`${BASE_URL}/api/v7/status`, {
+        const healthResp = http.get(`${BASE_URL}/health`, {
             headers,
             timeout: '5s',
-            tags: { name: 'v7_status' },
+            tags: { name: 'health' },
         });
-        check(statusResp, {
-            'status: returns 200': (r) => r.status === 200,
+        check(healthResp, {
+            'health: returns 200': (r) => r.status === 200,
         });
     }
 

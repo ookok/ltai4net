@@ -109,7 +109,7 @@ try
             (sp, key) =>
             {
                 var sessionMgr = sp.GetRequiredService<SessionManager>();
-                var store = new LTAI.Web.Session.LTAIAgentSessionStore(
+                Microsoft.Agents.AI.Hosting.AgentSessionStore store = new LTAI.Web.Session.LTAIAgentSessionStore(
                     sessionMgr,
                     sp.GetRequiredService<ILogger<LTAI.Web.Session.LTAIAgentSessionStore>>());
 
@@ -246,9 +246,7 @@ try
         }
         catch (Exception ex)
         {
-            // D68: failed reload keeps the old snapshot alive; surface the
-            // error to the client so it can show a meaningful toast.
-            return Results.Problem("Reload failed", statusCode: 422);
+            return Results.Problem($"Reload failed: {ex.Message}", statusCode: 422);
         }
     });
 
@@ -357,7 +355,8 @@ try
     app.MapPost("/ltai/v1/pipelines/{name}/run", async (
         LTAI.Agent.Workflows.YAMLWorkflowRegistry? reg,
         LTAI.Agent.Workflows.AgentWorkflows? pipes,
-        string name) =>
+        string name,
+        HttpContext ctx) =>
     {
         if (reg == null || pipes == null)
             return Results.NotFound(new { error = "AgentWorkflows or YAMLWorkflowRegistry not registered" });
@@ -421,6 +420,273 @@ try
         j.Completed = true;
         j.Error = "Cancelled";
         return Results.Ok(new { id, cancelled = true, cancelledAtUtc = DateTime.UtcNow });
+    });
+
+    // ── Audit finding REST surface (PalaceStore backed) ──
+    app.MapGet("/ltai/v1/audit", async (
+        PalaceStore store,
+        string? statusFilter, string? severity, string? fileFilter,
+        string? category, string? fromDate, string? toDate,
+        int limit = 500, bool includeFixed = false) =>
+    {
+        var max = Math.Clamp(limit > 0 ? limit : 500, 1, 2000);
+        var drawers = await store.SearchByWingAsync("audit", maxCount: max);
+        if (drawers.Count == 0) return Results.Ok(new { total = 0, findings = Array.Empty<object>() });
+
+        var statusSet = !string.IsNullOrEmpty(statusFilter)
+            ? statusFilter.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToHashSet()
+            : null;
+
+        var filtered = new List<object>();
+        foreach (var d in drawers)
+        {
+            var st = "open"; string? sev = null, file = null, line = null, cat = null;
+            if (d.Metadata != null)
+            {
+                try
+                {
+                    using var doc = System.Text.Json.JsonDocument.Parse(d.Metadata);
+                    var root = doc.RootElement;
+                    if (root.TryGetProperty("status", out var s)) st = s.GetString() ?? "open";
+                    if (root.TryGetProperty("severity", out var sv)) sev = sv.GetString();
+                    if (root.TryGetProperty("file", out var f)) file = f.GetString();
+                    if (root.TryGetProperty("line", out var l)) line = l.GetString();
+                    if (root.TryGetProperty("category", out var c)) cat = c.GetString();
+                }
+                catch { }
+            }
+            if (statusSet != null && !statusSet.Contains(st)) continue;
+            if (!string.IsNullOrEmpty(severity) && !string.Equals(sev, severity, StringComparison.OrdinalIgnoreCase)) continue;
+            if (!string.IsNullOrEmpty(category) && !string.Equals(cat, category, StringComparison.OrdinalIgnoreCase)) continue;
+            if (!includeFixed && st is not "open") continue;
+
+            filtered.Add(new
+            {
+                id = d.DrawerId[..8],
+                fullId = d.DrawerId,
+                status = st, severity = sev, file, line, category = cat,
+                content = d.Content, room = d.Room,
+                importance = d.Importance,
+                createdAt = DateTimeOffset.FromUnixTimeMilliseconds(d.CreatedAt).ToString("o"),
+            });
+        }
+        return Results.Ok(new { total = filtered.Count, findings = filtered });
+    });
+
+    app.MapGet("/ltai/v1/audit/{id}", async (PalaceStore store, string id) =>
+    {
+        var drawers = await store.SearchByWingAsync("audit", maxCount: 2000);
+        var match = drawers.FirstOrDefault(d =>
+            d.DrawerId.StartsWith(id, StringComparison.OrdinalIgnoreCase));
+        if (match == null) return Results.NotFound(new { error = $"Finding '{id}' not found" });
+
+        string? status = null, sev = null, file = null, line = null, cat = null,
+                resolvedAt = null, verifiedAt = null, closedAt = null,
+                fixDesc = null, closeSummary = null;
+        List<object>? trail = null;
+        if (match.Metadata != null)
+        {
+            try
+            {
+                using var doc = System.Text.Json.JsonDocument.Parse(match.Metadata);
+                var root = doc.RootElement;
+                if (root.TryGetProperty("status", out var s)) status = s.GetString();
+                if (root.TryGetProperty("severity", out var sv)) sev = sv.GetString();
+                if (root.TryGetProperty("file", out var f)) file = f.GetString();
+                if (root.TryGetProperty("line", out var l)) line = l.GetString();
+                if (root.TryGetProperty("category", out var c)) cat = c.GetString();
+                if (root.TryGetProperty("resolved_at", out var ra)) resolvedAt = ra.GetString();
+                if (root.TryGetProperty("verified_at", out var va)) verifiedAt = va.GetString();
+                if (root.TryGetProperty("closed_at", out var ca)) closedAt = ca.GetString();
+                if (root.TryGetProperty("fix_description", out var fd)) fixDesc = fd.GetString();
+                if (root.TryGetProperty("close_summary", out var cs)) closeSummary = cs.GetString();
+                if (root.TryGetProperty("_audit_trail", out var tr))
+                {
+                    var trailJson = tr.GetString();
+                    if (trailJson != null)
+                        trail = System.Text.Json.JsonSerializer.Deserialize<List<object>>(trailJson);
+                }
+            }
+            catch { }
+        }
+
+        return Results.Ok(new
+        {
+            id = match.DrawerId[..8],
+            fullId = match.DrawerId,
+            wing = match.Wing, room = match.Room,
+            status = status ?? "open", severity = sev, file, line, category = cat,
+            content = match.Content,
+            importance = match.Importance,
+            createdAt = DateTimeOffset.FromUnixTimeMilliseconds(match.CreatedAt).ToString("o"),
+            expiresAt = match.ExpiresAt.HasValue ? DateTimeOffset.FromUnixTimeMilliseconds(match.ExpiresAt.Value).ToString("o") : null,
+            resolvedAt, verifiedAt, closedAt,
+            fixDescription = fixDesc, closeSummary,
+            auditTrail = trail,
+        });
+    });
+
+    app.MapGet("/ltai/v1/audit/export", async (
+        PalaceStore store, string format = "json",
+        string? statusFilter = null, string? severity = null, string? category = null,
+        bool includeAll = false) =>
+    {
+        var drawers = await store.SearchByWingAsync("audit", maxCount: 2000);
+        var statusSet = !string.IsNullOrEmpty(statusFilter)
+            ? statusFilter.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToHashSet()
+            : null;
+
+        var records = new List<Dictionary<string, string?>>();
+        foreach (var d in drawers)
+        {
+            var st = "open"; string? sev = null, file = null, line = null, cat = null;
+            if (d.Metadata != null)
+            {
+                try
+                {
+                    using var doc = System.Text.Json.JsonDocument.Parse(d.Metadata);
+                    var root = doc.RootElement;
+                    if (root.TryGetProperty("status", out var s)) st = s.GetString() ?? "open";
+                    if (root.TryGetProperty("severity", out var sv)) sev = sv.GetString();
+                    if (root.TryGetProperty("file", out var f)) file = f.GetString();
+                    if (root.TryGetProperty("line", out var l)) line = l.GetString();
+                    if (root.TryGetProperty("category", out var c)) cat = c.GetString();
+                }
+                catch { }
+            }
+            if (statusSet != null && !statusSet.Contains(st)) continue;
+            if (!string.IsNullOrEmpty(severity) && !string.Equals(sev, severity, StringComparison.OrdinalIgnoreCase)) continue;
+            if (!string.IsNullOrEmpty(category) && !string.Equals(cat, category, StringComparison.OrdinalIgnoreCase)) continue;
+            if (!includeAll && st is not "open") continue;
+
+            records.Add(new Dictionary<string, string?>
+            {
+                ["id"] = d.DrawerId[..8], ["status"] = st, ["severity"] = sev,
+                ["file"] = file, ["line"] = line, ["category"] = cat,
+                ["content"] = d.Content, ["room"] = d.Room,
+            });
+        }
+
+        if (format.Equals("csv", StringComparison.OrdinalIgnoreCase))
+        {
+            static string CsvEscape(string? v)
+            {
+                var s = v ?? "";
+                if (s.Length > 0 && (s[0] == '=' || s[0] == '+' || s[0] == '-' || s[0] == '@'))
+                    s = "'" + s;
+                return "\"" + s.Replace("\"", "\"\"") + "\"";
+            }
+            var csv = "Id,Status,Severity,Category,File,Line,Content\n" +
+                string.Join("\n", records.Select(r =>
+                    $"{CsvEscape(r["id"])},{CsvEscape(r["status"])},{CsvEscape(r["severity"])},{CsvEscape(r["category"])},{CsvEscape(r["file"])},{r["line"]},{CsvEscape(r["content"])}"));
+            return Results.Text(csv, "text/csv");
+        }
+        if (format.Equals("markdown", StringComparison.OrdinalIgnoreCase))
+        {
+            static string MdEscape(string? v)
+            {
+                var s = v ?? "";
+                return s.Replace("|", "\\|").Replace("\n", " ");
+            }
+            var md = $"# Audit Findings ({records.Count})\n\n| ID | Status | Severity | Category | File:Line | Content |\n|----|--------|----------|----------|-----------|--------|\n" +
+                string.Join("\n", records.Select(r =>
+                    $"| {r["id"]} | {r["status"]} | {r["severity"]} | {r["category"]} | {r["file"]}:{r["line"]} | {MdEscape(((r["content"] ?? "").Length > 80 ? (r["content"] ?? "")[..80] + "..." : r["content"]))} |"));
+            return Results.Text(md, "text/markdown");
+        }
+        return Results.Ok(new { total = records.Count, findings = records });
+    });
+
+    app.MapGet("/ltai/v1/audit/stats", async (PalaceStore store,
+        string? severity = null, string? category = null) =>
+    {
+        var drawers = await store.SearchByWingAsync("audit", maxCount: 2000);
+        var statusCounts = new Dictionary<string, int>();
+        var sevCounts = new Dictionary<string, int>();
+        var catCounts = new Dictionary<string, int>();
+        var fileCounts = new Dictionary<string, int>();
+
+        foreach (var d in drawers)
+        {
+            var st = "open"; string sev = "?"; string cat = "?"; string file = "?";
+            if (d.Metadata != null)
+            {
+                try
+                {
+                    using var doc = System.Text.Json.JsonDocument.Parse(d.Metadata);
+                    var root = doc.RootElement;
+                    if (root.TryGetProperty("status", out var s)) st = s.GetString() ?? "open";
+                    if (root.TryGetProperty("severity", out var sv)) sev = sv.GetString() ?? "?";
+                    if (root.TryGetProperty("category", out var c)) cat = c.GetString() ?? "?";
+                    if (root.TryGetProperty("file", out var f)) file = f.GetString() ?? "?";
+                }
+                catch { }
+            }
+            if (!string.IsNullOrEmpty(severity) && !string.Equals(sev, severity, StringComparison.OrdinalIgnoreCase)) continue;
+            if (!string.IsNullOrEmpty(category) && !string.Equals(cat, category, StringComparison.OrdinalIgnoreCase)) continue;
+
+            statusCounts[st] = statusCounts.GetValueOrDefault(st) + 1;
+            sevCounts[sev] = sevCounts.GetValueOrDefault(sev) + 1;
+            catCounts[cat] = catCounts.GetValueOrDefault(cat) + 1;
+            fileCounts[file] = fileCounts.GetValueOrDefault(file) + 1;
+        }
+
+        return Results.Ok(new
+        {
+            total = drawers.Count,
+            byStatus = statusCounts,
+            bySeverity = sevCounts,
+            byCategory = catCounts,
+            topFiles = fileCounts.OrderByDescending(kv => kv.Value).Take(10)
+                .ToDictionary(kv => kv.Key, kv => kv.Value),
+        });
+    });
+
+    app.MapPost("/ltai/v1/audit/save", async (
+        PalaceStore store,
+        HttpRequest request,
+        CancellationToken ct) =>
+    {
+        try
+        {
+            using var reader = new StreamReader(request.Body);
+            var body = await reader.ReadToEndAsync(ct);
+            var findings = System.Text.Json.JsonSerializer.Deserialize<List<LTAI.Agent.Tools.Review.ReviewTools.AuditFinding>>(body);
+            if (findings == null || findings.Count == 0)
+                return Results.BadRequest(new { error = "Empty or invalid findings array" });
+
+            var roomName = DateTimeOffset.UtcNow.ToString("yyyyMMdd-HHmmss");
+            var cnt = 0;
+            foreach (var f in findings)
+            {
+                await store.StoreAsync(
+                    wing: "audit", room: roomName,
+                    content: System.Text.Json.JsonSerializer.Serialize(new
+                    {
+                        f.Severity, f.File, f.Line,
+                        Category = f.Category ?? "general",
+                        f.Description,
+                        PersistedAt = DateTimeOffset.UtcNow.ToString("o"),
+                    }),
+                    role: "audit",
+                    importance: f.Severity switch { "P0" => 0.9, "P1" => 0.7, _ => 0.5 },
+                    agentId: "review_tool",
+                    metadata: new Dictionary<string, object>
+                    {
+                        ["severity"] = f.Severity ?? "P2",
+                        ["file"] = f.File ?? "",
+                        ["line"] = f.Line ?? "",
+                        ["category"] = f.Category ?? "general",
+                        ["status"] = "open",
+                    },
+                    ttlMs: null);
+                cnt++;
+            }
+            return Results.Ok(new { persisted = cnt, room = roomName });
+        }
+        catch (Exception ex)
+        {
+            return Results.Problem(ex.Message);
+        }
     });
 
     // ── P7.1: Map DevUI endpoint (Development-only) ──
@@ -527,6 +793,8 @@ try
     app.MapControllers();
 
     // ── P19: Full-chain intent classification diagnostic endpoint ──
+    if (app.Environment.IsDevelopment())
+    {
     app.MapGet("/ltai/v1/classify", (string q, IServiceProvider sp) =>
     {
         if (string.IsNullOrWhiteSpace(q))
@@ -566,6 +834,7 @@ try
             chain = result
         });
     });
+    }
 
     // ── P6: MAF Protocol Endpoint Mapping (per-agent, isolated) ──
     // Each agent is mapped independently so that a single agent DI failure

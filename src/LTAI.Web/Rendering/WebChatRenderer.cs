@@ -17,25 +17,31 @@ public sealed class WebChatRenderer : IChatRenderer
     public void OnStreamStart() { }
     public void OnStreamEnd() { }
 
-    public void OnTextDelta(string delta)
+    public async Task OnTextDelta(string delta)
     {
         var payload = JsonSerializer.Serialize(new { type = "delta", text = delta });
-        WriteSse(payload);
+        await WriteSseAsync(payload).ConfigureAwait(false);
     }
 
-    public void OnToolCall(string name, string? arguments)
+    void IChatRenderer.OnTextDelta(string delta) => _ = OnTextDelta(delta);
+
+    public async Task OnToolCall(string name, string? arguments)
     {
         var payload = JsonSerializer.Serialize(new { type = "tool_call", name, arguments });
-        WriteSse(payload);
+        await WriteSseAsync(payload).ConfigureAwait(false);
     }
 
-    public void OnToolResult(string name, string result, bool success)
+    void IChatRenderer.OnToolCall(string name, string? arguments) => _ = OnToolCall(name, arguments);
+
+    public async Task OnToolResult(string name, string result, bool success)
     {
         var payload = JsonSerializer.Serialize(new { type = "tool_result", name, result, success });
-        WriteSse(payload);
+        await WriteSseAsync(payload).ConfigureAwait(false);
     }
 
-    public void RenderMessage(string role, string content,
+    void IChatRenderer.OnToolResult(string name, string result, bool success) => _ = OnToolResult(name, result, success);
+
+    public async Task RenderMessage(string role, string content,
         IReadOnlyList<ToolCallRecord>? toolCalls, string? reasoning)
     {
         var payload = JsonSerializer.Serialize(new
@@ -46,16 +52,23 @@ public sealed class WebChatRenderer : IChatRenderer
             toolCalls = toolCalls?.Select(t => new { t.Name, t.Args, t.Result }),
             reasoning
         });
-        WriteSse(payload);
+        await WriteSseAsync(payload).ConfigureAwait(false);
     }
+
+    void IChatRenderer.RenderMessage(string role, string content,
+        IReadOnlyList<ToolCallRecord>? toolCalls, string? reasoning)
+            => _ = RenderMessage(role, content, toolCalls, reasoning);
 
     public void UpdateStatus(string text) => _status = text;
 
-    public void UpdateProgress(string frame, string text, string? elapsed)
+    public async Task UpdateProgress(string frame, string text, string? elapsed)
     {
         var payload = JsonSerializer.Serialize(new { type = "progress", frame, text, elapsed });
-        WriteSse(payload);
+        await WriteSseAsync(payload).ConfigureAwait(false);
     }
+
+    void IChatRenderer.UpdateProgress(string frame, string text, string? elapsed)
+        => _ = UpdateProgress(frame, text, elapsed);
 
     public ToolResultInfo TryParseToolResult(string text) => default;
     public ConfirmRequest? TryParseConfirmRequest(string text) => null;
@@ -93,9 +106,9 @@ public sealed class WebChatRenderer : IChatRenderer
         await _response.Body.FlushAsync();
     }
 
-    private void WriteSse(string payload)
+    private async ValueTask WriteSseAsync(string payload)
     {
-        _response.WriteAsync($"data: {payload}\n\n").ConfigureAwait(false).GetAwaiter().GetResult();
-        _response.Body.FlushAsync().ConfigureAwait(false).GetAwaiter().GetResult();
+        await _response.WriteAsync($"data: {payload}\n\n").ConfigureAwait(false);
+        await _response.Body.FlushAsync().ConfigureAwait(false);
     }
 }

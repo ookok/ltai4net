@@ -95,7 +95,7 @@ public sealed class DocumentTools
         catch (Exception ex) { TryDelete(tmpPath); return $"Error: {ex.Message}"; }
     }
 
-    private static void TryDelete(string path) { try { File.Delete(path); } catch { } }
+    private static void TryDelete(string path) { try { File.Delete(path); } catch (IOException) { } catch (UnauthorizedAccessException) { } }
 
     public string ExcelWrite(string path, string cellsJson, bool create = false)
     {
@@ -892,10 +892,11 @@ public sealed class DocumentTools
 
     private static uint AddSharedString(SharedStringTable sst, string text)
     {
-        for (uint i = 0; i < sst.Elements<SharedStringItem>().Count(); i++)
-            if (sst.Elements<SharedStringItem>().ElementAt((int)i).InnerText == text) return i;
+        var items = sst.Elements<SharedStringItem>().ToList();
+        for (int i = 0; i < items.Count; i++)
+            if (items[i].InnerText == text) return (uint)i;
         sst.AppendChild(new SharedStringItem(new DocumentFormat.OpenXml.Spreadsheet.Text(text)));
-        return (uint)(sst.Elements<SharedStringItem>().Count() - 1);
+        return (uint)(items.Count);
     }
 
     private static (int startCol, int startRow, int endCol, int endRow) ParseRange(string range)

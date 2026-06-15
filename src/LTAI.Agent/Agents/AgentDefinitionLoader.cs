@@ -38,10 +38,9 @@ internal static class AgentDefinitionLoader
             try
             {
                 // DI factory lambda is sync; Task.Run keeps the call non-blocking.
-                return Task.Run(() =>
-                    AgentBuilder.BuildAgentImpl(sp, name, Description, CanRead, CanWrite, CanList, CanExec,
+                return AgentBuilder.BuildAgentImpl(sp, name, Description, CanRead, CanWrite, CanList, CanExec,
                         modelId: ModelId, temperature: Temperature, topP: TopP,
-                        agentPrompt: Prompt, yamlTools: Tools)).GetAwaiter().GetResult();
+                        agentPrompt: Prompt, yamlTools: Tools);
             }
             catch (Exception ex)
             {

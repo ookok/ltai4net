@@ -10,11 +10,12 @@ namespace LTAI.Desktop;
 
 public class App : Application
 {
-    public static LTAIService? Ltais { get; set; }
-    public static LTAI.Agent.ChatAgent? ChatAgent { get; set; }
-    public static Microsoft.Extensions.Options.IOptions<LTAI.Core.Configuration.LTAIOptions>? Options { get; set; }
-    public static LTAI.AI.MultiProviderChatClient? Router { get; set; }
-    public static System.Net.Http.IHttpClientFactory? HttpFactory { get; set; }
+    // Set once during startup before any window is created — thread-safe in practice.
+    public static LTAIService Ltais { get; set; } = null!;
+    public static LTAI.Agent.ChatAgent ChatAgent { get; set; } = null!;
+    public static Microsoft.Extensions.Options.IOptions<LTAI.Core.Configuration.LTAIOptions> Options { get; set; } = null!;
+    public static LTAI.AI.MultiProviderChatClient Router { get; set; } = null!;
+    public static System.Net.Http.IHttpClientFactory HttpFactory { get; set; } = null!;
 
     public override void Initialize()
     {
@@ -175,8 +176,12 @@ public class App : Application
             // Delay slightly then restart
             _ = Task.Run(async () =>
             {
-                await Task.Delay(100);
-                Environment.Exit(0);
+                try
+                {
+                    await Task.Delay(100);
+                    Environment.Exit(0);
+                }
+                catch { Environment.FailFast("Restart failed"); }
             });
         };
         btnRow.Children.Add(restartBtn);

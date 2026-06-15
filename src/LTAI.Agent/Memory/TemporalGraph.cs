@@ -4,16 +4,17 @@ namespace LTAI.Agent.Memory;
 
 public sealed class TemporalGraph
 {
-    private readonly SqliteConnection _db;
+    private readonly Func<SqliteConnection> _factory;
 
-    public TemporalGraph(SqliteConnection db)
+    public TemporalGraph(Func<SqliteConnection> factory)
     {
-        _db = db;
+        _factory = factory;
     }
 
     public void InitSchema()
     {
-        using var cmd = _db.CreateCommand();
+        using var conn = _factory();
+        using var cmd = conn.CreateCommand();
         cmd.CommandText = """
             CREATE TABLE IF NOT EXISTS temporal_edges (
                 from_id TEXT NOT NULL,
@@ -28,7 +29,8 @@ public sealed class TemporalGraph
 
     public void Append(string nodeId, int seq)
     {
-        using var cmd = _db.CreateCommand();
+        using var conn = _factory();
+        using var cmd = conn.CreateCommand();
         cmd.CommandText = """
             INSERT OR IGNORE INTO temporal_edges (from_id, to_id, seq)
             SELECT COALESCE(
@@ -43,7 +45,8 @@ public sealed class TemporalGraph
 
     public List<string> GetChain(int maxSteps = 50)
     {
-        using var cmd = _db.CreateCommand();
+        using var conn = _factory();
+        using var cmd = conn.CreateCommand();
         cmd.CommandText = """
             WITH RECURSIVE chain AS (
                 SELECT from_id, to_id, seq, 0 AS depth

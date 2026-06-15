@@ -33,13 +33,13 @@ public sealed class BackgroundJobService : IDisposable, IAsyncDisposable
     private volatile bool _paused;
     private readonly ManualResetEventSlim _pauseEvent = new(true);
     private readonly SemaphoreSlim _concurrencyGate;
+    private readonly ConcurrentQueue<(string JobId, DateTime ExpiresAt)> _cleanupQueue = new();
+    private int _cleanupLoopStarted;
 
-    /// <summary>Set by ChatAgent before tool calls to scope jobs to a session.</summary>
     public static string? CurrentSessionId { get => _currentSessionId.Value; set => _currentSessionId.Value = value; }
 
     private string EffectiveSession => CurrentSessionId ?? "default";
 
-    /// <summary>Default 60s cleanup, 100K max output, 10 concurrent jobs, 5min process timeout.</summary>
     public BackgroundJobService(
         int? expirationSeconds = null, int? maxOutputChars = null,
         int? maxConcurrentJobs = null, int? processTimeoutSeconds = null)
@@ -61,6 +61,31 @@ public sealed class BackgroundJobService : IDisposable, IAsyncDisposable
         _maxConcurrentJobs = Math.Max(1, maxConcurrentJobs);
         _processTimeoutSeconds = Math.Max(10, processTimeoutSeconds);
         _concurrencyGate = new SemaphoreSlim(_maxConcurrentJobs, _maxConcurrentJobs);
+    }
+
+    private void EnsureCleanupLoop()
+    {
+        if (Interlocked.CompareExchange(ref _cleanupLoopStarted, 1, 0) == 0)
+        {
+            _ = Task.Run(async () =>
+            {
+                while (!_cts.IsCancellationRequested)
+                {
+                    try
+                    {
+                        await Task.Delay(Math.Min(_expirationSeconds * 500, 30_000), _cts.Token).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException) { break; }
+
+                    var now = DateTime.UtcNow;
+                    while (_cleanupQueue.TryPeek(out var item) && item.ExpiresAt < now)
+                    {
+                        if (_cleanupQueue.TryDequeue(out _))
+                            _jobs.TryRemove(item.JobId, out _);
+                    }
+                }
+            }, _cts.Token);
+        }
     }
 
     public event Action<string, JobEntry>? JobCompleted;
@@ -197,11 +222,10 @@ public sealed class BackgroundJobService : IDisposable, IAsyncDisposable
         {
             while (true)
             {
-                var mem = new Memory<char>(buf);
-                var read = await reader.ReadAsync(mem, ct).ConfigureAwait(false);
+                var read = await reader.ReadAsync(buf, 0, buf.Length).ConfigureAwait(false);
                 if (read == 0) break;
                 var remaining = _maxOutputChars - sb.Length;
-                if (remaining <= 0) continue; // already at limit, keep draining silently
+                if (remaining <= 0) continue;
                 var toAdd = Math.Min(read, remaining);
                 sb.Append(buf, 0, toAdd);
                 if (sb.Length >= _maxOutputChars)
@@ -215,18 +239,8 @@ public sealed class BackgroundJobService : IDisposable, IAsyncDisposable
 
     private void ScheduleCleanup(string id)
     {
-        // F3: catch-all exception handler — unobserved exception from Task.Run
-        // in .NET Core 3.0+ crashes the finalizer thread.
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                await Task.Delay(_expirationSeconds * 1000, _cts.Token).ConfigureAwait(false);
-                _jobs.TryRemove(id, out _);
-            }
-            catch (OperationCanceledException) { /* service shutting down */ }
-            catch (Exception) { }
-        }, _cts.Token);
+        EnsureCleanupLoop();
+        _cleanupQueue.Enqueue((id, DateTime.UtcNow.AddSeconds(_expirationSeconds)));
     }
 
     public void Dispose()

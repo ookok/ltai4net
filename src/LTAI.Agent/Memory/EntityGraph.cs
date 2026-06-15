@@ -4,16 +4,17 @@ namespace LTAI.Agent.Memory;
 
 public sealed class EntityGraph
 {
-    private readonly SqliteConnection _db;
+    private readonly Func<SqliteConnection> _factory;
 
-    public EntityGraph(SqliteConnection db)
+    public EntityGraph(Func<SqliteConnection> factory)
     {
-        _db = db;
+        _factory = factory;
     }
 
     public void InitSchema()
     {
-        using var cmd = _db.CreateCommand();
+        using var conn = _factory();
+        using var cmd = conn.CreateCommand();
         cmd.CommandText = """
             CREATE TABLE IF NOT EXISTS entity_edges (
                 node_id     TEXT NOT NULL,
@@ -29,7 +30,8 @@ public sealed class EntityGraph
 
     public void Link(string nodeId, string entityId, string entityType = "")
     {
-        using var cmd = _db.CreateCommand();
+        using var conn = _factory();
+        using var cmd = conn.CreateCommand();
         cmd.CommandText = """
             INSERT OR IGNORE INTO entity_edges (node_id, entity_id, entity_type)
             VALUES (@node, @entity, @type)
@@ -42,7 +44,8 @@ public sealed class EntityGraph
 
     public List<string> GetNodesForEntity(string entityId, int limit = 20)
     {
-        using var cmd = _db.CreateCommand();
+        using var conn = _factory();
+        using var cmd = conn.CreateCommand();
         cmd.CommandText = """
             SELECT node_id FROM entity_edges
             WHERE entity_id = @entity
@@ -58,7 +61,8 @@ public sealed class EntityGraph
 
     public List<(string EntityId, string EntityType)> GetEntities(string nodeId)
     {
-        using var cmd = _db.CreateCommand();
+        using var conn = _factory();
+        using var cmd = conn.CreateCommand();
         cmd.CommandText = """
             SELECT entity_id, entity_type FROM entity_edges
             WHERE node_id = @node

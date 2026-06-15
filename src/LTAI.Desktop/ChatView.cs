@@ -262,7 +262,7 @@ public sealed partial class ChatView : UserControl, IChatRenderer
                     {
                         if (t.IsFaulted)
                             System.Diagnostics.Debug.WriteLine($"[ChatView] SendCommand failed: {t.Exception?.InnerException?.Message}");
-                    });
+                    }, TaskContinuationOptions.OnlyOnFaulted);
                 }
                 return;
             }
@@ -271,7 +271,7 @@ public sealed partial class ChatView : UserControl, IChatRenderer
             {
                 if (t.IsFaulted)
                     System.Diagnostics.Debug.WriteLine($"[ChatView] SendAsync failed: {t.Exception?.InnerException?.Message}");
-            });
+            }, TaskContinuationOptions.OnlyOnFaulted);
         };
 
         var inputRow = new DockPanel { Margin = new(0, 4, 0, 0) };
@@ -424,11 +424,11 @@ public sealed partial class ChatView : UserControl, IChatRenderer
                 if (_vm.IsSending) return;
                 e.Handled = true;
                 _vm.Input = _input.Text ?? "";
-                _ = _vm.SendCommand.ExecuteAsync(null).ContinueWith(t =>
-                {
-                    if (t.IsFaulted)
-                        System.Diagnostics.Debug.WriteLine($"[ChatView] SendCommand failed: {t.Exception?.InnerException?.Message}");
-                });
+                    _ = _vm.SendCommand.ExecuteAsync(null).ContinueWith(t =>
+                    {
+                        if (t.IsFaulted)
+                            System.Diagnostics.Debug.WriteLine($"[ChatView] SendCommand failed: {t.Exception?.InnerException?.Message}");
+                    }, TaskContinuationOptions.OnlyOnFaulted);
                 return;
             }
             if (_isSending) return;
@@ -790,11 +790,11 @@ public sealed partial class ChatView : UserControl, IChatRenderer
                         {
                             lastRenderedText = text;
                             UpdateResponseText(responsePanel, text);
+                            _scroller.ScrollToEnd();
                         }
                     }
                 }
 
-                _scroller.ScrollToEnd();
                 if (Volatile.Read(ref _tokens) % 20 == 0)
                     await Task.Yield();
             }

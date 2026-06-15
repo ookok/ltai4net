@@ -21,7 +21,6 @@ namespace LTAI.Agent.Tools;
 [ToolDomain("shell")]
 public sealed class SafeShellTool
 {
-    /// <summary>Fallback PATH for sandboxed process execution. Set from config at startup.</summary>
     public static string SystemPathFallback { get; set; } = @"C:\Windows\system32;C:\Windows";
     private static readonly SemaphoreSlim _concurrencyGate = new(
         int.TryParse(Environment.GetEnvironmentVariable("LTAI_SHELL_CONCURRENCY"), out var c) ? Math.Max(1, c) : 8,
@@ -29,6 +28,44 @@ public sealed class SafeShellTool
     private readonly string _ws;
     private readonly HashSet<string>? _allowList;
     private readonly IHttpClientFactory? _httpFactory;
+
+    private static readonly HashSet<string> BlockedExes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "sudo", "su", "chmod", "chown", "mkfs", "fdisk",
+        "dd", "shutdown", "reboot", "init", "halt", "poweroff",
+        "passwd", "useradd", "usermod", "groupadd", "fuser", "kill",
+        "mount", "umount", "iptables", "ufw", "systemctl",
+        "cmd", "cmd.exe", "certutil", "bitsadmin", "mshta", "cscript", "wmic",
+        "reg", "schtasks", "diskpart", "bcdedit", "regsvr32", "rundll32",
+        "attrib", "cacls", "takeown", "icacls",
+    };
+
+    private static readonly string[] DangerousPatterns =
+    {
+        "rm -rf /", "rm -rf ~", "rm -rf --no-preserve-root",
+        ":(){ :|:& };:", "eval ", "exec ",
+        "> /dev/", "dd if=", "wget -O - | sh", "curl .* | sh",
+        "wget .* -O ", "certutil .* -urlcache", "bitsadmin .* /transfer",
+    };
+
+    private static readonly HashSet<string> CodeExecNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "bash", "sh", "zsh", "dash", "ksh", "fish",
+        "python", "python2", "python3", "py",
+        "perl", "perl5",
+        "ruby", "rake",
+        "php",
+        "lua", "luajit",
+        "tclsh", "wish",
+        "powershell", "pwsh", "powershell.exe", "pwsh.exe",
+    };
+
+    private static readonly HashSet<string> CodeExecArgs = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "-c", "-command", "-e", "-i",
+    };
+
+    private static readonly string[] CommandSeps = { " & ", " && ", " || ", " | ", "; " };
 
     /// <param name="ws">工作目录，所有命令在此执行。</param>
     /// <param name="allowList">可选白名单，null=允许所有命令。</param>
@@ -63,52 +100,16 @@ public sealed class SafeShellTool
         var executable = parts.Length > 0 ? parts[0].Trim() : "";
         var executableName = Path.GetFileName(executable.AsSpan()).ToString();
 
-        // 1. 按可执行文件名阻止（token 级，无假阳性）
-        var blockedExes = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-        {
-            "sudo", "su", "chmod", "chown", "mkfs", "fdisk",
-            "dd", "shutdown", "reboot", "init", "halt", "poweroff",
-            "passwd", "useradd", "usermod", "groupadd", "fuser", "kill",
-            "mount", "umount", "iptables", "ufw", "systemctl",
-            "cmd", "cmd.exe", "certutil", "bitsadmin", "mshta", "cscript", "wmic",
-            "reg", "schtasks", "diskpart", "bcdedit", "regsvr32", "rundll32",
-            "attrib", "cacls", "takeown", "icacls",
-        };
-        if (blockedExes.Contains(executableName))
+        if (BlockedExes.Contains(executableName))
             return "❌ 命令包含危险操作，已阻止";
 
-        // 2. 按命令全文模式匹配（捕获复合危险命令）
-        var dangerousPatterns = new[]
-        {
-            "rm -rf /", "rm -rf ~", "rm -rf --no-preserve-root",
-            ":(){ :|:& };:", "eval ", "exec ",
-            "> /dev/", "dd if=", "wget -O - | sh", "curl .* | sh",
-            "wget .* -O ", "certutil .* -urlcache", "bitsadmin .* /transfer",
-        };
-        if (dangerousPatterns.Any(p => cmdLower.Contains(p)))
+        if (DangerousPatterns.Any(p => cmdLower.Contains(p)))
             return "❌ 命令包含危险操作，已阻止";
 
-        // 2b. 按可执行文件名检测代码执行（覆盖 bash/python/perl/pwsh 等所有变体）
-        var codeExecNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-        {
-            "bash", "sh", "zsh", "dash", "ksh", "fish",
-            "python", "python2", "python3", "py",
-            "perl", "perl5",
-            "ruby", "rake",
-            "php",
-            "lua", "luajit",
-            "tclsh", "wish",
-            "powershell", "pwsh", "powershell.exe", "pwsh.exe",
-        };
-        var codeExecArgs = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-        {
-            "-c", "-command", "-e", "-i",
-        };
-        if (parts.Length >= 2 && codeExecNames.Contains(parts[0]) && codeExecArgs.Contains(parts[1]))
+        if (parts.Length >= 2 && CodeExecNames.Contains(parts[0]) && CodeExecArgs.Contains(parts[1]))
             return "❌ 命令包含代码执行操作 (-c/-e/-command)，已阻止";
 
-        // Block command separator chars that bypass first-token checks
-        foreach (var sep in new[] { " & ", " && ", " || ", " | ", "; " })
+        foreach (var sep in CommandSeps)
         {
             if (cmdLower.Contains(sep))
             {
@@ -118,7 +119,7 @@ public sealed class SafeShellTool
                     var partExec = part.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
                     if (partExec.Length == 0) continue;
                     var pn = Path.GetFileName(partExec[0].AsSpan()).ToString();
-                    if (blockedExes.Contains(pn) || codeExecNames.Contains(pn))
+                    if (BlockedExes.Contains(pn) || CodeExecNames.Contains(pn))
                         return $"❌ 命令包含危险操作（{pn}），已阻止";
                 }
                 break;

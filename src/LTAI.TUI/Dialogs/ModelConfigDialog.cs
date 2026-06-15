@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Text.Json;
 using LTAI.Core.Configuration;
 using Terminal.Gui.App;
 using Terminal.Gui.Drawing;
@@ -17,6 +18,7 @@ public sealed class ModelConfigDialog : Dialog
     private readonly TextField _apiKeyField;
     private readonly DropDownList _modelDropdown;
     private readonly Label _statusLabel;
+    private CancellationTokenSource? _fetchCts;
 
     private static readonly (string key, string label)[] Layers = { ("L1", "快速反应"), ("L2", "深度推理"), ("L0", "并行辅助") };
     private static readonly KnownKeys.KeyInfo[] Providers = KnownKeys.All;
@@ -36,7 +38,7 @@ public sealed class ModelConfigDialog : Dialog
             var isActive = key == _layer;
             var btn = new Button { X = i * 16, Y = 0, Text = isActive ? $"[{label}]" : $" {label} " };
             var cap = key;
-            btn.Accepting += (_, _) => { LayerSwitchRequested = cap; _app.RequestStop(); };
+            btn.Accepting += (_, _) => { LayerSwitchRequested = cap; CancelFetch(); _app.RequestStop(); };
             Add(btn);
         }
 
@@ -117,6 +119,7 @@ public sealed class ModelConfigDialog : Dialog
         var cancelBtn = new Button { Text = "取消" };
         cancelBtn.Accepting += (_, e) =>
         {
+            CancelFetch();
             _app.RequestStop();
             e.Handled = true;
         };
@@ -148,14 +151,14 @@ public sealed class ModelConfigDialog : Dialog
         {
             var path = Path.Combine(AppContext.BaseDirectory, "appsettings.json");
             if (!File.Exists(path)) return ("", "");
-            var json = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(path));
-            var ai = json?["LTAI"]?["AI"] as System.Text.Json.Nodes.JsonObject;
-            if (ai == null) return ("", "");
-            var key = ((System.Collections.Generic.IDictionary<string, System.Text.Json.Nodes.JsonNode?>)ai)
-                .Keys.FirstOrDefault(k => string.Equals(k, layer, StringComparison.OrdinalIgnoreCase));
-            var l = key != null ? ai[key] : null;
-            if (l == null) return ("", "");
-            return (l["Provider"]?.GetValue<string>() ?? "", l["Model"]?.GetValue<string>() ?? "");
+            using var doc = JsonDocument.Parse(File.ReadAllBytes(path));
+            var root = doc.RootElement;
+            if (!root.TryGetProperty("LTAI", out var ltai)) return ("", "");
+            if (!ltai.TryGetProperty("AI", out var ai)) return ("", "");
+            if (!ai.TryGetProperty(layer, out var l)) return ("", "");
+            var provider = l.TryGetProperty("Provider", out var p) ? p.GetString() ?? "" : "";
+            var model = l.TryGetProperty("Model", out var m) ? m.GetString() ?? "" : "";
+            return (provider, model);
         }
         catch { return ("", ""); }
     }
@@ -171,6 +174,10 @@ public sealed class ModelConfigDialog : Dialog
         if (string.IsNullOrEmpty(endpoint)) { _statusLabel.Text = "未知 Provider"; return; }
         _statusLabel.Text = "正在获取...";
 
+        CancelFetch();
+        _fetchCts = new CancellationTokenSource();
+        var ct = _fetchCts.Token;
+
         Task.Run(async () =>
         {
             try
@@ -184,12 +191,14 @@ public sealed class ModelConfigDialog : Dialog
                     string u when u.Contains("openrouter.ai") => "https://openrouter.ai/api/v1/models",
                     _ => $"{endpoint.TrimEnd('/')}/models".Replace("//models", "/models"),
                 };
-                var resp = await http.GetAsync(url);
+                using var resp = await http.GetAsync(url, ct);
+                ct.ThrowIfCancellationRequested();
                 if (!resp.IsSuccessStatusCode) { TryInvoke(() => _statusLabel.Text = $"HTTP {(int)resp.StatusCode}"); return; }
                 var json = await resp.Content.ReadAsStringAsync();
-                var doc = System.Text.Json.JsonDocument.Parse(json);
+                ct.ThrowIfCancellationRequested();
+                using var doc = JsonDocument.Parse(json);
                 var models = new List<string>();
-                if (doc.RootElement.TryGetProperty("data", out var data) && data.ValueKind == System.Text.Json.JsonValueKind.Array)
+                if (doc.RootElement.TryGetProperty("data", out var data) && data.ValueKind == JsonValueKind.Array)
                     foreach (var m in data.EnumerateArray())
                         if (m.TryGetProperty("id", out var id)) models.Add(id.GetString() ?? "");
                 TryInvoke(() =>
@@ -200,6 +209,7 @@ public sealed class ModelConfigDialog : Dialog
                     else _statusLabel.Text = "未找到模型";
                 });
             }
+            catch (OperationCanceledException) { }
             catch (Exception ex) { TryInvoke(() => _statusLabel.Text = $"失败: {ex.Message}"); }
         });
 
@@ -208,6 +218,19 @@ public sealed class ModelConfigDialog : Dialog
             try { _app.Invoke(action); }
             catch (ObjectDisposedException) { /* dialog closed, ignore */ }
         }
+    }
+
+    private void CancelFetch()
+    {
+        _fetchCts?.Cancel();
+        _fetchCts?.Dispose();
+        _fetchCts = null;
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing) CancelFetch();
+        base.Dispose(disposing);
     }
 
     private void OnSave(object? s, EventArgs e)
@@ -220,6 +243,7 @@ public sealed class ModelConfigDialog : Dialog
 
         LTAIOptions.SaveLayerToAppSettings(_layer, provider, model);
         _statusLabel.Text = $"✅ {_layer} 已保存";
+        CancelFetch();
         _app.RequestStop();
     }
 

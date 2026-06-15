@@ -69,6 +69,7 @@ public sealed partial class DevUIViewModel : ViewModelBase
         IsSending = true;
         ChatLogText += $"\n[你]: {text}";
 
+        _chatCts?.Dispose();
         _chatCts = new CancellationTokenSource();
         try
         {

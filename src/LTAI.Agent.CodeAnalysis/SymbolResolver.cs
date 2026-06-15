@@ -14,7 +14,7 @@ public enum ReferenceKind
     Reference,
 }
 
-public sealed class SymbolResolver
+public sealed class SymbolResolver : IDisposable
 {
     private readonly string _workspace;
     private readonly ILogger? _logger;
@@ -303,4 +303,6 @@ public sealed class SymbolResolver
     }
 
     private string? ResolvePath(string path) => LTAI.Core.PathUtils.SafeResolvePath(_workspace, path);
+
+    public void Dispose() => _tsParser?.Dispose();
 }

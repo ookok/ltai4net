@@ -22,16 +22,11 @@ public sealed partial class WorkflowsViewModel : ViewModelBase
 
     public sealed record WorkflowItem(string Name, string Type, string Version);
 
-    public WorkflowsViewModel(LTAIService? svc = null)
+    public WorkflowsViewModel(LTAIService? svc = null, YAMLWorkflowRegistry? registry = null)
     {
-        if (svc == null) return;
-        try
-        {
-            _registry = svc.Chat.GetType().GetField("_workflowRegistry",
+        _registry = registry ?? svc?.Chat.GetType().GetField("_workflowRegistry",
                 System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)?
                 .GetValue(svc.Chat) as YAMLWorkflowRegistry;
-        }
-        catch { }
 
         if (_registry != null)
         {

@@ -4,6 +4,7 @@ using LTAI.Agent.Services;
 using LTAI.Agent.Tools;
 using LTAI.Agent.Tools.Review;
 using LTAI.Agent.Vector;
+using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -115,11 +116,12 @@ partial class AgentBuilder
             : name is "LTAI-Chat" or "LTAI-Writer" or "LTAI-Frontend")
         {
             var sub = new SubagentTools(sp, llm, ws, tools.ToList());
-            tools.Add(AIFunctionFactory.Create(sub.Explore));
-            tools.Add(AIFunctionFactory.Create(sub.Research));
-            tools.Add(AIFunctionFactory.Create(sub.Review));
-            tools.Add(AIFunctionFactory.Create(sub.SecurityReview));
-            tools.Add(AIFunctionFactory.Create(sub.SpawnSubagent));
+        tools.Add(AIFunctionFactory.Create(sub.Explore));
+        tools.Add(AIFunctionFactory.Create(sub.Research));
+        tools.Add(AIFunctionFactory.Create(sub.Review));
+        tools.Add(AIFunctionFactory.Create(sub.SecurityReview));
+        tools.Add(AIFunctionFactory.Create(sub.DeepResearch));
+        tools.Add(AIFunctionFactory.Create(sub.SpawnSubagent));
         }
     }
 
@@ -151,16 +153,37 @@ partial class AgentBuilder
         tools.Add(AIFunctionFactory.Create(git.GitRemote));
     }
 
-    static void RegisterReviewTools(ToolSet tools, string name, string ws)
+    static void RegisterReviewTools(ToolSet tools, string name, string ws, PalaceStore? palaceStore = null,
+        IServiceProvider? sp = null, IChatClient? llm = null, IReadOnlyList<AITool>? allTools = null)
     {
-        if (name is not ("LTAI-Chat" or "LTAI-Review" or "LTAI-Code" or "LTAI-Writer")) return;
-        var review = new ReviewTools(ws);
+        if (name is not ("LTAI-Chat" or "LTAI-Review" or "LTAI-Code" or "LTAI-Writer" or "LTAI-Security" or "LTAI-Debug")) return;
+        var review = new ReviewTools(ws, palaceStore, sp, llm, allTools);
         tools.Add(AIFunctionFactory.Create(review.LoadReviewRules));
         tools.Add(AIFunctionFactory.Create(review.GroupChanges));
         tools.Add(AIFunctionFactory.Create(review.MatchReviewRules));
         tools.Add(AIFunctionFactory.Create(review.RepairReviewPositions));
         tools.Add(AIFunctionFactory.Create(review.ReflectReviewQuality));
         tools.Add(AIFunctionFactory.Create(review.BuildReviewContext));
+        tools.Add(AIFunctionFactory.Create(review.SaveAuditFindings));
+        tools.Add(AIFunctionFactory.Create(review.ResolveAuditFinding));
+        tools.Add(AIFunctionFactory.Create(review.VerifyAuditFinding));
+        tools.Add(AIFunctionFactory.Create(review.ListAuditFindings));
+        tools.Add(AIFunctionFactory.Create(review.GetAuditFinding));
+        tools.Add(AIFunctionFactory.Create(review.CloseAuditFinding));
+        tools.Add(AIFunctionFactory.Create(review.ExportAuditFindings));
+        tools.Add(AIFunctionFactory.Create(review.AuditStatistics));
+        tools.Add(AIFunctionFactory.Create(review.BatchResolveAuditFindings));
+        tools.Add(AIFunctionFactory.Create(review.BatchCloseAuditFindings));
+        tools.Add(AIFunctionFactory.Create(review.DeleteAuditFinding));
+        tools.Add(AIFunctionFactory.Create(review.FreezeAuditGates));
+    }
+
+    static void RegisterParallelReviewTool(ToolSet tools, string name, string ws,
+        PalaceStore? palaceStore, IServiceProvider sp, IChatClient llm, IReadOnlyList<AITool> allTools)
+    {
+        if (name is not ("LTAI-Chat" or "LTAI-Review" or "LTAI-Code" or "LTAI-Writer" or "LTAI-Security" or "LTAI-Debug")) return;
+        var review = new ReviewTools(ws, palaceStore, sp, llm, allTools);
+        tools.Add(AIFunctionFactory.Create(review.ParallelReview));
     }
 
     static void RegisterSkillBankTools(ToolSet tools, string name, string[]? yamlTools)

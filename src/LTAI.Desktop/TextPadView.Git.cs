@@ -11,17 +11,22 @@ partial class TextPadView
 {
     private void UpdateGitInfo()
     {
+        _ = UpdateGitInfoAsync();
+    }
+
+    private async Task UpdateGitInfoAsync()
+    {
         try
         {
             var gitDir = FindGitDir(_rootDir);
             if (gitDir == null) { _gitBranchLabel.IsVisible = false; return; }
 
-            var branch = RunGit("rev-parse --abbrev-ref HEAD")?.Trim();
+            var branch = (await RunGitAsync("rev-parse --abbrev-ref HEAD"))?.Trim();
             _gitBranch = branch ?? "unknown";
             _gitBranchLabel.Text = $"🌿 {_gitBranch}";
             _gitBranchLabel.IsVisible = true;
 
-            var status = RunGit("status --porcelain --untracked-files=normal");
+            var status = await RunGitAsync("status --porcelain --untracked-files=normal");
             _gitFileStatus = new Dictionary<string, string>();
             if (status != null)
             {
@@ -72,6 +77,27 @@ partial class TextPadView
             var output = process.StandardOutput.ReadToEnd().Trim();
             process.WaitForExit(5000);
             return process.ExitCode == 0 ? output : null;
+        }
+        catch { return null; }
+    }
+
+    private async Task<string?> RunGitAsync(string args)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo("git", args)
+            {
+                WorkingDirectory = _rootDir,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            };
+            using var process = new Process { StartInfo = psi };
+            process.Start();
+            var output = await process.StandardOutput.ReadToEndAsync();
+            await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));
+            return process.ExitCode == 0 ? output.Trim() : null;
         }
         catch { return null; }
     }
@@ -143,10 +169,10 @@ partial class TextPadView
             return;
         }
 
-        if (output.Length < 2000 && output.Split('\n').Take(5).All(l => string.IsNullOrEmpty(l) || (l.Length >= 3 && l[2] == ' ')))
+        if (output.Length < 2000 && output.Replace("\r\n", "\n").Split('\n').Take(5).All(l => string.IsNullOrEmpty(l) || (l.Length >= 3 && l[2] == ' ')))
             { RenderGitStatusStructured(output); return; }
 
-        var lines = output.Split('\n');
+        var lines = output.Replace("\r\n", "\n").Split('\n');
         foreach (var line in lines)
         {
             var run = new Avalonia.Controls.Documents.Run(line + "\n");
@@ -240,12 +266,12 @@ partial class TextPadView
                 }
             }
         };
-        yesBtn.Click += (_, _) =>
+        yesBtn.Click += async (_, _) =>
         {
             var msg = msgBox.Text?.Trim();
             if (string.IsNullOrEmpty(msg)) return;
             var stage = stageAll.IsChecked == true ? "add -A && " : "";
-            var result = RunGit($"{stage}commit -m \"{msg.Replace("\"", "\\\"")}\"");
+            var result = await RunGitAsync($"{stage}commit -m \"{msg.Replace("\"", "\\\"")}\"");
             _statusBar.Text = result != null ? $"✅ 已提交: {msg[..Math.Min(msg.Length, 50)]}" : "❌ 提交失败";
             dialog.Close();
             UpdateGitInfo();
@@ -254,13 +280,13 @@ partial class TextPadView
         dialog.ShowDialog(owner);
     }
 
-    private void ToggleBlame()
+    private async void ToggleBlame()
     {
         if (_currentFile == null) return;
         if (_blameData != null) { _blameData = null; _statusBar.Text = "Blame 已关闭"; return; }
         try
         {
-            var output = RunGit($"blame --line-porcelain \"{_currentFile}\"");
+            var output = await RunGitAsync($"blame --line-porcelain \"{_currentFile}\"");
             if (output == null) { _statusBar.Text = "❌ Blame 不可用"; return; }
             _blameData = new Dictionary<string, string>();
             string? currentAuthor = null;

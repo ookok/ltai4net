@@ -24,7 +24,7 @@ public sealed class GitTools
         using var cts = new CancellationTokenSource(GitTimeout);
         try
         {
-            return Task.Run(action, cts.Token).GetAwaiter().GetResult();
+            return Task.Run(action, cts.Token).ConfigureAwait(false).GetAwaiter().GetResult();
         }
         catch (AggregateException ae) when (ae.InnerException != null)
         {

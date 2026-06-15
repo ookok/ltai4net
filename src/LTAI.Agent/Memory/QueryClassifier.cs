@@ -57,26 +57,9 @@ public sealed class QueryClassifier
 
     /// <summary>
     /// Detect whether the input is a pure greeting (no substantive request).
-    /// Supports Chinese, English, Japanese, Korean, French, Spanish, Russian.
+    /// Delegates to the shared static implementation.
     /// </summary>
-    public bool IsGreetingOnly(string task)
-    {
-        if (string.IsNullOrWhiteSpace(task)) return false;
-        var trimmed = task.Trim();
-
-        if (GreetingsSet.Contains(trimmed))
-            return true;
-
-        var hasToolKeyword = ToolKeywords.Any(k =>
-            trimmed.Contains(k, StringComparison.OrdinalIgnoreCase));
-        if (hasToolKeyword)
-            return false;
-
-        if (trimmed.Length <= _greetingMaxLength)
-            return true;
-
-        return false;
-    }
+    public bool IsGreetingOnly(string task) => IsGreetingOnlyStatic(task);
 
     /// <summary>
     /// Static fast-path greeting check (no DI needed). Used by callers that
@@ -90,10 +73,9 @@ public sealed class QueryClassifier
         if (GreetingsSet.Contains(trimmed))
             return true;
 
-        var hasToolKeyword = ToolKeywords.Any(k =>
-            trimmed.Contains(k, StringComparison.OrdinalIgnoreCase));
-        if (hasToolKeyword)
-            return false;
+        foreach (var keyword in ToolKeywords)
+            if (trimmed.Contains(keyword, StringComparison.OrdinalIgnoreCase))
+                return false;
 
         if (trimmed.Length <= _greetingMaxLength)
             return true;

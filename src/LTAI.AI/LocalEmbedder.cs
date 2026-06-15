@@ -36,8 +36,10 @@ public sealed class LocalEmbedder : IDisposable
     private DateTime _lastLoadAttemptAt;
     private bool _disposed;
     private readonly object _loadLock = new();
-    private string? _activeExecutionProvider; // P13.2 telemetry
-    private bool _usingQuantizedModel;        // P13.1 telemetry
+    private string? _activeExecutionProvider;
+    private bool _usingQuantizedModel;
+    private Task<bool>? _loadTask;
+    private volatile bool _loadInProgress;
 
     /// <summary>
     /// P13.1 + P13.2: configuration for local ONNX model loading. Set globally
@@ -104,7 +106,10 @@ public sealed class LocalEmbedder : IDisposable
         get
         {
             if (DefaultDisabled) return false;
-            if (!_loadAttempted) EnsureLoaded();
+            if (!_loadAttempted && !_loadInProgress)
+            {
+                _ = EnsureLoadedAsync();
+            }
             return _session != null;
         }
     }
@@ -113,7 +118,7 @@ public sealed class LocalEmbedder : IDisposable
     public async Task PreWarmAsync()
     {
         if (DefaultDisabled || _loadAttempted) return;
-        await Task.Run(() => EnsureLoaded()).ConfigureAwait(false);
+        await EnsureLoadedAsync().ConfigureAwait(false);
     }
 
     /// <summary>Actual embedding dimension of the loaded model.</summary>
@@ -167,112 +172,115 @@ public sealed class LocalEmbedder : IDisposable
         return (null, null, null, false);
     }
 
-    /// <summary>
-    /// Load the ONNX model with a timeout to prevent hang.
-    /// Uses Task.Run + Wait with timeout to unblock the UI thread.
-    /// </summary>
-    private void EnsureLoaded()
+    private async Task EnsureLoadedAsync()
     {
-        // Allow up to 3 retries with 30s backoff between attempts
         if (_loadAttempted && (_loadRetries >= 3 || (DateTime.UtcNow - _lastLoadAttemptAt).TotalSeconds < 30)) return;
+        if (_loadInProgress && _loadTask != null) { await _loadTask.ConfigureAwait(false); return; }
+
+        Task<bool> loadTask;
         lock (_loadLock)
         {
             if (_loadAttempted && (_loadRetries >= 3 || (DateTime.UtcNow - _lastLoadAttemptAt).TotalSeconds < 30)) return;
+            if (_loadInProgress && _loadTask != null) { loadTask = _loadTask; goto awaitExisting; }
             _lastLoadAttemptAt = DateTime.UtcNow;
             if (_modelPath == null || _vocabPath == null) { _loadAttempted = true; return; }
 
-            try
+            _loadInProgress = true;
+            _loadTask = loadTask = Task.Run(() =>
             {
-                // Run ONNX model loading on a background thread with timeout
-                // to prevent any possibility of blocking the UI thread.
-                var loaded = Task.Run(() =>
+                try
                 {
-                    try
+                    var opts = new SessionOptions();
+                    opts.ExecutionMode = ExecutionMode.ORT_PARALLEL;
+                    opts.IntraOpNumThreads = Math.Max(1, Environment.ProcessorCount / 2);
+                    opts.InterOpNumThreads = 2;
+
+                    opts.AppendExecutionProvider_CPU();
+
+                    var gpuPref = (Options.Gpu ?? "auto").ToLowerInvariant();
+                    if (gpuPref is "dml" or "auto")
                     {
-                        var opts = new SessionOptions();
-                        opts.ExecutionMode = ExecutionMode.ORT_PARALLEL;
-                        opts.IntraOpNumThreads = Math.Max(1, Environment.ProcessorCount / 2);
-                        opts.InterOpNumThreads = 2;
-
-                        // Always start with CPU fallback — fastest and most reliable
-                        opts.AppendExecutionProvider_CPU();
-
-                        // Try GPU providers only if they're fast to initialize
-                        var gpuPref = (Options.Gpu ?? "auto").ToLowerInvariant();
-                        if (gpuPref is "dml" or "auto")
+                        try
                         {
-                            try
-                            {
-                                opts.AppendExecutionProvider_DML(Options.DeviceId);
-                                _activeExecutionProvider = "DML";
-                            }
-                            catch { /* DML not available */ }
+                            opts.AppendExecutionProvider_DML(Options.DeviceId);
+                            _activeExecutionProvider = "DML";
                         }
-                        if (_activeExecutionProvider == null && (gpuPref is "cuda" or "auto"))
-                        {
-                            try
-                            {
-                                opts.AppendExecutionProvider_CUDA(Options.DeviceId);
-                                _activeExecutionProvider = "CUDA";
-                            }
-                            catch { /* CUDA not available */ }
-                        }
-                        if (_activeExecutionProvider == null)
-                            _activeExecutionProvider = "CPU";
-
-                        if (Options.EnableGraphOptimization)
-                            opts.GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL;
-
-                        _session = new InferenceSession(_modelPath, opts);
-
-                        // Detect actual dimension from model output metadata (hidden_size),
-                        // not input metadata (max_seq_len).
-                        try { _actualDimension = (int)_session.OutputMetadata.First().Value.Dimensions[2]; }
-                        catch { _actualDimension = DefaultDimension; }
-
-                        _vocab = LoadVocab(_vocabPath);
-                        return true;
+                        catch { }
                     }
-                    catch (Exception ex)
+                    if (_activeExecutionProvider == null && (gpuPref is "cuda" or "auto"))
                     {
-                        _session = null;
-                        _vocab = null;
-                        _activeExecutionProvider = null;
-                        _loadError = ex;
-                        return false;
+                        try
+                        {
+                            opts.AppendExecutionProvider_CUDA(Options.DeviceId);
+                            _activeExecutionProvider = "CUDA";
+                        }
+                        catch { }
                     }
-                });
+                    if (_activeExecutionProvider == null)
+                        _activeExecutionProvider = "CPU";
 
-                // Wait with timeout — if ONNX loading hangs, we don't block init
-                if (!loaded.Wait(ModelLoadTimeout))
+                    if (Options.EnableGraphOptimization)
+                        opts.GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL;
+
+                    _session = new InferenceSession(_modelPath, opts);
+                    try { _actualDimension = (int)_session.OutputMetadata.First().Value.Dimensions[2]; }
+                    catch { _actualDimension = DefaultDimension; }
+                    _vocab = LoadVocab(_vocabPath);
+                    return true;
+                }
+                catch (Exception ex)
                 {
-                    // Timeout — mark as failed and continue
                     _session = null;
                     _vocab = null;
                     _activeExecutionProvider = null;
-                    _loadError = new TimeoutException(
-                        $"ONNX model loading timed out after {ModelLoadTimeout.TotalSeconds}s");
+                    _loadError = ex;
+                    return false;
                 }
-            }
-            catch (Exception ex)
+            });
+        }
+        awaitExisting:
+        await LoadWithTimeoutAsync(loadTask).ConfigureAwait(false);
+    }
+
+    private async Task LoadWithTimeoutAsync(Task<bool> loadTask)
+    {
+        try
+        {
+            var timeoutTask = Task.Delay(ModelLoadTimeout);
+            var completed = await Task.WhenAny(loadTask, timeoutTask).ConfigureAwait(false);
+            if (completed == timeoutTask)
             {
                 _session = null;
                 _vocab = null;
                 _activeExecutionProvider = null;
-                _loadError = ex;
+                _loadError = new TimeoutException(
+                    $"ONNX model loading timed out after {ModelLoadTimeout.TotalSeconds}s");
             }
-            _loadAttempted = true;
-            // On failure, allow retry up to 3 times with backoff
-            if (_session == null)
+        }
+        catch (Exception ex)
+        {
+            _session = null;
+            _vocab = null;
+            _activeExecutionProvider = null;
+            _loadError = ex;
+        }
+        finally
+        {
+            lock (_loadLock)
             {
-                _loadRetries++;
-                if (_loadRetries < 3) _loadAttempted = false;
-                if (_loadRetries == 1)
-                    Console.Error.WriteLine($"[LTAI] ONNX model load failed, will retry up to 2 more times after 30s");
-            }
-            else
-            {
-                _loadRetries = 0; // Reset on success
+                _loadInProgress = false;
+                _loadAttempted = true;
+                if (_session == null)
+                {
+                    _loadRetries++;
+                    if (_loadRetries < 3) _loadAttempted = false;
+                    if (_loadRetries == 1)
+                        Console.Error.WriteLine($"[LTAI] ONNX model load failed, will retry up to 2 more times after 30s");
+                }
+                else
+                {
+                    _loadRetries = 0;
+                }
             }
         }
     }
@@ -284,7 +292,7 @@ public sealed class LocalEmbedder : IDisposable
     /// <summary>Generate embedding vector for the given text.</summary>
     public float[] Generate(string text)
     {
-        var (session, vocab) = GetLoadedModel();
+        var (session, vocab) = GetLoadedModelSync();
         if (session == null || vocab == null)
             throw new InvalidOperationException(
                 "LocalEmbedder not available. Use /model download to download an embedding model.");
@@ -323,8 +331,25 @@ public sealed class LocalEmbedder : IDisposable
         return EmbeddingPool.L2Normalize(result);
     }
 
+    private (InferenceSession?, Dictionary<string, int>?) GetLoadedModelSync()
+    {
+        if (!_loadAttempted && !_loadInProgress)
+        {
+            _ = EnsureLoadedAsync();
+        }
+        if (_loadInProgress && _loadTask != null)
+        {
+            try { _loadTask.GetAwaiter().GetResult(); }
+            catch { }
+        }
+        lock (_loadLock) { return (_session, _vocab); }
+    }
+
     /// <summary>Batched embedding — N texts in 1 session.Run. 5-10x throughput. Max 1024 texts.</summary>
     public IReadOnlyList<float[]> GenerateBatch(IReadOnlyList<string> texts)
+        => GenerateBatchAsync(texts).GetAwaiter().GetResult();
+
+    public async Task<IReadOnlyList<float[]>> GenerateBatchAsync(IReadOnlyList<string> texts, CancellationToken ct = default)
     {
         if (texts.Count == 0) return Array.Empty<float[]>();
         if (texts.Count == 1) return new[] { Generate(texts[0]) };
@@ -332,17 +357,21 @@ public sealed class LocalEmbedder : IDisposable
         const int maxBatchSize = 1024;
         if (texts.Count > maxBatchSize)
         {
-            // Process in chunks to avoid OOM from large ONNX tensors
             var chunkedResults = new List<float[]>(texts.Count);
             for (int i = 0; i < texts.Count; i += maxBatchSize)
             {
-                var chunk = texts.Skip(i).Take(maxBatchSize).ToList();
-                chunkedResults.AddRange(GenerateBatch(chunk));
+                ct.ThrowIfCancellationRequested();
+                var end = Math.Min(i + maxBatchSize, texts.Count);
+                var chunk = new List<string>(end - i);
+                for (int j = i; j < end; j++)
+                    chunk.Add(texts[j]);
+                var chunkResult = await GenerateBatchAsync(chunk, ct).ConfigureAwait(false);
+                chunkedResults.AddRange(chunkResult);
             }
             return chunkedResults;
         }
 
-        var (session, vocab) = GetLoadedModel();
+        var (session, vocab) = await GetLoadedModelAsync().ConfigureAwait(false);
         if (session == null || vocab == null)
             throw new InvalidOperationException(
                 "LocalEmbedder not available. Use /model download to download an embedding model.");
@@ -509,9 +538,9 @@ public sealed class LocalEmbedder : IDisposable
         return (null, null, false);
     }
 
-    private (InferenceSession?, Dictionary<string, int>?) GetLoadedModel()
+    private async Task<(InferenceSession?, Dictionary<string, int>?)> GetLoadedModelAsync()
     {
-        EnsureLoaded();
+        await EnsureLoadedAsync().ConfigureAwait(false);
         lock (_loadLock) { return (_session, _vocab); }
     }
 
@@ -552,12 +581,14 @@ public sealed class LocalEmbedder : IDisposable
             _session = null;
             _vocab = null;
             _loadAttempted = false;
+            _loadInProgress = false;
+            _loadTask = null;
             _currentModelName = name;
             _modelPath = modelFile;
             _vocabPath = vocabFile;
             _usingQuantizedModel = usingQuant;
 
-            EnsureLoaded();
+            EnsureLoadedAsync().GetAwaiter().GetResult();
             if (_session != null) toNotify = ModelSwitched;
         }
         toNotify?.Invoke(name);

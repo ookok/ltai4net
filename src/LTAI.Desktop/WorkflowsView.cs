@@ -69,6 +69,7 @@ public sealed class WorkflowsView : UserControl
         _refreshTimer = new DispatcherTimer(TimeSpan.FromSeconds(5), DispatcherPriority.Background,
             (_, _) => RefreshList());
         _refreshTimer.Start();
+        DetachedFromVisualTree += (_, _) => _refreshTimer?.Stop();
     }
 
     private void RefreshList()
@@ -113,11 +114,15 @@ public sealed class WorkflowsView : UserControl
                 var dir = _registry?.WatchDirectory ?? Path.Combine(Environment.CurrentDirectory, ".livingtree", "workflows");
                 if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
                 var path = Path.Combine(dir, dialog.Text + ".yaml");
-                if (File.Exists(path)) { _statusText.Text = $"❌ {dialog.Text} 已存在"; return; }
                 var template = $"kind: Workflow\nname: {dialog.Text}\ntype: sequential\nsteps:\n  - handoff:\n      agent: LTAI-Chat\n      input: \"{{{{input}}}}\"\n";
-                await File.WriteAllTextAsync(path, template);
-                _statusText.Text = $"✅ 已创建 {dialog.Text}";
-                RefreshList();
+                try
+                {
+                    using var fs = new FileStream(path, FileMode.CreateNew);
+                    await fs.WriteAsync(System.Text.Encoding.UTF8.GetBytes(template));
+                    _statusText.Text = $"✅ 已创建 {dialog.Text}";
+                    RefreshList();
+                }
+                catch (IOException) { _statusText.Text = $"❌ {dialog.Text} 已存在"; }
             }
         };
         if (VisualRoot is Window owner) win.ShowDialog(owner);

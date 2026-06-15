@@ -33,17 +33,23 @@ public sealed class DapClient : IAsyncDisposable
         foreach (var a in args) psi.ArgumentList.Add(a);
 
         _process = new Process { StartInfo = psi };
-        _process.Start();
-
-        _stdin = _process.StandardInput.BaseStream;
-        _stdout = _process.StandardOutput;
-        _process.ErrorDataReceived += (_, e) =>
+        try
         {
-            if (e.Data != null) OutputReceived?.Invoke(e.Data);
-        };
-        _process.BeginErrorReadLine();
-
-        _readerTask = Task.Run(() => ReadLoopAsync(_cts.Token));
+            _process.Start();
+            _stdin = _process.StandardInput.BaseStream;
+            _stdout = _process.StandardOutput;
+            _process.ErrorDataReceived += (_, e) =>
+            {
+                if (e.Data != null) OutputReceived?.Invoke(e.Data);
+            };
+            _process.BeginErrorReadLine();
+            _readerTask = Task.Run(() => ReadLoopAsync(_cts.Token));
+        }
+        catch
+        {
+            _process.Dispose();
+            throw;
+        }
     }
 
     public async Task<JsonObject> CallAsync(string command, JsonObject? args = null)
@@ -88,7 +94,14 @@ public sealed class DapClient : IAsyncDisposable
                 {
                     var reqSeq = msg["request_seq"]?.GetValue<long>() ?? 0;
                     TaskCompletionSource<JsonObject>? tcs;
-                    lock (_pending) _pending.TryGetValue((int)reqSeq, out tcs);
+                    lock (_pending)
+                    {
+                        _pending.TryGetValue((int)reqSeq, out tcs);
+                        if (tcs != null)
+                        {
+                            _pending.Remove((int)reqSeq);
+                        }
+                    }
                     if (tcs != null)
                     {
                         if (msg.TryGetPropertyValue("success", out var s) && s?.GetValue<bool>() == false)
@@ -100,7 +113,6 @@ public sealed class DapClient : IAsyncDisposable
                         {
                             tcs.TrySetResult(msg);
                         }
-                        lock (_pending) _pending.Remove((int)reqSeq);
                     }
                 }
                 else if (type == "event")

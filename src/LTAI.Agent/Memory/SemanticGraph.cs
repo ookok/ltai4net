@@ -4,18 +4,19 @@ namespace LTAI.Agent.Memory;
 
 public sealed class SemanticGraph
 {
-    private readonly SqliteConnection _db;
+    private readonly Func<SqliteConnection> _factory;
     private readonly double _similarityThreshold;
 
-    public SemanticGraph(SqliteConnection db, double similarityThreshold = 0.6)
+    public SemanticGraph(Func<SqliteConnection> factory, double similarityThreshold = 0.6)
     {
-        _db = db;
+        _factory = factory;
         _similarityThreshold = similarityThreshold;
     }
 
     public void InitSchema()
     {
-        using var cmd = _db.CreateCommand();
+        using var conn = _factory();
+        using var cmd = conn.CreateCommand();
         cmd.CommandText = """
             CREATE TABLE IF NOT EXISTS semantic_edges (
                 from_id    TEXT NOT NULL,
@@ -31,7 +32,8 @@ public sealed class SemanticGraph
     public void AddEdge(string fromId, string toId, double similarity)
     {
         if (similarity < _similarityThreshold) return;
-        using var cmd = _db.CreateCommand();
+        using var conn = _factory();
+        using var cmd = conn.CreateCommand();
         cmd.CommandText = """
             INSERT OR REPLACE INTO semantic_edges (from_id, to_id, similarity)
             VALUES (@from, @to, @sim)
@@ -44,7 +46,8 @@ public sealed class SemanticGraph
 
     public List<(string NodeId, double Similarity)> GetNeighbors(string nodeId, int topK = 20)
     {
-        using var cmd = _db.CreateCommand();
+        using var conn = _factory();
+        using var cmd = conn.CreateCommand();
         cmd.CommandText = """
             SELECT to_id, similarity FROM semantic_edges
             WHERE from_id = @id AND similarity >= @threshold

@@ -46,6 +46,7 @@ public sealed partial class ConfigViewModel : ViewModelBase
     {
         StatusBarText = "正在获取模型列表...";
         IsLoadingModels = true;
+        HttpClient? ownedHttp = null;
         try
         {
             var key = KnownKeys.All.Select(k => SecretManager.Get(k.EnvVar))
@@ -56,7 +57,7 @@ public sealed partial class ConfigViewModel : ViewModelBase
             var keyInfo = KnownKeys.All.FirstOrDefault(k => SecretManager.Has(k.EnvVar));
             var endpoint = keyInfo?.Endpoint ?? "https://api.deepseek.com/v1";
 
-            var http = App.HttpFactory?.CreateClient() ?? new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+            var http = App.HttpFactory?.CreateClient() ?? (ownedHttp = new HttpClient { Timeout = TimeSpan.FromSeconds(10) });
             var req = new HttpRequestMessage(HttpMethod.Get, $"{endpoint.TrimEnd('/')}/models");
             req.Headers.Authorization = new("Bearer", key);
             using var resp = await http.SendAsync(req);
@@ -78,7 +79,7 @@ public sealed partial class ConfigViewModel : ViewModelBase
             StatusBarText = $"✅ 获取到 {models.Count} 个模型";
         }
         catch (Exception ex) { StatusBarText = $"❌ 失败: {ex.Message}"; }
-        finally { IsLoadingModels = false; }
+        finally { IsLoadingModels = false; ownedHttp?.Dispose(); }
     }
 
     [RelayCommand]

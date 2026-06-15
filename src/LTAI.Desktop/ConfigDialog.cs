@@ -147,8 +147,13 @@ public sealed class ConfigDialog : Window
     {
         try
         {
-            var json = JsonNode.Parse(File.ReadAllText(ConfigPath()));
-            return json?["LTAI"]?["ToolTrust"]?["TrustAll"]?.GetValue<bool>() ?? false;
+            var path = ConfigPath();
+            if (!File.Exists(path)) return false;
+            using var doc = JsonDocument.Parse(File.ReadAllBytes(path));
+            return doc.RootElement.TryGetProperty("LTAI", out var l)
+                && l.TryGetProperty("ToolTrust", out var t)
+                && t.TryGetProperty("TrustAll", out var a)
+                && a.GetBoolean();
         }
         catch { return false; }
     }
@@ -157,10 +162,19 @@ public sealed class ConfigDialog : Window
     {
         try
         {
-            var json = JsonNode.Parse(File.ReadAllText(ConfigPath()));
-            var arr = json?["LTAI"]?["ToolTrust"]?["TrustedToolNames"] as JsonArray;
-            return arr?.Select(n => n?.GetValue<string>() ?? "").Where(s => s.Length > 0).ToArray()
-                   ?? [];
+            var path = ConfigPath();
+            if (!File.Exists(path)) return [];
+            using var doc = JsonDocument.Parse(File.ReadAllBytes(path));
+            if (!doc.RootElement.TryGetProperty("LTAI", out var l)) return [];
+            if (!l.TryGetProperty("ToolTrust", out var t)) return [];
+            if (!t.TryGetProperty("TrustedToolNames", out var names)) return [];
+            var result = new List<string>();
+            foreach (var n in names.EnumerateArray())
+            {
+                var s = n.GetString();
+                if (!string.IsNullOrEmpty(s)) result.Add(s);
+            }
+            return result.ToArray();
         }
         catch { return []; }
     }

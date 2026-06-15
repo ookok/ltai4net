@@ -16,6 +16,7 @@ public sealed record CompressedEntry(string Id, string Original, string Summary,
 public sealed class CompressionStore : IDisposable
 {
     private readonly string _connectionString;
+    private SqliteConnection? _sharedConn;
     private bool _schemaReady;
     private readonly object _gate = new();
     private long _totalEntries;
@@ -35,14 +36,30 @@ public sealed class CompressionStore : IDisposable
 
     public static CompressionStore CreateShared(string kgDbPath) => new(kgDbPath);
 
+    private SqliteConnection GetConnection()
+    {
+        if (_sharedConn != null && _sharedConn.State == ConnectionState.Open)
+            return _sharedConn;
+        lock (_gate)
+        {
+            if (_sharedConn != null && _sharedConn.State == ConnectionState.Open)
+                return _sharedConn;
+            _sharedConn = new SqliteConnection(_connectionString);
+            _sharedConn.Open();
+            using var pragma = _sharedConn.CreateCommand();
+            pragma.CommandText = "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=5000;";
+            pragma.ExecuteNonQuery();
+            return _sharedConn;
+        }
+    }
+
     private void EnsureSchema()
     {
         if (_schemaReady) return;
         lock (_gate)
         {
             if (_schemaReady) return;
-            using var conn = new SqliteConnection(_connectionString);
-            conn.Open();
+            var conn = GetConnection();
             using var cmd = conn.CreateCommand();
             cmd.CommandText = """
                 CREATE TABLE IF NOT EXISTS compression_store (
@@ -65,8 +82,7 @@ public sealed class CompressionStore : IDisposable
         EnsureSchema();
         var hash = ComputeHash(content);
         var id = hash[..12];
-        using var conn = new SqliteConnection(_connectionString);
-        conn.Open();
+        var conn = GetConnection();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = "INSERT OR IGNORE INTO compression_store (id,content_hash,original,summary,original_tokens,content_type,compressed_at) VALUES ($id,$hash,$original,$summary,$tokens,$type,$at)";
         cmd.Parameters.AddWithValue("$id", id); cmd.Parameters.AddWithValue("$hash", hash);
@@ -85,8 +101,7 @@ public sealed class CompressionStore : IDisposable
     public string? Retrieve(string id)
     {
         EnsureSchema();
-        using var conn = new SqliteConnection(_connectionString);
-        conn.Open();
+        var conn = GetConnection();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = "SELECT original FROM compression_store WHERE id=$id";
         cmd.Parameters.AddWithValue("$id", id);
@@ -96,9 +111,8 @@ public sealed class CompressionStore : IDisposable
     public CompressedEntry? GetEntry(string id)
     {
         EnsureSchema();
-        using var conn = new SqliteConnection(_connectionString);
-        conn.Open();
-        using         var cmd = conn.CreateCommand();
+        var conn = GetConnection();
+        using var cmd = conn.CreateCommand();
         cmd.CommandText = "SELECT id,original,summary,original_tokens,content_type FROM compression_store WHERE id=$id";
         cmd.Parameters.AddWithValue("$id", id);
         using var reader = cmd.ExecuteReader();
@@ -109,8 +123,7 @@ public sealed class CompressionStore : IDisposable
     public int Cleanup(TimeSpan maxAge)
     {
         EnsureSchema();
-        using var conn = new SqliteConnection(_connectionString);
-        conn.Open();
+        var conn = GetConnection();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = "DELETE FROM compression_store WHERE compressed_at < $cutoff";
         cmd.Parameters.AddWithValue("$cutoff", DateTime.UtcNow.Subtract(maxAge).ToString("O"));
@@ -120,7 +133,12 @@ public sealed class CompressionStore : IDisposable
     }
 
     public long TotalEntries => Interlocked.Read(ref _totalEntries);
-    public void Dispose() { }
+    public void Dispose()
+    {
+        _sharedConn?.Close();
+        _sharedConn?.Dispose();
+        _sharedConn = null;
+    }
 
     private static string ComputeHash(string content) => FastHash.ComputeHex(content);
     internal static int EstimateTokens(string text) => TokenEstimator.Estimate(text);

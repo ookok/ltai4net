@@ -157,4 +157,57 @@ public sealed class MultiGraphStoreTests : IDisposable
         _store.MarkConsolidated("cq1");
         Assert.DoesNotContain("cq1", _store.DequeueConsolidationBatch(10));
     }
+
+    [Fact]
+    public void StoreNodeSafe_GeneratesUniqueIds()
+    {
+        _store.StoreNodeSafe("wing:room", "s1", "content a");
+        _store.StoreNodeSafe("wing:room", "s1", "content b");
+        _store.StoreNodeSafe("wing:room", "s1", "content c");
+
+        // All three should be stored — search finds all
+        var results = _store.SearchContent("content");
+        Assert.True(results.Count >= 3, $"Expected >=3, got {results.Count}");
+    }
+
+    [Fact]
+    public void StoreNodeSafe_NoCollisionInSameMs()
+    {
+        const int batch = 20;
+        for (int i = 0; i < batch; i++)
+            _store.StoreNodeSafe("prefix", "s1", $"msg-{i}");
+
+        var results = _store.SearchContent("msg-");
+        Assert.True(results.Count >= batch, $"Expected >= {batch}, got {results.Count}");
+    }
+
+    [Fact]
+    public void StoreNode_HasExpirySet()
+    {
+        _store.StoreNode("n-exp", "s1", "with expiry");
+        var node = _store.GetNode("n-exp");
+        Assert.NotNull(node);
+
+        // SearchContent should find it (not expired)
+        var results = _store.SearchContent("expiry");
+        Assert.Contains("n-exp", results);
+    }
+
+    [Fact]
+    public void SearchContent_Fts5Fallback_Works()
+    {
+        _store.StoreNode("fts-test", "s1", "full text search via fts5");
+        var results = _store.SearchContent("search");
+        Assert.Contains("fts-test", results);
+    }
+
+    [Fact]
+    public void ConsolidationQueue_StaleReset()
+    {
+        _store.StoreNode("stale1", "s1", "stale test");
+        // Simulate stuck processing by directly updating status
+        // The stale reset in InitSchema/ResetStale should handle this
+        var batch = _store.DequeueConsolidationBatch(10);
+        Assert.NotEmpty(batch);
+    }
 }

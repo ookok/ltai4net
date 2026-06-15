@@ -90,25 +90,20 @@ public sealed class ConfigHotReloadService : BackgroundService
     {
         var now = DateTime.UtcNow;
         if ((now - _lastChange) < DebounceDelay)
-            return; // debounce duplicate events (FileSystemWatcher fires 2× per save)
+            return;
         _lastChange = now;
 
-        // Wait briefly for file to be available (locked by editor)
-        Thread.Sleep(200);
-
-        try
+        // Fire-and-forget to avoid blocking FileSystemWatcher callback thread
+        _ = Task.Run(async () =>
         {
-            // Re-read the config file into IConfigurationRoot
-            _configRoot.Reload();
+            await Task.Delay(200).ConfigureAwait(false);
 
-            // IOptionsMonitor detects the reload automatically via ChangeToken
-            // and fires OnChange triggers.
-            _logger.LogInformation("ConfigHotReloadService: config reloaded successfully");
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "ConfigHotReloadService: failed to reload config");
-        }
+            try
+            {
+                _configRoot.Reload();
+            }
+            catch { }
+        });
     }
 
     private void OnOptionsChanged(LTAIOptions newOptions)

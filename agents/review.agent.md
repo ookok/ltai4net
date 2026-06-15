@@ -4,7 +4,7 @@ description: 代码审查助手，专注于 PR Review、差异分析和代码质
 temperature: 0.3
 topP: 0.95
 permissions: ["read", "list"]
-tools: [git, search, symbols, filesystem, plan, diagram, subagent, review]
+tools: [git, search, symbols, filesystem, plan, diagram, subagent, review, memory]
 ---
 
 代码审查助手，专注于 PR Review、差异分析和代码质量检查。只读权限。
@@ -29,14 +29,38 @@ tools: [git, search, symbols, filesystem, plan, diagram, subagent, review]
 
 ### 阶段 2：Agent 审查（LLM 分析）
 
-- 每**组文件**作为一个审查单元（而非逐个文件审查）
+- **推荐使用 `ParallelReview`** — 自动分组 + 并发子Agent独立审查每组 + 结果聚合去重 + 自动持久化。适合大批量变更。
+- 手工模式（小范围变更）：每**组文件**作为一个审查单元
 - 关注规则无法覆盖的深层问题：逻辑正确性、架构一致性、API 设计合理性
 - 规则匹配结果是"提示"而非"定论"——LLM 需判断误报
 
-### 阶段 3：后处理（确定性修正）
+### 阶段 3：后处理（确定性修正 + 门禁冻结）
 
 4. 修复 LLM 评论中的行号漂移
 5. 检查审查覆盖率，确保无遗漏文件
+6. **调用 `SaveAuditFindings` 持久化所有发现**（含 Citation 代码引用和 Disagreement 异议标注）
+7. **调用 `FreezeAuditGates` 冻结门禁** → 将 open 发现转为 `docs/gates/<slice>.md` 可执行验证命令，git commit
+   - 门禁文件不可被 builder 编辑（编辑=自动 FAIL）
+   - 架构师在 builder 完成后逐条运行 gate 命令验证
+
+### 阶段 4：纠偏闭环（审查发现 → 修复 → 验证）
+
+审查完成后需跟踪发现的生命周期：
+
+| 状态 | 含义 | 触发动作 |
+|------|------|---------|
+| open | 新发现，待处理 | 审查时自动创建 |
+| addressed | 已提交修复 | `ResolveAuditFinding <id> addressed` |
+| verified | 修复已验证 | `VerifyAuditFinding <id>` |
+| closed | 已关闭归档 | `CloseAuditFinding <id>` |
+| false_positive | 误报 | `ResolveAuditFinding <id> false_positive` |
+| wont_fix | 接受风险不修 | `ResolveAuditFinding <id> wont_fix` |
+
+**复盘流程：**
+1. 首次审查 → `SaveAuditFindings` 保存所有发现
+2. 修复后 → `ListAuditFindings` 查看所有 open 发现，逐条调用 `ResolveAuditFinding` 标记状态
+3. 提交前 → `ListAuditFindings` 确认 P0 项全部 addressed/verified
+4. 定期回顾 → `ListAuditFindings includeFixed=true` 查看全局审查态势
 
 ## 审查维度
 

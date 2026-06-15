@@ -263,7 +263,7 @@ public sealed class MultiProviderChatClient : IChatClient
         {
             if (!_clients.TryGetValue(p, out var client)) continue;
             var callNum = Interlocked.Increment(ref _callCounter);
-            _logger.LogInformation("LLM streaming call #{CallNum} → provider={Provider}", callNum, p);
+            _logger.LogDebug("LLM streaming call #{CallNum} → provider={Provider}", callNum, p);
 
             anyAttempted = true;
             var success = false;
@@ -283,6 +283,7 @@ public sealed class MultiProviderChatClient : IChatClient
                     else
                         duplicates++;
                 }
+                if (duplicates == 0) goto skipDedupStream;
                 deduped.Reverse();
                 options = new ChatOptions
                 {
@@ -292,6 +293,7 @@ public sealed class MultiProviderChatClient : IChatClient
                     ModelId = options.ModelId,
                     StopSequences = options.StopSequences,
                 };
+                skipDedupStream:
                 _logger.LogDebug("Streaming dedup: {Before} → {After} tools ({Dups} duplicates)", before, deduped.Count, duplicates);
             }
 
@@ -469,6 +471,7 @@ public sealed class MultiProviderChatClient : IChatClient
                         else
                             duplicates++;
                     }
+                    if (duplicates == 0) goto skipDedup;
                     deduped.Reverse();
                     options = new ChatOptions
                     {
@@ -478,6 +481,7 @@ public sealed class MultiProviderChatClient : IChatClient
                         ModelId = options.ModelId,
                         StopSequences = options.StopSequences,
                     };
+                    skipDedup:
                     _logger.LogDebug("Non-streaming dedup: {Before} → {After} tools ({Dups} duplicates)", before, deduped.Count, duplicates);
                 }
 
@@ -485,7 +489,7 @@ public sealed class MultiProviderChatClient : IChatClient
                 var toolCount = options?.Tools?.Count ?? 0;
                 var msgCount = messages?.Count() ?? 0;
                 var textLen = messages?.Sum(m => m.Text?.Length ?? 0) ?? 0;
-                _logger.LogInformation("LLM call #{CallNum} → provider={Provider}, {ToolCount} tools, {MsgCount} msgs, ~{TextLen} chars text", callNum, p, toolCount, msgCount, textLen);
+                _logger.LogDebug("LLM call #{CallNum} → provider={Provider}, {ToolCount} tools, {MsgCount} msgs, ~{TextLen} chars text", callNum, p, toolCount, msgCount, textLen);
 
                 // Check pre-computed estimate against this provider's context limit
                 var ctxLimit = LTAI.Core.Configuration.UsageTracker.ResolveContextWindow(p);
@@ -659,7 +663,8 @@ public sealed class MultiProviderChatClient : IChatClient
         }
 
         // Sort by health score descending — healthiest provider first
-        foreach (var c in candidates.OrderByDescending(c => c.Health))
+        candidates.Sort((a, b) => b.Health.CompareTo(a.Health));
+        foreach (var c in candidates)
             yield return c.Id;
 
         // Hardcoded degradation chain exhausted → wide fallback via ModelMetadataProvider

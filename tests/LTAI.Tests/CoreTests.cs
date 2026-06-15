@@ -21,7 +21,7 @@ public class KgStoreTests : IDisposable
             ns: "LTAI.Tests", signature: "", source: "test.cs");
         Assert.True(id > 0);
 
-        var node = store.GetNode(id);
+        var node = await store.GetNode(id);
         Assert.NotNull(node);
         Assert.Equal("class", node.Kind);
         Assert.Equal("TestClass", node.Name);
@@ -36,7 +36,7 @@ public class KgStoreTests : IDisposable
         // Use the writer connection directly to ensure visibility
         await store.OptimizeFtsAsync();
 
-        var results = store.SearchFts("authentication");
+        var results = await store.SearchFts("authentication");
         Assert.NotEmpty(results);
         Assert.Contains(results, r => r.nodeId == id);
     }
@@ -49,7 +49,7 @@ public class KgStoreTests : IDisposable
         var b = await store.UpsertNode("n:b", "method", "MethodB");
         await store.AddEdge(a, b, "calls");
 
-        var neighbors = store.TraverseBfs([a], maxDepth: 1);
+        var neighbors = await store.TraverseBfs([a], maxDepth: 1);
         Assert.Contains(neighbors, n => n.Id == b);
     }
 }
@@ -115,7 +115,7 @@ public class KgStoreEdgeCaseTests : IDisposable
         var id1 = await store.UpsertNode("x:1", "class", "A");
         var id2 = await store.UpsertNode("x:1", "method", "B");
         Assert.Equal(id1, id2);
-        Assert.Equal("method", store.GetNode(id1)!.Kind);
+        Assert.Equal("method", (await store.GetNode(id1))!.Kind);
     }
 
     [Fact]
@@ -126,14 +126,14 @@ public class KgStoreEdgeCaseTests : IDisposable
         var b = await store.UpsertNode("d:b", "class", "B");
         await store.AddEdge(a, b, "calls");
         await store.DeleteNode(a);
-        Assert.Empty(store.GetEdges(nodeId: a));
+        Assert.Empty(await store.GetEdges(nodeId: a));
     }
 
     [Fact]
     public async Task FtsSearch_EmptyQuery_ReturnsEmpty()
     {
         using var store = new KgStore(Path.Combine(_dir, "e.db"));
-        try { var r = store.SearchFts(""); Assert.Empty(r); } catch (Microsoft.Data.Sqlite.SqliteException) { }
+        try { var r = await store.SearchFts(""); Assert.Empty(r); } catch (Microsoft.Data.Sqlite.SqliteException) { }
     }
 
     [Fact]
@@ -143,7 +143,7 @@ public class KgStoreEdgeCaseTests : IDisposable
         var id = await store.UpsertNode("doc:l", "document", "Long");
         await store.AddDoc(id, string.Join(" ", Enumerable.Repeat("auth authz acct", 1000)));
         await store.OptimizeFtsAsync();
-        Assert.NotEmpty(store.SearchFts("auth"));
+        Assert.NotEmpty(await store.SearchFts("auth"));
     }
 
     [Fact]
@@ -151,7 +151,7 @@ public class KgStoreEdgeCaseTests : IDisposable
     {
         using var store = new KgStore(Path.Combine(_dir, "ne.db"));
         var a = await store.UpsertNode("n:a", "class", "A");
-        Assert.Single(store.TraverseBfs([a]));
+        Assert.Single(await store.TraverseBfs([a]));
     }
 
     [Fact]
@@ -159,7 +159,7 @@ public class KgStoreEdgeCaseTests : IDisposable
     {
         using var store = new KgStore(Path.Combine(_dir, "m.db"));
         await store.SetMeta("ver", "1.0");
-        Assert.Equal("1.0", store.GetMeta("ver"));
+        Assert.Equal("1.0", await store.GetMeta("ver"));
     }
 
     [Fact]
@@ -176,14 +176,14 @@ public class KgStoreEdgeCaseTests : IDisposable
     public async Task GetNodeByExtId_NotFound_ReturnsNull()
     {
         using var store = new KgStore(Path.Combine(_dir, "nf.db"));
-        Assert.Null(store.GetNodeByExtId("nonexistent"));
+        Assert.Null(await store.GetNodeByExtId("nonexistent"));
     }
 
     [Fact]
     public async Task GetNodesByKind_NoMatches_ReturnsEmpty()
     {
         using var store = new KgStore(Path.Combine(_dir, "nk.db"));
-        Assert.Empty(store.GetNodesByKind("nonexistent"));
+        Assert.Empty(await store.GetNodesByKind("nonexistent"));
     }
 }
 

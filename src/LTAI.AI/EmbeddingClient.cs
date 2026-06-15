@@ -147,7 +147,7 @@ public sealed class EmbeddingClient : IDisposable
         {
             _dimension = _local.Dim;
             _logger.LogDebug("Embedding via local ONNX (batched): {Count} texts", texts.Length);
-            var batchResult = await Task.Run(() => _local.GenerateBatch(texts), ct).ConfigureAwait(false);
+            var batchResult = await _local.GenerateBatchAsync(texts, ct).ConfigureAwait(false);
             return batchResult is float[][] arr ? arr : batchResult.ToArray();
         }
 
@@ -315,6 +315,10 @@ public sealed class EmbeddingClient : IDisposable
     /// Supports both English (space-split) and Chinese (character-bigram-split).
     /// Outperforms n-gram by ~15-20% on recall.
     /// </summary>
+    private static readonly char[] FastEmbDelimiters = { ' ', '\n', '\r', '\t', '.', ',', ';', ':', '(', ')', '[', ']', '{', '}', '"', '\'', '!', '?', '-', '_', '/' };
+    private static readonly int[] HashSeeds3 = { 17, 31, 97 };
+    private static readonly int[] HashSeeds2 = { 17, 31 };
+
     public static float[] FastEmb(string text, int dimensions = 384)
     {
         // BM25-like scoring: use term frequency + pseudo-IDF
@@ -333,10 +337,7 @@ public sealed class EmbeddingClient : IDisposable
         var lower = text.ToLowerInvariant();
 
         // Tokenize: split on non-alphanumeric for English; handle Chinese by bigram
-        var rawTokens = lower.Split(new[] { ' ', '\n', '\r', '\t', '.', ',', ';', ':', '(', ')', '[', ']', '{', '}', '"', '\'', '!', '?', '-', '_', '/' },
-            StringSplitOptions.RemoveEmptyEntries)
-            .Where(t => t.Length > 0)
-            .ToList();
+        var rawTokens = lower.Split(FastEmbDelimiters, StringSplitOptions.RemoveEmptyEntries);
 
         // Chinese bigram splitting: detect CJK characters and split into overlapping bigrams
         var tokens = new List<string>();
@@ -381,7 +382,7 @@ public sealed class EmbeddingClient : IDisposable
         float docLen = tokens.Count;
 
         // Count term frequency
-        var tfs = new Dictionary<string, int>();
+        var tfs = new Dictionary<string, int>(tokens.Count);
         foreach (var t in tokens)
         {
             tfs.TryGetValue(t, out var c);
@@ -416,7 +417,7 @@ public sealed class EmbeddingClient : IDisposable
 
             // Hash term to dimension(s) using 3 seeds
             var h = (int)StableHash(term);
-            foreach (int s in new[] { 17, 31, 97 })
+            foreach (int s in HashSeeds3)
             {
                 var idx = Math.Abs(HashMix(h, s) % dimensions);
                 emb[idx] += score;
@@ -427,7 +428,7 @@ public sealed class EmbeddingClient : IDisposable
             {
                 var prefix = term[..3];
                 var ph = (int)StableHash(prefix);
-                foreach (int s in new[] { 17, 31 })
+                foreach (int s in HashSeeds2)
                 {
                     var idx = Math.Abs(HashMix(ph, s) % dimensions);
                     emb[idx] += score * 0.3f;
@@ -439,7 +440,9 @@ public sealed class EmbeddingClient : IDisposable
         for (int i = 0; i < dimensions; i++)
             if (emb[i] > 0) emb[i] = MathF.Log(1f + emb[i]);
 
-        var norm = MathF.Sqrt(emb.Sum(f => f * f));
+        var norm = 0f;
+        for (int i = 0; i < dimensions; i++) norm += emb[i] * emb[i];
+        norm = MathF.Sqrt(norm);
         if (norm > 0)
             for (int i = 0; i < dimensions; i++) emb[i] /= norm;
 

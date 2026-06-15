@@ -6,20 +6,27 @@ public sealed class DebugBridge : IDebugBridge
 {
     private DapSession? _session;
     private BreakpointManager? _bp;
+    private Action? _bpHandler;
 
     public IDebugSession? CurrentSession => _session;
 
     public void SetSession(DapSession session, BreakpointManager bp)
     {
+        if (_bp != null && _bpHandler != null)
+            _bp.BreakpointsChanged -= _bpHandler;
         _session = session;
         _bp = bp;
-        bp.BreakpointsChanged += () => BreakpointsChanged?.Invoke();
+        _bpHandler = () => BreakpointsChanged?.Invoke();
+        bp.BreakpointsChanged += _bpHandler;
     }
 
     public void ClearSession()
     {
+        if (_bp != null && _bpHandler != null)
+            _bp.BreakpointsChanged -= _bpHandler;
         _session = null;
         _bp = null;
+        _bpHandler = null;
     }
 
     public IReadOnlyCollection<DebugBreakpoint> GetAllBreakpoints()

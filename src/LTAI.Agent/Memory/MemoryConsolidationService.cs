@@ -13,17 +13,24 @@ namespace LTAI.Agent.Memory;
 public sealed class MemoryConsolidationService : BackgroundService
 {
     private readonly PalaceStore _store;
+    private readonly MultiGraphStore? _multiGraph;
     private readonly IChatClient? _llm;
     private readonly ILogger<MemoryConsolidationService>? _logger;
     private static readonly TimeSpan Interval = TimeSpan.FromMinutes(
         int.TryParse(Environment.GetEnvironmentVariable("LTAI_MEMORY_CONSOLIDATION_MINUTES"), out var m) ? Math.Max(5, m) : 30);
 
+    // LLM summarization rate limiter: max calls per consolidation cycle
+    private static readonly int MaxSummarizePerCycle = int.TryParse(
+        Environment.GetEnvironmentVariable("LTAI_MEMORY_SUMMARIZE_MAX_PER_CYCLE"), out var mc) ? Math.Max(1, mc) : 10;
+    private static readonly int SummarizePromptMaxChars = 8000; // prevent oversized LLM prompts
+
     public MemoryConsolidationService(PalaceStore store, IChatClient? llm = null,
-        ILogger<MemoryConsolidationService>? logger = null)
+        ILogger<MemoryConsolidationService>? logger = null, MultiGraphStore? multiGraph = null)
     {
         _store = store ?? throw new ArgumentNullException(nameof(store));
         _llm = llm;
         _logger = logger;
+        _multiGraph = multiGraph;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -49,9 +56,11 @@ public sealed class MemoryConsolidationService : BackgroundService
     {
         var expired = _store.CleanupExpired();
         var decayed = _store.DecayAll(factor: 0.95, minImportance: 0.05);
+        _multiGraph?.PurgeExpired();
         var rooms = _store.ListRooms();
         var merged = 0;
         var summarizedCount = 0;
+        var summarizeCalls = 0;
 
         foreach (var wing in _store.ListWings())
         {
@@ -64,8 +73,8 @@ public sealed class MemoryConsolidationService : BackgroundService
                     continue;
                 }
 
-                // LLM summarization for rooms with >=3 drawers
-                if (_llm != null && drawers.Count >= 3)
+                // LLM summarization for rooms with >=3 drawers (rate-limited)
+                if (_llm != null && drawers.Count >= 3 && summarizeCalls < MaxSummarizePerCycle)
                 {
                     try
                     {
@@ -73,6 +82,7 @@ public sealed class MemoryConsolidationService : BackgroundService
                         if (summarized > 0)
                         {
                             summarizedCount += summarized;
+                            summarizeCalls++;
                             continue;
                         }
                     }
@@ -97,6 +107,10 @@ public sealed class MemoryConsolidationService : BackgroundService
         var contents = drawers.Select(d => d.Content).ToList();
         var joined = string.Join("\n---\n", contents);
         if (joined.Length < 50) return 0;
+        if (joined.Length > SummarizePromptMaxChars)
+            joined = joined[..SummarizePromptMaxChars];
+
+        if (_llm == null) return 0;
 
         var prompt = $"""
             Summarize the following memory entries about "{room}" into a single concise paragraph (max 200 chars). 
@@ -106,18 +120,22 @@ public sealed class MemoryConsolidationService : BackgroundService
             """;
 
         var messages = new List<ChatMessage> { new(ChatRole.User, prompt) };
-        var response = await _llm!.GetResponseAsync(messages,
-            new ChatOptions { Temperature = 0.1f, MaxOutputTokens = 200 },
-            CancellationToken.None).ConfigureAwait(false);
+        var response = await _llm.GetResponseAsync(messages,
+            new ChatOptions { Temperature = 0.1f, MaxOutputTokens = 200 }).ConfigureAwait(false);
 
         var summary = response.Text?.Trim();
         if (string.IsNullOrWhiteSpace(summary) || summary.Length < 10) return 0;
 
-        // Store consolidated summary
-        var highestImportance = drawers.Max(d => d.Importance);
+        // Compute safe highest importance (guard against NaN/Infinity)
+        var highestImportance = drawers
+            .Select(d => d.Importance)
+            .Where(v => !double.IsNaN(v) && !double.IsInfinity(v))
+            .DefaultIfEmpty(0.5)
+            .Max();
+
         await _store.StoreAsync(wing, room, summary,
             role: "consolidation",
-            importance: Math.Min(highestImportance + 0.05, 0.95),
+            importance: Math.Clamp(highestImportance + 0.05, 0.0, 0.95),
             agentId: "consolidator",
             ttlMs: PalaceStore.DefaultTtlMs).ConfigureAwait(false);
 
@@ -128,7 +146,7 @@ public sealed class MemoryConsolidationService : BackgroundService
             if (_store.DeleteDrawer(d.DrawerId)) deleted++;
         }
 
-        _logger?.LogDebug("MemoryConsolidationService: summarized {Count}→1 for {Wing}/{Room}", drawers.Count, wing, room);
+        _logger?.LogDebug("MemoryConsolidationService: summarized {Count}->1 for {Wing}/{Room}", drawers.Count, wing, room);
         return deleted;
     }
 }

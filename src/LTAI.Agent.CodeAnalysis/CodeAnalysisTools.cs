@@ -154,6 +154,7 @@ public sealed class CodeAnalysisTools
         {
             var tree = CSharpSyntaxTree.ParseText(content);
             var root = tree.GetRoot();
+            var lines = content.Split('\n');
             var results = new List<(int line, int col, string role, string snippet)>();
 
             foreach (var token in root.DescendantTokens()
@@ -164,7 +165,7 @@ public sealed class CodeAnalysisTools
                 var col = tree.GetLineSpan(token.Span).StartLinePosition.Character + 1;
                 var role = DetermineRole(token);
                 if (kind != "any" && !MatchKind(role, kind)) continue;
-                var snippet = content.Split('\n')[line - 1].Trim();
+                var snippet = line > 0 && line <= lines.Length ? lines[line - 1].Trim() : "";
                 results.Add((line, col, role, snippet));
             }
             return FormatFindResults(results, name, Path.GetFileName(filePath));

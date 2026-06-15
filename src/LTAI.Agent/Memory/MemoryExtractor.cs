@@ -98,6 +98,15 @@ public sealed partial class MemoryExtractor
     private static partial Regex WorkflowPattern();
 
     /// <summary>
+    /// Fast check: does the message contain any technical keyword that warrants extraction?
+    /// Avoids LLM calls on trivial messages like "ok", "thanks", "yes".
+    /// </summary>
+    private static bool HasTechnicalKeyword(string text)
+    {
+        return TechKeywords.Any(k => text.Contains(k, StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
     /// Compute dynamic importance score for extracted memory content.
     /// Factors: length (longer = more detailed = more important),
     /// specificity (contains numbers/names = more important),
@@ -140,6 +149,12 @@ public sealed partial class MemoryExtractor
     public async Task<int> ExtractFromTurnAsync(string userMessage, string? entityId = null, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(userMessage)) return 0;
+
+        // Fast skip: very short messages without technical keywords are unlikely to contain extractable facts
+        if (userMessage.Length < 30 && !HasTechnicalKeyword(userMessage))
+            return 0;
+
+        ct.ThrowIfCancellationRequested();
 
         var extracted = new List<(string wing, string room, string content, double importance)>();
 
@@ -243,7 +258,7 @@ public sealed partial class MemoryExtractor
 
         if (extracted.Count == 0)
         {
-            var llmExtracted = await LlmFallbackExtractAsync(userMessage, entityId).ConfigureAwait(false);
+            var llmExtracted = await LlmFallbackExtractAsync(userMessage, entityId, ct).ConfigureAwait(false);
             if (llmExtracted > 0) return llmExtracted;
             return 0;
         }
@@ -252,26 +267,29 @@ public sealed partial class MemoryExtractor
             ? new Dictionary<string, object> { ["entity_id"] = entityId }
             : null;
 
-        int stored = 0;
-        foreach (var (wing, room, content, importance) in extracted)
+        // Batch fact extraction: collect all contents, make one LLM call
+        IReadOnlyList<string> allFacts = [];
+        if (_factExtractor != null && extracted.Count > 0)
         {
+            allFacts = await _factExtractor.ExtractFactsBatchAsync(
+                extracted.Select(e => e.content).ToList(), ct).ConfigureAwait(false);
+        }
+
+        int stored = 0;
+        for (int i = 0; i < extracted.Count; i++)
+        {
+            var (wing, room, content, importance) = extracted[i];
             if (!SafetyRules.IsSafeByRules(content)) continue;
 
             try
             {
-                // AnchorMem-inspired: extract atomic facts as retrieval anchors.
-                // Facts are appended to content so FTS5 indexes them; original
-                // content remains intact for generation context.
-                var facts = _factExtractor != null
-                    ? await _factExtractor.ExtractFactsAsync(content, CancellationToken.None).ConfigureAwait(false)
-                    : (IReadOnlyList<string>)[];
-
                 var augmentedContent = content;
                 var factMeta = meta != null ? new Dictionary<string, object>(meta) : new Dictionary<string, object>();
-                if (facts.Count > 0)
+                var perEntryFacts = allFacts.Count > i ? new[] { allFacts[i] } : Array.Empty<string>();
+                if (perEntryFacts.Length > 0)
                 {
-                    augmentedContent = $"{content}\n[facts]: {string.Join("; ", facts)}";
-                    factMeta["facts"] = facts.ToArray();
+                    augmentedContent = $"{content}\n[facts]: {string.Join("; ", perEntryFacts)}";
+                    factMeta["facts"] = perEntryFacts;
                 }
 
                 await _store.StoreAsync(wing, room, augmentedContent,
@@ -284,12 +302,11 @@ public sealed partial class MemoryExtractor
                 // Fast Path: also write to MultiGraphStore for intent-aware retrieval
                 if (_multiGraph != null)
                 {
-                    var nodeId = $"{wing}:{room}:{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}";
-                    _multiGraph.StoreNode(nodeId, wing, augmentedContent);
+                    _multiGraph.StoreNodeSafe($"{wing}:{room}", wing, augmentedContent);
                 }
 
                 _logger?.LogDebug("MemoryExtractor: stored '{Room}' (wing={Wing}){Facts}",
-                    room, wing, facts.Count > 0 ? $" +{facts.Count} facts" : "");
+                    room, wing, perEntryFacts.Length > 0 ? $" +{perEntryFacts.Length} facts" : "");
                 stored++;
             }
             catch (Exception ex)
@@ -309,9 +326,13 @@ public sealed partial class MemoryExtractor
     /// single-pass L3 LLM call to classify the user message for implicit facts.
     /// Token-constrained (max 50 output tokens) to minimize cost.
     /// </summary>
-    private async Task<int> LlmFallbackExtractAsync(string userMessage, string? entityId)
+    private async Task<int> LlmFallbackExtractAsync(string userMessage, string? entityId, CancellationToken ct = default)
     {
         if (_l3Fallback == null || userMessage.Length < 10 || userMessage.Length > 2000)
+            return 0;
+
+        // Skip obviously low-value messages
+        if (userMessage.Length < 30 && !HasTechnicalKeyword(userMessage))
             return 0;
 
         try
@@ -327,7 +348,7 @@ public sealed partial class MemoryExtractor
             var response = await _l3Fallback.GetResponseAsync(
                 messages,
                 new ChatOptions { Temperature = 0f, MaxOutputTokens = 50 },
-                CancellationToken.None).ConfigureAwait(false);
+                ct).ConfigureAwait(false);
 
             var text = response.Text?.Trim();
             if (string.IsNullOrEmpty(text) || text.StartsWith("none", StringComparison.OrdinalIgnoreCase))
@@ -359,7 +380,7 @@ public sealed partial class MemoryExtractor
             if (!SafetyRules.IsSafeByRules(summary)) return 0;
 
             var facts = _factExtractor != null
-                ? await _factExtractor.ExtractFactsAsync(summary, CancellationToken.None).ConfigureAwait(false)
+                ? await _factExtractor.ExtractFactsAsync(summary, ct).ConfigureAwait(false)
                 : (IReadOnlyList<string>)[];
 
             var augmentedContent = summary;

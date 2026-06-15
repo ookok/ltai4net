@@ -102,7 +102,7 @@ public static class Program
                 await LTAI.Core.Configuration.UsageTracker.FetchBalanceAsync(
                     options.Value.AI.DefaultProvider ?? "",
                     LTAI.Core.Configuration.SecretManager.Get("SILICONFLOW_API_KEY")
-                    ?? LTAI.Core.Configuration.SecretManager.Get("OPENROUTER_API_KEY"));
+                    ?? LTAI.Core.Configuration.SecretManager.Get("OPENROUTER_API_KEY")).ConfigureAwait(false);
             }
             catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"[Program] Balance fetch: {ex.Message}"); }
         });
@@ -132,11 +132,17 @@ public static class Program
                 sp.GetRequiredService<ISessionSerializer>());
             var cacheStore = sp.GetService<LTAI.Agent.Caching.IMemoryCachingStore>();
             if (cacheStore != null)
-                mgr.OnSessionDeleted = id => { _ = cacheStore.InvalidateSessionAsync(id); };
+                mgr.OnSessionDeleted = id => { _ = InvalidateCacheAsync(cacheStore, id); };
             return mgr;
         });
         services.AddTransient<DevUIViewModel>();
         return services;
+    }
+
+    private static async Task InvalidateCacheAsync(LTAI.Agent.Caching.IMemoryCachingStore store, string id)
+    {
+        try { await store.InvalidateSessionAsync(id).ConfigureAwait(false); }
+        catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"[Program] InvalidateCache failed: {ex.Message}"); }
     }
 }
 

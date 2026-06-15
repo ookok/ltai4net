@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Media;
@@ -10,6 +11,7 @@ public sealed class CommandPaletteDialog : Window
     private readonly CommandPaletteViewModel _vm;
     private readonly TextBox _searchBox;
     private readonly ListBox _listBox;
+    private readonly ObservableCollection<ListBoxItem> _listItems = new();
 
     public CommandPaletteDialog(List<CommandPaletteViewModel.CommandPaletteItem> items)
     {
@@ -31,7 +33,11 @@ public sealed class CommandPaletteDialog : Window
             Background = LtaiTheme.Sbb(LtaiTheme.BgPanel),
             Foreground = LtaiTheme.Sbb(LtaiTheme.TextPrimary),
         };
-        _searchBox.TextChanged += (_, _) => { _vm.Filter(_searchBox.Text ?? ""); _listBox.Items.Clear(); foreach (var item in _vm.FilteredItems) _listBox.Items.Add(new ListBoxItem { Content = new TextBlock { Text = $"{item.Icon}  {item.Title}  —  {item.Description}", FontSize = 12, Foreground = LtaiTheme.Sbb(LtaiTheme.TextPrimary) }, Tag = item }); };
+        _searchBox.TextChanged += (_, _) =>
+        {
+            _vm.Filter(_searchBox.Text ?? "");
+            RebuildList();
+        };
         DockPanel.SetDock(_searchBox, Dock.Top);
         root.Children.Add(_searchBox);
 
@@ -40,18 +46,9 @@ public sealed class CommandPaletteDialog : Window
             Background = LtaiTheme.Sbb(LtaiTheme.Bg),
             Foreground = LtaiTheme.Sbb(LtaiTheme.TextPrimary),
         };
+        _listBox.ItemsSource = _listItems;
 
-        foreach (var item in _vm.FilteredItems)
-        {
-            var textBlock = new TextBlock
-            {
-                Text = $"{item.Icon}  {item.Title}  —  {item.Description}",
-                FontSize = 12,
-                Foreground = LtaiTheme.Sbb(LtaiTheme.TextPrimary),
-            };
-            var listItem = new ListBoxItem { Content = textBlock, Tag = item };
-            _listBox.Items.Add(listItem);
-        }
+        RebuildList();
 
         _listBox.KeyDown += (_, e) =>
         {
@@ -73,5 +70,23 @@ public sealed class CommandPaletteDialog : Window
 
         root.Children.Add(_listBox);
         Content = root;
+    }
+
+    private void RebuildList()
+    {
+        _listItems.Clear();
+        foreach (var item in _vm.FilteredItems)
+        {
+            _listItems.Add(new ListBoxItem
+            {
+                Content = new TextBlock
+                {
+                    Text = $"{item.Icon}  {item.Title}  —  {item.Description}",
+                    FontSize = 12,
+                    Foreground = LtaiTheme.Sbb(LtaiTheme.TextPrimary),
+                },
+                Tag = item,
+            });
+        }
     }
 }

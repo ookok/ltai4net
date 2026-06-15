@@ -58,6 +58,11 @@ public sealed class SkillsView : UserControl
                 try
                 {
                     var scriptPath = skill.Path;
+                    if (string.IsNullOrEmpty(scriptPath) || !File.Exists(scriptPath))
+                    {
+                        _statusText.Text = $"❌ {skill.Name}: 脚本文件不存在";
+                        return;
+                    }
                     var (shell, args) = OperatingSystem.IsWindows()
                         ? ("pwsh", $"-NoProfile -File \"{scriptPath}\"")
                         : ("bash", scriptPath);
@@ -70,11 +75,13 @@ public sealed class SkillsView : UserControl
                     };
                     using var p = new System.Diagnostics.Process { StartInfo = psi };
                     p.Start();
-                    var output = await p.StandardOutput.ReadToEndAsync();
-                    var error = await p.StandardError.ReadToEndAsync();
-                    await p.WaitForExitAsync();
+                    var outputTask = p.StandardOutput.ReadToEndAsync();
+                    var errorTask = p.StandardError.ReadToEndAsync();
+                    var exitTask = p.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(30));
+                    await exitTask;
                     _statusText.Text = $"✅ {skill.Name}: 完成 (exit={p.ExitCode})";
                 }
+                catch (TimeoutException) { _statusText.Text = $"⏱ {skill.Name}: 超时"; }
                 catch (Exception ex) { _statusText.Text = $"❌ {skill.Name}: {ex.Message}"; }
             };
 

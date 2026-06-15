@@ -31,6 +31,14 @@ public sealed class DnsOverHttps : IDisposable
 
         try
         {
+            // Periodic cache eviction
+            if (_cache.Count > 1000)
+            {
+                var now = DateTime.UtcNow;
+                foreach (var kv in _cache)
+                    if (kv.Value.Expiry < now) _cache.TryRemove(kv.Key, out _);
+            }
+
             var resp = await _http.GetFromJsonAsync<DnsJsonResponse>(
                 $"/dns-query?name={Uri.EscapeDataString(host)}&type=A&ct=application/dns-json", ct);
 

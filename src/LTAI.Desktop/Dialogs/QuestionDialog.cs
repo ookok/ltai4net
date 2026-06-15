@@ -146,7 +146,7 @@ public sealed class QuestionDialog : Window
             if (!string.IsNullOrEmpty(custom))
                 result.Add(custom);
             if (result.Count == 0)
-                result.Add(_customBox?.Text?.Trim() ?? "(未选择)");
+                result.Add("(未选择)");
             return result;
         }
     }
