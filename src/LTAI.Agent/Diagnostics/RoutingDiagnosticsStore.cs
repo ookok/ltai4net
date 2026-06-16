@@ -76,7 +76,10 @@ public sealed class RoutingDiagnosticsStore : IDisposable
         // Don't block if another thread holds the gate — just skip the write flush
         if (_gate.Wait(0))
         {
-            try { _writer?.Dispose(); } catch { }
+            try { _writer?.Dispose(); } catch
+            {
+                // non-critical, best-effort
+            }
             _writer = null;
             _gate.Release();
         }

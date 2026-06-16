@@ -5,7 +5,7 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 
-namespace LTAI.Agent.Tools;
+namespace LTAI.Agent.CodeAnalysis;
 
 /// <summary>
 /// Multi-language code analysis tools.

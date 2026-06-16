@@ -134,9 +134,6 @@ public sealed class PalaceStore : IDisposable
         await foreach (var hit in SemanticSearchAsync(vec, topK: 1, wing: wing).ConfigureAwait(false))
             if (hit.Score >= 0.92) return hit.Drawer.DrawerId;
 
-        if (vec.Length != VectorQuantizer.Dim)
-            _logger?.LogWarning("PalaceStore: embedding dim mismatch: got {Actual}, expected {Expected}", vec.Length, VectorQuantizer.Dim);
-
         long? expiresAt = null;
         if (ttlMs is > 0)
             expiresAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + ttlMs.Value;
@@ -152,7 +149,14 @@ public sealed class PalaceStore : IDisposable
         cmd.Parameters.AddWithValue("$w", wing); cmd.Parameters.AddWithValue("$r", room);
         cmd.Parameters.AddWithValue("$id", drawerId); cmd.Parameters.AddWithValue("$role", role);
         cmd.Parameters.AddWithValue("$c", content);
-        cmd.Parameters.AddWithValue("$emb", VectorQuantizer.QuantizeToBytes(vec));
+
+        if (vec.Length == VectorQuantizer.Dim)
+            cmd.Parameters.AddWithValue("$emb", VectorQuantizer.QuantizeToBytes(vec));
+        else
+        {
+            _logger?.LogWarning("PalaceStore: embedding dim mismatch: got {Actual}, expected {Expected}. Storing without embedding.", vec.Length, VectorQuantizer.Dim);
+            cmd.Parameters.AddWithValue("$emb", DBNull.Value);
+        }
         cmd.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()); cmd.Parameters.AddWithValue("$exp", (object?)expiresAt ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$imp", importance); cmd.Parameters.AddWithValue("$agent", agentId ?? "default");
         cmd.Parameters.AddWithValue("$meta", metadata != null ? JsonSerializer.Serialize(metadata, JsonOpts) : DBNull.Value);
@@ -222,7 +226,7 @@ public sealed class PalaceStore : IDisposable
     // Sync overload for backward compat
     public bool TouchDrawer(string wing, string room, string drawerId, double importance)
     {
-        return TouchDrawerAsync(wing, room, drawerId, importance).ConfigureAwait(false).GetAwaiter().GetResult();
+        return Task.Run(() => TouchDrawerAsync(wing, room, drawerId, importance)).GetAwaiter().GetResult();
     }
 
     public Drawer? GetDrawer(string wing, string room, string drawerId)
@@ -1206,7 +1210,10 @@ public sealed class PalaceStore : IDisposable
                 catch (Exception ex)
                 {
                     _logger?.LogWarning(ex, "PalaceStore: HNSW snapshot load failed, rebuilding from SQL");
-                    try { File.Delete(snapshotPath); } catch { }
+                    try { File.Delete(snapshotPath); } catch
+                    {
+                        _logger?.LogWarning("Swallowing exception in PalaceStore.cs");
+                    }
                 }
             }
             await RebuildHnswCoreAsync().ConfigureAwait(false);

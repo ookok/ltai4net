@@ -48,7 +48,8 @@ public sealed class AutoTunerService : BackgroundService
 
         _logger.LogInformation("AutoTuner running: {NTrials} trials", cfg.Trials);
 
-        var store = new SqliteStudyStore(cfg.StorePath ?? "Data Source=.livingtree/hpo.db");
+        var dbPath = cfg.StorePath ?? Path.Combine(".livingtree", "hpo.db");
+        var store = new SqliteStudyStore(dbPath);
         var study = new Study("auto_tune", new TpeSampler(cfg.Seed), store, direction: StudyDirection.Maximize);
 
         var evalDir = cfg.EvalDir ?? Path.Combine(_options.DataDirectory, "eval");
@@ -134,7 +135,10 @@ public sealed class AutoTunerService : BackgroundService
                     items.Add(new EvalItem(p, string.Empty, e, Path.GetFileNameWithoutExtension(f)));
                 }
             }
-            catch { }
+            catch
+            {
+                // non-critical, best-effort
+            }
         }
         if (items.Count == 0) return 0;
 

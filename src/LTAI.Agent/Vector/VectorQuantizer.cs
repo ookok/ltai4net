@@ -47,6 +47,8 @@ public static class VectorQuantizer
 
     public static byte[] QuantizeToBytes(float[] vector)
     {
+        if (vector.Length != Dim)
+            throw new ArgumentException($"VectorQuantizer: expected {Dim} dimensions, got {vector.Length}");
         var packed = Instance.Quantize(vector);
         TrackPrecision(vector, packed);
         return packed.ToBytes();
@@ -70,6 +72,8 @@ public static class VectorQuantizer
 
     public static PackedVector Quantize(float[] vector)
     {
+        if (vector.Length != Dim)
+            throw new ArgumentException($"VectorQuantizer: expected {Dim} dimensions, got {vector.Length}");
         var packed = Instance.Quantize(vector);
         TrackPrecision(vector, packed);
         return packed;
@@ -84,13 +88,14 @@ public static class VectorQuantizer
     private static void TrackPrecision(float[] original, PackedVector packed)
     {
         var reconstructed = Instance.Dequantize(packed);
+        var len = Math.Min(original.Length, reconstructed.Length);
         double error = 0;
-        for (int i = 0; i < original.Length; i++)
+        for (int i = 0; i < len; i++)
         {
             var diff = original[i] - reconstructed[i];
             error += diff * diff;
         }
-        error = Math.Sqrt(error / original.Length);
+        error = Math.Sqrt(error / len);
         Interlocked.Increment(ref _totalQuantized);
         lock (Instance) // thread-safe update for accumulator fields
         {

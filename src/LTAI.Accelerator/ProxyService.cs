@@ -147,7 +147,10 @@ public sealed class ProxyService : IDisposable
                 var error = "HTTP/1.1 502 Bad Gateway\r\n\r\nProxy error";
                 await clientStream.WriteAsync(System.Text.Encoding.ASCII.GetBytes(error).AsMemory(), ct);
             }
-            catch { }
+            catch
+            {
+                // non-critical, best-effort
+            }
         }
     }
 
@@ -178,7 +181,10 @@ public sealed class ProxyService : IDisposable
                 var error = "HTTP/1.1 502 Bad Gateway\r\n\r\nProxy error";
                 await clientStream.WriteAsync(System.Text.Encoding.ASCII.GetBytes(error).AsMemory(), ct);
             }
-            catch { }
+            catch
+            {
+                // non-critical, best-effort
+            }
         }
     }
 
@@ -282,7 +288,10 @@ public sealed class ProxyService : IDisposable
             }
         }
         catch when (ct.IsCancellationRequested) { }
-        catch { }
+        catch
+        {
+            // non-critical, best-effort
+        }
     }
 
     public void Dispose()

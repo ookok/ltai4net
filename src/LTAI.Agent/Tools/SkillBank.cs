@@ -149,6 +149,9 @@ public sealed class SkillBank
             if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
             File.WriteAllText(_storePath, JsonSerializer.Serialize(snapshot, new JsonSerializerOptions { WriteIndented = true }));
         }
-        catch { }
+        catch
+        {
+            // non-critical, best-effort
+        }
     }
 }

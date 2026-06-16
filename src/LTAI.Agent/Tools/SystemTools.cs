@@ -5,8 +5,10 @@ using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Text.Json;
 using LTAI.AI;
+using LTAI.Core;
 
 namespace LTAI.Agent.Tools;
 
@@ -49,8 +51,6 @@ public sealed class SystemTools
         sb.AppendLine($"| OS Arch | {RuntimeInformation.OSArchitecture} |");
         sb.AppendLine($"| Process Arch | {RuntimeInformation.ProcessArchitecture} |");
         sb.AppendLine($"| .NET | {RuntimeInformation.FrameworkDescription} |");
-        sb.AppendLine($"| Machine | {Environment.MachineName} |");
-        sb.AppendLine($"| User | {Environment.UserName} |");
         sb.AppendLine($"| CPUs | {Environment.ProcessorCount} cores |");
         sb.AppendLine($"| Process | {Environment.ProcessId} |");
         sb.AppendLine($"| Uptime | {TimeSpan.FromMilliseconds(Environment.TickCount64):dd\\.hh\\:mm\\:ss} |");
@@ -72,7 +72,10 @@ public sealed class SystemTools
                 sb.AppendLine($"| Disk {drive.Name} | {FormatSize(drive.AvailableFreeSpace)} free / {FormatSize(drive.TotalSize)} total {pct} |");
             }
         }
-        catch { }
+        catch
+        {
+            // non-critical, best-effort
+        }
 
         return sb.ToString();
     }
@@ -104,7 +107,10 @@ public sealed class SystemTools
                         : "N/A";
                     sb.AppendLine($"| {p.Id} | {p.ProcessName} | {cpu} | {FormatSize(p.WorkingSet64)} | {p.Threads.Count} |");
                 }
-                catch { }
+                catch
+                {
+                    // non-critical, best-effort
+                }
                 finally { p.Dispose(); }
             }
 
@@ -201,7 +207,10 @@ public sealed class SystemTools
                 var reverse = await Dns.GetHostEntryAsync(entries[0]).ConfigureAwait(false);
                 sb.AppendLine($"\nPTR: {reverse.HostName}");
             }
-            catch { }
+            catch
+            {
+                // non-critical, best-effort
+            }
 
             return sb.ToString();
         }
@@ -334,7 +343,9 @@ public sealed class SystemTools
     {
         try
         {
-            var fp = Path.GetFullPath(Path.Combine(Directory.GetCurrentDirectory(), path));
+            var ws = Directory.GetCurrentDirectory();
+            var fp = PathUtils.SafeResolvePath(ws, path);
+            if (fp == null) return "Error: Path escapes workspace sandbox";
             if (!Directory.Exists(fp)) return $"Directory not found: {fp}";
 
             if (mode == "tree")
@@ -412,11 +423,16 @@ public sealed class SystemTools
         && !string.Equals(name, ".vs", StringComparison.OrdinalIgnoreCase);
 
     [Description("WHOIS lookup for domain registration info")]
+    private static readonly Regex _domainRx = new(@"^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*\.[a-zA-Z]{2,}$", RegexOptions.Compiled, TimeSpan.FromMilliseconds(100));
+
     public static async Task<string> Whois(
         [Description("Domain name (e.g. example.com)")] string domain)
     {
         try
         {
+            if (string.IsNullOrWhiteSpace(domain) || !_domainRx.IsMatch(domain))
+                return $"Error: Invalid domain name format '{domain}'";
+
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
             using var req = new HttpRequestMessage(HttpMethod.Get, $"https://rdap.org/domain/{domain}");
             req.Headers.UserAgent.ParseAdd("LTAI/1.0");
@@ -462,6 +478,79 @@ public sealed class SystemTools
         }
     }
 
+    private static readonly Regex _dockerImageRx = new(@"^[a-zA-Z0-9][a-zA-Z0-9._/-]*(:[a-zA-Z0-9._-]+)?$", RegexOptions.Compiled, TimeSpan.FromMilliseconds(100));
+
+    private static readonly HashSet<string> BlockedExes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "sudo", "su", "chmod", "chown", "mkfs", "fdisk",
+        "dd", "shutdown", "reboot", "init", "halt", "poweroff",
+        "passwd", "useradd", "usermod", "groupadd", "fuser", "kill",
+        "mount", "umount", "iptables", "ufw", "systemctl",
+        "cmd", "cmd.exe", "certutil", "bitsadmin", "mshta", "cscript", "wmic",
+        "reg", "schtasks", "diskpart", "bcdedit", "regsvr32", "rundll32",
+        "attrib", "cacls", "takeown", "icacls", "vssadmin",
+    };
+
+    private static readonly string[] DangerousPatterns =
+    {
+        "rm -rf /", "rm -rf ~", "rm -rf --no-preserve-root",
+        ":(){ :|:& };:", "eval ", "exec ",
+        "> /dev/", "dd if=", "wget -O - | sh", "curl .* | sh",
+        "wget .* -O ", "certutil .* -urlcache", "bitsadmin .* /transfer",
+    };
+
+    private static readonly HashSet<string> CodeExecNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "bash", "sh", "zsh", "dash", "ksh", "fish",
+        "python", "python2", "python3", "py",
+        "perl", "perl5", "ruby", "rake",
+        "php", "lua", "luajit",
+        "tclsh", "wish",
+        "powershell", "pwsh", "powershell.exe", "pwsh.exe",
+    };
+
+    private static readonly HashSet<string> CodeExecArgs = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "-c", "-command", "-e", "-i",
+    };
+
+    private static readonly string[] CommandSeps = { " & ", " && ", " || ", " | ", "; " };
+
+    private static string CheckCommandSafety(string command)
+    {
+        var cmdLower = command.ToLowerInvariant();
+        var parts = command.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var executable = parts.Length > 0 ? parts[0].Trim() : "";
+        var executableName = Path.GetFileName(executable.Trim('"').AsSpan()).ToString();
+
+        if (BlockedExes.Contains(executableName))
+            return "❌ 命令包含危险操作，已阻止";
+
+        if (DangerousPatterns.Any(p => cmdLower.Contains(p)))
+            return "❌ 命令包含危险操作，已阻止";
+
+        if (parts.Length >= 2 && CodeExecNames.Contains(parts[0]) && CodeExecArgs.Contains(parts[1]))
+            return "❌ 命令包含代码执行操作 (-c/-e/-command)，已阻止";
+
+        foreach (var sep in CommandSeps)
+        {
+            if (cmdLower.Contains(sep))
+            {
+                var partsChk = command.Split(new[] { "&&", "||", "|", "&", ";" }, StringSplitOptions.TrimEntries);
+                foreach (var part in partsChk)
+                {
+                    var partExec = part.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                    if (partExec.Length == 0) continue;
+                    var pn = Path.GetFileName(partExec[0].AsSpan()).ToString();
+                    if (BlockedExes.Contains(pn) || CodeExecNames.Contains(pn))
+                        return $"❌ 命令包含危险操作（{pn}），已阻止";
+                }
+                break;
+            }
+        }
+        return "";
+    }
+
     private static string FormatSize(long bytes) => bytes switch
     {
         < 1024 => $"{bytes} B",
@@ -477,6 +566,13 @@ public sealed class SystemTools
     {
         try
         {
+            if (string.IsNullOrWhiteSpace(image) || !_dockerImageRx.IsMatch(image))
+                return $"Error: Invalid Docker image name '{image}'";
+
+            var safetyMsg = CheckCommandSafety(command);
+            if (!string.IsNullOrEmpty(safetyMsg))
+                return safetyMsg;
+
             var psi = new ProcessStartInfo("docker")
             {
                 RedirectStandardOutput = true,
@@ -494,7 +590,10 @@ public sealed class SystemTools
             var error = await process.StandardError.ReadToEndAsync().ConfigureAwait(false);
             using var dockerCts = new CancellationTokenSource(TimeSpan.FromMinutes(5));
             try { await process.WaitForExitAsync(dockerCts.Token).ConfigureAwait(false); }
-            catch (OperationCanceledException) { try { process.Kill(); } catch { } }
+            catch (OperationCanceledException) { try { process.Kill(); } catch
+            {
+                // non-critical, best-effort
+            } }
 
             var sb = new StringBuilder();
             sb.AppendLine($"## Docker Run: {image}\n");
@@ -519,6 +618,10 @@ public sealed class SystemTools
     {
         try
         {
+            var safetyMsg = CheckCommandSafety(command);
+            if (!string.IsNullOrEmpty(safetyMsg))
+                return safetyMsg;
+
             var psi = new ProcessStartInfo
             {
                 FileName = Environment.OSVersion.Platform == PlatformID.Win32NT ? "cmd.exe" : "/bin/bash",
@@ -580,7 +683,10 @@ public sealed class SystemTools
             var error = await process.StandardError.ReadToEndAsync().ConfigureAwait(false);
             using var dockerCheckCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             try { await process.WaitForExitAsync(dockerCheckCts.Token).ConfigureAwait(false); }
-            catch (OperationCanceledException) { try { process.Kill(); } catch { } }
+            catch (OperationCanceledException) { try { process.Kill(); } catch
+            {
+                // non-critical, best-effort
+            } }
 
             if (process.ExitCode != 0)
                 return $"❌ Docker is not available: {error}";

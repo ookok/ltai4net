@@ -95,7 +95,13 @@ public sealed class DocumentTools
         catch (Exception ex) { TryDelete(tmpPath); return $"Error: {ex.Message}"; }
     }
 
-    private static void TryDelete(string path) { try { File.Delete(path); } catch (IOException) { } catch (UnauthorizedAccessException) { } }
+    private static void TryDelete(string path) { try { File.Delete(path); } catch (IOException)
+    {
+        // non-critical, best-effort
+    } catch (UnauthorizedAccessException)
+    {
+        // non-critical, best-effort
+    } }
 
     public string ExcelWrite(string path, string cellsJson, bool create = false)
     {

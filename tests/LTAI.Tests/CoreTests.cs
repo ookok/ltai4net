@@ -1,6 +1,6 @@
 using Xunit;
-using LTAI.Agent.Vector;
 using LTAI.Agent.Tools;
+using LTAI.Agent.Vector;
 using LTAI.Core.Configuration;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -197,37 +197,37 @@ public class SafeShellToolTests
     public async Task RunCommand_Dangerous_ReturnsError()
     {
         var tool = new SafeShellTool(Directory.GetCurrentDirectory());
-        var result = await tool.RunCommand("rm -rf /", confirm: true);
+        var result = await tool.RunCommand("rm -rf /");
         Assert.Contains("危险", result);
     }
 
     [Fact]
-    public async Task RunCommand_WithoutConfirm_ReturnsWarning()
+    public async Task RunCommand_SimpleCommand_Runs()
     {
         var tool = new SafeShellTool(Directory.GetCurrentDirectory());
-        var result = await tool.RunCommand("echo hello", confirm: false);
-        Assert.Contains("确认", result);
+        var result = await tool.RunCommand("echo hello");
+        Assert.Contains("hello", result);
     }
 
     [Fact]
-    public async Task RunCommand_WithConfirmAndSafe_Runs()
+    public async Task RunCommand_Safe_Runs()
     {
         var tool = new SafeShellTool(Directory.GetCurrentDirectory());
-        var result = await tool.RunCommand("echo hello world", confirm: true);
+        var result = await tool.RunCommand("echo hello world");
         Assert.Contains("hello world", result);
     }
     [Fact]
     public async Task RunCommand_Sudo_Blocked()
     {
         var t = new SafeShellTool(Directory.GetCurrentDirectory());
-        Assert.Contains("阻止", await t.RunCommand("sudo rm -rf /", confirm: true));
+        Assert.Contains("阻止", await t.RunCommand("sudo rm -rf /"));
     }
 
     [Fact]
     public async Task RunCommand_TokenLevel_Safe_Allowed()
     {
         var t = new SafeShellTool(Directory.GetCurrentDirectory());
-        var r = await t.RunCommand("dotnet --version", confirm: true);
+        var r = await t.RunCommand("dotnet --version");
         Assert.False(string.IsNullOrWhiteSpace(r), r);
     }
 
@@ -235,7 +235,7 @@ public class SafeShellToolTests
     public async Task RunCommand_RmWithArgs_SafeFile_Allowed()
     {
         var t = new SafeShellTool(Directory.GetCurrentDirectory());
-        var r = await t.RunCommand("rm temp.txt", confirm: true);
+        var r = await t.RunCommand("rm temp.txt");
         // rm without -rf and specific file should be allowed
         Assert.DoesNotContain("阻止", r);
     }
@@ -340,344 +340,4 @@ public class RerankerTests
     }
 }
 
-// ═══════════════════════════════════════════════════════════════
-//  DocumentTools — 文档读写测试
-// ═══════════════════════════════════════════════════════════════
 
-public class OfficeToolsTests : IDisposable
-{
-    private readonly string _dir;
-    public OfficeToolsTests()
-    {
-        _dir = Path.Combine(Path.GetTempPath(), "ltai-office-" + Guid.NewGuid().ToString("N")[..8]);
-        Directory.CreateDirectory(_dir);
-    }
-    public void Dispose() { try { Directory.Delete(_dir, recursive: true); } catch { } }
-
-    [Fact]
-    public void WordRead_AfterWrite_ReturnsContent()
-    {
-        var path = Path.Combine(_dir, "test.docx");
-        var tools = new DocumentTools(_dir);
-
-        var writeResult = tools.WordWrite(path, "Hello World\nLine Two", create: true);
-        Assert.StartsWith("Word saved:", writeResult);
-
-        var readResult = tools.WordRead(path);
-        Assert.Contains("Hello World", readResult);
-        Assert.Contains("Line Two", readResult);
-    }
-
-    [Fact]
-    public void ExcelRead_AfterWrite_ReturnsData()
-    {
-        var path = Path.Combine(_dir, "test.xlsx");
-        var tools = new DocumentTools(_dir);
-
-        var writeResult = tools.ExcelWrite(path, """[["A1","Value1"],["B2","Value2"]]""", create: true);
-        Assert.StartsWith("Excel saved:", writeResult);
-
-        var readResult = tools.ExcelRead(path, "Sheet1");
-        Assert.Contains("Value1", readResult);
-        Assert.Contains("Value2", readResult);
-    }
-
-    [Fact]
-    public void PptRead_AfterWrite_ReturnsContent()
-    {
-        var path = Path.Combine(_dir, "test.pptx");
-        var tools = new DocumentTools(_dir);
-
-        var writeResult = tools.PptWrite(path, "Slide One\nSlide Two", create: true);
-        Assert.StartsWith("PPT saved:", writeResult);
-
-        var readResult = tools.PptRead(path);
-        Assert.Contains("Slide One", readResult);
-    }
-
-    [Fact]
-    public void ExcelRead_FileNotFound_ReturnsError()
-    {
-        var tools = new DocumentTools(_dir);
-        var result = tools.ExcelRead(Path.Combine(_dir, "nonexistent.xlsx"), "Sheet1");
-        Assert.Contains("read error", result, StringComparison.OrdinalIgnoreCase);
-    }
-
-    [Fact]
-    public void WordRead_FileNotFound_ReturnsError()
-    {
-        var tools = new DocumentTools(_dir);
-        var result = tools.WordRead(Path.Combine(_dir, "nonexistent.docx"));
-        Assert.Contains("read error", result, StringComparison.OrdinalIgnoreCase);
-    }
-
-    [Fact]
-    public void PptRead_FileNotFound_ReturnsError()
-    {
-        var tools = new DocumentTools(_dir);
-        var result = tools.PptRead(Path.Combine(_dir, "nonexistent.pptx"));
-        Assert.Contains("read error", result, StringComparison.OrdinalIgnoreCase);
-    }
-}
-
-// ═══════════════════════════════════════════════════════════════
-//  DocumentTools — 文档生成流水线
-// ═══════════════════════════════════════════════
-
-public class DocGenPipelineTests : IDisposable
-{
-    private readonly string _dir;
-    public DocGenPipelineTests()
-    {
-        _dir = Path.Combine(Path.GetTempPath(), "ltai-docgen-" + Guid.NewGuid().ToString("N")[..8]);
-        Directory.CreateDirectory(_dir);
-    }
-    public void Dispose() { try { Directory.Delete(_dir, recursive: true); } catch { } }
-
-    [Fact]
-    public void RenderTemplate_SimplePlaceholders_Replaced()
-    {
-        var pipe = new DocumentTools(_dir);
-        var result = pipe.RenderTemplate("Hello {{name}}, your score is {{score}}",
-            """{"name": "Alice", "score": "95"}""");
-        Assert.Contains("Hello Alice", result);
-        Assert.Contains("score is 95", result);
-    }
-
-    [Fact]
-    public void RenderTemplate_SectionBlocks_Conditional()
-    {
-        var pipe = new DocumentTools(_dir);
-        var tpl = "# {{title}}\n{{#items}}\n- {{item}}\n{{/items}}";
-        var result = pipe.RenderTemplate(tpl, """{"title": "List", "items": ["A", "B"]}""");
-        Assert.Contains("# List", result);
-        Assert.DoesNotContain("{{#items}}", result);
-    }
-
-    [Fact]
-    public void RenderTemplate_EmptySection_Removed()
-    {
-        var pipe = new DocumentTools(_dir);
-        var tpl = "Start\n{{#optional}}hidden{{/optional}}\nEnd";
-        var result = pipe.RenderTemplate(tpl, """{}""");
-        Assert.Contains("Start", result);
-        Assert.Contains("End", result);
-        Assert.DoesNotContain("hidden", result);
-    }
-
-    [Fact]
-    public void InferContentTypes_HeadingsAndBody_Detected()
-    {
-        var pipe = new DocumentTools(_dir);
-        var text = "# Title\n## Section\nBody text here\n- list item\n```\ncode block\n```";
-        var result = pipe.InferContentTypes(text);
-        Assert.Contains("heading", result);
-        Assert.Contains("body", result);
-        Assert.Contains("list", result);
-        Assert.Contains("code", result);
-    }
-
-    [Fact]
-    public void GetDefaultStylesJson_ReturnsValidJson()
-    {
-        var json = DocumentTools.GetDefaultStylesJson();
-        Assert.Contains("title", json);
-        Assert.Contains("heading1", json);
-        Assert.Contains("fontSize", json);
-        var parsed = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, object>>(json);
-        Assert.NotNull(parsed);
-    }
-
-    [Fact]
-    public void BuildDocument_Word_Basic()
-    {
-        var pipe = new DocumentTools(_dir);
-        var path = Path.Combine(_dir, "test.docx");
-        var result = pipe.BuildDocumentAsync("test content", path).Result;
-        Assert.StartsWith("Word saved:", result);
-        Assert.True(File.Exists(path));
-    }
-
-    [Fact]
-    public void BuildDocument_Ppt_Basic()
-    {
-        var pipe = new DocumentTools(_dir);
-        var path = Path.Combine(_dir, "test.pptx");
-        var result = pipe.BuildDocumentAsync("test content", path).Result;
-        Assert.StartsWith("PPT saved:", result);
-        Assert.True(File.Exists(path));
-    }
-
-    [Fact]
-    public void BuildDocument_Excel_Basic()
-    {
-        var pipe = new DocumentTools(_dir);
-        var path = Path.Combine(_dir, "test.xlsx");
-        var result = pipe.BuildDocumentAsync("test content", path).Result;
-        Assert.StartsWith("Excel saved:", result);
-        Assert.True(File.Exists(path));
-    }
-
-    [Fact]
-    public void BuildDocument_UnsupportedFormat_ReturnsError()
-    {
-        var pipe = new DocumentTools(_dir);
-        var path = Path.Combine(_dir, "test.txt");
-        var result = pipe.BuildDocumentAsync("test", path).Result;
-        Assert.Contains("Unsupported format", result);
-    }
-
-    [Fact]
-    public void BuildDocument_AlreadyExists_ReturnsError()
-    {
-        var pipe = new DocumentTools(_dir);
-        var path = Path.Combine(_dir, "exists.docx");
-        File.WriteAllText(path, "dummy");
-        var result = pipe.BuildDocumentAsync("test", path).Result;
-        Assert.Contains("already exists", result);
-    }
-}
-
-// ═══════════════════════════════════════════════════════════════
-//  ExcelCopyRange — 样式保留复制
-// ═══════════════════════════════════════════════
-
-public class ExcelCopyRangeTests : IDisposable
-{
-    private readonly string _dir;
-    public ExcelCopyRangeTests()
-    {
-        _dir = Path.Combine(Path.GetTempPath(), "ltai-xlcpy-" + Guid.NewGuid().ToString("N")[..8]);
-        Directory.CreateDirectory(_dir);
-    }
-    public void Dispose() { try { Directory.Delete(_dir, recursive: true); } catch { } }
-
-    [Fact]
-    public void CopyRange_WithinSameFile_Works()
-    {
-        var tools = new DocumentTools(_dir);
-        var srcPath = Path.Combine(_dir, "src.xlsx");
-        tools.ExcelWrite(srcPath, """[["A1","Value1"],["B1","Value2"]]""", create: true);
-
-        // Copy A1:B1 to D1
-        var result = tools.ExcelCopyRange(srcPath, "A1:B1", srcPath, "D1");
-        Assert.StartsWith("Copied", result);
-
-        var readResult = tools.ExcelRead(srcPath, "Sheet1");
-        Assert.Contains("Value1", readResult);
-        Assert.Contains("Value2", readResult);
-    }
-
-    [Fact]
-    public void CopyRange_CrossFile_Works()
-    {
-        var tools = new DocumentTools(_dir);
-        var srcPath = Path.Combine(_dir, "src.xlsx");
-        tools.ExcelWrite(srcPath, """[["A1","SourceData"]]""", create: true);
-
-        var tgtPath = Path.Combine(_dir, "tgt.xlsx");
-        tools.ExcelWrite(tgtPath, """[["A1","OldData"]]""", create: true);
-
-        var result = tools.ExcelCopyRange(srcPath, "A1:A1", tgtPath, "A1");
-        Assert.StartsWith("Copied", result);
-
-        var readResult = tools.ExcelRead(tgtPath, "Sheet1");
-        Assert.Contains("SourceData", readResult);
-    }
-
-    [Fact]
-    public void CopyRange_SourceNotFound_ReturnsError()
-    {
-        var tools = new DocumentTools(_dir);
-        var result = tools.ExcelCopyRange("nonexistent.xlsx", "A1:B2", Path.Combine(_dir, "out.xlsx"), "A1");
-        Assert.Contains("copy error", result, StringComparison.OrdinalIgnoreCase);
-    }
-}
-
-// ═══════════════════════════════════════════════════════════════
-//  WordCopyStyle — 样式复制
-// ═══════════════════════════════════════════════
-
-public class WordCopyStyleTests : IDisposable
-{
-    private readonly string _dir;
-    public WordCopyStyleTests()
-    {
-        _dir = Path.Combine(Path.GetTempPath(), "ltai-wcpy-" + Guid.NewGuid().ToString("N")[..8]);
-        Directory.CreateDirectory(_dir);
-    }
-    public void Dispose() { try { Directory.Delete(_dir, recursive: true); } catch { } }
-
-    [Fact]
-    public void CopyStyle_SourceToTarget_Works()
-    {
-        var tools = new DocumentTools(_dir);
-        var srcPath = Path.Combine(_dir, "src.docx");
-        tools.WordWrite(srcPath, "Hello World", create: true);
-
-        var tgtPath = Path.Combine(_dir, "tgt.docx");
-        tools.WordWrite(tgtPath, "Target Content", create: true);
-
-        var result = tools.WordCopyStyle(srcPath, tgtPath);
-        Assert.StartsWith("Copied styles", result);
-
-        var readResult = tools.WordRead(tgtPath);
-        Assert.Contains("Target Content", readResult);
-    }
-
-    [Fact]
-    public void CopyStyle_SourceNotFound_ReturnsError()
-    {
-        var tools = new DocumentTools(_dir);
-        var tgt = Path.Combine(_dir, "t.docx");
-        tools.WordWrite(tgt, "test", create: true);
-        var result = tools.WordCopyStyle("nonexistent.docx", tgt);
-        Assert.Contains("copy style error", result, StringComparison.OrdinalIgnoreCase);
-    }
-}
-
-// ═══════════════════════════════════════════════════════════════
-//  PptCopyStyle — PPT 主题/母版复制
-// ═══════════════════════════════════════════════
-
-public class PptCopyStyleTests : IDisposable
-{
-    private readonly string _dir;
-    public PptCopyStyleTests()
-    {
-        _dir = Path.Combine(Path.GetTempPath(), "ltai-pcpy-" + Guid.NewGuid().ToString("N")[..8]);
-        Directory.CreateDirectory(_dir);
-    }
-    public void Dispose() { try { Directory.Delete(_dir, recursive: true); } catch { } }
-
-    [Fact]
-    public void CopyStyle_SourceToTarget_Works()
-    {
-        var tools = new DocumentTools(_dir);
-        var srcPath = Path.Combine(_dir, "src.pptx");
-        tools.PptWrite(srcPath, "Slide One", create: true);
-
-        var tgtPath = Path.Combine(_dir, "tgt.pptx");
-        tools.PptWrite(tgtPath, "Target Slide", create: true);
-
-        var result = tools.PptCopyStyle(srcPath, tgtPath);
-        Assert.StartsWith("Copied slide master", result);
-
-        var readResult = tools.PptRead(tgtPath);
-        Assert.Contains("Target Slide", readResult);
-    }
-
-    [Fact]
-    public void CopyStyle_SourceNotFound_ReturnsError()
-    {
-        var tools = new DocumentTools(_dir);
-        var tgt = Path.Combine(_dir, "t.pptx");
-        tools.PptWrite(tgt, "test", create: true);
-        var result = tools.PptCopyStyle("nonexistent.pptx", tgt);
-        Assert.Contains("copy style error", result, StringComparison.OrdinalIgnoreCase);
-    }
-}
-
-// ═══════════════════════════════════════════════════════════════
-//  LLM-as-Judge — 回归测试 (DISABLED: requires FakeChatClient from testing NuGet)
-// ═══════════════════════════════════════════════════════════════

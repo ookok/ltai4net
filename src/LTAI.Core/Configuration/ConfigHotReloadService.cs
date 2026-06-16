@@ -102,7 +102,10 @@ public sealed class ConfigHotReloadService : BackgroundService
             {
                 _configRoot.Reload();
             }
-            catch { }
+            catch
+            {
+                // non-critical, best-effort
+            }
         });
     }
 

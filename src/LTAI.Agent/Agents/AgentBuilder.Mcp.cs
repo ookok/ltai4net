@@ -15,9 +15,18 @@ partial class AgentBuilder
     {
         var mcpFactory = sp.GetRequiredService<McpClientFactory>();
         var mcpTask = s_mcpToolsCache.GetOrAdd(name, _ => mcpFactory.GetToolsAsync(opts.Mcp));
-        if (!mcpTask.IsCompletedSuccessfully) return;
 
-        foreach (var mcpTool in mcpTask.GetAwaiter().GetResult())
+        IReadOnlyList<AITool>? mcpTools;
+        try
+        {
+            mcpTools = Task.Run(() => mcpTask).GetAwaiter().GetResult();
+        }
+        catch
+        {
+            return;
+        }
+        if (mcpTools == null) return;
+        foreach (var mcpTool in mcpTools)
         {
             if (!canRead) continue;
             var mn = mcpTool.Name.ToLowerInvariant();

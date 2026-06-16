@@ -44,7 +44,10 @@ public sealed class WarpService : IDisposable
                     if (File.Exists(cli)) return cli;
                 }
             }
-            catch { }
+            catch
+            {
+                // non-critical, best-effort
+            }
         }
 
         return null;
@@ -99,7 +102,11 @@ public sealed class WarpService : IDisposable
 
             if (Connected)
             {
-                _ = Task.Run(() => WatchdogKillWarpGui());
+                _ = Task.Run(() =>
+                {
+                    try { WatchdogKillWarpGui(); }
+                    catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"WarpService watchdog error: {ex.Message}"); }
+                });
                 // Warm up SOCKS5 connection
                 for (int i = 0; i < 5; i++)
                 {
@@ -126,7 +133,10 @@ public sealed class WarpService : IDisposable
             RunWarp("disconnect");
             await Task.Delay(500);
         }
-        catch { }
+        catch
+        {
+            // non-critical, best-effort
+        }
         Connected = false;
     }
 
@@ -173,11 +183,17 @@ public sealed class WarpService : IDisposable
                             p.WaitForExit(2000);
                         }
                     }
-                    catch { }
+                    catch
+                    {
+                        // non-critical, best-effort
+                    }
                 }
             }
         }
-        catch { }
+        catch
+        {
+            // non-critical, best-effort
+        }
     }
 
     private async Task WatchdogKillWarpGui()
@@ -190,7 +206,10 @@ public sealed class WarpService : IDisposable
                 KillWarpGui();
             }
         }
-        catch (Exception) { }
+        catch (Exception)
+        {
+            // non-critical, best-effort
+        }
     }
 
     public void Dispose()

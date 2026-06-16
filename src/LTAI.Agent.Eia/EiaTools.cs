@@ -1,7 +1,7 @@
 using System.ComponentModel;
 using LTAI.AI;
 
-namespace LTAI.Agent.Tools;
+namespace LTAI.Agent.Eia;
 
 /// <summary>
 /// Environmental Impact Assessment (EIA) tools implementing Chinese standards:

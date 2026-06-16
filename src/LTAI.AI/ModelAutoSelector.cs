@@ -302,7 +302,10 @@ public sealed class ModelAutoSelectHostedService : BackgroundService
                     Volatile.Write(ref s_latestResult, updated);
             }
         }
-        catch (OperationCanceledException) { }
+        catch (OperationCanceledException)
+        {
+            // expected cancellation
+        }
         catch (Exception ex)
         {
             _logger.LogError(ex, "ModelAutoSelectHostedService failed");

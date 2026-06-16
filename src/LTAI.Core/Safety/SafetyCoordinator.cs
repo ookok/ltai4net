@@ -91,9 +91,9 @@ public sealed class SafetyCoordinator : AIContextProvider, IDisposable
     /// <summary>Get and clear the output-blocked flag. Returns reason or null.</summary>
     public static string? ConsumeBlock()
     {
-        var reason = Interlocked.Exchange(ref _outputBlocked, 0) == 1
-            ? Interlocked.Exchange(ref _outputBlockedReason, null)
-            : null;
+        if (Interlocked.Exchange(ref _outputBlocked, 0) != 1)
+            return null;
+        var reason = Interlocked.Exchange(ref _outputBlockedReason, null);
         return reason;
     }
 
@@ -200,8 +200,8 @@ public sealed class SafetyCoordinator : AIContextProvider, IDisposable
         }
         catch (Exception ex)
         {
-            _logger?.LogError(ex, "Safety LLM unavailable for {Direction} — degrading to pass-through (fail-open with alert)", direction);
-            return (true, "Safety LLM unavailable — passing through (degraded mode)");
+            _logger?.LogError(ex, "Safety LLM unavailable for {Direction} — blocking (fail-closed)", direction);
+            return (false, "Safety LLM unavailable — blocking by default (fail-closed)");
         }
         finally
         {

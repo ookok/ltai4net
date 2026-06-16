@@ -814,7 +814,10 @@ public sealed class ReviewTools
                     return $"review-{repo.Head.FriendlyName}";
             }
         }
-        catch { }
+        catch
+        {
+            // non-critical, best-effort
+        }
         return $"review-{DateTimeOffset.UtcNow:yyyyMMdd-HHmmss}";
     }
 
@@ -1168,7 +1171,10 @@ public sealed class ReviewTools
                     if (root.TryGetProperty("line", out var l)) line = l.GetString();
                     if (root.TryGetProperty("category", out var c)) cat = c.GetString();
                 }
-                catch { }
+                catch
+                {
+                    // non-critical, best-effort
+                }
             }
 
             // Apply filters
@@ -1273,7 +1279,10 @@ public sealed class ReviewTools
                         sb.AppendLine($"| {t.At} | {t.From} | {t.To} | {t.By ?? "-"} | {t.Summary ?? "-"} |");
                 }
             }
-            catch { }
+            catch
+            {
+                // non-critical, best-effort
+            }
         }
 
         return sb.ToString();
@@ -1319,7 +1328,10 @@ public sealed class ReviewTools
                     if (root.TryGetProperty("line", out var l)) line = l.GetString();
                     if (root.TryGetProperty("category", out var c)) cat = c.GetString();
                 }
-                catch { }
+                catch
+                {
+                    // non-critical, best-effort
+                }
             }
             if (statusFilterSet != null && !statusFilterSet.Contains(st)) continue;
             if (!string.IsNullOrEmpty(severity) && !string.Equals(sev, severity, StringComparison.OrdinalIgnoreCase)) continue;
@@ -1375,7 +1387,10 @@ public sealed class ReviewTools
                     if (root.TryGetProperty("category", out var c)) cat = c.GetString() ?? "?";
                     if (root.TryGetProperty("file", out var f)) file = f.GetString() ?? "?";
                 }
-                catch { }
+                catch
+                {
+                    // non-critical, best-effort
+                }
             }
             if (!string.IsNullOrEmpty(severity) && !string.Equals(sev, severity, StringComparison.OrdinalIgnoreCase)) continue;
             if (!string.IsNullOrEmpty(fileFilter) && !GlobMatch(file, fileFilter)) continue;
@@ -1478,7 +1493,10 @@ public sealed class ReviewTools
                         _ => kv.Value.ToString(),
                     };
         }
-        catch { }
+        catch
+        {
+            // non-critical, best-effort
+        }
         return meta;
     }
 
@@ -1540,9 +1558,9 @@ public sealed class ReviewTools
 
     public string StoreAsyncCompat(string wing, string room, string content,
         double importance, string agentId, Dictionary<string, object>? metadata, long? ttlMs)
-        => _memoryStore!.StoreAsync(wing, room, content, role: "audit",
-            importance: importance, agentId: agentId, metadata: metadata, ttlMs: ttlMs)
-            .ConfigureAwait(false).GetAwaiter().GetResult();
+        => Task.Run(() => _memoryStore!.StoreAsync(wing, room, content, role: "audit",
+            importance: importance, agentId: agentId, metadata: metadata, ttlMs: ttlMs))
+            .GetAwaiter().GetResult();
 
     // ── helpers ──
 

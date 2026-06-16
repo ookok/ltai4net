@@ -100,7 +100,10 @@ public sealed class LivingtreeHealthCheck : BackgroundService
                     if (Directory.GetFileSystemEntries(dir).Length == 0)
                         Directory.Delete(dir);
                 }
-                catch { }
+                catch
+                {
+                    // non-critical, best-effort
+                }
             }
         }
 

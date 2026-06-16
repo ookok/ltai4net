@@ -97,7 +97,10 @@ public sealed class WriteBuffer : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
-        try { _timer.Dispose(); } catch { }
+        try { _timer.Dispose(); } catch
+        {
+            _logger?.LogWarning("Swallowing exception in WriteBuffer.cs");
+        }
         FlushAllSync();
         _dirty.Clear();
     }

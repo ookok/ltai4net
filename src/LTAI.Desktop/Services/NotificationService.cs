@@ -24,7 +24,10 @@ public sealed class NotificationService
         {
             foreach (Action<DesktopNotification> h in handler.GetInvocationList())
             {
-                try { h(entry); } catch { }
+                try { h(entry); } catch
+                {
+                    // non-critical, best-effort
+                }
             }
         }
     }

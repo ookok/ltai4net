@@ -67,7 +67,10 @@ public sealed class RetryChainEmbedder
                 return result;
             }
         }
-        catch { }
+        catch
+        {
+            _logger?.LogWarning("Swallowing exception in RetryChainEmbedder.cs");
+        }
 
         Interlocked.Increment(ref _fallthroughs);
         LastTier = EmbeddingTier.Default;

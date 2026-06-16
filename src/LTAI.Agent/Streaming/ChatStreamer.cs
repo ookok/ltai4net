@@ -91,14 +91,20 @@ public sealed class ChatStreamer
                     Refresh();
                 }
             }
-            catch (OperationCanceledException) { }
+            catch (OperationCanceledException)
+            {
+                // expected cancellation
+            }
             catch (Exception ex)
             {
                 _renderer.OnTextDelta($"\n⚠ 流式响应错误: {ex.Message}");
             }
 
             spinCts.Cancel();
-            try { await spinTask.ConfigureAwait(false); } catch (OperationCanceledException) { }
+            try { await spinTask.ConfigureAwait(false); } catch (OperationCanceledException)
+            {
+                // expected cancellation
+            }
 
             _renderer.OnStreamEnd();
             _toolCalls.Clear();
@@ -143,8 +149,14 @@ public sealed class ChatStreamer
                     _renderer.InvalidateRender();
                 }
             }
-            catch (OperationCanceledException) { }
-            catch { }
+            catch (OperationCanceledException)
+            {
+                // expected cancellation
+            }
+            catch
+            {
+                // non-critical, best-effort
+            }
         }, spinCts.Token);
     }
 

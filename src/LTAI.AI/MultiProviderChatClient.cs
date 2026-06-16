@@ -319,7 +319,8 @@ public sealed class MultiProviderChatClient : IChatClient
             streamingTimeoutCts.CancelAfter(TimeSpan.FromSeconds(_perProviderTimeoutSec));
             var timeoutToken = streamingTimeoutCts.Token;
             var innerStream = client.GetStreamingResponseAsync(messages, options, timeoutToken);
-            await using (var enumerator = innerStream.GetAsyncEnumerator(timeoutToken))
+            var enumerator = innerStream.GetAsyncEnumerator(timeoutToken);
+            await using (enumerator.ConfigureAwait(false))
             {
                 success = true; // valid empty stream is success, not failure
                 while (true)
@@ -334,6 +335,7 @@ public sealed class MultiProviderChatClient : IChatClient
                         _lastError = $"Streaming timeout ({_perProviderTimeoutSec}s)";
                         _logger.LogWarning("Streaming from '{P}' timed out after {S}s, degrading", p, _perProviderTimeoutSec);
                         lastFailedProvider = p;
+                        success = false;
                         RecordFailure(p);
                         break;
                     }
@@ -342,6 +344,7 @@ public sealed class MultiProviderChatClient : IChatClient
                         _lastError = ex.Message;
                         _logger.LogWarning(ex, "Streaming from '{P}' failed, degrading", p);
                         lastFailedProvider = p;
+                        success = false;
                         RecordFailure(p);
                         break;
                     }
@@ -1041,7 +1044,13 @@ public static class ServiceCollectionExtensions
             var opts = sp.GetRequiredService<IOptions<LTAIOptions>>().Value;
 
             if (opts.AI.SkipSafetyChecks)
-                return router; // Bypass safety in dev mode
+            {
+                var env = sp.GetService<IHostEnvironment>();
+                if (env?.IsDevelopment() == true)
+                    return router; // Bypass safety in dev mode
+                var warnLog = sp.GetService<ILogger<MultiProviderChatClient>>();
+                warnLog?.LogWarning("SkipSafetyChecks=true but not in Development environment — safety wrapper will NOT be bypassed");
+            }
 
             var logger = sp.GetService<ILogger<LTAI.Core.Safety.SafeChatClient>>();
 

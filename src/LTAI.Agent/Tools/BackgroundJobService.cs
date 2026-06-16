@@ -174,7 +174,10 @@ public sealed class BackgroundJobService : IDisposable, IAsyncDisposable
             }
             catch (OperationCanceledException)
             {
-                try { process.Kill(entireProcessTree: true); } catch { }
+                try { process.Kill(entireProcessTree: true); } catch
+                {
+                    // non-critical, best-effort
+                }
                 entry.Error = $"Process killed: timeout ({_processTimeoutSeconds}s)";
                 entry.ExitCode = -1;
                 await stdoutTask.ConfigureAwait(false);
@@ -253,7 +256,10 @@ public sealed class BackgroundJobService : IDisposable, IAsyncDisposable
 
         foreach (var kv in _runningProcesses)
         {
-            try { kv.Value.Kill(entireProcessTree: true); } catch { }
+            try { kv.Value.Kill(entireProcessTree: true); } catch
+            {
+                // non-critical, best-effort
+            }
             kv.Value.Dispose();
         }
         _runningProcesses.Clear();
@@ -269,13 +275,19 @@ public sealed class BackgroundJobService : IDisposable, IAsyncDisposable
 
         foreach (var kv in _runningProcesses)
         {
-            try { kv.Value.Kill(entireProcessTree: true); } catch { }
+            try { kv.Value.Kill(entireProcessTree: true); } catch
+            {
+                // non-critical, best-effort
+            }
             kv.Value.Dispose();
         }
         _runningProcesses.Clear();
 
         // Wait briefly for cleanup tasks to complete
-        try { await Task.Delay(500).ConfigureAwait(false); } catch { }
+        try { await Task.Delay(500).ConfigureAwait(false); } catch
+        {
+            // non-critical, best-effort
+        }
     }
 
     [Description("列出所有后台作业及状态")]
@@ -339,7 +351,10 @@ public sealed class BackgroundJobService : IDisposable, IAsyncDisposable
 
         var timeout = TimeSpan.FromSeconds(Math.Clamp(timeoutSec, 1, 600));
         try { await Task.Run(() => entry.CompletedEvent.Wait(timeout, _cts.Token)).ConfigureAwait(false); }
-        catch (OperationCanceledException) { }
+        catch (OperationCanceledException)
+        {
+            // expected cancellation
+        }
 
         if (!entry.Completed)
             return $"Job #{jobId} did not complete within {timeoutSec}s.";

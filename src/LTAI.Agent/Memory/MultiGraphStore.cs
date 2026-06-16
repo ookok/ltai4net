@@ -181,7 +181,10 @@ public sealed class MultiGraphStore : IDisposable
                 tx.Commit();
 
                 // Post-commit sub-graph ops (non-fatal to main insert)
-                try { Temporal.Append(id, (int)ts); } catch { }
+                try { Temporal.Append(id, (int)ts); } catch
+                {
+                    // non-critical, best-effort
+                }
                 EnqueueConsolidation(id);
             }
             catch

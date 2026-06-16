@@ -440,7 +440,10 @@ public sealed class WebTools
                     foreach (var prop in hDoc.RootElement.EnumerateObject())
                         req.Headers.TryAddWithoutValidation(prop.Name, prop.Value.GetString());
                 }
-                catch { }
+                catch
+                {
+                    // non-critical, best-effort
+                }
             }
             if (body != null && (method is "POST" or "PUT" or "PATCH"))
                 req.Content = new StringContent(body, Encoding.UTF8, "application/json");

@@ -184,15 +184,18 @@ public sealed class ToolEmbeddingCache
             {
                 try
                 {
-                    await using var fs = File.OpenRead(_filePath);
-                    var entries = await JsonSerializer.DeserializeAsync<List<CacheEntry>>(
-                        fs, JsonOpts, ct).ConfigureAwait(false);
-                    if (entries is not null)
+                    var fs = File.OpenRead(_filePath);
+                    await using (fs.ConfigureAwait(false))
                     {
-                        foreach (var e in entries)
-                            _store[e.Key] = e;
+                        var entries = await JsonSerializer.DeserializeAsync<List<CacheEntry>>(
+                            fs, JsonOpts, ct).ConfigureAwait(false);
+                        if (entries is not null)
+                        {
+                            foreach (var e in entries)
+                                _store[e.Key] = e;
+                        }
+                        _logger.LogInformation("ToolEmbeddingCache: loaded {N} entries from {Path}", _store.Count, _filePath);
                     }
-                    _logger.LogInformation("ToolEmbeddingCache: loaded {N} entries from {Path}", _store.Count, _filePath);
                 }
                 catch (Exception ex)
                 {
@@ -218,7 +221,8 @@ public sealed class ToolEmbeddingCache
             Vector = kv.Value.Vector,
         }).ToList();
         var tmp = _filePath + ".tmp";
-        await using (var fs = File.Create(tmp))
+        var fs = File.Create(tmp);
+        await using (fs.ConfigureAwait(false))
         {
             await JsonSerializer.SerializeAsync(fs, entries, JsonOpts, ct).ConfigureAwait(false);
         }

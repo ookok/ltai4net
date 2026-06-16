@@ -5,6 +5,7 @@ using LTAI.Core.I18n;
 using LTAI.Core.Safety;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
 namespace LTAI.Agent;
@@ -23,7 +24,13 @@ partial class AgentBuilder
     internal static SafetyCoordinator? BuildSafetyCoordinator(IServiceProvider sp, LTAIOptions opts, ILogger log, string name)
     {
         SafetyCoordinator? safety = null;
-        if (opts.AI.SkipSafetyChecks) return null;
+        if (opts.AI.SkipSafetyChecks)
+        {
+            var env = sp.GetService<IHostEnvironment>();
+            if (env?.IsDevelopment() == true)
+                return null;
+            log?.LogWarning("SkipSafetyChecks=true but not in Development environment — safety checks will NOT be skipped");
+        }
 
         var steerLlm = sp.GetKeyedService<IChatClient>("steer");
         IChatClient? safetyClient = null;

@@ -25,17 +25,17 @@ public sealed class PromptEditorView : UserControl
 
         var topRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
         _agentCombo = new ComboBox { Width = 200, PlaceholderText = "选择 Agent..." };
-        _agentCombo.SelectionChanged += (_, _) => LoadSelectedPrompt();
+        _agentCombo.SelectionChanged += async (_, _) => await LoadSelectedPrompt();
 
         var loadBtn = new Button { Content = "📂 加载", Background = LtaiTheme.Sbb(LtaiTheme.AccentDNA),
             Foreground = LtaiTheme.Sbb(LtaiTheme.TextOnAccent) };
-        loadBtn.Click += (_, _) => LoadSelectedPrompt();
+        loadBtn.Click += async (_, _) => await LoadSelectedPrompt();
         topRow.Children.Add(_agentCombo);
         topRow.Children.Add(loadBtn);
 
         var saveBtn = new Button { Content = "💾 保存", Background = LtaiTheme.Sbb(LtaiTheme.BgPanel),
             Foreground = LtaiTheme.Sbb(LtaiTheme.TextPrimary) };
-        saveBtn.Click += (_, _) => SavePrompt();
+        saveBtn.Click += async (_, _) => await SavePrompt();
         topRow.Children.Add(saveBtn);
         root.Children.Add(topRow);
 
@@ -62,10 +62,13 @@ public sealed class PromptEditorView : UserControl
             foreach (var f in Directory.GetFiles(_agentsDir, "*.agent.md").OrderBy(f => f))
                 _agentCombo.Items.Add(Path.GetFileNameWithoutExtension(f).Replace(".agent", ""));
         }
-        catch { }
+        catch
+        {
+            // non-critical, best-effort
+        }
     }
 
-    private async void LoadSelectedPrompt()
+    private async Task LoadSelectedPrompt()
     {
         var name = _agentCombo.SelectedItem as string;
         if (name == null) return;
@@ -82,7 +85,7 @@ public sealed class PromptEditorView : UserControl
         catch (Exception ex) { _contentText.Text = $"❌ {ex.Message}"; }
     }
 
-    private async void SavePrompt()
+    private async Task SavePrompt()
     {
         var name = _agentCombo.SelectedItem as string;
         if (name == null || string.IsNullOrEmpty(_editBox.Text)) return;

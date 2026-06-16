@@ -2,6 +2,7 @@ using LTAI.Agent.LanguageServer;
 using LTAI.Agent.Memory;
 using LTAI.Agent.Services;
 using LTAI.Agent.Tools;
+using LTAI.Agent.CodeAnalysis;
 using LTAI.Agent.Tools.Review;
 using LTAI.Agent.Vector;
 using Microsoft.Agents.AI;

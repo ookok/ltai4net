@@ -68,7 +68,10 @@ public static class LtaiTheme
                 string.Equals(t.GetString(), "light", StringComparison.OrdinalIgnoreCase))
                 Current = AppTheme.Light;
         }
-        catch { }
+        catch
+        {
+            // non-critical, best-effort
+        }
     }
 
     public static void Save()
@@ -80,7 +83,10 @@ public static class LtaiTheme
             var prefs = new { theme = Current == AppTheme.Light ? "light" : "dark" };
             File.WriteAllText(PrefsPath, JsonSerializer.Serialize(prefs));
         }
-        catch { }
+        catch
+        {
+            // non-critical, best-effort
+        }
     }
 
     public static void Toggle()

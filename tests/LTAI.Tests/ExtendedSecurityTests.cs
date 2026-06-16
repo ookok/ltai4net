@@ -160,7 +160,7 @@ public sealed class ExtendedSecurityTests
             fs.Close();
             var result = PathUtils.CheckFileSize(path, maxBytes: 10 * 1024 * 1024);
             Assert.NotNull(result);
-            Assert.Contains("exceeds", result, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("File too large", result, StringComparison.OrdinalIgnoreCase);
         }
         finally
         {

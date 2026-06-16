@@ -22,9 +22,9 @@ namespace LTAI.Agent.Tools;
 public sealed class SafeShellTool
 {
     public static string SystemPathFallback { get; set; } = @"C:\Windows\system32;C:\Windows";
-    private static readonly SemaphoreSlim _concurrencyGate = new(
-        int.TryParse(Environment.GetEnvironmentVariable("LTAI_SHELL_CONCURRENCY"), out var c) ? Math.Max(1, c) : 8,
-        int.TryParse(Environment.GetEnvironmentVariable("LTAI_SHELL_CONCURRENCY"), out var m) ? Math.Max(1, m) : 8);
+    private static readonly int _shellConcurrency =
+        int.TryParse(Environment.GetEnvironmentVariable("LTAI_SHELL_CONCURRENCY"), out var sc) ? Math.Max(1, sc) : 8;
+    private static readonly SemaphoreSlim _concurrencyGate = new(_shellConcurrency, _shellConcurrency);
     private readonly string _ws;
     private readonly HashSet<string>? _allowList;
     private readonly IHttpClientFactory? _httpFactory;
@@ -98,7 +98,7 @@ public sealed class SafeShellTool
 
         var parts = command.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         var executable = parts.Length > 0 ? parts[0].Trim() : "";
-        var executableName = Path.GetFileName(executable.AsSpan()).ToString();
+        var executableName = Path.GetFileName(executable.Trim('"').AsSpan()).ToString();
 
         if (BlockedExes.Contains(executableName))
             return "❌ 命令包含危险操作，已阻止";
@@ -151,7 +151,7 @@ public sealed class SafeShellTool
         var psi = new ProcessStartInfo
         {
             FileName = isWindows ? "cmd.exe" : "/bin/bash",
-            Arguments = isWindows ? $"/c \"{command}\"" : $"-c \"{command}\"",
+            Arguments = isWindows ? $"/c \"{EscapeCmdArg(command)}\"" : $"-c \"{EscapeBashArg(command)}\"",
             WorkingDirectory = fullCwd,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
@@ -192,11 +192,10 @@ public sealed class SafeShellTool
             var stdoutTask = ReadStreamAsync(process.StandardOutput, output, outBuf, ctk);
             var stderrTask = ReadStreamAsync(process.StandardError, error, errBuf, ctk);
             try { await process.WaitForExitAsync(timeoutCts.Token).ConfigureAwait(false); }
-            catch (OperationCanceledException) { process.Kill(entireProcessTree: true); }
-
-            if (!process.HasExited)
+            catch (OperationCanceledException)
             {
                 process.Kill(entireProcessTree: true);
+                await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
                 return $"⏱️ 命令超时 ({timeoutSec}s)，已终止。\n"
                      + $"部分输出:\n{ContentTruncator.Truncate(output.ToString(), 2000)}";
             }
@@ -225,6 +224,16 @@ public sealed class SafeShellTool
         {
             return $"❌ 执行失败: {ex.Message}";
         }
+    }
+
+    private static string EscapeCmdArg(string arg)
+    {
+        return arg.Replace("\"", "\"\"");
+    }
+
+    private static string EscapeBashArg(string arg)
+    {
+        return arg.Replace("\\", "\\\\").Replace("\"", "\\\"");
     }
 
     private static async Task ReadStreamAsync(StreamReader reader, StringBuilder sb, char[] buffer, CancellationToken ct = default)

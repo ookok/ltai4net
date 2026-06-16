@@ -231,7 +231,10 @@ public sealed class LspLanguageManager : IDisposable
             {
                 if (_clients.TryRemove(ext, out var deadClient))
                 {
-                    try { deadClient.Dispose(); } catch { }
+                    try { deadClient.Dispose(); } catch
+                    {
+                        // non-critical, best-effort
+                    }
                 }
             }
         }

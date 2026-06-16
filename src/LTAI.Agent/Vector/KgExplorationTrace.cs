@@ -93,6 +93,9 @@ public sealed class KgExplorationTrace
             if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
             File.WriteAllText(_storePath, JsonSerializer.Serialize(_traces, new JsonSerializerOptions { WriteIndented = true }));
         }
-        catch { }
+        catch
+        {
+            // non-critical, best-effort
+        }
     }
 }

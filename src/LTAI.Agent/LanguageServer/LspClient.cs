@@ -109,24 +109,36 @@ public sealed class LspClient : IDisposable
                 return ParseDiagnostics(items);
             }
         }
-        catch { }
+        catch
+        {
+            // non-critical, best-effort
+        }
         return [];
     }
 
     public void Dispose()
     {
-        try { _killCts.Cancel(); } catch { }
+        try { _killCts.Cancel(); } catch
+        {
+            // non-critical, best-effort
+        }
         try
         {
             // Best-effort graceful shutdown with 2s timeout
-            var shutdownTask = SendNotificationAsync("shutdown", new { }, CancellationToken.None);
+            var shutdownTask = Task.Run(() => SendNotificationAsync("shutdown", new { }, CancellationToken.None));
             if (!shutdownTask.Wait(TimeSpan.FromSeconds(2)))
             {
                 // Force kill on timeout
-                try { _process?.Kill(); } catch { }
+                try { _process?.Kill(); } catch
+                {
+                    // non-critical, best-effort
+                }
             }
         }
-        catch { try { _process?.Kill(); } catch { } }
+        catch { try { _process?.Kill(); } catch
+        {
+            // non-critical, best-effort
+        } }
         _stdin?.Dispose();
         _stdout?.Dispose();
         _process?.Dispose();
@@ -169,7 +181,10 @@ public sealed class LspClient : IDisposable
                 }
             }
         }
-        catch (OperationCanceledException) { }
+        catch (OperationCanceledException)
+        {
+            // expected cancellation
+        }
         catch (Exception ex)
         {
             System.Diagnostics.Debug.WriteLine($"[LTAI] LSP read loop terminated: {ex.Message}");
@@ -214,7 +229,10 @@ public sealed class LspClient : IDisposable
                 }
             }
         }
-        catch { }
+        catch
+        {
+            // non-critical, best-effort
+        }
     }
 
     private async Task<JsonElement?> SendRequestAsync(string method, object? paramsObj, CancellationToken ct)

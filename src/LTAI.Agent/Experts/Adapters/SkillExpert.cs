@@ -78,7 +78,10 @@ public sealed partial class SkillExpert : IExpertModule
                         mdFile));
                 }
             }
-            catch { }
+            catch
+            {
+                // non-critical, best-effort
+            }
         }
 
         _cachedSkills = skills;

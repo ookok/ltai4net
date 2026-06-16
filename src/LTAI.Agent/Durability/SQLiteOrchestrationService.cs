@@ -151,7 +151,10 @@ public sealed class SQLiteOrchestrationService : InMemoryOrchestrationService
         _hydrated = true;
         // Replace the batch CTS in case this instance was stopped and restarted
         var oldCts = Interlocked.Exchange(ref _batchCts, new CancellationTokenSource());
-        try { oldCts.Dispose(); } catch { }
+        try { oldCts.Dispose(); } catch
+        {
+            _logger?.LogWarning("Swallowing exception in SQLiteOrchestrationService.cs");
+        }
         return base.StartAsync();
     }
 
@@ -300,7 +303,10 @@ public sealed class SQLiteOrchestrationService : InMemoryOrchestrationService
                     _logger.LogWarning(ex, "Batch persist failed ({Writes} queued)", count);
                 }
             }
-            catch (OperationCanceledException) { }
+            catch (OperationCanceledException)
+            {
+                // expected cancellation
+            }
         });
     }
 

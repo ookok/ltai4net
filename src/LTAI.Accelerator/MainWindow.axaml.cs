@@ -82,7 +82,10 @@ public partial class MainWindow : Window
             };
             _trayIcon.Clicked += (_, _) => { Show(); Activate(); WindowState = WindowState.Normal; };
         }
-        catch { }
+        catch
+        {
+            // non-critical, best-effort
+        }
     }
 
     private async void OnStartClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
@@ -107,9 +110,13 @@ public partial class MainWindow : Window
                 {
                     _ = Task.Run(async () =>
                     {
-                        await Task.Delay(5000);
-                        if (_proxy?.Warp.Available == true && !_proxy.Warp.Connected)
-                            await _proxy.Warp.ConnectAsync();
+                        try
+                        {
+                            await Task.Delay(5000);
+                            if (_proxy?.Warp.Available == true && !_proxy.Warp.Connected)
+                                await _proxy.Warp.ConnectAsync();
+                        }
+                        catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"WARP reconnect error: {ex.Message}"); }
                     });
                 }
             }

@@ -15,9 +15,14 @@
 - `src/LTAI.Web/` — ASP.NET Minimal API (端口 5100)
 - `src/LTAI.Cli/` — CLI 工具 (`ltai`)
 - `src/LTAI.Accelerator/` — 独立加速器（非核心 agent 链）
+- `src/LTAI.Hpo/` — 超参优化引擎（Samplers, Pruners，独立项目）
+- `src/LTAI.Mm/` — MetaMessage 记忆模块
+- `src/LTAI.Agent.Eia/` — EIA 集成
+- `src/Shared/Polyfill.cs` — 跨项目 Polyfill
 - `extern/agent-framework/` — MAF git 子模块 (Microsoft.Agents.AI)
 - `extern/durabletask-dotnet/` — DTFx git 子模块 (源码参考)
 - `extern/Terminal.Gui/` — Terminal.Gui git 子模块 (gui-cs, 预编译 DLL 到 `dist/lib/terminal.gui/`)
+- `extern/Editor/` — Terminal.Gui.Editor git 子模块 (gui-cs, 预编译 DLL 到 `dist/lib/editor/)`
 - `models/` — models-dev-providers.json（8 provider × 560+ 模型元数据缓存）
 
 ## DI 注册顺序（必须保持）
@@ -25,7 +30,7 @@
 ```csharp
 services.AddLTAICore();     // 配置、安全、日志
 services.AddLTAIAI();       // LLM 路由器、嵌入
-services.AddLTAIAgent();    // 10 agents、编排、工具
+services.AddLTAIAgent();    // 19 agents、编排、工具
 ```
 
 每个 agent 通过 `ServiceCollectionExtensions.GetAgentDefinitions()` 读取 `agents/*.agent.md` 注册为 MAF keyed service。ProviderRegistry 和 ModelAutoSelector 在 DI 启动时自动初始化。

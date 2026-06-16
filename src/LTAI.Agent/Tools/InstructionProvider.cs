@@ -160,7 +160,10 @@ public sealed class InstructionProvider : AIContextProvider
                         var content = File.ReadAllText(path);
                         _cachedAgentsMd = FilterAgentsMd(content);
                     }
-                    catch { }
+                    catch
+                    {
+                        // non-critical, best-effort
+                    }
                     break;
                 }
             }

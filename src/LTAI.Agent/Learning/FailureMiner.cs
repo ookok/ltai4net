@@ -71,7 +71,10 @@ public static class FailureRecorder
         }
         catch (Exception ex)
         {
-            try { Console.Error.WriteLine($"[LTAI] FailureMiner persist failed: {ex.Message}"); } catch { }
+            try { Console.Error.WriteLine($"[LTAI] FailureMiner persist failed: {ex.Message}"); } catch
+            {
+                // non-critical, best-effort
+            }
         }
     }
 
@@ -91,7 +94,10 @@ public static class FailureRecorder
                 var record = JsonSerializer.Deserialize<FailureRecord>(json);
                 if (record != null) results.Add(record);
             }
-            catch { }
+            catch
+            {
+                // non-critical, best-effort
+            }
         }
         return results;
     }

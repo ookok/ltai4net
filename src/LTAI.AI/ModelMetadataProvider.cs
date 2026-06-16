@@ -149,7 +149,7 @@ public sealed class ModelMetadataProvider : IDisposable
         _refreshTimer?.Dispose();
         _refreshTimer = new Timer(async _ =>
         {
-            try { await RefreshAllAsync(); }
+            try { await RefreshAllAsync().ConfigureAwait(false); }
             catch (Exception ex) { _logger.LogWarning(ex, "Background model refresh failed"); }
         }, null, RefreshInterval, RefreshInterval);
     }

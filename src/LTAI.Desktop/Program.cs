@@ -44,7 +44,10 @@ public static class Program
                 var json = System.Text.Json.JsonSerializer.Serialize(crash, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
                 File.WriteAllText(Path.Combine(AppContext.BaseDirectory, "crash.json"), json);
             }
-            catch { }
+            catch
+            {
+                // non-critical, best-effort
+            }
         };
         TaskScheduler.UnobservedTaskException += (_, e) =>
         {
@@ -60,7 +63,10 @@ public static class Program
                 var json = System.Text.Json.JsonSerializer.Serialize(crash, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
                 File.WriteAllText(Path.Combine(AppContext.BaseDirectory, "crash-unobserved.json"), json);
             }
-            catch { }
+            catch
+            {
+                // non-critical, best-effort
+            }
             e.SetObserved();
         };
 
@@ -92,8 +98,8 @@ public static class Program
         App.ChatAgent = chatAgent;
         App.Options = options;
         App.Ltais = new LTAIService(chatAgent, options, provider);
-        App.Router = provider.GetService<MultiProviderChatClient>();
-        App.HttpFactory = provider.GetService<IHttpClientFactory>();
+        App.Router = provider.GetService<MultiProviderChatClient>()!;
+        App.HttpFactory = provider.GetService<IHttpClientFactory>()!;
         Log("Static properties set");
         _ = Task.Run(async () =>
         {

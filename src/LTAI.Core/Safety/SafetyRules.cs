@@ -7,14 +7,16 @@ namespace LTAI.Core.Safety;
 public static class SafetyRules
 {
     private static readonly SearchValues<string> PemMarkers = SearchValues.Create(["-----BEGIN", "PRIVATE KEY", "RSA"], StringComparison.Ordinal);
+    private static readonly TimeSpan RegexTimeout = TimeSpan.FromMilliseconds(500);
+
     private static readonly Regex ApiKeyRx = new(
-        @"(?:sk-|pk-|api[_-]?key|secret|token|password)[\s\-_:：]+[a-zA-Z0-9]{16,}", RegexOptions.IgnoreCase);
-    private static readonly Regex CreditCardRx = new(@"\b\d{4}[\s\-]?\d{4}[\s\-]?\d{4}[\s\-]?\d{4}\b");
+        @"(?:sk-|pk-|api[_-]?key|secret|token|password)[\s\-_:：]+[a-zA-Z0-9]{16,}", RegexOptions.IgnoreCase, RegexTimeout);
+    private static readonly Regex CreditCardRx = new(@"\b\d{4}[\s\-]?\d{4}[\s\-]?\d{4}[\s\-]?\d{4}\b", RegexOptions.None, RegexTimeout);
     private static readonly Regex SqlInjectRx = new(
-        @"\b(DROP\s+TABLE|TRUNCATE\s+TABLE|DELETE\s+FROM\s+|EXEC\s*\(|xp_cmdshell)\b", RegexOptions.IgnoreCase);
+        @"\b(?:DROP\s+TABLE|TRUNCATE\s+TABLE|DELETE\s+FROM\s+|EXEC\s*\(|xp_cmdshell|UNION\s+(?:ALL\s+)?SELECT|INSERT\s+INTO|UPDATE\s+\w+\s+SET|OR\s+1\s*=\s*1|OR\s+'\d+'\s*=\s*'\d+'|SLEEP\s*\(|WAITFOR\s+DELAY|BENCHMARK\s*\(|INFORMATION_SCHEMA|pg_sleep|sp_executesql)\b", RegexOptions.IgnoreCase, RegexTimeout);
     private static readonly Regex XssRx = new(
-        @"<script[^>]*>.*?</script>|javascript:\s*\(|onerror\s*=|onload\s*=|eval\s*\(", RegexOptions.IgnoreCase | RegexOptions.Singleline);
-    private static readonly Regex PhoneRx = new(@"\+?\d{1,3}[\s\-]?\d{3,4}[\s\-]?\d{4,}");
+        @"<script[^>]*>.*?</script>|javascript:|on(?:error|load|focus|blur|change|click|mouseover|mouseout|keydown|keyup|keypress|submit|reset|select|abort)\s*=|eval\s*\(|data:\s*text/(?:html|javascript)|vbscript:|expression\s*\(|document\.(?:cookie|location)|(?:String\.)?fromCharCode|<(?:svg\s+/onload|details\s+/ontoggle|body\s+/onload|img\s+[^>]*onerror|input\s+[^>]*onfocus)\b", RegexOptions.IgnoreCase | RegexOptions.Singleline, RegexTimeout);
+    private static readonly Regex PhoneRx = new(@"\+?\d{1,3}[\s\-]?\d{3,4}[\s\-]?\d{4,}", RegexOptions.None, RegexTimeout);
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool IsSafeByRules(string text)
@@ -47,5 +49,5 @@ public static class SafetyRules
 
     private static readonly Regex PemRx = new(
         @"-----BEGIN[ A-Z]*KEY-----.*?-----END[ A-Z]*KEY-----",
-        RegexOptions.Singleline | RegexOptions.IgnoreCase);
+        RegexOptions.Singleline | RegexOptions.IgnoreCase, RegexTimeout);
 }

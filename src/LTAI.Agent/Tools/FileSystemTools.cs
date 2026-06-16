@@ -184,7 +184,10 @@ public sealed class FileSystemTools
         }
         catch
         {
-            try { if (File.Exists(tmp)) File.Delete(tmp); } catch { }
+            try { if (File.Exists(tmp)) File.Delete(tmp); } catch
+            {
+                // non-critical, best-effort
+            }
             throw;
         }
         return $"Written {content.Length} bytes to {Path.GetFileName(fp)}";

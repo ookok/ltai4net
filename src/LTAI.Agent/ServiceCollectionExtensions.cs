@@ -418,8 +418,8 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<LTAI.Agent.Indexing.CodeChunkIndex>(sp =>
         {
             var store = sp.GetRequiredService<KgStore>();
-            var parser = new LTAI.Agent.Tools.TreeSitterParser(
-                sp.GetService<ILogger<LTAI.Agent.Tools.TreeSitterParser>>());
+            var parser = new LTAI.Agent.CodeAnalysis.TreeSitterParser(
+                sp.GetService<ILogger<LTAI.Agent.CodeAnalysis.TreeSitterParser>>());
             return new LTAI.Agent.Indexing.CodeChunkIndex(store, parser,
                 sp.GetService<LTAI.AI.EmbeddingClient>(),
                 sp.GetService<ILogger<LTAI.Agent.Indexing.CodeChunkIndex>>(),
@@ -532,7 +532,7 @@ public static class ServiceCollectionExtensions
                 sameModel: sameModel,
                 steerJudge: sp.GetKeyedService<IChatClient>("steer"),
                 escalationDecider: sp.GetService<IEscalationDecider>(),
-                tsParser: sp.GetService<LTAI.Agent.Tools.TreeSitterParser>(),
+                tsParser: sp.GetService<LTAI.Agent.CodeAnalysis.TreeSitterParser>(),
                 lspManager: sp.GetService<LTAI.Agent.LanguageServer.LspLanguageManager>(),
                 checkpointStore: sp.GetService<IMemoryCachingStore>(),
                 escalationConfig: sp.GetRequiredService<IOptions<LTAIOptions>>().Value.Escalation);

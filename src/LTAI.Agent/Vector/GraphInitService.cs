@@ -37,7 +37,10 @@ public sealed class GraphInitService : IHostedService, IDisposable
                 await BuildAllAsync(ct).ConfigureAwait(false);
                 StartWatcher();
             }
-            catch (OperationCanceledException) { }
+            catch (OperationCanceledException)
+            {
+                // expected cancellation
+            }
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Graph: background init failed");
@@ -106,7 +109,10 @@ public sealed class GraphInitService : IHostedService, IDisposable
         _watcher.Error += (_, e) =>
         {
             _logger.LogError(e.GetException(), "Graph file watcher error");
-            try { _watcher.EnableRaisingEvents = false; _watcher.EnableRaisingEvents = true; } catch { }
+            try { _watcher.EnableRaisingEvents = false; _watcher.EnableRaisingEvents = true; } catch
+            {
+                _logger?.LogWarning("Swallowing exception in GraphInitService.cs");
+            }
         };
         _watcher.EnableRaisingEvents = true;
         _logger.LogInformation("Graph: file watcher started on {Dir}", ws);

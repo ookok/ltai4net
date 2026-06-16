@@ -4,7 +4,7 @@ using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Text;
 using Microsoft.Extensions.Logging;
 
-namespace LTAI.Agent.Tools;
+namespace LTAI.Agent.CodeAnalysis;
 
 public enum ReferenceKind
 {

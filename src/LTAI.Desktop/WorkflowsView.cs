@@ -133,6 +133,9 @@ public sealed class WorkflowsView : UserControl
     {
         try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
             { FileName = "http://localhost:5100/devui", UseShellExecute = true }); }
-        catch { }
+        catch
+        {
+            // non-critical, best-effort
+        }
     }
 }

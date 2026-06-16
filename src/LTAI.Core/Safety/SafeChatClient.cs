@@ -11,8 +11,10 @@ namespace LTAI.Core.Safety;
 /// 
 /// Unlike <see cref="SafetyCoordinator"/> (which runs inside the MAF AIContextProvider
 /// pipeline and only audits output post-delivery), this decorator wraps the LLM client
-/// itself, enabling TRUE output blocking: unsafe responses are replaced with a safe
+/// itself, enabling proactive output blocking: unsafe responses are replaced with a safe
 /// refusal message before the caller sees them.
+/// For streaming, rule-based checks block in real-time; the deferred LLM audit appends
+/// a warning marker if unsafe content is detected post-hoc.
 ///
 /// <b>Consumers:</b> Wrapped around inner IChatClient in MultiProviderChatClient.
 ///
@@ -149,6 +151,8 @@ public sealed class SafeChatClient : IChatClient
         }
 
         // Full LLM safety check for the complete text (post-hoc audit)
+        // If unsafe content is detected post-hoc, yield a warning marker so the
+        // caller knows the content may contain unsafe material.
         if (!safetyHalt && yieldedAny)
         {
             var fullText = buffer.ToString();
@@ -158,6 +162,8 @@ public sealed class SafeChatClient : IChatClient
                 if (!safe)
                 {
                     _logger?.LogWarning("SafeChatClient detected unsafe streaming output (post-hoc): {Reason}", reason);
+                    yield return new ChatResponseUpdate(ChatRole.Assistant,
+                        $"\n\n[⚠️ Potential safety issue detected: {reason}]");
                 }
             }
         }

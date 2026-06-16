@@ -1,6 +1,7 @@
 <Project>
   <!-- Suppress root Directory.Build.props OutputPath — submodule projects keep SDK default bin\ -->
   <PropertyGroup>
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
     <OutputPath></OutputPath>
     <AppendTargetFrameworkToOutputPath></AppendTargetFrameworkToOutputPath>
     <AppendRuntimeIdentifierToOutputPath></AppendRuntimeIdentifierToOutputPath>

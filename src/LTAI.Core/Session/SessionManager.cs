@@ -520,7 +520,10 @@ public sealed class SessionManager
         }
         catch
         {
-            try { File.Delete(tmpPath); } catch { }
+            try { File.Delete(tmpPath); } catch
+            {
+                // non-critical, best-effort
+            }
             throw;
         }
     }
@@ -536,7 +539,10 @@ public sealed class SessionManager
         }
         catch
         {
-            try { File.Delete(tmpPath); } catch { }
+            try { File.Delete(tmpPath); } catch
+            {
+                // non-critical, best-effort
+            }
             throw;
         }
     }
@@ -548,10 +554,16 @@ public sealed class SessionManager
             var ext = _serializer.FileExtension;
             foreach (var tmp in Directory.GetFiles(_sessionsDir, $"*{ext}.tmp.*"))
             {
-                try { File.Delete(tmp); } catch { }
+                try { File.Delete(tmp); } catch
+                {
+                    // non-critical, best-effort
+                }
             }
         }
-        catch { }
+        catch
+        {
+            // non-critical, best-effort
+        }
     }
 }
 

@@ -228,7 +228,7 @@ public sealed class UsageTracker : IUsageTracker
     string IUsageTracker.ContextText(int ovr) => CalcContextText(ovr);
     string IUsageTracker.BalanceDisplay => BalanceDisplayStatic;
     void IUsageTracker.SetContextWindowSize(int size) => _contextWindowSize = size;
-    async Task IUsageTracker.FetchBalanceAsync(string p, string? k) => await FetchBalanceStaticAsync(p, k);
+    async Task IUsageTracker.FetchBalanceAsync(string p, string? k) => await FetchBalanceStaticAsync(p, k).ConfigureAwait(false);
     string IUsageTracker.Summary() => BuildSummary();
     long IUsageTracker.CacheHitTokens => Interlocked.Read(ref _cacheHitTokens);
     long IUsageTracker.CacheMissTokens => Interlocked.Read(ref _cacheMissTokens);
@@ -372,7 +372,7 @@ public sealed class UsageTracker : IUsageTracker
     public static string ContextText(int contextWindowOverride = 0) => CalcContextText(contextWindowOverride);
     public static string BalanceDisplay => BalanceDisplayStatic;
     public static async Task FetchBalanceAsync(string defaultProvider, string? apiKey = null)
-        => await FetchBalanceStaticAsync(defaultProvider, apiKey);
+        => await FetchBalanceStaticAsync(defaultProvider, apiKey).ConfigureAwait(false);
     public static string Summary() => BuildSummary();
 
     // ══ Internal helpers (shared by static + interface impl) ══

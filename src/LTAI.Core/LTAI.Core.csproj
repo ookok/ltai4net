@@ -12,24 +12,24 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.Extensions.AI" Version="10.6.0" />
-    <PackageReference Include="TextMateSharp" Version="2.0.4" />
-    <PackageReference Include="TextMateSharp.Grammars" Version="2.0.4" />
+    <PackageReference Include="Microsoft.Extensions.AI" />
+    <PackageReference Include="TextMateSharp" />
+    <PackageReference Include="TextMateSharp.Grammars" />
     <Reference Include="Microsoft.Agents.AI.Abstractions" HintPath="..\..\dist\lib\maf\Microsoft.Agents.AI.Abstractions.dll" Condition="Exists('..\..\dist\lib\maf\Microsoft.Agents.AI.Abstractions.dll')" />
     <Reference Include="Microsoft.Agents.AI" HintPath="..\..\dist\lib\maf\Microsoft.Agents.AI.dll" Condition="Exists('..\..\dist\lib\maf\Microsoft.Agents.AI.dll')" />
     <ProjectReference Include="..\..\extern\agent-framework\dotnet\src\Microsoft.Agents.AI\Microsoft.Agents.AI.csproj" Condition="!Exists('..\..\dist\lib\maf\Microsoft.Agents.AI.dll')" />
-    <PackageReference Include="OpenTelemetry.Extensions.Hosting" Version="1.15.3" />
-    <PackageReference Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.15.2" />
-    <PackageReference Include="OpenTelemetry.Instrumentation.Http" Version="1.15.1" />
-    <PackageReference Include="OpenTelemetry.Exporter.Console" Version="1.15.3" />
-    <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.15.3" />
+    <PackageReference Include="OpenTelemetry.Extensions.Hosting" />
+    <PackageReference Include="OpenTelemetry.Instrumentation.AspNetCore" />
+    <PackageReference Include="OpenTelemetry.Instrumentation.Http" />
+    <PackageReference Include="OpenTelemetry.Exporter.Console" />
+    <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" />
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.8" />
-    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.8" />
-    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.8" />
-    <PackageReference Include="LibGit2Sharp" Version="0.31.0" />
+    <PackageReference Include="Microsoft.Extensions.Http" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" />
+    <PackageReference Include="Microsoft.Data.Sqlite" />
+    <PackageReference Include="LibGit2Sharp" />
   </ItemGroup>
 
 </Project>

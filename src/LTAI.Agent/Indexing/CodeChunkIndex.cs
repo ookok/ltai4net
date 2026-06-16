@@ -3,6 +3,7 @@ using System.ComponentModel;
 using System.Linq;
 using System.Text;
 using LTAI.Agent.Tools;
+using LTAI.Agent.CodeAnalysis;
 using LTAI.Agent.Utils;
 using LTAI.Agent.Vector;
 using Microsoft.Agents.AI;

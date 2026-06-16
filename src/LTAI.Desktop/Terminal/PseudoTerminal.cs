@@ -72,7 +72,10 @@ public sealed class PseudoTerminal : IDisposable
                 _process?.WaitForExit(5000);
             }
         }
-        catch { }
+        catch
+        {
+            // non-critical, best-effort
+        }
         Dispose();
     }
 
@@ -103,7 +106,7 @@ public sealed class PseudoTerminal : IDisposable
         {
             if (_masterFd >= 0)
             {
-                var ws = new winsize
+                var ws = new WinSize
                 {
                     ws_row = (ushort)rows,
                     ws_col = (ushort)cols,
@@ -122,7 +125,7 @@ public sealed class PseudoTerminal : IDisposable
 
     private void StartUnix(string shell, string workingDir)
     {
-        var ws = new winsize
+        var ws = new WinSize
         {
             ws_row = (ushort)_rows,
             ws_col = (ushort)_cols,
@@ -185,6 +188,7 @@ public sealed class PseudoTerminal : IDisposable
         _inputWrite = inputWriteSafe;
         _outputRead = outputReadSafe;
         _inputRead = inputRead;
+        _outputWrite = outputWrite;
 
         var size = new COORD { X = (short)_cols, Y = (short)_rows };
         var hr = CreatePseudoConsole(size, _inputRead, _outputWrite, 0, out _hPC);
@@ -289,7 +293,7 @@ public sealed class PseudoTerminal : IDisposable
     private static readonly ulong TIOCSWINSZ = OperatingSystem.IsMacOS() ? 0x80087467UL : 0x5414UL;
 
     [StructLayout(LayoutKind.Sequential)]
-    private struct winsize
+    private struct WinSize
     {
         public ushort ws_row;
         public ushort ws_col;
@@ -298,7 +302,7 @@ public sealed class PseudoTerminal : IDisposable
     }
 
     [DllImport("libc", SetLastError = true)]
-    private static extern int forkpty(out int amaster, IntPtr name, IntPtr termios, ref winsize winSize);
+    private static extern int forkpty(out int amaster, IntPtr name, IntPtr termios, ref WinSize winSize);
 
     [DllImport("libc", SetLastError = true)]
     private static extern int execvp(string file, string[] argv);
@@ -322,7 +326,7 @@ public sealed class PseudoTerminal : IDisposable
     private static extern int waitpid(int pid, out int status, int options);
 
     [DllImport("libc", SetLastError = true)]
-    private static extern int ioctl(int fd, ulong request, ref winsize ws);
+    private static extern int ioctl(int fd, ulong request, ref WinSize ws);
 
     [DllImport("libc", SetLastError = true)]
     private static extern int chdir(string path);

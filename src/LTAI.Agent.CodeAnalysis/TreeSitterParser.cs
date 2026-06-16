@@ -1,7 +1,7 @@
 using Microsoft.Extensions.Logging;
 using TreeSitter;
 
-namespace LTAI.Agent.Tools;
+namespace LTAI.Agent.CodeAnalysis;
 
 /// <summary>
 /// Multi-language code parser using TreeSitter.DotNet (30+ languages, native AST).
@@ -224,8 +224,14 @@ public sealed class TreeSitterParser : IDisposable
     {
         foreach (var lang in _languages.Values)
         {
-            try { lang.Dispose(); } catch { }
+            try { lang.Dispose(); } catch
+            {
+                // non-critical, best-effort
+            }
         }
-        try { _parser.Dispose(); } catch { }
+        try { _parser.Dispose(); } catch
+        {
+            // non-critical, best-effort
+        }
     }
 }

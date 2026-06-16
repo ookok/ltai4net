@@ -213,7 +213,10 @@ public sealed class YAMLWorkflowRegistry
         }
         finally
         {
-            try { File.Delete(tmpPath); } catch { }
+            try { File.Delete(tmpPath); } catch
+            {
+                // non-critical, best-effort
+            }
         }
     }
 

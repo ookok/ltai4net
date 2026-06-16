@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using Microsoft.Extensions.Logging;
 
 namespace LTAI.Core.Configuration;
 
@@ -17,9 +18,11 @@ namespace LTAI.Core.Configuration;
 /// </summary>
 public static class SecretManager
 {
+    /// <summary>Optional logger set by DI during startup for DPAPI failure diagnostics.</summary>
+    public static ILogger? Logger { get; set; }
+
     private static readonly ConcurrentDictionary<string, (string? value, DateTime cached)> _cache = new();
     private static readonly TimeSpan CacheTtl = TimeSpan.FromMinutes(5);
-    private static readonly string? _machineScope = Environment.MachineName;
 
     /// <summary>Read secret: cache (with TTL check) → Process env → User env → Machine env.</summary>
     public static string? Get(string envVar)
@@ -46,7 +49,7 @@ public static class SecretManager
                 var encrypted = EncryptIfNeeded(value);
                 Environment.SetEnvironmentVariable(envVar, encrypted, EnvironmentVariableTarget.User);
             }
-            catch { /* non-fatal on Linux if ~/.profile not writable */ }
+            catch (Exception ex) { Logger?.LogWarning(ex, "SecretManager: 持久化密钥失败 (非致命)"); }
         }
     }
 
@@ -69,7 +72,11 @@ public static class SecretManager
                 System.Security.Cryptography.DataProtectionScope.CurrentUser);
             return "DPAPI:" + Convert.ToBase64String(encrypted);
         }
-        catch { return value; }
+        catch (Exception ex)
+        {
+            Logger?.LogWarning(ex, "SecretManager: DPAPI 加密失败，回退明文存储");
+            return value;
+        }
     }
 
     /// <summary>DPAPI-decrypt a User-scope env var. Strips "DPAPI:" prefix before decrypting.</summary>
@@ -83,7 +90,11 @@ public static class SecretManager
                 System.Security.Cryptography.DataProtectionScope.CurrentUser);
             return System.Text.Encoding.UTF8.GetString(plain);
         }
-        catch { return value; }
+        catch (Exception ex)
+        {
+            Logger?.LogWarning(ex, "SecretManager: DPAPI 解密失败，返回原始值");
+            return value;
+        }
     }
 }
 

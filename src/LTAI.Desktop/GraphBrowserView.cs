@@ -112,7 +112,10 @@ public sealed class GraphBrowserView : UserControl
             var owner = GetMainWindow();
             if (owner != null) await dialog.ShowDialog(owner);
         }
-        catch { }
+        catch
+        {
+            // non-critical, best-effort
+        }
     }
 
     private static Window? GetMainWindow()

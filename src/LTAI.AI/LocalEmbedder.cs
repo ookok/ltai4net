@@ -205,7 +205,10 @@ public sealed class LocalEmbedder : IDisposable
                             opts.AppendExecutionProvider_DML(Options.DeviceId);
                             _activeExecutionProvider = "DML";
                         }
-                        catch { }
+                        catch
+                        {
+                            // non-critical, best-effort
+                        }
                     }
                     if (_activeExecutionProvider == null && (gpuPref is "cuda" or "auto"))
                     {
@@ -214,7 +217,10 @@ public sealed class LocalEmbedder : IDisposable
                             opts.AppendExecutionProvider_CUDA(Options.DeviceId);
                             _activeExecutionProvider = "CUDA";
                         }
-                        catch { }
+                        catch
+                        {
+                            // non-critical, best-effort
+                        }
                     }
                     if (_activeExecutionProvider == null)
                         _activeExecutionProvider = "CPU";
@@ -339,15 +345,18 @@ public sealed class LocalEmbedder : IDisposable
         }
         if (_loadInProgress && _loadTask != null)
         {
-            try { _loadTask.GetAwaiter().GetResult(); }
-            catch { }
+            try { Task.Run(() => _loadTask).GetAwaiter().GetResult(); }
+            catch
+            {
+                // non-critical, best-effort
+            }
         }
         lock (_loadLock) { return (_session, _vocab); }
     }
 
     /// <summary>Batched embedding — N texts in 1 session.Run. 5-10x throughput. Max 1024 texts.</summary>
     public IReadOnlyList<float[]> GenerateBatch(IReadOnlyList<string> texts)
-        => GenerateBatchAsync(texts).GetAwaiter().GetResult();
+        => Task.Run(() => GenerateBatchAsync(texts)).GetAwaiter().GetResult();
 
     public async Task<IReadOnlyList<float[]>> GenerateBatchAsync(IReadOnlyList<string> texts, CancellationToken ct = default)
     {
@@ -588,7 +597,7 @@ public sealed class LocalEmbedder : IDisposable
             _vocabPath = vocabFile;
             _usingQuantizedModel = usingQuant;
 
-            EnsureLoadedAsync().GetAwaiter().GetResult();
+            Task.Run(() => EnsureLoadedAsync()).GetAwaiter().GetResult();
             if (_session != null) toNotify = ModelSwitched;
         }
         toNotify?.Invoke(name);
@@ -646,8 +655,14 @@ public sealed class LocalEmbedder : IDisposable
             catch when (!triedFallback)
             {
                 triedFallback = true;
-                if (File.Exists(vocabFile)) try { File.Delete(vocabFile); } catch { }
-                if (activeFile != null && File.Exists(activeFile)) try { File.Delete(activeFile); } catch { }
+                if (File.Exists(vocabFile)) try { File.Delete(vocabFile); } catch
+                {
+                    // non-critical, best-effort
+                }
+                if (activeFile != null && File.Exists(activeFile)) try { File.Delete(activeFile); } catch
+                {
+                    // non-critical, best-effort
+                }
 
                 var fb = ModelBaseUrl.TrimEnd('/') + "/" + name;
                 var modelFile = wantQuant ? info.QuantizedFileName ?? "model_int8.onnx" : "model.onnx";
@@ -658,8 +673,14 @@ public sealed class LocalEmbedder : IDisposable
         }
         catch
         {
-            if (File.Exists(vocabFile)) try { File.Delete(vocabFile); } catch { }
-            if (activeFile != null && File.Exists(activeFile)) try { File.Delete(activeFile); } catch { }
+            if (File.Exists(vocabFile)) try { File.Delete(vocabFile); } catch
+            {
+                // non-critical, best-effort
+            }
+            if (activeFile != null && File.Exists(activeFile)) try { File.Delete(activeFile); } catch
+            {
+                // non-critical, best-effort
+            }
             return false;
         }
         finally
@@ -697,12 +718,18 @@ public sealed class LocalEmbedder : IDisposable
         if (targetQuant)
         {
             var fp32 = Path.Combine(modelDir, "model.onnx");
-            if (File.Exists(fp32)) { try { File.Delete(fp32); removed++; } catch { } }
+            if (File.Exists(fp32)) { try { File.Delete(fp32); removed++; } catch
+            {
+                // non-critical, best-effort
+            } }
         }
         else if (info.QuantizedFileName != null)
         {
             var q = Path.Combine(modelDir, info.QuantizedFileName);
-            if (File.Exists(q)) { try { File.Delete(q); removed++; } catch { } }
+            if (File.Exists(q)) { try { File.Delete(q); removed++; } catch
+            {
+                // non-critical, best-effort
+            } }
         }
         return removed;
     }

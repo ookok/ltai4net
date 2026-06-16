@@ -1420,7 +1420,10 @@ public sealed partial class KgStore : IDisposable
         finally { _hnswLock.ExitWriteLock(); }
 
         // Save HNSW snapshot for fast restart
-        try { SaveHnswSnapshot(); } catch { }
+        try { SaveHnswSnapshot(); } catch
+        {
+            // non-critical, best-effort
+        }
     }
 
     private string HnswSnapshotPath => _dbPath + ".hnsw";
@@ -1462,7 +1465,10 @@ public sealed partial class KgStore : IDisposable
                     return;
                 }
             }
-            catch { try { File.Delete(snapshotPath); } catch { } }
+            catch { try { File.Delete(snapshotPath); } catch
+            {
+                // non-critical, best-effort
+            } }
         }
         if (_hnswNodeIds.Count == 0)
             await RebuildCentroidsAsync().ConfigureAwait(false);

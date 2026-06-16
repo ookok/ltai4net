@@ -64,3 +64,6 @@ check_lines.py
 ## Logs
 logs/
 tests/secrets_export.json
+
+# Private tool artifacts.mimocode/
+tests/all_tests.txt

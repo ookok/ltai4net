@@ -132,7 +132,10 @@ public sealed partial class TextPadView : UserControl
             LineNumbersForeground = LtaiTheme.Sbb(LtaiTheme.TextDim),
             WordWrap = false,
         };
-        try { _editor.SyntaxHighlighting = HighlightingManager.Instance.GetDefinition("C#"); } catch { }
+        try { _editor.SyntaxHighlighting = HighlightingManager.Instance.GetDefinition("C#"); } catch
+        {
+            // non-critical, best-effort
+        }
 
         // 当前行高亮
         _editor.TextArea.TextView.CurrentLineBackground = LtaiTheme.Sbb(LtaiTheme.SurfaceOverlay);
@@ -290,13 +293,13 @@ public sealed partial class TextPadView : UserControl
         _gitOutputPanel.Child = _gitOutputText;
 
         _buildBtn = new Button { Content = "🛠 Build", FontSize = 10, Height = 20, Background = LtaiTheme.Sbb(LtaiTheme.AccentDNA), Foreground = LtaiTheme.Sbb(LtaiTheme.TextOnAccent), IsVisible = false };
-        _buildBtn.Click += (_, _) => RunProjectCmd("build");
+        _buildBtn.Click += (_, _) => _ = RunProjectCmd("build");
         _testBtn = new Button { Content = "🧪 Test", FontSize = 10, Height = 20, Background = LtaiTheme.Sbb(LtaiTheme.AccentInfo), Foreground = LtaiTheme.Sbb(LtaiTheme.TextOnAccent), IsVisible = false };
-        _testBtn.Click += (_, _) => RunProjectCmd("test");
+        _testBtn.Click += (_, _) => _ = RunProjectCmd("test");
         _publishBtn = new Button { Content = "🚀 Deploy", FontSize = 10, Height = 20, Background = LtaiTheme.Sbb(LtaiTheme.AccentSystem), Foreground = LtaiTheme.Sbb(LtaiTheme.TextOnAccent), IsVisible = false };
-        _publishBtn.Click += (_, _) => RunProjectCmd("publish");
+        _publishBtn.Click += (_, _) => _ = RunProjectCmd("publish");
         _runBtn = new Button { Content = "▶ Run", FontSize = 10, Height = 20, Background = LtaiTheme.Sbb(LtaiTheme.AccentInfo), Foreground = LtaiTheme.Sbb(LtaiTheme.TextOnAccent), IsVisible = false };
-        _runBtn.Click += (_, _) => RunProjectCmd("run");
+        _runBtn.Click += (_, _) => _ = RunProjectCmd("run");
 
         var debugBtn = new Button { Content = "🐛 Debug", FontSize = 10, Height = 20, Background = LtaiTheme.Sbb(LtaiTheme.AccentWarning), Foreground = LtaiTheme.Sbb(LtaiTheme.TextOnAccent), IsVisible = false };
         debugBtn.Click += (_, _) => _ = this.StartDebugAsync();
@@ -473,7 +476,7 @@ public sealed partial class TextPadView : UserControl
         {
             if (e.Key == Key.S && e.KeyModifiers == KeyModifiers.Control) { SaveFile(); e.Handled = true; }
             if (e.Key == Key.E && e.KeyModifiers == KeyModifiers.Control) { ToggleEdit(); e.Handled = true; }
-            if (e.Key == Key.B && e.KeyModifiers == KeyModifiers.Control) { RunProjectCmd("build"); e.Handled = true; }
+            if (e.Key == Key.B && e.KeyModifiers == KeyModifiers.Control) { _ = RunProjectCmd("build"); e.Handled = true; }
             if (e.Key == Key.G && e.KeyModifiers == KeyModifiers.Control) { ShowGoToLineDialog(); e.Handled = true; }
             if (e.Key == Key.F12 && e.KeyModifiers == KeyModifiers.None) { GoToDefinition(); e.Handled = true; }
             if (e.Key == Key.D && e.KeyModifiers == KeyModifiers.Control)
@@ -519,7 +522,7 @@ public sealed partial class TextPadView : UserControl
         {
             if (_currentFile == null || !_symbolList.IsVisible) return;
             var ext = Path.GetExtension(_currentFile);
-            var symbols = new LTAI.Agent.Tools.TreeSitterParser().ExtractSymbols(_editor.Text, ext);
+            var symbols = new LTAI.Agent.CodeAnalysis.TreeSitterParser().ExtractSymbols(_editor.Text, ext);
             _symbolList.ItemsSource = symbols.Select(s => new SymbolItem(s.kind == "method" ? "🔧" : s.kind == "class" ? "📦" : "📌", s.name, s.line)).ToList();
         }
         catch { /* non-critical */ }
@@ -727,7 +730,7 @@ public sealed partial class TextPadView : UserControl
 
             // 2. 在当前文件中搜索定义
             var ext = Path.GetExtension(_currentFile);
-            using var parser = new LTAI.Agent.Tools.TreeSitterParser();
+            using var parser = new LTAI.Agent.CodeAnalysis.TreeSitterParser();
             var symbols = parser.ExtractSymbols(_editor.Text, ext);
             var def = symbols.FirstOrDefault(s => s.name == name && s.kind is "class" or "method" or "struct" or "interface" or "enum" or "property" or "field" or "function");
 

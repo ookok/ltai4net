@@ -39,10 +39,16 @@ public static class PromptLoader
                     NotifyFilter = NotifyFilters.LastWrite
                 };
                 _watcher.Changed += (_, _) => _cache.Clear();
-                AppDomain.CurrentDomain.ProcessExit += (_, _) => { try { _watcher?.Dispose(); } catch { } };
+                AppDomain.CurrentDomain.ProcessExit += (_, _) => { try { _watcher?.Dispose(); } catch
+                {
+                    // non-critical, best-effort
+                } };
             }
         }
-        catch { }
+        catch
+        {
+            // non-critical, best-effort
+        }
     }
 
     /// <summary>Load prompt by name. Auto-resolves language suffix (zh/en).</summary>

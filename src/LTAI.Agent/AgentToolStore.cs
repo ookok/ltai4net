@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Text.Json;
 using Microsoft.Extensions.AI;
 
@@ -106,8 +107,37 @@ public sealed class AgentToolStore
                     var def = JsonSerializer.Deserialize<ToolFileDefinition>(json);
                     if (def != null && !string.IsNullOrEmpty(def.Name))
                     {
+                        Func<string> executeScript = () =>
+                        {
+                            try
+                            {
+                                if (def.ScriptPath == null || !File.Exists(def.ScriptPath))
+                                    return "⚠️ 脚本文件不存在";
+                                var psi = new ProcessStartInfo
+                                {
+                                    FileName = OperatingSystem.IsWindows() ? "cmd.exe" : "/bin/bash",
+                                    Arguments = OperatingSystem.IsWindows()
+                                        ? $"/c \"{def.ScriptPath}\""
+                                        : $"\"{def.ScriptPath}\"",
+                                    RedirectStandardOutput = true,
+                                    RedirectStandardError = true,
+                                    UseShellExecute = false,
+                                    CreateNoWindow = true,
+                                };
+                                using var proc = new Process { StartInfo = psi };
+                                proc.Start();
+                                var outText = proc.StandardOutput.ReadToEnd();
+                                var errText = proc.StandardError.ReadToEnd();
+                                proc.WaitForExit(30000);
+                                return (outText + errText).Trim();
+                            }
+                            catch (Exception ex)
+                            {
+                                return $"❌ 脚本执行失败: {ex.Message}";
+                            }
+                        };
                         var tool = AIFunctionFactory.Create(
-                            () => { try { if (def.ScriptPath != null) File.ReadAllText(def.ScriptPath); } catch { } },
+                            executeScript,
                             def.Name,
                             def.Description);
                         tools.Add(tool);

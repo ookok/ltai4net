@@ -313,7 +313,10 @@ partial class TextPadView
     private void RefreshTreeGitStatus()
     {
         try { ApplyGitStatusToTree(_tree.Items, ""); }
-        catch { }
+        catch
+        {
+            // non-critical, best-effort
+        }
     }
 
     private void ApplyGitStatusToTree(ItemCollection items, string prefix)

@@ -357,7 +357,10 @@ public static class AgentRegistry
 
     public static void StopWatcher()
     {
-        try { _agentWatcher?.Dispose(); } catch { }
+        try { _agentWatcher?.Dispose(); } catch
+        {
+            // non-critical, best-effort
+        }
         _agentWatcher = null;
     }
 }

@@ -233,7 +233,10 @@ public sealed class ToolFilteringChatClient : IChatClient
                 new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
             if (result != null) return (!result.Enough, result.Suggestion);
         }
-        catch { }
+        catch
+        {
+            // non-critical, best-effort
+        }
 
         return (true, null);
     }
@@ -266,7 +269,10 @@ public sealed class ToolFilteringChatClient : IChatClient
                 {
                     return await L3RerankAsync(query, candidates, ct).ConfigureAwait(false);
                 }
-                catch { }
+                catch
+                {
+                    // non-critical, best-effort
+                }
             }
             return candidates;
         }

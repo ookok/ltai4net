@@ -130,11 +130,14 @@ try
     Log.Information("P6 Protocol endpoints: registered {Count} agents for protocol exposure: {Names}",
         agentNames.Count, string.Join(", ", agentNames));
 
+    builder.WebHost.UseKestrel(o => o.Limits.MaxRequestBodySize = 10 * 1024 * 1024);
+
     var app = builder.Build();
 
     // ── Middleware pipeline (order matters) ──
     app.UseMiddleware<ExceptionMiddleware>();    // 1. Catch all exceptions
-    // 2. Security headers (before everything except exception handler)
+    app.UseHttpsRedirection();                   // 2. Redirect HTTP to HTTPS
+    // 3. Security headers (before everything except exception handler)
     app.Use(async (ctx, next) =>
     {
         ctx.Response.Headers["X-Content-Type-Options"] = "nosniff";
@@ -150,7 +153,11 @@ try
     app.UseMiddleware<ApiKeyMiddleware>();       // 5. Auth
     app.UseMiddleware<RateLimitMiddleware>();    // 6. Rate limit
 
-    app.MapOpenApi();
+    // OpenAPI / Swagger — development only
+    if (app.Environment.IsDevelopment())
+    {
+        app.MapOpenApi();
+    }
 
     // ── P9.0: LTAIDevUIService shared REST surface ──
     // Backed by the same service used by LTAI.TUI (/dashboard) and
@@ -289,7 +296,10 @@ try
                     await channel.Writer.WriteAsync(": keepalive\n\n", keepaliveCts.Token).ConfigureAwait(false);
                 }
             }
-            catch (OperationCanceledException) { }
+            catch (OperationCanceledException)
+            {
+                // expected cancellation
+            }
             catch (Exception ex) { logger.LogWarning(ex, "SSE keepalive error"); }
         }, keepaliveCts.Token);
 
@@ -309,7 +319,10 @@ try
             notifier.Unsubscribe(token);
             channel.Writer.TryComplete();
             // Graceful: wait a moment for keepalive to exit.
-            try { await keepalive.WaitAsync(TimeSpan.FromSeconds(1)); } catch { }
+            try { await keepalive.WaitAsync(TimeSpan.FromSeconds(1)); } catch
+            {
+                // non-critical, best-effort
+            }
         }
     });
 
@@ -453,7 +466,10 @@ try
                     if (root.TryGetProperty("line", out var l)) line = l.GetString();
                     if (root.TryGetProperty("category", out var c)) cat = c.GetString();
                 }
-                catch { }
+                catch
+                {
+                    // non-critical, best-effort
+                }
             }
             if (statusSet != null && !statusSet.Contains(st)) continue;
             if (!string.IsNullOrEmpty(severity) && !string.Equals(sev, severity, StringComparison.OrdinalIgnoreCase)) continue;
@@ -507,7 +523,10 @@ try
                         trail = System.Text.Json.JsonSerializer.Deserialize<List<object>>(trailJson);
                 }
             }
-            catch { }
+            catch
+            {
+                // non-critical, best-effort
+            }
         }
 
         return Results.Ok(new
@@ -552,7 +571,10 @@ try
                     if (root.TryGetProperty("line", out var l)) line = l.GetString();
                     if (root.TryGetProperty("category", out var c)) cat = c.GetString();
                 }
-                catch { }
+                catch
+                {
+                    // non-critical, best-effort
+                }
             }
             if (statusSet != null && !statusSet.Contains(st)) continue;
             if (!string.IsNullOrEmpty(severity) && !string.Equals(sev, severity, StringComparison.OrdinalIgnoreCase)) continue;
@@ -619,7 +641,10 @@ try
                     if (root.TryGetProperty("category", out var c)) cat = c.GetString() ?? "?";
                     if (root.TryGetProperty("file", out var f)) file = f.GetString() ?? "?";
                 }
-                catch { }
+                catch
+                {
+                    // non-critical, best-effort
+                }
             }
             if (!string.IsNullOrEmpty(severity) && !string.Equals(sev, severity, StringComparison.OrdinalIgnoreCase)) continue;
             if (!string.IsNullOrEmpty(category) && !string.Equals(cat, category, StringComparison.OrdinalIgnoreCase)) continue;
@@ -748,7 +773,10 @@ try
                     var drive = new DriveInfo(Path.GetPathRoot(SessionKeyInfo.KeyPath) ?? Path.GetPathRoot(Directory.GetCurrentDirectory()) ?? "C:\\");
                     diskFree = $"{drive.AvailableFreeSpace / 1024 / 1024} MB";
                 }
-                catch { }
+                catch
+                {
+                    // non-critical, best-effort
+                }
                 checks.Add(new
                 {
                     name = "session_store",

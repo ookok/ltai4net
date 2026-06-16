@@ -19,11 +19,21 @@
     <Assembly Name="LTAI.Agent" Dynamic="Required All" Serialize="Required All" />
     <Assembly Name="LTAI.Cli" Dynamic="Required All" />
     <Assembly Name="LTAI.Web" Dynamic="Required All" />
+    <Assembly Name="LTAI.Accelerator" Dynamic="Required All" />
+    <Assembly Name="LTAI.Agent.CodeAnalysis" Dynamic="Required All" />
+    <Assembly Name="LTAI.Agent.Database" Dynamic="Required All" />
+    <Assembly Name="LTAI.Agent.Documents" Dynamic="Required All" />
+    <Assembly Name="LTAI.Agent.Eia" Dynamic="Required All" />
+    <Assembly Name="LTAI.Hpo" Dynamic="Required All" />
+    <Assembly Name="LTAI.Mm" Dynamic="Required All" />
 
     <!-- ===== Known reflection targets ===== -->
     <!-- AIFunctionFactory.Create() wraps methods via reflection -->
     <Type Name="LTAI.Agent.Tools.*" Dynamic="Required All" />
     <Type Name="LTAI.Agent.Vector.*" Dynamic="Required All" />
+    <Type Name="LTAI.Agent.CodeAnalysis.*" Dynamic="Required All" />
+    <Type Name="LTAI.Agent.Database.*" Dynamic="Required All" />
+    <Type Name="LTAI.Agent.Documents.*" Dynamic="Required All" />
 
     <!-- ToolDomain/ToolExample attribute scanning -->
     <Type Name="LTAI.AI.ToolDomainAttribute" Dynamic="Required All" />
@@ -34,8 +44,15 @@
     <Type Name="LTAI.Agent.Vector.EdgeRow" Dynamic="Required All" Serialize="Required All" />
     <Type Name="LTAI.Agent.Vector.DocRow" Dynamic="Required All" Serialize="Required All" />
 
-    <!-- Chat agent types -->
-    <Type Name="LTAI.Agent.Agents.ChatAgent" Dynamic="Required All" />
+    <!-- Agent types -->
+    <Type Name="LTAI.Agent.ChatAgent" Dynamic="Required All" />
+    <Type Name="LTAI.Agent.FallbackAgent" Dynamic="Required All" />
+    <Type Name="LTAI.Agent.LazyAIAgentProxy" Dynamic="Required All" />
+    <Type Name="LTAI.Agent.Experts.ExpertRouterAgent" Dynamic="Required All" />
+
+    <!-- EiaTools (ToolDomain reflection discovery) -->
+    <Type Name="LTAI.Agent.Tools.EiaTools" Dynamic="Required All" />
+    <Type Name="LTAI.Agent.Tools.EiaTools" Serialize="Required All" />
 
     <!-- DI registrations -->
     <Type Name="LTAI.Agent.ServiceCollectionExtensions" Dynamic="Required All" />
@@ -45,6 +62,32 @@
     <Type Name="LTAI.Agent.Workflows.AgentWorkflows" Dynamic="Required All" />
     <Type Name="LTAI.Agent.Workflows.DecisionTreeRouter" Dynamic="Required All" />
     <Type Name="LTAI.Agent.Workflows.YAMLWorkflowRegistry" Dynamic="Required All" />
+    <Type Name="LTAI.Agent.Workflows.CheckpointEnabledWorkflow" Dynamic="Required All" />
+    <Type Name="LTAI.Agent.Workflows.YAMLWorkflowHost" Dynamic="Required All" />
+    <Type Name="LTAI.Agent.Workflows.YAMLWorkflowWatcher" Dynamic="Required All" />
+    <Type Name="LTAI.Agent.Workflows.WorkflowWatcherHostedService" Dynamic="Required All" />
+    <Type Name="LTAI.Agent.Workflows.WorkflowHotReloadNotifier" Dynamic="Required All" />
+    <Type Name="LTAI.Agent.Workflows.PipelineConfig" Dynamic="Required All" Serialize="Required All" />
+    <Type Name="LTAI.Agent.Workflows.PipelineStep" Dynamic="Required All" Serialize="Required All" />
+
+    <!-- Execution workflow step types (reflection-loaded) -->
+    <Type Name="LTAI.Agent.Execution.WorkflowStep" Dynamic="Required All" Serialize="Required All" />
+    <Type Name="LTAI.Agent.Execution.HandoffStep" Dynamic="Required All" Serialize="Required All" />
+    <Type Name="LTAI.Agent.Execution.SequentialStep" Dynamic="Required All" Serialize="Required All" />
+    <Type Name="LTAI.Agent.Execution.ConcurrentStep" Dynamic="Required All" Serialize="Required All" />
+    <Type Name="LTAI.Agent.Execution.ConditionalStep" Dynamic="Required All" Serialize="Required All" />
+    <Type Name="LTAI.Agent.Execution.RetryStep" Dynamic="Required All" Serialize="Required All" />
+    <Type Name="LTAI.Agent.Execution.NoopStep" Dynamic="Required All" Serialize="Required All" />
+    <Type Name="LTAI.Agent.Execution.ExecutionPlan" Dynamic="Required All" Serialize="Required All" />
+    <Type Name="LTAI.Agent.Execution.ExecutionEngine" Dynamic="Required All" />
+    <Type Name="LTAI.Agent.Execution.AdaptivePlanner" Dynamic="Required All" />
+    <Type Name="LTAI.Agent.Execution.StepChainBuilder" Dynamic="Required All" />
+
+    <!-- Pipeline step types -->
+    <Type Name="LTAI.Agent.Pipeline.Steps.*" Dynamic="Required All" />
+
+    <!-- Graph IR types -->
+    <Type Name="LTAI.Agent.Workflows.GraphIR.*" Dynamic="Required All" Serialize="Required All" />
 
     <!-- Config types -->
     <Type Name="LTAI.Core.Configuration.LTAIOptions" Dynamic="Required All" Serialize="Required All" />

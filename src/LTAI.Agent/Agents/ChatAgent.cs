@@ -10,6 +10,7 @@ using LTAI.Agent.Learning;
 using LTAI.Agent.Pipeline;
 using LTAI.Agent.Pipeline.Steps;
 using LTAI.Agent.Tools;
+using LTAI.Agent.CodeAnalysis;
 using LTAI.Agent.Workflows;
 using LTAI.Core.Safety;
 using LTAI.Core.Session;
@@ -647,7 +648,10 @@ public sealed class ChatAgent
             if (state?.CurrentMode != null)
                 current = state.CurrentMode;
         }
-        catch { }
+        catch
+        {
+            _logger?.LogWarning("Swallowing exception in ChatAgent.cs");
+        }
 
         // Find next mode in cycle
         var idx = Array.IndexOf(ModeCycle, current.ToLowerInvariant());
@@ -658,7 +662,10 @@ public sealed class ChatAgent
 
         // Save session
         try { await _agent.SerializeSessionAsync(session, cancellationToken: ct).ConfigureAwait(false); }
-        catch { }
+        catch
+        {
+            _logger?.LogWarning("Swallowing exception in ChatAgent.cs");
+        }
 
         // Update observer
         RefreshModeObserver(session);
@@ -847,7 +854,10 @@ public sealed class ChatAgent
             if (!string.IsNullOrWhiteSpace(refined2) && refined2.Length > 10)
                 return $"[工具]\n\n{refined2}";
         }
-        catch { }
+        catch
+        {
+            _logger?.LogWarning("Swallowing exception in ChatAgent.cs");
+        }
         return text;
     }
 

@@ -32,12 +32,30 @@ public sealed class DebugToolbar : StackPanel
         _pauseBtn = MakeButton("⏸", "Pause");
         _stopBtn = MakeButton("■", "Stop (Shift+F5)");
 
-        _continueBtn.Click += async (_, _) => { try { await _session.ContinueAsync(); } catch { } };
-        _stepOverBtn.Click += async (_, _) => { try { await _session.StepOverAsync(); } catch { } };
-        _stepIntoBtn.Click += async (_, _) => { try { await _session.StepIntoAsync(); } catch { } };
-        _stepOutBtn.Click += async (_, _) => { try { await _session.StepOutAsync(); } catch { } };
-        _pauseBtn.Click += async (_, _) => { try { await _session.PauseAsync(); } catch { } };
-        _stopBtn.Click += async (_, _) => { try { await _session.TerminateAsync(); } catch { } };
+        _continueBtn.Click += async (_, _) => { try { await _session.ContinueAsync(); } catch
+        {
+            // non-critical, best-effort
+        } };
+        _stepOverBtn.Click += async (_, _) => { try { await _session.StepOverAsync(); } catch
+        {
+            // non-critical, best-effort
+        } };
+        _stepIntoBtn.Click += async (_, _) => { try { await _session.StepIntoAsync(); } catch
+        {
+            // non-critical, best-effort
+        } };
+        _stepOutBtn.Click += async (_, _) => { try { await _session.StepOutAsync(); } catch
+        {
+            // non-critical, best-effort
+        } };
+        _pauseBtn.Click += async (_, _) => { try { await _session.PauseAsync(); } catch
+        {
+            // non-critical, best-effort
+        } };
+        _stopBtn.Click += async (_, _) => { try { await _session.TerminateAsync(); } catch
+        {
+            // non-critical, best-effort
+        } };
 
         _statusText = new TextBlock
         {

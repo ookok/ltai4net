@@ -438,7 +438,7 @@ public sealed class MainWindow : Window
         if (k == Key.Tab && !k.IsCtrl && !k.IsAlt)
         {
             _agentMode = _agentMode == "build" ? "plan" : "build";
-            _agentModeLabel.Text = $"[{_agentMode}]";
+            _agentModeLabel!.Text = $"[{_agentMode}]";
             _agentModeLabel.SetScheme(new Scheme(
                 new TgAttribute(
                     _agentMode == "plan" ? Color.BrightYellow : Color.BrightCyan,
@@ -529,7 +529,10 @@ public sealed class MainWindow : Window
                 _app.Clipboard?.SetClipboardData(text);
             }
         }
-        catch { }
+        catch
+        {
+            // non-critical, best-effort
+        }
     }
 
     // ═══════════════════════════════════
@@ -699,7 +702,10 @@ public sealed class MainWindow : Window
                 }
             }
         }
-        catch (OperationCanceledException) { }
+        catch (OperationCanceledException)
+        {
+            // expected cancellation
+        }
         catch (Exception ex) { _aiMsgCachePos = -1; _app.Invoke(() => AddMsg("System", $"⚠ {ex.Message}")); }
         finally
         {
@@ -899,7 +905,10 @@ public sealed class MainWindow : Window
             _modelLabelText = !string.IsNullOrEmpty(provider) ? $"L1: {provider} / {model}" : "未配置模型 (使用 /model 配置)";
             if (_homeModelLabel != null) _homeModelLabel.Text = _modelLabelText;
         }
-        catch { }
+        catch
+        {
+            // non-critical, best-effort
+        }
     }
 
     private void RestoreSession()
@@ -926,7 +935,10 @@ public sealed class MainWindow : Window
                 _sidebarTokens.Text = $"消息: {_conv.Count}";
             }
         }
-        catch { }
+        catch
+        {
+            // non-critical, best-effort
+        }
     }
 
     private static string GetGitBranch()

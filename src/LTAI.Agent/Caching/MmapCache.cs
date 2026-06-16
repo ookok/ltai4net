@@ -159,7 +159,10 @@ public sealed class MmapCache : IDisposable
     {
         if (_watchers.TryRemove(directoryPath, out var watcher))
         {
-            try { watcher.EnableRaisingEvents = false; watcher.Dispose(); } catch { }
+            try { watcher.EnableRaisingEvents = false; watcher.Dispose(); } catch
+            {
+                _logger?.LogWarning("Swallowing exception in MmapCache.cs");
+            }
             _logger.LogDebug("MmapCache: stopped watching {Dir}", directoryPath);
         }
     }
@@ -198,13 +201,19 @@ public sealed class MmapCache : IDisposable
         // Stop all watchers first
         foreach (var kv in _watchers)
         {
-            try { kv.Value.EnableRaisingEvents = false; kv.Value.Dispose(); } catch { }
+            try { kv.Value.EnableRaisingEvents = false; kv.Value.Dispose(); } catch
+            {
+                _logger?.LogWarning("Swallowing exception in MmapCache.cs");
+            }
         }
         _watchers.Clear();
 
         foreach (var entry in _cache.Values)
         {
-            try { entry.Accessor.Dispose(); entry.Mmap.Dispose(); } catch { }
+            try { entry.Accessor.Dispose(); entry.Mmap.Dispose(); } catch
+            {
+                _logger?.LogWarning("Swallowing exception in MmapCache.cs");
+            }
         }
         _cache.Clear();
         _accessCounts.Clear();
@@ -269,7 +278,10 @@ public sealed class MmapCache : IDisposable
         {
             _cache.TryRemove(victim.Path, out _);
             Interlocked.Add(ref _totalBytes, -victim.Length);
-            try { victim.Accessor.Dispose(); victim.Mmap.Dispose(); } catch { }
+            try { victim.Accessor.Dispose(); victim.Mmap.Dispose(); } catch
+            {
+                _logger?.LogWarning("Swallowing exception in MmapCache.cs");
+            }
             _logger.LogDebug("MmapCache: evicted {Path}", victim.Path);
         }
     }

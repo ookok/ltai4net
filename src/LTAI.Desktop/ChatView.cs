@@ -702,7 +702,10 @@ public sealed partial class ChatView : UserControl, IChatRenderer
         var oldCts = Interlocked.Exchange(ref _cts, null);
         if (oldCts is { IsCancellationRequested: false })
         {
-            try { oldCts.Cancel(); } catch (ObjectDisposedException) { }
+            try { oldCts.Cancel(); } catch (ObjectDisposedException)
+            {
+                // non-critical, best-effort
+            }
             oldCts.Dispose();
         }
         Interlocked.CompareExchange(ref _cts, new CancellationTokenSource(), null);
@@ -969,7 +972,10 @@ public sealed partial class ChatView : UserControl, IChatRenderer
                     if (kbResults.Count > 0)
                         parts.Add("## Relevant Knowledge:\n" + string.Join("\n", kbResults.Select(r => "- " + r)));
                 }
-                catch { }
+                catch
+                {
+                    // non-critical, best-effort
+                }
             }
             var result = parts.Count > 0 ? string.Join("\n\n", parts) : "No results found.";
             Dispatcher.UIThread.Post(() => AddSystemBubble(result));

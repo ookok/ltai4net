@@ -20,6 +20,11 @@ public static class PathUtils
         if (string.IsNullOrWhiteSpace(path))
             return null;
 
+        // Defense-in-depth: detect path traversal attempts before resolution.
+        // Catches encoded/obfuscated bypasses that Path.GetFullPath wouldn't resolve as traversal.
+        if (ContainsTraversalAttempt(path))
+            return null;
+
         // Normalize workspace to include trailing separator (prevents prefix collision)
         var normalizedWs = ws.EndsWith(Path.DirectorySeparatorChar) || ws.EndsWith(Path.AltDirectorySeparatorChar)
             ? ws
@@ -147,7 +152,10 @@ public static class PathUtils
                 if (Interlocked.Increment(ref _grantCount) > GrantMax) { _grants.Clear(); Interlocked.Exchange(ref _grantCount, 0); }
                 _grants[fp] = true;
             }
-            catch { }
+            catch
+            {
+                // non-critical, best-effort
+            }
         }
 
         /// <summary>检查路径是否已被授予跨沙箱访问权限。</summary>
@@ -165,10 +173,36 @@ public static class PathUtils
         public static void Revoke(string path)
         {
             try { _grants.Remove(Path.GetFullPath(path), out _); }
-            catch { }
+            catch
+            {
+                // non-critical, best-effort
+            }
         }
 
         /// <summary>清空所有已授予的权限。</summary>
         public static void Clear() => _grants.Clear();
+    }
+
+    private static bool ContainsTraversalAttempt(string path)
+    {
+        var parts = path.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+        // Direct parent directory reference
+        if (parts.Any(p => p == ".."))
+            return true;
+
+        // URL-encoded path traversal (%2e = '.', %2f = '/')
+        if (path.Contains("%2e", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        // Pattern like "...." (double-dot obfuscation attempts)
+        if (path.Contains("...."))
+            return true;
+
+        // Semicolons (potential cmd injection or separator bypass)
+        if (path.Contains(';'))
+            return true;
+
+        return false;
     }
 }

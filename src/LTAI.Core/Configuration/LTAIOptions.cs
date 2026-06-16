@@ -81,7 +81,10 @@ public sealed class LTAIOptions
                 WriteIndented = true
             }));
         }
-        catch { }
+        catch
+        {
+            // non-critical, best-effort
+        }
     }
 }
 

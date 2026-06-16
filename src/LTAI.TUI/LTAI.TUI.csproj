@@ -21,16 +21,16 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="ColorHelper" Version="1.8.1" />
-    <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="10.0.8" />
-    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.8" />
-    <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.8" />
-    <PackageReference Include="Markdig" Version="1.2.0" />
-    <PackageReference Include="Spectre.Console" Version="0.56.0" />
-    <PackageReference Include="System.IO.Abstractions" Version="22.1.1" />
-    <PackageReference Include="TextMateSharp" Version="2.0.4" />
-    <PackageReference Include="TextMateSharp.Grammars" Version="2.0.4" />
-    <PackageReference Include="Wcwidth" Version="4.0.1" />
+    <PackageReference Include="ColorHelper" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Json" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+    <PackageReference Include="Microsoft.Extensions.Logging" />
+    <PackageReference Include="Markdig" />
+    <PackageReference Include="Spectre.Console" />
+    <PackageReference Include="System.IO.Abstractions" />
+    <PackageReference Include="TextMateSharp" />
+    <PackageReference Include="TextMateSharp.Grammars" />
+    <PackageReference Include="Wcwidth" />
   </ItemGroup>
 
   <ItemGroup>

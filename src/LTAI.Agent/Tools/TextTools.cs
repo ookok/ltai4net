@@ -205,7 +205,10 @@ public sealed class TextTools
         }
         catch
         {
-            try { File.Delete(tmp); } catch { }
+            try { File.Delete(tmp); } catch
+            {
+                // non-critical, best-effort
+            }
             throw;
         }
     }

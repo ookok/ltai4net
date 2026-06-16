@@ -58,7 +58,7 @@ public class AgentBuilderToolTests
     public void RegisterSearchTools_ContainsWebSearch()
     {
         var tools = InvokeRegister("RegisterWebTools",
-            ["LTAI-Chat", null!]);
+            ["LTAI-Chat", null!, null]);
 
         Assert.Contains(tools, t => t.Name == "WebSearch");
     }

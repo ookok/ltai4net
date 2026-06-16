@@ -23,6 +23,7 @@ using System.Collections.Concurrent;
 using System.Text;
 using LTAI.Agent.LanguageServer;
 using LTAI.Agent.Tools;
+using LTAI.Agent.CodeAnalysis;
 using LTAI.Agent.Tools.Review;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;

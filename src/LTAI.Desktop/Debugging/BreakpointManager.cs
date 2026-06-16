@@ -74,7 +74,10 @@ public sealed class BreakpointManager
                 }
             }
         }
-        catch { }
+        catch
+        {
+            // non-critical, best-effort
+        }
     }
 
     private void Save()
@@ -105,6 +108,9 @@ public sealed class BreakpointManager
             };
             File.WriteAllText(_filePath, json.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
         }
-        catch { }
+        catch
+        {
+            // non-critical, best-effort
+        }
     }
 }

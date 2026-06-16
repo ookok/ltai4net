@@ -156,7 +156,10 @@ public static class ToolRegistry
                     .GetCustomAttribute<ToolDomainAttribute>(false)?.Domain ?? "";
             }
         }
-        catch (Exception) { }
+        catch (Exception)
+        {
+            // non-critical, best-effort
+        }
         return "";
     }
 
@@ -172,7 +175,10 @@ public static class ToolRegistry
                     .ToArray();
             }
         }
-        catch { }
+        catch
+        {
+            // non-critical, best-effort
+        }
         return [];
     }
 

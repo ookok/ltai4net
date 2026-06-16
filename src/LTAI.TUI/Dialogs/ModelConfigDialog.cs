@@ -131,7 +131,7 @@ public sealed class ModelConfigDialog : Dialog
     private void OnProviderChanged(object? s, ValueChangedEventArgs<string?> e)
     {
         if (string.IsNullOrEmpty(e.NewValue)) return;
-        var envVal = SecretManager.Get(Providers.FirstOrDefault(p => p.Service == e.NewValue)?.EnvVar);
+        var envVal = SecretManager.Get(Providers.FirstOrDefault(p => p.Service == e.NewValue)?.EnvVar ?? "");
         if (!string.IsNullOrEmpty(envVal)) _apiKeyField.Text = envVal;
     }
 
@@ -209,7 +209,10 @@ public sealed class ModelConfigDialog : Dialog
                     else _statusLabel.Text = "未找到模型";
                 });
             }
-            catch (OperationCanceledException) { }
+            catch (OperationCanceledException)
+            {
+                // expected cancellation
+            }
             catch (Exception ex) { TryInvoke(() => _statusLabel.Text = $"失败: {ex.Message}"); }
         });
 

@@ -10,8 +10,8 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="LibGit2Sharp" Version="0.31.0" />
-    <PackageReference Include="Markdig" Version="1.2.0" />
+    <PackageReference Include="LibGit2Sharp" />
+    <PackageReference Include="Markdig" />
     <!-- ── MAF prebuild support: if dist/lib/maf/*.dll exists, use Reference instead of ProjectReference (faster build). ── -->
     <Reference Include="Microsoft.Agents.AI.Abstractions" HintPath="..\..\dist\lib\maf\Microsoft.Agents.AI.Abstractions.dll" Condition="Exists('..\..\dist\lib\maf\Microsoft.Agents.AI.Abstractions.dll')" />
     <Reference Include="Microsoft.Agents.AI" HintPath="..\..\dist\lib\maf\Microsoft.Agents.AI.dll" Condition="Exists('..\..\dist\lib\maf\Microsoft.Agents.AI.dll')" />
@@ -36,17 +36,17 @@
     <ProjectReference Include="..\..\extern\agent-framework\dotnet\src\Microsoft.Agents.AI.Mem0\Microsoft.Agents.AI.Mem0.csproj" Condition="!Exists('..\..\dist\lib\maf\Microsoft.Agents.AI.Mem0.dll')" />
     <ProjectReference Include="..\..\extern\agent-framework\dotnet\src\Microsoft.Agents.AI.Mcp\Microsoft.Agents.AI.Mcp.csproj" Condition="!Exists('..\..\dist\lib\maf\Microsoft.Agents.AI.Mcp.dll')" />
     <ProjectReference Include="..\..\extern\agent-framework\dotnet\src\Microsoft.Agents.AI.DurableTask\Microsoft.Agents.AI.DurableTask.csproj" Condition="!Exists('..\..\dist\lib\maf\Microsoft.Agents.AI.DurableTask.dll')" />
-    <PackageReference Include="Microsoft.DurableTask.InProcessTestHost" Version="0.2.3-preview.1" />
-    <PackageReference Include="ModelContextProtocol" Version="1.4.0" />
-    <PackageReference Include="Microsoft.Extensions.AI" Version="10.6.0" />
-    <PackageReference Include="System.ClientModel" Version="1.14.0" />
+    <PackageReference Include="Microsoft.DurableTask.InProcessTestHost" />
+    <PackageReference Include="ModelContextProtocol" />
+    <PackageReference Include="Microsoft.Extensions.AI" />
+    <PackageReference Include="System.ClientModel" />
 
-    <PackageReference Include="Serilog.AspNetCore" Version="10.0.0" />
-    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.8" />
-    <!-- LiteDB removed �?replaced by KgStore (SQLite FTS5 + CTE) -->
-    <PackageReference Include="SkiaSharp" Version="3.119.4" />
-    <PackageReference Include="Wasmtime" Version="44.0.0" />
-    <PackageReference Include="TurboQuant" Version="0.2.0" />
+    <PackageReference Include="Serilog.AspNetCore" />
+    <PackageReference Include="Microsoft.Data.Sqlite" />
+    <!-- LiteDB removed �?replaced by KgStore (SQLite FTS5 + CTE) -->
+    <PackageReference Include="SkiaSharp" />
+    <PackageReference Include="Wasmtime" />
+    <PackageReference Include="TurboQuant" />
   </ItemGroup>
 
   <ItemGroup>

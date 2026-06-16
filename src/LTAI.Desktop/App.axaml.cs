@@ -30,7 +30,10 @@ public class App : Application
             if (themeResources != null)
                 Resources.MergedDictionaries.Add(themeResources);
         }
-        catch { }
+        catch
+        {
+            // non-critical, best-effort
+        }
 
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
@@ -165,7 +168,10 @@ public class App : Application
                 errorBox.Focus();
                 copyBtn.Content = "📋  按 Ctrl+C 复制";
             }
-            catch { }
+            catch
+            {
+                // non-critical, best-effort
+            }
         };
         btnRow.Children.Add(copyBtn);
 

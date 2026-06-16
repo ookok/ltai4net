@@ -339,7 +339,10 @@ public static class ChatMessageRenderer
                 localPath = Path.Combine(Path.GetTempPath(), $"ltai_img_{Guid.NewGuid():N}{ext}");
                 var bytes = await resp.Content.ReadAsByteArrayAsync();
                 await File.WriteAllBytesAsync(localPath, bytes);
-                _ = Task.Delay(60_000).ContinueWith(_ => { try { File.Delete(localPath); } catch { } });
+                _ = Task.Delay(60_000).ContinueWith(_ => { try { File.Delete(localPath); } catch
+                {
+                    // non-critical, best-effort
+                } });
             }
             else
             {

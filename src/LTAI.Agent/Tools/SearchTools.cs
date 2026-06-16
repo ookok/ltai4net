@@ -40,7 +40,10 @@ internal static class RipgrepDetector
                 return true;
             }
         }
-        catch { }
+        catch
+        {
+            // non-critical, best-effort
+        }
 
         // 2. Check tools/rg/rg.exe (build target auto-downloads here)
         try
@@ -68,7 +71,10 @@ internal static class RipgrepDetector
                 }
             }
         }
-        catch { }
+        catch
+        {
+            // non-critical, best-effort
+        }
 
         return false;
     }
@@ -227,7 +233,10 @@ public sealed class SearchTools
                 files.Add(f);
             }
         }
-        catch { }
+        catch
+        {
+            // non-critical, best-effort
+        }
 
         if (files.Count == 0)
             return $"No matches found for '{pattern}'\n提示：{RipgrepDetector.Suggestion}";
@@ -250,7 +259,10 @@ public sealed class SearchTools
                         matches.Add((relPath, lineNum, line.Trim()));
                 }
             }
-            catch { }
+            catch
+            {
+                // non-critical, best-effort
+            }
         });
 
         if (matches.IsEmpty)

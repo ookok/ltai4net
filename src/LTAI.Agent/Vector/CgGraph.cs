@@ -10,6 +10,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using LTAI.AI;
 using LTAI.Agent.Tools;
+using LTAI.Agent.CodeAnalysis;
 using LTAI.Agent.Utils;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;

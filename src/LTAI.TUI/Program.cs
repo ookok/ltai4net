@@ -41,7 +41,10 @@ public static class Program
                 var json = System.Text.Json.JsonSerializer.Serialize(crash, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
                 File.WriteAllText(Path.Combine(AppContext.BaseDirectory, "crash.json"), json);
             }
-            catch { }
+            catch
+            {
+                // non-critical, best-effort
+            }
         };
         TaskScheduler.UnobservedTaskException += (_, e) =>
         {
@@ -57,7 +60,10 @@ public static class Program
                 var json = System.Text.Json.JsonSerializer.Serialize(crash, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
                 File.WriteAllText(Path.Combine(AppContext.BaseDirectory, "crash-unobserved.json"), json);
             }
-            catch { }
+            catch
+            {
+                // non-critical, best-effort
+            }
             e.SetObserved();
         };
 
@@ -122,13 +128,17 @@ public static class Program
         catch (Exception ex)
         {
             AnsiConsole.MarkupLine($"[red]初始化失败:[/] {ex.Message.EscapeMarkup()}");
-            Console.ReadLine(); Environment.Exit(1); throw;
+            Console.ReadLine(); Environment.Exit(1); return;
         }
 
         var chatAgent = sp.GetRequiredService<ChatAgent>();
 
         // Background warmup
-        _ = Task.Run(async () => { try { await chatAgent.WarmUpAsync().ConfigureAwait(false); } catch { } });
+        _ = Task.Run(async () =>
+        {
+            try { await chatAgent.WarmUpAsync().ConfigureAwait(false); }
+            catch (Exception ex) { Log.Logger.Warning(ex, "WarmUp 失败"); }
+        });
 
         // ── Terminal.Gui FullScreen mode (暂用 FullScreen 验证渲染) ──
         Application.AppModel = AppModel.FullScreen;
@@ -168,7 +178,7 @@ public static class Program
             var zipPath = Path.Combine(Path.GetTempPath(), "wt.zip");
             AnsiConsole.MarkupLine("[cyan]├─ 正在下载 Windows Terminal...[/]");
             s_httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("LTAI/1.0");
-            var response = await s_httpClient.GetAsync(s_wtDownloadUrl);
+            using var response = await s_httpClient.GetAsync(s_wtDownloadUrl);
             response.EnsureSuccessStatusCode();
             await using (var fs = File.Create(zipPath)) await response.Content.CopyToAsync(fs);
             AnsiConsole.MarkupLine("[cyan]├─ 解压...[/]");
@@ -207,7 +217,10 @@ public static class Program
             using var proc = Process.Start(new ProcessStartInfo("where", "wt.exe") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true });
             if (proc != null) { var line = proc.StandardOutput.ReadLine(); proc.WaitForExit(1000); if (proc.ExitCode == 0 && !string.IsNullOrEmpty(line)) return line.Trim(); }
         }
-        catch { }
+        catch
+        {
+            // non-critical, best-effort
+        }
         return null;
     }
 

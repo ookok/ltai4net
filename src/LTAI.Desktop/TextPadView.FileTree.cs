@@ -48,7 +48,10 @@ partial class TextPadView
                 items.Add(node);
             }
         }
-        catch { }
+        catch
+        {
+            // non-critical, best-effort
+        }
     }
 
     private static void AddDragSupport(TreeViewItem node) { }
@@ -102,7 +105,10 @@ partial class TextPadView
         menu.Items.Add(WithClick(new MenuItem { Header = "📋 复制路径" }, (_, _) =>
         {
             try { CopyToClipboard(path); }
-            catch { }
+            catch
+            {
+                // non-critical, best-effort
+            }
         }));
 
         var rename = new MenuItem { Header = "✏️ 重命名" };
@@ -148,7 +154,10 @@ partial class TextPadView
         menu.Items.Add(WithClick(new MenuItem { Header = "📋 复制路径" }, (_, _) =>
         {
             try { CopyToClipboard(path); }
-            catch { }
+            catch
+            {
+                // non-critical, best-effort
+            }
         }));
 
         var newFile = new MenuItem { Header = "📄 新建文件" };
@@ -178,14 +187,14 @@ partial class TextPadView
         var allFiles = new HashSet<string>(files.Select(f => Path.GetFileName(f) ?? ""), StringComparer.OrdinalIgnoreCase);
         if (allFiles.Any(f => f?.EndsWith(".csproj") == true || f?.EndsWith(".sln") == true))
         {
-            menu.Items.Add(WithClick(new MenuItem { Header = "🛠 Build" }, (_, _) => RunShell("dotnet build")));
-            menu.Items.Add(WithClick(new MenuItem { Header = "🧪 Test" }, (_, _) => RunShell("dotnet test")));
-            menu.Items.Add(WithClick(new MenuItem { Header = "▶ Run" }, (_, _) => RunShell("dotnet run")));
+            menu.Items.Add(WithClick(new MenuItem { Header = "🛠 Build" }, (_, _) => _ = RunShell("dotnet build")));
+            menu.Items.Add(WithClick(new MenuItem { Header = "🧪 Test" }, (_, _) => _ = RunShell("dotnet test")));
+            menu.Items.Add(WithClick(new MenuItem { Header = "▶ Run" }, (_, _) => _ = RunShell("dotnet run")));
         }
         else if (allFiles.Contains("Cargo.toml"))
-            menu.Items.Add(WithClick(new MenuItem { Header = "🛠 cargo build" }, (_, _) => RunShell("cargo build")));
+            menu.Items.Add(WithClick(new MenuItem { Header = "🛠 cargo build" }, (_, _) => _ = RunShell("cargo build")));
         else if (allFiles.Contains("package.json"))
-            menu.Items.Add(WithClick(new MenuItem { Header = "🛠 npm run build" }, (_, _) => RunShell("npm run build")));
+            menu.Items.Add(WithClick(new MenuItem { Header = "🛠 npm run build" }, (_, _) => _ = RunShell("npm run build")));
         if (Directory.Exists(Path.Combine(path, ".git")) || FindGitDir(path) != null)
         {
             menu.Items.Add(WithClick(new MenuItem { Header = "🌿 git status" }, async (_, _) => await RunGitCmdAsync("status")));
@@ -274,7 +283,10 @@ partial class TextPadView
                     Foreground = LtaiTheme.Sbb(LtaiTheme.TextPrimary),
                     LineNumbersForeground = LtaiTheme.Sbb(LtaiTheme.TextDim),
                 };
-                try { _splitEditor.SyntaxHighlighting = HighlightingManager.Instance.GetDefinition("C#"); } catch { }
+                try { _splitEditor.SyntaxHighlighting = HighlightingManager.Instance.GetDefinition("C#"); } catch
+                {
+                    // non-critical, best-effort
+                }
                 _splitEditor.TextArea.TextView.CurrentLineBackground = LtaiTheme.Sbb(LtaiTheme.SurfaceOverlay);
                 _splitEditor.TextArea.TextView.CurrentLineBorder = new Pen(LtaiTheme.Sbb(LtaiTheme.CurrentLineBorder), 1);
                 _splitEditor.TextArea.SelectionBrush = LtaiTheme.Sbb(LtaiTheme.SelectionBg);
@@ -285,7 +297,10 @@ partial class TextPadView
             _editorGrid.Children.Add(new GridSplitter { Width = 4, Background = LtaiTheme.Sbb(LtaiTheme.Border), HorizontalAlignment = HorizontalAlignment.Stretch });
             Grid.SetColumn(_splitEditor, 2);
             _editorGrid.Children.Add(_splitEditor);
-            if (_currentFile != null) { try { _splitEditor.Load(_currentFile); } catch { } }
+            if (_currentFile != null) { try { _splitEditor.Load(_currentFile); } catch
+            {
+                // non-critical, best-effort
+            } }
         }
         else
         {
@@ -318,7 +333,10 @@ partial class TextPadView
                 ".md" => "Markdown", ".yaml" or ".yml" => "YAML",
                 ".sh" or ".bash" => "PowerShell", _ => null,
             };
-            try { _editor.SyntaxHighlighting = hlName != null ? HighlightingManager.Instance.GetDefinition(hlName) : null; } catch { }
+            try { _editor.SyntaxHighlighting = hlName != null ? HighlightingManager.Instance.GetDefinition(hlName) : null; } catch
+            {
+                // non-critical, best-effort
+            }
             _editor.IsReadOnly = !CodeExts.Contains(ext);
             _isReadOnly = _editor.IsReadOnly;
             _toggleBtn.Content = _isReadOnly ? "🔓 编辑" : "🔒 只读";
@@ -351,7 +369,10 @@ partial class TextPadView
             _fileWatcher = new FileSystemWatcher(dir, Path.GetFileName(path)) { NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.Size, EnableRaisingEvents = true };
             _fileWatcher.Changed += OnExternalFileChange;
         }
-        catch { }
+        catch
+        {
+            // non-critical, best-effort
+        }
     }
 
     private DateTime _lastFileChange = DateTime.MinValue;
@@ -377,7 +398,7 @@ partial class TextPadView
             var ext = Path.GetExtension(_currentFile);
             if (ext != ".cs" && ext != ".py" && ext != ".js" && ext != ".ts" && ext != ".go" && ext != ".rs" && ext != ".java")
             { _statusBar.Text = "语法检查仅支持 .cs/.py/.js/.ts/.go/.rs/.java"; return; }
-            using var parser = new LTAI.Agent.Tools.TreeSitterParser();
+            using var parser = new LTAI.Agent.CodeAnalysis.TreeSitterParser();
             var symbols = parser.ExtractSymbols(_editor.Text, ext);
             if (symbols.Count == 0) _statusBar.Text = "⚠️ 未解析出符号，可能存在语法错误";
             else _statusBar.Text = $"✅ 语法检查通过: {symbols.Count} 个符号 ({string.Join(", ", symbols.Select(s => s.kind).Distinct())})";
@@ -428,7 +449,10 @@ partial class TextPadView
                 _tree.Items.Clear(); BuildTree(_tree.Items, _rootDir);
                 RestoreExpanded(_tree.Items, expandedDirs);
             }
-            catch { }
+            catch
+            {
+                // non-critical, best-effort
+            }
         });
     }
 

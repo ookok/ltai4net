@@ -39,7 +39,11 @@ public partial class MainWindow : Window
     private static void Log(string msg)
     {
         var m = $"[{DateTime.UtcNow:O}] MainWindow: {msg}\n";
-        _ = Task.Run(() => File.AppendAllText("desktop-startup.log", m));
+        _ = Task.Run(() =>
+        {
+            try { File.AppendAllText("desktop-startup.log", m); }
+            catch { /* desktop-startup.log not writable */ }
+        });
     }
 
     public MainWindow(LTAIService svc)

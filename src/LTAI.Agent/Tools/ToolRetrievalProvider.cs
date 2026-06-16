@@ -223,7 +223,10 @@ public sealed class ToolRetrievalProvider : AIContextProvider
                 if (t is AIFunction func && func.UnderlyingMethod != null)
                     return func.UnderlyingMethod.GetCustomAttribute<ToolDomainAttribute>(false)?.Domain ?? "";
             }
-            catch { }
+            catch
+            {
+                // non-critical, best-effort
+            }
             return "";
         });
     }

@@ -3,9 +3,10 @@ name: Config Safety Check
 on:
   pull_request:
     paths:
-      - 'src/LTAI.Agent/agents.yaml'
-      - 'ltai.config.json'
-      - 'prompts/**'
+      - 'src/LTAI.Agent/ServiceCollectionExtensions.cs'
+      - 'agents/*.agent.md'
+      - 'Directory.Build.props'
+      - '**/appsettings*.json'
 
 jobs:
   config-diff:
@@ -17,44 +18,36 @@ jobs:
 
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '9.0.x'
+          dotnet-version: '10.0.x'
 
-      - name: Restore CLI project
-        run: dotnet restore src/LTAI.Cli/LTAI.Cli.csproj
+      - name: Restore and build
+        run: dotnet build LTAI.sln --no-restore
 
-      - name: Run ConfigDiffer (YAML)
+      - name: Validate Agent Definition Files
         run: |
-          dotnet run --project src/LTAI.Cli -- config-diff \
-            --base $(git rev-parse origin/main) \
-            --target HEAD \
-            --format json > config-diff-report.json
-
-      - name: Run ConfigDiffer (JSON)
-        run: |
-          dotnet run --project src/LTAI.Cli -- config-diff-json \
-            --base $(git show ${{ github.event.pull_request.base.sha }}:ltai.config.json 2>/dev/null || echo '{}') \
-            --target ltai.config.json \
-            --format json >> config-diff-report.json
-
-      - name: Check Critical Changes
-        id: check
-        run: |
-          if grep -q '"Level":"Critical"' config-diff-report.json 2>/dev/null; then
-            echo "⛔ CRITICAL breaking changes detected! PR blocked."
-            echo ""
-            echo "Check if unified_safety middleware was removed."
-            echo "Check if agent types were changed."
-            cat config-diff-report.json
-            exit 1
-          fi
-          echo "✅ Config safety check passed."
-
-      - name: Validate Prompt Files
-        run: |
-          for f in prompts/*.prompt; do
+          for f in agents/*.agent.md; do
             if [ ! -s "$f" ]; then
-              echo "⛔ Empty prompt file: $f"
+              echo "⛔ Empty agent definition: $f"
               exit 1
             fi
-            echo "✅ Prompt file OK: $f ($(wc -l < $f) lines)"
+            echo "✅ Agent definition OK: $f ($(wc -l < $f) lines)"
           done
+
+      - name: Validate App Settings JSON
+        run: |
+          for f in $(find src -name 'appsettings.json' -o -name 'appsettings.*.json' | grep -v appsettings.Development.json); do
+            if [ -f "$f" ] && ! python3 -c "import json; json.load(open('$f'))" 2>/dev/null; then
+              echo "⛔ Invalid JSON: $f"
+              exit 1
+            fi
+            echo "✅ Valid JSON: $f"
+          done
+
+      - name: Check for Hardcoded Secrets in Tracked Files
+        run: |
+          if grep -rqE '(sk-[a-zA-Z0-9]{20,}|ghp_[a-zA-Z0-9]{36,})' --include='*.cs' --include='*.json' --include='*.yaml' --include='*.yml' src/ .github/ 2>/dev/null; then
+            echo "⛔ Potential hardcoded secrets detected!"
+            grep -rnE '(sk-[a-zA-Z0-9]{20,}|ghp_[a-zA-Z0-9]{36,})' --include='*.cs' --include='*.json' --include='*.yaml' --include='*.yml' src/ .github/
+            exit 1
+          fi
+          echo "✅ No hardcoded secrets in tracked source files."

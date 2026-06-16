@@ -30,6 +30,8 @@ public sealed class EmbeddingClient : IDisposable
     private readonly LocalEmbedder? _local;
     private readonly RemoteEmbeddingCache? _remoteCache;
 
+    private readonly object _activationLock = new();
+
     private volatile int _dimension = 384;
     public int Dimension => _dimension;
 
@@ -112,7 +114,7 @@ public sealed class EmbeddingClient : IDisposable
             _logger.LogWarning("ActivateLocalFallback: no LocalEmbedder available (wasn't registered in DI?)");
             return;
         }
-        lock (_local)
+        lock (_activationLock)
         {
             if (_localFallbackActivated) return;
             _localFallbackActivated = true;

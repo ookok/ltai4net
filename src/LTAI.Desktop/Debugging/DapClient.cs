@@ -127,7 +127,10 @@ public sealed class DapClient : IAsyncDisposable
                 }
             }
         }
-        catch (OperationCanceledException) { }
+        catch (OperationCanceledException)
+        {
+            // expected cancellation
+        }
         catch (Exception ex) { OutputReceived?.Invoke($"DAP reader: {ex.Message}"); }
         finally { Disconnected?.Invoke(); }
     }
@@ -167,18 +170,27 @@ public sealed class DapClient : IAsyncDisposable
         {
             await CallAsync("disconnect");
         }
-        catch { }
+        catch
+        {
+            // non-critical, best-effort
+        }
 
         try
         {
             await _cts.CancelAsync();
             await _readerTask;
         }
-        catch { }
+        catch
+        {
+            // non-critical, best-effort
+        }
 
         _stdin.Close();
         _stdout.Close();
-        try { if (!_process.HasExited) _process.Kill(true); } catch { }
+        try { if (!_process.HasExited) _process.Kill(true); } catch
+        {
+            // non-critical, best-effort
+        }
         _process.Dispose();
     }
 

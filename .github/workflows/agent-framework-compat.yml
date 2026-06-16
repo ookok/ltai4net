@@ -37,8 +37,9 @@ jobs:
 
       - name: Build dependent projects
         run: |
-          dotnet build src/LTAI.Host/LTAI.Host.csproj --no-restore -warnaserror || echo "HOST_BUILD_FAILED=true" >> $GITHUB_ENV
+          dotnet build src/LTAI.Core/LTAI.Core.csproj --no-restore -warnaserror || echo "CORE_BUILD_FAILED=true" >> $GITHUB_ENV
           dotnet build src/LTAI.Cli/LTAI.Cli.csproj --no-restore -warnaserror || echo "CLI_BUILD_FAILED=true" >> $GITHUB_ENV
+          dotnet build src/LTAI.Web/LTAI.Web.csproj --no-restore -warnaserror || echo "WEB_BUILD_FAILED=true" >> $GITHUB_ENV
 
       - name: Check API compatibility
         run: |
@@ -60,16 +61,22 @@ jobs:
             echo "✅ LTAI.Agent build passed" >> $GITHUB_STEP_SUMMARY
           fi
 
-          if [ "$HOST_BUILD_FAILED" = "true" ]; then
-            echo "⚠️ **LTAI.Host build FAILED** (non-blocking)" >> $GITHUB_STEP_SUMMARY
+          if [ "$CORE_BUILD_FAILED" = "true" ]; then
+            echo "⚠️ **LTAI.Core build FAILED** (non-blocking)" >> $GITHUB_STEP_SUMMARY
           else
-            echo "✅ LTAI.Host build passed" >> $GITHUB_STEP_SUMMARY
+            echo "✅ LTAI.Core build passed" >> $GITHUB_STEP_SUMMARY
           fi
 
           if [ "$CLI_BUILD_FAILED" = "true" ]; then
             echo "⚠️ **LTAI.Cli build FAILED** (non-blocking)" >> $GITHUB_STEP_SUMMARY
           else
             echo "✅ LTAI.Cli build passed" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if [ "$WEB_BUILD_FAILED" = "true" ]; then
+            echo "⚠️ **LTAI.Web build FAILED** (non-blocking)" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "✅ LTAI.Web build passed" >> $GITHUB_STEP_SUMMARY
           fi
 
       - name: Run agent tests
