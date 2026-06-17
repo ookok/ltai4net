@@ -65,6 +65,17 @@ public sealed class CompactionStep : IPipelineStep
         _logger.LogInformation("CompactionStep: context {Pct:F0}% > threshold {Threshold:P0}, compressing",
             contextRatio * 100, _ratioThreshold);
 
+        // ── Predictive conversation type detection ──
+        // Inspired by FlashMemory-DeepSeek-V4: adjust compression ratios
+        // based on predicted conversation type (code review → preserve code,
+        // debugging → preserve error context, etc.)
+        var messageTexts = context.Messages
+            .Where(m => !string.IsNullOrEmpty(m.Text))
+            .Select(m => m.Text!)
+            .ToList();
+        var convType = _tiered.DetectType(messageTexts);
+        _logger.LogDebug("CompactionStep: detected conversation type={Type}", convType);
+
         var compressedCount = 0;
         var originalLength = 0;
         var compressedLength = 0;
@@ -76,7 +87,7 @@ public sealed class CompactionStep : IPipelineStep
             if (string.IsNullOrEmpty(msg.Text)) continue;
 
             var tier = _tiered.Classify(i, context.Messages.Count);
-            var ratio = _tiered.GetCompressionRatio(tier);
+            var ratio = _tiered.GetCompressionRatio(tier, convType);
             originalLength += msg.Text.Length;
 
             if (tier == Context.CompressTier.LowPriority) lowPriorityCount++;

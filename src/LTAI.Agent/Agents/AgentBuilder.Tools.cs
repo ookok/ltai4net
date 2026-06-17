@@ -36,6 +36,13 @@ partial class AgentBuilder
             tools.Add(AIFunctionFactory.Create(text.EditFile));
             tools.Add(AIFunctionFactory.Create(text.MultiEdit));
             var patchEdit = new PatchEditTool(ws);
+            // Wire dry-run impact analyzer from CgGraph when available
+            var cg = s_serviceProvider?.GetService<CgGraph>();
+            if (cg != null)
+            {
+                patchEdit.ImpactAnalyzer = async (symbol) =>
+                    await cg.QueryImpactAsync(symbol, depth: 2).ConfigureAwait(false);
+            }
             tools.Add(AIFunctionFactory.Create(patchEdit.ApplyPatches));
         }
         if (canRead) tools.Add(AIFunctionFactory.Create(TextTools.RegexTest));
@@ -52,6 +59,35 @@ partial class AgentBuilder
             ? HasYamlTool(yamlTools, "symbols")
             : name.StartsWith("LTAI-Chat") || name is "LTAI-Code" or "LTAI-Frontend"))
         { tools.Add(AIFunctionFactory.Create(codeAnalysis.GetSymbols)); tools.Add(AIFunctionFactory.Create(codeAnalysis.FindInCode)); }
+
+        // ── Graph-powered tools (Gortex-inspired: impact, compact query, contracts) ──
+        if (canRead && s_serviceProvider != null)
+        {
+            var cg = s_serviceProvider.GetService<CgGraph>();
+            if (cg != null)
+            {
+                System.Func<string, int, Task<string>> impactFn = (symbol, depth) => cg.QueryImpactAsync(symbol, depth);
+                tools.Add(AIFunctionFactory.Create(impactFn, "QueryImpact",
+                    "Analyze what would break if a symbol changes. Returns forward (called by) and reverse (calls) reachability. depth: 1-3."));
+
+                System.Func<string, Task<string>> compactFn = (query) => cg.QueryCompactAsync(query);
+                tools.Add(AIFunctionFactory.Create(compactFn, "QueryCodeGraph", "Search code graph in compact format (~27% fewer tokens than JSON). Returns symbol type, name, and source path."));
+            }
+
+            var contracts = s_serviceProvider.GetService<ContractRegistry>();
+            if (contracts != null)
+            {
+                System.Func<string, string, string> crossRepoFn = (repoA, repoB) =>
+                    System.Text.Json.JsonSerializer.Serialize(contracts.FindCrossRepo(repoA, repoB));
+                tools.Add(AIFunctionFactory.Create(crossRepoFn, "FindCrossRepoContracts",
+                    "Find API contracts shared between two repositories. Detects HTTP routes, gRPC services, message topics, env vars."));
+
+                tools.Add(AIFunctionFactory.Create(() =>
+                    contracts.ToString(),
+                    "ListContracts",
+                    "List all registered API contracts with provider/consumer repos."));
+            }
+        }
     }
 
     static void RegisterWebTools(ToolSet tools, string name, IHttpClientFactory httpFactory, string[]? yamlTools)

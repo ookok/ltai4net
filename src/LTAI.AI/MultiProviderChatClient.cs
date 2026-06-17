@@ -1135,7 +1135,8 @@ public static class ServiceCollectionExtensions
             new EmbeddingClient(sp.GetRequiredService<IHttpClientFactory>(),
                 sp.GetService<LocalEmbedder>(),
                 sp.GetService<ILogger<EmbeddingClient>>(),
-                sp.GetService<RemoteEmbeddingCache>()));
+                sp.GetService<RemoteEmbeddingCache>(),
+                sp.GetService<Glove50Embedder>()));
 
         // P14.5: in-memory TTL cache for remote embedding API results.
         // Separate from ToolEmbeddingCache (which persists tool/agent

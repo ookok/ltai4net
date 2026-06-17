@@ -83,7 +83,8 @@ Layer 2: agents/*.agent.md (正文)        ← 领域专属工作流
 
 1. **第 1 层** QuickParse — Roslyn/TreeSitter AST 解析（<200ms）
 2. **第 2 层** RuleEngine — 确定性规则匹配（<300ms）
-3. **第 3 层** LSP — 语义诊断（<500ms）
+3. **第 3 层** CLR (Claim-Level Reliability) — 提取 import/URL/config 关键声明并交叉验证（<300ms，VibeThinker 启发）
+4. **第 4 层** LSP — 语义诊断（<500ms）
 
 发现语法错误时：
 - 注入错误消息到 agent 上下文（`文件:行号:列号` 格式）
@@ -309,6 +310,100 @@ ollama serve  # 默认 http://localhost:11434
 
 如需自定义 endpoint，修改 `models/edge-providers.json` 中 `ollama.api` 字段。
 
+## Lookahead Provider Routing
+
+`LookaheadProviderSelector`（`src/LTAI.Agent/Context/LookaheadProviderSelector.cs`）基于 FlashMemory-DeepSeek-V4 的 LSA 范式，预测当前查询需要哪些上下文 provider，跳过无关的昂贵 provider。
+
+**路由流程：**
+1. 从对话消息中提取用户最新查询
+2. 关键词匹配 + 可选 MiniLM/GloVe embedding 分类为 code/knowledge/memory/system 等域
+3. 向上下文注入 `<provider-route skip="...">` 标记
+4. 下游 8 个 provider（KbGraph, CgGraph, CodeChunkIndex, WasmtimeSandbox, L4DeepSearch, L6AgentDiary, ProvenanceProvider, LspDiagnosticsProvider）检查标记并自动跳过
+
+**动态边界缓存**（MGPO 启发）：追踪每个 provider 的 skip 准确率。准确率 > 90% 的 provider 直接跳过分类开销；< 70% 的始终分类；70-90% 的用标准分类逻辑。
+
+## 预计算 Reach Index
+
+`ReachIndex`（`src/LTAI.Agent/Vector/ReachIndex.cs`）在 CgGraph 构建完成后后台运行，预计算所有符号的 depth-3 前向/反向可达性。将影响分析从 O(nodes × edges) 的 CTE BFS 降为 O(1) map lookup。
+
+```bash
+TUI: /impact <symbol>     # 分析修改该符号的影响范围
+```
+
+`LTAI_REACH_INDEX_MAX_NODES` 和 `LTAI_REACH_INDEX_MAX_EDGES` 环境变量控制超大仓库采样。
+
+## GloVe-50d 零依赖嵌入
+
+`Glove50Embedder`（`src/LTAI.AI/Glove50Embedder.cs`）提供 50 维语义嵌入，无 ONNX 依赖，零下载。内置 ~400 个代码相关词向量 + hash OOV fallback。注册为 `EmbeddingClient` 的 fallback 层（ONNX → Remote API → GloVe-50d → BM25 FastEmb）。
+
+可选下载真实 GloVe-50d 词表（`models/glove50d.gv50`，~2MB），自动从 `mogoo.com.cn/glove/` 下载：
+```bash
+./scripts/generate-glove50.ps1
+```
+
+## Token 节省追踪
+
+`TokenSavingsTracker`（`src/LTAI.Core/Configuration/TokenSavingsTracker.cs`）追踪 graph/tool lookups 替代直接读文件节省的 token 数。
+
+```bash
+TUI: /savings             # 查看 token 节省统计
+Web: GET /health          # 返回 token_savings 字段
+```
+
+指标：`ltai.tokens.saved`、`ltai.tokens.naive`、`ltai.tokens.actual`（OpenTelemetry）。
+
+## 跨仓库合约匹配
+
+`ContractRegistry`（`src/LTAI.Agent/Vector/ContractRegistry.cs`）+ `ContractWatcher` 自动检测跨仓库 API 合约：HTTP 路由、gRPC 服务、消息主题、环境变量、OpenAPI 规范。
+
+```bash
+TUI: /contracts           # 查看所有合约
+Agent: ListContracts       # agent 工具
+Agent: FindCrossRepoContracts  # 跨仓库查询
+```
+
+文件变更后 1.5s debounce 自动增量扫描。
+
+## 紧凑图格式
+
+`CompactGraphFormatter`（`src/LTAI.Agent/Vector/CompactGraphFormatter.cs`）GCX1 启发，比 JSON 少 ~27% token。通过 `CgGraph.QueryCompactAsync()` 使用，agent 工具 `QueryCodeGraph` 默认使用此格式。
+
+## Memory Refinery（MeMo 启发）
+
+`MemoryRefinery`（`src/LTAI.Agent/Memory/MemoryRefinery.cs`）后台服务每 15 分钟运行 MeMo 五步合成管线：
+
+1. **Fact Extraction** — 提取直接+间接事实
+2. **Consolidation** — 合并相关 QA 对
+3. **Verification** — 确保自包含性
+4. **Entity Surfacing** — 生成反向 QA（逆转诅咒缓解）
+5. **Cross-doc Synthesis** — 连接相关记忆
+
+合成结果存入 `reflection` room，供 L4DeepSearchProvider 检索时使用。
+
+## Entity Surfacing（逆转诅咒）
+
+`PalaceStore.StoreAsync` 每次写入记忆时自动提取大写命名实体，生成反向 QA 对（"Who is X" + "What does X do"）存入 `{room}.entity` room。L4DeepSearchProvider 的多轮查询协议会同时检索正向 + 反向记忆。
+
+## Experience Replay（VibeThinker 启发）
+
+`ExperienceReplayPool`（`src/LTAI.Agent/Memory/ExperienceReplayPool.cs`）离线自我蒸馏：记录成功 agent 交互轨迹 → 按学习潜力评分采样 → 合成为 system prompt 注入。作为 `PalaceFeedbackTracker` 的补充。
+
+## Long2Short token 效率追踪
+
+`Long2ShortTracker`（`src/LTAI.Agent/Tools/Long2ShortTracker.cs`）追踪每个工具的 token 效率。零和 brevity 奖励：同等质量下的较短输出获得更高评分。
+
+## 工具 Agent 工具
+
+以下工具通过 `Builder.Tools.cs` 自动注册到 chat/code/review 等 agent：
+
+| 工具 | 函数名 | 来源 |
+|------|--------|------|
+| 符号影响分析 | `QueryImpact` | `ReachIndex` |
+| 紧凑代码搜索 | `QueryCodeGraph` | `CgGraph.QueryCompactAsync` |
+| 跨仓库合约 | `ListContracts` | `ContractRegistry` |
+| 跨仓库合约查找 | `FindCrossRepoContracts` | `ContractRegistry` |
+| 预览编辑 | `ApplyPatches dryRun=true` | `PatchEditTool` |
+
 ## 参考文档
 
 - `docs/architecture.md` — 六层架构图
@@ -366,6 +461,10 @@ ollama serve  # 默认 http://localhost:11434
 | `LTAI_CG_CACHE_SIZE` | 100 | CgGraph 查询缓存条目数 |
 | `LTAI_CG_CACHE_TTL_SEC` | 30 | CgGraph 查询缓存 TTL |
 | `LTAI_MEMORY_CONSOLIDATION_MINUTES` | 30 | MemoryConsolidationService 执行间隔 |
+| `LTAI_MEMORY_REFINERY_MINUTES` | 15 | MemoryRefinery 反射合成执行间隔 |
+| `LTAI_REACH_INDEX_MAX_NODES` | -1 | ReachIndex 采样节点上限（-1=无限制） |
+| `LTAI_REACH_INDEX_MAX_EDGES` | -1 | ReachIndex 采样边上限（-1=无限制） |
+| `LTAI_COMPRESS_BOOST_*` | 见代码 | 对话类型压缩比 boost 覆盖 |
 | `LTAI_RATE_LIMIT_CLEANUP_MIN` | 5 | RateLimitMiddleware 清理间隔 |
 
 ### 行为控制

@@ -1,3 +1,4 @@
+using LTAI.Agent.Context;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 
@@ -15,6 +16,9 @@ public sealed class ProvenanceProvider : AIContextProvider
     protected override ValueTask<AIContext> ProvideAIContextAsync(
         InvokingContext context, CancellationToken ct = default)
     {
+        if (context.AIContext.IsProviderSkipped("ProvenanceProvider"))
+            return ValueTask.FromResult(context.AIContext ?? new AIContext());
+
         var recent = _tracker.List();
         if (recent.Count == 0)
             return ValueTask.FromResult(context.AIContext ?? new AIContext());

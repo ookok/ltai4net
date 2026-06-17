@@ -186,8 +186,78 @@ public sealed partial class PalaceStore : IDisposable
                 catch (Exception ex) { _logger?.LogWarning(ex, "PalaceStore background TrimAsync failed"); }
             });
 
+        // ── Entity Surfacing (MeMo-inspired) ──
+        // Automatically generate reverse QA pairs to mitigate the reversal curse.
+        // For each stored entry, create "Who is X" and "What does X do" variants
+        // so memory can be retrieved from both forward and backward directions.
+        try
+        {
+            var entityPairs = SurfaceEntitiesFromContent(content, wing, room);
+            foreach (var (q, a) in entityPairs)
+            {
+                // store as lower-importance companion entries in the same room
+                var companionId = Guid.NewGuid().ToString("n");
+                var companionContent = $"Q: {q}\nA: {a}";
+                using var compCmd = conn.CreateCommand();
+                compCmd.CommandText = "INSERT OR IGNORE INTO palace (wing,room,drawer_id,role,content,created_at,expires_at,importance,agent_id) VALUES ($w,$r,$id,'system',$c,$now,$exp,0.3,$agent)";
+                compCmd.Parameters.AddWithValue("$w", wing);
+                compCmd.Parameters.AddWithValue("$r", room + ".entity");
+                compCmd.Parameters.AddWithValue("$id", companionId);
+                compCmd.Parameters.AddWithValue("$c", companionContent);
+                compCmd.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+                compCmd.Parameters.AddWithValue("$exp", expiresAt.HasValue ? (object)expiresAt.Value : DBNull.Value);
+                compCmd.Parameters.AddWithValue("$agent", agentId ?? "default");
+                await compCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+            }
+        }
+        catch { /* entity surfacing is best-effort */ }
+
         return drawerId;
     }
+
+    /// <summary>Extract entity surfacing QA pairs from content (MeMo §4.1 Step 4).</summary>
+    private static List<(string Question, string Answer)> SurfaceEntitiesFromContent(
+        string content, string wing, string room)
+    {
+        var pairs = new List<(string, string)>();
+        if (string.IsNullOrWhiteSpace(content)) return pairs;
+
+        // Extract capitalized entities
+        var entities = new HashSet<string>();
+        foreach (Match m in EntityExtractPattern().Matches(content))
+        {
+            var entity = m.Groups[1].Value.Trim();
+            if (entity.Length >= 3 && entity.Length <= 60)
+                entities.Add(entity);
+        }
+
+        foreach (var entity in entities.Take(3))
+        {
+            // Find sentence describing this entity
+            var sentences = content.Split(['.', '!', '?', '\n'], StringSplitOptions.RemoveEmptyEntries);
+            foreach (var sentence in sentences)
+            {
+                if (sentence.Contains(entity, StringComparison.OrdinalIgnoreCase))
+                {
+                    var desc = sentence.Trim();
+                    if (desc.Length > entity.Length + 5)
+                    {
+                        if (desc.Length > 150) desc = desc[..147] + "...";
+                        pairs.Add(($"Who or what is {entity}?",
+                                   $"In {wing}/{room}: {entity} — {desc}"));
+                        pairs.Add(($"What is {entity} known for?",
+                                   $"{entity} relates to {wing}/{room}: {desc}"));
+                        break;
+                    }
+                }
+            }
+        }
+
+        return pairs;
+    }
+
+    [GeneratedRegex(@"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\b", RegexOptions.Compiled, 500)]
+    private static partial Regex EntityExtractPattern();
 
     /// <summary>
     /// Trim to target count by evicting oldest + least-important entries.
@@ -1136,7 +1206,18 @@ public sealed partial class PalaceStore : IDisposable
             rrf[id] = rrf.GetValueOrDefault(id) + 1.0 / (i + 60);
         }
 
-        var topIds = rrf.OrderByDescending(kv => kv.Value).Take(topK).ToList();
+        // ── Cross-Retrieval Majority Voting ──
+        // Items retrieved by BOTH FTS5 + HNSW are high-confidence;
+        // single-path items get a score penalty (same pattern as ToolRegistry).
+        var ftsSet = new HashSet<string>(ftsResults.Select(r => r.DrawerId), StringComparer.OrdinalIgnoreCase);
+        var semSet = new HashSet<string>(semResults.Select(r => r.Id), StringComparer.OrdinalIgnoreCase);
+        const double MajorityVotePenalty = 0.3;
+
+        var topIds = rrf
+            .Select(kvp => (id: kvp.Key, score: kvp.Value * (ftsSet.Contains(kvp.Key) && semSet.Contains(kvp.Key) ? 1.0 : MajorityVotePenalty)))
+            .OrderByDescending(x => x.score)
+            .Take(topK)
+            .ToList();
         if (topIds.Count == 0) return [];
 
         // Batch load drawers via IN clause (single query instead of per-drawer)
@@ -1148,7 +1229,7 @@ public sealed partial class PalaceStore : IDisposable
         batchCmd.CommandText = $"SELECT * FROM palace WHERE drawer_id IN ({placeholders}) AND (expires_at IS NULL OR expires_at>@now)";
         batchCmd.Parameters.AddWithValue("@now", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
         for (int i = 0; i < topIds.Count; i++)
-            batchCmd.Parameters.AddWithValue($"@p{i}", topIds[i].Key);
+            batchCmd.Parameters.AddWithValue($"@p{i}", topIds[i].id);
 
         var drawersById = new Dictionary<string, Drawer>(StringComparer.OrdinalIgnoreCase);
         using var batchRdr = await batchCmd.ExecuteReaderAsync().ConfigureAwait(false);

@@ -16,11 +16,85 @@ namespace LTAI.AI;
 ///   L2: Auto-selected unless user has explicitly configured it.
 ///   L3: Auto-selected; falls back to L1 if no suitable model found.
 ///
+/// Also provides query-level classification for Verifiable vs Knowledge tasks
+/// (Parametric Compression-Coverage Hypothesis from VibeThinker-3B).
+/// Verifiable tasks (code, math, SQL) can use smaller/reasoning-optimized models;
+/// knowledge tasks (writing, architecture, security) need larger models.
+///
 /// Results are persisted to <c>.livingtree/model-selections.json</c> for
 /// cross-restart continuity and inspected by TUI/Desktop/CLI.
 /// </summary>
 public sealed class ModelAutoSelector
 {
+    /// <summary>
+    /// Classify a user query as Verifiable (code/math/SQL) or Knowledge.
+    /// Based on VibeThinker-3B's Parametric Compression-Coverage Hypothesis:
+    /// verifiable reasoning can be compressed into compact models,
+    /// while open-domain knowledge requires broad parameter coverage.
+    /// </summary>
+    public static QueryCategory ClassifyQuery(string query)
+    {
+        if (string.IsNullOrWhiteSpace(query))
+            return QueryCategory.Knowledge;
+
+        var lower = query.ToLowerInvariant();
+
+        // Verifiable patterns: code, math, SQL, debugging, data
+        if (ContainsAny(lower, VerifiableKeywords))
+            return QueryCategory.Verifiable;
+
+        // Knowledge patterns: writing, architecture, design, security
+        if (ContainsAny(lower, KnowledgeKeywords))
+            return QueryCategory.Knowledge;
+
+        return QueryCategory.Knowledge; // conservative default
+    }
+
+    private static readonly string[] VerifiableKeywords =
+    [
+        "code", "function", "class", "method", "implement", "refactor", "compile", "syntax",
+        "bug", "fix", "debug", "error", "exception", "crash",
+        "sql", "query", "database", "table", "index",
+        "math", "calculate", "equation", "formula", "algorithm",
+        "test", "unit test", "integration test",
+        "代码", "函数", "类", "方法", "实现", "编译", "bug", "调试",
+        "数据库", "sql", "数学", "计算", "算法", "测试",
+    ];
+
+    private static readonly string[] KnowledgeKeywords =
+    [
+        "explain", "what is", "concept", "architecture", "design", "pattern",
+        "document", "write", "draft", "article", "blog",
+        "security", "vulnerability", "permission", "review",
+        "plan", "strategy", "roadmap", "proposal",
+        "规范", "架构", "设计", "安全", "漏洞", "文档",
+        "计划", "方案", "策略",
+    ];
+
+    private static bool ContainsAny(string text, string[] keywords)
+    {
+        foreach (var kw in keywords)
+        {
+            if (text.Contains(kw, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        return false;
+    }
+
+    /// <summary>Select the optimal model tier based on query category and available models.</summary>
+    public static (bool useSmallModel, string reason) SelectTierForQuery(
+        string query, AutoSelectResult? selection)
+    {
+        var category = ClassifyQuery(query);
+        if (category == QueryCategory.Verifiable)
+        {
+            // Verifiable tasks can use L2 (smaller reasoning model) instead of L3
+            if (selection != null && selection.L3 != null)
+                return (true, $"Verifiable task — using L2 ({selection.L2}) per Parametric Compression-Coverage Hypothesis");
+            return (true, "Verifiable task — using compact reasoning model");
+        }
+        return (false, "Knowledge task — using full model for broad coverage");
+    }
     private readonly ProviderRegistry _registry;
     private readonly ModelScoringEngine _scoring;
     private readonly IOptionsMonitor<LTAIOptions> _opts;
@@ -355,4 +429,18 @@ public sealed class ModelAutoSelectHostedService : BackgroundService
         ["StepFun"] = "stepfun",
         ["stepfun"] = "stepfun",
     };
+}
+
+/// <summary>
+/// Query category for model tier selection.
+/// Based on VibeThinker-3B's Parametric Compression-Coverage Hypothesis:
+/// Verifiable tasks can be handled by compact reasoning models;
+/// Knowledge tasks need broad-parameter models.
+/// </summary>
+public enum QueryCategory
+{
+    /// <summary>Code, math, SQL, debugging — compressible reasoning core.</summary>
+    Verifiable,
+    /// <summary>Writing, architecture, security, design — needs broad knowledge coverage.</summary>
+    Knowledge,
 }

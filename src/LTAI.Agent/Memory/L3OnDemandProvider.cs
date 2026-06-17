@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using LTAI.AI;
+using LTAI.Agent.Context;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
@@ -31,6 +32,9 @@ public sealed class L3OnDemandProvider : AIContextProvider
     protected override async ValueTask<AIContext> ProvideAIContextAsync(
         InvokingContext context, CancellationToken ct = default)
     {
+        if (context.AIContext.IsProviderSkipped("L3OnDemand"))
+            return new AIContext();
+
         try
         {
             // Skip on-demand memory when ExpertRouterAgent already injected aggregated context

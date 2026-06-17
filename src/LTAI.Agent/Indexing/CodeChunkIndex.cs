@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.ComponentModel;
 using System.Linq;
 using System.Text;
+using LTAI.Agent.Context;
 using LTAI.Agent.Tools;
 using LTAI.Agent.CodeAnalysis;
 using LTAI.Agent.Utils;
@@ -223,6 +224,9 @@ public sealed class CodeChunkIndex : AIContextProvider
     protected override async ValueTask<AIContext> ProvideAIContextAsync(
         InvokingContext context, CancellationToken ct = default)
     {
+        if (context.AIContext.IsProviderSkipped("CodeChunkIndex"))
+            return context.AIContext!;
+
         var msgs = context.AIContext?.Messages;
         if (msgs == null || !msgs.Any()) return context.AIContext!;
 

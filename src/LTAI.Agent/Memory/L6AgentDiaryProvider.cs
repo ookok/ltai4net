@@ -1,4 +1,5 @@
 using LTAI.AI;
+using LTAI.Agent.Context;
 using LTAI.Core.Safety;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
@@ -29,6 +30,9 @@ public sealed class L6AgentDiaryProvider : AIContextProvider
     protected override ValueTask<AIContext> ProvideAIContextAsync(
         InvokingContext context, CancellationToken ct = default)
     {
+        if (context.AIContext.IsProviderSkipped("L6AgentDiary"))
+            return ValueTask.FromResult(new AIContext());
+
         try
         {
             var diary = _store.SearchByRoom("diary", _agentId, MaxEntries);

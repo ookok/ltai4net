@@ -11,6 +11,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using LTAI.AI;
+using LTAI.Agent.Context;
 using LTAI.Agent.Tools;
 using LTAI.Agent.Formats;
 using LTAI.Agent.Utils;
@@ -349,6 +350,12 @@ public sealed class KbGraph : AIContextProvider, LTAI.Core.Vector.IKbQueryable
     {
         var msgs = context.AIContext?.Messages;
         if (msgs == null) return context.AIContext!;
+
+        if (context.AIContext.IsProviderSkipped("KbGraph"))
+        {
+            _logger.LogDebug("KbGraph: skipped by LookaheadProviderSelector");
+            return context.AIContext!;
+        }
 
         var userMsg = msgs.LastOrDefault(m => m.Role == ChatRole.User);
         if (userMsg?.Text == null || userMsg.Text.Length < 5)

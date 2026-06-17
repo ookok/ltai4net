@@ -4,7 +4,10 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using LTAI.Agent;
 using LTAI.Agent.Tools;
+using LTAI.Agent.Vector;
+using LTAI.Core.Configuration;
 using LTAI.Core.Session;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Terminal.Gui.App;
@@ -56,6 +59,7 @@ public sealed class MainWindow : Window
     private readonly Label _sidebarModel;
     private readonly Label _sidebarCost;
     private readonly Label _sidebarCache;
+    private readonly Label _sidebarSavings;
     private readonly Label _sidebarTodos;
     private readonly Label _sidebarFiles;
     private string _modelLabelText;
@@ -187,8 +191,9 @@ public sealed class MainWindow : Window
         _sidebarModel = new Label { X = 1, Y = 3, Text = "Token: 0" };
         _sidebarCost = new Label { X = 1, Y = 4, Text = "费用: ¥0" };
         _sidebarCache = new Label { X = 1, Y = 5, Text = "缓存: 0%" };
-        _sidebarTodos = new Label { X = 1, Y = 7, Text = "", Width = Dim.Fill() - 1 };
-        _sidebarFiles = new Label { X = 1, Y = 12, Text = "", Width = Dim.Fill() - 1 };
+        _sidebarSavings = new Label { X = 1, Y = 6, Text = "节省: 0" };
+        _sidebarTodos = new Label { X = 1, Y = 8, Text = "", Width = Dim.Fill() - 1 };
+        _sidebarFiles = new Label { X = 1, Y = 13, Text = "", Width = Dim.Fill() - 1 };
 
         var cwd = Directory.GetCurrentDirectory();
         var cwdDisplay = cwd.Length > 22 ? "..." + cwd[^19..] : cwd;
@@ -627,6 +632,10 @@ public sealed class MainWindow : Window
         _sidebarModel.Text = $"Token: {LTAI.Core.Configuration.UsageTracker.TotalTokens:N0}";
         _sidebarCost.Text = $"费用: {LTAI.Core.Configuration.UsageTracker.CostDisplay}";
         _sidebarCache.Text = $"缓存: {LTAI.Core.Configuration.UsageTracker.CacheHitRate:F0}%";
+        var saved = TokenSavingsTracker.TotalTokensSaved;
+        _sidebarSavings.Text = saved > 0
+            ? $"节省: {saved:N0} ({TokenSavingsTracker.SavingsRatio:P0})"
+            : "节省: 0";
 
         // Refresh todo list — only re-parse when raw string changed
         var todos = TaskTools.TodoList();
@@ -850,6 +859,43 @@ public sealed class MainWindow : Window
                     AddMsg("System", $"主题: {curTheme} → {nextTheme}");
                 }
                 catch (Exception ex) { AddMsg("System", $"主题切换失败: {ex.Message}"); }
+                return;
+            case "savings":
+                var saved = TokenSavingsTracker.TotalTokensSaved;
+                AddMsg("System", $"**Token 节省**\n- 总计节省: {saved:N0} tokens\n- 累计原始: {TokenSavingsTracker.TotalTokensNaive:N0} tokens\n- 节省比例: {TokenSavingsTracker.SavingsRatio:P1}\n- 查询次数: {TokenSavingsTracker.TotalLookups:N0}\n- 平均节省: {TokenSavingsTracker.AvgSavedPerLookup:F0}/次\n- 估算费用: ~${saved * 3e-6:F2}");
+                return;
+            case "impact":
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        var cg = _sp.GetService<CgGraph>();
+                        if (cg == null) { _app.Invoke(() => AddMsg("System", "代码图不可用")); return; }
+                        var parts = ActiveInput?.Text?.TrimStart('/').Split(' ') ?? [];
+                        var symbol = parts.Length > 1 ? string.Join(" ", parts.Skip(1)) : "";
+                        if (string.IsNullOrWhiteSpace(symbol))
+                        {
+                            _app.Invoke(() => AddMsg("System", "用法: `/impact <符号名>` — 分析修改该符号会影响哪些代码"));
+                            return;
+                        }
+                        var result = await cg.QueryImpactAsync(symbol).ConfigureAwait(false);
+                        _app.Invoke(() => AddMsg("System", result));
+                    }
+                    catch (Exception ex) { _app.Invoke(() => AddMsg("System", $"影响分析失败: {ex.Message}")); }
+                });
+                return;
+            case "contracts":
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        var contracts = _sp.GetService<ContractRegistry>();
+                        if (contracts == null) { _app.Invoke(() => AddMsg("System", "合约注册表不可用")); return; }
+                        var summary = contracts.ToString();
+                        _app.Invoke(() => AddMsg("System", summary));
+                    }
+                    catch (Exception ex) { _app.Invoke(() => AddMsg("System", $"合约查询失败: {ex.Message}")); }
+                });
                 return;
             case "help":
                 AddMsg("System", "输入 `/commands` 查看全部命令\n快捷键: `Ctrl+N` 新建 · `Ctrl+L` 清空 · `Ctrl+P` 命令\n`Ctrl+R` 搜索 · `Ctrl+↑/↓` 翻阅历史 · `Shift+Enter` 换行");

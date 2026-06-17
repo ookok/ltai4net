@@ -119,6 +119,15 @@ public static class ServiceCollectionExtensions
             return new KgStore(opts.ResolveDataPath("cg.db"));
         });
 
+        // Step 2a: GloVe-50d zero-dependency embedder (lightweight, no ONNX)
+        services.AddSingleton<Glove50Embedder>();
+        // Step 2a: Agent-level lookahead router (predicts which agent should handle query)
+        services.AddSingleton<AgentLookaheadRouter>();
+        // Step 2a: Contract registry for cross-repo API contract matching
+        services.AddSingleton<ContractRegistry>();
+        services.AddSingleton<ContractWatcher>();
+        services.AddHostedService(sp => sp.GetRequiredService<ContractWatcher>());
+
         // Step 2b: Reranker (two-stage embedding + LLM rescore)
         services.AddSingleton<Reranker>(sp =>
         {
@@ -413,6 +422,8 @@ public static class ServiceCollectionExtensions
         });
         // Tiered compressor: priority-aware context compression
         services.AddSingleton<LTAI.Agent.Context.TieredCompressor>();
+        // MeMo-inspired Memory Refinery: background reflection QA synthesis
+        services.AddHostedService<MemoryRefinery>();
         // Step 3b: Token budget tracker (from AI config, optional)
         services.AddSingleton<LTAI.AI.BudgetTracker>(sp =>
         {

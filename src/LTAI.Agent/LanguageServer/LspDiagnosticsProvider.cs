@@ -1,3 +1,4 @@
+using LTAI.Agent.Context;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 
@@ -21,6 +22,9 @@ public sealed class LspDiagnosticsProvider : AIContextProvider
     protected override ValueTask<AIContext> ProvideAIContextAsync(
         InvokingContext context, CancellationToken ct)
     {
+        if (context.AIContext.IsProviderSkipped("LspDiagnosticsProvider"))
+            return ValueTask.FromResult(context.AIContext ?? new AIContext());
+
         var ctx = context.AIContext;
         var diagnostics = _lsp.FormatDiagnostics();
         if (string.IsNullOrEmpty(diagnostics))

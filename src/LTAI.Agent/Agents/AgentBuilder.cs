@@ -52,6 +52,7 @@ internal static partial class AgentBuilder
     });
     private static readonly Caching.MmapFileProvider s_mmapProvider = new(s_mmapCache);
     private static readonly Caching.WriteBuffer s_writeBuf = new(mmap: s_mmapCache);
+    internal static IServiceProvider? s_serviceProvider;
 
     public static AIAgent BuildAgent(IServiceProvider sp, string name, string description,
         bool canRead, bool canWrite, bool canList, bool canExec,
@@ -78,6 +79,9 @@ internal static partial class AgentBuilder
         var opts = sp.GetRequiredService<IOptions<LTAIOptions>>().Value;
         var loggerFactory = sp.GetRequiredService<ILoggerFactory>();
 
+        // Expose service provider for cross-cutting tool wiring (e.g. PatchEditTool dry-run)
+        s_serviceProvider = sp;
+
         // Wire PlanTools to ExecutionEngine for integrated plan execution
         if (LTAI.Agent.Tools.PlanTools.ExecutionEngine == null)
         {
@@ -94,6 +98,21 @@ internal static partial class AgentBuilder
         }
         var llm = sp.GetRequiredService<IChatClient>();
         var log = loggerFactory.CreateLogger("Agent." + name);
+
+        // Agent-level lookahead routing: predict preferred agent for query
+        try
+        {
+            var router = sp.GetService<Context.AgentLookaheadRouter>();
+            if (router != null && !string.IsNullOrEmpty(agentPrompt))
+            {
+                var predicted = router.Predict(agentPrompt);
+                if (predicted.Length > 0 && !predicted.Contains(name))
+                    log.LogDebug("AgentLookaheadRouter: query '{Q}' → {Agents} (current: {Name})",
+                        agentPrompt.Length > 60 ? agentPrompt[..60] + "..." : agentPrompt,
+                        string.Join(", ", predicted), name);
+            }
+        }
+        catch { /* router unavailable — non-critical */ }
 
         // P0.1: Wrap with progress guard to detect repeated tool calls
         IChatClient guardedLlm = new LTAI.Agent.Clients.ThinkingTagValidator(

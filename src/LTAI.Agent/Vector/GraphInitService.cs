@@ -11,6 +11,7 @@ public sealed class GraphInitService : IHostedService, IDisposable
 {
     private readonly CgGraph _cg;
     private readonly KbGraph _kb;
+    private readonly ContractRegistry _contracts;
     private readonly ILogger<GraphInitService> _logger;
     private FileSystemWatcher? _watcher;
     private Timer? _debounceTimer;
@@ -19,10 +20,11 @@ public sealed class GraphInitService : IHostedService, IDisposable
     private static readonly TimeSpan DebounceInterval = TimeSpan.FromMilliseconds(500);
     private bool _building;
 
-    public GraphInitService(CgGraph cg, KbGraph kb, ILogger<GraphInitService> logger)
+    public GraphInitService(CgGraph cg, KbGraph kb, ContractRegistry contracts, ILogger<GraphInitService> logger)
     {
         _cg = cg;
         _kb = kb;
+        _contracts = contracts;
         _logger = logger;
     }
 
@@ -75,6 +77,18 @@ public sealed class GraphInitService : IHostedService, IDisposable
             _logger.LogInformation("Graph: building document index...");
             var docResult = await _kb.BuildDocumentIndexAsync(Directory.GetCurrentDirectory()).ConfigureAwait(false);
             _logger.LogInformation("Graph: {Result}", docResult);
+
+            // ── Scan for cross-repo API contracts ──
+            try
+            {
+                var ws = Directory.GetCurrentDirectory();
+                var contractCount = await ScanContractsAsync(ws, ct).ConfigureAwait(false);
+                _logger.LogInformation("Graph: scanned {N} API contracts", contractCount);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Graph: contract scan failed (non-fatal)");
+            }
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -84,6 +98,34 @@ public sealed class GraphInitService : IHostedService, IDisposable
         {
             _building = false;
         }
+    }
+
+    private async Task<int> ScanContractsAsync(string ws, CancellationToken ct)
+    {
+        var count = 0;
+        var checkedDirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var ext in new[] { ".cs", ".py", ".js", ".ts", ".go", ".rs", ".java", ".proto", ".yaml", ".json" })
+        {
+            ct.ThrowIfCancellationRequested();
+            var files = Directory.EnumerateFiles(ws, $"*{ext}", SearchOption.AllDirectories)
+                .Where(f => !f.Contains("\\obj\\") && !f.Contains("\\bin\\") && !f.Contains("\\node_modules\\") && !f.Contains("\\.git\\"))
+                .Take(500); // cap per extension
+
+            foreach (var file in files)
+            {
+                ct.ThrowIfCancellationRequested();
+                try
+                {
+                    var content = await File.ReadAllTextAsync(file, ct).ConfigureAwait(false);
+                    if (content.Length > 100_000) continue; // skip large files
+                    _contracts.ScanFile(Path.GetFileName(ws), file, content);
+                    count++;
+                }
+                catch { /* skip unreadable files */ }
+            }
+        }
+        return count;
     }
 
     private void StartWatcher()

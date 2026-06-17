@@ -17,6 +17,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Text;
 using LTAI.AI;
+using LTAI.Agent.Context;
 using LTAI.Core;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
@@ -88,6 +89,9 @@ public sealed class WasmtimeSandbox : AIContextProvider
     protected override ValueTask<AIContext> ProvideAIContextAsync(
         InvokingContext context, CancellationToken ct = default)
     {
+        if (context.AIContext.IsProviderSkipped("WasmtimeSandbox"))
+            return ValueTask.FromResult(context.AIContext ?? new AIContext());
+
         var existing = context.AIContext;
         if (existing == null) return ValueTask.FromResult(context.AIContext!);
 

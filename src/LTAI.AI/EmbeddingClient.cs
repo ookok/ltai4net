@@ -28,6 +28,7 @@ public sealed class EmbeddingClient : IDisposable
     private readonly ILogger<EmbeddingClient> _logger;
     private readonly (string name, string endpoint, string model, int dim, string apiKey)[] _availableProviders;
     private readonly LocalEmbedder? _local;
+    private readonly Glove50Embedder? _glove;
     private readonly RemoteEmbeddingCache? _remoteCache;
 
     private readonly object _activationLock = new();
@@ -56,11 +57,13 @@ public sealed class EmbeddingClient : IDisposable
         IHttpClientFactory httpFactory,
         LocalEmbedder? local = null,
         ILogger<EmbeddingClient>? logger = null,
-        RemoteEmbeddingCache? remoteCache = null)
+        RemoteEmbeddingCache? remoteCache = null,
+        Glove50Embedder? glove = null)
     {
         _httpFactory = httpFactory;
         _logger = logger ?? NullLogger<EmbeddingClient>.Instance;
         _remoteCache = remoteCache;
+        _glove = glove;
 
         _availableProviders = DefaultProviders
             .Select(p => (p.name, p.endpoint, p.model, p.dim, apiKey: LTAI.Core.Configuration.SecretManager.Get(p.envVar) ?? ""))
@@ -72,9 +75,11 @@ public sealed class EmbeddingClient : IDisposable
             _dimension = _local.Dim;
         else if (_availableProviders.Length > 0)
             _dimension = _availableProviders[0].dim;
+        else
+            _dimension = 384; // GloVe/FastEmb default
 
-        _logger.LogInformation("EmbeddingClient: {Count} API providers, local BGE={Local}, dim={Dim}, remoteCache={Cache}",
-            _availableProviders.Length, _local?.Available == true, _dimension, _remoteCache != null ? "on" : "off");
+        _logger.LogInformation("EmbeddingClient: {Count} API providers, local BGE={Local}, glove={Glove}, dim={Dim}, remoteCache={Cache}",
+            _availableProviders.Length, _local?.Available == true, _glove != null, _dimension, _remoteCache != null ? "on" : "off");
     }
 
     // P14.10: consecutive all-provider-failure counter + threshold-based
@@ -159,7 +164,15 @@ public sealed class EmbeddingClient : IDisposable
         // (fast, deterministic, free).
         if (_availableProviders.Length == 0)
         {
-            // Priority 3 fallback: BM25 heuristic
+            // Priority 3: GloVe-50d (zero-dependency, built-in, ~50KB)
+            if (_glove != null)
+            {
+                _logger.LogDebug("Embedding via GloVe-50d (zero-dep): {Count} texts", texts.Length);
+                var gloveResults = _glove.EmbedBatch(texts);
+                return gloveResults.Select(v => ProjectToDim(v, Dimension)).ToArray();
+            }
+
+            // Priority 4 fallback: BM25 heuristic
             _logger.LogWarning("No embedding models available, using BM25 fallback (dim={Dim})", Dimension);
             return texts.Select(t => FastEmb(t, Dimension)).ToArray();
         }
@@ -233,11 +246,19 @@ public sealed class EmbeddingClient : IDisposable
             }
         }
 
-        // Priority 3 fallback: BM25 for all missing texts
-        _logger.LogWarning("No embedding API succeeded, using BM25 fallback for {N} missing texts (dim={Dim})", missing.Count, Dimension);
-        for (int j = 0; j < missing.Count; j++)
+        // Priority 3 fallback: GloVe-50d (then BM25)
+        if (_glove != null)
         {
-            result[missing[j]] = FastEmb(missingTexts[j], Dimension);
+            _logger.LogWarning("No embedding API succeeded, using GloVe-50d fallback for {N} missing texts", missing.Count);
+            var gloveVecs = _glove.EmbedBatch(missingTexts);
+            for (int j = 0; j < missing.Count; j++)
+                result[missing[j]] = ProjectToDim(gloveVecs[j], Dimension);
+        }
+        else
+        {
+            _logger.LogWarning("No embedding API succeeded, using BM25 fallback for {N} missing texts (dim={Dim})", missing.Count, Dimension);
+            for (int j = 0; j < missing.Count; j++)
+                result[missing[j]] = FastEmb(missingTexts[j], Dimension);
         }
 
         // P14.10: every API provider failed — track consecutive failures and
@@ -496,6 +517,26 @@ public sealed class EmbeddingClient : IDisposable
     private sealed record EmbeddingApiResponse(EmbeddingData[]? Data);
     private sealed record EmbeddingData(int Index, float[]? Embedding);
     private sealed record EmbeddingResult(float[][] Embeddings, int Dimension);
+
+    /// <summary>Project a 50d GloVe vector to the target dimension via linear interpolation.</summary>
+    private static float[] ProjectToDim(float[] src, int targetDim)
+    {
+        if (src.Length == targetDim) return src;
+        var result = new float[targetDim];
+        for (int i = 0; i < targetDim; i++)
+        {
+            var srcIdx = (int)((long)i * src.Length / targetDim);
+            if (srcIdx >= src.Length) srcIdx = src.Length - 1;
+            result[i] = src[srcIdx];
+        }
+        // L2 normalize
+        var norm = 0.0;
+        for (int i = 0; i < targetDim; i++) norm += result[i] * result[i];
+        norm = Math.Sqrt(norm);
+        if (norm > 1e-10)
+            for (int i = 0; i < targetDim; i++) result[i] = (float)(result[i] / norm);
+        return result;
+    }
 
     public void Dispose() { }
 }

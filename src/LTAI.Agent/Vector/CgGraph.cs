@@ -9,6 +9,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using LTAI.AI;
+using LTAI.Agent.Context;
 using LTAI.Agent.Tools;
 using LTAI.Agent.CodeAnalysis;
 using LTAI.Agent.Utils;
@@ -37,6 +38,11 @@ public sealed class CgGraph : AIContextProvider
         int.TryParse(Environment.GetEnvironmentVariable("LTAI_CG_CACHE_SIZE"), out var cs) ? Math.Max(10, cs) : 100 });
     private static readonly TimeSpan QueryCacheTtl = TimeSpan.FromSeconds(
         int.TryParse(Environment.GetEnvironmentVariable("LTAI_CG_CACHE_TTL_SEC"), out var t) ? Math.Max(5, t) : 30);
+
+    // ── Precomputed Reach Index (Gortex-inspired) ──
+    private ReachIndex? _reachIndex;
+    /// <summary>Exposed for external tools (e.g. PatchEditTool --dry-run).</summary>
+    public ReachIndex? ReachIndex => _reachIndex;
 
     private static readonly HashSet<string> SourceExts = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -204,6 +210,11 @@ public sealed class CgGraph : AIContextProvider
         // Persist current file list for next build's diff
         await _store.SetMeta("cg:files", string.Join("\n", files)).ConfigureAwait(false);
 
+        // ── Build precomputed Reach Index (Gortex-inspired) ──
+        // Sub-millisecond impact analysis via precomputed depth-3 reach sets.
+        // Builds in background — does not block the return.
+        _ = BuildReachIndexAsync().ConfigureAwait(false);
+
         // Maintenance
         if (sc > 0 || _indexedFiles.Count % 10 == 0)
         {
@@ -212,6 +223,136 @@ public sealed class CgGraph : AIContextProvider
         }
 
         return $"Built: {sc} files, {na} symbols\n{await _store.Stats().ConfigureAwait(false)}";
+    }
+
+    // ═══════════════════════════════════════════
+    //  Reach Index (precomputed impact analysis)
+    // ═══════════════════════════════════════════
+
+    /// <summary>Build or rebuild the precomputed reach index in the background.</summary>
+    public async Task BuildReachIndexAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            _reachIndex = new ReachIndex();
+            await _reachIndex.BuildAsync(_store, ct).ConfigureAwait(false);
+            _logger.LogInformation("CgGraph: built reach index with {N} nodes", _reachIndex.NodeCount);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "CgGraph: reach index build failed");
+            _reachIndex = null;
+        }
+    }
+
+    /// <summary>
+    /// Sub-millisecond impact analysis via precomputed reach index.
+    /// Returns all symbols that would be affected by changing the given symbol.
+    /// Falls back to CTE BFS when reach index is unavailable.
+    /// </summary>
+    public async Task<string> QueryImpactAsync(string symbolName, int depth = 3, CancellationToken ct = default)
+    {
+        // Fast path: precomputed reach index
+        if (_reachIndex?.Built == true)
+        {
+            var nodes = await _store.SearchNodesByName(symbolName, limit: 5).ConfigureAwait(false);
+            var match = nodes.FirstOrDefault(n =>
+                n.Name.Equals(symbolName, StringComparison.OrdinalIgnoreCase));
+            if (match == null) return $"Symbol '{symbolName}' not found in graph.";
+
+            var impact = _reachIndex.QueryImpact(match.Id, depth);
+            if (impact.IsEmpty) return $"No impact found for '{symbolName}'.";
+
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine($"## Impact: `{symbolName}` (depth={depth}, index-v{impact.IndexVersion})");
+            sb.AppendLine($"Total: {impact.TotalAffected} symbols\n");
+
+            if (impact.ForwardReachable.Length > 0)
+            {
+                sb.AppendLine("### Forward (called by this symbol)");
+                foreach (var id in impact.ForwardReachable.Take(20))
+                {
+                    var n = await _store.GetNode(id).ConfigureAwait(false);
+                    if (n != null) sb.AppendLine($"  `{n.Name}` [{n.Kind}]");
+                }
+                if (impact.ForwardReachable.Length > 20)
+                    sb.AppendLine($"  ... and {impact.ForwardReachable.Length - 20} more");
+            }
+
+            if (impact.ReverseReachable.Length > 0)
+            {
+                sb.AppendLine("### Reverse (calls this symbol)");
+                foreach (var id in impact.ReverseReachable.Take(20))
+                {
+                    var n = await _store.GetNode(id).ConfigureAwait(false);
+                    if (n != null) sb.AppendLine($"  `{n.Name}` [{n.Kind}]");
+                }
+                if (impact.ReverseReachable.Length > 20)
+                    sb.AppendLine($"  ... and {impact.ReverseReachable.Length - 20} more");
+            }
+
+            // Track savings: impact analysis result vs naive grep+read
+            var naiveEstimate = impact.TotalAffected * 200 + 500; // ~200 tokens per affected symbol + overhead
+            LTAI.Core.Configuration.TokenSavingsTracker.RecordLookup(naiveEstimate, sb.Length / 4);
+
+            return sb.ToString();
+        }
+
+        // Fallback: CTE BFS (slower but comprehensive)
+        var nodes2 = await _store.SearchNodesByName(symbolName, limit: 5).ConfigureAwait(false);
+        var match2 = nodes2.FirstOrDefault(n =>
+            n.Name.Equals(symbolName, StringComparison.OrdinalIgnoreCase));
+        if (match2 == null) return $"Symbol '{symbolName}' not found in graph.";
+
+        var bfs = await _store.TraverseBfs([match2.Id], "CALLS", maxDepth: depth, maxNodes: 50).ConfigureAwait(false);
+        if (bfs.Count == 0) return $"No impact found for '{symbolName}'.";
+
+        var sb2 = new System.Text.StringBuilder();
+        sb2.AppendLine($"## Impact: `{symbolName}` (depth={depth}, BFS fallback)");
+        sb2.AppendLine($"Total: {bfs.Count} symbols\n");
+        foreach (var n in bfs.Take(20))
+            sb2.AppendLine($"  `{n.Name}` [{n.Kind}]");
+        if (bfs.Count > 20)
+            sb2.AppendLine($"  ... and {bfs.Count - 20} more");
+
+        return sb2.ToString();
+    }
+
+    // ═══════════════════════════════════════════
+    //  Compact Query (GCX1-inspired, −27% tokens)
+    // ═══════════════════════════════════════════
+
+    /// <summary>
+    /// Query the code graph and return results in compact format.
+    /// Uses <see cref="CompactGraphFormatter"/> — ~27% fewer tokens than JSON.
+    /// </summary>
+    public async Task<string> QueryCompactAsync(string query, int topK = 8, CancellationToken ct = default)
+    {
+        if (!_built) return "Code graph not built — run /build command first.";
+
+        var keywords = await RewriteQueryAsync(query, ct).ConfigureAwait(false);
+        if (string.IsNullOrWhiteSpace(keywords)) keywords = query;
+
+        var ftsHits = await _store.SearchFts(keywords, topN: topK * 2).ConfigureAwait(false);
+        if (ftsHits.Count == 0) return "## G none";
+
+        var nodes = new List<NodeRow>();
+        var seen = new HashSet<long>();
+        foreach (var hit in ftsHits.Take(topK))
+        {
+            if (!seen.Add(hit.nodeId)) continue;
+            var node = await _store.GetNode(hit.nodeId).ConfigureAwait(false);
+            if (node != null) nodes.Add(node);
+        }
+
+        var result = CompactGraphFormatter.Format(query, nodes);
+
+        // Track savings: compact vs naive JSON output
+        var (naive, compact, savings) = CompactGraphFormatter.Compare(query, nodes);
+        LTAI.Core.Configuration.TokenSavingsTracker.RecordLookup(naive, compact);
+
+        _queryCache.Set($"cgc:{query}|{topK}", result, QueryCacheTtl);
+        return result;
     }
 
     // ═══════════════════════════════════════════
@@ -297,6 +438,11 @@ public sealed class CgGraph : AIContextProvider
         }
 
         var result = string.Join("\n", lines);
+
+        // Track token savings: full file read would be much larger
+        var naiveTokens = ftsHits.Take(topK).Sum(h => h.text?.Length ?? 500) / 4;
+        LTAI.Core.Configuration.TokenSavingsTracker.RecordLookup(naiveTokens, result.Length / 4);
+
         _queryCache.Set(cacheKey, result, QueryCacheTtl);
         return result;
     }
@@ -335,6 +481,12 @@ public sealed class CgGraph : AIContextProvider
     protected override async ValueTask<AIContext> ProvideAIContextAsync(
         InvokingContext ctx, CancellationToken ct = default)
     {
+        if (ctx.AIContext.IsProviderSkipped("CgGraph"))
+        {
+            _logger.LogDebug("CgGraph: skipped by LookaheadProviderSelector");
+            return ctx.AIContext!;
+        }
+
         // Skip unless code index has been manually built (not auto-triggered
         // on first query, because TreeSitter native parser can crash on some files).
         if (!_built) return ctx.AIContext!;

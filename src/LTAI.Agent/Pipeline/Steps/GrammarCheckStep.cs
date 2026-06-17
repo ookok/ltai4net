@@ -22,6 +22,7 @@
 using System.Collections.Concurrent;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Text.RegularExpressions;
 using LTAI.Agent.LanguageServer;
 using LTAI.Agent.Tools;
 using LTAI.Agent.CodeAnalysis;
@@ -152,7 +153,41 @@ public sealed class GrammarCheckStep : IPipelineStep
                 sw.Elapsed.TotalMilliseconds, ruleMatches.Sum(kv => kv.Value.Count));
         }
 
-        // ── 第 3 层: LSP Diagnostics（语义诊断） ──
+        // ── 第 3 层: CLR (Claim-Level Reliability Assessment) ──
+        // Inspired by VibeThinker-3B: extract key claims from generated code
+        // and cross-validate them against the workspace (imports, API calls,
+        // config keys, file references).
+        if (_options.EnableClr)
+        {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            foreach (var filePath in writtenFiles)
+            {
+                try
+                {
+                    var content = await File.ReadAllTextAsync(filePath, context.CancellationToken)
+                        .ConfigureAwait(false);
+
+                    // Claim 1: Import/using directives — check files exist
+                    var importErrors = ValidateImports(filePath, content);
+                    allErrors.AddRange(importErrors);
+
+                    // Claim 2: API/endpoint references — check they match known patterns
+                    var apiErrors = ValidateApiClaims(content);
+                    allErrors.AddRange(apiErrors);
+
+                    // Claim 3: Config/environment variable references
+                    var configErrors = ValidateConfigClaims(content);
+                    allErrors.AddRange(configErrors);
+                }
+                catch { /* skip unreadable */ }
+            }
+            sw.Stop();
+            if (allErrors.Count(e => e.Source == "CLR") > 0)
+                _logger.LogDebug("GrammarCheckStep: CLR completed in {Ms:F1}ms, {ErrCount} claim issues",
+                    sw.Elapsed.TotalMilliseconds, allErrors.Count(e => e.Source == "CLR"));
+        }
+
+        // ── 第 4 层: LSP Diagnostics（语义诊断） ──
         if (_options.EnableLspDiag && _lspManager != null)
         {
             var sw = System.Diagnostics.Stopwatch.StartNew();
@@ -654,6 +689,82 @@ public sealed class GrammarCheckStep : IPipelineStep
         catch { /* best-effort: mined rules are non-critical */ }
     }
 
+    // ═══════════════════════════════════════════
+    //  CLR: Claim-Level Validation methods
+    //  (VibeThinker-inspired: extract key claims + cross-validate)
+    // ═══════════════════════════════════════════
+
+    private List<GrammarError> ValidateImports(string filePath, string content)
+    {
+        var errors = new List<GrammarError>();
+        var dir = Path.GetDirectoryName(filePath);
+        if (dir == null) return errors;
+
+        // C# using directives
+        foreach (Match m in s_usingPattern.Matches(content))
+        {
+            var ns = m.Groups[1].Value;
+            var expectedDir = Path.Combine(_workspacePath, ns.Replace('.', Path.DirectorySeparatorChar));
+            if (!Directory.Exists(expectedDir) && !ns.StartsWith("System", StringComparison.Ordinal))
+            {
+                errors.Add(new GrammarError(filePath, GetLineNumber(content, m.Index), 0,
+                    GrammarErrorSeverity.Warning, "clr", "CLAIM_IMPORT_NOT_FOUND",
+                    $"Import '{ns}' — no matching directory found (may need to create or install package)",
+                    "CLR"));
+            }
+        }
+        return errors;
+    }
+
+    private List<GrammarError> ValidateApiClaims(string content)
+    {
+        var errors = new List<GrammarError>();
+        foreach (Match m in s_httpUrlPattern.Matches(content))
+        {
+            var url = m.Groups[0].Value;
+            if (url.Contains("localhost") || url.Contains("127.0.0.1"))
+            {
+                errors.Add(new GrammarError("", 0, 0,
+                    GrammarErrorSeverity.Info, "clr", "CLAIM_HARDCODED_URL",
+                    $"Hardcoded URL '{url}' — consider making this configurable",
+                    "CLR"));
+            }
+        }
+        return errors;
+    }
+
+    private List<GrammarError> ValidateConfigClaims(string content)
+    {
+        var errors = new List<GrammarError>();
+        foreach (Match m in s_configKeyPattern.Matches(content))
+        {
+            var key = m.Groups[1].Value;
+            if (key.Contains(" ") || key.Contains("\t"))
+            {
+                errors.Add(new GrammarError("", 0, 0,
+                    GrammarErrorSeverity.Warning, "clr", "CLAIM_INVALID_KEY",
+                    $"Config key '{key}' contains whitespace — likely a typo",
+                    "CLR"));
+            }
+        }
+        return errors;
+    }
+
+    private static int GetLineNumber(string content, int index)
+    {
+        if (index <= 0) return 0;
+        int line = 1;
+        for (int i = 0; i < index && i < content.Length; i++)
+        {
+            if (content[i] == '\n') line++;
+        }
+        return line;
+    }
+
+    private static readonly Regex s_usingPattern = new(@"using\s+([\w.]+)\s*;", RegexOptions.Compiled);
+    private static readonly Regex s_httpUrlPattern = new(@"https?://[^\s""'》<>]+", RegexOptions.Compiled);
+    private static readonly Regex s_configKeyPattern = new(@"(?:getenv|env|config)\s*[\(:]\s*[""']([^""']+)[""']", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
     private sealed record MinedRulesFile(DateTime MinedAt, int TotalFailures, System.Collections.Generic.List<MinedRuleEntry> rules);
     private sealed record MinedRuleEntry(string Title, string Description, string Pattern, int Frequency);
 }
@@ -696,7 +807,7 @@ public enum GrammarErrorSeverity
     Info,
 }
 
-/// <summary>GrammarCheckStep 的配置选项。</summary>
+    /// <summary>GrammarCheckStep 的配置选项。</summary>
 public sealed class GrammarCheckOptions
 {
     /// <summary>是否启用 QuickParse 层（Roslyn/TreeSitter）。默认 true。</summary>
@@ -704,6 +815,9 @@ public sealed class GrammarCheckOptions
 
     /// <summary>是否启用 RuleEngine 层（确定性规则）。默认 true。</summary>
     public bool EnableRuleEngine { get; set; } = true;
+
+    /// <summary>是否启用 CLR Claim-Level Assessment。默认 true。</summary>
+    public bool EnableClr { get; set; } = true;
 
     /// <summary>是否启用 LSP 诊断层。默认 true（C# 使用内置 Roslyn 无需进程）。</summary>
     public bool EnableLspDiag { get; set; } = true;

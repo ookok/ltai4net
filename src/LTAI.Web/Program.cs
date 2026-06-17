@@ -816,6 +816,25 @@ try
             return status == "healthy";
         });
 
+        // Check token savings
+        try
+        {
+            checks.Add(new
+            {
+                name = "token_savings",
+                status = "healthy",
+                tokensSaved = TokenSavingsTracker.TotalTokensSaved,
+                tokensNaive = TokenSavingsTracker.TotalTokensNaive,
+                savingsRatio = TokenSavingsTracker.SavingsRatio,
+                lookups = TokenSavingsTracker.TotalLookups,
+                summary = TokenSavingsTracker.Summary,
+            });
+        }
+        catch
+        {
+            checks.Add(new { name = "token_savings", status = "degraded", error = "Savings tracker unavailable" });
+        }
+
         return Results.Json(new
         {
             status = allHealthy ? "healthy" : "degraded",

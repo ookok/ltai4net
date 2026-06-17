@@ -157,31 +157,66 @@ public sealed class SkillEvolutionEngine
 
     // ═══════════════════════════════════════════
     //  L2: Parameter tuning + skill updates (every 500 calls)
+    //  MGPO-style two-stage: (1) diverse exploration → (2) boundary focus
     // ═══════════════════════════════════════════
+
+    /// <summary>
+    /// MGPO weight: how close the success rate is to the maximum-entropy point (0.5).
+    /// Skills near 0.5 are at the capability boundary → highest learning potential.
+    /// Inspired by VibeThinker-3B's MaxEnt-Guided Policy Optimization.
+    /// </summary>
+    private static double MgpoWeight(double successRate)
+    {
+        // D_ME(p || 0.5): deviation from max-entropy point
+        var deviation = Math.Abs(successRate - 0.5);
+        // w(q) = exp(-γ * D_ME), γ=4 → weight 1.0 at p=0.5, ~0.14 at p=0.0/1.0
+        return Math.Exp(-4.0 * deviation);
+    }
 
     private async Task RunL2EvolutionAsync(CancellationToken ct)
     {
+        // Stage 1: Diverse exploration — focus on struggling skills (success < 0.4)
         var struggling = _stats
             .Where(kv => kv.Value.CallCount >= 5 && kv.Value.SuccessRate < 0.4)
             .OrderBy(kv => kv.Value.SuccessRate)
             .Take(5)
             .ToList();
 
-        if (struggling.Count == 0)
+        if (struggling.Count > 0)
         {
-            // No struggling tools — try updating existing auto-evolved skills instead
-            await RefreshExistingSkillsAsync(ct).ConfigureAwait(false);
+            await EvolveStrugglingSkillsAsync(struggling, ct).ConfigureAwait(false);
             return;
         }
 
-        // collect existing skill context
+        // Stage 2: Boundary focus — skills near the max-entropy point (success 0.4-0.7)
+        // These have the highest MGPO weight → highest learning potential.
+        var boundary = _stats
+            .Where(kv => kv.Value.CallCount >= 5)
+            .Select(kv => (name: kv.Key, stat: kv.Value, weight: MgpoWeight(kv.Value.SuccessRate)))
+            .OrderByDescending(x => x.weight)
+            .Take(5)
+            .ToList();
+
+        if (boundary.Count > 0 && boundary[0].weight > 0.3)
+        {
+            await EvolveBoundarySkillsAsync(boundary, ct).ConfigureAwait(false);
+            return;
+        }
+
+        // Fallback: update existing auto-evolved skills
+        await RefreshExistingSkillsAsync(ct).ConfigureAwait(false);
+    }
+
+    private async Task EvolveStrugglingSkillsAsync(
+        List<KeyValuePair<string, SkillStat>> struggling, CancellationToken ct)
+    {
         var existingSkills = ListExistingSkills();
         var existingContext = existingSkills.Count > 0
             ? "\nExisting skills:\n" + string.Join("\n", existingSkills.Select(s => $"  - {s.name} ({s.path})"))
             : "";
 
         var prompt = new StringBuilder();
-        prompt.AppendLine("Analyze these tool call statistics. For each struggling tool, decide whether to:");
+        prompt.AppendLine("Analyze these struggling tools. Decide whether to:");
         prompt.AppendLine("  a) Suggest parameter/call pattern improvements");
         prompt.AppendLine("  b) Update an existing related skill to cover this tool better");
         prompt.AppendLine("  c) Create a new SKILL.md teaching correct usage");
@@ -193,6 +228,33 @@ public sealed class SkillEvolutionEngine
         }
         prompt.AppendLine();
         prompt.AppendLine("Respond as JSON: {\"actions\":[{\"type\":\"optimize\"|\"update_skill\"|\"create_skill\",");
+        prompt.AppendLine("  \"tool\":\"name\",\"existing_skill\":\"if updating\",\"suggestion\":\"...\",\"markdown\":\"...if create/update\"}]}");
+
+        await LlmActionAsync(prompt.ToString(), ct).ConfigureAwait(false);
+    }
+
+    private async Task EvolveBoundarySkillsAsync(
+        List<(string name, SkillStat stat, double weight)> boundary, CancellationToken ct)
+    {
+        var existingSkills = ListExistingSkills();
+        var existingContext = existingSkills.Count > 0
+            ? "\nExisting skills:\n" + string.Join("\n", existingSkills.Select(s => $"  - {s.name} ({s.path})"))
+            : "";
+
+        var prompt = new StringBuilder();
+        prompt.AppendLine("These skills are at the capability boundary (uncertain success rate).");
+        prompt.AppendLine("MGPO analysis suggests high learning potential here. Decide whether to:");
+        prompt.AppendLine("  a) Refine/tune the skill's approach (most preferred)");
+        prompt.AppendLine("  b) Create a complementary variant skill");
+        prompt.AppendLine("  c) Update an existing skill to add boundary-case coverage");
+        prompt.AppendLine(existingContext);
+        prompt.AppendLine();
+        foreach (var (name, stat, weight) in boundary)
+        {
+            prompt.AppendLine($"- {name}: successRate={stat.SuccessRate:P1}, mgpoWeight={weight:F2}, calls={stat.CallCount}, avgLatency={stat.AvgLatencyMs:F0}ms");
+        }
+        prompt.AppendLine();
+        prompt.AppendLine("Respond as JSON: {\"actions\":[{\"type\":\"refine\"|\"create_variant\"|\"update_skill\",");
         prompt.AppendLine("  \"tool\":\"name\",\"existing_skill\":\"if updating\",\"suggestion\":\"...\",\"markdown\":\"...if create/update\"}]}");
 
         await LlmActionAsync(prompt.ToString(), ct).ConfigureAwait(false);
@@ -242,21 +304,91 @@ public sealed class SkillEvolutionEngine
         var autoSkills = ListAutoEvolvedSkills();
         if (autoSkills.Count < 2) return;
 
-        var prompt = new StringBuilder();
-        prompt.AppendLine("Review these auto-evolved skills for potential merging or removal:");
-        prompt.AppendLine();
-        foreach (var s in autoSkills)
-        {
-            var stat = _stats.TryGetValue(Path.GetFileNameWithoutExtension(s.name), out var sv) ? sv : null;
-            var usage = stat != null ? $"{stat.CallCount}calls/{stat.SuccessRate:P1}" : "no data";
-            prompt.AppendLine($"- {s.name} ({usage})");
-        }
-        prompt.AppendLine();
-        prompt.AppendLine("For each, decide: keep, merge (with which), or delete.");
-        prompt.AppendLine("Respond as JSON: {\"actions\":[{\"skill\":\"...\",\"action\":\"keep\"|\"delete\"|\"merge\",");
-        prompt.AppendLine("  \"merge_into\":\"...\",\"reason\":\"...\",\"merged_markdown\":\"...if merge\"}]}");
+        // ── Task Vector merging (MeMo-inspired) ──
+        // Find overlapping skills (high keyword overlap + similar success rate)
+        // and compute a "task vector" between them. If the vector is small
+        // (meaning one is a specialization of the other), merge them.
+        var mergeCandidates = new List<(string src, string dst, double similarity)>();
 
-        await LlmActionAsync(prompt.ToString(), ct).ConfigureAwait(false);
+        for (int i = 0; i < autoSkills.Count; i++)
+        {
+            for (int j = i + 1; j < autoSkills.Count; j++)
+            {
+                var nameI = Path.GetFileNameWithoutExtension(autoSkills[i].name);
+                var nameJ = Path.GetFileNameWithoutExtension(autoSkills[j].name);
+
+                if (nameI == nameJ) continue;
+
+                var statI = _stats.TryGetValue(nameI, out var si) ? si : null;
+                var statJ = _stats.TryGetValue(nameJ, out var sj) ? sj : null;
+
+                // Compute "task vector": difference in success rate → specialization direction
+                var rateDiff = Math.Abs((statI?.SuccessRate ?? 0.5) - (statJ?.SuccessRate ?? 0.5));
+                var keywordSim = ComputeKeywordOverlap(nameI, nameJ);
+
+                // Small rate difference + high keyword overlap → candidates for merging
+                if (rateDiff < 0.2 && keywordSim > 0.3)
+                {
+                    mergeCandidates.Add((nameI, nameJ, keywordSim));
+                }
+            }
+        }
+
+        // Use LLM only for promising merge candidates (reduce cost)
+        if (mergeCandidates.Count > 0)
+        {
+            var prompt = new StringBuilder();
+            prompt.AppendLine("Review these auto-evolved skills for potential merging (task vector analysis):");
+            prompt.AppendLine();
+            foreach (var (src, dst, sim) in mergeCandidates.Take(3))
+            {
+                var statSrc = _stats.TryGetValue(src, out var ss) ? ss : null;
+                var statDst = _stats.TryGetValue(dst, out var sd) ? sd : null;
+                prompt.AppendLine($"- [{src}] ↔ [{dst}] (keyword overlap: {sim:P1})");
+                prompt.AppendLine($"  Usage: {src}={(statSrc != null ? $"{statSrc.CallCount}c/{statSrc.SuccessRate:P1}" : "no data")}, " +
+                                  $"{dst}={(statDst != null ? $"{statDst.CallCount}c/{statDst.SuccessRate:P1}" : "no data")}");
+            }
+
+            if (mergeCandidates.Count > 3)
+                prompt.AppendLine($"\n... and {mergeCandidates.Count - 3} more candidates not shown");
+
+            prompt.AppendLine();
+            prompt.AppendLine("For highly overlapping skills, suggest which content to merge and what to keep.");
+            prompt.AppendLine("Respond as JSON: {\"actions\":[{\"skill\":\"from\",\"merge_into\":\"to\",");
+            prompt.AppendLine("  \"reason\":\"...\",\"merged_markdown\":\"...if merge\"}]}");
+
+            await LlmActionAsync(prompt.ToString(), ct).ConfigureAwait(false);
+        }
+        else
+        {
+            // Fallback: standard review with LLM (original behavior)
+            var prompt = new StringBuilder();
+            prompt.AppendLine("Review these auto-evolved skills for potential merging or removal:");
+            prompt.AppendLine();
+            foreach (var s in autoSkills)
+            {
+                var stat = _stats.TryGetValue(Path.GetFileNameWithoutExtension(s.name), out var sv) ? sv : null;
+                var usage = stat != null ? $"{stat.CallCount}calls/{stat.SuccessRate:P1}" : "no data";
+                prompt.AppendLine($"- {s.name} ({usage})");
+            }
+            prompt.AppendLine();
+            prompt.AppendLine("For each, decide: keep, merge (with which), or delete.");
+            prompt.AppendLine("Respond as JSON: {\"actions\":[{\"skill\":\"...\",\"action\":\"keep\"|\"delete\"|\"merge\",");
+            prompt.AppendLine("  \"merge_into\":\"...\",\"reason\":\"...\",\"merged_markdown\":\"...if merge\"}]}");
+            await LlmActionAsync(prompt.ToString(), ct).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>Keyword overlap similarity between two skill names.</summary>
+    private static double ComputeKeywordOverlap(string a, string b)
+    {
+        var tokensA = a.ToLowerInvariant().Split(['-', '_', ' ', '.'], StringSplitOptions.RemoveEmptyEntries);
+        var tokensB = b.ToLowerInvariant().Split(['-', '_', ' ', '.'], StringSplitOptions.RemoveEmptyEntries);
+        if (tokensA.Length == 0 || tokensB.Length == 0) return 0;
+
+        var setB = new HashSet<string>(tokensB);
+        var common = tokensA.Count(w => setB.Contains(w));
+        return (double)common / Math.Max(tokensA.Length, tokensB.Length);
     }
 
     private async Task CreateNewSkillsAsync(CancellationToken ct)

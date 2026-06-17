@@ -130,6 +130,9 @@ public sealed class ToolRegistry : IToolRegistry
     private const int VectorTopN = 50;
     private const int RrfTopN = 30;
 
+    /// <summary>Majority voting penalty for single-path-only tools (0-1).</summary>
+    private const double MajorityVotePenalty = 0.3;
+
     /// <summary>
     /// 构建工具的 embedding 文本（domain + 5 部分自然语言段落）。
     /// </summary>
@@ -462,16 +465,37 @@ public sealed class ToolRegistry : IToolRegistry
         foreach (var (docId, _) in vecResults)
             rrf[docId] = rrf.GetValueOrDefault(docId) + 1.0 / (RrfK + rank++);
 
-        // ── domain 加权 + Top-K ──
+        // ── Cross-Retrieval Majority Voting ──
+        // Inspired by FlashMemory-DeepSeek-V4: an entry is golden only if it
+        // receives consensus from multiple independent retrieval "layers".
+        // Tool candidates retrieved by BOTH BM25 AND Vector pass majority vote;
+        // those retrieved by only one path get a score penalty.
+        var bm25Set = new HashSet<int>(bm25Results.Select(r => r.docId));
+        var vecSet = new HashSet<int>(vecResults.Select(r => r.idx));
+
         var final = rrf
             .Select(kvp => (
                 tool: _tools[kvp.Key],
+                docId: kvp.Key,
                 score: kvp.Value
                     + (domain != null && string.Equals(_tools[kvp.Key].Domain, domain, StringComparison.OrdinalIgnoreCase) ? DomainBoost : 0)))
+            .Select(x => (
+                x.tool,
+                score: x.score * (bm25Set.Contains(x.docId) && vecSet.Contains(x.docId)
+                    ? 1.0   // majority consensus: both BM25 + Vector agree
+                    : MajorityVotePenalty))) // single-path: apply penalty
             .OrderByDescending(x => x.score)
             .Take(k)
             .Select(x => x.tool)
             .ToList();
+
+        // Track token savings: naive listing of all tools vs top-K
+        if (final.Count > 0)
+        {
+            var naiveTokens = _tools.Count * 20; // ~20 tokens per full tool description
+            var actualTokens = final.Count * 15; // ~15 tokens per concise tool result
+            LTAI.Core.Configuration.TokenSavingsTracker.RecordLookup(naiveTokens, actualTokens);
+        }
 
         return final;
     }
